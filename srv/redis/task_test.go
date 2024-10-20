@@ -36,26 +36,65 @@ func TestPersistTask(t *testing.T) {
 
 	// Verify that the status-specific kanban set has it
 	statusKey := fmt.Sprintf("%s:kanban:%s", taskRecord.WorkspaceId, taskRecord.Status)
-	_, err = db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
+	isMember, err := db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
 	assert.Nil(t, err)
+	assert.True(t, isMember)
 
+	// Change status and persist
 	taskRecord.Status = domain.TaskStatusInProgress
 	err = db.PersistTask(context.Background(), taskRecord)
 	assert.Nil(t, err)
 
 	// Verify that the task status was correctly updated in the set
 	statusKey = fmt.Sprintf("%s:kanban:%s", taskRecord.WorkspaceId, taskRecord.Status)
-	isMember, err := db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
+	isMember, err = db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
 	assert.Nil(t, err)
 	assert.True(t, isMember)
-	for _, status := range []domain.TaskStatus{domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
-		if status != taskRecord.Status {
-			statusKey := fmt.Sprintf("%s:kanban:%s", taskRecord.WorkspaceId, status)
-			isMember, err := db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
-			assert.Nil(t, err)
-			assert.False(t, isMember)
-		}
+
+	// Verify that the task is not in other status sets
+	for _, status := range []domain.TaskStatus{domain.TaskStatusToDo, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
+		statusKey := fmt.Sprintf("%s:kanban:%s", taskRecord.WorkspaceId, status)
+		isMember, err := db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
+		assert.Nil(t, err)
+		assert.False(t, isMember)
 	}
+
+	// Archive the task
+	now := time.Now()
+	taskRecord.Archived = &now
+	err = db.PersistTask(context.Background(), taskRecord)
+	assert.Nil(t, err)
+
+	// Verify that the task is in the archived set
+	archivedKey := fmt.Sprintf("%s:archived_tasks", taskRecord.WorkspaceId)
+	isMember, err = db.Client.SIsMember(context.Background(), archivedKey, taskRecord.Id).Result()
+	assert.Nil(t, err)
+	assert.True(t, isMember)
+
+	// Verify that the task is not in any kanban set
+	for _, status := range []domain.TaskStatus{domain.TaskStatusDrafting, domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
+		statusKey := fmt.Sprintf("%s:kanban:%s", taskRecord.WorkspaceId, status)
+		isMember, err := db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
+		assert.Nil(t, err)
+		assert.False(t, isMember)
+	}
+
+	// Unarchive the task
+	taskRecord.Archived = nil
+	taskRecord.Status = domain.TaskStatusComplete
+	err = db.PersistTask(context.Background(), taskRecord)
+	assert.Nil(t, err)
+
+	// Verify that the task is not in the archived set
+	isMember, err = db.Client.SIsMember(context.Background(), archivedKey, taskRecord.Id).Result()
+	assert.Nil(t, err)
+	assert.False(t, isMember)
+
+	// Verify that the task is in the correct kanban set
+	statusKey = fmt.Sprintf("%s:kanban:%s", taskRecord.WorkspaceId, taskRecord.Status)
+	isMember, err = db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
+	assert.Nil(t, err)
+	assert.True(t, isMember)
 }
 
 func TestGetTasks(t *testing.T) {

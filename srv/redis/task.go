@@ -14,7 +14,8 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-func (s Storage) PersistTask(ctx context.Context, task domain.Task) error {
+
+func (db Storage) PersistTask(ctx context.Context, task domain.Task) error {
 	taskJson, err := json.Marshal(task)
 	if err != nil {
 		log.Println("Failed to convert task record to JSON: ", err)
@@ -23,26 +24,52 @@ func (s Storage) PersistTask(ctx context.Context, task domain.Task) error {
 
 	// Persist the task record itself
 	key := fmt.Sprintf("%s:%s", task.WorkspaceId, task.Id)
-	err = s.Client.Set(ctx, key, taskJson, 0).Err()
+	err = db.Client.Set(ctx, key, taskJson, 0).Err()
 	if err != nil {
 		log.Println("Failed to persist task to Redis: ", err)
 		return err
 	}
 
-	// Add the task id to the appropriate set based on the task status, and remove from others
-	for _, status := range []domain.TaskStatus{domain.TaskStatusDrafting, domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
-		statusKey := fmt.Sprintf("%s:kanban:%s", task.WorkspaceId, status)
-		if status == task.Status {
-			err = s.Client.SAdd(ctx, statusKey, task.Id).Err()
+	// Handle archived tasks
+	archivedKey := fmt.Sprintf("%s:archived_tasks", task.WorkspaceId)
+	if task.Archived != nil {
+		// Remove from all kanban sets and add to archived set
+		for _, status := range []domain.TaskStatus{domain.TaskStatusDrafting, domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
+			statusKey := fmt.Sprintf("%s:kanban:%s", task.WorkspaceId, status)
+			err = db.Client.SRem(ctx, statusKey, task.Id).Err()
 			if err != nil {
-				log.Println("Failed to add task id to set: ", err)
+				log.Println("Failed to remove task id from kanban set: ", err)
 				return err
 			}
-		} else {
-			err = s.Client.SRem(ctx, statusKey, task.Id).Err()
-			if err != nil {
-				log.Println("Failed to remove task id from set: ", err)
-				return err
+		}
+		err = db.Client.SAdd(ctx, archivedKey, task.Id).Err()
+		if err != nil {
+			log.Println("Failed to add task id to archived set: ", err)
+			return err
+		}
+	} else {
+		// Remove from archived set if it exists there
+		err = db.Client.SRem(ctx, archivedKey, task.Id).Err()
+		if err != nil {
+			log.Println("Failed to remove task id from archived set: ", err)
+			return err
+		}
+
+		// Add the task id to the appropriate kanban set based on the task status, and remove from others
+		for _, status := range []domain.TaskStatus{domain.TaskStatusDrafting, domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
+			statusKey := fmt.Sprintf("%s:kanban:%s", task.WorkspaceId, status)
+			if status == task.Status {
+				err = db.Client.SAdd(ctx, statusKey, task.Id).Err()
+				if err != nil {
+					log.Println("Failed to add task id to kanban set: ", err)
+					return err
+				}
+			} else {
+				err = db.Client.SRem(ctx, statusKey, task.Id).Err()
+				if err != nil {
+					log.Println("Failed to remove task id from kanban set: ", err)
+					return err
+				}
 			}
 		}
 	}

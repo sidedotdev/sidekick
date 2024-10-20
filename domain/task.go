@@ -87,6 +87,7 @@ type Task struct {
 	Links       []TaskLink             `json:"links,omitempty"`
 	AgentType   AgentType              `json:"agentType"`
 	FlowType    FlowType               `json:"flowType"`
+	Archived	*time.Time             `json:"archived,omitempty"`
 	Created     time.Time              `json:"created"`
 	Updated     time.Time              `json:"updated"`
 	FlowOptions map[string]interface{} `json:"flowOptions,omitempty"`
