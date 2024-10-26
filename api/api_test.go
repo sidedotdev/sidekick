@@ -1156,6 +1156,96 @@ func TestDeleteTaskHandler(t *testing.T) {
 	assert.True(t, errors.Is(err, srv.ErrNotFound))
 }
 
+func TestArchiveTaskHandler(t *testing.T) {
+	// Initialize the test server and database
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+	redisDb := ctrl.dbAccessor
+
+	// Create tasks for testing
+	completedTask := models.Task{
+		WorkspaceId: "ws_" + ksuid.New().String(),
+		Id:          "task_" + ksuid.New().String(),
+		Description: "completed task",
+		AgentType:   models.AgentTypeLLM,
+		Status:      models.TaskStatusComplete,
+	}
+	inProgressTask := models.Task{
+		WorkspaceId: "ws_" + ksuid.New().String(),
+		Id:          "task_" + ksuid.New().String(),
+		Description: "in progress task",
+		AgentType:   models.AgentTypeLLM,
+		Status:      models.TaskStatusInProgress,
+	}
+	nonExistentTask := models.Task{
+		WorkspaceId: "non-existent-workspace",
+		Id:          "non-existent-task",
+	}
+
+	err := redisDb.PersistTask(context.Background(), completedTask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = redisDb.PersistTask(context.Background(), inProgressTask)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name           string
+		task           models.Task
+		expectedStatus int
+		expectedError  string
+	}{
+		{
+			name:           "Archive completed task",
+			task:           completedTask,
+			expectedStatus: http.StatusNoContent,
+		},
+		{
+			name:           "Archive in-progress task",
+			task:           inProgressTask,
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "only tasks with status 'canceled', 'failed', or 'complete' can be archived",
+		},
+		{
+			name:           "Archive non-existent task",
+			task:           nonExistentTask,
+			expectedStatus: http.StatusNotFound,
+			expectedError:  "task not found",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ginCtx, _ := gin.CreateTestContext(recorder)
+			ginCtx.Request = httptest.NewRequest(http.MethodPost, "/workspaces/"+tc.task.WorkspaceId+"/tasks/"+tc.task.Id+"/archive", nil)
+			ginCtx.Params = []gin.Param{
+				{Key: "workspaceId", Value: tc.task.WorkspaceId},
+				{Key: "id", Value: tc.task.Id},
+			}
+
+			ctrl.ArchiveTaskHandler(ginCtx)
+
+			assert.Equal(t, tc.expectedStatus, ginCtx.Writer.Status())
+
+			if tc.expectedError != "" {
+				var result map[string]string
+				err := json.Unmarshal(recorder.Body.Bytes(), &result)
+				if assert.Nil(t, err) {
+					assert.Equal(t, tc.expectedError, result["error"])
+				}
+			} else {
+				archivedTask, err := ctrl.dbAccessor.GetTask(ginCtx.Request.Context(), tc.task.WorkspaceId, tc.task.Id)
+				assert.NoError(t, err)
+				assert.NotNil(t, archivedTask.Archived)
+				assert.Equal(t, models.TaskStatusComplete, archivedTask.Status)
+			}
+		})
+	}
+}
+
 func TestGetWorkspacesHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)

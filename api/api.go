@@ -53,6 +53,37 @@ type Controller struct {
 	temporalTaskQueue string
 }
 
+// ArchiveTaskHandler handles the request to archive a task
+func (ctrl *Controller) ArchiveTaskHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	taskId := c.Param("id")
+
+	task, err := ctrl.dbAccessor.GetTask(c.Request.Context(), workspaceId, taskId)
+	if err != nil {
+		ctrl.ErrorHandler(c, http.StatusNotFound, errors.New("task not found"))
+		return
+	}
+
+	// Check if the task status is valid for archiving
+	if task.Status != models.TaskStatusCanceled && task.Status != models.TaskStatusFailed && task.Status != models.TaskStatusComplete {
+		ctrl.ErrorHandler(c, http.StatusBadRequest, errors.New("only tasks with status 'canceled', 'failed', or 'complete' can be archived"))
+		return
+	}
+
+	// Set the Archived field to the current timestamp
+	now := time.Now()
+	task.Archived = &now
+
+	// Persist the updated task
+	err = ctrl.dbAccessor.PersistTask(c.Request.Context(), task)
+	if err != nil {
+		ctrl.ErrorHandler(c, http.StatusInternalServerError, errors.New("failed to archive task"))
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
 func DefineRoutes(ctrl Controller) *gin.Engine {
 	r := gin.Default()
 	r.ForwardedByClientIP = true
@@ -66,6 +97,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	taskRoutes.GET("/:id", ctrl.GetTaskHandler)
 	taskRoutes.PUT("/:id", ctrl.UpdateTaskHandler)
 	taskRoutes.DELETE("/:id", ctrl.DeleteTaskHandler)
+	taskRoutes.POST("/:id/archive", ctrl.ArchiveTaskHandler)
 
 	flowRoutes := workspaceApiRoutes.Group("/:workspaceId/flows")
 	flowRoutes.GET("/:id/actions", ctrl.GetFlowActionsHandler)
