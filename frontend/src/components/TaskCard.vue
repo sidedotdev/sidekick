@@ -297,14 +297,6 @@ const cancelTask = async () => {
   border-bottom-right-radius: 5px;
 }
 
-.action.cancel {
-  background-color: var(--color-warning);
-}
-
-.action.cancel:hover {
-  background-color: var(--color-warning-hover);
-}
-
 .action.delete, .action.cancel {
   font-weight: bold;
 }

@@ -1210,15 +1210,17 @@ func TestCancelTaskHandler(t *testing.T) {
 				json.Unmarshal(resp.Body.Bytes(), &response)
 				assert.Equal(t, tc.expectedError, response["error"])
 
-				// Check task status has NOT been changed
+				// Check task status & agentType has NOT been changed
 				updatedTask, err := redisDb.GetTask(context.Background(), task.WorkspaceId, task.Id)
 				assert.NoError(t, err)
 				assert.Equal(t, tc.initialStatus, updatedTask.Status)
+				assert.Equal(t, models.AgentTypeLLM, updatedTask.AgentType)
 			} else {
 				// Check that the task status has been updated to canceled
 				updatedTask, err := redisDb.GetTask(context.Background(), task.WorkspaceId, task.Id)
 				assert.NoError(t, err)
 				assert.Equal(t, models.TaskStatusCanceled, updatedTask.Status)
+				assert.Equal(t, models.AgentTypeNone, updatedTask.AgentType)
 			}
 		})
 	}
