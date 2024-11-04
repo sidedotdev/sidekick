@@ -60,7 +60,7 @@ const statusLabel = (status: string) => {
   }
 };
 
-const canArchive = computed(() => ['complete', 'failed'].includes(props.task.status) && !props.task.archived);
+const canArchive = computed(() => ['complete', 'failed', 'canceled'].includes(props.task.status) && !props.task.archived);
 const canDelete = computed(() => props.task.status === 'drafting' || props.task.archived);
 const canCancel = computed(() => ['to_do', 'in_progress', 'blocked'].includes(props.task.status) && !props.task.archived);
 
