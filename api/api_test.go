@@ -1156,6 +1156,100 @@ func TestDeleteTaskHandler(t *testing.T) {
 	assert.True(t, errors.Is(err, srv.ErrNotFound))
 }
 
+func TestCancelTaskHandler(t *testing.T) {
+	// Initialize the test server and database
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+	redisDb := ctrl.dbAccessor
+
+	testCases := []struct {
+		name           string
+		initialStatus  models.TaskStatus
+		expectedStatus int
+		expectedError  string
+	}{
+		{"Cancel ToDo Task", models.TaskStatusToDo, http.StatusOK, ""},
+		{"Cancel InProgress Task", models.TaskStatusInProgress, http.StatusOK, ""},
+		{"Cancel Blocked Task", models.TaskStatusBlocked, http.StatusOK, ""},
+		{"Cancel Completed Task", models.TaskStatusComplete, http.StatusBadRequest, "Only tasks with status 'to_do', 'in_progress', or 'blocked' can be canceled"},
+		{"Cancel Canceled Task", models.TaskStatusCanceled, http.StatusBadRequest, "Only tasks with status 'to_do', 'in_progress', or 'blocked' can be canceled"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create a task for testing
+			task := models.Task{
+				WorkspaceId: "ws_" + ksuid.New().String(),
+				Id:          "task_" + ksuid.New().String(),
+				Description: "test description",
+				AgentType:   models.AgentTypeLLM,
+				Status:      tc.initialStatus,
+			}
+			err := redisDb.PersistTask(context.Background(), task)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Prepare the request
+			resp := httptest.NewRecorder()
+			ginCtx, _ := gin.CreateTestContext(resp)
+			ginCtx.Request = httptest.NewRequest(http.MethodPost, "/workspaces/"+task.WorkspaceId+"/tasks/"+task.Id+"/cancel", nil)
+			ginCtx.Params = []gin.Param{
+				{Key: "workspaceId", Value: task.WorkspaceId},
+				{Key: "id", Value: task.Id},
+			}
+
+			// Call the handler
+			ctrl.CancelTaskHandler(ginCtx)
+
+			// Check the response
+			assert.Equal(t, tc.expectedStatus, resp.Code)
+
+			if tc.expectedError != "" {
+				var response map[string]string
+				json.Unmarshal(resp.Body.Bytes(), &response)
+				assert.Equal(t, tc.expectedError, response["error"])
+
+				// Check task status has NOT been changed
+				updatedTask, err := redisDb.GetTask(context.Background(), task.WorkspaceId, task.Id)
+				assert.NoError(t, err)
+				assert.Equal(t, tc.initialStatus, updatedTask.Status)
+			} else {
+				// Check that the task status has been updated to canceled
+				updatedTask, err := redisDb.GetTask(context.Background(), task.WorkspaceId, task.Id)
+				assert.NoError(t, err)
+				assert.Equal(t, models.TaskStatusCanceled, updatedTask.Status)
+			}
+		})
+	}
+}
+
+func TestCancelTaskHandler_NonExistentTask(t *testing.T) {
+	// Initialize the test server and database
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+
+	// Prepare the request with non-existent task ID
+	resp := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(resp)
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/workspaces/ws_123/tasks/non_existent_task/cancel", nil)
+	ginCtx.Params = []gin.Param{
+		{Key: "workspaceId", Value: "ws_123"},
+		{Key: "id", Value: "non_existent_task"},
+	}
+
+	// Call the handler
+	ctrl.CancelTaskHandler(ginCtx)
+
+	// Check the response
+	assert.Equal(t, http.StatusNotFound, ginCtx.Writer.Status())
+
+	var response map[string]string
+	err := json.Unmarshal(resp.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "Task not found", response["error"])
+}
+
 func TestArchiveTaskHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
