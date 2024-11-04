@@ -229,6 +229,7 @@ func (ctrl *Controller) CancelTaskHandler(c *gin.Context) {
 	// Update the task status to 'canceled' and agent type to 'none'
 	task.Status = models.TaskStatusCanceled
 	task.AgentType = models.AgentTypeNone
+	task.Updated = time.Now()
 	err = ctrl.dbAccessor.PersistTask(c.Request.Context(), task)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update task status"})
