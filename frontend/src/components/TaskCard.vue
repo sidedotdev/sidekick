@@ -47,6 +47,8 @@ const statusLabel = (status: string) => {
       return 'To Do';
     case 'blocked':
       return 'Blocked';
+    case 'canceled':
+      return 'Canceled';
     case 'failed':
       return 'Failed';
     case 'in_progress':
@@ -208,6 +210,9 @@ const cancelTask = async () => {
 }
 .status-label.to_do {
   background-color: #a3a3a3;
+}
+.status-label.canceled {
+  background-color: rgb(147, 147, 0);
 }
 .status-label.blocked {
   background-color: #ff8e42;
