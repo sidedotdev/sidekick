@@ -187,6 +187,55 @@ func (ctrl *Controller) ErrorHandler(c *gin.Context, status int, err error) {
 	c.JSON(status, gin.H{"error": err.Error()})
 }
 
+// CancelTaskHandler handles the cancellation of a task
+func (ctrl *Controller) CancelTaskHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	taskId := c.Param("id")
+
+	task, err := ctrl.dbAccessor.GetTask(c.Request.Context(), workspaceId, taskId)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		return
+	}
+
+	// Check if the task status is eligible for cancellation
+	if task.Status != models.TaskStatusToDo && task.Status != models.TaskStatusInProgress && task.Status != models.TaskStatusBlocked {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Only tasks with status 'to_do', 'in_progress', or 'blocked' can be canceled"})
+		return
+	}
+
+	// Get the child workflows of the task
+	childFlows, err := ctrl.dbAccessor.GetFlowsForTask(c.Request.Context(), workspaceId, taskId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get child workflows"})
+		return
+	}
+
+	// Check if any of the child workflows are in progress and cancel them
+	devAgent := dev.DevAgent{
+		TemporalClient:    ctrl.temporalClient,
+		TemporalTaskQueue: ctrl.temporalTaskQueue,
+		WorkspaceId:       task.WorkspaceId,
+	}
+	for _, flow := range childFlows {
+		err = devAgent.TerminateWorkflowIfExists(c.Request.Context(), flow.Id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to terminate workflow"})
+			return
+		}
+	}
+
+	// Update the task status to 'canceled'
+	task.Status = models.TaskStatusCanceled
+	err = ctrl.dbAccessor.PersistTask(c.Request.Context(), task)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update task status"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Task canceled successfully"})
+}
+
 func (ctrl *Controller) DeleteTaskHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	taskId := c.Param("id")
