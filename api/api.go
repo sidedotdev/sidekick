@@ -98,6 +98,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	taskRoutes.PUT("/:id", ctrl.UpdateTaskHandler)
 	taskRoutes.DELETE("/:id", ctrl.DeleteTaskHandler)
 	taskRoutes.POST("/:id/archive", ctrl.ArchiveTaskHandler)
+	taskRoutes.POST("/:id/cancel", ctrl.CancelTaskHandler)
 
 	flowRoutes := workspaceApiRoutes.Group("/:workspaceId/flows")
 	flowRoutes.GET("/:id/actions", ctrl.GetFlowActionsHandler)
