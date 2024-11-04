@@ -3,6 +3,7 @@
     <div class="actions">
       <button v-if="task.status == 'drafting'" class="action edit" @click.stop="openEditModal">✎️</button>
       <button v-if="canArchive" class="action archive" @click.stop="archiveTask">📦</button>
+      <button v-if="canCancel" class="action cancel" @click.stop="cancelTask">X</button>
       <button v-if="canDelete" class="action delete" @click.stop="deleteTask">X</button>
     </div>
 
@@ -33,6 +34,7 @@ interface Emits {
   (event: 'updated', id: string): void;
   (event: 'error', message: string): void;
   (event: 'archived', id: string): void;
+  (event: 'canceled', id: string): void;
 }
 
 const emit = defineEmits<Emits>();
@@ -58,6 +60,7 @@ const statusLabel = (status: string) => {
 
 const canArchive = computed(() => ['complete', 'failed'].includes(props.task.status) && !props.task.archived);
 const canDelete = computed(() => props.task.status === 'drafting' || props.task.archived);
+const canCancel = computed(() => ['to_do', 'in_progress', 'blocked'].includes(props.task.status) && !props.task.archived);
 
 const isEditModalOpen = ref(false);
 
@@ -119,6 +122,28 @@ const cardClicked = async () => {
 
 const onUpdated = async () => {
   emit('updated', props.task.id)
+}
+
+const cancelTask = async () => {
+  if (!canCancel.value) {
+    emit('error', 'This task cannot be canceled')
+    return
+  }
+
+  if (!window.confirm('Are you sure you want to cancel this task?')) {
+    return
+  }
+
+  const {id, workspaceId} = props.task
+  const response = await fetch(`/api/v1/workspaces/${workspaceId}/tasks/${id}/cancel`, {
+    method: 'POST',
+  })
+  if (response.status === 200) {
+    emit('canceled', id)
+    emit('updated', id)
+  } else {
+    emit('error', 'Failed to cancel task')
+  }
 }
 </script>
 
@@ -267,6 +292,18 @@ const onUpdated = async () => {
 .action:last-child {
   border-top-right-radius: 5px;
   border-bottom-right-radius: 5px;
+}
+
+.action.cancel {
+  background-color: var(--color-warning);
+}
+
+.action.cancel:hover {
+  background-color: var(--color-warning-hover);
+}
+
+.action.delete, .action.cancel {
+  font-weight: bold;
 }
 
 .archived-label {
