@@ -130,6 +130,7 @@ const cancelTask = async () => {
     return
   }
 
+  // Confirm with the user before canceling the task
   if (!window.confirm('Are you sure you want to cancel this task?')) {
     return
   }
@@ -139,10 +140,12 @@ const cancelTask = async () => {
     method: 'POST',
   })
   if (response.status === 200) {
+    const data = await response.json()
     emit('canceled', id)
     emit('updated', id)
   } else {
-    emit('error', 'Failed to cancel task')
+    const errorData = await response.json()
+    emit('error', errorData.error || 'Failed to cancel task')
   }
 }
 </script>
