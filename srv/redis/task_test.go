@@ -10,6 +10,7 @@ import (
 
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
+	go_redis "github.com/redis/go-redis/v9"
 )
 
 func TestPersistTask(t *testing.T) {
@@ -65,11 +66,11 @@ func TestPersistTask(t *testing.T) {
 	err = db.PersistTask(context.Background(), taskRecord)
 	assert.Nil(t, err)
 
-	// Verify that the task is in the archived set
+	// Verify that the task is in the archived sorted set
 	archivedKey := fmt.Sprintf("%s:archived_tasks", taskRecord.WorkspaceId)
-	isMember, err = db.Client.SIsMember(context.Background(), archivedKey, taskRecord.Id).Result()
+	score, err := db.Client.ZScore(context.Background(), archivedKey, taskRecord.Id).Result()
 	assert.Nil(t, err)
-	assert.True(t, isMember)
+	assert.Equal(t, float64(now.Unix()), score)
 
 	// Verify that the task is not in any kanban set
 	for _, status := range []domain.TaskStatus{domain.TaskStatusDrafting, domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
@@ -85,10 +86,9 @@ func TestPersistTask(t *testing.T) {
 	err = db.PersistTask(context.Background(), taskRecord)
 	assert.Nil(t, err)
 
-	// Verify that the task is not in the archived set
-	isMember, err = db.Client.SIsMember(context.Background(), archivedKey, taskRecord.Id).Result()
-	assert.Nil(t, err)
-	assert.False(t, isMember)
+	// Verify that the task is not in the archived sorted set
+	_, err = db.Client.ZScore(context.Background(), archivedKey, taskRecord.Id).Result()
+	assert.Equal(t, go_redis.Nil, err)
 
 	// Verify that the task is in the correct kanban set
 	statusKey = fmt.Sprintf("%s:kanban:%s", taskRecord.WorkspaceId, taskRecord.Status)

@@ -33,7 +33,7 @@ func (db Storage) PersistTask(ctx context.Context, task domain.Task) error {
 	// Handle archived tasks
 	archivedKey := fmt.Sprintf("%s:archived_tasks", task.WorkspaceId)
 	if task.Archived != nil {
-		// Remove from all kanban sets and add to archived set
+		// Remove from all kanban sets and add to archived sorted set
 		for _, status := range []domain.TaskStatus{domain.TaskStatusDrafting, domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
 			statusKey := fmt.Sprintf("%s:kanban:%s", task.WorkspaceId, status)
 			err = db.Client.SRem(ctx, statusKey, task.Id).Err()
@@ -42,16 +42,17 @@ func (db Storage) PersistTask(ctx context.Context, task domain.Task) error {
 				return err
 			}
 		}
-		err = db.Client.SAdd(ctx, archivedKey, task.Id).Err()
+		score := float64(task.Archived.Unix())
+		err = db.Client.ZAdd(ctx, archivedKey, redis.Z{Score: score, Member: task.Id}).Err()
 		if err != nil {
-			log.Println("Failed to add task id to archived set: ", err)
+			log.Println("Failed to add task id to archived sorted set: ", err)
 			return err
 		}
 	} else {
-		// Remove from archived set if it exists there
-		err = db.Client.SRem(ctx, archivedKey, task.Id).Err()
+		// Remove from archived sorted set if it exists there
+		err = db.Client.ZRem(ctx, archivedKey, task.Id).Err()
 		if err != nil {
-			log.Println("Failed to remove task id from archived set: ", err)
+			log.Println("Failed to remove task id from archived sorted set: ", err)
 			return err
 		}
 

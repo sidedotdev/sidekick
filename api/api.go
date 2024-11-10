@@ -58,14 +58,14 @@ func (ctrl *Controller) ArchiveTaskHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	taskId := c.Param("id")
 
-	task, err := ctrl.dbAccessor.GetTask(c.Request.Context(), workspaceId, taskId)
+	task, err := ctrl.service.GetTask(c.Request.Context(), workspaceId, taskId)
 	if err != nil {
 		ctrl.ErrorHandler(c, http.StatusNotFound, errors.New("task not found"))
 		return
 	}
 
 	// Check if the task status is valid for archiving
-	if task.Status != models.TaskStatusCanceled && task.Status != models.TaskStatusFailed && task.Status != models.TaskStatusComplete {
+	if task.Status != domain.TaskStatusCanceled && task.Status != domain.TaskStatusFailed && task.Status != domain.TaskStatusComplete {
 		ctrl.ErrorHandler(c, http.StatusBadRequest, errors.New("only tasks with status 'canceled', 'failed', or 'complete' can be archived"))
 		return
 	}
@@ -75,7 +75,7 @@ func (ctrl *Controller) ArchiveTaskHandler(c *gin.Context) {
 	task.Archived = &now
 
 	// Persist the updated task
-	err = ctrl.dbAccessor.PersistTask(c.Request.Context(), task)
+	err = ctrl.service.PersistTask(c.Request.Context(), task)
 	if err != nil {
 		ctrl.ErrorHandler(c, http.StatusInternalServerError, errors.New("failed to archive task"))
 		return
@@ -193,20 +193,20 @@ func (ctrl *Controller) CancelTaskHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	taskId := c.Param("id")
 
-	task, err := ctrl.dbAccessor.GetTask(c.Request.Context(), workspaceId, taskId)
+	task, err := ctrl.service.GetTask(c.Request.Context(), workspaceId, taskId)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
 		return
 	}
 
 	// Check if the task status is eligible for cancellation
-	if task.Status != models.TaskStatusToDo && task.Status != models.TaskStatusInProgress && task.Status != models.TaskStatusBlocked {
+	if task.Status != domain.TaskStatusToDo && task.Status != domain.TaskStatusInProgress && task.Status != domain.TaskStatusBlocked {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Only tasks with status 'to_do', 'in_progress', or 'blocked' can be canceled"})
 		return
 	}
 
 	// Get the child workflows of the task
-	childFlows, err := ctrl.dbAccessor.GetFlowsForTask(c.Request.Context(), workspaceId, taskId)
+	childFlows, err := ctrl.service.GetFlowsForTask(c.Request.Context(), workspaceId, taskId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get child workflows"})
 		return
@@ -227,10 +227,10 @@ func (ctrl *Controller) CancelTaskHandler(c *gin.Context) {
 	}
 
 	// Update the task status to 'canceled' and agent type to 'none'
-	task.Status = models.TaskStatusCanceled
-	task.AgentType = models.AgentTypeNone
+	task.Status = domain.TaskStatusCanceled
+	task.AgentType = domain.AgentTypeNone
 	task.Updated = time.Now()
-	err = ctrl.dbAccessor.PersistTask(c.Request.Context(), task)
+	err = ctrl.service.PersistTask(c.Request.Context(), task)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update task status"})
 		return

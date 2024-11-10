@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sidekick/domain"
-	domain1 "sidekick/domain"
 	"sidekick/mocks"
 	"sidekick/srv"
 	"sidekick/srv/redis"
@@ -1160,29 +1159,29 @@ func TestCancelTaskHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	testCases := []struct {
 		name           string
-		initialStatus  models.TaskStatus
+		initialStatus  domain.TaskStatus
 		expectedStatus int
 		expectedError  string
 	}{
-		{"Cancel ToDo Task", models.TaskStatusToDo, http.StatusOK, ""},
-		{"Cancel InProgress Task", models.TaskStatusInProgress, http.StatusOK, ""},
-		{"Cancel Blocked Task", models.TaskStatusBlocked, http.StatusOK, ""},
-		{"Cancel Completed Task", models.TaskStatusComplete, http.StatusBadRequest, "Only tasks with status 'to_do', 'in_progress', or 'blocked' can be canceled"},
-		{"Cancel Canceled Task", models.TaskStatusCanceled, http.StatusBadRequest, "Only tasks with status 'to_do', 'in_progress', or 'blocked' can be canceled"},
+		{"Cancel ToDo Task", domain.TaskStatusToDo, http.StatusOK, ""},
+		{"Cancel InProgress Task", domain.TaskStatusInProgress, http.StatusOK, ""},
+		{"Cancel Blocked Task", domain.TaskStatusBlocked, http.StatusOK, ""},
+		{"Cancel Completed Task", domain.TaskStatusComplete, http.StatusBadRequest, "Only tasks with status 'to_do', 'in_progress', or 'blocked' can be canceled"},
+		{"Cancel Canceled Task", domain.TaskStatusCanceled, http.StatusBadRequest, "Only tasks with status 'to_do', 'in_progress', or 'blocked' can be canceled"},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Create a task for testing
-			task := models.Task{
+			task := domain.Task{
 				WorkspaceId: "ws_" + ksuid.New().String(),
 				Id:          "task_" + ksuid.New().String(),
 				Description: "test description",
-				AgentType:   models.AgentTypeLLM,
+				AgentType:   domain.AgentTypeLLM,
 				Status:      tc.initialStatus,
 			}
 			err := redisDb.PersistTask(context.Background(), task)
@@ -1214,13 +1213,13 @@ func TestCancelTaskHandler(t *testing.T) {
 				updatedTask, err := redisDb.GetTask(context.Background(), task.WorkspaceId, task.Id)
 				assert.NoError(t, err)
 				assert.Equal(t, tc.initialStatus, updatedTask.Status)
-				assert.Equal(t, models.AgentTypeLLM, updatedTask.AgentType)
+				assert.Equal(t, domain.AgentTypeLLM, updatedTask.AgentType)
 			} else {
 				// Check that the task status has been updated to canceled
 				updatedTask, err := redisDb.GetTask(context.Background(), task.WorkspaceId, task.Id)
 				assert.NoError(t, err)
-				assert.Equal(t, models.TaskStatusCanceled, updatedTask.Status)
-				assert.Equal(t, models.AgentTypeNone, updatedTask.AgentType)
+				assert.Equal(t, domain.TaskStatusCanceled, updatedTask.Status)
+				assert.Equal(t, domain.AgentTypeNone, updatedTask.AgentType)
 			}
 		})
 	}
@@ -1256,24 +1255,24 @@ func TestArchiveTaskHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	// Create tasks for testing
-	completedTask := models.Task{
+	completedTask := domain.Task{
 		WorkspaceId: "ws_" + ksuid.New().String(),
 		Id:          "task_" + ksuid.New().String(),
 		Description: "completed task",
-		AgentType:   models.AgentTypeLLM,
-		Status:      models.TaskStatusComplete,
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusComplete,
 	}
-	inProgressTask := models.Task{
+	inProgressTask := domain.Task{
 		WorkspaceId: "ws_" + ksuid.New().String(),
 		Id:          "task_" + ksuid.New().String(),
 		Description: "in progress task",
-		AgentType:   models.AgentTypeLLM,
-		Status:      models.TaskStatusInProgress,
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusInProgress,
 	}
-	nonExistentTask := models.Task{
+	nonExistentTask := domain.Task{
 		WorkspaceId: "non-existent-workspace",
 		Id:          "non-existent-task",
 	}
@@ -1289,7 +1288,7 @@ func TestArchiveTaskHandler(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		task           models.Task
+		task           domain.Task
 		expectedStatus int
 		expectedError  string
 	}{
@@ -1333,10 +1332,10 @@ func TestArchiveTaskHandler(t *testing.T) {
 					assert.Equal(t, tc.expectedError, result["error"])
 				}
 			} else {
-				archivedTask, err := ctrl.dbAccessor.GetTask(ginCtx.Request.Context(), tc.task.WorkspaceId, tc.task.Id)
+				archivedTask, err := ctrl.service.GetTask(ginCtx.Request.Context(), tc.task.WorkspaceId, tc.task.Id)
 				assert.NoError(t, err)
 				assert.NotNil(t, archivedTask.Archived)
-				assert.Equal(t, models.TaskStatusComplete, archivedTask.Status)
+				assert.Equal(t, domain.TaskStatusComplete, archivedTask.Status)
 			}
 		})
 	}
@@ -1496,8 +1495,8 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	assert.NoError(t, err, "Persisting workflow failed")
 
 	// persist this one before the websocket connection starts
-	flowEvent1 := domain1.ProgressText{
-		EventType: domain1.ProgressTextEventType,
+	flowEvent1 := domain.ProgressText{
+		EventType: domain.ProgressTextEventType,
 		ParentId:  "test-event-id-1",
 		Text:      "doing stuff 1",
 	}
@@ -1520,12 +1519,12 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	defer ws.Close()
 
 	// persist multiple flow events under single flow action
-	flowEvent2 := domain1.ProgressText{
-		EventType: domain1.ProgressTextEventType,
+	flowEvent2 := domain.ProgressText{
+		EventType: domain.ProgressTextEventType,
 		ParentId:  "test-event-id-2",
 		Text:      "doing stuff 2",
 	}
-	flowEvent3 := domain1.ProgressText{
+	flowEvent3 := domain.ProgressText{
 		EventType: flowEvent2.EventType,
 		ParentId:  flowEvent2.ParentId,
 		Text:      "doing stuff 3",
@@ -1546,14 +1545,14 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 
 	// Verify if the flow events are streamed correctly
 	timeout := time.After(15 * time.Second)
-	receivedEvents := make([]domain1.ProgressText, 0, 3)
+	receivedEvents := make([]domain.ProgressText, 0, 3)
 
 	for i := 0; i < 3; i++ {
 		select {
 		case <-timeout:
 			t.Fatalf("Timeout waiting for flow events. Received %d events so far", len(receivedEvents))
 		default:
-			var receivedEvent domain1.ProgressText
+			var receivedEvent domain.ProgressText
 			err = ws.SetReadDeadline(time.Now().Add(8 * time.Second))
 			assert.NoError(t, err, "Failed to set read deadline")
 			err = ws.ReadJSON(&receivedEvent)
