@@ -85,7 +85,7 @@ func (d Delegator) GetTasks(ctx context.Context, workspaceId string, statuses []
 }
 
 /* implements TaskStorage interface */
-func (d Delegator) GetArchivedTasks(ctx context.Context, workspaceId string, offset, limit int64) ([]domain.Task, error) {
+func (d Delegator) GetArchivedTasks(ctx context.Context, workspaceId string, offset, limit int64) ([]domain.Task, int64, error) {
 	return d.storage.GetArchivedTasks(ctx, workspaceId, offset, limit)
 }
 

@@ -234,9 +234,10 @@ func TestGetArchivedTasks(t *testing.T) {
 	}
 
 	// Test getting all archived tasks
-	retrievedTasks, err := db.GetArchivedTasks(ctx, workspaceId, 0, 10)
+	retrievedTasks, totalCount, err := db.GetArchivedTasks(ctx, workspaceId, 1, 3)
 	assert.NoError(t, err)
 	assert.Len(t, retrievedTasks, 3)
+	assert.Equal(t, totalCount, int64(3))
 
 	// Check if tasks are in the correct order (most recent first)
 	assert.Equal(t, "archived-task-3", retrievedTasks[0].Id)
@@ -244,17 +245,18 @@ func TestGetArchivedTasks(t *testing.T) {
 	assert.Equal(t, "archived-task-1", retrievedTasks[2].Id)
 
 	// Test pagination
-	retrievedTasks, err = db.GetArchivedTasks(ctx, workspaceId, 1, 2)
+	retrievedTasks, totalCount, err = db.GetArchivedTasks(ctx, workspaceId, 2, 2)
 	assert.NoError(t, err)
-	assert.Len(t, retrievedTasks, 2)
-	assert.Equal(t, "archived-task-2", retrievedTasks[0].Id)
-	assert.Equal(t, "archived-task-1", retrievedTasks[1].Id)
+	assert.Len(t, retrievedTasks, 1)
+	assert.Equal(t, "archived-task-1", retrievedTasks[0].Id)
+	assert.Equal(t, totalCount, int64(3))
 
 	// Test getting archived tasks from a workspace with no archived tasks
 	emptyWorkspaceId := "empty-workspace-id"
-	emptyTasks, err := db.GetArchivedTasks(ctx, emptyWorkspaceId, 0, 10)
+	emptyTasks, totalCount, err := db.GetArchivedTasks(ctx, emptyWorkspaceId, 1, 10)
 	assert.NoError(t, err)
 	assert.Len(t, emptyTasks, 0)
+	assert.Equal(t, totalCount, int64(0))
 }
 
 func TestAddTaskChange(t *testing.T) {

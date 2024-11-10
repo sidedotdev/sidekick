@@ -169,25 +169,34 @@ func (s Storage) GetTask(ctx context.Context, workspaceId string, taskId string)
 	return task, nil
 }
 
-func (db Storage) GetArchivedTasks(ctx context.Context, workspaceId string, offset, limit int64) ([]domain.Task, error) {
+func (db Storage) GetArchivedTasks(ctx context.Context, workspaceId string, page, pageSize int64) ([]domain.Task, int64, error) {
 	key := fmt.Sprintf("%s:archived_tasks", workspaceId)
 
-	// Get the tasks from the sorted set
-	taskIds, err := db.Client.ZRevRange(ctx, key, offset, offset+limit-1).Result()
+	// Get the total count of archived tasks
+	totalCount, err := db.Client.ZCard(ctx, key).Result()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get archived tasks: %w", err)
+		return nil, 0, fmt.Errorf("failed to get total count of archived tasks: %w", err)
+	}
+
+	// Calculate offset
+	offset := (page - 1) * pageSize
+
+	// Get the tasks from the sorted set
+	taskIds, err := db.Client.ZRevRange(ctx, key, offset, offset+pageSize-1).Result()
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get archived tasks: %w", err)
 	}
 
 	var tasks []domain.Task
 	for _, taskId := range taskIds {
 		task, err := db.GetTask(ctx, workspaceId, taskId)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get task %s: %w", taskId, err)
+			return nil, 0, fmt.Errorf("failed to get task %s: %w", taskId, err)
 		}
 		tasks = append(tasks, task)
 	}
 
-	return tasks, nil
+	return tasks, totalCount, nil
 }
 
 // AddTaskChange persists a task to the changes stream.

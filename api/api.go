@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -90,6 +91,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	r.SetTrustedProxies(nil)
 
 	workspaceApiRoutes := DefineWorkspaceApiRoutes(r, &ctrl)
+	workspaceApiRoutes.GET("/archived-tasks", ctrl.GetArchivedTasksHandler)
 
 	taskRoutes := workspaceApiRoutes.Group("/:workspaceId/tasks")
 	taskRoutes.POST("/", ctrl.CreateTaskHandler)
@@ -456,6 +458,52 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"tasks": taskResponses,
+	})
+}
+
+func (ctrl *Controller) GetArchivedTasksHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	if workspaceId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID is required"})
+		return
+	}
+
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil || page < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page number"})
+		return
+	}
+
+	pageSize, err := strconv.Atoi(c.DefaultQuery("pageSize", "10"))
+	if err != nil || pageSize < 1 || pageSize > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page size"})
+		return
+	}
+
+	archivedTasks, totalCount, err := ctrl.service.GetArchivedTasks(c, workspaceId, int64(page), int64(pageSize))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	taskResponses := make([]TaskResponse, len(archivedTasks))
+	for i, task := range archivedTasks {
+		flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, task.Id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		taskResponses[i] = TaskResponse{
+			Task:  task,
+			Flows: flows,
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"tasks":      taskResponses,
+		"totalCount": totalCount,
+		"page":       page,
+		"pageSize":   pageSize,
 	})
 }
 

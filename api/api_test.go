@@ -1574,3 +1574,57 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	assert.Equal(t, flowEvent2, receivedEvents[1])
 	assert.Equal(t, flowEvent3, receivedEvents[2])
 }
+
+func TestGetArchivedTasksHandler(t *testing.T) {
+	// Initialize the test server and database
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+
+	// Create and archive a task
+	now := time.Now()
+	task := domain.Task{
+		Id:          "test-task-id",
+		WorkspaceId: "test-workspace",
+		Title:       "Test Task",
+		Description: "This is a test task",
+		Status:      domain.TaskStatusToDo,
+		Archived:    &now,
+	}
+	err := ctrl.service.PersistTask(context.Background(), task)
+	assert.NoError(t, err)
+
+	// Create a new gin context with the mock controller
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+	c.Set("Controller", ctrl)
+	c.Params = gin.Params{{Key: "workspaceId", Value: "test-workspace"}}
+
+	// Call the GetArchivedTasksHandler function
+	ctrl.GetArchivedTasksHandler(c)
+
+	// Assert the response
+	assert.Equal(t, http.StatusOK, resp.Code)
+
+	var response map[string]interface{}
+	err = json.Unmarshal(resp.Body.Bytes(), &response)
+	assert.NoError(t, err)
+
+	assert.Contains(t, response, "tasks")
+	assert.Contains(t, response, "totalCount")
+	assert.Contains(t, response, "page")
+	assert.Contains(t, response, "pageSize")
+
+	tasks, ok := response["tasks"].([]interface{})
+	assert.True(t, ok)
+	assert.Equal(t, 1, len(tasks))
+
+	archivedTask, ok := tasks[0].(map[string]interface{})
+	assert.True(t, ok)
+	assert.Equal(t, "test-task-id", archivedTask["id"])
+	assert.Equal(t, "Test Task", archivedTask["title"])
+	assert.NotNil(t, archivedTask["archived"])
+
+	assert.Equal(t, float64(1), response["totalCount"])
+	assert.Equal(t, float64(1), response["page"])
+	assert.Equal(t, float64(10), response["pageSize"])
+}
