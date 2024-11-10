@@ -169,6 +169,27 @@ func (s Storage) GetTask(ctx context.Context, workspaceId string, taskId string)
 	return task, nil
 }
 
+func (db Storage) GetArchivedTasks(ctx context.Context, workspaceId string, offset, limit int64) ([]domain.Task, error) {
+	key := fmt.Sprintf("%s:archived_tasks", workspaceId)
+
+	// Get the tasks from the sorted set
+	taskIds, err := db.Client.ZRevRange(ctx, key, offset, offset+limit-1).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get archived tasks: %w", err)
+	}
+
+	var tasks []domain.Task
+	for _, taskId := range taskIds {
+		task, err := db.GetTask(ctx, workspaceId, taskId)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get task %s: %w", taskId, err)
+		}
+		tasks = append(tasks, task)
+	}
+
+	return tasks, nil
+}
+
 // AddTaskChange persists a task to the changes stream.
 func (s Streamer) AddTaskChange(ctx context.Context, task domain.Task) error {
 	streamKey := fmt.Sprintf("%s:task_changes", task.WorkspaceId)

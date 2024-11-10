@@ -48,6 +48,7 @@ type TaskStorage interface {
 	GetTask(ctx context.Context, workspaceId, taskId string) (Task, error)
 	GetTasks(ctx context.Context, workspaceId string, statuses []TaskStatus) ([]Task, error)
 	DeleteTask(ctx context.Context, workspaceId, taskId string) error
+	GetArchivedTasks(ctx context.Context, workspaceId string, offset, limit int64) ([]Task, error)
 }
 
 // TaskStreamer defines the interface for task-related stream operations

@@ -196,6 +196,67 @@ func TestDeleteTask(t *testing.T) {
 	}
 	assert.NotContains(t, tasks, task)
 }
+
+func TestGetArchivedTasks(t *testing.T) {
+	db := NewTestRedisStorage()
+	ctx := context.Background()
+
+	workspaceId := "test-workspace"
+
+	// Create and persist some archived tasks
+	archivedTasks := []domain.Task{
+		{
+			Id:          "archived-task-1",
+			WorkspaceId: workspaceId,
+			Title:       "Archived Task 1",
+			Status:      domain.TaskStatusComplete,
+			Archived:    func() *time.Time { t := time.Now().Add(-2 * time.Hour); return &t }(),
+		},
+		{
+			Id:          "archived-task-2",
+			WorkspaceId: workspaceId,
+			Title:       "Archived Task 2",
+			Status:      domain.TaskStatusComplete,
+			Archived:    func() *time.Time { t := time.Now().Add(-1 * time.Hour); return &t }(),
+		},
+		{
+			Id:          "archived-task-3",
+			WorkspaceId: workspaceId,
+			Title:       "Archived Task 3",
+			Status:      domain.TaskStatusComplete,
+			Archived:    func() *time.Time { t := time.Now(); return &t }(),
+		},
+	}
+
+	for _, task := range archivedTasks {
+		err := db.PersistTask(ctx, task)
+		assert.NoError(t, err)
+	}
+
+	// Test getting all archived tasks
+	retrievedTasks, err := db.GetArchivedTasks(ctx, workspaceId, 0, 10)
+	assert.NoError(t, err)
+	assert.Len(t, retrievedTasks, 3)
+
+	// Check if tasks are in the correct order (most recent first)
+	assert.Equal(t, "archived-task-3", retrievedTasks[0].Id)
+	assert.Equal(t, "archived-task-2", retrievedTasks[1].Id)
+	assert.Equal(t, "archived-task-1", retrievedTasks[2].Id)
+
+	// Test pagination
+	retrievedTasks, err = db.GetArchivedTasks(ctx, workspaceId, 1, 2)
+	assert.NoError(t, err)
+	assert.Len(t, retrievedTasks, 2)
+	assert.Equal(t, "archived-task-2", retrievedTasks[0].Id)
+	assert.Equal(t, "archived-task-1", retrievedTasks[1].Id)
+
+	// Test getting archived tasks from a workspace with no archived tasks
+	emptyWorkspaceId := "empty-workspace-id"
+	emptyTasks, err := db.GetArchivedTasks(ctx, emptyWorkspaceId, 0, 10)
+	assert.NoError(t, err)
+	assert.Len(t, emptyTasks, 0)
+}
+
 func TestAddTaskChange(t *testing.T) {
 	db := NewTestRedisStreamer()
 	workspaceId := "TEST_WORKSPACE_ID"
