@@ -1,17 +1,16 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
 import TaskCard from '@/components/TaskCard.vue'
 import type { Task } from '@/lib/models'
+import { store } from '../lib/store'
 
-const route = useRoute()
 const archivedTasks = ref<Task[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
 
 const fetchArchivedTasks = async () => {
   try {
-    const workspaceId = route.params.workspaceId
+    const workspaceId = store.workspaceId
     const response = await fetch(`/api/v1/workspaces/${workspaceId}/archived-tasks`)
     if (!response.ok) {
       throw new Error('Failed to fetch archived tasks')
