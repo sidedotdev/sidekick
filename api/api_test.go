@@ -1626,5 +1626,5 @@ func TestGetArchivedTasksHandler(t *testing.T) {
 
 	assert.Equal(t, float64(1), response["totalCount"])
 	assert.Equal(t, float64(1), response["page"])
-	assert.Equal(t, float64(10), response["pageSize"])
+	assert.Equal(t, float64(100), response["pageSize"])
 }

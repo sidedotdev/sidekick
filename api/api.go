@@ -474,7 +474,7 @@ func (ctrl *Controller) GetArchivedTasksHandler(c *gin.Context) {
 		return
 	}
 
-	pageSize, err := strconv.Atoi(c.DefaultQuery("pageSize", "10"))
+	pageSize, err := strconv.Atoi(c.DefaultQuery("pageSize", "100"))
 	if err != nil || pageSize < 1 || pageSize > 100 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page size"})
 		return
