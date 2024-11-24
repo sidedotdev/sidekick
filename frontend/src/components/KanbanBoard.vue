@@ -26,7 +26,7 @@ import TaskCreationModal from './TaskCreationModal.vue'
 const columnNames = {
   human: 'You',
   llm: 'AI Sidekick',
-  none: 'Complete',
+  none: 'Finished',
 }
 
 const props = defineProps({

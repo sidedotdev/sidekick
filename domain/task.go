@@ -27,9 +27,9 @@ const (
 	TaskStatusToDo       TaskStatus = "to_do"
 	TaskStatusInProgress TaskStatus = "in_progress"
 	TaskStatusBlocked    TaskStatus = "blocked"
-	TaskStatusComplete   TaskStatus = "complete"
-	TaskStatusFailed     TaskStatus = "failed"
-	TaskStatusCanceled   TaskStatus = "canceled"
+	TaskStatusComplete   TaskStatus = "complete" // considered to be "finished"
+	TaskStatusFailed     TaskStatus = "failed"   // also considered to be "finished"
+	TaskStatusCanceled   TaskStatus = "canceled" // also considered to be "finished"
 )
 
 var AllTaskStatuses []TaskStatus = []TaskStatus{
