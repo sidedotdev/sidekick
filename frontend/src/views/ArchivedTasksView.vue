@@ -11,7 +11,7 @@ const error = ref<string | null>(null)
 const fetchArchivedTasks = async () => {
   try {
     const workspaceId = store.workspaceId
-    const response = await fetch(`/api/v1/workspaces/${workspaceId}/archived-tasks`)
+    const response = await fetch(`/api/v1/workspaces/${workspaceId}/archived_tasks`)
     if (!response.ok) {
       throw new Error('Failed to fetch archived tasks')
     }

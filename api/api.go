@@ -91,7 +91,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	r.SetTrustedProxies(nil)
 
 	workspaceApiRoutes := DefineWorkspaceApiRoutes(r, &ctrl)
-	workspaceApiRoutes.GET("/archived-tasks", ctrl.GetArchivedTasksHandler)
+	workspaceApiRoutes.GET("/archived_tasks", ctrl.GetArchivedTasksHandler)
 
 	taskRoutes := workspaceApiRoutes.Group("/:workspaceId/tasks")
 	taskRoutes.POST("/", ctrl.CreateTaskHandler)
