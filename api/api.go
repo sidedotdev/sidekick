@@ -85,6 +85,12 @@ func (ctrl *Controller) ArchiveTaskHandler(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// ArchiveFinishedTasksHandler handles the request to archive all finished tasks
+func (ctrl *Controller) ArchiveFinishedTasksHandler(c *gin.Context) {
+	// TODO: Implement archiving of all finished tasks
+	c.JSON(http.StatusNotImplemented, gin.H{"message": "Not implemented yet"})
+}
+
 func DefineRoutes(ctrl Controller) *gin.Engine {
 	r := gin.Default()
 	r.ForwardedByClientIP = true
@@ -101,6 +107,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	taskRoutes.DELETE("/:id", ctrl.DeleteTaskHandler)
 	taskRoutes.POST("/:id/archive", ctrl.ArchiveTaskHandler)
 	taskRoutes.POST("/:id/cancel", ctrl.CancelTaskHandler)
+	taskRoutes.POST("/archive_finished", ctrl.ArchiveFinishedTasksHandler)
 
 	flowRoutes := workspaceApiRoutes.Group("/:workspaceId/flows")
 	flowRoutes.GET("/:id/actions", ctrl.GetFlowActionsHandler)
