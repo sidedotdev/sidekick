@@ -2,13 +2,14 @@
   <TaskCreationModal v-if="isModalOpen" @close="closeModal" @created="refresh" :status="newTaskStatus" />
   <div class="kanban-board">
     <div
-      v-for="agentType in ['human' as const, 'llm' as const, 'none' as const]"
+      v-for="agentType in ['human', 'llm', 'none'] as const"
       :key="agentType"
       class="kanban-column"
     >
       <h2>
-        {{ columnNames[agentType] }}
-        <button :class="{'invisible': agentType === 'none'}" class="new-task mini-button" @click="newTask(agentType)">+</button>
+        {{ columnNames[agentType as keyof typeof columnNames] }}
+        <button v-if="agentType !== 'none'" class="new-task mini-button" @click="newTask(agentType)">+</button>
+        <button v-if="agentType === 'none' && groupedTasks()[agentType]?.length > 0" class="new-task mini-button" @click="confirmArchiveFinished">📦</button>
       </h2>
       <TaskCard v-for="task in groupedTasks()[agentType]" :key="task.id" :task="task" @deleted="refresh" @updated="refresh" @error="error" />
       <button class="new-task" v-if="agentType == 'human'" @click="newTask(agentType)">+ Draft Task</button>
@@ -63,9 +64,11 @@ function refresh() {
 const isModalOpen = ref(false)
 const newTaskStatus = ref('to_do')
 
-const newTask = (agentType: string) => {
-  isModalOpen.value = true
-  newTaskStatus.value = agentType === 'human' ? 'drafting' : 'to_do';
+const newTask = (agentType: 'human' | 'llm' | 'none') => {
+  if (agentType !== 'none') {
+    isModalOpen.value = true
+    newTaskStatus.value = agentType === 'human' ? 'drafting' : 'to_do';
+  }
 }
 
 const closeModal = () => {
@@ -77,6 +80,20 @@ function error(e: any) {
   // alert and some uses of console.error (when in response to specific user
   // action like clicking buttons) in the frontend directory
   alert(e)
+}
+
+async function confirmArchiveFinished() {
+  if (confirm('Are you sure you want to archive all finished tasks?')) {
+    try {
+      const response = await fetch('/tasks/archive_finished', { method: 'POST' });
+      if (!response.ok) {
+        throw new Error('Failed to archive finished tasks');
+      }
+      refresh();
+    } catch (e) {
+      error(e);
+    }
+  }
 }
 </script>
 
@@ -157,6 +174,10 @@ h2 {
   justify-content: center;
   opacity: 0.0;
   transition: opacity 0.2s;
+}
+
+.kanban-column:hover .new-task.mini-button {
+  opacity: 1.0;
 }
 
 .new-task:hover {
