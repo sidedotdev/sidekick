@@ -1251,6 +1251,82 @@ func TestCancelTaskHandler_NonExistentTask(t *testing.T) {
 	assert.Equal(t, "Task not found", response["error"])
 }
 
+func TestArchiveFinishedTasksHandler(t *testing.T) {
+	// Initialize the test server and database
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+	redisDb := ctrl.dbAccessor
+
+	// Create tasks for testing
+	workspaceId := "ws_" + ksuid.New().String()
+	completedTask := models.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task_" + ksuid.New().String(),
+		Description: "completed task",
+		AgentType:   models.AgentTypeLLM,
+		Status:      models.TaskStatusComplete,
+	}
+	canceledTask := models.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task_" + ksuid.New().String(),
+		Description: "canceled task",
+		AgentType:   models.AgentTypeLLM,
+		Status:      models.TaskStatusCanceled,
+	}
+	failedTask := models.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task_" + ksuid.New().String(),
+		Description: "failed task",
+		AgentType:   models.AgentTypeLLM,
+		Status:      models.TaskStatusFailed,
+	}
+	inProgressTask := models.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task_" + ksuid.New().String(),
+		Description: "in progress task",
+		AgentType:   models.AgentTypeLLM,
+		Status:      models.TaskStatusInProgress,
+	}
+
+	// Persist tasks
+	for _, task := range []models.Task{completedTask, canceledTask, failedTask, inProgressTask} {
+		err := redisDb.PersistTask(context.Background(), task)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Test the ArchiveFinishedTasksHandler
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/workspaces/"+workspaceId+"/tasks/archive_finished", nil)
+	ginCtx.Params = []gin.Param{
+		{Key: "workspaceId", Value: workspaceId},
+	}
+
+	ctrl.ArchiveFinishedTasksHandler(ginCtx)
+
+	assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
+
+	var result map[string]int
+	err := json.Unmarshal(recorder.Body.Bytes(), &result)
+	if assert.NoError(t, err) {
+		assert.Equal(t, 3, result["archivedCount"])
+	}
+
+	// Check that the correct tasks were archived
+	for _, task := range []models.Task{completedTask, canceledTask, failedTask} {
+		archivedTask, err := ctrl.dbAccessor.GetTask(ginCtx.Request.Context(), workspaceId, task.Id)
+		assert.NoError(t, err)
+		assert.NotNil(t, archivedTask.Archived)
+	}
+
+	// Check that the in-progress task was not archived
+	nonArchivedTask, err := ctrl.dbAccessor.GetTask(ginCtx.Request.Context(), workspaceId, inProgressTask.Id)
+	assert.NoError(t, err)
+	assert.Nil(t, nonArchivedTask.Archived)
+}
+
 func TestArchiveTaskHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)

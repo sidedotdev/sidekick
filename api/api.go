@@ -87,8 +87,34 @@ func (ctrl *Controller) ArchiveTaskHandler(c *gin.Context) {
 
 // ArchiveFinishedTasksHandler handles the request to archive all finished tasks
 func (ctrl *Controller) ArchiveFinishedTasksHandler(c *gin.Context) {
-	// TODO: Implement archiving of all finished tasks
-	c.JSON(http.StatusNotImplemented, gin.H{"message": "Not implemented yet"})
+	workspaceId := c.Param("workspaceId")
+
+	// Get all tasks with status 'complete', 'canceled', or 'failed'
+	tasks, err := ctrl.dbAccessor.GetTasks(c.Request.Context(), workspaceId, []models.TaskStatus{
+		models.TaskStatusComplete,
+		models.TaskStatusCanceled,
+		models.TaskStatusFailed,
+	})
+	if err != nil {
+		ctrl.ErrorHandler(c, http.StatusInternalServerError, errors.New("failed to fetch tasks"))
+		return
+	}
+
+	archivedCount := 0
+	now := time.Now()
+
+	for _, task := range tasks {
+		task.Archived = &now
+		err := ctrl.dbAccessor.PersistTask(c.Request.Context(), task)
+		if err != nil {
+			// Log the error but continue with other tasks
+			log.Printf("Failed to archive task %s: %v", task.Id, err)
+		} else {
+			archivedCount++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"archivedCount": archivedCount})
 }
 
 func DefineRoutes(ctrl Controller) *gin.Engine {
