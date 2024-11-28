@@ -24,18 +24,16 @@ import type { Task, AgentType } from '../lib/models'
 import TaskCard from './TaskCard.vue'
 import TaskCreationModal from './TaskCreationModal.vue'
 
+const props = defineProps<{
+  workspaceId: string,
+  tasks: Task[]
+}>()
+
 const columnNames = {
   human: 'You',
   llm: 'AI Sidekick',
   none: 'Finished',
 }
-
-const props = defineProps({
-  tasks: {
-    type: Array as () => Task[],
-    required: true,
-  },
-})
 
 const emit = defineEmits(['refresh'])
 
@@ -85,7 +83,7 @@ function error(e: any) {
 async function confirmArchiveFinished() {
   if (confirm('Are you sure you want to archive all finished tasks?')) {
     try {
-      const response = await fetch('/tasks/archive_finished', { method: 'POST' });
+      const response = await fetch(`/api/v1/workspaces/${props.workspaceId}/tasks/archive_finished`, { method: 'POST' });
       if (!response.ok) {
         throw new Error('Failed to archive finished tasks');
       }
