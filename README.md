@@ -8,7 +8,15 @@
 Sidekick is AI automation designed to support software engineers working on
 real-world projects.
 
-TODO: edits code, runs tests, fixes them, etc etc. genflow.dev content
+**Key features**:
+
+1. **Agentic flows**: Sidekick automatically finds relevant code context, edits
+   code, then runs tests and iterates to fix issues based on test feedback.
+2. **Human-in-the-loop**: You guide Sidekick by approving requirements and
+   development plans, and by answering questions or debugging when the LLM
+   inevitably gets stuck.
+3. **Bring your own keys**: The Sidekick server runs on your machine and talks
+   to your AI provider directly, using your own keys.
 
 ## Demo
 
@@ -16,16 +24,20 @@ TODO
 
 ## Quickstart
 
+### 1. Install the side cli
+
 Download the [latest release](https://github.com/org-sidedev/sidekick/releases).
 
 Add it to your `$PATH`:
 
 ```sh
-chmod +x side
-mv side /usr/local/bin/
+chmod +x side_macos_arm64_x.x.x
+sudo mv side_macos_arm64_x.x.x /usr/local/bin/side
 ```
 
-Then in your project's root directory:
+### 2. Set up and configure a workspace
+
+In your project's root directory, run:
 
 ```sh
 side init
@@ -33,11 +45,19 @@ side init
 
 On first run, it will walk you through the setup process and ensure you've
 installed the necessary [dependencies](#dependencies) and
-[configured](#configuration) an AI provider.
+[configured](#configuration) an AI provider and other settings.
+
+### 3. Start the side server
+
+Finally, start the side server/worker:
+
+```sh
+side start
+```
+
+Then you can create a task at http://localhost:8855/kanban
 
 ## Configuration
-
-### Workspace Configuration
 
 ### side.toml
 
@@ -59,6 +79,8 @@ shortened output, though Sidekick will automatically summarize long test outputs
 too, at the cost of time and accuracy.
 
 <!-- TODO /gen document check_commands, autofix_commands, mission etc -->
+
+<!-- TODO /gen document LLM and Embedding configuration in the workspace config -->
 
 ### .sideignore
 
