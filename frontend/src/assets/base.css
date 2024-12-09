@@ -1,0 +1,150 @@
+/* non-color variables */
+:root {
+  --kanban-gap: 0.5rem;
+  --task-pad: 1.2rem;
+  --section-gap: 160px;
+}
+
+/* color palette from <https://github.com/vuejs/theme> */
+/* TODO remove unused variables, and rename used ones */
+:root {
+  --vt-c-white: #fdfdfd;
+  --vt-c-white-soft: #f8f8f8;
+  --vt-c-white-mute: #f0f0f0;
+
+  --vt-c-black: #181818;
+  --vt-c-black-soft: #1f1f1f;
+  --vt-c-black-mute: #242424;
+
+  --vt-c-indigo: #2c3e50;
+
+  --vt-c-divider-light-1: rgba(60, 60, 60, 0.29);
+  --vt-c-divider-light-2: rgba(60, 60, 60, 0.12);
+  --vt-c-divider-dark-1: rgba(84, 84, 84, 0.65);
+  --vt-c-divider-dark-2: rgba(84, 84, 84, 0.48);
+
+  --vt-c-text-light-1: var(--vt-c-indigo);
+  --vt-c-text-light-2: rgba(60, 60, 60, 1.0);
+  --vt-c-text-dark-1: var(--vt-c-white);
+  --vt-c-text-dark-2: rgba(235, 235, 235, 1.0);
+}
+
+/* specific color variables for light and dark modes only go here */
+:root {
+  --color-background-light: var(--vt-c-white-soft);
+  --color-text-light: var(--vt-c-text-light-1);
+
+  --color-background-dark: var(--vt-c-black);
+  --color-text-dark: #ddd;
+
+  --color-link-dark: rgb(85, 159, 255);
+  --color-link-light: rgb(0, 102, 204);
+
+  /* FIXME do we need both dark and light? */
+  --color-cta-button-bg-dark: rgba(131,58,180, 0.8);
+  --color-cta-button-bg-light: rgba(131,58,180, 0.8);
+  --color-cta-button-text-light: var(--color-text-dark);
+  --color-cta-button-text-dark: var(--color-text-dark);
+
+  /* FIXME do we need both dark and light? And where do we use these even? */
+  --color-green-light: hsla(160, 100%, 37%, 1);
+  --color-green-dark: hsla(160, 100%, 37%, 1);
+
+  /* FIXME do we need both dark and light? */
+  --color-select-border-light: #888;
+  --color-select-border-dark: #888;
+
+  --color-modal-background-light: var(--vt-c-white);
+  --color-modal-background-dark: var(--vt-c-black-soft);
+  --color-modal-text-light: var(--vt-c-text-light-1);
+  --color-modal-text-dark: var(--vt-c-text-dark-2);
+}
+
+/* semantic color variables for this project. these all default to dark mode.
+ * generally only these variableshould be used downstream, not the
+ * light/dark-specific variables. */
+:root {
+  --color-text: var(--color-text-dark);
+  --color-heading: var(--vt-c-text-dark-1);
+  --color-background: var(--color-background-dark); /* --color-background: var(--vt-c-black); */
+  --color-background-soft: var(--vt-c-black-soft);
+  --color-background-mute: var(--vt-c-black-mute);
+  --color-background-hover: #3f3f3f;
+  --color-border: #2b2b2b;
+  --color-border-contrast: #383838;
+  --color-border-hover: var(--vt-c-divider-dark-1); /* why */
+  --color-link: var(--color-link-dark);
+  --color-cta-button-bg: var(--color-cta-button-bg-dark);
+  --color-cta-button-text: var(--color-cta-button-text-dark);
+  --color-green: var(--color-green-dark);
+  --color-select-border: var(--color-select-border-dark);
+  --color-modal-background: var(--color-modal-background-dark);
+  --color-modal-text: var(--color-modal-text-dark);
+}
+
+/* override the color variables for light mode. generally only these variables
+ * without a "-light" or "-dark" suffix should be used downstream. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --color-heading: var(--vt-c-text-light-1);
+    --color-text: var(--color-text-light);
+    --color-background: var(--color-background-light);
+    --color-background-soft: var(--vt-c-white);
+    --color-background-mute: var(--vt-c-white-mute);
+    --color-background-hover: #ddd;
+    --color-border: var(--vt-c-divider-light-2);
+    --color-border-contrast: var(--vt-c-divider-light-1);
+    --color-border-hover: var(--vt-c-divider-light-1);
+    --color-link: var(--color-link-light);
+    --color-cta-button-bg: var(--color-cta-button-bg-light);
+    --color-cta-button-text: var(--color-cta-button-text-light);
+    --color-green: var(--color-green-light);
+    --color-select-border: rgba(0, 0, 0, 0.5);
+    --color-modal-background: var(--color-modal-background-light);
+    --color-modal-text: var(--color-modal-text-light);
+  }
+}
+
+/* override the color variables based on the user's preference. generally only
+ * these variables without a "-light" or "-dark" suffix should be used
+ * downstream. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-text: var(--vt-c-text-dark-2);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  font-weight: normal;
+}
+
+body {
+  min-height: 100vh;
+  color: var(--color-text);
+  background: var(--color-background);
+  transition:
+    color 0.5s,
+    background-color 0.5s;
+  line-height: 1.6;
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Oxygen,
+    Ubuntu,
+    Cantarell,
+    'Fira Sans',
+    'Droid Sans',
+    'Helvetica Neue',
+    sans-serif;
+  font-size: 15px;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}

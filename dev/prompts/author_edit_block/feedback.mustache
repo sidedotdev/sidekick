@@ -1,0 +1,38 @@
+The previously provided *edit blocks* had some issues when we used them to make
+changes. Here is the feedback we received:
+
+{{{feedback}}}
+
+{{#hasUserGuidance}}
+If additional work is needed based on the user guidance, follow the user
+guidance to do so by providing new *edit blocks*, otherwise just say "OK".
+{{/hasUserGuidance}}
+{{^hasUserGuidance}}
+Please analyze what was wrong with some of the previous *edit blocks*, consider
+the feedback and provide new *edit blocks* accordingly that fix whatever failed.
+
+Hint 1: If the feedback notes that applying edit blocks failed, take a look at the
+current state of the relevant code via the {{{retrieveCodeContextFunctionName}}}
+function or the {{{bulkSearchRepositoryFunctionName}}} function.
+
+Hint 2: If the feedback notes that applying edit blocks failed, and the edit
+block that failed isn't your first one for that file since the beginning or the
+last test run, it's possible that applying the previous edit blocks changed the
+file in a way that made the later edit blocks fail to match. We'd only want to
+provide the rest of the edit blocks in this case, i.e. the one that failed and
+everything after, and omit the previous ones which we can infer were applied
+successfully.
+
+Hint 3: If the feedback includes test results, that indicates that all previous
+edit blocks have already been applied successfully. If you want to make further
+changes to portions of functions you've already edited, it may be helpful to
+see the current state of the relevant code via the {{{retrieveCodeContextFunctionName}}} function.
+
+Hint 4: If you see errors that include a filepath and line number, use the
+{{{bulkReadFileFunctionName}}} function to see what's going on at those lines.
+{{/hasUserGuidance}}
+
+Hint 5: If an error indicates that a function/type/symbol doesn't exist, find
+what actual function needs to be used via tools or ask for help. Do not create
+it unless the original instructions mention doing that, as it is likely to be a
+hallucination.

@@ -1,0 +1,37 @@
+mission = """
+Sidekick is a human-in-the-loop system designed to support software developers
+through GenAI automation. Sidekick should be easy for developers to set up and
+use, intuitive to understand and highly introspectable with realtime feedback
+and granular tracking. It should be able to be guided by developers using it,
+but do as much as can be done reliably without the human in the loop, before
+engaging them. The core mission of Sidekick is to make developers more
+productive as they work within large existing code bases.
+"""
+
+[[test_commands]]
+command = "go test -test.timeout 15s ./..."
+
+[[test_commands]]
+working_dir = "frontend"
+command = "npm run test:unit -- --reporter=dot --run"
+
+[[test_commands]]
+working_dir = "frontend"
+command = "npm run type-check"
+
+[edit_code]
+hints = """
+You are working on a project named "sidekick". Thus, the root directory of the
+project houses the "sidekick" go package. DO NOT specify the root directory, sidekick,
+in any file paths, as all paths are relative to this root. I repeat, do not
+specify "sidekick/" in any file paths when proving edit blocks or getting code
+context.
+
+All frontend code is within the top-level "frontend" directory, always add that
+as the first directory when specifying any frontend path. Use em and rem instead
+of px. Use existing color variables instead of hard-coding colors. Don't assume
+light or dark theme, the existing variables auto-adjust based on light vs dark.
+
+When writing go tests, use a real redis DB via functions like
+newTestRedisDatabase rather than defining a mock database accessor.
+"""

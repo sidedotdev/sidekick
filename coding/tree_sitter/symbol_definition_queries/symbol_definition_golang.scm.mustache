@@ -1,0 +1,78 @@
+(
+  (comment)* @doc
+  .
+  (const_declaration
+    (const_spec
+      name: (identifier) @name
+    )
+  ) @declaration
+  (#strip! @doc "^//\\s*")
+  (#select-adjacent! @doc @declaration)
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (comment)* @doc
+  .
+  (var_declaration
+    (var_spec
+      name: (identifier) @name
+    )
+  ) @declaration
+  (#strip! @doc "^//\\s*")
+  (#select-adjacent! @doc @declaration)
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (comment)* @doc
+  .
+  (function_declaration
+    name: (identifier) @name
+  ) @declaration
+  (#strip! @doc "^//\\s*")
+  (#select-adjacent! @doc @declaration)
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (comment)* @doc
+  .
+  (method_declaration
+    name: (field_identifier) @name
+  ) @declaration
+  (#strip! @doc "^//\\s*")
+  (#select-adjacent! @doc @declaration)
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (comment)* @doc
+  .
+  (type_declaration
+    (_
+      name: (type_identifier) @name
+    )
+  ) @declaration
+  (#strip! @doc "^//\\s*")
+  (#select-adjacent! @doc @declaration)
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (comment)* @doc
+  .
+  (type_declaration
+    (type_spec
+      name: (type_identifier)
+      type: (interface_type
+        (method_elem
+          name: (_) @name
+        )
+      )
+    )
+  ) @declaration
+  (#strip! @doc "^//\\s*")
+  (#select-adjacent! @doc @declaration)
+  (#eq? @name "{{SymbolName}}")
+) @definition

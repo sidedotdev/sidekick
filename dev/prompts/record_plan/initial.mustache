@@ -1,0 +1,111 @@
+Here's an example of a plan that you might record where the requirements were to
+make some changes to and then test the fooBar function:
+
+function_call: {{{recordPlanFunctionName}}}
+{
+  "learnings": [
+    "The fooBar function already does foo currently, but not bar.",
+    "The Omg struct holds important info around omega values.",
+    "Other unit tests make use of the XYZ library",
+  ],
+  "analysis": "We first have to build out the bar functionality of fooBar. Then, to write tests for the fooBar function, we need to write tests that confirm it is performing foo & bar and exercise its edge cases.",
+  "steps": [
+	{
+		"step_number": "1",
+		"definition": "Edit the fooBar function such that it actually does bar.",
+		"type": "edit"
+		"completion_analysis": "Step 1 is complete when we have added bar functionality to the fooBar function, which view_diff is sufficient to confirm.",
+	},
+	{
+		"step_number": "2",
+		"definition": "Instantiate the XYZ library to create a test suite for fooBar with a new file: abc/xyz/foo_bar_test.go",
+		"type": "edit"
+		"completion_analysis": "This step is complete when we have created a test file with the XYZ library set up to enable testing of the fooBar function.",
+	},
+	{
+		"step_number": "3",
+		"definition": "Write a test for the scenario where the input is empty.",
+		"type": "edit"
+		"completion_analysis": "Step 3 is complete when we have written a test for the scenario where the content is empty and the test passes.",
+	},
+	{
+		"step_number": "4",
+		"definition": "Write a test for the scenario where the input is not empty.",
+		"type": "edit"
+		"completion_analysis": "Step 4 is complete when we have written a test for the scenario where the content is not empty and the test passes.",
+	}
+  ],
+  "is_planning_complete": true
+}	
+
+All plan steps *must* specify actions that require editing files. Thus, there
+should be NO steps that say anything related to investigating the root cause or
+analyzing the problem etc, as this should be done partially during planning, and
+partially during execution of other plan steps that edit things, where specific
+actions will be done based on that analysis within the step.
+
+Similarly, no steps should say anything about running the tests or submitting
+the code etc, as these don't directly involve editing and aren't actions that
+can be taken in this type of plan.
+
+Note that tests are automatically run after each step of the plan is complete,
+and a review is automatically done of the changes made during that step. So
+specifying a separate step to do those things is useless and in fact
+counterproductive. DO NOT SPECIFY ANY SUCH STEPS IN THE PLAN.
+
+Thinking step-by-step as a senior software engineer, analyze the following
+requirements along with the code context provided, and build a plan for meeting
+those requirements.
+
+You should ask for additional code context, search the repository or read files
+as required to create an accurate plan. Do not specify steps to modify a
+function or add a field etc unless you have retrieved the relevant code first to
+understand what needs to be done. Once you have most of the context you need to
+build a plan, then please record a plan through the {{{recordPlanFunctionName}}}
+function.
+
+{{#getHelpOrInputFunctionName}}
+If requirements are unclear or insufficient to understand how they might be
+fulfilled, especially when you discover an edge case that the requirements does
+not cover, DO NOT make any unfounded assumptions but rather ask for help or
+input to clarify requirements.
+
+If you are stuck or need help understanding something in order to
+create a good plan, use the {{{getHelpOrInputFunctionName}}} function.
+{{/getHelpOrInputFunctionName}}
+
+If you already have a large amount of code context, but it's not enough to
+complete the plan, DO NOT ask for more as it will kick other code out of your
+context window. Instead, output a partially complete plan, with learnings from
+this initial planning phase that will help you continue where you left off,
+without having all the original code context again. Include file names and
+names of functions etc that are relevant so that you can easily pick up right
+where you last left off. Don't include learnings that you already had recorded
+in the last incomplete plan's learnings, if there were any.
+
+Do not create too many steps that are very limited in scope. Each step should
+correspond roughly to 50-100 lines of code to add/remove, and should not span
+more than 2-3 files at most. Closely related steps should just be merged
+together, unless it would make the step too large and require a lot of context
+to complete. Steps should roughly be atomic pieces of work that can stand on
+their own.
+
+#START CODE CONTEXT
+{{{codeContext}}}
+#END CODE CONTEXT
+
+#START REQUIREMENTS
+{{{requirements}}}
+#END REQUIREMENTS
+
+{{#planningPrompt}}
+#IMPORTANT INSTRUCTIONS
+{{{planningPrompt}}}
+#END IMPORTANT INSTRUCTIONS
+{{/planningPrompt}}
+
+{{#reproduceIssue}}
+#CRITICAL INSTRUCTIONS
+{{{reproducePrompt}}}
+#END CRITICAL INSTRUCTIONS
+{{/reproduceIssue}}

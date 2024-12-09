@@ -1,0 +1,189 @@
+package dev
+
+import (
+	"fmt"
+	"sidekick/llm"
+	"sidekick/models"
+
+	"go.temporal.io/sdk/workflow"
+)
+
+type RequestKind string
+
+const (
+	RequestKindFreeForm       RequestKind = "free_form"
+	RequestKindMultipleChoice RequestKind = "multiple_choice"
+	RequestKindApproval       RequestKind = "approval"
+)
+
+type RequestForUser struct {
+	OriginWorkflowId string
+	FlowActionId     string
+	Content          string
+	Subflow          string
+	RequestParams    map[string]interface{}
+	RequestKind      RequestKind
+}
+
+func (r RequestForUser) ActionParams() map[string]any {
+	params := map[string]any{
+		"requestContent": r.Content,
+		"requestKind":    r.RequestKind,
+	}
+	for k, v := range r.RequestParams {
+		params[k] = v
+	}
+	return params
+}
+
+type UserResponse struct {
+	TargetWorkflowId string
+	Content          string
+	Approved         *bool
+	Choice           string
+}
+
+func GetUserApproval(actionCtx DevActionContext, approvalPrompt string, requestParams map[string]interface{}) (*UserResponse, error) {
+	if actionCtx.RepoConfig.DisableHumanInTheLoop {
+		// auto-approve for now if humans are not in the loop
+		// TODO: add a self-review process in this case
+		approved := true
+		return &UserResponse{Approved: &approved}, nil
+	}
+
+	// Create a RequestForUser struct for approval request
+	req := RequestForUser{
+		OriginWorkflowId: workflow.GetInfo(actionCtx).WorkflowExecution.ID,
+		Content:          approvalPrompt,
+		Subflow:          actionCtx.FlowScope.SubflowName,
+		RequestParams:    requestParams,
+		RequestKind:      RequestKindApproval,
+	}
+	actionCtx.ActionParams = req.ActionParams()
+
+	// Ensure tracking of the flow action within the guidance request
+	return TrackHuman(actionCtx, func(flowAction models.FlowAction) (*UserResponse, error) {
+		req.FlowActionId = flowAction.Id
+		return GetUserResponse(actionCtx.DevContext, req)
+	})
+	/*
+		if err != nil {
+			return UserResponse{}, fmt.Errorf("failed to get user response: %v", err)
+		}
+		return *userResponse, nil
+	*/
+}
+
+// Generic function for all user request kinds (free-form, multiple-choice,
+// approval, etc). It does NOT support disabling human-in-the-loop, that is
+// expected to be handled by the caller and never get this far.
+func GetUserResponse(dCtx DevContext, req RequestForUser) (*UserResponse, error) {
+	if dCtx.RepoConfig.DisableHumanInTheLoop {
+		return nil, fmt.Errorf("can't get user response as human-in-the-loop process is disabled")
+	}
+
+	// Signal the workflow
+	workflowInfo := workflow.GetInfo(dCtx)
+	parentWorkflowID := workflowInfo.ParentWorkflowExecution.ID
+	req.OriginWorkflowId = workflowInfo.WorkflowExecution.ID
+	workflowErr := workflow.SignalExternalWorkflow(dCtx, parentWorkflowID, "", SignalNameRequestForUser, req).Get(dCtx, nil)
+	if workflowErr != nil {
+		return nil, fmt.Errorf("failed to signal external workflow: %v", workflowErr)
+	}
+
+	// Wait for the 'userResponse' signal
+	var userResponse UserResponse
+	selector := workflow.NewNamedSelector(dCtx, "userResponseSelector")
+	selector.AddReceive(workflow.GetSignalChannel(dCtx, SignalNameUserResponse), func(c workflow.ReceiveChannel, more bool) {
+		c.Receive(dCtx, &userResponse)
+	})
+	selector.Select(dCtx)
+
+	return &userResponse, nil
+}
+
+func GetUserGuidance(dCtx DevContext, guidanceContext string, requestParams map[string]any) (*UserResponse, error) {
+	if dCtx.RepoConfig.DisableHumanInTheLoop {
+		return &UserResponse{
+			Content: `
+Automated response: User guidance is actually not available and will not be in
+this case because the human-in-the-loop process has been disabled. Thus there
+will be no way to clarify requirements or get other more specific guidance. But
+here is some general guidance that should help, as you seem to be stuck going in
+circles given that you tripped the threshold number of iterations to engage the
+human-in-the-loop process.
+
+1. If requirements are unclear, make a best guess at what the requirements are
+asking for.
+2. If you are solving a problem or debugging an error, make use of lateral
+thinking and try something completely new from what you were doing before.
+
+Randomly select and apply one of these techniques: TRIZ principles, SCAMPER, or
+oblique strategies, to explore diverse approaches for creatively solving the
+problem at hand. First choose one technique, then consider step by step what it
+would mean to apply it to your current situation.
+		`,
+		}, nil
+	}
+
+	guidanceRequest := &RequestForUser{
+		OriginWorkflowId: workflow.GetInfo(dCtx).WorkflowExecution.ID,
+		Subflow:          dCtx.FlowScope.SubflowName,
+		Content:          guidanceContext,
+		RequestKind:      RequestKindFreeForm,
+		RequestParams:    requestParams,
+	}
+
+	actionCtx := dCtx.NewActionContext("Get User Guidance")
+	actionCtx.ActionParams = guidanceRequest.ActionParams()
+
+	// Ensure tracking of the flow action within the guidance request
+	return TrackHuman(actionCtx, func(flowAction models.FlowAction) (*UserResponse, error) {
+		guidanceRequest.FlowActionId = flowAction.Id
+		return GetUserResponse(dCtx, *guidanceRequest)
+	})
+}
+
+// NOTE: this function is only needed due to the poor structure where feedback
+// and function calls are incorporated outside of the context where those are
+// generated. Once we stop doing that, this function can be removed in favor of
+// GetUserGuidance, or at least can be greatly simplified to not take in the
+// currentPromptInfo and chatHistory.
+//
+// before replacing, we'll need a better solution for remembering user feedback too.
+func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceContext string, chatHistory *[]llm.ChatMessage, requestParams map[string]any) (FeedbackInfo, error) {
+	userResponse, err := GetUserGuidance(dCtx, guidanceContext, requestParams)
+	if err != nil {
+		return FeedbackInfo{}, fmt.Errorf("failed to get user response: %v", err)
+	}
+
+	switch info := currentPromptInfo.(type) {
+	case FeedbackInfo:
+		info.Feedback += "\n\n#START Guidance From the User\n\nBased on all the work done so far and the above feedback, we asked the user to intervene and provide guidance, or fix the problem. Here is what they said about how to move forward from here: " + userResponse.Content + "\n#END Guidance From the User"
+		return info, nil
+	case SkipInfo:
+		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content}
+		return feedbackInfo, nil
+	case ToolCallResponseInfo:
+		// the caller is replacing the prompt info so will lose this unless we
+		// append it to chat history
+		*chatHistory = append(*chatHistory, llm.ChatMessage{
+			Role:       llm.ChatMessageRoleTool,
+			Content:    info.Response,
+			Name:       info.FunctionName,
+			ToolCallId: info.TooCallId,
+		})
+		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content}
+		return feedbackInfo, nil
+	case InitialDevStepInfo:
+		content := renderAuthorEditBlockInitialDevStepPrompt(info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, dCtx.RepoConfig)
+		*chatHistory = append(*chatHistory, llm.ChatMessage{
+			Role:    llm.ChatMessageRoleUser,
+			Content: content,
+		})
+		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content}
+		return feedbackInfo, nil
+	default:
+		return FeedbackInfo{}, fmt.Errorf("unsupported current prompt info type: %s", currentPromptInfo.GetType())
+	}
+}

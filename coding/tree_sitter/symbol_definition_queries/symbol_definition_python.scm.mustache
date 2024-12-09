@@ -1,0 +1,40 @@
+;(module
+;  (expression_statement
+;    (assignment
+;      left: (identifier) @name
+;    )
+;  )
+;  (#eq? @name "{{SymbolName}}")
+;) @definition
+
+(
+  (type_alias_statement
+    (type (identifier) @name)
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(expression_statement
+  (assignment
+    left: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (decorator)*
+  .
+  (class_definition
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (decorator)*
+  .
+  (function_definition
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition

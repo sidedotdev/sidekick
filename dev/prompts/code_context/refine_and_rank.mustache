@@ -1,0 +1,33 @@
+{{{startInitialCodeContext}}}
+{{{originalCodeContext}}}
+{{{endInitialCodeContext}}}
+
+Someone previously requested the above code context in relation to the following
+input:
+
+{{> input}}
+
+Unfortunately, the requested code context is too long. Also, we're interested in
+sorting code context by relevance. The original code context requests that we
+must adjust/rewrite are the following:
+
+{{{originalCodeContextRequests}}}
+
+Consider which parts of the code are most relevant to have access to in order to
+{{#step}} do the current step only, {{/step}}
+{{^step}} meet the given requirements, {{/step}}
+and formulate a set of new code context requests.
+
+1. Order the new code context requests from most relevant to least relevant
+2. Leave out anything that is completely irrelevant
+3. If a code context request is partially relevant, and there are nested symbols
+that are most relevant, use the nested symbol names instead. For example, if
+there is a very large class that was requested but is mostly not relevant,
+except a few methods, just specify the relevant method names
+4. Feel free to split up requests for a single file for multiple symbols into
+multiple requests (one per symbol) if that is required to better order by
+relevance.
+
+Note: When new functions / tests / types / etc are required, do include one
+examplar of code similar to what you need to write, but not multiple for any
+specific type of functionality.

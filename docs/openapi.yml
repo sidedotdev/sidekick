@@ -1,0 +1,329 @@
+openapi: 3.0.0
+info:
+  title: Sidekick API
+  version: 1.0.0
+  description: This is the API documentation for Sidekick
+
+paths:
+  /v1/workspaces:
+    get:
+      summary: Get all workspaces
+      operationId: getWorkspaces
+      responses:
+        '200':
+          description: A list of workspaces
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workspaces:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Workspace'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      summary: Create a new workspace
+      operationId: createWorkspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceRequest'
+      responses:
+        '200':
+          description: The created workspace
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/workspaces/{workspaceId}/tasks:
+    get:
+      summary: Get tasks for a workspace
+      operationId: getTasks
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: statuses
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: A list of tasks
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Task'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      summary: Create a new task in a workspace
+      operationId: createTask
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+      responses:
+        '200':
+          description: The created task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/workspaces/{workspaceId}/tasks/{id}:
+    get:
+      summary: Get a specific task in a workspace
+      operationId: getTask
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          description: The task ID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The requested task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '404':
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+                
+  /v1/workspaces/{workspaceId}/tasks/{id}:
+    put:
+      summary: Update a task in a workspace
+      operationId: updateTask
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          description: The task ID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+      responses:
+        '200':
+          description: The updated task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      summary: Delete a task in a workspace
+      operationId: deleteTask
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          description: The task ID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: A message indicating the task was deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '404':
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    Workspace:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "ws_1x2y3z"
+        name:
+          type: string
+          example: "My Workspace"
+        localRepoDir:
+          type: string
+          example: "/path/to/local/repo"
+        created:
+          type: string
+          format: date-time
+          example: "2023-10-01T12:00:00Z"
+        updated:
+          type: string
+          format: date-time
+          example: "2023-10-01T12:00:00Z"
+
+    WorkspaceRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "My Workspace"
+        localRepoDir:
+          type: string
+          example: "/path/to/local/repo"
+      required:
+        - name
+        - localRepoDir
+
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+        workspaceId:
+          type: string
+        status:
+          type: string
+        agentType:
+          type: string
+        flowType:
+          type: string
+        description:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    TaskRequest:
+      type: object
+      properties:
+        description:
+          type: string
+        status:
+          type: string
+        agentType:
+          type: string
+        flowType:
+          type: string
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Error message"

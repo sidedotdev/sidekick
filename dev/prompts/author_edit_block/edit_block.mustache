@@ -1,0 +1,151 @@
+An *edit block* is formatted like so:
+
+- The first line is "```" (without quotes), optionally followed by the
+  language name, as in regular code blocks.
+- The second line is "edit_block:" followed by the edit block sequence number,
+  which must start at 1 and be auto-incremented for each edit block.
+- The third line is the path to the file
+- The fourth line is "{{{search}}}" (without quotes) when updating an existing
+  file, "<<<<<<< CREATE_FILE" when creating a file, "<<<<<<< DELETE_FILE" when
+  creating a file and "<<<<<<< APPEND_TO_FILE" when appending to an existing
+  file.
+- The next lines (the OLD LINES section) are the old lines of text that need to be
+  replaced or provide context, if any. Only provide old lines that are present
+  in your code context, and ensure they are copied verbatim
+- Then comes a line with "{{{divider}}}" (without quotes)
+- The next lines are the new lines of text that replace the old lines
+- The second-last line is "{{{replace}}}" (without quotes) when searching.
+  When creating or appending to file, instead of "REPLACE_EXACT" it should be "NEW_LINES"
+- The last line is "```" (without quotes)
+
+We use the above format for each *edit block*. Do not place multiple conflict
+markers within a single *edit block*. Above the OLD LINES section, write the path
+to the file. In the OLD LINES section, write out the old code (which must be
+present in the chat history context) being replaced verbatim, and in the NEW
+LINES section, write out the new code, also verbatim, as it should appear in the
+final file. Here's an example of an *edit block*, adding a new method named
+another_method above an existing method:
+
+```python
+edit_block:1
+foo/bar/something.py
+{{{search}}}
+	def existing_method(x):
+{{{divider}}}
+	def another_method(a):
+		print(a)
+		return a
+
+	def existing_method(x):
+{{{replace}}}
+```
+
+Here's another example, redefining the method added above:
+
+```python
+edit_block:2
+foo/bar/something.py
+{{{search}}}
+	def another_method(a):
+		print(a)
+		return a
+{{{divider}}}
+	def another_method(a, b):
+		print(a)
+		print(b)
+		return a + b
+{{{replace}}}
+```
+
+An example adding a new class above an existing one:
+
+```python
+edit_block:3
+foo/bar/something.py
+{{{search}}}
+class SomeExistingClass():
+{{{divider}}}
+class TheNewClass():
+	pass
+
+class SomeExistingClass():
+{{{replace}}}
+```
+
+Notice we add last lines in the search section as the last lines in the replace
+section, to ensure we don't break the existing class.
+
+Anther example, this time adding a new method to the top of an existing class:
+
+```python
+edit_block:4
+foo/bar/something.py
+{{{search}}}
+class SomeExistingClass():
+{{{divider}}}
+class SomeExistingClass():
+	def the_new_method():
+		pass
+{{{replace}}}
+```
+
+Every edit block must be fenced with '```'. The first
+line after the fencing should be the file name, followed directly by the
+conflict markers.
+
+Very important: all lines in the OLD LINES section must match the original code
+exactly, being an exact set of sequential lines from the file, including
+comments. NEVER try to edit functions without reading their full body.
+To create new files, provide a new file path, use "CREATE_FILE" instead of
+"SEARCH_EXACT" and 0 lines in the OLD LINES section. For example, the following edit
+block creates the file at path "foo/bar/newfile.json":
+
+```json
+edit_block:5
+foo/bar/newfile.json
+<<<<<<< CREATE_FILE
+{{{divider}}}
+{"key": "value"}
+>>>>>>> NEW_LINES
+```
+
+To append at the end (emphasis: THE END), of an existing file, use
+"APPEND_TO_FILE" instead of "CREATE_FILE" and 0 lines in the OLD LINES section.
+Then the new lines will be appended to the end of the existing file. This is
+suitable only when adding new top-level code, since nested code, eg test cases,
+will be invalid if just appended to the end of a file. This will never add to
+the beginning of a file. Creating a file that already exists will fail, as will
+appending to a file that does not exist.
+
+Remember these rules:
+
+1. NEVER SKIP LINES OR COMMENTS in the OLD LINES section!
+2. NEVER ELIDE LINES AND REPLACE THEM WITH A COMMENT!
+3. NEVER OMIT OR CHANGE ANY WHITESPACE (tabs or spaces stay the same)!
+4. ALWAYS INCLUDE THE PATH TO THE FILE AT THE START OF AN EDIT BLOCK!
+5. Retain existing comments including TODOs/FIXMEs, unless they are resolved
+6. Start a OLD LINES section with a line that is just a 4-6 lines before the first
+line where a change is required
+7. Do NOT include additional comments explaining the change made to a specific
+line of code. Only include comments that would help someone else understand the
+code on its own and not in relation to the change being made.
+8. Increment the edit block sequence number for each new edit block, so that we
+have a unique number for each edit block.
+9. Ensure you edit balanced parentheses, brackets, and braces across old and new
+lines correctly. If the old line does not have a closing brace, the new line
+should not have a closing brace either.
+10. Don't include imports when using APPEND_TO_FILE when there are already
+imports at the top of the file: edit those import lines to add the new imports
+instead.
+11. Edit a single symbol (function/type/etc) at a time per edit block. For
+multiple edits to multiple symbols, use multiple separate edit blocks, each
+closed via the last line "```". Do this even if the symbols are beside each
+other in the same file.
+12. Never try to edit any lines of code that you don't see. Instead, use tools
+to view all the lines of code you want to edit first if the lines you want to
+edit are not visible to you.
+
+When you are done with all edit blocks, avoid using further tools: output
+without a tool call is the signal for us to finally apply those edits to the
+filesystem. Edit blocks from all messages that include tool calls will remain
+pending until that point.

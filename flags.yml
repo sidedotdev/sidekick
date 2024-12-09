@@ -1,0 +1,12 @@
+check-edits:
+  variations:
+    t1: true
+    c: false
+  defaultRule:
+    variation: t1
+info-needs:
+  variations:
+    t1: true
+    c: false
+  defaultRule:
+    variation: c

@@ -1,0 +1,117 @@
+@import './base.css';
+
+/* NOTE: color variables should be defined in base.css */
+
+body {
+  font-family: "JetBrains Mono", monospace;
+  font-optical-sizing: auto;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.2;
+  color: var(--color-text);
+  background-color: var(--color-background);
+}
+
+#app {
+  min-width: 300px;
+  margin: 0 auto;
+
+  font-weight: normal;
+}
+
+#app > header,#app > main, #app > footer {
+  padding: 0 4rem;
+}
+
+.invisible {
+  visibility: hidden;
+}
+
+a {
+  text-decoration: none;
+  color: var(--color-link);
+}
+
+pre {
+  white-space: pre-wrap;
+}
+
+.cta-button-color {
+  background-color: var(--color-cta-button-bg);
+  background:  linear-gradient(90deg, var(--color-cta-button-bg) 0%, rgba(253,29,29,0.2) 100%), rgba(131,58,180,0.9); 
+  color: var(--color-cta-button-text);
+  text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.3);
+}
+.cta-button {
+  font-family: "JetBrains Mono", monospace;
+  background-color: var(--color-cta-button-bg);
+  background:  linear-gradient(90deg, var(--color-cta-button-bg) 0%, rgba(253,29,29,0.2) 100%), rgba(131,58,180,0.9); 
+  color: var(--color-cta-button-text);
+  text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.9);
+  margin: 0 auto;
+  display: table;
+  font-size: 16px;
+  font-weight: 400;
+  text-decoration: none;
+  padding: 0.5rem 1.0rem;
+  border-radius: 4px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  transition: transform 0.3s, box-shadow 0.3s;
+}
+
+.green {
+  text-decoration: none;
+  color: var(--color-green);
+  transition: 0.4s;
+}
+
+.loader {
+  --s: 6px; /* the size of the wave */
+  --b: 4px; /* the thickness of the line*/
+  
+  height: calc(2*var(--s));
+  aspect-ratio: 2.5;
+  display: grid;
+  padding: 2px;
+  filter: blur(2px) contrast(20) hue-rotate(20deg);
+  background: #fff;
+  mix-blend-mode: darken;
+}
+.loader::before{
+  content: "";
+  --_g: calc(-.6*var(--s)), #0000 calc(99% - var(--b)),blue calc(101% - var(--b)) 99%,#0000 101%;
+  --_r: calc(1.166*var(--s) + var(--b)/2) at left 50%;
+  background :
+    radial-gradient(var(--_r) bottom var(--_g)) 
+      calc(50% - var(--s)) calc(50% - var(--s))/calc(4*var(--s)) calc(2*var(--s)),
+    radial-gradient(var(--_r) top    var(--_g)) 
+      calc(50% + var(--s)) calc(50% + var(--s))/calc(4*var(--s)) calc(2*var(--s));
+  animation: m 1s infinite linear;
+}
+@keyframes m {
+  to {
+    background-position: 
+      calc(50% - 5*var(--s)) calc(50% - var(--s)),
+      calc(50% - 3*var(--s)) calc(50% + var(--s))
+  }
+}
+
+a:hover, button:hover {
+  cursor: pointer;
+}
+@media (prefers-color-scheme: dark) {
+  a:hover, button:hover {
+    filter: brightness(1.2);
+  }
+}
+
+#app {
+  display: grid;
+  grid-template-columns: 2fr;
+  grid-template-rows: 2.5rem 1fr;
+  height: 100vh;
+  background-color: var(--color-background);
+  color: var(--color-text);
+}
+
+/* NOTE: color variables should be defined in base.css */

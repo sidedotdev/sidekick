@@ -1,0 +1,1 @@
+; Intentionally blank: not needed. The embedded language header query is used for the script tag.

@@ -1,0 +1,87 @@
+package golang
+
+import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/ioutil"
+	"strings"
+)
+
+type ExtractGoFunctionBodiesInput struct {
+	Pairs []FileFunctionPair
+}
+
+type FileFunctionPair struct {
+	Filename   string `json:"filename"`
+	FunctionSig string `json:"function_sig"`
+}
+
+func ExtractGoFunctionBodiesActivity(input ExtractGoFunctionBodiesInput) (string, error) {
+	var allBodies []string
+
+	for _, pair := range input.Pairs {
+		file, functionSig := pair.Filename, pair.FunctionSig
+		fileHeader := fmt.Sprintf("File: %s\n", file)
+		functionBody, err := extractFunctionBody(file, functionSig, 5)
+		if err != nil {
+			return "", err
+		}
+		allBodies = append(allBodies, fileHeader + functionBody)
+	}
+
+	return strings.Join(allBodies, "\n\n"), nil
+}
+
+func extractFunctionBody(filename, signature string, contextLines int) (string, error) {
+	// Read the source code from the file
+	source, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return "", err
+	}
+
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, filename, source, parser.AllErrors|parser.ParseComments)
+	if err != nil {
+		return "", err
+	}
+
+	// Fetch all comments from the file
+	commentMap := ast.NewCommentMap(fset, node, node.Comments)
+
+	for _, decl := range node.Decls {
+		if funcDecl, ok := decl.(*ast.FuncDecl); ok {
+			extractedSig := ExtractFunctionSignature(fset, funcDecl)
+
+			if extractedSig == signature {
+				startPos := fset.Position(funcDecl.Pos()).Line - contextLines
+				endPos := fset.Position(funcDecl.End()).Line + contextLines
+
+				// Check for comments associated with this function declaration
+				if comments, exists := commentMap[funcDecl]; exists {
+					commentStartPos := fset.Position(comments[0].Pos()).Line
+					if commentStartPos < startPos {
+						startPos = commentStartPos
+					}
+				}
+
+				// Ensure boundaries
+				totalLines := len(strings.Split(string(source), "\n"))
+				if startPos < 1 {
+					startPos = 1
+				}
+				if endPos > totalLines {
+					endPos = totalLines
+				}
+
+				// Extract the context and function body
+				contextAndBodyLines := strings.Split(string(source), "\n")[startPos-1 : endPos]
+				contextAndBodyStr := strings.Join(contextAndBodyLines, "\n")
+				return fmt.Sprintf("Start Line: %v\n```go\n%s\n```", startPos, contextAndBodyStr), nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("Function with signature %s not found in %s", signature, filename)
+}
