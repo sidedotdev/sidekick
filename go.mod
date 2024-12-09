@@ -16,7 +16,6 @@ require (
 	github.com/invopop/jsonschema v0.12.0
 	github.com/joho/godotenv v1.5.1
 	github.com/kardianos/service v1.2.2
-	github.com/pelletier/go-toml/v2 v2.1.0
 	github.com/redis/go-redis/v9 v9.5.1
 	github.com/rs/zerolog v1.31.0
 	github.com/sashabaranov/go-openai v1.29.1
@@ -52,7 +51,7 @@ require (
 	github.com/charmbracelet/lipgloss v0.7.1 // indirect
 	github.com/chenzhuoyu/base64x v0.0.0-20230717121745-296ad89f973d // indirect
 	github.com/chenzhuoyu/iasm v0.9.0 // indirect
-	github.com/cloudflare/circl v1.3.3 // indirect
+	github.com/cloudflare/circl v1.3.7 // indirect
 	github.com/containerd/console v1.0.4-0.20230313162750-1ae8d489ac81 // indirect
 	github.com/danieljoos/wincred v1.2.0 // indirect
 	github.com/danwakefield/fnmatch v0.0.0-20160403171240-cbb64ac3d964 // indirect
@@ -94,6 +93,7 @@ require (
 	github.com/muesli/termenv v0.15.2 // indirect
 	github.com/nikunjy/rules v1.5.0 // indirect
 	github.com/pborman/uuid v1.2.1 // indirect
+	github.com/pelletier/go-toml/v2 v2.1.0 // indirect
 	github.com/pjbgf/sha1cd v0.3.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
