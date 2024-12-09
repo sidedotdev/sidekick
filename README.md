@@ -1,6 +1,9 @@
-<img src="frontend/public/android-chrome-512x512.png" alt="Sidekick Logo">
 
-# Sidekick
+<h1>
+  <img src="frontend/public/android-chrome-512x512.png" alt="Sidekick Logo" height="45" align="left">
+  Sidekick
+</h1>
+
 
 Sidekick is AI automation designed to support software engineers working on
 real-world projects.
