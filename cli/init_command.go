@@ -11,12 +11,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sidekick/api"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/db"
 	"sidekick/llm"
 	"sidekick/models"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -48,18 +50,16 @@ func (h *InitCommandHandler) handleInitCommand() error {
 
 	isRepo, err := isGitRepo(baseDir)
 	if err != nil {
-		return fmt.Errorf("error checking if directory is a Git repository: %w", err)
+		return fmt.Errorf("error checking if directory is a git repository: %w", err)
 	}
 	if !isRepo {
-		return fmt.Errorf("this tool needs to be run in a Git repository directory")
+		return fmt.Errorf("side init must be run within a git repository")
 	}
-	fmt.Println("✔ The current directory is a Git repository.")
 
 	err = checkLanguageSpecificTools(baseDir)
 	if err != nil {
 		return err
 	}
-	fmt.Println("✔ Checked language-specific tools.")
 
 	config, configCheck, err := checkConfig(baseDir)
 	if err != nil {
@@ -82,6 +82,13 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	}
 
 	ctx := context.Background()
+
+	// check if redis is running
+	err = h.dbAccessor.CheckConnection(ctx)
+	if err != nil {
+		return fmt.Errorf("Redis isn't running, please install and run it: https://redis.io/docs/install/install-redis/")
+	}
+
 	workspace, err := h.findOrCreateWorkspace(ctx, workspaceName, baseDir)
 	if err != nil {
 		return fmt.Errorf("error finding or creating workspace: %w", err)
@@ -109,6 +116,12 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	}
 	fmt.Println("✔ Workspace configuration has been set up.")
 
+	// check if the temporal cli is installed with the mimimum required version or higher
+	err = ensureTemporalCliVersion("1.22.0")
+	if err != nil {
+		return err
+	}
+
 	if checkServerStatus() {
 		fmt.Println("✔ Sidekick server is running. Go to http://localhost:" + api.DefaultPort)
 	} else {
@@ -116,6 +129,47 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	}
 
 	return nil
+}
+
+func ensureTemporalCliVersion(minimumVersion string) error {
+	cmd := exec.Command("temporal", "--version")
+	cmdOutput, err := cmd.Output()
+	installLink := "https://docs.temporal.io/cli#installation"
+	if err != nil {
+		return fmt.Errorf("Temporal CLI is not installed. Please install it from %s", installLink)
+	}
+
+	// parses output like this: temporal version 0.10.6 (server 1.22.0) (ui 2.18.2)
+	re := regexp.MustCompile(`server (\d+\.\d+\.\d+)`)
+	matches := re.FindStringSubmatch(string(cmdOutput))
+	if len(matches) < 2 {
+		return fmt.Errorf("unable to parse Temporal CLI version output")
+	}
+
+	serverVersion := matches[1]
+	if compareVersions(serverVersion, minimumVersion) < 0 {
+		return fmt.Errorf("Temporal server version must be at least %s, found %s. Install the latest version of the temporal cli from %s", minimumVersion, serverVersion, installLink)
+	}
+
+	return nil
+}
+
+func compareVersions(serverVersion, requiredVersion string) int {
+	serverParts := strings.Split(serverVersion, ".")
+	requiredParts := strings.Split(requiredVersion, ".")
+
+	for i := 0; i < len(serverParts); i++ {
+		serverPart, _ := strconv.Atoi(serverParts[i])
+		requiredPart, _ := strconv.Atoi(requiredParts[i])
+
+		if serverPart > requiredPart {
+			return 1
+		} else if serverPart < requiredPart {
+			return -1
+		}
+	}
+
+	return 0
 }
 
 func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspaceID string, currentConfig *models.WorkspaceConfig, llmProviders, embeddingProviders []string) error {

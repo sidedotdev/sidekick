@@ -8,6 +8,7 @@ import (
 
 // TODO split this into multiple interfaces, TopicAccessor, MessageAccessor, TaskAcessor, KVAccessor etc.
 type DatabaseAccessor interface {
+	CheckConnection(ctx context.Context) error
 	PersistTopic(ctx context.Context, topic models.Topic) error
 	GetTopics(ctx context.Context, workspaceId string) ([]models.Topic, error)
 	PersistMessage(ctx context.Context, message models.Message) error

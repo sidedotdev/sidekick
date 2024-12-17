@@ -66,6 +66,7 @@ side start
 ```
 
 Then you can create a task at http://localhost:8855/kanban
+
 ## Dependencies 
 
 1. [temporal cli](https://docs.temporal.io/cli#installation)
@@ -83,6 +84,8 @@ Note: All language-specific dependencies are also dev dependencies for language-
 ## Configuration
 
 ### side.toml
+
+The `side.toml` file contains repositiory-specific configuration.
 
 #### test_commands
 
@@ -108,7 +111,6 @@ too, at the cost of time and accuracy.
 ### .sideignore
 
 <!-- TODO /gen how and when to use the .sideignore file -->
-
 
 ## Language and Framework Support
 
@@ -190,3 +192,7 @@ Planned languages include:
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Updating Dependencies
+
+To update the project dependencies and ensure the `go.sum` file is up-to-date, run the following command:

@@ -19,6 +19,11 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
+func (db RedisDatabase) CheckConnection(ctx context.Context) error {
+	_, err := db.Client.Ping(context.Background()).Result()
+	return err
+}
+
 func (db RedisDatabase) GetWorkspaceConfig(ctx context.Context, workspaceId string) (models.WorkspaceConfig, error) {
 	key := fmt.Sprintf("%s:workspace_config", workspaceId)
 	configJson, err := db.Client.Get(ctx, key).Result()
