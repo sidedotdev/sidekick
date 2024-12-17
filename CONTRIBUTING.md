@@ -119,6 +119,11 @@ cd ../sidekick
 
 ### Updating mocks
 
+Before running these, take note of any manual modifications that may have been
+necessary by searching for `NOTE` comments. While not great, it's necessary as
+mockery gets confused by temporal's internal packages, which requires some
+post-generation mock surgery.
+
 ```sh
 mockery --srcpkg=go.temporal.io/sdk/client \
 --name=Client \
