@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	temporal_worker "go.temporal.io/sdk/worker"
 	"net/http"
 	"os"
 	"os/signal"
 	"sidekick/api"
 	"sidekick/db"
 	"sidekick/worker"
+	"sync"
+	"syscall"
 
 	// Embedding the frontend build files
 	_ "embed"
@@ -44,14 +48,8 @@ func (p *program) Start(s service.Service) error {
 }
 
 func (p *program) run() {
-	// Start the server and worker processes
-	if err := startServer(); err != nil {
-		log.Error().Err(err).Msg("Failed to start server")
-	}
-
-	if err := startWorker(); err != nil {
-		log.Error().Err(err).Msg("Failed to start worker")
-	}
+	startServer()
+	startWorker()
 }
 
 func (p *program) Stop(s service.Service) error {
@@ -159,54 +157,68 @@ func handleStartCommand(args []string) {
 		ensureTemporalServerOrExit()
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+
 	if server {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			fmt.Println("Starting server...")
-			if err := startServer(); err != nil {
-				log.Fatal().Err(err).Msg("Failed to start server")
+			srv := startServer()
+
+			// Wait for cancellation
+			<-ctx.Done()
+			fmt.Println("Stopping server...")
+
+			if err := srv.Shutdown(ctx); err != nil {
+				panic(fmt.Sprintf("Graceful API server shutdown failed: %s", err))
 			}
+			fmt.Println("Server stopped")
 		}()
-		// TODO gracefully stop the server
-		// defer func() {
-		// 	stopServer()
-		// }()
 	}
 
 	if worker {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			fmt.Println("Starting worker...")
-			if err := startWorker(); err != nil {
-				log.Fatal().Err(err).Msg("Failed to start worker")
-			}
+			w := startWorker()
+
+			// Wait for cancellation
+			<-ctx.Done()
+			fmt.Println("Stopping worker...")
+			w.Stop()
 		}()
-		// TODO gracefully stop the worker
-		// defer func() {
-		// 	stopWorker()
-		// }()
 	}
 
-	// Handle signals to gracefully shutdown the server and worker
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt)
-	<-interrupt
+	// Wait for interrupt signal to gracefully shutdown the server
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Info().Msg("Shutdown Server ...")
+
+	// Signal all goroutines to stop
+	cancel()
+
+	// Wait for all processes to complete
+	wg.Wait()
+	fmt.Println("Shutdown complete")
 }
 
-func startServer() error {
-	if err := api.RunServer(); err != nil {
-		return fmt.Errorf("Failed to start server: %w", err)
-	}
-	return nil
+func startServer() *http.Server {
+	return api.RunServer()
 }
 
-func startWorker() error {
+func startWorker() temporal_worker.Worker {
 	var hostPort string
 	var taskQueue string
 	flag.StringVar(&hostPort, "hostPort", client.DefaultHostPort, "Host and port for the Temporal server, eg localhost:7233")
 	flag.StringVar(&taskQueue, "taskQueue", "default", "Task queue to use, eg default")
 	flag.Parse()
-	worker.StartWorker(hostPort, taskQueue)
-
-	return nil
+	return worker.StartWorker(hostPort, taskQueue)
 }
 
 func isTemporalServerRunning() bool {

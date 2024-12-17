@@ -32,17 +32,29 @@ import (
 // TODO register/reserve default port with IANA
 const DefaultPort = "8855"
 
-func RunServer() error {
+func RunServer() *http.Server {
 	gin.SetMode(gin.ReleaseMode)
 	ctrl := NewController()
-	r := DefineRoutes(ctrl)
+	router := DefineRoutes(ctrl)
 
 	port := os.Getenv("SIDE_SERVER_PORT")
 	if port == "" {
 		port = DefaultPort
 	}
 
-	return r.Run(fmt.Sprintf(":%s", port)) // starts the server
+	srv := &http.Server{
+		Addr:    fmt.Sprintf(":%s", port),
+		Handler: router.Handler(),
+	}
+
+	// Start server in a goroutine
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Failed to start API server: %s\n", err)
+		}
+	}()
+
+	return srv
 }
 
 const (
