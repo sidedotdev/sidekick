@@ -1,18 +1,9 @@
 package main
 
 import (
-	"context"
-	"flag"
 	"fmt"
-	temporal_worker "go.temporal.io/sdk/worker"
-	"net/http"
 	"os"
-	"os/signal"
-	"sidekick/api"
 	"sidekick/db"
-	"sidekick/worker"
-	"sync"
-	"syscall"
 
 	// Embedding the frontend build files
 	_ "embed"
@@ -21,7 +12,6 @@ import (
 	"github.com/kardianos/service"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
-	"go.temporal.io/sdk/client"
 )
 
 var (
@@ -133,108 +123,6 @@ func handleServiceCommand() {
 	err = service.Control(s, os.Args[2])
 	if err != nil {
 		fmt.Println("Service control action failed:", err)
-		os.Exit(1)
-	}
-}
-
-func handleStartCommand(args []string) {
-	server := false
-	worker := false
-
-	// Parse optional args: `server`, `worker`
-	for _, arg := range args {
-		switch arg {
-		case "server":
-			server = true
-		case "worker":
-			worker = true
-		}
-	}
-
-	if !server && !worker {
-		server = true
-		worker = true
-		ensureTemporalServerOrExit()
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var wg sync.WaitGroup
-
-	if server {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			fmt.Println("Starting server...")
-			srv := startServer()
-
-			// Wait for cancellation
-			<-ctx.Done()
-			fmt.Println("Stopping server...")
-
-			if err := srv.Shutdown(ctx); err != nil {
-				panic(fmt.Sprintf("Graceful API server shutdown failed: %s", err))
-			}
-			fmt.Println("Server stopped")
-		}()
-	}
-
-	if worker {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			fmt.Println("Starting worker...")
-			w := startWorker()
-
-			// Wait for cancellation
-			<-ctx.Done()
-			fmt.Println("Stopping worker...")
-			w.Stop()
-		}()
-	}
-
-	// Wait for interrupt signal to gracefully shutdown the server
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	log.Info().Msg("Shutdown Server ...")
-
-	// Signal all goroutines to stop
-	cancel()
-
-	// Wait for all processes to complete
-	wg.Wait()
-	fmt.Println("Shutdown complete")
-}
-
-func startServer() *http.Server {
-	return api.RunServer()
-}
-
-func startWorker() temporal_worker.Worker {
-	var hostPort string
-	var taskQueue string
-	flag.StringVar(&hostPort, "hostPort", client.DefaultHostPort, "Host and port for the Temporal server, eg localhost:7233")
-	flag.StringVar(&taskQueue, "taskQueue", "default", "Task queue to use, eg default")
-	flag.Parse()
-	return worker.StartWorker(hostPort, taskQueue)
-}
-
-func isTemporalServerRunning() bool {
-	resp, err := http.Get("http://localhost:8233")
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return true
-}
-
-func ensureTemporalServerOrExit() {
-	if !isTemporalServerRunning() {
-		fmt.Println("Temporal server is not running. Please start it before running starting sidekick server")
-		fmt.Println("To install the Temporal CLI, visit: https://docs.temporal.io/cli#install")
-		fmt.Println("To run the Temporal server, use the command:\n\n\ttemporal server start-dev --dynamic-config-value frontend.enableUpdateWorkflowExecution=true --dynamic-config-value frontend.enableUpdateWorkflowExecutionAsyncAccepted=true --db-filename local-temporal-db")
 		os.Exit(1)
 	}
 }
