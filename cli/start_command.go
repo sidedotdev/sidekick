@@ -276,10 +276,9 @@ func handleStartCommand(args []string) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			log.Info().Msg("Starting temporal server...")
+			log.Info().Msg("Starting temporal...")
 			cfg := newServerConfig("127.0.0.1", 7233)
 			temporalServer := startTemporal(cfg)
-			defer temporalServer.Stop()
 
 			log.Info().Str("component", "Server").Msgf("%v:%v", cfg.ip, cfg.ports.frontend)
 			log.Info().Str("component", "UI").Msgf("http://%v:%v", cfg.ip, cfg.ports.ui)
@@ -287,7 +286,8 @@ func handleStartCommand(args []string) {
 
 			// Wait for cancellation
 			<-ctx.Done()
-			log.Info().Msg("Stopping temporal server...")
+			log.Info().Msg("Stopping temporal...")
+			temporalServer.Stop()
 		}()
 	}
 
@@ -305,7 +305,6 @@ func handleStartCommand(args []string) {
 			if err := srv.Shutdown(ctx); err != nil {
 				log.Fatal().Err(err).Msg("Graceful API server shutdown failed")
 			}
-			log.Info().Msg("Server stopped")
 		}()
 	}
 
@@ -334,7 +333,7 @@ func handleStartCommand(args []string) {
 
 	// Wait for all processes to complete
 	wg.Wait()
-	log.Info().Msg("Shutdown complete")
+	log.Info().Msg("Shut down gracefully")
 }
 
 func startServer() *http.Server {
