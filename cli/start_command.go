@@ -246,20 +246,24 @@ func startTemporalServer(cfg *serverConfig) temporal.Server {
 func handleStartCommand(args []string) {
 	server := false
 	worker := false
+	temporal := false
 
-	// Parse optional args: `server`, `worker`
+	// Parse optional args: `server`, `worker`, `temporal`
 	for _, arg := range args {
 		switch arg {
 		case "server":
 			server = true
 		case "worker":
 			worker = true
+		case "temporal":
+			temporal = true
 		}
 	}
 
-	if !server && !worker {
+	if !server && !worker && !temporal {
 		server = true
 		worker = true
+		temporal = true
 		ensureTemporalServerOrExit()
 	}
 
@@ -267,6 +271,25 @@ func handleStartCommand(args []string) {
 	defer cancel()
 
 	var wg sync.WaitGroup
+
+	if temporal {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			log.Info().Msg("Starting temporal server...")
+			cfg := newServerConfig("127.0.0.1", 7233)
+			temporalServer := startTemporal(cfg)
+			defer temporalServer.Stop()
+
+			log.Info().Str("component", "Server").Msgf("%v:%v", cfg.ip, cfg.ports.frontend)
+			log.Info().Str("component", "UI").Msgf("http://%v:%v", cfg.ip, cfg.ports.ui)
+			log.Info().Str("component", "Metrics").Msgf("http://%v:%v/metrics", cfg.ip, cfg.ports.metrics)
+
+			// Wait for cancellation
+			<-ctx.Done()
+			log.Info().Msg("Stopping temporal server...")
+		}()
+	}
 
 	if server {
 		wg.Add(1)
