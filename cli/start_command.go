@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
-	"flag"
+
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"sidekick/api"
+	"sidekick/common"
 	"sidekick/worker"
 	"sync"
 	"syscall"
@@ -19,7 +20,6 @@ import (
 	uiserver "github.com/temporalio/ui-server/v2/server"
 	uiconfig "github.com/temporalio/ui-server/v2/server/config"
 	uiserveroptions "github.com/temporalio/ui-server/v2/server/server_options"
-	"go.temporal.io/sdk/client"
 	"go.temporal.io/server/common/authorization"
 	"go.temporal.io/server/common/cluster"
 	"go.temporal.io/server/common/config"
@@ -114,7 +114,7 @@ func startTemporalServer(cfg *serverConfig) temporal.Server {
 					SQL: &config.SQL{
 						PluginName: sqliteplugin.PluginName,
 						ConnectAttributes: map[string]string{
-							"mode":  "memory",
+							"mode":  "memory", // FIXME switch to disk
 							"cache": "shared",
 						},
 						DatabaseName: "temporal",
@@ -143,24 +143,28 @@ func startTemporalServer(cfg *serverConfig) temporal.Server {
 			"frontend": {
 				RPC: config.RPC{
 					GRPCPort: cfg.ports.frontend,
+					//BindOnLocalHost: true,
 					BindOnIP: cfg.ip,
 				},
 			},
 			"history": {
 				RPC: config.RPC{
 					GRPCPort: cfg.ports.history,
+					//BindOnLocalHost: true,
 					BindOnIP: cfg.ip,
 				},
 			},
 			"matching": {
 				RPC: config.RPC{
 					GRPCPort: cfg.ports.matching,
+					//BindOnLocalHost: true,
 					BindOnIP: cfg.ip,
 				},
 			},
 			"worker": {
 				RPC: config.RPC{
 					GRPCPort: cfg.ports.worker,
+					//BindOnLocalHost: true,
 					BindOnIP: cfg.ip,
 				},
 			},
@@ -232,14 +236,6 @@ func startTemporalServer(cfg *serverConfig) temporal.Server {
 		log.Fatal().Err(err).Msg("Unable to start server")
 	}
 
-	// FIXME move to caller
-	defer server.Stop()
-
-	// FIXME move to caller
-	log.Info().Str("component", "Server").Msgf("%v:%v", cfg.ip, cfg.ports.frontend)
-	log.Info().Str("component", "UI").Msgf("http://%v:%v", cfg.ip, cfg.ports.ui)
-	log.Info().Str("component", "Metrics").Msgf("http://%v:%v/metrics", cfg.ip, cfg.ports.metrics)
-
 	return server
 }
 
@@ -264,7 +260,6 @@ func handleStartCommand(args []string) {
 		server = true
 		worker = true
 		temporal = true
-		ensureTemporalServerOrExit()
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -277,7 +272,8 @@ func handleStartCommand(args []string) {
 		go func() {
 			defer wg.Done()
 			log.Info().Msg("Starting temporal...")
-			cfg := newServerConfig("127.0.0.1", 7233)
+
+			cfg := newServerConfig(common.GetTemporalServerHost(), common.GetTemporalServerPort())
 			temporalServer := startTemporal(cfg)
 
 			log.Info().Str("component", "Server").Msgf("%v:%v", cfg.ip, cfg.ports.frontend)
@@ -341,29 +337,5 @@ func startServer() *http.Server {
 }
 
 func startWorker() temporal_worker.Worker {
-	var hostPort string
-	var taskQueue string
-	flag.StringVar(&hostPort, "hostPort", client.DefaultHostPort, "Host and port for the Temporal server, eg localhost:7233")
-	flag.StringVar(&taskQueue, "taskQueue", "default", "Task queue to use, eg default")
-	flag.Parse()
-
-	return worker.StartWorker(hostPort, taskQueue)
-}
-
-func isTemporalServerRunning() bool {
-	resp, err := http.Get("http://localhost:8233")
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return true
-}
-
-func ensureTemporalServerOrExit() {
-	if !isTemporalServerRunning() {
-		fmt.Println("Temporal server is not running. Please start it before running starting sidekick server")
-		fmt.Println("To install the Temporal CLI, visit: https://docs.temporal.io/cli#install")
-		fmt.Println("To run the Temporal server, use the command:\n\n\ttemporal server start-dev --dynamic-config-value frontend.enableUpdateWorkflowExecution=true --dynamic-config-value frontend.enableUpdateWorkflowExecutionAsyncAccepted=true --db-filename local-temporal-db")
-		os.Exit(1)
-	}
+	return worker.StartWorker(common.GetTemporalServerHostPort(), common.GetTemporalTaskQueue())
 }

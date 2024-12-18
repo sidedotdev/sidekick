@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sidekick/api"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/db"
@@ -123,7 +122,7 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	}
 
 	if checkServerStatus() {
-		fmt.Println("✔ Sidekick server is running. Go to http://localhost:" + api.DefaultPort)
+		fmt.Printf("✔ Sidekick server is running. Go to http://localhost:%d\n", common.GetServerPort())
 	} else {
 		fmt.Println("ℹ Sidekick server is not running. Please run 'side start' to start the server.")
 	}
@@ -449,7 +448,7 @@ func checkServerStatus() bool {
 		Timeout: 1 * time.Second,
 	}
 
-	resp, err := client.Get("http://localhost:" + api.DefaultPort)
+	resp, err := client.Get(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
 	if err != nil {
 		return false
 	}

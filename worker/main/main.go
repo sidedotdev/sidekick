@@ -1,17 +1,16 @@
 package main
 
 import (
-	"flag"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
-	"go.temporal.io/sdk/client"
 	"os"
-)
-import (
-	"sidekick/worker" // Correctly pathing to the worker package
+	"sidekick/common"
+	"sidekick/worker"
 
 	"github.com/joho/godotenv"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
+
+// Correctly pathing to the worker package
 
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
@@ -20,11 +19,5 @@ func main() {
 		log.Fatal().Err(err).Msg("dot env loading failed")
 	}
 
-	var hostPort string
-	var taskQueue string
-	flag.StringVar(&hostPort, "hostPort", client.DefaultHostPort, "Host and port for the Temporal server, eg localhost:7233")
-	flag.StringVar(&taskQueue, "taskQueue", "default", "Task queue to use, eg default")
-	flag.Parse()
-
-	worker.StartWorker(hostPort, taskQueue)
+	worker.StartWorker(common.GetTemporalServerHostPort(), common.GetTemporalTaskQueue())
 }
