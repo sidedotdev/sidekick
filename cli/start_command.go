@@ -250,18 +250,25 @@ func setupSidekickTemporalSearchAttributes(cfg *serverConfig) error {
 	}
 	cl, err := client.NewLazyClient(clientOptions)
 	if err != nil {
-		return fmt.Errorf("Failed to add search attributes: %w", err)
+		return fmt.Errorf("failed to create Temporal client: %w", err)
 	}
-
 	defer cl.Close()
 
 	ctx := context.Background()
-	operator := cl.OperatorService() 
-	req, err := operator.ListSearchAttributes(ctx, &operatorservice.ListSearchAttributesRequest{
-		Namespace: cfg.namespace,
-	})
+	operator := cl.OperatorService()
 
-	panic("unimplemented")
+	// List existing search attributes
+	listReq := &operatorservice.ListSearchAttributesRequest{
+		Namespace: cfg.namespace,
+	}
+	_, err = operator.ListSearchAttributes(ctx, listReq)
+	if err != nil {
+		return fmt.Errorf("failed to list search attributes: %w", err)
+	}
+
+	// TODO: Implement logic to add WorkspaceId search attribute
+
+	return nil
 }
 
 func handleStartCommand(args []string) {
