@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"go.temporal.io/api/operatorservice/v1"
 	"go.temporal.io/sdk/client"
 	temporal_worker "go.temporal.io/sdk/worker"
 
@@ -254,7 +255,11 @@ func setupSidekickTemporalSearchAttributes(cfg *serverConfig) error {
 
 	defer cl.Close()
 
-	_ = cl.OperatorService() 
+	ctx := context.Background()
+	operator := cl.OperatorService() 
+	req, err := operator.ListSearchAttributes(ctx, &operatorservice.ListSearchAttributesRequest{
+		Namespace: cfg.namespace,
+	})
 
 	panic("unimplemented")
 }
