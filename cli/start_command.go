@@ -245,7 +245,7 @@ func startTemporalServer(cfg *serverConfig) temporal.Server {
 
 func setupSidekickTemporalSearchAttributes(cfg *serverConfig) error {
 	clientOptions := client.Options{
-		HostPort: common.GetTemporalServerHostPort(),
+		HostPort: fmt.Sprintf("%s:%d", cfg.ip, cfg.ports.frontend),
 	}
 	cl, err := client.NewLazyClient(clientOptions)
 	if err != nil {
