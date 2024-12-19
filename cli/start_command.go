@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"go.temporal.io/sdk/client"
 	temporal_worker "go.temporal.io/sdk/worker"
 
 	uiserver "github.com/temporalio/ui-server/v2/server"
@@ -50,7 +51,7 @@ type serverConfig struct {
 func newServerConfig(ip string, basePort int) *serverConfig {
 	cfg := &serverConfig{
 		ip:            ip,
-		namespace:     "default",
+		namespace:     common.GetTemporalNamespace(),
 		clusterName:   "active",
 		dbFileUriPath: "///Users/Shared/sidekick/local-temporal-db2", // FIXME use xdg data dir and name the db sidekick-temporal
 	}
@@ -237,7 +238,25 @@ func startTemporalServer(cfg *serverConfig) temporal.Server {
 		log.Fatal().Err(err).Msg("Unable to start server")
 	}
 
+	setupSidekickTemporalSearchAttributes(cfg)
+
 	return server
+}
+
+func setupSidekickTemporalSearchAttributes(cfg *serverConfig) error {
+	clientOptions := client.Options{
+		HostPort: common.GetTemporalServerHostPort(),
+	}
+	cl, err := client.NewLazyClient(clientOptions)
+	if err != nil {
+		return fmt.Errorf("Failed to add search attributes: %w", err)
+	}
+
+	defer cl.Close()
+
+	_ = cl.OperatorService() 
+
+	panic("unimplemented")
 }
 
 func handleStartCommand(args []string) {
