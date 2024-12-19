@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-
 	"fmt"
 	"net/http"
 	"os"
@@ -34,10 +33,11 @@ import (
 )
 
 type serverConfig struct {
-	ip          string
-	namespace   string
-	clusterName string
-	ports       struct {
+	ip            string
+	namespace     string
+	clusterName   string
+	dbFileUriPath string
+	ports         struct {
 		frontend int
 		history  int
 		matching int
@@ -49,9 +49,10 @@ type serverConfig struct {
 
 func newServerConfig(ip string, basePort int) *serverConfig {
 	cfg := &serverConfig{
-		ip:          ip,
-		namespace:   "default",
-		clusterName: "active",
+		ip:            ip,
+		namespace:     "default",
+		clusterName:   "active",
+		dbFileUriPath: "///Users/Shared/sidekick/tempdb2", // FIXME use xdg data dir and name the db sidekick-temporal
 	}
 
 	// Calculate ports
@@ -82,7 +83,6 @@ func startTemporalUIServer(cfg *serverConfig) error {
 	return nil
 }
 
-// cfg := newServerConfig(ip, basePort)
 func startTemporal(cfg *serverConfig) temporal.Server {
 	go (func() {
 		err := startTemporalUIServer(cfg)
@@ -114,10 +114,10 @@ func startTemporalServer(cfg *serverConfig) temporal.Server {
 					SQL: &config.SQL{
 						PluginName: sqliteplugin.PluginName,
 						ConnectAttributes: map[string]string{
-							"mode":  "memory", // FIXME switch to disk
-							"cache": "shared",
+							"mode":  "rwc",
+							"setup": "true",
 						},
-						DatabaseName: "temporal",
+						DatabaseName: cfg.dbFileUriPath,
 					},
 				},
 			},
@@ -143,28 +143,24 @@ func startTemporalServer(cfg *serverConfig) temporal.Server {
 			"frontend": {
 				RPC: config.RPC{
 					GRPCPort: cfg.ports.frontend,
-					//BindOnLocalHost: true,
 					BindOnIP: cfg.ip,
 				},
 			},
 			"history": {
 				RPC: config.RPC{
 					GRPCPort: cfg.ports.history,
-					//BindOnLocalHost: true,
 					BindOnIP: cfg.ip,
 				},
 			},
 			"matching": {
 				RPC: config.RPC{
 					GRPCPort: cfg.ports.matching,
-					//BindOnLocalHost: true,
 					BindOnIP: cfg.ip,
 				},
 			},
 			"worker": {
 				RPC: config.RPC{
 					GRPCPort: cfg.ports.worker,
-					//BindOnLocalHost: true,
 					BindOnIP: cfg.ip,
 				},
 			},
@@ -232,6 +228,7 @@ func startTemporalServer(cfg *serverConfig) temporal.Server {
 		log.Fatal().Err(err).Msg("Unable to create server")
 	}
 
+	log.Info().Msg("Starting temporal server")
 	if err := server.Start(); err != nil {
 		log.Fatal().Err(err).Msg("Unable to start server")
 	}

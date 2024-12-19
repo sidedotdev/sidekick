@@ -33,7 +33,6 @@ func GetTemporalNamespace() string {
 }
 
 const defaultTemporalTaskQueue = "default"
-
 func GetTemporalTaskQueue() string {
 	temporalTaskQueue := os.Getenv("SIDE_TEMPORAL_TASK_QUEUE")
 	if temporalTaskQueue == "" {
@@ -42,8 +41,8 @@ func GetTemporalTaskQueue() string {
 	return temporalTaskQueue
 }
 
-const defaultTemporalHost = "localhost"
-
+// NOTE: using "localhost" will not work as we bind via IP
+const defaultTemporalHost = "127.0.0.1"
 func GetTemporalServerHost() string {
 	temporalServerHost := os.Getenv("SIDE_TEMPORAL_SERVER_HOST")
 	if temporalServerHost == "" {
