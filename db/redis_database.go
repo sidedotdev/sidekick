@@ -83,9 +83,6 @@ func (db RedisDatabase) PersistSubflow(ctx context.Context, subflow models.Subfl
 	pipe.SAdd(ctx, subflowSetKey, subflow.Id)
 
 	_, err = pipe.Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to persist subflow: %w", err)
-	}
 
 	return nil
 }
@@ -121,6 +118,7 @@ func (db RedisDatabase) GetSubflows(ctx context.Context, workspaceId, flowId str
 
 	return subflows, nil
 }
+
 
 func NewRedisDatabase() *RedisDatabase {
 	redisAddr := os.Getenv("REDIS_ADDRESS")
