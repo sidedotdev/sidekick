@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/operatorservice/v1"
 	"go.temporal.io/sdk/client"
 	temporal_worker "go.temporal.io/sdk/worker"
@@ -261,12 +262,33 @@ func setupSidekickTemporalSearchAttributes(cfg *serverConfig) error {
 	listReq := &operatorservice.ListSearchAttributesRequest{
 		Namespace: cfg.namespace,
 	}
-	_, err = operator.ListSearchAttributes(ctx, listReq)
+	existingAttrs, err := operator.ListSearchAttributes(ctx, listReq)
 	if err != nil {
 		return fmt.Errorf("failed to list search attributes: %w", err)
 	}
 
-	// TODO: Implement logic to add WorkspaceId search attribute
+	// Check if WorkspaceId already exists and verify its type
+	workspaceIdAttr, exists := existingAttrs.CustomAttributes["WorkspaceId"]
+	if exists {
+		if workspaceIdAttr != enums.INDEXED_VALUE_TYPE_KEYWORD {
+			return fmt.Errorf("WorkspaceId search attribute already exists with a different type: %v", workspaceIdAttr)
+		}
+		// If it exists with the correct type, we don't need to add it again
+		return nil
+	}
+
+	// Add WorkspaceId search attribute
+	addReq := &operatorservice.AddSearchAttributesRequest{
+		SearchAttributes: map[string]enums.IndexedValueType{
+			"WorkspaceId": enums.INDEXED_VALUE_TYPE_KEYWORD,
+		},
+		Namespace: cfg.namespace,
+	}
+
+	_, err = operator.AddSearchAttributes(ctx, addReq)
+	if err != nil {
+		return fmt.Errorf("failed to add WorkspaceId search attribute: %w", err)
+	}
 
 	return nil
 }
