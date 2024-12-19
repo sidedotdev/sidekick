@@ -18,6 +18,8 @@ import (
 	"go.temporal.io/api/operatorservice/v1"
 	"go.temporal.io/sdk/client"
 	temporal_worker "go.temporal.io/sdk/worker"
+	zerologadapter "logur.dev/adapter/zerolog"
+	"logur.dev/logur"
 
 	uiserver "github.com/temporalio/ui-server/v2/server"
 	uiconfig "github.com/temporalio/ui-server/v2/server/config"
@@ -35,7 +37,7 @@ import (
 	"go.temporal.io/server/temporal"
 )
 
-type serverConfig struct {
+type temporalServerConfig struct {
 	ip            string
 	namespace     string
 	clusterName   string
@@ -50,8 +52,8 @@ type serverConfig struct {
 	}
 }
 
-func newServerConfig(ip string, basePort int) *serverConfig {
-	cfg := &serverConfig{
+func newTemporalServerConfig(ip string, basePort int) *temporalServerConfig {
+	cfg := &temporalServerConfig{
 		ip:            ip,
 		namespace:     common.GetTemporalNamespace(),
 		clusterName:   "active",
@@ -69,7 +71,7 @@ func newServerConfig(ip string, basePort int) *serverConfig {
 	return cfg
 }
 
-func startTemporalUIServer(cfg *serverConfig) error {
+func startTemporalUIServer(cfg *temporalServerConfig) error {
 	ui := uiserver.NewServer(uiserveroptions.WithConfigProvider(&uiconfig.Config{
 		TemporalGRPCAddress: fmt.Sprintf("%s:%d", cfg.ip, cfg.ports.frontend),
 		Host:                cfg.ip,
@@ -86,7 +88,7 @@ func startTemporalUIServer(cfg *serverConfig) error {
 	return nil
 }
 
-func startTemporal(cfg *serverConfig) temporal.Server {
+func startTemporal(cfg *temporalServerConfig) temporal.Server {
 	go (func() {
 		err := startTemporalUIServer(cfg)
 		if err != nil {
@@ -97,7 +99,7 @@ func startTemporal(cfg *serverConfig) temporal.Server {
 	return startTemporalServer(cfg)
 }
 
-func startTemporalServer(cfg *serverConfig) temporal.Server {
+func startTemporalServer(cfg *temporalServerConfig) temporal.Server {
 	// Create temporal server config
 	conf := &config.Config{
 		Global: config.Global{
@@ -202,7 +204,8 @@ func startTemporalServer(cfg *serverConfig) temporal.Server {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Unable to create authorizer")
 	}
-	logger := temporallog.NewNoopLogger().With()
+	logger := temporallog.NewNoopLogger() // FIXME /gen need something like this, but using zerolog: https://github.com/temporalio/cli/blob/main/temporalcli/devserver/log.go#L11
+
 	claimMapper, err := authorization.GetClaimMapperFromConfig(&conf.Global.Authorization, logger)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Unable to create claim mapper")
@@ -240,13 +243,18 @@ func startTemporalServer(cfg *serverConfig) temporal.Server {
 		log.Fatal().Err(err).Msg("Unable to start server")
 	}
 
-	setupSidekickTemporalSearchAttributes(cfg)
+	err = setupSidekickTemporalSearchAttributes(cfg)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Setting up sidekick temporal search attributes failed")
+	}
 
 	return server
 }
 
-func setupSidekickTemporalSearchAttributes(cfg *serverConfig) error {
+func setupSidekickTemporalSearchAttributes(cfg *temporalServerConfig) error {
+	logger := logur.LoggerToKV(zerologadapter.New(log.Logger))
 	clientOptions := client.Options{
+		Logger:   logger,
 		HostPort: fmt.Sprintf("%s:%d", cfg.ip, cfg.ports.frontend),
 	}
 	cl, err := client.NewLazyClient(clientOptions)
@@ -274,10 +282,12 @@ func setupSidekickTemporalSearchAttributes(cfg *serverConfig) error {
 			return fmt.Errorf("WorkspaceId search attribute already exists with a different type: %v", workspaceIdAttr)
 		}
 		// If it exists with the correct type, we don't need to add it again
+		log.Debug().Msg("WorkspaceId search attribute already exists and has the correct type")
 		return nil
 	}
 
 	// Add WorkspaceId search attribute
+	log.Info().Msg("Adding WorkspaceId search attribute to Temporal server")
 	addReq := &operatorservice.AddSearchAttributesRequest{
 		SearchAttributes: map[string]enums.IndexedValueType{
 			"WorkspaceId": enums.INDEXED_VALUE_TYPE_KEYWORD,
@@ -327,7 +337,7 @@ func handleStartCommand(args []string) {
 			defer wg.Done()
 			log.Info().Msg("Starting temporal...")
 
-			cfg := newServerConfig(common.GetTemporalServerHost(), common.GetTemporalServerPort())
+			cfg := newTemporalServerConfig(common.GetTemporalServerHost(), common.GetTemporalServerPort())
 			temporalServer := startTemporal(cfg)
 
 			log.Info().Str("component", "Server").Msgf("%v:%v", cfg.ip, cfg.ports.frontend)
