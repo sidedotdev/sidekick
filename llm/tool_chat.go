@@ -65,8 +65,11 @@ const (
 )
 
 var SmallModels = map[ToolChatProvider]string{
-	OpenaiToolChatProvider:    "gpt-4o-mini",
-	AnthropicToolChatProvider: string(anthropic.Claude3Haiku), // NOTE: 3.5 Haiku is much more expensive
+	OpenaiToolChatProvider: "gpt-4o-mini",
+
+	// NOTE: 3.5 Haiku is much more expensive than 3 Haiku, but performs better
+	// too and is what claude presents as their "small" model
+	AnthropicToolChatProvider: "claude-3-5-haiku-20241022",
 }
 
 func (provider ToolChatProvider) SmallModel() string {
