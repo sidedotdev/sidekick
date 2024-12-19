@@ -52,7 +52,7 @@ func newServerConfig(ip string, basePort int) *serverConfig {
 		ip:            ip,
 		namespace:     "default",
 		clusterName:   "active",
-		dbFileUriPath: "///Users/Shared/sidekick/tempdb2", // FIXME use xdg data dir and name the db sidekick-temporal
+		dbFileUriPath: "///Users/Shared/sidekick/local-temporal-db2", // FIXME use xdg data dir and name the db sidekick-temporal
 	}
 
 	// Calculate ports
