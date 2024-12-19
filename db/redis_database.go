@@ -753,6 +753,36 @@ func (db RedisDatabase) GetAllWorkspaces(ctx context.Context) ([]models.Workspac
 	return workspaces, nil
 }
 
+func (db RedisDatabase) DeleteWorkspace(ctx context.Context, workspaceId string) error {
+	// First get the workspace to get its name - ignore if not found
+	workspace, err := db.GetWorkspace(ctx, workspaceId)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil // Workspace already deleted - that's fine
+		}
+		return fmt.Errorf("failed to get workspace before deletion: %w", err)
+	}
+
+	// Remove from sorted set
+	err = db.Client.ZRem(ctx, "global:workspaces", workspace.Name+":"+workspaceId).Err()
+	if err != nil {
+		return fmt.Errorf("failed to remove workspace from sorted set: %w", err)
+	}
+
+	// Delete the workspace record
+	key := fmt.Sprintf("workspace:%s", workspaceId)
+	err = db.Client.Del(ctx, key).Err()
+	if err != nil {
+		return fmt.Errorf("failed to delete workspace record: %w", err)
+	}
+
+	// Delete workspace config if it exists
+	configKey := fmt.Sprintf("%s:workspace_config", workspaceId)
+	_ = db.Client.Del(ctx, configKey).Err() // Ignore error since config may not exist
+
+	return nil
+}
+
 // AddTaskChange persists a task to the changes stream.
 func (db RedisDatabase) AddTaskChange(ctx context.Context, task models.Task) error {
 	streamKey := fmt.Sprintf("%s:task_changes", task.WorkspaceId)
