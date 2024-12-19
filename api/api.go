@@ -206,6 +206,7 @@ func (ctrl *Controller) DeleteTaskHandler(c *gin.Context) {
 	for _, flow := range childFlows {
 		err = devAgent.TerminateWorkflowIfExists(c.Request.Context(), flow.Id)
 		if err != nil {
+			log.Println("Error terminating workflow:", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to terminate workflow"})
 			return
 		}

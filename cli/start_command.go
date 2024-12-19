@@ -207,7 +207,11 @@ func startTemporalServer(cfg *serverConfig) temporal.Server {
 
 	// Setup dynamic config
 	dynConf := make(dynamicconfig.StaticClient)
-	dynConf[dynamicconfig.ForceSearchAttributesCacheRefreshOnRead.Key()] = true
+
+	// NOTE: these are now the defaults, so no longer needed. we'll keep this
+	// around as an example of how to set dynamic config options
+	dynConf[dynamicconfig.FrontendEnableUpdateWorkflowExecution.Key()] = true
+	dynConf[dynamicconfig.FrontendEnableUpdateWorkflowExecutionAsyncAccepted.Key()] = true
 
 	// Create and start temporal server
 	server, err := temporal.NewServer(

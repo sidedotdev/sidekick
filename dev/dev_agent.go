@@ -384,12 +384,13 @@ func (ia DevAgent) HandleNewMessage(ctx context.Context, topicId string, events 
 
 const temporalLiteNotFoundError1 = "no rows in result set"
 const temporalLiteAlreadyCompletedError = "workflow execution already completed"
+const temporalWorkflowNotFoundForId = "workflow not found for ID"
 
 // TerminateWorkflowIfExists terminates a workflow execution if there is one running
 func (ia *DevAgent) TerminateWorkflowIfExists(ctx context.Context, workflowId string) error {
 	reason := "DevAgent TerminateWorkflowIfExists"
 	err := ia.TemporalClient.TerminateWorkflow(ctx, workflowId, "", reason)
-	if err != nil && !strings.Contains(err.Error(), temporalLiteNotFoundError1) && !strings.Contains(err.Error(), temporalLiteAlreadyCompletedError) {
+	if err != nil && !strings.Contains(err.Error(), temporalWorkflowNotFoundForId) && !strings.Contains(err.Error(), temporalLiteNotFoundError1) && !strings.Contains(err.Error(), temporalLiteAlreadyCompletedError) {
 		fmt.Printf("failed to terminate workflow: %v\n", err)
 		return fmt.Errorf("failed to terminate workflow: %w", err)
 	}
