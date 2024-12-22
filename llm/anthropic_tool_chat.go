@@ -118,6 +118,7 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 				panic("unexpected event type: " + chunk.Type)
 			}
 		case err := <-errCh:
+			log.Error().Err(err).Msg("Error in anthropic ChatStream")
 			return nil, err
 		}
 
