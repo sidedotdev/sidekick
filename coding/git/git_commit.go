@@ -1,5 +1,6 @@
 package git
 
+
 import (
 	"context"
 	"fmt"
@@ -17,7 +18,7 @@ type GitCommitParams struct {
 
 func GitCommitActivity(ctx context.Context, envContainer env.EnvContainer, params GitCommitParams) (string, error) {
 	var gitCommitOutput env.EnvRunCommandActivityOutput
-	args := []string{"-c", "user.name='Genflow Dev'", "-c", "user.email='genflow.dev@genflow.dev'", "commit", "-m", params.CommitMessage}
+	args := []string{"-c", "user.name='Sidekick'", "-c", "user.email='sidekick@side.dev'", "commit", "-m", params.CommitMessage}
 	if params.CommitAll {
 		args = append(args, "-a")
 	}
