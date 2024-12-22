@@ -41,7 +41,7 @@ type temporalServerConfig struct {
 	ip            string
 	namespace     string
 	clusterName   string
-	dbFileUriPath string
+	dbFilePath string
 	ports         struct {
 		frontend int
 		history  int
@@ -57,7 +57,7 @@ func newTemporalServerConfig(ip string, basePort int) *temporalServerConfig {
 		ip:            ip,
 		namespace:     common.GetTemporalNamespace(),
 		clusterName:   "active",
-		dbFileUriPath: "///Users/Shared/sidekick/local-temporal-db2", // FIXME use xdg data dir and name the db sidekick-temporal
+		dbFilePath: "/Users/Shared/sidekick/local-temporal-db2", // FIXME use xdg data dir and name the db sidekick-temporal
 	}
 
 	// Calculate ports
@@ -122,7 +122,7 @@ func startTemporalServer(cfg *temporalServerConfig) temporal.Server {
 							"mode":  "rwc",
 							"setup": "true",
 						},
-						DatabaseName: cfg.dbFileUriPath,
+						DatabaseName: cfg.dbFilePath,
 					},
 				},
 			},
