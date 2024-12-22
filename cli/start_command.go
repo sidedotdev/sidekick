@@ -54,9 +54,10 @@ type temporalServerConfig struct {
 	}
 }
 
-// ensureSidekickXDGDataHome creates the necessary directories for storing Sidekick data
-// according to XDG specifications.
-func ensureSidekickXDGDataHome() (string, error) {
+// getSidekickDataHome returns a directory path for storing user-specific
+// sidekick data. If needed, it also creates the necessary directories for
+// storing user-specific data according to the XDG spec.
+func getSidekickDataHome() (string, error) {
 	sidekickDataDir := filepath.Join(xdg.DataHome, "sidekick")
 	err := os.MkdirAll(sidekickDataDir, 0755)
 	if err != nil {
@@ -66,7 +67,7 @@ func ensureSidekickXDGDataHome() (string, error) {
 }
 
 func newTemporalServerConfig(ip string, basePort int) (*temporalServerConfig, error) {
-	sidekickDataDir, err := ensureSidekickXDGDataHome()
+	sidekickDataDir, err := getSidekickDataHome()
 	if err != nil {
 		return nil, fmt.Errorf("failed to ensure Sidekick XDG data home: %w", err)
 	}
