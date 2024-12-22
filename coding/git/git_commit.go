@@ -1,6 +1,5 @@
 package git
 
-
 import (
 	"context"
 	"fmt"

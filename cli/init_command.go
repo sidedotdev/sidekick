@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/db"
@@ -115,39 +114,10 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	}
 	fmt.Println("✔ Workspace configuration has been set up.")
 
-	// check if the temporal cli is installed with the mimimum required version or higher
-	err = ensureTemporalCliVersion("1.22.0")
-	if err != nil {
-		return err
-	}
-
 	if checkServerStatus() {
 		fmt.Printf("✔ Sidekick server is running. Go to http://localhost:%d\n", common.GetServerPort())
 	} else {
 		fmt.Println("ℹ Sidekick server is not running. Please run 'side start' to start the server.")
-	}
-
-	return nil
-}
-
-func ensureTemporalCliVersion(minimumVersion string) error {
-	cmd := exec.Command("temporal", "--version")
-	cmdOutput, err := cmd.Output()
-	installLink := "https://docs.temporal.io/cli#installation"
-	if err != nil {
-		return fmt.Errorf("Temporal CLI is not installed. Please install it from %s", installLink)
-	}
-
-	// parses output like this: temporal version 0.10.6 (server 1.22.0) (ui 2.18.2)
-	re := regexp.MustCompile(`server (\d+\.\d+\.\d+)`)
-	matches := re.FindStringSubmatch(string(cmdOutput))
-	if len(matches) < 2 {
-		return fmt.Errorf("unable to parse Temporal CLI version output")
-	}
-
-	serverVersion := matches[1]
-	if compareVersions(serverVersion, minimumVersion) < 0 {
-		return fmt.Errorf("Temporal server version must be at least %s, found %s. Install the latest version of the temporal cli from %s", minimumVersion, serverVersion, installLink)
 	}
 
 	return nil
