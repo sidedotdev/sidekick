@@ -30,7 +30,6 @@ import (
 	"go.temporal.io/server/common/cluster"
 	"go.temporal.io/server/common/config"
 	"go.temporal.io/server/common/dynamicconfig"
-	temporallog "go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/membership/static"
 	"go.temporal.io/server/common/metrics"
 	sqliteplugin "go.temporal.io/server/common/persistence/sql/sqlplugin/sqlite"
@@ -223,8 +222,8 @@ func startTemporalServer(cfg *temporalServerConfig) temporal.Server {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Unable to create authorizer")
 	}
-	logger := temporallog.NewNoopLogger() // FIXME /gen need something like this, but using zerolog: https://github.com/temporalio/cli/blob/main/temporalcli/devserver/log.go#L11
 
+	logger := common.NewZerologLogger(log.Logger)
 	claimMapper, err := authorization.GetClaimMapperFromConfig(&conf.Global.Authorization, logger)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Unable to create claim mapper")

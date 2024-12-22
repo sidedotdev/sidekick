@@ -11,6 +11,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/kardianos/service"
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -55,7 +56,9 @@ func main() {
 
 	// Load .env file if any
 	if err := godotenv.Load(); err != nil {
-		log.Debug().Err(err).Msg("Error loading .env file")
+		if !os.IsNotExist(err) {
+			log.Warn().Err(err).Msg("Warning: failed to load .env file")
+		}
 	}
 
 	if service.Interactive() {
@@ -66,6 +69,8 @@ func main() {
 }
 
 func interactiveMain() {
+	log.Logger = log.Level(zerolog.InfoLevel).Output(zerolog.ConsoleWriter{Out: os.Stderr})
+
 	switch os.Args[1] {
 	case "init":
 		handler := NewInitCommandHandler(dbAccessor)
