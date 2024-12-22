@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sidekick/api"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/db"
@@ -48,18 +47,16 @@ func (h *InitCommandHandler) handleInitCommand() error {
 
 	isRepo, err := isGitRepo(baseDir)
 	if err != nil {
-		return fmt.Errorf("error checking if directory is a Git repository: %w", err)
+		return fmt.Errorf("error checking if directory is a git repository: %w", err)
 	}
 	if !isRepo {
-		return fmt.Errorf("this tool needs to be run in a Git repository directory")
+		return fmt.Errorf("side init must be run within a git repository")
 	}
-	fmt.Println("✔ The current directory is a Git repository.")
 
 	err = checkLanguageSpecificTools(baseDir)
 	if err != nil {
 		return err
 	}
-	fmt.Println("✔ Checked language-specific tools.")
 
 	config, configCheck, err := checkConfig(baseDir)
 	if err != nil {
@@ -82,6 +79,13 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	}
 
 	ctx := context.Background()
+
+	// check if redis is running
+	err = h.dbAccessor.CheckConnection(ctx)
+	if err != nil {
+		return fmt.Errorf("Redis isn't running, please install and run it: https://redis.io/docs/install/install-redis/")
+	}
+
 	workspace, err := h.findOrCreateWorkspace(ctx, workspaceName, baseDir)
 	if err != nil {
 		return fmt.Errorf("error finding or creating workspace: %w", err)
@@ -110,7 +114,7 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	fmt.Println("✔ Workspace configuration has been set up.")
 
 	if checkServerStatus() {
-		fmt.Println("✔ Sidekick server is running. Go to http://localhost:" + api.DefaultPort)
+		fmt.Printf("✔ Sidekick server is running. Go to http://localhost:%d\n", common.GetServerPort())
 	} else {
 		fmt.Println("ℹ Sidekick server is not running. Please run 'side start' to start the server.")
 	}
@@ -395,7 +399,7 @@ func checkServerStatus() bool {
 		Timeout: 1 * time.Second,
 	}
 
-	resp, err := client.Get("http://localhost:" + api.DefaultPort)
+	resp, err := client.Get(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
 	if err != nil {
 		return false
 	}

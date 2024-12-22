@@ -279,7 +279,7 @@ func setupSubflow(eCtx ExecContext, subflowName string) models.Subflow {
 		WorkspaceId:     eCtx.WorkspaceId,
 		Name:            subflowName,
 		ParentSubflowId: parentSubflowId,
-		Status: 		 models.SubflowStatusStarted,
+		Status:          models.SubflowStatusStarted,
 	}
 
 	if subflow.Id == "" {

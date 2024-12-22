@@ -33,16 +33,12 @@ All the dependencies listed in README.md are required when developing the projec
 
 ## Development Workflow
 
-### Step 0: Start Temporal Server
+### Step 0: Run temporal (bundled)
+
+Start the side cli's bundled temporal server:
 
 ```sh
-temporal server start-dev --dynamic-config-value frontend.enableUpdateWorkflowExecution=true --dynamic-config-value frontend.enableUpdateWorkflowExecutionAsyncAccepted=true --db-filename local-temporal-db
-```
-
-Run this too:
-
-```sh
-temporal operator search-attribute create --name="WorkspaceId" --type="Keyword"
+SIDE_APP_ENV=development go build -o side sidekick/cli && ./side start temporal
 ```
 
 ### Step 1: Run the Worker
@@ -50,13 +46,13 @@ temporal operator search-attribute create --name="WorkspaceId" --type="Keyword"
 In another terminal instance, run the worker. Notice that this worker hosts both Workflow and Activity functions.
 
 ```sh
-go run worker/main.go
+SIDE_APP_ENV=development go run worker/main/main.go
 ```
 
 ### Step 2: Run the API Server
 
 ```sh
-go run api/main.go
+SIDE_APP_ENV=development go run api/main/main.go
 ```
 
 ### Step 3: Run the frontend
@@ -118,6 +114,11 @@ cd ../sidekick
 ```
 
 ### Updating mocks
+
+Before running these, take note of any manual modifications that may have been
+necessary by searching for `NOTE` comments. While not great, it's necessary as
+mockery gets confused by temporal's internal packages, which requires some
+post-generation mock surgery.
 
 ```sh
 mockery --srcpkg=go.temporal.io/sdk/client \

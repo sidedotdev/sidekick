@@ -26,8 +26,8 @@ import (
 	"sidekick/poll_failures"
 )
 
-// TODO move configuring the worker to a separate function to be able to test it
-func StartWorker(hostPort string, taskQueue string) {
+// StartWorker initializes and starts a new worker
+func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	featureFlag, err := fflag.NewFFlag("flags.yml")
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create go-feature-flag instance")
@@ -44,8 +44,6 @@ func StartWorker(hostPort string, taskQueue string) {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Unable to create Temporal client.")
 	}
-
-	defer c.Close()
 
 	redisDb := db.NewRedisDatabase()
 	_, err = redisDb.Client.Ping(context.Background()).Result()
@@ -96,7 +94,11 @@ func StartWorker(hostPort string, taskQueue string) {
 		DatabaseAccessor: redisDb,
 	}
 
-	w := worker.New(c, taskQueue, worker.Options{})
+	w := worker.New(c, taskQueue, worker.Options{
+		OnFatalError: func(err error) {
+			log.Fatal().Err(err).Msg("Worker encountered a fatal error")
+		},
+	})
 	RegisterWorkflows(w)
 
 	w.RegisterActivity(sidekick.GithubCloneRepoActivity)
@@ -128,9 +130,12 @@ func StartWorker(hostPort string, taskQueue string) {
 	}
 	w.RegisterActivity(workspaceActivities.GetWorkspaceConfig)
 
-	if err := w.Run(worker.InterruptCh()); err != nil {
-		log.Warn().Err(err)
+	err = w.Start()
+	if err != nil {
+		log.Fatal().Err(err)
 	}
+
+	return w
 }
 
 func RegisterWorkflows(w worker.WorkflowRegistry) {

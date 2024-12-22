@@ -25,7 +25,7 @@ type DevContext struct {
 
 func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string) (DevContext, error) {
 	initialExecCtx := flow_action.ExecContext{
-		Context: ctx,
+		Context:     ctx,
 		WorkspaceId: workspaceId,
 		FlowScope: &flow_action.FlowScope{
 			SubflowName: "Init",

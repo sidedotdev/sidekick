@@ -19,6 +19,11 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
+func (db RedisDatabase) CheckConnection(ctx context.Context) error {
+	_, err := db.Client.Ping(context.Background()).Result()
+	return err
+}
+
 func (db RedisDatabase) GetWorkspaceConfig(ctx context.Context, workspaceId string) (models.WorkspaceConfig, error) {
 	key := fmt.Sprintf("%s:workspace_config", workspaceId)
 	configJson, err := db.Client.Get(ctx, key).Result()
@@ -78,9 +83,6 @@ func (db RedisDatabase) PersistSubflow(ctx context.Context, subflow models.Subfl
 	pipe.SAdd(ctx, subflowSetKey, subflow.Id)
 
 	_, err = pipe.Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to persist subflow: %w", err)
-	}
 
 	return nil
 }
@@ -748,6 +750,36 @@ func (db RedisDatabase) GetAllWorkspaces(ctx context.Context) ([]models.Workspac
 	}
 
 	return workspaces, nil
+}
+
+func (db RedisDatabase) DeleteWorkspace(ctx context.Context, workspaceId string) error {
+	// First get the workspace to get its name - ignore if not found
+	workspace, err := db.GetWorkspace(ctx, workspaceId)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil // Workspace already deleted - that's fine
+		}
+		return fmt.Errorf("failed to get workspace before deletion: %w", err)
+	}
+
+	// Remove from sorted set
+	err = db.Client.ZRem(ctx, "global:workspaces", workspace.Name+":"+workspaceId).Err()
+	if err != nil {
+		return fmt.Errorf("failed to remove workspace from sorted set: %w", err)
+	}
+
+	// Delete the workspace record
+	key := fmt.Sprintf("workspace:%s", workspaceId)
+	err = db.Client.Del(ctx, key).Err()
+	if err != nil {
+		return fmt.Errorf("failed to delete workspace record: %w", err)
+	}
+
+	// Delete workspace config if it exists
+	configKey := fmt.Sprintf("%s:workspace_config", workspaceId)
+	_ = db.Client.Del(ctx, configKey).Err() // Ignore error since config may not exist
+
+	return nil
 }
 
 // AddTaskChange persists a task to the changes stream.
