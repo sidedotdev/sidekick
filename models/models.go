@@ -29,7 +29,6 @@ type WorkspaceConfig struct {
 type Flow struct {
 	WorkspaceId string   `json:"workspaceId"`
 	Id          string   `json:"id"`
-	TopicId     string   `json:"topicId"`  // topic id
 	Type        FlowType `json:"type"`     // flow type
 	ParentId    string   `json:"parentId"` // parent id of arbitrary type (eg task)
 	Status      string   `json:"status"`   // flow status
@@ -199,41 +198,4 @@ func StringToTaskStatus(s string) (TaskStatus, error) {
 	default:
 		return "", fmt.Errorf("invalid TaskStatus: %s", s)
 	}
-}
-
-// Message represents the structure of messages to be stored in the database.
-type Message struct {
-	WorkspaceId string    `json:"workspaceId"`
-	TopicId     string    `json:"topicId"` // partition key - topic id
-	Id          string    `json:"id"`      // sort key - message id
-	Role        string    `json:"role"`
-	Content     string    `json:"content,omitempty"`
-	Created     time.Time `json:"created"`
-	FlowId      string    `json:"flowId,omitempty"` // optional: associated flow id, if any
-	Status      string    `json:"status"`           // "unstarted", "partial", "complete"
-}
-
-const (
-	MessageStatusStarted  = "started"
-	MessageStatusComplete = "complete"
-)
-
-// TODO NewMessage
-
-type PartialMessage struct {
-	// FIXME we don't need this I think?
-	//MessageId string `json:"messageId"`
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
-	// TODO model tool calls properly
-	// ToolCalls []llm.ToolCall `json:"toolCalls,omitempty"`
-}
-
-// Topic represents the structure of topics to be stored in the database.
-type Topic struct {
-	WorkspaceId string    `json:"workspaceId"` // partition key - workspace id
-	Id          string    `json:"id"`          // sort key - topic id
-	Title       string    `json:"title"`       // title - title of the topic
-	Created     time.Time `json:"created"`     // created - creation timestamp of the topic
-	Updated     time.Time `json:"updated"`     // updated - last update timestamp of the topic
 }

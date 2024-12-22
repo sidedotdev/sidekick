@@ -13,15 +13,12 @@ import (
 	"sync"
 	"time"
 
-	"sidekick/agent"
 	"sidekick/common"
 	"sidekick/db"
 	"sidekick/dev"
 	"sidekick/flow_event"
 	"sidekick/frontend"
-	"sidekick/llm"
 	"sidekick/models"
-	"sidekick/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -84,12 +81,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	workspaceWsRoutes.GET("/:workspaceId/flows/:id/action_changes_ws", ctrl.FlowActionChangesWebsocketHandler)
 	workspaceWsRoutes.GET("/:workspaceId/flows/:id/events", ctrl.FlowEventsWebsocketHandler)
 
-	// TODO /gen remove topics & messages routes, handlers and models
-	r.GET("/topics", ctrl.GetTopicsHandler)
-	r.POST("/topics/create_with_message", ctrl.CreateTopicWithMessageHandler)
-	r.POST("/topics", ctrl.CreateTopicHandler)
-	r.GET("/topics/:id/messages", ctrl.GetMessagesHandler)
-	r.POST("/topics/:id/messages", ctrl.CreateMessageHandler)
+	// Topic and Message related routes have been removed
 
 	assets := http.FS(frontend.AssetsSubdirFs)
 	r.StaticFS("/assets", assets)
@@ -240,83 +232,7 @@ func (ctrl *Controller) CancelFlowHandler(c *gin.Context) {
 	})
 }
 
-func (ctrl *Controller) GetTopicsHandler(c *gin.Context) {
-	topics, err := ctrl.dbAccessor.GetTopics(c, "TODO")
-
-	if err != nil {
-		log.Println("Error fetching topics:", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get topics"})
-		return
-	}
-	c.JSON(200, gin.H{
-		"topics": topics,
-	})
-}
-
-func (ctrl *Controller) CreateTopic(title string) (models.Topic, error) {
-	workspaceId := "TODO" // FIXME
-	now := time.Now().UTC()
-	topicRecord := models.Topic{
-		WorkspaceId: workspaceId,
-		Id:          "topic_" + ksuid.New().String(),
-		Title:       title,
-		Created:     now,
-		Updated:     now,
-	}
-
-	err := ctrl.dbAccessor.PersistTopic(context.Background(), topicRecord)
-	if err != nil {
-		return models.Topic{}, err
-	}
-
-	return topicRecord, nil
-}
-
-func (ctrl *Controller) CreateTopicHandler(c *gin.Context) {
-	var topicReq CreateTopicRequest
-	if err := c.ShouldBindJSON(&topicReq); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	topic, err := ctrl.CreateTopic(topicReq.Title)
-	if err != nil {
-		log.Println("Failed to create topic: ", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create topic"})
-		return
-	}
-
-	c.JSON(200, gin.H{
-		"topic": topic,
-	})
-}
-
-func (ctrl *Controller) GetMessagesHandler(c *gin.Context) {
-	topicId := c.Param("id")
-	workspaceId := "TODO" // FIXME
-	exists, err := ctrl.dbAccessor.TopicExists(c, workspaceId, topicId)
-	if err != nil {
-		log.Println("Failed to check topic existence: ", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check topic existence"})
-		return
-	}
-	if !exists {
-		log.Println("Topic does not exist: " + topicId)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Topic does not exist: " + topicId})
-		return
-	}
-
-	messages, err := ctrl.dbAccessor.GetMessages(context.Background(), workspaceId, topicId)
-	if err != nil {
-		log.Println("Error fetching messages from RedisDatabase:", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get messages from RedisDatabase"})
-		return
-	}
-
-	c.JSON(200, gin.H{
-		"messages": messages,
-	})
-}
+// GetMessagesHandler function has been removed as it is no longer needed
 
 type TaskRequest struct {
 	Id          string `json:"id"`
@@ -332,147 +248,7 @@ type CreateMessageRequest struct {
 	Content string `json:"content"`
 }
 
-// Request struct for creating a topic
-type CreateTopicRequest struct {
-	Title string `json:"title"`
-}
-
-func (ctrl *Controller) TopicExists(workspaceId, topicId string) (bool, error) {
-	return ctrl.dbAccessor.TopicExists(context.Background(), workspaceId, topicId)
-}
-
-func (ctrl *Controller) CreateMessageHandler(c *gin.Context) {
-	workspaceId := "TODO" // FIXME
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-
-	var messageReq CreateMessageRequest
-	if err := c.ShouldBindJSON(&messageReq); err != nil {
-		errorMessage := fmt.Sprintf("Invalid create message request: %v", err)
-		log.Println(errorMessage)
-		c.SSEvent("error", gin.H{"error": errorMessage})
-		return
-	}
-
-	topicId := c.Param("id")
-	exists, err := ctrl.dbAccessor.TopicExists(c, workspaceId, topicId)
-	if err != nil {
-		log.Println("Failed to check topic existence: ", err)
-		c.SSEvent("error", gin.H{"error": "Failed to check topic existence"})
-		return
-	}
-
-	if !exists {
-		log.Println("Topic does not exist: ", topicId)
-		c.SSEvent("error", gin.H{"error": "Topic does not exist: " + topicId})
-		return
-	}
-
-	message, err := ctrl.CreateMessage(workspaceId, topicId, messageReq.Content, llm.ChatMessageRoleUser)
-	if err != nil {
-		log.Printf("Failed to create message: %v\n", err)
-		c.SSEvent("error", gin.H{"error": "Failed to create message"})
-		return
-	}
-
-	c.SSEvent("message/create", message)
-	c.Writer.Flush()
-
-	events := make(chan agent.Event, 10)
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		for event := range events {
-			//log.Println("Event received: ", event)
-			c.SSEvent(event.Type, event.Data)
-			c.Writer.Flush()
-		}
-		wg.Done()
-	}()
-
-	err = ctrl.AgentHandleNewMessage(c, topicId, events)
-	if err != nil {
-		log.Println("Agent failed to handle new message: ", err)
-		c.SSEvent("error", gin.H{"error": "Agent failed to handle new message"})
-		close(events)
-	}
-	wg.Wait()
-}
-
-func (ctrl *Controller) CreateTopicWithMessageHandler(c *gin.Context) {
-	workspaceId := "TODO" // FIXME
-
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	//c.Writer.Flush()
-
-	var messageReq CreateMessageRequest
-	if err := c.ShouldBindJSON(&messageReq); err != nil {
-		errorMessage := fmt.Sprintf("Invalid create message request: %v", err)
-		log.Println(errorMessage)
-		c.SSEvent("error", gin.H{"error": errorMessage})
-		return
-	}
-
-	topic, err := ctrl.CreateTopic(utils.FirstN(messageReq.Content, 30))
-	if err != nil {
-		log.Printf("Failed to create topic: %v\n", err)
-		c.SSEvent("error", gin.H{"error": "Failed to create topic"})
-		return
-	}
-	c.SSEvent("topic/create", topic)
-	c.Writer.Flush()
-
-	message, err := ctrl.CreateMessage(workspaceId, topic.Id, messageReq.Content, llm.ChatMessageRoleUser)
-	if err != nil {
-		log.Printf("Failed to create message: %v\n", err)
-		c.SSEvent("error", gin.H{"error": "Failed to create message"})
-		return
-	}
-	c.SSEvent("message/create", message)
-	c.Writer.Flush()
-
-	events := make(chan agent.Event, 10)
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		for event := range events {
-			//log.Printf("Event received: %v\n", utils.PanicJSON(event))
-			c.SSEvent(event.Type, event.Data)
-			c.Writer.Flush()
-		}
-		wg.Done()
-	}()
-
-	err = ctrl.AgentHandleNewMessage(c, topic.Id, events)
-	if err != nil {
-		log.Println("Agent failed to handle new message: ", err)
-		c.SSEvent("error", gin.H{"error": "Agent failed to handle new message"})
-		close(events)
-		wg.Wait()
-		return
-	}
-	wg.Wait()
-}
-
-func (ctrl *Controller) CreateMessage(workspaceId, topicId, messageContent string, role llm.ChatMessageRole) (models.Message, error) {
-	messageRecord := models.Message{
-		WorkspaceId: workspaceId,
-		TopicId:     topicId,
-		Id:          "message_" + ksuid.New().String(),
-		Role:        string(role),
-		Content:     messageContent,
-		Created:     time.Now().UTC(),
-	}
-	err := ctrl.dbAccessor.PersistMessage(context.Background(), messageRecord)
-	if err != nil {
-		return models.Message{}, err
-	}
-
-	return messageRecord, nil
-}
+// CreateMessage function has been removed as it is no longer needed
 
 func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
@@ -622,56 +398,6 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"tasks": taskResponses,
 	})
-}
-
-func (ctrl *Controller) AgentHandleNewMessage(ctx context.Context, topicId string, events chan<- agent.Event) error {
-	workspaceId := "TODO" // FIXME
-	messages, err := ctrl.dbAccessor.GetMessages(ctx, workspaceId, topicId)
-
-	if err != nil {
-		log.Println("Error fetching messages:", err)
-		events <- agent.Event{Type: agent.EventTypeError, Data: fmt.Sprintf("Error fetching messages: %v", err)}
-		return err // NOTE caller will close events in the err case
-	}
-
-	// Convert messages to the format required by agent
-	chatHistory := make([]llm.ChatMessage, 0, len(messages))
-	for _, message := range messages {
-		chatHistory = append(chatHistory, llm.ChatMessage{
-			Role:    llm.ChatMessageRole(message.Role),
-			Content: message.Content,
-		})
-	}
-	devAgent := dev.DevAgent{
-		TemporalClient:    ctrl.temporalClient,
-		TemporalTaskQueue: ctrl.temporalTaskQueue,
-		ChatHistory:       &chatHistory,
-		WorkspaceId:       workspaceId,
-	}
-
-	// create the message earlier, so we can emit events on the message before
-	// it's done being generated, eg our thinking or inferredIntent events
-	responseMessage, err := ctrl.CreateMessage(workspaceId, topicId, "", llm.ChatMessageRoleAssistant)
-	if err != nil {
-		log.Println("Error creating agent message:", err)
-		events <- agent.Event{Type: agent.EventTypeError, Data: fmt.Sprintf("Error creating agent message: %v", err)}
-		return err // NOTE caller will close events in the err case
-	}
-	responseMessage.Status = models.MessageStatusStarted
-	msgData, err := json.Marshal(responseMessage)
-	if err != nil {
-		return err
-	}
-	events <- agent.Event{Type: "message/create", Data: string(msgData)}
-
-	responseContent := devAgent.HandleNewMessage(ctx, topicId, events)
-	if responseContent != "" {
-		responseMessage.Content = responseContent
-		responseMessage.Status = models.MessageStatusComplete
-		ctrl.dbAccessor.PersistMessage(ctx, responseMessage)
-	}
-
-	return nil
 }
 
 func (ctrl *Controller) AgentHandleNewTask(ctx context.Context, task *models.Task) error {

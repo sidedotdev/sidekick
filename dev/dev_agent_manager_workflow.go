@@ -48,31 +48,6 @@ func DevAgentManagerWorkflow(ctx workflow.Context, input DevAgentManagerWorkflow
 		settable.Set(nil, err)
 	})
 
-	// TODO /gen remove this workflow.Go call and the
-	// CreateRequestForUserMessageRecord activity, as well as
-	// requestNotifications throughout this file
-	workflow.Go(ctx, func(ctx workflow.Context) {
-		for {
-			var newRequest RequestForUser
-			workflow.Await(ctx, func() bool {
-				for _, r := range requests {
-					if !requestNotifications[r.OriginWorkflowId] {
-						newRequest = r
-						return true
-					}
-				}
-				return false
-			})
-
-			// TODO do a web push notification in addition to persisting the message for any users subscribed to the topic/workflow/workspace
-			err := workflow.ExecuteActivity(ctx, ima.CreateRequestForUserMessageRecord, input.WorkspaceId, newRequest).Get(ctx, nil)
-			if err != nil {
-				log.Error("Failed to create request for user message record: %v", err)
-			}
-			requestNotifications[newRequest.OriginWorkflowId] = true
-		}
-	})
-
 	err := handleWorkRequests(ctx, input.WorkspaceId, ima, &count)
 	if err != nil {
 		return err

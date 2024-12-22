@@ -1,12 +1,7 @@
 package agent
 
-import (
-	"context"
-)
-
 type Agent interface {
-	// PerformAction performs an action given a user intent
-	PerformAction(ctx context.Context, action AgentAction, events chan<- Event)
+	// Agent interface methods
 }
 
 type AgentAction struct {

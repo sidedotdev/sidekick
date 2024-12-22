@@ -33,74 +33,9 @@ func newTestRedisDatabase() *RedisDatabase {
 	return db
 }
 
-func TestPersistMessage(t *testing.T) {
-	db := newTestRedisDatabase()
-	workspaceId := "TEST_WORKSPACE_ID"
-	messageRecord := models.Message{
-		WorkspaceId: workspaceId,
-		TopicId:     "topic_" + ksuid.New().String(),
-		Id:          "message_" + ksuid.New().String(),
-		Role:        "testRole",
-		Content:     "testContent",
-		FlowId:      "testWorkflowId",
-		Created:     time.Now().UTC(),
-	}
+// TestPersistMessage has been removed as it is no longer needed
 
-	err := db.PersistMessage(context.Background(), messageRecord)
-	assert.Nil(t, err)
-
-	// Check that the topic sorted set also has the message id
-	sortedSetKey := fmt.Sprintf("%s:%s:messages_sorted_set", messageRecord.WorkspaceId, messageRecord.TopicId)
-	rank, err := db.Client.ZRank(context.Background(), sortedSetKey, messageRecord.Id).Result()
-	assert.Nil(t, err)
-	assert.NotNil(t, rank)
-
-	// Check that the redis string has the desired content
-	key := fmt.Sprintf("%s:%s:%s", messageRecord.WorkspaceId, messageRecord.TopicId, messageRecord.Id)
-	jsonData, err := db.Client.Get(context.Background(), key).Result()
-	assert.Nil(t, err)
-
-	var retrievedMessage models.Message
-	err = json.Unmarshal([]byte(jsonData), &retrievedMessage)
-	assert.Nil(t, err)
-	assert.Equal(t, messageRecord, retrievedMessage)
-}
-
-func TestGetMessages(t *testing.T) {
-	db := newTestRedisDatabase()
-
-	workspaceId := "TEST_WORKSPACE_ID"
-	topicId := "topic_" + ksuid.New().String()
-	messageRecords := []models.Message{
-		{
-			WorkspaceId: workspaceId,
-			TopicId:     topicId,
-			Id:          "message_" + ksuid.New().String(),
-			Role:        "testRole1",
-			Content:     "testContent1",
-			FlowId:      "testWorkflowId1",
-			Created:     time.Now().UTC(),
-		},
-		{
-			WorkspaceId: workspaceId,
-			TopicId:     topicId,
-			Id:          "message_" + ksuid.New().String(),
-			Role:        "testRole2",
-			Content:     "testContent2",
-			FlowId:      "testWorkflowId2",
-			Created:     time.Now().UTC().Add(time.Millisecond),
-		},
-	}
-
-	for _, messageRecord := range messageRecords {
-		err := db.PersistMessage(context.Background(), messageRecord)
-		assert.Nil(t, err)
-	}
-
-	retrievedMessages, err := db.GetMessages(context.Background(), workspaceId, topicId)
-	assert.Nil(t, err)
-	assert.Equal(t, messageRecords, retrievedMessages)
-}
+// TestGetMessages has been removed as it is no longer needed
 
 func TestPersistTopic(t *testing.T) {
 	db := newTestRedisDatabase()

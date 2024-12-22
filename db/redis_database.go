@@ -131,32 +131,7 @@ func NewRedisDatabase() *RedisDatabase {
 	return &RedisDatabase{Client: rdb}
 }
 
-func (db RedisDatabase) GetMessages(ctx context.Context, workspaceId, topicId string) ([]models.Message, error) {
-	sortedSetKey := fmt.Sprintf("%s:%s:messages_sorted_set", workspaceId, topicId)
-	messageIDs, err := db.Client.ZRange(ctx, sortedSetKey, 0, -1).Result()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get message IDs from sorted set: %w", err)
-	}
-
-	messages := make([]models.Message, 0)
-	for _, messageID := range messageIDs {
-		key := fmt.Sprintf("%s:%s:%s", workspaceId, topicId, messageID)
-		messageJson, err := db.Client.Get(ctx, key).Result()
-
-		if err != nil {
-			return []models.Message{}, fmt.Errorf("failed to get message from Redis: %w", err)
-		}
-
-		var messageRecord models.Message
-		if err := json.Unmarshal([]byte(messageJson), &messageRecord); err != nil {
-			log.Println("Failed to unmarshal message record: ", err)
-			return []models.Message{}, err
-		}
-		messages = append(messages, messageRecord)
-	}
-
-	return messages, nil
-}
+// GetMessages function has been removed as it is no longer needed
 
 func (db RedisDatabase) PersistWorkflow(ctx context.Context, flow models.Flow) error {
 	workflowJson, err := json.Marshal(flow)
@@ -270,29 +245,7 @@ func (db RedisDatabase) TopicExists(ctx context.Context, workspaceId, topicId st
 	return err != redis.Nil, nil
 }
 
-func (db RedisDatabase) PersistMessage(ctx context.Context, messageRecord models.Message) error {
-	// Add the message to the sorted set for the topic id
-	sortedSetKey := fmt.Sprintf("%s:%s:messages_sorted_set", messageRecord.WorkspaceId, messageRecord.TopicId)
-	err := db.Client.ZAdd(ctx, sortedSetKey, redis.Z{
-		Score:  float64(messageRecord.Created.UnixMilli()),
-		Member: messageRecord.Id,
-	}).Err()
-	if err != nil {
-		return fmt.Errorf("failed to add message to sorted set: %w", err)
-	}
-
-	jsonData, err := json.Marshal(messageRecord)
-	if err != nil {
-		return fmt.Errorf("failed to convert to json when persisting message: %w", err)
-	}
-	key := fmt.Sprintf("%s:%s:%s", messageRecord.WorkspaceId, messageRecord.TopicId, messageRecord.Id)
-	err = db.Client.Set(ctx, key, jsonData, 0).Err()
-	if err != nil {
-		return fmt.Errorf("failed to persist message to Redis: %w", err)
-	}
-
-	return nil
-}
+// PersistMessage function has been removed as it is no longer needed
 
 func toMap(something interface{}) (map[string]interface{}, error) {
 	// Convert the thing to JSON
