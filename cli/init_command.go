@@ -301,57 +301,60 @@ func ensureTestCommands(config *common.RepoConfig, filePath string) error {
 
 func ensureAISecrets() ([]string, error) {
 	service := "sidekick"
-
-	openaiKey, openaiErr := keyring.Get(service, llm.OpenaiApiKeySecretName)
-	anthropicKey, anthropicErr := keyring.Get(service, llm.AnthropicApiKeySecretName)
 	var providers []string
 
-	if anthropicErr == nil && anthropicKey != "" {
-		// NOTE: anthropic is preferred when available as the primary default
-		// provider, so is appended first
-		providers = append(providers, "Anthropic")
-		fmt.Println("✔ Found existing ANTHROPIC_API_KEY in keyring.")
+	providerSelection := selection.New("Select your LLM API provider", []string{"Anthropic", "OpenAI"})
+	provider, err := providerSelection.RunPrompt()
+	if err != nil {
+		return nil, fmt.Errorf("provider selection failed: %w", err)
 	}
 
-	if openaiErr == nil && openaiKey != "" {
-		providers = append(providers, "OpenAI")
-		fmt.Println("✔ Found existing OPENAI_API_KEY in keyring.")
+	secretNames := map[string]string{
+		"Anthropic": llm.AnthropicApiKeySecretName,
+		"OpenAI":    llm.OpenaiApiKeySecretName,
 	}
 
-	if openaiErr == keyring.ErrNotFound && anthropicErr == keyring.ErrNotFound {
-		providerSelection := selection.New("Select your LLM API provider", []string{"OpenAI", "Anthropic"})
-		provider, err := providerSelection.RunPrompt()
-		if err != nil {
-			return nil, fmt.Errorf("provider selection failed: %w", err)
-		}
+	secretName, ok := secretNames[provider]
+	if !ok {
+		return nil, fmt.Errorf("invalid selection: %s", provider)
+	}
 
-		secretName := ""
-		switch provider {
-		case "OpenAI":
-			secretName = llm.OpenaiApiKeySecretName
-		case "Anthropic":
-			secretName = llm.AnthropicApiKeySecretName
-		default:
-			return nil, fmt.Errorf("invalid selection: %s", provider)
-		}
-
+	apiKey, err := keyring.Get(service, secretName)
+	if err == nil && apiKey != "" {
+		fmt.Printf("✔ Found existing %s API Key in keyring.\n", provider)
+	} else if err != nil && err != keyring.ErrNotFound {
+		return nil, fmt.Errorf("error retrieving API key from keyring: %w", err)
+	} else {
 		apiKeyInput := textinput.New(fmt.Sprintf("Enter your %s API Key: ", provider))
 		apiKeyInput.Hidden = true
 
-		apiKey, err := apiKeyInput.RunPrompt()
+		apiKey, err = apiKeyInput.RunPrompt()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get %s API Key: %w", provider, err)
 		}
 
-		if apiKey != "" {
-			err := keyring.Set(service, secretName, apiKey)
-			if err != nil {
-				return nil, fmt.Errorf("error storing API key in keyring: %w", err)
-			}
-			fmt.Printf("%s saved to keyring.\n", secretName)
-		} else {
+		if apiKey == "" {
 			return nil, fmt.Errorf("%s API Key not provided. Exiting.", provider)
 		}
+
+		err = keyring.Set(service, secretName, apiKey)
+		if err != nil {
+			return nil, fmt.Errorf("error storing API key in keyring: %w", err)
+		}
+
+		fmt.Printf("%s API Key saved to keyring.\n", provider)
+	}
+
+	// Check for all available providers
+	for providerName, secretName := range secretNames {
+		key, err := keyring.Get(service, secretName)
+		if err == nil && key != "" {
+			providers = append(providers, providerName)
+		}
+	}
+
+	if len(providers) == 0 {
+		return nil, fmt.Errorf("no API keys found or provided")
 	}
 
 	return providers, nil
