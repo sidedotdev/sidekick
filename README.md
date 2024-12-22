@@ -69,9 +69,8 @@ Then you can create a task at http://localhost:8855/kanban
 
 ## Dependencies 
 
-1. [temporal cli](https://docs.temporal.io/cli#installation)
-2. [redis](https://redis.io/docs/install/install-redis/)
-3. [ripgrep](https://github.com/BurntSushi/ripgrep?tab=readme-ov-file#installation)
+1. [redis](https://redis.io/docs/install/install-redis/)
+2. [ripgrep](https://github.com/BurntSushi/ripgrep?tab=readme-ov-file#installation)
 
 ### Language-specific Dependencies
 
