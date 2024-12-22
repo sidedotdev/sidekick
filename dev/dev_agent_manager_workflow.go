@@ -376,7 +376,7 @@ func setActivityOptions(ctx workflow.Context) workflow.Context {
 			InitialInterval:        time.Second,
 			BackoffCoefficient:     2.0,
 			MaximumInterval:        10 * time.Second,
-			MaximumAttempts:        3,        // up to 3 retries
+			MaximumAttempts:        3,          // up to 3 retries
 			NonRetryableErrorTypes: []string{}, // TODO make out-of-bounds errors non-retryable
 		},
 	}

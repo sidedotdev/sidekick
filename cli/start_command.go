@@ -6,12 +6,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sidekick/api"
 	"sidekick/common"
 	"sidekick/worker"
 	"sync"
 	"syscall"
 
+	"github.com/adrg/xdg"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/api/enums/v1"
@@ -38,11 +40,11 @@ import (
 )
 
 type temporalServerConfig struct {
-	ip            string
-	namespace     string
-	clusterName   string
-	dbFilePath string
-	ports         struct {
+	ip          string
+	namespace   string
+	clusterName string
+	dbFilePath  string
+	ports       struct {
 		frontend int
 		history  int
 		matching int
@@ -52,12 +54,28 @@ type temporalServerConfig struct {
 	}
 }
 
-func newTemporalServerConfig(ip string, basePort int) *temporalServerConfig {
+// ensureSidekickXDGDataHome creates the necessary directories for storing Sidekick data
+// according to XDG specifications.
+func ensureSidekickXDGDataHome() (string, error) {
+	sidekickDataDir := filepath.Join(xdg.DataHome, "sidekick")
+	err := os.MkdirAll(sidekickDataDir, 0755)
+	if err != nil {
+		return "", fmt.Errorf("failed to create Sidekick data directory: %w", err)
+	}
+	return sidekickDataDir, nil
+}
+
+func newTemporalServerConfig(ip string, basePort int) (*temporalServerConfig, error) {
+	sidekickDataDir, err := ensureSidekickXDGDataHome()
+	if err != nil {
+		return nil, fmt.Errorf("failed to ensure Sidekick XDG data home: %w", err)
+	}
+
 	cfg := &temporalServerConfig{
-		ip:            ip,
-		namespace:     common.GetTemporalNamespace(),
-		clusterName:   "active",
-		dbFilePath: "/Users/Shared/sidekick/local-temporal-db2", // FIXME use xdg data dir and name the db sidekick-temporal
+		ip:          ip,
+		namespace:   common.GetTemporalNamespace(),
+		clusterName: "active",
+		dbFilePath:  filepath.Join(sidekickDataDir, "temporal.db"),
 	}
 
 	// Calculate ports
@@ -68,7 +86,7 @@ func newTemporalServerConfig(ip string, basePort int) *temporalServerConfig {
 	cfg.ports.ui = basePort + 1000
 	cfg.ports.metrics = basePort + 2000
 
-	return cfg
+	return cfg, nil
 }
 
 func startTemporalUIServer(cfg *temporalServerConfig) error {
@@ -337,7 +355,10 @@ func handleStartCommand(args []string) {
 			defer wg.Done()
 			log.Info().Msg("Starting temporal...")
 
-			cfg := newTemporalServerConfig(common.GetTemporalServerHost(), common.GetTemporalServerPort())
+			cfg, err := newTemporalServerConfig(common.GetTemporalServerHost(), common.GetTemporalServerPort())
+			if err != nil {
+				log.Fatal().Err(err).Msg("Failed to create Temporal server config")
+			}
 			temporalServer := startTemporal(cfg)
 
 			log.Info().Str("component", "Server").Msgf("%v:%v", cfg.ip, cfg.ports.frontend)

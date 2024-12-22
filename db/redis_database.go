@@ -119,7 +119,6 @@ func (db RedisDatabase) GetSubflows(ctx context.Context, workspaceId, flowId str
 	return subflows, nil
 }
 
-
 func NewRedisDatabase() *RedisDatabase {
 	redisAddr := os.Getenv("REDIS_ADDRESS")
 	if redisAddr == "" {
