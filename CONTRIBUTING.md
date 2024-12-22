@@ -50,13 +50,13 @@ temporal operator search-attribute create --name="WorkspaceId" --type="Keyword"
 In another terminal instance, run the worker. Notice that this worker hosts both Workflow and Activity functions.
 
 ```sh
-go run worker/main.go
+go run worker/main/main.go
 ```
 
 ### Step 2: Run the API Server
 
 ```sh
-go run api/main.go
+go run api/main/main.go
 ```
 
 ### Step 3: Run the frontend

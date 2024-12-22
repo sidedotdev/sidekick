@@ -2,8 +2,10 @@ package main
 
 import (
 	"os"
+	"os/signal"
 	"sidekick/common"
 	"sidekick/worker"
+	"syscall"
 
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
@@ -19,5 +21,9 @@ func main() {
 		log.Fatal().Err(err).Msg("dot env loading failed")
 	}
 
-	worker.StartWorker(common.GetTemporalServerHostPort(), common.GetTemporalTaskQueue())
+	_ = worker.StartWorker(common.GetTemporalServerHostPort(), common.GetTemporalTaskQueue())
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
 }

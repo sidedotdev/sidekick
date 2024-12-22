@@ -43,7 +43,7 @@ func RunServer() *http.Server {
 	// Start server in a goroutine
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start API server: %s\n", err)
+			log.Fatalf("Failed to start API server: %v\n", err)
 		}
 	}()
 
