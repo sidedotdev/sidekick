@@ -16,7 +16,6 @@ import (
 	"sidekick/db"
 	"sidekick/llm"
 	"sidekick/models"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -121,24 +120,6 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	}
 
 	return nil
-}
-
-func compareVersions(serverVersion, requiredVersion string) int {
-	serverParts := strings.Split(serverVersion, ".")
-	requiredParts := strings.Split(requiredVersion, ".")
-
-	for i := 0; i < len(serverParts); i++ {
-		serverPart, _ := strconv.Atoi(serverParts[i])
-		requiredPart, _ := strconv.Atoi(requiredParts[i])
-
-		if serverPart > requiredPart {
-			return 1
-		} else if serverPart < requiredPart {
-			return -1
-		}
-	}
-
-	return 0
 }
 
 func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspaceID string, currentConfig *models.WorkspaceConfig, llmProviders, embeddingProviders []string) error {

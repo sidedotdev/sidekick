@@ -191,7 +191,3 @@ Planned languages include:
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Updating Dependencies
-
-To update the project dependencies and ensure the `go.sum` file is up-to-date, run the following command:
