@@ -1,19 +1,20 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"context"
-	"fmt"
-	"log"
 	"sidekick/agent"
+	"sidekick/common"
 	"sidekick/db"
 	"sidekick/dev"
 	"sidekick/flow_event"
@@ -29,28 +30,25 @@ import (
 	"go.temporal.io/sdk/client"
 )
 
-// TODO register/reserve default port with IANA
-const DefaultPort = "8855"
-
-func RunServer() error {
+func RunServer() *http.Server {
 	gin.SetMode(gin.ReleaseMode)
 	ctrl := NewController()
-	r := DefineRoutes(ctrl)
+	router := DefineRoutes(ctrl)
 
-	port := os.Getenv("SIDE_SERVER_PORT")
-	if port == "" {
-		port = DefaultPort
+	srv := &http.Server{
+		Addr:    fmt.Sprintf(":%d", common.GetServerPort()),
+		Handler: router.Handler(),
 	}
 
-	return r.Run(fmt.Sprintf(":%s", port)) // starts the server
-}
+	// Start server in a goroutine
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Failed to start API server: %v\n", err)
+		}
+	}()
 
-const (
-	TemporalNamespaceEnv     = "TEMPORAL_NAMESPACE"
-	TemporalServerHostEnv    = "TEMPORAL_SERVER_HOSTPORT"
-	TemporalTaskQueueEnv     = "TEMPORAL_TASK_QUEUE"
-	DefaultTemporalTaskQueue = "default"
-)
+	return srv
+}
 
 type Controller struct {
 	dbAccessor        db.DatabaseAccessor
@@ -140,26 +138,9 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 }
 
 func NewController() Controller {
-	temporalNamespace := os.Getenv(TemporalNamespaceEnv)
-	if temporalNamespace == "" {
-		log.Println("Missing Temporal namespace, using default")
-		temporalNamespace = client.DefaultNamespace
-	}
-
-	temporalTaskQueue := os.Getenv(TemporalTaskQueueEnv)
-	if temporalTaskQueue == "" {
-		log.Println("Missing Temporal task queue, using default")
-		temporalTaskQueue = DefaultTemporalTaskQueue
-	}
-
-	temporalServerHostPort := os.Getenv(TemporalServerHostEnv)
-	if temporalServerHostPort == "" {
-		log.Println("Missing Temporal server hostport, using default")
-		temporalServerHostPort = client.DefaultHostPort
-	}
 
 	clientOptions := client.Options{
-		HostPort: temporalServerHostPort,
+		HostPort: common.GetTemporalServerHostPort(),
 	}
 	temporalClient, err := client.NewLazyClient(clientOptions)
 	if err != nil {
@@ -189,8 +170,8 @@ func NewController() Controller {
 		dbAccessor:        &db.RedisDatabase{Client: redisClient},
 		flowEventAccessor: &db.RedisFlowEventAccessor{Client: redisClient},
 		temporalClient:    temporalClient,
-		temporalNamespace: temporalNamespace,
-		temporalTaskQueue: temporalTaskQueue,
+		temporalNamespace: common.GetTemporalNamespace(),
+		temporalTaskQueue: common.GetTemporalTaskQueue(),
 	}
 }
 
@@ -225,6 +206,7 @@ func (ctrl *Controller) DeleteTaskHandler(c *gin.Context) {
 	for _, flow := range childFlows {
 		err = devAgent.TerminateWorkflowIfExists(c.Request.Context(), flow.Id)
 		if err != nil {
+			log.Println("Error terminating workflow:", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to terminate workflow"})
 			return
 		}

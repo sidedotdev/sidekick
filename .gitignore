@@ -29,6 +29,7 @@ frontend/node_modules
 side
 libusearch_c.a
 local-temporal-db*
+.aider*
 
 # TODO: audit these and move into the sidekick workspace kanban board
 todo.md

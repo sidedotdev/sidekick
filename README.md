@@ -66,11 +66,11 @@ side start
 ```
 
 Then you can create a task at http://localhost:8855/kanban
+
 ## Dependencies 
 
-1. [temporal cli](https://docs.temporal.io/cli#installation)
-2. [redis](https://redis.io/docs/install/install-redis/)
-3. [ripgrep](https://github.com/BurntSushi/ripgrep?tab=readme-ov-file#installation)
+1. [redis](https://redis.io/docs/install/install-redis/)
+2. [ripgrep](https://github.com/BurntSushi/ripgrep?tab=readme-ov-file#installation)
 
 ### Language-specific Dependencies
 
@@ -83,6 +83,8 @@ Note: All language-specific dependencies are also dev dependencies for language-
 ## Configuration
 
 ### side.toml
+
+The `side.toml` file contains repositiory-specific configuration.
 
 #### test_commands
 
@@ -108,7 +110,6 @@ too, at the cost of time and accuracy.
 ### .sideignore
 
 <!-- TODO /gen how and when to use the .sideignore file -->
-
 
 ## Language and Framework Support
 

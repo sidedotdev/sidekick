@@ -21,7 +21,6 @@ import (
 	"github.com/invopop/jsonschema"
 	"github.com/redis/go-redis/v9"
 	"go.temporal.io/api/enums/v1"
-	"go.temporal.io/api/update/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
 )
@@ -53,7 +52,7 @@ func (ia *DevAgent) workRequest(ctx context.Context, parentId, request, flowType
 	workRequest := WorkRequest{ParentId: parentId, Input: request, FlowType: flowType, FlowOptions: flowOptions}
 	//updateHandle, err := ia.TemporalClient.UpdateWorkflow(ctx, devManagerWorkflowId, "", UpdateNameWorkRequest, workRequest)
 	firstRunId := ia.getFirstExecutionRunID(ctx, devManagerWorkflowId)
-	updateRequest := client.UpdateWorkflowWithOptionsRequest{
+	updateRequest := client.UpdateWorkflowOptions{
 		UpdateID:   uuid.New().String(),
 		WorkflowID: devManagerWorkflowId,
 		UpdateName: UpdateNameWorkRequest,
@@ -64,11 +63,9 @@ func (ia *DevAgent) workRequest(ctx context.Context, parentId, request, flowType
 		FirstExecutionRunID: firstRunId,
 
 		// How this RPC should block on the server before returning.
-		WaitPolicy: &update.WaitPolicy{
-			LifecycleStage: enums.UPDATE_WORKFLOW_EXECUTION_LIFECYCLE_STAGE_ACCEPTED,
-		},
+		WaitForStage: client.WorkflowUpdateStageAccepted,
 	}
-	updateHandle, err := ia.TemporalClient.UpdateWorkflowWithOptions(ctx, &updateRequest)
+	updateHandle, err := ia.TemporalClient.UpdateWorkflow(ctx, updateRequest)
 	if err != nil {
 		return models.Flow{}, fmt.Errorf("error issuing Update request: %w\n%v", err, updateRequest)
 	}
@@ -387,12 +384,13 @@ func (ia DevAgent) HandleNewMessage(ctx context.Context, topicId string, events 
 
 const temporalLiteNotFoundError1 = "no rows in result set"
 const temporalLiteAlreadyCompletedError = "workflow execution already completed"
+const temporalWorkflowNotFoundForId = "workflow not found for ID"
 
 // TerminateWorkflowIfExists terminates a workflow execution if there is one running
 func (ia *DevAgent) TerminateWorkflowIfExists(ctx context.Context, workflowId string) error {
 	reason := "DevAgent TerminateWorkflowIfExists"
 	err := ia.TemporalClient.TerminateWorkflow(ctx, workflowId, "", reason)
-	if err != nil && !strings.Contains(err.Error(), temporalLiteNotFoundError1) && !strings.Contains(err.Error(), temporalLiteAlreadyCompletedError) {
+	if err != nil && !strings.Contains(err.Error(), temporalWorkflowNotFoundForId) && !strings.Contains(err.Error(), temporalLiteNotFoundError1) && !strings.Contains(err.Error(), temporalLiteAlreadyCompletedError) {
 		fmt.Printf("failed to terminate workflow: %v\n", err)
 		return fmt.Errorf("failed to terminate workflow: %w", err)
 	}
