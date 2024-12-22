@@ -7,7 +7,6 @@ import (
 	"log"
 	"sidekick/common"
 	"sidekick/models"
-	"sidekick/utils"
 	"testing"
 	"time"
 
@@ -36,55 +35,6 @@ func newTestRedisDatabase() *RedisDatabase {
 // TestPersistMessage has been removed as it is no longer needed
 
 // TestGetMessages has been removed as it is no longer needed
-
-func TestPersistTopic(t *testing.T) {
-	db := newTestRedisDatabase()
-
-	workspaceId := "TEST_WORKSPACE_ID"
-	topicRecord := models.Topic{
-		WorkspaceId: workspaceId,
-		Id:          "topic_" + ksuid.New().String(),
-		Title:       "testTitle",
-		Created:     time.Now().UTC(),
-	}
-
-	err := db.PersistTopic(context.Background(), topicRecord)
-	assert.Nil(t, err)
-
-	// Check that the workspace topics sorted set also has the topic id
-	sortedSetKey := fmt.Sprintf("%s:topics_sorted_set", topicRecord.WorkspaceId)
-	rank, err := db.Client.ZRank(context.Background(), sortedSetKey, topicRecord.Id).Result()
-	assert.Nil(t, err)
-	assert.NotNil(t, rank)
-
-	key := fmt.Sprintf("%s:%s", topicRecord.WorkspaceId, topicRecord.Id)
-	topicJson, err := db.Client.Get(context.Background(), key).Result()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var gotTopicRecord models.Topic
-	if err := json.Unmarshal([]byte(topicJson), &gotTopicRecord); err != nil {
-		t.Fatal(err)
-	}
-	assert.Equal(t, utils.PanicJSON(topicRecord.Created), utils.PanicJSON(gotTopicRecord.Created))
-	assert.Equal(t, topicRecord, gotTopicRecord)
-}
-
-func TestTopicExists(t *testing.T) {
-	db := newTestRedisDatabase()
-
-	// Test when topic exists
-	err := db.Client.Set(context.Background(), "workspace1:topic1", "dummy", 0).Err()
-	assert.NoError(t, err)
-	exists, err := db.TopicExists(context.Background(), "workspace1", "topic1")
-	assert.NoError(t, err)
-	assert.True(t, exists)
-
-	// Test when topic does not exist
-	exists, err = db.TopicExists(context.Background(), "workspace1", "topic2")
-	assert.NoError(t, err)
-	assert.False(t, exists)
-}
 
 func TestGetTasks(t *testing.T) {
 	db := newTestRedisDatabase()

@@ -10,7 +10,6 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"sidekick/agent"
 	"sidekick/db"
 	"sidekick/flow_event"
 	"sidekick/mocks"
@@ -125,8 +124,13 @@ func requireSSETypes(t *testing.T, body []byte, expectedEventTypes ...string) {
 	}
 }
 
-func parseSSE(str string) ([]agent.Event, error) {
-	parsedEvents := make([]agent.Event, 0)
+type event struct {
+	Type string
+	Data string
+}
+
+func parseSSE(str string) ([]event, error) {
+	parsedEvents := make([]event, 0)
 	lines := strings.Split(str, "\n")
 	for i := 0; i < len(lines); i++ {
 		if strings.HasPrefix(lines[i], "event:") {
@@ -134,7 +138,7 @@ func parseSSE(str string) ([]agent.Event, error) {
 			i++
 			if i < len(lines) && strings.HasPrefix(lines[i], "data:") {
 				data := strings.TrimSpace(strings.TrimPrefix(lines[i], "data:"))
-				parsedEvents = append(parsedEvents, agent.Event{Type: eventType, Data: data})
+				parsedEvents = append(parsedEvents, event{Type: eventType, Data: data})
 			} else {
 				return nil, errors.New("invalid format, data field missing after event field")
 			}

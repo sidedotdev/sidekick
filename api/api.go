@@ -81,8 +81,6 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	workspaceWsRoutes.GET("/:workspaceId/flows/:id/action_changes_ws", ctrl.FlowActionChangesWebsocketHandler)
 	workspaceWsRoutes.GET("/:workspaceId/flows/:id/events", ctrl.FlowEventsWebsocketHandler)
 
-	// Topic and Message related routes have been removed
-
 	assets := http.FS(frontend.AssetsSubdirFs)
 	r.StaticFS("/assets", assets)
 

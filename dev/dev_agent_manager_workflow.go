@@ -58,7 +58,6 @@ func DevAgentManagerWorkflow(ctx workflow.Context, input DevAgentManagerWorkflow
 }
 
 type CancelSignal struct {
-	TopicId    string
 	WorkflowId string
 }
 
@@ -313,7 +312,6 @@ func executeWorkRequest(ctx workflow.Context, workspaceId string, workRequest Wo
 		WorkspaceId: workspaceId,
 		Id:          we.ID,
 		Type:        workRequest.FlowType,
-		TopicId:     workRequest.ParentId, // TODO remove
 		Status:      "in_progress",
 		ParentId:    workRequest.ParentId,
 	}

@@ -205,46 +205,6 @@ func (db RedisDatabase) GetWorkflow(ctx context.Context, workspaceId, flowId str
 	return flow, nil
 }
 
-func (db RedisDatabase) PersistTopic(ctx context.Context, topicRecord models.Topic) error {
-	topicJson, err := json.Marshal(topicRecord)
-	if err != nil {
-		log.Println("Failed to convert topic record to JSON: ", err)
-		return err
-	}
-
-	// Add the topic to the sorted set for the workspace id
-	sortedSetKey := fmt.Sprintf("%s:topics_sorted_set", topicRecord.WorkspaceId)
-	err = db.Client.ZAdd(ctx, sortedSetKey, redis.Z{
-		Score:  float64(topicRecord.Updated.UnixMilli()),
-		Member: topicRecord.Id,
-	}).Err()
-	if err != nil {
-		return fmt.Errorf("failed to add topic to sorted set: %w", err)
-	}
-
-	// Persist the topic record itself
-	key := fmt.Sprintf("%s:%s", topicRecord.WorkspaceId, topicRecord.Id)
-	err = db.Client.Set(ctx, key, topicJson, 0).Err()
-	if err != nil {
-		log.Println("Failed to persist topic to Redis: ", err)
-		return err
-	}
-
-	return nil
-}
-
-func (db RedisDatabase) TopicExists(ctx context.Context, workspaceId, topicId string) (bool, error) {
-	// Check if the topic exists in Redis
-	key := fmt.Sprintf("%s:%s", workspaceId, topicId)
-	_, err := db.Client.Get(ctx, key).Result()
-
-	if err != nil && err != redis.Nil {
-		return false, fmt.Errorf("failed to get topic from Redis: %w", err)
-	}
-
-	return err != redis.Nil, nil
-}
-
 // PersistMessage function has been removed as it is no longer needed
 
 func toMap(something interface{}) (map[string]interface{}, error) {
@@ -264,32 +224,6 @@ func toMap(something interface{}) (map[string]interface{}, error) {
 	return dataMap, nil
 }
 
-func (db RedisDatabase) GetTopics(ctx context.Context, workspaceId string) ([]models.Topic, error) {
-	sortedSetKey := fmt.Sprintf("%s:topics_sorted_set", workspaceId)
-	topicIds, err := db.Client.ZRange(ctx, sortedSetKey, 0, -1).Result()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get topics from sorted set: %w", err)
-	}
-
-	var topics []models.Topic
-	for _, topicId := range topicIds {
-		key := fmt.Sprintf("%s:%s", workspaceId, topicId)
-		topicJson, err := db.Client.Get(ctx, key).Result()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get topic from Redis: %w", err)
-		}
-
-		var topic models.Topic
-		err = json.Unmarshal([]byte(topicJson), &topic)
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal topic JSON: %w", err)
-		}
-
-		topics = append(topics, topic)
-	}
-
-	return topics, nil
-}
 func (db RedisDatabase) MGet(ctx context.Context, keys []string) ([]interface{}, error) {
 	return db.Client.MGet(ctx, keys...).Result()
 }
