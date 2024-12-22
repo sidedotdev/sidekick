@@ -15,6 +15,7 @@ import (
 
 	"github.com/adrg/xdg"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/operatorservice/v1"
@@ -223,7 +224,7 @@ func startTemporalServer(cfg *temporalServerConfig) temporal.Server {
 		log.Fatal().Err(err).Msg("Unable to create authorizer")
 	}
 
-	logger := common.NewZerologLogger(log.Logger)
+	logger := common.NewZerologLogger(log.Logger.Level(zerolog.WarnLevel))
 	claimMapper, err := authorization.GetClaimMapperFromConfig(&conf.Global.Authorization, logger)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Unable to create claim mapper")
@@ -256,7 +257,6 @@ func startTemporalServer(cfg *temporalServerConfig) temporal.Server {
 		log.Fatal().Err(err).Msg("Unable to create server")
 	}
 
-	log.Info().Msg("Starting temporal server")
 	if err := server.Start(); err != nil {
 		log.Fatal().Err(err).Msg("Unable to start server")
 	}
@@ -361,9 +361,9 @@ func handleStartCommand(args []string) {
 			}
 			temporalServer := startTemporal(cfg)
 
-			log.Info().Str("component", "Server").Msgf("%v:%v", cfg.ip, cfg.ports.frontend)
-			log.Info().Str("component", "UI").Msgf("http://%v:%v", cfg.ip, cfg.ports.ui)
-			log.Info().Str("component", "Metrics").Msgf("http://%v:%v/metrics", cfg.ip, cfg.ports.metrics)
+			log.Info().Str("component", "Temporal Server").Msgf("%v:%v", cfg.ip, cfg.ports.frontend)
+			log.Info().Str("component", "Temporal UI").Msgf("http://%v:%v", cfg.ip, cfg.ports.ui)
+			log.Info().Str("component", "Temporal Metrics").Msgf("http://%v:%v/metrics", cfg.ip, cfg.ports.metrics)
 
 			// Wait for cancellation
 			<-ctx.Done()
