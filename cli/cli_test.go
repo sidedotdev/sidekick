@@ -159,10 +159,10 @@ func TestCheckConfig_ValidFile(t *testing.T) {
 	assert.True(t, checkResult.hasTestCommands, "Expected hasTestCommands to be true with valid side.toml")
 }
 
-func TestCheckOrPromptForAPIKey_AnthropicProviderSelected(t *testing.T) {
+func TestEnsureAISecrets_AnthropicProviderSelected(t *testing.T) {
 	keyring.MockInit()
 
-	// Mock stdin to provide input for checkOrPromptForAPIKey
+	// Mock stdin to provide input for ensureAISecrets
 	oldStdin := os.Stdin
 	r, w, _ := os.Pipe()
 	os.Stdin = r
@@ -176,18 +176,23 @@ func TestCheckOrPromptForAPIKey_AnthropicProviderSelected(t *testing.T) {
 		os.Stdin = oldStdin
 	}()
 
-	_, err := ensureAISecrets()
+	providers, err := ensureAISecrets()
 	assert.NoError(t, err)
+	assert.Equal(t, []string{"Anthropic"}, providers)
 
 	apiKey, err := keyring.Get("sidekick", llm.AnthropicApiKeySecretName)
 	assert.NoError(t, err)
 	assert.Equal(t, "dummy-api-key-anthropic", apiKey)
+
+	// Ensure OpenAI key is not present
+	_, err = keyring.Get("sidekick", llm.OpenaiApiKeySecretName)
+	assert.Error(t, err)
 }
 
-func TestCheckOrPromptForAPIKey_OpenAIProviderSelected(t *testing.T) {
+func TestEnsureAISecrets_OpenAIProviderSelected(t *testing.T) {
 	keyring.MockInit()
 
-	// Mock stdin to provide input for checkOrPromptForAPIKey
+	// Mock stdin to provide input for ensureAISecrets
 	oldStdin := os.Stdin
 	r, w, _ := os.Pipe()
 	os.Stdin = r
@@ -201,29 +206,54 @@ func TestCheckOrPromptForAPIKey_OpenAIProviderSelected(t *testing.T) {
 		os.Stdin = oldStdin
 	}()
 
-	_, err := ensureAISecrets()
+	providers, err := ensureAISecrets()
 	assert.NoError(t, err)
+	assert.Equal(t, []string{"OpenAI"}, providers)
 
 	apiKey, err := keyring.Get("sidekick", llm.OpenaiApiKeySecretName)
 	assert.NoError(t, err)
 	assert.Equal(t, "dummy-api-key", apiKey)
+
+	// Ensure Anthropic key is not present
+	_, err = keyring.Get("sidekick", llm.AnthropicApiKeySecretName)
+	assert.Error(t, err)
 }
 
-func TestCheckOrPromptForAPIKey_UsesExistingKeyringValue(t *testing.T) {
+func TestEnsureAISecrets_UsesExistingKeyringValue(t *testing.T) {
 	keyring.MockInit()
 
 	service := "sidekick"
-	expectedAPIKey := "existing-api-key"
+	expectedOpenAIKey := "existing-openai-key"
+	expectedAnthropicKey := "existing-anthropic-key"
 
-	err := keyring.Set(service, llm.OpenaiApiKeySecretName, expectedAPIKey)
+	err := keyring.Set(service, llm.OpenaiApiKeySecretName, expectedOpenAIKey)
+	assert.NoError(t, err)
+	err = keyring.Set(service, llm.AnthropicApiKeySecretName, expectedAnthropicKey)
 	assert.NoError(t, err)
 
-	_, err = ensureAISecrets()
-	assert.NoError(t, err)
+	// Mock stdin to provide input for ensureAISecrets
+	oldStdin := os.Stdin
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	go func() {
+		w.WriteString("OpenAI\r\n")
+	}()
+	defer func() {
+		w.Close()
+		os.Stdin = oldStdin
+	}()
 
-	retrievedAPIKey, err := keyring.Get(service, llm.OpenaiApiKeySecretName)
+	providers, err := ensureAISecrets()
 	assert.NoError(t, err)
-	assert.Equal(t, expectedAPIKey, retrievedAPIKey)
+	assert.ElementsMatch(t, []string{"OpenAI", "Anthropic"}, providers)
+
+	retrievedOpenAIKey, err := keyring.Get(service, llm.OpenaiApiKeySecretName)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedOpenAIKey, retrievedOpenAIKey)
+
+	retrievedAnthropicKey, err := keyring.Get(service, llm.AnthropicApiKeySecretName)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedAnthropicKey, retrievedAnthropicKey)
 }
 
 func TestSaveConfig_CreatesFileWithCorrectContent(t *testing.T) {
