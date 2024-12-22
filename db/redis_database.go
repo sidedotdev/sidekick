@@ -131,8 +131,6 @@ func NewRedisDatabase() *RedisDatabase {
 	return &RedisDatabase{Client: rdb}
 }
 
-// GetMessages function has been removed as it is no longer needed
-
 func (db RedisDatabase) PersistWorkflow(ctx context.Context, flow models.Flow) error {
 	workflowJson, err := json.Marshal(flow)
 	if err != nil {
@@ -204,8 +202,6 @@ func (db RedisDatabase) GetWorkflow(ctx context.Context, workspaceId, flowId str
 
 	return flow, nil
 }
-
-// PersistMessage function has been removed as it is no longer needed
 
 func toMap(something interface{}) (map[string]interface{}, error) {
 	// Convert the thing to JSON
