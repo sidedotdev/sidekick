@@ -33,18 +33,26 @@ All the dependencies listed in README.md are required when developing the projec
 
 ## Development Workflow
 
+### Step 0: Run temporal (bundled)
+
+Start the side cli's bundled temporal server:
+
+```sh
+SIDE_APP_ENV=development go build -o side sidekick/cli && ./side start temporal
+```
+
 ### Step 1: Run the Worker
 
 In another terminal instance, run the worker. Notice that this worker hosts both Workflow and Activity functions.
 
 ```sh
-go run worker/main/main.go
+SIDE_APP_ENV=development go run worker/main/main.go
 ```
 
 ### Step 2: Run the API Server
 
 ```sh
-go run api/main/main.go
+SIDE_APP_ENV=development go run api/main/main.go
 ```
 
 ### Step 3: Run the frontend
