@@ -33,18 +33,6 @@ All the dependencies listed in README.md are required when developing the projec
 
 ## Development Workflow
 
-### Step 0: Start Temporal Server
-
-```sh
-temporal server start-dev --dynamic-config-value frontend.enableUpdateWorkflowExecution=true --dynamic-config-value frontend.enableUpdateWorkflowExecutionAsyncAccepted=true --db-filename local-temporal-db
-```
-
-Run this too:
-
-```sh
-temporal operator search-attribute create --name="WorkspaceId" --type="Keyword"
-```
-
 ### Step 1: Run the Worker
 
 In another terminal instance, run the worker. Notice that this worker hosts both Workflow and Activity functions.
