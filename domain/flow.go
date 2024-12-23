@@ -3,7 +3,6 @@ package domain
 import (
 	"context"
 	"fmt"
-	"time"
 )
 
 // record that is 1:1 with a temporal workflow
@@ -15,6 +14,8 @@ type Flow struct {
 	Status      string   `json:"status"`   // flow status
 }
 
+// TODO /gen remove type: we want to support external flow types not defined in
+// this codebase
 type FlowType = string
 
 const (
@@ -33,67 +34,9 @@ func StringToFlowType(s string) (FlowType, error) {
 	}
 }
 
-type SubflowStatus string
-
-const (
-	SubflowStatusInProgress SubflowStatus = "in_progress"
-	SubflowStatusStarted    SubflowStatus = "started"
-	SubflowStatusComplete   SubflowStatus = "complete"
-	SubflowStatusFailed     SubflowStatus = "failed"
-)
-
-// Subflow represents a subflow within a flow
-type Subflow struct {
-	WorkspaceId     string        `json:"workspaceId"`
-	Id              string        `json:"id"`                        // Unique identifier, prefixed with 'sf_'
-	Name            string        `json:"name"`                      // Name of the subflow
-	Description     string        `json:"description,omitempty"`     // Description of the subflow, if any
-	Status          SubflowStatus `json:"status"`                    // Status of the subflow
-	ParentSubflowId string        `json:"parentSubflowId,omitempty"` // ID of the parent subflow, if any
-	FlowId          string        `json:"flowId"`                    // ID of the flow this subflow belongs to
-	Result          string        `json:"result,omitempty"`          // Result of the subflow, if any
-}
-
-type ActionStatus = string
-
-const (
-	ActionStatusPending  ActionStatus = "pending"
-	ActionStatusStarted  ActionStatus = "started"
-	ActionStatusComplete ActionStatus = "complete"
-	ActionStatusFailed   ActionStatus = "failed"
-)
-
-type FlowAction struct {
-	Id                 string                 `json:"id"`
-	SubflowName        string                 `json:"subflow"`            // TODO: remove in favor of SubflowId
-	SubflowDescription string                 `json:"subflowDescription"` // TODO: remove in favor of SubflowId
-	SubflowId          string                 `json:"subflowId,omitempty"`
-	FlowId             string                 `json:"flowId"`
-	WorkspaceId        string                 `json:"workspaceId"`
-	Created            time.Time              `json:"created"`
-	Updated            time.Time              `json:"updated"`
-	ActionType         string                 `json:"actionType"`
-	ActionParams       map[string]interface{} `json:"actionParams"`
-	ActionStatus       ActionStatus           `json:"actionStatus"`
-	ActionResult       string                 `json:"actionResult"`
-	IsHumanAction      bool                   `json:"isHumanAction"`
-	IsCallbackAction   bool                   `json:"isCallbackAction"`
-}
-
 // FlowStorage defines the interface for flow-related database operations
 type FlowStorage interface {
-	PersistWorkflow(ctx context.Context, flow Flow) error
-	GetWorkflow(ctx context.Context, workspaceId, flowId string) (Flow, error)
+	PersistFlow(ctx context.Context, flow Flow) error
+	GetFlow(ctx context.Context, workspaceId, flowId string) (Flow, error)
 	GetFlowsForTask(ctx context.Context, workspaceId, taskId string) ([]Flow, error)
-	PersistSubflow(ctx context.Context, subflow Subflow) error
-	GetSubflows(ctx context.Context, workspaceId, flowId string) ([]Subflow, error)
-	PersistFlowAction(ctx context.Context, flowAction FlowAction) error
-	GetFlowActions(ctx context.Context, workspaceId, flowId string) ([]FlowAction, error)
-	GetFlowAction(ctx context.Context, workspaceId, flowActionId string) (FlowAction, error)
-}
-
-// FlowStreamer defines the interface for flow-related stream operations
-type FlowStreamer interface {
-	AddFlowActionChange(ctx context.Context, flowAction FlowAction) error
-	GetFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]FlowAction, string, error)
 }

@@ -39,7 +39,7 @@ type UpdateTaskStatusInput struct {
 }
 
 func (a *PollFailuresActivities) UpdateTaskStatus(ctx context.Context, input UpdateTaskStatusInput) error {
-	flow, err := a.Service.GetWorkflow(ctx, input.WorkspaceId, input.FlowId)
+	flow, err := a.Service.GetFlow(ctx, input.WorkspaceId, input.FlowId)
 	if err != nil {
 		if errors.Is(err, srv.ErrNotFound) {
 			return nil

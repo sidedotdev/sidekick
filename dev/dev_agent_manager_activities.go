@@ -23,7 +23,7 @@ func (ima *DevAgentManagerActivities) UpdateTaskForUserRequest(ctx context.Conte
 	// Recursive function to find a workflow record with parent_id that starts with "task_"
 	var findWorkflowParentTaskId func(string) (string, error)
 	findWorkflowParentTaskId = func(currentWorkflowId string) (string, error) {
-		flow, err := ima.Storage.GetWorkflow(ctx, workspaceId, currentWorkflowId)
+		flow, err := ima.Storage.GetFlow(ctx, workspaceId, currentWorkflowId)
 		if err != nil {
 			return "", fmt.Errorf("Failed to retrieve workflow record for workflowId %s: %v", currentWorkflowId, err)
 		}
@@ -57,7 +57,7 @@ func (ima *DevAgentManagerActivities) UpdateTaskForUserRequest(ctx context.Conte
 }
 
 func (ima *DevAgentManagerActivities) PutWorkflow(ctx context.Context, flow domain.Flow) (err error) {
-	err = ima.Storage.PersistWorkflow(ctx, flow)
+	err = ima.Storage.PersistFlow(ctx, flow)
 	return err
 }
 
@@ -95,7 +95,7 @@ func (ima *DevAgentManagerActivities) PassOnUserResponse(userResponse UserRespon
 
 func (ima *DevAgentManagerActivities) GetWorkflow(ctx context.Context, workspaceId, workflowId string) (message domain.Flow, err error) {
 	log := activity.GetLogger(ctx)
-	flow, err := ima.Storage.GetWorkflow(ctx, workspaceId, workflowId)
+	flow, err := ima.Storage.GetFlow(ctx, workspaceId, workflowId)
 	if err != nil {
 		log.Error("Failed to retrieve workflow record", "Error", err)
 		return domain.Flow{}, err

@@ -13,6 +13,8 @@ type Service interface {
 type Storage interface {
 	domain.TaskStorage
 	domain.FlowStorage
+	domain.SubflowStorage
+	domain.FlowActionStorage
 	domain.WorkspaceStorage
 
 	CheckConnection(ctx context.Context) error
@@ -25,5 +27,5 @@ type Storage interface {
 
 type Streamer interface {
 	domain.TaskStreamer
-	domain.FlowStreamer
+	domain.FlowActionStreamer
 }

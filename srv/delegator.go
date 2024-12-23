@@ -60,7 +60,6 @@ func (d Delegator) PersistWorkspaceConfig(ctx context.Context, workspaceId strin
 	return d.storage.PersistWorkspaceConfig(ctx, workspaceId, config)
 }
 
-
 /* implements TaskStorage interface */
 func (d Delegator) GetTask(ctx context.Context, workspaceId string, taskId string) (domain.Task, error) {
 	return d.storage.GetTask(ctx, workspaceId, taskId)
@@ -95,23 +94,22 @@ func (d Delegator) GetTaskChanges(ctx context.Context, workspaceId string, strea
 	return d.streamer.GetTaskChanges(ctx, workspaceId, streamMessageStartId, maxCount, blockDuration)
 }
 
-
 /* implements FlowStorage interface */
-func (d Delegator) PersistWorkflow(ctx context.Context, workflow domain.Flow) error {
-	err := d.storage.PersistWorkflow(ctx, workflow)
+func (d Delegator) PersistFlow(ctx context.Context, workflow domain.Flow) error {
+	err := d.storage.PersistFlow(ctx, workflow)
 	return err
 	// TODO
 	/*
-	if err != nil {
-		return err
-	}
-	return d.Streamer.AddFlowChange(ctx, workflow)
+		if err != nil {
+			return err
+		}
+		return d.Streamer.AddFlowChange(ctx, workflow)
 	*/
 }
 
 /* implements FlowStorage interface */
-func (d Delegator) GetWorkflow(ctx context.Context, workspaceId string, flowId string) (domain.Flow, error) {
-	return d.storage.GetWorkflow(ctx, workspaceId, flowId)
+func (d Delegator) GetFlow(ctx context.Context, workspaceId string, flowId string) (domain.Flow, error) {
+	return d.storage.GetFlow(ctx, workspaceId, flowId)
 }
 
 /* implements FlowStorage interface */

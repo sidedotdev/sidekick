@@ -75,7 +75,7 @@ func TestUpdateTaskStatus(t *testing.T) {
 		WorkspaceId: "workspace1",
 		ParentId:    "task_1",
 	}
-	err := activities.Service.PersistWorkflow(context.Background(), *workflow)
+	err := activities.Service.PersistFlow(context.Background(), *workflow)
 	assert.NoError(t, err)
 
 	task := &domain.Task{

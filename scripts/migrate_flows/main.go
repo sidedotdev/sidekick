@@ -46,7 +46,7 @@ func migrateFlows(ctx context.Context, redisDB *redis.Storage, dryRun bool) erro
 
 			for _, flowId := range flowIds {
 				// Verify if the flow is accessible using the current key format
-				_, err := redisDB.GetWorkflow(ctx, workspace.Id, flowId)
+				_, err := redisDB.GetFlow(ctx, workspace.Id, flowId)
 				if err != nil {
 					if err == srv.ErrNotFound {
 						// If not found, update the key

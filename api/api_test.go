@@ -525,7 +525,7 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 	err := db.PersistWorkspace(ctx, workspace)
 	assert.NoError(t, err, "Persisting workspace failed")
 	flow := domain.Flow{Id: flowId, WorkspaceId: workspaceId}
-	err = db.PersistWorkflow(ctx, flow)
+	err = db.PersistFlow(ctx, flow)
 	assert.NoError(t, err, "Persisting workflow failed")
 
 	router := DefineRoutes(ctrl)
@@ -595,7 +595,7 @@ func TestCompleteFlowActionHandler(t *testing.T) {
 	// Persist the task and the flow action in the database before the API call
 	err := redisDb.PersistTask(ctx, task)
 	assert.Nil(t, err)
-	err = redisDb.PersistWorkflow(ctx, flow)
+	err = redisDb.PersistFlow(ctx, flow)
 	assert.Nil(t, err)
 	err = redisDb.PersistFlowAction(ctx, flowAction)
 	assert.Nil(t, err)
@@ -859,7 +859,7 @@ func TestGetFlowActionsHandler_EmptyActions(t *testing.T) {
 		WorkspaceId: "ws_" + ksuid.New().String(),
 		Id:          "flow_1",
 	}
-	err := redisDb.PersistWorkflow(context.Background(), flow)
+	err := redisDb.PersistFlow(context.Background(), flow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1309,7 +1309,7 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	err := db.PersistWorkspace(ctx, workspace)
 	assert.NoError(t, err, "Persisting workspace failed")
 	flow := domain.Flow{Id: flowId, WorkspaceId: workspaceId}
-	err = db.PersistWorkflow(ctx, flow)
+	err = db.PersistFlow(ctx, flow)
 	assert.NoError(t, err, "Persisting workflow failed")
 
 	// persist this one before the websocket connection starts

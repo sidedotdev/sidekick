@@ -35,7 +35,7 @@ func TestUpdateTaskForUserRequest(t *testing.T) {
 	err := storage.PersistTask(context.Background(), task)
 	assert.Nil(t, err)
 
-	err = storage.PersistWorkflow(context.Background(), flow)
+	err = storage.PersistFlow(context.Background(), flow)
 	assert.Nil(t, err)
 
 	err = ima.UpdateTaskForUserRequest(context.Background(), workspaceId, flow.Id)

@@ -412,7 +412,7 @@ func (ctrl *Controller) GetFlowActionsHandler(c *gin.Context) {
 	}
 	if flowActions == nil {
 		flowActions = []domain.FlowAction{}
-		_, err := ctrl.service.GetWorkflow(c, workspaceId, flowId)
+		_, err := ctrl.service.GetFlow(c, workspaceId, flowId)
 		if err != nil {
 			if errors.Is(err, srv.ErrNotFound) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
@@ -568,7 +568,7 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 	}
 
 	// Retrieve the flow and then task associated with the flow action
-	flow, err := ctrl.service.GetWorkflow(ctx, workspaceId, flowAction.FlowId)
+	flow, err := ctrl.service.GetFlow(ctx, workspaceId, flowAction.FlowId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve flow"})
 		return
@@ -716,7 +716,7 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 	}
 
 	// Validate flowId under the given workspaceId
-	if _, err := ctrl.service.GetWorkflow(ctx, workspaceId, flowId); err != nil {
+	if _, err := ctrl.service.GetFlow(ctx, workspaceId, flowId); err != nil {
 		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
 		} else {
@@ -883,7 +883,7 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 	}
 
 	// Validate flowId under the given workspaceId
-	if _, err := ctrl.service.GetWorkflow(ctx, workspaceId, flowId); err != nil {
+	if _, err := ctrl.service.GetFlow(ctx, workspaceId, flowId); err != nil {
 		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
 		} else {
