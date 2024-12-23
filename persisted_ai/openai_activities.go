@@ -23,7 +23,7 @@ type Embedder interface {
 
 type OpenAIActivities struct {
 	FlowEventAccessor srv.FlowEventAccessor
-	DatabaseAccessor  srv.Service
+	Storage           srv.Storage
 	Embedder
 }
 
@@ -45,7 +45,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 	var cachedEmbeddings []interface{}
 	var err error
 	if len(embeddingKeys) > 0 {
-		cachedEmbeddings, err = oa.DatabaseAccessor.MGet(ctx, embeddingKeys)
+		cachedEmbeddings, err = oa.Storage.MGet(ctx, embeddingKeys)
 		if err != nil {
 			return err
 		}
@@ -63,7 +63,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 	// TODO replace with metric
 	log.Printf("embedding %d keys\n", len(toEmbedContentKeys))
 	if len(toEmbedContentKeys) > 0 {
-		values, err := oa.DatabaseAccessor.MGet(ctx, toEmbedContentKeys)
+		values, err := oa.Storage.MGet(ctx, toEmbedContentKeys)
 		if err != nil {
 			return err
 		}
@@ -97,7 +97,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 			}
 		}
 
-		err = oa.DatabaseAccessor.MSet(ctx, cacheValues)
+		err = oa.Storage.MSet(ctx, cacheValues)
 		if err != nil {
 			return err
 		}

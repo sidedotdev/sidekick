@@ -64,7 +64,7 @@ func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
 		Updated:      time.Now(),
 	}
 
-	if err := ctrl.dbAccessor.PersistWorkspace(c, workspace); err != nil {
+	if err := ctrl.service.PersistWorkspace(c, workspace); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create workspace"})
 		return
 	}
@@ -80,7 +80,7 @@ func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
 
 	// TODO /gen call SchedulePollFailuresWorkflow here, after fixing the TODO there
 
-	if err := ctrl.dbAccessor.PersistWorkspaceConfig(c, workspace.Id, workspaceConfig); err != nil {
+	if err := ctrl.service.PersistWorkspaceConfig(c, workspace.Id, workspaceConfig); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create workspace configuration"})
 		return
 	}
@@ -139,7 +139,7 @@ func (ctrl *Controller) SchedulePollFailuresWorkflow() error {
 func (ctrl *Controller) GetWorkspaceByIdHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 
-	workspace, err := ctrl.dbAccessor.GetWorkspace(c, workspaceId)
+	workspace, err := ctrl.service.GetWorkspace(c, workspaceId)
 	if err != nil {
 		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Workspace not found"})
@@ -157,7 +157,7 @@ func (ctrl *Controller) GetWorkspaceByIdHandler(c *gin.Context) {
 		LocalRepoDir: workspace.LocalRepoDir,
 	}
 
-	config, err := ctrl.dbAccessor.GetWorkspaceConfig(c, workspaceId)
+	config, err := ctrl.service.GetWorkspaceConfig(c, workspaceId)
 	if err != nil {
 		if !errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get workspace configuration"})
@@ -189,13 +189,13 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		return
 	}
 
-	workspace, err := ctrl.dbAccessor.GetWorkspace(c, workspaceId)
+	workspace, err := ctrl.service.GetWorkspace(c, workspaceId)
 	if err != nil {
 		ctrl.ErrorHandler(c, http.StatusNotFound, err)
 		return
 	}
 
-	workspaceConfig, err := ctrl.dbAccessor.GetWorkspaceConfig(c, workspaceId)
+	workspaceConfig, err := ctrl.service.GetWorkspaceConfig(c, workspaceId)
 	if err != nil {
 		if !errors.Is(err, srv.ErrNotFound) {
 			ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
@@ -222,12 +222,12 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 	}
 	workspace.Updated = time.Now()
 
-	if err := ctrl.dbAccessor.PersistWorkspace(c, workspace); err != nil {
+	if err := ctrl.service.PersistWorkspace(c, workspace); err != nil {
 		ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
 		return
 	}
 
-	if err := ctrl.dbAccessor.PersistWorkspaceConfig(c, workspaceId, workspaceConfig); err != nil {
+	if err := ctrl.service.PersistWorkspaceConfig(c, workspaceId, workspaceConfig); err != nil {
 		ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -247,7 +247,7 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 
 // GetWorkspacesHandler handles the request for listing all workspaces
 func (c *Controller) GetWorkspacesHandler(ctx *gin.Context) {
-	workspaces, err := c.dbAccessor.GetAllWorkspaces(ctx)
+	workspaces, err := c.service.GetAllWorkspaces(ctx)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve workspaces"})
 		return

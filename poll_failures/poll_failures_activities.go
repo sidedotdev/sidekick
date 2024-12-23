@@ -14,8 +14,8 @@ import (
 )
 
 type PollFailuresActivities struct {
-	TemporalClient   client.Client
-	DatabaseAccessor srv.Service
+	TemporalClient client.Client
+	Service        srv.Service
 }
 
 type ListFailedWorkflowsInput struct {
@@ -39,7 +39,7 @@ type UpdateTaskStatusInput struct {
 }
 
 func (a *PollFailuresActivities) UpdateTaskStatus(ctx context.Context, input UpdateTaskStatusInput) error {
-	flow, err := a.DatabaseAccessor.GetWorkflow(ctx, input.WorkspaceId, input.FlowId)
+	flow, err := a.Service.GetWorkflow(ctx, input.WorkspaceId, input.FlowId)
 	if err != nil {
 		if errors.Is(err, srv.ErrNotFound) {
 			return nil
@@ -53,7 +53,7 @@ func (a *PollFailuresActivities) UpdateTaskStatus(ctx context.Context, input Upd
 		return nil
 	}
 
-	task, err := a.DatabaseAccessor.GetTask(ctx, input.WorkspaceId, flow.ParentId)
+	task, err := a.Service.GetTask(ctx, input.WorkspaceId, flow.ParentId)
 	if err != nil {
 		return err
 	}
@@ -63,5 +63,5 @@ func (a *PollFailuresActivities) UpdateTaskStatus(ctx context.Context, input Upd
 	}
 
 	task.Status = domain.TaskStatusFailed
-	return a.DatabaseAccessor.PersistTask(ctx, task)
+	return a.Service.PersistTask(ctx, task)
 }

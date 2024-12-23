@@ -16,11 +16,11 @@ import (
 )
 
 var (
-	dbAccessor srv.Service
+	storage srv.Storage
 )
 
 func init() {
-	dbAccessor = redis.NewService()
+	storage = redis.NewStorage()
 }
 
 type program struct{}
@@ -65,7 +65,7 @@ func interactiveMain() {
 
 	switch os.Args[1] {
 	case "init":
-		handler := NewInitCommandHandler(dbAccessor)
+		handler := NewInitCommandHandler(storage)
 		if err := handler.handleInitCommand(); err != nil {
 			fmt.Println("Initialization failed:", err)
 			os.Exit(1)

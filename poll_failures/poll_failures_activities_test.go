@@ -19,14 +19,14 @@ import (
 // setupTestEnvironment sets up the necessary mocked and real components for testing.
 func setupTestEnvironment(t *testing.T) (*PollFailuresActivities, *mocks.Client) {
 	// Create a real Redis database instance
-	redisDB := redis.NewService()
+	service, _ := redis.NewTestRedisService()
 
 	// Create a mocked Temporal client
 	mockTemporalClient := mocks.NewClient(t)
 
 	return &PollFailuresActivities{
-		TemporalClient:   mockTemporalClient,
-		DatabaseAccessor: redisDB,
+		TemporalClient: mockTemporalClient,
+		Service:        service,
 	}, mockTemporalClient
 }
 
@@ -75,7 +75,7 @@ func TestUpdateTaskStatus(t *testing.T) {
 		WorkspaceId: "workspace1",
 		ParentId:    "task_1",
 	}
-	err := activities.DatabaseAccessor.PersistWorkflow(context.Background(), *workflow)
+	err := activities.Service.PersistWorkflow(context.Background(), *workflow)
 	assert.NoError(t, err)
 
 	task := &domain.Task{
@@ -83,7 +83,7 @@ func TestUpdateTaskStatus(t *testing.T) {
 		WorkspaceId: "workspace1",
 		Status:      domain.TaskStatusToDo,
 	}
-	err = activities.DatabaseAccessor.PersistTask(context.Background(), *task)
+	err = activities.Service.PersistTask(context.Background(), *task)
 	assert.NoError(t, err)
 
 	// Call the UpdateTaskStatus method
@@ -95,7 +95,7 @@ func TestUpdateTaskStatus(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Retrieve the updated task
-	updatedTask, err := activities.DatabaseAccessor.GetTask(context.Background(), "workspace1", "task_1")
+	updatedTask, err := activities.Service.GetTask(context.Background(), "workspace1", "task_1")
 	assert.NoError(t, err)
 
 	// Assert the task status is updated to TaskStatusFailed

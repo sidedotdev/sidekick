@@ -14,8 +14,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-
-func (s Service) PersistTask(ctx context.Context, task domain.Task) error {
+func (s Storage) PersistTask(ctx context.Context, task domain.Task) error {
 	taskJson, err := json.Marshal(task)
 	if err != nil {
 		log.Println("Failed to convert task record to JSON: ", err)
@@ -48,8 +47,6 @@ func (s Service) PersistTask(ctx context.Context, task domain.Task) error {
 		}
 	}
 
-	// FIXME move this to the caller to orchestrate between the storage and stream services
-	err = s.AddTaskChange(ctx, task)
 	if err != nil {
 		log.Println("Failed to add task change: ", err)
 		return err
@@ -58,7 +55,7 @@ func (s Service) PersistTask(ctx context.Context, task domain.Task) error {
 	return nil
 }
 
-func (s Service) DeleteTask(ctx context.Context, workspaceId, taskId string) error {
+func (s Storage) DeleteTask(ctx context.Context, workspaceId, taskId string) error {
 	task, err := s.GetTask(ctx, workspaceId, taskId)
 	if err != nil {
 		return err
@@ -82,8 +79,7 @@ func (s Service) DeleteTask(ctx context.Context, workspaceId, taskId string) err
 	return nil
 }
 
-
-func (s Service) GetTasks(ctx context.Context, workspaceId string, statuses []domain.TaskStatus) ([]domain.Task, error) {
+func (s Storage) GetTasks(ctx context.Context, workspaceId string, statuses []domain.TaskStatus) ([]domain.Task, error) {
 	var taskIds []string
 	for _, status := range statuses {
 		statusKey := fmt.Sprintf("%s:kanban:%s", workspaceId, status)
@@ -128,120 +124,7 @@ func (s Service) GetTasks(ctx context.Context, workspaceId string, statuses []do
 	return tasks, nil
 }
 
-// AddFlowActionChange persists a flow action to the changes stream.
-// TODO /gen add to the FlowStreamService interface
-func (s Service) AddFlowActionChange(ctx context.Context, flowAction domain.FlowAction) error {
-	streamKey := fmt.Sprintf("%s:%s:flow_action_changes", flowAction.WorkspaceId, flowAction.FlowId)
-	actionParams, err := json.Marshal(flowAction.ActionParams)
-	if err != nil {
-		log.Println("Failed to marshal action params: ", err)
-		return err
-	}
-	flowActionMap, err := toMap(flowAction)
-	if err != nil {
-		log.Println("Failed to append flow action to changes stream: ", err)
-		return err
-	}
-	// TODO Maybe we need to do the same for actionResult
-	flowActionMap["actionParams"] = string(actionParams)
-	err = s.Client.XAdd(ctx, &redis.XAddArgs{
-		Stream: streamKey,
-		Values: flowActionMap,
-	}).Err()
-	if err != nil {
-		log.Println("Failed to append flow action to changes stream: ", err)
-		return err
-	}
-
-	return nil
-}
-
-func (s Service) GetFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]domain.FlowAction, string, error) {
-	streamKey := fmt.Sprintf("%s:%s:flow_action_changes", workspaceId, flowId)
-	if streamMessageStartId == "" {
-		streamMessageStartId = "0"
-	}
-	if maxCount == 0 {
-		maxCount = 100
-	}
-	streams, err := s.Client.XRead(ctx, &redis.XReadArgs{
-		Streams: []string{streamKey, streamMessageStartId},
-		Count:   maxCount,
-		Block:   blockDuration,
-	}).Result()
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return nil, "", nil
-		}
-		return nil, "", err
-	}
-	if len(streams) == 0 {
-		return nil, "", fmt.Errorf("no streams returned for stream key %s", streamKey)
-	}
-
-	// TODO use db.MGet to get all the flow actions at once initially before
-	// switching to a stream
-	var flowActions []domain.FlowAction
-	for i, message := range streams[0].Messages {
-		// TODO /gen/req/planned migrate to using "flowAction" key set to
-		// flowAction, plus "end" key set to true
-		flowActionId, ok := message.Values["id"].(string)
-		if !ok {
-			return nil, "", fmt.Errorf("missing 'id' key in flow_action_changes message %d: %v", i, message)
-		}
-
-		if flowActionId != "end" {
-			actionParams := make(map[string]interface{})
-			err := json.Unmarshal([]byte(message.Values["actionParams"].(string)), &actionParams)
-			if err != nil {
-				return nil, "", fmt.Errorf("failed to unmarshal action params: %v", err)
-			}
-			subflowId, ok := message.Values["subflowId"].(string)
-			if !ok {
-				subflowId = ""
-			}
-			description, ok := message.Values["subflowDescription"].(string)
-			if !ok {
-				description = ""
-			}
-			isHumanAction, ok := message.Values["isHumanAction"].(string)
-			if !ok {
-				isHumanAction = ""
-			}
-			isCallbackAction, ok := message.Values["isCallbackAction"].(string)
-			if !ok {
-				isCallbackAction = ""
-			}
-			created, _ := time.Parse(message.Values["created"].(string), time.RFC3339)
-			updated, _ := time.Parse(message.Values["updated"].(string), time.RFC3339)
-			flowActions = append(flowActions, domain.FlowAction{
-				WorkspaceId:        workspaceId,
-				FlowId:             flowId,
-				SubflowId:          subflowId,
-				Id:                 flowActionId,
-				SubflowName:        message.Values["subflow"].(string),
-				SubflowDescription: description,
-				ActionType:         message.Values["actionType"].(string),
-				ActionStatus:       message.Values["actionStatus"].(string),
-				ActionParams:       actionParams,
-				ActionResult:       message.Values["actionResult"].(string),
-				IsHumanAction:      isHumanAction == "1",
-				IsCallbackAction:   isCallbackAction == "1",
-				Created:            created,
-				Updated:            updated,
-			})
-		} else {
-			return flowActions, "end", nil
-		}
-	}
-
-	// Return the last message id value to continue from
-	lastMessageId := streams[0].Messages[len(streams[0].Messages)-1].ID
-
-	return flowActions, lastMessageId, nil
-}
-
-func (s Service) GetTask(ctx context.Context, workspaceId string, taskId string) (domain.Task, error) {
+func (s Storage) GetTask(ctx context.Context, workspaceId string, taskId string) (domain.Task, error) {
 	key := fmt.Sprintf("%s:%s", workspaceId, taskId)
 	taskRecord, err := s.Client.Get(ctx, key).Result()
 	if err != nil {
@@ -259,8 +142,7 @@ func (s Service) GetTask(ctx context.Context, workspaceId string, taskId string)
 }
 
 // AddTaskChange persists a task to the changes stream.
-// TODO /gen add to the TaskStreamService interface
-func (s Service) AddTaskChange(ctx context.Context, task domain.Task) error {
+func (s Streamer) AddTaskChange(ctx context.Context, task domain.Task) error {
 	streamKey := fmt.Sprintf("%s:task_changes", task.WorkspaceId)
 	taskMap, err := toMap(task)
 	if err != nil {
@@ -283,7 +165,7 @@ func (s Service) AddTaskChange(ctx context.Context, task domain.Task) error {
 	return nil
 }
 
-func (s Service) GetTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]domain.Task, string, error) {
+func (s Streamer) GetTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]domain.Task, string, error) {
 	streamKey := fmt.Sprintf("%s:task_changes", workspaceId)
 	if streamMessageStartId == "" {
 		streamMessageStartId = "$"

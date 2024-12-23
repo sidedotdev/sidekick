@@ -18,7 +18,7 @@ import (
 	"github.com/zalando/go-keyring"
 )
 
-func newTestRedisDatabase() *redis.Service {
+func newTestRedisDatabase() *redis.Storage {
 	client := redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "",
@@ -31,7 +31,7 @@ func newTestRedisDatabase() *redis.Service {
 		panic(fmt.Sprintf("failed to flush redis database: %v", err))
 	}
 
-	return &redis.Service{Client: client}
+	return &redis.Storage{Client: client}
 }
 
 // Helper function to create a temporary directory and change to it

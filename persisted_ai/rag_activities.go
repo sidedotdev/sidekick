@@ -82,7 +82,7 @@ type RankedSubkeysOptions struct {
 
 func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]uint64, error) {
 	// FIXME put openai activities (later refactor this piece out to EmbeddingActivities) inside rag activities struct
-	oa := OpenAIActivities{DatabaseAccessor: ra.DatabaseAccessor, Embedder: ra.Embedder}
+	oa := OpenAIActivities{Storage: ra.DatabaseAccessor, Embedder: ra.Embedder}
 	err := oa.CachedEmbedActivity(context.Background(), OpenAIEmbedActivityOptions{
 		Secrets:       options.Secrets,
 		WorkspaceId:   options.WorkspaceId,

@@ -18,7 +18,7 @@ import (
 func TestUpdateWorkspaceHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	db := ctrl.dbAccessor
+	db := ctrl.service
 
 	testCases := []struct {
 		name              string
@@ -246,7 +246,7 @@ func TestCreateWorkspaceHandler(t *testing.T) {
 func TestGetWorkspaceByIdHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	db := ctrl.dbAccessor
+	db := ctrl.service
 
 	// Setup workspaces and configs
 	workspace1 := domain.Workspace{Id: "workspace1", Name: "Workspace One", LocalRepoDir: "/path/to/repo1"}

@@ -46,23 +46,24 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 		log.Fatal().Err(err).Msg("Unable to create Temporal client.")
 	}
 
-	redisDb := redis.NewService()
-	_, err = redisDb.Client.Ping(context.Background()).Result()
+	redisStorage := redis.NewStorage()
+	service := srv.NewDelegator(redisStorage, redis.NewStreamer())
+	err = service.CheckConnection(context.Background())
 	if err != nil {
 		log.Fatal().Err(err)
 	}
 
 	devManagerActivities := &dev.DevAgentManagerActivities{
-		DatabaseAccessor: redisDb,
-		TemporalClient:   c,
+		Storage:        service,
+		TemporalClient: c,
 	}
-	flowActivities := &flow_action.FlowActivities{DatabaseAccessor: redisDb}
+	flowActivities := &flow_action.FlowActivities{Service: service}
 	openAIActivities := &persisted_ai.OpenAIActivities{
-		DatabaseAccessor: redisDb,
-		Embedder:         embedding.OpenAIEmbedder{},
+		Storage:  service,
+		Embedder: embedding.OpenAIEmbedder{},
 	}
 	llmActivities := &persisted_ai.LlmActivities{
-		FlowEventAccessor: &srv.RedisFlowEventAccessor{Client: redisDb.Client},
+		FlowEventAccessor: &srv.RedisFlowEventAccessor{Client: redisStorage.Client},
 	}
 
 	lspActivities := &lsp.LSPActivities{
@@ -75,23 +76,23 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 		InitializedClients: map[string]lsp.LSPClient{},
 	}
 	treeSitterActivities := &tree_sitter.TreeSitterActivities{
-		DatabaseAccessor: redisDb,
+		DatabaseAccessor: service,
 	}
 	codingActivities := &coding.CodingActivities{
 		TreeSitterActivities: treeSitterActivities,
 		LSPActivities:        lspActivities,
 	}
 	vectorActivities := &embedding.VectorActivities{
-		DatabaseAccessor: redisDb,
+		DatabaseAccessor: service,
 	}
 	ragActivities := &persisted_ai.RagActivities{
-		DatabaseAccessor: redisDb,
+		DatabaseAccessor: service,
 		Embedder:         embedding.OpenAIEmbedder{},
 	}
 
 	pollFailuresActivities := &poll_failures.PollFailuresActivities{
-		TemporalClient:   c,
-		DatabaseAccessor: redisDb,
+		TemporalClient: c,
+		Service:        service,
 	}
 
 	w := worker.New(c, taskQueue, worker.Options{
@@ -126,7 +127,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	w.RegisterActivity(ffa.EvalBoolFlag)
 
 	workspaceActivities := &workspace.Activities{
-		DatabaseAccessor: redisDb,
+		Storage: service,
 	}
 	w.RegisterActivity(workspaceActivities.GetWorkspaceConfig)
 

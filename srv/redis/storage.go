@@ -8,24 +8,24 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type Service struct {
+type Storage struct {
 	Client *redis.Client
 }
 
-func NewService() *Service {
-	return &Service{Client: setupClient()}
+func NewStorage() *Storage {
+	return &Storage{Client: setupClient()}
 }
 
-func (s Service) CheckConnection(ctx context.Context) error {
+func (s Storage) CheckConnection(ctx context.Context) error {
 	_, err := s.Client.Ping(context.Background()).Result()
 	return err
 }
 
-func (s Service) MGet(ctx context.Context, keys []string) ([]interface{}, error) {
+func (s Storage) MGet(ctx context.Context, keys []string) ([]interface{}, error) {
 	return s.Client.MGet(ctx, keys...).Result()
 }
 
-func (s Service) MSet(ctx context.Context, values map[string]interface{}) error {
+func (s Storage) MSet(ctx context.Context, values map[string]interface{}) error {
 	return s.Client.MSet(ctx, values).Err()
 }
 

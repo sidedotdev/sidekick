@@ -2,32 +2,13 @@ package persisted_ai
 
 import (
 	"context"
-	"log"
 	"sidekick/env"
 	"sidekick/secret_manager"
-	"sidekick/srv/redis"
 	"time"
 
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
-
-func newTestRedisDatabase() *redis.Service {
-	db := &redis.Service{}
-	db.Client = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "", // no password set
-		DB:       1,  // use test DB
-	})
-
-	// Flush the database synchronously to ensure a clean state for each test
-	_, err := db.Client.FlushDB(context.Background()).Result()
-	if err != nil {
-		log.Panicf("failed to flush redis database: %v", err)
-	}
-
-	return db
-}
 
 func TestOpenAiEmbedActivityWorkflow(ctx workflow.Context) (string, error) {
 	retrypolicy := &temporal.RetryPolicy{

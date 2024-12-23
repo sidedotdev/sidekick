@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-func newTestRedisDatabase() *redis.Service {
-	db := &redis.Service{}
+func newTestRedisDatabase() *redis.Storage {
+	db := &redis.Storage{}
 	db.Client = redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "", // no password set

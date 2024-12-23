@@ -72,31 +72,18 @@ func NewMockController(t *testing.T) Controller {
 	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
 	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
 
+	service, client := redis.NewTestRedisService()
 	return Controller{
 		temporalClient: mockTemporalClient,
-		dbAccessor:     newTestRedisDatabase(),
+		service:        service,
 		flowEventAccessor: &srv.RedisFlowEventAccessor{
-			Client: newTestRedisDatabase().Client,
+			Client: client,
 		},
 	}
 }
 
-func newTestRedisDatabase() redis.Service {
-	redisDb := redis.Service{}
-	redisDb.Client = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "", // no password set
-		DB:       1,  // use default DB
-	})
-
-	// Flush the database synchronously to ensure a clean state for each test
-	clearDb(redisDb)
-
-	return redisDb
-}
-
-func clearDb(db redis.Service) {
-	_, err := db.Client.FlushDB(context.Background()).Result()
+func clearDb(client *redis.Client) {
+	_, err := client.FlushDB(context.Background()).Result()
 	if err != nil {
 		log.Panicf("failed to flush redis database: %v", err)
 	}
@@ -332,7 +319,7 @@ func TestGetTasksHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	service, _ := redis.NewTestRedisService()
 	ctx := context.Background()
 	workspaceId := "ws_1"
 
@@ -356,7 +343,7 @@ func TestGetTasksHandler(t *testing.T) {
 	}
 
 	for _, task := range tasks {
-		err := redisDb.PersistTask(ctx, task)
+		err := service.PersistTask(ctx, task)
 		assert.Nil(t, err)
 	}
 
@@ -429,7 +416,7 @@ func TestGetTasksHandlerWhenTasksAreEmpty(t *testing.T) {
 func TestGetFlowActionChangesHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	service, _ := redis.NewTestRedisService()
 
 	// Create a flow in the database
 	workspaceId := "ws_test-1"
@@ -473,15 +460,15 @@ func TestGetFlowActionChangesHandler(t *testing.T) {
 		Id:          "end",
 	}
 
-	err := redisDb.PersistFlowAction(context.Background(), flowAction1)
+	err := service.PersistFlowAction(context.Background(), flowAction1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = redisDb.PersistFlowAction(context.Background(), flowAction2)
+	err = service.PersistFlowAction(context.Background(), flowAction2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = redisDb.PersistFlowAction(context.Background(), endFlowAction)
+	err = service.PersistFlowAction(context.Background(), endFlowAction)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +515,7 @@ func TestGetFlowActionChangesHandler(t *testing.T) {
 func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	db := ctrl.dbAccessor
+	db := ctrl.service
 	ctx := context.Background()
 
 	workspaceId := "test-workspace-id-" + uuid.New().String()
@@ -577,7 +564,7 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 }
 func TestCompleteFlowActionHandler(t *testing.T) {
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 	workspaceId := "ws_123"
 	ctx := context.Background()
 	task := domain.Task{
@@ -639,7 +626,7 @@ func TestCompleteFlowActionHandler(t *testing.T) {
 
 func TestCompleteFlowActionHandler_NonHumanRequest(t *testing.T) {
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	workspaceId := "ws_1"
 	flowAction := domain.FlowAction{
@@ -678,7 +665,7 @@ func TestCompleteFlowActionHandler_NonHumanRequest(t *testing.T) {
 
 func TestCompleteFlowActionHandler_NonPending(t *testing.T) {
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	workspaceId := "ws_1"
 	flowAction := domain.FlowAction{
@@ -718,7 +705,7 @@ func TestCompleteFlowActionHandler_NonPending(t *testing.T) {
 
 func TestCompleteFlowActionHandler_NonCallback(t *testing.T) {
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	workspaceId := "ws_1"
 	flowAction := domain.FlowAction{
@@ -758,7 +745,7 @@ func TestCompleteFlowActionHandler_NonCallback(t *testing.T) {
 
 func TestCompleteFlowActionHandler_EmptyResponse(t *testing.T) {
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	workspaceId := "ws_1"
 	flowAction := domain.FlowAction{
@@ -800,7 +787,7 @@ func TestGetFlowActionsHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 	ctx := context.Background()
 
 	workspaceId := "ws_1"
@@ -866,7 +853,7 @@ func TestGetFlowActionsHandler_NonExistentFlowId(t *testing.T) {
 func TestGetFlowActionsHandler_EmptyActions(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	flow := domain.Flow{
 		WorkspaceId: "ws_" + ksuid.New().String(),
@@ -897,7 +884,7 @@ func TestUpdateTaskHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	// Create a task for testing
 	task := domain.Task{
@@ -935,7 +922,7 @@ func TestUpdateTaskHandler(t *testing.T) {
 	assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
 
 	// Check the updated task
-	updatedTask, _ := ctrl.dbAccessor.GetTask(ginCtx.Request.Context(), task.WorkspaceId, task.Id)
+	updatedTask, _ := ctrl.service.GetTask(ginCtx.Request.Context(), task.WorkspaceId, task.Id)
 	assert.Equal(t, req.Description, updatedTask.Description)
 	assert.Equal(t, req.AgentType, string(updatedTask.AgentType))
 	assert.Equal(t, req.Status, string(updatedTask.Status))
@@ -977,7 +964,7 @@ func TestUpdateTaskHandler_UnparseableRequestBody(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	// Create a task for testing
 	task := domain.Task{
@@ -1011,7 +998,7 @@ func TestUpdateTaskHandler_InvalidStatus(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	// Create a task for testing
 	task := domain.Task{
@@ -1053,7 +1040,7 @@ func TestUpdateTaskHandler_InvalidAgentType(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	// Create a task for testing
 	task := domain.Task{
@@ -1095,7 +1082,7 @@ func TestUpdateTaskHandler_InvalidAgentTypeAndStatusCombo(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	// Create a task for testing
 	task := domain.Task{
@@ -1138,7 +1125,7 @@ func TestDeleteTaskHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	service, _ := redis.NewTestRedisService()
 
 	// Create a task for testing
 	task := domain.Task{
@@ -1148,7 +1135,7 @@ func TestDeleteTaskHandler(t *testing.T) {
 		AgentType:   domain.AgentTypeLLM,
 		Status:      domain.TaskStatusToDo,
 	}
-	err := redisDb.PersistTask(context.Background(), task)
+	err := service.PersistTask(context.Background(), task)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1168,14 +1155,14 @@ func TestDeleteTaskHandler(t *testing.T) {
 	assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
 
 	// Check that the task has been deleted
-	_, err = ctrl.dbAccessor.GetTask(ginCtx.Request.Context(), task.WorkspaceId, task.Id)
+	_, err = ctrl.service.GetTask(ginCtx.Request.Context(), task.WorkspaceId, task.Id)
 	assert.True(t, errors.Is(err, srv.ErrNotFound))
 }
 
 func TestGetWorkspacesHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	service, client := redis.NewTestRedisService()
 
 	// Test for correct data retrieval
 	t.Run("returns workspaces correctly", func(t *testing.T) {
@@ -1186,7 +1173,7 @@ func TestGetWorkspacesHandler(t *testing.T) {
 			{Id: "workspace2", Name: "Workspace Two"},
 		}
 		for _, ws := range expectedWorkspaces {
-			redisDb.PersistWorkspace(context.Background(), ws)
+			service.PersistWorkspace(context.Background(), ws)
 		}
 
 		// Creating a test HTTP context
@@ -1208,7 +1195,7 @@ func TestGetWorkspacesHandler(t *testing.T) {
 	// Test for empty data
 	t.Run("returns empty list when no workspaces exist", func(t *testing.T) {
 		// No workspaces are added to ensure the database starts empty for this test scenario.
-		clearDb(redisDb.(redis.Service))
+		clearDb(client)
 
 		// Creating a test HTTP context
 		resp := httptest.NewRecorder()
@@ -1232,7 +1219,7 @@ func TestGetTaskHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 	ctx := context.Background()
 	workspaceId := "ws_1"
 	taskId := "task_" + ksuid.New().String()
@@ -1312,7 +1299,7 @@ func TestGetTaskHandler(t *testing.T) {
 func TestFlowEventsWebsocketHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	db := ctrl.dbAccessor
+	db := ctrl.service
 	ctx := context.Background()
 
 	workspaceId := "test-workspace-id-" + uuid.New().String()

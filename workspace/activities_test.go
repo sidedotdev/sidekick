@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"context"
-	"log"
 	"reflect"
 	"sidekick/common"
 	"sidekick/domain"
@@ -13,26 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func newTestRedisDatabase() *redis.Service {
-	db := &redis.Service{}
-	db.Client = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       1,
-	})
-
-	// Flush the database synchronously to ensure a clean state for each test
-	_, err := db.Client.FlushDB(context.Background()).Result()
-	if err != nil {
-		log.Panicf("failed to flush redis database: %v", err)
-	}
-
-	return db
-}
-
 func TestGetWorkspaceConfig(t *testing.T) {
-	db := newTestRedisDatabase()
-	activities := Activities{DatabaseAccessor: db}
+	db := redis.NewTestRedisStorage()
+	activities := Activities{Storage: db}
 
 	emptyConfig := domain.WorkspaceConfig{}
 	testCases := []struct {

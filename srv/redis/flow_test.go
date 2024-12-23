@@ -11,7 +11,7 @@ import (
 )
 
 func TestGetWorkflows(t *testing.T) {
-	db := NewTestRedisDatabase()
+	db := NewTestRedisStorage()
 
 	workspaceId := "TEST_WORKSPACE_ID"
 	parentId := "testParentId"
@@ -43,7 +43,7 @@ func TestGetWorkflows(t *testing.T) {
 }
 
 func TestPersistSubflow(t *testing.T) {
-	db := NewTestRedisDatabase()
+	db := NewTestRedisStorage()
 	ctx := context.Background()
 
 	validSubflow := domain.Subflow{
@@ -127,7 +127,7 @@ func TestPersistSubflow(t *testing.T) {
 }
 
 func TestGetSubflows(t *testing.T) {
-	db := NewTestRedisDatabase()
+	db := NewTestRedisStorage()
 	ctx := context.Background()
 
 	workspaceId := ksuid.New().String()
@@ -216,7 +216,7 @@ func TestGetSubflows(t *testing.T) {
 
 func TestGetFlowActions(t *testing.T) {
 	ctx := context.Background()
-	db := NewTestRedisDatabase()
+	db := NewTestRedisStorage()
 	flowAction1 := domain.FlowAction{
 		WorkspaceId: "TEST_WORKSPACE_ID",
 		FlowId:      "test-flow-id",
@@ -247,7 +247,7 @@ func TestGetFlowActions(t *testing.T) {
 
 func TestPersistFlowAction(t *testing.T) {
 	ctx := context.Background()
-	db := NewTestRedisDatabase()
+	service, _ := NewTestRedisService()
 	flowAction := domain.FlowAction{
 		WorkspaceId:  "TEST_WORKSPACE_ID",
 		FlowId:       "flow_" + ksuid.New().String(),
@@ -261,20 +261,20 @@ func TestPersistFlowAction(t *testing.T) {
 		IsCallbackAction: false,
 	}
 
-	err := db.PersistFlowAction(ctx, flowAction)
+	err := service.PersistFlowAction(ctx, flowAction)
 	assert.Nil(t, err)
 
-	retrievedFlowAction, err := db.GetFlowAction(ctx, flowAction.WorkspaceId, flowAction.Id)
+	retrievedFlowAction, err := service.GetFlowAction(ctx, flowAction.WorkspaceId, flowAction.Id)
 	assert.Nil(t, err)
 	assert.Equal(t, flowAction, retrievedFlowAction)
 
-	flowActions, err := db.GetFlowActions(ctx, flowAction.WorkspaceId, flowAction.FlowId)
+	flowActions, err := service.GetFlowActions(ctx, flowAction.WorkspaceId, flowAction.FlowId)
 	assert.Nil(t, err)
 	assert.Len(t, flowActions, 1)
 	assert.Equal(t, flowAction, flowActions[0])
 
 	// Check that the flow action ID was added to the Redis stream
-	flowActionChanges, _, err := db.GetFlowActionChanges(ctx, flowAction.WorkspaceId, flowAction.FlowId, "0", 100, 0)
+	flowActionChanges, _, err := service.GetFlowActionChanges(ctx, flowAction.WorkspaceId, flowAction.FlowId, "0", 100, 0)
 	assert.Nil(t, err)
 	assert.Len(t, flowActionChanges, 1)
 	assert.Equal(t, flowAction, flowActionChanges[0])
@@ -282,7 +282,7 @@ func TestPersistFlowAction(t *testing.T) {
 
 func TestPersistFlowAction_MissingId(t *testing.T) {
 	ctx := context.Background()
-	db := NewTestRedisDatabase()
+	db := NewTestRedisStorage()
 	flowAction := domain.FlowAction{
 		WorkspaceId: "TEST_WORKSPACE_ID",
 		FlowId:      "flow_" + ksuid.New().String(),
@@ -294,7 +294,7 @@ func TestPersistFlowAction_MissingId(t *testing.T) {
 
 func TestPersistFlowAction_MissingFlowId(t *testing.T) {
 	ctx := context.Background()
-	db := NewTestRedisDatabase()
+	db := NewTestRedisStorage()
 	flowAction := domain.FlowAction{
 		Id:          "id_" + ksuid.New().String(),
 		WorkspaceId: "TEST_WORKSPACE_ID",
@@ -306,7 +306,7 @@ func TestPersistFlowAction_MissingFlowId(t *testing.T) {
 
 func TestPersistFlowAction_MissingWorkspaceId(t *testing.T) {
 	ctx := context.Background()
-	db := NewTestRedisDatabase()
+	db := NewTestRedisStorage()
 	flowAction := domain.FlowAction{
 		Id:     "id_" + ksuid.New().String(),
 		FlowId: "flow_" + ksuid.New().String(),

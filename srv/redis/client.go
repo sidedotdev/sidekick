@@ -7,10 +7,11 @@ import (
 	zlog "github.com/rs/zerolog/log"
 )
 
-func NewClient(opt *Options) *redis.Client {
+func NewClient(opt *Options) *Client {
 	return redis.NewClient(opt)
 }
 
+type Client = redis.Client
 type Options = redis.Options
 
 func setupClient() *redis.Client {

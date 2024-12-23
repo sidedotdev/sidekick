@@ -10,7 +10,7 @@ import (
 	"sidekick/srv/redis"
 )
 
-func migrateFlows(ctx context.Context, redisDB *redis.Service, dryRun bool) error {
+func migrateFlows(ctx context.Context, redisDB *redis.Storage, dryRun bool) error {
 	workspaces, err := redisDB.GetAllWorkspaces(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get workspaces: %w", err)
@@ -83,7 +83,7 @@ func migrateFlows(ctx context.Context, redisDB *redis.Service, dryRun bool) erro
 	return nil
 }
 
-func updateFlowKey(ctx context.Context, redisDB *redis.Service, workspaceId string, flowId string) error {
+func updateFlowKey(ctx context.Context, redisDB *redis.Storage, workspaceId string, flowId string) error {
 	// Get the flow data using the old key format
 	oldKey := flowId // no workspaceId prefix
 	flowJson, err := redisDB.Client.Get(ctx, oldKey).Result()
@@ -124,7 +124,7 @@ func main() {
 	})
 	defer redisClient.Close()
 
-	redisDB := &redis.Service{Client: redisClient}
+	redisDB := &redis.Storage{Client: redisClient}
 
 	if dryRun {
 		log.Println("Running in dry-run mode. No changes will be made.")

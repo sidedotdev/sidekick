@@ -13,7 +13,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-func (s Service) PersistWorkspace(ctx context.Context, workspace domain.Workspace) error {
+func (s Storage) PersistWorkspace(ctx context.Context, workspace domain.Workspace) error {
 	workspaceJson, err := json.Marshal(workspace)
 	if err != nil {
 		log.Println("Failed to convert workspace to JSON: ", err)
@@ -38,7 +38,7 @@ func (s Service) PersistWorkspace(ctx context.Context, workspace domain.Workspac
 
 	return nil
 }
-func (s Service) GetWorkspace(ctx context.Context, workspaceId string) (domain.Workspace, error) {
+func (s Storage) GetWorkspace(ctx context.Context, workspaceId string) (domain.Workspace, error) {
 	key := fmt.Sprintf("workspace:%s", workspaceId)
 	workspaceJson, err := s.Client.Get(ctx, key).Result()
 	if err != nil {
@@ -55,7 +55,7 @@ func (s Service) GetWorkspace(ctx context.Context, workspaceId string) (domain.W
 	return workspace, nil
 }
 
-func (s Service) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error) {
+func (s Storage) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error) {
 	var workspaces []domain.Workspace
 
 	// Retrieve all workspace IDs from the Redis sorted set
@@ -82,7 +82,7 @@ func (s Service) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, erro
 	return workspaces, nil
 }
 
-func (s Service) DeleteWorkspace(ctx context.Context, workspaceId string) error {
+func (s Storage) DeleteWorkspace(ctx context.Context, workspaceId string) error {
 	// First get the workspace to get its name - ignore if not found
 	workspace, err := s.GetWorkspace(ctx, workspaceId)
 	if err != nil {
@@ -112,7 +112,7 @@ func (s Service) DeleteWorkspace(ctx context.Context, workspaceId string) error 
 	return nil
 }
 
-func (s Service) GetWorkspaceConfig(ctx context.Context, workspaceId string) (domain.WorkspaceConfig, error) {
+func (s Storage) GetWorkspaceConfig(ctx context.Context, workspaceId string) (domain.WorkspaceConfig, error) {
 	key := fmt.Sprintf("%s:workspace_config", workspaceId)
 	configJson, err := s.Client.Get(ctx, key).Result()
 	if err != nil {
@@ -130,7 +130,7 @@ func (s Service) GetWorkspaceConfig(ctx context.Context, workspaceId string) (do
 	return config, nil
 }
 
-func (s Service) PersistWorkspaceConfig(ctx context.Context, workspaceId string, config domain.WorkspaceConfig) error {
+func (s Storage) PersistWorkspaceConfig(ctx context.Context, workspaceId string, config domain.WorkspaceConfig) error {
 	if workspaceId == "" {
 		return fmt.Errorf("workspaceId cannot be empty")
 	}

@@ -13,7 +13,7 @@ import (
 )
 
 func TestPersistTask(t *testing.T) {
-	db := NewTestRedisDatabase()
+	db := NewTestRedisStorage()
 
 	taskRecord := domain.Task{
 		WorkspaceId: "test-workspace",
@@ -59,7 +59,7 @@ func TestPersistTask(t *testing.T) {
 }
 
 func TestGetTasks(t *testing.T) {
-	db := NewTestRedisDatabase()
+	db := NewTestRedisStorage()
 	ctx := context.Background()
 
 	taskRecords := []domain.Task{
@@ -109,7 +109,7 @@ func TestGetTasks(t *testing.T) {
 }
 
 func TestDeleteTask(t *testing.T) {
-	db := NewTestRedisDatabase()
+	db := NewTestRedisStorage()
 	ctx := context.Background()
 
 	// Create a new task
@@ -158,7 +158,7 @@ func TestDeleteTask(t *testing.T) {
 	assert.NotContains(t, tasks, task)
 }
 func TestAddTaskChange(t *testing.T) {
-	db := NewTestRedisDatabase()
+	db := NewTestRedisStreamer()
 	workspaceId := "TEST_WORKSPACE_ID"
 	taskRecord := domain.Task{
 		WorkspaceId: workspaceId,

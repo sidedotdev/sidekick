@@ -94,5 +94,6 @@ type FlowStorage interface {
 
 // FlowStreamer defines the interface for flow-related stream operations
 type FlowStreamer interface {
+	AddFlowActionChange(ctx context.Context, flowAction FlowAction) error
 	GetFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]FlowAction, string, error)
 }
