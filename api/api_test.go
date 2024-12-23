@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sidekick/domain"
-	"sidekick/flow_event"
+	domain1 "sidekick/domain"
 	"sidekick/mocks"
 	"sidekick/srv"
 	"sidekick/srv/redis"
@@ -1313,8 +1313,8 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	assert.NoError(t, err, "Persisting workflow failed")
 
 	// persist this one before the websocket connection starts
-	flowEvent1 := flow_event.ProgressText{
-		EventType: flow_event.ProgressTextEventType,
+	flowEvent1 := domain1.ProgressText{
+		EventType: domain1.ProgressTextEventType,
 		ParentId:  "test-event-id-1",
 		Text:      "doing stuff 1",
 	}
@@ -1337,12 +1337,12 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	defer ws.Close()
 
 	// persist multiple flow events under single flow action
-	flowEvent2 := flow_event.ProgressText{
-		EventType: flow_event.ProgressTextEventType,
+	flowEvent2 := domain1.ProgressText{
+		EventType: domain1.ProgressTextEventType,
 		ParentId:  "test-event-id-2",
 		Text:      "doing stuff 2",
 	}
-	flowEvent3 := flow_event.ProgressText{
+	flowEvent3 := domain1.ProgressText{
 		EventType: flowEvent2.EventType,
 		ParentId:  flowEvent2.ParentId,
 		Text:      "doing stuff 3",
@@ -1363,14 +1363,14 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 
 	// Verify if the flow events are streamed correctly
 	timeout := time.After(15 * time.Second)
-	receivedEvents := make([]flow_event.ProgressText, 0, 3)
+	receivedEvents := make([]domain1.ProgressText, 0, 3)
 
 	for i := 0; i < 3; i++ {
 		select {
 		case <-timeout:
 			t.Fatalf("Timeout waiting for flow events. Received %d events so far", len(receivedEvents))
 		default:
-			var receivedEvent flow_event.ProgressText
+			var receivedEvent domain1.ProgressText
 			err = ws.SetReadDeadline(time.Now().Add(8 * time.Second))
 			assert.NoError(t, err, "Failed to set read deadline")
 			err = ws.ReadJSON(&receivedEvent)

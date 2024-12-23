@@ -15,7 +15,7 @@ import (
 	"sidekick/common"
 	"sidekick/dev"
 	"sidekick/domain"
-	"sidekick/flow_event"
+	domain1 "sidekick/domain"
 	"sidekick/frontend"
 	"sidekick/srv"
 	"sidekick/srv/redis"
@@ -974,7 +974,7 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 				}
 
 				// remove stream keys that have been marked as ended
-				if flowEvent.GetEventType() == flow_event.EndStreamEventType {
+				if flowEvent.GetEventType() == domain1.EndStreamEventType {
 					for key := range keysMap {
 						if strings.HasSuffix(key, flowEvent.GetParentId()) {
 							streamKeys.Delete(key)

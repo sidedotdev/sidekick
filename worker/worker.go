@@ -82,7 +82,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 		TreeSitterActivities: treeSitterActivities,
 		LSPActivities:        lspActivities,
 	}
-	vectorActivities := &embedding.VectorActivities{
+	vectorActivities := &persisted_ai.VectorActivities{
 		DatabaseAccessor: service,
 	}
 	ragActivities := &persisted_ai.RagActivities{

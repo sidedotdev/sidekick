@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sidekick/flow_event"
+	"sidekick/domain"
 	"sidekick/llm"
 	"sidekick/srv"
 	"strings"
@@ -58,9 +58,9 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 				}
 			}
 
-			flowEventDelta := flow_event.ChatMessageDelta{
+			flowEventDelta := domain.ChatMessageDelta{
 				FlowActionId:     options.FlowActionId,
-				EventType:        flow_event.ChatMessageDeltaEventType,
+				EventType:        domain.ChatMessageDeltaEventType,
 				ChatMessageDelta: delta,
 			}
 			err := la.FlowEventAccessor.AddFlowEvent(context.Background(), options.WorkspaceId, options.FlowId, flowEventDelta)

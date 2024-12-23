@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"sidekick/flow_event"
+	"sidekick/domain"
 	"sidekick/llm"
 	"testing"
 
@@ -34,8 +34,8 @@ func TestAddChatMessageDeltaFlowEvent(t *testing.T) {
 	db := newTestRedisFlowEventAccessor()
 	workspaceId := "TEST_WORKSPACE_ID"
 	flowId := "TEST_FLOW_ID"
-	flowEvent := flow_event.ChatMessageDelta{
-		EventType:    flow_event.ChatMessageDeltaEventType,
+	flowEvent := domain.ChatMessageDelta{
+		EventType:    domain.ChatMessageDeltaEventType,
 		FlowActionId: "parentId",
 		ChatMessageDelta: llm.ChatMessageDelta{
 			Role:    llm.ChatMessageRole("User"),
@@ -67,7 +67,7 @@ func TestAddChatMessageDeltaFlowEvent(t *testing.T) {
 	// Verify the values in the stream
 	stream := streams[0] // Assuming the event is the first entry
 	jsonEvent := stream.Values["event"].(string)
-	var streamedEvent flow_event.ChatMessageDelta
+	var streamedEvent domain.ChatMessageDelta
 	err = json.Unmarshal([]byte(jsonEvent), &streamedEvent)
 	assert.Nil(t, err)
 	assert.Equal(t, flowEvent, streamedEvent)
@@ -77,8 +77,8 @@ func TestAddProgressTextFlowEvent(t *testing.T) {
 	db := newTestRedisFlowEventAccessor()
 	workspaceId := "TEST_WORKSPACE_ID"
 	flowId := "TEST_FLOW_ID"
-	flowEvent := flow_event.ProgressText{
-		EventType: flow_event.ProgressTextEventType,
+	flowEvent := domain.ProgressText{
+		EventType: domain.ProgressTextEventType,
 		ParentId:  "parentId",
 		Text:      "Test Flow Event",
 	}
@@ -96,7 +96,7 @@ func TestAddProgressTextFlowEvent(t *testing.T) {
 	// Verify the values in the stream
 	stream := streams[0] // Assuming the event is the first entry
 	jsonEvent := stream.Values["event"].(string)
-	var streamedEvent flow_event.ProgressText
+	var streamedEvent domain.ProgressText
 	err = json.Unmarshal([]byte(jsonEvent), &streamedEvent)
 	assert.Nil(t, err)
 	assert.Equal(t, flowEvent, streamedEvent)

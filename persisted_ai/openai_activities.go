@@ -39,7 +39,12 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 	embeddingKeys := make([]string, len(options.Subkeys))
 	for i, subKey := range options.Subkeys {
 		contentKeys[i] = fmt.Sprintf("%s:%s:%d", options.WorkspaceId, options.ContentType, subKey)
-		embeddingKeys[i] = fmt.Sprintf("%s:embedding:%s:%s:%d", options.WorkspaceId, options.EmbeddingType, options.ContentType, subKey)
+		embeddingKeys[i] = constructEmbeddingKey(embeddingKeyOptions{
+			workspaceId:   options.WorkspaceId,
+			embeddingType: options.EmbeddingType,
+			contentType:   options.ContentType,
+			subKey:        subKey,
+		})
 	}
 
 	var cachedEmbeddings []interface{}
@@ -103,4 +108,14 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 		}
 	}
 	return nil
+}
+
+type embeddingKeyOptions struct {
+	workspaceId   string
+	embeddingType string
+	contentType   string
+	subKey uint64
+}
+func constructEmbeddingKey(options embeddingKeyOptions) string {
+	return fmt.Sprintf("%s:embedding:%s:%s:%d", options.workspaceId, options.embeddingType, options.contentType, options.subKey)
 }

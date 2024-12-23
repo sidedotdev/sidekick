@@ -1,8 +1,9 @@
-package embedding
+package persisted_ai
 
 import (
 	"context"
 	"fmt"
+	"sidekick/embedding"
 	db "sidekick/srv"
 
 	usearch "github.com/unum-cloud/usearch/golang"
@@ -17,7 +18,7 @@ type VectorSearchActivityOptions struct {
 	ContentType   string
 	Subkeys       []uint64
 	EmbeddingType string
-	Query         EmbeddingVector
+	Query         embedding.EmbeddingVector
 	Limit         int
 }
 type VectorActivities struct {
@@ -28,7 +29,12 @@ func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]
 	// get the embeddings from the (non-vector) db
 	embeddingKeys := make([]string, 0, len(options.Subkeys))
 	for _, subKey := range options.Subkeys {
-		embeddingKey := fmt.Sprintf("%s:%s:%d:embedding:%s", options.WorkspaceId, options.ContentType, subKey, options.EmbeddingType)
+		embeddingKey := constructEmbeddingKey(embeddingKeyOptions{
+			workspaceId:   options.WorkspaceId,
+			embeddingType: options.EmbeddingType,
+			contentType:   options.ContentType,
+			subKey:        subKey,
+		})
 		embeddingKeys = append(embeddingKeys, embeddingKey)
 	}
 	values, err := va.DatabaseAccessor.MGet(context.Background(), embeddingKeys)
@@ -67,7 +73,7 @@ func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]
 			return []uint64{}, fmt.Errorf("embedding value is not a string type")
 		}
 		byteValue := []byte(stringValue)
-		var ev EmbeddingVector
+		var ev embedding.EmbeddingVector
 		if err := ev.UnmarshalBinary(byteValue); err != nil {
 			return []uint64{}, err
 		}
