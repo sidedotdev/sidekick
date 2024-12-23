@@ -2,11 +2,9 @@ package llm
 
 import (
 	"context"
-	"fmt"
-	"sidekick/secret_manager"
+	"sidekick/common"
 
-	"github.com/ehsanul/anthropic-go/v3/pkg/anthropic"
-	"github.com/sashabaranov/go-openai"
+	"sidekick/secret_manager"
 )
 
 const defaultTemperature float32 = 0.1
@@ -48,57 +46,13 @@ func PromptToToolChatParams(prompt string, controlParams ChatControlParams) Tool
 	}
 }
 
-type ChatProvider string
+type ToolChatProvider = common.ToolChatProvider
 
 const (
-	UnspecifiedChatProvider ChatProvider = ""
-	OpenaiChatProvider      ChatProvider = "openai"
-	AnthropicChatProvider   ChatProvider = "anthropic"
+	UnspecifiedToolChatProvider ToolChatProvider = ToolChatProvider(common.UnspecifiedChatProvider)
+	OpenaiToolChatProvider      ToolChatProvider = ToolChatProvider(common.OpenaiChatProvider)
+	AnthropicToolChatProvider   ToolChatProvider = ToolChatProvider(common.AnthropicChatProvider)
 )
-
-type ToolChatProvider string
-
-const (
-	UnspecifiedToolChatProvider ToolChatProvider = ""
-	OpenaiToolChatProvider      ToolChatProvider = "openai"
-	AnthropicToolChatProvider   ToolChatProvider = "anthropic"
-)
-
-var SmallModels = map[ToolChatProvider]string{
-	OpenaiToolChatProvider: "gpt-4o-mini",
-
-	// NOTE: 3.5 Haiku is much more expensive than 3 Haiku, but performs better
-	// too and is what claude presents as their "small" model
-	AnthropicToolChatProvider: "claude-3-5-haiku-20241022",
-}
-
-func (provider ToolChatProvider) SmallModel() string {
-	// missing will be empty string, i.e. the internal/built-in default model
-	// for the provider integration implementation
-	return SmallModels[provider]
-}
-
-var LongContextLargeModels = map[ToolChatProvider]string{
-	OpenaiToolChatProvider:    openai.GPT4Turbo20240409,
-	AnthropicToolChatProvider: string(anthropic.Claude3Opus),
-}
-
-func (provider ToolChatProvider) LongContextLargeModel() string {
-	return LongContextLargeModels[provider]
-}
-
-func StringToToolChatProvider(provider string) (ToolChatProvider, error) {
-	switch provider {
-	case string(OpenaiToolChatProvider):
-		return OpenaiToolChatProvider, nil
-	case string(AnthropicToolChatProvider):
-		return AnthropicToolChatProvider, nil
-	case string(UnspecifiedToolChatProvider):
-		return UnspecifiedToolChatProvider, nil
-	default:
-		return UnspecifiedToolChatProvider, fmt.Errorf("unknown provider: %s", provider)
-	}
-}
 
 type ToolChatOptions struct {
 	Params  ToolChatParams                        `json:"params"`
