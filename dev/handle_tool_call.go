@@ -95,7 +95,7 @@ func handleErrToolCallUnmarshal(toolCallResult ToolCallResponseInfo, err error) 
 			// NOTE: this error happens when the tool call arguments didn't
 			// follow schema. by providing the error as the tool call response,
 			// we give the llm a chance to self-correct via feedback.
-			toolCallResult.Response = err.Error()
+			toolCallResult.Response = fmt.Sprintf("%s\n\nHint: To fix this, follow the json schema correctly. In particular, don't put json within a string.", err.Error())
 			err = nil
 		}
 	}

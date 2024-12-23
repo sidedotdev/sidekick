@@ -263,7 +263,8 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		toolCall, requiredCodeContext, err = ForceToolRetrieveCodeContext(actionCtx, chatHistory)
 		if err != nil {
 			if errors.Is(err, llm.ErrToolCallUnmarshal) {
-				toolCallResponseInfo := ToolCallResponseInfo{Response: err.Error(), TooCallId: toolCall.Id, FunctionName: toolCall.Name}
+				response := fmt.Sprintf("%s\n\nHint: To fix this, follow the json schema correctly. In particular, don't put json within a string.", err.Error())
+				toolCallResponseInfo := ToolCallResponseInfo{Response: response, TooCallId: toolCall.Id, FunctionName: toolCall.Name}
 				addCodeContextPrompt(chatHistory, toolCallResponseInfo)
 				continue
 			}
