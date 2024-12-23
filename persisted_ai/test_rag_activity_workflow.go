@@ -2,6 +2,7 @@ package persisted_ai
 
 import (
 	"context"
+	"log"
 	"sidekick/env"
 	"sidekick/secret_manager"
 	"sidekick/srv/redis"
@@ -18,6 +19,13 @@ func newTestRedisDatabase() *redis.Service {
 		Password: "", // no password set
 		DB:       1,  // use test DB
 	})
+
+	// Flush the database synchronously to ensure a clean state for each test
+	_, err := db.Client.FlushDB(context.Background()).Result()
+	if err != nil {
+		log.Panicf("failed to flush redis database: %v", err)
+	}
+
 	return db
 }
 

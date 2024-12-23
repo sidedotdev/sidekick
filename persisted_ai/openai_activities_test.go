@@ -24,8 +24,8 @@ func TestCachedEmbedActivity_AllCached(t *testing.T) {
 		Subkeys:       []uint64{1},
 	}
 
-	expectedKeys := []string{"test_workspace:test_type:1:ada2"}
-	expectedEmbedding := embedding.EmbeddingVector{}
+	expectedKeys := []string{"test_workspace:embedding:ada2:test_type:1"}
+	expectedEmbedding := embedding.EmbeddingVector{0.5, 0.1}
 
 	// Pre-cache the embeddings
 	err := db.MSet(context.Background(), map[string]interface{}{expectedKeys[0]: expectedEmbedding})

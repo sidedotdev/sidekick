@@ -36,13 +36,12 @@ we already expect to cache these values in the database.
 // TODO move to embed package under EmbedActivities struct
 func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options OpenAIEmbedActivityOptions) error {
 	contentKeys := make([]string, len(options.Subkeys))
+	embeddingKeys := make([]string, len(options.Subkeys))
 	for i, subKey := range options.Subkeys {
 		contentKeys[i] = fmt.Sprintf("%s:%s:%d", options.WorkspaceId, options.ContentType, subKey)
+		embeddingKeys[i] = fmt.Sprintf("%s:embedding:%s:%s:%d", options.WorkspaceId, options.EmbeddingType, options.ContentType, subKey)
 	}
-	embeddingKeys := make([]string, len(options.Subkeys))
-	for i, key := range contentKeys {
-		embeddingKeys[i] = fmt.Sprintf("%s:embedding:%s", key, options.EmbeddingType)
-	}
+
 	var cachedEmbeddings []interface{}
 	var err error
 	if len(embeddingKeys) > 0 {
@@ -51,6 +50,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 			return err
 		}
 	}
+
 	toEmbedContentKeys := make([]string, 0)
 	missingEmbeddingKeys := make([]string, 0)
 	for i, cachedEmbedding := range cachedEmbeddings {
@@ -59,6 +59,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 			missingEmbeddingKeys = append(missingEmbeddingKeys, embeddingKeys[i])
 		}
 	}
+
 	// TODO replace with metric
 	log.Printf("embedding %d keys\n", len(toEmbedContentKeys))
 	if len(toEmbedContentKeys) > 0 {
