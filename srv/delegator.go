@@ -13,10 +13,6 @@ type Delegator struct {
 	streamer Streamer
 }
 
-func (d *Delegator) DeleteWorkspace(ctx context.Context, workspaceId string) error {
-	return d.storage.DeleteWorkspace(ctx, workspaceId)
-}
-
 func NewDelegator(storage Storage, streamer Streamer) *Delegator {
 	return &Delegator{
 		storage:  storage,
@@ -52,6 +48,10 @@ func (d Delegator) GetWorkspace(ctx context.Context, workspaceId string) (domain
 /* implements WorkspaceStorage interface */
 func (d Delegator) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error) {
 	return d.storage.GetAllWorkspaces(ctx)
+}
+
+func (d *Delegator) DeleteWorkspace(ctx context.Context, workspaceId string) error {
+	return d.storage.DeleteWorkspace(ctx, workspaceId)
 }
 
 /* implements WorkspaceStorage interface */
