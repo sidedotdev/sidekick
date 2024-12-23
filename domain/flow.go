@@ -80,8 +80,8 @@ type FlowAction struct {
 	IsCallbackAction   bool                   `json:"isCallbackAction"`
 }
 
-// FlowService defines the interface for flow-related database operations
-type FlowService interface {
+// FlowStorage defines the interface for flow-related database operations
+type FlowStorage interface {
 	PersistWorkflow(ctx context.Context, flow Flow) error
 	GetWorkflow(ctx context.Context, workspaceId, flowId string) (Flow, error)
 	GetFlowsForTask(ctx context.Context, workspaceId, taskId string) ([]Flow, error)
@@ -92,7 +92,7 @@ type FlowService interface {
 	GetFlowAction(ctx context.Context, workspaceId, flowActionId string) (FlowAction, error)
 }
 
-// FlowStreamService defines the interface for flow-related stream operations
-type FlowStreamService interface {
+// FlowStreamer defines the interface for flow-related stream operations
+type FlowStreamer interface {
 	GetFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]FlowAction, string, error)
 }

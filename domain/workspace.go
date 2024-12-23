@@ -25,8 +25,8 @@ type WorkspaceConfig struct {
 	Embedding common.EmbeddingConfig `json:"embedding"`
 }
 
-// WorkspaceService defines the interface for workspace-related database operations
-type WorkspaceService interface {
+// WorkspaceStorage defines the interface for workspace-related database operations
+type WorkspaceStorage interface {
 	PersistWorkspace(ctx context.Context, workspace Workspace) error
 	GetWorkspace(ctx context.Context, workspaceId string) (Workspace, error)
 	GetAllWorkspaces(ctx context.Context) ([]Workspace, error)

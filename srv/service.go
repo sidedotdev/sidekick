@@ -6,14 +6,14 @@ import (
 )
 
 type Service interface {
-	StorageService
-	StreamService
+	Storage
+	Streamer
 }
 
-type StorageService interface {
-	domain.TaskService
-	domain.FlowService
-	domain.WorkspaceService
+type Storage interface {
+	domain.TaskStorage
+	domain.FlowStorage
+	domain.WorkspaceStorage
 
 	CheckConnection(ctx context.Context) error
 
@@ -23,7 +23,7 @@ type StorageService interface {
 	MSet(ctx context.Context, values map[string]interface{}) error
 }
 
-type StreamService interface {
-	domain.TaskStreamService
-	domain.FlowStreamService
+type Streamer interface {
+	domain.TaskStreamer
+	domain.FlowStreamer
 }
