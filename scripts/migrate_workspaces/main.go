@@ -7,7 +7,7 @@ import (
 	"log"
 	"os"
 
-	"sidekick/models"
+	"sidekick/domain"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -39,7 +39,7 @@ func migrateWorkspaces() error {
 			continue
 		}
 
-		var workspace models.Workspace
+		var workspace domain.Workspace
 		err = json.Unmarshal([]byte(workspaceJson), &workspace)
 		if err != nil {
 			log.Printf("error unmarshalling workspace JSON for key %s: %v", key, err)

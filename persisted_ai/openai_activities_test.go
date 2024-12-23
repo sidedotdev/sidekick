@@ -5,17 +5,18 @@ import (
 	"fmt"
 	"sidekick/embedding"
 	"sidekick/secret_manager"
+	"sidekick/srv/redis"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
 func TestCachedEmbedActivity_AllCached(t *testing.T) {
-	db := newTestRedisDatabase()
+	db := redis.NewTestRedisStorage()
 
 	oa := &OpenAIActivities{
-		DatabaseAccessor: db,
-		Embedder:         &MockOpenAIEmbedder{},
+		Storage:  db,
+		Embedder: &MockOpenAIEmbedder{},
 	}
 	options := OpenAIEmbedActivityOptions{
 		WorkspaceId:   "test_workspace",
@@ -24,8 +25,8 @@ func TestCachedEmbedActivity_AllCached(t *testing.T) {
 		Subkeys:       []uint64{1},
 	}
 
-	expectedKeys := []string{"test_workspace:test_type:1:ada2"}
-	expectedEmbedding := embedding.EmbeddingVector{}
+	expectedKeys := []string{"test_workspace:embedding:ada2:test_type:1"}
+	expectedEmbedding := embedding.EmbeddingVector{0.5, 0.1}
 
 	// Pre-cache the embeddings
 	err := db.MSet(context.Background(), map[string]interface{}{expectedKeys[0]: expectedEmbedding})
@@ -45,11 +46,11 @@ func TestCachedEmbedActivity_AllCached(t *testing.T) {
 }
 
 func TestCachedEmbedActivity_NoKeys(t *testing.T) {
-	db := newTestRedisDatabase()
+	db := redis.NewTestRedisStorage()
 
 	oa := &OpenAIActivities{
-		DatabaseAccessor: db,
-		Embedder:         &MockOpenAIEmbedder{},
+		Storage:  db,
+		Embedder: &MockOpenAIEmbedder{},
 	}
 	options := OpenAIEmbedActivityOptions{
 		WorkspaceId:   "test_workspace",
@@ -63,11 +64,11 @@ func TestCachedEmbedActivity_NoKeys(t *testing.T) {
 }
 
 func TestCachedEmbedActivity_MissedCache(t *testing.T) {
-	db := newTestRedisDatabase()
+	db := redis.NewTestRedisStorage()
 
 	oa := &OpenAIActivities{
-		DatabaseAccessor: db,
-		Embedder:         &MockOpenAIEmbedder{},
+		Storage:  db,
+		Embedder: &MockOpenAIEmbedder{},
 	}
 	options := OpenAIEmbedActivityOptions{
 		Secrets: secret_manager.SecretManagerContainer{

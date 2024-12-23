@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sidekick/domain"
 	"sidekick/llm"
-	"sidekick/models"
 	"sidekick/utils"
 )
 
@@ -44,7 +44,7 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult Tool
 	// NOTE: the function passed in very deliberately returns
 	// ToolCallResponseInfo since what's returned is what's tracked, and we want
 	// to the entire tool call response, not just the response string
-	return Track(actionCtx, func(flowAction models.FlowAction) (ToolCallResponseInfo, error) {
+	return Track(actionCtx, func(flowAction domain.FlowAction) (ToolCallResponseInfo, error) {
 		var response string
 		switch toolCall.Name {
 		case getRetrieveCodeContextTool().Name:
@@ -95,7 +95,7 @@ func handleErrToolCallUnmarshal(toolCallResult ToolCallResponseInfo, err error) 
 			// NOTE: this error happens when the tool call arguments didn't
 			// follow schema. by providing the error as the tool call response,
 			// we give the llm a chance to self-correct via feedback.
-			toolCallResult.Response = err.Error()
+			toolCallResult.Response = fmt.Sprintf("%s\n\nHint: To fix this, follow the json schema correctly. In particular, don't put json within a string.", err.Error())
 			err = nil
 		}
 	}

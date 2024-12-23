@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/llm"
-	"sidekick/models"
 	"sidekick/secret_manager"
 	"sidekick/utils"
 	"sidekick/workspace"
@@ -31,9 +31,9 @@ func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string) (
 			SubflowName: "Init",
 		},
 	}
-	return flow_action.TrackSubflowFailureOnly(initialExecCtx, "Init", func(_ models.Subflow) (DevContext, error) {
+	return flow_action.TrackSubflowFailureOnly(initialExecCtx, "Init", func(_ domain.Subflow) (DevContext, error) {
 		actionCtx := initialExecCtx.NewActionContext("Setup Dev Context")
-		return flow_action.TrackFailureOnly(actionCtx, func(_ models.FlowAction) (DevContext, error) {
+		return flow_action.TrackFailureOnly(actionCtx, func(_ domain.FlowAction) (DevContext, error) {
 			return setupDevContextAction(ctx, workspaceId, repoDir)
 		})
 	})
@@ -62,7 +62,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		},
 	}
 
-	var workspaceConfig models.WorkspaceConfig
+	var workspaceConfig domain.WorkspaceConfig
 	var wa *workspace.Activities
 	err = workflow.ExecuteActivity(ctx, wa.GetWorkspaceConfig, workspaceId).Get(ctx, &workspaceConfig)
 	if err != nil {
@@ -87,21 +87,21 @@ type DevActionContext struct {
 	ActionParams map[string]interface{}
 }
 
-func Track[T any](devActionCtx DevActionContext, f func(flowAction models.FlowAction) (T, error)) (defaultT T, err error) {
+func Track[T any](devActionCtx DevActionContext, f func(flowAction domain.FlowAction) (T, error)) (defaultT T, err error) {
 	// TODO /gen check if the devContext.State.Paused is true, and if so, wait
 	// indefinitely for a temporal signal to resume before continuing
 	return flow_action.Track(devActionCtx.FlowActionContext(), f)
 }
 
-func TrackHuman[T any](devActionCtx DevActionContext, f func(flowAction models.FlowAction) (T, error)) (T, error) {
+func TrackHuman[T any](devActionCtx DevActionContext, f func(flowAction domain.FlowAction) (T, error)) (T, error) {
 	return flow_action.TrackHuman(devActionCtx.FlowActionContext(), f)
 }
 
-func RunSubflow[T any](dCtx DevContext, subflowName string, f func(subflow models.Subflow) (T, error)) (T, error) {
+func RunSubflow[T any](dCtx DevContext, subflowName string, f func(subflow domain.Subflow) (T, error)) (T, error) {
 	return flow_action.TrackSubflow(dCtx.ExecContext, subflowName, f)
 }
 
-func RunSubflowWithoutResult(dCtx DevContext, subflowName string, f func(subflow models.Subflow) error) (err error) {
+func RunSubflowWithoutResult(dCtx DevContext, subflowName string, f func(subflow domain.Subflow) error) (err error) {
 	return flow_action.TrackSubflowWithoutResult(dCtx.ExecContext, subflowName, f)
 }
 

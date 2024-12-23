@@ -3,7 +3,7 @@ package flow_action
 import (
 	"encoding/json"
 	"fmt"
-	"sidekick/models"
+	"sidekick/domain"
 	"time"
 
 	"github.com/segmentio/ksuid"
@@ -22,14 +22,14 @@ to allow for generic return type
 TODO: /gen write a set of tests for Track. use a real redis db instance via
 the existing newTestRedisDatabase fucntion and confirm started/failed/completed statuses.
 */
-func Track[T any](actionCtx ActionContext, f func(flowAction models.FlowAction) (T, error)) (defaultT T, err error) {
+func Track[T any](actionCtx ActionContext, f func(flowAction domain.FlowAction) (T, error)) (defaultT T, err error) {
 	if actionCtx.ExecContext.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking flow action")
 	}
 	return trackFlowAction(actionCtx.ExecContext, false, actionCtx.ActionType, actionCtx.ActionParams, f)
 }
 
-func TrackFailureOnly[T any](actionCtx ActionContext, f func(flowAction models.FlowAction) (T, error)) (defaultT T, err error) {
+func TrackFailureOnly[T any](actionCtx ActionContext, f func(flowAction domain.FlowAction) (T, error)) (defaultT T, err error) {
 	if actionCtx.ExecContext.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking flow action")
 	}
@@ -40,32 +40,32 @@ func TrackFailureOnly[T any](actionCtx ActionContext, f func(flowAction models.F
 Just like Track, but for human actions. This sets up the required metadata to
 ensure the human can complete the action.
 */
-func TrackHuman[T any](actionCtx ActionContext, f func(flowAction models.FlowAction) (T, error)) (T, error) {
+func TrackHuman[T any](actionCtx ActionContext, f func(flowAction domain.FlowAction) (T, error)) (T, error) {
 	if actionCtx.ExecContext.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking flow action")
 	}
 	return trackFlowAction(actionCtx.ExecContext, true, actionCtx.ActionType, actionCtx.ActionParams, f)
 }
 
-func TrackSubflow[T any](eCtx ExecContext, subflowName string, f func(subflow models.Subflow) (T, error)) (T, error) {
+func TrackSubflow[T any](eCtx ExecContext, subflowName string, f func(subflow domain.Subflow) (T, error)) (T, error) {
 	if eCtx.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking subflow")
 	}
 	return trackSubflow(eCtx, subflowName, f)
 }
 
-func TrackSubflowFailureOnly[T any](eCtx ExecContext, subflowName string, f func(subflow models.Subflow) (T, error)) (T, error) {
+func TrackSubflowFailureOnly[T any](eCtx ExecContext, subflowName string, f func(subflow domain.Subflow) (T, error)) (T, error) {
 	if eCtx.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking subflow")
 	}
 	return trackSubflowFailureOnly(eCtx, subflowName, f)
 }
 
-func TrackSubflowWithoutResult(eCtx ExecContext, subflowName string, f func(subflow models.Subflow) error) error {
+func TrackSubflowWithoutResult(eCtx ExecContext, subflowName string, f func(subflow domain.Subflow) error) error {
 	if eCtx.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking subflow")
 	}
-	_, err := trackSubflow(eCtx, subflowName, func(subflow models.Subflow) (_ string, err error) {
+	_, err := trackSubflow(eCtx, subflowName, func(subflow domain.Subflow) (_ string, err error) {
 		return "", f(subflow)
 	})
 	return err
@@ -77,7 +77,7 @@ func TrackSubflowWithoutResult(eCtx ExecContext, subflowName string, f func(subf
 // keep this around for now until we update the frontend to not rely on it
 const legacySubflowNameSeparator = ":|:"
 
-func trackSubflow[T any](eCtx ExecContext, subflowName string, f func(subflow models.Subflow) (T, error)) (defaultT T, err error) {
+func trackSubflow[T any](eCtx ExecContext, subflowName string, f func(subflow domain.Subflow) (T, error)) (defaultT T, err error) {
 	parentSubflow := eCtx.FlowScope.Subflow
 	subflow, err := putSubflow(eCtx, setupSubflow(eCtx, subflowName))
 	if err != nil {
@@ -103,7 +103,7 @@ func trackSubflow[T any](eCtx ExecContext, subflowName string, f func(subflow mo
 	val, err := f(subflow)
 
 	if err != nil {
-		subflow.Status = models.SubflowStatusFailed
+		subflow.Status = domain.SubflowStatusFailed
 		subflow.Result = fmt.Sprintf("failed: %v", err)
 		_, err2 := putSubflow(eCtx, subflow)
 		if err2 != nil {
@@ -117,7 +117,7 @@ func trackSubflow[T any](eCtx ExecContext, subflowName string, f func(subflow mo
 		return defaultT, fmt.Errorf("failed to convert val to json: %v", err)
 	}
 	subflow.Result = string(jsonVal)
-	subflow.Status = models.SubflowStatusComplete
+	subflow.Status = domain.SubflowStatusComplete
 	_, err = putSubflow(eCtx, subflow)
 	if err != nil {
 		return defaultT, fmt.Errorf("failed to mark subflow as complete: %v", err)
@@ -126,7 +126,7 @@ func trackSubflow[T any](eCtx ExecContext, subflowName string, f func(subflow mo
 	return val, nil
 }
 
-func trackSubflowFailureOnly[T any](eCtx ExecContext, subflowName string, f func(subflow models.Subflow) (T, error)) (defaultT T, err error) {
+func trackSubflowFailureOnly[T any](eCtx ExecContext, subflowName string, f func(subflow domain.Subflow) (T, error)) (defaultT T, err error) {
 	parentSubflow := eCtx.FlowScope.Subflow
 	subflow := setupSubflow(eCtx, subflowName) // don't persist the subflow yet, only do it if & when it fails
 
@@ -150,7 +150,7 @@ func trackSubflowFailureOnly[T any](eCtx ExecContext, subflowName string, f func
 	val, err := f(subflow)
 
 	if err != nil {
-		subflow.Status = models.SubflowStatusFailed
+		subflow.Status = domain.SubflowStatusFailed
 		subflow.Result = fmt.Sprintf("failed: %v", err)
 		_, err2 := putSubflow(eCtx, subflow)
 		if err2 != nil {
@@ -162,13 +162,13 @@ func trackSubflowFailureOnly[T any](eCtx ExecContext, subflowName string, f func
 	return val, nil
 }
 
-func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType string, actionParams map[string]any, f func(streamId models.FlowAction) (T, error)) (defaultT T, err error) {
-	initialStatus := models.ActionStatusStarted
+func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType string, actionParams map[string]any, f func(streamId domain.FlowAction) (T, error)) (defaultT T, err error) {
+	initialStatus := domain.ActionStatusStarted
 	if isHumanAction {
-		initialStatus = models.ActionStatusPending
+		initialStatus = domain.ActionStatusPending
 	}
 
-	flowAction, err := putFlowAction(eCtx, models.FlowAction{
+	flowAction, err := putFlowAction(eCtx, domain.FlowAction{
 		WorkspaceId:        eCtx.WorkspaceId,
 		SubflowName:        eCtx.FlowScope.SubflowName,
 		SubflowDescription: eCtx.FlowScope.subflowDescription,
@@ -186,7 +186,7 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 	val, err := f(flowAction)
 
 	if err != nil {
-		flowAction.ActionStatus = models.ActionStatusFailed
+		flowAction.ActionStatus = domain.ActionStatusFailed
 		flowAction.ActionResult = fmt.Sprintf("failed: %v", err)
 		var err2 error
 		flowAction, err2 = putFlowAction(eCtx, flowAction)
@@ -196,7 +196,7 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 		return defaultT, err
 	}
 
-	flowAction.ActionStatus = models.ActionStatusComplete
+	flowAction.ActionStatus = domain.ActionStatusComplete
 	jsonVal, err := json.Marshal(val)
 	if err != nil {
 		return defaultT, fmt.Errorf("failed to convert val to json: %v", err)
@@ -210,9 +210,9 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 	return val, nil
 }
 
-func trackFlowActionFailureOnly[T any](eCtx ExecContext, actionType string, actionParams map[string]any, f func(streamId models.FlowAction) (T, error)) (defaultT T, err error) {
-	initialStatus := models.ActionStatusStarted
-	flowAction := models.FlowAction{
+func trackFlowActionFailureOnly[T any](eCtx ExecContext, actionType string, actionParams map[string]any, f func(streamId domain.FlowAction) (T, error)) (defaultT T, err error) {
+	initialStatus := domain.ActionStatusStarted
+	flowAction := domain.FlowAction{
 		WorkspaceId:        eCtx.WorkspaceId,
 		SubflowName:        eCtx.FlowScope.SubflowName,
 		SubflowDescription: eCtx.FlowScope.subflowDescription,
@@ -225,7 +225,7 @@ func trackFlowActionFailureOnly[T any](eCtx ExecContext, actionType string, acti
 	val, err := f(flowAction)
 
 	if err != nil {
-		flowAction.ActionStatus = models.ActionStatusFailed
+		flowAction.ActionStatus = domain.ActionStatusFailed
 		flowAction.ActionResult = fmt.Sprintf("failed: %v", err)
 		var err2 error
 		flowAction, err2 = putFlowAction(eCtx, flowAction)
@@ -239,7 +239,7 @@ func trackFlowActionFailureOnly[T any](eCtx ExecContext, actionType string, acti
 	return val, nil
 }
 
-func putFlowAction(eCtx ExecContext, flowAction models.FlowAction) (models.FlowAction, error) {
+func putFlowAction(eCtx ExecContext, flowAction domain.FlowAction) (domain.FlowAction, error) {
 	if flowAction.Id == "" {
 		flowAction.Id = "fa_" + ksuid.New().String()
 	}
@@ -262,24 +262,24 @@ func putFlowAction(eCtx ExecContext, flowAction models.FlowAction) (models.FlowA
 	var fa *FlowActivities // nil struct pointer for struct-based activities
 	err := workflow.ExecuteActivity(eCtx, fa.PersistFlowAction, flowAction).Get(eCtx, nil)
 	if err != nil {
-		return models.FlowAction{}, err
+		return domain.FlowAction{}, err
 	}
 
 	return flowAction, nil
 }
 
-func setupSubflow(eCtx ExecContext, subflowName string) models.Subflow {
+func setupSubflow(eCtx ExecContext, subflowName string) domain.Subflow {
 	parentSubflowId := ""
 	parentSubflow := eCtx.FlowScope.Subflow
 	if parentSubflow != nil {
 		parentSubflowId = parentSubflow.Id
 	}
 
-	subflow := models.Subflow{
+	subflow := domain.Subflow{
 		WorkspaceId:     eCtx.WorkspaceId,
 		Name:            subflowName,
 		ParentSubflowId: parentSubflowId,
-		Status:          models.SubflowStatusStarted,
+		Status:          domain.SubflowStatusStarted,
 	}
 
 	if subflow.Id == "" {
@@ -292,11 +292,11 @@ func setupSubflow(eCtx ExecContext, subflowName string) models.Subflow {
 	return subflow
 }
 
-func putSubflow(eCtx ExecContext, subflow models.Subflow) (models.Subflow, error) {
+func putSubflow(eCtx ExecContext, subflow domain.Subflow) (domain.Subflow, error) {
 	var fa *FlowActivities // nil struct pointer for struct-based activities
 	err := workflow.ExecuteActivity(eCtx, fa.PersistSubflow, subflow).Get(eCtx, nil)
 	if err != nil {
-		return models.Subflow{}, err
+		return domain.Subflow{}, err
 	}
 	return subflow, nil
 }

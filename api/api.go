@@ -8,21 +8,20 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"sidekick/common"
-	"sidekick/db"
 	"sidekick/dev"
-	"sidekick/flow_event"
+	"sidekick/domain"
+	domain1 "sidekick/domain"
 	"sidekick/frontend"
-	"sidekick/models"
+	"sidekick/srv"
+	"sidekick/srv/redis"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/ksuid"
 	"go.temporal.io/sdk/client"
 )
@@ -48,8 +47,7 @@ func RunServer() *http.Server {
 }
 
 type Controller struct {
-	dbAccessor        db.DatabaseAccessor
-	flowEventAccessor db.FlowEventAccessor
+	service           srv.Service
 	temporalClient    client.Client
 	temporalNamespace string
 	temporalTaskQueue string
@@ -137,28 +135,15 @@ func NewController() Controller {
 		log.Fatal("Failed to create Temporal client", err)
 	}
 
-	redisAddr := os.Getenv("REDIS_ADDR")
-	if redisAddr == "" {
-		log.Println("Missing Redis address, using default localhost:6379")
-		redisAddr = "localhost:6379"
-	}
-
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:        redisAddr,
-		Password:    "", // no password set
-		DB:          0,  // use default DB
-		PoolSize:    300,
-		PoolTimeout: 300 * time.Second,
-	})
-
-	_, err = redisClient.Ping(context.Background()).Result()
+	redisStorage := redis.NewStorage()
+	service := srv.NewDelegator(redisStorage, redis.NewStreamer())
+	err = service.CheckConnection(context.Background())
 	if err != nil {
 		log.Fatal("Failed to connect to Redis", err)
 	}
 
 	return Controller{
-		dbAccessor:        &db.RedisDatabase{Client: redisClient},
-		flowEventAccessor: &db.RedisFlowEventAccessor{Client: redisClient},
+		service:           service,
 		temporalClient:    temporalClient,
 		temporalNamespace: common.GetTemporalNamespace(),
 		temporalTaskQueue: common.GetTemporalTaskQueue(),
@@ -174,14 +159,14 @@ func (ctrl *Controller) DeleteTaskHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	taskId := c.Param("id")
 
-	task, err := ctrl.dbAccessor.GetTask(c.Request.Context(), workspaceId, taskId)
+	task, err := ctrl.service.GetTask(c.Request.Context(), workspaceId, taskId)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
 		return
 	}
 
 	// Get the child workflows of the task
-	childFlows, err := ctrl.dbAccessor.GetFlowsForTask(c.Request.Context(), workspaceId, taskId)
+	childFlows, err := ctrl.service.GetFlowsForTask(c.Request.Context(), workspaceId, taskId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get child workflows"})
 		return
@@ -204,7 +189,7 @@ func (ctrl *Controller) DeleteTaskHandler(c *gin.Context) {
 		// TODO delete the flow from the database
 	}
 
-	err = ctrl.dbAccessor.DeleteTask(c.Request.Context(), workspaceId, taskId)
+	err = ctrl.service.DeleteTask(c.Request.Context(), workspaceId, taskId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete task"})
 		return
@@ -230,8 +215,6 @@ func (ctrl *Controller) CancelFlowHandler(c *gin.Context) {
 	})
 }
 
-// GetMessagesHandler function has been removed as it is no longer needed
-
 type TaskRequest struct {
 	Id          string `json:"id"`
 	Title       string `json:"title"`
@@ -241,12 +224,6 @@ type TaskRequest struct {
 	Status      string `json:"status"`
 	FlowOptions map[string]interface{}
 }
-
-type CreateMessageRequest struct {
-	Content string `json:"content"`
-}
-
-// CreateMessage function has been removed as it is no longer needed
 
 func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
@@ -258,20 +235,20 @@ func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 
 	// default values for create only
 	if taskReq.Status == "" {
-		taskReq.Status = string(models.TaskStatusToDo)
+		taskReq.Status = string(domain.TaskStatusToDo)
 	}
 
 	// create-specific validation (TODO let's separate out the types for the create and update task request bodies)
-	if taskReq.Status != string(models.TaskStatusDrafting) && taskReq.Status != string(models.TaskStatusToDo) {
+	if taskReq.Status != string(domain.TaskStatusDrafting) && taskReq.Status != string(domain.TaskStatusToDo) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Creating a task with status set to anything other than 'drafting' or 'to_do' is not allowed"})
 		return
 	}
 
 	if taskReq.AgentType == "" {
-		if taskReq.Status == string(models.TaskStatusDrafting) || taskReq.Status == "" {
-			taskReq.AgentType = string(models.AgentTypeHuman)
+		if taskReq.Status == string(domain.TaskStatusDrafting) || taskReq.Status == "" {
+			taskReq.AgentType = string(domain.AgentTypeHuman)
 		} else {
-			taskReq.AgentType = string(models.AgentTypeLLM)
+			taskReq.AgentType = string(domain.AgentTypeLLM)
 		}
 	}
 
@@ -281,13 +258,13 @@ func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 		return
 	}
 
-	flowType, err := models.StringToFlowType(taskReq.FlowType)
+	flowType, err := domain.StringToFlowType(taskReq.FlowType)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	task := models.Task{
+	task := domain.Task{
 		WorkspaceId: workspaceId,
 		Id:          "task_" + ksuid.New().String(),
 		Created:     time.Now(),
@@ -301,17 +278,17 @@ func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 		FlowOptions: taskReq.FlowOptions,
 	}
 
-	if err := ctrl.dbAccessor.PersistTask(c, task); err != nil {
+	if err := ctrl.service.PersistTask(c, task); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create task"})
 		return
 	}
 
-	if agentType == models.AgentTypeLLM {
+	if agentType == domain.AgentTypeLLM {
 		if err := ctrl.AgentHandleNewTask(c, &task); err != nil {
 			ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("Failed to handle new task: %w", err))
-			task.Status = models.TaskStatusFailed
-			task.AgentType = models.AgentTypeNone
-			ctrl.dbAccessor.PersistTask(c, task)
+			task.Status = domain.TaskStatusFailed
+			task.AgentType = domain.AgentTypeNone
+			ctrl.service.PersistTask(c, task)
 			return
 		}
 	}
@@ -321,8 +298,8 @@ func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 
 // API response object for a task
 type TaskResponse struct {
-	models.Task
-	Flows []models.Flow `json:"flows"`
+	domain.Task
+	Flows []domain.Flow `json:"flows"`
 }
 
 func (ctrl *Controller) GetTaskHandler(c *gin.Context) {
@@ -334,9 +311,9 @@ func (ctrl *Controller) GetTaskHandler(c *gin.Context) {
 		return
 	}
 
-	task, err := ctrl.dbAccessor.GetTask(c, workspaceId, taskId)
+	task, err := ctrl.service.GetTask(c, workspaceId, taskId)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
 		} else {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -359,17 +336,17 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 		statusesStr = "to_do,drafting,blocked,in_progress,complete,failed,canceled"
 	}
 	statuses := strings.Split(statusesStr, ",")
-	taskStatuses := []models.TaskStatus{}
+	taskStatuses := []domain.TaskStatus{}
 	for _, status := range statuses {
-		taskStatus := models.TaskStatus(status)
+		taskStatus := domain.TaskStatus(status)
 		taskStatuses = append(taskStatuses, taskStatus)
 	}
 
-	var tasks []models.Task
+	var tasks []domain.Task
 	var err error
 
 	if len(taskStatuses) > 0 {
-		tasks, err = ctrl.dbAccessor.GetTasks(c, workspaceId, taskStatuses)
+		tasks, err = ctrl.service.GetTasks(c, workspaceId, taskStatuses)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -377,12 +354,12 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 	}
 
 	if tasks == nil {
-		tasks = []models.Task{}
+		tasks = []domain.Task{}
 	}
 
 	taskResponses := make([]TaskResponse, len(tasks))
 	for i, task := range tasks {
-		flows, err := ctrl.dbAccessor.GetFlowsForTask(c, workspaceId, task.Id)
+		flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, task.Id)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -398,7 +375,7 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 	})
 }
 
-func (ctrl *Controller) AgentHandleNewTask(ctx context.Context, task *models.Task) error {
+func (ctrl *Controller) AgentHandleNewTask(ctx context.Context, task *domain.Task) error {
 	devAgent := dev.DevAgent{
 		TemporalClient:    ctrl.temporalClient,
 		TemporalTaskQueue: ctrl.temporalTaskQueue,
@@ -410,8 +387,8 @@ func (ctrl *Controller) AgentHandleNewTask(ctx context.Context, task *models.Tas
 	}
 
 	// Update the task status to in progress
-	task.Status = models.TaskStatusInProgress
-	err = ctrl.dbAccessor.PersistTask(ctx, *task)
+	task.Status = domain.TaskStatusInProgress
+	err = ctrl.service.PersistTask(ctx, *task)
 	if err != nil {
 		return err
 	}
@@ -422,20 +399,20 @@ func (ctrl *Controller) AgentHandleNewTask(ctx context.Context, task *models.Tas
 func (ctrl *Controller) GetFlowActionsHandler(c *gin.Context) {
 	flowId := c.Param("id")
 	workspaceId := c.Param("workspaceId")
-	if ctrl.dbAccessor == nil {
+	if ctrl.service == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database accessor not initialized"})
 		return
 	}
-	flowActions, err := ctrl.dbAccessor.GetFlowActions(c, workspaceId, flowId)
+	flowActions, err := ctrl.service.GetFlowActions(c, workspaceId, flowId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get flow actions"})
 		return
 	}
 	if flowActions == nil {
-		flowActions = []models.FlowAction{}
-		_, err := ctrl.dbAccessor.GetWorkflow(c, workspaceId, flowId)
+		flowActions = []domain.FlowAction{}
+		_, err := ctrl.service.GetFlow(c, workspaceId, flowId)
 		if err != nil {
-			if errors.Is(err, db.ErrNotFound) {
+			if errors.Is(err, srv.ErrNotFound) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
 			} else {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get flow"})
@@ -459,7 +436,7 @@ func (ctrl *Controller) GetFlowActionChangesHandler(c *gin.Context) {
 	go func() {
 		for event := range events {
 			switch event := event.(type) {
-			case models.FlowAction:
+			case domain.FlowAction:
 				select {
 				case <-clientGone:
 					// if the client has disconnected, stop sending events
@@ -492,7 +469,7 @@ func (ctrl *Controller) GetFlowActionChangesHandler(c *gin.Context) {
 			close(events)
 			return
 		default:
-			flowActions, lastStreamId, err := ctrl.dbAccessor.GetFlowActionChanges(ctx, workspaceId, flowId, streamMessageStartId, maxCount, blockDuration)
+			flowActions, lastStreamId, err := ctrl.service.GetFlowActionChanges(ctx, workspaceId, flowId, streamMessageStartId, maxCount, blockDuration)
 			if err != nil {
 				log.Printf("Failed to get flow actions: %v\n", err)
 				events <- err
@@ -521,7 +498,7 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 
 	// Retrieve the flow action from the database
-	flowAction, err := ctrl.dbAccessor.GetFlowAction(ctx, workspaceId, flowActionId)
+	flowAction, err := ctrl.service.GetFlowAction(ctx, workspaceId, flowActionId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve flow action"})
 		return
@@ -534,7 +511,7 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 	} else if !flowAction.IsHumanAction {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "For now, only human actions can be completed via this endpoint"})
 		return
-	} else if flowAction.ActionStatus != models.ActionStatusPending {
+	} else if flowAction.ActionStatus != domain.ActionStatusPending {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Flow action status is not pending"})
 		return
 	}
@@ -581,29 +558,29 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 		return
 	}
 	flowAction.ActionResult = string(userResponseJson)
-	flowAction.ActionStatus = models.ActionStatusComplete
+	flowAction.ActionStatus = domain.ActionStatusComplete
 
-	if err := ctrl.dbAccessor.PersistFlowAction(ctx, flowAction); err != nil {
+	if err := ctrl.service.PersistFlowAction(ctx, flowAction); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update flow action"})
 		return
 	}
 
 	// Retrieve the flow and then task associated with the flow action
-	flow, err := ctrl.dbAccessor.GetWorkflow(ctx, workspaceId, flowAction.FlowId)
+	flow, err := ctrl.service.GetFlow(ctx, workspaceId, flowAction.FlowId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve flow"})
 		return
 	}
-	task, err := ctrl.dbAccessor.GetTask(ctx, workspaceId, flow.ParentId)
+	task, err := ctrl.service.GetTask(ctx, workspaceId, flow.ParentId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve task"})
 		return
 	}
 
 	// Update the task status and agent type
-	task.Status = models.TaskStatusInProgress
-	task.AgentType = models.AgentTypeLLM
-	if err := ctrl.dbAccessor.PersistTask(ctx, task); err != nil {
+	task.Status = domain.TaskStatusInProgress
+	task.AgentType = domain.AgentTypeLLM
+	if err := ctrl.service.PersistTask(ctx, task); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update task"})
 		return
 	}
@@ -621,9 +598,9 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 	}
 	taskReq.Id = c.Param("id")
 
-	task, err := ctrl.dbAccessor.GetTask(requestCtx, workspaceId, taskReq.Id)
+	task, err := ctrl.service.GetTask(requestCtx, workspaceId, taskReq.Id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+		if errors.Is(err, srv.ErrNotFound) {
 			ctrl.ErrorHandler(c, http.StatusNotFound, err)
 		} else {
 			ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
@@ -646,23 +623,23 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 	task.FlowOptions = taskReq.FlowOptions
 
 	// If the task status is 'to_do' and there is no flow record, start the flow
-	flows, err := ctrl.dbAccessor.GetFlowsForTask(c, workspaceId, task.Id)
+	flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, task.Id)
 	if err != nil {
 		ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
 		return
 	}
 
-	if task.Status == models.TaskStatusToDo && len(flows) == 0 {
+	if task.Status == domain.TaskStatusToDo && len(flows) == 0 {
 		if err := ctrl.AgentHandleNewTask(requestCtx, &task); err != nil {
 			ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("Failed to handle new task: %w", err))
-			task.Status = models.TaskStatusFailed
-			task.AgentType = models.AgentTypeNone
-			ctrl.dbAccessor.PersistTask(c, task)
+			task.Status = domain.TaskStatusFailed
+			task.AgentType = domain.AgentTypeNone
+			ctrl.service.PersistTask(c, task)
 			return
 		}
 	}
 
-	if err := ctrl.dbAccessor.PersistTask(requestCtx, task); err != nil {
+	if err := ctrl.service.PersistTask(requestCtx, task); err != nil {
 		ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("Failed to handle new task: %w", err))
 		return
 	}
@@ -670,31 +647,31 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"task": task})
 }
 
-func validateTaskRequest(taskReq *TaskRequest) (models.AgentType, models.TaskStatus, error) {
-	var agentType models.AgentType
-	agentType, err := models.StringToAgentType(taskReq.AgentType)
+func validateTaskRequest(taskReq *TaskRequest) (domain.AgentType, domain.TaskStatus, error) {
+	var agentType domain.AgentType
+	agentType, err := domain.StringToAgentType(taskReq.AgentType)
 	if err != nil {
 		return "", "", err
 	}
 
 	// Check if the 'Status' field is set in the request
-	status, err := models.StringToTaskStatus(taskReq.Status)
+	status, err := domain.StringToTaskStatus(taskReq.Status)
 	if err != nil {
 		return "", "", err
 	}
 
 	// if agentType wasn't provided, override default when it's dependent on status
-	if taskReq.AgentType == "" && status == models.TaskStatusDrafting {
-		agentType = models.AgentTypeHuman
+	if taskReq.AgentType == "" && status == domain.TaskStatusDrafting {
+		agentType = domain.AgentTypeHuman
 	}
 
-	if status == models.TaskStatusDrafting {
-		if agentType == models.AgentTypeNone {
-			agentType = models.AgentTypeHuman
-		} else if agentType != models.AgentTypeHuman {
+	if status == domain.TaskStatusDrafting {
+		if agentType == domain.AgentTypeNone {
+			agentType = domain.AgentTypeHuman
+		} else if agentType != domain.AgentTypeHuman {
 			return "", "", errors.New("When task status is 'drafting', the agent type must be 'human'")
 		}
-	} else if agentType == models.AgentTypeNone && taskReq.Id == "" {
+	} else if agentType == domain.AgentTypeNone && taskReq.Id == "" {
 		return "", "", errors.New("Creating a task with agent type set to \"none\" is not allowed")
 	}
 
@@ -726,8 +703,8 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 	}
 
 	// Validate workspaceId
-	if _, err := ctrl.dbAccessor.GetWorkspace(ctx, workspaceId); err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+	if _, err := ctrl.service.GetWorkspace(ctx, workspaceId); err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Workspace not found"})
 		} else {
 			log.Printf("Error fetching workspace: %v", err)
@@ -737,8 +714,8 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 	}
 
 	// Validate flowId under the given workspaceId
-	if _, err := ctrl.dbAccessor.GetWorkflow(ctx, workspaceId, flowId); err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+	if _, err := ctrl.service.GetFlow(ctx, workspaceId, flowId); err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
 		} else {
 			log.Printf("Error fetching flow: %v", err)
@@ -779,7 +756,7 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 			return
 		default:
 			// Attempt to fetch the flow actions
-			flowActions, lastStreamId, err := ctrl.dbAccessor.GetFlowActionChanges(
+			flowActions, lastStreamId, err := ctrl.service.GetFlowActionChanges(
 				ctx, workspaceId, flowId, streamMessageStartId, maxCount, blockDuration,
 			)
 			if err != nil {
@@ -839,7 +816,7 @@ func (ctrl *Controller) TaskChangesWebsocketHandler(c *gin.Context) {
 			close(clientGone)
 			return
 		default:
-			tasks, lastId, err := ctrl.dbAccessor.GetTaskChanges(context.Background(), workspaceId, lastTaskStreamId, 50, 0)
+			tasks, lastId, err := ctrl.service.GetTaskChanges(context.Background(), workspaceId, lastTaskStreamId, 50, 0)
 			if err != nil {
 				log.Printf("Error getting task changes: %v", err)
 				return
@@ -847,7 +824,7 @@ func (ctrl *Controller) TaskChangesWebsocketHandler(c *gin.Context) {
 			if len(tasks) > 0 {
 				taskResponses := make([]TaskResponse, len(tasks))
 				for i, task := range tasks {
-					flows, err := ctrl.dbAccessor.GetFlowsForTask(c, workspaceId, task.Id)
+					flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, task.Id)
 
 					if err != nil {
 						log.Printf("Error getting flows for task: %v", err)
@@ -893,8 +870,8 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 	}
 
 	// Validate workspaceId
-	if _, err := ctrl.dbAccessor.GetWorkspace(ctx, workspaceId); err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+	if _, err := ctrl.service.GetWorkspace(ctx, workspaceId); err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Workspace not found"})
 		} else {
 			log.Printf("Error fetching workspace: %v", err)
@@ -904,8 +881,8 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 	}
 
 	// Validate flowId under the given workspaceId
-	if _, err := ctrl.dbAccessor.GetWorkflow(ctx, workspaceId, flowId); err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+	if _, err := ctrl.service.GetFlow(ctx, workspaceId, flowId); err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
 		} else {
 			log.Printf("Error fetching flow: %v", err)
@@ -974,7 +951,7 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 			}
 
 			// Attempt to fetch the flow events
-			flowEvents, lastStreamKeys, err := ctrl.flowEventAccessor.GetFlowEvents(
+			flowEvents, lastStreamKeys, err := ctrl.service.GetFlowEvents(
 				ctx, workspaceId, keysMap, maxCount, blockDuration,
 			)
 			if err != nil {
@@ -995,7 +972,7 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 				}
 
 				// remove stream keys that have been marked as ended
-				if flowEvent.GetEventType() == flow_event.EndStreamEventType {
+				if flowEvent.GetEventType() == domain1.EndStreamEventType {
 					for key := range keysMap {
 						if strings.HasSuffix(key, flowEvent.GetParentId()) {
 							streamKeys.Delete(key)

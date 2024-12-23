@@ -2,43 +2,25 @@ package workspace
 
 import (
 	"context"
-	"log"
 	"reflect"
 	"sidekick/common"
-	sidedb "sidekick/db"
-	"sidekick/models"
+	"sidekick/domain"
+	"sidekick/srv"
+	"sidekick/srv/redis"
 	"testing"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 )
 
-func newTestRedisDatabase() *sidedb.RedisDatabase {
-	db := &sidedb.RedisDatabase{}
-	db.Client = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       1,
-	})
-
-	// Flush the database synchronously to ensure a clean state for each test
-	_, err := db.Client.FlushDB(context.Background()).Result()
-	if err != nil {
-		log.Panicf("failed to flush redis database: %v", err)
-	}
-
-	return db
-}
-
 func TestGetWorkspaceConfig(t *testing.T) {
-	db := newTestRedisDatabase()
-	activities := Activities{DatabaseAccessor: db}
+	db := redis.NewTestRedisStorage()
+	activities := Activities{Storage: db}
 
-	emptyConfig := models.WorkspaceConfig{}
+	emptyConfig := domain.WorkspaceConfig{}
 	testCases := []struct {
 		name            string
 		workspaceID     string
-		workspaceConfig models.WorkspaceConfig
+		workspaceConfig domain.WorkspaceConfig
 		mockError       error
 		expectError     bool
 		errorMsg        string
@@ -46,7 +28,7 @@ func TestGetWorkspaceConfig(t *testing.T) {
 		{
 			name:        "Successful retrieval",
 			workspaceID: "test-workspace-1",
-			workspaceConfig: models.WorkspaceConfig{
+			workspaceConfig: domain.WorkspaceConfig{
 				LLM:       common.LLMConfig{Defaults: []common.ModelConfig{{Provider: "openai"}}},
 				Embedding: common.EmbeddingConfig{Defaults: []common.ModelConfig{{Provider: "openai"}}},
 			},
@@ -58,12 +40,12 @@ func TestGetWorkspaceConfig(t *testing.T) {
 			workspaceID:     "test-workspace-2",
 			workspaceConfig: emptyConfig,
 			expectError:     true,
-			errorMsg:        sidedb.ErrNotFound.Error(),
+			errorMsg:        srv.ErrNotFound.Error(),
 		},
 		{
 			name:        "Missing LLM config",
 			workspaceID: "test-workspace-3",
-			workspaceConfig: models.WorkspaceConfig{
+			workspaceConfig: domain.WorkspaceConfig{
 				Embedding: common.EmbeddingConfig{Defaults: []common.ModelConfig{{Provider: "openai"}}},
 			},
 			mockError:   nil,
@@ -73,7 +55,7 @@ func TestGetWorkspaceConfig(t *testing.T) {
 		{
 			name:        "Missing embedding config",
 			workspaceID: "test-workspace-4",
-			workspaceConfig: models.WorkspaceConfig{
+			workspaceConfig: domain.WorkspaceConfig{
 				LLM: common.LLMConfig{Defaults: []common.ModelConfig{{Provider: "openai"}}},
 			},
 			mockError:   nil,

@@ -6,8 +6,8 @@ import (
 	"log"
 	"math"
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/llm"
-	"sidekick/models"
 	"strings"
 
 	"github.com/invopop/jsonschema"
@@ -75,7 +75,7 @@ func (step DevStep) String() string {
 }
 
 func BuildDevPlan(dCtx DevContext, requirements, planningPrompt string, reproduceIssue bool) (*DevPlan, error) {
-	return RunSubflow(dCtx, "Build Dev Plan", func(_ models.Subflow) (*DevPlan, error) {
+	return RunSubflow(dCtx, "Build Dev Plan", func(_ domain.Subflow) (*DevPlan, error) {
 		return buildDevPlanSubflow(dCtx, requirements, planningPrompt, reproduceIssue)
 	})
 }

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"math"
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/llm"
-	"sidekick/models"
 	"sidekick/persisted_ai"
 	"sidekick/utils"
 
@@ -53,7 +53,7 @@ type buildDevRequirementsState struct {
 }
 
 func BuildDevRequirements(dCtx DevContext, initialInfo InitialDevRequirementsInfo) (*DevRequirements, error) {
-	return RunSubflow(dCtx, "Dev Requirements", func(_ models.Subflow) (*DevRequirements, error) {
+	return RunSubflow(dCtx, "Dev Requirements", func(_ domain.Subflow) (*DevRequirements, error) {
 		return buildDevRequirementsSubflow(dCtx, initialInfo)
 	})
 }
@@ -186,7 +186,7 @@ func generateDevRequirements(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*
 func TrackedToolChat(dCtx DevContext, actionName string, options llm.ToolChatOptions) (*llm.ChatMessageResponse, error) {
 	actionCtx := dCtx.NewActionContext(actionName)
 	actionCtx.ActionParams = options.ActionParams()
-	return Track(actionCtx, func(flowAction models.FlowAction) (*llm.ChatMessageResponse, error) {
+	return Track(actionCtx, func(flowAction domain.FlowAction) (*llm.ChatMessageResponse, error) {
 		if options.Params.Provider == llm.UnspecifiedToolChatProvider {
 			provider, modelConfig, _ := dCtx.GetToolChatConfig(common.DefaultKey, 0)
 			options.Params.Provider = provider

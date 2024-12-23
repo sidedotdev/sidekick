@@ -2,25 +2,13 @@ package persisted_ai
 
 import (
 	"context"
-	"sidekick/db"
 	"sidekick/env"
 	"sidekick/secret_manager"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
-
-func newTestRedisDatabase() *db.RedisDatabase {
-	db := &db.RedisDatabase{}
-	db.Client = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "", // no password set
-		DB:       0,  // use default DB
-	})
-	return db
-}
 
 func TestOpenAiEmbedActivityWorkflow(ctx workflow.Context) (string, error) {
 	retrypolicy := &temporal.RetryPolicy{

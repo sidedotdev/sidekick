@@ -2,12 +2,12 @@ package poll_failures
 
 import (
 	"context"
-	"sidekick/db"
 	"sidekick/mocks"
+	"sidekick/srv/redis"
 	"sidekick/utils"
 	"testing"
 
-	"sidekick/models"
+	"sidekick/domain"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -19,14 +19,14 @@ import (
 // setupTestEnvironment sets up the necessary mocked and real components for testing.
 func setupTestEnvironment(t *testing.T) (*PollFailuresActivities, *mocks.Client) {
 	// Create a real Redis database instance
-	redisDB := db.NewRedisDatabase()
+	service, _ := redis.NewTestRedisService()
 
 	// Create a mocked Temporal client
 	mockTemporalClient := mocks.NewClient(t)
 
 	return &PollFailuresActivities{
-		TemporalClient:   mockTemporalClient,
-		DatabaseAccessor: redisDB,
+		TemporalClient: mockTemporalClient,
+		Service:        service,
 	}, mockTemporalClient
 }
 
@@ -70,20 +70,20 @@ func TestUpdateTaskStatus(t *testing.T) {
 	activities, _ := setupTestEnvironment(t)
 
 	// Create a workflow record
-	workflow := &models.Flow{
+	workflow := &domain.Flow{
 		Id:          "workflow1",
 		WorkspaceId: "workspace1",
 		ParentId:    "task_1",
 	}
-	err := activities.DatabaseAccessor.PersistWorkflow(context.Background(), *workflow)
+	err := activities.Service.PersistFlow(context.Background(), *workflow)
 	assert.NoError(t, err)
 
-	task := &models.Task{
+	task := &domain.Task{
 		Id:          "task_1",
 		WorkspaceId: "workspace1",
-		Status:      models.TaskStatusToDo,
+		Status:      domain.TaskStatusToDo,
 	}
-	err = activities.DatabaseAccessor.PersistTask(context.Background(), *task)
+	err = activities.Service.PersistTask(context.Background(), *task)
 	assert.NoError(t, err)
 
 	// Call the UpdateTaskStatus method
@@ -95,10 +95,10 @@ func TestUpdateTaskStatus(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Retrieve the updated task
-	updatedTask, err := activities.DatabaseAccessor.GetTask(context.Background(), "workspace1", "task_1")
+	updatedTask, err := activities.Service.GetTask(context.Background(), "workspace1", "task_1")
 	assert.NoError(t, err)
 
 	// Assert the task status is updated to TaskStatusFailed
-	assert.Equal(t, models.TaskStatusFailed, updatedTask.Status)
-	assert.Equal(t, models.TaskStatusFailed, updatedTask.Status)
+	assert.Equal(t, domain.TaskStatusFailed, updatedTask.Status)
+	assert.Equal(t, domain.TaskStatusFailed, updatedTask.Status)
 }

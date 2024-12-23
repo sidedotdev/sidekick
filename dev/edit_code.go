@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/llm"
-	"sidekick/models"
 	"sidekick/utils"
 	"sort"
 	"strings"
@@ -18,7 +18,7 @@ var ErrMaxAttemptsReached = fmt.Errorf("reached max attempts")
 
 // edits code in the envContainer based on code context + requirements
 func EditCode(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) error {
-	return RunSubflowWithoutResult(dCtx, "Edit Code", func(_ models.Subflow) error {
+	return RunSubflowWithoutResult(dCtx, "Edit Code", func(_ domain.Subflow) error {
 		return editCodeSubflow(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo)
 	})
 }

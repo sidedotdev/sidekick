@@ -10,16 +10,15 @@ import (
 	"time"
 
 	"sidekick/common"
-	"sidekick/db"
+	"sidekick/domain"
 	"sidekick/llm"
-	"sidekick/models"
+	"sidekick/srv/redis"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/zalando/go-keyring"
 )
 
-func newTestRedisDatabase() *db.RedisDatabase {
+func newTestRedisDatabase() *redis.Storage {
 	client := redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "",
@@ -32,7 +31,7 @@ func newTestRedisDatabase() *db.RedisDatabase {
 		panic(fmt.Sprintf("failed to flush redis database: %v", err))
 	}
 
-	return &db.RedisDatabase{Client: client}
+	return &redis.Storage{Client: client}
 }
 
 // Helper function to create a temporary directory and change to it
@@ -337,7 +336,7 @@ func TestEnsureWorkspaceConfig(t *testing.T) {
 
 	// Test case 2: Update existing configuration
 	t.Run("Update existing configuration", func(t *testing.T) {
-		existingConfig := &models.WorkspaceConfig{
+		existingConfig := &domain.WorkspaceConfig{
 			LLM: common.LLMConfig{
 				Defaults: []common.ModelConfig{{Provider: "old-provider"}},
 			},

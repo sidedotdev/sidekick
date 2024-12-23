@@ -3,9 +3,9 @@ package dev
 import (
 	"fmt"
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/llm"
-	"sidekick/models"
 	"strings"
 
 	"go.temporal.io/sdk/workflow"
@@ -38,7 +38,7 @@ func RunTests(dCtx DevContext) (TestResult, error) {
 
 	actionCtx := dCtx.NewActionContext("Run Tests")
 	actionCtx.ActionParams = actionParams
-	testResults, err := Track(actionCtx, func(flowAction models.FlowAction) ([]TestResult, error) {
+	testResults, err := Track(actionCtx, func(flowAction domain.FlowAction) ([]TestResult, error) {
 		// execute all test commands in parallel
 		for _, testCommand := range repoConfig.TestCommands {
 			// Capture testCommand for the goroutine
