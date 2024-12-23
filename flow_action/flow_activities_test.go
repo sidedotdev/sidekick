@@ -6,10 +6,11 @@ import (
 	"log"
 	"testing"
 
+	"sidekick/db"
+	"sidekick/domain"
+
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"sidekick/db"
-	"sidekick/models"
 )
 
 func newTestRedisDatabase() *db.RedisDatabase {
@@ -34,7 +35,7 @@ func TestPersistFlowAction(t *testing.T) {
 		DatabaseAccessor: newTestRedisDatabase(),
 	}
 
-	flowAction := models.FlowAction{
+	flowAction := domain.FlowAction{
 		Id:          "test_id",
 		FlowId:      "test_flow_id",
 		WorkspaceId: "test_workspace_id",
@@ -47,7 +48,7 @@ func TestPersistFlowAction(t *testing.T) {
 	val, err := fa.DatabaseAccessor.Client.Get(context.Background(), key).Result()
 	assert.NoError(t, err)
 
-	var persistedFlowAction models.FlowAction
+	var persistedFlowAction domain.FlowAction
 	err = json.Unmarshal([]byte(val), &persistedFlowAction)
 	assert.NoError(t, err)
 

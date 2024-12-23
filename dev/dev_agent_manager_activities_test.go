@@ -4,8 +4,8 @@ import (
 	"context"
 	"log"
 	"sidekick/db"
+	"sidekick/domain"
 	"sidekick/mocks"
-	"sidekick/models"
 	"sidekick/utils"
 	"testing"
 
@@ -42,11 +42,11 @@ func TestUpdateTaskForUserRequest(t *testing.T) {
 	db := newTestRedisDatabase()
 
 	workspaceId := "testWorkspace"
-	task := models.Task{
+	task := domain.Task{
 		WorkspaceId: workspaceId,
 		Id:          "task_testTask",
 	}
-	flow := models.Flow{
+	flow := domain.Flow{
 		WorkspaceId: workspaceId,
 		Id:          "workflow_testWorkflow",
 		ParentId:    task.Id,
@@ -65,8 +65,8 @@ func TestUpdateTaskForUserRequest(t *testing.T) {
 	assert.Nil(t, err)
 
 	// Check that the task was updated appropriately
-	assert.Equal(t, models.AgentTypeHuman, updatedTask.AgentType)
-	assert.Equal(t, models.TaskStatusBlocked, updatedTask.Status)
+	assert.Equal(t, domain.AgentTypeHuman, updatedTask.AgentType)
+	assert.Equal(t, domain.TaskStatusBlocked, updatedTask.Status)
 }
 
 func TestCreatePendingUserRequest(t *testing.T) {
@@ -83,7 +83,7 @@ func TestCreatePendingUserRequest(t *testing.T) {
 		RequestKind:      RequestKindFreeForm,
 	}
 
-	var flowAction models.FlowAction
+	var flowAction domain.FlowAction
 	err := ima.CreatePendingUserRequest(ctx, workspaceId, request)
 	assert.Nil(t, err)
 
@@ -98,7 +98,7 @@ func TestCreatePendingUserRequest(t *testing.T) {
 		"requestContent": request.Content,
 		"requestKind":    string(request.RequestKind),
 	}, flowAction.ActionParams)
-	assert.Equal(t, models.ActionStatusPending, flowAction.ActionStatus)
+	assert.Equal(t, domain.ActionStatusPending, flowAction.ActionStatus)
 
 	// Retrieve the flow action from the database
 	persitedFlowAction, err := db.GetFlowAction(context.Background(), workspaceId, flowAction.Id)
@@ -124,7 +124,7 @@ func TestExistingUserRequest(t *testing.T) {
 		RequestKind:      RequestKindApproval,
 	}
 
-	existingFlowAction := models.FlowAction{
+	existingFlowAction := domain.FlowAction{
 		Id:          flowActionId,
 		WorkspaceId: workspaceId,
 		FlowId:      flowId,
@@ -133,12 +133,12 @@ func TestExistingUserRequest(t *testing.T) {
 			"requestContent": request.Content,
 			"requestKind":    string(request.RequestKind),
 		},
-		ActionStatus: models.ActionStatusStarted,
+		ActionStatus: domain.ActionStatusStarted,
 	}
 	err := db.PersistFlowAction(ctx, existingFlowAction)
 	assert.Nil(t, err)
 
-	var flowAction models.FlowAction
+	var flowAction domain.FlowAction
 	err = ima.CreatePendingUserRequest(ctx, workspaceId, request)
 	assert.Nil(t, err)
 

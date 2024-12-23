@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 	"sidekick/db"
-	"sidekick/models"
+	"sidekick/domain"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -27,7 +27,7 @@ func migrateFlows(ctx context.Context, redisDB *db.RedisDatabase, dryRun bool) e
 	for _, workspace := range workspaces {
 		log.Printf("Processing workspace: %s", workspace.Id)
 
-		tasks, err := redisDB.GetTasks(ctx, workspace.Id, models.AllTaskStatuses)
+		tasks, err := redisDB.GetTasks(ctx, workspace.Id, domain.AllTaskStatuses)
 		if err != nil {
 			log.Printf("Error getting tasks for workspace %s: %v", workspace.Id, err)
 			continue

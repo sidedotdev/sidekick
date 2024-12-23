@@ -7,7 +7,7 @@ import (
 	"log"
 	"os"
 	"sidekick/db"
-	"sidekick/models"
+	"sidekick/domain"
 	"strings"
 	"time"
 
@@ -21,7 +21,7 @@ type SubflowTree struct {
 	Description string        `json:"description,omitempty"`
 }
 
-func buildSubflowTrees(flowActions []models.FlowAction) []*SubflowTree {
+func buildSubflowTrees(flowActions []domain.FlowAction) []*SubflowTree {
 	subflowTrees := []*SubflowTree{}
 	ancestors := []*SubflowTree{}
 	subflowDescriptions := make(map[string]string)
@@ -109,12 +109,12 @@ func main() {
 
 func createSubflowsFromTree(ctx context.Context, tree SubflowTree, workspaceId, flowId string, parentSubflowId string, database *db.RedisDatabase, dryRun bool) (int, error) {
 	numCreated := 0
-	subflow := models.Subflow{
+	subflow := domain.Subflow{
 		WorkspaceId:     workspaceId,
 		Id:              fmt.Sprintf("sf_%s", ksuid.New().String()),
 		Name:            tree.Name,
 		Description:     tree.Description,
-		Status:          models.SubflowStatusComplete,
+		Status:          domain.SubflowStatusComplete,
 		FlowId:          flowId,
 		ParentSubflowId: parentSubflowId,
 	}
@@ -135,7 +135,7 @@ func createSubflowsFromTree(ctx context.Context, tree SubflowTree, workspaceId, 
 			if err != nil {
 				return numCreated, err
 			}
-		case models.FlowAction:
+		case domain.FlowAction:
 			if !dryRun {
 				// NOTE we're not using PersistFlowAction here because that
 				// calls AddFlowActionChange, which we don't want to do here
@@ -175,7 +175,7 @@ func migrateSubflows(ctx context.Context, database *db.RedisDatabase, dryRun boo
 		log.Printf("Processing workspace: %s", workspace.Id)
 		totalWorkspaces++
 
-		tasks, err := database.GetTasks(ctx, workspace.Id, models.AllTaskStatuses)
+		tasks, err := database.GetTasks(ctx, workspace.Id, domain.AllTaskStatuses)
 		if err != nil {
 			return "", fmt.Errorf("Failed to get tasks for workspace %s: %v", workspace.Id, err)
 		}
@@ -276,7 +276,7 @@ func migrateSubflows(ctx context.Context, database *db.RedisDatabase, dryRun boo
 	return summary, nil
 }
 
-func addFlowActionChangeV2(ctx context.Context, flowAction models.FlowAction, database *db.RedisDatabase) error {
+func addFlowActionChangeV2(ctx context.Context, flowAction domain.FlowAction, database *db.RedisDatabase) error {
 	// v2 streamkey created temporarily, until we rename
 	streamKey := fmt.Sprintf("%s:%s:flow_action_changes_v2", flowAction.WorkspaceId, flowAction.FlowId)
 	actionParams, err := json.Marshal(flowAction.ActionParams)

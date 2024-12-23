@@ -16,9 +16,9 @@ import (
 	"sidekick/common"
 	"sidekick/db"
 	"sidekick/dev"
+	"sidekick/domain"
 	"sidekick/flow_event"
 	"sidekick/frontend"
-	"sidekick/models"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -230,8 +230,6 @@ func (ctrl *Controller) CancelFlowHandler(c *gin.Context) {
 	})
 }
 
-// GetMessagesHandler function has been removed as it is no longer needed
-
 type TaskRequest struct {
 	Id          string `json:"id"`
 	Title       string `json:"title"`
@@ -241,12 +239,6 @@ type TaskRequest struct {
 	Status      string `json:"status"`
 	FlowOptions map[string]interface{}
 }
-
-type CreateMessageRequest struct {
-	Content string `json:"content"`
-}
-
-// CreateMessage function has been removed as it is no longer needed
 
 func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
@@ -258,20 +250,20 @@ func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 
 	// default values for create only
 	if taskReq.Status == "" {
-		taskReq.Status = string(models.TaskStatusToDo)
+		taskReq.Status = string(domain.TaskStatusToDo)
 	}
 
 	// create-specific validation (TODO let's separate out the types for the create and update task request bodies)
-	if taskReq.Status != string(models.TaskStatusDrafting) && taskReq.Status != string(models.TaskStatusToDo) {
+	if taskReq.Status != string(domain.TaskStatusDrafting) && taskReq.Status != string(domain.TaskStatusToDo) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Creating a task with status set to anything other than 'drafting' or 'to_do' is not allowed"})
 		return
 	}
 
 	if taskReq.AgentType == "" {
-		if taskReq.Status == string(models.TaskStatusDrafting) || taskReq.Status == "" {
-			taskReq.AgentType = string(models.AgentTypeHuman)
+		if taskReq.Status == string(domain.TaskStatusDrafting) || taskReq.Status == "" {
+			taskReq.AgentType = string(domain.AgentTypeHuman)
 		} else {
-			taskReq.AgentType = string(models.AgentTypeLLM)
+			taskReq.AgentType = string(domain.AgentTypeLLM)
 		}
 	}
 
@@ -281,13 +273,13 @@ func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 		return
 	}
 
-	flowType, err := models.StringToFlowType(taskReq.FlowType)
+	flowType, err := domain.StringToFlowType(taskReq.FlowType)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	task := models.Task{
+	task := domain.Task{
 		WorkspaceId: workspaceId,
 		Id:          "task_" + ksuid.New().String(),
 		Created:     time.Now(),
@@ -306,11 +298,11 @@ func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 		return
 	}
 
-	if agentType == models.AgentTypeLLM {
+	if agentType == domain.AgentTypeLLM {
 		if err := ctrl.AgentHandleNewTask(c, &task); err != nil {
 			ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("Failed to handle new task: %w", err))
-			task.Status = models.TaskStatusFailed
-			task.AgentType = models.AgentTypeNone
+			task.Status = domain.TaskStatusFailed
+			task.AgentType = domain.AgentTypeNone
 			ctrl.dbAccessor.PersistTask(c, task)
 			return
 		}
@@ -321,8 +313,8 @@ func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 
 // API response object for a task
 type TaskResponse struct {
-	models.Task
-	Flows []models.Flow `json:"flows"`
+	domain.Task
+	Flows []domain.Flow `json:"flows"`
 }
 
 func (ctrl *Controller) GetTaskHandler(c *gin.Context) {
@@ -359,13 +351,13 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 		statusesStr = "to_do,drafting,blocked,in_progress,complete,failed,canceled"
 	}
 	statuses := strings.Split(statusesStr, ",")
-	taskStatuses := []models.TaskStatus{}
+	taskStatuses := []domain.TaskStatus{}
 	for _, status := range statuses {
-		taskStatus := models.TaskStatus(status)
+		taskStatus := domain.TaskStatus(status)
 		taskStatuses = append(taskStatuses, taskStatus)
 	}
 
-	var tasks []models.Task
+	var tasks []domain.Task
 	var err error
 
 	if len(taskStatuses) > 0 {
@@ -377,7 +369,7 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 	}
 
 	if tasks == nil {
-		tasks = []models.Task{}
+		tasks = []domain.Task{}
 	}
 
 	taskResponses := make([]TaskResponse, len(tasks))
@@ -398,7 +390,7 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 	})
 }
 
-func (ctrl *Controller) AgentHandleNewTask(ctx context.Context, task *models.Task) error {
+func (ctrl *Controller) AgentHandleNewTask(ctx context.Context, task *domain.Task) error {
 	devAgent := dev.DevAgent{
 		TemporalClient:    ctrl.temporalClient,
 		TemporalTaskQueue: ctrl.temporalTaskQueue,
@@ -410,7 +402,7 @@ func (ctrl *Controller) AgentHandleNewTask(ctx context.Context, task *models.Tas
 	}
 
 	// Update the task status to in progress
-	task.Status = models.TaskStatusInProgress
+	task.Status = domain.TaskStatusInProgress
 	err = ctrl.dbAccessor.PersistTask(ctx, *task)
 	if err != nil {
 		return err
@@ -432,7 +424,7 @@ func (ctrl *Controller) GetFlowActionsHandler(c *gin.Context) {
 		return
 	}
 	if flowActions == nil {
-		flowActions = []models.FlowAction{}
+		flowActions = []domain.FlowAction{}
 		_, err := ctrl.dbAccessor.GetWorkflow(c, workspaceId, flowId)
 		if err != nil {
 			if errors.Is(err, db.ErrNotFound) {
@@ -459,7 +451,7 @@ func (ctrl *Controller) GetFlowActionChangesHandler(c *gin.Context) {
 	go func() {
 		for event := range events {
 			switch event := event.(type) {
-			case models.FlowAction:
+			case domain.FlowAction:
 				select {
 				case <-clientGone:
 					// if the client has disconnected, stop sending events
@@ -534,7 +526,7 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 	} else if !flowAction.IsHumanAction {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "For now, only human actions can be completed via this endpoint"})
 		return
-	} else if flowAction.ActionStatus != models.ActionStatusPending {
+	} else if flowAction.ActionStatus != domain.ActionStatusPending {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Flow action status is not pending"})
 		return
 	}
@@ -581,7 +573,7 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 		return
 	}
 	flowAction.ActionResult = string(userResponseJson)
-	flowAction.ActionStatus = models.ActionStatusComplete
+	flowAction.ActionStatus = domain.ActionStatusComplete
 
 	if err := ctrl.dbAccessor.PersistFlowAction(ctx, flowAction); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update flow action"})
@@ -601,8 +593,8 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 	}
 
 	// Update the task status and agent type
-	task.Status = models.TaskStatusInProgress
-	task.AgentType = models.AgentTypeLLM
+	task.Status = domain.TaskStatusInProgress
+	task.AgentType = domain.AgentTypeLLM
 	if err := ctrl.dbAccessor.PersistTask(ctx, task); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update task"})
 		return
@@ -652,11 +644,11 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 		return
 	}
 
-	if task.Status == models.TaskStatusToDo && len(flows) == 0 {
+	if task.Status == domain.TaskStatusToDo && len(flows) == 0 {
 		if err := ctrl.AgentHandleNewTask(requestCtx, &task); err != nil {
 			ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("Failed to handle new task: %w", err))
-			task.Status = models.TaskStatusFailed
-			task.AgentType = models.AgentTypeNone
+			task.Status = domain.TaskStatusFailed
+			task.AgentType = domain.AgentTypeNone
 			ctrl.dbAccessor.PersistTask(c, task)
 			return
 		}
@@ -670,31 +662,31 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"task": task})
 }
 
-func validateTaskRequest(taskReq *TaskRequest) (models.AgentType, models.TaskStatus, error) {
-	var agentType models.AgentType
-	agentType, err := models.StringToAgentType(taskReq.AgentType)
+func validateTaskRequest(taskReq *TaskRequest) (domain.AgentType, domain.TaskStatus, error) {
+	var agentType domain.AgentType
+	agentType, err := domain.StringToAgentType(taskReq.AgentType)
 	if err != nil {
 		return "", "", err
 	}
 
 	// Check if the 'Status' field is set in the request
-	status, err := models.StringToTaskStatus(taskReq.Status)
+	status, err := domain.StringToTaskStatus(taskReq.Status)
 	if err != nil {
 		return "", "", err
 	}
 
 	// if agentType wasn't provided, override default when it's dependent on status
-	if taskReq.AgentType == "" && status == models.TaskStatusDrafting {
-		agentType = models.AgentTypeHuman
+	if taskReq.AgentType == "" && status == domain.TaskStatusDrafting {
+		agentType = domain.AgentTypeHuman
 	}
 
-	if status == models.TaskStatusDrafting {
-		if agentType == models.AgentTypeNone {
-			agentType = models.AgentTypeHuman
-		} else if agentType != models.AgentTypeHuman {
+	if status == domain.TaskStatusDrafting {
+		if agentType == domain.AgentTypeNone {
+			agentType = domain.AgentTypeHuman
+		} else if agentType != domain.AgentTypeHuman {
 			return "", "", errors.New("When task status is 'drafting', the agent type must be 'human'")
 		}
-	} else if agentType == models.AgentTypeNone && taskReq.Id == "" {
+	} else if agentType == domain.AgentTypeNone && taskReq.Id == "" {
 		return "", "", errors.New("Creating a task with agent type set to \"none\" is not allowed")
 	}
 

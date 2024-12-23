@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sidekick/domain"
 	"sidekick/llm"
-	"sidekick/models"
 	"sidekick/utils"
 )
 
@@ -44,7 +44,7 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult Tool
 	// NOTE: the function passed in very deliberately returns
 	// ToolCallResponseInfo since what's returned is what's tracked, and we want
 	// to the entire tool call response, not just the response string
-	return Track(actionCtx, func(flowAction models.FlowAction) (ToolCallResponseInfo, error) {
+	return Track(actionCtx, func(flowAction domain.FlowAction) (ToolCallResponseInfo, error) {
 		var response string
 		switch toolCall.Name {
 		case getRetrieveCodeContextTool().Name:

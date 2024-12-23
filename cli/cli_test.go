@@ -11,8 +11,8 @@ import (
 
 	"sidekick/common"
 	"sidekick/db"
+	"sidekick/domain"
 	"sidekick/llm"
-	"sidekick/models"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -337,7 +337,7 @@ func TestEnsureWorkspaceConfig(t *testing.T) {
 
 	// Test case 2: Update existing configuration
 	t.Run("Update existing configuration", func(t *testing.T) {
-		existingConfig := &models.WorkspaceConfig{
+		existingConfig := &domain.WorkspaceConfig{
 			LLM: common.LLMConfig{
 				Defaults: []common.ModelConfig{{Provider: "old-provider"}},
 			},

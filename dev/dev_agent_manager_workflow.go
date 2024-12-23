@@ -3,7 +3,7 @@ package dev
 import (
 	"fmt"
 	"path/filepath"
-	"sidekick/models"
+	"sidekick/domain"
 	"sidekick/utils"
 	"strings"
 	"time"
@@ -119,7 +119,7 @@ func handleRequestForUser(ctx workflow.Context, c workflow.ReceiveChannel, input
 	var req RequestForUser
 	c.Receive(ctx, &req)
 
-	var flow models.Flow
+	var flow domain.Flow
 	err := workflow.ExecuteActivity(ctx, ima.GetWorkflow, workspaceId, req.OriginWorkflowId).Get(ctx, &flow)
 	if err != nil {
 		log.Error("Failed to retrieve workflow record", "Error", err)
@@ -189,7 +189,7 @@ func handleWorkflowClosure(ctx workflow.Context, c workflow.ReceiveChannel, inpu
 
 	// Update the Flow status to completed
 	// FIXME execute activity instead
-	var flow models.Flow
+	var flow domain.Flow
 	err := workflow.ExecuteActivity(ctx, ima.GetWorkflow, input.WorkspaceId, closure.FlowId).Get(ctx, &flow)
 	if err != nil {
 		log.Error("Failed to get workflow", "Error", err)
@@ -250,19 +250,19 @@ func ksuidSideEffect(ctx workflow.Context) string {
 	return ksuidValue
 }
 
-func executeWorkRequest(ctx workflow.Context, workspaceId string, workRequest WorkRequest, ima *DevAgentManagerActivities) (models.Flow, error) {
+func executeWorkRequest(ctx workflow.Context, workspaceId string, workRequest WorkRequest, ima *DevAgentManagerActivities) (domain.Flow, error) {
 	// FIXME remove the argument and use the below commented out code instead
 	// var ima *DevAgentManagerActivities // use a nil struct pointer to call activities that are part of a structure
 
-	var workspace models.Workspace
+	var workspace domain.Workspace
 	err := workflow.ExecuteActivity(ctx, ima.FindWorkspaceById, workspaceId).Get(ctx, &workspace)
 	if err != nil {
-		return models.Flow{}, err
+		return domain.Flow{}, err
 	}
 
 	repoDir, err := filepath.Abs(workspace.LocalRepoDir) // TODO specify sandbox to run these things in instead later
 	if err != nil {
-		return models.Flow{}, err
+		return domain.Flow{}, err
 	}
 
 	log := workflow.GetLogger(ctx)
@@ -298,17 +298,17 @@ func executeWorkRequest(ctx workflow.Context, workspaceId string, workRequest Wo
 		})
 	} else {
 		log.Error("Invalid flow type", "FlowType", workRequest.FlowType)
-		return models.Flow{}, fmt.Errorf("Invalid flow type '%s'. Valid values are 'basic_dev' and 'planned_dev'", workRequest.FlowType)
+		return domain.Flow{}, fmt.Errorf("Invalid flow type '%s'. Valid values are 'basic_dev' and 'planned_dev'", workRequest.FlowType)
 	}
 
 	var we workflow.Execution
 	err = childWorkflowFuture.GetChildWorkflowExecution().Get(childCtx, &we)
 	if err != nil {
 		log.Error("Child workflow failed to start", "Error", err, "WorkflowType", workRequest.FlowType)
-		return models.Flow{}, err
+		return domain.Flow{}, err
 	}
 	log.Info("Child workflow started", "WorkflowId", we.ID)
-	flow := models.Flow{
+	flow := domain.Flow{
 		WorkspaceId: workspaceId,
 		Id:          we.ID,
 		Type:        workRequest.FlowType,
@@ -319,7 +319,7 @@ func executeWorkRequest(ctx workflow.Context, workspaceId string, workRequest Wo
 	err = workflow.ExecuteActivity(ctx, ima.PutWorkflow, flow).Get(ctx, nil)
 	if err != nil {
 		log.Error("Child workflow record failed to be persisted", "Error", err, "WorkflowId", we.ID)
-		return models.Flow{}, err
+		return domain.Flow{}, err
 	}
 	return flow, nil
 }
@@ -331,7 +331,7 @@ func handleWorkRequests(ctx workflow.Context, workspaceId string, ima *DevAgentM
 	// var ima *DevAgentManagerActivities // use a nil struct pointer to call activities that are part of a structure
 	err := workflow.SetUpdateHandlerWithOptions(
 		ctx, UpdateNameWorkRequest,
-		func(ctx workflow.Context, workRequest WorkRequest) (models.Flow, error) {
+		func(ctx workflow.Context, workRequest WorkRequest) (domain.Flow, error) {
 			*count++
 			ctx = setActivityOptions(ctx)
 			return executeWorkRequest(ctx, workspaceId, workRequest, ima)

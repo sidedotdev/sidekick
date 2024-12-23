@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"sidekick/common"
 	sidedb "sidekick/db"
-	"sidekick/models"
+	"sidekick/domain"
 	"testing"
 
 	"github.com/redis/go-redis/v9"
@@ -34,11 +34,11 @@ func TestGetWorkspaceConfig(t *testing.T) {
 	db := newTestRedisDatabase()
 	activities := Activities{DatabaseAccessor: db}
 
-	emptyConfig := models.WorkspaceConfig{}
+	emptyConfig := domain.WorkspaceConfig{}
 	testCases := []struct {
 		name            string
 		workspaceID     string
-		workspaceConfig models.WorkspaceConfig
+		workspaceConfig domain.WorkspaceConfig
 		mockError       error
 		expectError     bool
 		errorMsg        string
@@ -46,7 +46,7 @@ func TestGetWorkspaceConfig(t *testing.T) {
 		{
 			name:        "Successful retrieval",
 			workspaceID: "test-workspace-1",
-			workspaceConfig: models.WorkspaceConfig{
+			workspaceConfig: domain.WorkspaceConfig{
 				LLM:       common.LLMConfig{Defaults: []common.ModelConfig{{Provider: "openai"}}},
 				Embedding: common.EmbeddingConfig{Defaults: []common.ModelConfig{{Provider: "openai"}}},
 			},
@@ -63,7 +63,7 @@ func TestGetWorkspaceConfig(t *testing.T) {
 		{
 			name:        "Missing LLM config",
 			workspaceID: "test-workspace-3",
-			workspaceConfig: models.WorkspaceConfig{
+			workspaceConfig: domain.WorkspaceConfig{
 				Embedding: common.EmbeddingConfig{Defaults: []common.ModelConfig{{Provider: "openai"}}},
 			},
 			mockError:   nil,
@@ -73,7 +73,7 @@ func TestGetWorkspaceConfig(t *testing.T) {
 		{
 			name:        "Missing embedding config",
 			workspaceID: "test-workspace-4",
-			workspaceConfig: models.WorkspaceConfig{
+			workspaceConfig: domain.WorkspaceConfig{
 				LLM: common.LLMConfig{Defaults: []common.ModelConfig{{Provider: "openai"}}},
 			},
 			mockError:   nil,

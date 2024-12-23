@@ -5,7 +5,7 @@ import (
 
 	"sidekick/db"
 
-	"sidekick/models"
+	"sidekick/domain"
 )
 
 type FlowActivities struct {
@@ -13,10 +13,10 @@ type FlowActivities struct {
 	DatabaseAccessor *db.RedisDatabase
 }
 
-func (fa *FlowActivities) PersistFlowAction(ctx context.Context, flowAction models.FlowAction) error {
+func (fa *FlowActivities) PersistFlowAction(ctx context.Context, flowAction domain.FlowAction) error {
 	return fa.DatabaseAccessor.PersistFlowAction(ctx, flowAction)
 }
 
-func (fa *FlowActivities) PersistSubflow(ctx context.Context, subflow models.Subflow) error {
+func (fa *FlowActivities) PersistSubflow(ctx context.Context, subflow domain.Subflow) error {
 	return fa.DatabaseAccessor.PersistSubflow(ctx, subflow)
 }

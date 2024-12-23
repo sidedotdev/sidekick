@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sidekick/db"
-	"sidekick/models"
+	"sidekick/domain"
 	"strings"
 	"time"
 
@@ -49,14 +49,14 @@ func (ima *DevAgentManagerActivities) UpdateTaskForUserRequest(ctx context.Conte
 		return fmt.Errorf("Failed to retrieve task record for taskId %s: %v", taskId, err)
 	}
 
-	task.AgentType = models.AgentTypeHuman
-	task.Status = models.TaskStatusBlocked
+	task.AgentType = domain.AgentTypeHuman
+	task.Status = domain.TaskStatusBlocked
 	task.Updated = time.Now()
 
 	return ima.DatabaseAccessor.PersistTask(ctx, task)
 }
 
-func (ima *DevAgentManagerActivities) PutWorkflow(ctx context.Context, flow models.Flow) (err error) {
+func (ima *DevAgentManagerActivities) PutWorkflow(ctx context.Context, flow domain.Flow) (err error) {
 	err = ima.DatabaseAccessor.PersistWorkflow(ctx, flow)
 	return err
 }
@@ -68,14 +68,14 @@ func (ima *DevAgentManagerActivities) CompleteFlowParentTask(ctx context.Context
 		return err
 	}
 
-	var taskStatus models.TaskStatus
+	var taskStatus domain.TaskStatus
 	if flowStatus == "completed" {
-		taskStatus = models.TaskStatusComplete
+		taskStatus = domain.TaskStatusComplete
 	} else {
-		taskStatus = models.TaskStatusFailed
+		taskStatus = domain.TaskStatusFailed
 	}
 	task.Status = taskStatus
-	task.AgentType = models.AgentTypeNone
+	task.AgentType = domain.AgentTypeNone
 	err = ima.DatabaseAccessor.PersistTask(ctx, task)
 	if err != nil {
 		return err
@@ -93,19 +93,19 @@ func (ima *DevAgentManagerActivities) PassOnUserResponse(userResponse UserRespon
 	return err
 }
 
-func (ima *DevAgentManagerActivities) GetWorkflow(ctx context.Context, workspaceId, workflowId string) (message models.Flow, err error) {
+func (ima *DevAgentManagerActivities) GetWorkflow(ctx context.Context, workspaceId, workflowId string) (message domain.Flow, err error) {
 	log := activity.GetLogger(ctx)
 	flow, err := ima.DatabaseAccessor.GetWorkflow(ctx, workspaceId, workflowId)
 	if err != nil {
 		log.Error("Failed to retrieve workflow record", "Error", err)
-		return models.Flow{}, err
+		return domain.Flow{}, err
 	}
 	return flow, nil
 }
 
 func (ima *DevAgentManagerActivities) CreatePendingUserRequest(ctx context.Context, workspaceId string, req RequestForUser) error {
 	if req.FlowActionId == "" {
-		flowAction := models.FlowAction{
+		flowAction := domain.FlowAction{
 			WorkspaceId:      workspaceId,
 			Id:               "fa_" + ksuid.New().String(),
 			FlowId:           req.OriginWorkflowId,
@@ -114,7 +114,7 @@ func (ima *DevAgentManagerActivities) CreatePendingUserRequest(ctx context.Conte
 			SubflowName:      req.Subflow,
 			ActionType:       "user_request",
 			ActionParams:     req.ActionParams(),
-			ActionStatus:     models.ActionStatusPending,
+			ActionStatus:     domain.ActionStatusPending,
 			IsHumanAction:    true,
 			IsCallbackAction: true,
 		}
@@ -136,12 +136,12 @@ func (ima *DevAgentManagerActivities) CreatePendingUserRequest(ctx context.Conte
 	return nil
 }
 
-func (ima *DevAgentManagerActivities) FindWorkspaceById(ctx context.Context, workspaceId string) (models.Workspace, error) {
+func (ima *DevAgentManagerActivities) FindWorkspaceById(ctx context.Context, workspaceId string) (domain.Workspace, error) {
 	log := activity.GetLogger(ctx)
 	workspace, err := ima.DatabaseAccessor.GetWorkspace(ctx, workspaceId)
 	if err != nil {
 		log.Error("Failed to retrieve workspace record", "Error", err)
-		return models.Workspace{}, err
+		return domain.Workspace{}, err
 	}
 	return workspace, nil
 }

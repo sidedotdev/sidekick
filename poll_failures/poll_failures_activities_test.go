@@ -7,7 +7,7 @@ import (
 	"sidekick/utils"
 	"testing"
 
-	"sidekick/models"
+	"sidekick/domain"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -70,7 +70,7 @@ func TestUpdateTaskStatus(t *testing.T) {
 	activities, _ := setupTestEnvironment(t)
 
 	// Create a workflow record
-	workflow := &models.Flow{
+	workflow := &domain.Flow{
 		Id:          "workflow1",
 		WorkspaceId: "workspace1",
 		ParentId:    "task_1",
@@ -78,10 +78,10 @@ func TestUpdateTaskStatus(t *testing.T) {
 	err := activities.DatabaseAccessor.PersistWorkflow(context.Background(), *workflow)
 	assert.NoError(t, err)
 
-	task := &models.Task{
+	task := &domain.Task{
 		Id:          "task_1",
 		WorkspaceId: "workspace1",
-		Status:      models.TaskStatusToDo,
+		Status:      domain.TaskStatusToDo,
 	}
 	err = activities.DatabaseAccessor.PersistTask(context.Background(), *task)
 	assert.NoError(t, err)
@@ -99,6 +99,6 @@ func TestUpdateTaskStatus(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Assert the task status is updated to TaskStatusFailed
-	assert.Equal(t, models.TaskStatusFailed, updatedTask.Status)
-	assert.Equal(t, models.TaskStatusFailed, updatedTask.Status)
+	assert.Equal(t, domain.TaskStatusFailed, updatedTask.Status)
+	assert.Equal(t, domain.TaskStatusFailed, updatedTask.Status)
 }

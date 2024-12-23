@@ -2,34 +2,33 @@ package db
 
 import (
 	"context"
-	"sidekick/models"
+	"sidekick/domain"
 	"time"
 )
 
-// TODO remove topic & message methods and call callers (and their callers)
-// TODO split this into multiple interfaces: TaskService, KVService etc.
-// TODO separate out stream stuff (i.e. flow action changes, task changes) into separate interfaces
+// TODO split this into multiple interfaces: TaskService, TaskStreamService, FlowService, FlowStreamService etc. Leave CheckConnection, MGet and MSet in this interface.
+// then we'll retain the DatabaseAccessor interface as a composition of all the other interfaces
 type DatabaseAccessor interface {
 	CheckConnection(ctx context.Context) error
-	PersistWorkflow(ctx context.Context, flow models.Flow) error
-	GetWorkflow(ctx context.Context, workspaceId, flowId string) (models.Flow, error)
-	GetFlowsForTask(ctx context.Context, workspaceId, taskId string) ([]models.Flow, error)
-	PersistSubflow(ctx context.Context, subflow models.Subflow) error
-	GetSubflows(ctx context.Context, workspaceId, flowId string) ([]models.Subflow, error)
-	PersistTask(ctx context.Context, task models.Task) error
-	GetTask(ctx context.Context, workspaceId, taskId string) (models.Task, error)
-	GetTasks(ctx context.Context, workspaceId string, statuses []models.TaskStatus) ([]models.Task, error)
-	PersistFlowAction(ctx context.Context, flowAction models.FlowAction) error
-	GetFlowActions(ctx context.Context, workspaceId, flowId string) ([]models.FlowAction, error)
-	GetFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]models.FlowAction, string, error)
-	GetFlowAction(ctx context.Context, workspaceId, flowActionId string) (models.FlowAction, error)
-	GetTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]models.Task, string, error)
+	PersistWorkflow(ctx context.Context, flow domain.Flow) error
+	GetWorkflow(ctx context.Context, workspaceId, flowId string) (domain.Flow, error)
+	GetFlowsForTask(ctx context.Context, workspaceId, taskId string) ([]domain.Flow, error)
+	PersistSubflow(ctx context.Context, subflow domain.Subflow) error
+	GetSubflows(ctx context.Context, workspaceId, flowId string) ([]domain.Subflow, error)
+	PersistTask(ctx context.Context, task domain.Task) error
+	GetTask(ctx context.Context, workspaceId, taskId string) (domain.Task, error)
+	GetTasks(ctx context.Context, workspaceId string, statuses []domain.TaskStatus) ([]domain.Task, error)
+	PersistFlowAction(ctx context.Context, flowAction domain.FlowAction) error
+	GetFlowActions(ctx context.Context, workspaceId, flowId string) ([]domain.FlowAction, error)
+	GetFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]domain.FlowAction, string, error)
+	GetFlowAction(ctx context.Context, workspaceId, flowActionId string) (domain.FlowAction, error)
+	GetTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]domain.Task, string, error)
 	DeleteTask(ctx context.Context, workspaceId, taskId string) error
-	PersistWorkspace(ctx context.Context, workspace models.Workspace) error
-	GetWorkspace(ctx context.Context, workspaceId string) (models.Workspace, error)
-	GetAllWorkspaces(ctx context.Context) ([]models.Workspace, error)
-	GetWorkspaceConfig(ctx context.Context, workspaceId string) (models.WorkspaceConfig, error)
-	PersistWorkspaceConfig(ctx context.Context, workspaceId string, config models.WorkspaceConfig) error
+	PersistWorkspace(ctx context.Context, workspace domain.Workspace) error
+	GetWorkspace(ctx context.Context, workspaceId string) (domain.Workspace, error)
+	GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error)
+	GetWorkspaceConfig(ctx context.Context, workspaceId string) (domain.WorkspaceConfig, error)
+	PersistWorkspaceConfig(ctx context.Context, workspaceId string, config domain.WorkspaceConfig) error
 
 	// TODO add workspaceId to this
 	MGet(ctx context.Context, keys []string) ([]interface{}, error)

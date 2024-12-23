@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"sidekick/common"
 	"sidekick/db"
-	"sidekick/models"
+	"sidekick/domain"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -56,7 +56,7 @@ func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
 		return
 	}
 
-	workspace := models.Workspace{
+	workspace := domain.Workspace{
 		Id:           "ws_" + ksuid.New().String(),
 		Name:         workspaceReq.Name,
 		LocalRepoDir: workspaceReq.LocalRepoDir,
@@ -69,7 +69,7 @@ func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
 		return
 	}
 
-	workspaceConfig := models.WorkspaceConfig{
+	workspaceConfig := domain.WorkspaceConfig{
 		LLM: common.LLMConfig{
 			Defaults: workspaceReq.LLMConfig.Defaults,
 		},
@@ -202,7 +202,7 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 			return
 		}
 		// If the config is not found, create a new one
-		workspaceConfig = models.WorkspaceConfig{
+		workspaceConfig = domain.WorkspaceConfig{
 			LLM:       common.LLMConfig{},
 			Embedding: common.EmbeddingConfig{},
 		}
@@ -253,7 +253,7 @@ func (c *Controller) GetWorkspacesHandler(ctx *gin.Context) {
 		return
 	}
 	if workspaces == nil {
-		workspaces = []models.Workspace{}
+		workspaces = []domain.Workspace{}
 	}
 	// Format the workspace data into JSON and return it in the response
 	ctx.JSON(http.StatusOK, gin.H{"workspaces": workspaces})

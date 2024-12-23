@@ -8,7 +8,7 @@ import (
 	"log"
 
 	"os"
-	"sidekick/models"
+	"sidekick/domain"
 	"sidekick/utils"
 	"strings"
 	"time"
@@ -24,25 +24,25 @@ func (db RedisDatabase) CheckConnection(ctx context.Context) error {
 	return err
 }
 
-func (db RedisDatabase) GetWorkspaceConfig(ctx context.Context, workspaceId string) (models.WorkspaceConfig, error) {
+func (db RedisDatabase) GetWorkspaceConfig(ctx context.Context, workspaceId string) (domain.WorkspaceConfig, error) {
 	key := fmt.Sprintf("%s:workspace_config", workspaceId)
 	configJson, err := db.Client.Get(ctx, key).Result()
 	if err != nil {
 		if err == redis.Nil {
-			return models.WorkspaceConfig{}, ErrNotFound
+			return domain.WorkspaceConfig{}, ErrNotFound
 		}
-		return models.WorkspaceConfig{}, fmt.Errorf("failed to get workspace config from Redis: %w", err)
+		return domain.WorkspaceConfig{}, fmt.Errorf("failed to get workspace config from Redis: %w", err)
 	}
 
-	var config models.WorkspaceConfig
+	var config domain.WorkspaceConfig
 	if err := json.Unmarshal([]byte(configJson), &config); err != nil {
-		return models.WorkspaceConfig{}, fmt.Errorf("failed to unmarshal workspace config: %w", err)
+		return domain.WorkspaceConfig{}, fmt.Errorf("failed to unmarshal workspace config: %w", err)
 	}
 
 	return config, nil
 }
 
-func (db RedisDatabase) PersistWorkspaceConfig(ctx context.Context, workspaceId string, config models.WorkspaceConfig) error {
+func (db RedisDatabase) PersistWorkspaceConfig(ctx context.Context, workspaceId string, config domain.WorkspaceConfig) error {
 	if workspaceId == "" {
 		return fmt.Errorf("workspaceId cannot be empty")
 	}
@@ -65,7 +65,7 @@ type RedisDatabase struct {
 }
 
 // PersistSubflow stores a Subflow model in Redis and updates the flow's subflow set
-func (db RedisDatabase) PersistSubflow(ctx context.Context, subflow models.Subflow) error {
+func (db RedisDatabase) PersistSubflow(ctx context.Context, subflow domain.Subflow) error {
 	if subflow.WorkspaceId == "" || subflow.Id == "" || subflow.FlowId == "" {
 		return errors.New("workspaceId, subflow.Id, and subflow.FlowId cannot be empty")
 	}
@@ -88,7 +88,7 @@ func (db RedisDatabase) PersistSubflow(ctx context.Context, subflow models.Subfl
 }
 
 // GetSubflows retrieves all Subflow models for a given flow ID
-func (db RedisDatabase) GetSubflows(ctx context.Context, workspaceId, flowId string) ([]models.Subflow, error) {
+func (db RedisDatabase) GetSubflows(ctx context.Context, workspaceId, flowId string) ([]domain.Subflow, error) {
 	if workspaceId == "" || flowId == "" {
 		return nil, errors.New("workspaceId and flowId cannot be empty")
 	}
@@ -100,7 +100,7 @@ func (db RedisDatabase) GetSubflows(ctx context.Context, workspaceId, flowId str
 		return nil, fmt.Errorf("failed to retrieve subflow IDs: %w", err)
 	}
 
-	subflows := make([]models.Subflow, 0, len(subflowIds))
+	subflows := make([]domain.Subflow, 0, len(subflowIds))
 	for _, subflowId := range subflowIds {
 		subflowKey := fmt.Sprintf("%s:%s", workspaceId, subflowId)
 		subflowJSON, err := db.Client.Get(ctx, subflowKey).Result()
@@ -108,7 +108,7 @@ func (db RedisDatabase) GetSubflows(ctx context.Context, workspaceId, flowId str
 			return nil, fmt.Errorf("failed to retrieve subflow %s: %w", subflowId, err)
 		}
 
-		var subflow models.Subflow
+		var subflow domain.Subflow
 		if err := json.Unmarshal([]byte(subflowJSON), &subflow); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal subflow %s: %w", subflowId, err)
 		}
@@ -131,7 +131,7 @@ func NewRedisDatabase() *RedisDatabase {
 	return &RedisDatabase{Client: rdb}
 }
 
-func (db RedisDatabase) PersistWorkflow(ctx context.Context, flow models.Flow) error {
+func (db RedisDatabase) PersistWorkflow(ctx context.Context, flow domain.Flow) error {
 	workflowJson, err := json.Marshal(flow)
 	if err != nil {
 		log.Println("Failed to convert topic record to JSON: ", err)
@@ -156,12 +156,12 @@ func (db RedisDatabase) PersistWorkflow(ctx context.Context, flow models.Flow) e
 	return nil
 }
 
-func (db RedisDatabase) GetFlowsForTask(ctx context.Context, workspaceId, taskId string) ([]models.Flow, error) {
+func (db RedisDatabase) GetFlowsForTask(ctx context.Context, workspaceId, taskId string) ([]domain.Flow, error) {
 	parentId := taskId
 	return db.GetChildFlows(ctx, workspaceId, parentId)
 }
 
-func (db RedisDatabase) GetChildFlows(ctx context.Context, workspaceId, parentId string) ([]models.Flow, error) {
+func (db RedisDatabase) GetChildFlows(ctx context.Context, workspaceId, parentId string) ([]domain.Flow, error) {
 	flowsKey := fmt.Sprintf("%s:%s:flows", workspaceId, parentId)
 	flowIds, err := db.Client.SMembers(ctx, flowsKey).Result()
 	if err != nil {
@@ -171,7 +171,7 @@ func (db RedisDatabase) GetChildFlows(ctx context.Context, workspaceId, parentId
 		return nil, fmt.Errorf("failed to get flow ids from parentId=%s set: %w", parentId, err)
 	}
 
-	flows := make([]models.Flow, 0)
+	flows := make([]domain.Flow, 0)
 	for _, flowId := range flowIds {
 		flow, err := db.GetWorkflow(ctx, workspaceId, flowId)
 		if err != nil {
@@ -183,21 +183,21 @@ func (db RedisDatabase) GetChildFlows(ctx context.Context, workspaceId, parentId
 	return flows, nil
 }
 
-func (db RedisDatabase) GetWorkflow(ctx context.Context, workspaceId, flowId string) (models.Flow, error) {
+func (db RedisDatabase) GetWorkflow(ctx context.Context, workspaceId, flowId string) (domain.Flow, error) {
 	workflowKey := fmt.Sprintf("%s:%s", workspaceId, flowId)
 	workflowJson, err := db.Client.Get(ctx, workflowKey).Result()
 	if err != nil {
 		if err == redis.Nil {
-			return models.Flow{}, ErrNotFound
+			return domain.Flow{}, ErrNotFound
 		}
 		log.Printf("Failed to get workflow record: %v\n", err)
-		return models.Flow{}, err
+		return domain.Flow{}, err
 	}
 
-	var flow models.Flow
+	var flow domain.Flow
 	if err := json.Unmarshal([]byte(workflowJson), &flow); err != nil {
 		log.Println("Failed to unmarshal workflow record: ", err)
-		return models.Flow{}, err
+		return domain.Flow{}, err
 	}
 
 	return flow, nil
@@ -252,7 +252,7 @@ func (db RedisDatabase) DeleteTask(ctx context.Context, workspaceId, taskId stri
 	return nil
 }
 
-func (db RedisDatabase) PersistTask(ctx context.Context, task models.Task) error {
+func (db RedisDatabase) PersistTask(ctx context.Context, task domain.Task) error {
 	taskJson, err := json.Marshal(task)
 	if err != nil {
 		log.Println("Failed to convert task record to JSON: ", err)
@@ -268,7 +268,7 @@ func (db RedisDatabase) PersistTask(ctx context.Context, task models.Task) error
 	}
 
 	// Add the task id to the appropriate set based on the task status, and remove from others
-	for _, status := range []models.TaskStatus{models.TaskStatusDrafting, models.TaskStatusToDo, models.TaskStatusInProgress, models.TaskStatusComplete, models.TaskStatusBlocked, models.TaskStatusFailed, models.TaskStatusCanceled} {
+	for _, status := range []domain.TaskStatus{domain.TaskStatusDrafting, domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
 		statusKey := fmt.Sprintf("%s:kanban:%s", task.WorkspaceId, status)
 		if status == task.Status {
 			err = db.Client.SAdd(ctx, statusKey, task.Id).Err()
@@ -285,6 +285,7 @@ func (db RedisDatabase) PersistTask(ctx context.Context, task models.Task) error
 		}
 	}
 
+	// FIXME move this to the caller to orchestrate between the storage and stream services
 	err = db.AddTaskChange(ctx, task)
 	if err != nil {
 		log.Println("Failed to add task change: ", err)
@@ -294,7 +295,7 @@ func (db RedisDatabase) PersistTask(ctx context.Context, task models.Task) error
 	return nil
 }
 
-func (db RedisDatabase) GetTasks(ctx context.Context, workspaceId string, statuses []models.TaskStatus) ([]models.Task, error) {
+func (db RedisDatabase) GetTasks(ctx context.Context, workspaceId string, statuses []domain.TaskStatus) ([]domain.Task, error) {
 	var taskIds []string
 	for _, status := range statuses {
 		statusKey := fmt.Sprintf("%s:kanban:%s", workspaceId, status)
@@ -325,9 +326,9 @@ func (db RedisDatabase) GetTasks(ctx context.Context, workspaceId string, status
 		}
 	}
 
-	var tasks []models.Task
+	var tasks []domain.Task
 	for _, taskJson := range taskJsons {
-		var task models.Task
+		var task domain.Task
 		err = json.Unmarshal([]byte(taskJson.(string)), &task)
 		if err != nil {
 			log.Println("Failed to unmarshal task: ", err)
@@ -339,7 +340,7 @@ func (db RedisDatabase) GetTasks(ctx context.Context, workspaceId string, status
 	return tasks, nil
 }
 
-func (db RedisDatabase) PersistFlowAction(ctx context.Context, flowAction models.FlowAction) error {
+func (db RedisDatabase) PersistFlowAction(ctx context.Context, flowAction domain.FlowAction) error {
 	if flowAction.Id == "" {
 		return fmt.Errorf("missing Id field in FlowAction model")
 	}
@@ -371,6 +372,7 @@ func (db RedisDatabase) PersistFlowAction(ctx context.Context, flowAction models
 		return err
 	}
 
+	// FIXME move this to the caller to orchestrate between the storage and stream services
 	db.AddFlowActionChange(ctx, flowAction)
 
 	// If the flow action is new, append its ID to a list of flow action IDs
@@ -387,7 +389,8 @@ func (db RedisDatabase) PersistFlowAction(ctx context.Context, flowAction models
 }
 
 // AddFlowActionChange persists a flow action to the changes stream.
-func (db RedisDatabase) AddFlowActionChange(ctx context.Context, flowAction models.FlowAction) error {
+// TODO /gen add to the FlowStreamService interface
+func (db RedisDatabase) AddFlowActionChange(ctx context.Context, flowAction domain.FlowAction) error {
 	streamKey := fmt.Sprintf("%s:%s:flow_action_changes", flowAction.WorkspaceId, flowAction.FlowId)
 	actionParams, err := json.Marshal(flowAction.ActionParams)
 	if err != nil {
@@ -413,7 +416,7 @@ func (db RedisDatabase) AddFlowActionChange(ctx context.Context, flowAction mode
 	return nil
 }
 
-func (db RedisDatabase) GetFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]models.FlowAction, string, error) {
+func (db RedisDatabase) GetFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]domain.FlowAction, string, error) {
 	streamKey := fmt.Sprintf("%s:%s:flow_action_changes", workspaceId, flowId)
 	if streamMessageStartId == "" {
 		streamMessageStartId = "0"
@@ -438,7 +441,7 @@ func (db RedisDatabase) GetFlowActionChanges(ctx context.Context, workspaceId, f
 
 	// TODO use db.MGet to get all the flow actions at once initially before
 	// switching to a stream
-	var flowActions []models.FlowAction
+	var flowActions []domain.FlowAction
 	for i, message := range streams[0].Messages {
 		// TODO /gen/req/planned migrate to using "flowAction" key set to
 		// flowAction, plus "end" key set to true
@@ -471,7 +474,7 @@ func (db RedisDatabase) GetFlowActionChanges(ctx context.Context, workspaceId, f
 			}
 			created, _ := time.Parse(message.Values["created"].(string), time.RFC3339)
 			updated, _ := time.Parse(message.Values["updated"].(string), time.RFC3339)
-			flowActions = append(flowActions, models.FlowAction{
+			flowActions = append(flowActions, domain.FlowAction{
 				WorkspaceId:        workspaceId,
 				FlowId:             flowId,
 				SubflowId:          subflowId,
@@ -498,7 +501,7 @@ func (db RedisDatabase) GetFlowActionChanges(ctx context.Context, workspaceId, f
 	return flowActions, lastMessageId, nil
 }
 
-func (db RedisDatabase) GetFlowActions(ctx context.Context, workspaceId, flowId string) ([]models.FlowAction, error) {
+func (db RedisDatabase) GetFlowActions(ctx context.Context, workspaceId, flowId string) ([]domain.FlowAction, error) {
 	listKey := fmt.Sprintf("%s:%s:flow_action_ids", workspaceId, flowId)
 	ids, err := db.Client.LRange(ctx, listKey, 0, -1).Result()
 	if err != nil {
@@ -509,7 +512,7 @@ func (db RedisDatabase) GetFlowActions(ctx context.Context, workspaceId, flowId 
 		return nil, err
 	}
 
-	var flowActions []models.FlowAction
+	var flowActions []domain.FlowAction
 	for _, id := range ids {
 		key := fmt.Sprintf("%s:%s", workspaceId, id)
 		flowActionJson, err := db.Client.Get(ctx, key).Result()
@@ -518,7 +521,7 @@ func (db RedisDatabase) GetFlowActions(ctx context.Context, workspaceId, flowId 
 			return nil, err
 		}
 
-		var flowAction models.FlowAction
+		var flowAction domain.FlowAction
 		err = json.Unmarshal([]byte(flowActionJson), &flowAction)
 		if err != nil {
 			log.Println("Failed to unmarshal flow action JSON: ", err)
@@ -531,42 +534,42 @@ func (db RedisDatabase) GetFlowActions(ctx context.Context, workspaceId, flowId 
 	return flowActions, nil
 }
 
-func (db RedisDatabase) GetFlowAction(ctx context.Context, workspaceId, flowActionId string) (models.FlowAction, error) {
+func (db RedisDatabase) GetFlowAction(ctx context.Context, workspaceId, flowActionId string) (domain.FlowAction, error) {
 	key := fmt.Sprintf("%s:%s", workspaceId, flowActionId)
 	val, err := db.Client.Get(ctx, key).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			return models.FlowAction{}, ErrNotFound
+			return domain.FlowAction{}, ErrNotFound
 		}
-		return models.FlowAction{}, err
+		return domain.FlowAction{}, err
 	}
 
-	var flowAction models.FlowAction
+	var flowAction domain.FlowAction
 	err = json.Unmarshal([]byte(val), &flowAction)
 	if err != nil {
-		return models.FlowAction{}, err
+		return domain.FlowAction{}, err
 	}
 
 	return flowAction, nil
 }
 
-func (db RedisDatabase) GetTask(ctx context.Context, workspaceId string, taskId string) (models.Task, error) {
+func (db RedisDatabase) GetTask(ctx context.Context, workspaceId string, taskId string) (domain.Task, error) {
 	key := fmt.Sprintf("%s:%s", workspaceId, taskId)
 	taskRecord, err := db.Client.Get(ctx, key).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			return models.Task{}, ErrNotFound
+			return domain.Task{}, ErrNotFound
 		}
-		return models.Task{}, err
+		return domain.Task{}, err
 	}
-	var task models.Task
+	var task domain.Task
 	err = json.Unmarshal([]byte(taskRecord), &task)
 	if err != nil {
-		return models.Task{}, err
+		return domain.Task{}, err
 	}
 	return task, nil
 }
-func (db RedisDatabase) PersistWorkspace(ctx context.Context, workspace models.Workspace) error {
+func (db RedisDatabase) PersistWorkspace(ctx context.Context, workspace domain.Workspace) error {
 	workspaceJson, err := json.Marshal(workspace)
 	if err != nil {
 		log.Println("Failed to convert workspace to JSON: ", err)
@@ -591,25 +594,25 @@ func (db RedisDatabase) PersistWorkspace(ctx context.Context, workspace models.W
 
 	return nil
 }
-func (db RedisDatabase) GetWorkspace(ctx context.Context, workspaceId string) (models.Workspace, error) {
+func (db RedisDatabase) GetWorkspace(ctx context.Context, workspaceId string) (domain.Workspace, error) {
 	key := fmt.Sprintf("workspace:%s", workspaceId)
 	workspaceJson, err := db.Client.Get(ctx, key).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			return models.Workspace{}, ErrNotFound
+			return domain.Workspace{}, ErrNotFound
 		}
-		return models.Workspace{}, fmt.Errorf("failed to get workspace from Redis: %w", err)
+		return domain.Workspace{}, fmt.Errorf("failed to get workspace from Redis: %w", err)
 	}
-	var workspace models.Workspace
+	var workspace domain.Workspace
 	err = json.Unmarshal([]byte(workspaceJson), &workspace)
 	if err != nil {
-		return models.Workspace{}, fmt.Errorf("failed to unmarshal workspace JSON: %w", err)
+		return domain.Workspace{}, fmt.Errorf("failed to unmarshal workspace JSON: %w", err)
 	}
 	return workspace, nil
 }
 
-func (db RedisDatabase) GetAllWorkspaces(ctx context.Context) ([]models.Workspace, error) {
-	var workspaces []models.Workspace
+func (db RedisDatabase) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error) {
+	var workspaces []domain.Workspace
 
 	// Retrieve all workspace IDs from the Redis sorted set
 	workspaceNameIds, err := db.Client.ZRange(ctx, "global:workspaces", 0, -1).Result()
@@ -624,7 +627,7 @@ func (db RedisDatabase) GetAllWorkspaces(ctx context.Context) ([]models.Workspac
 		if err != nil {
 			return nil, fmt.Errorf("failed to get workspace data for ID %s: %w", id, err)
 		}
-		var workspace models.Workspace
+		var workspace domain.Workspace
 		err = json.Unmarshal([]byte(workspaceJson), &workspace)
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal workspace JSON: %w", err)
@@ -666,7 +669,8 @@ func (db RedisDatabase) DeleteWorkspace(ctx context.Context, workspaceId string)
 }
 
 // AddTaskChange persists a task to the changes stream.
-func (db RedisDatabase) AddTaskChange(ctx context.Context, task models.Task) error {
+// TODO /gen add to the TaskStreamService interface
+func (db RedisDatabase) AddTaskChange(ctx context.Context, task domain.Task) error {
 	streamKey := fmt.Sprintf("%s:task_changes", task.WorkspaceId)
 	taskMap, err := toMap(task)
 	if err != nil {
@@ -689,7 +693,7 @@ func (db RedisDatabase) AddTaskChange(ctx context.Context, task models.Task) err
 	return nil
 }
 
-func (db RedisDatabase) GetTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]models.Task, string, error) {
+func (db RedisDatabase) GetTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]domain.Task, string, error) {
 	streamKey := fmt.Sprintf("%s:task_changes", workspaceId)
 	if streamMessageStartId == "" {
 		streamMessageStartId = "$"
@@ -709,9 +713,9 @@ func (db RedisDatabase) GetTaskChanges(ctx context.Context, workspaceId, streamM
 		return nil, "", fmt.Errorf("no streams returned for stream key %s", streamKey)
 	}
 
-	var tasks []models.Task
+	var tasks []domain.Task
 	for _, message := range streams[0].Messages {
-		var task models.Task
+		var task domain.Task
 		utils.Transcode(message.Values, &task)
 		tasks = append(tasks, task)
 	}

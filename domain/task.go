@@ -1,0 +1,102 @@
+package domain
+
+import (
+	"fmt"
+	"time"
+)
+
+type LinkType = string
+
+const (
+	LinkTypeBlocks    LinkType = "blocks"
+	LinkTypeBlockedBy LinkType = "blocked_by"
+	LinkTypeParent    LinkType = "parent"
+	LinkTypeChild     LinkType = "child"
+)
+
+type TaskLink struct {
+	LinkType     string `json:"linkType"`
+	TargetTaskId string `json:"targetTaskId"`
+}
+
+type TaskStatus string
+
+const (
+	TaskStatusDrafting   TaskStatus = "drafting"
+	TaskStatusToDo       TaskStatus = "to_do"
+	TaskStatusInProgress TaskStatus = "in_progress"
+	TaskStatusBlocked    TaskStatus = "blocked"
+	TaskStatusComplete   TaskStatus = "complete"
+	TaskStatusFailed     TaskStatus = "failed"
+	TaskStatusCanceled   TaskStatus = "canceled"
+)
+
+var AllTaskStatuses []TaskStatus = []TaskStatus{
+	TaskStatusDrafting,
+	TaskStatusToDo,
+	TaskStatusInProgress,
+	TaskStatusBlocked,
+	TaskStatusComplete,
+	TaskStatusFailed,
+	TaskStatusCanceled,
+}
+
+func StringToTaskStatus(s string) (TaskStatus, error) {
+	switch s {
+	case "to_do":
+		return TaskStatusToDo, nil
+	case "in_progress":
+		return TaskStatusInProgress, nil
+	case "complete":
+		return TaskStatusComplete, nil
+	case "drafting":
+		return TaskStatusDrafting, nil
+	case "blocked":
+		return TaskStatusBlocked, nil
+	case "failed":
+		return TaskStatusFailed, nil
+	case "canceled":
+		return TaskStatusCanceled, nil
+	default:
+		return "", fmt.Errorf("invalid TaskStatus: \"%s\"", s)
+	}
+}
+
+// Task represents the structure of tasks to be stored in the database.
+type Task struct {
+	WorkspaceId string                 `json:"workspaceId"`
+	Id          string                 `json:"id"`
+	Title       string                 `json:"title"`
+	Description string                 `json:"description"`
+	Status      TaskStatus             `json:"status"`
+	Links       []TaskLink             `json:"links,omitempty"`
+	AgentType   AgentType              `json:"agentType"`
+	FlowType    FlowType               `json:"flowType"`
+	Created     time.Time              `json:"created"`
+	Updated     time.Time              `json:"updated"`
+	FlowOptions map[string]interface{} `json:"flowOptions,omitempty"`
+}
+
+type AgentType string
+
+const (
+	AgentTypeHuman AgentType = "human"
+	AgentTypeLLM   AgentType = "llm"
+	AgentTypeNone  AgentType = "none"
+)
+
+func StringToAgentType(s string) (AgentType, error) {
+	switch s {
+	case "human":
+		return AgentTypeHuman, nil
+	case "llm":
+		return AgentTypeLLM, nil
+	case "none":
+		return AgentTypeNone, nil
+	case "":
+		// default
+		return AgentTypeLLM, nil
+	default:
+		return "", fmt.Errorf("Invalid agent type: \"%s\"", s)
+	}
+}

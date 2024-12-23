@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sidekick/domain"
 	"sidekick/llm"
-	"sidekick/models"
 	"strings"
 	"time"
 
@@ -33,10 +33,10 @@ func (ia *DevAgent) getFirstExecutionRunID(ctx context.Context, workflowID strin
 	return firstExecutionRunID
 }
 
-func (ia *DevAgent) workRequest(ctx context.Context, parentId, request, flowType string, flowOptions map[string]interface{}) (models.Flow, error) {
+func (ia *DevAgent) workRequest(ctx context.Context, parentId, request, flowType string, flowOptions map[string]interface{}) (domain.Flow, error) {
 	devManagerWorkflowId, err := ia.findOrStartDevAgentManagerWorkflow(ctx, ia.WorkspaceId)
 	if err != nil {
-		return models.Flow{}, fmt.Errorf("error finding or starting dev manager workflow: %w", err)
+		return domain.Flow{}, fmt.Errorf("error finding or starting dev manager workflow: %w", err)
 	}
 
 	workRequest := WorkRequest{ParentId: parentId, Input: request, FlowType: flowType, FlowOptions: flowOptions}
@@ -57,13 +57,13 @@ func (ia *DevAgent) workRequest(ctx context.Context, parentId, request, flowType
 	}
 	updateHandle, err := ia.TemporalClient.UpdateWorkflow(ctx, updateRequest)
 	if err != nil {
-		return models.Flow{}, fmt.Errorf("error issuing Update request: %w\n%v", err, updateRequest)
+		return domain.Flow{}, fmt.Errorf("error issuing Update request: %w\n%v", err, updateRequest)
 	}
 
-	var flow models.Flow
+	var flow domain.Flow
 	err = updateHandle.Get(ctx, &flow)
 	if err != nil {
-		return models.Flow{}, fmt.Errorf("update encountered an error: %w", err)
+		return domain.Flow{}, fmt.Errorf("update encountered an error: %w", err)
 	}
 	return flow, nil
 }
@@ -119,7 +119,7 @@ type ActionData struct {
 	Details    string `json:"details,omitempty"`
 }
 
-func (ia DevAgent) HandleNewTask(ctx context.Context, task *models.Task) error {
+func (ia DevAgent) HandleNewTask(ctx context.Context, task *domain.Task) error {
 	// perform a work request where the parentId is the taskId and the task description is the request
 	_, err := ia.workRequest(ctx, task.Id, task.Description, task.FlowType, task.FlowOptions)
 	if err != nil {

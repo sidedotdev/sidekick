@@ -14,8 +14,8 @@ import (
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/db"
+	"sidekick/domain"
 	"sidekick/llm"
-	"sidekick/models"
 	"strings"
 	"syscall"
 	"time"
@@ -122,9 +122,9 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	return nil
 }
 
-func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspaceID string, currentConfig *models.WorkspaceConfig, llmProviders, embeddingProviders []string) error {
+func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspaceID string, currentConfig *domain.WorkspaceConfig, llmProviders, embeddingProviders []string) error {
 	if currentConfig == nil {
-		currentConfig = &models.WorkspaceConfig{}
+		currentConfig = &domain.WorkspaceConfig{}
 	}
 
 	// Set up LLM configuration
@@ -157,7 +157,7 @@ func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspac
 // FIXME make a call to an API instead of directly using a database. this may
 // require running the server locally as a daemon if not already running or
 // configured to be remote
-func (h *InitCommandHandler) findOrCreateWorkspace(ctx context.Context, workspaceName, repoDir string) (*models.Workspace, error) {
+func (h *InitCommandHandler) findOrCreateWorkspace(ctx context.Context, workspaceName, repoDir string) (*domain.Workspace, error) {
 	workspaces, err := h.dbAccessor.GetAllWorkspaces(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving workspaces: %w", err)
@@ -169,7 +169,7 @@ func (h *InitCommandHandler) findOrCreateWorkspace(ctx context.Context, workspac
 		}
 	}
 
-	workspace := models.Workspace{
+	workspace := domain.Workspace{
 		Name:         workspaceName,
 		Id:           "ws_" + ksuid.New().String(),
 		LocalRepoDir: repoDir,

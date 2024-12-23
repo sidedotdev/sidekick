@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sidekick/db"
-	"sidekick/models"
+	"sidekick/domain"
 	"strings"
 
 	workflowApi "go.temporal.io/api/workflow/v1"
@@ -58,10 +58,10 @@ func (a *PollFailuresActivities) UpdateTaskStatus(ctx context.Context, input Upd
 		return err
 	}
 
-	if task.Status == models.TaskStatusFailed {
+	if task.Status == domain.TaskStatusFailed {
 		return nil // idempotency
 	}
 
-	task.Status = models.TaskStatusFailed
+	task.Status = domain.TaskStatusFailed
 	return a.DatabaseAccessor.PersistTask(ctx, task)
 }

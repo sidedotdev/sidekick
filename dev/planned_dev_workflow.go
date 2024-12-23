@@ -3,7 +3,7 @@ package dev
 import (
 	"fmt"
 	"os"
-	"sidekick/models"
+	"sidekick/domain"
 	"sidekick/utils"
 
 	"go.temporal.io/sdk/workflow"
@@ -106,7 +106,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 }
 
 func EnsureTestsPassAfterDevPlanExecuted(dCtx DevContext, input PlannedDevInput, planExec DevPlanExecution) error {
-	return RunSubflowWithoutResult(dCtx, "Finalize", func(_ models.Subflow) error {
+	return RunSubflowWithoutResult(dCtx, "Finalize", func(_ domain.Subflow) error {
 		return ensureTestsPassAfterDevPlanExecutedSubflow(dCtx, input, planExec)
 	})
 }

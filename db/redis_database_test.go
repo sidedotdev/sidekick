@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sidekick/common"
-	"sidekick/models"
+	"sidekick/domain"
 	"testing"
 	"time"
 
@@ -40,21 +40,21 @@ func TestGetTasks(t *testing.T) {
 	db := newTestRedisDatabase()
 	ctx := context.Background()
 
-	taskRecords := []models.Task{
+	taskRecords := []domain.Task{
 		{
 			WorkspaceId: "TEST_WORKSPACE_ID",
 			Id:          "task_" + ksuid.New().String(),
-			Status:      models.TaskStatusToDo,
+			Status:      domain.TaskStatusToDo,
 		},
 		{
 			WorkspaceId: "TEST_WORKSPACE_ID",
 			Id:          "task_" + ksuid.New().String(),
-			Status:      models.TaskStatusInProgress,
+			Status:      domain.TaskStatusInProgress,
 		},
 		{
 			WorkspaceId: "TEST_WORKSPACE_ID",
 			Id:          "task_" + ksuid.New().String(),
-			Status:      models.TaskStatusBlocked,
+			Status:      domain.TaskStatusBlocked,
 		},
 	}
 
@@ -64,37 +64,37 @@ func TestGetTasks(t *testing.T) {
 	}
 
 	// Call GetTasks with different combinations of statuses
-	statuses := []models.TaskStatus{taskRecords[0].Status, taskRecords[1].Status}
+	statuses := []domain.TaskStatus{taskRecords[0].Status, taskRecords[1].Status}
 	retrievedTasks, err := db.GetTasks(ctx, "TEST_WORKSPACE_ID", statuses)
 	assert.Nil(t, err)
 	assert.ElementsMatch(t, taskRecords[:2], retrievedTasks)
 
-	statuses = []models.TaskStatus{taskRecords[0].Status, taskRecords[2].Status}
+	statuses = []domain.TaskStatus{taskRecords[0].Status, taskRecords[2].Status}
 	retrievedTasks, err = db.GetTasks(ctx, "TEST_WORKSPACE_ID", statuses)
 	assert.Nil(t, err)
-	assert.ElementsMatch(t, []models.Task{taskRecords[0], taskRecords[2]}, retrievedTasks)
+	assert.ElementsMatch(t, []domain.Task{taskRecords[0], taskRecords[2]}, retrievedTasks)
 
-	statuses = []models.TaskStatus{taskRecords[2].Status}
+	statuses = []domain.TaskStatus{taskRecords[2].Status}
 	retrievedTasks, err = db.GetTasks(ctx, "TEST_WORKSPACE_ID", statuses)
 	assert.Nil(t, err)
-	assert.ElementsMatch(t, []models.Task{taskRecords[2]}, retrievedTasks)
+	assert.ElementsMatch(t, []domain.Task{taskRecords[2]}, retrievedTasks)
 
 	// we should return no tasks in the following case
-	statuses = []models.TaskStatus{"statusWithoutAnyTasks"}
+	statuses = []domain.TaskStatus{"statusWithoutAnyTasks"}
 	retrievedTasks, err = db.GetTasks(ctx, "TEST_WORKSPACE_ID", statuses)
 	assert.Nil(t, err)
-	assert.ElementsMatch(t, []models.Task{}, retrievedTasks)
+	assert.ElementsMatch(t, []domain.Task{}, retrievedTasks)
 }
 
 func TestPersistFlowAction(t *testing.T) {
 	ctx := context.Background()
 	db := newTestRedisDatabase()
-	flowAction := models.FlowAction{
+	flowAction := domain.FlowAction{
 		WorkspaceId:  "TEST_WORKSPACE_ID",
 		FlowId:       "flow_" + ksuid.New().String(),
 		Id:           "flow_action_" + ksuid.New().String(),
 		ActionType:   "testActionType",
-		ActionStatus: models.ActionStatusPending,
+		ActionStatus: domain.ActionStatusPending,
 		ActionParams: map[string]interface{}{
 			"key": "value",
 		},
@@ -124,7 +124,7 @@ func TestPersistFlowAction(t *testing.T) {
 func TestPersistFlowAction_MissingId(t *testing.T) {
 	ctx := context.Background()
 	db := newTestRedisDatabase()
-	flowAction := models.FlowAction{
+	flowAction := domain.FlowAction{
 		WorkspaceId: "TEST_WORKSPACE_ID",
 		FlowId:      "flow_" + ksuid.New().String(),
 	}
@@ -136,7 +136,7 @@ func TestPersistFlowAction_MissingId(t *testing.T) {
 func TestPersistFlowAction_MissingFlowId(t *testing.T) {
 	ctx := context.Background()
 	db := newTestRedisDatabase()
-	flowAction := models.FlowAction{
+	flowAction := domain.FlowAction{
 		Id:          "id_" + ksuid.New().String(),
 		WorkspaceId: "TEST_WORKSPACE_ID",
 	}
@@ -148,7 +148,7 @@ func TestPersistFlowAction_MissingFlowId(t *testing.T) {
 func TestPersistFlowAction_MissingWorkspaceId(t *testing.T) {
 	ctx := context.Background()
 	db := newTestRedisDatabase()
-	flowAction := models.FlowAction{
+	flowAction := domain.FlowAction{
 		Id:     "id_" + ksuid.New().String(),
 		FlowId: "flow_" + ksuid.New().String(),
 	}
@@ -160,13 +160,13 @@ func TestPersistFlowAction_MissingWorkspaceId(t *testing.T) {
 func TestGetFlowActions(t *testing.T) {
 	ctx := context.Background()
 	db := newTestRedisDatabase()
-	flowAction1 := models.FlowAction{
+	flowAction1 := domain.FlowAction{
 		WorkspaceId: "TEST_WORKSPACE_ID",
 		FlowId:      "test-flow-id",
 		Id:          "test-id1z",
 		// other fields...
 	}
-	flowAction2 := models.FlowAction{
+	flowAction2 := domain.FlowAction{
 		WorkspaceId: "TEST_WORKSPACE_ID",
 		FlowId:      "test-flow-id",
 		Id:          "test-id1a",
@@ -191,12 +191,12 @@ func TestGetFlowActions(t *testing.T) {
 func TestPersistTask(t *testing.T) {
 	db := newTestRedisDatabase()
 
-	taskRecord := models.Task{
+	taskRecord := domain.Task{
 		WorkspaceId: "test-workspace",
 		Id:          "test-id",
 		Title:       "test-title",
 		Description: "test-description",
-		Status:      models.TaskStatusToDo,
+		Status:      domain.TaskStatusToDo,
 	}
 
 	err := db.PersistTask(context.Background(), taskRecord)
@@ -205,7 +205,7 @@ func TestPersistTask(t *testing.T) {
 	// Verify that the TaskRecord was correctly persisted to the Redis database
 	persistedTaskJson, err := db.Client.Get(context.Background(), fmt.Sprintf("%s:%s", taskRecord.WorkspaceId, taskRecord.Id)).Result()
 	assert.Nil(t, err)
-	var persistedTask models.Task
+	var persistedTask domain.Task
 	err = json.Unmarshal([]byte(persistedTaskJson), &persistedTask)
 	assert.Nil(t, err)
 	assert.Equal(t, taskRecord, persistedTask)
@@ -215,7 +215,7 @@ func TestPersistTask(t *testing.T) {
 	_, err = db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
 	assert.Nil(t, err)
 
-	taskRecord.Status = models.TaskStatusInProgress
+	taskRecord.Status = domain.TaskStatusInProgress
 	err = db.PersistTask(context.Background(), taskRecord)
 	assert.Nil(t, err)
 
@@ -224,7 +224,7 @@ func TestPersistTask(t *testing.T) {
 	isMember, err := db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
 	assert.Nil(t, err)
 	assert.True(t, isMember)
-	for _, status := range []models.TaskStatus{models.TaskStatusToDo, models.TaskStatusInProgress, models.TaskStatusComplete, models.TaskStatusBlocked, models.TaskStatusFailed, models.TaskStatusCanceled} {
+	for _, status := range []domain.TaskStatus{domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
 		if status != taskRecord.Status {
 			statusKey := fmt.Sprintf("%s:kanban:%s", taskRecord.WorkspaceId, status)
 			isMember, err := db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
@@ -239,7 +239,7 @@ func TestGetWorkflows(t *testing.T) {
 
 	workspaceId := "TEST_WORKSPACE_ID"
 	parentId := "testParentId"
-	flows := []models.Flow{
+	flows := []domain.Flow{
 		{
 			WorkspaceId: workspaceId,
 			Id:          "workflow_" + ksuid.New().String(),
@@ -270,12 +270,12 @@ func TestDeleteTask(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a new task
-	task := models.Task{
+	task := domain.Task{
 		WorkspaceId: "test-workspace",
 		Id:          "test-task-id",
 		Title:       "Test Task",
 		Description: "This is a test task",
-		Status:      models.TaskStatusToDo,
+		Status:      domain.TaskStatusToDo,
 	}
 	err := db.PersistTask(ctx, task)
 	if err != nil {
@@ -289,7 +289,7 @@ func TestDeleteTask(t *testing.T) {
 	}
 
 	// Check if task has been added to the kanban sets
-	tasks, err := db.GetTasks(ctx, task.WorkspaceId, []models.TaskStatus{models.TaskStatusToDo})
+	tasks, err := db.GetTasks(ctx, task.WorkspaceId, []domain.TaskStatus{domain.TaskStatusToDo})
 	if err != nil {
 		t.Fatalf("Failed to get tasks from kanban set: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestDeleteTask(t *testing.T) {
 	}
 
 	// Check if task has been deleted from the kanban sets
-	tasks, err = db.GetTasks(ctx, task.WorkspaceId, []models.TaskStatus{models.TaskStatusToDo})
+	tasks, err = db.GetTasks(ctx, task.WorkspaceId, []domain.TaskStatus{domain.TaskStatusToDo})
 	if err != nil {
 		t.Fatalf("Failed to get tasks from kanban set: %v", err)
 	}
@@ -317,15 +317,15 @@ func TestDeleteTask(t *testing.T) {
 func TestAddTaskChange(t *testing.T) {
 	db := newTestRedisDatabase()
 	workspaceId := "TEST_WORKSPACE_ID"
-	taskRecord := models.Task{
+	taskRecord := domain.Task{
 		WorkspaceId: workspaceId,
 		Id:          "task_" + ksuid.New().String(),
 		Title:       "Test Task",
 		Description: "This is a test task",
-		Status:      models.TaskStatus("Pending"),
-		Links:       []models.TaskLink{},
-		AgentType:   models.AgentType("TestAgent"),
-		FlowType:    models.FlowType("TestFlow"),
+		Status:      domain.TaskStatus("Pending"),
+		Links:       []domain.TaskLink{},
+		AgentType:   domain.AgentType("TestAgent"),
+		FlowType:    domain.FlowType("TestFlow"),
 		Created:     time.Now().UTC(),
 		Updated:     time.Now().UTC(),
 		FlowOptions: map[string]interface{}{"key": "value"},
@@ -358,7 +358,7 @@ func TestAddTaskChange(t *testing.T) {
 func TestPersistWorkspace(t *testing.T) {
 	ctx := context.Background()
 	db := newTestRedisDatabase()
-	workspace := models.Workspace{Id: "123", Name: "TestWorkspace"}
+	workspace := domain.Workspace{Id: "123", Name: "TestWorkspace"}
 
 	// Test will try to persist the workspace
 	err := db.PersistWorkspace(ctx, workspace)
@@ -373,7 +373,7 @@ func TestPersistWorkspace(t *testing.T) {
 		t.Errorf("failed to get workspace from redis: %v", err)
 	}
 
-	var persistedWorkspace models.Workspace
+	var persistedWorkspace domain.Workspace
 	if err := json.Unmarshal([]byte(workspaceJson), &persistedWorkspace); err != nil {
 		t.Errorf("failed to unmarshal workspace JSON: %v", err)
 	}
@@ -404,7 +404,7 @@ func TestPersistWorkspaceConfig(t *testing.T) {
 	db := newTestRedisDatabase()
 	workspaceId := "test-workspace-id"
 
-	config := models.WorkspaceConfig{
+	config := domain.WorkspaceConfig{
 		LLM: common.LLMConfig{
 			Defaults: []common.ModelConfig{
 				{Provider: "OpenAI", Model: "gpt-3.5-turbo"},
@@ -446,7 +446,7 @@ func TestGetWorkspaceConfig(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 
 	// Create and persist a config
-	config := models.WorkspaceConfig{
+	config := domain.WorkspaceConfig{
 		LLM: common.LLMConfig{
 			Defaults: []common.ModelConfig{
 				{Provider: "OpenAI", Model: "gpt-3.5-turbo"},
@@ -475,18 +475,18 @@ func TestPersistSubflow(t *testing.T) {
 	db := newTestRedisDatabase()
 	ctx := context.Background()
 
-	validSubflow := models.Subflow{
+	validSubflow := domain.Subflow{
 		WorkspaceId: ksuid.New().String(),
 		Id:          "sf_" + ksuid.New().String(),
 		FlowId:      ksuid.New().String(),
 		Name:        "Test Subflow",
 		Description: "This is a test subflow",
-		Status:      models.SubflowStatusInProgress,
+		Status:      domain.SubflowStatusInProgress,
 	}
 
 	tests := []struct {
 		name          string
-		subflow       models.Subflow
+		subflow       domain.Subflow
 		expectedError bool
 		errorContains string
 	}{
@@ -497,7 +497,7 @@ func TestPersistSubflow(t *testing.T) {
 		},
 		{
 			name: "Empty WorkspaceId",
-			subflow: func() models.Subflow {
+			subflow: func() domain.Subflow {
 				sf := validSubflow
 				sf.WorkspaceId = ""
 				return sf
@@ -507,7 +507,7 @@ func TestPersistSubflow(t *testing.T) {
 		},
 		{
 			name: "Empty Id",
-			subflow: func() models.Subflow {
+			subflow: func() domain.Subflow {
 				sf := validSubflow
 				sf.Id = ""
 				return sf
@@ -517,7 +517,7 @@ func TestPersistSubflow(t *testing.T) {
 		},
 		{
 			name: "Empty FlowId",
-			subflow: func() models.Subflow {
+			subflow: func() domain.Subflow {
 				sf := validSubflow
 				sf.FlowId = ""
 				return sf
@@ -563,20 +563,20 @@ func TestGetSubflows(t *testing.T) {
 	flowId := ksuid.New().String()
 
 	// Create test subflows
-	subflows := []models.Subflow{
+	subflows := []domain.Subflow{
 		{
 			WorkspaceId: workspaceId,
 			Id:          "sf_" + ksuid.New().String(),
 			Name:        "Subflow 1",
 			FlowId:      flowId,
-			Status:      models.SubflowStatusInProgress,
+			Status:      domain.SubflowStatusInProgress,
 		},
 		{
 			WorkspaceId: workspaceId,
 			Id:          "sf_" + ksuid.New().String(),
 			Name:        "Subflow 2",
 			FlowId:      flowId,
-			Status:      models.SubflowStatusComplete,
+			Status:      domain.SubflowStatusComplete,
 		},
 	}
 
