@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -77,4 +78,21 @@ type FlowAction struct {
 	ActionResult       string                 `json:"actionResult"`
 	IsHumanAction      bool                   `json:"isHumanAction"`
 	IsCallbackAction   bool                   `json:"isCallbackAction"`
+}
+
+// FlowService defines the interface for flow-related database operations
+type FlowService interface {
+	PersistWorkflow(ctx context.Context, flow Flow) error
+	GetWorkflow(ctx context.Context, workspaceId, flowId string) (Flow, error)
+	GetFlowsForTask(ctx context.Context, workspaceId, taskId string) ([]Flow, error)
+	PersistSubflow(ctx context.Context, subflow Subflow) error
+	GetSubflows(ctx context.Context, workspaceId, flowId string) ([]Subflow, error)
+	PersistFlowAction(ctx context.Context, flowAction FlowAction) error
+	GetFlowActions(ctx context.Context, workspaceId, flowId string) ([]FlowAction, error)
+	GetFlowAction(ctx context.Context, workspaceId, flowActionId string) (FlowAction, error)
+}
+
+// FlowStreamService defines the interface for flow-related stream operations
+type FlowStreamService interface {
+	GetFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]FlowAction, string, error)
 }

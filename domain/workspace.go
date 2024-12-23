@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"sidekick/common"
 	"time"
 )
@@ -22,4 +23,13 @@ type Workspace struct {
 type WorkspaceConfig struct {
 	LLM       common.LLMConfig       `json:"llm"`
 	Embedding common.EmbeddingConfig `json:"embedding"`
+}
+
+// WorkspaceService defines the interface for workspace-related database operations
+type WorkspaceService interface {
+	PersistWorkspace(ctx context.Context, workspace Workspace) error
+	GetWorkspace(ctx context.Context, workspaceId string) (Workspace, error)
+	GetAllWorkspaces(ctx context.Context) ([]Workspace, error)
+	GetWorkspaceConfig(ctx context.Context, workspaceId string) (WorkspaceConfig, error)
+	PersistWorkspaceConfig(ctx context.Context, workspaceId string, config WorkspaceConfig) error
 }

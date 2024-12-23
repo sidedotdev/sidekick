@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -39,6 +40,19 @@ var AllTaskStatuses []TaskStatus = []TaskStatus{
 	TaskStatusComplete,
 	TaskStatusFailed,
 	TaskStatusCanceled,
+}
+
+// TaskService defines the interface for task-related database operations
+type TaskService interface {
+	PersistTask(ctx context.Context, task Task) error
+	GetTask(ctx context.Context, workspaceId, taskId string) (Task, error)
+	GetTasks(ctx context.Context, workspaceId string, statuses []TaskStatus) ([]Task, error)
+	DeleteTask(ctx context.Context, workspaceId, taskId string) error
+}
+
+// TaskStreamService defines the interface for task-related stream operations
+type TaskStreamService interface {
+	GetTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]Task, string, error)
 }
 
 func StringToTaskStatus(s string) (TaskStatus, error) {
