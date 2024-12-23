@@ -22,7 +22,6 @@ type Embedder interface {
 }
 
 type OpenAIActivities struct {
-	FlowEventAccessor srv.FlowEventAccessor
 	Storage           srv.Storage
 	Embedder
 }

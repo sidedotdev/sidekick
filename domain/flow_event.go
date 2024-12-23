@@ -1,9 +1,11 @@
 package domain
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sidekick/common"
+	"time"
 )
 
 // FlowEventType represents the different types of flow events.
@@ -57,8 +59,8 @@ func (e ProgressText) GetEventType() FlowEventType {
 var _ FlowEvent = ProgressText{}
 
 type ChatMessageDelta struct {
-	EventType        FlowEventType        `json:"eventType"`
-	FlowActionId     string               `json:"flowActionId"`
+	EventType        FlowEventType           `json:"eventType"`
+	FlowActionId     string                  `json:"flowActionId"`
 	ChatMessageDelta common.ChatMessageDelta `json:"chatMessageDelta"`
 }
 
@@ -111,4 +113,10 @@ func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
 	default:
 		return nil, fmt.Errorf("unknown flow eventType: %s", event.EventType)
 	}
+}
+
+type FlowEventStreamer interface {
+	AddFlowEvent(ctx context.Context, workspaceId string, flowId string, flowEvent FlowEvent) error
+	EndFlowEventStream(ctx context.Context, workspaceId, flowId, eventStreamParentId string) error
+	GetFlowEvents(ctx context.Context, workspaceId string, streamKeys map[string]string, maxCount int64, blockDuration time.Duration) ([]FlowEvent, map[string]string, error)
 }

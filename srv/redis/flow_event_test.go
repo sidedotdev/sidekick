@@ -1,37 +1,18 @@
-package srv
+package redis
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sidekick/domain"
 	"sidekick/llm"
 	"testing"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 )
 
-func newTestRedisFlowEventAccessor() *RedisFlowEventAccessor {
-	db := &RedisFlowEventAccessor{}
-	db.Client = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       1,
-	})
-
-	// Flush the database synchronously to ensure a clean state for each test
-	_, err := db.Client.FlushDB(context.Background()).Result()
-	if err != nil {
-		log.Panicf("failed to flush redis database: %v", err)
-	}
-
-	return db
-}
-
 func TestAddChatMessageDeltaFlowEvent(t *testing.T) {
-	db := newTestRedisFlowEventAccessor()
+	db := NewTestRedisStreamer()
 	workspaceId := "TEST_WORKSPACE_ID"
 	flowId := "TEST_FLOW_ID"
 	flowEvent := domain.ChatMessageDelta{
@@ -74,7 +55,7 @@ func TestAddChatMessageDeltaFlowEvent(t *testing.T) {
 }
 
 func TestAddProgressTextFlowEvent(t *testing.T) {
-	db := newTestRedisFlowEventAccessor()
+	db := NewTestRedisStreamer()
 	workspaceId := "TEST_WORKSPACE_ID"
 	flowId := "TEST_FLOW_ID"
 	flowEvent := domain.ProgressText{

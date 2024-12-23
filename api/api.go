@@ -48,7 +48,6 @@ func RunServer() *http.Server {
 
 type Controller struct {
 	service           srv.Service
-	flowEventAccessor srv.FlowEventAccessor
 	temporalClient    client.Client
 	temporalNamespace string
 	temporalTaskQueue string
@@ -145,7 +144,6 @@ func NewController() Controller {
 
 	return Controller{
 		service:           service,
-		flowEventAccessor: &srv.RedisFlowEventAccessor{Client: redisStorage.Client},
 		temporalClient:    temporalClient,
 		temporalNamespace: common.GetTemporalNamespace(),
 		temporalTaskQueue: common.GetTemporalTaskQueue(),
@@ -953,7 +951,7 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 			}
 
 			// Attempt to fetch the flow events
-			flowEvents, lastStreamKeys, err := ctrl.flowEventAccessor.GetFlowEvents(
+			flowEvents, lastStreamKeys, err := ctrl.service.GetFlowEvents(
 				ctx, workspaceId, keysMap, maxCount, blockDuration,
 			)
 			if err != nil {

@@ -28,4 +28,5 @@ type Storage interface {
 type Streamer interface {
 	domain.TaskStreamer
 	domain.FlowActionStreamer
+	domain.FlowEventStreamer
 }

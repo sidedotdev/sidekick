@@ -47,7 +47,8 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	}
 
 	redisStorage := redis.NewStorage()
-	service := srv.NewDelegator(redisStorage, redis.NewStreamer())
+	redisStreamer := redis.NewStreamer()
+	service := srv.NewDelegator(redisStorage, redisStreamer)
 	err = service.CheckConnection(context.Background())
 	if err != nil {
 		log.Fatal().Err(err)
@@ -63,7 +64,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 		Embedder: embedding.OpenAIEmbedder{},
 	}
 	llmActivities := &persisted_ai.LlmActivities{
-		FlowEventAccessor: &srv.RedisFlowEventAccessor{Client: redisStorage.Client},
+		Streamer: redisStreamer,
 	}
 
 	lspActivities := &lsp.LSPActivities{

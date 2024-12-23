@@ -6,24 +6,13 @@ import (
 	"sidekick/llm"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
-	"sidekick/srv"
+	"sidekick/srv/redis"
 	"time"
 
 	"github.com/ehsanul/anthropic-go/v3/pkg/anthropic"
-	"github.com/redis/go-redis/v9"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
-
-func newTestRedisFlowEventAccessor() *srv.RedisFlowEventAccessor {
-	return &srv.RedisFlowEventAccessor{
-		Client: redis.NewClient(&redis.Options{
-			Addr:     "localhost:6379",
-			Password: "",
-			DB:       1,
-		}),
-	}
-}
 
 type SentimentRequest struct {
 	Analysis  string `json:"analysis" jsonschema:"description=Very brief analysis of the sentiment of the user's message"`
@@ -83,7 +72,7 @@ func ExampleLlmActivitiesWorkflow(ctx workflow.Context) (string, error) {
 	}
 
 	var chatResponse llm.ChatMessageResponse
-	la := persisted_ai.LlmActivities{FlowEventAccessor: newTestRedisFlowEventAccessor()}
+	la := persisted_ai.LlmActivities{Streamer: redis.NewTestRedisStreamer()}
 	err := workflow.ExecuteActivity(ctx, la.ChatStream, chatStreamOptions).Get(ctx, &chatResponse)
 	if err != nil {
 		return "", err

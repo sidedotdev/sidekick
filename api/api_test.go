@@ -72,13 +72,10 @@ func NewMockController(t *testing.T) Controller {
 	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
 	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
 
-	service, client := redis.NewTestRedisService()
+	service, _ := redis.NewTestRedisService()
 	return Controller{
 		temporalClient: mockTemporalClient,
 		service:        service,
-		flowEventAccessor: &srv.RedisFlowEventAccessor{
-			Client: client,
-		},
 	}
 }
 
@@ -1318,7 +1315,7 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 		ParentId:  "test-event-id-1",
 		Text:      "doing stuff 1",
 	}
-	err = ctrl.flowEventAccessor.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent1)
+	err = ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent1)
 	assert.NoError(t, err, "Persisting flow event 1 failed")
 
 	router := DefineRoutes(ctrl)
@@ -1347,9 +1344,9 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 		ParentId:  flowEvent2.ParentId,
 		Text:      "doing stuff 3",
 	}
-	err = ctrl.flowEventAccessor.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent2)
+	err = ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent2)
 	assert.NoError(t, err, "Persisting flow event 2 failed")
-	err = ctrl.flowEventAccessor.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent3)
+	err = ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent3)
 	assert.NoError(t, err, "Persisting flow event 3 failed")
 
 	// send messages via the websocket to subscribe to the streams for the flow actions

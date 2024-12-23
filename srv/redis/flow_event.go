@@ -1,4 +1,4 @@
-package srv
+package redis
 
 import (
 	"context"
@@ -11,13 +11,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type RedisFlowEventAccessor struct {
-	Client *redis.Client
-}
-
-var _ FlowEventAccessor = &RedisFlowEventAccessor{}
-
-func (db *RedisFlowEventAccessor) AddFlowEvent(ctx context.Context, workspaceId string, flowId string, flowEvent domain.FlowEvent) error {
+func (db *Streamer) AddFlowEvent(ctx context.Context, workspaceId string, flowId string, flowEvent domain.FlowEvent) error {
 	streamKey := fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, flowEvent.GetParentId())
 
 	// we explicitly serialize since we have a deeply nested struct (chat message delta) that redis doesn't auto-serialize
@@ -38,7 +32,7 @@ func (db *RedisFlowEventAccessor) AddFlowEvent(ctx context.Context, workspaceId 
 	return nil
 }
 
-func (db *RedisFlowEventAccessor) EndFlowEventStream(ctx context.Context, workspaceId, flowId, eventStreamParentId string) error {
+func (db *Streamer) EndFlowEventStream(ctx context.Context, workspaceId, flowId, eventStreamParentId string) error {
 	streamKey := fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, eventStreamParentId)
 	serializedEvent, err := json.Marshal(domain.EndStream{
 		EventType: domain.EndStreamEventType,
@@ -61,7 +55,7 @@ func (db *RedisFlowEventAccessor) EndFlowEventStream(ctx context.Context, worksp
 	return nil
 }
 
-func (db *RedisFlowEventAccessor) GetFlowEvents(ctx context.Context, workspaceId string, streamKeys map[string]string, maxCount int64, blockDuration time.Duration) ([]domain.FlowEvent, map[string]string, error) {
+func (db *Streamer) GetFlowEvents(ctx context.Context, workspaceId string, streamKeys map[string]string, maxCount int64, blockDuration time.Duration) ([]domain.FlowEvent, map[string]string, error) {
 	updatedStreamKeys := make(map[string]string)
 	var events []domain.FlowEvent
 

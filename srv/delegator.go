@@ -155,3 +155,18 @@ func (d Delegator) AddFlowActionChange(ctx context.Context, flowAction domain.Fl
 func (d Delegator) GetFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]domain.FlowAction, string, error) {
 	return d.streamer.GetFlowActionChanges(ctx, workspaceId, flowId, streamMessageStartId, maxCount, blockDuration)
 }
+
+/* implements FlowEventStreamer interface */
+func (d Delegator) AddFlowEvent(ctx context.Context, workspaceId string, flowId string, flowEvent domain.FlowEvent) error {
+	return d.streamer.AddFlowEvent(ctx, workspaceId, flowId, flowEvent)
+}
+
+/* implements FlowEventStreamer interface */
+func (d Delegator) EndFlowEventStream(ctx context.Context, workspaceId, flowId, eventStreamParentId string) error {
+	return d.streamer.EndFlowEventStream(ctx, workspaceId, flowId, eventStreamParentId)
+}
+
+/* implements FlowEventStreamer interface */
+func (d Delegator) GetFlowEvents(ctx context.Context, workspaceId string, streamKeys map[string]string, maxCount int64, blockDuration time.Duration) ([]domain.FlowEvent, map[string]string, error) {
+	return d.streamer.GetFlowEvents(ctx, workspaceId, streamKeys, maxCount, blockDuration)
+}

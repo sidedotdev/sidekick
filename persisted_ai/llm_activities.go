@@ -21,7 +21,7 @@ type ChatStreamOptions struct {
 }
 
 type LlmActivities struct {
-	FlowEventAccessor srv.FlowEventAccessor
+	Streamer srv.Streamer
 }
 
 func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptions) (*llm.ChatMessageResponse, error) {
@@ -29,7 +29,7 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 	go func() {
 		defer func() {
 			// Mark the end of the Redis stream
-			err := la.FlowEventAccessor.EndFlowEventStream(context.Background(), options.WorkspaceId, options.FlowId, options.FlowActionId)
+			err := la.Streamer.EndFlowEventStream(context.Background(), options.WorkspaceId, options.FlowId, options.FlowActionId)
 			if err != nil {
 				log.Printf("failed to mark the end of the Redis stream: %v", err)
 			}
@@ -63,7 +63,7 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 				EventType:        domain.ChatMessageDeltaEventType,
 				ChatMessageDelta: delta,
 			}
-			err := la.FlowEventAccessor.AddFlowEvent(context.Background(), options.WorkspaceId, options.FlowId, flowEventDelta)
+			err := la.Streamer.AddFlowEvent(context.Background(), options.WorkspaceId, options.FlowId, flowEventDelta)
 			if err != nil {
 				log.Printf("failed to add chat message delta flow event to Redis stream: %v", err)
 			}
