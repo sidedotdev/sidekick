@@ -13,6 +13,10 @@ type Delegator struct {
 	streamer Streamer
 }
 
+func (d *Delegator) DeleteWorkspace(ctx context.Context, workspaceId string) error {
+	return d.storage.DeleteWorkspace(ctx, workspaceId)
+}
+
 func NewDelegator(storage Storage, streamer Streamer) *Delegator {
 	return &Delegator{
 		storage:  storage,

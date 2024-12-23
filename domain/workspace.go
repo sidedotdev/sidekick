@@ -32,4 +32,5 @@ type WorkspaceStorage interface {
 	GetAllWorkspaces(ctx context.Context) ([]Workspace, error)
 	GetWorkspaceConfig(ctx context.Context, workspaceId string) (WorkspaceConfig, error)
 	PersistWorkspaceConfig(ctx context.Context, workspaceId string, config WorkspaceConfig) error
+	DeleteWorkspace(ctx context.Context, workspaceId string) error
 }

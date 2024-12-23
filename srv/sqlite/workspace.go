@@ -111,7 +111,7 @@ func (s *Storage) DeleteWorkspace(ctx context.Context, workspaceId string) error
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to begin transaction for workspace deletion")
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return fmt.Errorf("failed to begin transaction for workspace deletion: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -125,7 +125,7 @@ func (s *Storage) DeleteWorkspace(ctx context.Context, workspaceId string) error
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to get rows affected")
-		return fmt.Errorf("failed to get rows affected: %w", err)
+		return fmt.Errorf("failed to get rows affected for workspace deletion: %w", err)
 	}
 
 	if rowsAffected == 0 {
@@ -141,7 +141,7 @@ func (s *Storage) DeleteWorkspace(ctx context.Context, workspaceId string) error
 
 	if err = tx.Commit(); err != nil {
 		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to commit transaction")
-		return fmt.Errorf("failed to commit transaction: %w", err)
+		return fmt.Errorf("failed to commit transaction for workspace deletion: %w", err)
 	}
 
 	log.Debug().Str("workspaceId", workspaceId).Msg("Workspace deleted successfully")
