@@ -2,22 +2,21 @@ package persisted_ai
 
 import (
 	"context"
-	"sidekick/db"
 	"sidekick/env"
 	"sidekick/secret_manager"
+	"sidekick/srv/redis"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
-func newTestRedisDatabase() *db.RedisDatabase {
-	db := &db.RedisDatabase{}
+func newTestRedisDatabase() *redis.Service {
+	db := &redis.Service{}
 	db.Client = redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "", // no password set
-		DB:       0,  // use default DB
+		DB:       1,  // use test DB
 	})
 	return db
 }

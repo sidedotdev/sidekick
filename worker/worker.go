@@ -14,7 +14,8 @@ import (
 	"sidekick/coding/git"
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
-	"sidekick/db"
+	"sidekick/srv"
+	"sidekick/srv/redis"
 	"sidekick/workspace"
 
 	"sidekick/dev"
@@ -45,7 +46,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 		log.Fatal().Err(err).Msg("Unable to create Temporal client.")
 	}
 
-	redisDb := db.NewRedisDatabase()
+	redisDb := redis.NewService()
 	_, err = redisDb.Client.Ping(context.Background()).Result()
 	if err != nil {
 		log.Fatal().Err(err)
@@ -55,14 +56,13 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 		DatabaseAccessor: redisDb,
 		TemporalClient:   c,
 	}
-	//redisDb := db.RedisDatabase{Client: redisClient}
 	flowActivities := &flow_action.FlowActivities{DatabaseAccessor: redisDb}
 	openAIActivities := &persisted_ai.OpenAIActivities{
 		DatabaseAccessor: redisDb,
 		Embedder:         embedding.OpenAIEmbedder{},
 	}
 	llmActivities := &persisted_ai.LlmActivities{
-		FlowEventAccessor: &db.RedisFlowEventAccessor{Client: redisDb.Client},
+		FlowEventAccessor: &srv.RedisFlowEventAccessor{Client: redisDb.Client},
 	}
 
 	lspActivities := &lsp.LSPActivities{

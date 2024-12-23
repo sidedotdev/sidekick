@@ -14,15 +14,15 @@ import (
 	"time"
 
 	"sidekick/common"
-	"sidekick/db"
 	"sidekick/dev"
 	"sidekick/domain"
 	"sidekick/flow_event"
 	"sidekick/frontend"
+	"sidekick/srv"
+	"sidekick/srv/redis"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/ksuid"
 	"go.temporal.io/sdk/client"
 )
@@ -48,8 +48,8 @@ func RunServer() *http.Server {
 }
 
 type Controller struct {
-	dbAccessor        db.Service
-	flowEventAccessor db.FlowEventAccessor
+	dbAccessor        srv.Service
+	flowEventAccessor srv.FlowEventAccessor
 	temporalClient    client.Client
 	temporalNamespace string
 	temporalTaskQueue string
@@ -143,22 +143,15 @@ func NewController() Controller {
 		redisAddr = "localhost:6379"
 	}
 
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:        redisAddr,
-		Password:    "", // no password set
-		DB:          0,  // use default DB
-		PoolSize:    300,
-		PoolTimeout: 300 * time.Second,
-	})
-
-	_, err = redisClient.Ping(context.Background()).Result()
+	redisService := redis.NewService()
+	err = redisService.CheckConnection(context.Background())
 	if err != nil {
 		log.Fatal("Failed to connect to Redis", err)
 	}
 
 	return Controller{
-		dbAccessor:        &db.RedisDatabase{Client: redisClient},
-		flowEventAccessor: &db.RedisFlowEventAccessor{Client: redisClient},
+		dbAccessor:        redisService,
+		flowEventAccessor: &srv.RedisFlowEventAccessor{Client: redisService.Client},
 		temporalClient:    temporalClient,
 		temporalNamespace: common.GetTemporalNamespace(),
 		temporalTaskQueue: common.GetTemporalTaskQueue(),
@@ -328,7 +321,7 @@ func (ctrl *Controller) GetTaskHandler(c *gin.Context) {
 
 	task, err := ctrl.dbAccessor.GetTask(c, workspaceId, taskId)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
 		} else {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -427,7 +420,7 @@ func (ctrl *Controller) GetFlowActionsHandler(c *gin.Context) {
 		flowActions = []domain.FlowAction{}
 		_, err := ctrl.dbAccessor.GetWorkflow(c, workspaceId, flowId)
 		if err != nil {
-			if errors.Is(err, db.ErrNotFound) {
+			if errors.Is(err, srv.ErrNotFound) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
 			} else {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get flow"})
@@ -615,7 +608,7 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 
 	task, err := ctrl.dbAccessor.GetTask(requestCtx, workspaceId, taskReq.Id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+		if errors.Is(err, srv.ErrNotFound) {
 			ctrl.ErrorHandler(c, http.StatusNotFound, err)
 		} else {
 			ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
@@ -719,7 +712,7 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 
 	// Validate workspaceId
 	if _, err := ctrl.dbAccessor.GetWorkspace(ctx, workspaceId); err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Workspace not found"})
 		} else {
 			log.Printf("Error fetching workspace: %v", err)
@@ -730,7 +723,7 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 
 	// Validate flowId under the given workspaceId
 	if _, err := ctrl.dbAccessor.GetWorkflow(ctx, workspaceId, flowId); err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
 		} else {
 			log.Printf("Error fetching flow: %v", err)
@@ -886,7 +879,7 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 
 	// Validate workspaceId
 	if _, err := ctrl.dbAccessor.GetWorkspace(ctx, workspaceId); err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Workspace not found"})
 		} else {
 			log.Printf("Error fetching workspace: %v", err)
@@ -897,7 +890,7 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 
 	// Validate flowId under the given workspaceId
 	if _, err := ctrl.dbAccessor.GetWorkflow(ctx, workspaceId, flowId); err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
 		} else {
 			log.Printf("Error fetching flow: %v", err)

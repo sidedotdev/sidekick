@@ -3,10 +3,10 @@ package sidekick
 import (
 	"encoding/json"
 	"fmt"
-	"sidekick/db"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
+	"sidekick/srv"
 	"time"
 
 	"github.com/ehsanul/anthropic-go/v3/pkg/anthropic"
@@ -15,8 +15,8 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-func newTestRedisFlowEventAccessor() *db.RedisFlowEventAccessor {
-	return &db.RedisFlowEventAccessor{
+func newTestRedisFlowEventAccessor() *srv.RedisFlowEventAccessor {
+	return &srv.RedisFlowEventAccessor{
 		Client: redis.NewClient(&redis.Options{
 			Addr:     "localhost:6379",
 			Password: "",

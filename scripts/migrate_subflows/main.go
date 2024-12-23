@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sidekick/db"
 	"sidekick/domain"
+	"sidekick/srv/redis"
 	"strings"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	go_redis "github.com/redis/go-redis/v9"
 	"github.com/segmentio/ksuid"
 )
 
@@ -87,7 +87,7 @@ func main() {
 	})
 	defer redisClient.Close()
 
-	redisDB := &db.RedisDatabase{Client: redisClient}
+	redisDB := &redis.Service{Client: redisClient}
 
 	if dryRun {
 		log.Println("Running in dry-run mode. No changes will be made.")
@@ -107,7 +107,7 @@ func main() {
 	log.Printf("Migration summary:\n%s", summary)
 }
 
-func createSubflowsFromTree(ctx context.Context, tree SubflowTree, workspaceId, flowId string, parentSubflowId string, database *db.RedisDatabase, dryRun bool) (int, error) {
+func createSubflowsFromTree(ctx context.Context, tree SubflowTree, workspaceId, flowId string, parentSubflowId string, database *redis.Service, dryRun bool) (int, error) {
 	numCreated := 0
 	subflow := domain.Subflow{
 		WorkspaceId:     workspaceId,
@@ -158,7 +158,7 @@ func createSubflowsFromTree(ctx context.Context, tree SubflowTree, workspaceId, 
 	return numCreated, nil
 }
 
-func migrateSubflows(ctx context.Context, database *db.RedisDatabase, dryRun bool) (string, error) {
+func migrateSubflows(ctx context.Context, database *redis.Service, dryRun bool) (string, error) {
 	workspaces, err := database.GetAllWorkspaces(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to get all workspaces: %w", err)
@@ -276,7 +276,7 @@ func migrateSubflows(ctx context.Context, database *db.RedisDatabase, dryRun boo
 	return summary, nil
 }
 
-func addFlowActionChangeV2(ctx context.Context, flowAction domain.FlowAction, database *db.RedisDatabase) error {
+func addFlowActionChangeV2(ctx context.Context, flowAction domain.FlowAction, database *redis.Service) error {
 	// v2 streamkey created temporarily, until we rename
 	streamKey := fmt.Sprintf("%s:%s:flow_action_changes_v2", flowAction.WorkspaceId, flowAction.FlowId)
 	actionParams, err := json.Marshal(flowAction.ActionParams)
@@ -290,7 +290,7 @@ func addFlowActionChangeV2(ctx context.Context, flowAction domain.FlowAction, da
 	}
 
 	flowActionMap["actionParams"] = string(actionParams)
-	err = database.Client.XAdd(ctx, &redis.XAddArgs{
+	err = database.Client.XAdd(ctx, &go_redis.XAddArgs{
 		Stream: streamKey,
 		Values: flowActionMap,
 	}).Err()

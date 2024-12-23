@@ -2,15 +2,13 @@ package tree_sitter
 
 import (
 	"reflect"
-	"sidekick/db"
+	"sidekick/srv/redis"
 	"sidekick/utils"
 	"testing"
-
-	"github.com/redis/go-redis/v9"
 )
 
-func newTestRedisDatabase() *db.RedisDatabase {
-	db := &db.RedisDatabase{}
+func newTestRedisDatabase() *redis.Service {
+	db := &redis.Service{}
 	db.Client = redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "", // no password set

@@ -3,12 +3,12 @@ package workspace
 import (
 	"context"
 	"errors"
-	"sidekick/db"
 	"sidekick/domain"
+	"sidekick/srv"
 )
 
 type Activities struct {
-	DatabaseAccessor db.Service
+	DatabaseAccessor srv.Service
 }
 
 func (a *Activities) GetWorkspaceConfig(workspaceID string) (domain.WorkspaceConfig, error) {

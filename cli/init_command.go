@@ -13,9 +13,9 @@ import (
 	"path/filepath"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
-	"sidekick/db"
 	"sidekick/domain"
 	"sidekick/llm"
+	"sidekick/srv"
 	"strings"
 	"syscall"
 	"time"
@@ -28,10 +28,10 @@ import (
 )
 
 type InitCommandHandler struct {
-	dbAccessor db.Service
+	dbAccessor srv.Service
 }
 
-func NewInitCommandHandler(dbAccessor db.Service) *InitCommandHandler {
+func NewInitCommandHandler(dbAccessor srv.Service) *InitCommandHandler {
 	return &InitCommandHandler{
 		dbAccessor: dbAccessor,
 	}
@@ -103,7 +103,7 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	}
 
 	existingConfig, err := h.dbAccessor.GetWorkspaceConfig(ctx, workspace.Id)
-	if err != nil && !errors.Is(err, db.ErrNotFound) {
+	if err != nil && !errors.Is(err, srv.ErrNotFound) {
 		return fmt.Errorf("error retrieving workspace configuration: %w", err)
 	}
 

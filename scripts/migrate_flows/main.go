@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sidekick/db"
 	"sidekick/domain"
-
-	"github.com/redis/go-redis/v9"
+	"sidekick/srv"
+	"sidekick/srv/redis"
 )
 
-func migrateFlows(ctx context.Context, redisDB *db.RedisDatabase, dryRun bool) error {
+func migrateFlows(ctx context.Context, redisDB *redis.Service, dryRun bool) error {
 	workspaces, err := redisDB.GetAllWorkspaces(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get workspaces: %w", err)
@@ -49,7 +48,7 @@ func migrateFlows(ctx context.Context, redisDB *db.RedisDatabase, dryRun bool) e
 				// Verify if the flow is accessible using the current key format
 				_, err := redisDB.GetWorkflow(ctx, workspace.Id, flowId)
 				if err != nil {
-					if err == db.ErrNotFound {
+					if err == srv.ErrNotFound {
 						// If not found, update the key
 						if !dryRun {
 							err = updateFlowKey(ctx, redisDB, workspace.Id, flowId)
@@ -84,7 +83,7 @@ func migrateFlows(ctx context.Context, redisDB *db.RedisDatabase, dryRun bool) e
 	return nil
 }
 
-func updateFlowKey(ctx context.Context, redisDB *db.RedisDatabase, workspaceId string, flowId string) error {
+func updateFlowKey(ctx context.Context, redisDB *redis.Service, workspaceId string, flowId string) error {
 	// Get the flow data using the old key format
 	oldKey := flowId // no workspaceId prefix
 	flowJson, err := redisDB.Client.Get(ctx, oldKey).Result()
@@ -125,7 +124,7 @@ func main() {
 	})
 	defer redisClient.Close()
 
-	redisDB := &db.RedisDatabase{Client: redisClient}
+	redisDB := &redis.Service{Client: redisClient}
 
 	if dryRun {
 		log.Println("Running in dry-run mode. No changes will be made.")

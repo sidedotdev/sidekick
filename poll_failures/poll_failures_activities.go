@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sidekick/db"
 	"sidekick/domain"
+	"sidekick/srv"
 	"strings"
 
 	workflowApi "go.temporal.io/api/workflow/v1"
@@ -15,7 +15,7 @@ import (
 
 type PollFailuresActivities struct {
 	TemporalClient   client.Client
-	DatabaseAccessor db.Service
+	DatabaseAccessor srv.Service
 }
 
 type ListFailedWorkflowsInput struct {
@@ -41,7 +41,7 @@ type UpdateTaskStatusInput struct {
 func (a *PollFailuresActivities) UpdateTaskStatus(ctx context.Context, input UpdateTaskStatusInput) error {
 	flow, err := a.DatabaseAccessor.GetWorkflow(ctx, input.WorkspaceId, input.FlowId)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+		if errors.Is(err, srv.ErrNotFound) {
 			return nil
 		} else {
 			return err

@@ -3,32 +3,24 @@ package main
 import (
 	"fmt"
 	"os"
-	"sidekick/db"
+	"sidekick/srv"
+	"sidekick/srv/redis"
 
 	// Embedding the frontend build files
 	_ "embed"
 
 	"github.com/joho/godotenv"
 	"github.com/kardianos/service"
-	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
 var (
-	dbAccessor db.Service
+	dbAccessor srv.Service
 )
 
 func init() {
-	redisAddr := os.Getenv("REDIS_ADDR")
-	if redisAddr == "" {
-		redisAddr = "localhost:6379" // default address if environment variable is not set
-	}
-
-	redisClient := redis.NewClient(&redis.Options{
-		Addr: redisAddr,
-	})
-	dbAccessor = &db.RedisDatabase{Client: redisClient}
+	dbAccessor = redis.NewService()
 }
 
 type program struct{}

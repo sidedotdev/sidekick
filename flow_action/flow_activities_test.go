@@ -6,15 +6,14 @@ import (
 	"log"
 	"testing"
 
-	"sidekick/db"
 	"sidekick/domain"
+	"sidekick/srv/redis"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 )
 
-func newTestRedisDatabase() *db.RedisDatabase {
-	db := &db.RedisDatabase{}
+func newTestRedisDatabase() *redis.Service {
+	db := &redis.Service{}
 	db.Client = redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "",

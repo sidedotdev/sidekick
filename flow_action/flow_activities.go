@@ -3,14 +3,13 @@ package flow_action
 import (
 	"context"
 
-	"sidekick/db"
-
 	"sidekick/domain"
+	"sidekick/srv/redis"
 )
 
 type FlowActivities struct {
 	// TODO /gen replace with a new Accessor interface added to flow_action package
-	DatabaseAccessor *db.RedisDatabase
+	DatabaseAccessor *redis.Service
 }
 
 func (fa *FlowActivities) PersistFlowAction(ctx context.Context, flowAction domain.FlowAction) error {

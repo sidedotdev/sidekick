@@ -6,16 +6,16 @@ import (
 	"path/filepath"
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
-	"sidekick/db"
 	"sidekick/embedding"
 	"sidekick/env"
 	"sidekick/secret_manager"
+	"sidekick/srv"
 	"sidekick/utils"
 	"strings"
 )
 
 type RagActivities struct {
-	DatabaseAccessor     db.Service
+	DatabaseAccessor     srv.Service
 	Embedder             Embedder
 	LSPActivities        *lsp.LSPActivities
 	TreeSitterActivities *tree_sitter.TreeSitterActivities

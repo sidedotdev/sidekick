@@ -1,4 +1,4 @@
-package db
+package redis
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sidekick/common"
+	"sidekick/srv"
 	"sidekick/domain"
 	"testing"
 	"time"
@@ -15,8 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func newTestRedisDatabase() *RedisDatabase {
-	db := &RedisDatabase{}
+func newTestRedisDatabase() *Service {
+	db := &Service{}
 	db.Client = redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "",
@@ -437,13 +438,13 @@ func TestPersistWorkspaceConfig(t *testing.T) {
 
 func TestGetWorkspaceConfig(t *testing.T) {
 	ctx := context.Background()
-	db := newTestRedisDatabase()
+	s := newTestRedisDatabase()
 	workspaceId := "test-workspace-id"
 
 	// Test retrieving a non-existent config
-	_, err := db.GetWorkspaceConfig(ctx, workspaceId)
+	_, err := s.GetWorkspaceConfig(ctx, workspaceId)
 	assert.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assert.ErrorIs(t, err, srv.ErrNotFound)
 
 	// Create and persist a config
 	config := domain.WorkspaceConfig{
@@ -458,16 +459,16 @@ func TestGetWorkspaceConfig(t *testing.T) {
 			},
 		},
 	}
-	err = db.PersistWorkspaceConfig(ctx, workspaceId, config)
+	err = s.PersistWorkspaceConfig(ctx, workspaceId, config)
 	assert.NoError(t, err)
 
 	// Test retrieving the existing config
-	retrievedConfig, err := db.GetWorkspaceConfig(ctx, workspaceId)
+	retrievedConfig, err := s.GetWorkspaceConfig(ctx, workspaceId)
 	assert.NoError(t, err)
 	assert.Equal(t, config, retrievedConfig)
 
 	// Test retrieving with an empty workspaceId
-	_, err = db.GetWorkspaceConfig(ctx, "")
+	_, err = s.GetWorkspaceConfig(ctx, "")
 	assert.Error(t, err)
 }
 

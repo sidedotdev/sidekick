@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sidekick/db"
 	"sidekick/embedding"
 	"sidekick/secret_manager"
+	"sidekick/srv"
 )
 
 type OpenAIEmbedActivityOptions struct {
@@ -22,8 +22,8 @@ type Embedder interface {
 }
 
 type OpenAIActivities struct {
-	FlowEventAccessor db.FlowEventAccessor
-	DatabaseAccessor  db.Service
+	FlowEventAccessor srv.FlowEventAccessor
+	DatabaseAccessor  srv.Service
 	Embedder
 }
 

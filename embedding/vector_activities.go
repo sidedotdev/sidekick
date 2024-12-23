@@ -3,7 +3,7 @@ package embedding
 import (
 	"context"
 	"fmt"
-	db "sidekick/db"
+	db "sidekick/srv"
 
 	usearch "github.com/unum-cloud/usearch/golang"
 )

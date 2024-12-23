@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"sidekick/common"
-	"sidekick/db"
 	"sidekick/domain"
+	"sidekick/srv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -141,7 +141,7 @@ func (ctrl *Controller) GetWorkspaceByIdHandler(c *gin.Context) {
 
 	workspace, err := ctrl.dbAccessor.GetWorkspace(c, workspaceId)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Workspace not found"})
 		} else {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get workspace"})
@@ -159,7 +159,7 @@ func (ctrl *Controller) GetWorkspaceByIdHandler(c *gin.Context) {
 
 	config, err := ctrl.dbAccessor.GetWorkspaceConfig(c, workspaceId)
 	if err != nil {
-		if !errors.Is(err, db.ErrNotFound) {
+		if !errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get workspace configuration"})
 			return
 		}
@@ -197,7 +197,7 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 
 	workspaceConfig, err := ctrl.dbAccessor.GetWorkspaceConfig(c, workspaceId)
 	if err != nil {
-		if !errors.Is(err, db.ErrNotFound) {
+		if !errors.Is(err, srv.ErrNotFound) {
 			ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
 			return
 		}

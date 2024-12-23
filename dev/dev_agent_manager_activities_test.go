@@ -3,31 +3,30 @@ package dev
 import (
 	"context"
 	"log"
-	"sidekick/db"
 	"sidekick/domain"
 	"sidekick/mocks"
+	"sidekick/srv/redis"
 	"sidekick/utils"
 	"testing"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 )
 
-func newTestRedisDatabase() *db.RedisDatabase {
-	db := &db.RedisDatabase{}
-	db.Client = redis.NewClient(&redis.Options{
+func newTestRedisDatabase() *redis.Service {
+	s := &redis.Service{}
+	s.Client = redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "",
 		DB:       1,
 	})
 
 	// Flush the database synchronously to ensure a clean state for each test
-	_, err := db.Client.FlushDB(context.Background()).Result()
+	_, err := s.Client.FlushDB(context.Background()).Result()
 	if err != nil {
 		log.Panicf("failed to flush redis database: %v", err)
 	}
 
-	return db
+	return s
 }
 
 func newDevAgentManagerActivities() *DevAgentManagerActivities {
@@ -39,7 +38,7 @@ func newDevAgentManagerActivities() *DevAgentManagerActivities {
 
 func TestUpdateTaskForUserRequest(t *testing.T) {
 	ima := newDevAgentManagerActivities()
-	db := newTestRedisDatabase()
+	s := newTestRedisDatabase()
 
 	workspaceId := "testWorkspace"
 	task := domain.Task{
@@ -51,17 +50,17 @@ func TestUpdateTaskForUserRequest(t *testing.T) {
 		Id:          "workflow_testWorkflow",
 		ParentId:    task.Id,
 	}
-	err := db.PersistTask(context.Background(), task)
+	err := s.PersistTask(context.Background(), task)
 	assert.Nil(t, err)
 
-	err = db.PersistWorkflow(context.Background(), flow)
+	err = s.PersistWorkflow(context.Background(), flow)
 	assert.Nil(t, err)
 
 	err = ima.UpdateTaskForUserRequest(context.Background(), workspaceId, flow.Id)
 	assert.Nil(t, err)
 
 	// Retrieve the task from the database
-	updatedTask, err := db.GetTask(context.Background(), workspaceId, task.Id)
+	updatedTask, err := s.GetTask(context.Background(), workspaceId, task.Id)
 	assert.Nil(t, err)
 
 	// Check that the task was updated appropriately
@@ -71,7 +70,7 @@ func TestUpdateTaskForUserRequest(t *testing.T) {
 
 func TestCreatePendingUserRequest(t *testing.T) {
 	ima := newDevAgentManagerActivities()
-	db := newTestRedisDatabase()
+	s := newTestRedisDatabase()
 	ctx := context.Background()
 
 	workspaceId := "testWorkspace"
@@ -87,7 +86,7 @@ func TestCreatePendingUserRequest(t *testing.T) {
 	err := ima.CreatePendingUserRequest(ctx, workspaceId, request)
 	assert.Nil(t, err)
 
-	flowActions, err := db.GetFlowActions(context.Background(), workspaceId, flowId)
+	flowActions, err := s.GetFlowActions(context.Background(), workspaceId, flowId)
 	assert.Nil(t, err)
 	assert.Len(t, flowActions, 1)
 
@@ -101,7 +100,7 @@ func TestCreatePendingUserRequest(t *testing.T) {
 	assert.Equal(t, domain.ActionStatusPending, flowAction.ActionStatus)
 
 	// Retrieve the flow action from the database
-	persitedFlowAction, err := db.GetFlowAction(context.Background(), workspaceId, flowAction.Id)
+	persitedFlowAction, err := s.GetFlowAction(context.Background(), workspaceId, flowAction.Id)
 	assert.Nil(t, err)
 
 	// Check that the flow action was persisted appropriately
@@ -110,7 +109,7 @@ func TestCreatePendingUserRequest(t *testing.T) {
 
 func TestExistingUserRequest(t *testing.T) {
 	ima := newDevAgentManagerActivities()
-	db := newTestRedisDatabase()
+	s := newTestRedisDatabase()
 	ctx := context.Background()
 
 	workspaceId := "testWorkspace"
@@ -135,14 +134,14 @@ func TestExistingUserRequest(t *testing.T) {
 		},
 		ActionStatus: domain.ActionStatusStarted,
 	}
-	err := db.PersistFlowAction(ctx, existingFlowAction)
+	err := s.PersistFlowAction(ctx, existingFlowAction)
 	assert.Nil(t, err)
 
 	var flowAction domain.FlowAction
 	err = ima.CreatePendingUserRequest(ctx, workspaceId, request)
 	assert.Nil(t, err)
 
-	flowActions, err := db.GetFlowActions(context.Background(), workspaceId, flowId)
+	flowActions, err := s.GetFlowActions(context.Background(), workspaceId, flowId)
 	assert.Nil(t, err)
 	assert.Len(t, flowActions, 1)
 

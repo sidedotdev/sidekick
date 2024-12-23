@@ -10,10 +10,11 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"sidekick/db"
 	"sidekick/domain"
 	"sidekick/flow_event"
 	"sidekick/mocks"
+	"sidekick/srv"
+	"sidekick/srv/redis"
 	"sidekick/utils"
 	"strings"
 	"testing"
@@ -22,7 +23,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -75,14 +75,14 @@ func NewMockController(t *testing.T) Controller {
 	return Controller{
 		temporalClient: mockTemporalClient,
 		dbAccessor:     newTestRedisDatabase(),
-		flowEventAccessor: &db.RedisFlowEventAccessor{
+		flowEventAccessor: &srv.RedisFlowEventAccessor{
 			Client: newTestRedisDatabase().Client,
 		},
 	}
 }
 
-func newTestRedisDatabase() db.RedisDatabase {
-	redisDb := db.RedisDatabase{}
+func newTestRedisDatabase() redis.Service {
+	redisDb := redis.Service{}
 	redisDb.Client = redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "", // no password set
@@ -95,7 +95,7 @@ func newTestRedisDatabase() db.RedisDatabase {
 	return redisDb
 }
 
-func clearDb(db db.RedisDatabase) {
+func clearDb(db redis.Service) {
 	_, err := db.Client.FlushDB(context.Background()).Result()
 	if err != nil {
 		log.Panicf("failed to flush redis database: %v", err)
@@ -1169,7 +1169,7 @@ func TestDeleteTaskHandler(t *testing.T) {
 
 	// Check that the task has been deleted
 	_, err = ctrl.dbAccessor.GetTask(ginCtx.Request.Context(), task.WorkspaceId, task.Id)
-	assert.True(t, errors.Is(err, db.ErrNotFound))
+	assert.True(t, errors.Is(err, srv.ErrNotFound))
 }
 
 func TestGetWorkspacesHandler(t *testing.T) {
@@ -1208,7 +1208,7 @@ func TestGetWorkspacesHandler(t *testing.T) {
 	// Test for empty data
 	t.Run("returns empty list when no workspaces exist", func(t *testing.T) {
 		// No workspaces are added to ensure the database starts empty for this test scenario.
-		clearDb(redisDb.(db.RedisDatabase))
+		clearDb(redisDb.(redis.Service))
 
 		// Creating a test HTTP context
 		resp := httptest.NewRecorder()

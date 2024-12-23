@@ -5,12 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"sidekick/db"
+	"sidekick/srv"
 	"strings"
 )
 
 type TreeSitterActivities struct {
-	DatabaseAccessor db.Service
+	DatabaseAccessor srv.Service
 }
 
 const ContentTypeFileSignature = "file:signature"

@@ -5,16 +5,16 @@ import (
 	"log"
 	"reflect"
 	"sidekick/common"
-	sidedb "sidekick/db"
 	"sidekick/domain"
+	"sidekick/srv"
+	"sidekick/srv/redis"
 	"testing"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 )
 
-func newTestRedisDatabase() *sidedb.RedisDatabase {
-	db := &sidedb.RedisDatabase{}
+func newTestRedisDatabase() *redis.Service {
+	db := &redis.Service{}
 	db.Client = redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "",
@@ -58,7 +58,7 @@ func TestGetWorkspaceConfig(t *testing.T) {
 			workspaceID:     "test-workspace-2",
 			workspaceConfig: emptyConfig,
 			expectError:     true,
-			errorMsg:        sidedb.ErrNotFound.Error(),
+			errorMsg:        srv.ErrNotFound.Error(),
 		},
 		{
 			name:        "Missing LLM config",

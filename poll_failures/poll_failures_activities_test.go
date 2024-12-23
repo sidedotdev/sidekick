@@ -2,8 +2,8 @@ package poll_failures
 
 import (
 	"context"
-	"sidekick/db"
 	"sidekick/mocks"
+	"sidekick/srv/redis"
 	"sidekick/utils"
 	"testing"
 
@@ -19,7 +19,7 @@ import (
 // setupTestEnvironment sets up the necessary mocked and real components for testing.
 func setupTestEnvironment(t *testing.T) (*PollFailuresActivities, *mocks.Client) {
 	// Create a real Redis database instance
-	redisDB := db.NewRedisDatabase()
+	redisDB := redis.NewService()
 
 	// Create a mocked Temporal client
 	mockTemporalClient := mocks.NewClient(t)

@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sidekick/db"
 	"sidekick/flow_event"
 	"sidekick/llm"
+	"sidekick/srv"
 	"strings"
 
 	"go.temporal.io/sdk/activity"
@@ -21,7 +21,7 @@ type ChatStreamOptions struct {
 }
 
 type LlmActivities struct {
-	FlowEventAccessor db.FlowEventAccessor
+	FlowEventAccessor srv.FlowEventAccessor
 }
 
 func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptions) (*llm.ChatMessageResponse, error) {

@@ -3,8 +3,8 @@ package dev
 import (
 	"context"
 	"fmt"
-	"sidekick/db"
 	"sidekick/domain"
+	"sidekick/srv"
 	"strings"
 	"time"
 
@@ -15,7 +15,7 @@ import (
 )
 
 type DevAgentManagerActivities struct {
-	DatabaseAccessor db.Service
+	DatabaseAccessor srv.Service
 	TemporalClient   client.Client
 }
 
@@ -126,7 +126,7 @@ func (ima *DevAgentManagerActivities) CreatePendingUserRequest(ctx context.Conte
 	} else {
 		_, err := ima.DatabaseAccessor.GetFlowAction(ctx, workspaceId, req.FlowActionId)
 		if err != nil {
-			if err == db.ErrNotFound {
+			if err == srv.ErrNotFound {
 				return fmt.Errorf("Flow action with id %s not found in workspace %s", req.FlowActionId, workspaceId)
 			}
 			return fmt.Errorf("Failed to find existing flow action: %v", err)
