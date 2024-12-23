@@ -15,7 +15,7 @@ import (
 
 type PollFailuresActivities struct {
 	TemporalClient   client.Client
-	DatabaseAccessor db.DatabaseAccessor
+	DatabaseAccessor db.Service
 }
 
 type ListFailedWorkflowsInput struct {

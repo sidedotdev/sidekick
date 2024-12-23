@@ -17,7 +17,9 @@ import (
 	zlog "github.com/rs/zerolog/log"
 )
 
-var ErrNotFound = errors.New("not found")
+type RedisDatabase struct {
+	Client *redis.Client
+}
 
 func (db RedisDatabase) CheckConnection(ctx context.Context) error {
 	_, err := db.Client.Ping(context.Background()).Result()
@@ -58,10 +60,6 @@ func (db RedisDatabase) PersistWorkspaceConfig(ctx context.Context, workspaceId 
 	}
 
 	return nil
-}
-
-type RedisDatabase struct {
-	Client *redis.Client
 }
 
 // PersistSubflow stores a Subflow model in Redis and updates the flow's subflow set

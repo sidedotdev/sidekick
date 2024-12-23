@@ -23,7 +23,7 @@ type Embedder interface {
 
 type OpenAIActivities struct {
 	FlowEventAccessor db.FlowEventAccessor
-	DatabaseAccessor  db.DatabaseAccessor
+	DatabaseAccessor  db.Service
 	Embedder
 }
 

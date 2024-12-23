@@ -8,7 +8,7 @@ import (
 )
 
 type Activities struct {
-	DatabaseAccessor db.DatabaseAccessor
+	DatabaseAccessor db.Service
 }
 
 func (a *Activities) GetWorkspaceConfig(workspaceID string) (domain.WorkspaceConfig, error) {

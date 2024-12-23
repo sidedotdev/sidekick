@@ -15,7 +15,7 @@ import (
 )
 
 type RagActivities struct {
-	DatabaseAccessor     db.DatabaseAccessor
+	DatabaseAccessor     db.Service
 	Embedder             Embedder
 	LSPActivities        *lsp.LSPActivities
 	TreeSitterActivities *tree_sitter.TreeSitterActivities

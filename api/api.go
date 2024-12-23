@@ -48,7 +48,7 @@ func RunServer() *http.Server {
 }
 
 type Controller struct {
-	dbAccessor        db.DatabaseAccessor
+	dbAccessor        db.Service
 	flowEventAccessor db.FlowEventAccessor
 	temporalClient    client.Client
 	temporalNamespace string

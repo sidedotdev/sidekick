@@ -28,10 +28,10 @@ import (
 )
 
 type InitCommandHandler struct {
-	dbAccessor db.DatabaseAccessor
+	dbAccessor db.Service
 }
 
-func NewInitCommandHandler(dbAccessor db.DatabaseAccessor) *InitCommandHandler {
+func NewInitCommandHandler(dbAccessor db.Service) *InitCommandHandler {
 	return &InitCommandHandler{
 		dbAccessor: dbAccessor,
 	}

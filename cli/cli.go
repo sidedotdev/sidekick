@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	dbAccessor db.DatabaseAccessor
+	dbAccessor db.Service
 )
 
 func init() {

@@ -15,7 +15,7 @@ import (
 )
 
 type DevAgentManagerActivities struct {
-	DatabaseAccessor db.DatabaseAccessor
+	DatabaseAccessor db.Service
 	TemporalClient   client.Client
 }
 

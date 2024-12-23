@@ -2,4 +2,4 @@ package db
 
 import "errors"
 
-var ErrTaskNotFound = errors.New("task not found")
+var ErrNotFound = errors.New("not found")

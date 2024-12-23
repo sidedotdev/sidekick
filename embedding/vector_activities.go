@@ -21,7 +21,7 @@ type VectorSearchActivityOptions struct {
 	Limit         int
 }
 type VectorActivities struct {
-	DatabaseAccessor db.DatabaseAccessor
+	DatabaseAccessor db.Service
 }
 
 func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]uint64, error) {

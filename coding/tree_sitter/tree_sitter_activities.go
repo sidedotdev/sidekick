@@ -10,7 +10,7 @@ import (
 )
 
 type TreeSitterActivities struct {
-	DatabaseAccessor db.DatabaseAccessor
+	DatabaseAccessor db.Service
 }
 
 const ContentTypeFileSignature = "file:signature"
