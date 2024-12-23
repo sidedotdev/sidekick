@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database/sqlite"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	zlog "github.com/rs/zerolog/log"
 	_ "modernc.org/sqlite"
 )
@@ -31,8 +34,37 @@ func NewClient(dbPath string) (*Client, error) {
 		return nil, fmt.Errorf("failed to ping SQLite database: %w", err)
 	}
 
+	client := &Client{db: db}
+
+	if err := client.Migrate(); err != nil {
+		return nil, fmt.Errorf("failed to run migrations: %w", err)
+	}
+
 	zlog.Info().Msg("SQLite client initialized successfully")
-	return &Client{db: db}, nil
+	return client, nil
+}
+
+func (c *Client) Migrate() error {
+	driver, err := sqlite.WithInstance(c.db, &sqlite.Config{})
+	if err != nil {
+		return fmt.Errorf("failed to create migration driver: %w", err)
+	}
+
+	migrationsDir := filepath.Join("srv", "sqlite", "migrations")
+	m, err := migrate.NewWithDatabaseInstance(
+		fmt.Sprintf("file://%s", migrationsDir),
+		"sqlite",
+		driver,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create migrate instance: %w", err)
+	}
+
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		return fmt.Errorf("failed to apply migrations: %w", err)
+	}
+
+	return nil
 }
 
 func (c *Client) Close() error {
