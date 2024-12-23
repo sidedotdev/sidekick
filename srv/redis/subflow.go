@@ -27,6 +27,9 @@ func (s Storage) PersistSubflow(ctx context.Context, subflow domain.Subflow) err
 	pipe.SAdd(ctx, subflowSetKey, subflow.Id)
 
 	_, err = pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to persist subflow: %w", err)
+	}
 
 	return nil
 }
