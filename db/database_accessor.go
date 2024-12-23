@@ -11,16 +11,11 @@ import (
 // TODO separate out stream stuff (i.e. flow action changes, task changes) into separate interfaces
 type DatabaseAccessor interface {
 	CheckConnection(ctx context.Context) error
-	PersistTopic(ctx context.Context, topic models.Topic) error
-	GetTopics(ctx context.Context, workspaceId string) ([]models.Topic, error)
-	PersistMessage(ctx context.Context, message models.Message) error
 	PersistWorkflow(ctx context.Context, flow models.Flow) error
 	GetWorkflow(ctx context.Context, workspaceId, flowId string) (models.Flow, error)
 	GetFlowsForTask(ctx context.Context, workspaceId, taskId string) ([]models.Flow, error)
 	PersistSubflow(ctx context.Context, subflow models.Subflow) error
 	GetSubflows(ctx context.Context, workspaceId, flowId string) ([]models.Subflow, error)
-	GetMessages(ctx context.Context, workspaceId, topicId string) ([]models.Message, error)
-	TopicExists(ctx context.Context, workspaceId, topicId string) (bool, error)
 	PersistTask(ctx context.Context, task models.Task) error
 	GetTask(ctx context.Context, workspaceId, taskId string) (models.Task, error)
 	GetTasks(ctx context.Context, workspaceId string, statuses []models.TaskStatus) ([]models.Task, error)

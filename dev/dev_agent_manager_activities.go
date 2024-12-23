@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sidekick/db"
-	"sidekick/llm"
 	"sidekick/models"
 	"strings"
 	"time"
@@ -102,51 +101,6 @@ func (ima *DevAgentManagerActivities) GetWorkflow(ctx context.Context, workspace
 		return models.Flow{}, err
 	}
 	return flow, nil
-}
-
-func (ima *DevAgentManagerActivities) CreateRequestForUserMessageRecord(ctx context.Context, workspaceId string, req RequestForUser) (message models.Message, err error) {
-	log := activity.GetLogger(ctx)
-	flow, err := ima.DatabaseAccessor.GetWorkflow(ctx, workspaceId, req.OriginWorkflowId)
-	if err != nil {
-		log.Error("Failed to retrieve workflow record", "Error", err)
-		return message, err
-	}
-
-	allMessages, err := ima.DatabaseAccessor.GetMessages(ctx, workspaceId, flow.TopicId)
-	if err != nil {
-		log.Error("Failed to retrieve existing message records", "Error", err)
-		return message, err
-	}
-	existing := false
-	for _, msg := range allMessages {
-		if msg.FlowId == req.OriginWorkflowId && msg.Content == req.Content {
-			existing = true
-			message = msg
-			break
-		}
-	}
-	if existing {
-		// A message with the same content already exists, return without creating a new message
-		log.Info("There is already a message with the same content, exiting early to remain idempotent")
-		return message, err
-	}
-
-	message = models.Message{
-		WorkspaceId: workspaceId,
-		TopicId:     flow.TopicId,
-		Id:          "message_" + ksuid.New().String(),
-		Role:        string(llm.ChatMessageRoleAssistant),
-		Content:     req.Content,
-		Created:     time.Now().UTC(),
-		FlowId:      req.OriginWorkflowId,
-	}
-	err = ima.DatabaseAccessor.PersistMessage(ctx, message)
-	if err != nil {
-		log.Error("Failed to create message record", "Error", err)
-		return message, err
-	}
-
-	return message, nil
 }
 
 func (ima *DevAgentManagerActivities) CreatePendingUserRequest(ctx context.Context, workspaceId string, req RequestForUser) error {

@@ -10,7 +10,6 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"sidekick/agent"
 	"sidekick/db"
 	"sidekick/flow_event"
 	"sidekick/mocks"
@@ -103,137 +102,6 @@ func clearDb(db db.RedisDatabase) {
 	}
 }
 
-func TestGetTopicsHandler(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
-	_, err := ctrl.CreateTopic("test topic for get topics handler")
-	assert.NoError(t, err)
-
-	resp := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(resp)
-	route := "/topics"
-	c.Request = httptest.NewRequest("GET", route, nil)
-
-	ctrl.GetTopicsHandler(c)
-
-	assert.Equal(t, http.StatusOK, resp.Code)
-
-	var responseBody gin.H
-	err = json.Unmarshal(resp.Body.Bytes(), &responseBody)
-	assert.NoError(t, err)
-
-	topics, ok := responseBody["topics"]
-	assert.True(t, ok)
-	assert.NotNil(t, topics)
-}
-
-func TestCreateTopicHandler(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
-	resp := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(resp)
-	topicRequest := CreateTopicRequest{Title: "test topic"}
-
-	jsonData, err := json.Marshal(topicRequest)
-	assert.NoError(t, err)
-
-	route := "/topics"
-	c.Request = httptest.NewRequest("POST", route, bytes.NewBuffer(jsonData))
-	ctrl.CreateTopicHandler(c)
-
-	assert.Equal(t, http.StatusOK, resp.Code)
-
-	responseBody := make(map[string]models.Topic)
-	json.Unmarshal(resp.Body.Bytes(), &responseBody)
-
-	responseTopic, hasTopic := responseBody["topic"]
-	assert.True(t, hasTopic)
-	assert.True(t, strings.HasPrefix(responseTopic.Id, "topic_"))
-}
-
-func TestGetMessagesHandler_NonExistentTopic(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
-	resp := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(resp)
-
-	route := "/topics/nonexistent_topic_id/messages"
-	c.Request = httptest.NewRequest("GET", route, nil)
-	c.Params = []gin.Param{{Key: "id", Value: "nonexistent_topic_id"}}
-	ctrl.GetMessagesHandler(c)
-
-	assert.Equal(t, http.StatusBadRequest, resp.Code, "Response should be Bad Request")
-}
-
-func TestGetMessagesHandler_ExistentTopic(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
-	topic, err := ctrl.CreateTopic("test topic 99")
-	if err != nil {
-		t.Fatal("Failed to create topic: ", err)
-	}
-	resp := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(resp)
-
-	route := "/topics/" + topic.Id + "/messages"
-	c.Request = httptest.NewRequest("GET", route, nil)
-	c.Params = []gin.Param{{Key: "id", Value: topic.Id}}
-	ctrl.GetMessagesHandler(c)
-
-	bytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal("Failed to read response body: ", err)
-	}
-
-	t.Log("Response body string: ", string(bytes))
-	responseBody := make(map[string]interface{})
-	json.Unmarshal(bytes, &responseBody)
-
-	assert.Equal(t, http.StatusOK, resp.Code)
-	assert.Equal(t, map[string]interface{}{
-		"messages": []interface{}{},
-	}, responseBody, "Response body should match")
-}
-
-func TestCreateMessageHandler(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
-	topic, err := ctrl.CreateTopic("test topic") // TODO create a message too
-	assert.NoError(t, err)
-
-	resp := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(resp)
-	messageRequest := CreateMessageRequest{Content: "test message"}
-
-	jsonData, err := json.Marshal(messageRequest)
-	assert.NoError(t, err)
-
-	route := "/topics/" + topic.Id + "/messages"
-	c.Request = httptest.NewRequest("POST", route, bytes.NewBuffer(jsonData))
-	c.Params = []gin.Param{{Key: "id", Value: topic.Id}}
-	ctrl.CreateMessageHandler(c)
-
-	assert.Equal(t, http.StatusOK, resp.Code)
-	body, _ := io.ReadAll(resp.Body)
-	requireSSETypes(t, body, "message/create")
-}
-
-func TestCreateTopicWithMessageHandler(t *testing.T) {
-	ctrl := NewMockController(t)
-	data := `{"content":"Hello, world!"}`
-
-	// Simulate a request
-	resp := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(resp)
-	c.Request, _ = http.NewRequest("POST", "/topic", bytes.NewBufferString(data))
-	c.Request.Header.Set("Content-Type", "application/json")
-	ctrl.CreateTopicWithMessageHandler(c)
-
-	assert.Equal(t, http.StatusOK, resp.Code)
-	body, _ := io.ReadAll(resp.Body)
-	requireSSETypes(t, body, "topic/create", "message/create")
-}
-
 func requireSSETypes(t *testing.T, body []byte, expectedEventTypes ...string) {
 	// Parse the Server-Sent Events
 	events, err := parseSSE(string(body))
@@ -256,8 +124,13 @@ func requireSSETypes(t *testing.T, body []byte, expectedEventTypes ...string) {
 	}
 }
 
-func parseSSE(str string) ([]agent.Event, error) {
-	parsedEvents := make([]agent.Event, 0)
+type event struct {
+	Type string
+	Data string
+}
+
+func parseSSE(str string) ([]event, error) {
+	parsedEvents := make([]event, 0)
 	lines := strings.Split(str, "\n")
 	for i := 0; i < len(lines); i++ {
 		if strings.HasPrefix(lines[i], "event:") {
@@ -265,7 +138,7 @@ func parseSSE(str string) ([]agent.Event, error) {
 			i++
 			if i < len(lines) && strings.HasPrefix(lines[i], "data:") {
 				data := strings.TrimSpace(strings.TrimPrefix(lines[i], "data:"))
-				parsedEvents = append(parsedEvents, agent.Event{Type: eventType, Data: data})
+				parsedEvents = append(parsedEvents, event{Type: eventType, Data: data})
 			} else {
 				return nil, errors.New("invalid format, data field missing after event field")
 			}
