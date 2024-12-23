@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"sidekick/common"
 	"testing"
 
 	"github.com/ehsanul/anthropic-go/v3/pkg/anthropic"
@@ -95,7 +96,7 @@ func TestAnthropicToChatMessageResponse(t *testing.T) {
 					OutputTokens: 20,
 				},
 				Model:    string(anthropic.Claude3Opus),
-				Provider: AnthropicChatProvider,
+				Provider: common.AnthropicChatProvider,
 			},
 		},
 		{
@@ -133,7 +134,7 @@ func TestAnthropicToChatMessageResponse(t *testing.T) {
 					OutputTokens: 15,
 				},
 				Model:    string(anthropic.Claude3Haiku),
-				Provider: AnthropicChatProvider,
+				Provider: common.AnthropicChatProvider,
 			},
 		},
 		{
@@ -174,7 +175,7 @@ func TestAnthropicToChatMessageResponse(t *testing.T) {
 					OutputTokens: 30,
 				},
 				Model:    string(anthropic.Claude35Sonnet),
-				Provider: AnthropicChatProvider,
+				Provider: common.AnthropicChatProvider,
 			},
 		},
 	}

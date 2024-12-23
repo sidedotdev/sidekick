@@ -6,16 +6,16 @@ import (
 	"path/filepath"
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
-	"sidekick/db"
 	"sidekick/embedding"
 	"sidekick/env"
 	"sidekick/secret_manager"
+	"sidekick/srv"
 	"sidekick/utils"
 	"strings"
 )
 
 type RagActivities struct {
-	DatabaseAccessor     db.DatabaseAccessor
+	DatabaseAccessor     srv.Service
 	Embedder             Embedder
 	LSPActivities        *lsp.LSPActivities
 	TreeSitterActivities *tree_sitter.TreeSitterActivities
@@ -82,7 +82,7 @@ type RankedSubkeysOptions struct {
 
 func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]uint64, error) {
 	// FIXME put openai activities (later refactor this piece out to EmbeddingActivities) inside rag activities struct
-	oa := OpenAIActivities{DatabaseAccessor: ra.DatabaseAccessor, Embedder: ra.Embedder}
+	oa := OpenAIActivities{Storage: ra.DatabaseAccessor, Embedder: ra.Embedder}
 	err := oa.CachedEmbedActivity(context.Background(), OpenAIEmbedActivityOptions{
 		Secrets:       options.Secrets,
 		WorkspaceId:   options.WorkspaceId,
@@ -94,7 +94,7 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]uint64, 
 		return []uint64{}, err
 	}
 
-	va := embedding.VectorActivities{DatabaseAccessor: ra.DatabaseAccessor}
+	va := VectorActivities{DatabaseAccessor: ra.DatabaseAccessor}
 
 	// TODO cache this too
 	queryVector, err := embedding.OpenAIEmbedder{}.Embed(context.Background(), options.EmbeddingType, options.Secrets.SecretManager, []string{options.RankQuery})
@@ -102,7 +102,7 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]uint64, 
 		return []uint64{}, err
 	}
 
-	return va.VectorSearch(embedding.VectorSearchActivityOptions{
+	return va.VectorSearch(VectorSearchActivityOptions{
 		WorkspaceId:   options.WorkspaceId,
 		EmbeddingType: options.EmbeddingType,
 		ContentType:   options.ContentType,

@@ -3,38 +3,21 @@ package flow_action
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"testing"
 
-	"github.com/redis/go-redis/v9"
+	"sidekick/domain"
+	"sidekick/srv/redis"
+
 	"github.com/stretchr/testify/assert"
-	"sidekick/db"
-	"sidekick/models"
 )
 
-func newTestRedisDatabase() *db.RedisDatabase {
-	db := &db.RedisDatabase{}
-	db.Client = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       1,
-	})
-
-	// Flush the database synchronously to ensure a clean state for each test
-	_, err := db.Client.FlushDB(context.Background()).Result()
-	if err != nil {
-		log.Panicf("failed to flush redis database: %v", err)
-	}
-
-	return db
-}
-
 func TestPersistFlowAction(t *testing.T) {
+	service, client := redis.NewTestRedisService()
 	fa := FlowActivities{
-		DatabaseAccessor: newTestRedisDatabase(),
+		Service: service,
 	}
 
-	flowAction := models.FlowAction{
+	flowAction := domain.FlowAction{
 		Id:          "test_id",
 		FlowId:      "test_flow_id",
 		WorkspaceId: "test_workspace_id",
@@ -44,10 +27,10 @@ func TestPersistFlowAction(t *testing.T) {
 	assert.NoError(t, err)
 
 	key := "test_workspace_id:test_id"
-	val, err := fa.DatabaseAccessor.Client.Get(context.Background(), key).Result()
+	val, err := client.Get(context.Background(), key).Result()
 	assert.NoError(t, err)
 
-	var persistedFlowAction models.FlowAction
+	var persistedFlowAction domain.FlowAction
 	err = json.Unmarshal([]byte(val), &persistedFlowAction)
 	assert.NoError(t, err)
 

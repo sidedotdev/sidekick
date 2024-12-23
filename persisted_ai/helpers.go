@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/llm"
-	"sidekick/models"
 	"sidekick/utils"
 
 	"go.temporal.io/sdk/workflow"
@@ -73,7 +73,7 @@ func ForceToolCall(actionCtx flow_action.ActionContext, llmConfig common.LLMConf
 	options.WorkspaceId = actionCtx.WorkspaceId
 	options.FlowId = flowId
 	actionCtx.ActionParams = options.ActionParams()
-	chatResponse, err := flow_action.Track(actionCtx, func(flowAction models.FlowAction) (llm.ChatMessageResponse, error) {
+	chatResponse, err := flow_action.Track(actionCtx, func(flowAction domain.FlowAction) (llm.ChatMessageResponse, error) {
 		options.FlowActionId = flowAction.Id
 		var chatResponse llm.ChatMessageResponse
 		err := workflow.ExecuteActivity(utils.LlmHeartbeatCtx(actionCtx), la.ChatStream, options).Get(actionCtx, &chatResponse)
@@ -98,7 +98,7 @@ func ForceToolCall(actionCtx flow_action.ActionContext, llmConfig common.LLMConf
 		})
 		options.Params.Messages = params.Messages
 		actionCtx.ActionParams = options.ActionParams()
-		chatResponse, err = flow_action.Track(actionCtx, func(flowAction models.FlowAction) (llm.ChatMessageResponse, error) {
+		chatResponse, err = flow_action.Track(actionCtx, func(flowAction domain.FlowAction) (llm.ChatMessageResponse, error) {
 			var chatResponse llm.ChatMessageResponse
 			options.FlowActionId = flowAction.Id
 			err := workflow.ExecuteActivity(utils.LlmHeartbeatCtx(actionCtx), la.ChatStream, options).Get(actionCtx, &chatResponse)

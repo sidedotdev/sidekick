@@ -13,9 +13,9 @@ import (
 	"path/filepath"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
-	"sidekick/db"
+	"sidekick/domain"
 	"sidekick/llm"
-	"sidekick/models"
+	"sidekick/srv"
 	"strings"
 	"syscall"
 	"time"
@@ -28,12 +28,12 @@ import (
 )
 
 type InitCommandHandler struct {
-	dbAccessor db.DatabaseAccessor
+	storage srv.Storage
 }
 
-func NewInitCommandHandler(dbAccessor db.DatabaseAccessor) *InitCommandHandler {
+func NewInitCommandHandler(storage srv.Storage) *InitCommandHandler {
 	return &InitCommandHandler{
-		dbAccessor: dbAccessor,
+		storage: storage,
 	}
 }
 
@@ -81,7 +81,7 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	ctx := context.Background()
 
 	// check if redis is running
-	err = h.dbAccessor.CheckConnection(ctx)
+	err = h.storage.CheckConnection(ctx)
 	if err != nil {
 		return fmt.Errorf("Redis isn't running, please install and run it: https://redis.io/docs/install/install-redis/")
 	}
@@ -102,8 +102,8 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		return fmt.Errorf("error checking or prompting for AI secrets: %w", err)
 	}
 
-	existingConfig, err := h.dbAccessor.GetWorkspaceConfig(ctx, workspace.Id)
-	if err != nil && !errors.Is(err, db.ErrNotFound) {
+	existingConfig, err := h.storage.GetWorkspaceConfig(ctx, workspace.Id)
+	if err != nil && !errors.Is(err, srv.ErrNotFound) {
 		return fmt.Errorf("error retrieving workspace configuration: %w", err)
 	}
 
@@ -122,9 +122,9 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	return nil
 }
 
-func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspaceID string, currentConfig *models.WorkspaceConfig, llmProviders, embeddingProviders []string) error {
+func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspaceID string, currentConfig *domain.WorkspaceConfig, llmProviders, embeddingProviders []string) error {
 	if currentConfig == nil {
-		currentConfig = &models.WorkspaceConfig{}
+		currentConfig = &domain.WorkspaceConfig{}
 	}
 
 	// Set up LLM configuration
@@ -146,7 +146,7 @@ func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspac
 	}
 
 	// Persist the updated configuration
-	err := h.dbAccessor.PersistWorkspaceConfig(ctx, workspaceID, *currentConfig)
+	err := h.storage.PersistWorkspaceConfig(ctx, workspaceID, *currentConfig)
 	if err != nil {
 		return fmt.Errorf("failed to persist workspace config: %w", err)
 	}
@@ -157,8 +157,8 @@ func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspac
 // FIXME make a call to an API instead of directly using a database. this may
 // require running the server locally as a daemon if not already running or
 // configured to be remote
-func (h *InitCommandHandler) findOrCreateWorkspace(ctx context.Context, workspaceName, repoDir string) (*models.Workspace, error) {
-	workspaces, err := h.dbAccessor.GetAllWorkspaces(ctx)
+func (h *InitCommandHandler) findOrCreateWorkspace(ctx context.Context, workspaceName, repoDir string) (*domain.Workspace, error) {
+	workspaces, err := h.storage.GetAllWorkspaces(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving workspaces: %w", err)
 	}
@@ -169,7 +169,7 @@ func (h *InitCommandHandler) findOrCreateWorkspace(ctx context.Context, workspac
 		}
 	}
 
-	workspace := models.Workspace{
+	workspace := domain.Workspace{
 		Name:         workspaceName,
 		Id:           "ws_" + ksuid.New().String(),
 		LocalRepoDir: repoDir,
@@ -177,7 +177,7 @@ func (h *InitCommandHandler) findOrCreateWorkspace(ctx context.Context, workspac
 		Updated:      time.Now(),
 	}
 
-	if err := h.dbAccessor.PersistWorkspace(ctx, workspace); err != nil {
+	if err := h.storage.PersistWorkspace(ctx, workspace); err != nil {
 		return nil, fmt.Errorf("error persisting workspace: %w", err)
 	}
 

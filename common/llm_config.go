@@ -2,7 +2,6 @@ package common
 
 import (
 	"fmt"
-	"sidekick/llm"
 )
 
 const (
@@ -42,7 +41,7 @@ func (c LLMConfig) GetModelsOrDefault(key string) ([]ModelConfig, bool) {
 	return c.Defaults, true
 }
 
-func (c LLMConfig) GetToolChatConfig(key string, iteration int) (llm.ToolChatProvider, ModelConfig, bool) {
+func (c LLMConfig) GetToolChatConfig(key string, iteration int) (ToolChatProvider, ModelConfig, bool) {
 	modelConfigs, isDefault := c.GetModelsOrDefault(key)
 	if len(modelConfigs) == 0 {
 		panic("LLM config: no default model config found")
@@ -52,10 +51,10 @@ func (c LLMConfig) GetToolChatConfig(key string, iteration int) (llm.ToolChatPro
 	// the correct modelConfig from the list of configs based on which can fit
 	// the context size
 	modelConfig := modelConfigs[iteration%len(modelConfigs)]
-	provider, err := llm.StringToToolChatProvider(modelConfig.Provider)
+	provider, err := StringToToolChatProvider(modelConfig.Provider)
 	if err != nil {
 		panic(fmt.Sprintf("AI config: failed to convert provider string to ToolChatProvider: %v", err))
-	} else if provider == llm.UnspecifiedToolChatProvider {
+	} else if provider == UnspecifiedToolChatProvider {
 		panic("AI config: provider is empty")
 	} else if modelConfig.Model == "" && !isDefault {
 		panic("AI config: model is empty")

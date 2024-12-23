@@ -10,10 +10,11 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"sidekick/db"
-	"sidekick/flow_event"
+	"sidekick/domain"
+	domain1 "sidekick/domain"
 	"sidekick/mocks"
-	"sidekick/models"
+	"sidekick/srv"
+	"sidekick/srv/redis"
 	"sidekick/utils"
 	"strings"
 	"testing"
@@ -22,7 +23,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -72,31 +72,15 @@ func NewMockController(t *testing.T) Controller {
 	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
 	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
 
+	service, _ := redis.NewTestRedisService()
 	return Controller{
 		temporalClient: mockTemporalClient,
-		dbAccessor:     newTestRedisDatabase(),
-		flowEventAccessor: &db.RedisFlowEventAccessor{
-			Client: newTestRedisDatabase().Client,
-		},
+		service:        service,
 	}
 }
 
-func newTestRedisDatabase() db.RedisDatabase {
-	redisDb := db.RedisDatabase{}
-	redisDb.Client = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "", // no password set
-		DB:       1,  // use default DB
-	})
-
-	// Flush the database synchronously to ensure a clean state for each test
-	clearDb(redisDb)
-
-	return redisDb
-}
-
-func clearDb(db db.RedisDatabase) {
-	_, err := db.Client.FlushDB(context.Background()).Result()
+func clearDb(client *redis.Client) {
+	_, err := client.FlushDB(context.Background()).Result()
 	if err != nil {
 		log.Panicf("failed to flush redis database: %v", err)
 	}
@@ -155,20 +139,20 @@ func TestCreateTaskHandler(t *testing.T) {
 		name           string
 		taskRequest    TaskRequest
 		expectedStatus int
-		expectedTask   *models.Task
+		expectedTask   *domain.Task
 		expectedError  string
 	}{
 		{
 			name: "AgentTypeHuman",
 			taskRequest: TaskRequest{
 				Description: "test description",
-				AgentType:   string(models.AgentTypeHuman),
-				FlowType:    models.FlowTypeBasicDev,
+				AgentType:   string(domain.AgentTypeHuman),
+				FlowType:    domain.FlowTypeBasicDev,
 			},
 			expectedStatus: http.StatusOK,
-			expectedTask: &models.Task{
-				AgentType: models.AgentTypeHuman,
-				FlowType:  models.FlowTypeBasicDev,
+			expectedTask: &domain.Task{
+				AgentType: domain.AgentTypeHuman,
+				FlowType:  domain.FlowTypeBasicDev,
 			},
 		},
 		{
@@ -176,12 +160,12 @@ func TestCreateTaskHandler(t *testing.T) {
 			taskRequest: TaskRequest{
 				Title:       "test task",
 				Description: "test description",
-				FlowType:    models.FlowTypeBasicDev,
+				FlowType:    domain.FlowTypeBasicDev,
 			},
 			expectedStatus: http.StatusOK,
-			expectedTask: &models.Task{
-				AgentType: models.AgentTypeLLM,
-				FlowType:  models.FlowTypeBasicDev,
+			expectedTask: &domain.Task{
+				AgentType: domain.AgentTypeLLM,
+				FlowType:  domain.FlowTypeBasicDev,
 			},
 		},
 		{
@@ -189,12 +173,12 @@ func TestCreateTaskHandler(t *testing.T) {
 			taskRequest: TaskRequest{
 				Title:       "test task",
 				Description: "test description",
-				FlowType:    models.FlowTypePlannedDev,
+				FlowType:    domain.FlowTypePlannedDev,
 			},
 			expectedStatus: http.StatusOK,
-			expectedTask: &models.Task{
-				AgentType:   models.AgentTypeLLM,
-				FlowType:    models.FlowTypePlannedDev,
+			expectedTask: &domain.Task{
+				AgentType:   domain.AgentTypeLLM,
+				FlowType:    domain.FlowTypePlannedDev,
 				FlowOptions: map[string]interface{}{},
 			},
 		},
@@ -203,15 +187,15 @@ func TestCreateTaskHandler(t *testing.T) {
 			taskRequest: TaskRequest{
 				Title:       "test task",
 				Description: "test description",
-				FlowType:    models.FlowTypePlannedDev,
+				FlowType:    domain.FlowTypePlannedDev,
 				FlowOptions: map[string]interface{}{
 					"planningPrompt": "test planning prompt",
 				},
 			},
 			expectedStatus: http.StatusOK,
-			expectedTask: &models.Task{
-				AgentType: models.AgentTypeLLM,
-				FlowType:  models.FlowTypePlannedDev,
+			expectedTask: &domain.Task{
+				AgentType: domain.AgentTypeLLM,
+				FlowType:  domain.FlowTypePlannedDev,
 				FlowOptions: map[string]interface{}{
 					"planningPrompt": "test planning prompt",
 				},
@@ -222,7 +206,7 @@ func TestCreateTaskHandler(t *testing.T) {
 			taskRequest: TaskRequest{
 				Description: "test description",
 				AgentType:   "none",
-				FlowType:    models.FlowTypeBasicDev,
+				FlowType:    domain.FlowTypeBasicDev,
 			},
 			expectedStatus: http.StatusBadRequest,
 			expectedError:  "Creating a task with agent type set to \"none\" is not allowed",
@@ -232,7 +216,7 @@ func TestCreateTaskHandler(t *testing.T) {
 			taskRequest: TaskRequest{
 				Description: "test description",
 				AgentType:   "something",
-				FlowType:    models.FlowTypeBasicDev,
+				FlowType:    domain.FlowTypeBasicDev,
 			},
 			expectedStatus: http.StatusBadRequest,
 			expectedError:  "Invalid agent type: \"something\"",
@@ -242,22 +226,22 @@ func TestCreateTaskHandler(t *testing.T) {
 			taskRequest: TaskRequest{
 				Status:      "drafting",
 				Description: "test description",
-				FlowType:    models.FlowTypeBasicDev,
+				FlowType:    domain.FlowTypeBasicDev,
 			},
 			expectedStatus: http.StatusOK,
-			expectedTask: &models.Task{
-				Status:    models.TaskStatusDrafting,
-				AgentType: models.AgentTypeHuman,
-				FlowType:  models.FlowTypeBasicDev,
+			expectedTask: &domain.Task{
+				Status:    domain.TaskStatusDrafting,
+				AgentType: domain.AgentTypeHuman,
+				FlowType:  domain.FlowTypeBasicDev,
 			},
 		},
 		{
 			name: "DraftingStatusAgentTypeLlm",
 			taskRequest: TaskRequest{
 				Status:      "drafting",
-				AgentType:   string(models.AgentTypeLLM),
+				AgentType:   string(domain.AgentTypeLLM),
 				Description: "test description",
-				FlowType:    models.FlowTypeBasicDev,
+				FlowType:    domain.FlowTypeBasicDev,
 			},
 			expectedStatus: http.StatusBadRequest,
 			expectedError:  "When task status is 'drafting', the agent type must be 'human'",
@@ -267,13 +251,13 @@ func TestCreateTaskHandler(t *testing.T) {
 			taskRequest: TaskRequest{
 				Status:      "in_progress",
 				Description: "test description",
-				FlowType:    models.FlowTypeBasicDev,
+				FlowType:    domain.FlowTypeBasicDev,
 			},
 			expectedStatus: http.StatusBadRequest,
-			expectedTask: &models.Task{
-				Status:    models.TaskStatusInProgress,
-				AgentType: models.AgentTypeHuman,
-				FlowType:  models.FlowTypeBasicDev,
+			expectedTask: &domain.Task{
+				Status:    domain.TaskStatusInProgress,
+				AgentType: domain.AgentTypeHuman,
+				FlowType:  domain.FlowTypeBasicDev,
 			},
 			expectedError: "Creating a task with status set to anything other than 'drafting' or 'to_do' is not allowed",
 		},
@@ -294,7 +278,7 @@ func TestCreateTaskHandler(t *testing.T) {
 			assert.Equal(t, tc.expectedStatus, resp.Code)
 
 			if resp.Code == http.StatusOK {
-				responseBody := make(map[string]models.Task)
+				responseBody := make(map[string]domain.Task)
 				json.Unmarshal(resp.Body.Bytes(), &responseBody)
 
 				responseTask, hasTask := responseBody["task"]
@@ -332,38 +316,38 @@ func TestGetTasksHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	service, _ := redis.NewTestRedisService()
 	ctx := context.Background()
 	workspaceId := "ws_1"
 
 	// Create some test tasks with different statuses
-	tasks := []models.Task{
+	tasks := []domain.Task{
 		{
 			WorkspaceId: workspaceId,
 			Id:          "task_" + ksuid.New().String(),
-			Status:      models.TaskStatusToDo,
+			Status:      domain.TaskStatusToDo,
 		},
 		{
 			WorkspaceId: workspaceId,
 			Id:          "task_" + ksuid.New().String(),
-			Status:      models.TaskStatusInProgress,
+			Status:      domain.TaskStatusInProgress,
 		},
 		{
 			WorkspaceId: workspaceId,
 			Id:          "task_" + ksuid.New().String(),
-			Status:      models.TaskStatusBlocked,
+			Status:      domain.TaskStatusBlocked,
 		},
 	}
 
 	for _, task := range tasks {
-		err := redisDb.PersistTask(ctx, task)
+		err := service.PersistTask(ctx, task)
 		assert.Nil(t, err)
 	}
 
 	// Test the GetTasks API with different combinations of statuses
 	testCases := []struct {
 		statusesStr   string
-		expectedTasks []models.Task
+		expectedTasks []domain.Task
 	}{
 		{
 			statusesStr:   "to_do,in_progress",
@@ -371,11 +355,11 @@ func TestGetTasksHandler(t *testing.T) {
 		},
 		{
 			statusesStr:   "to_do,blocked",
-			expectedTasks: []models.Task{tasks[0], tasks[2]},
+			expectedTasks: []domain.Task{tasks[0], tasks[2]},
 		},
 		{
 			statusesStr:   "blocked",
-			expectedTasks: []models.Task{tasks[2]},
+			expectedTasks: []domain.Task{tasks[2]},
 		},
 		// TODO need a case for when empty statuses are passed (should default to all statuses)
 		// TODO need a case for when invalid statuses are passed
@@ -391,7 +375,7 @@ func TestGetTasksHandler(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, resp.Code)
 		var result struct {
-			Tasks []models.Task `json:"tasks"`
+			Tasks []domain.Task `json:"tasks"`
 		}
 		err := json.Unmarshal(resp.Body.Bytes(), &result)
 		if assert.Nil(t, err) {
@@ -418,18 +402,18 @@ func TestGetTasksHandlerWhenTasksAreEmpty(t *testing.T) {
 	// Assert that the returned tasks list is empty
 	assert.Equal(t, http.StatusOK, resp.Code)
 	var result struct {
-		Tasks []models.Task `json:"tasks"`
+		Tasks []domain.Task `json:"tasks"`
 	}
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	if assert.Nil(t, err) {
-		assert.Equal(t, []models.Task{}, result.Tasks)
+		assert.Equal(t, []domain.Task{}, result.Tasks)
 	}
 }
 
 func TestGetFlowActionChangesHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	service, _ := redis.NewTestRedisService()
 
 	// Create a flow in the database
 	workspaceId := "ws_test-1"
@@ -437,7 +421,7 @@ func TestGetFlowActionChangesHandler(t *testing.T) {
 	subflowId := "sf_test-subflow-id"
 
 	// Test case 1: FlowAction with existing SubflowId
-	flowAction1 := models.FlowAction{
+	flowAction1 := domain.FlowAction{
 		WorkspaceId:        workspaceId,
 		FlowId:             flowId,
 		SubflowName:        "test-subflow",
@@ -445,7 +429,7 @@ func TestGetFlowActionChangesHandler(t *testing.T) {
 		SubflowId:          subflowId,
 		Id:                 "test-action-id-1",
 		ActionType:         "test-action-type",
-		ActionStatus:       models.ActionStatusPending,
+		ActionStatus:       domain.ActionStatusPending,
 		ActionParams: map[string]interface{}{
 			"test-param": "test-value",
 		},
@@ -453,35 +437,35 @@ func TestGetFlowActionChangesHandler(t *testing.T) {
 	}
 
 	// Test case 2: FlowAction without SubflowId (legacy)
-	flowAction2 := models.FlowAction{
+	flowAction2 := domain.FlowAction{
 		WorkspaceId:        workspaceId,
 		FlowId:             flowId,
 		SubflowName:        "another-subflow",
 		SubflowDescription: "Another subflow description",
 		Id:                 "test-action-id-2",
 		ActionType:         "test-action-type",
-		ActionStatus:       models.ActionStatusPending,
+		ActionStatus:       domain.ActionStatusPending,
 		ActionParams: map[string]interface{}{
 			"test-param": "test-value",
 		},
 		ActionResult: "test-result",
 	}
 
-	endFlowAction := models.FlowAction{
+	endFlowAction := domain.FlowAction{
 		WorkspaceId: workspaceId,
 		FlowId:      flowId,
 		Id:          "end",
 	}
 
-	err := redisDb.PersistFlowAction(context.Background(), flowAction1)
+	err := service.PersistFlowAction(context.Background(), flowAction1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = redisDb.PersistFlowAction(context.Background(), flowAction2)
+	err = service.PersistFlowAction(context.Background(), flowAction2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = redisDb.PersistFlowAction(context.Background(), endFlowAction)
+	err = service.PersistFlowAction(context.Background(), endFlowAction)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,14 +494,14 @@ func TestGetFlowActionChangesHandler(t *testing.T) {
 
 	assert.Equal(t, 2, len(events), "Expected 2 events")
 
-	var action1 models.FlowAction
+	var action1 domain.FlowAction
 	err = json.Unmarshal([]byte(events[0].Data), &action1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assert.Equal(t, utils.PrettyJSON(flowAction1), utils.PrettyJSON(action1))
 
-	var action2 models.FlowAction
+	var action2 domain.FlowAction
 	err = json.Unmarshal([]byte(events[1].Data), &action2)
 	if err != nil {
 		t.Fatal(err)
@@ -528,17 +512,17 @@ func TestGetFlowActionChangesHandler(t *testing.T) {
 func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	db := ctrl.dbAccessor
+	db := ctrl.service
 	ctx := context.Background()
 
 	workspaceId := "test-workspace-id-" + uuid.New().String()
 	flowId := "test-flow-id-" + uuid.New().String()
 	// persisting a workspace and flow so that the identifiers are valid
-	workspace := models.Workspace{Id: workspaceId}
+	workspace := domain.Workspace{Id: workspaceId}
 	err := db.PersistWorkspace(ctx, workspace)
 	assert.NoError(t, err, "Persisting workspace failed")
-	flow := models.Flow{Id: flowId, WorkspaceId: workspaceId}
-	err = db.PersistWorkflow(ctx, flow)
+	flow := domain.Flow{Id: flowId, WorkspaceId: workspaceId}
+	err = db.PersistFlow(ctx, flow)
 	assert.NoError(t, err, "Persisting workflow failed")
 
 	router := DefineRoutes(ctrl)
@@ -556,7 +540,7 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 	defer ws.Close()
 
 	// Simulate persisting a flow action
-	flowAction := models.FlowAction{
+	flowAction := domain.FlowAction{
 		Id:          "test-id",
 		ActionType:  "test-action-type",
 		FlowId:      flowId,
@@ -566,7 +550,7 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 	assert.NoError(t, err, "Persisting flow action failed")
 
 	// Verify if the flow action is streamed correctly
-	var receivedAction models.FlowAction
+	var receivedAction domain.FlowAction
 	err = ws.ReadJSON(&receivedAction)
 	if err != nil {
 		t.Fatalf("Failed to read flow action: %v", err)
@@ -577,29 +561,29 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 }
 func TestCompleteFlowActionHandler(t *testing.T) {
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 	workspaceId := "ws_123"
 	ctx := context.Background()
-	task := models.Task{
+	task := domain.Task{
 		WorkspaceId: workspaceId,
-		Status:      models.TaskStatusInProgress,
-		AgentType:   models.AgentTypeLLM,
+		Status:      domain.TaskStatusInProgress,
+		AgentType:   domain.AgentTypeLLM,
 	}
 	redisDb.PersistTask(ctx, task)
 
 	// Create a flow associated with the task
-	flow := models.Flow{
+	flow := domain.Flow{
 		ParentId:    task.Id,
 		WorkspaceId: workspaceId,
 		Id:          "flow_1",
 	}
 
 	// Create a flow action associated with the flow
-	flowAction := models.FlowAction{
+	flowAction := domain.FlowAction{
 		WorkspaceId:      workspaceId,
 		FlowId:           flow.Id,
 		Id:               "flow_action_1",
-		ActionStatus:     models.ActionStatusPending,
+		ActionStatus:     domain.ActionStatusPending,
 		ActionType:       "anything",
 		IsHumanAction:    true,
 		IsCallbackAction: true,
@@ -608,7 +592,7 @@ func TestCompleteFlowActionHandler(t *testing.T) {
 	// Persist the task and the flow action in the database before the API call
 	err := redisDb.PersistTask(ctx, task)
 	assert.Nil(t, err)
-	err = redisDb.PersistWorkflow(ctx, flow)
+	err = redisDb.PersistFlow(ctx, flow)
 	assert.Nil(t, err)
 	err = redisDb.PersistFlowAction(ctx, flowAction)
 	assert.Nil(t, err)
@@ -631,22 +615,22 @@ func TestCompleteFlowActionHandler(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Check that the task and the flow action were updated correctly
-	assert.Equal(t, models.TaskStatusInProgress, retrievedTask.Status)
-	assert.Equal(t, models.AgentTypeLLM, retrievedTask.AgentType)
+	assert.Equal(t, domain.TaskStatusInProgress, retrievedTask.Status)
+	assert.Equal(t, domain.AgentTypeLLM, retrievedTask.AgentType)
 	assert.Equal(t, expectedActionResult, retrievedFlowAction.ActionResult)
-	assert.Equal(t, models.ActionStatusComplete, retrievedFlowAction.ActionStatus)
+	assert.Equal(t, domain.ActionStatusComplete, retrievedFlowAction.ActionStatus)
 }
 
 func TestCompleteFlowActionHandler_NonHumanRequest(t *testing.T) {
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	workspaceId := "ws_1"
-	flowAction := models.FlowAction{
+	flowAction := domain.FlowAction{
 		WorkspaceId:      workspaceId,
 		FlowId:           "flow_1",
 		Id:               "flow_action_1",
-		ActionStatus:     models.ActionStatusPending,
+		ActionStatus:     domain.ActionStatusPending,
 		ActionType:       "anything",
 		IsHumanAction:    false,
 		IsCallbackAction: true,
@@ -678,14 +662,14 @@ func TestCompleteFlowActionHandler_NonHumanRequest(t *testing.T) {
 
 func TestCompleteFlowActionHandler_NonPending(t *testing.T) {
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	workspaceId := "ws_1"
-	flowAction := models.FlowAction{
+	flowAction := domain.FlowAction{
 		WorkspaceId:      workspaceId,
 		FlowId:           "flow_1",
 		Id:               "flow_action_1",
-		ActionStatus:     models.ActionStatusFailed,
+		ActionStatus:     domain.ActionStatusFailed,
 		ActionType:       "anything",
 		ActionResult:     "existing response",
 		IsHumanAction:    true,
@@ -718,14 +702,14 @@ func TestCompleteFlowActionHandler_NonPending(t *testing.T) {
 
 func TestCompleteFlowActionHandler_NonCallback(t *testing.T) {
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	workspaceId := "ws_1"
-	flowAction := models.FlowAction{
+	flowAction := domain.FlowAction{
 		WorkspaceId:      workspaceId,
 		FlowId:           "flow_1",
 		Id:               "flow_action_1",
-		ActionStatus:     models.ActionStatusFailed,
+		ActionStatus:     domain.ActionStatusFailed,
 		ActionType:       "anything",
 		ActionResult:     "existing response",
 		IsHumanAction:    true,
@@ -758,14 +742,14 @@ func TestCompleteFlowActionHandler_NonCallback(t *testing.T) {
 
 func TestCompleteFlowActionHandler_EmptyResponse(t *testing.T) {
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	workspaceId := "ws_1"
-	flowAction := models.FlowAction{
+	flowAction := domain.FlowAction{
 		WorkspaceId:      workspaceId,
 		FlowId:           "flow_1",
 		Id:               "flow_action_1",
-		ActionStatus:     models.ActionStatusPending,
+		ActionStatus:     domain.ActionStatusPending,
 		ActionType:       "user_request",
 		ActionResult:     "existing response",
 		IsHumanAction:    true,
@@ -800,12 +784,12 @@ func TestGetFlowActionsHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 	ctx := context.Background()
 
 	workspaceId := "ws_1"
 	// Create some test flow actions
-	flowActions := []models.FlowAction{
+	flowActions := []domain.FlowAction{
 		{
 			WorkspaceId: workspaceId,
 			FlowId:      "flow_1",
@@ -814,7 +798,7 @@ func TestGetFlowActionsHandler(t *testing.T) {
 			ActionParams: map[string]interface{}{
 				"test_param_1": "test_value_1",
 			},
-			ActionStatus: models.ActionStatusComplete,
+			ActionStatus: domain.ActionStatusComplete,
 			ActionResult: "test_result_1",
 		},
 		{
@@ -825,7 +809,7 @@ func TestGetFlowActionsHandler(t *testing.T) {
 			ActionParams: map[string]interface{}{
 				"test_param_2": "test_value_2",
 			},
-			ActionStatus: models.ActionStatusPending,
+			ActionStatus: domain.ActionStatusPending,
 			ActionResult: "test_result_2",
 		},
 	}
@@ -844,7 +828,7 @@ func TestGetFlowActionsHandler(t *testing.T) {
 	ctrl.GetFlowActionsHandler(c)
 
 	assert.Equal(t, http.StatusOK, resp.Code)
-	var result map[string][]models.FlowAction
+	var result map[string][]domain.FlowAction
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	if assert.Nil(t, err) {
 		assert.Equal(t, flowActions, result["flowActions"])
@@ -866,13 +850,13 @@ func TestGetFlowActionsHandler_NonExistentFlowId(t *testing.T) {
 func TestGetFlowActionsHandler_EmptyActions(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
-	flow := models.Flow{
+	flow := domain.Flow{
 		WorkspaceId: "ws_" + ksuid.New().String(),
 		Id:          "flow_1",
 	}
-	err := redisDb.PersistWorkflow(context.Background(), flow)
+	err := redisDb.PersistFlow(context.Background(), flow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -886,26 +870,26 @@ func TestGetFlowActionsHandler_EmptyActions(t *testing.T) {
 
 	// Assert that the returned flow actions list is empty
 	assert.Equal(t, http.StatusOK, resp.Code)
-	var result map[string][]models.FlowAction
+	var result map[string][]domain.FlowAction
 	fmt.Print(resp.Body.String())
 	err = json.Unmarshal(resp.Body.Bytes(), &result)
 	if assert.Nil(t, err) {
-		assert.Equal(t, []models.FlowAction{}, result["flowActions"])
+		assert.Equal(t, []domain.FlowAction{}, result["flowActions"])
 	}
 }
 func TestUpdateTaskHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	// Create a task for testing
-	task := models.Task{
+	task := domain.Task{
 		WorkspaceId: "ws_" + ksuid.New().String(),
 		Id:          "task_" + ksuid.New().String(),
 		Description: "test description",
-		AgentType:   models.AgentTypeLLM,
-		Status:      models.TaskStatusToDo,
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusToDo,
 	}
 	err := redisDb.PersistTask(context.Background(), task)
 	if err != nil {
@@ -915,8 +899,8 @@ func TestUpdateTaskHandler(t *testing.T) {
 	// Prepare the request body
 	req := TaskRequest{
 		Description: "updated description",
-		AgentType:   string(models.AgentTypeHuman),
-		Status:      string(models.TaskStatusDrafting),
+		AgentType:   string(domain.AgentTypeHuman),
+		Status:      string(domain.TaskStatusDrafting),
 	}
 	reqBody, _ := json.Marshal(req)
 
@@ -935,7 +919,7 @@ func TestUpdateTaskHandler(t *testing.T) {
 	assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
 
 	// Check the updated task
-	updatedTask, _ := ctrl.dbAccessor.GetTask(ginCtx.Request.Context(), task.WorkspaceId, task.Id)
+	updatedTask, _ := ctrl.service.GetTask(ginCtx.Request.Context(), task.WorkspaceId, task.Id)
 	assert.Equal(t, req.Description, updatedTask.Description)
 	assert.Equal(t, req.AgentType, string(updatedTask.AgentType))
 	assert.Equal(t, req.Status, string(updatedTask.Status))
@@ -951,8 +935,8 @@ func TestUpdateTaskHandler_InvalidTaskID(t *testing.T) {
 	// Prepare the request body
 	req := TaskRequest{
 		Description: "updated description",
-		AgentType:   string(models.AgentTypeHuman),
-		Status:      string(models.TaskStatusDrafting),
+		AgentType:   string(domain.AgentTypeHuman),
+		Status:      string(domain.TaskStatusDrafting),
 	}
 	reqBody, _ := json.Marshal(req)
 
@@ -977,15 +961,15 @@ func TestUpdateTaskHandler_UnparseableRequestBody(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	// Create a task for testing
-	task := models.Task{
+	task := domain.Task{
 		WorkspaceId: "ws_" + ksuid.New().String(),
 		Id:          "task_" + ksuid.New().String(),
 		Description: "test description",
-		AgentType:   models.AgentTypeLLM,
-		Status:      models.TaskStatusToDo,
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusToDo,
 	}
 	err := redisDb.PersistTask(context.Background(), task)
 	if err != nil {
@@ -1011,15 +995,15 @@ func TestUpdateTaskHandler_InvalidStatus(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	// Create a task for testing
-	task := models.Task{
+	task := domain.Task{
 		WorkspaceId: "ws_" + ksuid.New().String(),
 		Id:          "task_" + ksuid.New().String(),
 		Description: "test description",
-		AgentType:   models.AgentTypeLLM,
-		Status:      models.TaskStatusToDo,
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusToDo,
 	}
 	err := redisDb.PersistTask(context.Background(), task)
 	if err != nil {
@@ -1029,7 +1013,7 @@ func TestUpdateTaskHandler_InvalidStatus(t *testing.T) {
 	// Prepare the request body with an invalid 'status' field
 	req := TaskRequest{
 		Description: "updated description",
-		AgentType:   string(models.AgentTypeHuman),
+		AgentType:   string(domain.AgentTypeHuman),
 		Status:      "invalid-status",
 	}
 	reqBody, _ := json.Marshal(req)
@@ -1053,15 +1037,15 @@ func TestUpdateTaskHandler_InvalidAgentType(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	// Create a task for testing
-	task := models.Task{
+	task := domain.Task{
 		WorkspaceId: "ws_" + ksuid.New().String(),
 		Id:          "task_" + ksuid.New().String(),
 		Description: "test description",
-		AgentType:   models.AgentTypeLLM,
-		Status:      models.TaskStatusToDo,
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusToDo,
 	}
 	err := redisDb.PersistTask(context.Background(), task)
 	if err != nil {
@@ -1072,7 +1056,7 @@ func TestUpdateTaskHandler_InvalidAgentType(t *testing.T) {
 	req := TaskRequest{
 		Description: "updated description",
 		AgentType:   "invalid agent type",
-		Status:      string(models.TaskStatusToDo),
+		Status:      string(domain.TaskStatusToDo),
 	}
 	reqBody, _ := json.Marshal(req)
 
@@ -1095,15 +1079,15 @@ func TestUpdateTaskHandler_InvalidAgentTypeAndStatusCombo(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	// Create a task for testing
-	task := models.Task{
+	task := domain.Task{
 		WorkspaceId: "ws_" + ksuid.New().String(),
 		Id:          "task_" + ksuid.New().String(),
 		Description: "test description",
-		AgentType:   models.AgentTypeLLM,
-		Status:      models.TaskStatusToDo,
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusToDo,
 	}
 	err := redisDb.PersistTask(context.Background(), task)
 	if err != nil {
@@ -1113,8 +1097,8 @@ func TestUpdateTaskHandler_InvalidAgentTypeAndStatusCombo(t *testing.T) {
 	// Prepare the request body with an invalid 'status' field
 	req := TaskRequest{
 		Description: "updated description",
-		AgentType:   string(models.AgentTypeLLM),
-		Status:      string(models.TaskStatusDrafting),
+		AgentType:   string(domain.AgentTypeLLM),
+		Status:      string(domain.TaskStatusDrafting),
 	}
 	reqBody, _ := json.Marshal(req)
 
@@ -1138,17 +1122,17 @@ func TestDeleteTaskHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	service, _ := redis.NewTestRedisService()
 
 	// Create a task for testing
-	task := models.Task{
+	task := domain.Task{
 		WorkspaceId: "ws_" + ksuid.New().String(),
 		Id:          "task_" + ksuid.New().String(),
 		Description: "test description",
-		AgentType:   models.AgentTypeLLM,
-		Status:      models.TaskStatusToDo,
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusToDo,
 	}
-	err := redisDb.PersistTask(context.Background(), task)
+	err := service.PersistTask(context.Background(), task)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1168,25 +1152,25 @@ func TestDeleteTaskHandler(t *testing.T) {
 	assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
 
 	// Check that the task has been deleted
-	_, err = ctrl.dbAccessor.GetTask(ginCtx.Request.Context(), task.WorkspaceId, task.Id)
-	assert.True(t, errors.Is(err, db.ErrNotFound))
+	_, err = ctrl.service.GetTask(ginCtx.Request.Context(), task.WorkspaceId, task.Id)
+	assert.True(t, errors.Is(err, srv.ErrNotFound))
 }
 
 func TestGetWorkspacesHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	service, client := redis.NewTestRedisService()
 
 	// Test for correct data retrieval
 	t.Run("returns workspaces correctly", func(t *testing.T) {
 
 		// Persisting workspace data
-		expectedWorkspaces := []models.Workspace{
+		expectedWorkspaces := []domain.Workspace{
 			{Id: "workspace1", Name: "Workspace One"},
 			{Id: "workspace2", Name: "Workspace Two"},
 		}
 		for _, ws := range expectedWorkspaces {
-			redisDb.PersistWorkspace(context.Background(), ws)
+			service.PersistWorkspace(context.Background(), ws)
 		}
 
 		// Creating a test HTTP context
@@ -1199,7 +1183,7 @@ func TestGetWorkspacesHandler(t *testing.T) {
 
 		// Asserting the response
 		assert.Equal(t, http.StatusOK, resp.Code)
-		var result map[string][]models.Workspace
+		var result map[string][]domain.Workspace
 		err := json.Unmarshal(resp.Body.Bytes(), &result)
 		assert.Nil(t, err)
 		assert.ElementsMatch(t, expectedWorkspaces, result["workspaces"])
@@ -1208,7 +1192,7 @@ func TestGetWorkspacesHandler(t *testing.T) {
 	// Test for empty data
 	t.Run("returns empty list when no workspaces exist", func(t *testing.T) {
 		// No workspaces are added to ensure the database starts empty for this test scenario.
-		clearDb(redisDb.(db.RedisDatabase))
+		clearDb(client)
 
 		// Creating a test HTTP context
 		resp := httptest.NewRecorder()
@@ -1220,10 +1204,10 @@ func TestGetWorkspacesHandler(t *testing.T) {
 
 		// Asserting the response
 		assert.Equal(t, http.StatusOK, resp.Code)
-		var result map[string][]models.Workspace
+		var result map[string][]domain.Workspace
 		err := json.Unmarshal(resp.Body.Bytes(), &result)
 		if assert.Nil(t, err) {
-			assert.Equal(t, []models.Workspace{}, result["workspaces"])
+			assert.Equal(t, []domain.Workspace{}, result["workspaces"])
 		}
 	})
 }
@@ -1232,16 +1216,16 @@ func TestGetTaskHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 	ctx := context.Background()
 	workspaceId := "ws_1"
 	taskId := "task_" + ksuid.New().String()
 
 	// Create a test task
-	task := models.Task{
+	task := domain.Task{
 		WorkspaceId: workspaceId,
 		Id:          taskId,
-		Status:      models.TaskStatusToDo,
+		Status:      domain.TaskStatusToDo,
 	}
 
 	err := redisDb.PersistTask(ctx, task)
@@ -1253,7 +1237,7 @@ func TestGetTaskHandler(t *testing.T) {
 		taskId        string
 		expectedCode  int
 		expectedError string
-		expectedTask  *models.Task
+		expectedTask  *domain.Task
 	}{
 		{
 			workspaceId:  workspaceId,
@@ -1300,7 +1284,7 @@ func TestGetTaskHandler(t *testing.T) {
 				assert.Equal(t, testCase.expectedError, result["error"])
 			}
 		} else {
-			var result map[string]models.Task
+			var result map[string]domain.Task
 			err := json.Unmarshal(resp.Body.Bytes(), &result)
 			if assert.Nil(t, err) {
 				assert.Equal(t, *testCase.expectedTask, result["task"])
@@ -1312,26 +1296,26 @@ func TestGetTaskHandler(t *testing.T) {
 func TestFlowEventsWebsocketHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	db := ctrl.dbAccessor
+	db := ctrl.service
 	ctx := context.Background()
 
 	workspaceId := "test-workspace-id-" + uuid.New().String()
 	flowId := "test-flow-id-" + uuid.New().String()
 	// persisting a workspace and flow so that the identifiers are valid
-	workspace := models.Workspace{Id: workspaceId}
+	workspace := domain.Workspace{Id: workspaceId}
 	err := db.PersistWorkspace(ctx, workspace)
 	assert.NoError(t, err, "Persisting workspace failed")
-	flow := models.Flow{Id: flowId, WorkspaceId: workspaceId}
-	err = db.PersistWorkflow(ctx, flow)
+	flow := domain.Flow{Id: flowId, WorkspaceId: workspaceId}
+	err = db.PersistFlow(ctx, flow)
 	assert.NoError(t, err, "Persisting workflow failed")
 
 	// persist this one before the websocket connection starts
-	flowEvent1 := flow_event.ProgressText{
-		EventType: flow_event.ProgressTextEventType,
+	flowEvent1 := domain1.ProgressText{
+		EventType: domain1.ProgressTextEventType,
 		ParentId:  "test-event-id-1",
 		Text:      "doing stuff 1",
 	}
-	err = ctrl.flowEventAccessor.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent1)
+	err = ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent1)
 	assert.NoError(t, err, "Persisting flow event 1 failed")
 
 	router := DefineRoutes(ctrl)
@@ -1350,19 +1334,19 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	defer ws.Close()
 
 	// persist multiple flow events under single flow action
-	flowEvent2 := flow_event.ProgressText{
-		EventType: flow_event.ProgressTextEventType,
+	flowEvent2 := domain1.ProgressText{
+		EventType: domain1.ProgressTextEventType,
 		ParentId:  "test-event-id-2",
 		Text:      "doing stuff 2",
 	}
-	flowEvent3 := flow_event.ProgressText{
+	flowEvent3 := domain1.ProgressText{
 		EventType: flowEvent2.EventType,
 		ParentId:  flowEvent2.ParentId,
 		Text:      "doing stuff 3",
 	}
-	err = ctrl.flowEventAccessor.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent2)
+	err = ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent2)
 	assert.NoError(t, err, "Persisting flow event 2 failed")
-	err = ctrl.flowEventAccessor.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent3)
+	err = ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent3)
 	assert.NoError(t, err, "Persisting flow event 3 failed")
 
 	// send messages via the websocket to subscribe to the streams for the flow actions
@@ -1376,14 +1360,14 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 
 	// Verify if the flow events are streamed correctly
 	timeout := time.After(15 * time.Second)
-	receivedEvents := make([]flow_event.ProgressText, 0, 3)
+	receivedEvents := make([]domain1.ProgressText, 0, 3)
 
 	for i := 0; i < 3; i++ {
 		select {
 		case <-timeout:
 			t.Fatalf("Timeout waiting for flow events. Received %d events so far", len(receivedEvents))
 		default:
-			var receivedEvent flow_event.ProgressText
+			var receivedEvent domain1.ProgressText
 			err = ws.SetReadDeadline(time.Now().Add(8 * time.Second))
 			assert.NoError(t, err, "Failed to set read deadline")
 			err = ws.ReadJSON(&receivedEvent)

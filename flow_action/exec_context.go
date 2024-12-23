@@ -1,8 +1,8 @@
 package flow_action
 
 import (
+	"sidekick/domain"
 	"sidekick/env"
-	"sidekick/models"
 	"sidekick/secret_manager"
 
 	"go.temporal.io/sdk/workflow"
@@ -38,5 +38,5 @@ type FlowScope struct {
 	SubflowName        string // TODO /gen Remove this field after migration to Subflow model is complete
 	subflowDescription string // TODO /gen Remove this field after migration to Subflow model is complete
 	startedSubflow     bool   // TODO /gen Remove this field after migration to Subflow model is complete
-	Subflow            *models.Subflow
+	Subflow            *domain.Subflow
 }

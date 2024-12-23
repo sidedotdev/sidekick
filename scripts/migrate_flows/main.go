@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sidekick/db"
-	"sidekick/models"
-
-	"github.com/redis/go-redis/v9"
+	"sidekick/domain"
+	"sidekick/srv"
+	"sidekick/srv/redis"
 )
 
-func migrateFlows(ctx context.Context, redisDB *db.RedisDatabase, dryRun bool) error {
+func migrateFlows(ctx context.Context, redisDB *redis.Storage, dryRun bool) error {
 	workspaces, err := redisDB.GetAllWorkspaces(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get workspaces: %w", err)
@@ -27,7 +26,7 @@ func migrateFlows(ctx context.Context, redisDB *db.RedisDatabase, dryRun bool) e
 	for _, workspace := range workspaces {
 		log.Printf("Processing workspace: %s", workspace.Id)
 
-		tasks, err := redisDB.GetTasks(ctx, workspace.Id, models.AllTaskStatuses)
+		tasks, err := redisDB.GetTasks(ctx, workspace.Id, domain.AllTaskStatuses)
 		if err != nil {
 			log.Printf("Error getting tasks for workspace %s: %v", workspace.Id, err)
 			continue
@@ -47,9 +46,9 @@ func migrateFlows(ctx context.Context, redisDB *db.RedisDatabase, dryRun bool) e
 
 			for _, flowId := range flowIds {
 				// Verify if the flow is accessible using the current key format
-				_, err := redisDB.GetWorkflow(ctx, workspace.Id, flowId)
+				_, err := redisDB.GetFlow(ctx, workspace.Id, flowId)
 				if err != nil {
-					if err == db.ErrNotFound {
+					if err == srv.ErrNotFound {
 						// If not found, update the key
 						if !dryRun {
 							err = updateFlowKey(ctx, redisDB, workspace.Id, flowId)
@@ -84,7 +83,7 @@ func migrateFlows(ctx context.Context, redisDB *db.RedisDatabase, dryRun bool) e
 	return nil
 }
 
-func updateFlowKey(ctx context.Context, redisDB *db.RedisDatabase, workspaceId string, flowId string) error {
+func updateFlowKey(ctx context.Context, redisDB *redis.Storage, workspaceId string, flowId string) error {
 	// Get the flow data using the old key format
 	oldKey := flowId // no workspaceId prefix
 	flowJson, err := redisDB.Client.Get(ctx, oldKey).Result()
@@ -125,7 +124,7 @@ func main() {
 	})
 	defer redisClient.Close()
 
-	redisDB := &db.RedisDatabase{Client: redisClient}
+	redisDB := &redis.Storage{Client: redisClient}
 
 	if dryRun {
 		log.Println("Running in dry-run mode. No changes will be made.")

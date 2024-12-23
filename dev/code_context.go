@@ -7,10 +7,10 @@ import (
 	"sidekick/coding"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/llm"
-	"sidekick/models"
 	"sidekick/persisted_ai"
 	"sidekick/utils"
 	"strings"
@@ -53,7 +53,7 @@ type PrepareInitialCodeContextResult struct {
 // - include cases where retrieving code context fails, both in step 2 and 3, but succeeds after codeContextLoop retries
 // - include a case where code context is incorrect many times and we ask for guidance, then succeed after guidance
 func PrepareInitialCodeContext(dCtx DevContext, requirements string, planExec *DevPlanExecution, step *DevStep) (string, string, error) {
-	result, err := RunSubflow(dCtx, "Prepare Initial Code Context", func(subflow models.Subflow) (PrepareInitialCodeContextResult, error) {
+	result, err := RunSubflow(dCtx, "Prepare Initial Code Context", func(subflow domain.Subflow) (PrepareInitialCodeContextResult, error) {
 		return prepareInitialCodeContextSubflow(dCtx, requirements, planExec, step)
 	})
 	if err != nil {
@@ -144,7 +144,7 @@ func GetRankedRepoSummary(dCtx DevContext, rankQuery string) (string, error) {
 	for {
 		actionCtx := dCtx.NewActionContext("Get Ranked Repo Summary")
 		actionCtx.ActionParams = options.ActionParams()
-		repoSummary, err = Track(actionCtx, func(flowAction models.FlowAction) (string, error) {
+		repoSummary, err = Track(actionCtx, func(flowAction domain.FlowAction) (string, error) {
 			var repoSummary string
 			var ra *persisted_ai.RagActivities // use a nil struct pointer to call activities that are part of a structure
 			err := workflow.ExecuteActivity(utils.NoRetryCtx(dCtx), ra.RankedDirSignatureOutline, options).Get(dCtx, &repoSummary)
@@ -263,7 +263,8 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		toolCall, requiredCodeContext, err = ForceToolRetrieveCodeContext(actionCtx, chatHistory)
 		if err != nil {
 			if errors.Is(err, llm.ErrToolCallUnmarshal) {
-				toolCallResponseInfo := ToolCallResponseInfo{Response: err.Error(), TooCallId: toolCall.Id, FunctionName: toolCall.Name}
+				response := fmt.Sprintf("%s\n\nHint: To fix this, follow the json schema correctly. In particular, don't put json within a string.", err.Error())
+				toolCallResponseInfo := ToolCallResponseInfo{Response: response, TooCallId: toolCall.Id, FunctionName: toolCall.Name}
 				addCodeContextPrompt(chatHistory, toolCallResponseInfo)
 				continue
 			}

@@ -2,8 +2,8 @@ package dev
 
 import (
 	"fmt"
+	"sidekick/domain"
 	"sidekick/llm"
-	"sidekick/models"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -62,7 +62,7 @@ func GetUserApproval(actionCtx DevActionContext, approvalPrompt string, requestP
 	actionCtx.ActionParams = req.ActionParams()
 
 	// Ensure tracking of the flow action within the guidance request
-	return TrackHuman(actionCtx, func(flowAction models.FlowAction) (*UserResponse, error) {
+	return TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
 		req.FlowActionId = flowAction.Id
 		return GetUserResponse(actionCtx.DevContext, req)
 	})
@@ -138,7 +138,7 @@ would mean to apply it to your current situation.
 	actionCtx.ActionParams = guidanceRequest.ActionParams()
 
 	// Ensure tracking of the flow action within the guidance request
-	return TrackHuman(actionCtx, func(flowAction models.FlowAction) (*UserResponse, error) {
+	return TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
 		guidanceRequest.FlowActionId = flowAction.Id
 		return GetUserResponse(dCtx, *guidanceRequest)
 	})

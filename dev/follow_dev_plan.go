@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"sidekick/coding/git"
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/llm"
-	"sidekick/models"
 	"strings"
 )
 
@@ -85,7 +85,7 @@ type FollowDevPlanInput struct {
 
 // NOTE this is not yet used, but will be used in the future
 func FollowDevPlan(dCtx DevContext, input FollowDevPlanInput) (DevPlanExecution, error) {
-	return RunSubflow(dCtx, "Follow Dev Plan", func(_ models.Subflow) (DevPlanExecution, error) {
+	return RunSubflow(dCtx, "Follow Dev Plan", func(_ domain.Subflow) (DevPlanExecution, error) {
 		return followDevPlanSubflow(dCtx, input)
 	})
 }
@@ -134,7 +134,7 @@ func completeDevStep(dCtx DevContext, requirements string, planExecution DevPlan
 		subflowName = step.StepNumber + ". " + step.Title
 	}
 
-	return RunSubflow(dCtx, subflowName, func(subflow models.Subflow) (DevStepResult, error) {
+	return RunSubflow(dCtx, subflowName, func(subflow domain.Subflow) (DevStepResult, error) {
 		return completeDevStepSubflow(dCtx, requirements, planExecution, step)
 	})
 }
@@ -338,7 +338,7 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 }
 
 func performStep(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo, step DevStep, planExec DevPlanExecution) error {
-	return RunSubflowWithoutResult(dCtx, "Perform Step", func(_ models.Subflow) error {
+	return RunSubflowWithoutResult(dCtx, "Perform Step", func(_ domain.Subflow) error {
 		return performStepSubflow(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo, step, planExec)
 	})
 }

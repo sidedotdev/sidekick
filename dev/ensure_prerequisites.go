@@ -1,10 +1,10 @@
 package dev
 
-import "sidekick/models"
+import "sidekick/domain"
 
 // Run tests in a loop until they pass or the LLM says they don't have to pass
 func EnsurePrerequisites(dCtx DevContext, requirements string) error {
-	return RunSubflowWithoutResult(dCtx, "Ensure Prerequisites", func(_ models.Subflow) error {
+	return RunSubflowWithoutResult(dCtx, "Ensure Prerequisites", func(_ domain.Subflow) error {
 		return ensurePrerequisitesSubflow(dCtx, requirements)
 	})
 }

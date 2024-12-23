@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sidekick/db"
 	"sidekick/embedding"
 	"sidekick/secret_manager"
+	"sidekick/srv"
 )
 
 type OpenAIEmbedActivityOptions struct {
@@ -22,8 +22,7 @@ type Embedder interface {
 }
 
 type OpenAIActivities struct {
-	FlowEventAccessor db.FlowEventAccessor
-	DatabaseAccessor  db.DatabaseAccessor
+	Storage           srv.Storage
 	Embedder
 }
 
@@ -36,21 +35,26 @@ we already expect to cache these values in the database.
 // TODO move to embed package under EmbedActivities struct
 func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options OpenAIEmbedActivityOptions) error {
 	contentKeys := make([]string, len(options.Subkeys))
+	embeddingKeys := make([]string, len(options.Subkeys))
 	for i, subKey := range options.Subkeys {
 		contentKeys[i] = fmt.Sprintf("%s:%s:%d", options.WorkspaceId, options.ContentType, subKey)
+		embeddingKeys[i] = constructEmbeddingKey(embeddingKeyOptions{
+			workspaceId:   options.WorkspaceId,
+			embeddingType: options.EmbeddingType,
+			contentType:   options.ContentType,
+			subKey:        subKey,
+		})
 	}
-	embeddingKeys := make([]string, len(options.Subkeys))
-	for i, key := range contentKeys {
-		embeddingKeys[i] = fmt.Sprintf("%s:embedding:%s", key, options.EmbeddingType)
-	}
+
 	var cachedEmbeddings []interface{}
 	var err error
 	if len(embeddingKeys) > 0 {
-		cachedEmbeddings, err = oa.DatabaseAccessor.MGet(ctx, embeddingKeys)
+		cachedEmbeddings, err = oa.Storage.MGet(ctx, embeddingKeys)
 		if err != nil {
 			return err
 		}
 	}
+
 	toEmbedContentKeys := make([]string, 0)
 	missingEmbeddingKeys := make([]string, 0)
 	for i, cachedEmbedding := range cachedEmbeddings {
@@ -59,10 +63,11 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 			missingEmbeddingKeys = append(missingEmbeddingKeys, embeddingKeys[i])
 		}
 	}
+
 	// TODO replace with metric
 	log.Printf("embedding %d keys\n", len(toEmbedContentKeys))
 	if len(toEmbedContentKeys) > 0 {
-		values, err := oa.DatabaseAccessor.MGet(ctx, toEmbedContentKeys)
+		values, err := oa.Storage.MGet(ctx, toEmbedContentKeys)
 		if err != nil {
 			return err
 		}
@@ -96,10 +101,20 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 			}
 		}
 
-		err = oa.DatabaseAccessor.MSet(ctx, cacheValues)
+		err = oa.Storage.MSet(ctx, cacheValues)
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+type embeddingKeyOptions struct {
+	workspaceId   string
+	embeddingType string
+	contentType   string
+	subKey uint64
+}
+func constructEmbeddingKey(options embeddingKeyOptions) string {
+	return fmt.Sprintf("%s:embedding:%s:%s:%d", options.workspaceId, options.embeddingType, options.contentType, options.subKey)
 }

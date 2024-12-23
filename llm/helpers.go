@@ -39,4 +39,11 @@ func BuildFuncCallInput(chatHistory *[]ChatMessage, mutateHistory bool, tool Too
 	}
 }
 
+// Only listing the models one might use that have short context lengths
+var ShortContextLengthByModel = map[string]int{
+	openai.GPT4:     35000,
+	openai.GPT40314: 35000,
+	openai.GPT40613: 35000,
+}
+
 var ErrToolCallUnmarshal = errors.New("failed to unmarshal json, ensure schema is correctly being followed")

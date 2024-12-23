@@ -2,7 +2,6 @@ package common
 
 import (
 	"fmt"
-	"sidekick/llm"
 )
 
 type ModelConfig struct {
@@ -10,8 +9,8 @@ type ModelConfig struct {
 	Model    string `json:"model,omitempty"`
 }
 
-func (mc ModelConfig) ToolChatProvider() llm.ToolChatProvider {
-	provider, err := llm.StringToToolChatProvider(mc.Provider)
+func (mc ModelConfig) ToolChatProvider() ToolChatProvider {
+	provider, err := StringToToolChatProvider(mc.Provider)
 	if err != nil {
 		panic(fmt.Sprintf("AI config: failed to convert provider string to ToolChatProvider: %v", err))
 	}

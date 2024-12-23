@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"sidekick/common"
-	"sidekick/models"
+	"sidekick/domain"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -18,15 +18,15 @@ import (
 func TestUpdateWorkspaceHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	db := ctrl.dbAccessor
+	db := ctrl.service
 
 	testCases := []struct {
 		name              string
 		workspaceId       string
 		workspaceRequest  WorkspaceRequest
 		expectedStatus    int
-		expectedWorkspace *models.Workspace
-		expectedConfig    *models.WorkspaceConfig
+		expectedWorkspace *domain.Workspace
+		expectedConfig    *domain.WorkspaceConfig
 		expectedError     string
 	}{
 		{
@@ -43,12 +43,12 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 				},
 			},
 			expectedStatus: http.StatusOK,
-			expectedWorkspace: &models.Workspace{
+			expectedWorkspace: &domain.Workspace{
 				Id:           "existing_workspace_id",
 				Name:         "Updated Workspace",
 				LocalRepoDir: "/new/path/to/repo",
 			},
-			expectedConfig: &models.WorkspaceConfig{
+			expectedConfig: &domain.WorkspaceConfig{
 				LLM: common.LLMConfig{
 					Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-4"}},
 				},
@@ -69,12 +69,12 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 				},
 			},
 			expectedStatus: http.StatusOK,
-			expectedWorkspace: &models.Workspace{
+			expectedWorkspace: &domain.Workspace{
 				Id:           "existing_workspace_id",
 				Name:         "Initial Workspace",
 				LocalRepoDir: "/path/to/repo",
 			},
-			expectedConfig: &models.WorkspaceConfig{
+			expectedConfig: &domain.WorkspaceConfig{
 				LLM: common.LLMConfig{
 					Defaults: []common.ModelConfig{{Provider: "anthropic", Model: "claude-v1"}},
 				},
@@ -102,7 +102,7 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 	for _, tc := range testCases {
 		// Setup initial workspace data, must do for each test case to ensure we
 		// have a clean start
-		initialWorkspace := &models.Workspace{
+		initialWorkspace := &domain.Workspace{
 			Id:           "existing_workspace_id",
 			Name:         "Initial Workspace",
 			LocalRepoDir: "/path/to/repo",
@@ -111,7 +111,7 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 		assert.NoError(t, err)
 
 		// Setup initial workspace config
-		initialConfig := &models.WorkspaceConfig{
+		initialConfig := &domain.WorkspaceConfig{
 			LLM: common.LLMConfig{
 				Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-3.5-turbo"}},
 			},
@@ -246,11 +246,11 @@ func TestCreateWorkspaceHandler(t *testing.T) {
 func TestGetWorkspaceByIdHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	db := ctrl.dbAccessor
+	db := ctrl.service
 
 	// Setup workspaces and configs
-	workspace1 := models.Workspace{Id: "workspace1", Name: "Workspace One", LocalRepoDir: "/path/to/repo1"}
-	config1 := models.WorkspaceConfig{
+	workspace1 := domain.Workspace{Id: "workspace1", Name: "Workspace One", LocalRepoDir: "/path/to/repo1"}
+	config1 := domain.WorkspaceConfig{
 		LLM: common.LLMConfig{
 			Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-4"}},
 		},
@@ -261,7 +261,7 @@ func TestGetWorkspaceByIdHandler(t *testing.T) {
 	db.PersistWorkspace(context.Background(), workspace1)
 	db.PersistWorkspaceConfig(context.Background(), workspace1.Id, config1)
 
-	workspace2 := models.Workspace{Id: "workspace2", Name: "Workspace Two", LocalRepoDir: "/path/to/repo2"}
+	workspace2 := domain.Workspace{Id: "workspace2", Name: "Workspace Two", LocalRepoDir: "/path/to/repo2"}
 	db.PersistWorkspace(context.Background(), workspace2)
 
 	testCases := []struct {

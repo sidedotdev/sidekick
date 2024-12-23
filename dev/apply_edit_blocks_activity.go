@@ -9,9 +9,9 @@ import (
 	"regexp"
 	"sidekick/common"
 	"sidekick/diffp"
+	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/fflag"
-	"sidekick/models"
 	"slices"
 	"sort"
 	"strconv"
@@ -376,7 +376,7 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 	}
 	actionCtx := dCtx.NewActionContext("Apply Edit Blocks")
 	actionCtx.ActionParams = actionParams
-	reports, err := Track(actionCtx, func(flowAction models.FlowAction) ([]ApplyEditBlockReport, error) {
+	reports, err := Track(actionCtx, func(flowAction domain.FlowAction) ([]ApplyEditBlockReport, error) {
 		validEditBlocks, invalidReports := validateEditBlocks(editBlocks)
 
 		enabledFlags := make([]string, 0)
