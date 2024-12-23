@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sidekick/domain"
 	"sidekick/srv"
@@ -144,5 +145,76 @@ func (s *Storage) DeleteWorkspace(ctx context.Context, workspaceId string) error
 	}
 
 	log.Debug().Str("workspaceId", workspaceId).Msg("Workspace deleted successfully")
+	return nil
+}
+
+func (s *Storage) GetWorkspaceConfig(ctx context.Context, workspaceId string) (domain.WorkspaceConfig, error) {
+	query := `
+		SELECT llm_config, embedding_config
+		FROM workspace_configs
+		WHERE workspace_id = ?
+	`
+
+	var llmConfigJSON, embeddingConfigJSON string
+	err := s.db.QueryRowContext(ctx, query, workspaceId).Scan(&llmConfigJSON, &embeddingConfigJSON)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return domain.WorkspaceConfig{}, srv.ErrNotFound
+		}
+		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to get workspace config")
+		return domain.WorkspaceConfig{}, fmt.Errorf("failed to get workspace config: %w", err)
+	}
+
+	var config domain.WorkspaceConfig
+	err = json.Unmarshal([]byte(llmConfigJSON), &config.LLM)
+	if err != nil {
+		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to unmarshal LLM config")
+		return domain.WorkspaceConfig{}, fmt.Errorf("failed to unmarshal LLM config: %w", err)
+	}
+
+	err = json.Unmarshal([]byte(embeddingConfigJSON), &config.Embedding)
+	if err != nil {
+		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to unmarshal embedding config")
+		return domain.WorkspaceConfig{}, fmt.Errorf("failed to unmarshal embedding config: %w", err)
+	}
+
+	return config, nil
+}
+
+func (s *Storage) PersistWorkspaceConfig(ctx context.Context, workspaceId string, config domain.WorkspaceConfig) error {
+	// Check if the workspace exists
+	_, err := s.GetWorkspace(ctx, workspaceId)
+	if err != nil {
+		if err == srv.ErrNotFound {
+			log.Error().Str("workspaceId", workspaceId).Msg("Workspace not found")
+			return fmt.Errorf("workspace not found: %w", err)
+		}
+		return fmt.Errorf("failed to check workspace existence: %w", err)
+	}
+
+	llmConfigJSON, err := json.Marshal(config.LLM)
+	if err != nil {
+		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to marshal LLM config")
+		return fmt.Errorf("failed to marshal LLM config: %w", err)
+	}
+
+	embeddingConfigJSON, err := json.Marshal(config.Embedding)
+	if err != nil {
+		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to marshal embedding config")
+		return fmt.Errorf("failed to marshal embedding config: %w", err)
+	}
+
+	query := `
+		INSERT OR REPLACE INTO workspace_configs (workspace_id, llm_config, embedding_config)
+		VALUES (?, ?, ?)
+	`
+
+	_, err = s.db.ExecContext(ctx, query, workspaceId, string(llmConfigJSON), string(embeddingConfigJSON))
+	if err != nil {
+		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to persist workspace config")
+		return fmt.Errorf("failed to persist workspace config: %w", err)
+	}
+
+	log.Debug().Str("workspaceId", workspaceId).Msg("Workspace config persisted successfully")
 	return nil
 }

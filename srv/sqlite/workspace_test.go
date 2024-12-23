@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/srv"
 	"testing"
@@ -101,5 +102,98 @@ func TestDeleteWorkspace(t *testing.T) {
 
 	// Test deleting non-existent workspace
 	err = storage.DeleteWorkspace(ctx, "non-existent-id")
+	assert.Equal(t, srv.ErrNotFound, err)
+}
+
+func TestPersistWorkspaceConfig(t *testing.T) {
+	storage := NewTestSqliteStorage(t, "workspace_config_test")
+	ctx := context.Background()
+
+	workspaceId := "test-config-workspace-id"
+	workspace := domain.Workspace{
+		Id:           workspaceId,
+		Name:         "Test Config Workspace",
+		LocalRepoDir: "/test/config/path",
+		Created:      time.Now().UTC().Truncate(time.Millisecond),
+		Updated:      time.Now().UTC().Truncate(time.Millisecond),
+	}
+
+	err := storage.PersistWorkspace(ctx, workspace)
+	assert.NoError(t, err)
+
+	config := domain.WorkspaceConfig{
+		LLM: common.LLMConfig{
+			Defaults: []common.ModelConfig{
+				{Provider: "OpenAI", Model: "gpt-3.5-turbo"},
+			},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				"summarization": {{Provider: "OpenAI", Model: "gpt-4"}},
+			},
+		},
+		Embedding: common.EmbeddingConfig{
+			Defaults: []common.ModelConfig{
+				{Provider: "OpenAI", Model: "text-embedding-ada-002"},
+			},
+		},
+	}
+
+	// Test PersistWorkspaceConfig
+	err = storage.PersistWorkspaceConfig(ctx, workspaceId, config)
+	assert.NoError(t, err)
+
+	// Test updating existing config
+	updatedConfig := config
+	updatedConfig.LLM.Defaults[0].Model = "gpt-4"
+	err = storage.PersistWorkspaceConfig(ctx, workspaceId, updatedConfig)
+	assert.NoError(t, err)
+
+	// Test PersistWorkspaceConfig with non-existent workspace
+	err = storage.PersistWorkspaceConfig(ctx, "non-existent-id", config)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "workspace not found")
+}
+
+func TestGetWorkspaceConfig(t *testing.T) {
+	storage := NewTestSqliteStorage(t, "workspace_config_test")
+	ctx := context.Background()
+
+	workspaceId := "test-config-workspace-id"
+	workspace := domain.Workspace{
+		Id:           workspaceId,
+		Name:         "Test Config Workspace",
+		LocalRepoDir: "/test/config/path",
+		Created:      time.Now().UTC().Truncate(time.Millisecond),
+		Updated:      time.Now().UTC().Truncate(time.Millisecond),
+	}
+
+	err := storage.PersistWorkspace(ctx, workspace)
+	assert.NoError(t, err)
+
+	config := domain.WorkspaceConfig{
+		LLM: common.LLMConfig{
+			Defaults: []common.ModelConfig{
+				{Provider: "OpenAI", Model: "gpt-3.5-turbo"},
+			},
+			UseCaseConfigs: map[string][]common.ModelConfig{
+				"summarization": {{Provider: "OpenAI", Model: "gpt-4"}},
+			},
+		},
+		Embedding: common.EmbeddingConfig{
+			Defaults: []common.ModelConfig{
+				{Provider: "OpenAI", Model: "text-embedding-ada-002"},
+			},
+		},
+	}
+
+	err = storage.PersistWorkspaceConfig(ctx, workspaceId, config)
+	assert.NoError(t, err)
+
+	// Test GetWorkspaceConfig
+	retrievedConfig, err := storage.GetWorkspaceConfig(ctx, workspaceId)
+	assert.NoError(t, err)
+	assert.Equal(t, config, retrievedConfig)
+
+	// Test GetWorkspaceConfig with non-existent workspace
+	_, err = storage.GetWorkspaceConfig(ctx, "non-existent-id")
 	assert.Equal(t, srv.ErrNotFound, err)
 }
