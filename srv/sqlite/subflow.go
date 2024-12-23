@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,14 +9,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 )
-
-type Storage struct {
-	db *sql.DB
-}
-
-func NewStorage(db *sql.DB) *Storage {
-	return &Storage{db: db}
-}
 
 func (s *Storage) PersistSubflow(ctx context.Context, subflow domain.Subflow) error {
 	if subflow.WorkspaceId == "" || subflow.Id == "" || subflow.FlowId == "" {
@@ -55,7 +46,7 @@ func (s *Storage) PersistSubflow(ctx context.Context, subflow domain.Subflow) er
 		return fmt.Errorf("failed to persist subflow: %w", err)
 	}
 
-	log.Info().
+	log.Debug().
 		Str("subflowId", subflow.Id).
 		Str("workspaceId", subflow.WorkspaceId).
 		Str("flowId", subflow.FlowId).
@@ -129,7 +120,7 @@ func (s *Storage) GetSubflows(ctx context.Context, workspaceId, flowId string) (
 		return nil, fmt.Errorf("error occurred while iterating over subflow rows: %w", err)
 	}
 
-	log.Info().
+	log.Debug().
 		Str("workspaceId", workspaceId).
 		Str("flowId", flowId).
 		Int("count", len(subflows)).

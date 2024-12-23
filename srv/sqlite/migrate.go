@@ -10,7 +10,7 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
-//go:embed migrations/*
+//go:embed migrations/*.sql
 var fs embed.FS
 
 func Migrate(db *sql.DB, dbName string) error {
@@ -19,7 +19,7 @@ func Migrate(db *sql.DB, dbName string) error {
 		return fmt.Errorf("failed to create migration driver: %w", err)
 	}
 
-	migrationsSource, err := iofs.New(fs, "migrations/"+dbName)
+	migrationsSource, err := iofs.New(fs, "migrations")
 	if err != nil {
 		return fmt.Errorf("failed to create migrations iofs instance: %w", err)
 	}
