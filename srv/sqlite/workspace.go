@@ -1,54 +1,68 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"sidekick/domain"
+	"sidekick/srv"
 
-	"github.com/golang-migrate/migrate/v4"
-	"github.com/golang-migrate/migrate/v4/database/sqlite"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/rs/zerolog/log"
 )
 
-type WorkspaceStorage struct {
-	db *sql.DB
-}
+func (s *Storage) PersistWorkspace(ctx context.Context, workspace domain.Workspace) error {
+	query := `
+		INSERT OR REPLACE INTO workspaces (id, name, local_repo_dir, created, updated)
+		VALUES (?, ?, ?, ?, ?)
+	`
 
-func NewWorkspaceStorage(db *sql.DB) (*WorkspaceStorage, error) {
-	storage := &WorkspaceStorage{db: db}
-	if err := storage.migrateWorkspaceTables(); err != nil {
-		return nil, fmt.Errorf("failed to migrate workspace tables: %w", err)
-	}
-	return storage, nil
-}
-
-func (s *WorkspaceStorage) migrateWorkspaceTables() error {
-	driver, err := sqlite.WithInstance(s.db, &sqlite.Config{})
-	if err != nil {
-		return fmt.Errorf("failed to create migration driver: %w", err)
-	}
-
-	migrationsSource, err := iofs.New(fs, "migrations")
-	if err != nil {
-		return fmt.Errorf("failed to create migrations iofs instance: %w", err)
-	}
-
-	m, err := migrate.NewWithInstance(
-		"iofs",
-		migrationsSource,
-		"sqlite",
-		driver,
+	_, err := s.db.ExecContext(ctx, query,
+		workspace.Id,
+		workspace.Name,
+		workspace.LocalRepoDir,
+		workspace.Created,
+		workspace.Updated,
 	)
+
 	if err != nil {
-		return fmt.Errorf("failed to create migrate instance: %w", err)
+		log.Error().Err(err).
+			Str("workspaceId", workspace.Id).
+			Msg("Failed to persist workspace")
+		return fmt.Errorf("failed to persist workspace: %w", err)
 	}
 
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		return fmt.Errorf("failed to apply migrations: %w", err)
-	}
+	log.Debug().
+		Str("workspaceId", workspace.Id).
+		Msg("Workspace persisted successfully")
 
-	log.Info().Msg("Workspace tables migrated successfully")
 	return nil
 }
 
-// Implement WorkspaceStorage interface methods here...
+func (s *Storage) GetWorkspace(ctx context.Context, workspaceId string) (domain.Workspace, error) {
+	query := `
+		SELECT id, name, local_repo_dir, created, updated
+		FROM workspaces
+		WHERE id = ?
+	`
+
+	var workspace domain.Workspace
+	err := s.db.QueryRowContext(ctx, query, workspaceId).Scan(
+		&workspace.Id,
+		&workspace.Name,
+		&workspace.LocalRepoDir,
+		&workspace.Created,
+		&workspace.Updated,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return domain.Workspace{}, srv.ErrNotFound
+		}
+		log.Error().Err(err).
+			Str("workspaceId", workspaceId).
+			Msg("Failed to get workspace")
+		return domain.Workspace{}, fmt.Errorf("failed to get workspace: %w", err)
+	}
+
+	return workspace, nil
+}

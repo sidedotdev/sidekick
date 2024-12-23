@@ -2,7 +2,7 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
+
 	"sidekick/domain"
 	"testing"
 
@@ -12,19 +12,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func setupTestDB(t *testing.T, dbName string) *Storage {
-	db, err := sql.Open("sqlite", ":memory:")
-	require.NoError(t, err)
-
-	storage := NewStorage(db)
-	err = Migrate(db, dbName)
-	require.NoError(t, err)
-
-	return storage
-}
-
 func TestPersistSubflow(t *testing.T) {
-	storage := setupTestDB(t, "subflow")
+	storage := NewTestSqliteStorage(t, "subflow_test")
 	ctx := context.Background()
 
 	validSubflow := domain.Subflow{
@@ -76,7 +65,7 @@ func TestPersistSubflow(t *testing.T) {
 }
 
 func TestGetSubflows(t *testing.T) {
-	storage := setupTestDB(t, "subflow")
+	storage := NewTestSqliteStorage(t, "subflow_test")
 	ctx := context.Background()
 
 	workspaceId := ksuid.New().String()
