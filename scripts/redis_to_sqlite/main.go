@@ -57,7 +57,7 @@ func getAllWorkspaceIds(ctx context.Context, redisClient *redis.Storage) ([]stri
 	var workspaceIds []string
 	for _, workspace := range workspaces {
 		// TODO: remove this check
-		if workspace.Id != "ws_2h7TkUIDypLPvB5QXLIF0cwlqi8" {
+		if workspace.Id != "ws_2p263IQm3hGvXZP71jAF5vovHr4" {
 			continue
 		}
 		workspaceIds = append(workspaceIds, workspace.Id)

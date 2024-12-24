@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sidekick/domain"
 	"sidekick/srv"
+	"time"
 )
 
 // PersistFlowAction inserts or updates a FlowAction in the SQLite database
@@ -23,6 +24,9 @@ func (s *Storage) PersistFlowAction(ctx context.Context, flowAction domain.FlowA
 			is_human_action, is_callback_action
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
+
+	flowAction.Created = flowAction.Created.UTC().Truncate(time.Millisecond)
+	flowAction.Updated = flowAction.Updated.UTC().Truncate(time.Millisecond)
 
 	_, err = s.db.ExecContext(ctx, query,
 		flowAction.Id, flowAction.SubflowName, flowAction.SubflowDescription, flowAction.SubflowId,
