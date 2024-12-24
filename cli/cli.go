@@ -6,12 +6,11 @@ import (
 	"sidekick"
 	"sidekick/srv"
 
-
 	// Embedding the frontend build files
 	_ "embed"
 
-	system_service "github.com/kardianos/service"
 	"github.com/joho/godotenv"
+	system_service "github.com/kardianos/service"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )

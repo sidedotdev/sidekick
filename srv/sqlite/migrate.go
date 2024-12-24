@@ -14,11 +14,11 @@ import (
 var migrationsFs embed.FS
 
 func (s Storage) MigrateUp(dbName string) error {
-	err := migrateUp(s.db, dbName + ".core")
+	err := migrateUp(s.db, dbName+".core")
 	if err != nil {
 		return fmt.Errorf("failed to migrate main database: %w", err)
 	}
-	err = migrateUp(s.kvDb, dbName + ".kv")
+	err = migrateUp(s.kvDb, dbName+".kv")
 	if err != nil {
 		return fmt.Errorf("failed to migrate key-value database: %w", err)
 	}
