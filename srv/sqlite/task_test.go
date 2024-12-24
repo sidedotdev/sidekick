@@ -83,7 +83,7 @@ func TestDeleteTask(t *testing.T) {
 	// Test deleting a non-existent task
 	err = storage.DeleteTask(ctx, "nonexistent", "nonexistent")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), srv.ErrNotFound)
+	assert.Equal(t, srv.ErrNotFound.Error(), err.Error())
 }
 
 func TestGetTask(t *testing.T) {
