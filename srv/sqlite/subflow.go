@@ -10,6 +10,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Ensure Storage implements SubflowStorage interface
+var _ domain.SubflowStorage = (*Storage)(nil)
+
 func (s *Storage) PersistSubflow(ctx context.Context, subflow domain.Subflow) error {
 	if subflow.WorkspaceId == "" || subflow.Id == "" || subflow.FlowId == "" {
 		return errors.New("workspaceId, subflow.Id, and subflow.FlowId cannot be empty")

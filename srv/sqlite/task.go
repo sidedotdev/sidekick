@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// Ensure Storage implements SubflowStorage interface
+var _ domain.TaskStorage = (*Storage)(nil)
+
 // PersistTask inserts or updates a Task in the SQLite database
 func (s *Storage) PersistTask(ctx context.Context, task domain.Task) error {
 	linksJSON, err := json.Marshal(task.Links)
@@ -24,20 +27,15 @@ func (s *Storage) PersistTask(ctx context.Context, task domain.Task) error {
 	}
 
 	query := `
-		INSERT INTO tasks (
+		INSERT OR REPLACE INTO tasks (
 			workspace_id, id, title, description, status, links, agent_type,
 			flow_type, archived, created, updated, flow_options
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(workspace_id, id) DO UPDATE SET
-			title = ?, description = ?, status = ?, links = ?, agent_type = ?,
-			flow_type = ?, archived = ?, updated = ?, flow_options = ?
 	`
 
 	_, err = s.db.ExecContext(ctx, query,
 		task.WorkspaceId, task.Id, task.Title, task.Description, task.Status, linksJSON, task.AgentType,
 		task.FlowType, task.Archived, task.Created, task.Updated, flowOptionsJSON,
-		task.Title, task.Description, task.Status, linksJSON, task.AgentType,
-		task.FlowType, task.Archived, task.Updated, flowOptionsJSON,
 	)
 
 	if err != nil {
@@ -61,7 +59,7 @@ func (s *Storage) DeleteTask(ctx context.Context, workspaceId, taskId string) er
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("task not found")
+		return srv.ErrNotFound
 	}
 
 	return nil

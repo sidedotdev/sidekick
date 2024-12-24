@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"encoding/json"
 	"sidekick/domain"
 	"sidekick/srv"
 	"testing"
@@ -46,31 +45,8 @@ func TestPersistTask(t *testing.T) {
 	err = storage.PersistTask(ctx, task)
 	assert.NoError(t, err)
 
-	// Verify the task was updated, using GetTask
-	var retrievedTask domain.Task
-	var linksJSON, flowOptionsJSON []byte
-	err = storage.db.QueryRowContext(ctx, "SELECT * FROM tasks WHERE workspace_id = ? AND id = ?", task.WorkspaceId, task.Id).Scan(
-		&retrievedTask.WorkspaceId,
-		&retrievedTask.Id,
-		&retrievedTask.Title,
-		&retrievedTask.Description,
-		&retrievedTask.Status,
-		&linksJSON,
-		&retrievedTask.AgentType,
-		&retrievedTask.FlowType,
-		&retrievedTask.Archived,
-		&retrievedTask.Created,
-		&retrievedTask.Updated,
-		&flowOptionsJSON,
-	)
-	require.NoError(t, err)
-
-	err = json.Unmarshal(linksJSON, &retrievedTask.Links)
-	require.NoError(t, err)
-
-	err = json.Unmarshal(flowOptionsJSON, &retrievedTask.FlowOptions)
-	require.NoError(t, err)
-
+	// Verify the task was updated
+	retrievedTask, err := storage.GetTask(ctx, task.WorkspaceId, task.Id)
 	assert.Equal(t, task.Title, retrievedTask.Title)
 	assert.Equal(t, task.Status, retrievedTask.Status)
 	assert.Equal(t, task.Links, retrievedTask.Links)
@@ -100,15 +76,15 @@ func TestDeleteTask(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify the task was deleted
-	var count int
-	err = storage.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM tasks WHERE workspace_id = ? AND id = ?", task.WorkspaceId, task.Id).Scan(&count)
-	require.NoError(t, err)
-	assert.Equal(t, 0, count)
+	_, err = storage.GetTask(ctx, task.WorkspaceId, task.Id)
+	require.Error(t, err)
+	assert.Equal(t, srv.ErrNotFound, err)
+
 
 	// Test deleting a non-existent task
 	err = storage.DeleteTask(ctx, "nonexistent", "nonexistent")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "task not found")
+	assert.Contains(t, err.Error(), srv.ErrNotFound)
 }
 
 func TestGetTask(t *testing.T) {
