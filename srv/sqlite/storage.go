@@ -17,6 +17,23 @@ func NewStorage(db, kvDb *sql.DB) *Storage {
 	return &Storage{db: db, kvDb: kvDb}
 }
 
+// CheckConnection verifies that both the main database and the key-value database are accessible.
+func (s *Storage) CheckConnection(ctx context.Context) error {
+	checkDB := func(db *sql.DB) error {
+		return db.PingContext(ctx)
+	}
+
+	if err := checkDB(s.db); err != nil {
+		return fmt.Errorf("main database connection check failed: %w", err)
+	}
+
+	if err := checkDB(s.kvDb); err != nil {
+		return fmt.Errorf("key-value database connection check failed: %w", err)
+	}
+
+	return nil
+}
+
 func (s *Storage) MGet(ctx context.Context, workspaceId string, keys []string) ([]interface{}, error) {
 	if len(keys) == 0 {
 		return []interface{}{}, nil
