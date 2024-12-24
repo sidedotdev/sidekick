@@ -80,7 +80,6 @@ func TestDeleteTask(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, srv.ErrNotFound, err)
 
-
 	// Test deleting a non-existent task
 	err = storage.DeleteTask(ctx, "nonexistent", "nonexistent")
 	assert.Error(t, err)
