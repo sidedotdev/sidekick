@@ -5,6 +5,3 @@ CREATE TABLE IF NOT EXISTS kv (
     value BLOB,
     PRIMARY KEY (workspace_id, key)
 );
-
--- Create index on key for faster lookups
-CREATE INDEX IF NOT EXISTS idx_kv_key ON kv(workspace_id, key);
