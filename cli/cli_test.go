@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,27 +11,12 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/llm"
-	"sidekick/srv/redis"
+	"sidekick/srv/sqlite"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/zalando/go-keyring"
 )
-
-func newTestRedisDatabase() *redis.Storage {
-	client := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       1,
-	})
-
-	// Flush the database synchronously to ensure a clean state for each test
-	_, err := client.FlushDB(context.Background()).Result()
-	if err != nil {
-		panic(fmt.Sprintf("failed to flush redis database: %v", err))
-	}
-
-	return &redis.Storage{Client: client}
-}
 
 // Helper function to create a temporary directory and change to it
 func setupTempDir(t *testing.T) (string, func()) {
@@ -292,14 +276,16 @@ func TestEnsureTestCommands(t *testing.T) {
 
 func TestEnsureWorkspaceConfig(t *testing.T) {
 	ctx := context.Background()
-	workspaceID := "test-workspace"
 
-	// Create a test Redis database
-	testDB := newTestRedisDatabase()
-	defer testDB.Client.Close()
+	//testDB := redis.NewTestRedisStorage()
+	testDB := sqlite.NewTestSqliteStorage(t, "cli_test")
 
 	// Create a new InitCommandHandler with the test database
 	handler := NewInitCommandHandler(testDB)
+
+	workspace, err := handler.findOrCreateWorkspace(ctx, "test", "/tmp/test")
+	require.NoError(t, err)
+	workspaceID := workspace.Id
 
 	// Test case 1: New configuration
 	t.Run("New configuration", func(t *testing.T) {

@@ -144,7 +144,7 @@ func (s *Storage) DeleteWorkspace(ctx context.Context, workspaceId string) error
 		return fmt.Errorf("failed to commit transaction for workspace deletion: %w", err)
 	}
 
-	log.Debug().Str("workspaceId", workspaceId).Msg("Workspace deleted successfully")
+	log.Trace().Str("workspaceId", workspaceId).Msg("Workspace deleted successfully")
 	return nil
 }
 
@@ -215,6 +215,6 @@ func (s *Storage) PersistWorkspaceConfig(ctx context.Context, workspaceId string
 		return fmt.Errorf("failed to persist workspace config: %w", err)
 	}
 
-	log.Debug().Str("workspaceId", workspaceId).Msg("Workspace config persisted successfully")
+	log.Trace().Str("workspaceId", workspaceId).Msg("Workspace config persisted successfully")
 	return nil
 }
