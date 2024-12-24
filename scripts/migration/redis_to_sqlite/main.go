@@ -24,14 +24,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to get Sidekick data home: %v", err)
 	}
-	sqliteDbPath := filepath.Join(sidekickDataHome, "sidekick.db")
-	sqliteClient, err := initializeSQLiteStorage(sqliteDbPath)
+	sqliteClient, err := initializeSQLiteStorage(sidekickDataHome)
 	if err != nil {
 		log.Fatalf("Failed to initialize SQLite storage: %v", err)
 	}
 
 	// Retrieve all workspace IDs from Redis
-	workspaceIDs, err := getAllWorkspaceIDs(ctx, redisClient)
+	workspaceIds, err := getAllWorkspaceIds(ctx, redisClient)
 	if err != nil {
 		log.Fatalf("Failed to retrieve workspace IDs: %v", err)
 	}
@@ -40,12 +39,12 @@ func main() {
 	counters := make(map[string]int)
 
 	// Iterate through workspace IDs and migrate data
-	for _, workspaceID := range workspaceIDs {
-		fmt.Printf("Processing workspace: %s\n", workspaceID)
+	for _, workspaceId := range workspaceIds {
+		fmt.Printf("Processing workspace: %s\n", workspaceId)
 
-		err = migrateWorkspace(ctx, redisClient, sqliteClient, workspaceID, &counters)
+		err = migrateWorkspace(ctx, redisClient, sqliteClient, workspaceId, &counters)
 		if err != nil {
-			log.Fatalf("Failed to migrate workspace %s: %v", workspaceID, err)
+			log.Fatalf("Failed to migrate workspace %s: %v", workspaceId, err)
 		}
 	}
 
@@ -56,8 +55,9 @@ func main() {
 	}
 }
 
-func initializeSQLiteStorage(dbPath string) (*sqlite.Storage, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+func initializeSQLiteStorage(dbDir string) (*sqlite.Storage, error) {
+	dbPath := filepath.Join(dbDir, "sidekick.db")
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open SQLite database: %w", err)
 	}
@@ -68,7 +68,8 @@ func initializeSQLiteStorage(dbPath string) (*sqlite.Storage, error) {
 		return nil, fmt.Errorf("failed to set WAL journal mode: %w", err)
 	}
 
-	kvDb, err := sql.Open("sqlite3", dbPath+".kv")
+	kvDbPath := filepath.Join(dbDir, "sidekick.kv.db")
+	kvDb, err := sql.Open("sqlite", kvDbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open SQLite KV database: %w", err)
 	}
@@ -76,22 +77,23 @@ func initializeSQLiteStorage(dbPath string) (*sqlite.Storage, error) {
 	return sqlite.NewStorage(db, kvDb), nil
 }
 
-func getAllWorkspaceIDs(ctx context.Context, redisClient *redisStorage.Storage) ([]string, error) {
+func getAllWorkspaceIds(ctx context.Context, redisClient *redisStorage.Storage) ([]string, error) {
 	workspaces, err := redisClient.GetAllWorkspaces(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all workspaces: %w", err)
 	}
 
-	workspaceIDs := make([]string, len(workspaces))
+	workspaceIds := make([]string, len(workspaces))
 	for i, workspace := range workspaces {
-		workspaceIDs[i] = workspace.Id
+		workspaceIds[i] = workspace.Id
 	}
 
-	return workspaceIDs, nil
+	return workspaceIds, nil
 }
 
 func migrateWorkspace(ctx context.Context, redisClient *redisStorage.Storage, sqliteClient *sqlite.Storage, workspaceID string, counters *map[string]int) error {
 	// Migrate workspace
+	fmt.Printf("Migrating workspace: %s\n", workspaceID)
 	workspace, err := redisClient.GetWorkspace(ctx, workspaceID)
 	if err != nil {
 		return fmt.Errorf("failed to get workspace %s from Redis: %w", workspaceID, err)
@@ -103,7 +105,6 @@ func migrateWorkspace(ctx context.Context, redisClient *redisStorage.Storage, sq
 	}
 
 	(*counters)["workspaces"]++
-	fmt.Printf("Migrated workspace: %s\n", workspaceID)
 
 	// Migrate workspace config
 	config, err := redisClient.GetWorkspaceConfig(ctx, workspaceID)
@@ -117,7 +118,6 @@ func migrateWorkspace(ctx context.Context, redisClient *redisStorage.Storage, sq
 	}
 
 	(*counters)["workspace_configs"]++
-	fmt.Printf("Migrated workspace config: %s\n", workspaceID)
 
 	// Migrate Tasks, Flows, Subflows, and FlowActions
 	err = migrateTasksAndFlows(ctx, redisClient, sqliteClient, workspaceID, counters)
@@ -152,7 +152,6 @@ func migrateTask(ctx context.Context, redisClient *redisStorage.Storage, sqliteC
 		return fmt.Errorf("failed to persist task %s to SQLite: %w", task.Id, err)
 	}
 	(*counters)["tasks"]++
-	fmt.Printf("Migrated task: %s\n", task.Id)
 
 	// Migrate associated flows
 	err = migrateFlowsForTask(ctx, redisClient, sqliteClient, workspaceID, task.Id, counters)
@@ -204,7 +203,6 @@ func migrateFlowActions(ctx context.Context, redisClient *redisStorage.Storage, 
 		}
 		(*counters)["flow_actions"]++
 	}
-	fmt.Printf("Migrated %d flow actions for flow: %s\n", len(actions), flowID)
 
 	return nil
 }
@@ -222,7 +220,6 @@ func migrateSubflows(ctx context.Context, redisClient *redisStorage.Storage, sql
 		}
 		(*counters)["subflows"]++
 	}
-	fmt.Printf("Migrated %d subflows for flow: %s\n", len(subflows), flowID)
 
 	return nil
 }
