@@ -186,7 +186,7 @@ func (s *Storage) GetArchivedTasks(ctx context.Context, workspaceId string, offs
 	}
 
 	query := `SELECT workspace_id, id, title, description, status, links, agent_type, flow_type, archived, created, updated, flow_options
-			  FROM tasks WHERE workspace_id = ? AND archived IS NOT NULL ORDER BY archived DESC LIMIT ? OFFSET ?`
+			  FROM tasks WHERE workspace_id = ? AND archived IS NOT NULL ORDER BY archived, updated DESC LIMIT ? OFFSET ?`
 
 	rows, err := s.db.QueryContext(ctx, query, workspaceId, limit, offset)
 	if err != nil {

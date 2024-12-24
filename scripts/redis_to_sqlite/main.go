@@ -109,6 +109,11 @@ func migrateTasksAndFlows(ctx context.Context, redisClient *redis.Storage, sqlit
 	if err != nil {
 		return fmt.Errorf("failed to get tasks for workspace %s from Redis: %w", workspaceID, err)
 	}
+	archivedTasks, _, err := redisClient.GetArchivedTasks(ctx, workspaceID, 1, 100000)
+	if err != nil {
+		return fmt.Errorf("failed to get archived tasks for workspace %s from Redis: %w", workspaceID, err)
+	}
+	tasks = append(tasks, archivedTasks...)
 
 	for _, task := range tasks {
 		err := migrateTask(ctx, redisClient, sqliteClient, workspaceID, task, counters)

@@ -28,9 +28,13 @@ func migrateFlows(ctx context.Context, redisDB *redis.Storage, dryRun bool) erro
 
 		tasks, err := redisDB.GetTasks(ctx, workspace.Id, domain.AllTaskStatuses)
 		if err != nil {
-			log.Printf("Error getting tasks for workspace %s: %v", workspace.Id, err)
-			continue
+			return fmt.Errorf("failed to get tasks: %w", err)
 		}
+		archivedTasks, _, err := redisDB.GetArchivedTasks(ctx, workspace.Id, 1, 100000)
+		if err != nil {
+			return fmt.Errorf("failed to get archived tasks: %w", err)
+		}
+		tasks = append(tasks, archivedTasks...)
 
 		totalTasks += len(tasks)
 

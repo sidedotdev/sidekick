@@ -494,6 +494,7 @@ func (ctrl *Controller) GetArchivedTasksHandler(c *gin.Context) {
 
 	archivedTasks, totalCount, err := ctrl.service.GetArchivedTasks(c, workspaceId, int64(page), int64(pageSize))
 	if err != nil {
+		fmt.Println("Error fetching archived tasks:", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -502,6 +503,7 @@ func (ctrl *Controller) GetArchivedTasksHandler(c *gin.Context) {
 	for i, task := range archivedTasks {
 		flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, task.Id)
 		if err != nil {
+			fmt.Println("Error fetching flows for archived task:", task.Id, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
