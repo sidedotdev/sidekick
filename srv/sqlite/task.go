@@ -116,7 +116,7 @@ func (s *Storage) GetTask(ctx context.Context, workspaceId, taskId string) (doma
 // GetTasks retrieves multiple Tasks from the SQLite database with optional status filtering
 func (s *Storage) GetTasks(ctx context.Context, workspaceId string, statuses []domain.TaskStatus) ([]domain.Task, error) {
 	query := `SELECT workspace_id, id, title, description, status, links, agent_type, flow_type, archived, created, updated, flow_options
-			  FROM tasks WHERE workspace_id = ?`
+			  FROM tasks WHERE workspace_id = ? AND archived IS NULL`
 	args := []interface{}{workspaceId}
 
 	if len(statuses) > 0 {
@@ -177,7 +177,7 @@ func (s *Storage) GetTasks(ctx context.Context, workspaceId string, statuses []d
 }
 
 // GetArchivedTasks retrieves archived tasks from the SQLite database with pagination
-func (s *Storage) GetArchivedTasks(ctx context.Context, workspaceId string, offset, limit int64) ([]domain.Task, int64, error) {
+func (s *Storage) GetArchivedTasks(ctx context.Context, workspaceId string, page, pageSize int64) ([]domain.Task, int64, error) {
 	var totalCount int64
 	countQuery := "SELECT COUNT(*) FROM tasks WHERE workspace_id = ? AND archived IS NOT NULL"
 	err := s.db.QueryRowContext(ctx, countQuery, workspaceId).Scan(&totalCount)
@@ -186,8 +186,10 @@ func (s *Storage) GetArchivedTasks(ctx context.Context, workspaceId string, offs
 	}
 
 	query := `SELECT workspace_id, id, title, description, status, links, agent_type, flow_type, archived, created, updated, flow_options
-			  FROM tasks WHERE workspace_id = ? AND archived IS NOT NULL ORDER BY archived, updated DESC LIMIT ? OFFSET ?`
+			  FROM tasks WHERE workspace_id = ? AND archived IS NOT NULL ORDER BY archived DESC, updated DESC LIMIT ? OFFSET ?`
 
+	limit := pageSize
+	offset := (page - 1) * pageSize
 	rows, err := s.db.QueryContext(ctx, query, workspaceId, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query archived tasks: %w", err)

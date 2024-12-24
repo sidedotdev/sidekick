@@ -229,19 +229,19 @@ func TestGetArchivedTasks(t *testing.T) {
 	}
 
 	// Test getting archived tasks
-	archivedTasks, totalCount, err := storage.GetArchivedTasks(ctx, "workspace1", 0, 10)
+	archivedTasks, totalCount, err := storage.GetArchivedTasks(ctx, "workspace1", 1, 10)
 	assert.NoError(t, err)
 	assert.Len(t, archivedTasks, 2)
 	assert.Equal(t, int64(2), totalCount)
 
 	// Test pagination
-	archivedTasks, totalCount, err = storage.GetArchivedTasks(ctx, "workspace1", 1, 1)
+	archivedTasks, totalCount, err = storage.GetArchivedTasks(ctx, "workspace1", 2, 1)
 	assert.NoError(t, err)
 	assert.Len(t, archivedTasks, 1)
 	assert.Equal(t, int64(2), totalCount)
 
 	// Test getting archived tasks from non-existent workspace
-	emptyTasks, totalCount, err := storage.GetArchivedTasks(ctx, "nonexistent", 0, 10)
+	emptyTasks, totalCount, err := storage.GetArchivedTasks(ctx, "nonexistent", 1, 10)
 	assert.NoError(t, err)
 	assert.Len(t, emptyTasks, 0)
 	assert.Equal(t, int64(0), totalCount)
