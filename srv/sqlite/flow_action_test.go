@@ -2,35 +2,16 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"sidekick/domain"
 	"sidekick/srv"
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3" // SQLite driver
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-func newTestSQLiteDatabase() (*sql.DB, error) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		return nil, err
-	}
-
-	// Run migrations here if needed
-	// For example: err = RunMigrations(db)
-
-	return db, nil
-}
-
 func TestFlowActionStorage(t *testing.T) {
-	db, err := newTestSQLiteDatabase()
-	require.NoError(t, err)
-	defer db.Close()
-
-	storage := &Storage{db: db}
+	storage := NewTestSqliteStorage(t, "flow_action_test")
 
 	ctx := context.Background()
 	workspaceId := "test-workspace"
