@@ -13,12 +13,12 @@ import (
 //go:embed migrations/*.sql
 var migrationsFs embed.FS
 
-func (s *Storage) MigrateUp(dbName string) error {
-	err := migrateUp(s.db, dbName)
+func (s Storage) MigrateUp(dbName string) error {
+	err := migrateUp(s.db, dbName + ".core")
 	if err != nil {
 		return fmt.Errorf("failed to migrate main database: %w", err)
 	}
-	err = migrateUp(s.kvDb, dbName)
+	err = migrateUp(s.kvDb, dbName + ".kv")
 	if err != nil {
 		return fmt.Errorf("failed to migrate key-value database: %w", err)
 	}
@@ -36,12 +36,7 @@ func migrateUp(db *sql.DB, dbName string) error {
 		return fmt.Errorf("failed to create migrations iofs instance: %w", err)
 	}
 
-	m, err := migrate.NewWithInstance(
-		"iofs",
-		migrationsSource,
-		dbName,
-		driver,
-	)
+	m, err := migrate.NewWithInstance("iofs", migrationsSource, dbName, driver)
 	if err != nil {
 		return fmt.Errorf("failed to create migrate instance: %w", err)
 	}

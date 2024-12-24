@@ -18,19 +18,15 @@ func GetService() (srv.Service, error) {
 	switch storageType {
 	case "redis":
 		storage = redis.NewStorage()
-		log.Info().Msg("Using Redis storage")
-	case "sqlite":
+		log.Debug().Msg("Using Redis storage")
+	case "sqlite", "":
 		storage, err = sqlite.NewStorage()
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize SQLite storage: %w", err)
 		}
-		log.Info().Msg("Using SQLite storage")
+		log.Debug().Msg("Using SQLite storage")
 	default:
-		storage, err = sqlite.NewStorage()
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize default SQLite storage: %w", err)
-		}
-		log.Info().Msg("Using default SQLite storage")
+		log.Fatal().Str("storage", storageType).Msg("Unknown storage type")
 	}
 
 	streamer := redis.NewStreamer()

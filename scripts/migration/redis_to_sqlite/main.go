@@ -21,7 +21,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize SQLite storage: %v", err)
 	}
-	sqliteStorage.MigrateUp("sidekick")
 
 	// Retrieve all workspace IDs from Redis
 	workspaceIds, err := getAllWorkspaceIds(ctx, redisStorage)

@@ -44,6 +44,11 @@ func NewStorage() (*Storage, error) {
 
 	storage := &Storage{db: mainDb, kvDb: kvDb}
 
+	err = storage.MigrateUp("sidekick")
+	if err != nil {
+		return nil, fmt.Errorf("failed to migrate up sqlite storage: %w", err)
+	}
+
 	// Run PRAGMA optimize periodically
 	go storage.runPeriodicOptimization()
 
