@@ -1255,41 +1255,41 @@ func TestArchiveFinishedTasksHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.dbAccessor
+	redisDb := ctrl.service
 
 	// Create tasks for testing
 	workspaceId := "ws_" + ksuid.New().String()
-	completedTask := models.Task{
+	completedTask := domain.Task{
 		WorkspaceId: workspaceId,
 		Id:          "task_" + ksuid.New().String(),
 		Description: "completed task",
-		AgentType:   models.AgentTypeLLM,
-		Status:      models.TaskStatusComplete,
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusComplete,
 	}
-	canceledTask := models.Task{
+	canceledTask := domain.Task{
 		WorkspaceId: workspaceId,
 		Id:          "task_" + ksuid.New().String(),
 		Description: "canceled task",
-		AgentType:   models.AgentTypeLLM,
-		Status:      models.TaskStatusCanceled,
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusCanceled,
 	}
-	failedTask := models.Task{
+	failedTask := domain.Task{
 		WorkspaceId: workspaceId,
 		Id:          "task_" + ksuid.New().String(),
 		Description: "failed task",
-		AgentType:   models.AgentTypeLLM,
-		Status:      models.TaskStatusFailed,
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusFailed,
 	}
-	inProgressTask := models.Task{
+	inProgressTask := domain.Task{
 		WorkspaceId: workspaceId,
 		Id:          "task_" + ksuid.New().String(),
 		Description: "in progress task",
-		AgentType:   models.AgentTypeLLM,
-		Status:      models.TaskStatusInProgress,
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusInProgress,
 	}
 
 	// Persist tasks
-	for _, task := range []models.Task{completedTask, canceledTask, failedTask, inProgressTask} {
+	for _, task := range []domain.Task{completedTask, canceledTask, failedTask, inProgressTask} {
 		err := redisDb.PersistTask(context.Background(), task)
 		if err != nil {
 			t.Fatal(err)
@@ -1315,14 +1315,14 @@ func TestArchiveFinishedTasksHandler(t *testing.T) {
 	}
 
 	// Check that the correct tasks were archived
-	for _, task := range []models.Task{completedTask, canceledTask, failedTask} {
-		archivedTask, err := ctrl.dbAccessor.GetTask(ginCtx.Request.Context(), workspaceId, task.Id)
+	for _, task := range []domain.Task{completedTask, canceledTask, failedTask} {
+		archivedTask, err := ctrl.service.GetTask(ginCtx.Request.Context(), workspaceId, task.Id)
 		assert.NoError(t, err)
 		assert.NotNil(t, archivedTask.Archived)
 	}
 
 	// Check that the in-progress task was not archived
-	nonArchivedTask, err := ctrl.dbAccessor.GetTask(ginCtx.Request.Context(), workspaceId, inProgressTask.Id)
+	nonArchivedTask, err := ctrl.service.GetTask(ginCtx.Request.Context(), workspaceId, inProgressTask.Id)
 	assert.NoError(t, err)
 	assert.Nil(t, nonArchivedTask.Archived)
 }

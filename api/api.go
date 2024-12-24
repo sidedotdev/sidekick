@@ -90,10 +90,10 @@ func (ctrl *Controller) ArchiveFinishedTasksHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 
 	// Get all tasks with status 'complete', 'canceled', or 'failed'
-	tasks, err := ctrl.dbAccessor.GetTasks(c.Request.Context(), workspaceId, []models.TaskStatus{
-		models.TaskStatusComplete,
-		models.TaskStatusCanceled,
-		models.TaskStatusFailed,
+	tasks, err := ctrl.service.GetTasks(c.Request.Context(), workspaceId, []domain.TaskStatus{
+		domain.TaskStatusComplete,
+		domain.TaskStatusCanceled,
+		domain.TaskStatusFailed,
 	})
 	if err != nil {
 		ctrl.ErrorHandler(c, http.StatusInternalServerError, errors.New("failed to fetch tasks"))
@@ -105,7 +105,7 @@ func (ctrl *Controller) ArchiveFinishedTasksHandler(c *gin.Context) {
 
 	for _, task := range tasks {
 		task.Archived = &now
-		err := ctrl.dbAccessor.PersistTask(c.Request.Context(), task)
+		err := ctrl.service.PersistTask(c.Request.Context(), task)
 		if err != nil {
 			// Log the error but continue with other tasks
 			log.Printf("Failed to archive task %s: %v", task.Id, err)
