@@ -13,10 +13,8 @@ func NewTestSqliteStorage(t *testing.T, dbName string) *Storage {
 	kvDb, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 
-	storage := NewStorage(db, kvDb)
-	err = Migrate(db, dbName)
-	require.NoError(t, err)
-	err = Migrate(kvDb, dbName)
+	storage := &Storage{db: db, kvDb: kvDb}
+	err = storage.MigrateUp(dbName)
 	require.NoError(t, err)
 
 	return storage

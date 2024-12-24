@@ -5,7 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"path/filepath"
+	"sidekick/common"
+	"sidekick/srv"
 	"strings"
+	"time"
 )
 
 type Storage struct {
@@ -13,22 +18,87 @@ type Storage struct {
 	kvDb *sql.DB
 }
 
-func NewStorage(db, kvDb *sql.DB) *Storage {
-	return &Storage{db: db, kvDb: kvDb}
+// Ensure Storage implements SubflowStorage interface
+var _ srv.Storage = (*Storage)(nil)
+
+func NewStorage() (*Storage, error) {
+	mainDbPath, err := GetSqliteUri("sidekick.core.db")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get main database path: %w", err)
+	}
+	kvDbPath, err := GetSqliteUri("sidekick.kv.db")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get key-value database path: %w", err)
+	}
+
+	mainDb, err := sql.Open("sqlite", mainDbPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open main database: %w", err)
+	}
+
+	kvDb, err := sql.Open("sqlite", kvDbPath)
+	if err != nil {
+		mainDb.Close()
+		return nil, fmt.Errorf("failed to open key-value database: %w", err)
+	}
+
+	storage := &Storage{db: mainDb, kvDb: kvDb}
+
+	// Run PRAGMA optimize periodically
+	go storage.runPeriodicOptimization()
+
+	return storage, nil
+}
+
+func (s *Storage) runPeriodicOptimization() {
+	ticker := time.NewTicker(4 * time.Hour)
+	for range ticker.C {
+		_, _ = s.db.Exec("PRAGMA optimize")
+		_, _ = s.kvDb.Exec("PRAGMA optimize")
+	}
+}
+
+func GetSqliteUri(filePath string) (string, error) {
+	const (
+		busyTimeoutMs = 5000
+		cacheSizeKB   = 64000
+	)
+
+	// Use XDG data home for the database path
+	dbDir, err := common.GetSidekickDataHome()
+	if err != nil {
+		return "", fmt.Errorf("failed to get Sidekick data home: %w", err)
+	}
+	dbPath := filepath.Join(dbDir, filePath)
+
+	// Build our SQLite preferences as a series of URL encoded values
+	prefs := make(url.Values)
+	prefs.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeoutMs))
+	prefs.Add("_pragma", "journal_mode(WAL)")
+	prefs.Add("_pragma", "temp_store(MEMORY)")
+	prefs.Add("_pragma", "synchronous(NORMAL)")
+	prefs.Add("_pragma", fmt.Sprintf("cache_size(-%d)", cacheSizeKB))
+	prefs.Add("_pragma", "optimize(0x10002)")
+
+	// Construct the final SQLite address string
+	return fmt.Sprintf("file:%s?%s", dbPath, prefs.Encode()), nil
 }
 
 // CheckConnection verifies that both the main database and the key-value database are accessible.
 func (s *Storage) CheckConnection(ctx context.Context) error {
-	checkDB := func(db *sql.DB) error {
-		return db.PingContext(ctx)
+	checkDB := func(db *sql.DB, name string) error {
+		if err := db.PingContext(ctx); err != nil {
+			return fmt.Errorf("%s database connection check failed: %w", name, err)
+		}
+		return nil
 	}
 
-	if err := checkDB(s.db); err != nil {
-		return fmt.Errorf("main database connection check failed: %w", err)
+	if err := checkDB(s.db, "main"); err != nil {
+		return err
 	}
 
-	if err := checkDB(s.kvDb); err != nil {
-		return fmt.Errorf("key-value database connection check failed: %w", err)
+	if err := checkDB(s.kvDb, "key-value"); err != nil {
+		return err
 	}
 
 	return nil
@@ -112,8 +182,3 @@ func (s *Storage) MSet(ctx context.Context, workspaceId string, values map[strin
 
 	return nil
 }
-
-/* TODO
-// Ensure Storage implements SubflowStorage interface
-var _ srv.Storage = (*Storage)(nil)
-*/

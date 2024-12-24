@@ -2,14 +2,11 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
-	"path/filepath"
 
-	"sidekick/common"
 	"sidekick/domain"
-	redisStorage "sidekick/srv/redis"
+	"sidekick/srv/redis"
 	"sidekick/srv/sqlite"
 )
 
@@ -17,20 +14,17 @@ func main() {
 	ctx := context.Background()
 
 	// Initialize Redis client
-	redisClient := redisStorage.NewStorage()
+	redisStorage := redis.NewStorage()
 
 	// Initialize SQLite client
-	sidekickDataHome, err := common.GetSidekickDataHome()
-	if err != nil {
-		log.Fatalf("Failed to get Sidekick data home: %v", err)
-	}
-	sqliteClient, err := initializeSQLiteStorage(sidekickDataHome)
+	sqliteStorage, err := sqlite.NewStorage()
 	if err != nil {
 		log.Fatalf("Failed to initialize SQLite storage: %v", err)
 	}
+	sqliteStorage.MigrateUp("sidekick")
 
 	// Retrieve all workspace IDs from Redis
-	workspaceIds, err := getAllWorkspaceIds(ctx, redisClient)
+	workspaceIds, err := getAllWorkspaceIds(ctx, redisStorage)
 	if err != nil {
 		log.Fatalf("Failed to retrieve workspace IDs: %v", err)
 	}
@@ -42,7 +36,7 @@ func main() {
 	for _, workspaceId := range workspaceIds {
 		fmt.Printf("Processing workspace: %s\n", workspaceId)
 
-		err = migrateWorkspace(ctx, redisClient, sqliteClient, workspaceId, &counters)
+		err = migrateWorkspace(ctx, redisStorage, sqliteStorage, workspaceId, &counters)
 		if err != nil {
 			log.Fatalf("Failed to migrate workspace %s: %v", workspaceId, err)
 		}
@@ -55,29 +49,7 @@ func main() {
 	}
 }
 
-func initializeSQLiteStorage(dbDir string) (*sqlite.Storage, error) {
-	dbPath := filepath.Join(dbDir, "sidekick.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open SQLite database: %w", err)
-	}
-
-	// Set journal mode to WAL
-	_, err = db.Exec("PRAGMA journal_mode=WAL;")
-	if err != nil {
-		return nil, fmt.Errorf("failed to set WAL journal mode: %w", err)
-	}
-
-	kvDbPath := filepath.Join(dbDir, "sidekick.kv.db")
-	kvDb, err := sql.Open("sqlite", kvDbPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open SQLite KV database: %w", err)
-	}
-
-	return sqlite.NewStorage(db, kvDb), nil
-}
-
-func getAllWorkspaceIds(ctx context.Context, redisClient *redisStorage.Storage) ([]string, error) {
+func getAllWorkspaceIds(ctx context.Context, redisClient *redis.Storage) ([]string, error) {
 	workspaces, err := redisClient.GetAllWorkspaces(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all workspaces: %w", err)
@@ -91,7 +63,7 @@ func getAllWorkspaceIds(ctx context.Context, redisClient *redisStorage.Storage) 
 	return workspaceIds, nil
 }
 
-func migrateWorkspace(ctx context.Context, redisClient *redisStorage.Storage, sqliteClient *sqlite.Storage, workspaceID string, counters *map[string]int) error {
+func migrateWorkspace(ctx context.Context, redisClient *redis.Storage, sqliteClient *sqlite.Storage, workspaceID string, counters *map[string]int) error {
 	// Migrate workspace
 	fmt.Printf("Migrating workspace: %s\n", workspaceID)
 	workspace, err := redisClient.GetWorkspace(ctx, workspaceID)
@@ -128,7 +100,7 @@ func migrateWorkspace(ctx context.Context, redisClient *redisStorage.Storage, sq
 	return nil
 }
 
-func migrateTasksAndFlows(ctx context.Context, redisClient *redisStorage.Storage, sqliteClient *sqlite.Storage, workspaceID string, counters *map[string]int) error {
+func migrateTasksAndFlows(ctx context.Context, redisClient *redis.Storage, sqliteClient *sqlite.Storage, workspaceID string, counters *map[string]int) error {
 	// Retrieve all tasks for the workspace from Redis
 	tasks, err := redisClient.GetTasks(ctx, workspaceID, domain.AllTaskStatuses)
 	if err != nil {
@@ -145,7 +117,7 @@ func migrateTasksAndFlows(ctx context.Context, redisClient *redisStorage.Storage
 	return nil
 }
 
-func migrateTask(ctx context.Context, redisClient *redisStorage.Storage, sqliteClient *sqlite.Storage, workspaceID string, task domain.Task, counters *map[string]int) error {
+func migrateTask(ctx context.Context, redisClient *redis.Storage, sqliteClient *sqlite.Storage, workspaceID string, task domain.Task, counters *map[string]int) error {
 	// Migrate task
 	err := sqliteClient.PersistTask(ctx, task)
 	if err != nil {
@@ -162,7 +134,7 @@ func migrateTask(ctx context.Context, redisClient *redisStorage.Storage, sqliteC
 	return nil
 }
 
-func migrateFlowsForTask(ctx context.Context, redisClient *redisStorage.Storage, sqliteClient *sqlite.Storage, workspaceID, taskID string, counters *map[string]int) error {
+func migrateFlowsForTask(ctx context.Context, redisClient *redis.Storage, sqliteClient *sqlite.Storage, workspaceID, taskID string, counters *map[string]int) error {
 	flows, err := redisClient.GetFlowsForTask(ctx, workspaceID, taskID)
 	if err != nil {
 		return fmt.Errorf("failed to get flows for task %s from Redis: %w", taskID, err)
@@ -190,7 +162,7 @@ func migrateFlowsForTask(ctx context.Context, redisClient *redisStorage.Storage,
 	return nil
 }
 
-func migrateFlowActions(ctx context.Context, redisClient *redisStorage.Storage, sqliteClient *sqlite.Storage, workspaceID, flowID string, counters *map[string]int) error {
+func migrateFlowActions(ctx context.Context, redisClient *redis.Storage, sqliteClient *sqlite.Storage, workspaceID, flowID string, counters *map[string]int) error {
 	actions, err := redisClient.GetFlowActions(ctx, workspaceID, flowID)
 	if err != nil {
 		return fmt.Errorf("failed to get flow actions for flow %s from Redis: %w", flowID, err)
@@ -207,7 +179,7 @@ func migrateFlowActions(ctx context.Context, redisClient *redisStorage.Storage, 
 	return nil
 }
 
-func migrateSubflows(ctx context.Context, redisClient *redisStorage.Storage, sqliteClient *sqlite.Storage, workspaceID, flowID string, counters *map[string]int) error {
+func migrateSubflows(ctx context.Context, redisClient *redis.Storage, sqliteClient *sqlite.Storage, workspaceID, flowID string, counters *map[string]int) error {
 	subflows, err := redisClient.GetSubflows(ctx, workspaceID, flowID)
 	if err != nil {
 		return fmt.Errorf("failed to get subflows for flow %s from Redis: %w", flowID, err)

@@ -13,7 +13,19 @@ import (
 //go:embed migrations/*.sql
 var migrationsFs embed.FS
 
-func Migrate(db *sql.DB, dbName string) error {
+func (s *Storage) MigrateUp(dbName string) error {
+	err := migrateUp(s.db, dbName)
+	if err != nil {
+		return fmt.Errorf("failed to migrate main database: %w", err)
+	}
+	err = migrateUp(s.kvDb, dbName)
+	if err != nil {
+		return fmt.Errorf("failed to migrate key-value database: %w", err)
+	}
+	return nil
+}
+
+func migrateUp(db *sql.DB, dbName string) error {
 	driver, err := sqlite.WithInstance(db, &sqlite.Config{})
 	if err != nil {
 		return fmt.Errorf("failed to create migration driver: %w", err)
