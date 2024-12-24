@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"sidekick/common"
+	"sidekick/domain"
 	redisStorage "sidekick/srv/redis"
 	"sidekick/srv/sqlite"
 )
@@ -93,44 +94,101 @@ func migrateWorkspace(ctx context.Context, redisClient *redisStorage.Storage, sq
 	// Migrate workspace
 	workspace, err := redisClient.GetWorkspace(ctx, workspaceID)
 	if err != nil {
-		return fmt.Errorf("failed to get workspace from Redis: %w", err)
+		return fmt.Errorf("failed to get workspace %s from Redis: %w", workspaceID, err)
 	}
 
 	err = sqliteClient.PersistWorkspace(ctx, workspace)
 	if err != nil {
-		return fmt.Errorf("failed to persist workspace to SQLite: %w", err)
+		return fmt.Errorf("failed to persist workspace %s to SQLite: %w", workspaceID, err)
 	}
 
 	(*counters)["workspaces"]++
+	fmt.Printf("Migrated workspace: %s\n", workspaceID)
 
 	// Migrate workspace config
 	config, err := redisClient.GetWorkspaceConfig(ctx, workspaceID)
 	if err != nil {
-		return fmt.Errorf("failed to get workspace config from Redis: %w", err)
+		return fmt.Errorf("failed to get workspace config for %s from Redis: %w", workspaceID, err)
 	}
 
 	err = sqliteClient.PersistWorkspaceConfig(ctx, workspaceID, config)
 	if err != nil {
-		return fmt.Errorf("failed to persist workspace config to SQLite: %w", err)
+		return fmt.Errorf("failed to persist workspace config for %s to SQLite: %w", workspaceID, err)
 	}
 
 	(*counters)["workspace_configs"]++
+	fmt.Printf("Migrated workspace config: %s\n", workspaceID)
 
 	// Migrate Tasks, Flows, Subflows, and FlowActions
 	err = migrateTasksAndFlows(ctx, redisClient, sqliteClient, workspaceID, counters)
 	if err != nil {
-		return fmt.Errorf("failed to migrate tasks and flows: %w", err)
+		return fmt.Errorf("failed to migrate tasks and flows for workspace %s: %w", workspaceID, err)
 	}
 
 	return nil
 }
 
 func migrateTasksAndFlows(ctx context.Context, redisClient *redisStorage.Storage, sqliteClient *sqlite.Storage, workspaceID string, counters *map[string]int) error {
-	// TODO: Implement migration for Tasks, Flows, Subflows, and FlowActions
-	// This function should:
-	// 1. Retrieve all tasks for the workspace from Redis
-	// 2. For each task, migrate its data and associated flows
-	// 3. For each flow, migrate its actions and subflows
-	// 4. Update the counters for each migrated item type
-	return fmt.Errorf("migrateTasksAndFlows not implemented")
+	// Retrieve all tasks for the workspace from Redis
+	tasks, err := redisClient.GetTasks(ctx, workspaceID, domain.AllTaskStatuses)
+	if err != nil {
+		return fmt.Errorf("failed to get tasks for workspace %s from Redis: %w", workspaceID, err)
+	}
+
+	for _, task := range tasks {
+		// Migrate task
+		err = sqliteClient.PersistTask(ctx, task)
+		if err != nil {
+			return fmt.Errorf("failed to persist task %s to SQLite: %w", task.Id, err)
+		}
+		(*counters)["tasks"]++
+		fmt.Printf("Migrated task: %s\n", task.Id)
+
+		// Migrate associated flows
+		flows, err := redisClient.GetFlowsForTask(ctx, workspaceID, task.Id)
+		if err != nil {
+			return fmt.Errorf("failed to get flows for task %s from Redis: %w", task.Id, err)
+		}
+
+		for _, flow := range flows {
+			err = sqliteClient.PersistFlow(ctx, flow)
+			if err != nil {
+				return fmt.Errorf("failed to persist flow %s for task %s to SQLite: %w", flow.Id, task.Id, err)
+			}
+			(*counters)["flows"]++
+			fmt.Printf("Migrated flow %s for task: %s\n", flow.Id, task.Id)
+
+			// Migrate flow actions
+			actions, err := redisClient.GetFlowActions(ctx, workspaceID, flow.Id)
+			if err != nil {
+				return fmt.Errorf("failed to get flow actions for flow %s from Redis: %w", flow.Id, err)
+			}
+
+			for _, action := range actions {
+				err = sqliteClient.PersistFlowAction(ctx, action)
+				if err != nil {
+					return fmt.Errorf("failed to persist flow action %s to SQLite: %w", action.Id, err)
+				}
+				(*counters)["flow_actions"]++
+			}
+			fmt.Printf("Migrated %d flow actions for flow: %s\n", len(actions), flow.Id)
+
+			// Migrate subflows
+			subflows, err := redisClient.GetSubflows(ctx, workspaceID, flow.Id)
+			if err != nil {
+				return fmt.Errorf("failed to get subflows for flow %s from Redis: %w", flow.Id, err)
+			}
+
+			for _, subflow := range subflows {
+				err = sqliteClient.PersistSubflow(ctx, subflow)
+				if err != nil {
+					return fmt.Errorf("failed to persist subflow %s to SQLite: %w", subflow.Id, err)
+				}
+				(*counters)["subflows"]++
+			}
+			fmt.Printf("Migrated %d subflows for flow: %s\n", len(subflows), flow.Id)
+		}
+	}
+
+	return nil
 }
