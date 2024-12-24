@@ -177,7 +177,12 @@ func migrateFlowsForTask(ctx context.Context, redisClient *redisStorage.Storage,
 		(*counters)["flows"]++
 		fmt.Printf("Migrated flow %s for task: %s\n", flow.Id, taskID)
 
-		err = migrateFlowActionsAndSubflows(ctx, redisClient, sqliteClient, workspaceID, flow.Id, counters)
+		err = migrateFlowActions(ctx, redisClient, sqliteClient, workspaceID, flow.Id, counters)
+		if err != nil {
+			return err
+		}
+
+		err = migrateSubflows(ctx, redisClient, sqliteClient, workspaceID, flow.Id, counters)
 		if err != nil {
 			return err
 		}
@@ -186,8 +191,7 @@ func migrateFlowsForTask(ctx context.Context, redisClient *redisStorage.Storage,
 	return nil
 }
 
-func migrateFlowActionsAndSubflows(ctx context.Context, redisClient *redisStorage.Storage, sqliteClient *sqlite.Storage, workspaceID, flowID string, counters *map[string]int) error {
-	// Migrate flow actions
+func migrateFlowActions(ctx context.Context, redisClient *redisStorage.Storage, sqliteClient *sqlite.Storage, workspaceID, flowID string, counters *map[string]int) error {
 	actions, err := redisClient.GetFlowActions(ctx, workspaceID, flowID)
 	if err != nil {
 		return fmt.Errorf("failed to get flow actions for flow %s from Redis: %w", flowID, err)
@@ -202,7 +206,10 @@ func migrateFlowActionsAndSubflows(ctx context.Context, redisClient *redisStorag
 	}
 	fmt.Printf("Migrated %d flow actions for flow: %s\n", len(actions), flowID)
 
-	// Migrate subflows
+	return nil
+}
+
+func migrateSubflows(ctx context.Context, redisClient *redisStorage.Storage, sqliteClient *sqlite.Storage, workspaceID, flowID string, counters *map[string]int) error {
 	subflows, err := redisClient.GetSubflows(ctx, workspaceID, flowID)
 	if err != nil {
 		return fmt.Errorf("failed to get subflows for flow %s from Redis: %w", flowID, err)
