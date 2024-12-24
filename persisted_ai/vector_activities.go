@@ -69,7 +69,7 @@ func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]
 
 		stringValue, ok := value.(string)
 		if !ok {
-			return []uint64{}, fmt.Errorf("embedding value is not a string type")
+			return []uint64{}, fmt.Errorf("embedding value is not a string type for key: %s at %d", embeddingKeys[i], i)
 		}
 		byteValue := []byte(stringValue)
 		var ev embedding.EmbeddingVector
