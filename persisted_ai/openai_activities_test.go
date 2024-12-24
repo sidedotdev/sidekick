@@ -12,10 +12,10 @@ import (
 )
 
 func TestCachedEmbedActivity_AllCached(t *testing.T) {
-	db := redis.NewTestRedisStorage()
+	storage := redis.NewTestRedisStorage()
 
 	oa := &OpenAIActivities{
-		Storage:  db,
+		Storage:  storage,
 		Embedder: &MockOpenAIEmbedder{},
 	}
 	options := OpenAIEmbedActivityOptions{
@@ -25,18 +25,18 @@ func TestCachedEmbedActivity_AllCached(t *testing.T) {
 		Subkeys:       []uint64{1},
 	}
 
-	expectedKeys := []string{"test_workspace:embedding:ada2:test_type:1"}
+	expectedKeys := []string{"embedding:ada2:test_type:1"}
 	expectedEmbedding := embedding.EmbeddingVector{0.5, 0.1}
 
 	// Pre-cache the embeddings
-	err := db.MSet(context.Background(), map[string]interface{}{expectedKeys[0]: expectedEmbedding})
+	err := storage.MSet(context.Background(), "test_workspace", map[string]interface{}{expectedKeys[0]: expectedEmbedding})
 	require.NoError(t, err)
 	err = oa.CachedEmbedActivity(context.Background(), options)
 	require.NoError(t, err)
 
 	// Check if the expected keys are in the cache and if their values are the expected embeddings.
 	for _, key := range expectedKeys {
-		value, err := db.Client.Get(context.Background(), key).Result()
+		value, err := storage.Client.Get(context.Background(), options.WorkspaceId+":"+key).Result()
 		require.NoError(t, err)
 		var embedding embedding.EmbeddingVector
 		err = embedding.UnmarshalBinary([]byte(value))
@@ -64,10 +64,10 @@ func TestCachedEmbedActivity_NoKeys(t *testing.T) {
 }
 
 func TestCachedEmbedActivity_MissedCache(t *testing.T) {
-	db := redis.NewTestRedisStorage()
+	storage := redis.NewTestRedisStorage()
 
 	oa := &OpenAIActivities{
-		Storage:  db,
+		Storage:  storage,
 		Embedder: &MockOpenAIEmbedder{},
 	}
 	options := OpenAIEmbedActivityOptions{
@@ -81,17 +81,17 @@ func TestCachedEmbedActivity_MissedCache(t *testing.T) {
 	}
 
 	// have all content keys
-	err := db.MSet(context.Background(), map[string]interface{}{
-		"test_workspace:test_type:1": "some test content 1",
-		"test_workspace:test_type:2": "some test content 2",
-		"test_workspace:test_type:3": "some test content 3",
+	err := storage.MSet(context.Background(), options.WorkspaceId, map[string]interface{}{
+		"test_type:1": "some test content 1",
+		"test_type:2": "some test content 2",
+		"test_type:3": "some test content 3",
 	})
 	require.NoError(t, err)
 
 	// Pre-cache the embeddings for some of the keys
-	err = db.MSet(context.Background(), map[string]interface{}{
-		"test_workspace:test_type:1:ada2": embedding.EmbeddingVector{1.0, 2.0, 3.0},
-		"test_workspace:test_type:2:ada2": embedding.EmbeddingVector{4.0, 5.0, 6.0},
+	err = storage.MSet(context.Background(), options.WorkspaceId, map[string]interface{}{
+		"embedding:ada2:test_type:1": embedding.EmbeddingVector{1.0, 2.0, 3.0},
+		"embedding:ada2:test_type:2": embedding.EmbeddingVector{4.0, 5.0, 6.0},
 	})
 	require.NoError(t, err)
 
@@ -101,10 +101,10 @@ func TestCachedEmbedActivity_MissedCache(t *testing.T) {
 	// Check if all the expected keys are in the cache and if their values are the expected embeddings.
 	for _, subKey := range options.Subkeys {
 		key := fmt.Sprintf("%s:%s:%d:ada2", options.WorkspaceId, options.EmbeddingType, subKey)
-		exists, err := db.Client.Exists(context.Background(), key).Result()
+		exists, err := storage.Client.Exists(context.Background(), key).Result()
 		require.NoError(t, err)
 		if exists > 0 {
-			value, err := db.Client.Get(context.Background(), key).Result()
+			value, err := storage.Client.Get(context.Background(), key).Result()
 			require.NoError(t, err)
 			require.NotNil(t, value)
 		}

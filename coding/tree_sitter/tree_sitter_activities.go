@@ -41,7 +41,7 @@ func (t *TreeSitterActivities) CreateDirSignatureOutlines(workspaceId string, di
 		}
 	}
 
-	err = t.DatabaseAccessor.MSet(context.Background(), values)
+	err = t.DatabaseAccessor.MSet(context.Background(), workspaceId, values)
 	if err != nil {
 		return []uint64{}, err
 	}

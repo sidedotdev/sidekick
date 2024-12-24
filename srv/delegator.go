@@ -26,13 +26,13 @@ func (d Delegator) CheckConnection(ctx context.Context) error {
 }
 
 /* implements Storage interface */
-func (d Delegator) MGet(ctx context.Context, keys []string) ([]interface{}, error) {
-	return d.storage.MGet(ctx, keys)
+func (d Delegator) MGet(ctx context.Context, workspaceId string, keys []string) ([]interface{}, error) {
+	return d.storage.MGet(ctx, workspaceId, keys)
 }
 
 /* implements Storage interface */
-func (d Delegator) MSet(ctx context.Context, values map[string]interface{}) error {
-	return d.storage.MSet(ctx, values)
+func (d Delegator) MSet(ctx context.Context, workspaceId string, values map[string]interface{}) error {
+	return d.storage.MSet(ctx, workspaceId, values)
 }
 
 /* implements WorkspaceStorage interface */

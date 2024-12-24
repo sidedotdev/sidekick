@@ -37,9 +37,8 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 	contentKeys := make([]string, len(options.Subkeys))
 	embeddingKeys := make([]string, len(options.Subkeys))
 	for i, subKey := range options.Subkeys {
-		contentKeys[i] = fmt.Sprintf("%s:%s:%d", options.WorkspaceId, options.ContentType, subKey)
+		contentKeys[i] = fmt.Sprintf("%s:%d", options.ContentType, subKey)
 		embeddingKeys[i] = constructEmbeddingKey(embeddingKeyOptions{
-			workspaceId:   options.WorkspaceId,
 			embeddingType: options.EmbeddingType,
 			contentType:   options.ContentType,
 			subKey:        subKey,
@@ -49,7 +48,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 	var cachedEmbeddings []interface{}
 	var err error
 	if len(embeddingKeys) > 0 {
-		cachedEmbeddings, err = oa.Storage.MGet(ctx, embeddingKeys)
+		cachedEmbeddings, err = oa.Storage.MGet(ctx, options.WorkspaceId, embeddingKeys)
 		if err != nil {
 			return err
 		}
@@ -67,7 +66,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 	// TODO replace with metric
 	log.Printf("embedding %d keys\n", len(toEmbedContentKeys))
 	if len(toEmbedContentKeys) > 0 {
-		values, err := oa.Storage.MGet(ctx, toEmbedContentKeys)
+		values, err := oa.Storage.MGet(ctx, options.WorkspaceId, toEmbedContentKeys)
 		if err != nil {
 			return err
 		}
@@ -101,7 +100,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 			}
 		}
 
-		err = oa.Storage.MSet(ctx, cacheValues)
+		err = oa.Storage.MSet(ctx, options.WorkspaceId, cacheValues)
 		if err != nil {
 			return err
 		}
@@ -110,12 +109,11 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 }
 
 type embeddingKeyOptions struct {
-	workspaceId   string
 	embeddingType string
 	contentType   string
 	subKey        uint64
 }
 
 func constructEmbeddingKey(options embeddingKeyOptions) string {
-	return fmt.Sprintf("%s:embedding:%s:%s:%d", options.workspaceId, options.embeddingType, options.contentType, options.subKey)
+	return fmt.Sprintf("embedding:%s:%s:%d", options.embeddingType, options.contentType, options.subKey)
 }

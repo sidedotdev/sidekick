@@ -128,11 +128,10 @@ func (ra *RagActivities) LimitedDirSignatureOutline(options DirSignatureOutlineO
 	signaturePaths := make(map[string]int, 0)
 
 	dirChunkKeys := make([]string, len(options.DirChunkSubkeys))
-	for _, subkey := range options.DirChunkSubkeys {
-		key := fmt.Sprintf("%s:%s:%d", options.WorkspaceId, tree_sitter.ContentTypeDirChunk, subkey)
-		dirChunkKeys = append(dirChunkKeys, key)
+	for i, subkey := range options.DirChunkSubkeys {
+		dirChunkKeys[i] = fmt.Sprintf("%s:%d", tree_sitter.ContentTypeDirChunk, subkey)
 	}
-	dirChunks, err := ra.DatabaseAccessor.MGet(context.Background(), dirChunkKeys)
+	dirChunks, err := ra.DatabaseAccessor.MGet(context.Background(), options.WorkspaceId, dirChunkKeys)
 	if err != nil {
 		return "", err
 	}
@@ -164,11 +163,10 @@ chunksLoop:
 	}
 
 	fileSignatureKeys := make([]string, len(options.FileSignatureSubkeys))
-	for _, subkey := range options.FileSignatureSubkeys {
-		key := fmt.Sprintf("%s:%s:%d", options.WorkspaceId, tree_sitter.ContentTypeFileSignature, subkey)
-		fileSignatureKeys = append(fileSignatureKeys, key)
+	for i, subkey := range options.FileSignatureSubkeys {
+		fileSignatureKeys[i] = fmt.Sprintf("%s:%d", tree_sitter.ContentTypeFileSignature, subkey)
 	}
-	fileSignatures, err := ra.DatabaseAccessor.MGet(context.Background(), fileSignatureKeys)
+	fileSignatures, err := ra.DatabaseAccessor.MGet(context.Background(), options.WorkspaceId, fileSignatureKeys)
 	if err != nil {
 		return "", err
 	}
@@ -244,10 +242,10 @@ func (ra *RagActivities) RankedDirChunkSubkeys(options RankedDirChunkSubkeysOpti
 		value := strings.Join(paths, "\n")
 		hash := utils.Hash64(value)
 		hashes = append(hashes, hash)
-		key := fmt.Sprintf("%s:%s:%d", options.WorkspaceId, tree_sitter.ContentTypeDirChunk, hash)
+		key := fmt.Sprintf("%s:%d", tree_sitter.ContentTypeDirChunk, hash)
 		values[key] = value
 	}
-	err := ra.DatabaseAccessor.MSet(context.Background(), values)
+	err := ra.DatabaseAccessor.MSet(context.Background(), options.WorkspaceId, values)
 	if err != nil {
 		return []uint64{}, err
 	}

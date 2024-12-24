@@ -20,10 +20,8 @@ type Storage interface {
 
 	CheckConnection(ctx context.Context) error
 
-	// TODO add workspaceId to this
-	MGet(ctx context.Context, keys []string) ([]interface{}, error)
-	// TODO add workspaceId to this
-	MSet(ctx context.Context, values map[string]interface{}) error
+	MGet(ctx context.Context, workspaceId string, keys []string) ([]interface{}, error)
+	MSet(ctx context.Context, workspaceId string, values map[string]interface{}) error
 
 	DeleteWorkspace(ctx context.Context, workspaceId string) error
 }

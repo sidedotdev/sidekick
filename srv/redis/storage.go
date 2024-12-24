@@ -21,12 +21,20 @@ func (s Storage) CheckConnection(ctx context.Context) error {
 	return err
 }
 
-func (s Storage) MGet(ctx context.Context, keys []string) ([]interface{}, error) {
-	return s.Client.MGet(ctx, keys...).Result()
+func (s Storage) MGet(ctx context.Context, workspaceId string, keys []string) ([]interface{}, error) {
+	prefixedKeys := make([]string, len(keys))
+	for i, key := range keys {
+		prefixedKeys[i] = fmt.Sprintf("%s:%s", workspaceId, key)
+	}
+	return s.Client.MGet(ctx, prefixedKeys...).Result()
 }
 
-func (s Storage) MSet(ctx context.Context, values map[string]interface{}) error {
-	return s.Client.MSet(ctx, values).Err()
+func (s Storage) MSet(ctx context.Context, workspaceId string, values map[string]interface{}) error {
+	prefixedValues := make(map[string]interface{})
+	for key, value := range values {
+		prefixedValues[fmt.Sprintf("%s:%s", workspaceId, key)] = value
+	}
+	return s.Client.MSet(ctx, prefixedValues).Err()
 }
 
 func toMap(something interface{}) (map[string]interface{}, error) {

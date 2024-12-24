@@ -30,14 +30,13 @@ func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]
 	embeddingKeys := make([]string, 0, len(options.Subkeys))
 	for _, subKey := range options.Subkeys {
 		embeddingKey := constructEmbeddingKey(embeddingKeyOptions{
-			workspaceId:   options.WorkspaceId,
 			embeddingType: options.EmbeddingType,
 			contentType:   options.ContentType,
 			subKey:        subKey,
 		})
 		embeddingKeys = append(embeddingKeys, embeddingKey)
 	}
-	values, err := va.DatabaseAccessor.MGet(context.Background(), embeddingKeys)
+	values, err := va.DatabaseAccessor.MGet(context.Background(), options.WorkspaceId, embeddingKeys)
 	if err != nil {
 		return []uint64{}, err
 	}
