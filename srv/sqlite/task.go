@@ -33,6 +33,13 @@ func (s *Storage) PersistTask(ctx context.Context, task domain.Task) error {
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
+	if task.Archived != nil {
+		truncated := task.Archived.UTC().Truncate(time.Millisecond)
+		task.Archived = &truncated
+	}
+	task.Created = task.Created.UTC().Truncate(time.Millisecond)
+	task.Updated = task.Updated.UTC().Truncate(time.Millisecond)
+
 	_, err = s.db.ExecContext(ctx, query,
 		task.WorkspaceId, task.Id, task.Title, task.Description, task.Status, linksJSON, task.AgentType,
 		task.FlowType, task.Archived, task.Created, task.Updated, flowOptionsJSON,

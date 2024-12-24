@@ -54,13 +54,13 @@ func getAllWorkspaceIds(ctx context.Context, redisClient *redis.Storage) ([]stri
 		return nil, fmt.Errorf("failed to get all workspaces: %w", err)
 	}
 
-	workspaceIds := make([]string, len(workspaces))
-	for i, workspace := range workspaces {
+	var workspaceIds []string
+	for _, workspace := range workspaces {
 		// TODO: remove this check
 		if workspace.Id != "ws_2h7TkUIDypLPvB5QXLIF0cwlqi8" {
 			continue
 		}
-		workspaceIds[i] = workspace.Id
+		workspaceIds = append(workspaceIds, workspace.Id)
 	}
 
 	return workspaceIds, nil
@@ -182,13 +182,14 @@ func migrateFlowActions(ctx context.Context, redisClient *redis.Storage, sqliteC
 	return nil
 }
 
-func migrateSubflows(ctx context.Context, redisClient *redis.Storage, sqliteClient *sqlite.Storage, workspaceID, flowID string, counters *map[string]int) error {
-	subflows, err := redisClient.GetSubflows(ctx, workspaceID, flowID)
+func migrateSubflows(ctx context.Context, redisClient *redis.Storage, sqliteClient *sqlite.Storage, workspaceId, flowID string, counters *map[string]int) error {
+	subflows, err := redisClient.GetSubflows(ctx, workspaceId, flowID)
 	if err != nil {
 		return fmt.Errorf("failed to get subflows for flow %s from Redis: %w", flowID, err)
 	}
 
 	for _, subflow := range subflows {
+		subflow.WorkspaceId = workspaceId
 		err = sqliteClient.PersistSubflow(ctx, subflow)
 		if err != nil {
 			return fmt.Errorf("failed to persist subflow %s to SQLite: %w", subflow.Id, err)

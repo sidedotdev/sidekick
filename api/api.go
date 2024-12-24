@@ -127,7 +127,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	workspaceApiRoutes := DefineWorkspaceApiRoutes(r, &ctrl)
 	workspaceApiRoutes.GET("/archived_tasks", ctrl.GetArchivedTasksHandler)
 
-	taskRoutes := workspaceApiRoutes.Group("/:workspaceId/tasks")
+	taskRoutes := workspaceApiRoutes.Group("/tasks")
 	taskRoutes.POST("/", ctrl.CreateTaskHandler)
 	taskRoutes.GET("/", ctrl.GetTasksHandler)
 	taskRoutes.GET("/:id", ctrl.GetTaskHandler)
@@ -137,11 +137,11 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	taskRoutes.POST("/:id/cancel", ctrl.CancelTaskHandler)
 	taskRoutes.POST("/archive_finished", ctrl.ArchiveFinishedTasksHandler)
 
-	flowRoutes := workspaceApiRoutes.Group("/:workspaceId/flows")
+	flowRoutes := workspaceApiRoutes.Group("/flows")
 	flowRoutes.GET("/:id/actions", ctrl.GetFlowActionsHandler)
 	flowRoutes.POST("/:id/cancel", ctrl.CancelFlowHandler)
 
-	workspaceApiRoutes.POST("/:workspaceId/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
+	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
 
 	workspaceWsRoutes := r.Group("/ws/v1/workspaces")
 	workspaceWsRoutes.GET("/:workspaceId/task_changes", ctrl.TaskChangesWebsocketHandler)
@@ -445,6 +445,7 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 	if len(taskStatuses) > 0 {
 		tasks, err = ctrl.service.GetTasks(c, workspaceId, taskStatuses)
 		if err != nil {
+			log.Println("Error fetching tasks:", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}

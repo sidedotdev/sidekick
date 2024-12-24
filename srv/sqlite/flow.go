@@ -48,6 +48,7 @@ func (s *Storage) GetFlow(ctx context.Context, workspaceId, flowId string) (doma
 	return flow, nil
 }
 
+// FIXME write tests for this
 func (s *Storage) GetFlowsForTask(ctx context.Context, workspaceId, taskId string) ([]domain.Flow, error) {
 	query := `
 		SELECT workspace_id, id, type, parent_id, status
@@ -61,7 +62,7 @@ func (s *Storage) GetFlowsForTask(ctx context.Context, workspaceId, taskId strin
 	}
 	defer rows.Close()
 
-	var flows []domain.Flow
+	flows := make([]domain.Flow, 0)
 	for rows.Next() {
 		var flow domain.Flow
 		err := rows.Scan(&flow.WorkspaceId, &flow.Id, &flow.Type, &flow.ParentId, &flow.Status)
