@@ -140,7 +140,6 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	flowRoutes := workspaceApiRoutes.Group("/:workspaceId/flows")
 	flowRoutes.GET("/:id/actions", ctrl.GetFlowActionsHandler)
 	flowRoutes.POST("/:id/cancel", ctrl.CancelFlowHandler)
-	flowRoutes.GET("/:id/action_changes", ctrl.GetFlowActionChangesHandler)
 
 	workspaceApiRoutes.POST("/:workspaceId/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
 
@@ -589,74 +588,6 @@ func (ctrl *Controller) GetFlowActionsHandler(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"flowActions": flowActions})
-}
-
-func (ctrl *Controller) GetFlowActionChangesHandler(c *gin.Context) {
-	flowId := c.Param("id")
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	clientGone := c.Request.Context().Done()
-
-	events := make(chan interface{}, 10)
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		for event := range events {
-			switch event := event.(type) {
-			case domain.FlowAction:
-				select {
-				case <-clientGone:
-					// if the client has disconnected, stop sending events
-					log.Println("Flow action changes client disconnected")
-					return
-				default:
-					c.SSEvent("flow/action", event)
-					c.Writer.Flush()
-				}
-			case error:
-				c.SSEvent("error", gin.H{"error": event.Error()})
-				c.Writer.Flush()
-			}
-		}
-		log.Println("Flow action changes events channel closed")
-		wg.Done()
-	}()
-
-	ctx := c.Request.Context()
-	workspaceId := c.Param("workspaceId")
-	streamMessageStartId := "0"
-	maxCount := int64(100)
-	blockDuration := time.Second * 0
-
-	for {
-		select {
-		case <-clientGone:
-			// if the client has disconnected, stop fetching events
-			log.Println("Flow action changes client disconnected")
-			close(events)
-			return
-		default:
-			flowActions, lastStreamId, err := ctrl.service.GetFlowActionChanges(ctx, workspaceId, flowId, streamMessageStartId, maxCount, blockDuration)
-			if err != nil {
-				log.Printf("Failed to get flow actions: %v\n", err)
-				events <- err
-				close(events)
-				return
-			}
-
-			for _, flowAction := range flowActions {
-				events <- flowAction
-			}
-
-			if lastStreamId == "end" {
-				close(events)
-				wg.Wait()
-				return
-			}
-			streamMessageStartId = lastStreamId
-		}
-	}
 }
 
 func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
