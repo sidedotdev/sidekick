@@ -13,7 +13,6 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/adrg/xdg"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -54,20 +53,8 @@ type temporalServerConfig struct {
 	}
 }
 
-// getSidekickDataHome returns a directory path for storing user-specific
-// sidekick data. If needed, it also creates the necessary directories for
-// storing user-specific data according to the XDG spec.
-func getSidekickDataHome() (string, error) {
-	sidekickDataDir := filepath.Join(xdg.DataHome, "sidekick")
-	err := os.MkdirAll(sidekickDataDir, 0755)
-	if err != nil {
-		return "", fmt.Errorf("failed to create Sidekick data directory: %w", err)
-	}
-	return sidekickDataDir, nil
-}
-
 func newTemporalServerConfig(ip string, basePort int) (*temporalServerConfig, error) {
-	sidekickDataDir, err := getSidekickDataHome()
+	sidekickDataDir, err := common.GetSidekickDataHome()
 	if err != nil {
 		return nil, fmt.Errorf("failed to ensure Sidekick XDG data home: %w", err)
 	}
