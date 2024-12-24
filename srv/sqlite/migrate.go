@@ -11,7 +11,7 @@ import (
 )
 
 //go:embed migrations/*.sql
-var fs embed.FS
+var migrationsFs embed.FS
 
 func Migrate(db *sql.DB, dbName string) error {
 	driver, err := sqlite.WithInstance(db, &sqlite.Config{})
@@ -19,7 +19,7 @@ func Migrate(db *sql.DB, dbName string) error {
 		return fmt.Errorf("failed to create migration driver: %w", err)
 	}
 
-	migrationsSource, err := iofs.New(fs, "migrations")
+	migrationsSource, err := iofs.New(migrationsFs, "migrations")
 	if err != nil {
 		return fmt.Errorf("failed to create migrations iofs instance: %w", err)
 	}
