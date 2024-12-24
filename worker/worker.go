@@ -14,8 +14,6 @@ import (
 	"sidekick/coding/git"
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
-	"sidekick/srv"
-	"sidekick/srv/redis"
 	"sidekick/workspace"
 
 	"sidekick/dev"
@@ -46,12 +44,13 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 		log.Fatal().Err(err).Msg("Unable to create Temporal client.")
 	}
 
-	redisStorage := redis.NewStorage()
-	redisStreamer := redis.NewStreamer()
-	service := srv.NewDelegator(redisStorage, redisStreamer)
+	service, err := sidekick.GetService()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize storage")
+	}
 	err = service.CheckConnection(context.Background())
 	if err != nil {
-		log.Fatal().Err(err)
+		log.Fatal().Err(err).Msg("Failed to connect to storage")
 	}
 
 	devManagerActivities := &dev.DevAgentManagerActivities{
@@ -64,7 +63,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 		Embedder: embedding.OpenAIEmbedder{},
 	}
 	llmActivities := &persisted_ai.LlmActivities{
-		Streamer: redisStreamer,
+		Streamer: service,
 	}
 
 	lspActivities := &lsp.LSPActivities{

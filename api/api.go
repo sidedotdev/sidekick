@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sidekick"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,10 +17,8 @@ import (
 	"sidekick/common"
 	"sidekick/dev"
 	"sidekick/domain"
-	domain1 "sidekick/domain"
 	"sidekick/frontend"
 	"sidekick/srv"
-	"sidekick/srv/redis"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -29,7 +28,10 @@ import (
 
 func RunServer() *http.Server {
 	gin.SetMode(gin.ReleaseMode)
-	ctrl := NewController()
+	ctrl, err := NewController()
+	if err != nil {
+		log.Fatalf("Failed to initialize controller: %v\n", err)
+	}
 	router := DefineRoutes(ctrl)
 
 	srv := &http.Server{
@@ -193,21 +195,22 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	return r
 }
 
-func NewController() Controller {
-
+func NewController() (Controller, error) {
 	clientOptions := client.Options{
 		HostPort: common.GetTemporalServerHostPort(),
 	}
 	temporalClient, err := client.NewLazyClient(clientOptions)
 	if err != nil {
-		log.Fatal("Failed to create Temporal client", err)
+		return Controller{}, fmt.Errorf("failed to create Temporal client: %w", err)
 	}
 
-	redisStorage := redis.NewStorage()
-	service := srv.NewDelegator(redisStorage, redis.NewStreamer())
+	service, err := sidekick.GetService()
+	if err != nil {
+		return Controller{}, fmt.Errorf("failed to initialize storage: %w", err)
+	}
 	err = service.CheckConnection(context.Background())
 	if err != nil {
-		log.Fatal("Failed to connect to Redis", err)
+		return Controller{}, fmt.Errorf("failed to connect to storage: %w", err)
 	}
 
 	return Controller{
@@ -215,7 +218,7 @@ func NewController() Controller {
 		temporalClient:    temporalClient,
 		temporalNamespace: common.GetTemporalNamespace(),
 		temporalTaskQueue: common.GetTemporalTaskQueue(),
-	}
+	}, nil
 }
 
 func (ctrl *Controller) ErrorHandler(c *gin.Context, status int, err error) {
@@ -1137,7 +1140,7 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 				}
 
 				// remove stream keys that have been marked as ended
-				if flowEvent.GetEventType() == domain1.EndStreamEventType {
+				if flowEvent.GetEventType() == domain.EndStreamEventType {
 					for key := range keysMap {
 						if strings.HasSuffix(key, flowEvent.GetParentId()) {
 							streamKeys.Delete(key)
