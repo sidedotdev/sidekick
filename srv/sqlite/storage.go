@@ -5,14 +5,15 @@ import (
 )
 
 type Storage struct {
-	db *sql.DB
+	db   *sql.DB
+	kvDb *sql.DB
 }
 
-func NewStorage(db *sql.DB) *Storage {
-	return &Storage{db: db}
+func NewStorage(db, kvDb *sql.DB) *Storage {
+	return &Storage{db: db, kvDb: kvDb}
 }
 
 /* TODO
 // Ensure Storage implements SubflowStorage interface
-var _ srv.Storage = Storage{}
+var _ srv.Storage = (*Storage)(nil)
 */

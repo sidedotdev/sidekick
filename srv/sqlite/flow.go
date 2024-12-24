@@ -13,15 +13,13 @@ var _ domain.FlowStorage = (*Storage)(nil)
 
 func (s *Storage) PersistFlow(ctx context.Context, flow domain.Flow) error {
 	query := `
-		INSERT INTO flows (workspace_id, id, type, parent_id, status)
+		INSERT OR REPLACE INTO flows (workspace_id, id, type, parent_id, status)
 		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(workspace_id, id) DO UPDATE SET
-		type = ?, parent_id = ?, status = ?
 	`
 
 	_, err := s.db.ExecContext(ctx, query,
 		flow.WorkspaceId, flow.Id, flow.Type, flow.ParentId, flow.Status,
-		flow.Type, flow.ParentId, flow.Status)
+	)
 	if err != nil {
 		return fmt.Errorf("failed to persist flow: %w", err)
 	}
