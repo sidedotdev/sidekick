@@ -10,6 +10,7 @@ import (
 
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
+	go_redis "github.com/redis/go-redis/v9"
 )
 
 func TestPersistTask(t *testing.T) {
@@ -36,26 +37,64 @@ func TestPersistTask(t *testing.T) {
 
 	// Verify that the status-specific kanban set has it
 	statusKey := fmt.Sprintf("%s:kanban:%s", taskRecord.WorkspaceId, taskRecord.Status)
-	_, err = db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
+	isMember, err := db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
 	assert.Nil(t, err)
+	assert.True(t, isMember)
 
+	// Change status and persist
 	taskRecord.Status = domain.TaskStatusInProgress
 	err = db.PersistTask(context.Background(), taskRecord)
 	assert.Nil(t, err)
 
 	// Verify that the task status was correctly updated in the set
 	statusKey = fmt.Sprintf("%s:kanban:%s", taskRecord.WorkspaceId, taskRecord.Status)
-	isMember, err := db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
+	isMember, err = db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
 	assert.Nil(t, err)
 	assert.True(t, isMember)
-	for _, status := range []domain.TaskStatus{domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
-		if status != taskRecord.Status {
-			statusKey := fmt.Sprintf("%s:kanban:%s", taskRecord.WorkspaceId, status)
-			isMember, err := db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
-			assert.Nil(t, err)
-			assert.False(t, isMember)
-		}
+
+	// Verify that the task is not in other status sets
+	for _, status := range []domain.TaskStatus{domain.TaskStatusToDo, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
+		statusKey := fmt.Sprintf("%s:kanban:%s", taskRecord.WorkspaceId, status)
+		isMember, err := db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
+		assert.Nil(t, err)
+		assert.False(t, isMember)
 	}
+
+	// Archive the task
+	now := time.Now()
+	taskRecord.Archived = &now
+	err = db.PersistTask(context.Background(), taskRecord)
+	assert.Nil(t, err)
+
+	// Verify that the task is in the archived sorted set
+	archivedKey := fmt.Sprintf("%s:archived_tasks", taskRecord.WorkspaceId)
+	score, err := db.Client.ZScore(context.Background(), archivedKey, taskRecord.Id).Result()
+	assert.Nil(t, err)
+	assert.Equal(t, float64(now.Unix()), score)
+
+	// Verify that the task is not in any kanban set
+	for _, status := range []domain.TaskStatus{domain.TaskStatusDrafting, domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
+		statusKey := fmt.Sprintf("%s:kanban:%s", taskRecord.WorkspaceId, status)
+		isMember, err := db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
+		assert.Nil(t, err)
+		assert.False(t, isMember)
+	}
+
+	// Unarchive the task
+	taskRecord.Archived = nil
+	taskRecord.Status = domain.TaskStatusComplete
+	err = db.PersistTask(context.Background(), taskRecord)
+	assert.Nil(t, err)
+
+	// Verify that the task is not in the archived sorted set
+	_, err = db.Client.ZScore(context.Background(), archivedKey, taskRecord.Id).Result()
+	assert.Equal(t, go_redis.Nil, err)
+
+	// Verify that the task is in the correct kanban set
+	statusKey = fmt.Sprintf("%s:kanban:%s", taskRecord.WorkspaceId, taskRecord.Status)
+	isMember, err = db.Client.SIsMember(context.Background(), statusKey, taskRecord.Id).Result()
+	assert.Nil(t, err)
+	assert.True(t, isMember)
 }
 
 func TestGetTasks(t *testing.T) {
@@ -157,6 +196,69 @@ func TestDeleteTask(t *testing.T) {
 	}
 	assert.NotContains(t, tasks, task)
 }
+
+func TestGetArchivedTasks(t *testing.T) {
+	db := NewTestRedisStorage()
+	ctx := context.Background()
+
+	workspaceId := "test-workspace"
+
+	// Create and persist some archived tasks
+	archivedTasks := []domain.Task{
+		{
+			Id:          "archived-task-1",
+			WorkspaceId: workspaceId,
+			Title:       "Archived Task 1",
+			Status:      domain.TaskStatusComplete,
+			Archived:    func() *time.Time { t := time.Now().Add(-2 * time.Hour); return &t }(),
+		},
+		{
+			Id:          "archived-task-2",
+			WorkspaceId: workspaceId,
+			Title:       "Archived Task 2",
+			Status:      domain.TaskStatusComplete,
+			Archived:    func() *time.Time { t := time.Now().Add(-1 * time.Hour); return &t }(),
+		},
+		{
+			Id:          "archived-task-3",
+			WorkspaceId: workspaceId,
+			Title:       "Archived Task 3",
+			Status:      domain.TaskStatusComplete,
+			Archived:    func() *time.Time { t := time.Now(); return &t }(),
+		},
+	}
+
+	for _, task := range archivedTasks {
+		err := db.PersistTask(ctx, task)
+		assert.NoError(t, err)
+	}
+
+	// Test getting all archived tasks
+	retrievedTasks, totalCount, err := db.GetArchivedTasks(ctx, workspaceId, 1, 3)
+	assert.NoError(t, err)
+	assert.Len(t, retrievedTasks, 3)
+	assert.Equal(t, totalCount, int64(3))
+
+	// Check if tasks are in the correct order (most recent first)
+	assert.Equal(t, "archived-task-3", retrievedTasks[0].Id)
+	assert.Equal(t, "archived-task-2", retrievedTasks[1].Id)
+	assert.Equal(t, "archived-task-1", retrievedTasks[2].Id)
+
+	// Test pagination
+	retrievedTasks, totalCount, err = db.GetArchivedTasks(ctx, workspaceId, 2, 2)
+	assert.NoError(t, err)
+	assert.Len(t, retrievedTasks, 1)
+	assert.Equal(t, "archived-task-1", retrievedTasks[0].Id)
+	assert.Equal(t, totalCount, int64(3))
+
+	// Test getting archived tasks from a workspace with no archived tasks
+	emptyWorkspaceId := "empty-workspace-id"
+	emptyTasks, totalCount, err := db.GetArchivedTasks(ctx, emptyWorkspaceId, 1, 10)
+	assert.NoError(t, err)
+	assert.Len(t, emptyTasks, 0)
+	assert.Equal(t, totalCount, int64(0))
+}
+
 func TestAddTaskChange(t *testing.T) {
 	db := NewTestRedisStreamer()
 	workspaceId := "TEST_WORKSPACE_ID"

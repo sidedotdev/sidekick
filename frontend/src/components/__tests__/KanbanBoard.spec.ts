@@ -5,8 +5,13 @@ import TaskCard from '../TaskCard.vue'
 import type { Task } from '../../lib/models'
 
 describe('KanbanBoard', () => {
+  const defaultProps = {
+    workspaceId: 'test-workspace-id',
+    tasks: [] as Task[]
+  }
+
   it('renders no tasks when tasks prop is empty', () => {
-    const wrapper = shallowMount(KanbanBoard, { props: { tasks: [] } })
+    const wrapper = shallowMount(KanbanBoard, { props: defaultProps })
     expect(wrapper.findAll('.task-card').length).toBe(0)
   })
 
@@ -17,13 +22,14 @@ describe('KanbanBoard', () => {
       { id: '3', agentType: 'none' , status: 'complete'    },
       { id: '4', agentType: 'llm'  , status: 'to_do'       },
     ] as Task[]
-    const wrapper = shallowMount(KanbanBoard, { props: { tasks } })
+    const wrapper = shallowMount(KanbanBoard, { props: { ...defaultProps, tasks } })
     const columns = wrapper.findAll('.kanban-column')
     expect(columns.length).toBe(3)
     expect(columns.at(0)!.findAllComponents(TaskCard).length).toBe(1) // human
     expect(columns.at(1)!.findAllComponents(TaskCard).length).toBe(2) // llm
     expect(columns.at(2)!.findAllComponents(TaskCard).length).toBe(1) // none
   })
+
   it('displays tasks in descending order of id', () => {
     const tasks = [
       { id: '1', agentType: 'human', status: 'drafting' },
@@ -32,7 +38,7 @@ describe('KanbanBoard', () => {
     ] as Task[]
 
     const wrapper = shallowMount(KanbanBoard, {
-      props: { tasks }
+      props: { ...defaultProps, tasks }
     })
 
     const taskCards = wrapper.findAllComponents(TaskCard)

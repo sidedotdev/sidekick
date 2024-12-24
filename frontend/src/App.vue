@@ -44,6 +44,7 @@ const selectedWorkspace = () => {
       
       <nav class="container">
         <RouterLink to="/kanban">Board</RouterLink>
+        <RouterLink to="/archived-tasks">Archived Tasks</RouterLink>
         <RouterLink to="/workspaces/new">+Space</RouterLink>
       </nav>
     </div>

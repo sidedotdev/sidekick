@@ -27,9 +27,9 @@ const (
 	TaskStatusToDo       TaskStatus = "to_do"
 	TaskStatusInProgress TaskStatus = "in_progress"
 	TaskStatusBlocked    TaskStatus = "blocked"
-	TaskStatusComplete   TaskStatus = "complete"
-	TaskStatusFailed     TaskStatus = "failed"
-	TaskStatusCanceled   TaskStatus = "canceled"
+	TaskStatusComplete   TaskStatus = "complete" // considered to be "finished"
+	TaskStatusFailed     TaskStatus = "failed"   // also considered to be "finished"
+	TaskStatusCanceled   TaskStatus = "canceled" // also considered to be "finished"
 )
 
 var AllTaskStatuses []TaskStatus = []TaskStatus{
@@ -48,6 +48,7 @@ type TaskStorage interface {
 	GetTask(ctx context.Context, workspaceId, taskId string) (Task, error)
 	GetTasks(ctx context.Context, workspaceId string, statuses []TaskStatus) ([]Task, error)
 	DeleteTask(ctx context.Context, workspaceId, taskId string) error
+	GetArchivedTasks(ctx context.Context, workspaceId string, offset, limit int64) ([]Task, int64, error)
 }
 
 // TaskStreamer defines the interface for task-related stream operations
@@ -87,6 +88,7 @@ type Task struct {
 	Links       []TaskLink             `json:"links,omitempty"`
 	AgentType   AgentType              `json:"agentType"`
 	FlowType    FlowType               `json:"flowType"`
+	Archived	*time.Time             `json:"archived,omitempty"`
 	Created     time.Time              `json:"created"`
 	Updated     time.Time              `json:"updated"`
 	FlowOptions map[string]interface{} `json:"flowOptions,omitempty"`
