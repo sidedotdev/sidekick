@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -11,6 +10,8 @@ import (
 	"sidekick/srv"
 	"strings"
 	"time"
+
+	"github.com/kelindar/binary"
 )
 
 type Storage struct {
@@ -109,9 +110,9 @@ func (s *Storage) CheckConnection(ctx context.Context) error {
 	return nil
 }
 
-func (s *Storage) MGet(ctx context.Context, workspaceId string, keys []string) ([]interface{}, error) {
+func (s *Storage) MGet(ctx context.Context, workspaceId string, keys []string) ([][]byte, error) {
 	if len(keys) == 0 {
-		return []interface{}{}, nil
+		return [][]byte{}, nil
 	}
 
 	placeholders := make([]string, len(keys))
@@ -130,25 +131,26 @@ func (s *Storage) MGet(ctx context.Context, workspaceId string, keys []string) (
 	}
 	defer rows.Close()
 
-	results := make(map[string]interface{})
+	results := make(map[string][]byte)
 	for rows.Next() {
 		var key string
 		var value []byte
 		if err := rows.Scan(&key, &value); err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
-		var result interface{}
-		if err := json.Unmarshal(value, &result); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal value for key %s: %w", key, err)
-		}
-		results[key] = result
+		//var result interface{}
+		//if err := binary.Unmarshal(value, &result); err != nil {
+		//	return nil, fmt.Errorf("failed to unmarshal value for key %s: %w", key, err)
+		//}
+		//results[key] = result
+		results[key] = value
 	}
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating rows: %w", err)
 	}
 
-	orderedResults := make([]interface{}, len(keys))
+	orderedResults := make([][]byte, len(keys))
 	for i, key := range keys {
 		orderedResults[i] = results[key]
 	}
@@ -170,12 +172,15 @@ func (s *Storage) MSet(ctx context.Context, workspaceId string, values map[strin
 	defer stmt.Close()
 
 	for key, value := range values {
-		jsonValue, err := json.Marshal(value)
-		if err != nil {
-			return fmt.Errorf("failed to marshal value for key %s: %w", key, err)
+		var valueBytes []byte
+		if value != nil {
+			valueBytes, err = binary.Marshal(value)
+			if err != nil {
+				return fmt.Errorf("sqlite failed to marshal binary value for key %s: %w", key, err)
+			}
 		}
 
-		_, err = stmt.ExecContext(ctx, workspaceId, key, jsonValue)
+		_, err = stmt.ExecContext(ctx, workspaceId, key, valueBytes)
 		if err != nil {
 			return fmt.Errorf("failed to insert/update key %s: %w", key, err)
 		}

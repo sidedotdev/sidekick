@@ -46,6 +46,7 @@ require (
 	github.com/alessio/shellescape v1.4.1 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
+	github.com/kelindar/binary v1.0.19 // indirect
 )
 
 require (

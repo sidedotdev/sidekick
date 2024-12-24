@@ -12,6 +12,8 @@ import (
 	"sidekick/srv"
 	"sidekick/utils"
 	"strings"
+
+	"github.com/kelindar/binary"
 )
 
 type RagActivities struct {
@@ -138,9 +140,15 @@ func (ra *RagActivities) LimitedDirSignatureOutline(options DirSignatureOutlineO
 
 	// include paths for dir chunks, up to 1/10th of the char limit (approximately)
 chunksLoop:
-	for _, chunk := range dirChunks {
+	for i, chunk := range dirChunks {
 		if chunk != nil {
-			paths := strings.Split(chunk.(string), "\n")
+			var text string
+			err := binary.Unmarshal(chunk, &text)
+			if err != nil {
+				return "", fmt.Errorf("dirChunk %v for key %s failed to unmarshal: %w", chunk, dirChunkKeys[i], err)
+			}
+
+			paths := strings.Split(text, "\n")
 			commonPrefix := ""
 
 			if len(paths) > 1 {
@@ -172,9 +180,15 @@ chunksLoop:
 	}
 
 	// include paths for file signatures
-	for _, signature := range fileSignatures {
+	for i, signature := range fileSignatures {
 		if signature != nil {
-			lines := strings.Split(signature.(string), "\n")
+			var text string
+			err := binary.Unmarshal(signature, &text)
+			if err != nil {
+				return "", fmt.Errorf("dirChunk %v for key %s failed to unmarshal: %w", signature, fileSignatureKeys[i], err)
+			}
+
+			lines := strings.Split(text, "\n")
 			path := lines[0]
 			outline := strings.Join(lines[1:], "\n")
 			if charCount+len(path)+len(outline) > options.CharLimit {

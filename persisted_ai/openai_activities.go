@@ -7,6 +7,8 @@ import (
 	"sidekick/embedding"
 	"sidekick/secret_manager"
 	"sidekick/srv"
+
+	"github.com/kelindar/binary"
 )
 
 type OpenAIEmbedActivityOptions struct {
@@ -45,7 +47,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 		})
 	}
 
-	var cachedEmbeddings []interface{}
+	var cachedEmbeddings [][]byte
 	var err error
 	if len(embeddingKeys) > 0 {
 		cachedEmbeddings, err = oa.Storage.MGet(ctx, options.WorkspaceId, embeddingKeys)
@@ -76,9 +78,10 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 			if value == nil {
 				return fmt.Errorf("missing value for content key: %s", toEmbedContentKeys[i])
 			} else {
-				text, ok := value.(string)
-				if !ok {
-					return fmt.Errorf("value for key %s is not a string: %v", toEmbedContentKeys[i], value)
+				var text string
+				err := binary.Unmarshal(value, &text)
+				if err != nil {
+					return fmt.Errorf("value %v for key %s failed to unmarshal: %w", value, toEmbedContentKeys[i], err)
 				}
 				input = append(input, text)
 			}

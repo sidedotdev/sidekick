@@ -8,6 +8,7 @@ import (
 	"sidekick/srv/redis"
 	"testing"
 
+	"github.com/kelindar/binary"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,7 +40,7 @@ func TestCachedEmbedActivity_AllCached(t *testing.T) {
 		value, err := storage.Client.Get(context.Background(), options.WorkspaceId+":"+key).Result()
 		require.NoError(t, err)
 		var embedding embedding.EmbeddingVector
-		err = embedding.UnmarshalBinary([]byte(value))
+		err = binary.Unmarshal([]byte(value), &embedding)
 		require.NoError(t, err)
 		require.Equal(t, expectedEmbedding, embedding)
 	}

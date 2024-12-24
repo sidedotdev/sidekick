@@ -26,7 +26,7 @@ func (d Delegator) CheckConnection(ctx context.Context) error {
 }
 
 /* implements Storage interface */
-func (d Delegator) MGet(ctx context.Context, workspaceId string, keys []string) ([]interface{}, error) {
+func (d Delegator) MGet(ctx context.Context, workspaceId string, keys []string) ([][]byte, error) {
 	return d.storage.MGet(ctx, workspaceId, keys)
 }
 
