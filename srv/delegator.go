@@ -88,6 +88,11 @@ func (d Delegator) GetTasks(ctx context.Context, workspaceId string, statuses []
 	return d.storage.GetTasks(ctx, workspaceId, statuses)
 }
 
+/* implements TaskStorage interface */
+func (d Delegator) GetArchivedTasks(ctx context.Context, workspaceId string, offset, limit int64) ([]domain.Task, int64, error) {
+	return d.storage.GetArchivedTasks(ctx, workspaceId, offset, limit)
+}
+
 /* implements TaskStreamer interface */
 func (d Delegator) AddTaskChange(ctx context.Context, task domain.Task) error {
 	return d.streamer.AddTaskChange(ctx, task)

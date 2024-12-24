@@ -2,19 +2,22 @@
   <div :class="`task-card ${task.status.toLowerCase()}`" @click="cardClicked">
     <div class="actions">
       <button v-if="task.status == 'drafting'" class="action edit" @click.stop="openEditModal">✎️</button>
-      <button class="action delete" @click.stop="deleteTask">X</button>
+      <button v-if="canArchive" class="action archive" @click.stop="archiveTask">📦</button>
+      <button v-if="canCancel" class="action cancel" @click.stop="cancelTask">X</button>
+      <button v-if="canDelete" class="action delete" @click.stop="deleteTask">X</button>
     </div>
 
     <h3>{{ task.title }}</h3>
     <p>{{ task.description }}</p>
     <span :class="`status-label ${task.status.toLowerCase()}`">{{ statusLabel(task.status) }}</span>
+    <span v-if="task.archived" class="archived-label">Archived</span>
   </div>
 
   <TaskEditModal v-if="isEditModalOpen" :task="task" @close="closeEditModal" @updated="onUpdated" />
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import type { Task } from '../lib/models'
 import TaskEditModal from './TaskEditModal.vue'
 import router from '@/router'
@@ -30,6 +33,8 @@ interface Emits {
   (event: 'deleted', id: string): void;
   (event: 'updated', id: string): void;
   (event: 'error', message: string): void;
+  (event: 'archived', id: string): void;
+  (event: 'canceled', id: string): void;
 }
 
 const emit = defineEmits<Emits>();
@@ -42,6 +47,8 @@ const statusLabel = (status: string) => {
       return 'To Do';
     case 'blocked':
       return 'Blocked';
+    case 'canceled':
+      return 'Canceled';
     case 'failed':
       return 'Failed';
     case 'in_progress':
@@ -53,6 +60,9 @@ const statusLabel = (status: string) => {
   }
 };
 
+const canArchive = computed(() => ['complete', 'failed', 'canceled'].includes(props.task.status) && !props.task.archived);
+const canDelete = computed(() => props.task.status === 'drafting' || props.task.archived);
+const canCancel = computed(() => ['to_do', 'in_progress', 'blocked'].includes(props.task.status) && !props.task.archived);
 
 const isEditModalOpen = ref(false);
 
@@ -64,7 +74,25 @@ const closeEditModal = () => {
   isEditModalOpen.value = false
 }
 
+const archiveTask = async () => {
+  const {id, workspaceId} = props.task
+  const response = await fetch(`/api/v1/workspaces/${workspaceId}/tasks/${id}/archive`, {
+    method: 'POST',
+  })
+  if (response.status === 204) {
+    emit('archived', id)
+    emit('updated', id)
+  } else {
+    emit('error', 'Failed to archive task')
+  }
+}
+
 const deleteTask = async () => {
+  if (!canDelete.value) {
+    emit('error', 'This task cannot be deleted')
+    return
+  }
+
   if (!window.confirm('Are you sure you want to delete this task?')) {
     return
   }
@@ -74,36 +102,53 @@ const deleteTask = async () => {
     method: 'DELETE',
   })
   if (response.status === 200) {
-    // Remove the task from the list
     emit('deleted', id)
   } else {
-    // Show an error message to the user
     emit('error', 'Failed to delete task')
   }
 }
 
 const cardClicked = async () => {
-  // check if there is an active text selection
   const selection = window.getSelection()?.toString();
   if (selection) {
-    // don't perform any action if there is an active text selection, as they
-    // might be trying to copy text
     return
   }
 
   if (props.task.flows && props.task.flows.length > 0) {
     const firstFlowId = props.task.flows[0].id
-    // Navigate to the first flow using vue-router
-    // Replace 'flow' with the actual route name for the flow component
     router.push({ name: 'flow', params: { id: firstFlowId } })
   } else {
-    // Edit the task
     openEditModal()
   }
 }
 
 const onUpdated = async () => {
   emit('updated', props.task.id)
+}
+
+const cancelTask = async () => {
+  if (!canCancel.value) {
+    emit('error', 'This task cannot be canceled')
+    return
+  }
+
+  // Confirm with the user before canceling the task
+  if (!window.confirm('Are you sure you want to cancel this task?')) {
+    return
+  }
+
+  const {id, workspaceId} = props.task
+  const response = await fetch(`/api/v1/workspaces/${workspaceId}/tasks/${id}/cancel`, {
+    method: 'POST',
+  })
+  if (response.status === 200) {
+    const data = await response.json()
+    emit('canceled', id)
+    emit('updated', id)
+  } else {
+    const errorData = await response.json()
+    emit('error', errorData.error || 'Failed to cancel task')
+  }
 }
 </script>
 
@@ -165,6 +210,9 @@ const onUpdated = async () => {
 }
 .status-label.to_do {
   background-color: #a3a3a3;
+}
+.status-label.canceled {
+  background-color: rgb(147, 147, 0);
 }
 .status-label.blocked {
   background-color: #ff8e42;
@@ -252,5 +300,20 @@ const onUpdated = async () => {
 .action:last-child {
   border-top-right-radius: 5px;
   border-bottom-right-radius: 5px;
+}
+
+.action.delete, .action.cancel {
+  font-weight: bold;
+}
+
+.archived-label {
+  margin-left: 0.5rem;
+  padding: 0px 7px;
+  border-radius: 1px;
+  font-size: 13px;
+  font-weight: 600;
+  background-color: #808080;
+  color: var(--status-label-color);
+  font-family: "JetBrains Mono", monospace;
 }
 </style>

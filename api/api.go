@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,12 +54,76 @@ type Controller struct {
 	temporalTaskQueue string
 }
 
+// ArchiveTaskHandler handles the request to archive a task
+func (ctrl *Controller) ArchiveTaskHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	taskId := c.Param("id")
+
+	task, err := ctrl.service.GetTask(c.Request.Context(), workspaceId, taskId)
+	if err != nil {
+		ctrl.ErrorHandler(c, http.StatusNotFound, errors.New("task not found"))
+		return
+	}
+
+	// Check if the task status is valid for archiving
+	if task.Status != domain.TaskStatusCanceled && task.Status != domain.TaskStatusFailed && task.Status != domain.TaskStatusComplete {
+		ctrl.ErrorHandler(c, http.StatusBadRequest, errors.New("only tasks with status 'canceled', 'failed', or 'complete' can be archived"))
+		return
+	}
+
+	// Set the Archived field to the current timestamp
+	now := time.Now()
+	task.Archived = &now
+
+	// Persist the updated task
+	err = ctrl.service.PersistTask(c.Request.Context(), task)
+	if err != nil {
+		ctrl.ErrorHandler(c, http.StatusInternalServerError, errors.New("failed to archive task"))
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+// ArchiveFinishedTasksHandler handles the request to archive all finished tasks
+func (ctrl *Controller) ArchiveFinishedTasksHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+
+	// Get all tasks with status 'complete', 'canceled', or 'failed'
+	tasks, err := ctrl.service.GetTasks(c.Request.Context(), workspaceId, []domain.TaskStatus{
+		domain.TaskStatusComplete,
+		domain.TaskStatusCanceled,
+		domain.TaskStatusFailed,
+	})
+	if err != nil {
+		ctrl.ErrorHandler(c, http.StatusInternalServerError, errors.New("failed to fetch tasks"))
+		return
+	}
+
+	archivedCount := 0
+	now := time.Now()
+
+	for _, task := range tasks {
+		task.Archived = &now
+		err := ctrl.service.PersistTask(c.Request.Context(), task)
+		if err != nil {
+			// Log the error but continue with other tasks
+			log.Printf("Failed to archive task %s: %v", task.Id, err)
+		} else {
+			archivedCount++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"archivedCount": archivedCount})
+}
+
 func DefineRoutes(ctrl Controller) *gin.Engine {
 	r := gin.Default()
 	r.ForwardedByClientIP = true
 	r.SetTrustedProxies(nil)
 
 	workspaceApiRoutes := DefineWorkspaceApiRoutes(r, &ctrl)
+	workspaceApiRoutes.GET("/archived_tasks", ctrl.GetArchivedTasksHandler)
 
 	taskRoutes := workspaceApiRoutes.Group("/:workspaceId/tasks")
 	taskRoutes.POST("/", ctrl.CreateTaskHandler)
@@ -66,6 +131,9 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	taskRoutes.GET("/:id", ctrl.GetTaskHandler)
 	taskRoutes.PUT("/:id", ctrl.UpdateTaskHandler)
 	taskRoutes.DELETE("/:id", ctrl.DeleteTaskHandler)
+	taskRoutes.POST("/:id/archive", ctrl.ArchiveTaskHandler)
+	taskRoutes.POST("/:id/cancel", ctrl.CancelTaskHandler)
+	taskRoutes.POST("/archive_finished", ctrl.ArchiveFinishedTasksHandler)
 
 	flowRoutes := workspaceApiRoutes.Group("/:workspaceId/flows")
 	flowRoutes.GET("/:id/actions", ctrl.GetFlowActionsHandler)
@@ -153,6 +221,57 @@ func NewController() Controller {
 func (ctrl *Controller) ErrorHandler(c *gin.Context, status int, err error) {
 	log.Println("Error:", err)
 	c.JSON(status, gin.H{"error": err.Error()})
+}
+
+// CancelTaskHandler handles the cancellation of a task
+func (ctrl *Controller) CancelTaskHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	taskId := c.Param("id")
+
+	task, err := ctrl.service.GetTask(c.Request.Context(), workspaceId, taskId)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		return
+	}
+
+	// Check if the task status is eligible for cancellation
+	if task.Status != domain.TaskStatusToDo && task.Status != domain.TaskStatusInProgress && task.Status != domain.TaskStatusBlocked {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Only tasks with status 'to_do', 'in_progress', or 'blocked' can be canceled"})
+		return
+	}
+
+	// Get the child workflows of the task
+	childFlows, err := ctrl.service.GetFlowsForTask(c.Request.Context(), workspaceId, taskId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get child workflows"})
+		return
+	}
+
+	// Check if any of the child workflows are in progress and cancel them
+	devAgent := dev.DevAgent{
+		TemporalClient:    ctrl.temporalClient,
+		TemporalTaskQueue: ctrl.temporalTaskQueue,
+		WorkspaceId:       task.WorkspaceId,
+	}
+	for _, flow := range childFlows {
+		err = devAgent.TerminateWorkflowIfExists(c.Request.Context(), flow.Id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to terminate workflow"})
+			return
+		}
+	}
+
+	// Update the task status to 'canceled' and agent type to 'none'
+	task.Status = domain.TaskStatusCanceled
+	task.AgentType = domain.AgentTypeNone
+	task.Updated = time.Now()
+	err = ctrl.service.PersistTask(c.Request.Context(), task)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update task status"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Task canceled successfully"})
 }
 
 func (ctrl *Controller) DeleteTaskHandler(c *gin.Context) {
@@ -372,6 +491,52 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"tasks": taskResponses,
+	})
+}
+
+func (ctrl *Controller) GetArchivedTasksHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	if workspaceId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID is required"})
+		return
+	}
+
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil || page < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page number"})
+		return
+	}
+
+	pageSize, err := strconv.Atoi(c.DefaultQuery("pageSize", "100"))
+	if err != nil || pageSize < 1 || pageSize > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page size"})
+		return
+	}
+
+	archivedTasks, totalCount, err := ctrl.service.GetArchivedTasks(c, workspaceId, int64(page), int64(pageSize))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	taskResponses := make([]TaskResponse, len(archivedTasks))
+	for i, task := range archivedTasks {
+		flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, task.Id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		taskResponses[i] = TaskResponse{
+			Task:  task,
+			Flows: flows,
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"tasks":      taskResponses,
+		"totalCount": totalCount,
+		"page":       page,
+		"pageSize":   pageSize,
 	})
 }
 
