@@ -56,6 +56,7 @@ export interface Task {
   agentType: AgentType
   flows: Flow[]
   flowOptions?: null | { [key: string]: any }
+  archived?: Date | null
 }
 
 export type ActionStatus = 'pending' | 'started' | 'complete' | 'failed'

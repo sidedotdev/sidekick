@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sidekick/domain"
-	domain1 "sidekick/domain"
 	"sidekick/mocks"
 	"sidekick/srv"
 	"sidekick/srv/redis"
@@ -1156,6 +1155,268 @@ func TestDeleteTaskHandler(t *testing.T) {
 	assert.True(t, errors.Is(err, srv.ErrNotFound))
 }
 
+func TestCancelTaskHandler(t *testing.T) {
+	// Initialize the test server and database
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+	redisDb := ctrl.service
+
+	testCases := []struct {
+		name           string
+		initialStatus  domain.TaskStatus
+		expectedStatus int
+		expectedError  string
+	}{
+		{"Cancel ToDo Task", domain.TaskStatusToDo, http.StatusOK, ""},
+		{"Cancel InProgress Task", domain.TaskStatusInProgress, http.StatusOK, ""},
+		{"Cancel Blocked Task", domain.TaskStatusBlocked, http.StatusOK, ""},
+		{"Cancel Completed Task", domain.TaskStatusComplete, http.StatusBadRequest, "Only tasks with status 'to_do', 'in_progress', or 'blocked' can be canceled"},
+		{"Cancel Canceled Task", domain.TaskStatusCanceled, http.StatusBadRequest, "Only tasks with status 'to_do', 'in_progress', or 'blocked' can be canceled"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create a task for testing
+			task := domain.Task{
+				WorkspaceId: "ws_" + ksuid.New().String(),
+				Id:          "task_" + ksuid.New().String(),
+				Description: "test description",
+				AgentType:   domain.AgentTypeLLM,
+				Status:      tc.initialStatus,
+			}
+			err := redisDb.PersistTask(context.Background(), task)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Prepare the request
+			resp := httptest.NewRecorder()
+			ginCtx, _ := gin.CreateTestContext(resp)
+			ginCtx.Request = httptest.NewRequest(http.MethodPost, "/workspaces/"+task.WorkspaceId+"/tasks/"+task.Id+"/cancel", nil)
+			ginCtx.Params = []gin.Param{
+				{Key: "workspaceId", Value: task.WorkspaceId},
+				{Key: "id", Value: task.Id},
+			}
+
+			// Call the handler
+			ctrl.CancelTaskHandler(ginCtx)
+
+			// Check the response
+			assert.Equal(t, tc.expectedStatus, resp.Code)
+
+			if tc.expectedError != "" {
+				var response map[string]string
+				json.Unmarshal(resp.Body.Bytes(), &response)
+				assert.Equal(t, tc.expectedError, response["error"])
+
+				// Check task status & agentType has NOT been changed
+				updatedTask, err := redisDb.GetTask(context.Background(), task.WorkspaceId, task.Id)
+				assert.NoError(t, err)
+				assert.Equal(t, tc.initialStatus, updatedTask.Status)
+				assert.Equal(t, domain.AgentTypeLLM, updatedTask.AgentType)
+			} else {
+				// Check that the task status has been updated to canceled
+				updatedTask, err := redisDb.GetTask(context.Background(), task.WorkspaceId, task.Id)
+				assert.NoError(t, err)
+				assert.Equal(t, domain.TaskStatusCanceled, updatedTask.Status)
+				assert.Equal(t, domain.AgentTypeNone, updatedTask.AgentType)
+			}
+		})
+	}
+}
+
+func TestCancelTaskHandler_NonExistentTask(t *testing.T) {
+	// Initialize the test server and database
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+
+	// Prepare the request with non-existent task ID
+	resp := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(resp)
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/workspaces/ws_123/tasks/non_existent_task/cancel", nil)
+	ginCtx.Params = []gin.Param{
+		{Key: "workspaceId", Value: "ws_123"},
+		{Key: "id", Value: "non_existent_task"},
+	}
+
+	// Call the handler
+	ctrl.CancelTaskHandler(ginCtx)
+
+	// Check the response
+	assert.Equal(t, http.StatusNotFound, ginCtx.Writer.Status())
+
+	var response map[string]string
+	err := json.Unmarshal(resp.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "Task not found", response["error"])
+}
+
+func TestArchiveFinishedTasksHandler(t *testing.T) {
+	// Initialize the test server and database
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+	redisDb := ctrl.service
+
+	// Create tasks for testing
+	workspaceId := "ws_" + ksuid.New().String()
+	completedTask := domain.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task_" + ksuid.New().String(),
+		Description: "completed task",
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusComplete,
+	}
+	canceledTask := domain.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task_" + ksuid.New().String(),
+		Description: "canceled task",
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusCanceled,
+	}
+	failedTask := domain.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task_" + ksuid.New().String(),
+		Description: "failed task",
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusFailed,
+	}
+	inProgressTask := domain.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task_" + ksuid.New().String(),
+		Description: "in progress task",
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusInProgress,
+	}
+
+	// Persist tasks
+	for _, task := range []domain.Task{completedTask, canceledTask, failedTask, inProgressTask} {
+		err := redisDb.PersistTask(context.Background(), task)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Test the ArchiveFinishedTasksHandler
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/workspaces/"+workspaceId+"/tasks/archive_finished", nil)
+	ginCtx.Params = []gin.Param{
+		{Key: "workspaceId", Value: workspaceId},
+	}
+
+	ctrl.ArchiveFinishedTasksHandler(ginCtx)
+
+	assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
+
+	var result map[string]int
+	err := json.Unmarshal(recorder.Body.Bytes(), &result)
+	if assert.NoError(t, err) {
+		assert.Equal(t, 3, result["archivedCount"])
+	}
+
+	// Check that the correct tasks were archived
+	for _, task := range []domain.Task{completedTask, canceledTask, failedTask} {
+		archivedTask, err := ctrl.service.GetTask(ginCtx.Request.Context(), workspaceId, task.Id)
+		assert.NoError(t, err)
+		assert.NotNil(t, archivedTask.Archived)
+	}
+
+	// Check that the in-progress task was not archived
+	nonArchivedTask, err := ctrl.service.GetTask(ginCtx.Request.Context(), workspaceId, inProgressTask.Id)
+	assert.NoError(t, err)
+	assert.Nil(t, nonArchivedTask.Archived)
+}
+
+func TestArchiveTaskHandler(t *testing.T) {
+	// Initialize the test server and database
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+	redisDb := ctrl.service
+
+	// Create tasks for testing
+	completedTask := domain.Task{
+		WorkspaceId: "ws_" + ksuid.New().String(),
+		Id:          "task_" + ksuid.New().String(),
+		Description: "completed task",
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusComplete,
+	}
+	inProgressTask := domain.Task{
+		WorkspaceId: "ws_" + ksuid.New().String(),
+		Id:          "task_" + ksuid.New().String(),
+		Description: "in progress task",
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusInProgress,
+	}
+	nonExistentTask := domain.Task{
+		WorkspaceId: "non-existent-workspace",
+		Id:          "non-existent-task",
+	}
+
+	err := redisDb.PersistTask(context.Background(), completedTask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = redisDb.PersistTask(context.Background(), inProgressTask)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name           string
+		task           domain.Task
+		expectedStatus int
+		expectedError  string
+	}{
+		{
+			name:           "Archive completed task",
+			task:           completedTask,
+			expectedStatus: http.StatusNoContent,
+		},
+		{
+			name:           "Archive in-progress task",
+			task:           inProgressTask,
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "only tasks with status 'canceled', 'failed', or 'complete' can be archived",
+		},
+		{
+			name:           "Archive non-existent task",
+			task:           nonExistentTask,
+			expectedStatus: http.StatusNotFound,
+			expectedError:  "task not found",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ginCtx, _ := gin.CreateTestContext(recorder)
+			ginCtx.Request = httptest.NewRequest(http.MethodPost, "/workspaces/"+tc.task.WorkspaceId+"/tasks/"+tc.task.Id+"/archive", nil)
+			ginCtx.Params = []gin.Param{
+				{Key: "workspaceId", Value: tc.task.WorkspaceId},
+				{Key: "id", Value: tc.task.Id},
+			}
+
+			ctrl.ArchiveTaskHandler(ginCtx)
+
+			assert.Equal(t, tc.expectedStatus, ginCtx.Writer.Status())
+
+			if tc.expectedError != "" {
+				var result map[string]string
+				err := json.Unmarshal(recorder.Body.Bytes(), &result)
+				if assert.Nil(t, err) {
+					assert.Equal(t, tc.expectedError, result["error"])
+				}
+			} else {
+				archivedTask, err := ctrl.service.GetTask(ginCtx.Request.Context(), tc.task.WorkspaceId, tc.task.Id)
+				assert.NoError(t, err)
+				assert.NotNil(t, archivedTask.Archived)
+				assert.Equal(t, domain.TaskStatusComplete, archivedTask.Status)
+			}
+		})
+	}
+}
+
 func TestGetWorkspacesHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -1310,8 +1571,8 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	assert.NoError(t, err, "Persisting workflow failed")
 
 	// persist this one before the websocket connection starts
-	flowEvent1 := domain1.ProgressText{
-		EventType: domain1.ProgressTextEventType,
+	flowEvent1 := domain.ProgressText{
+		EventType: domain.ProgressTextEventType,
 		ParentId:  "test-event-id-1",
 		Text:      "doing stuff 1",
 	}
@@ -1334,12 +1595,12 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	defer ws.Close()
 
 	// persist multiple flow events under single flow action
-	flowEvent2 := domain1.ProgressText{
-		EventType: domain1.ProgressTextEventType,
+	flowEvent2 := domain.ProgressText{
+		EventType: domain.ProgressTextEventType,
 		ParentId:  "test-event-id-2",
 		Text:      "doing stuff 2",
 	}
-	flowEvent3 := domain1.ProgressText{
+	flowEvent3 := domain.ProgressText{
 		EventType: flowEvent2.EventType,
 		ParentId:  flowEvent2.ParentId,
 		Text:      "doing stuff 3",
@@ -1360,14 +1621,14 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 
 	// Verify if the flow events are streamed correctly
 	timeout := time.After(15 * time.Second)
-	receivedEvents := make([]domain1.ProgressText, 0, 3)
+	receivedEvents := make([]domain.ProgressText, 0, 3)
 
 	for i := 0; i < 3; i++ {
 		select {
 		case <-timeout:
 			t.Fatalf("Timeout waiting for flow events. Received %d events so far", len(receivedEvents))
 		default:
-			var receivedEvent domain1.ProgressText
+			var receivedEvent domain.ProgressText
 			err = ws.SetReadDeadline(time.Now().Add(8 * time.Second))
 			assert.NoError(t, err, "Failed to set read deadline")
 			err = ws.ReadJSON(&receivedEvent)
@@ -1388,4 +1649,58 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	assert.Equal(t, flowEvent1, receivedEvents[0])
 	assert.Equal(t, flowEvent2, receivedEvents[1])
 	assert.Equal(t, flowEvent3, receivedEvents[2])
+}
+
+func TestGetArchivedTasksHandler(t *testing.T) {
+	// Initialize the test server and database
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+
+	// Create and archive a task
+	now := time.Now()
+	task := domain.Task{
+		Id:          "test-task-id",
+		WorkspaceId: "test-workspace",
+		Title:       "Test Task",
+		Description: "This is a test task",
+		Status:      domain.TaskStatusToDo,
+		Archived:    &now,
+	}
+	err := ctrl.service.PersistTask(context.Background(), task)
+	assert.NoError(t, err)
+
+	// Create a new gin context with the mock controller
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+	c.Set("Controller", ctrl)
+	c.Params = gin.Params{{Key: "workspaceId", Value: "test-workspace"}}
+
+	// Call the GetArchivedTasksHandler function
+	ctrl.GetArchivedTasksHandler(c)
+
+	// Assert the response
+	assert.Equal(t, http.StatusOK, resp.Code)
+
+	var response map[string]interface{}
+	err = json.Unmarshal(resp.Body.Bytes(), &response)
+	assert.NoError(t, err)
+
+	assert.Contains(t, response, "tasks")
+	assert.Contains(t, response, "totalCount")
+	assert.Contains(t, response, "page")
+	assert.Contains(t, response, "pageSize")
+
+	tasks, ok := response["tasks"].([]interface{})
+	assert.True(t, ok)
+	assert.Equal(t, 1, len(tasks))
+
+	archivedTask, ok := tasks[0].(map[string]interface{})
+	assert.True(t, ok)
+	assert.Equal(t, "test-task-id", archivedTask["id"])
+	assert.Equal(t, "Test Task", archivedTask["title"])
+	assert.NotNil(t, archivedTask["archived"])
+
+	assert.Equal(t, float64(1), response["totalCount"])
+	assert.Equal(t, float64(1), response["page"])
+	assert.Equal(t, float64(100), response["pageSize"])
 }

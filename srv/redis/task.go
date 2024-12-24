@@ -14,6 +14,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+
 func (s Storage) PersistTask(ctx context.Context, task domain.Task) error {
 	taskJson, err := json.Marshal(task)
 	if err != nil {
@@ -29,20 +30,47 @@ func (s Storage) PersistTask(ctx context.Context, task domain.Task) error {
 		return err
 	}
 
-	// Add the task id to the appropriate set based on the task status, and remove from others
-	for _, status := range []domain.TaskStatus{domain.TaskStatusDrafting, domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
-		statusKey := fmt.Sprintf("%s:kanban:%s", task.WorkspaceId, status)
-		if status == task.Status {
-			err = s.Client.SAdd(ctx, statusKey, task.Id).Err()
-			if err != nil {
-				log.Println("Failed to add task id to set: ", err)
-				return err
-			}
-		} else {
+	// Handle archived tasks
+	archivedKey := fmt.Sprintf("%s:archived_tasks", task.WorkspaceId)
+	if task.Archived != nil {
+		// Remove from all kanban sets and add to archived sorted set
+		for _, status := range []domain.TaskStatus{domain.TaskStatusDrafting, domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
+			statusKey := fmt.Sprintf("%s:kanban:%s", task.WorkspaceId, status)
 			err = s.Client.SRem(ctx, statusKey, task.Id).Err()
 			if err != nil {
-				log.Println("Failed to remove task id from set: ", err)
+				log.Println("Failed to remove task id from kanban set: ", err)
 				return err
+			}
+		}
+		score := float64(task.Archived.Unix())
+		err = s.Client.ZAdd(ctx, archivedKey, redis.Z{Score: score, Member: task.Id}).Err()
+		if err != nil {
+			log.Println("Failed to add task id to archived sorted set: ", err)
+			return err
+		}
+	} else {
+		// Remove from archived sorted set if it exists there
+		err = s.Client.ZRem(ctx, archivedKey, task.Id).Err()
+		if err != nil {
+			log.Println("Failed to remove task id from archived sorted set: ", err)
+			return err
+		}
+
+		// Add the task id to the appropriate kanban set based on the task status, and remove from others
+		for _, status := range []domain.TaskStatus{domain.TaskStatusDrafting, domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
+			statusKey := fmt.Sprintf("%s:kanban:%s", task.WorkspaceId, status)
+			if status == task.Status {
+				err = s.Client.SAdd(ctx, statusKey, task.Id).Err()
+				if err != nil {
+					log.Println("Failed to add task id to kanban set: ", err)
+					return err
+				}
+			} else {
+				err = s.Client.SRem(ctx, statusKey, task.Id).Err()
+				if err != nil {
+					log.Println("Failed to remove task id from kanban set: ", err)
+					return err
+				}
 			}
 		}
 	}
@@ -55,6 +83,7 @@ func (s Storage) PersistTask(ctx context.Context, task domain.Task) error {
 	return nil
 }
 
+// TODO /gen add tests for DeleteTask
 func (s Storage) DeleteTask(ctx context.Context, workspaceId, taskId string) error {
 	task, err := s.GetTask(ctx, workspaceId, taskId)
 	if err != nil {
@@ -68,13 +97,23 @@ func (s Storage) DeleteTask(ctx context.Context, workspaceId, taskId string) err
 		return err
 	}
 
-	// Delete task from kanban sets
-	kanbanKey := fmt.Sprintf("%s:kanban:%s", workspaceId, task.Status)
-	err = s.Client.SRem(ctx, kanbanKey, taskId).Err()
-	if err != nil {
-		log.Println("Failed to delete task from kanban sets in Redis: ", err)
-		return err
+	// Delete task from archived/kanban set
+	if task.Archived != nil {
+		archiveKey := fmt.Sprintf("%s:archived_tasks", workspaceId)
+		err = s.Client.ZRem(ctx, archiveKey, taskId).Err()
+		if err != nil {
+			log.Println("Failed to delete task from archived sets in Redis: ", err)
+			return err
+		}
+	} else {
+		kanbanKey := fmt.Sprintf("%s:kanban:%s", workspaceId, task.Status)
+		err = s.Client.SRem(ctx, kanbanKey, taskId).Err()
+		if err != nil {
+			log.Println("Failed to delete task from kanban sets in Redis: ", err)
+			return err
+		}
 	}
+
 
 	return nil
 }
@@ -139,6 +178,36 @@ func (s Storage) GetTask(ctx context.Context, workspaceId string, taskId string)
 		return domain.Task{}, err
 	}
 	return task, nil
+}
+
+func (s Storage) GetArchivedTasks(ctx context.Context, workspaceId string, page, pageSize int64) ([]domain.Task, int64, error) {
+	key := fmt.Sprintf("%s:archived_tasks", workspaceId)
+
+	// Get the total count of archived tasks
+	totalCount, err := s.Client.ZCard(ctx, key).Result()
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get total count of archived tasks: %w", err)
+	}
+
+	// Calculate offset
+	offset := (page - 1) * pageSize
+
+	// Get the tasks from the sorted set
+	taskIds, err := s.Client.ZRevRange(ctx, key, offset, offset+pageSize-1).Result()
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get archived tasks: %w", err)
+	}
+
+	var tasks []domain.Task
+	for _, taskId := range taskIds {
+		task, err := s.GetTask(ctx, workspaceId, taskId)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to get task %s: %w", taskId, err)
+		}
+		tasks = append(tasks, task)
+	}
+
+	return tasks, totalCount, nil
 }
 
 // AddTaskChange persists a task to the changes stream.
