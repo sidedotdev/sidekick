@@ -38,6 +38,7 @@ func (p *program) Start(s system_service.Service) error {
 func (p *program) run() {
 	startServer()
 	startWorker()
+	startTemporal()
 }
 
 func (p *program) Stop(s system_service.Service) error {

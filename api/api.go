@@ -165,31 +165,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	// Wildcard route to serve index.html for other HTML-based frontend routes,
 	// eg /kanban etc as they get defined by the frontend. This also serves the
 	// root route rather than a custom route for the root.
-	r.NoRoute(func(c *gin.Context) {
-		// only do this for web page load requests
-		acceptHeader := c.Request.Header.Get("Accept")
-		isWebPage := strings.Contains(acceptHeader, "text/html") || strings.Contains(acceptHeader, "*/*") || acceptHeader == ""
-		isWebPage = isWebPage && !strings.Contains(c.Request.URL.Path, "/api/")
-		isWebPage = isWebPage && !strings.Contains(c.Request.URL.Path, "/ws/")
-		if !isWebPage {
-			c.Status(http.StatusNotFound)
-			return
-		}
-
-		// render index.html
-		file, err := frontend.DistFs.Open("dist/index.html")
-		if err != nil {
-			fmt.Println("Failed to open index.html", err)
-			c.Status(http.StatusInternalServerError)
-			return
-		} else {
-			c.Status(http.StatusOK)
-			_, err = io.Copy(c.Writer, file)
-			if err != nil {
-				log.Println("Failed to serve index.html", err)
-			}
-		}
-	})
+	r.NoRoute(ctrl.WildcardHandler)
 
 	return r
 }
@@ -1079,6 +1055,35 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 					}
 				}
 			}
+		}
+	}
+}
+
+// Wildcard route to serve index.html for other HTML-based frontend routes,
+// eg /kanban etc as they get defined by the frontend. This also serves the
+// root route rather than a custom route for the root.
+func (ctrl *Controller) WildcardHandler(c *gin.Context) {
+	// only do this for web page load requests
+	acceptHeader := c.Request.Header.Get("Accept")
+	isWebPage := strings.Contains(acceptHeader, "text/html") || strings.Contains(acceptHeader, "*/*") || acceptHeader == ""
+	isWebPage = isWebPage && !strings.Contains(c.Request.URL.Path, "/api/")
+	isWebPage = isWebPage && !strings.Contains(c.Request.URL.Path, "/ws/")
+	if !isWebPage {
+		c.Status(http.StatusNotFound)
+		return
+	}
+
+	// render index.html
+	file, err := frontend.DistFs.Open("dist/index.html")
+	if err != nil {
+		fmt.Println("Failed to open index.html", err)
+		c.Status(http.StatusInternalServerError)
+		return
+	} else {
+		c.Status(http.StatusOK)
+		_, err = io.Copy(c.Writer, file)
+		if err != nil {
+			log.Println("Failed to serve index.html", err)
 		}
 	}
 }

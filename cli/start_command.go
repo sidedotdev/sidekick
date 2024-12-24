@@ -94,7 +94,12 @@ func startTemporalUIServer(cfg *temporalServerConfig) error {
 	return nil
 }
 
-func startTemporal(cfg *temporalServerConfig) temporal.Server {
+func startTemporal() temporal.Server {
+	cfg, err := newTemporalServerConfig(common.GetTemporalServerHost(), common.GetTemporalServerPort())
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create Temporal server config")
+	}
+
 	go (func() {
 		err := startTemporalUIServer(cfg)
 		if err != nil {
@@ -102,7 +107,13 @@ func startTemporal(cfg *temporalServerConfig) temporal.Server {
 		}
 	})()
 
-	return startTemporalServer(cfg)
+	server := startTemporalServer(cfg)
+
+	log.Info().Str("component", "Temporal Server").Msgf("%v:%v", cfg.ip, cfg.ports.frontend)
+	log.Info().Str("component", "Temporal UI").Msgf("http://%v:%v", cfg.ip, cfg.ports.ui)
+	log.Info().Str("component", "Temporal Metrics").Msgf("http://%v:%v/metrics", cfg.ip, cfg.ports.metrics)
+
+	return server
 }
 
 func startTemporalServer(cfg *temporalServerConfig) temporal.Server {
@@ -342,15 +353,7 @@ func handleStartCommand(args []string) {
 			defer wg.Done()
 			log.Info().Msg("Starting temporal...")
 
-			cfg, err := newTemporalServerConfig(common.GetTemporalServerHost(), common.GetTemporalServerPort())
-			if err != nil {
-				log.Fatal().Err(err).Msg("Failed to create Temporal server config")
-			}
-			temporalServer := startTemporal(cfg)
-
-			log.Info().Str("component", "Temporal Server").Msgf("%v:%v", cfg.ip, cfg.ports.frontend)
-			log.Info().Str("component", "Temporal UI").Msgf("http://%v:%v", cfg.ip, cfg.ports.ui)
-			log.Info().Str("component", "Temporal Metrics").Msgf("http://%v:%v/metrics", cfg.ip, cfg.ports.metrics)
+			temporalServer := startTemporal()
 
 			// Wait for cancellation
 			<-ctx.Done()
