@@ -47,6 +47,7 @@ func TestPersistTask(t *testing.T) {
 
 	// Verify the task was updated
 	retrievedTask, err := storage.GetTask(ctx, task.WorkspaceId, task.Id)
+	assert.NoError(t, err)
 	assert.Equal(t, task.Title, retrievedTask.Title)
 	assert.Equal(t, task.Status, retrievedTask.Status)
 	assert.Equal(t, task.Links, retrievedTask.Links)
