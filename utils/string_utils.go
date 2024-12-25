@@ -5,21 +5,10 @@ import (
 	"encoding/binary"
 	"math"
 	"strings"
-	"unicode"
 
 	"github.com/adrg/strutil"
 	"github.com/adrg/strutil/metrics"
 )
-
-// removeWhitespace removes all whitespace characters from a string
-func removeWhitespace(s string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsSpace(r) {
-			return -1
-		}
-		return r
-	}, s)
-}
 
 func FirstN(s string, n int) string {
 	i := 0
