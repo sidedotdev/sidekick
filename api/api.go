@@ -891,7 +891,6 @@ func (ctrl *Controller) TaskChangesWebsocketHandler(c *gin.Context) {
 		case <-clientGone:
 			// if the client has disconnected, close the connection
 			log.Println("Flow action changes client disconnected")
-			close(clientGone)
 			return
 		default:
 			tasks, lastId, err := ctrl.service.GetTaskChanges(context.Background(), workspaceId, lastTaskStreamId, 50, 0)
