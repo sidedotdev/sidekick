@@ -4,10 +4,21 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"strings"
+	"unicode"
 
 	"github.com/adrg/strutil"
 	"github.com/adrg/strutil/metrics"
 )
+
+// removeWhitespace removes all whitespace characters from a string
+func removeWhitespace(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
 
 func FirstN(s string, n int) string {
 	i := 0
@@ -25,12 +36,39 @@ var distanceMetric = metrics.NewLevenshtein()
 func StringSimilarity(s1, s2 string) float64 {
 	if s1 == s2 {
 		return 1.0
-	} // faster and fixes NaN issue with empty strings
+	}
+
+	scores := []float64{}
+
 	if strings.TrimSpace(s1) == strings.TrimSpace(s2) {
-		return 0.95
-	} // high score if exact match other than surrounding whitespace
-	similarity := strutil.Similarity(s1, s2, distanceMetric)
-	return similarity
+		scores = append(scores, 0.95)
+	}
+
+	// Remove all whitespace
+	s1NoWhitespace := removeWhitespace(s1)
+	s2NoWhitespace := removeWhitespace(s2)
+
+	// Baseline score for strings identical when whitespace is removed
+	if s1NoWhitespace == s2NoWhitespace {
+		scores = append(scores, 0.94)
+	}
+
+	// Calculate Levenshtein distance
+	simOriginal := strutil.Similarity(s1, s2, distanceMetric)
+	scores = append(scores, simOriginal)
+
+	// Calculate Levenshtein distance with whitespace removed and weighted
+	// average (giving more weight to the no-whitespace similarity)
+	simNoWhitespace := strutil.Similarity(s1NoWhitespace, s2NoWhitespace, distanceMetric)
+	weightedAvg := 0.4*simOriginal + 0.6*simNoWhitespace
+	scores = append(scores, weightedAvg)
+
+	maxScore := 0.0
+	for _, score := range scores {
+		maxScore = max(maxScore, score)
+	}
+
+	return maxScore
 }
 
 // SliceLevenshtein calculates the Levenshtein distance between two slices of strings element by element.

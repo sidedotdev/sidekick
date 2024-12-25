@@ -32,12 +32,12 @@ func NewTestRedisStreamer() *Streamer {
 	streamer := &Streamer{Client: NewTestRedisClient()}
 
 	// Flush the database synchronously to ensure a clean state for each test
-	_, err := streamer .Client.FlushDB(context.Background()).Result()
+	_, err := streamer.Client.FlushDB(context.Background()).Result()
 	if err != nil {
 		log.Panicf("failed to flush redis database: %v", err)
 	}
 
-	return streamer 
+	return streamer
 }
 
 func NewTestRedisClient() *redis.Client {
