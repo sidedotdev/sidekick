@@ -3,29 +3,33 @@ package main
 import (
 	"fmt"
 	"os"
+	"sidekick"
 	"sidekick/srv"
-	"sidekick/srv/redis"
 
 	// Embedding the frontend build files
 	_ "embed"
 
 	"github.com/joho/godotenv"
-	"github.com/kardianos/service"
+	system_service "github.com/kardianos/service"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
 var (
-	storage srv.Storage
+	service srv.Service
 )
 
 func init() {
-	storage = redis.NewStorage()
+	var err error
+	service, err = sidekick.GetService()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize storage")
+	}
 }
 
 type program struct{}
 
-func (p *program) Start(s service.Service) error {
+func (p *program) Start(s system_service.Service) error {
 	go p.run()
 	return nil
 }
@@ -33,9 +37,10 @@ func (p *program) Start(s service.Service) error {
 func (p *program) run() {
 	startServer()
 	startWorker()
+	startTemporal()
 }
 
-func (p *program) Stop(s service.Service) error {
+func (p *program) Stop(s system_service.Service) error {
 	// Stop should put the program into a safe state and return quickly.
 	return nil
 }
@@ -53,7 +58,7 @@ func main() {
 		}
 	}
 
-	if service.Interactive() {
+	if system_service.Interactive() {
 		interactiveMain()
 	} else {
 		serviceMain()
@@ -65,7 +70,7 @@ func interactiveMain() {
 
 	switch os.Args[1] {
 	case "init":
-		handler := NewInitCommandHandler(storage)
+		handler := NewInitCommandHandler(service)
 		if err := handler.handleInitCommand(); err != nil {
 			fmt.Println("Initialization failed:", err)
 			os.Exit(1)
@@ -81,7 +86,7 @@ func interactiveMain() {
 
 func serviceMain() {
 	prg := &program{}
-	s, err := service.New(prg, svcConfig)
+	s, err := system_service.New(prg, svcConfig)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize service")
 		os.Exit(1)
@@ -96,7 +101,7 @@ func serviceMain() {
 	}
 }
 
-var svcConfig = &service.Config{
+var svcConfig = &system_service.Config{
 	Name:        "SidekickService",
 	DisplayName: "Sidekick Service",
 	Description: "This service runs the Sidekick server and worker.",
@@ -106,7 +111,7 @@ func handleServiceCommand() {
 	fmt.Println("Not yet supported")
 	os.Exit(1)
 	program := &program{}
-	s, err := service.New(program, svcConfig)
+	s, err := system_service.New(program, svcConfig)
 	if err != nil {
 		fmt.Println("Failed to create service:", err)
 		os.Exit(1)
@@ -117,7 +122,7 @@ func handleServiceCommand() {
 		os.Exit(1)
 	}
 
-	err = service.Control(s, os.Args[2])
+	err = system_service.Control(s, os.Args[2])
 	if err != nil {
 		fmt.Println("Service control action failed:", err)
 		os.Exit(1)

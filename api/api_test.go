@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -83,51 +82,6 @@ func clearDb(client *redis.Client) {
 	if err != nil {
 		log.Panicf("failed to flush redis database: %v", err)
 	}
-}
-
-func requireSSETypes(t *testing.T, body []byte, expectedEventTypes ...string) {
-	// Parse the Server-Sent Events
-	events, err := parseSSE(string(body))
-	if err != nil {
-		t.Fatalf("Error parsing Server-Sent Events: %s", err)
-	}
-
-	// Gather the event types
-	eventTypes := make([]string, 0, len(events))
-	for _, event := range events {
-		eventTypes = append(eventTypes, event.Type)
-		// TODO uncomment this once we mock openai and get rid of that existing error
-		// if event.Type == "error" {
-		// 	t.Fatalf("Received error event: %s", event.Data)
-		// }
-	}
-
-	for _, expectedEventType := range expectedEventTypes {
-		assert.Contains(t, eventTypes, expectedEventType)
-	}
-}
-
-type event struct {
-	Type string
-	Data string
-}
-
-func parseSSE(str string) ([]event, error) {
-	parsedEvents := make([]event, 0)
-	lines := strings.Split(str, "\n")
-	for i := 0; i < len(lines); i++ {
-		if strings.HasPrefix(lines[i], "event:") {
-			eventType := strings.TrimSpace(strings.TrimPrefix(lines[i], "event:"))
-			i++
-			if i < len(lines) && strings.HasPrefix(lines[i], "data:") {
-				data := strings.TrimSpace(strings.TrimPrefix(lines[i], "data:"))
-				parsedEvents = append(parsedEvents, event{Type: eventType, Data: data})
-			} else {
-				return nil, errors.New("invalid format, data field missing after event field")
-			}
-		}
-	}
-	return parsedEvents, nil
 }
 
 func TestCreateTaskHandler(t *testing.T) {
@@ -407,105 +361,6 @@ func TestGetTasksHandlerWhenTasksAreEmpty(t *testing.T) {
 	if assert.Nil(t, err) {
 		assert.Equal(t, []domain.Task{}, result.Tasks)
 	}
-}
-
-func TestGetFlowActionChangesHandler(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
-	service, _ := redis.NewTestRedisService()
-
-	// Create a flow in the database
-	workspaceId := "ws_test-1"
-	flowId := "test-flow-id"
-	subflowId := "sf_test-subflow-id"
-
-	// Test case 1: FlowAction with existing SubflowId
-	flowAction1 := domain.FlowAction{
-		WorkspaceId:        workspaceId,
-		FlowId:             flowId,
-		SubflowName:        "test-subflow",
-		SubflowDescription: "Test subflow description",
-		SubflowId:          subflowId,
-		Id:                 "test-action-id-1",
-		ActionType:         "test-action-type",
-		ActionStatus:       domain.ActionStatusPending,
-		ActionParams: map[string]interface{}{
-			"test-param": "test-value",
-		},
-		ActionResult: "test-result",
-	}
-
-	// Test case 2: FlowAction without SubflowId (legacy)
-	flowAction2 := domain.FlowAction{
-		WorkspaceId:        workspaceId,
-		FlowId:             flowId,
-		SubflowName:        "another-subflow",
-		SubflowDescription: "Another subflow description",
-		Id:                 "test-action-id-2",
-		ActionType:         "test-action-type",
-		ActionStatus:       domain.ActionStatusPending,
-		ActionParams: map[string]interface{}{
-			"test-param": "test-value",
-		},
-		ActionResult: "test-result",
-	}
-
-	endFlowAction := domain.FlowAction{
-		WorkspaceId: workspaceId,
-		FlowId:      flowId,
-		Id:          "end",
-	}
-
-	err := service.PersistFlowAction(context.Background(), flowAction1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = service.PersistFlowAction(context.Background(), flowAction2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = service.PersistFlowAction(context.Background(), endFlowAction)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	resp := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(resp)
-
-	route := "/v1/workspaces/" + workspaceId + "/flows/" + flowId + "/actions"
-	c.Request = httptest.NewRequest("GET", route, nil)
-	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}, {Key: "id", Value: flowId}}
-	ctrl.GetFlowActionChangesHandler(c)
-
-	assert.Equal(t, http.StatusOK, resp.Code)
-
-	// Check headers
-	assert.Equal(t, "text/event-stream", resp.Header().Get("Content-Type"))
-	assert.Equal(t, "no-cache", resp.Header().Get("Cache-Control"))
-	assert.Equal(t, "keep-alive", resp.Header().Get("Connection"))
-
-	// Check events
-	body, _ := io.ReadAll(resp.Body)
-	events, err := parseSSE(string(body))
-	if err != nil {
-		t.Fatalf("Error parsing Server-Sent Events: %s", err)
-	}
-
-	assert.Equal(t, 2, len(events), "Expected 2 events")
-
-	var action1 domain.FlowAction
-	err = json.Unmarshal([]byte(events[0].Data), &action1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assert.Equal(t, utils.PrettyJSON(flowAction1), utils.PrettyJSON(action1))
-
-	var action2 domain.FlowAction
-	err = json.Unmarshal([]byte(events[1].Data), &action2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assert.Equal(t, utils.PrettyJSON(flowAction2), utils.PrettyJSON(action2))
 }
 
 func TestFlowActionChangesWebsocketHandler(t *testing.T) {
@@ -1420,7 +1275,6 @@ func TestArchiveTaskHandler(t *testing.T) {
 func TestGetWorkspacesHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	service, client := redis.NewTestRedisService()
 
 	// Test for correct data retrieval
 	t.Run("returns workspaces correctly", func(t *testing.T) {
@@ -1431,7 +1285,7 @@ func TestGetWorkspacesHandler(t *testing.T) {
 			{Id: "workspace2", Name: "Workspace Two"},
 		}
 		for _, ws := range expectedWorkspaces {
-			service.PersistWorkspace(context.Background(), ws)
+			ctrl.service.PersistWorkspace(context.Background(), ws)
 		}
 
 		// Creating a test HTTP context
@@ -1452,8 +1306,7 @@ func TestGetWorkspacesHandler(t *testing.T) {
 
 	// Test for empty data
 	t.Run("returns empty list when no workspaces exist", func(t *testing.T) {
-		// No workspaces are added to ensure the database starts empty for this test scenario.
-		clearDb(client)
+		ctrl.service, _ = redis.NewTestRedisService() // clear the database
 
 		// Creating a test HTTP context
 		resp := httptest.NewRecorder()

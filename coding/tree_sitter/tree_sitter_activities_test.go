@@ -2,20 +2,9 @@ package tree_sitter
 
 import (
 	"reflect"
-	"sidekick/srv/redis"
 	"sidekick/utils"
 	"testing"
 )
-
-func newTestRedisDatabase() *redis.Storage {
-	db := &redis.Storage{}
-	db.Client = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "", // no password set
-		DB:       1,  // use default DB
-	})
-	return db
-}
 
 func TestSplitOutlineIntoChunks(t *testing.T) {
 	testCases := []struct {

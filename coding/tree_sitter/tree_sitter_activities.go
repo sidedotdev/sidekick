@@ -35,13 +35,13 @@ func (t *TreeSitterActivities) CreateDirSignatureOutlines(workspaceId string, di
 				value := outline.Path + "\n" + chunk
 				hash := hash64(value)
 				hashes = append(hashes, hash)
-				key := fmt.Sprintf("%s:%s:%d", workspaceId, ContentTypeFileSignature, hash)
+				key := fmt.Sprintf("%s:%d", ContentTypeFileSignature, hash)
 				values[key] = value
 			}
 		}
 	}
 
-	err = t.DatabaseAccessor.MSet(context.Background(), values)
+	err = t.DatabaseAccessor.MSet(context.Background(), workspaceId, values)
 	if err != nil {
 		return []uint64{}, err
 	}

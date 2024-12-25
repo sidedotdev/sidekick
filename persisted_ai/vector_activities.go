@@ -6,6 +6,7 @@ import (
 	"sidekick/embedding"
 	db "sidekick/srv"
 
+	"github.com/kelindar/binary"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
@@ -30,14 +31,13 @@ func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]
 	embeddingKeys := make([]string, 0, len(options.Subkeys))
 	for _, subKey := range options.Subkeys {
 		embeddingKey := constructEmbeddingKey(embeddingKeyOptions{
-			workspaceId:   options.WorkspaceId,
 			embeddingType: options.EmbeddingType,
 			contentType:   options.ContentType,
 			subKey:        subKey,
 		})
 		embeddingKeys = append(embeddingKeys, embeddingKey)
 	}
-	values, err := va.DatabaseAccessor.MGet(context.Background(), embeddingKeys)
+	values, err := va.DatabaseAccessor.MGet(context.Background(), options.WorkspaceId, embeddingKeys)
 	if err != nil {
 		return []uint64{}, err
 	}
@@ -68,9 +68,10 @@ func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]
 			return []uint64{}, fmt.Errorf("embedding is missing for key: %s at %d", embeddingKeys[i], i)
 		}
 
-		stringValue, ok := value.(string)
-		if !ok {
-			return []uint64{}, fmt.Errorf("embedding value is not a string type")
+		var stringValue string
+		err := binary.Unmarshal(value, &stringValue)
+		if err != nil {
+			return []uint64{}, fmt.Errorf("embedding value %v for key %s failed to unmarshal: %w", embeddingKeys[i], value, err)
 		}
 		byteValue := []byte(stringValue)
 		var ev embedding.EmbeddingVector
