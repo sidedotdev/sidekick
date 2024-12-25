@@ -3,6 +3,7 @@ package utils
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"math"
 	"strings"
 	"unicode"
 
@@ -32,6 +33,7 @@ func FirstN(s string, n int) string {
 }
 
 var distanceMetric = metrics.NewLevenshtein()
+var spacingReplacer = strings.NewReplacer(" ", "", "\t", "")
 
 func StringSimilarity(s1, s2 string) float64 {
 	if s1 == s2 {
@@ -45,23 +47,27 @@ func StringSimilarity(s1, s2 string) float64 {
 	}
 
 	// Remove all whitespace
-	s1NoWhitespace := removeWhitespace(s1)
-	s2NoWhitespace := removeWhitespace(s2)
+	s1NoSpacing := spacingReplacer.Replace(s1)
+	s2NoSpacing := spacingReplacer.Replace(s2)
 
 	// Baseline score for strings identical when whitespace is removed
-	if s1NoWhitespace == s2NoWhitespace {
-		scores = append(scores, 0.94)
+	if s1NoSpacing == s2NoSpacing {
+		scores = append(scores, 0.9)
 	}
 
 	// Calculate Levenshtein distance
 	simOriginal := strutil.Similarity(s1, s2, distanceMetric)
-	scores = append(scores, simOriginal)
+	if !math.IsNaN(simOriginal) {
+		scores = append(scores, simOriginal)
+	}
 
 	// Calculate Levenshtein distance with whitespace removed and weighted
 	// average (giving more weight to the no-whitespace similarity)
-	simNoWhitespace := strutil.Similarity(s1NoWhitespace, s2NoWhitespace, distanceMetric)
+	simNoWhitespace := strutil.Similarity(s1NoSpacing, s2NoSpacing, distanceMetric)
 	weightedAvg := 0.4*simOriginal + 0.6*simNoWhitespace
-	scores = append(scores, weightedAvg)
+	if !math.IsNaN(weightedAvg) {
+		scores = append(scores, weightedAvg)
+	}
 
 	maxScore := 0.0
 	for _, score := range scores {
