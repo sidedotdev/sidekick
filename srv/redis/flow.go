@@ -83,4 +83,3 @@ func (s Storage) GetFlow(ctx context.Context, workspaceId, flowId string) (domai
 
 	return flow, nil
 }
-

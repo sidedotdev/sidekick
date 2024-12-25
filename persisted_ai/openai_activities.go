@@ -22,7 +22,7 @@ type Embedder interface {
 }
 
 type OpenAIActivities struct {
-	Storage           srv.Storage
+	Storage srv.Storage
 	Embedder
 }
 
@@ -113,8 +113,9 @@ type embeddingKeyOptions struct {
 	workspaceId   string
 	embeddingType string
 	contentType   string
-	subKey uint64
+	subKey        uint64
 }
+
 func constructEmbeddingKey(options embeddingKeyOptions) string {
 	return fmt.Sprintf("%s:embedding:%s:%s:%d", options.workspaceId, options.embeddingType, options.contentType, options.subKey)
 }

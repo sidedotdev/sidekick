@@ -14,7 +14,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-
 func (s Storage) PersistTask(ctx context.Context, task domain.Task) error {
 	taskJson, err := json.Marshal(task)
 	if err != nil {
@@ -113,7 +112,6 @@ func (s Storage) DeleteTask(ctx context.Context, workspaceId, taskId string) err
 			return err
 		}
 	}
-
 
 	return nil
 }
