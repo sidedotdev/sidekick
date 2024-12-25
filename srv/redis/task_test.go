@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	go_redis "github.com/redis/go-redis/v9"
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
-	go_redis "github.com/redis/go-redis/v9"
 )
 
 func TestPersistTask(t *testing.T) {

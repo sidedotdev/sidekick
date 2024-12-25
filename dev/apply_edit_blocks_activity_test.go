@@ -982,7 +982,7 @@ class RST(FixedWidth):
         lines = [lines[1]] + lines + [lines[1]]
         return lines`
 
-func TestFindPotentialMatchesWithVisibleFileRangeAtEndEdge(t *testing.T) {
+func TestFindAcceptableMatchWithVisibleFileRangeAtEndEdge(t *testing.T) {
 	editBlock := EditBlock{
 		FilePath: "astropy/io/ascii/rst.py",
 		OldLines: []string{
@@ -1025,7 +1025,7 @@ func TestFindPotentialMatchesWithVisibleFileRangeAtEndEdge(t *testing.T) {
 	assert.Greater(t, bestMatch.score, 0.0)
 }
 
-func TestFindPotentialMatchesWithMissingVisibleFileRangesButWeFigureItOut(t *testing.T) {
+func TestFindAcceptableMatchWithMissingVisibleFileRangesButWeFigureItOut(t *testing.T) {
 	tmpFile, err := os.CreateTemp("", "*.py")
 	tmpFile.Write([]byte(rstLines))
 	if err != nil {
