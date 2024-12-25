@@ -12,6 +12,8 @@ import (
 	"sidekick/srv"
 	"sidekick/utils"
 	"strings"
+
+	"github.com/kelindar/binary"
 )
 
 type RagActivities struct {
@@ -128,20 +130,25 @@ func (ra *RagActivities) LimitedDirSignatureOutline(options DirSignatureOutlineO
 	signaturePaths := make(map[string]int, 0)
 
 	dirChunkKeys := make([]string, len(options.DirChunkSubkeys))
-	for _, subkey := range options.DirChunkSubkeys {
-		key := fmt.Sprintf("%s:%s:%d", options.WorkspaceId, tree_sitter.ContentTypeDirChunk, subkey)
-		dirChunkKeys = append(dirChunkKeys, key)
+	for i, subkey := range options.DirChunkSubkeys {
+		dirChunkKeys[i] = fmt.Sprintf("%s:%d", tree_sitter.ContentTypeDirChunk, subkey)
 	}
-	dirChunks, err := ra.DatabaseAccessor.MGet(context.Background(), dirChunkKeys)
+	dirChunks, err := ra.DatabaseAccessor.MGet(context.Background(), options.WorkspaceId, dirChunkKeys)
 	if err != nil {
 		return "", err
 	}
 
 	// include paths for dir chunks, up to 1/10th of the char limit (approximately)
 chunksLoop:
-	for _, chunk := range dirChunks {
+	for i, chunk := range dirChunks {
 		if chunk != nil {
-			paths := strings.Split(chunk.(string), "\n")
+			var text string
+			err := binary.Unmarshal(chunk, &text)
+			if err != nil {
+				return "", fmt.Errorf("dirChunk %v for key %s failed to unmarshal: %w", chunk, dirChunkKeys[i], err)
+			}
+
+			paths := strings.Split(text, "\n")
 			commonPrefix := ""
 
 			if len(paths) > 1 {
@@ -164,19 +171,24 @@ chunksLoop:
 	}
 
 	fileSignatureKeys := make([]string, len(options.FileSignatureSubkeys))
-	for _, subkey := range options.FileSignatureSubkeys {
-		key := fmt.Sprintf("%s:%s:%d", options.WorkspaceId, tree_sitter.ContentTypeFileSignature, subkey)
-		fileSignatureKeys = append(fileSignatureKeys, key)
+	for i, subkey := range options.FileSignatureSubkeys {
+		fileSignatureKeys[i] = fmt.Sprintf("%s:%d", tree_sitter.ContentTypeFileSignature, subkey)
 	}
-	fileSignatures, err := ra.DatabaseAccessor.MGet(context.Background(), fileSignatureKeys)
+	fileSignatures, err := ra.DatabaseAccessor.MGet(context.Background(), options.WorkspaceId, fileSignatureKeys)
 	if err != nil {
 		return "", err
 	}
 
 	// include paths for file signatures
-	for _, signature := range fileSignatures {
+	for i, signature := range fileSignatures {
 		if signature != nil {
-			lines := strings.Split(signature.(string), "\n")
+			var text string
+			err := binary.Unmarshal(signature, &text)
+			if err != nil {
+				return "", fmt.Errorf("dirChunk %v for key %s failed to unmarshal: %w", signature, fileSignatureKeys[i], err)
+			}
+
+			lines := strings.Split(text, "\n")
 			path := lines[0]
 			outline := strings.Join(lines[1:], "\n")
 			if charCount+len(path)+len(outline) > options.CharLimit {
@@ -244,10 +256,10 @@ func (ra *RagActivities) RankedDirChunkSubkeys(options RankedDirChunkSubkeysOpti
 		value := strings.Join(paths, "\n")
 		hash := utils.Hash64(value)
 		hashes = append(hashes, hash)
-		key := fmt.Sprintf("%s:%s:%d", options.WorkspaceId, tree_sitter.ContentTypeDirChunk, hash)
+		key := fmt.Sprintf("%s:%d", tree_sitter.ContentTypeDirChunk, hash)
 		values[key] = value
 	}
-	err := ra.DatabaseAccessor.MSet(context.Background(), values)
+	err := ra.DatabaseAccessor.MSet(context.Background(), options.WorkspaceId, values)
 	if err != nil {
 		return []uint64{}, err
 	}

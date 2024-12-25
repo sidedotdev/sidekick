@@ -8,6 +8,7 @@ import (
 type Service interface {
 	Storage
 	Streamer
+	DeleteWorkspace(ctx context.Context, workspaceId string) error
 }
 
 type Storage interface {
@@ -18,11 +19,8 @@ type Storage interface {
 	domain.WorkspaceStorage
 
 	CheckConnection(ctx context.Context) error
-
-	// TODO add workspaceId to this
-	MGet(ctx context.Context, keys []string) ([]interface{}, error)
-	// TODO add workspaceId to this
-	MSet(ctx context.Context, values map[string]interface{}) error
+	MGet(ctx context.Context, workspaceId string, keys []string) ([][]byte, error)
+	MSet(ctx context.Context, workspaceId string, values map[string]interface{}) error
 }
 
 type Streamer interface {

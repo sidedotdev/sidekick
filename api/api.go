@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sidekick"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,10 +17,8 @@ import (
 	"sidekick/common"
 	"sidekick/dev"
 	"sidekick/domain"
-	domain1 "sidekick/domain"
 	"sidekick/frontend"
 	"sidekick/srv"
-	"sidekick/srv/redis"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -29,7 +28,10 @@ import (
 
 func RunServer() *http.Server {
 	gin.SetMode(gin.ReleaseMode)
-	ctrl := NewController()
+	ctrl, err := NewController()
+	if err != nil {
+		log.Fatalf("Failed to initialize controller: %v\n", err)
+	}
 	router := DefineRoutes(ctrl)
 
 	srv := &http.Server{
@@ -125,7 +127,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	workspaceApiRoutes := DefineWorkspaceApiRoutes(r, &ctrl)
 	workspaceApiRoutes.GET("/archived_tasks", ctrl.GetArchivedTasksHandler)
 
-	taskRoutes := workspaceApiRoutes.Group("/:workspaceId/tasks")
+	taskRoutes := workspaceApiRoutes.Group("/tasks")
 	taskRoutes.POST("/", ctrl.CreateTaskHandler)
 	taskRoutes.GET("/", ctrl.GetTasksHandler)
 	taskRoutes.GET("/:id", ctrl.GetTaskHandler)
@@ -135,12 +137,11 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	taskRoutes.POST("/:id/cancel", ctrl.CancelTaskHandler)
 	taskRoutes.POST("/archive_finished", ctrl.ArchiveFinishedTasksHandler)
 
-	flowRoutes := workspaceApiRoutes.Group("/:workspaceId/flows")
+	flowRoutes := workspaceApiRoutes.Group("/flows")
 	flowRoutes.GET("/:id/actions", ctrl.GetFlowActionsHandler)
 	flowRoutes.POST("/:id/cancel", ctrl.CancelFlowHandler)
-	flowRoutes.GET("/:id/action_changes", ctrl.GetFlowActionChangesHandler)
 
-	workspaceApiRoutes.POST("/:workspaceId/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
+	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
 
 	workspaceWsRoutes := r.Group("/ws/v1/workspaces")
 	workspaceWsRoutes.GET("/:workspaceId/task_changes", ctrl.TaskChangesWebsocketHandler)
@@ -164,50 +165,27 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	// Wildcard route to serve index.html for other HTML-based frontend routes,
 	// eg /kanban etc as they get defined by the frontend. This also serves the
 	// root route rather than a custom route for the root.
-	r.NoRoute(func(c *gin.Context) {
-		// only do this for web page load requests
-		acceptHeader := c.Request.Header.Get("Accept")
-		isWebPage := strings.Contains(acceptHeader, "text/html") || strings.Contains(acceptHeader, "*/*") || acceptHeader == ""
-		isWebPage = isWebPage && !strings.Contains(c.Request.URL.Path, "/api/")
-		isWebPage = isWebPage && !strings.Contains(c.Request.URL.Path, "/ws/")
-		if !isWebPage {
-			c.Status(http.StatusNotFound)
-			return
-		}
-
-		// render index.html
-		file, err := frontend.DistFs.Open("dist/index.html")
-		if err != nil {
-			fmt.Println("Failed to open index.html", err)
-			c.Status(http.StatusInternalServerError)
-			return
-		} else {
-			c.Status(http.StatusOK)
-			_, err = io.Copy(c.Writer, file)
-			if err != nil {
-				log.Println("Failed to serve index.html", err)
-			}
-		}
-	})
+	r.NoRoute(ctrl.WildcardHandler)
 
 	return r
 }
 
-func NewController() Controller {
-
+func NewController() (Controller, error) {
 	clientOptions := client.Options{
 		HostPort: common.GetTemporalServerHostPort(),
 	}
 	temporalClient, err := client.NewLazyClient(clientOptions)
 	if err != nil {
-		log.Fatal("Failed to create Temporal client", err)
+		return Controller{}, fmt.Errorf("failed to create Temporal client: %w", err)
 	}
 
-	redisStorage := redis.NewStorage()
-	service := srv.NewDelegator(redisStorage, redis.NewStreamer())
+	service, err := sidekick.GetService()
+	if err != nil {
+		return Controller{}, fmt.Errorf("failed to initialize storage: %w", err)
+	}
 	err = service.CheckConnection(context.Background())
 	if err != nil {
-		log.Fatal("Failed to connect to Redis", err)
+		return Controller{}, fmt.Errorf("failed to connect to storage: %w", err)
 	}
 
 	return Controller{
@@ -215,7 +193,7 @@ func NewController() Controller {
 		temporalClient:    temporalClient,
 		temporalNamespace: common.GetTemporalNamespace(),
 		temporalTaskQueue: common.GetTemporalTaskQueue(),
-	}
+	}, nil
 }
 
 func (ctrl *Controller) ErrorHandler(c *gin.Context, status int, err error) {
@@ -467,6 +445,7 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 	if len(taskStatuses) > 0 {
 		tasks, err = ctrl.service.GetTasks(c, workspaceId, taskStatuses)
 		if err != nil {
+			log.Println("Error fetching tasks:", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -515,6 +494,7 @@ func (ctrl *Controller) GetArchivedTasksHandler(c *gin.Context) {
 
 	archivedTasks, totalCount, err := ctrl.service.GetArchivedTasks(c, workspaceId, int64(page), int64(pageSize))
 	if err != nil {
+		fmt.Println("Error fetching archived tasks:", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -523,6 +503,7 @@ func (ctrl *Controller) GetArchivedTasksHandler(c *gin.Context) {
 	for i, task := range archivedTasks {
 		flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, task.Id)
 		if err != nil {
+			fmt.Println("Error fetching flows for archived task:", task.Id, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -586,74 +567,6 @@ func (ctrl *Controller) GetFlowActionsHandler(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"flowActions": flowActions})
-}
-
-func (ctrl *Controller) GetFlowActionChangesHandler(c *gin.Context) {
-	flowId := c.Param("id")
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	clientGone := c.Request.Context().Done()
-
-	events := make(chan interface{}, 10)
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		for event := range events {
-			switch event := event.(type) {
-			case domain.FlowAction:
-				select {
-				case <-clientGone:
-					// if the client has disconnected, stop sending events
-					log.Println("Flow action changes client disconnected")
-					return
-				default:
-					c.SSEvent("flow/action", event)
-					c.Writer.Flush()
-				}
-			case error:
-				c.SSEvent("error", gin.H{"error": event.Error()})
-				c.Writer.Flush()
-			}
-		}
-		log.Println("Flow action changes events channel closed")
-		wg.Done()
-	}()
-
-	ctx := c.Request.Context()
-	workspaceId := c.Param("workspaceId")
-	streamMessageStartId := "0"
-	maxCount := int64(100)
-	blockDuration := time.Second * 0
-
-	for {
-		select {
-		case <-clientGone:
-			// if the client has disconnected, stop fetching events
-			log.Println("Flow action changes client disconnected")
-			close(events)
-			return
-		default:
-			flowActions, lastStreamId, err := ctrl.service.GetFlowActionChanges(ctx, workspaceId, flowId, streamMessageStartId, maxCount, blockDuration)
-			if err != nil {
-				log.Printf("Failed to get flow actions: %v\n", err)
-				events <- err
-				close(events)
-				return
-			}
-
-			for _, flowAction := range flowActions {
-				events <- flowAction
-			}
-
-			if lastStreamId == "end" {
-				close(events)
-				wg.Wait()
-				return
-			}
-			streamMessageStartId = lastStreamId
-		}
-	}
 }
 
 func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
@@ -1137,7 +1050,7 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 				}
 
 				// remove stream keys that have been marked as ended
-				if flowEvent.GetEventType() == domain1.EndStreamEventType {
+				if flowEvent.GetEventType() == domain.EndStreamEventType {
 					for key := range keysMap {
 						if strings.HasSuffix(key, flowEvent.GetParentId()) {
 							streamKeys.Delete(key)
@@ -1145,6 +1058,35 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 					}
 				}
 			}
+		}
+	}
+}
+
+// Wildcard route to serve index.html for other HTML-based frontend routes,
+// eg /kanban etc as they get defined by the frontend. This also serves the
+// root route rather than a custom route for the root.
+func (ctrl *Controller) WildcardHandler(c *gin.Context) {
+	// only do this for web page load requests
+	acceptHeader := c.Request.Header.Get("Accept")
+	isWebPage := strings.Contains(acceptHeader, "text/html") || strings.Contains(acceptHeader, "*/*") || acceptHeader == ""
+	isWebPage = isWebPage && !strings.Contains(c.Request.URL.Path, "/api/")
+	isWebPage = isWebPage && !strings.Contains(c.Request.URL.Path, "/ws/")
+	if !isWebPage {
+		c.Status(http.StatusNotFound)
+		return
+	}
+
+	// render index.html
+	file, err := frontend.DistFs.Open("dist/index.html")
+	if err != nil {
+		fmt.Println("Failed to open index.html", err)
+		c.Status(http.StatusInternalServerError)
+		return
+	} else {
+		c.Status(http.StatusOK)
+		_, err = io.Copy(c.Writer, file)
+		if err != nil {
+			log.Println("Failed to serve index.html", err)
 		}
 	}
 }

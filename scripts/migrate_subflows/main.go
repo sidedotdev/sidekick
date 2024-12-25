@@ -168,11 +168,6 @@ func migrateSubflows(ctx context.Context, database *redis.Storage, streamer *red
 	var totalWorkspaces, totalTasks, totalFlows, totalFlowActions, totalSubflowsCreated int
 
 	for _, workspace := range workspaces {
-		// TODO: remove this check
-		if workspace.Id != "ws_2h7TkUIDypLPvB5QXLIF0cwlqi8" {
-			continue
-		}
-
 		log.Printf("Processing workspace: %s", workspace.Id)
 		totalWorkspaces++
 
