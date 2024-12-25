@@ -19,11 +19,8 @@ type Storage interface {
 	domain.WorkspaceStorage
 
 	CheckConnection(ctx context.Context) error
-
 	MGet(ctx context.Context, workspaceId string, keys []string) ([][]byte, error)
 	MSet(ctx context.Context, workspaceId string, values map[string]interface{}) error
-
-	DeleteWorkspace(ctx context.Context, workspaceId string) error
 }
 
 type Streamer interface {

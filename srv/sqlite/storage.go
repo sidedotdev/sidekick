@@ -138,11 +138,6 @@ func (s *Storage) MGet(ctx context.Context, workspaceId string, keys []string) (
 		if err := rows.Scan(&key, &value); err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
-		//var result interface{}
-		//if err := binary.Unmarshal(value, &result); err != nil {
-		//	return nil, fmt.Errorf("failed to unmarshal value for key %s: %w", key, err)
-		//}
-		//results[key] = result
 		results[key] = value
 	}
 

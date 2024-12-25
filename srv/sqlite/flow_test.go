@@ -78,3 +78,47 @@ func TestGetFlow(t *testing.T) {
 		assert.ErrorIs(t, err, srv.ErrNotFound)
 	})
 }
+
+func TestGetFlowsForTask(t *testing.T) {
+	storage := NewTestSqliteStorage(t, "flow_test")
+	ctx := context.Background()
+
+	t.Run("Get multiple flows for a task", func(t *testing.T) {
+		workspaceId := "workspace1"
+		taskId := "task1"
+		expectedFlows := []domain.Flow{
+			{WorkspaceId: workspaceId, Id: "flow1", Type: domain.FlowTypeBasicDev, ParentId: taskId, Status: "active"},
+			{WorkspaceId: workspaceId, Id: "flow2", Type: domain.FlowTypePlannedDev, ParentId: taskId, Status: "completed"},
+		}
+
+		// Insert test flows
+		for _, flow := range expectedFlows {
+			err := storage.PersistFlow(ctx, flow)
+			require.NoError(t, err)
+		}
+
+		// Get flows for the task
+		flows, err := storage.GetFlowsForTask(ctx, workspaceId, taskId)
+		assert.NoError(t, err)
+		assert.Equal(t, expectedFlows, flows)
+	})
+
+	t.Run("Get flows for a task with no flows", func(t *testing.T) {
+		workspaceId := "workspace2"
+		taskId := "task2"
+
+		flows, err := storage.GetFlowsForTask(ctx, workspaceId, taskId)
+		assert.NoError(t, err)
+		assert.Empty(t, flows)
+	})
+
+	t.Run("Error handling for database error", func(t *testing.T) {
+		// Close the database connection to simulate a database error
+		err := storage.db.Close()
+		require.NoError(t, err)
+
+		_, err = storage.GetFlowsForTask(ctx, "workspace3", "task3")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to query flows for task")
+	})
+}
