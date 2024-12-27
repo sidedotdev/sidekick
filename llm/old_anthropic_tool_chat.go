@@ -46,12 +46,12 @@ func (OldAnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOpti
 
 	request := &anthropic.MessageRequest{
 		Model:             anthropic.Model(model),
+		Temperature: 	   float64(temperature),
 		MaxTokensToSample: 4000,
 		Messages:          anthropicFromChatMessages(options.Params.Messages),
 		ToolChoice:        anthropicFromToolChoice(options.Params.ToolChoice, options.Params.Tools),
 		Tools:             anthropicFromTools(options.Params.Tools),
 		Stream:            true,
-		Temperature:       float64(temperature),
 	}
 	//utils.PrettyPrint(request)
 
