@@ -1,55 +1,176 @@
 package common
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/denormal/go-gitignore"
 )
 
+// IgnoreFileType represents the type of ignore file with inherent precedence
+type IgnoreFileType int
+
+const (
+	GitIgnoreType IgnoreFileType = iota
+	IgnoreType
+	SideIgnoreType
+)
+
+// String returns the filename for the ignore file type
+func (t IgnoreFileType) String() string {
+	switch t {
+	case GitIgnoreType:
+		return ".gitignore"
+	case IgnoreType:
+		return ".ignore"
+	case SideIgnoreType:
+		return ".sideignore"
+	default:
+		return ""
+	}
+}
+
+// IgnoreFile represents a single ignore file with its type and parsed rules
+type IgnoreFile struct {
+	Type      IgnoreFileType
+	Dir       string
+	GitIgnore gitignore.GitIgnore
+}
+
+// IgnoreManager handles collection and evaluation of ignore files
+type IgnoreManager struct {
+	files []IgnoreFile
+}
+
+// findGitRoot finds the git repository root by looking for .git directory
+func findGitRoot(startDir string) (string, error) {
+	dir := startDir
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", errors.New("not in a git repository")
+		}
+		dir = parent
+	}
+}
+
+// collectIgnoreFiles finds all ignore files from startDir up to and including gitRoot
+func collectIgnoreFiles(startDir string, gitRoot string) ([]IgnoreFile, error) {
+	var files []IgnoreFile
+	dir := startDir
+
+	for {
+		// Check each type of ignore file in the current directory
+		for _, ignoreType := range []IgnoreFileType{GitIgnoreType, IgnoreType, SideIgnoreType} {
+			ignoreFile := filepath.Join(dir, ignoreType.String())
+			if _, err := os.Stat(ignoreFile); err == nil {
+				gitIgnore, err := gitignore.NewRepositoryWithFile(dir, ignoreType.String())
+				if err != nil {
+					return nil, err
+				}
+				files = append(files, IgnoreFile{
+					Type:      ignoreType,
+					Dir:       dir,
+					GitIgnore: gitIgnore,
+				})
+			}
+		}
+
+		// Stop if we've reached the git root
+		if dir == gitRoot {
+			break
+		}
+
+		// Move to parent directory
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	// Sort files by precedence: directory depth (deeper first), then type (higher type first)
+	sort.Slice(files, func(i, j int) bool {
+		// Compare directory depths
+		iDepth := len(strings.Split(files[i].Dir, string(filepath.Separator)))
+		jDepth := len(strings.Split(files[j].Dir, string(filepath.Separator)))
+		if iDepth != jDepth {
+			return iDepth > jDepth
+		}
+		// If same depth, compare types
+		return files[i].Type > files[j].Type
+	})
+
+	return files, nil
+}
+
+// NewIgnoreManager creates a new IgnoreManager for the given directory
+func NewIgnoreManager(baseDirectory string) (*IgnoreManager, error) {
+	gitRoot, err := findGitRoot(baseDirectory)
+	if err != nil {
+		// If not in a git repo, only collect ignore files from baseDirectory
+		gitRoot = baseDirectory
+	}
+
+	files, err := collectIgnoreFiles(baseDirectory, gitRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	return &IgnoreManager{files: files}, nil
+}
+
+// IsIgnored checks if a path should be ignored according to all ignore files
+func (im *IgnoreManager) IsIgnored(path string, isDir bool) bool {
+	for _, file := range im.files {
+		match := file.GitIgnore.Absolute(path, isDir)
+		if match != nil {
+			return match.Ignore()
+		}
+	}
+	return false
+}
+
 func WalkCodeDirectory(baseDirectory string, handleEntry func(string, fs.DirEntry) error) error {
-	// TODO allow for multipled/nested ignore files: find all
-	// .gitignore/.sideignore files in the directory tree and use the right ones
-	// depending on the file path
-	gitIgnore, err := gitignore.NewRepository(baseDirectory)
+	// Create ignore manager to handle all ignore files
+	ignoreManager, err := NewIgnoreManager(baseDirectory)
 	if err != nil {
 		return err
 	}
 
-	var sideIgnore *gitignore.GitIgnore
-	sideIgnoreFile := filepath.Join(baseDirectory, ".sideignore")
-	if _, err := os.Stat(sideIgnoreFile); err == nil {
-		tempIgnore, err := gitignore.NewRepositoryWithFile(baseDirectory, ".sideignore")
-		if err != nil {
-			return err
-		}
-		sideIgnore = &tempIgnore
+	// Validate that baseDirectory is a directory
+	info, err := os.Stat(baseDirectory)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errors.New("baseDirectory must be a directory")
 	}
 
-	// TODO validate that the basePath is a directory
 	err = filepath.WalkDir(baseDirectory, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		// don't show the root directory explicitly
-		// also note that the gitingore package fails if given the root directory :facepalm:
+
+		// Don't show the root directory explicitly
 		if path == baseDirectory {
 			return nil
 		}
 
-		// skip the .git directory
+		// Skip the .git directory
 		if entry.IsDir() && entry.Name() == ".git" {
 			return filepath.SkipDir
 		}
 
-		match := gitIgnore.Absolute(path, entry.IsDir())
-		var match2 gitignore.Match
-		if sideIgnore != nil {
-			match2 = (*sideIgnore).Absolute(path, entry.IsDir())
-		}
-
-		if (match != nil && match.Ignore()) || (match2 != nil && match2.Ignore()) {
+		// Check if path should be ignored
+		if ignoreManager.IsIgnored(path, entry.IsDir()) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
