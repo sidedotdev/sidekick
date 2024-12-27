@@ -54,10 +54,10 @@ func TestOldAnthropicToChatMessageDelta(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.panics {
 				assert.Panics(t, func() {
-					anthropicToChatMessageDelta(tt.input)
+					oldAnthropicToChatMessageDelta(tt.input)
 				})
 			} else {
-				result := anthropicToChatMessageDelta(tt.input)
+				result := oldAnthropicToChatMessageDelta(tt.input)
 				assert.Equal(t, tt.expected, result)
 			}
 		})
@@ -182,7 +182,7 @@ func TestAnthropicToChatMessageResponse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := anthropicToChatMessageResponse(tt.input)
+			result := oldAnthropicToChatMessageResponse(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -265,7 +265,7 @@ func TestAnthropicFromChatMessages(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := anthropicFromChatMessages(tt.input)
+			result := oldAnthropicFromChatMessages(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

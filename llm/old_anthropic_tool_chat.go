@@ -11,7 +11,7 @@ import (
 	"sidekick/common"
 	"sidekick/utils"
 
-	"github.com/ehsanul/anthropic-go/v3/pkg/anthropic"
+	old_anthropic "github.com/ehsanul/anthropic-go/v3/pkg/anthropic"
 	"github.com/ehsanul/anthropic-go/v3/pkg/anthropic/client/native"
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/activity"
@@ -44,23 +44,23 @@ func (OldAnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOpti
 		temperature = *options.Params.Temperature
 	}
 
-	request := &anthropic.MessageRequest{
-		Model:             anthropic.Model(model),
-		Temperature: 	   float64(temperature),
+	request := &old_anthropic.MessageRequest{
+		Model:             old_anthropic.Model(model),
+		Temperature:       float64(temperature),
 		MaxTokensToSample: 4000,
-		Messages:          anthropicFromChatMessages(options.Params.Messages),
-		ToolChoice:        anthropicFromToolChoice(options.Params.ToolChoice, options.Params.Tools),
-		Tools:             anthropicFromTools(options.Params.Tools),
+		Messages:          oldAnthropicFromChatMessages(options.Params.Messages),
+		ToolChoice:        oldAnthropicFromToolChoice(options.Params.ToolChoice, options.Params.Tools),
+		Tools:             oldAnthropicFromTools(options.Params.Tools),
 		Stream:            true,
 	}
 	//utils.PrettyPrint(request)
 
 	rCh, errCh := client.MessageStream(ctx, request)
 
-	chunk := &anthropic.MessageStreamResponse{}
+	chunk := &old_anthropic.MessageStreamResponse{}
 	done := false
-	messageResponse := anthropic.MessageResponse{}
-	var currentContentBlock anthropic.ContentBlock
+	messageResponse := old_anthropic.MessageResponse{}
+	var currentContentBlock old_anthropic.ContentBlock
 	currentBuilder := strings.Builder{}
 
 	for {
@@ -73,11 +73,11 @@ func (OldAnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOpti
 			}
 
 			switch chunk.Type {
-			case string(anthropic.MessageEventTypePing):
+			case string(old_anthropic.MessageEventTypePing):
 				continue
-			case string(anthropic.MessageEventTypeMessageStart):
+			case string(old_anthropic.MessageEventTypeMessageStart):
 				messageResponse = chunk.Message
-			case string(anthropic.MessageEventTypeMessageDelta):
+			case string(old_anthropic.MessageEventTypeMessageDelta):
 				// TODO handle MessageEventTypeMessageDelta properly
 				//deltaChan <- anthropicMessageDeltaToChatMessageDelta(chunk.ContentBlock)
 				//if chunk.Delta.StopReason != "" {
@@ -93,18 +93,18 @@ func (OldAnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOpti
 				//	messageResponse.Usage.OutputTokens = chunk.Usage.OutputTokens
 				//}
 				break
-			case string(anthropic.MessageEventTypeMessageStop):
+			case string(old_anthropic.MessageEventTypeMessageStop):
 				done = true
-			case string(anthropic.MessageEventTypeContentBlockStart):
-				deltaChan <- anthropicContentStartToChatMessageDelta(chunk.ContentBlock)
+			case string(old_anthropic.MessageEventTypeContentBlockStart):
+				deltaChan <- oldAnthropicContentStartToChatMessageDelta(chunk.ContentBlock)
 				currentContentBlock = chunk.ContentBlock
-			case string(anthropic.MessageEventTypeContentBlockStop):
+			case string(old_anthropic.MessageEventTypeContentBlockStop):
 				partResponse := toPartResponse(currentContentBlock, currentBuilder.String())
 				messageResponse.Content = append(messageResponse.Content, partResponse)
 				currentContentBlock = nil
 				currentBuilder.Reset()
-			case string(anthropic.MessageEventTypeContentBlockDelta):
-				deltaChan <- anthropicToChatMessageDelta(chunk.Delta)
+			case string(old_anthropic.MessageEventTypeContentBlockDelta):
+				deltaChan <- oldAnthropicToChatMessageDelta(chunk.Delta)
 				switch chunk.Delta.Type {
 				case "text_delta":
 					currentBuilder.WriteString(chunk.Delta.Text)
@@ -125,13 +125,13 @@ func (OldAnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOpti
 	}
 
 	close(deltaChan)
-	return anthropicToChatMessageResponse(messageResponse), nil
+	return oldAnthropicToChatMessageResponse(messageResponse), nil
 }
 
-func toPartResponse(contentBlock anthropic.ContentBlock, content string) anthropic.MessagePartResponse {
+func toPartResponse(contentBlock old_anthropic.ContentBlock, content string) old_anthropic.MessagePartResponse {
 	switch contentBlock.ContentBlockType() {
 	case "text":
-		return anthropic.MessagePartResponse{
+		return old_anthropic.MessagePartResponse{
 			Type: contentBlock.ContentBlockType(),
 			Text: content,
 		}
@@ -141,8 +141,8 @@ func toPartResponse(contentBlock anthropic.ContentBlock, content string) anthrop
 			panic(err)
 		}
 
-		toolUseContentBlock := contentBlock.(anthropic.ToolUseContentBlock)
-		return anthropic.MessagePartResponse{
+		toolUseContentBlock := contentBlock.(old_anthropic.ToolUseContentBlock)
+		return old_anthropic.MessagePartResponse{
 			Type:  toolUseContentBlock.Type,
 			ID:    toolUseContentBlock.ID,
 			Name:  toolUseContentBlock.Name,
@@ -153,7 +153,7 @@ func toPartResponse(contentBlock anthropic.ContentBlock, content string) anthrop
 	}
 }
 
-func anthropicToChatMessageResponse(response anthropic.MessageResponse) *ChatMessageResponse {
+func oldAnthropicToChatMessageResponse(response old_anthropic.MessageResponse) *ChatMessageResponse {
 	chatMessage := &ChatMessageResponse{
 		ChatMessage: ChatMessage{
 			Role: ChatMessageRoleAssistant,
@@ -184,23 +184,23 @@ func anthropicToChatMessageResponse(response anthropic.MessageResponse) *ChatMes
 	return chatMessage
 }
 
-func anthropicFromChatMessages(messages []ChatMessage) []anthropic.MessagePartRequest {
-	anthropicMessages := utils.Map(messages, func(msg ChatMessage) anthropic.MessagePartRequest {
-		anthropicMessage := anthropic.MessagePartRequest{
-			Role: anthropicFromChatMessageRole(msg.Role),
+func oldAnthropicFromChatMessages(messages []ChatMessage) []old_anthropic.MessagePartRequest {
+	anthropicMessages := utils.Map(messages, func(msg ChatMessage) old_anthropic.MessagePartRequest {
+		anthropicMessage := old_anthropic.MessagePartRequest{
+			Role: oldAnthropicFromChatMessageRole(msg.Role),
 		}
 		// only add content if it's not empty: anthropic doesn't allow empty content blocks
 		if msg.Content != "" {
 			// the tool role is not used by anthropic, but rather tool_result content blocks
 			if msg.Role == ChatMessageRoleTool {
-				anthropicMessage.Content = append(anthropicMessage.Content, anthropic.NewToolResultContentBlock(msg.ToolCallId, msg.Content, msg.IsError))
+				anthropicMessage.Content = append(anthropicMessage.Content, old_anthropic.NewToolResultContentBlock(msg.ToolCallId, msg.Content, msg.IsError))
 			} else {
-				anthropicMessage.Content = append(anthropicMessage.Content, anthropic.NewTextContentBlock(msg.Content))
+				anthropicMessage.Content = append(anthropicMessage.Content, old_anthropic.NewTextContentBlock(msg.Content))
 			}
 		}
 		if msg.ToolCalls != nil {
 			for _, toolCall := range msg.ToolCalls {
-				anthropicMessage.Content = append(anthropicMessage.Content, anthropic.ToolUseContentBlock{
+				anthropicMessage.Content = append(anthropicMessage.Content, old_anthropic.ToolUseContentBlock{
 					Type:  "tool_use",
 					ID:    toolCall.Id,
 					Name:  toolCall.Name,
@@ -215,12 +215,12 @@ func anthropicFromChatMessages(messages []ChatMessage) []anthropic.MessagePartRe
 	})
 
 	// not sure why we have empty messages, but we must filter them out to avoid anthropic errors
-	anthropicMessages = utils.Filter(anthropicMessages, func(msg anthropic.MessagePartRequest) bool {
+	anthropicMessages = utils.Filter(anthropicMessages, func(msg old_anthropic.MessagePartRequest) bool {
 		return len(msg.Content) > 0
 	})
 
 	// anthropic doesn't allow multiple consecutive messages from the same role
-	var mergedAnthropicMessages []anthropic.MessagePartRequest
+	var mergedAnthropicMessages []old_anthropic.MessagePartRequest
 	for _, msg := range anthropicMessages {
 		if len(mergedAnthropicMessages) == 0 {
 			mergedAnthropicMessages = append(mergedAnthropicMessages, msg)
@@ -238,34 +238,34 @@ func anthropicFromChatMessages(messages []ChatMessage) []anthropic.MessagePartRe
 	return mergedAnthropicMessages
 }
 
-func anthropicFromToolChoice(toolChoice ToolChoice, tools []*Tool) *anthropic.ToolChoice {
+func oldAnthropicFromToolChoice(toolChoice ToolChoice, tools []*Tool) *old_anthropic.ToolChoice {
 	if len(tools) == 0 {
 		return nil
 	}
 
 	switch toolChoice.Type {
 	case ToolChoiceTypeAuto:
-		return &anthropic.ToolChoice{
+		return &old_anthropic.ToolChoice{
 			Type: "auto",
 		}
 	case ToolChoiceTypeRequired:
-		return &anthropic.ToolChoice{
+		return &old_anthropic.ToolChoice{
 			Type: "any",
 		}
 	case ToolChoiceTypeTool:
-		return &anthropic.ToolChoice{
+		return &old_anthropic.ToolChoice{
 			Type: "tool",
 			Name: toolChoice.Name,
 		}
 	case ToolChoiceTypeUnspecified:
-		return &anthropic.ToolChoice{
+		return &old_anthropic.ToolChoice{
 			Type: "auto",
 		}
 	}
 	panic(fmt.Sprintf("unsupported tool choice type: %v", toolChoice.Type))
 }
 
-func anthropicFromChatMessageRole(role ChatMessageRole) string {
+func oldAnthropicFromChatMessageRole(role ChatMessageRole) string {
 	switch role {
 	case ChatMessageRoleUser, ChatMessageRoleSystem, ChatMessageRoleTool:
 		return "user"
@@ -275,9 +275,9 @@ func anthropicFromChatMessageRole(role ChatMessageRole) string {
 	panic(fmt.Sprintf("unsupported role: %v", role))
 }
 
-func anthropicFromTools(tools []*Tool) []anthropic.Tool {
-	return utils.Map(tools, func(tool *Tool) anthropic.Tool {
-		return anthropic.Tool{
+func oldAnthropicFromTools(tools []*Tool) []old_anthropic.Tool {
+	return utils.Map(tools, func(tool *Tool) old_anthropic.Tool {
+		return old_anthropic.Tool{
 			Name:        tool.Name,
 			Description: tool.Description,
 			InputSchema: tool.Parameters,
@@ -285,7 +285,7 @@ func anthropicFromTools(tools []*Tool) []anthropic.Tool {
 	})
 }
 
-func anthropicToChatMessageDelta(delta anthropic.MessageStreamDelta) ChatMessageDelta {
+func oldAnthropicToChatMessageDelta(delta old_anthropic.MessageStreamDelta) ChatMessageDelta {
 	outDelta := ChatMessageDelta{Role: ChatMessageRoleAssistant}
 	switch delta.Type {
 	case "text_delta":
@@ -300,15 +300,15 @@ func anthropicToChatMessageDelta(delta anthropic.MessageStreamDelta) ChatMessage
 	return outDelta
 }
 
-func anthropicContentStartToChatMessageDelta(contentBlock anthropic.ContentBlock) ChatMessageDelta {
+func oldAnthropicContentStartToChatMessageDelta(contentBlock old_anthropic.ContentBlock) ChatMessageDelta {
 	switch contentBlock.ContentBlockType() {
 	case "text":
 		return ChatMessageDelta{
 			Role:    ChatMessageRoleAssistant,
-			Content: contentBlock.(anthropic.TextContentBlock).Text,
+			Content: contentBlock.(old_anthropic.TextContentBlock).Text,
 		}
 	case "tool_use":
-		toolUseContentBlock := contentBlock.(anthropic.ToolUseContentBlock)
+		toolUseContentBlock := contentBlock.(old_anthropic.ToolUseContentBlock)
 		return ChatMessageDelta{
 			Role: ChatMessageRoleAssistant,
 			ToolCalls: []ToolCall{
