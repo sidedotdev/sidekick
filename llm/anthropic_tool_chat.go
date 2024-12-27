@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sidekick/common"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/rs/zerolog/log"
+	"go.temporal.io/sdk/activity"
 )
 
 const AnthropicDefaultModel = anthropic.ModelClaude3_5SonnetLatest
@@ -23,8 +26,10 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 		return nil, fmt.Errorf("failed to get Anthropic API key: %w", err)
 	}
 
+	httpClient := &http.Client{Timeout: 10 * time.Minute}
 	client := anthropic.NewClient(
 		option.WithAPIKey(token),
+		option.WithHTTPClient(httpClient), // NOTE: WithRequestTimeout was causing failure after a single token
 	)
 
 	messages, err := anthropicFromChatMessages(options.Params.Messages)
@@ -56,8 +61,13 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 	})
 
 	var finalMessage anthropic.Message
+	startedBlocks := 0
+	stoppedBlocks := 0
 	for stream.Next() {
 		event := stream.Current()
+		if activity.IsActivity(ctx) {
+			activity.RecordHeartbeat(ctx, event)
+		}
 		log.Trace().Interface("event", event).Msg("Received streamed event from Anthropic API")
 
 		err := finalMessage.Accumulate(event)
@@ -68,17 +78,34 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 		switch event := event.AsUnion().(type) {
 		case anthropic.ContentBlockStartEvent:
 			deltaChan <- anthropicContentStartToChatMessageDelta(event.ContentBlock)
+			startedBlocks++
 		case anthropic.ContentBlockDeltaEvent:
 			if len(finalMessage.Content) == 0 {
 				return nil, fmt.Errorf("anthropic tool chat failure: received event of type %s but there was no content block", event.Type)
 			}
 			deltaChan <- anthropicToChatMessageDelta(event.Delta)
+		case anthropic.ContentBlockStopEvent:
+			stoppedBlocks++
 		}
 	}
 
 	if stream.Err() != nil {
+		log.Error().Err(stream.Err()).Msg("Anthropic tool chat stream error")
 		return nil, fmt.Errorf("stream error: %w", stream.Err())
 	}
+
+	// the anthropic-go-sdk library seems to have a bug where if the stream
+	// stops midway, we don't get an error back in stream.Err(). this can be
+	// reproduced not passing in the httpclient, and causing a tool call
+	// response where a single chunk may take some time (>3s roughly). to detect
+	// this scenario, we check that all content blocks that are started are also
+	// stopped.
+	if startedBlocks != stoppedBlocks {
+		log.Error().Int("started", startedBlocks).Int("stopped", stoppedBlocks).Msg("Anthropic tool chat: number of started and stopped content blocks do not match: did something disconnect?")
+		return nil, fmt.Errorf("anthropic tool chat failure: started %d blocks but stopped %d", startedBlocks, stoppedBlocks)
+	}
+
+	log.Trace().Interface("responseMessage", finalMessage).Msg("Anthropic tool chat response message")
 
 	response, err := anthropicToChatMessageResponse(finalMessage)
 	if err != nil {
