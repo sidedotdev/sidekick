@@ -236,6 +236,10 @@ func startTemporalServer(cfg *temporalServerConfig) temporal.Server {
 	dynConf[dynamicconfig.FrontendEnableUpdateWorkflowExecution.Key()] = true
 	dynConf[dynamicconfig.FrontendEnableUpdateWorkflowExecutionAsyncAccepted.Key()] = true
 
+	// we bump up against the default 10mb warning limit often
+	dynConf[dynamicconfig.HistorySizeLimitWarn.Key()] = 50*1024*1024
+	dynConf[dynamicconfig.HistorySizeLimitError.Key()] = 100*1024*1024
+
 	// Create and start temporal server
 	server, err := temporal.NewServer(
 		temporal.WithConfig(conf),
