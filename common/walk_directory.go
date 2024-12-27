@@ -2,6 +2,7 @@ package common
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,6 +14,18 @@ import (
 
 // IgnoreFileType represents the type of ignore file with inherent precedence
 type IgnoreFileType int
+
+// IsIgnoreFile returns true if the given filename is an ignore file
+func IsIgnoreFile(name string) bool {
+	fmt.Printf("DEBUG: IsIgnoreFile checking %s against %s, %s, %s\n",
+		name,
+		GitIgnoreType.String(),
+		IgnoreType.String(),
+		SideIgnoreType.String())
+	return name == GitIgnoreType.String() ||
+		name == IgnoreType.String() ||
+		name == SideIgnoreType.String()
+}
 
 const (
 	GitIgnoreType IgnoreFileType = iota
@@ -68,7 +81,7 @@ func collectIgnoreFiles(startDir string, gitRoot string) ([]IgnoreFile, error) {
 
 	for {
 		// Check each type of ignore file in the current directory
-		for _, ignoreType := range []IgnoreFileType{GitIgnoreType, IgnoreType, SideIgnoreType} {
+		for _, ignoreType := range []IgnoreFileType{SideIgnoreType, IgnoreType, GitIgnoreType} {
 			ignoreFile := filepath.Join(dir, ignoreType.String())
 			if _, err := os.Stat(ignoreFile); err == nil {
 				gitIgnore, err := gitignore.NewRepositoryWithFile(dir, ignoreType.String())
@@ -132,9 +145,12 @@ func (im *IgnoreManager) IsIgnored(path string, isDir bool) bool {
 	for _, file := range im.files {
 		match := file.GitIgnore.Absolute(path, isDir)
 		if match != nil {
+			fmt.Printf("DEBUG: IsIgnored path=%s isDir=%v file.Dir=%s file.Type=%v match.Ignore()=%v\n",
+				path, isDir, file.Dir, file.Type, match.Ignore())
 			return match.Ignore()
 		}
 	}
+	fmt.Printf("DEBUG: IsIgnored path=%s isDir=%v no match found\n", path, isDir)
 	return false
 }
 
@@ -167,6 +183,15 @@ func WalkCodeDirectory(baseDirectory string, handleEntry func(string, fs.DirEntr
 		// Skip the .git directory
 		if entry.IsDir() && entry.Name() == ".git" {
 			return filepath.SkipDir
+		}
+
+		// Skip ignore files
+		if !entry.IsDir() {
+			isIgnore := IsIgnoreFile(entry.Name())
+			fmt.Printf("DEBUG: Checking file %s, isIgnore=%v\n", entry.Name(), isIgnore)
+			if isIgnore {
+				return nil
+			}
 		}
 
 		// Check if path should be ignored
