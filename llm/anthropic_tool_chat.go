@@ -11,8 +11,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const AnthropicDefaultModel = "claude-3-sonnet-20240229"
-const AnthropicDefaultLongContextModel = "claude-3-opus-20240229"
+const AnthropicDefaultModel = anthropic.ModelClaude3_5SonnetLatest
+const AnthropicDefaultLongContextModel = anthropic.ModelClaude3_5SonnetLatest
 const AnthropicApiKeySecretName = "ANTHROPIC_API_KEY"
 
 type AnthropicToolChat struct{}
@@ -52,19 +52,21 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 	var finalMessage anthropic.Message
 	for stream.Next() {
 		event := stream.Current()
+		log.Trace().Interface("event", event).Msg("Received streamed event from Anthropic API")
+
 		err := finalMessage.Accumulate(event)
 		if err != nil {
 			return nil, fmt.Errorf("failed to accumulate message: %w", err)
 		}
 
-		delta, err := anthropicToChatMessageDelta(event)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert delta: %w", err)
-		}
-
-		if delta != nil {
-			log.Trace().Interface("delta", delta).Msg("Received delta from Anthropic API")
-			deltaChan <- *delta
+		switch event := event.AsUnion().(type) {
+		case anthropic.ContentBlockStartEvent:
+			deltaChan <- anthropicContentStartToChatMessageDelta(event.ContentBlock)
+		case anthropic.ContentBlockDeltaEvent:
+			if len(finalMessage.Content) == 0 {
+				return nil, fmt.Errorf("anthropic tool chat failure: received event of type %s but there was no content block", event.Type)
+			}
+			deltaChan <- anthropicToChatMessageDelta(event.Delta)
 		}
 	}
 
@@ -78,6 +80,46 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 	}
 
 	return response, nil
+}
+
+func anthropicToChatMessageDelta(eventDelta anthropic.ContentBlockDeltaEventDelta) ChatMessageDelta {
+	outDelta := ChatMessageDelta{Role: ChatMessageRoleAssistant}
+
+	switch delta := eventDelta.AsUnion().(type) {
+	case anthropic.TextDelta:
+		outDelta.Content = delta.Text
+	case anthropic.InputJSONDelta:
+		outDelta.ToolCalls = append(outDelta.ToolCalls, ToolCall{
+			Arguments: delta.PartialJSON,
+		})
+	default:
+		panic(fmt.Sprintf("unsupported delta type: %v", eventDelta.Type))
+	}
+
+	return outDelta
+}
+
+func anthropicContentStartToChatMessageDelta(contentBlock anthropic.ContentBlockStartEventContentBlock) ChatMessageDelta {
+	switch contentBlock.Type {
+	case "text":
+		return ChatMessageDelta{
+			Role:    ChatMessageRoleAssistant,
+			Content: contentBlock.Text,
+		}
+	case "tool_use":
+		return ChatMessageDelta{
+			Role: ChatMessageRoleAssistant,
+			ToolCalls: []ToolCall{
+				{
+					Id:        contentBlock.ID,
+					Name:      contentBlock.Name,
+					Arguments: string(contentBlock.Input),
+				},
+			},
+		}
+	default:
+		panic(fmt.Sprintf("unsupported content block type: %s", contentBlock.Type))
+	}
 }
 
 func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam, error) {
@@ -137,25 +179,6 @@ func anthropicFromTools(tools []*Tool) ([]anthropic.ToolParam, error) {
 		})
 	}
 	return result, nil
-}
-
-func anthropicToChatMessageDelta(event anthropic.MessageStreamEvent) (*ChatMessageDelta, error) {
-	switch e := event.AsUnion().(type) {
-	case *anthropic.ContentBlockDeltaEvent:
-		return &ChatMessageDelta{
-			Content: e.Delta.Text,
-		}, nil
-	case *anthropic.ContentBlockStartEvent:
-		return &ChatMessageDelta{
-			ToolCalls: []ToolCall{{
-				Name:      e.ContentBlock.Name,
-				Arguments: "",
-			}},
-		}, nil
-	case *anthropic.ContentBlockStopEvent:
-		// Handle tool call completion if needed
-	}
-	return nil, nil
 }
 
 func anthropicToChatMessageResponse(message anthropic.Message) (*ChatMessageResponse, error) {

@@ -3,11 +3,16 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"sidekick/common"
 	"sidekick/secret_manager"
+	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/invopop/jsonschema"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -118,4 +123,99 @@ func TestAnthropicToChatMessageResponse(t *testing.T) {
 		OutputTokens: 50,
 	}, result.Usage)
 	assert.Equal(t, common.AnthropicChatProvider, result.Provider)
+}
+
+type getCurrentWeather struct {
+	Location string `json:"location"`
+	Unit     string `json:"unit" jsonschema:"enum=celsius,fahrenheit"`
+}
+
+func TestAnthropicToolChatIntegration(t *testing.T) {
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
+
+	if os.Getenv("SIDE_INTEGRATION_TEST") == "" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
+	ctx := context.Background()
+	chat := AnthropicToolChat{}
+
+	// Mock tool for testing
+	mockTool := &Tool{
+		Name:        "get_current_weather",
+		Description: "Get the current weather in a given location",
+		Parameters:  (&jsonschema.Reflector{ExpandedStruct: true}).Reflect(&getCurrentWeather{}),
+	}
+
+	options := ToolChatOptions{
+		Params: ToolChatParams{
+			Model: anthropic.ModelClaude_3_Haiku_20240307, // cheapest model for integration testing
+			Messages: []ChatMessage{
+				{Role: ChatMessageRoleUser, Content: "What's the weather like in New York?"},
+			},
+			Tools: []*Tool{mockTool},
+		},
+		Secrets: secret_manager.SecretManagerContainer{
+			SecretManager: &secret_manager.KeyringSecretManager{},
+		},
+	}
+
+	deltaChan := make(chan ChatMessageDelta)
+	var allDeltas []ChatMessageDelta
+
+	go func() {
+		for delta := range deltaChan {
+			allDeltas = append(allDeltas, delta)
+		}
+	}()
+
+	response, err := chat.ChatStream(ctx, options, deltaChan)
+	close(deltaChan)
+
+	if err != nil {
+		t.Fatalf("ChatStream returned an error: %v", err)
+	}
+
+	if response == nil {
+		t.Fatal("ChatStream returned a nil response")
+	}
+
+	// Check that we received deltas
+	if len(allDeltas) == 0 {
+		t.Error("No deltas received")
+	}
+
+	// Check that the response contains content
+	if response.Content == "" {
+		t.Error("Response content is empty")
+	}
+
+	// Check that the response includes a tool call
+	if len(response.ToolCalls) == 0 {
+		t.Error("No tool calls in the response")
+	}
+
+	// Verify tool call
+	toolCall := response.ToolCalls[0]
+	if toolCall.Name != "get_current_weather" {
+		t.Errorf("Expected tool call to 'get_current_weather', got '%s'", toolCall.Name)
+	}
+
+	// Parse tool call arguments
+	var args map[string]string
+	err = json.Unmarshal([]byte(toolCall.Arguments), &args)
+	if err != nil {
+		t.Fatalf("Failed to parse tool call arguments: %v", err)
+	}
+
+	// Check tool call arguments
+	if !strings.Contains(strings.ToLower(response.Content), "new york") {
+		t.Errorf("Expected location to contain 'New York', got '%s'", args["location"])
+	}
+	if args["unit"] != "celsius" && args["unit"] != "fahrenheit" {
+		t.Errorf("Expected unit 'celsius' or 'fahrenheit', got '%s'", args["unit"])
+	}
+
+	t.Logf("Response content: %s", response.Content)
+	t.Logf("Tool call: %+v", toolCall)
 }
