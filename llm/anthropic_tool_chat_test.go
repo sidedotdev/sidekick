@@ -98,7 +98,7 @@ func TestAnthropicFromChatMessages(t *testing.T) {
 	anthropicToolUseBlock := result[2].Content.Value[1].(anthropic.ToolUseBlockParam)
 	assert.Equal(t, anthropic.ToolUseBlockParamTypeToolUse, anthropicToolUseBlock.Type.Value)
 	assert.Equal(t, "search", anthropicToolUseBlock.Name.Value)
-	assert.Equal(t, `{"query": "test"}`, anthropicToolUseBlock.Input.Value.(string))
+	assert.Equal(t, `{"query": "test"}`, string(anthropicToolUseBlock.Input.Value.(json.RawMessage)))
 
 	anthropicToolResultBlock := result[3].Content.Value[0].(anthropic.ToolResultBlockParam)
 	assert.Equal(t, anthropic.ToolResultBlockParamTypeToolResult, anthropicToolResultBlock.Type.Value)
