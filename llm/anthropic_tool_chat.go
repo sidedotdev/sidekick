@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sidekick/common"
 
@@ -140,7 +141,7 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 			}
 		}
 		for _, toolCall := range msg.ToolCalls {
-			toolUseBlock := anthropic.NewToolUseBlockParam(toolCall.Id, toolCall.Name, toolCall.Arguments)
+			toolUseBlock := anthropic.NewToolUseBlockParam(toolCall.Id, toolCall.Name, json.RawMessage(toolCall.Arguments))
 			blocks = append(blocks, toolUseBlock)
 		}
 		result = append(result, anthropic.MessageParam{
