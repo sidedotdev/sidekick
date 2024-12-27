@@ -2,7 +2,6 @@ package llm
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sidekick/common"
 
@@ -141,16 +140,7 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 			}
 		}
 		for _, toolCall := range msg.ToolCalls {
-			/*
-				var args json.Marshaler
-				args = json.RawMessage(toolCall.Arguments)
-				blocks = append(blocks, anthropic.ContentBlockParam{
-					Type:  anthropic.F(anthropic.ContentBlockParamTypeToolUse),
-					Name:  anthropic.F(toolCall.Name),
-					Input: anthropic.F(args.(any)),
-				})
-			*/
-			toolUseBlock := anthropic.NewToolUseBlockParam(toolCall.Id, toolCall.Name, json.RawMessage(toolCall.Arguments))
+			toolUseBlock := anthropic.NewToolUseBlockParam(toolCall.Id, toolCall.Name, toolCall.Arguments)
 			blocks = append(blocks, toolUseBlock)
 		}
 		result = append(result, anthropic.MessageParam{
@@ -176,14 +166,10 @@ func anthropicFromChatMessageRole(role ChatMessageRole) anthropic.MessageParamRo
 func anthropicFromTools(tools []*Tool) ([]anthropic.ToolParam, error) {
 	var result []anthropic.ToolParam
 	for _, tool := range tools {
-		schema, err := json.Marshal(tool.Parameters)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal tool parameters: %w", err)
-		}
 		result = append(result, anthropic.ToolParam{
 			Name:        anthropic.F(tool.Name),
 			Description: anthropic.F(tool.Description),
-			InputSchema: anthropic.F[interface{}](json.RawMessage(schema)),
+			InputSchema: anthropic.F[interface{}](tool.Parameters),
 		})
 	}
 	return result, nil
@@ -195,8 +181,8 @@ func anthropicToChatMessageResponse(message anthropic.Message) (*ChatMessageResp
 			Role:    ChatMessageRoleAssistant,
 			Content: "",
 		},
-		Id:           message.ID,
-		StopReason:   string(message.StopReason),
+		Id:         message.ID,
+		StopReason: string(message.StopReason),
 		StopSequence: message.StopSequence,
 		Usage: Usage{
 			InputTokens:  int(message.Usage.InputTokens),

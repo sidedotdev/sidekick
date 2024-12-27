@@ -98,7 +98,7 @@ func TestAnthropicFromChatMessages(t *testing.T) {
 	anthropicToolUseBlock := result[2].Content.Value[1].(anthropic.ToolUseBlockParam)
 	assert.Equal(t, anthropic.ToolUseBlockParamTypeToolUse, anthropicToolUseBlock.Type.Value)
 	assert.Equal(t, "search", anthropicToolUseBlock.Name.Value)
-	assert.Equal(t, `{"query": "test"}`, string(anthropicToolUseBlock.Input.Value.(json.RawMessage)))
+	assert.Equal(t, `{"query": "test"}`, anthropicToolUseBlock.Input.Value.(string))
 
 	anthropicToolResultBlock := result[3].Content.Value[0].(anthropic.ToolResultBlockParam)
 	assert.Equal(t, anthropic.ToolResultBlockParamTypeToolResult, anthropicToolResultBlock.Type.Value)
@@ -175,7 +175,7 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 		Params: ToolChatParams{
 			Model: anthropic.ModelClaude_3_Haiku_20240307, // cheapest model for integration testing
 			Messages: []ChatMessage{
-				{Role: ChatMessageRoleUser, Content: "What's the weather like in New York?"},
+				{Role: ChatMessageRoleUser, Content: "First say hi. After thatn, then look up what the weather in New York"},
 			},
 			Tools: []*Tool{mockTool},
 		},
@@ -233,7 +233,7 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 	}
 
 	// Check tool call arguments
-	if !strings.Contains(strings.ToLower(response.Content), "new york") {
+	if !strings.Contains(strings.ToLower(args["location"]), "new york") {
 		t.Errorf("Expected location to contain 'New York', got '%s'", args["location"])
 	}
 	if args["unit"] != "celsius" && args["unit"] != "fahrenheit" {
