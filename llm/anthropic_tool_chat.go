@@ -150,7 +150,7 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 					Input: anthropic.F(args.(any)),
 				})
 			*/
-			toolUseBlock := anthropic.NewToolUseBlockParam(msg.ToolCallId, toolCall.Name, json.RawMessage(toolCall.Arguments))
+			toolUseBlock := anthropic.NewToolUseBlockParam(toolCall.Id, toolCall.Name, json.RawMessage(toolCall.Arguments))
 			blocks = append(blocks, toolUseBlock)
 		}
 		result = append(result, anthropic.MessageParam{
