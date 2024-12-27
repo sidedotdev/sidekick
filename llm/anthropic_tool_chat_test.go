@@ -46,6 +46,10 @@ func TestAnthropicChatStream_Unauthorized(t *testing.T) {
 func TestAnthropicFromChatMessages(t *testing.T) {
 	input := []ChatMessage{
 		{
+			Role:    ChatMessageRoleSystem,
+			Content: "System message",
+		},
+		{
 			Role:    ChatMessageRoleUser,
 			Content: "Hello",
 		},
@@ -54,33 +58,53 @@ func TestAnthropicFromChatMessages(t *testing.T) {
 			Content: "Hi there!",
 			ToolCalls: []ToolCall{
 				{
+					Id:        "tool_123",
 					Name:      "search",
 					Arguments: `{"query": "test"}`,
 				},
 			},
 		},
+		{
+			Role:       ChatMessageRoleTool,
+			ToolCallId: "tool_123",
+			Name:       "search",
+			Content:    "Not found: test",
+			IsError:    false,
+		},
 	}
 
 	result, err := anthropicFromChatMessages(input)
 	assert.NoError(t, err)
-	assert.Len(t, result, 2)
+	assert.Len(t, result, 4)
 
 	assert.Equal(t, anthropic.MessageParamRoleUser, result[0].Role.Value)
 	assert.Len(t, result[0].Content.Value, 1)
 	anthropicTextBlock := result[0].Content.Value[0].(anthropic.TextBlockParam)
 	assert.Equal(t, anthropic.TextBlockParamTypeText, anthropicTextBlock.Type.Value)
-	assert.Equal(t, "Hello", anthropicTextBlock.Text.Value)
+	assert.Equal(t, "System message", anthropicTextBlock.Text.Value)
 
-	assert.Equal(t, anthropic.MessageParamRoleAssistant, result[1].Role.Value)
-	assert.Len(t, result[1].Content.Value, 2)
+	assert.Equal(t, anthropic.MessageParamRoleUser, result[1].Role.Value)
+	assert.Len(t, result[1].Content.Value, 1)
 	anthropicTextBlock2 := result[1].Content.Value[0].(anthropic.TextBlockParam)
 	assert.Equal(t, anthropic.TextBlockParamTypeText, anthropicTextBlock2.Type.Value)
-	assert.Equal(t, "Hi there!", anthropicTextBlock2.Text.Value)
+	assert.Equal(t, "Hello", anthropicTextBlock2.Text.Value)
 
-	anthropicToolUseBlock := result[1].Content.Value[1].(anthropic.ToolUseBlockParam)
+	assert.Equal(t, anthropic.MessageParamRoleAssistant, result[2].Role.Value)
+	assert.Len(t, result[2].Content.Value, 2)
+	anthropicTextBlock3 := result[2].Content.Value[0].(anthropic.TextBlockParam)
+	assert.Equal(t, anthropic.TextBlockParamTypeText, anthropicTextBlock3.Type.Value)
+	assert.Equal(t, "Hi there!", anthropicTextBlock3.Text.Value)
+
+	anthropicToolUseBlock := result[2].Content.Value[1].(anthropic.ToolUseBlockParam)
 	assert.Equal(t, anthropic.ToolUseBlockParamTypeToolUse, anthropicToolUseBlock.Type.Value)
 	assert.Equal(t, "search", anthropicToolUseBlock.Name.Value)
 	assert.Equal(t, `{"query": "test"}`, string(anthropicToolUseBlock.Input.Value.(json.RawMessage)))
+
+	anthropicToolResultBlock := result[3].Content.Value[0].(anthropic.ToolResultBlockParam)
+	assert.Equal(t, anthropic.ToolResultBlockParamTypeToolResult, anthropicToolResultBlock.Type.Value)
+	assert.Equal(t, "Not found: test", anthropicToolResultBlock.Content.Value[0].(anthropic.TextBlockParam).Text.Value)
+	assert.Equal(t, "tool_123", anthropicToolResultBlock.ToolUseID.Value)
+	assert.Equal(t, false, anthropicToolResultBlock.IsError.Value)
 }
 
 func TestAnthropicToChatMessageResponse(t *testing.T) {

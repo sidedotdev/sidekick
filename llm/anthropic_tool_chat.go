@@ -134,7 +134,11 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 		var blocks []anthropic.ContentBlockParamUnion
 
 		if msg.Content != "" {
-			blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
+			if msg.Role == ChatMessageRoleTool {
+				blocks = append(blocks, anthropic.NewToolResultBlock(msg.ToolCallId, msg.Content, msg.IsError))
+			} else {
+				blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
+			}
 		}
 		for _, toolCall := range msg.ToolCalls {
 			/*
@@ -159,10 +163,8 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 
 func anthropicFromChatMessageRole(role ChatMessageRole) anthropic.MessageParamRole {
 	switch role {
-	case ChatMessageRoleSystem:
-		// anthropic doesn't have a system role
-		return anthropic.MessageParamRoleAssistant
-	case ChatMessageRoleUser:
+	case ChatMessageRoleSystem, ChatMessageRoleUser, ChatMessageRoleTool:
+		// anthropic doesn't have a system role nor a tool role
 		return anthropic.MessageParamRoleUser
 	case ChatMessageRoleAssistant:
 		return anthropic.MessageParamRoleAssistant
@@ -193,8 +195,9 @@ func anthropicToChatMessageResponse(message anthropic.Message) (*ChatMessageResp
 			Role:    ChatMessageRoleAssistant,
 			Content: "",
 		},
-		Id:         message.ID,
-		StopReason: string(message.StopReason),
+		Id:           message.ID,
+		StopReason:   string(message.StopReason),
+		StopSequence: message.StopSequence,
 		Usage: Usage{
 			InputTokens:  int(message.Usage.InputTokens),
 			OutputTokens: int(message.Usage.OutputTokens),
@@ -209,6 +212,7 @@ func anthropicToChatMessageResponse(message anthropic.Message) (*ChatMessageResp
 			response.Content += block.Text
 		case anthropic.ContentBlockTypeToolUse:
 			response.ToolCalls = append(response.ToolCalls, ToolCall{
+				Id:        block.ID,
 				Name:      block.Name,
 				Arguments: string(block.Input),
 			})
