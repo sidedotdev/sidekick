@@ -42,11 +42,17 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 		model = AnthropicDefaultModel
 	}
 
+	var temperature float32 = defaultTemperature
+	if options.Params.Temperature != nil {
+		temperature = *options.Params.Temperature
+	}
+
 	stream := client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
-		Model:     anthropic.F(model),
-		MaxTokens: anthropic.Int(1024),
-		Messages:  anthropic.F(messages),
-		Tools:     anthropic.F(tools),
+		Temperature: anthropic.F(float64(temperature)),
+		Model:       anthropic.F(model),
+		MaxTokens:   anthropic.Int(4000),
+		Messages:    anthropic.F(messages),
+		Tools:       anthropic.F(tools),
 	})
 
 	var finalMessage anthropic.Message
