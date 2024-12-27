@@ -81,12 +81,12 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 func getToolChatter(provider llm.ToolChatProvider, model string) (llm.ToolChatter, error) {
 	switch provider {
 	case llm.UnspecifiedToolChatProvider:
-		if strings.HasPrefix(model, "gpt") {
+		if strings.HasPrefix(model, "gpt") || strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "o3") {
 			return llm.OpenaiToolChat{}, nil
 		}
 
 		if strings.HasPrefix(model, "claude-") {
-			return llm.OldAnthropicToolChat{}, nil
+			return llm.AnthropicToolChat{}, nil
 		}
 
 		if model == "" {
@@ -98,7 +98,7 @@ func getToolChatter(provider llm.ToolChatProvider, model string) (llm.ToolChatte
 	case llm.OpenaiToolChatProvider:
 		return llm.OpenaiToolChat{}, nil
 	case llm.AnthropicToolChatProvider:
-		return llm.OldAnthropicToolChat{}, nil
+		return llm.AnthropicToolChat{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported tool chat provider: %s", provider)
 	}
