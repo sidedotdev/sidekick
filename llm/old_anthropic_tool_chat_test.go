@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAnthropicToChatMessageDelta(t *testing.T) {
+func TestOldAnthropicToChatMessageDelta(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    anthropic.MessageStreamDelta

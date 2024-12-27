@@ -86,7 +86,7 @@ func getToolChatter(provider llm.ToolChatProvider, model string) (llm.ToolChatte
 		}
 
 		if strings.HasPrefix(model, "claude-") {
-			return llm.AnthropicToolChat{}, nil
+			return llm.OldAnthropicToolChat{}, nil
 		}
 
 		if model == "" {
@@ -98,7 +98,7 @@ func getToolChatter(provider llm.ToolChatProvider, model string) (llm.ToolChatte
 	case llm.OpenaiToolChatProvider:
 		return llm.OpenaiToolChat{}, nil
 	case llm.AnthropicToolChatProvider:
-		return llm.AnthropicToolChat{}, nil
+		return llm.OldAnthropicToolChat{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported tool chat provider: %s", provider)
 	}
