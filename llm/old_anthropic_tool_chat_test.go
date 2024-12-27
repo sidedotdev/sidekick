@@ -64,7 +64,7 @@ func TestOldAnthropicToChatMessageDelta(t *testing.T) {
 	}
 }
 
-func TestAnthropicToChatMessageResponse(t *testing.T) {
+func TestOldAnthropicToChatMessageResponse(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    anthropic.MessageResponse
@@ -188,7 +188,7 @@ func TestAnthropicToChatMessageResponse(t *testing.T) {
 	}
 }
 
-func TestAnthropicFromChatMessages(t *testing.T) {
+func TestOldAnthropicFromChatMessages(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    []ChatMessage
