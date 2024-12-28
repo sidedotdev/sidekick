@@ -3,8 +3,10 @@ package nats
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sidekick/common"
+	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/rs/zerolog"
@@ -17,25 +19,30 @@ type Server struct {
 	log        zerolog.Logger
 }
 
+var SideAppEnv = os.Getenv("SIDE_APP_ENV")
+
 // New creates a new NATS server instance configured for Sidekick
 func New() (*Server, error) {
 	dataHome, err := common.GetSidekickDataHome()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Sidekick data home: %w", err)
 	}
-
-	// Create JetStream directory
-	jetstreamDir := filepath.Join(dataHome, "nats-jetstream")
+	devMode := SideAppEnv == "development"
 
 	// Configure NATS server
 	opts := &server.Options{
-		JetStream:       true,
-		JetStreamDomain: "sidekick_embedded",
-		StoreDir:        jetstreamDir,
-		Port:            -1,                            // Disable client connections
-		HTTPPort:        -1,                            // Disable monitoring
-		Cluster:         server.ClusterOpts{Port: -1},  // Disable clustering
-		LeafNode:        server.LeafNodeOpts{Port: -1}, // Disable leaf nodes
+		ServerName: "sidekick_embedded_nats_server",
+
+		JetStream:          true,
+		JetStreamDomain:    "sidekick_embedded",
+		StoreDir:           filepath.Join(dataHome, "nats-jetstream"),
+		JetStreamMaxMemory: 1024 * 1024 * 1024,      // 1GB
+		JetStreamMaxStore:  20 * 1024 * 1024 * 1024, // 20GB
+		Port:               28855,
+
+		// in development, we have multiple processes so can't rely on
+		// in-process communication only
+		DontListen: !devMode,
 	}
 
 	// Create NATS server instance
@@ -45,42 +52,36 @@ func New() (*Server, error) {
 	}
 
 	// Configure server logging
-	natsServer.SetLogger(newNATSLogger(), true, true)
+	natsServer.SetLogger(newNATSLogger(), false, false)
 
 	return &Server{
 		natsServer: natsServer,
-		log:        log.With().Str("component", "nats").Logger(),
+		log:        log.With().Str("component", "nats-server").Logger(),
 	}, nil
 }
 
 // Start starts the NATS server
 func (s *Server) Start(ctx context.Context) error {
-	s.log.Info().Msg("Starting NATS server...")
-
 	s.natsServer.Start()
 
 	// Wait for server to be ready
-	if !s.natsServer.ReadyForConnections(4) {
+	if !s.natsServer.ReadyForConnections(5 * time.Second) {
 		return fmt.Errorf("NATS server failed to start within timeout")
 	}
 
-	s.log.Info().Msg("NATS server started successfully")
 	return nil
 }
 
 // Stop gracefully stops the NATS server
 func (s *Server) Stop() error {
-	s.log.Info().Msg("Stopping NATS server...")
-	s.natsServer.Shutdown()
-	s.natsServer.WaitForShutdown()
-	s.log.Info().Msg("NATS server stopped")
+	s.natsServer.LameDuckShutdown()
 	return nil
 }
 
 // newNATSLogger creates a NATS-compatible logger that forwards to zerolog
 func newNATSLogger() server.Logger {
 	return &natsLogger{
-		log: log.With().Str("component", "nats").Logger(),
+		log: log.With().Str("component", "nats").Logger().Level(zerolog.WarnLevel),
 	}
 }
 
