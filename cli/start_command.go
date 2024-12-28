@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sidekick/api"
 	"sidekick/common"
+	"sidekick/nats"
 	"sidekick/worker"
 	"sync"
 	"syscall"
@@ -327,6 +328,7 @@ func handleStartCommand(args []string) {
 	server := false
 	worker := false
 	temporal := false
+	natsServer := false
 
 	// Parse optional args: `server`, `worker`, `temporal`
 	for _, arg := range args {
@@ -337,13 +339,16 @@ func handleStartCommand(args []string) {
 			worker = true
 		case "temporal":
 			temporal = true
+		case "nats":
+			natsServer = true
 		}
 	}
 
-	if !server && !worker && !temporal {
+	if !server && !worker && !temporal && !natsServer {
 		server = true
 		worker = true
 		temporal = true
+		natsServer = true
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -394,6 +399,31 @@ func handleStartCommand(args []string) {
 			<-ctx.Done()
 			log.Info().Msg("Stopping worker...")
 			w.Stop()
+		}()
+	}
+
+	if natsServer {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			log.Info().Msg("Starting NATS server...")
+
+			nats, err := nats.New()
+			if err != nil {
+				log.Fatal().Err(err).Msg("Failed to create NATS server")
+			}
+
+			if err := nats.Start(ctx); err != nil {
+				log.Fatal().Err(err).Msg("Failed to start NATS server")
+			}
+
+			// Wait for cancellation
+			<-ctx.Done()
+			log.Info().Msg("Stopping NATS server...")
+
+			if err := nats.Stop(); err != nil {
+				log.Error().Err(err).Msg("Error stopping NATS server")
+			}
 		}()
 	}
 
