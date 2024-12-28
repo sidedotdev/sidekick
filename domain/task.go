@@ -93,6 +93,7 @@ type Task struct {
 	Created     time.Time              `json:"created"`
 	Updated     time.Time              `json:"updated"`
 	FlowOptions map[string]interface{} `json:"flowOptions,omitempty"`
+	StreamId    string                 `json:"streamId,omitempty"`
 }
 
 type AgentType string

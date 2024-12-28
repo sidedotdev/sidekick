@@ -875,53 +875,55 @@ func (ctrl *Controller) TaskChangesWebsocketHandler(c *gin.Context) {
 	}
 	defer conn.Close()
 
+	// Create a new context that's canceled when the WebSocket connection is closed
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
+
 	// Handle disconnection detection in a separate goroutine
 	go func() {
 		for {
 			if _, _, err := conn.NextReader(); err != nil {
 				log.Printf("Client disconnected or error: %v", err)
 				close(clientGone)
+				cancel() // Cancel the context when the client disconnects
 				return
 			}
 		}
 	}()
 
+	taskChan, errChan := ctrl.service.StreamTaskChanges(ctx, workspaceId, lastTaskStreamId)
+
 	for {
 		select {
 		case <-clientGone:
-			// if the client has disconnected, close the connection
-			log.Println("Flow action changes client disconnected")
+			log.Println("Task changes client disconnected")
 			return
-		default:
-			tasks, lastId, err := ctrl.service.GetTaskChanges(context.Background(), workspaceId, lastTaskStreamId, 50, 0)
+		case err := <-errChan:
 			if err != nil {
-				log.Printf("Error getting task changes: %v", err)
+				log.Printf("Error streaming task changes: %v", err)
 				return
 			}
-			if len(tasks) > 0 {
-				taskResponses := make([]TaskResponse, len(tasks))
-				for i, task := range tasks {
-					flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, task.Id)
-
-					if err != nil {
-						log.Printf("Error getting flows for task: %v", err)
-						return
-					}
-					taskResponses[i] = TaskResponse{
-						Task:  task,
-						Flows: flows,
-					}
-				}
-
-				lastTaskStreamId = lastId
-				taskData := map[string]interface{}{
-					"tasks":            taskResponses,
-					"lastTaskStreamId": lastTaskStreamId,
-				}
-				if err := conn.WriteJSON(taskData); err != nil {
-					log.Printf("Error writing tasks to websocket: %v", err)
-					return
-				}
+		case task, ok := <-taskChan:
+			if !ok {
+				log.Println("Task channel closed")
+				return
+			}
+			flows, err := ctrl.service.GetFlowsForTask(ctx, workspaceId, task.Id)
+			if err != nil {
+				log.Printf("Error getting flows for task: %v", err)
+				return
+			}
+			taskResponse := TaskResponse{
+				Task:  task,
+				Flows: flows,
+			}
+			taskData := map[string]interface{}{
+				"tasks":            []TaskResponse{taskResponse},
+				"lastTaskStreamId": task.StreamId,
+			}
+			if err := conn.WriteJSON(taskData); err != nil {
+				log.Printf("Error writing task to websocket: %v", err)
+				return
 			}
 		}
 	}

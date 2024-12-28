@@ -1557,3 +1557,86 @@ func TestGetArchivedTasksHandler(t *testing.T) {
 	assert.Equal(t, float64(1), response["page"])
 	assert.Equal(t, float64(100), response["pageSize"])
 }
+
+func TestTaskChangesWebsocketHandler(t *testing.T) {
+	// Create a test server
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+
+	// Create a mock service
+	mockService := &MockService{}
+
+	taskChan := make(chan domain.Task)
+	errChan := make(chan error)
+
+	mockService.On("StreamTaskChanges", mock.Anything, "workspace1", "$").Return((<-chan domain.Task)(taskChan), (<-chan error)(errChan))
+	mockService.On("GetFlowsForTask", mock.Anything, "workspace1", "task1").Return([]domain.Flow{
+		{Id: "flow1", Title: "Flow 1"},
+	}, nil)
+	mockService.On("GetFlowsForTask", mock.Anything, "workspace1", "task2").Return([]domain.Flow{
+		{Id: "flow2", Title: "Flow 2"},
+	}, nil)
+
+	// Create a controller with the mock service
+	ctrl := &Controller{service: mockService}
+
+	// Set up the route
+	router.GET("/ws/:workspaceId/task-changes", ctrl.TaskChangesWebsocketHandler)
+
+	// Create a test server
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	// Replace "http" with "ws" in the server URL
+	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/workspace1/task-changes"
+
+	// Connect to the WebSocket server
+	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("could not open a ws connection on %s %v", url, err)
+	}
+	defer ws.Close()
+
+	// Send tasks through the channel
+	go func() {
+		taskChan <- domain.Task{Id: "task1", Title: "Task 1", StreamId: "stream_id_1"}
+		taskChan <- domain.Task{Id: "task2", Title: "Task 2", StreamId: "stream_id_2"}
+		close(taskChan)
+	}()
+
+	// Read the responses
+	for i := 0; i < 2; i++ {
+		_, msg, err := ws.ReadMessage()
+		if err != nil {
+			t.Fatalf("could not read message %v", err)
+		}
+
+		// Parse the response
+		var response map[string]interface{}
+		err = json.Unmarshal(msg, &response)
+		if err != nil {
+			t.Fatalf("could not parse message %v", err)
+		}
+
+		// Check the response
+		tasks, ok := response["tasks"].([]interface{})
+		if !ok {
+			t.Fatalf("tasks is not an array")
+		}
+		if len(tasks) != 1 {
+			t.Fatalf("expected 1 task, got %d", len(tasks))
+		}
+
+		lastTaskStreamId, ok := response["lastTaskStreamId"].(string)
+		if !ok {
+			t.Fatalf("lastTaskStreamId is not a string")
+		}
+		expectedStreamId := fmt.Sprintf("stream_id_%d", i+1)
+		if lastTaskStreamId != expectedStreamId {
+			t.Fatalf("expected lastTaskStreamId to be '%s', got '%s'", expectedStreamId, lastTaskStreamId)
+		}
+	}
+
+	// Check the mock expectations
+	mockService.AssertExpectations(t)
+}
