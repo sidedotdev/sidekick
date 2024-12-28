@@ -19,7 +19,6 @@ func (s *Streamer) AddFlowEvent(ctx context.Context, workspaceId string, flowId 
 	if err != nil {
 		return fmt.Errorf("failed to marshal flow event: %w", err)
 	}
-	fmt.Printf("adding flow event: %s\n", data)
 
 	subject := fmt.Sprintf("flow_events.%s.%s", workspaceId, flowEvent.GetParentId())
 	_, err = s.js.Publish(ctx, subject, data)
@@ -107,7 +106,6 @@ func (s *Streamer) GetFlowEvents(ctx context.Context, workspaceId string, stream
 
 		var lastSequence uint64
 		for msg := range msgs.Messages() {
-			fmt.Printf("got flow event message: %s\n", string(msg.Data()))
 			event, err := domain.UnmarshalFlowEvent(msg.Data())
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to unmarshal flow event: %w", err)
