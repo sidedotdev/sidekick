@@ -29,12 +29,13 @@ func New() (*Server, error) {
 
 	// Configure NATS server
 	opts := &server.Options{
-		JetStream: true,
-		StoreDir:  jetstreamDir,
-		Port:      -1,                            // Disable client connections
-		HTTPPort:  -1,                            // Disable monitoring
-		Cluster:   server.ClusterOpts{Port: -1},  // Disable clustering
-		LeafNode:  server.LeafNodeOpts{Port: -1}, // Disable leaf nodes
+		JetStream:       true,
+		JetStreamDomain: "sidekick_embedded",
+		StoreDir:        jetstreamDir,
+		Port:            -1,                            // Disable client connections
+		HTTPPort:        -1,                            // Disable monitoring
+		Cluster:         server.ClusterOpts{Port: -1},  // Disable clustering
+		LeafNode:        server.LeafNodeOpts{Port: -1}, // Disable leaf nodes
 	}
 
 	// Create NATS server instance
@@ -56,9 +57,7 @@ func New() (*Server, error) {
 func (s *Server) Start(ctx context.Context) error {
 	s.log.Info().Msg("Starting NATS server...")
 
-	if err := s.natsServer.Start(); err != nil {
-		return fmt.Errorf("failed to start NATS server: %w", err)
-	}
+	s.natsServer.Start()
 
 	// Wait for server to be ready
 	if !s.natsServer.ReadyForConnections(4) {
@@ -73,6 +72,7 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) Stop() error {
 	s.log.Info().Msg("Stopping NATS server...")
 	s.natsServer.Shutdown()
+	s.natsServer.WaitForShutdown()
 	s.log.Info().Msg("NATS server stopped")
 	return nil
 }
