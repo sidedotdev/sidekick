@@ -3,6 +3,7 @@ package common
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -40,7 +41,140 @@ func collectWalkedFiles(t *testing.T, baseDir string) []string {
 		return nil
 	})
 	require.NoError(t, err)
+	sort.Strings(paths)
 	return paths
+}
+
+func TestWalkCodeDirectory_MultiLevelIgnores(t *testing.T) {
+	tempDir := t.TempDir()
+	setupGitRepo(t, tempDir)
+
+	// Create nested directory structure
+	createDir(t, filepath.Join(tempDir, "level1"))
+	createDir(t, filepath.Join(tempDir, "level1/level2"))
+	createDir(t, filepath.Join(tempDir, "level1/level2/level3"))
+
+	// Create files at each level
+	createFile(t, filepath.Join(tempDir, "root.txt"), "root")
+	createFile(t, filepath.Join(tempDir, "level1/a.txt"), "a")
+	createFile(t, filepath.Join(tempDir, "level1/level2/b.txt"), "b")
+	createFile(t, filepath.Join(tempDir, "level1/level2/level3/c.txt"), "c")
+
+	// Create ignore files at different levels
+	createFile(t, filepath.Join(tempDir, ".gitignore"), "*.log")
+	createFile(t, filepath.Join(tempDir, ".sideignore"), ".gitignore\n.ignore\n.sideignore")
+	createFile(t, filepath.Join(tempDir, "level1/.ignore"), "*.txt")
+	createFile(t, filepath.Join(tempDir, "level1/level2/.sideignore"), "!b.txt")
+
+	// Create some files that should be ignored
+	createFile(t, filepath.Join(tempDir, "root.log"), "log")
+	createFile(t, filepath.Join(tempDir, "level1/a.log"), "log")
+
+	paths := collectWalkedFiles(t, tempDir)
+	assert.Equal(t, []string{
+		"level1",
+		"level1/level2",
+		"level1/level2/b.txt",
+		"level1/level2/level3",
+		"root.txt",
+	}, paths)
+}
+
+func TestWalkCodeDirectory_UnignorePatterns(t *testing.T) {
+	tempDir := t.TempDir()
+	setupGitRepo(t, tempDir)
+
+	// Create test files
+	createFile(t, filepath.Join(tempDir, "a.txt"), "a")
+	createFile(t, filepath.Join(tempDir, "b.txt"), "b")
+	createFile(t, filepath.Join(tempDir, "important.txt"), "important")
+	createDir(t, filepath.Join(tempDir, "docs"))
+	createFile(t, filepath.Join(tempDir, "docs/doc1.txt"), "doc1")
+	createFile(t, filepath.Join(tempDir, "docs/important.txt"), "important doc")
+
+	// Create ignore files with un-ignore patterns
+	createFile(t, filepath.Join(tempDir, ".gitignore"), "*.txt")
+	createFile(t, filepath.Join(tempDir, ".sideignore"), `
+.gitignore
+.ignore
+.sideignore
+!important.txt
+docs/important.txt`)
+
+	paths := collectWalkedFiles(t, tempDir)
+	assert.Equal(t, []string{
+		"docs",
+		"important.txt",
+	}, paths)
+}
+
+func TestWalkCodeDirectory_MixedScenarios(t *testing.T) {
+	tempDir := t.TempDir()
+	setupGitRepo(t, tempDir)
+
+	// Create complex directory structure
+	createDir(t, filepath.Join(tempDir, "src"))
+	createDir(t, filepath.Join(tempDir, "src/pkg"))
+	createDir(t, filepath.Join(tempDir, "tests"))
+
+	// Create various files
+	createFile(t, filepath.Join(tempDir, "src/main.go"), "main")
+	createFile(t, filepath.Join(tempDir, "src/main_test.go"), "test")
+	createFile(t, filepath.Join(tempDir, "src/pkg/util.go"), "util")
+	createFile(t, filepath.Join(tempDir, "src/pkg/util_test.go"), "util test")
+	createFile(t, filepath.Join(tempDir, "tests/integration.go"), "integration")
+	createFile(t, filepath.Join(tempDir, "tests/bench.go"), "bench")
+
+	// Create different types of ignore files
+	createFile(t, filepath.Join(tempDir, ".gitignore"), `
+*.log
+*.tmp`)
+	createFile(t, filepath.Join(tempDir, ".ignore"), `
+.gitignore
+.ignore
+.sideignore
+tests/
+*_test.go`)
+	createFile(t, filepath.Join(tempDir, "src/.sideignore"), `
+!*_test.go
+bench.go`)
+
+	paths := collectWalkedFiles(t, tempDir)
+	assert.Equal(t, []string{
+		"src",
+		"src/main.go",
+		"src/main_test.go",
+		"src/pkg",
+		"src/pkg/util.go",
+		"src/pkg/util_test.go",
+	}, paths)
+}
+
+func TestWalkCodeDirectory_NoGitRepo(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create files and directories
+	createDir(t, filepath.Join(tempDir, "code"))
+	createFile(t, filepath.Join(tempDir, "code/file1.go"), "file1")
+	createFile(t, filepath.Join(tempDir, "code/file2.go"), "file2")
+	createFile(t, filepath.Join(tempDir, "code/temp.log"), "log")
+
+	// Create ignore file in the base directory
+	createFile(t, filepath.Join(tempDir, "code/.ignore"), "*.log")
+
+	paths := collectWalkedFiles(t, filepath.Join(tempDir, "code"))
+	assert.Equal(t, []string{
+		".ignore",
+		"file1.go",
+		"file2.go",
+	}, paths)
+
+	// Verify that ignore files in parent directories are still processed
+	createFile(t, filepath.Join(tempDir, ".ignore"), "*.go")
+	paths = collectWalkedFiles(t, filepath.Join(tempDir, "code"))
+	assert.Equal(t, []string{
+		".ignore",
+	}, paths)
 }
 
 func TestFindGitRoot(t *testing.T) {
@@ -83,6 +217,7 @@ func TestWalkCodeDirectory_SingleIgnoreFile(t *testing.T) {
 				"sub/file.go",
 			},
 			expected: []string{
+				".gitignore",
 				"file.go",
 				"sub",
 				"sub/file.go",
@@ -99,6 +234,7 @@ func TestWalkCodeDirectory_SingleIgnoreFile(t *testing.T) {
 				"sub/file.go",
 			},
 			expected: []string{
+				".ignore",
 				"file.txt",
 				"sub",
 				"sub/file.txt",
@@ -115,6 +251,7 @@ func TestWalkCodeDirectory_SingleIgnoreFile(t *testing.T) {
 				"sub/file.go",
 			},
 			expected: []string{
+				".sideignore",
 				"file.go",
 				"file.txt",
 			},
@@ -156,10 +293,11 @@ func TestWalkCodeDirectory_IgnoreFilePrecedence(t *testing.T) {
 	createDir(t, subSubDir)
 
 	// Create ignore files at different levels
+	createFile(t, filepath.Join(tmpDir, ".sideignore"), ".gitignore\n.ignore\n.sideignore")
 	createFile(t, filepath.Join(tmpDir, ".gitignore"), "*.txt\n")
 	createFile(t, filepath.Join(subDir, ".gitignore"), "!important.txt\n")
 	createFile(t, filepath.Join(subDir, ".ignore"), "*.go\n")
-	createFile(t, filepath.Join(subSubDir, ".sideignore"), "!special.go\n")
+	createFile(t, filepath.Join(subSubDir, ".sideignore"), "!special.go\n.sideignore\n")
 
 	// Create test files
 	files := []string{

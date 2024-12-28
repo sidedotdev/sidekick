@@ -15,18 +15,6 @@ import (
 // IgnoreFileType represents the type of ignore file with inherent precedence
 type IgnoreFileType int
 
-// IsIgnoreFile returns true if the given filename is an ignore file
-func IsIgnoreFile(name string) bool {
-	fmt.Printf("DEBUG: IsIgnoreFile checking %s against %s, %s, %s\n",
-		name,
-		GitIgnoreType.String(),
-		IgnoreType.String(),
-		SideIgnoreType.String())
-	return name == GitIgnoreType.String() ||
-		name == IgnoreType.String() ||
-		name == SideIgnoreType.String()
-}
-
 const (
 	GitIgnoreType IgnoreFileType = iota
 	IgnoreType
@@ -74,8 +62,23 @@ func findGitRoot(startDir string) (string, error) {
 	}
 }
 
-// collectIgnoreFiles finds all ignore files from startDir up to and including gitRoot
-func collectIgnoreFiles(startDir string, gitRoot string) ([]IgnoreFile, error) {
+// sortIgnoreFiles sorts ignore files by precedence: directory depth (deeper first), then type (higher type first)
+func sortIgnoreFiles(files []IgnoreFile) {
+	sort.Slice(files, func(i, j int) bool {
+		// Compare directory depths
+		iDepth := len(strings.Split(files[i].Dir, string(filepath.Separator)))
+		jDepth := len(strings.Split(files[j].Dir, string(filepath.Separator)))
+		if iDepth != jDepth {
+			return iDepth > jDepth
+		}
+		// If same depth, compare types
+		return files[i].Type > files[j].Type
+	})
+}
+
+// collectAncestorIgnoreFiles finds all ignore files from startDir up to and
+// including gitRoot (or filesystem root if not in git repo)
+func collectAncestorIgnoreFiles(startDir string) ([]IgnoreFile, error) {
 	var files []IgnoreFile
 	dir := startDir
 
@@ -97,7 +100,7 @@ func collectIgnoreFiles(startDir string, gitRoot string) ([]IgnoreFile, error) {
 		}
 
 		// Stop if we've reached the git root
-		if dir == gitRoot {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 			break
 		}
 
@@ -109,30 +112,31 @@ func collectIgnoreFiles(startDir string, gitRoot string) ([]IgnoreFile, error) {
 		dir = parent
 	}
 
-	// Sort files by precedence: directory depth (deeper first), then type (higher type first)
-	sort.Slice(files, func(i, j int) bool {
-		// Compare directory depths
-		iDepth := len(strings.Split(files[i].Dir, string(filepath.Separator)))
-		jDepth := len(strings.Split(files[j].Dir, string(filepath.Separator)))
-		if iDepth != jDepth {
-			return iDepth > jDepth
-		}
-		// If same depth, compare types
-		return files[i].Type > files[j].Type
-	})
-
+	sortIgnoreFiles(files)
 	return files, nil
+}
+
+// AddIgnoreFile adds a new ignore file and maintains the precedence order
+func (im *IgnoreManager) AddIgnoreFile(ignoreType IgnoreFileType, dir string) error {
+	ignoreFile := filepath.Join(dir, ignoreType.String())
+	if _, err := os.Stat(ignoreFile); err == nil {
+		gitIgnore, err := gitignore.NewRepositoryWithFile(dir, ignoreType.String())
+		if err != nil {
+			return err
+		}
+		im.files = append(im.files, IgnoreFile{
+			Type:      ignoreType,
+			Dir:       dir,
+			GitIgnore: gitIgnore,
+		})
+		sortIgnoreFiles(im.files)
+	}
+	return nil
 }
 
 // NewIgnoreManager creates a new IgnoreManager for the given directory
 func NewIgnoreManager(baseDirectory string) (*IgnoreManager, error) {
-	gitRoot, err := findGitRoot(baseDirectory)
-	if err != nil {
-		// If not in a git repo, only collect ignore files from baseDirectory
-		gitRoot = baseDirectory
-	}
-
-	files, err := collectIgnoreFiles(baseDirectory, gitRoot)
+	files, err := collectAncestorIgnoreFiles(baseDirectory)
 	if err != nil {
 		return nil, err
 	}
@@ -185,21 +189,21 @@ func WalkCodeDirectory(baseDirectory string, handleEntry func(string, fs.DirEntr
 			return filepath.SkipDir
 		}
 
-		// Skip ignore files
-		if !entry.IsDir() {
-			isIgnore := IsIgnoreFile(entry.Name())
-			fmt.Printf("DEBUG: Checking file %s, isIgnore=%v\n", entry.Name(), isIgnore)
-			if isIgnore {
-				return nil
-			}
-		}
-
 		// Check if path should be ignored
 		if ignoreManager.IsIgnored(path, entry.IsDir()) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
+		}
+
+		// Check for ignore files in current directory
+		if entry.IsDir() {
+			for _, ignoreType := range []IgnoreFileType{SideIgnoreType, IgnoreType, GitIgnoreType} {
+				if err := ignoreManager.AddIgnoreFile(ignoreType, path); err != nil {
+					return err
+				}
+			}
 		}
 
 		return handleEntry(path, entry)
