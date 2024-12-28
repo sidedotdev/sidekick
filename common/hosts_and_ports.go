@@ -69,3 +69,29 @@ func GetTemporalServerPort() int {
 func GetTemporalServerHostPort() string {
 	return fmt.Sprintf("%s:%d", GetTemporalServerHost(), GetTemporalServerPort())
 }
+
+// NOTE: using "localhost" will not work as we bind via IP
+const defaultNatsServerHost = "127.0.0.1"
+
+func GetNatsServerHost() string {
+	natsServerHost := os.Getenv("SIDE_NATS_SERVER_HOST")
+	if natsServerHost == "" {
+		natsServerHost = defaultNatsServerHost
+	}
+	return natsServerHost
+}
+
+const defaultNatsServerPort = 28855
+
+func GetNatsServerPort() int {
+	natsServerPort := os.Getenv("SIDE_NATS_SERVER_PORT")
+	if natsServerPort == "" {
+		return defaultNatsServerPort
+	}
+
+	intPort, err := strconv.Atoi(natsServerPort)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to parse NATS server port: %s", natsServerPort))
+	}
+	return intPort
+}
