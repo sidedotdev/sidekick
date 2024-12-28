@@ -57,52 +57,91 @@ func (s *StreamerTestSuite) TearDownSuite() {
 
 func (s *StreamerTestSuite) TestTaskStreaming() {
 	s.T().Parallel()
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	workspaceId := "test-workspace"
 
-	// Create test task
-	task := domain.Task{
-		WorkspaceId: workspaceId,
-		Id:          "test-task-1",
-		Title:       "Test Task",
-		Description: "Test Description",
-		Status:      domain.TaskStatusToDo,
-		AgentType:   domain.AgentTypeLLM,
-		FlowType:    domain.FlowTypeBasicDev,
-		Created:     time.Now(),
-		Updated:     time.Now(),
-		FlowOptions: map[string]interface{}{"test": "value"},
+	// Create test tasks
+	tasks := []domain.Task{
+		{
+			WorkspaceId: workspaceId,
+			Id:          "test-task-1",
+			Title:       "Test Task 1",
+			Description: "Test Description 1",
+			Status:      domain.TaskStatusToDo,
+			AgentType:   domain.AgentTypeLLM,
+			FlowType:    domain.FlowTypeBasicDev,
+			Created:     time.Now(),
+			Updated:     time.Now(),
+			FlowOptions: map[string]interface{}{"test": "value1"},
+		},
+		{
+			WorkspaceId: workspaceId,
+			Id:          "test-task-2",
+			Title:       "Test Task 2",
+			Description: "Test Description 2",
+			Status:      domain.TaskStatusInProgress,
+			AgentType:   domain.AgentTypeLLM,
+			FlowType:    domain.FlowTypeBasicDev,
+			Created:     time.Now(),
+			Updated:     time.Now(),
+			FlowOptions: map[string]interface{}{"test": "value2"},
+		},
 	}
 
-	// Test adding task change
-	err := s.streamer.AddTaskChange(ctx, task)
-	s.Require().NoError(err)
+	// Test StreamTaskChanges
+	taskChan, errChan := s.streamer.StreamTaskChanges(ctx, workspaceId, "0")
+
+	// Add task changes in a separate goroutine
+	go func() {
+		for _, task := range tasks {
+			err := s.streamer.AddTaskChange(ctx, task)
+			s.Require().NoError(err)
+		}
+	}()
+
+	// Collect streamed tasks
+	var streamedTasks []domain.Task
+	for i := 0; i < len(tasks); i++ {
+		select {
+		case task := <-taskChan:
+			streamedTasks = append(streamedTasks, task)
+		case err := <-errChan:
+			s.Require().NoError(err)
+		case <-ctx.Done():
+			s.Fail("Context deadline exceeded")
+		}
+	}
+
+	// Verify streamed tasks
+	s.Require().Len(streamedTasks, len(tasks))
+	for i, task := range tasks {
+		s.Equal(task.Id, streamedTasks[i].Id)
+		s.Equal(task.Title, streamedTasks[i].Title)
+		s.Equal(task.Description, streamedTasks[i].Description)
+		s.Equal(task.Status, streamedTasks[i].Status)
+		s.Equal(task.AgentType, streamedTasks[i].AgentType)
+		s.Equal(task.FlowType, streamedTasks[i].FlowType)
+		s.Equal(task.FlowOptions, streamedTasks[i].FlowOptions)
+	}
 
 	// Test getting task changes
-	tasks, lastId, err := s.streamer.GetTaskChanges(ctx, workspaceId, "0", 10, time.Second)
+	fetchedTasks, lastId, err := s.streamer.GetTaskChanges(ctx, workspaceId, "0", 10, time.Second)
 	s.Require().NoError(err)
-	s.Require().Len(tasks, 1)
-	s.Equal(task.Id, tasks[0].Id)
-	s.Equal(task.Title, tasks[0].Title)
-	s.Equal(task.Description, tasks[0].Description)
-	s.Equal(task.Status, tasks[0].Status)
-
-	s.Equal(task.AgentType, tasks[0].AgentType)
-	s.Equal(task.FlowType, tasks[0].FlowType)
-	s.Equal(task.FlowOptions, tasks[0].FlowOptions)
+	s.Require().Len(fetchedTasks, len(tasks))
 	s.NotEmpty(lastId)
 
 	// Test getting changes with no new messages
-	tasks, newLastId, err := s.streamer.GetTaskChanges(ctx, workspaceId, lastId, 10, time.Millisecond)
+	noNewTasks, newLastId, err := s.streamer.GetTaskChanges(ctx, workspaceId, lastId, 10, time.Millisecond)
 	s.Require().NoError(err)
-	s.Empty(tasks)
+	s.Empty(noNewTasks)
 	s.Equal(lastId, newLastId)
 
-	// test getting changes with default continue message id, i.e. only new messages and hence no messages returned
+	// Test getting changes with default continue message id
 	time.Sleep(100 * time.Millisecond)
-	tasks, _, err = s.streamer.GetTaskChanges(ctx, workspaceId, "$", 10, time.Millisecond)
+	noNewTasks, _, err = s.streamer.GetTaskChanges(ctx, workspaceId, "$", 10, time.Millisecond)
 	s.Require().NoError(err)
-	s.Empty(tasks)
+	s.Empty(noNewTasks)
 }
 
 func (s *StreamerTestSuite) TestFlowActionStreaming() {
