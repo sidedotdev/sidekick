@@ -868,6 +868,7 @@ func (ctrl *Controller) TaskChangesWebsocketHandler(c *gin.Context) {
 	}
 
 	clientGone := make(chan struct{})
+
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		http.Error(c.Writer, "Could not open websocket connection", http.StatusBadRequest)
@@ -885,7 +886,6 @@ func (ctrl *Controller) TaskChangesWebsocketHandler(c *gin.Context) {
 			if _, _, err := conn.NextReader(); err != nil {
 				log.Printf("Client disconnected or error: %v", err)
 				close(clientGone)
-				cancel() // Cancel the context when the client disconnects
 				return
 			}
 		}

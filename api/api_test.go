@@ -1559,84 +1559,98 @@ func TestGetArchivedTasksHandler(t *testing.T) {
 }
 
 func TestTaskChangesWebsocketHandler(t *testing.T) {
-	// Create a test server
 	gin.SetMode(gin.TestMode)
-	router := gin.New()
+	ctrl := NewMockController(t)
+	db := ctrl.service
+	ctx := context.Background()
 
-	// Create a mock service
-	mockService := &MockService{}
+	workspaceId := "test-workspace-id-" + uuid.New().String()
 
-	taskChan := make(chan domain.Task)
-	errChan := make(chan error)
+	// Persist a workspace so that the identifier is valid
+	workspace := domain.Workspace{Id: workspaceId}
+	err := db.PersistWorkspace(ctx, workspace)
+	assert.NoError(t, err, "Persisting workspace failed")
 
-	mockService.On("StreamTaskChanges", mock.Anything, "workspace1", "$").Return((<-chan domain.Task)(taskChan), (<-chan error)(errChan))
-	mockService.On("GetFlowsForTask", mock.Anything, "workspace1", "task1").Return([]domain.Flow{
-		{Id: "flow1", Title: "Flow 1"},
-	}, nil)
-	mockService.On("GetFlowsForTask", mock.Anything, "workspace1", "task2").Return([]domain.Flow{
-		{Id: "flow2", Title: "Flow 2"},
-	}, nil)
+	// Persist this task before the websocket connection starts
+	task1 := domain.Task{
+		Id:          "task1",
+		WorkspaceId: workspaceId,
+		Title:       "Task 1",
+		Status:      domain.TaskStatusToDo,
+		StreamId:    "stream_id_1",
+	}
+	err = db.PersistTask(ctx, task1)
+	assert.NoError(t, err, "Persisting task 1 failed")
 
-	// Create a controller with the mock service
-	ctrl := &Controller{service: mockService}
+	router := DefineRoutes(ctrl)
 
-	// Set up the route
-	router.GET("/ws/:workspaceId/task-changes", ctrl.TaskChangesWebsocketHandler)
+	s := httptest.NewServer(router)
+	defer s.Close()
 
-	// Create a test server
-	server := httptest.NewServer(router)
-	defer server.Close()
-
-	// Replace "http" with "ws" in the server URL
-	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/workspace1/task-changes"
+	// Replace http with ws in the URL
+	wsURL := "ws" + strings.TrimPrefix(s.URL, "http") + "/ws/v1/workspaces/" + workspaceId + "/task_changes"
 
 	// Connect to the WebSocket server
-	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		t.Fatalf("could not open a ws connection on %s %v", url, err)
+		t.Fatalf("Failed to connect to WebSocket: %v", err)
 	}
 	defer ws.Close()
 
-	// Send tasks through the channel
+	// Persist another task after the websocket connection starts
+	task2 := domain.Task{
+		Id:          "task2",
+		WorkspaceId: workspaceId,
+		Title:       "Task 2",
+		Status:      domain.TaskStatusComplete,
+		StreamId:    "stream_id_2",
+	}
 	go func() {
-		taskChan <- domain.Task{Id: "task1", Title: "Task 1", StreamId: "stream_id_1"}
-		taskChan <- domain.Task{Id: "task2", Title: "Task 2", StreamId: "stream_id_2"}
-		close(taskChan)
+		time.Sleep(time.Millisecond)
+		err = db.PersistTask(ctx, task2)
+		assert.NoError(t, err, "Persisting task 2 failed")
 	}()
 
-	// Read the responses
-	for i := 0; i < 2; i++ {
-		_, msg, err := ws.ReadMessage()
-		if err != nil {
-			t.Fatalf("could not read message %v", err)
-		}
+	// Verify if the task is streamed correctly
+	timeout := time.After(2 * time.Second)
+	var receivedTask domain.Task
 
-		// Parse the response
+	select {
+	case <-timeout:
+		t.Fatalf("Timeout waiting for task")
+	default:
 		var response map[string]interface{}
-		err = json.Unmarshal(msg, &response)
+		err = ws.SetReadDeadline(time.Now().Add(8 * time.Second))
+		assert.NoError(t, err, "Failed to set read deadline")
+		err = ws.ReadJSON(&response)
 		if err != nil {
-			t.Fatalf("could not parse message %v", err)
+			t.Fatalf("Failed to read task: %v", err)
 		}
+		t.Logf("Received response: %+v", response)
 
-		// Check the response
 		tasks, ok := response["tasks"].([]interface{})
-		if !ok {
-			t.Fatalf("tasks is not an array")
-		}
-		if len(tasks) != 1 {
-			t.Fatalf("expected 1 task, got %d", len(tasks))
-		}
+		assert.True(t, ok, "tasks is not an array")
+		assert.Equal(t, 1, len(tasks), "expected 1 task")
+
+		taskJSON, err := json.Marshal(tasks[0])
+		assert.NoError(t, err, "Failed to marshal task")
+		err = json.Unmarshal(taskJSON, &receivedTask)
+		assert.NoError(t, err, "Failed to unmarshal task")
 
 		lastTaskStreamId, ok := response["lastTaskStreamId"].(string)
-		if !ok {
-			t.Fatalf("lastTaskStreamId is not a string")
-		}
-		expectedStreamId := fmt.Sprintf("stream_id_%d", i+1)
-		if lastTaskStreamId != expectedStreamId {
-			t.Fatalf("expected lastTaskStreamId to be '%s', got '%s'", expectedStreamId, lastTaskStreamId)
-		}
+		assert.True(t, ok, "lastTaskStreamId is not a string")
+		assert.Equal(t, "stream_id_2", lastTaskStreamId, "unexpected lastTaskStreamId")
 	}
 
-	// Check the mock expectations
-	mockService.AssertExpectations(t)
+	// Assert if the task matches the expected structure/content
+	assert.Equal(t, task2, receivedTask, "Received task does not match expected task")
+
+	// Close the WebSocket connection
+	err = ws.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	assert.NoError(t, err, "Failed to close WebSocket connection")
+
+	// Wait for a short time to allow for cleanup
+	time.Sleep(100 * time.Millisecond)
+
+	// Additional assertions can be added here if needed
 }
