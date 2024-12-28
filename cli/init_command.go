@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/llm"
@@ -423,7 +422,7 @@ func checkServerStatus() bool {
 func checkLanguageSpecificTools(baseDirectory string) error {
 	extensionCounts := make(map[string]int)
 
-	err := tree_sitter.WalkCodeDirectory(baseDirectory, func(path string, entry fs.DirEntry) error {
+	err := common.WalkCodeDirectory(baseDirectory, func(path string, entry fs.DirEntry) error {
 		if !entry.IsDir() {
 			ext := strings.ToLower(filepath.Ext(path))
 			extensionCounts[ext]++
