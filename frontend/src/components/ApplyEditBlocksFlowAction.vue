@@ -6,9 +6,7 @@
         <span v-if="result.didApply" class="result-applied">✅ Applied</span>
         <span v-else class="result-not-applied">❌ Not Applied</span>
       </h4>
-      <p v-if="result.error != ''" class="check-result-message">
-        {{ result.error }}
-      </p>
+      <pre v-if="result.error != ''" class="check-result-message">{{ result.error }}</pre>
       <template v-if="result.finalDiff">
         <div v-for="(parsedDiff, diffIndex) in parseFinalDiff(result.finalDiff)" :key="diffIndex" class="diff-view-container">
           <p class="file-header">{{ parsedDiff.oldFile.fileName || parsedDiff.newFile.fileName }}</p>

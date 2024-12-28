@@ -3,7 +3,7 @@ package persisted_ai
 import (
 	"io/fs"
 	"path/filepath"
-	"sidekick/coding/tree_sitter"
+	"sidekick/common"
 	"sidekick/utils"
 	"sort"
 	"strings"
@@ -33,7 +33,7 @@ const (
 func GetDirectoryChunks(basePath string) []DirChunk {
 	allPaths := []PathInfo{}
 
-	tree_sitter.WalkCodeDirectory(basePath, func(path string, entry fs.DirEntry) error {
+	common.WalkCodeDirectory(basePath, func(path string, entry fs.DirEntry) error {
 		relativePath := strings.Replace(path, basePath, "", 1)
 		allPaths = append(allPaths, PathInfo{Path: relativePath, DirEntry: entry})
 		return nil

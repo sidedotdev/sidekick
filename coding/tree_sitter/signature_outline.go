@@ -17,10 +17,10 @@ import (
 	"fmt"
 
 	"sidekick/coding/tree_sitter/language_bindings/vue"
+	"sidekick/common"
 	"sidekick/logger"
 	"sidekick/utils"
 
-	"github.com/denormal/go-gitignore"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/python"
@@ -90,60 +90,6 @@ func sourceTransform(languageName string, sourceCode *[]byte) []byte {
 	return *sourceCode
 }
 
-func WalkCodeDirectory(baseDirectory string, handleEntry func(string, fs.DirEntry) error) error {
-	// TODO allow for multipled/nested ignore files: find all
-	// .gitignore/.sideignore files in the directory tree and use the right ones
-	// depending on the file path
-	gitIgnore, err := gitignore.NewRepository(baseDirectory)
-	if err != nil {
-		return err
-	}
-
-	var sideIgnore *gitignore.GitIgnore
-	sideIgnoreFile := filepath.Join(baseDirectory, ".sideignore")
-	if _, err := os.Stat(sideIgnoreFile); err == nil {
-		tempIgnore, err := gitignore.NewRepositoryWithFile(baseDirectory, ".sideignore")
-		if err != nil {
-			return err
-		}
-		sideIgnore = &tempIgnore
-	}
-
-	// TODO validate that the basePath is a directory
-	err = filepath.WalkDir(baseDirectory, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		// don't show the root directory explicitly
-		// also note that the gitingore package fails if given the root directory :facepalm:
-		if path == baseDirectory {
-			return nil
-		}
-
-		// skip the .git directory
-		if entry.IsDir() && entry.Name() == ".git" {
-			return filepath.SkipDir
-		}
-
-		match := gitIgnore.Absolute(path, entry.IsDir())
-		var match2 gitignore.Match
-		if sideIgnore != nil {
-			match2 = (*sideIgnore).Absolute(path, entry.IsDir())
-		}
-
-		if (match != nil && match.Ignore()) || (match2 != nil && match2.Ignore()) {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		return handleEntry(path, entry)
-	})
-
-	return err
-}
-
 /*
 var checksums = make(map[string]string)
 var cachedOutlines = make(map[string]*[]FileOutline)
@@ -206,7 +152,7 @@ func GetDirectorySignatureOutlines(baseDirectory string, showPaths *map[string]b
 		baseDirectory = baseDirectory + string(os.PathSeparator)
 	}
 
-	err = WalkCodeDirectory(baseDirectory, func(path string, entry fs.DirEntry) error {
+	err = common.WalkCodeDirectory(baseDirectory, func(path string, entry fs.DirEntry) error {
 		relativePath := strings.Replace(path, baseDirectory, "", 1)
 
 		if entry.IsDir() {

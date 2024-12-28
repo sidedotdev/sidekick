@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
+	"sidekick/common"
 	"sidekick/env"
 	"sidekick/utils"
 	"slices"
@@ -96,7 +97,7 @@ func CodeFenceStartForLanguage(langName string) string {
 func getRelativeFilePathsBySymbolName(directoryPath string) (map[string][]string, error) {
 	symbolToPaths := make(map[string][]string, 0)
 	num := 0
-	err := tree_sitter.WalkCodeDirectory(directoryPath, func(path string, entry fs.DirEntry) error {
+	err := common.WalkCodeDirectory(directoryPath, func(path string, entry fs.DirEntry) error {
 		num++
 		if entry.IsDir() {
 			return nil
@@ -302,7 +303,7 @@ func getHintForNonExistentFile(directoryPath, absolutePath string) string {
 	relativePath := strings.TrimPrefix(absolutePath, filepath.Clean(directoryPath)+string(filepath.Separator))
 	pathSegments := strings.Split(relativePath, string(filepath.Separator))
 	candidates := []candidate{}
-	err := tree_sitter.WalkCodeDirectory(directoryPath, func(path string, entry fs.DirEntry) error {
+	err := common.WalkCodeDirectory(directoryPath, func(path string, entry fs.DirEntry) error {
 		if entry.IsDir() {
 			return nil
 		}

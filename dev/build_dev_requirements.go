@@ -100,11 +100,11 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	if len(chatResponse.ToolCalls) > 0 {
 		toolCall := chatResponse.ToolCalls[0] // parallel tool calls are not supported
 		if toolCall.Name == recordDevRequirementsTool.Name {
-			devReq, err := unmarshalDevRequirements(chatResponse.ToolCalls[0].Arguments)
-			if err == nil && devReq.Complete {
-				userResponse, err := ApproveDevRequirements(iteration.ExecCtx, devReq)
-				if err != nil {
-					return nil, fmt.Errorf("error approving dev requirements: %v", err)
+			devReq, unmarshalErr := unmarshalDevRequirements(chatResponse.ToolCalls[0].Arguments)
+			if unmarshalErr == nil && devReq.Complete {
+				userResponse, approveErr := ApproveDevRequirements(iteration.ExecCtx, devReq)
+				if approveErr != nil {
+					return nil, fmt.Errorf("error approving dev requirements: %v", approveErr)
 				}
 				if userResponse.Approved != nil && *userResponse.Approved {
 					return &devReq, nil // break the loop with the final result
@@ -116,8 +116,8 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 					// resetting iteration num to the closest multiple so that we don't ask for feedback again immediately
 					iteration.Num = int(math.Round(float64(iteration.Num)/float64(iteration.maxIterationsBeforeFeedback))) * iteration.maxIterationsBeforeFeedback
 				}
-			} else if err != nil {
-				toolResponse := ToolCallResponseInfo{Response: err.Error(), FunctionName: recordDevRequirementsTool.Name, TooCallId: toolCall.Id, IsError: true}
+			} else if unmarshalErr != nil {
+				toolResponse := ToolCallResponseInfo{Response: unmarshalErr.Error(), FunctionName: recordDevRequirementsTool.Name, TooCallId: toolCall.Id, IsError: true}
 				addToolCallResponse(iteration.ChatHistory, toolResponse)
 			} else {
 				toolResponse := ToolCallResponseInfo{Response: "Recorded partial requirements, but requirements are not complete yet based on the \"are_requirements_complete\" boolean field value being set to false. Do some more research or thinking or get help/input to complete the plan, as needed. Once the planning is complete, record the plan again in full.", FunctionName: recordDevPlanTool.Name, TooCallId: toolCall.Id}
@@ -180,7 +180,6 @@ func generateDevRequirements(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*
 		},
 	}
 	return TrackedToolChat(dCtx, "Generate Dev Requirements", options)
-
 }
 
 func TrackedToolChat(dCtx DevContext, actionName string, options llm.ToolChatOptions) (*llm.ChatMessageResponse, error) {
