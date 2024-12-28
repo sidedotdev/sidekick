@@ -96,6 +96,7 @@ func newServerWithOptions(opts ServerOptions) (*Server, error) {
 
 	// Configure server logging
 	natsServer.SetLogger(newNATSLogger(), false, false)
+	natsServer.ClientURL()
 
 	return &Server{
 		natsServer: natsServer,
@@ -109,7 +110,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Wait for server to be ready
 	if !s.natsServer.ReadyForConnections(5 * time.Second) {
-		return fmt.Errorf("NATS server failed to start within timeout")
+		return fmt.Errorf("NATS server failed to start within 5s timeout")
 	}
 
 	return nil
