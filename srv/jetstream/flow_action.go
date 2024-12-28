@@ -11,35 +11,34 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// Streamer is a JetStream-based task streamer
-var _ domain.TaskStreamer = (*Streamer)(nil)
+// Ensure Streamer implements FlowActionStreamer
+var _ domain.FlowActionStreamer = (*Streamer)(nil)
 
-func (s *Streamer) AddTaskChange(ctx context.Context, task domain.Task) error {
-	data, err := json.Marshal(task)
+func (s *Streamer) AddFlowActionChange(ctx context.Context, flowAction domain.FlowAction) error {
+	data, err := json.Marshal(flowAction)
 	if err != nil {
-		return fmt.Errorf("failed to marshal task: %w", err)
+		return fmt.Errorf("failed to marshal flow action: %w", err)
 	}
 
-	subject := fmt.Sprintf("tasks.changes.%s", task.WorkspaceId)
+	subject := fmt.Sprintf("flow_actions.changes.%s.%s", flowAction.WorkspaceId, flowAction.FlowId)
 	_, err = s.js.Publish(ctx, subject, data)
 	if err != nil {
-		return fmt.Errorf("failed to publish task change: %w", err)
+		return fmt.Errorf("failed to publish flow action change: %w", err)
 	}
 
 	return nil
 }
 
-func (s *Streamer) GetTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]domain.Task, string, error) {
+func (s *Streamer) GetFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]domain.FlowAction, string, error) {
 	if maxCount == 0 {
 		maxCount = 100
 	}
-
-	// default to starting from the end of the stream for task changes
+	// default to starting from the start of the stream for flow action changes
 	if streamMessageStartId == "" {
-		streamMessageStartId = "$"
+		streamMessageStartId = "0"
 	}
 
-	subject := fmt.Sprintf("tasks.changes.%s", workspaceId)
+	subject := fmt.Sprintf("flow_actions.changes.%s.%s", workspaceId, flowId)
 
 	var deliveryPolicy jetstream.DeliverPolicy
 	var startTime *time.Time
@@ -59,14 +58,14 @@ func (s *Streamer) GetTaskChanges(ctx context.Context, workspaceId, streamMessag
 		}
 	}
 
-	consumer, err := s.js.CreateOrUpdateConsumer(ctx, PersistentStreamName, jetstream.ConsumerConfig{
+	consumer, err := s.js.OrderedConsumer(ctx, PersistentStreamName, jetstream.OrderedConsumerConfig{
 		FilterSubjects:    []string{subject},
 		InactiveThreshold: 5 * time.Minute,
 		DeliverPolicy:     deliveryPolicy,
 		OptStartSeq:       startSeq,
 		OptStartTime:      startTime,
 	})
-	if err != nil && err != jetstream.ErrConsumerNameAlreadyInUse {
+	if err != nil {
 		return nil, "", fmt.Errorf("failed to create consumer: %w", err)
 	}
 
@@ -81,28 +80,34 @@ func (s *Streamer) GetTaskChanges(ctx context.Context, workspaceId, streamMessag
 		return nil, "", fmt.Errorf("failed to fetch messages: %w", err)
 	}
 
-	var tasks []domain.Task
+	var flowActions []domain.FlowAction
 	var lastSequence uint64
 
 	for msg := range msgs.Messages() {
-		var task domain.Task
-
-		if err := json.Unmarshal(msg.Data(), &task); err != nil {
-			return nil, "", fmt.Errorf("failed to unmarshal task: %w", err)
+		var flowAction domain.FlowAction
+		if err := json.Unmarshal(msg.Data(), &flowAction); err != nil {
+			return nil, "", fmt.Errorf("failed to unmarshal flow action: %w", err)
 		}
-		tasks = append(tasks, task)
+
+		// Handle end message
+		if flowAction.Id == "end" {
+			msg.Ack()
+			return flowActions, "end", nil
+		}
+
+		flowActions = append(flowActions, flowAction)
 		msg.Ack()
 
-		meta, err := msg.Metadata()
+		metadata, err := msg.Metadata()
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to get message metadata: %w", err)
 		}
-		lastSequence = meta.Sequence.Stream
-
+		lastSequence = metadata.Sequence.Stream
 	}
 
-	if len(tasks) == 0 {
-		return tasks, streamMessageStartId, nil
+	if len(flowActions) == 0 {
+		return nil, streamMessageStartId, nil
 	}
-	return tasks, fmt.Sprintf("%d", lastSequence+1), nil
+
+	return flowActions, fmt.Sprintf("%d", lastSequence+1), nil
 }
