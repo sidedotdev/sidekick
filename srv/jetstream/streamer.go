@@ -25,8 +25,11 @@ func NewStreamer(nc *nats.Conn) (*Streamer, error) {
 
 	// Ensure the tasks stream exists (this is idempotent)
 	_, err = js.CreateOrUpdateStream(context.Background(), jetstream.StreamConfig{
-		Name:     EphemeralStreamName,
-		Subjects: []string{},
+		Name: EphemeralStreamName,
+		// task changes could have been ephemeral, since it doesn't matter if
+		// they're lost. NOTE jetstream.DeliverByStartTimePolicy isn't working
+		// with this emphemeral stream, but DeliverNewPolicy is working fine.
+		Subjects: []string{"tasks.changes.*"},
 		Storage:  jetstream.MemoryStorage,
 	})
 	if err != nil {
@@ -36,13 +39,9 @@ func NewStreamer(nc *nats.Conn) (*Streamer, error) {
 	// Ensure the persistent stream exists (this is idempotent)
 	_, err = js.CreateOrUpdateStream(context.Background(), jetstream.StreamConfig{
 		Name: PersistentStreamName,
-		// task changes could have been ephemeral, since it doesn't matter if
-		// they're lost, but jetstream.DeliverByStartTimePolicy isn't working
-		// with the ephemeral stream for some reason
-
 		// flow action changes and flow events are persistent and should not be
 		// lost, they show the history of the flow
-		Subjects: []string{"tasks.changes.*", "flow_actions.changes.*.*"},
+		Subjects: []string{"flow_actions.changes.*.*", "flow_events.*.*"},
 		Storage:  jetstream.FileStorage,
 	})
 	if err != nil && err != jetstream.ErrStreamNameAlreadyInUse {

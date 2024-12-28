@@ -42,14 +42,11 @@ func (s *Streamer) GetTaskChanges(ctx context.Context, workspaceId, streamMessag
 	subject := fmt.Sprintf("tasks.changes.%s", workspaceId)
 
 	var deliveryPolicy jetstream.DeliverPolicy
-	var startTime *time.Time
 	var startSeq uint64
 	if streamMessageStartId == "0" {
 		deliveryPolicy = jetstream.DeliverAllPolicy
 	} else if streamMessageStartId == "$" {
-		deliveryPolicy = jetstream.DeliverByStartTimePolicy
-		now := time.Now()
-		startTime = &now
+		deliveryPolicy = jetstream.DeliverNewPolicy
 	} else {
 		deliveryPolicy = jetstream.DeliverByStartSequencePolicy
 		var err error
@@ -59,12 +56,11 @@ func (s *Streamer) GetTaskChanges(ctx context.Context, workspaceId, streamMessag
 		}
 	}
 
-	consumer, err := s.js.CreateOrUpdateConsumer(ctx, PersistentStreamName, jetstream.ConsumerConfig{
+	consumer, err := s.js.CreateOrUpdateConsumer(ctx, EphemeralStreamName, jetstream.ConsumerConfig{
 		FilterSubjects:    []string{subject},
 		InactiveThreshold: 5 * time.Minute,
 		DeliverPolicy:     deliveryPolicy,
 		OptStartSeq:       startSeq,
-		OptStartTime:      startTime,
 	})
 	if err != nil && err != jetstream.ErrConsumerNameAlreadyInUse {
 		return nil, "", fmt.Errorf("failed to create consumer: %w", err)

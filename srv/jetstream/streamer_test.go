@@ -200,6 +200,79 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 	s.Equal("end", continueMessageId)
 }
 
+func (s *StreamerTestSuite) TestFlowEventStreaming() {
+	s.T().Parallel()
+
+	ctx := context.Background()
+	workspaceId := "test-workspace"
+	flowId := "test-flow"
+
+	// Create some test flow events
+	event1 := domain.ProgressText{
+		Text:      "Running tests...",
+		EventType: domain.ProgressTextEventType,
+		ParentId:  "parent1",
+	}
+	event2 := domain.ChatMessageDelta{
+		EventType:    domain.ChatMessageDeltaEventType,
+		FlowActionId: "parent2",
+		ChatMessageDelta: common.ChatMessageDelta{
+			Role:    common.ChatMessageRoleAssistant,
+			Content: "How can I help you?",
+		},
+	}
+
+	// Add events
+	err := s.streamer.AddFlowEvent(ctx, workspaceId, flowId, event1)
+	s.NoError(err)
+	err = s.streamer.AddFlowEvent(ctx, workspaceId, flowId, event2)
+	s.NoError(err)
+
+	// Test getting events from the beginning
+	streamKeys := map[string]string{
+		"parent1": "0",
+		"parent2": "0",
+	}
+	events, newKeys, err := s.streamer.GetFlowEvents(ctx, workspaceId, streamKeys, 10, 50*time.Millisecond)
+	s.NoError(err)
+	s.Len(events, 2)
+	s.ElementsMatch([]string{"parent1", "parent2"}, []string{events[0].GetParentId(), events[1].GetParentId()})
+	s.ElementsMatch([]domain.FlowEventType{domain.ProgressTextEventType, domain.ChatMessageDeltaEventType}, []domain.FlowEventType{events[0].GetEventType(), events[1].GetEventType()})
+	s.NotEmpty(newKeys["parent1"])
+	s.NotEqual("0", newKeys["parent1"])
+	s.NotEmpty(newKeys["parent2"])
+	s.NotEqual("0", newKeys["parent2"])
+
+	// Test getting events with no new messages
+	events, newKeys2, err := s.streamer.GetFlowEvents(ctx, workspaceId, newKeys, 10, 50*time.Millisecond)
+	s.NoError(err)
+	s.Empty(events)
+	s.Equal(newKeys["parent1"], newKeys2["parent1"])
+	s.Equal(newKeys["parent2"], newKeys2["parent2"])
+
+	// Test getting just parent1 again
+	newKeys2["parent1"] = "0"
+	events, newKeys3, err := s.streamer.GetFlowEvents(ctx, workspaceId, newKeys2, 10, 50*time.Millisecond)
+	s.NoError(err)
+	s.Len(events, 1)
+	s.ElementsMatch([]string{"parent1"}, []string{events[0].GetParentId()})
+	s.ElementsMatch([]domain.FlowEventType{domain.ProgressTextEventType}, []domain.FlowEventType{events[0].GetEventType()})
+
+	s.Equal(newKeys["parent1"], newKeys3["parent1"])
+	s.Equal(newKeys["parent2"], newKeys3["parent2"])
+
+	// Test ending the stream
+	err = s.streamer.EndFlowEventStream(ctx, workspaceId, flowId, "parent1")
+	s.NoError(err)
+
+	// Test getting end events
+	events, _, err = s.streamer.GetFlowEvents(ctx, workspaceId, newKeys3, 10, 50*time.Millisecond)
+	s.NoError(err)
+	s.Len(events, 1)
+	s.Equal(domain.EndStreamEventType, events[0].GetEventType())
+}
+
 func TestStreamerSuite(t *testing.T) {
+	t.Parallel()
 	suite.Run(t, new(StreamerTestSuite))
 }
