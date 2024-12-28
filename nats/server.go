@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sidekick/common"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -39,10 +40,28 @@ type ServerOptions struct {
 type Server struct {
 	natsServer *server.Server
 	log        zerolog.Logger
+	startOnce  sync.Once
 }
 
-// NewServer creates a new NATS server instance configured for Sidekick with default production settings
-func NewServer() (*Server, error) {
+var serve *Server
+var serveOnce sync.Once = sync.Once{}
+
+// A singleton instance of the NATS server
+func GetOrNewServer() (*Server, error) {
+	if serve == nil {
+		var err error
+		serveOnce.Do(func() {
+			serve, err = newServer()
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return serve, nil
+}
+
+// newServer creates a new NATS server instance configured for Sidekick with default production settings
+func newServer() (*Server, error) {
 	dataHome, err := common.GetSidekickDataHome()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Sidekick data home: %w", err)
@@ -106,7 +125,9 @@ func newServerWithOptions(opts ServerOptions) (*Server, error) {
 
 // Start starts the NATS server
 func (s *Server) Start(ctx context.Context) error {
-	s.natsServer.Start()
+	s.startOnce.Do(func() {
+		s.natsServer.Start()
+	})
 
 	// Wait for server to be ready
 	if !s.natsServer.ReadyForConnections(5 * time.Second) {

@@ -18,9 +18,18 @@ const (
 )
 
 func NewStreamer(nc *nats.Conn) (*Streamer, error) {
+	s := &Streamer{js: nil}
+	if nc == nil {
+		return s, nil
+	}
+	err := s.Initialize(nc)
+	return s, err
+}
+
+func (s *Streamer) Initialize(nc *nats.Conn) error {
 	js, err := jetstream.New(nc)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get JetStream context: %w", err)
+		return fmt.Errorf("failed to get JetStream context: %w", err)
 	}
 
 	// Ensure the tasks stream exists (this is idempotent)
@@ -33,7 +42,7 @@ func NewStreamer(nc *nats.Conn) (*Streamer, error) {
 		Storage:  jetstream.MemoryStorage,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create emphemeral stream: %w", err)
+		return fmt.Errorf("failed to create emphemeral stream: %w", err)
 	}
 
 	// Ensure the persistent stream exists (this is idempotent)
@@ -45,8 +54,9 @@ func NewStreamer(nc *nats.Conn) (*Streamer, error) {
 		Storage:  jetstream.FileStorage,
 	})
 	if err != nil && err != jetstream.ErrStreamNameAlreadyInUse {
-		return nil, fmt.Errorf("failed to create persistent stream: %w", err)
+		return fmt.Errorf("failed to create persistent stream: %w", err)
 	}
 
-	return &Streamer{js: js}, nil
+	s.js = js
+	return nil
 }

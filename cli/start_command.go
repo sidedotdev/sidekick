@@ -408,7 +408,7 @@ func handleStartCommand(args []string) {
 			defer wg.Done()
 			log.Info().Msg("Starting NATS server...")
 
-			nats, err := nats.NewServer()
+			nats, err := nats.GetOrNewServer()
 			if err != nil {
 				log.Fatal().Err(err).Msg("Failed to create NATS server")
 			}
