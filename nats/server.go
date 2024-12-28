@@ -3,7 +3,6 @@ package nats
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sidekick/common"
 	"time"
@@ -19,15 +18,12 @@ type Server struct {
 	log        zerolog.Logger
 }
 
-var SideAppEnv = os.Getenv("SIDE_APP_ENV")
-
-// New creates a new NATS server instance configured for Sidekick
-func New() (*Server, error) {
+// NewServer creates a new NATS server instance configured for Sidekick
+func NewServer() (*Server, error) {
 	dataHome, err := common.GetSidekickDataHome()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Sidekick data home: %w", err)
 	}
-	devMode := SideAppEnv == "development"
 
 	// Configure NATS server
 	opts := &server.Options{
@@ -38,11 +34,12 @@ func New() (*Server, error) {
 		StoreDir:           filepath.Join(dataHome, "nats-jetstream"),
 		JetStreamMaxMemory: 1024 * 1024 * 1024,      // 1GB
 		JetStreamMaxStore:  20 * 1024 * 1024 * 1024, // 20GB
-		Port:               28855,
+		Port:               28855, // TODO add to hosts_and_ports.go
 
-		// in development, we have multiple processes so can't rely on
-		// in-process communication only
-		DontListen: !devMode,
+		// we'll always use the port to communication, never in-process.
+		// simplifies development when we have multiple binaries that need to
+		// communicate over nats/jetstream
+		DontListen: false,
 	}
 
 	// Create NATS server instance
