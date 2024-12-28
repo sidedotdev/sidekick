@@ -13,6 +13,10 @@ type Delegator struct {
 	streamer Streamer
 }
 
+func (d *Delegator) StreamTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string) (<-chan domain.Task, <-chan error) {
+	return d.streamer.StreamTaskChanges(ctx, workspaceId, streamMessageStartId)
+}
+
 func NewDelegator(storage Storage, streamer Streamer) *Delegator {
 	return &Delegator{
 		storage:  storage,

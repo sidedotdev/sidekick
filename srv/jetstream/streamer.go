@@ -3,6 +3,7 @@ package jetstream
 import (
 	"context"
 	"fmt"
+	"sidekick/domain"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -10,6 +11,10 @@ import (
 
 type Streamer struct {
 	js jetstream.JetStream
+}
+
+func (s *Streamer) StreamTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string) (<-chan domain.Task, <-chan error) {
+	panic("StreamTaskChanges not implemented for JetStream")
 }
 
 const (

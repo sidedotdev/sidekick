@@ -62,18 +62,18 @@ func main() {
 
 		/* We don't actually need task changes or flow events, just flow actions */
 		/*
-		err := migrateTaskChanges(ctx, redisStreamer, js, workspaceId)
-		if err != nil {
-			log.Printf("Failed to migrate task changes for workspace %s: %v", workspaceId, err)
-			continue
-		}
+			err := migrateTaskChanges(ctx, redisStreamer, js, workspaceId)
+			if err != nil {
+				log.Printf("Failed to migrate task changes for workspace %s: %v", workspaceId, err)
+				continue
+			}
 
-		err = migrateFlowEvents(ctx, redisStreamer, js, workspaceId)
-		if err != nil {
-			log.Printf("Failed to migrate flow events for workspace %s: %v", workspaceId, err)
-			continue
-		}
-			*/
+			err = migrateFlowEvents(ctx, redisStreamer, js, workspaceId)
+			if err != nil {
+				log.Printf("Failed to migrate flow events for workspace %s: %v", workspaceId, err)
+				continue
+			}
+		*/
 	}
 
 	log.Println("Migration completed")
@@ -97,7 +97,7 @@ func migrateFlowActionChanges(ctx context.Context, redisStreamer *redis.Streamer
 	continueMessageId := "0"
 	var totalMigrated int
 	for {
-		flowActions, nextMessageId, err := redisStreamer.GetFlowActionChanges(ctx, workspaceId, flowId, continueMessageId, 100, 100 * time.Millisecond)
+		flowActions, nextMessageId, err := redisStreamer.GetFlowActionChanges(ctx, workspaceId, flowId, continueMessageId, 100, 100*time.Millisecond)
 		if err != nil {
 			return fmt.Errorf("failed to get flow action changes from Redis for workspace %s, flow Id %s: %w", workspaceId, flowId, err)
 		}
