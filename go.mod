@@ -47,9 +47,12 @@ require (
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/kelindar/binary v1.0.19 // indirect
-	github.com/klauspost/compress v1.17.9 // indirect
+	github.com/klauspost/compress v1.17.11 // indirect
+	github.com/minio/highwayhash v1.0.3 // indirect
 	github.com/nats-io/gnatsd v1.4.1 // indirect
+	github.com/nats-io/jwt/v2 v2.7.3 // indirect
 	github.com/nats-io/nats-server v1.4.1 // indirect
+	github.com/nats-io/nats-server/v2 v2.10.24 // indirect
 	github.com/nats-io/nats.go v1.38.0 // indirect
 	github.com/nats-io/nkeys v0.4.9 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
@@ -221,7 +224,7 @@ require (
 	golang.org/x/sys v0.28.0 // indirect
 	golang.org/x/term v0.27.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
-	golang.org/x/time v0.5.0 // indirect
+	golang.org/x/time v0.8.0 // indirect
 	golang.org/x/tools v0.28.0 // indirect
 	google.golang.org/api v0.182.0 // indirect
 	google.golang.org/genproto v0.0.0-20240528184218-531527333157 // indirect
