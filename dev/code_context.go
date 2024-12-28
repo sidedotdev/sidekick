@@ -251,8 +251,8 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			addCodeContextPrompt(chatHistory, toolCallResponseInfo)
 		}
 
-		if attempts >= 7 {
-			return nil, "", fmt.Errorf("failed to refine and rank code context after 7 attempts: %v", err)
+		if attempts >= 17 {
+			return nil, "", fmt.Errorf("failed to refine and rank code context after 17 attempts: %v", err)
 		}
 
 		// STEP 2: Decide which code to read fully
