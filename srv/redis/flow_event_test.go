@@ -15,7 +15,7 @@ func TestAddChatMessageDeltaFlowEvent(t *testing.T) {
 	db := NewTestRedisStreamer()
 	workspaceId := "TEST_WORKSPACE_ID"
 	flowId := "TEST_FLOW_ID"
-	flowEvent := domain.ChatMessageDelta{
+	flowEvent := domain.ChatMessageDeltaEvent{
 		EventType:    domain.ChatMessageDeltaEventType,
 		FlowActionId: "parentId",
 		ChatMessageDelta: llm.ChatMessageDelta{
@@ -48,7 +48,7 @@ func TestAddChatMessageDeltaFlowEvent(t *testing.T) {
 	// Verify the values in the stream
 	stream := streams[0] // Assuming the event is the first entry
 	jsonEvent := stream.Values["event"].(string)
-	var streamedEvent domain.ChatMessageDelta
+	var streamedEvent domain.ChatMessageDeltaEvent
 	err = json.Unmarshal([]byte(jsonEvent), &streamedEvent)
 	assert.Nil(t, err)
 	assert.Equal(t, flowEvent, streamedEvent)
@@ -58,7 +58,7 @@ func TestAddProgressTextFlowEvent(t *testing.T) {
 	db := NewTestRedisStreamer()
 	workspaceId := "TEST_WORKSPACE_ID"
 	flowId := "TEST_FLOW_ID"
-	flowEvent := domain.ProgressText{
+	flowEvent := domain.ProgressTextEvent{
 		EventType: domain.ProgressTextEventType,
 		ParentId:  "parentId",
 		Text:      "Test Flow Event",
@@ -77,7 +77,7 @@ func TestAddProgressTextFlowEvent(t *testing.T) {
 	// Verify the values in the stream
 	stream := streams[0] // Assuming the event is the first entry
 	jsonEvent := stream.Values["event"].(string)
-	var streamedEvent domain.ProgressText
+	var streamedEvent domain.ProgressTextEvent
 	err = json.Unmarshal([]byte(jsonEvent), &streamedEvent)
 	assert.Nil(t, err)
 	assert.Equal(t, flowEvent, streamedEvent)

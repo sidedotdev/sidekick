@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sidekick/domain"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -18,6 +19,7 @@ func (s *Streamer) AddFlowEvent(ctx context.Context, workspaceId string, flowId 
 	if err != nil {
 		return fmt.Errorf("failed to marshal flow event: %w", err)
 	}
+	fmt.Printf("adding flow event: %s\n", data)
 
 	subject := fmt.Sprintf("flow_events.%s.%s", workspaceId, flowEvent.GetParentId())
 	_, err = s.js.Publish(ctx, subject, data)
@@ -29,7 +31,7 @@ func (s *Streamer) AddFlowEvent(ctx context.Context, workspaceId string, flowId 
 }
 
 func (s *Streamer) EndFlowEventStream(ctx context.Context, workspaceId, flowId, eventStreamParentId string) error {
-	data, err := json.Marshal(domain.EndStream{
+	data, err := json.Marshal(domain.EndStreamEvent{
 		EventType: domain.EndStreamEventType,
 		ParentId:  eventStreamParentId,
 	})
@@ -55,7 +57,12 @@ func (s *Streamer) GetFlowEvents(ctx context.Context, workspaceId string, stream
 	var events []domain.FlowEvent
 
 	// Process each flow ID stream separately
-	for flowEventParentId, startId := range streamKeys {
+	for streamKey, startId := range streamKeys {
+		parts := strings.Split(streamKey, ":")
+		if len(parts) != 4 || parts[0] != workspaceId || parts[2] != "stream" {
+			return nil, nil, fmt.Errorf("invalid stream key format: %s", streamKey)
+		}
+		flowEventParentId := parts[3]
 		subject := fmt.Sprintf("flow_events.%s.%s", workspaceId, flowEventParentId)
 
 		// default to starting from the beginning for flow events
@@ -92,19 +99,15 @@ func (s *Streamer) GetFlowEvents(ctx context.Context, workspaceId string, stream
 		}
 
 		// Pull messages
-		var msgs jetstream.MessageBatch
-		if blockDuration == 0 {
-			msgs, err = consumer.FetchNoWait(int(maxCount))
-		} else {
-			waitPerKey := blockDuration / time.Duration(len(streamKeys))
-			msgs, err = consumer.Fetch(int(maxCount), jetstream.FetchMaxWait(waitPerKey))
-		}
+		waitPerKey := blockDuration / time.Duration(len(streamKeys))
+		msgs, err := consumer.Fetch(int(maxCount), jetstream.FetchMaxWait(waitPerKey))
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to fetch messages for flow %s: %w", flowEventParentId, err)
 		}
 
 		var lastSequence uint64
 		for msg := range msgs.Messages() {
+			fmt.Printf("got flow event message: %s\n", string(msg.Data()))
 			event, err := domain.UnmarshalFlowEvent(msg.Data())
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to unmarshal flow event: %w", err)
@@ -120,9 +123,9 @@ func (s *Streamer) GetFlowEvents(ctx context.Context, workspaceId string, stream
 		}
 
 		if lastSequence > 0 {
-			newStreamKeys[flowEventParentId] = fmt.Sprintf("%d", lastSequence+1)
+			newStreamKeys[streamKey] = fmt.Sprintf("%d", lastSequence+1)
 		} else {
-			newStreamKeys[flowEventParentId] = startId
+			newStreamKeys[streamKey] = startId
 		}
 	}
 

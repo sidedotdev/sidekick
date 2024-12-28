@@ -58,7 +58,7 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 				}
 			}
 
-			flowEventDelta := domain.ChatMessageDelta{
+			flowEventDelta := domain.ChatMessageDeltaEvent{
 				FlowActionId:     options.FlowActionId,
 				EventType:        domain.ChatMessageDeltaEventType,
 				ChatMessageDelta: delta,

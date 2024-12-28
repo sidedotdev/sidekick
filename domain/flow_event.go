@@ -17,21 +17,21 @@ const (
 	EndStreamEventType        FlowEventType = "end_stream"
 )
 
-// EndStream represents the end of a flow event stream.
-type EndStream struct {
+// EndStreamEvent represents the end of a flow event stream.
+type EndStreamEvent struct {
 	EventType FlowEventType `json:"eventType"`
 	ParentId  string        `json:"parentId"`
 }
 
-func (e EndStream) GetParentId() string {
+func (e EndStreamEvent) GetParentId() string {
 	return e.ParentId
 }
 
-func (e EndStream) GetEventType() FlowEventType {
+func (e EndStreamEvent) GetEventType() FlowEventType {
 	return e.EventType
 }
 
-var _ FlowEvent = EndStream{}
+var _ FlowEvent = EndStreamEvent{}
 
 // FlowEvent is an interface representing a flow event with a parent ID.
 type FlowEvent interface {
@@ -39,40 +39,40 @@ type FlowEvent interface {
 	GetEventType() FlowEventType
 }
 
-// ProgressText represents the progress text updates in a flow action. The text
+// ProgressTextEvent represents the progress text updates in a flow action. The text
 // for this event is the latest full progress text, eg "Running tests...".
-type ProgressText struct {
+type ProgressTextEvent struct {
 	Text      string        `json:"text"`
 	EventType FlowEventType `json:"eventType"`
 	// either a FlowAction or Subflow may be a parent of a ProgressText
 	ParentId string `json:"parentId"`
 }
 
-func (e ProgressText) GetParentId() string {
+func (e ProgressTextEvent) GetParentId() string {
 	return e.ParentId
 }
 
-func (e ProgressText) GetEventType() FlowEventType {
+func (e ProgressTextEvent) GetEventType() FlowEventType {
 	return e.EventType
 }
 
-var _ FlowEvent = ProgressText{}
+var _ FlowEvent = ProgressTextEvent{}
 
-type ChatMessageDelta struct {
+type ChatMessageDeltaEvent struct {
 	EventType        FlowEventType           `json:"eventType"`
 	FlowActionId     string                  `json:"flowActionId"`
 	ChatMessageDelta common.ChatMessageDelta `json:"chatMessageDelta"`
 }
 
-func (e ChatMessageDelta) GetParentId() string {
+func (e ChatMessageDeltaEvent) GetParentId() string {
 	return e.FlowActionId
 }
 
-func (e ChatMessageDelta) GetEventType() FlowEventType {
+func (e ChatMessageDeltaEvent) GetEventType() FlowEventType {
 	return e.EventType
 }
 
-var _ FlowEvent = ChatMessageDelta{}
+var _ FlowEvent = ChatMessageDeltaEvent{}
 
 // UnmarshalFlowEvent unmarshals a JSON byte slice into a FlowEvent based on the "eventType" field.
 func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
@@ -87,7 +87,7 @@ func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
 
 	switch event.EventType {
 	case ProgressTextEventType:
-		var progressText ProgressText
+		var progressText ProgressTextEvent
 		err := json.Unmarshal(data, &progressText)
 		if err != nil {
 			return nil, err
@@ -95,7 +95,7 @@ func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
 		return progressText, nil
 
 	case ChatMessageDeltaEventType:
-		var chatMessageDelta ChatMessageDelta
+		var chatMessageDelta ChatMessageDeltaEvent
 		err := json.Unmarshal(data, &chatMessageDelta)
 		if err != nil {
 			return nil, err
@@ -103,7 +103,7 @@ func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
 		return chatMessageDelta, nil
 
 	case EndStreamEventType:
-		var endStream EndStream
+		var endStream EndStreamEvent
 		err := json.Unmarshal(data, &endStream)
 		if err != nil {
 			return nil, err

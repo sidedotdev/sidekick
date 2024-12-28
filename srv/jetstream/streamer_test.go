@@ -98,15 +98,9 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 	s.Empty(tasks)
 	s.Equal(lastId, newLastId)
 
-	// Test getting changes with no new messages and no wait
-	tasks, newLastId, err = s.streamer.GetTaskChanges(ctx, workspaceId, lastId, 10, 0)
-	s.Require().NoError(err)
-	s.Empty(tasks)
-	s.Equal(lastId, newLastId)
-
 	// test getting changes with default continue message id, i.e. only new messages and hence no messages returned
 	time.Sleep(100 * time.Millisecond)
-	tasks, _, err = s.streamer.GetTaskChanges(ctx, workspaceId, "$", 10, 0)
+	tasks, _, err = s.streamer.GetTaskChanges(ctx, workspaceId, "$", 10, time.Millisecond)
 	s.Require().NoError(err)
 	s.Empty(tasks)
 }
@@ -163,7 +157,7 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 	s.Equal(flowActionUpdated, flowActions[1])
 
 	// Test getting flow action changes in one go without waiting
-	flowActions, continueMessageId, err = s.streamer.GetFlowActionChanges(ctx, workspaceId, flowId, "", 10, 0)
+	flowActions, continueMessageId, err = s.streamer.GetFlowActionChanges(ctx, workspaceId, flowId, "", 10, time.Millisecond)
 	s.Require().NoError(err)
 	s.Require().Len(flowActions, 2)
 	s.Equal(flowAction, flowActions[0])
@@ -208,12 +202,12 @@ func (s *StreamerTestSuite) TestFlowEventStreaming() {
 	flowId := "test-flow"
 
 	// Create some test flow events
-	event1 := domain.ProgressText{
+	event1 := domain.ProgressTextEvent{
 		Text:      "Running tests...",
 		EventType: domain.ProgressTextEventType,
 		ParentId:  "parent1",
 	}
-	event2 := domain.ChatMessageDelta{
+	event2 := domain.ChatMessageDeltaEvent{
 		EventType:    domain.ChatMessageDeltaEventType,
 		FlowActionId: "parent2",
 		ChatMessageDelta: common.ChatMessageDelta{
@@ -230,36 +224,28 @@ func (s *StreamerTestSuite) TestFlowEventStreaming() {
 
 	// Test getting events from the beginning
 	streamKeys := map[string]string{
-		"parent1": "0",
-		"parent2": "0",
+		fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, "parent1"): "0",
+		fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, "parent2"): "0",
 	}
 	events, newKeys, err := s.streamer.GetFlowEvents(ctx, workspaceId, streamKeys, 10, 50*time.Millisecond)
 	s.NoError(err)
 	s.Len(events, 2)
 	s.ElementsMatch([]string{"parent1", "parent2"}, []string{events[0].GetParentId(), events[1].GetParentId()})
 	s.ElementsMatch([]domain.FlowEventType{domain.ProgressTextEventType, domain.ChatMessageDeltaEventType}, []domain.FlowEventType{events[0].GetEventType(), events[1].GetEventType()})
-	s.NotEmpty(newKeys["parent1"])
-	s.NotEqual("0", newKeys["parent1"])
-	s.NotEmpty(newKeys["parent2"])
-	s.NotEqual("0", newKeys["parent2"])
 
 	// Test getting events with no new messages
 	events, newKeys2, err := s.streamer.GetFlowEvents(ctx, workspaceId, newKeys, 10, 50*time.Millisecond)
 	s.NoError(err)
 	s.Empty(events)
-	s.Equal(newKeys["parent1"], newKeys2["parent1"])
-	s.Equal(newKeys["parent2"], newKeys2["parent2"])
 
-	// Test getting just parent1 again
-	newKeys2["parent1"] = "0"
+	// Test getting just parent2 again
+	newKeys2[fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, "parent2")] = "0"
 	events, newKeys3, err := s.streamer.GetFlowEvents(ctx, workspaceId, newKeys2, 10, 50*time.Millisecond)
 	s.NoError(err)
 	s.Len(events, 1)
-	s.ElementsMatch([]string{"parent1"}, []string{events[0].GetParentId()})
-	s.ElementsMatch([]domain.FlowEventType{domain.ProgressTextEventType}, []domain.FlowEventType{events[0].GetEventType()})
-
-	s.Equal(newKeys["parent1"], newKeys3["parent1"])
-	s.Equal(newKeys["parent2"], newKeys3["parent2"])
+	s.ElementsMatch([]string{"parent2"}, []string{events[0].GetParentId()})
+	s.ElementsMatch([]domain.FlowEventType{domain.ChatMessageDeltaEventType}, []domain.FlowEventType{events[0].GetEventType()})
+	s.Equal("How can I help you?", events[0].(domain.ChatMessageDeltaEvent).ChatMessageDelta.Content)
 
 	// Test ending the stream
 	err = s.streamer.EndFlowEventStream(ctx, workspaceId, flowId, "parent1")

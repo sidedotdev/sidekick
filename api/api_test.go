@@ -1424,7 +1424,7 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	assert.NoError(t, err, "Persisting workflow failed")
 
 	// persist this one before the websocket connection starts
-	flowEvent1 := domain.ProgressText{
+	flowEvent1 := domain.ProgressTextEvent{
 		EventType: domain.ProgressTextEventType,
 		ParentId:  "test-event-id-1",
 		Text:      "doing stuff 1",
@@ -1448,12 +1448,12 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	defer ws.Close()
 
 	// persist multiple flow events under single flow action
-	flowEvent2 := domain.ProgressText{
+	flowEvent2 := domain.ProgressTextEvent{
 		EventType: domain.ProgressTextEventType,
 		ParentId:  "test-event-id-2",
 		Text:      "doing stuff 2",
 	}
-	flowEvent3 := domain.ProgressText{
+	flowEvent3 := domain.ProgressTextEvent{
 		EventType: flowEvent2.EventType,
 		ParentId:  flowEvent2.ParentId,
 		Text:      "doing stuff 3",
@@ -1474,14 +1474,14 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 
 	// Verify if the flow events are streamed correctly
 	timeout := time.After(15 * time.Second)
-	receivedEvents := make([]domain.ProgressText, 0, 3)
+	receivedEvents := make([]domain.ProgressTextEvent, 0, 3)
 
 	for i := 0; i < 3; i++ {
 		select {
 		case <-timeout:
 			t.Fatalf("Timeout waiting for flow events. Received %d events so far", len(receivedEvents))
 		default:
-			var receivedEvent domain.ProgressText
+			var receivedEvent domain.ProgressTextEvent
 			err = ws.SetReadDeadline(time.Now().Add(8 * time.Second))
 			assert.NoError(t, err, "Failed to set read deadline")
 			err = ws.ReadJSON(&receivedEvent)

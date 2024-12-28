@@ -34,7 +34,7 @@ func (db *Streamer) AddFlowEvent(ctx context.Context, workspaceId string, flowId
 
 func (db *Streamer) EndFlowEventStream(ctx context.Context, workspaceId, flowId, eventStreamParentId string) error {
 	streamKey := fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, eventStreamParentId)
-	serializedEvent, err := json.Marshal(domain.EndStream{
+	serializedEvent, err := json.Marshal(domain.EndStreamEvent{
 		EventType: domain.EndStreamEventType,
 		ParentId:  eventStreamParentId,
 	})

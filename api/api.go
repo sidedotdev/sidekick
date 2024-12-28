@@ -811,7 +811,7 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 
 	streamMessageStartId := "0"
 	maxCount := int64(100)
-	blockDuration := time.Second * 0
+	blockDuration := 250 * time.Millisecond
 
 	clientGone := make(chan struct{})
 
@@ -851,7 +851,7 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 			}
 
 			// Check if streaming should end based on data
-			if lastStreamId == "end" || len(flowActions) == 0 {
+			if lastStreamId == "end" {
 				log.Println("Stream concluded: No new actions")
 				return
 			}
@@ -975,9 +975,12 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 	}
 	defer conn.Close()
 
+	// keep this small for smooth streaming. also, we can't block for too long
+	// as we want to subscribe to new streams in between polling
+	blockDuration := time.Millisecond * 25
+
 	streamKeys := sync.Map{}
 	maxCount := int64(100)
-	blockDuration := time.Millisecond * 250 // Note: we can't purely block with 0 duration as we want to handle new stream keys
 
 	clientGone := make(chan struct{})
 
