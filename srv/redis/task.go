@@ -246,6 +246,9 @@ func (s Streamer) GetTaskChanges(ctx context.Context, workspaceId, streamMessage
 		Block:   blockDuration,
 	}).Result()
 	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, streamMessageStartId, nil
+		}
 		return nil, "", err
 	}
 	if len(streams) == 0 {
@@ -260,7 +263,45 @@ func (s Streamer) GetTaskChanges(ctx context.Context, workspaceId, streamMessage
 	}
 
 	// Return the last message id value to continue from
-	lastMessageId := streams[0].Messages[len(streams[0].Messages)-1].ID
+	continueMessageId := streams[0].Messages[len(streams[0].Messages)-1].ID
 
-	return tasks, lastMessageId, nil
+	return tasks, continueMessageId, nil
+}
+
+func (s *Streamer) StreamTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string) (<-chan domain.Task, <-chan error) {
+	taskChan := make(chan domain.Task)
+	errChan := make(chan error, 1)
+
+	go func() {
+		defer close(taskChan)
+		defer close(errChan)
+
+		continueMessageId := streamMessageStartId
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// we tried a blockDuration of 0, but it turns out to be uncancellable
+				blockDuration := 250 * time.Millisecond
+				tasks, latestContinueMessageId, err := s.GetTaskChanges(ctx, workspaceId, continueMessageId, 100, blockDuration)
+				if err != nil {
+					errChan <- err
+					return
+				}
+
+				for _, task := range tasks {
+					select {
+					case <-ctx.Done():
+						return
+					case taskChan <- task:
+					}
+				}
+
+				continueMessageId = latestContinueMessageId
+			}
+		}
+	}()
+
+	return taskChan, errChan
 }

@@ -893,7 +893,6 @@ func (ctrl *Controller) TaskChangesWebsocketHandler(c *gin.Context) {
 			log.Println("Flow action changes client disconnected")
 			return
 		default:
-			context.WithCancel(context.Background())
 			tasks, lastId, err := ctrl.service.GetTaskChanges(context.Background(), workspaceId, lastTaskStreamId, 50, 0)
 			if err != nil {
 				log.Printf("Error getting task changes: %v", err)
