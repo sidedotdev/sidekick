@@ -169,7 +169,6 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 	done := make(chan bool)
 
 	go func() {
-		fmt.Printf("gofun Starting StreamFlowActionChanges test\n")
 		for {
 			select {
 			case action, ok := <-flowActionChan:
