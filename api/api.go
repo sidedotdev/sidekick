@@ -810,17 +810,15 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 	defer conn.Close()
 
 	streamMessageStartId := "0"
-	maxCount := int64(100)
-	blockDuration := 250 * time.Millisecond
 
-	clientGone := make(chan struct{})
+	flowActionChan, errChan := ctrl.service.StreamFlowActionChanges(ctx, workspaceId, flowId, streamMessageStartId)
 
 	// Handle disconnection detection in a separate goroutine
 	go func() {
 		for {
 			if _, _, err := conn.NextReader(); err != nil {
 				log.Printf("Client disconnected or error: %v", err)
-				close(clientGone)
+				c.Abort()
 				return
 			}
 		}
@@ -829,33 +827,21 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 	// Main loop for streaming flow actions
 	for {
 		select {
-		case <-clientGone:
-			log.Println("Client disconnected, ending stream")
+		case <-ctx.Done():
+			log.Println("Context cancelled, ending stream")
 			return
-		default:
-			// Attempt to fetch the flow actions
-			flowActions, lastStreamId, err := ctrl.service.GetFlowActionChanges(
-				ctx, workspaceId, flowId, streamMessageStartId, maxCount, blockDuration,
-			)
-			if err != nil {
-				log.Printf("Error fetching flow actions: %v", err)
+		case err := <-errChan:
+			log.Printf("Error streaming flow actions: %v", err)
+			return
+		case flowAction, ok := <-flowActionChan:
+			if !ok {
+				log.Println("Flow action channel closed, ending stream")
 				return
 			}
-
-			// Streaming each flow action
-			for _, flowAction := range flowActions {
-				if err := conn.WriteJSON(flowAction); err != nil {
-					log.Printf("Error writing flow action to websocket: %v", err)
-					return
-				}
-			}
-
-			// Check if streaming should end based on data
-			if lastStreamId == "end" {
-				log.Println("Stream concluded: No new actions")
+			if err := conn.WriteJSON(flowAction); err != nil {
+				log.Printf("Error writing flow action to websocket: %v", err)
 				return
 			}
-			streamMessageStartId = lastStreamId
 		}
 	}
 }

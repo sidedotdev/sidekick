@@ -393,25 +393,74 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 	}
 	defer ws.Close()
 
-	// Simulate persisting a flow action
-	flowAction := domain.FlowAction{
-		Id:          "test-id",
-		ActionType:  "test-action-type",
-		FlowId:      flowId,
-		WorkspaceId: workspaceId,
-	}
-	err = db.PersistFlowAction(context.Background(), flowAction)
-	assert.NoError(t, err, "Persisting flow action failed")
+	// Create a channel to signal when all expected actions have been received
+	done := make(chan bool)
 
-	// Verify if the flow action is streamed correctly
-	var receivedAction domain.FlowAction
-	err = ws.ReadJSON(&receivedAction)
-	if err != nil {
-		t.Fatalf("Failed to read flow action: %v", err)
+	// Create multiple flow actions
+	expectedActions := []domain.FlowAction{
+		{
+			Id:          "test-id-1",
+			ActionType:  "test-action-type-1",
+			FlowId:      flowId,
+			WorkspaceId: workspaceId,
+		},
+		{
+			Id:          "test-id-2",
+			ActionType:  "test-action-type-2",
+			FlowId:      flowId,
+			WorkspaceId: workspaceId,
+		},
 	}
 
-	// Assert if the flow action matches the expected structure/content
-	assert.Equal(t, "test-action-type", receivedAction.ActionType)
+	// Goroutine to read messages from WebSocket
+	go func() {
+		receivedCount := 0
+		for {
+			var receivedAction domain.FlowAction
+			err := ws.ReadJSON(&receivedAction)
+			if err != nil {
+				t.Errorf("Failed to read flow action: %v", err)
+				return
+			}
+
+			// Assert if the flow action matches the expected structure/content
+			assert.Equal(t, expectedActions[receivedCount].ActionType, receivedAction.ActionType)
+			assert.Equal(t, expectedActions[receivedCount].Id, receivedAction.Id)
+			assert.Equal(t, expectedActions[receivedCount].FlowId, receivedAction.FlowId)
+			assert.Equal(t, expectedActions[receivedCount].WorkspaceId, receivedAction.WorkspaceId)
+
+			receivedCount++
+			if receivedCount == len(expectedActions) {
+				done <- true
+				return
+			}
+		}
+	}()
+
+	// Simulate persisting flow actions
+	for _, flowAction := range expectedActions {
+		err = db.PersistFlowAction(context.Background(), flowAction)
+		assert.NoError(t, err, "Persisting flow action failed")
+	}
+
+	// Wait for all actions to be received or timeout
+	select {
+	case <-done:
+		// All expected actions were received
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for flow actions")
+	}
+
+	// Test error handling
+	invalidWorkspaceURL := "ws" + strings.TrimPrefix(s.URL, "http") + "/ws/v1/workspaces/invalid-workspace/flows/" + flowId + "/action_changes_ws"
+	_, resp, err := websocket.DefaultDialer.Dial(invalidWorkspaceURL, nil)
+	assert.Error(t, err, "Expected error for invalid workspace")
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "Expected 404 status code for invalid workspace")
+
+	invalidFlowURL := "ws" + strings.TrimPrefix(s.URL, "http") + "/ws/v1/workspaces/" + workspaceId + "/flows/invalid-flow/action_changes_ws"
+	_, resp, err = websocket.DefaultDialer.Dial(invalidFlowURL, nil)
+	assert.Error(t, err, "Expected error for invalid flow")
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "Expected 404 status code for invalid flow")
 }
 func TestCompleteFlowActionHandler(t *testing.T) {
 	ctrl := NewMockController(t)
