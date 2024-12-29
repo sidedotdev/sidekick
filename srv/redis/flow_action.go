@@ -13,6 +13,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+var _ domain.FlowActionStorage = (*Storage)(nil)
+var _ domain.FlowActionStreamer = (*Streamer)(nil)
+
 func (s Storage) PersistFlowAction(ctx context.Context, flowAction domain.FlowAction) error {
 	if flowAction.Id == "" {
 		return fmt.Errorf("missing Id field in FlowAction model")

@@ -111,6 +111,7 @@ func (s *Streamer) GetFlowActionChanges(ctx context.Context, workspaceId, flowId
 
 	return flowActions, fmt.Sprintf("%d", lastSequence+1), nil
 }
+
 func (s *Streamer) StreamFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string) (<-chan domain.FlowAction, <-chan error) {
 	// default to starting from the start of the stream for flow action changes
 	if streamMessageStartId == "" {

@@ -101,3 +101,46 @@ func (db *Streamer) GetFlowEvents(ctx context.Context, workspaceId string, strea
 	}
 	return events, updatedStreamKeys, nil
 }
+
+func (db *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, streamMessageStartId string, eventParentIdCh <-chan string) (<-chan domain.FlowEvent, <-chan error) {
+	eventCh := make(chan domain.FlowEvent)
+	errCh := make(chan error, 1)
+
+	go func() {
+		defer close(eventCh)
+		defer close(errCh)
+
+		streamKeys := make(map[string]string)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case eventParentId, ok := <-eventParentIdCh:
+				if !ok {
+					return
+				}
+				streamKey := fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, eventParentId)
+				streamKeys[streamKey] = streamMessageStartId
+			default:
+			}
+
+			events, updatedStreamKeys, err := db.GetFlowEvents(ctx, workspaceId, streamKeys, 100, time.Second*1)
+			if err != nil {
+				errCh <- err
+				return
+			}
+
+			for _, event := range events {
+				select {
+				case <-ctx.Done():
+					return
+				case eventCh <- event:
+				}
+			}
+
+			streamKeys = updatedStreamKeys
+		}
+	}()
+
+	return eventCh, errCh
+}

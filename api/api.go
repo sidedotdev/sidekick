@@ -768,7 +768,7 @@ var upgrader = websocket.Upgrader{
 
 func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
-	ctx := c.Request.Context()
+	ctx, cancel := context.WithCancel(c.Request.Context())
 	flowId := c.Param("id")
 
 	if workspaceId == "" {
@@ -818,7 +818,7 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 		for {
 			if _, _, err := conn.NextReader(); err != nil {
 				log.Printf("Client disconnected or error: %v", err)
-				c.Abort()
+				cancel()
 				return
 			}
 		}

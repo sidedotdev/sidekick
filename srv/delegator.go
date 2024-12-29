@@ -21,6 +21,10 @@ func (d *Delegator) StreamFlowActionChanges(ctx context.Context, workspaceId, fl
 	return d.streamer.StreamFlowActionChanges(ctx, workspaceId, flowId, streamMessageStartId)
 }
 
+func (d *Delegator) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, streamMessageStartId string, eventParentIdCh <-chan string) (<-chan domain.FlowEvent, <-chan error) {
+	return d.streamer.StreamFlowEvents(ctx, workspaceId, flowId, streamMessageStartId, eventParentIdCh)
+}
+
 func NewDelegator(storage Storage, streamer Streamer) *Delegator {
 	return &Delegator{
 		storage:  storage,
