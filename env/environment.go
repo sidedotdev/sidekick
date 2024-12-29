@@ -47,7 +47,6 @@ type LocalEnvParams struct {
 	WorkspaceId string
 	RepoDir     string
 	Branch      string
-	FlowId      string
 }
 
 func NewLocalEnv(ctx context.Context, params LocalEnvParams) (Env, error) {
