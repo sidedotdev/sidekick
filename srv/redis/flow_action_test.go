@@ -52,6 +52,7 @@ func TestGetFlowActions(t *testing.T) {
 func TestPersistFlowAction(t *testing.T) {
 	ctx := context.Background()
 	service, _ := NewTestRedisService()
+	streamer := NewTestRedisStreamer()
 	flowAction := domain.FlowAction{
 		WorkspaceId:  "TEST_WORKSPACE_ID",
 		FlowId:       "flow_" + ksuid.New().String(),
@@ -78,7 +79,7 @@ func TestPersistFlowAction(t *testing.T) {
 	assert.Equal(t, flowAction, flowActions[0])
 
 	// Check that the flow action ID was added to the Redis stream
-	flowActionChanges, _, err := service.GetFlowActionChanges(ctx, flowAction.WorkspaceId, flowAction.FlowId, "0", 100, 0)
+	flowActionChanges, _, err := streamer.GetFlowActionChanges(ctx, flowAction.WorkspaceId, flowAction.FlowId, "0", 100, 0)
 	assert.Nil(t, err)
 	assert.Len(t, flowActionChanges, 1)
 	assert.Equal(t, flowAction, flowActionChanges[0])
