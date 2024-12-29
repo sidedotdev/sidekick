@@ -27,5 +27,4 @@ type Streamer interface {
 	domain.TaskStreamer
 	domain.FlowActionStreamer
 	domain.FlowEventStreamer
-	StreamFlowEvents(ctx context.Context, workspaceId, flowId string, streamMessageStartId string, eventParentIdCh <-chan string) (<-chan domain.FlowEvent, <-chan error)
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sidekick/common"
-	"time"
 )
 
 // FlowEventType represents the different types of flow events.
@@ -118,5 +117,5 @@ func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
 type FlowEventStreamer interface {
 	AddFlowEvent(ctx context.Context, workspaceId string, flowId string, flowEvent FlowEvent) error
 	EndFlowEventStream(ctx context.Context, workspaceId, flowId, eventStreamParentId string) error
-	GetFlowEvents(ctx context.Context, workspaceId string, streamKeys map[string]string, maxCount int64, blockDuration time.Duration) ([]FlowEvent, map[string]string, error)
+	StreamFlowEvents(ctx context.Context, workspaceId, flowId string, streamMessageStartId string, eventParentIdCh <-chan string) (<-chan FlowEvent, <-chan error)
 }

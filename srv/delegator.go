@@ -21,10 +21,6 @@ func (d *Delegator) StreamFlowActionChanges(ctx context.Context, workspaceId, fl
 	return d.streamer.StreamFlowActionChanges(ctx, workspaceId, flowId, streamMessageStartId)
 }
 
-func (d *Delegator) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, streamMessageStartId string, eventParentIdCh <-chan string) (<-chan domain.FlowEvent, <-chan error) {
-	return d.streamer.StreamFlowEvents(ctx, workspaceId, flowId, streamMessageStartId, eventParentIdCh)
-}
-
 func NewDelegator(storage Storage, streamer Streamer) *Delegator {
 	return &Delegator{
 		storage:  storage,
@@ -187,7 +183,6 @@ func (d Delegator) EndFlowEventStream(ctx context.Context, workspaceId, flowId, 
 	return d.streamer.EndFlowEventStream(ctx, workspaceId, flowId, eventStreamParentId)
 }
 
-/* implements FlowEventStreamer interface */
-func (d Delegator) GetFlowEvents(ctx context.Context, workspaceId string, streamKeys map[string]string, maxCount int64, blockDuration time.Duration) ([]domain.FlowEvent, map[string]string, error) {
-	return d.streamer.GetFlowEvents(ctx, workspaceId, streamKeys, maxCount, blockDuration)
+func (d Delegator) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, streamMessageStartId string, eventParentIdCh <-chan string) (<-chan domain.FlowEvent, <-chan error) {
+	return d.streamer.StreamFlowEvents(ctx, workspaceId, flowId, streamMessageStartId, eventParentIdCh)
 }
