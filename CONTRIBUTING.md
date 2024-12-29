@@ -30,6 +30,7 @@ All the dependencies listed in README.md are required when developing the projec
 1. go (min version 1.21.x): https://go.dev/doc/install
 2. node: https://nodejs.org/en/learn/getting-started/how-to-install-nodejs
 3. usearch: https://unum-cloud.github.io/usearch/golang/
+4. [redis](https://redis.io/docs/install/install-redis/)
 
 ## Development Workflow
 

@@ -69,7 +69,7 @@ Then you can create a task at http://localhost:8855/kanban
 
 ## Dependencies 
 
-1. [redis](https://redis.io/docs/install/install-redis/)
+1. [git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
 2. [ripgrep](https://github.com/BurntSushi/ripgrep?tab=readme-ov-file#installation)
 
 ### Language-specific Dependencies
