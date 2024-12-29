@@ -222,5 +222,38 @@ func (s Streamer) GetFlowActionChanges(ctx context.Context, workspaceId, flowId,
 	return flowActions, lastMessageId, nil
 }
 func (s *Streamer) StreamFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string) (<-chan domain.FlowAction, <-chan error) {
-	panic("StreamFlowActionChanges is not yet implemented")
+	flowActionChan := make(chan domain.FlowAction)
+	errChan := make(chan error, 1)
+
+	go func() {
+		defer close(flowActionChan)
+		defer close(errChan)
+
+		continueMessageId := streamMessageStartId
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				blockDuration := 250 * time.Millisecond
+				flowActions, latestContinueMessageId, err := s.GetFlowActionChanges(ctx, workspaceId, flowId, continueMessageId, 100, blockDuration)
+				if err != nil {
+					errChan <- err
+					return
+				}
+
+				for _, flowAction := range flowActions {
+					select {
+					case <-ctx.Done():
+						return
+					case flowActionChan <- flowAction:
+					}
+				}
+
+				continueMessageId = latestContinueMessageId
+			}
+		}
+	}()
+
+	return flowActionChan, errChan
 }
