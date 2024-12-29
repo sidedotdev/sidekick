@@ -244,65 +244,108 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 func (s *StreamerTestSuite) TestFlowEventStreaming() {
 	s.T().Parallel()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	workspaceId := "test-workspace"
 	flowId := "test-flow"
 
-	// Create some test flow events
-	event1 := domain.ProgressTextEvent{
-		Text:      "Running tests...",
-		EventType: domain.ProgressTextEventType,
-		ParentId:  "parent1",
-	}
-	event2 := domain.ChatMessageDeltaEvent{
-		EventType:    domain.ChatMessageDeltaEventType,
-		FlowActionId: "parent2",
-		ChatMessageDelta: common.ChatMessageDelta{
-			Role:    common.ChatMessageRoleAssistant,
-			Content: "How can I help you?",
+	eventParentIdCh := make(chan string, 2)
+	eventCh, errCh := s.streamer.StreamFlowEvents(ctx, workspaceId, flowId, "", eventParentIdCh)
+
+	eventParentId1 := "parent1"
+	eventParentId2 := "parent2"
+
+	go func() {
+		eventParentIdCh <- eventParentId1
+		time.Sleep(100 * time.Millisecond)
+		eventParentIdCh <- eventParentId2
+		close(eventParentIdCh)
+	}()
+
+	// Create and add test flow events
+	events := []domain.FlowEvent{
+		domain.ProgressTextEvent{EventType: domain.ProgressTextEventType, ParentId: eventParentId1, Text: "Running tests..."},
+		domain.EndStreamEvent{EventType: domain.EndStreamEventType, ParentId: eventParentId1},
+		domain.ChatMessageDeltaEvent{
+			EventType:    domain.ChatMessageDeltaEventType,
+			FlowActionId: eventParentId2,
+			ChatMessageDelta: common.ChatMessageDelta{
+				Role:    common.ChatMessageRoleAssistant,
+				Content: "How can I help you?",
+			},
 		},
+		domain.EndStreamEvent{EventType: domain.EndStreamEventType, ParentId: eventParentId2},
 	}
 
-	// Add events
-	err := s.streamer.AddFlowEvent(ctx, workspaceId, flowId, event1)
-	s.NoError(err)
-	err = s.streamer.AddFlowEvent(ctx, workspaceId, flowId, event2)
-	s.NoError(err)
-
-	// Test getting events from the beginning
-	streamKeys := map[string]string{
-		fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, "parent1"): "0",
-		fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, "parent2"): "0",
+	for _, event := range events {
+		err := s.streamer.AddFlowEvent(ctx, workspaceId, flowId, event)
+		s.NoError(err)
 	}
-	events, newKeys, err := s.streamer.GetFlowEvents(ctx, workspaceId, streamKeys, 10, 50*time.Millisecond)
-	s.NoError(err)
-	s.Len(events, 2)
-	s.ElementsMatch([]string{"parent1", "parent2"}, []string{events[0].GetParentId(), events[1].GetParentId()})
-	s.ElementsMatch([]domain.FlowEventType{domain.ProgressTextEventType, domain.ChatMessageDeltaEventType}, []domain.FlowEventType{events[0].GetEventType(), events[1].GetEventType()})
 
-	// Test getting events with no new messages
-	events, newKeys2, err := s.streamer.GetFlowEvents(ctx, workspaceId, newKeys, 10, 50*time.Millisecond)
-	s.NoError(err)
-	s.Empty(events)
+	receivedEvents := make([]domain.FlowEvent, 0)
+	for i := 0; i < len(events); i++ {
+		select {
+		case event := <-eventCh:
+			receivedEvents = append(receivedEvents, event)
+		case err := <-errCh:
+			s.Fail("Unexpected error:", err)
+		case <-time.After(5 * time.Second):
+			s.Fail("Timeout waiting for events")
+		}
+	}
 
-	// Test getting just parent2 again
-	newKeys2[fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, "parent2")] = "0"
-	events, newKeys3, err := s.streamer.GetFlowEvents(ctx, workspaceId, newKeys2, 10, 50*time.Millisecond)
-	s.NoError(err)
-	s.Len(events, 1)
-	s.ElementsMatch([]string{"parent2"}, []string{events[0].GetParentId()})
-	s.ElementsMatch([]domain.FlowEventType{domain.ChatMessageDeltaEventType}, []domain.FlowEventType{events[0].GetEventType()})
-	s.Equal("How can I help you?", events[0].(domain.ChatMessageDeltaEvent).ChatMessageDelta.Content)
+	s.Equal(len(events), len(receivedEvents))
+	for i, event := range events {
+		s.Equal(event.GetEventType(), receivedEvents[i].GetEventType())
+		s.Equal(event.GetParentId(), receivedEvents[i].GetParentId())
+	}
+}
 
-	// Test ending the stream
-	err = s.streamer.EndFlowEventStream(ctx, workspaceId, flowId, "parent1")
+func (s *StreamerTestSuite) TestFlowEventStreaming_InvalidFlowEvent() {
+	s.T().Parallel()
+
+	ctx := context.Background()
+	flowId := "test-flow-2"
+	workspaceId := "test-workspace2"
+
+	invalidEvent := domain.ProgressTextEvent{EventType: "invalid", ParentId: "parent1"}
+	err := s.streamer.AddFlowEvent(ctx, workspaceId, flowId, invalidEvent)
 	s.NoError(err)
 
-	// Test getting end events
-	events, _, err = s.streamer.GetFlowEvents(ctx, workspaceId, newKeys3, 10, 50*time.Millisecond)
-	s.NoError(err)
-	s.Len(events, 1)
-	s.Equal(domain.EndStreamEventType, events[0].GetEventType())
+	eventParentIdCh := make(chan string)
+	eventCh, errCh := s.streamer.StreamFlowEvents(ctx, workspaceId, flowId, "", eventParentIdCh)
+	eventParentIdCh <- invalidEvent.ParentId
+
+	select {
+	case event := <-eventCh:
+		s.T().Errorf("Unexpected event: %v", event)
+	case err := <-errCh:
+		s.Contains(err.Error(), "unknown flow eventType")
+	case <-time.After(5 * time.Second):
+		s.Fail("Timeout waiting for error")
+	}
+}
+
+func (s *StreamerTestSuite) TestFlowEventStreaming_Cancellation() {
+	s.T().Parallel()
+
+	flowId := "test-flow-3"
+	workspaceId := "test-workspace3"
+
+	// Test context cancellation
+	ctxWithTimeout, cancelTimeout := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelTimeout()
+
+	eventCh, errCh := s.streamer.StreamFlowEvents(ctxWithTimeout, workspaceId, flowId, "", make(chan string))
+
+	<-ctxWithTimeout.Done()
+
+	_, eventChOpen := <-eventCh
+	_, errChOpen := <-errCh
+
+	s.False(eventChOpen, "Event channel should be closed")
+	s.False(errChOpen, "Error channel should be closed")
 }
 
 func TestStreamerSuite(t *testing.T) {

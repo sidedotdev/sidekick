@@ -7,6 +7,7 @@ import (
 	"sidekick/domain"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -138,37 +139,92 @@ func (s *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId str
 		defer close(eventCh)
 		defer close(errCh)
 
-		streamKeys := make(map[string]string)
+		wg := &sync.WaitGroup{}
+	outer:
 		for {
 			select {
 			case <-ctx.Done():
-				return
+				break outer
 			case eventParentId, ok := <-eventParentIdCh:
 				if !ok {
-					return
+					break outer
 				}
-				streamKey := fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, eventParentId)
-				streamKeys[streamKey] = streamMessageStartId
-			default:
-			}
+				subject := fmt.Sprintf("flow_events.%s.%s", workspaceId, eventParentId)
 
-			events, updatedStreamKeys, err := s.GetFlowEvents(ctx, workspaceId, streamKeys, 100, time.Second*1)
-			if err != nil {
-				errCh <- err
-				return
-			}
-
-			for _, event := range events {
-				select {
-				case <-ctx.Done():
-					return
-				case eventCh <- event:
+				consumer, err := s.createConsumer(ctx, subject, streamMessageStartId)
+				if err != nil {
+					errCh <- fmt.Errorf("failed to create consumer for event parent ID %s: %w", eventParentId, err)
+					break outer
 				}
-			}
 
-			streamKeys = updatedStreamKeys
+				wg.Add(1)
+				go s.consumeFlowEvents(ctx, consumer, eventCh, errCh, wg)
+			}
 		}
+		wg.Wait()
 	}()
 
 	return eventCh, errCh
+}
+
+func (s *Streamer) createConsumer(ctx context.Context, subject, streamMessageStartId string) (jetstream.Consumer, error) {
+	var deliveryPolicy jetstream.DeliverPolicy
+	var startSeq uint64
+
+	if streamMessageStartId == "" || streamMessageStartId == "0" {
+		deliveryPolicy = jetstream.DeliverAllPolicy
+	} else if streamMessageStartId == "$" {
+		deliveryPolicy = jetstream.DeliverLastPolicy
+	} else {
+		deliveryPolicy = jetstream.DeliverByStartSequencePolicy
+		var err error
+		startSeq, err = strconv.ParseUint(streamMessageStartId, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid stream message start id: %w", err)
+		}
+	}
+
+	consumer, err := s.js.OrderedConsumer(ctx, PersistentStreamName, jetstream.OrderedConsumerConfig{
+		FilterSubjects:    []string{subject},
+		InactiveThreshold: 5 * time.Minute,
+		DeliverPolicy:     deliveryPolicy,
+		OptStartSeq:       startSeq,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create consumer: %w", err)
+	}
+
+	return consumer, nil
+}
+
+func (s *Streamer) consumeFlowEvents(ctx context.Context, consumer jetstream.Consumer, eventCh chan<- domain.FlowEvent, errCh chan<- error, wg *sync.WaitGroup) {
+	var consContext jetstream.ConsumeContext
+	consContext, err := consumer.Consume(func(msg jetstream.Msg) {
+		event, err := domain.UnmarshalFlowEvent(msg.Data())
+		if err != nil {
+			errCh <- fmt.Errorf("failed to unmarshal flow event: %w", err)
+			return
+		}
+
+		select {
+		case eventCh <- event:
+			if _, ok := event.(domain.EndStreamEvent); ok {
+				consContext.Stop()
+			}
+			msg.Ack()
+		}
+	})
+	if err != nil {
+		errCh <- fmt.Errorf("failed to consume messages: %w", err)
+		return
+	}
+
+	defer consContext.Stop()
+
+	select {
+	case <-consContext.Closed():
+	case <-ctx.Done():
+	}
+
+	wg.Done()
 }
