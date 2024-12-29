@@ -183,6 +183,6 @@ func (d Delegator) EndFlowEventStream(ctx context.Context, workspaceId, flowId, 
 	return d.streamer.EndFlowEventStream(ctx, workspaceId, flowId, eventStreamParentId)
 }
 
-func (d Delegator) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, streamMessageStartId string, eventParentIdCh <-chan string) (<-chan domain.FlowEvent, <-chan error) {
-	return d.streamer.StreamFlowEvents(ctx, workspaceId, flowId, streamMessageStartId, eventParentIdCh)
+func (d Delegator) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, subscriptionCh <-chan domain.FlowEventSubscription) (<-chan domain.FlowEvent, <-chan error) {
+	return d.streamer.StreamFlowEvents(ctx, workspaceId, flowId, subscriptionCh)
 }

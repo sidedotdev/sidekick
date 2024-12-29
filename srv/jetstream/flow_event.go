@@ -45,14 +45,9 @@ func (s *Streamer) EndFlowEventStream(ctx context.Context, workspaceId, flowId, 
 	return nil
 }
 
-func (s *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, streamMessageStartId string, eventParentIdCh <-chan string) (<-chan domain.FlowEvent, <-chan error) {
+func (s *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, subscriptionCh <-chan domain.FlowEventSubscription) (<-chan domain.FlowEvent, <-chan error) {
 	eventCh := make(chan domain.FlowEvent)
 	errCh := make(chan error, 1)
-
-	// default to starting from the start of the stream for flow events
-	if streamMessageStartId == "" {
-		streamMessageStartId = "0"
-	}
 
 	eventParentIdSet := make(map[string]bool)
 	go func() {
@@ -65,24 +60,30 @@ func (s *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId str
 			select {
 			case <-ctx.Done():
 				break outer
-			case eventParentId, ok := <-eventParentIdCh:
+			case subscription, ok := <-subscriptionCh:
 				if !ok {
 					break outer
 				}
-				if eventParentIdSet[eventParentId] {
+				if eventParentIdSet[subscription.ParentId] {
 					continue
 				}
-				subject := fmt.Sprintf("flow_events.%s.%s", workspaceId, eventParentId)
+				subject := fmt.Sprintf("flow_events.%s.%s", workspaceId, subscription.ParentId)
+
+				// default to starting from the start of the stream for flow events
+				streamMessageStartId := subscription.StreamMessageStartId
+				if streamMessageStartId == "" {
+					streamMessageStartId = "0"
+				}
 
 				consumer, err := s.createConsumer(ctx, subject, streamMessageStartId)
 				if err != nil {
-					errCh <- fmt.Errorf("failed to create consumer for event parent ID %s: %w", eventParentId, err)
+					errCh <- fmt.Errorf("failed to create consumer for event parent ID %s: %w", subscription.ParentId, err)
 					break outer
 				}
 
 				wg.Add(1)
 				go s.consumeFlowEvents(ctx, consumer, eventCh, errCh, wg)
-				eventParentIdSet[eventParentId] = true
+				eventParentIdSet[subscription.ParentId] = true
 			}
 		}
 		wg.Wait()

@@ -250,17 +250,17 @@ func (s *StreamerTestSuite) TestFlowEventStreaming() {
 	workspaceId := "test-workspace"
 	flowId := "test-flow"
 
-	eventParentIdCh := make(chan string, 2)
-	eventCh, errCh := s.streamer.StreamFlowEvents(ctx, workspaceId, flowId, "", eventParentIdCh)
+	subscriptionCh := make(chan domain.FlowEventSubscription, 2)
+	eventCh, errCh := s.streamer.StreamFlowEvents(ctx, workspaceId, flowId, subscriptionCh)
 
 	eventParentId1 := "parent1"
 	eventParentId2 := "parent2"
 
 	go func() {
-		eventParentIdCh <- eventParentId1
+		subscriptionCh <- domain.FlowEventSubscription{ParentId: eventParentId1, StreamMessageStartId: ""}
 		time.Sleep(100 * time.Millisecond)
-		eventParentIdCh <- eventParentId2
-		close(eventParentIdCh)
+		subscriptionCh <- domain.FlowEventSubscription{ParentId: eventParentId2, StreamMessageStartId: ""}
+		close(subscriptionCh)
 	}()
 
 	// Create and add test flow events
@@ -313,9 +313,9 @@ func (s *StreamerTestSuite) TestFlowEventStreaming_InvalidFlowEvent() {
 	err := s.streamer.AddFlowEvent(ctx, workspaceId, flowId, invalidEvent)
 	s.NoError(err)
 
-	eventParentIdCh := make(chan string)
-	eventCh, errCh := s.streamer.StreamFlowEvents(ctx, workspaceId, flowId, "", eventParentIdCh)
-	eventParentIdCh <- invalidEvent.ParentId
+	subscriptionCh := make(chan domain.FlowEventSubscription)
+	eventCh, errCh := s.streamer.StreamFlowEvents(ctx, workspaceId, flowId, subscriptionCh)
+	subscriptionCh <- domain.FlowEventSubscription{ParentId: invalidEvent.ParentId, StreamMessageStartId: ""}
 
 	select {
 	case event := <-eventCh:
@@ -337,7 +337,7 @@ func (s *StreamerTestSuite) TestFlowEventStreaming_Cancellation() {
 	ctxWithTimeout, cancelTimeout := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancelTimeout()
 
-	eventCh, errCh := s.streamer.StreamFlowEvents(ctxWithTimeout, workspaceId, flowId, "", make(chan string))
+	eventCh, errCh := s.streamer.StreamFlowEvents(ctxWithTimeout, workspaceId, flowId, make(chan domain.FlowEventSubscription))
 
 	<-ctxWithTimeout.Done()
 
