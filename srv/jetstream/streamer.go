@@ -101,11 +101,13 @@ func (s *Streamer) Initialize(nc *nats.Conn) error {
 	// Ensure the tasks stream exists (this is idempotent)
 	_, err = js.CreateOrUpdateStream(context.Background(), jetstream.StreamConfig{
 		Name: EphemeralStreamName,
-		// task changes could have been ephemeral, since it doesn't matter if
-		// they're lost. NOTE jetstream.DeliverByStartTimePolicy isn't working
-		// with this emphemeral stream, but DeliverNewPolicy is working fine.
+		// task changes is ephemeral, since it doesn't matter if they're lost.
+		// NOTE jetstream.DeliverByStartTimePolicy isn't working with this
+		// emphemeral stream, but DeliverNewPolicy is working fine.
 		Subjects: []string{"tasks.changes.*"},
 		Storage:  jetstream.MemoryStorage,
+		Discard:  jetstream.DiscardOld,
+		MaxBytes: 10 * 1024 * 1024, // 10MB
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create emphemeral stream: %w", err)
@@ -115,9 +117,15 @@ func (s *Streamer) Initialize(nc *nats.Conn) error {
 	_, err = js.CreateOrUpdateStream(context.Background(), jetstream.StreamConfig{
 		Name: PersistentStreamName,
 		// flow action changes and flow events are persistent and should not be
-		// lost, they show the history of the flow
+		// lost, they show the history of the flow. that said, flow actions'
+		// final states are stored and that's sufficient, if we adjust the
+		// application to use that in combination with streaming. also, the
+		// ChatMessageDeltaEvent should be ephemeral, really any event where the
+		// parent is a flowAction
 		Subjects: []string{"flow_actions.changes.*.*", "flow_events.*.*"},
 		Storage:  jetstream.FileStorage,
+		Discard:  jetstream.DiscardNew,   // prevent publishing at this point, to avoid losing messages
+		MaxBytes: 5 * 1024 * 1024 * 1024, // 5GB
 	})
 	if err != nil && err != jetstream.ErrStreamNameAlreadyInUse {
 		return fmt.Errorf("failed to create persistent stream: %w", err)
