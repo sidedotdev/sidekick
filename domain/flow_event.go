@@ -43,7 +43,7 @@ type FlowEvent interface {
 type ProgressTextEvent struct {
 	Text      string        `json:"text"`
 	EventType FlowEventType `json:"eventType"`
-	// either a FlowAction or Subflow may be a parent of a ProgressText
+	// either a FlowAction, Subflow or Flow may be a parent of a ProgressText
 	ParentId string `json:"parentId"`
 }
 
