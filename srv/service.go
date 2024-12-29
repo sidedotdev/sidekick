@@ -9,6 +9,7 @@ type Service interface {
 	Storage
 	Streamer
 	DeleteWorkspace(ctx context.Context, workspaceId string) error
+	DeleteWorktree(ctx context.Context, workspaceId, worktreeId string) error
 }
 
 type Storage interface {
