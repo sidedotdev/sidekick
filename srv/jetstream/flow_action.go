@@ -111,3 +111,6 @@ func (s *Streamer) GetFlowActionChanges(ctx context.Context, workspaceId, flowId
 
 	return flowActions, fmt.Sprintf("%d", lastSequence+1), nil
 }
+func (s *Streamer) StreamFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string) (<-chan domain.FlowAction, <-chan error) {
+	panic("StreamFlowActionChanges is not yet implemented")
+}
