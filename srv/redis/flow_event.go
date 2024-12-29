@@ -118,14 +118,9 @@ func lenSyncMap(m *sync.Map) int {
 	return i
 }
 
-func (db *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, streamMessageStartId string, eventParentIdCh <-chan string) (<-chan domain.FlowEvent, <-chan error) {
+func (db *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, subscriptionCh <-chan domain.FlowEventSubscription) (<-chan domain.FlowEvent, <-chan error) {
 	eventCh := make(chan domain.FlowEvent)
 	errCh := make(chan error, 1)
-
-	// default to starting from the start of the stream for flow events
-	if streamMessageStartId == "" {
-		streamMessageStartId = "0"
-	}
 
 	go func() {
 		defer close(eventCh)
@@ -136,11 +131,15 @@ func (db *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId st
 			select {
 			case <-ctx.Done():
 				return
-			case eventParentId, ok := <-eventParentIdCh:
+			case subscription, ok := <-subscriptionCh:
 				if !ok {
 					return
 				}
-				streamKey := fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, eventParentId)
+				streamKey := fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, subscription.ParentId)
+				streamMessageStartId := subscription.StreamMessageStartId
+				if streamMessageStartId == "" {
+					streamMessageStartId = "0"
+				}
 				streamKeys.Store(streamKey, streamMessageStartId)
 			default:
 				if lenSyncMap(&streamKeys) == 0 {

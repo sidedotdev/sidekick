@@ -94,12 +94,12 @@ func TestStreamFlowEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	eventParentIdCh := make(chan string, 2)
-	eventCh, errCh := db.StreamFlowEvents(ctx, workspaceId, flowId, "0", eventParentIdCh)
+	subscriptionCh := make(chan domain.FlowEventSubscription, 2)
+	eventCh, errCh := db.StreamFlowEvents(ctx, workspaceId, flowId, subscriptionCh)
 
-	// Send event parent IDs
-	eventParentIdCh <- eventParentId1
-	eventParentIdCh <- eventParentId2
+	// Send FlowEventSubscriptions
+	subscriptionCh <- domain.FlowEventSubscription{ParentId: eventParentId1, StreamMessageStartId: "0"}
+	subscriptionCh <- domain.FlowEventSubscription{ParentId: eventParentId2, StreamMessageStartId: "0"}
 
 	// Add flow events for both parent IDs
 	flowEvent1 := domain.ProgressTextEvent{

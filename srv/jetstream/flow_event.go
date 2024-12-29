@@ -69,7 +69,6 @@ func (s *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId str
 				if !ok {
 					break outer
 				}
-				// only create a consumer for each event parent ID once
 				if eventParentIdSet[eventParentId] {
 					continue
 				}

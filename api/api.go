@@ -912,11 +912,6 @@ func (ctrl *Controller) TaskChangesWebsocketHandler(c *gin.Context) {
 	}
 }
 
-type FlowEventSubscription struct {
-	ParentId            string `json:"parentId"`
-	LastStreamMessageId string `json:"lastStreamMessageId,omitempty"`
-}
-
 func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
@@ -974,7 +969,7 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 				cancel()
 				return
 			}
-			var sub FlowEventSubscription
+			var sub domain.FlowEventSubscription
 			err = json.NewDecoder(r).Decode(&sub)
 			if err == io.EOF {
 				// One value is expected in the message.

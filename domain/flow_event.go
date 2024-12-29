@@ -114,8 +114,13 @@ func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
 	}
 }
 
+type FlowEventSubscription struct {
+	ParentId             string `json:"parentId"`
+	StreamMessageStartId string `json:"streamMessageStartId,omitempty"`
+}
+
 type FlowEventStreamer interface {
 	AddFlowEvent(ctx context.Context, workspaceId string, flowId string, flowEvent FlowEvent) error
 	EndFlowEventStream(ctx context.Context, workspaceId, flowId, eventStreamParentId string) error
-	StreamFlowEvents(ctx context.Context, workspaceId, flowId string, streamMessageStartId string, eventParentIdCh <-chan string) (<-chan FlowEvent, <-chan error)
+	StreamFlowEvents(ctx context.Context, workspaceId, flowId string, subscriptionCh <-chan FlowEventSubscription) (<-chan FlowEvent, <-chan error)
 }
