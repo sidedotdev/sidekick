@@ -126,3 +126,35 @@ func (s *Streamer) Initialize(nc *nats.Conn) error {
 	s.js = js
 	return nil
 }
+
+func (s *Streamer) createConsumer(ctx context.Context, subject, streamMessageStartId string) (jetstream.Consumer, error) {
+	var deliveryPolicy jetstream.DeliverPolicy
+	var startSeq uint64
+
+	if streamMessageStartId == "" {
+		return nil, fmt.Errorf("stream message start id is required when creating a consumer")
+	} else if streamMessageStartId == "0" {
+		deliveryPolicy = jetstream.DeliverAllPolicy
+	} else if streamMessageStartId == "$" {
+		deliveryPolicy = jetstream.DeliverLastPolicy
+	} else {
+		deliveryPolicy = jetstream.DeliverByStartSequencePolicy
+		var err error
+		startSeq, err = strconv.ParseUint(streamMessageStartId, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid stream message start id: %w", err)
+		}
+	}
+
+	consumer, err := s.js.OrderedConsumer(ctx, PersistentStreamName, jetstream.OrderedConsumerConfig{
+		FilterSubjects:    []string{subject},
+		InactiveThreshold: 5 * time.Minute,
+		DeliverPolicy:     deliveryPolicy,
+		OptStartSeq:       startSeq,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create consumer: %w", err)
+	}
+
+	return consumer, nil
+}

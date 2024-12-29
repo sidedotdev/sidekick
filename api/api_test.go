@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -371,6 +372,7 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 
 	workspaceId := "test-workspace-id-" + uuid.New().String()
 	flowId := "test-flow-id-" + uuid.New().String()
+
 	// persisting a workspace and flow so that the identifiers are valid
 	workspace := domain.Workspace{Id: workspaceId}
 	err := db.PersistWorkspace(ctx, workspace)
@@ -1459,12 +1461,13 @@ func TestGetTaskHandler(t *testing.T) {
 func TestFlowEventsWebsocketHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	db := ctrl.service
-	ctx := context.Background()
 
 	workspaceId := "test-workspace-id-" + uuid.New().String()
 	flowId := "test-flow-id-" + uuid.New().String()
+
 	// persisting a workspace and flow so that the identifiers are valid
+	db := ctrl.service
+	ctx := context.Background()
 	workspace := domain.Workspace{Id: workspaceId}
 	err := db.PersistWorkspace(ctx, workspace)
 	assert.NoError(t, err, "Persisting workspace failed")
@@ -1472,22 +1475,49 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	err = db.PersistFlow(ctx, flow)
 	assert.NoError(t, err, "Persisting workflow failed")
 
-	// persist this one before the websocket connection starts
-	flowEvent1 := domain.ProgressTextEvent{
-		EventType: domain.ProgressTextEventType,
-		ParentId:  "test-event-id-1",
-		Text:      "doing stuff 1",
-	}
-	err = ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent1)
-	assert.NoError(t, err, "Persisting flow event 1 failed")
-
 	router := DefineRoutes(ctrl)
-
 	s := httptest.NewServer(router)
 	defer s.Close()
 
 	// Replace http with ws in the URL
 	wsURL := "ws" + strings.TrimPrefix(s.URL, "http") + "/ws/v1/workspaces/" + workspaceId + "/flows/" + flowId + "/events"
+
+	// Create flow events
+	flowEvents := []domain.FlowEvent{
+		domain.ProgressTextEvent{
+			EventType: domain.ProgressTextEventType,
+			ParentId:  "parent-1",
+			Text:      "doing stuff 1",
+		},
+		domain.ProgressTextEvent{
+			EventType: domain.ProgressTextEventType,
+			ParentId:  "parent-2",
+			Text:      "doing stuff 2",
+		},
+		domain.ProgressTextEvent{
+			EventType: domain.ProgressTextEventType,
+			ParentId:  "parent-2",
+			Text:      "doing stuff 3",
+		},
+		domain.EndStreamEvent{
+			EventType: domain.EndStreamEventType,
+			ParentId:  "parent-2",
+		},
+		domain.EndStreamEvent{
+			EventType: domain.EndStreamEventType,
+			ParentId:  "parent-1",
+		},
+	}
+
+	// Start a goroutine to add the events over time, simulating a real-time scenario
+	go func() {
+		for _, event := range flowEvents {
+			time.Sleep(100 * time.Millisecond)
+			err = ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, event)
+			fmt.Printf("Added event: %v\n", event)
+			assert.NoError(t, err, "Failed to add flow event")
+		}
+	}()
 
 	// Connect to the WebSocket server
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -1496,61 +1526,44 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	}
 	defer ws.Close()
 
-	// persist multiple flow events under single flow action
-	flowEvent2 := domain.ProgressTextEvent{
-		EventType: domain.ProgressTextEventType,
-		ParentId:  "test-event-id-2",
-		Text:      "doing stuff 2",
-	}
-	flowEvent3 := domain.ProgressTextEvent{
-		EventType: flowEvent2.EventType,
-		ParentId:  flowEvent2.ParentId,
-		Text:      "doing stuff 3",
-	}
-	err = ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent2)
-	assert.NoError(t, err, "Persisting flow event 2 failed")
-	err = ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent3)
-	assert.NoError(t, err, "Persisting flow event 3 failed")
-
-	// send messages via the websocket to subscribe to the streams for the flow actions
-	err = ws.WriteJSON(FlowEventSubscription{ParentId: flowEvent1.ParentId})
+	// Send subscriptions
+	err = ws.WriteJSON(FlowEventSubscription{ParentId: "parent-1"})
 	assert.NoError(t, err, "Failed to send subscription for flowEvent1")
-	t.Log("Sent subscription for flowEvent1")
-	time.Sleep(100 * time.Millisecond)
-	err = ws.WriteJSON(FlowEventSubscription{ParentId: flowEvent2.ParentId})
+	err = ws.WriteJSON(FlowEventSubscription{ParentId: "parent-2"})
 	assert.NoError(t, err, "Failed to send subscription for flowEvent2")
-	t.Log("Sent subscription for flowEvent2")
 
 	// Verify if the flow events are streamed correctly
-	timeout := time.After(15 * time.Second)
-	receivedEvents := make([]domain.ProgressTextEvent, 0, 3)
+	timeout := time.After(5 * time.Second)
+	receivedEvents := make([]domain.FlowEvent, 0, len(flowEvents))
 
-	for i := 0; i < 3; i++ {
+	fmt.Print("Waiting for flow events...\n")
+	for i := 0; i < len(flowEvents); i++ {
 		select {
 		case <-timeout:
 			t.Fatalf("Timeout waiting for flow events. Received %d events so far", len(receivedEvents))
 		default:
-			var receivedEvent domain.ProgressTextEvent
-			err = ws.SetReadDeadline(time.Now().Add(8 * time.Second))
-			assert.NoError(t, err, "Failed to set read deadline")
-			err = ws.ReadJSON(&receivedEvent)
+			_, r, err := ws.NextReader()
 			if err != nil {
-				if err == websocket.ErrReadLimit {
-					t.Logf("Hit read limit for event %d, retrying", i+1)
-					continue // Try again if we hit the read limit
-				}
-				t.Fatalf("Failed to read flow event %d: %v", i+1, err)
+				t.Fatalf("Failed to get next reader: %v", err)
 			}
-			t.Logf("Received event %d: %+v", i+1, receivedEvent)
+			bytes, err := io.ReadAll(r)
+			if err != nil {
+				t.Fatalf("Failed to read ws bytes: %v", err)
+			}
+			receivedEvent, err := domain.UnmarshalFlowEvent(bytes)
+			if err != nil {
+				t.Fatalf("Failed to unmarshal flow event: %v", err)
+			}
+			t.Logf("Received event: %+v", receivedEvent)
 			receivedEvents = append(receivedEvents, receivedEvent)
 		}
 	}
 
 	// Assert if the flow events match the expected structure/content
-	assert.Equal(t, 3, len(receivedEvents), "Expected 3 flow events")
-	assert.Equal(t, flowEvent1, receivedEvents[0])
-	assert.Equal(t, flowEvent2, receivedEvents[1])
-	assert.Equal(t, flowEvent3, receivedEvents[2])
+	assert.Equal(t, len(flowEvents), len(receivedEvents), "Expected %d flow events, got %d", len(flowEvents), len(receivedEvents))
+	for i, event := range flowEvents {
+		assert.Equal(t, event, receivedEvents[i])
+	}
 }
 
 func TestGetArchivedTasksHandler(t *testing.T) {
@@ -1669,8 +1682,6 @@ func TestTaskChangesWebsocketHandler(t *testing.T) {
 		t.Fatalf("Timeout waiting for task")
 	default:
 		var response map[string]interface{}
-		err = ws.SetReadDeadline(time.Now().Add(8 * time.Second))
-		assert.NoError(t, err, "Failed to set read deadline")
 		err = ws.ReadJSON(&response)
 		if err != nil {
 			t.Fatalf("Failed to read task: %v", err)

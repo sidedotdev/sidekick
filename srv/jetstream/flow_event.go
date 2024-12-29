@@ -135,6 +135,11 @@ func (s *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId str
 	eventCh := make(chan domain.FlowEvent)
 	errCh := make(chan error, 1)
 
+	// default to starting from the start of the stream for flow events
+	if streamMessageStartId == "" {
+		streamMessageStartId = "0"
+	}
+
 	go func() {
 		defer close(eventCh)
 		defer close(errCh)
@@ -167,37 +172,9 @@ func (s *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId str
 	return eventCh, errCh
 }
 
-func (s *Streamer) createConsumer(ctx context.Context, subject, streamMessageStartId string) (jetstream.Consumer, error) {
-	var deliveryPolicy jetstream.DeliverPolicy
-	var startSeq uint64
-
-	if streamMessageStartId == "" || streamMessageStartId == "0" {
-		deliveryPolicy = jetstream.DeliverAllPolicy
-	} else if streamMessageStartId == "$" {
-		deliveryPolicy = jetstream.DeliverLastPolicy
-	} else {
-		deliveryPolicy = jetstream.DeliverByStartSequencePolicy
-		var err error
-		startSeq, err = strconv.ParseUint(streamMessageStartId, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid stream message start id: %w", err)
-		}
-	}
-
-	consumer, err := s.js.OrderedConsumer(ctx, PersistentStreamName, jetstream.OrderedConsumerConfig{
-		FilterSubjects:    []string{subject},
-		InactiveThreshold: 5 * time.Minute,
-		DeliverPolicy:     deliveryPolicy,
-		OptStartSeq:       startSeq,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create consumer: %w", err)
-	}
-
-	return consumer, nil
-}
-
 func (s *Streamer) consumeFlowEvents(ctx context.Context, consumer jetstream.Consumer, eventCh chan<- domain.FlowEvent, errCh chan<- error, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	var consContext jetstream.ConsumeContext
 	consContext, err := consumer.Consume(func(msg jetstream.Msg) {
 		event, err := domain.UnmarshalFlowEvent(msg.Data())
@@ -206,25 +183,20 @@ func (s *Streamer) consumeFlowEvents(ctx context.Context, consumer jetstream.Con
 			return
 		}
 
-		select {
-		case eventCh <- event:
-			if _, ok := event.(domain.EndStreamEvent); ok {
-				consContext.Stop()
-			}
-			msg.Ack()
+		eventCh <- event
+		if _, ok := event.(domain.EndStreamEvent); ok {
+			consContext.Stop()
 		}
+		msg.Ack()
 	})
 	if err != nil {
 		errCh <- fmt.Errorf("failed to consume messages: %w", err)
 		return
 	}
-
 	defer consContext.Stop()
 
 	select {
 	case <-consContext.Closed():
 	case <-ctx.Done():
 	}
-
-	wg.Done()
 }

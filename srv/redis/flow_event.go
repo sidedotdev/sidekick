@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sidekick/domain"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -62,6 +63,10 @@ func (db *Streamer) GetFlowEvents(ctx context.Context, workspaceId string, strea
 	var streamArgs []string
 	var lastIds []string
 	for key, lastId := range streamKeys {
+		// default to starting from the start of the stream for flow events
+		if lastId == "" {
+			lastId = "0"
+		}
 		streamArgs = append(streamArgs, key)
 		lastIds = append(lastIds, lastId)
 		updatedStreamKeys[key] = lastId
@@ -102,15 +107,29 @@ func (db *Streamer) GetFlowEvents(ctx context.Context, workspaceId string, strea
 	return events, updatedStreamKeys, nil
 }
 
+func lenSyncMap(m *sync.Map) int {
+	var i int
+	m.Range(func(_, _ any) bool {
+		i++
+		return true
+	})
+	return i
+}
+
 func (db *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, streamMessageStartId string, eventParentIdCh <-chan string) (<-chan domain.FlowEvent, <-chan error) {
 	eventCh := make(chan domain.FlowEvent)
 	errCh := make(chan error, 1)
+
+	// default to starting from the start of the stream for flow events
+	if streamMessageStartId == "" {
+		streamMessageStartId = "0"
+	}
 
 	go func() {
 		defer close(eventCh)
 		defer close(errCh)
 
-		streamKeys := make(map[string]string)
+		streamKeys := sync.Map{}
 		for {
 			select {
 			case <-ctx.Done():
@@ -120,28 +139,51 @@ func (db *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId st
 					return
 				}
 				streamKey := fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, eventParentId)
-				streamKeys[streamKey] = streamMessageStartId
+				streamKeys.Store(streamKey, streamMessageStartId)
 			default:
-			}
+				if lenSyncMap(&streamKeys) == 0 {
+					// spin until we have at least one stream key
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
 
-			events, updatedStreamKeys, err := db.GetFlowEvents(ctx, workspaceId, streamKeys, 100, time.Second*1)
-			if err != nil {
-				errCh <- err
-				return
-			}
+				// Convert sync.Map to a regular map for `GetFlowEvents`
+				keysMap := make(map[string]string)
+				streamKeys.Range(func(key, value interface{}) bool {
+					keysMap[key.(string)] = value.(string)
+					return true
+				})
 
-			for _, event := range events {
-				select {
-				case <-ctx.Done():
+				// wait until we have at least one stream key to fetch
+				if len(keysMap) == 0 {
+					time.Sleep(time.Millisecond * 20)
+					continue
+				}
+
+				blockDuration := 250 * time.Millisecond
+				events, updatedStreamKeys, err := db.GetFlowEvents(ctx, workspaceId, keysMap, 100, blockDuration)
+				if err != nil {
+					errCh <- err
 					return
-				case eventCh <- event:
-					if _, ok := event.(domain.EndStreamEvent); ok {
-						delete(streamKeys, fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, event.GetParentId()))
+				}
+
+				for _, event := range events {
+					select {
+					case <-ctx.Done():
+						return
+					case eventCh <- event:
+						if _, ok := event.(domain.EndStreamEvent); ok {
+							streamKeys.Delete(fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, event.GetParentId()))
+						}
 					}
 				}
-			}
 
-			streamKeys = updatedStreamKeys
+				// Update the stream keys for subsequent fetches
+				for key, lastId := range updatedStreamKeys {
+					streamKeys.Store(key, lastId)
+				}
+
+			}
 		}
 	}()
 
