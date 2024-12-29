@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 
 	"sidekick/coding/unix"
+	"sidekick/common"
+	"sidekick/domain"
 )
 
 type EnvType string
@@ -45,6 +47,7 @@ type LocalEnvParams struct {
 	WorkspaceId string
 	RepoDir     string
 	Branch      string
+	FlowId      string
 }
 
 func NewLocalEnv(ctx context.Context, params LocalEnvParams) (Env, error) {
@@ -55,13 +58,17 @@ func NewLocalEnv(ctx context.Context, params LocalEnvParams) (Env, error) {
 	return &LocalEnv{WorkingDirectory: dir}, err
 }
 
-func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams) (Env, error) {
-	tempDir, err := os.MkdirTemp("", "genflow_environment_"+params.WorkspaceId+"_")
+func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree domain.Worktree) (Env, error) {
+	sidekickDataHome, err := common.GetSidekickDataHome()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create temp dir: %v", err)
+		return nil, fmt.Errorf("failed to get Sidekick data home: %w", err)
 	}
 
-	workingDir := filepath.Join(tempDir, params.Branch)
+	workingDir := filepath.Join(sidekickDataHome, "worktrees", worktree.WorkspaceId, worktree.Name)
+	if err := os.MkdirAll(workingDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create worktree directory: %w", err)
+	}
+
 	runCommandInput := unix.RunCommandActivityInput{
 		WorkingDir: params.RepoDir,
 		Command:    "git",
@@ -69,7 +76,7 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams) (Env, er
 	}
 	runCommandOutput, err := unix.RunCommandActivity(ctx, runCommandInput)
 	if err != nil {
-		return nil, fmt.Errorf("failed to run git worktree add command: %v", err)
+		return nil, fmt.Errorf("failed to run git worktree add command: %w", err)
 	}
 
 	if runCommandOutput.ExitStatus != 0 {
