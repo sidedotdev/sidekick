@@ -11,13 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func newTestRedisDatabase() (*redis.Client, error) {
-	return redis.NewClient(&redis.Options{
-		Addr: "localhost:6379",
-		DB:   1, // Use a different DB for testing
-	}), nil
-}
-
 func TestGetFlowActions(t *testing.T) {
 	ctx := context.Background()
 	db := NewTestRedisStorage()
