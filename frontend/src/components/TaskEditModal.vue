@@ -21,6 +21,16 @@
           &nbsp;
           <label for="determineRequirements">Determine Requirements</label>
         </div>
+        <div>
+          <label>Environment Type</label>
+          <SegmentedControl
+            v-model="envType"
+            :options="[
+              { label: 'Repo Directory', value: 'local' },
+              { label: 'Git Worktree', value: 'local_git_worktree' }
+            ]"
+          />
+        </div>
       </template>
       <AutogrowTextarea id="description" v-model="description" placeholder="Describe your task in detail" required></AutogrowTextarea>
       <template v-if="false && flowType === 'planned_dev' && status === 'to_do'">
@@ -35,6 +45,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import AutogrowTextarea from './AutogrowTextarea.vue'
+import SegmentedControl from './SegmentedControl.vue'
 import type { Task } from '../lib/models'
 const props = defineProps({
   task: {
@@ -48,14 +59,19 @@ const status = ref(props.task.status)
 const defaultFlowType = localStorage.getItem('lastUsedFlowType') ?? 'basic_dev'
 const flowType = ref(props.task.flows[0]?.type ?? defaultFlowType)
 const planningPrompt = ref(props.task.flowOptions?.planningPrompt ?? '')
-const determineRequirements = ref(true)
+const determineRequirements = ref(props.task.flowOptions?.determineRequirements ?? true)
+const envType = ref(props.task.flowOptions?.envType ?? 'local')
 const submitTask = async () => {
   const workspaceId = props.task.workspaceId
-  const flowOptions = {planningPrompt: planningPrompt.value, determineRequirements: determineRequirements.value}
+  const flowOptions = {
+    planningPrompt: planningPrompt.value,
+    determineRequirements: determineRequirements.value,
+    envType: envType.value
+  }
   const response = await fetch(`/api/v1/workspaces/${workspaceId}/tasks/${props.task.id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ description: description.value, flowType: flowType.value, status: status.value, flowOptions}),
+    body: JSON.stringify({ description: description.value, flowType: flowType.value, status: status.value, flowOptions }),
   })
   if (!response.ok) {
     console.error('Failed to update task')
