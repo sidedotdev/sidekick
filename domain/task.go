@@ -54,7 +54,7 @@ type TaskStorage interface {
 // TaskStreamer defines the interface for task-related stream operations
 type TaskStreamer interface {
 	AddTaskChange(ctx context.Context, task Task) error
-	GetTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]Task, string, error)
+	StreamTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string) (<-chan Task, <-chan error)
 }
 
 func StringToTaskStatus(s string) (TaskStatus, error) {
@@ -92,6 +92,7 @@ type Task struct {
 	Created     time.Time              `json:"created"`
 	Updated     time.Time              `json:"updated"`
 	FlowOptions map[string]interface{} `json:"flowOptions,omitempty"`
+	StreamId    string                 `json:"streamId,omitempty"`
 }
 
 type AgentType string

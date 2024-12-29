@@ -41,5 +41,5 @@ type FlowActionStorage interface {
 // FlowActionStreamer defines the interface for flow-related stream operations
 type FlowActionStreamer interface {
 	AddFlowActionChange(ctx context.Context, flowAction FlowAction) error
-	GetFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]FlowAction, string, error)
+	StreamFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string) (<-chan FlowAction, <-chan error)
 }

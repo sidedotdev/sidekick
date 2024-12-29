@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -371,6 +372,7 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 
 	workspaceId := "test-workspace-id-" + uuid.New().String()
 	flowId := "test-flow-id-" + uuid.New().String()
+
 	// persisting a workspace and flow so that the identifiers are valid
 	workspace := domain.Workspace{Id: workspaceId}
 	err := db.PersistWorkspace(ctx, workspace)
@@ -393,25 +395,74 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 	}
 	defer ws.Close()
 
-	// Simulate persisting a flow action
-	flowAction := domain.FlowAction{
-		Id:          "test-id",
-		ActionType:  "test-action-type",
-		FlowId:      flowId,
-		WorkspaceId: workspaceId,
-	}
-	err = db.PersistFlowAction(context.Background(), flowAction)
-	assert.NoError(t, err, "Persisting flow action failed")
+	// Create a channel to signal when all expected actions have been received
+	done := make(chan bool)
 
-	// Verify if the flow action is streamed correctly
-	var receivedAction domain.FlowAction
-	err = ws.ReadJSON(&receivedAction)
-	if err != nil {
-		t.Fatalf("Failed to read flow action: %v", err)
+	// Create multiple flow actions
+	expectedActions := []domain.FlowAction{
+		{
+			Id:          "test-id-1",
+			ActionType:  "test-action-type-1",
+			FlowId:      flowId,
+			WorkspaceId: workspaceId,
+		},
+		{
+			Id:          "test-id-2",
+			ActionType:  "test-action-type-2",
+			FlowId:      flowId,
+			WorkspaceId: workspaceId,
+		},
 	}
 
-	// Assert if the flow action matches the expected structure/content
-	assert.Equal(t, "test-action-type", receivedAction.ActionType)
+	// Goroutine to read messages from WebSocket
+	go func() {
+		receivedCount := 0
+		for {
+			var receivedAction domain.FlowAction
+			err := ws.ReadJSON(&receivedAction)
+			if err != nil {
+				t.Errorf("Failed to read flow action: %v", err)
+				return
+			}
+
+			// Assert if the flow action matches the expected structure/content
+			assert.Equal(t, expectedActions[receivedCount].ActionType, receivedAction.ActionType)
+			assert.Equal(t, expectedActions[receivedCount].Id, receivedAction.Id)
+			assert.Equal(t, expectedActions[receivedCount].FlowId, receivedAction.FlowId)
+			assert.Equal(t, expectedActions[receivedCount].WorkspaceId, receivedAction.WorkspaceId)
+
+			receivedCount++
+			if receivedCount == len(expectedActions) {
+				done <- true
+				return
+			}
+		}
+	}()
+
+	// Simulate persisting flow actions
+	for _, flowAction := range expectedActions {
+		err = db.PersistFlowAction(context.Background(), flowAction)
+		assert.NoError(t, err, "Persisting flow action failed")
+	}
+
+	// Wait for all actions to be received or timeout
+	select {
+	case <-done:
+		// All expected actions were received
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for flow actions")
+	}
+
+	// Test error handling
+	invalidWorkspaceURL := "ws" + strings.TrimPrefix(s.URL, "http") + "/ws/v1/workspaces/invalid-workspace/flows/" + flowId + "/action_changes_ws"
+	_, resp, err := websocket.DefaultDialer.Dial(invalidWorkspaceURL, nil)
+	assert.Error(t, err, "Expected error for invalid workspace")
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "Expected 404 status code for invalid workspace")
+
+	invalidFlowURL := "ws" + strings.TrimPrefix(s.URL, "http") + "/ws/v1/workspaces/" + workspaceId + "/flows/invalid-flow/action_changes_ws"
+	_, resp, err = websocket.DefaultDialer.Dial(invalidFlowURL, nil)
+	assert.Error(t, err, "Expected error for invalid flow")
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "Expected 404 status code for invalid flow")
 }
 func TestCompleteFlowActionHandler(t *testing.T) {
 	ctrl := NewMockController(t)
@@ -1410,12 +1461,13 @@ func TestGetTaskHandler(t *testing.T) {
 func TestFlowEventsWebsocketHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	db := ctrl.service
-	ctx := context.Background()
 
 	workspaceId := "test-workspace-id-" + uuid.New().String()
 	flowId := "test-flow-id-" + uuid.New().String()
+
 	// persisting a workspace and flow so that the identifiers are valid
+	db := ctrl.service
+	ctx := context.Background()
 	workspace := domain.Workspace{Id: workspaceId}
 	err := db.PersistWorkspace(ctx, workspace)
 	assert.NoError(t, err, "Persisting workspace failed")
@@ -1423,22 +1475,49 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	err = db.PersistFlow(ctx, flow)
 	assert.NoError(t, err, "Persisting workflow failed")
 
-	// persist this one before the websocket connection starts
-	flowEvent1 := domain.ProgressText{
-		EventType: domain.ProgressTextEventType,
-		ParentId:  "test-event-id-1",
-		Text:      "doing stuff 1",
-	}
-	err = ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent1)
-	assert.NoError(t, err, "Persisting flow event 1 failed")
-
 	router := DefineRoutes(ctrl)
-
 	s := httptest.NewServer(router)
 	defer s.Close()
 
 	// Replace http with ws in the URL
 	wsURL := "ws" + strings.TrimPrefix(s.URL, "http") + "/ws/v1/workspaces/" + workspaceId + "/flows/" + flowId + "/events"
+
+	// Create flow events
+	flowEvents := []domain.FlowEvent{
+		domain.ProgressTextEvent{
+			EventType: domain.ProgressTextEventType,
+			ParentId:  "parent-1",
+			Text:      "doing stuff 1",
+		},
+		domain.ProgressTextEvent{
+			EventType: domain.ProgressTextEventType,
+			ParentId:  "parent-2",
+			Text:      "doing stuff 2",
+		},
+		domain.ProgressTextEvent{
+			EventType: domain.ProgressTextEventType,
+			ParentId:  "parent-2",
+			Text:      "doing stuff 3",
+		},
+		domain.EndStreamEvent{
+			EventType: domain.EndStreamEventType,
+			ParentId:  "parent-2",
+		},
+		domain.EndStreamEvent{
+			EventType: domain.EndStreamEventType,
+			ParentId:  "parent-1",
+		},
+	}
+
+	// Start a goroutine to add the events over time, simulating a real-time scenario
+	go func() {
+		for _, event := range flowEvents {
+			time.Sleep(100 * time.Millisecond)
+			err = ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, event)
+			fmt.Printf("Added event: %v\n", event)
+			assert.NoError(t, err, "Failed to add flow event")
+		}
+	}()
 
 	// Connect to the WebSocket server
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -1447,61 +1526,44 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	}
 	defer ws.Close()
 
-	// persist multiple flow events under single flow action
-	flowEvent2 := domain.ProgressText{
-		EventType: domain.ProgressTextEventType,
-		ParentId:  "test-event-id-2",
-		Text:      "doing stuff 2",
-	}
-	flowEvent3 := domain.ProgressText{
-		EventType: flowEvent2.EventType,
-		ParentId:  flowEvent2.ParentId,
-		Text:      "doing stuff 3",
-	}
-	err = ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent2)
-	assert.NoError(t, err, "Persisting flow event 2 failed")
-	err = ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent3)
-	assert.NoError(t, err, "Persisting flow event 3 failed")
-
-	// send messages via the websocket to subscribe to the streams for the flow actions
-	err = ws.WriteJSON(FlowEventSubscription{ParentId: flowEvent1.ParentId})
+	// Send subscriptions with StreamMessageStartId
+	err = ws.WriteJSON(domain.FlowEventSubscription{ParentId: "parent-1", StreamMessageStartId: "0"})
 	assert.NoError(t, err, "Failed to send subscription for flowEvent1")
-	t.Log("Sent subscription for flowEvent1")
-	time.Sleep(100 * time.Millisecond)
-	err = ws.WriteJSON(FlowEventSubscription{ParentId: flowEvent2.ParentId})
+	err = ws.WriteJSON(domain.FlowEventSubscription{ParentId: "parent-2", StreamMessageStartId: "0"})
 	assert.NoError(t, err, "Failed to send subscription for flowEvent2")
-	t.Log("Sent subscription for flowEvent2")
 
 	// Verify if the flow events are streamed correctly
-	timeout := time.After(15 * time.Second)
-	receivedEvents := make([]domain.ProgressText, 0, 3)
+	timeout := time.After(5 * time.Second)
+	receivedEvents := make([]domain.FlowEvent, 0, len(flowEvents))
 
-	for i := 0; i < 3; i++ {
+	fmt.Print("Waiting for flow events...\n")
+	for i := 0; i < len(flowEvents); i++ {
 		select {
 		case <-timeout:
 			t.Fatalf("Timeout waiting for flow events. Received %d events so far", len(receivedEvents))
 		default:
-			var receivedEvent domain.ProgressText
-			err = ws.SetReadDeadline(time.Now().Add(8 * time.Second))
-			assert.NoError(t, err, "Failed to set read deadline")
-			err = ws.ReadJSON(&receivedEvent)
+			_, r, err := ws.NextReader()
 			if err != nil {
-				if err == websocket.ErrReadLimit {
-					t.Logf("Hit read limit for event %d, retrying", i+1)
-					continue // Try again if we hit the read limit
-				}
-				t.Fatalf("Failed to read flow event %d: %v", i+1, err)
+				t.Fatalf("Failed to get next reader: %v", err)
 			}
-			t.Logf("Received event %d: %+v", i+1, receivedEvent)
+			bytes, err := io.ReadAll(r)
+			if err != nil {
+				t.Fatalf("Failed to read ws bytes: %v", err)
+			}
+			receivedEvent, err := domain.UnmarshalFlowEvent(bytes)
+			if err != nil {
+				t.Fatalf("Failed to unmarshal flow event: %v", err)
+			}
+			t.Logf("Received event: %+v", receivedEvent)
 			receivedEvents = append(receivedEvents, receivedEvent)
 		}
 	}
 
 	// Assert if the flow events match the expected structure/content
-	assert.Equal(t, 3, len(receivedEvents), "Expected 3 flow events")
-	assert.Equal(t, flowEvent1, receivedEvents[0])
-	assert.Equal(t, flowEvent2, receivedEvents[1])
-	assert.Equal(t, flowEvent3, receivedEvents[2])
+	assert.Equal(t, len(flowEvents), len(receivedEvents), "Expected %d flow events, got %d", len(flowEvents), len(receivedEvents))
+	for i, event := range flowEvents {
+		assert.Equal(t, event, receivedEvents[i])
+	}
 }
 
 func TestGetArchivedTasksHandler(t *testing.T) {
@@ -1556,4 +1618,99 @@ func TestGetArchivedTasksHandler(t *testing.T) {
 	assert.Equal(t, float64(1), response["totalCount"])
 	assert.Equal(t, float64(1), response["page"])
 	assert.Equal(t, float64(100), response["pageSize"])
+}
+
+func TestTaskChangesWebsocketHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+	db := ctrl.service
+	ctx := context.Background()
+
+	workspaceId := "test-workspace-id-" + uuid.New().String()
+
+	// Persist a workspace so that the identifier is valid
+	workspace := domain.Workspace{Id: workspaceId}
+	err := db.PersistWorkspace(ctx, workspace)
+	assert.NoError(t, err, "Persisting workspace failed")
+
+	// Persist this task before the websocket connection starts
+	task1 := domain.Task{
+		Id:          "task1",
+		WorkspaceId: workspaceId,
+		Title:       "Task 1",
+		Status:      domain.TaskStatusToDo,
+		StreamId:    "stream_id_1",
+	}
+	err = db.PersistTask(ctx, task1)
+	assert.NoError(t, err, "Persisting task 1 failed")
+
+	router := DefineRoutes(ctrl)
+
+	s := httptest.NewServer(router)
+	defer s.Close()
+
+	// Replace http with ws in the URL
+	wsURL := "ws" + strings.TrimPrefix(s.URL, "http") + "/ws/v1/workspaces/" + workspaceId + "/task_changes"
+
+	// Connect to the WebSocket server
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect to WebSocket: %v", err)
+	}
+	defer ws.Close()
+
+	// Persist another task after the websocket connection starts
+	task2 := domain.Task{
+		Id:          "task2",
+		WorkspaceId: workspaceId,
+		Title:       "Task 2",
+		Status:      domain.TaskStatusComplete,
+		StreamId:    "stream_id_2",
+	}
+	go func() {
+		time.Sleep(time.Millisecond)
+		err = db.PersistTask(ctx, task2)
+		assert.NoError(t, err, "Persisting task 2 failed")
+	}()
+
+	// Verify if the task is streamed correctly
+	timeout := time.After(2 * time.Second)
+	var receivedTask domain.Task
+
+	select {
+	case <-timeout:
+		t.Fatalf("Timeout waiting for task")
+	default:
+		var response map[string]interface{}
+		err = ws.ReadJSON(&response)
+		if err != nil {
+			t.Fatalf("Failed to read task: %v", err)
+		}
+		t.Logf("Received response: %+v", response)
+
+		tasks, ok := response["tasks"].([]interface{})
+		assert.True(t, ok, "tasks is not an array")
+		assert.Equal(t, 1, len(tasks), "expected 1 task")
+
+		taskJSON, err := json.Marshal(tasks[0])
+		assert.NoError(t, err, "Failed to marshal task")
+		err = json.Unmarshal(taskJSON, &receivedTask)
+		assert.NoError(t, err, "Failed to unmarshal task")
+
+		lastTaskStreamId, ok := response["lastTaskStreamId"].(string)
+		assert.True(t, ok, "lastTaskStreamId is not a string")
+		assert.Equal(t, "stream_id_2", lastTaskStreamId, "unexpected lastTaskStreamId")
+	}
+
+	// Assert if the task matches the expected structure/content
+	assert.Equal(t, task2, receivedTask, "Received task does not match expected task")
+
+	// Close the WebSocket connection
+	err = ws.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	assert.NoError(t, err, "Failed to close WebSocket connection")
+
+	// Wait for a short time to allow for cleanup
+	time.Sleep(100 * time.Millisecond)
+
+	// Additional assertions can be added here if needed
 }

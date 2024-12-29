@@ -300,3 +300,79 @@ func TestAddTaskChange(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, string(flowOptionsData), stream.Values["flowOptions"])
 }
+
+func TestStreamTaskChanges(t *testing.T) {
+	db := NewTestRedisStreamer()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	workspaceId := "TEST_WORKSPACE_ID"
+
+	taskChan, errChan := db.StreamTaskChanges(ctx, workspaceId, "")
+
+	// Add a task change
+	task1 := domain.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task_1",
+		Title:       "Test Task 1",
+		Status:      domain.TaskStatusToDo,
+	}
+	go func() {
+		time.Sleep(1 * time.Millisecond)
+		err := db.AddTaskChange(ctx, task1)
+		assert.NoError(t, err)
+	}()
+
+	// Check if the task is received through the channel
+	select {
+	case receivedTask := <-taskChan:
+		assert.Equal(t, task1.Id, receivedTask.Id)
+		assert.Equal(t, task1.Title, receivedTask.Title)
+		assert.Equal(t, task1.Status, receivedTask.Status)
+	case err := <-errChan:
+		t.Fatalf("Received unexpected error: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timed out waiting for task")
+	}
+
+	// Add another task change
+	task2 := domain.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task_2",
+		Title:       "Test Task 2",
+		Status:      domain.TaskStatusInProgress,
+	}
+	go func() {
+		time.Sleep(1 * time.Millisecond)
+		err := db.AddTaskChange(ctx, task2)
+		assert.NoError(t, err)
+	}()
+
+	// Check if the second task is received through the channel
+	select {
+	case receivedTask := <-taskChan:
+		assert.Equal(t, task2.Id, receivedTask.Id)
+		assert.Equal(t, task2.Title, receivedTask.Title)
+		assert.Equal(t, task2.Status, receivedTask.Status)
+	case err := <-errChan:
+		t.Fatalf("Received unexpected error: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timed out waiting for task")
+	}
+
+	// Test context cancellation
+	cancel()
+	select {
+	case _, ok := <-taskChan:
+		assert.False(t, ok, "Task channel should be closed after context cancellation")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timed out waiting for task channel to close")
+	}
+
+	select {
+	case _, ok := <-errChan:
+		assert.False(t, ok, "Error channel should be closed after context cancellation")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timed out waiting for error channel to close")
+	}
+}

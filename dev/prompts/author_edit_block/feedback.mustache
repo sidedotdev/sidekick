@@ -13,7 +13,7 @@ the feedback and provide new *edit blocks* accordingly that fix whatever failed.
 
 Hint 1: If the feedback notes that applying edit blocks failed, take a look at the
 current state of the relevant code via the {{{retrieveCodeContextFunctionName}}}
-function or the {{{bulkSearchRepositoryFunctionName}}} function.
+tool or the {{{bulkSearchRepositoryFunctionName}}} tool.
 
 Hint 2: If the feedback notes that applying edit blocks failed, and the edit
 block that failed isn't your first one for that file since the beginning or the
@@ -26,13 +26,17 @@ successfully.
 Hint 3: If the feedback includes test results, that indicates that all previous
 edit blocks have already been applied successfully. If you want to make further
 changes to portions of functions you've already edited, it may be helpful to
-see the current state of the relevant code via the {{{retrieveCodeContextFunctionName}}} function.
+see the current state of the relevant code via the {{{retrieveCodeContextFunctionName}}} tool.
 
 Hint 4: If you see errors that include a filepath and line number, use the
-{{{bulkReadFileFunctionName}}} function to see what's going on at those lines.
+{{{bulkReadFileFunctionName}}} tool to see what's going on at those lines.
 {{/hasUserGuidance}}
 
 Hint 5: If an error indicates that a function/type/symbol doesn't exist, find
 what actual function needs to be used via tools or ask for help. Do not create
 it unless the original instructions mention doing that, as it is likely to be a
 hallucination.
+
+Hint 6: If it seems like the edit failed saying it's not in chat history, but
+you think it is, then try creating multiple smaller edit blocks, one per
+function or import section etc.
