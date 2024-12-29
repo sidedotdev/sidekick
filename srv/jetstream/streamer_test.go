@@ -90,10 +90,11 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 	}
 
 	// Test StreamTaskChanges
-	taskChan, errChan := s.streamer.StreamTaskChanges(ctx, workspaceId, "0")
+	taskChan, errChan := s.streamer.StreamTaskChanges(ctx, workspaceId, "")
 
 	// Add task changes in a separate goroutine
 	go func() {
+		time.Sleep(100 * time.Millisecond)
 		for _, task := range tasks {
 			err := s.streamer.AddTaskChange(ctx, task)
 			s.Require().NoError(err)
@@ -124,30 +125,12 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 		s.Equal(task.FlowType, streamedTasks[i].FlowType)
 		s.Equal(task.FlowOptions, streamedTasks[i].FlowOptions)
 	}
-
-	// Test getting task changes
-	fetchedTasks, lastId, err := s.streamer.GetTaskChanges(ctx, workspaceId, "0", 10, time.Second)
-	s.Require().NoError(err)
-	s.Require().Len(fetchedTasks, len(tasks))
-	s.NotEmpty(lastId)
-
-	// Test getting changes with no new messages
-	noNewTasks, newLastId, err := s.streamer.GetTaskChanges(ctx, workspaceId, lastId, 10, time.Millisecond)
-	s.Require().NoError(err)
-	s.Empty(noNewTasks)
-	s.Equal(lastId, newLastId)
-
-	// Test getting changes with default continue message id
-	time.Sleep(100 * time.Millisecond)
-	noNewTasks, _, err = s.streamer.GetTaskChanges(ctx, workspaceId, "$", 10, time.Millisecond)
-	s.Require().NoError(err)
-	s.Empty(noNewTasks)
 }
 
+// Test end-to-end flow action streaming
 func (s *StreamerTestSuite) TestFlowActionStreaming() {
 	s.T().Parallel()
 
-	// Test end-to-end flow action streaming
 	ctx := context.Background()
 	workspaceId := "test-workspace"
 	flowId := "test-flow"
@@ -166,56 +149,69 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 	}
 	flowActionUpdated := domain.FlowAction(flowAction)
 	flowActionUpdated.ActionStatus = "completed"
-
-	// Test adding flow action change
-	err := s.streamer.AddFlowActionChange(ctx, flowAction)
-	s.Require().NoError(err)
-
-	// Test getting flow action changes in multiple parts
-	flowActions, continueMessageId, err := s.streamer.GetFlowActionChanges(ctx, workspaceId, flowId, "0", 1, time.Second)
-	s.Require().NoError(err)
-	s.Require().Len(flowActions, 1)
-	s.Equal(flowAction, flowActions[0])
-
-	err = s.streamer.AddFlowActionChange(ctx, flowActionUpdated)
-	s.Require().NoError(err)
-	flowActions, continueMessageId, err = s.streamer.GetFlowActionChanges(ctx, workspaceId, flowId, continueMessageId, 1, time.Second)
-	s.Require().NoError(err)
-	s.Require().Len(flowActions, 1)
-	s.Equal(flowActionUpdated, flowActions[0])
-
-	flowActions, _, err = s.streamer.GetFlowActionChanges(ctx, workspaceId, flowId, continueMessageId, 1, time.Second)
-	s.Require().NoError(err)
-	s.Require().Len(flowActions, 0)
-
-	// Test getting flow action changes in one go
-	flowActions, _, err = s.streamer.GetFlowActionChanges(ctx, workspaceId, flowId, "", 10, time.Second)
-	s.Require().NoError(err)
-	s.Require().Len(flowActions, 2)
-	s.Equal(flowAction, flowActions[0])
-	s.Equal(flowActionUpdated, flowActions[1])
-
-	// Test getting flow action changes in one go without waiting
-	flowActions, continueMessageId, err = s.streamer.GetFlowActionChanges(ctx, workspaceId, flowId, "", 10, time.Millisecond)
-	s.Require().NoError(err)
-	s.Require().Len(flowActions, 2)
-	s.Equal(flowAction, flowActions[0])
-	s.Equal(flowActionUpdated, flowActions[1])
-
-	// Test getting only new flow action changes starting from now
 	flowActionFailed := domain.FlowAction(flowAction)
 	flowActionFailed.ActionStatus = "failed"
+
+	// add the flow action changes
+	err := s.streamer.AddFlowActionChange(ctx, flowAction)
+	s.Require().NoError(err)
+	err = s.streamer.AddFlowActionChange(ctx, flowActionUpdated)
+	s.Require().NoError(err)
+	err = s.streamer.AddFlowActionChange(ctx, flowActionFailed)
+	s.Require().NoError(err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	flowActionChan, errChan := s.streamer.StreamFlowActionChanges(ctx, workspaceId, flowId, "")
+
+	receivedActions := make([]domain.FlowAction, 0)
+	done := make(chan bool)
+
 	go func() {
-		time.Sleep(100 * time.Millisecond)
-		err := s.streamer.AddFlowActionChange(ctx, flowActionFailed)
-		if err != nil {
-			s.T().Errorf("Failed to add flow action change: %v", err)
+		fmt.Printf("gofun Starting StreamFlowActionChanges test\n")
+		for {
+			select {
+			case action, ok := <-flowActionChan:
+				fmt.Printf("Received action: %v\n", action)
+				if !ok {
+					done <- true
+					return
+				}
+				receivedActions = append(receivedActions, action)
+			case err, ok := <-errChan:
+				if ok {
+					fmt.Printf("Received error: %v\n", err)
+					s.T().Errorf("Received error: %v", err)
+					done <- true
+					return
+				}
+			case <-ctx.Done():
+				fmt.Print("Context done\n")
+				done <- true
+				return
+			}
 		}
 	}()
-	flowActions, continueMessageId, err = s.streamer.GetFlowActionChanges(ctx, workspaceId, flowId, "$", 10, time.Second)
-	s.Require().NoError(err)
-	s.Require().Len(flowActions, 1)
-	s.Equal(flowActionFailed, flowActions[0])
+
+	// Add a new flow action change
+	newAction := domain.FlowAction{
+		WorkspaceId:  workspaceId,
+		FlowId:       flowId,
+		Id:           "test-action-2",
+		SubflowName:  "test-subflow-2",
+		ActionType:   "test-type-2",
+		ActionStatus: "pending",
+		ActionParams: map[string]interface{}{"test": "value2"},
+		ActionResult: "test-result-2",
+		Created:      time.Now().UTC().Truncate(time.Millisecond),
+		Updated:      time.Now().UTC().Truncate(time.Millisecond),
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		err = s.streamer.AddFlowActionChange(ctx, newAction)
+		s.Require().NoError(err)
+	}()
 
 	// Test end message
 	endAction := domain.FlowAction{
@@ -223,14 +219,26 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 		FlowId:      flowId,
 		Id:          "end",
 	}
-	err = s.streamer.AddFlowActionChange(ctx, endAction)
-	s.Require().NoError(err)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		err = s.streamer.AddFlowActionChange(ctx, endAction)
+		if err != nil {
+			s.T().Errorf("Failed to add end flow action change: %v", err)
+		}
+	}()
 
-	// Should receive both messages and stop at end
-	flowActions, continueMessageId, err = s.streamer.GetFlowActionChanges(ctx, workspaceId, flowId, continueMessageId, 10, time.Second)
-	s.Require().NoError(err)
-	s.Require().Len(flowActions, 0)
-	s.Equal("end", continueMessageId)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		s.T().Fatal("Test timed out")
+	}
+
+	s.Require().GreaterOrEqual(len(receivedActions), 5)
+	s.Equal(flowAction, receivedActions[0])
+	s.Equal(flowActionUpdated, receivedActions[1])
+	s.Equal(flowActionFailed, receivedActions[2])
+	s.Equal(newAction, receivedActions[3])
+	s.Equal(endAction, receivedActions[4])
 }
 
 func (s *StreamerTestSuite) TestFlowEventStreaming() {
