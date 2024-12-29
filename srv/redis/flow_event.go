@@ -135,6 +135,9 @@ func (db *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId st
 				case <-ctx.Done():
 					return
 				case eventCh <- event:
+					if _, ok := event.(domain.EndStreamEvent); ok {
+						delete(streamKeys, fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, event.GetParentId()))
+					}
 				}
 			}
 

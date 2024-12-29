@@ -88,35 +88,67 @@ func TestStreamFlowEvents(t *testing.T) {
 	db := NewTestRedisStreamer()
 	workspaceId := "TEST_WORKSPACE_ID"
 	flowId := "TEST_FLOW_ID"
-	eventParentId := "TEST_PARENT_ID"
+	eventParentId1 := "TEST_PARENT_ID_1"
+	eventParentId2 := "TEST_PARENT_ID_2"
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	eventParentIdCh := make(chan string, 1)
+	eventParentIdCh := make(chan string, 2)
 	eventCh, errCh := db.StreamFlowEvents(ctx, workspaceId, flowId, "0", eventParentIdCh)
 
-	// Send an event parent ID
-	eventParentIdCh <- eventParentId
+	// Send event parent IDs
+	eventParentIdCh <- eventParentId1
+	eventParentIdCh <- eventParentId2
 
-	// Add a flow event
-	flowEvent := domain.ProgressTextEvent{
+	// Add flow events for both parent IDs
+	flowEvent1 := domain.ProgressTextEvent{
 		EventType: domain.ProgressTextEventType,
-		ParentId:  eventParentId,
-		Text:      "Test Flow Event",
+		ParentId:  eventParentId1,
+		Text:      "Test Flow Event 1",
 	}
-	err := db.AddFlowEvent(ctx, workspaceId, flowId, flowEvent)
+	flowEvent2 := domain.ProgressTextEvent{
+		EventType: domain.ProgressTextEventType,
+		ParentId:  eventParentId2,
+		Text:      "Test Flow Event 2",
+	}
+	endEvent1 := domain.EndStreamEvent{
+		EventType: domain.EndStreamEventType,
+		ParentId:  eventParentId1,
+	}
+	endEvent2 := domain.EndStreamEvent{
+		EventType: domain.EndStreamEventType,
+		ParentId:  eventParentId2,
+	}
+
+	err := db.AddFlowEvent(ctx, workspaceId, flowId, flowEvent1)
+	assert.Nil(t, err)
+	err = db.AddFlowEvent(ctx, workspaceId, flowId, flowEvent2)
+	assert.Nil(t, err)
+	err = db.AddFlowEvent(ctx, workspaceId, flowId, endEvent1)
+	assert.Nil(t, err)
+	err = db.AddFlowEvent(ctx, workspaceId, flowId, endEvent2)
 	assert.Nil(t, err)
 
-	// Check if we receive the event
-	select {
-	case receivedEvent := <-eventCh:
-		assert.Equal(t, flowEvent, receivedEvent)
-	case err := <-errCh:
-		assert.Fail(t, "Received error instead of event", err)
-	case <-time.After(time.Second * 5):
-		assert.Fail(t, "Timed out waiting for event")
+	// Check if we receive the events
+	receivedEvents := make([]domain.FlowEvent, 0)
+	for i := 0; i < 4; i++ {
+		select {
+		case event := <-eventCh:
+			receivedEvents = append(receivedEvents, event)
+		case err := <-errCh:
+			assert.Fail(t, "Received error instead of event", err)
+		case <-time.After(time.Second * 5):
+			assert.Fail(t, "Timed out waiting for event")
+		}
 	}
+
+	// Verify received events
+	assert.Equal(t, 4, len(receivedEvents))
+	assert.Contains(t, receivedEvents, flowEvent1)
+	assert.Contains(t, receivedEvents, flowEvent2)
+	assert.Contains(t, receivedEvents, endEvent1)
+	assert.Contains(t, receivedEvents, endEvent2)
 
 	// Test cancellation
 	cancel()
