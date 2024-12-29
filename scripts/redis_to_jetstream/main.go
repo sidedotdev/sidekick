@@ -34,18 +34,27 @@ func main() {
 		log.Fatalf("Failed to create JetStream client: %v", err)
 	}
 
-	// Get all workspace IDs
+	// Get all workspaceIds
 	workspaceIds, err := getAllWorkspaceIds(ctx, storage)
 	if err != nil {
-		log.Fatalf("Failed to get workspace IDs: %v", err)
+		log.Fatalf("Failed to get workspaceIds: %v", err)
 	}
 
 	// Migrate task changes (including flow action changes) and flow events for each workspace
 	for _, workspaceId := range workspaceIds {
+		// if workspaceId != "ws_2h7TkUIDypLPvB5QXLIF0cwlqi8" {
+		// 	continue
+		// }
+		fmt.Printf("Migrating workspace: %s\n", workspaceId)
 		tasks, err := storage.GetTasks(ctx, workspaceId, domain.AllTaskStatuses)
 		if err != nil {
 			log.Fatalf("Failed to get tasks for workspace %s: %v", workspaceId, err)
 		}
+		archivedTasks, _, err := storage.GetArchivedTasks(ctx, workspaceId, 1, 1000000)
+		if err != nil {
+			log.Fatalf("Failed to get archived tasks for workspace %s: %v", workspaceId, err)
+		}
+		tasks = append(tasks, archivedTasks...)
 
 		for _, task := range tasks {
 			flows, err := storage.GetFlowsForTask(ctx, workspaceId, task.Id)
@@ -94,10 +103,30 @@ func getAllWorkspaceIds(ctx context.Context, storage srv.Storage) ([]string, err
 }
 
 func migrateFlowActionChanges(ctx context.Context, redisStreamer *redis.Streamer, js *jetstreamClient.Streamer, workspaceId, flowId string) error {
+	existingCount := 0
+	flowActionChan, errChan := js.StreamFlowActionChanges(ctx, workspaceId, flowId, "")
+outer:
+	for {
+		select {
+		case err := <-errChan:
+			if err != nil {
+				return err
+			}
+		case _, ok := <-flowActionChan:
+			if !ok {
+				break outer
+			}
+			existingCount++
+		case <-time.After(200 * time.Millisecond):
+			break outer
+		}
+	}
+
 	continueMessageId := "0"
+	skipCount := existingCount
 	var totalMigrated int
 	for {
-		flowActions, nextMessageId, err := redisStreamer.GetFlowActionChanges(ctx, workspaceId, flowId, continueMessageId, 100, 100*time.Millisecond)
+		flowActions, nextMessageId, err := redisStreamer.GetFlowActionChanges(ctx, workspaceId, flowId, continueMessageId, 100, 10*time.Millisecond)
 		if err != nil {
 			return fmt.Errorf("failed to get flow action changes from Redis for workspace %s, flow Id %s: %w", workspaceId, flowId, err)
 		}
@@ -107,30 +136,35 @@ func migrateFlowActionChanges(ctx context.Context, redisStreamer *redis.Streamer
 		}
 
 		for _, flowAction := range flowActions {
+			if skipCount > 0 {
+				// Skip existing flow action changes
+				skipCount--
+				continue
+			}
+
 			err = js.AddFlowActionChange(ctx, flowAction)
 			if err != nil {
-				return fmt.Errorf("failed to add flow action change to JetStream for workspace %s, flow type %s, flow action ID %s: %w", workspaceId, flowId, flowAction.Id, err)
+				return fmt.Errorf("failed to add flow action change to JetStream for workspace %s, flowId %s, flowActionId %s: %w", workspaceId, flowId, flowAction.Id, err)
 			}
 			totalMigrated++
 		}
 
-		log.Printf("Migrated %d flow action changes for workspace %s, flow type %s (Total: %d)", len(flowActions), workspaceId, flowId, totalMigrated)
 		continueMessageId = nextMessageId
 	}
 
-	log.Printf("Completed migrating %d flow action changes for workspace: %s, flow type: %s", totalMigrated, workspaceId, flowId)
+	log.Printf("Completed migrating %d flow action changes for workspace: %s, flowId: %s", totalMigrated, workspaceId, flowId)
 	return nil
 }
 
 /*
 func getLastMigratedMessageId(workspaceId, changeType, flowType string) (string, error) {
-	// TODO: Implement this function to retrieve the last migrated message ID from a persistent store
+	// TODO: Implement this function to retrieve the last migrated messageId from a persistent store
 	// Use flowType as part of the key for flow action changes
 	return "", nil
 }
 
 func saveLastMigratedMessageId(workspaceId, changeType, flowId, messageId string) error {
-	// TODO: Implement this function to save the last migrated message ID to a persistent store
+	// TODO: Implement this function to save the last migrated messageId to a persistent store
 	// Use flowId as part of the key for flow action changes
 	return nil
 }
@@ -140,7 +174,7 @@ func migrateFlowEvents(ctx context.Context, redisStreamer *redis.Streamer, js *j
 
 	lastMessageId, err := getLastMigratedMessageId(workspaceId, "flowEvent", "")
 	if err != nil {
-		return fmt.Errorf("failed to get last migrated message ID: %w", err)
+		return fmt.Errorf("failed to get last migrated messageId: %w", err)
 	}
 
 	streamKeys := map[string]string{
@@ -161,7 +195,7 @@ func migrateFlowEvents(ctx context.Context, redisStreamer *redis.Streamer, js *j
 		for _, event := range events {
 			err = js.AddFlowEvent(ctx, workspaceId, event.GetParentId(), event)
 			if err != nil {
-				return fmt.Errorf("failed to add flow event to JetStream for workspace %s, parent ID %s: %w", workspaceId, event.GetParentId(), err)
+				return fmt.Errorf("failed to add flow event to JetStream for workspace %s, parentId %s: %w", workspaceId, event.GetParentId(), err)
 			}
 			totalMigrated++
 		}
@@ -170,7 +204,7 @@ func migrateFlowEvents(ctx context.Context, redisStreamer *redis.Streamer, js *j
 		lastMessageId = newStreamKeys[fmt.Sprintf("%s:flow_events:stream", workspaceId)]
 		err = saveLastMigratedMessageId(workspaceId, "flowEvent", "", lastMessageId)
 		if err != nil {
-			return fmt.Errorf("failed to save last migrated message ID for workspace %s: %w", workspaceId, err)
+			return fmt.Errorf("failed to save last migrated messageId for workspace %s: %w", workspaceId, err)
 		}
 
 		log.Printf("Migrated %d flow events for workspace %s (Total: %d)", len(events), workspaceId, totalMigrated)
@@ -188,7 +222,7 @@ func migrateTaskChanges(ctx context.Context, redisStreamer *redis.Streamer, js *
 
 	lastMessageId, err := getLastMigratedMessageId(workspaceId, "task", "")
 	if err != nil {
-		return fmt.Errorf("failed to get last migrated message ID: %w", err)
+		return fmt.Errorf("failed to get last migrated messageId: %w", err)
 	}
 
 	var totalMigrated int
@@ -205,7 +239,7 @@ func migrateTaskChanges(ctx context.Context, redisStreamer *redis.Streamer, js *
 		for _, task := range tasks {
 			err = js.AddTaskChange(ctx, task)
 			if err != nil {
-				return fmt.Errorf("failed to add task change to JetStream for workspace %s, task ID %s: %w", workspaceId, task.Id, err)
+				return fmt.Errorf("failed to add task change to JetStream for workspace %s, taskId %s: %w", workspaceId, task.Id, err)
 			}
 			totalMigrated++
 
@@ -213,7 +247,7 @@ func migrateTaskChanges(ctx context.Context, redisStreamer *redis.Streamer, js *
 			if task.FlowType != "" {
 				err = migrateFlowActionChanges(ctx, redisStreamer, js, workspaceId, string(task.FlowType))
 				if err != nil {
-					log.Printf("Failed to migrate flow action changes for workspace %s, flow type %s: %v", workspaceId, task.FlowType, err)
+					log.Printf("Failed to migrate flow action changes for workspace %s, flowId %s: %v", workspaceId, task.FlowType, err)
 					// Continue with other tasks even if one flow's action changes fail
 				}
 			}
