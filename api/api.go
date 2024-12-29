@@ -319,7 +319,6 @@ type TaskRequest struct {
 	FlowType    string                 `json:"flowType"`
 	AgentType   string                 `json:"agentType"`
 	Status      string                 `json:"status"`
-	EnvType     string                 `json:"envType"`
 	FlowOptions map[string]interface{} `json:"flowOptions"`
 }
 
