@@ -2,7 +2,6 @@ package common
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -149,12 +148,9 @@ func (im *IgnoreManager) IsIgnored(path string, isDir bool) bool {
 	for _, file := range im.files {
 		match := file.GitIgnore.Absolute(path, isDir)
 		if match != nil {
-			fmt.Printf("DEBUG: IsIgnored path=%s isDir=%v file.Dir=%s file.Type=%v match.Ignore()=%v\n",
-				path, isDir, file.Dir, file.Type, match.Ignore())
 			return match.Ignore()
 		}
 	}
-	fmt.Printf("DEBUG: IsIgnored path=%s isDir=%v no match found\n", path, isDir)
 	return false
 }
 

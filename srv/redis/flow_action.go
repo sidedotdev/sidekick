@@ -13,6 +13,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+var _ domain.FlowActionStorage = (*Storage)(nil)
+var _ domain.FlowActionStreamer = (*Streamer)(nil)
+
 func (s Storage) PersistFlowAction(ctx context.Context, flowAction domain.FlowAction) error {
 	if flowAction.Id == "" {
 		return fmt.Errorf("missing Id field in FlowAction model")
@@ -220,4 +223,40 @@ func (s Streamer) GetFlowActionChanges(ctx context.Context, workspaceId, flowId,
 	lastMessageId := streams[0].Messages[len(streams[0].Messages)-1].ID
 
 	return flowActions, lastMessageId, nil
+}
+func (s *Streamer) StreamFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string) (<-chan domain.FlowAction, <-chan error) {
+	flowActionChan := make(chan domain.FlowAction)
+	errChan := make(chan error, 1)
+
+	go func() {
+		defer close(flowActionChan)
+		defer close(errChan)
+
+		continueMessageId := streamMessageStartId
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				blockDuration := 250 * time.Millisecond
+				flowActions, latestContinueMessageId, err := s.GetFlowActionChanges(ctx, workspaceId, flowId, continueMessageId, 100, blockDuration)
+				if err != nil {
+					errChan <- err
+					return
+				}
+
+				for _, flowAction := range flowActions {
+					select {
+					case <-ctx.Done():
+						return
+					case flowActionChan <- flowAction:
+					}
+				}
+
+				continueMessageId = latestContinueMessageId
+			}
+		}
+	}()
+
+	return flowActionChan, errChan
 }

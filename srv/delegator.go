@@ -3,7 +3,6 @@ package srv
 import (
 	"context"
 	"sidekick/domain"
-	"time"
 )
 
 /* Delegates calls, but also decorates storage with streaming for events/change
@@ -11,6 +10,14 @@ import (
 type Delegator struct {
 	storage  Storage
 	streamer Streamer
+}
+
+func (d *Delegator) StreamTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string) (<-chan domain.Task, <-chan error) {
+	return d.streamer.StreamTaskChanges(ctx, workspaceId, streamMessageStartId)
+}
+
+func (d *Delegator) StreamFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string) (<-chan domain.FlowAction, <-chan error) {
+	return d.streamer.StreamFlowActionChanges(ctx, workspaceId, flowId, streamMessageStartId)
 }
 
 func NewDelegator(storage Storage, streamer Streamer) *Delegator {
@@ -98,10 +105,6 @@ func (d Delegator) AddTaskChange(ctx context.Context, task domain.Task) error {
 	return d.streamer.AddTaskChange(ctx, task)
 }
 
-/* implements TaskStreamer interface */
-func (d Delegator) GetTaskChanges(ctx context.Context, workspaceId string, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]domain.Task, string, error) {
-	return d.streamer.GetTaskChanges(ctx, workspaceId, streamMessageStartId, maxCount, blockDuration)
-}
 
 /* implements FlowStorage interface */
 func (d Delegator) PersistFlow(ctx context.Context, workflow domain.Flow) error {
@@ -160,11 +163,6 @@ func (d Delegator) AddFlowActionChange(ctx context.Context, flowAction domain.Fl
 	return d.streamer.AddFlowActionChange(ctx, flowAction)
 }
 
-/* implements FlowStreamer interface */
-func (d Delegator) GetFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]domain.FlowAction, string, error) {
-	return d.streamer.GetFlowActionChanges(ctx, workspaceId, flowId, streamMessageStartId, maxCount, blockDuration)
-}
-
 /* implements FlowEventStreamer interface */
 func (d Delegator) AddFlowEvent(ctx context.Context, workspaceId string, flowId string, flowEvent domain.FlowEvent) error {
 	return d.streamer.AddFlowEvent(ctx, workspaceId, flowId, flowEvent)
@@ -175,7 +173,6 @@ func (d Delegator) EndFlowEventStream(ctx context.Context, workspaceId, flowId, 
 	return d.streamer.EndFlowEventStream(ctx, workspaceId, flowId, eventStreamParentId)
 }
 
-/* implements FlowEventStreamer interface */
-func (d Delegator) GetFlowEvents(ctx context.Context, workspaceId string, streamKeys map[string]string, maxCount int64, blockDuration time.Duration) ([]domain.FlowEvent, map[string]string, error) {
-	return d.streamer.GetFlowEvents(ctx, workspaceId, streamKeys, maxCount, blockDuration)
+func (d Delegator) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, subscriptionCh <-chan domain.FlowEventSubscription) (<-chan domain.FlowEvent, <-chan error) {
+	return d.streamer.StreamFlowEvents(ctx, workspaceId, flowId, subscriptionCh)
 }

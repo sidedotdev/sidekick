@@ -11,7 +11,6 @@ import (
 	"sidekick"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"sidekick/common"
@@ -768,7 +767,7 @@ var upgrader = websocket.Upgrader{
 
 func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
-	ctx := c.Request.Context()
+	ctx, cancel := context.WithCancel(c.Request.Context())
 	flowId := c.Param("id")
 
 	if workspaceId == "" {
@@ -810,17 +809,15 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 	defer conn.Close()
 
 	streamMessageStartId := "0"
-	maxCount := int64(100)
-	blockDuration := time.Second * 0
 
-	clientGone := make(chan struct{})
+	flowActionChan, errChan := ctrl.service.StreamFlowActionChanges(ctx, workspaceId, flowId, streamMessageStartId)
 
 	// Handle disconnection detection in a separate goroutine
 	go func() {
 		for {
 			if _, _, err := conn.NextReader(); err != nil {
 				log.Printf("Client disconnected or error: %v", err)
-				close(clientGone)
+				cancel()
 				return
 			}
 		}
@@ -829,33 +826,21 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 	// Main loop for streaming flow actions
 	for {
 		select {
-		case <-clientGone:
-			log.Println("Client disconnected, ending stream")
+		case <-ctx.Done():
+			log.Println("Context cancelled, ending stream")
 			return
-		default:
-			// Attempt to fetch the flow actions
-			flowActions, lastStreamId, err := ctrl.service.GetFlowActionChanges(
-				ctx, workspaceId, flowId, streamMessageStartId, maxCount, blockDuration,
-			)
-			if err != nil {
-				log.Printf("Error fetching flow actions: %v", err)
+		case err := <-errChan:
+			log.Printf("Error streaming flow actions: %v", err)
+			return
+		case flowAction, ok := <-flowActionChan:
+			if !ok {
+				log.Println("Flow action channel closed, ending stream")
 				return
 			}
-
-			// Streaming each flow action
-			for _, flowAction := range flowActions {
-				if err := conn.WriteJSON(flowAction); err != nil {
-					log.Printf("Error writing flow action to websocket: %v", err)
-					return
-				}
-			}
-
-			// Check if streaming should end based on data
-			if lastStreamId == "end" || len(flowActions) == 0 {
-				log.Println("Stream concluded: No new actions")
+			if err := conn.WriteJSON(flowAction); err != nil {
+				log.Printf("Error writing flow action to websocket: %v", err)
 				return
 			}
-			streamMessageStartId = lastStreamId
 		}
 	}
 }
@@ -867,7 +852,6 @@ func (ctrl *Controller) TaskChangesWebsocketHandler(c *gin.Context) {
 		lastTaskStreamId = "$" // Start from the latest message by default
 	}
 
-	clientGone := make(chan struct{})
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		http.Error(c.Writer, "Could not open websocket connection", http.StatusBadRequest)
@@ -875,66 +859,64 @@ func (ctrl *Controller) TaskChangesWebsocketHandler(c *gin.Context) {
 	}
 	defer conn.Close()
 
+	// Create a new context that's canceled when the WebSocket connection is closed
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
+
 	// Handle disconnection detection in a separate goroutine
 	go func() {
 		for {
 			if _, _, err := conn.NextReader(); err != nil {
 				log.Printf("Client disconnected or error: %v", err)
-				close(clientGone)
+				cancel()
 				return
 			}
 		}
 	}()
 
+	taskChan, errChan := ctrl.service.StreamTaskChanges(ctx, workspaceId, lastTaskStreamId)
+
 	for {
 		select {
-		case <-clientGone:
-			// if the client has disconnected, close the connection
-			log.Println("Flow action changes client disconnected")
+		case <-ctx.Done():
+			log.Println("Task changes client disconnected")
 			return
-		default:
-			tasks, lastId, err := ctrl.service.GetTaskChanges(context.Background(), workspaceId, lastTaskStreamId, 50, 0)
+		case err := <-errChan:
 			if err != nil {
-				log.Printf("Error getting task changes: %v", err)
+				log.Printf("Error streaming task changes: %v", err)
 				return
 			}
-			if len(tasks) > 0 {
-				taskResponses := make([]TaskResponse, len(tasks))
-				for i, task := range tasks {
-					flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, task.Id)
-
-					if err != nil {
-						log.Printf("Error getting flows for task: %v", err)
-						return
-					}
-					taskResponses[i] = TaskResponse{
-						Task:  task,
-						Flows: flows,
-					}
-				}
-
-				lastTaskStreamId = lastId
-				taskData := map[string]interface{}{
-					"tasks":            taskResponses,
-					"lastTaskStreamId": lastTaskStreamId,
-				}
-				if err := conn.WriteJSON(taskData); err != nil {
-					log.Printf("Error writing tasks to websocket: %v", err)
-					return
-				}
+		case task, ok := <-taskChan:
+			if !ok {
+				log.Println("Task channel closed")
+				return
+			}
+			flows, err := ctrl.service.GetFlowsForTask(ctx, workspaceId, task.Id)
+			if err != nil {
+				log.Printf("Error getting flows for task: %v", err)
+				return
+			}
+			taskResponse := TaskResponse{
+				Task:  task,
+				Flows: flows,
+			}
+			taskData := map[string]interface{}{
+				"tasks":            []TaskResponse{taskResponse},
+				"lastTaskStreamId": task.StreamId,
+			}
+			if err := conn.WriteJSON(taskData); err != nil {
+				log.Printf("Error writing task to websocket: %v", err)
+				return
 			}
 		}
 	}
 }
 
-type FlowEventSubscription struct {
-	ParentId            string `json:"parentId"`
-	LastStreamMessageId string `json:"lastStreamMessageId,omitempty"`
-}
-
 func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
+
 	workspaceId := c.Param("workspaceId")
-	ctx := c.Request.Context()
 	flowId := c.Param("id")
 
 	if workspaceId == "" {
@@ -975,11 +957,8 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 	}
 	defer conn.Close()
 
-	streamKeys := sync.Map{}
-	maxCount := int64(100)
-	blockDuration := time.Millisecond * 250 // Note: we can't purely block with 0 duration as we want to handle new stream keys
-
-	clientGone := make(chan struct{})
+	subscriptionCh := make(chan domain.FlowEventSubscription, 100)
+	defer close(subscriptionCh)
 
 	// Goroutine to read subscription messages and handle disconnection detection
 	go func() {
@@ -987,10 +966,10 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 			_, r, err := conn.NextReader()
 			if err != nil {
 				log.Printf("Client disconnected or error: %v", err)
-				close(clientGone)
+				cancel()
 				return
 			}
-			var sub FlowEventSubscription
+			var sub domain.FlowEventSubscription
 			err = json.NewDecoder(r).Decode(&sub)
 			if err == io.EOF {
 				// One value is expected in the message.
@@ -998,64 +977,27 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 			}
 			if err != nil {
 				log.Printf("Invalid message format: %v", err)
+				continue
 			}
-			if sub.LastStreamMessageId == "" {
-				sub.LastStreamMessageId = "0"
-			}
-			streamKey := fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, sub.ParentId)
-			streamKeys.Store(streamKey, sub.LastStreamMessageId)
+			subscriptionCh <- sub
 		}
 	}()
+
+	flowEventCh, errCh := ctrl.service.StreamFlowEvents(ctx, workspaceId, flowId, subscriptionCh)
 
 	// Main loop for streaming flow events
 	for {
 		select {
-		case <-clientGone:
+		case <-ctx.Done():
 			log.Println("Client disconnected, ending stream")
 			return
-		default:
-			// Convert sync.Map to a regular map for `GetFlowEvents`
-			keysMap := make(map[string]string)
-			streamKeys.Range(func(key, value interface{}) bool {
-				keysMap[key.(string)] = value.(string)
-				return true
-			})
-
-			// wait until we have at least one stream key to fetch
-			if len(keysMap) == 0 {
-				time.Sleep(time.Millisecond * 20)
-				continue
-			}
-
-			// Attempt to fetch the flow events
-			flowEvents, lastStreamKeys, err := ctrl.service.GetFlowEvents(
-				ctx, workspaceId, keysMap, maxCount, blockDuration,
-			)
-			if err != nil {
-				log.Printf("Error fetching flow events: %v", err)
+		case err := <-errCh:
+			log.Printf("Error streaming flow events: %v", err)
+			return
+		case flowEvent := <-flowEventCh:
+			if err := conn.WriteJSON(flowEvent); err != nil {
+				log.Printf("Error writing flow event to websocket: %v", err)
 				return
-			}
-
-			// Update the stream keys for subsequent fetches
-			for key, lastId := range lastStreamKeys {
-				streamKeys.Store(key, lastId)
-			}
-
-			// Streaming each flow event
-			for _, flowEvent := range flowEvents {
-				if err := conn.WriteJSON(flowEvent); err != nil {
-					log.Printf("Error writing flow event to websocket: %v", err)
-					return
-				}
-
-				// remove stream keys that have been marked as ended
-				if flowEvent.GetEventType() == domain.EndStreamEventType {
-					for key := range keysMap {
-						if strings.HasSuffix(key, flowEvent.GetParentId()) {
-							streamKeys.Delete(key)
-						}
-					}
-				}
 			}
 		}
 	}
