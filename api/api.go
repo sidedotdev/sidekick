@@ -979,9 +979,6 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 				log.Printf("Invalid message format: %v", err)
 				continue
 			}
-			if sub.StreamMessageStartId == "" {
-				sub.StreamMessageStartId = "0"
-			}
 			subscriptionCh <- sub
 		}
 	}()
