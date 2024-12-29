@@ -29,76 +29,64 @@ func (s *Streamer) AddTaskChange(ctx context.Context, task domain.Task) error {
 	return nil
 }
 
-func (s *Streamer) GetTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]domain.Task, string, error) {
-	if maxCount == 0 {
-		maxCount = 100
-	}
+func (s *Streamer) StreamTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string) (<-chan domain.Task, <-chan error) {
+	taskChan := make(chan domain.Task)
+	errChan := make(chan error, 1)
 
-	// default to starting from the end of the stream for task changes
-	if streamMessageStartId == "" {
-		streamMessageStartId = "$"
-	}
+	go func() {
+		defer close(taskChan)
+		defer close(errChan)
 
-	subject := fmt.Sprintf("tasks.changes.%s", workspaceId)
+		subject := fmt.Sprintf("tasks.changes.%s", workspaceId)
 
-	var deliveryPolicy jetstream.DeliverPolicy
-	var startSeq uint64
-	if streamMessageStartId == "0" {
-		deliveryPolicy = jetstream.DeliverAllPolicy
-	} else if streamMessageStartId == "$" {
-		deliveryPolicy = jetstream.DeliverNewPolicy
-	} else {
-		deliveryPolicy = jetstream.DeliverByStartSequencePolicy
-		var err error
-		startSeq, err = strconv.ParseUint(streamMessageStartId, 10, 64)
+		var deliveryPolicy jetstream.DeliverPolicy
+		var startSeq uint64
+		if streamMessageStartId == "0" {
+			deliveryPolicy = jetstream.DeliverAllPolicy
+		} else if streamMessageStartId == "$" || streamMessageStartId == "" {
+			deliveryPolicy = jetstream.DeliverNewPolicy
+		} else {
+			deliveryPolicy = jetstream.DeliverByStartSequencePolicy
+			var err error
+			startSeq, err = strconv.ParseUint(streamMessageStartId, 10, 64)
+			if err != nil {
+				errChan <- fmt.Errorf("invalid stream message start id: %w", err)
+				return
+			}
+		}
+
+		consumer, err := s.js.CreateOrUpdateConsumer(ctx, EphemeralStreamName, jetstream.ConsumerConfig{
+			FilterSubjects:    []string{subject},
+			InactiveThreshold: 5 * time.Minute,
+			DeliverPolicy:     deliveryPolicy,
+			OptStartSeq:       startSeq,
+		})
+		if err != nil && err != jetstream.ErrConsumerNameAlreadyInUse {
+			errChan <- fmt.Errorf("failed to create consumer: %w", err)
+			return
+		}
+
+		consContext, err := consumer.Consume(func(msg jetstream.Msg) {
+			var task domain.Task
+			if err := json.Unmarshal(msg.Data(), &task); err != nil {
+				errChan <- fmt.Errorf("failed to unmarshal task: %w", err)
+				return
+			}
+			select {
+			case taskChan <- task:
+				msg.Ack()
+			case <-ctx.Done():
+				return
+			}
+		})
 		if err != nil {
-			return nil, "", fmt.Errorf("invalid stream message start id: %w", err)
+			errChan <- fmt.Errorf("failed to create consume context: %w", err)
+			return
 		}
-	}
+		defer consContext.Stop()
 
-	consumer, err := s.js.CreateOrUpdateConsumer(ctx, EphemeralStreamName, jetstream.ConsumerConfig{
-		FilterSubjects:    []string{subject},
-		InactiveThreshold: 5 * time.Minute,
-		DeliverPolicy:     deliveryPolicy,
-		OptStartSeq:       startSeq,
-	})
-	if err != nil && err != jetstream.ErrConsumerNameAlreadyInUse {
-		return nil, "", fmt.Errorf("failed to create consumer: %w", err)
-	}
+		<-ctx.Done()
+	}()
 
-	// Pull messages
-	var msgs jetstream.MessageBatch
-	if blockDuration == 0 {
-		msgs, err = consumer.FetchNoWait(int(maxCount))
-	} else {
-		msgs, err = consumer.Fetch(int(maxCount), jetstream.FetchMaxWait(blockDuration))
-	}
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to fetch messages: %w", err)
-	}
-
-	var tasks []domain.Task
-	var lastSequence uint64
-
-	for msg := range msgs.Messages() {
-		var task domain.Task
-
-		if err := json.Unmarshal(msg.Data(), &task); err != nil {
-			return nil, "", fmt.Errorf("failed to unmarshal task: %w", err)
-		}
-		tasks = append(tasks, task)
-		msg.Ack()
-
-		meta, err := msg.Metadata()
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to get message metadata: %w", err)
-		}
-		lastSequence = meta.Sequence.Stream
-
-	}
-
-	if len(tasks) == 0 {
-		return tasks, streamMessageStartId, nil
-	}
-	return tasks, fmt.Sprintf("%d", lastSequence+1), nil
+	return taskChan, errChan
 }
