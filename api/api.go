@@ -957,8 +957,8 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 	}
 	defer conn.Close()
 
-	eventParentIdCh := make(chan string, 100)
-	defer close(eventParentIdCh)
+	subscriptionCh := make(chan domain.FlowEventSubscription, 100)
+	defer close(subscriptionCh)
 
 	// Goroutine to read subscription messages and handle disconnection detection
 	go func() {
@@ -979,11 +979,14 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 				log.Printf("Invalid message format: %v", err)
 				continue
 			}
-			eventParentIdCh <- sub.ParentId
+			if sub.StreamMessageStartId == "" {
+				sub.StreamMessageStartId = "0"
+			}
+			subscriptionCh <- sub
 		}
 	}()
 
-	flowEventCh, errCh := ctrl.service.StreamFlowEvents(ctx, workspaceId, flowId, "0", eventParentIdCh)
+	flowEventCh, errCh := ctrl.service.StreamFlowEvents(ctx, workspaceId, flowId, subscriptionCh)
 
 	// Main loop for streaming flow events
 	for {

@@ -1526,10 +1526,10 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	}
 	defer ws.Close()
 
-	// Send subscriptions
-	err = ws.WriteJSON(FlowEventSubscription{ParentId: "parent-1"})
+	// Send subscriptions with StreamMessageStartId
+	err = ws.WriteJSON(domain.FlowEventSubscription{ParentId: "parent-1", StreamMessageStartId: "0"})
 	assert.NoError(t, err, "Failed to send subscription for flowEvent1")
-	err = ws.WriteJSON(FlowEventSubscription{ParentId: "parent-2"})
+	err = ws.WriteJSON(domain.FlowEventSubscription{ParentId: "parent-2", StreamMessageStartId: "0"})
 	assert.NoError(t, err, "Failed to send subscription for flowEvent2")
 
 	// Verify if the flow events are streamed correctly
