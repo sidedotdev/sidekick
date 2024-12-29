@@ -58,7 +58,80 @@ func (db *Streamer) EndFlowEventStream(ctx context.Context, workspaceId, flowId,
 	return nil
 }
 
-func (db *Streamer) GetFlowEvents(ctx context.Context, workspaceId string, streamKeys map[string]string, maxCount int64, blockDuration time.Duration) ([]domain.FlowEvent, map[string]string, error) {
+func (db *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, subscriptionCh <-chan domain.FlowEventSubscription) (<-chan domain.FlowEvent, <-chan error) {
+	eventCh := make(chan domain.FlowEvent)
+	errCh := make(chan error, 1)
+
+	go func() {
+		defer close(eventCh)
+		defer close(errCh)
+
+		streamKeys := sync.Map{}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case subscription, ok := <-subscriptionCh:
+				if !ok {
+					return
+				}
+				streamKey := fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, subscription.ParentId)
+				streamMessageStartId := subscription.StreamMessageStartId
+				if streamMessageStartId == "" {
+					streamMessageStartId = "0"
+				}
+				streamKeys.Store(streamKey, streamMessageStartId)
+			default:
+				if lenSyncMap(&streamKeys) == 0 {
+					// spin until we have at least one stream key
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+
+				// Convert sync.Map to a regular map for `GetFlowEvents`
+				keysMap := make(map[string]string)
+				streamKeys.Range(func(key, value interface{}) bool {
+					keysMap[key.(string)] = value.(string)
+					return true
+				})
+
+				// wait until we have at least one stream key to fetch
+				if len(keysMap) == 0 {
+					time.Sleep(time.Millisecond * 20)
+					continue
+				}
+
+				blockDuration := 250 * time.Millisecond
+				events, updatedStreamKeys, err := db.getFlowEvents(ctx, workspaceId, keysMap, 100, blockDuration)
+				if err != nil {
+					errCh <- err
+					return
+				}
+
+				for _, event := range events {
+					select {
+					case <-ctx.Done():
+						return
+					case eventCh <- event:
+						if _, ok := event.(domain.EndStreamEvent); ok {
+							streamKeys.Delete(fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, event.GetParentId()))
+						}
+					}
+				}
+
+				// Update the stream keys for subsequent fetches
+				for key, lastId := range updatedStreamKeys {
+					streamKeys.Store(key, lastId)
+				}
+
+			}
+		}
+	}()
+
+	return eventCh, errCh
+}
+
+func (db *Streamer) getFlowEvents(ctx context.Context, workspaceId string, streamKeys map[string]string, maxCount int64, blockDuration time.Duration) ([]domain.FlowEvent, map[string]string, error) {
 	updatedStreamKeys := make(map[string]string)
 	var events []domain.FlowEvent
 
@@ -116,77 +189,4 @@ func lenSyncMap(m *sync.Map) int {
 		return true
 	})
 	return i
-}
-
-func (db *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, subscriptionCh <-chan domain.FlowEventSubscription) (<-chan domain.FlowEvent, <-chan error) {
-	eventCh := make(chan domain.FlowEvent)
-	errCh := make(chan error, 1)
-
-	go func() {
-		defer close(eventCh)
-		defer close(errCh)
-
-		streamKeys := sync.Map{}
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case subscription, ok := <-subscriptionCh:
-				if !ok {
-					return
-				}
-				streamKey := fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, subscription.ParentId)
-				streamMessageStartId := subscription.StreamMessageStartId
-				if streamMessageStartId == "" {
-					streamMessageStartId = "0"
-				}
-				streamKeys.Store(streamKey, streamMessageStartId)
-			default:
-				if lenSyncMap(&streamKeys) == 0 {
-					// spin until we have at least one stream key
-					time.Sleep(100 * time.Millisecond)
-					continue
-				}
-
-				// Convert sync.Map to a regular map for `GetFlowEvents`
-				keysMap := make(map[string]string)
-				streamKeys.Range(func(key, value interface{}) bool {
-					keysMap[key.(string)] = value.(string)
-					return true
-				})
-
-				// wait until we have at least one stream key to fetch
-				if len(keysMap) == 0 {
-					time.Sleep(time.Millisecond * 20)
-					continue
-				}
-
-				blockDuration := 250 * time.Millisecond
-				events, updatedStreamKeys, err := db.GetFlowEvents(ctx, workspaceId, keysMap, 100, blockDuration)
-				if err != nil {
-					errCh <- err
-					return
-				}
-
-				for _, event := range events {
-					select {
-					case <-ctx.Done():
-						return
-					case eventCh <- event:
-						if _, ok := event.(domain.EndStreamEvent); ok {
-							streamKeys.Delete(fmt.Sprintf("%s:%s:stream:%s", workspaceId, flowId, event.GetParentId()))
-						}
-					}
-				}
-
-				// Update the stream keys for subsequent fetches
-				for key, lastId := range updatedStreamKeys {
-					streamKeys.Store(key, lastId)
-				}
-
-			}
-		}
-	}()
-
-	return eventCh, errCh
 }

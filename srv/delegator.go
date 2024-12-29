@@ -3,7 +3,6 @@ package srv
 import (
 	"context"
 	"sidekick/domain"
-	"time"
 )
 
 /* Delegates calls, but also decorates storage with streaming for events/change
@@ -106,10 +105,6 @@ func (d Delegator) AddTaskChange(ctx context.Context, task domain.Task) error {
 	return d.streamer.AddTaskChange(ctx, task)
 }
 
-/* implements TaskStreamer interface */
-func (d Delegator) GetTaskChanges(ctx context.Context, workspaceId string, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]domain.Task, string, error) {
-	return d.streamer.GetTaskChanges(ctx, workspaceId, streamMessageStartId, maxCount, blockDuration)
-}
 
 /* implements FlowStorage interface */
 func (d Delegator) PersistFlow(ctx context.Context, workflow domain.Flow) error {
@@ -166,11 +161,6 @@ func (d Delegator) GetFlowAction(ctx context.Context, workspaceId string, flowAc
 /* implements FlowStreamer interface */
 func (d Delegator) AddFlowActionChange(ctx context.Context, flowAction domain.FlowAction) error {
 	return d.streamer.AddFlowActionChange(ctx, flowAction)
-}
-
-/* implements FlowStreamer interface */
-func (d Delegator) GetFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]domain.FlowAction, string, error) {
-	return d.streamer.GetFlowActionChanges(ctx, workspaceId, flowId, streamMessageStartId, maxCount, blockDuration)
 }
 
 /* implements FlowEventStreamer interface */

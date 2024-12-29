@@ -54,7 +54,6 @@ type TaskStorage interface {
 // TaskStreamer defines the interface for task-related stream operations
 type TaskStreamer interface {
 	AddTaskChange(ctx context.Context, task Task) error
-	GetTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string, maxCount int64, blockDuration time.Duration) ([]Task, string, error)
 	StreamTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string) (<-chan Task, <-chan error)
 }
 
