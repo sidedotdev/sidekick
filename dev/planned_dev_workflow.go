@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sidekick/domain"
+	"sidekick/env"
 	"sidekick/utils"
 
 	"go.temporal.io/sdk/workflow"
@@ -16,9 +17,10 @@ type PlannedDevInput struct {
 	PlannedDevOptions
 }
 type PlannedDevOptions struct {
-	PlanningPrompt        string `json:"planningPrompt"`
-	ReproduceIssue        bool   `json:"reproduceIssue"`
-	DetermineRequirements bool   `json:"determineRequirements"`
+	PlanningPrompt        string      `json:"planningPrompt"`
+	ReproduceIssue        bool        `json:"reproduceIssue"`
+	DetermineRequirements bool        `json:"determineRequirements"`
+	EnvType               env.EnvType `json:"envType,omitempty" default:"local"`
 }
 
 var SideAppEnv = os.Getenv("SIDE_APP_ENV")

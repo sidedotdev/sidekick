@@ -121,7 +121,6 @@ func (d Delegator) AddTaskChange(ctx context.Context, task domain.Task) error {
 	return d.streamer.AddTaskChange(ctx, task)
 }
 
-
 /* implements FlowStorage interface */
 func (d Delegator) PersistFlow(ctx context.Context, workflow domain.Flow) error {
 	err := d.storage.PersistFlow(ctx, workflow)

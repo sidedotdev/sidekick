@@ -8,6 +8,7 @@ import (
 
 	"sidekick/coding/git"
 	"sidekick/common"
+	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/utils"
@@ -22,7 +23,8 @@ type BasicDevWorkflowInput struct {
 }
 
 type BasicDevOptions struct {
-	DetermineRequirements bool `json:"determineRequirements"`
+	DetermineRequirements bool        `json:"determineRequirements"`
+	EnvType               env.EnvType `json:"envType,omitempty" default:"local"`
 }
 
 func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result string, err error) {
