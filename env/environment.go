@@ -19,6 +19,10 @@ const (
 	EnvTypeLocalGitWorktree EnvType = "local_git_worktree"
 )
 
+func (e EnvType) IsValid() bool {
+	return e == EnvTypeLocal || e == EnvTypeLocalGitWorktree
+}
+
 type Env interface {
 	GetType() EnvType
 	GetWorkingDirectory() string

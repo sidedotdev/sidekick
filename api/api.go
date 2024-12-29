@@ -16,6 +16,7 @@ import (
 	"sidekick/common"
 	"sidekick/dev"
 	"sidekick/domain"
+	"sidekick/env"
 	"sidekick/frontend"
 	"sidekick/srv"
 
@@ -312,13 +313,14 @@ func (ctrl *Controller) CancelFlowHandler(c *gin.Context) {
 }
 
 type TaskRequest struct {
-	Id          string `json:"id"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	FlowType    string `json:"flowType"`
-	AgentType   string `json:"agentType"`
-	Status      string `json:"status"`
-	FlowOptions map[string]interface{}
+	Id          string                 `json:"id"`
+	Title       string                 `json:"title"`
+	Description string                 `json:"description"`
+	FlowType    string                 `json:"flowType"`
+	AgentType   string                 `json:"agentType"`
+	Status      string                 `json:"status"`
+	EnvType     string                 `json:"envType"`
+	FlowOptions map[string]interface{} `json:"flowOptions"`
 }
 
 func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
@@ -750,6 +752,13 @@ func validateTaskRequest(taskReq *TaskRequest) (domain.AgentType, domain.TaskSta
 		}
 	} else if agentType == domain.AgentTypeNone && taskReq.Id == "" {
 		return "", "", errors.New("Creating a task with agent type set to \"none\" is not allowed")
+	}
+
+	// Validate EnvType
+	if envType, ok := taskReq.FlowOptions["envType"].(string); ok {
+		if !env.EnvType(envType).IsValid() {
+			return "", "", fmt.Errorf("invalid env type: %s", envType)
+		}
 	}
 
 	return agentType, status, nil
