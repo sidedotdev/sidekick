@@ -1551,17 +1551,22 @@ func TestGetFlowHandler(t *testing.T) {
 				assert.Equal(t, testCase.expectedError, result["error"])
 			}
 		} else {
-			var result map[string]FlowWithWorktrees
+			var result struct {
+				Flow struct {
+					domain.Flow
+					Worktrees []domain.Worktree `json:"worktrees"`
+				} `json:"flow"`
+			}
 			err := json.Unmarshal(resp.Body.Bytes(), &result)
 			if assert.Nil(t, err) {
-				assert.Equal(t, flow.Id, result["flow"].Id)
-				assert.Equal(t, flow.WorkspaceId, result["flow"].WorkspaceId)
-				assert.Equal(t, flow.Type, result["flow"].Type)
-				assert.Equal(t, flow.ParentId, result["flow"].ParentId)
-				assert.Equal(t, flow.Status, result["flow"].Status)
-				assert.Len(t, result["flow"].Worktrees, 2)
-				assert.Contains(t, []string{worktree1.Id, worktree2.Id}, result["flow"].Worktrees[0].Id)
-				assert.Contains(t, []string{worktree1.Id, worktree2.Id}, result["flow"].Worktrees[1].Id)
+				assert.Equal(t, flow.Id, result.Flow.Id)
+				assert.Equal(t, flow.WorkspaceId, result.Flow.WorkspaceId)
+				assert.Equal(t, flow.Type, result.Flow.Type)
+				assert.Equal(t, flow.ParentId, result.Flow.ParentId)
+				assert.Equal(t, flow.Status, result.Flow.Status)
+				assert.Len(t, result.Flow.Worktrees, 2)
+				assert.Contains(t, []string{worktree1.Id, worktree2.Id}, result.Flow.Worktrees[0].Id)
+				assert.Contains(t, []string{worktree1.Id, worktree2.Id}, result.Flow.Worktrees[1].Id)
 			}
 		}
 	}

@@ -1,6 +1,13 @@
 <template>
   <div class="flow-actions-container" :class="{ 'short-content': shortContent }">
-    <a v-if="devMode" href="vscode://file/FIXME" target="_blank">Open in VS Code</a>
+    <div v-if="flow">
+      <div class="worktrees" v-if="devMode">
+        <p v-for="worktree in flow.worktrees" :key="worktree.id">
+          {{ worktree.name }}
+          <a :href="`vscode://file/${dataDir}/${store.workspaceId}/${worktree.name}`" class="vs-code-button">Open in VS Code</a>
+        </p>
+      </div>
+    </div>
     <div class="scroll-container">
       <SubflowContainer v-for="(subflowTree, index) in subflowTrees" :key="index" :subflowTree="subflowTree" :defaultExpanded="index == subflowTrees.length - 1"/>
     </div>
@@ -11,11 +18,12 @@
 import { onMounted, ref, onUnmounted } from 'vue'
 import { useEventBus } from '@vueuse/core'
 import SubflowContainer from '@/components/SubflowContainer.vue'
-import type { FlowAction, SubflowTree, ChatMessageDelta } from '../lib/models'
+import type { FlowAction, SubflowTree, ChatMessageDelta, Flow } from '../lib/models'
 import { buildSubflowTrees } from '../lib/subflow'
 import { useRoute } from 'vue-router'
 import { store } from '../lib/store'
 
+const dataDir = `${import.meta.env.VITE_HOME}/Library/Application Support/Sidekick` // FIXME switch to API call to backend
 const devMode = import.meta.env.MODE === 'development'
 const flowActions = ref<FlowAction[]>([])
 const subflowTrees = ref<SubflowTree[]>([])
@@ -35,6 +43,7 @@ const updateSubflowTrees = () => {
   subflowTrees.value = newSubtrees
 }
 
+let flow = ref<Flow | null>(null)
 let actionChangesSocket: WebSocket | null = null
 let actionChangesSocketClosed = false
 let eventsSocket: WebSocket | null = null
@@ -178,6 +187,8 @@ onMounted(async () => {
   };
 
   connectActionChangesWebSocket();
+
+  flow.value = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${route.params.id}`).then((res) => res.json())
 })
 
 onUnmounted(() => {
@@ -205,5 +216,32 @@ onUnmounted(() => {
 
 .flow-actions-container.short-content {
   flex-direction: column;
+}
+
+.worktrees {
+  margin-top: 1rem;
+}
+
+.worktrees ul {
+  list-style-type: none;
+  padding: 0;
+}
+
+.worktrees li {
+  margin-bottom: 0.5rem;
+}
+
+.vs-code-button {
+  margin-left: 1rem;
+  padding: 0.25rem 0.5rem;
+  background-color: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border: none;
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.vs-code-button:hover {
+  background-color: var(--vscode-button-hoverBackground);
 }
 </style>

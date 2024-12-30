@@ -449,6 +449,7 @@ func (ctrl *Controller) GetFlowHandler(c *gin.Context) {
 
 	worktrees, err := ctrl.service.GetWorktreesForFlow(c, workspaceId, flowId)
 	if err != nil {
+		fmt.Printf("Error fetching worktrees for flow %s: %v\n", flowId, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve worktrees"})
 		return
 	}
@@ -458,7 +459,7 @@ func (ctrl *Controller) GetFlowHandler(c *gin.Context) {
 		Worktrees: worktrees,
 	}
 
-	c.JSON(http.StatusOK, gin.H{"flow": flowWithWorktrees})
+	c.JSON(http.StatusOK, flowWithWorktrees)
 }
 
 func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
