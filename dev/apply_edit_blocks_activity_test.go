@@ -201,14 +201,12 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tmpDir, err := os.MkdirTemp("", "base")
-			assert.Nil(t, err)
-			defer os.RemoveAll(tmpDir)
+			tmpDir := t.TempDir()
 
 			if tt.isExistingFile {
 				filePath := filepath.Join(tmpDir, "existing.txt")
-				err = os.WriteFile(filePath, []byte(tt.existingContent), 0644)
-				assert.Nil(t, err)
+				err := os.WriteFile(filePath, []byte(tt.existingContent), 0644)
+				require.NoError(t, err)
 			}
 
 			envContainer := env.EnvContainer{
@@ -241,7 +239,7 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 
 			if tt.editBlock.EditType == "delete" {
 				filePath := filepath.Join(tmpDir, tt.editBlock.FilePath)
-				_, err = os.Stat(filePath)
+				_, err := os.Stat(filePath)
 				assert.True(t, os.IsNotExist(err))
 			}
 		})
