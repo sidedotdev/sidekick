@@ -5,6 +5,7 @@
       :key="option.value"
       :class="{ active: modelValue === option.value }"
       @click="$emit('update:modelValue', option.value)"
+      type="button"
     >
       {{ option.label }}
     </button>
