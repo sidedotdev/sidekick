@@ -16,7 +16,7 @@
           <option value="planned_dev">Planned Dev</option>
           <!--option>PM + Planned Dev</option-->
         </select>
-        <div>
+        <div v-if="devMode">
           <label>Workdir</label>
           <SegmentedControl
             v-model="envType"
@@ -61,6 +61,7 @@ const planningPrompt = ref('')
 const determineRequirements = ref(true)
 const flowType = ref(localStorage.getItem('lastUsedFlowType') ?? 'basic_dev')
 const envType = ref('local')
+const devMode = import.meta.env.MODE === 'development'
 const submitTask = async () => {
   const flowOptions = {
     planningPrompt: planningPrompt.value,
