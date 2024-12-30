@@ -129,7 +129,7 @@ func TestWorktreeStorage(t *testing.T) {
 		require.NoError(t, err)
 
 		// Retrieve worktrees for the specific flow
-		retrievedWorktrees, err := storage.GetWorktreesForFlow(ctx, flowId)
+		retrievedWorktrees, err := storage.GetWorktreesForFlow(ctx, worktreesInFlow[0].WorkspaceId, flowId)
 		require.NoError(t, err)
 
 		// Check if the correct number of worktrees is returned
@@ -145,7 +145,7 @@ func TestWorktreeStorage(t *testing.T) {
 		assert.NotContains(t, retrievedWorktrees, worktreeOtherFlow)
 
 		// Test empty flow
-		emptyFlowWorktrees, err := storage.GetWorktreesForFlow(ctx, "empty-flow")
+		emptyFlowWorktrees, err := storage.GetWorktreesForFlow(ctx, worktreeOtherFlow.WorkspaceId, "empty-flow")
 		require.NoError(t, err)
 		assert.Empty(t, emptyFlowWorktrees)
 	})

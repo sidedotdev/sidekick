@@ -68,13 +68,13 @@ func (s *Storage) GetWorktrees(ctx context.Context, workspaceId string) ([]domai
 	return s.getWorktreesFromRows(rows)
 }
 
-func (s Storage) GetWorktreesForFlow(ctx context.Context, flowId string) ([]domain.Worktree, error) {
+func (s Storage) GetWorktreesForFlow(ctx context.Context, workspaceId, flowId string) ([]domain.Worktree, error) {
 	query := `
 		SELECT id, flow_id, name, created, workspace_id
 		FROM worktrees
-		WHERE flow_id = ?
+		WHERE workspace_id = ? AND flow_id = ?
 	`
-	rows, err := s.db.QueryContext(ctx, query, flowId)
+	rows, err := s.db.QueryContext(ctx, query, workspaceId, flowId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query worktrees: %w", err)
 	}
