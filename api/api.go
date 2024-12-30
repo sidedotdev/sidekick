@@ -26,6 +26,12 @@ import (
 	"go.temporal.io/sdk/client"
 )
 
+// FlowWithWorktrees represents a Flow with its associated Worktrees
+type FlowWithWorktrees struct {
+	domain.Flow
+	Worktrees []domain.Worktree `json:"worktrees"`
+}
+
 func RunServer() *http.Server {
 	gin.SetMode(gin.ReleaseMode)
 	ctrl, err := NewController()
@@ -138,6 +144,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	taskRoutes.POST("/archive_finished", ctrl.ArchiveFinishedTasksHandler)
 
 	flowRoutes := workspaceApiRoutes.Group("/flows")
+	flowRoutes.GET("/:id", ctrl.GetFlowHandler)
 	flowRoutes.GET("/:id/actions", ctrl.GetFlowActionsHandler)
 	flowRoutes.POST("/:id/cancel", ctrl.CancelFlowHandler)
 
@@ -419,6 +426,39 @@ func (ctrl *Controller) GetTaskHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"task": task})
+}
+
+func (ctrl *Controller) GetFlowHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	if workspaceId == "" || flowId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID and Flow ID are required"})
+		return
+	}
+
+	flow, err := ctrl.service.GetFlow(c, workspaceId, flowId)
+	if err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	worktrees, err := ctrl.service.GetWorktreesForFlow(c, workspaceId, flowId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve worktrees"})
+		return
+	}
+
+	flowWithWorktrees := FlowWithWorktrees{
+		Flow:      flow,
+		Worktrees: worktrees,
+	}
+
+	c.JSON(http.StatusOK, gin.H{"flow": flowWithWorktrees})
 }
 
 func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
