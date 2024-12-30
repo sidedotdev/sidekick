@@ -23,7 +23,7 @@ type DevContext struct {
 	EmbeddingConfig common.EmbeddingConfig
 }
 
-func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string) (DevContext, error) {
+func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, envType string) (DevContext, error) {
 	initialExecCtx := flow_action.ExecContext{
 		Context:     ctx,
 		WorkspaceId: workspaceId,
@@ -34,19 +34,33 @@ func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string) (
 	return flow_action.TrackSubflowFailureOnly(initialExecCtx, "Init", func(_ domain.Subflow) (DevContext, error) {
 		actionCtx := initialExecCtx.NewActionContext("Setup Dev Context")
 		return flow_action.TrackFailureOnly(actionCtx, func(_ domain.FlowAction) (DevContext, error) {
-			return setupDevContextAction(ctx, workspaceId, repoDir)
+			return setupDevContextAction(ctx, workspaceId, repoDir, envType)
 		})
 	})
 }
 
-func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir string) (DevContext, error) {
+func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir string, envType string) (DevContext, error) {
 	ctx = utils.NoRetryCtx(ctx)
 
 	var devEnv env.Env
 	var err error
-	devEnv, err = env.NewLocalEnv(context.Background(), env.LocalEnvParams{
-		RepoDir: repoDir,
-	})
+
+	switch envType {
+	case "local":
+		devEnv, err = env.NewLocalEnv(context.Background(), env.LocalEnvParams{
+			RepoDir: repoDir,
+		})
+	case "local_git_worktree":
+		devEnv, err = env.NewLocalGitWorktreeEnv(context.Background(), env.LocalEnvParams{
+			RepoDir: repoDir,
+		}, domain.Worktree{
+			WorkspaceId: workspaceId,
+			Name:        workflow.GetInfo(ctx).WorkflowExecution.ID,
+		})
+	default:
+		return DevContext{}, fmt.Errorf("unsupported environment type: %s", envType)
+	}
+
 	if err != nil {
 		return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
 	}
