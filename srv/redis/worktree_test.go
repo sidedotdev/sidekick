@@ -104,4 +104,32 @@ func TestWorktreeStorage(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, worktrees, worktree)
 	})
+
+	t.Run("GetWorktreesForFlow", func(t *testing.T) {
+		flowId := "flow_test"
+		workspaceId := "workspace_test"
+		worktrees := []domain.Worktree{
+			{Id: "wt_test6", FlowId: flowId, Name: "Test Worktree 6", Created: time.Now().UTC(), WorkspaceId: workspaceId},
+			{Id: "wt_test7", FlowId: flowId, Name: "Test Worktree 7", Created: time.Now().UTC(), WorkspaceId: workspaceId},
+			{Id: "wt_test8", FlowId: "other_flow", Name: "Test Worktree 8", Created: time.Now().UTC(), WorkspaceId: workspaceId},
+		}
+
+		for _, wt := range worktrees {
+			err := storage.PersistWorktree(ctx, wt)
+			require.NoError(t, err)
+		}
+
+		retrievedWorktrees, err := storage.GetWorktreesForFlow(ctx, workspaceId, flowId)
+		require.NoError(t, err)
+		assert.Len(t, retrievedWorktrees, 2)
+
+		for _, wt := range retrievedWorktrees {
+			assert.Equal(t, flowId, wt.FlowId)
+		}
+
+		// Test empty flow
+		emptyWorktrees, err := storage.GetWorktreesForFlow(ctx, workspaceId, "empty_flow")
+		require.NoError(t, err)
+		assert.Empty(t, emptyWorktrees)
+	})
 }

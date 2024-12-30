@@ -19,6 +19,6 @@ type WorktreeStorage interface {
 	PersistWorktree(ctx context.Context, worktree Worktree) error
 	GetWorktree(ctx context.Context, workspaceId, worktreeId string) (Worktree, error)
 	GetWorktrees(ctx context.Context, workspaceId string) ([]Worktree, error)
-	GetWorktreesForFlow(ctx context.Context, flowId string) ([]Worktree, error)
+	GetWorktreesForFlow(ctx context.Context, workspaceId, flowId string) ([]Worktree, error)
 	DeleteWorktree(ctx context.Context, workspaceId, worktreeId string) error
 }

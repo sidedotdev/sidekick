@@ -39,8 +39,8 @@ func (d Delegator) GetWorktrees(ctx context.Context, workspaceId string) ([]doma
 	return d.storage.GetWorktrees(ctx, workspaceId)
 }
 
-func (d Delegator) GetWorktreesForFlow(ctx context.Context, flowId string) ([]domain.Worktree, error) {
-	return d.storage.GetWorktreesForFlow(ctx, flowId)
+func (d Delegator) GetWorktreesForFlow(ctx context.Context, workspaceId string, flowId string) ([]domain.Worktree, error) {
+	return d.storage.GetWorktreesForFlow(ctx, workspaceId, flowId)
 }
 
 func (d Delegator) DeleteWorktree(ctx context.Context, workspaceId, worktreeId string) error {
