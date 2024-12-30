@@ -17,19 +17,20 @@
           <!--option>PM + Planned Dev</option-->
         </select>
         <div>
-          <input type="checkbox" id="determineRequirements" v-model="determineRequirements">
-          &nbsp;
-          <label for="determineRequirements">Determine Requirements</label>
-        </div>
-        <div>
-          <label>Environment Type</label>
+          <label>Workdir</label>
           <SegmentedControl
             v-model="envType"
             :options="[
               { label: 'Repo Directory', value: 'local' },
               { label: 'Git Worktree', value: 'local_git_worktree' }
             ]"
+            class="env-type"
           />
+        </div>
+        <div>
+          <input type="checkbox" id="determineRequirements" v-model="determineRequirements">
+          &nbsp;
+          <label for="determineRequirements">Determine Requirements</label>
         </div>
       </template>
       <AutogrowTextarea id="description" v-model="description" placeholder="Describe your task in detail" required></AutogrowTextarea>

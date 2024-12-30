@@ -3,6 +3,7 @@
   --kanban-gap: 0.5rem;
   --task-pad: 1.2rem;
   --section-gap: 160px;
+  --font-size: 15px;
 }
 
 /* color palette from <https://github.com/vuejs/theme> */
@@ -41,6 +42,7 @@
   --color-link-light: rgb(0, 102, 204);
 
   /* FIXME do we need both dark and light? */
+  --color-primary: rgba(131,58,180, 0.8);
   --color-cta-button-bg-dark: rgba(131,58,180, 0.8);
   --color-cta-button-bg-light: rgba(131,58,180, 0.8);
   --color-cta-button-text-light: var(--color-text-dark);
@@ -143,7 +145,7 @@ body {
     'Droid Sans',
     'Helvetica Neue',
     sans-serif;
-  font-size: 15px;
+  font-size: var(--font-size);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

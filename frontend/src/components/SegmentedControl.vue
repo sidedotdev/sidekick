@@ -30,20 +30,20 @@ defineEmits<{
 
 <style scoped>
 .segmented-control {
-  display: flex;
+  display: inline-flex;
   border: 1px solid var(--color-border);
   border-radius: 0.25rem;
   overflow: hidden;
 }
 
 button {
-  flex: 1;
   padding: 0.5rem 1rem;
   background-color: var(--color-background);
   color: var(--color-text);
   border: none;
   cursor: pointer;
   transition: background-color 0.3s, color 0.3s;
+  font-size: var(--font-size);
 }
 
 button:not(:last-child) {
@@ -51,7 +51,7 @@ button:not(:last-child) {
 }
 
 button.active {
-  background-color: var(--color-primary);
-  color: var(--color-text-inverse);
+  background-color: var(--color-background-hover);
+  box-shadow: inset 0 0 1px 1px var(--color-border-hover);
 }
 </style>
