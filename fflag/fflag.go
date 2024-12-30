@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/thomaspoignant/go-feature-flag/ffcontext"
-	"github.com/thomaspoignant/go-feature-flag/retriever/httpretriever"
-	"github.com/thomaspoignant/go-feature-flag/retriever/fileretriever"
 	"github.com/thomaspoignant/go-feature-flag/retriever"
+	"github.com/thomaspoignant/go-feature-flag/retriever/fileretriever"
+	"github.com/thomaspoignant/go-feature-flag/retriever/httpretriever"
 
 	ffclient "github.com/thomaspoignant/go-feature-flag"
 	"go.temporal.io/sdk/workflow"
@@ -41,7 +41,7 @@ func NewFFlag(flagsFilePath string) (FFlag, error) {
 		PollingInterval: 60 * time.Second,
 		Logger:          log.New(os.Stdout, "", 0),
 		Context:         context.Background(),
-		Retriever: r,
+		Retriever:       r,
 	})
 	if err != nil {
 		return FFlag{}, err

@@ -86,7 +86,7 @@ func (s Storage) GetWorktreesForFlow(ctx context.Context, workspaceId, flowId st
 	if err != nil {
 		return nil, fmt.Errorf("failed to get worktree IDs: %w", err)
 	}
-	
+
 	worktrees := make([]domain.Worktree, 0, len(worktreeIds))
 	for _, worktreeId := range worktreeIds {
 		worktree, err := s.GetWorktree(ctx, workspaceId, worktreeId)
