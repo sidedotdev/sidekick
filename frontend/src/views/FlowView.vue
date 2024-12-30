@@ -1,5 +1,6 @@
 <template>
   <div class="flow-actions-container" :class="{ 'short-content': shortContent }">
+    <a v-if="devMode" href="vscode://file/FIXME" target="_blank">Open in VS Code</a>
     <div class="scroll-container">
       <SubflowContainer v-for="(subflowTree, index) in subflowTrees" :key="index" :subflowTree="subflowTree" :defaultExpanded="index == subflowTrees.length - 1"/>
     </div>
@@ -15,6 +16,7 @@ import { buildSubflowTrees } from '../lib/subflow'
 import { useRoute } from 'vue-router'
 import { store } from '../lib/store'
 
+const devMode = import.meta.env.MODE === 'development'
 const flowActions = ref<FlowAction[]>([])
 const subflowTrees = ref<SubflowTree[]>([])
 const route = useRoute()

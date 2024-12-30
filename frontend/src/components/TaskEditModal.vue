@@ -16,7 +16,7 @@
           <option value="planned_dev">Planned Dev</option>
           <!--option>PM + Planned Dev</option-->
         </select>
-        <div>
+        <div v-if="devMode">
           <label>Workdir</label>
           <SegmentedControl
             v-model="envType"
@@ -53,6 +53,7 @@ const props = defineProps({
     required: true,
   },
 })
+const devMode = import.meta.env.MODE === 'development'
 const emit = defineEmits(['close', 'updated'])
 const description = ref(props.task.description)
 const status = ref(props.task.status)
