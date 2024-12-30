@@ -40,13 +40,14 @@ button {
   border: 0;
   padding: 0.5rem 1rem;
   background-color: var(--color-background);
-  color: var(--color-text);
+  color: var(--color-text-2);
   cursor: pointer;
   transition: background-color 0.3s, color 0.3s;
   font-size: var(--font-size);
 }
 
 button.active {
+  color: var(--color-text);
   background-color: var(--color-background-hover);
   box-shadow: inset 0 0 1px 1px var(--color-border-hover);
   border-radius: 0.5rem;
