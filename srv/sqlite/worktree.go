@@ -60,13 +60,29 @@ func (s *Storage) GetWorktrees(ctx context.Context, workspaceId string) ([]domai
 		FROM worktrees
 		WHERE workspace_id = ?
 	`
-
 	rows, err := s.db.QueryContext(ctx, query, workspaceId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query worktrees: %w", err)
 	}
 	defer rows.Close()
+	return s.getWorktreesFromRows(rows)
+}
 
+func (s Storage) GetWorktreesForFlow(ctx context.Context, flowId string) ([]domain.Worktree, error) {
+	query := `
+		SELECT id, flow_id, name, created, workspace_id
+		FROM worktrees
+		WHERE flow_id = ?
+	`
+	rows, err := s.db.QueryContext(ctx, query, flowId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query worktrees: %w", err)
+	}
+	defer rows.Close()
+	return s.getWorktreesFromRows(rows)
+}
+
+func (s Storage) getWorktreesFromRows(rows *sql.Rows) ([]domain.Worktree, error) {
 	var worktrees []domain.Worktree
 	for rows.Next() {
 		var worktree domain.Worktree
