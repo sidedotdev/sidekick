@@ -16,6 +16,17 @@
           <option value="planned_dev">Planned Dev</option>
           <!--option>PM + Planned Dev</option-->
         </select>
+        <div v-if="devMode">
+          <label>Workdir</label>
+          <SegmentedControl
+            v-model="envType"
+            :options="[
+              { label: 'Repo Directory', value: 'local' },
+              { label: 'Git Worktree', value: 'local_git_worktree' }
+            ]"
+            class="env-type"
+          />
+        </div>
         <div>
           <input type="checkbox" id="determineRequirements" v-model="determineRequirements">
           &nbsp;
@@ -35,6 +46,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import AutogrowTextarea from './AutogrowTextarea.vue'
+import SegmentedControl from './SegmentedControl.vue'
 import { store } from '../lib/store'
 const emit = defineEmits(['created', 'close'])
 const props = defineProps({
@@ -48,12 +60,18 @@ const status = ref(props.status || 'to_do')
 const planningPrompt = ref('')
 const determineRequirements = ref(true)
 const flowType = ref(localStorage.getItem('lastUsedFlowType') ?? 'basic_dev')
+const envType = ref('local')
+const devMode = import.meta.env.MODE === 'development'
 const submitTask = async () => {
-  const flowOptions = {planningPrompt: planningPrompt.value, determineRequirements: determineRequirements.value}
+  const flowOptions = {
+    planningPrompt: planningPrompt.value,
+    determineRequirements: determineRequirements.value,
+    envType: envType.value
+  }
   const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ description: description.value, flowType: flowType.value, status: status.value, flowOptions}),
+    body: JSON.stringify({ description: description.value, flowType: flowType.value, status: status.value, flowOptions }),
   })
   if (!response.ok) {
     console.error('Failed to create task')
@@ -64,6 +82,7 @@ const submitTask = async () => {
   flowType.value = ''
   status.value = 'to_do'
   planningPrompt.value = ''
+  envType.value = 'local'
   emit('created')
   emit('close')
 }

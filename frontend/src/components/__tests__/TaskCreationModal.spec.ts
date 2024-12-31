@@ -35,6 +35,7 @@ describe('TaskCreationModal', () => {
         flowOptions: {
           planningPrompt: '',
           determineRequirements: true,
+          envType: 'local',
         },
       }),
     })
@@ -65,6 +66,7 @@ describe('TaskCreationModal', () => {
         flowOptions: {
           planningPrompt: '',
           determineRequirements: true,
+          envType: 'local',
         },
       }),
     })
@@ -99,6 +101,7 @@ describe('TaskCreationModal', () => {
         flowOptions: {
           planningPrompt: '',
           determineRequirements: true,
+          envType: 'local',
         },
       }),
     })

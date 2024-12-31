@@ -14,7 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func GetService() (srv.Service, error) {
+func GetService() (*srv.Delegator, error) {
 	storageType := os.Getenv("SIDE_STORAGE")
 	var storage srv.Storage
 	var err error

@@ -1,5 +1,5 @@
 <template>
-  <KanbanBoard :tasks="tasks" :workspaceId="store.workspaceId" @refresh="fetchTasks" />
+  <KanbanBoard v-if="store.workspaceId" :tasks="tasks" :workspaceId="store.workspaceId" @refresh="fetchTasks" />
 </template>
 
 <script setup lang="ts">

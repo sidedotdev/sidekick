@@ -55,6 +55,7 @@ describe('TaskEditModal', () => {
         flowOptions: {
           planningPrompt: '',
           determineRequirements: true,
+          envType: 'local',
         },
       })
     })
@@ -83,6 +84,7 @@ describe('TaskEditModal', () => {
         flowOptions: {
           planningPrompt: '',
           determineRequirements: true,
+          envType: 'local',
         },
       }),
     })

@@ -52,6 +52,10 @@ const props = defineProps({
     type: Number,
     default: 0,
   },
+  expand: {
+    type: Boolean,
+    default: false,
+  },
 });
 
 const disableToggle = ref(false);

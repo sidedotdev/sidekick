@@ -67,6 +67,17 @@ export interface Flow {
   type: string
   parentId: string
   status: string
+  name?: string
+  description?: string
+  worktrees?: Worktree[]
+}
+
+export interface Worktree {
+  id: string
+  flowId: string
+  name: string
+  created: Date
+  workspaceId: string
 }
 
 export interface FlowAction {

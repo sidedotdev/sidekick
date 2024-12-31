@@ -9,6 +9,7 @@ type Service interface {
 	Storage
 	Streamer
 	DeleteWorkspace(ctx context.Context, workspaceId string) error
+	DeleteWorktree(ctx context.Context, workspaceId, worktreeId string) error
 }
 
 type Storage interface {
@@ -17,6 +18,7 @@ type Storage interface {
 	domain.SubflowStorage
 	domain.FlowActionStorage
 	domain.WorkspaceStorage
+	domain.WorktreeStorage
 
 	CheckConnection(ctx context.Context) error
 	MGet(ctx context.Context, workspaceId string, keys []string) ([][]byte, error)
