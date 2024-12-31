@@ -14,6 +14,7 @@ import (
 	"sidekick/coding/git"
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
+	"sidekick/srv"
 	"sidekick/workspace"
 
 	"sidekick/dev"
@@ -102,6 +103,8 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	})
 	RegisterWorkflows(w)
 
+	w.RegisterActivity(env.NewLocalGitWorktreeActivity)
+	w.RegisterActivity(&srv.Activities{Service: service})
 	w.RegisterActivity(sidekick.GithubCloneRepoActivity)
 	w.RegisterActivity(llmActivities)
 	w.RegisterActivity(pollFailuresActivities)

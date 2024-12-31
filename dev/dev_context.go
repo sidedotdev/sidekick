@@ -9,6 +9,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/secret_manager"
+	"sidekick/srv"
 	"sidekick/utils"
 	"sidekick/workspace"
 
@@ -23,7 +24,7 @@ type DevContext struct {
 	EmbeddingConfig common.EmbeddingConfig
 }
 
-func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string) (DevContext, error) {
+func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, envType string) (DevContext, error) {
 	initialExecCtx := flow_action.ExecContext{
 		Context:     ctx,
 		WorkspaceId: workspaceId,
@@ -34,24 +35,49 @@ func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string) (
 	return flow_action.TrackSubflowFailureOnly(initialExecCtx, "Init", func(_ domain.Subflow) (DevContext, error) {
 		actionCtx := initialExecCtx.NewActionContext("Setup Dev Context")
 		return flow_action.TrackFailureOnly(actionCtx, func(_ domain.FlowAction) (DevContext, error) {
-			return setupDevContextAction(ctx, workspaceId, repoDir)
+			return setupDevContextAction(ctx, workspaceId, repoDir, envType)
 		})
 	})
 }
 
-func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir string) (DevContext, error) {
+func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir string, envType string) (DevContext, error) {
 	ctx = utils.NoRetryCtx(ctx)
 
 	var devEnv env.Env
 	var err error
-	devEnv, err = env.NewLocalEnv(context.Background(), env.LocalEnvParams{
-		RepoDir: repoDir,
-	})
-	if err != nil {
-		return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
+	var envContainer env.EnvContainer
+
+	switch envType {
+	case "local":
+		devEnv, err = env.NewLocalEnv(context.Background(), env.LocalEnvParams{
+			RepoDir: repoDir,
+		})
+		if err != nil {
+			return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
+		}
+		envContainer = env.EnvContainer{Env: devEnv}
+	case "local_git_worktree":
+		worktree := domain.Worktree{
+			Id:          ksuidSideEffect(ctx),
+			FlowId:      workflow.GetInfo(ctx).WorkflowExecution.ID,
+			Name:        workflow.GetInfo(ctx).WorkflowExecution.ID, // TODO human-readable branch name generated from task description
+			WorkspaceId: workspaceId,
+		}
+		err = workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeActivity, env.LocalEnvParams{
+			RepoDir: repoDir,
+		}, worktree).Get(ctx, &envContainer)
+		devEnv = envContainer.Env
+		if err != nil {
+			return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
+		}
+		err = workflow.ExecuteActivity(ctx, srv.Activities.PersistWorktree, worktree).Get(ctx, nil)
+		if err != nil {
+			return DevContext{}, fmt.Errorf("failed to persist worktree: %v", err)
+		}
+	default:
+		return DevContext{}, fmt.Errorf("unsupported environment type: %s", envType)
 	}
 
-	envContainer := env.EnvContainer{Env: devEnv}
 	eCtx := flow_action.ExecContext{
 		FlowScope:    &flow_action.FlowScope{},
 		Context:      ctx,

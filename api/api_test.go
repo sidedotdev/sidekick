@@ -1458,6 +1458,120 @@ func TestGetTaskHandler(t *testing.T) {
 	}
 }
 
+func TestGetFlowHandler(t *testing.T) {
+	// Initialize the test server and database
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+	redisDb := ctrl.service
+	ctx := context.Background()
+	workspaceId := "ws_1"
+	flowId := "flow_" + ksuid.New().String()
+
+	// Create a test flow
+	flow := domain.Flow{
+		WorkspaceId: workspaceId,
+		Id:          flowId,
+		Type:        "default", // Use a string value instead of undefined constant
+		ParentId:    "task_1",
+		Status:      "in_progress", // Use a string value instead of undefined constant
+	}
+
+	err := redisDb.PersistFlow(ctx, flow)
+	assert.Nil(t, err)
+
+	// Create test worktrees
+	worktree1 := domain.Worktree{
+		Id:          "wt_1",
+		FlowId:      flowId,
+		Name:        "Worktree 1",
+		Created:     time.Now(),
+		WorkspaceId: workspaceId,
+	}
+	worktree2 := domain.Worktree{
+		Id:          "wt_2",
+		FlowId:      flowId,
+		Name:        "Worktree 2",
+		Created:     time.Now(),
+		WorkspaceId: workspaceId,
+	}
+
+	err = redisDb.PersistWorktree(ctx, worktree1)
+	assert.Nil(t, err)
+	err = redisDb.PersistWorktree(ctx, worktree2)
+	assert.Nil(t, err)
+
+	// Test cases
+	testCases := []struct {
+		workspaceId   string
+		flowId        string
+		expectedCode  int
+		expectedError string
+	}{
+		{
+			workspaceId:  workspaceId,
+			flowId:       flowId,
+			expectedCode: http.StatusOK,
+		},
+		{
+			workspaceId:   workspaceId,
+			flowId:        "nonexistent_flow",
+			expectedCode:  http.StatusNotFound,
+			expectedError: "Flow not found",
+		},
+		{
+			workspaceId:   "",
+			flowId:        flowId,
+			expectedCode:  http.StatusBadRequest,
+			expectedError: "Workspace ID and Flow ID are required",
+		},
+		{
+			workspaceId:   workspaceId,
+			flowId:        "",
+			expectedCode:  http.StatusBadRequest,
+			expectedError: "Workspace ID and Flow ID are required",
+		},
+	}
+
+	for _, testCase := range testCases {
+		resp := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(resp)
+		route := fmt.Sprintf("/v1/workspaces/%s/flows/%s", testCase.workspaceId, testCase.flowId)
+		c.Request = httptest.NewRequest("GET", route, bytes.NewBuffer([]byte{}))
+		c.Params = []gin.Param{
+			{Key: "workspaceId", Value: testCase.workspaceId},
+			{Key: "id", Value: testCase.flowId},
+		}
+		ctrl.GetFlowHandler(c)
+
+		assert.Equal(t, testCase.expectedCode, resp.Code)
+		if testCase.expectedError != "" {
+			var result map[string]string
+			err := json.Unmarshal(resp.Body.Bytes(), &result)
+			if assert.Nil(t, err) {
+				assert.Equal(t, testCase.expectedError, result["error"])
+			}
+		} else {
+			var result struct {
+				Flow struct {
+					domain.Flow
+					Worktrees []domain.Worktree `json:"worktrees"`
+				} `json:"flow"`
+			}
+			err := json.Unmarshal(resp.Body.Bytes(), &result)
+			if assert.Nil(t, err) {
+				assert.Equal(t, flow.Id, result.Flow.Id)
+				assert.Equal(t, flow.WorkspaceId, result.Flow.WorkspaceId)
+				assert.Equal(t, flow.Type, result.Flow.Type)
+				assert.Equal(t, flow.ParentId, result.Flow.ParentId)
+				assert.Equal(t, flow.Status, result.Flow.Status)
+				assert.Len(t, result.Flow.Worktrees, 2)
+				assert.Contains(t, []string{worktree1.Id, worktree2.Id}, result.Flow.Worktrees[0].Id)
+				assert.Contains(t, []string{worktree1.Id, worktree2.Id}, result.Flow.Worktrees[1].Id)
+			}
+		}
+	}
+}
+
 func TestFlowEventsWebsocketHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)

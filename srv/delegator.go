@@ -12,6 +12,13 @@ type Delegator struct {
 	streamer Streamer
 }
 
+func NewDelegator(storage Storage, streamer Streamer) *Delegator {
+	return &Delegator{
+		storage:  storage,
+		streamer: streamer,
+	}
+}
+
 func (d *Delegator) StreamTaskChanges(ctx context.Context, workspaceId, streamMessageStartId string) (<-chan domain.Task, <-chan error) {
 	return d.streamer.StreamTaskChanges(ctx, workspaceId, streamMessageStartId)
 }
@@ -20,11 +27,24 @@ func (d *Delegator) StreamFlowActionChanges(ctx context.Context, workspaceId, fl
 	return d.streamer.StreamFlowActionChanges(ctx, workspaceId, flowId, streamMessageStartId)
 }
 
-func NewDelegator(storage Storage, streamer Streamer) *Delegator {
-	return &Delegator{
-		storage:  storage,
-		streamer: streamer,
-	}
+func (d Delegator) PersistWorktree(ctx context.Context, worktree domain.Worktree) error {
+	return d.storage.PersistWorktree(ctx, worktree)
+}
+
+func (d Delegator) GetWorktree(ctx context.Context, workspaceId, worktreeId string) (domain.Worktree, error) {
+	return d.storage.GetWorktree(ctx, workspaceId, worktreeId)
+}
+
+func (d Delegator) GetWorktrees(ctx context.Context, workspaceId string) ([]domain.Worktree, error) {
+	return d.storage.GetWorktrees(ctx, workspaceId)
+}
+
+func (d Delegator) GetWorktreesForFlow(ctx context.Context, workspaceId string, flowId string) ([]domain.Worktree, error) {
+	return d.storage.GetWorktreesForFlow(ctx, workspaceId, flowId)
+}
+
+func (d Delegator) DeleteWorktree(ctx context.Context, workspaceId, worktreeId string) error {
+	return d.storage.DeleteWorktree(ctx, workspaceId, worktreeId)
 }
 
 /* implements Storage interface */
@@ -104,7 +124,6 @@ func (d Delegator) GetArchivedTasks(ctx context.Context, workspaceId string, off
 func (d Delegator) AddTaskChange(ctx context.Context, task domain.Task) error {
 	return d.streamer.AddTaskChange(ctx, task)
 }
-
 
 /* implements FlowStorage interface */
 func (d Delegator) PersistFlow(ctx context.Context, workflow domain.Flow) error {
