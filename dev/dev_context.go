@@ -58,8 +58,10 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		envContainer = env.EnvContainer{Env: devEnv}
 	case "local_git_worktree":
 		worktree := domain.Worktree{
+			Id:          ksuidSideEffect(ctx),
+			FlowId:      workflow.GetInfo(ctx).WorkflowExecution.ID,
+			Name:        workflow.GetInfo(ctx).WorkflowExecution.ID, // TODO human-readable branch name generated from task description
 			WorkspaceId: workspaceId,
-			Name:        workflow.GetInfo(ctx).WorkflowExecution.ID,
 		}
 		err = workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeActivity, env.LocalEnvParams{
 			RepoDir: repoDir,
