@@ -388,62 +388,6 @@ func getEmbeddedLanguageSignatures(languageName string, tree *sitter.Tree, sourc
 	return []Signature{}, nil
 }
 
-func getVueEmbeddedLanguageSignatures(vueTree *sitter.Tree, sourceCode *[]byte) ([]Signature, error) {
-	// Call GetVueEmbeddedTypescriptTree to get the embedded typescript
-	tsTree, err := GetVueEmbeddedTypescriptTree(vueTree, sourceCode)
-	if err != nil {
-		return []Signature{}, err
-	}
-	if tsTree == nil {
-		return []Signature{}, nil
-	}
-
-	signatureSlice, err := getFileSignaturesInternal("typescript", typescript.GetLanguage(), tsTree, sourceCode)
-	if err != nil {
-		return nil, err
-	}
-
-	return signatureSlice, nil
-}
-
-func GetVueEmbeddedTypescriptTree(vueTree *sitter.Tree, sourceCode *[]byte) (*sitter.Tree, error) {
-	//vueRanges := []sitter.Range{}
-	tsRanges := []sitter.Range{}
-
-	rootNode := vueTree.RootNode()
-	childCount := rootNode.ChildCount()
-
-	for i := 0; i < int(childCount); i++ {
-		node := rootNode.Child(i)
-		switch node.Type() {
-		case "template_element", "style_element":
-			// vueRanges = append(vueRanges, sitter.Range{
-			// 	StartPoint: node.StartPoint(),
-			// 	EndPoint:   node.EndPoint(),
-			// 	StartByte:  node.StartByte(),
-			// 	EndByte:    node.EndByte(),
-			// })
-		case "script_element":
-			codeNode := node.NamedChild(1)
-			tsRanges = append(tsRanges, sitter.Range{
-				StartPoint: codeNode.StartPoint(),
-				EndPoint:   codeNode.EndPoint(),
-				StartByte:  codeNode.StartByte(),
-				EndByte:    codeNode.EndByte(),
-			})
-		}
-	}
-
-	if len(tsRanges) == 0 {
-		return nil, nil
-	}
-
-	parser := sitter.NewParser()
-	// TODO make sure the lang attribute is ts before committing to typescript
-	parser.SetLanguage(typescript.GetLanguage())
-	parser.SetIncludedRanges(tsRanges)
-	return parser.ParseCtx(context.Background(), nil, *sourceCode)
-}
 
 func writeSignatureCapture(languageName string, out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
 	//out.WriteString(name + "\n")
@@ -451,19 +395,19 @@ func writeSignatureCapture(languageName string, out *strings.Builder, sourceCode
 	switch languageName {
 	case "golang":
 		{
-			writeGolangSignatureCapture(languageName, out, sourceCode, c, name)
+			writeGolangSignatureCapture(out, sourceCode, c, name)
 		}
 	case "typescript":
 		{
-			writeTypescriptSignatureCapture(languageName, out, sourceCode, c, name)
+			writeTypescriptSignatureCapture(out, sourceCode, c, name)
 		}
 	case "vue":
 		{
-			writeVueSignatureCapture(languageName, out, sourceCode, c, name)
+			writeVueSignatureCapture(out, sourceCode, c, name)
 		}
 	case "python":
 		{
-			writePythonSignatureCapture(languageName, out, sourceCode, c, name)
+			writePythonSignatureCapture(out, sourceCode, c, name)
 		}
 	default:
 		{
@@ -473,116 +417,6 @@ func writeSignatureCapture(languageName string, out *strings.Builder, sourceCode
 	}
 }
 
-func writeTypescriptSignatureCapture(languageName string, out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
-	content := c.Node.Content(*sourceCode)
-	switch name {
-	case "function.declaration":
-		{
-			if strings.HasPrefix(content, "async ") {
-				out.WriteString("async ")
-			}
-			// an alternative is to replace the full function declaration's body
-			// with an empty string, but that seems like it would be slower
-			//fmt.Println(c.Node.ChildByFieldName("body").Content(sourceCode))
-		}
-	case "function.name":
-		{
-			out.WriteString("function ")
-			out.WriteString(content)
-		}
-	case "class.declaration":
-		{
-			out.WriteString("class ")
-		}
-	case "class.body", "class.method.body":
-		{
-			out.WriteString("\n")
-		}
-	case "class.heritage":
-		{
-			out.WriteString(" ")
-			out.WriteString(content)
-		}
-	case "class.method.mod":
-		{
-			out.WriteString(content)
-			out.WriteString(" ")
-		}
-	case "class.field":
-		{
-			out.WriteString("  ")
-			out.WriteString(content)
-			out.WriteString("\n")
-		}
-	case "class.method":
-		{
-			out.WriteString("  ")
-		}
-	case "lexical.declaration":
-		{
-			lines := strings.Split(content, "\n")
-			for i, line := range lines {
-				out.WriteString(line)
-				out.WriteRune('\n')
-				// only output first 3 lines at most
-				if i >= 2 && i < len(lines)-1 {
-					lastIndent := line[:len(line)-len(strings.TrimLeft(line, "\t "))]
-					out.WriteString(lastIndent)
-					out.WriteString("[...]")
-					out.WriteRune('\n')
-					break
-				}
-			}
-		}
-	case "function.parameters", "function.return_type", "interface.declaration", "type.declaration", "type_alias.declaration", "class.name", "class.method.name", "class.method.parameters", "class.method.return_type":
-		{
-			out.WriteString(content)
-		}
-		/*
-			// FIXME didn't implement this in the corresponding query yet
-			case "method.doc", "function.doc", "type.doc":
-				{
-					out.WriteString(content)
-					out.WriteString("\n")
-				}
-		*/
-	}
-}
-
-func writeGolangSignatureCapture(languageName string, out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
-	content := c.Node.Content(*sourceCode)
-	switch name {
-	case "method.doc", "function.doc", "type.doc":
-		{
-			out.WriteString(content)
-			out.WriteString("\n")
-		}
-	case "method.result", "function.result", "var.type":
-		{
-			out.WriteString(" ")
-			out.WriteString(content)
-		}
-	case "method.name", "method.parameters", "function.parameters", "type.declaration", "const.declaration", "var.name":
-		{
-			out.WriteString(content)
-		}
-	case "var.declaration":
-		{
-			out.WriteString("var ")
-		}
-	case "method.receiver":
-		{
-			out.WriteString("func ")
-			out.WriteString(content)
-			out.WriteString(" ")
-		}
-	case "function.name":
-		{
-			out.WriteString("func ")
-			out.WriteString(content)
-		}
-	}
-}
 
 //go:embed signature_queries/*
 var signatureQueriesFS embed.FS
@@ -635,85 +469,4 @@ func countDirectories(path string) int {
 	return count
 }
 
-func writeVueSignatureCapture(languageName string, out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
-	switch name {
-	case "template":
-		out.WriteString("<template>")
-	case "script":
-		out.WriteString("<script>")
-	case "style":
-		out.WriteString("<style>")
-	}
-}
 
-func writePythonSignatureCapture(languageName string, out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
-	content := c.Node.Content(*sourceCode)
-	switch name {
-	case "type.declaration", "assignment.name", "function.parameters", "class.method.parameters", "class.superclasses":
-		{
-			out.WriteString(content)
-		}
-	case "assignment.type":
-		{
-			out.WriteString(": ")
-			out.WriteString(content)
-		}
-	case "assignment.right":
-		{
-			if strings.Contains(content, "NewType(") {
-				out.WriteString(" = ")
-				out.WriteString(content)
-			}
-		}
-	case "function.return_type", "class.method.return_type":
-		{
-			out.WriteString(" -> ")
-			out.WriteString(content)
-		}
-	case "function.name":
-		{
-			out.WriteString("def ")
-			out.WriteString(content)
-		}
-	case "function.docstring", "class.docstring", "class.method.decorator":
-		{
-			// TODO detect whitespace from content and only use "\t" if it's
-			// empty, otherwise use detected whitespace after a newline character
-			out.WriteString("\t")
-			out.WriteString(content)
-			out.WriteString("\n")
-		}
-	case "class.method.name":
-		{
-			out.WriteString("\tdef ")
-			out.WriteString(content)
-		}
-	case "class.method.docstring":
-		{
-			// TODO detect whitespace from content and only use "\t\t" if it's
-			// empty, otherwise use detected whitespace after a newline character
-			out.WriteString("\t\t")
-			out.WriteString(content)
-			out.WriteString("\n")
-		}
-	case "class.name":
-		{
-			out.WriteString("class ")
-			out.WriteString(content)
-		}
-	case "class.body", "class.method.body", "function.body":
-		{
-			// need class and method on separate lines and:in case of multiple
-			// methods, we need to separate them. and functions need a newline
-			// after for the docstring
-			out.WriteString("\n")
-		}
-	case "function.comments", "class.method.comments", "class.comments", "function.decorator", "class.decorator":
-		{
-			out.WriteString(content)
-			out.WriteString("\n")
-		}
-	default:
-		// Handle other Python-specific elements here in the future
-	}
-}

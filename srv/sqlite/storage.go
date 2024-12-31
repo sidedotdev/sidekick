@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"sidekick/common"
 	"sidekick/srv"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kelindar/binary"
+	"github.com/rs/zerolog/log"
 )
 
 type Storage struct {
@@ -46,8 +48,13 @@ func NewStorage() (*Storage, error) {
 	storage := &Storage{db: mainDb, kvDb: kvDb}
 
 	err = storage.MigrateUp("sidekick")
+	sideAppEnv := os.Getenv("SIDE_APP_ENV")
 	if err != nil {
-		return nil, fmt.Errorf("failed to migrate up sqlite storage: %w", err)
+		if sideAppEnv == "development" {
+			log.Warn().Msgf("Failed to migrate up sqlite storage: %v", err)
+		} else {
+			return nil, fmt.Errorf("failed to migrate up sqlite storage: %w", err)
+		}
 	}
 
 	// Run PRAGMA optimize periodically

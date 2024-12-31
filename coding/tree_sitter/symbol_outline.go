@@ -290,30 +290,6 @@ func writeSymbolCapture(languageName string, out *strings.Builder, sourceCode *[
 	}
 }
 
-func writeGolangSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
-	content := c.Node.Content(*sourceCode)
-	switch name {
-	case "function.name", "method.name", "const.name", "type.name", "var.name":
-		{
-			out.WriteString(content)
-		}
-	case "method.receiver_type":
-		{
-			out.WriteString(content)
-			out.WriteString(".")
-		}
-		// NOTE: we don't yet allow the full receiver as part of a symbol in
-		// retrieve_code_context, so we don't include it here either to avoid
-		// confusing the LLM. we do support the dot syntax above though.
-		/*
-			case "method.receiver":
-				{
-					out.WriteString(content)
-					out.WriteString(" ")
-				}
-		*/
-	}
-}
 func FormatSymbols(symbols []Symbol) string {
 	var out strings.Builder
 	for i, symbol := range symbols {
@@ -337,62 +313,6 @@ func getEmbeddedLanguageSymbols(languageName string, tree *sitter.Tree, sourceCo
 	return []Symbol{}, nil
 }
 
-func getVueEmbeddedLanguageSymbols(vueTree *sitter.Tree, sourceCode *[]byte) ([]Symbol, error) {
-	// Call GetVueEmbeddedTypescriptTree to get the embedded typescript
-	tsTree, err := GetVueEmbeddedTypescriptTree(vueTree, sourceCode)
-	if err != nil {
-		return nil, err
-	}
-	if tsTree == nil {
-		return []Symbol{}, nil
-	}
-	// Get symbols from tsTree and return them
-	symbols, err := getSourceSymbolsInternal("typescript", typescript.GetLanguage(), tsTree, sourceCode)
-	if err != nil {
-		return nil, err
-	}
-	return symbols, nil
-}
-
-func writeTypescriptSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
-	content := c.Node.Content(*sourceCode)
-	switch name {
-	case "method.class_name":
-		{
-			out.WriteString(content)
-			out.WriteString(".")
-		}
-	case "class.name", "method.name", "function.name", "interface.name", "lexical.name", "var.name", "type_alias.name", "type.name", "enum.name", "enum_member.name":
-		{
-			out.WriteString(content)
-		}
-	}
-}
-
-func writeVueSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
-	switch name {
-	case "template":
-		out.WriteString("<template>")
-	case "script":
-		out.WriteString("<script>")
-	case "style":
-		out.WriteString("<style>")
-	}
-}
-
-func writePythonSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
-	content := c.Node.Content(*sourceCode)
-	switch name {
-	case "class.method.name":
-		// skip as it's expected to be included in the method.name match instead
-	default:
-		{
-			if strings.HasSuffix(name, ".name") {
-				out.WriteString(content)
-			}
-		}
-	}
-}
 
 func (sc SourceCode) GetSymbols() ([]Symbol, error) {
 	sitterLanguage, err := getSitterLanguage(sc.LanguageName)
