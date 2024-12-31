@@ -61,6 +61,11 @@ func NewLocalEnv(ctx context.Context, params LocalEnvParams) (Env, error) {
 	return &LocalEnv{WorkingDirectory: dir}, err
 }
 
+func NewLocalGitWorktreeActivity(ctx context.Context, params LocalEnvParams, worktree domain.Worktree) (EnvContainer, error) {
+	env, err := NewLocalGitWorktreeEnv(ctx, params, worktree)
+	return EnvContainer{Env: env}, err
+}
+
 func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree domain.Worktree) (Env, error) {
 	sidekickDataHome, err := common.GetSidekickDataHome()
 	if err != nil {

@@ -45,6 +45,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 	var devEnv env.Env
 	var err error
+	var envContainer env.EnvContainer
 
 	switch envType {
 	case "local":
@@ -54,14 +55,16 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
 		}
+		envContainer = env.EnvContainer{Env: devEnv}
 	case "local_git_worktree":
 		worktree := domain.Worktree{
 			WorkspaceId: workspaceId,
 			Name:        workflow.GetInfo(ctx).WorkflowExecution.ID,
 		}
-		err = workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeEnv, env.LocalEnvParams{
+		err = workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeActivity, env.LocalEnvParams{
 			RepoDir: repoDir,
-		}, worktree).Get(ctx, &devEnv)
+		}, worktree).Get(ctx, &envContainer)
+		devEnv = envContainer.Env
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
 		}
@@ -73,7 +76,6 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		return DevContext{}, fmt.Errorf("unsupported environment type: %s", envType)
 	}
 
-	envContainer := env.EnvContainer{Env: devEnv}
 	eCtx := flow_action.ExecContext{
 		FlowScope:    &flow_action.FlowScope{},
 		Context:      ctx,

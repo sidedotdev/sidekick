@@ -103,6 +103,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	})
 	RegisterWorkflows(w)
 
+	w.RegisterActivity(env.NewLocalGitWorktreeActivity)
 	w.RegisterActivity(&srv.Activities{Service: service})
 	w.RegisterActivity(sidekick.GithubCloneRepoActivity)
 	w.RegisterActivity(llmActivities)
