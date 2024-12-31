@@ -26,12 +26,6 @@ import (
 	"go.temporal.io/sdk/client"
 )
 
-// FlowWithWorktrees represents a Flow with its associated Worktrees
-type FlowWithWorktrees struct {
-	domain.Flow
-	Worktrees []domain.Worktree `json:"worktrees"`
-}
-
 func RunServer() *http.Server {
 	gin.SetMode(gin.ReleaseMode)
 	ctrl, err := NewController()
@@ -428,6 +422,13 @@ func (ctrl *Controller) GetTaskHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"task": task})
 }
 
+
+// FlowWithWorktrees represents a Flow with its associated Worktrees
+type FlowWithWorktrees struct {
+	domain.Flow
+	Worktrees []domain.Worktree `json:"worktrees"`
+}
+
 func (ctrl *Controller) GetFlowHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	flowId := c.Param("id")
@@ -459,7 +460,7 @@ func (ctrl *Controller) GetFlowHandler(c *gin.Context) {
 		Worktrees: worktrees,
 	}
 
-	c.JSON(http.StatusOK, flowWithWorktrees)
+	c.JSON(http.StatusOK, gin.H{"flow": flowWithWorktrees})
 }
 
 func (ctrl *Controller) GetTasksHandler(c *gin.Context) {

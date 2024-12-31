@@ -190,7 +190,8 @@ onMounted(async () => {
 
   connectActionChangesWebSocket();
 
-  flow.value = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${route.params.id}`).then((res) => res.json())
+  const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${route.params.id}`)
+  flow.value = (await response.json()).flow
 })
 
 const workDir = (worktree: Worktree): string => {

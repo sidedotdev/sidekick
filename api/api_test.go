@@ -1552,10 +1552,7 @@ func TestGetFlowHandler(t *testing.T) {
 			}
 		} else {
 			var result struct {
-				Flow struct {
-					domain.Flow
-					Worktrees []domain.Worktree `json:"worktrees"`
-				} `json:"flow"`
+				Flow FlowWithWorktrees `json:"flow"`
 			}
 			err := json.Unmarshal(resp.Body.Bytes(), &result)
 			if assert.Nil(t, err) {
