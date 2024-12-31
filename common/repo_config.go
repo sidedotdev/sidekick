@@ -39,6 +39,13 @@ type RepoConfig struct {
 	MaxPlanningIterations int `toml:"max_planning_iterations,omitempty"`
 
 	EditCode EditCodeConfig `toml:"edit_code,omitempty"`
+
+	/** A script that will be executed in the working directory of a local git
+	 * worktree environment when setting up the dev context. This is useful for
+	 * performing any necessary setup steps specific to worktree environments.
+	 * The script is executed using /usr/bin/env sh -c and must return a zero
+	 * exit code to be considered successful. */
+	WorktreeSetup string `toml:"worktree_setup,omitempty"`
 }
 
 type CommandConfig struct {
