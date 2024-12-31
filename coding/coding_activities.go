@@ -400,7 +400,7 @@ func (sde *SymbolDefinitionExtraction) RetrieveSymbolDefinitions(envContainer en
 	symbolDefinitions := make([][]tree_sitter.SourceBlock, len(sde.symbols))
 	symbolErrors := make([]error, len(sde.symbols))
 	allSymbolsFailed := true
-	relatedSymbols := make(map[string][]RelatedSymbol)
+	relatedSymbols := sync.Map{}
 
 	var wg sync.WaitGroup
 	for i, symbol := range sde.symbols {
@@ -435,15 +435,15 @@ func (sde *SymbolDefinitionExtraction) RetrieveSymbolDefinitions(envContainer en
 						SymbolRange:      &symbolNameRange,
 					})
 					if err == nil {
-						relatedSymbols[symbol] = related
+						relatedSymbols.Store(symbol, related)
 					} else {
 						// hack to make the related symbol errors appear in the UI
-						relatedSymbols[symbol] = []RelatedSymbol{
+						relatedSymbols.Store(symbol, []RelatedSymbol{
 							{
 								Symbol:    tree_sitter.Symbol{Content: fmt.Sprintf("error getting related symbols: %v", err)},
 								Signature: tree_sitter.Signature{Content: fmt.Sprintf("error getting related symbols: %v", err)},
 							},
-						}
+						})
 					}
 				}
 			}
@@ -451,7 +451,13 @@ func (sde *SymbolDefinitionExtraction) RetrieveSymbolDefinitions(envContainer en
 	}
 	wg.Wait()
 
-	return symbolDefinitions, symbolErrors, allSymbolsFailed, relatedSymbols
+	relatedSymbolsMap := make(map[string][]RelatedSymbol)
+	relatedSymbols.Range(func(key, value interface{}) bool {
+		relatedSymbolsMap[key.(string)] = value.([]RelatedSymbol)
+		return true
+	})
+
+	return symbolDefinitions, symbolErrors, allSymbolsFailed, relatedSymbolsMap
 }
 
 func (sde *SymbolDefinitionExtraction) WriteSymbolDefinitions(
