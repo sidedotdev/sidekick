@@ -9,6 +9,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/secret_manager"
+	"sidekick/srv"
 	"sidekick/utils"
 	"sidekick/workspace"
 
@@ -50,19 +51,26 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		devEnv, err = env.NewLocalEnv(context.Background(), env.LocalEnvParams{
 			RepoDir: repoDir,
 		})
+		if err != nil {
+			return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
+		}
 	case "local_git_worktree":
-		devEnv, err = env.NewLocalGitWorktreeEnv(context.Background(), env.LocalEnvParams{
-			RepoDir: repoDir,
-		}, domain.Worktree{
+		worktree := domain.Worktree{
 			WorkspaceId: workspaceId,
 			Name:        workflow.GetInfo(ctx).WorkflowExecution.ID,
-		})
+		}
+		err = workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeEnv, env.LocalEnvParams{
+			RepoDir: repoDir,
+		}, worktree).Get(ctx, &devEnv)
+		if err != nil {
+			return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
+		}
+		err = workflow.ExecuteActivity(ctx, srv.Activities.PersistWorktree, worktree).Get(ctx, nil)
+		if err != nil {
+			return DevContext{}, fmt.Errorf("failed to persist worktree: %v", err)
+		}
 	default:
 		return DevContext{}, fmt.Errorf("unsupported environment type: %s", envType)
-	}
-
-	if err != nil {
-		return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
 	}
 
 	envContainer := env.EnvContainer{Env: devEnv}
