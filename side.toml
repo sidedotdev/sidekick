@@ -19,6 +19,10 @@ command = "npm run test:unit -- --reporter=dot --run"
 working_dir = "frontend"
 command = "npm run type-check"
 
+worktree_setup = """
+cd frontend && npm ci
+"""
+
 [edit_code]
 hints = """
 You are working on a project named "sidekick". Thus, the root directory of the
