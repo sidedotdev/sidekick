@@ -71,8 +71,8 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 			Status:      domain.TaskStatusToDo,
 			AgentType:   domain.AgentTypeLLM,
 			FlowType:    domain.FlowTypeBasicDev,
-			Created:     time.Now(),
-			Updated:     time.Now(),
+			Created:     time.Now().UTC().Truncate(time.Millisecond),
+			Updated:     time.Now().UTC().Truncate(time.Millisecond),
 			FlowOptions: map[string]interface{}{"test": "value1"},
 		},
 		{
@@ -83,8 +83,8 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 			Status:      domain.TaskStatusInProgress,
 			AgentType:   domain.AgentTypeLLM,
 			FlowType:    domain.FlowTypeBasicDev,
-			Created:     time.Now(),
-			Updated:     time.Now(),
+			Created:     time.Now().UTC().Truncate(time.Millisecond),
+			Updated:     time.Now().UTC().Truncate(time.Millisecond),
 			FlowOptions: map[string]interface{}{"test": "value2"},
 		},
 	}

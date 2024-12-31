@@ -23,12 +23,17 @@ onMounted(() => {
     metaThemeColor.setAttribute('content', '#4CAF50')
   }
   fetchWorkspaces()
-  store.selectWorkspaceId(localStorage.getItem('selectedWorkspaceId'));
+  const storedWorkspaceId = localStorage.getItem('selectedWorkspaceId')
+  if (storedWorkspaceId) {
+    store.selectWorkspaceId(storedWorkspaceId)
+  }
 })
 
 const selectedWorkspace = () => {
   console.log('selectedWorkspace', store.workspaceId)
-  localStorage.setItem('selectedWorkspaceId', store.workspaceId)
+  if (store.workspaceId) {
+    localStorage.setItem('selectedWorkspaceId', store.workspaceId)
+  }
 }
 
 </script>

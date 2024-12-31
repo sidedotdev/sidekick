@@ -22,11 +22,6 @@ type DevAgent struct {
 	ChatHistory       *[]llm.ChatMessage
 }
 
-type DevActionData struct {
-	WorkflowId  string
-	ChatHistory *[]llm.ChatMessage
-}
-
 func (ia *DevAgent) getFirstExecutionRunID(ctx context.Context, workflowID string) string {
 	handle := ia.TemporalClient.GetWorkflow(ctx, workflowID, "")
 	firstExecutionRunID := handle.GetRunID()
@@ -105,18 +100,6 @@ func (ia DevAgent) findOrStartDevAgentManagerWorkflow(ctx context.Context, works
 	}
 	// fmt.Printf("Started dev manager workflow: %s\n", we.GetID())
 	return we.GetID(), nil
-}
-
-type RequestResponseInfo struct {
-	WorkflowId string `json:"workflow_id" jsonschema:"description=The workflow ID tied to the request that the response is for."`
-}
-
-type ActionData struct {
-	ID         string `json:"id"`
-	ActionType string `json:"action_type"`
-	Status     string `json:"status"`
-	Title      string `json:"title"`
-	Details    string `json:"details,omitempty"`
 }
 
 func (ia DevAgent) HandleNewTask(ctx context.Context, task *domain.Task) error {

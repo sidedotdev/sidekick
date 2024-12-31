@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"sidekick/common"
+	"sidekick/domain"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
@@ -45,11 +48,22 @@ func TestLocalGitWorktreeEnvironment(t *testing.T) {
 		Branch:      ksuid.New().String(),
 	}
 
-	env, err := NewLocalGitWorktreeEnv(ctx, params)
+	worktree := domain.Worktree{
+		Id:          "wt_" + ksuid.New().String(),
+		FlowId:      "flow_" + ksuid.New().String(),
+		Name:        params.Branch,
+		Created:     time.Now(),
+		WorkspaceId: params.WorkspaceId,
+	}
+
+	env, err := NewLocalGitWorktreeEnv(ctx, params, worktree)
 
 	assert.NoError(t, err)
 	assert.Equal(t, EnvType("local_git_worktree"), env.GetType())
-	assert.Contains(t, env.GetWorkingDirectory(), params.WorkspaceId)
+
+	sidekickDataHome, _ := common.GetSidekickDataHome()
+	expectedWorkingDir := filepath.Join(sidekickDataHome, "worktrees", worktree.WorkspaceId, worktree.Name)
+	assert.Equal(t, expectedWorkingDir, env.GetWorkingDirectory())
 
 	// Test RunCommand
 	cmdInput := EnvRunCommandInput{
@@ -61,11 +75,10 @@ func TestLocalGitWorktreeEnvironment(t *testing.T) {
 	assert.Equal(t, 0, output.ExitStatus)
 	assert.NotEmpty(t, output.Stdout)
 	assert.NotEmpty(t, env.GetWorkingDirectory())
-	// "/private" prefix on macOS due to symlinks, so we check contains instead of equal
-	// assert.Equal(t, env.GetWorkingDirectory(), strings.TrimSuffix(output.Stdout, "\n"))
-	assert.Contains(t, output.Stdout, params.WorkspaceId)
-	assert.Contains(t, output.Stdout, env.GetWorkingDirectory())
+	assert.Contains(t, output.Stdout, worktree.WorkspaceId)
+	assert.Contains(t, output.Stdout, worktree.Name)
 }
+
 func TestLocalEnvironment_MarshalUnmarshal(t *testing.T) {
 	ctx := context.Background()
 	params := LocalEnvParams{
@@ -95,7 +108,15 @@ func TestLocalGitWorktreeEnvironment_MarshalUnmarshal(t *testing.T) {
 		Branch:      ksuid.New().String(),
 	}
 
-	originalEnv, err := NewLocalGitWorktreeEnv(ctx, params)
+	worktree := domain.Worktree{
+		Id:          "wt_" + ksuid.New().String(),
+		FlowId:      "flow_" + ksuid.New().String(),
+		Name:        params.Branch,
+		Created:     time.Now(),
+		WorkspaceId: params.WorkspaceId,
+	}
+
+	originalEnv, err := NewLocalGitWorktreeEnv(ctx, params, worktree)
 	assert.NoError(t, err)
 	envContainer := EnvContainer{Env: originalEnv}
 

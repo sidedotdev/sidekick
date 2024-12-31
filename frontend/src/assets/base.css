@@ -3,6 +3,7 @@
   --kanban-gap: 0.5rem;
   --task-pad: 1.2rem;
   --section-gap: 160px;
+  --font-size: 15px;
 }
 
 /* color palette from <https://github.com/vuejs/theme> */
@@ -26,21 +27,25 @@
   --vt-c-text-light-1: var(--vt-c-indigo);
   --vt-c-text-light-2: rgba(60, 60, 60, 1.0);
   --vt-c-text-dark-1: var(--vt-c-white);
-  --vt-c-text-dark-2: rgba(235, 235, 235, 1.0);
+  --vt-c-text-dark-2: rgba(150, 150, 150, 1.0);
 }
 
 /* specific color variables for light and dark modes only go here */
 :root {
   --color-background-light: var(--vt-c-white-soft);
   --color-text-light: var(--vt-c-text-light-1);
+  --color-text-light-2: var(--vt-c-text-light-2);
 
   --color-background-dark: var(--vt-c-black);
-  --color-text-dark: #ddd;
+
+  --color-text-dark: var(--vt-c-text-dark-1);
+  --color-text-dark-2: var(--vt-c-text-dark-2);
 
   --color-link-dark: rgb(85, 159, 255);
   --color-link-light: rgb(0, 102, 204);
 
   /* FIXME do we need both dark and light? */
+  --color-primary: rgba(131,58,180, 0.8);
   --color-cta-button-bg-dark: rgba(131,58,180, 0.8);
   --color-cta-button-bg-light: rgba(131,58,180, 0.8);
   --color-cta-button-text-light: var(--color-text-dark);
@@ -57,7 +62,7 @@
   --color-modal-background-light: var(--vt-c-white);
   --color-modal-background-dark: var(--vt-c-black-soft);
   --color-modal-text-light: var(--vt-c-text-light-1);
-  --color-modal-text-dark: var(--vt-c-text-dark-2);
+  --color-modal-text-dark: var(--color-text-dark);
 }
 
 /* semantic color variables for this project. these all default to dark mode.
@@ -65,6 +70,7 @@
  * light/dark-specific variables. */
 :root {
   --color-text: var(--color-text-dark);
+  --color-text-2: var(--color-text-dark-2);
   --color-heading: var(--vt-c-text-dark-1);
   --color-background: var(--color-background-dark); /* --color-background: var(--vt-c-black); */
   --color-background-soft: var(--vt-c-black-soft);
@@ -88,6 +94,7 @@
   :root {
     --color-heading: var(--vt-c-text-light-1);
     --color-text: var(--color-text-light);
+    --color-text-2: var(--color-text-light-2);
     --color-background: var(--color-background-light);
     --color-background-soft: var(--vt-c-white);
     --color-background-mute: var(--vt-c-white-mute);
@@ -110,7 +117,7 @@
  * downstream. */
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-text: var(--vt-c-text-dark-2);
+    --color-text: var(--color-text-dark);
   }
 }
 
@@ -143,7 +150,7 @@ body {
     'Droid Sans',
     'Helvetica Neue',
     sans-serif;
-  font-size: 15px;
+  font-size: var(--font-size);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
