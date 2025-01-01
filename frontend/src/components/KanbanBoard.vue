@@ -9,9 +9,9 @@
       <h2>
         {{ columnNames[agentType as keyof typeof columnNames] }}
         <button v-if="agentType !== 'none'" class="new-task mini-button" @click="newTask(agentType)">+</button>
-        <button v-if="agentType === 'none' && groupedTasks()[agentType]?.length > 0" class="new-task mini-button" @click="confirmArchiveFinished">📦</button>
+        <button v-if="agentType === 'none' && groupedTasks[agentType]?.length > 0" class="new-task mini-button" @click="confirmArchiveFinished">📦</button>
       </h2>
-      <TaskCard v-for="task in groupedTasks()[agentType]" :key="task.id" :task="task" @deleted="refresh" @canceled="refresh" @archived="refresh" @updated="refresh" @error="error" />
+      <TaskCard v-for="task in groupedTasks[agentType]" :key="task.id" :task="task" @deleted="refresh" @canceled="refresh" @archived="refresh" @updated="refresh" @error="error" />
       <button class="new-task" v-if="agentType == 'human'" @click="newTask(agentType)">+ Draft Task</button>
       <button class="new-task" v-if="agentType == 'llm'" @click="newTask(agentType)">+ Queue Task</button>
     </div>
@@ -19,7 +19,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { Task, AgentType } from '../lib/models'
 import TaskCard from './TaskCard.vue'
 import TaskCreationModal from './TaskCreationModal.vue'
@@ -37,7 +37,7 @@ const columnNames = {
 
 const emit = defineEmits(['refresh'])
 
-const groupedTasks = () => {
+const groupedTasks = computed(() => {
   return [...props.tasks]
     .sort()
     .reverse()
@@ -52,7 +52,7 @@ const groupedTasks = () => {
       });
       return grouped;
     }, {} as Record<AgentType, Task[]>);
-}
+})
 
 
 function refresh() {
