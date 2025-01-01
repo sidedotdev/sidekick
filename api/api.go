@@ -335,11 +335,29 @@ func (ctrl *Controller) PauseFlowHandler(c *gin.Context) {
 }
 
 func (ctrl *Controller) CancelFlowHandler(c *gin.Context) {
-	workflowID := c.Param("id")
-	// FIXME update the flow status in the database
+	workspaceID := c.Param("workspaceId")
+	flowID := c.Param("id")
 
-	err := ctrl.temporalClient.CancelWorkflow(c.Request.Context(), workflowID, "")
+	// Get the flow first to ensure it exists
+	flow, err := ctrl.service.GetFlow(c.Request.Context(), workspaceID, flowID)
 	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": fmt.Sprintf("Failed to get flow: %v", err),
+		})
+		return
+	}
+
+	// Update and persist the flow status
+	flow.Status = "canceled"
+	if err := ctrl.service.PersistFlow(c.Request.Context(), flow); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": fmt.Sprintf("Failed to update flow status: %v", err),
+		})
+		return
+	}
+
+	// Cancel the temporal workflow
+	if err := ctrl.temporalClient.CancelWorkflow(c.Request.Context(), flowID, ""); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"message": fmt.Sprintf("Failed to cancel workflow: %v", err),
 		})
