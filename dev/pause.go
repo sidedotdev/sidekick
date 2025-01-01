@@ -22,7 +22,7 @@ func SetupPauseHandler(dCtx DevContext, guidanceContext string, requestParams ma
 }
 
 func UserRequestIfPaused(dCtx DevContext, guidanceContext string, requestParams map[string]interface{}) (*UserResponse, error) {
-	if !dCtx.GlobalState.Paused {
+	if dCtx.GlobalState == nil || !dCtx.GlobalState.Paused {
 		return nil, nil
 	}
 

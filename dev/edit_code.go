@@ -112,8 +112,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	var extractedEditBlocks []EditBlock
 
 	attemptCount := 0
-	lastEditBlockIteration := 0
-	attemptsSinceLastEditBlock := 0
+	attemptsSinceLastEditBlockOrFeedback := 0
 	maxAttempts := 7 // Default value
 
 	repoConfig := dCtx.RepoConfig
@@ -122,11 +121,21 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	}
 
 	for {
-		attemptsSinceLastEditBlock = attemptCount - lastEditBlockIteration
+		// Check if we're paused and need user input
+		if response, err := UserRequestIfPaused(dCtx, "The system is paused. Would you like to provide any guidance?", nil); err != nil {
+			return nil, fmt.Errorf("failed to check pause status: %v", err)
+		} else if response != nil {
+			// Add the feedback to chat history
+			*chatHistory = append(*chatHistory, llm.ChatMessage{
+				Role:    llm.ChatMessageRoleSystem,
+				Content: fmt.Sprintf("User provided guidance while paused: %s", response.Content),
+			})
+			attemptsSinceLastEditBlockOrFeedback = 0
+		}
 
 		if attemptCount >= maxAttempts {
 			return nil, ErrMaxAttemptsReached
-		} else if attemptsSinceLastEditBlock > 0 && attemptsSinceLastEditBlock%3 == 0 {
+		} else if attemptsSinceLastEditBlockOrFeedback > 0 && attemptsSinceLastEditBlockOrFeedback%3 == 0 {
 			guidanceContext := "The system has attempted to generate edits multiple times without success. Please provide some guidance."
 			requestParams := map[string]any{
 				// TODO include the latest failure if any
@@ -136,12 +145,11 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			if err != nil {
 				return nil, fmt.Errorf("failed to get user feedback: %v", err)
 			}
+			attemptsSinceLastEditBlockOrFeedback = 0
 		}
 
 		// NOTE: this also ensures the tool call response is added to chat history
 		authorEditBlockInput := buildAuthorEditBlockInput(dCtx, codingModelConfig, repoConfig, chatHistory, promptInfo)
-		attemptCount++
-
 		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
 
 		// NOTE this MUST be below authorEditBlockInput to ensure tool call
@@ -149,13 +157,16 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		ManageChatHistory(dCtx, chatHistory, maxLength)
 
 		if len(extractedEditBlocks) > 0 {
-			lastEditBlockIteration = attemptCount
 			content := fmt.Sprintf("Note: %d edit block(s) are pending application.", len(extractedEditBlocks))
 			*chatHistory = append(*chatHistory, llm.ChatMessage{
 				Role:    llm.ChatMessageRoleSystem,
 				Content: content,
 			})
 		}
+
+		// Increment counters before making the call
+		attemptCount++
+		attemptsSinceLastEditBlockOrFeedback++
 
 		// call Open AI to get back messages that contain edit blocks
 		actionName := "Generate Code Edits"
@@ -193,6 +204,10 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 		if len(chatResponse.ToolCalls) > 0 && chatResponse.ToolCalls[0].Name != "" {
 			toolCallResponseInfo, err := handleToolCall(dCtx, chatResponse.ToolCalls[0])
+			// Reset feedback counter if this was a getHelpOrInput response
+			if chatResponse.ToolCalls[0].Name == getHelpOrInputTool.Name {
+				attemptsSinceLastEditBlockOrFeedback = 0
+			}
 			// dynamically adjust the context size extension based on the length of the response
 			if len(toolCallResponseInfo.Response) > 5000 {
 				contextSizeExtension += len(toolCallResponseInfo.Response) - 5000
