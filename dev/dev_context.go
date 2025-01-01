@@ -18,8 +18,8 @@ import (
 
 type DevContext struct {
 	flow_action.ExecContext
-	GlobalState	 *GlobalState
-	RepoConfig common.RepoConfig
+	GlobalState *GlobalState
+	RepoConfig  common.RepoConfig
 
 	LLMConfig       common.LLMConfig
 	EmbeddingConfig common.EmbeddingConfig
@@ -103,9 +103,9 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	// Execute worktree setup script if configured and using git worktree environment
 	if envType == "local_git_worktree" && repoConfig.WorktreeSetup != "" {
 		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
-			EnvContainer:       envContainer,
-			Command:            "/usr/bin/env",
-			Args:               []string{"sh", "-c", repoConfig.WorktreeSetup},
+			EnvContainer: envContainer,
+			Command:      "/usr/bin/env",
+			Args:         []string{"sh", "-c", repoConfig.WorktreeSetup},
 		}).Get(ctx, nil)
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to execute worktree setup script: %v", err)
