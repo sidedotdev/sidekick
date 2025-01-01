@@ -1,20 +1,48 @@
 package dev
 
 import (
+	"sidekick/domain"
+
 	"go.temporal.io/sdk/workflow"
 )
 
-func SetupPauseHandler(ctx workflow.Context, globalState *GlobalState) {
-	signalChan := workflow.GetSignalChannel(ctx, "pause-workflow")
-	workflow.Go(ctx, func(ctx workflow.Context) {
+func SetupPauseHandler(dCtx DevContext, guidanceContext string, requestParams map[string]interface{}) {
+	signalChan := workflow.GetSignalChannel(dCtx, "pause")
+	workflow.Go(dCtx, func(ctx workflow.Context) {
 		for {
 			selector := workflow.NewSelector(ctx)
 			selector.AddReceive(signalChan, func(c workflow.ReceiveChannel, more bool) {
 				var signal interface{}
 				c.Receive(ctx, &signal)
-				globalState.Paused = true
+				dCtx.GlobalState.Paused = true
 			})
 			selector.Select(ctx)
 		}
 	})
+}
+
+func UserRequestIfPaused(dCtx DevContext, guidanceContext string, requestParams map[string]interface{}) (*UserResponse, error) {
+	if !dCtx.GlobalState.Paused {
+		return nil, nil
+	}
+
+	guidanceRequest := &RequestForUser{
+		OriginWorkflowId: workflow.GetInfo(dCtx).WorkflowExecution.ID,
+		Subflow:          dCtx.FlowScope.SubflowName,
+		Content:          guidanceContext,
+		RequestKind:      RequestKindFreeForm,
+		RequestParams:    requestParams,
+	}
+
+	actionCtx := dCtx.NewActionContext("User Paused")
+	actionCtx.ActionParams = guidanceRequest.ActionParams()
+
+	// Ensure tracking of the flow action within the guidance request
+	response, err := TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
+		guidanceRequest.FlowActionId = flowAction.Id
+		return GetUserResponse(dCtx, *guidanceRequest)
+	})
+
+	dCtx.GlobalState.Paused = false
+	return response, err
 }

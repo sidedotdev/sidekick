@@ -30,9 +30,6 @@ var SideAppEnv = os.Getenv("SIDE_APP_ENV")
 func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec DevPlanExecution, err error) {
 	globalState := &GlobalState{}
 
-	// Set up the pause handler
-	SetupPauseHandler(ctx, globalState)
-
 	// don't recover panics in development so we can debug via temporal UI, at
 	// the cost of failed tasks appearing stuck without UI feedback in sidekick
 	if SideAppEnv != "development" {
@@ -60,6 +57,9 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 		return DevPlanExecution{}, fmt.Errorf("failed to setup dev context: %v", err)
 	}
 	dCtx.GlobalState = globalState
+
+	// Set up the pause handler
+	SetupPauseHandler(dCtx, "Paused for user input", nil)
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	err = EnsurePrerequisites(dCtx, input.Requirements)

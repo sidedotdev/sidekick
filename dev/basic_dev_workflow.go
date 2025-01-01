@@ -30,9 +30,6 @@ type BasicDevOptions struct {
 func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result string, err error) {
 	globalState := &GlobalState{}
 
-	// Set up the pause handler
-	SetupPauseHandler(ctx, globalState)
-
 	// don't recover panics in development so we can debug via temporal UI, at
 	// the cost of failed tasks appearing stuck without UI feedback in sidekick
 	if SideAppEnv != "development" {
@@ -61,6 +58,9 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		return "", err
 	}
 	dCtx.GlobalState = globalState
+
+	// Set up the pause handler
+	SetupPauseHandler(dCtx, "Paused for user input", nil)
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	err = EnsurePrerequisites(dCtx, requirements)

@@ -20,7 +20,7 @@ type RequestForUser struct {
 	OriginWorkflowId string
 	FlowActionId     string
 	Content          string
-	Subflow          string
+	Subflow          string // TODO add SubflowId here instead of legacy Subflow (which is the subflow name)
 	RequestParams    map[string]interface{}
 	RequestKind      RequestKind
 }
