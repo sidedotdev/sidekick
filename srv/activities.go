@@ -18,8 +18,6 @@ func (a Activities) PersistWorktree(ctx context.Context, worktree domain.Worktre
 	return a.Service.PersistWorktree(ctx, worktree)
 }
 
-// TODO: consider adding these as needed, though we need to change the inputs to structs some of these for backcompat
-/*
 func (a Activities) PersistFlow(ctx context.Context, workflow domain.Flow) error {
 	return a.Service.PersistFlow(ctx, workflow)
 }
@@ -28,6 +26,8 @@ func (a Activities) GetFlow(ctx context.Context, workspaceId string, flowId stri
 	return a.Service.GetFlow(ctx, workspaceId, flowId)
 }
 
+// TODO: consider adding these as needed, though we'd ideally change the inputs to structs some of these for backcompat
+/*
 func (a Activities) PersistSubflow(ctx context.Context, subflow domain.Subflow) error {
 	return a.Service.PersistSubflow(ctx, subflow)
 }

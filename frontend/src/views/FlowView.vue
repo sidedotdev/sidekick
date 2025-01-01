@@ -8,13 +8,13 @@
         <a :href="`idea://open?file=${encodeURIComponent(workDir(worktree))}`" class="vs-code-button">Intellij IDEA</a>
       </p>
     </div>
+    <div v-if="!['completed', 'failed', 'canceled'].includes(flow.status)" class="pause-button-container">
+      <button @click="pauseFlow" class="pause-button">⏸︎</button>
+    </div>
   </div>
   <div class="flow-actions-container" :class="{ 'short-content': shortContent }">
     <div class="scroll-container">
       <SubflowContainer v-for="(subflowTree, index) in subflowTrees" :key="index" :subflowTree="subflowTree" :defaultExpanded="index == subflowTrees.length - 1"/>
-    </div>
-    <div v-if="flow && !['completed', 'failed', 'canceled'].includes(flow.status)" class="pause-button-container">
-      <button @click="pauseFlow" class="pause-button">Pause Flow</button>
     </div>
   </div>
 </template>
@@ -248,8 +248,9 @@ onUnmounted(() => {
 }
 
 .pause-button-container {
-  position: sticky;
-  bottom: 1rem;
+  position: absolute;
+  right: 2rem;
+  bottom: 2rem;
   display: flex;
   justify-content: center;
   padding: 1rem;
@@ -257,17 +258,18 @@ onUnmounted(() => {
 }
 
 .pause-button {
-  padding: 0.5rem 1rem;
-  border-radius: 0.25rem;
-  background-color: var(--vp-c-bg-soft);
+  padding: 1rem 3rem;
+  border-radius: 0.5rem;
+  opacity: 0.5;
+  background-color: var(--color-primary);
   color: var(--vp-c-text-1);
   border: 1px solid var(--vp-c-divider);
   cursor: pointer;
-  font-size: 0.875rem;
-  transition: background-color 0.2s;
+  font-size: 3rem;
+  transition: opacity 0.2s;
 }
 
 .pause-button:hover {
-  background-color: var(--vp-c-bg-mute);
+  opacity: 1;
 }
 </style>

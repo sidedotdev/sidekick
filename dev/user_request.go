@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sidekick/domain"
 	"sidekick/llm"
+	"sidekick/srv"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -89,6 +90,21 @@ func GetUserResponse(dCtx DevContext, req RequestForUser) (*UserResponse, error)
 	workflowErr := workflow.SignalExternalWorkflow(dCtx, parentWorkflowID, "", SignalNameRequestForUser, req).Get(dCtx, nil)
 	if workflowErr != nil {
 		return nil, fmt.Errorf("failed to signal external workflow: %v", workflowErr)
+	}
+
+	// update the flow status as paused
+	var service *srv.Activities // nil-pointer for temporal activity
+	var flow domain.Flow
+	err := workflow.ExecuteActivity(dCtx, service.GetFlow, dCtx.WorkspaceId, req.OriginWorkflowId).Get(dCtx, &flow)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get flow: %v", err)
+	}
+	if flow.Status != domain.FlowStatusPaused {
+		flow.Status = domain.FlowStatusPaused
+		err := workflow.ExecuteActivity(dCtx, service.PersistFlow, flow).Get(dCtx, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to set flow status to paused: %v", err)
+		}
 	}
 
 	// Wait for the 'userResponse' signal
