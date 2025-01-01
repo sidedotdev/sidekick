@@ -48,7 +48,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	var envContainer env.EnvContainer
 
 	switch envType {
-	case "local":
+	case "local", "":
 		devEnv, err = env.NewLocalEnv(context.Background(), env.LocalEnvParams{
 			RepoDir: repoDir,
 		})
