@@ -22,7 +22,7 @@ type RepoConfig struct {
 	/** This is injected into prompts to give the LLM high-level context about
 	 * the purpose of your project. This is used especially when defining
 	 * requirements */
-	Mission string `toml:"mission"`
+	Mission string `toml:"mission,omitempty"`
 
 	/** Usage of this flag is NOT RECOMMENDED. This flag is intended to be used
 	 * for benchmarking purposes ONLY. Turning this on makes it so a human will

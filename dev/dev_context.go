@@ -104,7 +104,6 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	if envType == "local_git_worktree" && repoConfig.WorktreeSetup != "" {
 		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 			EnvContainer:       envContainer,
-			RelativeWorkingDir: "",
 			Command:            "/usr/bin/env",
 			Args:               []string{"sh", "-c", repoConfig.WorktreeSetup},
 		}).Get(ctx, nil)
