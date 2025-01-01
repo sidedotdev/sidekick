@@ -12,6 +12,7 @@ type FlowEventType string
 
 const (
 	ProgressTextEventType     FlowEventType = "progress_text"
+	StatusChangeEventType	  FlowEventType = "status_change"
 	ChatMessageDeltaEventType FlowEventType = "chat_message_delta"
 	EndStreamEventType        FlowEventType = "end_stream"
 )

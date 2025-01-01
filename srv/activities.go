@@ -26,6 +26,10 @@ func (a Activities) GetFlow(ctx context.Context, workspaceId string, flowId stri
 	return a.Service.GetFlow(ctx, workspaceId, flowId)
 }
 
+func (a Activities) AddFlowEvent(ctx context.Context, workspaceId string, flowId string, flowEvent domain.FlowEvent) error {
+	return a.Service.AddFlowEvent(ctx, workspaceId, flowId, flowEvent)
+}
+
 // TODO: consider adding these as needed, though we'd ideally change the inputs to structs some of these for backcompat
 /*
 func (a Activities) PersistSubflow(ctx context.Context, subflow domain.Subflow) error {
@@ -38,10 +42,6 @@ func (a Activities) PersistFlowAction(ctx context.Context, flowAction domain.Flo
 		return err
 	}
 	return a.Service.AddFlowActionChange(ctx, flowAction)
-}
-
-func (a Activities) AddFlowEvent(ctx context.Context, workspaceId string, flowId string, flowEvent domain.FlowEvent) error {
-	return a.Service.AddFlowEvent(ctx, workspaceId, flowId, flowEvent)
 }
 
 func (a Activities) EndFlowEventStream(ctx context.Context, workspaceId, flowId, eventStreamParentId string) error {

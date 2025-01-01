@@ -108,6 +108,14 @@ func GetUserResponse(dCtx DevContext, req RequestForUser) (*UserResponse, error)
 				return nil, fmt.Errorf("failed to set flow status to paused: %v", err)
 			}
 		}
+		err = workflow.ExecuteActivity(dCtx, service.AddFlowEvent, dCtx.WorkspaceId, flow.Id, domain.StatusChangeEvent{
+			EventType: domain.StatusChangeEventType,
+			ParentId: flow.Id,
+			Status:   flow.Status,
+		}).Get(dCtx, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to add flow event: %v", err)
+		}
 	}
 
 	// Wait for the 'userResponse' signal
