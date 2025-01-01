@@ -155,12 +155,12 @@ type getCurrentWeather struct {
 }
 
 func TestAnthropicToolChatIntegration(t *testing.T) {
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
-
-	if os.Getenv("SIDE_INTEGRATION_TEST") == "" {
+	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
 	}
 
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
 	chat := AnthropicToolChat{}
 
@@ -242,4 +242,79 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 
 	t.Logf("Response content: %s", response.Content)
 	t.Logf("Tool call: %+v", toolCall)
+
+	// check multi-turn works
+	t.Run("MultiTurn", func(t *testing.T) {
+		options.Params.Messages = append(options.Params.Messages, response.ChatMessage)
+		options.Params.Messages = append(options.Params.Messages, ChatMessage{
+			Role:       ChatMessageRoleTool,
+			Content:    "Warm and Sunny",
+			ToolCallId: toolCall.Id,
+			Name:       toolCall.Name,
+			IsError:    false,
+		})
+		options.Params.Messages = append(options.Params.Messages, ChatMessage{
+			Role:    ChatMessageRoleUser,
+			Content: "How about London?",
+		})
+
+		deltaChan := make(chan ChatMessageDelta)
+		var allDeltas []ChatMessageDelta
+
+		go func() {
+			for delta := range deltaChan {
+				allDeltas = append(allDeltas, delta)
+			}
+		}()
+
+		response, err := chat.ChatStream(ctx, options, deltaChan)
+		close(deltaChan)
+
+		if err != nil {
+			t.Fatalf("ChatStream returned an error: %v", err)
+		}
+
+		if response == nil {
+			t.Fatal("ChatStream returned a nil response")
+		}
+
+		// Check that we received deltas
+		if len(allDeltas) == 0 {
+			t.Error("No deltas received")
+		}
+
+		// Check that the response contains content
+		if response.Content == "" {
+			t.Error("Response content is empty")
+		}
+
+		// Check that the response includes a tool call
+		if len(response.ToolCalls) == 0 {
+			t.Error("No tool calls in the response")
+		}
+
+		// Verify tool call
+		toolCall := response.ToolCalls[0]
+		if toolCall.Name != "get_current_weather" {
+			t.Errorf("Expected tool call to 'get_current_weather', got '%s'", toolCall.Name)
+		}
+
+		// Parse tool call arguments
+		var args map[string]string
+		err = json.Unmarshal([]byte(toolCall.Arguments), &args)
+		if err != nil {
+			t.Fatalf("Failed to parse tool call arguments: %v", err)
+		}
+
+		// Check tool call arguments
+		if !strings.Contains(strings.ToLower(args["location"]), "london") {
+			t.Errorf("Expected location to contain 'london', got '%s'", args["location"])
+		}
+		if args["unit"] != "celsius" && args["unit"] != "fahrenheit" {
+			t.Errorf("Expected unit 'celsius' or 'fahrenheit', got '%s'", args["unit"])
+		}
+
+		t.Logf("Response content: %s", response.Content)
+		t.Logf("Tool call: %+v", toolCall)
+	})
 }

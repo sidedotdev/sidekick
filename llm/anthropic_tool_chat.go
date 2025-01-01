@@ -156,7 +156,7 @@ func anthropicContentStartToChatMessageDelta(contentBlock anthropic.ContentBlock
 }
 
 func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam, error) {
-	var result []anthropic.MessageParam
+	var anthropicMessages []anthropic.MessageParam
 	for _, msg := range messages {
 		var blocks []anthropic.ContentBlockParamUnion
 
@@ -168,15 +168,37 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 			}
 		}
 		for _, toolCall := range msg.ToolCalls {
-			toolUseBlock := anthropic.NewToolUseBlockParam(toolCall.Id, toolCall.Name, json.RawMessage(toolCall.Arguments))
+			var args map[string]any
+			err := json.Unmarshal([]byte(RepairJson(toolCall.Arguments)), &args)
+			if err != nil {
+				args["invalid_json_stringified"] = toolCall.Arguments
+			}
+			toolUseBlock := anthropic.NewToolUseBlockParam(toolCall.Id, toolCall.Name, args)
 			blocks = append(blocks, toolUseBlock)
 		}
-		result = append(result, anthropic.MessageParam{
+		anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
 			Role:    anthropic.F(anthropicFromChatMessageRole(msg.Role)),
 			Content: anthropic.F(blocks),
 		})
 	}
-	return result, nil
+
+	// anthropic doesn't allow multiple consecutive messages from the same role
+	var mergedAnthropicMessages []anthropic.MessageParam
+	for _, msg := range anthropicMessages {
+		if len(mergedAnthropicMessages) == 0 {
+			mergedAnthropicMessages = append(mergedAnthropicMessages, msg)
+			continue
+		}
+
+		lastMsg := &mergedAnthropicMessages[len(mergedAnthropicMessages)-1]
+		if lastMsg.Role == msg.Role {
+			lastMsg.Content.Value = append(lastMsg.Content.Value, msg.Content.Value...)
+		} else {
+			mergedAnthropicMessages = append(mergedAnthropicMessages, msg)
+		}
+	}
+
+	return mergedAnthropicMessages, nil
 }
 
 func anthropicFromChatMessageRole(role ChatMessageRole) anthropic.MessageParamRole {
@@ -209,8 +231,8 @@ func anthropicToChatMessageResponse(message anthropic.Message) (*ChatMessageResp
 			Role:    ChatMessageRoleAssistant,
 			Content: "",
 		},
-		Id:         message.ID,
-		StopReason: string(message.StopReason),
+		Id:           message.ID,
+		StopReason:   string(message.StopReason),
 		StopSequence: message.StopSequence,
 		Usage: Usage{
 			InputTokens:  int(message.Usage.InputTokens),
