@@ -9,7 +9,7 @@ productive as they work within large existing code bases.
 """
 
 worktree_setup = """
-cd frontend && npm ci
+cd frontend && npm ci && touch dist/empty.txt
 """
 
 [[test_commands]]
