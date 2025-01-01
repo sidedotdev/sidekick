@@ -42,14 +42,14 @@ func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, cont
 
 editLoop:
 	for {
-		// Check if we're paused and need user input
-		if response, err := UserRequestIfPaused(dCtx, "The system is paused. Would you like to provide any guidance?", nil); err != nil {
-			return fmt.Errorf("failed to check pause status: %v", err)
+		// Check if we're paused and need user guidance
+		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
+			return fmt.Errorf("failed to make user request when paused: %v", err)
 		} else if response != nil {
 			// Add the feedback to chat history and reset feedback counter
 			*chatHistory = append(*chatHistory, llm.ChatMessage{
 				Role:    llm.ChatMessageRoleSystem,
-				Content: response.Content,
+				Content: fmt.Sprintf("IMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content),
 			})
 			attemptsSinceLastFeedback = 0
 		}
@@ -135,14 +135,14 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	}
 
 	for {
-		// Check if we're paused and need user input
-		if response, err := UserRequestIfPaused(dCtx, "The system is paused. Would you like to provide any guidance?", nil); err != nil {
-			return nil, fmt.Errorf("failed to check pause status: %v", err)
+		// Check if we're paused and need user guidance
+		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
+			return nil, fmt.Errorf("failed to make user request when paused: %v", err)
 		} else if response != nil {
 			// Add the feedback to chat history
 			*chatHistory = append(*chatHistory, llm.ChatMessage{
 				Role:    llm.ChatMessageRoleSystem,
-				Content: fmt.Sprintf("User provided guidance while paused: %s", response.Content),
+				Content: fmt.Sprintf("IMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content),
 			})
 			attemptsSinceLastEditBlockOrFeedback = 0
 		}
@@ -183,8 +183,12 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		attemptsSinceLastEditBlockOrFeedback++
 
 		// call Open AI to get back messages that contain edit blocks
+		chatCtx := dCtx.WithCancelOnPause()
 		actionName := "Generate Code Edits"
-		chatResponse, err := TrackedToolChat(dCtx, actionName, authorEditBlockInput)
+		chatResponse, err := TrackedToolChat(chatCtx, actionName, authorEditBlockInput)
+		if dCtx.GlobalState.Paused {
+			continue // UserRequestIfPaused will handle the pause
+		}
 		if err != nil {
 			return []EditBlock{}, err
 		}

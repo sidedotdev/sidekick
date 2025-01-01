@@ -6,15 +6,17 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+type Pause struct{}
+
 func SetupPauseHandler(dCtx DevContext, guidanceContext string, requestParams map[string]interface{}) {
 	signalChan := workflow.GetSignalChannel(dCtx, "pause")
 	workflow.Go(dCtx, func(ctx workflow.Context) {
 		for {
 			selector := workflow.NewSelector(ctx)
 			selector.AddReceive(signalChan, func(c workflow.ReceiveChannel, more bool) {
-				var signal interface{}
-				c.Receive(ctx, &signal)
+				c.Receive(ctx, &Pause{})
 				dCtx.GlobalState.Paused = true
+				dCtx.GlobalState.Cancel() // cancel any ongoing activities when paused
 			})
 			selector.Select(ctx)
 		}

@@ -25,6 +25,13 @@ type DevContext struct {
 	EmbeddingConfig common.EmbeddingConfig
 }
 
+func (dCtx DevContext) WithCancelOnPause() DevContext {
+	ctx, cancel := workflow.WithCancel(dCtx.Context)
+	dCtx.Context = ctx
+	dCtx.GlobalState.AddCancelFunc(cancel)
+	return dCtx
+}
+
 func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, envType string) (DevContext, error) {
 	initialExecCtx := flow_action.ExecContext{
 		Context:     ctx,

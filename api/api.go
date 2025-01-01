@@ -140,6 +140,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	flowRoutes := workspaceApiRoutes.Group("/flows")
 	flowRoutes.GET("/:id", ctrl.GetFlowHandler)
 	flowRoutes.GET("/:id/actions", ctrl.GetFlowActionsHandler)
+	flowRoutes.POST("/:id/pause", ctrl.PauseFlowHandler)
 	flowRoutes.POST("/:id/cancel", ctrl.CancelFlowHandler)
 
 	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
@@ -294,6 +295,43 @@ func (ctrl *Controller) DeleteTaskHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Task deleted successfully"})
+}
+
+func (ctrl *Controller) PauseFlowHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	// Get the flow first
+	flow, err := ctrl.service.GetFlow(c.Request.Context(), workspaceId, flowId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": fmt.Sprintf("Failed to get flow: %v", err),
+		})
+		return
+	}
+
+	// Update flow status to paused
+	flow.Status = "paused"
+	err = ctrl.service.PersistFlow(c.Request.Context(), flow)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": fmt.Sprintf("Failed to persist flow status: %v", err),
+		})
+		return
+	}
+
+	// Send pause signal to temporal workflow
+	err = ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", "pause", &dev.Pause{})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": fmt.Sprintf("Failed to send pause signal: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Flow paused successfully",
+	})
 }
 
 func (ctrl *Controller) CancelFlowHandler(c *gin.Context) {
