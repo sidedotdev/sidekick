@@ -18,6 +18,7 @@ import (
 
 type DevContext struct {
 	flow_action.ExecContext
+	GlobalState	 *GlobalState
 	RepoConfig common.RepoConfig
 
 	LLMConfig       common.LLMConfig

@@ -28,6 +28,8 @@ type BasicDevOptions struct {
 }
 
 func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result string, err error) {
+	globalState := &GlobalState{}
+
 	// don't recover panics in development so we can debug via temporal UI, at
 	// the cost of failed tasks appearing stuck without UI feedback in sidekick
 	if SideAppEnv != "development" {
@@ -55,6 +57,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		_ = signalWorkflowClosure(ctx, "failed")
 		return "", err
 	}
+	dCtx.GlobalState = globalState
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	err = EnsurePrerequisites(dCtx, requirements)
