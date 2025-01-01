@@ -43,6 +43,7 @@ func (s *RunTestsTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 
 	s.devContext = &DevContext{
+		GlobalState: &GlobalState{},
 		ExecContext: flow_action.ExecContext{
 			EnvContainer: &s.envContainer,
 			Secrets: &secret_manager.SecretManagerContainer{

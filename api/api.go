@@ -728,6 +728,16 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve flow"})
 		return
 	}
+
+	// If flow was paused, set it back to in_progress when completing an action
+	if flow.Status == "paused" {
+		flow.Status = "in_progress"
+		if err := ctrl.service.PersistFlow(ctx, flow); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update flow status"})
+			return
+		}
+	}
+
 	task, err := ctrl.service.GetTask(ctx, workspaceId, flow.ParentId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve task"})

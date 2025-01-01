@@ -464,6 +464,60 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 	assert.Error(t, err, "Expected error for invalid flow")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "Expected 404 status code for invalid flow")
 }
+
+func TestCompleteFlowActionHandler_UnpausesFlow(t *testing.T) {
+	ctrl := NewMockController(t)
+	redisDb := ctrl.service
+	workspaceId := "ws_123"
+	ctx := context.Background()
+	task := domain.Task{
+		WorkspaceId: workspaceId,
+		Status:      domain.TaskStatusInProgress,
+		AgentType:   domain.AgentTypeLLM,
+	}
+	redisDb.PersistTask(ctx, task)
+
+	// Create a paused flow associated with the task
+	flow := domain.Flow{
+		ParentId:    task.Id,
+		WorkspaceId: workspaceId,
+		Id:          "flow_1",
+		Status:      "paused",
+	}
+
+	// Create a flow action associated with the flow
+	flowAction := domain.FlowAction{
+		WorkspaceId:      workspaceId,
+		FlowId:           flow.Id,
+		Id:               "flow_action_1",
+		ActionStatus:     domain.ActionStatusPending,
+		ActionType:       "anything",
+		IsHumanAction:    true,
+		IsCallbackAction: true,
+	}
+
+	// Persist the task, flow and flow action in the database before the API call
+	err := redisDb.PersistTask(ctx, task)
+	assert.Nil(t, err)
+	err = redisDb.PersistFlow(ctx, flow)
+	assert.Nil(t, err)
+	err = redisDb.PersistFlowAction(ctx, flowAction)
+	assert.Nil(t, err)
+
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+	c.Request = httptest.NewRequest("POST", "/v1/workspaces/"+workspaceId+"/flow_actions/"+flowAction.Id+"/complete", strings.NewReader(`{"userResponse": {"content": "test response"}}`))
+	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}, {Key: "id", Value: flowAction.Id}}
+
+	ctrl.CompleteFlowActionHandler(c)
+	assert.Equal(t, http.StatusOK, resp.Code)
+
+	// Verify flow was unpaused
+	retrievedFlow, err := redisDb.GetFlow(ctx, workspaceId, flow.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "in_progress", retrievedFlow.Status)
+}
+
 func TestCompleteFlowActionHandler(t *testing.T) {
 	ctrl := NewMockController(t)
 	redisDb := ctrl.service
