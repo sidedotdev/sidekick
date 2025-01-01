@@ -92,18 +92,21 @@ func GetUserResponse(dCtx DevContext, req RequestForUser) (*UserResponse, error)
 		return nil, fmt.Errorf("failed to signal external workflow: %v", workflowErr)
 	}
 
-	// update the flow status as paused
-	var service *srv.Activities // nil-pointer for temporal activity
-	var flow domain.Flow
-	err := workflow.ExecuteActivity(dCtx, service.GetFlow, dCtx.WorkspaceId, req.OriginWorkflowId).Get(dCtx, &flow)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get flow: %v", err)
-	}
-	if flow.Status != domain.FlowStatusPaused {
-		flow.Status = domain.FlowStatusPaused
-		err := workflow.ExecuteActivity(dCtx, service.PersistFlow, flow).Get(dCtx, nil)
+	v := workflow.GetVersion(dCtx, "pause-flow", workflow.DefaultVersion, 1)
+	if v == 1 {
+		// update the flow status as paused
+		var service *srv.Activities // nil-pointer for temporal activity
+		var flow domain.Flow
+		err := workflow.ExecuteActivity(dCtx, service.GetFlow, dCtx.WorkspaceId, req.OriginWorkflowId).Get(dCtx, &flow)
 		if err != nil {
-			return nil, fmt.Errorf("failed to set flow status to paused: %v", err)
+			return nil, fmt.Errorf("failed to get flow: %v", err)
+		}
+		if flow.Status != domain.FlowStatusPaused {
+			flow.Status = domain.FlowStatusPaused
+			err := workflow.ExecuteActivity(dCtx, service.PersistFlow, flow).Get(dCtx, nil)
+			if err != nil {
+				return nil, fmt.Errorf("failed to set flow status to paused: %v", err)
+			}
 		}
 	}
 
