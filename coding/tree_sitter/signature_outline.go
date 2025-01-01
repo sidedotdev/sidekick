@@ -388,7 +388,6 @@ func getEmbeddedLanguageSignatures(languageName string, tree *sitter.Tree, sourc
 	return []Signature{}, nil
 }
 
-
 func writeSignatureCapture(languageName string, out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
 	//out.WriteString(name + "\n")
 	//out.WriteString(c.Node.Type() + "\n")
@@ -416,7 +415,6 @@ func writeSignatureCapture(languageName string, out *strings.Builder, sourceCode
 		}
 	}
 }
-
 
 //go:embed signature_queries/*
 var signatureQueriesFS embed.FS
@@ -468,5 +466,3 @@ func countDirectories(path string) int {
 
 	return count
 }
-
-
