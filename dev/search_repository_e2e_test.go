@@ -37,14 +37,12 @@ func (s *SearchRepositoryE2ETestSuite) SetupTest() {
 	s.SetLogger(tlog.NewStructuredLogger(slog.New(th)))
 
 	// Create a temporary directory for the test
-	var err error
-	s.dir, err = os.MkdirTemp("", "search-repository-test")
-	s.Require().NoError(err)
+	s.dir = s.T().TempDir()
 
 	// Initialize git repository so that rg respects .gitignore files
 	cmd := exec.Command("git", "init")
 	cmd.Dir = s.dir
-	err = cmd.Run()
+	err := cmd.Run()
 	s.Require().NoError(err)
 
 	// Set up the environment container
