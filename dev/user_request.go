@@ -95,20 +95,20 @@ func GetUserResponse(dCtx DevContext, req RequestForUser) (*UserResponse, error)
 	v := workflow.GetVersion(dCtx, "pause-flow", workflow.DefaultVersion, 1)
 	if v == 1 {
 		// update the flow status as paused
-		var service *srv.Activities // nil-pointer for temporal activity
 		var flow domain.Flow
-		err := workflow.ExecuteActivity(dCtx, service.GetFlow, dCtx.WorkspaceId, req.OriginWorkflowId).Get(dCtx, &flow)
+		err := workflow.ExecuteActivity(dCtx, srv.Activities.GetFlow, dCtx.WorkspaceId, req.OriginWorkflowId).Get(dCtx, &flow)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get flow: %v", err)
 		}
 		if flow.Status != domain.FlowStatusPaused {
 			flow.Status = domain.FlowStatusPaused
-			err := workflow.ExecuteActivity(dCtx, service.PersistFlow, flow).Get(dCtx, nil)
+			err := workflow.ExecuteActivity(dCtx, srv.Activities.PersistFlow, flow).Get(dCtx, nil)
 			if err != nil {
 				return nil, fmt.Errorf("failed to set flow status to paused: %v", err)
 			}
 		}
-		err = workflow.ExecuteActivity(dCtx, service.AddFlowEvent, dCtx.WorkspaceId, flow.Id, domain.StatusChangeEvent{
+		/* TODO
+		err = workflow.ExecuteActivity(dCtx, srv.Activities.AddFlowEvent, dCtx.WorkspaceId, flow.Id, domain.StatusChangeEvent{
 			EventType: domain.StatusChangeEventType,
 			ParentId: flow.Id,
 			Status:   flow.Status,
@@ -116,6 +116,7 @@ func GetUserResponse(dCtx DevContext, req RequestForUser) (*UserResponse, error)
 		if err != nil {
 			return nil, fmt.Errorf("failed to add flow event: %v", err)
 		}
+			*/
 	}
 
 	// Wait for the 'userResponse' signal
