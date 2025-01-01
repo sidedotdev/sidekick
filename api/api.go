@@ -234,6 +234,15 @@ func (ctrl *Controller) CancelTaskHandler(c *gin.Context) {
 		WorkspaceId:       task.WorkspaceId,
 	}
 	for _, flow := range childFlows {
+		// Update and persist the flow status
+		flow.Status = "canceled"
+		if err := ctrl.service.PersistFlow(c.Request.Context(), flow); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"message": fmt.Sprintf("Failed to update flow status: %v", err),
+			})
+			return
+		}
+
 		err = devAgent.TerminateWorkflowIfExists(c.Request.Context(), flow.Id)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to terminate workflow"})
