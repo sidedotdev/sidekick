@@ -33,6 +33,7 @@ func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, cont
 	// were made or not, and what feedback there may be for adjusting or
 	// gathering requirements
 	attemptCount := 0
+	attemptsSinceLastFeedback := 0
 	maxAttempts := 17
 	repoConfig := dCtx.RepoConfig
 	if repoConfig.MaxIterations > 0 {
@@ -41,12 +42,24 @@ func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, cont
 
 editLoop:
 	for {
+		// Check if we're paused and need user input
+		if response, err := UserRequestIfPaused(dCtx, "The system is paused. Would you like to provide any guidance?", nil); err != nil {
+			return fmt.Errorf("failed to check pause status: %v", err)
+		} else if response != nil {
+			// Add the feedback to chat history and reset feedback counter
+			*chatHistory = append(*chatHistory, llm.ChatMessage{
+				Role:    llm.ChatMessageRoleSystem,
+				Content: response.Content,
+			})
+			attemptsSinceLastFeedback = 0
+		}
+
 		if attemptCount >= maxAttempts {
 			return ErrMaxAttemptsReached
 		}
 
-		// TODO don't force getting user feedback if it just got help recently already via a function call
-		if attemptCount > 0 && attemptCount%3 == 0 {
+		// Only request feedback if we haven't received any recently from any source
+		if attemptCount > 0 && attemptsSinceLastFeedback >= 3 {
 			guidanceContext := "The system has attempted to edit the code multiple times without success. Please provide some guidance."
 			requestParams := map[string]any{
 				"editBlockReports": reports,
@@ -55,6 +68,7 @@ editLoop:
 			if err != nil {
 				return fmt.Errorf("failed to get user feedback: %v", err)
 			}
+			attemptsSinceLastFeedback = 0
 		}
 
 		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
