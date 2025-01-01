@@ -168,7 +168,7 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 			}
 		}
 		for _, toolCall := range msg.ToolCalls {
-			var args map[string]any
+			args := make(map[string]any, 0)
 			err := json.Unmarshal([]byte(RepairJson(toolCall.Arguments)), &args)
 			if err != nil {
 				args["invalid_json_stringified"] = toolCall.Arguments
