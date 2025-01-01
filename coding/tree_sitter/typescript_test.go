@@ -104,7 +104,6 @@ func TestGetFileSignaturesStringTypescript(t *testing.T) {
 	}
 }
 
-
 func TestGetFileSymbolsStringTypescript(t *testing.T) {
 	tests := []struct {
 		name     string

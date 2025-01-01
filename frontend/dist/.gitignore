@@ -1,0 +1,3 @@
+# ignore contents of this directory, while committing the directory itself
+/*
+!/.gitignore

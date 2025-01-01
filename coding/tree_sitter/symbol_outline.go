@@ -313,7 +313,6 @@ func getEmbeddedLanguageSymbols(languageName string, tree *sitter.Tree, sourceCo
 	return []Symbol{}, nil
 }
 
-
 func (sc SourceCode) GetSymbols() ([]Symbol, error) {
 	sitterLanguage, err := getSitterLanguage(sc.LanguageName)
 	if err != nil {

@@ -422,7 +422,6 @@ func (ctrl *Controller) GetTaskHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"task": task})
 }
 
-
 // FlowWithWorktrees represents a Flow with its associated Worktrees
 type FlowWithWorktrees struct {
 	domain.Flow

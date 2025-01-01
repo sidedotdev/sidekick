@@ -8,6 +8,10 @@ engaging them. The core mission of Sidekick is to make developers more
 productive as they work within large existing code bases.
 """
 
+worktree_setup = """
+cd frontend && npm ci && touch dist/empty.txt
+"""
+
 [[test_commands]]
 command = "go test -test.timeout 15s ./..."
 
