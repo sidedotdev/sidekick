@@ -13,6 +13,9 @@
     <div class="scroll-container">
       <SubflowContainer v-for="(subflowTree, index) in subflowTrees" :key="index" :subflowTree="subflowTree" :defaultExpanded="index == subflowTrees.length - 1"/>
     </div>
+    <div v-if="flow && !['completed', 'failed', 'canceled'].includes(flow.status)" class="pause-button-container">
+      <button @click="pauseFlow" class="pause-button">Pause Flow</button>
+    </div>
   </div>
 </template>
 
@@ -198,6 +201,18 @@ const workDir = (worktree: Worktree): string => {
   return `${dataDir}/worktrees/${worktree.workspaceId}/${worktree.name}`
 }
 
+const pauseFlow = async () => {
+  if (!flow.value) return
+  
+  try {
+    await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${flow.value.id}/pause`, {
+      method: 'POST',
+    })
+  } catch (err) {
+    console.error('Failed to pause flow:', err)
+  }
+}
+
 onUnmounted(() => {
   if (actionChangesSocket !== null) {
     actionChangesSocketClosed = true
@@ -230,5 +245,29 @@ onUnmounted(() => {
   z-index: 1000;
   top: 1rem;
   right: 1rem;
+}
+
+.pause-button-container {
+  position: sticky;
+  bottom: 1rem;
+  display: flex;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 1000;
+}
+
+.pause-button {
+  padding: 0.5rem 1rem;
+  border-radius: 0.25rem;
+  background-color: var(--vp-c-bg-soft);
+  color: var(--vp-c-text-1);
+  border: 1px solid var(--vp-c-divider);
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: background-color 0.2s;
+}
+
+.pause-button:hover {
+  background-color: var(--vp-c-bg-mute);
 }
 </style>
