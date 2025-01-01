@@ -20,8 +20,8 @@ import (
 
 // Helper function to create a temporary directory and change to it
 func setupTempDir(t *testing.T) (string, func()) {
-	tmpDir, err := os.MkdirTemp("", "test")
-	assert.NoError(t, err)
+	t.Helper()
+	tmpDir := t.TempDir()
 
 	currentDir, err := os.Getwd()
 	assert.NoError(t, err)
@@ -31,7 +31,6 @@ func setupTempDir(t *testing.T) (string, func()) {
 
 	cleanup := func() {
 		os.Chdir(currentDir)
-		os.RemoveAll(tmpDir)
 	}
 
 	return tmpDir, cleanup

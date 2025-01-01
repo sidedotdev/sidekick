@@ -2,7 +2,6 @@ package dev
 
 import (
 	"context"
-	"log"
 	"log/slog"
 	"os"
 	"sidekick/common"
@@ -38,6 +37,7 @@ type AuthorEditBlocksTestSuite struct {
 }
 
 func (s *AuthorEditBlocksTestSuite) SetupTest() {
+	s.T().Helper()
 	// log warnings only (default debug level is too noisy when tests fail)
 	th := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{AddSource: false, Level: slog.LevelWarn})
 	s.SetLogger(tlog.NewStructuredLogger(slog.New(th)))
@@ -71,18 +71,14 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	var fa *flow_action.FlowActivities // use a nil struct pointer to call activities that are part of a structure
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil)
 
-	// TODO create a helper function: CreateTestLocalEnvironment
-	dir, err := os.MkdirTemp("", "AuthorEditBlocksTestSuite")
-	if err != nil {
-		log.Fatalf("Failed to create temp dir: %v", err)
-	}
+	// Create temporary directory using t.TempDir()
+	s.dir = s.T().TempDir()
 	devEnv, err := env.NewLocalEnv(context.Background(), env.LocalEnvParams{
-		RepoDir: dir,
+		RepoDir: s.dir,
 	})
 	if err != nil {
-		log.Fatalf("Failed to create local environment: %v", err)
+		s.T().Fatalf("Failed to create local environment: %v", err)
 	}
-	s.dir = dir
 	s.envContainer = env.EnvContainer{
 		Env: devEnv,
 	}

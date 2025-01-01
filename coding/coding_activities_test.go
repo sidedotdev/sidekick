@@ -614,11 +614,7 @@ nested/file0a.txt`,
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			// Create a temporary directory for the test
-			tmpDir, err := os.MkdirTemp("", "test_get_hint")
-			if err != nil {
-				t.Fatalf("Failed to create temp directory: %v", err)
-			}
-			defer os.RemoveAll(tmpDir)
+			tmpDir := t.TempDir()
 
 			// Set up files in the temporary directory
 			for _, file := range tt.setupFiles {
