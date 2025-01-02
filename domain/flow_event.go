@@ -12,7 +12,7 @@ type FlowEventType string
 
 const (
 	ProgressTextEventType     FlowEventType = "progress_text"
-	StatusChangeEventType	  FlowEventType = "status_change"
+	StatusChangeEventType     FlowEventType = "status_change"
 	ChatMessageDeltaEventType FlowEventType = "chat_message_delta"
 	EndStreamEventType        FlowEventType = "end_stream"
 )
@@ -74,6 +74,26 @@ func (e ChatMessageDeltaEvent) GetEventType() FlowEventType {
 
 var _ FlowEvent = ChatMessageDeltaEvent{}
 
+// StatusChangeEvent represents a status change in the flow.
+type StatusChangeEvent struct {
+	EventType FlowEventType `json:"eventType"`
+	ParentId  string        `json:"parentId"`
+	Status    string        `json:"status"`
+}
+
+// GetParentId returns the parent ID of the StatusChangeEvent.
+func (e StatusChangeEvent) GetParentId() string {
+	return e.ParentId
+}
+
+// GetEventType returns the event type of the StatusChangeEvent.
+func (e StatusChangeEvent) GetEventType() FlowEventType {
+	return e.EventType
+}
+
+// Ensure StatusChangeEvent implements FlowEvent interface
+var _ FlowEvent = (*StatusChangeEvent)(nil)
+
 // UnmarshalFlowEvent unmarshals a JSON byte slice into a FlowEvent based on the "eventType" field.
 func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
 	var event struct {
@@ -109,6 +129,14 @@ func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
 			return nil, err
 		}
 		return endStream, nil
+
+	case StatusChangeEventType:
+		var statusChange StatusChangeEvent
+		err := json.Unmarshal(data, &statusChange)
+		if err != nil {
+			return nil, err
+		}
+		return statusChange, nil
 
 	default:
 		return nil, fmt.Errorf("unknown flow eventType: %s", event.EventType)

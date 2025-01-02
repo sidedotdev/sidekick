@@ -116,7 +116,7 @@ func GetUserResponse(dCtx DevContext, req RequestForUser) (*UserResponse, error)
 		if err != nil {
 			return nil, fmt.Errorf("failed to add flow event: %v", err)
 		}
-			*/
+		*/
 	}
 
 	// Wait for the 'userResponse' signal

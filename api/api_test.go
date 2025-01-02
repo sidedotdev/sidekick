@@ -580,7 +580,6 @@ func TestCompleteFlowActionHandler_UnpausesFlow(t *testing.T) {
 	assert.Equal(t, "in_progress", retrievedFlow.Status)
 }
 
-
 func TestCompleteFlowActionHandler_NonHumanRequest(t *testing.T) {
 	ctrl := NewMockController(t)
 	redisDb := ctrl.service
