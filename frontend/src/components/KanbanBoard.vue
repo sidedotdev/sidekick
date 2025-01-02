@@ -38,9 +38,7 @@ const columnNames = {
 const emit = defineEmits(['refresh'])
 
 const groupedTasks = computed(() => {
-  return [...props.tasks]
-    .sort()
-    .reverse()
+  return props.tasks
     .reduce((grouped, task) => {
       grouped[task.agentType] = [...(grouped[task.agentType] || []), task];
       // sort by updated descending, if same then sort by id descending
