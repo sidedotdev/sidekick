@@ -2,6 +2,9 @@
   <div :class="`task-card ${task.status.toLowerCase()}`" @click="cardClicked">
     <div class="actions">
       <button v-if="task.status == 'drafting'" class="action edit" @click.stop="openEditModal">✎️</button>
+      <button class="action copy" @click.stop="copyTask">
+        <CopyIcon :size="16" />
+      </button>
       <button v-if="canArchive" class="action archive" @click.stop="archiveTask">📦</button>
       <button v-if="canCancel" class="action cancel" @click.stop="cancelTask">X</button>
       <button v-if="canDelete" class="action delete" @click.stop="deleteTask">X</button>
@@ -20,6 +23,7 @@
 import { ref, computed } from 'vue'
 import type { Task } from '../lib/models'
 import TaskEditModal from './TaskEditModal.vue'
+import CopyIcon from './icons/CopyIcon.vue'
 import router from '@/router'
 
 const props = defineProps({
@@ -35,6 +39,7 @@ interface Emits {
   (event: 'error', message: string): void;
   (event: 'archived', id: string): void;
   (event: 'canceled', id: string): void;
+  (event: 'copied', id: string): void;
 }
 
 const emit = defineEmits<Emits>();
@@ -124,6 +129,28 @@ const cardClicked = async () => {
 
 const onUpdated = async () => {
   emit('updated', props.task.id)
+}
+
+const copyTask = async () => {
+  const { workspaceId, title, description, agentType, flowOptions } = props.task
+  const response = await fetch(`/api/v1/workspaces/${workspaceId}/tasks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 
+      title: `Copy of ${title}`,
+      description,
+      status: 'to_do',
+      agentType,
+      flowOptions
+    }),
+  })
+  if (response.ok) {
+    const newTask = await response.json()
+    emit('updated', newTask.id)
+    emit('copied', newTask.id)
+  } else {
+    emit('error', 'Failed to copy task')
+  }
 }
 
 const cancelTask = async () => {
@@ -304,6 +331,12 @@ const cancelTask = async () => {
 
 .action.delete, .action.cancel {
   font-weight: bold;
+}
+
+.action.copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .archived-label {
