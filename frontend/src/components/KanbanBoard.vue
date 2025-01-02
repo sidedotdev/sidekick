@@ -1,5 +1,5 @@
 <template>
-  <TaskModal v-if="isModalOpen" @close="closeModal" @created="refresh" :status="newTaskStatus" />
+  <TaskModal v-if="isModalOpen" @close="closeModal" @created="refresh" :task="newTask" />
   <div class="kanban-board">
     <div
       v-for="agentType in ['human', 'llm', 'none'] as const"
@@ -8,19 +8,19 @@
     >
       <h2>
         {{ columnNames[agentType as keyof typeof columnNames] }}
-        <button v-if="agentType !== 'none'" class="new-task mini-button" @click="newTask(agentType)">+</button>
+        <button v-if="agentType !== 'none'" class="new-task mini-button" @click="addTask(agentType)">+</button>
         <button v-if="agentType === 'none' && groupedTasks[agentType]?.length > 0" class="new-task mini-button" @click="confirmArchiveFinished">📦</button>
       </h2>
       <TaskCard v-for="task in groupedTasks[agentType]" :key="task.id" :task="task" @deleted="refresh" @canceled="refresh" @archived="refresh" @updated="refresh" @error="error" />
-      <button class="new-task" v-if="agentType == 'human'" @click="newTask(agentType)">+ Draft Task</button>
-      <button class="new-task" v-if="agentType == 'llm'" @click="newTask(agentType)">+ Queue Task</button>
+      <button class="new-task" v-if="agentType == 'human'" @click="addTask(agentType)">+ Draft Task</button>
+      <button class="new-task" v-if="agentType == 'llm'" @click="addTask(agentType)">+ Queue Task</button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { FullTask, AgentType } from '../lib/models'
+import type { FullTask, AgentType, Task } from '../lib/models'
 import TaskCard from './TaskCard.vue'
 import TaskModal from './TaskModal.vue'
 
@@ -58,17 +58,27 @@ function refresh() {
 }
 
 const isModalOpen = ref(false)
-const newTaskStatus = ref('to_do')
+const newTask = ref<Task>({
+  status: 'drafting',
+  agentType: 'human',
+  workspaceId: props.workspaceId,
+})
 
-const newTask = (agentType: 'human' | 'llm' | 'none') => {
+const addTask = (agentType: 'human' | 'llm' | 'none') => {
   if (agentType !== 'none') {
     isModalOpen.value = true
-    newTaskStatus.value = agentType === 'human' ? 'drafting' : 'to_do';
+    newTask.value.agentType = agentType
+    newTask.value.status = agentType === 'human' ? 'drafting' : 'to_do';
   }
 }
 
 const closeModal = () => {
   isModalOpen.value = false
+  newTask.value = {
+    status: 'drafting',
+    agentType: 'human',
+    workspaceId: props.workspaceId,
+  }
 }
 
 function error(e: any) {

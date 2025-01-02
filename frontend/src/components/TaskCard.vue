@@ -39,9 +39,14 @@ const copiedTask = computed(() => {
     workspaceId: props.task.workspaceId,
     flowType: props.task.flowType,
     flowOptions: props.task.flowOptions,
-    status: 'to_do',
+    status: props.task.status,
     agentType: 'llm',
   }
+
+  if (copy.status !== 'drafting' && copy.status !== 'to_do') {
+    copy.status = 'to_do'
+  }
+
   delete copy.id
   delete copy.flows
   delete copy.updated
