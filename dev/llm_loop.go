@@ -80,9 +80,16 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 		}
 
 		// Check for pause at the beginning of each iteration
-		_, err := UserRequestIfPaused(dCtx, fmt.Sprintf("LlmLoop iteration %d", iteration.Num), nil)
+		response, err := UserRequestIfPaused(dCtx, fmt.Sprintf("LlmLoop iteration %d", iteration.Num), nil)
 		if err != nil {
 			return nil, fmt.Errorf("error checking for pause: %v", err)
+		}
+		if response != nil && response.Content != "" {
+			*iteration.ChatHistory = append(*iteration.ChatHistory, llm.ChatMessage{
+				Role:    "user",
+				Content: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content),
+			})
+			iterationsSinceLastFeedback = 0
 		}
 
 		// Get user feedback every N iterations
