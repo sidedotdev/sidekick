@@ -250,9 +250,11 @@ func getPlanningInput(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInf
 	name := ""
 	toolCallId := ""
 	skip := false
+	cacheControl := ""
 	switch info := promptInfo.(type) {
 	case InitialPlanningInfo:
 		content = buildInitialRecordPlanPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanningPrompt, info.ReproduceIssue)
+		cacheControl = "ephemeral"
 	case FeedbackInfo:
 		content = info.Feedback
 	case SkipInfo:
@@ -272,6 +274,7 @@ func getPlanningInput(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInf
 			Content:    content,
 			Name:       name,
 			ToolCallId: toolCallId,
+			CacheControl: cacheControl,
 		}
 		*chatHistory = append(*chatHistory, newMessage)
 	}
