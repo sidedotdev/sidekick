@@ -64,6 +64,7 @@ let setShortContent = () => {
 }
 
 onMounted(async () => {
+  const flowPromise = fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${route.params.id}`)
   setShortContent()
   useEventBus('flow-view-collapse').on(() => {
     shortContent.value = true
@@ -73,8 +74,13 @@ onMounted(async () => {
   const connectEventsWebSocket = () => {
     eventsSocket = new WebSocket(`ws://${window.location.host}/ws/v1/workspaces/${store.workspaceId}/flows/${route.params.id}/events`);
 
-    eventsSocket.onopen = () => {
+    eventsSocket.onopen = async () => {
       console.log("Events WebSocket connection opened");
+      await flowPromise
+      setTimeout(() => {
+        const message = JSON.stringify({parentId: flow.value?.id});
+        eventsSocket?.send(message);
+      }, 10);
     };
 
     eventsSocket.onmessage = (event) => {
@@ -201,7 +207,7 @@ onMounted(async () => {
 
   connectActionChangesWebSocket();
 
-  const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${route.params.id}`)
+  const response = await flowPromise
   flow.value = (await response.json()).flow
 })
 
@@ -257,23 +263,23 @@ onUnmounted(() => {
 
 .pause-button-container {
   position: absolute;
-  right: 2rem;
-  bottom: 2rem;
+  right: 1.5rem;
+  bottom: 1.5rem;
   display: flex;
   justify-content: center;
-  padding: 1rem;
+  padding: 0.75rem;
   z-index: 1000;
 }
 
 .pause-button {
-  padding: 1rem 3rem;
+  padding: 0.25rem 2rem;
   border-radius: 0.5rem;
-  opacity: 0.5;
+  opacity: 0.8;
   background-color: var(--color-primary);
   color: var(--vp-c-text-1);
   border: 1px solid var(--vp-c-divider);
   cursor: pointer;
-  font-size: 3rem;
+  font-size: 3.5rem;
   transition: opacity 0.2s;
 }
 
