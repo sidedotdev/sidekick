@@ -2,6 +2,8 @@ package srv
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sidekick/domain"
 )
 
@@ -126,16 +128,37 @@ func (d Delegator) AddTaskChange(ctx context.Context, task domain.Task) error {
 }
 
 /* implements FlowStorage interface */
-func (d Delegator) PersistFlow(ctx context.Context, workflow domain.Flow) error {
-	err := d.storage.PersistFlow(ctx, workflow)
-	return err
-	// TODO
-	/*
-		if err != nil {
-			return err
+func (d Delegator) PersistFlow(ctx context.Context, flow domain.Flow) error {
+	// Attempt to get the existing flow
+	existingFlow, err := d.storage.GetFlow(ctx, flow.WorkspaceId, flow.Id)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("error getting existing flow: %w", err)
+	}
+
+	var statusChangeEvent *domain.StatusChangeEvent
+
+	// Check if it's a new flow or if the status has changed
+	if errors.Is(err, ErrNotFound) || existingFlow.Status != flow.Status {
+		statusChangeEvent = &domain.StatusChangeEvent{
+			EventType: domain.StatusChangeEventType,
+			ParentId:  flow.Id,
+			Status:    flow.Status,
 		}
-		return d.Streamer.AddFlowChange(ctx, workflow)
-	*/
+	}
+
+	// Persist the new or updated flow
+	if err := d.storage.PersistFlow(ctx, flow); err != nil {
+		return fmt.Errorf("error persisting flow: %w", err)
+	}
+
+	// If we have a status change event, add it using the streamer
+	if statusChangeEvent != nil {
+		if err := d.streamer.AddFlowEvent(ctx, flow.WorkspaceId, flow.Id, statusChangeEvent); err != nil {
+			return fmt.Errorf("error adding flow event: %w", err)
+		}
+	}
+
+	return nil
 }
 
 /* implements FlowStorage interface */
