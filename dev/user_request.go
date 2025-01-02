@@ -94,7 +94,11 @@ func GetUserResponse(dCtx DevContext, req RequestForUser) (*UserResponse, error)
 
 	v := workflow.GetVersion(dCtx, "pause-flow", workflow.DefaultVersion, 1)
 	if v == 1 {
-		// update the flow status as paused
+		// update the flow status as paused. required if user feedback was requested from
+		// within the flow rather than via user intervention to pause it from
+		// the outside (both cases flow through this code path), otherwise the
+		// flow will appear "pausable" even though it's really just waiting for
+		// user response, i.e. paused
 		var flow domain.Flow
 		err := workflow.ExecuteActivity(dCtx, srv.Activities.GetFlow, dCtx.WorkspaceId, req.OriginWorkflowId).Get(dCtx, &flow)
 		if err != nil {
@@ -107,16 +111,6 @@ func GetUserResponse(dCtx DevContext, req RequestForUser) (*UserResponse, error)
 				return nil, fmt.Errorf("failed to set flow status to paused: %v", err)
 			}
 		}
-		/* TODO
-		err = workflow.ExecuteActivity(dCtx, srv.Activities.AddFlowEvent, dCtx.WorkspaceId, flow.Id, domain.StatusChangeEvent{
-			EventType: domain.StatusChangeEventType,
-			ParentId: flow.Id,
-			Status:   flow.Status,
-		}).Get(dCtx, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to add flow event: %v", err)
-		}
-		*/
 	}
 
 	// Wait for the 'userResponse' signal
@@ -126,6 +120,9 @@ func GetUserResponse(dCtx DevContext, req RequestForUser) (*UserResponse, error)
 		c.Receive(dCtx, &userResponse)
 	})
 	selector.Select(dCtx)
+
+	// NOTE: unpausing of the flow is always done via the complete flow action
+	// handler, so it is omitted here
 
 	return &userResponse, nil
 }
