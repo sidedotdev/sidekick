@@ -1,5 +1,5 @@
 <template>
-  <TaskCreationModal v-if="isModalOpen" @close="closeModal" @created="refresh" :status="newTaskStatus" />
+  <TaskModal v-if="isModalOpen" @close="closeModal" @created="refresh" :status="newTaskStatus" />
   <div class="kanban-board">
     <div
       v-for="agentType in ['human', 'llm', 'none'] as const"
@@ -20,13 +20,13 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { Task, AgentType } from '../lib/models'
+import type { FullTask, AgentType } from '../lib/models'
 import TaskCard from './TaskCard.vue'
-import TaskCreationModal from './TaskCreationModal.vue'
+import TaskModal from './TaskModal.vue'
 
 const props = defineProps<{
   workspaceId: string,
-  tasks: Task[]
+  tasks: FullTask[]
 }>()
 
 const columnNames = {
@@ -42,14 +42,14 @@ const groupedTasks = computed(() => {
     .reduce((grouped, task) => {
       grouped[task.agentType] = [...(grouped[task.agentType] || []), task];
       // sort by updated descending, if same then sort by id descending
-      grouped[task.agentType].sort((a: Task, b: Task) => {
+      grouped[task.agentType].sort((a: FullTask, b: FullTask) => {
         if (b.updated === a.updated) {
           return b.id > a.id ? 1 : -1;
         }
         return b.updated > a.updated ? 1 : -1;
       });
       return grouped;
-    }, {} as Record<AgentType, Task[]>);
+    }, {} as Record<AgentType, FullTask[]>);
 })
 
 

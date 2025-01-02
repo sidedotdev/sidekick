@@ -14,14 +14,14 @@
     <span v-if="task.archived" class="archived-label">Archived</span>
   </div>
 
-  <TaskEditModal v-if="isCopyModalOpen" :task="copiedTask" @close="closeCopyModal" @updated="onUpdated" />
-  <TaskEditModal v-if="isEditModalOpen" :task="task" @close="closeEditModal" @updated="onUpdated" />
+  <TaskModal v-if="isCopyModalOpen" :task="copiedTask" @close="closeCopyModal" @updated="onUpdated" />
+  <TaskModal v-if="isEditModalOpen" :task="task" @close="closeEditModal" @updated="onUpdated" />
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import type { FullTask, Task } from '../lib/models'
-import TaskEditModal from './TaskEditModal.vue'
+import TaskModal from './TaskModal.vue'
 import CopyIcon from './icons/CopyIcon.vue'
 import router from '@/router'
 

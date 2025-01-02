@@ -1,35 +1,44 @@
 <template>
-  <div class="modal-overlay" @click="safeClose">
-    <div class="modal" @click.stop>
-      <h2>{{ isEditMode ? 'Edit Task' : 'Create a New Task' }}</h2>
-      <form @submit.prevent="submitTask">
+  <div class="overlay" @click="safeClose"></div>
+  <div class="modal" @click.stop>
+    <h2>{{ isEditMode ? 'Edit Task' : 'New Task' }}</h2>
+    <form @submit.prevent="submitTask">
+      <div>
+        <label>Status</label>
         <SegmentedControl v-model="status" :options="statusOptions" />
-        <SegmentedControl v-model="flowType" :options="flowTypeOptions" />
-        <template v-if="status === 'to_do'">
-          <SegmentedControl v-model="envType" :options="envTypeOptions" />
-          <label>
-            <input type="checkbox" v-model="determineRequirements" />
-            Determine Requirements
-          </label>
-        </template>
-        <AutogrowTextarea v-model="description" placeholder="Task description" />
-        <AutogrowTextarea v-if="status === 'to_do'" v-model="planningPrompt" placeholder="Planning prompt" />
-        <div class="button-container">
-          <button type="button" @click="safeClose">Cancel</button>
-          <button type="submit">{{ isEditMode ? 'Update Task' : 'Create Task' }}</button>
-        </div>
-      </form>
-    </div>
+      </div>
+      <div>
+      <label>Flow</label>
+      <SegmentedControl v-model="flowType" :options="flowTypeOptions" />
+      </div>
+      <div v-if="devMode">
+        <label>Workdir</label>
+        <SegmentedControl v-model="envType" :options="envTypeOptions" />
+      </div>
+      <label>
+        <input type="checkbox" v-model="determineRequirements" />
+        Determine Requirements
+      </label>
+      <div>
+        <AutogrowTextarea id="description" v-model="description" placeholder="Task description - the more detail, the better" />
+      </div>
+      <!--AutogrowTextarea v-if="task.flowType === 'planned_dev'" v-model="planningPrompt" placeholder="Planning prompt" /-->
+      <div class="button-container">
+        <button type="button" @click="close">Cancel</button>
+        <button type="submit">{{ isEditMode ? 'Update Task' : 'Create Task' }}</button>
+      </div>
+    </form>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import AutogrowTextarea from './AutogrowTextarea.vue'
 import SegmentedControl from './SegmentedControl.vue'
 import { store } from '../lib/store'
-import type { Task, TaskStatus, AgentType } from '../lib/models'
+import type { Task, TaskStatus } from '../lib/models'
 
+const devMode = import.meta.env.MODE === 'development'
 const props = defineProps<{
   task?: Task
 }>()
@@ -51,20 +60,17 @@ const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
 
 const statusOptions = [
   { label: 'To Do', value: 'to_do' },
-  { label: 'In Progress', value: 'in_progress' },
-  { label: 'Complete', value: 'complete' },
-  { label: 'Failed', value: 'failed' },
+  { label: 'Drafting', value: 'drafting' },
 ]
 
 const flowTypeOptions = [
-  { label: 'Code', value: 'code' },
-  { label: 'Analyze', value: 'analyze' },
-  { label: 'Prompt', value: 'prompt' },
+  { label: 'Just Code', value: 'basic_dev' },
+  { label: 'Plan Then Code', value: 'planned_dev' },
 ]
 
 const envTypeOptions = [
-  { label: 'Local', value: 'local' },
-  { label: 'Prod', value: 'prod' },
+  { label: 'Repo Directory', value: 'local' },
+  { label: 'Git Worktree', value: 'local_git_worktree' }
 ]
 
 const submitTask = async () => {
@@ -113,60 +119,72 @@ const submitTask = async () => {
     emit('updated')
   }
 
-  emit('close')
+  close()
 }
 
 const safeClose = () => {
   const hasChanges = isEditMode.value
     ? description.value !== props.task!.description ||
-      status.value !== props.task!.status ||
       flowType.value !== props.task!.flowType ||
       envType.value !== props.task!.flowOptions?.envType ||
       determineRequirements.value !== props.task!.flowOptions?.determineRequirements ||
       planningPrompt.value !== props.task!.flowOptions?.planningPrompt
-    : description.value !== '' || flowType.value !== '' || status.value !== 'to_do'
+    : description.value !== ''
 
   if (hasChanges) {
     if (!window.confirm('Are you sure you want to close this modal? Your changes will be lost.')) {
       return
     }
   }
+  close()
+}
+const close = () => {
   emit('close')
 }
 </script>
 
 <style scoped>
-.modal-overlay {
+.overlay {
   position: fixed;
   top: 0;
+  right: 0;
+  bottom: 0;
   left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.5);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 1000;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 100000;
 }
 
 .modal {
-  background-color: var(--color-background);
-  padding: 2rem;
-  border-radius: 0.5rem;
-  width: 90%;
-  max-width: 40rem;
-  box-shadow: 0 0.25rem 0.5rem rgba(0, 0, 0, 0.1);
+  font-family: sans-serif;
+  border: 1px solid rgba(255, 255, 255, 0.02);
+  border-radius: 5px;
+  justify-content: center;
+  /*align-items: center;*/
+  background-color: var(--color-modal-background);
+  color: var(--color-modal-text);
+  z-index: 100000 !important;
+  padding: 30px;
+  width: 50rem;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  overflow: auto;
+  max-height: 100%;
+  transition: background-color 0.5s, color 0.5s;
 }
 
 h2 {
   margin-top: 0;
-  margin-bottom: 1rem;
+  margin-bottom: 1.5rem;
 }
 
 form {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
+  width: 100%
+}
+form > div {
+  width: 100%;
+  margin-top: 0.5rem;
 }
 
 .button-container {
@@ -189,22 +207,24 @@ button[type="submit"] {
   color: var(--color-text-contrast);
 }
 
-button[type="submit"]:hover {
-  background-color: var(--color-primary-hover);
-}
-
 button[type="button"] {
   background-color: var(--color-background-hover);
   color: var(--color-text);
 }
 
-button[type="button"]:hover {
-  background-color: var(--color-background-active);
-}
-
 label {
-  display: flex;
+  display: inline-block;
+  display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  margin: 12px 0;
+  min-width: 100px;
+}
+
+#description {
+  width: 100%;
+  min-height: 100px;
+  font-size: 16px;
+  margin: 10px 0;
 }
 </style>
