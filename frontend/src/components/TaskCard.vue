@@ -2,9 +2,7 @@
   <div :class="`task-card ${task.status.toLowerCase()}`" @click="cardClicked">
     <div class="actions">
       <button v-if="task.status == 'drafting'" class="action edit" @click.stop="openEditModal">✎️</button>
-      <button class="action copy" @click.stop="copyTask">
-        <CopyIcon :size="16" />
-      </button>
+      <button class="action copy" @click.stop="copyTask"><CopyIcon/></button>
       <button v-if="canArchive" class="action archive" @click.stop="archiveTask">📦</button>
       <button v-if="canCancel" class="action cancel" @click.stop="cancelTask">X</button>
       <button v-if="canDelete" class="action delete" @click.stop="deleteTask">X</button>
@@ -16,21 +14,39 @@
     <span v-if="task.archived" class="archived-label">Archived</span>
   </div>
 
+  <TaskEditModal v-if="isCopyModalOpen" :task="copiedTask" @close="closeCopyModal" @updated="onUpdated" />
   <TaskEditModal v-if="isEditModalOpen" :task="task" @close="closeEditModal" @updated="onUpdated" />
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { Task } from '../lib/models'
+import type { FullTask, Task } from '../lib/models'
 import TaskEditModal from './TaskEditModal.vue'
 import CopyIcon from './icons/CopyIcon.vue'
 import router from '@/router'
 
 const props = defineProps({
   task: {
-    type: Object as () => Task,
+    type: Object as () => FullTask,
     required: true,
   },
+})
+
+const copiedTask = computed(() => {
+  const copy: Task = {
+    title: props.task.title,
+    description: props.task.description,
+    workspaceId: props.task.workspaceId,
+    flowType: props.task.flowType,
+    flowOptions: props.task.flowOptions,
+    status: 'to_do',
+    agentType: 'llm',
+  }
+  delete copy.id
+  delete copy.flows
+  delete copy.updated
+  delete copy.created
+  return copy
 })
 
 interface Emits {
@@ -39,7 +55,6 @@ interface Emits {
   (event: 'error', message: string): void;
   (event: 'archived', id: string): void;
   (event: 'canceled', id: string): void;
-  (event: 'copied', id: string): void;
 }
 
 const emit = defineEmits<Emits>();
@@ -70,6 +85,7 @@ const canDelete = computed(() => props.task.status === 'drafting' || props.task.
 const canCancel = computed(() => ['to_do', 'in_progress', 'blocked'].includes(props.task.status) && !props.task.archived);
 
 const isEditModalOpen = ref(false);
+const isCopyModalOpen = ref(false);
 
 const openEditModal = () => {
   isEditModalOpen.value = true
@@ -78,6 +94,11 @@ const openEditModal = () => {
 const closeEditModal = () => {
   isEditModalOpen.value = false
 }
+
+const closeCopyModal = () => {
+  isCopyModalOpen.value = false
+}
+
 
 const archiveTask = async () => {
   const {id, workspaceId} = props.task
@@ -132,25 +153,7 @@ const onUpdated = async () => {
 }
 
 const copyTask = async () => {
-  const { workspaceId, title, description, agentType, flowOptions } = props.task
-  const response = await fetch(`/api/v1/workspaces/${workspaceId}/tasks`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      title: `Copy of ${title}`,
-      description,
-      status: 'to_do',
-      agentType,
-      flowOptions
-    }),
-  })
-  if (response.ok) {
-    const newTask = await response.json()
-    emit('updated', newTask.id)
-    emit('copied', newTask.id)
-  } else {
-    emit('error', 'Failed to copy task')
-  }
+  isCopyModalOpen.value = true
 }
 
 const cancelTask = async () => {
@@ -348,5 +351,13 @@ const cancelTask = async () => {
   background-color: #808080;
   color: var(--status-label-color);
   font-family: "JetBrains Mono", monospace;
+}
+
+.action.copy {
+  color: #000;
+}
+.action.copy svg {
+  width: 0.8rem;
+  height: 0.8rem;
 }
 </style>
