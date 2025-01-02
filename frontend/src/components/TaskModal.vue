@@ -55,7 +55,7 @@ const description = ref(props.task?.description || '')
 const status = ref<TaskStatus>(props.task?.status || 'to_do')
 const flowType = ref(props.task?.flowType || localStorage.getItem('lastUsedFlowType') || '')
 const envType = ref(props.task?.flowOptions?.envType || localStorage.getItem('lastUsedEnvType') || 'local')
-const determineRequirements = ref(props.task?.flowOptions?.determineRequirements || false)
+const determineRequirements = ref(props.task?.flowOptions?.determineRequirements || true)
 const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
 
 const statusOptions = [
