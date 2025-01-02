@@ -18,6 +18,16 @@ type ChatMessage struct {
 	Name       string `json:"name"`
 	ToolCallId string `json:"toolCallId"`
 	IsError    bool   `json:"isError"`
+
+	/* temporary, until we move to using a slice of content blocks */
+	CacheControl string `json:"cacheControl"`
+}
+
+// TODO ChatMessage.Content should be changed to []ContentBlock
+type ContentBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+	CacheControl string `json:"cacheControl"`
 }
 
 type ChatMessageRole string

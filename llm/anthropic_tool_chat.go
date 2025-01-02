@@ -28,6 +28,7 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 
 	httpClient := &http.Client{Timeout: 10 * time.Minute}
 	client := anthropic.NewClient(
+		//option.WithBaseURL("https://api.anthropic.com"),
 		option.WithAPIKey(token),
 		option.WithHTTPClient(httpClient), // NOTE: WithRequestTimeout was causing failure after a single token
 	)
@@ -162,18 +163,36 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 
 		if msg.Content != "" {
 			if msg.Role == ChatMessageRoleTool {
-				blocks = append(blocks, anthropic.NewToolResultBlock(msg.ToolCallId, msg.Content, msg.IsError))
+				block := anthropic.NewToolResultBlock(msg.ToolCallId, msg.Content, msg.IsError)
+				if msg.CacheControl != "" {
+					block.CacheControl = anthropic.F(anthropic.CacheControlEphemeralParam{
+						Type: anthropic.F(anthropic.CacheControlEphemeralType(msg.CacheControl)),
+					})
+				}
+				blocks = append(blocks, block)
 			} else {
-				blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
+				block := anthropic.NewTextBlock(msg.Content)
+				if msg.CacheControl != "" {
+					block.CacheControl = anthropic.F(anthropic.CacheControlEphemeralParam{
+						Type: anthropic.F(anthropic.CacheControlEphemeralType(msg.CacheControl)),
+					})
+				}
+				blocks = append(blocks, block)
 			}
 		}
 		for _, toolCall := range msg.ToolCalls {
 			args := make(map[string]any, 0)
 			err := json.Unmarshal([]byte(RepairJson(toolCall.Arguments)), &args)
 			if err != nil {
+				// anthropic requires valid json, but didn't give us valid json. we improvise.
 				args["invalid_json_stringified"] = toolCall.Arguments
 			}
 			toolUseBlock := anthropic.NewToolUseBlockParam(toolCall.Id, toolCall.Name, args)
+			if msg.CacheControl != "" {
+				toolUseBlock.CacheControl = anthropic.F(anthropic.CacheControlEphemeralParam{
+					Type: anthropic.F(anthropic.CacheControlEphemeralType(msg.CacheControl)),
+				})
+			}
 			blocks = append(blocks, toolUseBlock)
 		}
 		anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
