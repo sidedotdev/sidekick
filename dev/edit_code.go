@@ -42,15 +42,11 @@ func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, cont
 
 editLoop:
 	for {
-		// Check if we're paused and need user guidance
+		// pause checkpoint
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return fmt.Errorf("failed to make user request when paused: %v", err)
 		} else if response != nil {
-			// Add the feedback to chat history and reset feedback counter
-			*chatHistory = append(*chatHistory, llm.ChatMessage{
-				Role:    llm.ChatMessageRoleSystem,
-				Content: fmt.Sprintf("IMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content),
-			})
+			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
 			attemptsSinceLastFeedback = 0
 		}
 
@@ -135,15 +131,11 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	}
 
 	for {
-		// Check if we're paused and need user guidance
+		// pause checkpoint
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return nil, fmt.Errorf("failed to make user request when paused: %v", err)
 		} else if response != nil {
-			// Add the feedback to chat history
-			*chatHistory = append(*chatHistory, llm.ChatMessage{
-				Role:    llm.ChatMessageRoleSystem,
-				Content: fmt.Sprintf("IMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content),
-			})
+			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
 			attemptsSinceLastEditBlockOrFeedback = 0
 		}
 
