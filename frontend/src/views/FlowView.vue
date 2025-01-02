@@ -8,7 +8,7 @@
         <a :href="`idea://open?file=${encodeURIComponent(workDir(worktree))}`" class="vs-code-button">Intellij IDEA</a>
       </p>
     </div>
-    <div v-if="!['completed', 'failed', 'canceled'].includes(flow.status)" class="pause-button-container">
+    <div v-if="!['completed', 'failed', 'canceled', 'paused'].includes(flow.status)" class="pause-button-container">
       <button @click="pauseFlow" class="pause-button">⏸︎</button>
     </div>
   </div>
@@ -81,32 +81,40 @@ onMounted(async () => {
       try {
         setShortContent()
         const flowEvent = JSON.parse(event.data);
-        if (flowEvent.eventType === 'chat_message_delta') {
-          const delta = flowEvent.chatMessageDelta as ChatMessageDelta;
-          const actionIndex = flowActions.value.findIndex(action => action.id === flowEvent.flowActionId);
-          if (actionIndex !== -1) {
-            const action = flowActions.value[actionIndex];
-            const contentBuilder: string[] = [];
+        switch (flowEvent.eventType) {
+          case 'chat_message_delta': {
+            const delta = flowEvent.chatMessageDelta as ChatMessageDelta;
+            const actionIndex = flowActions.value.findIndex(action => action.id === flowEvent.flowActionId);
+            if (actionIndex !== -1) {
+              const action = flowActions.value[actionIndex];
+              const contentBuilder: string[] = [];
 
-            if (delta.content) {
-              contentBuilder.push(delta.content);
+              if (delta.content) {
+                contentBuilder.push(delta.content);
+              }
+
+              if (delta.toolCalls) {
+                delta.toolCalls.forEach(toolCall => {
+                  if (toolCall.name) {
+                    contentBuilder.push(`toolName = ${toolCall.name}\n`);
+                  }
+                  if (toolCall.arguments) {
+                    contentBuilder.push(toolCall.arguments);
+                  }
+                });
+              }
+
+              action.actionResult += contentBuilder.join('\n');
+              flowActions.value[actionIndex] = action;
+            } else {
+              console.error(`FlowAction with id ${flowEvent.flowActionId} not found.`);
             }
-
-            if (delta.toolCalls) {
-              delta.toolCalls.forEach(toolCall => {
-                if (toolCall.name) {
-                  contentBuilder.push(`toolName = ${toolCall.name}\n`);
-                }
-                if (toolCall.arguments) {
-                  contentBuilder.push(toolCall.arguments);
-                }
-              });
+          }
+          break
+          case 'status_change': {
+            if (flow.value && flowEvent.parentId == flow.value.id) {
+              flow.value.status = flowEvent.status;
             }
-
-            action.actionResult += contentBuilder.join('\n');
-            flowActions.value[actionIndex] = action;
-          } else {
-            console.error(`FlowAction with id ${flowEvent.flowActionId} not found.`);
           }
         }
       } catch (err) {
