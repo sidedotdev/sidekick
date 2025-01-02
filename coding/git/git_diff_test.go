@@ -3,7 +3,6 @@ package git
 import (
 	"context"
 	"io/fs"
-	"log"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -35,6 +34,7 @@ type GitDiffWorkflowTestSuite struct {
 }
 
 func (s *GitDiffWorkflowTestSuite) SetupTest() {
+	s.T().Helper()
 	// log warnings only (default debug level is too noisy when tests fail)
 	th := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{AddSource: false, Level: slog.LevelWarn})
 	s.SetLogger(tlog.NewStructuredLogger(slog.New(th)))
@@ -56,28 +56,24 @@ func (s *GitDiffWorkflowTestSuite) SetupTest() {
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
 	s.env.RegisterActivity(env.EnvRunCommandActivity)
 
-	// TODO create a helper function: CreateTestLocalEnvironment
-	dir, err := os.MkdirTemp("", "git_diff_test")
-	if err != nil {
-		log.Fatalf("Failed to create temp dir: %v", err)
-	}
+	// Create temporary directory using t.TempDir()
+	s.dir = s.T().TempDir()
 	devEnv, err := env.NewLocalEnv(context.Background(), env.LocalEnvParams{
-		RepoDir: dir,
+		RepoDir: s.dir,
 	})
 	if err != nil {
-		log.Fatalf("Failed to create local environment: %v", err)
+		s.T().Fatalf("Failed to create local environment: %v", err)
 	}
-	s.dir = dir
 	s.envContainer = env.EnvContainer{
 		Env: devEnv,
 	}
 
 	// init git repo
 	cmd := exec.Command("git", "init")
-	cmd.Dir = dir
+	cmd.Dir = s.dir
 	err = cmd.Run()
 	if err != nil {
-		log.Fatalf("Failed to init git repo: %v", err)
+		s.T().Fatalf("Failed to init git repo: %v", err)
 	}
 }
 

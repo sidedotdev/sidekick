@@ -2,7 +2,6 @@ package dev
 
 import (
 	"context"
-	"log"
 	"log/slog"
 	"os"
 	"sidekick/common"
@@ -68,15 +67,12 @@ func (s *RunTestsTestSuite) SetupTest() {
 	var fa *flow_action.FlowActivities
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	dir, err := os.MkdirTemp("", "RunTestsTestSuite")
-	if err != nil {
-		log.Fatalf("Failed to create temp dir: %v", err)
-	}
+	dir := s.T().TempDir()
 	devEnv, err := env.NewLocalEnv(context.Background(), env.LocalEnvParams{
 		RepoDir: dir,
 	})
 	if err != nil {
-		log.Fatalf("Failed to create local environment: %v", err)
+		s.T().Fatalf("Failed to create local environment: %v", err)
 	}
 	s.envContainer = env.EnvContainer{
 		Env: devEnv,

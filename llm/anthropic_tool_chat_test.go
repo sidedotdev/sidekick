@@ -1,272 +1,320 @@
 package llm
 
 import (
+	"context"
+	"encoding/json"
+	"os"
 	"sidekick/common"
+	"sidekick/secret_manager"
+	"strings"
 	"testing"
 
-	"github.com/ehsanul/anthropic-go/v3/pkg/anthropic"
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/invopop/jsonschema"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAnthropicToChatMessageDelta(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    anthropic.MessageStreamDelta
-		expected ChatMessageDelta
-		panics   bool
-	}{
-		{
-			name: "text_delta type",
-			input: anthropic.MessageStreamDelta{
-				Type: "text_delta",
-				Text: "Hello, world!",
-			},
-			expected: ChatMessageDelta{
-				Role:    ChatMessageRoleAssistant,
-				Content: "Hello, world!",
-			},
-		},
-		{
-			name: "input_json_delta type",
-			input: anthropic.MessageStreamDelta{
-				Type:        "input_json_delta",
-				PartialJson: `{"key": "value"}`,
-			},
-			expected: ChatMessageDelta{
-				Role: ChatMessageRoleAssistant,
-				ToolCalls: []ToolCall{
-					{
-						Arguments: `{"key": "value"}`,
-					},
+func TestAnthropicChatStream_Unauthorized(t *testing.T) {
+	ctx := context.Background()
+	mockSecretManager := &secret_manager.MockSecretManager{}
+	anthropicToolChat := AnthropicToolChat{}
+	options := ToolChatOptions{
+		Params: ToolChatParams{
+			Messages: []ChatMessage{
+				{
+					Role:    ChatMessageRoleUser,
+					Content: "Hello",
 				},
 			},
+			Model:    AnthropicDefaultModel,
+			Provider: ToolChatProvider(common.AnthropicChatProvider),
 		},
-		{
-			name: "unsupported delta type",
-			input: anthropic.MessageStreamDelta{
-				Type: "unsupported_type",
-			},
-			panics: true,
+		Secrets: secret_manager.SecretManagerContainer{
+			SecretManager: mockSecretManager,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.panics {
-				assert.Panics(t, func() {
-					anthropicToChatMessageDelta(tt.input)
-				})
-			} else {
-				result := anthropicToChatMessageDelta(tt.input)
-				assert.Equal(t, tt.expected, result)
-			}
-		})
-	}
-}
-
-func TestAnthropicToChatMessageResponse(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    anthropic.MessageResponse
-		expected *ChatMessageResponse
-	}{
-		{
-			name: "Text content only",
-			input: anthropic.MessageResponse{
-				Content: []anthropic.MessagePartResponse{
-					{Type: "text", Text: "Hello, world!"},
-				},
-				StopReason:   "stop_sequence",
-				StopSequence: "\\n\\nHuman:",
-				Usage: anthropic.MessageUsage{
-					InputTokens:  10,
-					OutputTokens: 20,
-				},
-				Model: string(anthropic.Claude3Opus),
-			},
-			expected: &ChatMessageResponse{
-				ChatMessage: ChatMessage{
-					Role:    ChatMessageRoleAssistant,
-					Content: "Hello, world!",
-				},
-				StopReason:   "stop_sequence",
-				StopSequence: "\\n\\nHuman:",
-				Usage: Usage{
-					InputTokens:  10,
-					OutputTokens: 20,
-				},
-				Model:    string(anthropic.Claude3Opus),
-				Provider: common.AnthropicChatProvider,
-			},
-		},
-		{
-			name: "Tool call only",
-			input: anthropic.MessageResponse{
-				Content: []anthropic.MessagePartResponse{
-					{
-						Type:  "tool_use",
-						ID:    "tool1",
-						Name:  "search",
-						Input: map[string]interface{}{"query": "golang testing"},
-					},
-				},
-				StopReason: "end_turn",
-				Usage: anthropic.MessageUsage{
-					InputTokens:  5,
-					OutputTokens: 15,
-				},
-				Model: string(anthropic.Claude3Haiku),
-			},
-			expected: &ChatMessageResponse{
-				ChatMessage: ChatMessage{
-					Role: ChatMessageRoleAssistant,
-					ToolCalls: []ToolCall{
-						{
-							Id:        "tool1",
-							Name:      "search",
-							Arguments: `{"query":"golang testing"}`,
-						},
-					},
-				},
-				StopReason: "end_turn",
-				Usage: Usage{
-					InputTokens:  5,
-					OutputTokens: 15,
-				},
-				Model:    string(anthropic.Claude3Haiku),
-				Provider: common.AnthropicChatProvider,
-			},
-		},
-		{
-			name: "Combination of text and tool call",
-			input: anthropic.MessageResponse{
-				Content: []anthropic.MessagePartResponse{
-					{Type: "text", Text: "Here's the search result:"},
-					{
-						Type:  "tool_use",
-						ID:    "tool2",
-						Name:  "search",
-						Input: map[string]interface{}{"query": "go unit testing"},
-					},
-					{Type: "text", Text: "Let me know if you need more information."},
-				},
-				StopReason: "max_tokens",
-				Usage: anthropic.MessageUsage{
-					InputTokens:  15,
-					OutputTokens: 30,
-				},
-				Model: string(anthropic.Claude35Sonnet),
-			},
-			expected: &ChatMessageResponse{
-				ChatMessage: ChatMessage{
-					Role:    ChatMessageRoleAssistant,
-					Content: "Here's the search result:Let me know if you need more information.",
-					ToolCalls: []ToolCall{
-						{
-							Id:        "tool2",
-							Name:      "search",
-							Arguments: `{"query":"go unit testing"}`,
-						},
-					},
-				},
-				StopReason: "max_tokens",
-				Usage: Usage{
-					InputTokens:  15,
-					OutputTokens: 30,
-				},
-				Model:    string(anthropic.Claude35Sonnet),
-				Provider: common.AnthropicChatProvider,
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := anthropicToChatMessageResponse(tt.input)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
+	deltaChan := make(chan ChatMessageDelta)
+	defer close(deltaChan)
+	_, err := anthropicToolChat.ChatStream(ctx, options, deltaChan)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "401")
 }
 
 func TestAnthropicFromChatMessages(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    []ChatMessage
-		expected []anthropic.MessagePartRequest
-	}{
+	input := []ChatMessage{
 		{
-			name: "Simple text messages",
-			input: []ChatMessage{
-				{Role: ChatMessageRoleUser, Content: "Hello"},
-				{Role: ChatMessageRoleAssistant, Content: "Hi there!"},
-			},
-			expected: []anthropic.MessagePartRequest{
-				{Role: "user", Content: []anthropic.ContentBlock{anthropic.NewTextContentBlock("Hello")}},
-				{Role: "assistant", Content: []anthropic.ContentBlock{anthropic.NewTextContentBlock("Hi there!")}},
-			},
+			Role:    ChatMessageRoleSystem,
+			Content: "System message",
 		},
 		{
-			name: "Message with tool call",
-			input: []ChatMessage{
-				{Role: ChatMessageRoleAssistant, Content: "Let me search that for you.", ToolCalls: []ToolCall{
-					{Id: "tool1", Name: "search", Arguments: `{"query":"golang testing"}`},
-				}},
-			},
-			expected: []anthropic.MessagePartRequest{
+			Role:    ChatMessageRoleUser,
+			Content: "Hello",
+		},
+		{
+			Role:    ChatMessageRoleAssistant,
+			Content: "Hi there!",
+			ToolCalls: []ToolCall{
 				{
-					Role: "assistant",
-					Content: []anthropic.ContentBlock{
-						anthropic.NewTextContentBlock("Let me search that for you."),
-						anthropic.ToolUseContentBlock{
-							Type:  "tool_use",
-							ID:    "tool1",
-							Name:  "search",
-							Input: map[string]interface{}{"query": "golang testing"},
-						},
-					},
+					Id:        "tool_123",
+					Name:      "search",
+					Arguments: `{"query": "test"}`,
 				},
 			},
 		},
 		{
-			name: "Tool call response",
-			input: []ChatMessage{
-				{Role: ChatMessageRoleAssistant, Content: "", ToolCalls: []ToolCall{
-					{Id: "tool1", Name: "search", Arguments: `{"query":"something"}`},
-				}},
-				{Role: ChatMessageRoleTool, ToolCallId: "tool1", Content: "results", Name: "search"},
-			},
-			expected: []anthropic.MessagePartRequest{
-				{Role: "assistant", Content: []anthropic.ContentBlock{
-					anthropic.ToolUseContentBlock{Type: "tool_use", ID: "tool1", Name: "search", Input: map[string]any{"query": "something"}},
-				}},
-				{Role: "user", Content: []anthropic.ContentBlock{anthropic.NewToolResultContentBlock("tool1", "results", false)}},
-			},
-		},
-		{
-			name: "Consecutive messages from same role",
-			input: []ChatMessage{
-				{Role: ChatMessageRoleUser, Content: "Hello"},
-				{Role: ChatMessageRoleUser, Content: "How are you?"},
-				{Role: ChatMessageRoleAssistant, Content: "Hi!"},
-				{Role: ChatMessageRoleAssistant, Content: "I'm doing well, thank you."},
-			},
-			expected: []anthropic.MessagePartRequest{
-				{Role: "user", Content: []anthropic.ContentBlock{
-					anthropic.NewTextContentBlock("Hello"),
-					anthropic.NewTextContentBlock("How are you?"),
-				}},
-				{Role: "assistant", Content: []anthropic.ContentBlock{
-					anthropic.NewTextContentBlock("Hi!"),
-					anthropic.NewTextContentBlock("I'm doing well, thank you."),
-				}},
-			},
+			Role:       ChatMessageRoleTool,
+			ToolCallId: "tool_123",
+			Name:       "search",
+			Content:    "Not found: test",
+			IsError:    false,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := anthropicFromChatMessages(tt.input)
-			assert.Equal(t, tt.expected, result)
-		})
+	result, err := anthropicFromChatMessages(input)
+	assert.NoError(t, err)
+	assert.Len(t, result, 4)
+
+	assert.Equal(t, anthropic.MessageParamRoleUser, result[0].Role.Value)
+	assert.Len(t, result[0].Content.Value, 1)
+	anthropicTextBlock := result[0].Content.Value[0].(anthropic.TextBlockParam)
+	assert.Equal(t, anthropic.TextBlockParamTypeText, anthropicTextBlock.Type.Value)
+	assert.Equal(t, "System message", anthropicTextBlock.Text.Value)
+
+	assert.Equal(t, anthropic.MessageParamRoleUser, result[1].Role.Value)
+	assert.Len(t, result[1].Content.Value, 1)
+	anthropicTextBlock2 := result[1].Content.Value[0].(anthropic.TextBlockParam)
+	assert.Equal(t, anthropic.TextBlockParamTypeText, anthropicTextBlock2.Type.Value)
+	assert.Equal(t, "Hello", anthropicTextBlock2.Text.Value)
+
+	assert.Equal(t, anthropic.MessageParamRoleAssistant, result[2].Role.Value)
+	assert.Len(t, result[2].Content.Value, 2)
+	anthropicTextBlock3 := result[2].Content.Value[0].(anthropic.TextBlockParam)
+	assert.Equal(t, anthropic.TextBlockParamTypeText, anthropicTextBlock3.Type.Value)
+	assert.Equal(t, "Hi there!", anthropicTextBlock3.Text.Value)
+
+	anthropicToolUseBlock := result[2].Content.Value[1].(anthropic.ToolUseBlockParam)
+	assert.Equal(t, anthropic.ToolUseBlockParamTypeToolUse, anthropicToolUseBlock.Type.Value)
+	assert.Equal(t, "search", anthropicToolUseBlock.Name.Value)
+	assert.Equal(t, `{"query": "test"}`, string(anthropicToolUseBlock.Input.Value.(json.RawMessage)))
+
+	anthropicToolResultBlock := result[3].Content.Value[0].(anthropic.ToolResultBlockParam)
+	assert.Equal(t, anthropic.ToolResultBlockParamTypeToolResult, anthropicToolResultBlock.Type.Value)
+	assert.Equal(t, "Not found: test", anthropicToolResultBlock.Content.Value[0].(anthropic.TextBlockParam).Text.Value)
+	assert.Equal(t, "tool_123", anthropicToolResultBlock.ToolUseID.Value)
+	assert.Equal(t, false, anthropicToolResultBlock.IsError.Value)
+}
+
+func TestAnthropicToChatMessageResponse(t *testing.T) {
+	input := &anthropic.Message{
+		ID:   "msg_123",
+		Role: anthropic.MessageRoleAssistant,
+		Content: []anthropic.ContentBlock{
+			{
+				Type: anthropic.ContentBlockTypeText,
+				Text: "Hello, how can I help you?",
+			},
+			{
+				Type:  anthropic.ContentBlockTypeToolUse,
+				Name:  "search",
+				Input: json.RawMessage(`{"query": "test"}`),
+			},
+		},
+		Model:      "claude-3-sonnet-20240229",
+		StopReason: anthropic.MessageStopReasonEndTurn,
+		Usage: anthropic.Usage{
+			InputTokens:  100,
+			OutputTokens: 50,
+		},
 	}
+
+	result, err := anthropicToChatMessageResponse(*input)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	assert.Equal(t, "msg_123", result.Id)
+	assert.Equal(t, ChatMessageRoleAssistant, result.Role)
+	assert.Equal(t, "Hello, how can I help you?", result.Content)
+	assert.Len(t, result.ToolCalls, 1)
+	assert.Equal(t, "search", result.ToolCalls[0].Name)
+	assert.Equal(t, `{"query": "test"}`, string(result.ToolCalls[0].Arguments))
+	assert.Equal(t, "claude-3-sonnet-20240229", result.Model)
+	assert.Equal(t, string(anthropic.MessageStopReasonEndTurn), result.StopReason)
+	assert.Equal(t, Usage{
+		InputTokens:  100,
+		OutputTokens: 50,
+	}, result.Usage)
+	assert.Equal(t, common.AnthropicChatProvider, result.Provider)
+}
+
+type getCurrentWeather struct {
+	Location string `json:"location"`
+	Unit     string `json:"unit" jsonschema:"enum=celsius,fahrenheit"`
+}
+
+func TestAnthropicToolChatIntegration(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
+	ctx := context.Background()
+	chat := AnthropicToolChat{}
+
+	// Mock tool for testing
+	mockTool := &Tool{
+		Name:        "get_current_weather",
+		Description: "Get the current weather in a given location",
+		Parameters:  (&jsonschema.Reflector{ExpandedStruct: true}).Reflect(&getCurrentWeather{}),
+	}
+
+	options := ToolChatOptions{
+		Params: ToolChatParams{
+			Model: anthropic.ModelClaude_3_Haiku_20240307, // cheapest model for integration testing
+			Messages: []ChatMessage{
+				{Role: ChatMessageRoleUser, Content: "First say hi. After thatn, then look up what the weather in New York"},
+			},
+			Tools: []*Tool{mockTool},
+		},
+		Secrets: secret_manager.SecretManagerContainer{
+			SecretManager: &secret_manager.KeyringSecretManager{},
+		},
+	}
+
+	deltaChan := make(chan ChatMessageDelta)
+	var allDeltas []ChatMessageDelta
+
+	go func() {
+		for delta := range deltaChan {
+			allDeltas = append(allDeltas, delta)
+		}
+	}()
+
+	response, err := chat.ChatStream(ctx, options, deltaChan)
+	close(deltaChan)
+
+	if err != nil {
+		t.Fatalf("ChatStream returned an error: %v", err)
+	}
+
+	if response == nil {
+		t.Fatal("ChatStream returned a nil response")
+	}
+
+	// Check that we received deltas
+	if len(allDeltas) == 0 {
+		t.Error("No deltas received")
+	}
+
+	// Check that the response contains content
+	if response.Content == "" {
+		t.Error("Response content is empty")
+	}
+
+	// Check that the response includes a tool call
+	if len(response.ToolCalls) == 0 {
+		t.Error("No tool calls in the response")
+	}
+
+	// Verify tool call
+	toolCall := response.ToolCalls[0]
+	if toolCall.Name != "get_current_weather" {
+		t.Errorf("Expected tool call to 'get_current_weather', got '%s'", toolCall.Name)
+	}
+
+	// Parse tool call arguments
+	var args map[string]string
+	err = json.Unmarshal([]byte(toolCall.Arguments), &args)
+	if err != nil {
+		t.Fatalf("Failed to parse tool call arguments: %v", err)
+	}
+
+	// Check tool call arguments
+	if !strings.Contains(strings.ToLower(args["location"]), "new york") {
+		t.Errorf("Expected location to contain 'New York', got '%s'", args["location"])
+	}
+	if args["unit"] != "celsius" && args["unit"] != "fahrenheit" {
+		t.Errorf("Expected unit 'celsius' or 'fahrenheit', got '%s'", args["unit"])
+	}
+
+	t.Logf("Response content: %s", response.Content)
+	t.Logf("Tool call: %+v", toolCall)
+
+	// check multi-turn works
+	t.Run("MultiTurn", func(t *testing.T) {
+		options.Params.Messages = append(options.Params.Messages, response.ChatMessage)
+		options.Params.Messages = append(options.Params.Messages, ChatMessage{
+			Role:       ChatMessageRoleTool,
+			Content:    "Warm and Sunny",
+			ToolCallId: toolCall.Id,
+			Name:       toolCall.Name,
+			IsError:    false,
+		})
+		options.Params.Messages = append(options.Params.Messages, ChatMessage{
+			Role:    ChatMessageRoleUser,
+			Content: "How about London?",
+		})
+
+		deltaChan := make(chan ChatMessageDelta)
+		var allDeltas []ChatMessageDelta
+
+		go func() {
+			for delta := range deltaChan {
+				allDeltas = append(allDeltas, delta)
+			}
+		}()
+
+		response, err := chat.ChatStream(ctx, options, deltaChan)
+		close(deltaChan)
+
+		if err != nil {
+			t.Fatalf("ChatStream returned an error: %v", err)
+		}
+
+		if response == nil {
+			t.Fatal("ChatStream returned a nil response")
+		}
+
+		// Check that we received deltas
+		if len(allDeltas) == 0 {
+			t.Error("No deltas received")
+		}
+
+		// Check that the response contains content
+		if response.Content == "" {
+			t.Error("Response content is empty")
+		}
+
+		// Check that the response includes a tool call
+		if len(response.ToolCalls) == 0 {
+			t.Error("No tool calls in the response")
+		}
+
+		// Verify tool call
+		toolCall := response.ToolCalls[0]
+		if toolCall.Name != "get_current_weather" {
+			t.Errorf("Expected tool call to 'get_current_weather', got '%s'", toolCall.Name)
+		}
+
+		// Parse tool call arguments
+		var args map[string]string
+		err = json.Unmarshal([]byte(toolCall.Arguments), &args)
+		if err != nil {
+			t.Fatalf("Failed to parse tool call arguments: %v", err)
+		}
+
+		// Check tool call arguments
+		if !strings.Contains(strings.ToLower(args["location"]), "london") {
+			t.Errorf("Expected location to contain 'london', got '%s'", args["location"])
+		}
+		if args["unit"] != "celsius" && args["unit"] != "fahrenheit" {
+			t.Errorf("Expected unit 'celsius' or 'fahrenheit', got '%s'", args["unit"])
+		}
+
+		t.Logf("Response content: %s", response.Content)
+		t.Logf("Tool call: %+v", toolCall)
+	})
 }

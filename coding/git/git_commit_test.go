@@ -140,15 +140,12 @@ func TestGitCommitActivity_NoChangesToCommit(t *testing.T) {
 func createTempGitRepo(t *testing.T) (string, func()) {
 	t.Helper()
 
-	tempDir, err := os.MkdirTemp("", "gitcommitactivitytest")
-	require.NoError(t, err)
+	tempDir := t.TempDir()
 
 	cmd := exec.Command("git", "init")
 	cmd.Dir = tempDir
-	err = cmd.Run()
+	err := cmd.Run()
 	require.NoError(t, err)
 
-	return tempDir, func() {
-		os.RemoveAll(tempDir)
-	}
+	return tempDir, func() {}
 }

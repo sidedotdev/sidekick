@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"sidekick"
-	"sidekick/srv"
 
 	// Embedding the frontend build files
 	_ "embed"
@@ -14,18 +13,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
-
-var (
-	service srv.Service
-)
-
-func init() {
-	var err error
-	service, err = sidekick.GetService()
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize storage")
-	}
-}
 
 type program struct{}
 
@@ -70,6 +57,10 @@ func interactiveMain() {
 
 	switch os.Args[1] {
 	case "init":
+		service, err := sidekick.GetService()
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to initialize storage")
+		}
 		handler := NewInitCommandHandler(service)
 		if err := handler.handleInitCommand(); err != nil {
 			fmt.Println("Initialization failed:", err)

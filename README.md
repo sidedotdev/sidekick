@@ -105,14 +105,16 @@ your tests are fast and reliable. It's also helpful to configure them to provide
 shortened output, though Sidekick will automatically summarize long test outputs
 too, at the cost of time and accuracy.
 
+<!-- TODO: uncomment when this isn't limited to developer-mode only
 #### worktree_setup
 
 The `worktree_setup` field allows you to specify a shell script that will be
 executed when setting up a local git worktree environment. Worktrees are used to
 let Sidekick work without polluting your main working directory, and allows
-multiple tasks to be done in parallel. This is useful for performing additional
-setup steps that are required for your development environment, such as
-installing project-specific dependencies.
+multiple tasks to be done in parallel with conflicts. This is useful for
+performing additional setup steps that are required for your development
+environment, such as installing project-specific dependencies.
+-->
 
 ### .sideignore
 
