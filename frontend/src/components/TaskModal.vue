@@ -24,7 +24,7 @@
       </div>
       <!--AutogrowTextarea v-if="task.flowType === 'planned_dev'" v-model="planningPrompt" placeholder="Planning prompt" /-->
       <div class="button-container">
-        <button type="button" @click="close">Cancel</button>
+        <button class="cancel" type="button" @click="close">Cancel</button>
         <button type="submit">{{ isEditMode ? 'Update Task' : 'Create Task' }}</button>
       </div>
     </form>
