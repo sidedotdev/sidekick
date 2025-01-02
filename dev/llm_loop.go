@@ -5,6 +5,8 @@ import (
 	"sidekick/llm"
 )
 
+var ErrPaused = fmt.Errorf("operation paused")
+
 // LlmIteration represents a single iteration in the LLM loop.
 type LlmIteration struct {
 	LlmLoopConfig
@@ -67,15 +69,24 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 		State:         config.initialState,
 	}
 
+	iterationsSinceLastFeedback := 0
+
 	for {
 		iteration.Num++
+		iterationsSinceLastFeedback++
 
 		if iteration.Num > config.maxIterations {
 			return nil, ErrMaxAttemptsReached
 		}
 
+		// Check for pause at the beginning of each iteration
+		_, err := UserRequestIfPaused(dCtx, fmt.Sprintf("LlmLoop iteration %d", iteration.Num), nil)
+		if err != nil {
+			return nil, fmt.Errorf("error checking for pause: %v", err)
+		}
+
 		// Get user feedback every N iterations
-		if iteration.Num > 0 && iteration.Num%config.maxIterationsBeforeFeedback == 0 {
+		if iterationsSinceLastFeedback >= config.maxIterationsBeforeFeedback {
 			guidanceContext := fmt.Sprintf("The LLM has looped %d times without finalizing. Please provide guidance or just say \"continue\" if they are on track.", iteration.Num)
 			userResponse, err := GetUserGuidance(dCtx, guidanceContext, nil)
 			if err != nil {
@@ -87,11 +98,34 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 				Role:    "user",
 				Content: userResponse.Content,
 			})
+
+			iterationsSinceLastFeedback = 0
 		}
 
-		result, err := loopFunc(iteration)
-		if err != nil || result != nil {
-			return result, err
+		// Use WithCancelOnPause for long-running operations
+		cancelCtx := dCtx.WithCancelOnPause()
+		result, err := loopFunc(&LlmIteration{
+			LlmLoopConfig: iteration.LlmLoopConfig,
+			Num:           iteration.Num,
+			ExecCtx:       cancelCtx,
+			ChatHistory:   iteration.ChatHistory,
+			State:         iteration.State,
+		})
+
+		if err != nil {
+			if err == ErrPaused {
+				continue
+			}
+			return nil, err
+		}
+
+		if result != nil {
+			return result, nil
+		}
+
+		// Check if paused after each iteration
+		if dCtx.GlobalState != nil && dCtx.GlobalState.Paused {
+			continue
 		}
 
 		// I think we want the loopFunc to have full control over managing chat history
