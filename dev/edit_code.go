@@ -140,6 +140,11 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		}
 
 		if attemptCount >= maxAttempts {
+			if len(extractedEditBlocks) > 0 {
+				// make use of the results so far, given there are some that are
+				// not yet applied: it may be sufficient
+				return extractedEditBlocks, nil
+			}
 			return nil, ErrMaxAttemptsReached
 		} else if attemptsSinceLastEditBlockOrFeedback > 0 && attemptsSinceLastEditBlockOrFeedback%3 == 0 {
 			guidanceContext := "The system has attempted to generate edits multiple times without success. Please provide some guidance."
@@ -189,6 +194,9 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		currentExtractedBlocks, err := ExtractEditBlocks(chatResponse.ChatMessage.Content)
 		if err != nil {
 			return []EditBlock{}, fmt.Errorf("failed to extract edit blocks: %v", err)
+		}
+		if len(currentExtractedBlocks) > 0 {
+			attemptsSinceLastEditBlockOrFeedback = 0
 		}
 		visibleCodeBlocks := extractAllCodeBlocks(authorEditBlockInput.Params.Messages)
 		for _, block := range currentExtractedBlocks {
