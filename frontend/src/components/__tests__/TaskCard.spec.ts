@@ -12,9 +12,10 @@ const task: FullTask = {
   description: 'This is a test task',
   status: 'drafting',
   agentType: 'llm',
+  flowType: 'basic_dev',
   flows: [],
   created: new Date(),
-  updated: new Date()
+  updated: new Date(),
 }
 
   it('renders without errors', () => {
