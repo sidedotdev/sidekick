@@ -9,7 +9,7 @@ import (
 )
 
 func GetConnection() (*nats.Conn, error) {
-	nc, err := nats.Connect(fmt.Sprintf("nats://%s:%d", common.GetNatsServerHost(), common.GetNatsServerPort()))
+	nc, err := nats.Connect(fmt.Sprintf("nats://%s:%d", common.GetNatsServerHost(), common.GetNatsServerPort()), nats.MaxReconnects(-1))
 
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to NATS")
