@@ -138,6 +138,7 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 			// we add to the chat history as soon as we get the feedback instead
 			// of in the next iteration
 			promptInfo = feedbackInfo
+			iterationsSinceLastFeedback = 0
 		}
 
 		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
