@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/llm"
@@ -96,6 +95,7 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 
 	chatHistory := &[]llm.ChatMessage{}
 	i := 0
+	iterationsSinceLastFeedback := 0
 
 	maxIterations := 17
 	repoConfig := dCtx.RepoConfig
@@ -108,10 +108,21 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 	hasRevisedPerReproPrompt := false
 	var devPlan DevPlan
 	for {
-		i = i + 1
+		i++
+		iterationsSinceLastFeedback++
+
+		response, err := UserRequestIfPaused(dCtx, fmt.Sprintf("Planning iteration %d", i), nil)
+		if err != nil {
+			return nil, fmt.Errorf("error in UserRequestIfPaused: %w", err)
+		}
+		if response != nil && response.Content != "" {
+			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
+			iterationsSinceLastFeedback = 0
+		}
+
 		if i > maxIterations {
 			return nil, ErrMaxAttemptsReached
-		} else if i%maxIterationsBeforeFeedback == 0 && !devPlan.Complete {
+		} else if iterationsSinceLastFeedback >= maxIterationsBeforeFeedback && !devPlan.Complete {
 			// TODO include the plan so far if any. If plan is empty (no learnings and no steps), use a different guidance context string.
 			// TODO don't ask for feedback if the user was just asked via get_help_or_input
 			guidanceContext := "The LLM has looped 5 times without finalizing a plan. Please provide guidance or just say \"continue\" if they are on track."
@@ -132,12 +143,20 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
 		ManageChatHistory(dCtx, chatHistory, maxLength)
 		planningInput := getPlanningInput(dCtx, chatHistory, promptInfo)
-		chatResponse, err := TrackedToolChat(dCtx, "Generate Dev Plan", planningInput)
+		chatCtx := dCtx.WithCancelOnPause()
+		chatResponse, err := TrackedToolChat(chatCtx, "Generate Dev Plan", planningInput)
+		if dCtx.GlobalState != nil && dCtx.GlobalState.Paused {
+			continue // UserRequestIfPaused will handle the pause
+		}
 		if err != nil {
 			return nil, fmt.Errorf("error executing OpenAI chat completion activity: %w", err)
 		}
 
 		*chatHistory = append(*chatHistory, chatResponse.ChatMessage)
+
+		if dCtx.GlobalState != nil && dCtx.GlobalState.Paused {
+			continue
+		}
 		if len(chatResponse.ToolCalls) > 0 {
 			// NOTE we have parallel tool calls disabled for now
 			toolCall := chatResponse.ToolCalls[0]
@@ -159,11 +178,13 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 					if planningPrompt != "" && !hasRevisedPerPlanningPrompt {
 						hasRevisedPerPlanningPrompt = true
 						promptInfo = ToolCallResponseInfo{Response: "List out all conditions/requirements in the following instructions. Then consider whether the plan meets each one, one by one. Once you have done that, then rewrite & record the plan as needed to ensure it meets all conditions/requirements.\n\nInstructions follow:\n\n" + planningPrompt, FunctionName: recordDevPlanTool.Name, TooCallId: toolCall.Id}
+						iterationsSinceLastFeedback = 0
 						continue
 					}
 					if reproduceIssue && !hasRevisedPerReproPrompt {
 						hasRevisedPerReproPrompt = true
 						promptInfo = ToolCallResponseInfo{Response: reviseReproPrompt, FunctionName: recordDevPlanTool.Name, TooCallId: toolCall.Id}
+						iterationsSinceLastFeedback = 0
 						continue
 					}
 
@@ -176,8 +197,7 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 					} else {
 						feedback := "Plan was not approved and therefore not recorded. Please continue planning by taking this feedback into account:\n\n" + userResponse.Content
 						promptInfo = ToolCallResponseInfo{Response: feedback, FunctionName: toolCall.Name, TooCallId: toolCall.Id}
-						// resetting i to the closest multiple so that we don't ask for feedback again immediately
-						i = int(math.Round(float64(i)/float64(maxIterationsBeforeFeedback))) * maxIterationsBeforeFeedback
+						iterationsSinceLastFeedback = 0
 						continue
 					}
 				} else {
