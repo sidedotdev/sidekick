@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"fmt"
 	"sidekick/secret_manager"
 	"time"
@@ -49,4 +50,19 @@ func (pk *ProviderKey) Validate() error {
 	}
 
 	return nil
+}
+
+// ProviderKeyStorage defines the interface for provider key persistence operations
+type ProviderKeyStorage interface {
+	// PersistProviderKey stores or updates a provider key
+	PersistProviderKey(ctx context.Context, key ProviderKey) error
+
+	// GetProviderKey retrieves a provider key by its ID
+	GetProviderKey(ctx context.Context, keyId string) (ProviderKey, error)
+
+	// GetAllProviderKeys retrieves all stored provider keys
+	GetAllProviderKeys(ctx context.Context) ([]ProviderKey, error)
+
+	// DeleteProviderKey removes a provider key by its ID
+	DeleteProviderKey(ctx context.Context, keyId string) error
 }

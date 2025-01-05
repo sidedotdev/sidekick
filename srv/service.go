@@ -19,6 +19,7 @@ type Storage interface {
 	domain.FlowActionStorage
 	domain.WorkspaceStorage
 	domain.WorktreeStorage
+	domain.ProviderKeyStorage
 
 	CheckConnection(ctx context.Context) error
 	MGet(ctx context.Context, workspaceId string, keys []string) ([][]byte, error)

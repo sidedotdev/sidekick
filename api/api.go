@@ -124,6 +124,8 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	r.ForwardedByClientIP = true
 	r.SetTrustedProxies(nil)
 
+	DefineProviderKeyApiRoutes(r, &ctrl)
+
 	workspaceApiRoutes := DefineWorkspaceApiRoutes(r, &ctrl)
 	workspaceApiRoutes.GET("/archived_tasks", ctrl.GetArchivedTasksHandler)
 

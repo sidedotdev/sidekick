@@ -218,3 +218,23 @@ func (d Delegator) EndFlowEventStream(ctx context.Context, workspaceId, flowId, 
 func (d Delegator) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, subscriptionCh <-chan domain.FlowEventSubscription) (<-chan domain.FlowEvent, <-chan error) {
 	return d.streamer.StreamFlowEvents(ctx, workspaceId, flowId, subscriptionCh)
 }
+
+/* implements ProviderKeyStorage interface */
+func (d Delegator) PersistProviderKey(ctx context.Context, key domain.ProviderKey) error {
+	return d.storage.PersistProviderKey(ctx, key)
+}
+
+/* implements ProviderKeyStorage interface */
+func (d Delegator) GetProviderKey(ctx context.Context, keyId string) (domain.ProviderKey, error) {
+	return d.storage.GetProviderKey(ctx, keyId)
+}
+
+/* implements ProviderKeyStorage interface */
+func (d Delegator) GetAllProviderKeys(ctx context.Context) ([]domain.ProviderKey, error) {
+	return d.storage.GetAllProviderKeys(ctx)
+}
+
+/* implements ProviderKeyStorage interface */
+func (d Delegator) DeleteProviderKey(ctx context.Context, keyId string) error {
+	return d.storage.DeleteProviderKey(ctx, keyId)
+}
