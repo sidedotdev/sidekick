@@ -1,3 +1,13 @@
+export interface ProviderKey {
+  id: string
+  nickname?: string
+  providerType: 'openai' | 'anthropic'
+  secretManagerType: string
+  secretName: string
+  created: Date
+  updated: Date
+}
+
 export interface ModelConfig {
   provider: string
   model: string
