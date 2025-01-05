@@ -11,6 +11,7 @@ import (
 type SecretManager interface {
 	GetSecret(secretName string) (string, error)
 	SetSecret(secretName string, secret string) error
+	DeleteSecret(secretName string) error
 	GetType() SecretManagerType
 }
 
@@ -37,6 +38,10 @@ func (e EnvSecretManager) GetSecret(secretName string) (string, error) {
 	return secret, nil
 }
 
+func (e EnvSecretManager) DeleteSecret(secretName string) error {
+	return fmt.Errorf("cannot delete secrets in environment secret manager - secrets must be managed via environment variables")
+}
+
 func (e EnvSecretManager) GetType() SecretManagerType {
 	return EnvSecretManagerType
 }
@@ -57,6 +62,14 @@ func (k KeyringSecretManager) GetSecret(secretName string) (string, error) {
 		return "", fmt.Errorf("error retrieving %s from keyring: %w", secretName, err)
 	}
 	return secret, nil
+}
+
+func (k KeyringSecretManager) DeleteSecret(secretName string) error {
+	err := keyring.Delete("sidekick", secretName)
+	if err != nil {
+		return fmt.Errorf("error deleting %s from keyring: %w", secretName, err)
+	}
+	return nil
 }
 
 func (k KeyringSecretManager) GetType() SecretManagerType {
@@ -85,8 +98,29 @@ func (m *MockSecretManager) SetSecret(secretName string, secret string) error {
 	return nil
 }
 
+func (m *MockSecretManager) DeleteSecret(secretName string) error {
+	if m.secrets != nil {
+		delete(m.secrets, secretName)
+	}
+	return nil
+}
+
 func (m MockSecretManager) GetType() SecretManagerType {
 	return MockSecretManagerType
+}
+
+// GetSecretManager returns a SecretManager instance of the specified type
+func GetSecretManager(smType SecretManagerType) SecretManager {
+	switch smType {
+	case KeyringSecretManagerType:
+		return &KeyringSecretManager{}
+	case EnvSecretManagerType:
+		return &EnvSecretManager{}
+	case MockSecretManagerType:
+		return &MockSecretManager{}
+	default:
+		return &KeyringSecretManager{} // Default to keyring
+	}
 }
 
 type SecretManagerContainer struct {

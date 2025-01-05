@@ -1,7 +1,7 @@
 package api
 
 import (
-	"errors"
+	"fmt"
 	"net/http"
 	"sidekick/domain"
 	"sidekick/secret_manager"
@@ -50,12 +50,12 @@ func (ctrl *Controller) CreateProviderKeyHandler(c *gin.Context) {
 	}
 
 	if keyReq.KeyValue == "" {
-		ctrl.ErrorHandler(c, http.StatusBadRequest, errors.New("key value is required"))
+		ctrl.ErrorHandler(c, http.StatusBadRequest, fmt.Errorf("key value is required"))
 		return
 	}
 
 	if keyReq.ProviderType == "" {
-		ctrl.ErrorHandler(c, http.StatusBadRequest, errors.New("provider type is required"))
+		ctrl.ErrorHandler(c, http.StatusBadRequest, fmt.Errorf("provider type is required"))
 		return
 	}
 
@@ -78,16 +78,16 @@ func (ctrl *Controller) CreateProviderKeyHandler(c *gin.Context) {
 	secretManager := secret_manager.GetSecretManager(keyReq.SecretType)
 
 	// Store the actual key value in the secret manager
-	if err := secretManager.SetSecret(c, providerKey.SecretName, keyReq.KeyValue); err != nil {
-		ctrl.ErrorHandler(c, http.StatusInternalServerError, errors.New("failed to store key in secret manager"))
+	if err := secretManager.SetSecret(providerKey.SecretName, keyReq.KeyValue); err != nil {
+		ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("failed to store key in secret manager: %w", err))
 		return
 	}
 
 	// Store the provider key metadata
 	if err := ctrl.service.PersistProviderKey(c, providerKey); err != nil {
 		// Attempt to clean up the secret if metadata storage fails
-		_ = secretManager.DeleteSecret(c, providerKey.SecretName)
-		ctrl.ErrorHandler(c, http.StatusInternalServerError, errors.New("failed to store provider key metadata"))
+		_ = secretManager.DeleteSecret(providerKey.SecretName)
+		ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("failed to store provider key metadata: %w", err))
 		return
 	}
 
@@ -107,7 +107,7 @@ func (ctrl *Controller) CreateProviderKeyHandler(c *gin.Context) {
 func (ctrl *Controller) GetProviderKeysHandler(c *gin.Context) {
 	keys, err := ctrl.service.GetAllProviderKeys(c)
 	if err != nil {
-		ctrl.ErrorHandler(c, http.StatusInternalServerError, errors.New("failed to retrieve provider keys"))
+		ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("failed to retrieve provider keys: %w", err))
 		return
 	}
 
@@ -171,7 +171,7 @@ func (ctrl *Controller) UpdateProviderKeyHandler(c *gin.Context) {
 	key.Updated = time.Now()
 
 	if err := ctrl.service.PersistProviderKey(c, key); err != nil {
-		ctrl.ErrorHandler(c, http.StatusInternalServerError, errors.New("failed to update provider key"))
+		ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("failed to update provider key: %w", err))
 		return
 	}
 
@@ -198,17 +198,17 @@ func (ctrl *Controller) DeleteProviderKeyHandler(c *gin.Context) {
 	}
 
 	// Get secret manager based on the type
-	secretManager := secret_manager.GetSecretManager(keyReq.SecretType)
+	secretManager := secret_manager.GetSecretManager(key.SecretManagerType)
 
 	// Delete from secret manager first
-	if err := secretManager.DeleteSecret(c, key.SecretName); err != nil {
-		ctrl.ErrorHandler(c, http.StatusInternalServerError, errors.New("failed to delete key from secret manager"))
+	if err := secretManager.DeleteSecret(key.SecretName); err != nil {
+		ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("failed to delete key from secret manager: %w", err))
 		return
 	}
 
 	// Delete the provider key metadata
 	if err := ctrl.service.DeleteProviderKey(c, keyId); err != nil {
-		ctrl.ErrorHandler(c, http.StatusInternalServerError, errors.New("failed to delete provider key metadata"))
+		ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("failed to delete provider key metadata: %w", err))
 		return
 	}
 
