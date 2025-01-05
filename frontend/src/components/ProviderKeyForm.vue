@@ -58,13 +58,13 @@ const submitKey = async () => {
   const formData = {
     providerType: providerType.value,
     nickname: nickname.value || null,
-    apiKey: apiKey.value || undefined
+    keyValue: apiKey.value || undefined
   }
 
   try {
     const url = isEditMode.value
-      ? `/api/v1/provider-keys/${props.keyToEdit!.id}`
-      : '/api/v1/provider-keys'
+      ? `/api/v1/provider_keys/${props.keyToEdit!.id}`
+      : '/api/v1/provider_keys'
     
     const method = isEditMode.value ? 'PUT' : 'POST'
 

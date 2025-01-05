@@ -32,7 +32,7 @@ type ProviderKeyResponse struct {
 
 // DefineProviderKeyApiRoutes sets up the API routes for provider key management
 func DefineProviderKeyApiRoutes(r *gin.Engine, ctrl *Controller) *gin.RouterGroup {
-	providerKeyApiRoutes := r.Group("/api/v1/provider-keys")
+	providerKeyApiRoutes := r.Group("/api/v1/provider_keys")
 	providerKeyApiRoutes.POST("/", ctrl.CreateProviderKeyHandler)
 	providerKeyApiRoutes.GET("/", ctrl.GetProviderKeysHandler)
 	providerKeyApiRoutes.GET("/:keyId", ctrl.GetProviderKeyByIdHandler)
@@ -57,6 +57,12 @@ func (ctrl *Controller) CreateProviderKeyHandler(c *gin.Context) {
 	if keyReq.ProviderType == "" {
 		ctrl.ErrorHandler(c, http.StatusBadRequest, fmt.Errorf("provider type is required"))
 		return
+	}
+
+	if keyReq.SecretType == "" {
+		// default to keyring secret manager (which is the only one you can use
+		// to create via the API, for now)
+		keyReq.SecretType = secret_manager.KeyringSecretManagerType
 	}
 
 	providerKey := domain.ProviderKey{
