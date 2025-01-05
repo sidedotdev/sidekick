@@ -30,7 +30,7 @@ var bulkSearchRepositoryTool = llm.Tool{
 
 const refuseAtSearchOutputLength = 6000
 const maxSearchOutputLength = 2000
-const SearchRepoNoResultsMessage = "No results found. Try a less restrictive search query."
+const SearchRepoNoResultsMessage = "No results found. Try a less restrictive search query, or try a different tool."
 
 type SearchRepositoryInput struct {
 	PathGlob        string
