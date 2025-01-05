@@ -54,7 +54,7 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 				Context:      ctx1,
 				EnvContainer: &s.envContainer,
 				Secrets: &secret_manager.SecretManagerContainer{
-					SecretManager: secret_manager.MockSecretManager{},
+					SecretManager: &secret_manager.MockSecretManager{},
 				},
 				FlowScope: &flow_action.FlowScope{
 					SubflowName: "AuthorEditBlocksTestSuite",

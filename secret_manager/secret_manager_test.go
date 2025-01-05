@@ -44,3 +44,30 @@ func TestSecretManagerContainer_MarshalUnmarshal(t *testing.T) {
 		})
 	}
 }
+
+func TestMockSecretManager_SetSecret(t *testing.T) {
+	m := &MockSecretManager{}
+	err := m.SetSecret("test-key", "test-secret")
+	assert.NoError(t, err)
+
+	secret, err := m.GetSecret("test-key")
+	assert.NoError(t, err)
+	assert.Equal(t, "test-secret", secret)
+}
+
+func TestKeyringSecretManager_SetSecret(t *testing.T) {
+	k := &KeyringSecretManager{}
+	err := k.SetSecret("test-key", "test-secret")
+	assert.NoError(t, err)
+
+	secret, err := k.GetSecret("test-key")
+	assert.NoError(t, err)
+	assert.Equal(t, "test-secret", secret)
+}
+
+func TestEnvSecretManager_SetSecret(t *testing.T) {
+	e := &EnvSecretManager{}
+	err := e.SetSecret("test-key", "test-secret")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot set secrets in environment secret manager")
+}

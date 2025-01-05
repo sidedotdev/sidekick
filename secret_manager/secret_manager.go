@@ -10,6 +10,7 @@ import (
 
 type SecretManager interface {
 	GetSecret(secretName string) (string, error)
+	SetSecret(secretName string, secret string) error
 	GetType() SecretManagerType
 }
 
@@ -22,6 +23,10 @@ const (
 )
 
 type EnvSecretManager struct{}
+
+func (e EnvSecretManager) SetSecret(secretName string, secret string) error {
+	return fmt.Errorf("cannot set secrets in environment secret manager - secrets must be set as environment variables")
+}
 
 func (e EnvSecretManager) GetSecret(secretName string) (string, error) {
 	secretName = fmt.Sprintf("SIDE_%s", secretName)
@@ -38,6 +43,14 @@ func (e EnvSecretManager) GetType() SecretManagerType {
 
 type KeyringSecretManager struct{}
 
+func (k KeyringSecretManager) SetSecret(secretName string, secret string) error {
+	err := keyring.Set("sidekick", secretName, secret)
+	if err != nil {
+		return fmt.Errorf("error setting %s in keyring: %w", secretName, err)
+	}
+	return nil
+}
+
 func (k KeyringSecretManager) GetSecret(secretName string) (string, error) {
 	secret, err := keyring.Get("sidekick", secretName)
 	if err != nil {
@@ -50,13 +63,29 @@ func (k KeyringSecretManager) GetType() SecretManagerType {
 	return KeyringSecretManagerType
 }
 
-type MockSecretManager struct{}
+type MockSecretManager struct {
+	secrets map[string]string
+}
 
-func (e MockSecretManager) GetSecret(secretName string) (string, error) {
+func (m MockSecretManager) GetSecret(secretName string) (string, error) {
+	if m.secrets == nil {
+		return "fake secret", nil
+	}
+	if secret, ok := m.secrets[secretName]; ok {
+		return secret, nil
+	}
 	return "fake secret", nil
 }
 
-func (e MockSecretManager) GetType() SecretManagerType {
+func (m *MockSecretManager) SetSecret(secretName string, secret string) error {
+	if m.secrets == nil {
+		m.secrets = make(map[string]string)
+	}
+	m.secrets[secretName] = secret
+	return nil
+}
+
+func (m MockSecretManager) GetType() SecretManagerType {
 	return MockSecretManagerType
 }
 

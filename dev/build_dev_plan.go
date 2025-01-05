@@ -271,10 +271,10 @@ func getPlanningInput(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInf
 
 	if !skip {
 		newMessage := llm.ChatMessage{
-			Role:       role,
-			Content:    content,
-			Name:       name,
-			ToolCallId: toolCallId,
+			Role:         role,
+			Content:      content,
+			Name:         name,
+			ToolCallId:   toolCallId,
 			CacheControl: cacheControl,
 		}
 		*chatHistory = append(*chatHistory, newMessage)

@@ -46,7 +46,7 @@ func (s *RunTestsTestSuite) SetupTest() {
 		ExecContext: flow_action.ExecContext{
 			EnvContainer: &s.envContainer,
 			Secrets: &secret_manager.SecretManagerContainer{
-				SecretManager: secret_manager.MockSecretManager{},
+				SecretManager: &secret_manager.MockSecretManager{},
 			},
 			FlowScope: &flow_action.FlowScope{
 				SubflowName: "RunTestsTestSuite",
