@@ -250,8 +250,8 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			addCodeContextPrompt(chatHistory, userFeedback)
 			iterationsSinceLastFeedback = 0
 		} else if iterationsSinceLastFeedback >= 3 {
-			actionCtx.DevContext = actionCtx.DevContext.WithCancelOnPause()
-			toolCall, err := ForceToolBulkSearchRepository(actionCtx.DevContext, chatHistory)
+			chatCtx := actionCtx.DevContext.WithCancelOnPause()
+			toolCall, err := ForceToolBulkSearchRepository(chatCtx, chatHistory)
 			if actionCtx.GlobalState != nil && actionCtx.GlobalState.Paused {
 				continue // UserRequestIfPaused will handle the pause
 			}
@@ -281,8 +281,8 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		// one of retrieve_code_context or bulk_search_repository. if given
 		// bulk_search_repository,
 		var toolCall llm.ToolCall
-		actionCtx.DevContext = actionCtx.DevContext.WithCancelOnPause()
-		toolCall, requiredCodeContext, err = ForceToolRetrieveCodeContext(actionCtx, chatHistory)
+		chatCtx := actionCtx.WithCancelOnPause()
+		toolCall, requiredCodeContext, err = ForceToolRetrieveCodeContext(chatCtx, chatHistory)
 		if actionCtx.GlobalState != nil && actionCtx.GlobalState.Paused {
 			continue // UserRequestIfPaused will handle the pause
 		}

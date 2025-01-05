@@ -133,6 +133,13 @@ type DevActionContext struct {
 	ActionParams map[string]interface{}
 }
 
+func (actionCtx DevActionContext) WithCancelOnPause() DevActionContext {
+	ctx, cancel := workflow.WithCancel(actionCtx.Context)
+	actionCtx.Context = ctx
+	actionCtx.GlobalState.AddCancelFunc(cancel)
+	return actionCtx
+}
+
 func Track[T any](devActionCtx DevActionContext, f func(flowAction domain.FlowAction) (T, error)) (defaultT T, err error) {
 	// TODO /gen check if the devContext.State.Paused is true, and if so, wait
 	// indefinitely for a temporal signal to resume before continuing
