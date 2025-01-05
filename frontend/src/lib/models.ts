@@ -1,6 +1,7 @@
 export interface ModelConfig {
   provider: string
   model: string
+  providerKeyId?: string
 }
 
 export interface LLMConfig {
