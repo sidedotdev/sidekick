@@ -2,7 +2,14 @@ package common
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+
+	"github.com/adrg/xdg"
+	"github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/v2"
 )
 
 // ValidProviderTypes are the allowed provider types for custom providers
@@ -13,11 +20,11 @@ var BuiltinProviders = []string{"openai", "anthropic"}
 
 // CustomProviderConfig represents configuration for a custom LLM or embedding provider
 type CustomProviderConfig struct {
-	Name         string `json:"name"`
-	ProviderType string `json:"provider_type"`
-	BaseURL      string `json:"base_url"`
-	Key          string `json:"key"`
-	DefaultModel string `json:"default_model,omitempty"`
+	Name         string `koanf:"name"`
+	ProviderType string `koanf:"provider_type"`
+	BaseURL      string `koanf:"base_url"`
+	Key          string `koanf:"key"`
+	DefaultModel string `koanf:"default_model,omitempty"`
 }
 
 // Validate ensures the CustomProviderConfig is valid
@@ -42,10 +49,10 @@ func (c CustomProviderConfig) Validate() error {
 
 // LocalConfig represents the local configuration file structure
 type LocalConfig struct {
-	CustomLLMProviders       []CustomProviderConfig   `json:"custom_llm_providers,omitempty"`
-	CustomEmbeddingProviders []CustomProviderConfig   `json:"custom_embedding_providers,omitempty"`
-	LLM                      map[string][]ModelConfig `json:"llm,omitempty"`
-	Embedding                map[string][]ModelConfig `json:"embedding,omitempty"`
+	CustomLLMProviders       []CustomProviderConfig   `koanf:"custom_llm_providers,omitempty"`
+	CustomEmbeddingProviders []CustomProviderConfig   `koanf:"custom_embedding_providers,omitempty"`
+	LLM                      map[string][]ModelConfig `koanf:"llm,omitempty"`
+	Embedding                map[string][]ModelConfig `koanf:"embedding,omitempty"`
 }
 
 // getCustomProviderNames returns a slice of custom provider names
@@ -112,4 +119,36 @@ func (c LocalConfig) Validate() error {
 	}
 
 	return nil
+}
+
+// GetSidekickConfig loads the sidekick configuration from the given file path.
+// If the config file doesn't exist, returns an empty config.
+// The config file is expected to be in YAML format.
+func GetSidekickConfig(configPath string) (LocalConfig, error) {
+	k := koanf.New(".")
+
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		return LocalConfig{}, nil
+	}
+
+	// Load YAML config
+	if err := k.Load(file.Provider(configPath), yaml.Parser()); err != nil {
+		return LocalConfig{}, fmt.Errorf("error loading config: %w", err)
+	}
+
+	var config LocalConfig
+	if err := k.Unmarshal("", &config); err != nil {
+		return LocalConfig{}, fmt.Errorf("error unmarshaling config: %w", err)
+	}
+
+	if err := config.Validate(); err != nil {
+		return LocalConfig{}, fmt.Errorf("invalid config: %w", err)
+	}
+
+	return config, nil
+}
+
+// GetDefaultConfigPath returns the default path for the sidekick config file
+func GetDefaultConfigPath() string {
+	return filepath.Join(xdg.ConfigHome, "sidekick", "config.yaml")
 }

@@ -5,8 +5,8 @@ import (
 )
 
 type ModelConfig struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model,omitempty"`
+	Provider string `koanf:"provider"`
+	Model    string `koanf:"model,omitempty"`
 }
 
 func (mc ModelConfig) ToolChatProvider() ToolChatProvider {
