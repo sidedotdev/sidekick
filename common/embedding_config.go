@@ -25,3 +25,13 @@ func (c EmbeddingConfig) GetModelsOrDefault(key string) []ModelConfig {
 	}
 	return c.Defaults
 }
+
+func (c EmbeddingConfig) GetModelConfig(key string) ModelConfig {
+	modelConfigs := c.GetModelsOrDefault(key)
+	if len(modelConfigs) == 0 {
+		panic("Embedding config: no default model config found")
+	}
+
+	modelConfig := modelConfigs[0]
+	return modelConfig
+}

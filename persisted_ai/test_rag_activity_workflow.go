@@ -2,10 +2,12 @@ package persisted_ai
 
 import (
 	"context"
+	"sidekick/common"
 	"sidekick/env"
 	"sidekick/secret_manager"
 	"time"
 
+	"github.com/sashabaranov/go-openai"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
@@ -44,7 +46,7 @@ func TestOpenAiEmbedActivityWorkflow(ctx workflow.Context) (string, error) {
 		RankedViaEmbeddingOptions: RankedViaEmbeddingOptions{
 			WorkspaceId:   workspaceId,
 			EnvContainer:  env.EnvContainer{Env: devEnv},
-			EmbeddingType: "ada2",
+			ModelConfig:   common.ModelConfig{Provider: "openai", Model: string(openai.SmallEmbedding3)},
 			RankQuery:     "Add a component for a kanban board that allows you to add a card to a column.",
 			Secrets:       secret_manager.SecretManagerContainer{SecretManager: secret_manager.EnvSecretManager{}},
 		},

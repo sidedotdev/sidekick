@@ -1,18 +1,13 @@
 package common
 
-import (
-	"fmt"
-)
+import "strings"
 
 type ModelConfig struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model,omitempty"`
+	// Provider here is the provider name, not the provider type (though they may be the same)
+	Provider string `koanf:"provider" json:"provider"`
+	Model    string `koanf:"model,omitempty" json:"model,omitempty"`
 }
 
-func (mc ModelConfig) ToolChatProvider() ToolChatProvider {
-	provider, err := StringToToolChatProvider(mc.Provider)
-	if err != nil {
-		panic(fmt.Sprintf("AI config: failed to convert provider string to ToolChatProvider: %v", err))
-	}
-	return provider
+func (c ModelConfig) NormalizedProviderName() string {
+	return strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(c.Provider, " ", "_"), "-", "_"))
 }

@@ -14,11 +14,11 @@ import (
 	"sidekick/coding/git"
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
+	"sidekick/common"
 	"sidekick/srv"
 	"sidekick/workspace"
 
 	"sidekick/dev"
-	"sidekick/embedding"
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/flow_action"
@@ -61,7 +61,6 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	flowActivities := &flow_action.FlowActivities{Service: service}
 	openAIActivities := &persisted_ai.OpenAIActivities{
 		Storage:  service,
-		Embedder: embedding.OpenAIEmbedder{},
 	}
 	llmActivities := &persisted_ai.LlmActivities{
 		Streamer: service,
@@ -88,7 +87,6 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	}
 	ragActivities := &persisted_ai.RagActivities{
 		DatabaseAccessor: service,
-		Embedder:         embedding.OpenAIEmbedder{},
 	}
 
 	pollFailuresActivities := &poll_failures.PollFailuresActivities{
@@ -128,6 +126,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	w.RegisterActivity(dev.ReadFileActivity)
 	w.RegisterActivity(dev.ManageChatHistoryActivity)
 	w.RegisterActivity(ffa.EvalBoolFlag)
+	w.RegisterActivity(common.GetLocalConfig)
 
 	workspaceActivities := &workspace.Activities{
 		Storage: service,

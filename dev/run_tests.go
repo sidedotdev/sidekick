@@ -168,18 +168,12 @@ preamble like "Here is the summary".
 %s
 `, testOutput)
 
-	provider, modelConfig, isDefault := dCtx.GetToolChatConfig(common.SummarizationKey, 0)
-
-	model := modelConfig.Model
-	if isDefault {
-		model = provider.SmallModel() // summarization is typically an easier task
-	}
+	modelConfig := dCtx.GetModelConfig(common.SummarizationKey, 0, "small")
 
 	toolChatOptions := llm.ToolChatOptions{
 		Secrets: *dCtx.Secrets,
 		Params: llm.PromptToToolChatParams(prompt, llm.ChatControlParams{
-			Provider: provider,
-			Model:    model,
+			ModelConfig: modelConfig,
 		}),
 	}
 	chatResponse, err := TrackedToolChat(dCtx, "Summarize Tests", toolChatOptions)

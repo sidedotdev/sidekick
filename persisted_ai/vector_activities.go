@@ -15,12 +15,12 @@ type VectorIndex struct {
 }
 
 type VectorSearchActivityOptions struct {
-	WorkspaceId   string
-	ContentType   string
-	Subkeys       []uint64
-	EmbeddingType string
-	Query         embedding.EmbeddingVector
-	Limit         int
+	WorkspaceId string
+	ContentType string
+	Subkeys     []uint64
+	Model       string
+	Query       embedding.EmbeddingVector
+	Limit       int
 }
 type VectorActivities struct {
 	DatabaseAccessor db.Service
@@ -31,9 +31,9 @@ func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]
 	embeddingKeys := make([]string, 0, len(options.Subkeys))
 	for _, subKey := range options.Subkeys {
 		embeddingKey := constructEmbeddingKey(embeddingKeyOptions{
-			embeddingType: options.EmbeddingType,
-			contentType:   options.ContentType,
-			subKey:        subKey,
+			model:       options.Model,
+			contentType: options.ContentType,
+			subKey:      subKey,
 		})
 		embeddingKeys = append(embeddingKeys, embeddingKey)
 	}
@@ -43,21 +43,16 @@ func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]
 	}
 
 	// initialize vector index
-	var vector_size int
-	if options.EmbeddingType == "ada2" || options.EmbeddingType == "oai-te3-sm" {
-		vector_size = 1536
-	} else {
-		return []uint64{}, fmt.Errorf("embedding type not yet supported: %s", options.EmbeddingType)
-	}
-	vectors_count := len(options.Subkeys)
-	conf := usearch.DefaultConfig(uint(vector_size))
+	numDimensions := len(options.Query)
+	vectorsCount := len(options.Subkeys)
+	conf := usearch.DefaultConfig(uint(numDimensions))
 	index, err := usearch.NewIndex(conf)
 	if err != nil {
 		return []uint64{}, fmt.Errorf("failed to create Index: %v", err)
 	}
 	defer index.Destroy()
 
-	err = index.Reserve(uint(vectors_count))
+	err = index.Reserve(uint(vectorsCount))
 	if err != nil {
 		return []uint64{}, fmt.Errorf("failed to reserve: %v", err)
 	}

@@ -16,25 +16,37 @@ const OpenaiDefaultModel = "gpt-4o-2024-05-13"
 const OpenaiDefaultLongContextModel = "gpt-4o-2024-05-13"
 const OpenaiApiKeySecretName = "OPENAI_API_KEY"
 
-type OpenaiToolChat struct{}
+type OpenaiToolChat struct {
+	BaseURL      string
+	DefaultModel string
+}
 
 // implements ToolChat interface
-func (OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta) (*ChatMessageResponse, error) {
-	token, err := options.Secrets.SecretManager.GetSecret(OpenaiApiKeySecretName)
+func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta) (*ChatMessageResponse, error) {
+	providerNameNormalized := options.Params.ModelConfig.NormalizedProviderName()
+	token, err := options.Secrets.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
 	if err != nil {
 		return nil, err
 	}
 
-	client := openai.NewClient(token)
+	config := openai.DefaultConfig(token)
+	if o.BaseURL != "" {
+		config.BaseURL = o.BaseURL
+	}
+	client := openai.NewClientWithConfig(config)
 
 	var temperature float32 = defaultTemperature
 	if options.Params.Temperature != nil {
 		temperature = *options.Params.Temperature
 	}
 
-	var model string = OpenaiDefaultModel
+	var model string
 	if options.Params.Model != "" {
 		model = options.Params.Model
+	} else if o.DefaultModel != "" {
+		model = o.DefaultModel
+	} else {
+		model = OpenaiDefaultModel
 	}
 
 	var parallelToolCalls bool = false
@@ -42,9 +54,14 @@ func (OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions, d
 		parallelToolCalls = *options.Params.ParallelToolCalls
 	}
 
+	// openai-compatible endpoints may require alternating user vs assistant
+	// messages, so we merge consecutive messages of the same/equivalent role.
+	// this is a hacky way to infer that we should merge messages
+	shouldMerge := o.BaseURL != "" && !strings.HasPrefix(model, "gpt") && !strings.HasPrefix(model, "o1-") && !strings.HasPrefix(model, "o3-")
+
 	req := openai.ChatCompletionRequest{
 		Model:             model,
-		Messages:          openaiFromChatMessages(options.Params.Messages),
+		Messages:          openaiFromChatMessages(options.Params.Messages, shouldMerge),
 		ToolChoice:        openaiFromToolChoice(options.Params.ToolChoice, options.Params.Tools),
 		Tools:             openaiFromTools(options.Params.Tools),
 		Stream:            true,
@@ -94,9 +111,12 @@ func (OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions, d
 		deltaChan <- delta
 		deltas = append(deltas, delta)
 	}
-
+	message := stitchDeltasToMessage(deltas)
+	if message.Role == "" {
+		return nil, errors.New("chat message role not found")
+	}
 	return &ChatMessageResponse{
-		ChatMessage: *stitchDeltasToMessage(deltas),
+		ChatMessage: message,
 		StopReason:  string(finishReason), // TODO /gen convert this properly, once we have an enum defined for stop reasons
 		Usage:       openaiToUsage(usage),
 		Model:       model,
@@ -104,8 +124,8 @@ func (OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions, d
 	}, nil
 }
 
-func openaiFromChatMessages(messages []ChatMessage) []openai.ChatCompletionMessage {
-	return utils.Map(messages, func(msg ChatMessage) openai.ChatCompletionMessage {
+func openaiFromChatMessages(messages []ChatMessage, shouldMerge bool) []openai.ChatCompletionMessage {
+	openaiMessages := utils.Map(messages, func(msg ChatMessage) openai.ChatCompletionMessage {
 		return openai.ChatCompletionMessage{
 			Role:       string(msg.Role),
 			Content:    msg.Content,
@@ -114,6 +134,37 @@ func openaiFromChatMessages(messages []ChatMessage) []openai.ChatCompletionMessa
 			Name:       msg.Name,
 		}
 	})
+
+	if !shouldMerge {
+		return openaiMessages
+	}
+
+	// openai-compatible endpoints may require alternating user vs assistant
+	// messages, so we merge consecutive messages of the same/equivalent role
+	var mergedMessages []openai.ChatCompletionMessage
+	for _, msg := range openaiMessages {
+		if len(mergedMessages) == 0 {
+			mergedMessages = append(mergedMessages, msg)
+			continue
+		}
+		lastMsg := &mergedMessages[len(mergedMessages)-1]
+
+		// Consider tool, user, and system roles as equivalent
+		isEquivalentRole := lastMsg.Role == string(msg.Role) ||
+			(isUserLikeRole(lastMsg.Role) && isUserLikeRole(string(msg.Role)))
+
+		if isEquivalentRole {
+			lastMsg.Content += "\n\n" + string(msg.Role) + ":" + msg.Content
+		} else {
+			mergedMessages = append(mergedMessages, msg)
+		}
+	}
+
+	return mergedMessages
+}
+
+func isUserLikeRole(s string) bool {
+	return s == "user" || s == "system" || s == "tool"
 }
 
 func openaiFromTools(tools []*Tool) []openai.Tool {
@@ -208,7 +259,7 @@ func cleanupDelta(delta ChatMessageDelta) ChatMessageDelta {
 	return delta
 }
 
-func stitchDeltasToMessage(deltas []ChatMessageDelta) *ChatMessage {
+func stitchDeltasToMessage(deltas []ChatMessageDelta) ChatMessage {
 	var contentBuilder strings.Builder
 	var nameBuilder strings.Builder
 	var argsBuilder strings.Builder
@@ -266,7 +317,7 @@ func stitchDeltasToMessage(deltas []ChatMessageDelta) *ChatMessage {
 		currentToolCall = &ToolCall{}
 	}
 
-	return &ChatMessage{
+	return ChatMessage{
 		Role:      role,
 		Content:   contentBuilder.String(),
 		ToolCalls: toolCalls,

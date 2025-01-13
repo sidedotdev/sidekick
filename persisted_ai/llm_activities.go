@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/llm"
 	"sidekick/srv"
@@ -71,7 +72,7 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 
 	}()
 
-	toolChatter, err := getToolChatter(options.Params.Provider, options.Params.Model)
+	toolChatter, err := getToolChatter(options.Params.ModelConfig)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to get tool chatter")
 		return nil, err
@@ -79,28 +80,60 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 	return toolChatter.ChatStream(ctx, options.ToolChatOptions, deltaChan)
 }
 
-func getToolChatter(provider llm.ToolChatProvider, model string) (llm.ToolChatter, error) {
-	switch provider {
-	case llm.UnspecifiedToolChatProvider:
-		if strings.HasPrefix(model, "gpt") || strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "o3") {
-			return llm.OpenaiToolChat{}, nil
-		}
-
-		if strings.HasPrefix(model, "claude-") {
-			return llm.AnthropicToolChat{}, nil
-		}
-
-		if model == "" {
-			return nil, errors.New("unspecified tool chat provider")
-		}
-
-		return nil, fmt.Errorf("unsupported tool chat model: %v", model)
-
-	case llm.OpenaiToolChatProvider:
-		return llm.OpenaiToolChat{}, nil
-	case llm.AnthropicToolChatProvider:
-		return llm.AnthropicToolChat{}, nil
-	default:
-		return nil, fmt.Errorf("unsupported tool chat provider: %s", provider)
+func getToolChatter(config common.ModelConfig) (llm.ToolChatter, error) {
+	providerType, err := getProviderType(config.Provider)
+	if err != nil {
+		return nil, err
 	}
+
+	switch providerType {
+	case llm.OpenaiToolChatProviderType:
+		return llm.OpenaiToolChat{}, nil
+	case llm.OpenaiCompatibleToolChatProviderType:
+		localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load local config: %w", err)
+		}
+		for _, p := range localConfig.Providers {
+			if p.Type == string(providerType) {
+				return llm.OpenaiToolChat{
+					BaseURL:      p.BaseURL,
+					DefaultModel: p.DefaultLLM,
+				}, nil
+			}
+		}
+		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
+	case llm.AnthropicToolChatProviderType:
+		return llm.AnthropicToolChat{}, nil
+	case llm.UnspecifiedToolChatProviderType:
+		return nil, errors.New("tool chat provider was not specified")
+
+	default:
+		return nil, fmt.Errorf("unsupported tool chat provider type: %s", providerType)
+	}
+}
+
+func getProviderType(s string) (llm.ToolChatProviderType, error) {
+	switch s {
+	case "openai":
+		return llm.OpenaiToolChatProviderType, nil
+	case "anthropic":
+		return llm.AnthropicToolChatProviderType, nil
+	case "mock":
+		return llm.ToolChatProviderType("mock"), nil
+	}
+
+	// TODO first try workspace config to determine provider type, then fallback to local config
+	localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
+	if err != nil {
+		return llm.UnspecifiedToolChatProviderType, fmt.Errorf("failed to load local config: %w", err)
+	}
+
+	for _, provider := range localConfig.Providers {
+		if provider.Name == s {
+			return llm.ToolChatProviderType(provider.Type), nil
+		}
+	}
+
+	return llm.UnspecifiedToolChatProviderType, fmt.Errorf("unknown provider: %s", s)
 }

@@ -3,6 +3,7 @@ package sidekick
 import (
 	"encoding/json"
 	"fmt"
+	"sidekick/common"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
@@ -65,8 +66,9 @@ func ExampleLlmActivitiesWorkflow(ctx workflow.Context) (string, error) {
 						Parameters:  anthropic.GenerateInputSchema(&SentimentRequest{}),
 					},
 				},
-				Provider: llm.AnthropicToolChatProvider,
-				//Provider: OpenaiToolChatProvider,
+				ModelConfig: common.ModelConfig{
+					Provider: string(llm.AnthropicToolChatProviderType),
+				},
 			},
 		},
 	}

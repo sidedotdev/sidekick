@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sidekick/embedding"
+	"sidekick/common"
 	"sidekick/secret_manager"
 	"sidekick/srv"
 
@@ -12,20 +12,15 @@ import (
 )
 
 type OpenAIEmbedActivityOptions struct {
-	Secrets       secret_manager.SecretManagerContainer
-	WorkspaceId   string
-	ContentType   string
-	EmbeddingType string // FIXME make this an enum
-	Subkeys       []uint64
-}
-
-type Embedder interface {
-	Embed(ctx context.Context, embeddingType string, secretManager secret_manager.SecretManager, inputs []string) ([]embedding.EmbeddingVector, error)
+	Secrets     secret_manager.SecretManagerContainer
+	WorkspaceId string
+	ContentType string
+	ModelConfig common.ModelConfig
+	Subkeys     []uint64
 }
 
 type OpenAIActivities struct {
 	Storage srv.Storage
-	Embedder
 }
 
 /*
@@ -41,9 +36,9 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 	for i, subKey := range options.Subkeys {
 		contentKeys[i] = fmt.Sprintf("%s:%d", options.ContentType, subKey)
 		embeddingKeys[i] = constructEmbeddingKey(embeddingKeyOptions{
-			embeddingType: options.EmbeddingType,
-			contentType:   options.ContentType,
-			subKey:        subKey,
+			model:       options.ModelConfig.Model,
+			contentType: options.ContentType,
+			subKey:      subKey,
 		})
 	}
 
@@ -87,6 +82,10 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 			}
 		}
 
+		embedder, err := getEmbedder(options.ModelConfig)
+		if err != nil {
+			return err
+		}
 		cacheValues := make(map[string]interface{}, len(input))
 		batchSize := 2048 // 2048 is the maximum batch size for the OpenAI embedding API
 		for i := 0; i < len(input); i += batchSize {
@@ -94,7 +93,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 			if end > len(input) {
 				end = len(input)
 			}
-			embeddings, err := oa.Embedder.Embed(ctx, options.EmbeddingType, options.Secrets.SecretManager, input[i:end])
+			embeddings, err := embedder.Embed(ctx, options.ModelConfig, options.Secrets.SecretManager, input[i:end])
 			if err != nil {
 				return err
 			}
@@ -112,11 +111,11 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 }
 
 type embeddingKeyOptions struct {
-	embeddingType string
-	contentType   string
-	subKey        uint64
+	model       string
+	contentType string
+	subKey      uint64
 }
 
 func constructEmbeddingKey(options embeddingKeyOptions) string {
-	return fmt.Sprintf("embedding:%s:%s:%d", options.embeddingType, options.contentType, options.subKey)
+	return fmt.Sprintf("embedding:%s:%s:%d", options.model, options.contentType, options.subKey)
 }

@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
+	"sidekick/common"
 	"sidekick/embedding"
 	"sidekick/env"
+	"sidekick/llm"
 	"sidekick/secret_manager"
 	"sidekick/srv"
 	"sidekick/utils"
@@ -18,7 +20,6 @@ import (
 
 type RagActivities struct {
 	DatabaseAccessor     srv.Service
-	Embedder             Embedder
 	LSPActivities        *lsp.LSPActivities
 	TreeSitterActivities *tree_sitter.TreeSitterActivities
 }
@@ -31,16 +32,17 @@ type RankedDirSignatureOutlineOptions struct {
 type RankedViaEmbeddingOptions struct {
 	WorkspaceId   string
 	EnvContainer  env.EnvContainer
-	EmbeddingType string
 	RankQuery     string
 	Secrets       secret_manager.SecretManagerContainer
+	ModelConfig   common.ModelConfig
 }
 
 func (options RankedDirSignatureOutlineOptions) ActionParams() map[string]any {
 	return map[string]interface{}{
-		"rankQuery":     options.RankQuery,
-		"charLimit":     options.CharLimit,
-		"embeddingType": options.EmbeddingType,
+		"rankQuery": options.RankQuery,
+		"charLimit": options.CharLimit,
+		"provider":  options.ModelConfig.Provider,
+		"model":     options.ModelConfig.Model,
 	}
 }
 
@@ -83,14 +85,13 @@ type RankedSubkeysOptions struct {
 }
 
 func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]uint64, error) {
-	// FIXME put openai activities (later refactor this piece out to EmbeddingActivities) inside rag activities struct
-	oa := OpenAIActivities{Storage: ra.DatabaseAccessor, Embedder: ra.Embedder}
+	oa := OpenAIActivities{Storage: ra.DatabaseAccessor}
 	err := oa.CachedEmbedActivity(context.Background(), OpenAIEmbedActivityOptions{
-		Secrets:       options.Secrets,
-		WorkspaceId:   options.WorkspaceId,
-		EmbeddingType: options.EmbeddingType,
-		ContentType:   options.ContentType,
-		Subkeys:       options.Subkeys,
+		Secrets:     options.Secrets,
+		WorkspaceId: options.WorkspaceId,
+		ModelConfig: options.ModelConfig,
+		ContentType: options.ContentType,
+		Subkeys:     options.Subkeys,
 	})
 	if err != nil {
 		return []uint64{}, err
@@ -98,20 +99,53 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]uint64, 
 
 	va := VectorActivities{DatabaseAccessor: ra.DatabaseAccessor}
 
-	// TODO cache this too
-	queryVector, err := embedding.OpenAIEmbedder{}.Embed(context.Background(), options.EmbeddingType, options.Secrets.SecretManager, []string{options.RankQuery})
+	embedder, err := getEmbedder(options.ModelConfig)
+	if err != nil {
+		return []uint64{}, err
+	}
+	queryVector, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, []string{options.RankQuery})
 	if err != nil {
 		return []uint64{}, err
 	}
 
 	return va.VectorSearch(VectorSearchActivityOptions{
-		WorkspaceId:   options.WorkspaceId,
-		EmbeddingType: options.EmbeddingType,
-		ContentType:   options.ContentType,
-		Subkeys:       options.Subkeys,
-		Query:         queryVector[0],
-		Limit:         1000,
+		WorkspaceId: options.WorkspaceId,
+		Model:       options.ModelConfig.Model,
+		ContentType: options.ContentType,
+		Subkeys:     options.Subkeys,
+		Query:       queryVector[0],
+		Limit:       1000,
 	})
+}
+
+func getEmbedder(config common.ModelConfig) (embedding.Embedder, error) {
+	var embedder embedding.Embedder
+	providerType, err := getProviderType(config.Provider)
+	if err != nil {
+		return nil, err
+	}
+	switch providerType {
+	case llm.OpenaiToolChatProviderType:
+		embedder = &embedding.OpenAIEmbedder{}
+	case llm.OpenaiCompatibleToolChatProviderType:
+		localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load local config: %w", err)
+		}
+		for _, p := range localConfig.Providers {
+			if p.Type == string(providerType) {
+				return &embedding.OpenAIEmbedder{
+					BaseURL:      p.BaseURL,
+				}, nil
+			}
+		}
+		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
+	case llm.ToolChatProviderType("mock"):
+		return &embedding.MockEmbedder{}, nil
+	default:
+		return nil, fmt.Errorf("unsupported provider type %s for provider %s", providerType, config.Provider)
+	}
+	return embedder, nil
 }
 
 type DirSignatureOutlineOptions struct {

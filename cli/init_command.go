@@ -57,6 +57,33 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		return err
 	}
 
+	// Check for existing local provider configuration
+	localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
+	if err != nil {
+		return fmt.Errorf("error loading local config: %w", err)
+	}
+
+	var llmProviders []string
+	var embeddingProviders []string
+	
+	// If we have valid local config, skip provider secrets setup: we assume
+	// valid secrets are stored in the local config
+	// TODO validate the key exists in local config providers and actually work
+	if len(localConfig.Providers) > 0 {
+		fmt.Printf("✔ Found existing provider configuration in %s\n", common.GetSidekickConfigPath())
+	} else {
+		// No config exists - proceed with normal setup
+		embeddingProviders, err = ensureEmbeddingSecrets()
+		if err != nil {
+			return fmt.Errorf("error checking or prompting for embedding secrets: %w", err)
+		}
+
+		llmProviders, err = ensureAISecrets()
+		if err != nil {
+			return fmt.Errorf("error checking or prompting for AI secrets: %w", err)
+		}
+	}
+
 	config, configCheck, err := checkConfig(baseDir)
 	if err != nil {
 		return fmt.Errorf("error during config check: %w", err)
@@ -90,16 +117,6 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		return fmt.Errorf("error finding or creating workspace: %w", err)
 	}
 	fmt.Printf("✔ Workspace found or created successfully: %v\n", workspace.Id)
-
-	embeddingProviders, err := ensureEmbeddingSecrets()
-	if err != nil {
-		return fmt.Errorf("error checking or prompting for embedding secrets: %w", err)
-	}
-
-	llmProviders, err := ensureAISecrets()
-	if err != nil {
-		return fmt.Errorf("error checking or prompting for AI secrets: %w", err)
-	}
 
 	existingConfig, err := h.storage.GetWorkspaceConfig(ctx, workspace.Id)
 	if err != nil && !errors.Is(err, srv.ErrNotFound) {

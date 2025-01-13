@@ -100,51 +100,55 @@ type Tool struct {
 type ChatProvider string
 
 const (
-	UnspecifiedChatProvider ChatProvider = ""
-	OpenaiChatProvider      ChatProvider = "openai"
-	AnthropicChatProvider   ChatProvider = "anthropic"
+	UnspecifiedChatProvider       ChatProvider = ""
+	OpenaiChatProvider           ChatProvider = "openai"
+	AnthropicChatProvider        ChatProvider = "anthropic"
+	OpenaiCompatibleChatProvider ChatProvider = "openai_compatible"
 )
 
-type ToolChatProvider string
+type ToolChatProviderType string
 
 const (
-	UnspecifiedToolChatProvider ToolChatProvider = ""
-	OpenaiToolChatProvider      ToolChatProvider = "openai"
-	AnthropicToolChatProvider   ToolChatProvider = "anthropic"
+	UnspecifiedToolChatProviderType      ToolChatProviderType = ""
+	OpenaiToolChatProviderType           ToolChatProviderType = "openai"
+	AnthropicToolChatProviderType        ToolChatProviderType = "anthropic"
+	OpenaiCompatibleToolChatProviderType ToolChatProviderType = "openai_compatible"
 )
 
-var SmallModels = map[ToolChatProvider]string{
-	OpenaiToolChatProvider: "gpt-4o-mini",
+var SmallModels = map[ToolChatProviderType]string{
+	OpenaiToolChatProviderType: "gpt-4o-mini",
 
 	// NOTE: 3.5 Haiku is much more expensive than 3 Haiku, but performs better
 	// too and is what claude presents as their "small" model
-	AnthropicToolChatProvider: "claude-3-5-haiku-20241022",
+	AnthropicToolChatProviderType: "claude-3-5-haiku-20241022",
 }
 
-func (provider ToolChatProvider) SmallModel() string {
+func (provider ToolChatProviderType) SmallModel() string {
 	// missing will be empty string, i.e. the internal/built-in default model
 	// for the provider integration implementation
 	return SmallModels[provider]
 }
 
-var LongContextLargeModels = map[ToolChatProvider]string{
-	OpenaiToolChatProvider:    openai.GPT4Turbo20240409,
-	AnthropicToolChatProvider: string(anthropic.Claude3Opus),
+var LongContextLargeModels = map[ToolChatProviderType]string{
+	OpenaiToolChatProviderType:           openai.GPT4Turbo20240409,
+	AnthropicToolChatProviderType:        string(anthropic.Claude3Opus),
 }
 
-func (provider ToolChatProvider) LongContextLargeModel() string {
+func (provider ToolChatProviderType) LongContextLargeModel() string {
 	return LongContextLargeModels[provider]
 }
 
-func StringToToolChatProvider(provider string) (ToolChatProvider, error) {
-	switch provider {
-	case string(OpenaiToolChatProvider):
-		return OpenaiToolChatProvider, nil
-	case string(AnthropicToolChatProvider):
-		return AnthropicToolChatProvider, nil
-	case string(UnspecifiedToolChatProvider):
-		return UnspecifiedToolChatProvider, nil
+func StringToToolChatProviderType(providerType string) (ToolChatProviderType, error) {
+	switch providerType {
+	case string(OpenaiToolChatProviderType):
+		return OpenaiToolChatProviderType, nil
+	case string(AnthropicToolChatProviderType):
+		return AnthropicToolChatProviderType, nil
+	case string(UnspecifiedToolChatProviderType):
+		return UnspecifiedToolChatProviderType, nil
+	case string(OpenaiCompatibleToolChatProviderType):
+		return OpenaiCompatibleToolChatProviderType, nil
 	default:
-		return UnspecifiedToolChatProvider, fmt.Errorf("unknown provider: %s", provider)
+		return UnspecifiedToolChatProviderType, fmt.Errorf("unknown provider: %s", providerType)
 	}
 }
