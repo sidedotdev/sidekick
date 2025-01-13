@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"sidekick/utils"
 )
 
 // LocalPublicConfig represents the local configuration without keys
@@ -47,6 +48,8 @@ func GetLocalConfig() (LocalPublicConfig, error) {
 	}
 	if defaults, ok := config.LLM[DefaultKey]; ok {
 		llmConfig.Defaults = defaults
+	} else if defaults, ok := config.LLM["defaults"]; ok {
+		llmConfig.Defaults = defaults
 	}
 	for key, models := range config.LLM {
 		if key != DefaultKey {
@@ -59,6 +62,8 @@ func GetLocalConfig() (LocalPublicConfig, error) {
 		UseCaseConfigs: make(map[string][]ModelConfig),
 	}
 	if defaults, ok := config.Embedding[DefaultKey]; ok {
+		embeddingConfig.Defaults = defaults
+	} else if defaults, ok := config.Embedding["defaults"]; ok {
 		embeddingConfig.Defaults = defaults
 	}
 	for key, models := range config.Embedding {
