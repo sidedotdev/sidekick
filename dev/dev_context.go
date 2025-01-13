@@ -83,7 +83,10 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		WorkspaceId:  workspaceId,
 		EnvContainer: &envContainer,
 		Secrets: &secret_manager.SecretManagerContainer{
-			SecretManager: secret_manager.KeyringSecretManager{},
+			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+				secret_manager.KeyringSecretManager{},
+				secret_manager.LocalConfigSecretManager{},
+			}),
 		},
 	}
 
