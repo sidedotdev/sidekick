@@ -57,18 +57,18 @@ func (k KeyringSecretManager) GetType() SecretManagerType {
 type LocalConfigSecretManager struct{}
 
 type CompositeSecretManager struct {
-	Managers []SecretManager
+	managers []SecretManager
 }
 
 func NewCompositeSecretManager(managers []SecretManager) *CompositeSecretManager {
 	return &CompositeSecretManager{
-		Managers: managers,
+		managers: managers,
 	}
 }
 
 func (c CompositeSecretManager) GetSecret(secretName string) (string, error) {
 	var lastErr error
-	for _, manager := range c.Managers {
+	for _, manager := range c.managers {
 		secret, err := manager.GetSecret(secretName)
 		if err == nil {
 			return secret, nil
@@ -82,8 +82,8 @@ func (c CompositeSecretManager) GetSecret(secretName string) (string, error) {
 }
 
 func (c CompositeSecretManager) MarshalJSON() ([]byte, error) {
-	managers := make([]SecretManagerContainer, len(c.Managers))
-	for i, manager := range c.Managers {
+	managers := make([]SecretManagerContainer, len(c.managers))
+	for i, manager := range c.managers {
 		managers[i] = SecretManagerContainer{
 			SecretManager: manager,
 		}
@@ -103,9 +103,9 @@ func (c *CompositeSecretManager) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	c.Managers = make([]SecretManager, len(container.Containers))
+	c.managers = make([]SecretManager, len(container.Containers))
 	for i, container := range container.Containers {
-		c.Managers[i] = container.SecretManager
+		c.managers[i] = container.SecretManager
 	}
 
 	return nil
