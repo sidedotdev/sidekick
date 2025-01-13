@@ -16,25 +16,36 @@ const OpenaiDefaultModel = "gpt-4o-2024-05-13"
 const OpenaiDefaultLongContextModel = "gpt-4o-2024-05-13"
 const OpenaiApiKeySecretName = "OPENAI_API_KEY"
 
-type OpenaiToolChat struct{}
+type OpenaiToolChat struct {
+	BaseURL       string
+	DefaultModel  string
+}
 
 // implements ToolChat interface
-func (OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta) (*ChatMessageResponse, error) {
+func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta) (*ChatMessageResponse, error) {
 	token, err := options.Secrets.SecretManager.GetSecret(OpenaiApiKeySecretName)
 	if err != nil {
 		return nil, err
 	}
 
-	client := openai.NewClient(token)
+	config := openai.DefaultConfig(token)
+	if o.BaseURL != "" {
+		config.BaseURL = o.BaseURL
+	}
+	client := openai.NewClientWithConfig(config)
 
 	var temperature float32 = defaultTemperature
 	if options.Params.Temperature != nil {
 		temperature = *options.Params.Temperature
 	}
 
-	var model string = OpenaiDefaultModel
+	var model string
 	if options.Params.Model != "" {
 		model = options.Params.Model
+	} else if o.DefaultModel != "" {
+		model = o.DefaultModel
+	} else {
+		model = OpenaiDefaultModel
 	}
 
 	var parallelToolCalls bool = false

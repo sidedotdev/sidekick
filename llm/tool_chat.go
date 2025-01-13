@@ -49,9 +49,10 @@ func PromptToToolChatParams(prompt string, controlParams ChatControlParams) Tool
 type ToolChatProviderType = common.ToolChatProviderType
 
 const (
-	UnspecifiedToolChatProviderType ToolChatProviderType = ToolChatProviderType(common.UnspecifiedChatProvider)
-	OpenaiToolChatProviderType      ToolChatProviderType = ToolChatProviderType(common.OpenaiChatProvider)
-	AnthropicToolChatProviderType   ToolChatProviderType = ToolChatProviderType(common.AnthropicChatProvider)
+	UnspecifiedToolChatProviderType    ToolChatProviderType = ToolChatProviderType(common.UnspecifiedChatProvider)
+	OpenaiToolChatProviderType         ToolChatProviderType = ToolChatProviderType(common.OpenaiChatProvider)
+	AnthropicToolChatProviderType      ToolChatProviderType = ToolChatProviderType(common.AnthropicChatProvider)
+	OpenaiCompatibleToolChatProviderType ToolChatProviderType = ToolChatProviderType(common.OpenaiCompatibleChatProvider)
 )
 
 type ToolChatOptions struct {

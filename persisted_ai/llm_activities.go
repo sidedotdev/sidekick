@@ -72,15 +72,44 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 
 	}()
 
-	providerType, err := getProviderType(options.Params.ModelConfig.Provider)
-	if err != nil {
-		return nil, err
-	}
-	toolChatter, err := getToolChatter(providerType, options.Params.ModelConfig.Model)
+	toolChatter, err := getToolChatter(options.Params.ModelConfig)
 	if err != nil {
 		return nil, err
 	}
 	return toolChatter.ChatStream(ctx, options.ToolChatOptions, deltaChan)
+}
+
+func getToolChatter(config common.ModelConfig) (llm.ToolChatter, error) {
+	providerType, err := getProviderType(config.Provider)
+	if err != nil {
+		return nil, err
+	}
+
+	switch providerType {
+	case llm.OpenaiToolChatProviderType:
+		return llm.OpenaiToolChat{}, nil
+	case llm.OpenaiCompatibleToolChatProviderType:
+		localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load local config: %w", err)
+		}
+		for _, p := range localConfig.Providers {
+			if p.Type == string(providerType) {
+				return llm.OpenaiToolChat{
+					BaseURL:      p.BaseURL,
+					DefaultModel: p.DefaultLLM,
+				}, nil
+			}
+		}
+		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
+	case llm.AnthropicToolChatProviderType:
+		return llm.AnthropicToolChat{}, nil
+	case llm.UnspecifiedToolChatProviderType:
+		return nil, errors.New("tool chat provider was not specified")
+
+	default:
+		return nil, fmt.Errorf("unsupported tool chat provider type: %s", providerType)
+	}
 }
 
 func getProviderType(s string) (llm.ToolChatProviderType, error) {
@@ -104,30 +133,4 @@ func getProviderType(s string) (llm.ToolChatProviderType, error) {
 	}
 
 	return llm.UnspecifiedToolChatProviderType, fmt.Errorf("unknown provider: %s", s)
-}
-
-func getToolChatter(provider llm.ToolChatProviderType, model string) (llm.ToolChatter, error) {
-	switch provider {
-	case llm.UnspecifiedToolChatProviderType:
-		if strings.HasPrefix(model, "gpt") {
-			return llm.OpenaiToolChat{}, nil
-		}
-
-		if strings.HasPrefix(model, "claude-") {
-			return llm.AnthropicToolChat{}, nil
-		}
-
-		if model == "" {
-			return nil, errors.New("unspecified tool chat provider")
-		}
-
-		return nil, fmt.Errorf("unsupported tool chat model: %v", model)
-
-	case llm.OpenaiToolChatProviderType:
-		return llm.OpenaiToolChat{}, nil
-	case llm.AnthropicToolChatProviderType:
-		return llm.AnthropicToolChat{}, nil
-	default:
-		return nil, fmt.Errorf("unsupported tool chat provider: %s", provider)
-	}
 }

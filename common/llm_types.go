@@ -90,17 +90,19 @@ type Tool struct {
 type ChatProvider string
 
 const (
-	UnspecifiedChatProvider ChatProvider = ""
-	OpenaiChatProvider      ChatProvider = "openai"
-	AnthropicChatProvider   ChatProvider = "anthropic"
+	UnspecifiedChatProvider       ChatProvider = ""
+	OpenaiChatProvider           ChatProvider = "openai"
+	AnthropicChatProvider        ChatProvider = "anthropic"
+	OpenaiCompatibleChatProvider ChatProvider = "openai_compatible"
 )
 
 type ToolChatProviderType string
 
 const (
-	UnspecifiedToolChatProviderType ToolChatProviderType = ""
-	OpenaiToolChatProviderType      ToolChatProviderType = "openai"
-	AnthropicToolChatProviderType   ToolChatProviderType = "anthropic"
+	UnspecifiedToolChatProviderType      ToolChatProviderType = ""
+	OpenaiToolChatProviderType           ToolChatProviderType = "openai"
+	AnthropicToolChatProviderType        ToolChatProviderType = "anthropic"
+	OpenaiCompatibleToolChatProviderType ToolChatProviderType = "openai_compatible"
 )
 
 var SmallModels = map[ToolChatProviderType]string{
@@ -118,8 +120,8 @@ func (provider ToolChatProviderType) SmallModel() string {
 }
 
 var LongContextLargeModels = map[ToolChatProviderType]string{
-	OpenaiToolChatProviderType:    openai.GPT4Turbo20240409,
-	AnthropicToolChatProviderType: string(anthropic.Claude3Opus),
+	OpenaiToolChatProviderType:           openai.GPT4Turbo20240409,
+	AnthropicToolChatProviderType:        string(anthropic.Claude3Opus),
 }
 
 func (provider ToolChatProviderType) LongContextLargeModel() string {
@@ -134,6 +136,8 @@ func StringToToolChatProviderType(providerType string) (ToolChatProviderType, er
 		return AnthropicToolChatProviderType, nil
 	case string(UnspecifiedToolChatProviderType):
 		return UnspecifiedToolChatProviderType, nil
+	case string(OpenaiCompatibleToolChatProviderType):
+		return OpenaiCompatibleToolChatProviderType, nil
 	default:
 		return UnspecifiedToolChatProviderType, fmt.Errorf("unknown provider: %s", providerType)
 	}
