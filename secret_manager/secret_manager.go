@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-
+	"strings"
 	"github.com/zalando/go-keyring"
+	"sidekick/common"
 )
 
 type SecretManager interface {
@@ -16,9 +17,10 @@ type SecretManager interface {
 type SecretManagerType string
 
 const (
-	EnvSecretManagerType     SecretManagerType = "env"
-	MockSecretManagerType    SecretManagerType = "mock"
-	KeyringSecretManagerType SecretManagerType = "keyring"
+	EnvSecretManagerType        SecretManagerType = "env"
+	MockSecretManagerType       SecretManagerType = "mock"
+	KeyringSecretManagerType    SecretManagerType = "keyring"
+	LocalConfigSecretManagerType SecretManagerType = "local_config"
 )
 
 type EnvSecretManager struct{}
@@ -48,6 +50,66 @@ func (k KeyringSecretManager) GetSecret(secretName string) (string, error) {
 
 func (k KeyringSecretManager) GetType() SecretManagerType {
 	return KeyringSecretManagerType
+}
+
+type LocalConfigSecretManager struct{}
+
+func (l LocalConfigSecretManager) GetType() SecretManagerType {
+	return LocalConfigSecretManagerType
+}
+
+func (l LocalConfigSecretManager) GetSecret(secretName string) (string, error) {
+    // Load the local config
+    configPath := common.GetSidekickConfigPath()
+    config, err := common.LoadSidekickConfig(configPath)
+    if err != nil {
+        return "", fmt.Errorf("error loading local config: %w", err)
+    }
+
+	// Handle special cases first
+	switch secretName {
+	case "OPENAI_API_KEY":
+		return l.findProviderKey(config, "", "openai")
+	case "ANTHROPIC_API_KEY":
+		return l.findProviderKey(config, "", "anthropic")
+	}
+
+	// For other cases, strip _API_KEY suffix and match against provider names
+	if strings.HasSuffix(secretName, "_API_KEY") {
+		providerName := strings.TrimSuffix(secretName, "_API_KEY")
+		return l.findProviderKey(config, providerName, "")
+	}
+
+	return "", fmt.Errorf("secret %s not found in local config", secretName)
+}
+
+func (l LocalConfigSecretManager) findProviderKey(config common.LocalConfig, name, providerType string) (string, error) {
+	var matches []common.ModelProviderConfig
+
+	for _, provider := range config.CustomProviders {
+		if providerType != "" && provider.ProviderType == providerType {
+			matches = append(matches, provider)
+		} else if name != "" {
+			// Convert provider name to match secret name format
+			providerNameNormalized := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(provider.Name, " ", "_"), "-", "_"))
+			if providerNameNormalized == name {
+				matches = append(matches, provider)
+			}
+		}
+	}
+	if len(matches) == 0 {
+		if providerType != "" {
+			return "", fmt.Errorf("no provider found with type %s", providerType)
+		}
+		return "", fmt.Errorf("no provider found with name %s", name)
+	}
+	if len(matches) > 1 {
+		if providerType != "" {
+			return "", fmt.Errorf("multiple providers found with type %s", providerType)
+		}
+		return "", fmt.Errorf("multiple providers found with name %s", name)
+	}
+	return matches[0].Key, nil
 }
 
 type MockSecretManager struct{}
@@ -102,6 +164,12 @@ func (sc *SecretManagerContainer) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		sc.SecretManager = ksm
+	case string(LocalConfigSecretManagerType):
+		var lcm *LocalConfigSecretManager
+		if err := json.Unmarshal(v.Manager, &lcm); err != nil {
+			return err
+		}
+		sc.SecretManager = lcm
 	default:
 		return fmt.Errorf("unknown SecretManager type: %s", v.Type)
 	}
