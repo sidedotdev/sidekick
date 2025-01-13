@@ -14,6 +14,7 @@ import (
 	"sidekick/coding/git"
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
+	"sidekick/common"
 	"sidekick/srv"
 	"sidekick/workspace"
 
@@ -125,6 +126,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	w.RegisterActivity(dev.ReadFileActivity)
 	w.RegisterActivity(dev.ManageChatHistoryActivity)
 	w.RegisterActivity(ffa.EvalBoolFlag)
+	w.RegisterActivity(common.GetLocalConfig)
 
 	workspaceActivities := &workspace.Activities{
 		Storage: service,
