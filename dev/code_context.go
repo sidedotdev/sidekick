@@ -131,6 +131,7 @@ func GetRankedRepoSummary(dCtx DevContext, rankQuery string) (string, error) {
 			EmbeddingType: "oai-te3-sm",
 			RankQuery:     rankQuery,
 			Secrets:       *dCtx.Secrets,
+			ModelConfig:   dCtx.GetEmbeddingModelConfig(common.DefaultKey),
 		},
 		CharLimit: min(defaultMaxChatHistoryLength/2, 15000), // ensure we leave space for other messages
 	}

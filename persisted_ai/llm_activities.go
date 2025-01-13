@@ -118,6 +118,8 @@ func getProviderType(s string) (llm.ToolChatProviderType, error) {
 		return llm.OpenaiToolChatProviderType, nil
 	case "anthropic":
 		return llm.AnthropicToolChatProviderType, nil
+	case "mock":
+		return llm.ToolChatProviderType("mock"), nil
 	}
 
 	// TODO first try workspace config to determine provider type, then fallback to local config

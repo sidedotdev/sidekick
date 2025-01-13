@@ -23,7 +23,8 @@ type OpenaiToolChat struct {
 
 // implements ToolChat interface
 func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta) (*ChatMessageResponse, error) {
-	token, err := options.Secrets.SecretManager.GetSecret(OpenaiApiKeySecretName)
+	providerNameNormalized := options.Params.ModelConfig.NormalizedProviderName()
+	token, err := options.Secrets.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
 	if err != nil {
 		return nil, err
 	}

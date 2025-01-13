@@ -18,7 +18,6 @@ import (
 	"sidekick/workspace"
 
 	"sidekick/dev"
-	"sidekick/embedding"
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/flow_action"
@@ -61,7 +60,6 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	flowActivities := &flow_action.FlowActivities{Service: service}
 	openAIActivities := &persisted_ai.OpenAIActivities{
 		Storage:  service,
-		Embedder: embedding.OpenAIEmbedder{},
 	}
 	llmActivities := &persisted_ai.LlmActivities{
 		Streamer: service,
@@ -88,7 +86,6 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	}
 	ragActivities := &persisted_ai.RagActivities{
 		DatabaseAccessor: service,
-		Embedder:         embedding.OpenAIEmbedder{},
 	}
 
 	pollFailuresActivities := &poll_failures.PollFailuresActivities{

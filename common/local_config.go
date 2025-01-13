@@ -101,6 +101,13 @@ func LoadSidekickConfig(configPath string) (LocalConfig, error) {
 		return LocalConfig{}, fmt.Errorf("invalid config: %w", err)
 	}
 
+	for i := range config.Providers {
+		p := &config.Providers[i]
+		if slices.Contains(BuiltinProviders, p.Type) && p.Name == "" {
+			p.Name = p.Type
+		}
+	}
+
 	return config, nil
 }
 

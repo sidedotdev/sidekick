@@ -152,7 +152,7 @@ func (l LocalConfigSecretManager) findProviderKey(config common.LocalConfig, nam
 			matches = append(matches, provider)
 		} else if name != "" {
 			// Convert provider name to match secret name format
-			providerNameNormalized := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(provider.Name, " ", "_"), "-", "_"))
+			providerNameNormalized := common.ModelConfig{Provider: provider.Name}.NormalizedProviderName()
 			if providerNameNormalized == name {
 				matches = append(matches, provider)
 			}

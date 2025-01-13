@@ -3,39 +3,36 @@ package embedding
 import (
 	"context"
 	"fmt"
+	"sidekick/common"
 	"sidekick/secret_manager"
 
 	openai "github.com/sashabaranov/go-openai"
 )
 
-type OpenAIEmbedder struct{}
-
-var embeddingTypeToModel = map[string]openai.EmbeddingModel{
-	"ada2":       openai.AdaEmbeddingV2,
-	"oai-te3-sm": openai.SmallEmbedding3,
+type OpenAIEmbedder struct {
+	BaseURL      string
+	DefaultModel string
 }
 
-const ErrUnsupportedEmbeddingType = "unsupported embedding type"
-const OpenaiApiKeySecretName = "OPENAI_API_KEY"
-
-func (oe OpenAIEmbedder) Embed(ctx context.Context, embeddingType string, secretManager secret_manager.SecretManager, input []string) ([]EmbeddingVector, error) {
-	token, err := secretManager.GetSecret(OpenaiApiKeySecretName)
+func (oe OpenAIEmbedder) Embed(ctx context.Context, modelConfig common.ModelConfig, secretManager secret_manager.SecretManager, input []string) ([]EmbeddingVector, error) {
+	providerNameNormalized := modelConfig.NormalizedProviderName()
+	token, err := secretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
 	if err != nil {
 		return nil, err
 	}
 
 	// TODO use this to dependency-inject the NewClient implementation: https://github.com/temporalio/samples-go/blob/a0c4ef5f372e854a472e4b634877e539a30cafe3/greetings/workflow.go#L22
-	client := openai.NewClient(token)
 
-	var model openai.EmbeddingModel
-	model, ok := embeddingTypeToModel[embeddingType]
-	if !ok {
-		return nil, fmt.Errorf(ErrUnsupportedEmbeddingType + ": " + embeddingType)
+	clientConfig := openai.DefaultConfig(token)
+	if oe.BaseURL != "" {
+		clientConfig.BaseURL = oe.BaseURL
 	}
+	client := openai.NewClientWithConfig(clientConfig)
+
 
 	response, err := client.CreateEmbeddings(ctx, openai.EmbeddingRequest{
 		Input: input,
-		Model: model,
+		Model: openai.EmbeddingModel(modelConfig.Model),
 		User:  "",
 	})
 	if err != nil {

@@ -29,7 +29,11 @@ providers:
     type: openai_compatible
     base_url: https://example.com
     key: abc123
-    default_llm: gpt-4
+    default_llm: custom-model
+  - type: openai
+    key: xyz456
+  - type: anthropic
+    key: 789def
 llm:
   defaults:
     - provider: custom_llm
@@ -48,9 +52,18 @@ embedding:
 		config, err := LoadSidekickConfig(configPath)
 		require.NoError(t, err)
 
-		assert.Len(t, config.Providers, 1)
+		assert.Len(t, config.Providers, 3)
 		assert.Equal(t, "custom_llm", config.Providers[0].Name)
 		assert.Equal(t, "openai_compatible", config.Providers[0].Type)
+		assert.Equal(t, "https://example.com", config.Providers[0].BaseURL)
+		assert.Equal(t, "abc123", config.Providers[0].Key)
+		assert.Equal(t, "custom-model", config.Providers[0].DefaultLLM)
+		assert.Equal(t, "openai", config.Providers[1].Type)
+		assert.Equal(t, "openai", config.Providers[1].Name)
+		assert.Equal(t, "xyz456", config.Providers[1].Key)
+		assert.Equal(t, "anthropic", config.Providers[2].Type)
+		assert.Equal(t, "anthropic", config.Providers[2].Name)
+		assert.Equal(t, "789def", config.Providers[2].Key)
 
 		assert.Len(t, config.LLM["defaults"], 2)
 		assert.Equal(t, "custom_llm", config.LLM["defaults"][0].Provider)

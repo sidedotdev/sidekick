@@ -206,6 +206,11 @@ func (dCtx *DevContext) GetModelConfig(key string, iteration int, fallback strin
 	return modelConfig
 }
 
+func (dCtx *DevContext) GetEmbeddingModelConfig(key string) common.ModelConfig {
+	modelConfig := dCtx.EmbeddingConfig.GetModelConfig(key)
+	return modelConfig
+}
+
 func (devActionCtx *DevActionContext) FlowActionContext() flow_action.ActionContext {
 	return flow_action.ActionContext{
 		ExecContext:  devActionCtx.ExecContext,
