@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.InfoLevel)
 
 	// Load the .env file (You can do this once and cache if needed)
 	if err := godotenv.Load(); err != nil {
