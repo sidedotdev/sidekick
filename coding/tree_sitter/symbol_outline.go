@@ -280,6 +280,10 @@ func writeSymbolCapture(languageName string, out *strings.Builder, sourceCode *[
 		{
 			writePythonSymbolCapture(out, sourceCode, c, name)
 		}
+	case "java":
+		{
+			writeJavaSymbolCapture(out, sourceCode, c, name)
+		}
 	default:
 		{
 			// NOTE this is expected to provide quite bad output until tweaked per language

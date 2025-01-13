@@ -25,8 +25,8 @@ type ChatMessage struct {
 
 // TODO ChatMessage.Content should be changed to []ContentBlock
 type ContentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type         string `json:"type"`
+	Text         string `json:"text"`
 	CacheControl string `json:"cacheControl"`
 }
 

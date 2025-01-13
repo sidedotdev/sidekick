@@ -23,6 +23,7 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
+	"github.com/smacker/go-tree-sitter/java"
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 )
@@ -408,6 +409,10 @@ func writeSignatureCapture(languageName string, out *strings.Builder, sourceCode
 		{
 			writePythonSignatureCapture(out, sourceCode, c, name)
 		}
+	case "java":
+		{
+			writeJavaSignatureCapture(out, sourceCode, c, name)
+		}
 	default:
 		{
 			// NOTE this is expected to provide quite bad output until tweaked per language
@@ -443,6 +448,8 @@ func inferLanguageFromFilePath(filePath string) (string, *sitter.Language, error
 		return "vue", vue.GetLanguage(), nil
 	case "python":
 		return "python", python.GetLanguage(), nil
+	case "java":
+		return "java", java.GetLanguage(), nil
 	default:
 		return "", nil, fmt.Errorf("%w: %s", ErrFailedInferLanguage, filePath)
 	}

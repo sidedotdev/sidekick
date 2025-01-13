@@ -236,8 +236,8 @@ func addDevRequirementsPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptI
 		panic("Unsupported prompt type for dev requirements: " + promptInfo.GetType())
 	}
 	*chatHistory = append(*chatHistory, llm.ChatMessage{
-		Role:    role,
-		Content: content,
+		Role:         role,
+		Content:      content,
 		CacheControl: cacheControl,
 	})
 }

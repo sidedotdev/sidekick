@@ -252,10 +252,10 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 
 	if !skip {
 		newMessage := llm.ChatMessage{
-			Role:       role,
-			Content:    content,
-			Name:       name,
-			ToolCallId: toolCallId,
+			Role:         role,
+			Content:      content,
+			Name:         name,
+			ToolCallId:   toolCallId,
 			CacheControl: cacheControl,
 		}
 		// FIXME don't mutate chatHistory here, let the caller do it if they want it
