@@ -165,7 +165,7 @@ func generateDevRequirements(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*
 		})
 	*/
 
-	provider, modelConfig, _ := dCtx.GetToolChatConfig(common.PlanningKey, 0)
+	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 
 	options := llm.ToolChatOptions{
 		Secrets: *dCtx.Secrets,
@@ -175,8 +175,7 @@ func generateDevRequirements(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*
 			ToolChoice: llm.ToolChoice{
 				Type: llm.ToolChoiceTypeAuto, // TODO test with llm.ToolChoiceTypeRequired
 			},
-			Provider: provider,
-			Model:    modelConfig.Model,
+			ModelConfig: modelConfig,
 		},
 	}
 	return TrackedToolChat(dCtx, "Generate Dev Requirements", options)
@@ -186,10 +185,8 @@ func TrackedToolChat(dCtx DevContext, actionName string, options llm.ToolChatOpt
 	actionCtx := dCtx.NewActionContext(actionName)
 	actionCtx.ActionParams = options.ActionParams()
 	return Track(actionCtx, func(flowAction domain.FlowAction) (*llm.ChatMessageResponse, error) {
-		if options.Params.Provider == llm.UnspecifiedToolChatProviderType {
-			provider, modelConfig, _ := dCtx.GetToolChatConfig(common.DefaultKey, 0)
-			options.Params.Provider = provider
-			options.Params.Model = modelConfig.Model
+		if options.Params.Provider == "" {
+			options.Params.ModelConfig = dCtx.GetModelConfig(common.DefaultKey, 0, "default")
 		}
 		flowId := workflow.GetInfo(dCtx).WorkflowExecution.ID
 		chatStreamOptions := persisted_ai.ChatStreamOptions{

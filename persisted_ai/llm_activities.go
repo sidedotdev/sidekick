@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/llm"
 	"sidekick/srv"
@@ -71,11 +72,38 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 
 	}()
 
-	toolChatter, err := getToolChatter(options.Params.Provider, options.Params.Model)
+	providerType, err := getProviderType(options.Params.ModelConfig.Provider)
+	if err != nil {
+		return nil, err
+	}
+	toolChatter, err := getToolChatter(providerType, options.Params.ModelConfig.Model)
 	if err != nil {
 		return nil, err
 	}
 	return toolChatter.ChatStream(ctx, options.ToolChatOptions, deltaChan)
+}
+
+func getProviderType(s string) (llm.ToolChatProviderType, error) {
+	switch s {
+	case "openai":
+		return llm.OpenaiToolChatProviderType, nil
+	case "anthropic":
+		return llm.AnthropicToolChatProviderType, nil
+	}
+
+	// TODO first try workspace config to determine provider type, then fallback to local config
+	localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
+	if err != nil {
+		return llm.UnspecifiedToolChatProviderType, fmt.Errorf("failed to load local config: %w", err)
+	}
+
+	for _, provider := range localConfig.Providers {
+		if provider.Name == s {
+			return llm.ToolChatProviderType(provider.Type), nil
+		}
+	}
+
+	return llm.UnspecifiedToolChatProviderType, fmt.Errorf("unknown provider: %s", s)
 }
 
 func getToolChatter(provider llm.ToolChatProviderType, model string) (llm.ToolChatter, error) {

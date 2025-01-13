@@ -266,7 +266,7 @@ func getPlanningInput(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInf
 		tools = append(tools, &getHelpOrInputTool)
 	}
 
-	provider, modelConfig, _ := dCtx.GetToolChatConfig(common.PlanningKey, 0)
+	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 
 	return llm.ToolChatOptions{
 		Secrets: *dCtx.Secrets,
@@ -276,8 +276,7 @@ func getPlanningInput(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInf
 			ToolChoice: llm.ToolChoice{
 				Type: llm.ToolChoiceTypeAuto,
 			},
-			Provider: provider,
-			Model:    modelConfig.Model,
+			ModelConfig: modelConfig,
 		},
 	}
 }

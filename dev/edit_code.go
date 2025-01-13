@@ -277,8 +277,7 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 				Type: llm.ToolChoiceTypeAuto,
 			},
 			Temperature: &temperature,
-			Provider:    codingModelConfig.ToolChatProvider(),
-			Model:       codingModelConfig.Model,
+			ModelConfig: codingModelConfig,
 		},
 	}
 }

@@ -108,7 +108,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 
 		// TODO /gen use models slice and modelIndex and modelAttemptCount just like
 		// in completeDevStep to switch models when ErrMaxIterationsReached
-		_, modelConfig, _ := dCtx.GetToolChatConfig(common.CodingKey, attemptCount/3)
+		modelConfig := dCtx.GetModelConfig(common.CodingKey, attemptCount/3, "default")
 
 		// TODO don't force getting help if it just got help recently already
 		if attemptCount > 0 && attemptCount%3 == 0 {
