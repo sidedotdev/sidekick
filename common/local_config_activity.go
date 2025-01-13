@@ -13,11 +13,11 @@ type LocalPublicConfig struct {
 
 // ModelProviderPublicConfig represents the model provider configuration without keys
 type ModelProviderPublicConfig struct {
-	Name         string `json:"name"`
-	ProviderType string `json:"provider_type"`
-	BaseURL      string `json:"base_url,omitempty"`
-	DefaultLLM   string `json:"default_llm,omitempty"`
-	SmallLLM     string `json:"small_llm,omitempty"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	BaseURL    string `json:"base_url,omitempty"`
+	DefaultLLM string `json:"default_llm,omitempty"`
+	SmallLLM   string `json:"small_llm,omitempty"`
 }
 
 // GetLocalConfig loads the local configuration and converts it to a format
@@ -33,11 +33,11 @@ func GetLocalConfig() (LocalPublicConfig, error) {
 	for i, p := range config.Providers {
 		// Create copy without sensitive key
 		providers[i] = ModelProviderPublicConfig{
-			Name:         p.Name,
-			ProviderType: p.Type,
-			BaseURL:      p.BaseURL,
-			DefaultLLM:   p.DefaultLLM,
-			SmallLLM:     p.SmallLLM,
+			Name:       p.Name,
+			Type:       p.Type,
+			BaseURL:    p.BaseURL,
+			DefaultLLM: p.DefaultLLM,
+			SmallLLM:   p.SmallLLM,
 		}
 	}
 

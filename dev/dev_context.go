@@ -186,8 +186,15 @@ func (dCtx *DevContext) GetModelConfig(key string, iteration int, fallback strin
 			if err == nil {
 				modelConfig.Model = provider.SmallModel()
 			} else {
-				// TODO: use dCtx.Providers to get the small model based on the
-				// provider name, if a small model is configured
+				// Try to find provider in configured providers
+				for _, p := range dCtx.Providers {
+					if p.Name == modelConfig.Provider {
+						if p.SmallLLM != "" {
+							modelConfig.Model = p.SmallLLM
+						}
+						break
+					}
+				}
 			}
 		} else {
 			modelConfig, _ = dCtx.LLMConfig.GetModelConfig(fallback, iteration)
