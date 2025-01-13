@@ -378,6 +378,7 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 	name := ""
 	toolCallId := ""
 	skip := false
+	cacheControl := ""
 	switch info := promptInfo.(type) {
 	case SkipInfo:
 		skip = true
@@ -390,8 +391,10 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 		content = info.Feedback
 	case DetermineCodeContextInfo:
 		content = renderCodeContextInitialPrompt(info)
+		cacheControl = "ephemeral"
 	case RefineCodeContextInfo:
 		content = renderCodeContextRefineAndRankPrompt(info)
+		cacheControl = "ephemeral"
 	default:
 		panic("Unsupported prompt type for code context: " + promptInfo.GetType())
 	}
@@ -402,6 +405,7 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 			Content:    content,
 			Name:       name,
 			ToolCallId: toolCallId,
+			CacheControl: cacheControl,
 		})
 	}
 }

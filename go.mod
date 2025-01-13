@@ -19,9 +19,12 @@ require (
 	github.com/invopop/jsonschema v0.12.0
 	github.com/joho/godotenv v1.5.1
 	github.com/kardianos/service v1.2.2
+	github.com/kelindar/binary v1.0.19
 	github.com/knadh/koanf/parsers/yaml v0.1.0
 	github.com/knadh/koanf/providers/file v0.1.0
 	github.com/knadh/koanf/v2 v2.1.2
+	github.com/nats-io/nats-server/v2 v2.10.24
+	github.com/nats-io/nats.go v1.38.0
 	github.com/redis/go-redis/v9 v9.5.1
 	github.com/rs/zerolog v1.31.0
 	github.com/sashabaranov/go-openai v1.29.1
@@ -50,26 +53,28 @@ require (
 )
 
 require (
-	cloud.google.com/go/auth v0.5.0 // indirect
-	cloud.google.com/go/auth/oauth2adapt v0.2.2 // indirect
-	cloud.google.com/go/iam v1.1.8 // indirect
+	cloud.google.com/go/auth v0.7.2 // indirect
+	cloud.google.com/go/auth/oauth2adapt v0.2.3 // indirect
+	cloud.google.com/go/iam v1.1.10 // indirect
 	dario.cat/mergo v1.0.0 // indirect
 	github.com/alessio/shellescape v1.4.1 // indirect
+	github.com/anthropics/anthropic-sdk-go v0.2.0-alpha.8
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
-	github.com/kelindar/binary v1.0.19
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/minio/highwayhash v1.0.3 // indirect
 	github.com/nats-io/jwt/v2 v2.7.3 // indirect
-	github.com/nats-io/nats-server/v2 v2.10.24
-	github.com/nats-io/nats.go v1.38.0
 	github.com/nats-io/nkeys v0.4.9 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
+	github.com/tidwall/gjson v1.14.4 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
 )
 
 require (
-	cloud.google.com/go v0.114.0 // indirect
-	cloud.google.com/go/compute/metadata v0.3.0 // indirect
+	cloud.google.com/go v0.115.0 // indirect
+	cloud.google.com/go/compute/metadata v0.5.0 // indirect
 	cloud.google.com/go/storage v1.41.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v0.0.0-20230828082145-3c4c8a2d2371 // indirect
@@ -133,7 +138,7 @@ require (
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/s2a-go v0.1.7 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.2 // indirect
-	github.com/googleapis/gax-go/v2 v2.12.4 // indirect
+	github.com/googleapis/gax-go/v2 v2.12.5 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/gorilla/securecookie v1.1.1 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0 // indirect
@@ -235,8 +240,8 @@ require (
 	golang.org/x/text v0.21.0 // indirect
 	golang.org/x/time v0.8.0 // indirect
 	golang.org/x/tools v0.28.0 // indirect
-	google.golang.org/api v0.182.0 // indirect
-	google.golang.org/genproto v0.0.0-20240528184218-531527333157 // indirect
+	google.golang.org/api v0.189.0 // indirect
+	google.golang.org/genproto v0.0.0-20240722135656-d784300faade // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240822170219-fc7c04adadcd // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240822170219-fc7c04adadcd // indirect
 	google.golang.org/grpc v1.65.0 // indirect

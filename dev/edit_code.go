@@ -229,9 +229,11 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	name := ""
 	toolCallId := ""
 	skip := false
+	cacheControl := ""
 	switch info := promptInfo.(type) {
 	case InitialCodeInfo:
 		content = renderAuthorEditBlockInitialPrompt(info.CodeContext, info.Requirements, repoConfig)
+		cacheControl = "ephemeral"
 	case InitialDevStepInfo:
 		content = renderAuthorEditBlockInitialDevStepPrompt(info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, repoConfig)
 	case SkipInfo:
@@ -254,6 +256,7 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 			Content:    content,
 			Name:       name,
 			ToolCallId: toolCallId,
+			CacheControl: cacheControl,
 		}
 		// FIXME don't mutate chatHistory here, let the caller do it if they want it
 		*chatHistory = append(*chatHistory, newMessage)

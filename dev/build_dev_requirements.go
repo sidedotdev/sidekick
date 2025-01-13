@@ -219,9 +219,11 @@ func unmarshalDevRequirements(jsonStr string) (DevRequirements, error) {
 func addDevRequirementsPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) {
 	var content string
 	role := llm.ChatMessageRoleUser
+	cacheControl := ""
 	switch info := promptInfo.(type) {
 	case InitialDevRequirementsInfo:
 		content = getInitialDevRequirementsPrompt(info.Mission, info.Context, info.Requirements)
+		cacheControl = "ephemeral"
 	case FeedbackInfo:
 		content = info.Feedback
 	case ToolCallResponseInfo:
@@ -233,6 +235,7 @@ func addDevRequirementsPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptI
 	*chatHistory = append(*chatHistory, llm.ChatMessage{
 		Role:    role,
 		Content: content,
+		CacheControl: cacheControl,
 	})
 }
 
