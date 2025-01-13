@@ -14,22 +14,22 @@ type ToolChatter interface {
 }
 
 type ChatControlParams struct {
-	Temperature *float32         `json:"temperature"`
-	Model       string           `json:"model"`
-	Provider    ToolChatProvider `json:"provider"`
+	Temperature *float32             `json:"temperature"`
+	Model       string               `json:"model"`
+	Provider    ToolChatProviderType `json:"provider"`
 }
 
 // chat params for LLMs that support automatic tool selection (provided multiple
 // tools, these LLMs can decide when it is appropriate to use a tool and use the
 // tool via a tool call
 type ToolChatParams struct {
-	Messages          []ChatMessage    `json:"messages"`
-	Tools             []*Tool          `json:"tools"`
-	ToolChoice        ToolChoice       `json:"toolChoice"`
-	ParallelToolCalls *bool            `json:"parallelToolCalls"`
-	Temperature       *float32         `json:"temperature"`
-	Model             string           `json:"model"`
-	Provider          ToolChatProvider `json:"provider"`
+	Messages          []ChatMessage        `json:"messages"`
+	Tools             []*Tool              `json:"tools"`
+	ToolChoice        ToolChoice           `json:"toolChoice"`
+	ParallelToolCalls *bool                `json:"parallelToolCalls"`
+	Temperature       *float32             `json:"temperature"`
+	Model             string               `json:"model"`
+	Provider          ToolChatProviderType `json:"provider"`
 }
 
 func PromptToToolChatParams(prompt string, controlParams ChatControlParams) ToolChatParams {
@@ -46,12 +46,12 @@ func PromptToToolChatParams(prompt string, controlParams ChatControlParams) Tool
 	}
 }
 
-type ToolChatProvider = common.ToolChatProvider
+type ToolChatProviderType = common.ToolChatProviderType
 
 const (
-	UnspecifiedToolChatProvider ToolChatProvider = ToolChatProvider(common.UnspecifiedChatProvider)
-	OpenaiToolChatProvider      ToolChatProvider = ToolChatProvider(common.OpenaiChatProvider)
-	AnthropicToolChatProvider   ToolChatProvider = ToolChatProvider(common.AnthropicChatProvider)
+	UnspecifiedToolChatProviderType ToolChatProviderType = ToolChatProviderType(common.UnspecifiedChatProvider)
+	OpenaiToolChatProviderType      ToolChatProviderType = ToolChatProviderType(common.OpenaiChatProvider)
+	AnthropicToolChatProviderType   ToolChatProviderType = ToolChatProviderType(common.AnthropicChatProvider)
 )
 
 type ToolChatOptions struct {

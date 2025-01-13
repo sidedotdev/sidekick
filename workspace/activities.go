@@ -18,10 +18,12 @@ func (a *Activities) GetWorkspaceConfig(workspaceID string) (domain.WorkspaceCon
 		return domain.WorkspaceConfig{}, err
 	}
 
+	// FIXME remove, these will be optional instead
 	if config.LLM.Defaults == nil || len(config.LLM.Defaults) == 0 {
 		return domain.WorkspaceConfig{}, errors.New("missing LLM config for workspace")
 	}
 
+	// FIXME remove, these will be optional instead
 	if config.Embedding.Defaults == nil || len(config.Embedding.Defaults) == 0 {
 		return domain.WorkspaceConfig{}, errors.New("missing embedding config")
 	}

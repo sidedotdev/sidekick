@@ -15,22 +15,21 @@ func TestGetSidekickConfig(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
 	t.Run("no config file returns empty config", func(t *testing.T) {
-		config, err := GetSidekickConfig(configPath)
+		config, err := LoadSidekickConfig(configPath)
 		require.NoError(t, err)
-		assert.Empty(t, config.CustomLLMProviders)
-		assert.Empty(t, config.CustomEmbeddingProviders)
+		assert.Empty(t, config.CustomProviders)
 		assert.Empty(t, config.LLM)
 		assert.Empty(t, config.Embedding)
 	})
 
 	t.Run("valid config file", func(t *testing.T) {
 		configYAML := `
-custom_llm_providers:
+custom_providers:
   - name: custom_llm
     provider_type: openai_compatible
     base_url: https://example.com
     key: abc123
-    default_model: gpt-4
+    default_llm: gpt-4
 llm:
   defaults:
     - provider: custom_llm
@@ -46,12 +45,12 @@ embedding:
 `
 		require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0644))
 
-		config, err := GetSidekickConfig(configPath)
+		config, err := LoadSidekickConfig(configPath)
 		require.NoError(t, err)
 
-		assert.Len(t, config.CustomLLMProviders, 1)
-		assert.Equal(t, "custom_llm", config.CustomLLMProviders[0].Name)
-		assert.Equal(t, "openai_compatible", config.CustomLLMProviders[0].ProviderType)
+		assert.Len(t, config.CustomProviders, 1)
+		assert.Equal(t, "custom_llm", config.CustomProviders[0].Name)
+		assert.Equal(t, "openai_compatible", config.CustomProviders[0].ProviderType)
 
 		assert.Len(t, config.LLM["defaults"], 2)
 		assert.Equal(t, "custom_llm", config.LLM["defaults"][0].Provider)
@@ -74,7 +73,7 @@ embedding:
 `
 		require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0644))
 
-		_, err := GetSidekickConfig(configPath)
+		_, err := LoadSidekickConfig(configPath)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "anthropic provider is not allowed for embeddings")
 	})
@@ -87,14 +86,14 @@ llm:
 `
 		require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0644))
 
-		_, err := GetSidekickConfig(configPath)
+		_, err := LoadSidekickConfig(configPath)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid provider: unknown_provider")
 	})
 
 	t.Run("invalid config - invalid custom provider", func(t *testing.T) {
 		configYAML := `
-custom_llm_providers:
+custom_providers:
   - name: custom_llm
     provider_type: invalid_type
     base_url: https://example.com
@@ -102,7 +101,7 @@ custom_llm_providers:
 `
 		require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0644))
 
-		_, err := GetSidekickConfig(configPath)
+		_, err := LoadSidekickConfig(configPath)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid provider_type: invalid_type")
 	})

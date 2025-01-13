@@ -18,28 +18,25 @@ var ValidProviderTypes = []string{"openai", "anthropic", "openai_compatible"}
 // BuiltinProviders are the providers that are built into the system
 var BuiltinProviders = []string{"openai", "anthropic"}
 
-// CustomProviderConfig represents configuration for a custom LLM or embedding provider
-type CustomProviderConfig struct {
+// ModelProviderConfig represents configuration for an LLM or embedding provider
+type ModelProviderConfig struct {
 	Name         string `koanf:"name"`
 	ProviderType string `koanf:"provider_type"`
-	BaseURL      string `koanf:"base_url"`
+	BaseURL      string `koanf:"base_url,omitempty"`
 	Key          string `koanf:"key"`
-	DefaultModel string `koanf:"default_model,omitempty"`
+	DefaultLLM   string `koanf:"default_llm,omitempty"`
 }
 
 // Validate ensures the CustomProviderConfig is valid
-func (c CustomProviderConfig) Validate() error {
-	if c.Name == "" {
-		return fmt.Errorf("name is required")
-	}
+func (c ModelProviderConfig) Validate() error {
 	if c.ProviderType == "" {
 		return fmt.Errorf("provider_type is required")
 	}
 	if !slices.Contains(ValidProviderTypes, c.ProviderType) {
 		return fmt.Errorf("invalid provider_type: %s", c.ProviderType)
 	}
-	if c.BaseURL == "" {
-		return fmt.Errorf("base_url is required")
+	if c.Name == "" && c.ProviderType != "openai" && c.ProviderType != "anthropic" {
+		return fmt.Errorf("name is required for custom provider types like openai_compatible")
 	}
 	if c.Key == "" {
 		return fmt.Errorf("key is required")
@@ -49,19 +46,15 @@ func (c CustomProviderConfig) Validate() error {
 
 // LocalConfig represents the local configuration file structure
 type LocalConfig struct {
-	CustomLLMProviders       []CustomProviderConfig   `koanf:"custom_llm_providers,omitempty"`
-	CustomEmbeddingProviders []CustomProviderConfig   `koanf:"custom_embedding_providers,omitempty"`
-	LLM                      map[string][]ModelConfig `koanf:"llm,omitempty"`
-	Embedding                map[string][]ModelConfig `koanf:"embedding,omitempty"`
+	CustomProviders []ModelProviderConfig   `koanf:"custom_providers,omitempty"`
+	LLM             map[string][]ModelConfig `koanf:"llm,omitempty"`
+	Embedding       map[string][]ModelConfig `koanf:"embedding,omitempty"`
 }
 
 // getCustomProviderNames returns a slice of custom provider names
 func (c LocalConfig) getCustomProviderNames() []string {
 	names := make([]string, 0)
-	for _, p := range c.CustomLLMProviders {
-		names = append(names, p.Name)
-	}
-	for _, p := range c.CustomEmbeddingProviders {
+	for _, p := range c.CustomProviders {
 		names = append(names, p.Name)
 	}
 	return names
@@ -89,14 +82,9 @@ func (c LocalConfig) validateProvider(provider string, allowAnthropicProvider bo
 // Validate ensures the LocalConfig is valid
 func (c LocalConfig) Validate() error {
 	// Validate custom providers
-	for _, p := range c.CustomLLMProviders {
+	for _, p := range c.CustomProviders {
 		if err := p.Validate(); err != nil {
 			return fmt.Errorf("invalid custom LLM provider %s: %w", p.Name, err)
-		}
-	}
-	for _, p := range c.CustomEmbeddingProviders {
-		if err := p.Validate(); err != nil {
-			return fmt.Errorf("invalid custom embedding provider %s: %w", p.Name, err)
 		}
 	}
 
@@ -121,10 +109,10 @@ func (c LocalConfig) Validate() error {
 	return nil
 }
 
-// GetSidekickConfig loads the sidekick configuration from the given file path.
+// LoadSidekickConfig loads the sidekick configuration from the given file path.
 // If the config file doesn't exist, returns an empty config.
 // The config file is expected to be in YAML format.
-func GetSidekickConfig(configPath string) (LocalConfig, error) {
+func LoadSidekickConfig(configPath string) (LocalConfig, error) {
 	k := koanf.New(".")
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
@@ -148,7 +136,21 @@ func GetSidekickConfig(configPath string) (LocalConfig, error) {
 	return config, nil
 }
 
-// GetDefaultConfigPath returns the default path for the sidekick config file
-func GetDefaultConfigPath() string {
-	return filepath.Join(xdg.ConfigHome, "sidekick", "config.yaml")
+func GetSidekickConfigDir() string {
+	configDir := xdg.ConfigHome
+
+	// prefer ".config" when possible (e.g. on macOS), for developer
+	// accessibility to edit this file
+	for _, dir := range xdg.ConfigDirs {
+		if filepath.Base(dir) == ".config" {
+			configDir = dir
+			break
+		}
+	}
+
+	return filepath.Join(configDir, "sidekick")
+}
+
+func GetSidekickConfigPath() string {
+	return filepath.Join(GetSidekickConfigDir(), "config.yml")
 }

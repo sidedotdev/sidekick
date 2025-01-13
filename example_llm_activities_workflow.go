@@ -65,7 +65,7 @@ func ExampleLlmActivitiesWorkflow(ctx workflow.Context) (string, error) {
 						Parameters:  anthropic.GenerateInputSchema(&SentimentRequest{}),
 					},
 				},
-				Provider: llm.AnthropicToolChatProvider,
+				Provider: llm.AnthropicToolChatProviderType,
 				//Provider: OpenaiToolChatProvider,
 			},
 		},

@@ -44,7 +44,7 @@ func ForceToolCall(actionCtx flow_action.ActionContext, llmConfig common.LLMConf
 	if model == "" {
 		model = modelConfig.Model
 	}
-	if provider == llm.UnspecifiedToolChatProvider {
+	if provider == llm.UnspecifiedToolChatProviderType {
 		provider = toolChatProvider
 	}
 

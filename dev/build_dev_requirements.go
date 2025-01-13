@@ -186,7 +186,7 @@ func TrackedToolChat(dCtx DevContext, actionName string, options llm.ToolChatOpt
 	actionCtx := dCtx.NewActionContext(actionName)
 	actionCtx.ActionParams = options.ActionParams()
 	return Track(actionCtx, func(flowAction domain.FlowAction) (*llm.ChatMessageResponse, error) {
-		if options.Params.Provider == llm.UnspecifiedToolChatProvider {
+		if options.Params.Provider == llm.UnspecifiedToolChatProviderType {
 			provider, modelConfig, _ := dCtx.GetToolChatConfig(common.DefaultKey, 0)
 			options.Params.Provider = provider
 			options.Params.Model = modelConfig.Model

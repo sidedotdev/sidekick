@@ -156,8 +156,38 @@ func (dCtx *DevContext) NewActionContext(actionType string) DevActionContext {
 /** GetToolChatConfig returns the tool chat provider and model config for the given
  * key and iteration. If there is no model config for the given key, it falls
  * back to the default model config. */
-func (dCtx *DevContext) GetToolChatConfig(key string, iteration int) (llm.ToolChatProvider, common.ModelConfig, bool) {
-	return dCtx.LLMConfig.GetToolChatConfig(key, iteration)
+func (dCtx *DevContext) GetToolChatConfig(key string, iteration int) (llm.ToolChatProviderType, common.ModelConfig, bool) {
+	modelConfig, isDefault := dCtx.LLMConfig.GetModelConfig(key, iteration)
+	//return dCtx.LLMConfig.GetToolChatConfig(key, iteration)
+
+	// FIXME this is using modelConfig.Provider as if it is the provider type. won't work for custom providers.
+	provider, err := common.StringToToolChatProviderType(modelConfig.Provider)
+	if err != nil {
+		panic(fmt.Sprintf("AI config: failed to convert provider string to ToolChatProvider: %v", err))
+	} else if provider == common.UnspecifiedToolChatProviderType {
+		panic("AI config: provider is empty")
+	} else if modelConfig.Model == "" && !isDefault {
+		panic("AI config: model is empty")
+	}
+
+	return provider, modelConfig, isDefault
+}
+
+func (dCtx *DevContext) GetModelConfig(key string, iteration int, fallback string) common.ModelConfig {
+	modelConfig, isDefault := dCtx.LLMConfig.GetModelConfig(key, iteration)
+	if isDefault && fallback != "default" {
+		if fallback == "small" {
+			provider, err := common.StringToToolChatProviderType(modelConfig.Provider)
+			if err == nil {
+				modelConfig.Model = provider.SmallModel()
+			} else {
+				// TODO: use dCtx.Providers to get the small model based on the provider name
+			}
+		} else {
+			modelConfig, _ = dCtx.LLMConfig.GetModelConfig(fallback, iteration)
+		}
+	}
+	return modelConfig
 }
 
 func (devActionCtx *DevActionContext) FlowActionContext() flow_action.ActionContext {

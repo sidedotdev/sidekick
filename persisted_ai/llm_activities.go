@@ -78,9 +78,9 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 	return toolChatter.ChatStream(ctx, options.ToolChatOptions, deltaChan)
 }
 
-func getToolChatter(provider llm.ToolChatProvider, model string) (llm.ToolChatter, error) {
+func getToolChatter(provider llm.ToolChatProviderType, model string) (llm.ToolChatter, error) {
 	switch provider {
-	case llm.UnspecifiedToolChatProvider:
+	case llm.UnspecifiedToolChatProviderType:
 		if strings.HasPrefix(model, "gpt") {
 			return llm.OpenaiToolChat{}, nil
 		}
@@ -95,9 +95,9 @@ func getToolChatter(provider llm.ToolChatProvider, model string) (llm.ToolChatte
 
 		return nil, fmt.Errorf("unsupported tool chat model: %v", model)
 
-	case llm.OpenaiToolChatProvider:
+	case llm.OpenaiToolChatProviderType:
 		return llm.OpenaiToolChat{}, nil
-	case llm.AnthropicToolChatProvider:
+	case llm.AnthropicToolChatProviderType:
 		return llm.AnthropicToolChat{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported tool chat provider: %s", provider)

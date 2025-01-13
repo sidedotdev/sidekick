@@ -41,7 +41,7 @@ func (c LLMConfig) GetModelsOrDefault(key string) ([]ModelConfig, bool) {
 	return c.Defaults, true
 }
 
-func (c LLMConfig) GetToolChatConfig(key string, iteration int) (ToolChatProvider, ModelConfig, bool) {
+func (c LLMConfig) GetModelConfig(key string, iteration int) (ModelConfig, bool) {
 	modelConfigs, isDefault := c.GetModelsOrDefault(key)
 	if len(modelConfigs) == 0 {
 		panic("LLM config: no default model config found")
@@ -51,10 +51,26 @@ func (c LLMConfig) GetToolChatConfig(key string, iteration int) (ToolChatProvide
 	// the correct modelConfig from the list of configs based on which can fit
 	// the context size
 	modelConfig := modelConfigs[iteration%len(modelConfigs)]
-	provider, err := StringToToolChatProvider(modelConfig.Provider)
+
+	return modelConfig, isDefault
+}
+
+// FIXME a ToolChatProvider requires knowing the list of providers, which is missing in the arguments
+func (c LLMConfig) GetToolChatConfig(key string, iteration int) (ToolChatProviderType, ModelConfig, bool) {
+	modelConfigs, isDefault := c.GetModelsOrDefault(key)
+	if len(modelConfigs) == 0 {
+		panic("LLM config: no default model config found")
+	}
+
+	// TODO add logic for MaxContextChars + param for context size, to choose
+	// the correct modelConfig from the list of configs based on which can fit
+	// the context size
+	modelConfig := modelConfigs[iteration%len(modelConfigs)]
+	// FIXME this is using modelConfig.Provider as if it is the provider type. won't work for custom providers.
+	provider, err := StringToToolChatProviderType(modelConfig.Provider)
 	if err != nil {
 		panic(fmt.Sprintf("AI config: failed to convert provider string to ToolChatProvider: %v", err))
-	} else if provider == UnspecifiedToolChatProvider {
+	} else if provider == UnspecifiedToolChatProviderType {
 		panic("AI config: provider is empty")
 	} else if modelConfig.Model == "" && !isDefault {
 		panic("AI config: model is empty")
