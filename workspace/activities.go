@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"context"
-	"errors"
 	"sidekick/domain"
 	"sidekick/srv"
 )
@@ -17,16 +16,5 @@ func (a *Activities) GetWorkspaceConfig(workspaceID string) (domain.WorkspaceCon
 	if err != nil {
 		return domain.WorkspaceConfig{}, err
 	}
-
-	// FIXME remove, these will be optional instead
-	if config.LLM.Defaults == nil || len(config.LLM.Defaults) == 0 {
-		return domain.WorkspaceConfig{}, errors.New("missing LLM config for workspace")
-	}
-
-	// FIXME remove, these will be optional instead
-	if config.Embedding.Defaults == nil || len(config.Embedding.Defaults) == 0 {
-		return domain.WorkspaceConfig{}, errors.New("missing embedding config")
-	}
-
 	return config, nil
 }
