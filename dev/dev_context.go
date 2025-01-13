@@ -19,7 +19,7 @@ import (
 type DevContext struct {
 	flow_action.ExecContext
 	RepoConfig common.RepoConfig
-
+	Providers	    []common.ModelProviderConfig
 	LLMConfig       common.LLMConfig
 	EmbeddingConfig common.EmbeddingConfig
 }
@@ -87,10 +87,12 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		},
 	}
 
-	// TODO /gen activity to get the model configurations, by loading the
-	// LocalConfig. The LocalConfig.LLM should be converted to LLMConfig (empty
-	// is fine), and the LocalConfig.Embedding should be converted to
-	// EmbeddingConfig (empty fine here too) when returned from the activity.
+	// TODO /gen activity to get the providers (without the keys, which are
+	// sensitive), and model configurations, by loading the LocalConfig. Create
+	// a new struct for this. The LocalConfig.LLM should be converted to
+	// LLMConfig (empty is fine), and the LocalConfig.Embedding should be
+	// converted to EmbeddingConfig (empty fine here too) when returned from the
+	// activity.
 	// 
 	// Then workspaceConfig.LLM and workspaceConfig.Embedding should be used to
 	// override these values, if present. If neither LocalConfig nor
@@ -189,7 +191,8 @@ func (dCtx *DevContext) GetModelConfig(key string, iteration int, fallback strin
 			if err == nil {
 				modelConfig.Model = provider.SmallModel()
 			} else {
-				// TODO: use dCtx.Providers to get the small model based on the provider name
+				// TODO: use dCtx.Providers to get the small model based on the
+				// provider name, if a small model is configured
 			}
 		} else {
 			modelConfig, _ = dCtx.LLMConfig.GetModelConfig(fallback, iteration)

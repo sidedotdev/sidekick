@@ -12,38 +12,6 @@ import (
 	"github.com/knadh/koanf/v2"
 )
 
-// ValidProviderTypes are the allowed provider types for custom providers
-var ValidProviderTypes = []string{"openai", "anthropic", "openai_compatible"}
-
-// BuiltinProviders are the providers that are built into the system
-var BuiltinProviders = []string{"openai", "anthropic"}
-
-// ModelProviderConfig represents configuration for an LLM or embedding provider
-type ModelProviderConfig struct {
-	Name         string `koanf:"name"`
-	ProviderType string `koanf:"provider_type"`
-	BaseURL      string `koanf:"base_url,omitempty"`
-	Key          string `koanf:"key"`
-	DefaultLLM   string `koanf:"default_llm,omitempty"`
-}
-
-// Validate ensures the CustomProviderConfig is valid
-func (c ModelProviderConfig) Validate() error {
-	if c.ProviderType == "" {
-		return fmt.Errorf("provider_type is required")
-	}
-	if !slices.Contains(ValidProviderTypes, c.ProviderType) {
-		return fmt.Errorf("invalid provider_type: %s", c.ProviderType)
-	}
-	if c.Name == "" && c.ProviderType != "openai" && c.ProviderType != "anthropic" {
-		return fmt.Errorf("name is required for custom provider types like openai_compatible")
-	}
-	if c.Key == "" {
-		return fmt.Errorf("key is required")
-	}
-	return nil
-}
-
 // LocalConfig represents the local configuration file structure
 type LocalConfig struct {
 	CustomProviders []ModelProviderConfig   `koanf:"custom_providers,omitempty"`
