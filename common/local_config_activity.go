@@ -2,7 +2,6 @@ package common
 
 import (
 	"fmt"
-	"sidekick/utils"
 )
 
 // LocalPublicConfig represents the local configuration without keys
