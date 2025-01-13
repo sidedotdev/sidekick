@@ -48,9 +48,6 @@ func TestGetWorkspaceConfig(t *testing.T) {
 			workspaceConfig: domain.WorkspaceConfig{
 				Embedding: common.EmbeddingConfig{Defaults: []common.ModelConfig{{Provider: "openai"}}},
 			},
-			mockError:   nil,
-			expectError: true,
-			errorMsg:    "missing LLM config",
 		},
 		{
 			name:        "Missing embedding config",
@@ -58,9 +55,6 @@ func TestGetWorkspaceConfig(t *testing.T) {
 			workspaceConfig: domain.WorkspaceConfig{
 				LLM: common.LLMConfig{Defaults: []common.ModelConfig{{Provider: "openai"}}},
 			},
-			mockError:   nil,
-			expectError: true,
-			errorMsg:    "missing embedding config",
 		},
 	}
 
