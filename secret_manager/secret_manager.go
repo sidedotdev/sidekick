@@ -22,6 +22,7 @@ const (
 	MockSecretManagerType        SecretManagerType = "mock"
 	KeyringSecretManagerType     SecretManagerType = "keyring"
 	LocalConfigSecretManagerType SecretManagerType = "local_config"
+	CompositeSecretManagerType   SecretManagerType = "composite"
 )
 
 type EnvSecretManager struct{}
@@ -54,6 +55,65 @@ func (k KeyringSecretManager) GetType() SecretManagerType {
 }
 
 type LocalConfigSecretManager struct{}
+
+type CompositeSecretManager struct {
+	Managers []SecretManager
+}
+
+func NewCompositeSecretManager(managers []SecretManager) *CompositeSecretManager {
+	return &CompositeSecretManager{
+		Managers: managers,
+	}
+}
+
+func (c CompositeSecretManager) GetSecret(secretName string) (string, error) {
+	var lastErr error
+	for _, manager := range c.Managers {
+		secret, err := manager.GetSecret(secretName)
+		if err == nil {
+			return secret, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return "", fmt.Errorf("secret %s not found in any secret manager: %v", secretName, lastErr)
+	}
+	return "", fmt.Errorf("no secret managers configured")
+}
+
+func (c CompositeSecretManager) MarshalJSON() ([]byte, error) {
+	managers := make([]SecretManagerContainer, len(c.Managers))
+	for i, manager := range c.Managers {
+		managers[i] = SecretManagerContainer{
+			SecretManager: manager,
+		}
+	}
+	return json.Marshal(struct {
+		Managers []SecretManagerContainer `json:"managers"`
+	}{
+		Managers: managers,
+	})
+}
+
+func (c *CompositeSecretManager) UnmarshalJSON(data []byte) error {
+	var container struct {
+		Containers []SecretManagerContainer `json:"managers"`
+	}
+	if err := json.Unmarshal(data, &container); err != nil {
+		return err
+	}
+
+	c.Managers = make([]SecretManager, len(container.Containers))
+	for i, container := range container.Containers {
+		c.Managers[i] = container.SecretManager
+	}
+
+	return nil
+}
+
+func (c CompositeSecretManager) GetType() SecretManagerType {
+	return CompositeSecretManagerType
+}
 
 func (l LocalConfigSecretManager) GetType() SecretManagerType {
 	return LocalConfigSecretManagerType
@@ -171,6 +231,12 @@ func (sc *SecretManagerContainer) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		sc.SecretManager = lcm
+	case string(CompositeSecretManagerType):
+		var csm *CompositeSecretManager
+		if err := json.Unmarshal(v.Manager, &csm); err != nil {
+			return err
+		}
+		sc.SecretManager = csm
 	default:
 		return fmt.Errorf("unknown SecretManager type: %s", v.Type)
 	}
