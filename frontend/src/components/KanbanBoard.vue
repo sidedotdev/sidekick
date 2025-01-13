@@ -1,5 +1,5 @@
 <template>
-  <TaskCreationModal v-if="isModalOpen" @close="closeModal" @created="refresh" :status="newTaskStatus" />
+  <TaskModal v-if="isModalOpen" @close="closeModal" @created="refresh" :task="newTask" />
   <div class="kanban-board">
     <div
       v-for="agentType in ['human', 'llm', 'none'] as const"
@@ -8,25 +8,25 @@
     >
       <h2>
         {{ columnNames[agentType as keyof typeof columnNames] }}
-        <button v-if="agentType !== 'none'" class="new-task mini-button" @click="newTask(agentType)">+</button>
-        <button v-if="agentType === 'none' && groupedTasks()[agentType]?.length > 0" class="new-task mini-button" @click="confirmArchiveFinished">📦</button>
+        <button v-if="agentType !== 'none'" class="new-task mini-button" @click="addTask(agentType)">+</button>
+        <button v-if="agentType === 'none' && groupedTasks[agentType]?.length > 0" class="new-task mini-button" @click="confirmArchiveFinished">📦</button>
       </h2>
-      <TaskCard v-for="task in groupedTasks()[agentType]" :key="task.id" :task="task" @deleted="refresh" @updated="refresh" @error="error" />
-      <button class="new-task" v-if="agentType == 'human'" @click="newTask(agentType)">+ Draft Task</button>
-      <button class="new-task" v-if="agentType == 'llm'" @click="newTask(agentType)">+ Queue Task</button>
+      <TaskCard v-for="task in groupedTasks[agentType]" :key="task.id" :task="task" @deleted="refresh" @canceled="refresh" @archived="refresh" @updated="refresh" @error="error" />
+      <button class="new-task" v-if="agentType == 'human'" @click="addTask(agentType)">+ Draft Task</button>
+      <button class="new-task" v-if="agentType == 'llm'" @click="addTask(agentType)">+ Queue Task</button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import type { Task, AgentType } from '../lib/models'
+import { computed, ref } from 'vue'
+import type { FullTask, AgentType, Task } from '../lib/models'
 import TaskCard from './TaskCard.vue'
-import TaskCreationModal from './TaskCreationModal.vue'
+import TaskModal from './TaskModal.vue'
 
 const props = defineProps<{
   workspaceId: string,
-  tasks: Task[]
+  tasks: FullTask[]
 }>()
 
 const columnNames = {
@@ -37,22 +37,20 @@ const columnNames = {
 
 const emit = defineEmits(['refresh'])
 
-const groupedTasks = () => {
-  return [...props.tasks]
-    .sort()
-    .reverse()
+const groupedTasks = computed(() => {
+  return props.tasks
     .reduce((grouped, task) => {
       grouped[task.agentType] = [...(grouped[task.agentType] || []), task];
       // sort by updated descending, if same then sort by id descending
-      grouped[task.agentType].sort((a: Task, b: Task) => {
+      grouped[task.agentType].sort((a: FullTask, b: FullTask) => {
         if (b.updated === a.updated) {
           return b.id > a.id ? 1 : -1;
         }
         return b.updated > a.updated ? 1 : -1;
       });
       return grouped;
-    }, {} as Record<AgentType, Task[]>);
-}
+    }, {} as Record<AgentType, FullTask[]>);
+})
 
 
 function refresh() {
@@ -60,17 +58,27 @@ function refresh() {
 }
 
 const isModalOpen = ref(false)
-const newTaskStatus = ref('to_do')
+const newTask = ref<Task>({
+  status: 'drafting',
+  agentType: 'human',
+  workspaceId: props.workspaceId,
+})
 
-const newTask = (agentType: 'human' | 'llm' | 'none') => {
+const addTask = (agentType: 'human' | 'llm' | 'none') => {
   if (agentType !== 'none') {
     isModalOpen.value = true
-    newTaskStatus.value = agentType === 'human' ? 'drafting' : 'to_do';
+    newTask.value.agentType = agentType
+    newTask.value.status = agentType === 'human' ? 'drafting' : 'to_do';
   }
 }
 
 const closeModal = () => {
   isModalOpen.value = false
+  newTask.value = {
+    status: 'drafting',
+    agentType: 'human',
+    workspaceId: props.workspaceId,
+  }
 }
 
 function error(e: any) {

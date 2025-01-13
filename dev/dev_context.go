@@ -18,10 +18,18 @@ import (
 
 type DevContext struct {
 	flow_action.ExecContext
-	RepoConfig common.RepoConfig
+	GlobalState *GlobalState
+	RepoConfig  common.RepoConfig
 
 	LLMConfig       common.LLMConfig
 	EmbeddingConfig common.EmbeddingConfig
+}
+
+func (dCtx DevContext) WithCancelOnPause() DevContext {
+	ctx, cancel := workflow.WithCancel(dCtx.Context)
+	dCtx.Context = ctx
+	dCtx.GlobalState.AddCancelFunc(cancel)
+	return dCtx
 }
 
 func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, envType string) (DevContext, error) {
@@ -123,6 +131,13 @@ type DevActionContext struct {
 	DevContext
 	ActionType   string
 	ActionParams map[string]interface{}
+}
+
+func (actionCtx DevActionContext) WithCancelOnPause() DevActionContext {
+	ctx, cancel := workflow.WithCancel(actionCtx.Context)
+	actionCtx.Context = ctx
+	actionCtx.GlobalState.AddCancelFunc(cancel)
+	return actionCtx
 }
 
 func Track[T any](devActionCtx DevActionContext, f func(flowAction domain.FlowAction) (T, error)) (defaultT T, err error) {

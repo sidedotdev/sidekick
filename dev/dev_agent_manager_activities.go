@@ -106,11 +106,12 @@ func (ima *DevAgentManagerActivities) GetWorkflow(ctx context.Context, workspace
 func (ima *DevAgentManagerActivities) CreatePendingUserRequest(ctx context.Context, workspaceId string, req RequestForUser) error {
 	if req.FlowActionId == "" {
 		flowAction := domain.FlowAction{
-			WorkspaceId:      workspaceId,
-			Id:               "fa_" + ksuid.New().String(),
-			FlowId:           req.OriginWorkflowId,
-			Created:          time.Now().UTC(),
-			Updated:          time.Now().UTC(),
+			WorkspaceId: workspaceId,
+			Id:          "fa_" + ksuid.New().String(),
+			FlowId:      req.OriginWorkflowId,
+			Created:     time.Now().UTC(),
+			Updated:     time.Now().UTC(),
+			// TODO SubflowId: 	      req.SubflowId,
 			SubflowName:      req.Subflow,
 			ActionType:       "user_request",
 			ActionParams:     req.ActionParams(),

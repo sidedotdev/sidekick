@@ -213,28 +213,48 @@ func RefineAndRankCodeContext(dCtx DevContext, envContainer env.EnvContainer, pr
 func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestFirst bool, maxLength int) (*RequiredCodeContext, string, error) {
 	var requiredCodeContext RequiredCodeContext
 	var codeContext string
-	var err error
 	chatHistory := &[]llm.ChatMessage{}
 	addCodeContextPrompt(chatHistory, promptInfo)
 	noRetryCtx := utils.NoRetryCtx(actionCtx)
 	attempts := 0
+	iterationsSinceLastFeedback := 0
 
 	for {
+		// Check for pause at the beginning of each iteration
+		userResponse, err := UserRequestIfPaused(actionCtx.DevContext, "Code context loop paused. Would you like to provide any guidance?", nil)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to check for pause: %v", err)
+		}
+		if userResponse != nil && userResponse.Content != "" {
+			addCodeContextPrompt(chatHistory, FeedbackInfo{
+				Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", userResponse.Content),
+			})
+			iterationsSinceLastFeedback = 0
+			continue
+		}
+
 		// NOTE due to most of the testing being done this way so far, we clean
 		// up chat history *before* extending it. We'll look into changing this
 		// later, and will tune our max history length to support that change.
 		ManageChatHistory(actionCtx, chatHistory, defaultMaxChatHistoryLength)
 
-		attempts += 1
-		if attempts%5 == 0 {
+		attempts++
+		iterationsSinceLastFeedback++
+
+		if iterationsSinceLastFeedback >= 5 {
 			guidanceContext := "The system has attempted to refine and rank the code context multiple times without success. Please provide some guidance."
 			userFeedback, err := GetUserFeedback(actionCtx.DevContext, SkipInfo{}, guidanceContext, chatHistory, nil)
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to get user feedback: %v", err)
 			}
 			addCodeContextPrompt(chatHistory, userFeedback)
-		} else if attempts%3 == 0 {
-			toolCall, err := ForceToolBulkSearchRepository(actionCtx.DevContext, chatHistory)
+			iterationsSinceLastFeedback = 0
+		} else if iterationsSinceLastFeedback >= 3 {
+			chatCtx := actionCtx.DevContext.WithCancelOnPause()
+			toolCall, err := ForceToolBulkSearchRepository(chatCtx, chatHistory)
+			if actionCtx.GlobalState != nil && actionCtx.GlobalState.Paused {
+				continue // UserRequestIfPaused will handle the pause
+			}
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to force searching repository: %v", err)
 			}
@@ -249,6 +269,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 				return nil, "", err
 			}
 			addCodeContextPrompt(chatHistory, toolCallResponseInfo)
+			iterationsSinceLastFeedback = 0
 		}
 
 		if attempts >= 17 {
@@ -260,7 +281,11 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		// one of retrieve_code_context or bulk_search_repository. if given
 		// bulk_search_repository,
 		var toolCall llm.ToolCall
-		toolCall, requiredCodeContext, err = ForceToolRetrieveCodeContext(actionCtx, chatHistory)
+		chatCtx := actionCtx.WithCancelOnPause()
+		toolCall, requiredCodeContext, err = ForceToolRetrieveCodeContext(chatCtx, chatHistory)
+		if actionCtx.GlobalState != nil && actionCtx.GlobalState.Paused {
+			continue // UserRequestIfPaused will handle the pause
+		}
 		if err != nil {
 			if errors.Is(err, llm.ErrToolCallUnmarshal) {
 				response := fmt.Sprintf("%s\n\nHint: To fix this, follow the json schema correctly. In particular, don't put json within a string.", err.Error())
@@ -293,6 +318,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 				promptInfo = ToolCallResponseInfo{Response: feedback, TooCallId: toolCall.Id, FunctionName: toolCall.Name}
 				addCodeContextPrompt(chatHistory, promptInfo)
 				fmt.Println(feedback) // someone looking at worker logs can see what's going on this way
+				iterationsSinceLastFeedback = 0
 				continue
 			} else {
 				// TODO check for empty code context too. we should use
@@ -307,6 +333,12 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		promptInfo = ToolCallResponseInfo{Response: feedback, TooCallId: toolCall.Id, FunctionName: toolCall.Name}
 		addCodeContextPrompt(chatHistory, promptInfo)
 		fmt.Printf("\n%s\n", feedback) // someone looking at worker logs can see what's going on this way
+		iterationsSinceLastFeedback = 0
+
+		// Check if the operation was paused
+		if actionCtx.DevContext.GlobalState != nil && actionCtx.DevContext.GlobalState.Paused {
+			return nil, "", fmt.Errorf("operation paused by user")
+		}
 	}
 
 	return &requiredCodeContext, codeContext, nil

@@ -188,7 +188,6 @@ func handleWorkflowClosure(ctx workflow.Context, c workflow.ReceiveChannel, inpu
 	log.Info("Received workflow closure", "closure", closure)
 
 	// Update the Flow status to completed
-	// FIXME execute activity instead
 	var flow domain.Flow
 	err := workflow.ExecuteActivity(ctx, ima.GetWorkflow, input.WorkspaceId, closure.FlowId).Get(ctx, &flow)
 	if err != nil {

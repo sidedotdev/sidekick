@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sidekick/domain"
 	"sidekick/llm"
+	"sidekick/srv"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -20,7 +21,7 @@ type RequestForUser struct {
 	OriginWorkflowId string
 	FlowActionId     string
 	Content          string
-	Subflow          string
+	Subflow          string // TODO add SubflowId here instead of legacy Subflow (which is the subflow name)
 	RequestParams    map[string]interface{}
 	RequestKind      RequestKind
 }
@@ -91,6 +92,27 @@ func GetUserResponse(dCtx DevContext, req RequestForUser) (*UserResponse, error)
 		return nil, fmt.Errorf("failed to signal external workflow: %v", workflowErr)
 	}
 
+	v := workflow.GetVersion(dCtx, "pause-flow", workflow.DefaultVersion, 1)
+	if v == 1 {
+		// update the flow status as paused. required if user feedback was requested from
+		// within the flow rather than via user intervention to pause it from
+		// the outside (both cases flow through this code path), otherwise the
+		// flow will appear "pausable" even though it's really just waiting for
+		// user response, i.e. paused
+		var flow domain.Flow
+		err := workflow.ExecuteActivity(dCtx, srv.Activities.GetFlow, dCtx.WorkspaceId, req.OriginWorkflowId).Get(dCtx, &flow)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get flow: %v", err)
+		}
+		if flow.Status != domain.FlowStatusPaused {
+			flow.Status = domain.FlowStatusPaused
+			err := workflow.ExecuteActivity(dCtx, srv.Activities.PersistFlow, flow).Get(dCtx, nil)
+			if err != nil {
+				return nil, fmt.Errorf("failed to set flow status to paused: %v", err)
+			}
+		}
+	}
+
 	// Wait for the 'userResponse' signal
 	var userResponse UserResponse
 	selector := workflow.NewNamedSelector(dCtx, "userResponseSelector")
@@ -98,6 +120,9 @@ func GetUserResponse(dCtx DevContext, req RequestForUser) (*UserResponse, error)
 		c.Receive(dCtx, &userResponse)
 	})
 	selector.Select(dCtx)
+
+	// NOTE: unpausing of the flow is always done via the complete flow action
+	// handler, so it is omitted here
 
 	return &userResponse, nil
 }

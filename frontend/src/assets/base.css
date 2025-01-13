@@ -45,7 +45,7 @@
   --color-link-light: rgb(0, 102, 204);
 
   /* FIXME do we need both dark and light? */
-  --color-primary: rgba(131,58,180, 0.8);
+  --color-primary: rgba(131,58,180);
   --color-cta-button-bg-dark: rgba(131,58,180, 0.8);
   --color-cta-button-bg-light: rgba(131,58,180, 0.8);
   --color-cta-button-text-light: var(--color-text-dark);

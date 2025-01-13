@@ -10,6 +10,8 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+// SetupPauseHandler is already in the dev package, so we don't need to import it
+
 type PlannedDevInput struct {
 	RepoDir      string
 	Requirements string
@@ -26,6 +28,8 @@ type PlannedDevOptions struct {
 var SideAppEnv = os.Getenv("SIDE_APP_ENV")
 
 func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec DevPlanExecution, err error) {
+	globalState := &GlobalState{}
+
 	// don't recover panics in development so we can debug via temporal UI, at
 	// the cost of failed tasks appearing stuck without UI feedback in sidekick
 	if SideAppEnv != "development" {
@@ -52,6 +56,10 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 		_ = signalWorkflowClosure(ctx, "failed")
 		return DevPlanExecution{}, fmt.Errorf("failed to setup dev context: %v", err)
 	}
+	dCtx.GlobalState = globalState
+
+	// Set up the pause handler
+	SetupPauseHandler(dCtx, "Paused for user input", nil)
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	err = EnsurePrerequisites(dCtx, input.Requirements)

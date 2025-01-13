@@ -91,7 +91,11 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
 	ManageChatHistory(iteration.ExecCtx.Context, iteration.ChatHistory, maxLength)
 
-	chatResponse, err := generateDevRequirements(iteration.ExecCtx, iteration.ChatHistory)
+	chatCtx := iteration.ExecCtx.WithCancelOnPause()
+	chatResponse, err := generateDevRequirements(chatCtx, iteration.ChatHistory)
+	if iteration.ExecCtx.GlobalState != nil && iteration.ExecCtx.GlobalState.Paused {
+		return nil, nil // continue the loop: UserRequestIfPaused will handle the pause
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +110,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 				if approveErr != nil {
 					return nil, fmt.Errorf("error approving dev requirements: %v", approveErr)
 				}
+				iteration.NumSinceLastFeedback = 0
 				if userResponse.Approved != nil && *userResponse.Approved {
 					return &devReq, nil // break the loop with the final result
 				} else {

@@ -14,6 +14,8 @@ type Flow struct {
 	Status      string   `json:"status"`   // flow status
 }
 
+const FlowStatusPaused = "paused"
+
 // TODO /gen remove type: we want to support external flow types not defined in
 // this codebase
 type FlowType = string

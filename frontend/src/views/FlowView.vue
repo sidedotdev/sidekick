@@ -8,6 +8,9 @@
         <a :href="`idea://open?file=${encodeURIComponent(workDir(worktree))}`" class="vs-code-button">Intellij IDEA</a>
       </p>
     </div>
+    <div v-if="!['completed', 'failed', 'canceled', 'paused'].includes(flow.status)" class="pause-button-container">
+      <button @click="pauseFlow" class="pause-button">⏸︎</button>
+    </div>
   </div>
   <div class="flow-actions-container" :class="{ 'short-content': shortContent }">
     <div class="scroll-container">
@@ -61,6 +64,7 @@ let setShortContent = () => {
 }
 
 onMounted(async () => {
+  const flowPromise = fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${route.params.id}`)
   setShortContent()
   useEventBus('flow-view-collapse').on(() => {
     shortContent.value = true
@@ -70,40 +74,53 @@ onMounted(async () => {
   const connectEventsWebSocket = () => {
     eventsSocket = new WebSocket(`ws://${window.location.host}/ws/v1/workspaces/${store.workspaceId}/flows/${route.params.id}/events`);
 
-    eventsSocket.onopen = () => {
+    eventsSocket.onopen = async () => {
       console.log("Events WebSocket connection opened");
+      await flowPromise
+      setTimeout(() => {
+        const message = JSON.stringify({parentId: flow.value?.id});
+        eventsSocket?.send(message);
+      }, 10);
     };
 
     eventsSocket.onmessage = (event) => {
       try {
         setShortContent()
         const flowEvent = JSON.parse(event.data);
-        if (flowEvent.eventType === 'chat_message_delta') {
-          const delta = flowEvent.chatMessageDelta as ChatMessageDelta;
-          const actionIndex = flowActions.value.findIndex(action => action.id === flowEvent.flowActionId);
-          if (actionIndex !== -1) {
-            const action = flowActions.value[actionIndex];
-            const contentBuilder: string[] = [];
+        switch (flowEvent.eventType) {
+          case 'chat_message_delta': {
+            const delta = flowEvent.chatMessageDelta as ChatMessageDelta;
+            const actionIndex = flowActions.value.findIndex(action => action.id === flowEvent.flowActionId);
+            if (actionIndex !== -1) {
+              const action = flowActions.value[actionIndex];
+              const contentBuilder: string[] = [];
 
-            if (delta.content) {
-              contentBuilder.push(delta.content);
+              if (delta.content) {
+                contentBuilder.push(delta.content);
+              }
+
+              if (delta.toolCalls) {
+                delta.toolCalls.forEach(toolCall => {
+                  if (toolCall.name) {
+                    contentBuilder.push(`toolName = ${toolCall.name}\n`);
+                  }
+                  if (toolCall.arguments) {
+                    contentBuilder.push(toolCall.arguments);
+                  }
+                });
+              }
+
+              action.actionResult += contentBuilder.join('\n');
+              flowActions.value[actionIndex] = action;
+            } else {
+              console.error(`FlowAction with id ${flowEvent.flowActionId} not found.`);
             }
-
-            if (delta.toolCalls) {
-              delta.toolCalls.forEach(toolCall => {
-                if (toolCall.name) {
-                  contentBuilder.push(`toolName = ${toolCall.name}\n`);
-                }
-                if (toolCall.arguments) {
-                  contentBuilder.push(toolCall.arguments);
-                }
-              });
+          }
+          break
+          case 'status_change': {
+            if (flow.value && flowEvent.parentId == flow.value.id) {
+              flow.value.status = flowEvent.status;
             }
-
-            action.actionResult += contentBuilder.join('\n');
-            flowActions.value[actionIndex] = action;
-          } else {
-            console.error(`FlowAction with id ${flowEvent.flowActionId} not found.`);
           }
         }
       } catch (err) {
@@ -190,12 +207,24 @@ onMounted(async () => {
 
   connectActionChangesWebSocket();
 
-  const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${route.params.id}`)
+  const response = await flowPromise
   flow.value = (await response.json()).flow
 })
 
 const workDir = (worktree: Worktree): string => {
   return `${dataDir}/worktrees/${worktree.workspaceId}/${worktree.name}`
+}
+
+const pauseFlow = async () => {
+  if (!flow.value) return
+  
+  try {
+    await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${flow.value.id}/pause`, {
+      method: 'POST',
+    })
+  } catch (err) {
+    console.error('Failed to pause flow:', err)
+  }
 }
 
 onUnmounted(() => {
@@ -230,5 +259,31 @@ onUnmounted(() => {
   z-index: 1000;
   top: 1rem;
   right: 1rem;
+}
+
+.pause-button-container {
+  position: absolute;
+  right: 1.5rem;
+  bottom: 1.5rem;
+  display: flex;
+  justify-content: center;
+  padding: 0.75rem;
+  z-index: 1000;
+}
+
+.pause-button {
+  padding: 0.25rem 2rem;
+  border-radius: 0.5rem;
+  opacity: 0.8;
+  background-color: var(--color-primary);
+  color: var(--vp-c-text-1);
+  border: 1px solid var(--vp-c-divider);
+  cursor: pointer;
+  font-size: 3.5rem;
+  transition: opacity 0.2s;
+}
+
+.pause-button:hover {
+  opacity: 1;
 }
 </style>

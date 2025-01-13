@@ -1,19 +1,22 @@
 import { describe, it, expect, vi } from 'vitest'
 import { shallowMount } from '@vue/test-utils'
 import TaskCard from '../TaskCard.vue'
-import TaskEditModal from '../TaskEditModal.vue'
-import type { Task } from '../../lib/models'
+import TaskModal from '../TaskModal.vue'
+import type { FullTask } from '../../lib/models'
 
 describe('TaskCard', () => {
-const task = {
+const task: FullTask = {
   id: 'task_1',
   workspaceId: 'ws_1',
   title: 'Test Task',
   description: 'This is a test task',
   status: 'drafting',
   agentType: 'llm',
+  flowType: 'basic_dev',
   flows: [],
-} as unknown as Task
+  created: new Date(),
+  updated: new Date(),
+}
 
   it('renders without errors', () => {
     const wrapper = shallowMount(TaskCard, {
@@ -45,15 +48,15 @@ const task = {
     expect(wrapper.find('.action.edit').exists()).toBe(true)
   })
 
-  it('opens the TaskEditModal when the edit button is clicked', async () => {
+  it('opens the TaskModal when the edit button is clicked', async () => {
     const wrapper = shallowMount(TaskCard, {
       props: { task },
     })
     await wrapper.find('.action.edit').trigger('click')
-    expect(wrapper.findComponent(TaskEditModal).isVisible()).toBe(true)
+    expect(wrapper.findComponent(TaskModal).exists()).toBe(true)
   })
 
-  it('calls the correct endpoint when delete button is clickec', async () => {
+  it('calls the correct endpoint when delete button is clicked', async () => {
     const wrapper = shallowMount(TaskCard, {
       props: { task },
     })
@@ -66,7 +69,7 @@ const task = {
 
     await wrapper.find('.action.delete').trigger('click')
 
-    expect(fetch).toHaveBeenCalledWith('/api/v1/workspaces/ws_1/tasks/task_1', {
+    expect(mockFetch).toHaveBeenCalledWith('/api/v1/workspaces/ws_1/tasks/task_1', {
       method: 'DELETE',
     })
   })

@@ -140,6 +140,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	flowRoutes := workspaceApiRoutes.Group("/flows")
 	flowRoutes.GET("/:id", ctrl.GetFlowHandler)
 	flowRoutes.GET("/:id/actions", ctrl.GetFlowActionsHandler)
+	flowRoutes.POST("/:id/pause", ctrl.PauseFlowHandler)
 	flowRoutes.POST("/:id/cancel", ctrl.CancelFlowHandler)
 
 	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
@@ -233,6 +234,15 @@ func (ctrl *Controller) CancelTaskHandler(c *gin.Context) {
 		WorkspaceId:       task.WorkspaceId,
 	}
 	for _, flow := range childFlows {
+		// Update and persist the flow status
+		flow.Status = "canceled"
+		if err := ctrl.service.PersistFlow(c.Request.Context(), flow); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"message": fmt.Sprintf("Failed to update flow status: %v", err),
+			})
+			return
+		}
+
 		err = devAgent.TerminateWorkflowIfExists(c.Request.Context(), flow.Id)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to terminate workflow"})
@@ -296,12 +306,67 @@ func (ctrl *Controller) DeleteTaskHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Task deleted successfully"})
 }
 
-func (ctrl *Controller) CancelFlowHandler(c *gin.Context) {
-	workflowID := c.Param("id")
-	// FIXME update the flow status in the database
+func (ctrl *Controller) PauseFlowHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
 
-	err := ctrl.temporalClient.CancelWorkflow(c.Request.Context(), workflowID, "")
+	// Get the flow first
+	flow, err := ctrl.service.GetFlow(c.Request.Context(), workspaceId, flowId)
 	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": fmt.Sprintf("Failed to get flow: %v", err),
+		})
+		return
+	}
+
+	// Update flow status to paused
+	flow.Status = "paused"
+	err = ctrl.service.PersistFlow(c.Request.Context(), flow)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": fmt.Sprintf("Failed to persist flow status: %v", err),
+		})
+		return
+	}
+
+	// Send pause signal to temporal workflow
+	err = ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", "pause", &dev.Pause{})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": fmt.Sprintf("Failed to send pause signal: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Flow paused successfully",
+	})
+}
+
+func (ctrl *Controller) CancelFlowHandler(c *gin.Context) {
+	workspaceID := c.Param("workspaceId")
+	flowID := c.Param("id")
+
+	// Get the flow first to ensure it exists
+	flow, err := ctrl.service.GetFlow(c.Request.Context(), workspaceID, flowID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": fmt.Sprintf("Failed to get flow: %v", err),
+		})
+		return
+	}
+
+	// Update and persist the flow status
+	flow.Status = "canceled"
+	if err := ctrl.service.PersistFlow(c.Request.Context(), flow); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": fmt.Sprintf("Failed to update flow status: %v", err),
+		})
+		return
+	}
+
+	// Cancel the temporal workflow
+	if err := ctrl.temporalClient.CancelWorkflow(c.Request.Context(), flowID, ""); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"message": fmt.Sprintf("Failed to cancel workflow: %v", err),
 		})
@@ -690,6 +755,16 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve flow"})
 		return
 	}
+
+	// If flow was paused, set it back to in_progress when completing an action
+	if flow.Status == "paused" {
+		flow.Status = "in_progress"
+		if err := ctrl.service.PersistFlow(ctx, flow); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update flow status"})
+			return
+		}
+	}
+
 	task, err := ctrl.service.GetTask(ctx, workspaceId, flow.ParentId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve task"})
