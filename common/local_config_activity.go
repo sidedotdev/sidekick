@@ -4,28 +4,37 @@ import (
 	"fmt"
 )
 
-// LocalConfigResponse represents the local configuration without sensitive data
-type LocalConfigResponse struct {
-	CustomProviders []ModelProviderConfig `json:"custom_providers,omitempty"`
-	LLM             LLMConfig             `json:"llm"`
-	Embedding       EmbeddingConfig       `json:"embedding"`
+// LocalPublicConfig represents the local configuration without keys
+type LocalPublicConfig struct {
+	Providers []ModelProviderPublicConfig `json:"providers,omitempty"`
+	LLM       LLMConfig                   `json:"llm"`
+	Embedding EmbeddingConfig             `json:"embedding"`
+}
+
+// ModelProviderPublicConfig represents the model provider configuration without keys
+type ModelProviderPublicConfig struct {
+	Name         string `json:"name"`
+	ProviderType string `json:"provider_type"`
+	BaseURL      string `json:"base_url,omitempty"`
+	DefaultLLM   string `json:"default_llm,omitempty"`
+	SmallLLM     string `json:"small_llm,omitempty"`
 }
 
 // GetLocalConfig loads the local configuration and converts it to a format
 // suitable for client consumption, with sensitive data removed
-func GetLocalConfig(configPath string) (LocalConfigResponse, error) {
-	config, err := LoadSidekickConfig(configPath)
+func GetLocalConfig() (LocalPublicConfig, error) {
+	config, err := LoadSidekickConfig(GetSidekickConfigPath())
 	if err != nil {
-		return LocalConfigResponse{}, fmt.Errorf("failed to load config: %w", err)
+		return LocalPublicConfig{}, fmt.Errorf("failed to load config: %w", err)
 	}
 
 	// Strip sensitive data from provider configs
-	providers := make([]ModelProviderConfig, len(config.CustomProviders))
-	for i, p := range config.CustomProviders {
+	providers := make([]ModelProviderPublicConfig, len(config.Providers))
+	for i, p := range config.Providers {
 		// Create copy without sensitive key
-		providers[i] = ModelProviderConfig{
+		providers[i] = ModelProviderPublicConfig{
 			Name:         p.Name,
-			ProviderType: p.ProviderType,
+			ProviderType: p.Type,
 			BaseURL:      p.BaseURL,
 			DefaultLLM:   p.DefaultLLM,
 			SmallLLM:     p.SmallLLM,
@@ -60,12 +69,12 @@ func GetLocalConfig(configPath string) (LocalConfigResponse, error) {
 
 	// Verify that at least one config has defaults
 	if len(llmConfig.Defaults) == 0 && len(embeddingConfig.Defaults) == 0 {
-		return LocalConfigResponse{}, fmt.Errorf("no default models configured in local config")
+		return LocalPublicConfig{}, fmt.Errorf("no default models configured in local config")
 	}
 
-	return LocalConfigResponse{
-		CustomProviders: providers,
-		LLM:             llmConfig,
-		Embedding:       embeddingConfig,
+	return LocalPublicConfig{
+		Providers: providers,
+		LLM:       llmConfig,
+		Embedding: embeddingConfig,
 	}, nil
 }

@@ -3,7 +3,7 @@ package dev
 import (
 	"context"
 	"fmt"
-	"path/filepath"
+	"os"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
@@ -20,7 +20,7 @@ import (
 type DevContext struct {
 	flow_action.ExecContext
 	RepoConfig      common.RepoConfig
-	Providers       []common.ModelProviderConfig
+	Providers       []common.ModelProviderPublicConfig
 	LLMConfig       common.LLMConfig
 	EmbeddingConfig common.EmbeddingConfig
 }
@@ -89,10 +89,9 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	}
 
 	// Get local configuration first
-	var localConfig common.LocalConfigResponse
-	configPath := filepath.Join(repoDir, ".sidekick", "config.yaml")
-	err = workflow.ExecuteActivity(ctx, common.GetLocalConfig, configPath).Get(ctx, &localConfig)
-	if err != nil {
+	var localConfig common.LocalPublicConfig
+	err = workflow.ExecuteActivity(ctx, common.GetLocalConfig).Get(ctx, &localConfig)
+	if err != nil && !os.IsNotExist(err) {
 		return DevContext{}, fmt.Errorf("failed to get local config: %v", err)
 	}
 
@@ -108,11 +107,17 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	finalLLMConfig := localConfig.LLM
 	finalEmbeddingConfig := localConfig.Embedding
 
-	if len(workspaceConfig.LLM.Defaults) > 0 || len(workspaceConfig.LLM.UseCaseConfigs) > 0 {
-		finalLLMConfig = workspaceConfig.LLM
+	if len(workspaceConfig.LLM.Defaults) > 0 {
+		finalLLMConfig.Defaults = workspaceConfig.LLM.Defaults
 	}
-	if len(workspaceConfig.Embedding.Defaults) > 0 || len(workspaceConfig.Embedding.UseCaseConfigs) > 0 {
-		finalEmbeddingConfig = workspaceConfig.Embedding
+	for key, models := range workspaceConfig.LLM.UseCaseConfigs {
+		finalLLMConfig.UseCaseConfigs[key] = models
+	}
+	if len(workspaceConfig.Embedding.Defaults) > 0 {
+		finalEmbeddingConfig.Defaults = workspaceConfig.Embedding.Defaults
+	}
+	for key, models := range workspaceConfig.Embedding.UseCaseConfigs {
+		finalEmbeddingConfig.UseCaseConfigs[key] = models
 	}
 	repoConfig, err := GetRepoConfig(eCtx)
 	if err != nil {
@@ -134,7 +139,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	return DevContext{
 		ExecContext:     eCtx,
 		RepoConfig:      repoConfig,
-		Providers:       localConfig.CustomProviders,
+		Providers:       localConfig.Providers, // TODO merge with workspace providers
 		LLMConfig:       finalLLMConfig,
 		EmbeddingConfig: finalEmbeddingConfig,
 	}, nil

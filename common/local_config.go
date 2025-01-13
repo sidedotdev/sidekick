@@ -14,15 +14,15 @@ import (
 
 // LocalConfig represents the local configuration file structure
 type LocalConfig struct {
-	CustomProviders []ModelProviderConfig    `koanf:"custom_providers,omitempty"`
-	LLM             map[string][]ModelConfig `koanf:"llm,omitempty"`
-	Embedding       map[string][]ModelConfig `koanf:"embedding,omitempty"`
+	Providers []ModelProviderConfig    `koanf:"providers,omitempty"`
+	LLM       map[string][]ModelConfig `koanf:"llm,omitempty"`
+	Embedding map[string][]ModelConfig `koanf:"embedding,omitempty"`
 }
 
 // getCustomProviderNames returns a slice of custom provider names
 func (c LocalConfig) getCustomProviderNames() []string {
 	names := make([]string, 0)
-	for _, p := range c.CustomProviders {
+	for _, p := range c.Providers {
 		names = append(names, p.Name)
 	}
 	return names
@@ -40,9 +40,9 @@ func (c LocalConfig) validateProvider(provider string, allowAnthropicProvider bo
 		return nil
 	}
 
-	customProviders := c.getCustomProviderNames()
-	if !slices.Contains(customProviders, provider) {
-		return fmt.Errorf("invalid provider: %s", provider)
+	providerNames := c.getCustomProviderNames()
+	if !slices.Contains(providerNames, provider) {
+		return fmt.Errorf("invalid provider name: %s", provider)
 	}
 	return nil
 }
@@ -50,7 +50,7 @@ func (c LocalConfig) validateProvider(provider string, allowAnthropicProvider bo
 // Validate ensures the LocalConfig is valid
 func (c LocalConfig) Validate() error {
 	// Validate custom providers
-	for _, p := range c.CustomProviders {
+	for _, p := range c.Providers {
 		if err := p.Validate(); err != nil {
 			return fmt.Errorf("invalid custom LLM provider %s: %w", p.Name, err)
 		}

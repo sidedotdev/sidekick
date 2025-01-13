@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
-	"github.com/zalando/go-keyring"
 	"sidekick/common"
+	"strings"
+
+	"github.com/zalando/go-keyring"
 )
 
 type SecretManager interface {
@@ -17,9 +18,9 @@ type SecretManager interface {
 type SecretManagerType string
 
 const (
-	EnvSecretManagerType        SecretManagerType = "env"
-	MockSecretManagerType       SecretManagerType = "mock"
-	KeyringSecretManagerType    SecretManagerType = "keyring"
+	EnvSecretManagerType         SecretManagerType = "env"
+	MockSecretManagerType        SecretManagerType = "mock"
+	KeyringSecretManagerType     SecretManagerType = "keyring"
 	LocalConfigSecretManagerType SecretManagerType = "local_config"
 )
 
@@ -59,12 +60,12 @@ func (l LocalConfigSecretManager) GetType() SecretManagerType {
 }
 
 func (l LocalConfigSecretManager) GetSecret(secretName string) (string, error) {
-    // Load the local config
-    configPath := common.GetSidekickConfigPath()
-    config, err := common.LoadSidekickConfig(configPath)
-    if err != nil {
-        return "", fmt.Errorf("error loading local config: %w", err)
-    }
+	// Load the local config
+	configPath := common.GetSidekickConfigPath()
+	config, err := common.LoadSidekickConfig(configPath)
+	if err != nil {
+		return "", fmt.Errorf("error loading local config: %w", err)
+	}
 
 	// Handle special cases first
 	switch secretName {
@@ -86,8 +87,8 @@ func (l LocalConfigSecretManager) GetSecret(secretName string) (string, error) {
 func (l LocalConfigSecretManager) findProviderKey(config common.LocalConfig, name, providerType string) (string, error) {
 	var matches []common.ModelProviderConfig
 
-	for _, provider := range config.CustomProviders {
-		if providerType != "" && provider.ProviderType == providerType {
+	for _, provider := range config.Providers {
+		if providerType != "" && provider.Type == providerType {
 			matches = append(matches, provider)
 		} else if name != "" {
 			// Convert provider name to match secret name format
