@@ -128,9 +128,9 @@ func GetRankedRepoSummary(dCtx DevContext, rankQuery string) (string, error) {
 		RankedViaEmbeddingOptions: persisted_ai.RankedViaEmbeddingOptions{
 			WorkspaceId:   dCtx.WorkspaceId,
 			EnvContainer:  *dCtx.EnvContainer,
-			EmbeddingType: "oai-te3-sm",
 			RankQuery:     rankQuery,
 			Secrets:       *dCtx.Secrets,
+			ModelConfig:   dCtx.GetEmbeddingModelConfig(common.DefaultKey),
 		},
 		CharLimit: min(defaultMaxChatHistoryLength/2, 15000), // ensure we leave space for other messages
 	}
@@ -384,13 +384,8 @@ func RetrieveCodeContext(dCtx DevContext, requiredCodeContext RequiredCodeContex
 }
 
 func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *[]llm.ChatMessage) (llm.ToolCall, RequiredCodeContext, error) {
-	toolChatProvider, modelConfig, isDefault := actionCtx.GetToolChatConfig(common.CodeLocalizationKey, 0)
-	model := modelConfig.Model
-	if isDefault {
-		// code localization is an easy task
-		model = toolChatProvider.SmallModel()
-	}
-	params := llm.ToolChatParams{Messages: *chatHistory, Provider: toolChatProvider, Model: model}
+	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "small")
+	params := llm.ToolChatParams{Messages: *chatHistory, ModelConfig: modelConfig}
 	chatResponse, err := persisted_ai.ForceToolCall(actionCtx.FlowActionContext(), actionCtx.LLMConfig, &params, getRetrieveCodeContextTool())
 	*chatHistory = params.Messages // update chat history with the new messages
 	if err != nil {

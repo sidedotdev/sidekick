@@ -23,12 +23,7 @@ var defineInformationNeedsTool = &llm.Tool{
 
 // TODO /gen use ForceToolCall instead of this function
 func llmInputForIdentifyInformationNeeds(dCtx DevContext, chatHistory []llm.ChatMessage, prompt string) llm.ToolChatOptions {
-	provider, modelConfig, isDefault := dCtx.GetToolChatConfig(common.QueryExpansionKey, 0)
-
-	model := modelConfig.Model
-	if isDefault {
-		model = provider.SmallModel() // query expansion is an easy task
-	}
+	modelConfig := dCtx.GetModelConfig(common.QueryExpansionKey, 0, "small") // query expansion is an easy task
 
 	chatHistory = append(chatHistory, llm.ChatMessage{
 		Role:    "user",
@@ -38,9 +33,8 @@ func llmInputForIdentifyInformationNeeds(dCtx DevContext, chatHistory []llm.Chat
 	return llm.ToolChatOptions{
 		Secrets: *dCtx.Secrets,
 		Params: llm.ToolChatParams{
-			Provider: provider,
-			Model:    model,
 			Messages: chatHistory,
+			ModelConfig: modelConfig,
 			// TODO /gen use a tool for this, after defining the tool more
 			// specifically (not just a list of needs, but several different
 			// aspects, eg questions to answer by reading code, related

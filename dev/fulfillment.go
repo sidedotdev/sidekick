@@ -59,9 +59,8 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 	// chat, and include that in the CheckWorkInfo struct.
 	chatHistory := getCriteriaFulfillmentPrompt(promptInfo)
 
-	provider, modelConfig, _ := dCtx.GetToolChatConfig(common.JudgingKey, 0)
-	model := modelConfig.Model
-	params := llm.ToolChatParams{Messages: *chatHistory, Provider: provider, Model: model}
+	modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
+	params := llm.ToolChatParams{Messages: *chatHistory, ModelConfig: modelConfig}
 
 	var fulfillment CriteriaFulfillment
 	attempts := 0
