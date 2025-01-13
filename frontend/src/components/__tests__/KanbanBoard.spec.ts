@@ -2,12 +2,12 @@ import { describe, it, expect, vi } from 'vitest'
 import { shallowMount } from '@vue/test-utils'
 import KanbanBoard from '../KanbanBoard.vue'
 import TaskCard from '../TaskCard.vue'
-import type { Task } from '../../lib/models'
+import type { FullTask } from '../../lib/models'
 
 describe('KanbanBoard', () => {
   const defaultProps = {
     workspaceId: 'test-workspace-id',
-    tasks: [] as Task[]
+    tasks: [] as FullTask[]
   }
 
   it('renders no tasks when tasks prop is empty', () => {
@@ -21,7 +21,7 @@ describe('KanbanBoard', () => {
       { id: '2', agentType: 'llm'  , status: 'in_progress' },
       { id: '3', agentType: 'none' , status: 'complete'    },
       { id: '4', agentType: 'llm'  , status: 'to_do'       },
-    ] as Task[]
+    ] as FullTask[]
     const wrapper = shallowMount(KanbanBoard, { props: { ...defaultProps, tasks } })
     const columns = wrapper.findAll('.kanban-column')
     expect(columns.length).toBe(3)
@@ -35,7 +35,7 @@ describe('KanbanBoard', () => {
       { id: '1', agentType: 'human', status: 'drafting' },
       { id: '2', agentType: 'human', status: 'drafting' },
       { id: '3', agentType: 'human', status: 'drafting' },
-    ] as Task[]
+    ] as FullTask[]
 
     const wrapper = shallowMount(KanbanBoard, {
       props: { ...defaultProps, tasks }
