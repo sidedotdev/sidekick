@@ -111,9 +111,12 @@ func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		deltaChan <- delta
 		deltas = append(deltas, delta)
 	}
-
+	message := stitchDeltasToMessage(deltas)
+	if message.Role == "" {
+		return nil, errors.New("chat message role not found")
+	}
 	return &ChatMessageResponse{
-		ChatMessage: *stitchDeltasToMessage(deltas),
+		ChatMessage: message,
 		StopReason:  string(finishReason), // TODO /gen convert this properly, once we have an enum defined for stop reasons
 		Usage:       openaiToUsage(usage),
 		Model:       model,
@@ -256,7 +259,7 @@ func cleanupDelta(delta ChatMessageDelta) ChatMessageDelta {
 	return delta
 }
 
-func stitchDeltasToMessage(deltas []ChatMessageDelta) *ChatMessage {
+func stitchDeltasToMessage(deltas []ChatMessageDelta) ChatMessage {
 	var contentBuilder strings.Builder
 	var nameBuilder strings.Builder
 	var argsBuilder strings.Builder
@@ -314,7 +317,7 @@ func stitchDeltasToMessage(deltas []ChatMessageDelta) *ChatMessage {
 		currentToolCall = &ToolCall{}
 	}
 
-	return &ChatMessage{
+	return ChatMessage{
 		Role:      role,
 		Content:   contentBuilder.String(),
 		ToolCalls: toolCalls,
