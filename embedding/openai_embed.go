@@ -9,9 +9,10 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+const OpenaiDefaultModel = string(openai.SmallEmbedding3)
+
 type OpenAIEmbedder struct {
-	BaseURL      string
-	DefaultModel string
+	BaseURL string
 }
 
 func (oe OpenAIEmbedder) Embed(ctx context.Context, modelConfig common.ModelConfig, secretManager secret_manager.SecretManager, input []string) ([]EmbeddingVector, error) {
@@ -29,10 +30,14 @@ func (oe OpenAIEmbedder) Embed(ctx context.Context, modelConfig common.ModelConf
 	}
 	client := openai.NewClientWithConfig(clientConfig)
 
+	model := modelConfig.Model
+	if model == "" {
+		model = OpenaiDefaultModel
+	}
 
 	response, err := client.CreateEmbeddings(ctx, openai.EmbeddingRequest{
 		Input: input,
-		Model: openai.EmbeddingModel(modelConfig.Model),
+		Model: openai.EmbeddingModel(model),
 		User:  "",
 	})
 	if err != nil {

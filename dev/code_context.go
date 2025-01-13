@@ -128,7 +128,6 @@ func GetRankedRepoSummary(dCtx DevContext, rankQuery string) (string, error) {
 		RankedViaEmbeddingOptions: persisted_ai.RankedViaEmbeddingOptions{
 			WorkspaceId:   dCtx.WorkspaceId,
 			EnvContainer:  *dCtx.EnvContainer,
-			EmbeddingType: "oai-te3-sm",
 			RankQuery:     rankQuery,
 			Secrets:       *dCtx.Secrets,
 			ModelConfig:   dCtx.GetEmbeddingModelConfig(common.DefaultKey),
