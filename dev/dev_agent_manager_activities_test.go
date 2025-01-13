@@ -48,6 +48,7 @@ func TestUpdateTaskForUserRequest(t *testing.T) {
 	// Check that the task was updated appropriately
 	assert.Equal(t, domain.AgentTypeHuman, updatedTask.AgentType)
 	assert.Equal(t, domain.TaskStatusBlocked, updatedTask.Status)
+	assert.False(t, updatedTask.Updated.IsZero(), "Updated time should be set")
 }
 
 func TestCreatePendingUserRequest(t *testing.T) {
@@ -64,7 +65,6 @@ func TestCreatePendingUserRequest(t *testing.T) {
 		RequestKind:      RequestKindFreeForm,
 	}
 
-	var flowAction domain.FlowAction
 	err := ima.CreatePendingUserRequest(ctx, workspaceId, request)
 	assert.Nil(t, err)
 
@@ -72,7 +72,7 @@ func TestCreatePendingUserRequest(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Len(t, flowActions, 1)
 
-	flowAction = flowActions[0]
+	flowAction := flowActions[0]
 
 	assert.Equal(t, "user_request", flowAction.ActionType)
 	assert.Equal(t, map[string]interface{}{
@@ -80,13 +80,18 @@ func TestCreatePendingUserRequest(t *testing.T) {
 		"requestKind":    string(request.RequestKind),
 	}, flowAction.ActionParams)
 	assert.Equal(t, domain.ActionStatusPending, flowAction.ActionStatus)
+	assert.True(t, flowAction.IsHumanAction)
+	assert.True(t, flowAction.IsCallbackAction)
+	assert.Equal(t, request.Subflow, flowAction.SubflowName)
+	assert.False(t, flowAction.Created.IsZero(), "Created time should be set")
+	assert.False(t, flowAction.Updated.IsZero(), "Updated time should be set")
 
 	// Retrieve the flow action from the database
-	persitedFlowAction, err := storage.GetFlowAction(context.Background(), workspaceId, flowAction.Id)
+	persistedFlowAction, err := storage.GetFlowAction(context.Background(), workspaceId, flowAction.Id)
 	assert.Nil(t, err)
 
 	// Check that the flow action was persisted appropriately
-	assert.Equal(t, flowAction, persitedFlowAction)
+	assert.Equal(t, flowAction, persistedFlowAction)
 }
 
 func TestExistingUserRequest(t *testing.T) {

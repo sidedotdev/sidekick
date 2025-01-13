@@ -33,6 +33,7 @@ func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, cont
 	// were made or not, and what feedback there may be for adjusting or
 	// gathering requirements
 	attemptCount := 0
+	attemptsSinceLastFeedback := 0
 	maxAttempts := 17
 	repoConfig := dCtx.RepoConfig
 	if repoConfig.MaxIterations > 0 {
@@ -41,12 +42,20 @@ func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, cont
 
 editLoop:
 	for {
+		// pause checkpoint
+		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
+			return fmt.Errorf("failed to make user request when paused: %v", err)
+		} else if response != nil {
+			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
+			attemptsSinceLastFeedback = 0
+		}
+
 		if attemptCount >= maxAttempts {
 			return ErrMaxAttemptsReached
 		}
 
-		// TODO don't force getting user feedback if it just got help recently already via a function call
-		if attemptCount > 0 && attemptCount%3 == 0 {
+		// Only request feedback if we haven't received any recently from any source
+		if attemptCount > 0 && attemptsSinceLastFeedback >= 3 {
 			guidanceContext := "The system has attempted to edit the code multiple times without success. Please provide some guidance."
 			requestParams := map[string]any{
 				"editBlockReports": reports,
@@ -55,6 +64,7 @@ editLoop:
 			if err != nil {
 				return fmt.Errorf("failed to get user feedback: %v", err)
 			}
+			attemptsSinceLastFeedback = 0
 		}
 
 		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
@@ -112,8 +122,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	var extractedEditBlocks []EditBlock
 
 	attemptCount := 0
-	lastEditBlockIteration := 0
-	attemptsSinceLastEditBlock := 0
+	attemptsSinceLastEditBlockOrFeedback := 0
 	maxAttempts := 7 // Default value
 
 	repoConfig := dCtx.RepoConfig
@@ -122,11 +131,22 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	}
 
 	for {
-		attemptsSinceLastEditBlock = attemptCount - lastEditBlockIteration
+		// pause checkpoint
+		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
+			return nil, fmt.Errorf("failed to make user request when paused: %v", err)
+		} else if response != nil && response.Content != "" {
+			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
+			attemptsSinceLastEditBlockOrFeedback = 0
+		}
 
 		if attemptCount >= maxAttempts {
+			if len(extractedEditBlocks) > 0 {
+				// make use of the results so far, given there are some that are
+				// not yet applied: it may be sufficient
+				return extractedEditBlocks, nil
+			}
 			return nil, ErrMaxAttemptsReached
-		} else if attemptsSinceLastEditBlock > 0 && attemptsSinceLastEditBlock%3 == 0 {
+		} else if attemptsSinceLastEditBlockOrFeedback > 0 && attemptsSinceLastEditBlockOrFeedback%3 == 0 {
 			guidanceContext := "The system has attempted to generate edits multiple times without success. Please provide some guidance."
 			requestParams := map[string]any{
 				// TODO include the latest failure if any
@@ -136,12 +156,11 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			if err != nil {
 				return nil, fmt.Errorf("failed to get user feedback: %v", err)
 			}
+			attemptsSinceLastEditBlockOrFeedback = 0
 		}
 
 		// NOTE: this also ensures the tool call response is added to chat history
 		authorEditBlockInput := buildAuthorEditBlockInput(dCtx, codingModelConfig, repoConfig, chatHistory, promptInfo)
-		attemptCount++
-
 		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
 
 		// NOTE this MUST be below authorEditBlockInput to ensure tool call
@@ -149,7 +168,6 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		ManageChatHistory(dCtx, chatHistory, maxLength)
 
 		if len(extractedEditBlocks) > 0 {
-			lastEditBlockIteration = attemptCount
 			content := fmt.Sprintf("Note: %d edit block(s) are pending application.", len(extractedEditBlocks))
 			*chatHistory = append(*chatHistory, llm.ChatMessage{
 				Role:    llm.ChatMessageRoleSystem,
@@ -157,9 +175,17 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			})
 		}
 
+		// Increment counters before making the call
+		attemptCount++
+		attemptsSinceLastEditBlockOrFeedback++
+
 		// call Open AI to get back messages that contain edit blocks
+		chatCtx := dCtx.WithCancelOnPause()
 		actionName := "Generate Code Edits"
-		chatResponse, err := TrackedToolChat(dCtx, actionName, authorEditBlockInput)
+		chatResponse, err := TrackedToolChat(chatCtx, actionName, authorEditBlockInput)
+		if dCtx.GlobalState.Paused {
+			continue // UserRequestIfPaused will handle the pause
+		}
 		if err != nil {
 			return []EditBlock{}, err
 		}
@@ -168,6 +194,9 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		currentExtractedBlocks, err := ExtractEditBlocks(chatResponse.ChatMessage.Content)
 		if err != nil {
 			return []EditBlock{}, fmt.Errorf("failed to extract edit blocks: %v", err)
+		}
+		if len(currentExtractedBlocks) > 0 {
+			attemptsSinceLastEditBlockOrFeedback = 0
 		}
 		visibleCodeBlocks := extractAllCodeBlocks(authorEditBlockInput.Params.Messages)
 		for _, block := range currentExtractedBlocks {
@@ -193,6 +222,10 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 		if len(chatResponse.ToolCalls) > 0 && chatResponse.ToolCalls[0].Name != "" {
 			toolCallResponseInfo, err := handleToolCall(dCtx, chatResponse.ToolCalls[0])
+			// Reset feedback counter if this was a getHelpOrInput response
+			if chatResponse.ToolCalls[0].Name == getHelpOrInputTool.Name {
+				attemptsSinceLastEditBlockOrFeedback = 0
+			}
 			// dynamically adjust the context size extension based on the length of the response
 			if len(toolCallResponseInfo.Response) > 5000 {
 				contextSizeExtension += len(toolCallResponseInfo.Response) - 5000
