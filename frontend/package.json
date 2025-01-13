@@ -8,7 +8,8 @@
     "preview": "vite preview",
     "test:unit": "vitest",
     "test:e2e": "nightwatch tests/e2e",
-    "build-only": "vite build",
+    "build-only": "vite build && git checkout dist/.gitignore",
+    "build-dev": "vite build --mode development && git checkout dist/.gitignore",
     "type-check": "vue-tsc --noEmit -p tsconfig.vitest.json --composite false",
     "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix --ignore-path .gitignore",
     "format": "prettier --write src/"
