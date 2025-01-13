@@ -29,8 +29,10 @@ func TestAnthropicChatStream_Unauthorized(t *testing.T) {
 					Content: "Hello",
 				},
 			},
-			Model:    AnthropicDefaultModel,
-			Provider: ToolChatProvider(common.AnthropicChatProvider),
+			ModelConfig: common.ModelConfig{
+				Provider: string(common.AnthropicChatProvider),
+				Model:    AnthropicDefaultModel,
+			},
 		},
 		Secrets: secret_manager.SecretManagerContainer{
 			SecretManager: mockSecretManager,
@@ -172,7 +174,10 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 
 	options := ToolChatOptions{
 		Params: ToolChatParams{
-			Model: anthropic.ModelClaude_3_Haiku_20240307, // cheapest model for integration testing
+			ModelConfig: common.ModelConfig{
+				Provider: string(common.AnthropicChatProvider),
+				Model: anthropic.ModelClaude_3_Haiku_20240307, // cheapest model for integration testing
+			},
 			Messages: []ChatMessage{
 				{Role: ChatMessageRoleUser, Content: "First say hi. After thatn, then look up what the weather in New York"},
 			},
