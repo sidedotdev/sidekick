@@ -110,6 +110,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 				if approveErr != nil {
 					return nil, fmt.Errorf("error approving dev requirements: %v", approveErr)
 				}
+				iteration.NumSinceLastFeedback = 0
 				if userResponse.Approved != nil && *userResponse.Approved {
 					return &devReq, nil // break the loop with the final result
 				} else {

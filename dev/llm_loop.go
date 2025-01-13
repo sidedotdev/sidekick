@@ -10,10 +10,11 @@ var ErrPaused = fmt.Errorf("operation paused")
 // LlmIteration represents a single iteration in the LLM loop.
 type LlmIteration struct {
 	LlmLoopConfig
-	Num         int
-	ExecCtx     DevContext
-	ChatHistory *[]llm.ChatMessage
-	State       interface{}
+	Num                  int
+	NumSinceLastFeedback int
+	ExecCtx              DevContext
+	ChatHistory          *[]llm.ChatMessage
+	State                interface{}
 }
 
 // Option is a functional option for configuring LlmLoop
@@ -62,18 +63,17 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 	}
 
 	iteration := &LlmIteration{
-		LlmLoopConfig: *config,
-		Num:           0,
-		ExecCtx:       dCtx,
-		ChatHistory:   chatHistory,
-		State:         config.initialState,
+		LlmLoopConfig:        *config,
+		Num:                  0,
+		NumSinceLastFeedback: 0,
+		ExecCtx:              dCtx,
+		ChatHistory:          chatHistory,
+		State:                config.initialState,
 	}
-
-	iterationsSinceLastFeedback := 0
 
 	for {
 		iteration.Num++
-		iterationsSinceLastFeedback++
+		iteration.NumSinceLastFeedback++
 
 		if iteration.Num > config.maxIterations {
 			return nil, ErrMaxAttemptsReached
@@ -89,11 +89,11 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 				Role:    "user",
 				Content: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content),
 			})
-			iterationsSinceLastFeedback = 0
+			iteration.NumSinceLastFeedback = 0
 		}
 
 		// Get user feedback every N iterations
-		if iterationsSinceLastFeedback >= config.maxIterationsBeforeFeedback {
+		if iteration.NumSinceLastFeedback >= config.maxIterationsBeforeFeedback {
 			guidanceContext := fmt.Sprintf("The LLM has looped %d times without finalizing. Please provide guidance or just say \"continue\" if they are on track.", iteration.Num)
 			userResponse, err := GetUserGuidance(dCtx, guidanceContext, nil)
 			if err != nil {
@@ -106,7 +106,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 				Content: userResponse.Content,
 			})
 
-			iterationsSinceLastFeedback = 0
+			iteration.NumSinceLastFeedback = 0
 		}
 
 		// Use WithCancelOnPause for long-running operations
