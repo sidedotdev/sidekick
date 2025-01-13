@@ -17,8 +17,8 @@ const OpenaiDefaultLongContextModel = "gpt-4o-2024-05-13"
 const OpenaiApiKeySecretName = "OPENAI_API_KEY"
 
 type OpenaiToolChat struct {
-	BaseURL       string
-	DefaultModel  string
+	BaseURL      string
+	DefaultModel string
 }
 
 // implements ToolChat interface
@@ -54,9 +54,14 @@ func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		parallelToolCalls = *options.Params.ParallelToolCalls
 	}
 
+	// openai-compatible endpoints may require alternating user vs assistant
+	// messages, so we merge consecutive messages of the same/equivalent role.
+	// this is a hacky way to infer that we should merge messages
+	shouldMerge := o.BaseURL != "" && !strings.HasPrefix(model, "gpt") && !strings.HasPrefix(model, "o1-") && !strings.HasPrefix(model, "o3-")
+
 	req := openai.ChatCompletionRequest{
 		Model:             model,
-		Messages:          openaiFromChatMessages(options.Params.Messages),
+		Messages:          openaiFromChatMessages(options.Params.Messages, shouldMerge),
 		ToolChoice:        openaiFromToolChoice(options.Params.ToolChoice, options.Params.Tools),
 		Tools:             openaiFromTools(options.Params.Tools),
 		Stream:            true,
@@ -116,8 +121,8 @@ func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 	}, nil
 }
 
-func openaiFromChatMessages(messages []ChatMessage) []openai.ChatCompletionMessage {
-	return utils.Map(messages, func(msg ChatMessage) openai.ChatCompletionMessage {
+func openaiFromChatMessages(messages []ChatMessage, shouldMerge bool) []openai.ChatCompletionMessage {
+	openaiMessages := utils.Map(messages, func(msg ChatMessage) openai.ChatCompletionMessage {
 		return openai.ChatCompletionMessage{
 			Role:       string(msg.Role),
 			Content:    msg.Content,
@@ -126,6 +131,37 @@ func openaiFromChatMessages(messages []ChatMessage) []openai.ChatCompletionMessa
 			Name:       msg.Name,
 		}
 	})
+
+	if !shouldMerge {
+		return openaiMessages
+	}
+
+	// openai-compatible endpoints may require alternating user vs assistant
+	// messages, so we merge consecutive messages of the same/equivalent role
+	var mergedMessages []openai.ChatCompletionMessage
+	for _, msg := range openaiMessages {
+		if len(mergedMessages) == 0 {
+			mergedMessages = append(mergedMessages, msg)
+			continue
+		}
+		lastMsg := &mergedMessages[len(mergedMessages)-1]
+
+		// Consider tool, user, and system roles as equivalent
+		isEquivalentRole := lastMsg.Role == string(msg.Role) ||
+			(isUserLikeRole(lastMsg.Role) && isUserLikeRole(string(msg.Role)))
+
+		if isEquivalentRole {
+			lastMsg.Content += "\n\n" + string(msg.Role) + ":" + msg.Content
+		} else {
+			mergedMessages = append(mergedMessages, msg)
+		}
+	}
+
+	return mergedMessages
+}
+
+func isUserLikeRole(s string) bool {
+	return s == "user" || s == "system" || s == "tool"
 }
 
 func openaiFromTools(tools []*Tool) []openai.Tool {

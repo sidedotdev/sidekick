@@ -14,7 +14,7 @@ type ToolChatter interface {
 }
 
 type ChatControlParams struct {
-	Temperature *float32             `json:"temperature"`
+	Temperature *float32 `json:"temperature"`
 	common.ModelConfig
 }
 
@@ -22,11 +22,11 @@ type ChatControlParams struct {
 // tools, these LLMs can decide when it is appropriate to use a tool and use the
 // tool via a tool call
 type ToolChatParams struct {
-	Messages          []ChatMessage        `json:"messages"`
-	Tools             []*Tool              `json:"tools"`
-	ToolChoice        ToolChoice           `json:"toolChoice"`
-	ParallelToolCalls *bool                `json:"parallelToolCalls"`
-	Temperature       *float32             `json:"temperature"`
+	Messages          []ChatMessage `json:"messages"`
+	Tools             []*Tool       `json:"tools"`
+	ToolChoice        ToolChoice    `json:"toolChoice"`
+	ParallelToolCalls *bool         `json:"parallelToolCalls"`
+	Temperature       *float32      `json:"temperature"`
 	common.ModelConfig
 }
 
@@ -49,9 +49,9 @@ func PromptToToolChatParams(prompt string, controlParams ChatControlParams) Tool
 type ToolChatProviderType = common.ToolChatProviderType
 
 const (
-	UnspecifiedToolChatProviderType    ToolChatProviderType = ToolChatProviderType(common.UnspecifiedChatProvider)
-	OpenaiToolChatProviderType         ToolChatProviderType = ToolChatProviderType(common.OpenaiChatProvider)
-	AnthropicToolChatProviderType      ToolChatProviderType = ToolChatProviderType(common.AnthropicChatProvider)
+	UnspecifiedToolChatProviderType      ToolChatProviderType = ToolChatProviderType(common.UnspecifiedChatProvider)
+	OpenaiToolChatProviderType           ToolChatProviderType = ToolChatProviderType(common.OpenaiChatProvider)
+	AnthropicToolChatProviderType        ToolChatProviderType = ToolChatProviderType(common.AnthropicChatProvider)
 	OpenaiCompatibleToolChatProviderType ToolChatProviderType = ToolChatProviderType(common.OpenaiCompatibleChatProvider)
 )
 
