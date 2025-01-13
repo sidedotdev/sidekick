@@ -14,7 +14,7 @@ import (
 
 // LocalConfig represents the local configuration file structure
 type LocalConfig struct {
-	CustomProviders []ModelProviderConfig   `koanf:"custom_providers,omitempty"`
+	CustomProviders []ModelProviderConfig    `koanf:"custom_providers,omitempty"`
 	LLM             map[string][]ModelConfig `koanf:"llm,omitempty"`
 	Embedding       map[string][]ModelConfig `koanf:"embedding,omitempty"`
 }

@@ -18,8 +18,8 @@ import (
 
 type DevContext struct {
 	flow_action.ExecContext
-	RepoConfig common.RepoConfig
-	Providers	    []common.ModelProviderConfig
+	RepoConfig      common.RepoConfig
+	Providers       []common.ModelProviderConfig
 	LLMConfig       common.LLMConfig
 	EmbeddingConfig common.EmbeddingConfig
 }
@@ -93,7 +93,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	// LLMConfig (empty is fine), and the LocalConfig.Embedding should be
 	// converted to EmbeddingConfig (empty fine here too) when returned from the
 	// activity.
-	// 
+	//
 	// Then workspaceConfig.LLM and workspaceConfig.Embedding should be used to
 	// override these values, if present. If neither LocalConfig nor
 	// WorkspaceConfig are configured with defaults, return an error.
