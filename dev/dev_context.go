@@ -66,7 +66,6 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		err = workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeActivity, env.LocalEnvParams{
 			RepoDir: repoDir,
 		}, worktree).Get(ctx, &envContainer)
-		devEnv = envContainer.Env
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
 		}
@@ -87,6 +86,15 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			SecretManager: secret_manager.KeyringSecretManager{},
 		},
 	}
+
+	// TODO /gen activity to get the model configurations, by loading the
+	// LocalConfig. The LocalConfig.LLM should be converted to LLMConfig (empty
+	// is fine), and the LocalConfig.Embedding should be converted to
+	// EmbeddingConfig (empty fine here too) when returned from the activity.
+	// 
+	// Then workspaceConfig.LLM and workspaceConfig.Embedding should be used to
+	// override these values, if present. If neither LocalConfig nor
+	// WorkspaceConfig are configured with defaults, return an error.
 
 	var workspaceConfig domain.WorkspaceConfig
 	var wa *workspace.Activities
