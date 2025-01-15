@@ -21,35 +21,44 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 	switch name {
 	case "class.declaration":
 		{
-			if !strings.HasPrefix(content, "class") {
-				out.WriteString("class ")
-			}
+			out.WriteString("class ")
 		}
-	case "class.name", "constructor.name", "method.name":
+	case "class.name":
 		{
+			out.WriteString(content)
+		}
+	case "constructor.name", "method.name":
+		{
+			// Check if the method/constructor is private
+			modifiers := c.Node.Parent().ChildByFieldName("modifiers")
+			if modifiers != nil && strings.Contains(modifiers.Content(*sourceCode), "private") {
+				return
+			}
+			out.WriteString("\t")
 			out.WriteString(content)
 		}
 	case "method.parameters", "constructor.parameters":
 		{
-			out.WriteString(content)
-		}
-	case "field.declaration":
-		{
-			if !strings.HasSuffix(content, ";") {
-				out.WriteString(content)
-				out.WriteString(";")
-			} else {
+			// Only write parameters if the method/constructor was public (written)
+			if !strings.HasSuffix(out.String(), "\t") {
 				out.WriteString(content)
 			}
 		}
-	case "field.type":
+	case "field.declaration":
 		{
-			out.WriteString(content)
-			out.WriteString(" ")
-		}
-	case "field.name":
-		{
-			out.WriteString(content)
+			modifiers := c.Node.ChildByFieldName("modifiers")
+			if modifiers == nil || !strings.Contains(modifiers.Content(*sourceCode), "public") {
+				return
+			}
+			out.WriteString("\t")
+			// Get type and name
+			typeNode := c.Node.ChildByFieldName("type")
+			nameNode := c.Node.ChildByFieldName("name")
+			if typeNode != nil && nameNode != nil {
+				out.WriteString(typeNode.Content(*sourceCode))
+				out.WriteString(" ")
+				out.WriteString(nameNode.Content(*sourceCode))
+			}
 		}
 	}
 }
