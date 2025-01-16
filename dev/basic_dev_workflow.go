@@ -28,6 +28,8 @@ type BasicDevOptions struct {
 }
 
 func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result string, err error) {
+	globalState := &GlobalState{}
+
 	// don't recover panics in development so we can debug via temporal UI, at
 	// the cost of failed tasks appearing stuck without UI feedback in sidekick
 	if SideAppEnv != "development" {
@@ -55,6 +57,10 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		_ = signalWorkflowClosure(ctx, "failed")
 		return "", err
 	}
+	dCtx.GlobalState = globalState
+
+	// Set up the pause handler
+	SetupPauseHandler(dCtx, "Paused for user input", nil)
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	err = EnsurePrerequisites(dCtx, requirements)
@@ -108,7 +114,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 
 		// TODO /gen use models slice and modelIndex and modelAttemptCount just like
 		// in completeDevStep to switch models when ErrMaxIterationsReached
-		_, modelConfig, _ := dCtx.GetToolChatConfig(common.CodingKey, attemptCount/3)
+		modelConfig := dCtx.GetModelConfig(common.CodingKey, attemptCount/3, "default")
 
 		// TODO don't force getting help if it just got help recently already
 		if attemptCount > 0 && attemptCount%3 == 0 {

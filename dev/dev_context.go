@@ -3,11 +3,11 @@ package dev
 import (
 	"context"
 	"fmt"
+	"os"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/flow_action"
-	"sidekick/llm"
 	"sidekick/secret_manager"
 	"sidekick/srv"
 	"sidekick/utils"
@@ -18,10 +18,18 @@ import (
 
 type DevContext struct {
 	flow_action.ExecContext
-	RepoConfig common.RepoConfig
-
+	GlobalState     *GlobalState
+	RepoConfig      common.RepoConfig
+	Providers       []common.ModelProviderPublicConfig
 	LLMConfig       common.LLMConfig
 	EmbeddingConfig common.EmbeddingConfig
+}
+
+func (dCtx DevContext) WithCancelOnPause() DevContext {
+	ctx, cancel := workflow.WithCancel(dCtx.Context)
+	dCtx.Context = ctx
+	dCtx.GlobalState.AddCancelFunc(cancel)
+	return dCtx
 }
 
 func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, envType string) (DevContext, error) {
@@ -66,7 +74,6 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		err = workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeActivity, env.LocalEnvParams{
 			RepoDir: repoDir,
 		}, worktree).Get(ctx, &envContainer)
-		devEnv = envContainer.Env
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
 		}
@@ -84,15 +91,43 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		WorkspaceId:  workspaceId,
 		EnvContainer: &envContainer,
 		Secrets: &secret_manager.SecretManagerContainer{
-			SecretManager: secret_manager.KeyringSecretManager{},
+			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+				secret_manager.KeyringSecretManager{},
+				secret_manager.LocalConfigSecretManager{},
+			}),
 		},
 	}
 
+	// Get local configuration first
+	var localConfig common.LocalPublicConfig
+	err = workflow.ExecuteActivity(ctx, common.GetLocalConfig).Get(ctx, &localConfig)
+	if err != nil && !os.IsNotExist(err) {
+		return DevContext{}, fmt.Errorf("failed to get local config: %v", err)
+	}
+
+	// Get workspace configuration
 	var workspaceConfig domain.WorkspaceConfig
 	var wa *workspace.Activities
 	err = workflow.ExecuteActivity(ctx, wa.GetWorkspaceConfig, workspaceId).Get(ctx, &workspaceConfig)
 	if err != nil {
 		return DevContext{}, fmt.Errorf("failed to get workspace config: %v", err)
+	}
+
+	// Merge configurations - workspace config overrides local config if present
+	finalLLMConfig := localConfig.LLM
+	finalEmbeddingConfig := localConfig.Embedding
+
+	if len(workspaceConfig.LLM.Defaults) > 0 {
+		finalLLMConfig.Defaults = workspaceConfig.LLM.Defaults
+	}
+	for key, models := range workspaceConfig.LLM.UseCaseConfigs {
+		finalLLMConfig.UseCaseConfigs[key] = models
+	}
+	if len(workspaceConfig.Embedding.Defaults) > 0 {
+		finalEmbeddingConfig.Defaults = workspaceConfig.Embedding.Defaults
+	}
+	for key, models := range workspaceConfig.Embedding.UseCaseConfigs {
+		finalEmbeddingConfig.UseCaseConfigs[key] = models
 	}
 	repoConfig, err := GetRepoConfig(eCtx)
 	if err != nil {
@@ -114,8 +149,9 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	return DevContext{
 		ExecContext:     eCtx,
 		RepoConfig:      repoConfig,
-		LLMConfig:       workspaceConfig.LLM,
-		EmbeddingConfig: workspaceConfig.Embedding,
+		Providers:       localConfig.Providers, // TODO merge with workspace providers
+		LLMConfig:       finalLLMConfig,
+		EmbeddingConfig: finalEmbeddingConfig,
 	}, nil
 }
 
@@ -123,6 +159,13 @@ type DevActionContext struct {
 	DevContext
 	ActionType   string
 	ActionParams map[string]interface{}
+}
+
+func (actionCtx DevActionContext) WithCancelOnPause() DevActionContext {
+	ctx, cancel := workflow.WithCancel(actionCtx.Context)
+	actionCtx.Context = ctx
+	actionCtx.GlobalState.AddCancelFunc(cancel)
+	return actionCtx
 }
 
 func Track[T any](devActionCtx DevActionContext, f func(flowAction domain.FlowAction) (T, error)) (defaultT T, err error) {
@@ -153,11 +196,34 @@ func (dCtx *DevContext) NewActionContext(actionType string) DevActionContext {
 	}
 }
 
-/** GetToolChatConfig returns the tool chat provider and model config for the given
- * key and iteration. If there is no model config for the given key, it falls
- * back to the default model config. */
-func (dCtx *DevContext) GetToolChatConfig(key string, iteration int) (llm.ToolChatProvider, common.ModelConfig, bool) {
-	return dCtx.LLMConfig.GetToolChatConfig(key, iteration)
+func (dCtx *DevContext) GetModelConfig(key string, iteration int, fallback string) common.ModelConfig {
+	modelConfig, isDefault := dCtx.LLMConfig.GetModelConfig(key, iteration)
+	if isDefault && fallback != "default" {
+		if fallback == "small" {
+			provider, err := common.StringToToolChatProviderType(modelConfig.Provider)
+			if err == nil {
+				modelConfig.Model = provider.SmallModel()
+			} else {
+				// Try to find provider in configured providers
+				for _, p := range dCtx.Providers {
+					if p.Name == modelConfig.Provider {
+						if p.SmallLLM != "" {
+							modelConfig.Model = p.SmallLLM
+						}
+						break
+					}
+				}
+			}
+		} else {
+			modelConfig, _ = dCtx.LLMConfig.GetModelConfig(fallback, iteration)
+		}
+	}
+	return modelConfig
+}
+
+func (dCtx *DevContext) GetEmbeddingModelConfig(key string) common.ModelConfig {
+	modelConfig := dCtx.EmbeddingConfig.GetModelConfig(key)
+	return modelConfig
 }
 
 func (devActionCtx *DevActionContext) FlowActionContext() flow_action.ActionContext {

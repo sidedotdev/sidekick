@@ -91,7 +91,11 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
 	ManageChatHistory(iteration.ExecCtx.Context, iteration.ChatHistory, maxLength)
 
-	chatResponse, err := generateDevRequirements(iteration.ExecCtx, iteration.ChatHistory)
+	chatCtx := iteration.ExecCtx.WithCancelOnPause()
+	chatResponse, err := generateDevRequirements(chatCtx, iteration.ChatHistory)
+	if iteration.ExecCtx.GlobalState != nil && iteration.ExecCtx.GlobalState.Paused {
+		return nil, nil // continue the loop: UserRequestIfPaused will handle the pause
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +110,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 				if approveErr != nil {
 					return nil, fmt.Errorf("error approving dev requirements: %v", approveErr)
 				}
+				iteration.NumSinceLastFeedback = 0
 				if userResponse.Approved != nil && *userResponse.Approved {
 					return &devReq, nil // break the loop with the final result
 				} else {
@@ -165,7 +170,7 @@ func generateDevRequirements(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*
 		})
 	*/
 
-	provider, modelConfig, _ := dCtx.GetToolChatConfig(common.PlanningKey, 0)
+	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 
 	options := llm.ToolChatOptions{
 		Secrets: *dCtx.Secrets,
@@ -175,8 +180,7 @@ func generateDevRequirements(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*
 			ToolChoice: llm.ToolChoice{
 				Type: llm.ToolChoiceTypeAuto, // TODO test with llm.ToolChoiceTypeRequired
 			},
-			Provider: provider,
-			Model:    modelConfig.Model,
+			ModelConfig: modelConfig,
 		},
 	}
 	return TrackedToolChat(dCtx, "Generate Dev Requirements", options)
@@ -186,10 +190,8 @@ func TrackedToolChat(dCtx DevContext, actionName string, options llm.ToolChatOpt
 	actionCtx := dCtx.NewActionContext(actionName)
 	actionCtx.ActionParams = options.ActionParams()
 	return Track(actionCtx, func(flowAction domain.FlowAction) (*llm.ChatMessageResponse, error) {
-		if options.Params.Provider == llm.UnspecifiedToolChatProvider {
-			provider, modelConfig, _ := dCtx.GetToolChatConfig(common.DefaultKey, 0)
-			options.Params.Provider = provider
-			options.Params.Model = modelConfig.Model
+		if options.Params.Provider == "" {
+			options.Params.ModelConfig = dCtx.GetModelConfig(common.DefaultKey, 0, "default")
 		}
 		flowId := workflow.GetInfo(dCtx).WorkflowExecution.ID
 		chatStreamOptions := persisted_ai.ChatStreamOptions{

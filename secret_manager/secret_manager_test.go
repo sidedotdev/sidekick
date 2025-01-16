@@ -24,6 +24,13 @@ func TestSecretManagerContainer_MarshalUnmarshal(t *testing.T) {
 			name:    "MockSecretManager",
 			manager: &MockSecretManager{},
 		},
+		{
+			name: "CompositeSecretManager",
+			manager: NewCompositeSecretManager([]SecretManager{
+				&EnvSecretManager{},
+				&KeyringSecretManager{},
+			}),
+		},
 	}
 
 	for _, tt := range tests {

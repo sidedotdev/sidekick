@@ -39,13 +39,9 @@ func GetOpenaiFuncArgs(ctx context.Context, la LlmActivities, toolOptions llm.To
 func ForceToolCall(actionCtx flow_action.ActionContext, llmConfig common.LLMConfig, params *llm.ToolChatParams, tools ...*llm.Tool) (*llm.ChatMessageResponse, error) {
 	var la *LlmActivities // use a nil struct pointer to call activities that are part of a structure
 
-	toolChatProvider, modelConfig, _ := llmConfig.GetToolChatConfig(common.DefaultKey, 0)
-	provider, model := params.Provider, params.Model
-	if model == "" {
-		model = modelConfig.Model
-	}
-	if provider == llm.UnspecifiedToolChatProvider {
-		provider = toolChatProvider
+	if params.ModelConfig.Provider == "" {
+		modelConfig, _ := llmConfig.GetModelConfig(common.DefaultKey, 0)
+		params.ModelConfig = modelConfig
 	}
 
 	options := ChatStreamOptions{
@@ -53,8 +49,7 @@ func ForceToolCall(actionCtx flow_action.ActionContext, llmConfig common.LLMConf
 			Secrets: *actionCtx.Secrets,
 			Params: llm.ToolChatParams{
 				Messages:    params.Messages, // TODO use go get dario.cat/mergo
-				Provider:    provider,
-				Model:       model,
+				ModelConfig: params.ModelConfig,
 				Temperature: params.Temperature,
 				Tools:       tools,
 				ToolChoice: llm.ToolChoice{
