@@ -135,7 +135,7 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	} else {
 		fmt.Println("ℹ Sidekick server is not running.")
 
-		var startServer bool
+		startServer := true // default to "Yes"
 		err := huh.NewConfirm().
 			Title("Would you like to start the server now?").
 			Value(&startServer).
