@@ -33,7 +33,7 @@ func llmInputForIdentifyInformationNeeds(dCtx DevContext, chatHistory []llm.Chat
 	return llm.ToolChatOptions{
 		Secrets: *dCtx.Secrets,
 		Params: llm.ToolChatParams{
-			Messages: chatHistory,
+			Messages:    chatHistory,
 			ModelConfig: modelConfig,
 			// TODO /gen use a tool for this, after defining the tool more
 			// specifically (not just a list of needs, but several different

@@ -30,11 +30,11 @@ type RankedDirSignatureOutlineOptions struct {
 }
 
 type RankedViaEmbeddingOptions struct {
-	WorkspaceId   string
-	EnvContainer  env.EnvContainer
-	RankQuery     string
-	Secrets       secret_manager.SecretManagerContainer
-	ModelConfig   common.ModelConfig
+	WorkspaceId  string
+	EnvContainer env.EnvContainer
+	RankQuery    string
+	Secrets      secret_manager.SecretManagerContainer
+	ModelConfig  common.ModelConfig
 }
 
 func (options RankedDirSignatureOutlineOptions) ActionParams() map[string]any {
@@ -135,7 +135,7 @@ func getEmbedder(config common.ModelConfig) (embedding.Embedder, error) {
 		for _, p := range localConfig.Providers {
 			if p.Type == string(providerType) {
 				return &embedding.OpenAIEmbedder{
-					BaseURL:      p.BaseURL,
+					BaseURL: p.BaseURL,
 				}, nil
 			}
 		}

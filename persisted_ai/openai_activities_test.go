@@ -17,7 +17,7 @@ func TestCachedEmbedActivity_AllCached(t *testing.T) {
 	storage := redis.NewTestRedisStorage()
 
 	oa := &OpenAIActivities{
-		Storage:  storage,
+		Storage: storage,
 	}
 	options := OpenAIEmbedActivityOptions{
 		WorkspaceId: "test_workspace",
@@ -50,7 +50,7 @@ func TestCachedEmbedActivity_NoKeys(t *testing.T) {
 	db := redis.NewTestRedisStorage()
 
 	oa := &OpenAIActivities{
-		Storage:  db,
+		Storage: db,
 	}
 	options := OpenAIEmbedActivityOptions{
 		WorkspaceId: "test_workspace",
@@ -67,7 +67,7 @@ func TestCachedEmbedActivity_MissedCache(t *testing.T) {
 	storage := redis.NewTestRedisStorage()
 
 	oa := &OpenAIActivities{
-		Storage:  storage,
+		Storage: storage,
 	}
 	options := OpenAIEmbedActivityOptions{
 		Secrets: secret_manager.SecretManagerContainer{
