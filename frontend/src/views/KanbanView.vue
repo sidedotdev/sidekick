@@ -7,8 +7,16 @@ import { ref, onMounted, watch, onUnmounted } from 'vue'
 import type { Ref } from 'vue'
 import KanbanBoard from '../components/KanbanBoard.vue'
 import { store } from '../lib/store'
+import type { Task, FullTask } from '../lib/models'
 
-const tasks: Ref<Array<any>> = ref([])
+const parseTaskDates = (task: any): FullTask => {
+  if (task.created) task.created = new Date(task.created)
+  if (task.updated) task.updated = new Date(task.updated)
+  if (task.archived) task.archived = new Date(task.archived)
+  return task as FullTask
+}
+
+const tasks: Ref<Array<FullTask>> = ref([])
 let socket: WebSocket | null = null
 let socketClosed = false
 let lastTaskStreamId: string | null = null
@@ -17,7 +25,8 @@ const fetchTasks = async () => {
   if (store.workspaceId) {
     try {
       const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/tasks`)
-      tasks.value = (await response.json()).tasks
+      const data = await response.json()
+      tasks.value = data.tasks.map((task: any) => parseTaskDates(task))
     } catch (error) {
       console.error('Failed to fetch tasks:', error)
     }
@@ -63,14 +72,15 @@ const connectWebSocket = (onConnect: (() => void)) => {
   };
 };
 
-const updateTasks = (newTasks: Array<any>) => {
+const updateTasks = (newTasks: Array<FullTask>) => {
   // Merging or updating the current tasks based on new incoming tasks
   newTasks.forEach(task => {
-    const index = tasks.value.findIndex(t => t.id === task.id);
+    const parsedTask = parseTaskDates(task)
+    const index = tasks.value.findIndex(t => t.id === parsedTask.id);
     if (index !== -1) {
-      tasks.value.splice(index, 1, task);
+      tasks.value.splice(index, 1, parsedTask);
     } else {
-      tasks.value.push(task);
+      tasks.value.push(parsedTask);
     }
   });
 
