@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/charmbracelet/huh"
 	"github.com/erikgeiser/promptkit/selection"
 	"github.com/erikgeiser/promptkit/textinput"
 	"github.com/segmentio/ksuid"
@@ -132,7 +133,25 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	if checkServerStatus() {
 		fmt.Printf("✔ Sidekick server is running. Go to http://localhost:%d\n", common.GetServerPort())
 	} else {
-		fmt.Println("ℹ Sidekick server is not running. Please run 'side start' to start the server.")
+		fmt.Println("ℹ Sidekick server is not running.")
+
+		var startServer bool
+		err := huh.NewConfirm().
+			Title("Would you like to start the server now?").
+			Value(&startServer).
+			Affirmative("Yes").
+			Negative("No").
+			Run()
+
+		if err != nil {
+			return fmt.Errorf("error prompting to start server: %w", err)
+		}
+
+		if startServer {
+			handleStartCommand([]string{})
+		} else {
+			fmt.Println("Please run 'side start' to start the server when you're ready.")
+		}
 	}
 
 	return nil
