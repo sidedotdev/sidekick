@@ -126,11 +126,11 @@ func PrepareRepoSummary(dCtx DevContext, requirements string) (string, string, e
 func GetRankedRepoSummary(dCtx DevContext, rankQuery string) (string, error) {
 	options := persisted_ai.RankedDirSignatureOutlineOptions{
 		RankedViaEmbeddingOptions: persisted_ai.RankedViaEmbeddingOptions{
-			WorkspaceId:   dCtx.WorkspaceId,
-			EnvContainer:  *dCtx.EnvContainer,
-			RankQuery:     rankQuery,
-			Secrets:       *dCtx.Secrets,
-			ModelConfig:   dCtx.GetEmbeddingModelConfig(common.DefaultKey),
+			WorkspaceId:  dCtx.WorkspaceId,
+			EnvContainer: *dCtx.EnvContainer,
+			RankQuery:    rankQuery,
+			Secrets:      *dCtx.Secrets,
+			ModelConfig:  dCtx.GetEmbeddingModelConfig(common.DefaultKey),
 		},
 		CharLimit: min(defaultMaxChatHistoryLength/2, 15000), // ensure we leave space for other messages
 	}
@@ -249,7 +249,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			}
 			addCodeContextPrompt(chatHistory, userFeedback)
 			iterationsSinceLastFeedback = 0
-		} else if attempts % 3 == 0 {
+		} else if attempts%3 == 0 {
 			chatCtx := actionCtx.DevContext.WithCancelOnPause()
 			toolCall, err := ForceToolBulkSearchRepository(chatCtx, chatHistory)
 			if actionCtx.GlobalState != nil && actionCtx.GlobalState.Paused {
@@ -288,7 +288,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		if err != nil {
 			if errors.Is(err, llm.ErrToolCallUnmarshal) {
 				response := fmt.Sprintf("%s\n\nHint: To fix this, follow the json schema correctly. In particular, don't put json within a string.", err.Error())
-				toolCallResponseInfo := ToolCallResponseInfo{Response: response, TooCallId: toolCall.Id, FunctionName: toolCall.Name}
+				toolCallResponseInfo := ToolCallResponseInfo{Response: response, ToolCallId: toolCall.Id, FunctionName: toolCall.Name}
 				addCodeContextPrompt(chatHistory, toolCallResponseInfo)
 				continue
 			}
@@ -314,7 +314,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			if len(codeContext) > maxLength {
 				// TODO if this happens, we could try partially symbolizing the code context too
 				feedback := "Error: the code context requested is too long to include. YOU MUST SHORTEN THE CODE CONTEXT REQUESTED. DO NOT REQUEST SO MANY FUNCTIONS AND TYPES IN SO MANY FILES. If you're not asking for too many symbols, then be more specific in your request - eg request just a few methods instead of a big class."
-				promptInfo = ToolCallResponseInfo{Response: feedback, TooCallId: toolCall.Id, FunctionName: toolCall.Name}
+				promptInfo = ToolCallResponseInfo{Response: feedback, ToolCallId: toolCall.Id, FunctionName: toolCall.Name}
 				addCodeContextPrompt(chatHistory, promptInfo)
 				continue
 			} else {
@@ -327,7 +327,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		// we'll retry if we get an error, and include the error in the feedback
 		hint := fmt.Sprintf("Have you followed the required formats exactly for all arguments? Look at the examples given in the %s schema descriptions for all the properties. Note that frontend components can be retrieved in full with empty symbol names array", getRetrieveCodeContextTool().Name)
 		feedback := fmt.Sprintf("failed to extract code context: %v\n%s\n\nHint: %s", err, result.Failures, hint)
-		promptInfo = ToolCallResponseInfo{Response: feedback, TooCallId: toolCall.Id, FunctionName: toolCall.Name}
+		promptInfo = ToolCallResponseInfo{Response: feedback, ToolCallId: toolCall.Id, FunctionName: toolCall.Name}
 		addCodeContextPrompt(chatHistory, promptInfo)
 
 		// Check if the operation was paused
@@ -416,7 +416,7 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 		role = llm.ChatMessageRoleTool
 		content = renderCodeContextFeedbackPrompt(info.Response)
 		name = info.FunctionName
-		toolCallId = info.TooCallId
+		toolCallId = info.ToolCallId
 		isError = info.IsError
 	case FeedbackInfo:
 		content = info.Feedback

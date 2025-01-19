@@ -279,7 +279,7 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 		role = llm.ChatMessageRoleTool
 		content = info.Response
 		name = info.FunctionName
-		toolCallId = info.TooCallId
+		toolCallId = info.ToolCallId
 		isError = info.IsError
 	default:
 		panic("Unsupported prompt type for authoring edit blocks: " + promptInfo.GetType())

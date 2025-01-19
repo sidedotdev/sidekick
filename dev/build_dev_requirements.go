@@ -114,17 +114,17 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 					return &devReq, nil // break the loop with the final result
 				} else {
 					feedback := "Requirements were not approved and therefore not recorded. Please try again, taking this feedback into account:\n\n" + userResponse.Content
-					toolResponse := ToolCallResponseInfo{Response: feedback, FunctionName: toolCall.Name, TooCallId: toolCall.Id}
+					toolResponse := ToolCallResponseInfo{Response: feedback, FunctionName: toolCall.Name, ToolCallId: toolCall.Id}
 					addToolCallResponse(iteration.ChatHistory, toolResponse)
 				}
 			} else if unmarshalErr != nil {
 				if chatResponse.ToolCalls[0].Name == getHelpOrInputTool.Name {
 					iteration.NumSinceLastFeedback = 0
 				}
-				toolResponse := ToolCallResponseInfo{Response: unmarshalErr.Error(), FunctionName: recordDevRequirementsTool.Name, TooCallId: toolCall.Id, IsError: true}
+				toolResponse := ToolCallResponseInfo{Response: unmarshalErr.Error(), FunctionName: recordDevRequirementsTool.Name, ToolCallId: toolCall.Id, IsError: true}
 				addToolCallResponse(iteration.ChatHistory, toolResponse)
 			} else {
-				toolResponse := ToolCallResponseInfo{Response: "Recorded partial requirements, but requirements are not complete yet based on the \"are_requirements_complete\" boolean field value being set to false. Do some more research or thinking or get help/input to complete the plan, as needed. Once the planning is complete, record the plan again in full.", FunctionName: recordDevPlanTool.Name, TooCallId: toolCall.Id}
+				toolResponse := ToolCallResponseInfo{Response: "Recorded partial requirements, but requirements are not complete yet based on the \"are_requirements_complete\" boolean field value being set to false. Do some more research or thinking or get help/input to complete the plan, as needed. Once the planning is complete, record the plan again in full.", FunctionName: recordDevPlanTool.Name, ToolCallId: toolCall.Id}
 				addToolCallResponse(iteration.ChatHistory, toolResponse)
 			}
 		} else {
@@ -237,8 +237,8 @@ func addDevRequirementsPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptI
 		panic("Unsupported prompt type for dev requirements: " + promptInfo.GetType())
 	}
 	*chatHistory = append(*chatHistory, llm.ChatMessage{
-		Role:    role,
-		Content: content,
+		Role:         role,
+		Content:      content,
 		CacheControl: cacheControl,
 	})
 }
@@ -248,7 +248,7 @@ func addToolCallResponse(chatHistory *[]llm.ChatMessage, info ToolCallResponseIn
 		Role:       llm.ChatMessageRoleTool,
 		Content:    info.Response,
 		Name:       info.FunctionName,
-		ToolCallId: info.TooCallId,
+		ToolCallId: info.ToolCallId,
 		IsError:    info.IsError,
 	})
 }
