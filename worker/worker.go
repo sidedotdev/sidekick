@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/client"
@@ -39,10 +40,17 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 		Logger:   logger,
 		HostPort: hostPort,
 	}
-	c, err := client.Dial(clientOptions)
-
+	var temporalClient client.Client
+	for i := 0; i < 5; i++ {
+		temporalClient, err = client.Dial(clientOptions)
+		if err == nil {
+			break
+		}
+		log.Debug().Err(err).Msgf("Failed to create Temporal client, retrying in 500ms (attempt %d/5)", i+1)
+		time.Sleep(500 * time.Millisecond)
+	}
 	if err != nil {
-		log.Fatal().Err(err).Msg("Unable to create Temporal client.")
+		log.Fatal().Err(err).Msg("Unable to create Temporal client after multiple retries.")
 	}
 
 	service, err := sidekick.GetService()
@@ -56,11 +64,11 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 
 	devManagerActivities := &dev.DevAgentManagerActivities{
 		Storage:        service,
-		TemporalClient: c,
+		TemporalClient: temporalClient,
 	}
 	flowActivities := &flow_action.FlowActivities{Service: service}
 	openAIActivities := &persisted_ai.OpenAIActivities{
-		Storage:  service,
+		Storage: service,
 	}
 	llmActivities := &persisted_ai.LlmActivities{
 		Streamer: service,
@@ -90,11 +98,11 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	}
 
 	pollFailuresActivities := &poll_failures.PollFailuresActivities{
-		TemporalClient: c,
+		TemporalClient: temporalClient,
 		Service:        service,
 	}
 
-	w := worker.New(c, taskQueue, worker.Options{
+	w := worker.New(temporalClient, taskQueue, worker.Options{
 		OnFatalError: func(err error) {
 			log.Fatal().Err(err).Msg("Worker encountered a fatal error")
 		},
