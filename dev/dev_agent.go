@@ -22,10 +22,9 @@ type DevAgent struct {
 	ChatHistory       *[]llm.ChatMessage
 }
 
-func (ia *DevAgent) getFirstExecutionRunID(ctx context.Context, workflowID string) string {
+func (ia *DevAgent) getRunID(ctx context.Context, workflowID string) string {
 	handle := ia.TemporalClient.GetWorkflow(ctx, workflowID, "")
-	firstExecutionRunID := handle.GetRunID()
-	return firstExecutionRunID
+	return handle.GetRunID()
 }
 
 func (ia *DevAgent) workRequest(ctx context.Context, parentId, request, flowType string, flowOptions map[string]interface{}) (domain.Flow, error) {
@@ -36,16 +35,12 @@ func (ia *DevAgent) workRequest(ctx context.Context, parentId, request, flowType
 
 	workRequest := WorkRequest{ParentId: parentId, Input: request, FlowType: flowType, FlowOptions: flowOptions}
 	//updateHandle, err := ia.TemporalClient.UpdateWorkflow(ctx, devManagerWorkflowId, "", UpdateNameWorkRequest, workRequest)
-	firstRunId := ia.getFirstExecutionRunID(ctx, devManagerWorkflowId)
 	updateRequest := client.UpdateWorkflowOptions{
 		UpdateID:   uuid.New().String(),
 		WorkflowID: devManagerWorkflowId,
+		RunID:      ia.getRunID(ctx, devManagerWorkflowId),
 		UpdateName: UpdateNameWorkRequest,
 		Args:       []interface{}{workRequest},
-		// FirstExecutionRunID specifies the RunID expected to identify the first
-		// run in the workflow execution chain. If this expectation does not match
-		// then the server will reject the update request with an error.
-		FirstExecutionRunID: firstRunId,
 
 		// How this RPC should block on the server before returning.
 		WaitForStage: client.WorkflowUpdateStageAccepted,
