@@ -454,8 +454,9 @@ func checkLanguageSpecificTools(baseDirectory string) error {
 	if extensionCounts[".go"] > 0 {
 		if err = checkGoInstallation(); err != nil {
 			return err
-		} else if err = checkGoplsInstallation(); err != nil {
-			return err
+		}
+		if _, err = common.FindOrInstallGopls(); err != nil {
+			return fmt.Errorf("failed to find or install gopls during initialization: %w", err)
 		}
 	}
 
@@ -466,14 +467,6 @@ func checkGoInstallation() error {
 	cmd := exec.Command("go", "version")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("Detected Go files, but Go is not installed. Please install Go from https://golang.org/dl/")
-	}
-	return nil
-}
-
-func checkGoplsInstallation() error {
-	cmd := exec.Command("gopls", "version")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("Detected Go files, but gopls is not installed. To install, run: go install golang.org/x/tools/gopls@latest")
 	}
 	return nil
 }
