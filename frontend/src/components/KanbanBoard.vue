@@ -1,5 +1,5 @@
 <template>
-  <TaskModal v-if="isModalOpen" @close="closeModal" @created="refresh" :task="newTask" />
+  <TaskModal v-if="isModalOpen" @close="closeModal" @created="refresh" @updated="refresh" :task="newTask" />
   <div class="kanban-board">
     <div
       v-for="agentType in ['human', 'llm', 'none'] as const"
