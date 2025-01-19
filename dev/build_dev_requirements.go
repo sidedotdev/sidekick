@@ -342,6 +342,12 @@ so that we you can easily pick up right where you last left off. Don't include
 learnings that we already had recorded in the last incomplete product dev
 requirements, if there were any, but add new ones if any.
 
+If there are crucial details in the original request below that need to be kept,
+then copy them into either requirements or learnings. Things like code snippets
+should be copied verbatim into learnings for instance. The original request will
+be wiped away with the final new requirements you come up with, so make sure not
+to lose any essential details.
+
 # REQUEST
 
 %s`, context, mission, requirements)
