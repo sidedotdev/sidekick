@@ -3,7 +3,6 @@ package dev
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/llm"
@@ -117,11 +116,11 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 					feedback := "Requirements were not approved and therefore not recorded. Please try again, taking this feedback into account:\n\n" + userResponse.Content
 					toolResponse := ToolCallResponseInfo{Response: feedback, FunctionName: toolCall.Name, TooCallId: toolCall.Id}
 					addToolCallResponse(iteration.ChatHistory, toolResponse)
-
-					// resetting iteration num to the closest multiple so that we don't ask for feedback again immediately
-					iteration.Num = int(math.Round(float64(iteration.Num)/float64(iteration.maxIterationsBeforeFeedback))) * iteration.maxIterationsBeforeFeedback
 				}
 			} else if unmarshalErr != nil {
+				if chatResponse.ToolCalls[0].Name == getHelpOrInputTool.Name {
+					iteration.NumSinceLastFeedback = 0
+				}
 				toolResponse := ToolCallResponseInfo{Response: unmarshalErr.Error(), FunctionName: recordDevRequirementsTool.Name, TooCallId: toolCall.Id, IsError: true}
 				addToolCallResponse(iteration.ChatHistory, toolResponse)
 			} else {

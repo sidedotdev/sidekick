@@ -216,6 +216,10 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 				if err != nil {
 					return nil, fmt.Errorf("error handling tool call: %w", err)
 				}
+				if chatResponse.ToolCalls[0].Name == getHelpOrInputTool.Name {
+					iterationsSinceLastFeedback = 0
+				}
+
 				continue
 			}
 		} else if chatResponse.StopReason == string(openai.FinishReasonStop) || chatResponse.StopReason == string(openai.FinishReasonToolCalls) {

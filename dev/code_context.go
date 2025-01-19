@@ -249,7 +249,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			}
 			addCodeContextPrompt(chatHistory, userFeedback)
 			iterationsSinceLastFeedback = 0
-		} else if iterationsSinceLastFeedback >= 3 {
+		} else if attempts % 3 == 0 {
 			chatCtx := actionCtx.DevContext.WithCancelOnPause()
 			toolCall, err := ForceToolBulkSearchRepository(chatCtx, chatHistory)
 			if actionCtx.GlobalState != nil && actionCtx.GlobalState.Paused {
@@ -269,7 +269,6 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 				return nil, "", err
 			}
 			addCodeContextPrompt(chatHistory, toolCallResponseInfo)
-			iterationsSinceLastFeedback = 0
 		}
 
 		if attempts >= 17 {
@@ -317,8 +316,6 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 				feedback := "Error: the code context requested is too long to include. YOU MUST SHORTEN THE CODE CONTEXT REQUESTED. DO NOT REQUEST SO MANY FUNCTIONS AND TYPES IN SO MANY FILES. If you're not asking for too many symbols, then be more specific in your request - eg request just a few methods instead of a big class."
 				promptInfo = ToolCallResponseInfo{Response: feedback, TooCallId: toolCall.Id, FunctionName: toolCall.Name}
 				addCodeContextPrompt(chatHistory, promptInfo)
-				fmt.Println(feedback) // someone looking at worker logs can see what's going on this way
-				iterationsSinceLastFeedback = 0
 				continue
 			} else {
 				// TODO check for empty code context too. we should use
@@ -332,8 +329,6 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		feedback := fmt.Sprintf("failed to extract code context: %v\n%s\n\nHint: %s", err, result.Failures, hint)
 		promptInfo = ToolCallResponseInfo{Response: feedback, TooCallId: toolCall.Id, FunctionName: toolCall.Name}
 		addCodeContextPrompt(chatHistory, promptInfo)
-		fmt.Printf("\n%s\n", feedback) // someone looking at worker logs can see what's going on this way
-		iterationsSinceLastFeedback = 0
 
 		// Check if the operation was paused
 		if actionCtx.DevContext.GlobalState != nil && actionCtx.DevContext.GlobalState.Paused {
