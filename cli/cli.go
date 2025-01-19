@@ -59,7 +59,7 @@ func interactiveMain() {
 	case "init":
 		service, err := sidekick.GetService()
 		if err != nil {
-			log.Fatal().Err(err).Msg("Failed to initialize storage")
+			log.Fatal().Err(err).Msg("Failed to initialize service")
 		}
 		handler := NewInitCommandHandler(service)
 		if err := handler.handleInitCommand(); err != nil {
@@ -79,12 +79,12 @@ func serviceMain() {
 	prg := &program{}
 	s, err := system_service.New(prg, svcConfig)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize service")
+		log.Fatal().Err(err).Msg("Failed to initialize system service")
 		os.Exit(1)
 	}
 	logger, err := s.Logger(nil)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to get service logger")
+		log.Fatal().Err(err).Msg("Failed to get system service logger")
 	}
 	err = s.Run()
 	if err != nil {
