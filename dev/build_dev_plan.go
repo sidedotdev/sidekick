@@ -255,6 +255,7 @@ func getPlanningInput(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInf
 	name := ""
 	toolCallId := ""
 	skip := false
+	isError := false
 	cacheControl := ""
 	switch info := promptInfo.(type) {
 	case InitialPlanningInfo:
@@ -269,17 +270,19 @@ func getPlanningInput(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInf
 		content = info.Response
 		name = info.FunctionName
 		toolCallId = info.TooCallId
+		isError = info.IsError
 	default:
 		panic("Unsupported prompt type for planning: " + promptInfo.GetType())
 	}
 
 	if !skip {
 		newMessage := llm.ChatMessage{
-			Role:       role,
-			Content:    content,
-			Name:       name,
-			ToolCallId: toolCallId,
+			Role:         role,
+			Content:      content,
+			Name:         name,
+			ToolCallId:   toolCallId,
 			CacheControl: cacheControl,
+			IsError:      isError,
 		}
 		*chatHistory = append(*chatHistory, newMessage)
 	}
