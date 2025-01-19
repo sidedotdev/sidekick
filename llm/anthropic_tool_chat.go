@@ -274,5 +274,9 @@ func anthropicToChatMessageResponse(message anthropic.Message) (*ChatMessageResp
 		}
 	}
 
+	if len(response.Content) == 0 && len(response.ToolCalls) == 0 {
+		return nil, fmt.Errorf("anthropic tool chat failure: empty response message")
+	}
+
 	return response, nil
 }
