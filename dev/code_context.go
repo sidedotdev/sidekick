@@ -407,6 +407,7 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 	name := ""
 	toolCallId := ""
 	skip := false
+	isError := false
 	cacheControl := ""
 	switch info := promptInfo.(type) {
 	case SkipInfo:
@@ -416,6 +417,7 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 		content = renderCodeContextFeedbackPrompt(info.Response)
 		name = info.FunctionName
 		toolCallId = info.TooCallId
+		isError = info.IsError
 	case FeedbackInfo:
 		content = info.Feedback
 	case DetermineCodeContextInfo:
@@ -430,11 +432,12 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 
 	if !skip {
 		*chatHistory = append(*chatHistory, llm.ChatMessage{
-			Role:       role,
-			Content:    content,
-			Name:       name,
-			ToolCallId: toolCallId,
+			Role:         role,
+			Content:      content,
+			Name:         name,
+			ToolCallId:   toolCallId,
 			CacheControl: cacheControl,
+			IsError:      isError,
 		})
 	}
 }

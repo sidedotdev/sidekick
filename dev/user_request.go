@@ -197,6 +197,7 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 			Content:    info.Response,
 			Name:       info.FunctionName,
 			ToolCallId: info.TooCallId,
+			IsError:    info.IsError,
 		})
 		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content}
 		return feedbackInfo, nil
