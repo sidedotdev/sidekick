@@ -5,14 +5,18 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sidekick/api"
 	"sidekick/common"
 	"sidekick/nats"
 	"sidekick/worker"
+	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -324,13 +328,66 @@ func setupSidekickTemporalSearchAttributes(cfg *temporalServerConfig) error {
 	return nil
 }
 
+// openURL opens the specified URL in the default browser of the user.
+func openURL(url string) error {
+	var cmd string
+	var args []string
+
+	switch runtime.GOOS {
+	case "windows":
+		cmd = "cmd"
+		args = []string{"/c", "start", url}
+	case "darwin":
+		cmd = "open"
+		args = []string{url}
+	default: // "linux", "freebsd", "openbsd", "netbsd"
+		// Check if running under WSL
+		if isWSL() {
+			// Use 'cmd.exe /c start' to open the URL in the default Windows browser
+			cmd = "cmd.exe"
+			args = []string{"/c", "start", url}
+		} else {
+			// Use xdg-open on native Linux environments
+			cmd = "xdg-open"
+			args = []string{url}
+		}
+	}
+	if len(args) > 1 {
+		// args[0] is used for 'start' command argument, to prevent issues with URLs starting with a quote
+		args = append(args[:1], append([]string{""}, args[1:]...)...)
+	}
+	return exec.Command(cmd, args...).Start()
+}
+
+// isWSL checks if the Go program is running inside Windows Subsystem for Linux
+func isWSL() bool {
+	releaseData, err := exec.Command("uname", "-r").Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(string(releaseData)), "microsoft")
+}
+
+// waitForServer attempts to connect to the server until it responds or times out
+func waitForServer(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if checkServerStatus() {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
+}
+
 func handleStartCommand(args []string) {
 	server := false
 	worker := false
 	temporal := false
 	natsServer := false
+	disableAutoOpen := false
 
-	// Parse optional args: `server`, `worker`, `temporal`
+	// Parse optional args: `server`, `worker`, `temporal`, `--disable-auto-open`
 	for _, arg := range args {
 		switch arg {
 		case "server":
@@ -341,6 +398,8 @@ func handleStartCommand(args []string) {
 			temporal = true
 		case "nats":
 			natsServer = true
+		case "--disable-auto-open":
+			disableAutoOpen = true
 		}
 	}
 
@@ -377,6 +436,20 @@ func handleStartCommand(args []string) {
 			defer wg.Done()
 			log.Info().Msg("Starting server...")
 			srv := startServer()
+
+			// If auto-open is enabled and server is started successfully, try to open the URL
+			if !disableAutoOpen {
+				// Wait for server to be ready
+				if waitForServer(5 * time.Second) {
+					url := fmt.Sprintf("http://localhost:%d", common.GetServerPort())
+					log.Info().Msgf("Opening %s in default browser...", url)
+					if err := openURL(url); err != nil {
+						log.Error().Err(err).Msg("Failed to open URL in browser")
+					}
+				} else {
+					log.Error().Msg("Server did not become ready in time to open URL")
+				}
+			}
 
 			// Wait for cancellation
 			<-ctx.Done()
