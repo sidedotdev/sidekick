@@ -165,12 +165,12 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 				unvalidatedDevPlan, err := unmarshalPlan(toolCall.Arguments)
 				if err != nil {
 					fmt.Printf("error parsing plan: %v\n", err)
-					promptInfo = ToolCallResponseInfo{Response: "Plan failed to be parsed and was NOT recorded: " + err.Error(), FunctionName: recordDevPlanTool.Name, TooCallId: toolCall.Id}
+					promptInfo = ToolCallResponseInfo{Response: "Plan failed to be parsed and was NOT recorded: " + err.Error() + "\n\nPlease try again.", FunctionName: recordDevPlanTool.Name, TooCallId: toolCall.Id, IsError: true}
 					continue
 				}
 				validatedDevPlan, err := ValidateAndCleanPlan(unvalidatedDevPlan)
 				if err != nil {
-					promptInfo = ToolCallResponseInfo{Response: "Plan failed to be parsed and was NOT recorded: " + err.Error(), FunctionName: recordDevPlanTool.Name, TooCallId: toolCall.Id}
+					promptInfo = ToolCallResponseInfo{Response: "Plan failed to be parsed and was NOT recorded: " + err.Error() + "\n\nPlease try again.", FunctionName: recordDevPlanTool.Name, TooCallId: toolCall.Id, IsError: true}
 					continue
 				}
 				devPlan = validatedDevPlan
