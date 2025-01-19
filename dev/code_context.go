@@ -394,6 +394,8 @@ func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *[]llm
 	err = json.Unmarshal([]byte(llm.RepairJson(jsonStr)), &requiredCodeContext)
 	if err != nil {
 		return toolCall, RequiredCodeContext{}, fmt.Errorf("%w: %v", llm.ErrToolCallUnmarshal, err)
+	} else if requiredCodeContext.CodeContextRequests == nil {
+		return toolCall, RequiredCodeContext{}, fmt.Errorf("%w: missing code_context_requests in tool call", llm.ErrToolCallUnmarshal)
 	}
 
 	return toolCall, requiredCodeContext, nil
