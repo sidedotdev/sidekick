@@ -1,5 +1,10 @@
 <template>
   <TaskModal v-if="isModalOpen" @close="closeModal" @created="refresh" @updated="refresh" :task="newTask" />
+  <div v-if="showGuidedOverlay" class="guided-overlay">
+    <div class="guided-text">
+      Get started by adding your first task to the AI Sidekick queue!
+    </div>
+  </div>
   <div class="kanban-board">
     <div
       v-for="agentType in ['human', 'llm', 'none'] as const"
@@ -26,7 +31,8 @@ import TaskModal from './TaskModal.vue'
 
 const props = defineProps<{
   workspaceId: string,
-  tasks: FullTask[]
+  tasks: FullTask[],
+  showGuidedOverlay: boolean
 }>()
 
 const columnNames = {
@@ -35,7 +41,7 @@ const columnNames = {
   none: 'Finished',
 }
 
-const emit = defineEmits(['refresh'])
+const emit = defineEmits(['refresh', 'dismissOverlay'])
 
 const groupedTasks = computed(() => {
   return props.tasks
@@ -69,6 +75,9 @@ const addTask = (agentType: 'human' | 'llm' | 'none') => {
     isModalOpen.value = true
     newTask.value.agentType = agentType
     newTask.value.status = agentType === 'human' ? 'drafting' : 'to_do';
+    if (agentType === 'llm' && props.showGuidedOverlay) {
+      emit('dismissOverlay')
+    }
   }
 }
 
@@ -189,5 +198,44 @@ h2 {
 .new-task:hover {
   border-color: rgba(255, 255, 255, 0.02);
   background-color: rgba(255, 255, 255, 0.07);
+}
+
+.guided-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 99999;
+  pointer-events: none;
+}
+
+.guided-overlay::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 66.6%;
+  transform: translate(-50%, calc(-50% + 8rem));
+  width: 12rem;
+  height: 3rem;
+  background: radial-gradient(circle at center, transparent 0%, transparent 60%, rgba(0, 0, 0, 0.7) 100%);
+  pointer-events: none;
+}
+
+.guided-text {
+  position: absolute;
+  top: 50%;
+  left: 66.6%;
+  transform: translate(-50%, calc(-50% + 4rem));
+  color: var(--color-text);
+  font-size: 1.2rem;
+  text-align: center;
+  width: 20rem;
+  padding: 1rem;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  pointer-events: none;
 }
 </style>
