@@ -1,5 +1,12 @@
 <template>
-  <KanbanBoard v-if="store.workspaceId" :tasks="tasks" :workspaceId="store.workspaceId" @refresh="fetchTasks" />
+  <KanbanBoard 
+    v-if="store.workspaceId" 
+    :tasks="tasks" 
+    :workspaceId="store.workspaceId" 
+    :showGuidedOverlay="showGuidedOverlay"
+    @refresh="fetchTasks"
+    @dismissOverlay="handleOverlayDismiss" 
+  />
 </template>
 
 <script setup lang="ts">
@@ -17,6 +24,8 @@ const parseTaskDates = (task: any): FullTask => {
 }
 
 const tasks: Ref<Array<FullTask>> = ref([])
+const showGuidedOverlay = ref(false)
+const isInitialLoad = ref(true)
 let socket: WebSocket | null = null
 let socketClosed = false
 let lastTaskStreamId: string | null = null
@@ -27,10 +36,18 @@ const fetchTasks = async () => {
       const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/tasks`)
       const data = await response.json()
       tasks.value = data.tasks.map((task: any) => parseTaskDates(task))
+      if (isInitialLoad.value && tasks.value.length === 0) {
+        showGuidedOverlay.value = true
+      }
+      isInitialLoad.value = false
     } catch (error) {
       console.error('Failed to fetch tasks:', error)
     }
   }
+}
+
+const handleOverlayDismiss = () => {
+  showGuidedOverlay.value = false
 }
 
 const connectWebSocket = (onConnect: (() => void)) => {
