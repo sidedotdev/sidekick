@@ -11,6 +11,7 @@ import (
 )
 
 func TestGetFileSignaturesStringTypescript(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name     string
 		code     string
@@ -80,6 +81,7 @@ func TestGetFileSignaturesStringTypescript(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Create a temporary file with the test case code
 			tmpfile, err := os.CreateTemp("", "test*.ts")
 			if err != nil {
@@ -109,6 +111,7 @@ func TestGetFileSignaturesStringTypescript(t *testing.T) {
 }
 
 func TestGetFileSymbolsStringTypescript(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		code     string
@@ -209,6 +212,7 @@ function add(a: number, b: number): number {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			tmpfile, err := os.CreateTemp("", "*.ts")
 			if err != nil {
 				t.Fatalf("Failed to create temp file: %v", err)
@@ -235,6 +239,7 @@ function add(a: number, b: number): number {
 }
 
 func TestGetSymbolDefinitionTypescript(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name               string
 		symbolName         string
@@ -372,6 +377,7 @@ export const x = someFunction({
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			filePath, err := utils.WriteTestTempFile(t, "ts", tc.code)
 			if err != nil {
 				t.Fatalf("Failed to write temp file: %v", err)
@@ -395,6 +401,7 @@ export const x = someFunction({
 }
 
 func TestGetFileHeadersStringTypescript(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name     string
 		code     string
@@ -473,6 +480,7 @@ func TestGetFileHeadersStringTypescript(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Create a temporary file with the test case code
 			tmpfile, err := os.CreateTemp("", "test*.ts")
 			if err != nil {

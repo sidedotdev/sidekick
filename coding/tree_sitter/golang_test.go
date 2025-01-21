@@ -10,6 +10,7 @@ import (
 )
 
 func TestGetFileSignaturesStringGolang(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name     string
 		code     string
@@ -84,6 +85,7 @@ func TestGetFileSignaturesStringGolang(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Create a temporary file with the test case code
 			tmpfile, err := os.CreateTemp("", "test*.go")
 			if err != nil {
@@ -113,6 +115,7 @@ func TestGetFileSignaturesStringGolang(t *testing.T) {
 }
 
 func TestGetFileSymbolsStringGolang(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		code     string
@@ -202,6 +205,7 @@ func add(a int, b int) int {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			tmpfile, err := os.CreateTemp("", "*.go")
 			if err != nil {
 				t.Fatalf("Failed to create temp file: %v", err)
@@ -228,6 +232,7 @@ func add(a int, b int) int {
 }
 
 func TestGetAllAlternativeFileSymbolsGolang(t *testing.T) {
+	t.Parallel()
 	// Define the test cases
 	testCases := []struct {
 		name           string
@@ -256,6 +261,7 @@ func TestGetAllAlternativeFileSymbolsGolang(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Write the input to a temp file with a '.go' extension
 			filePath, err := utils.WriteTestTempFile(t, "go", tc.input)
 			if err != nil {
@@ -277,6 +283,7 @@ func TestGetAllAlternativeFileSymbolsGolang(t *testing.T) {
 }
 
 func TestGetSymbolDefinitionGolang(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name               string
 		symbolName         string
@@ -436,6 +443,7 @@ type Something = string
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			filePath, err := utils.WriteTestTempFile(t, "go", tc.code)
 			if err != nil {
 				t.Fatalf("Failed to write temp file: %v", err)
@@ -459,6 +467,7 @@ type Something = string
 }
 
 func TestGetFileHeadersStringGolang(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name     string
 		code     string
@@ -543,6 +552,7 @@ func TestGetFileHeadersStringGolang(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Create a temporary file with the test case code
 			tmpfile, err := os.CreateTemp("", "test*.go")
 			if err != nil {

@@ -11,6 +11,7 @@ import (
 )
 
 func TestGetFileSymbolsStringVue(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		code     string
@@ -39,6 +40,7 @@ func TestGetFileSymbolsStringVue(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			tmpfile, err := os.CreateTemp("", "*.vue")
 			if err != nil {
 				t.Fatalf("Failed to create temp file: %v", err)
@@ -67,6 +69,7 @@ func TestGetFileSymbolsStringVue(t *testing.T) {
 }
 
 func TestGetAllAlternativeFileSymbolsVue(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name                string
 		code                string
@@ -95,6 +98,7 @@ func TestGetAllAlternativeFileSymbolsVue(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Write the input to a temp file with a '.go' extension
 			filePath, err := utils.WriteTestTempFile(t, "vue", tc.code)
 			if err != nil {
@@ -122,6 +126,7 @@ func TestGetAllAlternativeFileSymbolsVue(t *testing.T) {
 }
 
 func TestGetSymbolDefinitionVue(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name               string
 		symbolName         string
@@ -277,6 +282,7 @@ h1 {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			filePath, err := utils.WriteTestTempFile(t, "vue", tc.code)
 			if err != nil {
 				t.Fatalf("Failed to write temp file: %v", err)
@@ -300,6 +306,7 @@ h1 {
 }
 
 func TestGetFileHeadersStringVue(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name     string
 		code     string
@@ -373,6 +380,7 @@ func TestGetFileHeadersStringVue(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Create a temporary file with the test case code
 			tmpfile, err := os.CreateTemp("", "test*.vue")
 			if err != nil {

@@ -23,6 +23,7 @@ func parseJavaString(code string) *sitter.Tree {
 }
 
 func TestGetDeclarationIndentLevel(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name     string
 		code     string
@@ -51,6 +52,7 @@ func TestGetDeclarationIndentLevel(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			tree := parseJavaString(tc.code)
 			defer tree.Close()
 
@@ -75,6 +77,7 @@ func TestGetDeclarationIndentLevel(t *testing.T) {
 }
 
 func TestGetFileHeadersStringJava(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name     string
 		code     string
@@ -159,6 +162,7 @@ func TestGetFileHeadersStringJava(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Create a temporary file with the test case code
 			tmpfile, err := os.CreateTemp("", "test*.java")
 			if err != nil {
@@ -185,6 +189,7 @@ func TestGetFileHeadersStringJava(t *testing.T) {
 }
 
 func TestGetFileSignaturesStringJava(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name     string
 		code     string
@@ -194,84 +199,6 @@ func TestGetFileSignaturesStringJava(t *testing.T) {
 			name:     "empty interface",
 			code:     "interface TestInterface {}",
 			expected: "interface TestInterface\n---\n",
-		},
-		{
-			name: "nested class in class",
-			code: `
-public class OuterClass {
-    public static class StaticNestedClass {
-        public void nestedMethod() {}
-    }
-    protected class IgnoredNestedClass {}
-    private class AnotherIgnoredClass {}
-    public class PublicNestedClass {
-        public void method() {}
-    }
-}`,
-			expected: `public class OuterClass
----
-	public static class StaticNestedClass
-		public void nestedMethod()
----
-	public class PublicNestedClass
-		public void method()
----
-`,
-		},
-		{
-			name: "nested interface in class",
-			code: `
-public class OuterClass {
-    public interface NestedInterface {
-        void method();
-    }
-    private interface IgnoredInterface {}
-}`,
-			expected: `public class OuterClass
----
-	public interface NestedInterface
-		void method();
----
-`,
-		},
-		{
-			name: "nested annotation in class",
-			code: `
-public class OuterClass {
-    public @interface NestedAnnotation {
-        String value() default "";
-    }
-    private @interface IgnoredAnnotation {}
-}`,
-			expected: `public class OuterClass
----
-	public @interface NestedAnnotation
-		String value() default "";
----
-`,
-		},
-		{
-			name: "deeply nested types",
-			code: `
-public class OuterClass {
-    public class Level1 {
-        public interface Level2 {
-            public class Level3 {
-                void method();
-            }
-        }
-    }
-}`,
-			expected: `public class OuterClass
----
-	public class Level1
----
-		public interface Level2
----
-			public class Level3
-				void method()
----
-`,
 		},
 		{
 			name:     "interface with method",
@@ -469,6 +396,89 @@ public class OuterClass {
 			expected: "enum Complex\n\tFIRST(1)\n\tSECOND(2)\n\tpublic int getValue()\n---\n",
 		},
 		{
+			name:     "annotated enum",
+			code:     "@Deprecated enum Legacy { OLD, OLDER }",
+			expected: "@Deprecated enum Legacy\n\tOLD\n\tOLDER\n---\n",
+		},
+		{
+			name: "nested class in class",
+			code: `
+public class OuterClass {
+    public static class StaticNestedClass {
+        public void nestedMethod() {}
+    }
+    protected class IgnoredNestedClass {}
+    private class AnotherIgnoredClass {}
+    public class PublicNestedClass {
+        public void method() {}
+    }
+}`,
+			expected: `public class OuterClass
+---
+	public static class StaticNestedClass
+		public void nestedMethod()
+---
+	public class PublicNestedClass
+		public void method()
+---
+`,
+		},
+		{
+			name: "nested interface in class",
+			code: `
+public class OuterClass {
+    public interface NestedInterface {
+        void method();
+    }
+    private interface IgnoredInterface {}
+}`,
+			expected: `public class OuterClass
+---
+	public interface NestedInterface
+		void method();
+---
+`,
+		},
+		{
+			name: "nested annotation in class",
+			code: `
+public class OuterClass {
+    public @interface NestedAnnotation {
+        String value() default "";
+    }
+    private @interface IgnoredAnnotation {}
+}`,
+			expected: `public class OuterClass
+---
+	public @interface NestedAnnotation
+		String value() default "";
+---
+`,
+		},
+		{
+			name: "deeply nested types",
+			code: `
+public class OuterClass {
+    public class Level1 {
+        public interface Level2 {
+            public class Level3 {
+                void method();
+            }
+        }
+    }
+}`,
+			expected: `public class OuterClass
+---
+	public class Level1
+---
+		public interface Level2
+---
+			public class Level3
+				void method()
+---
+`,
+		},
+		{
 			name: "nested enum in class",
 			code: `
 public class Container {
@@ -487,15 +497,11 @@ public class Container {
 ---
 `,
 		},
-		{
-			name:     "annotated enum",
-			code:     "@Deprecated enum Legacy { OLD, OLDER }",
-			expected: "@Deprecated enum Legacy\n\tOLD\n\tOLDER\n---\n",
-		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Create a temporary file with the test case code
 			tmpfile, err := os.CreateTemp("", "test*.java")
 			if err != nil {
@@ -718,6 +724,7 @@ enum Size {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			tmpfile, err := os.CreateTemp("", "*.java")
 			if err != nil {
 				t.Fatalf("Failed to create temp file: %v", err)
@@ -1015,6 +1022,7 @@ public enum DocEnum {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			filePath, err := utils.WriteTestTempFile(t, "java", tc.code)
 			if err != nil {
 				t.Fatalf("Failed to write temp file: %v", err)

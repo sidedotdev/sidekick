@@ -10,6 +10,7 @@ import (
 )
 
 func TestGetFileSignaturesStringPython(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name     string
 		code     string
@@ -215,6 +216,7 @@ class MyClass:
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Create a temporary file with the test case code
 			tmpfile, err := os.CreateTemp("", "test*.py")
 			if err != nil {
@@ -244,6 +246,7 @@ class MyClass:
 }
 
 func TestGetFileSymbolsStringPython(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		code     string
@@ -353,6 +356,7 @@ class TestClass:
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			tmpfile, err := os.CreateTemp("", "*.py")
 			if err != nil {
 				t.Fatalf("Failed to create temp file: %v", err)
@@ -379,6 +383,7 @@ class TestClass:
 }
 
 func TestGetSymbolDefinitionPython(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name               string
 		symbolName         string
@@ -577,6 +582,7 @@ class Greeter:
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			filePath, err := utils.WriteTestTempFile(t, "py", tc.code)
 			if err != nil {
 				t.Fatalf("Failed to write temp file: %v", err)
@@ -601,6 +607,7 @@ class Greeter:
 }
 
 func TestGetFileHeadersStringPython(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name     string
 		code     string
@@ -654,6 +661,7 @@ func TestGetFileHeadersStringPython(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Create a temporary file with the test case code
 			tmpfile, err := os.CreateTemp("", "test*.py")
 			if err != nil {
