@@ -201,7 +201,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 				if err != nil {
 					return nil, fmt.Errorf("error getting plan approval: %w", err)
 				}
-
+				iteration.NumSinceLastFeedback = 0
 				if userResponse.Approved != nil && *userResponse.Approved {
 					return &validatedDevPlan, nil
 				} else {
