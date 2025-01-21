@@ -1,9 +1,9 @@
 ; Class declarations (including nested)
 (
   [
-    (modifiers)?
-    (annotation)*
-  ]
+    (block_comment)
+    (line_comment)
+  ]* @doc
   .
   (class_declaration
     name: (identifier) @name
@@ -14,9 +14,9 @@
 ; Interface declarations
 (
   [
-    (modifiers)?
-    (annotation)*
-  ]
+    (block_comment)
+    (line_comment)
+  ]* @doc
   .
   (interface_declaration
     name: (identifier) @name
@@ -27,9 +27,9 @@
 ; Annotation type declarations
 (
   [
-    (modifiers)?
-    (annotation)*
-  ]
+    (block_comment)
+    (line_comment)
+  ]* @doc
   .
   (annotation_type_declaration
     name: (identifier) @name
@@ -40,9 +40,9 @@
 ; Method declarations
 (
   [
-    (modifiers)?
-    (annotation)*
-  ]
+    (block_comment)
+    (line_comment)
+  ]* @doc
   .
   (method_declaration
     name: (identifier) @name
@@ -53,9 +53,9 @@
 ; Constructor declarations
 (
   [
-    (modifiers)?
-    (annotation)*
-  ]
+    (block_comment)
+    (line_comment)
+  ]* @doc
   .
   (constructor_declaration
     name: (identifier) @name
@@ -66,9 +66,9 @@
 ; Field declarations
 (
   [
-    (modifiers)?
-    (annotation)*
-  ]
+    (block_comment)
+    (line_comment)
+  ]* @doc
   .
   (field_declaration
     declarator: (variable_declarator
@@ -81,9 +81,9 @@
 ; Enum declarations
 (
   [
-    (modifiers)?
-    (annotation)*
-  ]
+    (block_comment)
+    (line_comment)
+  ]* @doc
   .
   (enum_declaration
     name: (identifier) @name

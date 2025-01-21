@@ -12,175 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestGetSymbolDefinitionJava(t *testing.T) {
-	testCases := []struct {
-		name               string
-		symbolName         string
-		code               string
-		expectedDefinition string
-		expectedError      string
-	}{
-		{
-			name:          "empty code",
-			symbolName:    "TestClass",
-			code:          "",
-			expectedError: `symbol not found: TestClass`,
-		},
-		{
-			name:       "basic class definition",
-			symbolName: "TestClass",
-			code: `public class TestClass {
-    private String name;
-}`,
-			expectedDefinition: `public class TestClass {
-    private String name;
-}`,
-		},
-		{
-			name:       "class with method",
-			symbolName: "TestClass",
-			code: `public class TestClass {
-    public void testMethod() {
-        System.out.println("Hello");
-    }
-}`,
-			expectedDefinition: `public class TestClass {
-    public void testMethod() {
-        System.out.println("Hello");
-    }
-}`,
-		},
-		{
-			name:       "method definition",
-			symbolName: "testMethod",
-			code: `public class TestClass {
-    public void testMethod() {
-        System.out.println("Hello");
-    }
-}`,
-			expectedDefinition: `    public void testMethod() {
-        System.out.println("Hello");
-    }`,
-		},
-		{
-			name:          "symbol not found",
-			symbolName:    "NonExistentSymbol",
-			code:          "public class SomeClass {}",
-			expectedError: `symbol not found: NonExistentSymbol`,
-		},
-		{
-			name:       "interface definition",
-			symbolName: "TestInterface",
-			code: `public interface TestInterface {
-    void testMethod();
-    String getName();
-}`,
-			expectedDefinition: `public interface TestInterface {
-    void testMethod();
-    String getName();
-}`,
-		},
-		{
-			name:       "annotation definition",
-			symbolName: "TestAnnotation",
-			code: `@interface TestAnnotation {
-    String value() default "";
-}`,
-			expectedDefinition: `@interface TestAnnotation {
-    String value() default "";
-}`,
-		},
-		{
-			name:       "nested class",
-			symbolName: "InnerClass",
-			code: `public class OuterClass {
-    private static class InnerClass {
-        private String field;
-    }
-}`,
-			expectedDefinition: `    private static class InnerClass {
-        private String field;
-    }`,
-		},
-		{
-			name:       "field definition",
-			symbolName: "field",
-			code: `public class TestClass {
-    private static final String field = "test";
-}`,
-			expectedDefinition: `    private static final String field = "test";`,
-		},
-		{
-			name:       "annotated class",
-			symbolName: "AnnotatedClass",
-			code: `@Deprecated
-@SuppressWarnings("unchecked")
-public class AnnotatedClass {
-    private String name;
-}`,
-			expectedDefinition: `@Deprecated
-@SuppressWarnings("unchecked")
-public class AnnotatedClass {
-    private String name;
-}`,
-		},
-		{
-			name:       "annotated method",
-			symbolName: "annotatedMethod",
-			code: `public class TestClass {
-    @Override
-    @Deprecated
-    public void annotatedMethod() {
-        System.out.println("test");
-    }
-}`,
-			expectedDefinition: `    @Override
-    @Deprecated
-    public void annotatedMethod() {
-        System.out.println("test");
-    }`,
-		},
-		{
-			name:       "enum definition",
-			symbolName: "TestEnum",
-			code: `public enum TestEnum {
-    ONE,
-    TWO,
-    THREE
-}`,
-			expectedDefinition: `public enum TestEnum {
-    ONE,
-    TWO,
-    THREE
-}`,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			filePath, err := utils.WriteTestTempFile(t, "java", tc.code)
-			if err != nil {
-				t.Fatalf("Failed to write temp file: %v", err)
-			}
-			defer os.Remove(filePath)
-
-			definition, err := GetSymbolDefinitionsString(filePath, tc.symbolName, 0)
-			if err != nil {
-				if tc.expectedError == "" {
-					t.Fatalf("Unexpected error: %v", err)
-				} else if !strings.Contains(err.Error(), tc.expectedError) {
-					t.Fatalf("Expected error: %s, got: %v", tc.expectedError, err)
-				}
-			}
-
-			if strings.TrimSuffix(definition, "\n") != strings.TrimSuffix(tc.expectedDefinition, "\n") {
-				t.Errorf("Expected definition:\n%s\nGot:\n%s", utils.PanicJSON(tc.expectedDefinition), utils.PanicJSON(definition))
-				t.Errorf("Expected definition:\n%s\nGot:\n%s", tc.expectedDefinition, definition)
-			}
-		})
-	}
-}
-
 func parseJavaString(code string) *sitter.Tree {
 	parser := sitter.NewParser()
 	parser.SetLanguage(java.GetLanguage())
@@ -680,6 +511,175 @@ public class Dog extends Animal {
 			}
 
 			assert.Equal(t, test.expected, symbolsString)
+		})
+	}
+}
+
+func TestGetSymbolDefinitionJava(t *testing.T) {
+	testCases := []struct {
+		name               string
+		symbolName         string
+		code               string
+		expectedDefinition string
+		expectedError      string
+	}{
+		{
+			name:          "empty code",
+			symbolName:    "TestClass",
+			code:          "",
+			expectedError: `symbol not found: TestClass`,
+		},
+		{
+			name:       "basic class definition",
+			symbolName: "TestClass",
+			code: `public class TestClass {
+    private String name;
+}`,
+			expectedDefinition: `public class TestClass {
+    private String name;
+}`,
+		},
+		{
+			name:       "class with method",
+			symbolName: "TestClass",
+			code: `public class TestClass {
+    public void testMethod() {
+        System.out.println("Hello");
+    }
+}`,
+			expectedDefinition: `public class TestClass {
+    public void testMethod() {
+        System.out.println("Hello");
+    }
+}`,
+		},
+		{
+			name:       "method definition",
+			symbolName: "testMethod",
+			code: `public class TestClass {
+    public void testMethod() {
+        System.out.println("Hello");
+    }
+}`,
+			expectedDefinition: `    public void testMethod() {
+        System.out.println("Hello");
+    }`,
+		},
+		{
+			name:          "symbol not found",
+			symbolName:    "NonExistentSymbol",
+			code:          "public class SomeClass {}",
+			expectedError: `symbol not found: NonExistentSymbol`,
+		},
+		{
+			name:       "interface definition",
+			symbolName: "TestInterface",
+			code: `public interface TestInterface {
+    void testMethod();
+    String getName();
+}`,
+			expectedDefinition: `public interface TestInterface {
+    void testMethod();
+    String getName();
+}`,
+		},
+		{
+			name:       "annotation definition",
+			symbolName: "TestAnnotation",
+			code: `@interface TestAnnotation {
+    String value() default "";
+}`,
+			expectedDefinition: `@interface TestAnnotation {
+    String value() default "";
+}`,
+		},
+		{
+			name:       "nested class",
+			symbolName: "InnerClass",
+			code: `public class OuterClass {
+    private static class InnerClass {
+        private String field;
+    }
+}`,
+			expectedDefinition: `    private static class InnerClass {
+        private String field;
+    }`,
+		},
+		{
+			name:       "field definition",
+			symbolName: "field",
+			code: `public class TestClass {
+    private static final String field = "test";
+}`,
+			expectedDefinition: `    private static final String field = "test";`,
+		},
+		{
+			name:       "annotated class",
+			symbolName: "AnnotatedClass",
+			code: `@Deprecated
+@SuppressWarnings("unchecked")
+public class AnnotatedClass {
+    private String name;
+}`,
+			expectedDefinition: `@Deprecated
+@SuppressWarnings("unchecked")
+public class AnnotatedClass {
+    private String name;
+}`,
+		},
+		{
+			name:       "annotated method",
+			symbolName: "annotatedMethod",
+			code: `public class TestClass {
+    @Override
+    @Deprecated
+    public void annotatedMethod() {
+        System.out.println("test");
+    }
+}`,
+			expectedDefinition: `    @Override
+    @Deprecated
+    public void annotatedMethod() {
+        System.out.println("test");
+    }`,
+		},
+		{
+			name:       "enum definition",
+			symbolName: "TestEnum",
+			code: `public enum TestEnum {
+    ONE,
+    TWO,
+    THREE
+}`,
+			expectedDefinition: `public enum TestEnum {
+    ONE,
+    TWO,
+    THREE
+}`,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			filePath, err := utils.WriteTestTempFile(t, "java", tc.code)
+			if err != nil {
+				t.Fatalf("Failed to write temp file: %v", err)
+			}
+			defer os.Remove(filePath)
+
+			definition, err := GetSymbolDefinitionsString(filePath, tc.symbolName, 0)
+			if err != nil {
+				if tc.expectedError == "" {
+					t.Fatalf("Unexpected error: %v", err)
+				} else if !strings.Contains(err.Error(), tc.expectedError) {
+					t.Fatalf("Expected error: %s, got: %v", tc.expectedError, err)
+				}
+			}
+
+			if strings.TrimSuffix(definition, "\n") != strings.TrimSuffix(tc.expectedDefinition, "\n") {
+				t.Errorf("Expected definition:\n%s\nGot:\n%s", utils.PanicJSON(tc.expectedDefinition), utils.PanicJSON(definition))
+				t.Errorf("Expected definition:\n%s\nGot:\n%s", tc.expectedDefinition, definition)
+			}
 		})
 	}
 }
