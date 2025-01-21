@@ -81,7 +81,6 @@ func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 	}
 
 	defer stream.Close()
-	defer close(deltaChan)
 
 	var deltas []ChatMessageDelta
 	var finishReason openai.FinishReason
