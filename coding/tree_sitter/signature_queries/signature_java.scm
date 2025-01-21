@@ -1,6 +1,7 @@
 (interface_declaration
   (modifiers)? @interface.modifiers
   (identifier) @interface.name
+  (type_parameters)? @interface.type_parameters
     body: (_
       [
         (method_declaration) @interface.method.declaration
@@ -38,11 +39,13 @@
 (class_declaration
   (modifiers)? @class.modifiers
   (identifier) @class.name
+  (type_parameters)? @class.type_parameters
     body: (_
       [
         (method_declaration
           (modifiers)? @class.method.modifiers
             (#not-match? @class.method.modifiers "private|protected")
+          (type_parameters)? @class.method.type_parameters
           type: (_) @class.method.type
           (identifier) @class.method.name
           (formal_parameters) @class.method.parameters

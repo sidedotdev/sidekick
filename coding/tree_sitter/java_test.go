@@ -133,6 +133,51 @@ func TestGetFileSignaturesStringJava(t *testing.T) {
 			code:     "@FunctionalInterface interface TestInterface { void test(); }",
 			expected: "@FunctionalInterface interface TestInterface\n\tvoid test();\n---\n",
 		},
+		{
+			name:     "class with type parameter",
+			code:     "class Box<T> { }",
+			expected: "class Box<T>\n---\n",
+		},
+		{
+			name:     "class with bounded type parameter",
+			code:     "class NumberBox<T extends Number> { }",
+			expected: "class NumberBox<T extends Number>\n---\n",
+		},
+		{
+			name:     "class with multiple type parameters",
+			code:     "class Pair<K,V> { }",
+			expected: "class Pair<K,V>\n---\n",
+		},
+		{
+			name:     "class with complex type parameters",
+			code:     "class Container<T extends Comparable<T>> { }",
+			expected: "class Container<T extends Comparable<T>>\n---\n",
+		},
+		{
+			name:     "generic interface",
+			code:     "interface Box<T> { T get(); void put(T item); }",
+			expected: "interface Box<T>\n\tT get();\n\tvoid put(T item);\n---\n",
+		},
+		{
+			name:     "generic interface with bounds",
+			code:     "interface Sortable<T extends Comparable<T>> { void sort(T[] items); }",
+			expected: "interface Sortable<T extends Comparable<T>>\n\tvoid sort(T[] items);\n---\n",
+		},
+		{
+			name:     "class with generic method",
+			code:     "class Util { public <T> void print(T item) {} }",
+			expected: "class Util\n\tpublic <T> void print(T item)\n---\n",
+		},
+		{
+			name:     "class with bounded generic method",
+			code:     "class NumberUtil { public <T extends Number> double sum(T[] numbers) {} }",
+			expected: "class NumberUtil\n\tpublic <T extends Number> double sum(T[] numbers)\n---\n",
+		},
+		{
+			name:     "class with multiple generic methods",
+			code:     "class Converter { public <T,R> R convert(T input) {} public <V> void validate(V value) {} }",
+			expected: "class Converter\n\tpublic <T,R> R convert(T input)\n\tpublic <V> void validate(V value)\n---\n",
+		},
 	}
 
 	for _, tc := range testCases {

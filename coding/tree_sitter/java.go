@@ -69,6 +69,13 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 		{
 			out.WriteString(content)
 		}
+	case "class.type_parameters", "interface.type_parameters", "class.method.type_parameters":
+		{
+			out.WriteString(content)
+			if name == "class.method.type_parameters" {
+				out.WriteString(" ")
+			}
+		}
 	case "annotation.element.declaration":
 		{
 			out.WriteString("\t")

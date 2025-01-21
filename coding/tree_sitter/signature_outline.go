@@ -345,7 +345,7 @@ func getFileSignaturesInternal(languageName string, sitterLanguage *sitter.Langu
 		}
 		if sigWriter.Len() > 0 {
 			signature := Signature{
-				Content:    strings.Trim(sigWriter.String(), "\n"),
+				Content:    strings.Trim(sigWriter.String(), " \n"),
 				StartPoint: startPoint,
 				EndPoint:   endPoint,
 			}
