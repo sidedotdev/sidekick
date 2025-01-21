@@ -1,0 +1,92 @@
+; Class declarations (including nested)
+(
+  [
+    (modifiers)?
+    (annotation)*
+  ]
+  .
+  (class_declaration
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+; Interface declarations
+(
+  [
+    (modifiers)?
+    (annotation)*
+  ]
+  .
+  (interface_declaration
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+; Annotation type declarations
+(
+  [
+    (modifiers)?
+    (annotation)*
+  ]
+  .
+  (annotation_type_declaration
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+; Method declarations
+(
+  [
+    (modifiers)?
+    (annotation)*
+  ]
+  .
+  (method_declaration
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+; Constructor declarations
+(
+  [
+    (modifiers)?
+    (annotation)*
+  ]
+  .
+  (constructor_declaration
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+; Field declarations
+(
+  [
+    (modifiers)?
+    (annotation)*
+  ]
+  .
+  (field_declaration
+    declarator: (variable_declarator
+      name: (identifier) @name
+    )
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+; Enum declarations
+(
+  [
+    (modifiers)?
+    (annotation)*
+  ]
+  .
+  (enum_declaration
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition

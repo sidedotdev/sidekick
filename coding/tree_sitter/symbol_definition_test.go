@@ -526,4 +526,3 @@ export const x = someFunction({
 		})
 	}
 }
-
