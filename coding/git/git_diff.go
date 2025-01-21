@@ -6,6 +6,7 @@ import (
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/flow_action"
+	"strings"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -16,6 +17,14 @@ type GitDiffParams struct {
 	ThreeDotDiff     bool
 	IgnoreWhitespace bool
 	Staged           bool
+}
+
+type GitMergeParams struct {
+	SourceBranch    string // The branch to merge from (typically the worktree branch)
+	TargetBranch    string // The branch to merge into (typically the base branch)
+	CommitMessage   string // Required for basic workflows to create initial commit
+	IsBasicFlow     bool   // Whether this is a basic workflow (needs commit) or planned workflow
+	OriginalRepoDir string // Path to original repo directory (not worktree)
 }
 
 func GitDiff(eCtx flow_action.ExecContext) (string, error) {
@@ -67,6 +76,61 @@ func GitDiffLegacy(eCtx flow_action.ExecContext) (string, error) {
 		return "", fmt.Errorf("git diff failed: %v", gitDiffOutput.Stderr)
 	}
 	return gitDiffOutput.Stdout + "\n" + gitDiffOutput2.Stdout, nil
+}
+
+// GitMergeActivity performs a git merge operation from a source branch into a target branch.
+// For basic workflows, it first creates a commit of any changes. The merge is performed
+// in the original repo directory, not the worktree directory.
+func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params GitMergeParams) error {
+	if params.SourceBranch == "" || params.TargetBranch == "" {
+		return fmt.Errorf("both source and target branches are required for merge")
+	}
+	if params.OriginalRepoDir == "" {
+		return fmt.Errorf("original repo directory is required for merge")
+	}
+
+	// For basic workflows, we need to commit changes first
+	if params.IsBasicFlow {
+		if params.CommitMessage == "" {
+			return fmt.Errorf("commit message is required for basic workflow merge")
+		}
+
+		// Create commit in worktree
+		_, err := GitCommitActivity(ctx, envContainer, GitCommitParams{
+			CommitMessage: params.CommitMessage,
+			CommitAll:     true,
+		})
+		if err != nil && !strings.Contains(err.Error(), "nothing to commit") {
+			return fmt.Errorf("failed to create commit before merge: %v", err)
+		}
+	}
+
+	// Switch to target branch in original repo
+	checkoutOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer:       envContainer,
+		RelativeWorkingDir: params.OriginalRepoDir,
+		Command:            "git",
+		Args:               []string{"checkout", params.TargetBranch},
+	})
+	if err != nil || checkoutOutput.ExitStatus != 0 {
+		return fmt.Errorf("failed to checkout target branch: %v", err)
+	}
+
+	// Perform the merge
+	mergeOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer:       envContainer,
+		RelativeWorkingDir: params.OriginalRepoDir,
+		Command:            "git",
+		Args:               []string{"merge", params.SourceBranch},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to execute merge command: %v", err)
+	}
+	if mergeOutput.ExitStatus != 0 {
+		return fmt.Errorf("merge failed: %s", mergeOutput.Stderr)
+	}
+
+	return nil
 }
 
 func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
