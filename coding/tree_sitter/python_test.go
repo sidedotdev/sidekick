@@ -5,6 +5,8 @@ import (
 	"sidekick/utils"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestGetFileSignaturesStringPython(t *testing.T) {
@@ -593,6 +595,82 @@ class Greeter:
 			if strings.TrimSuffix(definition, "\n") != strings.TrimSuffix(tc.expectedDefinition, "\n") {
 				t.Errorf("Expected definition:\n%s\nGot:\n%s", utils.PanicJSON(tc.expectedDefinition), utils.PanicJSON(definition))
 				t.Errorf("Expected definition:\n%s\nGot:\n%s", tc.expectedDefinition, definition)
+			}
+		})
+	}
+}
+
+func TestGetFileHeadersStringPython(t *testing.T) {
+	testCases := []struct {
+		name     string
+		code     string
+		expected string
+	}{
+		{
+			name:     "empty",
+			code:     "",
+			expected: "",
+		},
+		{
+			name:     "no imports",
+			code:     "print('Hello, world!')",
+			expected: "",
+		},
+		{
+			name:     "import with comments",
+			code:     "import math  # Import the math module",
+			expected: "import math  # Import the math module\n",
+		},
+		{
+			name:     "import with multiple lines",
+			code:     "import math\nimport os\nimport sys",
+			expected: "import math\nimport os\nimport sys\n",
+		},
+		{
+			name:     "import with leading and trailing whitespace",
+			code:     "    import math  \n  import os  \n  import sys  ",
+			expected: "    import math  \n  import os  \n  import sys  \n",
+		},
+		{
+			name:     "import with from and comments",
+			code:     "from math import sqrt  # Import the sqrt function",
+			expected: "from math import sqrt  # Import the sqrt function\n",
+		},
+		{
+			name:     "import with from and alias",
+			code:     "from math import sqrt as s",
+			expected: "from math import sqrt as s\n",
+		},
+		{
+			name:     "import with multiple from and alias",
+			code:     "from math import sqrt as s, pow as p",
+			expected: "from math import sqrt as s, pow as p\n",
+		},
+		{
+			name:     "nested imports",
+			code:     "def x():\n    import math\n    import os\n    import sys",
+			expected: "",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create a temporary file with the test case code
+			tmpfile, err := os.CreateTemp("", "test*.py")
+			if err != nil {
+				t.Fatalf("Failed to create temp file: %v", err)
+			}
+			defer os.Remove(tmpfile.Name())
+			if _, err := tmpfile.Write([]byte(tc.code)); err != nil {
+				t.Fatalf("Failed to write to temp file: %v", err)
+			}
+			if err := tmpfile.Close(); err != nil {
+				t.Fatalf("Failed to close temp file: %v", err)
+			}
+			result, err := GetFileHeadersString(tmpfile.Name(), 0)
+			assert.Nil(t, err)
+			// Check the result
+			if result != tc.expected {
+				t.Errorf("GetFileHeadersString returned incorrect result. Expected:\n%s\nGot:\n%s", utils.PanicJSON(tc.expected), utils.PanicJSON(result))
 			}
 		})
 	}
