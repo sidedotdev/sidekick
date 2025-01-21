@@ -657,6 +657,120 @@ public class AnnotatedClass {
     THREE
 }`,
 		},
+		{
+			name:       "class with single line doc comments",
+			symbolName: "DocClass",
+			code: `// This is a documented class
+// with multiple line comments
+public class DocClass {
+    private String name;
+}`,
+			expectedDefinition: `// This is a documented class
+// with multiple line comments
+public class DocClass {
+    private String name;
+}`,
+		},
+		{
+			name:       "class with multi-line doc comments",
+			symbolName: "DocClass2",
+			code: `/* This is a documented class
+ * with multiple lines
+ * in a block comment
+ */
+public class DocClass2 {
+    private String name;
+}`,
+			expectedDefinition: `/* This is a documented class
+ * with multiple lines
+ * in a block comment
+ */
+public class DocClass2 {
+    private String name;
+}`,
+		},
+		{
+			name:       "method with single line doc comments",
+			symbolName: "docMethod",
+			code: `public class TestClass {
+    // This method does something
+    // really important
+    public void docMethod() {
+        System.out.println("Hello");
+    }
+}`,
+			expectedDefinition: `    // This method does something
+    // really important
+    public void docMethod() {
+        System.out.println("Hello");
+    }`,
+		},
+		{
+			name:       "method with multi-line doc comments",
+			symbolName: "docMethod2",
+			code: `public class TestClass {
+    /* This method does something
+     * really important
+     * in a very special way
+     */
+    public void docMethod2() {
+        System.out.println("Hello");
+    }
+}`,
+			expectedDefinition: `    /* This method does something
+     * really important
+     * in a very special way
+     */
+    public void docMethod2() {
+        System.out.println("Hello");
+    }`,
+		},
+		{
+			name:       "interface with doc comments",
+			symbolName: "DocInterface",
+			code: `// This interface defines
+// a contract for something
+public interface DocInterface {
+    void testMethod();
+}`,
+			expectedDefinition: `// This interface defines
+// a contract for something
+public interface DocInterface {
+    void testMethod();
+}`,
+		},
+		{
+			name:       "field with doc comments",
+			symbolName: "docField",
+			code: `public class TestClass {
+    /* This field stores
+     * an important value
+     */
+    private static final String docField = "test";
+}`,
+			expectedDefinition: `    /* This field stores
+     * an important value
+     */
+    private static final String docField = "test";`,
+		},
+		{
+			name:       "enum with doc comments",
+			symbolName: "DocEnum",
+			code: `// This enum represents
+// some important values
+public enum DocEnum {
+    ONE,
+    TWO,
+    THREE
+}`,
+			expectedDefinition: `// This enum represents
+// some important values
+public enum DocEnum {
+    ONE,
+    TWO,
+    THREE
+}`,
+		},
 	}
 
 	for _, tc := range testCases {
