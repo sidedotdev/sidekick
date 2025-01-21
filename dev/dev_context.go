@@ -19,6 +19,7 @@ import (
 type DevContext struct {
 	flow_action.ExecContext
 	GlobalState     *GlobalState
+	WorktreeName    string
 	RepoConfig      common.RepoConfig
 	Providers       []common.ModelProviderPublicConfig
 	LLMConfig       common.LLMConfig
@@ -147,13 +148,19 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		}
 	}
 
-	return DevContext{
+	devCtx := DevContext{
 		ExecContext:     eCtx,
 		RepoConfig:      repoConfig,
 		Providers:       localConfig.Providers, // TODO merge with workspace providers
 		LLMConfig:       finalLLMConfig,
 		EmbeddingConfig: finalEmbeddingConfig,
-	}, nil
+	}
+
+	if envType == "local_git_worktree" {
+		devCtx.WorktreeName = workflow.GetInfo(ctx).WorkflowExecution.ID // Same as worktree.Name above
+	}
+
+	return devCtx, nil
 }
 
 type DevActionContext struct {
