@@ -547,6 +547,63 @@ public class Dog extends Animal {
 }`,
 			expected: "Animal, Dog, makeSound, bark",
 		},
+		{
+			name: "basic enum",
+			code: `
+public enum Direction {
+    NORTH, SOUTH, EAST, WEST
+}`,
+			expected: "Direction",
+		},
+		{
+			name: "enum with methods",
+			code: `
+public enum Operation {
+    PLUS, MINUS, TIMES, DIVIDE;
+    
+    public double apply(double x, double y) {
+        return 0.0;
+    }
+    
+    private void helper() {
+        // Helper method
+    }
+}`,
+			expected: "Operation, apply",
+		},
+		{
+			name: "nested enum",
+			code: `
+public class Container {
+    public enum Status {
+        ACTIVE, INACTIVE, PENDING;
+        
+        public boolean isTerminal() {
+            return false;
+        }
+    }
+    
+    public void process() {
+        // Process method
+    }
+}`,
+			expected: "Container, Status, process, isTerminal",
+		},
+		{
+			name: "multiple enums",
+			code: `
+enum Color {
+    RED, GREEN, BLUE;
+    public String getHex() { return ""; }
+}
+
+enum Size {
+    SMALL, MEDIUM, LARGE;
+    public int getValue() { return 0; }
+    private void internal() {}
+}`,
+			expected: "Color, Size, getValue, getHex",
+		},
 	}
 
 	for _, test := range tests {

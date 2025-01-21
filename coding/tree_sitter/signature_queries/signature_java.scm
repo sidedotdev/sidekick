@@ -171,11 +171,13 @@
 
 ; extract enum method names as separate matches for symbol outline
 (enum_declaration
-  body: (_
-    (method_declaration
-      (modifiers)? @method.modifiers
-        (#not-match? @method.modifiers "private|protected")
-      (identifier) @method.name
+  (enum_body
+    (enum_body_declarations
+      (method_declaration
+        (modifiers)? @method.modifiers
+          (#not-match? @method.modifiers "private|protected")
+        (identifier) @method.name
+      )
     )
   )
 )

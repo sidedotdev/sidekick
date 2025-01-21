@@ -8,8 +8,9 @@ import (
 
 func writeJavaSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
 	content := c.Node.Content(*sourceCode)
+	// note: only top-level names here (eg we must skip enum.method.name for instance)
 	switch name {
-	case "class.name", "interface.name", "method.name", "annotation.name":
+	case "class.name", "interface.name", "method.name", "annotation.name", "enum.name":
 		{
 			out.WriteString(content)
 		}
