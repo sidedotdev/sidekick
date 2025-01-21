@@ -1,7 +1,10 @@
 package llm
 
 import (
+	"encoding/json"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestParseJsonValue(t *testing.T) {
@@ -38,7 +41,12 @@ func TestParseJsonValue(t *testing.T) {
 		{
 			name:     "string ending with </invoke>",
 			input:    `[{"key": "value"}]</invoke>`,
-			expected: `[{"key": "value"}]</invoke>`,
+			expected: `[{"key":"value"}]`,
+		},
+		{
+			name:     "string ending with </invoke> and more",
+			input:    `[{"key": "value"}]</invoke> and more`,
+			expected: `[{"key":"value"}]`,
 		},
 		{
 			name:     "nested json structure",
@@ -49,9 +57,11 @@ func TestParseJsonValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseJsonValue(tt.input)
-			if got != tt.expected {
-				t.Errorf("parseJsonValue() = %v, want %v", got, tt.expected)
+			got := tryParseStringAsJson(tt.input)
+			marshaled, err := json.Marshal(got)
+			assert.NoError(t, err)
+			if string(marshaled) != tt.expected && got != tt.expected {
+				t.Errorf("parseJsonValue() = %s, want %s", string(marshaled), tt.expected)
 			}
 		})
 	}
@@ -59,54 +69,90 @@ func TestParseJsonValue(t *testing.T) {
 
 func TestRepairJson(t *testing.T) {
 	tests := []struct {
+		name     string
 		input    string
 		expected string
 	}{
 		{
+			name: "newline in string",
 			input: `{"key": "value with 
  newline"}`,
-			expected: `{"key": "value with \n newline"}`,
+			expected: `{"key":"value with \n newline"}`,
+		},
+		{
+			name:     "string containing JSON array",
+			input:    `{"searches": "[{\"path\": \"file.go\"}]</invoke>"}`,
+			expected: `{"searches":[{"path":"file.go"}]}`,
+		},
+		{
+			name:     "string containing JSON object",
+			input:    `{"data": "{\"key\": \"value\"}</invoke>"}`,
+			expected: `{"data":{"key":"value"}}`,
+		},
+		{
+			name:     "nested JSON with newlines and JSON strings",
+			input:    `{"outer": {"inner": "{\"key\": \"value\"}</invoke>"}}`,
+			expected: `{"outer":{"inner":{"key":"value"}}}`,
+		},
+		{
+			name:     "array with JSON string and newlines",
+			input:    `{"items": ["normal", "{\"key\": \"value\"}</invoke>", "plain"]}`,
+			expected: `{"items":["normal",{"key":"value"},"plain"]}`,
+		},
+		{
+			name:     "invalid JSON string should remain unchanged",
+			input:    `{"data": "{\"key\": \"value\"</invoke>"}`,
+			expected: `{"data":"{\"key\": \"value\"</invoke>"}`,
+		},
+		{
+			name:     "non-JSON string ending with </invoke> should remain unchanged",
+			input:    `{"data": "not json</invoke>"}`,
+			expected: `{"data":"not json</invoke>"}`,
+		},
+		{
+			input: `{"key": "value with 
+ newline"}`,
+			expected: `{"key":"value with \n newline"}`,
 		},
 		{
 			input:    "{\"key\": \"value with \r\n newline\"}",
-			expected: `{"key": "value with \r\n newline"}`,
+			expected: `{"key":"value with \r\n newline"}`,
 		},
 		{
 			input:    `{"key": "value without newline"}`,
-			expected: `{"key": "value without newline"}`,
+			expected: `{"key":"value without newline"}`,
 		},
 		{
 			input:    `{"key": "value with \n escaped newline"}`,
-			expected: `{"key": "value with \n escaped newline"}`,
+			expected: `{"key":"value with \n escaped newline"}`,
 		},
 		{
 			input: `{"key": "value with 
  multiple 
  newlines"}`,
-			expected: `{"key": "value with \n multiple \n newlines"}`,
+			expected: `{"key":"value with \n multiple \n newlines"}`,
 		},
 		{
 			input: `{"key": "value with valid escape: \" and 
  newline"}`,
-			expected: `{"key": "value with valid escape: \" and \n newline"}`,
+			expected: `{"key":"value with valid escape: \" and \n newline"}`,
 		},
 		{
 			input: `{"key1": "value1",
 "key2": "value2"}`,
-			expected: `{"key1": "value1",
-"key2": "value2"}`,
+			expected: `{"key1":"value1","key2":"value2"}`,
 		},
 		{
 			input: `{"nested": {"key": "value with 
  newline"}}`,
-			expected: `{"nested": {"key": "value with \n newline"}}`,
+			expected: `{"nested":{"key":"value with \n newline"}}`,
 		},
 	}
 
 	for _, test := range tests {
 		got := RepairJson(test.input)
 		if got != test.expected {
-			t.Errorf("For input %q, expected %q, but got %q", test.input, test.expected, got)
+			t.Errorf("For input %q\nexpected %q\n but got %q", test.input, test.expected, got)
 		}
 	}
 }

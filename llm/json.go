@@ -1,22 +1,17 @@
 package llm
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 )
 
-// parseJsonValue attempts to parse a string as a JSON array or object.
-// If successful, it returns the parsed JSON structure as a string.
-// If unsuccessful, it returns the original string unchanged.
-func parseJsonValue(input string) string {
+func tryParseStringAsJson(input string) interface{} {
 	// Trim whitespace
 	trimmed := strings.TrimSpace(input)
 
-	// Quick check - must start with [ or { and end with ] or }
-	if len(trimmed) < 2 || !((trimmed[0] == '[' && trimmed[len(trimmed)-1] == ']') ||
-		(trimmed[0] == '{' && trimmed[len(trimmed)-1] == '}')) {
-		return input
-	}
+	// remove "</invoke>" and any characters after it with regex
+	trimmed = strings.Split(trimmed, "</invoke>")[0]
 
 	// Try to parse as JSON
 	var parsed interface{}
@@ -25,18 +20,60 @@ func parseJsonValue(input string) string {
 		return input
 	}
 
-	// If we successfully parsed, re-encode to ensure consistent formatting
-	formatted, err := json.Marshal(parsed)
-	if err != nil {
+	// check if map or array, only those can be interpreted as JSON
+	switch parsed.(type) {
+	case map[string]interface{}, []interface{}:
+		return parsed
+	default:
 		return input
 	}
-
-	return string(formatted)
 }
 
 func RepairJson(input string) string {
-	return escapeNewLinesInJSON(input)
-	// TODO repair rare case where nested json array/object is instead a json string itself, eg. {"key": "[{\"key\": \"value\"}]"}
+	// First escape newlines in JSON strings
+	escaped := escapeNewLinesInJSON(input)
+
+	// Parse the JSON structure
+	var data interface{}
+	if err := json.Unmarshal([]byte(escaped), &data); err != nil {
+		return escaped // Return escaped string if not valid JSON
+	}
+
+	// Process all string values in the structure
+	processed := processJsonStrings(data)
+
+	// Marshal back to JSON string
+	buffer := &bytes.Buffer{}
+    encoder := json.NewEncoder(buffer)
+    encoder.SetEscapeHTML(false)
+	err := encoder.Encode(processed)
+	if err != nil {
+		return escaped // Return escaped string if marshaling fails
+	}
+
+	return strings.TrimSpace(buffer.String())
+}
+
+// processJsonStrings walks through a JSON structure and attempts to parse string values as JSON
+func processJsonStrings(data interface{}) interface{} {
+	switch v := data.(type) {
+	case map[string]interface{}:
+		result := make(map[string]interface{})
+		for key, value := range v {
+			result[key] = processJsonStrings(value)
+		}
+		return result
+	case []interface{}:
+		result := make([]interface{}, len(v))
+		for i, value := range v {
+			result[i] = processJsonStrings(value)
+		}
+		return result
+	case string:
+		return tryParseStringAsJson(v)
+	default:
+		return v
+	}
 }
 
 // escapeNewLinesInJSON tries to repair JSON that has unescaped newlines by escaping them.
