@@ -230,12 +230,57 @@ func TestRepairJson(t *testing.T) {
  newline"}}`,
 			expected: `{"nested":{"key":"value with \n newline"}}`,
 		},
+		{
+			name:     "basic string to JSON object conversion",
+			input:    `{"data": "{\"key\":\"value\",\"num\":42}"}`,
+			expected: `{"data":{"key":"value","num":42}}`,
+		},
+		{
+			name:     "string to JSON array conversion",
+			input:    `{"items": "[1,2,3,{\"x\":\"y\"}]"}`,
+			expected: `{"items":[1,2,3,{"x":"y"}]}`,
+		},
+		{
+			name:     "multiple string conversions",
+			input:    `{"obj": "{\"a\":1}", "arr": "[1,2]", "plain": "text"}`,
+			expected: `{"obj":{"a":1},"arr":[1,2],"plain":"text"}`,
+		},
+		{
+			name:     "nested string conversions",
+			input:    `{"outer": {"inner": "{\"deep\": {\"x\": 1}}", "arr": "[1,2]"}}`,
+			expected: `{"outer":{"inner":{"deep":{"x":1}},"arr":[1,2]}}`,
+		},
+		{
+			name:     "invalid JSON remains as string",
+			input:    `{"data": "{\"broken\": missing quote}"}`,
+			expected: `{"data":"{\"broken\": missing quote}"}`,
+		},
+		{
+			name:     "mixed valid and invalid conversions",
+			input:    `{"valid": "{\"x\":1}", "invalid": "{broken}", "also_valid": "[1,2]"}`,
+			expected: `{"valid":{"x":1},"invalid":"{broken}","also_valid":[1,2]}`,
+		},
+		{
+			name:     "complex nested structure with mixed conversions",
+			input:    `{"a": {"b": "{\"x\":1}", "c": {"d": "[1,2]", "e": "{invalid}", "f": "{\"y\":{\"z\":3}}"}, "g": "plain"}}`,
+			expected: `{"a":{"b":{"x":1},"c":{"d":[1,2],"e":"{invalid}","f":{"y":{"z":3}}},"g":"plain"}}`,
+		},
 	}
 
 	for _, test := range tests {
 		got := RepairJson(test.input)
-		if got != test.expected {
-			t.Errorf("For input %q\nexpected %q\n but got %q", test.input, test.expected, got)
+
+		var expectedJSON, gotJSON interface{}
+		if err := json.Unmarshal([]byte(test.expected), &expectedJSON); err != nil {
+			t.Errorf("Failed to parse expected JSON %q: %v", test.expected, err)
+			continue
 		}
+		if err := json.Unmarshal([]byte(got), &gotJSON); err != nil {
+			t.Errorf("Failed to parse actual JSON %q: %v", got, err)
+			continue
+		}
+
+		assert.Equal(t, expectedJSON, gotJSON, "For input %q\nexpected JSON equivalent to %q\nbut got %q",
+			test.input, test.expected, got)
 	}
 }
