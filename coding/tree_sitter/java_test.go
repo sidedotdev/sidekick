@@ -74,6 +74,116 @@ func TestGetDeclarationIndentLevel(t *testing.T) {
 	}
 }
 
+func TestGetFileHeadersStringJava(t *testing.T) {
+	testCases := []struct {
+		name     string
+		code     string
+		expected string
+	}{
+		{
+			name:     "empty",
+			code:     "",
+			expected: "",
+		},
+		{
+			name:     "single import",
+			code:     "import java.util.List;",
+			expected: "import java.util.List;\n",
+		},
+		{
+			name:     "multiple imports",
+			code:     "import java.util.List;\nimport java.util.Map;",
+			expected: "import java.util.List;\nimport java.util.Map;\n",
+		},
+		{
+			name:     "multiple imports on consecutive lines",
+			code:     "import java.util.List;\nimport java.util.Map;\nimport java.util.Set;",
+			expected: "import java.util.List;\nimport java.util.Map;\nimport java.util.Set;\n",
+		},
+		{
+			name:     "static import",
+			code:     "import static org.junit.Assert.*;",
+			expected: "import static org.junit.Assert.*;\n",
+		},
+		{
+			name:     "wildcard import",
+			code:     "import java.util.*;",
+			expected: "import java.util.*;\n",
+		},
+		{
+			name:     "package declaration",
+			code:     "package com.example;",
+			expected: "package com.example;\n",
+		},
+		{
+			name:     "package + import",
+			code:     "package com.example;\nimport java.util.List;",
+			expected: "package com.example;\nimport java.util.List;\n",
+		},
+		{
+			name:     "package + empty line + import",
+			code:     "package com.example;\n\nimport java.util.List;",
+			expected: "package com.example;\n\nimport java.util.List;\n",
+		},
+		{
+			name:     "package + multiple whitespace lines + import",
+			code:     "package com.example;\n\n\t\t\n  \n \t \t\nimport java.util.List;",
+			expected: "package com.example;\n\n\t\t\n  \n \t \t\nimport java.util.List;\n",
+		},
+		{
+			name:     "package later in file",
+			code:     "import java.util.List;\npackage com.example;",
+			expected: "import java.util.List;\npackage com.example;\n",
+		},
+		{
+			name:     "import later in file",
+			code:     "package com.example;\nclass Main {}\nimport java.util.List;",
+			expected: "package com.example;\n---\nimport java.util.List;\n",
+		},
+		{
+			name:     "package twice in file",
+			code:     "package com.example;\nclass Main {}\npackage com.other;",
+			expected: "package com.example;\n---\npackage com.other;\n",
+		},
+		{
+			name:     "import twice in file",
+			code:     "import java.util.List;\nclass Main {}\nimport java.util.Map;",
+			expected: "import java.util.List;\n---\nimport java.util.Map;\n",
+		},
+		{
+			name:     "package + import twice in file",
+			code:     "package com.example;\nimport java.util.List;\nclass Main {}\npackage com.other;\nimport java.util.Map;",
+			expected: "package com.example;\nimport java.util.List;\n---\npackage com.other;\nimport java.util.Map;\n",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create a temporary file with the test case code
+			tmpfile, err := os.CreateTemp("", "test*.java")
+			if err != nil {
+				t.Fatalf("Failed to create temp file: %v", err)
+			}
+			defer os.Remove(tmpfile.Name())
+
+			if _, err := tmpfile.Write([]byte(tc.code)); err != nil {
+				t.Fatalf("Failed to write to temp file: %v", err)
+			}
+			if err := tmpfile.Close(); err != nil {
+				t.Fatalf("Failed to close temp file: %v", err)
+			}
+
+			result, err := GetFileHeadersString(tmpfile.Name(), 0)
+			assert.Nil(t, err)
+
+			// Check the result
+			if result != tc.expected {
+				t.Errorf("GetFileHeadersString returned incorrect result. Expected:\n%s\nGot:\n%s", utils.PanicJSON(tc.expected), utils.PanicJSON(result))
+			}
+		})
+	}
+}
+
 func TestGetFileSignaturesStringJava(t *testing.T) {
 	testCases := []struct {
 		name     string
