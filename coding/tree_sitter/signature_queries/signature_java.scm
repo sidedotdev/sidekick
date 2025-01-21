@@ -11,7 +11,32 @@
     ) @interface.body
 ) @interface.declaration
 
+(annotation_type_declaration
+  (modifiers)? @annotation.modifiers
+  (identifier) @annotation.name
+    body: (_
+      [
+        (annotation_type_element_declaration
+          (modifiers)? @annotation.element.modifiers
+            (#not-match? @annotation.element.modifiers "private|protected")
+          type: (_) @annotation.element.type
+          (identifier) @annotation.element.name
+        ) @annotation.element.declaration
+
+        (annotation_type_element_declaration
+          (modifiers)? @annotation.element.ignore.modifiers
+            (#match? @annotation.element.ignore.modifiers "private|protected")
+        )
+
+        (constant_declaration) @annotation.constant.declaration
+
+        (_)
+      ]*
+    ) @annotation.body
+) @annotation.declaration
+
 (class_declaration
+  (modifiers)? @class.modifiers
   (identifier) @class.name
     body: (_
       [
@@ -29,8 +54,8 @@
         )
 
         (constructor_declaration
-          (modifiers)? @class.method.modifiers
-            (#not-match? @class.method.modifiers "private|protected")
+          (modifiers)? @class.constructor.modifiers
+            (#not-match? @class.constructor.modifiers "private|protected")
           (identifier) @class.constructor.name
           (formal_parameters) @class.constructor.parameters
         ) @class.constructor.declaration

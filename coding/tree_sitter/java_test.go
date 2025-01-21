@@ -31,7 +31,7 @@ func TestGetFileSignaturesStringJava(t *testing.T) {
 		{
 			name:     "public interface",
 			code:     "public interface TestInterface { void method(); }",
-			expected: "interface public TestInterface\n\tvoid method();\n---\n",
+			expected: "public interface TestInterface\n\tvoid method();\n---\n",
 		},
 		{
 			name:     "interface with constant",
@@ -102,6 +102,31 @@ func TestGetFileSignaturesStringJava(t *testing.T) {
 			name:     "multiple classes",
 			code:     "class Class1 {} class Class2 {}",
 			expected: "class Class1\n---\nclass Class2\n---\n",
+		},
+		{
+			name:     "annotation type declaration",
+			code:     "@interface TestAnnotation { String value(); int count() default 0; }",
+			expected: "@interface TestAnnotation\n\tString value();\n\tint count() default 0;\n---\n",
+		},
+		{
+			name:     "annotation type declaration with private method",
+			code:     "@interface TestAnnotation { String value(); private int count() default 0; }",
+			expected: "@interface TestAnnotation\n\tString value();\n---\n",
+		},
+		{
+			name:     "class with annotation",
+			code:     "@Test class TestClass {}",
+			expected: "@Test class TestClass\n---\n",
+		},
+		{
+			name:     "method with annotation",
+			code:     "class TestClass { @Override public void testMethod() {} }",
+			expected: "class TestClass\n\t@Override public void testMethod()\n---\n",
+		},
+		{
+			name:     "interface with annotation",
+			code:     "@FunctionalInterface interface TestInterface { void test(); }",
+			expected: "@FunctionalInterface interface TestInterface\n\tvoid test();\n---\n",
 		},
 	}
 
