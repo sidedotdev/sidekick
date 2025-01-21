@@ -84,7 +84,7 @@ func retryChatStreamOnEmptyResponse(
 ) (*llm.ChatMessageResponse, error) {
 	// this shows what's going on to the user in the streaming UI
 	deltaChan <- llm.ChatMessageDelta{
-		Role:   llm.ChatMessageRoleAssistant,
+		Role: llm.ChatMessageRoleAssistant,
 		Content: `
 
 ----------------------------------------------------------------------------
