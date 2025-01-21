@@ -44,8 +44,8 @@ func RepairJson(input string) string {
 
 	// Marshal back to JSON string
 	buffer := &bytes.Buffer{}
-    encoder := json.NewEncoder(buffer)
-    encoder.SetEscapeHTML(false)
+	encoder := json.NewEncoder(buffer)
+	encoder.SetEscapeHTML(false)
 	err := encoder.Encode(processed)
 	if err != nil {
 		return escaped // Return escaped string if marshaling fails
@@ -78,6 +78,43 @@ func processJsonStrings(data interface{}) interface{} {
 
 // escapeNewLinesInJSON tries to repair JSON that has unescaped newlines by escaping them.
 // It is robust against valid JSON escapes like `\"` and will only escape newlines inside strings.
+// tryConvertStringsToRawJson attempts to convert string values in a JSON structure to raw JSON messages
+// where possible, validating that the entire structure remains valid JSON after each conversion.
+func tryConvertStringsToRawJson(data interface{}) interface{} {
+	switch v := data.(type) {
+	case map[string]interface{}:
+		result := make(map[string]interface{})
+		// First pass: copy all values
+		for key, value := range v {
+			result[key] = tryConvertStringsToRawJson(value)
+		}
+		return result
+	case []interface{}:
+		result := make([]interface{}, len(v))
+		// First pass: copy all values
+		for i, value := range v {
+			result[i] = tryConvertStringsToRawJson(value)
+		}
+		return result
+	case string:
+		// Try to parse the string as JSON
+		var parsed interface{}
+		if err := json.Unmarshal([]byte(v), &parsed); err != nil {
+			return v
+		}
+
+		// Only convert if parsed result is an object or array
+		switch parsed.(type) {
+		case map[string]interface{}, []interface{}:
+			return parsed
+		default:
+			return v
+		}
+	default:
+		return v
+	}
+}
+
 func escapeNewLinesInJSON(input string) string {
 	var inString, wasBackslash bool
 	var result strings.Builder

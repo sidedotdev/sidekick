@@ -67,6 +67,89 @@ func TestParseJsonValue(t *testing.T) {
 	}
 }
 
+func TestTryConvertStringsToRawJson(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    interface{}
+		expected interface{}
+	}{
+		{
+			name: "simple string to object conversion",
+			input: map[string]interface{}{
+				"data": "{\"key\": \"value\"}",
+			},
+			expected: map[string]interface{}{
+				"data": map[string]interface{}{
+					"key": "value",
+				},
+			},
+		},
+		{
+			name: "invalid conversion attempt",
+			input: map[string]interface{}{
+				"data": "{\"key\": value}",
+			},
+			expected: map[string]interface{}{
+				"data": "{\"key\": value}",
+			},
+		},
+		{
+			name: "multiple string conversion",
+			input: map[string]interface{}{
+				"data":   "{\"arr\": [1,2]}",
+				"other":  "{\"x\": 1}",
+				"plain":  "just a string",
+				"number": 42,
+			},
+			expected: map[string]interface{}{
+				"data": map[string]interface{}{
+					"arr": []interface{}{float64(1), float64(2)},
+				},
+				"other": map[string]interface{}{
+					"x": float64(1),
+				},
+				"plain":  "just a string",
+				"number": 42,
+			},
+		},
+		{
+			name: "nested structure",
+			input: map[string]interface{}{
+				"outer": map[string]interface{}{
+					"inner": "{\"x\": [1,2,3]}",
+				},
+			},
+			expected: map[string]interface{}{
+				"outer": map[string]interface{}{
+					"inner": map[string]interface{}{
+						"x": []interface{}{float64(1), float64(2), float64(3)},
+					},
+				},
+			},
+		},
+		{
+			name: "array with JSON strings",
+			input: []interface{}{
+				"[1,2,3]",
+				"{\"key\": \"value\"}",
+				"not json",
+			},
+			expected: []interface{}{
+				[]interface{}{float64(1), float64(2), float64(3)},
+				map[string]interface{}{"key": "value"},
+				"not json",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tryConvertStringsToRawJson(tt.input)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
 func TestRepairJson(t *testing.T) {
 	tests := []struct {
 		name     string
