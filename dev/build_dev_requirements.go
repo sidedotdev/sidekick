@@ -118,9 +118,6 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 					addToolCallResponse(iteration.ChatHistory, toolResponse)
 				}
 			} else if unmarshalErr != nil {
-				if chatResponse.ToolCalls[0].Name == getHelpOrInputTool.Name {
-					iteration.NumSinceLastFeedback = 0
-				}
 				toolResponse := ToolCallResponseInfo{Response: unmarshalErr.Error(), FunctionName: recordDevRequirementsTool.Name, ToolCallId: toolCall.Id, IsError: true}
 				addToolCallResponse(iteration.ChatHistory, toolResponse)
 			} else {
@@ -129,8 +126,20 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 			}
 		} else {
 			var toolCallResult ToolCallResponseInfo
-			toolCallResult, err = handleToolCall(iteration.ExecCtx, chatResponse.ToolCalls[0])
+			toolCallResult, err = handleToolCall(iteration.ExecCtx, toolCall)
+			if err != nil {
+				return nil, fmt.Errorf("error handling tool call: %w", err)
+			}
+
 			addToolCallResponse(iteration.ChatHistory, toolCallResult)
+
+			if len(toolCallResult.Response) > 5000 {
+				state.contextSizeExtension += len(toolCallResult.Response) - 5000
+			}
+
+			if toolCall.Name == getHelpOrInputTool.Name {
+				iteration.NumSinceLastFeedback = 0
+			}
 		}
 	} else if chatResponse.StopReason == string(openai.FinishReasonStop) || chatResponse.StopReason == string(openai.FinishReasonToolCalls) {
 		// TODO try to extract the dev requirements from the content in this case and treat it as if it was a tool call

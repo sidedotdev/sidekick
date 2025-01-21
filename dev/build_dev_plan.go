@@ -161,7 +161,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 					ToolCallId:   toolCall.Id,
 					IsError:      true,
 				})
-				return nil, nil
+				return nil, nil // continue the loop
 			}
 
 			validatedDevPlan, err := ValidateAndCleanPlan(unvalidatedDevPlan)
@@ -172,7 +172,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 					ToolCallId:   toolCall.Id,
 					IsError:      true,
 				})
-				return nil, nil
+				return nil, nil // continue the loop
 			}
 
 			state.devPlan = validatedDevPlan
@@ -184,7 +184,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 						FunctionName: recordDevPlanTool.Name,
 						ToolCallId:   toolCall.Id,
 					})
-					return nil, nil
+					return nil, nil // continue the loop
 				}
 
 				if !state.hasRevisedPerReproPrompt && state.reproduceIssue {
@@ -194,7 +194,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 						FunctionName: recordDevPlanTool.Name,
 						ToolCallId:   toolCall.Id,
 					})
-					return nil, nil
+					return nil, nil // continue the loop
 				}
 
 				userResponse, err := ApproveDevPlan(iteration.ExecCtx, validatedDevPlan)
@@ -210,7 +210,6 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 						FunctionName: toolCall.Name,
 						ToolCallId:   toolCall.Id,
 					})
-					return nil, nil
 				}
 			} else {
 				addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
@@ -218,10 +217,9 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 					FunctionName: recordDevPlanTool.Name,
 					ToolCallId:   toolCall.Id,
 				})
-				return nil, nil
 			}
 		} else {
-			toolCallResponseInfo, err := handleToolCall(iteration.ExecCtx, chatResponse.ToolCalls[0])
+			toolCallResponseInfo, err := handleToolCall(iteration.ExecCtx, toolCall)
 			if err != nil {
 				return nil, fmt.Errorf("error handling tool call: %w", err)
 			}
@@ -231,19 +229,21 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 			}
 
 			addToolCallResponse(iteration.ChatHistory, toolCallResponseInfo)
-			return nil, nil
+			if toolCall.Name == getHelpOrInputTool.Name {
+				iteration.NumSinceLastFeedback = 0
+			}
 		}
 	} else if chatResponse.StopReason == string(openai.FinishReasonStop) || chatResponse.StopReason == string(openai.FinishReasonToolCalls) {
 		addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
 			Response:     "Expected a tool call to record the plan, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevPlanTool.Name + " tool.",
 			FunctionName: recordDevPlanTool.Name,
 		})
-		return nil, nil
 	} else { // FIXME handle other stop reasons with more specific logic
 		feedbackInfo := FeedbackInfo{Feedback: "Expected a tool call to record the dev requirements, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevRequirementsTool.Name + " tool."}
 		addDevRequirementsPrompt(iteration.ChatHistory, feedbackInfo)
-		return nil, nil // continue the loop
 	}
+
+	return nil, nil // continue the loop
 }
 
 func unmarshalPlan(jsonStr string) (DevPlan, error) {
