@@ -30,6 +30,9 @@
         (field_declaration
           (modifiers)? @class.field.modifiers
             (#not-match? @class.field.modifiers "private|protected")
+          declarator: (_
+            (identifier) @class.field.name
+          )
         ) @class.field.declaration
 
         (field_declaration
@@ -41,3 +44,14 @@
       ]*
     ) @class.body
 ) @class.declaration
+
+; extract method names as separate matches for symbol outline
+(class_declaration
+  body: (_
+    (method_declaration
+      (modifiers)? @method.modifiers
+        (#not-match? @method.modifiers "private|protected")
+      (identifier) @method.name
+    )
+  )
+)

@@ -9,7 +9,7 @@ import (
 func writeJavaSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
 	content := c.Node.Content(*sourceCode)
 	switch name {
-	case "class.name", "method.name", "constructor.name", "field.name":
+	case "class.name", "interface.name", "method.name":
 		{
 			out.WriteString(content)
 		}

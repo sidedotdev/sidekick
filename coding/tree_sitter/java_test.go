@@ -134,7 +134,7 @@ public class Person {
         // Constructor
     }
 }`,
-			expected: "Person, Person",
+			expected: "Person",
 		},
 		{
 			name:     "empty",
@@ -142,31 +142,41 @@ public class Person {
 			expected: "",
 		},
 		{
-			name:     "single class",
+			name:     "empty class",
 			code:     "class Test {}",
 			expected: "Test",
 		},
 		{
-			name: "class with fields",
+			name: "class with private, public and protected fields",
 			code: `
 public class TestClass {
     private int field1;
-    protected String field2;
+    public String field2;
+    protected String field3;
 }`,
-			expected: "TestClass, field1, field2",
+			expected: "TestClass",
 		},
 		{
-			name: "class with method and fields",
+			name: "class with methods and fields",
 			code: `
 public class Complex {
     private double real;
     private double imaginary;
+	public double x;
 
     public Complex add(Complex other) {
         return new Complex();
     }
+
+    public Complex subtract(Complex other) {
+        return new Complex();
+    }
+
+    private Complex internal(Complex other) {
+        return new Complex();
+    }
 }`,
-			expected: "Complex, real, imaginary, add",
+			expected: "Complex, add, subtract",
 		},
 	}
 
