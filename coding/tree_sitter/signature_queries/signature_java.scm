@@ -1,5 +1,6 @@
 (interface_declaration
   (modifiers)? @interface.modifiers
+    (#not-match? @interface.modifiers "private|protected")
   (identifier) @interface.name
   (type_parameters)? @interface.type_parameters
     body: (_
@@ -14,6 +15,7 @@
 
 (annotation_type_declaration
   (modifiers)? @annotation.modifiers
+    (#not-match? @annotation.modifiers "private|protected")
   (identifier) @annotation.name
     body: (_
       [
@@ -38,6 +40,7 @@
 
 (class_declaration
   (modifiers)? @class.modifiers
+    (#not-match? @class.modifiers "private|protected")
   (identifier) @class.name
   (type_parameters)? @class.type_parameters
     body: (_

@@ -97,8 +97,6 @@ class Greeter:
 		pass`,
 			// NOTE the expected is not idealy here as the type is not nested under the class, but it'll do for now
 			expected: `
-type Vector = list[float]
----
 @class_decorator(arg1, arg2)
 class Greeter
 	def what(self)
@@ -106,6 +104,8 @@ class Greeter
 	def greet(self, name)
 	def what2(self)
 	def what3(self)
+---
+type Vector = list[float]
 ---
 `,
 		},

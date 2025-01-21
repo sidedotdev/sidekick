@@ -27,8 +27,11 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 				return
 			}
 
-			// TODO get write amount of indentation based on traversing
-			// ancestors, until node of type "program" is reached
+			level := getDeclarationIndentLevel(c.Node)
+			for i := 0; i < level; i++ {
+				out.WriteString("\t")
+			}
+
 			switch name {
 			case "annotation.declaration":
 				{
@@ -46,8 +49,10 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 		}
 	case "annotation.modifiers", "class.modifiers", "interface.modifiers":
 		{
-			// TODO get write amount of indentation based on traversing
-			// ancestors, until node of type "program" is reached
+			level := getDeclarationIndentLevel(c.Node.Parent())
+			for i := 0; i < level; i++ {
+				out.WriteString("\t")
+			}
 			out.WriteString(content)
 			out.WriteString(" ")
 			switch name {
@@ -76,19 +81,16 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 				out.WriteString(" ")
 			}
 		}
-	case "annotation.element.declaration":
-		{
-			out.WriteString("\t")
-			out.WriteString(content)
-			out.WriteString("\n")
-		}
 	case "interface.body", "class.body", "annotation.body":
 		{
 			out.WriteString("\n")
 		}
-	case "interface.method.declaration", "interface.constant.declaration", "interface.field.declaration":
+	case "interface.method.declaration", "interface.constant.declaration", "interface.field.declaration", "annotation.element.declaration":
 		{
-			out.WriteString("\t") // TODO get write amount of indentation based on traversing ancestors
+			level := getDeclarationIndentLevel(c.Node)
+			for i := 0; i < level; i++ {
+				out.WriteString("\t")
+			}
 			out.WriteString(content)
 			out.WriteString("\n")
 		}
@@ -99,7 +101,10 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 		}
 	case "class.constructor.declaration", "class.method.declaration":
 		{
-			out.WriteString("\t") // TODO get write amount of indentation based on traversing ancestors
+			level := getDeclarationIndentLevel(c.Node)
+			for i := 0; i < level; i++ {
+				out.WriteString("\t")
+			}
 		}
 	case "class.method.parameters", "class.constructor.parameters":
 		{
@@ -108,9 +113,25 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 		}
 	case "class.field.declaration":
 		{
-			out.WriteString("\t") // TODO get write amount of indentation based on traversing ancestors
+			level := getDeclarationIndentLevel(c.Node)
+			for i := 0; i < level; i++ {
+				out.WriteString("\t")
+			}
 			out.WriteString(content)
 			out.WriteString("\n")
 		}
 	}
+}
+
+// getDeclarationIndentLevel returns the number of declaration ancestors between the node and the program node
+func getDeclarationIndentLevel(node *sitter.Node) int {
+	level := 0
+	current := node.Parent()
+	for current != nil {
+		if strings.HasSuffix(current.Type(), "_declaration") {
+			level++
+		}
+		current = current.Parent()
+	}
+	return level
 }

@@ -1,6 +1,7 @@
 package tree_sitter
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"embed"
@@ -360,6 +361,15 @@ func getFileSignaturesInternal(languageName string, sitterLanguage *sitter.Langu
 		return nil, fmt.Errorf("error getting embedded language file map: %w", err)
 	}
 	signatures = append(signatures, embeddedSignatures...)
+
+	// Sort signatures by start point
+	slices.SortFunc(signatures, func(i, j Signature) int {
+		c := cmp.Compare(i.StartPoint.Row, j.StartPoint.Row)
+		if c == 0 {
+			c = cmp.Compare(i.StartPoint.Column, j.StartPoint.Column)
+		}
+		return c
+	})
 
 	return signatures, nil
 }

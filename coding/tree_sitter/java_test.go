@@ -1,11 +1,76 @@
 package tree_sitter
 
 import (
+	"context"
 	"os"
 	"testing"
 
+	sitter "github.com/smacker/go-tree-sitter"
+	"github.com/smacker/go-tree-sitter/java"
 	"github.com/stretchr/testify/assert"
 )
+
+func parseJavaString(code string) *sitter.Tree {
+	parser := sitter.NewParser()
+	parser.SetLanguage(java.GetLanguage())
+	tree, err := parser.ParseCtx(context.Background(), nil, []byte(code))
+	if err != nil {
+		panic(err)
+	}
+	return tree
+}
+
+func TestGetDeclarationIndentLevel(t *testing.T) {
+	testCases := []struct {
+		name     string
+		code     string
+		nodePath []string
+		expected int
+	}{
+		{
+			name:     "top level class",
+			code:     "class Test {}",
+			nodePath: []string{"class_declaration"},
+			expected: 0,
+		},
+		{
+			name:     "nested class",
+			code:     "class Outer { class Inner {} }",
+			nodePath: []string{"class_declaration", "class_body", "class_declaration"},
+			expected: 1,
+		},
+		{
+			name:     "deeply nested class",
+			code:     "class L1 { class L2 { class L3 {} } }",
+			nodePath: []string{"class_declaration", "class_body", "class_declaration", "class_body", "class_declaration"},
+			expected: 2,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tree := parseJavaString(tc.code)
+			defer tree.Close()
+
+			node := tree.RootNode()
+			for _, pathElement := range tc.nodePath {
+				found := false
+				for i := 0; i < int(node.ChildCount()); i++ {
+					child := node.Child(i)
+					if child.Type() == pathElement {
+						node = child
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "Failed to find node of type %s", pathElement)
+			}
+
+			level := getDeclarationIndentLevel(node)
+			assert.Equal(t, tc.expected, level)
+		})
+	}
+}
 
 func TestGetFileSignaturesStringJava(t *testing.T) {
 	testCases := []struct {
@@ -17,6 +82,84 @@ func TestGetFileSignaturesStringJava(t *testing.T) {
 			name:     "empty interface",
 			code:     "interface TestInterface {}",
 			expected: "interface TestInterface\n---\n",
+		},
+		{
+			name: "nested class in class",
+			code: `
+public class OuterClass {
+    public static class StaticNestedClass {
+        public void nestedMethod() {}
+    }
+    protected class IgnoredNestedClass {}
+    private class AnotherIgnoredClass {}
+    public class PublicNestedClass {
+        public void method() {}
+    }
+}`,
+			expected: `public class OuterClass
+---
+	public static class StaticNestedClass
+		public void nestedMethod()
+---
+	public class PublicNestedClass
+		public void method()
+---
+`,
+		},
+		{
+			name: "nested interface in class",
+			code: `
+public class OuterClass {
+    public interface NestedInterface {
+        void method();
+    }
+    private interface IgnoredInterface {}
+}`,
+			expected: `public class OuterClass
+---
+	public interface NestedInterface
+		void method();
+---
+`,
+		},
+		{
+			name: "nested annotation in class",
+			code: `
+public class OuterClass {
+    public @interface NestedAnnotation {
+        String value() default "";
+    }
+    private @interface IgnoredAnnotation {}
+}`,
+			expected: `public class OuterClass
+---
+	public @interface NestedAnnotation
+		String value() default "";
+---
+`,
+		},
+		{
+			name: "deeply nested types",
+			code: `
+public class OuterClass {
+    public class Level1 {
+        public interface Level2 {
+            public class Level3 {
+                void method();
+            }
+        }
+    }
+}`,
+			expected: `public class OuterClass
+---
+	public class Level1
+---
+		public interface Level2
+---
+			public class Level3
+				void method()
+---
+`,
 		},
 		{
 			name:     "interface with method",
