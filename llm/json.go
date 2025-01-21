@@ -42,6 +42,9 @@ func RepairJson(input string) string {
 	// Process all string values in the structure
 	processed := processJsonStrings(data)
 
+	// Try to convert any remaining string values to raw JSON messages
+	processed = tryConvertStringsToRawJson(processed)
+
 	// Marshal back to JSON string
 	buffer := &bytes.Buffer{}
 	encoder := json.NewEncoder(buffer)
