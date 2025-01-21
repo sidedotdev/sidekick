@@ -31,32 +31,37 @@ func TestGetFileSignaturesStringJava(t *testing.T) {
 		{
 			name:     "class with public field",
 			code:     "class TestClass { public int field; }",
-			expected: "class TestClass\n\tint field\n---\n",
+			expected: "class TestClass\n\tpublic int field;\n---\n",
 		},
 		{
 			name:     "class with mixed fields",
 			code:     "class TestClass { private int field1; public String field2; protected int field3; }",
-			expected: "class TestClass\n\tString field2\n---\n",
+			expected: "class TestClass\n\tpublic String field2;\n---\n",
 		},
 		{
 			name:     "class with constructor",
 			code:     "class TestClass { public TestClass() {} }",
-			expected: "class TestClass\n\tTestClass()\n---\n",
+			expected: "class TestClass\n\tpublic TestClass()\n---\n",
 		},
 		{
 			name:     "class with parameterized constructor",
 			code:     "class TestClass { public TestClass(int param1, String param2) {} }",
-			expected: "class TestClass\n\tTestClass(int param1, String param2)\n---\n",
+			expected: "class TestClass\n\tpublic TestClass(int param1, String param2)\n---\n",
 		},
 		{
 			name:     "class with method",
 			code:     "class TestClass { public void testMethod() {} }",
-			expected: "class TestClass\n\ttestMethod()\n---\n",
+			expected: "class TestClass\n\tpublic void testMethod()\n---\n",
+		},
+		{
+			name:     "class with multiple methods",
+			code:     "class TestClass { public void testMethod() {}\npublic void testMethod2() {} }",
+			expected: "class TestClass\n\tpublic void testMethod()\n\tpublic void testMethod2()\n---\n",
 		},
 		{
 			name:     "class with parameterized method",
 			code:     "class TestClass { public boolean testMethod(int param1, String param2) { return true; } }",
-			expected: "class TestClass\n\ttestMethod(int param1, String param2)\n---\n",
+			expected: "class TestClass\n\tpublic boolean testMethod(int param1, String param2)\n---\n",
 		},
 		{
 			name:     "class with private method",
@@ -189,4 +194,3 @@ public class Complex {
 		})
 	}
 }
-

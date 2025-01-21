@@ -1,16 +1,43 @@
 (class_declaration
   (identifier) @class.name
-  (class_body)? @class.body) @class.declaration
+    body: (_
+      [
+        (method_declaration
+          (modifiers)? @class.method.modifiers
+            (#not-match? @class.method.modifiers "private|protected")
+          type: (_) @class.method.type
+          (identifier) @class.method.name
+          (formal_parameters) @class.method.parameters
+        ) @class.method.declaration
 
-(method_declaration
-  (identifier) @method.name
-  (formal_parameters) @method.parameters
-) @method.declaration
+        (method_declaration
+          (modifiers)? @class.method.ignored.modifiers
+            (#match? @class.method.ignored.modifiers "private|protected")
+        )
 
-(constructor_declaration
-  (identifier) @constructor.name
-  (formal_parameters) @constructor.parameters) @constructor.declaration
+        (constructor_declaration
+          (modifiers)? @class.method.modifiers
+            (#not-match? @class.method.modifiers "private|protected")
+          (identifier) @class.constructor.name
+          (formal_parameters) @class.constructor.parameters
+        ) @class.constructor.declaration
 
-(field_declaration
-  (variable_declarator
-    (identifier) @field.name)) @field.declaration
+        (constructor_declaration
+          (modifiers)? @class.constructor.ignored.modifiers
+            (#match? @class.constructor.ignored.modifiers "private|protected")
+        )
+
+        (field_declaration
+          (modifiers)? @class.field.modifiers
+            (#not-match? @class.field.modifiers "private|protected")
+        ) @class.field.declaration
+
+        (field_declaration
+          (modifiers)? @class.field.ignored.modifiers
+            (#match? @class.field.ignored.modifiers "private|protected")
+        ) @class.field.ignored.declaration
+
+        (_)
+      ]*
+    ) @class.body
+) @class.declaration

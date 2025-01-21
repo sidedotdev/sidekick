@@ -21,44 +21,37 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 	switch name {
 	case "class.declaration":
 		{
+			// TODO get write amount of indentation based on traversing
+			// ancestors, until node of type "program" is reached
 			out.WriteString("class ")
 		}
-	case "class.name":
+	case "class.name", "class.constructor.name", "class.method.name":
 		{
 			out.WriteString(content)
 		}
-	case "constructor.name", "method.name":
+	case "class.body":
 		{
-			// Check if the method/constructor is private
-			modifiers := c.Node.Parent().ChildByFieldName("modifiers")
-			if modifiers != nil && strings.Contains(modifiers.Content(*sourceCode), "private") {
-				return
-			}
-			out.WriteString("\t")
+			out.WriteString("\n")
+		}
+	case "class.constructor.modifiers", "class.method.modifiers", "class.method.type":
+		{
 			out.WriteString(content)
+			out.WriteString(" ")
 		}
-	case "method.parameters", "constructor.parameters":
+	case "class.constructor.declaration", "class.method.declaration":
 		{
-			// Only write parameters if the method/constructor was public (written)
-			if !strings.HasSuffix(out.String(), "\t") {
-				out.WriteString(content)
-			}
+			out.WriteString("\t") // TODO get write amount of indentation based on traversing ancestors
 		}
-	case "field.declaration":
+	case "class.method.parameters", "class.constructor.parameters":
 		{
-			modifiers := c.Node.ChildByFieldName("modifiers")
-			if modifiers == nil || !strings.Contains(modifiers.Content(*sourceCode), "public") {
-				return
-			}
-			out.WriteString("\t")
-			// Get type and name
-			typeNode := c.Node.ChildByFieldName("type")
-			nameNode := c.Node.ChildByFieldName("name")
-			if typeNode != nil && nameNode != nil {
-				out.WriteString(typeNode.Content(*sourceCode))
-				out.WriteString(" ")
-				out.WriteString(nameNode.Content(*sourceCode))
-			}
+			out.WriteString(content)
+			out.WriteString("\n")
+		}
+	case "class.field.declaration":
+		{
+			out.WriteString("\t") // TODO get write amount of indentation based on traversing ancestors
+			out.WriteString(content)
+			out.WriteString("\n")
 		}
 	}
 }
