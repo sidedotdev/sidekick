@@ -124,6 +124,11 @@ func TestGetFileSignaturesStringJava(t *testing.T) {
 			expected: "class TestClass\n\t@Override public void testMethod()\n---\n",
 		},
 		{
+			name:     "method argument with annotation",
+			code:     "class TestClass { public void testMethod(@NotNull String arg) {} }",
+			expected: "class TestClass\n\tpublic void testMethod(@NotNull String arg)\n---\n",
+		},
+		{
 			name:     "interface with annotation",
 			code:     "@FunctionalInterface interface TestInterface { void test(); }",
 			expected: "@FunctionalInterface interface TestInterface\n\tvoid test();\n---\n",
