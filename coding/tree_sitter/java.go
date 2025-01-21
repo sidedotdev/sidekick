@@ -19,7 +19,7 @@ func writeJavaSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.Q
 func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
 	content := c.Node.Content(*sourceCode)
 	switch name {
-	case "class.declaration", "annotation.declaration", "interface.declaration":
+	case "class.declaration", "annotation.declaration", "interface.declaration", "enum.declaration":
 		{
 			maybeModifiers := c.Node.Child(0)
 			if maybeModifiers != nil && maybeModifiers.Type() == "modifiers" {
@@ -45,9 +45,13 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 				{
 					out.WriteString("interface ")
 				}
+			case "enum.declaration":
+				{
+					out.WriteString("enum ")
+				}
 			}
 		}
-	case "annotation.modifiers", "class.modifiers", "interface.modifiers":
+	case "annotation.modifiers", "class.modifiers", "interface.modifiers", "enum.modifiers":
 		{
 			level := getDeclarationIndentLevel(c.Node.Parent())
 			for i := 0; i < level; i++ {
@@ -68,9 +72,13 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 				{
 					out.WriteString("interface ")
 				}
+			case "enum.modifiers":
+				{
+					out.WriteString("enum ")
+				}
 			}
 		}
-	case "annotation.name", "interface.name", "class.name", "class.constructor.name", "class.method.name":
+	case "annotation.name", "interface.name", "class.name", "class.constructor.name", "class.method.name", "enum.name", "enum.method.name", "enum.field.name":
 		{
 			out.WriteString(content)
 		}
@@ -81,11 +89,14 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 				out.WriteString(" ")
 			}
 		}
-	case "interface.body", "class.body", "annotation.body":
+	case "interface.body", "class.body", "annotation.body", "enum.body":
 		{
 			out.WriteString("\n")
 		}
-	case "interface.method.declaration", "interface.constant.declaration", "interface.field.declaration", "annotation.element.declaration":
+	case "interface.method.declaration", "interface.constant.declaration", "interface.field.declaration",
+		"class.field.declaration", "enum.field.declaration",
+		"annotation.element.declaration",
+		"enum.constant.declaration":
 		{
 			level := getDeclarationIndentLevel(c.Node)
 			for i := 0; i < level; i++ {
@@ -94,29 +105,20 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 			out.WriteString(content)
 			out.WriteString("\n")
 		}
-	case "class.constructor.modifiers", "class.method.modifiers", "class.method.type":
+	case "class.constructor.modifiers", "class.method.modifiers", "class.method.type", "enum.method.modifiers", "enum.method.type":
 		{
 			out.WriteString(content)
 			out.WriteString(" ")
 		}
-	case "class.constructor.declaration", "class.method.declaration":
+	case "class.constructor.declaration", "class.method.declaration", "enum.method.declaration":
 		{
 			level := getDeclarationIndentLevel(c.Node)
 			for i := 0; i < level; i++ {
 				out.WriteString("\t")
 			}
 		}
-	case "class.method.parameters", "class.constructor.parameters":
+	case "class.method.parameters", "class.constructor.parameters", "enum.method.parameters":
 		{
-			out.WriteString(content)
-			out.WriteString("\n")
-		}
-	case "class.field.declaration":
-		{
-			level := getDeclarationIndentLevel(c.Node)
-			for i := 0; i < level; i++ {
-				out.WriteString("\t")
-			}
 			out.WriteString(content)
 			out.WriteString("\n")
 		}

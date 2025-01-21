@@ -90,3 +90,20 @@
   )
   (#eq? @name "{{SymbolName}}")
 ) @definition
+
+; Enum constant
+(
+  [
+    (block_comment)
+    (line_comment)
+  ]* @doc
+  .
+  (enum_declaration
+    body: (_
+      (enum_constant
+        name: (identifier) @name
+      )
+    )
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition

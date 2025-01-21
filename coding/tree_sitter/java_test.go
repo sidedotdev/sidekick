@@ -194,6 +194,16 @@ public class OuterClass {
 			expected: "class TestClass\n---\n",
 		},
 		{
+			name:     "class with public constant",
+			code:     "class TestClass { public static final int CONSTANT = 42; }",
+			expected: "class TestClass\n\tpublic static final int CONSTANT = 42;\n---\n",
+		},
+		{
+			name:     "class with multiple constants",
+			code:     "class TestClass { private static final int CONSTANT1 = 42; public static final int CONSTANT2 = 43; protected static final int CONSTANT3 = 44; }",
+			expected: "class TestClass\n\tpublic static final int CONSTANT2 = 43;\n---\n",
+		},
+		{
 			name:     "class with private field",
 			code:     "class TestClass { private int field; }",
 			expected: "class TestClass\n---\n",
@@ -322,6 +332,55 @@ public class OuterClass {
 			name:     "class with multiple generic methods",
 			code:     "class Converter { public <T,R> R convert(T input) {} public <V> void validate(V value) {} }",
 			expected: "class Converter\n\tpublic <T,R> R convert(T input)\n\tpublic <V> void validate(V value)\n---\n",
+		},
+		{
+			name:     "empty enum",
+			code:     "enum EmptyEnum {}",
+			expected: "enum EmptyEnum\n---\n",
+		},
+		{
+			name:     "enum with constants",
+			code:     "enum Direction { NORTH, SOUTH, EAST, WEST }",
+			expected: "enum Direction\n\tNORTH\n\tSOUTH\n\tEAST\n\tWEST\n---\n",
+		},
+		{
+			name:     "enum with public method",
+			code:     "enum Status { OK, ERROR; public String getMessage() { return null; } }",
+			expected: "enum Status\n\tOK\n\tERROR\n\tpublic String getMessage()\n---\n",
+		},
+		{
+			name:     "enum with private method",
+			code:     "enum Status { OK, ERROR; private String getMessage() { return null; } }",
+			expected: "enum Status\n\tOK\n\tERROR\n---\n",
+		},
+		{
+			name:     "enum with constants and multiple methods",
+			code:     "enum Complex { FIRST(1), SECOND(2); private final int value; private Complex(int value) { this.value = value; } public int getValue() { return value; } }",
+			expected: "enum Complex\n\tFIRST(1)\n\tSECOND(2)\n\tpublic int getValue()\n---\n",
+		},
+		{
+			name: "nested enum in class",
+			code: `
+public class Container {
+    public enum Status {
+        ACTIVE, INACTIVE;
+        public boolean isActive() { return this == ACTIVE; }
+    }
+    private enum Hidden { ONE, TWO }
+}`,
+			expected: `public class Container
+---
+	public enum Status
+		ACTIVE
+		INACTIVE
+		public boolean isActive()
+---
+`,
+		},
+		{
+			name:     "annotated enum",
+			code:     "@Deprecated enum Legacy { OLD, OLDER }",
+			expected: "@Deprecated enum Legacy\n\tOLD\n\tOLDER\n---\n",
 		},
 	}
 
@@ -646,6 +705,20 @@ public class AnnotatedClass {
 		{
 			name:       "enum definition",
 			symbolName: "TestEnum",
+			code: `public enum TestEnum {
+    ONE,
+    TWO,
+    THREE
+}`,
+			expectedDefinition: `public enum TestEnum {
+    ONE,
+    TWO,
+    THREE
+}`,
+		},
+		{
+			name:       "enum member definition",
+			symbolName: "TWO",
 			code: `public enum TestEnum {
     ONE,
     TWO,

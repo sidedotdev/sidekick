@@ -106,10 +106,26 @@
   (modifiers)? @enum.modifiers
     (#not-match? @enum.modifiers "private|protected")
   (identifier) @enum.name
-    body: (_
+  body: (_
+    ; bug in tree-sitter means * isn't working here, so hard-coding many with ? instead
+    (enum_constant)? @enum.constant.declaration
+    (enum_constant)? @enum.constant.declaration
+    (enum_constant)? @enum.constant.declaration
+    (enum_constant)? @enum.constant.declaration
+    (enum_constant)? @enum.constant.declaration
+    (enum_constant)? @enum.constant.declaration
+    (enum_constant)? @enum.constant.declaration
+    (enum_constant)? @enum.constant.declaration
+    (enum_constant)? @enum.constant.declaration
+    (enum_constant)? @enum.constant.declaration
+    (enum_constant)? @enum.constant.declaration
+    (enum_constant)? @enum.constant.declaration
+    (enum_constant)? @enum.constant.declaration
+    (enum_constant)? @enum.constant.declaration
+    (enum_constant)? @enum.constant.declaration
+    (enum_constant)? @enum.constant.declaration
+    (enum_body_declarations
       [
-        (enum_constant) @enum.constant.declaration
-
         (method_declaration
           (modifiers)? @enum.method.modifiers
             (#not-match? @enum.method.modifiers "private|protected")
@@ -138,7 +154,8 @@
 
         (_)
       ]*
-    ) @enum.body
+    )?
+  ) @enum.body
 ) @enum.declaration
 
 ; extract method names as separate matches for symbol outline
