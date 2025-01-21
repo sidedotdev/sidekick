@@ -70,7 +70,7 @@ const newTask = ref<Task>({
   workspaceId: props.workspaceId,
 })
 
-const addTask = (agentType: 'human' | 'llm' | 'none') => {
+const addTask = (agentType: AgentType) => {
   if (agentType !== 'none') {
     isModalOpen.value = true
     newTask.value.agentType = agentType
