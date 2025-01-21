@@ -14,6 +14,31 @@ func TestGetFileSignaturesStringJava(t *testing.T) {
 		expected string
 	}{
 		{
+			name:     "empty interface",
+			code:     "interface TestInterface {}",
+			expected: "interface TestInterface\n---\n",
+		},
+		{
+			name:     "interface with method",
+			code:     "interface TestInterface { void testMethod(); }",
+			expected: "interface TestInterface\n\tvoid testMethod();\n---\n",
+		},
+		{
+			name:     "interface with multiple methods",
+			code:     "interface TestInterface { void method1(); String method2(int param); }",
+			expected: "interface TestInterface\n\tvoid method1();\n\tString method2(int param);\n---\n",
+		},
+		{
+			name:     "public interface",
+			code:     "public interface TestInterface { void method(); }",
+			expected: "interface public TestInterface\n\tvoid method();\n---\n",
+		},
+		{
+			name:     "interface with constant",
+			code:     "interface TestInterface { public static final int CONSTANT = 42; void method(); }",
+			expected: "interface TestInterface\n\tpublic static final int CONSTANT = 42;\n\tvoid method();\n---\n",
+		},
+		{
 			name:     "empty",
 			code:     "",
 			expected: "",

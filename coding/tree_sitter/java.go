@@ -9,7 +9,7 @@ import (
 func writeJavaSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
 	content := c.Node.Content(*sourceCode)
 	switch name {
-	case "class.name", "interface.name", "method.name":
+	case "class.name", "interface.name", "method.name", "constructor.name", "field.name", "interface.constant.name":
 		{
 			out.WriteString(content)
 		}
@@ -24,6 +24,29 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 			// TODO get write amount of indentation based on traversing
 			// ancestors, until node of type "program" is reached
 			out.WriteString("class ")
+		}
+	case "interface.declaration":
+		{
+			out.WriteString("interface ")
+		}
+	case "interface.modifiers":
+		{
+			out.WriteString(content)
+			out.WriteString(" ")
+		}
+	case "interface.name":
+		{
+			out.WriteString(content)
+		}
+	case "interface.body":
+		{
+			out.WriteString("\n")
+		}
+	case "interface.method.declaration", "interface.constant.declaration", "interface.field.declaration":
+		{
+			out.WriteString("\t") // TODO get write amount of indentation based on traversing ancestors
+			out.WriteString(content)
+			out.WriteString("\n")
 		}
 	case "class.name", "class.constructor.name", "class.method.name":
 		{

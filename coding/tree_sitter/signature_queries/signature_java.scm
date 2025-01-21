@@ -1,3 +1,16 @@
+(interface_declaration
+  (modifiers)? @interface.modifiers
+  (identifier) @interface.name
+    body: (_
+      [
+        (method_declaration) @interface.method.declaration
+        (constant_declaration) @interface.constant.declaration
+        (field_declaration) @interface.field.declaration
+        (_)
+      ]*
+    ) @interface.body
+) @interface.declaration
+
 (class_declaration
   (identifier) @class.name
     body: (_
@@ -30,7 +43,7 @@
         (field_declaration
           (modifiers)? @class.field.modifiers
             (#not-match? @class.field.modifiers "private|protected")
-          declarator: (_
+          (variable_declarator
             (identifier) @class.field.name
           )
         ) @class.field.declaration
@@ -39,6 +52,19 @@
           (modifiers)? @class.field.ignored.modifiers
             (#match? @class.field.ignored.modifiers "private|protected")
         ) @class.field.ignored.declaration
+
+        (constant_declaration
+          (modifiers)? @class.constant.modifiers
+            (#not-match? @class.constant.modifiers "private|protected")
+          (variable_declarator
+            (identifier) @class.constant.name
+          )
+        ) @class.constant.declaration
+
+        (constant_declaration
+          (modifiers)? @class.constant.ignored.modifiers
+            (#match? @class.constant.ignored.modifiers "private|protected")
+        ) @class.constant.ignored.declaration
 
         (_)
       ]*

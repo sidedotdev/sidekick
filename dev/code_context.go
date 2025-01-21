@@ -126,11 +126,11 @@ func PrepareRepoSummary(dCtx DevContext, requirements string) (string, string, e
 func GetRankedRepoSummary(dCtx DevContext, rankQuery string) (string, error) {
 	options := persisted_ai.RankedDirSignatureOutlineOptions{
 		RankedViaEmbeddingOptions: persisted_ai.RankedViaEmbeddingOptions{
-			WorkspaceId:   dCtx.WorkspaceId,
-			EnvContainer:  *dCtx.EnvContainer,
-			RankQuery:     rankQuery,
-			Secrets:       *dCtx.Secrets,
-			ModelConfig:   dCtx.GetEmbeddingModelConfig(common.DefaultKey),
+			WorkspaceId:  dCtx.WorkspaceId,
+			EnvContainer: *dCtx.EnvContainer,
+			RankQuery:    rankQuery,
+			Secrets:      *dCtx.Secrets,
+			ModelConfig:  dCtx.GetEmbeddingModelConfig(common.DefaultKey),
 		},
 		CharLimit: min(defaultMaxChatHistoryLength/2, 15000), // ensure we leave space for other messages
 	}
@@ -249,7 +249,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			}
 			addCodeContextPrompt(chatHistory, userFeedback)
 			iterationsSinceLastFeedback = 0
-		} else if attempts % 3 == 0 {
+		} else if attempts%3 == 0 {
 			chatCtx := actionCtx.DevContext.WithCancelOnPause()
 			toolCall, err := ForceToolBulkSearchRepository(chatCtx, chatHistory)
 			if actionCtx.GlobalState != nil && actionCtx.GlobalState.Paused {
