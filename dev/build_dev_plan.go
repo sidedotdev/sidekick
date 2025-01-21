@@ -10,6 +10,7 @@ import (
 
 	"github.com/invopop/jsonschema"
 	"github.com/sashabaranov/go-openai"
+	"go.temporal.io/sdk/workflow"
 )
 
 type buildDevPlanState struct {
@@ -201,7 +202,12 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 				if err != nil {
 					return nil, fmt.Errorf("error getting plan approval: %w", err)
 				}
-				iteration.NumSinceLastFeedback = 0
+
+				v := workflow.GetVersion(iteration.ExecCtx, "dev-plan", workflow.DefaultVersion, 1)
+				if v == 1 {
+					iteration.NumSinceLastFeedback = 0
+				}
+
 				if userResponse.Approved != nil && *userResponse.Approved {
 					return &validatedDevPlan, nil
 				} else {
