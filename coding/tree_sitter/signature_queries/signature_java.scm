@@ -102,8 +102,58 @@
     ) @class.body
 ) @class.declaration
 
+(enum_declaration
+  (modifiers)? @enum.modifiers
+    (#not-match? @enum.modifiers "private|protected")
+  (identifier) @enum.name
+    body: (_
+      [
+        (enum_constant) @enum.constant.declaration
+
+        (method_declaration
+          (modifiers)? @enum.method.modifiers
+            (#not-match? @enum.method.modifiers "private|protected")
+          type: (_) @enum.method.type
+          (identifier) @enum.method.name
+          (formal_parameters) @enum.method.parameters
+        ) @enum.method.declaration
+
+        (method_declaration
+          (modifiers)? @enum.method.ignored.modifiers
+            (#match? @enum.method.ignored.modifiers "private|protected")
+        )
+
+        (field_declaration
+          (modifiers)? @enum.field.modifiers
+            (#not-match? @enum.field.modifiers "private|protected")
+          (variable_declarator
+            (identifier) @enum.field.name
+          )
+        ) @enum.field.declaration
+
+        (field_declaration
+          (modifiers)? @enum.field.ignored.modifiers
+            (#match? @enum.field.ignored.modifiers "private|protected")
+        ) @enum.field.ignored.declaration
+
+        (_)
+      ]*
+    ) @enum.body
+) @enum.declaration
+
 ; extract method names as separate matches for symbol outline
 (class_declaration
+  body: (_
+    (method_declaration
+      (modifiers)? @method.modifiers
+        (#not-match? @method.modifiers "private|protected")
+      (identifier) @method.name
+    )
+  )
+)
+
+; extract enum method names as separate matches for symbol outline
+(enum_declaration
   body: (_
     (method_declaration
       (modifiers)? @method.modifiers
