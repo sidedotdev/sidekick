@@ -421,6 +421,71 @@ public class Complex {
 }`,
 			expected: "Complex, add, subtract",
 		},
+		{
+			name: "interface declaration",
+			code: `
+public interface Drawable {
+    void draw();
+    void resize();
+}`,
+			expected: "Drawable",
+		},
+		{
+			name: "annotation declaration",
+			code: `
+public @interface TestAnnotation {
+    String value() default "";
+    int count() default 0;
+}`,
+			expected: "TestAnnotation",
+		},
+		{
+			name: "nested class",
+			code: `
+public class Outer {
+    private int x;
+    
+    public class Inner {
+        public void innerMethod() {
+            System.out.println("Inner method");
+        }
+    }
+    
+    public void outerMethod() {
+        System.out.println("Outer method");
+    }
+}`,
+			expected: "Outer, outerMethod, Inner, innerMethod",
+		},
+		{
+			name: "multiple classes in single file",
+			code: `
+class First {
+    public void firstMethod() {}
+}
+
+class Second {
+    public void secondMethod() {}
+}
+
+class Third {
+    private void thirdMethod() {}
+}`,
+			expected: "First, Second, Third, firstMethod, secondMethod",
+		},
+		{
+			name: "class inheritance",
+			code: `
+public class Animal {
+    public void makeSound() {}
+}
+
+public class Dog extends Animal {
+    public void bark() {}
+    private void sleep() {}
+}`,
+			expected: "Animal, Dog, makeSound, bark",
+		},
 	}
 
 	for _, test := range tests {
