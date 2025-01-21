@@ -36,20 +36,12 @@
 ) @annotation.declaration
 
 (class_declaration
-  [
-    (modifiers)? @class.modifiers
-    (marker_annotation)* @class.annotations
-    (annotation)* @class.annotations
-  ]
+  (modifiers)? @class.modifiers
   (identifier) @class.name
     body: (_
       [
         (method_declaration
-          [
-            (modifiers)? @class.method.modifiers
-            (marker_annotation)* @class.method.annotations
-            (annotation)* @class.method.annotations
-          ]
+          (modifiers)? @class.method.modifiers
             (#not-match? @class.method.modifiers "private|protected")
           type: (_) @class.method.type
           (identifier) @class.method.name
@@ -62,11 +54,7 @@
         )
 
         (constructor_declaration
-          [
-            (modifiers)? @class.constructor.modifiers
-            (marker_annotation)* @class.constructor.annotations
-            (annotation)* @class.constructor.annotations
-          ]
+          (modifiers)? @class.constructor.modifiers
             (#not-match? @class.constructor.modifiers "private|protected")
           (identifier) @class.constructor.name
           (formal_parameters) @class.constructor.parameters
@@ -78,11 +66,7 @@
         )
 
         (field_declaration
-          [
-            (modifiers)? @class.field.modifiers
-            (marker_annotation)* @class.field.annotations
-            (annotation)* @class.field.annotations
-          ]
+          (modifiers)? @class.field.modifiers
             (#not-match? @class.field.modifiers "private|protected")
           (variable_declarator
             (identifier) @class.field.name
