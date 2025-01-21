@@ -14,7 +14,7 @@ import { ref, onMounted, watch, onUnmounted } from 'vue'
 import type { Ref } from 'vue'
 import KanbanBoard from '../components/KanbanBoard.vue'
 import { store } from '../lib/store'
-import type { Task, FullTask } from '../lib/models'
+import type { FullTask } from '../lib/models'
 
 const parseTaskDates = (task: any): FullTask => {
   if (task.created) task.created = new Date(task.created)
@@ -24,8 +24,7 @@ const parseTaskDates = (task: any): FullTask => {
 }
 
 const tasks: Ref<Array<FullTask>> = ref([])
-const showGuidedOverlay = ref(false)
-const isInitialLoad = ref(true)
+const showGuidedOverlay = ref(localStorage.getItem('guidedTourNeeded') !== 'false')
 let socket: WebSocket | null = null
 let socketClosed = false
 let lastTaskStreamId: string | null = null
@@ -36,10 +35,11 @@ const fetchTasks = async () => {
       const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/tasks`)
       const data = await response.json()
       tasks.value = data.tasks.map((task: any) => parseTaskDates(task))
-      if (isInitialLoad.value && tasks.value.length === 0) {
-        showGuidedOverlay.value = true
+      if (tasks.value.length > 0) {
+        // If there are any tasks, user never needs the guided tour again
+        localStorage.setItem('guidedTourNeeded', 'false')
+        showGuidedOverlay.value = false
       }
-      isInitialLoad.value = false
     } catch (error) {
       console.error('Failed to fetch tasks:', error)
     }
@@ -47,6 +47,7 @@ const fetchTasks = async () => {
 }
 
 const handleOverlayDismiss = () => {
+  localStorage.setItem('guidedTourNeeded', 'false')
   showGuidedOverlay.value = false
 }
 
