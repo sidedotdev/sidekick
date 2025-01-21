@@ -68,6 +68,92 @@ func TestGetSymbolDefinitionJava(t *testing.T) {
 			code:          "public class SomeClass {}",
 			expectedError: `symbol not found: NonExistentSymbol`,
 		},
+		{
+			name:       "interface definition",
+			symbolName: "TestInterface",
+			code: `public interface TestInterface {
+    void testMethod();
+    String getName();
+}`,
+			expectedDefinition: `public interface TestInterface {
+    void testMethod();
+    String getName();
+}`,
+		},
+		{
+			name:       "annotation definition",
+			symbolName: "TestAnnotation",
+			code: `@interface TestAnnotation {
+    String value() default "";
+}`,
+			expectedDefinition: `@interface TestAnnotation {
+    String value() default "";
+}`,
+		},
+		{
+			name:       "nested class",
+			symbolName: "InnerClass",
+			code: `public class OuterClass {
+    private static class InnerClass {
+        private String field;
+    }
+}`,
+			expectedDefinition: `    private static class InnerClass {
+        private String field;
+    }`,
+		},
+		{
+			name:       "field definition",
+			symbolName: "field",
+			code: `public class TestClass {
+    private static final String field = "test";
+}`,
+			expectedDefinition: `    private static final String field = "test";`,
+		},
+		{
+			name:       "annotated class",
+			symbolName: "AnnotatedClass",
+			code: `@Deprecated
+@SuppressWarnings("unchecked")
+public class AnnotatedClass {
+    private String name;
+}`,
+			expectedDefinition: `@Deprecated
+@SuppressWarnings("unchecked")
+public class AnnotatedClass {
+    private String name;
+}`,
+		},
+		{
+			name:       "annotated method",
+			symbolName: "annotatedMethod",
+			code: `public class TestClass {
+    @Override
+    @Deprecated
+    public void annotatedMethod() {
+        System.out.println("test");
+    }
+}`,
+			expectedDefinition: `    @Override
+    @Deprecated
+    public void annotatedMethod() {
+        System.out.println("test");
+    }`,
+		},
+		{
+			name:       "enum definition",
+			symbolName: "TestEnum",
+			code: `public enum TestEnum {
+    ONE,
+    TWO,
+    THREE
+}`,
+			expectedDefinition: `public enum TestEnum {
+    ONE,
+    TWO,
+    THREE
+}`,
+		},
 	}
 
 	for _, tc := range testCases {
