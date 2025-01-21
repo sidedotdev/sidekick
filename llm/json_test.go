@@ -4,6 +4,59 @@ import (
 	"testing"
 )
 
+func TestParseJsonValue(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "valid json array",
+			input:    `[{"key": "value"}]`,
+			expected: `[{"key":"value"}]`,
+		},
+		{
+			name:     "valid json object",
+			input:    `{"key": "value"}`,
+			expected: `{"key":"value"}`,
+		},
+		{
+			name:     "valid json array with whitespace",
+			input:    ` [ { "key" : "value" } ] `,
+			expected: `[{"key":"value"}]`,
+		},
+		{
+			name:     "invalid json",
+			input:    `[{"key": "value"`,
+			expected: `[{"key": "value"`,
+		},
+		{
+			name:     "non-json string",
+			input:    `just a string`,
+			expected: `just a string`,
+		},
+		{
+			name:     "string ending with </invoke>",
+			input:    `[{"key": "value"}]</invoke>`,
+			expected: `[{"key": "value"}]</invoke>`,
+		},
+		{
+			name:     "nested json structure",
+			input:    `{"outer": {"inner": [1,2,3]}}`,
+			expected: `{"outer":{"inner":[1,2,3]}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseJsonValue(tt.input)
+			if got != tt.expected {
+				t.Errorf("parseJsonValue() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestRepairJson(t *testing.T) {
 	tests := []struct {
 		input    string

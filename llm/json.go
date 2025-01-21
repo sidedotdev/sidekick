@@ -1,6 +1,38 @@
 package llm
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
+
+// parseJsonValue attempts to parse a string as a JSON array or object.
+// If successful, it returns the parsed JSON structure as a string.
+// If unsuccessful, it returns the original string unchanged.
+func parseJsonValue(input string) string {
+	// Trim whitespace
+	trimmed := strings.TrimSpace(input)
+
+	// Quick check - must start with [ or { and end with ] or }
+	if len(trimmed) < 2 || !((trimmed[0] == '[' && trimmed[len(trimmed)-1] == ']') ||
+		(trimmed[0] == '{' && trimmed[len(trimmed)-1] == '}')) {
+		return input
+	}
+
+	// Try to parse as JSON
+	var parsed interface{}
+	err := json.Unmarshal([]byte(trimmed), &parsed)
+	if err != nil {
+		return input
+	}
+
+	// If we successfully parsed, re-encode to ensure consistent formatting
+	formatted, err := json.Marshal(parsed)
+	if err != nil {
+		return input
+	}
+
+	return string(formatted)
+}
 
 func RepairJson(input string) string {
 	return escapeNewLinesInJSON(input)
