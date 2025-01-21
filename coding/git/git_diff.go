@@ -13,6 +13,8 @@ import (
 type GitDiffParams struct {
 	FilePaths        []string
 	CommitSHA        string
+	BaseBranch       string
+	ThreeDotDiff     bool
 	IgnoreWhitespace bool
 	Staged           bool
 }
@@ -71,15 +73,27 @@ func GitDiffLegacy(eCtx flow_action.ExecContext) (string, error) {
 func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
 	var gitDiffOutput env.EnvRunCommandActivityOutput
 	args := []string{"diff"}
-	if params.CommitSHA != "" {
-		args = append(args, params.CommitSHA)
+
+	if params.ThreeDotDiff {
+		if params.BaseBranch == "" {
+			return "", fmt.Errorf("base branch is required for three-dot diff")
+		}
+		// Use three-dot syntax to show changes between branches
+		args = append(args, fmt.Sprintf("%s...HEAD", params.BaseBranch))
+	} else {
+		// Original behavior for non-three-dot diffs
+		if params.CommitSHA != "" {
+			args = append(args, params.CommitSHA)
+		}
+		if params.Staged {
+			args = append(args, "--staged")
+		}
 	}
+
 	if params.IgnoreWhitespace {
 		args = append(args, "-w")
 	}
-	if params.Staged {
-		args = append(args, "--staged")
-	}
+
 	args = append(args, params.FilePaths...)
 	gitDiffOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
