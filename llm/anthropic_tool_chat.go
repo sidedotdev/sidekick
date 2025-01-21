@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sidekick/common"
+	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -163,7 +164,7 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 
 		if msg.Content != "" {
 			if msg.Role == ChatMessageRoleTool {
-				block := anthropic.NewToolResultBlock(msg.ToolCallId, msg.Content, msg.IsError)
+				block := anthropic.NewToolResultBlock(msg.ToolCallId, invalidJsonWorkaround(msg.Content), msg.IsError)
 				if msg.CacheControl != "" {
 					block.CacheControl = anthropic.F(anthropic.CacheControlEphemeralParam{
 						Type: anthropic.F(anthropic.CacheControlEphemeralType(msg.CacheControl)),
@@ -171,7 +172,7 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 				}
 				blocks = append(blocks, block)
 			} else {
-				block := anthropic.NewTextBlock(msg.Content)
+				block := anthropic.NewTextBlock(invalidJsonWorkaround(msg.Content))
 				if msg.CacheControl != "" {
 					block.CacheControl = anthropic.F(anthropic.CacheControlEphemeralParam{
 						Type: anthropic.F(anthropic.CacheControlEphemeralType(msg.CacheControl)),
@@ -218,6 +219,12 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 	}
 
 	return mergedAnthropicMessages, nil
+}
+
+func invalidJsonWorkaround(s string) string {
+	// replace "\x1b" with "" to avoid invalid json error from anthropic
+	// with current version of sdk
+	return strings.ReplaceAll(s, "\x1b", "")
 }
 
 func anthropicFromChatMessageRole(role ChatMessageRole) anthropic.MessageParamRole {
