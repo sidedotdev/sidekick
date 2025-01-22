@@ -1,5 +1,18 @@
 <template>
   <div>
+    <div v-if="useCaseMode" class="use-case-selector">
+      <label for="useCase">Use Case:</label>
+      <select id="useCase" v-model="selectedUseCaseValue" required>
+        <option value="">Select Use Case</option>
+        <option v-for="useCase in USE_CASES" 
+                :key="useCase" 
+                :value="useCase">{{ useCase }}</option>
+      </select>
+      <button 
+        type="button" 
+        @click="$emit('remove-use-case')" 
+        class="remove-btn">Remove Use Case</button>
+    </div>
     <div v-for="(config, index) in modelValue" :key="index" class="config-item">
       <label :for="'provider' + index">Provider:</label>
       <select :id="'provider' + index" v-model="config.provider" required>
@@ -19,17 +32,30 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { ModelConfig } from '@/lib/models';
 
+const USE_CASES = ['planning', 'coding', 'code_localization', 'judging', 'summarization', 'query_expansion'] as const;
+
 const props = defineProps<{
+  useCaseMode?: boolean;
+  selectedUseCase?: string;
   modelValue: ModelConfig[];
   type: 'llm' | 'embedding';
 }>();
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: ModelConfig[]): void;
+  (e: 'update:selectedUseCase', value: string): void;
+  (e: 'remove-use-case'): void;
 }>();
+
+const selectedUseCaseValue = computed({
+  get: () => props.selectedUseCase || '',
+  set: (value: string) => {
+    emit('update:selectedUseCase', value);
+  }
+});
 
 const availableProviders = computed(() => {
   if (props.type === 'llm') {
@@ -53,6 +79,17 @@ const removeConfig = (index: number) => {
 </script>
 
 <style scoped>
+.use-case-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.use-case-selector select {
+  flex: 1;
+}
+
 .config-item {
   display: flex;
   align-items: center;

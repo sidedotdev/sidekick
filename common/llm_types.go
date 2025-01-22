@@ -43,11 +43,11 @@ const (
 // metadata around the execution of the chat inference
 type ChatMessageResponse struct {
 	ChatMessage
-	Id           string       `json:"id"`
-	StopReason   string       `json:"stopReason"` // TODO enum
-	StopSequence string       `json:"stopSequence"`
-	Usage        Usage        `json:"usage"`
-	Model        string       `json:"model"`
+	Id           string `json:"id"`
+	StopReason   string `json:"stopReason"` // TODO enum
+	StopSequence string `json:"stopSequence"`
+	Usage        Usage  `json:"usage"`
+	Model        string `json:"model"`
 	Provider     string `json:"provider"`
 }
 
