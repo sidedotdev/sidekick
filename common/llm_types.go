@@ -48,7 +48,7 @@ type ChatMessageResponse struct {
 	StopSequence string       `json:"stopSequence"`
 	Usage        Usage        `json:"usage"`
 	Model        string       `json:"model"`
-	Provider     ChatProvider `json:"provider"`
+	Provider     string `json:"provider"`
 }
 
 type Usage struct {

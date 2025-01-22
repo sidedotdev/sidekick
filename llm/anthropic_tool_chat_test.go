@@ -30,7 +30,7 @@ func TestAnthropicChatStream_Unauthorized(t *testing.T) {
 				},
 			},
 			ModelConfig: common.ModelConfig{
-				Provider: string(common.AnthropicChatProvider),
+				Provider: "anthropic",
 				Model:    AnthropicDefaultModel,
 			},
 		},
@@ -131,7 +131,7 @@ func TestAnthropicToChatMessageResponse(t *testing.T) {
 		},
 	}
 
-	result, err := anthropicToChatMessageResponse(*input)
+	result, err := anthropicToChatMessageResponse(*input, "anthropic")
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -147,7 +147,7 @@ func TestAnthropicToChatMessageResponse(t *testing.T) {
 		InputTokens:  100,
 		OutputTokens: 50,
 	}, result.Usage)
-	assert.Equal(t, common.AnthropicChatProvider, result.Provider)
+	assert.Equal(t, "anthropic", result.Provider)
 }
 
 type getCurrentWeather struct {
@@ -175,7 +175,7 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 	options := ToolChatOptions{
 		Params: ToolChatParams{
 			ModelConfig: common.ModelConfig{
-				Provider: string(common.AnthropicChatProvider),
+				Provider: "anthropic",
 				Model:    anthropic.ModelClaude_3_Haiku_20240307, // cheapest model for integration testing
 			},
 			Messages: []ChatMessage{

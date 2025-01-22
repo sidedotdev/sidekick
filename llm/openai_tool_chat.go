@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sidekick/common"
 	"sidekick/utils"
 	"strings"
 
@@ -119,7 +118,7 @@ func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		StopReason:  string(finishReason), // TODO /gen convert this properly, once we have an enum defined for stop reasons
 		Usage:       openaiToUsage(usage),
 		Model:       model,
-		Provider:    common.OpenaiChatProvider,
+		Provider:    options.Params.Provider,
 	}, nil
 }
 

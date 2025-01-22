@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sidekick/common"
 	"strings"
 	"time"
 
@@ -109,7 +108,7 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 
 	log.Trace().Interface("responseMessage", finalMessage).Msg("Anthropic tool chat response message")
 
-	response, err := anthropicToChatMessageResponse(finalMessage)
+	response, err := anthropicToChatMessageResponse(finalMessage, options.Params.Provider)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert response: %w", err)
 	}
@@ -251,7 +250,7 @@ func anthropicFromTools(tools []*Tool) ([]anthropic.ToolParam, error) {
 	return result, nil
 }
 
-func anthropicToChatMessageResponse(message anthropic.Message) (*ChatMessageResponse, error) {
+func anthropicToChatMessageResponse(message anthropic.Message, provider string) (*ChatMessageResponse, error) {
 	response := &ChatMessageResponse{
 		ChatMessage: ChatMessage{
 			Role:    ChatMessageRoleAssistant,
@@ -265,7 +264,7 @@ func anthropicToChatMessageResponse(message anthropic.Message) (*ChatMessageResp
 			OutputTokens: int(message.Usage.OutputTokens),
 		},
 		Model:    message.Model,
-		Provider: common.AnthropicChatProvider,
+		Provider: provider,
 	}
 
 	for _, block := range message.Content {
