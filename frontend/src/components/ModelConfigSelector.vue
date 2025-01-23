@@ -14,13 +14,19 @@
         class="remove-btn">Remove Use Case</button>
     </div>
     <div v-for="(config, index) in modelValue" :key="index" class="config-item">
-      <label :for="'provider' + index">Provider:</label>
-      <select :id="'provider' + index" v-model="config.provider" required>
+      <label :for="type + '-provider' + index">Provider:</label>
+      <select :id="type + '-provider' + index" v-model="config.provider" required>
         <option value="">Select</option>
         <option v-for="provider in availableProviders" 
                 :key="provider" 
                 :value="provider">{{ provider }}</option>
       </select>
+      <label :for="type + '-model' + index">Model:</label>
+      <input 
+        type="text" 
+        :id="type + '-model' + index" 
+        v-model="config.model" 
+        required>
       <button 
         type="button" 
         @click="removeConfig(index)" 
@@ -95,6 +101,11 @@ const removeConfig = (index: number) => {
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.5rem;
+}
+
+.config-item input[type="text"] {
+  flex: 1;
+  min-width: 8rem;
 }
 
 .add-btn, .remove-btn {

@@ -14,9 +14,31 @@
         v-model="llmConfig.defaults"
         type="llm"
       />
+      <ExpandableSection
+        v-model="llmAdvancedExpanded"
+        title="Advanced Settings"
+      >
+        <template v-for="(configs, useCase) in llmConfig.useCaseConfigs" :key="useCase">
+          <ModelConfigSelector
+            v-model="llmConfig.useCaseConfigs[String(useCase)]"
+            :selected-use-case="String(useCase)"
+            type="llm"
+            use-case-mode
+            @remove-use-case="removeUseCaseConfig('llm', String(useCase))"
+          />
+        </template>
+        <ModelConfigSelector
+          :model-value="[{ provider: '', model: '' }]"
+          type="llm"
+          use-case-mode
+          @update:selected-use-case="addUseCaseConfig('llm', $event)"
+          @update:model-value="updateEmptyUseCaseConfig($event)"
+        />
+      </ExpandableSection>
     </div>
     <div>
       <h3>Embeddings</h3>
+      <!-- Note: Embeddings intentionally do not support use case configs -->
       <ModelConfigSelector
         v-model="embeddingConfig.defaults"
         type="embedding"
@@ -29,7 +51,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import ModelConfigSelector from '@/components/ModelConfigSelector.vue';
-import type { Workspace, LLMConfig, EmbeddingConfig } from '@/lib/models';
+import ExpandableSection from '@/components/ExpandableSection.vue';
+import type { Workspace, LLMConfig, EmbeddingConfig, ModelConfig } from '@/lib/models';
 
 const props = defineProps<{
   workspace: Workspace;
@@ -42,21 +65,45 @@ const emit = defineEmits<{
 
 const name = ref('');
 const localRepoDir = ref('');
-const llmConfig = ref<LLMConfig>({ defaults: [{ provider: '', model: '' }], useCaseConfigs: {} });
-const embeddingConfig = ref<EmbeddingConfig>({ defaults: [{ provider: '', model: '' }], useCaseConfigs: {} });
+const llmConfig = ref<LLMConfig>({ 
+  defaults: props.workspace.llmConfig?.defaults?.length ? [...props.workspace.llmConfig.defaults] : [{ provider: '', model: '' }], 
+  useCaseConfigs: props.workspace.llmConfig?.useCaseConfigs ? { ...props.workspace.llmConfig.useCaseConfigs } : {} 
+});
+const embeddingConfig = ref<EmbeddingConfig>({ 
+  defaults: props.workspace.embeddingConfig?.defaults?.length ? [...props.workspace.embeddingConfig.defaults] : [{ provider: '', model: '' }], 
+  useCaseConfigs: props.workspace.embeddingConfig?.useCaseConfigs ? { ...props.workspace.embeddingConfig.useCaseConfigs } : {} 
+});
+
+const llmAdvancedExpanded = ref(false);
+const embeddingAdvancedExpanded = ref(false);
 
 const isEditing = computed(() => !!props.workspace.id);
+
+const addUseCaseConfig = (configType: 'llm' | 'embedding', useCase: string) => {
+  const config = configType === 'llm' ? llmConfig : embeddingConfig;
+  if (!config.value.useCaseConfigs[useCase]) {
+    config.value.useCaseConfigs[useCase] = [{ provider: '', model: '' }];
+  }
+};
+
+const removeUseCaseConfig = (configType: 'llm' | 'embedding', useCase: string) => {
+  const config = configType === 'llm' ? llmConfig : embeddingConfig;
+  delete config.value.useCaseConfigs[useCase];
+};
+
+const updateEmptyUseCaseConfig = (newConfig: ModelConfig[]) => {
+  // This handles the "Add Fallback" button for the empty use case config selector
+  if (newConfig.length > 1) {
+    const lastConfig = newConfig[newConfig.length - 1];
+    const emptyConfig = { provider: '', model: '' };
+    return [emptyConfig];
+  }
+};
 
 onMounted(() => {
   if (props.workspace) {
     name.value = props.workspace.name;
     localRepoDir.value = props.workspace.localRepoDir;
-    if (props.workspace.llmConfig != null && props.workspace.llmConfig.defaults.length > 0) {
-      llmConfig.value = props.workspace.llmConfig;
-    }
-    if (props.workspace.embeddingConfig != null && props.workspace.embeddingConfig.defaults.length > 0) {
-      embeddingConfig.value = props.workspace.embeddingConfig;
-    }
   }
 });
 

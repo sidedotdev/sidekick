@@ -27,10 +27,8 @@ describe('WorkspaceForm.vue', () => {
 ;
     await wrapper.find('#name').setValue('New Workspace');
     await wrapper.find('#localRepoDir').setValue('/local/repo/dir');
-    // Set LLM provider
-    await wrapper.findAll('#provider0').at(0)?.setValue('openai');
-    // Set embedding provider
-    await wrapper.findAll('#provider0').at(1)?.setValue('openai');
+    await wrapper.find('#llm-provider0').setValue('openai');
+    await wrapper.find('#embedding-provider0').setValue('openai');
     await wrapper.find('form').trigger('submit.prevent');
 
     expect(mockFetch).toHaveBeenCalledWith('/api/v1/workspaces', {
@@ -78,10 +76,8 @@ describe('WorkspaceForm.vue', () => {
 
     await wrapper.find('#name').setValue('Updated Workspace');
     await wrapper.find('#localRepoDir').setValue('/updated/repo/dir');
-    // Set LLM provider
-    await wrapper.findAll('#provider0').at(0)?.setValue('openai');
-    // Set embedding provider
-    await wrapper.findAll('#provider0').at(1)?.setValue('openai');
+    await wrapper.find('#llm-provider0').setValue('openai');
+    await wrapper.find('#embedding-provider0').setValue('openai');
     await wrapper.find('form').trigger('submit.prevent');
 
     expect(mockFetch).toHaveBeenCalledWith('/api/v1/workspaces/456', {
@@ -135,9 +131,7 @@ describe('WorkspaceForm.vue', () => {
 
     expect((wrapper.find('#name').element as HTMLInputElement).value).toBe('Existing Workspace');
     expect((wrapper.find('#localRepoDir').element as HTMLInputElement).value).toBe('/existing/repo/dir');
-    // Check LLM provider
-    expect((wrapper.findAll('#provider0').at(0)?.element as HTMLSelectElement).value).toBe('anthropic');
-    // Check embedding provider
-    expect((wrapper.findAll('#provider0').at(1)?.element as HTMLSelectElement).value).toBe('openai');
+    expect((wrapper.find('#llm-provider0').element as HTMLSelectElement).value).toBe('anthropic');
+    expect((wrapper.find('#embedding-provider0').element as HTMLSelectElement).value).toBe('openai');
   });
 });
