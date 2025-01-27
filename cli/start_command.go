@@ -13,6 +13,7 @@ import (
 	"sidekick/worker"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -425,6 +426,23 @@ func handleStartCommand(args []string) {
 				log.Error().Err(err).Msg("Error stopping NATS server")
 			}
 		}()
+	}
+
+	if server {
+		time.Sleep(time.Second)
+		fmt.Print(`
+  ______  __       __          __       __          __       
+ /      \|  \     |  \        |  \     |  \        |  \      
+|  ▓▓▓▓▓▓\\▓▓ ____| ▓▓ ______ | ▓▓   __ \▓▓ _______| ▓▓   __ 
+| ▓▓___\▓▓  \/      ▓▓/      \| ▓▓  /  \  \/       \ ▓▓  /  \
+ \▓▓    \| ▓▓  ▓▓▓▓▓▓▓  ▓▓▓▓▓▓\ ▓▓_/  ▓▓ ▓▓  ▓▓▓▓▓▓▓ ▓▓_/  ▓▓
+ _\▓▓▓▓▓▓\ ▓▓ ▓▓  | ▓▓ ▓▓    ▓▓ ▓▓   ▓▓| ▓▓ ▓▓     | ▓▓   ▓▓ 
+|  \__| ▓▓ ▓▓ ▓▓__| ▓▓ ▓▓▓▓▓▓▓▓ ▓▓▓▓▓▓\| ▓▓ ▓▓_____| ▓▓▓▓▓▓\ 
+ \▓▓    ▓▓ ▓▓\▓▓    ▓▓\▓▓     \ ▓▓  \▓▓\ ▓▓\▓▓     \ ▓▓  \▓▓\
+  \▓▓▓▓▓▓ \▓▓ \▓▓▓▓▓▓▓ \▓▓▓▓▓▓▓\▓▓   \▓▓\▓▓ \▓▓▓▓▓▓▓\▓▓   \▓▓
+
+`)
+		fmt.Printf("To use the Sidekick UI, go to: http://localhost:%d\n\n", common.GetServerPort())
 	}
 
 	// Wait for interrupt signal to gracefully shutdown the server
