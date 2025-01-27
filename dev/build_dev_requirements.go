@@ -114,23 +114,32 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 					return &devReq, nil // break the loop with the final result
 				} else {
 					feedback := "Requirements were not approved and therefore not recorded. Please try again, taking this feedback into account:\n\n" + userResponse.Content
-					toolResponse := ToolCallResponseInfo{Response: feedback, FunctionName: toolCall.Name, TooCallId: toolCall.Id}
+					toolResponse := ToolCallResponseInfo{Response: feedback, FunctionName: toolCall.Name, ToolCallId: toolCall.Id}
 					addToolCallResponse(iteration.ChatHistory, toolResponse)
 				}
 			} else if unmarshalErr != nil {
-				if chatResponse.ToolCalls[0].Name == getHelpOrInputTool.Name {
-					iteration.NumSinceLastFeedback = 0
-				}
-				toolResponse := ToolCallResponseInfo{Response: unmarshalErr.Error(), FunctionName: recordDevRequirementsTool.Name, TooCallId: toolCall.Id, IsError: true}
+				toolResponse := ToolCallResponseInfo{Response: unmarshalErr.Error(), FunctionName: recordDevRequirementsTool.Name, ToolCallId: toolCall.Id, IsError: true}
 				addToolCallResponse(iteration.ChatHistory, toolResponse)
 			} else {
-				toolResponse := ToolCallResponseInfo{Response: "Recorded partial requirements, but requirements are not complete yet based on the \"are_requirements_complete\" boolean field value being set to false. Do some more research or thinking or get help/input to complete the plan, as needed. Once the planning is complete, record the plan again in full.", FunctionName: recordDevPlanTool.Name, TooCallId: toolCall.Id}
+				toolResponse := ToolCallResponseInfo{Response: "Recorded partial requirements, but requirements are not complete yet based on the \"are_requirements_complete\" boolean field value being set to false. Do some more research or thinking or get help/input to complete the plan, as needed. Once the planning is complete, record the plan again in full.", FunctionName: recordDevPlanTool.Name, ToolCallId: toolCall.Id}
 				addToolCallResponse(iteration.ChatHistory, toolResponse)
 			}
 		} else {
 			var toolCallResult ToolCallResponseInfo
-			toolCallResult, err = handleToolCall(iteration.ExecCtx, chatResponse.ToolCalls[0])
+			toolCallResult, err = handleToolCall(iteration.ExecCtx, toolCall)
+			if err != nil {
+				return nil, fmt.Errorf("error handling tool call: %w", err)
+			}
+
 			addToolCallResponse(iteration.ChatHistory, toolCallResult)
+
+			if len(toolCallResult.Response) > 5000 {
+				state.contextSizeExtension += len(toolCallResult.Response) - 5000
+			}
+
+			if toolCall.Name == getHelpOrInputTool.Name {
+				iteration.NumSinceLastFeedback = 0
+			}
 		}
 	} else if chatResponse.StopReason == string(openai.FinishReasonStop) || chatResponse.StopReason == string(openai.FinishReasonToolCalls) {
 		// TODO try to extract the dev requirements from the content in this case and treat it as if it was a tool call
@@ -248,7 +257,7 @@ func addToolCallResponse(chatHistory *[]llm.ChatMessage, info ToolCallResponseIn
 		Role:       llm.ChatMessageRoleTool,
 		Content:    info.Response,
 		Name:       info.FunctionName,
-		ToolCallId: info.TooCallId,
+		ToolCallId: info.ToolCallId,
 		IsError:    info.IsError,
 	})
 }
@@ -341,6 +350,12 @@ context again. Include file names and names of functions etc that are relevant
 so that we you can easily pick up right where you last left off. Don't include
 learnings that we already had recorded in the last incomplete product dev
 requirements, if there were any, but add new ones if any.
+
+If there are crucial details in the original request below that need to be kept,
+then copy them into either requirements or learnings. Things like code snippets
+should be copied verbatim into learnings for instance. The original request will
+be wiped away with the final new requirements you come up with, so make sure not
+to lose any essential details.
 
 # REQUEST
 

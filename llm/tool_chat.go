@@ -39,10 +39,7 @@ func PromptToToolChatParams(prompt string, controlParams ChatControlParams) Tool
 			},
 		},
 		Temperature: controlParams.Temperature,
-		ModelConfig: common.ModelConfig{
-			Model:    controlParams.Model,
-			Provider: controlParams.Provider,
-		},
+		ModelConfig: controlParams.ModelConfig,
 	}
 }
 

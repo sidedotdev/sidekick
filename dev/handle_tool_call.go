@@ -19,7 +19,7 @@ const maxRetrieveCodeContextLength = 15000
 func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult ToolCallResponseInfo, err error) {
 	dCtx.Context = utils.NoRetryCtx(dCtx)
 	toolCallResult.FunctionName = toolCall.Name
-	toolCallResult.TooCallId = toolCall.Id
+	toolCallResult.ToolCallId = toolCall.Id
 
 	// we need to use the TrackHuman function when the tool call is for a human
 	// to respond, which happens inside the GetHelpOrInput tool call itself

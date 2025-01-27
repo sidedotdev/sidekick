@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"sidekick/common"
 	"sidekick/utils"
 
 	old_anthropic "github.com/ehsanul/anthropic-go/v3/pkg/anthropic"
@@ -165,7 +164,7 @@ func oldAnthropicToChatMessageResponse(response old_anthropic.MessageResponse) *
 			OutputTokens: response.Usage.OutputTokens,
 		},
 		Model:    string(response.Model),
-		Provider: common.AnthropicChatProvider,
+		Provider: "anthropic",
 	}
 
 	for _, part := range response.Content {

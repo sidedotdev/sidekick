@@ -200,7 +200,7 @@ func (p FeedbackInfo) GetType() string {
 type ToolCallResponseInfo struct {
 	Response     string
 	FunctionName string
-	TooCallId    string
+	ToolCallId   string
 	IsError      bool
 }
 

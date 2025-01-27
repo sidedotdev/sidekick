@@ -16,6 +16,7 @@
 
 # IDE dirs
 .idea/
+.vscode/
 
 # Other
 .env
