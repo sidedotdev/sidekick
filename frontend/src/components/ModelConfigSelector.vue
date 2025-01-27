@@ -1,8 +1,7 @@
 <template>
   <div>
     <div v-if="useCaseMode" class="use-case-selector">
-      <label for="useCase">Use Case:</label>
-      <select id="useCase" v-model="selectedUseCaseValue" required>
+      <select id="useCase" v-model="selectedUseCaseValue">
         <option value="">Select Use Case</option>
         <option v-for="useCase in USE_CASES" 
                 :key="useCase" 
@@ -13,27 +12,28 @@
         @click="$emit('remove-use-case')" 
         class="remove-btn">Remove Use Case</button>
     </div>
-    <div v-for="(config, index) in modelValue" :key="index" class="config-item">
-      <label :for="type + '-provider' + index">Provider:</label>
-      <select :id="type + '-provider' + index" v-model="config.provider" required>
-        <option value="">Select</option>
-        <option v-for="provider in availableProviders" 
-                :key="provider" 
-                :value="provider">{{ provider }}</option>
-      </select>
-      <label :for="type + '-model' + index">Model:</label>
-      <input 
-        type="text" 
-        :id="type + '-model' + index" 
-        v-model="config.model" 
-        required>
-      <button 
-        type="button" 
-        @click="removeConfig(index)" 
-        v-if="modelValue.length > 1" 
-        class="remove-btn">Remove</button>
-    </div>
-    <button type="button" @click="addConfig" class="add-btn">Add Fallback</button>
+    <template v-if="!useCaseMode || selectedUseCaseValue">
+      <div v-for="(config, index) in modelValue" :key="index" class="config-item">
+        <select :id="type + '-provider' + index" v-model="config.provider" required>
+          <option value="">Select Provider</option>
+          <option v-for="provider in availableProviders" 
+                  :key="provider" 
+                  :value="provider">{{ provider }}</option>
+        </select>
+        <input 
+          type="text" 
+          :id="type + '-model' + index" 
+          v-model="config.model" 
+          placeholder="Default Model"
+          required>
+        <button 
+          type="button" 
+          @click="removeConfig(index)" 
+          v-if="modelValue.length > 1" 
+          class="remove-btn">Remove</button>
+      </div>
+      <button type="button" @click="addConfig" class="add-btn">Add Fallback</button>
+    </template>
   </div>
 </template>
 
@@ -56,11 +56,9 @@ const emit = defineEmits<{
   (e: 'remove-use-case'): void;
 }>();
 
-const selectedUseCaseValue = computed({
-  get: () => props.selectedUseCase || '',
-  set: (value: string) => {
-    emit('update:selectedUseCase', value);
-  }
+const selectedUseCaseValue = ref(props.selectedUseCase || '')
+watch(selectedUseCaseValue, (newValue) => {
+  emit('update:selectedUseCase', newValue);
 });
 
 const availableProviders = computed(() => {

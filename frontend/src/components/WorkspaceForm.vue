@@ -24,21 +24,16 @@
             :selected-use-case="String(useCase)"
             type="llm"
             use-case-mode
+            @update:selected-use-case="(newUseCase) => updateUseCaseConfig('llm', String(useCase), newUseCase)"
             @remove-use-case="removeUseCaseConfig('llm', String(useCase))"
           />
         </template>
-        <ModelConfigSelector
-          :model-value="[{ provider: '', model: '' }]"
-          type="llm"
-          use-case-mode
-          @update:selected-use-case="addUseCaseConfig('llm', $event)"
-          @update:model-value="updateEmptyUseCaseConfig($event)"
-        />
       </ExpandableSection>
     </div>
     <div>
       <h3>Embeddings</h3>
-      <!-- Note: Embeddings intentionally do not support use case configs -->
+      <!-- Note: Embeddings do not support use case configs yet, even though
+      embedding config does, so don't show them in the UI -->
       <ModelConfigSelector
         v-model="embeddingConfig.defaults"
         type="embedding"
@@ -49,7 +44,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, nextTick } from 'vue';
 import ModelConfigSelector from '@/components/ModelConfigSelector.vue';
 import ExpandableSection from '@/components/ExpandableSection.vue';
 import type { Workspace, LLMConfig, EmbeddingConfig, ModelConfig } from '@/lib/models';
@@ -67,37 +62,40 @@ const name = ref('');
 const localRepoDir = ref('');
 const llmConfig = ref<LLMConfig>({ 
   defaults: props.workspace.llmConfig?.defaults?.length ? [...props.workspace.llmConfig.defaults] : [{ provider: '', model: '' }], 
-  useCaseConfigs: props.workspace.llmConfig?.useCaseConfigs ? { ...props.workspace.llmConfig.useCaseConfigs } : {} 
+  useCaseConfigs: props.workspace.llmConfig?.useCaseConfigs ? { ...props.workspace.llmConfig.useCaseConfigs } : {'': [{ provider: '', model: '' }]}
 });
 const embeddingConfig = ref<EmbeddingConfig>({ 
   defaults: props.workspace.embeddingConfig?.defaults?.length ? [...props.workspace.embeddingConfig.defaults] : [{ provider: '', model: '' }], 
-  useCaseConfigs: props.workspace.embeddingConfig?.useCaseConfigs ? { ...props.workspace.embeddingConfig.useCaseConfigs } : {} 
+  useCaseConfigs: props.workspace.embeddingConfig?.useCaseConfigs ? { ...props.workspace.embeddingConfig.useCaseConfigs } : {'': [{ provider: '', model: '' }]} 
 });
 
 const llmAdvancedExpanded = ref(false);
-const embeddingAdvancedExpanded = ref(false);
 
 const isEditing = computed(() => !!props.workspace.id);
 
-const addUseCaseConfig = (configType: 'llm' | 'embedding', useCase: string) => {
+const updateUseCaseConfig = (configType: 'llm' | 'embedding', oldUseCase: string, newUseCase: string | undefined) => {
   const config = configType === 'llm' ? llmConfig : embeddingConfig;
-  if (!config.value.useCaseConfigs[useCase]) {
-    config.value.useCaseConfigs[useCase] = [{ provider: '', model: '' }];
+  if (newUseCase) {
+    let newModelConfigs = [{ provider: '', model: '' }]
+    if (config.value.useCaseConfigs[oldUseCase]) {
+      newModelConfigs = config.value.useCaseConfigs[oldUseCase]
+      delete config.value.useCaseConfigs[oldUseCase]
+    }
+    if (!config.value.useCaseConfigs[newUseCase]) {
+      config.value.useCaseConfigs[newUseCase] = newModelConfigs;
+    }
   }
+  // always want a "Select Use Case" dropdown for adding another one
+  nextTick(() => {
+    if (!config.value.useCaseConfigs['']) {
+      config.value.useCaseConfigs[''] = [{ provider: '', model: '' }];
+    }
+  });
 };
 
 const removeUseCaseConfig = (configType: 'llm' | 'embedding', useCase: string) => {
   const config = configType === 'llm' ? llmConfig : embeddingConfig;
   delete config.value.useCaseConfigs[useCase];
-};
-
-const updateEmptyUseCaseConfig = (newConfig: ModelConfig[]) => {
-  // This handles the "Add Fallback" button for the empty use case config selector
-  if (newConfig.length > 1) {
-    const lastConfig = newConfig[newConfig.length - 1];
-    const emptyConfig = { provider: '', model: '' };
-    return [emptyConfig];
-  }
 };
 
 onMounted(() => {
