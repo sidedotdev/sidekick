@@ -437,18 +437,31 @@ func handleStartCommand(args []string) {
 			log.Info().Msg("Starting server...")
 			srv := startServer()
 
-			// If auto-open is enabled and server is started successfully, try to open the URL
-			if !disableAutoOpen {
-				// Wait for server to be ready
-				if waitForServer(5 * time.Second) {
+			// Wait for server to be ready
+			if waitForServer(5 * time.Second) {
+				fmt.Print(`
+  ______  __       __          __       __          __       
+ /      \|  \     |  \        |  \     |  \        |  \      
+|  ▓▓▓▓▓▓\\▓▓ ____| ▓▓ ______ | ▓▓   __ \▓▓ _______| ▓▓   __ 
+| ▓▓___\▓▓  \/      ▓▓/      \| ▓▓  /  \  \/       \ ▓▓  /  \
+ \▓▓    \| ▓▓  ▓▓▓▓▓▓▓  ▓▓▓▓▓▓\ ▓▓_/  ▓▓ ▓▓  ▓▓▓▓▓▓▓ ▓▓_/  ▓▓
+ _\▓▓▓▓▓▓\ ▓▓ ▓▓  | ▓▓ ▓▓    ▓▓ ▓▓   ▓▓| ▓▓ ▓▓     | ▓▓   ▓▓ 
+|  \__| ▓▓ ▓▓ ▓▓__| ▓▓ ▓▓▓▓▓▓▓▓ ▓▓▓▓▓▓\| ▓▓ ▓▓_____| ▓▓▓▓▓▓\ 
+ \▓▓    ▓▓ ▓▓\▓▓    ▓▓\▓▓     \ ▓▓  \▓▓\ ▓▓\▓▓     \ ▓▓  \▓▓\
+  \▓▓▓▓▓▓ \▓▓ \▓▓▓▓▓▓▓ \▓▓▓▓▓▓▓\▓▓   \▓▓\▓▓ \▓▓▓▓▓▓▓\▓▓   \▓▓
+
+`)
+				// If auto-open is enabled and server is started successfully, try to open the URL
+				if !disableAutoOpen {
 					url := fmt.Sprintf("http://localhost:%d", common.GetServerPort())
+					fmt.Printf("Opening Sidekick UI at %s\n\n", url)
 					log.Info().Msgf("Opening %s in default browser...", url)
 					if err := openURL(url); err != nil {
 						log.Error().Err(err).Msg("Failed to open URL in browser")
 					}
-				} else {
-					log.Error().Msg("Server did not become ready in time to open URL")
 				}
+			} else if !disableAutoOpen {
+				log.Error().Msg("Server did not become ready in time to open URL")
 			}
 
 			// Wait for cancellation
@@ -499,25 +512,6 @@ func handleStartCommand(args []string) {
 			}
 		}()
 	}
-
-	if server {
-		time.Sleep(time.Second)
-		fmt.Print(`
-  ______  __       __          __       __          __       
- /      \|  \     |  \        |  \     |  \        |  \      
-|  ▓▓▓▓▓▓\\▓▓ ____| ▓▓ ______ | ▓▓   __ \▓▓ _______| ▓▓   __ 
-| ▓▓___\▓▓  \/      ▓▓/      \| ▓▓  /  \  \/       \ ▓▓  /  \
- \▓▓    \| ▓▓  ▓▓▓▓▓▓▓  ▓▓▓▓▓▓\ ▓▓_/  ▓▓ ▓▓  ▓▓▓▓▓▓▓ ▓▓_/  ▓▓
- _\▓▓▓▓▓▓\ ▓▓ ▓▓  | ▓▓ ▓▓    ▓▓ ▓▓   ▓▓| ▓▓ ▓▓     | ▓▓   ▓▓ 
-|  \__| ▓▓ ▓▓ ▓▓__| ▓▓ ▓▓▓▓▓▓▓▓ ▓▓▓▓▓▓\| ▓▓ ▓▓_____| ▓▓▓▓▓▓\ 
- \▓▓    ▓▓ ▓▓\▓▓    ▓▓\▓▓     \ ▓▓  \▓▓\ ▓▓\▓▓     \ ▓▓  \▓▓\
-  \▓▓▓▓▓▓ \▓▓ \▓▓▓▓▓▓▓ \▓▓▓▓▓▓▓\▓▓   \▓▓\▓▓ \▓▓▓▓▓▓▓\▓▓   \▓▓
-
-`)
-		fmt.Printf("Opening Sidekick UI at http://localhost:%d\n\n", common.GetServerPort())
-		openURL(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
-	}
-
 
 	// Wait for interrupt signal to gracefully shutdown the server
 	quit := make(chan os.Signal, 1)
