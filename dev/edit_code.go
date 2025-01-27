@@ -262,6 +262,7 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	name := ""
 	toolCallId := ""
 	skip := false
+	isError := false
 	cacheControl := ""
 	switch info := promptInfo.(type) {
 	case InitialCodeInfo:
@@ -278,7 +279,8 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 		role = llm.ChatMessageRoleTool
 		content = info.Response
 		name = info.FunctionName
-		toolCallId = info.TooCallId
+		toolCallId = info.ToolCallId
+		isError = info.IsError
 	default:
 		panic("Unsupported prompt type for authoring edit blocks: " + promptInfo.GetType())
 	}
@@ -290,6 +292,7 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 			Name:         name,
 			ToolCallId:   toolCallId,
 			CacheControl: cacheControl,
+			IsError:      isError,
 		}
 		// FIXME don't mutate chatHistory here, let the caller do it if they want it
 		*chatHistory = append(*chatHistory, newMessage)

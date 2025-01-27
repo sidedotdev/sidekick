@@ -12,9 +12,10 @@ const fetchWorkspaces = async () => {
   const data = await response.json()
   workspaces.value = data.workspaces.sort((a: Workspace, b: Workspace) => a.name.localeCompare(b.name))
 }
+const mode = import.meta.env.MODE
 
 onMounted(async () => {
-  if (import.meta.env.MODE === 'development') {
+  if (mode === 'development') {
     document.title = 'Sidekick Dev'
     let metaThemeColor = document.querySelector('meta[name="theme-color"]')
     if (!metaThemeColor) {
@@ -75,7 +76,7 @@ const selectedWorkspace = () => {
                 {{ workspace.name }}
               </option>
             </select>
-            <RouterLink :to="'/workspaces/' + store.workspaceId" class="edit-workspace-button">⚙️</RouterLink>
+            <RouterLink v-if="mode === 'development'" :to="'/workspaces/' + store.workspaceId" class="edit-workspace-button">⚙️</RouterLink>
           </div>
 
           <!--RouterLink to="/kanban">Kanban</RouterLink-->

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/embedding"
@@ -19,9 +18,7 @@ import (
 )
 
 type RagActivities struct {
-	DatabaseAccessor     srv.Service
-	LSPActivities        *lsp.LSPActivities
-	TreeSitterActivities *tree_sitter.TreeSitterActivities
+	DatabaseAccessor srv.Service
 }
 
 type RankedDirSignatureOutlineOptions struct {

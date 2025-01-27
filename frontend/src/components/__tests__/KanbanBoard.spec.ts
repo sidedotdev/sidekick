@@ -7,7 +7,8 @@ import type { FullTask } from '../../lib/models'
 describe('KanbanBoard', () => {
   const defaultProps = {
     workspaceId: 'test-workspace-id',
-    tasks: [] as FullTask[]
+    tasks: [] as FullTask[],
+    showGuidedOverlay: false
   }
 
   it('renders no tasks when tasks prop is empty', () => {
@@ -38,7 +39,7 @@ describe('KanbanBoard', () => {
     ] as FullTask[]
 
     const wrapper = shallowMount(KanbanBoard, {
-      props: { ...defaultProps, tasks }
+      props: { ...defaultProps, tasks, showGuidedOverlay: false }
     })
 
     const taskCards = wrapper.findAllComponents(TaskCard)

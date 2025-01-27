@@ -1,11 +1,13 @@
 package tree_sitter
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sidekick/coding/tree_sitter/language_bindings/vue"
+	"slices"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -198,6 +200,8 @@ func getSourceSymbolsInternal(languageName string, sitterLanguage *sitter.Langua
 		var names []string
 		var sourceCaptures []SourceCapture
 		var declaration Declaration
+		startPoint := sitter.Point{Row: ^uint32(0), Column: ^uint32(0)}
+		endPoint := sitter.Point{Row: 0, Column: 0}
 		for _, c := range m.Captures {
 			name := q.CaptureNameForId(c.Index)
 			names = append(names, name)
@@ -214,13 +218,22 @@ func getSourceSymbolsInternal(languageName string, sitterLanguage *sitter.Langua
 				})
 			}
 			writeSymbolCapture(languageName, &sigWriter, sourceCode, c, name)
+			if shouldExtendSymbolRange(languageName, name) {
+				if c.Node.StartPoint().Row < startPoint.Row || (c.Node.StartPoint().Row == startPoint.Row && c.Node.StartPoint().Column < startPoint.Column) {
+					startPoint = c.Node.StartPoint()
+				}
+				if c.Node.EndPoint().Row > endPoint.Row || (c.Node.EndPoint().Row == endPoint.Row && c.Node.EndPoint().Column > endPoint.Column) {
+					endPoint = c.Node.EndPoint()
+				}
+			}
+
 		}
 		if sigWriter.Len() > 0 {
 			symbol := Symbol{
 				Content:        sigWriter.String(),
 				SymbolType:     getSymbolType(languageName, names),
-				StartPoint:     sitter.Point{},
-				EndPoint:       sitter.Point{},
+				StartPoint:     startPoint,
+				EndPoint:       endPoint,
 				SourceCaptures: sourceCaptures,
 				Declaration:    declaration,
 			}
@@ -234,7 +247,35 @@ func getSourceSymbolsInternal(languageName string, sitterLanguage *sitter.Langua
 	}
 	symbols = append(symbols, embeddedSymbols...)
 
+	// sort symbols by start point
+	slices.SortFunc(symbols, func(i, j Symbol) int {
+		c := cmp.Compare(i.StartPoint.Row, j.StartPoint.Row)
+		if c != 0 {
+			c = cmp.Compare(i.StartPoint.Column, j.StartPoint.Column)
+		}
+		return c
+	})
+
 	return symbols, nil
+}
+
+func shouldExtendSymbolRange(languageName, captureName string) bool {
+	// all top-level name captures should extend the range
+	if strings.HasSuffix(captureName, ".name") && strings.Count(captureName, ".") == 1 {
+		return true
+	}
+
+	switch languageName {
+	case "vue":
+		{
+			// extend the range for <template>, <script>, and <style>
+			if captureName == "template" || captureName == "script" || captureName == "style" {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // cross language symbol types
@@ -279,6 +320,10 @@ func writeSymbolCapture(languageName string, out *strings.Builder, sourceCode *[
 	case "python":
 		{
 			writePythonSymbolCapture(out, sourceCode, c, name)
+		}
+	case "java":
+		{
+			writeJavaSymbolCapture(out, sourceCode, c, name)
 		}
 	default:
 		{

@@ -160,9 +160,7 @@ func updateVisibleFileRanges(editBlocks []EditBlock, filePath string, lineEdits 
 		}
 		for i := range block.VisibleFileRanges {
 			fileRange := &block.VisibleFileRanges[i]
-			utils.PrettyPrint(fileRange)
 			for _, lineEdit := range lineEdits {
-				utils.PrettyPrint(lineEdit)
 				if fileRange.StartLine >= lineEdit.editStartLineNumber {
 					fileRange.StartLine += lineEdit.numLinesAdded
 				}

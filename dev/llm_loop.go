@@ -110,14 +110,8 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 		}
 
 		// Use WithCancelOnPause for long-running operations
-		cancelCtx := dCtx.WithCancelOnPause()
-		result, err := loopFunc(&LlmIteration{
-			LlmLoopConfig: iteration.LlmLoopConfig,
-			Num:           iteration.Num,
-			ExecCtx:       cancelCtx,
-			ChatHistory:   iteration.ChatHistory,
-			State:         iteration.State,
-		})
+		iteration.ExecCtx = dCtx.WithCancelOnPause()
+		result, err := loopFunc(iteration)
 
 		if err != nil {
 			if err == ErrPaused {
