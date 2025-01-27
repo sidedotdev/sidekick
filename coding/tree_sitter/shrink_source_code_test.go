@@ -13,6 +13,7 @@ func normalizeWhitespace(content string) string {
 	return newlinesRegex.ReplaceAllString(strings.TrimSpace(content), "\n")
 }
 
+// TODO move to golang_test.go
 func TestRemoveCommentsGolang(t *testing.T) {
 	testCases := []struct {
 		name              string
@@ -124,6 +125,7 @@ func main() {
 	}
 }
 
+// TODO move to python_test.go
 func TestRemoveCommentsPython(t *testing.T) {
 	testCases := []struct {
 		name              string
