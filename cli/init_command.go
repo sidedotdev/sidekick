@@ -65,7 +65,7 @@ func (h *InitCommandHandler) handleInitCommand() error {
 
 	var llmProviders []string
 	var embeddingProviders []string
-	
+
 	// If we have valid local config, skip provider secrets setup: we assume
 	// valid secrets are stored in the local config
 	// TODO validate the key exists in local config providers and actually work
