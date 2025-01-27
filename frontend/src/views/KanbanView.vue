@@ -24,7 +24,8 @@ const parseTaskDates = (task: any): FullTask => {
 }
 
 const tasks: Ref<Array<FullTask>> = ref([])
-const showGuidedOverlay = ref(localStorage.getItem('guidedTourNeeded') !== 'false')
+const showGuidedOverlay = ref(false) // disable for now, until this works better
+//const showGuidedOverlay = ref(localStorage.getItem('guidedTourNeeded') !== 'false')
 let socket: WebSocket | null = null
 let socketClosed = false
 let lastTaskStreamId: string | null = null
