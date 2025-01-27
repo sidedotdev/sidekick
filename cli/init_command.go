@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/charmbracelet/huh"
 	"github.com/erikgeiser/promptkit/selection"
 	"github.com/erikgeiser/promptkit/textinput"
 	"github.com/segmentio/ksuid"
@@ -132,7 +133,25 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	if checkServerStatus() {
 		fmt.Printf("✔ Sidekick server is running. Go to http://localhost:%d\n", common.GetServerPort())
 	} else {
-		fmt.Println("ℹ Sidekick server is not running. Please run 'side start' to start the server.")
+		fmt.Println("ℹ Sidekick server is not running.")
+
+		startServer := true // default to "Yes"
+		err := huh.NewConfirm().
+			Title("Would you like to start the server now?").
+			Value(&startServer).
+			Affirmative("Yes").
+			Negative("No").
+			Run()
+
+		if err != nil {
+			return fmt.Errorf("error prompting to start server: %w", err)
+		}
+
+		if startServer {
+			handleStartCommand([]string{})
+		} else {
+			fmt.Println("Please run 'side start' to start the server when you're ready.")
+		}
 	}
 
 	return nil
@@ -454,8 +473,9 @@ func checkLanguageSpecificTools(baseDirectory string) error {
 	if extensionCounts[".go"] > 0 {
 		if err = checkGoInstallation(); err != nil {
 			return err
-		} else if err = checkGoplsInstallation(); err != nil {
-			return err
+		}
+		if _, err = common.FindOrInstallGopls(); err != nil {
+			return fmt.Errorf("failed to find or install gopls during initialization: %w", err)
 		}
 	}
 
@@ -466,14 +486,6 @@ func checkGoInstallation() error {
 	cmd := exec.Command("go", "version")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("Detected Go files, but Go is not installed. Please install Go from https://golang.org/dl/")
-	}
-	return nil
-}
-
-func checkGoplsInstallation() error {
-	cmd := exec.Command("gopls", "version")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("Detected Go files, but gopls is not installed. To install, run: go install golang.org/x/tools/gopls@latest")
 	}
 	return nil
 }
