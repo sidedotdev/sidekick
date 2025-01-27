@@ -1,6 +1,7 @@
 package tree_sitter
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"embed"
@@ -23,6 +24,7 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
+	"github.com/smacker/go-tree-sitter/java"
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 )
@@ -344,7 +346,7 @@ func getFileSignaturesInternal(languageName string, sitterLanguage *sitter.Langu
 		}
 		if sigWriter.Len() > 0 {
 			signature := Signature{
-				Content:    strings.Trim(sigWriter.String(), "\n"),
+				Content:    strings.Trim(sigWriter.String(), " \n"),
 				StartPoint: startPoint,
 				EndPoint:   endPoint,
 			}
@@ -359,6 +361,15 @@ func getFileSignaturesInternal(languageName string, sitterLanguage *sitter.Langu
 		return nil, fmt.Errorf("error getting embedded language file map: %w", err)
 	}
 	signatures = append(signatures, embeddedSignatures...)
+
+	// Sort signatures by start point
+	slices.SortFunc(signatures, func(i, j Signature) int {
+		c := cmp.Compare(i.StartPoint.Row, j.StartPoint.Row)
+		if c == 0 {
+			c = cmp.Compare(i.StartPoint.Column, j.StartPoint.Column)
+		}
+		return c
+	})
 
 	return signatures, nil
 }
@@ -408,6 +419,10 @@ func writeSignatureCapture(languageName string, out *strings.Builder, sourceCode
 		{
 			writePythonSignatureCapture(out, sourceCode, c, name)
 		}
+	case "java":
+		{
+			writeJavaSignatureCapture(out, sourceCode, c, name)
+		}
 	default:
 		{
 			// NOTE this is expected to provide quite bad output until tweaked per language
@@ -443,6 +458,8 @@ func inferLanguageFromFilePath(filePath string) (string, *sitter.Language, error
 		return "vue", vue.GetLanguage(), nil
 	case "python":
 		return "python", python.GetLanguage(), nil
+	case "java":
+		return "java", java.GetLanguage(), nil
 	default:
 		return "", nil, fmt.Errorf("%w: %s", ErrFailedInferLanguage, filePath)
 	}

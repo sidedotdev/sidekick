@@ -44,11 +44,11 @@ func TestOpenAiEmbedActivityWorkflow(ctx workflow.Context) (string, error) {
 	err = workflow.ExecuteActivity(ctx, ra.RankedDirSignatureOutline, RankedDirSignatureOutlineOptions{
 		CharLimit: 15000,
 		RankedViaEmbeddingOptions: RankedViaEmbeddingOptions{
-			WorkspaceId:   workspaceId,
-			EnvContainer:  env.EnvContainer{Env: devEnv},
-			ModelConfig:   common.ModelConfig{Provider: "openai", Model: string(openai.SmallEmbedding3)},
-			RankQuery:     "Add a component for a kanban board that allows you to add a card to a column.",
-			Secrets:       secret_manager.SecretManagerContainer{SecretManager: secret_manager.EnvSecretManager{}},
+			WorkspaceId:  workspaceId,
+			EnvContainer: env.EnvContainer{Env: devEnv},
+			ModelConfig:  common.ModelConfig{Provider: "openai", Model: string(openai.SmallEmbedding3)},
+			RankQuery:    "Add a component for a kanban board that allows you to add a card to a column.",
+			Secrets:      secret_manager.SecretManagerContainer{SecretManager: secret_manager.EnvSecretManager{}},
 		},
 	}).Get(ctx, &rankedOutline)
 

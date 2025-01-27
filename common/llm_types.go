@@ -25,8 +25,8 @@ type ChatMessage struct {
 
 // TODO ChatMessage.Content should be changed to []ContentBlock
 type ContentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type         string `json:"type"`
+	Text         string `json:"text"`
 	CacheControl string `json:"cacheControl"`
 }
 
@@ -100,7 +100,7 @@ type Tool struct {
 type ChatProvider string
 
 const (
-	UnspecifiedChatProvider       ChatProvider = ""
+	UnspecifiedChatProvider      ChatProvider = ""
 	OpenaiChatProvider           ChatProvider = "openai"
 	AnthropicChatProvider        ChatProvider = "anthropic"
 	OpenaiCompatibleChatProvider ChatProvider = "openai_compatible"
@@ -130,8 +130,8 @@ func (provider ToolChatProviderType) SmallModel() string {
 }
 
 var LongContextLargeModels = map[ToolChatProviderType]string{
-	OpenaiToolChatProviderType:           openai.GPT4Turbo20240409,
-	AnthropicToolChatProviderType:        string(anthropic.Claude3Opus),
+	OpenaiToolChatProviderType:    openai.GPT4Turbo20240409,
+	AnthropicToolChatProviderType: string(anthropic.Claude3Opus),
 }
 
 func (provider ToolChatProviderType) LongContextLargeModel() string {

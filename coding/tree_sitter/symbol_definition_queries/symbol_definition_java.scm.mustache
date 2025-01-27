@@ -1,0 +1,109 @@
+; Class declarations (including nested)
+(
+  [
+    (block_comment)
+    (line_comment)
+  ]* @doc
+  .
+  (class_declaration
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+; Interface declarations
+(
+  [
+    (block_comment)
+    (line_comment)
+  ]* @doc
+  .
+  (interface_declaration
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+; Annotation type declarations
+(
+  [
+    (block_comment)
+    (line_comment)
+  ]* @doc
+  .
+  (annotation_type_declaration
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+; Method declarations
+(
+  [
+    (block_comment)
+    (line_comment)
+  ]* @doc
+  .
+  (method_declaration
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+; Constructor declarations
+(
+  [
+    (block_comment)
+    (line_comment)
+  ]* @doc
+  .
+  (constructor_declaration
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+; Field declarations
+(
+  [
+    (block_comment)
+    (line_comment)
+  ]* @doc
+  .
+  (field_declaration
+    declarator: (variable_declarator
+      name: (identifier) @name
+    )
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+; Enum declarations
+(
+  [
+    (block_comment)
+    (line_comment)
+  ]* @doc
+  .
+  (enum_declaration
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+; Enum constant
+(
+  [
+    (block_comment)
+    (line_comment)
+  ]* @doc
+  .
+  (enum_declaration
+    body: (_
+      (enum_constant
+        name: (identifier) @name
+      )
+    )
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition

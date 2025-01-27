@@ -164,6 +164,7 @@ produce a repo summary.
 | typescript | ✓ | ✓ |
 | vue | ✓ | ✓ |
 | python | ✓ | ✓ |
+| java | ✓ | ✓ |
 
 ### Planned Support
 
@@ -183,7 +184,6 @@ Planned languages include:
 <!-- TODO create issues for each of these -->
 
 - javascript
-- java
 - kotlin
 - markdown
 - jsx / tsx

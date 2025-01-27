@@ -209,14 +209,22 @@ func removeComments(sourceCode SourceCode) (bool, SourceCode) {
 		panic(err)
 	}
 
-	queryString := `(comment) @comment`
+	var queryString string
 
 	// python docstrings are not comment nodes. and python signatures parse
 	// poorly, so need to use a different query to ensure the right strings are
-	// chosen
+	// chosen. and java doesn't have a node named `comment`, and other languages
+	// might not either, so we whitelist per language to avoid failures for new
+	// languages here.
+	// TODO: move this to language-specific query files instead, similar to the
+	// signature_queries and header_queries
 	switch sourceCode.OriginalLanguageName {
+	case "typescript", "javascript", "golang", "vue", "typscript-signatures", "javascript-signatures", "go", "vue-signatures", "golang-signatures":
+		queryString = `(comment) @comment`
 	case "python":
-		queryString += `
+		queryString = `
+(comment) @comment
+
 (block
 	.
     (expression_statement
@@ -232,6 +240,8 @@ func removeComments(sourceCode SourceCode) (bool, SourceCode) {
 `
 	case "python-signatures":
 		queryString += `
+(comment) @comment
+
 (ERROR
 	(expression_statement
 		(string) @comment
@@ -244,7 +254,18 @@ func removeComments(sourceCode SourceCode) (bool, SourceCode) {
 	)
 )
 `
+	case "java", "java-signatures":
+		queryString = `
+(line_comment) @comment
+(block_comment) @comment
+`
 	}
+
+	// no query
+	if queryString == "" {
+		return false, sourceCode
+	}
+
 	q, err := sitter.NewQuery([]byte(queryString), sitterLanguage)
 	if err != nil {
 		panic(err)
