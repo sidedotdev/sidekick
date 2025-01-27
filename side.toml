@@ -17,7 +17,7 @@ command = "go test -test.timeout 15s ./..."
 
 [[test_commands]]
 working_dir = "frontend"
-command = "npm run test:unit -- --reporter=dot --run"
+command = "npm run test:unit -- --reporter=dot --no-color --run"
 
 [[test_commands]]
 working_dir = "frontend"

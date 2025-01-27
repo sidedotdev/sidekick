@@ -196,7 +196,8 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 			Role:       llm.ChatMessageRoleTool,
 			Content:    info.Response,
 			Name:       info.FunctionName,
-			ToolCallId: info.TooCallId,
+			ToolCallId: info.ToolCallId,
+			IsError:    info.IsError,
 		})
 		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content}
 		return feedbackInfo, nil

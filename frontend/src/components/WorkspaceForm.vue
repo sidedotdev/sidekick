@@ -10,40 +10,44 @@
     </div>
     <div>
       <h3>LLMs</h3>
-      <div v-for="(config, index) in llmConfig.defaults" :key="index" class="config-item">
-        <label :for="'llmProvider' + index">Provider:</label>
-        <select :id="'llmProvider' + index" v-model="config.provider" required>
-          <option value="">Select</option>
-          <option value="openai">OpenAI</option>
-          <option value="anthropic">Anthropic</option>
-        </select>
-        <!--label :for="'llmModel' + index">LLM Model:</label>
-        <input :id="'llmModel' + index" v-model="config.model" required-->
-        <button type="button" @click="removeConfig('llm', index)" v-if="llmConfig.defaults.length > 1" class="remove-btn">Remove</button>
-      </div>
-      <button type="button" @click="addConfig('llm')" class="add-btn">Add Fallback</button>
+      <ModelConfigSelector
+        v-model="llmConfig.defaults"
+        type="llm"
+      />
+      <ExpandableSection
+        v-model="llmAdvancedExpanded"
+        title="Advanced Settings"
+      >
+        <template v-for="(configs, useCase) in llmConfig.useCaseConfigs" :key="useCase">
+          <ModelConfigSelector
+            v-model="llmConfig.useCaseConfigs[String(useCase)]"
+            :selected-use-case="String(useCase)"
+            type="llm"
+            use-case-mode
+            @update:selected-use-case="(newUseCase) => updateUseCaseConfig('llm', String(useCase), newUseCase)"
+            @remove-use-case="removeUseCaseConfig('llm', String(useCase))"
+          />
+        </template>
+      </ExpandableSection>
     </div>
     <div>
       <h3>Embeddings</h3>
-      <div v-for="(config, index) in embeddingConfig.defaults" :key="index" class="config-item">
-        <label :for="'embeddingProvider' + index">Provider:</label>
-        <select :id="'embeddingProvider' + index" v-model="config.provider" required>
-          <option value="">Select</option>
-          <option value="openai">OpenAI</option>
-        </select>
-        <!--label :for="'embeddingModel' + index">Embedding Model:</label>
-        <input :id="'embeddingModel' + index" v-model="config.model" required-->
-        <button type="button" @click="removeConfig('embedding', index)" v-if="embeddingConfig.defaults.length > 1" class="remove-btn">Remove</button>
-      </div>
-      <button type="button" @click="addConfig('embedding')" class="add-btn">Add Fallback</button>
+      <!-- Note: Embeddings do not support use case configs yet, even though
+      embedding config does, so don't show them in the UI -->
+      <ModelConfigSelector
+        v-model="embeddingConfig.defaults"
+        type="embedding"
+      />
     </div>
     <button type="submit">{{ isEditing ? 'Update' : 'Create' }} Workspace</button>
   </form>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue';
-import type { Workspace, LLMConfig, EmbeddingConfig } from '@/lib/models';
+import { ref, computed, onMounted, nextTick } from 'vue';
+import ModelConfigSelector from '@/components/ModelConfigSelector.vue';
+import ExpandableSection from '@/components/ExpandableSection.vue';
+import type { Workspace, LLMConfig, EmbeddingConfig, ModelConfig } from '@/lib/models';
 
 const props = defineProps<{
   workspace: Workspace;
@@ -56,35 +60,50 @@ const emit = defineEmits<{
 
 const name = ref('');
 const localRepoDir = ref('');
-const llmConfig = ref<LLMConfig>({ defaults: [{ provider: '', model: '' }], useCaseConfigs: {} });
-const embeddingConfig = ref<EmbeddingConfig>({ defaults: [{ provider: '', model: '' }], useCaseConfigs: {} });
+const llmConfig = ref<LLMConfig>({ 
+  defaults: props.workspace.llmConfig?.defaults?.length ? [...props.workspace.llmConfig.defaults] : [{ provider: '', model: '' }], 
+  useCaseConfigs: props.workspace.llmConfig?.useCaseConfigs ? { ...props.workspace.llmConfig.useCaseConfigs } : {'': [{ provider: '', model: '' }]}
+});
+const embeddingConfig = ref<EmbeddingConfig>({ 
+  defaults: props.workspace.embeddingConfig?.defaults?.length ? [...props.workspace.embeddingConfig.defaults] : [{ provider: '', model: '' }], 
+  useCaseConfigs: props.workspace.embeddingConfig?.useCaseConfigs ? { ...props.workspace.embeddingConfig.useCaseConfigs } : {'': [{ provider: '', model: '' }]} 
+});
+
+const llmAdvancedExpanded = ref(false);
 
 const isEditing = computed(() => !!props.workspace.id);
+
+const updateUseCaseConfig = (configType: 'llm' | 'embedding', oldUseCase: string, newUseCase: string | undefined) => {
+  const config = configType === 'llm' ? llmConfig : embeddingConfig;
+  if (newUseCase) {
+    let newModelConfigs = [{ provider: '', model: '' }]
+    if (config.value.useCaseConfigs[oldUseCase]) {
+      newModelConfigs = config.value.useCaseConfigs[oldUseCase]
+      delete config.value.useCaseConfigs[oldUseCase]
+    }
+    if (!config.value.useCaseConfigs[newUseCase]) {
+      config.value.useCaseConfigs[newUseCase] = newModelConfigs;
+    }
+  }
+  // always want a "Select Use Case" dropdown for adding another one
+  nextTick(() => {
+    if (!config.value.useCaseConfigs['']) {
+      config.value.useCaseConfigs[''] = [{ provider: '', model: '' }];
+    }
+  });
+};
+
+const removeUseCaseConfig = (configType: 'llm' | 'embedding', useCase: string) => {
+  const config = configType === 'llm' ? llmConfig : embeddingConfig;
+  delete config.value.useCaseConfigs[useCase];
+};
 
 onMounted(() => {
   if (props.workspace) {
     name.value = props.workspace.name;
     localRepoDir.value = props.workspace.localRepoDir;
-    if (props.workspace.llmConfig != null && props.workspace.llmConfig.defaults.length > 0) {
-      llmConfig.value = props.workspace.llmConfig;
-    }
-    if (props.workspace.embeddingConfig != null && props.workspace.embeddingConfig.defaults.length > 0) {
-      embeddingConfig.value = props.workspace.embeddingConfig;
-    }
   }
 });
-
-const addConfig = (type: 'llm' | 'embedding') => {
-  const config = type === 'llm' ? llmConfig : embeddingConfig;
-  config.value.defaults.push({ provider: '', model: '' });
-};
-
-const removeConfig = (type: 'llm' | 'embedding', index: number) => {
-  const config = type === 'llm' ? llmConfig : embeddingConfig;
-  if (config.value.defaults.length > 1) {
-    config.value.defaults.splice(index, 1);
-  }
-};
 
 const submitWorkspace = async () => {
   const formData: Omit<Workspace, 'id'> = {

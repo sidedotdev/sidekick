@@ -103,7 +103,7 @@ func (s *Streamer) consumeFlowEvents(ctx context.Context, consumer jetstream.Con
 			return
 		}
 
-		eventCh <- event
+		eventCh <- event // FIXME this can panic if eventCh is closed
 		if _, ok := event.(domain.EndStreamEvent); ok {
 			consContext.Stop()
 		}

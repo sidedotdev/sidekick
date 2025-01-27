@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sidekick/common"
+	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -108,7 +108,7 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 
 	log.Trace().Interface("responseMessage", finalMessage).Msg("Anthropic tool chat response message")
 
-	response, err := anthropicToChatMessageResponse(finalMessage)
+	response, err := anthropicToChatMessageResponse(finalMessage, options.Params.Provider)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert response: %w", err)
 	}
@@ -163,7 +163,7 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 
 		if msg.Content != "" {
 			if msg.Role == ChatMessageRoleTool {
-				block := anthropic.NewToolResultBlock(msg.ToolCallId, msg.Content, msg.IsError)
+				block := anthropic.NewToolResultBlock(msg.ToolCallId, invalidJsonWorkaround(msg.Content), msg.IsError)
 				if msg.CacheControl != "" {
 					block.CacheControl = anthropic.F(anthropic.CacheControlEphemeralParam{
 						Type: anthropic.F(anthropic.CacheControlEphemeralType(msg.CacheControl)),
@@ -171,7 +171,7 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 				}
 				blocks = append(blocks, block)
 			} else {
-				block := anthropic.NewTextBlock(msg.Content)
+				block := anthropic.NewTextBlock(invalidJsonWorkaround(msg.Content))
 				if msg.CacheControl != "" {
 					block.CacheControl = anthropic.F(anthropic.CacheControlEphemeralParam{
 						Type: anthropic.F(anthropic.CacheControlEphemeralType(msg.CacheControl)),
@@ -220,6 +220,12 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 	return mergedAnthropicMessages, nil
 }
 
+func invalidJsonWorkaround(s string) string {
+	// replace "\x1b" with "" to avoid invalid json error from anthropic
+	// with current version of sdk
+	return strings.ReplaceAll(s, "\x1b", "")
+}
+
 func anthropicFromChatMessageRole(role ChatMessageRole) anthropic.MessageParamRole {
 	switch role {
 	case ChatMessageRoleSystem, ChatMessageRoleUser, ChatMessageRoleTool:
@@ -244,7 +250,7 @@ func anthropicFromTools(tools []*Tool) ([]anthropic.ToolParam, error) {
 	return result, nil
 }
 
-func anthropicToChatMessageResponse(message anthropic.Message) (*ChatMessageResponse, error) {
+func anthropicToChatMessageResponse(message anthropic.Message, provider string) (*ChatMessageResponse, error) {
 	response := &ChatMessageResponse{
 		ChatMessage: ChatMessage{
 			Role:    ChatMessageRoleAssistant,
@@ -258,7 +264,7 @@ func anthropicToChatMessageResponse(message anthropic.Message) (*ChatMessageResp
 			OutputTokens: int(message.Usage.OutputTokens),
 		},
 		Model:    message.Model,
-		Provider: common.AnthropicChatProvider,
+		Provider: provider,
 	}
 
 	for _, block := range message.Content {

@@ -8,7 +8,6 @@ import (
 	"sidekick/domain"
 	"sidekick/llm"
 	"sidekick/srv"
-	"strings"
 
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/activity"
@@ -27,6 +26,8 @@ type LlmActivities struct {
 
 func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptions) (*llm.ChatMessageResponse, error) {
 	deltaChan := make(chan llm.ChatMessageDelta, 10)
+	defer close(deltaChan)
+
 	go func() {
 		defer func() {
 			// Mark the end of the stream
@@ -40,25 +41,6 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 			if activity.IsActivity(ctx) {
 				activity.RecordHeartbeat(ctx, delta)
 			}
-
-			contentBuilder := strings.Builder{}
-			if delta.Content != "" {
-				//fmt.Print(delta.Content)
-				contentBuilder.WriteString(delta.Content)
-			}
-			if delta.ToolCalls != nil {
-				for _, toolCall := range delta.ToolCalls {
-					if toolCall.Name != "" {
-						//fmt.Printf("toolName = %s\n", toolCall.Name)
-						contentBuilder.WriteString(fmt.Sprintf("toolName = %s\n", toolCall.Name))
-					}
-					if toolCall.Arguments != "" {
-						//fmt.Print(toolCall.Arguments)
-						contentBuilder.WriteString(toolCall.Arguments)
-					}
-				}
-			}
-
 			flowEventDelta := domain.ChatMessageDeltaEvent{
 				FlowActionId:     options.FlowActionId,
 				EventType:        domain.ChatMessageDeltaEventType,
@@ -77,7 +59,79 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 		log.Error().Err(err).Msg("Failed to get tool chatter")
 		return nil, err
 	}
-	return toolChatter.ChatStream(ctx, options.ToolChatOptions, deltaChan)
+
+	// First attempt
+	response, err := toolChatter.ChatStream(ctx, options.ToolChatOptions, deltaChan)
+	if err != nil {
+		return response, err
+	}
+	response.Provider = options.Params.ModelConfig.Provider
+
+	// Check for empty response
+	if len(response.Content) == 0 && len(response.ToolCalls) == 0 {
+		log.Debug().Msg("Received empty response, attempting retry with modified prompt")
+		return retryChatStreamOnEmptyResponse(ctx, options.ToolChatOptions, response, toolChatter, deltaChan)
+	}
+
+	return response, nil
+}
+
+func retryChatStreamOnEmptyResponse(
+	ctx context.Context,
+	chatOptions llm.ToolChatOptions,
+	originalResponse *llm.ChatMessageResponse,
+	toolChatter llm.ToolChatter,
+	deltaChan chan llm.ChatMessageDelta,
+) (*llm.ChatMessageResponse, error) {
+	// this shows what's going on to the user in the streaming UI
+	deltaChan <- llm.ChatMessageDelta{
+		Role: llm.ChatMessageRoleAssistant,
+		Content: `
+----------------------------------------------------------------------------
+Sidekick: got an unexpected empty response. Retrying with modified prompt...
+----------------------------------------------------------------------------
+
+`,
+	}
+
+	// Create retry options with additional messages
+	chatOptions.Params.Messages = append(chatOptions.Params.Messages,
+		llm.ChatMessage{
+			Role:    llm.ChatMessageRoleAssistant,
+			Content: "(error: unexpected empty response)",
+		},
+		llm.ChatMessage{
+			Role:    llm.ChatMessageRoleSystem,
+			Content: "Please provide a non-empty response",
+		},
+	)
+
+	// Second attempt
+	retryResponse, err := toolChatter.ChatStream(ctx, chatOptions, deltaChan)
+	if err != nil {
+		retryResponse.Provider = chatOptions.Params.ModelConfig.Provider
+		return retryResponse, err
+	}
+
+	// Sum up token usage from both attempts
+	retryResponse.Usage.InputTokens += originalResponse.Usage.InputTokens
+	retryResponse.Usage.OutputTokens += originalResponse.Usage.OutputTokens
+
+	// If retry also returns empty response, replace content to be not actually
+	// empty - so as to prevent issues later. but don't consider this an actual
+	// error: most errors are expected to be retried, and we don't have
+	// non-retryable errors set up with temporal yet, and this complicates what
+	// callers will have to do with these responses, requiring special handling
+	// for specific classes of error. instead, we'll let the upstream caller
+	// just process this as normal, and hope that their processing causes a
+	// change in the followup LLM calls, given this is a recoverable situation
+	// on retry to the LLM model with some new input.
+	if len(retryResponse.Content) == 0 && len(retryResponse.ToolCalls) == 0 {
+		retryResponse.Content = "(error: unexpected empty response)"
+	}
+
+	retryResponse.Provider = chatOptions.Params.ModelConfig.Provider
+	return retryResponse, nil
 }
 
 func getToolChatter(config common.ModelConfig) (llm.ToolChatter, error) {

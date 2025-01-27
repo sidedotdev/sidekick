@@ -3,7 +3,6 @@ package dev
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/llm"
@@ -11,7 +10,17 @@ import (
 
 	"github.com/invopop/jsonschema"
 	"github.com/sashabaranov/go-openai"
+	"go.temporal.io/sdk/workflow"
 )
+
+type buildDevPlanState struct {
+	contextSizeExtension        int
+	hasRevisedPerPlanningPrompt bool
+	hasRevisedPerReproPrompt    bool
+	devPlan                     DevPlan
+	planningPrompt              string
+	reproduceIssue              bool
+}
 
 var recordDevPlanTool = llm.Tool{
 	Name:        "record_dev_plan",
@@ -81,162 +90,166 @@ func BuildDevPlan(dCtx DevContext, requirements, planningPrompt string, reproduc
 
 func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, reproduceIssue bool) (*DevPlan, error) {
 	codeContext, fullCodeContext, err := PrepareInitialCodeContext(dCtx, requirements, nil, nil)
-	contextSizeExtension := len(fullCodeContext) - len(codeContext)
 	if err != nil {
-		return nil, fmt.Errorf("failed to prepare code context: %v", err)
+		return nil, fmt.Errorf("failed to prepare code context: %w", err)
 	}
+	contextSizeExtension := len(fullCodeContext) - len(codeContext)
 
-	var promptInfo PromptInfo = InitialPlanningInfo{
+	chatHistory := &[]llm.ChatMessage{}
+	addDevPlanPrompt(dCtx, chatHistory, InitialPlanningInfo{
 		CodeContext:    codeContext,
 		Requirements:   requirements,
 		PlanningPrompt: planningPrompt,
 		ReproduceIssue: reproduceIssue,
-	}
-
-	chatHistory := &[]llm.ChatMessage{}
-	i := 0
-	iterationsSinceLastFeedback := 0
+	})
 
 	maxIterations := 17
-	repoConfig := dCtx.RepoConfig
-	if repoConfig.MaxPlanningIterations > 0 {
-		maxIterations = repoConfig.MaxPlanningIterations
+	if dCtx.RepoConfig.MaxPlanningIterations > 0 {
+		maxIterations = dCtx.RepoConfig.MaxPlanningIterations
 	}
 
-	maxIterationsBeforeFeedback := 5
-	hasRevisedPerPlanningPrompt := false
-	hasRevisedPerReproPrompt := false
-	var devPlan DevPlan
-	for {
-		i++
-		iterationsSinceLastFeedback++
+	initialState := &buildDevPlanState{
+		contextSizeExtension:        contextSizeExtension,
+		hasRevisedPerPlanningPrompt: false,
+		hasRevisedPerReproPrompt:    false,
+		planningPrompt:              planningPrompt,
+		reproduceIssue:              reproduceIssue,
+	}
 
-		response, err := UserRequestIfPaused(dCtx, fmt.Sprintf("Planning iteration %d", i), nil)
-		if err != nil {
-			return nil, fmt.Errorf("error in UserRequestIfPaused: %w", err)
-		}
-		if response != nil && response.Content != "" {
-			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
-			iterationsSinceLastFeedback = 0
-		}
+	result, err := LlmLoop(
+		dCtx,
+		chatHistory,
+		buildDevPlanIteration,
+		WithInitialState(initialState),
+		WithFeedbackEvery(5),
+		WithMaxIterations(maxIterations),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to run LlmLoop: %w", err)
+	}
 
-		if i > maxIterations {
-			return nil, ErrMaxAttemptsReached
-		} else if iterationsSinceLastFeedback >= maxIterationsBeforeFeedback && !devPlan.Complete {
-			// TODO include the plan so far if any. If plan is empty (no learnings and no steps), use a different guidance context string.
-			// TODO don't ask for feedback if the user was just asked via get_help_or_input
-			guidanceContext := "The LLM has looped 5 times without finalizing a plan. Please provide guidance or just say \"continue\" if they are on track."
-			requestParams := map[string]any{}
-			feedbackInfo, err := GetUserFeedback(dCtx, promptInfo, guidanceContext, chatHistory, requestParams)
+	return result, nil
+}
+
+func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
+	state, ok := iteration.State.(*buildDevPlanState)
+	if !ok {
+		return nil, fmt.Errorf("Invalid llm iteration state type, expected *buildDevPlanState: %v", iteration.State)
+	}
+
+	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
+	ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, maxLength)
+
+	chatCtx := iteration.ExecCtx.WithCancelOnPause()
+	chatResponse, err := generateDevPlan(chatCtx, iteration.ChatHistory)
+	if iteration.ExecCtx.GlobalState != nil && iteration.ExecCtx.GlobalState.Paused {
+		return nil, nil // continue the loop: UserRequestIfPaused will handle the pause
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error executing OpenAI chat completion activity: %w", err)
+	}
+
+	*iteration.ChatHistory = append(*iteration.ChatHistory, chatResponse.ChatMessage)
+
+	if len(chatResponse.ToolCalls) > 0 {
+		toolCall := chatResponse.ToolCalls[0]
+		if toolCall.Name == recordDevPlanTool.Name {
+			unvalidatedDevPlan, err := unmarshalPlan(toolCall.Arguments)
 			if err != nil {
-				return nil, fmt.Errorf("failed to get user feedback: %v", err)
+				addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
+					Response:     "Please output a new plan: Plan failed to be parsed and was NOT recorded: " + err.Error(),
+					FunctionName: recordDevPlanTool.Name,
+					ToolCallId:   toolCall.Id,
+					IsError:      true,
+				})
+				return nil, nil // continue the loop
 			}
 
-			// FIXME this replaces the existing promptInfo which could have
-			// important info in it that hasn't yet made it to chat history.
-			// let's instead switch to the pattern used in code_context.go where
-			// we add to the chat history as soon as we get the feedback instead
-			// of in the next iteration
-			promptInfo = feedbackInfo
-			iterationsSinceLastFeedback = 0
-		}
+			validatedDevPlan, err := ValidateAndCleanPlan(unvalidatedDevPlan)
+			if err != nil {
+				addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
+					Response:     "Please output a new plan: Plan failed validation and was NOT recorded: " + err.Error(),
+					FunctionName: recordDevPlanTool.Name,
+					ToolCallId:   toolCall.Id,
+					IsError:      true,
+				})
+				return nil, nil // continue the loop
+			}
 
-		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
-		ManageChatHistory(dCtx, chatHistory, maxLength)
-		planningInput := getPlanningInput(dCtx, chatHistory, promptInfo)
-		chatCtx := dCtx.WithCancelOnPause()
-		chatResponse, err := TrackedToolChat(chatCtx, "Generate Dev Plan", planningInput)
-		if dCtx.GlobalState != nil && dCtx.GlobalState.Paused {
-			continue // UserRequestIfPaused will handle the pause
-		}
-		if err != nil {
-			return nil, fmt.Errorf("error executing OpenAI chat completion activity: %w", err)
-		}
-
-		*chatHistory = append(*chatHistory, chatResponse.ChatMessage)
-
-		if dCtx.GlobalState != nil && dCtx.GlobalState.Paused {
-			continue
-		}
-		if len(chatResponse.ToolCalls) > 0 {
-			// NOTE we have parallel tool calls disabled for now
-			toolCall := chatResponse.ToolCalls[0]
-			if toolCall.Name == recordDevPlanTool.Name {
-				unvalidatedDevPlan, err := unmarshalPlan(toolCall.Arguments)
-				if err != nil {
-					fmt.Printf("error parsing plan: %v\n", err)
-					promptInfo = ToolCallResponseInfo{Response: "Plan failed to be parsed and was NOT recorded: " + err.Error(), FunctionName: recordDevPlanTool.Name, TooCallId: toolCall.Id}
-					continue
+			state.devPlan = validatedDevPlan
+			if validatedDevPlan.Complete {
+				if !state.hasRevisedPerPlanningPrompt && state.planningPrompt != "" {
+					state.hasRevisedPerPlanningPrompt = true
+					addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
+						Response:     "List out all conditions/requirements in the following instructions. Then consider whether the plan meets each one, one by one. Once you have done that, then rewrite & record the plan as needed to ensure it meets all conditions/requirements.\n\nInstructions follow:\n\n" + state.planningPrompt,
+						FunctionName: recordDevPlanTool.Name,
+						ToolCallId:   toolCall.Id,
+					})
+					return nil, nil // continue the loop
 				}
-				validatedDevPlan, err := ValidateAndCleanPlan(unvalidatedDevPlan)
-				if err != nil {
-					promptInfo = ToolCallResponseInfo{Response: "Plan failed to be parsed and was NOT recorded: " + err.Error(), FunctionName: recordDevPlanTool.Name, TooCallId: toolCall.Id}
-					continue
+
+				if !state.hasRevisedPerReproPrompt && state.reproduceIssue {
+					state.hasRevisedPerReproPrompt = true
+					addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
+						Response:     reviseReproPrompt,
+						FunctionName: recordDevPlanTool.Name,
+						ToolCallId:   toolCall.Id,
+					})
+					return nil, nil // continue the loop
 				}
-				devPlan = validatedDevPlan
 
-				if devPlan.Complete {
-					if planningPrompt != "" && !hasRevisedPerPlanningPrompt {
-						hasRevisedPerPlanningPrompt = true
-						promptInfo = ToolCallResponseInfo{Response: "List out all conditions/requirements in the following instructions. Then consider whether the plan meets each one, one by one. Once you have done that, then rewrite & record the plan as needed to ensure it meets all conditions/requirements.\n\nInstructions follow:\n\n" + planningPrompt, FunctionName: recordDevPlanTool.Name, TooCallId: toolCall.Id}
-						iterationsSinceLastFeedback = 0
-						continue
-					}
-					if reproduceIssue && !hasRevisedPerReproPrompt {
-						hasRevisedPerReproPrompt = true
-						promptInfo = ToolCallResponseInfo{Response: reviseReproPrompt, FunctionName: recordDevPlanTool.Name, TooCallId: toolCall.Id}
-						iterationsSinceLastFeedback = 0
-						continue
-					}
+				userResponse, err := ApproveDevPlan(iteration.ExecCtx, validatedDevPlan)
+				if err != nil {
+					return nil, fmt.Errorf("error getting plan approval: %w", err)
+				}
 
-					userResponse, err := ApproveDevPlan(dCtx, devPlan)
-					if err != nil {
-						return nil, fmt.Errorf("error executing OpenAI chat completion activity: %w", err)
-					}
-					if userResponse.Approved != nil && *userResponse.Approved {
-						break
-					} else {
-						feedback := "Plan was not approved and therefore not recorded. Please continue planning by taking this feedback into account:\n\n" + userResponse.Content
-						promptInfo = ToolCallResponseInfo{Response: feedback, FunctionName: toolCall.Name, TooCallId: toolCall.Id}
-						iterationsSinceLastFeedback = 0
-						continue
-					}
+				v := workflow.GetVersion(iteration.ExecCtx, "dev-plan", workflow.DefaultVersion, 1)
+				if v == 1 {
+					iteration.NumSinceLastFeedback = 0
+				}
+
+				if userResponse.Approved != nil && *userResponse.Approved {
+					return &validatedDevPlan, nil
 				} else {
-					// TODO add a ContinuePlanningInfo struct that implements PromptInfo
-					promptInfo = ToolCallResponseInfo{Response: "Recorded plan progress, but the plan is not complete yet based on the \"is_planning_complete\" boolean field value being set to false. Do some more research or thinking or get help/input to complete the plan, as needed. Once the planning is complete, record the plan again in full.", FunctionName: recordDevPlanTool.Name, TooCallId: toolCall.Id}
+					addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
+						Response:     "Plan was not approved and therefore not recorded. Please continue planning by taking this feedback into account:\n\n" + userResponse.Content,
+						FunctionName: toolCall.Name,
+						ToolCallId:   toolCall.Id,
+					})
 				}
 			} else {
-				var toolCallResponseInfo ToolCallResponseInfo
-				toolCallResponseInfo, err = handleToolCall(dCtx, chatResponse.ToolCalls[0])
-				// dynamically adjust the context size extension based on the length of the response
-				if len(toolCallResponseInfo.Response) > 5000 {
-					contextSizeExtension += len(toolCallResponseInfo.Response) - 5000
-				}
-				promptInfo = toolCallResponseInfo
-				if err != nil {
-					return nil, fmt.Errorf("error handling tool call: %w", err)
-				}
-				if chatResponse.ToolCalls[0].Name == getHelpOrInputTool.Name {
-					iterationsSinceLastFeedback = 0
-				}
-
-				continue
+				addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
+					Response:     "Recorded plan progress, but the plan is not complete yet based on the \"is_planning_complete\" boolean field value being set to false. Do some more research or thinking or get help/input to complete the plan, as needed. Once the planning is complete, record the plan again in full.",
+					FunctionName: recordDevPlanTool.Name,
+					ToolCallId:   toolCall.Id,
+				})
 			}
-		} else if chatResponse.StopReason == string(openai.FinishReasonStop) || chatResponse.StopReason == string(openai.FinishReasonToolCalls) {
-			promptInfo = FeedbackInfo{Feedback: "Expected a tool call to record the plan, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevPlanTool.Name + " tool."}
-			continue
 		} else {
-			log.Printf("expected chat stream stop reason to be stop or tool_call, got: %v", chatResponse.StopReason)
-			promptInfo = SkipInfo{}
-			continue
-		}
+			toolCallResponseInfo, err := handleToolCall(iteration.ExecCtx, toolCall)
+			if err != nil {
+				return nil, fmt.Errorf("error handling tool call: %w", err)
+			}
 
-		if err != nil {
-			return nil, err
+			if len(toolCallResponseInfo.Response) > 5000 {
+				state.contextSizeExtension += len(toolCallResponseInfo.Response) - 5000
+			}
+
+			addToolCallResponse(iteration.ChatHistory, toolCallResponseInfo)
+			if toolCall.Name == getHelpOrInputTool.Name {
+				iteration.NumSinceLastFeedback = 0
+			}
 		}
+	} else if chatResponse.StopReason == string(openai.FinishReasonStop) || chatResponse.StopReason == string(openai.FinishReasonToolCalls) {
+		addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
+			Response:     "Expected a tool call to record the plan, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevPlanTool.Name + " tool.",
+			FunctionName: recordDevPlanTool.Name,
+		})
+	} else { // FIXME handle other stop reasons with more specific logic
+		feedbackInfo := FeedbackInfo{Feedback: "Expected a tool call to record the dev requirements, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevRequirementsTool.Name + " tool."}
+		addDevRequirementsPrompt(iteration.ChatHistory, feedbackInfo)
 	}
 
-	return &devPlan, nil
+	return nil, nil // continue the loop
 }
 
 func unmarshalPlan(jsonStr string) (DevPlan, error) {
@@ -248,46 +261,11 @@ func unmarshalPlan(jsonStr string) (DevPlan, error) {
 	return plan, nil
 }
 
-func getPlanningInput(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) llm.ToolChatOptions {
-	// TODO extract chat message building into a separate function
-	var content string
-	role := llm.ChatMessageRoleUser
-	name := ""
-	toolCallId := ""
-	skip := false
-	cacheControl := ""
-	switch info := promptInfo.(type) {
-	case InitialPlanningInfo:
-		content = buildInitialRecordPlanPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanningPrompt, info.ReproduceIssue)
-		cacheControl = "ephemeral"
-	case FeedbackInfo:
-		content = info.Feedback
-	case SkipInfo:
-		skip = true
-	case ToolCallResponseInfo:
-		role = llm.ChatMessageRoleTool
-		content = info.Response
-		name = info.FunctionName
-		toolCallId = info.TooCallId
-	default:
-		panic("Unsupported prompt type for planning: " + promptInfo.GetType())
-	}
-
-	if !skip {
-		newMessage := llm.ChatMessage{
-			Role:         role,
-			Content:      content,
-			Name:         name,
-			ToolCallId:   toolCallId,
-			CacheControl: cacheControl,
-		}
-		*chatHistory = append(*chatHistory, newMessage)
-	}
-
+func generateDevPlan(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*llm.ChatMessageResponse, error) {
 	tools := []*llm.Tool{
 		&recordDevPlanTool,
-		&bulkSearchRepositoryTool,
 		getRetrieveCodeContextTool(),
+		&bulkSearchRepositoryTool,
 		&bulkReadFileTool,
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
@@ -296,7 +274,7 @@ func getPlanningInput(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInf
 
 	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 
-	return llm.ToolChatOptions{
+	chatOptions := llm.ToolChatOptions{
 		Secrets: *dCtx.Secrets,
 		Params: llm.ToolChatParams{
 			Messages: *chatHistory,
@@ -307,6 +285,8 @@ func getPlanningInput(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInf
 			ModelConfig: modelConfig,
 		},
 	}
+
+	return TrackedToolChat(dCtx, "Generate Dev Plan", chatOptions)
 }
 
 // TODO we should determine if the code context is too large programmatically
@@ -357,3 +337,26 @@ include at least one step that creates a test that reproduces the issue. In that
 step, describe the AAA in detail, and ensure you include the predicted failure of
 the test prior to fixing the bug as part of the completion_analysis.
 `
+
+func addDevPlanPrompt(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) {
+	var content string
+	role := llm.ChatMessageRoleUser
+	cacheControl := ""
+	switch info := promptInfo.(type) {
+	case InitialPlanningInfo:
+		content = buildInitialRecordPlanPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanningPrompt, info.ReproduceIssue)
+		cacheControl = "ephemeral"
+	case FeedbackInfo:
+		content = info.Feedback
+	case ToolCallResponseInfo:
+		addToolCallResponse(chatHistory, info)
+		return
+	default:
+		panic("Unsupported prompt type for dev plan: " + promptInfo.GetType())
+	}
+	*chatHistory = append(*chatHistory, llm.ChatMessage{
+		Role:         role,
+		Content:      content,
+		CacheControl: cacheControl,
+	})
+}
