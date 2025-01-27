@@ -14,7 +14,7 @@ const fetchWorkspaces = async () => {
 }
 const mode = import.meta.env.MODE
 
-onMounted(() => {
+onMounted(async () => {
   if (mode === 'development') {
     document.title = 'Sidekick Dev'
     let metaThemeColor = document.querySelector('meta[name="theme-color"]')
@@ -23,10 +23,22 @@ onMounted(() => {
     }
     metaThemeColor.setAttribute('content', '#4CAF50')
   }
-  fetchWorkspaces()
+
   const storedWorkspaceId = localStorage.getItem('selectedWorkspaceId')
+
   if (storedWorkspaceId) {
     store.selectWorkspaceId(storedWorkspaceId)
+  }
+
+  await fetchWorkspaces()
+  if (!storedWorkspaceId && workspaces.value.length > 0) {
+    // If no workspace was previously selected, select the one with
+    // lexicographically last ID (more recently created)
+    const workspaceId = [...workspaces.value].map(w => w.id).sort().reverse()[0]
+    if (workspaceId) {
+      store.selectWorkspaceId(workspaceId)
+      localStorage.setItem('selectedWorkspaceId', workspaceId)
+    }
   }
 })
 
@@ -47,7 +59,7 @@ const selectedWorkspace = () => {
   <div class="app-container">
     <div class="sidebar">
       <RouterLink id="logo-link" to="/kanban"><div id="logo">~</div></RouterLink>
-      
+
       <nav class="container">
         <RouterLink to="/kanban">Board</RouterLink>
         <RouterLink to="/archived-tasks">Archived Tasks</RouterLink>
@@ -84,7 +96,7 @@ const selectedWorkspace = () => {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   grid-template-rows: auto 1fr;
-  grid-template-areas: 
+  grid-template-areas:
     "sidebar header"
     "sidebar main";
   height: 100vh;
@@ -173,7 +185,7 @@ main {
   word-spacing: -0.2em;
   letter-spacing: -0.07em;
 
-  background:  linear-gradient(90deg, rgba(176, 78, 241, 0.7) 0%, rgba(253,29,29,0.45) 100%), #fff; 
+  background:  linear-gradient(90deg, rgba(176, 78, 241, 0.7) 0%, rgba(253,29,29,0.45) 100%), #fff;
   background-clip: text;
   -webkit-text-fill-color: transparent;
   font-size: 4rem;

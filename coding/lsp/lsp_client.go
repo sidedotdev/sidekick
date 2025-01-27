@@ -1,11 +1,12 @@
 package lsp
 
 import (
-	"context" // Adding the missing json package for handling JSON data
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os/exec"
+	"sidekick/common"
 
 	"github.com/sourcegraph/jsonrpc2"
 )
@@ -46,7 +47,11 @@ func lspServerStdioReadWriteCloser(languageName string) (*ReadWriteCloser, error
 	var cmd *exec.Cmd
 	switch languageName {
 	case "golang":
-		cmd = exec.Command("gopls", "-remote=auto", "-logfile=auto", "-debug=:0", "-remote.debug=:0", "-rpc.trace", "-remote.listen.timeout=0")
+		goplsPath, err := common.FindOrInstallGopls()
+		if err != nil {
+			return nil, fmt.Errorf("failed to find or install gopls: %w", err)
+		}
+		cmd = exec.Command(goplsPath, "-remote=auto", "-logfile=auto", "-debug=:0", "-remote.debug=:0", "-rpc.trace", "-remote.listen.timeout=0")
 	default:
 		return nil, fmt.Errorf("%v: %s", ErrUnsupportedLanguage, languageName)
 	}
@@ -77,7 +82,6 @@ func (l *Jsonrpc2LSPClient) Initialize(ctx context.Context, params InitializePar
 	if err != nil {
 		return InitializeResponse{}, fmt.Errorf("gopls failure: %v", err)
 	}
-
 	// Setup JSON-RPC 2.0 connection
 	(*l).Conn = jsonrpc2.NewConn(ctx, jsonrpc2.NewBufferedStream(rwc, jsonrpc2.VSCodeObjectCodec{}), &noopHandler{})
 
