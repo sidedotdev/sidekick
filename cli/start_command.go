@@ -514,8 +514,10 @@ func handleStartCommand(args []string) {
   \▓▓▓▓▓▓ \▓▓ \▓▓▓▓▓▓▓ \▓▓▓▓▓▓▓\▓▓   \▓▓\▓▓ \▓▓▓▓▓▓▓\▓▓   \▓▓
 
 `)
-		fmt.Printf("To use the Sidekick UI, go to: http://localhost:%d\n\n", common.GetServerPort())
+		fmt.Printf("Opening Sidekick UI at http://localhost:%d\n\n", common.GetServerPort())
+		openURL(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
 	}
+
 
 	// Wait for interrupt signal to gracefully shutdown the server
 	quit := make(chan os.Signal, 1)
