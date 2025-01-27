@@ -18,6 +18,14 @@ too long.
 
 The signature listing queries live at `signature_queries/signature_<language>.scm`.
 
+Signatures are also accompanied by "headers", which refer to package
+declarations and imports at the top-level, or whatever the corresponding
+language feature is. This ensures that LLMs have the context of what libraries
+are being used, and also the context required to edit those statements if/when
+necessary.
+
+The header queries live at `header_queries/header_<language>.scm`.
+
 ## Symbols 
 
 This package provides two related but distinct symbol processing capabilities:
