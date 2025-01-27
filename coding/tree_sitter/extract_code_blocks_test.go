@@ -138,7 +138,7 @@ abc=invalid line number`,
 			expected: nil,
 		},
 		// TODO /gen add test cases for truncated search output (with and without files listed after)
-		// TODO /gen add tests cases for non-search output, eg regular code blocks
+		// TODO /gen add tests cases for non-search output, eg regular code blocks, which should not be extracted.
 	}
 
 	for _, tt := range tests {
