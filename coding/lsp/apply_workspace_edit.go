@@ -3,6 +3,7 @@ package lsp
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"sidekick/env"
 	"sort"
@@ -94,8 +95,11 @@ func readURI(documentURI string) (string, error) {
 	if !strings.HasPrefix(documentURI, "file://") {
 		return "", fmt.Errorf("invalid file URI: %s", documentURI)
 	}
-	filePath := strings.TrimPrefix(documentURI, "file://")
-	contents, err := os.ReadFile(filePath)
+	u, err := url.Parse(documentURI)
+	if err != nil {
+		return "", err
+	}
+	contents, err := os.ReadFile(u.Path)
 	if err != nil {
 		return "", err
 	}
@@ -106,8 +110,11 @@ func writeURI(documentURI, updatedContents string) error {
 	if !strings.HasPrefix(documentURI, "file://") {
 		return fmt.Errorf("invalid file URI: %s", documentURI)
 	}
-	filePath := strings.TrimPrefix(documentURI, "file://")
-	err := os.WriteFile(filePath, []byte(updatedContents), 0644)
+	u, err := url.Parse(documentURI)
+	if err != nil {
+		return err
+	}
+	err = os.WriteFile(u.Path, []byte(updatedContents), 0644)
 	if err != nil {
 		return err
 	}

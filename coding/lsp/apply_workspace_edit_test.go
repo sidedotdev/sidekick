@@ -2,7 +2,9 @@ package lsp
 
 import (
 	"context"
+	"net/url"
 	"os"
+	"path/filepath"
 	"sidekick/env"
 	"testing"
 
@@ -311,6 +313,69 @@ Line 5`
 		t.Errorf("Expected file contents to be '%s', but got '%s'", expectedContents, contents)
 	}
 }
+
+func TestApplyWorkspaceEditSpaceInPath(t *testing.T) {
+	const originalContents = `Line 1
+Line 2
+Line 3
+Line 4
+Line 5`
+
+	tempDirWithSpaces := filepath.Join(t.TempDir(), "path with spaces")
+	testFilePath := filepath.Join(tempDirWithSpaces, "test file with spaces.go")
+	os.MkdirAll(tempDirWithSpaces, 0755)
+	err := os.WriteFile(testFilePath, []byte(originalContents), 0644)
+	assert.Nil(t, err)
+
+	uri, err := url.Parse("file://" + testFilePath)
+	assert.Nil(t, err)
+	documentURI := uri.String()
+
+	// TODO write mockFileContents to tempFile
+	// Create a mock WorkspaceEdit with valid edits
+	workspaceEdit := WorkspaceEdit{
+		DocumentChanges: []TextDocumentEdit{
+			{
+				TextDocument: OptionalVersionedTextDocumentIdentifier{
+					TextDocumentIdentifier: TextDocumentIdentifier{
+						DocumentURI: documentURI,
+					},
+				},
+				Edits: []TextEdit{
+					{
+						Range: Range{
+							Start: Position{Line: 0, Character: 0},
+							End:   Position{Line: 0, Character: 6},
+						},
+						NewText: "New content",
+					},
+				},
+			},
+		},
+	}
+
+	devEnv, err := env.NewLocalEnv(context.Background(), env.LocalEnvParams{
+		RepoDir: "TODO tempdir",
+	})
+	assert.Nil(t, err)
+	envContainer := env.EnvContainer{
+		Env: devEnv,
+	}
+	// Call ApplyWorkspaceEdit with the mock WorkspaceEdit
+	err = ApplyWorkspaceEdit(context.Background(), envContainer, workspaceEdit)
+	assert.Nil(t, err)
+
+	// Read the contents of the file
+	contents, err := readURI(documentURI)
+	assert.Nil(t, err)
+
+	// Assert that the contents of the file have been updated as expected
+	expectedContents := "New content" + originalContents[6:]
+	if contents != expectedContents {
+		t.Errorf("Expected file contents to be '%s', but got '%s'", expectedContents, contents)
+	}
+}
+
 func TestApplyTextEditCRLF(t *testing.T) {
 	tests := []struct {
 		name             string

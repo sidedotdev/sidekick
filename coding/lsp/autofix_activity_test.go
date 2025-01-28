@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sidekick/coding/check"
@@ -47,8 +48,8 @@ func TestAutofixActivity(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
-	uri := "file://" + tmpFile.Name()
-	result, err := lspa.AutofixActivity(context.Background(), AutofixActivityInput{envContainer, uri})
+	uri := utils.Ptr("file://" + tmpFile.Name())
+	result, err := lspa.AutofixActivity(context.Background(), AutofixActivityInput{envContainer, *uri})
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(result.SkippedCodeActions))
 	assert.Equal(t, 0, len(result.AppliedEdits))
@@ -66,7 +67,7 @@ func TestAutofixActivity(t *testing.T) {
 						{
 							TextDocument: OptionalVersionedTextDocumentIdentifier{
 								TextDocumentIdentifier: TextDocumentIdentifier{
-									DocumentURI: uri,
+									DocumentURI: *uri,
 								},
 							},
 							Edits: []TextEdit{
@@ -91,7 +92,7 @@ func TestAutofixActivity(t *testing.T) {
 			},
 		}, nil
 	}
-	result, err = lspa.AutofixActivity(context.Background(), AutofixActivityInput{envContainer, uri})
+	result, err = lspa.AutofixActivity(context.Background(), AutofixActivityInput{envContainer, *uri})
 	assert.NoError(t, err)
 
 	// Read the content of the file to confirm the edit
@@ -102,9 +103,28 @@ func TestAutofixActivity(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Contains(t, string(content), "twice edited")
 
+	// Test case: file path has spaces
+	tempDirWithSpaces := filepath.Join(t.TempDir(), "path with spaces")
+	testFilePath := filepath.Join(tempDirWithSpaces, "test file with spaces.go")
+	os.MkdirAll(tempDirWithSpaces, 0755)
+	err = os.WriteFile(testFilePath, []byte(""), 0644)
+	assert.Nil(t, err)
+	fileUri, err := url.Parse("file://" + testFilePath)
+	assert.Nil(t, err)
+	uri = utils.Ptr(fileUri.String())
+	// NOTE: this relies on mockLSPClient.TextDocumentCodeActionFunc set above, in prior test case
+	result, err = lspa.AutofixActivity(context.Background(), AutofixActivityInput{envContainer, *uri})
+	assert.NoError(t, err)
+	content, err = os.ReadFile(testFilePath)
+	assert.Equal(t, 0, len(result.SkippedCodeActions))
+	assert.Equal(t, 0, len(result.FailedEdits))
+	assert.Equal(t, 1, len(result.AppliedEdits))
+	assert.NoError(t, err)
+	assert.Contains(t, string(content), "twice edited")
+
 	// Test case: failure case where reading the file fails.
-	uri = "file://does/not/exist"
-	result, err = lspa.AutofixActivity(context.Background(), AutofixActivityInput{envContainer, uri})
+	uri = utils.Ptr("file://does/not/exist")
+	result, err = lspa.AutofixActivity(context.Background(), AutofixActivityInput{envContainer, *uri})
 	assert.Error(t, err)
 	assert.Equal(t, 0, len(result.SkippedCodeActions))
 	assert.Equal(t, 0, len(result.FailedEdits))
@@ -123,7 +143,7 @@ func TestAutofixActivity(t *testing.T) {
 						{
 							TextDocument: OptionalVersionedTextDocumentIdentifier{
 								TextDocumentIdentifier: TextDocumentIdentifier{
-									DocumentURI: uri,
+									DocumentURI: *uri,
 								},
 							},
 							Edits: []TextEdit{
@@ -141,8 +161,8 @@ func TestAutofixActivity(t *testing.T) {
 			},
 		}, nil
 	}
-	uri = "file://" + tmpFile.Name()
-	result, err = lspa.AutofixActivity(context.Background(), AutofixActivityInput{envContainer, uri})
+	uri = utils.Ptr("file://" + tmpFile.Name())
+	result, err = lspa.AutofixActivity(context.Background(), AutofixActivityInput{envContainer, *uri})
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(result.SkippedCodeActions))
 	assert.Equal(t, 1, len(result.FailedEdits))
