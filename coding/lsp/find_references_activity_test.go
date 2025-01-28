@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sidekick/env"
@@ -337,4 +338,44 @@ func useStuff() {
 			}
 		})
 	}
+}
+
+func TestE2eFindReferencesActivitySpacesInPath(t *testing.T) {
+	t.Parallel()
+	tempDirWithSpaces := filepath.Join(t.TempDir(), "path with spaces")
+
+	testFilePath := filepath.Join(tempDirWithSpaces, "test file with spaces.go")
+	testFile := `package foo
+
+func (f Foo) FooBar(){}
+func (f Foo) Omg(){}
+
+type Foo struct {}
+`
+
+	os.MkdirAll(tempDirWithSpaces, 0755)
+	err := os.WriteFile(testFilePath, []byte(testFile), 0644)
+	require.NoError(t, err)
+
+	lspa := &LSPActivities{
+		LSPClientProvider: func(language string) LSPClient {
+			return &Jsonrpc2LSPClient{
+				LanguageName: "golang",
+			}
+		},
+		InitializedClients: map[string]LSPClient{},
+	}
+
+	input := FindReferencesActivityInput{
+		EnvContainer: env.EnvContainer{
+			Env: &env.LocalEnv{WorkingDirectory: tempDirWithSpaces},
+		},
+		RelativeFilePath: filepath.Base(testFilePath),
+		SymbolText:       "Foo",
+	}
+
+	result, err := lspa.FindReferencesActivity(context.Background(), input)
+	fmt.Printf("Result: %v\n", result)
+	require.NoError(t, err)
+	require.Len(t, result, 2)
 }

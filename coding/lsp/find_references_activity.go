@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sidekick/env"
@@ -52,8 +53,11 @@ func (lspa *LSPActivities) FindReferencesActivity(ctx context.Context, input Fin
 		return nil, fmt.Errorf("failed to find symbol position: %w", err)
 	}
 
-	uri := "file://" + absoluteFilepath
-	references, err := lspClient.TextDocumentReferences(ctx, uri, position.Line, position.Character)
+	uri, err := url.Parse("file://" + absoluteFilepath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse uri file://%s: %w", absoluteFilepath, err)
+	}
+	references, err := lspClient.TextDocumentReferences(ctx, uri.String(), position.Line, position.Character)
 	if err != nil {
 		return nil, fmt.Errorf("failed to invoke lsp text document references: %w", err)
 	}
@@ -77,13 +81,16 @@ func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string,
 	if !ok {
 		// Initialize LSP client
 		lspClient = lspa.LSPClientProvider(lang)
-		rootUri := "file://" + baseDir
+		rootUri, err := url.Parse("file://" + baseDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse rootUri file://%s: %w", baseDir, err)
+		}
 		params := InitializeParams{
 			ProcessID:    1,
-			RootURI:      rootUri,
+			RootURI:      rootUri.String(),
 			Capabilities: defaultClientCapabilities,
 		}
-		_, err := lspClient.Initialize(ctx, params)
+		_, err = lspClient.Initialize(ctx, params)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize LSP client: %w", err)
 		}
