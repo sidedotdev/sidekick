@@ -55,7 +55,7 @@ func (lspa *LSPActivities) FindReferencesActivity(ctx context.Context, input Fin
 	uri := "file://" + absoluteFilepath
 	references, err := lspClient.TextDocumentReferences(ctx, uri, position.Line, position.Character)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find references: %w", err)
+		return nil, fmt.Errorf("failed to invoke lsp text document references: %w", err)
 	}
 
 	return references, nil
