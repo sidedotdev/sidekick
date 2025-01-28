@@ -14,6 +14,7 @@ import (
 	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/java"
 	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/typescript/tsx"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 )
 
@@ -403,6 +404,8 @@ func getSitterLanguage(languageName string) (*sitter.Language, error) {
 		return java.GetLanguage(), nil
 	case "ts", "typescript":
 		return typescript.GetLanguage(), nil
+	case "tsx":
+		return tsx.GetLanguage(), nil
 	case "vue":
 		return vue.GetLanguage(), nil
 	// Add more languages as needed
