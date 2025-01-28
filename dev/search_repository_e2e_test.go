@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sidekick/coding/tree_sitter"
 	"sidekick/env"
 	"sidekick/utils"
 	"strings"
@@ -140,6 +141,41 @@ func (s *SearchRepositoryE2ETestSuite) TestMultiwordSearch() {
 	s.Require().NoError(err)
 	s.Contains(result, "test.txt")
 	s.Contains(result, "This is a test file")
+}
+
+func (s *SearchRepositoryE2ETestSuite) TestTruncatedLongSearchOutputWithMultipleFiles() {
+	// Create multiple large files with repeating content
+	uniqueContent1 := strings.Repeat("first file content line\n", maxSearchOutputLength/len("first file content line\n")/2)
+	uniqueContent2 := strings.Repeat("second file line here\n", maxSearchOutputLength/len("second file line here\n")/2)
+	uniqueContent3 := strings.Repeat("third file test data\n", maxSearchOutputLength/len("third file test data\n")/2)
+
+	s.createTestFile("file1.txt", uniqueContent1)
+	s.createTestFile("file2.txt", uniqueContent2)
+	s.createTestFile("file3.txt", uniqueContent3)
+
+	// Test case: Output is truncated and additional files are listed
+	result, err := s.executeSearchRepository(SearchRepositoryInput{
+		PathGlob:   "*.txt",
+		SearchTerm: "file",
+	})
+
+	s.Require().NoError(err)
+
+	// Verify content is present but truncated
+	searchBlocks := tree_sitter.ExtractSearchCodeBlocks(result)
+	s.Assertions.Len(searchBlocks, 2)
+	s.Contains(result, "file1.txt")
+	s.Contains(searchBlocks[0].Code, strings.TrimSpace(uniqueContent1))
+	s.Contains(result, "file2.txt")
+	s.Contains(searchBlocks[1].Code, "second file line here\n")
+	s.Contains(result, "file3.txt")
+	s.NotContains(searchBlocks[1].Code, "third file test data\n")
+
+	// Verify exact truncation message is included
+	s.Contains(result, "... (search output truncated). The last file's results may be partial. Further matches exist in these files:")
+
+	// Verify total output length constraint
+	s.LessOrEqual(len(result), maxSearchOutputLength)
 }
 
 func (s *SearchRepositoryE2ETestSuite) TestTruncatedLongSearchOutput() {

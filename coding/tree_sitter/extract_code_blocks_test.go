@@ -137,8 +137,13 @@ another/secondary_file.go
 abc=invalid line number`,
 			expected: nil,
 		},
+		{
+			name:     "Non-search output - regular code block",
+			input:    "```go\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n```",
+			expected: nil,
+		},
+
 		// TODO /gen add test cases for truncated search output (with and without files listed after)
-		// TODO /gen add tests cases for non-search output, eg regular code blocks, which should not be extracted.
 	}
 
 	for _, tt := range tests {
