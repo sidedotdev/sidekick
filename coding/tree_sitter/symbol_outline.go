@@ -314,6 +314,10 @@ func writeSymbolCapture(languageName string, out *strings.Builder, sourceCode *[
 		{
 			writeTypescriptSymbolCapture(out, sourceCode, c, name)
 		}
+	case "tsx":
+		{
+			writeTsxSymbolCapture(out, sourceCode, c, name)
+		}
 	case "vue":
 		{
 			writeVueSymbolCapture(out, sourceCode, c, name)

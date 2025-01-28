@@ -411,6 +411,10 @@ func writeSignatureCapture(languageName string, out *strings.Builder, sourceCode
 		{
 			writeTypescriptSignatureCapture(out, sourceCode, c, name)
 		}
+	case "tsx":
+		{
+			writeTsxSignatureCapture(out, sourceCode, c, name)
+		}
 	case "vue":
 		{
 			writeVueSignatureCapture(out, sourceCode, c, name)
