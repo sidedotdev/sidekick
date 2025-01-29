@@ -175,7 +175,7 @@ func golangIntegrationTest(t *testing.T, code string, expectedCode string) {
 	uri := "file://" + tmpFile.Name()
 	result, err := lspa.AutofixActivity(context.Background(), AutofixActivityInput{envContainer, uri})
 	assert.NoError(t, err)
-	assert.Equal(t, []string{}, utils.Map(result.FailedEdits, func(fe FailedEdit) string { return fe.Err.Error() }))
+	assert.Equal(t, []string{}, utils.Map(result.FailedEdits, func(fe FailedEdit) string { return fe.Error }))
 	assert.Equal(t, 0, len(result.SkippedCodeActions))
 	assert.Equal(t, 1, len(result.AppliedEdits))
 
