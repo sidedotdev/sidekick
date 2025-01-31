@@ -11,8 +11,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-const OpenaiDefaultModel = "gpt-4o-2024-05-13"
-const OpenaiDefaultLongContextModel = "gpt-4o-2024-05-13"
+const OpenaiDefaultModel = "o3-mini-2025-01-31"
 const OpenaiApiKeySecretName = "OPENAI_API_KEY"
 
 type OpenaiToolChat struct {
