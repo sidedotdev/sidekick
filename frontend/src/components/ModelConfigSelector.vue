@@ -25,7 +25,8 @@
           :id="type + '-model' + index" 
           v-model="config.model" 
           placeholder="Default Model"
-          required>
+          :required="config.provider !== 'openai' && config.provider !== 'anthropic'"
+        >
         <button 
           type="button" 
           @click="removeConfig(index)" 
