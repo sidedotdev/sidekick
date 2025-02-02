@@ -2,7 +2,6 @@ package tree_sitter
 
 import (
 	"os"
-	"strings"
 	"testing"
 
 	"sidekick/utils"
