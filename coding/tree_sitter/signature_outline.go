@@ -379,6 +379,13 @@ func shouldExtendSignatureRange(languageName, captureName string) bool {
 		case "type.declaration", "const.declaration":
 			return true
 		}
+	case "vue":
+		{
+			// extend the range for <template>, <script>, and <style>
+			if captureName == "template" || captureName == "script" || captureName == "style" {
+				return true
+			}
+		}
 	}
 	return false // declaration is inclusive of the body so usually shouldn't extend
 }

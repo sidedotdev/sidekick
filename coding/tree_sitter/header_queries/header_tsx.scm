@@ -1,2 +1,3 @@
 (program (import_statement) @header)
-(program (import_require_clause) @header)
+
+(program (import_alias) @header)

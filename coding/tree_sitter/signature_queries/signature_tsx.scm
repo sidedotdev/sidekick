@@ -1,5 +1,6 @@
 (function_declaration
   name: (identifier) @function.name
+  type_parameters: (_)? @function.type_parameters
   parameters: (formal_parameters) @function.parameters
   return_type: (_)? @function.return_type
 ) @function.declaration
@@ -43,20 +44,33 @@
   ) @var.declaration
 )
 
-(class_declaration
+; node type can be class_declaration or just class
+(_
   name: (_) @class.name
   (class_heritage)* @class.heritage
-  body: (class_body
-    (public_field_definition)* @class.field
-    (method_definition
-      (accessibility_modifier)*  @class.method.mod
-      name: (_) @class.method.name
-      parameters: (_) @class.method.parameters
-      return_type: (_)? @class.method.return_type
-      body: (_) @class.method.body
-    )* @class.method
+  (class_body
+    [
+      (public_field_definition
+        (accessibility_modifier)* @class.field.mod
+        name: (_) @class.field.name
+        type: (_)? @class.field.type
+      ) @class.field.declaration
+
+      (method_definition
+        (accessibility_modifier)* @class.method.mod
+        name: (_) @class.method.name
+        parameters: (_) @class.method.parameters
+        return_type: (_)? @class.method.return_type
+        body: (_) @class.method.body
+      ) @class.method.declaration
+
+      (_)
+
+      ";"
+    ]*
   ) @class.body
 ) @class.declaration
+
 
 ; for symbol outline
 (method_definition

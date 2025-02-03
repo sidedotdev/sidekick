@@ -31,9 +31,14 @@ func TestGetFileSignaturesStringTsx(t *testing.T) {
 const Button: React.FC<ButtonProps> = ({ onClick, children }) => {
   return <button onClick={onClick}>{children}</button>;
 };`,
-			expected: `interface ButtonProps { onClick: () => void; children: React.ReactNode; }
-
-const Button: React.FC<ButtonProps> = ({ onClick, children }) => { return <button onClick={onClick}>{children}</button>; }
+			expected: `interface ButtonProps {
+  onClick: () => void;
+  children: React.ReactNode;
+}
+---
+const Button: React.FC<ButtonProps> = ({ onClick, children }) => {
+  return <button onClick={onClick}>{children}</button>;
+};
 ---
 `,
 		},
@@ -53,11 +58,9 @@ const Button: React.FC<ButtonProps> = ({ onClick, children }) => { return <butto
   }
 }`,
 			expected: `class Counter extends React.Component<{}, { count: number }>
-state = { count: 0 }
-
-increment = () => { this.setState(prev => ({ count: prev.count + 1 })); }
-
-render() { return ( <div>Count: {this.state.count}</div> ); }
+	state
+	increment
+	render()
 ---
 `,
 		},
@@ -86,9 +89,10 @@ render() { return ( <div>Count: {this.state.count}</div> ); }
   };
 }`,
 			expected: `function withLogging<P extends object>(WrappedComponent: React.ComponentType<P>)
-  class WithLogging extends React.Component<P>
-    componentDidMount()
-    render()
+---
+	class WithLogging extends React.Component<P>
+		componentDidMount()
+		render()
 ---
 `,
 		},
@@ -180,7 +184,7 @@ const Button: React.FC<ButtonProps> = ({ onClick }) => {
     }
   };
 }`,
-			expected: "WithLogging, render, withLogging",
+			expected: "withLogging, WithLogging, render",
 		},
 	}
 
@@ -258,6 +262,16 @@ func TestGetFileHeadersStringTsx(t *testing.T) {
 			name:     "nested imports",
 			code:     "function x() {\n    import React from 'react';\n}",
 			expected: "",
+		},
+		{
+			name:     "import aliases",
+			code:     "import { foo as f, bar as b } from 'bar';",
+			expected: "import { foo as f, bar as b } from 'bar';\n",
+		},
+		{
+			name:     "import equals",
+			code:     "import foo = bar;",
+			expected: "import foo = bar;\n",
 		},
 	}
 

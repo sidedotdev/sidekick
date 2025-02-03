@@ -251,7 +251,7 @@ func getSourceSymbolsInternal(languageName string, sitterLanguage *sitter.Langua
 	// sort symbols by start point
 	slices.SortFunc(symbols, func(i, j Symbol) int {
 		c := cmp.Compare(i.StartPoint.Row, j.StartPoint.Row)
-		if c != 0 {
+		if c == 0 {
 			c = cmp.Compare(i.StartPoint.Column, j.StartPoint.Column)
 		}
 		return c
@@ -272,6 +272,13 @@ func shouldExtendSymbolRange(languageName, captureName string) bool {
 			// extend the range for <template>, <script>, and <style>
 			if captureName == "template" || captureName == "script" || captureName == "style" {
 				return true
+			}
+		}
+	case "typescript", "tsx":
+		{
+			// these capture names just
+			if captureName == "interface.declaration" || captureName == "type.declaration" || captureName == "type_alias.declaration" {
+				return false
 			}
 		}
 	}

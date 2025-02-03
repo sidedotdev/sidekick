@@ -14,9 +14,6 @@ func writeTypescriptSignatureCapture(out *strings.Builder, sourceCode *[]byte, c
 			if strings.HasPrefix(content, "async ") {
 				out.WriteString("async ")
 			}
-			// an alternative is to replace the full function declaration's body
-			// with an empty string, but that seems like it would be slower
-			//fmt.Println(c.Node.ChildByFieldName("body").Content(sourceCode))
 		}
 	case "function.name":
 		{
@@ -25,31 +22,31 @@ func writeTypescriptSignatureCapture(out *strings.Builder, sourceCode *[]byte, c
 		}
 	case "class.declaration":
 		{
+			writeTypescriptIndentLevel(c.Node, out)
 			out.WriteString("class ")
 		}
 	case "class.body", "class.method.body":
 		{
-			out.WriteString("\n")
+			//out.WriteString("\n")
 		}
 	case "class.heritage":
 		{
 			out.WriteString(" ")
 			out.WriteString(content)
 		}
-	case "class.method.mod":
+	case "class.method.mod", "class.field.mod":
 		{
 			out.WriteString(content)
 			out.WriteString(" ")
 		}
-	case "class.field":
+	case "class.field.name":
 		{
-			out.WriteString("  ")
 			out.WriteString(content)
-			out.WriteString("\n")
 		}
-	case "class.method":
+	case "class.method.declaration", "class.field.declaration":
 		{
-			out.WriteString("  ")
+			out.WriteString("\n")
+			writeTypescriptIndentLevel(c.Node, out)
 		}
 	case "lexical.declaration":
 		{
@@ -67,7 +64,11 @@ func writeTypescriptSignatureCapture(out *strings.Builder, sourceCode *[]byte, c
 				}
 			}
 		}
-	case "function.parameters", "function.return_type", "interface.declaration", "type.declaration", "type_alias.declaration", "class.name", "class.method.name", "class.method.parameters", "class.method.return_type":
+	case "function.type_parameters", "function.parameters", "function.return_type",
+	"interface.declaration", "type.declaration", "type_alias.declaration",
+	"class.name",
+	"class.field.type",
+	"class.method.name", "class.method.parameters", "class.method.return_type":
 		{
 			out.WriteString(content)
 		}
@@ -94,5 +95,25 @@ func writeTypescriptSymbolCapture(out *strings.Builder, sourceCode *[]byte, c si
 		{
 			out.WriteString(content)
 		}
+	}
+}
+
+// getTypescriptIndentLevel returns the number of declaration ancestors between the node and the program node
+func getTypescriptIndentLevel(node *sitter.Node) int {
+	level := 0
+	current := node.Parent()
+	for current != nil {
+		if strings.HasSuffix(current.Type(), "_declaration") || current.Type() == "class" {
+			level++
+		}
+		current = current.Parent()
+	}
+	return level
+}
+
+func writeTypescriptIndentLevel(node *sitter.Node, out *strings.Builder) {
+	level := getTypescriptIndentLevel(node)
+	for i := 0; i < level; i++ {
+		out.WriteString("\t")
 	}
 }
