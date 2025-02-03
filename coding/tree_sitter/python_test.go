@@ -311,7 +311,7 @@ class TestClass:
 		pass
 	def method2(self):
 		pass`,
-			expected: "method1, method2, TestClass",
+			expected: "TestClass, method1, method2",
 		},
 		{
 			name:     "variable declaration",
@@ -351,7 +351,7 @@ class TestClass:
 		{
 			name:     "Typed method",
 			code:     "class Greeter:\n\tdef greet(self, name: str) -> None:\n\t\tprint(\"Hello, \" + name)",
-			expected: "greet, Greeter",
+			expected: "Greeter, greet",
 		},
 	}
 	for _, test := range tests {

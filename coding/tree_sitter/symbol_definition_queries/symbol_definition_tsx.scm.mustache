@@ -1,0 +1,84 @@
+(
+  (function_declaration
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+;(
+;  (function
+;    name: (identifier) @name
+;  )
+;  (#eq? @name "{{SymbolName}}")
+;) @definition
+
+(
+  (interface_declaration
+    name: (type_identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (type_alias_declaration
+    name: (type_identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (class_declaration
+    name: (_) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (call_expression
+    function: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (variable_declaration
+    (variable_declarator
+      name: (identifier) @name
+    )
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (lexical_declaration
+    (variable_declarator
+      name: (identifier) @name
+    )
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (method_definition
+    name: (_) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (interface_declaration
+    body: (_
+      (method_signature
+        name: (_) @name
+      )
+    )
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (interface_declaration
+    name: (_) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+)

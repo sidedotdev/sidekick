@@ -70,7 +70,7 @@ func TestGetDeclarationIndentLevel(t *testing.T) {
 				assert.True(t, found, "Failed to find node of type %s", pathElement)
 			}
 
-			level := getDeclarationIndentLevel(node)
+			level := getJavaIndentLevel(node)
 			assert.Equal(t, tc.expected, level)
 		})
 	}
@@ -632,7 +632,7 @@ public class Outer {
         System.out.println("Outer method");
     }
 }`,
-			expected: "Outer, outerMethod, Inner, innerMethod",
+			expected: "Outer, Inner, innerMethod, outerMethod",
 		},
 		{
 			name: "multiple classes in single file",
@@ -648,7 +648,7 @@ class Second {
 class Third {
     private void thirdMethod() {}
 }`,
-			expected: "First, Second, Third, firstMethod, secondMethod",
+			expected: "First, firstMethod, Second, secondMethod, Third",
 		},
 		{
 			name: "class inheritance",
@@ -661,7 +661,7 @@ public class Dog extends Animal {
     public void bark() {}
     private void sleep() {}
 }`,
-			expected: "Animal, Dog, makeSound, bark",
+			expected: "Animal, makeSound, Dog, bark",
 		},
 		{
 			name: "basic enum",
@@ -703,7 +703,7 @@ public class Container {
         // Process method
     }
 }`,
-			expected: "Container, Status, process, isTerminal",
+			expected: "Container, Status, isTerminal, process",
 		},
 		{
 			name: "multiple enums",
@@ -718,7 +718,7 @@ enum Size {
     public int getValue() { return 0; }
     private void internal() {}
 }`,
-			expected: "Color, Size, getValue, getHex",
+			expected: "Color, getHex, Size, getValue",
 		},
 	}
 

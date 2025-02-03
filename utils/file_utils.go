@@ -23,6 +23,8 @@ func InferLanguageNameFromFilePath(filePath string) string {
 		return "python"
 	case ".ts":
 		return "typescript"
+	case ".tsx":
+		return "tsx"
 	case ".vue":
 		return "vue"
 	case ".java":

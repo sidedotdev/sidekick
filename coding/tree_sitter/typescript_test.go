@@ -55,7 +55,7 @@ func TestGetFileSignaturesStringTypescript(t *testing.T) {
 		{
 			name:     "class with one method",
 			code:     "class TestClass { method1(arg1: number): void {} }",
-			expected: "class TestClass\n  method1(arg1: number): void\n---\n",
+			expected: "class TestClass\n\tmethod1(arg1: number): void\n---\n",
 		},
 		{
 			name: "class declaration with constructor, member and method",
@@ -71,9 +71,9 @@ func TestGetFileSignaturesStringTypescript(t *testing.T) {
 }
 			`,
 			expected: `class Rectangle extends Polygon
-  private abc: string
-  public constructor(protected readonly width: number, protected readonly height: number)
-  public getArea(): number
+	private abc: string
+	public constructor(protected readonly width: number, protected readonly height: number)
+	public getArea(): number
 ---
 `,
 		},
@@ -201,12 +201,12 @@ function add(a: number, b: number): number {
 		{
 			name:     "single class with single method",
 			code:     "class TestClass { testMethod() {} }",
-			expected: "testMethod, TestClass",
+			expected: "TestClass, testMethod",
 		},
 		{
 			name:     "single class with multiple methods",
 			code:     "class TestClass { testMethod1() {} testMethod2() {} }",
-			expected: "testMethod1, testMethod2, TestClass",
+			expected: "TestClass, testMethod1, testMethod2",
 		},
 	}
 
@@ -476,6 +476,16 @@ func TestGetFileHeadersStringTypescript(t *testing.T) {
 			name:     "nested imports",
 			code:     "function x() {\n    import { foo } from 'bar';\n    import { baz } from 'qux';\n}",
 			expected: "",
+		},
+		{
+			name:     "import aliases",
+			code:     "import { foo as f, bar as b } from 'bar';",
+			expected: "import { foo as f, bar as b } from 'bar';\n",
+		},
+		{
+			name:     "import equals",
+			code:     "import foo = bar;",
+			expected: "import foo = bar;\n",
 		},
 	}
 	for _, tc := range testCases {

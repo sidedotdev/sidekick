@@ -28,10 +28,7 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 				return
 			}
 
-			level := getDeclarationIndentLevel(c.Node)
-			for i := 0; i < level; i++ {
-				out.WriteString("\t")
-			}
+			writeJavaIndentLevel(c.Node, out)
 
 			switch name {
 			case "annotation.declaration":
@@ -54,10 +51,7 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 		}
 	case "annotation.modifiers", "class.modifiers", "interface.modifiers", "enum.modifiers":
 		{
-			level := getDeclarationIndentLevel(c.Node.Parent())
-			for i := 0; i < level; i++ {
-				out.WriteString("\t")
-			}
+			writeJavaIndentLevel(c.Node.Parent(), out)
 			out.WriteString(content)
 			out.WriteString(" ")
 			switch name {
@@ -99,10 +93,7 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 		"annotation.element.declaration",
 		"enum.constant.declaration":
 		{
-			level := getDeclarationIndentLevel(c.Node)
-			for i := 0; i < level; i++ {
-				out.WriteString("\t")
-			}
+			writeJavaIndentLevel(c.Node, out)
 			out.WriteString(content)
 			out.WriteString("\n")
 		}
@@ -113,10 +104,7 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 		}
 	case "class.constructor.declaration", "class.method.declaration", "enum.method.declaration":
 		{
-			level := getDeclarationIndentLevel(c.Node)
-			for i := 0; i < level; i++ {
-				out.WriteString("\t")
-			}
+			writeJavaIndentLevel(c.Node, out)
 		}
 	case "class.method.parameters", "class.constructor.parameters", "enum.method.parameters":
 		{
@@ -126,8 +114,8 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 	}
 }
 
-// getDeclarationIndentLevel returns the number of declaration ancestors between the node and the program node
-func getDeclarationIndentLevel(node *sitter.Node) int {
+// getJavaIndentLevel returns the number of declaration ancestors between the node and the program node
+func getJavaIndentLevel(node *sitter.Node) int {
 	level := 0
 	current := node.Parent()
 	for current != nil {
@@ -137,4 +125,11 @@ func getDeclarationIndentLevel(node *sitter.Node) int {
 		current = current.Parent()
 	}
 	return level
+}
+
+func writeJavaIndentLevel(node *sitter.Node, out *strings.Builder) {
+	level := getJavaIndentLevel(node)
+	for i := 0; i < level; i++ {
+		out.WriteString("\t")
+	}
 }
