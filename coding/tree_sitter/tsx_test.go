@@ -96,6 +96,76 @@ const Button: React.FC<ButtonProps> = ({ onClick, children }) => {
 ---
 `,
 		},
+		{
+			name: "complex TSX",
+			code: `import { useState, useEffect } from "react";
+interface User {
+  id: number;
+  name: string;
+  email: string;
+  username: string;
+}
+
+interface UsersState {
+  users: User[] | null;
+  loading: boolean;
+  error: string | null;
+}
+
+const useUsers = (): UsersState => {
+  const [state, setState] = useState<UsersState>({users: null, loading: true, error: null});
+  useEffect(() => {
+    async function fetchUsers() {
+      const response = await fetch('/api/users');
+      const data = await response.json();
+      setState({users: data, loading: false, error: null});
+    }
+    fetchUsers();
+  }, []);
+  return state;
+};
+
+function UserList() {
+  const { users, loading, error } = useUsers();
+  return (
+    <div>
+      {loading && <p>Loading...</p>}
+      {error && <p>Error: {error}</p>}
+      {users && users.map((user: User) => (
+        <div key={user.id}>
+          <h2>{user.name}</h2>
+          <p>{user.email}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export default UserList;`,
+			expected: `interface User {
+  id: number;
+  name: string;
+  email: string;
+  username: string;
+}
+---
+interface UsersState {
+  users: User[] | null;
+  loading: boolean;
+  error: string | null;
+}
+---
+const useUsers = (): UsersState => {
+  const [state, setState] = useState<UsersState>({users: null, loading: true, error: null});
+  useEffect(() => {
+  [...]
+---
+async function fetchUsers()
+---
+function UserList()
+---
+`,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -185,6 +255,54 @@ const Button: React.FC<ButtonProps> = ({ onClick }) => {
   };
 }`,
 			expected: "withLogging, WithLogging, render",
+		},
+		{
+			name: "complex TSX",
+			code: `import { useState, useEffect } from "react";
+interface User {
+  id: number;
+  name: string;
+  email: string;
+  username: string;
+}
+
+interface UsersState {
+  users: User[] | null;
+  loading: boolean;
+  error: string | null;
+}
+
+const useUsers = (): UsersState => {
+  const [state, setState] = useState<UsersState>({users: null, loading: true, error: null});
+  useEffect(() => {
+    async function fetchUsers() {
+      const response = await fetch('/api/users');
+      const data = await response.json();
+      setState({users: data, loading: false, error: null});
+    }
+    fetchUsers();
+  }, []);
+  return state;
+};
+
+function UserList() {
+  const { users, loading, error } = useUsers();
+  return (
+    <div>
+      {loading && <p>Loading...</p>}
+      {error && <p>Error: {error}</p>}
+      {users && users.map((user: User) => (
+        <div key={user.id}>
+          <h2>{user.name}</h2>
+          <p>{user.email}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export default UserList;`,
+			expected: "User, UsersState, useUsers, fetchUsers, UserList",
 		},
 	}
 
