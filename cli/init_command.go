@@ -185,19 +185,14 @@ func createSideignore(sideignorePath string) error {
 # Adjust by:
 #
 # 1. Removing paths for languages/frameworks not relevant to you
-# 2. Add any paths specific to your project that get auto-generated, such as
-#    mocks etc.
+# 2. Add any paths specific to your project that get auto-generated but not
+#    normally imported, such as mocks etc.
 
 # General vendored dependencies
 vendor/
 third_party/
 extern/
 deps/
-
-# General paths for generated code
-gen/
-generated/
-generated-src/
 
 # Node
 node_modules/
