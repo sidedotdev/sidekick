@@ -76,11 +76,7 @@
   name: (_) @method.name
 )
 
-
 ; TODO
-;(enum_declaration
-;  name: (identifier) @enum.name
-;) @enum.declaration
 ;(function_signature
 ;  name: (identifier) @function.name
 ;  parameters: (formal_parameters) @function.parameters

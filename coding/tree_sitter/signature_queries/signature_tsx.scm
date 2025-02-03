@@ -71,8 +71,27 @@
   ) @class.body
 ) @class.declaration
 
-
 ; for symbol outline
 (method_definition
   name: (_) @method.name
 )
+
+; TODO
+;(function_signature
+;  name: (identifier) @function.name
+;  parameters: (formal_parameters) @function.parameters
+;  return_type: (type_annotation) @function.return_type
+;)
+;
+;(method_signature
+;  name: (property_identifier) @method.name)
+;
+;(abstract_method_signature
+;  name: (property_identifier) @abstract_method_signature.name)
+;
+;(abstract_class_declaration
+;  name: (type_identifier) @abstract_class.name) @abstract_class.declaration
+;
+;(module
+;  name: (identifier) @module.name) @module.declaration
+;
