@@ -37,6 +37,7 @@ type SearchRepositoryInput struct {
 	SearchTerm      string
 	ContextLines    int
 	CaseInsensitive bool
+	FixedStrings    bool
 }
 
 // TODO /gen include the function name in the associated with each search result
@@ -103,6 +104,10 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 	if input.CaseInsensitive {
 		rgArgs += " --ignore-case"
 		gitGrepArgs += " --ignore-case"
+	}
+	if input.FixedStrings {
+		rgArgs += " --fixed-strings"
+		gitGrepArgs += " --fixed-strings"
 	}
 
 	// TODO /gen replace with a new env.ReadFilesActivity - we need to implement that.
@@ -190,6 +195,16 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 
 	// handle no results
 	if strings.TrimSpace(output) == "" {
+		if searchOutput.Stderr != "" && !strings.Contains(searchOutput.Stderr, "regex parse error") && !strings.Contains(searchOutput.Stderr, "No files were searched") {
+			return searchOutput.Stderr, nil
+		}
+
+		if !input.FixedStrings {
+			// retry with fixed strings search
+			input.FixedStrings = true
+			return SearchRepository(ctx, envContainer, input)
+		}
+
 		if !input.CaseInsensitive {
 			// retry with case-insensitive search
 			input.CaseInsensitive = true
