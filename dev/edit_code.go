@@ -302,6 +302,8 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	tools = append(tools, &bulkSearchRepositoryTool)
 	tools = append(tools, getRetrieveCodeContextTool())
 	tools = append(tools, &bulkReadFileTool)
+	tools = append(tools, &runCommandTool)
+
 	if !repoConfig.DisableHumanInTheLoop {
 		tools = append(tools, &getHelpOrInputTool)
 	}

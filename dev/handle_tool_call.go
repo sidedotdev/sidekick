@@ -77,6 +77,11 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult Tool
 			})
 		case recordDevPlanTool.Name:
 			response, err = "recorded", nil
+		case runCommandTool.Name:
+			var runCommandParams RunCommandParams
+			response, err = unmarshalAndInvoke(toolCall, &runCommandParams, func() (string, error) {
+				return RunCommand(dCtx, runCommandParams)
+			})
 		default:
 			// FIXME this should be non-retryable but is being retried now (openai can rarely use a function name that we don't support)
 			response, err = "", fmt.Errorf("unknown function name: %s", toolCall.Name)
