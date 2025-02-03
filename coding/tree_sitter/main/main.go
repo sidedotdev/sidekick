@@ -100,7 +100,6 @@ func main() {
 				SymbolNames: []string{"getSitterLanguage", "normalizeLanguageName"},
 			},
 
-
 			/*
 				{
 					FilePath:    "db/redis_database.go",

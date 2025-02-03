@@ -349,3 +349,44 @@ func (s *SearchRepositoryE2ETestSuite) TestFallbackToCaseInsensitiveUponNoResult
 	s.Contains(result, "fallback.txt")
 	s.Contains(result, "This is a FALLBACK test file")
 }
+func (s *SearchRepositoryE2ETestSuite) TestFallbackToFixedStringSearch() {
+	// Create a test file that contains the literal search term
+	testFilename := "test_invalid_regex.txt"
+	testContent := "This is a test containing something ( inside it."
+	s.createTestFile(testFilename, testContent)
+
+	// Use an invalid regex as the search term to trigger fallback to fixed string search
+	input := SearchRepositoryInput{
+		PathGlob:        testFilename,
+		SearchTerm:      "something (",
+		ContextLines:    2,
+		CaseInsensitive: false,
+		FixedStrings:    false,
+	}
+
+	result, err := s.executeSearchRepository(input)
+	s.Require().NoError(err, "Search should not error on fallback")
+	s.Require().NotContains(result, "regex parse error", "Output should not contain regex parse error")
+	s.Require().Contains(result, "This is a test containing something (", "Output should contain the matching line")
+}
+
+func (s *SearchRepositoryE2ETestSuite) TestFallbackToFixedStringSearch_NoMatches() {
+	// Create a test file that does NOT contain the search term
+	testFilename := "test_no_match.txt"
+	testContent := "This is a test with no matching content."
+	s.createTestFile(testFilename, testContent)
+
+	// Use an invalid regex as the search term which also doesn't match any content
+	input := SearchRepositoryInput{
+		PathGlob:        testFilename,
+		SearchTerm:      "something (",
+		ContextLines:    2,
+		CaseInsensitive: false,
+		FixedStrings:    false,
+	}
+
+	result, err := s.executeSearchRepository(input)
+	s.Require().NoError(err, "Search should not error even when no matches are found")
+	// Expecting no results message, which is defined in SearchRepoNoResultsMessage
+	s.Require().Equal(SearchRepoNoResultsMessage, result, "Output should indicate no results found")
+}
