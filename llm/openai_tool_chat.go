@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"sidekick/utils"
 	"strings"
 
@@ -33,11 +34,6 @@ func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 	}
 	client := openai.NewClientWithConfig(config)
 
-	var temperature float32 = defaultTemperature
-	if options.Params.Temperature != nil {
-		temperature = *options.Params.Temperature
-	}
-
 	var model string
 	if options.Params.Model != "" {
 		model = options.Params.Model
@@ -47,9 +43,14 @@ func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		model = OpenaiDefaultModel
 	}
 
-	var parallelToolCalls bool = false
-	if options.Params.ParallelToolCalls != nil {
-		parallelToolCalls = *options.Params.ParallelToolCalls
+	var temperature float32 = defaultTemperature
+	if options.Params.Temperature != nil {
+		temperature = *options.Params.Temperature
+	}
+	oSeries := regexp.MustCompile(`^o\d(-|$)`)
+	if oSeries.MatchString(model) {
+		// o-series does not support temperature, so omit by force-setting to 0
+		temperature = 0.0
 	}
 
 	// openai-compatible endpoints may require alternating user vs assistant
@@ -64,13 +65,12 @@ func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		Tools:             openaiFromTools(options.Params.Tools),
 		Stream:            true,
 		Temperature:       temperature,
-		ParallelToolCalls: parallelToolCalls,
 		StreamOptions: &openai.StreamOptions{
 			IncludeUsage: true,
 		},
 	}
-	if len(req.Tools) == 0 {
-		req.ParallelToolCalls = nil
+	if len(req.Tools) > 0 && options.Params.ParallelToolCalls != nil {
+		req.ParallelToolCalls = options.Params.ParallelToolCalls
 	}
 	stream, err := client.CreateChatCompletionStream(ctx, req)
 

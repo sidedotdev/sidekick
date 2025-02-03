@@ -33,7 +33,7 @@ func LlmHeartbeatCtx(ctx workflow.Context) workflow.Context {
 	}
 	options := workflow.ActivityOptions{
 		StartToCloseTimeout: 5 * time.Minute,
-		HeartbeatTimeout:    20 * time.Second, // we heartbeat every 20s: 5s was not enough for anthropic tool streaming chunks sometimes. maybe incorporating ping message events will fix this.
+		HeartbeatTimeout:    120 * time.Second, // we heartbeat every 120s: 5s was not enough for anthropic tool streaming chunks sometimes and 60s not enough for o3-mini. maybe incorporating ping message events will fix this for anthropic.
 		RetryPolicy:         retrypolicy,
 	}
 	ctx = workflow.WithActivityOptions(ctx, options)
