@@ -14,6 +14,7 @@ import (
 	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/java"
 	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/typescript/tsx"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 )
 
@@ -250,7 +251,7 @@ func getSourceSymbolsInternal(languageName string, sitterLanguage *sitter.Langua
 	// sort symbols by start point
 	slices.SortFunc(symbols, func(i, j Symbol) int {
 		c := cmp.Compare(i.StartPoint.Row, j.StartPoint.Row)
-		if c != 0 {
+		if c == 0 {
 			c = cmp.Compare(i.StartPoint.Column, j.StartPoint.Column)
 		}
 		return c
@@ -271,6 +272,13 @@ func shouldExtendSymbolRange(languageName, captureName string) bool {
 			// extend the range for <template>, <script>, and <style>
 			if captureName == "template" || captureName == "script" || captureName == "style" {
 				return true
+			}
+		}
+	case "typescript", "tsx":
+		{
+			// these capture names just
+			if captureName == "interface.declaration" || captureName == "type.declaration" || captureName == "type_alias.declaration" {
+				return false
 			}
 		}
 	}
@@ -312,6 +320,10 @@ func writeSymbolCapture(languageName string, out *strings.Builder, sourceCode *[
 	case "typescript":
 		{
 			writeTypescriptSymbolCapture(out, sourceCode, c, name)
+		}
+	case "tsx":
+		{
+			writeTsxSymbolCapture(out, sourceCode, c, name)
 		}
 	case "vue":
 		{
@@ -403,6 +415,8 @@ func getSitterLanguage(languageName string) (*sitter.Language, error) {
 		return java.GetLanguage(), nil
 	case "ts", "typescript":
 		return typescript.GetLanguage(), nil
+	case "tsx":
+		return tsx.GetLanguage(), nil
 	case "vue":
 		return vue.GetLanguage(), nil
 	// Add more languages as needed
