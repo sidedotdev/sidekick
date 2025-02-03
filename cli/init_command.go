@@ -58,6 +58,17 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		return err
 	}
 
+	sideignorePath := filepath.Join(baseDir, ".sideignore")
+	if _, err := os.Stat(sideignorePath); errors.Is(err, os.ErrNotExist) {
+		err := createSideignore(sideignorePath)
+		if err != nil {
+			return fmt.Errorf("error creating .sideignore: %w", err)
+		}
+		fmt.Println("✔ .sideignore file created.")
+	} else if err != nil {
+		return fmt.Errorf("error checking .sideignore: %w", err)
+	}
+
 	// Check for existing local provider configuration
 	localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
 	if err != nil {
@@ -155,6 +166,72 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	}
 
 	return nil
+}
+
+func createSideignore(sideignorePath string) error {
+	f, err := os.Create(sideignorePath)
+	if err != nil {
+		return fmt.Errorf("error creating .sideignore: %w", err)
+	}
+	defer f.Close()
+	content := `
+# To avoid giving your LLM irrelevant context, this .sideignore file can be used
+# to exclude any code that isn't part of what is normally edited.  The format is
+# the same as .gitignore. Note that any patterns listed here are ignored *in
+# addition* to to what is ignored via .sideignore.
+#
+# The following is a list of common vendored dependencies or known paths that
+# should not be edited, in case they are not already in a .gitignore file.
+# Adjust by:
+#
+# 1. Removing paths for languages/frameworks not relevant to you
+# 2. Add any paths specific to your project that get auto-generated, such as
+#    mocks etc.
+
+# General vendored dependencies
+vendor/
+third_party/
+extern/
+deps/
+
+# General paths for generated code
+gen/
+generated/
+generated-src/
+
+# Node
+node_modules/
+
+# Python virtual environments (less common names)
+.venv/
+env/
+
+# Go vendored dependencies
+vendor/
+
+# Ruby
+.bundle/
+vendor/bundle/
+
+# PHP
+vendor/
+
+# Java / Kotlin
+.gradle/
+
+# C / C++
+deps/
+
+# Swift / Dart / Flutter
+.dart_tool/
+Carthage/
+
+# Elixir / Erlang
+_build/
+deps/
+`
+	_, err = f.WriteString(strings.TrimSpace(content))
+	return err
 }
 
 func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspaceID string, currentConfig *domain.WorkspaceConfig, llmProviders, embeddingProviders []string) error {

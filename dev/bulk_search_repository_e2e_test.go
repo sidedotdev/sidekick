@@ -102,7 +102,6 @@ func TestBulkSearchRepositorySuite(t *testing.T) {
 	suite.Run(t, new(BulkSearchRepositoryE2ETestSuite))
 }
 
-
 func (s *BulkSearchRepositoryE2ETestSuite) TestPathGlobIsNonExistentFile() {
 	// Execute bulk search with non-existent file
 	result, err := s.executeBulkSearchRepository(BulkSearchRepositoryParams{
