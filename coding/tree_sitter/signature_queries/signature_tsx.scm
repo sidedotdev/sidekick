@@ -76,36 +76,3 @@
 (method_definition
   name: (_) @method.name
 )
-
-; React component function declarations
-(variable_declaration
-  (variable_declarator
-    name: (identifier) @react.component.name
-    value: (arrow_function
-      parameters: (_) @react.component.parameters
-      return_type: (_)? @react.component.return_type
-      body: (jsx_element) @react.component.body
-    )
-  )
-) @react.component.declaration
-
-; React component class declarations
-(class_declaration
-  name: (_) @react.class.name
-  (class_heritage
-    (extends_clause
-      value: (member_expression
-        object: (identifier) @react.class.base
-        property: (property_identifier) @react.class.type
-      )
-    )
-  )?
-) @react.class.declaration
-
-; React hooks
-(variable_declaration
-  (variable_declarator
-    name: (identifier) @hook.name
-    value: (arrow_function) @hook.body
-  )
-) @hook.declaration
