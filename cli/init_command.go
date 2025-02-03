@@ -38,7 +38,7 @@ func NewInitCommandHandler(storage srv.Storage) *InitCommandHandler {
 }
 
 func (h *InitCommandHandler) handleInitCommand() error {
-	fmt.Println("Starting initialization...")
+	fmt.Println("Initializing new workspace...")
 
 	baseDir, err := getGitBaseDirectory()
 	if err != nil {
@@ -64,7 +64,7 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		if err != nil {
 			return fmt.Errorf("error creating .sideignore: %w", err)
 		}
-		fmt.Println("✔ .sideignore file created.")
+		fmt.Println("✔ Created .sideignore file (commit this)")
 	} else if err != nil {
 		return fmt.Errorf("error checking .sideignore: %w", err)
 	}
@@ -106,9 +106,9 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		if err != nil {
 			return fmt.Errorf("error prompting for test command: %w", err)
 		}
-		fmt.Println("✔ Your test command has been saved in side.toml.")
+		fmt.Println("✔ Your test command has been saved in side.toml (commit this)")
 	} else {
-		fmt.Println("✔ Found valid test commands in side.toml.")
+		fmt.Println("✔ Found valid test commands in side.toml")
 	}
 
 	workspaceName, err := getRepoName(baseDir)
@@ -139,12 +139,12 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	if err != nil {
 		return fmt.Errorf("error ensuring workspace configuration: %w", err)
 	}
-	fmt.Println("✔ Workspace configuration has been set up.")
+	fmt.Println("✔ Workspace configuration has been set up")
 
 	if checkServerStatus() {
 		fmt.Printf("✔ Sidekick server is running. Go to http://localhost:%d\n", common.GetServerPort())
 	} else {
-		fmt.Println("ℹ Sidekick server is not running.")
+		fmt.Println("ℹ Sidekick server is not running")
 
 		startServer := true // default to "Yes"
 		err := huh.NewConfirm().
@@ -161,7 +161,7 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		if startServer {
 			handleStartCommand([]string{})
 		} else {
-			fmt.Println("Please run 'side start' to start the server when you're ready.")
+			fmt.Println("Please run 'side start' to start the server when you're ready")
 		}
 	}
 
@@ -385,11 +385,11 @@ func saveConfig(filePath string, config common.RepoConfig) error {
 }
 
 func ensureTestCommands(config *common.RepoConfig, filePath string) error {
-	fmt.Println("\nPlease enter the command you use to run your tests.")
+	fmt.Println("\nPlease enter the command you use to run your tests")
 	fmt.Println("Examples:")
 	fmt.Println("- If you are using JavaScript, you might use: jest")
 	fmt.Println("- If you are using Python, you might use: pytest")
-	fmt.Println("- If you are using another tool, please specify its command.")
+	fmt.Println("- If you are using another tool, please specify its command")
 	fmt.Print("Enter your test command: ")
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -397,7 +397,7 @@ func ensureTestCommands(config *common.RepoConfig, filePath string) error {
 	testCommand := scanner.Text()
 
 	if testCommand == "" {
-		return fmt.Errorf("No command entered. Exiting.")
+		return fmt.Errorf("No command entered, exiting early")
 	}
 
 	config.TestCommands = []common.CommandConfig{
@@ -446,7 +446,7 @@ func ensureAISecrets() ([]string, error) {
 		}
 
 		if apiKey == "" {
-			return nil, fmt.Errorf("%s API Key not provided. Exiting.", provider)
+			return nil, fmt.Errorf("%s API Key not provided, exiting early", provider)
 		}
 
 		err = keyring.Set(service, secretName, apiKey)
@@ -479,7 +479,7 @@ func ensureEmbeddingSecrets() ([]string, error) {
 	openaiKey, err := keyring.Get(service, llm.OpenaiApiKeySecretName)
 	if err == nil && openaiKey != "" {
 		providers = append(providers, "OpenAI")
-		fmt.Println("✔ Found existing OPENAI_API_KEY in keyring for embeddings.")
+		fmt.Println("✔ Found existing OPENAI_API_KEY in keyring for embeddings")
 		return providers, nil
 	}
 
@@ -496,14 +496,14 @@ func ensureEmbeddingSecrets() ([]string, error) {
 	}
 
 	if apiKey == "" {
-		return nil, fmt.Errorf("OpenAI API Key not provided. Exiting.")
+		return nil, fmt.Errorf("OpenAI API Key not provided, exiting early")
 	}
 
 	err = keyring.Set(service, llm.OpenaiApiKeySecretName, apiKey)
 	if err != nil {
 		return nil, fmt.Errorf("error storing OpenAI API key in keyring: %w", err)
 	}
-	fmt.Println("OpenAI API Key saved to keyring.")
+	fmt.Println("OpenAI API Key saved to keyring")
 
 	providers = append(providers, "OpenAI")
 	return providers, nil
