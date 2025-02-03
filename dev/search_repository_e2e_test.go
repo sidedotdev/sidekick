@@ -18,6 +18,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+
 type SearchRepositoryE2ETestSuite struct {
 	suite.Suite
 	testsuite.WorkflowTestSuite
