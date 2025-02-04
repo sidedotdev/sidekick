@@ -11,27 +11,24 @@ import (
 )
 
 type RunCommandParams struct {
-	Command    string `json:"command" jsonschema:"description=The shell command to execute,required"`
-	WorkingDir string `json:"workingDir,omitempty" jsonschema:"description=Optional working directory relative to environment's working directory"`
+	Command    string `json:"command" jsonschema:"description=The shell command or script to execute"`
+	WorkingDir string `json:"workingDir,omitempty" jsonschema:"description=Optional working directory relative to the repository root directory"`
 }
 
 var runCommandTool = llm.Tool{
 	Name:        "run_command",
-	Description: "Used to execute shell commands after getting user approval. The command will be run through 'sh' shell. If workingDir is provided, it will be interpreted relative to the environment's working directory.",
+	Description: "Used to execute shell commands after getting user approval. The command will be run through the 'sh' shell if approved.",
 	Parameters:  (&jsonschema.Reflector{ExpandedStruct: true}).Reflect(&RunCommandParams{}),
 }
 
 // RunCommand handles the execution of shell commands with user approval
 func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 	// Format approval prompt
-	workDirInfo := ""
-	if params.WorkingDir != "" {
-		workDirInfo = fmt.Sprintf(" in directory '%s'", params.WorkingDir)
-	}
-	approvalPrompt := fmt.Sprintf("Do you approve running the following command%s?\n\n%s", workDirInfo, params.Command)
+	approvalPrompt := fmt.Sprintf("Allow running the following command?\n\n%s", params.Command)
 
 	// Get user approval
-	userResponse, err := GetUserApproval(dCtx.NewActionContext("RunCommand"), approvalPrompt, map[string]interface{}{
+	actionCtx := dCtx.NewActionContext("Approve Command")
+	userResponse, err := GetUserApproval(actionCtx, approvalPrompt, map[string]any{
 		"command":    params.Command,
 		"workingDir": params.WorkingDir,
 	})

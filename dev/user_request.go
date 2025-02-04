@@ -44,7 +44,7 @@ type UserResponse struct {
 	Choice           string
 }
 
-func GetUserApproval(actionCtx DevActionContext, approvalPrompt string, requestParams map[string]interface{}) (*UserResponse, error) {
+func GetUserApproval(actionCtx DevActionContext, approvalPrompt string, requestParams map[string]any) (*UserResponse, error) {
 	if actionCtx.RepoConfig.DisableHumanInTheLoop {
 		// auto-approve for now if humans are not in the loop
 		// TODO: add a self-review process in this case

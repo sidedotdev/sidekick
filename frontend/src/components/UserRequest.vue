@@ -1,6 +1,10 @@
 <template>
   <form v-if="isPending" @submit.prevent="flowAction.actionParams.requestKind === 'free_form' && submitUserResponse(true)">
     <p>{{ flowAction.actionParams.requestContent }}</p>
+    <pre v-if="flowAction.actionParams.command"><code>{{ flowAction.actionParams.command }}</code></pre>
+    <p v-if="flowAction.actionParams.workingDir">
+      Working Dir: <code>{{ flowAction.actionParams.workingDir }}</code>
+    </p>
     <AutogrowTextarea v-model="responseContent" :placeholder="flowAction.actionParams.requestKind === 'approval' ? 'Content is only required for the revise option' : ''" />
     <div v-if="flowAction.actionParams.requestKind === 'approval'">
       <button type="button" class="cta-button-color"
