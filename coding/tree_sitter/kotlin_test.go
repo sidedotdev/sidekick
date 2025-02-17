@@ -113,6 +113,23 @@ class Visible {
 `,
 		},
 		{
+			name: "class with mixed properties",
+			input: `
+class MixedProps {
+   val a: Int = 1
+   private val b: Int = 2
+   protected var c: String? = null
+   var d: Boolean = false
+}
+`,
+			expected: `class MixedProps
+	val a: Int = 1
+	var d: Boolean = false
+---
+`,
+		},
+
+		{
 			name: "protected class",
 			input: `
 protected class Protected {
@@ -120,6 +137,22 @@ protected class Protected {
 }
 `,
 			expected: ``,
+		},
+		{
+			name: "class with private properties",
+			input: `
+class MixedProps {
+  val publicProp: String = "hello"
+  private val secret: String = "secret"
+  protected var alsoSecret: Int = 100
+  var another: Boolean = true
+}
+`,
+			expected: `class MixedProps
+	val publicProp: String = "hello"
+	var another: Boolean = true
+---
+`,
 		},
 	}
 
@@ -225,6 +258,19 @@ class Visible {
 			expected: "Visible, shown, alsoShown",
 		},
 		{
+			name: "class with mixed properties",
+			code: `
+class MixedProps {
+   val a: Int = 1
+   private val b: Int = 2
+   protected var c: String? = null
+   var d: Boolean = false
+}
+`,
+			expected: "MixedProps",
+		},
+
+		{
 			name: "protected class",
 			code: `
 protected class Protected {
@@ -232,6 +278,18 @@ protected class Protected {
 }
 `,
 			expected: "",
+		},
+		{
+			name: "class with private properties",
+			code: `
+class MixedProps {
+  val publicProp: String = "hello"
+  private val secret: String = "secret"
+  protected var alsoSecret: Int = 100
+  var another: Boolean = true
+}
+`,
+			expected: "MixedProps",
 		},
 	}
 

@@ -22,10 +22,19 @@
       )
 
       (property_declaration
+        (modifiers)? @class.method.modifiers
+          (#not-match? @class.method.modifiers "private|protected")
         (variable_declaration
           (simple_identifier) @class.property.name
         )
       ) @class.property.declaration
+
+      ; private/protected matching alternate to make sure overall class capture
+      ; still happens
+      (property_declaration
+        (modifiers)? @class.property.ignored.modifiers
+          (#match? @class.property.ignored.modifiers "private|protected")
+      )
 
       (_)
     ]*
