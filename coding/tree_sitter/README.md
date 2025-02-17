@@ -26,7 +26,8 @@ language feature is. This ensures that LLMs have the context of what libraries
 are being used, and also the context required to edit those statements if/when
 necessary.
 
-The header queries live at `header_queries/header_<language>.scm`.
+The header queries live at `header_queries/header_<language>.scm`, and any
+captures named "header" will be part of the final output.
 
 ## Symbols 
 
