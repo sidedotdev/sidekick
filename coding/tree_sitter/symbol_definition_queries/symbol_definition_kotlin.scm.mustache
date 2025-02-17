@@ -1,0 +1,31 @@
+; All class declarations (including value classes, enums, and regular classes)
+(
+  [
+    (multiline_comment)
+    (line_comment)
+  ]* @doc
+  .
+  (class_declaration
+    (type_identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+; Function declarations
+(
+  [
+    (multiline_comment)
+    (line_comment)
+  ]* @doc
+  .
+  (function_declaration
+    (simple_identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+; enum members
+(enum_entry
+  (simple_identifier) @name
+  (#eq? @name "{{SymbolName}}")
+) @definition

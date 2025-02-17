@@ -43,3 +43,23 @@
     ]*
   )? @class.enum_body
 ) @class.declaration
+
+; extract method names as separate matches for symbol outline
+(class_declaration
+  (_
+    (function_declaration
+      (modifiers)? @method.modifiers
+        (#not-match? @method.modifiers "private|protected")
+      (simple_identifier) @method.name
+    )
+  )
+)
+
+; extract enum entry names as separate matches for symbol outline
+(class_declaration
+  (_
+    (enum_entry
+      (simple_identifier) @enum_entry.name
+    )
+  )
+)

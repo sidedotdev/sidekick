@@ -69,7 +69,11 @@ func writeKotlinIndentLevel(node *sitter.Node, out *strings.Builder) {
 }
 
 // writeKotlinSymbolCapture captures Kotlin symbol information from source code.
-// This is a stub implementation.
 func writeKotlinSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
-	out.WriteString("// kotlin symbol capture not implemented yet")
+	content := c.Node.Content(*sourceCode)
+	// note: only top-level names here (eg we must skip class.method.name for instance)
+	switch name {
+	case "class.name", "method.name", "enum_entry.name":
+		out.WriteString(content)
+	}
 }
