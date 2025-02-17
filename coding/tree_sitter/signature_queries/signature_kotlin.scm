@@ -10,8 +10,10 @@
       (function_declaration
         (modifiers)? @class.method.modifiers
           (#not-match? @class.method.modifiers "private|protected")
+        (type_parameters)? @class.method.type_parameters
         (simple_identifier) @class.method.name
         (function_value_parameters) @class.method.parameters
+        (user_type)? @class.method.return_type
       ) @class.method.declaration
 
       ; private/protected matching alternate to make sure overall class capture
@@ -45,8 +47,10 @@
       (function_declaration
         (modifiers)? @class.method.modifiers
           (#not-match? @class.method.modifiers "private|protected")
+        (type_parameters)? @class.method.type_parameters
         (simple_identifier) @class.method.name
         (function_value_parameters) @class.method.parameters
+        (user_type)? @class.method.return_type
       ) @class.method.declaration
 
       ; private/protected matching alternate to make sure overall class capture
@@ -67,6 +71,19 @@
   )? @class.enum_body
 
 ) @class.declaration
+
+; Top-level function declarations
+(source_file
+  (function_declaration
+    (modifiers)? @function.modifiers
+      ; not sure if we wanna exclude internal too here
+      (#not-match? @function.modifiers "private")
+    (type_parameters)? @function.type_parameters
+    (simple_identifier) @function.name
+    (function_value_parameters) @function.parameters
+    (user_type)? @function.return_type
+  ) @function.declaration
+)
 
 ; Extract method names for symbol outline
 (class_declaration

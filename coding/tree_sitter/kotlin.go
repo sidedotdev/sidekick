@@ -10,6 +10,24 @@ import (
 func writeKotlinSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
 	content := c.Node.Content(*sourceCode)
 	switch name {
+	case "function.declaration":
+		writeKotlinIndentLevel(c.Node, out)
+		maybeModifiers := c.Node.Child(0)
+		if maybeModifiers != nil && maybeModifiers.Type() == "modifiers" {
+			out.WriteString(maybeModifiers.Content(*sourceCode))
+			out.WriteString(" ")
+		}
+		out.WriteString("fun ")
+	case "function.name":
+		out.WriteString(content)
+	case "function.type_parameters", "class.method.type_parameters":
+		out.WriteString(content)
+		out.WriteString(" ")
+	case "function.parameters", "function.type_constraints", "class.method.parameters", "class.method.type_constraints":
+		out.WriteString(content)
+	case "function.return_type", "class.method.return_type":
+		out.WriteString(": ")
+		out.WriteString(content)
 	case "class.declaration":
 		writeKotlinIndentLevel(c.Node, out)
 		maybeEnum := c.Node.Child(0)
@@ -23,15 +41,22 @@ func writeKotlinSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sit
 			out.WriteString("enum ")
 		}
 		out.WriteString("class ")
-	case "class.name", "class.method.name":
+	case "class.name":
+		out.WriteString(content)
+	case "class.method.name":
 		out.WriteString(content)
 	case "class.primary_constructor":
 		out.WriteString(content)
-	case "class.type_parameters", "class.method.parameters":
+	case "class.type_parameters":
 		out.WriteString(content)
 	case "class.method.declaration":
 		out.WriteString("\n")
 		writeKotlinIndentLevel(c.Node, out)
+		maybeModifiers := c.Node.Child(0)
+		if maybeModifiers != nil && maybeModifiers.Type() == "modifiers" {
+			out.WriteString(maybeModifiers.Content(*sourceCode))
+			out.WriteString(" ")
+		}
 		out.WriteString("fun ")
 	case "class.property.declaration":
 		out.WriteString("\n")
@@ -43,7 +68,6 @@ func writeKotlinSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sit
 		out.WriteString(content)
 	case "class.body":
 		// Do nothing here as we want to handle each inner declaration separately
-		// out.WriteString("\n")
 	}
 }
 
@@ -71,9 +95,8 @@ func writeKotlinIndentLevel(node *sitter.Node, out *strings.Builder) {
 // writeKotlinSymbolCapture captures Kotlin symbol information from source code.
 func writeKotlinSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
 	content := c.Node.Content(*sourceCode)
-	// note: only top-level names here (eg we must skip class.method.name for instance)
 	switch name {
-	case "class.name", "method.name", "enum_entry.name":
+	case "class.name", "method.name", "function.name", "enum_entry.name":
 		out.WriteString(content)
 	}
 }

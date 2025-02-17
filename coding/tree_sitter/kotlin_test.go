@@ -17,6 +17,60 @@ func TestGetFileSignaturesStringKotlin(t *testing.T) {
 		expected string
 	}{
 		{
+			name: "top level function",
+			input: `fun main() {
+    println("Hello, World!")
+}`,
+			expected: `fun main()
+---
+`,
+		},
+		{
+			name: "generic function",
+			input: `fun <T> genericFunc(item: T): T {
+    return item
+}`,
+			expected: `fun <T> genericFunc(item: T): T
+---
+`,
+		},
+		{
+			name: "function with parameters",
+			input: `fun greet(name: String, age: Int) {
+    println("Hello, $name! You are $age years old.")
+}`,
+			expected: `fun greet(name: String, age: Int)
+---
+`,
+		},
+		{
+			name: "function with return type",
+			input: `fun calculate(x: Int, y: Int): Int {
+    return x + y
+}`,
+			expected: `fun calculate(x: Int, y: Int): Int
+---
+`,
+		},
+		{
+			name: "annotated function",
+			input: `@Deprecated("Use newMethod instead")
+fun oldMethod() {
+    println("old")
+}`,
+			// ideally we'd retain the newline, but it's not important
+			expected: `@Deprecated("Use newMethod instead") fun oldMethod()
+---
+`,
+		},
+		{
+			name: "private function excluded",
+			input: `private fun internal() {
+    println("internal")
+}`,
+			expected: ``,
+		},
+		{
 			name: "simple classes",
 			input: `
 class Empty
@@ -40,6 +94,18 @@ class Hello {
 			expected: `class Hello
 	fun a()
 	fun b()
+---
+`,
+		},
+		{
+			name: "class with generic method",
+			input: `class Container<T> {
+    fun <R> transform(item: T, mapper: (T) -> R): R {
+        return mapper(item)
+    }
+}`,
+			expected: `class Container<T>
+	fun <R> transform(item: T, mapper: (T) -> R): R
 ---
 `,
 		},
@@ -186,6 +252,36 @@ func TestGetFileSymbolsStringKotlin(t *testing.T) {
 		code     string
 		expected string
 	}{
+		{
+			name: "top level function",
+			code: `fun main() {
+    println("Hello, World!")
+}`,
+			expected: `main`,
+		},
+		{
+			name: "generic function",
+			code: `fun <T> genericFunc(item: T): T {
+    return item
+}`,
+			expected: `genericFunc`,
+		},
+		{
+			name: "private function excluded",
+			code: `private fun internal() {
+    println("internal")
+}`,
+			expected: ``,
+		},
+		{
+			name: "class with generic method",
+			code: `class Container<T> {
+    fun <R> transform(item: T, mapper: (T) -> R): R {
+        return mapper(item)
+    }
+}`,
+			expected: `Container, transform`,
+		},
 		{
 			name: "simple classes",
 			code: `
@@ -494,7 +590,6 @@ class DocClass2 {
 		})
 	}
 }
-
 
 func TestGetFileHeadersStringKotlin(t *testing.T) {
 	t.Parallel()
