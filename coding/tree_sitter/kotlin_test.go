@@ -33,6 +33,7 @@ class Empty2
 			input: `
 class Hello {
   fun a() {}
+  private fun hidden() {}
   fun b() {}
 }
 `,
@@ -90,6 +91,36 @@ value class Password(private val s: String)
 ---
 `,
 		},
+		{
+			name: "private class and methods",
+			input: `
+private class Hidden {
+  fun visible() {}
+  private fun invisible() {}
+}
+
+class Visible {
+  private fun hidden() {}
+  protected fun alsoHidden() {}
+  fun shown() {}
+  fun alsoShown() {}
+}
+`,
+			expected: `class Visible
+	fun shown()
+	fun alsoShown()
+---
+`,
+		},
+		{
+			name: "protected class",
+			input: `
+protected class Protected {
+  fun someMethod() {}
+}
+`,
+			expected: ``,
+		},
 	}
 
 	for _, tt := range tests {
@@ -135,6 +166,7 @@ class Empty2 {}
 			code: `
 class Hello {
   fun a() {}
+  private fun hidden() {}
   fun b() {}
 }
 `,
@@ -174,6 +206,32 @@ enum class Color(val rgb: Int) {
 value class Password(private val s: String)
 `,
 			expected: "Password",
+		},
+		{
+			name: "private class and methods",
+			code: `
+private class Hidden {
+  fun visible() {}
+  private fun invisible() {}
+}
+
+class Visible {
+  private fun hidden() {}
+  protected fun alsoHidden() {}
+  fun shown() {}
+  fun alsoShown() {}
+}
+`,
+			expected: "Visible, shown, alsoShown",
+		},
+		{
+			name: "protected class",
+			code: `
+protected class Protected {
+  fun someMethod() {}
+}
+`,
+			expected: "",
 		},
 	}
 

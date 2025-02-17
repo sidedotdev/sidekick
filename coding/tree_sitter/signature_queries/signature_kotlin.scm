@@ -1,14 +1,25 @@
+; Capture non-private/protected classes for signatures and symbols
 (class_declaration
   (modifiers)? @class.modifiers
+    (#not-match? @class.modifiers "private|protected")
   (type_identifier) @class.name
   (type_parameters)? @class.type_parameters
   (primary_constructor)? @class.primary_constructor
   (class_body
     [
       (function_declaration
+        (modifiers)? @class.method.modifiers
+          (#not-match? @class.method.modifiers "private|protected")
         (simple_identifier) @class.method.name
         (function_value_parameters) @class.method.parameters
       ) @class.method.declaration
+
+      ; private/protected matching alternate to make sure overall class capture
+      ; still happens
+      (function_declaration
+        (modifiers)? @class.method.ignored.modifiers
+          (#match? @class.method.ignored.modifiers "private|protected")
+      )
 
       (property_declaration
         (variable_declaration
@@ -23,15 +34,33 @@
   (enum_class_body
     [
       (function_declaration
+        (modifiers)? @class.method.modifiers
+          (#not-match? @class.method.modifiers "private|protected")
         (simple_identifier) @class.method.name
         (function_value_parameters) @class.method.parameters
       ) @class.method.declaration
 
+      ; private/protected matching alternate to make sure overall class capture
+      ; still happens
+      (function_declaration
+        (modifiers)? @class.method.ignored.modifiers
+          (#match? @class.method.ignored.modifiers "private|protected")
+      )
+
       (property_declaration
+        (modifiers)? @class.method.modifiers
+          (#not-match? @class.method.modifiers "private|protected")
         (variable_declaration
           (simple_identifier) @class.property.name
         )
       ) @class.property.declaration
+
+      ; private/protected matching alternate to make sure overall class capture
+      ; still happens
+      (property_declaration
+        (modifiers)? @class.property.ignored.modifiers
+          (#match? @class.property.ignored.modifiers "private|protected")
+      )
       
       (enum_entry
         (simple_identifier) @class.enum_entry.name
@@ -42,10 +71,13 @@
       (_)
     ]*
   )? @class.enum_body
+
 ) @class.declaration
 
-; extract method names as separate matches for symbol outline
+; Extract method names for symbol outline
 (class_declaration
+  (modifiers)? @method.class.modifiers
+    (#not-match? @method.class.modifiers "private|protected")
   (_
     (function_declaration
       (modifiers)? @method.modifiers
@@ -55,8 +87,10 @@
   )
 )
 
-; extract enum entry names as separate matches for symbol outline
+; Extract enum entry names for symbol outline
 (class_declaration
+  (modifiers)? @enum_entry.class.modifiers
+    (#not-match? @enum_entry.class.modifiers "private|protected")
   (_
     (enum_entry
       (simple_identifier) @enum_entry.name
