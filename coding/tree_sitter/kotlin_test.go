@@ -220,6 +220,76 @@ enum class MixedMethods {
 ---
 `,
 		},
+		{
+			name: "class with single annotation",
+			input: `
+@Test
+class Empty
+`,
+			expected: `@Test class Empty
+---
+`,
+		},
+		{
+			name: "class with annotated parameter",
+			input: `
+class Empty(@field:Test val x: Boolean)
+`,
+			expected: `class Empty(@field:Test val x: Boolean)
+---
+`,
+		},
+		{
+			name: "property with multiple annotations in set",
+			input: `
+class Container {
+    @set:[Inject VisibleForTesting]
+    var x: Int = 0
+}
+`,
+			expected: `class Container
+	@set:[Inject VisibleForTesting]
+    var x: Int = 0
+---
+`,
+		},
+		{
+			name: "property with multiple separate annotations",
+			input: `
+class X {
+    @A @B
+    override val s: String = ""
+}
+`,
+			expected: `class X
+	@A @B
+    override val s: String = ""
+---
+`,
+		},
+		{
+			name: "function with multiple annotations",
+			input: `
+class X {
+    @A @B
+    fun s(): String { return "" }
+}
+`,
+			expected: `class X
+	@A @B fun s(): String
+---
+`,
+		},
+		{
+			name: "top level annotated function",
+			input: `
+@Test
+fun foo() = bar {}
+`,
+			expected: `@Test fun foo()
+---
+`,
+		},
 	}
 
 	for _, tt := range tests {
