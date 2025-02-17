@@ -139,18 +139,18 @@ protected class Protected {
 			expected: ``,
 		},
 		{
-			name: "class with private properties",
+			name: "enum class with mixed methods",
 			input: `
-class MixedProps {
-  val publicProp: String = "hello"
-  private val secret: String = "secret"
-  protected var alsoSecret: Int = 100
-  var another: Boolean = true
+enum class MixedMethods {
+  X, Y;
+  fun a() {}
+  private fun hidden() {}
 }
 `,
-			expected: `class MixedProps
-	val publicProp: String = "hello"
-	var another: Boolean = true
+			expected: `enum class MixedMethods
+	X
+	Y
+	fun a()
 ---
 `,
 		},
