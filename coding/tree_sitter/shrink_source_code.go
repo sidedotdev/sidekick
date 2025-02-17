@@ -254,10 +254,15 @@ func removeComments(sourceCode SourceCode) (bool, SourceCode) {
 	)
 )
 `
-	case "java", "java-signatures":
+		case "java", "java-signatures":
 		queryString = `
 (line_comment) @comment
 (block_comment) @comment
+`
+		case "kotlin", "kotlin-signatures":
+		queryString = `
+(line_comment) @comment
+(multiline_comment) @comment
 `
 	}
 
