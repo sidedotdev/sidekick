@@ -290,6 +290,26 @@ fun foo() = bar {}
 ---
 `,
 		},
+		{
+			name: "class with private property, public method and public property",
+			input: `
+class ResourceManager {
+    private val resources = mutableListOf<Resource>()
+
+    fun registerResource(resource: Resource) {
+        resources.add(resource)
+    }
+
+    val allResources: Collection<Resource>
+        get() = resources
+}
+`,
+			expected: `class ResourceManager
+	fun registerResource(resource: Resource)
+	val allResources: Collection<Resource>
+---
+`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -456,6 +476,22 @@ class MixedProps {
 }
 `,
 			expected: "MixedProps",
+		},
+		{
+			name: "class with private property, public method and public property",
+			code: `
+class ResourceManager {
+    private val resources = mutableListOf<Resource>()
+
+    fun registerResource(resource: Resource) {
+        resources.add(resource)
+    }
+
+    val allResources: Collection<Resource>
+        get() = resources
+}
+`,
+			expected: "ResourceManager, registerResource",
 		},
 	}
 
