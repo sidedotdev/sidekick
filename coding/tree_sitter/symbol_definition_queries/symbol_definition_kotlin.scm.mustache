@@ -11,6 +11,18 @@
   (#eq? @name "{{SymbolName}}")
 ) @definition
 
+(
+  [
+    (multiline_comment)
+    (line_comment)
+  ]* @doc
+  .
+  (object_declaration
+    (type_identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
 ; Function declarations
 (
   [
