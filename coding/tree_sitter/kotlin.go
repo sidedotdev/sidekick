@@ -28,7 +28,7 @@ func writeKotlinSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sit
 	case "function.return_type", "class.method.return_type":
 		out.WriteString(": ")
 		out.WriteString(content)
-	case "class.declaration":
+	case "class.declaration", "object.declaration":
 		writeKotlinIndentLevel(c.Node, out)
 		maybeEnum := c.Node.Child(0)
 		maybeModifiers := c.Node.Child(0)
@@ -40,7 +40,10 @@ func writeKotlinSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sit
 		if maybeEnum != nil && maybeEnum.Type() == "enum" {
 			out.WriteString("enum ")
 		}
-		out.WriteString("class ")
+		switch name {
+			case "class.declaration": { out.WriteString("class ") }
+			case "object.declaration": { out.WriteString("object ") }
+		}
 	case "class.name":
 		out.WriteString(content)
 	case "class.method.name":

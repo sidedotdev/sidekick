@@ -72,6 +72,50 @@
 
 ) @class.declaration
 
+; just like with classes, but for objects now: reusing the @class internals though, just want a different declaration
+(object_declaration
+  (modifiers)? @class.modifiers
+    (#not-match? @class.modifiers "private|protected")
+  (type_identifier) @class.name
+  (type_parameters)? @class.type_parameters
+  (class_body
+    [
+      (function_declaration
+        (modifiers)? @class.method.modifiers
+          (#not-match? @class.method.modifiers "private|protected")
+        (type_parameters)? @class.method.type_parameters
+        (simple_identifier) @class.method.name
+        (function_value_parameters) @class.method.parameters
+        (user_type)? @class.method.return_type
+      ) @class.method.declaration
+
+      ; private/protected matching alternate to make sure overall class capture
+      ; still happens
+      (function_declaration
+        (modifiers)? @class.method.ignored.modifiers
+          (#match? @class.method.ignored.modifiers "private|protected")
+      )
+
+      (property_declaration
+        (modifiers)? @class.method.modifiers
+          (#not-match? @class.method.modifiers "private|protected")
+        (variable_declaration
+          (simple_identifier) @class.property.name
+        )
+      ) @class.property.declaration
+
+      ; private/protected matching alternate to make sure overall class capture
+      ; still happens
+      (property_declaration
+        (modifiers)? @class.property.ignored.modifiers
+          (#match? @class.property.ignored.modifiers "private|protected")
+      )
+
+      (_)
+    ]*
+  )? @class.body
+) @object.declaration
+
 ; Top-level function declarations
 (source_file
   (function_declaration
@@ -87,6 +131,18 @@
 
 ; Extract method names for symbol outline
 (class_declaration
+  (modifiers)? @method.class.modifiers
+    (#not-match? @method.class.modifiers "private|protected")
+  (_
+    (function_declaration
+      (modifiers)? @method.modifiers
+        (#not-match? @method.modifiers "private|protected")
+      (simple_identifier) @method.name
+    )
+  )
+)
+
+(object_declaration
   (modifiers)? @method.class.modifiers
     (#not-match? @method.class.modifiers "private|protected")
   (_
