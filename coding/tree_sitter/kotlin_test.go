@@ -330,6 +330,60 @@ object ResourceManager {
 ---
 `,
 		},
+		{
+			name: "top level properties",
+			input: `
+val greeting: String = "Hello"
+var counter: Int = 0
+private val secret: String = "hidden"
+const val MAX_COUNT = 100
+@Deprecated("Use newGreeting instead")
+var oldGreeting = "Hi"
+`,
+			expected: `val greeting: String = "Hello"
+---
+var counter: Int = 0
+---
+const val MAX_COUNT = 100
+---
+@Deprecated("Use newGreeting instead")
+var oldGreeting = "Hi"
+---
+`,
+		},
+		{
+			name: "top level properties with type inference",
+			input: `
+val inferred = 42
+var mutable = "changeable"
+private val hidden = true
+`,
+			expected: `val inferred = 42
+---
+var mutable = "changeable"
+---
+`,
+		},
+		{
+			name: "top level properties with annotations",
+			input: `@JvmField
+val javaField = "java"
+@Volatile
+var sharedVar = 0
+@Deprecated("Old") @JvmStatic
+val oldValue = ""
+`,
+			expected: `@JvmField
+val javaField = "java"
+---
+@Volatile
+var sharedVar = 0
+---
+@Deprecated("Old") @JvmStatic
+val oldValue = ""
+---
+`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -529,6 +583,39 @@ object ResourceManager {
 `,
 			expected: "ResourceManager, registerResource",
 		},
+		{
+			name: "top level properties",
+			code: `
+val greeting: String = "Hello"
+var counter: Int = 0
+private val secret: String = "hidden"
+const val MAX_COUNT = 100
+@Deprecated("Use newGreeting instead")
+var oldGreeting = "Hi"
+`,
+			expected: "greeting, counter, MAX_COUNT, oldGreeting",
+		},
+		{
+			name: "top level properties with type inference",
+			code: `
+val inferred = 42
+var mutable = "changeable"
+private val hidden = true
+`,
+			expected: "inferred, mutable",
+		},
+		{
+			name: "top level properties with annotations",
+			code: `
+@JvmField
+val javaField = "java"
+@Volatile
+var sharedVar = 0
+@Deprecated("Old") @JvmStatic
+val oldValue = ""
+`,
+			expected: "javaField, sharedVar, oldValue",
+		},
 	}
 
 	for _, test := range tests {
@@ -704,6 +791,84 @@ class DocClass2 {
     fun docMethod2() {
         println("Hello")
     }`,
+		},
+		{
+			name:       "generic class definition",
+			symbolName: "Container",
+			code: `class Container<T> {
+    private var value: T? = null
+    
+    fun setValue(item: T) {
+        value = item
+    }
+    
+    fun getValue(): T? = value
+}`,
+			expectedDefinition: `class Container<T> {
+    private var value: T? = null
+    
+    fun setValue(item: T) {
+        value = item
+    }
+    
+    fun getValue(): T? = value
+}`,
+		},
+		{
+			name:       "generic function definition",
+			symbolName: "transform",
+			code: `fun <T, R> transform(input: T, mapper: (T) -> R): R {
+    return mapper(input)
+}`,
+			expectedDefinition: `fun <T, R> transform(input: T, mapper: (T) -> R): R {
+    return mapper(input)
+}`,
+		},
+		{
+			name:       "class with generic method",
+			symbolName: "convertTo",
+			code: `class TypeConverter {
+    fun <T> convertTo(value: Any): T {
+        return value as T
+    }
+}`,
+			expectedDefinition: `    fun <T> convertTo(value: Any): T {
+        return value as T
+    }`,
+		},
+		{
+			name:       "value class definition",
+			symbolName: "Password",
+			code: `@JvmInline
+value class Password(private val value: String) {
+    fun masked(): String = "*".repeat(value.length)
+}`,
+			expectedDefinition: `@JvmInline
+value class Password(private val value: String) {
+    fun masked(): String = "*".repeat(value.length)
+}`,
+		},
+		{
+			name:       "object definition",
+			symbolName: "Singleton",
+			code: `object Singleton {
+    private var count = 0
+    
+    fun increment() {
+        count++
+    }
+    
+    fun getCount(): Int = count
+}`,
+			expectedDefinition: `object Singleton {
+    private var count = 0
+    
+    fun increment() {
+        count++
+    }
+    
+    fun getCount(): Int = count
+}`,
 		},
 	}
 

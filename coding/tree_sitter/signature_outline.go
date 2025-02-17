@@ -384,6 +384,11 @@ func shouldExtendSignatureRange(languageName, captureName string) bool {
 		case "type.declaration", "const.declaration":
 			return true
 		}
+	case "kotlin":
+		switch captureName {
+		case "property.declaration":
+			return true
+		}
 	case "vue":
 		{
 			// extend the range for <template>, <script>, and <style>

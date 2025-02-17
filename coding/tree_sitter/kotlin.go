@@ -11,13 +11,14 @@ func writeKotlinSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sit
 	content := c.Node.Content(*sourceCode)
 	switch name {
 	case "function.declaration":
-		writeKotlinIndentLevel(c.Node, out)
 		maybeModifiers := c.Node.Child(0)
 		if maybeModifiers != nil && maybeModifiers.Type() == "modifiers" {
 			out.WriteString(maybeModifiers.Content(*sourceCode))
 			out.WriteString(" ")
 		}
 		out.WriteString("fun ")
+	case "property.declaration":
+		out.WriteString(content)
 	case "function.name":
 		out.WriteString(content)
 	case "function.type_parameters", "class.method.type_parameters":
@@ -99,7 +100,7 @@ func writeKotlinIndentLevel(node *sitter.Node, out *strings.Builder) {
 func writeKotlinSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
 	content := c.Node.Content(*sourceCode)
 	switch name {
-	case "class.name", "method.name", "function.name", "enum_entry.name":
+	case "class.name", "method.name", "function.name", "enum_entry.name", "property.name":
 		out.WriteString(content)
 	}
 }

@@ -129,6 +129,18 @@
   ) @function.declaration
 )
 
+; Top-level property declarations
+(source_file
+  (property_declaration
+    (modifiers)? @property.modifiers
+      ; not sure if we wanna exclude internal too here
+      (#not-match? @property.modifiers "private")
+    (variable_declaration
+      (simple_identifier) @property.name
+    )
+  ) @property.declaration
+)
+
 ; Extract method names for symbol outline
 (class_declaration
   (modifiers)? @method.class.modifiers
