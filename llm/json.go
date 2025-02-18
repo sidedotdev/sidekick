@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"sidekick/utils"
 	"strings"
 )
 
@@ -14,6 +13,7 @@ func tryParseStringAsJson(input string) interface{} {
 
 	// remove "</invoke>" and any characters after it with regex
 	trimmed = strings.Split(trimmed, "</invoke>")[0]
+	trimmed = strings.TrimSpace(trimmed)
 
 	// Try to parse as JSON
 	var parsed interface{}
@@ -76,11 +76,39 @@ func tryParseStringsAsJsonRawMessages(input string) string {
 	// for each str, try to replace it in the input with a version that removes
 	// the str's outer double quotes and unescapes double quotes within
 	for _, str := range strs {
-		maybeJson := strings.Replace(input, utils.PanicJSON(str), str, 1)
+		// Trim whitespace
+		trimmed := strings.TrimSpace(str)
+
+		// remove "</invoke>" and any characters after it with regex
+		trimmed = strings.Split(trimmed, "</invoke>")[0]
+		trimmed = strings.TrimSpace(trimmed)
+
+		buffer := &bytes.Buffer{}
+		encoder := json.NewEncoder(buffer)
+		encoder.SetEscapeHTML(false)
+		err := encoder.Encode(str)
+		if err != nil {
+			continue
+		}
+		jsonStr := strings.TrimSpace(buffer.String())
+		maybeJson := strings.Replace(input, jsonStr, trimmed, 1)
+
 		var data interface{}
-		err := json.Unmarshal([]byte(maybeJson), &data)
+		err = json.Unmarshal([]byte(maybeJson), &data)
 		if err == nil { // if it parses as valid JSON, replace input with this
 			input = maybeJson
+			continue
+		}
+
+		if strings.HasSuffix(trimmed, "}") {
+			trimmed = strings.TrimSuffix(trimmed, "}")
+			maybeJson := strings.Replace(input, jsonStr, trimmed, 1)
+
+			var data interface{}
+			err := json.Unmarshal([]byte(maybeJson), &data)
+			if err == nil { // if it parses as valid JSON, replace input with this
+				input = maybeJson
+			}
 		}
 	}
 

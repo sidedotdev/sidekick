@@ -187,6 +187,21 @@ func TestRepairJson(t *testing.T) {
 			input:    `{"analysis": "blah blah", "steps": "[ { \"key\": \"value\"} ], \"is_planning_complete\": true"}`,
 			expected: `{"analysis": "blah blah", "steps": [ { "key": "value"} ], "is_planning_complete": true}`,
 		},
+		{
+			name:     "multiple items in json string repair with invoke suffix",
+			input:    `{"analysis": "blah blah", "steps": "[ { \"key\": \"value\"} ], \"is_planning_complete\": true </invoke>"}`,
+			expected: `{"analysis": "blah blah", "steps": [ { "key": "value"} ], "is_planning_complete": true}`,
+		},
+		{
+			name:     "multiple items in json string repair with closing brace repeated",
+			input:    `{"analysis": "blah blah", "steps": "[ { \"key\": \"value\"} ], \"is_planning_complete\": true}"}`,
+			expected: `{"analysis": "blah blah", "steps": [ { "key": "value"} ], "is_planning_complete": true}`,
+		},
+		{
+			name:     "multiple items in json string repair with closing brace repeated and invoke suffix",
+			input:    `{"analysis": "blah blah", "steps": "[ { \"key\": \"value\"} ], \"is_planning_complete\": true} </invoke>"}`,
+			expected: `{"analysis": "blah blah", "steps": [ { "key": "value"} ], "is_planning_complete": true}`,
+		},
 	}
 
 	for _, test := range tests {
