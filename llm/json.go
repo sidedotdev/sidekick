@@ -33,6 +33,10 @@ func RepairJson(input string) string {
 	// First escape newlines in JSON strings
 	escaped := escapeNewLinesInJSON(input)
 
+	// check if treating any string values in maps as json.RawMessage results in
+	// an overall valid JSON structure. if so, that new json structure is what's returned
+	escaped = tryParseStringsAsJsonRawMessages(escaped)
+
 	// Parse the JSON structure
 	var data interface{}
 	if err := json.Unmarshal([]byte(escaped), &data); err != nil {
@@ -41,9 +45,6 @@ func RepairJson(input string) string {
 
 	// Process all string values in the structure
 	processed := processJsonStrings(data)
-
-	// Try to convert any remaining string values to raw JSON messages
-	processed = tryConvertStringsToRawJson(processed)
 
 	// Marshal back to JSON string
 	buffer := &bytes.Buffer{}
@@ -55,6 +56,13 @@ func RepairJson(input string) string {
 	}
 
 	return strings.TrimSpace(buffer.String())
+}
+
+// check if treating any string values in maps as json.RawMessage results in an
+// overall valid JSON structure. if so, that new json structure is what's
+// returned
+func tryParseStringsAsJsonRawMessages(input string) string {
+	return input
 }
 
 // processJsonStrings walks through a JSON structure and attempts to parse string values as JSON
@@ -74,45 +82,6 @@ func processJsonStrings(data interface{}) interface{} {
 		return result
 	case string:
 		return tryParseStringAsJson(v)
-	default:
-		return v
-	}
-}
-
-// escapeNewLinesInJSON tries to repair JSON that has unescaped newlines by escaping them.
-// It is robust against valid JSON escapes like `\"` and will only escape newlines inside strings.
-// tryConvertStringsToRawJson attempts to convert string values in a JSON structure to raw JSON messages
-// where possible, validating that the entire structure remains valid JSON after each conversion.
-func tryConvertStringsToRawJson(data interface{}) interface{} {
-	switch v := data.(type) {
-	case map[string]interface{}:
-		result := make(map[string]interface{})
-		// First pass: copy all values
-		for key, value := range v {
-			result[key] = tryConvertStringsToRawJson(value)
-		}
-		return result
-	case []interface{}:
-		result := make([]interface{}, len(v))
-		// First pass: copy all values
-		for i, value := range v {
-			result[i] = tryConvertStringsToRawJson(value)
-		}
-		return result
-	case string:
-		// Try to parse the string as JSON
-		var parsed interface{}
-		if err := json.Unmarshal([]byte(v), &parsed); err != nil {
-			return v
-		}
-
-		// Only convert if parsed result is an object or array
-		switch parsed.(type) {
-		case map[string]interface{}, []interface{}:
-			return parsed
-		default:
-			return v
-		}
 	default:
 		return v
 	}
