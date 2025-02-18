@@ -59,8 +59,12 @@ func RepairJson(input string) string {
 }
 
 // check if treating any string values in maps as json.RawMessage results in an
-// overall valid JSON structure. if so, that new json structure is what's
-// returned
+// overall valid JSON structure. if so, that new json structure is what's returned.
+// IMPORTANT: we can't just parse the string as json. the whole point of this is
+// that it won't parse as json on its own, but the overall json message will
+// parse once we remove the double quotes and unescape the double quotes within
+// the string. if the overall message fails to parse after that, we can continue
+// and try the next string, until all are exhausted.
 func tryParseStringsAsJsonRawMessages(input string) string {
 	return input
 }

@@ -182,22 +182,29 @@ func TestRepairJson(t *testing.T) {
 			input:    `{"a": {"b": "{\"x\":1}", "c": {"d": "[1,2]", "e": "{invalid}", "f": "{\"y\":{\"z\":3}}"}, "g": "plain"}}`,
 			expected: `{"a":{"b":{"x":1},"c":{"d":[1,2],"e":"{invalid}","f":{"y":{"z":3}}},"g":"plain"}}`,
 		},
+		{
+			name:     "multiple items in json string repair",
+			input:    `{"analysis": "blah blah", "steps": "[ { \"key\": \"value\"} ], \"is_planning_complete\": true"}`,
+			expected: `{"analysis": "blah blah", "steps": [ { "key": "value"} ], "is_planning_complete": true}`,
+		},
 	}
 
 	for _, test := range tests {
-		got := RepairJson(test.input)
+		t.Run(test.name, func(t *testing.T) {
+			got := RepairJson(test.input)
 
-		var expectedJSON, gotJSON interface{}
-		if err := json.Unmarshal([]byte(test.expected), &expectedJSON); err != nil {
-			t.Errorf("Failed to parse expected JSON %q: %v", test.expected, err)
-			continue
-		}
-		if err := json.Unmarshal([]byte(got), &gotJSON); err != nil {
-			t.Errorf("Failed to parse actual JSON %q: %v", got, err)
-			continue
-		}
+			var expectedJSON, gotJSON interface{}
+			if err := json.Unmarshal([]byte(test.expected), &expectedJSON); err != nil {
+				t.Errorf("Failed to parse expected JSON %q: %v", test.expected, err)
+				return
+			}
+			if err := json.Unmarshal([]byte(got), &gotJSON); err != nil {
+				t.Errorf("Failed to parse actual JSON %q: %v", got, err)
+				return
+			}
 
-		assert.Equal(t, expectedJSON, gotJSON, "For input %q\nexpected JSON equivalent to %q\nbut got %q",
-			test.input, test.expected, got)
+			assert.Equal(t, expectedJSON, gotJSON, "For input %q\nexpected JSON equivalent to %q\nbut got %q",
+				test.input, test.expected, got)
+		})
 	}
 }
