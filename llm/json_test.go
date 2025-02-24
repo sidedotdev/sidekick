@@ -148,6 +148,11 @@ func TestRepairJson(t *testing.T) {
 			expected: `{"nested":{"key":"value with \n newline"}}`,
 		},
 		{
+			name:     "string with just numbers are left as strings",
+			input:    `{"items": "123"}`,
+			expected: `{"items":"123"}`,
+		},
+		{
 			name:     "basic string to JSON object conversion",
 			input:    `{"data": "{\"key\":\"value\",\"num\":42}"}`,
 			expected: `{"data":{"key":"value","num":42}}`,

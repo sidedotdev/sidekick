@@ -76,6 +76,12 @@ func tryParseStringsAsJsonRawMessages(input string) string {
 	// for each str, try to replace it in the input with a version that removes
 	// the str's outer double quotes and unescapes double quotes within
 	for _, str := range strs {
+		// if the string doesn't contain one of these characters, skip it, as we
+		// don't want to parse strings that should remain strings as-is
+		if !strings.ContainsAny(str, `"{}[]`) {
+			continue
+		}
+
 		// Trim whitespace
 		trimmed := strings.TrimSpace(str)
 
