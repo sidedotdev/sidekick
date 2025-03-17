@@ -92,7 +92,9 @@ class Hello {
 }
 `,
 			expected: `class Hello
+---
 	fun a()
+---
 	fun b()
 ---
 `,
@@ -105,6 +107,7 @@ class Hello {
     }
 }`,
 			expected: `class Container<T>
+---
 	fun <R> transform(item: T, mapper: (T) -> R): R
 ---
 `,
@@ -127,7 +130,9 @@ class Something {
 }
 `,
 			expected: `class Something
+---
 	val x: Int = 4
+---
 	var y: Int?
 ---
 `,
@@ -161,7 +166,7 @@ value class Password(private val s: String)
 			name: "private class and methods",
 			input: `
 private class Hidden {
-  fun visible() {}
+  fun alsoHidden() {}
   private fun invisible() {}
 }
 
@@ -173,7 +178,9 @@ class Visible {
 }
 `,
 			expected: `class Visible
+---
 	fun shown()
+---
 	fun alsoShown()
 ---
 `,
@@ -189,7 +196,9 @@ class MixedProps {
 }
 `,
 			expected: `class MixedProps
+---
 	val a: Int = 1
+---
 	var d: Boolean = false
 ---
 `,
@@ -216,6 +225,7 @@ enum class MixedMethods {
 			expected: `enum class MixedMethods
 	X
 	Y
+---
 	fun a()
 ---
 `,
@@ -248,6 +258,7 @@ class Container {
 }
 `,
 			expected: `class Container
+---
 	@set:[Inject VisibleForTesting]
     var x: Int = 0
 ---
@@ -262,6 +273,7 @@ class X {
 }
 `,
 			expected: `class X
+---
 	@A @B
     override val s: String = ""
 ---
@@ -276,6 +288,7 @@ class X {
 }
 `,
 			expected: `class X
+---
 	@A @B fun s(): String
 ---
 `,
@@ -305,7 +318,9 @@ class ResourceManager {
 }
 `,
 			expected: `class ResourceManager
+---
 	fun registerResource(resource: Resource)
+---
 	val allResources: Collection<Resource>
 ---
 `,
@@ -325,7 +340,9 @@ object ResourceManager {
 }
 `,
 			expected: `object ResourceManager
+---
 	fun registerResource(resource: Resource)
+---
 	val allResources: Collection<Resource>
 ---
 `,

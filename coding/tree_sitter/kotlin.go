@@ -11,6 +11,7 @@ func writeKotlinSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sit
 	content := c.Node.Content(*sourceCode)
 	switch name {
 	case "function.declaration":
+		writeKotlinIndentLevel(c.Node, out)
 		maybeModifiers := c.Node.Child(0)
 		if maybeModifiers != nil && maybeModifiers.Type() == "modifiers" {
 			out.WriteString(maybeModifiers.Content(*sourceCode))
@@ -18,15 +19,16 @@ func writeKotlinSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sit
 		}
 		out.WriteString("fun ")
 	case "property.declaration":
+		writeKotlinIndentLevel(c.Node, out)
 		out.WriteString(content)
 	case "function.name":
 		out.WriteString(content)
-	case "function.type_parameters", "class.method.type_parameters":
+	case "function.type_parameters":
 		out.WriteString(content)
 		out.WriteString(" ")
-	case "function.parameters", "function.type_constraints", "class.method.parameters", "class.method.type_constraints":
+	case "function.parameters", "function.type_constraints":
 		out.WriteString(content)
-	case "function.return_type", "class.method.return_type":
+	case "function.return_type":
 		out.WriteString(": ")
 		out.WriteString(content)
 	case "class.declaration", "object.declaration":
@@ -42,29 +44,20 @@ func writeKotlinSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sit
 			out.WriteString("enum ")
 		}
 		switch name {
-			case "class.declaration": { out.WriteString("class ") }
-			case "object.declaration": { out.WriteString("object ") }
+		case "class.declaration":
+			{
+				out.WriteString("class ")
+			}
+		case "object.declaration":
+			{
+				out.WriteString("object ")
+			}
 		}
 	case "class.name":
-		out.WriteString(content)
-	case "class.method.name":
 		out.WriteString(content)
 	case "class.primary_constructor":
 		out.WriteString(content)
 	case "class.type_parameters":
-		out.WriteString(content)
-	case "class.method.declaration":
-		out.WriteString("\n")
-		writeKotlinIndentLevel(c.Node, out)
-		maybeModifiers := c.Node.Child(0)
-		if maybeModifiers != nil && maybeModifiers.Type() == "modifiers" {
-			out.WriteString(maybeModifiers.Content(*sourceCode))
-			out.WriteString(" ")
-		}
-		out.WriteString("fun ")
-	case "class.property.declaration":
-		out.WriteString("\n")
-		writeKotlinIndentLevel(c.Node, out)
 		out.WriteString(content)
 	case "class.enum_entry.name":
 		out.WriteString("\n")
@@ -100,7 +93,7 @@ func writeKotlinIndentLevel(node *sitter.Node, out *strings.Builder) {
 func writeKotlinSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
 	content := c.Node.Content(*sourceCode)
 	switch name {
-	case "class.name", "method.name", "function.name", "enum_entry.name", "property.name":
+	case "class.name", "function.name", "enum_entry.name", "property.name":
 		out.WriteString(content)
 	}
 }
