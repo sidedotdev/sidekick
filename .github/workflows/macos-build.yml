@@ -7,3 +7,51 @@ on:
 jobs:
   build:
     runs-on: macos-15
+    steps:
+      - name: Checkout Sidekick
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Clone USearch
+        run: |
+          git clone --recursive --branch v2.16.6 https://github.com/unum-cloud/usearch.git
+        working-directory: /tmp
+
+      - name: Configure USearch
+        run: |
+          cmake -D CMAKE_BUILD_TYPE=Release -D USEARCH_USE_FP16LIB=1 -D USEARCH_USE_OPENMP=0 -D USEARCH_USE_SIMSIMD=0 -D USEARCH_USE_JEMALLOC=1 -D USEARCH_BUILD_TEST_CPP=1 -D USEARCH_BUILD_BENCH_CPP=1 -D USEARCH_BUILD_LIB_C=1 -D USEARCH_BUILD_TEST_C=1 -D USEARCH_BUILD_SQLITE=0 -B build_release
+        working-directory: /tmp/usearch
+
+      - name: Build USearch
+        run: |
+          cmake --build build_release --config Release
+        working-directory: /tmp/usearch
+
+      - name: Run USearch C++ Tests
+        run: |
+          ./build_release/test_cpp
+        working-directory: /tmp/usearch
+
+      - name: Run USearch C Tests
+        run: |
+          ./build_release/test_c
+        working-directory: /tmp/usearch
+
+      - name: Copy USearch Library
+        run: |
+          cp /tmp/usearch/build_release/libusearch_static_c.a libusearch_c.a
+
+      - name: Run Sidekick Tests
+        run: |
+          go test -test.timeout 30s ./...
+
+      - name: Build CLI
+        env:
+          CGO_ENABLED: 1
+          CGO_LDFLAGS: "-L. libusearch_c.a -lstdc++ -lm"
+        run: |
+          go build -o side sidekick/cli
