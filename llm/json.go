@@ -3,6 +3,7 @@ package llm
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 )
 
@@ -12,6 +13,7 @@ func tryParseStringAsJson(input string) interface{} {
 
 	// remove "</invoke>" and any characters after it with regex
 	trimmed = strings.Split(trimmed, "</invoke>")[0]
+	trimmed = strings.TrimSpace(trimmed)
 
 	// Try to parse as JSON
 	var parsed interface{}
@@ -33,6 +35,10 @@ func RepairJson(input string) string {
 	// First escape newlines in JSON strings
 	escaped := escapeNewLinesInJSON(input)
 
+	// check if treating any string values in maps as json.RawMessage results in
+	// an overall valid JSON structure. if so, that new json structure is what's returned
+	escaped = tryParseStringsAsJsonRawMessages(escaped)
+
 	// Parse the JSON structure
 	var data interface{}
 	if err := json.Unmarshal([]byte(escaped), &data); err != nil {
@@ -41,9 +47,6 @@ func RepairJson(input string) string {
 
 	// Process all string values in the structure
 	processed := processJsonStrings(data)
-
-	// Try to convert any remaining string values to raw JSON messages
-	processed = tryConvertStringsToRawJson(processed)
 
 	// Marshal back to JSON string
 	buffer := &bytes.Buffer{}
@@ -55,6 +58,98 @@ func RepairJson(input string) string {
 	}
 
 	return strings.TrimSpace(buffer.String())
+}
+
+// check if treating any string values in maps as json.RawMessage results in an
+// overall valid JSON structure. if so, that new json structure is what's returned.
+// IMPORTANT: we can't just parse the string as json. the whole point of this is
+// that it won't parse as json on its own, but the overall json message will
+// parse once we remove the double quotes and unescape the double quotes within
+// the string. if the overall message fails to parse after that, we can continue
+// and try the next string, until all are exhausted.
+func tryParseStringsAsJsonRawMessages(input string) string {
+	err, strs := extractAllJsonStrings(input)
+	if err != nil {
+		return input // return escaped string if not valid JSON
+	}
+
+	// for each str, try to replace it in the input with a version that removes
+	// the str's outer double quotes and unescapes double quotes within
+	for _, str := range strs {
+		// if the string doesn't contain one of these characters, skip it, as we
+		// don't want to parse strings that should remain strings as-is
+		if !strings.ContainsAny(str, `"{}[]`) {
+			continue
+		}
+
+		// Trim whitespace
+		trimmed := strings.TrimSpace(str)
+
+		// remove "</invoke>" and any characters after it with regex
+		trimmed = strings.Split(trimmed, "</invoke>")[0]
+		trimmed = strings.TrimSpace(trimmed)
+
+		buffer := &bytes.Buffer{}
+		encoder := json.NewEncoder(buffer)
+		encoder.SetEscapeHTML(false)
+		err := encoder.Encode(str)
+		if err != nil {
+			continue
+		}
+		jsonStr := strings.TrimSpace(buffer.String())
+		maybeJson := strings.Replace(input, jsonStr, trimmed, 1)
+
+		var data interface{}
+		err = json.Unmarshal([]byte(maybeJson), &data)
+		if err == nil { // if it parses as valid JSON, replace input with this
+			input = maybeJson
+			continue
+		}
+
+		if strings.HasSuffix(trimmed, "}") {
+			trimmed = strings.TrimSuffix(trimmed, "}")
+			maybeJson := strings.Replace(input, jsonStr, trimmed, 1)
+
+			var data interface{}
+			err := json.Unmarshal([]byte(maybeJson), &data)
+			if err == nil { // if it parses as valid JSON, replace input with this
+				input = maybeJson
+			}
+		}
+	}
+
+	return input
+}
+
+func extractAllJsonStrings(input string) (error, []string) {
+	// Parse the JSON structure
+	var data interface{}
+	if err := json.Unmarshal([]byte(input), &data); err != nil {
+		return errors.New("invalid JSON"), nil
+	}
+
+	// Traverse the JSON structure to find all string values
+	var strs []string
+	var stack []interface{}
+	stack = append(stack, data)
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		switch v := current.(type) {
+			case string:
+					strs = append(strs, v)
+			case map[string]interface{}:
+				for _, value := range v {
+					stack = append(stack, value)
+				}
+			case []interface{}:
+				for _, value := range v {
+					stack = append(stack, value)
+				}
+		}
+	}
+
+	return nil, strs
 }
 
 // processJsonStrings walks through a JSON structure and attempts to parse string values as JSON
@@ -74,45 +169,6 @@ func processJsonStrings(data interface{}) interface{} {
 		return result
 	case string:
 		return tryParseStringAsJson(v)
-	default:
-		return v
-	}
-}
-
-// escapeNewLinesInJSON tries to repair JSON that has unescaped newlines by escaping them.
-// It is robust against valid JSON escapes like `\"` and will only escape newlines inside strings.
-// tryConvertStringsToRawJson attempts to convert string values in a JSON structure to raw JSON messages
-// where possible, validating that the entire structure remains valid JSON after each conversion.
-func tryConvertStringsToRawJson(data interface{}) interface{} {
-	switch v := data.(type) {
-	case map[string]interface{}:
-		result := make(map[string]interface{})
-		// First pass: copy all values
-		for key, value := range v {
-			result[key] = tryConvertStringsToRawJson(value)
-		}
-		return result
-	case []interface{}:
-		result := make([]interface{}, len(v))
-		// First pass: copy all values
-		for i, value := range v {
-			result[i] = tryConvertStringsToRawJson(value)
-		}
-		return result
-	case string:
-		// Try to parse the string as JSON
-		var parsed interface{}
-		if err := json.Unmarshal([]byte(v), &parsed); err != nil {
-			return v
-		}
-
-		// Only convert if parsed result is an object or array
-		switch parsed.(type) {
-		case map[string]interface{}, []interface{}:
-			return parsed
-		default:
-			return v
-		}
 	default:
 		return v
 	}

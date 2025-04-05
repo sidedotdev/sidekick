@@ -85,6 +85,16 @@ func TestE2eRelatedSymbolsActivity(t *testing.T) {
 				{"Foo.FooBaz", "file1.go", true},
 			},
 		},
+		{
+			name:       "Spaces in file path",
+			symbolText: "Foo",
+			filePath:   filepath.Join(tempDir, "has spaces here", "file space.go"),
+			fileRange:  getRangeMatching(t, file1Content, "type Foo struct {"),
+			expected: []symAndFile{
+				{"FooBar", "file space.go", true},
+				{"Foo.FooBaz", "file space.go", true},
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -94,7 +104,7 @@ func TestE2eRelatedSymbolsActivity(t *testing.T) {
 
 			input := RelatedSymbolsActivityInput{
 				EnvContainer: env.EnvContainer{
-					Env: &env.LocalEnv{WorkingDirectory: tempDir},
+					Env: &env.LocalEnv{WorkingDirectory: filepath.Dir(tc.filePath)},
 				},
 				RelativeFilePath: filepath.Base(tc.filePath),
 				SymbolText:       tc.symbolText,
@@ -174,9 +184,11 @@ func func2InFile2(x StructInFile1) {
 func createTestFiles(t *testing.T, tempDir string) {
 	writeFile(t, filepath.Join(tempDir, "file1.go"), file1Content)
 	writeFile(t, filepath.Join(tempDir, "file2.go"), file2Content)
+	writeFile(t, filepath.Join(tempDir, "has spaces here", "file space.go"), file1Content)
 }
 
 func writeFile(t *testing.T, path, content string) {
+	os.MkdirAll(filepath.Dir(path), 0755)
 	err := os.WriteFile(path, []byte(content), 0644)
 	require.NoError(t, err)
 }
