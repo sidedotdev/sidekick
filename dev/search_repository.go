@@ -4,28 +4,14 @@ import (
 	"fmt"
 	"regexp"
 	"sidekick/env"
-	"sidekick/llm"
-	"sidekick/persisted_ai"
 	"strings"
 
-	"github.com/invopop/jsonschema"
 	"go.temporal.io/sdk/workflow"
 )
-
-type BulkSearchRepositoryParams struct {
-	ContextLines int                  `json:"context_lines" jsonschema:"description=The number of lines of context to include around the search term."`
-	Searches     []SingleSearchParams `json:"searches" jsonschema:"description=The list of searches to perform."`
-}
 
 type SingleSearchParams struct {
 	PathGlob   string `json:"path_glob" jsonschema:"description=The file glob path to search within."`
 	SearchTerm string `json:"search_term" jsonschema:"description=The search term to look for within the files."`
-}
-
-var bulkSearchRepositoryTool = llm.Tool{
-	Name:        "bulk_search_repository",
-	Description: "Used to perform multiple searches within the repository, each for files matching a given glob pattern and containing a search term.",
-	Parameters:  (&jsonschema.Reflector{ExpandedStruct: true}).Reflect(&BulkSearchRepositoryParams{}),
 }
 
 const refuseAtSearchOutputLength = 6000
@@ -37,6 +23,7 @@ type SearchRepositoryInput struct {
 	SearchTerm      string
 	ContextLines    int
 	CaseInsensitive bool
+	FixedStrings    bool
 }
 
 // TODO /gen include the function name in the associated with each search result
@@ -104,8 +91,12 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 		rgArgs += " --ignore-case"
 		gitGrepArgs += " --ignore-case"
 	}
+	if input.FixedStrings {
+		rgArgs += " --fixed-strings"
+		gitGrepArgs += " --fixed-strings"
+	}
 
-	// TODO /gen replace with a new env.ReadFilesActivity - we need to implement that.
+	// TODO /gen replace with a new env.FileExistsActivity - we need to implement that.
 	var catOutput env.EnvRunCommandOutput
 	err := workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
@@ -190,6 +181,16 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 
 	// handle no results
 	if strings.TrimSpace(output) == "" {
+		if searchOutput.Stderr != "" && !strings.Contains(searchOutput.Stderr, "regex parse error") && !strings.Contains(searchOutput.Stderr, "No files were searched") {
+			return searchOutput.Stderr, nil
+		}
+
+		if !input.FixedStrings {
+			// retry with fixed strings search
+			input.FixedStrings = true
+			return SearchRepository(ctx, envContainer, input)
+		}
+
 		if !input.CaseInsensitive {
 			// retry with case-insensitive search
 			input.CaseInsensitive = true
@@ -218,32 +219,4 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 	}
 
 	return output, nil
-}
-
-func BulkSearchRepository(ctx workflow.Context, envContainer env.EnvContainer, bulkSearchRepositoryParams BulkSearchRepositoryParams) (string, error) {
-	results := []string{}
-	for _, searchParams := range bulkSearchRepositoryParams.Searches {
-		result, err := SearchRepository(ctx, envContainer, SearchRepositoryInput{
-			PathGlob:     searchParams.PathGlob,
-			SearchTerm:   searchParams.SearchTerm,
-			ContextLines: bulkSearchRepositoryParams.ContextLines,
-		})
-		if err != nil {
-			return "", err
-		}
-		results = append(results, result)
-	}
-	return strings.Join(results, "\n"), nil
-}
-
-func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *[]llm.ChatMessage) (llm.ToolCall, error) {
-	actionCtx := dCtx.ExecContext.NewActionContext("Generate Repo Search Query")
-	params := llm.ToolChatParams{Messages: *chatHistory}
-	chatResponse, err := persisted_ai.ForceToolCall(actionCtx, dCtx.LLMConfig, &params, &bulkSearchRepositoryTool)
-	*chatHistory = params.Messages // update chat history with the new messages
-	if err != nil {
-		return llm.ToolCall{}, fmt.Errorf("failed to force tool call: %v", err)
-	}
-	toolCall := chatResponse.ToolCalls[0]
-	return toolCall, err
 }

@@ -129,6 +129,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	w.RegisterActivity(flowActivities)
 
 	w.RegisterActivity(dev.GetRepoConfigActivity)
+	w.RegisterActivity(dev.GetSymbolsActivity)
 	w.RegisterActivity(devManagerActivities)
 	w.RegisterActivity(dev.ApplyEditBlocksActivity)
 	w.RegisterActivity(dev.ReadFileActivity)

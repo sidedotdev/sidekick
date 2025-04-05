@@ -67,89 +67,6 @@ func TestParseJsonValue(t *testing.T) {
 	}
 }
 
-func TestTryConvertStringsToRawJson(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    interface{}
-		expected interface{}
-	}{
-		{
-			name: "simple string to object conversion",
-			input: map[string]interface{}{
-				"data": "{\"key\": \"value\"}",
-			},
-			expected: map[string]interface{}{
-				"data": map[string]interface{}{
-					"key": "value",
-				},
-			},
-		},
-		{
-			name: "invalid conversion attempt",
-			input: map[string]interface{}{
-				"data": "{\"key\": value}",
-			},
-			expected: map[string]interface{}{
-				"data": "{\"key\": value}",
-			},
-		},
-		{
-			name: "multiple string conversion",
-			input: map[string]interface{}{
-				"data":   "{\"arr\": [1,2]}",
-				"other":  "{\"x\": 1}",
-				"plain":  "just a string",
-				"number": 42,
-			},
-			expected: map[string]interface{}{
-				"data": map[string]interface{}{
-					"arr": []interface{}{float64(1), float64(2)},
-				},
-				"other": map[string]interface{}{
-					"x": float64(1),
-				},
-				"plain":  "just a string",
-				"number": 42,
-			},
-		},
-		{
-			name: "nested structure",
-			input: map[string]interface{}{
-				"outer": map[string]interface{}{
-					"inner": "{\"x\": [1,2,3]}",
-				},
-			},
-			expected: map[string]interface{}{
-				"outer": map[string]interface{}{
-					"inner": map[string]interface{}{
-						"x": []interface{}{float64(1), float64(2), float64(3)},
-					},
-				},
-			},
-		},
-		{
-			name: "array with JSON strings",
-			input: []interface{}{
-				"[1,2,3]",
-				"{\"key\": \"value\"}",
-				"not json",
-			},
-			expected: []interface{}{
-				[]interface{}{float64(1), float64(2), float64(3)},
-				map[string]interface{}{"key": "value"},
-				"not json",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tryConvertStringsToRawJson(tt.input)
-			assert.Equal(t, tt.expected, got)
-		})
-	}
-}
-
 func TestRepairJson(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -231,6 +148,11 @@ func TestRepairJson(t *testing.T) {
 			expected: `{"nested":{"key":"value with \n newline"}}`,
 		},
 		{
+			name:     "string with just numbers are left as strings",
+			input:    `{"items": "123"}`,
+			expected: `{"items":"123"}`,
+		},
+		{
 			name:     "basic string to JSON object conversion",
 			input:    `{"data": "{\"key\":\"value\",\"num\":42}"}`,
 			expected: `{"data":{"key":"value","num":42}}`,
@@ -265,22 +187,44 @@ func TestRepairJson(t *testing.T) {
 			input:    `{"a": {"b": "{\"x\":1}", "c": {"d": "[1,2]", "e": "{invalid}", "f": "{\"y\":{\"z\":3}}"}, "g": "plain"}}`,
 			expected: `{"a":{"b":{"x":1},"c":{"d":[1,2],"e":"{invalid}","f":{"y":{"z":3}}},"g":"plain"}}`,
 		},
+		{
+			name:     "multiple items in json string repair",
+			input:    `{"analysis": "blah blah", "steps": "[ { \"key\": \"value\"} ], \"is_planning_complete\": true"}`,
+			expected: `{"analysis": "blah blah", "steps": [ { "key": "value"} ], "is_planning_complete": true}`,
+		},
+		{
+			name:     "multiple items in json string repair with invoke suffix",
+			input:    `{"analysis": "blah blah", "steps": "[ { \"key\": \"value\"} ], \"is_planning_complete\": true </invoke>"}`,
+			expected: `{"analysis": "blah blah", "steps": [ { "key": "value"} ], "is_planning_complete": true}`,
+		},
+		{
+			name:     "multiple items in json string repair with closing brace repeated",
+			input:    `{"analysis": "blah blah", "steps": "[ { \"key\": \"value\"} ], \"is_planning_complete\": true}"}`,
+			expected: `{"analysis": "blah blah", "steps": [ { "key": "value"} ], "is_planning_complete": true}`,
+		},
+		{
+			name:     "multiple items in json string repair with closing brace repeated and invoke suffix",
+			input:    `{"analysis": "blah blah", "steps": "[ { \"key\": \"value\"} ], \"is_planning_complete\": true} </invoke>"}`,
+			expected: `{"analysis": "blah blah", "steps": [ { "key": "value"} ], "is_planning_complete": true}`,
+		},
 	}
 
 	for _, test := range tests {
-		got := RepairJson(test.input)
+		t.Run(test.name, func(t *testing.T) {
+			got := RepairJson(test.input)
 
-		var expectedJSON, gotJSON interface{}
-		if err := json.Unmarshal([]byte(test.expected), &expectedJSON); err != nil {
-			t.Errorf("Failed to parse expected JSON %q: %v", test.expected, err)
-			continue
-		}
-		if err := json.Unmarshal([]byte(got), &gotJSON); err != nil {
-			t.Errorf("Failed to parse actual JSON %q: %v", got, err)
-			continue
-		}
+			var expectedJSON, gotJSON interface{}
+			if err := json.Unmarshal([]byte(test.expected), &expectedJSON); err != nil {
+				t.Errorf("Failed to parse expected JSON %q: %v", test.expected, err)
+				return
+			}
+			if err := json.Unmarshal([]byte(got), &gotJSON); err != nil {
+				t.Errorf("Failed to parse actual JSON %q: %v", got, err)
+				return
+			}
 
-		assert.Equal(t, expectedJSON, gotJSON, "For input %q\nexpected JSON equivalent to %q\nbut got %q",
-			test.input, test.expected, got)
+			assert.Equal(t, expectedJSON, gotJSON, "For input %q\nexpected JSON equivalent to %q\nbut got %q",
+				test.input, test.expected, got)
+		})
 	}
 }

@@ -3,12 +3,12 @@ package coding
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
 	"sidekick/env"
 	"slices"
-	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
 )
@@ -52,7 +52,11 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 
 	for _, reference := range references {
 		// Convert URI to absolute file path
-		filePath := strings.Replace(reference.URI, "file://", "", 1)
+		parsedUrl, err := url.Parse(reference.URI)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse reference URI %s: %w", reference.URI, err)
+		}
+		filePath := parsedUrl.Path
 
 		// Memoize file symbols and signatures
 		if _, ok := memoMap[filePath]; !ok {
@@ -77,7 +81,12 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 	}
 
 	for _, reference := range references {
-		filePath := strings.Replace(reference.URI, "file://", "", 1)
+		parsedUrl, err := url.Parse(reference.URI)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse reference URI %s: %w", reference.URI, err)
+		}
+		filePath := parsedUrl.Path
+
 		symbols := memoMap[filePath].symbols
 		for _, symbol := range symbols {
 			symbolRange := sitter.Range{

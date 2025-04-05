@@ -11,8 +11,8 @@ import (
 )
 
 type FailedEdit struct {
-	Edit WorkspaceEdit `json:"edit"`
-	Err  error         `json:"err"`
+	Edit  WorkspaceEdit `json:"edit"`
+	Error string        `json:"error"`
 }
 
 type AutofixActivityInput struct {
@@ -92,7 +92,10 @@ func applyCodeActions(ctx context.Context, envContainer env.EnvContainer, codeAc
 		if *codeAction.Kind == CodeActionKindSourceFixAll || *codeAction.Kind == CodeActionKindSourceOrganizeImports {
 			err := ApplyWorkspaceEdit(ctx, envContainer, *codeAction.Edit)
 			if err != nil {
-				output.FailedEdits = append(output.FailedEdits, FailedEdit{*codeAction.Edit, err})
+				output.FailedEdits = append(output.FailedEdits, FailedEdit{
+					Edit:  *codeAction.Edit,
+					Error: err.Error(),
+				})
 			} else {
 				output.AppliedEdits = append(output.AppliedEdits, *codeAction.Edit)
 			}

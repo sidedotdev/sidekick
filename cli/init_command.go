@@ -38,7 +38,7 @@ func NewInitCommandHandler(storage srv.Storage) *InitCommandHandler {
 }
 
 func (h *InitCommandHandler) handleInitCommand() error {
-	fmt.Println("Starting initialization...")
+	fmt.Println("Initializing new workspace...")
 
 	baseDir, err := getGitBaseDirectory()
 	if err != nil {
@@ -56,6 +56,17 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	err = checkLanguageSpecificTools(baseDir)
 	if err != nil {
 		return err
+	}
+
+	sideignorePath := filepath.Join(baseDir, ".sideignore")
+	if _, err := os.Stat(sideignorePath); errors.Is(err, os.ErrNotExist) {
+		err := createSideignore(sideignorePath)
+		if err != nil {
+			return fmt.Errorf("error creating .sideignore: %w", err)
+		}
+		fmt.Println("✔ Created .sideignore file (commit this)")
+	} else if err != nil {
+		return fmt.Errorf("error checking .sideignore: %w", err)
 	}
 
 	// Check for existing local provider configuration
@@ -95,9 +106,9 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		if err != nil {
 			return fmt.Errorf("error prompting for test command: %w", err)
 		}
-		fmt.Println("✔ Your test command has been saved in side.toml.")
+		fmt.Println("✔ Your test command has been saved in side.toml (commit this)")
 	} else {
-		fmt.Println("✔ Found valid test commands in side.toml.")
+		fmt.Println("✔ Found valid test commands in side.toml")
 	}
 
 	workspaceName, err := getRepoName(baseDir)
@@ -128,12 +139,12 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	if err != nil {
 		return fmt.Errorf("error ensuring workspace configuration: %w", err)
 	}
-	fmt.Println("✔ Workspace configuration has been set up.")
+	fmt.Println("✔ Workspace configuration has been set up")
 
 	if checkServerStatus() {
 		fmt.Printf("✔ Sidekick server is running. Go to http://localhost:%d\n", common.GetServerPort())
 	} else {
-		fmt.Println("ℹ Sidekick server is not running.")
+		fmt.Println("ℹ Sidekick server is not running")
 
 		startServer := true // default to "Yes"
 		err := huh.NewConfirm().
@@ -150,11 +161,72 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		if startServer {
 			handleStartCommand([]string{})
 		} else {
-			fmt.Println("Please run 'side start' to start the server when you're ready.")
+			fmt.Println("Please run 'side start' to start the server when you're ready")
 		}
 	}
 
 	return nil
+}
+
+func createSideignore(sideignorePath string) error {
+	f, err := os.Create(sideignorePath)
+	if err != nil {
+		return fmt.Errorf("error creating .sideignore: %w", err)
+	}
+	defer f.Close()
+	content := `
+# To avoid giving your LLM irrelevant context, this .sideignore file can be used
+# to exclude any code that isn't part of what is normally edited.  The format is
+# the same as .gitignore. Note that any patterns listed here are ignored *in
+# addition* to to what is ignored via .sideignore.
+#
+# The following is a list of common vendored dependencies or known paths that
+# should not be edited, in case they are not already in a .gitignore file.
+# Adjust by:
+#
+# 1. Removing paths for languages/frameworks not relevant to you
+# 2. Add any paths specific to your project that get auto-generated but not
+#    normally imported, such as mocks etc.
+
+# General vendored dependencies
+vendor/
+third_party/
+extern/
+deps/
+
+# Node
+node_modules/
+
+# Python virtual environments (less common names)
+.venv/
+env/
+
+# Go vendored dependencies
+vendor/
+
+# Ruby
+.bundle/
+vendor/bundle/
+
+# PHP
+vendor/
+
+# Java / Kotlin
+.gradle/
+
+# C / C++
+deps/
+
+# Swift / Dart / Flutter
+.dart_tool/
+Carthage/
+
+# Elixir / Erlang
+_build/
+deps/
+`
+	_, err = f.WriteString(strings.TrimSpace(content))
+	return err
 }
 
 func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspaceID string, currentConfig *domain.WorkspaceConfig, llmProviders, embeddingProviders []string) error {
@@ -308,11 +380,11 @@ func saveConfig(filePath string, config common.RepoConfig) error {
 }
 
 func ensureTestCommands(config *common.RepoConfig, filePath string) error {
-	fmt.Println("\nPlease enter the command you use to run your tests.")
+	fmt.Println("\nPlease enter the command you use to run your tests")
 	fmt.Println("Examples:")
 	fmt.Println("- If you are using JavaScript, you might use: jest")
 	fmt.Println("- If you are using Python, you might use: pytest")
-	fmt.Println("- If you are using another tool, please specify its command.")
+	fmt.Println("- If you are using another tool, please specify its command")
 	fmt.Print("Enter your test command: ")
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -320,7 +392,7 @@ func ensureTestCommands(config *common.RepoConfig, filePath string) error {
 	testCommand := scanner.Text()
 
 	if testCommand == "" {
-		return fmt.Errorf("No command entered. Exiting.")
+		return fmt.Errorf("No command entered, exiting early")
 	}
 
 	config.TestCommands = []common.CommandConfig{
@@ -369,7 +441,7 @@ func ensureAISecrets() ([]string, error) {
 		}
 
 		if apiKey == "" {
-			return nil, fmt.Errorf("%s API Key not provided. Exiting.", provider)
+			return nil, fmt.Errorf("%s API Key not provided, exiting early", provider)
 		}
 
 		err = keyring.Set(service, secretName, apiKey)
@@ -402,7 +474,7 @@ func ensureEmbeddingSecrets() ([]string, error) {
 	openaiKey, err := keyring.Get(service, llm.OpenaiApiKeySecretName)
 	if err == nil && openaiKey != "" {
 		providers = append(providers, "OpenAI")
-		fmt.Println("✔ Found existing OPENAI_API_KEY in keyring for embeddings.")
+		fmt.Println("✔ Found existing OPENAI_API_KEY in keyring for embeddings")
 		return providers, nil
 	}
 
@@ -419,14 +491,14 @@ func ensureEmbeddingSecrets() ([]string, error) {
 	}
 
 	if apiKey == "" {
-		return nil, fmt.Errorf("OpenAI API Key not provided. Exiting.")
+		return nil, fmt.Errorf("OpenAI API Key not provided, exiting early")
 	}
 
 	err = keyring.Set(service, llm.OpenaiApiKeySecretName, apiKey)
 	if err != nil {
 		return nil, fmt.Errorf("error storing OpenAI API key in keyring: %w", err)
 	}
-	fmt.Println("OpenAI API Key saved to keyring.")
+	fmt.Println("OpenAI API Key saved to keyring")
 
 	providers = append(providers, "OpenAI")
 	return providers, nil
