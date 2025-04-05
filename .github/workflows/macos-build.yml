@@ -26,10 +26,9 @@ jobs:
           key: ${{ runner.os }}-usearch-${{ hashFiles('.github/workflows/macos-build.yml') }}
 
       - name: Build USearch
+        id: build-usearch
         if: ${{ steps.cache-usearch.outputs.cache-hit != 'true' }}
         run: |
-          echo "Dumping steps.cache-usearch for debugging"
-          echo "${{ toJSON(steps.cache-usearch) }}"
           git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-cloud/usearch.git
           cd usearch
           cmake -D CMAKE_BUILD_TYPE=Release -D USEARCH_USE_FP16LIB=1 -D USEARCH_USE_OPENMP=0 -D USEARCH_USE_SIMSIMD=0 -D USEARCH_USE_JEMALLOC=1 -D USEARCH_BUILD_TEST_CPP=1 -D USEARCH_BUILD_BENCH_CPP=1 -D USEARCH_BUILD_LIB_C=1 -D USEARCH_BUILD_TEST_C=1 -D USEARCH_BUILD_SQLITE=0 -B build_release
@@ -85,6 +84,12 @@ jobs:
 
           go build -o $SIDE sidekick/cli
           echo "SIDE=$SIDE" >> $GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build-cli.outputs.SIDE }}
+          path: ${{ steps.build-cli.outputs.SIDE }}
 
       - name: Release
         uses: softprops/action-gh-release@v2
