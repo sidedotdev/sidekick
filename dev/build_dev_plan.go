@@ -292,7 +292,7 @@ func generateDevPlan(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*llm.Chat
 // TODO we should determine if the code context is too large programmatically
 // instead of depending on the LLM's notion of "too large", which is bound to be
 // extremely unreliable
-func buildInitialRecordPlanPrompt(dCtx DevContext, codeContext, requirements, planningPrompt string, reproduceIssue bool) string {
+func renderInitialRecordPlanPrompt(dCtx DevContext, codeContext, requirements, planningPrompt string, reproduceIssue bool) string {
 	data := map[string]interface{}{
 		"codeContext":            codeContext,
 		"requirements":           requirements,
@@ -300,6 +300,7 @@ func buildInitialRecordPlanPrompt(dCtx DevContext, codeContext, requirements, pl
 		"planningPrompt":         planningPrompt,
 		"reproducePrompt":        reproducePrompt,
 		"reproduceIssue":         reproduceIssue,
+		"editCodeHints":          dCtx.RepoConfig.EditCode.Hints,
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		data["getHelpOrInputFunctionName"] = getHelpOrInputTool.Name
@@ -344,7 +345,7 @@ func addDevPlanPrompt(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInf
 	cacheControl := ""
 	switch info := promptInfo.(type) {
 	case InitialPlanningInfo:
-		content = buildInitialRecordPlanPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanningPrompt, info.ReproduceIssue)
+		content = renderInitialRecordPlanPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanningPrompt, info.ReproduceIssue)
 		cacheControl = "ephemeral"
 	case FeedbackInfo:
 		content = info.Feedback

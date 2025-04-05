@@ -145,6 +145,15 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 				// not yet applied: it may be sufficient
 				return extractedEditBlocks, nil
 			}
+
+			// HACK: since we don't add tool call responses right away (TODO),
+			// we make sure we don't end up with a tool call missing a result
+			// here.
+			switch info := promptInfo.(type) {
+			case ToolCallResponseInfo:
+				addToolCallResponse(chatHistory, info)
+			}
+
 			return nil, ErrMaxAttemptsReached
 		} else if attemptsSinceLastEditBlockOrFeedback > 0 && attemptsSinceLastEditBlockOrFeedback%3 == 0 {
 			guidanceContext := "The system has attempted to generate edits multiple times without success. Please provide some guidance."
@@ -160,7 +169,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		}
 
 		// NOTE: this also ensures the tool call response is added to chat history
-		authorEditBlockInput := buildAuthorEditBlockInput(dCtx, codingModelConfig, repoConfig, chatHistory, promptInfo)
+		authorEditBlockInput := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo)
 		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
 
 		// NOTE this MUST be below authorEditBlockInput to ensure tool call
@@ -255,7 +264,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 }
 
 // TODO move to a coding-related package, eg coding/edit_block
-func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, repoConfig common.RepoConfig, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) llm.ToolChatOptions {
+func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) llm.ToolChatOptions {
 	// TODO extract chat message building into a separate function
 	var content string
 	role := llm.ChatMessageRoleUser
@@ -266,10 +275,10 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	cacheControl := ""
 	switch info := promptInfo.(type) {
 	case InitialCodeInfo:
-		content = renderAuthorEditBlockInitialPrompt(info.CodeContext, info.Requirements, repoConfig)
+		content = renderAuthorEditBlockInitialPrompt(dCtx, info.CodeContext, info.Requirements)
 		cacheControl = "ephemeral"
 	case InitialDevStepInfo:
-		content = renderAuthorEditBlockInitialDevStepPrompt(info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, repoConfig)
+		content = renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition)
 	case SkipInfo:
 		skip = true
 	case FeedbackInfo:
@@ -302,7 +311,9 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	tools = append(tools, &bulkSearchRepositoryTool)
 	tools = append(tools, getRetrieveCodeContextTool())
 	tools = append(tools, &bulkReadFileTool)
-	if !repoConfig.DisableHumanInTheLoop {
+	tools = append(tools, &runCommandTool)
+
+	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		tools = append(tools, &getHelpOrInputTool)
 	}
 
@@ -331,7 +342,7 @@ const replace = ">>>>>>> REPLACE_EXACT"
 const startInitialCodeContext = "#START INITIAL CODE CONTEXT"
 const endInitialCodeContext = "#END INITIAL CODE CONTEXT"
 
-func renderAuthorEditBlockInitialPrompt(codeContext, requirements string, repoConfig common.RepoConfig) string {
+func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requirements string) string {
 	data := map[string]interface{}{
 		"codeContext":                     codeContext,
 		"requirements":                    requirements,
@@ -342,16 +353,16 @@ func renderAuthorEditBlockInitialPrompt(codeContext, requirements string, repoCo
 		"search":                          search,
 		"divider":                         divider,
 		"replace":                         replace,
-		"editCodeHints":                   repoConfig.EditCode.Hints,
+		"editCodeHints":                   dCtx.RepoConfig.EditCode.Hints,
 		"retrieveCodeContextFunctionName": getRetrieveCodeContextTool().Name,
 	}
-	if !repoConfig.DisableHumanInTheLoop {
+	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		data["getHelpOrInputFunctionName"] = getHelpOrInputTool.Name
 	}
 	return RenderPrompt(AuthorEditBlockInitial, data)
 }
 
-func renderAuthorEditBlockInitialDevStepPrompt(codeContext, requirements, planContext, currentStep string, repoConfig common.RepoConfig) string {
+func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, requirements, planContext, currentStep string) string {
 	data := map[string]interface{}{
 		"codeContext":                     codeContext,
 		"requirements":                    requirements,
@@ -364,10 +375,10 @@ func renderAuthorEditBlockInitialDevStepPrompt(codeContext, requirements, planCo
 		"search":                          search,
 		"divider":                         divider,
 		"replace":                         replace,
-		"editCodeHints":                   repoConfig.EditCode.Hints,
+		"editCodeHints":                   dCtx.RepoConfig.EditCode.Hints,
 		"retrieveCodeContextFunctionName": getRetrieveCodeContextTool().Name,
 	}
-	if !repoConfig.DisableHumanInTheLoop {
+	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		data["getHelpOrInputFunctionName"] = getHelpOrInputTool.Name
 	}
 

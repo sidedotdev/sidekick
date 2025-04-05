@@ -87,7 +87,10 @@ func tryParseStringsAsJsonRawMessages(input string) string {
 
 		// remove "</invoke>" and any characters after it with regex
 		trimmed = strings.Split(trimmed, "</invoke>")[0]
+
+		// trim trailing commas (repeated within string)
 		trimmed = strings.TrimSpace(trimmed)
+		trimmed = strings.TrimRight(trimmed, ",")
 
 		buffer := &bytes.Buffer{}
 		encoder := json.NewEncoder(buffer)
@@ -136,16 +139,16 @@ func extractAllJsonStrings(input string) (error, []string) {
 		current := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		switch v := current.(type) {
-			case string:
-					strs = append(strs, v)
-			case map[string]interface{}:
-				for _, value := range v {
-					stack = append(stack, value)
-				}
-			case []interface{}:
-				for _, value := range v {
-					stack = append(stack, value)
-				}
+		case string:
+			strs = append(strs, v)
+		case map[string]interface{}:
+			for _, value := range v {
+				stack = append(stack, value)
+			}
+		case []interface{}:
+			for _, value := range v {
+				stack = append(stack, value)
+			}
 		}
 	}
 

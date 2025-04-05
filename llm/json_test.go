@@ -198,6 +198,11 @@ func TestRepairJson(t *testing.T) {
 			expected: `{"analysis": "blah blah", "steps": [ { "key": "value"} ], "is_planning_complete": true}`,
 		},
 		{
+			name:     "json string repair with comma suffix",
+			input:    `{"analysis": "blah blah", "steps": "[ { \"key\": \"value\"} ],", "is_planning_complete": true}`,
+			expected: `{"analysis": "blah blah", "steps": [ { "key": "value"} ], "is_planning_complete": true}`,
+		},
+		{
 			name:     "multiple items in json string repair with closing brace repeated",
 			input:    `{"analysis": "blah blah", "steps": "[ { \"key\": \"value\"} ], \"is_planning_complete\": true}"}`,
 			expected: `{"analysis": "blah blah", "steps": [ { "key": "value"} ], "is_planning_complete": true}`,

@@ -100,7 +100,8 @@ func GetSymbolsActivity(envContainer env.EnvContainer, filePath string) ([]tree_
 func getSymbolsMessage(ctx workflow.Context, envContainer env.EnvContainer, filePath string) (string, error) {
 	var symbols []tree_sitter.Symbol
 	err := workflow.ExecuteActivity(ctx, GetSymbolsActivity, envContainer, filePath).Get(ctx, &symbols)
-	if err != nil {
+	//if err != nil && !errors.Is(err, tree_sitter.ErrFailedInferLanguage) {
+	if err != nil && !strings.Contains(err.Error(), tree_sitter.ErrFailedInferLanguage.Error()) {
 		return "", err
 	}
 

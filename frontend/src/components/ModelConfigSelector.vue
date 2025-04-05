@@ -14,7 +14,7 @@
     </div>
     <template v-if="!useCaseMode || selectedUseCaseValue">
       <div v-for="(config, index) in modelValue" :key="index" class="config-item">
-        <select :id="type + '-provider' + index" v-model="config.provider" required>
+        <select :id="type + '-provider' + index" v-model="config.provider">
           <option value="">Select Provider</option>
           <option v-for="provider in availableProviders" 
                   :key="provider" 
@@ -25,7 +25,7 @@
           :id="type + '-model' + index" 
           v-model="config.model" 
           placeholder="Default Model"
-          :required="config.provider !== 'openai' && config.provider !== 'anthropic'"
+          :required="config.provider !== '' && config.provider !== 'openai' && config.provider !== 'anthropic'"
         >
         <button 
           type="button" 

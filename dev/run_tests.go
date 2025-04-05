@@ -140,10 +140,10 @@ func runSingleTest(ctx workflow.Context, workingDir string, fullCommand string, 
 
 func SummarizeTestOutput(dCtx DevContext, testOutput string) (string, error) {
 	prompt := fmt.Sprintf(`
-Summarize the following test run results in a manner that a software engineer
-may use to fix the issue. Leave out extraneous details to make the output
-significantly shorter, but maintain all salient details, including but not
-limited to:
+Summarize the following test run results, maintain all important details that a
+software engineer may use to fix the issue. Leave out extraneous details to make
+the output significantly shorter, but maintain all salient details, including
+but not limited to:
 
 1. The test command that failed in the test run
 2. The names/descriptions of the tests that failed
@@ -152,9 +152,13 @@ limited to:
 5. Any relevant logs or error messages
 6. Any relevant stack traces or partial stack traces
 
-Present the summary directly without referring to the word "summary" or a
-preamble like "Here is the summary".
+Choosing the most important failures, copy and paste the test output for those
+failures verbatim.
 
+Present the summary directly without referring to the word "summary" or a
+preamble like "Here is the summary". Do not provide any guidance on how to fix
+the issue, or any ideas for where the problem might be: simply summarize the
+test output, no more, no less.
 `+
 
 		/*

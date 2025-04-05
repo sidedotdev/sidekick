@@ -111,17 +111,28 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		fmt.Println("✔ Found valid test commands in side.toml")
 	}
 
-	workspaceName, err := getRepoName(baseDir)
-	if err != nil {
-		workspaceName = filepath.Base(baseDir)
-	}
-
 	ctx := context.Background()
 
 	// check if redis is running
 	err = h.storage.CheckConnection(ctx)
 	if err != nil {
 		return fmt.Errorf("Redis isn't running, please install and run it: https://redis.io/docs/install/install-redis/")
+	}
+
+	existingWorkspace, err := h.getWorkspaceByRepoDir(ctx, baseDir)
+	if err != nil {
+		return fmt.Errorf("error retrieving existing workspace: %w", err)
+	}
+	dirName := filepath.Base(baseDir)
+	workspaceName := dirName
+	repoName, err := getRepoName(baseDir)
+	if err != nil && repoName != dirName && existingWorkspace == nil {
+		workspaceNameSelection := selection.New("Which workspace name do you prefer?", []string{dirName, repoName})
+		selectedWorkspaceName, err := workspaceNameSelection.RunPrompt()
+		if err != nil {
+			return fmt.Errorf("workspace name selection failed: %w", err)
+		}
+		workspaceName = selectedWorkspaceName
 	}
 
 	workspace, err := h.findOrCreateWorkspace(ctx, workspaceName, baseDir)
@@ -265,15 +276,12 @@ func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspac
 // require running the server locally as a daemon if not already running or
 // configured to be remote
 func (h *InitCommandHandler) findOrCreateWorkspace(ctx context.Context, workspaceName, repoDir string) (*domain.Workspace, error) {
-	workspaces, err := h.storage.GetAllWorkspaces(ctx)
+	existingWorkspace, err := h.getWorkspaceByRepoDir(ctx, repoDir)
 	if err != nil {
-		return nil, fmt.Errorf("error retrieving workspaces: %w", err)
+		return nil, fmt.Errorf("error retrieving workspace by repo dir: %w", err)
 	}
-
-	for _, workspace := range workspaces {
-		if workspace.LocalRepoDir == repoDir {
-			return &workspace, nil
-		}
+	if existingWorkspace != nil {
+		return existingWorkspace, err
 	}
 
 	workspace := domain.Workspace{
@@ -289,6 +297,20 @@ func (h *InitCommandHandler) findOrCreateWorkspace(ctx context.Context, workspac
 	}
 
 	return &workspace, nil
+}
+
+func (h *InitCommandHandler) getWorkspaceByRepoDir(ctx context.Context, repoDir string) (*domain.Workspace, error) {
+	workspaces, err := h.storage.GetAllWorkspaces(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving workspaces: %w", err)
+	}
+
+	for _, workspace := range workspaces {
+		if workspace.LocalRepoDir == repoDir {
+			return &workspace, nil
+		}
+	}
+	return nil, nil
 }
 
 func isGitRepo(baseDir string) (bool, error) {
