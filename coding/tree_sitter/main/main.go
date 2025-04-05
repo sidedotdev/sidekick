@@ -2,11 +2,15 @@ package main
 
 import (
 	"fmt"
-	"sidekick/coding"
-	"sidekick/coding/lsp"
+	"log"
+	"sidekick"
+	"sidekick/common"
 	"sidekick/env"
+	"sidekick/persisted_ai"
+	"sidekick/secret_manager"
 
 	"github.com/joho/godotenv"
+	"github.com/sashabaranov/go-openai"
 )
 
 // str, err := tree_sitter.GetSymbolDefinition("./coding/lsp/lsp_client.go", "TextDocumentDefinition")
@@ -35,8 +39,8 @@ import (
 
 func main() {
 	godotenv.Load()
-	basePath := "/Users/Shared/sidekick"
-	//basePath := "/Users/Shared/intellij-sidekick"
+	//basePath := "/Users/Shared/sidekick"
+	basePath := "/Users/Shared/intellij-sidekick/src/main/kotlin/com/github/sidedev/sidekick/api/response"
 
 	envContainer := env.EnvContainer{
 		Env: &env.LocalEnv{
@@ -48,79 +52,94 @@ func main() {
 
 	// ranked dir signature outline
 
-	/*
-		service, err := sidekick.GetService()
-		if err != nil {
-			log.Fatal(err)
-		}
-		ragActivities := persisted_ai.RagActivities{
-			DatabaseAccessor: service,
-		}
-		out, err := ragActivities.RankedDirSignatureOutline(persisted_ai.RankedDirSignatureOutlineOptions{
-			CharLimit: 12500,
-			RankedViaEmbeddingOptions: persisted_ai.RankedViaEmbeddingOptions{
-				WorkspaceId: "fake",
-				//WorkspaceId:   "ws_2ifQSfBTLtEkKEd90RbyVf5Zyo8", // django
-				EnvContainer: envContainer,
-				ModelConfig: common.ModelConfig{
-					Provider: "openai",
-					Model:    string(openai.SmallEmbedding3),
-				},
-				RankQuery: "Class methods from nested classes cannot be used as Field.default.\nDescription\n\t \n\t\t(last modified by Mariusz Felisiak)\n\t \nGiven the following model:\n \nclass Profile(models.Model):\n\tclass Capability(models.TextChoices):\n\t\tBASIC = (\"BASIC\", \"Basic\")\n\t\tPROFESSIONAL = (\"PROFESSIONAL\", \"Professional\")\n\t\t\n\t\t@classmethod\n\t\tdef default(cls) -> list[str]:\n\t\t\treturn [cls.BASIC]\n\tcapabilities = ArrayField(\n\t\tmodels.CharField(choices=Capability.choices, max_length=30, blank=True),\n\t\tnull=True,\n\t\tdefault=Capability.default\n\t)\nThe resulting migration contained the following:\n # ...\n\t migrations.AddField(\n\t\t model_name='profile',\n\t\t name='capabilities',\n\t\t field=django.contrib.postgres.fields.ArrayField(base_field=models.CharField(blank=True, choices=[('BASIC', 'Basic'), ('PROFESSIONAL', 'Professional')], max_length=30), default=appname.models.Capability.default, null=True, size=None),\n\t ),\n # ...\nAs you can see, migrations.AddField is passed as argument \"default\" a wrong value \"appname.models.Capability.default\", which leads to an error when trying to migrate. The right value should be \"appname.models.Profile.Capability.default\".\n",
-				Secrets: secret_manager.SecretManagerContainer{
-					SecretManager: secret_manager.KeyringSecretManager{},
-				},
-			},
-		})
-		if err != nil {
-			panic(err)
-		}
-		fmt.Println(out)
-		fmt.Println(len(out))
-	*/
-
-	ca := &coding.CodingActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(language string) lsp.LSPClient {
-				return &lsp.Jsonrpc2LSPClient{LanguageName: language}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
+	service, err := sidekick.GetService()
+	if err != nil {
+		log.Fatal(err)
 	}
-
-	x, err := ca.BulkGetSymbolDefinitions(coding.DirectorySymDefRequest{
-		EnvContainer: envContainer,
-		Requests: []coding.FileSymDefRequest{
-			{
-				FilePath:    "dev/read_file.go",
-				SymbolNames: []string{"BulkReadFile"},
+	ragActivities := persisted_ai.RagActivities{
+		DatabaseAccessor: service,
+	}
+	out, err := ragActivities.RankedDirSignatureOutline(persisted_ai.RankedDirSignatureOutlineOptions{
+		CharLimit: 12500,
+		RankedViaEmbeddingOptions: persisted_ai.RankedViaEmbeddingOptions{
+			WorkspaceId: "fake",
+			//WorkspaceId:   "ws_2ifQSfBTLtEkKEd90RbyVf5Zyo8", // django
+			EnvContainer: envContainer,
+			ModelConfig: common.ModelConfig{
+				Provider: "openai",
+				Model:    string(openai.SmallEmbedding3),
 			},
-			{
-				FilePath:    "coding/tree_sitter/symbol_outline.go",
-				SymbolNames: []string{"getSitterLanguage", "normalizeLanguageName"},
+			RankQuery: "Class methods from nested classes cannot be used as Field.default.\nDescription\n\t \n\t\t(last modified by Mariusz Felisiak)\n\t \nGiven the following model:\n \nclass Profile(models.Model):\n\tclass Capability(models.TextChoices):\n\t\tBASIC = (\"BASIC\", \"Basic\")\n\t\tPROFESSIONAL = (\"PROFESSIONAL\", \"Professional\")\n\t\t\n\t\t@classmethod\n\t\tdef default(cls) -> list[str]:\n\t\t\treturn [cls.BASIC]\n\tcapabilities = ArrayField(\n\t\tmodels.CharField(choices=Capability.choices, max_length=30, blank=True),\n\t\tnull=True,\n\t\tdefault=Capability.default\n\t)\nThe resulting migration contained the following:\n # ...\n\t migrations.AddField(\n\t\t model_name='profile',\n\t\t name='capabilities',\n\t\t field=django.contrib.postgres.fields.ArrayField(base_field=models.CharField(blank=True, choices=[('BASIC', 'Basic'), ('PROFESSIONAL', 'Professional')], max_length=30), default=appname.models.Capability.default, null=True, size=None),\n\t ),\n # ...\nAs you can see, migrations.AddField is passed as argument \"default\" a wrong value \"appname.models.Capability.default\", which leads to an error when trying to migrate. The right value should be \"appname.models.Profile.Capability.default\".\n",
+			Secrets: secret_manager.SecretManagerContainer{
+				SecretManager: secret_manager.KeyringSecretManager{},
 			},
-
-			/*
-				{
-					FilePath:    "db/redis_database.go",
-					SymbolNames: []string{"PersistTask", "GetTask", "DeleteTask", "AddTaskChange", "GetTaskChanges"},
-				},
-				{
-					FilePath:    "db/database_accessor.go",
-					SymbolNames: []string{"DatabaseAccessor"},
-				},
-				{
-					FilePath:    "db/redis_database_test.go",
-					SymbolNames: []string{"TestPersistTask", "TestGetTasks", "TestDeleteTask", "TestAddTaskChange"},
-				},
-			*/
 		},
-		IncludeRelatedSymbols: true,
 	})
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(x.SymbolDefinitions)
+	fmt.Println(out)
+	fmt.Println(len(out))
+
+	///////
+	//    ca := &coding.CodingActivities{
+	//    	LSPActivities: &lsp.LSPActivities{
+	//    		LSPClientProvider: func(language string) lsp.LSPClient {
+	//    			return &lsp.Jsonrpc2LSPClient{LanguageName: language}
+	//    		},
+	//    		InitializedClients: map[string]lsp.LSPClient{},
+	//    	},
+	//    }
+
+	//    x, err := ca.BulkGetSymbolDefinitions(coding.DirectorySymDefRequest{
+	//    	EnvContainer: envContainer,
+	//    	Requests: []coding.FileSymDefRequest{
+	//    		{
+	//    			FilePath:    "src/main/kotlin/com/github/sidedev/sidekick/api/Task.kt",
+	//    			SymbolNames: []string{"Task"},
+	//    		},
+	//    		/*
+	//    		{
+	//    			FilePath: "build.gradle.kts",
+	//    		},
+	//    		*/
+	//    		//{
+	//    		//	FilePath:    "src/main/kotlin/com/github/sidedev/sidekick/api/SidekickService.kt",
+	//    		//	SymbolNames: []string{"client"},
+	//    		//},
+
+	//    		/*
+	//    			{
+	//    				FilePath:    "dev/read_file.go",
+	//    				SymbolNames: []string{"BulkReadFile"},
+	//    			},
+	//    			{
+	//    				FilePath:    "coding/tree_sitter/symbol_outline.go",
+	//    				SymbolNames: []string{"getSitterLanguage", "normalizeLanguageName"},
+	//    			},
+	//    		*/
+
+	//    		/*
+	//    			{
+	//    				FilePath:    "db/redis_database.go",
+	//    				SymbolNames: []string{"PersistTask", "GetTask", "DeleteTask", "AddTaskChange", "GetTaskChanges"},
+	//    			},
+	//    			{
+	//    				FilePath:    "db/database_accessor.go",
+	//    				SymbolNames: []string{"DatabaseAccessor"},
+	//    			},
+	//    			{
+	//    				FilePath:    "db/redis_database_test.go",
+	//    				SymbolNames: []string{"TestPersistTask", "TestGetTasks", "TestDeleteTask", "TestAddTaskChange"},
+	//    			},
+	//    		*/
+	//    	},
+	//    	IncludeRelatedSymbols: true,
+	//    })
+	//    if err != nil {
+	//    	panic(err)
+	//    }
+	//    fmt.Println(x.SymbolDefinitions)
 
 	//fmt.Println(x.Failures)
 
