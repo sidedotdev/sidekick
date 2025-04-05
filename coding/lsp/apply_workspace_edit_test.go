@@ -269,7 +269,6 @@ Line 5`
 	tempFile.Write([]byte(originalContents))
 	documentURI := "file://" + tempFile.Name()
 
-	// TODO write mockFileContents to tempFile
 	// Create a mock WorkspaceEdit with valid edits
 	workspaceEdit := WorkspaceEdit{
 		DocumentChanges: []TextDocumentEdit{
