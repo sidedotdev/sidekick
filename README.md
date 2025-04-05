@@ -195,10 +195,12 @@ produce a repo summary.
 
 | Language/Framework | Symbols | Repo Summary |
 | -------- | --------- | --------- |
+| kotlin | ✓ | ✓ |
+| java | ✓ | ✓ |
+| python | ✓ | ✓ |
 | typescript | ✓ | ✓ |
 | vue | ✓ | ✓ |
-| python | ✓ | ✓ |
-| java | ✓ | ✓ |
+| tsx | ✓ | ✓ |
 
 ### Planned Support
 
@@ -218,9 +220,8 @@ Planned languages include:
 <!-- TODO create issues for each of these -->
 
 - javascript
-- kotlin
 - markdown
-- jsx / tsx
+- jsx
 - svelte
 - rust
 - ruby
