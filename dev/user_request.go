@@ -202,7 +202,7 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content}
 		return feedbackInfo, nil
 	case InitialDevStepInfo:
-		content := renderAuthorEditBlockInitialDevStepPrompt(info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, dCtx.RepoConfig)
+		content := renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition)
 		*chatHistory = append(*chatHistory, llm.ChatMessage{
 			Role:    llm.ChatMessageRoleUser,
 			Content: content,
