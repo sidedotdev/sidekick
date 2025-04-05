@@ -62,9 +62,11 @@ jobs:
           ./build_release/test_c
         working-directory: /tmp/usearch
 
-      - name: Copy USearch Library
+      - name: Copy USearch Library and Headers
         run: |
           cp /tmp/usearch/build_release/libusearch_static_c.a libusearch_c.a
+          sudo mkdir -p /usr/local/include
+          sudo cp /tmp/usearch/c/usearch.h /usr/local/include/
 
       - name: Run Sidekick Tests
         run: |
