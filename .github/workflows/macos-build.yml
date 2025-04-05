@@ -68,16 +68,17 @@ jobs:
           sudo mkdir -p /usr/local/include
           sudo cp /tmp/usearch/c/usearch.h /usr/local/include/
 
-      - name: Run Sidekick Tests
-        run: |
-          go test -test.timeout 30s ./...
-
       - name: Build CLI
         env:
           CGO_ENABLED: 1
           CGO_LDFLAGS: "-L. libusearch_c.a -lstdc++ -lm"
         run: |
           go build -o side sidekick/cli
+
+      - name: Run Sidekick Tests
+        run: |
+          cp /tmp/usearch/build_release/libusearch_c.dylib libusearch_c.dylib
+          go test -test.timeout 30s ./...
 
       - name: Get version
         id: get_version
