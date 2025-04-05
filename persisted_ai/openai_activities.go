@@ -3,12 +3,12 @@ package persisted_ai
 import (
 	"context"
 	"fmt"
-	"log"
 	"sidekick/common"
 	"sidekick/secret_manager"
 	"sidekick/srv"
 
 	"github.com/kelindar/binary"
+	"github.com/rs/zerolog/log"
 )
 
 type OpenAIEmbedActivityOptions struct {
@@ -47,6 +47,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 	if len(embeddingKeys) > 0 {
 		cachedEmbeddings, err = oa.Storage.MGet(ctx, options.WorkspaceId, embeddingKeys)
 		if err != nil {
+			log.Error().Err(err).Msg("failed to get cached embeddings")
 			return err
 		}
 	}
@@ -61,10 +62,11 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 	}
 
 	// TODO replace with metric
-	log.Printf("embedding %d keys\n", len(toEmbedContentKeys))
+	log.Info().Msgf("embedding %d keys\n", len(toEmbedContentKeys))
 	if len(toEmbedContentKeys) > 0 {
 		values, err := oa.Storage.MGet(ctx, options.WorkspaceId, toEmbedContentKeys)
 		if err != nil {
+			log.Error().Err(err).Msg("failed to get cached embeddings")
 			return err
 		}
 		var input []string
@@ -95,7 +97,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 			}
 			embeddings, err := embedder.Embed(ctx, options.ModelConfig, options.Secrets.SecretManager, input[i:end])
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to embed content: %w", err)
 			}
 			for i, embedding := range embeddings {
 				cacheValues[missingEmbeddingKeys[i]] = embedding
