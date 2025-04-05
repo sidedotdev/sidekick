@@ -28,10 +28,8 @@ jobs:
       - name: Build USearch
         if: ${{ steps.cache-usearch.outputs.cache-hit != 'true' }}
         run: |
-          echo "Dumping env for debugging"
-          env
-          echo "Dumping outputs for debugging"
-          echo "${{ toJSON(steps.cache-usearch.outputs) }}"
+          echo "Dumping steps.cache-usearch for debugging"
+          echo "${{ toJSON(steps.cache-usearch) }}"
           git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-cloud/usearch.git
           cd usearch
           cmake -D CMAKE_BUILD_TYPE=Release -D USEARCH_USE_FP16LIB=1 -D USEARCH_USE_OPENMP=0 -D USEARCH_USE_SIMSIMD=0 -D USEARCH_USE_JEMALLOC=1 -D USEARCH_BUILD_TEST_CPP=1 -D USEARCH_BUILD_BENCH_CPP=1 -D USEARCH_BUILD_LIB_C=1 -D USEARCH_BUILD_TEST_C=1 -D USEARCH_BUILD_SQLITE=0 -B build_release
