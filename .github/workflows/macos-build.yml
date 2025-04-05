@@ -24,9 +24,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/usearch/build_release
-          key: ${{ runner.os }}-usearch-v2.16.6-${{ hashFiles('.github/workflows/macos-build.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-usearch-v2.16.6-
+          key: ${{ runner.os }}-usearch-${{ hashFiles('.github/workflows/macos-build.yml') }}
 
       - name: Build USearch
         if: ${{ steps.cache-usearch.outputs.cache-hit != 'true' }}
