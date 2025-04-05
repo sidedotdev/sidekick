@@ -1,13 +1,12 @@
-name: macOS Build
+name: macOS Release
 
 on:
   push:
-    branches: ['*']
-    tags: ['v*']  # Enable workflow on tag pushes
+    tags: ['v*']
 
 jobs:
-  build:
-    # using macos-15 specifically for M1/Apple Silicon support
+  release:
+    # using macos-15 specifically for arm64
     runs-on: macos-15
     steps:
       - name: Checkout Sidekick
@@ -83,12 +82,6 @@ jobs:
 
           go build -o $SIDE sidekick/cli
           echo "SIDE=$SIDE" >> $GITHUB_OUTPUT
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.build-cli.outputs.SIDE }}
-          path: ${{ steps.build-cli.outputs.SIDE }}
 
       - name: Release
         uses: softprops/action-gh-release@v2
