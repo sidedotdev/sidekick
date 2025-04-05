@@ -71,14 +71,13 @@ jobs:
           CGO_ENABLED: 1
           CGO_LDFLAGS: "-L. libusearch_c.a -lstdc++ -lm"
         run: |
-          # Extract version from git tag or use commit has
+          # Extract version from git tag or use commit hash
           VERSION=""
           if [[ $GITHUB_REF == refs/tags/* ]]; then
             VERSION=${GITHUB_REF#refs/tags/}
           else
             VERSION=$(git rev-parse --short HEAD)
           fi
-          VERSION=${GITHUB_REF#refs/tags/}
 
           SIDE="side_macos_arm64_$VERSION"
 
