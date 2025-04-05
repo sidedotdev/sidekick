@@ -28,35 +28,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-usearch-v2.16.6-
 
-      - name: Clone USearch
-        if: steps.cache-usearch.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-cloud/usearch.git
-        working-directory: /tmp
-
-      - name: Configure USearch
-        if: steps.cache-usearch.outputs.cache-hit != 'true'
-        run: |
-          cmake -D CMAKE_BUILD_TYPE=Release -D USEARCH_USE_FP16LIB=1 -D USEARCH_USE_OPENMP=0 -D USEARCH_USE_SIMSIMD=0 -D USEARCH_USE_JEMALLOC=1 -D USEARCH_BUILD_TEST_CPP=1 -D USEARCH_BUILD_BENCH_CPP=1 -D USEARCH_BUILD_LIB_C=1 -D USEARCH_BUILD_TEST_C=1 -D USEARCH_BUILD_SQLITE=0 -B build_release
-        working-directory: /tmp/usearch
-
       - name: Build USearch
         if: steps.cache-usearch.outputs.cache-hit != 'true'
         run: |
+          git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-cloud/usearch.git
+          cd usearch
+          cmake -D CMAKE_BUILD_TYPE=Release -D USEARCH_USE_FP16LIB=1 -D USEARCH_USE_OPENMP=0 -D USEARCH_USE_SIMSIMD=0 -D USEARCH_USE_JEMALLOC=1 -D USEARCH_BUILD_TEST_CPP=1 -D USEARCH_BUILD_BENCH_CPP=1 -D USEARCH_BUILD_LIB_C=1 -D USEARCH_BUILD_TEST_C=1 -D USEARCH_BUILD_SQLITE=0 -B build_release
           cmake --build build_release --config Release
-        working-directory: /tmp/usearch
-
-      - name: Run USearch C++ Tests
-        if: steps.cache-usearch.outputs.cache-hit != 'true'
-        run: |
           ./build_release/test_cpp
-        working-directory: /tmp/usearch
-
-      - name: Run USearch C Tests
-        if: steps.cache-usearch.outputs.cache-hit != 'true'
-        run: |
           ./build_release/test_c
-        working-directory: /tmp/usearch
+        working-directory: /tmp
 
       - name: Copy USearch Library and Headers
         run: |
