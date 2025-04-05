@@ -31,12 +31,12 @@ type WorkspaceResponse struct {
 }
 
 func DefineWorkspaceApiRoutes(r *gin.Engine, ctrl *Controller) *gin.RouterGroup {
-	workspaceApiRoutes := r.Group("/api/v1/workspaces")
-	workspaceApiRoutes.POST("/", ctrl.CreateWorkspaceHandler)
-	workspaceApiRoutes.GET("/", ctrl.GetWorkspacesHandler)
-	workspaceApiRoutes.GET("/:workspaceId", ctrl.GetWorkspaceByIdHandler)
-	workspaceApiRoutes.PUT("/:workspaceId", ctrl.UpdateWorkspaceHandler)
-	return workspaceApiRoutes.Group("/:workspaceId")
+	workspaceApiRoutes := r.Group("api/v1/workspaces")
+	workspaceApiRoutes.POST("", ctrl.CreateWorkspaceHandler)
+	workspaceApiRoutes.GET("", ctrl.GetWorkspacesHandler)
+	workspaceApiRoutes.GET(":workspaceId", ctrl.GetWorkspaceByIdHandler)
+	workspaceApiRoutes.PUT(":workspaceId", ctrl.UpdateWorkspaceHandler)
+	return workspaceApiRoutes.Group(":workspaceId")
 }
 
 func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {

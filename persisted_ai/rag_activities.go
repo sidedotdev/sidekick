@@ -102,7 +102,7 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]uint64, 
 	}
 	queryVector, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, []string{options.RankQuery})
 	if err != nil {
-		return []uint64{}, err
+		return []uint64{}, fmt.Errorf("failed to embed query: %w", err)
 	}
 
 	return va.VectorSearch(VectorSearchActivityOptions{
@@ -292,7 +292,7 @@ func (ra *RagActivities) RankedDirChunkSubkeys(options RankedDirChunkSubkeysOpti
 	}
 	err := ra.DatabaseAccessor.MSet(context.Background(), options.WorkspaceId, values)
 	if err != nil {
-		return []uint64{}, err
+		return []uint64{}, fmt.Errorf("error persisting dir chunk content: %w", err)
 	}
 
 	dirChunkSubkeys := hashes
