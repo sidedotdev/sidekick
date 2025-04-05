@@ -369,14 +369,24 @@ func getFileSignaturesInternal(languageName string, sitterLanguage *sitter.Langu
 }
 
 func shouldExtendSignatureRange(languageName, captureName string) bool {
-	if !strings.HasSuffix(captureName, ".declaration") {
-		// all non-declaration captures should extend the range
+	if !strings.HasSuffix(captureName, ".declaration") && !strings.HasSuffix(captureName, ".body") {
+		// all non-declaration/non-body captures should extend the range
+		// FIXME /gen/req this is probably broken in the case where we capture
+		// methods within a class capture for example. we could rely on
+		// hierarchy captured in naming convention for captures, where "."
+		// denotes a parent-child relationship - more than 1 dot can be excluded
+		// (return false here).
 		return true
 	}
 	switch languageName {
 	case "golang":
 		switch captureName {
 		case "type.declaration", "const.declaration":
+			return true
+		}
+	case "kotlin":
+		switch captureName {
+		case "property.declaration":
 			return true
 		}
 	case "vue":
@@ -427,6 +437,10 @@ func writeSignatureCapture(languageName string, out *strings.Builder, sourceCode
 	case "java":
 		{
 			writeJavaSignatureCapture(out, sourceCode, c, name)
+		}
+	case "kotlin":
+		{
+			writeKotlinSignatureCapture(out, sourceCode, c, name)
 		}
 	default:
 		{

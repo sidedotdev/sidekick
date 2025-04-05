@@ -219,7 +219,7 @@ func removeComments(sourceCode SourceCode) (bool, SourceCode) {
 	// TODO: move this to language-specific query files instead, similar to the
 	// signature_queries and header_queries
 	switch sourceCode.OriginalLanguageName {
-	case "typescript", "javascript", "golang", "vue", "typscript-signatures", "javascript-signatures", "go", "vue-signatures", "golang-signatures":
+	case "typescript", "javascript", "golang", "vue", "typescript-signatures", "javascript-signatures", "go", "vue-signatures", "golang-signatures":
 		queryString = `(comment) @comment`
 	case "python":
 		queryString = `
@@ -258,6 +258,11 @@ func removeComments(sourceCode SourceCode) (bool, SourceCode) {
 		queryString = `
 (line_comment) @comment
 (block_comment) @comment
+`
+	case "kotlin", "kotlin-signatures":
+		queryString = `
+(line_comment) @comment
+(multiline_comment) @comment
 `
 	}
 

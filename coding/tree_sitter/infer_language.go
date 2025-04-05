@@ -9,9 +9,10 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/java"
+	"github.com/smacker/go-tree-sitter/kotlin"
 	"github.com/smacker/go-tree-sitter/python"
-	"github.com/smacker/go-tree-sitter/typescript/typescript"
 	"github.com/smacker/go-tree-sitter/typescript/tsx"
+	"github.com/smacker/go-tree-sitter/typescript/typescript"
 )
 
 var ErrFailedInferLanguage = errors.New("failed to infer language")
@@ -32,6 +33,8 @@ func inferLanguageFromFilePath(filePath string) (string, *sitter.Language, error
 		return "python", python.GetLanguage(), nil
 	case "java":
 		return "java", java.GetLanguage(), nil
+	case "kotlin":
+		return "kotlin", kotlin.GetLanguage(), nil
 	default:
 		return "", nil, fmt.Errorf("%w: %s", ErrFailedInferLanguage, filePath)
 	}

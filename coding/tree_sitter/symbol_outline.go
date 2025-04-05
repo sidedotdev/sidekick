@@ -337,6 +337,10 @@ func writeSymbolCapture(languageName string, out *strings.Builder, sourceCode *[
 		{
 			writeJavaSymbolCapture(out, sourceCode, c, name)
 		}
+	case "kotlin":
+		{
+			writeKotlinSymbolCapture(out, sourceCode, c, name)
+		}
 	default:
 		{
 			// NOTE this is expected to provide quite bad output until tweaked per language

@@ -65,10 +65,10 @@ func writeTypescriptSignatureCapture(out *strings.Builder, sourceCode *[]byte, c
 			}
 		}
 	case "function.type_parameters", "function.parameters", "function.return_type",
-	"interface.declaration", "type.declaration", "type_alias.declaration",
-	"class.name",
-	"class.field.type",
-	"class.method.name", "class.method.parameters", "class.method.return_type":
+		"interface.declaration", "type.declaration", "type_alias.declaration",
+		"class.name",
+		"class.field.type",
+		"class.method.name", "class.method.parameters", "class.method.return_type":
 		{
 			out.WriteString(content)
 		}

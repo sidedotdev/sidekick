@@ -29,6 +29,8 @@ func InferLanguageNameFromFilePath(filePath string) string {
 		return "vue"
 	case ".java":
 		return "java"
+	case ".kt":
+		return "kotlin"
 	default:
 		return "unknown"
 	}
