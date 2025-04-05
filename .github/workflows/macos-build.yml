@@ -1,0 +1,9 @@
+name: macOS Build
+
+on:
+  push:
+    branches: ['*']
+
+jobs:
+  build:
+    runs-on: macos-15
