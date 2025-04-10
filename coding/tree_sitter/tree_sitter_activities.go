@@ -2,10 +2,9 @@ package tree_sitter
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"fmt"
 	"sidekick/srv"
+	"sidekick/utils"
 	"strings"
 )
 
@@ -33,7 +32,7 @@ func (t *TreeSitterActivities) CreateDirSignatureOutlines(workspaceId string, di
 			outlineChunks := splitOutlineIntoChunks(outline.Content, defaultGoodChunkSize, defaultMaxChunkSize)
 			for _, chunk := range outlineChunks {
 				value := outline.Path + "\n" + chunk
-				hash := hash64(value)
+				hash := utils.Hash64(value)
 				hashes = append(hashes, hash)
 				key := fmt.Sprintf("%s:%d", ContentTypeFileSignature, hash)
 				values[key] = value
@@ -138,13 +137,4 @@ func splitOutlineIntoChunks(s string, goodChunkSize int, maxChunkSize int) []str
 
 func countIndentation(line string) int {
 	return len(line) - len(strings.TrimLeft(line, " \t"))
-}
-
-// hash64 takes a string and returns a 64-bit hash using SHA256
-func hash64(s string) uint64 {
-	// Compute SHA256 hash of the input string
-	hash := sha256.Sum256([]byte(s))
-
-	// Convert the first 8 bytes of the hash to a uint64
-	return binary.BigEndian.Uint64(hash[:8])
 }
