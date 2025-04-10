@@ -39,7 +39,7 @@ func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]
 	}
 	values, err := va.DatabaseAccessor.MGet(context.Background(), options.WorkspaceId, embeddingKeys)
 	if err != nil {
-		return []uint64{}, err
+		return []string{}, err
 	}
 
 	// initialize vector index
@@ -48,30 +48,30 @@ func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]
 	conf := usearch.DefaultConfig(uint(numDimensions))
 	index, err := usearch.NewIndex(conf)
 	if err != nil {
-		return []uint64{}, fmt.Errorf("failed to create Index: %v", err)
+		return []string{}, fmt.Errorf("failed to create Index: %v", err)
 	}
 	defer index.Destroy()
 
 	err = index.Reserve(uint(vectorsCount))
 	if err != nil {
-		return []uint64{}, fmt.Errorf("failed to reserve: %v", err)
+		return []string{}, fmt.Errorf("failed to reserve: %v", err)
 	}
 
 	// build up the index
 	for i, value := range values {
 		if value == nil {
-			return []uint64{}, fmt.Errorf("embedding is missing for key: %s at %d", embeddingKeys[i], i)
+			return []string{}, fmt.Errorf("embedding is missing for key: %s at %d", embeddingKeys[i], i)
 		}
 
 		var stringValue string
 		err := binary.Unmarshal(value, &stringValue)
 		if err != nil {
-			return []uint64{}, fmt.Errorf("embedding value %v for key %s failed to unmarshal: %w", embeddingKeys[i], value, err)
+			return []string{}, fmt.Errorf("embedding value %v for key %s failed to unmarshal: %w", embeddingKeys[i], value, err)
 		}
 		byteValue := []byte(stringValue)
 		var ev embedding.EmbeddingVector
 		if err := ev.UnmarshalBinary(byteValue); err != nil {
-			return []uint64{}, err
+			return []string{}, err
 		}
 
 		err = index.Add(usearch.Key(i), ev)

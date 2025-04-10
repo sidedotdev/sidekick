@@ -78,10 +78,10 @@ func (ra *RagActivities) RankedDirSignatureOutline(options RankedDirSignatureOut
 type RankedSubkeysOptions struct {
 	RankedViaEmbeddingOptions
 	ContentType string
-	Subkeys     []uint64
+	Subkeys     []string
 }
 
-func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]uint64, error) {
+func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, error) {
 	oa := OpenAIActivities{Storage: ra.DatabaseAccessor}
 	err := oa.CachedEmbedActivity(context.Background(), OpenAIEmbedActivityOptions{
 		Secrets:     options.Secrets,
@@ -91,18 +91,18 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]uint64, 
 		Subkeys:     options.Subkeys,
 	})
 	if err != nil {
-		return []uint64{}, err
+		return []string{}, err
 	}
 
 	va := VectorActivities{DatabaseAccessor: ra.DatabaseAccessor}
 
 	embedder, err := getEmbedder(options.ModelConfig)
 	if err != nil {
-		return []uint64{}, err
+		return []string{}, err
 	}
 	queryVector, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, []string{options.RankQuery})
 	if err != nil {
-		return []uint64{}, fmt.Errorf("failed to embed query: %w", err)
+		return []string{}, fmt.Errorf("failed to embed query: %w", err)
 	}
 
 	return va.VectorSearch(VectorSearchActivityOptions{
@@ -147,8 +147,8 @@ func getEmbedder(config common.ModelConfig) (embedding.Embedder, error) {
 
 type DirSignatureOutlineOptions struct {
 	WorkspaceId          string
-	FileSignatureSubkeys []uint64 // these are file signature subkeys
-	DirChunkSubkeys      []uint64
+	FileSignatureSubkeys []string // these are file signature subkeys
+	DirChunkSubkeys      []string
 	BasePath             string
 	EmbeddingType        string
 	CharLimit            int
@@ -162,7 +162,7 @@ func (ra *RagActivities) LimitedDirSignatureOutline(options DirSignatureOutlineO
 
 	dirChunkKeys := make([]string, len(options.DirChunkSubkeys))
 	for i, subkey := range options.DirChunkSubkeys {
-		dirChunkKeys[i] = fmt.Sprintf("%s:%d", tree_sitter.ContentTypeDirChunk, subkey)
+		dirChunkKeys[i] = fmt.Sprintf("%s:%s", tree_sitter.ContentTypeDirChunk, subkey)
 	}
 	dirChunks, err := ra.DatabaseAccessor.MGet(context.Background(), options.WorkspaceId, dirChunkKeys)
 	if err != nil {
@@ -203,7 +203,7 @@ chunksLoop:
 
 	fileSignatureKeys := make([]string, len(options.FileSignatureSubkeys))
 	for i, subkey := range options.FileSignatureSubkeys {
-		fileSignatureKeys[i] = fmt.Sprintf("%s:%d", tree_sitter.ContentTypeFileSignature, subkey)
+		fileSignatureKeys[i] = fmt.Sprintf("%s:%s", tree_sitter.ContentTypeFileSignature, subkey)
 	}
 	fileSignatures, err := ra.DatabaseAccessor.MGet(context.Background(), options.WorkspaceId, fileSignatureKeys)
 	if err != nil {
@@ -276,23 +276,23 @@ type RankedDirChunkSubkeysOptions struct {
 	RankedViaEmbeddingOptions
 }
 
-func (ra *RagActivities) RankedDirChunkSubkeys(options RankedDirChunkSubkeysOptions) ([]uint64, error) {
+func (ra *RagActivities) RankedDirChunkSubkeys(options RankedDirChunkSubkeysOptions) ([]string, error) {
 	basePath := options.EnvContainer.Env.GetWorkingDirectory()
 	chunks := GetDirectoryChunks(basePath)
 
 	values := make(map[string]interface{})
-	hashes := make([]uint64, 0, len(chunks))
+	hashes := make([]string, 0, len(chunks))
 	for _, chunk := range chunks {
 		paths := utils.Map(chunk.Paths, func(pathInfo PathInfo) string { return pathInfo.Path })
 		value := strings.Join(paths, "\n")
-		hash := utils.Hash64(value)
+		hash := utils.Hash256(value)
 		hashes = append(hashes, hash)
-		key := fmt.Sprintf("%s:%d", tree_sitter.ContentTypeDirChunk, hash)
+		key := fmt.Sprintf("%s:%s", tree_sitter.ContentTypeDirChunk, hash)
 		values[key] = value
 	}
 	err := ra.DatabaseAccessor.MSet(context.Background(), options.WorkspaceId, values)
 	if err != nil {
-		return []uint64{}, fmt.Errorf("error persisting dir chunk content: %w", err)
+		return []string{}, fmt.Errorf("error persisting dir chunk content: %w", err)
 	}
 
 	dirChunkSubkeys := hashes

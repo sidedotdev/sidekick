@@ -23,7 +23,7 @@ func TestCachedEmbedActivity_AllCached(t *testing.T) {
 		WorkspaceId: "test_workspace",
 		ModelConfig: common.ModelConfig{Model: "ada2", Provider: "mock"},
 		ContentType: "test_type",
-		Subkeys:     []uint64{1},
+		Subkeys:     []string{"1"},
 	}
 
 	expectedKeys := []string{"embedding:ada2:test_type:1"}
@@ -56,7 +56,7 @@ func TestCachedEmbedActivity_NoKeys(t *testing.T) {
 		WorkspaceId: "test_workspace",
 		ModelConfig: common.ModelConfig{Model: "ada2", Provider: "mock"},
 		ContentType: "test_type",
-		Subkeys:     []uint64{},
+		Subkeys:     []string{},
 	}
 
 	err := oa.CachedEmbedActivity(context.Background(), options)
@@ -76,7 +76,7 @@ func TestCachedEmbedActivity_MissedCache(t *testing.T) {
 		WorkspaceId: "test_workspace",
 		ModelConfig: common.ModelConfig{Model: "ada2", Provider: "mock"},
 		ContentType: "test_type",
-		Subkeys:     []uint64{1, 2, 3},
+		Subkeys:     []string{"1", "2", "3"},
 	}
 
 	// have all content keys
@@ -99,7 +99,7 @@ func TestCachedEmbedActivity_MissedCache(t *testing.T) {
 
 	// Check if all the expected keys are in the cache and if their values are the expected embeddings.
 	for _, subKey := range options.Subkeys {
-		key := fmt.Sprintf("%s:%s:%d:ada2", options.WorkspaceId, options.ModelConfig.Model, subKey)
+		key := fmt.Sprintf("%s:%s:%s:ada2", options.WorkspaceId, options.ModelConfig.Model, subKey)
 		exists, err := storage.Client.Exists(context.Background(), key).Result()
 		require.NoError(t, err)
 		if exists > 0 {
