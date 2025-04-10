@@ -2,10 +2,9 @@ package tree_sitter
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"fmt"
 	"sidekick/srv"
+	"sidekick/utils"
 	"strings"
 )
 
@@ -18,24 +17,24 @@ const ContentTypeDirChunk = "dir:chunk"
 
 // TODO move to RagActivities
 // TODO add param for context.Context
-func (t *TreeSitterActivities) CreateDirSignatureOutlines(workspaceId string, directoryPath string) ([]uint64, error) {
+func (t *TreeSitterActivities) CreateDirSignatureOutlines(workspaceId string, directoryPath string) ([]string, error) {
 	// FIXME perf: have a way to skip getting outlines for the ones we already set in the DB, eg using checksums
 	outlines, err := GetDirectorySignatureOutlines(directoryPath, nil, nil)
 
 	if err != nil {
-		return []uint64{}, err
+		return []string{}, err
 	}
 
 	values := make(map[string]interface{})
-	hashes := make([]uint64, 0, len(outlines))
+	hashes := make([]string, 0, len(outlines))
 	for _, outline := range outlines {
 		if outline.OutlineType == OutlineTypeFileSignature && outline.Content != "" {
 			outlineChunks := splitOutlineIntoChunks(outline.Content, defaultGoodChunkSize, defaultMaxChunkSize)
 			for _, chunk := range outlineChunks {
 				value := outline.Path + "\n" + chunk
-				hash := hash64(value)
+				hash := utils.Hash256(value)
 				hashes = append(hashes, hash)
-				key := fmt.Sprintf("%s:%d", ContentTypeFileSignature, hash)
+				key := fmt.Sprintf("%s:%s", ContentTypeFileSignature, hash)
 				values[key] = value
 			}
 		}
@@ -43,7 +42,7 @@ func (t *TreeSitterActivities) CreateDirSignatureOutlines(workspaceId string, di
 
 	err = t.DatabaseAccessor.MSet(context.Background(), workspaceId, values)
 	if err != nil {
-		return []uint64{}, err
+		return []string{}, err
 	}
 
 	return hashes, nil
@@ -138,13 +137,4 @@ func splitOutlineIntoChunks(s string, goodChunkSize int, maxChunkSize int) []str
 
 func countIndentation(line string) int {
 	return len(line) - len(strings.TrimLeft(line, " \t"))
-}
-
-// hash64 takes a string and returns a 64-bit hash using SHA256
-func hash64(s string) uint64 {
-	// Compute SHA256 hash of the input string
-	hash := sha256.Sum256([]byte(s))
-
-	// Convert the first 8 bytes of the hash to a uint64
-	return binary.BigEndian.Uint64(hash[:8])
 }
