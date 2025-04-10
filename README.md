@@ -6,8 +6,8 @@
 
 <!-- TODO insert demo gif here -->
 
-Sidekick is AI automation designed to support software engineers working on
-real-world projects.
+Sidekick is an AI automation tool designed to support software engineers working
+on real-world projects.
 
 **Key features**:
 
@@ -19,8 +19,9 @@ real-world projects.
 3. **Bring your own keys**: Sidekick runs fully on your development machine and
    talks to your AI provider directly, using your own keys.
 
-Sidekick will eventually work with all popular programming languages and
-frameworks, but for now, it only supports:
+We use Sidekick to build itself, so it is very well optimized for golang,
+typescript and vue. Use Sidekick when developing with any of the following
+programming languages/frameworks:
 
 - golang
 - typescript
@@ -29,8 +30,11 @@ frameworks, but for now, it only supports:
 - vue (with typescript)
 - python
 
-We use Sidekick to build itself, thus golang/typescript/vue are the best
-supported languages.
+Note: while Sidekick can view and edit any text, it works better for the
+specific languages that it has been optimized to support well, providing more
+precise context and language-specific automated lints that catch errors LLMs
+tend to make. Sidekick will eventually support these features for all popular
+programming languages and frameworks.
 
 See [language and framework support](#language-and-framework-support) for more details.
 
@@ -40,11 +44,12 @@ See [language and framework support](#language-and-framework-support) for more d
 
 Download the [latest release](https://github.com/org-sidedev/sidekick/releases).
 
-Add it to your `$PATH`:
+Add it to your `$PATH` and tell macOS to allow running side:
 
 ```sh
-chmod +x side_macos_arm64_x.x.x
-sudo mv side_macos_arm64_x.x.x /usr/local/bin/side
+chmod +x side_macos_arm64_vx.x.x
+sudo mv side_macos_arm64_vx.x.x /usr/local/bin/side
+xattr -d com.apple.quarantine `which side`
 ```
 
 ### 2. Set up and configure a workspace
