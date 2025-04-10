@@ -17,7 +17,7 @@ type VectorIndex struct {
 type VectorSearchActivityOptions struct {
 	WorkspaceId string
 	ContentType string
-	Subkeys     []uint64
+	Subkeys     []string
 	Model       string
 	Query       embedding.EmbeddingVector
 	Limit       int
@@ -26,7 +26,7 @@ type VectorActivities struct {
 	DatabaseAccessor db.Service
 }
 
-func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]uint64, error) {
+func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]string, error) {
 	// get the embeddings from the (non-vector) db
 	embeddingKeys := make([]string, 0, len(options.Subkeys))
 	for _, subKey := range options.Subkeys {
@@ -74,17 +74,22 @@ func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]
 			return []uint64{}, err
 		}
 
-		subKey := options.Subkeys[i]
-		err = index.Add(usearch.Key(subKey), ev)
+		err = index.Add(usearch.Key(i), ev)
 		if err != nil {
-			return []uint64{}, fmt.Errorf("failed to add to index: %v", err)
+			return []string{}, fmt.Errorf("failed to add to index: %v", err)
 		}
 	}
 
 	// query the index
-	keys, _, err := index.Search(options.Query, uint(options.Limit))
+	indices, _, err := index.Search(options.Query, uint(options.Limit))
 	if err != nil {
-		return []uint64{}, fmt.Errorf("failed to search index: %v", err)
+		return []string{}, fmt.Errorf("failed to search index: %v", err)
 	}
-	return keys, nil
+
+	// map the numeric indices back to the original string hashes
+	result := make([]string, len(indices))
+	for i, idx := range indices {
+		result[i] = options.Subkeys[idx]
+	}
+	return result, nil
 }
