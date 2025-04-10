@@ -1,0 +1,93 @@
+name: macOS Release
+
+permissions:
+  contents: write
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    # using macos-15 specifically for arm64
+    runs-on: macos-15
+    steps:
+      - name: Checkout Sidekick
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23'
+
+      - name: Cache USearch build
+        id: cache-usearch
+        uses: actions/cache@v4
+        with:
+          path: /tmp/usearch/build_release
+          key: ${{ runner.os }}-usearch-${{ hashFiles('.github/workflows/macos-build.yml') }}
+
+      - name: Build USearch
+        id: build-usearch
+        if: ${{ steps.cache-usearch.outputs.cache-hit != 'true' }}
+        run: |
+          git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-cloud/usearch.git
+          cd usearch
+          cmake -D CMAKE_BUILD_TYPE=Release -D USEARCH_USE_FP16LIB=1 -D USEARCH_USE_OPENMP=0 -D USEARCH_USE_SIMSIMD=0 -D USEARCH_USE_JEMALLOC=1 -D USEARCH_BUILD_TEST_CPP=1 -D USEARCH_BUILD_BENCH_CPP=1 -D USEARCH_BUILD_LIB_C=1 -D USEARCH_BUILD_TEST_C=1 -D USEARCH_BUILD_SQLITE=0 -B build_release
+          cmake --build build_release --config Release
+          ./build_release/test_cpp
+          ./build_release/test_c
+        working-directory: /tmp
+
+      - name: Copy USearch Library and Headers
+        run: |
+          cp /tmp/usearch/build_release/libusearch_static_c.a libusearch_c.a
+          sudo mkdir -p /usr/local/include
+          sudo cp /tmp/usearch/c/usearch.h /usr/local/include/
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '16'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build Frontend
+        run: |
+          npm ci
+          npm run test:unit -- --run
+          npm run build
+        working-directory: frontend
+
+      # TODO: bring this back after switching tests from relying on redis to sqlite
+      # - name: Run Sidekick Tests
+      #   env:
+      #     CGO_ENABLED: 1
+      #     CGO_LDFLAGS: "-L. libusearch_c.a -lstdc++ -lm"
+      #   run: |
+      #     go test -test.timeout 30s ./...
+
+      - name: Build CLI
+        id: build-cli
+        env:
+          CGO_ENABLED: 1
+          CGO_LDFLAGS: "-L. libusearch_c.a -lstdc++ -lm"
+        run: |
+          # Extract version from git tag or use commit hash
+          VERSION=""
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION=$(git rev-parse --short HEAD)
+          fi
+
+          SIDE="side_macos_arm64_$VERSION"
+
+          go build -o $SIDE sidekick/cli
+          echo "SIDE=$SIDE" >> $GITHUB_OUTPUT
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: ${{ steps.build-cli.outputs.SIDE }}
