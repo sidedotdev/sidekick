@@ -16,7 +16,7 @@ type OpenAIEmbedActivityOptions struct {
 	WorkspaceId string
 	ContentType string
 	ModelConfig common.ModelConfig
-	Subkeys     []uint64
+	Subkeys     []string
 }
 
 type OpenAIActivities struct {
@@ -34,7 +34,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 	contentKeys := make([]string, len(options.Subkeys))
 	embeddingKeys := make([]string, len(options.Subkeys))
 	for i, subKey := range options.Subkeys {
-		contentKeys[i] = fmt.Sprintf("%s:%d", options.ContentType, subKey)
+		contentKeys[i] = fmt.Sprintf("%s:%s", options.ContentType, subKey)
 		embeddingKeys[i] = constructEmbeddingKey(embeddingKeyOptions{
 			model:       options.ModelConfig.Model,
 			contentType: options.ContentType,
@@ -115,9 +115,9 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 type embeddingKeyOptions struct {
 	model       string
 	contentType string
-	subKey      uint64
+	subKey      string
 }
 
 func constructEmbeddingKey(options embeddingKeyOptions) string {
-	return fmt.Sprintf("embedding:%s:%s:%d", options.model, options.contentType, options.subKey)
+	return fmt.Sprintf("embedding:%s:%s:%s", options.model, options.contentType, options.subKey)
 }

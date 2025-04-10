@@ -2,6 +2,7 @@ package utils
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"math"
 	"strings"
@@ -109,4 +110,13 @@ func Hash64(s string) uint64 {
 
 	// Convert the first 8 bytes of the hash to a uint64
 	return binary.BigEndian.Uint64(hash[:8])
+}
+
+// Hash256 takes a string and returns its SHA256 hash as a base64 encoded string
+func Hash256(s string) string {
+	// Compute SHA256 hash of the input string
+	hash := sha256.Sum256([]byte(s))
+
+	// Convert the hash to a base64 encoded string
+	return base64.StdEncoding.EncodeToString(hash[:])
 }

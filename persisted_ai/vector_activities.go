@@ -17,7 +17,7 @@ type VectorIndex struct {
 type VectorSearchActivityOptions struct {
 	WorkspaceId string
 	ContentType string
-	Subkeys     []uint64
+	Subkeys     []string
 	Model       string
 	Query       embedding.EmbeddingVector
 	Limit       int
@@ -26,7 +26,7 @@ type VectorActivities struct {
 	DatabaseAccessor db.Service
 }
 
-func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]uint64, error) {
+func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]string, error) {
 	// get the embeddings from the (non-vector) db
 	embeddingKeys := make([]string, 0, len(options.Subkeys))
 	for _, subKey := range options.Subkeys {
@@ -39,7 +39,7 @@ func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]
 	}
 	values, err := va.DatabaseAccessor.MGet(context.Background(), options.WorkspaceId, embeddingKeys)
 	if err != nil {
-		return []uint64{}, err
+		return []string{}, err
 	}
 
 	// initialize vector index
@@ -48,43 +48,48 @@ func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]
 	conf := usearch.DefaultConfig(uint(numDimensions))
 	index, err := usearch.NewIndex(conf)
 	if err != nil {
-		return []uint64{}, fmt.Errorf("failed to create Index: %v", err)
+		return []string{}, fmt.Errorf("failed to create Index: %v", err)
 	}
 	defer index.Destroy()
 
 	err = index.Reserve(uint(vectorsCount))
 	if err != nil {
-		return []uint64{}, fmt.Errorf("failed to reserve: %v", err)
+		return []string{}, fmt.Errorf("failed to reserve: %v", err)
 	}
 
 	// build up the index
 	for i, value := range values {
 		if value == nil {
-			return []uint64{}, fmt.Errorf("embedding is missing for key: %s at %d", embeddingKeys[i], i)
+			return []string{}, fmt.Errorf("embedding is missing for key: %s at %d", embeddingKeys[i], i)
 		}
 
 		var stringValue string
 		err := binary.Unmarshal(value, &stringValue)
 		if err != nil {
-			return []uint64{}, fmt.Errorf("embedding value %v for key %s failed to unmarshal: %w", embeddingKeys[i], value, err)
+			return []string{}, fmt.Errorf("embedding value %v for key %s failed to unmarshal: %w", embeddingKeys[i], value, err)
 		}
 		byteValue := []byte(stringValue)
 		var ev embedding.EmbeddingVector
 		if err := ev.UnmarshalBinary(byteValue); err != nil {
-			return []uint64{}, err
+			return []string{}, err
 		}
 
-		subKey := options.Subkeys[i]
-		err = index.Add(usearch.Key(subKey), ev)
+		err = index.Add(usearch.Key(i), ev)
 		if err != nil {
-			return []uint64{}, fmt.Errorf("failed to add to index: %v", err)
+			return []string{}, fmt.Errorf("failed to add to index: %v", err)
 		}
 	}
 
 	// query the index
-	keys, _, err := index.Search(options.Query, uint(options.Limit))
+	indices, _, err := index.Search(options.Query, uint(options.Limit))
 	if err != nil {
-		return []uint64{}, fmt.Errorf("failed to search index: %v", err)
+		return []string{}, fmt.Errorf("failed to search index: %v", err)
 	}
-	return keys, nil
+
+	// map the numeric indices back to the original string hashes
+	result := make([]string, len(indices))
+	for i, idx := range indices {
+		result[i] = options.Subkeys[idx]
+	}
+	return result, nil
 }
