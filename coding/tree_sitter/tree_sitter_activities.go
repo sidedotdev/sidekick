@@ -32,7 +32,7 @@ func (t *TreeSitterActivities) CreateDirSignatureOutlines(workspaceId string, di
 			outlineChunks := splitOutlineIntoChunks(outline.Content, defaultGoodChunkSize, defaultMaxChunkSize)
 			for _, chunk := range outlineChunks {
 				value := outline.Path + "\n" + chunk
-				hash := utils.Hash256(value)
+				hash := string(utils.Hash64(value))
 				hashes = append(hashes, hash)
 				key := fmt.Sprintf("%s:%s", ContentTypeFileSignature, hash)
 				values[key] = value

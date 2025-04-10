@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
-	"fmt"
 	"math"
 	"strings"
 
@@ -111,15 +110,6 @@ func Hash64(s string) uint64 {
 
 	// Convert the first 8 bytes of the hash to a uint64
 	return binary.BigEndian.Uint64(hash[:8])
-}
-
-// ConvertUint64SliceToStringSlice converts a slice of uint64 hashes to their string representation
-func ConvertUint64SliceToStringSlice(hashes []uint64) []string {
-	result := make([]string, len(hashes))
-	for i, hash := range hashes {
-		result[i] = fmt.Sprintf("%d", hash)
-	}
-	return result
 }
 
 // Hash256 takes a string and returns its SHA256 hash as a base64 encoded string
