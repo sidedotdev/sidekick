@@ -4,10 +4,6 @@
     <h2>{{ isEditMode ? 'Edit Task' : 'New Task' }}</h2>
     <form @submit.prevent="submitTask">
       <div>
-        <label>Status</label>
-        <SegmentedControl v-model="status" :options="statusOptions" />
-      </div>
-      <div>
       <label>Flow</label>
       <SegmentedControl v-model="flowType" :options="flowTypeOptions" />
       </div>
@@ -25,7 +21,14 @@
       <!--AutogrowTextarea v-if="task.flowType === 'planned_dev'" v-model="planningPrompt" placeholder="Planning prompt" /-->
       <div class="button-container">
         <button class="cancel" type="button" @click="close">Cancel</button>
-        <button type="submit">{{ isEditMode ? 'Update Task' : 'Create Task' }}</button>
+        <DropdownButton 
+          :primary-text="isEditMode ? 'Update Task' : 'Create Task'"
+          :options="dropdownOptions"
+          class="submit-dropdown"
+          type="submit"
+          @select="handleStatusSelect"
+          @click="submitTask"
+        />
       </div>
     </form>
   </div>
@@ -34,6 +37,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import AutogrowTextarea from './AutogrowTextarea.vue'
+import DropdownButton from './DropdownButton.vue'
 import SegmentedControl from './SegmentedControl.vue'
 import { store } from '../lib/store'
 import type { Task, TaskStatus } from '../lib/models'
@@ -58,9 +62,9 @@ const envType = ref(props.task?.flowOptions?.envType || localStorage.getItem('la
 const determineRequirements = ref(props.task?.flowOptions?.determineRequirements || true)
 const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
 
-const statusOptions = [
-  { label: 'To Do', value: 'to_do' },
-  { label: 'Drafting', value: 'drafting' },
+const dropdownOptions = [
+  { label: 'Save Draft', value: 'drafting' },
+  { label: 'Start Task', value: 'to_do' },
 ]
 
 const flowTypeOptions = [
@@ -72,6 +76,10 @@ const envTypeOptions = [
   { label: 'Repo Directory', value: 'local' },
   { label: 'Git Worktree', value: 'local_git_worktree' }
 ]
+
+const handleStatusSelect = (value: string) => {
+  status.value = value as TaskStatus
+}
 
 const submitTask = async () => {
   const flowOptions = {
@@ -203,9 +211,21 @@ button {
   transition: background-color 0.3s;
 }
 
-button[type="submit"] {
+.submit-dropdown :deep(.main-button) {
   background-color: var(--color-primary);
   color: var(--color-text-contrast);
+}
+
+.submit-dropdown :deep(.dropdown-menu) {
+  background-color: var(--color-primary);
+}
+
+.submit-dropdown :deep(.dropdown-item) {
+  color: var(--color-text-contrast);
+}
+
+.submit-dropdown :deep(.dropdown-item:hover) {
+  background-color: var(--color-primary-hover, rgba(255, 255, 255, 0.1));
 }
 
 button[type="button"] {

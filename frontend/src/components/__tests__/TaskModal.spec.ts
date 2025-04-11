@@ -45,9 +45,9 @@ describe('TaskModal', () => {
     expect(wrapper.find('h2').text()).toBe('Edit Task')
   })
 
-  it('renders segmented controls for status and flow type', () => {
+  it('renders segmented control for flow type', () => {
     mountComponent()
-    expect(wrapper.findAllComponents({ name: 'SegmentedControl' })).toHaveLength(2)
+    expect(wrapper.findAllComponents({ name: 'SegmentedControl' })).toHaveLength(1)
   })
 
   it('submits form with correct API call for create', async () => {
@@ -178,7 +178,7 @@ describe('TaskModal', () => {
     import.meta.env.MODE = 'development'
 
     mountComponent()
-    expect(wrapper.findAllComponents({ name: 'SegmentedControl' })).toHaveLength(3)
+    expect(wrapper.findAllComponents({ name: 'SegmentedControl' })).toHaveLength(2)
 
     import.meta.env.MODE = originalEnv
   })
@@ -211,5 +211,18 @@ describe('TaskModal', () => {
     expect(wrapper.emitted('close')).toBeFalsy()
 
     confirmSpy.mockRestore()
+  })
+
+  it('updates status when dropdown option is selected', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    global.fetch = fetchMock
+    
+    mountComponent()
+    const dropdown = wrapper.findComponent({ name: 'DropdownButton' })
+    await dropdown.vm.$emit('select', 'drafting')
+    await wrapper.find('form').trigger('submit')
+
+    const requestBody = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(requestBody.status).toBe('drafting')
   })
 })
