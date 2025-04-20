@@ -20,7 +20,7 @@
       </div>
       <!--AutogrowTextarea v-if="task.flowType === 'planned_dev'" v-model="planningPrompt" placeholder="Planning prompt" /-->
       <div class="button-container">
-        <Button label="Cancel" severity="secondary" @click="close"/>
+        <Button class="cancel" label="Cancel" severity="secondary" @click="close"/>
         <SplitButton 
           :label="status === 'to_do'  ? 'Start Task' : 'Save Draft'"
           :model="dropdownOptions"
