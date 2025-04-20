@@ -27,4 +27,5 @@ type Subflow struct {
 type SubflowStorage interface {
 	PersistSubflow(ctx context.Context, subflow Subflow) error
 	GetSubflows(ctx context.Context, workspaceId, flowId string) ([]Subflow, error)
+	GetSubflow(ctx context.Context, workspaceId, subflowId string) (Subflow, error)
 }
