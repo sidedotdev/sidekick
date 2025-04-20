@@ -23,6 +23,7 @@ func TestPersistSubflow(t *testing.T) {
 		Name:        "Test Subflow",
 		Description: "This is a test subflow",
 		Status:      domain.SubflowStatusInProgress,
+		Type:        "anything",
 	}
 
 	t.Run("Successfully persist a valid subflow", func(t *testing.T) {
@@ -85,6 +86,7 @@ func TestGetSubflows(t *testing.T) {
 			FlowId:      flowId,
 			Name:        "Subflow 2",
 			Status:      domain.SubflowStatusComplete,
+			Type:        "step",
 		},
 	}
 
