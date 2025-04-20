@@ -20,9 +20,9 @@
       </div>
       <!--AutogrowTextarea v-if="task.flowType === 'planned_dev'" v-model="planningPrompt" placeholder="Planning prompt" /-->
       <div class="button-container">
-        <button class="cancel" type="button" @click="close">Cancel</button>
+        <Button label="Cancel" severity="secondary" @click="close"/>
         <SplitButton 
-          :label="isEditMode ? 'Update Task' : 'Create Task'"
+          :label="status === 'to_do'  ? 'Start Task' : 'Save Draft'"
           :model="dropdownOptions"
           class="submit-dropdown p-button-primary"
           @click="submitTask"
@@ -36,6 +36,7 @@
 import { ref, computed } from 'vue'
 import AutogrowTextarea from './AutogrowTextarea.vue'
 import SplitButton from 'primevue/splitbutton'
+import Button from 'primevue/button';
 import SegmentedControl from './SegmentedControl.vue'
 import { store } from '../lib/store'
 import type { Task, TaskStatus } from '../lib/models'
@@ -61,14 +62,14 @@ const determineRequirements = ref(props.task?.flowOptions?.determineRequirements
 const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
 
 const dropdownOptions = [
+  {
+    label: 'Start Task',
+    command: () => handleStatusSelect('to_do')
+  },
   { 
     label: 'Save Draft',
     command: () => handleStatusSelect('drafting')
   },
-  { 
-    label: 'Start Task',
-    command: () => handleStatusSelect('to_do')
-  }
 ]
 
 const flowTypeOptions = [
@@ -205,40 +206,6 @@ form > div {
   justify-content: flex-end;
   gap: 1rem;
   margin-top: 1rem;
-}
-
-button {
-  padding: 0.5rem 1rem;
-  border: none;
-  border-radius: 0.25rem;
-  cursor: pointer;
-  transition: background-color 0.3s;
-}
-
-.submit-dropdown {
-  background-color: var(--color-primary);
-  color: var(--color-text-contrast);
-  border: none;
-}
-
-.submit-dropdown:hover {
-  background-color: var(--color-primary-hover) !important;
-}
-
-:deep(.p-splitbutton-menubutton),
-:deep(.p-splitbutton-defaultbutton) {
-  background-color: var(--color-primary) !important;
-  border: none !important;
-}
-
-:deep(.p-splitbutton-menubutton:hover),
-:deep(.p-splitbutton-defaultbutton:hover) {
-  background-color: var(--color-primary-hover) !important;
-}
-
-button[type="button"] {
-  background-color: var(--color-background-hover);
-  color: var(--color-text);
 }
 
 label {
