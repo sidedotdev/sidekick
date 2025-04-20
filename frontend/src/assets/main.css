@@ -100,7 +100,7 @@ a:hover, button:hover {
   cursor: pointer;
 }
 @media (prefers-color-scheme: dark) {
-  a:hover, button:hover {
+  a:hover, button:hover:not(.p-button) {
     filter: brightness(1.2);
   }
 }

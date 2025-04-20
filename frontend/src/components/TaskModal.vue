@@ -21,12 +21,10 @@
       <!--AutogrowTextarea v-if="task.flowType === 'planned_dev'" v-model="planningPrompt" placeholder="Planning prompt" /-->
       <div class="button-container">
         <button class="cancel" type="button" @click="close">Cancel</button>
-        <DropdownButton 
-          :primary-text="isEditMode ? 'Update Task' : 'Create Task'"
-          :options="dropdownOptions"
-          class="submit-dropdown"
-          type="submit"
-          @select="handleStatusSelect"
+        <SplitButton 
+          :label="isEditMode ? 'Update Task' : 'Create Task'"
+          :model="dropdownOptions"
+          class="submit-dropdown p-button-primary"
           @click="submitTask"
         />
       </div>
@@ -37,7 +35,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import AutogrowTextarea from './AutogrowTextarea.vue'
-import DropdownButton from './DropdownButton.vue'
+import SplitButton from 'primevue/splitbutton'
 import SegmentedControl from './SegmentedControl.vue'
 import { store } from '../lib/store'
 import type { Task, TaskStatus } from '../lib/models'
@@ -63,8 +61,14 @@ const determineRequirements = ref(props.task?.flowOptions?.determineRequirements
 const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
 
 const dropdownOptions = [
-  { label: 'Save Draft', value: 'drafting' },
-  { label: 'Start Task', value: 'to_do' },
+  { 
+    label: 'Save Draft',
+    command: () => handleStatusSelect('drafting')
+  },
+  { 
+    label: 'Start Task',
+    command: () => handleStatusSelect('to_do')
+  }
 ]
 
 const flowTypeOptions = [
@@ -160,7 +164,7 @@ const close = () => {
   bottom: 0;
   left: 0;
   background: rgba(0, 0, 0, 0.7);
-  z-index: 100000;
+  z-index: 1000;
 }
 
 .modal {
@@ -171,7 +175,7 @@ const close = () => {
   /*align-items: center;*/
   background-color: var(--color-modal-background);
   color: var(--color-modal-text);
-  z-index: 100000 !important;
+  z-index: 1000 !important;
   padding: 30px;
   width: 50rem;
   position: fixed;
@@ -211,21 +215,25 @@ button {
   transition: background-color 0.3s;
 }
 
-.submit-dropdown :deep(.main-button) {
+.submit-dropdown {
   background-color: var(--color-primary);
   color: var(--color-text-contrast);
+  border: none;
 }
 
-.submit-dropdown :deep(.dropdown-menu) {
-  background-color: var(--color-primary);
+.submit-dropdown:hover {
+  background-color: var(--color-primary-hover) !important;
 }
 
-.submit-dropdown :deep(.dropdown-item) {
-  color: var(--color-text-contrast);
+:deep(.p-splitbutton-menubutton),
+:deep(.p-splitbutton-defaultbutton) {
+  background-color: var(--color-primary) !important;
+  border: none !important;
 }
 
-.submit-dropdown :deep(.dropdown-item:hover) {
-  background-color: var(--color-primary-hover, rgba(255, 255, 255, 0.1));
+:deep(.p-splitbutton-menubutton:hover),
+:deep(.p-splitbutton-defaultbutton:hover) {
+  background-color: var(--color-primary-hover) !important;
 }
 
 button[type="button"] {

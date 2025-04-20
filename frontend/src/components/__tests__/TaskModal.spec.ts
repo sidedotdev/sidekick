@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, VueWrapper } from '@vue/test-utils'
 import TaskModal from '../TaskModal.vue'
 import type { Task } from '../../lib/models'
+import { nextTick } from 'process'
+import { wrap } from 'module'
 
 vi.mock('../../lib/store', () => ({
   store: {
@@ -218,8 +220,24 @@ describe('TaskModal', () => {
     global.fetch = fetchMock
     
     mountComponent()
-    const dropdown = wrapper.findComponent({ name: 'DropdownButton' })
-    await dropdown.vm.$emit('select', 'drafting')
+    const splitButton = wrapper.findComponent({ name: 'SplitButton' })
+    const dropdown = splitButton.find('.p-splitbutton-dropdown')
+    await dropdown.trigger('click')
+
+    const options = document.querySelectorAll('.p-tieredmenu-item-content')
+    let found = false
+    for (const option of options) {
+      if (/draft/i.test(option.textContent || '')) {
+        option.dispatchEvent(new Event('click'))
+        await wrapper.vm.$nextTick()
+        found = true
+        break
+      }
+    }
+    if (!found) {
+      throw new Error('Draft option not found in dropdown')
+    }
+
     await wrapper.find('form').trigger('submit')
 
     const requestBody = JSON.parse(fetchMock.mock.calls[0][1].body)
