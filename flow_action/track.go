@@ -47,25 +47,25 @@ func TrackHuman[T any](actionCtx ActionContext, f func(flowAction domain.FlowAct
 	return trackFlowAction(actionCtx.ExecContext, true, actionCtx.ActionType, actionCtx.ActionParams, f)
 }
 
-func TrackSubflow[T any](eCtx ExecContext, subflowName string, f func(subflow domain.Subflow) (T, error)) (T, error) {
+func TrackSubflow[T any](eCtx ExecContext, subflowType, subflowName string, f func(subflow domain.Subflow) (T, error)) (T, error) {
 	if eCtx.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking subflow")
 	}
-	return trackSubflow(eCtx, subflowName, f)
+	return trackSubflow(eCtx, subflowType, subflowName, f)
 }
 
-func TrackSubflowFailureOnly[T any](eCtx ExecContext, subflowName string, f func(subflow domain.Subflow) (T, error)) (T, error) {
+func TrackSubflowFailureOnly[T any](eCtx ExecContext, subflowType, subflowName string, f func(subflow domain.Subflow) (T, error)) (T, error) {
 	if eCtx.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking subflow")
 	}
-	return trackSubflowFailureOnly(eCtx, subflowName, f)
+	return trackSubflowFailureOnly(eCtx, subflowType, subflowName, f)
 }
 
-func TrackSubflowWithoutResult(eCtx ExecContext, subflowName string, f func(subflow domain.Subflow) error) error {
+func TrackSubflowWithoutResult(eCtx ExecContext, subflowType, subflowName string, f func(subflow domain.Subflow) error) error {
 	if eCtx.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking subflow")
 	}
-	_, err := trackSubflow(eCtx, subflowName, func(subflow domain.Subflow) (_ string, err error) {
+	_, err := trackSubflow(eCtx, subflowType, subflowName, func(subflow domain.Subflow) (_ string, err error) {
 		return "", f(subflow)
 	})
 	return err
@@ -77,9 +77,9 @@ func TrackSubflowWithoutResult(eCtx ExecContext, subflowName string, f func(subf
 // keep this around for now until we update the frontend to not rely on it
 const legacySubflowNameSeparator = ":|:"
 
-func trackSubflow[T any](eCtx ExecContext, subflowName string, f func(subflow domain.Subflow) (T, error)) (defaultT T, err error) {
+func trackSubflow[T any](eCtx ExecContext, subflowType, subflowName string, f func(subflow domain.Subflow) (T, error)) (defaultT T, err error) {
 	parentSubflow := eCtx.FlowScope.Subflow
-	subflow, err := putSubflow(eCtx, setupSubflow(eCtx, subflowName))
+	subflow, err := putSubflow(eCtx, setupSubflow(eCtx, subflowType, subflowName))
 	if err != nil {
 		return defaultT, err
 	}
@@ -126,9 +126,9 @@ func trackSubflow[T any](eCtx ExecContext, subflowName string, f func(subflow do
 	return val, nil
 }
 
-func trackSubflowFailureOnly[T any](eCtx ExecContext, subflowName string, f func(subflow domain.Subflow) (T, error)) (defaultT T, err error) {
+func trackSubflowFailureOnly[T any](eCtx ExecContext, subflowType, subflowName string, f func(subflow domain.Subflow) (T, error)) (defaultT T, err error) {
 	parentSubflow := eCtx.FlowScope.Subflow
-	subflow := setupSubflow(eCtx, subflowName) // don't persist the subflow yet, only do it if & when it fails
+	subflow := setupSubflow(eCtx, subflowType, subflowName) // don't persist the subflow yet, only do it if & when it fails
 
 	eCtx.FlowScope.Subflow = &subflow
 
@@ -268,7 +268,7 @@ func putFlowAction(eCtx ExecContext, flowAction domain.FlowAction) (domain.FlowA
 	return flowAction, nil
 }
 
-func setupSubflow(eCtx ExecContext, subflowName string) domain.Subflow {
+func setupSubflow(eCtx ExecContext, subflowType, subflowName string) domain.Subflow {
 	parentSubflowId := ""
 	parentSubflow := eCtx.FlowScope.Subflow
 	if parentSubflow != nil {
@@ -277,6 +277,7 @@ func setupSubflow(eCtx ExecContext, subflowName string) domain.Subflow {
 
 	subflow := domain.Subflow{
 		WorkspaceId:     eCtx.WorkspaceId,
+		Type:            subflowType,
 		Name:            subflowName,
 		ParentSubflowId: parentSubflowId,
 		Status:          domain.SubflowStatusStarted,

@@ -52,7 +52,7 @@ type buildDevRequirementsState struct {
 }
 
 func BuildDevRequirements(dCtx DevContext, initialInfo InitialDevRequirementsInfo) (*DevRequirements, error) {
-	return RunSubflow(dCtx, "Dev Requirements", func(_ domain.Subflow) (*DevRequirements, error) {
+	return RunSubflow(dCtx, "dev_requirements", "Dev Requirements", func(_ domain.Subflow) (*DevRequirements, error) {
 		return buildDevRequirementsSubflow(dCtx, initialInfo)
 	})
 }

@@ -53,7 +53,7 @@ type PrepareInitialCodeContextResult struct {
 // - include cases where retrieving code context fails, both in step 2 and 3, but succeeds after codeContextLoop retries
 // - include a case where code context is incorrect many times and we ask for guidance, then succeed after guidance
 func PrepareInitialCodeContext(dCtx DevContext, requirements string, planExec *DevPlanExecution, step *DevStep) (string, string, error) {
-	result, err := RunSubflow(dCtx, "Prepare Initial Code Context", func(subflow domain.Subflow) (PrepareInitialCodeContextResult, error) {
+	result, err := RunSubflow(dCtx, "code_context", "Prepare Initial Code Context", func(subflow domain.Subflow) (PrepareInitialCodeContextResult, error) {
 		return prepareInitialCodeContextSubflow(dCtx, requirements, planExec, step)
 	})
 	if err != nil {

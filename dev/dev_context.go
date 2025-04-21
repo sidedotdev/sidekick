@@ -37,10 +37,10 @@ func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, e
 		Context:     ctx,
 		WorkspaceId: workspaceId,
 		FlowScope: &flow_action.FlowScope{
-			SubflowName: "Init",
+			SubflowName: "Initialization",
 		},
 	}
-	return flow_action.TrackSubflowFailureOnly(initialExecCtx, "Init", func(_ domain.Subflow) (DevContext, error) {
+	return flow_action.TrackSubflowFailureOnly(initialExecCtx, "init", "Initialization", func(_ domain.Subflow) (DevContext, error) {
 		actionCtx := initialExecCtx.NewActionContext("Setup Dev Context")
 		return flow_action.TrackFailureOnly(actionCtx, func(_ domain.FlowAction) (DevContext, error) {
 			return setupDevContextAction(ctx, workspaceId, repoDir, envType)
@@ -178,12 +178,12 @@ func TrackHuman[T any](devActionCtx DevActionContext, f func(flowAction domain.F
 	return flow_action.TrackHuman(devActionCtx.FlowActionContext(), f)
 }
 
-func RunSubflow[T any](dCtx DevContext, subflowName string, f func(subflow domain.Subflow) (T, error)) (T, error) {
-	return flow_action.TrackSubflow(dCtx.ExecContext, subflowName, f)
+func RunSubflow[T any](dCtx DevContext, subflowType, subflowName string, f func(subflow domain.Subflow) (T, error)) (T, error) {
+	return flow_action.TrackSubflow(dCtx.ExecContext, subflowType, subflowName, f)
 }
 
-func RunSubflowWithoutResult(dCtx DevContext, subflowName string, f func(subflow domain.Subflow) error) (err error) {
-	return flow_action.TrackSubflowWithoutResult(dCtx.ExecContext, subflowName, f)
+func RunSubflowWithoutResult(dCtx DevContext, subflowType, subflowName string, f func(subflow domain.Subflow) error) (err error) {
+	return flow_action.TrackSubflowWithoutResult(dCtx.ExecContext, subflowType, subflowName, f)
 }
 
 // WithChildSubflow has been removed. Use RunSubflow or RunSubflowWithoutResult instead.

@@ -116,7 +116,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 }
 
 func EnsureTestsPassAfterDevPlanExecuted(dCtx DevContext, input PlannedDevInput, planExec DevPlanExecution) error {
-	return RunSubflowWithoutResult(dCtx, "Finalize", func(_ domain.Subflow) error {
+	return RunSubflowWithoutResult(dCtx, "pass_tests", "Finalize", func(_ domain.Subflow) error {
 		return ensureTestsPassAfterDevPlanExecutedSubflow(dCtx, input, planExec)
 	})
 }
