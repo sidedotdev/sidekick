@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sidekick/domain"
+	"sidekick/utils"
 	"testing"
 
 	"github.com/segmentio/ksuid"
@@ -106,7 +107,7 @@ func TestGetSubflow(t *testing.T) {
 		WorkspaceId: workspaceId,
 		Id:          "sf_" + ksuid.New().String(),
 		Name:        "Test Subflow",
-		Type:        "step",
+		Type:        utils.Ptr("step"),
 		FlowId:      flowId,
 		Status:      domain.SubflowStatusComplete,
 		Result:      "success",

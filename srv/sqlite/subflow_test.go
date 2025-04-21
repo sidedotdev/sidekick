@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"sidekick/domain"
+	"sidekick/utils"
 	"testing"
 
 	"github.com/segmentio/ksuid"
@@ -23,7 +24,7 @@ func TestPersistSubflow(t *testing.T) {
 		Name:        "Test Subflow",
 		Description: "This is a test subflow",
 		Status:      domain.SubflowStatusInProgress,
-		Type:        "anything",
+		Type:        utils.Ptr("anything"),
 	}
 
 	t.Run("Successfully persist a valid subflow", func(t *testing.T) {
@@ -86,7 +87,7 @@ func TestGetSubflows(t *testing.T) {
 			FlowId:      flowId,
 			Name:        "Subflow 2",
 			Status:      domain.SubflowStatusComplete,
-			Type:        "step",
+			Type:        utils.Ptr("step"),
 		},
 	}
 
@@ -138,7 +139,7 @@ func TestGetSubflow(t *testing.T) {
 		Name:            "Test Subflow",
 		Description:     "A test subflow",
 		Status:          domain.SubflowStatusInProgress,
-		Type:            "step",
+		Type:            utils.Ptr("step"),
 		ParentSubflowId: "sf_parent",
 		Result:          `{"key": "value"}`,
 	}

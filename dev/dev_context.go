@@ -37,10 +37,10 @@ func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, e
 		Context:     ctx,
 		WorkspaceId: workspaceId,
 		FlowScope: &flow_action.FlowScope{
-			SubflowName: "Initialization",
+			SubflowName: "Initialize",
 		},
 	}
-	return flow_action.TrackSubflowFailureOnly(initialExecCtx, "init", "Initialization", func(_ domain.Subflow) (DevContext, error) {
+	return flow_action.TrackSubflowFailureOnly(initialExecCtx, "flow_init", "Initialize", func(_ domain.Subflow) (DevContext, error) {
 		actionCtx := initialExecCtx.NewActionContext("Setup Dev Context")
 		return flow_action.TrackFailureOnly(actionCtx, func(_ domain.FlowAction) (DevContext, error) {
 			return setupDevContextAction(ctx, workspaceId, repoDir, envType)

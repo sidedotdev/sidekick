@@ -277,7 +277,7 @@ func setupSubflow(eCtx ExecContext, subflowType, subflowName string) domain.Subf
 
 	subflow := domain.Subflow{
 		WorkspaceId:     eCtx.WorkspaceId,
-		Type:            subflowType,
+		Type:            &subflowType,
 		Name:            subflowName,
 		ParentSubflowId: parentSubflowId,
 		Status:          domain.SubflowStatusStarted,

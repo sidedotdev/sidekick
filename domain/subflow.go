@@ -16,7 +16,7 @@ type Subflow struct {
 	WorkspaceId     string        `json:"workspaceId"`
 	Id              string        `json:"id"`                        // Unique identifier, prefixed with 'sf_'
 	Name            string        `json:"name"`                      // Name of the subflow
-	Type            string        `json:"type"`                      // Type of the subflow (e.g., "step" or "edit_code")
+	Type            *string       `json:"type,omitempty"`            // Type of the subflow (e.g., "step" or "edit_code")
 	Description     string        `json:"description,omitempty"`     // Description of the subflow, if any
 	Status          SubflowStatus `json:"status"`                    // Status of the subflow
 	ParentSubflowId string        `json:"parentSubflowId,omitempty"` // ID of the parent subflow, if any
