@@ -34,6 +34,7 @@ a {
 
 pre {
   white-space: pre-wrap;
+  overflow-x: scroll;
 }
 
 .cta-button-color {
