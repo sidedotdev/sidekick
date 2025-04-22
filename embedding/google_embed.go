@@ -10,8 +10,12 @@ import (
 )
 
 const (
-	GoogleDefaultModel = "gemini-embedding-exp-03-07"
-	maxBatchSize      = 100
+	/* NOTE: free tier of google doesn't yet support "gemini-embedding-exp-03-07"
+	 * and limits are very low for that currently even with billing enabled (10
+	 * RPM and 1000 RPD) */
+	//GoogleDefaultModel = "gemini-embedding-exp-03-07"
+	GoogleDefaultModel = "text-embedding-004"
+	maxBatchSize       = 100
 )
 
 type GoogleEmbedder struct{}
@@ -60,7 +64,7 @@ func (ge GoogleEmbedder) Embed(ctx context.Context, modelConfig common.ModelConf
 		}
 
 		if len(res.Embeddings) != len(batch) {
-			return nil, fmt.Errorf("unexpected number of embeddings returned for batch %d/%d: got %d, want %d", 
+			return nil, fmt.Errorf("unexpected number of embeddings returned for batch %d/%d: got %d, want %d",
 				i/maxBatchSize+1, (len(inputs)+maxBatchSize-1)/maxBatchSize, len(res.Embeddings), len(batch))
 		}
 
