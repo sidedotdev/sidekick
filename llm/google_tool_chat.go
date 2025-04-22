@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"sidekick/utils"
 	"strings"
+	"time"
 
 	"github.com/invopop/jsonschema"
+	"go.temporal.io/sdk/activity"
 	"google.golang.org/genai"
 )
 
@@ -58,6 +60,27 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 
 	stream := client.Models.GenerateContentStream(ctx, model, contents, config)
 	var deltas []ChatMessageDelta
+
+	// additional heartbeat until outer function ends: we can't rely on the
+	// delta heartbeat because thinking tokens are being hidden in the API
+	// currently, resulting in a very long time between deltas and thus
+	// heartbeat timeouts.
+	closeChan := make(chan bool)
+	defer func(){ closeChan <- true }()
+	go func () {
+		for {
+			// select between sleep and channel close
+			select {
+				case <-closeChan:
+					return
+				case <-time.After(5 * time.Second):
+					if activity.IsActivity(ctx) {
+						activity.RecordHeartbeat(ctx, map[string]bool{"fake": true})
+					}
+					continue
+			}
+		}
+	}()
 
 	for result, err := range stream {
 		if err != nil {
