@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sidekick/utils"
@@ -140,9 +141,29 @@ func googleFromChatMessages(messages []ChatMessage) []*genai.Content {
 				}
 			}
 		} else {
-			currentParts = append(currentParts, &genai.Part{
-				Text: content,
-			})
+			if content != "" {
+				currentParts = append(currentParts, &genai.Part{
+					Text: content,
+				})
+			}
+
+			for _, toolCall := range msg.ToolCalls {
+				args := make(map[string]any, 0)
+				err := json.Unmarshal([]byte(RepairJson(toolCall.Arguments)), &args)
+				if err != nil {
+					// anthropic requires valid json, but didn't give us valid json. we improvise.
+					// NOTE: copied to google from anthropic without checking
+					args["invalid_json_stringified"] = toolCall.Arguments
+				}
+
+				currentParts = append(currentParts, &genai.Part{
+					FunctionResponse: &genai.FunctionResponse{
+						ID:       toolCall.Id,
+						Name:     toolCall.Name,
+						Response: args,
+					},
+				})
+			}
 		}
 	}
 
@@ -223,6 +244,7 @@ func googleToChatMessageDelta(result *genai.GenerateContentResponse) *ChatMessag
 		if part.FunctionCall != nil {
 			delta.ToolCalls = []ToolCall{
 				{
+					Id:        part.FunctionCall.ID,
 					Name:      part.FunctionCall.Name,
 					Arguments: utils.PanicJSON(part.FunctionCall.Args),
 				},
