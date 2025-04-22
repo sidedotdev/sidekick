@@ -220,6 +220,117 @@ func TestGoogleFromTools(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "array of strings",
+			tools: []*Tool{
+				{
+					Name:        "test",
+					Description: "test function",
+					Parameters: &jsonschema.Schema{
+						Type:     "object",
+						Required: []string{"field1"},
+						Properties: orderedmap.New[string, *jsonschema.Schema](
+							orderedmap.WithInitialData(orderedmap.Pair[string, *jsonschema.Schema]{
+								Key: "field1",
+								Value: &jsonschema.Schema{
+									Type:        "array",
+									Description: "an array of strings",
+									Items: &jsonschema.Schema{
+										Type: "string",
+									},
+								},
+							}),
+						),
+					},
+				},
+			},
+			want: []*genai.Tool{
+				{
+					FunctionDeclarations: []*genai.FunctionDeclaration{
+						{
+							Name:        "test",
+							Description: "test function",
+							Parameters: &genai.Schema{
+								Type:     "object",
+								Required: []string{"field1"},
+								Properties: map[string]*genai.Schema{
+									"field1": &genai.Schema{
+										Type:        "array",
+										Description: "an array of strings",
+										Items: &genai.Schema{
+											Type: "string",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "array of objects",
+			tools: []*Tool{
+				{
+					Name:        "test",
+					Description: "test function",
+					Parameters: &jsonschema.Schema{
+						Type:     "object",
+						Required: []string{"field1"},
+						Properties: orderedmap.New[string, *jsonschema.Schema](
+							orderedmap.WithInitialData(orderedmap.Pair[string, *jsonschema.Schema]{
+								Key: "field1",
+								Value: &jsonschema.Schema{
+									Type:        "array",
+									Description: "an array of objects",
+									Items: &jsonschema.Schema{
+										Type: "object",
+										Properties: orderedmap.New[string, *jsonschema.Schema](
+											orderedmap.WithInitialData(orderedmap.Pair[string, *jsonschema.Schema]{
+												Key: "subfield",
+												Value: &jsonschema.Schema{
+													Type:        "string",
+													Description: "a string field in the object",
+												},
+											}),
+										),
+									},
+								},
+							}),
+						),
+					},
+				},
+			},
+			want: []*genai.Tool{
+				{
+					FunctionDeclarations: []*genai.FunctionDeclaration{
+						{
+							Name:        "test",
+							Description: "test function",
+							Parameters: &genai.Schema{
+								Type:     "object",
+								Required: []string{"field1"},
+								Properties: map[string]*genai.Schema{
+									"field1": &genai.Schema{
+										Type:        "array",
+										Description: "an array of objects",
+										Items: &genai.Schema{
+											Type: "object",
+											Properties: map[string]*genai.Schema{
+												"subfield": &genai.Schema{
+													Type:        "string",
+													Description: "a string field in the object",
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -337,6 +448,7 @@ func TestGoogleToChatMessageDelta(t *testing.T) {
 		})
 	}
 }
+
 func TestGoogleToolChatIntegration(t *testing.T) {
 	t.Parallel()
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {

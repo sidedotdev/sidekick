@@ -1,6 +1,5 @@
 package worker
 
-
 import (
 	"context"
 	"time"

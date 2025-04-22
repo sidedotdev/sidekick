@@ -197,6 +197,10 @@ func googleFromSchema(schema *jsonschema.Schema) *genai.Schema {
 		}
 	}
 
+	if schema.Items != nil {
+		geminiSchema.Items = googleFromSchema(schema.Items)
+	}
+
 	return geminiSchema
 }
 
