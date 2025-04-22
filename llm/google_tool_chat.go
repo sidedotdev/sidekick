@@ -142,28 +142,43 @@ func googleFromChatMessages(messages []ChatMessage) []*genai.Content {
 			}
 		} else {
 			if content != "" {
-				currentParts = append(currentParts, &genai.Part{
-					Text: content,
-				})
-			}
-
-			for _, toolCall := range msg.ToolCalls {
-				args := make(map[string]any, 0)
-				err := json.Unmarshal([]byte(RepairJson(toolCall.Arguments)), &args)
-				if err != nil {
-					// anthropic requires valid json, but didn't give us valid json. we improvise.
-					// NOTE: copied to google from anthropic without checking
-					args["invalid_json_stringified"] = toolCall.Arguments
+				if msg.Role == ChatMessageRoleTool {
+					functionResponse := genai.FunctionResponse{
+						ID:       msg.ToolCallId,
+						Name:     msg.Name,
+					}
+					if msg.IsError {
+						functionResponse.Response = map[string]any{"error": msg.Content}
+					} else {
+						functionResponse.Response = map[string]any{"output": msg.Content}
+					}
+					currentParts = append(currentParts, &genai.Part{
+						FunctionResponse: &functionResponse,
+					})
+				} else {
+					currentParts = append(currentParts, &genai.Part{
+						Text: content,
+					})
 				}
-
-				currentParts = append(currentParts, &genai.Part{
-					FunctionResponse: &genai.FunctionResponse{
-						ID:       toolCall.Id,
-						Name:     toolCall.Name,
-						Response: args,
-					},
-				})
 			}
+		}
+
+		for _, toolCall := range msg.ToolCalls {
+			args := make(map[string]any, 0)
+			err := json.Unmarshal([]byte(RepairJson(toolCall.Arguments)), &args)
+			if err != nil {
+				// anthropic requires valid json, but didn't give us valid json. we improvise.
+				// NOTE: copied to google from anthropic without checking
+				args["invalid_json_stringified"] = toolCall.Arguments
+			}
+
+			currentParts = append(currentParts, &genai.Part{
+				FunctionCall: &genai.FunctionCall{
+					ID:       toolCall.Id,
+					Name:     toolCall.Name,
+					Args: args,
+				},
+			})
 		}
 	}
 
