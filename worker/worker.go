@@ -1,5 +1,6 @@
 package worker
 
+
 import (
 	"context"
 	"time"
@@ -67,7 +68,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 		TemporalClient: temporalClient,
 	}
 	flowActivities := &flow_action.FlowActivities{Service: service}
-	openAIActivities := &persisted_ai.OpenAIActivities{
+	embedActivities := &persisted_ai.EmbedActivities{
 		Storage: service,
 	}
 	llmActivities := &persisted_ai.LlmActivities{
@@ -124,7 +125,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	w.RegisterActivity(git.GitRestoreActivity)
 	w.RegisterActivity(git.GitCommitActivity)
 	w.RegisterActivity(git.GitCheckoutActivity)
-	w.RegisterActivity(openAIActivities)
+	w.RegisterActivity(embedActivities)
 	w.RegisterActivity(vectorActivities)
 	w.RegisterActivity(flowActivities)
 

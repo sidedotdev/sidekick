@@ -82,8 +82,8 @@ type RankedSubkeysOptions struct {
 }
 
 func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, error) {
-	oa := OpenAIActivities{Storage: ra.DatabaseAccessor}
-	err := oa.CachedEmbedActivity(context.Background(), OpenAIEmbedActivityOptions{
+	ea := EmbedActivities{Storage: ra.DatabaseAccessor}
+	err := ea.CachedEmbedActivity(context.Background(), CachedEmbedActivityOptions{
 		Secrets:     options.Secrets,
 		WorkspaceId: options.WorkspaceId,
 		ModelConfig: options.ModelConfig,

@@ -11,7 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type OpenAIEmbedActivityOptions struct {
+type CachedEmbedActivityOptions struct {
 	Secrets     secret_manager.SecretManagerContainer
 	WorkspaceId string
 	ContentType string
@@ -19,7 +19,7 @@ type OpenAIEmbedActivityOptions struct {
 	Subkeys     []string
 }
 
-type OpenAIActivities struct {
+type EmbedActivities struct {
 	Storage srv.Storage
 }
 
@@ -30,7 +30,7 @@ don't make sense to pass over the temporal activity boundary, especially since
 we already expect to cache these values in the database.
 */
 // TODO move to embed package under EmbedActivities struct
-func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options OpenAIEmbedActivityOptions) error {
+func (ea *EmbedActivities) CachedEmbedActivity(ctx context.Context, options CachedEmbedActivityOptions) error {
 	contentKeys := make([]string, len(options.Subkeys))
 	embeddingKeys := make([]string, len(options.Subkeys))
 	for i, subKey := range options.Subkeys {
@@ -45,7 +45,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 	var cachedEmbeddings [][]byte
 	var err error
 	if len(embeddingKeys) > 0 {
-		cachedEmbeddings, err = oa.Storage.MGet(ctx, options.WorkspaceId, embeddingKeys)
+		cachedEmbeddings, err = ea.Storage.MGet(ctx, options.WorkspaceId, embeddingKeys)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to get cached embeddings")
 			return err
@@ -64,7 +64,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 	// TODO replace with metric
 	log.Info().Msgf("embedding %d keys\n", len(toEmbedContentKeys))
 	if len(toEmbedContentKeys) > 0 {
-		values, err := oa.Storage.MGet(ctx, options.WorkspaceId, toEmbedContentKeys)
+		values, err := ea.Storage.MGet(ctx, options.WorkspaceId, toEmbedContentKeys)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to get cached embeddings")
 			return err
@@ -104,7 +104,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 			}
 		}
 
-		err = oa.Storage.MSet(ctx, options.WorkspaceId, cacheValues)
+		err = ea.Storage.MSet(ctx, options.WorkspaceId, cacheValues)
 		if err != nil {
 			return err
 		}
