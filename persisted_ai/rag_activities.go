@@ -107,6 +107,7 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 
 	return va.VectorSearch(VectorSearchActivityOptions{
 		WorkspaceId: options.WorkspaceId,
+		Provider:    options.ModelConfig.Provider,
 		Model:       options.ModelConfig.Model,
 		ContentType: options.ContentType,
 		Subkeys:     options.Subkeys,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sidekick/common"
+	"sidekick/embedding"
 	"sidekick/secret_manager"
 	"sidekick/srv"
 
@@ -35,11 +36,16 @@ func (ea *EmbedActivities) CachedEmbedActivity(ctx context.Context, options Cach
 	embeddingKeys := make([]string, len(options.Subkeys))
 	for i, subKey := range options.Subkeys {
 		contentKeys[i] = fmt.Sprintf("%s:%s", options.ContentType, subKey)
-		embeddingKeys[i] = constructEmbeddingKey(embeddingKeyOptions{
+		embeddingKey, err := constructEmbeddingKey(embeddingKeyOptions{
+			provider:    options.ModelConfig.Provider,
 			model:       options.ModelConfig.Model,
 			contentType: options.ContentType,
 			subKey:      subKey,
 		})
+		if err != nil {
+			return err
+		}
+		embeddingKeys[i] = embeddingKey
 	}
 
 	var cachedEmbeddings [][]byte
@@ -113,11 +119,29 @@ func (ea *EmbedActivities) CachedEmbedActivity(ctx context.Context, options Cach
 }
 
 type embeddingKeyOptions struct {
+	provider    string
 	model       string
 	contentType string
 	subKey      string
 }
 
-func constructEmbeddingKey(options embeddingKeyOptions) string {
-	return fmt.Sprintf("embedding:%s:%s:%s", options.model, options.contentType, options.subKey)
+func constructEmbeddingKey(options embeddingKeyOptions) (string, error) {
+	model := options.model
+	if model == "" {
+		switch options.provider {
+		case "openai":
+			{
+				model = embedding.OpenaiDefaultModel
+			}
+		case "google":
+			{
+				model = embedding.GoogleDefaultModel
+			}
+		default:
+			{
+				return "", fmt.Errorf("No embedding model given for provider %s", options.provider)
+			}
+		}
+	}
+	return fmt.Sprintf("embedding:%s:%s:%s", options.model, options.contentType, options.subKey), nil
 }

@@ -159,6 +159,8 @@ func getToolChatter(config common.ModelConfig) (llm.ToolChatter, error) {
 		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
 	case llm.AnthropicToolChatProviderType:
 		return llm.AnthropicToolChat{}, nil
+	case llm.GoogleToolChatProviderType:
+		return llm.GoogleToolChat{}, nil
 	case llm.UnspecifiedToolChatProviderType:
 		return nil, errors.New("tool chat provider was not specified")
 
@@ -168,11 +170,14 @@ func getToolChatter(config common.ModelConfig) (llm.ToolChatter, error) {
 }
 
 func getProviderType(s string) (llm.ToolChatProviderType, error) {
+
 	switch s {
 	case "openai":
 		return llm.OpenaiToolChatProviderType, nil
 	case "anthropic":
 		return llm.AnthropicToolChatProviderType, nil
+	case "google":
+		return llm.GoogleToolChatProviderType, nil
 	case "mock":
 		return llm.ToolChatProviderType("mock"), nil
 	}

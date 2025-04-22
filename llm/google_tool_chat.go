@@ -24,7 +24,7 @@ func NewGoogleToolChat() *GoogleToolChat {
 	return &GoogleToolChat{}
 }
 
-func (g *GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta) (*ChatMessageResponse, error) {
+func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta) (*ChatMessageResponse, error) {
 	apiKey, err := options.Secrets.GetSecret(GoogleApiKeySecretName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Google API key: %w", err)

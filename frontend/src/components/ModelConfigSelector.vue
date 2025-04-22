@@ -25,7 +25,7 @@
           :id="type + '-model' + index" 
           v-model="config.model" 
           placeholder="Default Model"
-          :required="config.provider !== '' && config.provider !== 'openai' && config.provider !== 'anthropic'"
+          :required="isCustomProvider(config.provider)"
         >
         <button 
           type="button" 
@@ -64,10 +64,14 @@ watch(selectedUseCaseValue, (newValue) => {
 
 const availableProviders = computed(() => {
   if (props.type === 'llm') {
-    return ['openai', 'anthropic', 'google'];
+    return ['google', 'anthropic', 'openai'];
   }
-  return ['openai'];
+  return ['google', 'openai'];
 });
+
+const isCustomProvider = (provider: string): boolean => {
+  return !availableProviders.value.includes(provider.toLowerCase())
+}
 
 const addConfig = () => {
   const newConfigs = [...props.modelValue, { provider: '', model: '' }];
