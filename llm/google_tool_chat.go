@@ -65,19 +65,24 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 	// delta heartbeat because thinking tokens are being hidden in the API
 	// currently, resulting in a very long time between deltas and thus
 	// heartbeat timeouts.
-	closeChan := make(chan bool)
-	defer func(){ closeChan <- true }()
-	go func () {
+	heartbeatCtx, cancelHeartbeat := context.WithCancel(context.Background())
+	defer cancelHeartbeat()
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
 		for {
 			// select between sleep and channel close
 			select {
-				case <-closeChan:
-					return
-				case <-time.After(5 * time.Second):
+			case <-heartbeatCtx.Done():
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				{
 					if activity.IsActivity(ctx) {
 						activity.RecordHeartbeat(ctx, map[string]bool{"fake": true})
 					}
 					continue
+				}
 			}
 		}
 	}()
@@ -170,8 +175,8 @@ func googleFromChatMessages(messages []ChatMessage) []*genai.Content {
 			if content != "" {
 				if msg.Role == ChatMessageRoleTool {
 					functionResponse := genai.FunctionResponse{
-						ID:       msg.ToolCallId,
-						Name:     msg.Name,
+						ID:   msg.ToolCallId,
+						Name: msg.Name,
 					}
 					if msg.IsError {
 						functionResponse.Response = map[string]any{"error": msg.Content}
@@ -200,8 +205,8 @@ func googleFromChatMessages(messages []ChatMessage) []*genai.Content {
 
 			currentParts = append(currentParts, &genai.Part{
 				FunctionCall: &genai.FunctionCall{
-					ID:       toolCall.Id,
-					Name:     toolCall.Name,
+					ID:   toolCall.Id,
+					Name: toolCall.Name,
 					Args: args,
 				},
 			})
