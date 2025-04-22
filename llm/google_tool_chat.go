@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sidekick/utils"
 	"strings"
@@ -52,28 +53,26 @@ func (g *GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 	}
 
 	stream := client.Models.GenerateContentStream(ctx, model, contents, config)
-	response := &ChatMessageResponse{
-		Model:    model,
-		Provider: "google",
-	}
+	var deltas []ChatMessageDelta
 
 	for result := range stream {
 		delta := googleToChatMessageDelta(result)
 		if delta != nil {
 			deltaChan <- *delta
-		}
-
-		// Accumulate response
-		if result.Candidates != nil && len(result.Candidates) > 0 {
-			for _, part := range result.Candidates[0].Content.Parts {
-				if part.Text != "" {
-					response.Content += part.Text
-				}
-			}
+			deltas = append(deltas, *delta)
 		}
 	}
 
-	return response, nil
+	message := stitchDeltasToMessage(deltas)
+	if message.Role == "" {
+		return nil, errors.New("chat message role not found")
+	}
+
+	return &ChatMessageResponse{
+		ChatMessage: message,
+		Model:       model,
+		Provider:    "google",
+	}, nil
 }
 
 func googleFromChatMessages(messages []ChatMessage) []*genai.Content {

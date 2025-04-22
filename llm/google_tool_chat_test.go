@@ -244,6 +244,36 @@ func TestGoogleToChatMessageDelta(t *testing.T) {
 				Content: "before<thinking>processing</thinking>after",
 			},
 		},
+		{
+			name: "function call",
+			result: &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{
+					{
+						Content: &genai.Content{
+							Parts: []*genai.Part{
+								{
+									FunctionCall: &genai.FunctionCall{
+										Name: "test_function",
+										Args: map[string]any{
+											"param1": "value1",
+											"param2": 42,
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: &ChatMessageDelta{
+				ToolCalls: []ToolCall{
+					{
+						Name:      "test_function",
+						Arguments: `{"param1":"value1","param2":42}`,
+					},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
