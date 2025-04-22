@@ -124,6 +124,8 @@ func getEmbedder(config common.ModelConfig) (embedding.Embedder, error) {
 	switch providerType {
 	case llm.OpenaiToolChatProviderType:
 		embedder = &embedding.OpenAIEmbedder{}
+	case llm.GoogleToolChatProviderType:
+		embedder = &embedding.GoogleEmbedder{}
 	case llm.OpenaiCompatibleToolChatProviderType:
 		localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
 		if err != nil {
