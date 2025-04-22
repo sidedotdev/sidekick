@@ -104,6 +104,7 @@ const (
 	OpenaiChatProvider           ChatProvider = "openai"
 	AnthropicChatProvider        ChatProvider = "anthropic"
 	OpenaiCompatibleChatProvider ChatProvider = "openai_compatible"
+	GoogleChatProvider           ChatProvider = "google"
 )
 
 type ToolChatProviderType string

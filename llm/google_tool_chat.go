@@ -181,7 +181,7 @@ func googleFromSchema(schema *jsonschema.Schema) *genai.Schema {
 		Type:        genai.Type(schema.Type),
 		Description: schema.Description,
 		Required:    schema.Required,
-		Enum:        utils.Map(schema.Enum, func(v any) string {
+		Enum: utils.Map(schema.Enum, func(v any) string {
 			return v.(string)
 		}),
 	}
