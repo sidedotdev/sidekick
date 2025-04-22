@@ -64,7 +64,7 @@ watch(selectedUseCaseValue, (newValue) => {
 
 const availableProviders = computed(() => {
   if (props.type === 'llm') {
-    return ['openai', 'anthropic'];
+    return ['openai', 'anthropic', 'google'];
   }
   return ['openai'];
 });
