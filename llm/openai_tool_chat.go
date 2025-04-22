@@ -275,19 +275,15 @@ func stitchDeltasToMessage(deltas []ChatMessageDelta, idRequired bool) ChatMessa
 		}
 
 		if delta.ToolCalls != nil {
-			fmt.Println("tool calls not nil")
 			for _, toolCallDelta := range delta.ToolCalls {
 				// Since the function call content is also being received in chunks,
 				// we need to build it in parts just like the content.
-				fmt.Println("processing tool call delta")
-				utils.PrettyPrint(toolCallDelta)
 
 				// infer if it is a new tool/function call
 				if toolCallDelta.Name != "" || (idRequired && toolCallDelta.Id != "") {
 					// confirm we have all the details already (or none)
 					// if we have all, it's a new call, otherwise it isn't
 					lastCallComplete := (!idRequired || currentToolCall.Id != "") && nameBuilder.String() != ""
-					fmt.Printf("Stitching new tool call delta: %v\n", lastCallComplete)
 					if lastCallComplete {
 						currentToolCall.Name = nameBuilder.String()
 						currentToolCall.Arguments = argsBuilder.String()
@@ -303,12 +299,10 @@ func stitchDeltasToMessage(deltas []ChatMessageDelta, idRequired bool) ChatMessa
 				}
 
 				if toolCallDelta.Arguments != "" {
-					fmt.Println("got args")
 					argsBuilder.WriteString(toolCallDelta.Arguments)
 				}
 
 				if toolCallDelta.Name != "" {
-					fmt.Println("got name")
 					nameBuilder.WriteString(toolCallDelta.Name)
 				}
 			}
