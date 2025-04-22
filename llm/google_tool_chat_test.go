@@ -463,7 +463,7 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 	mockTool := &Tool{
 		Name:        "get_current_weather",
 		Description: "Get the current weather in a given location",
-		Parameters:  (&jsonschema.Reflector{ExpandedStruct: true}).Reflect(&getCurrentWeather{}),
+		Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&getCurrentWeather{}),
 	}
 
 	options := ToolChatOptions{

@@ -18,7 +18,7 @@ type RunCommandParams struct {
 var runCommandTool = llm.Tool{
 	Name:        "run_command",
 	Description: "Used to execute shell commands after getting user approval. The command will be run through the 'sh' shell if approved. This method should NOT be used to run tests.",
-	Parameters:  (&jsonschema.Reflector{ExpandedStruct: true}).Reflect(&RunCommandParams{}),
+	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&RunCommandParams{}),
 }
 
 // RunCommand handles the execution of shell commands with user approval
