@@ -12,10 +12,10 @@ import (
 )
 
 const (
-	GOOGLE_API_KEY     = "GOOGLE_API_KEY"
-	defaultGeminiModel = "gemini-2.5-pro-preview-03-25"
-	thinkingStartTag   = "<thinking>"
-	thinkingEndTag     = "</thinking>"
+	GoogleApiKeySecretName = "GOOGLE_API_KEY"
+	GoogleDefaultModel     = "gemini-2.5-pro-exp-03-25"
+	thinkingStartTag       = "<thinking>"
+	thinkingEndTag         = "</thinking>"
 )
 
 type GoogleToolChat struct{}
@@ -25,7 +25,7 @@ func NewGoogleToolChat() *GoogleToolChat {
 }
 
 func (g *GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta) (*ChatMessageResponse, error) {
-	apiKey, err := options.Secrets.GetSecret(GOOGLE_API_KEY)
+	apiKey, err := options.Secrets.GetSecret(GoogleApiKeySecretName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Google API key: %w", err)
 	}
@@ -38,7 +38,7 @@ func (g *GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 		return nil, fmt.Errorf("failed to create Google client: %w", err)
 	}
 
-	model := defaultGeminiModel
+	model := GoogleDefaultModel
 	if options.Params.ModelConfig.Model != "" {
 		model = options.Params.ModelConfig.Model
 	}
@@ -55,7 +55,10 @@ func (g *GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 	stream := client.Models.GenerateContentStream(ctx, model, contents, config)
 	var deltas []ChatMessageDelta
 
-	for result := range stream {
+	for result, err := range stream {
+		if err != nil {
+			return nil, fmt.Errorf("failed to iterate on google tool chat stream: %w", err)
+		}
 		delta := googleToChatMessageDelta(result)
 		if delta != nil {
 			deltaChan <- *delta
@@ -63,7 +66,7 @@ func (g *GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 		}
 	}
 
-	message := stitchDeltasToMessage(deltas)
+	message := stitchDeltasToMessage(deltas, true)
 	if message.Role == "" {
 		return nil, errors.New("chat message role not found")
 	}
@@ -178,6 +181,9 @@ func googleFromSchema(schema *jsonschema.Schema) *genai.Schema {
 		Type:        genai.Type(schema.Type),
 		Description: schema.Description,
 		Required:    schema.Required,
+		Enum:        utils.Map(schema.Enum, func(v any) string {
+			return v.(string)
+		}),
 	}
 
 	if schema.Properties != nil {
@@ -201,7 +207,9 @@ func googleToChatMessageDelta(result *genai.GenerateContentResponse) *ChatMessag
 		return nil
 	}
 
-	delta := &ChatMessageDelta{}
+	delta := &ChatMessageDelta{
+		Role: ChatMessageRoleAssistant,
+	}
 
 	// Handle function calls
 	for _, part := range candidate.Content.Parts {
