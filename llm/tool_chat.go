@@ -50,6 +50,7 @@ const (
 	OpenaiToolChatProviderType           ToolChatProviderType = ToolChatProviderType(common.OpenaiChatProvider)
 	AnthropicToolChatProviderType        ToolChatProviderType = ToolChatProviderType(common.AnthropicChatProvider)
 	OpenaiCompatibleToolChatProviderType ToolChatProviderType = ToolChatProviderType(common.OpenaiCompatibleChatProvider)
+	GoogleToolChatProviderType           ToolChatProviderType = ToolChatProviderType(common.GoogleChatProvider)
 )
 
 type ToolChatOptions struct {
