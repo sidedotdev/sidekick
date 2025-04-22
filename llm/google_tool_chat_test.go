@@ -178,6 +178,48 @@ func TestGoogleFromTools(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "enum field",
+			tools: []*Tool{
+				{
+					Name:        "test",
+					Description: "test function",
+					Parameters: &jsonschema.Schema{
+						Type:     "object",
+						Required: []string{"field1"},
+						Properties: orderedmap.New[string, *jsonschema.Schema](
+							orderedmap.WithInitialData(orderedmap.Pair[string, *jsonschema.Schema]{
+								Key: "field1",
+								Value: &jsonschema.Schema{
+									Type: "string",
+									Enum: []any{"value1", "value2"},
+								},
+							}),
+						),
+					},
+				},
+			},
+			want: []*genai.Tool{
+				{
+					FunctionDeclarations: []*genai.FunctionDeclaration{
+						{
+							Name:        "test",
+							Description: "test function",
+							Parameters: &genai.Schema{
+								Type:     "object",
+								Required: []string{"field1"},
+								Properties: map[string]*genai.Schema{
+									"field1": &genai.Schema{
+										Type: "string",
+										Enum: []string{"value1", "value2"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -213,6 +255,7 @@ func TestGoogleToChatMessageDelta(t *testing.T) {
 				},
 			},
 			want: &ChatMessageDelta{
+				Role:    ChatMessageRoleAssistant,
 				Content: "Hello world",
 			},
 		},
@@ -230,6 +273,7 @@ func TestGoogleToChatMessageDelta(t *testing.T) {
 				},
 			},
 			want: &ChatMessageDelta{
+				Role:    ChatMessageRoleAssistant,
 				Content: "<thinking>processing</thinking>",
 			},
 		},
@@ -249,6 +293,7 @@ func TestGoogleToChatMessageDelta(t *testing.T) {
 				},
 			},
 			want: &ChatMessageDelta{
+				Role:    ChatMessageRoleAssistant,
 				Content: "before<thinking>processing</thinking>after",
 			},
 		},
@@ -274,6 +319,7 @@ func TestGoogleToChatMessageDelta(t *testing.T) {
 				},
 			},
 			want: &ChatMessageDelta{
+				Role: ChatMessageRoleAssistant,
 				ToolCalls: []ToolCall{
 					{
 						Name:      "test_function",
