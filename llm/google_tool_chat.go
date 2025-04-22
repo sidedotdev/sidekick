@@ -48,6 +48,9 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 
 	config := &genai.GenerateContentConfig{
 		Tools: googleFromTools(options.Params.Tools),
+		ThinkingConfig: &genai.ThinkingConfig{
+			IncludeThoughts: true,
+		},
 	}
 	if options.Params.Temperature != nil {
 		config.Temperature = options.Params.Temperature
