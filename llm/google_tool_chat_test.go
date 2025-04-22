@@ -1,9 +1,17 @@
 package llm
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"sidekick/common"
+	"sidekick/secret_manager"
+	"strings"
 	"testing"
 
 	"github.com/invopop/jsonschema"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	orderedmap "github.com/wk8/go-ordered-map/v2"
 	"google.golang.org/genai"
@@ -282,4 +290,195 @@ func TestGoogleToChatMessageDelta(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+func TestGoogleToolChatIntegration(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
+	ctx := context.Background()
+	chat := GoogleToolChat{}
+
+	// Mock tool for testing
+	mockTool := &Tool{
+		Name:        "get_current_weather",
+		Description: "Get the current weather in a given location",
+		Parameters:  (&jsonschema.Reflector{ExpandedStruct: true}).Reflect(&getCurrentWeather{}),
+	}
+
+	options := ToolChatOptions{
+		Params: ToolChatParams{
+			ModelConfig: common.ModelConfig{
+				Provider: "google",
+				Model:    "gemini-2.5-pro-preview-03-25", // default model for testing
+			},
+			Messages: []ChatMessage{
+				{Role: ChatMessageRoleUser, Content: "First say hi. After that, look up what the weather in New York"},
+			},
+			Tools: []*Tool{mockTool},
+		},
+		Secrets: secret_manager.SecretManagerContainer{
+			SecretManager: &secret_manager.KeyringSecretManager{},
+		},
+	}
+
+	deltaChan := make(chan ChatMessageDelta)
+	var allDeltas []ChatMessageDelta
+
+	go func() {
+		for delta := range deltaChan {
+			allDeltas = append(allDeltas, delta)
+		}
+	}()
+
+	response, err := chat.ChatStream(ctx, options, deltaChan)
+	close(deltaChan)
+
+	if err != nil {
+		t.Fatalf("ChatStream returned an error: %v", err)
+	}
+
+	if response == nil {
+		t.Fatal("ChatStream returned a nil response")
+	}
+
+	// Check that we received deltas
+	if len(allDeltas) == 0 {
+		t.Error("No deltas received")
+	}
+
+	// Check for thinking output in deltas
+	hasThinking := false
+	for _, delta := range allDeltas {
+		if strings.Contains(delta.Content, "<thinking>") {
+			hasThinking = true
+			break
+		}
+	}
+	if !hasThinking {
+		t.Error("No thinking output found in deltas")
+	}
+
+	// Check that the response contains content
+	if response.Content == "" {
+		t.Error("Response content is empty")
+	}
+
+	// Check that the response includes a tool call
+	if len(response.ToolCalls) == 0 {
+		t.Error("No tool calls in the response")
+	}
+
+	// Verify tool call
+	toolCall := response.ToolCalls[0]
+	if toolCall.Name != "get_current_weather" {
+		t.Errorf("Expected tool call to 'get_current_weather', got '%s'", toolCall.Name)
+	}
+
+	// Parse tool call arguments
+	var args map[string]string
+	err = json.Unmarshal([]byte(toolCall.Arguments), &args)
+	if err != nil {
+		t.Fatalf("Failed to parse tool call arguments: %v", err)
+	}
+
+	// Check tool call arguments
+	if !strings.Contains(strings.ToLower(args["location"]), "new york") {
+		t.Errorf("Expected location to contain 'New York', got '%s'", args["location"])
+	}
+	if args["unit"] != "celsius" && args["unit"] != "fahrenheit" {
+		t.Errorf("Expected unit 'celsius' or 'fahrenheit', got '%s'", args["unit"])
+	}
+
+	t.Logf("Response content: %s", response.Content)
+	t.Logf("Tool call: %+v", toolCall)
+
+	// check multi-turn works
+	t.Run("MultiTurn", func(t *testing.T) {
+		options.Params.Messages = append(options.Params.Messages, response.ChatMessage)
+		options.Params.Messages = append(options.Params.Messages, ChatMessage{
+			Role:       ChatMessageRoleTool,
+			Content:    "Warm and Sunny",
+			ToolCallId: toolCall.Id,
+			Name:       toolCall.Name,
+			IsError:    false,
+		})
+		options.Params.Messages = append(options.Params.Messages, ChatMessage{
+			Role:    ChatMessageRoleUser,
+			Content: "How about London?",
+		})
+
+		deltaChan := make(chan ChatMessageDelta)
+		var allDeltas []ChatMessageDelta
+
+		go func() {
+			for delta := range deltaChan {
+				allDeltas = append(allDeltas, delta)
+			}
+		}()
+
+		response, err := chat.ChatStream(ctx, options, deltaChan)
+		close(deltaChan)
+
+		if err != nil {
+			t.Fatalf("ChatStream returned an error: %v", err)
+		}
+
+		if response == nil {
+			t.Fatal("ChatStream returned a nil response")
+		}
+
+		// Check that we received deltas
+		if len(allDeltas) == 0 {
+			t.Error("No deltas received")
+		}
+
+		// Check for thinking output in deltas
+		hasThinking := false
+		for _, delta := range allDeltas {
+			if strings.Contains(delta.Content, "<thinking>") {
+				hasThinking = true
+				break
+			}
+		}
+		if !hasThinking {
+			t.Error("No thinking output found in deltas")
+		}
+
+		// Check that the response contains content
+		if response.Content == "" {
+			t.Error("Response content is empty")
+		}
+
+		// Check that the response includes a tool call
+		if len(response.ToolCalls) == 0 {
+			t.Error("No tool calls in the response")
+		}
+
+		// Verify tool call
+		toolCall := response.ToolCalls[0]
+		if toolCall.Name != "get_current_weather" {
+			t.Errorf("Expected tool call to 'get_current_weather', got '%s'", toolCall.Name)
+		}
+
+		// Parse tool call arguments
+		var args map[string]string
+		err = json.Unmarshal([]byte(toolCall.Arguments), &args)
+		if err != nil {
+			t.Fatalf("Failed to parse tool call arguments: %v", err)
+		}
+
+		// Check tool call arguments
+		if !strings.Contains(strings.ToLower(args["location"]), "london") {
+			t.Errorf("Expected location to contain 'london', got '%s'", args["location"])
+		}
+		if args["unit"] != "celsius" && args["unit"] != "fahrenheit" {
+			t.Errorf("Expected unit 'celsius' or 'fahrenheit', got '%s'", args["unit"])
+		}
+
+		t.Logf("Response content: %s", response.Content)
+		t.Logf("Tool call: %+v", toolCall)
+	})
 }
