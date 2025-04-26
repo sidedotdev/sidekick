@@ -28,6 +28,30 @@ func NewGoogleToolChat() *GoogleToolChat {
 }
 
 func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta) (*ChatMessageResponse, error) {
+	// additional heartbeat until ChatStream ends: we can't rely on the delta
+	// heartbeat because thinking tokens are being hidden in the API currently,
+	// resulting in a very long time between deltas and thus heartbeat timeouts.
+	heartbeatCtx, cancelHeartbeat := context.WithCancel(context.Background())
+	defer cancelHeartbeat()
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				{
+					if activity.IsActivity(ctx) {
+						activity.RecordHeartbeat(ctx, map[string]bool{"fake": true})
+					}
+					continue
+				}
+			}
+		}
+	}()
+
 	apiKey, err := options.Secrets.GetSecret(GoogleApiKeySecretName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Google API key: %w", err)
@@ -48,7 +72,13 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 
 	contents := googleFromChatMessages(options.Params.Messages)
 
+	toolConfig, err := googleFromToolChoice(options.Params.ToolChoice)
+	if err != nil {
+		return nil, err
+	}
+
 	config := &genai.GenerateContentConfig{
+		ToolConfig: toolConfig,
 		Tools: googleFromTools(options.Params.Tools),
 		ThinkingConfig: &genai.ThinkingConfig{
 			IncludeThoughts: true,
@@ -60,32 +90,6 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 
 	stream := client.Models.GenerateContentStream(ctx, model, contents, config)
 	var deltas []ChatMessageDelta
-
-	// additional heartbeat until outer function ends: we can't rely on the
-	// delta heartbeat because thinking tokens are being hidden in the API
-	// currently, resulting in a very long time between deltas and thus
-	// heartbeat timeouts.
-	heartbeatCtx, cancelHeartbeat := context.WithCancel(context.Background())
-	defer cancelHeartbeat()
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			// select between sleep and channel close
-			select {
-			case <-heartbeatCtx.Done():
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				{
-					if activity.IsActivity(ctx) {
-						activity.RecordHeartbeat(ctx, map[string]bool{"fake": true})
-					}
-					continue
-				}
-			}
-		}
-	}()
 
 	for result, err := range stream {
 		if err != nil {
@@ -107,6 +111,29 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		ChatMessage: message,
 		Model:       model,
 		Provider:    "google",
+	}, nil
+}
+
+func googleFromToolChoice(toolChoice ToolChoice) (*genai.ToolConfig, error) {
+	var functionCallingMode genai.FunctionCallingConfigMode
+	var allowedFunctionNames []string
+	switch toolChoice.Type {
+	case ToolChoiceTypeAuto, ToolChoiceTypeUnspecified:
+		functionCallingMode = genai.FunctionCallingConfigModeAuto
+	case ToolChoiceTypeRequired:
+		functionCallingMode = genai.FunctionCallingConfigModeAny
+	case ToolChoiceTypeTool:
+		functionCallingMode = genai.FunctionCallingConfigModeAny
+		allowedFunctionNames = append(allowedFunctionNames, toolChoice.Name)
+	default:
+		return nil, fmt.Errorf("unknown tool choice type: %s", toolChoice.Type)
+	}
+
+	return &genai.ToolConfig{
+		FunctionCallingConfig: &genai.FunctionCallingConfig{
+			Mode: functionCallingMode,
+			AllowedFunctionNames: allowedFunctionNames,
+		},
 	}, nil
 }
 
