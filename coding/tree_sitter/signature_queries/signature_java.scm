@@ -1,3 +1,36 @@
+; Queries for top-level declarations (non-private/protected)
+
+(class_declaration
+  (modifiers)? @class.modifiers
+    (#not-match? @class.modifiers "private|protected")
+  name: (identifier) @class.name
+  (type_parameters)? @class.type_parameters
+  ; body: (_) @class.body ; Body not needed for signature capture itself
+) @class.declaration
+
+(interface_declaration
+  (modifiers)? @interface.modifiers
+    (#not-match? @interface.modifiers "private|protected")
+  name: (identifier) @interface.name
+  (type_parameters)? @interface.type_parameters
+  ; body: (_) @interface.body
+) @interface.declaration
+
+(enum_declaration
+  (modifiers)? @enum.modifiers
+    (#not-match? @enum.modifiers "private|protected")
+  name: (identifier) @enum.name
+  ; body: (_) @enum.body
+) @enum.declaration
+
+(annotation_type_declaration
+  (modifiers)? @annotation.modifiers
+    (#not-match? @annotation.modifiers "private|protected")
+  name: (identifier) @annotation.name
+  ; body: (_) @annotation.body
+) @annotation.declaration
+
+
 ; XXX NOTE: OLD QUERIES BELOW and commented out. these older queries are good
 ; for referencing how to do these queries, but are not to be uncommented EVER.
 ; Instead, add new queries above this line.

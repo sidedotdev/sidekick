@@ -196,328 +196,317 @@ func TestGetFileSignaturesStringJava(t *testing.T) {
 		expected string
 	}{
 		/*
-		{
-			name:     "empty interface",
-			code:     "interface TestInterface {}",
-			expected: "interface TestInterface\n---\n",
-		},
-		{
-			name:     "interface with method",
-			code:     "interface TestInterface { void testMethod(); }",
-			expected: "interface TestInterface\n\tvoid testMethod();\n---\n",
-		},
-		{
-			name:     "interface with multiple methods",
-			code:     "interface TestInterface { void method1(); String method2(int param); }",
-			expected: "interface TestInterface\n\tvoid method1();\n\tString method2(int param);\n---\n",
-		},
-		{
-			name:     "public interface",
-			code:     "public interface TestInterface { void method(); }",
-			expected: "public interface TestInterface\n\tvoid method();\n---\n",
-		},
+			{
+				name:     "empty interface",
+				code:     "interface TestInterface {}",
+				expected: "interface TestInterface\n---\n",
+			},
+			{
+				name:     "interface with method",
+				code:     "interface TestInterface { void testMethod(); }",
+				expected: "interface TestInterface\n\tvoid testMethod();\n---\n",
+			},
+			{
+				name:     "interface with multiple methods",
+				code:     "interface TestInterface { void method1(); String method2(int param); }",
+				expected: "interface TestInterface\n\tvoid method1();\n\tString method2(int param);\n---\n",
+			},
+			{
+				name:     "public interface",
+				code:     "public interface TestInterface { void method(); }",
+				expected: "public interface TestInterface\n\tvoid method();\n---\n",
+			},
+			{
+				name:     "interface with constant",
+				code:     "interface TestInterface { public static final int CONSTANT = 42; void method(); }",
+				expected: "interface TestInterface\n\tpublic static final int CONSTANT = 42;\n\tvoid method();\n---\n",
+			},
+			{
+				name:     "empty",
+				code:     "",
+				expected: "",
+			},
+			{
+				name:     "simple class",
+				code:     "class TestClass {}",
+				expected: "class TestClass\n---\n",
+			},
+			{
+				name:     "class with public constant",
+				code:     "class TestClass { public static final int CONSTANT = 42; }",
+				expected: "class TestClass\n\tpublic static final int CONSTANT = 42;\n---\n",
+			},
+			{
+				name:     "class with multiple constants",
+				code:     "class TestClass { private static final int CONSTANT1 = 42; public static final int CONSTANT2 = 43; protected static final int CONSTANT3 = 44; }",
+				expected: "class TestClass\n\tpublic static final int CONSTANT2 = 43;\n---\n",
+			},
+			{
+				name:     "class with private field",
+				code:     "class TestClass { private int field; }",
+				expected: "class TestClass\n---\n",
+			},
+			{
+				name:     "class with public field",
+				code:     "class TestClass { public int field; }",
+				expected: "class TestClass\n\tpublic int field;\n---\n",
+			},
+			{
+				name:     "class with mixed fields",
+				code:     "class TestClass { private int field1; public String field2; protected int field3; }",
+				expected: "class TestClass\n\tpublic String field2;\n---\n",
+			},
+			{
+				name:     "class with constructor",
+				code:     "class TestClass { public TestClass() {} }",
+				expected: "class TestClass\n\tpublic TestClass()\n---\n",
+			},
+			{
+				name:     "class with parameterized constructor",
+				code:     "class TestClass { public TestClass(int param1, String param2) {} }",
+				expected: "class TestClass\n\tpublic TestClass(int param1, String param2)\n---\n",
+			},
+			{
+				name:     "class with method",
+				code:     "class TestClass { public void testMethod() {} }",
+				expected: "class TestClass\n\tpublic void testMethod()\n---\n",
+			},
+			{
+				name:     "class with multiple methods",
+				code:     "class TestClass { public void testMethod() {}\npublic void testMethod2() {} }",
+				expected: "class TestClass\n\tpublic void testMethod()\n\tpublic void testMethod2()\n---\n",
+			},
 		*/
 		/*
-		{
-			name:     "interface with constant",
-			code:     "interface TestInterface { public static final int CONSTANT = 42; void method(); }",
-			expected: "interface TestInterface\n\tpublic static final int CONSTANT = 42;\n\tvoid method();\n---\n",
-		},
-		{
-			name:     "empty",
-			code:     "",
-			expected: "",
-		},
-		{
-			name:     "simple class",
-			code:     "class TestClass {}",
-			expected: "class TestClass\n---\n",
-		},
+			{
+				name:     "class with parameterized method",
+				code:     "class TestClass { public boolean testMethod(int param1, String param2) { return true; } }",
+				expected: "class TestClass\n\tpublic boolean testMethod(int param1, String param2)\n---\n",
+			},
+			{
+				name:     "class with private method",
+				code:     "class TestClass { private void testMethod() {} }",
+				expected: "class TestClass\n---\n",
+			},
+			{
+				name:     "class with comment",
+				code:     "// Test class comment\nclass TestClass {}",
+				expected: "class TestClass\n---\n",
+			},
 		*/
 		/*
-		{
-			name:     "class with public constant",
-			code:     "class TestClass { public static final int CONSTANT = 42; }",
-			expected: "class TestClass\n\tpublic static final int CONSTANT = 42;\n---\n",
-		},
-		{
-			name:     "class with multiple constants",
-			code:     "class TestClass { private static final int CONSTANT1 = 42; public static final int CONSTANT2 = 43; protected static final int CONSTANT3 = 44; }",
-			expected: "class TestClass\n\tpublic static final int CONSTANT2 = 43;\n---\n",
-		},
-		{
-			name:     "class with private field",
-			code:     "class TestClass { private int field; }",
-			expected: "class TestClass\n---\n",
-		},
-		{
-			name:     "class with public field",
-			code:     "class TestClass { public int field; }",
-			expected: "class TestClass\n\tpublic int field;\n---\n",
-		},
-		{
-			name:     "class with mixed fields",
-			code:     "class TestClass { private int field1; public String field2; protected int field3; }",
-			expected: "class TestClass\n\tpublic String field2;\n---\n",
-		},
+			{
+				name:     "multiple classes",
+				code:     "class Class1 {} class Class2 {}",
+				expected: "class Class1\\n---\\nclass Class2\\n---\\n",
+			},
+			{ // Uncommented annotation type declaration
+				name:     "annotation type declaration",
+				code:     "@interface TestAnnotation { String value(); int count() default 0; }",
+				expected: "@interface TestAnnotation\\n\\tString value();\\n\\tint count() default 0;\\n---\\n",
+			},
+			/* // Keep private method version commented
+			{
+				name:     "annotation type declaration with private method",
+				code:     "@interface TestAnnotation { String value(); private int count() default 0; }",
+				expected: "@interface TestAnnotation\n\tString value();\n---\n",
+			},
+			{
+				name:     "class with annotation",
+				code:     "@Test class TestClass {}",
+				expected: "@Test class TestClass\n---\n",
+			},
+			{
+				name:     "method with annotation",
+				code:     "class TestClass { @Override public void testMethod() {} }",
+				expected: "class TestClass\n\t@Override public void testMethod()\n---\n",
+			},
+			{
+				name:     "method argument with annotation",
+				code:     "class TestClass { public void testMethod(@NotNull String arg) {} }",
+				expected: "class TestClass\n\tpublic void testMethod(@NotNull String arg)\n---\n",
+			},
+			{
+				name:     "interface with annotation",
+				code:     "@FunctionalInterface interface TestInterface { void test(); }",
+				expected: "@FunctionalInterface interface TestInterface\n\tvoid test();\n---\n",
+			},
+			{
+				name:     "class with type parameter",
+				code:     "class Box<T> { }",
+				expected: "class Box<T>\n---\n",
+			},
+			{
+				name:     "class with bounded type parameter",
+				code:     "class NumberBox<T extends Number> { }",
+				expected: "class NumberBox<T extends Number>\n---\n",
+			},
+			{
+				name:     "class with multiple type parameters",
+				code:     "class Pair<K,V> { }",
+				expected: "class Pair<K,V>\n---\n",
+			},
+			{
+				name:     "class with complex type parameters",
+				code:     "class Container<T extends Comparable<T>> { }",
+				expected: "class Container<T extends Comparable<T>>\n---\n",
+			},
 		*/
 		/*
-		{
-			name:     "class with constructor",
-			code:     "class TestClass { public TestClass() {} }",
-			expected: "class TestClass\n\tpublic TestClass()\n---\n",
-		},
-		{
-			name:     "class with parameterized constructor",
-			code:     "class TestClass { public TestClass(int param1, String param2) {} }",
-			expected: "class TestClass\n\tpublic TestClass(int param1, String param2)\n---\n",
-		},
+			{
+				name:     "generic interface",
+				code:     "interface Box<T> { T get(); void put(T item); }",
+				expected: "interface Box<T>\n\tT get();\n\tvoid put(T item);\n---\n",
+			},
+			{
+				name:     "generic interface with bounds",
+				code:     "interface Sortable<T extends Comparable<T>> { void sort(T[] items); }",
+				expected: "interface Sortable<T extends Comparable<T>>\n\tvoid sort(T[] items);\n---\n",
+			},
+			{
+				name:     "class with generic method",
+				code:     "class Util { public <T> void print(T item) {} }",
+				expected: "class Util\n\tpublic <T> void print(T item)\n---\n",
+			},
+			{
+				name:     "class with bounded generic method",
+				code:     "class NumberUtil { public <T extends Number> double sum(T[] numbers) {} }",
+				expected: "class NumberUtil\n\tpublic <T extends Number> double sum(T[] numbers)\n---\n",
+			},
+			{
+				name:     "class with multiple generic methods",
+				code:     "class Converter { public <T,R> R convert(T input) {} public <V> void validate(V value) {} }",
+				expected: "class Converter\n\tpublic <T,R> R convert(T input)\n\tpublic <V> void validate(V value)\n---\n",
+			},
 		*/
 		/*
-		{
-			name:     "class with method",
-			code:     "class TestClass { public void testMethod() {} }",
-			expected: "class TestClass\n\tpublic void testMethod()\n---\n",
-		},
-		{
-			name:     "class with multiple methods",
-			code:     "class TestClass { public void testMethod() {}\npublic void testMethod2() {} }",
-			expected: "class TestClass\n\tpublic void testMethod()\n\tpublic void testMethod2()\n---\n",
-		},
-		*/
-		/*
-		{
-			name:     "class with parameterized method",
-			code:     "class TestClass { public boolean testMethod(int param1, String param2) { return true; } }",
-			expected: "class TestClass\n\tpublic boolean testMethod(int param1, String param2)\n---\n",
-		},
-		{
-			name:     "class with private method",
-			code:     "class TestClass { private void testMethod() {} }",
-			expected: "class TestClass\n---\n",
-		},
-		{
-			name:     "class with comment",
-			code:     "// Test class comment\nclass TestClass {}",
-			expected: "class TestClass\n---\n",
-		},
-		*/
-		/*
-		{
-			name:     "multiple classes",
-			code:     "class Class1 {} class Class2 {}",
-			expected: "class Class1\n---\nclass Class2\n---\n",
-		},
-		{
-			name:     "annotation type declaration",
-			code:     "@interface TestAnnotation { String value(); int count() default 0; }",
-			expected: "@interface TestAnnotation\n\tString value();\n\tint count() default 0;\n---\n",
-		},
-		{
-			name:     "annotation type declaration with private method",
-			code:     "@interface TestAnnotation { String value(); private int count() default 0; }",
-			expected: "@interface TestAnnotation\n\tString value();\n---\n",
-		},
-		{
-			name:     "class with annotation",
-			code:     "@Test class TestClass {}",
-			expected: "@Test class TestClass\n---\n",
-		},
-		{
-			name:     "method with annotation",
-			code:     "class TestClass { @Override public void testMethod() {} }",
-			expected: "class TestClass\n\t@Override public void testMethod()\n---\n",
-		},
-		{
-			name:     "method argument with annotation",
-			code:     "class TestClass { public void testMethod(@NotNull String arg) {} }",
-			expected: "class TestClass\n\tpublic void testMethod(@NotNull String arg)\n---\n",
-		},
-		{
-			name:     "interface with annotation",
-			code:     "@FunctionalInterface interface TestInterface { void test(); }",
-			expected: "@FunctionalInterface interface TestInterface\n\tvoid test();\n---\n",
-		},
-		*/
-		/*
-		{
-			name:     "class with type parameter",
-			code:     "class Box<T> { }",
-			expected: "class Box<T>\n---\n",
-		},
-		{
-			name:     "class with bounded type parameter",
-			code:     "class NumberBox<T extends Number> { }",
-			expected: "class NumberBox<T extends Number>\n---\n",
-		},
-		{
-			name:     "class with multiple type parameters",
-			code:     "class Pair<K,V> { }",
-			expected: "class Pair<K,V>\n---\n",
-		},
-		{
-			name:     "class with complex type parameters",
-			code:     "class Container<T extends Comparable<T>> { }",
-			expected: "class Container<T extends Comparable<T>>\n---\n",
-		},
-		*/
-		/*
-		{
-			name:     "generic interface",
-			code:     "interface Box<T> { T get(); void put(T item); }",
-			expected: "interface Box<T>\n\tT get();\n\tvoid put(T item);\n---\n",
-		},
-		{
-			name:     "generic interface with bounds",
-			code:     "interface Sortable<T extends Comparable<T>> { void sort(T[] items); }",
-			expected: "interface Sortable<T extends Comparable<T>>\n\tvoid sort(T[] items);\n---\n",
-		},
-		{
-			name:     "class with generic method",
-			code:     "class Util { public <T> void print(T item) {} }",
-			expected: "class Util\n\tpublic <T> void print(T item)\n---\n",
-		},
-		{
-			name:     "class with bounded generic method",
-			code:     "class NumberUtil { public <T extends Number> double sum(T[] numbers) {} }",
-			expected: "class NumberUtil\n\tpublic <T extends Number> double sum(T[] numbers)\n---\n",
-		},
-		{
-			name:     "class with multiple generic methods",
-			code:     "class Converter { public <T,R> R convert(T input) {} public <V> void validate(V value) {} }",
-			expected: "class Converter\n\tpublic <T,R> R convert(T input)\n\tpublic <V> void validate(V value)\n---\n",
-		},
-		*/
-		/*
-		{
-			name:     "empty enum",
-			code:     "enum EmptyEnum {}",
-			expected: "enum EmptyEnum\n---\n",
-		},
-		{
-			name:     "enum with constants",
-			code:     "enum Direction { NORTH, SOUTH, EAST, WEST }",
-			expected: "enum Direction\n\tNORTH\n\tSOUTH\n\tEAST\n\tWEST\n---\n",
-		},
-		{
-			name:     "enum with public method",
-			code:     "enum Status { OK, ERROR; public String getMessage() { return null; } }",
-			expected: "enum Status\n\tOK\n\tERROR\n\tpublic String getMessage()\n---\n",
-		},
-		{
-			name:     "enum with private method",
-			code:     "enum Status { OK, ERROR; private String getMessage() { return null; } }",
-			expected: "enum Status\n\tOK\n\tERROR\n---\n",
-		},
-		{
-			name:     "enum with constants and multiple methods",
-			code:     "enum Complex { FIRST(1), SECOND(2); private final int value; private Complex(int value) { this.value = value; } public int getValue() { return value; } }",
-			expected: "enum Complex\n\tFIRST(1)\n\tSECOND(2)\n\tpublic int getValue()\n---\n",
-		},
-		{
-			name:     "annotated enum",
-			code:     "@Deprecated enum Legacy { OLD, OLDER }",
-			expected: "@Deprecated enum Legacy\n\tOLD\n\tOLDER\n---\n",
-		},
-		*/
-		/*
-		{
-			name: "nested class in class",
-			code: `
-public class OuterClass {
-    public static class StaticNestedClass {
-        public void nestedMethod() {}
-    }
-    protected class IgnoredNestedClass {}
-    private class AnotherIgnoredClass {}
-    public class PublicNestedClass {
-        public void method() {}
-    }
-}`,
-			expected: `public class OuterClass
----
-	public static class StaticNestedClass
-		public void nestedMethod()
----
-	public class PublicNestedClass
-		public void method()
----
-`,
-		},
-		{
-			name: "nested interface in class",
-			code: `
-public class OuterClass {
-    public interface NestedInterface {
-        void method();
-    }
-    private interface IgnoredInterface {}
-}`,
-			expected: `public class OuterClass
----
-	public interface NestedInterface
-		void method();
----
-`,
-		},
-		{
-			name: "nested annotation in class",
-			code: `
-public class OuterClass {
-    public @interface NestedAnnotation {
-        String value() default "";
-    }
-    private @interface IgnoredAnnotation {}
-}`,
-			expected: `public class OuterClass
----
-	public @interface NestedAnnotation
-		String value() default "";
----
-`,
-		},
-		{
-			name: "deeply nested types",
-			code: `
-public class OuterClass {
-    public class Level1 {
-        public interface Level2 {
-            public class Level3 {
-                void method();
-            }
-        }
-    }
-}`,
-			expected: `public class OuterClass
----
-	public class Level1
----
-		public interface Level2
----
-			public class Level3
-				void method()
----
-`,
-		},
-		{
-			name: "nested enum in class",
-			code: `
-public class Container {
-    public enum Status {
-        ACTIVE, INACTIVE;
-        public boolean isActive() { return this == ACTIVE; }
-    }
-    private enum Hidden { ONE, TWO }
-}`,
-			expected: `public class Container
----
-	public enum Status
-		ACTIVE
-		INACTIVE
-		public boolean isActive()
----
-`,
-		},
+				{
+					name:     "empty enum",
+					code:     "enum EmptyEnum {}",
+					expected: "enum EmptyEnum\n---\n",
+				},
+				{
+					name:     "enum with constants",
+					code:     "enum Direction { NORTH, SOUTH, EAST, WEST }",
+					expected: "enum Direction\n\tNORTH\n\tSOUTH\n\tEAST\n\tWEST\n---\n",
+				},
+				{
+					name:     "enum with public method",
+					code:     "enum Status { OK, ERROR; public String getMessage() { return null; } }",
+					expected: "enum Status\n\tOK\n\tERROR\n\tpublic String getMessage()\n---\n",
+				},
+				{
+					name:     "enum with private method",
+					code:     "enum Status { OK, ERROR; private String getMessage() { return null; } }",
+					expected: "enum Status\n\tOK\n\tERROR\n---\n",
+				},
+				{
+					name:     "enum with constants and multiple methods",
+					code:     "enum Complex { FIRST(1), SECOND(2); private final int value; private Complex(int value) { this.value = value; } public int getValue() { return value; } }",
+					expected: "enum Complex\n\tFIRST(1)\n\tSECOND(2)\n\tpublic int getValue()\n---\n",
+				},
+				{
+					name:     "annotated enum",
+					code:     "@Deprecated enum Legacy { OLD, OLDER }",
+					expected: "@Deprecated enum Legacy\n\tOLD\n\tOLDER\n---\n",
+				},
+				{
+					name: "nested class in class",
+					code: `
+		public class OuterClass {
+		    public static class StaticNestedClass {
+		        public void nestedMethod() {}
+		    }
+		    protected class IgnoredNestedClass {}
+		    private class AnotherIgnoredClass {}
+		    public class PublicNestedClass {
+		        public void method() {}
+		    }
+		}`,
+					expected: `public class OuterClass
+		---
+			public static class StaticNestedClass
+				public void nestedMethod()
+		---
+			public class PublicNestedClass
+				public void method()
+		---
+		`,
+				},
+				{
+					name: "nested interface in class",
+					code: `
+		public class OuterClass {
+		    public interface NestedInterface {
+		        void method();
+		    }
+		    private interface IgnoredInterface {}
+		}`,
+					expected: `public class OuterClass
+		---
+			public interface NestedInterface
+				void method();
+		---
+		`,
+				},
+				{
+					name: "nested annotation in class",
+					code: `
+		public class OuterClass {
+		    public @interface NestedAnnotation {
+		        String value() default "";
+		    }
+		    private @interface IgnoredAnnotation {}
+		}`,
+					expected: `public class OuterClass
+		---
+			public @interface NestedAnnotation
+				String value() default "";
+		---
+		`,
+				},
+				{
+					name: "deeply nested types",
+					code: `
+		public class OuterClass {
+		    public class Level1 {
+		        public interface Level2 {
+		            public class Level3 {
+		                void method();
+		            }
+		        }
+		    }
+		}`,
+					expected: `public class OuterClass
+		---
+			public class Level1
+		---
+				public interface Level2
+		---
+					public class Level3
+						void method()
+		---
+		`,
+				},
+				{
+					name: "nested enum in class",
+					code: `
+		public class Container {
+		    public enum Status {
+		        ACTIVE, INACTIVE;
+		        public boolean isActive() { return this == ACTIVE; }
+		    }
+		    private enum Hidden { ONE, TWO }
+		}`,
+					expected: `public class Container
+		---
+			public enum Status
+				ACTIVE
+				INACTIVE
+				public boolean isActive()
+		---
+		`,
+				},
 		*/
 	}
 
@@ -559,28 +548,27 @@ func TestGetFileSymbolsStringJava(t *testing.T) {
 		expected string
 	}{
 		/*
-		{
-			name: "simple class with method",
-			code: `
-public class Test {
-    public void testMethod() {
-        System.out.println("Hello");
-    }
-}`,
-			expected: "Test, testMethod",
-		},
-		{
-			name: "class with constructor",
-			code: `
-public class Person {
-    public Person(String name) {
-        // Constructor
-    }
-}`,
-			expected: "Person",
-		},
+				{
+					name: "simple class with method",
+					code: `
+		public class Test {
+		    public void testMethod() {
+		        System.out.println("Hello");
+		    }
+		}`,
+					expected: "Test, testMethod",
+				},
+				{
+					name: "class with constructor",
+					code: `
+		public class Person {
+		    public Person(String name) {
+		        // Constructor
+		    }
+		}`,
+					expected: "Person",
+				},
 		*/
-		/*
 		{
 			name:     "empty",
 			code:     "",
@@ -591,44 +579,42 @@ public class Person {
 			code:     "class Test {}",
 			expected: "Test",
 		},
+		/*
+				{
+					name: "class with private, public and protected fields",
+					code: `
+		public class TestClass {
+		    private int field1;
+		    public String field2;
+		    protected String field3;
+		}`,
+					expected: "TestClass",
+				},
 		*/
 		/*
-		{
-			name: "class with private, public and protected fields",
-			code: `
-public class TestClass {
-    private int field1;
-    public String field2;
-    protected String field3;
-}`,
-			expected: "TestClass",
-		},
+				{
+					name: "class with methods and fields",
+					code: `
+		public class Complex {
+		    private double real;
+		    private double imaginary;
+			public double x;
+
+		    public Complex add(Complex other) {
+		        return new Complex();
+		    }
+
+		    public Complex subtract(Complex other) {
+		        return new Complex();
+		    }
+
+		    private Complex internal(Complex other) {
+		        return new Complex();
+		    }
+		}`,
+					expected: "Complex, add, subtract",
+				},
 		*/
-		/*
-		{
-			name: "class with methods and fields",
-			code: `
-public class Complex {
-    private double real;
-    private double imaginary;
-	public double x;
-
-    public Complex add(Complex other) {
-        return new Complex();
-    }
-
-    public Complex subtract(Complex other) {
-        return new Complex();
-    }
-
-    private Complex internal(Complex other) {
-        return new Complex();
-    }
-}`,
-			expected: "Complex, add, subtract",
-		},
-		*/
-		/*
 		{
 			name: "interface declaration",
 			code: `
@@ -636,6 +622,7 @@ public interface Drawable {
     void draw();
     void resize();
 }`,
+			// Symbol should just be the interface name
 			expected: "Drawable",
 		},
 		{
@@ -645,118 +632,119 @@ public @interface TestAnnotation {
     String value() default "";
     int count() default 0;
 }`,
+			// Symbol should just be the annotation name
 			expected: "TestAnnotation",
 		},
-		*/
 		/*
-		{
-			name: "nested class",
-			code: `
-public class Outer {
-    private int x;
-    
-    public class Inner {
-        public void innerMethod() {
-            System.out.println("Inner method");
-        }
-    }
-    
-    public void outerMethod() {
-        System.out.println("Outer method");
-    }
-}`,
-			expected: "Outer, Inner, innerMethod, outerMethod",
-		},
-		{
-			name: "multiple classes in single file",
-			code: `
-class First {
-    public void firstMethod() {}
-}
+				{
+					name: "nested class",
+					code: `
+		public class Outer {
+		    private int x;
 
-class Second {
-    public void secondMethod() {}
-}
+		    public class Inner {
+		        public void innerMethod() {
+		            System.out.println("Inner method");
+		        }
+		    }
 
-class Third {
-    private void thirdMethod() {}
-}`,
-			expected: "First, firstMethod, Second, secondMethod, Third",
-		},
-		{
-			name: "class inheritance",
-			code: `
-public class Animal {
-    public void makeSound() {}
-}
+		    public void outerMethod() {
+		        System.out.println("Outer method");
+		    }
+		}`,
+					expected: "Outer, Inner, innerMethod, outerMethod",
+				},
+				{
+					name: "multiple classes in single file",
+					code: `
+		class First {
+		    public void firstMethod() {}
+		}
 
-public class Dog extends Animal {
-    public void bark() {}
-    private void sleep() {}
-}`,
-			expected: "Animal, makeSound, Dog, bark",
-		},
+		class Second {
+		    public void secondMethod() {}
+		}
+
+		class Third {
+		    private void thirdMethod() {}
+		}`,
+					expected: "First, firstMethod, Second, secondMethod, Third",
+				},
+				{
+					name: "class inheritance",
+					code: `
+		public class Animal {
+		    public void makeSound() {}
+		}
+
+		public class Dog extends Animal {
+		    public void bark() {}
+		    private void sleep() {}
+		}`,
+					expected: "Animal, makeSound, Dog, bark",
+				},
 		*/
-		/*
 		{
 			name: "basic enum",
 			code: `
 public enum Direction {
     NORTH, SOUTH, EAST, WEST
 }`,
+			// Symbol should just be the enum name. Constants handled later.
 			expected: "Direction",
 		},
-		{
-			name: "enum with methods",
-			code: `
-public enum Operation {
-    PLUS, MINUS, TIMES, DIVIDE;
-    
-    public double apply(double x, double y) {
-        return 0.0;
-    }
-    
-    private void helper() {
-        // Helper method
-    }
-}`,
-			expected: "Operation, apply",
-		},
-		{
-			name: "nested enum",
-			code: `
-public class Container {
-    public enum Status {
-        ACTIVE, INACTIVE, PENDING;
-        
-        public boolean isTerminal() {
-            return false;
-        }
-    }
-    
-    public void process() {
-        // Process method
-    }
-}`,
-			expected: "Container, Status, isTerminal, process",
-		},
+		/*
+				{
+					name: "enum with methods",
+					code: `
+		public enum Operation {
+		    PLUS, MINUS, TIMES, DIVIDE;
+
+		    public double apply(double x, double y) {
+		        return 0.0;
+		    }
+
+		    private void helper() {
+		        // Helper method
+		    }
+		}`,
+					expected: "Operation, apply",
+				},
+				{
+					name: "nested enum",
+					code: `
+		public class Container {
+		    public enum Status {
+		        ACTIVE, INACTIVE, PENDING;
+
+		        public boolean isTerminal() {
+		            return false;
+		        }
+		    }
+
+		    public void process() {
+		        // Process method
+		    }
+		}`,
+					expected: "Container, Status, isTerminal, process",
+				},
 		*/
 		/*
-		{
-			name: "multiple enums",
-			code: `
-enum Color {
-    RED, GREEN, BLUE;
-    public String getHex() { return ""; }
-}
+				{
+					name: "multiple enums",
+					code: `
+		enum Color {
+		    RED, GREEN, BLUE;
+		    public String getHex() { return ""; }
+		}
 
-enum Size {
-    SMALL, MEDIUM, LARGE;
-    public int getValue() { return 0; }
-    private void internal() {}
-}`,
-			expected: "Color, getHex, Size, getValue",
-		},
+		enum Size {
+		    SMALL, MEDIUM, LARGE;
+		    public int getValue() { return 0; }
+		    private void internal() {}
+		}`,
+					expected: "Color, getHex, Size, getValue",
+				},
 		*/
 	}
 
