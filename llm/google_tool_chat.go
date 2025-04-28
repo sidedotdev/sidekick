@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/invopop/jsonschema"
-	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/activity"
 	"google.golang.org/genai"
 )
@@ -22,9 +21,9 @@ const (
 	// and if that's not possible, guide the user in how to adjust their
 	// settings after manually enabling billing.
 	//GoogleDefaultModel     = "gemini-2.5-pro-exp-03-25"
-	GoogleDefaultModel     = "gemini-2.5-pro-preview-03-25"
-	thinkingStartTag       = "<thinking>"
-	thinkingEndTag         = "</thinking>"
+	GoogleDefaultModel = "gemini-2.5-pro-preview-03-25"
+	thinkingStartTag   = "<thinking>"
+	thinkingEndTag     = "</thinking>"
 )
 
 type GoogleToolChat struct{}
@@ -58,12 +57,11 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		}
 	}()
 
-
 	providerName := options.Params.ModelConfig.Provider
 	providerNameNormalized := options.Params.ModelConfig.NormalizedProviderName()
 	apiKey, err := options.Secrets.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get %s API key: %w", providerName , err)
+		return nil, fmt.Errorf("failed to get %s API key: %w", providerName, err)
 	}
 
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
@@ -71,7 +69,7 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		Backend: genai.BackendGeminiAPI,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create %s client: %w", providerName , err)
+		return nil, fmt.Errorf("failed to create %s client: %w", providerName, err)
 	}
 
 	model := GoogleDefaultModel
@@ -99,30 +97,51 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 
 	stream := client.Models.GenerateContentStream(ctx, model, contents, config)
 	var deltas []ChatMessageDelta
+	var lastResult *genai.GenerateContentResponse // Store the last response for usage metadata
 
 	for result, err := range stream {
 		if err != nil {
-			return nil, fmt.Errorf("failed to iterate on %s tool chat stream: %w", providerName , err)
+			return nil, fmt.Errorf("failed to iterate on %s tool chat stream: %w", providerName, err)
 		}
 		delta := googleToChatMessageDelta(result)
 		if delta != nil {
 			deltaChan <- *delta
 			deltas = append(deltas, *delta)
 		}
+		// Keep track of the last response, as usage metadata is often in the final one
+		lastResult = result
 	}
 
 	message := stitchDeltasToMessage(deltas, true)
 	if message.Role == "" {
-		if len(deltas) == 0 {
+		// It's possible to get only usage metadata without content/role in some scenarios (e.g., safety filters)
+		// If we have a lastResult with metadata, we might still want to return usage.
+		// However, the current logic requires a role. If no deltas were received at all, error out.
+		if len(deltas) == 0 && (lastResult == nil || lastResult.UsageMetadata == nil) {
 			return nil, fmt.Errorf("received no streamed events from %s backend", providerName)
 		}
-		return nil, errors.New("chat message role not found")
+		// If we only got metadata but no actual message content/role delta, we still error for now.
+		// A valid message requires a role.
+		if len(deltas) == 0 {
+			return nil, fmt.Errorf("received no streamed events or final usage metadata from %s backend", providerName)
+		}
+		// If we got deltas but couldn't form a message (e.g., missing role), it's an error.
+		return nil, errors.New("chat message role not found after stitching deltas")
+	}
+
+	// Extract usage information from the last response
+	usage := Usage{} // Default to zero values
+	if lastResult != nil && lastResult.UsageMetadata != nil {
+		usage.InputTokens = int(lastResult.UsageMetadata.PromptTokenCount)
+		usage.OutputTokens = int(lastResult.UsageMetadata.CandidatesTokenCount)
+		// Note: TotalTokenCount is also available if needed later: int(lastResult.UsageMetadata.TotalTokenCount)
 	}
 
 	return &ChatMessageResponse{
 		ChatMessage: message,
 		Model:       model,
 		Provider:    providerName,
+		Usage:       usage,
 	}, nil
 }
 

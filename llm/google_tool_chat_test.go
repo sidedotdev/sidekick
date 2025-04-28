@@ -538,8 +538,16 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 		t.Errorf("Expected unit 'celsius' or 'fahrenheit', got '%s'", args["unit"])
 	}
 
+	// Check usage
+	assert.NotNil(t, response.Usage, "Usage field should not be nil")
+	// Depending on the model and exact prompt, token counts can vary slightly,
+	// but they should be positive for a successful interaction.
+	assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0")
+	assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0")
+
 	t.Logf("Response content: %s", response.Content)
 	t.Logf("Tool call: %+v", toolCall)
+	t.Logf("Usage: InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
 
 	// check multi-turn works
 	t.Run("MultiTurn", func(t *testing.T) {
@@ -613,7 +621,13 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 			t.Errorf("Expected unit 'celsius' or 'fahrenheit', got '%s'", args["unit"])
 		}
 
+		// Check usage for multi-turn
+		assert.NotNil(t, response.Usage, "Usage field should not be nil in multi-turn")
+		assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0 in multi-turn")
+		assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0 in multi-turn")
+
 		t.Logf("Response content: %s", response.Content)
 		t.Logf("Tool call: %+v", toolCall)
+		t.Logf("Usage (multi-turn): InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
 	})
 }
