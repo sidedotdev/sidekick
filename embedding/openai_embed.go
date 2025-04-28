@@ -15,7 +15,8 @@ type OpenAIEmbedder struct {
 	BaseURL string
 }
 
-func (oe OpenAIEmbedder) Embed(ctx context.Context, modelConfig common.ModelConfig, secretManager secret_manager.SecretManager, input []string) ([]EmbeddingVector, error) {
+func (oe OpenAIEmbedder) Embed(ctx context.Context, modelConfig common.ModelConfig, secretManager secret_manager.SecretManager, input []string, taskType string) ([]EmbeddingVector, error) {
+	// taskType is ignored for OpenAI
 	providerNameNormalized := modelConfig.NormalizedProviderName()
 	token, err := secretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
 	if err != nil {

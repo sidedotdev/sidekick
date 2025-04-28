@@ -79,7 +79,7 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 
 	config := &genai.GenerateContentConfig{
 		ToolConfig: toolConfig,
-		Tools: googleFromTools(options.Params.Tools),
+		Tools:      googleFromTools(options.Params.Tools),
 		ThinkingConfig: &genai.ThinkingConfig{
 			IncludeThoughts: true,
 		},
@@ -131,7 +131,7 @@ func googleFromToolChoice(toolChoice ToolChoice) (*genai.ToolConfig, error) {
 
 	return &genai.ToolConfig{
 		FunctionCallingConfig: &genai.FunctionCallingConfig{
-			Mode: functionCallingMode,
+			Mode:                 functionCallingMode,
 			AllowedFunctionNames: allowedFunctionNames,
 		},
 	}, nil

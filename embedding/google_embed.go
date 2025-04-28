@@ -20,7 +20,7 @@ const (
 
 type GoogleEmbedder struct{}
 
-func (ge GoogleEmbedder) Embed(ctx context.Context, modelConfig common.ModelConfig, secretManager secret_manager.SecretManager, inputs []string) ([]EmbeddingVector, error) {
+func (ge GoogleEmbedder) Embed(ctx context.Context, modelConfig common.ModelConfig, secretManager secret_manager.SecretManager, inputs []string, taskType string) ([]EmbeddingVector, error) {
 	apiKey, err := secretManager.GetSecret("GOOGLE_API_KEY")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Google API key: %w", err)
@@ -58,7 +58,12 @@ func (ge GoogleEmbedder) Embed(ctx context.Context, modelConfig common.ModelConf
 			}
 		}
 
-		res, err := client.Models.EmbedContent(ctx, model, contents, nil)
+		var embedConfig *genai.EmbedContentConfig
+		if taskType != "" {
+			embedConfig = &genai.EmbedContentConfig{TaskType: taskType}
+		}
+
+		res, err := client.Models.EmbedContent(ctx, model, contents, embedConfig)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate embeddings for batch %d/%d: %w", i/maxBatchSize+1, (len(inputs)+maxBatchSize-1)/maxBatchSize, err)
 		}
