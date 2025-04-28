@@ -101,7 +101,8 @@ func (ea *EmbedActivities) CachedEmbedActivity(ctx context.Context, options Cach
 			if end > len(input) {
 				end = len(input)
 			}
-			embeddings, err := embedder.Embed(ctx, options.ModelConfig, options.Secrets.SecretManager, input[i:end])
+			// Use TaskTypeRetrievalDocument for embedding content to be stored.
+			embeddings, err := embedder.Embed(ctx, options.ModelConfig, options.Secrets.SecretManager, input[i:end], embedding.TaskTypeRetrievalDocument)
 			if err != nil {
 				return fmt.Errorf("failed to embed content: %w", err)
 			}

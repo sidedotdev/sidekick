@@ -100,7 +100,8 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 	if err != nil {
 		return []string{}, err
 	}
-	queryVector, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, []string{options.RankQuery})
+	// Use TaskTypeRetrievalQuery for embedding the search query.
+	queryVector, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, []string{options.RankQuery}, embedding.TaskTypeRetrievalQuery)
 	if err != nil {
 		return []string{}, fmt.Errorf("failed to embed query: %w", err)
 	}
