@@ -44,15 +44,15 @@
   (modifiers)? @method.class.modifiers ; For parent visibility predicate check
   (class_body
     (method_declaration
-      (modifiers)? @method.modifiers ; Modifiers for signature
-        (#not-match? @method.modifiers "(private|protected)") ; Check method visibility
+      (modifiers)? @method.modifiers
+        (#not-match? @method.modifiers "(private|protected)")
       (type_parameters)? @method.type_parameters
-      type: (_) @method.type ; Return type
+      type: (_) @method.type
       name: (identifier) @method.name ; Hierarchical and simple name
-      parameters: (_) @method.parameters ; Parameters
+      parameters: (_) @method.parameters
     ) @method.declaration ; Capture the whole method for signature context
   )
-  (#not-match? @method.class.modifiers "(private|protected)") ; Check class visibility
+  (#not-match? @method.class.modifiers "(private|protected)")
 )
 
 ;; Methods in Interfaces (default or static - abstract methods are part of interface decl)
@@ -69,7 +69,7 @@
       parameters: (_) @method.parameters
     ) @method.declaration
   )
-  (#not-match? @method.interface.modifiers "(private|protected)") ; Check interface visibility
+  (#not-match? @method.interface.modifiers "(private|protected)")
 )
 
 ;; Methods in Enums
@@ -83,11 +83,11 @@
         type: (_) @method.type
         name: (identifier) @method.name
         parameters: (_) @method.parameters
-        (#not-match? @method.modifiers "(private|protected)") ; Check method visibility
+        (#not-match? @method.modifiers "(private|protected)")
       ) @method.declaration
     )
   )
-  (#not-match? @method.enum.modifiers "(private|protected)") ; Check enum visibility
+  (#not-match? @method.enum.modifiers "(private|protected)")
 )
 
 ;; Constructors in Classes
@@ -95,13 +95,13 @@
   (modifiers)? @constructor.class.modifiers ; For parent visibility predicate check
   (class_body
     (constructor_declaration
-      (modifiers)? @constructor.modifiers ; Modifiers for signature
+      (modifiers)? @constructor.modifiers
       name: (identifier) @constructor.name
-      parameters: (_) @constructor.parameters ; Parameters
-      (#not-match? @constructor.modifiers "(private|protected)") ; Check: constructor visibility
+      parameters: (_) @constructor.parameters
+      (#not-match? @constructor.modifiers "(private|protected)")
     ) @constructor.declaration ; Capture the whole constructor
   )
-  (#not-match? @constructor.class.modifiers "(private|protected)") ; Check class visibility
+  (#not-match? @constructor.class.modifiers "(private|protected)")
 )
 
 ;; fields/constants in Classes (captures each declarator)
@@ -109,17 +109,17 @@
   (modifiers)? @field.class.modifiers ; For parent visibility predicate check
   (class_body
     (field_declaration
-      (modifiers)? @field.modifiers ; Modifiers for the whole declaration
-      type: (_) @field.type ; Type for the whole declaration
+      (modifiers)? @field.modifiers
+      type: (_) @field.type
       (variable_declarator
         name: (identifier) @field.name
-        value: (_)? @field.value ; Optional value
-        dimensions: (_)? @field.dimensions ; Optional array dimensions on declarator
+        value: (_)? @field.value
+        dimensions: (_)? @field.dimensions
       ) @declarator ; Capture each declarator
-      (#not-match? @field.modifiers "(private|protected)") ; Check field visibility based on declaration modifiers
+      (#not-match? @field.modifiers "(private|protected)")
     ) @field.declaration ; Capture the whole field declaration (match per declarator)
   )
-  (#not-match? @field.class.modifiers "(private|protected)") ; Check class visibility
+  (#not-match? @field.class.modifiers "(private|protected)")
 )
 
 ;; Constants in Interfaces (captures each declarator)
@@ -127,7 +127,7 @@
   (modifiers)? @constant.interface.modifiers ; For parent visibility predicate check
   (interface_body
     (constant_declaration ; Constants in interfaces are implicitly public static final
-      (modifiers)? @constant.modifiers ; Modifiers for the whole declaration
+      (modifiers)? @constant.modifiers
       type: (_) @constant.type
       (variable_declarator
         name: (identifier) @constant.name
@@ -137,7 +137,7 @@
       ; No visibility check needed, implicitly public
     ) @constant.declaration
   )
-  (#not-match? @constant.interface.modifiers "(private|protected)") ; Check interface visibility
+  (#not-match? @constant.interface.modifiers "(private|protected)")
 )
 
 ;; Enum Constants
@@ -145,13 +145,13 @@
   (modifiers)? @constant.enum.modifiers ; For parent visibility predicate check
   (enum_body
     (enum_constant
-      (modifiers)? @constant.modifiers ; Modifiers for the whole declaration
+      (modifiers)? @constant.modifiers
       name: (identifier) @constant.name ; Hierarchical and simple name
-      arguments: (_)? @constant.arguments ; Optional arguments
+      arguments: (_)? @constant.arguments
     ) @constant.declaration ; Capture the constant
     ; No explicit visibility check needed for enum constants, they are implicitly public static final
   )
-  (#not-match? @constant.enum.modifiers "(private|protected)") ; Check enum visibility
+  (#not-match? @constant.enum.modifiers "(private|protected)")
 )
 
 ;; Annotation Type Constants
@@ -159,7 +159,7 @@
   (modifiers)? @constant.annotation.modifiers ; For parent visibility predicate check
   (annotation_type_body
     (constant_declaration
-      (modifiers)? @constant.modifiers ; Modifiers for the whole declaration
+      (modifiers)? @constant.modifiers
       type: (_) @constant.type
       (variable_declarator
         name: (identifier) @constant.name
@@ -168,7 +168,7 @@
       ) @declarator
     ) @constant.declaration
   )
-  (#not-match? @constant.annotation.modifiers "(private|protected)") ; Check annotation visibility
+  (#not-match? @constant.annotation.modifiers "(private|protected)")
 )
 
 ;; Annotation Type Elements
@@ -176,11 +176,11 @@
   (modifiers)? @annotation_type_element.annotation.modifiers ; For parent visibility predicate check
   (annotation_type_body
     (annotation_type_element_declaration
-      (modifiers)? @annotation_type_element.modifiers ; Modifiers (usually public abstract)
-      type: (_) @annotation_type_element.type ; Type
+      (modifiers)? @annotation_type_element.modifiers
+      type: (_) @annotation_type_element.type
       name: (identifier) @annotation_type_element.name
       ; No explicit visibility check needed, implicitly public abstract
     ) @annotation_type_element.declaration ; Capture the element
   )
-  (#not-match? @annotation_type_element.annotation.modifiers "(private|protected)") ; Check annotation visibility
+  (#not-match? @annotation_type_element.annotation.modifiers "(private|protected)")
 )
