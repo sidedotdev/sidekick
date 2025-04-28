@@ -23,6 +23,7 @@ type PlannedDevOptions struct {
 	ReproduceIssue        bool        `json:"reproduceIssue"`
 	DetermineRequirements bool        `json:"determineRequirements"`
 	EnvType               env.EnvType `json:"envType,omitempty" default:"local"`
+	StartBranch           *string     `json:"startBranch,omitempty"` // Optional branch for git worktree env
 }
 
 var SideAppEnv = os.Getenv("SIDE_APP_ENV")
