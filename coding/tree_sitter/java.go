@@ -10,7 +10,7 @@ func writeJavaSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.Q
 	content := c.Node.Content(*sourceCode)
 	// note: only top-level names here (eg we must skip enum.method.name for instance)
 	switch name {
-	case "class.name", "interface.name", "method.name", "annotation.name", "enum.name":
+	case "class.name", "interface.name", "method.name", "field.name", "annotation.name", "enum.name", "constant.name", "annotation_type_element.name":
 		{
 			out.WriteString(content)
 		}
@@ -75,40 +75,33 @@ func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitte
 				}
 			}
 		}
-	case "annotation.name", "interface.name", "class.name", "class.constructor.name", "class.method.name", "enum.name", "enum.method.name", "enum.field.name":
+	case "annotation.name", "interface.name", "class.name", "constructor.name", "method.name", "enum.name", "field.name", "constant.name":
 		{
 			out.WriteString(content)
 		}
-	case "class.type_parameters", "interface.type_parameters", "class.method.type_parameters":
+	case "class.type_parameters", "interface.type_parameters", "method.type_parameters":
 		{
 			out.WriteString(content)
-			if name == "class.method.type_parameters" {
+			if name == "method.type_parameters" {
 				out.WriteString(" ")
 			}
 		}
-	case "interface.body", "class.body", "annotation.body", "enum.body":
-		{
-			out.WriteString("\n")
-		}
-	case "interface.method.declaration", "interface.constant.declaration", "interface.field.declaration",
-		"class.field.declaration", "enum.field.declaration",
-		"annotation.element.declaration",
-		"enum.constant.declaration":
-		{
-			writeJavaIndentLevel(c.Node, out)
-			out.WriteString(content)
-			out.WriteString("\n")
-		}
-	case "class.constructor.modifiers", "class.method.modifiers", "class.method.type", "enum.method.modifiers", "enum.method.type":
+	case "constructor.modifiers", "method.modifiers", "field.modifiers", "constant.modifiers",
+		"method.type", "field.type", "constant.type":
 		{
 			out.WriteString(content)
 			out.WriteString(" ")
 		}
-	case "class.constructor.declaration", "class.method.declaration", "enum.method.declaration":
+	case "constructor.declaration", "method.declaration", "constant.declaration", "field.declaration":
 		{
 			writeJavaIndentLevel(c.Node, out)
 		}
-	case "class.method.parameters", "class.constructor.parameters", "enum.method.parameters":
+	case "annotation_type_element.declaration":
+		{
+			writeJavaIndentLevel(c.Node, out)
+			out.WriteString(content)
+		}
+	case "method.parameters", "constructor.parameters":
 		{
 			out.WriteString(content)
 			out.WriteString("\n")
