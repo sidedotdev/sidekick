@@ -52,7 +52,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 
 	ctx = utils.DefaultRetryCtx(ctx)
 
-	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType))
+	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), input.PlannedDevOptions.StartBranch)
 	if err != nil {
 		_ = signalWorkflowClosure(ctx, "failed")
 		return DevPlanExecution{}, fmt.Errorf("failed to setup dev context: %v", err)

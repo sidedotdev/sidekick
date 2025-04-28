@@ -32,7 +32,7 @@ func (dCtx DevContext) WithCancelOnPause() DevContext {
 	return dCtx
 }
 
-func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, envType string) (DevContext, error) {
+func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, envType string, startBranch *string) (DevContext, error) {
 	initialExecCtx := flow_action.ExecContext{
 		Context:     ctx,
 		WorkspaceId: workspaceId,
@@ -43,12 +43,12 @@ func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, e
 	return flow_action.TrackSubflowFailureOnly(initialExecCtx, "flow_init", "Initialize", func(_ domain.Subflow) (DevContext, error) {
 		actionCtx := initialExecCtx.NewActionContext("Setup Dev Context")
 		return flow_action.TrackFailureOnly(actionCtx, func(_ domain.FlowAction) (DevContext, error) {
-			return setupDevContextAction(ctx, workspaceId, repoDir, envType)
+			return setupDevContextAction(ctx, workspaceId, repoDir, envType, startBranch)
 		})
 	})
 }
 
-func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir string, envType string) (DevContext, error) {
+func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir string, envType string, startBranch *string) (DevContext, error) {
 	ctx = utils.NoRetryCtx(ctx)
 
 	var devEnv env.Env
@@ -72,7 +72,8 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			WorkspaceId: workspaceId,
 		}
 		err = workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeActivity, env.LocalEnvParams{
-			RepoDir: repoDir,
+			RepoDir:     repoDir,
+			StartBranch: startBranch,
 		}, worktree).Get(ctx, &envContainer)
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
