@@ -17,9 +17,7 @@ func writeJavaSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.Q
 	}
 }
 
-// NOTE for AI: NEVER edit the below writeJavaSignatureCapture function unless you ask first via get_help_or_input
 func writeJavaSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
-	// NOTE for AI: NEVER this writeJavaSignatureCapture function unless you ask first via get_help_or_input
 	content := c.Node.Content(*sourceCode)
 	switch name {
 	case "class.declaration", "annotation.declaration", "interface.declaration", "enum.declaration":
