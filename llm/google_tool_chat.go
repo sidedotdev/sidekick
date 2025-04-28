@@ -10,13 +10,19 @@ import (
 	"time"
 
 	"github.com/invopop/jsonschema"
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/activity"
 	"google.golang.org/genai"
 )
 
 const (
 	GoogleApiKeySecretName = "GOOGLE_API_KEY"
-	GoogleDefaultModel     = "gemini-2.5-pro-exp-03-25"
+	// FIXME /gen/req/plan we need exp for the free-tier, but preview for the
+	// paid tier! we should ideally detect which and support both automagically,
+	// and if that's not possible, guide the user in how to adjust their
+	// settings after manually enabling billing.
+	//GoogleDefaultModel     = "gemini-2.5-pro-exp-03-25"
+	GoogleDefaultModel     = "gemini-2.5-pro-preview-03-25"
 	thinkingStartTag       = "<thinking>"
 	thinkingEndTag         = "</thinking>"
 )
@@ -52,9 +58,12 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		}
 	}()
 
-	apiKey, err := options.Secrets.GetSecret(GoogleApiKeySecretName)
+
+	providerName := options.Params.ModelConfig.Provider
+	providerNameNormalized := options.Params.ModelConfig.NormalizedProviderName()
+	apiKey, err := options.Secrets.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get Google API key: %w", err)
+		return nil, fmt.Errorf("failed to get %s API key: %w", providerName , err)
 	}
 
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
@@ -62,7 +71,7 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		Backend: genai.BackendGeminiAPI,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Google client: %w", err)
+		return nil, fmt.Errorf("failed to create %s client: %w", providerName , err)
 	}
 
 	model := GoogleDefaultModel
@@ -93,7 +102,7 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 
 	for result, err := range stream {
 		if err != nil {
-			return nil, fmt.Errorf("failed to iterate on google tool chat stream: %w", err)
+			return nil, fmt.Errorf("failed to iterate on %s tool chat stream: %w", providerName , err)
 		}
 		delta := googleToChatMessageDelta(result)
 		if delta != nil {
@@ -104,13 +113,16 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 
 	message := stitchDeltasToMessage(deltas, true)
 	if message.Role == "" {
+		if len(deltas) == 0 {
+			return nil, fmt.Errorf("received no streamed events from %s backend", providerName)
+		}
 		return nil, errors.New("chat message role not found")
 	}
 
 	return &ChatMessageResponse{
 		ChatMessage: message,
 		Model:       model,
-		Provider:    "google",
+		Provider:    providerName,
 	}, nil
 }
 
@@ -251,19 +263,20 @@ func googleFromTools(tools []*Tool) []*genai.Tool {
 		return nil
 	}
 
-	geminiTools := make([]*genai.Tool, len(tools))
-	for i, tool := range tools {
-		geminiTools[i] = &genai.Tool{
-			FunctionDeclarations: []*genai.FunctionDeclaration{
-				{
+	var genaiTools []*genai.Tool
+	if len(tools) > 0 {
+		genaiTool := &genai.Tool{
+			FunctionDeclarations: utils.Map(tools, func(tool *Tool) *genai.FunctionDeclaration {
+				return &genai.FunctionDeclaration{
 					Name:        tool.Name,
 					Description: tool.Description,
 					Parameters:  googleFromSchema(tool.Parameters),
-				},
-			},
+				}
+			}),
 		}
+		genaiTools = append(genaiTools, genaiTool)
 	}
-	return geminiTools
+	return genaiTools
 }
 
 func googleFromSchema(schema *jsonschema.Schema) *genai.Schema {
