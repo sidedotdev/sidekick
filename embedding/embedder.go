@@ -10,6 +10,7 @@ import (
 const (
 	TaskTypeRetrievalDocument  = "RETRIEVAL_DOCUMENT"
 	TaskTypeRetrievalQuery     = "RETRIEVAL_QUERY"
+	TaskTypeCodeRetrievalQuery = "CODE_RETRIEVAL_QUERY"
 	TaskTypeSemanticSimilarity = "SEMANTIC_SIMILARITY"
 	TaskTypeClassification     = "CLASSIFICATION"
 	TaskTypeClustering         = "CLUSTERING"
