@@ -404,12 +404,12 @@ func TestGetFileSignaturesStringJava(t *testing.T) {
 			name: "nested class in class",
 			code: `
 public class OuterClass {
-    public static class StaticNestedClass { // Public static nested
+    public static class StaticNestedClass {
         public void nestedMethod() {}
     }
-    protected class IgnoredNestedClass {} // Protected inner
-    private class AnotherIgnoredClass {} // Private inner
-    public class PublicNestedClass { // Public inner
+    protected class IgnoredNestedClass {}
+    private class AnotherIgnoredClass {}
+    public class PublicNestedClass {
         public void method() {}
     }
 }`,
@@ -419,10 +419,10 @@ public class OuterClass {
 			name: "nested interface in class",
 			code: `
 public class OuterClass {
-    public interface NestedInterface { // Public nested interface
-        void method(); // Abstract method
+    public interface NestedInterface {
+        void method();
     }
-    private interface IgnoredInterface {} // Private nested interface
+    private interface IgnoredInterface {}
 }`,
 			expected: "public class OuterClass\n---\n\tpublic interface NestedInterface\n---\n\t\tvoid method()",
 		},
@@ -430,10 +430,10 @@ public class OuterClass {
 			name: "nested annotation in class",
 			code: `
 public class OuterClass {
-    public @interface NestedAnnotation { // Public nested annotation
-        String value() default ""; // Element
+    public @interface NestedAnnotation {
+        String value() default "";
     }
-    private @interface IgnoredAnnotation {} // Private nested annotation
+    private @interface IgnoredAnnotation {}
 }`,
 			expected: "public class OuterClass\n---\n\tpublic @interface NestedAnnotation\n---\n\t\tString value() default \"\";",
 		},
@@ -441,10 +441,10 @@ public class OuterClass {
 			name: "deeply nested types",
 			code: `
 public class OuterClass {
-    public class Level1 { // Public inner class
-        public interface Level2 { // Public nested interface
-            public class Level3 { // Public inner class
-                void method(); // Package-private method (visible within Level3) - Should this be included? Let's assume yes for now based on query logic.
+    public class Level1 {
+        public interface Level2 {
+            public class Level3 {
+                void method();
             }
         }
     }
@@ -455,11 +455,11 @@ public class OuterClass {
 			name: "nested enum in class",
 			code: `
 public class Container {
-    public enum Status { // Public nested enum
-        ACTIVE, INACTIVE; // Constants
-        public boolean isActive() { return this == ACTIVE; } // Public method
+    public enum Status {
+        ACTIVE, INACTIVE;
+        public boolean isActive() { return this == ACTIVE; }
     }
-    private enum Hidden { ONE, TWO } // Private nested enum
+    private enum Hidden { ONE, TWO }
 }`,
 			expected: "public class Container\n---\n\tpublic enum Status\n---\n\t\tACTIVE\n---\n\t\tINACTIVE\n---\n\t\tpublic boolean isActive()",
 		},
@@ -490,7 +490,7 @@ public class Container {
 			// we don't care about the last spearator really, we'd ideall leave
 			// it out but the implementation today has it and we strip it away
 			// later anyways
-			result = strings.TrimSuffix(result, "\n---\n") // Corrected escaping
+			result = strings.TrimSuffix(result, "\n---\n")
 
 			// Check the result
 			if result != tc.expected {
@@ -522,7 +522,6 @@ public class Test {
 			code: `
 public class Person {
     public Person(String name) {
-        // Constructor
     }
 }`,
 			expected: "Person",
@@ -553,7 +552,7 @@ public class TestClass {
 public class Complex {
     private double real;
     private double imaginary;
-	public double x; // Public field
+	public double x;
 
     public Complex add(Complex other) {
         return new Complex();
@@ -563,7 +562,7 @@ public class Complex {
         return new Complex();
     }
 
-    private Complex internal(Complex other) { // Private method
+    private Complex internal(Complex other) {
         return new Complex();
     }
 }`,
@@ -574,7 +573,7 @@ public class Complex {
 			code: `
 public interface Drawable {
     void draw();
-    void resize(); // Implicitly public abstract
+    void resize();
 }`,
 			expected: "Drawable, draw, resize",
 		},
@@ -583,7 +582,7 @@ public interface Drawable {
 			code: `
 public @interface TestAnnotation {
     String value() default "";
-    int count() default 0; // Implicitly public abstract
+    int count() default 0;
 }`,
 			expected: "TestAnnotation, value, count",
 		},
@@ -593,7 +592,7 @@ public @interface TestAnnotation {
 public class Outer {
     private int x;
 
-    public class Inner { // Non-static inner class is public
+    public class Inner {
         public void innerMethod() {
             System.out.println("Inner method");
         }
@@ -608,16 +607,16 @@ public class Outer {
 		{
 			name: "multiple classes in single file",
 			code: `
-class First { // Package-private
+class First {
     public void firstMethod() {}
 }
 
-class Second { // Package-private
+class Second {
     public void secondMethod() {}
 }
 
-class Third { // Package-private
-    private void thirdMethod() {} // Private method
+class Third {
+    private void thirdMethod() {}
 }`,
 			expected: "First, firstMethod, Second, secondMethod, Third",
 		},
@@ -630,7 +629,7 @@ public class Animal {
 
 public class Dog extends Animal {
     public void bark() {}
-    private void sleep() {} // Private method
+    private void sleep() {}
 }`,
 			expected: "Animal, makeSound, Dog, bark",
 		},
@@ -638,7 +637,7 @@ public class Dog extends Animal {
 			name: "basic enum",
 			code: `
 public enum Direction {
-    NORTH, SOUTH, EAST, WEST // Implicitly public static final
+    NORTH, SOUTH, EAST, WEST
 }`,
 			expected: "Direction, NORTH, SOUTH, EAST, WEST",
 		},
@@ -646,14 +645,13 @@ public enum Direction {
 			name: "enum with methods",
 			code: `
 public enum Operation {
-    PLUS, MINUS, TIMES, DIVIDE; // Constants
+    PLUS, MINUS, TIMES, DIVIDE;
 
-    public double apply(double x, double y) { // Public method
+    public double apply(double x, double y) {
         return 0.0;
     }
 
-    private void helper() { // Private method
-        // Helper method
+    private void helper() {
     }
 }`,
 			expected: "Operation, PLUS, MINUS, TIMES, DIVIDE, apply",
@@ -662,16 +660,15 @@ public enum Operation {
 			name: "nested enum",
 			code: `
 public class Container {
-    public enum Status { // Public nested enum
-        ACTIVE, INACTIVE, PENDING; // Constants
+    public enum Status {
+        ACTIVE, INACTIVE, PENDING;
 
-        public boolean isTerminal() { // Public method in enum
+        public boolean isTerminal() {
             return false;
         }
     }
 
-    public void process() { // Public method in outer class
-        // Process method
+    public void process() {
     }
 }`,
 			expected: "Container, Status, ACTIVE, INACTIVE, PENDING, isTerminal, process",
@@ -679,15 +676,15 @@ public class Container {
 		{
 			name: "multiple enums",
 			code: `
-enum Color { // Package-private enum
-    RED, GREEN, BLUE; // Constants
-    public String getHex() { return ""; } // Public method
+enum Color {
+    RED, GREEN, BLUE;
+    public String getHex() { return ""; }
 }
 
-enum Size { // Package-private enum
-    SMALL, MEDIUM, LARGE; // Constants
-    public int getValue() { return 0; } // Public method
-    private void internal() {} // Private method
+enum Size {
+    SMALL, MEDIUM, LARGE;
+    public int getValue() { return 0; }
+    private void internal() {}
 }`,
 			expected: "Color, RED, GREEN, BLUE, getHex, Size, SMALL, MEDIUM, LARGE, getValue",
 		},
@@ -1011,8 +1008,8 @@ public enum DocEnum {
 						code: `
 			public @interface TestAnnotation {
 			    String value() default "";
-			    String value() default ""; // Implicitly public abstract
-			    int count() default 0; // Implicitly public abstract
+			    String value() default "";
+			    int count() default 0;
 			}`,
 						// Symbol should include annotation name and its elements
 						expected: "TestAnnotation, value, count",
