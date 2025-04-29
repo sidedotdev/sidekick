@@ -25,6 +25,7 @@ type BasicDevWorkflowInput struct {
 type BasicDevOptions struct {
 	DetermineRequirements bool        `json:"determineRequirements"`
 	EnvType               env.EnvType `json:"envType,omitempty" default:"local"`
+	StartBranch           *string     `json:"startBranch,omitempty"`
 }
 
 func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result string, err error) {
@@ -52,7 +53,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	requirements := input.Requirements
 	ctx = utils.DefaultRetryCtx(ctx)
 
-	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType))
+	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), input.BasicDevOptions.StartBranch)
 	if err != nil {
 		_ = signalWorkflowClosure(ctx, "failed")
 		return "", err
