@@ -50,19 +50,6 @@
   (#eq? @name "{{SymbolName}}")
 ) @definition
 
-; Constructor declarations
-(
-  [
-    (block_comment)
-    (line_comment)
-  ]* @doc
-  .
-  (constructor_declaration
-    name: (identifier) @name
-  )
-  (#eq? @name "{{SymbolName}}")
-) @definition
-
 ; Field declarations
 (
   [
