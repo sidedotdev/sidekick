@@ -5,6 +5,8 @@ import { store } from './lib/store'
 import type { Ref } from 'vue'
 import type { Workspace } from './lib/models'
 
+// look up if system is dark mode
+const isDarkMode = ref(window.matchMedia('(prefers-color-scheme: dark)').matches)
 const workspaces: Ref<Workspace[]> = ref([])
 
 const fetchWorkspaces = async () => {
@@ -22,6 +24,10 @@ onMounted(async () => {
       metaThemeColor = document.createElement('meta')
     }
     metaThemeColor.setAttribute('content', '#4CAF50')
+  }
+
+  if (isDarkMode.value) {
+    document.documentElement.classList.toggle('dark-mode');
   }
 
   const storedWorkspaceId = localStorage.getItem('selectedWorkspaceId')

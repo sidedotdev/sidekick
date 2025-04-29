@@ -36,7 +36,12 @@ func DefineWorkspaceApiRoutes(r *gin.Engine, ctrl *Controller) *gin.RouterGroup 
 	workspaceApiRoutes.GET("", ctrl.GetWorkspacesHandler)
 	workspaceApiRoutes.GET(":workspaceId", ctrl.GetWorkspaceByIdHandler)
 	workspaceApiRoutes.PUT(":workspaceId", ctrl.UpdateWorkspaceHandler)
-	return workspaceApiRoutes.Group(":workspaceId")
+
+	// Create a group with workspaceId parameter for nested routes
+	workspaceGroup := workspaceApiRoutes.Group(":workspaceId")
+	workspaceGroup.GET("/subflows/:id", ctrl.GetSubflowHandler)
+
+	return workspaceGroup
 }
 
 func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {

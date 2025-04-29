@@ -86,6 +86,7 @@ func (s *Streamer) StreamFlowEvents(ctx context.Context, workspaceId, flowId str
 				eventParentIdSet[subscription.ParentId] = true
 			}
 		}
+		// ensure all consumers are stopped before closing channels
 		wg.Wait()
 	}()
 
@@ -113,10 +114,12 @@ func (s *Streamer) consumeFlowEvents(ctx context.Context, consumer jetstream.Con
 		errCh <- fmt.Errorf("failed to consume messages: %w", err)
 		return
 	}
-	defer consContext.Stop()
 
 	select {
 	case <-consContext.Closed():
 	case <-ctx.Done():
+		// ensure the consumer is closed before calling wg.Done()
+		consContext.Stop()
+		<-consContext.Closed()
 	}
 }

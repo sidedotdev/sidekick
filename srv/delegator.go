@@ -181,6 +181,11 @@ func (d Delegator) GetSubflows(ctx context.Context, workspaceId string, flowId s
 	return d.storage.GetSubflows(ctx, workspaceId, flowId)
 }
 
+/* implements SubflowStorage interface */
+func (d Delegator) GetSubflow(ctx context.Context, workspaceId string, subflowId string) (domain.Subflow, error) {
+	return d.storage.GetSubflow(ctx, workspaceId, subflowId)
+}
+
 /* implements FlowStorage interface */
 func (d Delegator) PersistFlowAction(ctx context.Context, flowAction domain.FlowAction) error {
 	err := d.storage.PersistFlowAction(ctx, flowAction)

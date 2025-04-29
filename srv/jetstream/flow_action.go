@@ -93,11 +93,12 @@ func (s *Streamer) StreamFlowActionChanges(ctx context.Context, workspaceId, flo
 			errChan <- fmt.Errorf("failed to create consume context: %w", err)
 			return
 		}
-		defer consContext.Stop()
 
 		select {
 		case <-consContext.Closed():
 		case <-ctx.Done():
+			consContext.Stop()
+			<-consContext.Closed()
 		}
 	}()
 

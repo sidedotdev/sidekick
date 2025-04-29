@@ -78,7 +78,6 @@ export interface Flow {
   type: string
   parentId: string
   status: string
-  name?: string
   description?: string
   worktrees?: Worktree[]
 }
@@ -105,6 +104,7 @@ export interface FlowAction {
   actionResult: string
   isHumanAction: boolean
 }
+
 export interface SubflowTree {
   name: string;
   description?: string | null;

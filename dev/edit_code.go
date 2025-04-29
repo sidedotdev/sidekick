@@ -18,7 +18,7 @@ var ErrMaxAttemptsReached = fmt.Errorf("reached max attempts")
 
 // edits code in the envContainer based on code context + requirements
 func EditCode(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) error {
-	return RunSubflowWithoutResult(dCtx, "Edit Code", func(_ domain.Subflow) error {
+	return RunSubflowWithoutResult(dCtx, "edit_code", "Edit Code", func(_ domain.Subflow) error {
 		return editCodeSubflow(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo)
 	})
 }

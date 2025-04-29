@@ -20,8 +20,8 @@ func (s *Storage) PersistSubflow(ctx context.Context, subflow domain.Subflow) er
 
 	query := `
 		INSERT OR REPLACE INTO subflows (
-			id, workspace_id, name, description, status, parent_subflow_id, flow_id, result
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			id, workspace_id, type, name, description, status, parent_subflow_id, flow_id, result
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	result, err := json.Marshal(subflow.Result)
@@ -32,6 +32,7 @@ func (s *Storage) PersistSubflow(ctx context.Context, subflow domain.Subflow) er
 	_, err = s.db.ExecContext(ctx, query,
 		subflow.Id,
 		subflow.WorkspaceId,
+		subflow.Type,
 		subflow.Name,
 		subflow.Description,
 		subflow.Status,
@@ -64,7 +65,7 @@ func (s *Storage) GetSubflows(ctx context.Context, workspaceId, flowId string) (
 	}
 
 	query := `
-		SELECT id, workspace_id, name, description, status, parent_subflow_id, flow_id, result
+		SELECT id, workspace_id, type, name, description, status, parent_subflow_id, flow_id, result
 		FROM subflows
 		WHERE workspace_id = ? AND flow_id = ?
 	`
@@ -87,6 +88,7 @@ func (s *Storage) GetSubflows(ctx context.Context, workspaceId, flowId string) (
 		err := rows.Scan(
 			&subflow.Id,
 			&subflow.WorkspaceId,
+			&subflow.Type,
 			&subflow.Name,
 			&subflow.Description,
 			&subflow.Status,
@@ -130,4 +132,56 @@ func (s *Storage) GetSubflows(ctx context.Context, workspaceId, flowId string) (
 		Msg("Subflows retrieved successfully")
 
 	return subflows, nil
+}
+
+func (s *Storage) GetSubflow(ctx context.Context, workspaceId, subflowId string) (domain.Subflow, error) {
+	if workspaceId == "" || subflowId == "" {
+		return domain.Subflow{}, errors.New("workspaceId and subflowId cannot be empty")
+	}
+
+	query := `
+		SELECT id, workspace_id, type, name, description, status, parent_subflow_id, flow_id, result
+		FROM subflows
+		WHERE workspace_id = ? AND id = ?
+	`
+
+	var subflow domain.Subflow
+	var result []byte
+
+	err := s.db.QueryRowContext(ctx, query, workspaceId, subflowId).Scan(
+		&subflow.Id,
+		&subflow.WorkspaceId,
+		&subflow.Type,
+		&subflow.Name,
+		&subflow.Description,
+		&subflow.Status,
+		&subflow.ParentSubflowId,
+		&subflow.FlowId,
+		&result,
+	)
+
+	if err != nil {
+		log.Error().Err(err).
+			Str("workspaceId", workspaceId).
+			Str("subflowId", subflowId).
+			Msg("Failed to get subflow")
+		return domain.Subflow{}, fmt.Errorf("failed to get subflow: %w", err)
+	}
+
+	if len(result) > 0 {
+		err = json.Unmarshal(result, &subflow.Result)
+		if err != nil {
+			log.Error().Err(err).
+				Str("subflowId", subflowId).
+				Msg("Failed to unmarshal subflow result")
+			return domain.Subflow{}, fmt.Errorf("failed to unmarshal subflow result: %w", err)
+		}
+	}
+
+	log.Debug().
+		Str("workspaceId", workspaceId).
+		Str("subflowId", subflowId).
+		Msg("Subflow retrieved successfully")
+
+	return subflow, nil
 }
