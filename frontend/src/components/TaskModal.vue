@@ -15,6 +15,34 @@
         <input type="checkbox" v-model="determineRequirements" />
         Determine Requirements
       </label>
+
+      <!-- Branch Selection Dropdown -->
+      <div v-if="envType === 'local_git_worktree'">
+        <label for="startBranch">Start Branch</label>
+        <Dropdown
+          id="startBranch"
+          v-model="selectedBranch"
+          :options="branches"
+          optionLabel="name"
+          optionValue="name"
+          placeholder="Select a branch..."
+          :loading="isLoadingBranches"
+          :filter="true"
+          filterPlaceholder="Search branches"
+          style="width: 100%;"
+        >
+          <template #option="slotProps">
+            <div class="branch-option">
+              <span>{{ slotProps.option.name }}</span>
+              <span v-if="slotProps.option.isCurrent" class="branch-tag current">Current</span>
+              <span v-if="slotProps.option.isDefault" class="branch-tag default">Default</span>
+            </div>
+          </template>
+        </Dropdown>
+         <small v-if="isLoadingBranches">Loading branches...</small>
+         <small v-else-if="!isLoadingBranches && branches.length === 0 && envType === 'local_git_worktree'">No branches found or failed to load.</small>
+      </div>
+
       <div>
         <AutogrowTextarea id="description" v-model="description" placeholder="Task description - the more detail, the better" />
       </div>
@@ -33,13 +61,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import AutogrowTextarea from './AutogrowTextarea.vue'
 import SplitButton from 'primevue/splitbutton'
 import Button from 'primevue/button';
+import Dropdown from 'primevue/dropdown'; // Added
 import SegmentedControl from './SegmentedControl.vue'
 import { store } from '../lib/store'
 import type { Task, TaskStatus } from '../lib/models'
+
+// Interface for branch data from API
+interface BranchInfo {
+  name: string;
+  isCurrent: boolean;
+  isDefault: boolean;
+}
 
 const devMode = import.meta.env.MODE === 'development'
 const props = defineProps<{
@@ -57,9 +93,15 @@ const isEditMode = computed(() => !!props.task?.id)
 const description = ref(props.task?.description || '')
 const status = ref<TaskStatus>(props.task?.status || 'to_do')
 const flowType = ref(props.task?.flowType || localStorage.getItem('lastUsedFlowType') || 'basic_dev')
-const envType = ref(props.task?.flowOptions?.envType || localStorage.getItem('lastUsedEnvType') || 'local')
-const determineRequirements = ref(props.task?.flowOptions?.determineRequirements || true)
+const envType = ref<string>(props.task?.flowOptions?.envType || localStorage.getItem('lastUsedEnvType') || 'local')
+const determineRequirements = ref<boolean>(props.task?.flowOptions?.determineRequirements ?? true)
 const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
+const selectedBranch = ref<string | null>(props.task?.flowOptions?.startBranch || null)
+
+// State for branch fetching
+const branches = ref<BranchInfo[]>([])
+const isLoadingBranches = ref(false)
+
 
 const dropdownOptions = [
   {
@@ -86,12 +128,76 @@ const handleStatusSelect = (value: string) => {
   status.value = value as TaskStatus
 }
 
+// Function to fetch branches
+const fetchBranches = async () => {
+  if (!store.workspaceId && !props.task?.workspaceId) {
+    console.error("Workspace ID is not available to fetch branches.");
+    return;
+  }
+  const workspaceId = props.task?.workspaceId || store.workspaceId;
+  isLoadingBranches.value = true;
+  branches.value = []; // Clear previous branches
+  try {
+    const response = await fetch(`/api/v1/workspaces/${workspaceId}/branches`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const data = await response.json();
+    branches.value = data.branches || [];
+    // Optional: Automatically select current or default if nothing is pre-selected
+    if (!selectedBranch.value && branches.value.length > 0) {
+       const current = branches.value.find(b => b.isCurrent);
+       if (current) {
+           selectedBranch.value = current.name;
+       } else {
+           const defaultBranch = branches.value.find(b => b.isDefault);
+           if (defaultBranch) {
+               selectedBranch.value = defaultBranch.name;
+           }
+       }
+    }
+
+  } catch (error) {
+    console.error("Failed to fetch branches:", error);
+    // Handle error display to user if necessary
+  } finally {
+    isLoadingBranches.value = false;
+  }
+};
+
+// Watch for changes in envType to fetch branches or clear selection
+watch(envType, (newEnvType, oldEnvType) => {
+  if (newEnvType === 'local_git_worktree') {
+    fetchBranches();
+  } else if (oldEnvType === 'local_git_worktree') {
+    selectedBranch.value = null; // Reset selection when switching away
+    branches.value = []; // Clear branches list
+  }
+});
+
+// Fetch branches on mount if the initial envType requires it
+onMounted(() => {
+  if (envType.value === 'local_git_worktree') {
+    fetchBranches();
+  }
+});
+
+
 const submitTask = async () => {
-  const flowOptions = {
+  const flowOptions: Record<string, any> = { // Use Record for dynamic keys
     planningPrompt: planningPrompt.value,
     determineRequirements: determineRequirements.value,
-    envType: envType.value
+    envType: envType.value,
+    // Add startBranch only if envType is local_git_worktree and a branch is selected
+    startBranch: envType.value === 'local_git_worktree' ? (selectedBranch.value || null) : null,
   }
+
+  // Remove null/empty values from flowOptions if needed by backend
+  Object.keys(flowOptions).forEach(key => {
+    if (flowOptions[key] === null || flowOptions[key] === '') {
+      delete flowOptions[key];
+    }
+  });
   
   const taskData = {
     description: description.value,
@@ -137,13 +243,39 @@ const submitTask = async () => {
 }
 
 const safeClose = () => {
-  const hasChanges = isEditMode.value
-    ? description.value !== props.task!.description ||
-      flowType.value !== props.task!.flowType ||
-      envType.value !== props.task!.flowOptions?.envType ||
-      determineRequirements.value !== props.task!.flowOptions?.determineRequirements ||
-      planningPrompt.value !== props.task!.flowOptions?.planningPrompt
-    : description.value !== ''
+  let hasChanges = false;
+  if (isEditMode.value) {
+    const task = props.task!;
+    const options = task.flowOptions;
+    const initialEnvType = options?.envType;
+    const initialStartBranch = options?.startBranch || null;
+    const initialDetermineRequirements = options?.determineRequirements ?? true;
+    const initialPlanningPrompt = options?.planningPrompt || '';
+
+    hasChanges = description.value !== task.description ||
+                 flowType.value !== task.flowType ||
+                 envType.value !== initialEnvType ||
+                 determineRequirements.value !== initialDetermineRequirements ||
+                  planningPrompt.value !== initialPlanningPrompt ||
+                  // Check branch change only if envType is worktree
+                  (envType.value === 'local_git_worktree' && selectedBranch.value !== initialStartBranch);
+  } else {
+    // Check changes for a new task: Compare current values against initial defaults
+    const initialDescription = '';
+    const initialSelectedBranch = null;
+    const initialFlowType = localStorage.getItem('lastUsedFlowType') || 'basic_dev';
+    const initialEnvType = localStorage.getItem('lastUsedEnvType') || 'local';
+    const initialDetermineRequirements = true; // Default for new task
+    const initialPlanningPrompt = '';
+
+    hasChanges = description.value !== initialDescription ||
+                 selectedBranch.value !== initialSelectedBranch ||
+                 flowType.value !== initialFlowType ||
+                 envType.value !== initialEnvType ||
+                 determineRequirements.value !== initialDetermineRequirements ||
+                 planningPrompt.value !== initialPlanningPrompt;
+  }
+
 
   if (hasChanges) {
     if (!window.confirm('Are you sure you want to close this modal? Your changes will be lost.')) {
@@ -223,4 +355,36 @@ label {
   font-size: 16px;
   margin: 10px 0;
 }
+
+/* Styles for branch dropdown options */
+.branch-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.branch-tag {
+  font-size: 0.8rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  margin-left: 0.5rem;
+  font-weight: bold;
+}
+
+.branch-tag.current {
+  background-color: var(--p-primary-color); /* Use PrimeVue variable */
+  color: var(--p-primary-contrast-color);
+}
+
+.branch-tag.default {
+  background-color: var(--p-surface-400); /* Use a neutral PrimeVue variable */
+  color: var(--p-text-color);
+}
+
+/* Ensure dropdown width is consistent */
+:deep(.p-dropdown) {
+    width: 100%;
+}
+
 </style>
