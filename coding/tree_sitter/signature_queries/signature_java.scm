@@ -177,6 +177,7 @@
   (annotation_type_body
     (annotation_type_element_declaration
       (modifiers)? @annotation_type_element.modifiers
+        (#not-match? @annotation_type_element.modifiers "(private|protected)")
       type: (_) @annotation_type_element.type
       name: (identifier) @annotation_type_element.name
       ; No explicit visibility check needed, implicitly public abstract
