@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sidekick/domain"
+	"sidekick/utils"
 	"testing"
 
 	"github.com/segmentio/ksuid"
@@ -89,6 +90,83 @@ func TestPersistSubflow(t *testing.T) {
 				isMember, err := db.Client.SIsMember(ctx, subflowSetKey, tt.subflow.Id).Result()
 				assert.NoError(t, err)
 				assert.True(t, isMember)
+			}
+		})
+	}
+}
+
+func TestGetSubflow(t *testing.T) {
+	db := NewTestRedisStorage()
+	ctx := context.Background()
+
+	workspaceId := ksuid.New().String()
+	flowId := ksuid.New().String()
+
+	// Create test subflow
+	subflow := domain.Subflow{
+		WorkspaceId: workspaceId,
+		Id:          "sf_" + ksuid.New().String(),
+		Name:        "Test Subflow",
+		Type:        utils.Ptr("step"),
+		FlowId:      flowId,
+		Status:      domain.SubflowStatusComplete,
+		Result:      "success",
+	}
+
+	// Persist test subflow
+	err := db.PersistSubflow(ctx, subflow)
+	assert.NoError(t, err)
+
+	tests := []struct {
+		name          string
+		workspaceId   string
+		subflowId     string
+		expectedError bool
+		errorContains string
+	}{
+		{
+			name:          "Successfully retrieving subflow",
+			workspaceId:   workspaceId,
+			subflowId:     subflow.Id,
+			expectedError: false,
+		},
+		{
+			name:          "Empty workspaceId",
+			workspaceId:   "",
+			subflowId:     subflow.Id,
+			expectedError: true,
+			errorContains: "workspaceId and subflowId cannot be empty",
+		},
+		{
+			name:          "Empty subflowId",
+			workspaceId:   workspaceId,
+			subflowId:     "",
+			expectedError: true,
+			errorContains: "workspaceId and subflowId cannot be empty",
+		},
+		{
+			name:          "Non-existent subflow",
+			workspaceId:   workspaceId,
+			subflowId:     "sf_nonexistent",
+			expectedError: true,
+			errorContains: "subflow not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			retrieved, err := db.GetSubflow(ctx, tt.workspaceId, tt.subflowId)
+
+			if tt.expectedError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorContains)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, subflow.Id, retrieved.Id)
+				assert.Equal(t, subflow.Name, retrieved.Name)
+				assert.Equal(t, subflow.Type, retrieved.Type)
+				assert.Equal(t, subflow.Status, retrieved.Status)
+				assert.Equal(t, subflow.Result, retrieved.Result)
 			}
 		})
 	}

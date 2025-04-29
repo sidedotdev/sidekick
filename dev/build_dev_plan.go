@@ -83,7 +83,7 @@ func (step DevStep) String() string {
 }
 
 func BuildDevPlan(dCtx DevContext, requirements, planningPrompt string, reproduceIssue bool) (*DevPlan, error) {
-	return RunSubflow(dCtx, "Build Dev Plan", func(_ domain.Subflow) (*DevPlan, error) {
+	return RunSubflow(dCtx, "dev_plan", "Build Dev Plan", func(_ domain.Subflow) (*DevPlan, error) {
 		return buildDevPlanSubflow(dCtx, requirements, planningPrompt, reproduceIssue)
 	})
 }

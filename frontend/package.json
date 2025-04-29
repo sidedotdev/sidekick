@@ -16,7 +16,9 @@
   },
   "dependencies": {
     "@git-diff-view/vue": "^0.0.18",
+    "@primeuix/themes": "^1.0.3",
     "@vueuse/core": "^11.1.0",
+    "primevue": "4.1.0",
     "sse-ts": "^1.0.2",
     "vue": "^3.3.4",
     "vue-json-pretty": "^2.4.0",

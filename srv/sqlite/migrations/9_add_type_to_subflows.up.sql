@@ -1,0 +1,1 @@
+ALTER TABLE subflows ADD COLUMN type TEXT;

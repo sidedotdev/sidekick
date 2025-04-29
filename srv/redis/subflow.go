@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"sidekick/domain"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // PersistSubflow stores a Subflow model in Redis and updates the flow's subflow set
@@ -32,6 +34,29 @@ func (s Storage) PersistSubflow(ctx context.Context, subflow domain.Subflow) err
 	}
 
 	return nil
+}
+
+// GetSubflow retrieves a single Subflow model by its ID
+func (s Storage) GetSubflow(ctx context.Context, workspaceId, subflowId string) (domain.Subflow, error) {
+	if workspaceId == "" || subflowId == "" {
+		return domain.Subflow{}, errors.New("workspaceId and subflowId cannot be empty")
+	}
+
+	subflowKey := fmt.Sprintf("%s:%s", workspaceId, subflowId)
+	subflowJSON, err := s.Client.Get(ctx, subflowKey).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return domain.Subflow{}, fmt.Errorf("subflow not found: %s", subflowId)
+		}
+		return domain.Subflow{}, fmt.Errorf("failed to retrieve subflow: %w", err)
+	}
+
+	var subflow domain.Subflow
+	if err := json.Unmarshal([]byte(subflowJSON), &subflow); err != nil {
+		return domain.Subflow{}, fmt.Errorf("failed to unmarshal subflow: %w", err)
+	}
+
+	return subflow, nil
 }
 
 // GetSubflows retrieves all Subflow models for a given flow ID

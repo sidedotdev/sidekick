@@ -45,7 +45,7 @@ const actionResult = computed(() => {
 }
 pre {
   overflow-x: scroll;
-  white-space: pre;
+  white-space: pre-wrap;
 }
 
 h3 {

@@ -1,0 +1,1 @@
+ALTER TABLE subflows DROP COLUMN type;

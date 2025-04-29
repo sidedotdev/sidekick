@@ -4,10 +4,6 @@
     <h2>{{ isEditMode ? 'Edit Task' : 'New Task' }}</h2>
     <form @submit.prevent="submitTask">
       <div>
-        <label>Status</label>
-        <SegmentedControl v-model="status" :options="statusOptions" />
-      </div>
-      <div>
       <label>Flow</label>
       <SegmentedControl v-model="flowType" :options="flowTypeOptions" />
       </div>
@@ -24,8 +20,13 @@
       </div>
       <!--AutogrowTextarea v-if="task.flowType === 'planned_dev'" v-model="planningPrompt" placeholder="Planning prompt" /-->
       <div class="button-container">
-        <button class="cancel" type="button" @click="close">Cancel</button>
-        <button type="submit">{{ isEditMode ? 'Update Task' : 'Create Task' }}</button>
+        <Button class="cancel" label="Cancel" severity="secondary" @click="close"/>
+        <SplitButton 
+          :label="status === 'to_do'  ? 'Start Task' : 'Save Draft'"
+          :model="dropdownOptions"
+          class="submit-dropdown p-button-primary"
+          @click="submitTask"
+        />
       </div>
     </form>
   </div>
@@ -34,6 +35,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import AutogrowTextarea from './AutogrowTextarea.vue'
+import SplitButton from 'primevue/splitbutton'
+import Button from 'primevue/button';
 import SegmentedControl from './SegmentedControl.vue'
 import { store } from '../lib/store'
 import type { Task, TaskStatus } from '../lib/models'
@@ -58,9 +61,15 @@ const envType = ref(props.task?.flowOptions?.envType || localStorage.getItem('la
 const determineRequirements = ref(props.task?.flowOptions?.determineRequirements || true)
 const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
 
-const statusOptions = [
-  { label: 'To Do', value: 'to_do' },
-  { label: 'Drafting', value: 'drafting' },
+const dropdownOptions = [
+  {
+    label: 'Start Task',
+    command: () => handleStatusSelect('to_do')
+  },
+  { 
+    label: 'Save Draft',
+    command: () => handleStatusSelect('drafting')
+  },
 ]
 
 const flowTypeOptions = [
@@ -72,6 +81,10 @@ const envTypeOptions = [
   { label: 'Repo Directory', value: 'local' },
   { label: 'Git Worktree', value: 'local_git_worktree' }
 ]
+
+const handleStatusSelect = (value: string) => {
+  status.value = value as TaskStatus
+}
 
 const submitTask = async () => {
   const flowOptions = {
@@ -152,7 +165,7 @@ const close = () => {
   bottom: 0;
   left: 0;
   background: rgba(0, 0, 0, 0.7);
-  z-index: 100000;
+  z-index: 1000;
 }
 
 .modal {
@@ -163,7 +176,7 @@ const close = () => {
   /*align-items: center;*/
   background-color: var(--color-modal-background);
   color: var(--color-modal-text);
-  z-index: 100000 !important;
+  z-index: 1000 !important;
   padding: 30px;
   width: 50rem;
   position: fixed;
@@ -193,24 +206,6 @@ form > div {
   justify-content: flex-end;
   gap: 1rem;
   margin-top: 1rem;
-}
-
-button {
-  padding: 0.5rem 1rem;
-  border: none;
-  border-radius: 0.25rem;
-  cursor: pointer;
-  transition: background-color 0.3s;
-}
-
-button[type="submit"] {
-  background-color: var(--color-primary);
-  color: var(--color-text-contrast);
-}
-
-button[type="button"] {
-  background-color: var(--color-background-hover);
-  color: var(--color-text);
 }
 
 label {

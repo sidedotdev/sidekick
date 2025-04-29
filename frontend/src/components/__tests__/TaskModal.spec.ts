@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, VueWrapper } from '@vue/test-utils'
 import TaskModal from '../TaskModal.vue'
 import type { Task } from '../../lib/models'
+import { nextTick } from 'process'
+import { wrap } from 'module'
 
 vi.mock('../../lib/store', () => ({
   store: {
@@ -45,9 +47,9 @@ describe('TaskModal', () => {
     expect(wrapper.find('h2').text()).toBe('Edit Task')
   })
 
-  it('renders segmented controls for status and flow type', () => {
+  it('renders segmented control for flow type', () => {
     mountComponent()
-    expect(wrapper.findAllComponents({ name: 'SegmentedControl' })).toHaveLength(2)
+    expect(wrapper.findAllComponents({ name: 'SegmentedControl' })).toHaveLength(1)
   })
 
   it('submits form with correct API call for create', async () => {
@@ -178,7 +180,7 @@ describe('TaskModal', () => {
     import.meta.env.MODE = 'development'
 
     mountComponent()
-    expect(wrapper.findAllComponents({ name: 'SegmentedControl' })).toHaveLength(3)
+    expect(wrapper.findAllComponents({ name: 'SegmentedControl' })).toHaveLength(2)
 
     import.meta.env.MODE = originalEnv
   })
@@ -211,5 +213,34 @@ describe('TaskModal', () => {
     expect(wrapper.emitted('close')).toBeFalsy()
 
     confirmSpy.mockRestore()
+  })
+
+  it('updates status when dropdown option is selected', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    global.fetch = fetchMock
+    
+    mountComponent()
+    const splitButton = wrapper.findComponent({ name: 'SplitButton' })
+    const dropdown = splitButton.find('.p-splitbutton-dropdown')
+    await dropdown.trigger('click')
+
+    const options = document.querySelectorAll('.p-tieredmenu-item-content')
+    let found = false
+    for (const option of options) {
+      if (/draft/i.test(option.textContent || '')) {
+        option.dispatchEvent(new Event('click'))
+        await wrapper.vm.$nextTick()
+        found = true
+        break
+      }
+    }
+    if (!found) {
+      throw new Error('Draft option not found in dropdown')
+    }
+
+    await wrapper.find('form').trigger('submit')
+
+    const requestBody = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(requestBody.status).toBe('drafting')
   })
 })

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"sidekick/domain"
+	"sidekick/utils"
 	"testing"
 
 	"github.com/segmentio/ksuid"
@@ -23,6 +24,7 @@ func TestPersistSubflow(t *testing.T) {
 		Name:        "Test Subflow",
 		Description: "This is a test subflow",
 		Status:      domain.SubflowStatusInProgress,
+		Type:        utils.Ptr("anything"),
 	}
 
 	t.Run("Successfully persist a valid subflow", func(t *testing.T) {
@@ -85,6 +87,7 @@ func TestGetSubflows(t *testing.T) {
 			FlowId:      flowId,
 			Name:        "Subflow 2",
 			Status:      domain.SubflowStatusComplete,
+			Type:        utils.Ptr("step"),
 		},
 	}
 
@@ -118,5 +121,60 @@ func TestGetSubflows(t *testing.T) {
 		retrievedSubflows, err := storage.GetSubflows(ctx, nonExistentWorkspaceId, nonExistentFlowId)
 		assert.NoError(t, err)
 		assert.Len(t, retrievedSubflows, 0)
+	})
+}
+
+func TestGetSubflow(t *testing.T) {
+	storage := NewTestSqliteStorage(t, "subflow_test")
+	ctx := context.Background()
+
+	workspaceId := ksuid.New().String()
+	flowId := ksuid.New().String()
+	subflowId := "sf_" + ksuid.New().String()
+
+	testSubflow := domain.Subflow{
+		WorkspaceId:     workspaceId,
+		Id:              subflowId,
+		FlowId:          flowId,
+		Name:            "Test Subflow",
+		Description:     "A test subflow",
+		Status:          domain.SubflowStatusInProgress,
+		Type:            utils.Ptr("step"),
+		ParentSubflowId: "sf_parent",
+		Result:          `{"key": "value"}`,
+	}
+
+	// Persist test subflow
+	err := storage.PersistSubflow(ctx, testSubflow)
+	require.NoError(t, err)
+
+	t.Run("Successfully retrieve an existing subflow", func(t *testing.T) {
+		retrievedSubflow, err := storage.GetSubflow(ctx, workspaceId, subflowId)
+		assert.NoError(t, err)
+		assert.Equal(t, testSubflow, retrievedSubflow)
+	})
+
+	t.Run("Attempt to retrieve subflow with empty parameters", func(t *testing.T) {
+		_, err := storage.GetSubflow(ctx, "", subflowId)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "workspaceId and subflowId cannot be empty")
+
+		_, err = storage.GetSubflow(ctx, workspaceId, "")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "workspaceId and subflowId cannot be empty")
+	})
+
+	t.Run("Attempt to retrieve non-existent subflow", func(t *testing.T) {
+		nonExistentId := "sf_" + ksuid.New().String()
+		_, err := storage.GetSubflow(ctx, workspaceId, nonExistentId)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to get subflow")
+	})
+
+	t.Run("Attempt to retrieve subflow from wrong workspace", func(t *testing.T) {
+		wrongWorkspaceId := ksuid.New().String()
+		_, err := storage.GetSubflow(ctx, wrongWorkspaceId, subflowId)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to get subflow")
 	})
 }

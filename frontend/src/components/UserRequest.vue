@@ -128,6 +128,7 @@ form {
 
 p {
   white-space: pre-wrap;
+  overflow-x: scroll;
 }
 
 button {
