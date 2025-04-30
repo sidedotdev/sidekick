@@ -2,15 +2,20 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
-	"os/exec"
-	"path/filepath"
+	"os"
+	"path/filepath" // Added for determineManagedWorktreeBranches
+
+	// Added for Git activities
+	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/srv"
-	"strings"
 	"time"
+
+	// Added for determineManagedWorktreeBranches
 
 	"github.com/gin-gonic/gin"
 	"github.com/segmentio/ksuid"
@@ -65,12 +70,14 @@ func (ctrl *Controller) GetWorkspaceBranchesHandler(c *gin.Context) {
 		return
 	}
 
-	workspace, err := ctrl.service.GetWorkspace(c.Request.Context(), workspaceId)
+	ctx := c.Request.Context() // Use context from request
+
+	// 1. Call ctrl.service.GetWorkspace
+	workspace, err := ctrl.service.GetWorkspace(ctx, workspaceId)
 	if err != nil {
-		if errors.Is(err, srv.ErrNotFound) {
+		if errors.Is(err, srv.ErrNotFound) { // Use the requested error check
 			c.JSON(http.StatusNotFound, gin.H{"error": "Workspace not found"})
 		} else {
-			// Log the unexpected error for debugging
 			log.Printf("Error getting workspace %s: %v", workspaceId, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get workspace"})
 		}
@@ -84,116 +91,73 @@ func (ctrl *Controller) GetWorkspaceBranchesHandler(c *gin.Context) {
 	}
 	repoDir := workspace.LocalRepoDir
 
-	// --- Determine managed worktree branches ---
-	managedWorktreeBranches := make(map[string]struct{})
-	sidekickDataHome, err := common.GetSidekickDataHome()
-	if err != nil {
-		log.Printf("Error getting sidekick data home: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to determine sidekick data directory"})
+	// Ensure the repo directory exists before running git commands
+	if _, err := os.Stat(repoDir); os.IsNotExist(err) {
+		log.Printf("Error: workspace repository directory does not exist: %s", repoDir)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Workspace repository directory not found"})
 		return
 	}
-	managedWorktreeBasePath := filepath.Join(sidekickDataHome, "worktrees", workspaceId)
 
-	cmdWorktreeList := exec.Command("git", "worktree", "list", "--porcelain")
-	cmdWorktreeList.Dir = repoDir
-	worktreeOutput, err := cmdWorktreeList.Output()
+	// 2. Call coding/git.ListWorktreesActivity
+	gitWorktrees, err := git.ListWorktreesActivity(ctx, repoDir)
 	if err != nil {
-		// Log the error but continue; failure here just means we might not filter perfectly.
-		log.Printf("Warning: 'git worktree list --porcelain' failed in %s: %v. Proceeding without filtering worktree branches.", repoDir, err)
-	} else {
-		lines := strings.Split(string(worktreeOutput), "\n")
-		var currentWorktreePath string
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "worktree ") {
-				currentWorktreePath = strings.TrimPrefix(line, "worktree ")
-			} else if strings.HasPrefix(line, "branch ") && currentWorktreePath != "" {
-				// Check if the worktree path is within our managed directory
-				isManaged, _ := filepath.Match(managedWorktreeBasePath+string(filepath.Separator)+"*", currentWorktreePath)
-				// Also handle exact match in case the base path itself is listed (less likely)
-				if currentWorktreePath == managedWorktreeBasePath || isManaged {
-					branchRef := strings.TrimPrefix(line, "branch ")
-					// Extract branch name from ref (e.g., refs/heads/my-branch -> my-branch)
-					// Base might not be robust enough if refs aren't standard, but common case.
-					branchName := filepath.Base(branchRef)
-					if branchName != "." && branchName != "/" { // Basic sanity check
-						managedWorktreeBranches[branchName] = struct{}{}
-					}
-				}
-				currentWorktreePath = "" // Reset for the next block
-			} else if line == "" || strings.HasPrefix(line, "detached") || strings.HasPrefix(line, "HEAD") {
-				// Reset path if block ends or worktree is detached/HEAD info encountered before branch
-				if line == "" {
-					currentWorktreePath = ""
-				}
-			}
-		}
+		// Log the error but proceed; failure to list worktrees shouldn't block listing branches.
+		// determineManagedWorktreeBranches will handle an empty map correctly.
+		log.Printf("Warning: failed to list worktrees for workspace %s in dir %s: %v", workspaceId, repoDir, err)
+		gitWorktrees = make(map[string]string) // Ensure map is non-nil
+	}
+
+	// 3. Call determineManagedWorktreeBranches
+	managedWorktreeBranches, err := determineManagedWorktreeBranches(&workspace, gitWorktrees)
+	if err != nil {
+		log.Printf("Error determining managed worktree branches for workspace %s: %v", workspaceId, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to determine managed worktrees"})
+		return
 	}
 	log.Printf("Identified managed worktree branches for workspace %s: %v", workspaceId, managedWorktreeBranches)
 
-	// --- Get current branch ---
-	cmdCurrentBranch := exec.Command("git", "symbolic-ref", "--short", "HEAD")
-	cmdCurrentBranch.Dir = repoDir
-	currentBranchOutput, err := cmdCurrentBranch.Output()
-	currentBranchName := ""
-	isDetached := false
+	// 4. Call coding/git activities
+	currentBranchName, isDetached, err := git.GetCurrentBranch(ctx, repoDir)
 	if err != nil {
-		// Command fails in detached HEAD state, which is fine.
-		log.Printf("Info: Could not get symbolic-ref HEAD in %s (likely detached HEAD): %v", repoDir, err)
-		isDetached = true
-	} else {
-		currentBranchName = strings.TrimSpace(string(currentBranchOutput))
+		// Log the error but proceed. If we can't get the current branch, none will be marked as current.
+		log.Printf("Warning: failed to get current branch for workspace %s in dir %s: %v", workspaceId, repoDir, err)
+		currentBranchName = "" // Ensure it's empty on error
+		isDetached = false     // Assume not detached if error occurred
 	}
 
-	// --- Get default branch (main or master) ---
-	defaultBranchName := ""
-	for _, potentialDefault := range []string{"main", "master"} {
-		cmdVerify := exec.Command("git", "rev-parse", "--verify", potentialDefault)
-		cmdVerify.Dir = repoDir
-		if err := cmdVerify.Run(); err == nil {
-			defaultBranchName = potentialDefault
-			break // Found the default
-		}
-	}
-	if defaultBranchName == "" {
-		log.Printf("Warning: Could not determine default branch (main/master) in %s", repoDir)
+	defaultBranchName, err := git.GetDefaultBranch(ctx, repoDir)
+	if err != nil {
+		// Log the error but proceed. If we can't get the default branch, none will be marked as default.
+		log.Printf("Warning: failed to get default branch for workspace %s in dir %s: %v", workspaceId, repoDir, err)
+		defaultBranchName = "" // Ensure it's empty on error
 	}
 
-	// --- Get all local branches, sorted ---
-	// Format %(refname:short) gives just the branch name.
-	cmdBranchList := exec.Command("git", "branch", "--list", "--sort=-committerdate", "--format=%(refname:short)")
-	cmdBranchList.Dir = repoDir
-	branchListOutput, err := cmdBranchList.Output()
+	localBranchNames, err := git.ListLocalBranches(ctx, repoDir)
 	if err != nil {
-		log.Printf("Error running 'git branch --list' in %s: %v", repoDir, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list branches"})
+		log.Printf("Error listing local branches for workspace %s in dir %s: %v", workspaceId, repoDir, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list git branches"})
 		return
 	}
 
-	allBranches := strings.Split(strings.TrimSpace(string(branchListOutput)), "\n")
-
-	// --- Filter and format branches ---
+	// 5. Filter branches
+	// 6. Format results
 	var filteredBranches []BranchInfo
-	for _, branchName := range allBranches {
+	for _, branchName := range localBranchNames {
 		if branchName == "" {
-			continue // Skip empty lines if any
+			continue // Skip empty lines just in case
 		}
-		// Skip branches associated with managed worktrees
 		if _, isManaged := managedWorktreeBranches[branchName]; isManaged {
 			log.Printf("Filtering out managed worktree branch: %s", branchName)
-			continue
+			continue // Skip branches associated with managed worktrees
 		}
-
-		isCurrent := !isDetached && (branchName == currentBranchName)
-		isDefault := (defaultBranchName != "") && (branchName == defaultBranchName)
-
 		filteredBranches = append(filteredBranches, BranchInfo{
 			Name:      branchName,
-			IsCurrent: isCurrent,
-			IsDefault: isDefault,
+			IsCurrent: !isDetached && branchName == currentBranchName,      // Only mark current if not detached
+			IsDefault: branchName != "" && branchName == defaultBranchName, // Avoid marking empty string as default
 		})
 	}
 
+	// 7. Return JSON response (matching original structure)
 	c.JSON(http.StatusOK, gin.H{"branches": filteredBranches})
 }
 
@@ -415,4 +379,49 @@ func (c *Controller) GetWorkspacesHandler(ctx *gin.Context) {
 	}
 	// Format the workspace data into JSON and return it in the response
 	ctx.JSON(http.StatusOK, gin.H{"workspaces": workspaces})
+}
+
+// determineManagedWorktreeBranches identifies branches associated with managed worktrees.
+// It compares the actual worktree paths (resolved) from Git with the expected paths
+// based on the Sidekick data home directory structure.
+func determineManagedWorktreeBranches(workspace *domain.Workspace, gitWorktrees map[string]string) (map[string]struct{}, error) {
+	managedBranches := make(map[string]struct{})
+
+	sidekickDataHome, err := common.GetSidekickDataHome()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get sidekick data home: %w", err)
+	}
+
+	// Base path where managed worktrees for this workspace *should* reside.
+	expectedWorktreeBaseDir := filepath.Join(sidekickDataHome, "worktrees", workspace.Id)
+
+	for branchName, actualWorktreePath := range gitWorktrees {
+		// Construct the expected path for a managed worktree for this specific branch.
+		expectedPath := filepath.Join(expectedWorktreeBaseDir, branchName)
+
+		// Resolve the expected path similar to how ListWorktreesActivity resolves actual paths.
+		// This ensures consistent comparison, handling potential symlinks in the data directory path.
+		resolvedExpectedPath, err := filepath.Abs(expectedPath)
+		if err != nil {
+			log.Printf("Warning: could not get absolute path for expected worktree dir %s: %v", expectedPath, err)
+			continue // Skip if we can't resolve the expected path
+		}
+		resolvedExpectedPathEval, err := filepath.EvalSymlinks(resolvedExpectedPath)
+		if err != nil {
+			// If EvalSymlinks fails, it might be because the directory doesn't exist (which is expected if the worktree isn't managed).
+			// Use the Abs path in this case.
+			if !os.IsNotExist(err) {
+				log.Printf("Warning: could not evaluate symlinks for expected worktree dir %s: %v", resolvedExpectedPath, err)
+				// Fallback to the absolute path if EvalSymlinks fails for reasons other than NotExist
+			}
+			resolvedExpectedPathEval = resolvedExpectedPath
+		}
+
+		// The actualWorktreePath from ListWorktreesActivity is already absolute and symlink-resolved.
+		if actualWorktreePath == resolvedExpectedPathEval {
+			managedBranches[branchName] = struct{}{}
+		}
+	}
+
+	return managedBranches, nil
 }
