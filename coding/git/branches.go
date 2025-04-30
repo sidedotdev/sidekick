@@ -5,7 +5,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
+	"os/exec" // Added for ListWorktreesActivity
+	"path/filepath"
 	"strings"
 )
 
@@ -168,4 +169,78 @@ func ListLocalBranches(ctx context.Context, repoDir string) (branchNames []strin
 	// This results in an empty slice, which is the correct behavior.
 
 	return branches, nil
+}
+
+// ListWorktreesActivity lists all worktrees associated with the repository.
+// It returns a map where the key is the absolute path to the worktree
+// and the value is the short branch name checked out in that worktree.
+// Worktrees with a detached HEAD are excluded.
+func ListWorktreesActivity(ctx context.Context, repoDir string) (map[string]string, error) {
+	stdout, stderr, exitCode, err := runGitCommand(ctx, repoDir, "worktree", "list", "--porcelain")
+	if err != nil {
+		// runGitCommand already wraps the error with context
+		// Check if the error is specifically "not a git repository" which might be masked by exit code 128
+		if exitCode == 128 && strings.Contains(stderr, "not a git repository") {
+			return nil, fmt.Errorf("directory '%s' is not a git repository: %w", repoDir, err)
+		}
+		return nil, err // Return the wrapped error from runGitCommand
+	}
+
+	worktrees := make(map[string]string)
+	entries := strings.Split(strings.TrimSpace(stdout), "\n\n")
+
+	for _, entry := range entries {
+		lines := strings.Split(entry, "\n")
+		var path, branch string
+		isDetached := false
+
+		for _, line := range lines {
+			if strings.HasPrefix(line, "worktree ") {
+				path = strings.TrimPrefix(line, "worktree ")
+				// Ensure path is absolute and symlinks are resolved for consistent map keys
+				absPath, pathErr := filepath.Abs(path)
+				if pathErr != nil {
+					return nil, fmt.Errorf("failed to get absolute path for worktree '%s': %w", path, pathErr)
+				}
+				resolvedPath, symlinkErr := filepath.EvalSymlinks(absPath)
+				if symlinkErr != nil {
+					// If symlink resolution fails, fallback to the absolute path.
+					// This might happen if the path points to a location that doesn't exist
+					// during resolution, though git worktree list should provide valid paths.
+					// Log this potential issue? For now, just use absPath.
+					// Consider if specific errors should be handled differently (e.g., os.IsNotExist).
+					// Let's proceed with absPath if EvalSymlinks fails.
+					resolvedPath = absPath
+				}
+				path = resolvedPath // Use the resolved path
+			} else if strings.HasPrefix(line, "branch refs/heads/") {
+				branch = strings.TrimPrefix(line, "branch refs/heads/")
+			} else if line == "detached" {
+				isDetached = true
+				// If detached, we don't care about the branch line even if present (unlikely)
+				branch = "" // Ensure branch is empty if detached
+				break       // No need to parse further lines for branch info if detached
+			}
+		}
+
+		// Only add if we found a path and a non-detached branch
+		if path != "" && branch != "" && !isDetached {
+			worktrees[path] = branch
+		} else if path != "" && !isDetached && branch == "" {
+			// This case might occur for the main worktree if it's somehow detached
+			// but the 'detached' line wasn't present, or if parsing failed.
+			// Or, more likely, the main worktree before the first commit.
+			// Let's check if it's the main worktree path.
+			absRepoDir, _ := filepath.Abs(repoDir)
+			if path == absRepoDir {
+				// It's the main worktree, possibly without a branch yet (pre-commit).
+				// Or it could be detached without the 'detached' flag (less common).
+				// We need a branch name for the map value. Let's skip it if no branch is found.
+				// Alternatively, we could try GetCurrentBranch, but let's keep this focused.
+				// For now, skip if no branch ref is explicitly listed.
+			}
+		}
+	}
+
+	return worktrees, nil
 }
