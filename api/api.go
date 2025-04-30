@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sidekick"
 	"strconv"
@@ -20,6 +19,7 @@ import (
 	"sidekick/frontend"
 	"sidekick/srv"
 
+	"github.com/rs/zerolog/log"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/segmentio/ksuid"
@@ -30,7 +30,7 @@ func RunServer() *http.Server {
 	gin.SetMode(gin.ReleaseMode)
 	ctrl, err := NewController()
 	if err != nil {
-		log.Fatalf("Failed to initialize controller: %v\n", err)
+		log.Fatal().Err(err).Msg("Failed to initialize controller")
 	}
 	router := DefineRoutes(ctrl)
 
@@ -42,7 +42,7 @@ func RunServer() *http.Server {
 	// Start server in a goroutine
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start API server: %v\n", err)
+			log.Fatal().Err(err).Msg("Failed to start API server")
 		}
 	}()
 
@@ -110,7 +110,7 @@ func (ctrl *Controller) ArchiveFinishedTasksHandler(c *gin.Context) {
 		err := ctrl.service.PersistTask(c.Request.Context(), task)
 		if err != nil {
 			// Log the error but continue with other tasks
-			log.Printf("Failed to archive task %s: %v", task.Id, err)
+			log.Error().Err(err).Str("taskId", task.Id).Msg("Failed to archive task")
 		} else {
 			archivedCount++
 		}
@@ -157,7 +157,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	// them at the top-level (not possible with StaticFS due to route pattern conflict)
 	files, err := frontend.DistFs.ReadDir("dist")
 	if err != nil {
-		log.Fatal("Failed to read embedded files", err)
+		log.Fatal().Err(err).Msg("Failed to read embedded files")
 	}
 	dist := http.FS(frontend.DistFs)
 	for _, file := range files {
@@ -199,7 +199,7 @@ func NewController() (Controller, error) {
 }
 
 func (ctrl *Controller) ErrorHandler(c *gin.Context, status int, err error) {
-	log.Println("Error:", err)
+	log.Error().Err(err)
 	c.JSON(status, gin.H{"error": err.Error()})
 }
 
@@ -289,7 +289,7 @@ func (ctrl *Controller) DeleteTaskHandler(c *gin.Context) {
 	for _, flow := range childFlows {
 		err = devAgent.TerminateWorkflowIfExists(c.Request.Context(), flow.Id)
 		if err != nil {
-			log.Println("Error terminating workflow:", err)
+			log.Error().Err(err).Str("flowId", flow.Id).Msg("Error terminating workflow")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to terminate workflow"})
 			return
 		}
@@ -551,7 +551,7 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 	if len(taskStatuses) > 0 {
 		tasks, err = ctrl.service.GetTasks(c, workspaceId, taskStatuses)
 		if err != nil {
-			log.Println("Error fetching tasks:", err)
+			log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Error fetching tasks")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -951,18 +951,18 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Context cancelled, ending stream")
+			log.Info().Msg("FlowActionChangesWebsocketHandler context cancelled, ending stream")
 			return
 		case err := <-errChan:
-			log.Printf("Error streaming flow actions: %v", err)
+			log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Error streaming flow actions")
 			return
 		case flowAction, ok := <-flowActionChan:
 			if !ok {
-				log.Println("Flow action channel closed, ending stream")
+				log.Info().Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Flow action channel closed, ending stream")
 				return
 			}
 			if err := conn.WriteJSON(flowAction); err != nil {
-				log.Printf("Error writing flow action to websocket: %v", err)
+				log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Error writing flow action to websocket")
 				return
 			}
 		}
@@ -1003,21 +1003,21 @@ func (ctrl *Controller) TaskChangesWebsocketHandler(c *gin.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Task changes client disconnected")
+			log.Info().Str("workspaceId", workspaceId).Msg("Task changes client disconnected")
 			return
 		case err := <-errChan:
 			if err != nil {
-				log.Printf("Error streaming task changes: %v", err)
+				log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Error streaming task changes")
 				return
 			}
 		case task, ok := <-taskChan:
 			if !ok {
-				log.Println("Task channel closed")
+				log.Info().Str("workspaceId", workspaceId).Msg("Task channel closed")
 				return
 			}
 			flows, err := ctrl.service.GetFlowsForTask(ctx, workspaceId, task.Id)
 			if err != nil {
-				log.Printf("Error getting flows for task: %v", err)
+				log.Error().Err(err).Str("workspaceId", workspaceId).Str("taskId", task.Id).Msg("Error getting flows for task")
 				return
 			}
 			taskResponse := TaskResponse{
@@ -1029,7 +1029,7 @@ func (ctrl *Controller) TaskChangesWebsocketHandler(c *gin.Context) {
 				"lastTaskStreamId": task.StreamId,
 			}
 			if err := conn.WriteJSON(taskData); err != nil {
-				log.Printf("Error writing task to websocket: %v", err)
+				log.Error().Err(err).Str("workspaceId", workspaceId).Str("taskId", task.Id).Msg("Error writing task to websocket")
 				return
 			}
 		}
@@ -1089,7 +1089,12 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 		for {
 			_, r, err := conn.NextReader()
 			if err != nil {
-				log.Printf("Client disconnected or error: %v", err)
+				// Log client disconnection as info, not error, unless it's an unexpected error
+				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+					log.Error().Err(err).Msg("FlowEventsWebsocketHandler client read error")
+				} else {
+					log.Info().Msg("FlowEventsWebsocketHandler client disconnected")
+				}
 				cancel()
 				return
 			}
@@ -1100,7 +1105,7 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 				err = io.ErrUnexpectedEOF
 			}
 			if err != nil {
-				log.Printf("Invalid message format: %v", err)
+				log.Error().Err(err).Msg("Invalid message format received in FlowEventsWebsocketHandler")
 				continue
 			}
 			subscriptionCh <- sub
@@ -1113,7 +1118,7 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Client disconnected, ending stream")
+			log.Printf("Client disconnected, ending stream\n")
 			return
 		case err := <-errCh:
 			log.Printf("Error streaming flow events: %v", err)
@@ -1144,14 +1149,14 @@ func (ctrl *Controller) WildcardHandler(c *gin.Context) {
 	// render index.html
 	file, err := frontend.DistFs.Open("dist/index.html")
 	if err != nil {
-		fmt.Println("Failed to open index.html", err)
+		log.Error().Err(err).Msg("Failed to open index.html")
 		c.Status(http.StatusInternalServerError)
 		return
 	} else {
 		c.Status(http.StatusOK)
 		_, err = io.Copy(c.Writer, file)
 		if err != nil {
-			log.Println("Failed to serve index.html", err)
+			log.Error().Err(err).Msg("Failed to serve index.html")
 		}
 	}
 }
