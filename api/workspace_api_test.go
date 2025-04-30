@@ -393,7 +393,7 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 			if tc.expectError {
 				assert.Error(t, err)
 			} else {
-				require.NoError(t, err) // Use require for critical checks
+				require.NoError(t, err)                               // Use require for critical checks
 				require.Equal(t, tc.expectedManaged, managedBranches) // Use require for critical checks
 			}
 		})

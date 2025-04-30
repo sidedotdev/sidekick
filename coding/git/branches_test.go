@@ -331,7 +331,7 @@ func TestListWorktrees(t *testing.T) {
 		// testify/assert.ElementsMatch might be better if order is unstable,
 		// but assert.Equal often works for slices if elements are comparable.
 		expected := []GitWorktree{
-			{Path: resolvedRepoDir, Branch: "main"},      // Use resolved path
+			{Path: resolvedRepoDir, Branch: "main"},     // Use resolved path
 			{Path: resolvedWtADir, Branch: "feature-a"}, // Use resolved path
 			{Path: resolvedWtBDir, Branch: "feature-b"}, // Use resolved path
 		}
