@@ -51,13 +51,13 @@ type LocalGitWorktreeEnv struct {
 type LocalEnvParams struct {
 	WorkspaceId string
 	RepoDir     string
-	Branch      string
-	StartBranch *string // Optional branch to base the new worktree branch on
+	StartBranch *string
 }
 
+
 func NewLocalEnv(ctx context.Context, params LocalEnvParams) (Env, error) {
-	if params.Branch != "" {
-		return nil, fmt.Errorf("branch is not supported for local environment")
+	if params.StartBranch != nil {
+		return nil, fmt.Errorf("start branch is not supported for local environment")
 	}
 	dir, err := filepath.Abs(params.RepoDir)
 	return &LocalEnv{WorkingDirectory: dir}, err

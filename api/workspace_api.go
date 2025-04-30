@@ -129,9 +129,6 @@ func (ctrl *Controller) GetWorkspaceBranchesHandler(c *gin.Context) {
 
 	var filteredBranches []BranchInfo
 	for _, branchName := range localBranchNames {
-		if branchName == "" {
-			continue // Skip empty lines just in case
-		}
 		// Skip branches associated with managed worktrees
 		if _, isManaged := managedWorktreeBranches[branchName]; isManaged {
 			continue
@@ -140,7 +137,7 @@ func (ctrl *Controller) GetWorkspaceBranchesHandler(c *gin.Context) {
 		filteredBranches = append(filteredBranches, BranchInfo{
 			Name:      branchName,
 			IsCurrent: !isDetached && branchName == currentBranchName,      // Only mark current if not detached
-			IsDefault: branchName != "" && branchName == defaultBranchName, // Avoid marking empty string as default
+			IsDefault: branchName == defaultBranchName, // Avoid marking empty string as default
 		})
 	}
 
