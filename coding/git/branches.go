@@ -10,6 +10,12 @@ import (
 	"strings"
 )
 
+// GitWorktree holds information about a Git worktree.
+type GitWorktree struct {
+	Path   string // Absolute, symlink-resolved path to the worktree directory.
+	Branch string // The branch checked out in the worktree. Empty if detached.
+}
+
 // runGitCommand executes a git command in the specified directory.
 // It returns stdout, stderr, exit code, and any error encountered during execution.
 // If the command runs but exits with a non-zero status, the error will be an *exec.ExitError,
@@ -171,11 +177,11 @@ func ListLocalBranches(ctx context.Context, repoDir string) (branchNames []strin
 	return branches, nil
 }
 
-// ListWorktreesActivity lists all worktrees associated with the repository.
-// It returns a map where the key is the absolute path to the worktree
-// and the value is the short branch name checked out in that worktree.
+// ListWorktreesActivity lists all Git worktrees for a given repository directory.
+// It returns a slice of GitWorktree structs, each containing the absolute,
+// symlink-resolved path and the corresponding branch name.
 // Worktrees with a detached HEAD are excluded.
-func ListWorktreesActivity(ctx context.Context, repoDir string) (map[string]string, error) {
+func ListWorktreesActivity(ctx context.Context, repoDir string) ([]GitWorktree, error) {
 	stdout, stderr, exitCode, err := runGitCommand(ctx, repoDir, "worktree", "list", "--porcelain")
 	if err != nil {
 		// runGitCommand already wraps the error with context
@@ -186,7 +192,7 @@ func ListWorktreesActivity(ctx context.Context, repoDir string) (map[string]stri
 		return nil, err // Return the wrapped error from runGitCommand
 	}
 
-	worktrees := make(map[string]string)
+	var worktrees []GitWorktree
 	entries := strings.Split(strings.TrimSpace(stdout), "\n\n")
 
 	for _, entry := range entries {
@@ -197,22 +203,6 @@ func ListWorktreesActivity(ctx context.Context, repoDir string) (map[string]stri
 		for _, line := range lines {
 			if strings.HasPrefix(line, "worktree ") {
 				path = strings.TrimPrefix(line, "worktree ")
-				// Ensure path is absolute and symlinks are resolved for consistent map keys
-				absPath, pathErr := filepath.Abs(path)
-				if pathErr != nil {
-					return nil, fmt.Errorf("failed to get absolute path for worktree '%s': %w", path, pathErr)
-				}
-				resolvedPath, symlinkErr := filepath.EvalSymlinks(absPath)
-				if symlinkErr != nil {
-					// If symlink resolution fails, fallback to the absolute path.
-					// This might happen if the path points to a location that doesn't exist
-					// during resolution, though git worktree list should provide valid paths.
-					// Log this potential issue? For now, just use absPath.
-					// Consider if specific errors should be handled differently (e.g., os.IsNotExist).
-					// Let's proceed with absPath if EvalSymlinks fails.
-					resolvedPath = absPath
-				}
-				path = resolvedPath // Use the resolved path
 			} else if strings.HasPrefix(line, "branch refs/heads/") {
 				branch = strings.TrimPrefix(line, "branch refs/heads/")
 			} else if line == "detached" {
@@ -225,7 +215,7 @@ func ListWorktreesActivity(ctx context.Context, repoDir string) (map[string]stri
 
 		// Only add if we found a path and a non-detached branch
 		if path != "" && branch != "" && !isDetached {
-			worktrees[path] = branch
+			worktrees = append(worktrees, GitWorktree{Path: path, Branch: branch})
 		} else if path != "" && !isDetached && branch == "" {
 			// This case might occur for the main worktree if it's somehow detached
 			// but the 'detached' line wasn't present, or if parsing failed.

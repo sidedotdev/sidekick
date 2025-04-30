@@ -6,13 +6,21 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
+	"time"
 
+	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestUpdateWorkspaceHandler(t *testing.T) {
@@ -241,6 +249,302 @@ func TestCreateWorkspaceHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Helper function to run git commands for tests
+func runGitCommand(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git command failed: git %s\nOutput: %s", strings.Join(args, " "), string(output))
+}
+
+// Helper function to create a commit
+func createCommit(t *testing.T, repoDir, message string) {
+	t.Helper()
+	// Create a dummy file to commit
+	filePath := filepath.Join(repoDir, "dummy.txt")
+	err := os.WriteFile(filePath, []byte(time.Now().String()), 0644)
+	require.NoError(t, err)
+	runGitCommand(t, repoDir, "add", ".")
+	runGitCommand(t, repoDir, "commit", "-m", message)
+}
+
+func TestDetermineManagedWorktreeBranches(t *testing.T) {
+	// Create a temporary directory to act as SIDE_DATA_HOME
+	tempHome := t.TempDir()
+	t.Setenv("SIDE_DATA_HOME", tempHome) // Set env var for the test duration
+
+	workspace1 := &domain.Workspace{Id: "ws1"}
+	workspace2 := &domain.Workspace{Id: "ws2"} // Another workspace for isolation check
+
+	// --- Setup expected directory structure ---
+	ws1WorktreeBase := filepath.Join(tempHome, "worktrees", workspace1.Id)
+	err := os.MkdirAll(ws1WorktreeBase, 0755)
+	require.NoError(t, err)
+
+	// Create dummy directories for expected managed worktrees
+	managedBranch1Path := filepath.Join(ws1WorktreeBase, "managed-branch-1")
+	err = os.Mkdir(managedBranch1Path, 0755)
+	require.NoError(t, err)
+	resolvedManagedBranch1Path, err := filepath.Abs(managedBranch1Path)
+	require.NoError(t, err)
+	resolvedManagedBranch1PathEval, err := filepath.EvalSymlinks(resolvedManagedBranch1Path)
+	require.NoError(t, err) // Should resolve since we created it
+
+	// Path for a managed branch that *doesn't* actually exist on disk yet
+	nonExistentManagedBranchPath := filepath.Join(ws1WorktreeBase, "managed-branch-nonexistent")
+	resolvedNonExistentManagedPath, err := filepath.Abs(nonExistentManagedBranchPath)
+	require.NoError(t, err)
+	// EvalSymlinks will fail with IsNotExist, so the function should use the Abs path
+	_, err = filepath.EvalSymlinks(resolvedNonExistentManagedPath)
+	require.Error(t, err)
+	require.True(t, os.IsNotExist(err))
+
+	// Path for an unmanaged worktree (outside the expected structure)
+	unmanagedBranchPath := filepath.Join(t.TempDir(), "unmanaged-branch-loc")
+	err = os.Mkdir(unmanagedBranchPath, 0755)
+	require.NoError(t, err)
+	resolvedUnmanagedBranchPath, err := filepath.Abs(unmanagedBranchPath)
+	require.NoError(t, err)
+	resolvedUnmanagedBranchPathEval, err := filepath.EvalSymlinks(resolvedUnmanagedBranchPath)
+	require.NoError(t, err)
+
+	// --- Define Test Cases ---
+	testCases := []struct {
+		name            string
+		workspace       *domain.Workspace
+		gitWorktrees    []git.GitWorktree // Now a slice of structs
+		expectedManaged map[string]struct{}
+		expectError     bool
+	}{
+		{
+			name:            "no worktrees",
+			workspace:       workspace1,
+			gitWorktrees:    []git.GitWorktree{}, // Empty slice
+			expectedManaged: map[string]struct{}{},
+			expectError:     false,
+		},
+		{
+			name:      "one managed worktree (exists)",
+			workspace: workspace1,
+			gitWorktrees: []git.GitWorktree{ // Slice with one element
+				{Branch: "managed-branch-1", Path: resolvedManagedBranch1PathEval},
+			},
+			expectedManaged: map[string]struct{}{
+				"managed-branch-1": {},
+			},
+			expectError: false,
+		},
+		{
+			name:      "one managed worktree (does not exist)",
+			workspace: workspace1,
+			gitWorktrees: []git.GitWorktree{ // Slice with one element
+				// Git reports this path, but it doesn't exist on disk.
+				// determineManagedWorktreeBranches should still match based on the expected path calculation.
+				{Branch: "managed-branch-nonexistent", Path: resolvedNonExistentManagedPath},
+			},
+			expectedManaged: map[string]struct{}{
+				"managed-branch-nonexistent": {},
+			},
+			expectError: false,
+		},
+		{
+			name:      "one unmanaged worktree",
+			workspace: workspace1,
+			gitWorktrees: []git.GitWorktree{ // Slice with one element
+				{Branch: "unmanaged-branch", Path: resolvedUnmanagedBranchPathEval},
+			},
+			expectedManaged: map[string]struct{}{},
+			expectError:     false,
+		},
+		{
+			name:      "mixed managed and unmanaged worktrees",
+			workspace: workspace1,
+			gitWorktrees: []git.GitWorktree{ // Slice with multiple elements
+				{Branch: "managed-branch-1", Path: resolvedManagedBranch1PathEval},
+				{Branch: "unmanaged-branch", Path: resolvedUnmanagedBranchPathEval},
+				{Branch: "managed-branch-nonexistent", Path: resolvedNonExistentManagedPath},
+			},
+			expectedManaged: map[string]struct{}{
+				"managed-branch-1":           {},
+				"managed-branch-nonexistent": {},
+			},
+			expectError: false,
+		},
+		{
+			name:      "different workspace, should not match ws1 structure",
+			workspace: workspace2, // Use workspace2
+			gitWorktrees: []git.GitWorktree{ // Slice with one element
+				// This path matches ws1's structure, but not ws2's
+				{Branch: "managed-branch-1", Path: resolvedManagedBranch1PathEval},
+			},
+			expectedManaged: map[string]struct{}{}, // Should be empty
+			expectError:     false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Pass the slice directly
+			managedBranches, err := determineManagedWorktreeBranches(tc.workspace, tc.gitWorktrees)
+
+			if tc.expectError {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err) // Use require for critical checks
+				require.Equal(t, tc.expectedManaged, managedBranches) // Use require for critical checks
+			}
+		})
+	}
+
+	// NOTE: Removed the "error getting sidekick data home" test case.
+	// common.GetSidekickDataHome returns a default path when the env var is unset,
+	// making it difficult to reliably trigger and test the error condition here
+	// without mocking, which is disallowed by the plan. The primary error path
+	// (e.g., cannot determine user home) is implicitly covered by OS-level failures.
+}
+
+// runGitCommand executes a git command in the specified directory and returns its output.
+func TestGetWorkspaceBranchesHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// --- Test Setup ---
+	ctrl := NewMockController(t) // Uses test Redis instance
+	tempHome := t.TempDir()
+	t.Setenv("SIDE_DATA_HOME", tempHome) // For determineManagedWorktreeBranches
+
+	// Create a temporary Git repo directory
+	repoDir := t.TempDir()
+
+	// Workspace pointing to the temp repo
+	workspace := domain.Workspace{
+		Id:           "ws-branches-test",
+		Name:         "Branches Test Workspace",
+		LocalRepoDir: repoDir,
+		Created:      time.Now(),
+		Updated:      time.Now(),
+	}
+	err := ctrl.service.PersistWorkspace(context.Background(), workspace)
+	require.NoError(t, err)
+
+	// --- Initialize Git Repo State ---
+	runGitCommand(t, repoDir, "init", "-b", "main") // Initialize with main branch
+	runGitCommand(t, repoDir, "config", "user.email", "test@example.com")
+	runGitCommand(t, repoDir, "config", "user.name", "Test User")
+	createCommit(t, repoDir, "Initial commit")
+
+	// Create branches
+	runGitCommand(t, repoDir, "branch", "feature/a")
+	runGitCommand(t, repoDir, "branch", "bugfix/b")
+	runGitCommand(t, repoDir, "branch", "release/c") // Will be a managed worktree
+
+	// Create a managed worktree
+	managedWorktreeBranch := "release/c"
+	managedWorktreeDir := filepath.Join(tempHome, "worktrees", workspace.Id, managedWorktreeBranch)
+	// No need to MkdirAll, git worktree add will do it
+	runGitCommand(t, repoDir, "worktree", "add", managedWorktreeDir, managedWorktreeBranch)
+
+	// Create an unmanaged worktree
+	unmanagedWorktreeBranch := "bugfix/b"
+	unmanagedWorktreeDir := filepath.Join(t.TempDir(), "unmanaged-wt") // Different temp dir
+	runGitCommand(t, repoDir, "worktree", "add", unmanagedWorktreeDir, unmanagedWorktreeBranch)
+
+	// Checkout a specific branch to test 'current' flag
+	currentBranch := "feature/a"
+	runGitCommand(t, repoDir, "checkout", currentBranch)
+
+	// --- Define Expected Response ---
+	// Note: Order matters for ListLocalBranchesActivity (sort=-committerdate)
+	// Since we just created them, the order might be reverse alphabetical or creation order.
+	// Let's assume creation order for now: main, feature/a, bugfix/b, release/c
+	// The handler should filter out 'release/c' (managed worktree branch).
+	// Branches with *unmanaged* worktrees (like 'bugfix/b') should NOT be filtered.
+	// Expected branches: main (default), feature/a (current), bugfix/b (unmanaged worktree)
+	// 'release/c' (managed worktree) should be filtered out.
+	expectedBranches := []BranchInfo{
+		{Name: "bugfix/b", IsCurrent: false, IsDefault: false},
+		{Name: "feature/a", IsCurrent: true, IsDefault: false},
+		{Name: "main", IsCurrent: false, IsDefault: true},
+	}
+	// Note: The assertion sorts both lists alphabetically before comparing.
+
+	// --- Test Cases ---
+	t.Run("success - list branches excluding managed worktrees", func(t *testing.T) {
+		resp := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(resp)
+		c.Request = httptest.NewRequest("GET", "/v1/workspaces/"+workspace.Id+"/branches", nil)
+		c.Params = gin.Params{{Key: "workspaceId", Value: workspace.Id}}
+
+		ctrl.GetWorkspaceBranchesHandler(c)
+
+		assert.Equal(t, http.StatusOK, resp.Code)
+
+		var result struct {
+			Branches []BranchInfo `json:"branches"`
+		}
+		err := json.Unmarshal(resp.Body.Bytes(), &result)
+		require.NoError(t, err)
+
+		// Sort both actual and expected slices for stable comparison
+		sortBranches := func(branches []BranchInfo) {
+			sort.Slice(branches, func(i, j int) bool {
+				return branches[i].Name < branches[j].Name
+			})
+		}
+		sortBranches(result.Branches)
+		sortBranches(expectedBranches)
+
+		assert.Equal(t, expectedBranches, result.Branches)
+	})
+
+	t.Run("workspace not found", func(t *testing.T) {
+		resp := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(resp)
+		workspaceId := "nonexistent-ws"
+		c.Request = httptest.NewRequest("GET", "/v1/workspaces/"+workspaceId+"/branches", nil)
+		c.Params = gin.Params{{Key: "workspaceId", Value: workspaceId}}
+
+		ctrl.GetWorkspaceBranchesHandler(c)
+
+		assert.Equal(t, http.StatusNotFound, resp.Code)
+		var result gin.H
+		err := json.Unmarshal(resp.Body.Bytes(), &result)
+		require.NoError(t, err)
+		assert.Equal(t, gin.H{"error": "Workspace not found"}, result)
+	})
+
+	t.Run("repo directory does not exist", func(t *testing.T) {
+		// Create a workspace pointing to a non-existent directory
+		badRepoDir := filepath.Join(t.TempDir(), "nonexistent-repo")
+		badWorkspace := domain.Workspace{
+			Id:           "ws-bad-repo",
+			Name:         "Bad Repo Workspace",
+			LocalRepoDir: badRepoDir, // This directory won't be created
+			Created:      time.Now(),
+			Updated:      time.Now(),
+		}
+		err := ctrl.service.PersistWorkspace(context.Background(), badWorkspace)
+		require.NoError(t, err)
+
+		resp := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(resp)
+		c.Request = httptest.NewRequest("GET", "/v1/workspaces/"+badWorkspace.Id+"/branches", nil)
+		c.Params = gin.Params{{Key: "workspaceId", Value: badWorkspace.Id}}
+
+		ctrl.GetWorkspaceBranchesHandler(c)
+
+		// Expecting an internal server error because git commands will fail
+		assert.Equal(t, http.StatusInternalServerError, resp.Code)
+		var result gin.H
+		err = json.Unmarshal(resp.Body.Bytes(), &result)
+		require.NoError(t, err)
+		// The handler checks os.Stat before calling git activities.
+		// Ensure the error message reflects that the directory check failed.
+		require.Contains(t, result["error"], "Workspace repository directory not found")
+	})
+
 }
 
 func TestGetWorkspaceByIdHandler(t *testing.T) {
