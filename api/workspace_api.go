@@ -6,16 +6,15 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath" // Added for determineManagedWorktreeBranches
+	"path/filepath"
+	"strings"
 
-	// Added for Git activities
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/srv"
+	"sidekick/utils"
 	"time"
-
-	// Added for determineManagedWorktreeBranches
 
 	"github.com/gin-gonic/gin"
 	"github.com/segmentio/ksuid"
@@ -99,13 +98,12 @@ func (ctrl *Controller) GetWorkspaceBranchesHandler(c *gin.Context) {
 	}
 
 	// 2. Call coding/git.ListWorktreesActivity
+	// TODO move this into determineManagedWorktreeBranches
 	gitWorktrees, err := git.ListWorktreesActivity(ctx, repoDir)
 	if err != nil {
-		// Log the error but proceed; failure to list worktrees shouldn't block listing branches.
-		// determineManagedWorktreeBranches will handle an empty map correctly.
-		log.Printf("Warning: failed to list worktrees for workspace %s in dir %s: %v", workspaceId, repoDir, err)
-		gitWorktrees = make(map[string]string) // Ensure map is non-nil
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list worktrees"})
 	}
+	fmt.Printf("List of worktrees for workspace %s:\n%s\n", workspaceId, utils.PrettyJSON(gitWorktrees))
 
 	// 3. Call determineManagedWorktreeBranches
 	managedWorktreeBranches, err := determineManagedWorktreeBranches(&workspace, gitWorktrees)
@@ -149,6 +147,9 @@ func (ctrl *Controller) GetWorkspaceBranchesHandler(c *gin.Context) {
 		if _, isManaged := managedWorktreeBranches[branchName]; isManaged {
 			log.Printf("Filtering out managed worktree branch: %s", branchName)
 			continue // Skip branches associated with managed worktrees
+		} else {
+			log.Printf("NOT filtering out worktree branch: %s", branchName)
+
 		}
 		filteredBranches = append(filteredBranches, BranchInfo{
 			Name:      branchName,
@@ -381,10 +382,9 @@ func (c *Controller) GetWorkspacesHandler(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"workspaces": workspaces})
 }
 
-// determineManagedWorktreeBranches identifies branches associated with managed worktrees.
-// It compares the actual worktree paths (resolved) from Git with the expected paths
-// based on the Sidekick data home directory structure.
-func determineManagedWorktreeBranches(workspace *domain.Workspace, gitWorktrees map[string]string) (map[string]struct{}, error) {
+// determineManagedWorktreeBranches identifies branches associated with
+// sidekick-managed worktrees.
+func determineManagedWorktreeBranches(workspace *domain.Workspace, gitWorktrees []git.GitWorktree) (map[string]struct{}, error) {
 	managedBranches := make(map[string]struct{})
 
 	sidekickDataHome, err := common.GetSidekickDataHome()
@@ -392,34 +392,11 @@ func determineManagedWorktreeBranches(workspace *domain.Workspace, gitWorktrees 
 		return nil, fmt.Errorf("failed to get sidekick data home: %w", err)
 	}
 
-	// Base path where managed worktrees for this workspace *should* reside.
-	expectedWorktreeBaseDir := filepath.Join(sidekickDataHome, "worktrees", workspace.Id)
-
-	for branchName, actualWorktreePath := range gitWorktrees {
-		// Construct the expected path for a managed worktree for this specific branch.
-		expectedPath := filepath.Join(expectedWorktreeBaseDir, branchName)
-
-		// Resolve the expected path similar to how ListWorktreesActivity resolves actual paths.
-		// This ensures consistent comparison, handling potential symlinks in the data directory path.
-		resolvedExpectedPath, err := filepath.Abs(expectedPath)
-		if err != nil {
-			log.Printf("Warning: could not get absolute path for expected worktree dir %s: %v", expectedPath, err)
-			continue // Skip if we can't resolve the expected path
-		}
-		resolvedExpectedPathEval, err := filepath.EvalSymlinks(resolvedExpectedPath)
-		if err != nil {
-			// If EvalSymlinks fails, it might be because the directory doesn't exist (which is expected if the worktree isn't managed).
-			// Use the Abs path in this case.
-			if !os.IsNotExist(err) {
-				log.Printf("Warning: could not evaluate symlinks for expected worktree dir %s: %v", resolvedExpectedPath, err)
-				// Fallback to the absolute path if EvalSymlinks fails for reasons other than NotExist
-			}
-			resolvedExpectedPathEval = resolvedExpectedPath
-		}
-
-		// The actualWorktreePath from ListWorktreesActivity is already absolute and symlink-resolved.
-		if actualWorktreePath == resolvedExpectedPathEval {
-			managedBranches[branchName] = struct{}{}
+	managedWorktreeBaseDir := filepath.Join(sidekickDataHome, "worktrees", workspace.Id)
+	for _, gitWorktree := range gitWorktrees {
+		// using Contains because of symlinks in osx (/private/var/folders/... -> /var/folders/...)
+		if strings.Contains(gitWorktree.Path, managedWorktreeBaseDir) {
+			managedBranches[gitWorktree.Branch] = struct{}{}
 		}
 	}
 

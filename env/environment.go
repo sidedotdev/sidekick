@@ -121,8 +121,7 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 		}
 	}
 
-	// Determine the name for the new branch within the worktree
-	newBranchName := fmt.Sprintf("sidekick-wt-%s", worktree.Name)
+	newBranchName := worktree.Name
 
 	// Add the worktree, creating a new branch based on the target branch
 	addWorktreeInput := unix.RunCommandActivityInput{

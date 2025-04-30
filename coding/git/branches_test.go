@@ -281,8 +281,8 @@ func TestListWorktrees(t *testing.T) {
 		resolvedRepoDir, err := filepath.EvalSymlinks(absRepoDir)
 		require.NoError(t, err) // EvalSymlinks should succeed for the temp dir
 
-		expected := map[string]string{
-			resolvedRepoDir: "main", // Use resolved path
+		expected := []GitWorktree{
+			{Path: resolvedRepoDir, Branch: "main"}, // Use resolved path
 		}
 		assert.Equal(t, expected, worktrees)
 	})
@@ -327,12 +327,16 @@ func TestListWorktrees(t *testing.T) {
 		resolvedWtBDir, err := filepath.EvalSymlinks(absWtBDir)
 		require.NoError(t, err)
 
-		expected := map[string]string{
-			resolvedRepoDir: "main",      // Use resolved path
-			resolvedWtADir:  "feature-a", // Use resolved path
-			resolvedWtBDir:  "feature-b", // Use resolved path
+		// Note: The order might not be guaranteed by git, but usually main is first.
+		// testify/assert.ElementsMatch might be better if order is unstable,
+		// but assert.Equal often works for slices if elements are comparable.
+		expected := []GitWorktree{
+			{Path: resolvedRepoDir, Branch: "main"},      // Use resolved path
+			{Path: resolvedWtADir, Branch: "feature-a"}, // Use resolved path
+			{Path: resolvedWtBDir, Branch: "feature-b"}, // Use resolved path
 		}
-		assert.Equal(t, expected, worktrees)
+		// Use ElementsMatch for order-insensitive comparison
+		assert.ElementsMatch(t, expected, worktrees)
 
 		// Clean up worktree directories manually (TempDir only cleans repoDir)
 		assert.NoError(t, os.RemoveAll(wtADir))
@@ -363,8 +367,8 @@ func TestListWorktrees(t *testing.T) {
 		// require.NoError(t, err)
 
 		// Expect only the main worktree (resolved path), as detached ones are excluded
-		expected := map[string]string{
-			resolvedRepoDir: "main", // Use resolved path
+		expected := []GitWorktree{
+			{Path: resolvedRepoDir, Branch: "main"}, // Use resolved path
 		}
 		assert.Equal(t, expected, worktrees)
 
@@ -386,8 +390,8 @@ func TestListWorktrees(t *testing.T) {
 		resolvedRepoDir, err := filepath.EvalSymlinks(absRepoDir)
 		require.NoError(t, err)
 
-		expected := map[string]string{
-			resolvedRepoDir: "main", // Expect the main worktree and its initial branch
+		expected := []GitWorktree{
+			{Path: resolvedRepoDir, Branch: "main"}, // Expect the main worktree and its initial branch
 		}
 		assert.Equal(t, expected, worktrees, "Should return the main worktree even before commits")
 	})
