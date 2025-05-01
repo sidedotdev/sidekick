@@ -283,6 +283,9 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 	ws1WorktreeBase := filepath.Join(tempHome, "worktrees", workspace1.Id)
 	err := os.MkdirAll(ws1WorktreeBase, 0755)
 	require.NoError(t, err)
+	ws2WorktreeBase := filepath.Join(tempHome, "worktrees", workspace2.Id)
+	err = os.MkdirAll(ws2WorktreeBase, 0755)
+	require.NoError(t, err)
 
 	// Create dummy directories for expected managed worktrees
 	managedBranch1Path := filepath.Join(ws1WorktreeBase, "managed-branch-1")
@@ -291,6 +294,15 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 	resolvedManagedBranch1Path, err := filepath.Abs(managedBranch1Path)
 	require.NoError(t, err)
 	resolvedManagedBranch1PathEval, err := filepath.EvalSymlinks(resolvedManagedBranch1Path)
+	require.NoError(t, err) // Should resolve since we created it
+
+	// in different workspace, but same git repo
+	managedBranch2Path := filepath.Join(ws2WorktreeBase, "managed-branch-2")
+	err = os.Mkdir(managedBranch2Path, 0755)
+	require.NoError(t, err)
+	resolvedManagedBranch2Path, err := filepath.Abs(managedBranch2Path)
+	require.NoError(t, err)
+	resolvedManagedBranch2PathEval, err := filepath.EvalSymlinks(resolvedManagedBranch2Path)
 	require.NoError(t, err) // Should resolve since we created it
 
 	// Path for a managed branch that *doesn't* actually exist on disk yet
@@ -314,21 +326,18 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 	// --- Define Test Cases ---
 	testCases := []struct {
 		name            string
-		workspace       *domain.Workspace
 		gitWorktrees    []git.GitWorktree // Now a slice of structs
 		expectedManaged map[string]struct{}
 		expectError     bool
 	}{
 		{
 			name:            "no worktrees",
-			workspace:       workspace1,
 			gitWorktrees:    []git.GitWorktree{}, // Empty slice
 			expectedManaged: map[string]struct{}{},
 			expectError:     false,
 		},
 		{
 			name:      "one managed worktree (exists)",
-			workspace: workspace1,
 			gitWorktrees: []git.GitWorktree{ // Slice with one element
 				{Branch: "managed-branch-1", Path: resolvedManagedBranch1PathEval},
 			},
@@ -338,8 +347,19 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name:      "two managed worktrees across two workspaces",
+			gitWorktrees: []git.GitWorktree{ // Slice with one element
+				{Branch: "managed-branch-1", Path: resolvedManagedBranch1PathEval},
+				{Branch: "managed-branch-2", Path: resolvedManagedBranch2PathEval},
+			},
+			expectedManaged: map[string]struct{}{
+				"managed-branch-1": {},
+				"managed-branch-2": {},
+			},
+			expectError: false,
+		},
+		{
 			name:      "one managed worktree (does not exist)",
-			workspace: workspace1,
 			gitWorktrees: []git.GitWorktree{ // Slice with one element
 				// Git reports this path, but it doesn't exist on disk.
 				// determineManagedWorktreeBranches should still match based on the expected path calculation.
@@ -352,7 +372,6 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 		},
 		{
 			name:      "one unmanaged worktree",
-			workspace: workspace1,
 			gitWorktrees: []git.GitWorktree{ // Slice with one element
 				{Branch: "unmanaged-branch", Path: resolvedUnmanagedBranchPathEval},
 			},
@@ -361,7 +380,6 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 		},
 		{
 			name:      "mixed managed and unmanaged worktrees",
-			workspace: workspace1,
 			gitWorktrees: []git.GitWorktree{ // Slice with multiple elements
 				{Branch: "managed-branch-1", Path: resolvedManagedBranch1PathEval},
 				{Branch: "unmanaged-branch", Path: resolvedUnmanagedBranchPathEval},
@@ -373,22 +391,12 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 			},
 			expectError: false,
 		},
-		{
-			name:      "different workspace, should not match ws1 structure",
-			workspace: workspace2, // Use workspace2
-			gitWorktrees: []git.GitWorktree{ // Slice with one element
-				// This path matches ws1's structure, but not ws2's
-				{Branch: "managed-branch-1", Path: resolvedManagedBranch1PathEval},
-			},
-			expectedManaged: map[string]struct{}{}, // Should be empty
-			expectError:     false,
-		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Pass the slice directly
-			managedBranches, err := determineManagedWorktreeBranches(tc.workspace, tc.gitWorktrees)
+			managedBranches, err := determineManagedWorktreeBranches(tc.gitWorktrees)
 
 			if tc.expectError {
 				assert.Error(t, err)
