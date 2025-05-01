@@ -19,9 +19,9 @@ import (
 	"sidekick/frontend"
 	"sidekick/srv"
 
-	"github.com/rs/zerolog/log"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
 	"go.temporal.io/sdk/client"
 )

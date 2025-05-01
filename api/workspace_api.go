@@ -363,7 +363,7 @@ func getFilteredBranches(ctx context.Context, repoDir string, workspace *domain.
 
 		filteredBranches = append(filteredBranches, BranchInfo{
 			Name:      branchName,
-			IsCurrent: !isDetached && branchName == currentBranchName, // Only mark current if not detached
+			IsCurrent: !isDetached && branchName == currentBranchName,      // Only mark current if not detached
 			IsDefault: branchName != "" && branchName == defaultBranchName, // Mark as default only if names match and are not empty
 		})
 	}

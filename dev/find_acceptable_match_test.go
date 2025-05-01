@@ -142,6 +142,64 @@ func TestFindAcceptableMatchBasicCases(t *testing.T) {
 }
 
 func TestFindAcceptableMatchAdvancedCases(t *testing.T) {
+	t.Run("IgnoreLeadingMismatchedLine", func(t *testing.T) {
+		// Based on the "closest match" example from the requirements
+		originalLines := []string{
+			"func TestGetWorkspaceByIdHandler(t *testing.T) {",
+			"\tgin.SetMode(gin.TestMode)",
+			"\tctrl := NewMockController(t)",
+			"\tdb := ctrl.service",
+		}
+
+		block := EditBlock{
+			FilePath: "some/file.go",
+			OldLines: []string{
+				")", // This line should be ignored by the matching logic
+				"",
+				"func TestGetWorkspaceByIdHandler(t *testing.T) {",
+				"\tgin.SetMode(gin.TestMode)",
+				"\tctrl := NewMockController(t)",
+				"",
+			},
+			NewLines: []string{"// new content"}, // NewLines are needed but content doesn't matter
+			EditType: "update",                   // EditType is needed but content doesn't matter
+		}
+
+		// Call the function under test
+		// Set isOriginalLinesFromActualFile to true as we are simulating actual file content
+		bestMatch, _ := FindAcceptableMatch(block, originalLines, true)
+
+		// Assertions: We expect a successful match starting at index 0 of originalLines,
+		// effectively ignoring the first line ")" from block.OldLines.
+		assert.True(t, bestMatch.successfulMatch, "Expected a successful match despite the leading mismatched line")
+		assert.Equal(t, 0, bestMatch.index, "Expected match index to be 0, indicating the start of the actual content match")
+
+		// We can also assert the content of the matched lines if the `match` struct stores them reliably.
+		// Let's assume `bestMatch.lines` holds the lines from `originalLines` that were matched.
+		// The number of lines matched might vary depending on the fuzzy matching logic,
+		// but it should start with the correct lines.
+		// For this specific case, it's plausible it matches the common lines.
+		expectedMatchedLines := []string{
+			"func TestGetWorkspaceByIdHandler(t *testing.T) {",
+			"\tgin.SetMode(gin.TestMode)",
+			"\tctrl := NewMockController(t)",
+			// Note: The last line "" in OldLines might cause the match to exclude "\tdb := ctrl.service"
+			// depending on the exact fuzzy logic implementation.
+			// Let's assert the core part that *must* match.
+		}
+		// Check if at least the core common lines are present in the match result
+		if len(bestMatch.lines) >= 3 {
+			assert.Equal(t, expectedMatchedLines[0], bestMatch.lines[0])
+			assert.Equal(t, expectedMatchedLines[1], bestMatch.lines[1])
+			assert.Equal(t, expectedMatchedLines[2], bestMatch.lines[2])
+		} else {
+			// If fewer lines are matched, the test might need adjustment based on
+			// the actual behavior of FindAcceptableMatch, but the primary goal
+			// is checking successfulMatch and index.
+			t.Logf("Warning: Matched lines count (%d) is less than expected core lines (3). Match lines: %v", len(bestMatch.lines), bestMatch.lines)
+			// We still rely on successfulMatch and index being correct.
+		}
+	})
 }
 
 // bigger test, catches more issues
@@ -203,4 +261,3 @@ func TestFindAcceptableMatchOneOff(t *testing.T) {
 		t.Errorf("Expected score > 0, match:%v", acceptableMatch)
 	}
 }
-

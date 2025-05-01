@@ -53,7 +53,6 @@ type LocalEnvParams struct {
 	StartBranch *string
 }
 
-
 func NewLocalEnv(ctx context.Context, params LocalEnvParams) (Env, error) {
 	if params.StartBranch != nil {
 		return nil, fmt.Errorf("start branch is not supported for local environment")
