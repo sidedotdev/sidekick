@@ -328,30 +328,28 @@ func (c *Controller) GetWorkspacesHandler(ctx *gin.Context) {
 // It requires the context, repository directory path, workspace domain object, and pre-fetched worktree activity.
 func getFilteredBranches(ctx context.Context, repoDir string, workspace *domain.Workspace) ([]BranchInfo, error) {
 	gitWorktrees, err := git.ListWorktreesActivity(ctx, repoDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list worktrees: %w", err)
+	}
+
 	managedWorktreeBranches, err := determineManagedWorktreeBranches(workspace, gitWorktrees)
 	if err != nil {
-		// Log specific error context but return a generic error message for the caller
-		log.Error().Err(err).Str("workspaceId", workspace.Id).Msg("Failed to determine managed worktree branches")
-		return nil, fmt.Errorf("failed to determine managed worktrees")
+		return nil, fmt.Errorf("failed to determine managed worktrees: %w", err)
 	}
 
 	currentBranchName, isDetached, err := git.GetCurrentBranch(ctx, repoDir)
 	if err != nil {
-		log.Error().Err(err).Str("workspaceId", workspace.Id).Str("repoDir", repoDir).Msg("Failed to get current branch")
-		return nil, fmt.Errorf("failed to get current branch")
+		return nil, fmt.Errorf("failed to get current branch: %w", err)
 	}
 
 	defaultBranchName, err := git.GetDefaultBranch(ctx, repoDir)
 	if err != nil {
-		// Log the error but don't fail the entire operation, default branch might not be critical for listing
-		log.Warn().Err(err).Str("workspaceId", workspace.Id).Str("repoDir", repoDir).Msg("Failed to get default branch, proceeding without it")
-		defaultBranchName = "" // Ensure defaultBranchName is empty if detection fails
+		return nil, fmt.Errorf("failed to get default branch: %w", err)
 	}
 
 	localBranchNames, err := git.ListLocalBranches(ctx, repoDir)
 	if err != nil {
-		log.Error().Err(err).Str("workspaceId", workspace.Id).Str("repoDir", repoDir).Msg("Failed to list local branches")
-		return nil, fmt.Errorf("failed to list git branches")
+		return nil, fmt.Errorf("failed to list git branches: %w", err)
 	}
 
 	var filteredBranches []BranchInfo
