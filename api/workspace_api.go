@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -93,52 +94,10 @@ func (ctrl *Controller) GetWorkspaceBranchesHandler(c *gin.Context) {
 		return
 	}
 
-	gitWorktrees, err := git.ListWorktreesActivity(ctx, repoDir)
+	filteredBranches, err := getFilteredBranches(ctx, repoDir, &workspace)
 	if err != nil {
-		log.Error().Err(err).Str("workspaceId", workspaceId).Str("repoDir", repoDir).Msg("Failed to list worktrees")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list worktrees"})
-		return // Return error if listing worktrees fails
-	}
-	managedWorktreeBranches, err := determineManagedWorktreeBranches(&workspace, gitWorktrees)
-	if err != nil {
-		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to determine managed worktree branches")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to determine managed worktrees"})
+		ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("Failed to get branches: %v", err))
 		return
-	}
-
-	currentBranchName, isDetached, err := git.GetCurrentBranch(ctx, repoDir)
-	if err != nil {
-		log.Error().Err(err).Str("workspaceId", workspaceId).Str("repoDir", repoDir).Msg("Failed to get current branch")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get current branch"})
-		return
-	}
-
-	defaultBranchName, err := git.GetDefaultBranch(ctx, repoDir)
-	if err != nil {
-		log.Error().Err(err).Str("workspaceId", workspaceId).Str("repoDir", repoDir).Msg("Failed to get current branch")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get current branch"})
-		return
-	}
-
-	localBranchNames, err := git.ListLocalBranches(ctx, repoDir)
-	if err != nil {
-		log.Error().Err(err).Str("workspaceId", workspaceId).Str("repoDir", repoDir).Msg("Failed to list local branches")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list git branches"})
-		return
-	}
-
-	var filteredBranches []BranchInfo
-	for _, branchName := range localBranchNames {
-		// Skip branches associated with managed worktrees
-		if _, isManaged := managedWorktreeBranches[branchName]; isManaged {
-			continue
-		}
-
-		filteredBranches = append(filteredBranches, BranchInfo{
-			Name:      branchName,
-			IsCurrent: !isDetached && branchName == currentBranchName,      // Only mark current if not detached
-			IsDefault: branchName == defaultBranchName, // Avoid marking empty string as default
-		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{"branches": filteredBranches})
@@ -362,6 +321,54 @@ func (c *Controller) GetWorkspacesHandler(ctx *gin.Context) {
 	}
 	// Format the workspace data into JSON and return it in the response
 	ctx.JSON(http.StatusOK, gin.H{"workspaces": workspaces})
+}
+
+// getFilteredBranches retrieves and filters local git branches for a given workspace repository.
+// It excludes branches associated with managed worktrees.
+// It requires the context, repository directory path, workspace domain object, and pre-fetched worktree activity.
+func getFilteredBranches(ctx context.Context, repoDir string, workspace *domain.Workspace) ([]BranchInfo, error) {
+	gitWorktrees, err := git.ListWorktreesActivity(ctx, repoDir)
+	managedWorktreeBranches, err := determineManagedWorktreeBranches(workspace, gitWorktrees)
+	if err != nil {
+		// Log specific error context but return a generic error message for the caller
+		log.Error().Err(err).Str("workspaceId", workspace.Id).Msg("Failed to determine managed worktree branches")
+		return nil, fmt.Errorf("failed to determine managed worktrees")
+	}
+
+	currentBranchName, isDetached, err := git.GetCurrentBranch(ctx, repoDir)
+	if err != nil {
+		log.Error().Err(err).Str("workspaceId", workspace.Id).Str("repoDir", repoDir).Msg("Failed to get current branch")
+		return nil, fmt.Errorf("failed to get current branch")
+	}
+
+	defaultBranchName, err := git.GetDefaultBranch(ctx, repoDir)
+	if err != nil {
+		// Log the error but don't fail the entire operation, default branch might not be critical for listing
+		log.Warn().Err(err).Str("workspaceId", workspace.Id).Str("repoDir", repoDir).Msg("Failed to get default branch, proceeding without it")
+		defaultBranchName = "" // Ensure defaultBranchName is empty if detection fails
+	}
+
+	localBranchNames, err := git.ListLocalBranches(ctx, repoDir)
+	if err != nil {
+		log.Error().Err(err).Str("workspaceId", workspace.Id).Str("repoDir", repoDir).Msg("Failed to list local branches")
+		return nil, fmt.Errorf("failed to list git branches")
+	}
+
+	var filteredBranches []BranchInfo
+	for _, branchName := range localBranchNames {
+		// Skip branches associated with managed worktrees
+		if _, isManaged := managedWorktreeBranches[branchName]; isManaged {
+			continue
+		}
+
+		filteredBranches = append(filteredBranches, BranchInfo{
+			Name:      branchName,
+			IsCurrent: !isDetached && branchName == currentBranchName, // Only mark current if not detached
+			IsDefault: branchName != "" && branchName == defaultBranchName, // Mark as default only if names match and are not empty
+		})
+	}
+
+	return filteredBranches, nil
 }
 
 // determineManagedWorktreeBranches identifies branches associated with

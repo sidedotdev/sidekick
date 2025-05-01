@@ -46,13 +46,13 @@ func TestLocalGitWorktreeEnvironment(t *testing.T) {
 	params := LocalEnvParams{
 		WorkspaceId: "workspace1",
 		RepoDir:     "./",
-		StartBranch: utils.Ptr(ksuid.New().String()),
+		StartBranch: utils.Ptr("main"),
 	}
 
 	worktree := domain.Worktree{
 		Id:          "wt_" + ksuid.New().String(),
 		FlowId:      "flow_" + ksuid.New().String(),
-		Name:        *params.StartBranch,
+		Name:        ksuid.New().String(),
 		Created:     time.Now(),
 		WorkspaceId: params.WorkspaceId,
 	}
@@ -106,13 +106,13 @@ func TestLocalGitWorktreeEnvironment_MarshalUnmarshal(t *testing.T) {
 	params := LocalEnvParams{
 		WorkspaceId: "workspace1",
 		RepoDir:     "./",
-		StartBranch: utils.Ptr(ksuid.New().String()),
+		StartBranch: utils.Ptr("main"),
 	}
 
 	worktree := domain.Worktree{
 		Id:          "wt_" + ksuid.New().String(),
 		FlowId:      "flow_" + ksuid.New().String(),
-		Name:        *params.StartBranch,
+		Name:        ksuid.New().String(),
 		Created:     time.Now(),
 		WorkspaceId: params.WorkspaceId,
 	}
