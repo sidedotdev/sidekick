@@ -332,7 +332,7 @@ func getFilteredBranches(ctx context.Context, repoDir string, workspace *domain.
 		return nil, fmt.Errorf("failed to list worktrees: %w", err)
 	}
 
-	managedWorktreeBranches, err := determineManagedWorktreeBranches(workspace, gitWorktrees)
+	managedWorktreeBranches, err := determineManagedWorktreeBranches(gitWorktrees)
 	if err != nil {
 		return nil, fmt.Errorf("failed to determine managed worktrees: %w", err)
 	}
@@ -371,7 +371,7 @@ func getFilteredBranches(ctx context.Context, repoDir string, workspace *domain.
 
 // determineManagedWorktreeBranches identifies branches associated with
 // sidekick-managed worktrees.
-func determineManagedWorktreeBranches(workspace *domain.Workspace, gitWorktrees []git.GitWorktree) (map[string]struct{}, error) {
+func determineManagedWorktreeBranches(gitWorktrees []git.GitWorktree) (map[string]struct{}, error) {
 	managedBranches := make(map[string]struct{})
 
 	sidekickDataHome, err := common.GetSidekickDataHome()
@@ -379,7 +379,7 @@ func determineManagedWorktreeBranches(workspace *domain.Workspace, gitWorktrees 
 		return nil, fmt.Errorf("failed to get sidekick data home: %w", err)
 	}
 
-	managedWorktreeBaseDir := filepath.Join(sidekickDataHome, "worktrees", workspace.Id)
+	managedWorktreeBaseDir := filepath.Join(sidekickDataHome, "worktrees")
 	for _, gitWorktree := range gitWorktrees {
 		// using Contains because of symlinks in osx (/private/var/folders/... -> /var/folders/...)
 		if strings.Contains(gitWorktree.Path, managedWorktreeBaseDir) {
