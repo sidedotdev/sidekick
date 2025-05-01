@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestFindAcceptableMatch(t *testing.T) {
+func TestFindAcceptableMatchBasicCases(t *testing.T) {
 	originalLines := []string{
 		"Line 1: Nothing special",
 		"Line 2: Start of block",
@@ -141,6 +141,9 @@ func TestFindAcceptableMatch(t *testing.T) {
 	}
 }
 
+func TestFindAcceptableMatchAdvancedCases(t *testing.T) {
+}
+
 // bigger test, catches more issues
 // TODO use a generative test instead, eg by performing small random edits on
 // the originalLines vs large random edits on random code snippets
@@ -200,3 +203,4 @@ func TestFindAcceptableMatchOneOff(t *testing.T) {
 		t.Errorf("Expected score > 0, match:%v", acceptableMatch)
 	}
 }
+
