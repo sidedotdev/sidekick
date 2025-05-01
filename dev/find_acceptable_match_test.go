@@ -43,9 +43,24 @@ func TestFindAcceptableMatchBasicCases(t *testing.T) {
 		expectedAll  []int
 	}{
 		{
-			"Exact Match",
-			EditBlock{OldLines: []string{"Line 2: Start of block", "Line 3: Middle of block", "Line 4: End of block"}},
+			"Exact match at start",
+			EditBlock{OldLines: []string{originalLines[0]}},
+			0, []int{0},
+		},
+		{
+			"Exact Match in middle",
+			EditBlock{OldLines: originalLines[1:4]},
 			1, []int{1},
+		},
+		{
+			"Exact match at end",
+			EditBlock{OldLines: []string{originalLines[22]}},
+			22, []int{22},
+		},
+		{
+			"Exact match full",
+			EditBlock{OldLines: originalLines},
+			0, []int{0},
 		},
 		{
 			"Whitespace Trim Match",
@@ -118,8 +133,17 @@ func TestFindAcceptableMatchBasicCases(t *testing.T) {
 			len(originalLines) - 1, []int{len(originalLines) - 1},
 		},
 		{
-
-			"No Match",
+			"Added a line matching nothing at start, but still a match since everything else matches",
+			EditBlock{OldLines: append([]string{"this matches none of the lines", "\n", "\n"}, originalLines...)},
+			0, []int{0},
+		},
+		{
+			"No match",
+			EditBlock{OldLines: []string{"this matches none of the lines", "\n", "\n"}},
+			0, []int{},
+		},
+		{
+			"No Match again",
 			EditBlock{OldLines: []string{"This line does not exist in the original."}},
 			-99, // Indicates no match
 			[]int{},
@@ -129,76 +153,74 @@ func TestFindAcceptableMatchBasicCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			bestMatch, allMatches := FindAcceptableMatch(tt.block, originalLines, false)
+			assert.Equal(t, tt.expectedAll, utils.Map(allMatches, func(m match) int { return m.index }))
 			if tt.expectedBest == -99 {
 				if bestMatch.score != 0 {
 					t.Errorf("Expected score: 0, match:%v", bestMatch)
 				}
-			} else if bestMatch.index != tt.expectedBest {
-				t.Errorf("Expected index: %d, Got index: %d, match: %v", tt.expectedBest, bestMatch.index, utils.PrettyJSON(bestMatch))
-				assert.Equal(t, tt.expectedAll, utils.Map(allMatches, func(m match) int { return m.index }))
+			} else {
+				if bestMatch.index != tt.expectedBest {
+					t.Errorf("Expected index: %d, Got index: %d, match: %v", tt.expectedBest, bestMatch.index, utils.PrettyJSON(bestMatch))
+				}
 			}
 		})
 	}
 }
 
 func TestFindAcceptableMatchAdvancedCases(t *testing.T) {
-	t.Run("IgnoreLeadingMismatchedLine", func(t *testing.T) {
-		// Based on the "closest match" example from the requirements
-		originalLines := []string{
-			"func TestGetWorkspaceByIdHandler(t *testing.T) {",
-			"\tgin.SetMode(gin.TestMode)",
-			"\tctrl := NewMockController(t)",
-			"\tdb := ctrl.service",
-		}
+	t.Run("Ignore leading hallucinated comment", func(t *testing.T) {
+		originalLines := strings.Split(`
+// sidekick-managed worktrees.
+func determineManagedWorktreeBranches(workspace *domain.Workspace, gitWorktrees map[string]string) (map[string]struct{}, error) {
+	managedBranches := make(map[string]struct{})
+
+	sidekickDataHome, err := common.GetSidekickDataHome()
+`, "\n")
 
 		block := EditBlock{
 			FilePath: "some/file.go",
-			OldLines: []string{
-				")", // This line should be ignored by the matching logic
-				"",
-				"func TestGetWorkspaceByIdHandler(t *testing.T) {",
-				"\tgin.SetMode(gin.TestMode)",
-				"\tctrl := NewMockController(t)",
-				"",
-			},
-			NewLines: []string{"// new content"}, // NewLines are needed but content doesn't matter
-			EditType: "update",                   // EditType is needed but content doesn't matter
+			OldLines: strings.Split(`
+// sidekick-managed worktrees.
+func determineManagedWorktreeBranches(workspace *domain.Workspace, gitWorktrees map[string]string) (map[string]struct{}, error) {
+	managedBranches := make(map[string]struct{})
+
+	sidekickDataHome, err := common.GetSidekickDataHome()
+`, "\n"),
+			EditType: "update",
 		}
 
-		// Call the function under test
-		// Set isOriginalLinesFromActualFile to true as we are simulating actual file content
-		bestMatch, _ := FindAcceptableMatch(block, originalLines, true)
+		bestMatch, allAcceptableMatches := FindAcceptableMatch(block, originalLines, false)
 
-		// Assertions: We expect a successful match starting at index 0 of originalLines,
-		// effectively ignoring the first line ")" from block.OldLines.
+		utils.PrettyPrint(allAcceptableMatches)
+		assert.True(t, len(allAcceptableMatches) == 1, "Expected an acceptable match despite the leading mismatched line")
 		assert.True(t, bestMatch.successfulMatch, "Expected a successful match despite the leading mismatched line")
-		assert.Equal(t, 0, bestMatch.index, "Expected match index to be 0, indicating the start of the actual content match")
+	})
 
-		// We can also assert the content of the matched lines if the `match` struct stores them reliably.
-		// Let's assume `bestMatch.lines` holds the lines from `originalLines` that were matched.
-		// The number of lines matched might vary depending on the fuzzy matching logic,
-		// but it should start with the correct lines.
-		// For this specific case, it's plausible it matches the common lines.
-		expectedMatchedLines := []string{
-			"func TestGetWorkspaceByIdHandler(t *testing.T) {",
-			"\tgin.SetMode(gin.TestMode)",
-			"\tctrl := NewMockController(t)",
-			// Note: The last line "" in OldLines might cause the match to exclude "\tdb := ctrl.service"
-			// depending on the exact fuzzy logic implementation.
-			// Let's assert the core part that *must* match.
+	t.Run("bad leading closing delimiter line NOT ignored", func(t *testing.T) {
+		originalLines := strings.Split(`
+}
+
+func TestGetWorkspaceByIdHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+	db := ctrl.service
+`, "\n")
+
+				block := EditBlock{
+					FilePath: "some/file.go",
+					OldLines: strings.Split(`)
+
+func TestGetWorkspaceByIdHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+`, "\n"),
+			EditType: "update",
 		}
-		// Check if at least the core common lines are present in the match result
-		if len(bestMatch.lines) >= 3 {
-			assert.Equal(t, expectedMatchedLines[0], bestMatch.lines[0])
-			assert.Equal(t, expectedMatchedLines[1], bestMatch.lines[1])
-			assert.Equal(t, expectedMatchedLines[2], bestMatch.lines[2])
-		} else {
-			// If fewer lines are matched, the test might need adjustment based on
-			// the actual behavior of FindAcceptableMatch, but the primary goal
-			// is checking successfulMatch and index.
-			t.Logf("Warning: Matched lines count (%d) is less than expected core lines (3). Match lines: %v", len(bestMatch.lines), bestMatch.lines)
-			// We still rely on successfulMatch and index being correct.
-		}
+
+		_, allAcceptableMatches := FindAcceptableMatch(block, originalLines, false)
+
+		utils.PrettyPrint(allAcceptableMatches)
+		assert.True(t, len(allAcceptableMatches) == 0, "Expected no acceptable match due to bad delimiter match")
 	})
 }
 

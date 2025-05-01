@@ -758,17 +758,25 @@ func FindPotentialMatches(block EditBlock, originalLines []string, startingLineI
 }
 
 // Find the first non-whitespace line in block's old lines
-func calculateStartingLineIndex(block EditBlock, originalLines []string) int {
+func calculateStartingLineIndex(lines []string) int {
 	startingLineIndex := 0
-	for startingLineIndex < len(block.OldLines)-1 && isWhitespaceOrEndingDelimiter(block.OldLines[startingLineIndex]) {
+	for startingLineIndex < len(lines)-1 && isWhitespaceOrEndingDelimiter(lines[startingLineIndex]) {
 		startingLineIndex++
 	}
 	return startingLineIndex
 }
 
 func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFromActualFile bool) (match, []match) {
-	startingLineIndex := calculateStartingLineIndex(block, originalLines)
+	startingLineIndex := calculateStartingLineIndex(block.OldLines)
 	potentialMatches := FindPotentialMatches(block, originalLines, startingLineIndex, isOriginalLinesFromActualFile)
+
+	// if no potential matches based on first line, go to the next line and try again
+	skippedOldLines := 0
+	if len(potentialMatches) == 0 && startingLineIndex+1 < len(block.OldLines) {
+		skippedOldLines = 1
+		startingLineIndex = startingLineIndex + 1 + calculateStartingLineIndex(block.OldLines[startingLineIndex+1:])
+		potentialMatches = FindPotentialMatches(block, originalLines, startingLineIndex, isOriginalLinesFromActualFile)
+	}
 
 	var allMatches []match
 	var bestMatch match
@@ -793,7 +801,7 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 		for i := 0; i+oldLinesOffset < len(block.OldLines); i++ {
 			oldLine := block.OldLines[i+oldLinesOffset]
 
-			// fmt.Printf("i:%v, oldLinesOffset: %v, originalLinesOffset: %v\n", i, oldLinesOffset, originalLinesOffset)
+			//fmt.Printf("i:%v, oldLinesOffset: %v, originalLinesOffset: %v\n", i, oldLinesOffset, originalLinesOffset)
 			// bounds check
 			if adjustedIndex+i+originalLinesOffset >= len(originalLines) {
 				if isWhitespaceOrComment(oldLine) {
@@ -806,25 +814,74 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 			}
 			originalLine := originalLines[adjustedIndex+i+originalLinesOffset]
 
-			// fmt.Printf("comparing:\n%v\n%v\n", originalLine, oldLine)
+			fmt.Printf("comparing:\n    orig: %s\n     old: %s\n", originalLine, oldLine)
 			score := utils.StringSimilarity(originalLine, oldLine)
-			// fmt.Printf("score: %v\n", score)
+			fmt.Printf("score: %v\n", score)
 
 			// skip whitespace-only or comment-only lines when on one side only
 			// TODO ignore changes or added comments on the end of an existing line
 			if score < similarityThreshold {
-				if isWhitespaceOrComment(originalLine) && !isWhitespaceOrComment(oldLine) {
+				if (isWhitespaceOrComment(originalLine) && !isWhitespaceOrComment(oldLine)) ||
+					(isWhitespace(originalLine) && !isWhitespace(oldLine)) {
 					matchedLines = append(matchedLines, originalLine)
-					// fmt.Println("offsetting original lines")
+					//fmt.Println("offsetting original lines")
 					originalLinesOffset += 1
 					i--
 					continue
-				} else if isWhitespaceOrComment(oldLine) && !isWhitespaceOrComment(originalLine) {
-					// fmt.Println("offsetting old lines")
+				} else if (isWhitespaceOrComment(oldLine) && !isWhitespaceOrComment(originalLine)) ||
+					(isWhitespace(oldLine) && !isWhitespace(originalLine)) {
+					//fmt.Println("offsetting old lines")
+					oldLinesOffset += 1
+					i--
+					continue
+				} else if numScoredLines == 0 && skippedOldLines > 0 {
+					// we haven't scored lines, but it's a potential match, so
+					// that means startLineIndex is not at 0, so we'll offset
+					// old lines further. note: this is not the same as setting
+					// oldLinesOffset to startLineIndex, since we might find
+					// matches with closing delimiters, which startLineIndex
+					// does try to skip initially
 					oldLinesOffset += 1
 					i--
 					continue
 				} else {
+					// TODO add some good test cases for below before bring in
+					// this additional logic, if we think we still want it after
+					// writing out those test cases
+					/*
+						nextOriginalLinesOffset := originalLinesOffset + 1
+						if adjustedIndex+i+nextOriginalLinesOffset < len(originalLines) {
+							nextOriginalLine := originalLines[adjustedIndex+i+nextOriginalLinesOffset]
+							nextScore := utils.StringSimilarity(nextOriginalLine, oldLine)
+							// skipping original line gives us a better match, so we
+							// should skip, but account for this as a scored line
+							// that got a bad score
+							if nextScore >= similarityThreshold {
+								numScoredLines++
+								totalScore += score
+								originalLinesOffset += 1
+								i--
+								continue
+							}
+						}
+
+						nextOldLinesOffset := oldLinesOffset + 1
+						if i+nextOldLinesOffset < len(block.OldLines) {
+							nextOldLine := block.OldLines[i+nextOldLinesOffset]
+							nextScore := utils.StringSimilarity(originalLine, nextOldLine)
+							// skipping old line gives us a better match, so we
+							// should skip, but account for this as a scored line
+							// that got a bad score
+							if nextScore >= similarityThreshold {
+								numScoredLines++
+								totalScore += score
+								oldLinesOffset += 1
+								i--
+								continue
+							}
+						}
+					*/
+
 					// fmt.Println("offsetting nothing")
 				}
 			}
@@ -845,19 +902,25 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 		var highScoreRatio float64
 		var avgScore float64
 		if successfulMatch {
+			//fmt.Println("successfulMatch")
 			// different denominator so that we can use a consistent threshold
 			// when skipping whitespace or comment lines
-			highScoreRatio = float64(numHighScoreLines) / float64(numScoredLines)
-			avgScore = float64(totalScore) / float64(numScoredLines)
+			highScoreRatio = float64(numHighScoreLines) / float64(numScoredLines+skippedOldLines)
+			avgScore = float64(totalScore) / float64(numScoredLines+skippedOldLines)
+			//fmt.Printf("highScoreRatio: %v\n", highScoreRatio)
+			//fmt.Printf("avgScore: %v\n", avgScore)
 		} else {
+			//fmt.Println("NOT successfulMatch")
 			// we don't score all lines when unsuccessful, so for parity across
 			// multiple unsuccessful matches, we need to use a consistent
 			// denominator
 			highScoreRatio = float64(numHighScoreLines) / float64(len(block.OldLines))
 			avgScore = float64(totalScore) / float64(len(block.OldLines))
 		}
-		// fmt.Printf("highScoreRatio: %v\n", highScoreRatio)
+		//fmt.Printf("highScoreRatio: %v\n", highScoreRatio)
+		//fmt.Printf("numScoredLines: %v\n", numScoredLines)
 		thisMatch := match{index: adjustedIndex, successfulMatch: successfulMatch, highScoreRatio: highScoreRatio, score: avgScore, lines: matchedLines, failedToMatch: failedToMatch, foundInstead: foundInstead}
+
 		allMatches = append(allMatches, thisMatch)
 
 		isNewBest := successfulMatch && avgScore > bestMatch.score

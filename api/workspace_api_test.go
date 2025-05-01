@@ -544,7 +544,6 @@ func TestGetWorkspaceBranchesHandler(t *testing.T) {
 		// Ensure the error message reflects that the directory check failed.
 		require.Contains(t, result["error"], "Workspace repository directory not found")
 	})
-
 }
 
 func TestGetWorkspaceByIdHandler(t *testing.T) {
