@@ -199,7 +199,7 @@ func NewController() (Controller, error) {
 }
 
 func (ctrl *Controller) ErrorHandler(c *gin.Context, status int, err error) {
-	log.Error().Err(err)
+	log.Error().Err(err).Str("path", c.FullPath()).Int("status", status).Msg("Error handling request")
 	c.JSON(status, gin.H{"error": err.Error()})
 }
 

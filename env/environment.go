@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"sidekick/coding/unix"
 	"sidekick/common"
@@ -79,55 +78,16 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 		return nil, fmt.Errorf("failed to create worktree directory: %w", err)
 	}
 
-	// Determine the target branch to base the worktree on
-	var targetBranch string
-	if params.StartBranch != nil && *params.StartBranch != "" {
-		targetBranch = *params.StartBranch
-		// TODO: Optionally verify the branch exists? Might be complex if remote.
-	} else {
-		// Get current branch name
-		getCurrentBranchInput := unix.RunCommandActivityInput{
-			WorkingDir: params.RepoDir,
-			Command:    "git",
-			Args:       []string{"symbolic-ref", "--short", "HEAD"},
-		}
-		getCurrentBranchOutput, err := unix.RunCommandActivity(ctx, getCurrentBranchInput)
-		if err == nil && getCurrentBranchOutput.ExitStatus == 0 {
-			// Use strings.TrimSpace on Stdout to get the branch name
-			targetBranch = strings.TrimSpace(getCurrentBranchOutput.Stdout)
-		} else {
-			// Likely detached HEAD or other error, try default branches
-			verifyMainInput := unix.RunCommandActivityInput{
-				WorkingDir: params.RepoDir,
-				Command:    "git",
-				Args:       []string{"rev-parse", "--verify", "main"},
-			}
-			verifyMainOutput, err := unix.RunCommandActivity(ctx, verifyMainInput)
-			if err == nil && verifyMainOutput.ExitStatus == 0 {
-				targetBranch = "main"
-			} else {
-				verifyMasterInput := unix.RunCommandActivityInput{
-					WorkingDir: params.RepoDir,
-					Command:    "git",
-					Args:       []string{"rev-parse", "--verify", "master"},
-				}
-				verifyMasterOutput, err := unix.RunCommandActivity(ctx, verifyMasterInput)
-				if err == nil && verifyMasterOutput.ExitStatus == 0 {
-					targetBranch = "master"
-				} else {
-					return nil, fmt.Errorf("failed to determine current or default branch (main/master) to base worktree on")
-				}
-			}
-		}
-	}
-
 	newBranchName := worktree.Name
-
+	worktreeBaseRef := "HEAD"
+	if params.StartBranch != nil && *params.StartBranch != "" {
+		worktreeBaseRef = *params.StartBranch
+	}
 	// Add the worktree, creating a new branch based on the target branch
 	addWorktreeInput := unix.RunCommandActivityInput{
 		WorkingDir: params.RepoDir,
 		Command:    "git",
-		Args:       []string{"worktree", "add", "-b", newBranchName, workingDir, targetBranch},
+		Args:       []string{"worktree", "add", "-b", newBranchName, workingDir, worktreeBaseRef},
 	}
 	addWorktreeOutput, err := unix.RunCommandActivity(ctx, addWorktreeInput)
 	if err != nil {
