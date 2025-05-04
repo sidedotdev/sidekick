@@ -18,13 +18,13 @@ func TestUnmarshalFlowEvent_CodeDiffEvent(t *testing.T) {
 			name: "valid code diff event",
 			json: `{
 				"eventType": "code_diff",
-				"flowActionId": "action123",
+				"subflowId": "sf_123",
 				"diff": "diff --git a/file.txt b/file.txt\n@@ -1,1 +1,1 @@\n-old\n+new"
 			}`,
 			want: CodeDiffEvent{
-				EventType:    CodeDiffEventType,
-				FlowActionId: "action123",
-				Diff:         "diff --git a/file.txt b/file.txt\n@@ -1,1 +1,1 @@\n-old\n+new",
+				EventType: CodeDiffEventType,
+				SubflowId: "sf_123",
+				Diff:      "diff --git a/file.txt b/file.txt\n@@ -1,1 +1,1 @@\n-old\n+new",
 			},
 			wantErr: false,
 		},
@@ -32,7 +32,7 @@ func TestUnmarshalFlowEvent_CodeDiffEvent(t *testing.T) {
 			name: "invalid json",
 			json: `{
 				"eventType": "codeDiff",
-				"flowActionId": "action123"
+				"subflowId": "sf_123"
 				"diff": "some diff"
 			}`,
 			want:    nil,
@@ -42,7 +42,7 @@ func TestUnmarshalFlowEvent_CodeDiffEvent(t *testing.T) {
 			name: "missing required field",
 			json: `{
 				"eventType": "codeDiff",
-				"flowActionId": "action123"
+				"subflowId": "sf_123"
 			}`,
 			want:    nil,
 			wantErr: true,
@@ -70,9 +70,9 @@ func TestUnmarshalFlowEvent_CodeDiffEvent(t *testing.T) {
 
 func TestUnmarshalFlowEvent_CodeDiffEvent_RoundTrip(t *testing.T) {
 	original := CodeDiffEvent{
-		EventType:    CodeDiffEventType,
-		FlowActionId: "action123",
-		Diff:         "diff --git a/file.txt b/file.txt\n@@ -1,1 +1,1 @@\n-old\n+new",
+		EventType: CodeDiffEventType,
+		SubflowId: "sf_123",
+		Diff:      "diff --git a/file.txt b/file.txt\n@@ -1,1 +1,1 @@\n-old\n+new",
 	}
 
 	// Marshal to JSON

@@ -95,6 +95,22 @@ func (e StatusChangeEvent) GetEventType() FlowEventType {
 // Ensure StatusChangeEvent implements FlowEvent interface
 var _ FlowEvent = (*StatusChangeEvent)(nil)
 
+type CodeDiffEvent struct {
+	EventType    FlowEventType `json:"eventType"`
+	SubflowId string        `json:"subflowId"`
+	Diff         string        `json:"diff"`
+}
+
+func (e CodeDiffEvent) GetParentId() string {
+	return e.SubflowId
+}
+
+func (e CodeDiffEvent) GetEventType() FlowEventType {
+	return e.EventType
+}
+
+var _ FlowEvent = (*CodeDiffEvent)(nil)
+
 // UnmarshalFlowEvent unmarshals a JSON byte slice into a FlowEvent based on the "eventType" field.
 func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
 	var event struct {
@@ -162,19 +178,3 @@ type FlowEventStreamer interface {
 	EndFlowEventStream(ctx context.Context, workspaceId, flowId, eventStreamParentId string) error
 	StreamFlowEvents(ctx context.Context, workspaceId, flowId string, subscriptionCh <-chan FlowEventSubscription) (<-chan FlowEvent, <-chan error)
 }
-
-type CodeDiffEvent struct {
-	EventType    FlowEventType `json:"eventType"`
-	FlowActionId string        `json:"flowActionId"`
-	Diff         string        `json:"diff"`
-}
-
-func (e CodeDiffEvent) GetParentId() string {
-	return e.FlowActionId
-}
-
-func (e CodeDiffEvent) GetEventType() FlowEventType {
-	return e.EventType
-}
-
-var _ FlowEvent = (*CodeDiffEvent)(nil)

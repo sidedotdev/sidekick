@@ -3,13 +3,17 @@ package dev
 import (
 	_ "embed"
 	"fmt"
+	"sidekick/coding/git"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/llm"
+	"sidekick/srv"
 	"sidekick/utils"
 	"sort"
 	"strings"
+
+	"go.temporal.io/sdk/workflow"
 )
 
 const SignaturesEditHint = "Important note about shrunk context: in order to edit code for which we only show extracted code signatures, you must retrieve code context to get the full code from the original source using a tool."
@@ -88,6 +92,32 @@ editLoop:
 			promptInfo = FeedbackInfo{Feedback: feedback}
 			attemptCount++
 		} else {
+			anyApplied := false
+			for _, report := range reports {
+				if report.DidApply {
+					anyApplied = true
+				}
+			}
+
+			if anyApplied {
+				// emit event with the git diff after any successful edits
+				diff, err := git.GitDiff(dCtx.ExecContext)
+				if err != nil {
+					return fmt.Errorf("failed to get git diff after edits: %v", err)
+				}
+
+				subflow := dCtx.FlowScope.Subflow
+				var srvActivities *srv.Activities
+				err = workflow.ExecuteActivity(dCtx, srvActivities.AddFlowEvent, dCtx.WorkspaceId, subflow.FlowId, &domain.CodeDiffEvent{
+					EventType:    domain.CodeDiffEventType,
+					SubflowId:    subflow.Id,
+					Diff:         diff,
+				}).Get(dCtx, nil)
+				if err != nil {
+					return fmt.Errorf("failed to emit code diff event: %v", err)
+				}
+			}
+
 			// Construct a message from the reports and add it to the chat
 			// history, so that the LLM can see what happened
 			reportMessage := feedbackFromApplyEditBlockReports(reports)
@@ -111,6 +141,7 @@ editLoop:
 				Role:    "system",
 				Content: reportMessage,
 			})
+
 			break
 		}
 	}
