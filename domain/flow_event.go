@@ -15,6 +15,7 @@ const (
 	StatusChangeEventType     FlowEventType = "status_change"
 	ChatMessageDeltaEventType FlowEventType = "chat_message_delta"
 	EndStreamEventType        FlowEventType = "end_stream"
+	CodeDiffEventType         FlowEventType = "code_diff"
 )
 
 // EndStreamEvent represents the end of a flow event stream.
@@ -153,3 +154,19 @@ type FlowEventStreamer interface {
 	EndFlowEventStream(ctx context.Context, workspaceId, flowId, eventStreamParentId string) error
 	StreamFlowEvents(ctx context.Context, workspaceId, flowId string, subscriptionCh <-chan FlowEventSubscription) (<-chan FlowEvent, <-chan error)
 }
+
+type CodeDiffEvent struct {
+	EventType    FlowEventType `json:"eventType"`
+	FlowActionId string        `json:"flowActionId"`
+	Diff         string        `json:"diff"`
+}
+
+func (e CodeDiffEvent) GetParentId() string {
+	return e.FlowActionId
+}
+
+func (e CodeDiffEvent) GetEventType() FlowEventType {
+	return e.EventType
+}
+
+var _ FlowEvent = (*CodeDiffEvent)(nil)
