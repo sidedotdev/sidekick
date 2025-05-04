@@ -139,6 +139,14 @@ func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
 		}
 		return statusChange, nil
 
+	case CodeDiffEventType:
+		var codeDiff CodeDiffEvent
+		err := json.Unmarshal(data, &codeDiff)
+		if err != nil {
+			return nil, err
+		}
+		return codeDiff, nil
+
 	default:
 		return nil, fmt.Errorf("unknown flow eventType: %s", event.EventType)
 	}
