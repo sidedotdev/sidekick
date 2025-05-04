@@ -206,9 +206,9 @@ func TestGetWorkspaceByIdHandler(t *testing.T) {
 	db := ctrl.service
 `, "\n")
 
-				block := EditBlock{
-					FilePath: "some/file.go",
-					OldLines: strings.Split(`)
+		block := EditBlock{
+			FilePath: "some/file.go",
+			OldLines: strings.Split(`)
 
 func TestGetWorkspaceByIdHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)

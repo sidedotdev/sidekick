@@ -337,7 +337,7 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 			expectError:     false,
 		},
 		{
-			name:      "one managed worktree (exists)",
+			name: "one managed worktree (exists)",
 			gitWorktrees: []git.GitWorktree{ // Slice with one element
 				{Branch: "managed-branch-1", Path: resolvedManagedBranch1PathEval},
 			},
@@ -347,7 +347,7 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:      "two managed worktrees across two workspaces",
+			name: "two managed worktrees across two workspaces",
 			gitWorktrees: []git.GitWorktree{ // Slice with one element
 				{Branch: "managed-branch-1", Path: resolvedManagedBranch1PathEval},
 				{Branch: "managed-branch-2", Path: resolvedManagedBranch2PathEval},
@@ -359,7 +359,7 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:      "one managed worktree (does not exist)",
+			name: "one managed worktree (does not exist)",
 			gitWorktrees: []git.GitWorktree{ // Slice with one element
 				// Git reports this path, but it doesn't exist on disk.
 				// determineManagedWorktreeBranches should still match based on the expected path calculation.
@@ -371,7 +371,7 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:      "one unmanaged worktree",
+			name: "one unmanaged worktree",
 			gitWorktrees: []git.GitWorktree{ // Slice with one element
 				{Branch: "unmanaged-branch", Path: resolvedUnmanagedBranchPathEval},
 			},
@@ -379,7 +379,7 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 			expectError:     false,
 		},
 		{
-			name:      "mixed managed and unmanaged worktrees",
+			name: "mixed managed and unmanaged worktrees",
 			gitWorktrees: []git.GitWorktree{ // Slice with multiple elements
 				{Branch: "managed-branch-1", Path: resolvedManagedBranch1PathEval},
 				{Branch: "unmanaged-branch", Path: resolvedUnmanagedBranchPathEval},
