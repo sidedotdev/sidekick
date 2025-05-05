@@ -26,7 +26,9 @@ func (a Activities) GetFlow(ctx context.Context, workspaceId string, flowId stri
 	return a.Service.GetFlow(ctx, workspaceId, flowId)
 }
 
-func (a Activities) AddFlowEvent(ctx context.Context, workspaceId string, flowId string, flowEvent domain.FlowEvent) error {
+func (a Activities) AddFlowEvent(ctx context.Context, workspaceId string, flowId string, flowEventContainer domain.FlowEventContainer) error {
+	flowEvent := flowEventContainer.FlowEvent
+	// The underlying service method still expects the FlowEvent interface, not the container.
 	return a.Service.AddFlowEvent(ctx, workspaceId, flowId, flowEvent)
 }
 
