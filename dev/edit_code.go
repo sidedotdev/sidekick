@@ -109,9 +109,9 @@ editLoop:
 				subflow := dCtx.FlowScope.Subflow
 				var srvActivities *srv.Activities
 				err = workflow.ExecuteActivity(dCtx, srvActivities.AddFlowEvent, dCtx.WorkspaceId, subflow.FlowId, &domain.CodeDiffEvent{
-					EventType:    domain.CodeDiffEventType,
-					SubflowId:    subflow.Id,
-					Diff:         diff,
+					EventType: domain.CodeDiffEventType,
+					SubflowId: subflow.Id,
+					Diff:      diff,
 				}).Get(dCtx, nil)
 				if err != nil {
 					return fmt.Errorf("failed to emit code diff event: %v", err)
