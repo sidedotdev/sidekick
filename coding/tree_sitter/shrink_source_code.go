@@ -180,8 +180,10 @@ func ShrinkEmbeddedCodeContext(content string, longestFirst bool, maxLength int)
 
 		didRemove, withoutComments := removeComments(sourceCode)
 		if didRemove {
+			oldSourceCodeContent := sourceCode.Content
 			hint := "Shrank context - here are the extracted code signatures only, in lieu of full code:\n"
-			content = strings.Replace(content, sourceCode.Content, hint+withoutComments.Content, 1)
+			fenceStart := "```" + sourceCode.OriginalLanguageName + "\n"
+			content = strings.Replace(content, "Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:\n"+fenceStart+oldSourceCodeContent, hint+fenceStart+withoutComments.Content, 1)
 			adjustedSourceCodes[i] = withoutComments
 		}
 	}
@@ -221,7 +223,7 @@ func removeComments(sourceCode SourceCode) (bool, SourceCode) {
 	// TODO: move this to language-specific query files instead, similar to the
 	// signature_queries and header_queries
 	switch sourceCode.OriginalLanguageName {
-	case "typescript", "javascript", "golang", "vue", "typescript-signatures", "javascript-signatures", "go", "vue-signatures", "golang-signatures":
+	case "typescript", "javascript", "golang", "vue", "typescript-signatures", "javascript-signatures", "go", "vue-signatures", "golang-signatures", "go-signatures":
 		queryString = `(comment) @comment`
 	case "python":
 		queryString = `
@@ -241,7 +243,7 @@ func removeComments(sourceCode SourceCode) (bool, SourceCode) {
 )
 `
 	case "python-signatures":
-		queryString += `
+		queryString = `
 (comment) @comment
 
 (ERROR

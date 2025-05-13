@@ -123,12 +123,90 @@ func TestShrinkEmbeddedCodeContext(t *testing.T) {
 			wantDidShrink: true,
 		},
 		{
-			name:         "removes header lines and comments",
-			input:        createMarkdownCodeBlock("go", "// Package comment\npackage main\n\n// Func comment\nfunc Example() {\n\tfmt.Println(\"hello\")\n}"),
-			maxLength:    50,
+			name:          "unsupported language remains unchanged",
+			input:         createMarkdownCodeBlock("ruby", "def hello\n  puts 'world'\nend"),
+			maxLength:     10,
+			longestFirst:  true,
+			wantContent:   createMarkdownCodeBlock("ruby", "def hello\n  puts 'world'\nend"),
+			wantDidShrink: false,
+		},
+		{
+			name: "mixed supported and unsupported languages",
+			input: createMarkdownCodeBlock("ruby", "def hello\n  puts 'world'\nend") + "\n" +
+				createMarkdownCodeBlock("go", "func main() {\n\tfmt.Println(\"hello\")\n}"),
+			maxLength:    40,
+			longestFirst: true,
+			wantContent: createMarkdownCodeBlock("ruby", "def hello\n  puts 'world'\nend") + "\n" +
+				"Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:\n" +
+				createMarkdownCodeBlock("go-signatures", "func main()"),
+			wantDidShrink: true,
+		},
+		{
+			name: "python with docstrings and comments",
+			input: createMarkdownCodeBlock("python", `"""
+Module docstring
+Multiple lines
+"""
+
+def function():
+    """
+    Function docstring
+    Multiple lines
+    """
+    # Comment 1
+    print("hello")  # Comment 2
+    return True  # Comment 3`),
+			maxLength:    200,
 			longestFirst: true,
 			wantContent: "Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:\n" +
-				createMarkdownCodeBlock("go-signatures", "// Func comment\nfunc Example()"),
+				createMarkdownCodeBlock("python-signatures", `def function()
+	"""
+    Function docstring
+    Multiple lines
+    """`),
+			wantDidShrink: true,
+		},
+		{
+			name: "keeps comments when they fit",
+			input: createMarkdownCodeBlock("go", `// Function comment
+// Multiple lines
+func main() {
+	// Comment 1
+	fmt.Println("hello") // Comment 2
+	fmt.Println("abc 123 this is a comment to get over threshold length")
+	return  // Comment 3
+}`),
+			maxLength:    190,
+			longestFirst: true,
+			wantContent: "Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:\n" +
+				createMarkdownCodeBlock("go-signatures", "// Function comment\n// Multiple lines\nfunc main()"),
+			wantDidShrink: true,
+		},
+		{
+			name:         "remove all comments when still too long",
+			input:        createMarkdownCodeBlock("go", "// Function comment\n// Multiple lines\nfunc main() {\n\t// Comment 1\n\tfmt.Println(\"hello\")  // Comment 2\n\treturn  // Comment 3\n}"),
+			maxLength:    20,
+			longestFirst: true,
+			wantContent: "Shrank context - here are the extracted code signatures only, in lieu of full code:\n" +
+				createMarkdownCodeBlock("go-signatures", "func main()"),
+			wantDidShrink: true,
+		},
+		{
+			name: "removes header lines and header comments",
+			input: createMarkdownCodeBlock("go", `// Package comment
+package main
+
+// Func comment
+func main() {
+	// Comment 1
+	fmt.Println("hello") // Comment 2
+	fmt.Println("abc 123 this is a comment to get over threshold length")
+	return  // Comment 3
+}`),
+			maxLength:    200,
+			longestFirst: true,
+			wantContent: "Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:\n" +
+				createMarkdownCodeBlock("go-signatures", "// Func comment\nfunc main()"),
 			wantDidShrink: true,
 		},
 	}
@@ -137,7 +215,8 @@ func TestShrinkEmbeddedCodeContext(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			gotContent, gotDidShrink := ShrinkEmbeddedCodeContext(tt.input, tt.longestFirst, tt.maxLength)
 			if normalizeWhitespace(gotContent) != normalizeWhitespace(tt.wantContent) {
-				t.Errorf("%s: content mismatch\nwant:\n%s\ngot:\n%s", tt.name, tt.wantContent, gotContent)
+				t.Errorf("%s: mismatch\nwant:\n%s\ngot:\n%s", tt.name, tt.wantContent, gotContent)
+				t.Errorf("%s: json-formatted mismatch\nwant:\n%s\ngot:\n%s", tt.name, utils.PanicJSON(tt.wantContent), utils.PanicJSON(gotContent))
 			}
 			if gotDidShrink != tt.wantDidShrink {
 				t.Errorf("%s: didShrink mismatch: want %v, got %v", tt.name, tt.wantDidShrink, gotDidShrink)
