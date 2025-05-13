@@ -19,7 +19,7 @@ import (
 type DevContext struct {
 	flow_action.ExecContext
 	GlobalState     *GlobalState
-	WorktreeName    string
+	Worktree    	*domain.Worktree
 	RepoConfig      common.RepoConfig
 	Providers       []common.ModelProviderPublicConfig
 	LLMConfig       common.LLMConfig
@@ -56,6 +56,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	var err error
 	var envContainer env.EnvContainer
 
+	var worktree *domain.Worktree
 	switch envType {
 	case "local", "":
 		devEnv, err = env.NewLocalEnv(context.Background(), env.LocalEnvParams{
@@ -66,7 +67,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		}
 		envContainer = env.EnvContainer{Env: devEnv}
 	case "local_git_worktree":
-		worktree := domain.Worktree{
+		worktree = &domain.Worktree{
 			Id:          ksuidSideEffect(ctx),
 			FlowId:      workflow.GetInfo(ctx).WorkflowExecution.ID,
 			Name:        workflow.GetInfo(ctx).WorkflowExecution.ID, // TODO human-readable branch name generated from task description
@@ -75,11 +76,11 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		err = workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeActivity, env.LocalEnvParams{
 			RepoDir:     repoDir,
 			StartBranch: startBranch,
-		}, worktree).Get(ctx, &envContainer)
+		}, *worktree).Get(ctx, &envContainer)
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
 		}
-		err = workflow.ExecuteActivity(ctx, srv.Activities.PersistWorktree, worktree).Get(ctx, nil)
+		err = workflow.ExecuteActivity(ctx, srv.Activities.PersistWorktree, *worktree).Get(ctx, nil)
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to persist worktree: %v", err)
 		}
@@ -150,14 +151,11 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 	devCtx := DevContext{
 		ExecContext:     eCtx,
+		Worktree:        worktree,
 		RepoConfig:      repoConfig,
 		Providers:       localConfig.Providers, // TODO merge with workspace providers
 		LLMConfig:       finalLLMConfig,
 		EmbeddingConfig: finalEmbeddingConfig,
-	}
-
-	if envType == "local_git_worktree" {
-		devCtx.WorktreeName = workflow.GetInfo(ctx).WorkflowExecution.ID // Same as worktree.Name above
 	}
 
 	return devCtx, nil
