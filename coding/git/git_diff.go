@@ -12,7 +12,6 @@ import (
 
 type GitDiffParams struct {
 	FilePaths        []string
-	CommitSHA        string
 	BaseBranch       string
 	ThreeDotDiff     bool
 	IgnoreWhitespace bool
@@ -81,10 +80,6 @@ func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params 
 		// Use three-dot syntax to show changes between branches
 		args = append(args, fmt.Sprintf("%s...HEAD", params.BaseBranch))
 	} else {
-		// Original behavior for non-three-dot diffs
-		if params.CommitSHA != "" {
-			args = append(args, params.CommitSHA)
-		}
 		if params.Staged {
 			args = append(args, "--staged")
 		}
