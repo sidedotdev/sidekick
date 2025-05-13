@@ -1108,6 +1108,7 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 				log.Error().Err(err).Msg("Invalid message format received in FlowEventsWebsocketHandler")
 				continue
 			}
+			log.Debug().Str("parentId", sub.ParentId).Msg("received subscription message")
 			subscriptionCh <- sub
 		}
 	}()
