@@ -2,8 +2,8 @@ package sqlite
 
 import (
 	"context"
+	"sidekick/common"
 	"sidekick/domain"
-	"sidekick/srv"
 	"testing"
 	"time"
 
@@ -57,7 +57,7 @@ func TestFlowActionStorage(t *testing.T) {
 
 	t.Run("GetFlowAction_NotFound", func(t *testing.T) {
 		_, err := storage.GetFlowAction(ctx, workspaceId, "non-existent-id")
-		assert.Equal(t, srv.ErrNotFound, err)
+		assert.Equal(t, common.ErrNotFound, err)
 	})
 
 	t.Run("GetFlowActions", func(t *testing.T) {

@@ -2,8 +2,8 @@ package sqlite
 
 import (
 	"context"
+	"sidekick/common"
 	"sidekick/domain"
-	"sidekick/srv"
 	"testing"
 	"time"
 
@@ -79,12 +79,12 @@ func TestDeleteTask(t *testing.T) {
 	// Verify the task was deleted
 	_, err = storage.GetTask(ctx, task.WorkspaceId, task.Id)
 	require.Error(t, err)
-	assert.Equal(t, srv.ErrNotFound, err)
+	assert.Equal(t, common.ErrNotFound, err)
 
 	// Test deleting a non-existent task
 	err = storage.DeleteTask(ctx, "nonexistent", "nonexistent")
 	assert.Error(t, err)
-	assert.Equal(t, srv.ErrNotFound.Error(), err.Error())
+	assert.Equal(t, common.ErrNotFound.Error(), err.Error())
 }
 
 func TestGetTask(t *testing.T) {
@@ -131,7 +131,7 @@ func TestGetTask(t *testing.T) {
 	// Test getting a non-existent task
 	_, err = storage.GetTask(ctx, "nonexistent", "nonexistent")
 	assert.Error(t, err)
-	assert.Equal(t, srv.ErrNotFound, err)
+	assert.Equal(t, common.ErrNotFound, err)
 }
 
 func TestGetTasks(t *testing.T) {

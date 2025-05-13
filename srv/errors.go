@@ -1,5 +1,5 @@
 package srv
 
-import "errors"
+import "sidekick/common"
 
-var ErrNotFound = errors.New("not found")
+var ErrNotFound = common.ErrNotFound

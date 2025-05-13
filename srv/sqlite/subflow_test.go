@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/utils"
 	"testing"
@@ -168,13 +169,13 @@ func TestGetSubflow(t *testing.T) {
 		nonExistentId := "sf_" + ksuid.New().String()
 		_, err := storage.GetSubflow(ctx, workspaceId, nonExistentId)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to get subflow")
+		assert.ErrorIs(t, err, common.ErrNotFound)
 	})
 
 	t.Run("Attempt to retrieve subflow from wrong workspace", func(t *testing.T) {
 		wrongWorkspaceId := ksuid.New().String()
 		_, err := storage.GetSubflow(ctx, wrongWorkspaceId, subflowId)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to get subflow")
+		assert.ErrorIs(t, err, common.ErrNotFound)
 	})
 }

@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sidekick/common"
 	"sidekick/domain"
-	"sidekick/srv"
 	"time"
 )
 
@@ -110,7 +110,7 @@ func (s *Storage) GetFlowAction(ctx context.Context, workspaceId, flowActionId s
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return domain.FlowAction{}, srv.ErrNotFound
+			return domain.FlowAction{}, common.ErrNotFound
 		}
 		return domain.FlowAction{}, fmt.Errorf("failed to get flow action: %w", err)
 	}
