@@ -13,6 +13,81 @@ func normalizeWhitespace(content string) string {
 	return newlinesRegex.ReplaceAllString(strings.TrimSpace(content), "\n")
 }
 
+func createMarkdownCodeBlock(language, code string) string {
+	return "```" + language + "\n" + code + "\n```"
+}
+
+func TestShrinkEmbeddedCodeContext(t *testing.T) {
+	tests := []struct {
+		name          string
+		input         string
+		maxLength     int
+		longestFirst  bool
+		wantContent   string
+		wantDidShrink bool
+	}{
+		{
+			name:          "empty content",
+			input:         "",
+			maxLength:     100,
+			longestFirst:  true,
+			wantContent:   "",
+			wantDidShrink: false,
+		},
+		{
+			name:          "content under max length",
+			input:         "Some text without code blocks",
+			maxLength:     100,
+			longestFirst:  true,
+			wantContent:   "Some text without code blocks",
+			wantDidShrink: false,
+		},
+		{
+			name:          "single code block under max length",
+			input:         "Some text\n" + createMarkdownCodeBlock("go", "func test() {\n\treturn\n}") + "\nMore text",
+			maxLength:     100,
+			longestFirst:  true,
+			wantContent:   "Some text\n" + createMarkdownCodeBlock("go", "func test() {\n\treturn\n}") + "\nMore text",
+			wantDidShrink: false,
+		},
+		{
+			name: "duplicate code blocks",
+			input: createMarkdownCodeBlock("go", "func test() {\n\treturn\n}") + "\n" +
+				"Some text\n" +
+				createMarkdownCodeBlock("go", "func test() {\n\treturn\n}"),
+			maxLength:     50, // Small enough to trigger deduplication, but not true shrinking (dedupe brings it below max length)
+			longestFirst:  true,
+			wantContent:   "[...]\nSome text\n" + createMarkdownCodeBlock("go", "func test() {\n\treturn\n}"),
+			wantDidShrink: false, // deduplication is not shrinking
+		},
+		{
+			name: "multiple different blocks under max length",
+			input: createMarkdownCodeBlock("go", "func test1() {}") + "\n" +
+				"Some text\n" +
+				createMarkdownCodeBlock("python", "def test2():\n    pass"),
+			maxLength:    1000,
+			longestFirst: true,
+			wantContent: createMarkdownCodeBlock("go", "func test1() {}") + "\n" +
+				"Some text\n" +
+				createMarkdownCodeBlock("python", "def test2():\n    pass"),
+			wantDidShrink: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotContent, gotDidShrink := ShrinkEmbeddedCodeContext(tt.input, tt.longestFirst, tt.maxLength)
+			if normalizeWhitespace(gotContent) != normalizeWhitespace(tt.wantContent) {
+				t.Errorf("%s: content mismatch\nwant:\n%s\ngot:\n%s", tt.name, tt.wantContent, gotContent)
+			}
+			if gotDidShrink != tt.wantDidShrink {
+				t.Errorf("%s: didShrink mismatch: want %v, got %v", tt.name, tt.wantDidShrink, gotDidShrink)
+			}
+
+		})
+	}
+}
+
 // TODO move to golang_test.go
 func TestRemoveCommentsGolang(t *testing.T) {
 	testCases := []struct {

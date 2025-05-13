@@ -125,7 +125,8 @@ func ShrinkEmbeddedCodeContext(content string, longestFirst bool, maxLength int)
 		if seen[sourceCode.Content] {
 			// TODO get the file path when extracting source code blocks too
 			fenceStart := "```" + sourceCode.OriginalLanguageName + "\n"
-			content = strings.Replace(content, fenceStart+sourceCode.Content+"```", "", 1)
+			// remove previously seen code
+			content = strings.Replace(content, fenceStart+sourceCode.Content+"```", "[...]", 1)
 		}
 		seen[sourceCode.Content] = true
 	}
