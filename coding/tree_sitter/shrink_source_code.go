@@ -162,8 +162,9 @@ func ShrinkEmbeddedCodeContext(content string, longestFirst bool, maxLength int)
 
 		didShrink = true
 		oldFenceStart := "```" + sourceCode.OriginalLanguageName + "\n"
+		newFenceStart := "```" + sourceCode.OriginalLanguageName + "-signatures" + "\n"
 		hint := "Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:\n"
-		content = strings.Replace(content, oldFenceStart+sourceCode.Content+"```", hint+*signaturesString, 1)
+		content = strings.Replace(content, oldFenceStart+sourceCode.Content, hint+newFenceStart+*signaturesString, 1)
 		adjustedSourceCodes = append(adjustedSourceCodes, SourceCode{
 			Content:              *signaturesString,
 			LanguageName:         sourceCode.LanguageName,

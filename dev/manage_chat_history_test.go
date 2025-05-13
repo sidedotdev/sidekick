@@ -181,7 +181,9 @@ func main() {
 		symbolizedCodeContent := strings.TrimPrefix(`
 some/file.go
 Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
+`+"```"+`go-signatures
 func main()
+`+"```"+`
 
 -------------------
 `, "\n") + SignaturesEditHint
@@ -228,7 +230,9 @@ some code without a language
 
 some/file.go
 Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
+` + "```" + `go-signatures
 func main()
+` + "```" + `
 
 -------------------
 ` + SignaturesEditHint
