@@ -17,6 +17,26 @@ func createMarkdownCodeBlock(language, code string) string {
 	return "```" + language + "\n" + code + "\n```"
 }
 
+var longFunction = `func long() {
+	fmt.Println("hello testing 123 and this is a long line of code very long")
+	fmt.Println("hello testing 123 and this is a long line of code very long")
+	fmt.Println("hello testing 123 and this is a long line of code very long")
+	fmt.Println("hello testing 123 and this is a long line of code very long")
+	fmt.Println("hello testing 123 and this is a long line of code very long")
+	fmt.Println("hello testing 123 and this is a long line of code very long")
+	fmt.Println("hello testing 123 and this is a long line of code very long")
+	fmt.Println("hello testing 123 and this is a long line of code very long")
+	fmt.Println("hello testing 123 and this is a long line of code very long")
+	fmt.Println("hello testing 123 and this is a long line of code very long")
+}`
+
+var lessLongFunction = `func lessLong() {
+	fmt.Println("less long 123 and this is kinda long")
+	fmt.Println("less long 123 and this is kinda long")
+	fmt.Println("less long 123 and this is kinda long")
+	fmt.Println("less long 123 and this is kinda long")
+}`
+
 func TestShrinkEmbeddedCodeContext(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -50,6 +70,10 @@ func TestShrinkEmbeddedCodeContext(t *testing.T) {
 			wantContent:   "Some text\n" + createMarkdownCodeBlock("go", "func test() {\n\treturn\n}") + "\nMore text",
 			wantDidShrink: false,
 		},
+		// TODO /gen/basic test case for avoiding "shrinking" a function that
+		// has a very short body, one that is shorter than the hint itself,
+		// which would actually enlarge it instead of shrink it (note: the
+		// function doesn't handle this case properly yet)
 		{
 			name: "duplicate code blocks",
 			input: createMarkdownCodeBlock("go", "func test() {\n\treturn\n}") + "\n" +
@@ -71,6 +95,41 @@ func TestShrinkEmbeddedCodeContext(t *testing.T) {
 				"Some text\n" +
 				createMarkdownCodeBlock("python", "def test2():\n    pass"),
 			wantDidShrink: false,
+		},
+		{
+			name: "shrinks the blocks that are longest first when longestFirst=true",
+			input: createMarkdownCodeBlock("go", longFunction) + "\n" +
+				"Some text\n" +
+				createMarkdownCodeBlock("go", lessLongFunction),
+			maxLength:    500, // enough to shrink just the long function
+			longestFirst: true,
+			wantContent: "Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:\n" +
+				createMarkdownCodeBlock("go-signatures", "func long()") + "\n" +
+				"Some text\n" +
+				createMarkdownCodeBlock("go", lessLongFunction),
+			wantDidShrink: true,
+		},
+		{
+			name: "shrinks in reverse order when longestFirst=false",
+			input: createMarkdownCodeBlock("go", longFunction) + "\n" +
+				"Some text\n" +
+				createMarkdownCodeBlock("go", lessLongFunction),
+			maxLength:    1000, // enough to shrink just the lessLong function
+			longestFirst: false,
+			wantContent: createMarkdownCodeBlock("go", longFunction) + "\n" +
+				"Some text\n" +
+				"Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:\n" +
+				createMarkdownCodeBlock("go-signatures", "func lessLong()"),
+			wantDidShrink: true,
+		},
+		{
+			name:         "removes header lines and comments",
+			input:        createMarkdownCodeBlock("go", "// Package comment\npackage main\n\n// Func comment\nfunc Example() {\n\tfmt.Println(\"hello\")\n}"),
+			maxLength:    50,
+			longestFirst: true,
+			wantContent: "Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:\n" +
+				createMarkdownCodeBlock("go-signatures", "// Func comment\nfunc Example()"),
+			wantDidShrink: true,
 		},
 	}
 
