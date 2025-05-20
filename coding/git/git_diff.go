@@ -69,7 +69,6 @@ func GitDiffLegacy(eCtx flow_action.ExecContext) (string, error) {
 	return gitDiffOutput.Stdout + "\n" + gitDiffOutput2.Stdout, nil
 }
 
-
 func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
 	var gitDiffOutput env.EnvRunCommandActivityOutput
 	args := []string{"diff"}

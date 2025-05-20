@@ -15,7 +15,16 @@ const (
 	RequestKindFreeForm       RequestKind = "free_form"
 	RequestKindMultipleChoice RequestKind = "multiple_choice"
 	RequestKindApproval       RequestKind = "approval"
+	RequestKindMergeApproval  RequestKind = "merge_approval"
 )
+
+// MergeApprovalParams contains parameters specific to merge approval requests
+type MergeApprovalParams struct {
+	TargetBranch      string   `json:"targetBranch"`
+	SourceBranch      string   `json:"sourceBranch"`
+	Diff              string   `json:"diff"`
+	AvailableBranches []string `json:"availableBranches"`
+}
 
 type RequestForUser struct {
 	OriginWorkflowId string
