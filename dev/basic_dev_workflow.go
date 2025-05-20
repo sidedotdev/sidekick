@@ -261,9 +261,10 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 
 			if mergeResult.HasConflicts {
 				// Present continue request for conflicts
+				// FIXME: need to use this in an outer loop (which does not yet exist)
 				promptInfo, err = GetUserFeedback(dCtx, promptInfo, "Merge conflicts detected", chatHistory, map[string]any{
 					"requestKind": RequestKindApproval,
-					"continueTag": "Done",
+					"continueTag": "done",
 				})
 				if err != nil {
 					_ = signalWorkflowClosure(ctx, "failed")
