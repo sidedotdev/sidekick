@@ -16,6 +16,7 @@ const (
 	RequestKindMultipleChoice RequestKind = "multiple_choice"
 	RequestKindApproval       RequestKind = "approval"
 	RequestKindMergeApproval  RequestKind = "merge_approval"
+	RequestKindContinue       RequestKind = "continue"
 )
 
 // MergeApprovalParams contains parameters specific to merge approval requests
@@ -95,7 +96,7 @@ func GetUserMergeApproval(actionCtx DevActionContext, approvalPrompt string, req
 		// auto-approve for now if humans are not in the loop
 		// TODO: add a self-review process in this case
 		approved := true
- 		targetBranch := "main" // TODO: store the startBranch as part of the worktree object when creating it, then retrieve it here
+		targetBranch := "main" // TODO: store the startBranch as part of the worktree object when creating it, then retrieve it here
 		return MergeApprovalResponse{Approved: approved, TargetBranch: targetBranch}, nil
 	}
 
@@ -174,6 +175,29 @@ func GetUserResponse(dCtx DevContext, req RequestForUser) (*UserResponse, error)
 	// handler, so it is omitted here
 
 	return &userResponse, nil
+}
+
+func GetUserContinue(actionCtx DevActionContext, prompt string, requestParams map[string]any) error {
+	if actionCtx.RepoConfig.DisableHumanInTheLoop {
+		return nil
+	}
+
+	// Create a RequestForUser struct for continue request
+	req := RequestForUser{
+		OriginWorkflowId: workflow.GetInfo(actionCtx).WorkflowExecution.ID,
+		Content:          prompt,
+		Subflow:          actionCtx.FlowScope.SubflowName,
+		RequestParams:    requestParams,
+		RequestKind:      RequestKindContinue,
+	}
+	actionCtx.ActionParams = req.ActionParams()
+
+	// Ensure tracking of the flow action within the guidance request
+	_, err := TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
+		req.FlowActionId = flowAction.Id
+		return GetUserResponse(actionCtx.DevContext, req)
+	})
+	return err
 }
 
 func GetUserGuidance(dCtx DevContext, guidanceContext string, requestParams map[string]any) (*UserResponse, error) {

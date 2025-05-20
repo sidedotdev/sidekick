@@ -3,6 +3,7 @@ package dev
 import (
 	"fmt"
 	"os"
+	"sidekick/coding/git"
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/utils"
@@ -105,6 +106,57 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 	if err != nil {
 		_ = signalWorkflowClosure(ctx, "failed")
 		return DevPlanExecution{}, fmt.Errorf("failed to auto-format code: %v", err)
+	}
+
+	// Handle merge if using worktree
+	if input.EnvType == env.EnvTypeLocalGitWorktree {
+		defaultTarget := "main"
+		if input.PlannedDevOptions.StartBranch != nil {
+			defaultTarget = *input.PlannedDevOptions.StartBranch
+		}
+
+		// Get diff between branches using three-dot syntax
+		var gitDiff string
+		future := workflow.ExecuteActivity(ctx, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
+			ThreeDotDiff: true,
+			BaseBranch:   defaultTarget,
+		})
+		err = future.Get(ctx, &gitDiff)
+		if err != nil {
+			_ = signalWorkflowClosure(ctx, "failed")
+			return DevPlanExecution{}, fmt.Errorf("failed to get branch diff: %v", err)
+		}
+
+		mergeInfo, err := getMergeApproval(dCtx, defaultTarget, gitDiff)
+		if err != nil {
+			_ = signalWorkflowClosure(ctx, "failed")
+			return DevPlanExecution{}, fmt.Errorf("failed to get merge approval: %v", err)
+		}
+
+		if mergeInfo.Approved {
+			// Perform the merge
+			var mergeResult git.MergeActivityResult
+			err = workflow.ExecuteActivity(ctx, git.GitMergeActivity, dCtx.EnvContainer, git.GitMergeParams{
+				SourceBranch: *input.PlannedDevOptions.StartBranch,
+				TargetBranch: mergeInfo.TargetBranch,
+			}).Get(ctx, &mergeResult)
+			if err != nil {
+				_ = signalWorkflowClosure(ctx, "failed")
+				return DevPlanExecution{}, fmt.Errorf("failed to merge: %v", err)
+			}
+
+			if mergeResult.HasConflicts {
+				// Present continue request with Done tag
+				actionCtx := dCtx.NewActionContext("user_request.continue")
+				err := GetUserContinue(actionCtx, "Merge conflicts detected. Please resolve conflicts and continue when done.", map[string]any{
+					"continueTag": "Done",
+				})
+				if err != nil {
+					_ = signalWorkflowClosure(ctx, "failed")
+					return DevPlanExecution{}, fmt.Errorf("failed to get continue approval: %v", err)
+				}
+			}
+		}
 	}
 
 	// emit signal when workflow ends successfully

@@ -230,8 +230,20 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 		if input.BasicDevOptions.StartBranch != nil {
 			defaultTarget = *input.BasicDevOptions.StartBranch
 		}
-		
-		mergeInfo, err := getMergeApproval(dCtx, defaultTarget)
+
+		// Get diff between branches using three-dot syntax
+		var gitDiff string
+		future := workflow.ExecuteActivity(ctx, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
+			ThreeDotDiff: true,
+			BaseBranch:   defaultTarget,
+		})
+		err = future.Get(ctx, &gitDiff)
+		if err != nil {
+			_ = signalWorkflowClosure(ctx, "failed")
+			return "", fmt.Errorf("failed to get branch diff: %v", err)
+		}
+
+		mergeInfo, err := getMergeApproval(dCtx, defaultTarget, gitDiff)
 		if err != nil {
 			_ = signalWorkflowClosure(ctx, "failed")
 			return "", fmt.Errorf("failed to get merge approval: %v", err)
@@ -283,7 +295,7 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 	return testResult.Output, nil
 }
 
-func getMergeApproval(dCtx DevContext, defaultTarget string) (MergeApprovalResponse, error) {
+func getMergeApproval(dCtx DevContext, defaultTarget string, gitDiff string) (MergeApprovalResponse, error) {
 	// Get current branch and available branches
 	var sourceBranch string
 	future := workflow.ExecuteActivity(dCtx, git.GetCurrentBranch, dCtx.EnvContainer)
@@ -299,25 +311,12 @@ func getMergeApproval(dCtx DevContext, defaultTarget string) (MergeApprovalRespo
 		return MergeApprovalResponse{}, fmt.Errorf("failed to list branches: %v", err)
 	}
 
-	// Get diff between branches using three-dot syntax
-	// FIXME no this is not gonna work for basic dev workflow, only the planned
-	// dev workflow!!!! refactor into separate functions
-	var gitDiff string
-	future = workflow.ExecuteActivity(dCtx, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
-		ThreeDotDiff: true,
-		BaseBranch:   defaultTarget,
-	})
-	err = future.Get(dCtx, &gitDiff)
-	if err != nil {
-		return MergeApprovalResponse{}, fmt.Errorf("failed to get branch diff: %v", err)
-	}
-
 	// Request merge approval from user
 	mergeParams := MergeApprovalParams{
-		SourceBranch:      sourceBranch,
+		SourceBranch:        sourceBranch,
 		DefaultTargetBranch: defaultTarget,
-		Diff:              gitDiff,
-		AvailableBranches: availableBranches,
+		Diff:                gitDiff,
+		AvailableBranches:   availableBranches,
 	}
 
 	actionCtx := dCtx.NewActionContext("user_request.approve_merge")
