@@ -226,59 +226,18 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 
 	// Step 6: Handle merge if using worktree
 	if input.EnvType == env.EnvTypeLocalGitWorktree {
-		// Get current branch and available branches
-		var sourceBranch string
-		future := workflow.ExecuteActivity(ctx, git.GetCurrentBranch, dCtx.EnvContainer)
-		err = future.Get(ctx, &sourceBranch)
-		if err != nil {
-			_ = signalWorkflowClosure(ctx, "failed")
-			return "", fmt.Errorf("failed to get current branch: %v", err)
-		}
-
-		var availableBranches []string
-		future = workflow.ExecuteActivity(ctx, git.ListLocalBranches, dCtx.EnvContainer)
-		err = future.Get(ctx, &availableBranches)
-		if err != nil {
-			_ = signalWorkflowClosure(ctx, "failed")
-			return "", fmt.Errorf("failed to list branches: %v", err)
-		}
-
-		// Default target branch is the start branch if specified
 		defaultTarget := "main"
 		if input.BasicDevOptions.StartBranch != nil {
 			defaultTarget = *input.BasicDevOptions.StartBranch
 		}
-
-		// Get diff between branches using three-dot syntax
-		var gitDiff string
-		future = workflow.ExecuteActivity(ctx, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
-			ThreeDotDiff: true,
-			BaseBranch:   defaultTarget,
-		})
-		err = future.Get(ctx, &gitDiff)
-		if err != nil {
-			_ = signalWorkflowClosure(ctx, "failed")
-			return "", fmt.Errorf("failed to get branch diff: %v", err)
-		}
-
-		// Request merge approval from user
-		mergeParams := MergeApprovalParams{
-			SourceBranch:      sourceBranch,
-			TargetBranch:      defaultTarget,
-			Diff:              gitDiff,
-			AvailableBranches: availableBranches,
-		}
-
-		actionCtx := dCtx.NewActionContext("user_request.approve_merge")
-		mergeInfo, err := GetUserMergeApproval(actionCtx, "Please approve before we merge", map[string]any{
-			"mergeApprovalInfo": mergeParams,
-		})
+		
+		mergeInfo, err := getMergeApproval(dCtx, defaultTarget)
 		if err != nil {
 			_ = signalWorkflowClosure(ctx, "failed")
 			return "", fmt.Errorf("failed to get merge approval: %v", err)
 		}
 
-		if *mergeInfo.Approved {
+		if mergeInfo.Approved {
 			// Commit any pending changes first
 			err = workflow.ExecuteActivity(ctx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
 				CommitMessage: "Commit changes before merge",
@@ -291,8 +250,8 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 			// Perform merge
 			var mergeResult git.MergeActivityResult
 			future := workflow.ExecuteActivity(ctx, git.GitMergeActivity, dCtx.EnvContainer, git.GitMergeParams{
-				SourceBranch: sourceBranch,
-				TargetBranch: mergeInfo.GetTargetBranch(),
+				SourceBranch: *input.BasicDevOptions.StartBranch,
+				TargetBranch: mergeInfo.TargetBranch,
 			})
 			err = future.Get(ctx, &mergeResult)
 			if err != nil {
@@ -321,4 +280,47 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 	}
 
 	return testResult.Output, nil
+}
+
+func getMergeApproval(dCtx DevContext, defaultTarget string) (MergeApprovalResponse, error) {
+	// Get current branch and available branches
+	var sourceBranch string
+	future := workflow.ExecuteActivity(dCtx, git.GetCurrentBranch, dCtx.EnvContainer)
+	err := future.Get(dCtx, &sourceBranch)
+	if err != nil {
+		return MergeApprovalResponse{}, fmt.Errorf("failed to get current branch: %v", err)
+	}
+
+	var availableBranches []string
+	future = workflow.ExecuteActivity(dCtx, git.ListLocalBranches, dCtx.EnvContainer)
+	err = future.Get(dCtx, &availableBranches)
+	if err != nil {
+		return MergeApprovalResponse{}, fmt.Errorf("failed to list branches: %v", err)
+	}
+
+	// Get diff between branches using three-dot syntax
+	// FIXME no this is not gonna work for basic dev workflow, only the planned
+	// dev workflow!!!! refactor into separate functions
+	var gitDiff string
+	future = workflow.ExecuteActivity(dCtx, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
+		ThreeDotDiff: true,
+		BaseBranch:   defaultTarget,
+	})
+	err = future.Get(dCtx, &gitDiff)
+	if err != nil {
+		return MergeApprovalResponse{}, fmt.Errorf("failed to get branch diff: %v", err)
+	}
+
+	// Request merge approval from user
+	mergeParams := MergeApprovalParams{
+		SourceBranch:      sourceBranch,
+		DefaultTargetBranch: defaultTarget,
+		Diff:              gitDiff,
+		AvailableBranches: availableBranches,
+	}
+
+	actionCtx := dCtx.NewActionContext("user_request.approve_merge")
+	return GetUserMergeApproval(actionCtx, "Please approve before we merge", map[string]any{
+		"mergeApprovalInfo": mergeParams,
+	})
 }

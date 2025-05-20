@@ -20,15 +20,15 @@ const (
 
 // MergeApprovalParams contains parameters specific to merge approval requests
 type MergeApprovalParams struct {
-	TargetBranch      string   `json:"targetBranch"` // the default target branch, which is to be confirmed/overridden by the user
-	SourceBranch      string   `json:"sourceBranch"`
-	Diff              string   `json:"diff"`
-	AvailableBranches []string `json:"availableBranches"`
+	DefaultTargetBranch string   `json:"defaultTargetBranch"` // the default target branch, which is to be confirmed/overridden by the user
+	SourceBranch        string   `json:"sourceBranch"`
+	Diff                string   `json:"diff"`
+	AvailableBranches   []string `json:"availableBranches"`
 }
 
 type MergeApprovalResponse struct {
-	Approved          bool   `json:"approved"`
-	TargetBranch      string `json:"targetBranch"` // actual target branch selected by the user
+	Approved     bool   `json:"approved"`
+	TargetBranch string `json:"targetBranch"` // actual target branch selected by the user
 }
 
 type RequestForUser struct {
@@ -119,8 +119,8 @@ func GetUserMergeApproval(actionCtx DevActionContext, approvalPrompt string, req
 	}
 
 	return MergeApprovalResponse{
-		Approved:       *userResponse.Approved,
-		TargetBranch:   userResponse.Params["targetBranch"].(string),
+		Approved:     *userResponse.Approved,
+		TargetBranch: userResponse.Params["targetBranch"].(string),
 	}, nil
 }
 
