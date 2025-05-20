@@ -19,7 +19,7 @@ import (
 type DevContext struct {
 	flow_action.ExecContext
 	GlobalState     *GlobalState
-	Worktree    	*domain.Worktree
+	Worktree        *domain.Worktree
 	RepoConfig      common.RepoConfig
 	Providers       []common.ModelProviderPublicConfig
 	LLMConfig       common.LLMConfig
