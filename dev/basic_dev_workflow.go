@@ -224,7 +224,101 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 		return "", err
 	}
 
-	// TODO Step 6: git add all and commit
+	// Step 6: Handle merge if using worktree
+	if input.EnvType == env.EnvTypeLocalGitWorktree {
+		// Get current branch and available branches
+		var sourceBranch string
+		future := workflow.ExecuteActivity(ctx, git.GetCurrentBranch, dCtx.EnvContainer)
+		err = future.Get(ctx, &sourceBranch)
+		if err != nil {
+			_ = signalWorkflowClosure(ctx, "failed")
+			return "", fmt.Errorf("failed to get current branch: %v", err)
+		}
+
+		var availableBranches []string
+		future = workflow.ExecuteActivity(ctx, git.ListLocalBranches, dCtx.EnvContainer)
+		err = future.Get(ctx, &availableBranches)
+		if err != nil {
+			_ = signalWorkflowClosure(ctx, "failed")
+			return "", fmt.Errorf("failed to list branches: %v", err)
+		}
+
+		// Default target branch is the start branch if specified
+		defaultTarget := "main"
+		if input.BasicDevOptions.StartBranch != nil {
+			defaultTarget = *input.BasicDevOptions.StartBranch
+		}
+
+		// Get diff between branches using three-dot syntax
+		var gitDiff string
+		future = workflow.ExecuteActivity(ctx, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
+			ThreeDotDiff: true,
+			BaseBranch:   defaultTarget,
+		})
+		err = future.Get(ctx, &gitDiff)
+		if err != nil {
+			_ = signalWorkflowClosure(ctx, "failed")
+			return "", fmt.Errorf("failed to get branch diff: %v", err)
+		}
+
+		// Request merge approval from user
+		mergeParams := MergeApprovalParams{
+			SourceBranch:      sourceBranch,
+			TargetBranch:      defaultTarget,
+			Diff:              gitDiff,
+			AvailableBranches: availableBranches,
+		}
+
+		promptInfo, err = GetUserFeedback(dCtx, promptInfo, "Merge approval required", chatHistory, map[string]any{
+			"requestKind":       RequestKindMergeApproval,
+			"mergeApprovalInfo": mergeParams,
+		})
+		if err != nil {
+			_ = signalWorkflowClosure(ctx, "failed")
+			return "", fmt.Errorf("failed to get merge approval: %v", err)
+		}
+
+		mergeInfo, ok := promptInfo.(MergeApprovalInfo)
+		if !ok {
+			_ = signalWorkflowClosure(ctx, "failed")
+			return "", fmt.Errorf("unexpected prompt info type: %T", promptInfo)
+		}
+
+		if mergeInfo.GetApproved() {
+			// Commit any pending changes first
+			err = workflow.ExecuteActivity(ctx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
+				CommitMessage: "Commit changes before merge",
+			}).Get(ctx, nil)
+			if err != nil {
+				_ = signalWorkflowClosure(ctx, "failed")
+				return "", fmt.Errorf("failed to commit changes: %v", err)
+			}
+
+			// Perform merge
+			var mergeResult git.MergeActivityResult
+			future := workflow.ExecuteActivity(ctx, git.GitMergeActivity, dCtx.EnvContainer, git.GitMergeParams{
+				SourceBranch: sourceBranch,
+				TargetBranch: mergeInfo.GetTargetBranch(),
+			})
+			err = future.Get(ctx, &mergeResult)
+			if err != nil {
+				_ = signalWorkflowClosure(ctx, "failed")
+				return "", fmt.Errorf("failed to merge branches: %v", err)
+			}
+
+			if mergeResult.HasConflicts {
+				// Present continue request for conflicts
+				promptInfo, err = GetUserFeedback(dCtx, promptInfo, "Merge conflicts detected", chatHistory, map[string]any{
+					"requestKind": RequestKindApproval,
+					"continueTag": "Done",
+				})
+				if err != nil {
+					_ = signalWorkflowClosure(ctx, "failed")
+					return "", fmt.Errorf("failed to get continue response: %v", err)
+				}
+			}
+		}
+	}
 
 	// Emit signal when workflow ends successfully
 	err = signalWorkflowClosure(ctx, "completed")
