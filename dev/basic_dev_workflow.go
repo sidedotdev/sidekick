@@ -272,15 +272,14 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 			}
 
 			if mergeResult.HasConflicts {
-				// Present continue request for conflicts
-				// FIXME: need to use this in an outer loop (which does not yet exist)
-				promptInfo, err = GetUserFeedback(dCtx, promptInfo, "Merge conflicts detected", chatHistory, map[string]any{
-					"requestKind": RequestKindApproval,
-					"continueTag": "done",
+				// Present continue request with Done tag
+				actionCtx := dCtx.NewActionContext("user_request.continue")
+				err := GetUserContinue(actionCtx, "Merge conflicts detected. Please resolve conflicts and continue when done.", map[string]any{
+					"continueTag": "Done",
 				})
 				if err != nil {
 					_ = signalWorkflowClosure(ctx, "failed")
-					return "", fmt.Errorf("failed to get continue response: %v", err)
+					return "", fmt.Errorf("failed to get continue approval: %v", err)
 				}
 			}
 		}
