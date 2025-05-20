@@ -269,8 +269,8 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 			AvailableBranches: availableBranches,
 		}
 
-		promptInfo, err = GetUserFeedback(dCtx, promptInfo, "Merge approval required", chatHistory, map[string]any{
-			"requestKind":       RequestKindMergeApproval,
+		actionCtx := dCtx.NewActionContext("user_request.approve_merge")
+		mergeInfo, err := GetUserMergeApproval(actionCtx, "Please approve before we merge", map[string]any{
 			"mergeApprovalInfo": mergeParams,
 		})
 		if err != nil {
@@ -278,13 +278,7 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 			return "", fmt.Errorf("failed to get merge approval: %v", err)
 		}
 
-		mergeInfo, ok := promptInfo.(MergeApprovalInfo)
-		if !ok {
-			_ = signalWorkflowClosure(ctx, "failed")
-			return "", fmt.Errorf("unexpected prompt info type: %T", promptInfo)
-		}
-
-		if mergeInfo.GetApproved() {
+		if *mergeInfo.Approved {
 			// Commit any pending changes first
 			err = workflow.ExecuteActivity(ctx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
 				CommitMessage: "Commit changes before merge",

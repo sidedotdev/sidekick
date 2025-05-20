@@ -20,10 +20,15 @@ const (
 
 // MergeApprovalParams contains parameters specific to merge approval requests
 type MergeApprovalParams struct {
-	TargetBranch      string   `json:"targetBranch"`
+	TargetBranch      string   `json:"targetBranch"` // the default target branch, which is to be confirmed/overridden by the user
 	SourceBranch      string   `json:"sourceBranch"`
 	Diff              string   `json:"diff"`
 	AvailableBranches []string `json:"availableBranches"`
+}
+
+type MergeApprovalResponse struct {
+	Approved          bool   `json:"approved"`
+	TargetBranch      string `json:"targetBranch"` // actual target branch selected by the user
 }
 
 type RequestForUser struct {
@@ -51,6 +56,7 @@ type UserResponse struct {
 	Content          string
 	Approved         *bool
 	Choice           string
+	Params           map[string]interface{}
 }
 
 func GetUserApproval(actionCtx DevActionContext, approvalPrompt string, requestParams map[string]interface{}) (*UserResponse, error) {
@@ -82,6 +88,40 @@ func GetUserApproval(actionCtx DevActionContext, approvalPrompt string, requestP
 		}
 		return *userResponse, nil
 	*/
+}
+
+func GetUserMergeApproval(actionCtx DevActionContext, approvalPrompt string, requestParams map[string]interface{}) (MergeApprovalResponse, error) {
+	if actionCtx.RepoConfig.DisableHumanInTheLoop {
+		// auto-approve for now if humans are not in the loop
+		// TODO: add a self-review process in this case
+		approved := true
+ 		targetBranch := "main" // TODO: store the startBranch as part of the worktree object when creating it, then retrieve it here
+		return MergeApprovalResponse{Approved: approved, TargetBranch: targetBranch}, nil
+	}
+
+	// Create a RequestForUser struct for approval request
+	req := RequestForUser{
+		OriginWorkflowId: workflow.GetInfo(actionCtx).WorkflowExecution.ID,
+		Content:          approvalPrompt,
+		Subflow:          actionCtx.FlowScope.SubflowName,
+		RequestParams:    requestParams,
+		RequestKind:      RequestKindMergeApproval,
+	}
+	actionCtx.ActionParams = req.ActionParams()
+
+	// Ensure tracking of the flow action within the guidance request
+	userResponse, err := TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
+		req.FlowActionId = flowAction.Id
+		return GetUserResponse(actionCtx.DevContext, req)
+	})
+	if err != nil {
+		return MergeApprovalResponse{}, err
+	}
+
+	return MergeApprovalResponse{
+		Approved:       *userResponse.Approved,
+		TargetBranch:   userResponse.Params["targetBranch"].(string),
+	}, nil
 }
 
 // Generic function for all user request kinds (free-form, multiple-choice,
