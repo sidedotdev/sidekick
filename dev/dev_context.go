@@ -58,7 +58,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 	var worktree *domain.Worktree
 	switch envType {
-	case "local", "":
+	case string(env.EnvTypeLocal), "":
 		devEnv, err = env.NewLocalEnv(context.Background(), env.LocalEnvParams{
 			RepoDir: repoDir,
 		})
@@ -66,7 +66,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
 		}
 		envContainer = env.EnvContainer{Env: devEnv}
-	case "local_git_worktree":
+	case string(env.EnvTypeLocalGitWorktree):
 		worktree = &domain.Worktree{
 			Id:          ksuidSideEffect(ctx),
 			FlowId:      workflow.GetInfo(ctx).WorkflowExecution.ID,

@@ -509,7 +509,7 @@ func TestCompleteFlowActionHandler(t *testing.T) {
 	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}, {Key: "id", Value: flowAction.Id}}
 
 	ctrl.CompleteFlowActionHandler(c)
-	expectedActionResult := fmt.Sprintf(`{"TargetWorkflowId":"%s","Content":"test response","Approved":null,"Choice":""}`, flow.Id)
+	expectedActionResult := fmt.Sprintf(`{"TargetWorkflowId":"%s","Content":"test response","Approved":null,"Choice":"","Params":null}`, flow.Id)
 	assert.Equal(t, http.StatusOK, resp.Code)
 	assert.Contains(t, resp.Body.String(), `"actionResult":`+utils.PanicJSON(expectedActionResult))
 	assert.Contains(t, resp.Body.String(), `"actionStatus":"complete"`)
