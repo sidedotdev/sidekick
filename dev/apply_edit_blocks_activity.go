@@ -814,9 +814,9 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 			}
 			originalLine := originalLines[adjustedIndex+i+originalLinesOffset]
 
-			fmt.Printf("comparing:\n    orig: %s\n     old: %s\n", originalLine, oldLine)
+			//fmt.Printf("comparing:\n    orig: %s\n     old: %s\n", originalLine, oldLine)
 			score := utils.StringSimilarity(originalLine, oldLine)
-			fmt.Printf("score: %v\n", score)
+			//fmt.Printf("score: %v\n", score)
 
 			// skip whitespace-only or comment-only lines when on one side only
 			// TODO ignore changes or added comments on the end of an existing line
