@@ -93,6 +93,26 @@ type PromptInfo interface {
 	GetType() string
 }
 
+type MergeApprovalInfo struct {
+	Approved          bool
+	TargetBranch      string
+	SourceBranch      string
+	Diff              string
+	AvailableBranches []string
+}
+
+func (i MergeApprovalInfo) GetType() string {
+	return "merge_approval"
+}
+
+func (i MergeApprovalInfo) GetApproved() bool {
+	return i.Approved
+}
+
+func (i MergeApprovalInfo) GetTargetBranch() string {
+	return i.TargetBranch
+}
+
 type DetermineCodeContextInfo struct {
 	RepoSummary   string
 	Requirements  string
