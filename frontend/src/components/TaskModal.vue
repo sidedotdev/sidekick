@@ -1,6 +1,6 @@
 <template>
   <div class="overlay" @click="safeClose"></div>
-  <div class="modal" @click.stop>
+  <div class="modal">
     <h2>{{ isEditMode ? 'Edit Task' : 'New Task' }}</h2>
     <form @submit.prevent="submitTask">
       <div>
@@ -39,14 +39,16 @@
             </div>
           </template>
         </Dropdown>
-         <small v-if="isLoadingBranches">Loading branches...</small>
-         <small v-else-if="!isLoadingBranches && branches.length === 0 && envType === 'local_git_worktree'">No branches found or failed to load.</small>
+        <small v-if="!isLoadingBranches && branches.length === 0">No branches found or failed to load.</small>
       </div>
 
       <div>
         <AutogrowTextarea id="description" v-model="description" placeholder="Task description - the more detail, the better" />
       </div>
-      <!--AutogrowTextarea v-if="task.flowType === 'planned_dev'" v-model="planningPrompt" placeholder="Planning prompt" /-->
+      <div v-if="devMode && flowType === 'planned_dev'">
+        <label>Planning Prompt</label>
+        <AutogrowTextarea v-model="planningPrompt" />
+      </div>
       <div class="button-container">
         <Button class="cancel" label="Cancel" severity="secondary" @click="close"/>
         <SplitButton 
@@ -126,6 +128,7 @@ const envTypeOptions = [
 
 const handleStatusSelect = (value: string) => {
   status.value = value as TaskStatus
+  submitTask()
 }
 
 // Function to fetch branches
