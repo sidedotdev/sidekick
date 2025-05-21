@@ -30,7 +30,7 @@ onMounted(async () => {
     document.documentElement.classList.toggle('dark-mode');
   }
 
-  const storedWorkspaceId = localStorage.getItem('selectedWorkspaceId')
+  const storedWorkspaceId = sessionStorage.getItem('selectedWorkspaceId') ?? localStorage.getItem('selectedWorkspaceId')
 
   if (storedWorkspaceId) {
     store.selectWorkspaceId(storedWorkspaceId)
@@ -43,6 +43,7 @@ onMounted(async () => {
     const workspaceId = [...workspaces.value].map(w => w.id).sort().reverse()[0]
     if (workspaceId) {
       store.selectWorkspaceId(workspaceId)
+      sessionStorage.setItem('selectedWorkspaceId', workspaceId)
       localStorage.setItem('selectedWorkspaceId', workspaceId)
     }
   }
@@ -51,6 +52,7 @@ onMounted(async () => {
 const selectedWorkspace = () => {
   console.log('selectedWorkspace', store.workspaceId)
   if (store.workspaceId) {
+    sessionStorage.setItem('selectedWorkspaceId', store.workspaceId)
     localStorage.setItem('selectedWorkspaceId', store.workspaceId)
   }
 }
