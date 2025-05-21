@@ -108,8 +108,9 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 		return DevPlanExecution{}, fmt.Errorf("failed to auto-format code: %v", err)
 	}
 
-	// Handle merge if using worktree
-	if input.EnvType == env.EnvTypeLocalGitWorktree {
+	// Handle merge if using worktree and workflow version is new enough
+	v := workflow.GetVersion(ctx, "git-worktree-merge", workflow.DefaultVersion, 1)
+	if input.EnvType == env.EnvTypeLocalGitWorktree && v == 1 {
 		defaultTarget := "main"
 		if input.PlannedDevOptions.StartBranch != nil {
 			defaultTarget = *input.PlannedDevOptions.StartBranch

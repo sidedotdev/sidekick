@@ -224,23 +224,18 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 		return "", err
 	}
 
-	// Step 6: Handle merge if using worktree
-	if input.EnvType == env.EnvTypeLocalGitWorktree {
+	// Step 6: Handle merge if using worktree and workflow version is new enough
+	workflowVersion := workflow.GetVersion(ctx, "git-worktree-merge", workflow.DefaultVersion, 1)
+	if input.EnvType == env.EnvTypeLocalGitWorktree && workflowVersion == 1 {
 		defaultTarget := "main"
 		if input.BasicDevOptions.StartBranch != nil {
 			defaultTarget = *input.BasicDevOptions.StartBranch
 		}
 
-		// Get diff between branches using three-dot syntax
-		var gitDiff string
-		future := workflow.ExecuteActivity(ctx, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
-			ThreeDotDiff: true,
-			BaseBranch:   defaultTarget,
-		})
-		err = future.Get(ctx, &gitDiff)
-		if err != nil {
+		gitDiff, diffErr := git.GitDiff(dCtx.ExecContext)
+		if diffErr != nil {
 			_ = signalWorkflowClosure(ctx, "failed")
-			return "", fmt.Errorf("failed to get branch diff: %v", err)
+			return "", fmt.Errorf("failed to get git diff: %v", diffErr)
 		}
 
 		mergeInfo, err := getMergeApproval(dCtx, defaultTarget, gitDiff)
