@@ -134,33 +134,53 @@ const fetchBranches = async () => {
     return;
   }
   const workspaceId = props.task?.workspaceId || store.workspaceId;
-  isLoadingBranches.value = true;
-  branches.value = []; // Clear previous branches
+  if (!workspaceId) {
+    console.error("No workspace ID available for fetching branches");
+    return;
+  }
+  
+  // Check cache first
+  const cachedBranches = store.getBranchCache(workspaceId);
+  if (cachedBranches) {
+    branches.value = cachedBranches;
+    updateSelectedBranch();
+  } else {
+    isLoadingBranches.value = true;
+  }
+
+  // Fetch fresh data
   try {
     const response = await fetch(`/api/v1/workspaces/${workspaceId}/branches`);
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
     const data = await response.json();
-    branches.value = data.branches || [];
-    // Optional: Automatically select current or default if nothing is pre-selected
-    if (!selectedBranch.value && branches.value.length > 0) {
-       const current = branches.value.find(b => b.isCurrent);
-       if (current) {
-           selectedBranch.value = current.name;
-       } else {
-           const defaultBranch = branches.value.find(b => b.isDefault);
-           if (defaultBranch) {
-               selectedBranch.value = defaultBranch.name;
-           }
-       }
-    }
-
+    const freshBranches = data.branches || [];
+    branches.value = freshBranches;
+    store.setBranchCache(workspaceId, freshBranches);
+    updateSelectedBranch();
   } catch (error) {
     console.error("Failed to fetch branches:", error);
-    // Handle error display to user if necessary
+    if (!cachedBranches) {
+      branches.value = []; // Only clear if we had no cache
+    }
   } finally {
     isLoadingBranches.value = false;
+  }
+};
+
+// Helper to handle branch selection logic
+const updateSelectedBranch = () => {
+  if (!selectedBranch.value && branches.value.length > 0) {
+    const current = branches.value.find(b => b.isCurrent);
+    if (current) {
+      selectedBranch.value = current.name;
+    } else {
+      const defaultBranch = branches.value.find(b => b.isDefault);
+      if (defaultBranch) {
+        selectedBranch.value = defaultBranch.name;
+      }
+    }
   }
 };
 
