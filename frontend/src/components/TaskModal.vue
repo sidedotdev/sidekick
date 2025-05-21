@@ -11,13 +11,9 @@
         <label>Workdir</label>
         <SegmentedControl v-model="envType" :options="envTypeOptions" />
       </div>
-      <label>
-        <input type="checkbox" v-model="determineRequirements" />
-        Determine Requirements
-      </label>
 
       <!-- Branch Selection Dropdown -->
-      <div v-if="envType === 'local_git_worktree'">
+      <div v-if="envType === 'local_git_worktree'" style="display: flex;">
         <label for="startBranch">Start Branch</label>
         <Dropdown
           id="startBranch"
@@ -41,6 +37,11 @@
         </Dropdown>
         <small v-if="!isLoadingBranches && branches.length === 0">No branches found or failed to load.</small>
       </div>
+
+      <label>
+        <input type="checkbox" v-model="determineRequirements" />
+        Determine Requirements
+      </label>
 
       <div>
         <AutogrowTextarea id="description" v-model="description" placeholder="Task description - the more detail, the better" />
@@ -381,9 +382,6 @@ label {
 
 /* Styles for branch dropdown options */
 .branch-option {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   width: 100%;
 }
 
@@ -393,6 +391,7 @@ label {
   border-radius: 3px;
   margin-left: 0.5rem;
   font-weight: bold;
+  float: right;
 }
 
 .branch-tag.current {
@@ -405,9 +404,8 @@ label {
   color: var(--p-text-color);
 }
 
-/* Ensure dropdown width is consistent */
-:deep(.p-dropdown) {
-    width: 100%;
+:deep(.p-select) {
+  background-color: field;
 }
 
 </style>
