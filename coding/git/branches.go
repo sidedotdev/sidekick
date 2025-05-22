@@ -63,14 +63,22 @@ func runGitCommand(ctx context.Context, repoDir string, args ...string) (stdout,
 	return stdout, stderr, 0, nil
 }
 
+// BranchState represents the current branch state of a Git repository.
+type BranchState struct {
+	// Name is the current branch name. Empty if in detached HEAD state.
+	Name string
+	// IsDetached indicates whether HEAD is in a detached state.
+	IsDetached bool
+}
+
 // GetCurrentBranch determines the current branch name or detached HEAD state for a repository.
-// It returns the branch name, a boolean indicating true if in detached HEAD state, and an error if encountered.
+// It returns the branch state and any error encountered.
 // An empty repository (initialized but without commits) will return the initial branch name (e.g., "main" or "master")
-// and isDetached=false.
+// and IsDetached=false.
 // FIXME: adjust to take in an env.EnvContainer instead of repoDir, and use
 // EnvRunCommand instead of runGitCommand. note: error behavior is that a
 // non-zero exit code is an err for runGitCommand, but not for EnvRunCommand.
-func GetCurrentBranch(ctx context.Context, repoDir string) (branchName string, isDetached bool, err error) {
+func GetCurrentBranch(ctx context.Context, repoDir string) (BranchState, error) {
 	// `git symbolic-ref --short HEAD` returns the current branch name if on a branch.
 	// It exits with 0 even in an empty repo after `git init -b <name>`.
 	// It exits with 1 and prints "fatal: ref HEAD is not a symbolic ref" to stderr if in detached HEAD state.
@@ -78,7 +86,7 @@ func GetCurrentBranch(ctx context.Context, repoDir string) (branchName string, i
 
 	if err == nil && exitCode == 0 {
 		// Success, we are on a branch (or unborn branch in an empty repo)
-		return strings.TrimSpace(stdout), false, nil
+		return BranchState{Name: strings.TrimSpace(stdout)}, nil
 	}
 
 	// Check specifically for the detached HEAD error signature.
@@ -87,17 +95,17 @@ func GetCurrentBranch(ctx context.Context, repoDir string) (branchName string, i
 		// We can be reasonably sure this means detached HEAD.
 		// No need for the extra rev-parse check, as symbolic-ref failing this way
 		// is the primary indicator.
-		return "", true, nil
+		return BranchState{IsDetached: true}, nil
 	}
 
 	// Handle cases where the initial runGitCommand failed for reasons other than the specific detached HEAD case
 	// (e.g., directory not found, not a git repo). The error from runGitCommand is used.
 	if err != nil {
-		return "", false, fmt.Errorf("failed to determine current branch in %s: %w", repoDir, err)
+		return BranchState{}, fmt.Errorf("failed to determine current branch in %s: %w", repoDir, err)
 	}
 
 	// If err was nil, but exitCode was non-zero and not the handled detached case.
-	return "", false, fmt.Errorf("failed to determine current branch in %s: git symbolic-ref exit code %d, stderr: %s", repoDir, exitCode, stderr)
+	return BranchState{}, fmt.Errorf("failed to determine current branch in %s: git symbolic-ref exit code %d, stderr: %s", repoDir, exitCode, stderr)
 }
 
 // GetDefaultBranch finds the default branch name (main or master) for a repository.
