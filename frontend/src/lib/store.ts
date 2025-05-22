@@ -1,6 +1,6 @@
 import { reactive } from 'vue';
 
-interface BranchInfo {
+export interface BranchInfo {
   name: string;
   isCurrent: boolean;
   isDefault: boolean;
