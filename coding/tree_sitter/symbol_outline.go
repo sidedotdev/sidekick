@@ -104,6 +104,20 @@ func GetAllAlternativeFileSymbols(filePath string) ([]Symbol, error) {
 // TODO in golang, append the module name to the symbol name with a dot as well as another alternative symbol
 func expandWithAlternativeSymbols(languageName string, sitterLanguage *sitter.Language, tree *sitter.Tree, sourceCode *[]byte, symbolSlice []Symbol) []Symbol {
 	for _, symbol := range symbolSlice {
+		// Handle Kotlin backtick-escaped symbols
+		if languageName == "kotlin" {
+			content := symbol.Content
+			if len(content) >= 2 && strings.HasPrefix(content, "`") && strings.HasSuffix(content, "`") {
+				unescaped := strings.Trim(content, "`")
+				symbolSlice = append(symbolSlice, Symbol{
+					Content:    unescaped,
+					SymbolType: "alt_" + symbol.SymbolType,
+					StartPoint: symbol.StartPoint,
+					EndPoint:   symbol.EndPoint,
+				})
+			}
+		}
+
 		if symbol.SymbolType == "method" {
 			// Extract the receiver type and method name using the symbol.SourceCaptures
 			var receiverMaybePointer, receiverNoPointer, receiverTypeNoPointer, methodName string
