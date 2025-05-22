@@ -106,7 +106,7 @@ func (ea *EmbedActivities) CachedEmbedActivity(ctx context.Context, options Cach
 				return fmt.Errorf("failed to embed content: %w", err)
 			}
 			for j, embedding := range embeddings {
-				cacheValues[missingEmbeddingKeys[i + j]] = embedding
+				cacheValues[missingEmbeddingKeys[i+j]] = embedding
 			}
 		}
 
