@@ -61,7 +61,28 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 	}
 
 	// First attempt
-	response, err := toolChatter.ChatStream(ctx, options.ToolChatOptions, deltaChan)
+	progressChan := make(chan llm.ProgressInfo, 10)
+	defer close(progressChan)
+
+	go func() {
+		for progress := range progressChan {
+			if activity.IsActivity(ctx) {
+				activity.RecordHeartbeat(ctx, progress)
+			}
+			progressEvent := domain.ProgressTextEvent{
+				ParentId:  options.FlowActionId,
+				EventType: domain.ProgressTextEventType,
+				Text:      progress.Title,
+				Details:   progress.Details,
+			}
+			err := la.Streamer.AddFlowEvent(context.Background(), options.WorkspaceId, options.FlowId, progressEvent)
+			if err != nil {
+				log.Error().Err(err).Msg("failed to add progress text event to stream")
+			}
+		}
+	}()
+
+	response, err := toolChatter.ChatStream(ctx, options.ToolChatOptions, deltaChan, progressChan)
 	if err != nil {
 		return response, err
 	}
@@ -70,7 +91,7 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 	// Check for empty response
 	if len(response.Content) == 0 && len(response.ToolCalls) == 0 {
 		log.Debug().Msg("Received empty response, attempting retry with modified prompt")
-		return retryChatStreamOnEmptyResponse(ctx, options.ToolChatOptions, response, toolChatter, deltaChan)
+		return retryChatStreamOnEmptyResponse(ctx, options.ToolChatOptions, response, toolChatter, deltaChan, progressChan)
 	}
 
 	return response, nil
@@ -82,6 +103,7 @@ func retryChatStreamOnEmptyResponse(
 	originalResponse *llm.ChatMessageResponse,
 	toolChatter llm.ToolChatter,
 	deltaChan chan llm.ChatMessageDelta,
+	progressChan chan llm.ProgressInfo,
 ) (*llm.ChatMessageResponse, error) {
 	// this shows what's going on to the user in the streaming UI
 	deltaChan <- llm.ChatMessageDelta{
@@ -107,7 +129,7 @@ Sidekick: got an unexpected empty response. Retrying with modified prompt...
 	)
 
 	// Second attempt
-	retryResponse, err := toolChatter.ChatStream(ctx, chatOptions, deltaChan)
+	retryResponse, err := toolChatter.ChatStream(ctx, chatOptions, deltaChan, progressChan)
 	if err != nil {
 		retryResponse.Provider = chatOptions.Params.ModelConfig.Provider
 		return retryResponse, err

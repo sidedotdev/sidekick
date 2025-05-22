@@ -14,7 +14,7 @@ import (
 	"google.golang.org/genai"
 )
 
-type progressInfo struct {
+type ProgressInfo struct {
 	Title   string
 	Details string
 }
@@ -37,7 +37,7 @@ func NewGoogleToolChat() *GoogleToolChat {
 	return &GoogleToolChat{}
 }
 
-func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta) (*ChatMessageResponse, error) {
+func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta, progressChan chan<- ProgressInfo) (*ChatMessageResponse, error) {
 	// additional heartbeat until ChatStream ends: we can't rely on the delta
 	// heartbeat because thinking tokens are being hidden in the API currently,
 	// resulting in a very long time between deltas and thus heartbeat timeouts.
@@ -108,10 +108,13 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		if err != nil {
 			return nil, fmt.Errorf("failed to iterate on %s tool chat stream: %w", providerName, err)
 		}
-		delta := googleToChatMessageDelta(result)
+		delta, progress := googleToChatMessageDelta(result)
 		if delta != nil {
 			deltaChan <- *delta
 			deltas = append(deltas, *delta)
+		}
+		if progress != nil && progressChan != nil {
+			progressChan <- *progress
 		}
 		// Keep track of the last response, as usage metadata is often in the final one
 		lastResult = result
@@ -335,7 +338,7 @@ func googleFromSchema(schema *jsonschema.Schema) *genai.Schema {
 	return geminiSchema
 }
 
-func googleToChatMessageDelta(result *genai.GenerateContentResponse) (*ChatMessageDelta, *progressInfo) {
+func googleToChatMessageDelta(result *genai.GenerateContentResponse) (*ChatMessageDelta, *ProgressInfo) {
 	if result == nil || len(result.Candidates) == 0 {
 		return nil, nil
 	}
@@ -365,7 +368,7 @@ func googleToChatMessageDelta(result *genai.GenerateContentResponse) (*ChatMessa
 
 	// Handle text content
 	var content strings.Builder
-	var progress *progressInfo
+	var progress *ProgressInfo
 
 	for _, part := range candidate.Content.Parts {
 		if part.Text != "" {
@@ -382,13 +385,18 @@ func googleToChatMessageDelta(result *genai.GenerateContentResponse) (*ChatMessa
 				title = strings.TrimSuffix(title, "**")
 				title = strings.TrimSpace(title)
 
-				// Truncate title if too long
+				// Truncate title at last space before 120 chars if too long
 				if len(title) > 120 {
-					title = title[:117] + "..."
+					lastSpace := strings.LastIndex(title[:120], " ")
+					if lastSpace == -1 {
+						lastSpace = 117
+					}
+					title = title[:lastSpace] + "..."
 				}
 
-				details := part.Text
-				progress = &progressInfo{
+				// Details should only include remaining lines after title
+				details := strings.Join(lines[1:], "\n")
+				progress = &ProgressInfo{
 					Title:   title,
 					Details: details,
 				}

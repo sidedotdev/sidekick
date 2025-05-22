@@ -41,7 +41,9 @@ func TestAnthropicChatStream_Unauthorized(t *testing.T) {
 
 	deltaChan := make(chan ChatMessageDelta)
 	defer close(deltaChan)
-	_, err := anthropicToolChat.ChatStream(ctx, options, deltaChan)
+	progressChan := make(chan ProgressInfo)
+	defer close(progressChan)
+	_, err := anthropicToolChat.ChatStream(ctx, options, deltaChan, progressChan)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "401")
 }
@@ -197,7 +199,9 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 		}
 	}()
 
-	response, err := chat.ChatStream(ctx, options, deltaChan)
+	progressChan := make(chan ProgressInfo)
+	defer close(progressChan)
+	response, err := chat.ChatStream(ctx, options, deltaChan, progressChan)
 	close(deltaChan)
 
 	if err != nil {
@@ -271,7 +275,9 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 			}
 		}()
 
-		response, err := chat.ChatStream(ctx, options, deltaChan)
+		progressChan := make(chan ProgressInfo)
+		defer close(progressChan)
+		response, err := chat.ChatStream(ctx, options, deltaChan, progressChan)
 		close(deltaChan)
 
 		if err != nil {

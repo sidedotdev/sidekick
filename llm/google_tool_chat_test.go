@@ -347,7 +347,7 @@ func TestGoogleToChatMessageDelta(t *testing.T) {
 		name         string
 		response     *genai.GenerateContentResponse
 		wantDelta    *ChatMessageDelta
-		wantProgress *progressInfo
+		wantProgress *ProgressInfo
 	}{
 		{
 			name:         "nil response",
@@ -401,9 +401,9 @@ func TestGoogleToChatMessageDelta(t *testing.T) {
 			wantDelta: &ChatMessageDelta{
 				Role: ChatMessageRoleAssistant,
 			},
-			wantProgress: &progressInfo{
+			wantProgress: &ProgressInfo{
 				Title:   "Analyzing code",
-				Details: "**Analyzing code**\nLooking at the implementation\nChecking patterns",
+				Details: "Looking at the implementation\nChecking patterns",
 			},
 		},
 		{
@@ -425,9 +425,9 @@ func TestGoogleToChatMessageDelta(t *testing.T) {
 			wantDelta: &ChatMessageDelta{
 				Role: ChatMessageRoleAssistant,
 			},
-			wantProgress: &progressInfo{
+			wantProgress: &ProgressInfo{
 				Title:   "Simple title",
-				Details: "Simple title\nWith details",
+				Details: "With details",
 			},
 		},
 		{
@@ -449,9 +449,9 @@ func TestGoogleToChatMessageDelta(t *testing.T) {
 			wantDelta: &ChatMessageDelta{
 				Role: ChatMessageRoleAssistant,
 			},
-			wantProgress: &progressInfo{
-				Title:   "This is a very long title that should be truncated because it exceeds the maximum length of 120 characters and we want to ensure...",
-				Details: "This is a very long title that should be truncated because it exceeds the maximum length of 120 characters and we want to ensure it looks good\nWith details",
+			wantProgress: &ProgressInfo{
+				Title:   "This is a very long title that should be truncated because it exceeds the maximum length of 120 characters and we want...",
+				Details: "With details",
 			},
 		},
 		{
@@ -484,93 +484,6 @@ func TestGoogleToChatMessageDelta(t *testing.T) {
 				},
 			},
 			wantProgress: nil,
-		},
-		{
-			name: "text content",
-			result: &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{
-					{
-						Content: &genai.Content{
-							Parts: []*genai.Part{
-								{Text: "Hello world"},
-							},
-						},
-					},
-				},
-			},
-			want: &ChatMessageDelta{
-				Role:    ChatMessageRoleAssistant,
-				Content: "Hello world",
-			},
-		},
-		{
-			name: "thinking content",
-			result: &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{
-					{
-						Content: &genai.Content{
-							Parts: []*genai.Part{
-								{Text: "processing", Thought: true},
-							},
-						},
-					},
-				},
-			},
-			want: &ChatMessageDelta{
-				Role:    ChatMessageRoleAssistant,
-				Content: "<thinking>processing</thinking>",
-			},
-		},
-		{
-			name: "thinking in middle",
-			result: &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{
-					{
-						Content: &genai.Content{
-							Parts: []*genai.Part{
-								{Text: "before"},
-								{Text: "processing", Thought: true},
-								{Text: "after"},
-							},
-						},
-					},
-				},
-			},
-			want: &ChatMessageDelta{
-				Role:    ChatMessageRoleAssistant,
-				Content: "before<thinking>processing</thinking>after",
-			},
-		},
-		{
-			name: "function call",
-			result: &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{
-					{
-						Content: &genai.Content{
-							Parts: []*genai.Part{
-								{
-									FunctionCall: &genai.FunctionCall{
-										Name: "test_function",
-										Args: map[string]any{
-											"param1": "value1",
-											"param2": 42,
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			want: &ChatMessageDelta{
-				Role: ChatMessageRoleAssistant,
-				ToolCalls: []ToolCall{
-					{
-						Name:      "test_function",
-						Arguments: `{"param1":"value1","param2":42}`,
-					},
-				},
-			},
 		},
 	}
 
@@ -629,7 +542,10 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 		}
 	}()
 
-	response, err := chat.ChatStream(ctx, options, deltaChan)
+	progressChan := make(chan ProgressInfo, 10)
+	defer close(progressChan)
+
+	response, err := chat.ChatStream(ctx, options, deltaChan, progressChan)
 	close(deltaChan)
 
 	if err != nil {
@@ -711,7 +627,10 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 			}
 		}()
 
-		response, err := chat.ChatStream(ctx, options, deltaChan)
+		progressChan := make(chan ProgressInfo, 10)
+		defer close(progressChan)
+
+		response, err := chat.ChatStream(ctx, options, deltaChan, progressChan)
 		close(deltaChan)
 
 		if err != nil {
