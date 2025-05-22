@@ -14,6 +14,11 @@ import (
 	"google.golang.org/genai"
 )
 
+type progressInfo struct {
+	Title   string
+	Details string
+}
+
 const (
 	GoogleApiKeySecretName = "GOOGLE_API_KEY"
 	// FIXME /gen/req/plan we need exp for the free-tier, but preview for the
@@ -330,14 +335,14 @@ func googleFromSchema(schema *jsonschema.Schema) *genai.Schema {
 	return geminiSchema
 }
 
-func googleToChatMessageDelta(result *genai.GenerateContentResponse) *ChatMessageDelta {
+func googleToChatMessageDelta(result *genai.GenerateContentResponse) (*ChatMessageDelta, *progressInfo) {
 	if result == nil || len(result.Candidates) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	candidate := result.Candidates[0]
 	if candidate.Content == nil || len(candidate.Content.Parts) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	delta := &ChatMessageDelta{
@@ -354,24 +359,52 @@ func googleToChatMessageDelta(result *genai.GenerateContentResponse) *ChatMessag
 					Arguments: utils.PanicJSON(part.FunctionCall.Args),
 				},
 			}
-			return delta
+			return delta, nil
 		}
 	}
 
 	// Handle text content
 	var content strings.Builder
+	var progress *progressInfo
+
 	for _, part := range candidate.Content.Parts {
 		if part.Text != "" {
 			if part.Thought {
-				content.WriteString(fmt.Sprintf("%s%s%s", thinkingStartTag, part.Text, thinkingEndTag))
+				// Parse thinking content into progress info
+				lines := strings.Split(strings.TrimSpace(part.Text), "\n")
+				if len(lines) == 0 {
+					continue
+				}
+
+				title := lines[0]
+				// Strip ** markers if present
+				title = strings.TrimPrefix(title, "**")
+				title = strings.TrimSuffix(title, "**")
+				title = strings.TrimSpace(title)
+
+				// Truncate title if too long
+				if len(title) > 120 {
+					title = title[:117] + "..."
+				}
+
+				details := part.Text
+				progress = &progressInfo{
+					Title:   title,
+					Details: details,
+				}
 			} else {
 				content.WriteString(part.Text)
 			}
 		}
 	}
+
 	if content.Len() > 0 {
 		delta.Content = content.String()
 	}
 
-	return delta
+	if delta.Content == "" && delta.ToolCalls == nil && progress == nil {
+		return nil, nil
+	}
+
+	return delta, progress
 }

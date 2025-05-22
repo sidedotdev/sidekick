@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"reflect"
 	"sidekick/common"
 	"sidekick/secret_manager"
 	"strings"
@@ -343,14 +344,146 @@ func TestGoogleFromTools(t *testing.T) {
 
 func TestGoogleToChatMessageDelta(t *testing.T) {
 	tests := []struct {
-		name   string
-		result *genai.GenerateContentResponse
-		want   *ChatMessageDelta
+		name         string
+		response     *genai.GenerateContentResponse
+		wantDelta    *ChatMessageDelta
+		wantProgress *progressInfo
 	}{
 		{
-			name:   "nil response",
-			result: nil,
-			want:   nil,
+			name:         "nil response",
+			response:     nil,
+			wantDelta:    nil,
+			wantProgress: nil,
+		},
+		{
+			name: "empty candidates",
+			response: &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{},
+			},
+			wantDelta:    nil,
+			wantProgress: nil,
+		},
+		{
+			name: "regular text content",
+			response: &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{
+					{
+						Content: &genai.Content{
+							Parts: []*genai.Part{
+								{Text: "Hello world"},
+							},
+						},
+					},
+				},
+			},
+			wantDelta: &ChatMessageDelta{
+				Role:    ChatMessageRoleAssistant,
+				Content: "Hello world",
+			},
+			wantProgress: nil,
+		},
+		{
+			name: "thinking content with ** markers",
+			response: &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{
+					{
+						Content: &genai.Content{
+							Parts: []*genai.Part{
+								{
+									Text:    "**Analyzing code**\nLooking at the implementation\nChecking patterns",
+									Thought: true,
+								},
+							},
+						},
+					},
+				},
+			},
+			wantDelta: &ChatMessageDelta{
+				Role: ChatMessageRoleAssistant,
+			},
+			wantProgress: &progressInfo{
+				Title:   "Analyzing code",
+				Details: "**Analyzing code**\nLooking at the implementation\nChecking patterns",
+			},
+		},
+		{
+			name: "thinking content without markers",
+			response: &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{
+					{
+						Content: &genai.Content{
+							Parts: []*genai.Part{
+								{
+									Text:    "Simple title\nWith details",
+									Thought: true,
+								},
+							},
+						},
+					},
+				},
+			},
+			wantDelta: &ChatMessageDelta{
+				Role: ChatMessageRoleAssistant,
+			},
+			wantProgress: &progressInfo{
+				Title:   "Simple title",
+				Details: "Simple title\nWith details",
+			},
+		},
+		{
+			name: "long title truncation",
+			response: &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{
+					{
+						Content: &genai.Content{
+							Parts: []*genai.Part{
+								{
+									Text:    "This is a very long title that should be truncated because it exceeds the maximum length of 120 characters and we want to ensure it looks good\nWith details",
+									Thought: true,
+								},
+							},
+						},
+					},
+				},
+			},
+			wantDelta: &ChatMessageDelta{
+				Role: ChatMessageRoleAssistant,
+			},
+			wantProgress: &progressInfo{
+				Title:   "This is a very long title that should be truncated because it exceeds the maximum length of 120 characters and we want to ensure...",
+				Details: "This is a very long title that should be truncated because it exceeds the maximum length of 120 characters and we want to ensure it looks good\nWith details",
+			},
+		},
+		{
+			name: "function call",
+			response: &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{
+					{
+						Content: &genai.Content{
+							Parts: []*genai.Part{
+								{
+									FunctionCall: &genai.FunctionCall{
+										ID:   "123",
+										Name: "test",
+										Args: map[string]interface{}{"foo": "bar"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantDelta: &ChatMessageDelta{
+				Role: ChatMessageRoleAssistant,
+				ToolCalls: []ToolCall{
+					{
+						Id:        "123",
+						Name:      "test",
+						Arguments: `{"foo":"bar"}`,
+					},
+				},
+			},
+			wantProgress: nil,
 		},
 		{
 			name: "text content",
@@ -443,8 +576,13 @@ func TestGoogleToChatMessageDelta(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := googleToChatMessageDelta(tt.result)
-			assert.Equal(t, tt.want, got)
+			delta, progress := googleToChatMessageDelta(tt.response)
+			if !reflect.DeepEqual(delta, tt.wantDelta) {
+				t.Errorf("googleToChatMessageDelta() delta = %v, want %v", delta, tt.wantDelta)
+			}
+			if !reflect.DeepEqual(progress, tt.wantProgress) {
+				t.Errorf("googleToChatMessageDelta() progress = %v, want %v", progress, tt.wantProgress)
+			}
 		})
 	}
 }
