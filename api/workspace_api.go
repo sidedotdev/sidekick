@@ -337,10 +337,11 @@ func getFilteredBranches(ctx context.Context, repoDir string, workspace *domain.
 		return nil, fmt.Errorf("failed to determine managed worktrees: %w", err)
 	}
 
-	currentBranchName, isDetached, err := git.GetCurrentBranch(ctx, repoDir)
+	branchState, err := git.GetCurrentBranch(ctx, repoDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current branch: %w", err)
 	}
+	currentBranchName, isDetached := branchState.Name, branchState.IsDetached
 
 	defaultBranchName, err := git.GetDefaultBranch(ctx, repoDir)
 	if err != nil {

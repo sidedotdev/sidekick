@@ -67,10 +67,10 @@ func TestGetCurrentBranch(t *testing.T) {
 		runGitCommandInTestRepo(t, repoDir, "branch", "develop")
 		runGitCommandInTestRepo(t, repoDir, "checkout", "develop")
 
-		branch, isDetached, err := GetCurrentBranch(ctx, repoDir)
+		state, err := GetCurrentBranch(ctx, repoDir)
 		require.NoError(t, err)
-		assert.False(t, isDetached, "Should not be in detached HEAD state")
-		assert.Equal(t, "develop", branch, "Branch name should be 'develop'")
+		assert.False(t, state.IsDetached, "Should not be in detached HEAD state")
+		assert.Equal(t, "develop", state.Name, "Branch name should be 'develop'")
 	})
 
 	t.Run("Detached HEAD", func(t *testing.T) {
@@ -78,20 +78,20 @@ func TestGetCurrentBranch(t *testing.T) {
 		commitHash := createCommit(t, repoDir, "Initial commit")
 		runGitCommandInTestRepo(t, repoDir, "checkout", commitHash) // Detach HEAD by checking out commit hash
 
-		branch, isDetached, err := GetCurrentBranch(ctx, repoDir)
+		state, err := GetCurrentBranch(ctx, repoDir)
 		require.NoError(t, err)
-		assert.True(t, isDetached, "Should be in detached HEAD state")
-		assert.Empty(t, branch, "Branch name should be empty in detached HEAD state")
+		assert.True(t, state.IsDetached, "Should be in detached HEAD state")
+		assert.Empty(t, state.Name, "Branch name should be empty in detached HEAD state")
 	})
 
 	t.Run("Empty Repository (Initialized)", func(t *testing.T) {
 		repoDir := setupTestGitRepo(t) // Sets up repo with 'main' but no commits
 
 		// `git symbolic-ref --short HEAD` should return the initial branch name even before the first commit.
-		branch, isDetached, err := GetCurrentBranch(ctx, repoDir)
+		state, err := GetCurrentBranch(ctx, repoDir)
 		require.NoError(t, err)
-		assert.False(t, isDetached, "Should not be detached in an empty repo")
-		assert.Equal(t, "main", branch, "Branch name should be the initial branch 'main'")
+		assert.False(t, state.IsDetached, "Should not be detached in an empty repo")
+		assert.Equal(t, "main", state.Name, "Branch name should be the initial branch 'main'")
 	})
 
 	t.Run("Invalid Directory", func(t *testing.T) {
@@ -100,19 +100,23 @@ func TestGetCurrentBranch(t *testing.T) {
 		// Ensure the directory does not exist before the call
 		_ = os.RemoveAll(nonExistentDir)
 
-		_, _, err := GetCurrentBranch(ctx, nonExistentDir)
+		state, err := GetCurrentBranch(ctx, nonExistentDir)
 		require.Error(t, err, "Should return an error for a non-existent directory")
 		// Check if the error indicates the directory issue, as handled by runGitCommand
 		assert.Contains(t, err.Error(), "no such file or directory", "Error message should indicate directory not found")
+		assert.Empty(t, state.Name, "Branch name should be empty on error")
+		assert.False(t, state.IsDetached, "Should not indicate detached state on error")
 	})
 
 	t.Run("Not a Git Repository", func(t *testing.T) {
 		// Create a directory but don't initialize git in it.
 		notRepoDir := t.TempDir()
-		_, _, err := GetCurrentBranch(ctx, notRepoDir)
+		state, err := GetCurrentBranch(ctx, notRepoDir)
 		require.Error(t, err, "Should return an error for a directory that is not a git repository")
 		// Git commands usually include "not a git repository" in stderr
 		assert.Contains(t, err.Error(), "not a git repository", "Error message should indicate it's not a git repository")
+		assert.Empty(t, state.Name, "Branch name should be empty on error")
+		assert.False(t, state.IsDetached, "Should not indicate detached state on error")
 	})
 }
 
