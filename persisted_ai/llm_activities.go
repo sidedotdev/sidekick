@@ -26,7 +26,9 @@ type LlmActivities struct {
 
 func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptions) (*llm.ChatMessageResponse, error) {
 	deltaChan := make(chan llm.ChatMessageDelta, 10)
+	progressChan := make(chan llm.ProgressInfo, 10)
 	defer close(deltaChan)
+	defer close(progressChan)
 
 	go func() {
 		defer func() {
@@ -54,16 +56,6 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 
 	}()
 
-	toolChatter, err := getToolChatter(options.Params.ModelConfig)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to get tool chatter")
-		return nil, err
-	}
-
-	// First attempt
-	progressChan := make(chan llm.ProgressInfo, 10)
-	defer close(progressChan)
-
 	go func() {
 		for progress := range progressChan {
 			if activity.IsActivity(ctx) {
@@ -82,6 +74,13 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 		}
 	}()
 
+	toolChatter, err := getToolChatter(options.Params.ModelConfig)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get tool chatter")
+		return nil, err
+	}
+
+	// First attempt
 	response, err := toolChatter.ChatStream(ctx, options.ToolChatOptions, deltaChan, progressChan)
 	if err != nil {
 		return response, err
