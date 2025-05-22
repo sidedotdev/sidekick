@@ -304,7 +304,8 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 func getMergeApproval(dCtx DevContext, defaultTarget string, gitDiff string) (MergeApprovalResponse, error) {
 	// Get current branch and available branches
 	var sourceBranch git.BranchState
-	future := workflow.ExecuteActivity(dCtx, git.GetCurrentBranch, dCtx.EnvContainer)
+	// FIXME pass in envContainer directly in the future after refactoring the activity method
+	future := workflow.ExecuteActivity(dCtx, git.GetCurrentBranch, dCtx.EnvContainer.Env.GetWorkingDirectory())
 	err := future.Get(dCtx, &sourceBranch)
 	if err != nil {
 		return MergeApprovalResponse{}, fmt.Errorf("failed to get current branch: %v", err)
