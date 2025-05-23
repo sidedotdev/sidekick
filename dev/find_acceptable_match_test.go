@@ -191,7 +191,7 @@ func determineManagedWorktreeBranches(workspace *domain.Workspace, gitWorktrees 
 
 		bestMatch, allAcceptableMatches := FindAcceptableMatch(block, originalLines, false)
 
-		utils.PrettyPrint(allAcceptableMatches)
+		//utils.PrettyPrint(allAcceptableMatches)
 		assert.True(t, len(allAcceptableMatches) == 1, "Expected an acceptable match despite the leading mismatched line")
 		assert.True(t, bestMatch.successfulMatch, "Expected a successful match despite the leading mismatched line")
 	})
@@ -219,7 +219,7 @@ func TestGetWorkspaceByIdHandler(t *testing.T) {
 
 		_, allAcceptableMatches := FindAcceptableMatch(block, originalLines, false)
 
-		utils.PrettyPrint(allAcceptableMatches)
+		//utils.PrettyPrint(allAcceptableMatches)
 		assert.True(t, len(allAcceptableMatches) == 0, "Expected no acceptable match due to bad delimiter match")
 	})
 }
