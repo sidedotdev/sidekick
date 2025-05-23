@@ -101,35 +101,48 @@ const actionHeading = computed(() => {
     case 'user_request.approve_merge':
       return 'Approve Merge';
     case "Get User Guidance":
+    case "user_guidance":
       if (props.flowAction.actionStatus === 'complete') {
         return 'Human Guidance';
       } else {
         return 'Too Many Iterations: AI Needs Your Help';
       }
     case 'Approve Dev Requirements':
+    case 'approve_dev_requirements':
         return 'Human Review';
     case 'Generate Dev Requirements':
+    case 'generate.dev_requirements':
       return 'Generate Requirements'
     case 'Generate Dev Plan':
+    case 'generate.dev_plan':
       return 'Generate Plan'
     case 'Generate Code Edits':
+    case 'generate.code_edits':
       return 'Generate Edits'
+    case 'Get Ranked Repo Summary':
+    case 'ranked_repo_summary':
+      return 'Ranked Repo Summary';
     case 'Apply Edit Blocks':
+    case 'apply_edit_blocks':
       return 'Apply Edits';
     case 'Run Tests':
     case 'RunTests':
+    case 'run_tests':
       return 'Tests';
     case 'Check Criteria Fulfillment':
+    case 'check_criteria_fulfillment':
       return 'Complete?';
     default:
       // Handle general dot-notation pattern
-      if (actionType.includes('.')) {
+      if (/^tool_call\./.test(props.flowAction.actionType)){
+        return props.flowAction.actionType.replace(/^tool_call\./, 'Tool: ');
+      } else if (actionType.includes('.')) {
         const dotIndex = actionType.indexOf('.');
         const beforeDot = actionType.substring(0, dotIndex);
         const afterDot = actionType.substring(dotIndex + 1);
         return `${humanizeText(beforeDot)}: ${humanizeText(afterDot)}`;
       }
-      return actionType;
+      return humanizeText(actionType);
     }
 });
 
@@ -138,13 +151,17 @@ const actionSpecificComponent = computed(() => {
     case 'user_request':
       return UserRequest
     case 'Get Ranked Repo Summary':
+    case 'ranked_repo_summary':
       return PlaintextResultFlowAction
     case 'Check Criteria Fulfillment':
+    case 'check_criteria_fulfillment':
       return CheckCriteriaFulfillmentFlowAction
     case 'Apply Edit Blocks':
+    case 'apply_edit_blocks':
       return ApplyEditBlocksFlowAction
     case 'Run Tests':
     case 'RunTests':
+    case 'run_tests':
       return RunTestsFlowAction
     default:
       if (props.flowAction.isHumanAction) {
@@ -153,7 +170,7 @@ const actionSpecificComponent = computed(() => {
       if (props.flowAction.actionParams?.messages && Object.prototype.hasOwnProperty.call(props.flowAction.actionParams, 'temperature')) {
         return ChatCompletionFlowAction
       }
-      if (/^Tool: /.test(props.flowAction.actionType)){
+      if (/^(Tool: |tool_call\.)/.test(props.flowAction.actionType)){
         return ToolFlowAction
       }
       return null;
@@ -188,6 +205,7 @@ const summary = computed<Summary | null>(() => {
 
   switch (props.flowAction.actionType) {
     case 'Run Tests':
+    case 'run_tests':
     case 'RunTests': {
       // NOTE: shoving non-arrays into an array is to support extremely legacy data
       const results = Array.isArray(actionResult.value) ? actionResult.value : (actionResult.value != null ? [actionResult.value] : []);
@@ -201,6 +219,7 @@ const summary = computed<Summary | null>(() => {
       };
     }
 
+    case 'apply_edit_blocks':
     case 'Apply Edit Blocks': {
       const editResults = actionResult.value as ApplyEditBlockResult[] | null;
       if (editResults == null) {
@@ -218,6 +237,7 @@ const summary = computed<Summary | null>(() => {
       };
     }
 
+    case 'check_criteria_fulfillment':
     case 'Check Criteria Fulfillment': {
       try {
         const criteriaFulfillment = JSON.parse(actionResult.value?.toolCalls[0]?.arguments || "null") as CriteriaFulfillment | null;
