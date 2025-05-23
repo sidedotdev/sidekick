@@ -84,14 +84,22 @@ function toggle() {
   })
 }
 
+const humanizeText = (text: string): string => {
+  return text.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+};
+
 const actionHeading = computed(() => {
-  switch (props.flowAction.actionType) {
+  const actionType = props.flowAction.actionType;
+  
+  switch (actionType) {
     case 'user_request':
       if (props.flowAction.actionStatus === 'complete') {
         return 'Human Input';
       } else {
         return 'AI Asked For Your Input';
       }
+    case 'user_request.approve_merge':
+      return 'Approve Merge';
     case "Get User Guidance":
       if (props.flowAction.actionStatus === 'complete') {
         return 'Human Guidance';
@@ -114,7 +122,14 @@ const actionHeading = computed(() => {
     case 'Check Criteria Fulfillment':
       return 'Complete?';
     default:
-      return props.flowAction.actionType;
+      // Handle general dot-notation pattern
+      if (actionType.includes('.')) {
+        const dotIndex = actionType.indexOf('.');
+        const beforeDot = actionType.substring(0, dotIndex);
+        const afterDot = actionType.substring(dotIndex + 1);
+        return `${humanizeText(beforeDot)}: ${humanizeText(afterDot)}`;
+      }
+      return actionType;
     }
 });
 
