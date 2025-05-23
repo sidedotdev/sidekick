@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +19,92 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/zalando/go-keyring"
 )
+
+
+func TestHelpFlags(t *testing.T) {
+	// Save original args and exit function
+	oldArgs := os.Args
+	oldExit := osExit
+	defer func() {
+		os.Args = oldArgs
+		osExit = oldExit
+	}()
+
+	tests := []struct {
+		name     string
+		args     []string
+		exitCode int
+		contains []string
+	}{
+		{
+			name:     "long help flag",
+			args:     []string{"side", "--help"},
+			exitCode: 0,
+			contains: []string{
+				"Sidekick - A development tool",
+				"Available Commands:",
+				"init",
+				"start",
+			},
+		},
+		{
+			name:     "short help flag",
+			args:     []string{"side", "-h"},
+			exitCode: 0,
+			contains: []string{
+				"Sidekick - A development tool",
+				"Available Commands:",
+				"init",
+				"start",
+			},
+		},
+		{
+			name:     "no args shows usage",
+			args:     []string{"side"},
+			exitCode: 1,
+			contains: []string{"Usage: side init"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			// Mock os.Exit
+			exitCode := 0
+			osExit = func(code int) {
+				exitCode = code
+			}
+
+			// Set test args
+			os.Args = tt.args
+
+			// Run main
+			main()
+
+			// Restore stdout and get output
+			w.Close()
+			os.Stdout = oldStdout
+			var output strings.Builder
+			_, _ = io.Copy(&output, r)
+
+			// Check exit code
+			if exitCode != tt.exitCode {
+				t.Errorf("expected exit code %d, got %d", tt.exitCode, exitCode)
+			}
+
+			// Check output contains expected strings
+			for _, s := range tt.contains {
+				if !strings.Contains(output.String(), s) {
+					t.Errorf("expected output to contain %q", s)
+				}
+			}
+		})
+	}
+}
 
 // Helper function to create a temporary directory and change to it
 func setupTempDir(t *testing.T) (string, func()) {
