@@ -51,23 +51,23 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 	if targetWorktree != nil {
 		// Use worktree path for merge
 		mergeCmd := fmt.Sprintf("cd %s && git merge %s", targetWorktree.Path, params.SourceBranch)
-		mergeCmdOutput, mergeCmdErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		mergeOutput, mergeErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 			EnvContainer: envContainer,
 			Command:      "sh",
 			Args:         []string{"-c", mergeCmd},
 		})
-		if mergeCmdErr != nil {
-			resultErr = fmt.Errorf("failed to execute merge command in worktree: %v", mergeCmdErr)
+		if mergeErr != nil {
+			resultErr = fmt.Errorf("failed to execute merge command in worktree: %v", mergeErr)
 			return
 		}
-		if mergeCmdOutput.ExitStatus != 0 {
-			if strings.Contains(mergeCmdOutput.Stderr, "CONFLICT") {
+		if mergeOutput.ExitStatus != 0 {
+			if strings.Contains(mergeOutput.Stdout, "CONFLICT") {
 				result.HasConflicts = true
 				// resultErr  is nil, since conflicts are not operational errors
 				resultErr = nil
 				return
 			}
-			resultErr = fmt.Errorf("merge failed in worktree: %s", mergeCmdOutput.Stderr)
+			resultErr = fmt.Errorf("merge failed in worktree: %s", mergeOutput.Stderr)
 			return
 		}
 		// Merge successful, no conflicts. result.HasConflicts is false (default), resultErr is nil.
@@ -115,7 +115,7 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 		return // defer will run and potentially set resultErr if it's currently nil
 	}
 	if mergeOutput.ExitStatus != 0 {
-		if strings.Contains(mergeOutput.Stderr, "CONFLICT") {
+		if strings.Contains(mergeOutput.Stdout, "CONFLICT") {
 			result.HasConflicts = true
 			// resultErr remains nil (unless defer sets it to a restore error)
 			return // defer will run
