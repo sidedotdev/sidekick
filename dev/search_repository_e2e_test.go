@@ -390,3 +390,90 @@ func (s *SearchRepositoryE2ETestSuite) TestFallbackToFixedStringSearch_NoMatches
 	// Expecting no results message, which is defined in SearchRepoNoResultsMessage
 	s.Require().Equal(SearchRepoNoResultsMessage, result, "Output should indicate no results found")
 }
+
+func (s *SearchRepositoryE2ETestSuite) TestSearchWithSpecialCharacters() {
+	// Test searching for terms with various shell metacharacters
+
+	// Test with parentheses
+	s.createTestFile("test_parens.go", "func NewActionContext() {\n\treturn nil\n}")
+	result, err := s.executeSearchRepository(SearchRepositoryInput{
+		PathGlob:     "*.go",
+		SearchTerm:   "NewActionContext(",
+		ContextLines: 1,
+	})
+	s.Require().NoError(err)
+	s.Contains(result, "test_parens.go")
+	s.Contains(result, "NewActionContext(")
+
+	// Test with double quotes
+	s.ResetWorkflowEnvironment()
+	s.createTestFile("test_quotes.go", "func \"test\" example() {\n\treturn\n}")
+	result, err = s.executeSearchRepository(SearchRepositoryInput{
+		PathGlob:     "*.go",
+		SearchTerm:   "func \"test\"",
+		ContextLines: 1,
+	})
+	s.Require().NoError(err)
+	s.Contains(result, "test_quotes.go")
+	s.Contains(result, "func \"test\"")
+
+	// Test with single quotes
+	s.ResetWorkflowEnvironment()
+	s.createTestFile("test_single_quotes.txt", "This is a 'quoted' string")
+	result, err = s.executeSearchRepository(SearchRepositoryInput{
+		PathGlob:     "*.txt",
+		SearchTerm:   "'quoted'",
+		ContextLines: 0,
+	})
+	s.Require().NoError(err)
+	s.Contains(result, "test_single_quotes.txt")
+	s.Contains(result, "'quoted'")
+
+	// Test with backticks
+	s.ResetWorkflowEnvironment()
+	s.createTestFile("test_backticks.md", "Use `command` to run it")
+	result, err = s.executeSearchRepository(SearchRepositoryInput{
+		PathGlob:     "*.md",
+		SearchTerm:   "`command`",
+		ContextLines: 0,
+	})
+	s.Require().NoError(err)
+	s.Contains(result, "test_backticks.md")
+	s.Contains(result, "`command`")
+
+	// Test with semicolon and ampersand
+	s.ResetWorkflowEnvironment()
+	s.createTestFile("test_special.sh", "echo 'hello'; echo 'world' &")
+	result, err = s.executeSearchRepository(SearchRepositoryInput{
+		PathGlob:     "*.sh",
+		SearchTerm:   "echo 'world' &",
+		ContextLines: 0,
+	})
+	s.Require().NoError(err)
+	s.Contains(result, "test_special.sh")
+	s.Contains(result, "echo 'world' &")
+
+	// Test with pipe and dollar sign
+	s.ResetWorkflowEnvironment()
+	s.createTestFile("test_pipe_dollar.sh", "cat file | grep $VAR")
+	result, err = s.executeSearchRepository(SearchRepositoryInput{
+		PathGlob:     "*.sh",
+		SearchTerm:   "grep $VAR",
+		ContextLines: 0,
+	})
+	s.Require().NoError(err)
+	s.Contains(result, "test_pipe_dollar.sh")
+	s.Contains(result, "grep $VAR")
+
+	// Test with backslashes
+	s.ResetWorkflowEnvironment()
+	s.createTestFile("test_backslash.txt", "Path: C:\\Users\\test\\file.txt")
+	result, err = s.executeSearchRepository(SearchRepositoryInput{
+		PathGlob:     "*.txt",
+		SearchTerm:   "C:\\Users\\test",
+		ContextLines: 0,
+	})
+	s.Require().NoError(err)
+	s.Contains(result, "test_backslash.txt")
+	s.Contains(result, "C:\\Users\\test")
+}
