@@ -1,8 +1,46 @@
 <template>
   <form v-if="isPending" @submit.prevent="flowAction.actionParams.requestKind === 'free_form' && submitUserResponse(true)">
-    <p>{{ flowAction.actionParams.requestContent }}</p>
-    <AutogrowTextarea v-model="responseContent" :placeholder="flowAction.actionParams.requestKind === 'approval' ? 'Content is only required for the revise option' : ''" />
+    <vue-markdown
+      :source="flowAction.actionParams.requestContent"
+      :options="{ breaks: true }"
+      class="markdown"
+    />
+    <div v-if="flowAction.actionParams.command">
+      <pre>{{ flowAction.actionParams.command }}</pre>
+    </div>
     <div v-if="flowAction.actionParams.requestKind === 'approval'">
+      <AutogrowTextarea v-model="responseContent" placeholder="Rejection reason" />
+      <button type="button" class="cta-button-color"
+        :disabled="responseContent.trim() !== ''"
+        @click="submitUserResponse(true)"
+      >
+        {{ approveCopy() }}
+      </button>
+
+      <button type="button" class="secondary"
+        :disabled="responseContent.trim() === ''"
+        @click="submitUserResponse(false)"
+      >
+        {{ rejectCopy() }}
+      </button>
+    </div>
+    <div v-else-if="flowAction.actionParams.requestKind === 'merge_approval'">
+      <template v-if="flowAction.actionParams.mergeApprovalInfo.diff">
+        <div v-for="(parsedDiff, diffIndex) in parseDiff(flowAction.actionParams.mergeApprovalInfo.diff)" :key="diffIndex" class="diff-view-container">
+          <p class="file-header">{{ parsedDiff.oldFile.fileName || parsedDiff.newFile.fileName }}</p>
+          <DiffView
+            :data="parsedDiff"
+            :diff-view-font-size="14"
+            :diff-view-mode="DiffModeEnum.Unified"
+            :diff-view-highlight="true"
+            :diff-view-add-widget="false"
+            :diff-view-wrap="true"
+            :diff-view-theme="getTheme()"
+          />
+        </div>
+      </template>
+
+      <AutogrowTextarea v-model="responseContent" placeholder="Rejection reason" />
       <button type="button" class="cta-button-color"
         :disabled="responseContent.trim() !== ''"
         @click="submitUserResponse(true)"
@@ -18,13 +56,18 @@
       </button>
     </div>
     <div v-else>
+      <AutogrowTextarea v-model="responseContent"/>
       <button :disabled="responseContent.length == 0" class="cta-button-color" type="submit">Submit</button>
     </div>
   </form>
   <!-- TODO move approved/rejected to FlowActionItem summary. Only show content here -->
-  <div v-if="expand && !isPending">
+  <div v-if="expand && !isPending && (!flowAction.actionParams.command || !parsedActionResult.Approved)">
     <div v-if="flowAction.actionParams.requestContent">
-      <p><i>{{ flowAction.actionParams.requestContent }}</i></p>
+      <vue-markdown
+        :source="flowAction.actionParams.requestContent"
+        :options="{ breaks: true }"
+        class="markdown"
+      />
     </div>
     <div v-if="flowAction.actionParams.requestKind == 'approval'">
       <!--p>{{ flowAction.actionParams.requestContent }}</p-->
@@ -40,6 +83,9 @@
 import { ref, computed } from 'vue';
 import type { FlowAction } from '../lib/models';
 import AutogrowTextarea from './AutogrowTextarea.vue';
+import VueMarkdown from 'vue-markdown-render'
+import "@git-diff-view/vue/styles/diff-view.css";
+import { DiffView, DiffModeEnum } from "@git-diff-view/vue";
 
 interface UserResponse {
   content?: string;
@@ -117,6 +163,47 @@ async function submitUserResponse(approved: boolean) {
     console.error(error);
   }
 }
+
+
+interface ParsedDiff {
+  oldFile: { fileName: string | null; fileLang: string | null };
+  newFile: { fileName: string | null; fileLang: string | null };
+  hunks: string[];
+}
+
+const parseDiff = (diffString: string): ParsedDiff[] => {
+  const files = diffString.split(/^(?=diff )/m);
+  return files.map(file => {
+    const fileHeader = file.split('\n')[0];
+    const [oldFile, newFile] = fileHeader.match(/(?<=a\/).+(?= b\/)|(?<=b\/).+/g) || [];
+    const hunks = [file];
+    return {
+      oldFile: { fileName: oldFile || null, fileLang: getFileLanguage(oldFile) },
+      newFile: { fileName: newFile || null, fileLang: getFileLanguage(newFile) },
+      hunks,
+    };
+  });
+};
+
+const getFileLanguage = (fileName: string | undefined): string | null => {
+  if (!fileName) return null;
+  const extension = fileName.split('.').pop();
+  // Add more mappings as needed
+  const languageMap: { [key: string]: string } = {
+    'js': 'javascript',
+    'ts': 'typescript',
+    'py': 'python',
+    'go': 'go',
+    'vue': 'vue',
+    // Add more mappings here
+  };
+  return languageMap[extension?.toLowerCase() ?? ''] || null;
+};
+
+const getTheme = () => {
+  const prefersDarkScheme = window.matchMedia("(prefers-color-scheme: dark)");
+  return prefersDarkScheme.matches ? 'dark' : 'light';
+};
 </script>
 
 <style scoped>
@@ -153,11 +240,8 @@ button:disabled:hover {
   filter: none;
 }
 
-textarea {
-  width: 100%;
-  padding: 0.5rem;
-  border: 1px solid #ccc;
-  resize: none;
+:deep(textarea) {
+  margin-bottom: 20px;
 }
 
 .free-form p + p {
@@ -166,5 +250,37 @@ textarea {
 
 b {
   font-weight: bold;
+}
+.markdown :deep(h4) {
+  font-size: 120%;
+  margin: 20px 0 10px;
+}
+
+.markdown :deep(pre) {
+  border: 2px solid var(--color-border-contrast);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.markdown :deep(strong) {
+  font-weight: bold;
+}
+
+/* FIXME make this dependent on light vs dark theme */
+.markdown :deep(li > code) {
+  padding: 2px 4px;
+  font-size: 90%;
+  color: #6bc725;
+  background-color: #000;
+  border-radius: 4px;
+}
+
+.markdown :deep(li) {
+  margin-top: 5px;
+}
+.markdown :deep(p:not(:first-child)) {
+  margin-top: 15px;
+}
+.markdown :deep(ol), .markdown :deep(ul) {
+  margin-top: 5px;
 }
 </style>
