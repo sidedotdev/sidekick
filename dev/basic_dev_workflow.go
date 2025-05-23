@@ -259,8 +259,15 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 
 		if mergeInfo.Approved {
 			// Commit any pending changes first
-			message := strings.Split(requirements, "\n")[0]
-			message = message[:min(len(message), 100)] + "..."
+			message := strings.TrimSpace(requirements)
+			if strings.Contains(message, "Overview:\n") {
+				message = strings.Split(message, "Overview:\n")[1]
+				message = strings.TrimSpace(message)
+			}
+			message = strings.Split(message, "\n")[0]
+			if len(message) > 100 {
+				message = message[:100] + "...\n\n..." + message[100:]
+			}
 			err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
 				CommitMessage: message,
 			}).Get(dCtx, nil)
@@ -272,7 +279,7 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 			// Perform merge
 			var mergeResult git.MergeActivityResult
 			future := workflow.ExecuteActivity(dCtx, git.GitMergeActivity, dCtx.EnvContainer, git.GitMergeParams{
-				SourceBranch: *startBranch,
+				SourceBranch: dCtx.Worktree.Name,
 				TargetBranch: mergeInfo.TargetBranch,
 			})
 			err = future.Get(dCtx, &mergeResult)
@@ -305,28 +312,11 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 }
 
 func getMergeApproval(dCtx DevContext, defaultTarget string, gitDiff string) (MergeApprovalResponse, error) {
-	// Get current branch and available branches
-	var sourceBranch git.BranchState
-	// FIXME pass in envContainer directly in the future after refactoring the activity method
-	future := workflow.ExecuteActivity(dCtx, git.GetCurrentBranch, dCtx.EnvContainer.Env.GetWorkingDirectory())
-	err := future.Get(dCtx, &sourceBranch)
-	if err != nil {
-		return MergeApprovalResponse{}, fmt.Errorf("failed to get current branch: %v", err)
-	}
-
-	var availableBranches []string
-	future = workflow.ExecuteActivity(dCtx, git.ListLocalBranches, dCtx.EnvContainer)
-	err = future.Get(dCtx, &availableBranches)
-	if err != nil {
-		return MergeApprovalResponse{}, fmt.Errorf("failed to list branches: %v", err)
-	}
-
 	// Request merge approval from user
 	mergeParams := MergeApprovalParams{
-		SourceBranch:        sourceBranch.Name,
+		SourceBranch:        dCtx.Worktree.Name,
 		DefaultTargetBranch: defaultTarget,
 		Diff:                gitDiff,
-		AvailableBranches:   availableBranches,
 	}
 
 	actionCtx := dCtx.NewActionContext("user_request.approve_merge")

@@ -21,7 +21,7 @@ import type { BranchInfo } from '../lib/store'
 
 const props = defineProps<{
   workspaceId: string
-  modelValue: string | null
+  modelValue: string | undefined | null
 }>()
 
 const emit = defineEmits<{

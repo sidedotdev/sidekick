@@ -40,6 +40,15 @@
         </div>
       </template>
 
+      <div style="display: flex; margin-top: 0.5rem;">
+        <label for="targetBranch">Merge into</label>
+        <BranchSelector
+          id="targetBranch"
+          v-model="targetBranch"
+          :workspaceId="flowAction.workspaceId"
+        />
+      </div>
+
       <AutogrowTextarea v-model="responseContent" placeholder="Rejection reason" />
       <button type="button" class="cta-button-color"
         :disabled="responseContent.trim() !== ''"
@@ -83,6 +92,7 @@
 import { ref, computed } from 'vue';
 import type { FlowAction } from '../lib/models';
 import AutogrowTextarea from './AutogrowTextarea.vue';
+import BranchSelector from './BranchSelector.vue'
 import VueMarkdown from 'vue-markdown-render'
 import "@git-diff-view/vue/styles/diff-view.css";
 import { DiffView, DiffModeEnum } from "@git-diff-view/vue";
@@ -91,6 +101,7 @@ interface UserResponse {
   content?: string;
   approved?: boolean;
   choice?: string;
+  params?: { [key: string]: any };
 }
 
 const props = defineProps({
@@ -106,6 +117,7 @@ const props = defineProps({
 
 const responseContent = ref('');
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
+const targetBranch = ref<string | undefined>()
 
 const parsedActionResult = computed(() => {
   try {
@@ -138,6 +150,9 @@ async function submitUserResponse(approved: boolean) {
 
   const userResponse: UserResponse = {
     content: responseContent.value,
+    params: {
+      targetBranch: targetBranch.value,
+    }
   };
 
   if (/approval/.test(props.flowAction.actionParams.requestKind)){
@@ -241,8 +256,8 @@ button:disabled:hover {
 }
 
 :deep(textarea) {
-  margin-top: 20px;
-  margin-bottom: 20px;
+  margin-top: 15px;
+  margin-bottom: 15px;
 }
 
 .free-form p + p {
@@ -252,6 +267,12 @@ button:disabled:hover {
 b {
   font-weight: bold;
 }
+
+label[for="targetBranch"] {
+  align-self: center;
+  margin-right: 1rem;
+}
+
 .markdown :deep(h4) {
   font-size: 120%;
   margin: 20px 0 10px;

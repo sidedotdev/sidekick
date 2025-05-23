@@ -92,7 +92,7 @@ const actionResult = computed(() => {
 });
 
 const parseFinalDiff = (diffString: string): ParsedDiff[] => {
-  const files = diffString.split(/^(?=diff )/);
+  const files = diffString.split(/^(?=diff )/m);
   return files.map(file => {
     const fileHeader = file.split('\n')[0];
     const [oldFile, newFile] = fileHeader.match(/(?<=a\/).+(?= b\/)|(?<=b\/).+/g) || [];

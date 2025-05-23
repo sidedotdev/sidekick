@@ -138,7 +138,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 			// Perform the merge
 			var mergeResult git.MergeActivityResult
 			err = workflow.ExecuteActivity(ctx, git.GitMergeActivity, dCtx.EnvContainer, git.GitMergeParams{
-				SourceBranch: *input.PlannedDevOptions.StartBranch,
+				SourceBranch: dCtx.Worktree.Name,
 				TargetBranch: mergeInfo.TargetBranch,
 			}).Get(ctx, &mergeResult)
 			if err != nil {
