@@ -2,6 +2,7 @@ package dev
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sidekick/env"
 	"strings"
@@ -16,6 +17,33 @@ func escapeShellArg(arg string) string {
 	escaped := strings.ReplaceAll(arg, "'", `'\''`)
 	// Wrap in single quotes
 	return "'" + escaped + "'"
+}
+
+// filterFilesByGlob filters a list of files using the given glob pattern.
+// It tries matching against both the full path and the basename.
+func filterFilesByGlob(files []string, globPattern string) ([]string, error) {
+	var filteredFiles []string
+	for _, file := range files {
+		if file == "" {
+			continue
+		}
+		// Try matching against the full path first
+		matched, err := filepath.Match(globPattern, file)
+		if err != nil {
+			return nil, fmt.Errorf("invalid glob pattern %s: %v", globPattern, err)
+		}
+		// If full path doesn't match, try matching against just the basename
+		if !matched {
+			matched, err = filepath.Match(globPattern, filepath.Base(file))
+			if err != nil {
+				return nil, fmt.Errorf("invalid glob pattern %s: %v", globPattern, err)
+			}
+		}
+		if matched {
+			filteredFiles = append(filteredFiles, file)
+		}
+	}
+	return filteredFiles, nil
 }
 
 type SingleSearchParams struct {
@@ -93,9 +121,6 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 	rgArgs := "--files-with-matches"
 	gitGrepArgs := fmt.Sprintf("git grep --no-index --show-function --heading --line-number --context %d", input.ContextLines)
 
-	if input.PathGlob != "" && input.PathGlob != "*" {
-		rgArgs += fmt.Sprintf(` --glob "%s"`, input.PathGlob)
-	}
 	if input.CaseInsensitive {
 		rgArgs += " --ignore-case"
 		gitGrepArgs += " --ignore-case"
@@ -104,6 +129,9 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 		rgArgs += " --fixed-strings"
 		gitGrepArgs += " --fixed-strings"
 	}
+	// Don't use --glob with rg when PathGlob is specified, as it overrides ignore files
+	// We'll filter manually instead to respect .gitignore and .sideignore
+	useManualGlobFiltering := input.PathGlob != "" && input.PathGlob != "*"
 
 	// TODO /gen replace with a new env.FileExistsActivity - we need to implement that.
 	var catOutput env.EnvRunCommandOutput
@@ -122,32 +150,16 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 		rgArgs += " --ignore-file .sideignore"
 	}
 
-	/* Combine rg and git grep commands into something like (plus the added args if any):
-	*
-	*     rg --files-with-matches search_term | xargs -r git grep --no-index --show-function --heading --line-number --context 5 search_term
-	*
-	* The idea is to use rg to get the list of files that contain the search
-	* term very quickly, but then use git grep on the specific files to leverage
-	* the --show-function parameter. This provides better context around the
-	* search term.
-	 */
 	escapedSearchTerm := escapeShellArg(input.SearchTerm)
-	listFilesCmd := fmt.Sprintf(`rg %s %s`, rgArgs, escapedSearchTerm)
-	fullCmd := fmt.Sprintf(`%s | xargs -r %s %s`, listFilesCmd, gitGrepArgs, escapedSearchTerm)
-
+	
 	var searchOutput env.EnvRunCommandOutput
-	err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
-		EnvContainer:       envContainer,
-		RelativeWorkingDir: "./",
-		Command:            "sh",
-		Args:               []string{"-c", fullCmd},
-	}).Get(ctx, &searchOutput)
-	if err != nil {
-		return "", fmt.Errorf("failed to search the repository: %v", err)
-	}
-
-	output := searchOutput.Stdout
-	if len(output) > refuseAtSearchOutputLength {
+	if useManualGlobFiltering {
+		// When using manual glob filtering, we need to:
+		// 1. Get the list of files from rg (respecting ignore files)
+		// 2. Filter them manually using the glob pattern
+		// 3. Run git grep on the filtered files
+		listFilesCmd := fmt.Sprintf(`rg %s %s`, rgArgs, escapedSearchTerm)
+		
 		var listFilesOutput env.EnvRunCommandOutput
 		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 			EnvContainer:       envContainer,
@@ -156,14 +168,105 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 			Args:               []string{"-c", listFilesCmd},
 		}).Get(ctx, &listFilesOutput)
 		if err != nil {
-			return "", fmt.Errorf("failed to list files to search the repository: %v", err)
+			return "", fmt.Errorf("failed to list files for manual glob filtering: %v", err)
 		}
 
-		// TODO check if the NumContextLines is too high and if so, reduce it and retry the search or at least provide that as feedback here
-		if len(listFilesOutput.Stdout) > maxSearchOutputLength {
-			return "Search output is too long, and even the list of files that matched is too long. Try a more constrained path glob and/or a more specific search term. Alternatively, skip doing this search entirely if it's not essential.", nil
+		// Filter files using glob pattern
+		allFiles := strings.Split(strings.TrimSpace(listFilesOutput.Stdout), "\n")
+		filteredFiles, err := filterFilesByGlob(allFiles, input.PathGlob)
+		if err != nil {
+			return "", err
+		}
+
+		if len(filteredFiles) == 0 {
+			// No files matched the glob pattern after filtering
+			if strings.TrimSpace(listFilesOutput.Stdout) == "" {
+				// No files matched the search term at all - continue to normal "no results" handling
+				searchOutput.Stdout = ""
+			} else {
+				// Files matched the search term but none matched the glob pattern
+				return fmt.Sprintf("No files matched the path glob %s - please try a different path glob", input.PathGlob), nil
+			}
 		} else {
-			return fmt.Sprintf("Search output is too long. You could try with fewer context lines, a more constrained path glob and a more specific search term. Alternatively, skip doing this search entirely if it's not essential. Here is the list of matching files:\n\n%s", listFilesOutput.Stdout), nil
+			// Run git grep on the filtered files
+			escapedFiles := make([]string, len(filteredFiles))
+			for i, file := range filteredFiles {
+				escapedFiles[i] = escapeShellArg(file)
+			}
+			filesArg := strings.Join(escapedFiles, " ")
+			fullCmd := fmt.Sprintf(`%s %s %s`, gitGrepArgs, escapedSearchTerm, filesArg)
+			
+			err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+				EnvContainer:       envContainer,
+				RelativeWorkingDir: "./",
+				Command:            "sh",
+				Args:               []string{"-c", fullCmd},
+			}).Get(ctx, &searchOutput)
+			if err != nil {
+				return "", fmt.Errorf("failed to search filtered files: %v", err)
+			}
+		}
+	} else {
+		// Original behavior: use rg + git grep pipeline
+		fullCmd := fmt.Sprintf(`rg %s %s | xargs -r %s %s`, rgArgs, escapedSearchTerm, gitGrepArgs, escapedSearchTerm)
+		
+		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+			EnvContainer:       envContainer,
+			RelativeWorkingDir: "./",
+			Command:            "sh",
+			Args:               []string{"-c", fullCmd},
+		}).Get(ctx, &searchOutput)
+		if err != nil {
+			return "", fmt.Errorf("failed to search the repository: %v", err)
+		}
+	}
+
+	output := searchOutput.Stdout
+	if len(output) > refuseAtSearchOutputLength {
+		var listFilesOutput env.EnvRunCommandOutput
+		if useManualGlobFiltering {
+			// For manual glob filtering, we already have the file list from the previous step
+			listFilesCmd := fmt.Sprintf(`rg %s %s`, rgArgs, escapedSearchTerm)
+			err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+				EnvContainer:       envContainer,
+				RelativeWorkingDir: "./",
+				Command:            "sh",
+				Args:               []string{"-c", listFilesCmd},
+			}).Get(ctx, &listFilesOutput)
+			if err != nil {
+				return "", fmt.Errorf("failed to list files to search the repository: %v", err)
+			}
+
+			// Filter files using glob pattern for the file list
+			allFiles := strings.Split(strings.TrimSpace(listFilesOutput.Stdout), "\n")
+			filteredFiles, err := filterFilesByGlob(allFiles, input.PathGlob)
+			if err != nil {
+				return "", err
+			}
+
+			fileList := strings.Join(filteredFiles, "\n")
+			if len(fileList) > maxSearchOutputLength {
+				return "Search output is too long, and even the list of files that matched is too long. Try a more constrained path glob and/or a more specific search term. Alternatively, skip doing this search entirely if it's not essential.", nil
+			} else {
+				return fmt.Sprintf("Search output is too long. You could try with fewer context lines, a more constrained path glob and a more specific search term. Alternatively, skip doing this search entirely if it's not essential. Here is the list of matching files:\n\n%s", fileList), nil
+			}
+		} else {
+			err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+				EnvContainer:       envContainer,
+				RelativeWorkingDir: "./",
+				Command:            "sh",
+				Args:               []string{"-c", fmt.Sprintf(`rg %s %s`, rgArgs, escapedSearchTerm)},
+			}).Get(ctx, &listFilesOutput)
+			if err != nil {
+				return "", fmt.Errorf("failed to list files to search the repository: %v", err)
+			}
+
+			// TODO check if the NumContextLines is too high and if so, reduce it and retry the search or at least provide that as feedback here
+			if len(listFilesOutput.Stdout) > maxSearchOutputLength {
+				return "Search output is too long, and even the list of files that matched is too long. Try a more constrained path glob and/or a more specific search term. Alternatively, skip doing this search entirely if it's not essential.", nil
+			} else {
+				return fmt.Sprintf("Search output is too long. You could try with fewer context lines, a more constrained path glob and a more specific search term. Alternatively, skip doing this search entirely if it's not essential. Here is the list of matching files:\n\n%s", listFilesOutput.Stdout), nil
+			}
 		}
 	}
 
@@ -208,19 +311,31 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 		}
 
 		if input.PathGlob != "" && input.PathGlob != "*" {
-			// Check if the given path glob matches any files
+			// Check if the given path glob matches any files using manual filtering to respect ignore files
 			var listOutput env.EnvRunCommandOutput
+			listAllFilesCmd := "rg --files"
+			if catOutput.ExitStatus == 0 {
+				listAllFilesCmd += " --ignore-file .sideignore"
+			}
+			
 			err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 				EnvContainer:       envContainer,
 				RelativeWorkingDir: "./",
-				Command:            "rg",
-				Args:               []string{"-g", input.PathGlob, "--files"},
+				Command:            "sh",
+				Args:               []string{"-c", listAllFilesCmd},
 			}).Get(ctx, &listOutput)
 			if err != nil {
-				return "", fmt.Errorf("failed to check path glob: %v", err)
+				return "", fmt.Errorf("failed to list all files for path glob check: %v", err)
 			}
 
-			if strings.TrimSpace(listOutput.Stdout) == "" {
+			// Filter files using glob pattern
+			allFiles := strings.Split(strings.TrimSpace(listOutput.Stdout), "\n")
+			matchingFiles, err := filterFilesByGlob(allFiles, input.PathGlob)
+			if err != nil {
+				return "", err
+			}
+
+			if len(matchingFiles) == 0 {
 				return fmt.Sprintf("No files matched the path glob %s - please try a different path glob", input.PathGlob), nil
 			}
 		}

@@ -477,3 +477,135 @@ func (s *SearchRepositoryE2ETestSuite) TestSearchWithSpecialCharacters() {
 	s.Contains(result, "test_backslash.txt")
 	s.Contains(result, "C:\\Users\\test")
 }
+
+func (s *SearchRepositoryE2ETestSuite) TestGlobPatternsRespectGitignore() {
+	// Create .gitignore file
+	s.createTestFile(".gitignore", "ignored_dir/\n*.ignored")
+
+	// Create directories
+	err := os.MkdirAll(filepath.Join(s.dir, "ignored_dir"), 0755)
+	s.Require().NoError(err)
+	err = os.MkdirAll(filepath.Join(s.dir, "normal_dir"), 0755)
+	s.Require().NoError(err)
+
+	// Create files that should be ignored by .gitignore
+	s.createTestFile("ignored_dir/test_file.txt", "This file should be ignored by git")
+	s.createTestFile("test.ignored", "This file should be ignored by git")
+
+	// Create files that should not be ignored
+	s.createTestFile("normal_dir/test_file.txt", "This file should not be ignored")
+	s.createTestFile("test.txt", "This file should not be ignored")
+
+	// Test with glob pattern that would match both ignored and non-ignored files
+	var result string
+	s.env.ExecuteWorkflow(s.wrapperWorkflow, s.envContainer, SearchRepositoryInput{
+		PathGlob:     "*/test_file.txt",
+		SearchTerm:   "file",
+		ContextLines: 0,
+	})
+	s.Require().NoError(s.env.GetWorkflowResult(&result))
+
+	// Verify that only non-ignored files are found
+	s.Contains(result, "normal_dir/test_file.txt")
+	s.NotContains(result, "ignored_dir/test_file.txt")
+
+	// Test with glob pattern that matches ignored file extension
+	s.ResetWorkflowEnvironment()
+	s.env.ExecuteWorkflow(s.wrapperWorkflow, s.envContainer, SearchRepositoryInput{
+		PathGlob:     "*.ignored",
+		SearchTerm:   "file",
+		ContextLines: 0,
+	})
+	s.Require().NoError(s.env.GetWorkflowResult(&result))
+
+	// Should return no results because .ignored files are in .gitignore
+	s.Equal("No files matched the path glob *.ignored - please try a different path glob", result)
+}
+
+func (s *SearchRepositoryE2ETestSuite) TestGlobPatternsRespectSideignore() {
+	// Create .sideignore file
+	s.createTestFile(".sideignore", "temp_dir/\n*.temp")
+
+	// Create directories
+	err := os.MkdirAll(filepath.Join(s.dir, "temp_dir"), 0755)
+	s.Require().NoError(err)
+	err = os.MkdirAll(filepath.Join(s.dir, "src_dir"), 0755)
+	s.Require().NoError(err)
+
+	// Create files that should be ignored by .sideignore
+	s.createTestFile("temp_dir/build_file.txt", "This file should be ignored by sideignore")
+	s.createTestFile("cache.temp", "This file should be ignored by sideignore")
+
+	// Create files that should not be ignored
+	s.createTestFile("src_dir/build_file.txt", "This file should not be ignored")
+	s.createTestFile("cache.txt", "This file should not be ignored")
+
+	// Test with glob pattern that would match both ignored and non-ignored files
+	var result string
+	s.env.ExecuteWorkflow(s.wrapperWorkflow, s.envContainer, SearchRepositoryInput{
+		PathGlob:     "*/build_file.txt",
+		SearchTerm:   "file",
+		ContextLines: 0,
+	})
+	s.Require().NoError(s.env.GetWorkflowResult(&result))
+
+	// Verify that only non-ignored files are found
+	s.Contains(result, "src_dir/build_file.txt")
+	s.NotContains(result, "temp_dir/build_file.txt")
+
+	// Test with glob pattern that matches ignored file extension
+	s.ResetWorkflowEnvironment()
+	s.env.ExecuteWorkflow(s.wrapperWorkflow, s.envContainer, SearchRepositoryInput{
+		PathGlob:     "*.temp",
+		SearchTerm:   "file",
+		ContextLines: 0,
+	})
+	s.Require().NoError(s.env.GetWorkflowResult(&result))
+
+	// Should return no results because .temp files are in .sideignore
+	s.Equal("No files matched the path glob *.temp - please try a different path glob", result)
+}
+
+func (s *SearchRepositoryE2ETestSuite) TestManualGlobFilteringBasicFunctionality() {
+	// Create directories
+	err := os.MkdirAll(filepath.Join(s.dir, "src"), 0755)
+	s.Require().NoError(err)
+	err = os.MkdirAll(filepath.Join(s.dir, "docs"), 0755)
+	s.Require().NoError(err)
+
+	// Create files with same search term but different extensions
+	s.createTestFile("src/main.go", "This is a Go source file with function")
+	s.createTestFile("src/utils.go", "This is another Go file with function")
+	s.createTestFile("docs/readme.txt", "This is documentation with function")
+	s.createTestFile("config.json", "This is config with function")
+
+	// Test glob pattern that should only match .go files
+	var result string
+	s.env.ExecuteWorkflow(s.wrapperWorkflow, s.envContainer, SearchRepositoryInput{
+		PathGlob:     "*.go",
+		SearchTerm:   "function",
+		ContextLines: 0,
+	})
+	s.Require().NoError(s.env.GetWorkflowResult(&result))
+
+	// Verify that only .go files are found
+	s.Contains(result, "src/main.go")
+	s.Contains(result, "src/utils.go")
+	s.NotContains(result, "docs/readme.txt")
+	s.NotContains(result, "config.json")
+
+	// Test glob pattern that should only match files in src directory
+	s.ResetWorkflowEnvironment()
+	s.env.ExecuteWorkflow(s.wrapperWorkflow, s.envContainer, SearchRepositoryInput{
+		PathGlob:     "src/*",
+		SearchTerm:   "function",
+		ContextLines: 0,
+	})
+	s.Require().NoError(s.env.GetWorkflowResult(&result))
+
+	// Verify that only files in src directory are found
+	s.Contains(result, "src/main.go")
+	s.Contains(result, "src/utils.go")
+	s.NotContains(result, "docs/readme.txt")
+	s.NotContains(result, "config.json")
+}
