@@ -25,7 +25,7 @@
       </button>
     </div>
     <div v-else-if="flowAction.actionParams.requestKind === 'merge_approval'">
-      <template v-if="flowAction.actionParams.mergeApprovalInfo.diff">
+      <template v-if="flowAction.actionParams.mergeApprovalInfo?.diff">
         <div v-for="(parsedDiff, diffIndex) in parseDiff(flowAction.actionParams.mergeApprovalInfo.diff)" :key="diffIndex" class="diff-view-container">
           <p class="file-header">{{ parsedDiff.oldFile.fileName || parsedDiff.newFile.fileName }}</p>
           <DiffView
@@ -69,7 +69,7 @@
         class="markdown"
       />
     </div>
-    <div v-if="flowAction.actionParams.requestKind == 'approval'">
+    <div v-if="/approval/.test(props.flowAction.actionParams.requestKind)">
       <!--p>{{ flowAction.actionParams.requestContent }}</p-->
       <p>{{ parsedActionResult.Approved ? '✅ Approved' : '❌ Rejected: ' }}{{ parsedActionResult.Content }}</p>
     </div>
@@ -140,7 +140,7 @@ async function submitUserResponse(approved: boolean) {
     content: responseContent.value,
   };
 
-  if (props.flowAction.actionParams.requestKind === 'approval') {
+  if (/approval/.test(props.flowAction.actionParams.requestKind)){
     userResponse.approved = approved;
   }
 
@@ -241,6 +241,7 @@ button:disabled:hover {
 }
 
 :deep(textarea) {
+  margin-top: 20px;
   margin-bottom: 20px;
 }
 
