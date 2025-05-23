@@ -292,7 +292,7 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 				// Present continue request with Done tag
 				actionCtx := dCtx.NewActionContext("user_request.continue")
 				err := GetUserContinue(actionCtx, "Merge conflicts detected. Please resolve conflicts and continue when done.", map[string]any{
-					"continueTag": "Done",
+					"continueTag": "done",
 				})
 				if err != nil {
 					_ = signalWorkflowClosure(dCtx, "failed")

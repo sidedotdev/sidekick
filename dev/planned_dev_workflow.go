@@ -150,7 +150,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 				// Present continue request with Done tag
 				actionCtx := dCtx.NewActionContext("user_request.continue")
 				err := GetUserContinue(actionCtx, "Merge conflicts detected. Please resolve conflicts and continue when done.", map[string]any{
-					"continueTag": "Done",
+					"continueTag": "done",
 				})
 				if err != nil {
 					_ = signalWorkflowClosure(ctx, "failed")

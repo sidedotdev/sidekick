@@ -139,7 +139,7 @@ const parsedActionResult = computed(() => {
 const tags: {[key: string]: string} = {
   "approve_plan": "Approve",
   "reject_plan": "Revise",
-  "Done": "Done",
+  "done": "Done",
 }
 
 function rejectCopy(): string {
