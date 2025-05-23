@@ -64,6 +64,14 @@
         {{ rejectCopy() }}
       </button>
     </div>
+    <div v-else-if="flowAction.actionParams.requestKind === 'continue'">
+      <button type="button" class="cta-button-color"
+        :disabled="!isPending"
+        @click="submitUserResponse(true)"
+      >
+        {{ continueCopy() }}
+      </button>
+    </div>
     <div v-else>
       <AutogrowTextarea v-model="responseContent"/>
       <button :disabled="responseContent.length == 0" class="cta-button-color" type="submit">Submit</button>
@@ -131,6 +139,7 @@ const parsedActionResult = computed(() => {
 const tags: {[key: string]: string} = {
   "approve_plan": "Approve",
   "reject_plan": "Revise",
+  "Done": "Done",
 }
 
 function rejectCopy(): string {
@@ -143,6 +152,11 @@ function approveCopy(): string {
   return tag && tags[tag] ? tags[tag] : "Approve"
 }
 
+function continueCopy(): string {
+  const tag: string | undefined = props.flowAction.actionParams.continueTag
+  return tag && tags[tag] ? tags[tag] : "Continue"
+}
+
 async function submitUserResponse(approved: boolean) {
   if (props.flowAction.actionStatus !== 'pending') {
     return;
@@ -150,10 +164,13 @@ async function submitUserResponse(approved: boolean) {
 
   const userResponse: UserResponse = {
     content: responseContent.value,
-    params: {
-      targetBranch: targetBranch.value,
-    }
   };
+
+  if (props.flowAction.actionParams.requestKind === 'merge_approval') {
+    userResponse.params = {
+      targetBranch: targetBranch.value,
+    };
+  }
 
   if (/approval/.test(props.flowAction.actionParams.requestKind)){
     userResponse.approved = approved;
