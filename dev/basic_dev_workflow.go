@@ -3,6 +3,7 @@ package dev
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"go.temporal.io/sdk/workflow"
 
@@ -258,8 +259,10 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 
 		if mergeInfo.Approved {
 			// Commit any pending changes first
+			message := strings.Split(requirements, "\n")[0]
+			message = message[:min(len(message), 100)] + "..."
 			err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
-				CommitMessage: "Commit changes before merge",
+				CommitMessage: message,
 			}).Get(dCtx, nil)
 			if err != nil {
 				_ = signalWorkflowClosure(dCtx, "failed")
