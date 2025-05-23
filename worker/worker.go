@@ -124,6 +124,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	w.RegisterActivity(git.GitRestoreActivity)
 	w.RegisterActivity(git.GitCommitActivity)
 	w.RegisterActivity(git.GitCheckoutActivity)
+	w.RegisterActivity(git.GitMergeActivity)
 	w.RegisterActivity(git.ListWorktreesActivity)
 	w.RegisterActivity(git.GetCurrentBranch)
 	w.RegisterActivity(git.GetDefaultBranch)
