@@ -1,17 +1,20 @@
 <template>
-  <Dropdown
-    v-model="selectedBranch"
-    :options="branches"
-    optionLabel="name"
-    optionValue="name"
-    :loading="isLoadingBranches"
-    placeholder="Select Branch"
-    class="w-full"
-  />
+  <div>
+    <Dropdown
+      v-model="selectedBranchValue"
+      :options="branches"
+      optionLabel="name"
+      optionValue="name"
+      :loading="isLoadingBranches"
+      placeholder="Select Branch"
+      class="w-full"
+    />
+    <small v-if="!isLoadingBranches && branches.length === 0">No branches found or failed to load.</small>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import Dropdown from 'primevue/dropdown'
 import { store } from '../lib/store'
 import type { BranchInfo } from '../lib/store'
@@ -29,10 +32,10 @@ const emit = defineEmits<{
 const branches = ref<BranchInfo[]>([])
 const isLoadingBranches = ref(false)
 
-// Computed property to handle v-model binding
-const selectedBranch = computed({
-  get: () => props.modelValue,
-  set: (value) => emit('update:modelValue', value)
+// Computed property to handle v-model binding with null safety
+const selectedBranchValue = computed({
+  get: () => props.modelValue || '',
+  set: (value: string) => emit('update:modelValue', value || null)
 })
 
 // Function to fetch branches
@@ -74,7 +77,7 @@ const fetchBranches = async () => {
 
 // Helper to handle branch selection logic
 const updateSelectedBranch = () => {
-  if (!selectedBranch.value && branches.value.length > 0) {
+  if (!props.modelValue && branches.value.length > 0) {
     const current = branches.value.find(b => b.isCurrent);
     if (current) {
       emit('update:modelValue', current.name);

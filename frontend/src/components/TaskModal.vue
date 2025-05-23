@@ -12,30 +12,14 @@
         <SegmentedControl v-model="envType" :options="envTypeOptions" />
       </div>
 
-      <!-- Branch Selection Dropdown -->
+      <!-- Branch Selection -->
       <div v-if="envType === 'local_git_worktree'" style="display: flex;">
         <label for="startBranch">Start Branch</label>
-        <Dropdown
+        <BranchSelector
           id="startBranch"
           v-model="selectedBranch"
-          :options="branches"
-          optionLabel="name"
-          optionValue="name"
-          placeholder="Select a branch..."
-          :loading="isLoadingBranches"
-          :filter="true"
-          filterPlaceholder="Search branches"
-          style="width: 100%;"
-        >
-          <template #option="slotProps">
-            <div class="branch-option">
-              <span>{{ slotProps.option.name }}</span>
-              <span v-if="slotProps.option.isCurrent" class="branch-tag current">Current</span>
-              <span v-if="slotProps.option.isDefault" class="branch-tag default">Default</span>
-            </div>
-          </template>
-        </Dropdown>
-        <small v-if="!isLoadingBranches && branches.length === 0">No branches found or failed to load.</small>
+          :workspaceId="workspaceId"
+        />
       </div>
 
       <label>
@@ -64,21 +48,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import AutogrowTextarea from './AutogrowTextarea.vue'
 import SplitButton from 'primevue/splitbutton'
 import Button from 'primevue/button';
-import Dropdown from 'primevue/dropdown'; // Added
 import SegmentedControl from './SegmentedControl.vue'
+import BranchSelector from './BranchSelector.vue'
 import { store } from '../lib/store'
 import type { Task, TaskStatus } from '../lib/models'
-
-// Interface for branch data from API
-interface BranchInfo {
-  name: string;
-  isCurrent: boolean;
-  isDefault: boolean;
-}
 
 const devMode = import.meta.env.MODE === 'development'
 const props = defineProps<{
@@ -100,10 +77,7 @@ const envType = ref<string>(props.task?.flowOptions?.envType || localStorage.get
 const determineRequirements = ref<boolean>(props.task?.flowOptions?.determineRequirements ?? true)
 const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
 const selectedBranch = ref<string | null>(props.task?.flowOptions?.startBranch || null)
-
-// State for branch fetching
-const branches = ref<BranchInfo[]>([])
-const isLoadingBranches = ref(false)
+const workspaceId = ref<string>(props.task?.workspaceId || store.workspaceId as string)
 
 
 const dropdownOptions = [
@@ -132,77 +106,10 @@ const handleStatusSelect = (value: string) => {
   submitTask()
 }
 
-// Function to fetch branches
-const fetchBranches = async () => {
-  if (!store.workspaceId && !props.task?.workspaceId) {
-    console.error("Workspace ID is not available to fetch branches.");
-    return;
-  }
-  const workspaceId = props.task?.workspaceId || store.workspaceId;
-  if (!workspaceId) {
-    console.error("No workspace ID available for fetching branches");
-    return;
-  }
-  
-  // Check cache first
-  const cachedBranches = store.getBranchCache(workspaceId);
-  if (cachedBranches) {
-    branches.value = cachedBranches;
-    updateSelectedBranch();
-  } else {
-    isLoadingBranches.value = true;
-  }
-
-  // Fetch fresh data
-  try {
-    const response = await fetch(`/api/v1/workspaces/${workspaceId}/branches`);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    const data = await response.json();
-    const freshBranches = data.branches || [];
-    branches.value = freshBranches;
-    store.setBranchCache(workspaceId, freshBranches);
-    updateSelectedBranch();
-  } catch (error) {
-    console.error("Failed to fetch branches:", error);
-    if (!cachedBranches) {
-      branches.value = []; // Only clear if we had no cache
-    }
-  } finally {
-    isLoadingBranches.value = false;
-  }
-};
-
-// Helper to handle branch selection logic
-const updateSelectedBranch = () => {
-  if (!selectedBranch.value && branches.value.length > 0) {
-    const current = branches.value.find(b => b.isCurrent);
-    if (current) {
-      selectedBranch.value = current.name;
-    } else {
-      const defaultBranch = branches.value.find(b => b.isDefault);
-      if (defaultBranch) {
-        selectedBranch.value = defaultBranch.name;
-      }
-    }
-  }
-};
-
-// Watch for changes in envType to fetch branches or clear selection
+// Watch for changes in envType to manage branch selection
 watch(envType, (newEnvType, oldEnvType) => {
-  if (newEnvType === 'local_git_worktree') {
-    fetchBranches();
-  } else if (oldEnvType === 'local_git_worktree') {
+  if (oldEnvType === 'local_git_worktree') {
     selectedBranch.value = null; // Reset selection when switching away
-    branches.value = []; // Clear branches list
-  }
-});
-
-// Fetch branches on mount if the initial envType requires it
-onMounted(() => {
-  if (envType.value === 'local_git_worktree') {
-    fetchBranches();
   }
 });
 
@@ -230,10 +137,9 @@ const submitTask = async () => {
     flowOptions,
   }
 
-  const workspaceId = isEditMode.value ? props.task!.workspaceId : store.workspaceId
   const url = isEditMode.value
-    ? `/api/v1/workspaces/${workspaceId}/tasks/${props.task!.id}`
-    : `/api/v1/workspaces/${workspaceId}/tasks`
+    ? `/api/v1/workspaces/${workspaceId.value}/tasks/${props.task!.id}`
+    : `/api/v1/workspaces/${workspaceId.value}/tasks`
 
   const method = isEditMode.value ? 'PUT' : 'POST'
 
