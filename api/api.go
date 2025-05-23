@@ -702,9 +702,10 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 
 	var body struct {
 		UserResponse struct {
-			Content  string `json:"content"`
-			Approved *bool  `json:"approved"`
-			Choice   string `json:"choice"`
+			Content  string                 `json:"content"`
+			Approved *bool                  `json:"approved"`
+			Choice   string                 `json:"choice"`
+			Params   map[string]interface{} `json:"params"`
 		} `json:"userResponse"`
 	}
 	if err := c.BindJSON(&body); err != nil {
@@ -727,6 +728,7 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 		Content:          body.UserResponse.Content,
 		Approved:         body.UserResponse.Approved,
 		Choice:           body.UserResponse.Choice,
+		Params:           body.UserResponse.Params,
 	}
 	if err := devAgent.RelayResponse(ctx, userResponse); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to relay user response"})
