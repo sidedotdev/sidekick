@@ -9,6 +9,15 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+// escapeShellArg escapes a string for safe use as an argument in shell commands.
+// It wraps the string in single quotes and escapes any single quotes within the string.
+func escapeShellArg(arg string) string {
+	// Replace single quotes with '\'' (end quote, escaped quote, start quote)
+	escaped := strings.ReplaceAll(arg, "'", `'\''`)
+	// Wrap in single quotes
+	return "'" + escaped + "'"
+}
+
 type SingleSearchParams struct {
 	PathGlob   string `json:"path_glob" jsonschema:"description=The file glob path to search within."`
 	SearchTerm string `json:"search_term" jsonschema:"description=The search term to look for within the files."`
@@ -122,8 +131,9 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 	* the --show-function parameter. This provides better context around the
 	* search term.
 	 */
-	listFilesCmd := fmt.Sprintf(`rg %s "%s"`, rgArgs, input.SearchTerm)
-	fullCmd := fmt.Sprintf(`%s | xargs -r %s "%s"`, listFilesCmd, gitGrepArgs, input.SearchTerm)
+	escapedSearchTerm := escapeShellArg(input.SearchTerm)
+	listFilesCmd := fmt.Sprintf(`rg %s %s`, rgArgs, escapedSearchTerm)
+	fullCmd := fmt.Sprintf(`%s | xargs -r %s %s`, listFilesCmd, gitGrepArgs, escapedSearchTerm)
 
 	var searchOutput env.EnvRunCommandOutput
 	err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
