@@ -131,7 +131,8 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 	}
 	// Don't use --glob with rg when PathGlob is specified, as it overrides ignore files
 	// We'll filter manually instead to respect .gitignore and .sideignore
-	useManualGlobFiltering := input.PathGlob != "" && input.PathGlob != "*"
+	v := workflow.GetVersion(ctx, "manual-search-glob-filtering", workflow.DefaultVersion, 1)
+	useManualGlobFiltering := input.PathGlob != "" && input.PathGlob != "*" && v >= 1
 
 	// TODO /gen replace with a new env.FileExistsActivity - we need to implement that.
 	var catOutput env.EnvRunCommandOutput
