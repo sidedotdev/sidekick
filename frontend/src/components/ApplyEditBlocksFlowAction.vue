@@ -10,7 +10,7 @@
       <template v-if="result.finalDiff">
         <UnifiedDiffViewer
           :diff-string="result.finalDiff"
-          :default-expanded="false"
+          :default-expanded="true"
         />
       </template>
       <div v-else>

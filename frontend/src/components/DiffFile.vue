@@ -46,9 +46,6 @@ import type { ParsedDiff } from '../lib/diffUtils'
 import "@git-diff-view/vue/styles/diff-view.css"
 import { DiffView, DiffModeEnum } from "@git-diff-view/vue"
 
-// Note: We're not using ExpandableSection component here because it's not customizable enough
-// for our specific file header layout with file path, copy button, and visual summary
-
 interface Props {
   fileData: ParsedDiff
   defaultExpanded?: boolean
@@ -77,7 +74,6 @@ const visualSummary = computed(() => {
 
   const addedRatio = props.fileData.linesAdded / total
   const removedRatio = props.fileData.linesRemoved / total
-  const unchangedRatio = props.fileData.linesUnchanged / total
 
   // Round to nearest 20% (each square represents 20%)
   const addedSquares = Math.round(addedRatio * 5)
