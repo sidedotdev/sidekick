@@ -476,6 +476,18 @@ func (s *SearchRepositoryE2ETestSuite) TestSearchWithSpecialCharacters() {
 	s.Require().NoError(err)
 	s.Contains(result, "test_backslash.txt")
 	s.Contains(result, "C:\\Users\\test")
+
+	// Test with terms starting with double dashes
+	s.ResetWorkflowEnvironment()
+	s.createTestFile("test_double_dash.go", "// --verbose flag enables detailed output\nfunc main() {\n\tfmt.Println(\"--help\")\n}")
+	result, err = s.executeSearchRepository(SearchRepositoryInput{
+		PathGlob:     "*.go",
+		SearchTerm:   "--verbose",
+		ContextLines: 0,
+	})
+	s.Require().NoError(err)
+	s.Contains(result, "test_double_dash.go")
+	s.Contains(result, "--verbose")
 }
 
 func (s *SearchRepositoryE2ETestSuite) TestGlobPatternsRespectGitignore() {
