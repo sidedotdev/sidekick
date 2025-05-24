@@ -196,7 +196,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 			}
 			filesArg := strings.Join(escapedFiles, " ")
 			fullCmd := fmt.Sprintf(`%s -- %s %s`, gitGrepArgs, escapedSearchTerm, filesArg)
-			
+
 			err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 				EnvContainer:       envContainer,
 				RelativeWorkingDir: "./",
@@ -210,7 +210,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 	} else {
 		// Original behavior: use rg + git grep pipeline
 		fullCmd := fmt.Sprintf(`rg %s -- %s | xargs -r %s -- %s`, rgArgs, escapedSearchTerm, gitGrepArgs, escapedSearchTerm)
-		
+
 		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 			EnvContainer:       envContainer,
 			RelativeWorkingDir: "./",
