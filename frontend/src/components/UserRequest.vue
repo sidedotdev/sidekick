@@ -10,6 +10,9 @@
     </div>
     <div v-if="flowAction.actionParams.requestKind === 'approval'">
       <AutogrowTextarea v-model="responseContent" placeholder="Rejection reason" />
+      <div v-if="errorMessage" class="error-message">
+        {{ errorMessage }}
+      </div>
       <button type="button" class="cta-button-color"
         :disabled="responseContent.trim() !== ''"
         @click="submitUserResponse(true)"
@@ -50,6 +53,9 @@
       </div>
 
       <AutogrowTextarea v-model="responseContent" placeholder="Rejection reason" />
+      <div v-if="errorMessage" class="error-message">
+        {{ errorMessage }}
+      </div>
       <button type="button" class="cta-button-color"
         :disabled="responseContent.trim() !== ''"
         @click="submitUserResponse(true)"
@@ -74,6 +80,9 @@
     </div>
     <div v-else>
       <AutogrowTextarea v-model="responseContent"/>
+      <div v-if="errorMessage" class="error-message">
+        {{ errorMessage }}
+      </div>
       <button :disabled="responseContent.length == 0" class="cta-button-color" type="submit">Submit</button>
     </div>
   </form>
@@ -124,6 +133,7 @@ const props = defineProps({
 });
 
 const responseContent = ref('');
+const errorMessage = ref('');
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
 const targetBranch = ref<string | undefined>()
 
@@ -162,6 +172,9 @@ async function submitUserResponse(approved: boolean) {
     return;
   }
 
+  // Clear any existing error message
+  errorMessage.value = '';
+
   const userResponse: UserResponse = {
     content: responseContent.value,
   };
@@ -184,15 +197,25 @@ async function submitUserResponse(approved: boolean) {
         userResponse: userResponse,
       }),
     })
-    // TODO /gen show the error in the UI
+    
     if (!response.ok) {
-      console.error('Failed to complete flow action')
+      try {
+        const errorData = await response.json();
+        errorMessage.value = errorData.error || 'Failed to complete flow action';
+      } catch (parseError) {
+        errorMessage.value = 'Failed to complete flow action';
+      }
+      return false;
     }
-    console.debug(await response.json())
-    return false
+    
+    // Success case - parse response once
+    const result = await response.json();
+    console.debug(result);
+    return true;
   } catch (error) {
-    // TODO /gen show the error in the UI
+    errorMessage.value = 'Network error: Failed to submit response';
     console.error(error);
+    return false;
   }
 }
 
@@ -321,5 +344,15 @@ label[for="targetBranch"] {
 }
 .markdown :deep(ol), .markdown :deep(ul) {
   margin-top: 5px;
+}
+
+.error-message {
+  background-color: var(--color-error-bg, #fee);
+  color: var(--color-error-text, #c33);
+  border: 1px solid var(--color-error-border, #fcc);
+  border-radius: 4px;
+  padding: 0.75rem;
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
 }
 </style>
