@@ -2,8 +2,6 @@ package dev
 
 import (
 	"fmt"
-	"reflect"
-	"runtime"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -11,11 +9,12 @@ import (
 // ExecuteActivityWithUserRetry wraps workflow.ExecuteActivity with automatic user-prompted retry on failure.
 // This function is a drop-in replacement for workflow.ExecuteActivity but will prompt the user to
 // continue/retry when activities fail, creating an infinite retry loop until the activity succeeds.
-func ExecuteActivityWithUserRetry(ctx DevContext, activity interface{}, args ...interface{}) workflow.Future {
+// The actionCtx parameter provides the action context for tracking and naming the retry operation.
+func ExecuteActivityWithUserRetry(actionCtx DevActionContext, activity interface{}, args ...interface{}) workflow.Future {
 	// Create a custom future that handles the retry logic
-	future, settable := workflow.NewFuture(ctx)
+	future, settable := workflow.NewFuture(actionCtx.DevContext)
 
-	workflow.Go(ctx, func(gCtx workflow.Context) {
+	workflow.Go(actionCtx.DevContext, func(gCtx workflow.Context) {
 		for {
 			// Execute the activity
 			activityFuture := workflow.ExecuteActivity(gCtx, activity, args...)
@@ -38,14 +37,8 @@ func ExecuteActivityWithUserRetry(ctx DevContext, activity interface{}, args ...
 				return
 			}
 
-			// Get activity name for error message
-			activityName := getActivityName(activity)
-
-			// Create action context for user retry prompt
-			actionCtx := ctx.NewActionContext("activity_retry")
-
 			// Prompt user to retry
-			prompt := fmt.Sprintf("%s failed: %s. Would you like to retry?", activityName, err.Error())
+			prompt := fmt.Sprintf("%s failed: %s. Would you like to retry?", actionCtx.ActionType, err.Error())
 			requestParams := map[string]any{
 				"continueTag": "Retry",
 			}
@@ -64,29 +57,3 @@ func ExecuteActivityWithUserRetry(ctx DevContext, activity interface{}, args ...
 	return future
 }
 
-// getActivityName extracts a readable name from the activity interface{}
-func getActivityName(activity interface{}) string {
-	if activity == nil {
-		return "Unknown Activity"
-	}
-
-	// Try to get the function name using reflection
-	activityType := reflect.TypeOf(activity)
-	if activityType.Kind() == reflect.Func {
-		// Get the function name
-		if funcName := runtime.FuncForPC(reflect.ValueOf(activity).Pointer()).Name(); funcName != "" {
-			// Extract just the function name from the full path
-			if lastDot := len(funcName) - 1; lastDot >= 0 {
-				for i := lastDot; i >= 0; i-- {
-					if funcName[i] == '.' {
-						return funcName[i+1:]
-					}
-				}
-			}
-			return funcName
-		}
-	}
-
-	// Fallback to type name
-	return activityType.String()
-}
