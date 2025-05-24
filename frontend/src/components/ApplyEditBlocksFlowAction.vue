@@ -8,18 +8,10 @@
       </h4>
       <pre v-if="result.error != ''" class="check-result-message">{{ result.error }}</pre>
       <template v-if="result.finalDiff">
-        <div v-for="(parsedDiff, diffIndex) in parseFinalDiff(result.finalDiff)" :key="diffIndex" class="diff-view-container">
-          <p class="file-header">{{ parsedDiff.oldFile.fileName || parsedDiff.newFile.fileName }}</p>
-          <DiffView
-            :data="parsedDiff"
-            :diff-view-font-size="14"
-            :diff-view-mode="DiffModeEnum.Unified"
-            :diff-view-highlight="true"
-            :diff-view-add-widget="false"
-            :diff-view-wrap="true"
-            :diff-view-theme="getTheme()"
-          />
-        </div>
+        <UnifiedDiffViewer
+          :diff-string="result.finalDiff"
+          :default-expanded="false"
+        />
       </template>
       <div v-else>
         <p>File: {{ result.originalEditBlock.filePath }}</p>
@@ -35,8 +27,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { FlowAction } from '../lib/models';
-import "@git-diff-view/vue/styles/diff-view.css";
-import { DiffView, DiffModeEnum } from "@git-diff-view/vue";
+import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
 
 // FIXME /gen switch to camelCase in backend json struct tags and here
 export interface ApplyEditBlockResult {
@@ -52,12 +43,6 @@ export interface ApplyEditBlockResult {
     message: string;
   };
   finalDiff?: string;
-}
-
-interface ParsedDiff {
-  oldFile: { fileName: string | null; fileLang: string | null };
-  newFile: { fileName: string | null; fileLang: string | null };
-  hunks: string[];
 }
 
 const props = defineProps({
@@ -90,40 +75,6 @@ const actionResult = computed(() => {
   }
   return parsedResult;
 });
-
-const parseFinalDiff = (diffString: string): ParsedDiff[] => {
-  const files = diffString.split(/^(?=diff )/m);
-  return files.map(file => {
-    const fileHeader = file.split('\n')[0];
-    const [oldFile, newFile] = fileHeader.match(/(?<=a\/).+(?= b\/)|(?<=b\/).+/g) || [];
-    const hunks = [file];
-    return {
-      oldFile: { fileName: oldFile || null, fileLang: getFileLanguage(oldFile) },
-      newFile: { fileName: newFile || null, fileLang: getFileLanguage(newFile) },
-      hunks,
-    };
-  });
-};
-
-const getFileLanguage = (fileName: string | undefined): string | null => {
-  if (!fileName) return null;
-  const extension = fileName.split('.').pop();
-  // Add more mappings as needed
-  const languageMap: { [key: string]: string } = {
-    'js': 'javascript',
-    'ts': 'typescript',
-    'py': 'python',
-    'go': 'go',
-    'vue': 'vue',
-    // Add more mappings here
-  };
-  return languageMap[extension?.toLowerCase() ?? ''] || null;
-};
-
-const getTheme = () => {
-  const prefersDarkScheme = window.matchMedia("(prefers-color-scheme: dark)");
-  return prefersDarkScheme.matches ? 'dark' : 'light';
-};
 </script>
 
 <style scoped>
@@ -154,23 +105,6 @@ const getTheme = () => {
   border-left: 2px solid #ccc;
   padding-top: 5px;
   padding-bottom: 5px;
-}
-.diff-view-container {
-  margin: -15px;
-  margin-top: 0.5rem;
-  border: 1px solid var(--color-border-contrast);
-  border-left: 0;
-  border-right: 0;
-  background-color: inherit;
-}
-.file-header {
-  padding: 0.5rem;
-  font-weight: bold;
-  position: sticky;
-  z-index: calc(50 - var(--level, 0));
-  background-color: inherit;
-  top: calc(v-bind(level) * var(--name-height) - 1px);
-  border-bottom: 1px solid var(--color-border-contrast);
 }
 
 </style>
