@@ -159,7 +159,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 		// 1. Get the list of files from rg (respecting ignore files)
 		// 2. Filter them manually using the glob pattern
 		// 3. Run git grep on the filtered files
-		listFilesCmd := fmt.Sprintf(`rg %s %s`, rgArgs, escapedSearchTerm)
+		listFilesCmd := fmt.Sprintf(`rg %s -- %s`, rgArgs, escapedSearchTerm)
 		
 		var listFilesOutput env.EnvRunCommandOutput
 		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
@@ -195,7 +195,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 				escapedFiles[i] = escapeShellArg(file)
 			}
 			filesArg := strings.Join(escapedFiles, " ")
-			fullCmd := fmt.Sprintf(`%s %s %s`, gitGrepArgs, escapedSearchTerm, filesArg)
+			fullCmd := fmt.Sprintf(`%s -- %s %s`, gitGrepArgs, escapedSearchTerm, filesArg)
 			
 			err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 				EnvContainer:       envContainer,
@@ -209,7 +209,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 		}
 	} else {
 		// Original behavior: use rg + git grep pipeline
-		fullCmd := fmt.Sprintf(`rg %s %s | xargs -r %s %s`, rgArgs, escapedSearchTerm, gitGrepArgs, escapedSearchTerm)
+		fullCmd := fmt.Sprintf(`rg %s -- %s | xargs -r %s -- %s`, rgArgs, escapedSearchTerm, gitGrepArgs, escapedSearchTerm)
 		
 		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 			EnvContainer:       envContainer,
@@ -227,7 +227,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 		var listFilesOutput env.EnvRunCommandOutput
 		if useManualGlobFiltering {
 			// For manual glob filtering, we already have the file list from the previous step
-			listFilesCmd := fmt.Sprintf(`rg %s %s`, rgArgs, escapedSearchTerm)
+			listFilesCmd := fmt.Sprintf(`rg %s -- %s`, rgArgs, escapedSearchTerm)
 			err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 				EnvContainer:       envContainer,
 				RelativeWorkingDir: "./",
@@ -256,7 +256,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 				EnvContainer:       envContainer,
 				RelativeWorkingDir: "./",
 				Command:            "sh",
-				Args:               []string{"-c", fmt.Sprintf(`rg %s %s`, rgArgs, escapedSearchTerm)},
+				Args:               []string{"-c", fmt.Sprintf(`rg %s -- %s`, rgArgs, escapedSearchTerm)},
 			}).Get(ctx, &listFilesOutput)
 			if err != nil {
 				return "", fmt.Errorf("failed to list files to search the repository: %v", err)
