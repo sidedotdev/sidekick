@@ -136,14 +136,26 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 
 		if mergeInfo.Approved {
 			// Perform the merge
-			var mergeResult git.MergeActivityResult
-			err = workflow.ExecuteActivity(ctx, git.GitMergeActivity, dCtx.EnvContainer, git.GitMergeParams{
-				SourceBranch: dCtx.Worktree.Name,
-				TargetBranch: mergeInfo.TargetBranch,
-			}).Get(ctx, &mergeResult)
+			actionCtx := dCtx.NewActionContext("merge")
+			actionCtx.ActionParams = map[string]interface{}{
+				"sourceBranch": dCtx.Worktree.Name,
+				"targetBranch": mergeInfo.TargetBranch,
+			}
+
+			mergeResult, err := Track(actionCtx, func(flowAction domain.FlowAction) (git.MergeActivityResult, error) {
+				var result git.MergeActivityResult
+				err := workflow.ExecuteActivity(ctx, git.GitMergeActivity, dCtx.EnvContainer, git.GitMergeParams{
+					SourceBranch: dCtx.Worktree.Name,
+					TargetBranch: mergeInfo.TargetBranch,
+				}).Get(ctx, &result)
+				if err != nil {
+					return git.MergeActivityResult{}, fmt.Errorf("failed to merge: %v", err)
+				}
+				return result, nil
+			})
 			if err != nil {
 				_ = signalWorkflowClosure(ctx, "failed")
-				return DevPlanExecution{}, fmt.Errorf("failed to merge: %v", err)
+				return DevPlanExecution{}, err
 			}
 
 			if mergeResult.HasConflicts {
