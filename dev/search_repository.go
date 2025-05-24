@@ -152,7 +152,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 	}
 
 	escapedSearchTerm := escapeShellArg(input.SearchTerm)
-	
+
 	var searchOutput env.EnvRunCommandOutput
 	if useManualGlobFiltering {
 		// When using manual glob filtering, we need to:
@@ -160,7 +160,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 		// 2. Filter them manually using the glob pattern
 		// 3. Run git grep on the filtered files
 		listFilesCmd := fmt.Sprintf(`rg %s %s`, rgArgs, escapedSearchTerm)
-		
+
 		var listFilesOutput env.EnvRunCommandOutput
 		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 			EnvContainer:       envContainer,
@@ -196,7 +196,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 			}
 			filesArg := strings.Join(escapedFiles, " ")
 			fullCmd := fmt.Sprintf(`%s %s %s`, gitGrepArgs, escapedSearchTerm, filesArg)
-			
+
 			err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 				EnvContainer:       envContainer,
 				RelativeWorkingDir: "./",
@@ -210,7 +210,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 	} else {
 		// Original behavior: use rg + git grep pipeline
 		fullCmd := fmt.Sprintf(`rg %s %s | xargs -r %s %s`, rgArgs, escapedSearchTerm, gitGrepArgs, escapedSearchTerm)
-		
+
 		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 			EnvContainer:       envContainer,
 			RelativeWorkingDir: "./",
@@ -318,7 +318,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 			if catOutput.ExitStatus == 0 {
 				listAllFilesCmd += " --ignore-file .sideignore"
 			}
-			
+
 			err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 				EnvContainer:       envContainer,
 				RelativeWorkingDir: "./",

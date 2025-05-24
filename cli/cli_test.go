@@ -20,7 +20,6 @@ import (
 	"github.com/zalando/go-keyring"
 )
 
-
 func TestHelpFlags(t *testing.T) {
 	// Save original args and exit function
 	oldArgs := os.Args
