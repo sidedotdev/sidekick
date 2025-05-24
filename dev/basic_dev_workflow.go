@@ -277,15 +277,26 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 			}
 
 			// Perform merge
-			var mergeResult git.MergeActivityResult
-			future := workflow.ExecuteActivity(dCtx, git.GitMergeActivity, dCtx.EnvContainer, git.GitMergeParams{
-				SourceBranch: dCtx.Worktree.Name,
-				TargetBranch: mergeInfo.TargetBranch,
+			actionCtx := dCtx.NewActionContext("merge")
+			actionCtx.ActionParams = map[string]interface{}{
+				"sourceBranch": dCtx.Worktree.Name,
+				"targetBranch": mergeInfo.TargetBranch,
+			}
+			mergeResult, err := Track(actionCtx, func(flowAction domain.FlowAction) (git.MergeActivityResult, error) {
+				var result git.MergeActivityResult
+				future := workflow.ExecuteActivity(dCtx, git.GitMergeActivity, dCtx.EnvContainer, git.GitMergeParams{
+					SourceBranch: dCtx.Worktree.Name,
+					TargetBranch: mergeInfo.TargetBranch,
+				})
+				err := future.Get(dCtx, &result)
+				if err != nil {
+					return result, fmt.Errorf("failed to merge branches: %v", err)
+				}
+				return result, nil
 			})
-			err = future.Get(dCtx, &mergeResult)
 			if err != nil {
 				_ = signalWorkflowClosure(dCtx, "failed")
-				return "", fmt.Errorf("failed to merge branches: %v", err)
+				return "", err
 			}
 
 			if mergeResult.HasConflicts {
