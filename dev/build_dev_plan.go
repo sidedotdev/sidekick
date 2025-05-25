@@ -140,11 +140,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
 	ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, maxLength)
 
-	chatCtx := iteration.ExecCtx.WithCancelOnPause()
-	chatResponse, err := generateDevPlan(chatCtx, iteration.ChatHistory)
-	if iteration.ExecCtx.GlobalState != nil && iteration.ExecCtx.GlobalState.Paused {
-		return nil, nil // continue the loop: UserRequestIfPaused will handle the pause
-	}
+	chatResponse, err := generateDevPlan(iteration.ExecCtx, iteration.ChatHistory)
 	if err != nil {
 		return nil, fmt.Errorf("error executing OpenAI chat completion activity: %w", err)
 	}

@@ -90,11 +90,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
 	ManageChatHistory(iteration.ExecCtx.Context, iteration.ChatHistory, maxLength)
 
-	chatCtx := iteration.ExecCtx.WithCancelOnPause()
-	chatResponse, err := generateDevRequirements(chatCtx, iteration.ChatHistory)
-	if iteration.ExecCtx.GlobalState != nil && iteration.ExecCtx.GlobalState.Paused {
-		return nil, nil // continue the loop: UserRequestIfPaused will handle the pause
-	}
+	chatResponse, err := generateDevRequirements(iteration.ExecCtx, iteration.ChatHistory)
 	if err != nil {
 		return nil, err
 	}
