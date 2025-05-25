@@ -28,6 +28,10 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+type DevActivities struct {
+	*lsp.LSPActivities
+}
+
 type ApplyEditBlockReport struct {
 	OriginalEditBlock EditBlock `json:"originalEditBlock"`
 
@@ -57,7 +61,7 @@ type ApplyEditBlockActivityInput struct {
 	CheckCommands []common.CommandConfig
 }
 
-func ApplyEditBlocksActivity(input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
+func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
 	baseDir := input.EnvContainer.Env.GetWorkingDirectory()
 	var reports []ApplyEditBlockReport
 
@@ -546,7 +550,7 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 
 		noRetryCtx := utils.NoRetryCtx(dCtx)
 		var validReports []ApplyEditBlockReport
-		err := workflow.ExecuteActivity(noRetryCtx, ApplyEditBlocksActivity, applyEditBlockInput).Get(noRetryCtx, &validReports)
+		err := workflow.ExecuteActivity(noRetryCtx, "DevActivities.ApplyEditBlocks", applyEditBlockInput).Get(noRetryCtx, &validReports)
 		if err != nil {
 			return nil, err
 		}
