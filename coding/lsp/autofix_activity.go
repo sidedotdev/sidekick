@@ -107,6 +107,9 @@ func applyCodeActions(ctx context.Context, envContainer env.EnvContainer, codeAc
 
 var defaultClientCapabilities = ClientCapabilities{
 	TextDocument: TextDocumentClientCapabilities{
+		Synchronization: &TextDocumentSyncClientCapabilities{
+			DidSave: &[]bool{true}[0],
+		},
 		CodeAction: CodeActionClientCapabilities{
 			CodeActionLiteralSupport: &CodeActionLiteralSupport{
 				CodeActionKind: &CodeActionKindValueSet{
