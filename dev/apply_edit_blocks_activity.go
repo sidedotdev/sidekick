@@ -137,7 +137,7 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 			updateVisibleFileRanges(input.EditBlocks[i:], block.FilePath, lineEdits)
 
 			// Notify LSP server about the file changes
-			err := notifyLSPServerOfFileSave(input.EnvContainer, block.FilePath)
+			err := da.notifyLSPServerOfFileChanges(ctx, input.EnvContainer, block.FilePath, block.EditType)
 			if err != nil {
 				log.Warn().Err(err).Str("filePath", block.FilePath).Msg("Failed to notify LSP server of file change")
 			}
@@ -156,155 +156,133 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 	return reports, nil
 }
 
-// notifyLSPServerOfFileSave notifies the LSP server about changes to a file
-// by sending appropriate textDocument notifications based on server capabilities
-func notifyLSPServerOfFileSave(envContainer env.EnvContainer, filePath string) error {
+// notifyLSPServerOfFileChanges notifies the LSP server about file changes
+// by sending appropriate textDocument notifications based on edit type and server capabilities
+func (da *DevActivities) notifyLSPServerOfFileChanges(ctx context.Context, envContainer env.EnvContainer, filePath string, editType string) error {
+	switch editType {
+	case "update":
+		return da.handleUpdateEditNotifications(ctx, envContainer, filePath)
+	case "create", "append":
+		return da.handleCreateAppendEditNotifications(ctx, envContainer, filePath)
+	case "delete":
+		return da.handleDeleteEditNotifications(ctx, envContainer, filePath)
+	default:
+		return fmt.Errorf("unknown edit type: %s", editType)
+	}
+}
+
+// handleUpdateEditNotifications handles LSP notifications for update edits:
+// didOpen (if openClose supported) → didChange (if didOpen was called) → didSave (if supported) → didClose
+func (da *DevActivities) handleUpdateEditNotifications(ctx context.Context, envContainer env.EnvContainer, filePath string) error {
 	baseDir := envContainer.Env.GetWorkingDirectory()
-	absoluteFilePath := filepath.Join(baseDir, filePath)
-
-	// Determine language from file extension
-	language := getLanguageFromFilePath(filePath)
+	language := utils.InferLanguageNameFromFilePath(filePath)
 	if language == "" {
-		// Skip LSP notifications for files without recognized language
-		return nil
+		return nil // Skip LSP notifications for files without recognized language
 	}
 
-	// Create LSP activities instance
-	lspa := lsp.LSPActivities{
-		LSPClientProvider: func(languageName string) lsp.LSPClient {
-			return &lsp.Jsonrpc2LSPClient{
-				LanguageName: languageName,
-			}
-		},
-		InitializedClients: map[string]lsp.LSPClient{},
+	var didOpenCalled bool
+
+	// Step 1: didOpen (if openClose supported)
+	didOpenInput := lsp.TextDocumentDidOpenActivityInput{
+		RepoDir:  baseDir,
+		FilePath: filePath,
+	}
+	err := da.LSPActivities.TextDocumentDidOpenActivity(ctx, didOpenInput)
+	if err == nil {
+		didOpenCalled = true
 	}
 
-	ctx := context.Background()
-	client, err := lspa.findOrInitClient(ctx, baseDir, language)
-	if err != nil {
-		return fmt.Errorf("failed to get LSP client: %w", err)
-	}
-
-	// Get server capabilities to determine which notifications to send
-	capabilities := client.GetServerCapabilities()
-
-	// Check textDocumentSync capabilities
-	var syncOptions *lsp.TextDocumentSyncOptions
-	switch sync := capabilities.TextDocumentSync.(type) {
-	case *lsp.TextDocumentSyncOptions:
-		syncOptions = sync
-	case lsp.TextDocumentSyncKind:
-		// no save notification if save sync option not explicitly set
-		return nil
-	}
-
-	documentURI := "file://" + absoluteFilePath
-
-	// Try didSave notification first (most common and simple)
-	if syncOptions != nil && syncOptions.Save != nil {
-		// Server supports save notifications
-		params := lsp.DidSaveTextDocumentParams{
-			TextDocument: lsp.TextDocumentIdentifier{
-				URI: documentURI,
-			},
-		}
-
-		// Check if server wants file content included
-		if saveOpts, ok := syncOptions.Save.(*lsp.SaveOptions); ok && saveOpts != nil && saveOpts.IncludeText != nil && *saveOpts.IncludeText {
-			// Read file content
-			content, err := os.ReadFile(absoluteFilePath)
-			if err != nil {
-				return fmt.Errorf("failed to read file content for didSave: %w", err)
-			}
-			text := string(content)
-			params.Text = &text
-		}
-
-		err = client.TextDocumentDidSave(ctx, params)
-		if err != nil {
-			return fmt.Errorf("failed to send didSave notification: %w", err)
-		}
-		return nil
-	}
-
-	// Fallback to didOpen/didClose cycle if save is not supported but openClose is
-	if syncOptions != nil && syncOptions.OpenClose != nil && *syncOptions.OpenClose {
-		// Read file content
+	// Step 2: didChange (if didOpen was called and change is supported)
+	if didOpenCalled {
+		// Read current file content for change notification
+		absoluteFilePath := filepath.Join(baseDir, filePath)
 		content, err := os.ReadFile(absoluteFilePath)
-		if err != nil {
-			return fmt.Errorf("failed to read file content for didOpen: %w", err)
+		if err == nil {
+			didChangeInput := lsp.TextDocumentDidChangeActivityInput{
+				RepoDir:  baseDir,
+				FilePath: filePath,
+				Version:  2, // Version after the edit
+				ContentChanges: []lsp.TextDocumentContentChangeEvent{
+					{
+						Text: string(content), // Full document sync
+					},
+				},
+			}
+			_ = da.LSPActivities.TextDocumentDidChangeActivity(ctx, didChangeInput) // Ignore errors
 		}
-
-		// Send didClose first (in case file was already open)
-		closeParams := lsp.DidCloseTextDocumentParams{
-			TextDocument: lsp.TextDocumentIdentifier{
-				URI: documentURI,
-			},
-		}
-		_ = client.TextDocumentDidClose(ctx, closeParams) // Ignore errors for close
-
-		// Send didOpen with updated content
-		openParams := lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        documentURI,
-				LanguageID: language,
-				Version:    1,
-				Text:       string(content),
-			},
-		}
-		err = client.TextDocumentDidOpen(ctx, openParams)
-		if err != nil {
-			return fmt.Errorf("failed to send didOpen notification: %w", err)
-		}
-		return nil
 	}
 
-	// If neither save nor openClose is supported, we can't notify the server
-	log.Debug().Str("filePath", filePath).Msg("LSP server does not support textDocument sync notifications")
+	// Step 3: didSave (if supported)
+	didSaveInput := lsp.TextDocumentDidSaveActivityInput{
+		RepoDir:  baseDir,
+		FilePath: filePath,
+	}
+	_ = da.LSPActivities.TextDocumentDidSaveActivity(ctx, didSaveInput) // Ignore errors
+
+	// Step 4: didClose (if didOpen was called)
+	if didOpenCalled {
+		didCloseInput := lsp.TextDocumentDidCloseActivityInput{
+			RepoDir:  baseDir,
+			FilePath: filePath,
+		}
+		_ = da.LSPActivities.TextDocumentDidCloseActivity(ctx, didCloseInput) // Ignore errors
+	}
+
 	return nil
 }
 
-// getLanguageFromFilePath determines the language identifier from a file path
-func getLanguageFromFilePath(filePath string) string {
-	ext := filepath.Ext(filePath)
-	switch ext {
-	case ".go":
-		return "go"
-	case ".js":
-		return "javascript"
-	case ".ts":
-		return "typescript"
-	case ".py":
-		return "python"
-	case ".java":
-		return "java"
-	case ".cpp", ".cc", ".cxx":
-		return "cpp"
-	case ".c":
-		return "c"
-	case ".cs":
-		return "csharp"
-	case ".php":
-		return "php"
-	case ".rb":
-		return "ruby"
-	case ".rs":
-		return "rust"
-	case ".vue":
-		return "vue"
-	case ".html":
-		return "html"
-	case ".css":
-		return "css"
-	case ".json":
-		return "json"
-	case ".xml":
-		return "xml"
-	case ".yaml", ".yml":
-		return "yaml"
-	default:
-		return ""
+// handleCreateAppendEditNotifications handles LSP notifications for create/append edits:
+// didSave first, fallback to didOpen/didClose if save not supported
+func (da *DevActivities) handleCreateAppendEditNotifications(ctx context.Context, envContainer env.EnvContainer, filePath string) error {
+	baseDir := envContainer.Env.GetWorkingDirectory()
+	language := utils.InferLanguageNameFromFilePath(filePath)
+	if language == "" {
+		return nil // Skip LSP notifications for files without recognized language
 	}
+
+	// Try didSave first
+	didSaveInput := lsp.TextDocumentDidSaveActivityInput{
+		RepoDir:  baseDir,
+		FilePath: filePath,
+	}
+	err := da.LSPActivities.TextDocumentDidSaveActivity(ctx, didSaveInput)
+	if err == nil {
+		return nil // didSave succeeded
+	}
+
+	// Fallback to didOpen/didClose cycle
+	didOpenInput := lsp.TextDocumentDidOpenActivityInput{
+		RepoDir:  baseDir,
+		FilePath: filePath,
+	}
+	err = da.LSPActivities.TextDocumentDidOpenActivity(ctx, didOpenInput)
+	if err == nil {
+		// If didOpen succeeded, also call didClose
+		didCloseInput := lsp.TextDocumentDidCloseActivityInput{
+			RepoDir:  baseDir,
+			FilePath: filePath,
+		}
+		_ = da.LSPActivities.TextDocumentDidCloseActivity(ctx, didCloseInput) // Ignore errors
+	}
+
+	return nil
+}
+
+// handleDeleteEditNotifications handles LSP notifications for delete edits: just didClose
+func (da *DevActivities) handleDeleteEditNotifications(ctx context.Context, envContainer env.EnvContainer, filePath string) error {
+	baseDir := envContainer.Env.GetWorkingDirectory()
+	language := utils.InferLanguageNameFromFilePath(filePath)
+	if language == "" {
+		return nil // Skip LSP notifications for files without recognized language
+	}
+
+	didCloseInput := lsp.TextDocumentDidCloseActivityInput{
+		RepoDir:  baseDir,
+		FilePath: filePath,
+	}
+	_ = da.LSPActivities.TextDocumentDidCloseActivity(ctx, didCloseInput) // Ignore errors
+
+	return nil
 }
 
 type lineEdit struct {

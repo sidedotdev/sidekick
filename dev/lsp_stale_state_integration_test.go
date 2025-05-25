@@ -87,7 +87,18 @@ func main() {
 		EnabledFlags: []string{}, // No flags to avoid checks that might interfere
 	}
 
-	reports, err := ApplyEditBlocksActivity(applyInput)
+	devActivities := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	reports, err := devActivities.ApplyEditBlocks(context.Background(), applyInput)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
 	require.True(t, reports[0].DidApply, "Edit block should have been applied successfully")
