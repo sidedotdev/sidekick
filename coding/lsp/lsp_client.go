@@ -117,7 +117,7 @@ func (l *Jsonrpc2LSPClient) TextDocumentDefinition(ctx context.Context, uri stri
 	}
 	params := TextDocumentPositionParams{
 		TextDocument: TextDocumentIdentifier{
-			DocumentURI: uri,
+			URI: uri,
 		},
 		Position: Position{
 			Line:      line,
@@ -140,7 +140,7 @@ func (l *Jsonrpc2LSPClient) TextDocumentReferences(ctx context.Context, uri stri
 	params := ReferenceParams{
 		TextDocumentPositionParams: TextDocumentPositionParams{
 			TextDocument: TextDocumentIdentifier{
-				DocumentURI: uri,
+				URI: uri,
 			},
 			Position: Position{
 				Line:      line,
@@ -180,7 +180,7 @@ func (l *Jsonrpc2LSPClient) TextDocumentImplementation(ctx context.Context, uri 
 	}
 	params := TextDocumentPositionParams{
 		TextDocument: TextDocumentIdentifier{
-			DocumentURI: uri,
+			URI: uri,
 		},
 		Position: Position{
 			Line:      line,

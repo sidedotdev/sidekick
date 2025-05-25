@@ -67,7 +67,7 @@ func TestAutofixActivity(t *testing.T) {
 						{
 							TextDocument: OptionalVersionedTextDocumentIdentifier{
 								TextDocumentIdentifier: TextDocumentIdentifier{
-									DocumentURI: *uri,
+									URI: *uri,
 								},
 							},
 							Edits: []TextEdit{
@@ -143,7 +143,7 @@ func TestAutofixActivity(t *testing.T) {
 						{
 							TextDocument: OptionalVersionedTextDocumentIdentifier{
 								TextDocumentIdentifier: TextDocumentIdentifier{
-									DocumentURI: *uri,
+									URI: *uri,
 								},
 							},
 							Edits: []TextEdit{

@@ -193,7 +193,7 @@ const (
 )
 
 type TextDocumentIdentifier struct {
-	DocumentURI string `json:"uri"`
+	URI string `json:"uri"`
 }
 
 type TypeDefinition struct {

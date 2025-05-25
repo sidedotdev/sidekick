@@ -132,7 +132,11 @@ func ApplyEditBlocksActivity(input ApplyEditBlockActivityInput) ([]ApplyEditBloc
 			lineEdits := getLineEditsFromDiff(report.FinalDiff)
 			updateVisibleFileRanges(input.EditBlocks[i:], block.FilePath, lineEdits)
 
-			// FIXME /gen we need to reload the file that was edited in the LSP server
+			// Notify LSP server about the file changes
+			err := notifyLSPServerOfFileSave(input.EnvContainer, block.FilePath)
+			if err != nil {
+				log.Warn().Err(err).Str("filePath", block.FilePath).Msg("Failed to notify LSP server of file change")
+			}
 		}
 	}
 
@@ -146,6 +150,157 @@ func ApplyEditBlocksActivity(input ApplyEditBlockActivityInput) ([]ApplyEditBloc
 	// them all
 
 	return reports, nil
+}
+
+// notifyLSPServerOfFileSave notifies the LSP server about changes to a file
+// by sending appropriate textDocument notifications based on server capabilities
+func notifyLSPServerOfFileSave(envContainer env.EnvContainer, filePath string) error {
+	baseDir := envContainer.Env.GetWorkingDirectory()
+	absoluteFilePath := filepath.Join(baseDir, filePath)
+
+	// Determine language from file extension
+	language := getLanguageFromFilePath(filePath)
+	if language == "" {
+		// Skip LSP notifications for files without recognized language
+		return nil
+	}
+
+	// Create LSP activities instance
+	lspa := lsp.LSPActivities{
+		LSPClientProvider: func(languageName string) lsp.LSPClient {
+			return &lsp.Jsonrpc2LSPClient{
+				LanguageName: languageName,
+			}
+		},
+		InitializedClients: map[string]lsp.LSPClient{},
+	}
+
+	ctx := context.Background()
+	client, err := lspa.findOrInitClient(ctx, baseDir, language)
+	if err != nil {
+		return fmt.Errorf("failed to get LSP client: %w", err)
+	}
+
+	// Get server capabilities to determine which notifications to send
+	capabilities := client.GetServerCapabilities()
+
+	// Check textDocumentSync capabilities
+	var syncOptions *lsp.TextDocumentSyncOptions
+	switch sync := capabilities.TextDocumentSync.(type) {
+	case *lsp.TextDocumentSyncOptions:
+		syncOptions = sync
+	case lsp.TextDocumentSyncKind:
+		// no save notification if save sync option not explicitly set
+		return nil
+	}
+
+	documentURI := "file://" + absoluteFilePath
+
+	// Try didSave notification first (most common and simple)
+	if syncOptions != nil && syncOptions.Save != nil {
+		// Server supports save notifications
+		params := lsp.DidSaveTextDocumentParams{
+			TextDocument: lsp.TextDocumentIdentifier{
+				URI: documentURI,
+			},
+		}
+
+		// Check if server wants file content included
+		if saveOpts, ok := syncOptions.Save.(*lsp.SaveOptions); ok && saveOpts != nil && saveOpts.IncludeText != nil && *saveOpts.IncludeText {
+			// Read file content
+			content, err := os.ReadFile(absoluteFilePath)
+			if err != nil {
+				return fmt.Errorf("failed to read file content for didSave: %w", err)
+			}
+			text := string(content)
+			params.Text = &text
+		}
+
+		err = client.TextDocumentDidSave(ctx, params)
+		if err != nil {
+			return fmt.Errorf("failed to send didSave notification: %w", err)
+		}
+		return nil
+	}
+
+	// Fallback to didOpen/didClose cycle if save is not supported but openClose is
+	if syncOptions != nil && syncOptions.OpenClose != nil && *syncOptions.OpenClose {
+		// Read file content
+		content, err := os.ReadFile(absoluteFilePath)
+		if err != nil {
+			return fmt.Errorf("failed to read file content for didOpen: %w", err)
+		}
+
+		// Send didClose first (in case file was already open)
+		closeParams := lsp.DidCloseTextDocumentParams{
+			TextDocument: lsp.TextDocumentIdentifier{
+				URI: documentURI,
+			},
+		}
+		_ = client.TextDocumentDidClose(ctx, closeParams) // Ignore errors for close
+
+		// Send didOpen with updated content
+		openParams := lsp.DidOpenTextDocumentParams{
+			TextDocument: lsp.TextDocumentItem{
+				URI:        documentURI,
+				LanguageID: language,
+				Version:    1,
+				Text:       string(content),
+			},
+		}
+		err = client.TextDocumentDidOpen(ctx, openParams)
+		if err != nil {
+			return fmt.Errorf("failed to send didOpen notification: %w", err)
+		}
+		return nil
+	}
+
+	// If neither save nor openClose is supported, we can't notify the server
+	log.Debug().Str("filePath", filePath).Msg("LSP server does not support textDocument sync notifications")
+	return nil
+}
+
+// getLanguageFromFilePath determines the language identifier from a file path
+func getLanguageFromFilePath(filePath string) string {
+	ext := filepath.Ext(filePath)
+	switch ext {
+	case ".go":
+		return "go"
+	case ".js":
+		return "javascript"
+	case ".ts":
+		return "typescript"
+	case ".py":
+		return "python"
+	case ".java":
+		return "java"
+	case ".cpp", ".cc", ".cxx":
+		return "cpp"
+	case ".c":
+		return "c"
+	case ".cs":
+		return "csharp"
+	case ".php":
+		return "php"
+	case ".rb":
+		return "ruby"
+	case ".rs":
+		return "rust"
+	case ".vue":
+		return "vue"
+	case ".html":
+		return "html"
+	case ".css":
+		return "css"
+	case ".json":
+		return "json"
+	case ".xml":
+		return "xml"
+	case ".yaml", ".yml":
+		return "yaml"
+	default:
+		return ""
+	}
 }
 
 type lineEdit struct {
