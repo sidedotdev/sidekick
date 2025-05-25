@@ -156,7 +156,6 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 }
 
 func RegisterWorkflows(w worker.WorkflowRegistry) {
-	w.RegisterWorkflow(sidekick.ExampleLlmActivitiesWorkflow)
 	w.RegisterWorkflow(persisted_ai.TestOpenAiEmbedActivityWorkflow)
 	w.RegisterWorkflow(dev.DevAgentManagerWorkflow)
 	w.RegisterWorkflow(dev.PlannedDevWorkflow)
