@@ -1,11 +1,11 @@
 package dev
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sidekick/llm"
 )
-
-var ErrPaused = fmt.Errorf("operation paused")
 
 // LlmIteration represents a single iteration in the LLM loop.
 type LlmIteration struct {
@@ -74,6 +74,8 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 	for {
 		iteration.Num++
 		iteration.NumSinceLastFeedback++
+		// Use WithCancelOnPause for long-running operations, ensuring a fresh context for each iteration.
+		iteration.ExecCtx = dCtx.WithCancelOnPause()
 
 		if iteration.Num > config.maxIterations {
 			return nil, ErrMaxAttemptsReached
@@ -109,14 +111,15 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 			iteration.NumSinceLastFeedback = 0
 		}
 
-		// Use WithCancelOnPause for long-running operations
-		iteration.ExecCtx = dCtx.WithCancelOnPause()
 		result, err := loopFunc(iteration)
 
 		if err != nil {
-			if err == ErrPaused {
+			// If loopFunc was canceled due to a system pause, continue the loop.
+			// UserRequestIfPaused at the next iteration's start will handle the pause.
+			if dCtx.GlobalState != nil && dCtx.GlobalState.Paused && errors.Is(err, context.Canceled) {
 				continue
 			}
+			// Otherwise, it's a genuine error from loopFunc.
 			return nil, err
 		}
 
