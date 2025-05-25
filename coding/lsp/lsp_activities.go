@@ -129,3 +129,153 @@ func findSymbolPositions(ctx context.Context, filePath string, symbols []string)
 func convertFilePathToURI(repoDir, filePath string) string {
 	return "file://" + path.Join(repoDir, filePath)
 }
+
+// TextDocumentDidOpenActivityInput represents input for the TextDocumentDidOpen notification.
+type TextDocumentDidOpenActivityInput struct {
+	RepoDir    string `json:"repo_dir"`
+	FilePath   string `json:"file_path"`
+	LanguageID string `json:"language_id"`
+	Version    int    `json:"version"`
+	Text       string `json:"text"`
+}
+
+// TextDocumentDidOpenActivity sends a textDocument/didOpen notification to the LSP server.
+func (lspa *LSPActivities) TextDocumentDidOpenActivity(ctx context.Context, input TextDocumentDidOpenActivityInput) error {
+	langName := utils.InferLanguageNameFromFilePath(input.FilePath)
+	lspClient, err := lspa.findOrInitClient(ctx, input.RepoDir, langName)
+	if err != nil {
+		return err
+	}
+
+	// Check if server supports open/close notifications
+	capabilities := lspClient.GetServerCapabilities()
+	if syncOptions, ok := capabilities.TextDocumentSync.(map[string]interface{}); ok {
+		if openClose, exists := syncOptions["openClose"]; exists {
+			if openCloseBool, ok := openClose.(bool); ok && !openCloseBool {
+				return nil // Server doesn't support open/close notifications
+			}
+		}
+	}
+
+	fileURI := convertFilePathToURI(input.RepoDir, input.FilePath)
+	params := DidOpenTextDocumentParams{
+		TextDocument: TextDocumentItem{
+			URI:        fileURI,
+			LanguageID: input.LanguageID,
+			Version:    input.Version,
+			Text:       input.Text,
+		},
+	}
+
+	return lspClient.TextDocumentDidOpen(ctx, params)
+}
+
+// TextDocumentDidCloseActivityInput represents input for the TextDocumentDidClose notification.
+type TextDocumentDidCloseActivityInput struct {
+	RepoDir  string `json:"repo_dir"`
+	FilePath string `json:"file_path"`
+}
+
+// TextDocumentDidCloseActivity sends a textDocument/didClose notification to the LSP server.
+func (lspa *LSPActivities) TextDocumentDidCloseActivity(ctx context.Context, input TextDocumentDidCloseActivityInput) error {
+	langName := utils.InferLanguageNameFromFilePath(input.FilePath)
+	lspClient, err := lspa.findOrInitClient(ctx, input.RepoDir, langName)
+	if err != nil {
+		return err
+	}
+
+	// Check if server supports open/close notifications
+	capabilities := lspClient.GetServerCapabilities()
+	if syncOptions, ok := capabilities.TextDocumentSync.(map[string]interface{}); ok {
+		if openClose, exists := syncOptions["openClose"]; exists {
+			if openCloseBool, ok := openClose.(bool); ok && !openCloseBool {
+				return nil // Server doesn't support open/close notifications
+			}
+		}
+	}
+
+	fileURI := convertFilePathToURI(input.RepoDir, input.FilePath)
+	params := DidCloseTextDocumentParams{
+		TextDocument: TextDocumentIdentifier{
+			URI: fileURI,
+		},
+	}
+
+	return lspClient.TextDocumentDidClose(ctx, params)
+}
+
+// TextDocumentDidChangeActivityInput represents input for the TextDocumentDidChange notification.
+type TextDocumentDidChangeActivityInput struct {
+	RepoDir        string                           `json:"repo_dir"`
+	FilePath       string                           `json:"file_path"`
+	Version        int                              `json:"version"`
+	ContentChanges []TextDocumentContentChangeEvent `json:"content_changes"`
+}
+
+// TextDocumentDidChangeActivity sends a textDocument/didChange notification to the LSP server.
+func (lspa *LSPActivities) TextDocumentDidChangeActivity(ctx context.Context, input TextDocumentDidChangeActivityInput) error {
+	langName := utils.InferLanguageNameFromFilePath(input.FilePath)
+	lspClient, err := lspa.findOrInitClient(ctx, input.RepoDir, langName)
+	if err != nil {
+		return err
+	}
+
+	// Check if server supports change notifications
+	capabilities := lspClient.GetServerCapabilities()
+	if syncOptions, ok := capabilities.TextDocumentSync.(map[string]interface{}); ok {
+		if change, exists := syncOptions["change"]; exists {
+			if changeInt, ok := change.(float64); ok && changeInt == 0 {
+				return nil // Server doesn't support change notifications (TextDocumentSyncKind.None)
+			}
+		}
+	}
+
+	fileURI := convertFilePathToURI(input.RepoDir, input.FilePath)
+	params := DidChangeTextDocumentParams{
+		TextDocument: VersionedTextDocumentIdentifier{
+			TextDocumentIdentifier: TextDocumentIdentifier{
+				URI: fileURI,
+			},
+			Version: input.Version,
+		},
+		ContentChanges: input.ContentChanges,
+	}
+
+	return lspClient.TextDocumentDidChange(ctx, params)
+}
+
+// TextDocumentDidSaveActivityInput represents input for the TextDocumentDidSave notification.
+type TextDocumentDidSaveActivityInput struct {
+	RepoDir  string  `json:"repo_dir"`
+	FilePath string  `json:"file_path"`
+	Text     *string `json:"text,omitempty"`
+}
+
+// TextDocumentDidSaveActivity sends a textDocument/didSave notification to the LSP server.
+func (lspa *LSPActivities) TextDocumentDidSaveActivity(ctx context.Context, input TextDocumentDidSaveActivityInput) error {
+	langName := utils.InferLanguageNameFromFilePath(input.FilePath)
+	lspClient, err := lspa.findOrInitClient(ctx, input.RepoDir, langName)
+	if err != nil {
+		return err
+	}
+
+	// Check if server supports save notifications
+	capabilities := lspClient.GetServerCapabilities()
+	if syncOptions, ok := capabilities.TextDocumentSync.(map[string]interface{}); ok {
+		if save, exists := syncOptions["save"]; exists {
+			if saveBool, ok := save.(bool); ok && !saveBool {
+				return nil // Server doesn't support save notifications
+			}
+		}
+	}
+
+	fileURI := convertFilePathToURI(input.RepoDir, input.FilePath)
+	params := DidSaveTextDocumentParams{
+		TextDocument: TextDocumentIdentifier{
+			URI: fileURI,
+		},
+		Text: input.Text,
+	}
+
+	return lspClient.TextDocumentDidSave(ctx, params)
+}
