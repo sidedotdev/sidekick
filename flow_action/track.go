@@ -105,7 +105,10 @@ func trackSubflow[T any](eCtx ExecContext, subflowType, subflowName string, f fu
 	if err != nil {
 		subflow.Status = domain.SubflowStatusFailed
 		subflow.Result = fmt.Sprintf("failed: %v", err)
-		_, err2 := putSubflow(eCtx, subflow)
+		disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
+		updateECtx := eCtx
+		updateECtx.Context = disconnectedWorkflowCtx
+		_, err2 := putSubflow(updateECtx, subflow)
 		if err2 != nil {
 			return defaultT, fmt.Errorf("failed to mark subflow as failed: %v\noriginal failure: %v", err2, err)
 		}
@@ -118,7 +121,10 @@ func trackSubflow[T any](eCtx ExecContext, subflowType, subflowName string, f fu
 	}
 	subflow.Result = string(jsonVal)
 	subflow.Status = domain.SubflowStatusComplete
-	_, err = putSubflow(eCtx, subflow)
+	disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
+	updateECtx := eCtx
+	updateECtx.Context = disconnectedWorkflowCtx
+	_, err = putSubflow(updateECtx, subflow)
 	if err != nil {
 		return defaultT, fmt.Errorf("failed to mark subflow as complete: %v", err)
 	}
@@ -152,7 +158,10 @@ func trackSubflowFailureOnly[T any](eCtx ExecContext, subflowType, subflowName s
 	if err != nil {
 		subflow.Status = domain.SubflowStatusFailed
 		subflow.Result = fmt.Sprintf("failed: %v", err)
-		_, err2 := putSubflow(eCtx, subflow)
+		disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
+		updateECtx := eCtx
+		updateECtx.Context = disconnectedWorkflowCtx
+		_, err2 := putSubflow(updateECtx, subflow)
 		if err2 != nil {
 			return defaultT, fmt.Errorf("failed to mark subflow as failed: %v\noriginal failure: %v", err2, err)
 		}
@@ -189,7 +198,10 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 		flowAction.ActionStatus = domain.ActionStatusFailed
 		flowAction.ActionResult = fmt.Sprintf("failed: %v", err)
 		var err2 error
-		flowAction, err2 = putFlowAction(eCtx, flowAction)
+		disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
+		updateECtx := eCtx
+		updateECtx.Context = disconnectedWorkflowCtx
+		flowAction, err2 = putFlowAction(updateECtx, flowAction)
 		if err2 != nil {
 			return defaultT, fmt.Errorf("failed to mark flow action as failed: %v\noriginal failure: %v", err2, err)
 		}
@@ -202,7 +214,10 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 		return defaultT, fmt.Errorf("failed to convert val to json: %v", err)
 	}
 	flowAction.ActionResult = string(jsonVal)
-	flowAction, err = putFlowAction(eCtx, flowAction)
+	disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
+	updateECtx := eCtx
+	updateECtx.Context = disconnectedWorkflowCtx
+	flowAction, err = putFlowAction(updateECtx, flowAction)
 	if err != nil {
 		return val, fmt.Errorf("failed to mark flow action as completed: %v", err)
 	}
@@ -228,7 +243,10 @@ func trackFlowActionFailureOnly[T any](eCtx ExecContext, actionType string, acti
 		flowAction.ActionStatus = domain.ActionStatusFailed
 		flowAction.ActionResult = fmt.Sprintf("failed: %v", err)
 		var err2 error
-		flowAction, err2 = putFlowAction(eCtx, flowAction)
+		disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
+		updateECtx := eCtx
+		updateECtx.Context = disconnectedWorkflowCtx
+		flowAction, err2 = putFlowAction(updateECtx, flowAction)
 		if err2 != nil {
 			return defaultT, fmt.Errorf("failed to mark flow action as failed: %v\noriginal failure: %v", err2, err)
 		}
