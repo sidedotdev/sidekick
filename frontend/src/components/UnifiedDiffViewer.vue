@@ -45,6 +45,7 @@ const parsedFiles = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  margin: 0.5rem 0 0;
 }
 
 .no-diff-message {

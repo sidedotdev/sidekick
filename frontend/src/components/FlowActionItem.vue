@@ -343,6 +343,10 @@ a.disable-toggle:hover {
   background-color: var(--color-background-mute);
 }
 
+.expanded.odd :deep(.diff-file .file-header:not(:hover)) {
+  background-color: var(--color-background);
+}
+
 .flow-action:has(.expanded:last-child):has(+ .subflow-container) {
   padding-bottom: 1rem;
 }

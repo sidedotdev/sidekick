@@ -116,7 +116,6 @@ const getTheme = () => {
 
 <style scoped>
 .diff-file {
-  margin: 0.5rem 0;
   border: 1px solid var(--color-border);
   border-radius: 0.375rem;
   background: var(--color-background-soft);
@@ -125,6 +124,8 @@ const getTheme = () => {
 .file-header {
   cursor: pointer;
   user-select: none;
+  background: var(--color-background-mute);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .file-header:hover {
@@ -136,8 +137,6 @@ const getTheme = () => {
   justify-content: space-between;
   align-items: center;
   padding: 0.75rem 1rem;
-  background: var(--color-background-mute);
-  border-bottom: 1px solid var(--color-border);
 }
 
 .file-path-container {

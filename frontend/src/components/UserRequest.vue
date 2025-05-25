@@ -126,7 +126,7 @@ const props = defineProps({
 const responseContent = ref('');
 const errorMessage = ref('');
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
-const targetBranch = ref<string | undefined>()
+const targetBranch = ref<string | undefined>(props.flowAction.actionParams.mergeApprovalInfo?.defaultTargetBranch)
 
 const parsedActionResult = computed(() => {
   try {
