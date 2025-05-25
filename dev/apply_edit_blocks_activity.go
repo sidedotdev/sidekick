@@ -72,15 +72,13 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 		switch block.EditType {
 		case "create":
 			report, err = ApplyCreateEditBlock(block, baseDir)
-			// TODO pass in LSP client pre-initialized so we don't have to do it
-			AutofixIfEditSucceeded(input.EnvContainer, &report)
+			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
 		case "update":
 			report, err = ApplyUpdateEditBlock(block, baseDir)
-			AutofixIfEditSucceeded(input.EnvContainer, &report)
+			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
 		case "append":
 			report, err = ApplyAppendEditBlock(block, baseDir)
-			// TODO pass in LSP client pre-initialized so we don't have to do it
-			AutofixIfEditSucceeded(input.EnvContainer, &report)
+			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
 		case "delete":
 			report, err = ApplyDeleteEditBlock(block, baseDir)
 		default:
@@ -1140,12 +1138,23 @@ func getLineEditsFromDiff(diff string) []lineEdit {
 	return lineEdits
 }
 
-func AutofixIfEditSucceeded(envContainer env.EnvContainer, report *ApplyEditBlockReport) {
+func AutofixIfEditSucceeded(ctx context.Context, devActivities *DevActivities, envContainer env.EnvContainer, report *ApplyEditBlockReport) {
 	if report.Error != "" {
 		return
 	}
 	runAutofixCommands(envContainer, report)
-	runAutofixViaLSP(envContainer, report)
+
+	// LSP-based autofix
+	absoluteFilePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), report.OriginalEditBlock.FilePath)
+	autofixInput := lsp.AutofixActivityInput{
+		DocumentURI:  "file://" + absoluteFilePath,
+		EnvContainer: envContainer,
+	}
+	result, autofixErr := devActivities.LSPActivities.AutofixActivity(ctx, autofixInput)
+	if autofixErr != nil {
+		report.AutofixError += fmt.Sprintf("\nLSP autofix error: %+v", autofixErr)
+	}
+	report.AutofixResult = result
 }
 
 // command-based autofix
@@ -1177,29 +1186,6 @@ func runAutofixCommands(envContainer env.EnvContainer, report *ApplyEditBlockRep
 		}
 	}
 	report.AutofixError += combinedOutput
-}
-
-// LSP-based autofix
-func runAutofixViaLSP(envContainer env.EnvContainer, report *ApplyEditBlockReport) {
-	absoluteFilePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), report.OriginalEditBlock.FilePath)
-	lspa := lsp.LSPActivities{
-		LSPClientProvider: func(languageName string) lsp.LSPClient {
-			return &lsp.Jsonrpc2LSPClient{
-				LanguageName: languageName,
-			}
-		},
-		InitializedClients: map[string]lsp.LSPClient{},
-	}
-	ctx := context.Background()
-	autofixInput := lsp.AutofixActivityInput{
-		DocumentURI:  "file://" + absoluteFilePath,
-		EnvContainer: envContainer,
-	}
-	result, autofixErr := lspa.AutofixActivity(ctx, autofixInput)
-	if autofixErr != nil {
-		report.AutofixError += fmt.Sprintf("\nLSP autofix error: %+v", autofixErr)
-	}
-	report.AutofixResult = result
 }
 
 // CheckResult defines the structure to hold results of checks performed during edit application.
