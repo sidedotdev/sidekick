@@ -7,6 +7,7 @@ import (
 	"sidekick/env"
 	"strings"
 
+	doublestar "github.com/bmatcuk/doublestar/v4"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -28,15 +29,19 @@ func filterFilesByGlob(files []string, globPattern string) ([]string, error) {
 			continue
 		}
 		// Try matching against the full path first
-		matched, err := filepath.Match(globPattern, file)
+		matched, err := doublestar.PathMatch(globPattern, file)
 		if err != nil {
 			return nil, fmt.Errorf("invalid glob pattern %s: %v", globPattern, err)
 		}
 		// If full path doesn't match, try matching against just the basename
 		if !matched {
-			matched, err = filepath.Match(globPattern, filepath.Base(file))
-			if err != nil {
-				return nil, fmt.Errorf("invalid glob pattern %s: %v", globPattern, err)
+			base := filepath.Base(file)
+			// Avoid re-matching if globPattern is `.` or `..` or if base is same as file (already matched)
+			if base != "." && base != ".." && base != file {
+				matched, err = doublestar.PathMatch(globPattern, base)
+				if err != nil {
+					return nil, fmt.Errorf("invalid glob pattern %s (when matching basename %s): %v", globPattern, base, err)
+				}
 			}
 		}
 		if matched {
