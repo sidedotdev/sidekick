@@ -18,6 +18,12 @@ type LSPClient interface {
 	TextDocumentImplementation(ctx context.Context, uri string, line int, character int) ([]Location, error)
 	TextDocumentReferences(ctx context.Context, uri string, line int, character int) ([]Location, error)
 	GetServerCapabilities() ServerCapabilities
+
+	// Text document synchronization notifications
+	TextDocumentDidOpen(ctx context.Context, params DidOpenTextDocumentParams) error
+	TextDocumentDidChange(ctx context.Context, params DidChangeTextDocumentParams) error
+	TextDocumentDidSave(ctx context.Context, params DidSaveTextDocumentParams) error
+	TextDocumentDidClose(ctx context.Context, params DidCloseTextDocumentParams) error
 }
 
 type Jsonrpc2LSPClient struct {
@@ -111,7 +117,7 @@ func (l *Jsonrpc2LSPClient) TextDocumentDefinition(ctx context.Context, uri stri
 	}
 	params := TextDocumentPositionParams{
 		TextDocument: TextDocumentIdentifier{
-			DocumentURI: uri,
+			URI: uri,
 		},
 		Position: Position{
 			Line:      line,
@@ -134,7 +140,7 @@ func (l *Jsonrpc2LSPClient) TextDocumentReferences(ctx context.Context, uri stri
 	params := ReferenceParams{
 		TextDocumentPositionParams: TextDocumentPositionParams{
 			TextDocument: TextDocumentIdentifier{
-				DocumentURI: uri,
+				URI: uri,
 			},
 			Position: Position{
 				Line:      line,
@@ -174,7 +180,7 @@ func (l *Jsonrpc2LSPClient) TextDocumentImplementation(ctx context.Context, uri 
 	}
 	params := TextDocumentPositionParams{
 		TextDocument: TextDocumentIdentifier{
-			DocumentURI: uri,
+			URI: uri,
 		},
 		Position: Position{
 			Line:      line,
@@ -191,4 +197,36 @@ func (l *Jsonrpc2LSPClient) TextDocumentImplementation(ctx context.Context, uri 
 
 func (l *Jsonrpc2LSPClient) GetServerCapabilities() ServerCapabilities {
 	return l.ServerCapabilities
+}
+
+// textDocument/didOpen notification
+func (l *Jsonrpc2LSPClient) TextDocumentDidOpen(ctx context.Context, params DidOpenTextDocumentParams) error {
+	if l.Conn == nil {
+		return fmt.Errorf("TextDocumentDidOpen called before Initialize")
+	}
+	return l.Conn.Notify(ctx, "textDocument/didOpen", params)
+}
+
+// textDocument/didChange notification
+func (l *Jsonrpc2LSPClient) TextDocumentDidChange(ctx context.Context, params DidChangeTextDocumentParams) error {
+	if l.Conn == nil {
+		return fmt.Errorf("TextDocumentDidChange called before Initialize")
+	}
+	return l.Conn.Notify(ctx, "textDocument/didChange", params)
+}
+
+// textDocument/didSave notification
+func (l *Jsonrpc2LSPClient) TextDocumentDidSave(ctx context.Context, params DidSaveTextDocumentParams) error {
+	if l.Conn == nil {
+		return fmt.Errorf("TextDocumentDidSave called before Initialize")
+	}
+	return l.Conn.Notify(ctx, "textDocument/didSave", params)
+}
+
+// textDocument/didClose notification
+func (l *Jsonrpc2LSPClient) TextDocumentDidClose(ctx context.Context, params DidCloseTextDocumentParams) error {
+	if l.Conn == nil {
+		return fmt.Errorf("TextDocumentDidClose called before Initialize")
+	}
+	return l.Conn.Notify(ctx, "textDocument/didClose", params)
 }

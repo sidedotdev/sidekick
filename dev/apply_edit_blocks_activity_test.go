@@ -1,10 +1,12 @@
 package dev
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/env"
@@ -216,7 +218,19 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 				},
 			}
 
-			reports, err := ApplyEditBlocksActivity(
+			devActivities := &DevActivities{
+				LSPActivities: &lsp.LSPActivities{
+					LSPClientProvider: func(languageName string) lsp.LSPClient {
+						return &lsp.Jsonrpc2LSPClient{
+							LanguageName: languageName,
+						}
+					},
+					InitializedClients: map[string]lsp.LSPClient{},
+				},
+			}
+
+			reports, err := devActivities.ApplyEditBlocks(
+				context.Background(),
 				ApplyEditBlockActivityInput{
 					EnvContainer: envContainer,
 					EditBlocks:   []EditBlock{tt.editBlock},
@@ -840,7 +854,19 @@ func main() {
 		},
 	}
 
-	reports, err := ApplyEditBlocksActivity(
+	devActivities := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	reports, err := devActivities.ApplyEditBlocks(
+		context.Background(),
 		ApplyEditBlockActivityInput{
 			EnvContainer: envContainer,
 			EditBlocks:   editBlocks,
@@ -942,7 +968,19 @@ func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
 				},
 			}
 
-			reports, err := ApplyEditBlocksActivity(
+			devActivities := &DevActivities{
+				LSPActivities: &lsp.LSPActivities{
+					LSPClientProvider: func(languageName string) lsp.LSPClient {
+						return &lsp.Jsonrpc2LSPClient{
+							LanguageName: languageName,
+						}
+					},
+					InitializedClients: map[string]lsp.LSPClient{},
+				},
+			}
+
+			reports, err := devActivities.ApplyEditBlocks(
+				context.Background(),
 				ApplyEditBlockActivityInput{
 					EnvContainer: envContainer,
 					EditBlocks:   []EditBlock{tt.editBlock},
