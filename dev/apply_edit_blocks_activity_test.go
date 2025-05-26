@@ -298,14 +298,23 @@ func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
 		NewLines: []string{},
 	}
 
-	// Test with CheckEdits flag enabled
-	reports, err := ApplyEditBlocksActivity(
-		ApplyEditBlockActivityInput{
-			EnvContainer: envContainer,
-			EditBlocks:   []EditBlock{editBlock},
-			EnabledFlags: []string{fflag.CheckEdits}, // Enable CheckEdits flag
+	devActivities := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
 		},
-	)
+	}
+
+	// Test with CheckEdits flag enabled
+	reports, err := devActivities.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
+		EnvContainer: envContainer,
+		EditBlocks:   []EditBlock{editBlock},
+		EnabledFlags: []string{fflag.CheckEdits}, // Enable CheckEdits flag
+	})
 
 	// Verify the operation succeeded
 	assert.Nil(t, err)
@@ -1073,7 +1082,19 @@ func TestApplyEditBlocks_FinalDiff_AfterFailedChecksAndRestore(t *testing.T) {
 		CheckCommands: []common.CommandConfig{{Command: "false"}}, // Ensure check fails
 	}
 
-	reports, activityErr := ApplyEditBlocksActivity(input)
+	devActivities := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	reports, activityErr := devActivities.ApplyEditBlocks(context.Background(), input)
+
 	require.NoError(t, activityErr) // Activity itself should not error for this case, error is in report
 	require.Len(t, reports, 1)
 	report := reports[0]
@@ -1140,7 +1161,19 @@ func TestApplyEditBlocks_FinalDiff_NewFilePassesChecks(t *testing.T) {
 		CheckCommands: []common.CommandConfig{{Command: "true"}}, // Ensure check passes
 	}
 
-	reports, activityErr := ApplyEditBlocksActivity(input)
+	devActivities := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	reports, activityErr := devActivities.ApplyEditBlocks(context.Background(), input)
+
 	require.NoError(t, activityErr)
 	require.Len(t, reports, 1)
 	report := reports[0]
