@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"sidekick/domain"
+	"sidekick/utils"
 	"time"
 
-	"github.com/segmentio/ksuid"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -83,21 +83,21 @@ func trackSubflow[T any](eCtx ExecContext, subflowType, subflowName string, f fu
 	if err != nil {
 		return defaultT, err
 	}
-	eCtx.FlowScope.Subflow = &subflow
+	(*eCtx.FlowScope).Subflow = &subflow
 
 	// handle legacy subflow name value
 	originalSubflowName := eCtx.FlowScope.SubflowName
 	if originalSubflowName == "" {
-		eCtx.FlowScope.SubflowName = subflow.Name
+		(*eCtx.FlowScope).SubflowName = subflow.Name
 	} else {
-		eCtx.FlowScope.SubflowName = fmt.Sprintf("%s%s%s", originalSubflowName, legacySubflowNameSeparator, subflow.Name)
+		(*eCtx.FlowScope).SubflowName = fmt.Sprintf("%s%s%s", originalSubflowName, legacySubflowNameSeparator, subflow.Name)
 	}
 
 	defer func() {
-		eCtx.FlowScope.Subflow = parentSubflow
+		(*eCtx.FlowScope).Subflow = parentSubflow
 
 		// handle legacy subflow name value
-		eCtx.FlowScope.SubflowName = originalSubflowName
+		(*eCtx.FlowScope).SubflowName = originalSubflowName
 	}()
 
 	val, err := f(subflow)
@@ -130,21 +130,21 @@ func trackSubflowFailureOnly[T any](eCtx ExecContext, subflowType, subflowName s
 	parentSubflow := eCtx.FlowScope.Subflow
 	subflow := setupSubflow(eCtx, subflowType, subflowName) // don't persist the subflow yet, only do it if & when it fails
 
-	eCtx.FlowScope.Subflow = &subflow
+	(*eCtx.FlowScope).Subflow = &subflow
 
 	// handle legacy subflow name value
 	originalSubflowName := eCtx.FlowScope.SubflowName
 	if originalSubflowName == "" {
-		eCtx.FlowScope.SubflowName = subflow.Name
+		(*eCtx.FlowScope).SubflowName = subflow.Name
 	} else {
-		eCtx.FlowScope.SubflowName = fmt.Sprintf("%s%s%s", originalSubflowName, legacySubflowNameSeparator, subflow.Name)
+		(*eCtx.FlowScope).SubflowName = fmt.Sprintf("%s%s%s", originalSubflowName, legacySubflowNameSeparator, subflow.Name)
 	}
 
 	defer func() {
-		eCtx.FlowScope.Subflow = parentSubflow
+		(*eCtx.FlowScope).Subflow = parentSubflow
 
 		// handle legacy subflow name value
-		eCtx.FlowScope.SubflowName = originalSubflowName
+		(*eCtx.FlowScope).SubflowName = originalSubflowName
 	}()
 
 	val, err := f(subflow)
@@ -241,7 +241,7 @@ func trackFlowActionFailureOnly[T any](eCtx ExecContext, actionType string, acti
 
 func putFlowAction(eCtx ExecContext, flowAction domain.FlowAction) (domain.FlowAction, error) {
 	if flowAction.Id == "" {
-		flowAction.Id = "fa_" + ksuid.New().String()
+		flowAction.Id = "fa_" + utils.KsuidSideEffect(eCtx)
 	}
 
 	if flowAction.FlowId == "" {
@@ -284,7 +284,7 @@ func setupSubflow(eCtx ExecContext, subflowType, subflowName string) domain.Subf
 	}
 
 	if subflow.Id == "" {
-		subflow.Id = "sf_" + ksuid.New().String()
+		subflow.Id = "sf_" + utils.KsuidSideEffect(eCtx)
 	}
 	if subflow.FlowId == "" {
 		subflow.FlowId = workflow.GetInfo(eCtx).WorkflowExecution.ID
