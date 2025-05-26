@@ -93,34 +93,91 @@ func ApplyEditBlocksActivity(input ApplyEditBlockActivityInput) ([]ApplyEditBloc
 		report.DidApply = true
 
 		if report.Error == "" && slices.Contains(input.EnabledFlags, fflag.CheckEdits) {
-			// get the git diff before we potentially restore
-			diff, diffErr := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
-				FilePaths: []string{filepath.Join(baseDir, block.FilePath)},
+			// This block executes if CheckEdits is enabled and no prior error occurred for this edit block.
+			// report.Error is guaranteed to be empty at the start of this block.
+			var currentBlockError string
+			pathForDiff := filepath.Join(baseDir, block.FilePath)
+
+			// 1.a. Calculate initial git diff (diff_A) before checks or staging.
+			// This diff represents the changes made by the edit operation itself.
+			initialDiff, initialDiffErr := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
+				FilePaths: []string{pathForDiff},
 			})
-			report.FinalDiff = diff
+			report.FinalDiff = initialDiff // Assign diff_A to FinalDiff. May be overwritten if checks pass.
 
-			// Skip file checking for delete operations since the file no longer exists
 			if block.EditType == "delete" {
-				err := gitAdd(input.EnvContainer, block.FilePath)
-				if err != nil {
-					report.Error += fmt.Sprintf("\nFailed to git add: %v", err)
+				// 1.c. Handle delete operations.
+				// 1.c.i. Stage the deletion.
+				gitAddErr := gitAdd(input.EnvContainer, block.FilePath) // Uses relative path as per original.
+				if gitAddErr != nil {
+					errMsg := fmt.Sprintf("Failed to git add deleted file: %v", gitAddErr)
+					if currentBlockError == "" {
+						currentBlockError = errMsg
+					} else {
+						currentBlockError += "\n" + errMsg
+					}
 				}
+				// 1.c.ii. report.FinalDiff retains diff_A (already set).
 			} else {
-				checkResult, err := checkAndStageOrRestoreFile(input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create")
+				// 1.b. Handle non-delete operations (create, update, append).
+				// 1.b.i. Perform checks and stage or restore the file.
+				checkResult, checkErr := checkAndStageOrRestoreFile(input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create")
 				report.CheckResult = checkResult
+
 				if !checkResult.Success {
-					report.DidApply = false
+					// 1.b.iii. Checks failed.
+					report.DidApply = false // Mark as not applied due to check failure.
 					hint := fixCheckHint(report)
-					report.Error = fmt.Sprintf("Checks failed: %s\nHint: %s", checkResult.Message, hint)
+					errMsg := fmt.Sprintf("Checks failed: %s\nHint: %s", checkResult.Message, hint)
+					if currentBlockError == "" {
+						currentBlockError = errMsg
+					} else {
+						currentBlockError += "\n" + errMsg
+					}
+					// 1.b.iii.1. report.FinalDiff retains diff_A (already set).
+				} else {
+					// 1.b.ii. Checks passed and file is staged.
+					// 1.b.ii.1. Recalculate FinalDiff to get staged changes (diff_B).
+					stagedDiff, stagedDiffErr := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
+						FilePaths: []string{pathForDiff}, // Use consistent path for diff.
+						Staged:    true,
+					})
+					report.FinalDiff = stagedDiff // Update FinalDiff to diff_B.
+
+					// 1.b.ii.2. Record any error from calculating the staged diff.
+					if stagedDiffErr != nil {
+						errMsg := fmt.Sprintf("Failure when getting staged git diff: %v", stagedDiffErr)
+						if currentBlockError == "" {
+							currentBlockError = errMsg
+						} else {
+							currentBlockError += "\n" + errMsg
+						}
+					}
 				}
-				if err != nil {
-					report.Error = report.Error + fmt.Sprintf("\nFailure when checking/staging/restoring file: %v", err)
+
+				// Record any error from the checkAndStageOrRestoreFile operation itself.
+				if checkErr != nil {
+					errMsg := fmt.Sprintf("Failure when checking/staging/restoring file: %v", checkErr)
+					if currentBlockError == "" {
+						currentBlockError = errMsg
+					} else {
+						currentBlockError += "\n" + errMsg
+					}
 				}
 			}
 
-			if diffErr != nil {
-				report.Error = report.Error + fmt.Sprintf("\nFailure when getting git diff: %v", diffErr)
+			// 1.a. (Error part) & 4. Record error from the initial diff calculation.
+			if initialDiffErr != nil {
+				errMsg := fmt.Sprintf("Failure when getting initial git diff: %v", initialDiffErr)
+				if currentBlockError == "" {
+					currentBlockError = errMsg
+				} else {
+					currentBlockError += "\n" + errMsg
+				}
 			}
+
+			// Assign all errors accumulated within this CheckEdits block to report.Error.
+			report.Error = currentBlockError
 		}
 
 		reports = append(reports, report)
