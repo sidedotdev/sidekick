@@ -89,7 +89,10 @@ func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params 
 		args = append(args, "-w")
 	}
 
-	args = append(args, params.FilePaths...)
+	if len(params.FilePaths) > 0 {
+		args = append(args, "--")
+		args = append(args, params.FilePaths...)
+	}
 	gitDiffOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
