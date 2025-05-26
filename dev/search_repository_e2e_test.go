@@ -253,6 +253,38 @@ func (s *SearchRepositoryE2ETestSuite) TestPathGlobSearch() {
 	s.Contains(result, "No files matched the path glob nonexistent/*.txt")
 }
 
+func (s *SearchRepositoryE2ETestSuite) TestPathGlobSearchWithGlobstar() {
+	// Create directories
+	err := os.MkdirAll(filepath.Join(s.dir, "sub", "deeper"), 0755)
+	s.Require().NoError(err)
+
+	// Create files with a common search term
+	commonContent := "globstar_test_content"
+	s.createTestFile("root_file.vue", commonContent)
+	s.createTestFile("sub/sub_file.vue", commonContent)
+	s.createTestFile("sub/deeper/deep_file.vue", commonContent)
+	s.createTestFile("root_file.js", commonContent)    // Should not match the glob pattern
+	s.createTestFile("sub/another.txt", commonContent) // Should not match
+
+	// Execute the search
+	var result string
+	s.env.ExecuteWorkflow(s.wrapperWorkflow, s.envContainer, SearchRepositoryInput{
+		PathGlob:     "**/*.vue",
+		SearchTerm:   commonContent,
+		ContextLines: 0,
+	})
+	s.Require().NoError(s.env.GetWorkflowResult(&result))
+
+	// Verify the results
+	// These assertions are expected to fail with the current implementation
+	s.Contains(result, "root_file.vue")
+	s.Contains(result, filepath.Join("sub", "sub_file.vue"))
+	s.Contains(result, filepath.Join("sub", "deeper", "deep_file.vue"))
+
+	s.NotContains(result, "root_file.js")
+	s.NotContains(result, filepath.Join("sub", "another.txt"))
+}
+
 func (s *SearchRepositoryE2ETestSuite) TestCaseSensitiveAndInsensitiveSearch() {
 	// Create a file with mixed-case content
 	s.createTestFile("mixed_case.txt", "This FILE contains mixed case content\nThis file contains mixed case content")
