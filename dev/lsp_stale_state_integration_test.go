@@ -73,9 +73,9 @@ func main() {
 			"}",
 		},
 		NewLines: []string{
+			"// some comment to make TestFunction move to another line",
 			"func TestFunction() {",
 			"\tfmt.Println(\"original function\")",
-			"\tfmt.Println(\"additional line\")",
 			"}",
 		},
 	}
@@ -86,16 +86,7 @@ func main() {
 		EnabledFlags: []string{}, // No flags to avoid checks that might interfere
 	}
 
-	devActivities := &DevActivities{
-		LSPActivities: &lsp.LSPActivities{
-			LSPClientProvider: func(languageName string) lsp.LSPClient {
-				return &lsp.Jsonrpc2LSPClient{
-					LanguageName: languageName,
-				}
-			},
-			InitializedClients: map[string]lsp.LSPClient{},
-		},
-	}
+	devActivities := &DevActivities{LSPActivities: lspa} // should use same lspa
 
 	reports, err := devActivities.ApplyEditBlocks(context.Background(), applyInput)
 	require.NoError(t, err)
