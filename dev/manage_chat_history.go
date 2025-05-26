@@ -27,6 +27,16 @@ const summaryEnd = "#END SUMMARY"
 const guidanceStart = "#START Guidance From the User"
 const guidanceEnd = "#END Guidance From the User"
 
+// ContextType constants
+const (
+	ContextTypeInitialInstructions string = "InitialInstructions"
+	ContextTypeUserFeedback        string = "UserFeedback"
+	ContextTypeTestResult          string = "TestResult"
+	ContextTypeEditBlockReport     string = "EditBlockReport"
+	ContextTypeSelfReviewFeedback  string = "SelfReviewFeedback"
+	ContextTypeSummary             string = "Summary"
+)
+
 //const defaultMaxChatHistoryLength = 12000
 
 //const defaultMaxChatHistoryLength = 20000 // Adjusted temporarily for gpt4-turbo
@@ -231,4 +241,30 @@ func containsMessage(messages []llm.ChatMessage, message llm.ChatMessage) bool {
 		}
 	}
 	return false
+}
+
+// ManageChatHistoryV2Activity manages chat history based on ContextType.
+// It implements the V2 logic for message retention and trimming, eventually
+// superseding ManageChatHistoryActivity.
+func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {
+	// TODO: Implement V2 logic:
+	// 1. Identify messages with ContextType and define their blocks/collections.
+	//    - InitialInstructions: always kept, block is itself.
+	//    - UserFeedback: accumulating.
+	//    - TestResult, SelfReviewFeedback, Summary: superseded by type.
+	//    - EditBlockReport: complex block definition, superseded by recency of this type.
+	// 2. Determine "live" status for each block/collection based on rules.
+	// 3. Consolidate all messages that fall within any "live" block/collection.
+	//    - Handle overlaps: a message in multiple live blocks is retained.
+	//    - InitialInstructions message is always retained.
+	// 4. Perform trimming: If total content length of retained messages exceeds maxLength,
+	//    drop oldest unprotected messages first. maxLength is a soft limit.
+
+	// For now, this is a basic structure. The actual logic will be built in subsequent steps.
+
+	// Ensure tool calls and responses are cleaned up as per requirements.
+	// This function modifies chatHistory in-place.
+	cleanToolCallsAndResponses(&chatHistory)
+
+	return chatHistory, nil
 }
