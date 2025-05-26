@@ -8,7 +8,6 @@ import (
 	"sidekick/env"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -105,30 +104,11 @@ func main() {
 	require.Empty(t, reports[0].Error, "Edit block should not have errors")
 
 	// Step 3: Use FindReferencesActivity again with the same LSPActivities instance
-	// This should fail with a line number out of range error because the LSP server
+	// This is a regression test so we don't fail with a line number out of range error because the LSP server
 	// still has the old view of the file but the file has been modified
 	secondRefs, err := lspa.FindReferencesActivity(ctx, findRefsInput)
-
-	// This is where we expect the bug to manifest - the LSP server should complain
-	// about line numbers being out of range because it still has the old file content
-	// but the file has been modified externally
-	if err != nil {
-		t.Logf("Expected error occurred (this demonstrates the bug): %v", err)
-		// We expect an error related to line numbers or ranges being invalid
-		assert.Contains(t, err.Error(), "range", "Error should mention range/line issues")
-	} else {
-		// If no error occurs, the references might be incorrect due to stale state
-		t.Logf("No error occurred, but references might be incorrect due to stale LSP state")
-		t.Logf("Initial references: %d, Second references: %d", len(initialRefs), len(secondRefs))
-
-		// The test might pass but with incorrect results due to stale state
-		// This is still a bug, just manifesting differently
-		if len(secondRefs) != len(initialRefs) {
-			t.Logf("Reference count changed unexpectedly, indicating stale LSP state")
-		}
+	require.NoError(t, err)
+	if len(secondRefs) != len(initialRefs) {
+		t.Errorf("Reference count changed unexpectedly, indicating stale LSP state")
 	}
-
-	// For now, we'll mark this as expected behavior until we implement the fix
-	// Once we implement textDocument/didSave notifications, this test should pass
-	t.Logf("This test demonstrates the LSP stale state issue that needs to be fixed")
 }
