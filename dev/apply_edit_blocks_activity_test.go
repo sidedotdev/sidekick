@@ -246,6 +246,72 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 	}
 }
 
+func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a test file to delete
+	filePath := filepath.Join(tmpDir, "test_file.txt")
+	err := os.WriteFile(filePath, []byte("content to be deleted"), 0644)
+	require.NoError(t, err)
+
+	// Initialize git repo for diff functionality
+	cmd := exec.Command("git", "init")
+	cmd.Dir = tmpDir
+	err = cmd.Run()
+	require.NoError(t, err)
+
+	cmd = exec.Command("git", "add", ".")
+	cmd.Dir = tmpDir
+	err = cmd.Run()
+	require.NoError(t, err)
+
+	cmd = exec.Command("git", "commit", "-m", "initial commit")
+	cmd.Dir = tmpDir
+	err = cmd.Run()
+	require.NoError(t, err)
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{
+			WorkingDirectory: tmpDir,
+		},
+	}
+
+	editBlock := EditBlock{
+		EditType: "delete",
+		FilePath: "test_file.txt",
+		OldLines: []string{},
+		NewLines: []string{},
+	}
+
+	// Test with CheckEdits flag enabled
+	reports, err := ApplyEditBlocksActivity(
+		ApplyEditBlockActivityInput{
+			EnvContainer: envContainer,
+			EditBlocks:   []EditBlock{editBlock},
+			EnabledFlags: []string{fflag.CheckEdits}, // Enable CheckEdits flag
+		},
+	)
+
+	// Verify the operation succeeded
+	assert.Nil(t, err)
+	assert.Len(t, reports, 1)
+	assert.Equal(t, "", reports[0].Error, "DELETE_FILE operation should not report errors when CheckEdits is enabled")
+	assert.True(t, reports[0].DidApply, "DELETE_FILE operation should be marked as applied")
+	assert.NotEmpty(t, reports[0].FinalDiff, "DELETE_FILE operation should generate git diff output")
+
+	// Verify the file was actually deleted
+	_, err = os.Stat(filePath)
+	assert.True(t, os.IsNotExist(err), "File should be deleted")
+
+	// Verify the deletion was staged
+	stashCmd := exec.Command("git", "stash", "--keep-index")
+	stashCmd.Dir = tmpDir
+	err = stashCmd.Run()
+	require.NoError(t, err)
+	_, err = os.Stat(filePath)
+	assert.True(t, os.IsNotExist(err), "File should still be deleted post-stash")
+}
+
 func TestGetUpdatedContents(t *testing.T) {
 	tests := []struct {
 		name             string

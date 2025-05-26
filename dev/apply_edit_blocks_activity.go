@@ -93,21 +93,31 @@ func ApplyEditBlocksActivity(input ApplyEditBlockActivityInput) ([]ApplyEditBloc
 		report.DidApply = true
 
 		if report.Error == "" && slices.Contains(input.EnabledFlags, fflag.CheckEdits) {
+			// get the git diff before we potentially restore
 			diff, diffErr := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
 				FilePaths: []string{filepath.Join(baseDir, block.FilePath)},
 			})
 			report.FinalDiff = diff
 
-			checkResult, err := checkAndStageOrRestoreFile(input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create")
-			report.CheckResult = checkResult
-			if !checkResult.Success {
-				report.DidApply = false
-				hint := fixCheckHint(report)
-				report.Error = fmt.Sprintf("Checks failed: %s\nHint: %s", checkResult.Message, hint)
+			// Skip file checking for delete operations since the file no longer exists
+			if block.EditType == "delete" {
+				err := gitAdd(input.EnvContainer, block.FilePath)
+				if err != nil {
+					report.Error += fmt.Sprintf("\nFailed to git add: %v", err)
+				}
+			} else {
+				checkResult, err := checkAndStageOrRestoreFile(input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create")
+				report.CheckResult = checkResult
+				if !checkResult.Success {
+					report.DidApply = false
+					hint := fixCheckHint(report)
+					report.Error = fmt.Sprintf("Checks failed: %s\nHint: %s", checkResult.Message, hint)
+				}
+				if err != nil {
+					report.Error = report.Error + fmt.Sprintf("\nFailure when checking/staging/restoring file: %v", err)
+				}
 			}
-			if err != nil {
-				report.Error = report.Error + fmt.Sprintf("\nFailure when checking/staging/restoring file: %v", err)
-			}
+
 			if diffErr != nil {
 				report.Error = report.Error + fmt.Sprintf("\nFailure when getting git diff: %v", diffErr)
 			}
@@ -273,13 +283,17 @@ func checkAndStageOrRestoreFile(envContainer env.EnvContainer, checkCommands []c
 
 	// if checks pass, git add the changes to the staging area so other restores
 	// don't affect this change
-	input := git.GitAddActivityInput{EnvContainer: envContainer, Path: filePath}
-	err := git.GitAddActivity(context.Background(), input)
+	err := gitAdd(envContainer, filePath)
 	if err != nil {
 		return checkResult, fmt.Errorf("Failed to git add: %v", err)
 	}
 
 	return checkResult, nil
+}
+
+func gitAdd(envContainer env.EnvContainer, filePath string) error {
+	input := git.GitAddActivityInput{EnvContainer: envContainer, Path: filePath}
+	return git.GitAddActivity(context.Background(), input)
 }
 
 func ApplyCreateEditBlock(block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
