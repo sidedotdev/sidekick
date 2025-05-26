@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sidekick/coding/tree_sitter"
+	"sidekick/common"
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/llm"
@@ -977,6 +978,157 @@ func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestApplyEditBlocks_FinalDiff_AfterFailedChecksAndRestore(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "finalDiffFailedCheckTest")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	// Initialize Git repo
+	initCmd := exec.Command("git", "init")
+	initCmd.Dir = tmpDir
+	err = initCmd.Run()
+	require.NoError(t, err)
+
+	// Create and commit an initial file
+	originalContent := "original content\nline2"
+	filePath := "existing_file.txt"
+	fullPath := filepath.Join(tmpDir, filePath)
+	err = os.WriteFile(fullPath, []byte(originalContent), 0644)
+	require.NoError(t, err)
+
+	addCmd := exec.Command("git", "add", filePath)
+	addCmd.Dir = tmpDir
+	err = addCmd.Run()
+	require.NoError(t, err)
+
+	commitCmd := exec.Command("git", "commit", "-m", "Initial commit")
+	commitCmd.Dir = tmpDir
+	err = commitCmd.Run()
+	require.NoError(t, err)
+
+	// Define the edit
+	modifiedContent := "modified content\nline2_changed\nnew_line"
+	editBlock := EditBlock{
+		EditType: "update",
+		FilePath: filePath,
+		OldLines: strings.Split(originalContent, "\n"),
+		NewLines: strings.Split(modifiedContent, "\n"),
+	}
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{
+			WorkingDirectory: tmpDir,
+		},
+	}
+
+	// Create side.toml for valid project context if needed by checks
+	// This is often needed for git operations or other environment setups within activities.
+	_, err = os.Create(filepath.Join(tmpDir, "side.toml"))
+	require.NoError(t, err)
+
+	input := ApplyEditBlockActivityInput{
+		EnvContainer:  envContainer,
+		EditBlocks:    []EditBlock{editBlock},
+		EnabledFlags:  []string{fflag.CheckEdits},
+		CheckCommands: []common.CommandConfig{{Command: "false"}}, // Ensure check fails
+	}
+
+	reports, activityErr := ApplyEditBlocksActivity(input)
+	require.NoError(t, activityErr) // Activity itself should not error for this case, error is in report
+	require.Len(t, reports, 1)
+	report := reports[0]
+
+	assert.False(t, report.CheckResult.Success, "CheckResult.Success should be false")
+	assert.False(t, report.DidApply, "DidApply should be false")
+	// report.Error might contain check failure message. If it's specifically about the check, that's expected.
+	// If it's about diffing itself, that would be a problem. The requirements state errors from diffing are recorded.
+
+	assert.NotEmpty(t, report.FinalDiff, "FinalDiff should not be empty after failed check and restore")
+	assert.Contains(t, report.FinalDiff, fmt.Sprintf("--- a/%s", filePath), "FinalDiff should contain the original file path")
+	assert.Contains(t, report.FinalDiff, fmt.Sprintf("+++ b/%s", filePath), "FinalDiff should contain the modified file path")
+	assert.Contains(t, report.FinalDiff, "-original content", "FinalDiff should show removed original content")
+	assert.Contains(t, report.FinalDiff, "+modified content", "FinalDiff should show added modified content")
+
+	// Verify file is restored
+	currentContent, err := os.ReadFile(fullPath)
+	require.NoError(t, err)
+	assert.Equal(t, originalContent, string(currentContent), "File content should be restored to original")
+
+	// Verify file is not staged
+	diffCachedCmd := exec.Command("git", "diff", "--cached", "--name-only")
+	diffCachedCmd.Dir = tmpDir
+	out, err := diffCachedCmd.Output()
+	require.NoError(t, err)
+	assert.Empty(t, strings.TrimSpace(string(out)), "No files should be staged after failed check and restore")
+}
+
+func TestApplyEditBlocks_FinalDiff_NewFilePassesChecks(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "finalDiffNewFilePassCheckTest")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	// Initialize Git repo
+	initCmd := exec.Command("git", "init")
+	initCmd.Dir = tmpDir
+	err = initCmd.Run()
+	require.NoError(t, err)
+
+	// Create side.toml for valid project context if needed by checks
+	_, err = os.Create(filepath.Join(tmpDir, "side.toml"))
+	require.NoError(t, err)
+
+	newFilePath := "new_file.txt"
+	newFileContent := "new file content\nline two"
+
+	editBlock := EditBlock{
+		EditType: "create",
+		FilePath: newFilePath,
+		OldLines: []string{},
+		NewLines: strings.Split(newFileContent, "\n"),
+	}
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{
+			WorkingDirectory: tmpDir,
+		},
+	}
+
+	input := ApplyEditBlockActivityInput{
+		EnvContainer:  envContainer,
+		EditBlocks:    []EditBlock{editBlock},
+		EnabledFlags:  []string{fflag.CheckEdits},
+		CheckCommands: []common.CommandConfig{{Command: "true"}}, // Ensure check passes
+	}
+
+	reports, activityErr := ApplyEditBlocksActivity(input)
+	require.NoError(t, activityErr)
+	require.Len(t, reports, 1)
+	report := reports[0]
+
+	assert.Empty(t, report.Error, "Report error should be empty for successful creation and check")
+	assert.True(t, report.CheckResult.Success, "CheckResult.Success should be true")
+	assert.True(t, report.DidApply, "DidApply should be true")
+
+	assert.NotEmpty(t, report.FinalDiff, "FinalDiff should not be empty for new file that passes checks")
+	assert.Contains(t, report.FinalDiff, "--- /dev/null", "FinalDiff should indicate creation from /dev/null")
+	assert.Contains(t, report.FinalDiff, fmt.Sprintf("+++ b/%s", newFilePath), "FinalDiff should contain the new file path")
+	assert.Contains(t, report.FinalDiff, "+new file content", "FinalDiff should show added new file content")
+	assert.Contains(t, report.FinalDiff, "+line two", "FinalDiff should show added second line of new file content")
+
+	// Verify new file exists with correct content
+	createdFilePath := filepath.Join(tmpDir, newFilePath)
+	currentContent, err := os.ReadFile(createdFilePath)
+	require.NoError(t, err)
+	assert.Equal(t, newFileContent, string(currentContent), "New file content is incorrect")
+
+	// Verify file is staged
+	diffCachedCmd := exec.Command("git", "diff", "--cached", "--name-only")
+	diffCachedCmd.Dir = tmpDir
+	out, err := diffCachedCmd.Output()
+	require.NoError(t, err)
+	assert.Contains(t, strings.TrimSpace(string(out)), newFilePath, "New file should be staged")
 }
 
 const rstLines = `# Licensed under a 3-clause BSD style license
