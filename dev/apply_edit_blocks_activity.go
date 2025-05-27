@@ -1,4 +1,4 @@
-package dev /* TODO move to coding/edit_block */
+package dev /* TODO move to coding package */
 
 import (
 	"context"
