@@ -169,6 +169,19 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 					return DevPlanExecution{}, fmt.Errorf("failed to get continue approval: %v", err)
 				}
 			}
+
+			// After successful merge, cleanup the worktree
+			if !mergeResult.HasConflicts && dCtx.Worktree != nil {
+				actionCtx := dCtx.NewActionContext("cleanup_worktree")
+				_, err := Track(actionCtx, func(flowAction domain.FlowAction) (interface{}, error) {
+					future := workflow.ExecuteActivity(dCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name)
+					return nil, future.Get(dCtx, nil)
+				})
+				if err != nil {
+					// Log the error but don't fail the workflow since merge was successful
+					workflow.GetLogger(dCtx).Error("Failed to cleanup worktree", "error", err)
+				}
+			}
 		}
 	}
 

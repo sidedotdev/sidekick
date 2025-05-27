@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sidekick/env"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -156,5 +157,80 @@ func TestListWorktrees(t *testing.T) {
 		require.Error(t, err, "Should return an error for a directory that is not a git repository")
 		// Error comes from git command failing inside runGitCommand
 		assert.Contains(t, err.Error(), "not a git repository", "Error message should indicate it's not a git repository")
+	})
+}
+
+func TestCleanupWorktreeActivity(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Successful Cleanup", func(t *testing.T) {
+		// Setup main repository
+		repoDir := setupTestGitRepo(t)
+		createCommit(t, repoDir, "Initial commit on main")
+
+		// Create a feature branch and worktree
+		branchName := "feature-cleanup-test"
+		runGitCommandInTestRepo(t, repoDir, "branch", branchName)
+		
+		wtDirRelative := "../worktree-cleanup-test"
+		wtDir := filepath.Join(filepath.Dir(repoDir), "worktree-cleanup-test")
+		_ = os.RemoveAll(wtDir) // Clean up potential leftovers
+		runGitCommandInTestRepo(t, repoDir, "worktree", "add", wtDirRelative, branchName)
+		createCommit(t, wtDir, "Commit on feature branch")
+
+		// Verify the worktree and branch exist before cleanup
+		worktrees, err := ListWorktreesActivity(ctx, repoDir)
+		require.NoError(t, err)
+		require.Len(t, worktrees, 2, "Should have main worktree and feature worktree")
+
+		branches := runGitCommandInTestRepo(t, repoDir, "branch")
+		assert.Contains(t, branches, branchName, "Feature branch should exist before cleanup")
+
+		// Create environment container for the worktree
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: wtDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		// Perform cleanup from within the worktree
+		err = CleanupWorktreeActivity(ctx, envContainer, wtDir, branchName)
+		require.NoError(t, err, "Cleanup should succeed")
+
+		// Verify the worktree was removed
+		worktreesAfter, err := ListWorktreesActivity(ctx, repoDir)
+		require.NoError(t, err)
+		require.Len(t, worktreesAfter, 1, "Should only have main worktree after cleanup")
+		assert.Equal(t, "main", worktreesAfter[0].Branch, "Remaining worktree should be main")
+
+		// Verify the branch was deleted
+		branchesAfter := runGitCommandInTestRepo(t, repoDir, "branch")
+		assert.NotContains(t, branchesAfter, branchName, "Feature branch should be deleted after cleanup")
+
+		// Verify the worktree directory no longer exists
+		_, err = os.Stat(wtDir)
+		assert.True(t, os.IsNotExist(err), "Worktree directory should no longer exist")
+	})
+
+	t.Run("Missing Branch Name", func(t *testing.T) {
+		repoDir := setupTestGitRepo(t)
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		err = CleanupWorktreeActivity(ctx, envContainer, repoDir, "")
+		require.Error(t, err, "Should fail with empty branch name")
+		assert.Contains(t, err.Error(), "branch name is required", "Error should mention missing branch name")
+	})
+
+	t.Run("Non-existent Branch", func(t *testing.T) {
+		repoDir := setupTestGitRepo(t)
+		createCommit(t, repoDir, "Initial commit")
+		
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		err = CleanupWorktreeActivity(ctx, envContainer, repoDir, "non-existent-branch")
+		require.Error(t, err, "Should fail with non-existent branch")
+		assert.Contains(t, err.Error(), "failed to delete branch", "Error should mention branch deletion failure")
 	})
 }

@@ -8,6 +8,72 @@ import (
 	"strings"
 )
 
+// CleanupWorktreeActivity removes a git worktree and deletes the associated branch.
+// This should be called after successful merges to clean up temporary worktrees.
+// The function must be run from within the worktree directory that needs to be removed.
+func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer, worktreePath, branchName string) error {
+	if branchName == "" {
+		return fmt.Errorf("branch name is required for cleanup")
+	}
+
+	// First, checkout the HEAD commit SHA to detach from the branch
+	// This is necessary because we can't delete a branch that is currently checked out
+	headResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer: envContainer,
+		Command:      "git",
+		Args:         []string{"rev-parse", "HEAD"},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get HEAD commit SHA: %v", err)
+	}
+	if headResult.ExitStatus != 0 {
+		return fmt.Errorf("failed to get HEAD commit SHA: %s", headResult.Stderr)
+	}
+
+	headSHA := strings.TrimSpace(headResult.Stdout)
+	checkoutResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer: envContainer,
+		Command:      "git",
+		Args:         []string{"checkout", headSHA},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to checkout HEAD commit: %v", err)
+	}
+	if checkoutResult.ExitStatus != 0 {
+		return fmt.Errorf("failed to checkout HEAD commit %s: %s", headSHA, checkoutResult.Stderr)
+	}
+
+	// Delete the branch before removing the worktree
+	// Use -D to force delete even if not fully merged
+	deleteBranchResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer: envContainer,
+		Command:      "git",
+		Args:         []string{"branch", "-D", branchName},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to execute branch delete command: %v", err)
+	}
+	if deleteBranchResult.ExitStatus != 0 {
+		return fmt.Errorf("failed to delete branch %s: %s", branchName, deleteBranchResult.Stderr)
+	}
+
+	// Remove the current worktree using "." since we're running from within the worktree
+	// The working directory is the same as the worktree path that needs to be removed
+	removeResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer: envContainer,
+		Command:      "git",
+		Args:         []string{"worktree", "remove", "."},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to execute worktree remove command: %v", err)
+	}
+	if removeResult.ExitStatus != 0 {
+		return fmt.Errorf("failed to remove current worktree: %s", removeResult.Stderr)
+	}
+
+	return nil
+}
+
 // ListWorktreesActivity lists all Git worktrees for a given repository directory.
 // It returns a slice of GitWorktree structs, each containing the absolute,
 // symlink-resolved path and the corresponding branch name.
