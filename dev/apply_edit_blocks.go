@@ -1,4 +1,4 @@
-package dev /* TODO move to coding/edit_block */
+package dev /* TODO move to coding package */
 
 import (
 	"context"
@@ -27,6 +27,10 @@ import (
 
 	"go.temporal.io/sdk/workflow"
 )
+
+type DevActivities struct {
+	*lsp.LSPActivities
+}
 
 type ApplyEditBlockReport struct {
 	OriginalEditBlock EditBlock `json:"originalEditBlock"`
@@ -57,7 +61,7 @@ type ApplyEditBlockActivityInput struct {
 	CheckCommands []common.CommandConfig
 }
 
-func ApplyEditBlocksActivity(input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
+func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
 	baseDir := input.EnvContainer.Env.GetWorkingDirectory()
 	var reports []ApplyEditBlockReport
 
@@ -68,15 +72,13 @@ func ApplyEditBlocksActivity(input ApplyEditBlockActivityInput) ([]ApplyEditBloc
 		switch block.EditType {
 		case "create":
 			report, err = ApplyCreateEditBlock(block, baseDir)
-			// TODO pass in LSP client pre-initialized so we don't have to do it
-			AutofixIfEditSucceeded(input.EnvContainer, &report)
+			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
 		case "update":
 			report, err = ApplyUpdateEditBlock(block, baseDir)
-			AutofixIfEditSucceeded(input.EnvContainer, &report)
+			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
 		case "append":
 			report, err = ApplyAppendEditBlock(block, baseDir)
-			// TODO pass in LSP client pre-initialized so we don't have to do it
-			AutofixIfEditSucceeded(input.EnvContainer, &report)
+			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
 		case "delete":
 			report, err = ApplyDeleteEditBlock(block, baseDir)
 		default:
@@ -199,7 +201,11 @@ func ApplyEditBlocksActivity(input ApplyEditBlockActivityInput) ([]ApplyEditBloc
 			lineEdits := getLineEditsFromDiff(report.FinalDiff)
 			updateVisibleFileRanges(input.EditBlocks[i:], block.FilePath, lineEdits)
 
-			// FIXME /gen we need to reload the file that was edited in the LSP server
+			// Notify LSP server about the file changes
+			err := da.notifyLSPServerOfFileChanges(ctx, input.EnvContainer, block.FilePath, block.EditType)
+			if err != nil {
+				log.Warn().Err(err).Str("filePath", block.FilePath).Msg("Failed to notify LSP server of file change")
+			}
 		}
 	}
 
@@ -213,6 +219,84 @@ func ApplyEditBlocksActivity(input ApplyEditBlockActivityInput) ([]ApplyEditBloc
 	// them all
 
 	return reports, nil
+}
+
+// notifyLSPServerOfFileChanges notifies the LSP server about file changes
+// by sending appropriate textDocument notifications based on edit type and server capabilities
+func (da *DevActivities) notifyLSPServerOfFileChanges(ctx context.Context, envContainer env.EnvContainer, filePath string, editType string) error {
+	switch editType {
+	case "update", "append":
+		return da.notifyDidOpenChangeSaveAndClose(ctx, envContainer, filePath)
+	case "create":
+		return da.notifyDidOpenChangeSaveAndClose(ctx, envContainer, filePath)
+		// TODO call notifyCreateFile if server supports it
+	case "delete":
+		return nil
+		// TODO call notifyDeleteFile if server supports it
+	default:
+		return fmt.Errorf("unknown edit type: %s", editType)
+	}
+}
+
+// notifyDidOpenChangeSaveAndClose handles LSP open/close/change/save
+// notifications (depending on server support) in the order:
+// didOpen → didChange  → didSave → didClose
+func (da *DevActivities) notifyDidOpenChangeSaveAndClose(ctx context.Context, envContainer env.EnvContainer, filePath string) error {
+	baseDir := envContainer.Env.GetWorkingDirectory()
+	language := utils.InferLanguageNameFromFilePath(filePath)
+	if language == "" {
+		return nil // Skip LSP notifications for files without recognized language
+	}
+
+	var didOpenCalled bool
+
+	// Step 1: didOpen (if openClose supported)
+	didOpenInput := lsp.TextDocumentDidOpenActivityInput{
+		RepoDir:  baseDir,
+		FilePath: filePath,
+	}
+	err := da.LSPActivities.TextDocumentDidOpenActivity(ctx, didOpenInput)
+	if err == nil {
+		didOpenCalled = true
+	}
+
+	// Step 2: didChange (if didOpen was called and change is supported)
+	if didOpenCalled {
+		// Read current file content for change notification
+		absoluteFilePath := filepath.Join(baseDir, filePath)
+		content, err := os.ReadFile(absoluteFilePath)
+		if err == nil {
+			didChangeInput := lsp.TextDocumentDidChangeActivityInput{
+				RepoDir:  baseDir,
+				FilePath: filePath,
+				Version:  2, // Version after the edit
+				ContentChanges: []lsp.TextDocumentContentChangeEvent{
+					{
+						Text: string(content), // Full document sync
+					},
+				},
+			}
+			_ = da.LSPActivities.TextDocumentDidChangeActivity(ctx, didChangeInput) // Ignore errors
+		}
+	}
+
+	// Step 3: didSave (if supported)
+	didSaveInput := lsp.TextDocumentDidSaveActivityInput{
+		RepoDir:  baseDir,
+		FilePath: filePath,
+	}
+	_ = da.LSPActivities.TextDocumentDidSaveActivity(ctx, didSaveInput) // Ignore errors
+
+	// Step 4: didClose (if didOpen was called)
+	if didOpenCalled {
+		didCloseInput := lsp.TextDocumentDidCloseActivityInput{
+			RepoDir:  baseDir,
+			FilePath: filePath,
+		}
+		_ = da.LSPActivities.TextDocumentDidCloseActivity(ctx, didCloseInput) // Ignore errors
+	}
+
+	return nil
 }
 
 type lineEdit struct {
@@ -462,7 +546,7 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 
 		noRetryCtx := utils.NoRetryCtx(dCtx)
 		var validReports []ApplyEditBlockReport
-		err := workflow.ExecuteActivity(noRetryCtx, ApplyEditBlocksActivity, applyEditBlockInput).Get(noRetryCtx, &validReports)
+		err := workflow.ExecuteActivity(noRetryCtx, "DevActivities.ApplyEditBlocks", applyEditBlockInput).Get(noRetryCtx, &validReports)
 		if err != nil {
 			return nil, err
 		}
@@ -1074,12 +1158,23 @@ func getLineEditsFromDiff(diff string) []lineEdit {
 	return lineEdits
 }
 
-func AutofixIfEditSucceeded(envContainer env.EnvContainer, report *ApplyEditBlockReport) {
+func AutofixIfEditSucceeded(ctx context.Context, devActivities *DevActivities, envContainer env.EnvContainer, report *ApplyEditBlockReport) {
 	if report.Error != "" {
 		return
 	}
 	runAutofixCommands(envContainer, report)
-	runAutofixViaLSP(envContainer, report)
+
+	// LSP-based autofix
+	absoluteFilePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), report.OriginalEditBlock.FilePath)
+	autofixInput := lsp.AutofixActivityInput{
+		DocumentURI:  "file://" + absoluteFilePath,
+		EnvContainer: envContainer,
+	}
+	result, autofixErr := devActivities.LSPActivities.AutofixActivity(ctx, autofixInput)
+	if autofixErr != nil {
+		report.AutofixError += fmt.Sprintf("\nLSP autofix error: %+v", autofixErr)
+	}
+	report.AutofixResult = result
 }
 
 // command-based autofix
@@ -1111,29 +1206,6 @@ func runAutofixCommands(envContainer env.EnvContainer, report *ApplyEditBlockRep
 		}
 	}
 	report.AutofixError += combinedOutput
-}
-
-// LSP-based autofix
-func runAutofixViaLSP(envContainer env.EnvContainer, report *ApplyEditBlockReport) {
-	absoluteFilePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), report.OriginalEditBlock.FilePath)
-	lspa := lsp.LSPActivities{
-		LSPClientProvider: func(languageName string) lsp.LSPClient {
-			return &lsp.Jsonrpc2LSPClient{
-				LanguageName: languageName,
-			}
-		},
-		InitializedClients: map[string]lsp.LSPClient{},
-	}
-	ctx := context.Background()
-	autofixInput := lsp.AutofixActivityInput{
-		DocumentURI:  "file://" + absoluteFilePath,
-		EnvContainer: envContainer,
-	}
-	result, autofixErr := lspa.AutofixActivity(ctx, autofixInput)
-	if autofixErr != nil {
-		report.AutofixError += fmt.Sprintf("\nLSP autofix error: %+v", autofixErr)
-	}
-	report.AutofixResult = result
 }
 
 // CheckResult defines the structure to hold results of checks performed during edit application.

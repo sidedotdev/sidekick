@@ -1,10 +1,12 @@
 package dev
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/env"
@@ -154,6 +156,7 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 			editBlock:      EditBlock{EditType: "update", FilePath: "nonexistent.txt", OldLines: []string{"Old content"}, NewLines: []string{"New content"}},
 			wantErr:        true,
 		},
+		// FIXME /gen/req uncomment and update implementation to make this test case work
 		//{
 		//	name:            "Update when file exists but is empty and old lines is empty",
 		//	isExistingFile:  true,
@@ -201,6 +204,17 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		devActivities := &DevActivities{
+			LSPActivities: &lsp.LSPActivities{
+				LSPClientProvider: func(languageName string) lsp.LSPClient {
+					return &lsp.Jsonrpc2LSPClient{
+						LanguageName: languageName,
+					}
+				},
+				InitializedClients: map[string]lsp.LSPClient{},
+			},
+		}
+
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 
@@ -216,7 +230,8 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 				},
 			}
 
-			reports, err := ApplyEditBlocksActivity(
+			reports, err := devActivities.ApplyEditBlocks(
+				context.Background(),
 				ApplyEditBlockActivityInput{
 					EnvContainer: envContainer,
 					EditBlocks:   []EditBlock{tt.editBlock},
@@ -284,14 +299,23 @@ func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
 		NewLines: []string{},
 	}
 
-	// Test with CheckEdits flag enabled
-	reports, err := ApplyEditBlocksActivity(
-		ApplyEditBlockActivityInput{
-			EnvContainer: envContainer,
-			EditBlocks:   []EditBlock{editBlock},
-			EnabledFlags: []string{fflag.CheckEdits}, // Enable CheckEdits flag
+	devActivities := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
 		},
-	)
+	}
+
+	// Test with CheckEdits flag enabled
+	reports, err := devActivities.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
+		EnvContainer: envContainer,
+		EditBlocks:   []EditBlock{editBlock},
+		EnabledFlags: []string{fflag.CheckEdits}, // Enable CheckEdits flag
+	})
 
 	// Verify the operation succeeded
 	assert.Nil(t, err)
@@ -840,7 +864,19 @@ func main() {
 		},
 	}
 
-	reports, err := ApplyEditBlocksActivity(
+	devActivities := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	reports, err := devActivities.ApplyEditBlocks(
+		context.Background(),
 		ApplyEditBlockActivityInput{
 			EnvContainer: envContainer,
 			EditBlocks:   editBlocks,
@@ -942,7 +978,19 @@ func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
 				},
 			}
 
-			reports, err := ApplyEditBlocksActivity(
+			devActivities := &DevActivities{
+				LSPActivities: &lsp.LSPActivities{
+					LSPClientProvider: func(languageName string) lsp.LSPClient {
+						return &lsp.Jsonrpc2LSPClient{
+							LanguageName: languageName,
+						}
+					},
+					InitializedClients: map[string]lsp.LSPClient{},
+				},
+			}
+
+			reports, err := devActivities.ApplyEditBlocks(
+				context.Background(),
 				ApplyEditBlockActivityInput{
 					EnvContainer: envContainer,
 					EditBlocks:   []EditBlock{tt.editBlock},
@@ -1035,7 +1083,19 @@ func TestApplyEditBlocks_FinalDiff_AfterFailedChecksAndRestore(t *testing.T) {
 		CheckCommands: []common.CommandConfig{{Command: "false"}}, // Ensure check fails
 	}
 
-	reports, activityErr := ApplyEditBlocksActivity(input)
+	devActivities := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	reports, activityErr := devActivities.ApplyEditBlocks(context.Background(), input)
+
 	require.NoError(t, activityErr) // Activity itself should not error for this case, error is in report
 	require.Len(t, reports, 1)
 	report := reports[0]
@@ -1102,7 +1162,19 @@ func TestApplyEditBlocks_FinalDiff_NewFilePassesChecks(t *testing.T) {
 		CheckCommands: []common.CommandConfig{{Command: "true"}}, // Ensure check passes
 	}
 
-	reports, activityErr := ApplyEditBlocksActivity(input)
+	devActivities := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	reports, activityErr := devActivities.ApplyEditBlocks(context.Background(), input)
+
 	require.NoError(t, activityErr)
 	require.Len(t, reports, 1)
 	report := reports[0]
