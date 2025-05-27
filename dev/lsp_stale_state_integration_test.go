@@ -11,10 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLSPStaleStateWithEditBlocks reproduces the issue where
-// LSP server state becomes stale after file modifications via ApplyEditBlocksActivity.
-// This test should initially fail with a line number out of range error.
-func TestLSPStaleStateWithEditBlocks(t *testing.T) {
+// TestLSPDocumentSyncWhenApplyingEditBlocks ensures the LSP server state doesn't
+// become stale after file modifications via ApplyEditBlocksActivity, ensuring
+// document syncs occurred.
+func TestLSPDocumentSyncWhenApplyingEditBlocks_golang(t *testing.T) {
 	// Create a temporary directory for test files
 	tempDir := t.TempDir()
 
