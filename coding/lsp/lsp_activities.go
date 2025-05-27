@@ -154,6 +154,8 @@ func (lspa *LSPActivities) TextDocumentDidOpenActivity(ctx context.Context, inpu
 			if openCloseBool, ok := openClose.(bool); ok && !openCloseBool {
 				return nil // Server doesn't support open/close notifications
 			}
+		} else {
+			return nil // Server doesn't support open/close notifications
 		}
 	}
 
@@ -191,6 +193,8 @@ func (lspa *LSPActivities) TextDocumentDidCloseActivity(ctx context.Context, inp
 			if openCloseBool, ok := openClose.(bool); ok && !openCloseBool {
 				return nil // Server doesn't support open/close notifications
 			}
+		} else {
+			return nil // Server doesn't support open/close notifications
 		}
 	}
 
@@ -224,9 +228,11 @@ func (lspa *LSPActivities) TextDocumentDidChangeActivity(ctx context.Context, in
 	capabilities := lspClient.GetServerCapabilities()
 	if syncOptions, ok := capabilities.TextDocumentSync.(map[string]interface{}); ok {
 		if change, exists := syncOptions["change"]; exists {
-			if changeInt, ok := change.(float64); ok && changeInt == 0 {
+			if changeNum, ok := change.(float64); ok && changeNum == float64(TextDocumentSyncKindNone) {
 				return nil // Server doesn't support change notifications (TextDocumentSyncKind.None)
 			}
+		} else {
+			return nil // chnage not found in capabilities
 		}
 	}
 
@@ -261,11 +267,20 @@ func (lspa *LSPActivities) TextDocumentDidSaveActivity(ctx context.Context, inpu
 
 	// Check if server supports save notifications
 	capabilities := lspClient.GetServerCapabilities()
+	includeText := true
 	if syncOptions, ok := capabilities.TextDocumentSync.(map[string]interface{}); ok {
 		if save, exists := syncOptions["save"]; exists {
 			if saveBool, ok := save.(bool); ok && !saveBool {
 				return nil // Server doesn't support save notifications
+			} else if saveMap, ok := save.(map[string]interface{}); ok {
+				if includeTextInterface, exists := saveMap["includeText"]; exists {
+					if includeTextBool, ok := includeTextInterface.(bool); ok {
+						includeText = includeTextBool
+					}
+				}
 			}
+		} else {
+			return nil // Server doesn't support save notifications
 		}
 	}
 
@@ -274,7 +289,9 @@ func (lspa *LSPActivities) TextDocumentDidSaveActivity(ctx context.Context, inpu
 		TextDocument: TextDocumentIdentifier{
 			URI: fileURI,
 		},
-		Text: input.Text,
+	}
+	if includeText {
+		params.Text = input.Text
 	}
 
 	return lspClient.TextDocumentDidSave(ctx, params)
