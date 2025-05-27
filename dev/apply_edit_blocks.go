@@ -225,20 +225,23 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 // by sending appropriate textDocument notifications based on edit type and server capabilities
 func (da *DevActivities) notifyLSPServerOfFileChanges(ctx context.Context, envContainer env.EnvContainer, filePath string, editType string) error {
 	switch editType {
-	case "update":
-		return da.handleUpdateEditNotifications(ctx, envContainer, filePath)
-	case "create", "append":
-		return da.handleCreateAppendEditNotifications(ctx, envContainer, filePath)
+	case "update", "append":
+		return da.notifyDidOpenChangeSaveAndClose(ctx, envContainer, filePath)
+	case "create":
+		return da.notifyDidOpenChangeSaveAndClose(ctx, envContainer, filePath)
+		// TODO call notifyCreateFile if server supports it
 	case "delete":
-		return da.handleDeleteEditNotifications(ctx, envContainer, filePath)
+		return nil
+		// TODO call notifyDeleteFile if server supports it
 	default:
 		return fmt.Errorf("unknown edit type: %s", editType)
 	}
 }
 
-// handleUpdateEditNotifications handles LSP notifications for update edits:
-// didOpen (if openClose supported) → didChange (if didOpen was called) → didSave (if supported) → didClose
-func (da *DevActivities) handleUpdateEditNotifications(ctx context.Context, envContainer env.EnvContainer, filePath string) error {
+// notifyDidOpenChangeSaveAndClose handles LSP open/close/change/save
+// notifications (depending on server support) in the order:
+// didOpen → didChange  → didSave → didClose
+func (da *DevActivities) notifyDidOpenChangeSaveAndClose(ctx context.Context, envContainer env.EnvContainer, filePath string) error {
 	baseDir := envContainer.Env.GetWorkingDirectory()
 	language := utils.InferLanguageNameFromFilePath(filePath)
 	if language == "" {
@@ -292,60 +295,6 @@ func (da *DevActivities) handleUpdateEditNotifications(ctx context.Context, envC
 		}
 		_ = da.LSPActivities.TextDocumentDidCloseActivity(ctx, didCloseInput) // Ignore errors
 	}
-
-	return nil
-}
-
-// handleCreateAppendEditNotifications handles LSP notifications for create/append edits:
-// didSave first, fallback to didOpen/didClose if save not supported
-func (da *DevActivities) handleCreateAppendEditNotifications(ctx context.Context, envContainer env.EnvContainer, filePath string) error {
-	baseDir := envContainer.Env.GetWorkingDirectory()
-	language := utils.InferLanguageNameFromFilePath(filePath)
-	if language == "" {
-		return nil // Skip LSP notifications for files without recognized language
-	}
-
-	// Try didSave first
-	didSaveInput := lsp.TextDocumentDidSaveActivityInput{
-		RepoDir:  baseDir,
-		FilePath: filePath,
-	}
-	err := da.LSPActivities.TextDocumentDidSaveActivity(ctx, didSaveInput)
-	if err == nil {
-		return nil // didSave succeeded
-	}
-
-	// Fallback to didOpen/didClose cycle
-	didOpenInput := lsp.TextDocumentDidOpenActivityInput{
-		RepoDir:  baseDir,
-		FilePath: filePath,
-	}
-	err = da.LSPActivities.TextDocumentDidOpenActivity(ctx, didOpenInput)
-	if err == nil {
-		// If didOpen succeeded, also call didClose
-		didCloseInput := lsp.TextDocumentDidCloseActivityInput{
-			RepoDir:  baseDir,
-			FilePath: filePath,
-		}
-		_ = da.LSPActivities.TextDocumentDidCloseActivity(ctx, didCloseInput) // Ignore errors
-	}
-
-	return nil
-}
-
-// handleDeleteEditNotifications handles LSP notifications for delete edits: just didClose
-func (da *DevActivities) handleDeleteEditNotifications(ctx context.Context, envContainer env.EnvContainer, filePath string) error {
-	baseDir := envContainer.Env.GetWorkingDirectory()
-	language := utils.InferLanguageNameFromFilePath(filePath)
-	if language == "" {
-		return nil // Skip LSP notifications for files without recognized language
-	}
-
-	didCloseInput := lsp.TextDocumentDidCloseActivityInput{
-		RepoDir:  baseDir,
-		FilePath: filePath,
-	}
-	_ = da.LSPActivities.TextDocumentDidCloseActivity(ctx, didCloseInput) // Ignore errors
 
 	return nil
 }
