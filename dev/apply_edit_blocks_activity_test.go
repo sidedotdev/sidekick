@@ -156,6 +156,7 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 			editBlock:      EditBlock{EditType: "update", FilePath: "nonexistent.txt", OldLines: []string{"Old content"}, NewLines: []string{"New content"}},
 			wantErr:        true,
 		},
+		// FIXME /gen/req uncomment and update implementation to make this test case work
 		//{
 		//	name:            "Update when file exists but is empty and old lines is empty",
 		//	isExistingFile:  true,
@@ -203,6 +204,17 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		devActivities := &DevActivities{
+			LSPActivities: &lsp.LSPActivities{
+				LSPClientProvider: func(languageName string) lsp.LSPClient {
+					return &lsp.Jsonrpc2LSPClient{
+						LanguageName: languageName,
+					}
+				},
+				InitializedClients: map[string]lsp.LSPClient{},
+			},
+		}
+
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 
@@ -215,17 +227,6 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 			envContainer := env.EnvContainer{
 				Env: &env.LocalEnv{
 					WorkingDirectory: tmpDir,
-				},
-			}
-
-			devActivities := &DevActivities{
-				LSPActivities: &lsp.LSPActivities{
-					LSPClientProvider: func(languageName string) lsp.LSPClient {
-						return &lsp.Jsonrpc2LSPClient{
-							LanguageName: languageName,
-						}
-					},
-					InitializedClients: map[string]lsp.LSPClient{},
 				},
 			}
 
