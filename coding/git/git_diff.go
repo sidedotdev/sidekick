@@ -2,10 +2,11 @@ package git
 
 import (
 	"context"
-	"fmt"
+	"fmt" // Added for string manipulation functions
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/flow_action"
+	"strings"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -70,40 +71,151 @@ func GitDiffLegacy(eCtx flow_action.ExecContext) (string, error) {
 }
 
 func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
-	var gitDiffOutput env.EnvRunCommandActivityOutput
-	args := []string{"diff"}
+	// AC1.2: Handle Staged or ThreeDotDiff first, as their logic remains largely unchanged.
+	if params.ThreeDotDiff || params.Staged {
+		args := []string{"diff"}
 
-	if params.ThreeDotDiff {
-		if params.BaseBranch == "" {
-			return "", fmt.Errorf("base branch is required for three-dot diff")
-		}
-		// Use three-dot syntax to show changes between branches
-		args = append(args, fmt.Sprintf("%s...HEAD", params.BaseBranch))
-	} else {
-		if params.Staged {
+		if params.ThreeDotDiff {
+			if params.BaseBranch == "" {
+				return "", fmt.Errorf("base branch is required for three-dot diff")
+			}
+			args = append(args, fmt.Sprintf("%s...HEAD", params.BaseBranch))
+		} else { // params.Staged must be true here
 			args = append(args, "--staged")
 		}
+
+		if params.IgnoreWhitespace {
+			args = append(args, "-w")
+		}
+
+		if len(params.FilePaths) > 0 {
+			args = append(args, "--")
+			args = append(args, params.FilePaths...)
+		}
+
+		gitDiffRunOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+			EnvContainer:       envContainer,
+			RelativeWorkingDir: "./",
+			Command:            "git",
+			Args:               args,
+		})
+		if err != nil {
+			return "", fmt.Errorf("failed to execute git diff command: %w", err)
+		}
+		// For `git diff`, exit status 1 means differences were found (not an error for content).
+		// Exit status 0 means no differences. Other exit codes are errors.
+		if gitDiffRunOutput.ExitStatus != 0 && gitDiffRunOutput.ExitStatus != 1 {
+			return "", fmt.Errorf("git diff command failed with exit status %d: %s", gitDiffRunOutput.ExitStatus, gitDiffRunOutput.Stderr)
+		}
+		return gitDiffRunOutput.Stdout, nil
 	}
 
-	if params.IgnoreWhitespace {
-		args = append(args, "-w")
+	// AC1.1: Combined untracked and tracked file diffs
+	// (params.Staged is false, params.ThreeDotDiff is false)
+
+	var untrackedDiffStdout string
+	var trackedDiffStdout string
+	var finalError error
+
+	// Part 1: Untracked files diff
+	// Command: sh -c 'git ls-files --others --exclude-standard [-- <filepath1> ...] -z | xargs -0 -r -n 1 git --no-pager diff /dev/null'
+	// `IgnoreWhitespace` is NOT applicable here.
+	{
+		var lsFilesCmdParts []string
+		// Add -z for NUL-terminated output, essential for xargs -0
+		lsFilesCmdParts = append(lsFilesCmdParts, "git", "ls-files", "--others", "--exclude-standard", "-z")
+		if len(params.FilePaths) > 0 {
+			lsFilesCmdParts = append(lsFilesCmdParts, "--")
+			for _, fp := range params.FilePaths {
+				cleanFp := strings.TrimSpace(fp) // Trim whitespace, including newlines
+				// Quote file paths for the shell command string to handle spaces, single quotes, etc.
+				// This quoting is for the benefit of the outer `sh -c` execution,
+				// as `git ls-files` itself (with -z) handles paths robustly.
+				// However, if a path itself contains a single quote, it needs escaping for the shell.
+				quotedFp := fmt.Sprintf("'%s'", strings.ReplaceAll(cleanFp, "'", "'\\''"))
+				lsFilesCmdParts = append(lsFilesCmdParts, quotedFp)
+			}
+		}
+		lsFilesCmdString := strings.Join(lsFilesCmdParts, " ")
+
+		// Full shell command using xargs.
+		// -r ensures xargs doesn't run if ls-files has no output.
+		// -n 1 ensures git diff is called per file.
+		// xargs appends each NUL-terminated file name from (ls-files -z) to `git --no-pager diff /dev/null`.
+		// No need to add -z to lsFilesCmdString here as it's already part of lsFilesCmdParts
+		scriptForUntracked := fmt.Sprintf("%s | xargs -0 -r -n 1 git --no-pager diff /dev/null", lsFilesCmdString)
+
+		untrackedDiffRunOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+			EnvContainer:       envContainer,
+			RelativeWorkingDir: "./",
+			Command:            "sh",
+			Args:               []string{"-c", scriptForUntracked},
+		})
+
+		if err != nil {
+			finalError = fmt.Errorf("failed to execute untracked files diff command: %w", err)
+		} else {
+			// If ExitStatus is non-zero:
+			//   - If Stderr is non-empty, it's an error.
+			//   - If Stderr is empty, it might indicate diffs were found (e.g., xargs exiting 123 due to git diff exiting 1).
+			//     In this case, Stdout should contain the diffs and it's not an application error.
+			// If ExitStatus is 0: OK (no diffs, or diffs in stdout if xargs/pipe behaves that way).
+			if untrackedDiffRunOutput.ExitStatus != 0 && untrackedDiffRunOutput.Stderr != "" {
+				finalError = fmt.Errorf("untracked files diff command failed with exit status %d: %s", untrackedDiffRunOutput.ExitStatus, untrackedDiffRunOutput.Stderr)
+			} else {
+				untrackedDiffStdout = untrackedDiffRunOutput.Stdout
+			}
+		}
 	}
 
-	if len(params.FilePaths) > 0 {
-		args = append(args, "--")
-		args = append(args, params.FilePaths...)
+	// Part 2: Tracked files diff (Modified in Working Tree vs. Index)
+	if finalError == nil { // Only proceed if untracked diff part was successful or had no critical error
+		trackedArgs := []string{"diff"}
+		if params.IgnoreWhitespace { // Apply IgnoreWhitespace only for tracked files diff
+			trackedArgs = append(trackedArgs, "-w")
+		}
+
+		if len(params.FilePaths) > 0 {
+			// `git diff -- <filepaths>` will correctly ignore untracked files in the list
+			// and only diff tracked ones that are modified against the index.
+			var cleanFilePaths []string
+			for _, fp := range params.FilePaths {
+				cleanFilePaths = append(cleanFilePaths, strings.TrimSpace(fp))
+			}
+			trackedArgs = append(trackedArgs, "--")
+			trackedArgs = append(trackedArgs, cleanFilePaths...)
+		}
+		// If params.FilePaths is empty, `git diff` will diff all modified tracked files against the index.
+
+		trackedDiffRunOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+			EnvContainer:       envContainer,
+			RelativeWorkingDir: "./",
+			Command:            "git",
+			Args:               trackedArgs,
+		})
+		if err != nil {
+			finalError = fmt.Errorf("failed to execute tracked files diff command: %w", err)
+		} else {
+			if trackedDiffRunOutput.ExitStatus != 0 && trackedDiffRunOutput.ExitStatus != 1 {
+				finalError = fmt.Errorf("tracked files diff command failed with exit status %d: %s", trackedDiffRunOutput.ExitStatus, trackedDiffRunOutput.Stderr)
+			} else {
+				trackedDiffStdout = trackedDiffRunOutput.Stdout
+			}
+		}
 	}
-	gitDiffOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
-		EnvContainer:       envContainer,
-		RelativeWorkingDir: "./",
-		Command:            "git",
-		Args:               args,
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to git diff: %v", err)
+
+	if finalError != nil {
+		return "", finalError
 	}
-	if gitDiffOutput.ExitStatus != 0 {
-		return "", fmt.Errorf("git diff failed: %v", gitDiffOutput.Stderr)
+
+	// Part 3: Combine outputs
+	var parts []string
+	if untrackedDiffStdout != "" {
+		parts = append(parts, untrackedDiffStdout)
 	}
-	return gitDiffOutput.Stdout, nil
+	if trackedDiffStdout != "" {
+		parts = append(parts, trackedDiffStdout)
+	}
+
+	return strings.Join(parts, "\n"), nil
 }
