@@ -23,6 +23,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
+	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 )
 
@@ -54,6 +55,11 @@ type Controller struct {
 	temporalClient    client.Client
 	temporalNamespace string
 	temporalTaskQueue string
+}
+
+// UserActionRequest defines the expected request body for user actions.
+type UserActionRequest struct {
+	ActionType string `json:"actionType"`
 }
 
 // ArchiveTaskHandler handles the request to archive a task
@@ -142,6 +148,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	flowRoutes.GET("/:id/actions", ctrl.GetFlowActionsHandler)
 	flowRoutes.POST("/:id/pause", ctrl.PauseFlowHandler)
 	flowRoutes.POST("/:id/cancel", ctrl.CancelFlowHandler)
+	flowRoutes.POST("/:id/user_action", ctrl.UserActionHandler)
 
 	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
 
@@ -330,7 +337,7 @@ func (ctrl *Controller) PauseFlowHandler(c *gin.Context) {
 	}
 
 	// Send pause signal to temporal workflow
-	err = ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", "pause", &dev.Pause{})
+	err = ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", dev.SignalNamePause, &dev.Pause{})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"message": fmt.Sprintf("Failed to send pause signal: %v", err),
@@ -376,6 +383,55 @@ func (ctrl *Controller) CancelFlowHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Workflow cancelled successfully",
 	})
+}
+
+// UserActionHandler handles requests to perform user-initiated actions on a flow.
+func (ctrl *Controller) UserActionHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	_, err := ctrl.service.GetFlow(c, workspaceId, flowId)
+	if err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	var req UserActionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request payload: " + err.Error()})
+		return
+	}
+	if req.ActionType == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request payload: missing or blank actionType"})
+		return
+	}
+
+	if req.ActionType != string(dev.UserActionGoNext) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("Invalid actionType '%s'. Only '%s' is supported.", req.ActionType, dev.UserActionGoNext)})
+		return
+	}
+
+	// Note: the only way to interact with the flow's GlobalState is by
+	// signalling it. The signal handler will then process the action within the
+	// context of the temporal workflow.
+	err = ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", dev.SignalNameUserAction, dev.UserActionGoNext)
+	if err != nil {
+		var serviceErrNotFound *serviceerror.NotFound
+		if errors.As(err, &serviceErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"message": fmt.Sprintf("Flow with ID %s not found", flowId)})
+			return
+		}
+		log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Failed to signal workflow for user action")
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to signal workflow: " + err.Error()})
+		return
+	}
+
+	log.Info().Str("workspaceId", workspaceId).Str("flowId", flowId).Str("action", req.ActionType).Msg("User action signaled to workflow")
+	c.JSON(http.StatusOK, gin.H{"message": "User action '" + req.ActionType + "' signaled successfully"})
 }
 
 type TaskRequest struct {

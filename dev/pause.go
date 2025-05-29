@@ -9,7 +9,7 @@ import (
 type Pause struct{}
 
 func SetupPauseHandler(dCtx DevContext, guidanceContext string, requestParams map[string]interface{}) {
-	signalChan := workflow.GetSignalChannel(dCtx, "pause")
+	signalChan := workflow.GetSignalChannel(dCtx, SignalNamePause)
 	workflow.Go(dCtx, func(ctx workflow.Context) {
 		for {
 			selector := workflow.NewSelector(ctx)
