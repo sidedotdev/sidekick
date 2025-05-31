@@ -68,35 +68,6 @@ let shortContent = ref(true);
 
 const isActiveFollowDevPlanSubflow = ref(false);
 
-const updateActiveFollowDevPlanStatus = async () => {
-  if (!flow.value || !flowActions.value || flowActions.value.length === 0) {
-    isActiveFollowDevPlanSubflow.value = false;
-    return;
-  }
-
-  for (const action of flowActions.value) {
-    if (action.actionType === 'follow_dev_plan' && action.subflowId) {
-      try {
-        const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/subflows/${action.subflowId}`);
-        if (response.ok) {
-          const subflow = await response.json() as Subflow;
-          if (subflow.status === SubflowStatus.Started) {
-            isActiveFollowDevPlanSubflow.value = true;
-            return; // Found an active one, no need to check further
-          }
-        } else {
-          console.warn(`Failed to fetch subflow ${action.subflowId}: ${response.status}`);
-        }
-      } catch (err) {
-        console.error(`Error fetching subflow ${action.subflowId}:`, err);
-      }
-    }
-  }
-  isActiveFollowDevPlanSubflow.value = false; // No active follow_dev_plan subflow found
-};
-
-watch([() => flow.value?.id, flowActions], updateActiveFollowDevPlanStatus, { immediate: true, deep: true });
-
 const triggerNextStep = async () => {
   if (!flow.value) return;
   try {
