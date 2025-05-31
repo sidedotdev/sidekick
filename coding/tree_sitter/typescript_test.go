@@ -513,6 +513,7 @@ func TestGetFileHeadersStringTypescript(t *testing.T) {
 	}
 }
 
+// FIXME /gen move test cases into TestGetSymbolDefinitionTypescript and remove this separate test function
 func TestGetSymbolDefinitionTypescriptEnum(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
