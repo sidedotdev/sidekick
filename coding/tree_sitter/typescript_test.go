@@ -519,22 +519,22 @@ func TestGetSymbolDefinitionTypescriptEnum(t *testing.T) {
 		name               string
 		symbolName         string
 		code               string
-		expectedDefinition string // Will be empty for this step as we expect an error
+		expectedDefinition string
 		expectedError      string
 	}{
 		{
 			name:               "simple enum with string literal member",
 			symbolName:         "MySimpleEnum",
 			code:               `enum MySimpleEnum { Member1 = "val1" }`,
-			expectedDefinition: "",
-			expectedError:      "symbol not found: MySimpleEnum",
+			expectedDefinition: `enum MySimpleEnum { Member1 = "val1" }`,
+			expectedError:      "",
 		},
 		{
 			name:               "exported enum with string literal members",
 			symbolName:         "MyTestStatus",
 			code:               `export enum MyTestStatus { Active = "active", Inactive = "inactive" }`,
-			expectedDefinition: "",
-			expectedError:      "symbol not found: MyTestStatus",
+			expectedDefinition: `export enum MyTestStatus { Active = "active", Inactive = "inactive" }`,
+			expectedError:      "",
 		},
 	}
 
