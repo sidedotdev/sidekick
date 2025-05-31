@@ -60,8 +60,9 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 	}
 	dCtx.GlobalState = globalState
 
-	// Set up the pause handler
+	// Set up the pause and user action handlers
 	SetupPauseHandler(dCtx, "Paused for user input", nil)
+	SetupUserActionHandler(dCtx)
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	err = EnsurePrerequisites(dCtx)

@@ -8,8 +8,18 @@
         <a :href="`idea://open?file=${encodeURIComponent(workDir(worktree))}`" class="vs-code-button">Intellij IDEA</a>
       </p>
     </div>
-    <div v-if="!['completed', 'failed', 'canceled', 'paused'].includes(flow.status)" class="pause-button-container">
+    <div 
+      v-if="flow && !['completed', 'failed', 'canceled', 'paused'].includes(flow.status)" 
+      class="flow-controls-container"
+    >
       <button @click="pauseFlow" class="pause-button">⏸︎</button>
+      <button 
+        v-if="isActiveFollowDevPlanSubflow"
+        @click="triggerNextStep" 
+        class="next-button"
+      >
+        Next Step
+      </button>
     </div>
   </div>
   <div class="flow-actions-container" :class="{ 'short-content': shortContent }">
@@ -20,10 +30,11 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, onUnmounted } from 'vue'
+import { computed, onMounted, ref, onUnmounted, watch } from 'vue'
 import { useEventBus } from '@vueuse/core'
 import SubflowContainer from '@/components/SubflowContainer.vue'
-import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Worktree } from '../lib/models'
+import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Worktree, Subflow } from '../lib/models'
+import { SubflowStatus } from '../lib/models'
 import { buildSubflowTrees } from '../lib/subflow'
 import { useRoute } from 'vue-router'
 import { store } from '../lib/store'
@@ -54,6 +65,60 @@ let actionChangesSocketClosed = false
 let eventsSocket: WebSocket | null = null
 let eventsSocketClosed = false;
 let shortContent = ref(true);
+
+const isActiveFollowDevPlanSubflow = ref(false);
+
+const updateActiveFollowDevPlanStatus = async () => {
+  if (!flow.value || !flowActions.value || flowActions.value.length === 0) {
+    isActiveFollowDevPlanSubflow.value = false;
+    return;
+  }
+
+  for (const action of flowActions.value) {
+    if (action.actionType === 'follow_dev_plan' && action.subflowId) {
+      try {
+        const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/subflows/${action.subflowId}`);
+        if (response.ok) {
+          const subflow = await response.json() as Subflow;
+          if (subflow.status === SubflowStatus.Started) {
+            isActiveFollowDevPlanSubflow.value = true;
+            return; // Found an active one, no need to check further
+          }
+        } else {
+          console.warn(`Failed to fetch subflow ${action.subflowId}: ${response.status}`);
+        }
+      } catch (err) {
+        console.error(`Error fetching subflow ${action.subflowId}:`, err);
+      }
+    }
+  }
+  isActiveFollowDevPlanSubflow.value = false; // No active follow_dev_plan subflow found
+};
+
+watch([() => flow.value?.id, flowActions], updateActiveFollowDevPlanStatus, { immediate: true, deep: true });
+
+const triggerNextStep = async () => {
+  if (!flow.value) return;
+  try {
+    const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${flow.value.id}/user_action`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ action_type: 'go_next_step' }),
+    });
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error(`Failed to trigger next step: ${response.status}`, errorBody);
+      // TODO: Optionally, provide user feedback here e.g. via a toast notification
+    } else {
+      console.log('Next step triggered successfully');
+    }
+  } catch (err) {
+    console.error('Error triggering next step:', err);
+    // TODO: Optionally, provide user feedback here
+  }
+};
 
 let setShortContent = () => {
   setTimeout(() => {
@@ -261,11 +326,13 @@ onUnmounted(() => {
   right: 1rem;
 }
 
-.pause-button-container {
+.flow-controls-container { /* Renamed from pause-button-container */
   position: absolute;
   right: 1.5rem;
   bottom: 1.5rem;
   display: flex;
+  align-items: center; /* Align items vertically */
+  gap: 0.5rem; /* Add space between buttons */
   justify-content: center;
   padding: 0.75rem;
   z-index: 1000;
@@ -284,6 +351,22 @@ onUnmounted(() => {
 }
 
 .pause-button:hover {
+  opacity: 1;
+}
+
+.next-button {
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  opacity: 0.8;
+  background-color: var(--color-primary); /* Using primary color, can be adjusted */
+  color: var(--vp-c-text-1);
+  border: 1px solid var(--vp-c-divider);
+  cursor: pointer;
+  font-size: 1rem; /* Standard font size for text button */
+  transition: opacity 0.2s;
+}
+
+.next-button:hover {
   opacity: 1;
 }
 </style>

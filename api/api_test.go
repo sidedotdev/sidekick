@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"sidekick/dev"
 	"sidekick/domain"
 	"sidekick/mocks"
 	"sidekick/srv"
@@ -25,6 +26,8 @@ import (
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 )
 
@@ -1878,4 +1881,133 @@ func TestTaskChangesWebsocketHandler(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Additional assertions can be added here if needed
+}
+
+func TestUserActionHandler_BasicCases(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+	router := DefineRoutes(ctrl)
+
+	workspaceId := "ws_test_" + ksuid.New().String()
+	flowId := "flow_test_" + ksuid.New().String()
+
+	// persist workspace and flow to avoid 404 response
+	workspace := domain.Workspace{Id: workspaceId}
+	db := ctrl.service
+	ctx := context.Background()
+	err := db.PersistWorkspace(ctx, workspace)
+	require.NoError(t, err)
+	flow := domain.Flow{Id: flowId, WorkspaceId: workspaceId}
+	err = db.PersistFlow(ctx, flow)
+	require.NoError(t, err)
+
+	t.Run("Successful go_next_step", func(t *testing.T) {
+		payload := UserActionRequest{ActionType: string(dev.UserActionGoNext)}
+		jsonPayload, _ := json.Marshal(payload)
+
+		req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/user_action", workspaceId, flowId), bytes.NewBuffer(jsonPayload))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+		expectedResponse := gin.H{"message": fmt.Sprintf("User action '%s' signaled successfully", dev.UserActionGoNext)}
+		jsonResponse, _ := json.Marshal(expectedResponse)
+		assert.JSONEq(t, string(jsonResponse), rr.Body.String())
+	})
+
+	t.Run("Invalid actionType", func(t *testing.T) {
+		payload := UserActionRequest{ActionType: "invalid_action"}
+		jsonPayload, _ := json.Marshal(payload)
+
+		req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/user_action", workspaceId, flowId), bytes.NewBuffer(jsonPayload))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusBadRequest, rr.Code)
+		expectedResponse := gin.H{"message": fmt.Sprintf("Invalid actionType '%s'. Only '%s' is supported.", "invalid_action", dev.UserActionGoNext)}
+		jsonResponse, _ := json.Marshal(expectedResponse)
+		assert.JSONEq(t, string(jsonResponse), rr.Body.String())
+	})
+
+	t.Run("Invalid request payload - non-JSON", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/user_action", workspaceId, flowId), bytes.NewBufferString("not-json"))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusBadRequest, rr.Code)
+		// The exact error message for JSON parsing can vary, so we check for a prefix.
+		assert.True(t, strings.HasPrefix(rr.Body.String(), `{"message":"Invalid request payload:`))
+	})
+
+	t.Run("Invalid request payload - missing actionType", func(t *testing.T) {
+		payload := map[string]string{"other_field": "value"} // Missing actionType
+		jsonPayload, _ := json.Marshal(payload)
+
+		req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/user_action", workspaceId, flowId), bytes.NewBuffer(jsonPayload))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusBadRequest, rr.Code)
+		assert.Contains(t, rr.Body.String(), "Invalid request payload: missing or blank actionType")
+	})
+}
+
+func TestUserActionHandler_FlowNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	apiCtrl := NewMockController(t)
+	router := DefineRoutes(apiCtrl)
+
+	workspaceID := "test-ws-notfound-123"
+	flowID := "test-flow-notfound-123"
+	action := dev.UserActionGoNext
+
+	payload := fmt.Sprintf(`{"actionType": "%s"}`, action)
+	req, _ := http.NewRequest("POST", fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/user_action", workspaceID, flowID), strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusNotFound, rr.Code, "Response code should be Not Found")
+}
+
+func TestUserActionHandler_SignalError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	apiCtrl := NewMockController(t)
+	router := DefineRoutes(apiCtrl)
+	signalErr := serviceerror.DeadlineExceeded{Message: "deadline exceeded"}
+	mockTemporalClient := (apiCtrl.temporalClient).(*mocks.Client)
+	// undo default signal success mocking
+	mockTemporalClient.On("SignalWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Unset()
+	// mock failure to signal (note: can't be daisy-changed on to the unset, that doesn't work)
+	mockTemporalClient.On("SignalWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&signalErr)
+
+	workspaceId := "test-ws-signalerr"
+	flowId := "test-flow-signalerr"
+	action := dev.UserActionGoNext
+
+	// persist workspace and flow to avoid 404 response
+	workspace := domain.Workspace{Id: workspaceId}
+	db := apiCtrl.service
+	ctx := context.Background()
+	err := db.PersistWorkspace(ctx, workspace)
+	require.NoError(t, err)
+	flow := domain.Flow{Id: flowId, WorkspaceId: workspaceId}
+	err = db.PersistFlow(ctx, flow)
+	require.NoError(t, err)
+
+	payload := fmt.Sprintf(`{"actionType": "%s"}`, action)
+	req, _ := http.NewRequest("POST", fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/user_action", workspaceId, flowId), strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusInternalServerError, rr.Code, "Response code should be Internal Server Error")
+	expectedResponse := fmt.Sprintf(`{"message":"Failed to signal workflow: %s"}`, signalErr.Error())
+	assert.JSONEq(t, expectedResponse, rr.Body.String(), "Response body mismatch")
 }
