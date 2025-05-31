@@ -66,6 +66,7 @@ let currentFlowIdForSockets: string | null = null; // To help manage WebSocket c
 
 let subflowTreeDebounceTimer: NodeJS.Timeout; // Hoisted for actionChangesSocket
 let subscribeStreamDebounceTimers: {[key: string]: NodeJS.Timeout} = {}; // Hoisted for actionChangesSocket
+let subflowStatusUpdateDebounceTimers: {[key: string]: NodeJS.Timeout} = {};
 
 const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Promise<Response>) => {
   eventsSocket = new WebSocket(`ws://${window.location.host}/ws/v1/workspaces/${store.workspaceId}/flows/${flowId}/events`);
@@ -111,8 +112,32 @@ const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Prom
           // Check if this status change is for the main flow
           if (flow.value && flowEvent.parentId === flow.value.id) {
             flow.value.status = flowEvent.status;
+          } else { // This is a subflow status change
+            const subflowId = flowEvent.parentId;
+            if (subflowId) { // Ensure subflowId is present
+              clearTimeout(subflowStatusUpdateDebounceTimers[subflowId]);
+              subflowStatusUpdateDebounceTimers[subflowId] = setTimeout(() => {
+                const subflowToUpdate = subflowsById.value[subflowId];
+                if (subflowToUpdate) {
+                  subflowToUpdate.status = flowEvent.status; // Update status in our cache
+
+                  if (subflowToUpdate.type === 'follow_dev_plan') {
+                    if (flowEvent.status === SubflowStatus.Started) {
+                      activeFollowDevPlanSubflowIds.value.add(subflowId);
+                    } else if (
+                      flowEvent.status === SubflowStatus.Complete ||
+                      flowEvent.status === SubflowStatus.Failed
+                    ) {
+                      activeFollowDevPlanSubflowIds.value.delete(subflowId);
+                    }
+                  }
+                } else {
+                  // Optional: Log if subflow not found, though it should have been fetched by actionChangesSocket
+                  console.warn(`Received status update for subflow ${subflowId} not found in cache.`);
+                }
+              }, 100);
+            }
           }
-          // Subflow status changes will be handled in the next step's modifications to this handler
           break;
         }
       }
@@ -256,6 +281,11 @@ const setupFlow = async (newFlowId: string | undefined) => {
     flowActions.value = [];
     activeFollowDevPlanSubflowIds.value.clear();
     subflowsById.value = {};
+    // Clear any pending subflow status update timers
+    Object.keys(subflowStatusUpdateDebounceTimers).forEach(key => {
+      clearTimeout(subflowStatusUpdateDebounceTimers[key]);
+    });
+    subflowStatusUpdateDebounceTimers = {};
     updateSubflowTrees(); // Clear trees
     return;
   }
@@ -267,6 +297,11 @@ const setupFlow = async (newFlowId: string | undefined) => {
   flowActions.value = [];
   activeFollowDevPlanSubflowIds.value.clear();
   subflowsById.value = {};
+  // Clear any pending subflow status update timers
+  Object.keys(subflowStatusUpdateDebounceTimers).forEach(key => {
+    clearTimeout(subflowStatusUpdateDebounceTimers[key]);
+  });
+  subflowStatusUpdateDebounceTimers = {};
   updateSubflowTrees(); // Clear trees
 
   const flowPromise = fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${newFlowId}`);
@@ -360,6 +395,11 @@ onUnmounted(() => {
   if (eventsSocket) {
     eventsSocket.close();
   }
+  // Clear any pending subflow status update timers on unmount
+  Object.keys(subflowStatusUpdateDebounceTimers).forEach(key => {
+    clearTimeout(subflowStatusUpdateDebounceTimers[key]);
+  });
+  subflowStatusUpdateDebounceTimers = {};
 })
 </script>
 
