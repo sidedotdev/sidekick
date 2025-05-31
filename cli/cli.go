@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sidekick"
+	"strconv"
 
 	// Embedding the frontend build files
 	_ "embed"
@@ -69,6 +70,13 @@ func main() {
 			log.Warn().Err(err).Msg("Warning: failed to load .env file")
 		}
 	}
+
+	// set global log level
+	logLevel, err := strconv.Atoi(os.Getenv("SIDE_LOG_LEVEL"))
+	if err != nil {
+		logLevel = int(zerolog.InfoLevel) // default to INFO
+	}
+	zerolog.SetGlobalLevel(zerolog.Level(logLevel))
 
 	if system_service.Interactive() {
 		interactiveMain()
