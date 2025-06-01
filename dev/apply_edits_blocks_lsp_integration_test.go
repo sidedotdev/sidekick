@@ -31,7 +31,6 @@ func main() {
 	TestFunction()
 }
 `
-
 	// Write test file to the temporary directory
 	testFilePath := filepath.Join(tempDir, "test.go")
 	err := os.WriteFile(testFilePath, []byte(initialContent), 0644)
@@ -98,7 +97,7 @@ func main() {
 	applyInput := ApplyEditBlockActivityInput{
 		EnvContainer: envContainer,
 		EditBlocks:   []EditBlock{editBlock},
-		EnabledFlags: []string{}, // No flags to avoid checks that might interfere
+		EnabledFlags: []string{}, // check-edits flag not passed in, thus no git repo is needed
 	}
 
 	devActivities := &DevActivities{LSPActivities: lspa} // should use same lspa

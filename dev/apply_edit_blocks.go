@@ -100,39 +100,28 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 			var currentBlockError string
 			pathForDiff := filepath.Join(baseDir, block.FilePath)
 
-			// Calculate the diff of (potentially autofixed and staged by autofixer) changes against HEAD.
-			// This serves as the base for FinalDiff, representing the total change if successful.
-			stagedChangesDiff, scdErr := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
+			// Calculate the diff of unstaged changes, which we assume are
+			// related to this edit block plus any autofixes that might have run
+			// after it was applied. This serves as the base for FinalDiff, representing the total
+			// change if successful.
+			unstagedChangesDiff, scdErr := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
 				FilePaths: []string{pathForDiff},
-				Staged:    true,
+				Staged:    false,
 			})
 			if scdErr != nil {
-				errMsg := fmt.Sprintf("Failure when getting staged git diff for block: %v", scdErr)
+				errMsg := fmt.Sprintf("Failure when getting unstaged git diff for block: %v", scdErr)
 				if currentBlockError == "" {
 					currentBlockError = errMsg
 				} else {
 					currentBlockError += "\n" + errMsg
 				}
 			}
-			report.FinalDiff = stagedChangesDiff // Tentatively set FinalDiff
+			report.FinalDiff = unstagedChangesDiff
 
 			if block.EditType == "delete" {
-				// For delete, FinalDiff should be the diff of the deletion itself (WD vs Index pre-delete).
-				// Autofix typically doesn't run or stage deletes.
-				deleteDiff, delDiffErr := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
-					FilePaths: []string{pathForDiff}, // WD (file is deleted) vs Index (file exists pre-delete)
-				})
-				if delDiffErr != nil {
-					errMsg := fmt.Sprintf("Failure when getting git diff for deleted file: %v", delDiffErr)
-					if currentBlockError == "" {
-						currentBlockError = errMsg
-					} else {
-						currentBlockError += "\n" + errMsg
-					}
-				}
-				report.FinalDiff = deleteDiff // Overwrite FinalDiff with the specific deletion diff.
-
-				// Stage the deletion.
+				// Stage the deletion directly instead of using
+				// checkAndStageOrRestoreFile, since checking the file is not
+				// possible after deleting it.
 				gitAddErr := gitAdd(input.EnvContainer, block.FilePath)
 				if gitAddErr != nil {
 					errMsg := fmt.Sprintf("Failed to git add deleted file: %v", gitAddErr)
@@ -143,23 +132,21 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 					}
 				}
 			} else { // create, update, append
-				// Autofix might have run and staged. report.FinalDiff is currently StagedChanges vs HEAD.
 				checkResult, checkErr := checkAndStageOrRestoreFile(input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create")
 				report.CheckResult = checkResult
 
 				if !checkResult.Success {
-					report.DidApply = false      // Mark as not applied due to check failure.
-					hint := fixCheckHint(report) // Uses report.FinalDiff (StagedChanges vs HEAD)
+					report.DidApply = false
+					hint := fixCheckHint(report)
 					errMsg := fmt.Sprintf("Checks failed: %s\nHint: %s", checkResult.Message, hint)
 					if currentBlockError == "" {
 						currentBlockError = errMsg
 					} else {
 						currentBlockError += "\n" + errMsg
 					}
-					// report.FinalDiff (StagedChanges vs HEAD) remains, representing the failed attempt.
-				} else {
-					// Checks passed. File is staged by checkAndStageOrRestoreFile.
-					// report.FinalDiff (StagedChanges vs HEAD) is appropriate.
+					// report.FinalDiff remains as-is despite restoration having
+					// occurred: this is so that we can record and show the user
+					// the diff that failed checks clearly.
 				}
 
 				if checkErr != nil {
@@ -178,45 +165,6 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 				}
 			} else {
 				report.Error = currentBlockError
-			}
-		} else if report.Error == "" && report.DidApply {
-			// CheckEdits is disabled, but block was applied successfully.
-			// Ensure staging for sequential edits.
-			pathForDiff := filepath.Join(baseDir, block.FilePath)
-			var stageErr error
-
-			if block.EditType == "delete" {
-				// For delete, FinalDiff should be WD vs Index, then stage.
-				deleteDiff, delDiffErr := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
-					FilePaths: []string{pathForDiff},
-				})
-				if delDiffErr != nil {
-					report.Error += fmt.Sprintf("\nFailed to get diff for delete (CheckEdits off): %v", delDiffErr)
-				}
-				report.FinalDiff = deleteDiff
-				stageErr = gitAdd(input.EnvContainer, block.FilePath)
-			} else {
-				// For create, update, append: Autofix might have staged.
-				// If not, or to be sure, stage again. Staging an already staged file is fine.
-				// FinalDiff should be Staged vs HEAD.
-				stagedDiff, sdErr := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
-					FilePaths: []string{pathForDiff},
-					Staged:    true,
-				})
-				if sdErr != nil {
-					report.Error += fmt.Sprintf("\nFailed to get staged diff (CheckEdits off): %v", sdErr)
-				}
-				report.FinalDiff = stagedDiff
-				stageErr = gitAdd(input.EnvContainer, block.FilePath) // Ensure it's staged
-			}
-
-			if stageErr != nil {
-				errMsg := fmt.Sprintf("Failed to git add file (CheckEdits off): %v", stageErr)
-				if report.Error == "" {
-					report.Error = errMsg
-				} else {
-					report.Error += "\n" + errMsg
-				}
 			}
 		}
 
