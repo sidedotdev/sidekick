@@ -29,7 +29,7 @@ import (
 )
 
 type DevActivities struct {
-	*lsp.LSPActivities
+	LSPActivities *lsp.LSPActivities
 }
 
 type ApplyEditBlockReport struct {
