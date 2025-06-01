@@ -2,7 +2,7 @@ package git
 
 import (
 	"context"
-	"fmt" // Added for string manipulation functions
+	"fmt"
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/flow_action"
@@ -71,7 +71,6 @@ func GitDiffLegacy(eCtx flow_action.ExecContext) (string, error) {
 }
 
 func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
-	// AC1.2: Handle Staged or ThreeDotDiff first, as their logic remains largely unchanged.
 	if params.ThreeDotDiff || params.Staged {
 		args := []string{"diff"}
 
@@ -110,12 +109,8 @@ func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params 
 		return gitDiffRunOutput.Stdout, nil
 	}
 
-	// AC1.1: Combined untracked and tracked file diffs
-	// (params.Staged is false, params.ThreeDotDiff is false)
-
 	var untrackedDiffStdout string
 	var trackedDiffStdout string
-	var finalError error
 
 	// Part 1: Untracked files diff
 	// Command: sh -c 'git ls-files --others --exclude-standard [-- <filepath1> ...] -z | xargs -0 -r -n 1 git --no-pager diff /dev/null'
@@ -153,7 +148,7 @@ func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params 
 		})
 
 		if err != nil {
-			finalError = fmt.Errorf("failed to execute untracked files diff command: %w", err)
+			return "", fmt.Errorf("failed to execute untracked files diff command: %w", err)
 		} else {
 			// If ExitStatus is non-zero:
 			//   - If Stderr is non-empty, it's an error.
@@ -161,7 +156,7 @@ func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params 
 			//     In this case, Stdout should contain the diffs and it's not an application error.
 			// If ExitStatus is 0: OK (no diffs, or diffs in stdout if xargs/pipe behaves that way).
 			if untrackedDiffRunOutput.ExitStatus != 0 && untrackedDiffRunOutput.Stderr != "" {
-				finalError = fmt.Errorf("untracked files diff command failed with exit status %d: %s", untrackedDiffRunOutput.ExitStatus, untrackedDiffRunOutput.Stderr)
+				return "", fmt.Errorf("untracked files diff command failed with exit status %d: %s", untrackedDiffRunOutput.ExitStatus, untrackedDiffRunOutput.Stderr)
 			} else {
 				untrackedDiffStdout = untrackedDiffRunOutput.Stdout
 			}
@@ -169,43 +164,38 @@ func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params 
 	}
 
 	// Part 2: Tracked files diff (Modified in Working Tree vs. Index)
-	if finalError == nil { // Only proceed if untracked diff part was successful or had no critical error
-		trackedArgs := []string{"diff"}
-		if params.IgnoreWhitespace { // Apply IgnoreWhitespace only for tracked files diff
-			trackedArgs = append(trackedArgs, "-w")
-		}
-
-		if len(params.FilePaths) > 0 {
-			// `git diff -- <filepaths>` will correctly ignore untracked files in the list
-			// and only diff tracked ones that are modified against the index.
-			var cleanFilePaths []string
-			for _, fp := range params.FilePaths {
-				cleanFilePaths = append(cleanFilePaths, strings.TrimSpace(fp))
-			}
-			trackedArgs = append(trackedArgs, "--")
-			trackedArgs = append(trackedArgs, cleanFilePaths...)
-		}
-		// If params.FilePaths is empty, `git diff` will diff all modified tracked files against the index.
-
-		trackedDiffRunOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
-			EnvContainer:       envContainer,
-			RelativeWorkingDir: "./",
-			Command:            "git",
-			Args:               trackedArgs,
-		})
-		if err != nil {
-			finalError = fmt.Errorf("failed to execute tracked files diff command: %w", err)
-		} else {
-			if trackedDiffRunOutput.ExitStatus != 0 && trackedDiffRunOutput.ExitStatus != 1 {
-				finalError = fmt.Errorf("tracked files diff command failed with exit status %d: %s", trackedDiffRunOutput.ExitStatus, trackedDiffRunOutput.Stderr)
-			} else {
-				trackedDiffStdout = trackedDiffRunOutput.Stdout
-			}
-		}
+	trackedArgs := []string{"diff"}
+	if params.IgnoreWhitespace {
+		trackedArgs = append(trackedArgs, "-w")
 	}
 
-	if finalError != nil {
-		return "", finalError
+	// if params.FilePaths is empty, `git diff` will diff all modified tracked
+	// files against the index
+	if len(params.FilePaths) > 0 {
+		// `git diff -- <filepaths>` will correctly ignore untracked files in the list
+		// and only diff tracked ones that are modified against the index.
+		var cleanFilePaths []string
+		for _, fp := range params.FilePaths {
+			cleanFilePaths = append(cleanFilePaths, strings.TrimSpace(fp))
+		}
+		trackedArgs = append(trackedArgs, "--")
+		trackedArgs = append(trackedArgs, cleanFilePaths...)
+	}
+
+	trackedDiffRunOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer:       envContainer,
+		RelativeWorkingDir: "./",
+		Command:            "git",
+		Args:               trackedArgs,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to execute tracked files diff command: %w", err)
+	} else {
+		if trackedDiffRunOutput.ExitStatus != 0 && trackedDiffRunOutput.ExitStatus != 1 {
+			return "", fmt.Errorf("tracked files diff command failed with exit status %d: %s", trackedDiffRunOutput.ExitStatus, trackedDiffRunOutput.Stderr)
+		} else {
+			trackedDiffStdout = trackedDiffRunOutput.Stdout
+		}
 	}
 
 	// Part 3: Combine outputs

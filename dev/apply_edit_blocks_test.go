@@ -1068,7 +1068,6 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 		runGitCommand(t, tmpDirB, "add", existingFilePath)
 		runGitCommand(t, tmpDirB, "commit", "-m", "Initial commit for sequential_existing.txt")
 		initialCommits := getCommitHashes(t, tmpDirB, existingFilePath)
-		utils.PrettyPrint(initialCommits)
 		require.Len(t, initialCommits, 1, "Should have 1 initial commit")
 
 		// Block B1: Modify to "Initial line.\nLine Alpha"
