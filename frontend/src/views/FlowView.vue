@@ -3,7 +3,7 @@
     <div class="editor-links" v-if="devMode">
       <p v-for="worktree in flow.worktrees" :key="worktree.id">
         Open Worktree:
-        <a :href="`vscode://file/${workDir(worktree)}`">VS Code</a>
+        <a :href="`vscode://file/${workDir(worktree)}?windowId=_blank`">VS Code</a>
         |
         <a :href="`idea://open?file=${encodeURIComponent(workDir(worktree))}`" class="vs-code-button">Intellij IDEA</a>
       </p>
