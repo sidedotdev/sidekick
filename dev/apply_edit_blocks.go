@@ -32,7 +32,6 @@ type DevActivities struct {
 	LSPActivities *lsp.LSPActivities
 }
 
-
 type ApplyEditBlockReport struct {
 	OriginalEditBlock EditBlock `json:"originalEditBlock"`
 
@@ -530,7 +529,7 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 	actionParams := map[string]interface{}{
 		// visible stuff is very verbose, so we leave it out of the flow events.
 		// they are very necessary in the activity though.
-		"editBlocks": utils.Map(editBlocks, func (block EditBlock) EditBlock {
+		"editBlocks": utils.Map(editBlocks, func(block EditBlock) EditBlock {
 			block.VisibleCodeBlocks = []tree_sitter.CodeBlock{}
 			block.VisibleFileRanges = []FileRange{}
 			return block
@@ -578,7 +577,7 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		// which are automatically using the returned value, so we side-step
 		// that here via the variable outside the closure.
 		fullReports = reports
-		trackedReports := utils.Map(reports, func (report ApplyEditBlockReport) ApplyEditBlockReport {
+		trackedReports := utils.Map(reports, func(report ApplyEditBlockReport) ApplyEditBlockReport {
 			report.OriginalEditBlock.VisibleCodeBlocks = []tree_sitter.CodeBlock{}
 			report.OriginalEditBlock.VisibleFileRanges = []FileRange{}
 			return report

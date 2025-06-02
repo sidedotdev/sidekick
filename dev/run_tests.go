@@ -168,7 +168,7 @@ test output, no more, no less.
 Rough template to follow (though adjust to the formatting of actual test outputs
 and feel free to adjust labels as needed):
 
-` + "```" + `example
+`+"```"+`example
 Test Command: <command>
 
 ## Test Failures
@@ -200,7 +200,7 @@ etc
 ## (Summary of other relevant logs/etc)
 
 (Anything here, only include if necessary)
-` + "```" + `
+`+"```"+`
 
 Here is the test result output to summarize:
 
