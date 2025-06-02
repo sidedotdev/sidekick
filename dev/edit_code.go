@@ -43,6 +43,7 @@ func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, cont
 	if repoConfig.MaxIterations > 0 {
 		maxAttempts = repoConfig.MaxIterations
 	}
+	maxIterationsBeforeFeedback := 3
 
 editLoop:
 	for {
@@ -54,12 +55,14 @@ editLoop:
 			attemptsSinceLastFeedback = 0
 		}
 
-		if attemptCount >= maxAttempts {
+
+		v := workflow.GetVersion(dCtx, "no-max-unless-disabled-human", workflow.DefaultVersion, 1)
+		if attemptCount >= maxAttempts && (v == 0 || dCtx.RepoConfig.DisableHumanInTheLoop) {
 			return ErrMaxAttemptsReached
 		}
 
 		// Only request feedback if we haven't received any recently from any source
-		if attemptCount > 0 && attemptsSinceLastFeedback >= 3 {
+		if attemptCount > 0 && attemptsSinceLastFeedback >= maxIterationsBeforeFeedback {
 			guidanceContext := "The system has attempted to edit the code multiple times without success. Please provide some guidance."
 			requestParams := map[string]any{
 				"editBlockReports": reports,
@@ -161,6 +164,16 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		maxAttempts = repoConfig.MaxIterations
 	}
 
+	feedbackIterations := 3
+	v := workflow.GetVersion(dCtx, "author-edit-feedback-iterations", workflow.DefaultVersion, 1)
+	if v == 1 {
+		// TODO when tool calls are not finding things automatically, provide
+		// better hints for how to find things after Nth iteration, before going
+		// to human-based support. Eg fuzzy search or embedding search etc.
+		// Maybe provide that as a tool or even run that tool automatically.
+		feedbackIterations = 6
+	}
+
 	for {
 		// pause checkpoint
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
@@ -186,7 +199,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			}
 
 			return nil, ErrMaxAttemptsReached
-		} else if attemptsSinceLastEditBlockOrFeedback > 0 && attemptsSinceLastEditBlockOrFeedback%3 == 0 {
+		} else if attemptsSinceLastEditBlockOrFeedback > 0 && attemptsSinceLastEditBlockOrFeedback%feedbackIterations == 0 {
 			guidanceContext := "The system has attempted to generate edits multiple times without success. Please provide some guidance."
 			requestParams := map[string]any{
 				// TODO include the latest failure if any

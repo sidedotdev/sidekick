@@ -116,12 +116,22 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 		reproduceIssue:              reproduceIssue,
 	}
 
+	feedbackIterations := 5
+	v := workflow.GetVersion(dCtx, "dev-planning-feedback-iterations", workflow.DefaultVersion, 1)
+	if v == 1 {
+		// TODO when tool calls are not finding things automatically, provide
+		// better hints for how to find things after Nth iteration, before going
+		// to human-based support. Eg fuzzy search or embedding search etc.
+		// Maybe provide that as a tool or even run that tool automatically.
+		feedbackIterations = 9
+	}
+
 	result, err := LlmLoop(
 		dCtx,
 		chatHistory,
 		buildDevPlanIteration,
 		WithInitialState(initialState),
-		WithFeedbackEvery(5),
+		WithFeedbackEvery(feedbackIterations),
 		WithMaxIterations(maxIterations),
 	)
 	if err != nil {
