@@ -47,9 +47,6 @@ reasonable (less than a few hundred lines).
 Logs always use zerolog in go. JSON serialization is always in camelCase, not
 snake_case.
 
-Comments should be minimal and only used for explaining the "why", not the "what"
-(rare exceptions for very complex logic). Comments shouldn't be used to talk
-about the current task acceptance criteria or plan/steps directly, but should be
-focused on what would help maintainers read the code later. Tune comments
-for maintainability rather than pedagogy.
+New comments should be added sparingly. When added, comments must be concise and
+avoid repeating what is plainly visible in the code directly.
 """

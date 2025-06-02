@@ -126,9 +126,9 @@ Remember these rules:
 5. Retain existing comments including TODOs/FIXMEs, unless they are resolved
 6. Start a OLD LINES section with a line that is just a 4-6 lines before the first
 line where a change is required
-7. Do NOT include additional comments explaining the change made to a specific
-line of code. Only include comments that would help someone else understand the
-code on its own and not in relation to the change being made.
+7. Do NOT add comments explaining the changes made to a specific line of code.
+Only include comments that would help someone else understand the code on its
+own and not in relation to the change being made.
 8. Increment the edit block sequence number for each new edit block, so that we
 have a unique number for each edit block.
 9. Ensure you edit balanced parentheses, brackets, and braces across old and new
@@ -144,6 +144,13 @@ other in the same file.
 12. Never try to edit any lines of code that you don't see. Instead, use tools
 to view all the lines of code you want to edit first if the lines you want to
 edit are not visible to you.
+13. Never add useless comments. Don't explain what you are changing in comments
+in the edit block new lines. Comments saying what was "// Added" or "// Removed"
+or otherwise just detailing the obvious are absolutely not welcome. Comments
+must ALWAYS make sense outside of the context of a specific edit and task. It's
+fine to add such comments if thinking out loud, not within an edit block, but
+then remove these extraneous & unnecessary comments for the final formatted edit
+blocks.
 
 When you are done with all edit blocks, avoid using further tools: output
 without a tool call is the signal for us to finally apply those edits to the
