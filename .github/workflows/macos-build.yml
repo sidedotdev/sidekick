@@ -83,7 +83,7 @@ jobs:
 
           SIDE="side_macos_arm64_$VERSION"
 
-          go build -o $SIDE sidekick/cli
+          go build -ldflags="-X main.version=${VERSION}" -o $SIDE sidekick/cli
           echo "SIDE=$SIDE" >> $GITHUB_OUTPUT
 
       - name: Release
