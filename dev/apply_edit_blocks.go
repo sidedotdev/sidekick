@@ -556,7 +556,14 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 
 		noRetryCtx := utils.NoRetryCtx(dCtx)
 		var validReports []ApplyEditBlockReport
-		err := workflow.ExecuteActivity(noRetryCtx, "DevActivities.ApplyEditBlocks", applyEditBlockInput).Get(noRetryCtx, &validReports)
+		var err error
+		v := workflow.GetVersion(dCtx, "apply-edit-blocks", workflow.DefaultVersion, 1)
+		if v == 1 {
+			var da *DevActivities
+			err = workflow.ExecuteActivity(noRetryCtx, da.ApplyEditBlocks, applyEditBlockInput).Get(noRetryCtx, &validReports)
+		} else {
+			err = workflow.ExecuteActivity(noRetryCtx, ApplyEditBlocksActivity, applyEditBlockInput).Get(noRetryCtx, &validReports)
+		}
 		if err != nil {
 			return nil, err
 		}
