@@ -11,17 +11,27 @@
       <a :href="`http://localhost:19855/namespaces/default/workflows/${flow.id}`">Temporal {{ flow.id }}</a>
     </div>
     </div>
+    <!-- TODO: In the future, we should allow going to next step even if currently paused -->
     <div 
       v-if="flow && !['completed', 'failed', 'canceled', 'paused'].includes(flow.status)" 
       class="flow-controls-container"
     >
       <button @click="pauseFlow" class="pause-button">⏸︎</button>
+
+      <!--
+        NOTE: goToNextStep is only avaiable in devMode for now, until it has
+        been further tested, since this is a major new feature and is likely
+        somewhat buggy now. devMode condition will be removed by sidekick
+        maintainers in the future, when it's ready to be released.
+        This is a purposeful change from the original requirements/step
+        definition, guided by the user who provided that.
+      -->
       <button 
-        v-if="isActiveFollowDevPlanSubflow"
-        @click="triggerNextStep" 
+        v-if="devMode && isActiveFollowDevPlanSubflow"
+        @click="goToNextStep"
         class="next-button"
       >
-        Next Step
+        ⏭
       </button>
     </div>
   </div>
@@ -36,7 +46,7 @@
 import { computed, onMounted, ref, onUnmounted, watch } from 'vue'
 import { useEventBus } from '@vueuse/core'
 import SubflowContainer from '@/components/SubflowContainer.vue'
-import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Worktree, Subflow } from '../lib/models'
+import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Worktree, Subflow } from '../lib/models' // Added Subflow here
 import { SubflowStatus } from '../lib/models'
 import { buildSubflowTrees } from '../lib/subflow'
 import { useRoute } from 'vue-router'
@@ -50,16 +60,24 @@ const flowActions = ref<FlowAction[]>([])
 const subflowTrees = ref<SubflowTree[]>([])
 const route = useRoute()
 
+// activeFollowDevPlanSubflowIds: Stores IDs of 'follow_dev_plan' subflows that are currently active.
+// This is populated by listening to WebSocket events for subflow status changes.
+const activeFollowDevPlanSubflowIds = ref(new Set<string>());
+
+// subflowsById: A record of subflow objects, keyed by their ID.
+// This is also populated by listening to WebSocket events for subflow status changes.
+const subflowsById = ref<Record<string, Subflow>>({});
+
+// isActiveFollowDevPlanSubflow: A computed property determining the "Next" button's visibility.
+// It's true if there's at least one active 'follow_dev_plan' subflow.
+// This, combined with the main flow status check in the template (`!['completed', 'failed', 'canceled', 'paused'].includes(flow.status)`),
+// fulfills the visibility conditions:
+// 1. Main flow is active and not paused.
+// 2. An active 'follow_dev_plan' subflow exists.
+const isActiveFollowDevPlanSubflow = computed(() => activeFollowDevPlanSubflowIds.value.size > 0);
+
 const updateSubflowTrees = () => {
-  // we only want to show pending user requests, since we use that as the way to
-  // show the form for a request. complete ones are shown under the "Tool:
-  // get_help_or_input" action
   const relevantFlowActions = flowActions.value
-  /*
-  .filter((action) => {
-    return action.actionType !== 'user_request' || action.actionStatus !== 'complete'
-  })
-    */
   const newSubtrees = buildSubflowTrees(relevantFlowActions)
   subflowTrees.value = newSubtrees
 }
@@ -70,58 +88,315 @@ let actionChangesSocketClosed = false
 let eventsSocket: WebSocket | null = null
 let eventsSocketClosed = false;
 let shortContent = ref(true);
+let currentFlowIdForSockets: string | null = null;
 
-const isActiveFollowDevPlanSubflow = ref(false);
+let subflowTreeDebounceTimer: NodeJS.Timeout;
+let subscribeStreamDebounceTimers: {[key: string]: NodeJS.Timeout} = {};
+let subflowStatusUpdateDebounceTimers: {[key: string]: NodeJS.Timeout} = {};
 
-const updateActiveFollowDevPlanStatus = async () => {
-  if (!flow.value || !flowActions.value || flowActions.value.length === 0) {
-    isActiveFollowDevPlanSubflow.value = false;
+const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Promise<Response>) => {
+  eventsSocket = new WebSocket(`ws://${window.location.host}/ws/v1/workspaces/${store.workspaceId}/flows/${flowId}/events`);
+
+  eventsSocket.onopen = async () => {
+    console.log("Events WebSocket connection opened for flow:", flowId);
+    if (initialFlowPromise) {
+      await initialFlowPromise; // Wait for the main flow data to be fetched if provided
+    }
+    setTimeout(() => {
+      // Send message to subscribe to events for the main flow itself
+      const message = JSON.stringify({parentId: flowId});
+      eventsSocket?.send(message);
+    }, 10);
+  };
+
+  eventsSocket.onmessage = (event) => {
+    try {
+      setShortContent()
+      const flowEvent = JSON.parse(event.data);
+      switch (flowEvent.eventType) {
+        case 'chat_message_delta': {
+          const delta = flowEvent.chatMessageDelta as ChatMessageDelta;
+          const actionIndex = flowActions.value.findIndex(action => action.id === flowEvent.flowActionId);
+          if (actionIndex !== -1) {
+            const action = flowActions.value[actionIndex];
+            const contentBuilder: string[] = [];
+            if (delta.content) contentBuilder.push(delta.content);
+            if (delta.toolCalls) {
+              delta.toolCalls.forEach(toolCall => {
+                if (toolCall.name) contentBuilder.push(`toolName = ${toolCall.name}\n`);
+                if (toolCall.arguments) contentBuilder.push(toolCall.arguments);
+              });
+            }
+            action.actionResult += contentBuilder.join('\n');
+            flowActions.value[actionIndex] = action;
+          } else {
+            console.error(`FlowAction with id ${flowEvent.flowActionId} not found.`);
+          }
+          break;
+        }
+        case 'status_change': {
+          // Check if this status change is for the main flow
+          if (flow.value && flowEvent.parentId === flow.value.id) {
+            flow.value.status = flowEvent.status;
+          } else { // This is a subflow status change
+            const subflowId = flowEvent.parentId;
+            if (subflowId) { // Ensure subflowId is present
+              clearTimeout(subflowStatusUpdateDebounceTimers[subflowId]);
+              subflowStatusUpdateDebounceTimers[subflowId] = setTimeout(() => {
+                const subflowToUpdate = subflowsById.value[subflowId];
+                if (subflowToUpdate) {
+                  subflowToUpdate.status = flowEvent.status; // Update status in our cache
+
+                  if (subflowToUpdate.type === 'follow_dev_plan') {
+                    if (flowEvent.status === SubflowStatus.Started) {
+                      activeFollowDevPlanSubflowIds.value.add(subflowId);
+                    } else if (
+                      flowEvent.status === SubflowStatus.Complete ||
+                      flowEvent.status === SubflowStatus.Failed
+                    ) {
+                      activeFollowDevPlanSubflowIds.value.delete(subflowId);
+                    }
+                  }
+                } else {
+                  // Optional: Log if subflow not found, though it should have been fetched by actionChangesSocket
+                  console.warn(`Received status update for subflow ${subflowId} not found in cache.`);
+                }
+              }, 100);
+            }
+          }
+          break;
+        }
+      }
+    } catch (err) {
+      console.error("Error parsing Events WebSocket message", err);
+    }
+  };
+
+  eventsSocket.onerror = (error) => {
+    console.error("Events WebSocket error observed:", error);
+  };
+
+  eventsSocket.onclose = (event) => {
+    if (eventsSocketClosed) return;
+    console.log("Events WebSocket is closed. Reconnect will be attempted in 1 second.", event.reason);
+    setTimeout(() => {
+      if (!eventsSocketClosed && currentFlowIdForSockets) {
+        connectEventsWebSocketForFlow(currentFlowIdForSockets); // Reconnect, no initialFlowPromise needed
+      }
+    }, 1000);
+  };
+};
+
+const getAndSubscribeSubflowWithDebounce = (subflowId: string, delay: number) => {
+  // Clear existing timer for this subflowId, if any
+  if (subflowProcessingDebounceTimers.value[subflowId]) {
+    clearTimeout(subflowProcessingDebounceTimers.value[subflowId]);
+  }
+
+  subflowProcessingDebounceTimers.value[subflowId] = setTimeout(async () => {
+    try {
+      let subflowData = subflowsById.value[subflowId];
+
+      if (!subflowData) {
+        const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/subflows/${subflowId}`);
+        if (response.ok) {
+          subflowData = (await response.json()).subflow as Subflow;
+          subflowsById.value[subflowId] = subflowData;
+        } else {
+          console.error(`Failed to fetch subflow ${subflowId}: ${response.status}`, await response.text());
+          return
+        }
+      }
+
+      // Ensure subflowData is available before proceeding (either from cache or successful fetch)
+      if (!subflowData) {
+          console.error(`Subflow data for ${subflowId} is still not available after cache check and fetch attempt.`);
+          return
+      }
+      
+      // Send subscription message for the current subflowId
+      eventsSocket?.send(JSON.stringify({ parentId: subflowId }));
+
+      // If there's a parent subflow, process it with a 10ms debounce
+      if (subflowData.parentSubflowId) {
+        getAndSubscribeSubflowWithDebounce(subflowData.parentSubflowId, 10);
+      }
+    } catch (err) {
+      console.error(`Error processing subflow ${subflowId}:`, err);
+    } finally {
+      delete subflowProcessingDebounceTimers.value[subflowId];
+    }
+  }, delay);
+};
+
+const connectActionChangesWebSocketForFlow = (flowId: string) => {
+  actionChangesSocket = new WebSocket(`ws://${window.location.host}/ws/v1/workspaces/${store.workspaceId}/flows/${flowId}/action_changes_ws`);
+
+  actionChangesSocket.onopen = () => {
+    console.log("WebSocket connection opened for flow:", flowId);
+  };
+
+  actionChangesSocket.onmessage = async (event) => {
+    try {
+      const flowAction: FlowAction = JSON.parse(event.data);
+      const index = flowActions.value.findIndex((action) => action.id === flowAction.id);
+
+      // ensure we get subflow
+      if (flowAction.subflowId) {
+        getAndSubscribeSubflowWithDebounce(flowAction.subflowId, 100);
+      }
+
+      // Existing logic for flowAction processing
+      clearTimeout(subscribeStreamDebounceTimers[flowAction.id]);
+      subscribeStreamDebounceTimers[flowAction.id] = setTimeout(() => {
+        let latestFlowAction = flowActions.value.find((action) => action.id === flowAction.id);
+        if (latestFlowAction?.actionStatus === 'started') {
+          // Subscribe to events for the flow action itself (e.g., for chat messages)
+          eventsSocket?.send(JSON.stringify({ parentId: flowAction.id }));
+        }
+        setShortContent();
+      }, 100);
+
+      if (index !== -1) {
+        flowActions.value[index] = flowAction;
+      } else {
+        flowActions.value.push(flowAction);
+      }
+      
+      clearTimeout(subflowTreeDebounceTimer);
+      subflowTreeDebounceTimer = setTimeout(() => {
+        updateSubflowTrees();
+      }, 100);
+    } catch (err) {
+      console.error("Error parsing WebSocket message for action changes", err);
+    }
+  };
+
+  actionChangesSocket.onerror = (error) => {
+    console.error("ActionChanges WebSocket error observed:", error);
+  };
+
+  actionChangesSocket.onclose = (event) => {
+    if (actionChangesSocketClosed) return;
+    console.log("ActionChanges WebSocket is closed. Reconnect will be attempted in 1 second.", event.reason);
+    setTimeout(() => {
+      if (!actionChangesSocketClosed && currentFlowIdForSockets) {
+        connectActionChangesWebSocketForFlow(currentFlowIdForSockets);
+      }
+    }, 1000);
+  };
+};
+
+const setupFlow = async (newFlowId: string | undefined) => {
+  // Close existing WebSockets first
+  if (actionChangesSocket) {
+    actionChangesSocketClosed = true;
+    actionChangesSocket.close();
+    actionChangesSocket = null;
+  }
+  if (eventsSocket) {
+    eventsSocketClosed = true;
+    eventsSocket.close();
+    eventsSocket = null;
+  }
+  actionChangesSocketClosed = false; // Reset for new connections
+  eventsSocketClosed = false;
+  currentFlowIdForSockets = null; // Reset
+
+  if (!newFlowId) {
+    flow.value = null;
+    flowActions.value = [];
+    activeFollowDevPlanSubflowIds.value.clear();
+    subflowsById.value = {};
+    // Clear any pending subflow status update timers
+    Object.keys(subflowStatusUpdateDebounceTimers).forEach(key => {
+      clearTimeout(subflowStatusUpdateDebounceTimers[key]);
+    });
+    subflowStatusUpdateDebounceTimers = {};
+
+    // Clear any pending subflow processing timers
+    Object.values(subflowProcessingDebounceTimers.value).forEach(timerId => clearTimeout(timerId));
+    subflowProcessingDebounceTimers.value = {};
+
+    updateSubflowTrees(); // Clear trees
     return;
   }
 
-  for (const action of flowActions.value) {
-    if (action.actionType === 'follow_dev_plan' && action.subflowId) {
-      try {
-        const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/subflows/${action.subflowId}`);
-        if (response.ok) {
-          const subflow = await response.json() as Subflow;
-          if (subflow.status === SubflowStatus.Started) {
-            isActiveFollowDevPlanSubflow.value = true;
-            return; // Found an active one, no need to check further
-          }
-        } else {
-          console.warn(`Failed to fetch subflow ${action.subflowId}: ${response.status}`);
-        }
-      } catch (err) {
-        console.error(`Error fetching subflow ${action.subflowId}:`, err);
-      }
+  currentFlowIdForSockets = newFlowId;
+
+  // Reset states for the new flow
+  flow.value = null;
+  flowActions.value = [];
+  activeFollowDevPlanSubflowIds.value.clear();
+  subflowsById.value = {};
+  // Clear any pending subflow status update timers
+  Object.keys(subflowStatusUpdateDebounceTimers).forEach(key => {
+    clearTimeout(subflowStatusUpdateDebounceTimers[key]);
+  });
+  subflowStatusUpdateDebounceTimers = {};
+
+  // Clear any pending subflow processing timers
+  Object.values(subflowProcessingDebounceTimers.value).forEach(timerId => clearTimeout(timerId));
+  subflowProcessingDebounceTimers.value = {};
+
+  updateSubflowTrees(); // Clear trees
+
+  const flowPromise = fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${newFlowId}`);
+
+  connectEventsWebSocketForFlow(newFlowId, flowPromise);
+  connectActionChangesWebSocketForFlow(newFlowId);
+
+  try {
+    const response = await flowPromise;
+    if (response.ok) {
+      const flowData = await response.json();
+      flow.value = flowData.flow;
+    } else {
+      console.error(`Failed to fetch flow ${newFlowId}:`, await response.text());
+      flow.value = null;
     }
+  } catch (err) {
+    console.error(`Error fetching flow ${newFlowId}:`, err);
+    flow.value = null;
   }
-  isActiveFollowDevPlanSubflow.value = false; // No active follow_dev_plan subflow found
+  setShortContent();
 };
 
-watch([() => flow.value?.id, flowActions], updateActiveFollowDevPlanStatus, { immediate: true, deep: true });
 
-const triggerNextStep = async () => {
+onMounted(async () => {
+  const initialFlowId = route.params.id as string;
+  if (initialFlowId) {
+    await setupFlow(initialFlowId);
+  }
+  
+  useEventBus('flow-view-collapse').on(() => {
+    shortContent.value = true;
+  });
+});
+
+watch(() => route.params.id, async (newFlowId, oldFlowId) => {
+  if (newFlowId && newFlowId !== oldFlowId && typeof newFlowId === 'string') {
+    await setupFlow(newFlowId);
+  } else if (!newFlowId && oldFlowId) { // Navigating away from a specific flow
+    await setupFlow(undefined);
+  }
+});
+
+const goToNextStep = async () => {
   if (!flow.value) return;
   try {
     const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${flow.value.id}/user_action`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action_type: 'go_next_step' }),
     });
     if (!response.ok) {
-      const errorBody = await response.text();
-      console.error(`Failed to trigger next step: ${response.status}`, errorBody);
-      // TODO: Optionally, provide user feedback here e.g. via a toast notification
+      console.error(`Failed to trigger next step: ${response.status}`, await response.text());
     } else {
       console.log('Next step triggered successfully');
     }
   } catch (err) {
     console.error('Error triggering next step:', err);
-    // TODO: Optionally, provide user feedback here
   }
 };
 
@@ -133,161 +408,12 @@ let setShortContent = () => {
   }, 10)
 }
 
-onMounted(async () => {
-  const flowPromise = fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${route.params.id}`)
-  setShortContent()
-  useEventBus('flow-view-collapse').on(() => {
-    shortContent.value = true
-  })
-
-  // Connect to the new WebSocket for flow events. Note this will replace the flow action changes WebSocket eventually
-  const connectEventsWebSocket = () => {
-    eventsSocket = new WebSocket(`ws://${window.location.host}/ws/v1/workspaces/${store.workspaceId}/flows/${route.params.id}/events`);
-
-    eventsSocket.onopen = async () => {
-      console.log("Events WebSocket connection opened");
-      await flowPromise
-      setTimeout(() => {
-        const message = JSON.stringify({parentId: flow.value?.id});
-        eventsSocket?.send(message);
-      }, 10);
-    };
-
-    eventsSocket.onmessage = (event) => {
-      try {
-        setShortContent()
-        const flowEvent = JSON.parse(event.data);
-        switch (flowEvent.eventType) {
-          case 'chat_message_delta': {
-            const delta = flowEvent.chatMessageDelta as ChatMessageDelta;
-            const actionIndex = flowActions.value.findIndex(action => action.id === flowEvent.flowActionId);
-            if (actionIndex !== -1) {
-              const action = flowActions.value[actionIndex];
-              const contentBuilder: string[] = [];
-
-              if (delta.content) {
-                contentBuilder.push(delta.content);
-              }
-
-              if (delta.toolCalls) {
-                delta.toolCalls.forEach(toolCall => {
-                  if (toolCall.name) {
-                    contentBuilder.push(`toolName = ${toolCall.name}\n`);
-                  }
-                  if (toolCall.arguments) {
-                    contentBuilder.push(toolCall.arguments);
-                  }
-                });
-              }
-
-              action.actionResult += contentBuilder.join('\n');
-              flowActions.value[actionIndex] = action;
-            } else {
-              console.error(`FlowAction with id ${flowEvent.flowActionId} not found.`);
-            }
-          }
-          break
-          case 'status_change': {
-            if (flow.value && flowEvent.parentId == flow.value.id) {
-              flow.value.status = flowEvent.status;
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Error parsing Events WebSocket message", err);
-      }
-    };
-
-    eventsSocket.onerror = (error) => {
-      console.error("Events WebSocket error observed:", error);
-    };
-
-    eventsSocket.onclose = (event) => {
-      if (eventsSocketClosed) {
-        return;
-      }
-      console.log("Events WebSocket is closed. Reconnect will be attempted in 1 second.", event.reason);
-      setTimeout(() => {
-        connectEventsWebSocket();
-      }, 1000);
-    };
-  };
-  connectEventsWebSocket();
-
-  const connectActionChangesWebSocket = () => {
-    console.log("connectWebSocket")
-    actionChangesSocket = new WebSocket(`ws://${window.location.host}/ws/v1/workspaces/${store.workspaceId}/flows/${route.params.id}/action_changes_ws`);
-
-    actionChangesSocket.onopen = () => {
-      console.log("WebSocket connection opened");
-    };
-
-    let subflowTreeDebounceTimer: NodeJS.Timeout;
-    let subscribeStreamDebounceTimers: {[key: string]: NodeJS.Timeout} = {};
-    actionChangesSocket.onmessage = (event) => {
-      try {
-        const flowAction: FlowAction = JSON.parse(event.data);
-        const index = flowActions.value.findIndex((action) => action.id === flowAction.id);
-
-        // get events for this flow action, if status is still "started" after
-        // waiting 100ms (we wait in case a followup action change already
-        // happened but hasn't streamed in yet, telling us it's already
-        // completed)
-        clearTimeout(subscribeStreamDebounceTimers[flowAction.id]);
-        subscribeStreamDebounceTimers[flowAction.id] = setTimeout(() => {
-          let latestFlowAction = flowActions.value.find((action) => action.id === flowAction.id);
-          // started means it's in progress
-          if (latestFlowAction?.actionStatus === 'started') {
-            const message = JSON.stringify({parentId: flowAction.id});
-            eventsSocket?.send(message);
-          }
-          setShortContent()
-        }, 100)
-
-        if (index !== -1) {
-          flowActions.value[index] = flowAction;
-        } else {
-          flowActions.value.push(flowAction);
-        }
-        // Debounce this call for UI updates
-        clearTimeout(subflowTreeDebounceTimer);
-        subflowTreeDebounceTimer = setTimeout(() => {
-          updateSubflowTrees();
-        }, 100);
-      } catch (err) {
-        console.error("Error parsing WebSocket message", err);
-      }
-    };
-
-    actionChangesSocket.onerror = (error) => {
-      console.error("WebSocket error observed:", error);
-      // You might want to attempt reconnection here
-    };
-
-    actionChangesSocket.onclose = (event) => {
-      if (actionChangesSocketClosed) {
-        return;
-      }
-      console.log("WebSocket is closed. Reconnect will be attempted in 1 second.", event.reason);
-      setTimeout(() => {
-        connectActionChangesWebSocket();
-      }, 1000);
-    };
-  };
-
-  connectActionChangesWebSocket();
-
-  const response = await flowPromise
-  flow.value = (await response.json()).flow
-})
-
 const workDir = (worktree: Worktree): string => {
   return `${dataDir}/worktrees/${worktree.workspaceId}/${worktree.name}`
 }
 
 const pauseFlow = async () => {
   if (!flow.value) return
-  
   try {
     await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${flow.value.id}/pause`, {
       method: 'POST',
@@ -298,14 +424,19 @@ const pauseFlow = async () => {
 }
 
 onUnmounted(() => {
-  if (actionChangesSocket !== null) {
-    actionChangesSocketClosed = true
-    actionChangesSocket.close()
+  actionChangesSocketClosed = true; // Prevent reconnects
+  if (actionChangesSocket) {
+    actionChangesSocket.close();
   }
-  if (eventsSocket !== null) {
-    eventsSocketClosed = true
-    eventsSocket.close()
+  eventsSocketClosed = true; // Prevent reconnects
+  if (eventsSocket) {
+    eventsSocket.close();
   }
+  // Clear any pending subflow status update timers on unmount
+  Object.keys(subflowStatusUpdateDebounceTimers).forEach(key => {
+    clearTimeout(subflowStatusUpdateDebounceTimers[key]);
+  });
+  subflowStatusUpdateDebounceTimers = {};
 })
 </script>
 

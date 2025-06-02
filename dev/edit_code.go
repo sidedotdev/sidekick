@@ -47,6 +47,17 @@ func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, cont
 
 editLoop:
 	for {
+		// Handle user request to go to the next step, if versioned feature is active.
+		version := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
+		if version == 1 { // New logic path for "Go Next Step" feature
+			action := dCtx.GlobalState.GetPendingUserAction()
+			if action != nil && *action == UserActionGoNext {
+				// Exit editCodeSubflow immediately as per requirements for "Go Next Step".
+				// The action is not consumed here.
+				return nil
+			}
+		}
+
 		// pause checkpoint
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return fmt.Errorf("failed to make user request when paused: %v", err)
@@ -178,6 +189,17 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	}
 
 	for {
+		// Check for UserActionGoNext and version to potentially skip this step
+		version := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
+		if version == 1 {
+			action := dCtx.GlobalState.GetPendingUserAction()
+			if action != nil && *action == UserActionGoNext {
+				// If UserActionGoNext is pending and version is new, skip authoring edit blocks.
+				// The action is not consumed here; it will be consumed in completeDevStepSubflow.
+				return nil, nil
+			}
+		}
+
 		// pause checkpoint
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return nil, fmt.Errorf("failed to make user request when paused: %v", err)
