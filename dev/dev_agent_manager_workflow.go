@@ -306,7 +306,6 @@ func executeWorkRequest(ctx workflow.Context, workspaceId string, workRequest Wo
 		log.Error("Child workflow failed to start", "Error", err, "WorkflowType", workRequest.FlowType)
 		return domain.Flow{}, err
 	}
-	log.Info("Child workflow started", "WorkflowId", we.ID)
 	flow := domain.Flow{
 		WorkspaceId: workspaceId,
 		Id:          we.ID,
@@ -314,7 +313,7 @@ func executeWorkRequest(ctx workflow.Context, workspaceId string, workRequest Wo
 		Status:      "in_progress",
 		ParentId:    workRequest.ParentId,
 	}
-	log.Info("workflow record: %s\n", utils.PrettyJSON(flow))
+	log.Info("Child workflow started", "WorkflowId", "flow", utils.PrettyJSON(flow))
 	err = workflow.ExecuteActivity(ctx, ima.PutWorkflow, flow).Get(ctx, nil)
 	if err != nil {
 		log.Error("Child workflow record failed to be persisted", "Error", err, "WorkflowId", we.ID)
