@@ -15,6 +15,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// version is the version of the CLI, injected at build time.
+var version string
+
 // For testing
 var osExit = os.Exit
 
@@ -37,23 +40,37 @@ func (p *program) Stop(s system_service.Service) error {
 }
 
 func displayHelp() {
-	fmt.Println("Sidekick - A development tool that helps you manage and monitor your local services")
+	fmt.Println("~ Sidekick (side) is an AI automation tool designed to support software engineers.")
 	fmt.Println("\nAvailable Commands:")
-	fmt.Println("  init    Initialize Sidekick in the current directory")
-	fmt.Println("  start   Start Sidekick services (server and/or worker)")
+	fmt.Println("  init     Initialize Sidekick in the current directory. Must be a root directory or subdirectory within a git repository.")
+	fmt.Println("  start    Start services required to use Sidekick. Starts all services by default, but provides sub-commands to run each service individually.")
+	fmt.Println("  version  Show version information")
+	fmt.Println("  help     Show help information")
 	fmt.Println("\nFlags:")
-	fmt.Println("  -h, --help   Show help information")
+	fmt.Println("  -h, --help     Show help information")
+	fmt.Println("  -v, --version  Show version information")
 	fmt.Println("\nExamples:")
-	fmt.Println("  side init            Initialize Sidekick")
-	fmt.Println("  side start           Start all Sidekick services")
-	fmt.Println("  side start server    Start the Sidekick api server")
-	fmt.Println("  side start worker    Start the Sidekick worker")
+	fmt.Println("  side init           # Initialize Sidekick")
+	fmt.Println("  side start          # Start all Sidekick services")
+	fmt.Println("  side version        # Display version")
+	fmt.Println("  side help           # Display help")
 }
 
 func main() {
 	// Check for help flag before other argument processing
-	if len(os.Args) == 2 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
+	if len(os.Args) == 2 && (os.Args[1] == "help" || os.Args[1] == "--help" || os.Args[1] == "-h") {
 		displayHelp()
+		osExit(0)
+		return
+	}
+
+	// Check for version flag before other argument processing
+	if len(os.Args) == 2 && (os.Args[1] == "version" || os.Args[1] == "-v" || os.Args[1] == "--version") {
+		if version == "" {
+			fmt.Println("Sidekick version: MISSING")
+		} else {
+			fmt.Printf("Sidekick version: %s\n", version)
+		}
 		osExit(0)
 		return
 	}
