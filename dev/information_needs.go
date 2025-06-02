@@ -18,7 +18,7 @@ type InformationNeeds struct {
 var defineInformationNeedsTool = &llm.Tool{
 	Name:        "define_information_needs",
 	Description: "Defines the information needs based on the provided requirements and repository summary.",
-	Parameters:  (&jsonschema.Reflector{ExpandedStruct: true}).Reflect(&InformationNeeds{}),
+	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&InformationNeeds{}),
 }
 
 // TODO /gen use ForceToolCall instead of this function

@@ -768,6 +768,7 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
 		return
 	}
+
 	requestKindString, ok := flowAction.ActionParams["requestKind"].(string)
 	if ok {
 		switch dev.RequestKind(requestKindString) {

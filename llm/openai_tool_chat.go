@@ -22,7 +22,7 @@ type OpenaiToolChat struct {
 }
 
 // implements ToolChat interface
-func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta) (*ChatMessageResponse, error) {
+func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta, progressChan chan<- ProgressInfo) (*ChatMessageResponse, error) {
 	providerNameNormalized := options.Params.ModelConfig.NormalizedProviderName()
 	token, err := options.Secrets.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
 	if err != nil {
@@ -110,7 +110,7 @@ func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		deltaChan <- delta
 		deltas = append(deltas, delta)
 	}
-	message := stitchDeltasToMessage(deltas)
+	message := stitchDeltasToMessage(deltas, false)
 	if message.Role == "" {
 		err := errors.New("chat message role not found")
 		log.Error().Err(err).Interface("deltas", deltas)
@@ -260,7 +260,7 @@ func cleanupDelta(delta ChatMessageDelta) ChatMessageDelta {
 	return delta
 }
 
-func stitchDeltasToMessage(deltas []ChatMessageDelta) ChatMessage {
+func stitchDeltasToMessage(deltas []ChatMessageDelta, idRequired bool) ChatMessage {
 	var contentBuilder strings.Builder
 	var nameBuilder strings.Builder
 	var argsBuilder strings.Builder
@@ -283,15 +283,17 @@ func stitchDeltasToMessage(deltas []ChatMessageDelta) ChatMessage {
 				// we need to build it in parts just like the content.
 
 				// infer if it is a new tool/function call
-				if toolCallDelta.Name != "" || toolCallDelta.Id != "" {
+				if toolCallDelta.Name != "" || (idRequired && toolCallDelta.Id != "") {
 					// confirm we have all the details already (or none)
 					// if we have all, it's a new call, otherwise it isn't
-					lastCallComplete := currentToolCall.Id != "" && currentToolCall.Name != ""
+					lastCallComplete := (!idRequired || currentToolCall.Id != "") && nameBuilder.String() != ""
 					if lastCallComplete {
 						currentToolCall.Name = nameBuilder.String()
 						currentToolCall.Arguments = argsBuilder.String()
 						toolCalls = append(toolCalls, *currentToolCall)
 						currentToolCall = &ToolCall{}
+						nameBuilder.Reset()
+						argsBuilder.Reset()
 					}
 				}
 
@@ -311,11 +313,10 @@ func stitchDeltasToMessage(deltas []ChatMessageDelta) ChatMessage {
 	}
 
 	// Assign the last tool call to the message
-	if currentToolCall.Id != "" {
+	if nameBuilder.String() != "" {
 		currentToolCall.Name = nameBuilder.String()
 		currentToolCall.Arguments = argsBuilder.String()
 		toolCalls = append(toolCalls, *currentToolCall)
-		currentToolCall = &ToolCall{}
 	}
 
 	return ChatMessage{

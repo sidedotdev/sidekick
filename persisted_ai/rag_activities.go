@@ -82,8 +82,8 @@ type RankedSubkeysOptions struct {
 }
 
 func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, error) {
-	oa := OpenAIActivities{Storage: ra.DatabaseAccessor}
-	err := oa.CachedEmbedActivity(context.Background(), OpenAIEmbedActivityOptions{
+	ea := EmbedActivities{Storage: ra.DatabaseAccessor}
+	err := ea.CachedEmbedActivity(context.Background(), CachedEmbedActivityOptions{
 		Secrets:     options.Secrets,
 		WorkspaceId: options.WorkspaceId,
 		ModelConfig: options.ModelConfig,
@@ -100,13 +100,19 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 	if err != nil {
 		return []string{}, err
 	}
-	queryVector, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, []string{options.RankQuery})
+	// TODO /gen/basic cache the queryVector in memory
+	// NOTE: "code_retrieval_query" would be ideal here, but isn't supported by text-embedding-004
+	// TODO: dynamically decide task type based on model name
+	// TODO: change "task type" to instead be "use_case" and we'll map to task
+	// type internally in the embedder implementation
+	queryVector, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, []string{options.RankQuery}, embedding.TaskTypeRetrievalQuery)
 	if err != nil {
 		return []string{}, fmt.Errorf("failed to embed query: %w", err)
 	}
 
 	return va.VectorSearch(VectorSearchActivityOptions{
 		WorkspaceId: options.WorkspaceId,
+		Provider:    options.ModelConfig.Provider,
 		Model:       options.ModelConfig.Model,
 		ContentType: options.ContentType,
 		Subkeys:     options.Subkeys,
@@ -124,6 +130,8 @@ func getEmbedder(config common.ModelConfig) (embedding.Embedder, error) {
 	switch providerType {
 	case llm.OpenaiToolChatProviderType:
 		embedder = &embedding.OpenAIEmbedder{}
+	case llm.GoogleToolChatProviderType:
+		embedder = &embedding.GoogleEmbedder{}
 	case llm.OpenaiCompatibleToolChatProviderType:
 		localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
 		if err != nil {

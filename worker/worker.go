@@ -67,7 +67,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 		TemporalClient: temporalClient,
 	}
 	flowActivities := &flow_action.FlowActivities{Service: service}
-	openAIActivities := &persisted_ai.OpenAIActivities{
+	embedActivities := &persisted_ai.EmbedActivities{
 		Storage: service,
 	}
 	llmActivities := &persisted_ai.LlmActivities{
@@ -134,14 +134,14 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	w.RegisterActivity(git.GetCurrentBranch)
 	w.RegisterActivity(git.GetDefaultBranch)
 	w.RegisterActivity(git.ListLocalBranches)
-	w.RegisterActivity(openAIActivities)
+	w.RegisterActivity(embedActivities)
 	w.RegisterActivity(vectorActivities)
 	w.RegisterActivity(flowActivities)
 
 	w.RegisterActivity(dev.GetRepoConfigActivity)
 	w.RegisterActivity(dev.GetSymbolsActivity)
 	w.RegisterActivity(devManagerActivities)
-	w.RegisterActivity(dev.ApplyEditBlocksActivity) // backcompat for <= v0.4.1
+	w.RegisterActivity(dev.ApplyEditBlocksActivity) // backcompat for <= v0.4.2
 	w.RegisterActivity(devActivities)
 	w.RegisterActivity(dev.ReadFileActivity)
 	w.RegisterActivity(dev.ManageChatHistoryActivity)

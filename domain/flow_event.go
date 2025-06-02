@@ -44,6 +44,7 @@ type FlowEvent interface {
 // for this event is the latest full progress text, eg "Running tests...".
 type ProgressTextEvent struct {
 	Text      string        `json:"text"`
+	Details   string        `json:"details"`
 	EventType FlowEventType `json:"eventType"`
 	// either a FlowAction, Subflow or Flow may be a parent of a ProgressText
 	ParentId string `json:"parentId"`

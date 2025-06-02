@@ -97,13 +97,16 @@ func TestAuthorEditBlockTestSuite(t *testing.T) {
 func (s *AuthorEditBlocksTestSuite) TestInitialCodeInfoNoEditBlocks() {
 	chatHistory := &[]llm.ChatMessage{}
 	var la *persisted_ai.LlmActivities // use a nil struct pointer to call activities that are part of a structure
-	s.env.OnActivity(la.ChatStream, mock.Anything, mock.Anything).Return(
-		&llm.ChatMessageResponse{
-			StopReason: string(openai.FinishReasonStop),
-			ChatMessage: llm.ChatMessage{
-				Content: "No edit blocks",
-			},
+	s.env.OnActivity(la.ChatStream, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		// Simulate progress events being handled
+		opts := args[1].(persisted_ai.ChatStreamOptions)
+		s.NotEmpty(opts.FlowActionId)
+	}).Return(&llm.ChatMessageResponse{
+		StopReason: string(openai.FinishReasonStop),
+		ChatMessage: llm.ChatMessage{
+			Content: "No edit blocks",
 		},
+	},
 		nil,
 	).Once()
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, PromptInfoContainer{

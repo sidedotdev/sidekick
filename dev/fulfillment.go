@@ -15,7 +15,7 @@ import (
 var determineCriteriaFulfillmentTool = llm.Tool{
 	Name:        "determine_criteria_fulfillment",
 	Description: "Determines if the criteria have been met based on the given analysis.",
-	Parameters:  (&jsonschema.Reflector{ExpandedStruct: true}).Reflect(&CriteriaFulfillment{}),
+	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&CriteriaFulfillment{}),
 }
 
 // CriteriaFulfillment represents whether specific criteria have been met

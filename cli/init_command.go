@@ -432,13 +432,14 @@ func ensureAISecrets() ([]string, error) {
 	service := "sidekick"
 	var providers []string
 
-	providerSelection := selection.New("Select your LLM API provider", []string{"Anthropic", "OpenAI"})
+	providerSelection := selection.New("Select your LLM API provider", []string{"Google", "Anthropic", "OpenAI"})
 	provider, err := providerSelection.RunPrompt()
 	if err != nil {
 		return nil, fmt.Errorf("provider selection failed: %w", err)
 	}
 
 	secretNames := map[string]string{
+		"Google":    llm.GoogleApiKeySecretName,
 		"Anthropic": llm.AnthropicApiKeySecretName,
 		"OpenAI":    llm.OpenaiApiKeySecretName,
 	}
