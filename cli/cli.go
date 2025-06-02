@@ -67,9 +67,9 @@ func main() {
 	// Check for version flag before other argument processing
 	if len(os.Args) == 2 && (os.Args[1] == "version" || os.Args[1] == "-v" || os.Args[1] == "--version") {
 		if version == "" {
-			fmt.Println("Sidekick version: MISSING")
+			fmt.Println("sidekick MISSING_VERSION")
 		} else {
-			fmt.Printf("Sidekick version: %s\n", version)
+			fmt.Printf("sidekick %s\n", version)
 		}
 		osExit(0)
 		return
