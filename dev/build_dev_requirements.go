@@ -3,6 +3,7 @@ package dev
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/llm"
@@ -35,16 +36,26 @@ type DevRequirements struct {
 //	//Priority    string `json:"priority" jsonschema:"enum=P0,enum=P1,enum=P2,description=P0: non-negotiable i.e. must be done\\, P1: not blocking if it's hard to achieve\\, P2: nice to have"`
 //}
 
+var markdownListPattern = regexp.MustCompile(`^\s*(-|\d+\.|[a-z]\.|[iv]+\.)\s+`)
+
 func (r DevRequirements) String() string {
 	var criteria string
 	var learnings string
 	for _, ac := range r.AcceptanceCriteria {
-		criteria += fmt.Sprintf("- %s\n", ac)
+		if markdownListPattern.MatchString(ac) {
+			criteria += fmt.Sprintf("%s\n", ac)
+		} else {
+			criteria += fmt.Sprintf("- %s\n", ac)
+		}
 	}
 	for _, learning := range r.Learnings {
-		learnings += fmt.Sprintf("- %s\n", learning)
+		if markdownListPattern.MatchString(learning) {
+			learnings += fmt.Sprintf("%s\n", learning)
+		} else {
+			learnings += fmt.Sprintf("- %s\n", learning)
+		}
 	}
-	return fmt.Sprintf("Overview: %s\n\nAcceptance Criteria:\n%s\n\nLearnings:\n%s", r.Overview, criteria, learnings)
+	return fmt.Sprintf("#### Overview:\n%s\n\n#### Acceptance Criteria:\n%s\n\n#### Learnings:\n%s", r.Overview, criteria, learnings)
 }
 
 type buildDevRequirementsState struct {

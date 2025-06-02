@@ -74,8 +74,14 @@ func (step DevStep) String() string {
 	writer := &strings.Builder{}
 	level := len(strings.Split(step.StepNumber, ".")) - 1
 	writer.WriteString(strings.Repeat("  ", level))
-	writer.WriteString(step.StepNumber)
-	writer.WriteString(") ")
+	if level == 0 {
+		writer.WriteString("#### Step ")
+		writer.WriteString(step.StepNumber)
+		writer.WriteString(": ")
+	} else {
+		writer.WriteString(step.StepNumber)
+		writer.WriteString(". ")
+	}
 	writer.WriteString(step.Title)
 	writer.WriteString("\n")
 	writer.WriteString(strings.ReplaceAll(strings.Trim(step.Definition, "\n"), "\n", "\n"+strings.Repeat("  ", level+1)))
