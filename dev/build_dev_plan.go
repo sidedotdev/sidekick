@@ -25,7 +25,7 @@ type buildDevPlanState struct {
 var recordDevPlanTool = llm.Tool{
 	Name:        "record_dev_plan",
 	Description: "Records a step-by-step software development plan to fulfill the specified requirements.",
-	Parameters:  (&jsonschema.Reflector{ExpandedStruct: true}).Reflect(&DevPlan{}),
+	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&DevPlan{}),
 }
 
 type DevPlan struct {

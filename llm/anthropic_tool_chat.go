@@ -25,7 +25,7 @@ const AnthropicApiKeySecretName = "ANTHROPIC_API_KEY"
 
 type AnthropicToolChat struct{}
 
-func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta) (*ChatMessageResponse, error) {
+func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta, progressChan chan<- ProgressInfo) (*ChatMessageResponse, error) {
 	token, err := options.Secrets.SecretManager.GetSecret(AnthropicApiKeySecretName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Anthropic API key: %w", err)

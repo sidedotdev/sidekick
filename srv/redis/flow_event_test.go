@@ -63,6 +63,7 @@ func TestAddProgressTextFlowEvent(t *testing.T) {
 		EventType: domain.ProgressTextEventType,
 		ParentId:  "parentId",
 		Text:      "Test Flow Event",
+		Details:   "Additional test details",
 	}
 
 	err := db.AddFlowEvent(context.Background(), workspaceId, flowId, flowEvent)
