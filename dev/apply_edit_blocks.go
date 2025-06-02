@@ -527,11 +527,19 @@ func ApplyAppendEditBlock(block EditBlock, baseDir string) (ApplyEditBlockReport
 // TODO /gen write tests for this
 func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]ApplyEditBlockReport, error) {
 	actionParams := map[string]interface{}{
-		"editBlocks": editBlocks,
+		// visible stuff is very verbose, so we leave it out of the flow events.
+		// they are very necessary in the activity though.
+		"editBlocks": utils.Map(editBlocks, func (block EditBlock) EditBlock {
+			block.VisibleCodeBlocks = []tree_sitter.CodeBlock{}
+			block.VisibleFileRanges = []FileRange{}
+			return block
+		}),
 	}
 	actionCtx := dCtx.NewActionContext("Apply Edit Blocks")
 	actionCtx.ActionParams = actionParams
-	reports, err := Track(actionCtx, func(flowAction domain.FlowAction) ([]ApplyEditBlockReport, error) {
+
+	var fullReports []ApplyEditBlockReport
+	_, err := Track(actionCtx, func(flowAction domain.FlowAction) ([]ApplyEditBlockReport, error) {
 		validEditBlocks, invalidReports := validateEditBlocks(editBlocks)
 
 		enabledFlags := make([]string, 0)
@@ -557,9 +565,20 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		sort.Slice(reports, func(i, j int) bool {
 			return reports[i].OriginalEditBlock.SequenceNumber < reports[j].OriginalEditBlock.SequenceNumber
 		})
-		return reports, nil
+
+		// visible stuff is very verbose, so we leave it out of the flow events,
+		// which are automatically using the returned value, so we side-step
+		// that here via the variable outside the closure.
+		fullReports = reports
+		trackedReports := utils.Map(reports, func (report ApplyEditBlockReport) ApplyEditBlockReport {
+			report.OriginalEditBlock.VisibleCodeBlocks = []tree_sitter.CodeBlock{}
+			report.OriginalEditBlock.VisibleFileRanges = []FileRange{}
+			return report
+		})
+		return trackedReports, nil
 	})
-	return reports, err
+
+	return fullReports, err
 }
 
 func validateEditBlocks(editBlocks []EditBlock) (validEditBlocks []EditBlock, invalidReports []ApplyEditBlockReport) {
