@@ -173,6 +173,17 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	}
 
 	for {
+		// Check for UserActionGoNext and version to potentially skip this step
+		version := workflow.GetVersion(dCtx, "userActionGoNextStepV1", workflow.DefaultVersion, 1)
+		if version == 1 {
+			action := dCtx.GlobalState.GetPendingUserAction()
+			if action != nil && *action == UserActionGoNext {
+				// If UserActionGoNext is pending and version is new, skip authoring edit blocks.
+				// The action is not consumed here; it will be consumed in completeDevStepSubflow.
+				return nil, nil
+			}
+		}
+
 		// pause checkpoint
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return nil, fmt.Errorf("failed to make user request when paused: %v", err)
