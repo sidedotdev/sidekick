@@ -150,9 +150,20 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
 	ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, maxLength)
 
-	chatResponse, err := generateDevPlan(iteration.ExecCtx, iteration.ChatHistory)
+	var chatResponse *llm.ChatMessageResponse
+	var err error
+	if v := workflow.GetVersion(iteration.ExecCtx, "dev-plan-cleanup-cancel-internally", workflow.DefaultVersion, 1); v == 1 {
+		chatResponse, err = generateDevPlan(iteration.ExecCtx, iteration.ChatHistory)
+	} else {
+		// old version: new one does this in outer LlmLoop
+		chatCtx := iteration.ExecCtx.WithCancelOnPause()
+		chatResponse, err = generateDevPlan(chatCtx, iteration.ChatHistory)
+		if iteration.ExecCtx.GlobalState != nil && iteration.ExecCtx.GlobalState.Paused {
+				return nil, nil // continue the loop: UserRequestIfPaused will handle the pause
+		}
+	}
 	if err != nil {
-		return nil, fmt.Errorf("error executing OpenAI chat completion activity: %w", err)
+		return nil, fmt.Errorf("error generating dev plan: %w", err)
 	}
 
 	*iteration.ChatHistory = append(*iteration.ChatHistory, chatResponse.ChatMessage)

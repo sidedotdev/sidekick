@@ -100,7 +100,18 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
 	ManageChatHistory(iteration.ExecCtx.Context, iteration.ChatHistory, maxLength)
 
-	chatResponse, err := generateDevRequirements(iteration.ExecCtx, iteration.ChatHistory)
+	var chatResponse *llm.ChatMessageResponse
+	var err error
+	if v := workflow.GetVersion(iteration.ExecCtx, "dev-requirements-cleanup-cancel-internally", workflow.DefaultVersion, 1); v == 1 {
+		chatResponse, err = generateDevRequirements(iteration.ExecCtx, iteration.ChatHistory)
+	} else {
+		// old version: new one does this in outer LlmLoop
+		chatCtx := iteration.ExecCtx.WithCancelOnPause()
+		chatResponse, err = generateDevRequirements(chatCtx, iteration.ChatHistory)
+		if iteration.ExecCtx.GlobalState != nil && iteration.ExecCtx.GlobalState.Paused {
+			return nil, nil // continue the loop: UserRequestIfPaused will handle the pause
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

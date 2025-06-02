@@ -95,29 +95,32 @@ editLoop:
 			promptInfo = FeedbackInfo{Feedback: feedback}
 			attemptCount++
 		} else {
-			anyApplied := false
-			for _, report := range reports {
-				if report.DidApply {
-					anyApplied = true
-				}
-			}
-
-			if anyApplied {
-				// emit event with the git diff after any successful edits
-				diff, err := git.GitDiff(dCtx.ExecContext)
-				if err != nil {
-					return fmt.Errorf("failed to get git diff after edits: %v", err)
+			v := workflow.GetVersion(dCtx, "edit_code_diff", workflow.DefaultVersion, 1)
+			diff_enabled := false // TODO remove this later
+			if v == 1 && diff_enabled {
+				anyApplied := false
+				for _, report := range reports {
+					if report.DidApply {
+						anyApplied = true
+					}
 				}
 
-				subflow := dCtx.FlowScope.Subflow
-				var srvActivities *srv.Activities
-				err = workflow.ExecuteActivity(dCtx, srvActivities.AddFlowEvent, dCtx.WorkspaceId, subflow.FlowId, &domain.CodeDiffEvent{
-					EventType: domain.CodeDiffEventType,
-					SubflowId: subflow.Id,
-					Diff:      diff,
-				}).Get(dCtx, nil)
-				if err != nil {
-					return fmt.Errorf("failed to emit code diff event: %v", err)
+				if anyApplied {
+					// emit event with the git diff after any successful edits
+					diff, err := git.GitDiff(dCtx.ExecContext)
+					if err != nil {
+						return fmt.Errorf("failed to get git diff after edits: %v", err)
+					}
+
+					subflow := dCtx.FlowScope.Subflow
+					err = workflow.ExecuteActivity(dCtx, srv.Activities.AddFlowEvent, dCtx.WorkspaceId, subflow.FlowId, domain.CodeDiffEvent{
+						EventType: domain.CodeDiffEventType,
+						SubflowId: subflow.Id,
+						Diff:      diff,
+					}).Get(dCtx, nil)
+					if err != nil {
+						return fmt.Errorf("failed to emit code diff event: %v", err)
+					}
 				}
 			}
 
@@ -326,7 +329,6 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 		skip = true
 	case FeedbackInfo:
 		content = renderAuthorEditBlockFeedbackPrompt(info.Feedback)
-		fmt.Printf("\n%s\n", info.Feedback) // someone looking at worker logs can see what's going on this way
 	case ToolCallResponseInfo:
 		role = llm.ChatMessageRoleTool
 		content = info.Response
