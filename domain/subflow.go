@@ -5,9 +5,9 @@ import "context"
 type SubflowStatus string
 
 const (
-	SubflowStatusStarted    SubflowStatus = "started" // this more-or-less means "in-progress"
-	SubflowStatusComplete   SubflowStatus = "complete"
-	SubflowStatusFailed     SubflowStatus = "failed"
+	SubflowStatusStarted  SubflowStatus = "started" // this more-or-less means "in-progress"
+	SubflowStatusComplete SubflowStatus = "complete"
+	SubflowStatusFailed   SubflowStatus = "failed"
 )
 
 // Subflow represents a subflow within a flow

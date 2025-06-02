@@ -165,7 +165,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 		chatCtx := iteration.ExecCtx.WithCancelOnPause()
 		chatResponse, err = generateDevPlan(chatCtx, iteration.ChatHistory)
 		if iteration.ExecCtx.GlobalState != nil && iteration.ExecCtx.GlobalState.Paused {
-				return nil, nil // continue the loop: UserRequestIfPaused will handle the pause
+			return nil, nil // continue the loop: UserRequestIfPaused will handle the pause
 		}
 	}
 	if err != nil {

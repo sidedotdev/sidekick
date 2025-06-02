@@ -171,7 +171,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		// Create a feature branch and worktree
 		branchName := "feature-cleanup-test"
 		runGitCommandInTestRepo(t, repoDir, "branch", branchName)
-		
+
 		wtDirRelative := "../worktree-cleanup-test"
 		wtDir := filepath.Join(filepath.Dir(repoDir), "worktree-cleanup-test")
 		_ = os.RemoveAll(wtDir) // Clean up potential leftovers
@@ -224,7 +224,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 	t.Run("Non-existent Branch", func(t *testing.T) {
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit")
-		
+
 		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
