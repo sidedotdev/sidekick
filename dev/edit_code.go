@@ -46,6 +46,17 @@ func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, cont
 
 editLoop:
 	for {
+		// Handle user request to go to the next step, if versioned feature is active.
+		version := workflow.GetVersion(dCtx, "userActionGoNextStepV1", workflow.DefaultVersion, 1)
+		if version == 1 { // New logic path for "Go Next Step" feature
+			action := dCtx.GlobalState.GetPendingUserAction()
+			if action != nil && *action == UserActionGoNext {
+				// Exit editCodeSubflow immediately as per requirements for "Go Next Step".
+				// The action is not consumed here.
+				return nil
+			}
+		}
+
 		// pause checkpoint
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return fmt.Errorf("failed to make user request when paused: %v", err)
