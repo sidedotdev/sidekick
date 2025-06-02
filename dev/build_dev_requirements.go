@@ -197,11 +197,11 @@ func generateDevRequirements(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*
 			ModelConfig: modelConfig,
 		},
 	}
-	return TrackedToolChat(dCtx, "Generate Dev Requirements", options)
+	return TrackedToolChat(dCtx, "dev_requirements", options)
 }
 
-func TrackedToolChat(dCtx DevContext, actionName string, options llm.ToolChatOptions) (*llm.ChatMessageResponse, error) {
-	actionCtx := dCtx.NewActionContext(actionName)
+func TrackedToolChat(dCtx DevContext, actionType string, options llm.ToolChatOptions) (*llm.ChatMessageResponse, error) {
+	actionCtx := dCtx.NewActionContext("generate." + actionType)
 	actionCtx.ActionParams = options.ActionParams()
 	return Track(actionCtx, func(flowAction domain.FlowAction) (*llm.ChatMessageResponse, error) {
 		if options.Params.Provider == "" {
@@ -216,10 +216,9 @@ func TrackedToolChat(dCtx DevContext, actionName string, options llm.ToolChatOpt
 		}
 		var chatResponse llm.ChatMessageResponse
 		var la *persisted_ai.LlmActivities // use a nil struct pointer to call activities that are part of a structure
-
 		err := workflow.ExecuteActivity(utils.LlmHeartbeatCtx(dCtx), la.ChatStream, chatStreamOptions).Get(dCtx, &chatResponse)
 		if err != nil {
-			return nil, fmt.Errorf("error during tracked tool chat action '%s': %v", actionName, err)
+			return nil, fmt.Errorf("error during tracked tool chat action '%s': %v", actionType, err)
 		}
 
 		return &chatResponse, nil
@@ -274,8 +273,7 @@ func ApproveDevRequirements(dCtx DevContext, devReq DevRequirements) (*UserRespo
 		Content:       "Please approve or reject these requirements:\n\n" + devReq.String() + "\n\nDo you approve these requirements? If not, please provide feedback on what needs to be changed.",
 		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
 	}
-	actionCtx := dCtx.NewActionContext("Approve Dev Requirements")
-	return GetUserApproval(actionCtx, req.Content, req.RequestParams)
+	return GetUserApproval(dCtx, "dev_requirements", req.Content, req.RequestParams)
 }
 
 // TODO we should determine if the context is too large programmatically instead

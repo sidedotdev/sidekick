@@ -27,8 +27,7 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 	approvalPrompt := "Allow running the following command?"
 
 	// Get user approval
-	actionCtx := dCtx.NewActionContext("Approve Command")
-	userResponse, err := GetUserApproval(actionCtx, approvalPrompt, map[string]any{
+	userResponse, err := GetUserApproval(dCtx, "run_command", approvalPrompt, map[string]any{
 		"command":    params.Command,
 		"workingDir": params.WorkingDir,
 	})

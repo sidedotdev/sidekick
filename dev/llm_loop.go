@@ -79,7 +79,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 		// Use WithCancelOnPause for long-running operations, ensuring a fresh context for each iteration.
 		iteration.ExecCtx = dCtx.WithCancelOnPause()
 
-		v := workflow.GetVersion(dCtx, "no-max-unless-diabled-human", workflow.DefaultVersion, 1)
+		v := workflow.GetVersion(dCtx, "no-max-unless-disabled-human", workflow.DefaultVersion, 1)
 		if iteration.Num > config.maxIterations && (v == 0 || dCtx.RepoConfig.DisableHumanInTheLoop) {
 			return nil, ErrMaxAttemptsReached
 		}

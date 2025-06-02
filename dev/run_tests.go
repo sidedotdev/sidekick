@@ -36,7 +36,7 @@ func RunTests(dCtx DevContext) (TestResult, error) {
 		"testCommands": repoConfig.TestCommands,
 	}
 
-	actionCtx := dCtx.NewActionContext("Run Tests")
+	actionCtx := dCtx.NewActionContext("run_tests")
 	actionCtx.ActionParams = actionParams
 	testResults, err := Track(actionCtx, func(flowAction domain.FlowAction) ([]TestResult, error) {
 		// execute all test commands in parallel
@@ -180,7 +180,7 @@ test output, no more, no less.
 			ModelConfig: modelConfig,
 		}),
 	}
-	chatResponse, err := TrackedToolChat(dCtx, "Summarize Tests", toolChatOptions)
+	chatResponse, err := TrackedToolChat(dCtx, "summarize_tests", toolChatOptions)
 	if err != nil {
 		return "", err
 	}

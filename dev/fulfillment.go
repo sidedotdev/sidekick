@@ -66,7 +66,7 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 	attempts := 0
 	for {
 		// TODO /gen test this, assert it calls the right tool via mock of chat stream method
-		actionCtx := dCtx.ExecContext.NewActionContext("Check Criteria Fulfillment")
+		actionCtx := dCtx.ExecContext.NewActionContext("check_criteria_fulfillment")
 		chatResponse, err := persisted_ai.ForceToolCall(actionCtx, dCtx.LLMConfig, &params, &determineCriteriaFulfillmentTool)
 		*chatHistory = params.Messages // update chat history with the new messages
 		if err != nil {

@@ -60,7 +60,9 @@ type UserResponse struct {
 	Params           map[string]interface{}
 }
 
-func GetUserApproval(actionCtx DevActionContext, approvalPrompt string, requestParams map[string]interface{}) (*UserResponse, error) {
+func GetUserApproval(dCtx DevContext, approvalType, approvalPrompt string, requestParams map[string]interface{}) (*UserResponse, error) {
+	actionType := "approve." + approvalType
+	actionCtx := dCtx.NewActionContext("user_request." + actionType)
 	if actionCtx.RepoConfig.DisableHumanInTheLoop {
 		// auto-approve for now if humans are not in the loop
 		// TODO: add a self-review process in this case
@@ -91,7 +93,8 @@ func GetUserApproval(actionCtx DevActionContext, approvalPrompt string, requestP
 	*/
 }
 
-func GetUserMergeApproval(actionCtx DevActionContext, approvalPrompt string, requestParams map[string]interface{}) (MergeApprovalResponse, error) {
+func GetUserMergeApproval(dCtx DevContext, approvalPrompt string, requestParams map[string]interface{}) (MergeApprovalResponse, error) {
+	actionCtx := dCtx.NewActionContext("user_request.approve.merge")
 	if actionCtx.RepoConfig.DisableHumanInTheLoop {
 		// auto-approve for now if humans are not in the loop
 		// TODO: add a self-review process in this case
@@ -232,7 +235,7 @@ would mean to apply it to your current situation.
 		RequestParams:    requestParams,
 	}
 
-	actionCtx := dCtx.NewActionContext("Get User Guidance")
+	actionCtx := dCtx.NewActionContext("user_request.guidance")
 	actionCtx.ActionParams = guidanceRequest.ActionParams()
 
 	// Ensure tracking of the flow action within the guidance request

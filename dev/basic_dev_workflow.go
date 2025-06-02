@@ -344,8 +344,7 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, gitDiff string) (Me
 		Diff:                gitDiff,
 	}
 
-	actionCtx := dCtx.NewActionContext("user_request.approve_merge")
-	return GetUserMergeApproval(actionCtx, "Please approve before we merge", map[string]any{
+	return GetUserMergeApproval(dCtx, "Please approve before we merge", map[string]any{
 		"mergeApprovalInfo": mergeParams,
 	})
 }

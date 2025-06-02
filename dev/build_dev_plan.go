@@ -292,7 +292,7 @@ func generateDevPlan(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*llm.Chat
 		},
 	}
 
-	return TrackedToolChat(dCtx, "Generate Dev Plan", chatOptions)
+	return TrackedToolChat(dCtx, "dev_plan", chatOptions)
 }
 
 // TODO we should determine if the code context is too large programmatically
@@ -319,8 +319,7 @@ func ApproveDevPlan(dCtx DevContext, devPlan DevPlan) (*UserResponse, error) {
 		Content:       "Please approve or reject the development plan:\n\n" + devPlan.String() + "\n\nDo you approve this plan? If not, please provide feedback on what needs to be changed.",
 		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
 	}
-	actionCtx := dCtx.NewActionContext("Approve Dev Plan")
-	return GetUserApproval(actionCtx, req.Content, req.RequestParams)
+	return GetUserApproval(dCtx, "dev_plan", req.Content, req.RequestParams)
 }
 
 // List out all conditions/requirements in the following instructions. Then

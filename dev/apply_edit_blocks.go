@@ -32,6 +32,7 @@ type DevActivities struct {
 	LSPActivities *lsp.LSPActivities
 }
 
+
 type ApplyEditBlockReport struct {
 	OriginalEditBlock EditBlock `json:"originalEditBlock"`
 
@@ -535,7 +536,7 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 			return block
 		}),
 	}
-	actionCtx := dCtx.NewActionContext("Apply Edit Blocks")
+	actionCtx := dCtx.NewActionContext("apply_edit_blocks")
 	actionCtx.ActionParams = actionParams
 
 	var fullReports []ApplyEditBlockReport

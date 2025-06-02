@@ -98,18 +98,27 @@ const actionHeading = computed(() => {
       } else {
         return 'AI Asked For Your Input';
       }
+    case 'user_request.paused':
+      if (props.flowAction.actionStatus === 'complete') {
+        return 'Human Input';
+      } else {
+        return 'Paused';
+      }
     case 'user_request.approve_merge':
-      return 'Approve Merge';
+    case 'user_request.approve.merge':
+      return 'Review Changes';
+    case 'Approve Dev Requirements':
+    case 'user_request.approve.dev_requirements':
+        return 'Review Requirements';
+    case 'user_request.approve.dev_plan':
+        return 'Review Plan';
     case "Get User Guidance":
-    case "user_guidance":
+    case "user_request.guidance":
       if (props.flowAction.actionStatus === 'complete') {
         return 'Human Guidance';
       } else {
         return 'Too Many Iterations: AI Needs Your Help';
       }
-    case 'Approve Dev Requirements':
-    case 'approve_dev_requirements':
-        return 'Human Review';
     case 'Generate Dev Requirements':
     case 'generate.dev_requirements':
       return 'Generate Requirements'
@@ -164,9 +173,13 @@ const actionSpecificComponent = computed(() => {
     case 'run_tests':
       return RunTestsFlowAction
     default:
-      if (props.flowAction.isHumanAction) {
+      if (props.flowAction.isHumanAction || /^user_request\./.test(props.flowAction.actionType)) {
         return UserRequest
       }
+      if (/^generate\./.test(props.flowAction.actionType)) {
+        return ChatCompletionFlowAction
+      }
+      // legacy support for chat completion flow actions with actionType not prefixed with "generate."
       if (props.flowAction.actionParams?.messages && Object.prototype.hasOwnProperty.call(props.flowAction.actionParams, 'temperature')) {
         return ChatCompletionFlowAction
       }
