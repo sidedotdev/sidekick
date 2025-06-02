@@ -115,7 +115,7 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 			deltaChan <- *delta
 			deltas = append(deltas, *delta)
 		} else {
-			log.Debug().Msgf("did not convert result to delta for %s tool chat stream: %s", providerName , utils.PrettyJSON(result))
+			log.Debug().Msgf("did not convert result to delta for %s tool chat stream: %s", providerName, utils.PrettyJSON(result))
 		}
 		if progress != nil && progressChan != nil {
 			progressChan <- *progress

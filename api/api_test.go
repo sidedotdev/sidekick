@@ -489,11 +489,11 @@ func TestCompleteFlowActionHandler(t *testing.T) {
 
 	// Create a flow action associated with the flow
 	flowAction := domain.FlowAction{
-		WorkspaceId:      workspaceId,
-		FlowId:           flow.Id,
-		Id:               "flow_action_1",
-		ActionStatus:     domain.ActionStatusPending,
-		ActionType:       "anything",
+		WorkspaceId:  workspaceId,
+		FlowId:       flow.Id,
+		Id:           "flow_action_1",
+		ActionStatus: domain.ActionStatusPending,
+		ActionType:   "anything",
 		ActionParams: map[string]interface{}{
 			"requestKind": dev.RequestKindFreeForm, // requires non-empty content in user response
 		},
@@ -711,11 +711,11 @@ func TestCompleteFlowActionHandler_FreeFormButEmptyResponseContent(t *testing.T)
 
 	workspaceId := "ws_1"
 	flowAction := domain.FlowAction{
-		WorkspaceId:      workspaceId,
-		FlowId:           "flow_1",
-		Id:               "flow_action_1",
-		ActionStatus:     domain.ActionStatusPending,
-		ActionType:       "user_request",
+		WorkspaceId:  workspaceId,
+		FlowId:       "flow_1",
+		Id:           "flow_action_1",
+		ActionStatus: domain.ActionStatusPending,
+		ActionType:   "user_request",
 		ActionParams: map[string]interface{}{
 			"requestKind": dev.RequestKindFreeForm, // requires non-empty content in user response
 		},
