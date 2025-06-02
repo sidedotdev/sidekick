@@ -246,33 +246,15 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		}
 		*chatHistory = append(*chatHistory, chatResponse.ChatMessage)
 
-		currentExtractedBlocks, err := ExtractEditBlocks(chatResponse.ChatMessage.Content)
+		currentExtractedBlocks, err := ExtractEditBlocksWithVisibility(chatResponse.ChatMessage.Content, *chatHistory)
 		if err != nil {
 			return []EditBlock{}, fmt.Errorf("failed to extract edit blocks: %v", err)
 		}
 		if len(currentExtractedBlocks) > 0 {
 			attemptsSinceLastEditBlockOrFeedback = 0
 		}
-		visibleCodeBlocks := extractAllCodeBlocks(authorEditBlockInput.Params.Messages)
 		for _, block := range currentExtractedBlocks {
-			// these file ranges visible now, but might not be later after we
-			// ManageChatHistory, so we need to track visibility right now, at
-			// the point the edit block is first authored. We also track it per
-			// Remove GetRepoConfig as it is already set
-			// visibility
-			block.VisibleCodeBlocks = utils.Filter(visibleCodeBlocks, func(cb tree_sitter.CodeBlock) bool {
-				return cb.FilePath == block.FilePath
-			})
-			block.VisibleFileRanges = codeBlocksToMergedFileRanges(block.FilePath, visibleCodeBlocks)
-
-			// TODO /gen/req add one more visible code block (won't have
-			// corresponding visible file range) that is based all on the
-			// content in the first message, so if the first message has code in
-			// it, we can use that code directly. We'll still force the LLM to
-			// look up the file, but the error will say that nothing matches in
-			// the file, vs it not being in the chat context (which it is)
-
-			extractedEditBlocks = append(extractedEditBlocks, *block)
+			extractedEditBlocks = append(extractedEditBlocks, block)
 		}
 
 		if len(chatResponse.ToolCalls) > 0 && chatResponse.ToolCalls[0].Name != "" {
