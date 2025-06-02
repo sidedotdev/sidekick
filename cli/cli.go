@@ -44,10 +44,10 @@ func displayHelp() {
 	fmt.Println("\nFlags:")
 	fmt.Println("  -h, --help   Show help information")
 	fmt.Println("\nExamples:")
-	fmt.Println("  side init              Initialize Sidekick")
-	fmt.Println("  side start             Start all Sidekick services")
-	fmt.Println("  side start --server    Start only the Sidekick server")
-	fmt.Println("  side start --worker    Start only the Sidekick worker")
+	fmt.Println("  side init            Initialize Sidekick")
+	fmt.Println("  side start           Start all Sidekick services")
+	fmt.Println("  side start server    Start the Sidekick api server")
+	fmt.Println("  side start worker    Start the Sidekick worker")
 }
 
 func main() {
