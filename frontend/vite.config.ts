@@ -34,7 +34,12 @@ export default defineConfig({
     }
   },
   build: {
-      chunkSizeWarningLimit: 1600,
+    // Note: most of this is from the syntax-highlighting for diffs, which
+    // likely can be optimized a whole lot as it appears to be included multiple
+    // times (not 100% sure)
+    // TODO /gen/req/plan optimize the frontend total build size (don't care
+    // about chunking just yet)
+    chunkSizeWarningLimit: 2048,
   },
   test: {
     onConsoleLog(log: string, type: 'stdout' | 'stderr'): false | void {
