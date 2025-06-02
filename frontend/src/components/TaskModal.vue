@@ -1,6 +1,6 @@
 <template>
   <div class="overlay" @click="safeClose"></div>
-  <div class="modal" @click.stop>
+  <div class="modal">
     <h2>{{ isEditMode ? 'Edit Task' : 'New Task' }}</h2>
     <form @submit.prevent="submitTask">
       <div>
@@ -11,14 +11,29 @@
         <label>Workdir</label>
         <SegmentedControl v-model="envType" :options="envTypeOptions" />
       </div>
+
+      <!-- Branch Selection -->
+      <div v-if="envType === 'local_git_worktree'" style="display: flex;">
+        <label for="startBranch">Start Branch</label>
+        <BranchSelector
+          id="startBranch"
+          v-model="selectedBranch"
+          :workspaceId="workspaceId"
+        />
+      </div>
+
       <label>
         <input type="checkbox" v-model="determineRequirements" />
         Determine Requirements
       </label>
+
       <div>
         <AutogrowTextarea id="description" v-model="description" placeholder="Task description - the more detail, the better" />
       </div>
-      <!--AutogrowTextarea v-if="task.flowType === 'planned_dev'" v-model="planningPrompt" placeholder="Planning prompt" /-->
+      <div v-if="devMode && flowType === 'planned_dev'">
+        <label>Planning Prompt</label>
+        <AutogrowTextarea v-model="planningPrompt" />
+      </div>
       <div class="button-container">
         <Button class="cancel" label="Cancel" severity="secondary" @click="close"/>
         <SplitButton 
@@ -33,11 +48,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import AutogrowTextarea from './AutogrowTextarea.vue'
 import SplitButton from 'primevue/splitbutton'
 import Button from 'primevue/button';
 import SegmentedControl from './SegmentedControl.vue'
+import BranchSelector from './BranchSelector.vue'
 import { store } from '../lib/store'
 import type { Task, TaskStatus } from '../lib/models'
 
@@ -57,9 +73,12 @@ const isEditMode = computed(() => !!props.task?.id)
 const description = ref(props.task?.description || '')
 const status = ref<TaskStatus>(props.task?.status || 'to_do')
 const flowType = ref(props.task?.flowType || localStorage.getItem('lastUsedFlowType') || 'basic_dev')
-const envType = ref(props.task?.flowOptions?.envType || localStorage.getItem('lastUsedEnvType') || 'local')
-const determineRequirements = ref(props.task?.flowOptions?.determineRequirements || true)
+const envType = ref<string>(props.task?.flowOptions?.envType || localStorage.getItem('lastUsedEnvType') || 'local')
+const determineRequirements = ref<boolean>(props.task?.flowOptions?.determineRequirements ?? true)
 const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
+const selectedBranch = ref<string | null>(props.task?.flowOptions?.startBranch || null)
+const workspaceId = ref<string>(props.task?.workspaceId || store.workspaceId as string)
+
 
 const dropdownOptions = [
   {
@@ -84,14 +103,32 @@ const envTypeOptions = [
 
 const handleStatusSelect = (value: string) => {
   status.value = value as TaskStatus
+  submitTask()
 }
 
+// Watch for changes in envType to manage branch selection
+watch(envType, (newEnvType, oldEnvType) => {
+  if (oldEnvType === 'local_git_worktree') {
+    selectedBranch.value = null; // Reset selection when switching away
+  }
+});
+
+
 const submitTask = async () => {
-  const flowOptions = {
+  const flowOptions: Record<string, any> = { // Use Record for dynamic keys
     planningPrompt: planningPrompt.value,
     determineRequirements: determineRequirements.value,
-    envType: envType.value
+    envType: envType.value,
+    // Add startBranch only if envType is local_git_worktree and a branch is selected
+    startBranch: envType.value === 'local_git_worktree' ? (selectedBranch.value || null) : null,
   }
+
+  // Remove null/empty values from flowOptions if needed by backend
+  Object.keys(flowOptions).forEach(key => {
+    if (flowOptions[key] === null || flowOptions[key] === '') {
+      delete flowOptions[key];
+    }
+  });
   
   const taskData = {
     description: description.value,
@@ -100,10 +137,9 @@ const submitTask = async () => {
     flowOptions,
   }
 
-  const workspaceId = isEditMode.value ? props.task!.workspaceId : store.workspaceId
   const url = isEditMode.value
-    ? `/api/v1/workspaces/${workspaceId}/tasks/${props.task!.id}`
-    : `/api/v1/workspaces/${workspaceId}/tasks`
+    ? `/api/v1/workspaces/${workspaceId.value}/tasks/${props.task!.id}`
+    : `/api/v1/workspaces/${workspaceId.value}/tasks`
 
   const method = isEditMode.value ? 'PUT' : 'POST'
 
@@ -137,13 +173,39 @@ const submitTask = async () => {
 }
 
 const safeClose = () => {
-  const hasChanges = isEditMode.value
-    ? description.value !== props.task!.description ||
-      flowType.value !== props.task!.flowType ||
-      envType.value !== props.task!.flowOptions?.envType ||
-      determineRequirements.value !== props.task!.flowOptions?.determineRequirements ||
-      planningPrompt.value !== props.task!.flowOptions?.planningPrompt
-    : description.value !== ''
+  let hasChanges = false;
+  if (isEditMode.value) {
+    const task = props.task!;
+    const options = task.flowOptions;
+    const initialEnvType = options?.envType;
+    const initialStartBranch = options?.startBranch || null;
+    const initialDetermineRequirements = options?.determineRequirements ?? true;
+    const initialPlanningPrompt = options?.planningPrompt || '';
+
+    hasChanges = description.value !== task.description ||
+                 flowType.value !== task.flowType ||
+                 envType.value !== initialEnvType ||
+                 determineRequirements.value !== initialDetermineRequirements ||
+                  planningPrompt.value !== initialPlanningPrompt ||
+                  // Check branch change only if envType is worktree
+                  (envType.value === 'local_git_worktree' && selectedBranch.value !== initialStartBranch);
+  } else {
+    // Check changes for a new task: Compare current values against initial defaults
+    const initialDescription = '';
+    const initialSelectedBranch = null;
+    const initialFlowType = localStorage.getItem('lastUsedFlowType') || 'basic_dev';
+    const initialEnvType = localStorage.getItem('lastUsedEnvType') || 'local';
+    const initialDetermineRequirements = true; // Default for new task
+    const initialPlanningPrompt = '';
+
+    hasChanges = description.value !== initialDescription ||
+                 selectedBranch.value !== initialSelectedBranch ||
+                 flowType.value !== initialFlowType ||
+                 envType.value !== initialEnvType ||
+                 determineRequirements.value !== initialDetermineRequirements ||
+                 planningPrompt.value !== initialPlanningPrompt;
+  }
+
 
   if (hasChanges) {
     if (!window.confirm('Are you sure you want to close this modal? Your changes will be lost.')) {
@@ -223,4 +285,33 @@ label {
   font-size: 16px;
   margin: 10px 0;
 }
+
+/* Styles for branch dropdown options */
+.branch-option {
+  width: 100%;
+}
+
+.branch-tag {
+  font-size: 0.8rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  margin-left: 0.5rem;
+  font-weight: bold;
+  float: right;
+}
+
+.branch-tag.current {
+  background-color: var(--p-primary-color); /* Use PrimeVue variable */
+  color: var(--p-primary-contrast-color);
+}
+
+.branch-tag.default {
+  background-color: var(--p-surface-400); /* Use a neutral PrimeVue variable */
+  color: var(--p-text-color);
+}
+
+:deep(.p-select) {
+  background-color: field;
+}
+
 </style>

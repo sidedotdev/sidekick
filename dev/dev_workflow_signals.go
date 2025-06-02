@@ -10,6 +10,8 @@ import (
 const SignalNameRequestForUser = "requestForUser"
 const SignalNameUserResponse = "userResponse"
 const SignalNameWorkflowClosed = "workflowClosed"
+const SignalNamePause = "pause"
+const SignalNameUserAction = "userAction"
 
 type WorkflowClosure struct {
 	FlowId string

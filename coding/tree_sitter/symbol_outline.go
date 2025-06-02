@@ -13,6 +13,7 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/java"
+	"github.com/smacker/go-tree-sitter/kotlin"
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/typescript/tsx"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
@@ -104,6 +105,20 @@ func GetAllAlternativeFileSymbols(filePath string) ([]Symbol, error) {
 // TODO in golang, append the module name to the symbol name with a dot as well as another alternative symbol
 func expandWithAlternativeSymbols(languageName string, sitterLanguage *sitter.Language, tree *sitter.Tree, sourceCode *[]byte, symbolSlice []Symbol) []Symbol {
 	for _, symbol := range symbolSlice {
+		// Handle Kotlin backtick-escaped symbols
+		if languageName == "kotlin" {
+			content := symbol.Content
+			if len(content) >= 2 && strings.HasPrefix(content, "`") && strings.HasSuffix(content, "`") {
+				unescaped := strings.Trim(content, "`")
+				symbolSlice = append(symbolSlice, Symbol{
+					Content:    unescaped,
+					SymbolType: "alt_" + symbol.SymbolType,
+					StartPoint: symbol.StartPoint,
+					EndPoint:   symbol.EndPoint,
+				})
+			}
+		}
+
 		if symbol.SymbolType == "method" {
 			// Extract the receiver type and method name using the symbol.SourceCaptures
 			var receiverMaybePointer, receiverNoPointer, receiverTypeNoPointer, methodName string
@@ -396,13 +411,13 @@ func (sc SourceCode) GetSymbols() ([]Symbol, error) {
 
 func normalizeLanguageName(s string) string {
 	switch s {
-	case "go", "golang":
+	case "go":
 		return "golang"
-	case "py", "python":
+	case "py":
 		return "python"
-	case "java":
-		return "java"
-	case "ts", "typescript":
+	case "kt":
+		return "kotlin"
+	case "ts":
 		return "typescript"
 	default:
 		return s
@@ -410,14 +425,16 @@ func normalizeLanguageName(s string) string {
 }
 
 func getSitterLanguage(languageName string) (*sitter.Language, error) {
-	switch languageName {
-	case "go", "golang":
+	switch normalizeLanguageName(languageName) {
+	case "golang":
 		return golang.GetLanguage(), nil
-	case "py", "python":
+	case "python":
 		return python.GetLanguage(), nil
 	case "java":
 		return java.GetLanguage(), nil
-	case "ts", "typescript":
+	case "kotlin":
+		return kotlin.GetLanguage(), nil
+	case "typescript":
 		return typescript.GetLanguage(), nil
 	case "tsx":
 		return tsx.GetLanguage(), nil

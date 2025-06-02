@@ -45,6 +45,7 @@ require (
 )
 
 require (
+	github.com/bmatcuk/doublestar/v4 v4.8.1 // indirect
 	github.com/catppuccin/go v0.2.0 // indirect
 	github.com/charmbracelet/huh v0.6.0 // indirect
 	github.com/charmbracelet/x/ansi v0.2.3 // indirect

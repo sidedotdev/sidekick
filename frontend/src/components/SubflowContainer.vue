@@ -78,7 +78,7 @@ function toggleAccordion() {
 
 function childKey(child: FlowAction | SubflowTree, index: number): string {
   if (isFlowAction(child)) {
-    return child.id
+    return child.id + ":" + child.updated
   } else {
     return child.name + index
   }

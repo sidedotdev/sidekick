@@ -21,7 +21,7 @@ func Get() zerolog.Logger {
 		zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
 		zerolog.TimeFieldFormat = time.RFC3339Nano
 
-		logLevel, err := strconv.Atoi(os.Getenv("LOG_LEVEL"))
+		logLevel, err := strconv.Atoi(os.Getenv("SIDE_LOG_LEVEL"))
 		if err != nil {
 			logLevel = int(zerolog.InfoLevel) // default to INFO
 		}

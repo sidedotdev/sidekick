@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sidekick/common"
 	"sidekick/domain"
-	"sidekick/srv"
 )
 
 func (s *Storage) PersistWorktree(ctx context.Context, worktree domain.Worktree) error {
@@ -46,7 +46,7 @@ func (s *Storage) GetWorktree(ctx context.Context, workspaceId, worktreeId strin
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return domain.Worktree{}, srv.ErrNotFound
+			return domain.Worktree{}, common.ErrNotFound
 		}
 		return domain.Worktree{}, fmt.Errorf("failed to get worktree: %w", err)
 	}
@@ -123,7 +123,7 @@ func (s *Storage) DeleteWorktree(ctx context.Context, workspaceId, worktreeId st
 	}
 
 	if rowsAffected == 0 {
-		return srv.ErrNotFound
+		return common.ErrNotFound
 	}
 
 	return nil

@@ -38,7 +38,7 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult Tool
 		return handleErrToolCallUnmarshal(toolCallResult, fmt.Errorf("%w: %v", llm.ErrToolCallUnmarshal, err))
 	}
 
-	actionCtx := dCtx.NewActionContext("Tool: " + toolCall.Name)
+	actionCtx := dCtx.NewActionContext("tool_call." + toolCall.Name)
 	actionCtx.ActionParams = actionParams
 
 	// NOTE: the function passed in very deliberately returns

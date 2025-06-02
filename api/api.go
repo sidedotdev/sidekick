@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sidekick"
 	"strconv"
@@ -22,7 +21,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
+	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 )
 
@@ -30,7 +31,7 @@ func RunServer() *http.Server {
 	gin.SetMode(gin.ReleaseMode)
 	ctrl, err := NewController()
 	if err != nil {
-		log.Fatalf("Failed to initialize controller: %v\n", err)
+		log.Fatal().Err(err).Msg("Failed to initialize controller")
 	}
 	router := DefineRoutes(ctrl)
 
@@ -42,7 +43,7 @@ func RunServer() *http.Server {
 	// Start server in a goroutine
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start API server: %v\n", err)
+			log.Fatal().Err(err).Msg("Failed to start API server")
 		}
 	}()
 
@@ -54,6 +55,11 @@ type Controller struct {
 	temporalClient    client.Client
 	temporalNamespace string
 	temporalTaskQueue string
+}
+
+// UserActionRequest defines the expected request body for user actions.
+type UserActionRequest struct {
+	ActionType string `json:"actionType"`
 }
 
 // ArchiveTaskHandler handles the request to archive a task
@@ -110,7 +116,7 @@ func (ctrl *Controller) ArchiveFinishedTasksHandler(c *gin.Context) {
 		err := ctrl.service.PersistTask(c.Request.Context(), task)
 		if err != nil {
 			// Log the error but continue with other tasks
-			log.Printf("Failed to archive task %s: %v", task.Id, err)
+			log.Error().Err(err).Str("taskId", task.Id).Msg("Failed to archive task")
 		} else {
 			archivedCount++
 		}
@@ -142,6 +148,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	flowRoutes.GET("/:id/actions", ctrl.GetFlowActionsHandler)
 	flowRoutes.POST("/:id/pause", ctrl.PauseFlowHandler)
 	flowRoutes.POST("/:id/cancel", ctrl.CancelFlowHandler)
+	flowRoutes.POST("/:id/user_action", ctrl.UserActionHandler)
 
 	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
 
@@ -157,7 +164,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	// them at the top-level (not possible with StaticFS due to route pattern conflict)
 	files, err := frontend.DistFs.ReadDir("dist")
 	if err != nil {
-		log.Fatal("Failed to read embedded files", err)
+		log.Fatal().Err(err).Msg("Failed to read embedded files")
 	}
 	dist := http.FS(frontend.DistFs)
 	for _, file := range files {
@@ -199,7 +206,7 @@ func NewController() (Controller, error) {
 }
 
 func (ctrl *Controller) ErrorHandler(c *gin.Context, status int, err error) {
-	log.Println("Error:", err)
+	log.Error().Err(err).Str("path", c.FullPath()).Int("status", status).Msg("Error handling request")
 	c.JSON(status, gin.H{"error": err.Error()})
 }
 
@@ -289,7 +296,7 @@ func (ctrl *Controller) DeleteTaskHandler(c *gin.Context) {
 	for _, flow := range childFlows {
 		err = devAgent.TerminateWorkflowIfExists(c.Request.Context(), flow.Id)
 		if err != nil {
-			log.Println("Error terminating workflow:", err)
+			log.Error().Err(err).Str("flowId", flow.Id).Msg("Error terminating workflow")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to terminate workflow"})
 			return
 		}
@@ -330,7 +337,7 @@ func (ctrl *Controller) PauseFlowHandler(c *gin.Context) {
 	}
 
 	// Send pause signal to temporal workflow
-	err = ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", "pause", &dev.Pause{})
+	err = ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", dev.SignalNamePause, &dev.Pause{})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"message": fmt.Sprintf("Failed to send pause signal: %v", err),
@@ -376,6 +383,55 @@ func (ctrl *Controller) CancelFlowHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Workflow cancelled successfully",
 	})
+}
+
+// UserActionHandler handles requests to perform user-initiated actions on a flow.
+func (ctrl *Controller) UserActionHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	_, err := ctrl.service.GetFlow(c, workspaceId, flowId)
+	if err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	var req UserActionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request payload: " + err.Error()})
+		return
+	}
+	if req.ActionType == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request payload: missing or blank actionType"})
+		return
+	}
+
+	if req.ActionType != string(dev.UserActionGoNext) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("Invalid actionType '%s'. Only '%s' is supported.", req.ActionType, dev.UserActionGoNext)})
+		return
+	}
+
+	// Note: the only way to interact with the flow's GlobalState is by
+	// signalling it. The signal handler will then process the action within the
+	// context of the temporal workflow.
+	err = ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", dev.SignalNameUserAction, dev.UserActionGoNext)
+	if err != nil {
+		var serviceErrNotFound *serviceerror.NotFound
+		if errors.As(err, &serviceErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"message": fmt.Sprintf("Flow with ID %s not found", flowId)})
+			return
+		}
+		log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Failed to signal workflow for user action")
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to signal workflow: " + err.Error()})
+		return
+	}
+
+	log.Info().Str("workspaceId", workspaceId).Str("flowId", flowId).Str("action", req.ActionType).Msg("User action signaled to workflow")
+	c.JSON(http.StatusOK, gin.H{"message": "User action '" + req.ActionType + "' signaled successfully"})
 }
 
 type TaskRequest struct {
@@ -551,7 +607,7 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 	if len(taskStatuses) > 0 {
 		tasks, err = ctrl.service.GetTasks(c, workspaceId, taskStatuses)
 		if err != nil {
-			log.Println("Error fetching tasks:", err)
+			log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Error fetching tasks")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -702,9 +758,10 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 
 	var body struct {
 		UserResponse struct {
-			Content  string `json:"content"`
-			Approved *bool  `json:"approved"`
-			Choice   string `json:"choice"`
+			Content  string                 `json:"content"`
+			Approved *bool                  `json:"approved"`
+			Choice   string                 `json:"choice"`
+			Params   map[string]interface{} `json:"params"`
 		} `json:"userResponse"`
 	}
 	if err := c.BindJSON(&body); err != nil {
@@ -712,29 +769,32 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 		return
 	}
 
-	switch flowAction.ActionParams["requestKind"] {
-	case dev.RequestKindFreeForm:
-		if strings.TrimSpace(body.UserResponse.Content) == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "User response cannot be empty"})
-			return
-		}
-	case dev.RequestKindApproval:
-		if body.UserResponse.Approved == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Approved cannot be empty"})
-			return
-		}
-	case dev.RequestKindMergeApproval:
-		if body.UserResponse.Approved == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Approved cannot be empty"})
-			return
-		}
-		if body.UserResponse.Params["targetBranch"] == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Target branch cannot be empty"})
-		}
-	case dev.RequestKindMultipleChoice:
-		if strings.TrimSpace(body.UserResponse.Choice) == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "User choice cannot be empty"})
-			return
+	requestKindString, ok := flowAction.ActionParams["requestKind"].(string)
+	if ok {
+		switch dev.RequestKind(requestKindString) {
+		case dev.RequestKindFreeForm:
+			if strings.TrimSpace(body.UserResponse.Content) == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "User response cannot be empty"})
+				return
+			}
+		case dev.RequestKindApproval:
+			if body.UserResponse.Approved == nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Approved cannot be empty"})
+				return
+			}
+		case dev.RequestKindMergeApproval:
+			if body.UserResponse.Approved == nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Approved cannot be empty"})
+				return
+			}
+			if body.UserResponse.Params["targetBranch"] == nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Target branch cannot be empty"})
+			}
+		case dev.RequestKindMultipleChoice:
+			if strings.TrimSpace(body.UserResponse.Choice) == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "User choice cannot be empty"})
+				return
+			}
 		}
 	}
 
@@ -749,6 +809,7 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 		Content:          body.UserResponse.Content,
 		Approved:         body.UserResponse.Approved,
 		Choice:           body.UserResponse.Choice,
+		Params:           body.UserResponse.Params,
 	}
 	if err := devAgent.RelayResponse(ctx, userResponse); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to relay user response"})
@@ -973,18 +1034,18 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Context cancelled, ending stream")
+			log.Info().Msg("FlowActionChangesWebsocketHandler context cancelled, ending stream")
 			return
 		case err := <-errChan:
-			log.Printf("Error streaming flow actions: %v", err)
+			log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Error streaming flow actions")
 			return
 		case flowAction, ok := <-flowActionChan:
 			if !ok {
-				log.Println("Flow action channel closed, ending stream")
+				log.Info().Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Flow action channel closed, ending stream")
 				return
 			}
 			if err := conn.WriteJSON(flowAction); err != nil {
-				log.Printf("Error writing flow action to websocket: %v", err)
+				log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Msg("Error writing flow action to websocket")
 				return
 			}
 		}
@@ -1025,21 +1086,21 @@ func (ctrl *Controller) TaskChangesWebsocketHandler(c *gin.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Task changes client disconnected")
+			log.Info().Str("workspaceId", workspaceId).Msg("Task changes client disconnected")
 			return
 		case err := <-errChan:
 			if err != nil {
-				log.Printf("Error streaming task changes: %v", err)
+				log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Error streaming task changes")
 				return
 			}
 		case task, ok := <-taskChan:
 			if !ok {
-				log.Println("Task channel closed")
+				log.Info().Str("workspaceId", workspaceId).Msg("Task channel closed")
 				return
 			}
 			flows, err := ctrl.service.GetFlowsForTask(ctx, workspaceId, task.Id)
 			if err != nil {
-				log.Printf("Error getting flows for task: %v", err)
+				log.Error().Err(err).Str("workspaceId", workspaceId).Str("taskId", task.Id).Msg("Error getting flows for task")
 				return
 			}
 			taskResponse := TaskResponse{
@@ -1051,7 +1112,7 @@ func (ctrl *Controller) TaskChangesWebsocketHandler(c *gin.Context) {
 				"lastTaskStreamId": task.StreamId,
 			}
 			if err := conn.WriteJSON(taskData); err != nil {
-				log.Printf("Error writing task to websocket: %v", err)
+				log.Error().Err(err).Str("workspaceId", workspaceId).Str("taskId", task.Id).Msg("Error writing task to websocket")
 				return
 			}
 		}
@@ -1111,7 +1172,12 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 		for {
 			_, r, err := conn.NextReader()
 			if err != nil {
-				log.Printf("Client disconnected or error: %v", err)
+				// Log client disconnection as info, not error, unless it's an unexpected error
+				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+					log.Error().Err(err).Msg("FlowEventsWebsocketHandler client read error")
+				} else {
+					log.Info().Msg("FlowEventsWebsocketHandler client disconnected")
+				}
 				cancel()
 				return
 			}
@@ -1122,9 +1188,10 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 				err = io.ErrUnexpectedEOF
 			}
 			if err != nil {
-				log.Printf("Invalid message format: %v", err)
+				log.Error().Err(err).Msg("Invalid message format received in FlowEventsWebsocketHandler")
 				continue
 			}
+			log.Debug().Str("parentId", sub.ParentId).Msg("received subscription message")
 			subscriptionCh <- sub
 		}
 	}()
@@ -1135,7 +1202,7 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Client disconnected, ending stream")
+			log.Printf("Client disconnected, ending stream\n")
 			return
 		case err := <-errCh:
 			log.Printf("Error streaming flow events: %v", err)
@@ -1166,14 +1233,14 @@ func (ctrl *Controller) WildcardHandler(c *gin.Context) {
 	// render index.html
 	file, err := frontend.DistFs.Open("dist/index.html")
 	if err != nil {
-		fmt.Println("Failed to open index.html", err)
+		log.Error().Err(err).Msg("Failed to open index.html")
 		c.Status(http.StatusInternalServerError)
 		return
 	} else {
 		c.Status(http.StatusOK)
 		_, err = io.Copy(c.Writer, file)
 		if err != nil {
-			log.Println("Failed to serve index.html", err)
+			log.Error().Err(err).Msg("Failed to serve index.html")
 		}
 	}
 }

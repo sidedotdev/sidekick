@@ -37,7 +37,7 @@ describe('FlowActionItem', () => {
     const wrapper = mount(FlowActionItem, {
       props: { flowAction },
     })
-    expect(wrapper.text()).toContain(flowAction.actionType)
+    expect(wrapper.text()).toContain('Something Something')
     expect(wrapper.text()).toContain('...')
   })
 

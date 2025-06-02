@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/utils"
 	"testing"
@@ -23,7 +24,7 @@ func TestPersistSubflow(t *testing.T) {
 		FlowId:      ksuid.New().String(),
 		Name:        "Test Subflow",
 		Description: "This is a test subflow",
-		Status:      domain.SubflowStatusInProgress,
+		Status:      domain.SubflowStatusStarted,
 		Type:        utils.Ptr("anything"),
 	}
 
@@ -79,7 +80,7 @@ func TestGetSubflows(t *testing.T) {
 			Id:          "sf_" + ksuid.New().String(),
 			FlowId:      flowId,
 			Name:        "Subflow 1",
-			Status:      domain.SubflowStatusInProgress,
+			Status:      domain.SubflowStatusStarted,
 		},
 		{
 			WorkspaceId: workspaceId,
@@ -138,7 +139,7 @@ func TestGetSubflow(t *testing.T) {
 		FlowId:          flowId,
 		Name:            "Test Subflow",
 		Description:     "A test subflow",
-		Status:          domain.SubflowStatusInProgress,
+		Status:          domain.SubflowStatusStarted,
 		Type:            utils.Ptr("step"),
 		ParentSubflowId: "sf_parent",
 		Result:          `{"key": "value"}`,
@@ -168,13 +169,13 @@ func TestGetSubflow(t *testing.T) {
 		nonExistentId := "sf_" + ksuid.New().String()
 		_, err := storage.GetSubflow(ctx, workspaceId, nonExistentId)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to get subflow")
+		assert.ErrorIs(t, err, common.ErrNotFound)
 	})
 
 	t.Run("Attempt to retrieve subflow from wrong workspace", func(t *testing.T) {
 		wrongWorkspaceId := ksuid.New().String()
 		_, err := storage.GetSubflow(ctx, wrongWorkspaceId, subflowId)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to get subflow")
+		assert.ErrorIs(t, err, common.ErrNotFound)
 	})
 }
