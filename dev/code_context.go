@@ -28,7 +28,7 @@ type RequiredCodeContext struct {
 var retrieveCodeContextTool = &llm.Tool{
 	Name:        "retrieve_code_context",
 	Description: "When additional code context is required, analysis should be done first. Then the shortlist of functions and important custom types of interest. Returns the complete lines of code corresponding to that input, i.e., the full function and type defintion bodies. The go import block will also be included.",
-	Parameters:  (&jsonschema.Reflector{ExpandedStruct: true}).Reflect(&RequiredCodeContext{}),
+	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&RequiredCodeContext{}),
 }
 
 // this function doesn't do much yet, but will allow us to switch out the

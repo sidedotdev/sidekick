@@ -18,7 +18,7 @@ import (
 
 type OldAnthropicToolChat struct{}
 
-func (OldAnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta) (*ChatMessageResponse, error) {
+func (OldAnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta, progressChan chan<- ProgressInfo) (*ChatMessageResponse, error) {
 	token, err := options.Secrets.SecretManager.GetSecret(AnthropicApiKeySecretName)
 	if err != nil {
 		return nil, err

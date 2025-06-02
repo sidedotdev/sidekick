@@ -30,7 +30,7 @@ func (c LocalConfig) getCustomProviderNames() []string {
 
 // validateProvider checks if a provider name is valid
 func (c LocalConfig) validateProvider(provider string, allowAnthropicProvider bool) error {
-	if provider == "openai" {
+	if provider == "openai" || provider == "google" {
 		return nil
 	}
 	if provider == "anthropic" {

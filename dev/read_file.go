@@ -86,7 +86,7 @@ type BulkReadFileParams struct {
 var bulkReadFileTool = llm.Tool{
 	Name:        "read_file_lines",
 	Description: "Read files from the repo given specific line numbers and a window for additional context. Most useful for debugging errors that mention a line number, or for retrieving context that you can't see another way.",
-	Parameters:  (&jsonschema.Reflector{ExpandedStruct: true}).Reflect(&BulkReadFileParams{}),
+	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&BulkReadFileParams{}),
 }
 
 // TODO add tests for bulk read file, with mock read file activity

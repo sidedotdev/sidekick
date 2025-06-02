@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sidekick/common"
+	"sidekick/embedding"
 	"sidekick/secret_manager"
 	"sidekick/srv"
 
@@ -11,7 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type OpenAIEmbedActivityOptions struct {
+type CachedEmbedActivityOptions struct {
 	Secrets     secret_manager.SecretManagerContainer
 	WorkspaceId string
 	ContentType string
@@ -19,7 +20,7 @@ type OpenAIEmbedActivityOptions struct {
 	Subkeys     []string
 }
 
-type OpenAIActivities struct {
+type EmbedActivities struct {
 	Storage srv.Storage
 }
 
@@ -30,22 +31,27 @@ don't make sense to pass over the temporal activity boundary, especially since
 we already expect to cache these values in the database.
 */
 // TODO move to embed package under EmbedActivities struct
-func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options OpenAIEmbedActivityOptions) error {
+func (ea *EmbedActivities) CachedEmbedActivity(ctx context.Context, options CachedEmbedActivityOptions) error {
 	contentKeys := make([]string, len(options.Subkeys))
 	embeddingKeys := make([]string, len(options.Subkeys))
 	for i, subKey := range options.Subkeys {
 		contentKeys[i] = fmt.Sprintf("%s:%s", options.ContentType, subKey)
-		embeddingKeys[i] = constructEmbeddingKey(embeddingKeyOptions{
+		embeddingKey, err := constructEmbeddingKey(embeddingKeyOptions{
+			provider:    options.ModelConfig.Provider,
 			model:       options.ModelConfig.Model,
 			contentType: options.ContentType,
 			subKey:      subKey,
 		})
+		if err != nil {
+			return err
+		}
+		embeddingKeys[i] = embeddingKey
 	}
 
 	var cachedEmbeddings [][]byte
 	var err error
 	if len(embeddingKeys) > 0 {
-		cachedEmbeddings, err = oa.Storage.MGet(ctx, options.WorkspaceId, embeddingKeys)
+		cachedEmbeddings, err = ea.Storage.MGet(ctx, options.WorkspaceId, embeddingKeys)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to get cached embeddings")
 			return err
@@ -64,7 +70,7 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 	// TODO replace with metric
 	log.Info().Msgf("embedding %d keys\n", len(toEmbedContentKeys))
 	if len(toEmbedContentKeys) > 0 {
-		values, err := oa.Storage.MGet(ctx, options.WorkspaceId, toEmbedContentKeys)
+		values, err := ea.Storage.MGet(ctx, options.WorkspaceId, toEmbedContentKeys)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to get cached embeddings")
 			return err
@@ -95,16 +101,16 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 			if end > len(input) {
 				end = len(input)
 			}
-			embeddings, err := embedder.Embed(ctx, options.ModelConfig, options.Secrets.SecretManager, input[i:end])
+			embeddings, err := embedder.Embed(ctx, options.ModelConfig, options.Secrets.SecretManager, input[i:end], embedding.TaskTypeRetrievalDocument)
 			if err != nil {
 				return fmt.Errorf("failed to embed content: %w", err)
 			}
-			for i, embedding := range embeddings {
-				cacheValues[missingEmbeddingKeys[i]] = embedding
+			for j, embedding := range embeddings {
+				cacheValues[missingEmbeddingKeys[i+j]] = embedding
 			}
 		}
 
-		err = oa.Storage.MSet(ctx, options.WorkspaceId, cacheValues)
+		err = ea.Storage.MSet(ctx, options.WorkspaceId, cacheValues)
 		if err != nil {
 			return err
 		}
@@ -113,11 +119,29 @@ func (oa *OpenAIActivities) CachedEmbedActivity(ctx context.Context, options Ope
 }
 
 type embeddingKeyOptions struct {
+	provider    string
 	model       string
 	contentType string
 	subKey      string
 }
 
-func constructEmbeddingKey(options embeddingKeyOptions) string {
-	return fmt.Sprintf("embedding:%s:%s:%s", options.model, options.contentType, options.subKey)
+func constructEmbeddingKey(options embeddingKeyOptions) (string, error) {
+	model := options.model
+	if model == "" {
+		switch options.provider {
+		case "openai":
+			{
+				model = embedding.OpenaiDefaultModel
+			}
+		case "google":
+			{
+				model = embedding.GoogleDefaultModel
+			}
+		default:
+			{
+				return "", fmt.Errorf("No embedding model given for provider %s", options.provider)
+			}
+		}
+	}
+	return fmt.Sprintf("embedding:%s:%s:%s", options.model, options.contentType, options.subKey), nil
 }

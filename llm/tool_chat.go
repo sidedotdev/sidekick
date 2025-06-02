@@ -10,7 +10,7 @@ import (
 const defaultTemperature float32 = 0.1
 
 type ToolChatter interface {
-	ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta) (*ChatMessageResponse, error)
+	ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta, progressChan chan<- ProgressInfo) (*ChatMessageResponse, error)
 }
 
 type ChatControlParams struct {
@@ -50,6 +50,7 @@ const (
 	OpenaiToolChatProviderType           ToolChatProviderType = ToolChatProviderType(common.OpenaiChatProvider)
 	AnthropicToolChatProviderType        ToolChatProviderType = ToolChatProviderType(common.AnthropicChatProvider)
 	OpenaiCompatibleToolChatProviderType ToolChatProviderType = ToolChatProviderType(common.OpenaiCompatibleChatProvider)
+	GoogleToolChatProviderType           ToolChatProviderType = ToolChatProviderType(common.GoogleChatProvider)
 )
 
 type ToolChatOptions struct {

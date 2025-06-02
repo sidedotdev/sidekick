@@ -18,6 +18,7 @@ type VectorSearchActivityOptions struct {
 	WorkspaceId string
 	ContentType string
 	Subkeys     []string
+	Provider    string
 	Model       string
 	Query       embedding.EmbeddingVector
 	Limit       int
@@ -30,11 +31,15 @@ func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]
 	// get the embeddings from the (non-vector) db
 	embeddingKeys := make([]string, 0, len(options.Subkeys))
 	for _, subKey := range options.Subkeys {
-		embeddingKey := constructEmbeddingKey(embeddingKeyOptions{
+		embeddingKey, err := constructEmbeddingKey(embeddingKeyOptions{
+			provider:    options.Provider,
 			model:       options.Model,
 			contentType: options.ContentType,
 			subKey:      subKey,
 		})
+		if err != nil {
+			return []string{}, err
+		}
 		embeddingKeys = append(embeddingKeys, embeddingKey)
 	}
 	values, err := va.DatabaseAccessor.MGet(context.Background(), options.WorkspaceId, embeddingKeys)

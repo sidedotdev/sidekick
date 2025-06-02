@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/ehsanul/anthropic-go/v3/pkg/anthropic"
 	"github.com/invopop/jsonschema"
-	"github.com/sashabaranov/go-openai"
 )
 
 type ChatMessage struct {
@@ -104,6 +102,7 @@ const (
 	OpenaiChatProvider           ChatProvider = "openai"
 	AnthropicChatProvider        ChatProvider = "anthropic"
 	OpenaiCompatibleChatProvider ChatProvider = "openai_compatible"
+	GoogleChatProvider           ChatProvider = "google"
 )
 
 type ToolChatProviderType string
@@ -112,6 +111,7 @@ const (
 	UnspecifiedToolChatProviderType      ToolChatProviderType = ""
 	OpenaiToolChatProviderType           ToolChatProviderType = "openai"
 	AnthropicToolChatProviderType        ToolChatProviderType = "anthropic"
+	GoogleToolChatProviderType           ToolChatProviderType = "google"
 	OpenaiCompatibleToolChatProviderType ToolChatProviderType = "openai_compatible"
 )
 
@@ -121,6 +121,8 @@ var SmallModels = map[ToolChatProviderType]string{
 	// NOTE: 3.5 Haiku is much more expensive than 3 Haiku, but performs better
 	// too and is what claude presents as their "small" model
 	AnthropicToolChatProviderType: "claude-3-5-haiku-20241022",
+
+	GoogleToolChatProviderType: "gemini-2.5-flash-preview-04-17",
 }
 
 func (provider ToolChatProviderType) SmallModel() string {
@@ -129,21 +131,14 @@ func (provider ToolChatProviderType) SmallModel() string {
 	return SmallModels[provider]
 }
 
-var LongContextLargeModels = map[ToolChatProviderType]string{
-	OpenaiToolChatProviderType:    openai.GPT4Turbo20240409,
-	AnthropicToolChatProviderType: string(anthropic.Claude3Opus),
-}
-
-func (provider ToolChatProviderType) LongContextLargeModel() string {
-	return LongContextLargeModels[provider]
-}
-
 func StringToToolChatProviderType(providerType string) (ToolChatProviderType, error) {
 	switch providerType {
 	case string(OpenaiToolChatProviderType):
 		return OpenaiToolChatProviderType, nil
 	case string(AnthropicToolChatProviderType):
 		return AnthropicToolChatProviderType, nil
+	case string(GoogleToolChatProviderType):
+		return GoogleToolChatProviderType, nil
 	case string(UnspecifiedToolChatProviderType):
 		return UnspecifiedToolChatProviderType, nil
 	case string(OpenaiCompatibleToolChatProviderType):

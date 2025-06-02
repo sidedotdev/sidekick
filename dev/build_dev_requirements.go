@@ -17,7 +17,7 @@ import (
 var recordDevRequirementsTool = llm.Tool{
 	Name:        "record_dev_requirements",
 	Description: "Records functional and non-functional product requirements for software developers to consume.",
-	Parameters:  (&jsonschema.Reflector{ExpandedStruct: true}).Reflect(&DevRequirements{}),
+	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&DevRequirements{}),
 }
 
 /* Represents low-level requirements for a software engineer to implement a feature or fix a bug etc */

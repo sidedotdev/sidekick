@@ -41,7 +41,9 @@ func TestAnthropicChatStream_Unauthorized(t *testing.T) {
 
 	deltaChan := make(chan ChatMessageDelta)
 	defer close(deltaChan)
-	_, err := anthropicToolChat.ChatStream(ctx, options, deltaChan)
+	progressChan := make(chan ProgressInfo)
+	defer close(progressChan)
+	_, err := anthropicToolChat.ChatStream(ctx, options, deltaChan, progressChan)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "401")
 }
@@ -169,7 +171,7 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 	mockTool := &Tool{
 		Name:        "get_current_weather",
 		Description: "Get the current weather in a given location",
-		Parameters:  (&jsonschema.Reflector{ExpandedStruct: true}).Reflect(&getCurrentWeather{}),
+		Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&getCurrentWeather{}),
 	}
 
 	options := ToolChatOptions{
@@ -179,7 +181,7 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 				Model:    anthropic.ModelClaude_3_Haiku_20240307, // cheapest model for integration testing
 			},
 			Messages: []ChatMessage{
-				{Role: ChatMessageRoleUser, Content: "First say hi. After thatn, then look up what the weather in New York"},
+				{Role: ChatMessageRoleUser, Content: "First say hi. After that, then look up what the weather is like in New York"},
 			},
 			Tools: []*Tool{mockTool},
 		},
@@ -197,7 +199,9 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 		}
 	}()
 
-	response, err := chat.ChatStream(ctx, options, deltaChan)
+	progressChan := make(chan ProgressInfo)
+	defer close(progressChan)
+	response, err := chat.ChatStream(ctx, options, deltaChan, progressChan)
 	close(deltaChan)
 
 	if err != nil {
@@ -271,7 +275,9 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 			}
 		}()
 
-		response, err := chat.ChatStream(ctx, options, deltaChan)
+		progressChan := make(chan ProgressInfo)
+		defer close(progressChan)
+		response, err := chat.ChatStream(ctx, options, deltaChan, progressChan)
 		close(deltaChan)
 
 		if err != nil {

@@ -16,10 +16,10 @@ import (
 func TestCachedEmbedActivity_AllCached(t *testing.T) {
 	storage := redis.NewTestRedisStorage()
 
-	oa := &OpenAIActivities{
+	oa := &EmbedActivities{
 		Storage: storage,
 	}
-	options := OpenAIEmbedActivityOptions{
+	options := CachedEmbedActivityOptions{
 		WorkspaceId: "test_workspace",
 		ModelConfig: common.ModelConfig{Model: "ada2", Provider: "mock"},
 		ContentType: "test_type",
@@ -49,10 +49,10 @@ func TestCachedEmbedActivity_AllCached(t *testing.T) {
 func TestCachedEmbedActivity_NoKeys(t *testing.T) {
 	db := redis.NewTestRedisStorage()
 
-	oa := &OpenAIActivities{
+	oa := &EmbedActivities{
 		Storage: db,
 	}
-	options := OpenAIEmbedActivityOptions{
+	options := CachedEmbedActivityOptions{
 		WorkspaceId: "test_workspace",
 		ModelConfig: common.ModelConfig{Model: "ada2", Provider: "mock"},
 		ContentType: "test_type",
@@ -66,10 +66,10 @@ func TestCachedEmbedActivity_NoKeys(t *testing.T) {
 func TestCachedEmbedActivity_MissedCache(t *testing.T) {
 	storage := redis.NewTestRedisStorage()
 
-	oa := &OpenAIActivities{
+	oa := &EmbedActivities{
 		Storage: storage,
 	}
-	options := OpenAIEmbedActivityOptions{
+	options := CachedEmbedActivityOptions{
 		Secrets: secret_manager.SecretManagerContainer{
 			SecretManager: &secret_manager.MockSecretManager{},
 		},

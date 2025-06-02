@@ -17,7 +17,7 @@ import (
 var bulkSearchRepositoryTool = llm.Tool{
 	Name:        "bulk_search_repository",
 	Description: "Used to perform multiple searches within the repository, each for files matching a given glob pattern and containing a search term.",
-	Parameters:  (&jsonschema.Reflector{ExpandedStruct: true}).Reflect(&BulkSearchRepositoryParams{}),
+	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&BulkSearchRepositoryParams{}),
 }
 
 type BulkSearchRepositoryParams struct {
