@@ -193,7 +193,7 @@ const (
 )
 
 type TextDocumentIdentifier struct {
-	DocumentURI string `json:"uri"`
+	URI string `json:"uri"`
 }
 
 type TypeDefinition struct {
@@ -210,7 +210,8 @@ type ClientCapabilities struct {
 }
 
 type TextDocumentClientCapabilities struct {
-	CodeAction CodeActionClientCapabilities `json:"codeAction,omitempty"`
+	Synchronization *TextDocumentSyncClientCapabilities `json:"synchronization,omitempty"`
+	CodeAction      CodeActionClientCapabilities        `json:"codeAction,omitempty"`
 }
 
 // CodeActionKind represents the kind of a code action.
@@ -386,6 +387,205 @@ func (c ChangeNotifType) MarshalJSON() ([]byte, error) {
 		return json.Marshal(c.BoolValue)
 	}
 	return json.Marshal(c.StringValue)
+}
+
+// TextDocumentSyncKind defines how text documents are synced.
+type TextDocumentSyncKind int
+
+const (
+	// Documents should not be synced at all.
+	TextDocumentSyncKindNone TextDocumentSyncKind = 0
+
+	// Documents are synced by always sending the full content
+	// of the document.
+	TextDocumentSyncKindFull TextDocumentSyncKind = 1
+
+	// Documents are synced by sending the full content on open.
+	// After that only incremental updates to the document are
+	// sent.
+	TextDocumentSyncKindIncremental TextDocumentSyncKind = 2
+)
+
+// SaveOptions represents options for save notifications.
+type SaveOptions struct {
+	/**
+	 * The client is supposed to include the content on save.
+	 */
+	IncludeText *bool `json:"includeText,omitempty"`
+}
+
+// TextDocumentSyncOptions defines how text documents are synced.
+type TextDocumentSyncOptions struct {
+	/**
+	 * Open and close notifications are sent to the server. If omitted open
+	 * close notification should not be sent.
+	 */
+	OpenClose *bool `json:"openClose,omitempty"`
+
+	/**
+	 * Change notifications are sent to the server. See
+	 * TextDocumentSyncKind.None, TextDocumentSyncKind.Full and
+	 * TextDocumentSyncKind.Incremental. If omitted it defaults to
+	 * TextDocumentSyncKind.None.
+	 */
+	Change *TextDocumentSyncKind `json:"change,omitempty"`
+
+	/**
+	 * If present will save notifications are sent to the server. If omitted
+	 * the notification should not be sent.
+	 */
+	WillSave *bool `json:"willSave,omitempty"`
+
+	/**
+	 * If present will save wait until requests are sent to the server. If
+	 * omitted the request should not be sent.
+	 */
+	WillSaveWaitUntil *bool `json:"willSaveWaitUntil,omitempty"`
+
+	/**
+	 * If present save notifications are sent to the server. If omitted the
+	 * notification should not be sent.
+	 */
+	Save interface{} `json:"save,omitempty"` // Can be bool or SaveOptions
+}
+
+// TextDocumentSyncClientCapabilities represents client capabilities for text document synchronization.
+type TextDocumentSyncClientCapabilities struct {
+	/**
+	 * Whether text document synchronization supports dynamic registration.
+	 */
+	DynamicRegistration *bool `json:"dynamicRegistration,omitempty"`
+
+	/**
+	 * The client supports sending will save notifications.
+	 */
+	WillSave *bool `json:"willSave,omitempty"`
+
+	/**
+	 * The client supports sending a will save request and
+	 * waits for a response providing text edits which will
+	 * be applied to the document before it is saved.
+	 */
+	WillSaveWaitUntil *bool `json:"willSaveWaitUntil,omitempty"`
+
+	/**
+	 * The client supports did save notifications.
+	 */
+	DidSave *bool `json:"didSave,omitempty"`
+}
+
+// TextDocumentItem represents an item to transfer a text document from the client to the server.
+type TextDocumentItem struct {
+	/**
+	 * The text document's URI.
+	 */
+	URI string `json:"uri"`
+
+	/**
+	 * The text document's language identifier.
+	 */
+	LanguageID string `json:"languageId"`
+
+	/**
+	 * The version number of this document (it will increase after each
+	 * change, including undo/redo).
+	 */
+	Version int `json:"version"`
+
+	/**
+	 * The content of the opened text document.
+	 */
+	Text string `json:"text"`
+}
+
+// VersionedTextDocumentIdentifier extends TextDocumentIdentifier with version information.
+type VersionedTextDocumentIdentifier struct {
+	TextDocumentIdentifier
+
+	/**
+	 * The version number of this document.
+	 *
+	 * The version number of a document will increase after each change,
+	 * including undo/redo. The number doesn't need to be consecutive.
+	 */
+	Version int `json:"version"`
+}
+
+// DidOpenTextDocumentParams represents parameters for the textDocument/didOpen notification.
+type DidOpenTextDocumentParams struct {
+	/**
+	 * The document that was opened.
+	 */
+	TextDocument TextDocumentItem `json:"textDocument"`
+}
+
+// TextDocumentContentChangeEvent represents an event describing a change to a text document.
+type TextDocumentContentChangeEvent struct {
+	/**
+	 * The range of the document that changed.
+	 */
+	Range *Range `json:"range,omitempty"`
+
+	/**
+	 * The optional length of the range that got replaced.
+	 *
+	 * @deprecated use range instead.
+	 */
+	RangeLength *int `json:"rangeLength,omitempty"`
+
+	/**
+	 * The new text for the provided range or the new text of the whole document.
+	 */
+	Text string `json:"text"`
+}
+
+// DidChangeTextDocumentParams represents parameters for the textDocument/didChange notification.
+type DidChangeTextDocumentParams struct {
+	/**
+	 * The document that did change. The version number points
+	 * to the version after all provided content changes have
+	 * been applied.
+	 */
+	TextDocument VersionedTextDocumentIdentifier `json:"textDocument"`
+
+	/**
+	 * The actual content changes. The content changes describe single state
+	 * changes to the document. So if there are two content changes c1 (at
+	 * array index 0) and c2 (at array index 1) for a document in state S then
+	 * c1 moves the document from S to S' and c2 from S' to S''. So c1 is
+	 * computed on the state S and c2 is computed on the state S'.
+	 *
+	 * To mirror the content of a document using change events use the following
+	 * approach:
+	 * - start with the same initial content
+	 * - apply the 'textDocument/didChange' notifications in the order you
+	 *   receive them.
+	 * - apply the `TextDocumentContentChangeEvent`s in a single notification
+	 *   in the order you receive them.
+	 */
+	ContentChanges []TextDocumentContentChangeEvent `json:"contentChanges"`
+}
+
+// DidSaveTextDocumentParams represents parameters for the textDocument/didSave notification.
+type DidSaveTextDocumentParams struct {
+	/**
+	 * The document that was saved.
+	 */
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+
+	/**
+	 * Optional the content when saved. Depends on the includeText value
+	 * when the save notification was requested.
+	 */
+	Text *string `json:"text,omitempty"`
+}
+
+// DidCloseTextDocumentParams represents parameters for the textDocument/didClose notification.
+type DidCloseTextDocumentParams struct {
+	/**
+	 * The document that was closed.
+	 */
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
 }
 
 type Position struct {

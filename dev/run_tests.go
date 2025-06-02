@@ -36,7 +36,7 @@ func RunTests(dCtx DevContext) (TestResult, error) {
 		"testCommands": repoConfig.TestCommands,
 	}
 
-	actionCtx := dCtx.NewActionContext("Run Tests")
+	actionCtx := dCtx.NewActionContext("run_tests")
 	actionCtx.ActionParams = actionParams
 	testResults, err := Track(actionCtx, func(flowAction domain.FlowAction) ([]TestResult, error) {
 		// execute all test commands in parallel
@@ -141,33 +141,68 @@ func runSingleTest(ctx workflow.Context, workingDir string, fullCommand string, 
 func SummarizeTestOutput(dCtx DevContext, testOutput string) (string, error) {
 	prompt := fmt.Sprintf(`
 Summarize the following test run results, maintain all important details that a
-software engineer may use to fix the issue. Leave out extraneous details to make
-the output significantly shorter, but maintain all salient details, including
-but not limited to:
+software engineer may use to fix the underlyng issue. Leave out extraneous
+details to make the output significantly shorter, but maintain all salient
+details, including but not limited to:
 
 1. The test command that failed in the test run
-2. The names/descriptions of the tests that failed
-3. Details of the assertions that failed, if applicable
-4. All relevant file paths and line numbers
-5. Any relevant logs or error messages
-6. Any relevant stack traces or partial stack traces
+2. The names/descriptions of the tests that failed (don't repeat the parent test name if there are many similar ones, group together instead)
+3. Details of the assertions that failed, if applicable (don't repeat if there are many similar assertions that failed, group these together instead)
+4. All relevant file paths and line numbers (don't repeat if there are many similar file paths and line numbers, group together instead)
+5. Any relevant logs or error messages (don't repeat if there are many similar logs/errors, group together instead)
+6. Any relevant stack traces or partial stack traces (don't repeat in full if there are many similar ones, group together instead)
 
-Choosing the most important failures, copy and paste the test output for those
-failures verbatim.
+Choosing the most important and representative failures, copy and paste the test
+output for those failures verbatim, though you can cut out large sections that
+are especially verbose or irrelevant/noisy. (important: only retain 1 or 2
+verbatim samples when it's repetitive). Don't repeat the same details across
+both the summary and verbatim sample(s), to keep the summary very short overall.
+If a verbatim sample is representative, just mention all the tests with similar
+failures for that group of failures.
 
 Present the summary directly without referring to the word "summary" or a
 preamble like "Here is the summary". Do not provide any guidance on how to fix
 the issue, or any ideas for where the problem might be: simply summarize the
 test output, no more, no less.
-`+
 
-		/*
-		   The summary should be formed from significant substrings of the test run output,
-		   rather than reformulating the output entirely, both those substrings should be
-		   constrained to the most relevant ones.
-		*/
+Rough template to follow (though adjust to the formatting of actual test outputs
+and feel free to adjust labels as needed):
 
-		`Here is the test result output to summarize:
+` + "```" + `example
+Test Command: <command>
+
+## Test Failures
+
+### <group1> (name of test failure group)
+- <parent> (class/parent test or similar, if any)
+	- <child1> (sub-test name)
+	- <child2> (sub-test name)
+	- <child3> (sub-test name)
+		- Assertion/log/error specific to child3 only, if any
+	- <child4> (sub-test name)
+
+Common (failing assertions/logs/errors/etc for this group):
+	- <assertion1> at <relative file path>:<line> (common assertion)
+	- <log1> (verbatim log common across )
+	- <error1> (common error)
+
+(Verbatim-ish output of representative test failure) <parent.childN>:
+<sample1> (include a common stack trace here if any, removing anything noisy)
+
+### Test2
+...
+
+### <group3> (name of test failure group)
+...
+
+etc
+
+## (Summary of other relevant logs/etc)
+
+(Anything here, only include if necessary)
+` + "```" + `
+
+Here is the test result output to summarize:
 
 %s
 `, testOutput)
@@ -180,7 +215,7 @@ test output, no more, no less.
 			ModelConfig: modelConfig,
 		}),
 	}
-	chatResponse, err := TrackedToolChat(dCtx, "Summarize Tests", toolChatOptions)
+	chatResponse, err := TrackedToolChat(dCtx, "summarize_tests", toolChatOptions)
 	if err != nil {
 		return "", err
 	}

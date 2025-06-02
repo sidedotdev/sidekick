@@ -122,10 +122,11 @@ func ManageChatHistoryActivity(chatHistory []llm.ChatMessage, maxLength int) ([]
 				numAssistantMessagesSeen++
 			}
 
-			// Check if the message contains guidance from the user
+			// Check if the message contains guidance from the user (and isn't
+			// copy from our prompts retrived via tools)
 			guidanceStartIndex := strings.Index(message.Content, guidanceStart)
 			guidanceEndIndex := strings.Index(message.Content, guidanceEnd)
-			if guidanceStartIndex != -1 && guidanceEndIndex != -1 {
+			if guidanceStartIndex != -1 && guidanceEndIndex != -1 && message.Role != llm.ChatMessageRoleTool {
 				// If guidance is present, retain the guidance and drop the remainder of the message
 				// Include the '#START Guidance From the User' and '#END Guidance From the User' tags in the retained guidance
 				guidanceContent := message.Content[guidanceStartIndex : guidanceEndIndex+len(guidanceEnd)]

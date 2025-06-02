@@ -3,13 +3,17 @@ package dev
 import (
 	_ "embed"
 	"fmt"
+	"sidekick/coding/git"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/llm"
+	"sidekick/srv"
 	"sidekick/utils"
 	"sort"
 	"strings"
+
+	"go.temporal.io/sdk/workflow"
 )
 
 const SignaturesEditHint = "Important note about shrunk context: in order to edit code for which we only show extracted code signatures, you must retrieve code context to get the full code from the original source using a tool."
@@ -39,9 +43,21 @@ func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, cont
 	if repoConfig.MaxIterations > 0 {
 		maxAttempts = repoConfig.MaxIterations
 	}
+	maxIterationsBeforeFeedback := 3
 
 editLoop:
 	for {
+		// Handle user request to go to the next step, if versioned feature is active.
+		version := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
+		if version == 1 { // New logic path for "Go Next Step" feature
+			action := dCtx.GlobalState.GetPendingUserAction()
+			if action != nil && *action == UserActionGoNext {
+				// Exit editCodeSubflow immediately as per requirements for "Go Next Step".
+				// The action is not consumed here.
+				return nil
+			}
+		}
+
 		// pause checkpoint
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return fmt.Errorf("failed to make user request when paused: %v", err)
@@ -50,12 +66,14 @@ editLoop:
 			attemptsSinceLastFeedback = 0
 		}
 
-		if attemptCount >= maxAttempts {
+
+		v := workflow.GetVersion(dCtx, "no-max-unless-disabled-human", workflow.DefaultVersion, 1)
+		if attemptCount >= maxAttempts && (v == 0 || dCtx.RepoConfig.DisableHumanInTheLoop) {
 			return ErrMaxAttemptsReached
 		}
 
 		// Only request feedback if we haven't received any recently from any source
-		if attemptCount > 0 && attemptsSinceLastFeedback >= 3 {
+		if attemptCount > 0 && attemptsSinceLastFeedback >= maxIterationsBeforeFeedback {
 			guidanceContext := "The system has attempted to edit the code multiple times without success. Please provide some guidance."
 			requestParams := map[string]any{
 				"editBlockReports": reports,
@@ -88,6 +106,35 @@ editLoop:
 			promptInfo = FeedbackInfo{Feedback: feedback}
 			attemptCount++
 		} else {
+			v := workflow.GetVersion(dCtx, "edit_code_diff", workflow.DefaultVersion, 1)
+			diff_enabled := false // TODO remove this later
+			if v == 1 && diff_enabled {
+				anyApplied := false
+				for _, report := range reports {
+					if report.DidApply {
+						anyApplied = true
+					}
+				}
+
+				if anyApplied {
+					// emit event with the git diff after any successful edits
+					diff, err := git.GitDiff(dCtx.ExecContext)
+					if err != nil {
+						return fmt.Errorf("failed to get git diff after edits: %v", err)
+					}
+
+					subflow := dCtx.FlowScope.Subflow
+					err = workflow.ExecuteActivity(dCtx, srv.Activities.AddFlowEvent, dCtx.WorkspaceId, subflow.FlowId, domain.CodeDiffEvent{
+						EventType: domain.CodeDiffEventType,
+						SubflowId: subflow.Id,
+						Diff:      diff,
+					}).Get(dCtx, nil)
+					if err != nil {
+						return fmt.Errorf("failed to emit code diff event: %v", err)
+					}
+				}
+			}
+
 			// Construct a message from the reports and add it to the chat
 			// history, so that the LLM can see what happened
 			reportMessage := feedbackFromApplyEditBlockReports(reports)
@@ -111,6 +158,7 @@ editLoop:
 				Role:    "system",
 				Content: reportMessage,
 			})
+
 			break
 		}
 	}
@@ -130,7 +178,28 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		maxAttempts = repoConfig.MaxIterations
 	}
 
+	feedbackIterations := 3
+	v := workflow.GetVersion(dCtx, "author-edit-feedback-iterations", workflow.DefaultVersion, 1)
+	if v == 1 {
+		// TODO when tool calls are not finding things automatically, provide
+		// better hints for how to find things after Nth iteration, before going
+		// to human-based support. Eg fuzzy search or embedding search etc.
+		// Maybe provide that as a tool or even run that tool automatically.
+		feedbackIterations = 6
+	}
+
 	for {
+		// Check for UserActionGoNext and version to potentially skip this step
+		version := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
+		if version == 1 {
+			action := dCtx.GlobalState.GetPendingUserAction()
+			if action != nil && *action == UserActionGoNext {
+				// If UserActionGoNext is pending and version is new, skip authoring edit blocks.
+				// The action is not consumed here; it will be consumed in completeDevStepSubflow.
+				return nil, nil
+			}
+		}
+
 		// pause checkpoint
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return nil, fmt.Errorf("failed to make user request when paused: %v", err)
@@ -155,7 +224,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			}
 
 			return nil, ErrMaxAttemptsReached
-		} else if attemptsSinceLastEditBlockOrFeedback > 0 && attemptsSinceLastEditBlockOrFeedback%3 == 0 {
+		} else if attemptsSinceLastEditBlockOrFeedback > 0 && attemptsSinceLastEditBlockOrFeedback%feedbackIterations == 0 {
 			guidanceContext := "The system has attempted to generate edits multiple times without success. Please provide some guidance."
 			requestParams := map[string]any{
 				// TODO include the latest failure if any
@@ -190,8 +259,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 		// call Open AI to get back messages that contain edit blocks
 		chatCtx := dCtx.WithCancelOnPause()
-		actionName := "Generate Code Edits"
-		chatResponse, err := TrackedToolChat(chatCtx, actionName, authorEditBlockInput)
+		chatResponse, err := TrackedToolChat(chatCtx, "code_edits", authorEditBlockInput)
 		if dCtx.GlobalState.Paused {
 			continue // UserRequestIfPaused will handle the pause
 		}
@@ -200,33 +268,15 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		}
 		*chatHistory = append(*chatHistory, chatResponse.ChatMessage)
 
-		currentExtractedBlocks, err := ExtractEditBlocks(chatResponse.ChatMessage.Content)
+		currentExtractedBlocks, err := ExtractEditBlocksWithVisibility(chatResponse.ChatMessage.Content, *chatHistory)
 		if err != nil {
 			return []EditBlock{}, fmt.Errorf("failed to extract edit blocks: %v", err)
 		}
 		if len(currentExtractedBlocks) > 0 {
 			attemptsSinceLastEditBlockOrFeedback = 0
 		}
-		visibleCodeBlocks := extractAllCodeBlocks(authorEditBlockInput.Params.Messages)
 		for _, block := range currentExtractedBlocks {
-			// these file ranges visible now, but might not be later after we
-			// ManageChatHistory, so we need to track visibility right now, at
-			// the point the edit block is first authored. We also track it per
-			// Remove GetRepoConfig as it is already set
-			// visibility
-			block.VisibleCodeBlocks = utils.Filter(visibleCodeBlocks, func(cb tree_sitter.CodeBlock) bool {
-				return cb.FilePath == block.FilePath
-			})
-			block.VisibleFileRanges = codeBlocksToMergedFileRanges(block.FilePath, visibleCodeBlocks)
-
-			// TODO /gen/req add one more visible code block (won't have
-			// corresponding visible file range) that is based all on the
-			// content in the first message, so if the first message has code in
-			// it, we can use that code directly. We'll still force the LLM to
-			// look up the file, but the error will say that nothing matches in
-			// the file, vs it not being in the chat context (which it is)
-
-			extractedEditBlocks = append(extractedEditBlocks, *block)
+			extractedEditBlocks = append(extractedEditBlocks, block)
 		}
 
 		if len(chatResponse.ToolCalls) > 0 && chatResponse.ToolCalls[0].Name != "" {
@@ -283,7 +333,6 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 		skip = true
 	case FeedbackInfo:
 		content = renderAuthorEditBlockFeedbackPrompt(info.Feedback)
-		fmt.Printf("\n%s\n", info.Feedback) // someone looking at worker logs can see what's going on this way
 	case ToolCallResponseInfo:
 		role = llm.ChatMessageRoleTool
 		content = info.Response

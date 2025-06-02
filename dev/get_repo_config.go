@@ -27,6 +27,19 @@ func GetRepoConfigActivity(envContainer env.EnvContainer) (common.RepoConfig, er
 		return common.RepoConfig{}, fmt.Errorf("failed to unmarshal TOML data: %v", err)
 	}
 
+	// If hints are not provided inline, try loading from HintsPath
+	// EditCode is a struct value, so a nil check is invalid and causes a build error.
+	// If the [edit_code] section is missing, Hints and HintsPath will be zero-valued (empty strings),
+	// so the condition correctly handles this case without the nil check.
+	if config.EditCode.Hints == "" && config.EditCode.HintsPath != "" {
+		hintsFilePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), config.EditCode.HintsPath)
+		hintsData, err := os.ReadFile(hintsFilePath)
+		if err != nil {
+			return common.RepoConfig{}, fmt.Errorf("failed to read hints file specified in side.toml (hints_path: %q): %w", config.EditCode.HintsPath, err)
+		}
+		config.EditCode.Hints = string(hintsData)
+	}
+
 	return config, nil
 }
 

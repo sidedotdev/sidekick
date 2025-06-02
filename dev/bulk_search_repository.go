@@ -57,7 +57,7 @@ func BulkSearchRepository(ctx workflow.Context, envContainer env.EnvContainer, b
 }
 
 func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *[]llm.ChatMessage) (llm.ToolCall, error) {
-	actionCtx := dCtx.ExecContext.NewActionContext("Generate Repo Search Query")
+	actionCtx := dCtx.ExecContext.NewActionContext("generate.repo_search_query")
 	params := llm.ToolChatParams{Messages: *chatHistory}
 	chatResponse, err := persisted_ai.ForceToolCall(actionCtx, dCtx.LLMConfig, &params, &bulkSearchRepositoryTool)
 	*chatHistory = params.Messages // update chat history with the new messages

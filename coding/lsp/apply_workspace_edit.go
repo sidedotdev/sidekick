@@ -123,7 +123,7 @@ func writeURI(documentURI, updatedContents string) error {
 
 func ApplyWorkspaceEdit(ctx context.Context, envContainer env.EnvContainer, workspaceEdit WorkspaceEdit) error {
 	for _, documentEdit := range workspaceEdit.DocumentChanges {
-		originalContents, err := readURI(documentEdit.TextDocument.TextDocumentIdentifier.DocumentURI)
+		originalContents, err := readURI(documentEdit.TextDocument.TextDocumentIdentifier.URI)
 		if err != nil {
 			return err
 		}
@@ -134,7 +134,7 @@ func ApplyWorkspaceEdit(ctx context.Context, envContainer env.EnvContainer, work
 		}
 
 		// Write the updated contents back to the file
-		err = writeURI(documentEdit.TextDocument.TextDocumentIdentifier.DocumentURI, updatedContents)
+		err = writeURI(documentEdit.TextDocument.TextDocumentIdentifier.URI, updatedContents)
 		if err != nil {
 			return err
 		}

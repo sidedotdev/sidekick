@@ -249,16 +249,19 @@ func (s *StreamerTestSuite) TestFlowEventStreaming() {
 	workspaceId := "test-workspace"
 	flowId := "test-flow"
 
-	subscriptionCh := make(chan domain.FlowEventSubscription, 2)
+	subscriptionCh := make(chan domain.FlowEventSubscription)
 	eventCh, errCh := s.streamer.StreamFlowEvents(ctx, workspaceId, flowId, subscriptionCh)
 
 	eventParentId1 := "parent1"
 	eventParentId2 := "parent2"
+	eventParentId3 := "parent3"
 
 	go func() {
 		subscriptionCh <- domain.FlowEventSubscription{ParentId: eventParentId1, StreamMessageStartId: ""}
 		time.Sleep(100 * time.Millisecond)
 		subscriptionCh <- domain.FlowEventSubscription{ParentId: eventParentId2, StreamMessageStartId: ""}
+		time.Sleep(100 * time.Millisecond)
+		subscriptionCh <- domain.FlowEventSubscription{ParentId: eventParentId3, StreamMessageStartId: ""}
 		close(subscriptionCh)
 	}()
 
@@ -266,15 +269,20 @@ func (s *StreamerTestSuite) TestFlowEventStreaming() {
 	events := []domain.FlowEvent{
 		domain.ProgressTextEvent{EventType: domain.ProgressTextEventType, ParentId: eventParentId1, Text: "Running tests..."},
 		domain.EndStreamEvent{EventType: domain.EndStreamEventType, ParentId: eventParentId1},
+		domain.CodeDiffEvent{
+			EventType: domain.CodeDiffEventType,
+			SubflowId: eventParentId2,
+			Diff:      "this is a fake test diff",
+		},
 		domain.ChatMessageDeltaEvent{
 			EventType:    domain.ChatMessageDeltaEventType,
-			FlowActionId: eventParentId2,
+			FlowActionId: eventParentId3,
 			ChatMessageDelta: common.ChatMessageDelta{
 				Role:    common.ChatMessageRoleAssistant,
 				Content: "How can I help you?",
 			},
 		},
-		domain.EndStreamEvent{EventType: domain.EndStreamEventType, ParentId: eventParentId2},
+		domain.EndStreamEvent{EventType: domain.EndStreamEventType, ParentId: eventParentId3},
 	}
 
 	for _, event := range events {
@@ -288,7 +296,7 @@ func (s *StreamerTestSuite) TestFlowEventStreaming() {
 		case event := <-eventCh:
 			receivedEvents = append(receivedEvents, event)
 		case err := <-errCh:
-			s.Fail("Unexpected error:", err)
+			s.Fail("Unexpected error:" + err.Error())
 		case <-time.After(5 * time.Second):
 			s.Fail("Timeout waiting for events")
 		}

@@ -1039,3 +1039,86 @@ func TestGetFileHeadersStringKotlin(t *testing.T) {
 		})
 	}
 }
+
+func TestGetAllAlternativeFileSymbolsKotlin(t *testing.T) {
+	t.Parallel()
+	// Define the test cases
+	testCases := []struct {
+		name           string
+		input          string
+		expectedOutput []string
+	}{
+		{
+			name: "Function with backticks",
+			input: `
+				fun ` + "`" + `test-function` + "`" + `() {
+				}
+			`,
+			expectedOutput: []string{"`test-function`", "test-function"},
+		},
+		{
+			name: "Property with backticks",
+			input: `
+				val ` + "`" + `special-property` + "`" + ` = 42
+			`,
+			expectedOutput: []string{"`special-property`", "special-property"},
+		},
+		{
+			name: "Function without backticks",
+			input: `
+				fun normalFunction() {
+				}
+			`,
+			expectedOutput: []string{"normalFunction"},
+		},
+		{
+			name: "Property without backticks",
+			input: `
+				val normalProperty = 42
+			`,
+			expectedOutput: []string{"normalProperty"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// Write the input to a temp file with a '.kt' extension
+			filePath, err := utils.WriteTestTempFile(t, "kt", tc.input)
+			if err != nil {
+				t.Fatalf("Failed to create temp file: %v", err)
+			}
+			defer os.Remove(filePath)
+
+			// Call the function and check the output
+			output, err := GetAllAlternativeFileSymbols(filePath)
+			if err != nil {
+				t.Fatalf("failed to get all alternative file symbols: %v", err)
+			}
+
+			// Convert output to string slice for comparison
+			outputStr := symbolToStringSlice(output)
+			if !assert.ElementsMatch(t, outputStr, tc.expectedOutput) {
+				t.Errorf("Expected %s, but got %s", utils.PanicJSON(tc.expectedOutput), utils.PanicJSON(outputStr))
+			}
+
+			// Verify properties of alternative symbols
+			for _, symbol := range output {
+				if strings.HasPrefix(symbol.SymbolType, "alt_") {
+					// Find the original symbol
+					var originalSymbol Symbol
+					for _, s := range output {
+						if !strings.HasPrefix(s.SymbolType, "alt_") &&
+							strings.TrimPrefix(symbol.SymbolType, "alt_") == s.SymbolType {
+							originalSymbol = s
+							break
+						}
+					}
+					// Alternative should have same points as original
+					assert.Equal(t, originalSymbol.StartPoint, symbol.StartPoint)
+					assert.Equal(t, originalSymbol.EndPoint, symbol.EndPoint)
+				}
+			}
+		})
+	}
+}

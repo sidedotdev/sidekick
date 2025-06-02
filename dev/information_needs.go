@@ -74,7 +74,7 @@ but err on the side of a longer list so the RAG has more information to work
 with. If the requirements are referencing code, list specific class, function,
 and variable names.
 `, repoSummary, requirements)
-	actionName := "Identify Information Needs"
+	actionName := "requirements_query_expansion"
 	options := llmInputForIdentifyInformationNeeds(dCtx, *chatHistory, prompt)
 	chatResponse, err := TrackedToolChat(dCtx, actionName, options)
 	if err != nil {

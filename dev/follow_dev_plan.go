@@ -252,14 +252,25 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 				}
 				continue
 			}
-			return result, fmt.Errorf("failed to perform step: %v", err)
+			return result, fmt.Errorf("failed to perform step: %w", err)
 		}
 
 		// Step 3: evaluate completion of step
-		result, err = checkIfDevStepCompleted(dCtx, requirements, step, planExecution)
-		if err != nil {
-			return result, fmt.Errorf("failed to check if requirements are fulfilled: %v", err)
+		executeNormalStepEvaluation := true
+		if v := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1); v == 1 {
+			action := dCtx.GlobalState.GetPendingUserAction()
+			if action != nil && *action == UserActionGoNext {
+				dCtx.GlobalState.ConsumePendingUserAction()
+				executeNormalStepEvaluation = false
+			}
 		}
+		if executeNormalStepEvaluation {
+			result, err = checkIfDevStepCompleted(dCtx, requirements, step, planExecution)
+			if err != nil {
+				return result, fmt.Errorf("failed to check if requirements are fulfilled: %w", err)
+			}
+		}
+
 		if result.Successful {
 			break
 		} else {
@@ -275,21 +286,21 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 	if step.Type == "edit" {
 		err = AutoFormatCode(dCtx)
 		if err != nil {
-			return result, err
+			return result, fmt.Errorf("failed to auto-format code: %w", err)
 		}
 
 		// needed when check edits is enabled to ensure we commit the auto-formatting
 		// needed when check edits is disabled because staging is how we limit future diffs in that case
 		err = git.GitAddAll(dCtx.ExecContext)
 		if err != nil {
-			return result, err
+			return result, fmt.Errorf("failed to git add all: %w", err)
 		}
 
 		if fflag.IsEnabled(dCtx, fflag.CheckEdits) {
 			// TODO use an LLM to write a better commit message
 			err = git.GitCommit(dCtx.ExecContext, fmt.Sprintf("%s\n\n%s", step.Title, step.Definition))
 			if err != nil {
-				return result, err
+				return result, fmt.Errorf("failed to git commit: %w", err)
 			}
 		}
 	}

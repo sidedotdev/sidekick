@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestFindAcceptableMatch(t *testing.T) {
+func TestFindAcceptableMatchBasicCases(t *testing.T) {
 	originalLines := []string{
 		"Line 1: Nothing special",
 		"Line 2: Start of block",
@@ -43,9 +43,24 @@ func TestFindAcceptableMatch(t *testing.T) {
 		expectedAll  []int
 	}{
 		{
-			"Exact Match",
-			EditBlock{OldLines: []string{"Line 2: Start of block", "Line 3: Middle of block", "Line 4: End of block"}},
+			"Exact match at start",
+			EditBlock{OldLines: []string{originalLines[0]}},
+			0, []int{0},
+		},
+		{
+			"Exact Match in middle",
+			EditBlock{OldLines: originalLines[1:4]},
 			1, []int{1},
+		},
+		{
+			"Exact match at end",
+			EditBlock{OldLines: []string{originalLines[22]}},
+			22, []int{22},
+		},
+		{
+			"Exact match full",
+			EditBlock{OldLines: originalLines},
+			0, []int{0},
 		},
 		{
 			"Whitespace Trim Match",
@@ -118,8 +133,17 @@ func TestFindAcceptableMatch(t *testing.T) {
 			len(originalLines) - 1, []int{len(originalLines) - 1},
 		},
 		{
-
-			"No Match",
+			"Added a line matching nothing at start, but still a match since everything else matches",
+			EditBlock{OldLines: append([]string{"this matches none of the lines", "\n", "\n"}, originalLines...)},
+			0, []int{0},
+		},
+		{
+			"No match",
+			EditBlock{OldLines: []string{"this matches none of the lines", "\n", "\n"}},
+			0, []int{},
+		},
+		{
+			"No Match again",
 			EditBlock{OldLines: []string{"This line does not exist in the original."}},
 			-99, // Indicates no match
 			[]int{},
@@ -129,16 +153,75 @@ func TestFindAcceptableMatch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			bestMatch, allMatches := FindAcceptableMatch(tt.block, originalLines, false)
+			assert.Equal(t, tt.expectedAll, utils.Map(allMatches, func(m match) int { return m.index }))
 			if tt.expectedBest == -99 {
 				if bestMatch.score != 0 {
 					t.Errorf("Expected score: 0, match:%v", bestMatch)
 				}
-			} else if bestMatch.index != tt.expectedBest {
-				t.Errorf("Expected index: %d, Got index: %d, match: %v", tt.expectedBest, bestMatch.index, utils.PrettyJSON(bestMatch))
-				assert.Equal(t, tt.expectedAll, utils.Map(allMatches, func(m match) int { return m.index }))
+			} else {
+				if bestMatch.index != tt.expectedBest {
+					t.Errorf("Expected index: %d, Got index: %d, match: %v", tt.expectedBest, bestMatch.index, utils.PrettyJSON(bestMatch))
+				}
 			}
 		})
 	}
+}
+
+func TestFindAcceptableMatchAdvancedCases(t *testing.T) {
+	t.Run("Ignore leading hallucinated comment", func(t *testing.T) {
+		originalLines := strings.Split(`
+// sidekick-managed worktrees.
+func determineManagedWorktreeBranches(workspace *domain.Workspace, gitWorktrees map[string]string) (map[string]struct{}, error) {
+	managedBranches := make(map[string]struct{})
+
+	sidekickDataHome, err := common.GetSidekickDataHome()
+`, "\n")
+
+		block := EditBlock{
+			FilePath: "some/file.go",
+			OldLines: strings.Split(`
+// sidekick-managed worktrees.
+func determineManagedWorktreeBranches(workspace *domain.Workspace, gitWorktrees map[string]string) (map[string]struct{}, error) {
+	managedBranches := make(map[string]struct{})
+
+	sidekickDataHome, err := common.GetSidekickDataHome()
+`, "\n"),
+			EditType: "update",
+		}
+
+		bestMatch, allAcceptableMatches := FindAcceptableMatch(block, originalLines, false)
+
+		//utils.PrettyPrint(allAcceptableMatches)
+		assert.True(t, len(allAcceptableMatches) == 1, "Expected an acceptable match despite the leading mismatched line")
+		assert.True(t, bestMatch.successfulMatch, "Expected a successful match despite the leading mismatched line")
+	})
+
+	t.Run("bad leading closing delimiter line NOT ignored", func(t *testing.T) {
+		originalLines := strings.Split(`
+}
+
+func TestGetWorkspaceByIdHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+	db := ctrl.service
+`, "\n")
+
+		block := EditBlock{
+			FilePath: "some/file.go",
+			OldLines: strings.Split(`)
+
+func TestGetWorkspaceByIdHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+`, "\n"),
+			EditType: "update",
+		}
+
+		_, allAcceptableMatches := FindAcceptableMatch(block, originalLines, false)
+
+		//utils.PrettyPrint(allAcceptableMatches)
+		assert.True(t, len(allAcceptableMatches) == 0, "Expected no acceptable match due to bad delimiter match")
+	})
 }
 
 // bigger test, catches more issues

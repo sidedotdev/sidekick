@@ -173,7 +173,36 @@ func (d Delegator) GetFlowsForTask(ctx context.Context, workspaceId string, task
 
 /* implements FlowStorage interface */
 func (d Delegator) PersistSubflow(ctx context.Context, subflow domain.Subflow) error {
-	return d.storage.PersistSubflow(ctx, subflow)
+	// Attempt to get the existing subflow
+	existingSubflow, err := d.storage.GetSubflow(ctx, subflow.WorkspaceId, subflow.Id)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("error getting existing subflow: %w", err)
+	}
+
+	var statusChangeEvent *domain.StatusChangeEvent
+
+	// Check if it's a new subflow or if the status has changed
+	if errors.Is(err, ErrNotFound) || existingSubflow.Status != subflow.Status {
+		statusChangeEvent = &domain.StatusChangeEvent{
+			EventType: domain.StatusChangeEventType,
+			ParentId:  subflow.Id,
+			Status:    string(subflow.Status),
+		}
+	}
+
+	// Persist the new or updated subflow
+	if err := d.storage.PersistSubflow(ctx, subflow); err != nil {
+		return fmt.Errorf("error persisting subflow: %w", err)
+	}
+
+	// If we have a status change event, add it using the streamer
+	if statusChangeEvent != nil {
+		if err := d.streamer.AddFlowEvent(ctx, subflow.WorkspaceId, subflow.FlowId, statusChangeEvent); err != nil {
+			return fmt.Errorf("error adding flow event: %w", err)
+		}
+	}
+
+	return nil
 }
 
 /* implements FlowStorage interface */

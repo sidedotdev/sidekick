@@ -97,6 +97,7 @@ export interface FlowAction {
   created: Date
   updated: Date
   subflow: string
+  subflowId?: string; // Added to link FlowAction to a specific Subflow instance if applicable
   subflowDescription?: string
   actionType: string
   actionParams: { [key: string]: any }
@@ -156,3 +157,23 @@ export interface ChatMessageDelta {
   toolCalls: ToolCall[];
   usage: Usage;
 }
+
+// --- From Go definition ---
+export enum SubflowStatus {
+  Started = "started",
+  Complete = "complete",
+  Failed = "failed",
+}
+
+export interface Subflow {
+  workspaceId: string;
+  id: string; // Unique identifier, prefixed with 'sf_'
+  name: string; // Name of the subflow
+  type?: string; // Type of the subflow (e.g., "step" or "edit_code")
+  description?: string; // Description of the subflow, if any
+  status: SubflowStatus; // Status of the subflow
+  parentSubflowId?: string; // ID of the parent subflow, if any
+  flowId: string; // ID of the flow this subflow belongs to
+  result?: string; // Result of the subflow, if any
+}
+// --- End From Go definition ---

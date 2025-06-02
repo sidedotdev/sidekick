@@ -2,6 +2,7 @@ package dev
 
 import (
 	"encoding/json"
+	"os"
 	"sidekick/llm"
 	"strings"
 	"testing"
@@ -181,7 +182,9 @@ func main() {
 		symbolizedCodeContent := strings.TrimPrefix(`
 some/file.go
 Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
+`+"```"+`go-signatures
 func main()
+`+"```"+`
 
 -------------------
 `, "\n") + SignaturesEditHint
@@ -228,7 +231,9 @@ some code without a language
 
 some/file.go
 Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
+` + "```" + `go-signatures
 func main()
+` + "```" + `
 
 -------------------
 ` + SignaturesEditHint
@@ -443,6 +448,31 @@ func TestManageChatHistory_toolCallJson(t *testing.T) {
 	assert.Equal(t, 3, len(*chatHistory))
 	assert.Contains(t, (*chatHistory)[1].Content, originalChatHistory[3].Content)
 	assert.Contains(t, (*chatHistory)[2].Content, originalChatHistory[4].Content)
+}
+
+func TestManageChatHistory_ToolCallEdgeCase(t *testing.T) {
+	chatHistoryBytes, err := os.ReadFile("test_files/manage_chat_history_tool_call_edge_case.txt")
+	if err != nil {
+		t.Fatalf("Failed to read test file: %v", err)
+	}
+
+	var chatHistory *[]llm.ChatMessage
+	err = json.Unmarshal(chatHistoryBytes, &chatHistory)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal chat history: %v", err)
+	}
+
+	originalLen := len(*chatHistory)
+	originalChatHistory := make([]llm.ChatMessage, originalLen)
+	copy(originalChatHistory, *chatHistory)
+
+	manageChatHistoryWithMutation(chatHistory, 37000)
+
+	// Verify that exactly the 2nd and 3rd messages are dropped
+	assert.Equal(t, originalLen-2, len(*chatHistory))
+	for i := 3; i < originalLen; i++ {
+		assert.Equal(t, originalChatHistory[i], (*chatHistory)[i-2])
+	}
 }
 
 /*

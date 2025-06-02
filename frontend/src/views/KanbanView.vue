@@ -2,7 +2,6 @@
   <KanbanBoard 
     v-if="store.workspaceId" 
     :tasks="tasks" 
-    :workspaceId="store.workspaceId" 
     :showGuidedOverlay="showGuidedOverlay"
     @refresh="fetchTasks"
     @dismissOverlay="handleOverlayDismiss" 

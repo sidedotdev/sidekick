@@ -1,16 +1,31 @@
 package api
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/srv"
-	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
 )
+
+// BranchInfo represents basic information about a git branch.
+type BranchInfo struct {
+	Name      string `json:"name"`
+	IsCurrent bool   `json:"isCurrent"`
+	IsDefault bool   `json:"isDefault"`
+}
 
 // WorkspaceRequest defines the structure for workspace creation and update requests.
 type WorkspaceRequest struct {
@@ -36,12 +51,56 @@ func DefineWorkspaceApiRoutes(r *gin.Engine, ctrl *Controller) *gin.RouterGroup 
 	workspaceApiRoutes.GET("", ctrl.GetWorkspacesHandler)
 	workspaceApiRoutes.GET(":workspaceId", ctrl.GetWorkspaceByIdHandler)
 	workspaceApiRoutes.PUT(":workspaceId", ctrl.UpdateWorkspaceHandler)
+	workspaceApiRoutes.GET(":workspaceId/branches", ctrl.GetWorkspaceBranchesHandler)
 
 	// Create a group with workspaceId parameter for nested routes
 	workspaceGroup := workspaceApiRoutes.Group(":workspaceId")
 	workspaceGroup.GET("/subflows/:id", ctrl.GetSubflowHandler)
 
 	return workspaceGroup
+}
+
+// GetWorkspaceBranchesHandler retrieves the list of local git branches for a workspace,
+// excluding branches associated with managed worktrees.
+func (ctrl *Controller) GetWorkspaceBranchesHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	if workspaceId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "workspaceId is required"})
+		return
+	}
+	ctx := c.Request.Context()
+
+	workspace, err := ctrl.service.GetWorkspace(ctx, workspaceId)
+	if err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Workspace not found"})
+		} else {
+			log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to get workspace")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get workspace"})
+		}
+		return
+	}
+
+	if workspace.LocalRepoDir == "" {
+		log.Error().Str("workspaceId", workspaceId).Msg("Workspace has no LocalRepoDir configured")
+		c.JSON(http.StatusConflict, gin.H{"error": "Workspace repository directory not configured"})
+		return
+	}
+	repoDir := workspace.LocalRepoDir
+
+	if _, err := os.Stat(repoDir); os.IsNotExist(err) {
+		log.Error().Err(err).Str("repoDir", repoDir).Msg("Workspace repository directory does not exist")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Workspace repository directory not found"})
+		return
+	}
+
+	filteredBranches, err := getFilteredBranches(ctx, repoDir, &workspace)
+	if err != nil {
+		ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("Failed to get branches: %v", err))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"branches": filteredBranches})
 }
 
 func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
@@ -262,4 +321,72 @@ func (c *Controller) GetWorkspacesHandler(ctx *gin.Context) {
 	}
 	// Format the workspace data into JSON and return it in the response
 	ctx.JSON(http.StatusOK, gin.H{"workspaces": workspaces})
+}
+
+// getFilteredBranches retrieves and filters local git branches for a given workspace repository.
+// It excludes branches associated with managed worktrees.
+// It requires the context, repository directory path, workspace domain object, and pre-fetched worktree activity.
+func getFilteredBranches(ctx context.Context, repoDir string, workspace *domain.Workspace) ([]BranchInfo, error) {
+	gitWorktrees, err := git.ListWorktreesActivity(ctx, repoDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list worktrees: %w", err)
+	}
+
+	managedWorktreeBranches, err := determineManagedWorktreeBranches(gitWorktrees)
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine managed worktrees: %w", err)
+	}
+
+	branchState, err := git.GetCurrentBranch(ctx, repoDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current branch: %w", err)
+	}
+	currentBranchName, isDetached := branchState.Name, branchState.IsDetached
+
+	defaultBranchName, err := git.GetDefaultBranch(ctx, repoDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get default branch: %w", err)
+	}
+
+	localBranchNames, err := git.ListLocalBranches(ctx, repoDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list git branches: %w", err)
+	}
+
+	var filteredBranches []BranchInfo
+	for _, branchName := range localBranchNames {
+		// Skip branches associated with managed worktrees
+		if _, isManaged := managedWorktreeBranches[branchName]; isManaged {
+			continue
+		}
+
+		filteredBranches = append(filteredBranches, BranchInfo{
+			Name:      branchName,
+			IsCurrent: !isDetached && branchName == currentBranchName,      // Only mark current if not detached
+			IsDefault: branchName != "" && branchName == defaultBranchName, // Mark as default only if names match and are not empty
+		})
+	}
+
+	return filteredBranches, nil
+}
+
+// determineManagedWorktreeBranches identifies branches associated with
+// sidekick-managed worktrees.
+func determineManagedWorktreeBranches(gitWorktrees []git.GitWorktree) (map[string]struct{}, error) {
+	managedBranches := make(map[string]struct{})
+
+	sidekickDataHome, err := common.GetSidekickDataHome()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get sidekick data home: %w", err)
+	}
+
+	managedWorktreeBaseDir := filepath.Join(sidekickDataHome, "worktrees")
+	for _, gitWorktree := range gitWorktrees {
+		// using Contains because of symlinks in osx (/private/var/folders/... -> /var/folders/...)
+		if strings.Contains(gitWorktree.Path, managedWorktreeBaseDir) {
+			managedBranches[gitWorktree.Branch] = struct{}{}
+		}
+	}
+
+	return managedBranches, nil
 }

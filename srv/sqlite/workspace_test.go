@@ -4,7 +4,6 @@ import (
 	"context"
 	"sidekick/common"
 	"sidekick/domain"
-	"sidekick/srv"
 	"testing"
 	"time"
 
@@ -35,7 +34,7 @@ func TestPersistAndGetWorkspace(t *testing.T) {
 
 	// Test GetWorkspace with non-existent ID
 	_, err = storage.GetWorkspace(ctx, "non-existent-id")
-	assert.Equal(t, srv.ErrNotFound, err)
+	assert.Equal(t, common.ErrNotFound, err)
 
 	// Test updating an existing workspace
 	updatedWorkspace := workspace
@@ -98,11 +97,11 @@ func TestDeleteWorkspace(t *testing.T) {
 
 	// Verify workspace is deleted
 	_, err = storage.GetWorkspace(ctx, workspace.Id)
-	assert.Equal(t, srv.ErrNotFound, err)
+	assert.Equal(t, common.ErrNotFound, err)
 
 	// Test deleting non-existent workspace
 	err = storage.DeleteWorkspace(ctx, "non-existent-id")
-	assert.Equal(t, srv.ErrNotFound, err)
+	assert.Equal(t, common.ErrNotFound, err)
 }
 
 func TestPersistWorkspaceConfig(t *testing.T) {
@@ -195,5 +194,5 @@ func TestGetWorkspaceConfig(t *testing.T) {
 
 	// Test GetWorkspaceConfig with non-existent workspace
 	_, err = storage.GetWorkspaceConfig(ctx, "non-existent-id")
-	assert.Equal(t, srv.ErrNotFound, err)
+	assert.Equal(t, common.ErrNotFound, err)
 }

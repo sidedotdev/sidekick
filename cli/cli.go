@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sidekick"
+	"strconv"
 
 	// Embedding the frontend build files
 	_ "embed"
@@ -13,6 +14,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
+
+// For testing
+var osExit = os.Exit
 
 type program struct{}
 
@@ -32,10 +36,32 @@ func (p *program) Stop(s system_service.Service) error {
 	return nil
 }
 
+func displayHelp() {
+	fmt.Println("Sidekick - A development tool that helps you manage and monitor your local services")
+	fmt.Println("\nAvailable Commands:")
+	fmt.Println("  init    Initialize Sidekick in the current directory")
+	fmt.Println("  start   Start Sidekick services (server and/or worker)")
+	fmt.Println("\nFlags:")
+	fmt.Println("  -h, --help   Show help information")
+	fmt.Println("\nExamples:")
+	fmt.Println("  side init            Initialize Sidekick")
+	fmt.Println("  side start           Start all Sidekick services")
+	fmt.Println("  side start server    Start the Sidekick api server")
+	fmt.Println("  side start worker    Start the Sidekick worker")
+}
+
 func main() {
+	// Check for help flag before other argument processing
+	if len(os.Args) == 2 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
+		displayHelp()
+		osExit(0)
+		return
+	}
+
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: side init")
-		os.Exit(1)
+		osExit(1)
+		return
 	}
 
 	// Load .env file if any
@@ -44,6 +70,13 @@ func main() {
 			log.Warn().Err(err).Msg("Warning: failed to load .env file")
 		}
 	}
+
+	// set global log level
+	logLevel, err := strconv.Atoi(os.Getenv("SIDE_LOG_LEVEL"))
+	if err != nil {
+		logLevel = int(zerolog.InfoLevel) // default to INFO
+	}
+	zerolog.SetGlobalLevel(zerolog.Level(logLevel))
 
 	if system_service.Interactive() {
 		interactiveMain()

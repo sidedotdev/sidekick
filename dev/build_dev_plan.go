@@ -74,8 +74,14 @@ func (step DevStep) String() string {
 	writer := &strings.Builder{}
 	level := len(strings.Split(step.StepNumber, ".")) - 1
 	writer.WriteString(strings.Repeat("  ", level))
-	writer.WriteString(step.StepNumber)
-	writer.WriteString(") ")
+	if level == 0 {
+		writer.WriteString("#### Step ")
+		writer.WriteString(step.StepNumber)
+		writer.WriteString(": ")
+	} else {
+		writer.WriteString(step.StepNumber)
+		writer.WriteString(". ")
+	}
 	writer.WriteString(step.Title)
 	writer.WriteString("\n")
 	writer.WriteString(strings.ReplaceAll(strings.Trim(step.Definition, "\n"), "\n", "\n"+strings.Repeat("  ", level+1)))
@@ -116,12 +122,22 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 		reproduceIssue:              reproduceIssue,
 	}
 
+	feedbackIterations := 5
+	v := workflow.GetVersion(dCtx, "dev-planning-feedback-iterations", workflow.DefaultVersion, 1)
+	if v == 1 {
+		// TODO when tool calls are not finding things automatically, provide
+		// better hints for how to find things after Nth iteration, before going
+		// to human-based support. Eg fuzzy search or embedding search etc.
+		// Maybe provide that as a tool or even run that tool automatically.
+		feedbackIterations = 9
+	}
+
 	result, err := LlmLoop(
 		dCtx,
 		chatHistory,
 		buildDevPlanIteration,
 		WithInitialState(initialState),
-		WithFeedbackEvery(5),
+		WithFeedbackEvery(feedbackIterations),
 		WithMaxIterations(maxIterations),
 	)
 	if err != nil {
@@ -140,13 +156,20 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
 	ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, maxLength)
 
-	chatCtx := iteration.ExecCtx.WithCancelOnPause()
-	chatResponse, err := generateDevPlan(chatCtx, iteration.ChatHistory)
-	if iteration.ExecCtx.GlobalState != nil && iteration.ExecCtx.GlobalState.Paused {
-		return nil, nil // continue the loop: UserRequestIfPaused will handle the pause
+	var chatResponse *llm.ChatMessageResponse
+	var err error
+	if v := workflow.GetVersion(iteration.ExecCtx, "dev-plan-cleanup-cancel-internally", workflow.DefaultVersion, 1); v == 1 {
+		chatResponse, err = generateDevPlan(iteration.ExecCtx, iteration.ChatHistory)
+	} else {
+		// old version: new one does this in outer LlmLoop
+		chatCtx := iteration.ExecCtx.WithCancelOnPause()
+		chatResponse, err = generateDevPlan(chatCtx, iteration.ChatHistory)
+		if iteration.ExecCtx.GlobalState != nil && iteration.ExecCtx.GlobalState.Paused {
+				return nil, nil // continue the loop: UserRequestIfPaused will handle the pause
+		}
 	}
 	if err != nil {
-		return nil, fmt.Errorf("error executing OpenAI chat completion activity: %w", err)
+		return nil, fmt.Errorf("error generating dev plan: %w", err)
 	}
 
 	*iteration.ChatHistory = append(*iteration.ChatHistory, chatResponse.ChatMessage)
@@ -286,7 +309,7 @@ func generateDevPlan(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*llm.Chat
 		},
 	}
 
-	return TrackedToolChat(dCtx, "Generate Dev Plan", chatOptions)
+	return TrackedToolChat(dCtx, "dev_plan", chatOptions)
 }
 
 // TODO we should determine if the code context is too large programmatically
@@ -313,8 +336,7 @@ func ApproveDevPlan(dCtx DevContext, devPlan DevPlan) (*UserResponse, error) {
 		Content:       "Please approve or reject the development plan:\n\n" + devPlan.String() + "\n\nDo you approve this plan? If not, please provide feedback on what needs to be changed.",
 		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
 	}
-	actionCtx := dCtx.NewActionContext("Approve Dev Plan")
-	return GetUserApproval(actionCtx, req.Content, req.RequestParams)
+	return GetUserApproval(dCtx, "dev_plan", req.Content, req.RequestParams)
 }
 
 // List out all conditions/requirements in the following instructions. Then

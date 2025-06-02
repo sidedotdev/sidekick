@@ -102,6 +102,10 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 		Service:        service,
 	}
 
+	devActivities := &dev.DevActivities{
+		LSPActivities: lspActivities,
+	}
+
 	w := worker.New(temporalClient, taskQueue, worker.Options{
 		OnFatalError: func(err error) {
 			log.Fatal().Err(err).Msg("Worker encountered a fatal error")
@@ -124,6 +128,12 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	w.RegisterActivity(git.GitRestoreActivity)
 	w.RegisterActivity(git.GitCommitActivity)
 	w.RegisterActivity(git.GitCheckoutActivity)
+	w.RegisterActivity(git.GitMergeActivity)
+	w.RegisterActivity(git.ListWorktreesActivity)
+	w.RegisterActivity(git.CleanupWorktreeActivity)
+	w.RegisterActivity(git.GetCurrentBranch)
+	w.RegisterActivity(git.GetDefaultBranch)
+	w.RegisterActivity(git.ListLocalBranches)
 	w.RegisterActivity(embedActivities)
 	w.RegisterActivity(vectorActivities)
 	w.RegisterActivity(flowActivities)
@@ -131,7 +141,8 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	w.RegisterActivity(dev.GetRepoConfigActivity)
 	w.RegisterActivity(dev.GetSymbolsActivity)
 	w.RegisterActivity(devManagerActivities)
-	w.RegisterActivity(dev.ApplyEditBlocksActivity)
+	w.RegisterActivity(dev.ApplyEditBlocksActivity) // backcompat for <= v0.4.2
+	w.RegisterActivity(devActivities)
 	w.RegisterActivity(dev.ReadFileActivity)
 	w.RegisterActivity(dev.ManageChatHistoryActivity)
 	w.RegisterActivity(ffa.EvalBoolFlag)
@@ -151,7 +162,6 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 }
 
 func RegisterWorkflows(w worker.WorkflowRegistry) {
-	w.RegisterWorkflow(sidekick.ExampleLlmActivitiesWorkflow)
 	w.RegisterWorkflow(persisted_ai.TestOpenAiEmbedActivityWorkflow)
 	w.RegisterWorkflow(dev.DevAgentManagerWorkflow)
 	w.RegisterWorkflow(dev.PlannedDevWorkflow)

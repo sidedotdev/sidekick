@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"sidekick/common"
 	"sidekick/domain"
-	"sidekick/srv"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -75,7 +75,7 @@ func TestGetFlow(t *testing.T) {
 
 	t.Run("Get non-existent flow", func(t *testing.T) {
 		_, err := storage.GetFlow(ctx, "non-existent-workspace", "non-existent-flow")
-		assert.ErrorIs(t, err, srv.ErrNotFound)
+		assert.ErrorIs(t, err, common.ErrNotFound)
 	})
 }
 

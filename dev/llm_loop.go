@@ -1,11 +1,13 @@
 package dev
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sidekick/llm"
-)
 
-var ErrPaused = fmt.Errorf("operation paused")
+	"go.temporal.io/sdk/workflow"
+)
 
 // LlmIteration represents a single iteration in the LLM loop.
 type LlmIteration struct {
@@ -74,8 +76,11 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 	for {
 		iteration.Num++
 		iteration.NumSinceLastFeedback++
+		// Use WithCancelOnPause for long-running operations, ensuring a fresh context for each iteration.
+		iteration.ExecCtx = dCtx.WithCancelOnPause()
 
-		if iteration.Num > config.maxIterations {
+		v := workflow.GetVersion(dCtx, "no-max-unless-disabled-human", workflow.DefaultVersion, 1)
+		if iteration.Num > config.maxIterations && (v == 0 || dCtx.RepoConfig.DisableHumanInTheLoop) {
 			return nil, ErrMaxAttemptsReached
 		}
 
@@ -109,27 +114,25 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 			iteration.NumSinceLastFeedback = 0
 		}
 
-		// Use WithCancelOnPause for long-running operations
-		iteration.ExecCtx = dCtx.WithCancelOnPause()
 		result, err := loopFunc(iteration)
 
 		if err != nil {
-			if err == ErrPaused {
+			// If loopFunc was canceled due to a system pause, continue the loop.
+			// UserRequestIfPaused at the next iteration's start will handle the pause.
+			if dCtx.GlobalState != nil && dCtx.GlobalState.Paused && errors.Is(err, context.Canceled) {
+				if v >= 1 {
+					// ensure we don't break due to max iterations in this case
+					iteration.Num--
+					iteration.NumSinceLastFeedback--
+				}
 				continue
 			}
+			// Otherwise, it's a genuine error from loopFunc.
 			return nil, err
 		}
 
 		if result != nil {
 			return result, nil
 		}
-
-		// Check if paused after each iteration
-		if dCtx.GlobalState != nil && dCtx.GlobalState.Paused {
-			continue
-		}
-
-		// I think we want the loopFunc to have full control over managing chat history
-		// ManageChatHistory(flowCtx.WorkflowContext, iteration.ChatHistory, defaultMaxChatHistoryLength);
 	}
 }

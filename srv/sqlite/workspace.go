@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sidekick/common"
 	"sidekick/domain"
-	"sidekick/srv"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -58,7 +58,7 @@ func (s *Storage) GetWorkspace(ctx context.Context, workspaceId string) (domain.
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return domain.Workspace{}, srv.ErrNotFound
+			return domain.Workspace{}, common.ErrNotFound
 		}
 		log.Error().Err(err).
 			Str("workspaceId", workspaceId).
@@ -130,7 +130,7 @@ func (s *Storage) DeleteWorkspace(ctx context.Context, workspaceId string) error
 	}
 
 	if rowsAffected == 0 {
-		return srv.ErrNotFound
+		return common.ErrNotFound
 	}
 
 	// Delete from workspace_configs table
@@ -160,7 +160,7 @@ func (s *Storage) GetWorkspaceConfig(ctx context.Context, workspaceId string) (d
 	err := s.db.QueryRowContext(ctx, query, workspaceId).Scan(&llmConfigJSON, &embeddingConfigJSON)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return domain.WorkspaceConfig{}, srv.ErrNotFound
+			return domain.WorkspaceConfig{}, common.ErrNotFound
 		}
 		log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Failed to get workspace config")
 		return domain.WorkspaceConfig{}, fmt.Errorf("failed to get workspace config: %w", err)
@@ -186,7 +186,7 @@ func (s *Storage) PersistWorkspaceConfig(ctx context.Context, workspaceId string
 	// Check if the workspace exists
 	_, err := s.GetWorkspace(ctx, workspaceId)
 	if err != nil {
-		if err == srv.ErrNotFound {
+		if err == common.ErrNotFound {
 			log.Error().Str("workspaceId", workspaceId).Msg("Workspace not found")
 			return fmt.Errorf("workspace not found: %w", err)
 		}

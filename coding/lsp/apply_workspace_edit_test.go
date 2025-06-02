@@ -275,7 +275,7 @@ Line 5`
 			{
 				TextDocument: OptionalVersionedTextDocumentIdentifier{
 					TextDocumentIdentifier: TextDocumentIdentifier{
-						DocumentURI: documentURI,
+						URI: documentURI,
 					},
 				},
 				Edits: []TextEdit{
@@ -337,7 +337,7 @@ Line 5`
 			{
 				TextDocument: OptionalVersionedTextDocumentIdentifier{
 					TextDocumentIdentifier: TextDocumentIdentifier{
-						DocumentURI: documentURI,
+						URI: documentURI,
 					},
 				},
 				Edits: []TextEdit{

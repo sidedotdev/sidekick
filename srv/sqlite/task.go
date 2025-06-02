@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sidekick/common"
 	"sidekick/domain"
-	"sidekick/srv"
 	"strings"
 	"time"
 )
@@ -66,7 +66,7 @@ func (s *Storage) DeleteTask(ctx context.Context, workspaceId, taskId string) er
 	}
 
 	if rowsAffected == 0 {
-		return srv.ErrNotFound
+		return common.ErrNotFound
 	}
 
 	return nil
@@ -87,7 +87,7 @@ func (s *Storage) GetTask(ctx context.Context, workspaceId, taskId string) (doma
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return domain.Task{}, srv.ErrNotFound
+			return domain.Task{}, common.ErrNotFound
 		}
 		return domain.Task{}, fmt.Errorf("failed to get task: %w", err)
 	}

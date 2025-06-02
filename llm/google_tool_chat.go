@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/invopop/jsonschema"
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/activity"
 	"google.golang.org/genai"
 )
@@ -108,10 +109,13 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		if err != nil {
 			return nil, fmt.Errorf("failed to iterate on %s tool chat stream: %w", providerName, err)
 		}
+		// TODO: handle result.UsageMetadata.CandidatesTokenCount
 		delta, progress := googleToChatMessageDelta(result)
 		if delta != nil {
 			deltaChan <- *delta
 			deltas = append(deltas, *delta)
+		} else {
+			log.Debug().Msgf("did not convert result to delta for %s tool chat stream: %s", providerName , utils.PrettyJSON(result))
 		}
 		if progress != nil && progressChan != nil {
 			progressChan <- *progress

@@ -63,7 +63,7 @@ func getAutofixCodeActions(ctx context.Context, lspClient LSPClient, documentURI
 	endCharacter := len(lines[endLine])
 	return lspClient.TextDocumentCodeAction(ctx, CodeActionParams{
 		TextDocument: TextDocumentIdentifier{
-			DocumentURI: documentURI,
+			URI: documentURI,
 		},
 		Range: Range{
 			Start: Position{
@@ -107,6 +107,9 @@ func applyCodeActions(ctx context.Context, envContainer env.EnvContainer, codeAc
 
 var defaultClientCapabilities = ClientCapabilities{
 	TextDocument: TextDocumentClientCapabilities{
+		Synchronization: &TextDocumentSyncClientCapabilities{
+			DidSave: &[]bool{true}[0],
+		},
 		CodeAction: CodeActionClientCapabilities{
 			CodeActionLiteralSupport: &CodeActionLiteralSupport{
 				CodeActionKind: &CodeActionKindValueSet{

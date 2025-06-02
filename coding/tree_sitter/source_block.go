@@ -111,7 +111,7 @@ func ExpandContextLines(sourceBlocks []SourceBlock, numContextLines int, sourceC
 		sb.Range.StartByte -= reduceBytes
 		sb.Range.StartPoint.Column = 0
 		sb.Range.EndByte += countBytesInLines(sb.Range.EndByte, numContextLines, sourceCode, "forward")
-		// using length since end is exclusive
+		// using len instead of len-1 since end is exclusive
 		sb.Range.EndPoint.Column = uint32(len(sourceCodeLines[sb.Range.EndPoint.Row]))
 
 		// startByte is in the middle of a line, so we need to go back to the start of the line

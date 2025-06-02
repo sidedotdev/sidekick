@@ -82,3 +82,10 @@
   )
   (#eq? @name "{{SymbolName}}")
 )
+
+(
+  (enum_declaration
+    name: (_) @name ; note: type_identifier is not correct in this position, and in fact, we don't care what the node type is as long as it's the name
+  ) @definition
+  (#eq? @name "{{SymbolName}}")
+)

@@ -50,12 +50,12 @@ type LocalGitWorktreeEnv struct {
 type LocalEnvParams struct {
 	WorkspaceId string
 	RepoDir     string
-	Branch      string
+	StartBranch *string
 }
 
 func NewLocalEnv(ctx context.Context, params LocalEnvParams) (Env, error) {
-	if params.Branch != "" {
-		return nil, fmt.Errorf("branch is not supported for local environment")
+	if params.StartBranch != nil {
+		return nil, fmt.Errorf("start branch is not supported for local environment")
 	}
 	dir, err := filepath.Abs(params.RepoDir)
 	return &LocalEnv{WorkingDirectory: dir}, err
@@ -77,18 +77,24 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 		return nil, fmt.Errorf("failed to create worktree directory: %w", err)
 	}
 
-	runCommandInput := unix.RunCommandActivityInput{
+	newBranchName := worktree.Name
+	worktreeBaseRef := "HEAD"
+	if params.StartBranch != nil && *params.StartBranch != "" {
+		worktreeBaseRef = *params.StartBranch
+	}
+	// Add the worktree, creating a new branch based on the target branch
+	addWorktreeInput := unix.RunCommandActivityInput{
 		WorkingDir: params.RepoDir,
 		Command:    "git",
-		Args:       []string{"worktree", "add", workingDir},
+		Args:       []string{"worktree", "add", "-b", newBranchName, workingDir, worktreeBaseRef},
 	}
-	runCommandOutput, err := unix.RunCommandActivity(ctx, runCommandInput)
+	addWorktreeOutput, err := unix.RunCommandActivity(ctx, addWorktreeInput)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run git worktree add command: %w", err)
 	}
 
-	if runCommandOutput.ExitStatus != 0 {
-		return nil, fmt.Errorf("git worktree add command failed with exit status %d: %s", runCommandOutput.ExitStatus, runCommandOutput.Stderr)
+	if addWorktreeOutput.ExitStatus != 0 {
+		return nil, fmt.Errorf("git worktree add command failed with exit status %d: %s", addWorktreeOutput.ExitStatus, addWorktreeOutput.Stderr)
 	}
 
 	return &LocalGitWorktreeEnv{WorkingDirectory: workingDir}, nil

@@ -512,3 +512,62 @@ func TestGetFileHeadersStringTypescript(t *testing.T) {
 		})
 	}
 }
+
+// FIXME /gen move test cases into TestGetSymbolDefinitionTypescript and remove this separate test function
+func TestGetSymbolDefinitionTypescriptEnum(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name               string
+		symbolName         string
+		code               string
+		expectedDefinition string
+		expectedError      string
+	}{
+		{
+			name:               "simple enum with string literal member",
+			symbolName:         "MySimpleEnum",
+			code:               `enum MySimpleEnum { Member1 = "val1" }`,
+			expectedDefinition: `enum MySimpleEnum { Member1 = "val1" }`,
+			expectedError:      "",
+		},
+		{
+			name:               "exported enum with string literal members",
+			symbolName:         "MyTestStatus",
+			code:               `export enum MyTestStatus { Active = "active", Inactive = "inactive" }`,
+			expectedDefinition: `export enum MyTestStatus { Active = "active", Inactive = "inactive" }`,
+			expectedError:      "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			filePath, err := utils.WriteTestTempFile(t, "ts", tc.code)
+			if err != nil {
+				t.Fatalf("Failed to write temp file: %v", err)
+			}
+			defer os.Remove(filePath)
+
+			definition, err := GetSymbolDefinitionsString(filePath, tc.symbolName, 0)
+
+			if tc.expectedError != "" {
+				// We expect an error
+				if err == nil {
+					t.Fatalf("Expected error containing '%s', but got no error. Definition returned:\n%s", tc.expectedError, definition)
+				}
+				if !strings.Contains(err.Error(), tc.expectedError) {
+					t.Fatalf("Expected error containing '%s', got: %v", tc.expectedError, err)
+				}
+				// If err is not nil AND contains the expectedError, this sub-test passes for this step's goal (to show current failure).
+			} else {
+				// We expect no error (this branch is for when the fix is implemented in a future step)
+				if err != nil {
+					t.Fatalf("GetSymbolDefinitionsString returned an unexpected error: %v", err)
+				}
+				if strings.TrimSuffix(definition, "\n") != strings.TrimSuffix(tc.expectedDefinition, "\n") {
+					t.Errorf("Expected definition:\n%s\nGot:\n%s", utils.PanicJSON(tc.expectedDefinition), utils.PanicJSON(definition))
+				}
+			}
+		})
+	}
+}

@@ -27,6 +27,7 @@
 *.DS_Store
 
 frontend/node_modules
+main
 side
 libusearch_c.a
 local-temporal-db*
