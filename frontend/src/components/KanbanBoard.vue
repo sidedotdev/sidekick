@@ -25,12 +25,12 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { FullTask, AgentType, Task } from '../lib/models'
+import type { FullTask, AgentType, Task, TaskStatus } from '../lib/models'
 import TaskCard from './TaskCard.vue'
 import TaskModal from './TaskModal.vue'
+import { store } from '../lib/store'
 
 const props = defineProps<{
-  workspaceId: string,
   tasks: FullTask[],
   showGuidedOverlay: boolean
 }>()
@@ -64,17 +64,23 @@ function refresh() {
 }
 
 const isModalOpen = ref(false)
-const newTask = ref<Task>({
-  status: 'drafting',
-  agentType: 'human',
-  workspaceId: props.workspaceId,
+
+const taskState = ref({
+  agentType: 'human' as AgentType,
+  status: 'drafting' as TaskStatus,
 })
+
+const newTask = computed<Task>(() => ({
+  status: taskState.value.status,
+  agentType: taskState.value.agentType,
+  workspaceId: store.workspaceId || '',
+}))
 
 const addTask = (agentType: AgentType) => {
   if (agentType !== 'none') {
     isModalOpen.value = true
-    newTask.value.agentType = agentType
-    newTask.value.status = agentType === 'human' ? 'drafting' : 'to_do';
+    taskState.value.agentType = agentType
+    taskState.value.status = agentType === 'human' ? 'drafting' : 'to_do'
     if (agentType === 'llm' && props.showGuidedOverlay) {
       emit('dismissOverlay')
     }
@@ -83,10 +89,9 @@ const addTask = (agentType: AgentType) => {
 
 const closeModal = () => {
   isModalOpen.value = false
-  newTask.value = {
-    status: 'drafting',
+  taskState.value = {
     agentType: 'human',
-    workspaceId: props.workspaceId,
+    status: 'drafting'
   }
 }
 
@@ -100,7 +105,7 @@ function error(e: any) {
 async function confirmArchiveFinished() {
   if (confirm('Are you sure you want to archive all finished tasks?')) {
     try {
-      const response = await fetch(`/api/v1/workspaces/${props.workspaceId}/tasks/archive_finished`, { method: 'POST' });
+      const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/tasks/archive_finished`, { method: 'POST' });
       if (!response.ok) {
         throw new Error('Failed to archive finished tasks');
       }

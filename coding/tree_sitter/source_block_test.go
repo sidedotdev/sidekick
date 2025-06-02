@@ -106,6 +106,32 @@ func TestExpandContextLines(t *testing.T) {
 			},
 		},
 		{
+			name: "context lines not able to be expanded",
+			sourceBlocks: []SourceBlock{
+				{
+					Range: sitter.Range{
+						StartByte:  0,
+						EndByte:    uint32(len([]byte("line1\nline2\nline3"))),
+						StartPoint: sitter.Point{Row: 0, Column: 0},
+						EndPoint:   sitter.Point{Row: 2, Column: 5},
+					},
+				},
+			},
+			numContextLines: 3,
+			sourceCode:      []byte("line1\nline2\nline3"),
+			expectedStrings: []string{"line1\nline2\nline3"},
+			expected: []SourceBlock{
+				{
+					Range: sitter.Range{
+						StartByte:  0,
+						EndByte:    uint32(len([]byte("line1\nline2\nline3"))),
+						StartPoint: sitter.Point{Row: 0, Column: 0},
+						EndPoint:   sitter.Point{Row: 2, Column: 5},
+					},
+				},
+			},
+		},
+		{
 			name: "context lines greater than available lines, with newline at end of source code",
 			sourceBlocks: []SourceBlock{
 				{

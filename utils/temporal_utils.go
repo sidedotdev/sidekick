@@ -3,6 +3,7 @@ package utils
 import (
 	"time"
 
+	"github.com/segmentio/ksuid"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
@@ -31,9 +32,14 @@ func LlmHeartbeatCtx(ctx workflow.Context) workflow.Context {
 		MaximumAttempts:        4,          // up to 4 retries
 		NonRetryableErrorTypes: []string{}, // TODO make out-of-bounds errors non-retryable
 	}
+
+	// we heartbeat every 40s: 5s was not enough for anthropic tool streaming
+	// chunks sometimes, or even 20s with litellm going to bedrock with large
+	// context. maybe incorporating ping message events will fix this, though
+	// openai-compatible providers will not provide this, so it doesn't matter.
 	options := workflow.ActivityOptions{
 		StartToCloseTimeout: 5 * time.Minute,
-		HeartbeatTimeout:    20 * time.Second, // we heartbeat every 20s: 5s was not enough for anthropic tool streaming chunks sometimes. maybe incorporating ping message events will fix this.
+		HeartbeatTimeout:    40 * time.Second,
 		RetryPolicy:         retrypolicy,
 	}
 	ctx = workflow.WithActivityOptions(ctx, options)
@@ -70,4 +76,23 @@ func SingleRetryCtx(ctx workflow.Context) workflow.Context {
 	}
 	ctx = workflow.WithActivityOptions(ctx, options)
 	return ctx
+}
+
+// workflow-safe ksuid generation via a side effect
+func KsuidSideEffect(ctx workflow.Context) string {
+	v := workflow.GetVersion(ctx, "ksuid-gen-side-effect", workflow.DefaultVersion, 1)
+	if v == 1 {
+		encodedKsuid := workflow.SideEffect(ctx, func(ctx workflow.Context) interface{} {
+			return ksuid.New().String()
+		})
+		var ksuidValue string
+		encodedKsuid.Get(&ksuidValue)
+		return ksuidValue
+	}
+
+	// non-side-effect to avoid completely breaking old workflows that didn't
+	// use side effects for this erroneously - they still mostly work, just with
+	// duplicate records sometimes. this is better than forcing them to all be
+	// restarted.
+	return ksuid.New().String()
 }

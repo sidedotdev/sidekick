@@ -1,4 +1,4 @@
-package dev /* TODO move to coding/edit_block */
+package dev /* TODO move to coding package */
 
 import (
 	"context"
@@ -27,6 +27,11 @@ import (
 
 	"go.temporal.io/sdk/workflow"
 )
+
+type DevActivities struct {
+	LSPActivities *lsp.LSPActivities
+}
+
 
 type ApplyEditBlockReport struct {
 	OriginalEditBlock EditBlock `json:"originalEditBlock"`
@@ -57,7 +62,23 @@ type ApplyEditBlockActivityInput struct {
 	CheckCommands []common.CommandConfig
 }
 
-func ApplyEditBlocksActivity(input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
+// needed for backcompat, avoiding non-deterministic temporal workflow runs
+func ApplyEditBlocksActivity(ctx context.Context, input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
+	da := DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+	return da.ApplyEditBlocks(ctx, input)
+}
+
+func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
 	baseDir := input.EnvContainer.Env.GetWorkingDirectory()
 	var reports []ApplyEditBlockReport
 
@@ -68,15 +89,13 @@ func ApplyEditBlocksActivity(input ApplyEditBlockActivityInput) ([]ApplyEditBloc
 		switch block.EditType {
 		case "create":
 			report, err = ApplyCreateEditBlock(block, baseDir)
-			// TODO pass in LSP client pre-initialized so we don't have to do it
-			AutofixIfEditSucceeded(input.EnvContainer, &report)
+			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
 		case "update":
 			report, err = ApplyUpdateEditBlock(block, baseDir)
-			AutofixIfEditSucceeded(input.EnvContainer, &report)
+			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
 		case "append":
 			report, err = ApplyAppendEditBlock(block, baseDir)
-			// TODO pass in LSP client pre-initialized so we don't have to do it
-			AutofixIfEditSucceeded(input.EnvContainer, &report)
+			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
 		case "delete":
 			report, err = ApplyDeleteEditBlock(block, baseDir)
 		default:
@@ -93,23 +112,76 @@ func ApplyEditBlocksActivity(input ApplyEditBlockActivityInput) ([]ApplyEditBloc
 		report.DidApply = true
 
 		if report.Error == "" && slices.Contains(input.EnabledFlags, fflag.CheckEdits) {
-			diff, diffErr := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
-				FilePaths: []string{filepath.Join(baseDir, block.FilePath)},
-			})
-			report.FinalDiff = diff
+			// This block executes if CheckEdits is enabled and no prior error occurred for this edit block.
+			// report.Error is guaranteed to be empty at the start of this block.
+			var currentBlockError string
+			pathForDiff := filepath.Join(baseDir, block.FilePath)
 
-			checkResult, err := checkAndStageOrRestoreFile(input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create")
-			report.CheckResult = checkResult
-			if !checkResult.Success {
-				report.DidApply = false
-				hint := fixCheckHint(report)
-				report.Error = fmt.Sprintf("Checks failed: %s\nHint: %s", checkResult.Message, hint)
+			// Calculate the diff of unstaged changes, which we assume are
+			// related to this edit block plus any autofixes that might have run
+			// after it was applied. This serves as the base for FinalDiff, representing the total
+			// change if successful.
+			unstagedChangesDiff, scdErr := git.GitDiffActivity(context.Background(), input.EnvContainer, git.GitDiffParams{
+				FilePaths: []string{pathForDiff},
+				Staged:    false,
+			})
+			if scdErr != nil {
+				errMsg := fmt.Sprintf("Failure when getting unstaged git diff for block: %v", scdErr)
+				if currentBlockError == "" {
+					currentBlockError = errMsg
+				} else {
+					currentBlockError += "\n" + errMsg
+				}
 			}
-			if err != nil {
-				report.Error = report.Error + fmt.Sprintf("\nFailure when checking/staging/restoring file: %v", err)
+			report.FinalDiff = unstagedChangesDiff
+
+			if block.EditType == "delete" {
+				// Stage the deletion directly instead of using
+				// checkAndStageOrRestoreFile, since checking the file is not
+				// possible after deleting it.
+				gitAddErr := gitAdd(input.EnvContainer, block.FilePath)
+				if gitAddErr != nil {
+					errMsg := fmt.Sprintf("Failed to git add deleted file: %v", gitAddErr)
+					if currentBlockError == "" {
+						currentBlockError = errMsg
+					} else {
+						currentBlockError += "\n" + errMsg
+					}
+				}
+			} else { // create, update, append
+				checkResult, checkErr := checkAndStageOrRestoreFile(input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create")
+				report.CheckResult = checkResult
+
+				if !checkResult.Success {
+					report.DidApply = false
+					hint := fixCheckHint(report)
+					errMsg := fmt.Sprintf("Checks failed: %s\nHint: %s", checkResult.Message, hint)
+					if currentBlockError == "" {
+						currentBlockError = errMsg
+					} else {
+						currentBlockError += "\n" + errMsg
+					}
+					// report.FinalDiff remains as-is despite restoration having
+					// occurred: this is so that we can record and show the user
+					// the diff that failed checks clearly.
+				}
+
+				if checkErr != nil {
+					errMsg := fmt.Sprintf("Failure when checking/staging/restoring file: %v", checkErr)
+					if currentBlockError == "" {
+						currentBlockError = errMsg
+					} else {
+						currentBlockError += "\n" + errMsg
+					}
+				}
 			}
-			if diffErr != nil {
-				report.Error = report.Error + fmt.Sprintf("\nFailure when getting git diff: %v", diffErr)
+			// Consolidate errors from this block
+			if report.Error != "" { // Error from ApplyXYZEditBlock or Autofix
+				if currentBlockError != "" {
+					report.Error = report.Error + "\n" + currentBlockError
+				}
+			} else {
+				report.Error = currentBlockError
 			}
 		}
 
@@ -132,7 +204,11 @@ func ApplyEditBlocksActivity(input ApplyEditBlockActivityInput) ([]ApplyEditBloc
 			lineEdits := getLineEditsFromDiff(report.FinalDiff)
 			updateVisibleFileRanges(input.EditBlocks[i:], block.FilePath, lineEdits)
 
-			// FIXME /gen we need to reload the file that was edited in the LSP server
+			// Notify LSP server about the file changes
+			err := da.notifyLSPServerOfFileChanges(ctx, input.EnvContainer, block.FilePath, block.EditType)
+			if err != nil {
+				log.Warn().Err(err).Str("filePath", block.FilePath).Msg("Failed to notify LSP server of file change")
+			}
 		}
 	}
 
@@ -146,6 +222,84 @@ func ApplyEditBlocksActivity(input ApplyEditBlockActivityInput) ([]ApplyEditBloc
 	// them all
 
 	return reports, nil
+}
+
+// notifyLSPServerOfFileChanges notifies the LSP server about file changes
+// by sending appropriate textDocument notifications based on edit type and server capabilities
+func (da *DevActivities) notifyLSPServerOfFileChanges(ctx context.Context, envContainer env.EnvContainer, filePath string, editType string) error {
+	switch editType {
+	case "update", "append":
+		return da.notifyDidOpenChangeSaveAndClose(ctx, envContainer, filePath)
+	case "create":
+		return da.notifyDidOpenChangeSaveAndClose(ctx, envContainer, filePath)
+		// TODO call notifyCreateFile if server supports it
+	case "delete":
+		return nil
+		// TODO call notifyDeleteFile if server supports it
+	default:
+		return fmt.Errorf("unknown edit type: %s", editType)
+	}
+}
+
+// notifyDidOpenChangeSaveAndClose handles LSP open/close/change/save
+// notifications (depending on server support) in the order:
+// didOpen → didChange  → didSave → didClose
+func (da *DevActivities) notifyDidOpenChangeSaveAndClose(ctx context.Context, envContainer env.EnvContainer, filePath string) error {
+	baseDir := envContainer.Env.GetWorkingDirectory()
+	language := utils.InferLanguageNameFromFilePath(filePath)
+	if language == "" {
+		return nil // Skip LSP notifications for files without recognized language
+	}
+
+	var didOpenCalled bool
+
+	// Step 1: didOpen (if openClose supported)
+	didOpenInput := lsp.TextDocumentDidOpenActivityInput{
+		RepoDir:  baseDir,
+		FilePath: filePath,
+	}
+	err := da.LSPActivities.TextDocumentDidOpenActivity(ctx, didOpenInput)
+	if err == nil {
+		didOpenCalled = true
+	}
+
+	// Step 2: didChange (if didOpen was called and change is supported)
+	if didOpenCalled {
+		// Read current file content for change notification
+		absoluteFilePath := filepath.Join(baseDir, filePath)
+		content, err := os.ReadFile(absoluteFilePath)
+		if err == nil {
+			didChangeInput := lsp.TextDocumentDidChangeActivityInput{
+				RepoDir:  baseDir,
+				FilePath: filePath,
+				Version:  2, // Version after the edit
+				ContentChanges: []lsp.TextDocumentContentChangeEvent{
+					{
+						Text: string(content), // Full document sync
+					},
+				},
+			}
+			_ = da.LSPActivities.TextDocumentDidChangeActivity(ctx, didChangeInput) // Ignore errors
+		}
+	}
+
+	// Step 3: didSave (if supported)
+	didSaveInput := lsp.TextDocumentDidSaveActivityInput{
+		RepoDir:  baseDir,
+		FilePath: filePath,
+	}
+	_ = da.LSPActivities.TextDocumentDidSaveActivity(ctx, didSaveInput) // Ignore errors
+
+	// Step 4: didClose (if didOpen was called)
+	if didOpenCalled {
+		didCloseInput := lsp.TextDocumentDidCloseActivityInput{
+			RepoDir:  baseDir,
+			FilePath: filePath,
+		}
+		_ = da.LSPActivities.TextDocumentDidCloseActivity(ctx, didCloseInput) // Ignore errors
+	}
+
+	return nil
 }
 
 type lineEdit struct {
@@ -273,13 +427,17 @@ func checkAndStageOrRestoreFile(envContainer env.EnvContainer, checkCommands []c
 
 	// if checks pass, git add the changes to the staging area so other restores
 	// don't affect this change
-	input := git.GitAddActivityInput{EnvContainer: envContainer, Path: filePath}
-	err := git.GitAddActivity(context.Background(), input)
+	err := gitAdd(envContainer, filePath)
 	if err != nil {
 		return checkResult, fmt.Errorf("Failed to git add: %v", err)
 	}
 
 	return checkResult, nil
+}
+
+func gitAdd(envContainer env.EnvContainer, filePath string) error {
+	input := git.GitAddActivityInput{EnvContainer: envContainer, Path: filePath}
+	return git.GitAddActivity(context.Background(), input)
 }
 
 func ApplyCreateEditBlock(block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
@@ -370,11 +528,19 @@ func ApplyAppendEditBlock(block EditBlock, baseDir string) (ApplyEditBlockReport
 // TODO /gen write tests for this
 func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]ApplyEditBlockReport, error) {
 	actionParams := map[string]interface{}{
-		"editBlocks": editBlocks,
+		// visible stuff is very verbose, so we leave it out of the flow events.
+		// they are very necessary in the activity though.
+		"editBlocks": utils.Map(editBlocks, func (block EditBlock) EditBlock {
+			block.VisibleCodeBlocks = []tree_sitter.CodeBlock{}
+			block.VisibleFileRanges = []FileRange{}
+			return block
+		}),
 	}
-	actionCtx := dCtx.NewActionContext("Apply Edit Blocks")
+	actionCtx := dCtx.NewActionContext("apply_edit_blocks")
 	actionCtx.ActionParams = actionParams
-	reports, err := Track(actionCtx, func(flowAction domain.FlowAction) ([]ApplyEditBlockReport, error) {
+
+	var fullReports []ApplyEditBlockReport
+	_, err := Track(actionCtx, func(flowAction domain.FlowAction) ([]ApplyEditBlockReport, error) {
 		validEditBlocks, invalidReports := validateEditBlocks(editBlocks)
 
 		enabledFlags := make([]string, 0)
@@ -391,7 +557,14 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 
 		noRetryCtx := utils.NoRetryCtx(dCtx)
 		var validReports []ApplyEditBlockReport
-		err := workflow.ExecuteActivity(noRetryCtx, ApplyEditBlocksActivity, applyEditBlockInput).Get(noRetryCtx, &validReports)
+		var err error
+		v := workflow.GetVersion(dCtx, "apply-edit-blocks", workflow.DefaultVersion, 1)
+		if v == 1 {
+			var da *DevActivities
+			err = workflow.ExecuteActivity(noRetryCtx, da.ApplyEditBlocks, applyEditBlockInput).Get(noRetryCtx, &validReports)
+		} else {
+			err = workflow.ExecuteActivity(noRetryCtx, ApplyEditBlocksActivity, applyEditBlockInput).Get(noRetryCtx, &validReports)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -400,9 +573,20 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		sort.Slice(reports, func(i, j int) bool {
 			return reports[i].OriginalEditBlock.SequenceNumber < reports[j].OriginalEditBlock.SequenceNumber
 		})
-		return reports, nil
+
+		// visible stuff is very verbose, so we leave it out of the flow events,
+		// which are automatically using the returned value, so we side-step
+		// that here via the variable outside the closure.
+		fullReports = reports
+		trackedReports := utils.Map(reports, func (report ApplyEditBlockReport) ApplyEditBlockReport {
+			report.OriginalEditBlock.VisibleCodeBlocks = []tree_sitter.CodeBlock{}
+			report.OriginalEditBlock.VisibleFileRanges = []FileRange{}
+			return report
+		})
+		return trackedReports, nil
 	})
-	return reports, err
+
+	return fullReports, err
 }
 
 func validateEditBlocks(editBlocks []EditBlock) (validEditBlocks []EditBlock, invalidReports []ApplyEditBlockReport) {
@@ -758,17 +942,25 @@ func FindPotentialMatches(block EditBlock, originalLines []string, startingLineI
 }
 
 // Find the first non-whitespace line in block's old lines
-func calculateStartingLineIndex(block EditBlock, originalLines []string) int {
+func calculateStartingLineIndex(lines []string) int {
 	startingLineIndex := 0
-	for startingLineIndex < len(block.OldLines)-1 && isWhitespaceOrEndingDelimiter(block.OldLines[startingLineIndex]) {
+	for startingLineIndex < len(lines)-1 && isWhitespaceOrEndingDelimiter(lines[startingLineIndex]) {
 		startingLineIndex++
 	}
 	return startingLineIndex
 }
 
 func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFromActualFile bool) (match, []match) {
-	startingLineIndex := calculateStartingLineIndex(block, originalLines)
+	startingLineIndex := calculateStartingLineIndex(block.OldLines)
 	potentialMatches := FindPotentialMatches(block, originalLines, startingLineIndex, isOriginalLinesFromActualFile)
+
+	// if no potential matches based on first line, go to the next line and try again
+	skippedOldLines := 0
+	if len(potentialMatches) == 0 && startingLineIndex+1 < len(block.OldLines) {
+		skippedOldLines = 1
+		startingLineIndex = startingLineIndex + 1 + calculateStartingLineIndex(block.OldLines[startingLineIndex+1:])
+		potentialMatches = FindPotentialMatches(block, originalLines, startingLineIndex, isOriginalLinesFromActualFile)
+	}
 
 	var allMatches []match
 	var bestMatch match
@@ -793,7 +985,7 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 		for i := 0; i+oldLinesOffset < len(block.OldLines); i++ {
 			oldLine := block.OldLines[i+oldLinesOffset]
 
-			// fmt.Printf("i:%v, oldLinesOffset: %v, originalLinesOffset: %v\n", i, oldLinesOffset, originalLinesOffset)
+			//fmt.Printf("i:%v, oldLinesOffset: %v, originalLinesOffset: %v\n", i, oldLinesOffset, originalLinesOffset)
 			// bounds check
 			if adjustedIndex+i+originalLinesOffset >= len(originalLines) {
 				if isWhitespaceOrComment(oldLine) {
@@ -806,25 +998,74 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 			}
 			originalLine := originalLines[adjustedIndex+i+originalLinesOffset]
 
-			// fmt.Printf("comparing:\n%v\n%v\n", originalLine, oldLine)
+			//fmt.Printf("comparing:\n    orig: %s\n     old: %s\n", originalLine, oldLine)
 			score := utils.StringSimilarity(originalLine, oldLine)
-			// fmt.Printf("score: %v\n", score)
+			//fmt.Printf("score: %v\n", score)
 
 			// skip whitespace-only or comment-only lines when on one side only
 			// TODO ignore changes or added comments on the end of an existing line
 			if score < similarityThreshold {
-				if isWhitespaceOrComment(originalLine) && !isWhitespaceOrComment(oldLine) {
+				if (isWhitespaceOrComment(originalLine) && !isWhitespaceOrComment(oldLine)) ||
+					(isWhitespace(originalLine) && !isWhitespace(oldLine)) {
 					matchedLines = append(matchedLines, originalLine)
-					// fmt.Println("offsetting original lines")
+					//fmt.Println("offsetting original lines")
 					originalLinesOffset += 1
 					i--
 					continue
-				} else if isWhitespaceOrComment(oldLine) && !isWhitespaceOrComment(originalLine) {
-					// fmt.Println("offsetting old lines")
+				} else if (isWhitespaceOrComment(oldLine) && !isWhitespaceOrComment(originalLine)) ||
+					(isWhitespace(oldLine) && !isWhitespace(originalLine)) {
+					//fmt.Println("offsetting old lines")
+					oldLinesOffset += 1
+					i--
+					continue
+				} else if numScoredLines == 0 && skippedOldLines > 0 {
+					// we haven't scored lines, but it's a potential match, so
+					// that means startLineIndex is not at 0, so we'll offset
+					// old lines further. note: this is not the same as setting
+					// oldLinesOffset to startLineIndex, since we might find
+					// matches with closing delimiters, which startLineIndex
+					// does try to skip initially
 					oldLinesOffset += 1
 					i--
 					continue
 				} else {
+					// TODO add some good test cases for below before bring in
+					// this additional logic, if we think we still want it after
+					// writing out those test cases
+					/*
+						nextOriginalLinesOffset := originalLinesOffset + 1
+						if adjustedIndex+i+nextOriginalLinesOffset < len(originalLines) {
+							nextOriginalLine := originalLines[adjustedIndex+i+nextOriginalLinesOffset]
+							nextScore := utils.StringSimilarity(nextOriginalLine, oldLine)
+							// skipping original line gives us a better match, so we
+							// should skip, but account for this as a scored line
+							// that got a bad score
+							if nextScore >= similarityThreshold {
+								numScoredLines++
+								totalScore += score
+								originalLinesOffset += 1
+								i--
+								continue
+							}
+						}
+
+						nextOldLinesOffset := oldLinesOffset + 1
+						if i+nextOldLinesOffset < len(block.OldLines) {
+							nextOldLine := block.OldLines[i+nextOldLinesOffset]
+							nextScore := utils.StringSimilarity(originalLine, nextOldLine)
+							// skipping old line gives us a better match, so we
+							// should skip, but account for this as a scored line
+							// that got a bad score
+							if nextScore >= similarityThreshold {
+								numScoredLines++
+								totalScore += score
+								oldLinesOffset += 1
+								i--
+								continue
+							}
+						}
+					*/
+
 					// fmt.Println("offsetting nothing")
 				}
 			}
@@ -845,19 +1086,25 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 		var highScoreRatio float64
 		var avgScore float64
 		if successfulMatch {
+			//fmt.Println("successfulMatch")
 			// different denominator so that we can use a consistent threshold
 			// when skipping whitespace or comment lines
-			highScoreRatio = float64(numHighScoreLines) / float64(numScoredLines)
-			avgScore = float64(totalScore) / float64(numScoredLines)
+			highScoreRatio = float64(numHighScoreLines) / float64(numScoredLines+skippedOldLines)
+			avgScore = float64(totalScore) / float64(numScoredLines+skippedOldLines)
+			//fmt.Printf("highScoreRatio: %v\n", highScoreRatio)
+			//fmt.Printf("avgScore: %v\n", avgScore)
 		} else {
+			//fmt.Println("NOT successfulMatch")
 			// we don't score all lines when unsuccessful, so for parity across
 			// multiple unsuccessful matches, we need to use a consistent
 			// denominator
 			highScoreRatio = float64(numHighScoreLines) / float64(len(block.OldLines))
 			avgScore = float64(totalScore) / float64(len(block.OldLines))
 		}
-		// fmt.Printf("highScoreRatio: %v\n", highScoreRatio)
+		//fmt.Printf("highScoreRatio: %v\n", highScoreRatio)
+		//fmt.Printf("numScoredLines: %v\n", numScoredLines)
 		thisMatch := match{index: adjustedIndex, successfulMatch: successfulMatch, highScoreRatio: highScoreRatio, score: avgScore, lines: matchedLines, failedToMatch: failedToMatch, foundInstead: foundInstead}
+
 		allMatches = append(allMatches, thisMatch)
 
 		isNewBest := successfulMatch && avgScore > bestMatch.score
@@ -940,12 +1187,23 @@ func getLineEditsFromDiff(diff string) []lineEdit {
 	return lineEdits
 }
 
-func AutofixIfEditSucceeded(envContainer env.EnvContainer, report *ApplyEditBlockReport) {
+func AutofixIfEditSucceeded(ctx context.Context, devActivities *DevActivities, envContainer env.EnvContainer, report *ApplyEditBlockReport) {
 	if report.Error != "" {
 		return
 	}
 	runAutofixCommands(envContainer, report)
-	runAutofixViaLSP(envContainer, report)
+
+	// LSP-based autofix
+	absoluteFilePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), report.OriginalEditBlock.FilePath)
+	autofixInput := lsp.AutofixActivityInput{
+		DocumentURI:  "file://" + absoluteFilePath,
+		EnvContainer: envContainer,
+	}
+	result, autofixErr := devActivities.LSPActivities.AutofixActivity(ctx, autofixInput)
+	if autofixErr != nil {
+		report.AutofixError += fmt.Sprintf("\nLSP autofix error: %+v", autofixErr)
+	}
+	report.AutofixResult = result
 }
 
 // command-based autofix
@@ -977,29 +1235,6 @@ func runAutofixCommands(envContainer env.EnvContainer, report *ApplyEditBlockRep
 		}
 	}
 	report.AutofixError += combinedOutput
-}
-
-// LSP-based autofix
-func runAutofixViaLSP(envContainer env.EnvContainer, report *ApplyEditBlockReport) {
-	absoluteFilePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), report.OriginalEditBlock.FilePath)
-	lspa := lsp.LSPActivities{
-		LSPClientProvider: func(languageName string) lsp.LSPClient {
-			return &lsp.Jsonrpc2LSPClient{
-				LanguageName: languageName,
-			}
-		},
-		InitializedClients: map[string]lsp.LSPClient{},
-	}
-	ctx := context.Background()
-	autofixInput := lsp.AutofixActivityInput{
-		DocumentURI:  "file://" + absoluteFilePath,
-		EnvContainer: envContainer,
-	}
-	result, autofixErr := lspa.AutofixActivity(ctx, autofixInput)
-	if autofixErr != nil {
-		report.AutofixError += fmt.Sprintf("\nLSP autofix error: %+v", autofixErr)
-	}
-	report.AutofixResult = result
 }
 
 // CheckResult defines the structure to hold results of checks performed during edit application.

@@ -8,6 +8,7 @@ import (
 type ActionStatus = string
 
 const (
+	// pending as akin to requested
 	ActionStatusPending  ActionStatus = "pending"
 	ActionStatusStarted  ActionStatus = "started"
 	ActionStatusComplete ActionStatus = "complete"

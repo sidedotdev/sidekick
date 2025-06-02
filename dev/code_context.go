@@ -83,7 +83,7 @@ func prepareInitialCodeContextSubflow(dCtx DevContext, requirements string, plan
 	}
 
 	// Step 3: Refine and rank the code context, if needed
-	if len(codeContext) > min(defaultMaxChatHistoryLength/2, 10000) {
+	if len(codeContext) > min(defaultMaxChatHistoryLength/2, refineContextLengthThreshold) {
 		refinePromptInfo := RefineCodeContextInfo{
 			DetermineCodeContextInfo:   initialPromptInfo,
 			OriginalCodeContext:        codeContext,
@@ -142,7 +142,7 @@ func GetRankedRepoSummary(dCtx DevContext, rankQuery string) (string, error) {
 	// TODO /gen instead of this for to reduce the char limit upon error, let's
 	// use a token limit + real token counter
 	for {
-		actionCtx := dCtx.NewActionContext("Get Ranked Repo Summary")
+		actionCtx := dCtx.NewActionContext("ranked_repo_summary")
 		actionCtx.ActionParams = options.ActionParams()
 		repoSummary, err = Track(actionCtx, func(flowAction domain.FlowAction) (string, error) {
 			var repoSummary string
@@ -182,6 +182,9 @@ func GetRelevantCodeContext(dCtx DevContext, promptInfo DetermineCodeContextInfo
 	return codeContextLoop(dCtx.NewActionContext("Determine Required Code Context"), promptInfo, longestFirst, threshold)
 }
 
+// TODO: make this configurable and/or dynamic by model
+const refineContextLengthThreshold = 15000
+
 func RefineAndRankCodeContext(dCtx DevContext, envContainer env.EnvContainer, promptInfo RefineCodeContextInfo) (string, string, error) {
 	// shrinking code context from end to start (since we asked the LLM
 	// to sort by relevance) until it's below the length threshold or it
@@ -190,7 +193,7 @@ func RefineAndRankCodeContext(dCtx DevContext, envContainer env.EnvContainer, pr
 
 	// leave some room for other messages in other subflows after code context
 	// is finalized
-	threshold := min(defaultMaxChatHistoryLength/2, 10000)
+	threshold := min(defaultMaxChatHistoryLength/2, refineContextLengthThreshold)
 
 	// TODO move up to PrepareInitialCodeContext and beyond
 	requiredCodeContext, codeContext, err := codeContextLoop(dCtx.NewActionContext("Refine And Rank Code Context"), promptInfo, longestFirst, threshold)
@@ -310,8 +313,14 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 				codeContext = strings.TrimSpace(codeContext) + "\n\n-------------\n" + SignaturesEditHint
 			}
 
+			currentMax := maxLength
+			v := workflow.GetVersion(actionCtx, "code_context_max_length", workflow.DefaultVersion, 1)
+			if v == 1 {
+				currentMax = currentMax + len("\n\n-------------\n"+SignaturesEditHint)
+			}
+
 			// TODO use tiktoken to count exact tokens and compare with specific model being used + margin
-			if len(codeContext) > maxLength {
+			if len(codeContext) > currentMax {
 				// TODO if this happens, we could try partially symbolizing the code context too
 				feedback := "Error: the code context requested is too long to include. YOU MUST SHORTEN THE CODE CONTEXT REQUESTED. DO NOT REQUEST SO MANY FUNCTIONS AND TYPES IN SO MANY FILES. If you're not asking for too many symbols, then be more specific in your request - eg request just a few methods instead of a big class."
 				promptInfo = ToolCallResponseInfo{Response: feedback, ToolCallId: toolCall.Id, FunctionName: toolCall.Name}
@@ -343,16 +352,34 @@ func extractCodeContext(ctx workflow.Context, req coding.DirectorySymDefRequest)
 	var symDefResults coding.SymDefResults
 	var ca *coding.CodingActivities // use a nil struct pointer to call activities that are part of a structure
 
-	// we find that context is messing up python editing and not that helpful
-	// otherwise, so we'll leave it out for now
-	// TODO: try to remove this override by one of:
-	// 1. detecting bad edits using the expanded context lines as the old lines
-	// 2. detecting bad edits that are editing functions that have not been fully retrieved
-	// 3. adding text below the code context that indicates that the code
-	// context is incomplete, eg the function is cut off
-	// 4. adding a "show more" tool that will retrieve the full function (this kind of does 3 too)
-	// 5. only adding the context if it doesn't cut off a function
-	overrideNumContextLines := 0
+	/*
+		TODO (this TODO is stale): try to remove the 0 override by one of:
+
+		1. detecting bad edits using the expanded context lines as the old lines
+		2. detecting bad edits that are editing functions that have not been fully retrieved
+		3. adding text below the code context that indicates that the code
+		context is incomplete, eg the function is cut off
+		4. adding a "show more" tool that will retrieve the full function (this kind of does 3 too)
+		5. only adding the context if it doesn't cut off a function
+	*/
+	// overrideNumContextLines := 0
+
+	/*
+		With older models, we found that context was messing up python
+		editing and not that helpful otherwise, so we overrode by always setting
+		context lines to 0.
+
+		But with gemini pro 2.5, the lack of context means it's guessing poorly the
+		lines before/after a function in its edit blocks, and failing a lot of
+		edits, which is annoying. So we're using a fixed value of 3 lines
+		instead now.
+
+		TODO: confirm the new setting works ok for claude sonnet 3.5 and gpt
+		4.1, with all languages but especially with python. If not, customize
+		overrides by model.
+	*/
+	overrideNumContextLines := 3
+
 	req.NumContextLines = &overrideNumContextLines
 
 	err := workflow.ExecuteActivity(ctx, ca.BulkGetSymbolDefinitions, req).Get(ctx, &symDefResults)

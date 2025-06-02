@@ -17,7 +17,7 @@ type RunCommandParams struct {
 
 var runCommandTool = llm.Tool{
 	Name:        "run_command",
-	Description: "Used to execute shell commands after getting user approval. The command will be run through the 'sh' shell if approved. This method should NOT be used to run tests.",
+	Description: "Not for running tests. This tool is used to execute other shell commands, subject to user approval. The command will be run through the 'sh' shell if approved. This tool should NOT be used to run tests. When asked to provide edit blocks, all tests are run automatically after no further edit blocks are provided.",
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&RunCommandParams{}),
 }
 
@@ -27,8 +27,7 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 	approvalPrompt := "Allow running the following command?"
 
 	// Get user approval
-	actionCtx := dCtx.NewActionContext("Approve Command")
-	userResponse, err := GetUserApproval(actionCtx, approvalPrompt, map[string]any{
+	userResponse, err := GetUserApproval(dCtx, "run_command", approvalPrompt, map[string]any{
 		"command":    params.Command,
 		"workingDir": params.WorkingDir,
 	})

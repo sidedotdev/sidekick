@@ -9,7 +9,7 @@ import (
 type Pause struct{}
 
 func SetupPauseHandler(dCtx DevContext, guidanceContext string, requestParams map[string]interface{}) {
-	signalChan := workflow.GetSignalChannel(dCtx, "pause")
+	signalChan := workflow.GetSignalChannel(dCtx, SignalNamePause)
 	workflow.Go(dCtx, func(ctx workflow.Context) {
 		for {
 			selector := workflow.NewSelector(ctx)
@@ -36,7 +36,7 @@ func UserRequestIfPaused(dCtx DevContext, guidanceContext string, requestParams 
 		RequestParams:    requestParams,
 	}
 
-	actionCtx := dCtx.NewActionContext("User Paused")
+	actionCtx := dCtx.NewActionContext("user_request.paused")
 	actionCtx.ActionParams = guidanceRequest.ActionParams()
 
 	response, err := TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {

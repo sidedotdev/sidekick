@@ -66,7 +66,7 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 	attempts := 0
 	for {
 		// TODO /gen test this, assert it calls the right tool via mock of chat stream method
-		actionCtx := dCtx.ExecContext.NewActionContext("Check Criteria Fulfillment")
+		actionCtx := dCtx.ExecContext.NewActionContext("check_criteria_fulfillment")
 		chatResponse, err := persisted_ai.ForceToolCall(actionCtx, dCtx.LLMConfig, &params, &determineCriteriaFulfillmentTool)
 		*chatHistory = params.Messages // update chat history with the new messages
 		if err != nil {
@@ -163,6 +163,12 @@ the specific future step from the above plan that you think will fix the issue
 if you think the automatic check failure is not meant to be fixed in the current
 step. If there's no such step, consider the criteria not fulfilled due to the
 failure.
+
+If the automated tests clearly indicate a failure related to the changes made in
+the current step or a previous one without a followup step explicitly defined to
+fix it, then don't analyze too much after determining that fact: just indicate
+that the tests should be fixed. When they are fixed, we'll come back to analyze
+whether criteria is fulfilled fully later.
 
 Anyways, here are the automated check results:
 

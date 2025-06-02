@@ -15,6 +15,7 @@ const (
 	StatusChangeEventType     FlowEventType = "status_change"
 	ChatMessageDeltaEventType FlowEventType = "chat_message_delta"
 	EndStreamEventType        FlowEventType = "end_stream"
+	CodeDiffEventType         FlowEventType = "code_diff"
 )
 
 // EndStreamEvent represents the end of a flow event stream.
@@ -95,6 +96,22 @@ func (e StatusChangeEvent) GetEventType() FlowEventType {
 // Ensure StatusChangeEvent implements FlowEvent interface
 var _ FlowEvent = (*StatusChangeEvent)(nil)
 
+type CodeDiffEvent struct {
+	EventType FlowEventType `json:"eventType"`
+	SubflowId string        `json:"subflowId"`
+	Diff      string        `json:"diff"`
+}
+
+func (e CodeDiffEvent) GetParentId() string {
+	return e.SubflowId
+}
+
+func (e CodeDiffEvent) GetEventType() FlowEventType {
+	return e.EventType
+}
+
+var _ FlowEvent = (*CodeDiffEvent)(nil)
+
 // UnmarshalFlowEvent unmarshals a JSON byte slice into a FlowEvent based on the "eventType" field.
 func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
 	var event struct {
@@ -139,6 +156,14 @@ func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
 		}
 		return statusChange, nil
 
+	case CodeDiffEventType:
+		var codeDiff CodeDiffEvent
+		err := json.Unmarshal(data, &codeDiff)
+		if err != nil {
+			return nil, err
+		}
+		return codeDiff, nil
+
 	default:
 		return nil, fmt.Errorf("unknown flow eventType: %s", event.EventType)
 	}
@@ -153,4 +178,46 @@ type FlowEventStreamer interface {
 	AddFlowEvent(ctx context.Context, workspaceId string, flowId string, flowEvent FlowEvent) error
 	EndFlowEventStream(ctx context.Context, workspaceId, flowId, eventStreamParentId string) error
 	StreamFlowEvents(ctx context.Context, workspaceId, flowId string, subscriptionCh <-chan FlowEventSubscription) (<-chan FlowEvent, <-chan error)
+}
+
+// FlowEventContainer is a wrapper around FlowEvent interface to allow
+// for robust JSON marshaling and unmarshaling, particularly for use
+// in contexts like Temporal activity arguments where interface types
+// are problematic.
+type FlowEventContainer struct {
+	FlowEvent FlowEvent
+}
+
+// MarshalJSON implements the json.Marshaler interface.
+// It marshals the underlying concrete FlowEvent.
+func (c FlowEventContainer) MarshalJSON() ([]byte, error) {
+	if c.FlowEvent == nil {
+		// Return JSON null if the event is nil
+		return []byte("null"), nil
+	}
+	// Marshal the concrete event stored in the interface.
+	// This works because json.Marshal calls the MarshalJSON method of the
+	// concrete type if available, or uses reflection otherwise. Since our
+	// concrete event types are simple structs with json tags, this correctly
+	// marshals them including their "eventType" field.
+	return json.Marshal(c.FlowEvent)
+}
+
+// UnmarshalJSON implements the json.Unmarshaler interface.
+// It uses UnmarshalFlowEvent to determine the concrete type from the
+// "eventType" field in the JSON data and unmarshals into that type.
+func (c *FlowEventContainer) UnmarshalJSON(data []byte) error {
+	// Handle null JSON value
+	if string(data) == "null" {
+		c.FlowEvent = nil
+		return nil
+	}
+
+	// Use the existing helper function to unmarshal based on eventType
+	flowEvent, err := UnmarshalFlowEvent(data)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal data into FlowEvent for container: %w", err)
+	}
+	c.FlowEvent = flowEvent
+	return nil
 }

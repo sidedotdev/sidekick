@@ -3,6 +3,7 @@ package dev
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/llm"
@@ -25,7 +26,7 @@ type DevRequirements struct {
 	Overview string `json:"overview" jsonschema:"description=Overview of the product requirements"`
 	// Move UserRequirements to a higher-level ProductRequirements struct, which is expected to require multiple tasks, each of which will later have its own DevRequirements
 	//UserRequirements []string `json:"user_facing_requirements" jsonschema:"description=List of all product requirements\\: A brief\\, unambiguous specification of the user-facing behavior of the product\\, with sufficient detail for a senior software engineer to start tech design and/or development\\, but no more. Does not specify implementation details or steps."`
-	AcceptanceCriteria []string `json:"acceptance_criteria" jsonschema:"description=Acceptance criteria\\, each being a specific condition that must be met before the product requirements are considered completely satisfied. This creates a brief\\, unambiguous specification\\, with sufficient detail for a senior software engineer to start tech design and/or development"`
+	AcceptanceCriteria []string `json:"acceptance_criteria" jsonschema:"description=Ordered acceptance criteria\\, with maximum of one level of nesting with an unordered list denoted by '    -'. Each acceptance criterium is a specific condition that must be met before the requirements are considered completely satisfied. This creates a brief\\, unambiguous specification\\, with sufficient detail for a senior software engineer to start development"`
 	Complete           bool     `json:"are_requirements_complete" jsonschema:"description=Are the product requirements complete and all ambiguity resolved by them?"`
 	Learnings          []string `json:"learnings" jsonschema:"description=List of learnings that will help the software engineer fulfill the requirements. It also contains learnings that will help us refine product requirements in the future."`
 }
@@ -35,16 +36,26 @@ type DevRequirements struct {
 //	//Priority    string `json:"priority" jsonschema:"enum=P0,enum=P1,enum=P2,description=P0: non-negotiable i.e. must be done\\, P1: not blocking if it's hard to achieve\\, P2: nice to have"`
 //}
 
+var markdownListPattern = regexp.MustCompile(`^\s*(-|\d+\.|[a-z]\.|[iv]+\.)\s+`)
+
 func (r DevRequirements) String() string {
 	var criteria string
 	var learnings string
 	for _, ac := range r.AcceptanceCriteria {
-		criteria += fmt.Sprintf("- %s\n", ac)
+		if markdownListPattern.MatchString(ac) {
+			criteria += fmt.Sprintf("%s\n", ac)
+		} else {
+			criteria += fmt.Sprintf("- %s\n", ac)
+		}
 	}
 	for _, learning := range r.Learnings {
-		learnings += fmt.Sprintf("- %s\n", learning)
+		if markdownListPattern.MatchString(learning) {
+			learnings += fmt.Sprintf("%s\n", learning)
+		} else {
+			learnings += fmt.Sprintf("- %s\n", learning)
+		}
 	}
-	return fmt.Sprintf("Overview: %s\n\nAcceptance Criteria:\n%s\n\nLearnings:\n%s", r.Overview, criteria, learnings)
+	return fmt.Sprintf("#### Overview:\n%s\n\n#### Acceptance Criteria:\n%s\n\n#### Learnings:\n%s", r.Overview, criteria, learnings)
 }
 
 type buildDevRequirementsState struct {
@@ -78,7 +89,17 @@ func buildDevRequirementsSubflow(dCtx DevContext, initialInfo InitialDevRequirem
 	initialState := &buildDevRequirementsState{
 		contextSizeExtension: contextSizeExtension,
 	}
-	return LlmLoop(dCtx, chatHistory, buildDevRequirementsIteration, WithInitialState(initialState), WithFeedbackEvery(5))
+
+	feedbackIterations := 5
+	v := workflow.GetVersion(dCtx, "dev-requirements-feedback-iterations", workflow.DefaultVersion, 1)
+	if v == 1 {
+		// TODO when tool calls are not finding things automatically, provide
+		// better hints for how to find things after Nth iteration, before going
+		// to human-based support. Eg fuzzy search or embedding search etc.
+		// Maybe provide that as a tool or even run that tool automatically.
+		feedbackIterations = 9
+	}
+	return LlmLoop(dCtx, chatHistory, buildDevRequirementsIteration, WithInitialState(initialState), WithFeedbackEvery(feedbackIterations))
 }
 
 func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, error) {
@@ -90,10 +111,17 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
 	ManageChatHistory(iteration.ExecCtx.Context, iteration.ChatHistory, maxLength)
 
-	chatCtx := iteration.ExecCtx.WithCancelOnPause()
-	chatResponse, err := generateDevRequirements(chatCtx, iteration.ChatHistory)
-	if iteration.ExecCtx.GlobalState != nil && iteration.ExecCtx.GlobalState.Paused {
-		return nil, nil // continue the loop: UserRequestIfPaused will handle the pause
+	var chatResponse *llm.ChatMessageResponse
+	var err error
+	if v := workflow.GetVersion(iteration.ExecCtx, "dev-requirements-cleanup-cancel-internally", workflow.DefaultVersion, 1); v == 1 {
+		chatResponse, err = generateDevRequirements(iteration.ExecCtx, iteration.ChatHistory)
+	} else {
+		// old version: new one does this in outer LlmLoop
+		chatCtx := iteration.ExecCtx.WithCancelOnPause()
+		chatResponse, err = generateDevRequirements(chatCtx, iteration.ChatHistory)
+		if iteration.ExecCtx.GlobalState != nil && iteration.ExecCtx.GlobalState.Paused {
+			return nil, nil // continue the loop: UserRequestIfPaused will handle the pause
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -191,11 +219,11 @@ func generateDevRequirements(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*
 			ModelConfig: modelConfig,
 		},
 	}
-	return TrackedToolChat(dCtx, "Generate Dev Requirements", options)
+	return TrackedToolChat(dCtx, "dev_requirements", options)
 }
 
-func TrackedToolChat(dCtx DevContext, actionName string, options llm.ToolChatOptions) (*llm.ChatMessageResponse, error) {
-	actionCtx := dCtx.NewActionContext(actionName)
+func TrackedToolChat(dCtx DevContext, actionType string, options llm.ToolChatOptions) (*llm.ChatMessageResponse, error) {
+	actionCtx := dCtx.NewActionContext("generate." + actionType)
 	actionCtx.ActionParams = options.ActionParams()
 	return Track(actionCtx, func(flowAction domain.FlowAction) (*llm.ChatMessageResponse, error) {
 		if options.Params.Provider == "" {
@@ -210,10 +238,9 @@ func TrackedToolChat(dCtx DevContext, actionName string, options llm.ToolChatOpt
 		}
 		var chatResponse llm.ChatMessageResponse
 		var la *persisted_ai.LlmActivities // use a nil struct pointer to call activities that are part of a structure
-
 		err := workflow.ExecuteActivity(utils.LlmHeartbeatCtx(dCtx), la.ChatStream, chatStreamOptions).Get(dCtx, &chatResponse)
 		if err != nil {
-			return nil, fmt.Errorf("error during tracked tool chat action '%s': %v", actionName, err)
+			return nil, fmt.Errorf("error during tracked tool chat action '%s': %v", actionType, err)
 		}
 
 		return &chatResponse, nil
@@ -268,8 +295,7 @@ func ApproveDevRequirements(dCtx DevContext, devReq DevRequirements) (*UserRespo
 		Content:       "Please approve or reject these requirements:\n\n" + devReq.String() + "\n\nDo you approve these requirements? If not, please provide feedback on what needs to be changed.",
 		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
 	}
-	actionCtx := dCtx.NewActionContext("Approve Dev Requirements")
-	return GetUserApproval(actionCtx, req.Content, req.RequestParams)
+	return GetUserApproval(dCtx, "dev_requirements", req.Content, req.RequestParams)
 }
 
 // TODO we should determine if the context is too large programmatically instead

@@ -1,14 +1,19 @@
 package dev
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
+	"sidekick/common"
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/llm"
+	"sidekick/utils"
 	"strings"
 	"testing"
 
@@ -153,6 +158,7 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 			editBlock:      EditBlock{EditType: "update", FilePath: "nonexistent.txt", OldLines: []string{"Old content"}, NewLines: []string{"New content"}},
 			wantErr:        true,
 		},
+		// FIXME /gen/req uncomment and update implementation to make this test case work
 		//{
 		//	name:            "Update when file exists but is empty and old lines is empty",
 		//	isExistingFile:  true,
@@ -200,7 +206,20 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		devActivities := &DevActivities{
+			LSPActivities: &lsp.LSPActivities{
+				LSPClientProvider: func(languageName string) lsp.LSPClient {
+					return &lsp.Jsonrpc2LSPClient{
+						LanguageName: languageName,
+					}
+				},
+				InitializedClients: map[string]lsp.LSPClient{},
+			},
+		}
+
 		t.Run(tt.name, func(t *testing.T) {
+			// note: since CheckEdits isn't enabled in this test, we don't need
+			// a git repo
 			tmpDir := t.TempDir()
 
 			if tt.isExistingFile {
@@ -215,10 +234,12 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 				},
 			}
 
-			reports, err := ApplyEditBlocksActivity(
+			reports, err := devActivities.ApplyEditBlocks(
+				context.Background(),
 				ApplyEditBlockActivityInput{
 					EnvContainer: envContainer,
 					EditBlocks:   []EditBlock{tt.editBlock},
+					EnabledFlags: []string{}, // explicitly skips check-edits flag for now (TODO: remove that flag and make it the default)
 				},
 			)
 
@@ -244,6 +265,81 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a test file to delete
+	filePath := filepath.Join(tmpDir, "test_file.txt")
+	err := os.WriteFile(filePath, []byte("content to be deleted"), 0644)
+	require.NoError(t, err)
+
+	// Initialize git repo for diff functionality
+	cmd := exec.Command("git", "init")
+	cmd.Dir = tmpDir
+	err = cmd.Run()
+	require.NoError(t, err)
+
+	cmd = exec.Command("git", "add", ".")
+	cmd.Dir = tmpDir
+	err = cmd.Run()
+	require.NoError(t, err)
+
+	cmd = exec.Command("git", "commit", "-m", "initial commit")
+	cmd.Dir = tmpDir
+	err = cmd.Run()
+	require.NoError(t, err)
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{
+			WorkingDirectory: tmpDir,
+		},
+	}
+
+	editBlock := EditBlock{
+		EditType: "delete",
+		FilePath: "test_file.txt",
+		OldLines: []string{},
+		NewLines: []string{},
+	}
+
+	devActivities := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	// Test with CheckEdits flag enabled
+	reports, err := devActivities.ApplyEditBlocks(context.Background(), ApplyEditBlockActivityInput{
+		EnvContainer: envContainer,
+		EditBlocks:   []EditBlock{editBlock},
+		EnabledFlags: []string{fflag.CheckEdits}, // Enable CheckEdits flag
+	})
+
+	// Verify the operation succeeded
+	assert.Nil(t, err)
+	assert.Len(t, reports, 1)
+	assert.Equal(t, "", reports[0].Error, "DELETE_FILE operation should not report errors when CheckEdits is enabled")
+	assert.True(t, reports[0].DidApply, "DELETE_FILE operation should be marked as applied")
+	assert.NotEmpty(t, reports[0].FinalDiff, "DELETE_FILE operation should generate git diff output")
+
+	// Verify the file was actually deleted
+	_, err = os.Stat(filePath)
+	assert.True(t, os.IsNotExist(err), "File should be deleted")
+
+	// Verify the deletion was staged
+	stashCmd := exec.Command("git", "stash", "--keep-index")
+	stashCmd.Dir = tmpDir
+	err = stashCmd.Run()
+	require.NoError(t, err)
+	_, err = os.Stat(filePath)
+	assert.True(t, os.IsNotExist(err), "File should still be deleted post-stash")
 }
 
 func TestGetUpdatedContents(t *testing.T) {
@@ -773,7 +869,19 @@ func main() {
 		},
 	}
 
-	reports, err := ApplyEditBlocksActivity(
+	devActivities := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	reports, err := devActivities.ApplyEditBlocks(
+		context.Background(),
 		ApplyEditBlockActivityInput{
 			EnvContainer: envContainer,
 			EditBlocks:   editBlocks,
@@ -789,6 +897,259 @@ func main() {
 
 	content, _ := os.ReadFile(filepath.Join(tmpDir, "temp.go"))
 	assert.Equal(t, expectedContent, string(content))
+}
+
+// Helper function to run git commands in a specific directory
+func runGitCommand(t *testing.T, dir string, args ...string) string {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		t.Logf("git command `git %s` failed. Stderr: %s", strings.Join(args, " "), stderr.String())
+		// Don't require.NoError for commands that are expected to fail (e.g. git log on a new file before commit)
+		// require.NoError(t, err, "git command failed: git %s. Stderr: %s", strings.Join(args, " "), stderr.String())
+	}
+	// git often adds a trailing newline, which might not be in the actual file or intended content
+	return out.String() //strings.TrimSuffix(out.String(), "\n")
+}
+
+// Helper function to get staged content of a file
+func getStagedContent(t *testing.T, dir string, repoRelativeFilePath string) string {
+	// git show :<path> shows the content from the index
+	content := runGitCommand(t, dir, "show", ":"+repoRelativeFilePath)
+	return content
+}
+
+// Helper function to get commit hashes for a file
+func getCommitHashes(t *testing.T, dir string, filePath string) []string {
+	// Using --follow to track renames, though not strictly necessary for these tests
+	// Using --pretty=%H to get just the commit hash
+	// filePath should be relative to the repo root (dir)
+	fullPath := filePath          // already relative to dir
+	if filepath.IsAbs(filePath) { // Should not happen if used correctly
+		relPath, err := filepath.Rel(dir, filePath)
+		require.NoError(t, err)
+		fullPath = relPath
+	}
+	// It's okay if git log returns a non-zero exit code if the file doesn't exist or has no commits.
+	// The runGitCommand will log this, and we'll handle the empty output.
+	output := runGitCommand(t, dir, "log", "--pretty=%H", "--follow", "--", fullPath)
+	if output == "" {
+		return []string{}
+	}
+	return utils.Filter(strings.Split(output, "\n"), func(s string) bool { return s != "" })
+}
+
+func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
+	da := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	// Scenario A: New File
+	t.Run("Scenario A - New File", func(t *testing.T) {
+		tmpDirA, err := os.MkdirTemp("", "sequentialNewTest")
+		require.NoError(t, err)
+		defer os.RemoveAll(tmpDirA)
+
+		runGitCommand(t, tmpDirA, "init")
+		runGitCommand(t, tmpDirA, "config", "user.email", "test@example.com")
+		runGitCommand(t, tmpDirA, "config", "user.name", "Test User")
+		runGitCommand(t, tmpDirA, "checkout", "-b", "main") // Ensure we are on a branch
+
+		newFilePath := "sequential_new.txt"
+		fullNewFilePath := filepath.Join(tmpDirA, newFilePath)
+
+		// Block A1: Create sequential_new.txt with "Line 1"
+		editBlockA1 := EditBlock{
+			FilePath: newFilePath,
+			EditType: "create",
+			NewLines: []string{"Line 1", "", ""},
+		}
+		inputA1 := ApplyEditBlockActivityInput{
+			EditBlocks: []EditBlock{editBlockA1},
+			EnvContainer: env.EnvContainer{
+				Env: &env.LocalEnv{WorkingDirectory: tmpDirA},
+			},
+			EnabledFlags: []string{fflag.CheckEdits},
+		}
+		reportsA1, err := da.ApplyEditBlocks(context.Background(), inputA1)
+		require.NoError(t, err)
+		require.Len(t, reportsA1, 1)
+		require.True(t, reportsA1[0].DidApply, "Block A1 should have been applied. Error: %s", reportsA1[0].Error)
+		assert.Empty(t, reportsA1[0].Error, "Block A1 error should be empty: %s", reportsA1[0].Error)
+
+		// Verify diff for A1 (AC3.3)
+		assert.Contains(t, reportsA1[0].FinalDiff, "--- /dev/null", "Diff for new file A1 should be against /dev/null")
+		assert.Contains(t, reportsA1[0].FinalDiff, "+++ b/"+newFilePath, "Diff for new file A1 should show new file path")
+		assert.Contains(t, reportsA1[0].FinalDiff, "+Line 1", "Diff for A1 should show addition of 'Line 1'")
+
+		// Verify file content on disk
+		contentA1, err := os.ReadFile(fullNewFilePath)
+		require.NoError(t, err)
+		assert.Equal(t, "Line 1\n", string(contentA1), "File content after A1 should be 'Line 1\\n'")
+
+		// Verify staging for A1 (AC3.6)
+		stagedContentA1 := getStagedContent(t, tmpDirA, newFilePath)
+		assert.Equal(t, "Line 1\n", stagedContentA1, "Staged content after A1 should be 'Line 1\\n'")
+
+		// Verify no commits (AC3.5)
+		commitsA1 := getCommitHashes(t, tmpDirA, newFilePath)
+		assert.Empty(t, commitsA1, "No commits should exist for new file after A1")
+
+		// Block A2: Append "Line 2" to sequential_new.txt
+		editBlockA2 := EditBlock{
+			FilePath: newFilePath,
+			EditType: "update",
+			OldLines: []string{"Line 1", ""},
+			NewLines: []string{"Line 1", "Line 2"},
+		}
+		inputA2 := ApplyEditBlockActivityInput{
+			EditBlocks: []EditBlock{editBlockA2},
+			EnvContainer: env.EnvContainer{
+				Env: &env.LocalEnv{WorkingDirectory: tmpDirA},
+			},
+			EnabledFlags: []string{fflag.CheckEdits},
+		}
+		reportsA2, err := da.ApplyEditBlocks(context.Background(), inputA2)
+		require.NoError(t, err)
+		require.Len(t, reportsA2, 1)
+		require.True(t, reportsA2[0].DidApply, "Block A2 should have been applied. Error: %s", reportsA2[0].Error)
+		assert.Empty(t, reportsA2[0].Error, "Block A2 error should be empty: %s", reportsA2[0].Error)
+
+		// Verify diff for A2 (AC3.3)
+		assert.Contains(t, reportsA2[0].FinalDiff, "--- a/"+newFilePath, "Diff for A2 should be against previous version of file")
+		assert.Contains(t, reportsA2[0].FinalDiff, "+++ b/"+newFilePath, "Diff for A2 should show file path")
+		assert.Contains(t, reportsA2[0].FinalDiff, "+Line 2", "Diff for A2 should show addition of 'Line 2'")
+		assert.Contains(t, reportsA2[0].FinalDiff, " Line 1", "Diff for A2 should show 'Line 1' as context")
+
+		// Verify file content on disk
+		contentA2, err := os.ReadFile(fullNewFilePath)
+		require.NoError(t, err)
+		assert.Equal(t, "Line 1\nLine 2", string(contentA2), "File content after A2 should be 'Line 1\\nLine 2'")
+
+		// Verify staging for A2 (AC3.6)
+		stagedContentA2 := getStagedContent(t, tmpDirA, newFilePath)
+		assert.Equal(t, "Line 1\nLine 2", stagedContentA2, "Staged content after A2 should be 'Line 1\\nLine 2'")
+
+		// Verify no commits (AC3.5)
+		commitsA2 := getCommitHashes(t, tmpDirA, newFilePath)
+		assert.Empty(t, commitsA2, "No commits should exist for new file after A2")
+	})
+
+	// Scenario B: Existing File
+	t.Run("Scenario B - Existing File", func(t *testing.T) {
+		tmpDirB, err := os.MkdirTemp("", "sequentialExistingTest")
+		require.NoError(t, err)
+		defer os.RemoveAll(tmpDirB)
+
+		runGitCommand(t, tmpDirB, "init")
+		runGitCommand(t, tmpDirB, "config", "user.email", "test@example.com")
+		runGitCommand(t, tmpDirB, "config", "user.name", "Test User")
+		runGitCommand(t, tmpDirB, "checkout", "-b", "main")
+
+		existingFilePath := "sequential_existing.txt"
+		fullExistingFilePath := filepath.Join(tmpDirB, existingFilePath)
+
+		// Create and commit initial file
+		initialContent := "Initial line.\n"
+		err = os.WriteFile(fullExistingFilePath, []byte(initialContent), 0644)
+		require.NoError(t, err)
+		runGitCommand(t, tmpDirB, "add", existingFilePath)
+		runGitCommand(t, tmpDirB, "commit", "-m", "Initial commit for sequential_existing.txt")
+		initialCommits := getCommitHashes(t, tmpDirB, existingFilePath)
+		require.Len(t, initialCommits, 1, "Should have 1 initial commit")
+
+		// Block B1: Modify to "Initial line.\nLine Alpha"
+		editBlockB1 := EditBlock{
+			FilePath: existingFilePath,
+			EditType: "update",
+			OldLines: []string{"Initial line.", ""},
+			NewLines: []string{"Initial line.", "Line Alpha", ""},
+		}
+		inputB1 := ApplyEditBlockActivityInput{
+			EditBlocks: []EditBlock{editBlockB1},
+			EnvContainer: env.EnvContainer{
+				Env: &env.LocalEnv{WorkingDirectory: tmpDirB},
+			},
+			EnabledFlags: []string{fflag.CheckEdits},
+		}
+		reportsB1, err := da.ApplyEditBlocks(context.Background(), inputB1)
+		require.NoError(t, err)
+		require.Len(t, reportsB1, 1)
+		require.True(t, reportsB1[0].DidApply, "Block B1 should have been applied. Error: %s", reportsB1[0].Error)
+		assert.Empty(t, reportsB1[0].Error, "Block B1 error should be empty: %s", reportsB1[0].Error)
+
+		// Verify diff for B1 (AC3.4)
+		assert.Contains(t, reportsB1[0].FinalDiff, "--- a/"+existingFilePath, "Diff for B1 should be against previous version of file")
+		assert.Contains(t, reportsB1[0].FinalDiff, "+++ b/"+existingFilePath, "Diff for B1 should show file path")
+		assert.Contains(t, reportsB1[0].FinalDiff, "+Line Alpha", "Diff for B1 should show addition of 'Line Alpha'")
+		assert.NotContains(t, reportsB1[0].FinalDiff, "+Initial line.", "Diff for B1 should NOT show addition of 'Initial line.'")
+		assert.Contains(t, reportsB1[0].FinalDiff, " Initial line.", "Diff for B1 should show 'Initial line.' as context")
+
+		// Verify file content on disk
+		contentB1, err := os.ReadFile(fullExistingFilePath)
+		require.NoError(t, err)
+		assert.Equal(t, "Initial line.\nLine Alpha\n", string(contentB1), "File content after B1 should be 'Initial line.\\nLine Alpha\\n'")
+
+		// Verify staging for B1 (AC3.6)
+		stagedContentB1 := getStagedContent(t, tmpDirB, existingFilePath)
+		assert.Equal(t, "Initial line.\nLine Alpha\n", stagedContentB1, "Staged content after B1 should be 'Initial line.\\nLine Alpha\\n'")
+
+		// Verify no new commits (AC3.5)
+		commitsB1 := getCommitHashes(t, tmpDirB, existingFilePath)
+		assert.Len(t, commitsB1, 1, "Commit count should still be 1 after B1")
+
+		// Block B2: Modify to "Initial line.\nLine Alpha\nLine Beta"
+		editBlockB2 := EditBlock{
+			FilePath: existingFilePath,
+			EditType: "update",
+			OldLines: []string{"Initial line.", "Line Alpha", ""},
+			NewLines: []string{"Initial line.", "Line Alpha", "Line Beta"},
+		}
+		inputB2 := ApplyEditBlockActivityInput{
+			EditBlocks: []EditBlock{editBlockB2},
+			EnvContainer: env.EnvContainer{
+				Env: &env.LocalEnv{WorkingDirectory: tmpDirB},
+			},
+			EnabledFlags: []string{fflag.CheckEdits},
+		}
+		reportsB2, err := da.ApplyEditBlocks(context.Background(), inputB2)
+		require.NoError(t, err)
+		require.Len(t, reportsB2, 1)
+		require.True(t, reportsB2[0].DidApply, "Block B2 should have been applied. Error: %s", reportsB2[0].Error)
+		assert.Empty(t, reportsB2[0].Error, "Block B2 error should be empty: %s", reportsB2[0].Error)
+
+		// Verify diff for B2 (AC3.4)
+		assert.Contains(t, reportsB2[0].FinalDiff, "--- a/"+existingFilePath, "Diff for B2 should be against previous version of file")
+		assert.Contains(t, reportsB2[0].FinalDiff, "+++ b/"+existingFilePath, "Diff for B2 should show file path")
+		assert.Contains(t, reportsB2[0].FinalDiff, "+Line Beta", "Diff for B2 should show addition of 'Line Beta'")
+		assert.NotContains(t, reportsB2[0].FinalDiff, "+Line Alpha", "Diff for B2 should NOT show addition of 'Line Alpha'")
+		assert.Contains(t, reportsB2[0].FinalDiff, " Line Alpha", "Diff for B2 should show 'Line Alpha' as context")
+
+		// Verify file content on disk
+		contentB2, err := os.ReadFile(fullExistingFilePath)
+		require.NoError(t, err)
+		assert.Equal(t, "Initial line.\nLine Alpha\nLine Beta", string(contentB2), "File content after B2 should be 'Initial line.\\nLine Alpha\\nLine Beta'")
+
+		// Verify staging for B2 (AC3.6)
+		stagedContentB2 := getStagedContent(t, tmpDirB, existingFilePath)
+		assert.Equal(t, "Initial line.\nLine Alpha\nLine Beta", stagedContentB2, "Staged content after B2 should be 'Initial line.\\nLine Alpha\\nLine Beta'")
+
+		// Verify no new commits (AC3.5)
+		commitsB2 := getCommitHashes(t, tmpDirB, existingFilePath)
+		assert.Len(t, commitsB2, 1, "Commit count should still be 1 after B2")
+	})
 }
 
 func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
@@ -875,7 +1236,19 @@ func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
 				},
 			}
 
-			reports, err := ApplyEditBlocksActivity(
+			devActivities := &DevActivities{
+				LSPActivities: &lsp.LSPActivities{
+					LSPClientProvider: func(languageName string) lsp.LSPClient {
+						return &lsp.Jsonrpc2LSPClient{
+							LanguageName: languageName,
+						}
+					},
+					InitializedClients: map[string]lsp.LSPClient{},
+				},
+			}
+
+			reports, err := devActivities.ApplyEditBlocks(
+				context.Background(),
 				ApplyEditBlockActivityInput{
 					EnvContainer: envContainer,
 					EditBlocks:   []EditBlock{tt.editBlock},
@@ -911,6 +1284,181 @@ func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestApplyEditBlocks_FinalDiff_AfterFailedChecksAndRestore(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "finalDiffFailedCheckTest")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	// Initialize Git repo
+	initCmd := exec.Command("git", "init")
+	initCmd.Dir = tmpDir
+	err = initCmd.Run()
+	require.NoError(t, err)
+
+	// Create and commit an initial file
+	originalContent := "original content\nline2"
+	filePath := "existing_file.txt"
+	fullPath := filepath.Join(tmpDir, filePath)
+	err = os.WriteFile(fullPath, []byte(originalContent), 0644)
+	require.NoError(t, err)
+
+	addCmd := exec.Command("git", "add", filePath)
+	addCmd.Dir = tmpDir
+	err = addCmd.Run()
+	require.NoError(t, err)
+
+	commitCmd := exec.Command("git", "commit", "-m", "Initial commit")
+	commitCmd.Dir = tmpDir
+	err = commitCmd.Run()
+	require.NoError(t, err)
+
+	// Define the edit
+	modifiedContent := "modified content\nline2_changed\nnew_line"
+	editBlock := EditBlock{
+		EditType: "update",
+		FilePath: filePath,
+		OldLines: strings.Split(originalContent, "\n"),
+		NewLines: strings.Split(modifiedContent, "\n"),
+	}
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{
+			WorkingDirectory: tmpDir,
+		},
+	}
+
+	// Create side.toml for valid project context if needed by checks
+	// This is often needed for git operations or other environment setups within activities.
+	_, err = os.Create(filepath.Join(tmpDir, "side.toml"))
+	require.NoError(t, err)
+
+	input := ApplyEditBlockActivityInput{
+		EnvContainer:  envContainer,
+		EditBlocks:    []EditBlock{editBlock},
+		EnabledFlags:  []string{fflag.CheckEdits},
+		CheckCommands: []common.CommandConfig{{Command: "false"}}, // Ensure check fails
+	}
+
+	devActivities := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	reports, activityErr := devActivities.ApplyEditBlocks(context.Background(), input)
+
+	require.NoError(t, activityErr) // Activity itself should not error for this case, error is in report
+	require.Len(t, reports, 1)
+	report := reports[0]
+
+	assert.False(t, report.CheckResult.Success, "CheckResult.Success should be false")
+	assert.False(t, report.DidApply, "DidApply should be false")
+	// report.Error might contain check failure message. If it's specifically about the check, that's expected.
+	// If it's about diffing itself, that would be a problem. The requirements state errors from diffing are recorded.
+
+	assert.NotEmpty(t, report.FinalDiff, "FinalDiff should not be empty after failed check and restore")
+	assert.Contains(t, report.FinalDiff, fmt.Sprintf("--- a/%s", filePath), "FinalDiff should contain the original file path")
+	assert.Contains(t, report.FinalDiff, fmt.Sprintf("+++ b/%s", filePath), "FinalDiff should contain the modified file path")
+	assert.Contains(t, report.FinalDiff, "-original content", "FinalDiff should show removed original content")
+	assert.Contains(t, report.FinalDiff, "+modified content", "FinalDiff should show added modified content")
+
+	// Verify file is restored
+	currentContent, err := os.ReadFile(fullPath)
+	require.NoError(t, err)
+	assert.Equal(t, originalContent, string(currentContent), "File content should be restored to original")
+
+	// Verify file is not staged
+	diffCachedCmd := exec.Command("git", "diff", "--cached", "--name-only")
+	diffCachedCmd.Dir = tmpDir
+	out, err := diffCachedCmd.Output()
+	require.NoError(t, err)
+	assert.Empty(t, strings.TrimSpace(string(out)), "No files should be staged after failed check and restore")
+}
+
+func TestApplyEditBlocks_FinalDiff_NewFilePassesChecks(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "finalDiffNewFilePassCheckTest")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	// Initialize Git repo
+	initCmd := exec.Command("git", "init")
+	initCmd.Dir = tmpDir
+	err = initCmd.Run()
+	require.NoError(t, err)
+
+	// Create side.toml for valid project context if needed by checks
+	_, err = os.Create(filepath.Join(tmpDir, "side.toml"))
+	require.NoError(t, err)
+
+	newFilePath := "new_file.txt"
+	newFileContent := "new file content\nline two"
+
+	editBlock := EditBlock{
+		EditType: "create",
+		FilePath: newFilePath,
+		OldLines: []string{},
+		NewLines: strings.Split(newFileContent, "\n"),
+	}
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{
+			WorkingDirectory: tmpDir,
+		},
+	}
+
+	input := ApplyEditBlockActivityInput{
+		EnvContainer:  envContainer,
+		EditBlocks:    []EditBlock{editBlock},
+		EnabledFlags:  []string{fflag.CheckEdits},
+		CheckCommands: []common.CommandConfig{{Command: "true"}}, // Ensure check passes
+	}
+
+	devActivities := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	reports, activityErr := devActivities.ApplyEditBlocks(context.Background(), input)
+
+	require.NoError(t, activityErr)
+	require.Len(t, reports, 1)
+	report := reports[0]
+
+	assert.Empty(t, report.Error, "Report error should be empty for successful creation and check")
+	assert.True(t, report.CheckResult.Success, "CheckResult.Success should be true")
+	assert.True(t, report.DidApply, "DidApply should be true")
+
+	assert.NotEmpty(t, report.FinalDiff, "FinalDiff should not be empty for new file that passes checks")
+	assert.Contains(t, report.FinalDiff, "--- /dev/null", "FinalDiff should indicate creation from /dev/null")
+	assert.Contains(t, report.FinalDiff, fmt.Sprintf("+++ b/%s", newFilePath), "FinalDiff should contain the new file path")
+	assert.Contains(t, report.FinalDiff, "+new file content", "FinalDiff should show added new file content")
+	assert.Contains(t, report.FinalDiff, "+line two", "FinalDiff should show added second line of new file content")
+
+	// Verify new file exists with correct content
+	createdFilePath := filepath.Join(tmpDir, newFilePath)
+	currentContent, err := os.ReadFile(createdFilePath)
+	require.NoError(t, err)
+	assert.Equal(t, newFileContent, string(currentContent), "New file content is incorrect")
+
+	// Verify file is staged
+	diffCachedCmd := exec.Command("git", "diff", "--cached", "--name-only")
+	diffCachedCmd.Dir = tmpDir
+	out, err := diffCachedCmd.Output()
+	require.NoError(t, err)
+	assert.Contains(t, strings.TrimSpace(string(out)), newFilePath, "New file should be staged")
 }
 
 const rstLines = `# Licensed under a 3-clause BSD style license

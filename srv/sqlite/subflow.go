@@ -2,9 +2,11 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sidekick/common"
 	"sidekick/domain"
 
 	"github.com/rs/zerolog/log"
@@ -161,6 +163,9 @@ func (s *Storage) GetSubflow(ctx context.Context, workspaceId, subflowId string)
 	)
 
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return domain.Subflow{}, common.ErrNotFound
+		}
 		log.Error().Err(err).
 			Str("workspaceId", workspaceId).
 			Str("subflowId", subflowId).

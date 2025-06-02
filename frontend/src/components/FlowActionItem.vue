@@ -84,37 +84,74 @@ function toggle() {
   })
 }
 
+const humanizeText = (text: string): string => {
+  return text.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+};
+
 const actionHeading = computed(() => {
-  switch (props.flowAction.actionType) {
+  const actionType = props.flowAction.actionType;
+  
+  switch (actionType) {
     case 'user_request':
       if (props.flowAction.actionStatus === 'complete') {
         return 'Human Input';
       } else {
         return 'AI Asked For Your Input';
       }
+    case 'user_request.paused':
+      if (props.flowAction.actionStatus === 'complete') {
+        return 'Human Input';
+      } else {
+        return 'Paused';
+      }
+    case 'user_request.approve_merge':
+    case 'user_request.approve.merge':
+      return 'Review Changes';
+    case 'Approve Dev Requirements':
+    case 'user_request.approve.dev_requirements':
+        return 'Review Requirements';
+    case 'user_request.approve.dev_plan':
+        return 'Review Plan';
     case "Get User Guidance":
+    case "user_request.guidance":
       if (props.flowAction.actionStatus === 'complete') {
         return 'Human Guidance';
       } else {
         return 'Too Many Iterations: AI Needs Your Help';
       }
-    case 'Approve Dev Requirements':
-        return 'Human Review';
     case 'Generate Dev Requirements':
+    case 'generate.dev_requirements':
       return 'Generate Requirements'
     case 'Generate Dev Plan':
+    case 'generate.dev_plan':
       return 'Generate Plan'
     case 'Generate Code Edits':
+    case 'generate.code_edits':
       return 'Generate Edits'
+    case 'Get Ranked Repo Summary':
+    case 'ranked_repo_summary':
+      return 'Ranked Repo Summary';
     case 'Apply Edit Blocks':
+    case 'apply_edit_blocks':
       return 'Apply Edits';
     case 'Run Tests':
     case 'RunTests':
+    case 'run_tests':
       return 'Tests';
     case 'Check Criteria Fulfillment':
+    case 'check_criteria_fulfillment':
       return 'Complete?';
     default:
-      return props.flowAction.actionType;
+      // Handle general dot-notation pattern
+      if (/^tool_call\./.test(props.flowAction.actionType)){
+        return props.flowAction.actionType.replace(/^tool_call\./, 'Tool: ');
+      } else if (actionType.includes('.')) {
+        const dotIndex = actionType.indexOf('.');
+        const beforeDot = actionType.substring(0, dotIndex);
+        const afterDot = actionType.substring(dotIndex + 1);
+        return `${humanizeText(beforeDot)}: ${humanizeText(afterDot)}`;
+      }
+      return humanizeText(actionType);
     }
 });
 
@@ -123,22 +160,30 @@ const actionSpecificComponent = computed(() => {
     case 'user_request':
       return UserRequest
     case 'Get Ranked Repo Summary':
+    case 'ranked_repo_summary':
       return PlaintextResultFlowAction
     case 'Check Criteria Fulfillment':
+    case 'check_criteria_fulfillment':
       return CheckCriteriaFulfillmentFlowAction
     case 'Apply Edit Blocks':
+    case 'apply_edit_blocks':
       return ApplyEditBlocksFlowAction
     case 'Run Tests':
     case 'RunTests':
+    case 'run_tests':
       return RunTestsFlowAction
     default:
-      if (props.flowAction.isHumanAction) {
+      if (props.flowAction.isHumanAction || /^user_request\./.test(props.flowAction.actionType)) {
         return UserRequest
       }
+      if (/^generate\./.test(props.flowAction.actionType)) {
+        return ChatCompletionFlowAction
+      }
+      // legacy support for chat completion flow actions with actionType not prefixed with "generate."
       if (props.flowAction.actionParams?.messages && Object.prototype.hasOwnProperty.call(props.flowAction.actionParams, 'temperature')) {
         return ChatCompletionFlowAction
       }
-      if (/^Tool: /.test(props.flowAction.actionType)){
+      if (/^(Tool: |tool_call\.)/.test(props.flowAction.actionType)){
         return ToolFlowAction
       }
       return null;
@@ -173,6 +218,7 @@ const summary = computed<Summary | null>(() => {
 
   switch (props.flowAction.actionType) {
     case 'Run Tests':
+    case 'run_tests':
     case 'RunTests': {
       // NOTE: shoving non-arrays into an array is to support extremely legacy data
       const results = Array.isArray(actionResult.value) ? actionResult.value : (actionResult.value != null ? [actionResult.value] : []);
@@ -186,6 +232,7 @@ const summary = computed<Summary | null>(() => {
       };
     }
 
+    case 'apply_edit_blocks':
     case 'Apply Edit Blocks': {
       const editResults = actionResult.value as ApplyEditBlockResult[] | null;
       if (editResults == null) {
@@ -203,6 +250,7 @@ const summary = computed<Summary | null>(() => {
       };
     }
 
+    case 'check_criteria_fulfillment':
     case 'Check Criteria Fulfillment': {
       try {
         const criteriaFulfillment = JSON.parse(actionResult.value?.toolCalls[0]?.arguments || "null") as CriteriaFulfillment | null;
@@ -306,6 +354,10 @@ a.disable-toggle:hover {
 .expanded.odd {
   /*background-color: #242424;*/
   background-color: var(--color-background-mute);
+}
+
+.expanded.odd :deep(.diff-file .file-header:not(:hover)) {
+  background-color: var(--color-background);
 }
 
 .flow-action:has(.expanded:last-child):has(+ .subflow-container) {

@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sidekick/common"
-	"sidekick/srv"
 	"strings"
 	"time"
 
@@ -20,9 +19,6 @@ type Storage struct {
 	db   *sql.DB
 	kvDb *sql.DB
 }
-
-// Ensure Storage implements SubflowStorage interface
-var _ srv.Storage = (*Storage)(nil)
 
 func NewStorage() (*Storage, error) {
 	mainDbPath, err := GetSqliteUri("sidekick.core.db")

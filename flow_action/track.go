@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"sidekick/domain"
+	"sidekick/utils"
 	"time"
 
-	"github.com/segmentio/ksuid"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -83,21 +83,21 @@ func trackSubflow[T any](eCtx ExecContext, subflowType, subflowName string, f fu
 	if err != nil {
 		return defaultT, err
 	}
-	eCtx.FlowScope.Subflow = &subflow
+	(*eCtx.FlowScope).Subflow = &subflow
 
 	// handle legacy subflow name value
 	originalSubflowName := eCtx.FlowScope.SubflowName
 	if originalSubflowName == "" {
-		eCtx.FlowScope.SubflowName = subflow.Name
+		(*eCtx.FlowScope).SubflowName = subflow.Name
 	} else {
-		eCtx.FlowScope.SubflowName = fmt.Sprintf("%s%s%s", originalSubflowName, legacySubflowNameSeparator, subflow.Name)
+		(*eCtx.FlowScope).SubflowName = fmt.Sprintf("%s%s%s", originalSubflowName, legacySubflowNameSeparator, subflow.Name)
 	}
 
 	defer func() {
-		eCtx.FlowScope.Subflow = parentSubflow
+		(*eCtx.FlowScope).Subflow = parentSubflow
 
 		// handle legacy subflow name value
-		eCtx.FlowScope.SubflowName = originalSubflowName
+		(*eCtx.FlowScope).SubflowName = originalSubflowName
 	}()
 
 	val, err := f(subflow)
@@ -105,7 +105,12 @@ func trackSubflow[T any](eCtx ExecContext, subflowType, subflowName string, f fu
 	if err != nil {
 		subflow.Status = domain.SubflowStatusFailed
 		subflow.Result = fmt.Sprintf("failed: %v", err)
-		_, err2 := putSubflow(eCtx, subflow)
+		updateECtx := eCtx
+		if v := workflow.GetVersion(eCtx, "disconnected-context", workflow.DefaultVersion, 1); v == 1 {
+			disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
+			updateECtx.Context = disconnectedWorkflowCtx
+		}
+		_, err2 := putSubflow(updateECtx, subflow)
 		if err2 != nil {
 			return defaultT, fmt.Errorf("failed to mark subflow as failed: %v\noriginal failure: %v", err2, err)
 		}
@@ -118,7 +123,12 @@ func trackSubflow[T any](eCtx ExecContext, subflowType, subflowName string, f fu
 	}
 	subflow.Result = string(jsonVal)
 	subflow.Status = domain.SubflowStatusComplete
-	_, err = putSubflow(eCtx, subflow)
+	updateECtx := eCtx
+	if v := workflow.GetVersion(eCtx, "disconnected-context", workflow.DefaultVersion, 1); v == 1 {
+		disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
+		updateECtx.Context = disconnectedWorkflowCtx
+	}
+	_, err = putSubflow(updateECtx, subflow)
 	if err != nil {
 		return defaultT, fmt.Errorf("failed to mark subflow as complete: %v", err)
 	}
@@ -130,21 +140,21 @@ func trackSubflowFailureOnly[T any](eCtx ExecContext, subflowType, subflowName s
 	parentSubflow := eCtx.FlowScope.Subflow
 	subflow := setupSubflow(eCtx, subflowType, subflowName) // don't persist the subflow yet, only do it if & when it fails
 
-	eCtx.FlowScope.Subflow = &subflow
+	(*eCtx.FlowScope).Subflow = &subflow
 
 	// handle legacy subflow name value
 	originalSubflowName := eCtx.FlowScope.SubflowName
 	if originalSubflowName == "" {
-		eCtx.FlowScope.SubflowName = subflow.Name
+		(*eCtx.FlowScope).SubflowName = subflow.Name
 	} else {
-		eCtx.FlowScope.SubflowName = fmt.Sprintf("%s%s%s", originalSubflowName, legacySubflowNameSeparator, subflow.Name)
+		(*eCtx.FlowScope).SubflowName = fmt.Sprintf("%s%s%s", originalSubflowName, legacySubflowNameSeparator, subflow.Name)
 	}
 
 	defer func() {
-		eCtx.FlowScope.Subflow = parentSubflow
+		(*eCtx.FlowScope).Subflow = parentSubflow
 
 		// handle legacy subflow name value
-		eCtx.FlowScope.SubflowName = originalSubflowName
+		(*eCtx.FlowScope).SubflowName = originalSubflowName
 	}()
 
 	val, err := f(subflow)
@@ -152,7 +162,12 @@ func trackSubflowFailureOnly[T any](eCtx ExecContext, subflowType, subflowName s
 	if err != nil {
 		subflow.Status = domain.SubflowStatusFailed
 		subflow.Result = fmt.Sprintf("failed: %v", err)
-		_, err2 := putSubflow(eCtx, subflow)
+		updateECtx := eCtx
+		if v := workflow.GetVersion(eCtx, "disconnected-context", workflow.DefaultVersion, 1); v == 1 {
+			disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
+			updateECtx.Context = disconnectedWorkflowCtx
+		}
+		_, err2 := putSubflow(updateECtx, subflow)
 		if err2 != nil {
 			return defaultT, fmt.Errorf("failed to mark subflow as failed: %v\noriginal failure: %v", err2, err)
 		}
@@ -189,7 +204,12 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 		flowAction.ActionStatus = domain.ActionStatusFailed
 		flowAction.ActionResult = fmt.Sprintf("failed: %v", err)
 		var err2 error
-		flowAction, err2 = putFlowAction(eCtx, flowAction)
+		updateECtx := eCtx
+		if v := workflow.GetVersion(eCtx, "disconnected-context", workflow.DefaultVersion, 1); v == 1 {
+			disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
+			updateECtx.Context = disconnectedWorkflowCtx
+		}
+		flowAction, err2 = putFlowAction(updateECtx, flowAction)
 		if err2 != nil {
 			return defaultT, fmt.Errorf("failed to mark flow action as failed: %v\noriginal failure: %v", err2, err)
 		}
@@ -202,7 +222,12 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 		return defaultT, fmt.Errorf("failed to convert val to json: %v", err)
 	}
 	flowAction.ActionResult = string(jsonVal)
-	flowAction, err = putFlowAction(eCtx, flowAction)
+	updateECtx := eCtx
+	if v := workflow.GetVersion(eCtx, "disconnected-context", workflow.DefaultVersion, 1); v == 1 {
+		disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
+		updateECtx.Context = disconnectedWorkflowCtx
+	}
+	flowAction, err = putFlowAction(updateECtx, flowAction)
 	if err != nil {
 		return val, fmt.Errorf("failed to mark flow action as completed: %v", err)
 	}
@@ -228,7 +253,12 @@ func trackFlowActionFailureOnly[T any](eCtx ExecContext, actionType string, acti
 		flowAction.ActionStatus = domain.ActionStatusFailed
 		flowAction.ActionResult = fmt.Sprintf("failed: %v", err)
 		var err2 error
-		flowAction, err2 = putFlowAction(eCtx, flowAction)
+		updateECtx := eCtx
+		if v := workflow.GetVersion(eCtx, "disconnected-context", workflow.DefaultVersion, 1); v == 1 {
+			disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
+			updateECtx.Context = disconnectedWorkflowCtx
+		}
+		flowAction, err2 = putFlowAction(updateECtx, flowAction)
 		if err2 != nil {
 			return defaultT, fmt.Errorf("failed to mark flow action as failed: %v\noriginal failure: %v", err2, err)
 		}
@@ -241,7 +271,7 @@ func trackFlowActionFailureOnly[T any](eCtx ExecContext, actionType string, acti
 
 func putFlowAction(eCtx ExecContext, flowAction domain.FlowAction) (domain.FlowAction, error) {
 	if flowAction.Id == "" {
-		flowAction.Id = "fa_" + ksuid.New().String()
+		flowAction.Id = "fa_" + utils.KsuidSideEffect(eCtx)
 	}
 
 	if flowAction.FlowId == "" {
@@ -260,6 +290,9 @@ func putFlowAction(eCtx ExecContext, flowAction domain.FlowAction) (domain.FlowA
 	flowAction.Updated = time.Now()
 
 	var fa *FlowActivities // nil struct pointer for struct-based activities
+
+	//fmt.Printf("putFlowAction with:\n")
+	//utils.PrettyPrint(flowAction)
 	err := workflow.ExecuteActivity(eCtx, fa.PersistFlowAction, flowAction).Get(eCtx, nil)
 	if err != nil {
 		return domain.FlowAction{}, err
@@ -284,7 +317,7 @@ func setupSubflow(eCtx ExecContext, subflowType, subflowName string) domain.Subf
 	}
 
 	if subflow.Id == "" {
-		subflow.Id = "sf_" + ksuid.New().String()
+		subflow.Id = "sf_" + utils.KsuidSideEffect(eCtx)
 	}
 	if subflow.FlowId == "" {
 		subflow.FlowId = workflow.GetInfo(eCtx).WorkflowExecution.ID

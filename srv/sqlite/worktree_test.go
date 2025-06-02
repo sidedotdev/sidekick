@@ -2,8 +2,8 @@ package sqlite
 
 import (
 	"context"
+	"sidekick/common"
 	"sidekick/domain"
-	"sidekick/srv"
 	"testing"
 	"time"
 
@@ -51,7 +51,7 @@ func TestWorktreeStorage(t *testing.T) {
 
 		// Test non-existent worktree
 		_, err = storage.GetWorktree(ctx, "non-existent", "wt_non-existent")
-		assert.ErrorIs(t, err, srv.ErrNotFound)
+		assert.ErrorIs(t, err, common.ErrNotFound)
 	})
 
 	t.Run("GetWorktrees", func(t *testing.T) {
@@ -97,7 +97,7 @@ func TestWorktreeStorage(t *testing.T) {
 
 		// Verify the worktree was deleted
 		_, err = storage.GetWorktree(ctx, worktree.WorkspaceId, worktree.Id)
-		assert.ErrorIs(t, err, srv.ErrNotFound)
+		assert.ErrorIs(t, err, common.ErrNotFound)
 
 		// Verify the worktree was removed from the workspace set
 		worktrees, err := storage.GetWorktrees(ctx, worktree.WorkspaceId)

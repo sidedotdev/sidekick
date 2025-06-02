@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sidekick/common"
 	"sidekick/domain"
-	"sidekick/srv"
 )
 
 // Ensure Storage implements FlowStorage interface
@@ -40,7 +40,7 @@ func (s *Storage) GetFlow(ctx context.Context, workspaceId, flowId string) (doma
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return domain.Flow{}, srv.ErrNotFound
+			return domain.Flow{}, common.ErrNotFound
 		}
 		return domain.Flow{}, fmt.Errorf("failed to get flow: %w", err)
 	}
