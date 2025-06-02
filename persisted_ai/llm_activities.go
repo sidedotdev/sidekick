@@ -62,10 +62,12 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 
 	// First attempt
 	response, err := toolChatter.ChatStream(ctx, options.ToolChatOptions, deltaChan)
+	if response != nil {
+		response.Provider = options.Params.ModelConfig.Provider
+	}
 	if err != nil {
 		return response, err
 	}
-	response.Provider = options.Params.ModelConfig.Provider
 
 	// Check for empty response
 	if len(response.Content) == 0 && len(response.ToolCalls) == 0 {
@@ -108,8 +110,10 @@ Sidekick: got an unexpected empty response. Retrying with modified prompt...
 
 	// Second attempt
 	retryResponse, err := toolChatter.ChatStream(ctx, chatOptions, deltaChan)
-	if err != nil {
+	if retryResponse != nil {
 		retryResponse.Provider = chatOptions.Params.ModelConfig.Provider
+	}
+	if err != nil {
 		return retryResponse, err
 	}
 
@@ -130,7 +134,6 @@ Sidekick: got an unexpected empty response. Retrying with modified prompt...
 		retryResponse.Content = "(error: unexpected empty response)"
 	}
 
-	retryResponse.Provider = chatOptions.Params.ModelConfig.Provider
 	return retryResponse, nil
 }
 

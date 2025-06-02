@@ -7,6 +7,9 @@
         |
         <a :href="`idea://open?file=${encodeURIComponent(workDir(worktree))}`" class="vs-code-button">Intellij IDEA</a>
       </p>
+    <div class="debug" v-if="devMode">
+      <a :href="`http://localhost:19855/namespaces/default/workflows/${flow.id}`">Temporal {{ flow.id }}</a>
+    </div>
     </div>
     <div 
       v-if="flow && !['completed', 'failed', 'canceled', 'paused'].includes(flow.status)" 
@@ -39,7 +42,9 @@ import { buildSubflowTrees } from '../lib/subflow'
 import { useRoute } from 'vue-router'
 import { store } from '../lib/store'
 
-const dataDir = `${import.meta.env.VITE_HOME}/Library/Application Support/Sidekick` // FIXME switch to API call to backend
+const dataDir = `${import.meta.env.VITE_HOME}/Library/Application Support/sidekick` // FIXME switch to API call to backend
+
+const subflowProcessingDebounceTimers = ref<Record<string, NodeJS.Timeout>>({})
 const devMode = import.meta.env.MODE === 'development'
 const flowActions = ref<FlowAction[]>([])
 const subflowTrees = ref<SubflowTree[]>([])

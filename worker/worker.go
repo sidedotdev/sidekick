@@ -130,6 +130,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	w.RegisterActivity(git.GitCheckoutActivity)
 	w.RegisterActivity(git.GitMergeActivity)
 	w.RegisterActivity(git.ListWorktreesActivity)
+	w.RegisterActivity(git.CleanupWorktreeActivity)
 	w.RegisterActivity(git.GetCurrentBranch)
 	w.RegisterActivity(git.GetDefaultBranch)
 	w.RegisterActivity(git.ListLocalBranches)
@@ -140,6 +141,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	w.RegisterActivity(dev.GetRepoConfigActivity)
 	w.RegisterActivity(dev.GetSymbolsActivity)
 	w.RegisterActivity(devManagerActivities)
+	w.RegisterActivity(dev.ApplyEditBlocksActivity) // backcompat for <= v0.4.1
 	w.RegisterActivity(devActivities)
 	w.RegisterActivity(dev.ReadFileActivity)
 	w.RegisterActivity(dev.ManageChatHistoryActivity)

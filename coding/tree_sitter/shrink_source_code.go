@@ -180,6 +180,7 @@ func ShrinkEmbeddedCodeContext(content string, longestFirst bool, maxLength int)
 
 		didRemove, withoutComments := removeComments(sourceCode)
 		if didRemove {
+			didShrink = true
 			oldSourceCodeContent := sourceCode.Content
 			hint := "Shrank context - here are the extracted code signatures only, in lieu of full code:\n"
 			fenceStart := "```" + sourceCode.OriginalLanguageName + "\n"

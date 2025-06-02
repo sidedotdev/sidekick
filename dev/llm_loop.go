@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"sidekick/llm"
+
+	"go.temporal.io/sdk/workflow"
 )
 
 // LlmIteration represents a single iteration in the LLM loop.
@@ -77,7 +79,8 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 		// Use WithCancelOnPause for long-running operations, ensuring a fresh context for each iteration.
 		iteration.ExecCtx = dCtx.WithCancelOnPause()
 
-		if iteration.Num > config.maxIterations {
+		v := workflow.GetVersion(dCtx, "no-max-unless-diabled-human", workflow.DefaultVersion, 1)
+		if iteration.Num > config.maxIterations && (v == 0 || dCtx.RepoConfig.DisableHumanInTheLoop) {
 			return nil, ErrMaxAttemptsReached
 		}
 
@@ -117,6 +120,11 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 			// If loopFunc was canceled due to a system pause, continue the loop.
 			// UserRequestIfPaused at the next iteration's start will handle the pause.
 			if dCtx.GlobalState != nil && dCtx.GlobalState.Paused && errors.Is(err, context.Canceled) {
+				if v >= 1 {
+					// ensure we don't break due to max iterations in this case
+					iteration.Num--
+					iteration.NumSinceLastFeedback--
+				}
 				continue
 			}
 			// Otherwise, it's a genuine error from loopFunc.
@@ -126,13 +134,5 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 		if result != nil {
 			return result, nil
 		}
-
-		// Check if paused after each iteration
-		if dCtx.GlobalState != nil && dCtx.GlobalState.Paused {
-			continue
-		}
-
-		// I think we want the loopFunc to have full control over managing chat history
-		// ManageChatHistory(flowCtx.WorkflowContext, iteration.ChatHistory, defaultMaxChatHistoryLength);
 	}
 }

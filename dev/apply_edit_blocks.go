@@ -61,6 +61,22 @@ type ApplyEditBlockActivityInput struct {
 	CheckCommands []common.CommandConfig
 }
 
+// needed for backcompat, avoiding non-deterministic temporal workflow runs
+func ApplyEditBlocksActivity(ctx context.Context, input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
+	da := DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+	return da.ApplyEditBlocks(ctx, input)
+}
+
 func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
 	baseDir := input.EnvContainer.Env.GetWorkingDirectory()
 	var reports []ApplyEditBlockReport

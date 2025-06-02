@@ -8,6 +8,13 @@
     <div v-if="flowAction.actionParams.command">
       <pre>{{ flowAction.actionParams.command }}</pre>
     </div>
+    <template v-if="flowAction.actionParams.mergeApprovalInfo?.diff">
+      <UnifiedDiffViewer
+        :diff-string="flowAction.actionParams.mergeApprovalInfo.diff"
+        :default-expanded="false"
+      />
+    </template>
+
     <div v-if="flowAction.actionParams.requestKind === 'approval'">
       <AutogrowTextarea v-model="responseContent" placeholder="Rejection reason" />
       <div v-if="errorMessage" class="error-message">
@@ -27,14 +34,8 @@
         {{ rejectCopy() }}
       </button>
     </div>
-    <div v-else-if="flowAction.actionParams.requestKind === 'merge_approval'">
-      <template v-if="flowAction.actionParams.mergeApprovalInfo?.diff">
-        <UnifiedDiffViewer
-          :diff-string="flowAction.actionParams.mergeApprovalInfo.diff"
-          :default-expanded="false"
-        />
-      </template>
 
+    <div v-else-if="flowAction.actionParams.requestKind === 'merge_approval'">
       <div style="display: flex; margin-top: 0.5rem;">
         <label for="targetBranch">Merge into</label>
         <BranchSelector
@@ -87,6 +88,18 @@
         class="markdown"
       />
     </div>
+    <div v-if="flowAction.actionParams.command">
+      <pre>{{ flowAction.actionParams.command }}</pre>
+    </div>
+    <template v-if="flowAction.actionParams.mergeApprovalInfo?.diff">
+      <UnifiedDiffViewer
+        :diff-string="flowAction.actionParams.mergeApprovalInfo.diff"
+        :default-expanded="false"
+      />
+    </template>
+    <div v-if="parsedActionResult?.Params?.targetBranch">
+      Merge into: {{ parsedActionResult.Params.targetBranch }}
+    </div>
     <div v-if="/approval/.test(props.flowAction.actionParams.requestKind)">
       <!--p>{{ flowAction.actionParams.requestContent }}</p-->
       <p>{{ parsedActionResult.Approved ? '✅ Approved' : '❌ Rejected: ' }}{{ parsedActionResult.Content }}</p>
@@ -126,7 +139,6 @@ const props = defineProps({
 const responseContent = ref('');
 const errorMessage = ref('');
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
-const targetBranch = ref<string | undefined>(props.flowAction.actionParams.mergeApprovalInfo?.defaultTargetBranch)
 
 const parsedActionResult = computed(() => {
   try {
@@ -135,6 +147,8 @@ const parsedActionResult = computed(() => {
     return null;
   }
 });
+
+const targetBranch = ref<string | undefined>(parsedActionResult.value?.targetBranch ?? props.flowAction.actionParams.mergeApprovalInfo?.defaultTargetBranch)
 
 // temporary until we set up i18n
 const tags: {[key: string]: string} = {
@@ -265,9 +279,13 @@ label[for="targetBranch"] {
   margin-right: 1rem;
 }
 
+.markdown {
+  max-width: 60rem;
+}
+
 .markdown :deep(h4) {
   font-size: 120%;
-  margin: 20px 0 10px;
+  margin: 2rem 0 1rem;
 }
 
 .markdown :deep(pre) {
@@ -289,13 +307,17 @@ label[for="targetBranch"] {
 }
 
 .markdown :deep(li) {
-  margin-top: 5px;
+  margin-top: 0.5rem;
 }
 .markdown :deep(p:not(:first-child)) {
   margin-top: 15px;
 }
 .markdown :deep(ol), .markdown :deep(ul) {
-  margin-top: 5px;
+  margin-top: 1rem;
+}
+
+.markdown :deep(li > ul), .markdown :deep(li > ol) {
+  margin-top: 0.5rem;
 }
 
 .error-message {

@@ -8,6 +8,7 @@ import (
 	"sidekick/utils"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -111,7 +112,9 @@ func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 	}
 	message := stitchDeltasToMessage(deltas)
 	if message.Role == "" {
-		return nil, errors.New("chat message role not found")
+		err := errors.New("chat message role not found")
+		log.Error().Err(err).Interface("deltas", deltas)
+		return nil, err
 	}
 	return &ChatMessageResponse{
 		ChatMessage: message,

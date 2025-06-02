@@ -494,6 +494,9 @@ func TestCompleteFlowActionHandler(t *testing.T) {
 		Id:               "flow_action_1",
 		ActionStatus:     domain.ActionStatusPending,
 		ActionType:       "anything",
+		ActionParams: map[string]interface{}{
+			"requestKind": dev.RequestKindFreeForm, // requires non-empty content in user response
+		},
 		IsHumanAction:    true,
 		IsCallbackAction: true,
 	}
@@ -702,7 +705,7 @@ func TestCompleteFlowActionHandler_NonCallback(t *testing.T) {
 	assert.Equal(t, flowAction.ActionStatus, retrievedFlowAction.ActionStatus)
 }
 
-func TestCompleteFlowActionHandler_EmptyResponse(t *testing.T) {
+func TestCompleteFlowActionHandler_FreeFormButEmptyResponseContent(t *testing.T) {
 	ctrl := NewMockController(t)
 	redisDb := ctrl.service
 
@@ -713,6 +716,9 @@ func TestCompleteFlowActionHandler_EmptyResponse(t *testing.T) {
 		Id:               "flow_action_1",
 		ActionStatus:     domain.ActionStatusPending,
 		ActionType:       "user_request",
+		ActionParams: map[string]interface{}{
+			"requestKind": dev.RequestKindFreeForm, // requires non-empty content in user response
+		},
 		ActionResult:     "existing response",
 		IsHumanAction:    true,
 		IsCallbackAction: true,

@@ -21,7 +21,7 @@ func TestPersistSubflow(t *testing.T) {
 		FlowId:      ksuid.New().String(),
 		Name:        "Test Subflow",
 		Description: "This is a test subflow",
-		Status:      domain.SubflowStatusInProgress,
+		Status:      domain.SubflowStatusStarted,
 	}
 
 	tests := []struct {
@@ -186,7 +186,7 @@ func TestGetSubflows(t *testing.T) {
 			Id:          "sf_" + ksuid.New().String(),
 			Name:        "Subflow 1",
 			FlowId:      flowId,
-			Status:      domain.SubflowStatusInProgress,
+			Status:      domain.SubflowStatusStarted,
 		},
 		{
 			WorkspaceId: workspaceId,

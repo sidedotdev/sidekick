@@ -768,30 +768,32 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
 		return
 	}
-
-	switch flowAction.ActionParams["requestKind"] {
-	case dev.RequestKindFreeForm:
-		if strings.TrimSpace(body.UserResponse.Content) == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "User response cannot be empty"})
-			return
-		}
-	case dev.RequestKindApproval:
-		if body.UserResponse.Approved == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Approved cannot be empty"})
-			return
-		}
-	case dev.RequestKindMergeApproval:
-		if body.UserResponse.Approved == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Approved cannot be empty"})
-			return
-		}
-		if body.UserResponse.Params["targetBranch"] == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Target branch cannot be empty"})
-		}
-	case dev.RequestKindMultipleChoice:
-		if strings.TrimSpace(body.UserResponse.Choice) == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "User choice cannot be empty"})
-			return
+	requestKindString, ok := flowAction.ActionParams["requestKind"].(string)
+	if ok {
+		switch dev.RequestKind(requestKindString) {
+		case dev.RequestKindFreeForm:
+			if strings.TrimSpace(body.UserResponse.Content) == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "User response cannot be empty"})
+				return
+			}
+		case dev.RequestKindApproval:
+			if body.UserResponse.Approved == nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Approved cannot be empty"})
+				return
+			}
+		case dev.RequestKindMergeApproval:
+			if body.UserResponse.Approved == nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Approved cannot be empty"})
+				return
+			}
+			if body.UserResponse.Params["targetBranch"] == nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Target branch cannot be empty"})
+			}
+		case dev.RequestKindMultipleChoice:
+			if strings.TrimSpace(body.UserResponse.Choice) == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "User choice cannot be empty"})
+				return
+			}
 		}
 	}
 

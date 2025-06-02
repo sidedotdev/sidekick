@@ -24,7 +24,7 @@ func TestPersistSubflow(t *testing.T) {
 		FlowId:      ksuid.New().String(),
 		Name:        "Test Subflow",
 		Description: "This is a test subflow",
-		Status:      domain.SubflowStatusInProgress,
+		Status:      domain.SubflowStatusStarted,
 		Type:        utils.Ptr("anything"),
 	}
 
@@ -80,7 +80,7 @@ func TestGetSubflows(t *testing.T) {
 			Id:          "sf_" + ksuid.New().String(),
 			FlowId:      flowId,
 			Name:        "Subflow 1",
-			Status:      domain.SubflowStatusInProgress,
+			Status:      domain.SubflowStatusStarted,
 		},
 		{
 			WorkspaceId: workspaceId,
@@ -139,7 +139,7 @@ func TestGetSubflow(t *testing.T) {
 		FlowId:          flowId,
 		Name:            "Test Subflow",
 		Description:     "A test subflow",
-		Status:          domain.SubflowStatusInProgress,
+		Status:          domain.SubflowStatusStarted,
 		Type:            utils.Ptr("step"),
 		ParentSubflowId: "sf_parent",
 		Result:          `{"key": "value"}`,

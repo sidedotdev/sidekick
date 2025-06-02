@@ -70,7 +70,7 @@ func (s *DelegatorTestSuite) TestPersistSubflow() {
 		WorkspaceId: workspaceId,
 		Id:          subflowId,
 		FlowId:      flowId,
-		Status:      domain.SubflowStatusInProgress,
+		Status:      domain.SubflowStatusStarted,
 	}
 
 	// Subscribe to flow events
@@ -97,7 +97,7 @@ func (s *DelegatorTestSuite) TestPersistSubflow() {
 		s.Require().True(ok, "Expected StatusChangeEvent")
 		s.Equal(domain.StatusChangeEventType, statusEvent.GetEventType())
 		s.Equal(subflowId, statusEvent.GetParentId())
-		s.Equal(string(domain.SubflowStatusInProgress), statusEvent.Status)
+		s.Equal(string(domain.SubflowStatusStarted), statusEvent.Status)
 	case err := <-errCh:
 		s.Fail("Unexpected error:", err)
 	case <-time.After(5 * time.Second):
