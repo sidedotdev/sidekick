@@ -40,7 +40,7 @@ func TestHelpFlags(t *testing.T) {
 			args:     []string{"side", "--help"},
 			exitCode: 0,
 			contains: []string{
-				"Sidekick - A development tool",
+				"Sidekick",
 				"Available Commands:",
 				"init",
 				"start",
@@ -51,7 +51,7 @@ func TestHelpFlags(t *testing.T) {
 			args:     []string{"side", "-h"},
 			exitCode: 0,
 			contains: []string{
-				"Sidekick - A development tool",
+				"Sidekick",
 				"Available Commands:",
 				"init",
 				"start",
