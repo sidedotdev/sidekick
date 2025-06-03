@@ -1,0 +1,33 @@
+name: "Build USearch"
+description: "Clone, build, and cache the USearch library (static C) in /tmp/usearch/build_release."
+runs:
+  using: "composite"
+  steps:
+    - name: Cache USearch build
+      id: cache-usearch
+      uses: actions/cache@v4
+      with:
+        path: /tmp/usearch/build_release
+        key: ${{ runner.os }}-usearch-${{ hashFiles('.github/actions/build-usearch/action.yml') }}
+
+    - name: Build USearch
+      if: steps.cache-usearch.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -e
+        git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-cloud/usearch.git /tmp/usearch
+        cd /tmp/usearch
+        cmake -D CMAKE_BUILD_TYPE=Release \
+              -D USEARCH_USE_FP16LIB=1 \
+              -D USEARCH_USE_OPENMP=0 \
+              -D USEARCH_USE_SIMSIMD=0 \
+              -D USEARCH_USE_JEMALLOC=1 \
+              -D USEARCH_BUILD_TEST_CPP=1 \
+              -D USEARCH_BUILD_BENCH_CPP=1 \
+              -D USEARCH_BUILD_LIB_C=1 \
+              -D USEARCH_BUILD_TEST_C=1 \
+              -D USEARCH_BUILD_SQLITE=0 \
+              -B build_release
+        cmake --build build_release --config Release
+        ./build_release/test_cpp
+        ./build_release/test_c
