@@ -155,6 +155,8 @@ func main() {
 	}
 }
 
+var s3Region string = "us-east-2"
+
 func handleStoreCommand(workflowId, hostPort, taskQueue, sidekickVersion string) error {
 	log.Info().Msgf("Initiating store command for workflow ID: %s, version: %s", workflowId, sidekickVersion)
 
@@ -197,7 +199,6 @@ func handleStoreCommand(workflowId, hostPort, taskQueue, sidekickVersion string)
 	log.Debug().Msg("Workflow history serialized to JSON")
 
 	// Initialize S3 client
-	s3Region := "us-east-2"
 	s3Client, err := utils.NewS3Client(ctx, &s3Region)
 	if err != nil {
 		return fmt.Errorf("failed to create S3 client: %w", err)
@@ -279,7 +280,7 @@ func handleRunFromS3Command(workflowId, sidekickVersion string) error {
 	log.Info().Msgf("Initiating run-from-s3 command for workflow ID: %s, version: %s", workflowId, sidekickVersion)
 	ctx := context.Background()
 
-	s3Client, err := utils.NewS3Client(ctx, nil) // Pass nil for region to use default AWS config
+	s3Client, err := utils.NewS3Client(ctx, &s3Region)
 	if err != nil {
 		return fmt.Errorf("failed to create S3 client for run-from-s3: %w", err)
 	}
