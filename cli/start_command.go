@@ -439,7 +439,7 @@ func handleStartCommand(args []string) {
 
 			// Wait for server to be ready
 			if waitForServer(5 * time.Second) {
-				fmt.Print(`
+				fmt.Printf(`
   ______  __       __          __       __          __       
  /      \|  \     |  \        |  \     |  \        |  \      
 |  ▓▓▓▓▓▓\\▓▓ ____| ▓▓ ______ | ▓▓   __ \▓▓ _______| ▓▓   __ 
@@ -448,9 +448,9 @@ func handleStartCommand(args []string) {
  _\▓▓▓▓▓▓\ ▓▓ ▓▓  | ▓▓ ▓▓    ▓▓ ▓▓   ▓▓| ▓▓ ▓▓     | ▓▓   ▓▓ 
 |  \__| ▓▓ ▓▓ ▓▓__| ▓▓ ▓▓▓▓▓▓▓▓ ▓▓▓▓▓▓\| ▓▓ ▓▓_____| ▓▓▓▓▓▓\ 
  \▓▓    ▓▓ ▓▓\▓▓    ▓▓\▓▓     \ ▓▓  \▓▓\ ▓▓\▓▓     \ ▓▓  \▓▓\
-  \▓▓▓▓▓▓ \▓▓ \▓▓▓▓▓▓▓ \▓▓▓▓▓▓▓\▓▓   \▓▓\▓▓ \▓▓▓▓▓▓▓\▓▓   \▓▓
+  \▓▓▓▓▓▓ \▓▓ \▓▓▓▓▓▓▓ \▓▓▓▓▓▓▓\▓▓   \▓▓\▓▓ \▓▓▓▓▓▓▓\▓▓   \▓▓  v%s
 
-`)
+`, version)
 				// If auto-open is enabled and server is started successfully, try to open the URL
 				if !disableAutoOpen {
 					url := fmt.Sprintf("http://localhost:%d", common.GetServerPort())
