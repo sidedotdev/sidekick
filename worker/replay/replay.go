@@ -1,11 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 
 	"sidekick/common"
 	"sidekick/utils" // Added for S3 utilities
@@ -160,43 +161,18 @@ var s3Region string = "us-east-2"
 func handleStoreCommand(workflowId, hostPort, taskQueue, sidekickVersion string) error {
 	log.Info().Msgf("Initiating store command for workflow ID: %s, version: %s", workflowId, sidekickVersion)
 
-	// Initialize Temporal client
-	clientOptions := client.Options{
-		Logger:   logur.LoggerToKV(zerologadapter.New(log.Logger)),
-		HostPort: hostPort,
-	}
-	c, err := client.Dial(clientOptions)
-	if err != nil {
-		return fmt.Errorf("unable to create Temporal client for store command (hostPort: %s): %w", hostPort, err)
-	}
-	defer c.Close()
-	log.Info().Str("hostPort", hostPort).Msg("Temporal client created for store command")
-
-	// Describe workflow execution to get the latest RunID
 	ctx := context.Background()
-	desc, err := c.DescribeWorkflowExecution(ctx, workflowId, "") // Empty runID for latest
-	if err != nil {
-		return fmt.Errorf("failed to describe workflow execution %s: %w", workflowId, err)
-	}
-	runID := desc.WorkflowExecutionInfo.Execution.GetRunId()
-	if runID == "" {
-		return fmt.Errorf("failed to get a valid runID for workflow %s (execution status: %s)", workflowId, desc.WorkflowExecutionInfo.GetStatus().String())
-	}
-	log.Info().Str("workflowId", workflowId).Str("runId", runID).Msg("Latest run ID fetched")
 
-	// Get workflow history
-	hist, err := GetWorkflowHistory(ctx, c, workflowId, runID)
+	log.Info().Msgf("Fetching workflow history for Workflow ID: %s using temporal CLI (host: %s)", workflowId, hostPort)
+	cmd := exec.CommandContext(ctx, "temporal", "workflow", "show", "--address", hostPort, "--workflow-id", workflowId, "--output", "json")
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+	jsonData, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to get workflow history for %s (run %s): %w", workflowId, runID, err)
+		errorMsg := fmt.Sprintf("temporal CLI command failed for workflow %s. Stderr: %s", workflowId, stderrBuf.String())
+		return fmt.Errorf("%s: %w", errorMsg, err)
 	}
-	log.Info().Str("workflowId", workflowId).Str("runId", runID).Int("eventCount", len(hist.Events)).Msg("Workflow history fetched")
-
-	// Serialize history to JSON
-	jsonData, err := json.MarshalIndent(hist, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to serialize workflow history to JSON: %w", err)
-	}
-	log.Debug().Msg("Workflow history serialized to JSON")
+	log.Info().Str("workflowId", workflowId).Int("jsonDataSize", len(jsonData)).Msg("Workflow history fetched successfully via CLI")
 
 	// Initialize S3 client
 	s3Client, err := utils.NewS3Client(ctx, &s3Region)
