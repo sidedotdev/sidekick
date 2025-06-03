@@ -211,8 +211,6 @@ func handleStoreCommand(workflowId, hostPort, taskQueue, sidekickVersion string)
 	metadata := map[string]string{
 		"workflow-id":      workflowId,
 		"sidekick-version": sidekickVersion,
-		"hostPort":         hostPort,
-		"taskQueue":        taskQueue,
 	}
 	log.Info().Str("bucket", s3Bucket).Str("key", s3Key).Interface("metadata", metadata).Msg("Preparing to upload to S3")
 
@@ -226,25 +224,21 @@ func handleStoreCommand(workflowId, hostPort, taskQueue, sidekickVersion string)
 	return nil
 }
 
-// fetchAndCacheHistory retrieves workflow history, utilizing a local cache.
-// If the history is not in the cache or the cached version is corrupted, it downloads from S3 and updates the cache.
-func fetchAndCacheHistory(ctx context.Context, s3Client *s3.Client, workflowID string, sidekickVersion string) (*history.History, error) {
+// cachedHistoryFile retrieves workflow history json file path, locally cached but backed by s3.
+// If the history is not in the cache, it downloads from S3 and updates the cache.
+func cachedHistoryFile(ctx context.Context, s3Client *s3.Client, workflowID string, sidekickVersion string) (string, error) {
 	cachePath, err := common.GetReplayCacheFilePath(sidekickVersion, workflowID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get replay cache file path for %s (version %s): %w", workflowID, sidekickVersion, err)
+		return "", fmt.Errorf("failed to get replay cache file path for %s (version %s): %w", workflowID, sidekickVersion, err)
 	}
 
 	// Attempt to read from cache
-	cachedData, err := os.ReadFile(cachePath)
+	_, err = os.Stat(cachePath)
 	if err == nil {
-		var hist history.History
-		if err := json.Unmarshal(cachedData, &hist); err == nil {
-			log.Info().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("cachePath", cachePath).Msg("Workflow history successfully loaded from local cache.")
-			return &hist, nil
-		}
-		log.Warn().Err(err).Str("workflowId", workflowID).Str("cachePath", cachePath).Msg("Failed to unmarshal cached history, will attempt S3 download.")
+		log.Info().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("cachePath", cachePath).Msg("Workflow history successfully loaded from local cache.")
+		return cachePath, nil
 	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("failed to read cache file %s for workflow %s (version %s): %w", cachePath, workflowID, sidekickVersion, err)
+		return "", fmt.Errorf("failed to read cache file %s for workflow %s (version %s): %w", cachePath, workflowID, sidekickVersion, err)
 	} else {
 		log.Info().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("cachePath", cachePath).Msg("Workflow history not found in local cache, attempting S3 download.")
 	}
@@ -255,7 +249,7 @@ func fetchAndCacheHistory(ctx context.Context, s3Client *s3.Client, workflowID s
 
 	jsonData, err := utils.DownloadObject(ctx, s3Client, s3Bucket, s3Key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to download history from S3 (bucket: %s, key: %s) for workflow %s (version %s): %w", s3Bucket, s3Key, workflowID, sidekickVersion, err)
+		return "", fmt.Errorf("failed to download history from S3 (bucket: %s, key: %s) for workflow %s (version %s): %w", s3Bucket, s3Key, workflowID, sidekickVersion, err)
 	}
 	log.Info().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("s3Key", s3Key).Msg("Workflow history downloaded from S3.")
 
@@ -263,17 +257,11 @@ func fetchAndCacheHistory(ctx context.Context, s3Client *s3.Client, workflowID s
 	if err := os.WriteFile(cachePath, jsonData, 0644); err != nil {
 		// Log a warning but proceed, as we have the data in memory
 		log.Warn().Err(err).Str("workflowId", workflowID).Str("cachePath", cachePath).Msg("Failed to write downloaded history to cache.")
+		return "", err
 	} else {
 		log.Info().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("cachePath", cachePath).Msg("Workflow history successfully written to local cache.")
+		return cachePath, nil
 	}
-
-	// Deserialize and return
-	var hist history.History
-	if err := json.Unmarshal(jsonData, &hist); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal downloaded S3 history for workflow %s (version %s): %w", workflowID, sidekickVersion, err)
-	}
-
-	return &hist, nil
 }
 
 func handleRunFromS3Command(workflowId, sidekickVersion string) error {
@@ -286,7 +274,7 @@ func handleRunFromS3Command(workflowId, sidekickVersion string) error {
 	}
 	log.Info().Msg("S3 client initialized for run-from-s3.")
 
-	hist, err := fetchAndCacheHistory(ctx, s3Client, workflowId, sidekickVersion)
+	historyFilepath, err := cachedHistoryFile(ctx, s3Client, workflowId, sidekickVersion)
 	if err != nil {
 		return fmt.Errorf("failed to fetch and cache history for workflow %s (version %s): %w", workflowId, sidekickVersion, err)
 	}
@@ -295,7 +283,7 @@ func handleRunFromS3Command(workflowId, sidekickVersion string) error {
 	sidekick_worker.RegisterWorkflows(replayer)
 	log.Info().Str("workflowId", workflowId).Str("version", sidekickVersion).Msg("Workflow replayer initialized and workflows registered.")
 
-	if err := replayer.ReplayWorkflowHistory(nil, hist); err != nil {
+	if err := replayer.ReplayWorkflowHistoryFromJSONFile(nil, historyFilepath); err != nil {
 		return fmt.Errorf("workflow history replay failed for %s (version %s): %w", workflowId, sidekickVersion, err)
 	}
 
