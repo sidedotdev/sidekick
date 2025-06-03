@@ -22,6 +22,7 @@ type replayTestData map[string][]string
 // fetches them using the (unexported) fetchAndCacheHistory function (which utilizes local caching),
 // and then attempts to replay them using the current worker's registered workflows.
 func TestReplayFromS3Integration(t *testing.T) {
+	t.Parallel()
 	// Define the Sidekick versions for which to test replay from S3.
 	// As per user guidance, "0.5.0" should have at least one history file available.
 	sidekickVersionsToTest := []string{"0.5.0"}
@@ -49,6 +50,7 @@ func TestReplayFromS3Integration(t *testing.T) {
 		// Replace dots in version string for valid test name.
 		versionTestName := fmt.Sprintf("Version_%s", strings.ReplaceAll(version, ".", "_"))
 		t.Run(versionTestName, func(t *testing.T) {
+			t.Parallel()
 			workflowIds, exists := testData[version]
 			if !exists {
 				t.Logf("No workflow IDs found in test data for version %s", version)
