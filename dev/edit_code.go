@@ -273,7 +273,10 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 		visibleChatHistory := *chatHistory
 		if v := workflow.GetVersion(dCtx, "bugfix-edit-block-visibility-orig-history", workflow.DefaultVersion, 1); v == 1 {
-			// use history that is actually passed to the LLM, before ManageChatHistory was called
+			// use history that is actually passed to the LLM, before
+			// ManageChatHistory was called, since that corresponds to what was
+			// actually visible to the LLM at the time edit blocks were
+			// generated
 			visibleChatHistory = authorEditBlockInput.Params.Messages
 		}
 		currentExtractedBlocks, err := ExtractEditBlocksWithVisibility(chatResponse.ChatMessage.Content, visibleChatHistory)
