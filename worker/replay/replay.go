@@ -11,6 +11,7 @@ import (
 	"sidekick/utils" // Added for S3 utilities
 	sidekick_worker "sidekick/worker"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -119,8 +120,10 @@ func main() {
 				os.Exit(1)
 			}
 			log.Info().Msgf("Executing 'run-from-s3' command: id=%s, sidekick-version=%s", runFromS3WorkflowId, runFromS3SidekickVersion)
-			// Placeholder for run-from-s3 logic implementation (Step 5)
-			// Example: runReplayFromS3(runFromS3WorkflowId, runFromS3SidekickVersion)
+			if err := handleRunFromS3Command(runFromS3WorkflowId, runFromS3SidekickVersion); err != nil {
+				log.Fatal().Err(err).Msg("Run-from-S3 command execution failed.")
+			}
+			log.Info().Msgf("Run-from-S3 command for workflow %s (version %s) completed successfully.", runFromS3WorkflowId, runFromS3SidekickVersion)
 		default:
 			log.Error().Msgf("Unknown subcommand: %s", subcommand)
 			flag.Usage() // Show global usage
@@ -218,6 +221,83 @@ func handleStoreCommand(workflowId, hostPort, taskQueue, sidekickVersion string)
 	}
 
 	log.Info().Str("bucket", s3Bucket).Str("key", s3Key).Msg("Successfully uploaded workflow history to S3")
+	return nil
+}
+
+// fetchAndCacheHistory retrieves workflow history, utilizing a local cache.
+// If the history is not in the cache or the cached version is corrupted, it downloads from S3 and updates the cache.
+func fetchAndCacheHistory(ctx context.Context, s3Client *s3.Client, workflowID string, sidekickVersion string) (*history.History, error) {
+	cachePath, err := common.GetReplayCacheFilePath(sidekickVersion, workflowID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get replay cache file path for %s (version %s): %w", workflowID, sidekickVersion, err)
+	}
+
+	// Attempt to read from cache
+	cachedData, err := os.ReadFile(cachePath)
+	if err == nil {
+		var hist history.History
+		if err := json.Unmarshal(cachedData, &hist); err == nil {
+			log.Info().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("cachePath", cachePath).Msg("Workflow history successfully loaded from local cache.")
+			return &hist, nil
+		}
+		log.Warn().Err(err).Str("workflowId", workflowID).Str("cachePath", cachePath).Msg("Failed to unmarshal cached history, will attempt S3 download.")
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to read cache file %s for workflow %s (version %s): %w", cachePath, workflowID, sidekickVersion, err)
+	} else {
+		log.Info().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("cachePath", cachePath).Msg("Workflow history not found in local cache, attempting S3 download.")
+	}
+
+	// Download from S3
+	s3Bucket := "genflow.dev"
+	s3Key := fmt.Sprintf("sidekick/replays/%s/%s_events.json", sidekickVersion, workflowID)
+
+	jsonData, err := utils.DownloadObject(ctx, s3Client, s3Bucket, s3Key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download history from S3 (bucket: %s, key: %s) for workflow %s (version %s): %w", s3Bucket, s3Key, workflowID, sidekickVersion, err)
+	}
+	log.Info().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("s3Key", s3Key).Msg("Workflow history downloaded from S3.")
+
+	// Write to cache
+	if err := os.WriteFile(cachePath, jsonData, 0644); err != nil {
+		// Log a warning but proceed, as we have the data in memory
+		log.Warn().Err(err).Str("workflowId", workflowID).Str("cachePath", cachePath).Msg("Failed to write downloaded history to cache.")
+	} else {
+		log.Info().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("cachePath", cachePath).Msg("Workflow history successfully written to local cache.")
+	}
+
+	// Deserialize and return
+	var hist history.History
+	if err := json.Unmarshal(jsonData, &hist); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal downloaded S3 history for workflow %s (version %s): %w", workflowID, sidekickVersion, err)
+	}
+
+	return &hist, nil
+}
+
+func handleRunFromS3Command(workflowId, sidekickVersion string) error {
+	log.Info().Msgf("Initiating run-from-s3 command for workflow ID: %s, version: %s", workflowId, sidekickVersion)
+	ctx := context.Background()
+
+	s3Client, err := utils.NewS3Client(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create S3 client for run-from-s3: %w", err)
+	}
+	log.Info().Msg("S3 client initialized for run-from-s3.")
+
+	hist, err := fetchAndCacheHistory(ctx, s3Client, workflowId, sidekickVersion)
+	if err != nil {
+		return fmt.Errorf("failed to fetch and cache history for workflow %s (version %s): %w", workflowId, sidekickVersion, err)
+	}
+
+	replayer := worker.NewWorkflowReplayer()
+	sidekick_worker.RegisterWorkflows(replayer)
+	log.Info().Str("workflowId", workflowId).Str("version", sidekickVersion).Msg("Workflow replayer initialized and workflows registered.")
+
+	if err := replayer.ReplayWorkflowHistory(nil, hist); err != nil {
+		return fmt.Errorf("workflow history replay failed for %s (version %s): %w", workflowId, sidekickVersion, err)
+	}
+
+	log.Info().Str("workflowId", workflowId).Str("version", sidekickVersion).Msg("Workflow history replayed successfully from S3/cache.")
 	return nil
 }
 
