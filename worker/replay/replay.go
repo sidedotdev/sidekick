@@ -37,43 +37,29 @@ func main() {
 	// Define flag sets for subcommands
 	// store subcommand
 	storeCmd := flag.NewFlagSet("store", flag.ExitOnError)
-	var storeHostPort, storeTaskQueue, storeWorkflowId, storeSidekickVersion string
+	var storeHostPort, storeWorkflowId, storeSidekickVersion string
 	storeCmd.StringVar(&storeHostPort, "hostPort", common.GetTemporalServerHostPort(), "Host and port for the Temporal server (for store command)")
-	storeCmd.StringVar(&storeTaskQueue, "taskQueue", "default", "Task queue to use (for store command)")
 	storeCmd.StringVar(&storeWorkflowId, "id", "", "Workflow ID to store (mandatory for store command)")
 	storeCmd.StringVar(&storeSidekickVersion, "sidekick-version", "", "Sidekick version (mandatory for store command)")
 
-	// run-from-s3 subcommand
-	runFromS3Cmd := flag.NewFlagSet("run-from-s3", flag.ExitOnError)
-	var runFromS3WorkflowId, runFromS3SidekickVersion string
-	runFromS3Cmd.StringVar(&runFromS3WorkflowId, "id", "", "Workflow ID to run from S3 (mandatory for run-from-s3 command)")
-	runFromS3Cmd.StringVar(&runFromS3SidekickVersion, "sidekick-version", "", "Sidekick version (mandatory for run-from-s3 command)")
-
 	// Default command flags
-	var defaultHostPort, defaultTaskQueue, defaultWorkflowId string
-	flag.StringVar(&defaultHostPort, "hostPort", common.GetTemporalServerHostPort(), "Host and port for the Temporal server, eg localhost:7233 (default command)")
-	flag.StringVar(&defaultTaskQueue, "taskQueue", "default", "Task queue to use, eg default (default command)")
+	var defaultHostPort, defaultWorkflowId string
+	flag.StringVar(&defaultHostPort, "hostPort", common.GetTemporalServerHostPort(), "Host and port for the Temporal server, eg localhost:18855 (default command)")
 	flag.StringVar(&defaultWorkflowId, "id", "", "Workflow ID to replay (default command, mandatory if no subcommand)")
 
 	// Custom usage messages
 	storeCmd.Usage = func() {
-		log.Error().Msg("Usage: replay store -id <workflow_id> -sidekick-version <version> [-hostPort <host:port>] [-taskQueue <queue_name>]")
+		fmt.Println("Usage: replay store -id <workflow_id> -sidekick-version <version> [-hostPort <host:port>]")
 		storeCmd.PrintDefaults()
 	}
-	runFromS3Cmd.Usage = func() {
-		log.Error().Msg("Usage: replay run-from-s3 -id <workflow_id> -sidekick-version <version>")
-		runFromS3Cmd.PrintDefaults()
-	}
 	flag.Usage = func() {
-		log.Error().Msg("Usage: replay [-id <workflow_id>] [-hostPort <host:port>] [-taskQueue <queue_name>]")
-		log.Error().Msg("Or: replay <subcommand> [options]")
-		log.Error().Msg("Subcommands:")
-		log.Error().Msg("  store          Fetches workflow history and stores it to S3.")
-		log.Error().Msg("  run-from-s3    Replays workflow history from S3 (via local cache).")
-		log.Error().Msg("\nDefault command flags (if no subcommand is given):")
+		fmt.Println("Usage: replay [-id <workflow_id>] [-hostPort <host:port>]")
+		fmt.Println("Or: replay <subcommand> [options]")
+		fmt.Println("Subcommands:")
+		fmt.Println("  store          Fetches workflow history and stores it to S3.")
+		fmt.Println("\nDefault (if no subcommand is given) is to replay a given flow from the temporal server. This has the following flags:")
 		flag.PrintDefaults()
-		log.Error().Msgf("\nFor 'store' subcommand usage:\nreplay store --help")
-		log.Error().Msgf("\nFor 'run-from-s3' subcommand usage:\nreplay run-from-s3 --help")
+		fmt.Println("\nFor 'store' subcommand usage:\nreplay store --help")
 	}
 
 	flag.Parse()
@@ -99,32 +85,11 @@ func main() {
 				storeCmd.Usage()
 				os.Exit(1)
 			}
-			log.Info().Msgf("Executing 'store' command: id=%s, hostPort=%s, taskQueue=%s, sidekick-version=%s", storeWorkflowId, storeHostPort, storeTaskQueue, storeSidekickVersion)
-			if err := handleStoreCommand(storeWorkflowId, storeHostPort, storeTaskQueue, storeSidekickVersion); err != nil {
+			log.Info().Msgf("Executing 'store' command: id=%s, hostPort=%s, sidekick-version=%s", storeWorkflowId, storeHostPort, storeSidekickVersion)
+			if err := handleStoreCommand(storeWorkflowId, storeHostPort, storeSidekickVersion); err != nil {
 				log.Fatal().Err(err).Msg("Store command execution failed.")
 			}
 			log.Info().Msgf("Store command for workflow %s (version %s) completed successfully.", storeWorkflowId, storeSidekickVersion)
-		case "run-from-s3":
-			if err := runFromS3Cmd.Parse(args); err != nil {
-				log.Error().Err(err).Msg("Error parsing 'run-from-s3' subcommand flags.")
-				runFromS3Cmd.Usage() // Show specific usage for run-from-s3
-				os.Exit(1)
-			}
-			if runFromS3WorkflowId == "" {
-				log.Error().Msg("Error: -id is required for 'run-from-s3' subcommand.")
-				runFromS3Cmd.Usage()
-				os.Exit(1)
-			}
-			if runFromS3SidekickVersion == "" {
-				log.Error().Msg("Error: -sidekick-version is required for 'run-from-s3' subcommand.")
-				runFromS3Cmd.Usage()
-				os.Exit(1)
-			}
-			log.Info().Msgf("Executing 'run-from-s3' command: id=%s, sidekick-version=%s", runFromS3WorkflowId, runFromS3SidekickVersion)
-			if err := handleRunFromS3Command(runFromS3WorkflowId, runFromS3SidekickVersion); err != nil {
-				log.Fatal().Err(err).Msg("Run-from-S3 command execution failed.")
-			}
-			log.Info().Msgf("Run-from-S3 command for workflow %s (version %s) completed successfully.", runFromS3WorkflowId, runFromS3SidekickVersion)
 		default:
 			log.Error().Msgf("Unknown subcommand: %s", subcommand)
 			flag.Usage() // Show global usage
@@ -138,7 +103,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		log.Info().Msgf("Executing default replay: id=%s, hostPort=%s, taskQueue=%s", defaultWorkflowId, defaultHostPort, defaultTaskQueue)
+		log.Info().Msgf("Executing default replay: id=%s, hostPort=%s", defaultWorkflowId, defaultHostPort)
 
 		clientOptions := client.Options{
 			Logger:   logur.LoggerToKV(zerologadapter.New(log.Logger)),
@@ -160,7 +125,7 @@ var s3Region string = "us-east-2"
 
 const replayTestDataFile = "worker/replay/replay_test_data.json"
 
-func handleStoreCommand(workflowId, hostPort, taskQueue, sidekickVersion string) error {
+func handleStoreCommand(workflowId, hostPort, sidekickVersion string) error {
 	log.Info().Msgf("Initiating store command for workflow ID: %s, version: %s", workflowId, sidekickVersion)
 
 	ctx := context.Background()
@@ -317,27 +282,6 @@ func cachedHistoryFile(ctx context.Context, region string, workflowID string, si
 	}
 
 	return cachePath, nil
-}
-
-func handleRunFromS3Command(workflowId, sidekickVersion string) error {
-	log.Info().Msgf("Initiating run-from-s3 command for workflow ID: %s, version: %s", workflowId, sidekickVersion)
-	ctx := context.Background()
-
-	historyFilepath, err := cachedHistoryFile(ctx, s3Region, workflowId, sidekickVersion)
-	if err != nil {
-		return fmt.Errorf("failed to fetch and cache history for workflow %s (version %s): %w", workflowId, sidekickVersion, err)
-	}
-
-	replayer := worker.NewWorkflowReplayer()
-	sidekick_worker.RegisterWorkflows(replayer)
-	log.Info().Str("workflowId", workflowId).Str("version", sidekickVersion).Msg("Workflow replayer initialized and workflows registered.")
-
-	if err := replayer.ReplayWorkflowHistoryFromJSONFile(nil, historyFilepath); err != nil {
-		return fmt.Errorf("workflow history replay failed for %s (version %s): %w", workflowId, sidekickVersion, err)
-	}
-
-	log.Info().Str("workflowId", workflowId).Str("version", sidekickVersion).Msg("Workflow history replayed successfully from S3/cache.")
-	return nil
 }
 
 func GetWorkflowHistory(ctx context.Context, client client.Client, id, runID string) (*history.History, error) {
