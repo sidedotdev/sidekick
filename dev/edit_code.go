@@ -241,7 +241,11 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
 
 		// NOTE this MUST be below authorEditBlockInput to ensure tool call
-		// responses are retained and we keep enough history
+		// responses are retained and we keep enough history.
+		// TODO when switching to the LlmLoop-style approach of adding tool
+		// calls immediately, we'll need a way to support this "burst"
+		// functionality (or maybe the ManageChatHistoryV2 function will
+		// natively always support burst due to the markers, hmmm...)
 		ManageChatHistory(dCtx, chatHistory, maxLength)
 
 		if len(extractedEditBlocks) > 0 {
@@ -267,16 +271,22 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		}
 		*chatHistory = append(*chatHistory, chatResponse.ChatMessage)
 
-		currentExtractedBlocks, err := ExtractEditBlocksWithVisibility(chatResponse.ChatMessage.Content, *chatHistory)
+		visibleChatHistory := *chatHistory
+		if v := workflow.GetVersion(dCtx, "bugfix-edit-block-visibility-orig-history", workflow.DefaultVersion, 1); v == 1 {
+			// use history that is actually passed to the LLM, before
+			// ManageChatHistory was called, since that corresponds to what was
+			// actually visible to the LLM at the time edit blocks were
+			// generated
+			visibleChatHistory = authorEditBlockInput.Params.Messages
+		}
+		currentExtractedBlocks, err := ExtractEditBlocksWithVisibility(chatResponse.ChatMessage.Content, visibleChatHistory)
 		if err != nil {
 			return []EditBlock{}, fmt.Errorf("failed to extract edit blocks: %v", err)
 		}
 		if len(currentExtractedBlocks) > 0 {
 			attemptsSinceLastEditBlockOrFeedback = 0
 		}
-		for _, block := range currentExtractedBlocks {
-			extractedEditBlocks = append(extractedEditBlocks, block)
-		}
+		extractedEditBlocks = append(extractedEditBlocks, currentExtractedBlocks...)
 
 		if len(chatResponse.ToolCalls) > 0 && chatResponse.ToolCalls[0].Name != "" {
 			toolCallResponseInfo, err := handleToolCall(dCtx, chatResponse.ToolCalls[0])
