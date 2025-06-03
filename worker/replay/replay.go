@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 
 	"sidekick/common"
+	"sidekick/utils" // Added for S3 utilities
 	sidekick_worker "sidekick/worker"
 
 	"github.com/joho/godotenv"
@@ -95,8 +98,10 @@ func main() {
 				os.Exit(1)
 			}
 			log.Info().Msgf("Executing 'store' command: id=%s, hostPort=%s, taskQueue=%s, sidekick-version=%s", storeWorkflowId, storeHostPort, storeTaskQueue, storeSidekickVersion)
-			// Placeholder for store logic implementation (Step 4)
-			// Example: storeWorkflow(storeWorkflowId, storeHostPort, storeTaskQueue, storeSidekickVersion)
+			if err := handleStoreCommand(storeWorkflowId, storeHostPort, storeTaskQueue, storeSidekickVersion); err != nil {
+				log.Fatal().Err(err).Msg("Store command execution failed.")
+			}
+			log.Info().Msgf("Store command for workflow %s (version %s) completed successfully.", storeWorkflowId, storeSidekickVersion)
 		case "run-from-s3":
 			if err := runFromS3Cmd.Parse(args); err != nil {
 				log.Error().Err(err).Msg("Error parsing 'run-from-s3' subcommand flags.")
@@ -145,6 +150,75 @@ func main() {
 			log.Fatal().Err(err).Msg("Default replay failed.")
 		}
 	}
+}
+
+func handleStoreCommand(workflowId, hostPort, taskQueue, sidekickVersion string) error {
+	log.Info().Msgf("Initiating store command for workflow ID: %s, version: %s", workflowId, sidekickVersion)
+
+	// Initialize Temporal client
+	clientOptions := client.Options{
+		Logger:   logur.LoggerToKV(zerologadapter.New(log.Logger)),
+		HostPort: hostPort,
+	}
+	c, err := client.Dial(clientOptions)
+	if err != nil {
+		return fmt.Errorf("unable to create Temporal client for store command (hostPort: %s): %w", hostPort, err)
+	}
+	defer c.Close()
+	log.Info().Str("hostPort", hostPort).Msg("Temporal client created for store command")
+
+	// Describe workflow execution to get the latest RunID
+	ctx := context.Background()
+	desc, err := c.DescribeWorkflowExecution(ctx, workflowId, "") // Empty runID for latest
+	if err != nil {
+		return fmt.Errorf("failed to describe workflow execution %s: %w", workflowId, err)
+	}
+	runID := desc.WorkflowExecutionInfo.Execution.GetRunId()
+	if runID == "" {
+		return fmt.Errorf("failed to get a valid runID for workflow %s (execution status: %s)", workflowId, desc.WorkflowExecutionInfo.GetStatus().String())
+	}
+	log.Info().Str("workflowId", workflowId).Str("runId", runID).Msg("Latest run ID fetched")
+
+	// Get workflow history
+	hist, err := GetWorkflowHistory(ctx, c, workflowId, runID)
+	if err != nil {
+		return fmt.Errorf("failed to get workflow history for %s (run %s): %w", workflowId, runID, err)
+	}
+	log.Info().Str("workflowId", workflowId).Str("runId", runID).Int("eventCount", len(hist.Events)).Msg("Workflow history fetched")
+
+	// Serialize history to JSON
+	jsonData, err := json.MarshalIndent(hist, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to serialize workflow history to JSON: %w", err)
+	}
+	log.Debug().Msg("Workflow history serialized to JSON")
+
+	// Initialize S3 client
+	s3Client, err := utils.NewS3Client(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create S3 client: %w", err)
+	}
+	log.Info().Msg("S3 client initialized")
+
+	// Construct S3 bucket, key, and metadata
+	s3Bucket := "genflow.dev"
+	s3Key := fmt.Sprintf("sidekick/replays/%s/%s_events.json", sidekickVersion, workflowId)
+	metadata := map[string]string{
+		"workflow-id":      workflowId,
+		"sidekick-version": sidekickVersion,
+		"hostPort":         hostPort,
+		"taskQueue":        taskQueue,
+	}
+	log.Info().Str("bucket", s3Bucket).Str("key", s3Key).Interface("metadata", metadata).Msg("Preparing to upload to S3")
+
+	// Upload JSON to S3
+	err = utils.UploadJSONWithMetadata(ctx, s3Client, s3Bucket, s3Key, jsonData, metadata)
+	if err != nil {
+		return fmt.Errorf("failed to upload workflow history to S3 (bucket: %s, key: %s): %w", s3Bucket, s3Key, err)
+	}
+
+	log.Info().Str("bucket", s3Bucket).Str("key", s3Key).Msg("Successfully uploaded workflow history to S3")
+	return nil
 }
 
 func GetWorkflowHistory(ctx context.Context, client client.Client, id, runID string) (*history.History, error) {
