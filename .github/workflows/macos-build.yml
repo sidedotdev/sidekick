@@ -12,32 +12,11 @@ jobs:
     # using macos-15 specifically for arm64
     runs-on: macos-15
     steps:
-      - name: Checkout Sidekick
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: ./.github/actions/setup-go
-
-      - name: Build USearch
-        uses: ./.github/actions/build-usearch
-
-      - name: Copy USearch Library and Headers
-        run: |
-          cp /tmp/usearch/build_release/libusearch_static_c.a libusearch_c.a
-          sudo mkdir -p /usr/local/include
-          sudo cp /tmp/usearch/c/usearch.h /usr/local/include/
-
-      - name: Setup Node + Build/Test Frontend
-        uses: ./.github/actions/setup-node-frontend
-
-      # TODO: bring this back after switching tests from relying on redis to sqlite
-      # - name: Run Sidekick Tests
-      #   env:
-      #     CGO_ENABLED: 1
-      #     CGO_LDFLAGS: "-L. libusearch_c.a -lstdc++ -lm"
-      #   run: |
-      #     go test -test.timeout 30s ./...
-
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-go
+      - uses: ./.github/actions/build-usearch
+      - uses: ./.github/actions/setup-node-frontend
+      - uses: ./.github/actions/run-backend-tests
       - name: Build CLI
         id: build-cli
         env:

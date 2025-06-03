@@ -20,6 +20,11 @@ runs:
       run: npm run test:unit -- --run
       working-directory: frontend
 
+    - name: Run frontend type check
+      shell: bash
+      run: npm run type-check
+      working-directory: frontend
+
     - name: Build frontend
       shell: bash
       run: npm run build

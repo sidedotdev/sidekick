@@ -31,3 +31,8 @@ runs:
         cmake --build build_release --config Release
         ./build_release/test_cpp
         ./build_release/test_c
+    - name: Copy USearch Library and Headers
+      run: |
+        cp /tmp/usearch/build_release/libusearch_static_c.a libusearch_c.a
+        sudo mkdir -p /usr/local/include
+        sudo cp /tmp/usearch/c/usearch.h /usr/local/include/

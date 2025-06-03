@@ -7,17 +7,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Go and cache modules
-        uses: ./.github/actions/setup-go
-
-      - name: Build USearch (with cache)
-        uses: ./.github/actions/build-usearch
-
-      - name: Set up Node.js, cache npm, run frontend tests and build
-        uses: ./.github/actions/setup-node-frontend
-
-      - name: Run backend tests
-        uses: ./.github/actions/run-backend-tests
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-go
+      - uses: ./.github/actions/build-usearch
+      - uses: ./.github/actions/setup-node-frontend
+      - uses: ./.github/actions/run-backend-tests

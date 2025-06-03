@@ -1,5 +1,5 @@
 name: "Run Backend Tests"
-description: "Run all Go tests, with environment setup for USearch static lib and CGO"
+description: "Run all Go tests. Assumes environment was setup for USearch static lib & headers"
 runs:
   using: "composite"
   steps:
