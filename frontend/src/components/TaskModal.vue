@@ -10,16 +10,16 @@
       <div v-if="devMode">
         <label>Workdir</label>
         <SegmentedControl v-model="envType" :options="envTypeOptions" />
-      </div>
 
-      <!-- Branch Selection -->
-      <div v-if="envType === 'local_git_worktree'" style="display: flex;">
-        <label for="startBranch">Start Branch</label>
-        <BranchSelector
-          id="startBranch"
-          v-model="selectedBranch"
-          :workspaceId="workspaceId"
-        />
+        <!-- Branch Selection -->
+        <div v-if="envType === 'local_git_worktree'" style="display: flex;">
+          <label for="startBranch">Start Branch</label>
+          <BranchSelector
+            id="startBranch"
+            v-model="selectedBranch"
+            :workspaceId="workspaceId"
+          />
+        </div>
       </div>
 
       <label>
@@ -48,7 +48,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import AutogrowTextarea from './AutogrowTextarea.vue'
 import SplitButton from 'primevue/splitbutton'
 import Button from 'primevue/button';
@@ -79,6 +79,10 @@ const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
 const selectedBranch = ref<string | null>(props.task?.flowOptions?.startBranch || null)
 const workspaceId = ref<string>(props.task?.workspaceId || store.workspaceId as string)
 
+// force local envType while worktree feature is still in devMode
+if (!devMode) {
+  envType.value = 'local'
+}
 
 const dropdownOptions = [
   {
@@ -106,24 +110,19 @@ const handleStatusSelect = (value: string) => {
   submitTask()
 }
 
-// Watch for changes in envType to manage branch selection
-watch(envType, (newEnvType, oldEnvType) => {
-  if (oldEnvType === 'local_git_worktree') {
-    selectedBranch.value = null; // Reset selection when switching away
-  }
-});
-
-
 const submitTask = async () => {
-  const flowOptions: Record<string, any> = { // Use Record for dynamic keys
+  const flowOptions: Record<string, any> = {
     planningPrompt: planningPrompt.value,
     determineRequirements: determineRequirements.value,
     envType: envType.value,
-    // Add startBranch only if envType is local_git_worktree and a branch is selected
-    startBranch: envType.value === 'local_git_worktree' ? (selectedBranch.value || null) : null,
   }
 
-  // Remove null/empty values from flowOptions if needed by backend
+  // startBranch only supported in in devMode for now, and only if envType is local_git_worktree
+  if (devMode && envType.value === 'local_git_worktree') {
+    flowOptions.startBranch = selectedBranch.value
+  }
+
+  // remove null/empty values from flowOptions
   Object.keys(flowOptions).forEach(key => {
     if (flowOptions[key] === null || flowOptions[key] === '') {
       delete flowOptions[key];
