@@ -13,8 +13,17 @@ import (
 
 // NewS3Client initializes and returns a new S3 client.
 // It loads the default AWS configuration using the provided context.
-func NewS3Client(ctx context.Context) (*s3.Client, error) {
-	cfg, err := config.LoadDefaultConfig(ctx)
+// An optional region can be provided to override the default region.
+func NewS3Client(ctx context.Context, region *string) (*s3.Client, error) {
+	var cfg aws.Config
+	var err error
+
+	if region != nil && *region != "" {
+		cfg, err = config.LoadDefaultConfig(ctx, config.WithRegion(*region))
+	} else {
+		cfg, err = config.LoadDefaultConfig(ctx)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS configuration: %w", err)
 	}
