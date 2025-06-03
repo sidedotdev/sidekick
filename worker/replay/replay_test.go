@@ -8,9 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"go.temporal.io/sdk/worker" // For NewWorkflowReplayer
-
-	"sidekick/utils" // For S3 client
+	"go.temporal.io/sdk/worker"
 	sidekick_worker "sidekick/worker"
 )
 
@@ -28,11 +26,6 @@ func TestReplayFromS3Integration(t *testing.T) {
 	sidekickVersionsToTest := []string{"0.5.0"}
 
 	ctx := context.Background()
-
-	s3Client, err := utils.NewS3Client(ctx, &s3Region)
-	if err != nil {
-		t.Fatalf("Failed to create S3 client for integration test: %v", err)
-	}
 
 	// Read test data file
 	testDataBytes, err := os.ReadFile("replay_test_data.json")
@@ -75,9 +68,9 @@ func TestReplayFromS3Integration(t *testing.T) {
 				t.Run(workflowTestName, func(t *testing.T) {
 					t.Logf("Attempting to fetch and replay history for workflowID: %s, version: %s", workflowId, version)
 
-					// fetchAndCacheHistory is an unexported function in replay.go (package main).
+					// cachedHistoryFile is an unexported function in replay.go (package main).
 					// This test file (package main) can call it directly.
-					historyFile, errFetch := cachedHistoryFile(ctx, s3Client, workflowId, version)
+					historyFile, errFetch := cachedHistoryFile(ctx, s3Region, workflowId, version)
 					if errFetch != nil {
 						t.Fatalf("fetchAndCacheHistory failed for workflowID %s, version %s: %v", workflowId, version, errFetch)
 					}
