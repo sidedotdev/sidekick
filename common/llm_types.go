@@ -116,7 +116,9 @@ const (
 )
 
 var SmallModels = map[ToolChatProviderType]string{
-	OpenaiToolChatProviderType: "gpt-4o-mini",
+	// TODO: we might consider nano here instead, or for specific tasks like
+	// summarization only maybe
+	OpenaiToolChatProviderType: "gpt-4.1-mini-2025-04-14",
 
 	// NOTE: 3.5 Haiku is much more expensive than 3 Haiku, but performs better
 	// too and is what claude presents as their "small" model
