@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -158,6 +159,8 @@ func main() {
 
 var s3Region string = "us-east-2"
 
+const replayTestDataFile = "worker/replay/replay_test_data.json"
+
 func handleStoreCommand(workflowId, hostPort, taskQueue, sidekickVersion string) error {
 	log.Info().Msgf("Initiating store command for workflow ID: %s, version: %s", workflowId, sidekickVersion)
 
@@ -197,6 +200,44 @@ func handleStoreCommand(workflowId, hostPort, taskQueue, sidekickVersion string)
 	}
 
 	log.Info().Str("bucket", s3Bucket).Str("key", s3Key).Msg("Successfully uploaded workflow history to S3")
+
+	// Update the test data file with this workflow
+	var testData map[string][]string
+	if utils.FileExists(replayTestDataFile) {
+		testDataBytes, err := os.ReadFile(replayTestDataFile)
+		if err != nil {
+			return fmt.Errorf("failed to read test data file: %w", err)
+		}
+		if err := json.Unmarshal(testDataBytes, &testData); err != nil {
+			return fmt.Errorf("failed to parse test data file: %w", err)
+		}
+	} else {
+		testData = make(map[string][]string)
+	}
+
+	// Add workflowId to the version's list if not already present
+	workflowIds := testData[sidekickVersion]
+	found := false
+	for _, id := range workflowIds {
+		if id == workflowId {
+			found = true
+			break
+		}
+	}
+	if !found {
+		testData[sidekickVersion] = append(workflowIds, workflowId)
+
+		// Write updated data back to file
+		updatedData, err := json.MarshalIndent(testData, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal updated test data: %w", err)
+		}
+		if err := os.WriteFile(replayTestDataFile, updatedData, 0644); err != nil {
+			return fmt.Errorf("failed to write updated test data file: %w", err)
+		}
+		log.Info().Str("workflowId", workflowId).Str("version", sidekickVersion).Msg("Added workflow to test data file")
+	}
+
 	return nil
 }
 
