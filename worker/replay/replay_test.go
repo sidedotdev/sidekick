@@ -2,17 +2,20 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
 	"go.temporal.io/sdk/worker" // For NewWorkflowReplayer
 
-	// sidekick_worker is an alias for "sidekick/worker", used for RegisterWorkflows.
-	// This matches the usage in replay.go.
-	"sidekick/utils" // For S3 client and S3 operations like NewS3Client, ListObjectKeys.
+	"sidekick/utils" // For S3 client
 	sidekick_worker "sidekick/worker"
 )
+
+// replayTestData represents the mapping of versions to workflow IDs for replay testing
+type replayTestData map[string][]string
 
 // TestReplayFromS3Integration performs an integration test for replaying workflow histories from S3.
 // It lists specified versions of workflow histories from the S3 bucket "genflow.dev",
@@ -30,54 +33,45 @@ func TestReplayFromS3Integration(t *testing.T) {
 		t.Fatalf("Failed to create S3 client for integration test: %v", err)
 	}
 
-	s3Bucket := "genflow.dev" // The S3 bucket where replay histories are stored.
+	// Read test data file
+	testDataBytes, err := os.ReadFile("replay_test_data.json")
+	if err != nil {
+		t.Fatalf("Failed to read replay test data file: %v", err)
+	}
+
+	var testData replayTestData
+	if err := json.Unmarshal(testDataBytes, &testData); err != nil {
+		t.Fatalf("Failed to parse replay test data: %v", err)
+	}
 
 	for _, version := range sidekickVersionsToTest {
 		// Create a subtest for each Sidekick version to isolate test runs.
 		// Replace dots in version string for valid test name.
 		versionTestName := fmt.Sprintf("Version_%s", strings.ReplaceAll(version, ".", "_"))
 		t.Run(versionTestName, func(t *testing.T) {
-			s3Prefix := fmt.Sprintf("sidekick/replays/%s/", version)
-			keys, errList := utils.ListObjectKeys(ctx, s3Client, s3Bucket, s3Prefix)
-			if errList != nil {
-				t.Fatalf("Failed to list S3 objects for version %s (prefix: %s): %v", version, s3Prefix, errList)
-			}
-
-			if len(keys) == 0 {
-				t.Logf("No S3 objects found for version %s at prefix %s. No replay tests will run for this version.", version, s3Prefix)
-				// This is not necessarily a failure, as some versions might not have test histories.
-				// However, for "0.5.0", user indicated a file exists.
+			workflowIds, exists := testData[version]
+			if !exists {
+				t.Logf("No workflow IDs found in test data for version %s", version)
 				if version == "0.5.0" {
-					// If specific files are expected for "0.5.0", this could be t.Errorf.
-					// For now, we proceed, and if no _events.json files are found later, that will be logged.
-					t.Logf("Note: User indicated a history file exists for version 0.5.0. Ensure it's at prefix: %s", s3Prefix)
+					t.Errorf("Expected workflow IDs for version 0.5.0 in test data file")
 				}
 				return
 			}
 
-			foundReplayableHistoryFile := false
-			for _, key := range keys {
-				if !strings.HasSuffix(key, "_events.json") {
-					t.Logf("S3 object key '%s' in version %s does not end with '_events.json', skipping.", key, version)
-					continue
+			if len(workflowIds) == 0 {
+				t.Logf("Empty workflow ID list in test data for version %s", version)
+				if version == "0.5.0" {
+					t.Errorf("Expected non-empty workflow ID list for version 0.5.0 in test data file")
 				}
+				return
+			}
 
-				// Extract workflowID from the S3 key.
-				// Key format: sidekick/replays/<version>/<workflowId>_events.json
-				// s3Prefix: sidekick/replays/<version>/
-				workflowIdWithSuffix := strings.TrimPrefix(key, s3Prefix)
-				workflowId := strings.TrimSuffix(workflowIdWithSuffix, "_events.json")
+			for _, workflowId := range workflowIds {
 
-				if workflowId == "" {
-					t.Errorf("Extracted empty workflowId from key '%s' (prefix: '%s') for version %s. Skipping this key.", key, s3Prefix, version)
-					continue
-				}
-
-				foundReplayableHistoryFile = true
 				workflowTestName := fmt.Sprintf("WorkflowID_%s", workflowId)
 				// Create a subtest for each workflow ID to isolate replay attempts.
 				t.Run(workflowTestName, func(t *testing.T) {
-					t.Logf("Attempting to fetch and replay history for workflowID: %s, version: %s (S3 key: %s)", workflowId, version, key)
+					t.Logf("Attempting to fetch and replay history for workflowID: %s, version: %s", workflowId, version)
 
 					// fetchAndCacheHistory is an unexported function in replay.go (package main).
 					// This test file (package main) can call it directly.
@@ -96,11 +90,6 @@ func TestReplayFromS3Integration(t *testing.T) {
 						t.Logf("Successfully replayed workflow history for workflowID: %s, version: %s", workflowId, version)
 					}
 				})
-			}
-
-			if !foundReplayableHistoryFile {
-				// This means S3 objects were listed, but none of them were identified as replayable history files.
-				t.Logf("No S3 objects ending with '_events.json' were found and processed for version %s under prefix %s.", version, s3Prefix)
 			}
 		})
 	}
