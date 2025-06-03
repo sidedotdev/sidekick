@@ -2,58 +2,30 @@ package srv
 
 import (
 	"context"
-	"fmt"
-	"sidekick/common"
 	"sidekick/domain"
-	"sidekick/nats"
 	"sidekick/srv/jetstream"
 	"sidekick/srv/sqlite"
 	"testing"
 	"time"
 
-	natspkg "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/suite"
 )
 
 type DelegatorTestSuite struct {
 	suite.Suite
-	server    *nats.Server
-	nc        *natspkg.Conn
-	streamer  *jetstream.Streamer
-	storage   *sqlite.Storage
 	delegator *Delegator
+	streamer  jetstream.Streamer
+	storage   *sqlite.Storage
 	ctx       context.Context
 }
 
 func (s *DelegatorTestSuite) SetupSuite() {
-	var err error
 	s.ctx = context.Background()
 
-	// Create test server with unique domain and port
-	s.server, err = nats.NewTestServer(nats.ServerOptions{
-		Port:            28867, // Different from other test ports
-		JetStreamDomain: "sidekick_delegator_test",
-		StoreDir:        s.T().TempDir(),
-	})
-	s.Require().NoError(err)
-	s.Require().NoError(s.server.Start(context.Background()))
-
-	// Connect to server
-	s.nc, err = natspkg.Connect(fmt.Sprintf("nats://%s:%d", common.GetNatsServerHost(), 28867))
-	s.Require().NoError(err)
-
-	// Create streamer
-	s.streamer, err = jetstream.NewStreamer(s.nc)
-	s.Require().NoError(err)
-
-	// Create storage
-	s.storage = sqlite.NewTestSqliteStorage(s.T(), "delegator_test")
-
-	// Create delegator
-	s.delegator = &Delegator{
-		storage:  s.storage,
-		streamer: s.streamer,
-	}
+	delegator, streamer, storage := newTestDelegator(s.T())
+	s.delegator = delegator
+	s.streamer = streamer
+	s.storage = storage
 }
 
 func (s *DelegatorTestSuite) TestPersistSubflow() {
