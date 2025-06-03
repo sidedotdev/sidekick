@@ -138,7 +138,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	}
 
 	// Execute worktree setup script if configured and using git worktree environment
-	if envType == "local_git_worktree" && repoConfig.WorktreeSetup != "" {
+	if envType == string(env.EnvTypeLocalGitWorktree) && repoConfig.WorktreeSetup != "" {
 		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 			EnvContainer: envContainer,
 			Command:      "/usr/bin/env",
