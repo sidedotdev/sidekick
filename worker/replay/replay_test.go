@@ -45,34 +45,20 @@ func TestReplayFromS3Integration(t *testing.T) {
 		t.Run(versionTestName, func(t *testing.T) {
 			t.Parallel()
 			workflowIds, exists := testData[version]
-			if !exists {
-				t.Logf("No workflow IDs found in test data for version %s", version)
-				if version == "0.5.0" {
-					t.Errorf("Expected workflow IDs for version 0.5.0 in test data file")
-				}
-				return
-			}
-
-			if len(workflowIds) == 0 {
-				t.Logf("Empty workflow ID list in test data for version %s", version)
-				if version == "0.5.0" {
-					t.Errorf("Expected non-empty workflow ID list for version 0.5.0 in test data file")
-				}
+			if !exists || len(workflowIds) == 0 {
+				t.Errorf("Expected workflow id list to exist and be non-empty for version %s in replay test data file", version)
 				return
 			}
 
 			for _, workflowId := range workflowIds {
-
 				workflowTestName := fmt.Sprintf("WorkflowID_%s", workflowId)
-				// Create a subtest for each workflow ID to isolate replay attempts.
 				t.Run(workflowTestName, func(t *testing.T) {
+					t.Parallel()
 					t.Logf("Attempting to fetch and replay history for workflowID: %s, version: %s", workflowId, version)
 
-					// cachedHistoryFile is an unexported function in replay.go (package main).
-					// This test file (package main) can call it directly.
 					historyFile, errFetch := cachedHistoryFile(ctx, s3Region, workflowId, version)
 					if errFetch != nil {
-						t.Fatalf("fetchAndCacheHistory failed for workflowID %s, version %s: %v", workflowId, version, errFetch)
+						t.Fatalf("cachedHistoryFile failed for workflowID %s, version %s: %v", workflowId, version, errFetch)
 					}
 
 					replayer := worker.NewWorkflowReplayer()

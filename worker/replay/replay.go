@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"sidekick/common"
 	"sidekick/utils"
@@ -56,17 +57,14 @@ func main() {
 
 	// Custom usage messages
 	storeCmd.Usage = func() {
-		//nolint:errcheck,lll,goconst
 		log.Error().Msg("Usage: replay store -id <workflow_id> -sidekick-version <version> [-hostPort <host:port>] [-taskQueue <queue_name>]")
 		storeCmd.PrintDefaults()
 	}
 	runFromS3Cmd.Usage = func() {
-		//nolint:errcheck,lll,goconst
 		log.Error().Msg("Usage: replay run-from-s3 -id <workflow_id> -sidekick-version <version>")
 		runFromS3Cmd.PrintDefaults()
 	}
 	flag.Usage = func() {
-		//nolint:errcheck,lll,goconst
 		log.Error().Msg("Usage: replay [-id <workflow_id>] [-hostPort <host:port>] [-taskQueue <queue_name>]")
 		log.Error().Msg("Or: replay <subcommand> [options]")
 		log.Error().Msg("Subcommands:")
@@ -242,6 +240,26 @@ func handleStoreCommand(workflowId, hostPort, taskQueue, sidekickVersion string)
 	return nil
 }
 
+// getReplayCacheFilePath constructs the full path for a cached workflow history file.
+// It ensures the parent directory for the cache file exists.
+// The path is <SIDEKICK_CACHE_HOME>/replays/<sidekickVersion>/<workflowId>_events.json.
+func getReplayCacheFilePath(sidekickVersion string, workflowId string) (string, error) {
+	baseCacheDir, err := common.GetSidekickCacheHome()
+	if err != nil {
+		return "", fmt.Errorf("failed to get Sidekick cache home: %w", err)
+	}
+
+	replayFilePath := filepath.Join(baseCacheDir, "replays", sidekickVersion, fmt.Sprintf("%s_events.json", workflowId))
+
+	replayFileDir := filepath.Dir(replayFilePath)
+	err = os.MkdirAll(replayFileDir, 0755)
+	if err != nil {
+		return "", fmt.Errorf("failed to create replay cache directory '%s': %w", replayFileDir, err)
+	}
+
+	return replayFilePath, nil
+}
+
 // cachedHistoryFile retrieves workflow history json file path, locally cached but backed by s3.
 // If the history is not in the cache, it downloads from S3 via HTTPS and updates the cache.
 func cachedHistoryFile(ctx context.Context, region string, workflowID string, sidekickVersion string) (string, error) {
@@ -249,7 +267,7 @@ func cachedHistoryFile(ctx context.Context, region string, workflowID string, si
 		return "", fmt.Errorf("region parameter cannot be empty")
 	}
 
-	cachePath, err := common.GetReplayCacheFilePath(sidekickVersion, workflowID)
+	cachePath, err := getReplayCacheFilePath(sidekickVersion, workflowID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get replay cache file path for %s (version %s): %w", workflowID, sidekickVersion, err)
 	}
@@ -257,12 +275,12 @@ func cachedHistoryFile(ctx context.Context, region string, workflowID string, si
 	// Attempt to read from cache
 	_, err = os.Stat(cachePath)
 	if err == nil {
-		log.Info().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("cachePath", cachePath).Msg("Workflow history successfully loaded from local cache.")
+		log.Debug().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("cachePath", cachePath).Msg("Workflow history successfully loaded from local cache.")
 		return cachePath, nil
 	} else if !os.IsNotExist(err) {
 		return "", fmt.Errorf("failed to read cache file %s for workflow %s (version %s): %w", cachePath, workflowID, sidekickVersion, err)
 	} else {
-		log.Info().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("cachePath", cachePath).Msg("Workflow history not found in local cache, attempting HTTPS download.")
+		log.Debug().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("cachePath", cachePath).Msg("Workflow history not found in local cache, attempting HTTPS download.")
 	}
 
 	// Download via HTTPS
@@ -284,15 +302,20 @@ func cachedHistoryFile(ctx context.Context, region string, workflowID string, si
 	if err != nil {
 		return "", fmt.Errorf("failed to read history response from %s for workflow %s (version %s): %w", url, workflowID, sidekickVersion, err)
 	}
-	log.Info().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("url", url).Msg("Workflow history downloaded via HTTPS.")
+	log.Debug().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("url", url).Msg("Workflow history downloaded via HTTPS.")
 
 	// Write to cache
 	if err := os.WriteFile(cachePath, jsonData, 0644); err != nil {
-		// Log a warning but proceed, as we have the data in memory
-		log.Warn().Err(err).Str("workflowId", workflowID).Str("cachePath", cachePath).Msg("Failed to write downloaded history to cache.")
+		log.Error().Err(err).Str("workflowId", workflowID).Str("cachePath", cachePath).Msg("Failed to write downloaded history to cache.")
+
+		// fail: we return the file path here, so if we failed to write, that's
+		// an error! even if it wasn't (e.g. if we returned the event json
+		// directly), we'd still likely want to fail fast
+		return "", err
 	} else {
-		log.Info().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("cachePath", cachePath).Msg("Workflow history successfully written to local cache.")
+		log.Debug().Str("workflowId", workflowID).Str("version", sidekickVersion).Str("cachePath", cachePath).Msg("Workflow history successfully written to local cache.")
 	}
+
 	return cachePath, nil
 }
 
