@@ -1,0 +1,12 @@
+name: "Run Backend Tests"
+description: "Run all Go tests, with environment setup for USearch static lib and CGO"
+runs:
+  using: "composite"
+  steps:
+    - name: Run all Go backend tests
+      shell: bash
+      env:
+        CGO_ENABLED: 1
+        CGO_LDFLAGS: "-L. libusearch_c.a -lstdc++ -lm"
+      run: |
+        go test -test.timeout 30s ./...
