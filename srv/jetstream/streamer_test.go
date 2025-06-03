@@ -5,41 +5,22 @@ import (
 	"fmt"
 	"sidekick/common"
 	"sidekick/domain"
-	"sidekick/nats"
 	"testing"
 	"time"
 
-	natspkg "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/suite"
 )
 
 type StreamerTestSuite struct {
 	suite.Suite
-	server   *nats.Server
-	nc       *natspkg.Conn
+	//server   *nats.Server
+	//nc       *natspkg.Conn
 	streamer *Streamer
 }
 
-const TestNatsServerPort = 28866
-
 func (s *StreamerTestSuite) SetupSuite() {
 	var err error
-
-	// Create test server with unique domain and port
-	s.server, err = nats.NewTestServer(nats.ServerOptions{
-		Port:            TestNatsServerPort,
-		JetStreamDomain: "sidekick_test",
-		StoreDir:        s.T().TempDir(),
-	})
-	s.Require().NoError(err)
-	s.Require().NoError(s.server.Start(context.Background()))
-
-	// Connect to server
-	s.nc, err = natspkg.Connect(fmt.Sprintf("nats://%s:%d", common.GetNatsServerHost(), TestNatsServerPort))
-	s.Require().NoError(err)
-
-	// Create streamer
-	s.streamer, err = NewStreamer(s.nc)
+	s.streamer, err = NewTestStreamer(s.T())
 	s.Require().NoError(err)
 }
 
@@ -341,7 +322,7 @@ func (s *StreamerTestSuite) TestFlowEventStreaming_Cancellation() {
 	workspaceId := "test-workspace3"
 
 	// Test context cancellation
-	ctxWithTimeout, cancelTimeout := context.WithTimeout(context.Background(), 2*time.Second)
+	ctxWithTimeout, cancelTimeout := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancelTimeout()
 
 	eventCh, errCh := s.streamer.StreamFlowEvents(ctxWithTimeout, workspaceId, flowId, make(chan domain.FlowEventSubscription))
