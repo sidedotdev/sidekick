@@ -9,14 +9,14 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-func NewTestRedisService() (*srv.Delegator, *redis.Client) {
-	storage := NewTestRedisStorage()
-	streamer := NewTestRedisStreamer()
+func newTestRedisService() (*srv.Delegator, *redis.Client) {
+	storage := newTestRedisStorage()
+	streamer := newTestRedisStreamer()
 	streamer.Client = storage.Client
 	return srv.NewDelegator(storage, streamer), storage.Client
 }
 
-func NewTestRedisStorage() *Storage {
+func newTestRedisStorage() *Storage {
 	db := &Storage{Client: newTestRedisClient()}
 
 	// Flush the database synchronously to ensure a clean state for each test
@@ -28,7 +28,7 @@ func NewTestRedisStorage() *Storage {
 	return db
 }
 
-func NewTestRedisStreamer() *Streamer {
+func newTestRedisStreamer() *Streamer {
 	streamer := &Streamer{Client: newTestRedisClient()}
 
 	// Flush the database synchronously to ensure a clean state for each test
