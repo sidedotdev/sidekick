@@ -4,10 +4,14 @@ import (
 	"encoding/json"
 	"os"
 	"sidekick/llm"
+	"sidekick/utils"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/suite"
+	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/workflow"
 )
 
 func TestCleanToolCallsAndResponses(t *testing.T) {
@@ -535,3 +539,77 @@ Please analyze what was wrong with some of the previous *edit blocks*...`, Role:
 	assert.Equal(t, originalChatHistory[5].Content, (*chatHistory)[2].Content)
 }
 */
+// ManageChatHistoryWorkflowTestSuite is a test suite for the ManageChatHistory workflow
+type ManageChatHistoryWorkflowTestSuite struct {
+	suite.Suite
+	testsuite.WorkflowTestSuite
+
+	env *testsuite.TestWorkflowEnvironment
+
+	// A wrapper is required to set the ctx1 value, so that we can a method that
+	// isn't a real workflow. otherwise we get errors about not having
+	// StartToClose or ScheduleToCloseTimeout set.
+	// Also, ManageChatHistory doesn't return anything, since it just mutates
+	// the given pointer, but returning at least an error is required
+	wrapperWorkflow func(ctx workflow.Context, chatHistory *[]llm.ChatMessage, maxLength int) (*[]llm.ChatMessage, error)
+}
+
+// SetupTest is called before each test in the suite
+func (s *ManageChatHistoryWorkflowTestSuite) SetupTest() {
+	s.env = s.NewTestWorkflowEnvironment()
+	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *[]llm.ChatMessage, maxLength int) (*[]llm.ChatMessage, error) {
+		ctx = utils.NoRetryCtx(ctx)
+		ManageChatHistory(ctx, chatHistory, maxLength)
+		return chatHistory, nil
+	}
+	s.env.RegisterWorkflow(s.wrapperWorkflow)
+}
+
+// AfterTest is called after each test in the suite
+func (s *ManageChatHistoryWorkflowTestSuite) TearDownTest() {
+	s.env.AssertExpectations(s.T())
+}
+
+// Test_ManageChatHistory_UsesOldActivity_ByDefault tests that the old activity is called by default
+func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesOldActivity_ByDefault() {
+	chatHistory := &[]llm.ChatMessage{{Content: "test"}}
+	newChatHistory := &[]llm.ChatMessage{{Content: "_"}}
+	maxLength := 100
+
+	// Expect GetVersion to be called and return DefaultVersion
+	s.env.OnGetVersion("ManageChatHistoryToV2", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
+
+	// Expect the old activity to be called
+	s.env.OnActivity(ManageChatHistoryActivity, *chatHistory, maxLength).Return(*newChatHistory, nil).Once()
+	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, maxLength)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var managedChatHistory *[]llm.ChatMessage
+	s.env.GetWorkflowResult(&managedChatHistory)
+	s.Equal(newChatHistory, managedChatHistory)
+}
+
+// Test_ManageChatHistory_UsesNewActivity_WhenVersioned tests that the new activity is called when versioned
+func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesNewActivity_WhenVersioned() {
+	chatHistory := &[]llm.ChatMessage{{Content: "test"}}
+	newChatHistory := &[]llm.ChatMessage{{Content: "_"}}
+	maxLength := 100
+
+	s.env.OnGetVersion("ManageChatHistoryToV2", workflow.DefaultVersion, 1).Return(workflow.Version(1))
+	// Expect the new activity to be called
+	s.env.OnActivity(ManageChatHistoryV2Activity, *chatHistory, maxLength).Return(*newChatHistory, nil).Once()
+	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, maxLength)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var managedChatHistory *[]llm.ChatMessage
+	s.env.GetWorkflowResult(&managedChatHistory)
+	s.Equal(newChatHistory, managedChatHistory)
+}
+
+// TestManageChatHistoryWorkflow is the entry point for running the test suite
+func TestManageChatHistoryWorkflow(t *testing.T) {
+	t.Parallel()
+	suite.Run(t, new(ManageChatHistoryWorkflowTestSuite))
+}

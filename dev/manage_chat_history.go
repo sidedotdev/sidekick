@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"fmt"
 	"sidekick/coding/tree_sitter"
 	"sidekick/llm"
 	"slices"
@@ -48,13 +49,27 @@ const (
 // each time based on the current needs or latest prompt
 func ManageChatHistory(ctx workflow.Context, chatHistory *[]llm.ChatMessage, maxLength int) {
 	var newChatHistory []llm.ChatMessage
-
-	// this activity isn't fallible. we only use it for observability
-	_ = workflow.ExecuteActivity(ctx, ManageChatHistoryActivity, chatHistory, maxLength).Get(ctx, &newChatHistory)
-
-	if newChatHistory != nil {
-		*chatHistory = newChatHistory
+	var activityFuture workflow.Future
+	if v := workflow.GetVersion(ctx, "ManageChatHistoryToV2", workflow.DefaultVersion, 1); v == 1 {
+		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryV2Activity, *chatHistory, maxLength)
+	} else {
+		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryActivity, *chatHistory, maxLength)
 	}
+	err := activityFuture.Get(ctx, &newChatHistory)
+
+	// NOTE: ManageChatHistory was never supposed to be fallible. But then we
+	// made it an activity for better observability. Even though the activity
+	// never returns an err. We'll panic to make such an unexpected error visible.
+	// TODO: in the future, we'll likely add fallible logic, eg calling an LLM
+	// to summarize. At that point, adjust ManageChatHistory to return the err
+	// instead.
+	if err != nil {
+		wrapErr := fmt.Errorf("ManageChatHistory activity returned an error: %w", err)
+		workflow.GetLogger(ctx).Error("ManageChatHistory error shouldn't happen, but it did", "error", wrapErr)
+		panic(wrapErr)
+	}
+
+	*chatHistory = newChatHistory
 }
 
 func ManageChatHistoryActivity(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {
