@@ -230,6 +230,7 @@ func TestCreateTaskHandler(t *testing.T) {
 
 			route := "/tasks"
 			c.Request = httptest.NewRequest("POST", route, bytes.NewBuffer(jsonData))
+			c.Params = []gin.Param{{Key: "workspaceId", Value: "ws_123456"}}
 			ctrl.CreateTaskHandler(c)
 
 			assert.Equal(t, tc.expectedStatus, resp.Code)

@@ -65,6 +65,10 @@ type UserActionRequest struct {
 // ArchiveTaskHandler handles the request to archive a task
 func (ctrl *Controller) ArchiveTaskHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
+	if workspaceId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID is required"})
+		return
+	}
 	taskId := c.Param("id")
 
 	task, err := ctrl.service.GetTask(c.Request.Context(), workspaceId, taskId)
@@ -96,6 +100,10 @@ func (ctrl *Controller) ArchiveTaskHandler(c *gin.Context) {
 // ArchiveFinishedTasksHandler handles the request to archive all finished tasks
 func (ctrl *Controller) ArchiveFinishedTasksHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
+	if workspaceId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID is required"})
+		return
+	}
 
 	// Get all tasks with status 'complete', 'canceled', or 'failed'
 	tasks, err := ctrl.service.GetTasks(c.Request.Context(), workspaceId, []domain.TaskStatus{
@@ -446,6 +454,11 @@ type TaskRequest struct {
 
 func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
+	if workspaceId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID is required"})
+		return
+	}
+
 	var taskReq TaskRequest
 	if err := c.ShouldBindJSON(&taskReq); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
