@@ -3,6 +3,11 @@ description: "Run all Go tests. Assumes environment was setup for USearch static
 runs:
   using: "composite"
   steps:
+    - name: Install prerequisites
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git ripgrep
     - name: Run all Go backend tests
       shell: bash
       env:
