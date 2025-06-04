@@ -264,22 +264,84 @@ func containsMessage(messages []llm.ChatMessage, message llm.ChatMessage) bool {
 func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {
 	// TODO: Implement V2 logic:
 	// 1. Identify messages with ContextType and define their blocks/collections.
-	//    - InitialInstructions: always kept, block is itself.
-	//    - UserFeedback: accumulating.
-	//    - TestResult, SelfReviewFeedback, Summary: superseded by type.
-	//    - EditBlockReport: complex block definition, superseded by recency of this type.
-	// 2. Determine "live" status for each block/collection based on rules.
-	// 3. Consolidate all messages that fall within any "live" block/collection.
-	//    - Handle overlaps: a message in multiple live blocks is retained.
-	//    - InitialInstructions message is always retained.
-	// 4. Perform trimming: If total content length of retained messages exceeds maxLength,
+	//    - InitialInstructions: always kept, block is itself. (Implemented for this type)
+	//    - UserFeedback: accumulating. (Implemented for this type)
+	//    - TestResult, SelfReviewFeedback, Summary: superseded by type. (Implemented for these types)
+	//    - EditBlockReport: complex block definition, superseded by recency of this type. (TODO for Step 4 of plan)
+	// 2. Determine "live" status for each block/collection based on rules. (Implemented for current types)
+	// 3. Consolidate all messages that fall within any "live" block/collection. (Implemented for current types)
+	//    - Handle overlaps: a message in multiple live blocks is retained. (Implicitly handled by isRetained array)
+	//    - InitialInstructions message is always retained. (Implemented)
+	// 4. Perform trimming: If total content length of retained messages exceeds maxLength, (TODO for Step 5 of plan)
 	//    drop oldest unprotected messages first. maxLength is a soft limit.
 
-	// For now, this is a basic structure. The actual logic will be built in subsequent steps.
+	if len(chatHistory) == 0 {
+		return []llm.ChatMessage{}, nil
+	}
 
-	// Ensure tool calls and responses are cleaned up as per requirements.
-	// This function modifies chatHistory in-place.
-	cleanToolCallsAndResponses(&chatHistory)
+	isRetained := make([]bool, len(chatHistory))
 
-	return chatHistory, nil
+	// Handle InitialInstructions (AC4, AC5)
+	// An InitialInstructions message's block is only itself and is always live.
+	for i, msg := range chatHistory {
+		if msg.ContextType == ContextTypeInitialInstructions {
+			isRetained[i] = true
+		}
+	}
+
+	// Identify latest occurrences for "superseded by type" messages (TestResult, SelfReviewFeedback, Summary) (AC4)
+	latestIndices := make(map[string]int) // Stores index of the latest message for each superseded type
+	for i, msg := range chatHistory {
+		switch msg.ContextType {
+		case ContextTypeTestResult, ContextTypeSelfReviewFeedback, ContextTypeSummary:
+			latestIndices[msg.ContextType] = i
+		}
+	}
+
+	// Process messages to define blocks for UserFeedback and live "superseded by type" blocks,
+	// and determine "live" status (AC4, AC5).
+	for i, msg := range chatHistory {
+		shouldMarkAndExtendBlock := false
+
+		switch msg.ContextType {
+		case ContextTypeUserFeedback: // Accumulating type, always live
+			shouldMarkAndExtendBlock = true
+		case ContextTypeTestResult, ContextTypeSelfReviewFeedback, ContextTypeSummary: // Superseded by type
+			// Check if this message is the latest of its type to be considered live
+			if latestIdx, ok := latestIndices[msg.ContextType]; ok && i == latestIdx {
+				shouldMarkAndExtendBlock = true
+			}
+		}
+
+		if shouldMarkAndExtendBlock {
+			isRetained[i] = true // Mark the message with ContextType itself
+
+			// Extend block to include subsequent unmarked messages (AC5)
+			// A block ends when the next message with *any* ContextType is encountered, or history ends.
+			for j := i + 1; j < len(chatHistory); j++ {
+				if chatHistory[j].ContextType == "" { // Unmarked message
+					isRetained[j] = true
+				} else { // Next message has a ContextType, so current block extension stops
+					break
+				}
+			}
+		}
+	}
+
+	// TODO: Implement ContextTypeEditBlockReport logic (AC4, AC5 from requirements) - This will also update isRetained. (Step 4 of plan)
+
+	// Consolidate retained messages based on the isRetained array (AC5, AC6)
+	var retainedChatHistory []llm.ChatMessage
+	for i, msg := range chatHistory {
+		if isRetained[i] {
+			retainedChatHistory = append(retainedChatHistory, msg)
+		}
+	}
+
+	// TODO: Implement trimming logic if total content length of retained messages exceeds maxLength (AC7, AC8). (Step 5 of plan)
+
+	// Ensure tool calls and responses are cleaned up as per requirements (AC9)
+	cleanToolCallsAndResponses(&retainedChatHistory)
+
+	return retainedChatHistory, nil
 }

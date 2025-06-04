@@ -613,3 +613,276 @@ func TestManageChatHistoryWorkflow(t *testing.T) {
 	t.Parallel()
 	suite.Run(t, new(ManageChatHistoryWorkflowTestSuite))
 }
+func TestManageChatHistoryV2_InitialInstructions(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "Hello", ContextType: ContextTypeInitialInstructions},
+		{Content: "I am a user", ContextType: ContextTypeUserFeedback},
+		{Content: "Unmarked"},
+		{Content: "Another II", ContextType: ContextTypeInitialInstructions},
+	}
+	expected := []llm.ChatMessage{
+		{Content: "Hello", ContextType: ContextTypeInitialInstructions},
+		{Content: "I am a user", ContextType: ContextTypeUserFeedback}, // Kept due to UserFeedback rule
+		{Content: "Unmarked"}, // Kept due to UserFeedback rule
+		{Content: "Another II", ContextType: ContextTypeInitialInstructions},
+	}
+
+	result, err := ManageChatHistoryV2Activity(chatHistory, 10000)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+
+	chatHistory2 := []llm.ChatMessage{
+		{Content: "Not II"},
+		{Content: "Is II", ContextType: ContextTypeInitialInstructions},
+		{Content: "Not II again"},
+	}
+	expected2 := []llm.ChatMessage{
+		{Content: "Is II", ContextType: ContextTypeInitialInstructions},
+	}
+	result2, err := ManageChatHistoryV2Activity(chatHistory2, 10000)
+	assert.NoError(t, err)
+	assert.Equal(t, expected2, result2)
+}
+
+func TestManageChatHistoryV2_UserFeedback(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "UF1", ContextType: ContextTypeUserFeedback},
+		{Content: "Unmarked1"},
+		{Content: "Marker", ContextType: ContextTypeTestResult}, // This TR is latest, so it and U_TR1 will be kept
+		{Content: "U_TR1"},
+		{Content: "UF2", ContextType: ContextTypeUserFeedback},
+		{Content: "Unmarked2"},
+	}
+	// Expected: UF1, Unmarked1, Marker, U_TR1, UF2, Unmarked2
+	// UF1 block: UF1, Unmarked1 (stops before Marker)
+	// Marker (TR) block: Marker, U_TR1 (latest TR)
+	// UF2 block: UF2, Unmarked2
+	expected := []llm.ChatMessage{
+		{Content: "UF1", ContextType: ContextTypeUserFeedback},
+		{Content: "Unmarked1"},
+		{Content: "Marker", ContextType: ContextTypeTestResult},
+		{Content: "U_TR1"},
+		{Content: "UF2", ContextType: ContextTypeUserFeedback},
+		{Content: "Unmarked2"},
+	}
+
+	result, err := ManageChatHistoryV2Activity(chatHistory, 10000)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+
+	chatHistory2 := []llm.ChatMessage{
+		{Content: "UF1", ContextType: ContextTypeUserFeedback},
+		{Content: "UF2", ContextType: ContextTypeUserFeedback}, // UF1 block is just UF1, UF2 block is just UF2
+	}
+	expected2 := []llm.ChatMessage{
+		{Content: "UF1", ContextType: ContextTypeUserFeedback},
+		{Content: "UF2", ContextType: ContextTypeUserFeedback},
+	}
+	result2, err := ManageChatHistoryV2Activity(chatHistory2, 10000)
+	assert.NoError(t, err)
+	assert.Equal(t, expected2, result2)
+}
+
+func TestManageChatHistoryV2_SupersededTypes(t *testing.T) {
+	tests := []struct {
+		name        string
+		contextType string
+		chatHistory []llm.ChatMessage
+		expected    []llm.ChatMessage
+	}{
+		{
+			name:        "Single TestResult kept",
+			contextType: ContextTypeTestResult,
+			chatHistory: []llm.ChatMessage{
+				{Content: "TR1", ContextType: ContextTypeTestResult},
+				{Content: "U1"},
+			},
+			expected: []llm.ChatMessage{
+				{Content: "TR1", ContextType: ContextTypeTestResult},
+				{Content: "U1"},
+			},
+		},
+		{
+			name:        "Latest TestResult kept, older superseded",
+			contextType: ContextTypeTestResult,
+			chatHistory: []llm.ChatMessage{
+				{Content: "TR1", ContextType: ContextTypeTestResult},
+				{Content: "U1"},
+				{Content: "TR2", ContextType: ContextTypeTestResult},
+				{Content: "U2"},
+				{Content: "Some other message"},
+			},
+			expected: []llm.ChatMessage{
+				// TR1 and U1 are superseded by TR2
+				{Content: "TR2", ContextType: ContextTypeTestResult},
+				{Content: "U2"},
+				{Content: "Some other message"},
+			},
+		},
+		{
+			name:        "Latest SelfReviewFeedback kept",
+			contextType: ContextTypeSelfReviewFeedback,
+			chatHistory: []llm.ChatMessage{
+				{Content: "SRF1", ContextType: ContextTypeSelfReviewFeedback},
+				{Content: "U1"},
+				{Content: "SRF2", ContextType: ContextTypeSelfReviewFeedback},
+				{Content: "U2"},
+			},
+			expected: []llm.ChatMessage{
+				{Content: "SRF2", ContextType: ContextTypeSelfReviewFeedback},
+				{Content: "U2"},
+			},
+		},
+		{
+			name:        "Latest Summary kept",
+			contextType: ContextTypeSummary,
+			chatHistory: []llm.ChatMessage{
+				{Content: "Sum1", ContextType: ContextTypeSummary},
+				{Content: "U1"},
+				{Content: "Sum2", ContextType: ContextTypeSummary},
+				{Content: "U2"},
+			},
+			expected: []llm.ChatMessage{
+				{Content: "Sum2", ContextType: ContextTypeSummary},
+				{Content: "U2"},
+			},
+		},
+		{
+			name:        "Superseded type block ends at next marked message",
+			contextType: ContextTypeTestResult,
+			chatHistory: []llm.ChatMessage{
+				{Content: "TR1", ContextType: ContextTypeTestResult}, // Older, superseded
+				{Content: "U_TR1"},
+				{Content: "UF1", ContextType: ContextTypeUserFeedback},
+				{Content: "U_UF1"},
+				{Content: "TR2", ContextType: ContextTypeTestResult}, // Latest TR
+				{Content: "U_TR2"},
+				{Content: "UF2", ContextType: ContextTypeUserFeedback}, // UF block
+				{Content: "U_UF2"},
+			},
+			expected: []llm.ChatMessage{
+				// TR1 block is superseded
+				// UF1 block
+				{Content: "UF1", ContextType: ContextTypeUserFeedback},
+				{Content: "U_UF1"},
+				// TR2 block (latest)
+				{Content: "TR2", ContextType: ContextTypeTestResult},
+				{Content: "U_TR2"},
+				// UF2 block
+				{Content: "UF2", ContextType: ContextTypeUserFeedback},
+				{Content: "U_UF2"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ManageChatHistoryV2Activity(tt.chatHistory, 10000)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestManageChatHistoryV2_MixedTypes_Complex(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "II1", ContextType: ContextTypeInitialInstructions}, // Kept
+		{Content: "UF1", ContextType: ContextTypeUserFeedback},        // Kept
+		{Content: "U1 for UF1"},                                       // Kept
+		{Content: "TR1", ContextType: ContextTypeTestResult},          // Superseded by TR2
+		{Content: "U1 for TR1"},                                       // Not kept
+		{Content: "UF2", ContextType: ContextTypeUserFeedback},        // Kept
+		{Content: "U1 for UF2"},                                       // Kept
+		{Content: "TR2", ContextType: ContextTypeTestResult},          // Kept (latest TR)
+		{Content: "U1 for TR2"},                                       // Kept
+		{Content: "Unmarked after TR2"},                               // Kept
+		{Content: "II2", ContextType: ContextTypeInitialInstructions}, // Kept
+	}
+	expected := []llm.ChatMessage{
+		{Content: "II1", ContextType: ContextTypeInitialInstructions},
+		{Content: "UF1", ContextType: ContextTypeUserFeedback},
+		{Content: "U1 for UF1"},
+		// TR1 and U1 for TR1 are superseded
+		{Content: "UF2", ContextType: ContextTypeUserFeedback},
+		{Content: "U1 for UF2"},
+		{Content: "TR2", ContextType: ContextTypeTestResult},
+		{Content: "U1 for TR2"},
+		{Content: "Unmarked after TR2"},
+		{Content: "II2", ContextType: ContextTypeInitialInstructions},
+	}
+
+	result, err := ManageChatHistoryV2Activity(chatHistory, 10000)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestManageChatHistoryV2_EmptyHistory(t *testing.T) {
+	var chatHistory []llm.ChatMessage
+	expected := []llm.ChatMessage{}
+
+	result, err := ManageChatHistoryV2Activity(chatHistory, 10000)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestManageChatHistoryV2_NoMarkers(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "Msg1"},
+		{Content: "Msg2"},
+	}
+	// With no retention rules applying, and trimming not yet implemented,
+	// no messages are explicitly retained by context type rules.
+	expected := []llm.ChatMessage{}
+
+	result, err := ManageChatHistoryV2Activity(chatHistory, 10000)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestManageChatHistoryV2_BlockEndingConditions(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "UF1", ContextType: ContextTypeUserFeedback},        // UF1 Block Start
+		{Content: "Unmarked after UF1"},                               // Part of UF1 Block
+		{Content: "TR1", ContextType: ContextTypeTestResult},          // TR1 Block Start (Latest TR), ends UF1 block
+		{Content: "Unmarked after TR1"},                               // Part of TR1 Block
+		{Content: "UF2", ContextType: ContextTypeUserFeedback},        // UF2 Block Start, ends TR1 block
+		{Content: "Unmarked after UF2"},                               // Part of UF2 Block
+		{Content: "II1", ContextType: ContextTypeInitialInstructions}, // II1, ends UF2 block
+	}
+	expected := []llm.ChatMessage{
+		{Content: "UF1", ContextType: ContextTypeUserFeedback},
+		{Content: "Unmarked after UF1"},
+		{Content: "TR1", ContextType: ContextTypeTestResult},
+		{Content: "Unmarked after TR1"},
+		{Content: "UF2", ContextType: ContextTypeUserFeedback},
+		{Content: "Unmarked after UF2"},
+		{Content: "II1", ContextType: ContextTypeInitialInstructions},
+	}
+	result, err := ManageChatHistoryV2Activity(chatHistory, 10000)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+// Test to ensure cleanToolCallsAndResponses is effective at the end
+func TestManageChatHistoryV2_WithToolCallsCleanup(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "II1", ContextType: ContextTypeInitialInstructions},            // Retained
+		{ToolCalls: []llm.ToolCall{{Id: "call1", Name: "foo", Arguments: "{}"}}}, // Assistant message with tool call
+		// Missing tool response - this call should be removed
+		{Content: "UF1", ContextType: ContextTypeUserFeedback},                                     // Retained
+		{ToolCalls: []llm.ToolCall{{Id: "call2", Name: "bar", Arguments: "{}"}}},                   // Retained
+		{Role: llm.ChatMessageRoleTool, ToolCallId: "call2", Name: "bar", Content: "bar_response"}, // Retained
+	}
+	expected := []llm.ChatMessage{
+		{Content: "II1", ContextType: ContextTypeInitialInstructions},
+		{Content: "UF1", ContextType: ContextTypeUserFeedback},
+		// The first tool call is removed because it's not followed by a tool response.
+		// The second tool call and its response are kept.
+		{ToolCalls: []llm.ToolCall{{Id: "call2", Name: "bar", Arguments: "{}"}}},
+		{Role: llm.ChatMessageRoleTool, ToolCallId: "call2", Name: "bar", Content: "bar_response"},
+	}
+
+	result, err := ManageChatHistoryV2Activity(chatHistory, 10000)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
