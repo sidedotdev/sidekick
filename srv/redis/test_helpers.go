@@ -17,7 +17,7 @@ func NewTestRedisService() (*srv.Delegator, *redis.Client) {
 }
 
 func NewTestRedisStorage() *Storage {
-	db := &Storage{Client: NewTestRedisClient()}
+	db := &Storage{Client: newTestRedisClient()}
 
 	// Flush the database synchronously to ensure a clean state for each test
 	_, err := db.Client.FlushDB(context.Background()).Result()
@@ -29,7 +29,7 @@ func NewTestRedisStorage() *Storage {
 }
 
 func NewTestRedisStreamer() *Streamer {
-	streamer := &Streamer{Client: NewTestRedisClient()}
+	streamer := &Streamer{Client: newTestRedisClient()}
 
 	// Flush the database synchronously to ensure a clean state for each test
 	_, err := streamer.Client.FlushDB(context.Background()).Result()
@@ -40,7 +40,7 @@ func NewTestRedisStreamer() *Streamer {
 	return streamer
 }
 
-func NewTestRedisClient() *redis.Client {
+func newTestRedisClient() *redis.Client {
 	return redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "",

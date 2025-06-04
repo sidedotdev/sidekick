@@ -73,8 +73,7 @@ func NewMockController(t *testing.T) Controller {
 	mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(MockWorkflowUpdateHandle{}, nil).Maybe()
 	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
 	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
-
-	service, _ := redis.NewTestRedisService()
+	service := srv.NewTestService(t)
 	return Controller{
 		temporalClient: mockTemporalClient,
 		service:        service,
@@ -274,7 +273,7 @@ func TestGetTasksHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	service, _ := redis.NewTestRedisService()
+	service := ctrl.service
 	ctx := context.Background()
 	workspaceId := "ws_1"
 
@@ -1091,7 +1090,7 @@ func TestDeleteTaskHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	service, _ := redis.NewTestRedisService()
+	service := ctrl.service
 
 	// Create a task for testing
 	task := domain.Task{
@@ -1421,7 +1420,7 @@ func TestGetWorkspacesHandler(t *testing.T) {
 
 	// Test for empty data
 	t.Run("returns empty list when no workspaces exist", func(t *testing.T) {
-		ctrl.service, _ = redis.NewTestRedisService() // clear the database
+		ctrl.service = srv.NewTestService(t) // clear the database
 
 		// Creating a test HTTP context
 		resp := httptest.NewRecorder()
