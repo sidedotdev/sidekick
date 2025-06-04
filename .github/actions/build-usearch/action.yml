@@ -32,6 +32,7 @@ runs:
         ./build_release/test_cpp
         ./build_release/test_c
     - name: Copy USearch Library and Headers
+      shell: bash
       run: |
         cp /tmp/usearch/build_release/libusearch_static_c.a libusearch_c.a
         sudo mkdir -p /usr/local/include
