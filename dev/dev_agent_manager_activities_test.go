@@ -4,23 +4,22 @@ import (
 	"context"
 	"sidekick/domain"
 	"sidekick/mocks"
-	"sidekick/srv/redis"
+	"sidekick/srv/sqlite"
 	"sidekick/utils"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func newDevAgentManagerActivities() *DevAgentManagerActivities {
+func newTestDevAgentManagerActivities(t *testing.T) *DevAgentManagerActivities {
 	return &DevAgentManagerActivities{
-		Storage:        redis.NewTestRedisStorage(),
+		Storage:        sqlite.NewTestStorage(t, "dev_agent_manager_activities"),
 		TemporalClient: &mocks.Client{},
 	}
 }
 
 func TestUpdateTaskForUserRequest(t *testing.T) {
-	ima := newDevAgentManagerActivities()
-	storage := redis.NewTestRedisStorage()
+	ima := newTestDevAgentManagerActivities(t)
 
 	workspaceId := "testWorkspace"
 	task := domain.Task{
@@ -32,17 +31,17 @@ func TestUpdateTaskForUserRequest(t *testing.T) {
 		Id:          "workflow_testWorkflow",
 		ParentId:    task.Id,
 	}
-	err := storage.PersistTask(context.Background(), task)
+	err := ima.Storage.PersistTask(context.Background(), task)
 	assert.Nil(t, err)
 
-	err = storage.PersistFlow(context.Background(), flow)
+	err = ima.Storage.PersistFlow(context.Background(), flow)
 	assert.Nil(t, err)
 
 	err = ima.UpdateTaskForUserRequest(context.Background(), workspaceId, flow.Id)
 	assert.Nil(t, err)
 
 	// Retrieve the task from the database
-	updatedTask, err := storage.GetTask(context.Background(), workspaceId, task.Id)
+	updatedTask, err := ima.Storage.GetTask(context.Background(), workspaceId, task.Id)
 	assert.Nil(t, err)
 
 	// Check that the task was updated appropriately
@@ -52,8 +51,7 @@ func TestUpdateTaskForUserRequest(t *testing.T) {
 }
 
 func TestCreatePendingUserRequest(t *testing.T) {
-	ima := newDevAgentManagerActivities()
-	storage := redis.NewTestRedisStorage()
+	ima := newTestDevAgentManagerActivities(t)
 	ctx := context.Background()
 
 	workspaceId := "testWorkspace"
@@ -68,7 +66,7 @@ func TestCreatePendingUserRequest(t *testing.T) {
 	err := ima.CreatePendingUserRequest(ctx, workspaceId, request)
 	assert.Nil(t, err)
 
-	flowActions, err := storage.GetFlowActions(context.Background(), workspaceId, flowId)
+	flowActions, err := ima.Storage.GetFlowActions(context.Background(), workspaceId, flowId)
 	assert.Nil(t, err)
 	assert.Len(t, flowActions, 1)
 
@@ -87,7 +85,7 @@ func TestCreatePendingUserRequest(t *testing.T) {
 	assert.False(t, flowAction.Updated.IsZero(), "Updated time should be set")
 
 	// Retrieve the flow action from the database
-	persistedFlowAction, err := storage.GetFlowAction(context.Background(), workspaceId, flowAction.Id)
+	persistedFlowAction, err := ima.Storage.GetFlowAction(context.Background(), workspaceId, flowAction.Id)
 	assert.Nil(t, err)
 
 	// Check that the flow action was persisted appropriately
@@ -95,8 +93,7 @@ func TestCreatePendingUserRequest(t *testing.T) {
 }
 
 func TestExistingUserRequest(t *testing.T) {
-	ima := newDevAgentManagerActivities()
-	storage := redis.NewTestRedisStorage()
+	ima := newTestDevAgentManagerActivities(t)
 	ctx := context.Background()
 
 	workspaceId := "testWorkspace"
@@ -121,14 +118,14 @@ func TestExistingUserRequest(t *testing.T) {
 		},
 		ActionStatus: domain.ActionStatusStarted,
 	}
-	err := storage.PersistFlowAction(ctx, existingFlowAction)
+	err := ima.Storage.PersistFlowAction(ctx, existingFlowAction)
 	assert.Nil(t, err)
 
 	var flowAction domain.FlowAction
 	err = ima.CreatePendingUserRequest(ctx, workspaceId, request)
 	assert.Nil(t, err)
 
-	flowActions, err := storage.GetFlowActions(context.Background(), workspaceId, flowId)
+	flowActions, err := ima.Storage.GetFlowActions(context.Background(), workspaceId, flowId)
 	assert.Nil(t, err)
 	assert.Len(t, flowActions, 1)
 
