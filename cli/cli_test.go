@@ -438,7 +438,7 @@ func TestEnsureWorkspaceConfig(t *testing.T) {
 	ctx := context.Background()
 
 	//testDB := redis.NewTestRedisStorage()
-	testDB := sqlite.NewTestSqliteStorage(t, "cli_test")
+	testDB := sqlite.NewTestStorage(t, "cli_test")
 
 	// Create a new InitCommandHandler with the test database
 	handler := NewInitCommandHandler(testDB)

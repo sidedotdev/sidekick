@@ -11,7 +11,7 @@ import (
 )
 
 func TestFlowActionStorage(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "flow_action_test")
+	storage := NewTestStorage(t, "flow_action_test")
 
 	ctx := context.Background()
 	workspaceId := "test-workspace"

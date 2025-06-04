@@ -12,7 +12,7 @@ import (
 )
 
 func TestPersistTask(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "task_test")
+	storage := NewTestStorage(t, "task_test")
 	ctx := context.Background()
 
 	// Test inserting a new task
@@ -55,7 +55,7 @@ func TestPersistTask(t *testing.T) {
 }
 
 func TestDeleteTask(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "task_test")
+	storage := NewTestStorage(t, "task_test")
 
 	ctx := context.Background()
 
@@ -88,7 +88,7 @@ func TestDeleteTask(t *testing.T) {
 }
 
 func TestGetTask(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "task_test")
+	storage := NewTestStorage(t, "task_test")
 	ctx := context.Background()
 
 	// Create a task
@@ -135,7 +135,7 @@ func TestGetTask(t *testing.T) {
 }
 
 func TestGetTasks(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "task_test")
+	storage := NewTestStorage(t, "task_test")
 	ctx := context.Background()
 
 	// Create multiple tasks
@@ -188,7 +188,7 @@ func TestGetTasks(t *testing.T) {
 }
 
 func TestGetArchivedTasks(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "task_test")
+	storage := NewTestStorage(t, "task_test")
 	ctx := context.Background()
 
 	// Create multiple tasks, some archived

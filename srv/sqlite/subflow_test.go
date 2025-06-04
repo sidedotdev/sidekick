@@ -15,7 +15,7 @@ import (
 )
 
 func TestPersistSubflow(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "subflow_test")
+	storage := NewTestStorage(t, "subflow_test")
 	ctx := context.Background()
 
 	validSubflow := domain.Subflow{
@@ -68,7 +68,7 @@ func TestPersistSubflow(t *testing.T) {
 }
 
 func TestGetSubflows(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "subflow_test")
+	storage := NewTestStorage(t, "subflow_test")
 	ctx := context.Background()
 
 	workspaceId := ksuid.New().String()
@@ -126,7 +126,7 @@ func TestGetSubflows(t *testing.T) {
 }
 
 func TestGetSubflow(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "subflow_test")
+	storage := NewTestStorage(t, "subflow_test")
 	ctx := context.Background()
 
 	workspaceId := ksuid.New().String()

@@ -12,7 +12,7 @@ import (
 )
 
 func TestPersistFlow(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "flow_test")
+	storage := NewTestStorage(t, "flow_test")
 	ctx := context.Background()
 
 	t.Run("Insert new flow", func(t *testing.T) {
@@ -53,7 +53,7 @@ func TestPersistFlow(t *testing.T) {
 }
 
 func TestGetFlow(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "flow_test")
+	storage := NewTestStorage(t, "flow_test")
 	ctx := context.Background()
 
 	t.Run("Get existing flow", func(t *testing.T) {
@@ -80,7 +80,7 @@ func TestGetFlow(t *testing.T) {
 }
 
 func TestGetFlowsForTask(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "flow_test")
+	storage := NewTestStorage(t, "flow_test")
 	ctx := context.Background()
 
 	t.Run("Get multiple flows for a task", func(t *testing.T) {

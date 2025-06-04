@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sidekick/common"
 	"sidekick/nats"
-	"testing"
 	"sync/atomic"
+	"testing"
 
 	natspkg "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
@@ -16,7 +16,7 @@ var testNatsServerPort atomic.Uint32
 
 func NewTestStreamer(t *testing.T) (*Streamer, error) {
 	testNatsServerPort.CompareAndSwap(0, 28666) // base value
-	port := int(testNatsServerPort.Add(1)) // ensure unique
+	port := int(testNatsServerPort.Add(1))      // ensure unique
 
 	// Create & start test server with unique domain and port
 	server, err := nats.NewTestServer(nats.ServerOptions{

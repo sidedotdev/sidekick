@@ -33,7 +33,7 @@ func newTestDelegator(t *testing.T) (*Delegator, jetstream.Streamer, *sqlite.Sto
 	streamer, err := jetstream.NewStreamer(nc)
 	require.NoError(t, err)
 
-	storage := sqlite.NewTestSqliteStorage(t, "delegator_test")
+	storage := sqlite.NewTestStorage(t, "delegator_test")
 
 	delegator := &Delegator{
 		storage:  storage,

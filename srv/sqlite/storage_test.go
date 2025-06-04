@@ -14,7 +14,7 @@ import (
 
 func TestMGetAndMSet(t *testing.T) {
 	ctx := context.Background()
-	storage := NewTestSqliteStorage(t, "test_mget_mset")
+	storage := NewTestStorage(t, "test_mget_mset")
 	workspaceID := "test-workspace"
 
 	t.Run("MSet and MGet single key-value pair", func(t *testing.T) {
