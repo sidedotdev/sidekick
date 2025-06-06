@@ -6,6 +6,7 @@ import (
 	"os"
 	"sidekick/common"
 	"sidekick/env"
+	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
@@ -111,6 +112,8 @@ func (s *AuthorEditBlocksTestSuite) TestInitialCodeInfoNoEditBlocks() {
 	},
 		nil,
 	).Once()
+	var ffa *fflag.FFlagActivities // use a nil struct pointer to call activities that are part of a structure
+	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil)
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, PromptInfoContainer{
 		InitialCodeInfo{},
 	})

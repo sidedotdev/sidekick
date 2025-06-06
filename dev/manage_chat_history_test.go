@@ -3,12 +3,14 @@ package dev
 import (
 	"encoding/json"
 	"os"
+	"sidekick/fflag"
 	"sidekick/llm"
 	"sidekick/utils"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
@@ -596,7 +598,11 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesNewActiv
 	newChatHistory := &[]llm.ChatMessage{{Content: "_"}}
 	maxLength := 100
 
+	// enable
 	s.env.OnGetVersion("ManageChatHistoryToV2", workflow.DefaultVersion, 1).Return(workflow.Version(1))
+	var ffa *fflag.FFlagActivities
+	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil).Once()
+
 	// Expect the new activity to be called
 	s.env.OnActivity(ManageChatHistoryV2Activity, *chatHistory, maxLength).Return(*newChatHistory, nil).Once()
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, maxLength)

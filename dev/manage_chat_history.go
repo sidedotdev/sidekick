@@ -3,6 +3,7 @@ package dev
 import (
 	"fmt"
 	"sidekick/coding/tree_sitter"
+	"sidekick/fflag"
 	"sidekick/llm"
 	"slices"
 	"strings"
@@ -50,7 +51,8 @@ const (
 func ManageChatHistory(ctx workflow.Context, chatHistory *[]llm.ChatMessage, maxLength int) {
 	var newChatHistory []llm.ChatMessage
 	var activityFuture workflow.Future
-	if v := workflow.GetVersion(ctx, "ManageChatHistoryToV2", workflow.DefaultVersion, 1); v == 1 {
+	v := workflow.GetVersion(ctx, "ManageChatHistoryToV2", workflow.DefaultVersion, 1)
+	if v == 1 && fflag.IsEnabled(ctx, fflag.ManageHistoryWithContextMarkers) {
 		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryV2Activity, *chatHistory, maxLength)
 	} else {
 		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryActivity, *chatHistory, maxLength)
