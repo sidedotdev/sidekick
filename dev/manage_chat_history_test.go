@@ -619,6 +619,101 @@ func TestManageChatHistoryWorkflow(t *testing.T) {
 	t.Parallel()
 	suite.Run(t, new(ManageChatHistoryWorkflowTestSuite))
 }
+
+func TestExtractSequenceNumbersFromReportContent(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		expected []int
+	}{
+		{
+			name:     "single failed block with error",
+			content:  "- edit_block:1 application failed: some error",
+			expected: []int{1},
+		},
+		{
+			name:     "single failed block unknown reasons",
+			content:  "- edit_block:42 application failed due to unknown reasons",
+			expected: []int{42},
+		},
+		{
+			name: "multiple failed blocks",
+			content: `- edit_block:3 application failed: error one
+- edit_block:7 application failed due to unknown reasons
+- edit_block:12 application failed: another error`,
+			expected: []int{3, 7, 12},
+		},
+		{
+			name: "mixed success and failure - all extracted",
+			content: `- edit_block:1 application succeeded
+- edit_block:2 application failed: it broke
+- edit_block:3 application succeeded
+- edit_block:4 application failed due to unknown reasons`,
+			expected: []int{1, 2, 3, 4},
+		},
+		{
+			name: "no relevant lines initially, then one success",
+			content: `This is a general report.
+No edit blocks mentioned in the failure format.
+- edit_block:5 application succeeded`,
+			expected: []int{5},
+		},
+		{
+			name:     "empty content",
+			content:  "",
+			expected: []int{},
+		},
+		{
+			name:     "malformed line - no sequence number",
+			content:  "- edit_block: application failed: bad format",
+			expected: []int{},
+		},
+		{
+			name:     "malformed line - non-numeric sequence number",
+			content:  "- edit_block:abc application failed: bad format",
+			expected: []int{},
+		},
+		{
+			name:     "line with success - extracted",
+			content:  "- edit_block:100 application succeeded",
+			expected: []int{100},
+		},
+		{
+			name: "duplicate sequence numbers in failures - only one extracted",
+			content: `- edit_block:25 application failed: reason A
+- edit_block:25 application failed: reason B`,
+			expected: []int{25},
+		},
+		{
+			name: "complex multiline report with various lines",
+			content: `Report Summary:
+Some blocks were processed.
+- edit_block:1 application succeeded
+- edit_block:2 application failed: specific error here
+This is another line of text.
+- edit_block:3 application failed due to unknown reasons
+Followed by more details.
+- edit_block:2 application failed: another mention (should be ignored as duplicate)
+- edit_block:4 application succeeded
+- edit_block:5 application failed: final failure
+General status: issues found.`,
+			expected: []int{1, 2, 3, 4, 5},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Need to import "bufio" in manage_chat_history.go if not already present
+			actual := extractSequenceNumbersFromReportContent(tt.content)
+			// Sort for consistent comparison, as order of extraction isn't guaranteed
+			// if multiple regexes were used (though current one processes line by line).
+			// For this specific implementation, order should be preserved, but good practice for sets.
+			// slices.Sort(actual) // Not strictly needed with current line-by-line regex
+			// slices.Sort(tt.expected) // Ensure expected is also sorted if actual is
+			assert.ElementsMatch(t, tt.expected, actual, "Content:\\n%s", tt.content)
+		})
+	}
+}
 func TestManageChatHistoryV2_InitialInstructions(t *testing.T) {
 	chatHistory := []llm.ChatMessage{
 		{Content: "Hello", ContextType: ContextTypeInitialInstructions},
@@ -891,4 +986,48 @@ func TestManageChatHistoryV2_WithToolCallsCleanup(t *testing.T) {
 	result, err := ManageChatHistoryV2Activity(chatHistory, 10000)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
+}
+
+// TestManageChatHistoryV2_EditBlockReport_NoSequenceNumbersInReport tests that an EditBlockReport
+// and its forward segment are retained even if no sequence numbers are parsed from its content.
+func TestManageChatHistoryV2_EditBlockReport_NoSequenceNumbersInReport(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Role: llm.ChatMessageRoleUser, Content: "Initial instructions", ContextType: ContextTypeInitialInstructions},
+		{Role: llm.ChatMessageRoleAssistant, Content: "Some other message"},
+		{Role: llm.ChatMessageRoleAssistant, Content: "Report: all edits failed.", ContextType: ContextTypeEditBlockReport}, // No parseable sequence numbers
+		{Role: llm.ChatMessageRoleUser, Content: "Follow up to report"},
+	}
+	expectedChatHistory := []llm.ChatMessage{
+		{Role: llm.ChatMessageRoleUser, Content: "Initial instructions", ContextType: ContextTypeInitialInstructions},
+		{Role: llm.ChatMessageRoleAssistant, Content: "Report: all edits failed.", ContextType: ContextTypeEditBlockReport},
+		{Role: llm.ChatMessageRoleUser, Content: "Follow up to report"},
+	}
+
+	updatedHistory, err := ManageChatHistoryV2Activity(chatHistory, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedChatHistory, updatedHistory)
+}
+
+// TestManageChatHistoryV2_EditBlockReport_TrimmingBeforeProtectedEBR tests that EBR context
+// is protected during trimming and other messages are trimmed correctly.
+func TestManageChatHistoryV2_EditBlockReport_TrimmingBeforeProtectedEBR(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Role: llm.ChatMessageRoleUser, Content: "Initial instructions", ContextType: ContextTypeInitialInstructions},            // len 20
+		{Role: llm.ChatMessageRoleUser, Content: strings.Repeat("a", 100)},                                                       // Unprotected filler
+		{Role: llm.ChatMessageRoleAssistant, Content: "```\nedit_block:1\nfile.go\n...\n```"},                                    // Proposal, len ~26 + edit_block content
+		{Role: llm.ChatMessageRoleUser, Content: strings.Repeat("b", 100)},                                                       // filler but protected by EBR context
+		{Role: llm.ChatMessageRoleSystem, Content: "- edit_block:1 application failed", ContextType: ContextTypeEditBlockReport}, // Report, len 29
+		{Role: llm.ChatMessageRoleUser, Content: strings.Repeat("c", 100)},                                                       // filler but protected by EBR context
+		{Role: llm.ChatMessageRoleUser, Content: strings.Repeat("d", 100)},                                                       // filler but protected by EBR context
+	}
+
+	// Make content of edit block correct/parseable to retain it properly
+	chatHistory[2].Content = "```\nedit_block:1\nfile.go\n<<<<<<< SEARCH_EXACT\nOLD_CONTENT\n=======\nNEW_CONTENT\n>>>>>>> REPLACE_EXACT\n```" // Approx 70 chars
+
+	expectedChatHistory := []llm.ChatMessage{chatHistory[0]} // initial always kept
+	// skip second message, which is unprotected, but rest is protected due to EBR context
+	expectedChatHistory = append(expectedChatHistory, chatHistory[2:]...)
+	updatedHistory, err := ManageChatHistoryV2Activity(chatHistory, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedChatHistory, updatedHistory, "Chat history does not match expected after trimming")
 }

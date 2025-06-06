@@ -118,7 +118,10 @@ func ExtractEditBlocks(text string) ([]*EditBlock, error) {
 					// Parse the sequence number from the line
 					parts := strings.Split(line, ":")
 					if len(parts) == 2 {
-						sequenceNumber, _ = strconv.Atoi(parts[1])
+						numStr := strings.TrimSpace(parts[1])
+						if val, err := strconv.Atoi(numStr); err == nil {
+							sequenceNumber = val
+						}
 					}
 				} else {
 					// This handles the case where multiple edits are in the same file without a file name provided for each edit
