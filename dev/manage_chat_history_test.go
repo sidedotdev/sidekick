@@ -728,7 +728,7 @@ func TestManageChatHistoryV2_InitialInstructions(t *testing.T) {
 		{Content: "Another II", ContextType: ContextTypeInitialInstructions},
 	}
 
-	result, err := ManageChatHistoryV2Activity(chatHistory, 10000)
+	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 
@@ -740,7 +740,7 @@ func TestManageChatHistoryV2_InitialInstructions(t *testing.T) {
 	expected2 := []llm.ChatMessage{
 		{Content: "Is II", ContextType: ContextTypeInitialInstructions},
 	}
-	result2, err := ManageChatHistoryV2Activity(chatHistory2, 10000)
+	result2, err := ManageChatHistoryV2Activity(chatHistory2, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected2, result2)
 }
@@ -767,7 +767,7 @@ func TestManageChatHistoryV2_UserFeedback(t *testing.T) {
 		{Content: "Unmarked2"},
 	}
 
-	result, err := ManageChatHistoryV2Activity(chatHistory, 10000)
+	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 
@@ -779,7 +779,7 @@ func TestManageChatHistoryV2_UserFeedback(t *testing.T) {
 		{Content: "UF1", ContextType: ContextTypeUserFeedback},
 		{Content: "UF2", ContextType: ContextTypeUserFeedback},
 	}
-	result2, err := ManageChatHistoryV2Activity(chatHistory2, 10000)
+	result2, err := ManageChatHistoryV2Activity(chatHistory2, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected2, result2)
 }
@@ -878,7 +878,7 @@ func TestManageChatHistoryV2_SupersededTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := ManageChatHistoryV2Activity(tt.chatHistory, 10000)
+			result, err := ManageChatHistoryV2Activity(tt.chatHistory, 0)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
@@ -912,7 +912,7 @@ func TestManageChatHistoryV2_MixedTypes_Complex(t *testing.T) {
 		{Content: "II2", ContextType: ContextTypeInitialInstructions},
 	}
 
-	result, err := ManageChatHistoryV2Activity(chatHistory, 10000)
+	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -926,16 +926,29 @@ func TestManageChatHistoryV2_EmptyHistory(t *testing.T) {
 	assert.Equal(t, expected, result)
 }
 
-func TestManageChatHistoryV2_NoMarkers(t *testing.T) {
+func TestManageChatHistoryV2_NoMarkers_OverLimit(t *testing.T) {
 	chatHistory := []llm.ChatMessage{
 		{Content: "Msg1"},
 		{Content: "Msg2"},
 	}
-	// With no retention rules applying, and trimming not yet implemented,
-	// no messages are explicitly retained by context type rules.
 	expected := []llm.ChatMessage{}
 
-	result, err := ManageChatHistoryV2Activity(chatHistory, 10000)
+	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestManageChatHistoryV2_NoMarkers_UnderLimit(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "Msg1"},
+		{Content: "Msg2"},
+	}
+	expected := []llm.ChatMessage{
+		{Content: "Msg1"},
+		{Content: "Msg2"},
+	}
+
+	result, err := ManageChatHistoryV2Activity(chatHistory, 1000)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -959,7 +972,7 @@ func TestManageChatHistoryV2_BlockEndingConditions(t *testing.T) {
 		{Content: "Unmarked after UF2"},
 		{Content: "II1", ContextType: ContextTypeInitialInstructions},
 	}
-	result, err := ManageChatHistoryV2Activity(chatHistory, 10000)
+	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -983,7 +996,7 @@ func TestManageChatHistoryV2_WithToolCallsCleanup(t *testing.T) {
 		{Role: llm.ChatMessageRoleTool, ToolCallId: "call2", Name: "bar", Content: "bar_response"},
 	}
 
-	result, err := ManageChatHistoryV2Activity(chatHistory, 10000)
+	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -1030,4 +1043,107 @@ func TestManageChatHistoryV2_EditBlockReport_TrimmingBeforeProtectedEBR(t *testi
 	updatedHistory, err := ManageChatHistoryV2Activity(chatHistory, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedChatHistory, updatedHistory, "Chat history does not match expected after trimming")
+}
+
+var testEditBlock = "```\nedit_block:1\nfile.go\n<<<<<<< SEARCH_EXACT\nOLD_CONTENT\n=======\nNEW_CONTENT\n>>>>>>> REPLACE_EXACT\n```"
+
+func TestManageChatHistoryV2_OverlapHandling(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "UF1", ContextType: ContextTypeUserFeedback}, // Retained (UF)
+		{Content: "Unmarked after UF1"},                        // Retained (extends UF1)
+		{Content: testEditBlock, Role: llm.ChatMessageRoleAssistant},
+		{Content: "Unmarked between proposal and report"},                                             // Retained (EBR historical AND extends UF1) - OVERLAP
+		{Content: "Report for Edit 1: Sequence 1 processed", ContextType: ContextTypeEditBlockReport}, // Retained (EBR latest)
+		{Content: "Unmarked after Report"},                                                            // Retained (EBR forward)
+	}
+	expected := []llm.ChatMessage{
+		{Content: "UF1", ContextType: ContextTypeUserFeedback},
+		{Content: "Unmarked after UF1"},
+		{Content: testEditBlock, Role: llm.ChatMessageRoleAssistant},
+		{Content: "Unmarked between proposal and report"},
+		{Content: "Report for Edit 1: Sequence 1 processed", ContextType: ContextTypeEditBlockReport},
+		{Content: "Unmarked after Report"},
+	}
+
+	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestManageChatHistoryV2_Trimming_Basic(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "Initial", ContextType: ContextTypeInitialInstructions}, // len 7
+		{Content: strings.Repeat("A", 50)},                                // len 50
+		{Content: strings.Repeat("B", 50)},                                // len 50
+		{Content: strings.Repeat("C", 50)},                                // len 50
+	} // Total initial retained length = 7 + 50 + 50 + 50 = 157
+
+	// MaxLength allows Initial + one 50-char message (e.g. 7 + 50 = 57)
+	// We need to drop 157 - 57 = 100 chars. So, "A" and "B" should be dropped.
+	expected := []llm.ChatMessage{
+		{Content: "Initial", ContextType: ContextTypeInitialInstructions},
+		{Content: strings.Repeat("C", 50)},
+	}
+	result, err := ManageChatHistoryV2Activity(chatHistory, 57)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+
+	// check boundary condition
+	expected2 := []llm.ChatMessage{
+		{Content: "Initial", ContextType: ContextTypeInitialInstructions},
+	}
+	result2, err := ManageChatHistoryV2Activity(chatHistory, 56)
+	assert.NoError(t, err)
+	assert.Equal(t, expected2, result2)
+}
+
+func TestManageChatHistoryV2_Trimming_InitialInstructionsProtected(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: strings.Repeat("A", 50)},                                // len 50
+		{Content: "Initial", ContextType: ContextTypeInitialInstructions}, // len 7
+		{Content: strings.Repeat("B", 50)},                                // len 50
+	} // Total initial retained length = 50 + 7 + 50 = 107
+
+	// MaxLength allows only Initial (7 chars). Need to drop 100 chars.
+	// "A" and "B" should be dropped.
+	expected := []llm.ChatMessage{
+		{Content: "Initial", ContextType: ContextTypeInitialInstructions},
+	}
+	result, err := ManageChatHistoryV2Activity(chatHistory, 10) // maxLength is 10
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestManageChatHistoryV2_Trimming_SoftLimit(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "Initial One", ContextType: ContextTypeInitialInstructions}, // len 11
+		{Content: strings.Repeat("A", 50)},                                    // len 50, droppable
+		{Content: "Initial Two", ContextType: ContextTypeInitialInstructions}, // len 11
+	} // Total initial retained length = 11 + 50 + 11 = 72
+
+	// MaxLength is 25.
+	// "Initial One" (11) + "Initial Two" (11) = 22.
+	// We need to drop 72 - 25 = 47 from droppable messages.
+	// Dropping "A" (50 chars) makes total length 11+11 = 22. This is <= 25.
+	// So, "A" is dropped.
+	expected := []llm.ChatMessage{
+		{Content: "Initial One", ContextType: ContextTypeInitialInstructions},
+		{Content: "Initial Two", ContextType: ContextTypeInitialInstructions},
+	}
+	result, err := ManageChatHistoryV2Activity(chatHistory, 25)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+
+	// Case: Only InitialInstructions, and they exceed maxLength
+	chatHistoryOnlyII := []llm.ChatMessage{
+		{Content: "Very Long Initial Instructions Part 1", ContextType: ContextTypeInitialInstructions}, // len 35
+		{Content: "Very Long Initial Instructions Part 2", ContextType: ContextTypeInitialInstructions}, // len 35
+	} // Total 70
+	expectedOnlyII := []llm.ChatMessage{
+		{Content: "Very Long Initial Instructions Part 1", ContextType: ContextTypeInitialInstructions},
+		{Content: "Very Long Initial Instructions Part 2", ContextType: ContextTypeInitialInstructions},
+	}
+	resultOnlyII, err := ManageChatHistoryV2Activity(chatHistoryOnlyII, 50) // maxLength 50, but II total 70
+	assert.NoError(t, err)
+	assert.Equal(t, expectedOnlyII, resultOnlyII) // Soft limit: IIs are kept even if > maxLength
 }

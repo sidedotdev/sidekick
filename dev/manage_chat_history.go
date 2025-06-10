@@ -395,20 +395,32 @@ func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) (
 		// were already marked for retention if it's the latest, in the loop above.
 	}
 
-	// Consolidate retained messages based on the isRetained array (AC5, AC6)
-	var retainedChatHistory []llm.ChatMessage
+	// Get length of new history so far, based on what is force-retained
+	var totalLength = 0
+	var newChatHistory []llm.ChatMessage
 	for i, msg := range chatHistory {
 		if isRetained[i] {
-			retainedChatHistory = append(retainedChatHistory, msg)
+			totalLength += len(msg.Content)
 		}
 	}
 
-	// TODO: Implement trimming logic if total content length of retained messages exceeds maxLength (AC7, AC8). (Step 5 of plan)
+	// Iterate backwards to add the latest messages that aren't force-retained,
+	// but fit under the max length. Retained messages don't care about maxLength
+	for i := len(chatHistory) - 1; i >= 0; i-- {
+		msg := chatHistory[i]
+		if isRetained[i] || len(msg.Content)+totalLength <= maxLength {
+			newChatHistory = append(newChatHistory, chatHistory[i])
+			if !isRetained[i] {
+				totalLength += len(msg.Content)
+			}
+		}
+	}
+	slices.Reverse(newChatHistory)
 
 	// Ensure tool calls and responses are cleaned up as per requirements (AC9)
-	cleanToolCallsAndResponses(&retainedChatHistory)
+	cleanToolCallsAndResponses(&newChatHistory)
 
-	return retainedChatHistory, nil
+	return newChatHistory, nil
 }
 
 // extracts edit block report sequence numbers from lines formatted like:
