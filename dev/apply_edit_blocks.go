@@ -541,6 +541,8 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 	var fullReports []ApplyEditBlockReport
 	_, err := Track(actionCtx, func(flowAction domain.FlowAction) ([]ApplyEditBlockReport, error) {
 		validEditBlocks, invalidReports := validateEditBlocks(editBlocks)
+		//fmt.Printf("Validated %d edit blocks\n", len(validEditBlocks))
+		//fmt.Printf("Invalid reports: %d\n", len(invalidReports))
 
 		enabledFlags := make([]string, 0)
 		if fflag.IsEnabled(dCtx, fflag.CheckEdits) {
@@ -838,6 +840,7 @@ const minimumAcceptableHighScoreRatio = 0.95
 
 func FindAcceptableMatch(block EditBlock, originalLines []string, isOriginalLinesFromActualFile bool) (match, []match) {
 	closestMatch, closestMatches := FindClosestMatch(block, originalLines, isOriginalLinesFromActualFile)
+	//fmt.Printf("closest matches: %v\n", closestMatches)
 	if closestMatch.successfulMatch && closestMatch.highScoreRatio > minimumAcceptableHighScoreRatio {
 		acceptableMatches := utils.Filter(closestMatches, func(m match) bool {
 			return m.successfulMatch && m.highScoreRatio > minimumAcceptableHighScoreRatio
@@ -951,6 +954,7 @@ func calculateStartingLineIndex(lines []string) int {
 
 func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFromActualFile bool) (match, []match) {
 	startingLineIndex := calculateStartingLineIndex(block.OldLines)
+	//fmt.Printf("starting line index: %d\n", startingLineIndex)
 	potentialMatches := FindPotentialMatches(block, originalLines, startingLineIndex, isOriginalLinesFromActualFile)
 
 	// if no potential matches based on first line, go to the next line and try again
@@ -971,11 +975,21 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 		failedToMatch := []string{}
 		foundInstead := []string{}
 
+		// here's the idea: we found the index of the potential match for
+		// oldlines[startingLineIndex], but we actually want to score all lines,
+		// even before the startingLineIndex, meaning we need to offset the
+		// startpoint of the potential match as well. but to account for
+		// differences in oldLines vs originalLines, we do the
+		// isWhitespaceOrEndingDelimiter check as we offset, which matches how
+		// startingLineIndex was set as well. Essentially, we're doing a
+		// backwards/reverse version of what we did for startingLineIndex, but
+		// on originalLines instead of oldLines.
 		offset := 0
-		for offset < startingLineIndex && potentialMatch.index-offset-1 > 0 && potentialMatch.index-offset-1 < len(originalLines) && isWhitespaceOrEndingDelimiter(originalLines[potentialMatch.index-offset-1]) {
+		for offset < startingLineIndex && potentialMatch.index-offset-1 >= 0 && isWhitespaceOrEndingDelimiter(originalLines[potentialMatch.index-offset-1]) {
 			offset++
 		}
 
+		//fmt.Printf("potential match index: %d, offset: %d\n", potentialMatch.index, offset)
 		adjustedIndex := potentialMatch.index - offset
 		var matchedLines []string
 
@@ -984,7 +998,7 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 		for i := 0; i+oldLinesOffset < len(block.OldLines); i++ {
 			oldLine := block.OldLines[i+oldLinesOffset]
 
-			//fmt.Printf("i:%v, oldLinesOffset: %v, originalLinesOffset: %v\n", i, oldLinesOffset, originalLinesOffset)
+			//fmt.Printf("i:%v, adjustedIndex: %v, oldLinesOffset: %v, originalLinesOffset: %v\n", i, adjustedIndex, oldLinesOffset, originalLinesOffset)
 			// bounds check
 			if adjustedIndex+i+originalLinesOffset >= len(originalLines) {
 				if isWhitespaceOrComment(oldLine) {
