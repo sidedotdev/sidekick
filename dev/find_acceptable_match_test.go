@@ -222,7 +222,30 @@ func TestGetWorkspaceByIdHandler(t *testing.T) {
 		//utils.PrettyPrint(allAcceptableMatches)
 		assert.True(t, len(allAcceptableMatches) == 0, "Expected no acceptable match due to bad delimiter match")
 	})
+
+	t.Run("exact match but with multiple delimiters at start", func(t *testing.T) {
+		originalLines := strings.Split(`	}
 }
+
+func TestGetWorkspaceByIdHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+	db := ctrl.service
+}`, "\n")
+
+		block := EditBlock{
+			FilePath: "some/file.go",
+			OldLines: originalLines,
+			EditType: "update",
+		}
+
+		_, allAcceptableMatches := FindAcceptableMatch(block, originalLines, false)
+
+		//utils.PrettyPrint(allAcceptableMatches)
+		assert.True(t, len(allAcceptableMatches) == 1, "Expected one acceptable match")
+	})
+}
+
 
 // bigger test, catches more issues
 // TODO use a generative test instead, eg by performing small random edits on
