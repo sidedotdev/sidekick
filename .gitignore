@@ -16,7 +16,8 @@
 
 # IDE dirs
 .idea/
-.vscode/
+.vscode/*
+!.vscode/launch.json
 
 # Other
 .env
@@ -32,8 +33,12 @@ libusearch_c.a
 local-temporal-db*
 .aider*
 
+# dlv bugs
+__debug_bin*
+
 # TODO: audit these and move into the sidekick workspace kanban board
 todo.md
 
 # TODO: audit these and move into public roadmap & github issues
 release-thoughts.md
+
