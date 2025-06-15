@@ -34,29 +34,15 @@ All the dependencies listed in README.md are required when developing the projec
 
 ## Development Workflow
 
-### Step 0: Run temporal (bundled)
+### Step 1: Start backend
 
-Start the side cli's bundled temporal server:
-
-```sh
-SIDE_APP_ENV=development go build -o side sidekick/cli && ./side start temporal
-```
-
-### Step 1: Run the Worker
-
-In another terminal instance, run the worker. Notice that this worker hosts both Workflow and Activity functions.
+Build the side cli and start all servers:
 
 ```sh
-SIDE_APP_ENV=development go run worker/main/main.go
+SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development go run sidekick/cli start -- --disable-auto-open
 ```
 
-### Step 2: Run the API Server
-
-```sh
-SIDE_APP_ENV=development go run api/main/main.go
-```
-
-### Step 3: Run the frontend
+### Step 2: Run the frontend
 
 ```sh
 cd frontend
@@ -64,17 +50,37 @@ npm ci
 npm run dev
 ```
 
-### Step 4: Check out the web UI
+### Step 3: Check out the web UI
 
 Open http://localhost:5173/kanban
 
 This assumes you have already run `side init` in at least one project.
 
-### Step 5: Run Tests
+### Step 4: Run Tests
 
 ```sh
 go test -test.timeout 10s sidekick/... 
 ```
+
+## Debugging
+
+The best way to debug workflow logic is via replaying temporal event histories
+for a flow where that bug was observed.
+
+### Replays
+
+A replay can be run locally like so (you'll have to have sidekick's temporal
+server running at least):
+
+```sh
+go run sidekick/worker/replay -id $YOUR_FLOW_ID
+```
+
+You can utilize Printf debugging and keep replaying the same flow.
+
+There is also a launch configuration for VSCode allowing you to debug a replayed
+flow through dlv, with VSCode's UI. To do this, simply edit `.vscode/launch.json`
+to put in the flow id, then run the "Replay Flow" launch configuration.
 
 ## Style Guides
 
@@ -107,11 +113,11 @@ cmake --build build_release --config Release
 mv build_release/libusearch_static_c.a ../sidekick/libusearch_c.a 
 ```
 
-Then back in sidekick's root directory, run build_cli.sh:
+Then back in sidekick's root directory, run build_install_local_cli.sh, which will build and install (into /usr/local/bin):
 
 ```sh
 cd ../sidekick
-./build_cli.sh
+./build_install_local_cli.sh
 ```
 
 ### Updating mocks

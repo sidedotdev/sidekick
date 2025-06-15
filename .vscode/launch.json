@@ -9,10 +9,10 @@
             "type": "go",
             "request": "launch",
             "mode": "auto",
-            "program": "${workspaceFolder}/worker/replay/replay.go",
+            "program": "${workspaceFolder}/worker/replay",
             "args": [
                 "-id",
-                "'replace this with your flow id (in .vscode/launch.json)'"
+                "'replace this with your flow id (in .vscode/launch.json)'" // REPLACE THIS
             ],
             "env": {
                 "TEMPORAL_DEBUG": "true",
