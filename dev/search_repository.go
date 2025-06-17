@@ -20,6 +20,17 @@ func escapeShellArg(arg string) string {
 	return "'" + escaped + "'"
 }
 
+// isSpecificPathGlob returns true if the glob pattern targets specific paths rather than matching everything.
+func isSpecificPathGlob(pattern string) bool {
+	matchAllPatterns := []string{"", "*", "**", "**/*"}
+	for _, p := range matchAllPatterns {
+		if pattern == p {
+			return false
+		}
+	}
+	return true
+}
+
 // filterFilesByGlob filters a list of files using the given glob pattern.
 // It tries matching against both the full path and the basename.
 func filterFilesByGlob(files []string, globPattern string) ([]string, error) {
@@ -134,7 +145,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 	// Don't use --glob with rg when PathGlob is specified, as it overrides ignore files
 	// We'll filter manually instead to respect .gitignore and .sideignore
 	v := workflow.GetVersion(ctx, "manual-search-glob-filtering", workflow.DefaultVersion, 1)
-	useManualGlobFiltering := input.PathGlob != "" && input.PathGlob != "*" && v >= 1
+	useManualGlobFiltering := isSpecificPathGlob(input.PathGlob) && v >= 1
 
 	// TODO /gen replace with a new env.FileExistsActivity - we need to implement that.
 	var catOutput env.EnvRunCommandOutput
@@ -313,7 +324,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 			return SearchRepository(ctx, envContainer, input)
 		}
 
-		if input.PathGlob != "" && input.PathGlob != "*" {
+		if isSpecificPathGlob(input.PathGlob) {
 			// Check if the given path glob matches any files using manual filtering to respect ignore files
 			var listOutput env.EnvRunCommandOutput
 			listAllFilesCmd := "rg --files"
