@@ -2,8 +2,10 @@ package dev
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
+	"sidekick/common"
 	"sidekick/env"
 	"strings"
 
@@ -117,6 +119,28 @@ another/file.go
 // TODO /gen use cs command to search the repository instead of just rg as a fallback at least given the "*"/"" path glob
 
 // TODO /gen support "-F" flag for fixed string search in rg, and use it if the search term is a fixed string
+
+func getOrCreateCoreIgnoreFile() (string, error) {
+	configDir := common.GetSidekickConfigDir()
+	coreIgnorePath := filepath.Join(configDir, "core_ignore")
+
+	// Check if file exists
+	if _, err := os.Stat(coreIgnorePath); os.IsNotExist(err) {
+		// Create config directory if it doesn't exist
+		if err := os.MkdirAll(configDir, 0755); err != nil {
+			return "", fmt.Errorf("failed to create config directory: %v", err)
+		}
+
+		// Create core_ignore file with .git exclusion
+		if err := os.WriteFile(coreIgnorePath, []byte(".git\n"), 0644); err != nil {
+			return "", fmt.Errorf("failed to create core_ignore file: %v", err)
+		}
+	} else if err != nil {
+		return "", fmt.Errorf("failed to check core_ignore file: %v", err)
+	}
+
+	return coreIgnorePath, nil
+}
 
 // SearchRepository searches the repository for the given search term, ignoring matching .gitingore or .sideignore
 func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input SearchRepositoryInput) (string, error) {
