@@ -333,16 +333,16 @@ func (s *SearchRepositoryE2ETestSuite) TestNoResults() {
 
 func (s *SearchRepositoryE2ETestSuite) TestRespectIgnoreFiles() {
 	// Create .sideignore file
-	s.createTestFile(".sideignore", "ignored_gen_file.txt\n*.genignore")
+	s.createTestFile(".sideignore", "ignored*\n*.genignore")
 
 	// Create .gitignore file
-	s.createTestFile(".gitignore", "ignored_git_file.txt\n*.gitignore")
+	s.createTestFile(".gitignore", "*.anotherignore")
 
 	// Create files that should be ignored
 	s.createTestFile("ignored_gen_file.txt", "This file should be ignored by genflow")
 	s.createTestFile("ignored_git_file.txt", "This file should be ignored by git")
 	s.createTestFile("test.genignore", "This file should be ignored by genflow")
-	s.createTestFile("test.gitignore", "This file should be ignored by git")
+	s.createTestFile("test.anotherignore", "This file should be ignored by git")
 
 	// Create a file that should not be ignored
 	s.createTestFile("normal_file.txt", "This file should not be ignored")
@@ -564,6 +564,63 @@ func (s *SearchRepositoryE2ETestSuite) TestGlobPatternsRespectGitignore() {
 
 	// Should return no results because .ignored files are in .gitignore
 	s.Equal("No files matched the path glob *.ignored - please try a different path glob", result)
+}
+
+func (s *SearchRepositoryE2ETestSuite) TestGitDirIsNeverSearched() {
+	// Create a file in .git directory
+	err := os.MkdirAll(filepath.Join(s.dir, ".git"), 0755)
+	s.Require().NoError(err)
+	s.createTestFile(".git/test_file.txt", "secret content")
+
+	// Create a regular file with same content
+	s.createTestFile("regular_file.txt", "secret content")
+
+	// Search for the content
+	result, err := s.executeSearchRepository(SearchRepositoryInput{
+		PathGlob:     "**/*",
+		SearchTerm:   "secret content",
+		ContextLines: 0,
+	})
+
+	// Verify only the regular file is found
+	s.Require().NoError(err)
+	s.Contains(result, "regular_file.txt")
+	s.NotContains(result, ".git/test_file.txt")
+}
+
+func (s *SearchRepositoryE2ETestSuite) TestGithubDirIsSearched() {
+	// Create a file in .github directory
+	err := os.MkdirAll(filepath.Join(s.dir, ".github"), 0755)
+	s.Require().NoError(err)
+	s.createTestFile(".github/workflow.yml", "name: CI")
+
+	// Search for the content
+	result, err := s.executeSearchRepository(SearchRepositoryInput{
+		PathGlob:     "**/*",
+		SearchTerm:   "CI",
+		ContextLines: 0,
+	})
+
+	// Verify the file in .github is found
+	s.Require().NoError(err)
+	s.Contains(result, ".github/workflow.yml")
+}
+
+func (s *SearchRepositoryE2ETestSuite) TestHiddenButEmptyDirectory() {
+	// Create .github directory but leave it empty
+	err := os.MkdirAll(filepath.Join(s.dir, ".github"), 0755)
+	s.Require().NoError(err)
+
+	// Search specifically in .github directory
+	result, err := s.executeSearchRepository(SearchRepositoryInput{
+		PathGlob:     ".github/**",
+		SearchTerm:   "anything",
+		ContextLines: 0,
+	})
+
+	// Since the directory is empty, this is the appropriate error message
+	s.Require().NoError(err)
+	s.Equal("No files matched the path glob .github/** - please try a different path glob", result)
 }
 
 func (s *SearchRepositoryE2ETestSuite) TestGlobPatternsRespectSideignore() {

@@ -2,8 +2,10 @@ package dev
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
+	"sidekick/common"
 	"sidekick/env"
 	"strings"
 
@@ -129,9 +131,36 @@ another/file.go
 
 // TODO /gen support "-F" flag for fixed string search in rg, and use it if the search term is a fixed string
 
+func getOrCreateCoreIgnoreFile() (string, error) {
+	configDir := common.GetSidekickConfigDir()
+	coreIgnorePath := filepath.Join(configDir, "core_ignore")
+
+	// Check if file exists
+	if _, err := os.Stat(coreIgnorePath); os.IsNotExist(err) {
+		// Create config directory if it doesn't exist
+		if err := os.MkdirAll(configDir, 0755); err != nil {
+			return "", fmt.Errorf("failed to create config directory: %v", err)
+		}
+
+		// Create core_ignore file with .git exclusion
+		if err := os.WriteFile(coreIgnorePath, []byte(".git\n"), 0644); err != nil {
+			return "", fmt.Errorf("failed to create core_ignore file: %v", err)
+		}
+	} else if err != nil {
+		return "", fmt.Errorf("failed to check core_ignore file: %v", err)
+	}
+
+	return coreIgnorePath, nil
+}
+
 // SearchRepository searches the repository for the given search term, ignoring matching .gitingore or .sideignore
 func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input SearchRepositoryInput) (string, error) {
-	rgArgs := "--files-with-matches"
+	coreIgnorePath, err := getOrCreateCoreIgnoreFile()
+	if err != nil {
+		return "", fmt.Errorf("failed to get core ignore file: %v", err)
+	}
+
+	rgArgs := "--files-with-matches --hidden --ignore-file " + escapeShellArg(coreIgnorePath)
 	gitGrepArgs := fmt.Sprintf("git grep --no-index --show-function --heading --line-number --context %d", input.ContextLines)
 
 	if input.CaseInsensitive {
@@ -149,7 +178,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 
 	// TODO /gen replace with a new env.FileExistsActivity - we need to implement that.
 	var catOutput env.EnvRunCommandOutput
-	err := workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "cat",
@@ -327,7 +356,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 		if isSpecificPathGlob(input.PathGlob) {
 			// Check if the given path glob matches any files using manual filtering to respect ignore files
 			var listOutput env.EnvRunCommandOutput
-			listAllFilesCmd := "rg --files"
+			listAllFilesCmd := "rg --files --hidden --ignore-file " + escapeShellArg(coreIgnorePath)
 			if catOutput.ExitStatus == 0 {
 				listAllFilesCmd += " --ignore-file .sideignore"
 			}
