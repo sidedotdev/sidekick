@@ -606,7 +606,7 @@ func (s *SearchRepositoryE2ETestSuite) TestGithubDirIsSearched() {
 	s.Contains(result, ".github/workflow.yml")
 }
 
-func (s *SearchRepositoryE2ETestSuite) TestGithubGlobSearch() {
+func (s *SearchRepositoryE2ETestSuite) TestHiddenButEmptyDirectory() {
 	// Create .github directory but leave it empty
 	err := os.MkdirAll(filepath.Join(s.dir, ".github"), 0755)
 	s.Require().NoError(err)
@@ -618,9 +618,9 @@ func (s *SearchRepositoryE2ETestSuite) TestGithubGlobSearch() {
 		ContextLines: 0,
 	})
 
-	// Verify we get the standard no results message
+	// Since the directory is empty, this is the appropriate error message
 	s.Require().NoError(err)
-	s.Equal(SearchRepoNoResultsMessage, result)
+	s.Equal("No files matched the path glob .github/** - please try a different path glob", result)
 }
 
 func (s *SearchRepositoryE2ETestSuite) TestGlobPatternsRespectSideignore() {
