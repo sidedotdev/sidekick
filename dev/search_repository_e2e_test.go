@@ -566,6 +566,63 @@ func (s *SearchRepositoryE2ETestSuite) TestGlobPatternsRespectGitignore() {
 	s.Equal("No files matched the path glob *.ignored - please try a different path glob", result)
 }
 
+func (s *SearchRepositoryE2ETestSuite) TestGitDirIsNeverSearched() {
+	// Create a file in .git directory
+	err := os.MkdirAll(filepath.Join(s.dir, ".git"), 0755)
+	s.Require().NoError(err)
+	s.createTestFile(".git/test_file.txt", "secret content")
+
+	// Create a regular file with same content
+	s.createTestFile("regular_file.txt", "secret content")
+
+	// Search for the content
+	result, err := s.executeSearchRepository(SearchRepositoryInput{
+		PathGlob:     "**/*",
+		SearchTerm:   "secret content",
+		ContextLines: 0,
+	})
+
+	// Verify only the regular file is found
+	s.Require().NoError(err)
+	s.Contains(result, "regular_file.txt")
+	s.NotContains(result, ".git/test_file.txt")
+}
+
+func (s *SearchRepositoryE2ETestSuite) TestGithubDirIsSearched() {
+	// Create a file in .github directory
+	err := os.MkdirAll(filepath.Join(s.dir, ".github"), 0755)
+	s.Require().NoError(err)
+	s.createTestFile(".github/workflow.yml", "name: CI")
+
+	// Search for the content
+	result, err := s.executeSearchRepository(SearchRepositoryInput{
+		PathGlob:     "**/*",
+		SearchTerm:   "CI",
+		ContextLines: 0,
+	})
+
+	// Verify the file in .github is found
+	s.Require().NoError(err)
+	s.Contains(result, ".github/workflow.yml")
+}
+
+func (s *SearchRepositoryE2ETestSuite) TestGithubGlobSearch() {
+	// Create .github directory but leave it empty
+	err := os.MkdirAll(filepath.Join(s.dir, ".github"), 0755)
+	s.Require().NoError(err)
+
+	// Search specifically in .github directory
+	result, err := s.executeSearchRepository(SearchRepositoryInput{
+		PathGlob:     ".github/**",
+		SearchTerm:   "anything",
+		ContextLines: 0,
+	})
+
+	// Verify we get the standard no results message
+	s.Require().NoError(err)
+	s.Equal(SearchRepoNoResultsMessage, result)
+}
+
 func (s *SearchRepositoryE2ETestSuite) TestGlobPatternsRespectSideignore() {
 	// Create .sideignore file
 	s.createTestFile(".sideignore", "temp_dir/\n*.temp")
