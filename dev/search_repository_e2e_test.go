@@ -333,16 +333,16 @@ func (s *SearchRepositoryE2ETestSuite) TestNoResults() {
 
 func (s *SearchRepositoryE2ETestSuite) TestRespectIgnoreFiles() {
 	// Create .sideignore file
-	s.createTestFile(".sideignore", "ignored_gen_file.txt\n*.genignore")
+	s.createTestFile(".sideignore", "ignored*\n*.genignore")
 
 	// Create .gitignore file
-	s.createTestFile(".gitignore", "ignored_git_file.txt\n*.gitignore")
+	s.createTestFile(".gitignore", "*.anotherignore")
 
 	// Create files that should be ignored
 	s.createTestFile("ignored_gen_file.txt", "This file should be ignored by genflow")
 	s.createTestFile("ignored_git_file.txt", "This file should be ignored by git")
 	s.createTestFile("test.genignore", "This file should be ignored by genflow")
-	s.createTestFile("test.gitignore", "This file should be ignored by git")
+	s.createTestFile("test.anotherignore", "This file should be ignored by git")
 
 	// Create a file that should not be ignored
 	s.createTestFile("normal_file.txt", "This file should not be ignored")

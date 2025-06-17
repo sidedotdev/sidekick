@@ -144,7 +144,12 @@ func getOrCreateCoreIgnoreFile() (string, error) {
 
 // SearchRepository searches the repository for the given search term, ignoring matching .gitingore or .sideignore
 func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input SearchRepositoryInput) (string, error) {
-	rgArgs := "--files-with-matches"
+	coreIgnorePath, err := getOrCreateCoreIgnoreFile()
+	if err != nil {
+		return "", fmt.Errorf("failed to get core ignore file: %v", err)
+	}
+
+	rgArgs := "--files-with-matches --hidden --ignore-file " + escapeShellArg(coreIgnorePath)
 	gitGrepArgs := fmt.Sprintf("git grep --no-index --show-function --heading --line-number --context %d", input.ContextLines)
 
 	if input.CaseInsensitive {
@@ -162,7 +167,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 
 	// TODO /gen replace with a new env.FileExistsActivity - we need to implement that.
 	var catOutput env.EnvRunCommandOutput
-	err := workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
 		Command:            "cat",
@@ -340,7 +345,7 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 		if input.PathGlob != "" && input.PathGlob != "*" {
 			// Check if the given path glob matches any files using manual filtering to respect ignore files
 			var listOutput env.EnvRunCommandOutput
-			listAllFilesCmd := "rg --files"
+			listAllFilesCmd := "rg --files --hidden --ignore-file " + escapeShellArg(coreIgnorePath)
 			if catOutput.ExitStatus == 0 {
 				listAllFilesCmd += " --ignore-file .sideignore"
 			}
