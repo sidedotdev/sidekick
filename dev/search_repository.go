@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sidekick/common"
 	"sidekick/env"
+	"sidekick/utils"
 	"strings"
 
 	doublestar "github.com/bmatcuk/doublestar/v4"
@@ -68,7 +69,11 @@ type SingleSearchParams struct {
 
 const refuseAtSearchOutputLength = 6000
 const maxSearchOutputLength = 2000
-const SearchRepoNoResultsMessage = "No results found. Try a less restrictive search query, or try a different tool."
+
+// formatSearchPrefix returns a consistent prefix describing what was searched
+func formatSearchPrefix(input SearchRepositoryInput) string {
+	return fmt.Sprintf("Searched for %q in %q", input.SearchTerm, input.PathGlob)
+}
 
 type SearchRepositoryInput struct {
 	PathGlob        string
@@ -373,12 +378,26 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 			}
 
 			if len(matchingFiles) == 0 {
-				return fmt.Sprintf("No files matched the path glob %s - please try a different path glob", input.PathGlob), nil
+				return fmt.Sprintf("%s\nNo files matched the path glob %s - please try a different path glob", 
+					formatSearchPrefix(input), input.PathGlob), nil
 			}
+
+			// Show file metadata for no results when path glob is specified
+			prefix := formatSearchPrefix(input)
+			if len(matchingFiles) <= 10 {
+				indentedFiles := utils.Map(matchingFiles, func(file string) string {
+					return "\t" + file
+				})
+				return fmt.Sprintf("%s\nNo results found in the following files:\n%s", 
+					prefix, strings.Join(indentedFiles, "\n")), nil
+			}
+			return fmt.Sprintf("%s\nNo results found in %d matching files", 
+				prefix, len(matchingFiles)), nil
 		}
 
-		return SearchRepoNoResultsMessage, nil
+		return fmt.Sprintf("%s\nNo results found. Try a less restrictive search query, or try a different tool.",
+			formatSearchPrefix(input)), nil
 	}
 
-	return output, nil
+	return fmt.Sprintf("%s\n%s", formatSearchPrefix(input), output), nil
 }

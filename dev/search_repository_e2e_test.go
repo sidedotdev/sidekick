@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -238,6 +239,7 @@ func (s *SearchRepositoryE2ETestSuite) TestPathGlobSearch() {
 	s.Require().NoError(s.env.GetWorkflowResult(&result))
 
 	s.Contains(result, "dir1/file2.txt")
+	s.Contains(result, "This is file2")
 	s.NotContains(result, "file1.txt")
 	s.NotContains(result, "dir2/file3.txt")
 
@@ -248,8 +250,12 @@ func (s *SearchRepositoryE2ETestSuite) TestPathGlobSearch() {
 		SearchTerm:   "won't match any of the files",
 		ContextLines: 0,
 	})
-	s.Require().NoError(s.env.GetWorkflowResult(&result))
-	s.Equal(SearchRepoNoResultsMessage, result, "Expected SearchRepoNoResultsMessage for nonexistent search term")
+	var searchResult string
+	s.Require().NoError(s.env.GetWorkflowResult(&searchResult))
+	expectedPrefix := `Searched for "won't match any of the files" in "dir1/*.txt"`
+	s.Contains(searchResult, expectedPrefix, "Expected search prefix")
+	s.Contains(searchResult, "No results found in the following files:", "Expected file list header")
+	s.Contains(searchResult, "\tdir1/file2.txt", "Expected matching file in list")
 
 	// Test with a glob that matches some files but search term matching other files
 	s.ResetWorkflowEnvironment()
@@ -258,8 +264,12 @@ func (s *SearchRepositoryE2ETestSuite) TestPathGlobSearch() {
 		SearchTerm:   "file3",
 		ContextLines: 0,
 	})
-	s.Require().NoError(s.env.GetWorkflowResult(&result))
-	s.Equal(SearchRepoNoResultsMessage, result, "Expected SearchRepoNoResultsMessage for nonexistent search term")
+	searchResult = ""
+	s.Require().NoError(s.env.GetWorkflowResult(&searchResult))
+	expectedPrefix = `Searched for "file3" in "dir1/*.txt"`
+	s.Contains(searchResult, expectedPrefix, "Expected search prefix")
+	s.Contains(searchResult, "No results found in the following files:", "Expected file list header")
+	s.Contains(searchResult, "\tdir1/file2.txt", "Expected matching file in list")
 
 	// Test with a glob that doesn't match any files
 	s.ResetWorkflowEnvironment()
@@ -348,7 +358,10 @@ func (s *SearchRepositoryE2ETestSuite) TestNoResults() {
 	})
 	s.Require().NoError(s.env.GetWorkflowResult(&result))
 
-	s.Equal(SearchRepoNoResultsMessage, result, "Expected SearchRepoNoResultsMessage for nonexistent search term")
+	expectedPrefix := `Searched for "nonexistent" in "*"`
+	expectedMsg := "No results found. Try a less restrictive search query, or try a different tool."
+	s.Contains(result, expectedPrefix, "Expected search prefix")
+	s.Contains(result, expectedMsg, "Expected no results message")
 }
 
 func (s *SearchRepositoryE2ETestSuite) TestRespectIgnoreFiles() {
@@ -440,7 +453,9 @@ func (s *SearchRepositoryE2ETestSuite) TestFallbackToFixedStringSearch_NoMatches
 	result, err := s.executeSearchRepository(input)
 	s.Require().NoError(err, "Search should not error even when no matches are found")
 	// Expecting no results message, which is defined in SearchRepoNoResultsMessage
-	s.Require().Equal(SearchRepoNoResultsMessage, result, "Output should indicate no results found")
+	expectedPrefix := fmt.Sprintf(`Searched for "%s" in "%s"`, input.SearchTerm, input.PathGlob)
+	s.Contains(result, expectedPrefix, "Expected search prefix")
+	s.Contains(result, "No results found", "Output should indicate no results found")
 }
 
 func (s *SearchRepositoryE2ETestSuite) TestSearchWithSpecialCharacters() {
@@ -583,7 +598,8 @@ func (s *SearchRepositoryE2ETestSuite) TestGlobPatternsRespectGitignore() {
 	s.Require().NoError(s.env.GetWorkflowResult(&result))
 
 	// Should return no results because .ignored files are in .gitignore
-	s.Equal("No files matched the path glob *.ignored - please try a different path glob", result)
+	s.Equal(`Searched for "file" in "*.ignored"
+No files matched the path glob *.ignored - please try a different path glob`, result)
 }
 
 func (s *SearchRepositoryE2ETestSuite) TestGitDirIsNeverSearched() {
@@ -640,7 +656,8 @@ func (s *SearchRepositoryE2ETestSuite) TestHiddenButEmptyDirectory() {
 
 	// Since the directory is empty, this is the appropriate error message
 	s.Require().NoError(err)
-	s.Equal("No files matched the path glob .github/** - please try a different path glob", result)
+	s.Equal(`Searched for "anything" in ".github/**"
+No files matched the path glob .github/** - please try a different path glob`, result)
 }
 
 func (s *SearchRepositoryE2ETestSuite) TestGlobPatternsRespectSideignore() {
@@ -684,7 +701,8 @@ func (s *SearchRepositoryE2ETestSuite) TestGlobPatternsRespectSideignore() {
 	s.Require().NoError(s.env.GetWorkflowResult(&result))
 
 	// Should return no results because .temp files are in .sideignore
-	s.Equal("No files matched the path glob *.temp - please try a different path glob", result)
+	s.Equal(`Searched for "file" in "*.temp"
+No files matched the path glob *.temp - please try a different path glob`, result)
 }
 
 func (s *SearchRepositoryE2ETestSuite) TestManualGlobFilteringBasicFunctionality() {
