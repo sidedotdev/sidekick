@@ -209,6 +209,7 @@ func (s *SearchRepositoryE2ETestSuite) TestRefusalForOverlyLongSearchOutput() {
 	})
 
 	s.Require().NoError(err)
+	s.Contains(result, "Searched for \"line\" in \"*\"")
 	s.Contains(result, "Search output is too long.")
 	s.Contains(result, "You could try with fewer context lines")
 }

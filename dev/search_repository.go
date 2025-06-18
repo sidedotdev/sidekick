@@ -289,9 +289,9 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 
 			fileList := strings.Join(filteredFiles, "\n")
 			if len(fileList) > maxSearchOutputLength {
-				return "Search output is too long, and even the list of files that matched is too long. Try a more constrained path glob and/or a more specific search term. Alternatively, skip doing this search entirely if it's not essential.", nil
+				return addSearchPrefix(input, "Search output is too long, and even the list of files that matched is too long. Try a more constrained path glob and/or a more specific search term. Alternatively, skip doing this search entirely if it's not essential."), nil
 			} else {
-				return fmt.Sprintf("Search output is too long. You could try with fewer context lines, a more constrained path glob and a more specific search term. Alternatively, skip doing this search entirely if it's not essential. Here is the list of matching files:\n\n%s", fileList), nil
+				return addSearchPrefix(input, fmt.Sprintf("Search output is too long. You could try with fewer context lines, a more constrained path glob and a more specific search term. Alternatively, skip doing this search entirely if it's not essential. Here is the list of matching files:\n\n%s", fileList)), nil
 			}
 		} else {
 			err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
@@ -306,9 +306,9 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 
 			// TODO check if the NumContextLines is too high and if so, reduce it and retry the search or at least provide that as feedback here
 			if len(listFilesOutput.Stdout) > maxSearchOutputLength {
-				return "Search output is too long, and even the list of files that matched is too long. Try a more constrained path glob and/or a more specific search term. Alternatively, skip doing this search entirely if it's not essential.", nil
+				return addSearchPrefix(input, "Search output is too long, and even the list of files that matched is too long. Try a more constrained path glob and/or a more specific search term. Alternatively, skip doing this search entirely if it's not essential."), nil
 			} else {
-				return fmt.Sprintf("Search output is too long. You could try with fewer context lines, a more constrained path glob and a more specific search term. Alternatively, skip doing this search entirely if it's not essential. Here is the list of matching files:\n\n%s", listFilesOutput.Stdout), nil
+				return addSearchPrefix(input, fmt.Sprintf("Search output is too long. You could try with fewer context lines, a more constrained path glob and a more specific search term. Alternatively, skip doing this search entirely if it's not essential. Here is the list of matching files:\n\n%s", listFilesOutput.Stdout)), nil
 			}
 		}
 	}
@@ -332,7 +332,9 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 		} else {
 			message = "\n... (search output truncated). The last file's matches are cut off, but no other files matched."
 		}
-		return output[:maxSearchOutputLength-len(message)] + message, nil
+		prefix := addSearchPrefix(input, "")
+		maxContentLength := maxSearchOutputLength - len(prefix)
+		return addSearchPrefix(input, output[:maxContentLength-len(message)]+message), nil
 	}
 
 	// handle no results
