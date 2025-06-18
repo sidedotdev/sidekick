@@ -625,8 +625,8 @@ func (s *SearchRepositoryE2ETestSuite) TestGitDirIsNeverSearched() {
 	s.NotContains(result, ".git/test_file.txt")
 }
 
-func (s *SearchRepositoryE2ETestSuite) TestGithubDirIsSearched() {
-	// Create a file in .github directory
+func (s *SearchRepositoryE2ETestSuite) TestHiddenDirIsSearched() {
+	// Create a file in .github hidden directory
 	err := os.MkdirAll(filepath.Join(s.dir, ".github"), 0755)
 	s.Require().NoError(err)
 	s.createTestFile(".github/workflow.yml", "name: CI")
