@@ -70,9 +70,10 @@ type SingleSearchParams struct {
 const refuseAtSearchOutputLength = 6000
 const maxSearchOutputLength = 2000
 
-// formatSearchPrefix returns a consistent prefix describing what was searched
-func formatSearchPrefix(input SearchRepositoryInput) string {
-	return fmt.Sprintf("Searched for %q in %q", input.SearchTerm, input.PathGlob)
+// addSearchPrefix adds a consistent search description prefix to the given output
+func addSearchPrefix(input SearchRepositoryInput, output string) string {
+	prefix := fmt.Sprintf("Searched for %q in %q", input.SearchTerm, input.PathGlob)
+	return fmt.Sprintf("%s\n%s", prefix, output)
 }
 
 type SearchRepositoryInput struct {
@@ -378,26 +379,22 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 			}
 
 			if len(matchingFiles) == 0 {
-				return fmt.Sprintf("%s\nNo files matched the path glob %s - please try a different path glob", 
-					formatSearchPrefix(input), input.PathGlob), nil
+				return addSearchPrefix(input, fmt.Sprintf("No files matched the path glob %s - please try a different path glob", input.PathGlob)), nil
 			}
 
 			// Show file metadata for no results when path glob is specified
-			prefix := formatSearchPrefix(input)
 			if len(matchingFiles) <= 10 {
 				indentedFiles := utils.Map(matchingFiles, func(file string) string {
 					return "\t" + file
 				})
-				return fmt.Sprintf("%s\nNo results found in the following files:\n%s", 
-					prefix, strings.Join(indentedFiles, "\n")), nil
+				return addSearchPrefix(input, fmt.Sprintf("No results found in the following files:\n%s",
+					strings.Join(indentedFiles, "\n"))), nil
 			}
-			return fmt.Sprintf("%s\nNo results found in %d matching files", 
-				prefix, len(matchingFiles)), nil
+			return addSearchPrefix(input, fmt.Sprintf("No results found in %d matching files", len(matchingFiles))), nil
 		}
 
-		return fmt.Sprintf("%s\nNo results found. Try a less restrictive search query, or try a different tool.",
-			formatSearchPrefix(input)), nil
+		return addSearchPrefix(input, "No results found. Try a less restrictive search query, or try a different tool."), nil
 	}
 
-	return fmt.Sprintf("%s\n%s", formatSearchPrefix(input), output), nil
+	return addSearchPrefix(input, output), nil
 }
