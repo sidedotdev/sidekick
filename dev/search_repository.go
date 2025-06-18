@@ -222,14 +222,8 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 		}
 
 		if len(filteredFiles) == 0 {
-			// No files matched the glob pattern after filtering
-			if strings.TrimSpace(listFilesOutput.Stdout) == "" {
-				// No files matched the search term at all - continue to normal "no results" handling
-				searchOutput.Stdout = ""
-			} else {
-				// Files matched the search term but none matched the glob pattern
-				return fmt.Sprintf("No files matched the path glob %s - please try a different path glob", input.PathGlob), nil
-			}
+			// skip searching, continue to normal "no results" handling
+			searchOutput.Stdout = ""
 		} else {
 			// Run git grep on the filtered files
 			escapedFiles := make([]string, len(filteredFiles))

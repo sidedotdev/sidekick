@@ -241,6 +241,26 @@ func (s *SearchRepositoryE2ETestSuite) TestPathGlobSearch() {
 	s.NotContains(result, "file1.txt")
 	s.NotContains(result, "dir2/file3.txt")
 
+	// Test with a glob that matches some files but search term matching none
+	s.ResetWorkflowEnvironment()
+	s.env.ExecuteWorkflow(s.wrapperWorkflow, s.envContainer, SearchRepositoryInput{
+		PathGlob:     "dir1/*.txt",
+		SearchTerm:   "won't match any of the files",
+		ContextLines: 0,
+	})
+	s.Require().NoError(s.env.GetWorkflowResult(&result))
+	s.Equal(SearchRepoNoResultsMessage, result, "Expected SearchRepoNoResultsMessage for nonexistent search term")
+
+	// Test with a glob that matches some files but search term matching other files
+	s.ResetWorkflowEnvironment()
+	s.env.ExecuteWorkflow(s.wrapperWorkflow, s.envContainer, SearchRepositoryInput{
+		PathGlob:     "dir1/*.txt",
+		SearchTerm:   "file3",
+		ContextLines: 0,
+	})
+	s.Require().NoError(s.env.GetWorkflowResult(&result))
+	s.Equal(SearchRepoNoResultsMessage, result, "Expected SearchRepoNoResultsMessage for nonexistent search term")
+
 	// Test with a glob that doesn't match any files
 	s.ResetWorkflowEnvironment()
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, s.envContainer, SearchRepositoryInput{
