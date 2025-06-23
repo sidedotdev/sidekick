@@ -85,6 +85,78 @@ type SearchRepositoryInput struct {
 }
 
 // TODO /gen include the function name in the associated with each search result
+
+type searchContext struct {
+	ctx                    workflow.Context
+	envContainer           env.EnvContainer
+	input                  SearchRepositoryInput
+	coreIgnorePath         string
+	rgArgs                 string
+	gitGrepArgs            string
+	escapedSearchTerm      string
+	useManualGlobFiltering bool
+	sideIgnoreExists       bool
+}
+
+func initSearchContext(ctx workflow.Context, envContainer env.EnvContainer, input SearchRepositoryInput) (*searchContext, error) {
+	coreIgnorePath, err := getOrCreateCoreIgnoreFile()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get core ignore file: %w", err)
+	}
+
+	sCtx := &searchContext{
+		ctx:            ctx,
+		envContainer:   envContainer,
+		input:          input,
+		coreIgnorePath: coreIgnorePath,
+	}
+
+	sCtx.escapedSearchTerm = escapeShellArg(input.SearchTerm)
+
+	// Base rgArgs
+	sCtx.rgArgs = "--files-with-matches --hidden --ignore-file " + escapeShellArg(sCtx.coreIgnorePath)
+
+	// Base gitGrepArgs
+	sCtx.gitGrepArgs = fmt.Sprintf("git grep --no-index --show-function --heading --line-number --context %d", input.ContextLines)
+
+	if input.CaseInsensitive {
+		sCtx.rgArgs += " --ignore-case"
+		sCtx.gitGrepArgs += " --ignore-case"
+	}
+	if input.FixedStrings {
+		sCtx.rgArgs += " --fixed-strings"
+		sCtx.gitGrepArgs += " --fixed-strings"
+	}
+
+	// Determine if manual glob filtering should be used
+	// Version guard for manual glob filtering logic
+	v := workflow.GetVersion(sCtx.ctx, "manual-search-glob-filtering", workflow.DefaultVersion, 1)
+	sCtx.useManualGlobFiltering = isSpecificPathGlob(sCtx.input.PathGlob) && v >= 1
+
+	// Check for .sideignore file
+	var catOutput env.EnvRunCommandOutput
+	// TODO /gen replace with a new env.FileExistsActivity - we need to implement that. (This comment is from original code, moved here with the logic)
+	err = workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+		EnvContainer:       sCtx.envContainer,
+		RelativeWorkingDir: "./",
+		Command:            "cat",
+		Args:               []string{".sideignore"},
+	}).Get(sCtx.ctx, &catOutput)
+	if err != nil {
+		// This error means the activity execution failed (e.g., worker unavailable, panic in activity)
+		return nil, fmt.Errorf("failed to execute command to check for .sideignore file: %w", err)
+	}
+
+	sCtx.sideIgnoreExists = false
+	if catOutput.ExitStatus == 0 { // cat was successful, so .sideignore exists
+		sCtx.rgArgs += " --ignore-file .sideignore"
+		sCtx.sideIgnoreExists = true
+	}
+	// If catOutput.ExitStatus != 0 (e.g. file not found), we proceed without adding .sideignore to rgArgs, which is the desired behavior.
+
+	return sCtx, nil
+}
+
 // by processing the search results further through tree-sitter (note: This
 // requires StructuredSearchRepository to be implemented first.) The tree-sitter
 // stuff might be done simply if we find the smallest symbol definition that
@@ -161,45 +233,10 @@ func getOrCreateCoreIgnoreFile() (string, error) {
 
 // SearchRepository searches the repository for the given search term, ignoring matching .gitingore or .sideignore
 func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input SearchRepositoryInput) (string, error) {
-	coreIgnorePath, err := getOrCreateCoreIgnoreFile()
+	sCtx, err := initSearchContext(ctx, envContainer, input)
 	if err != nil {
-		return "", fmt.Errorf("failed to get core ignore file: %v", err)
+		return "", fmt.Errorf("failed to initialize search: %w", err)
 	}
-
-	rgArgs := "--files-with-matches --hidden --ignore-file " + escapeShellArg(coreIgnorePath)
-	gitGrepArgs := fmt.Sprintf("git grep --no-index --show-function --heading --line-number --context %d", input.ContextLines)
-
-	if input.CaseInsensitive {
-		rgArgs += " --ignore-case"
-		gitGrepArgs += " --ignore-case"
-	}
-	if input.FixedStrings {
-		rgArgs += " --fixed-strings"
-		gitGrepArgs += " --fixed-strings"
-	}
-	// Don't use --glob with rg when PathGlob is specified, as it overrides ignore files
-	// We'll filter manually instead to respect .gitignore and .sideignore
-	v := workflow.GetVersion(ctx, "manual-search-glob-filtering", workflow.DefaultVersion, 1)
-	useManualGlobFiltering := isSpecificPathGlob(input.PathGlob) && v >= 1
-
-	// TODO /gen replace with a new env.FileExistsActivity - we need to implement that.
-	var catOutput env.EnvRunCommandOutput
-	err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
-		EnvContainer:       envContainer,
-		RelativeWorkingDir: "./",
-		Command:            "cat",
-		Args:               []string{".sideignore"},
-	}).Get(ctx, &catOutput)
-	if err != nil {
-		return "", fmt.Errorf("failed to cat .sideignore: %v", err)
-	}
-
-	// if successful, .sideignore file exists
-	if catOutput.ExitStatus == 0 {
-		rgArgs += " --ignore-file .sideignore"
-	}
-
-	escapedSearchTerm := escapeShellArg(input.SearchTerm)
 
 	var searchOutput env.EnvRunCommandOutput
 	if useManualGlobFiltering {
