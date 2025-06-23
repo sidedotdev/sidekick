@@ -168,6 +168,8 @@ func getToolChatter(config common.ModelConfig) (llm.ToolChatter, error) {
 	case llm.OpenaiToolChatProviderType:
 		return llm.OpenaiToolChat{}, nil
 	case llm.OpenaiCompatibleToolChatProviderType:
+		// FIXME pass in the providers in the parameters instead of loading the
+		// config directly here
 		localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
 		if err != nil {
 			return nil, fmt.Errorf("failed to load local config: %w", err)
