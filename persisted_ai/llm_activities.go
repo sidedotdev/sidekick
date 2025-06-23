@@ -15,9 +15,10 @@ import (
 
 type ChatStreamOptions struct {
 	llm.ToolChatOptions
-	WorkspaceId  string
-	FlowId       string
-	FlowActionId string
+	WorkspaceId        string
+	FlowId             string
+	FlowActionId       string
+	AvailableProviders []common.ModelProviderPublicConfig
 }
 
 type LlmActivities struct {

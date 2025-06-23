@@ -13,11 +13,12 @@ import (
 )
 
 type CachedEmbedActivityOptions struct {
-	Secrets     secret_manager.SecretManagerContainer
-	WorkspaceId string
-	ContentType string
-	ModelConfig common.ModelConfig
-	Subkeys     []string
+	Secrets            secret_manager.SecretManagerContainer
+	WorkspaceId        string
+	ContentType        string
+	ModelConfig        common.ModelConfig
+	Subkeys            []string
+	AvailableProviders []common.ModelProviderPublicConfig
 }
 
 type EmbedActivities struct {

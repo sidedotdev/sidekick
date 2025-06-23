@@ -27,11 +27,12 @@ type RankedDirSignatureOutlineOptions struct {
 }
 
 type RankedViaEmbeddingOptions struct {
-	WorkspaceId  string
-	EnvContainer env.EnvContainer
-	RankQuery    string
-	Secrets      secret_manager.SecretManagerContainer
-	ModelConfig  common.ModelConfig
+	WorkspaceId        string
+	EnvContainer       env.EnvContainer
+	RankQuery          string
+	Secrets            secret_manager.SecretManagerContainer
+	ModelConfig        common.ModelConfig
+	AvailableProviders []common.ModelProviderPublicConfig
 }
 
 func (options RankedDirSignatureOutlineOptions) ActionParams() map[string]any {
