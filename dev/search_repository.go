@@ -12,6 +12,7 @@ import (
 
 	doublestar "github.com/bmatcuk/doublestar/v4"
 	"go.temporal.io/sdk/workflow"
+	tree_sitter "sidekick/coding/tree_sitter"
 )
 
 // escapeShellArg escapes a string for safe use as an argument in shell commands.
@@ -401,6 +402,256 @@ func (sCtx *searchContext) handleOutputLengthChecks(rawOutput string) (string, b
 	}
 
 	return rawOutput, false, nil
+}
+
+// getFilesMatchingPathGlob returns a list of files that match the input.PathGlob.
+// It uses rg to find files and then filters them using filterFilesByGlob.
+// This approach is consistent with how matchingFiles are determined in executeMainSearch when useManualGlobFiltering is true.
+func (sCtx *searchContext) getFilesMatchingPathGlob() ([]string, error) {
+	var rgFilesOutput env.EnvRunCommandOutput
+	rgFilesCmdParts := []string{"--files", "--hidden", "--no-messages"}
+	rgFilesCmdParts = append(rgFilesCmdParts, "--ignore-file", sCtx.coreIgnorePath)
+	if sCtx.sideIgnoreExists {
+		rgFilesCmdParts = append(rgFilesCmdParts, "--ignore-file", ".sideignore")
+	}
+	// Add PathGlob as a positional argument for rg to search within.
+	// It should not be shell-escaped here as it's passed directly in Args.
+	rgFilesCmdParts = append(rgFilesCmdParts, sCtx.input.PathGlob)
+
+	// Version guard for this rg call
+	vGetFilesRg := workflow.GetVersion(sCtx.ctx, "get-files-matching-path-glob-rg-v1", workflow.DefaultVersion, 1)
+	if vGetFilesRg >= 1 {
+		err := workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+			EnvContainer:       sCtx.envContainer,
+			RelativeWorkingDir: "./",
+			Command:            "rg",
+			Args:               rgFilesCmdParts,
+		}).Get(sCtx.ctx, &rgFilesOutput)
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute rg to list files for glob '%s': %w", sCtx.input.PathGlob, err)
+		}
+		// rg --files exits 1 if no files match, 0 if files match, 2 for error.
+		// We are interested in stderr only if ExitStatus is 2 (error).
+		// If ExitStatus is 0 or 1, stdout contains the file list (or is empty).
+		if rgFilesOutput.ExitStatus == 2 {
+			return nil, fmt.Errorf("rg command to list files for glob '%s' failed with exit status %d: %s", sCtx.input.PathGlob, rgFilesOutput.ExitStatus, rgFilesOutput.Stderr)
+		}
+	} else {
+		return nil, fmt.Errorf("getFilesMatchingPathGlob requires workflow version 'get-files-matching-path-glob-rg-v1' or newer")
+	}
+
+	rawFiles := strings.TrimSpace(rgFilesOutput.Stdout)
+	if rawFiles == "" {
+		return []string{}, nil
+	}
+	files := strings.Split(rawFiles, "\n")
+
+	// Filter using filterFilesByGlob to ensure consistent glob matching (e.g., basename matching)
+	// as per existing patterns in the codebase.
+	return filterFilesByGlob(files, sCtx.input.PathGlob)
+}
+
+// performGlobalFallbackSearch performs a global search for the input.SearchTerm,
+// ignoring input.PathGlob but respecting other settings like case sensitivity and ignore files.
+// It returns a list of file paths where the term was found.
+func (sCtx *searchContext) performGlobalFallbackSearch() ([]string, error) {
+	var rgOutput env.EnvRunCommandOutput
+
+	// Construct the rg command string for sh -c
+	// Base options for finding files with matches, respecting ignores, case, etc.
+	rgCmdOptions := "--files-with-matches --hidden --no-messages"
+	rgCmdOptions += " --ignore-file " + escapeShellArg(sCtx.coreIgnorePath)
+	if sCtx.sideIgnoreExists {
+		rgCmdOptions += " --ignore-file .sideignore"
+	}
+	if sCtx.input.CaseInsensitive {
+		rgCmdOptions += " --ignore-case"
+	}
+	if sCtx.input.FixedStrings {
+		rgCmdOptions += " --fixed-strings"
+	}
+
+	// The command string to be executed by sh -c
+	// sCtx.escapedSearchTerm is already shell-escaped.
+	cmdStr := fmt.Sprintf("rg %s %s", rgCmdOptions, sCtx.escapedSearchTerm)
+
+	vGlobalRg := workflow.GetVersion(sCtx.ctx, "global-fallback-search-rg-v1", workflow.DefaultVersion, 1)
+	if vGlobalRg >= 1 {
+		err := workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+			EnvContainer:       sCtx.envContainer,
+			RelativeWorkingDir: "./",
+			Command:            "sh",
+			Args:               []string{"-c", cmdStr},
+		}).Get(sCtx.ctx, &rgOutput)
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute global rg search activity: %w", err)
+		}
+		// rg --files-with-matches exits 0 if matches found, 1 if no matches, 2 for error.
+		if rgOutput.ExitStatus == 2 {
+			return nil, fmt.Errorf("global rg search command failed with exit status %d: %s", rgOutput.ExitStatus, rgOutput.Stderr)
+		}
+		// If ExitStatus is 1 (no matches), Stdout will be empty, which is handled below.
+	} else {
+		return nil, fmt.Errorf("performGlobalFallbackSearch requires workflow version 'global-fallback-search-rg-v1' or newer")
+	}
+
+	if strings.TrimSpace(rgOutput.Stdout) == "" {
+		return []string{}, nil
+	}
+
+	files := strings.Split(strings.TrimSpace(rgOutput.Stdout), "\n")
+	var resultFiles []string
+	for _, f := range files {
+		if strings.TrimSpace(f) != "" { // Ensure no empty strings from split
+			resultFiles = append(resultFiles, f)
+		}
+	}
+	return resultFiles, nil
+}
+
+// processGlobalFallbackResults processes files found by the global fallback search.
+// It may run git grep, parse results using ExtractSearchCodeBlocks, and truncate them if necessary.
+func (sCtx *searchContext) processGlobalFallbackResults(filesFoundGlobally []string) (string, error) {
+	numFilesFound := len(filesFoundGlobally)
+
+	if numFilesFound == 0 {
+		return "", nil
+	}
+
+	if numFilesFound > 3 && numFilesFound < 10 {
+		// Sort files for consistent output, though rg output is usually sorted.
+		// For this small number, direct join is fine as per requirements.
+		return fmt.Sprintf("\n%s", strings.Join(filesFoundGlobally, "\n")), nil
+	}
+
+	if numFilesFound >= 10 {
+		return fmt.Sprintf("\nSearch term found in %d files (ignoring original path glob). TODO: Show summary of these files.", numFilesFound), nil
+	}
+
+	// Case: 0 < numFilesFound <= 3. Execute git grep.
+	var gitGrepOutput env.EnvRunCommandOutput
+	escapedFiles := make([]string, len(filesFoundGlobally))
+	for i, f := range filesFoundGlobally {
+		escapedFiles[i] = escapeShellArg(f)
+	}
+
+	// sCtx.gitGrepArgs already includes context lines, --show-function, --heading, --line-number,
+	// and incorporates input.CaseInsensitive and input.FixedStrings.
+	// sCtx.escapedSearchTerm is already shell-escaped.
+	cmdStr := fmt.Sprintf("git grep %s %s -- %s", sCtx.gitGrepArgs, sCtx.escapedSearchTerm, strings.Join(escapedFiles, " "))
+
+	vGlobalGitGrep := workflow.GetVersion(sCtx.ctx, "global-fallback-git-grep-v1", workflow.DefaultVersion, 1)
+	if vGlobalGitGrep >= 1 {
+		err := workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+			EnvContainer:       sCtx.envContainer,
+			RelativeWorkingDir: "./",
+			Command:            "sh",
+			Args:               []string{"-c", cmdStr},
+		}).Get(sCtx.ctx, &gitGrepOutput)
+
+		if err != nil {
+			return "", fmt.Errorf("failed to execute git grep for global fallback: %w", err)
+		}
+		// git grep exits 0 if matches found, 1 if no matches. Exit status > 1 indicates an error.
+		if gitGrepOutput.ExitStatus > 1 {
+			return "", fmt.Errorf("git grep for global fallback failed with exit status %d: %s", gitGrepOutput.ExitStatus, gitGrepOutput.Stderr)
+		}
+	} else {
+		return "", fmt.Errorf("processGlobalFallbackResults git grep requires workflow version 'global-fallback-git-grep-v1' or newer")
+	}
+
+	batchGitGrepOutput := gitGrepOutput.Stdout
+	if strings.TrimSpace(batchGitGrepOutput) == "" {
+		// This could happen if git grep finds no matches, even if rg found the files.
+		// Provide a message indicating the files where the term was expected.
+		return fmt.Sprintf("\nTerm was reported in files: %s (but no specific context or matches were retrieved by git grep).", strings.Join(filesFoundGlobally, ", ")), nil
+	}
+
+	allCodeBlocks := tree_sitter.ExtractSearchCodeBlocks(batchGitGrepOutput)
+
+	fileStats := make(map[string]struct {
+		totalCodeChars int
+		numMatches     int
+	})
+	filesToTruncate := make(map[string]bool)
+
+	if len(allCodeBlocks) > 0 {
+		for _, block := range allCodeBlocks {
+			if block.FilePath == "" {
+				// This should ideally not happen with git grep --heading. Log if it does.
+				workflow.GetLogger(sCtx.ctx).Warn("ExtractSearchCodeBlocks produced a block with an empty FilePath from git grep output.", "blockHeader", block.HeaderContent)
+				continue
+			}
+			stats := fileStats[block.FilePath]
+			// Assuming block.Code contains the relevant lines of code for the match.
+			stats.totalCodeChars += len(block.Code)
+			stats.numMatches++
+			fileStats[block.FilePath] = stats
+		}
+
+		for filePath, stats := range fileStats {
+			if stats.totalCodeChars > 1000 {
+				filesToTruncate[filePath] = true
+			}
+		}
+	}
+
+	if len(filesToTruncate) == 0 {
+		return batchGitGrepOutput, nil // No truncation needed
+	}
+
+	// This TODO comment is added as per requirements when truncation logic is active.
+	// TODO: If results for a file are truncated (>1000 chars), consider re-searching that file with ContextLines = 0 before showing the summary message.
+
+	var resultSegments []string
+	// git grep output with --heading separates file sections with "\n--\n".
+	// If only one file, there's no "--" separator.
+	var segments []string
+	if strings.Contains(batchGitGrepOutput, "\n--\n") {
+		segments = strings.Split(batchGitGrepOutput, "\n--\n")
+	} else {
+		segments = []string{batchGitGrepOutput} // Treat as a single segment
+	}
+
+	anyTruncationPerformed := false
+	for _, segment := range segments {
+		trimmedSegment := strings.TrimSpace(segment)
+		if trimmedSegment == "" {
+			continue
+		}
+
+		// Extract filename from the first line of the segment (due to --heading).
+		firstNewlineIdx := strings.Index(trimmedSegment, "\n")
+		var filePathFromSegment string
+		if firstNewlineIdx == -1 { // Segment might be just the filename (e.g. empty file or no actual matches after header)
+			filePathFromSegment = trimmedSegment
+		} else {
+			filePathFromSegment = trimmedSegment[:firstNewlineIdx]
+		}
+
+		// Ensure filePathFromSegment is clean and matches keys in fileStats (relative paths)
+		// (fileStats keys are from CodeBlock.FilePath, which should be relative)
+
+		stats, statsOk := fileStats[filePathFromSegment]
+		if statsOk && filesToTruncate[filePathFromSegment] {
+			resultSegments = append(resultSegments, fmt.Sprintf("%s: %d matches (results truncated due to length)", filePathFromSegment, stats.numMatches))
+			anyTruncationPerformed = true
+		} else {
+			// If file not in fileStats (e.g., header only, no blocks parsed by ExtractSearchCodeBlocks),
+			// or not marked for truncation, keep its original segment.
+			resultSegments = append(resultSegments, segment) // Use the original, non-trimmed segment
+		}
+	}
+
+	if !anyTruncationPerformed && len(filesToTruncate) > 0 {
+		workflow.GetLogger(sCtx.ctx).Warn("Truncation was planned based on fileStats, but no output segments were actually replaced. Check segment parsing and FilePath matching.", "filesToTruncate", filesToTruncate)
+		// Fallback to returning original output if reconstruction is problematic, or decide on a different strategy.
+		// For now, the logic proceeds, and if resultSegments is empty or malformed, it will be joined as such.
+	}
+
+	return strings.Join(resultSegments, "\n--\n"), nil
 }
 
 // SearchRepository searches the repository for the given search term, ignoring matching .gitingore or .sideignore
