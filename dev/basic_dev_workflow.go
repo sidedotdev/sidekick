@@ -11,7 +11,6 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
-	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/utils"
 )
@@ -125,7 +124,7 @@ func codingSubflow(dCtx DevContext, requirements string, envType env.EnvType, st
 		if subflowName == fmt.Sprintf("%s (1)", overallName) {
 			subflowName = overallName
 		}
-		dCtx.FlowScope = &flow_action.FlowScope{SubflowName: subflowName}
+		dCtx.FlowScope.SubflowName = subflowName
 
 		// TODO /gen use models slice and modelIndex and modelAttemptCount just like
 		// in completeDevStep to switch models when ErrMaxIterationsReached
