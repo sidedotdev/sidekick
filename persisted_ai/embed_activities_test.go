@@ -24,6 +24,9 @@ func TestCachedEmbedActivity_AllCached(t *testing.T) {
 		ModelConfig: common.ModelConfig{Model: "ada2", Provider: "mock"},
 		ContentType: "test_type",
 		Subkeys:     []string{"1"},
+		AvailableProviders: []common.ModelProviderPublicConfig{
+			{Name: "mock", Type: "mock"},
+		},
 	}
 
 	expectedKeys := []string{"embedding:ada2:test_type:1"}
@@ -57,6 +60,9 @@ func TestCachedEmbedActivity_NoKeys(t *testing.T) {
 		ModelConfig: common.ModelConfig{Model: "ada2", Provider: "mock"},
 		ContentType: "test_type",
 		Subkeys:     []string{},
+		AvailableProviders: []common.ModelProviderPublicConfig{
+			{Name: "mock", Type: "mock"},
+		},
 	}
 
 	err := oa.CachedEmbedActivity(context.Background(), options)
@@ -77,6 +83,9 @@ func TestCachedEmbedActivity_MissedCache(t *testing.T) {
 		ModelConfig: common.ModelConfig{Model: "ada2", Provider: "mock"},
 		ContentType: "test_type",
 		Subkeys:     []string{"1", "2", "3"},
+		AvailableProviders: []common.ModelProviderPublicConfig{
+			{Name: "mock", Type: "mock"},
+		},
 	}
 
 	// have all content keys

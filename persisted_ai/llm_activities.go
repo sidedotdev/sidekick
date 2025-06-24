@@ -15,9 +15,10 @@ import (
 
 type ChatStreamOptions struct {
 	llm.ToolChatOptions
-	WorkspaceId  string
-	FlowId       string
-	FlowActionId string
+	WorkspaceId        string
+	FlowId             string
+	FlowActionId       string
+	AvailableProviders []common.ModelProviderPublicConfig
 }
 
 type LlmActivities struct {
@@ -74,7 +75,7 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 		}
 	}()
 
-	toolChatter, err := getToolChatter(options.Params.ModelConfig)
+	toolChatter, err := getToolChatter(options.ToolChatOptions.Params.ModelConfig, options.AvailableProviders)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to get tool chatter")
 		return nil, err
@@ -158,65 +159,59 @@ Sidekick: got an unexpected empty response. Retrying with modified prompt...
 	return retryResponse, nil
 }
 
-func getToolChatter(config common.ModelConfig) (llm.ToolChatter, error) {
-	providerType, err := getProviderType(config.Provider)
+func getToolChatter(modelCfg common.ModelConfig, availableProviders []common.ModelProviderPublicConfig) (llm.ToolChatter, error) {
+	var selectedProviderConfig *common.ModelProviderPublicConfig
+	for i := range availableProviders {
+		if availableProviders[i].Name == modelCfg.Provider {
+			selectedProviderConfig = &availableProviders[i]
+			break
+		}
+	}
+
+	if selectedProviderConfig == nil {
+		return nil, fmt.Errorf("configuration not found for provider named: %s", modelCfg.Provider)
+	}
+
+	providerType, err := getProviderType(selectedProviderConfig.Type)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to determine provider type for %s (type %s): %w", selectedProviderConfig.Name, selectedProviderConfig.Type, err)
 	}
 
 	switch providerType {
 	case llm.OpenaiToolChatProviderType:
 		return llm.OpenaiToolChat{}, nil
 	case llm.OpenaiCompatibleToolChatProviderType:
-		localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
-		if err != nil {
-			return nil, fmt.Errorf("failed to load local config: %w", err)
-		}
-		for _, p := range localConfig.Providers {
-			if p.Type == string(providerType) {
-				return llm.OpenaiToolChat{
-					BaseURL:      p.BaseURL,
-					DefaultModel: p.DefaultLLM,
-				}, nil
-			}
-		}
-		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
+		return llm.OpenaiToolChat{
+			BaseURL:      selectedProviderConfig.BaseURL,
+			DefaultModel: selectedProviderConfig.DefaultLLM,
+		}, nil
 	case llm.AnthropicToolChatProviderType:
 		return llm.AnthropicToolChat{}, nil
 	case llm.GoogleToolChatProviderType:
 		return llm.GoogleToolChat{}, nil
 	case llm.UnspecifiedToolChatProviderType:
-		return nil, errors.New("tool chat provider was not specified")
-
+		return nil, errors.New("tool chat provider was not specified or is invalid")
 	default:
 		return nil, fmt.Errorf("unsupported tool chat provider type: %s", providerType)
 	}
 }
 
-func getProviderType(s string) (llm.ToolChatProviderType, error) {
-
-	switch s {
+// getProviderType converts a provider type string to the llm.ToolChatProviderType enum.
+func getProviderType(providerTypeStr string) (llm.ToolChatProviderType, error) {
+	switch providerTypeStr {
 	case "openai":
 		return llm.OpenaiToolChatProviderType, nil
+	case "openai_compatible":
+		return llm.OpenaiCompatibleToolChatProviderType, nil
 	case "anthropic":
 		return llm.AnthropicToolChatProviderType, nil
 	case "google":
 		return llm.GoogleToolChatProviderType, nil
-	case "mock":
+	case "mock": // "mock" is a valid type string for llm.ToolChatProviderType.
 		return llm.ToolChatProviderType("mock"), nil
+	default:
+		// This case should ideally not be reached if availableProviders is correctly populated
+		// and validated upstream.
+		return llm.UnspecifiedToolChatProviderType, fmt.Errorf("unknown or unsupported provider type string: %s", providerTypeStr)
 	}
-
-	// TODO first try workspace config to determine provider type, then fallback to local config
-	localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
-	if err != nil {
-		return llm.UnspecifiedToolChatProviderType, fmt.Errorf("failed to load local config: %w", err)
-	}
-
-	for _, provider := range localConfig.Providers {
-		if provider.Name == s {
-			return llm.ToolChatProviderType(provider.Type), nil
-		}
-	}
-
-	return llm.UnspecifiedToolChatProviderType, fmt.Errorf("unknown provider: %s", s)
 }

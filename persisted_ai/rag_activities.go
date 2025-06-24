@@ -27,11 +27,12 @@ type RankedDirSignatureOutlineOptions struct {
 }
 
 type RankedViaEmbeddingOptions struct {
-	WorkspaceId  string
-	EnvContainer env.EnvContainer
-	RankQuery    string
-	Secrets      secret_manager.SecretManagerContainer
-	ModelConfig  common.ModelConfig
+	WorkspaceId        string
+	EnvContainer       env.EnvContainer
+	RankQuery          string
+	Secrets            secret_manager.SecretManagerContainer
+	ModelConfig        common.ModelConfig
+	AvailableProviders []common.ModelProviderPublicConfig
 }
 
 func (options RankedDirSignatureOutlineOptions) ActionParams() map[string]any {
@@ -53,7 +54,7 @@ func (ra *RagActivities) RankedDirSignatureOutline(options RankedDirSignatureOut
 	}
 
 	rankedFileSignatureSubkeys, err := ra.RankedSubkeys(RankedSubkeysOptions{
-		RankedViaEmbeddingOptions: options.RankedViaEmbeddingOptions,
+		RankedViaEmbeddingOptions: options.RankedViaEmbeddingOptions, // This includes AvailableProviders
 		ContentType:               tree_sitter.ContentTypeFileSignature,
 		Subkeys:                   fileSignatureSubkeys,
 	})
@@ -61,7 +62,9 @@ func (ra *RagActivities) RankedDirSignatureOutline(options RankedDirSignatureOut
 		return "", err
 	}
 
-	rankedDirChunkSubkeys, err := ra.RankedDirChunkSubkeys(RankedDirChunkSubkeysOptions{options.RankedViaEmbeddingOptions})
+	rankedDirChunkSubkeys, err := ra.RankedDirChunkSubkeys(RankedDirChunkSubkeysOptions{
+		RankedViaEmbeddingOptions: options.RankedViaEmbeddingOptions, // This includes AvailableProviders
+	})
 	if err != nil {
 		return "", err
 	}
@@ -84,11 +87,12 @@ type RankedSubkeysOptions struct {
 func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, error) {
 	ea := EmbedActivities{Storage: ra.DatabaseAccessor}
 	err := ea.CachedEmbedActivity(context.Background(), CachedEmbedActivityOptions{
-		Secrets:     options.Secrets,
-		WorkspaceId: options.WorkspaceId,
-		ModelConfig: options.ModelConfig,
-		ContentType: options.ContentType,
-		Subkeys:     options.Subkeys,
+		Secrets:            options.Secrets,
+		WorkspaceId:        options.WorkspaceId,
+		ModelConfig:        options.ModelConfig,
+		ContentType:        options.ContentType,
+		Subkeys:            options.Subkeys,
+		AvailableProviders: options.AvailableProviders,
 	})
 	if err != nil {
 		return []string{}, err
@@ -96,7 +100,7 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 
 	va := VectorActivities{DatabaseAccessor: ra.DatabaseAccessor}
 
-	embedder, err := getEmbedder(options.ModelConfig)
+	embedder, err := getEmbedder(options.ModelConfig, options.AvailableProviders)
 	if err != nil {
 		return []string{}, err
 	}
@@ -121,34 +125,45 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 	})
 }
 
-func getEmbedder(config common.ModelConfig) (embedding.Embedder, error) {
-	var embedder embedding.Embedder
-	providerType, err := getProviderType(config.Provider)
-	if err != nil {
-		return nil, err
+func getEmbedder(modelCfg common.ModelConfig, availableProviders []common.ModelProviderPublicConfig) (embedding.Embedder, error) {
+	var selectedProviderConfig *common.ModelProviderPublicConfig
+	for i := range availableProviders {
+		// Make a copy of the provider to avoid modifying the original slice
+		provider := availableProviders[i]
+		if provider.Name == modelCfg.Provider {
+			selectedProviderConfig = &provider
+			break
+		}
 	}
+
+	if selectedProviderConfig == nil {
+		return nil, fmt.Errorf("configuration not found for provider named: %s", modelCfg.Provider)
+	}
+
+	// getProviderType is in the persisted_ai package (llm_activities.go)
+	providerType, err := getProviderType(selectedProviderConfig.Type)
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine provider type for %s (type %s): %w", selectedProviderConfig.Name, selectedProviderConfig.Type, err)
+	}
+
+	var embedder embedding.Embedder
 	switch providerType {
 	case llm.OpenaiToolChatProviderType:
 		embedder = &embedding.OpenAIEmbedder{}
 	case llm.GoogleToolChatProviderType:
 		embedder = &embedding.GoogleEmbedder{}
 	case llm.OpenaiCompatibleToolChatProviderType:
-		localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
-		if err != nil {
-			return nil, fmt.Errorf("failed to load local config: %w", err)
+		embedder = &embedding.OpenAIEmbedder{
+			BaseURL: selectedProviderConfig.BaseURL,
+			// Note: Default embedding model for openai_compatible is not handled here,
+			// it's expected to be part of ModelConfig if needed, or handled by OpenAIEmbedder's logic.
+			// FIXME: it doesn't have to be this way though, let's mirror llm.OpenaiToolChat here instead.
 		}
-		for _, p := range localConfig.Providers {
-			if p.Type == string(providerType) {
-				return &embedding.OpenAIEmbedder{
-					BaseURL: p.BaseURL,
-				}, nil
-			}
-		}
-		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
-	case llm.ToolChatProviderType("mock"):
+	case llm.ToolChatProviderType("mock"): // Assuming "mock" is a valid type string for llm.ToolChatProviderType
 		return &embedding.MockEmbedder{}, nil
+	// Anthropic does not have an embedder, so it's not listed here.
 	default:
-		return nil, fmt.Errorf("unsupported provider type %s for provider %s", providerType, config.Provider)
+		return nil, fmt.Errorf("unsupported provider type %s for embedding with provider %s (model %s)", providerType, modelCfg.Provider, modelCfg.Model)
 	}
 	return embedder, nil
 }
@@ -305,7 +320,7 @@ func (ra *RagActivities) RankedDirChunkSubkeys(options RankedDirChunkSubkeysOpti
 
 	dirChunkSubkeys := hashes
 	return ra.RankedSubkeys(RankedSubkeysOptions{
-		RankedViaEmbeddingOptions: options.RankedViaEmbeddingOptions,
+		RankedViaEmbeddingOptions: options.RankedViaEmbeddingOptions, // This includes AvailableProviders
 		ContentType:               tree_sitter.ContentTypeDirChunk,
 		Subkeys:                   dirChunkSubkeys,
 	})
