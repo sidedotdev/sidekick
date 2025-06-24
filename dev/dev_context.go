@@ -6,8 +6,10 @@ import (
 	"os"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/embedding"
 	"sidekick/env"
 	"sidekick/flow_action"
+	"sidekick/llm"
 	"sidekick/secret_manager"
 	"sidekick/srv"
 	"sidekick/utils"
@@ -95,10 +97,71 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		EnvContainer: &envContainer,
 		Secrets: &secret_manager.SecretManagerContainer{
 			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+				secret_manager.EnvSecretManager{},
 				secret_manager.KeyringSecretManager{},
 				secret_manager.LocalConfigSecretManager{},
 			}),
 		},
+	}
+
+	// Retrieve API keys and relevant environment variables
+	openaiAPIKey, _ := eCtx.Secrets.GetSecret(llm.OpenaiApiKeySecretName)
+	anthropicAPIKey, _ := eCtx.Secrets.GetSecret("ANTHROPIC_API_KEY") // Assuming ANTHROPIC_API_KEY is the secret name
+	googleAPIKey, _ := eCtx.Secrets.GetSecret(llm.GoogleApiKeySecretName)
+
+	openaiAPIHost := os.Getenv("OPENAI_API_HOST")
+	sideDefaultLLM := os.Getenv("SIDE_DEFAULT_LLM")
+	sideDefaultEmbedding := os.Getenv("SIDE_DEFAULT_EMBEDDING")
+
+	// Determine Environment Variable Fallback Defaults (Tier 1)
+	var envLLMDefaults []common.ModelConfig
+	if anthropicAPIKey != "" {
+		model := llm.AnthropicDefaultModel
+		if sideDefaultLLM != "" {
+			model = sideDefaultLLM
+		}
+		envLLMDefaults = []common.ModelConfig{{Provider: string(common.AnthropicToolChatProviderType), Model: model}}
+	} else if googleAPIKey != "" {
+		model := llm.GoogleDefaultModel
+		if sideDefaultLLM != "" {
+			model = sideDefaultLLM
+		}
+		envLLMDefaults = []common.ModelConfig{{Provider: string(common.GoogleToolChatProviderType), Model: model}}
+	} else if openaiAPIKey != "" {
+		if openaiAPIHost != "" { // openai_compatible
+			if sideDefaultLLM != "" {
+				envLLMDefaults = []common.ModelConfig{{Provider: string(common.OpenaiCompatibleToolChatProviderType), Model: sideDefaultLLM}}
+			}
+			// If SIDE_DEFAULT_LLM is not set for openai_compatible, no default from env vars.
+		} else { // openai
+			model := llm.OpenaiDefaultModel
+			if sideDefaultLLM != "" {
+				model = sideDefaultLLM
+			}
+			envLLMDefaults = []common.ModelConfig{{Provider: string(common.OpenaiToolChatProviderType), Model: model}}
+		}
+	}
+
+	var envEmbeddingDefaults []common.ModelConfig
+	if googleAPIKey != "" {
+		model := embedding.GoogleDefaultModel
+		if sideDefaultEmbedding != "" {
+			model = sideDefaultEmbedding
+		}
+		envEmbeddingDefaults = []common.ModelConfig{{Provider: string(common.GoogleToolChatProviderType), Model: model}}
+	} else if openaiAPIKey != "" {
+		if openaiAPIHost != "" { // openai_compatible
+			if sideDefaultEmbedding != "" {
+				envEmbeddingDefaults = []common.ModelConfig{{Provider: string(common.OpenaiCompatibleToolChatProviderType), Model: sideDefaultEmbedding}}
+			}
+			// If SIDE_DEFAULT_EMBEDDING is not set for openai_compatible, no default from env vars.
+		} else { // openai
+			model := embedding.OpenaiDefaultModel
+			if sideDefaultEmbedding != "" {
+				model = sideDefaultEmbedding
+			}
+			envEmbeddingDefaults = []common.ModelConfig{{Provider: string(common.OpenaiToolChatProviderType), Model: model}}
+		}
 	}
 
 	// Get local configuration first
@@ -116,22 +179,114 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		return DevContext{}, fmt.Errorf("failed to get workspace config: %v", err)
 	}
 
-	// Merge configurations - workspace config overrides local config if present
+	// Initialize final configurations starting with local config values
 	finalLLMConfig := localConfig.LLM
 	finalEmbeddingConfig := localConfig.Embedding
 
+	// Apply precedence for Defaults: Env Fallback -> Local Config -> Workspace Config
+	// Start with environment fallback defaults
+	if len(envLLMDefaults) > 0 {
+		finalLLMConfig.Defaults = envLLMDefaults
+	}
+	if len(envEmbeddingDefaults) > 0 {
+		finalEmbeddingConfig.Defaults = envEmbeddingDefaults
+	}
+
+	// Local config overrides environment fallback if defaults are present
+	if len(localConfig.LLM.Defaults) > 0 {
+		finalLLMConfig.Defaults = localConfig.LLM.Defaults
+	}
+	if len(localConfig.Embedding.Defaults) > 0 {
+		finalEmbeddingConfig.Defaults = localConfig.Embedding.Defaults
+	}
+
+	// Workspace config overrides local and environment fallback if defaults are present
 	if len(workspaceConfig.LLM.Defaults) > 0 {
 		finalLLMConfig.Defaults = workspaceConfig.LLM.Defaults
-	}
-	for key, models := range workspaceConfig.LLM.UseCaseConfigs {
-		finalLLMConfig.UseCaseConfigs[key] = models
 	}
 	if len(workspaceConfig.Embedding.Defaults) > 0 {
 		finalEmbeddingConfig.Defaults = workspaceConfig.Embedding.Defaults
 	}
+
+	// Merge UseCaseConfigs from workspace (workspace overrides local)
+	if finalLLMConfig.UseCaseConfigs == nil && len(workspaceConfig.LLM.UseCaseConfigs) > 0 {
+		finalLLMConfig.UseCaseConfigs = make(map[string][]common.ModelConfig)
+	}
+	for key, models := range workspaceConfig.LLM.UseCaseConfigs {
+		finalLLMConfig.UseCaseConfigs[key] = models
+	}
+	if finalEmbeddingConfig.UseCaseConfigs == nil && len(workspaceConfig.Embedding.UseCaseConfigs) > 0 {
+		finalEmbeddingConfig.UseCaseConfigs = make(map[string][]common.ModelConfig)
+	}
 	for key, models := range workspaceConfig.Embedding.UseCaseConfigs {
 		finalEmbeddingConfig.UseCaseConfigs[key] = models
 	}
+
+	// Derive ModelProviderPublicConfig from environment variables
+	var envModelProviders []common.ModelProviderPublicConfig
+	if openaiAPIKey != "" {
+		if openaiAPIHost != "" {
+			providerConf := common.ModelProviderPublicConfig{
+				Name:    string(common.OpenaiCompatibleToolChatProviderType),
+				Type:    string(common.OpenaiCompatibleToolChatProviderType),
+				BaseURL: openaiAPIHost,
+			}
+			if sideDefaultLLM != "" {
+				providerConf.DefaultLLM = sideDefaultLLM
+			}
+			if smallModel, ok := common.SmallModels[common.OpenaiCompatibleToolChatProviderType]; ok {
+				providerConf.SmallLLM = smallModel
+			}
+			envModelProviders = append(envModelProviders, providerConf)
+		} else {
+			providerConf := common.ModelProviderPublicConfig{
+				Name:       string(common.OpenaiToolChatProviderType),
+				Type:       string(common.OpenaiToolChatProviderType),
+				DefaultLLM: llm.OpenaiDefaultModel,
+			}
+			if smallModel, ok := common.SmallModels[common.OpenaiToolChatProviderType]; ok {
+				providerConf.SmallLLM = smallModel
+			}
+			envModelProviders = append(envModelProviders, providerConf)
+		}
+	}
+	if anthropicAPIKey != "" {
+		providerConf := common.ModelProviderPublicConfig{
+			Name:       string(common.AnthropicToolChatProviderType),
+			Type:       string(common.AnthropicToolChatProviderType),
+			DefaultLLM: llm.AnthropicDefaultModel,
+		}
+		if smallModel, ok := common.SmallModels[common.AnthropicToolChatProviderType]; ok {
+			providerConf.SmallLLM = smallModel
+		}
+		envModelProviders = append(envModelProviders, providerConf)
+	}
+	if googleAPIKey != "" {
+		providerConf := common.ModelProviderPublicConfig{
+			Name:       string(common.GoogleToolChatProviderType),
+			Type:       string(common.GoogleToolChatProviderType),
+			DefaultLLM: llm.GoogleDefaultModel,
+		}
+		if smallModel, ok := common.SmallModels[common.GoogleToolChatProviderType]; ok {
+			providerConf.SmallLLM = smallModel
+		}
+		envModelProviders = append(envModelProviders, providerConf)
+	}
+
+	// Construct devCtx.Providers: localConfig.Providers take precedence by Name
+	mergedProviders := make([]common.ModelProviderPublicConfig, 0, len(localConfig.Providers)+len(envModelProviders))
+	localProviderNames := make(map[string]struct{})
+	for _, p := range localConfig.Providers {
+		mergedProviders = append(mergedProviders, p)
+		localProviderNames[p.Name] = struct{}{}
+	}
+
+	for _, envP := range envModelProviders {
+		if _, exists := localProviderNames[envP.Name]; !exists {
+			mergedProviders = append(mergedProviders, envP)
+		}
+	}
+
 	repoConfig, err := GetRepoConfig(eCtx)
 	if err != nil {
 		return DevContext{}, fmt.Errorf("failed to get coding config: %v", err)
@@ -149,16 +304,16 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		}
 	}
 
-	devCtx := DevContext{
+	tdevCtx := DevContext{
 		ExecContext:     eCtx,
 		Worktree:        worktree,
 		RepoConfig:      repoConfig,
-		Providers:       localConfig.Providers, // TODO merge with workspace providers
+		Providers:       mergedProviders, // TODO merge with workspace providers as a separate step
 		LLMConfig:       finalLLMConfig,
 		EmbeddingConfig: finalEmbeddingConfig,
 	}
 
-	return devCtx, nil
+	return tdevCtx, nil
 }
 
 type DevActionContext struct {
