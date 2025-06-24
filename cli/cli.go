@@ -138,59 +138,7 @@ func setupAndRunInteractiveCli(args []string) error {
 					return nil
 				},
 			},
-			{
-				Name:      "task",
-				Usage:     "Create and manage a task (e.g., side task \"fix the error in my tests\")",
-				ArgsUsage: "<task description>",
-				Flags: []cli.Flag{
-					&cli.BoolFlag{Name: "disable-human-in-the-loop", Usage: "Disable human-in-the-loop prompts"},
-					&cli.BoolFlag{Name: "async", Usage: "Run task asynchronously and exit immediately"},
-					&cli.StringFlag{Name: "flow", Value: "basic_dev", Usage: "Specify flow type (e.g., basic_dev, planned_dev)"},
-					&cli.BoolFlag{Name: "P", Usage: "Shorthand for --flow planned_dev"},
-					&cli.StringFlag{Name: "flow-options", Value: `{"requirements": true}`, Usage: "JSON string for flow options"},
-					&cli.StringSliceFlag{Name: "flow-option", Aliases: []string{"o"}, Usage: "Add flow option (key=value), can be specified multiple times"},
-					&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"nr"}, Usage: "Shorthand to set requirements to false in flow options"},
-				},
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					taskDescription := cmd.Args().First()
-					if taskDescription == "" {
-						// Show help if no args and not asking for help explicitly for task command
-						if !cmd.IsSet("help") {
-							_ = cli.ShowSubcommandHelp(cmd) // Show help for the current subcommand (task)
-							return cli.Exit("Task description is required.", 1)
-						}
-						return nil // Was 'task --help' or similar
-					}
-
-					fmt.Printf("Task command invoked for: %q\n", taskDescription)
-					fmt.Printf("  Disable Human in the Loop: %t\n", cmd.Bool("disable-human-in-the-loop"))
-					fmt.Printf("  Async: %t\n", cmd.Bool("async"))
-
-					flowType := cmd.String("flow")
-					if cmd.Bool("P") {
-						flowType = "planned_dev"
-						fmt.Println("  (Flow type overridden to 'planned_dev' by -P flag)")
-					}
-					fmt.Printf("  Flow Type: %s\n", flowType)
-
-					rawFlowOptions := cmd.String("flow-options")
-					fmt.Printf("  Flow Options (raw JSON): %s\n", rawFlowOptions)
-
-					if cmd.Bool("no-requirements") {
-						fmt.Println("  (--no-requirements specified: will set 'requirements' to false in flow options)")
-						// Actual modification of flowOptions JSON will be in a later step
-					}
-
-					flowOptionOverrides := cmd.StringSlice("flow-option")
-					if len(flowOptionOverrides) > 0 {
-						fmt.Printf("  Flow Option Overrides (key=value): %v\n", flowOptionOverrides)
-						// Actual parsing and application of these overrides will be in a later step
-					}
-
-					fmt.Println("\n[INFO] This is a placeholder. Task creation logic will be implemented later.")
-					return nil
-				},
-			},
+			NewTaskCommand(),
 		},
 	}
 	return cliApp.Run(context.Background(), args)
