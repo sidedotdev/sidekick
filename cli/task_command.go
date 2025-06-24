@@ -14,7 +14,9 @@ import (
 	"bytes"         // New import
 	"encoding/json" // New import
 	"net/http"      // New import
+	"os/signal"     // New import
 	"strings"       // New import
+	"syscall"       // New import
 
 	"sidekick/common" // New import
 	"sidekick/domain" // New import
@@ -104,6 +106,68 @@ func createTaskAPI(workspaceID string, payload []byte) (map[string]interface{}, 
 		return nil, fmt.Errorf("failed to decode API response for create task (status %s): %w. Response body fragment: %s", resp.Status, err, string(bodyBytes))
 	}
 	return responseData, nil
+}
+
+// getTaskAPI fetches the details of a specific task from the Sidekick server.
+func getTaskAPI(workspaceID string, taskID string) (map[string]interface{}, error) {
+	serverBaseURL := fmt.Sprintf("http://localhost:%d", common.GetServerPort())
+	reqURL := fmt.Sprintf("%s/api/v1/workspaces/%s/tasks/%s", serverBaseURL, workspaceID, taskID)
+
+	resp, err := http.Get(reqURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send get task request to API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read the entire body first to ensure it's available for error reporting
+	bodyBytes, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("failed to read response body from get task request (status %s): %w", resp.Status, readErr)
+	}
+
+	if resp.StatusCode != http.StatusOK { // Expect 200 OK
+		return nil, fmt.Errorf("API request to get task failed with status %s: %s", resp.Status, string(bodyBytes))
+	}
+
+	var responseData map[string]interface{}
+	// Now decode from the buffered bodyBytes
+	if err := json.Unmarshal(bodyBytes, &responseData); err != nil {
+		return nil, fmt.Errorf("failed to decode API response for get task (status %s): %w. Full response body: %s", resp.Status, err, string(bodyBytes))
+	}
+	return responseData, nil
+}
+
+// cancelTaskAPI sends a request to the Sidekick server to cancel a task.
+func cancelTaskAPI(workspaceID string, taskID string) error {
+	serverBaseURL := fmt.Sprintf("http://localhost:%d", common.GetServerPort())
+	reqURL := fmt.Sprintf("%s/api/v1/workspaces/%s/tasks/%s/cancel", serverBaseURL, workspaceID, taskID)
+
+	req, err := http.NewRequest("POST", reqURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create cancel task request: %w", err)
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send cancel task request to API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK { // Expect 200 OK for cancellation
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("API request to cancel task failed with status %s and could not read response body: %w", resp.Status, readErr)
+		}
+		var errorResponse struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(bodyBytes, &errorResponse) == nil && errorResponse.Error != "" {
+			return fmt.Errorf("API request to cancel task failed with status %s: %s", resp.Status, errorResponse.Error)
+		}
+		return fmt.Errorf("API request to cancel task failed with status %s: %s", resp.Status, string(bodyBytes))
+	}
+	return nil
 }
 
 // NewTaskCommand creates and returns the definition for the "task" CLI subcommand.
@@ -222,12 +286,71 @@ func NewTaskCommand() *cli.Command {
 			// For now, we just print the ID.
 			if cmd.Bool("async") {
 				fmt.Println("Task submitted in async mode. CLI will now exit.")
+				return nil
 			} else {
-				fmt.Println("Task submitted in sync mode. CLI will wait for completion (not yet implemented).")
-				// Placeholder for sync logic
-			}
+				// Synchronous mode
+				fmt.Printf("Task submitted in sync mode. Waiting for completion (Task ID: %s). Press Ctrl+C to cancel.\n", taskID)
 
-			return nil
+				sigChan := make(chan os.Signal, 1)
+				signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+				doneChan := make(chan string, 1) // Final status string
+				errChan := make(chan error, 1)   // Errors from polling
+
+				go func() {
+					for {
+						taskData, err := getTaskAPI(workspace.Id, taskID)
+						if err != nil {
+							// Log polling error and retry, rather than immediately failing the command
+							fmt.Fprintf(os.Stderr, "Error polling task status: %v. Retrying in 5 seconds...\n", err)
+							time.Sleep(5 * time.Second)
+							continue
+						}
+
+						status, ok := taskData["status"].(string)
+						if !ok {
+							errChan <- fmt.Errorf("task status not found or not a string in API response: %v", taskData)
+							return
+						}
+
+						// Optional: print status updates, can be refined later with a spinner
+						// fmt.Printf("Current task status: %s\\n", status)
+
+						switch status {
+						case string(domain.TaskStatusComplete), string(domain.TaskStatusFailed), string(domain.TaskStatusCanceled):
+							doneChan <- status
+							return
+						case string(domain.TaskStatusToDo), string(domain.TaskStatusInProgress), string(domain.TaskStatusBlocked):
+							// Task is still ongoing, continue polling
+							time.Sleep(2 * time.Second) // Polling interval
+						default:
+							errChan <- fmt.Errorf("unknown task status received: %s", status)
+							return
+						}
+					}
+				}()
+
+				select {
+				case sig := <-sigChan:
+					fmt.Printf("\nSignal %v received. Attempting to cancel task %s...\n", sig, taskID)
+					cancelErr := cancelTaskAPI(workspace.Id, taskID)
+					if cancelErr != nil {
+						// Log cancellation error, but still exit as user intended to stop.
+						fmt.Fprintf(os.Stderr, "Failed to cancel task: %v\n", cancelErr)
+						return cli.Exit("Task cancellation failed.", 1)
+					}
+					fmt.Println("Task cancellation requested successfully.")
+					return nil // Exit after cancellation attempt
+				case finalStatus := <-doneChan:
+					fmt.Printf("Task %s finished with status: %s\n", taskID, finalStatus)
+					if finalStatus == string(domain.TaskStatusFailed) {
+						return cli.Exit(fmt.Sprintf("Task %s failed.", taskID), 1)
+					}
+					return nil
+				case err := <-errChan:
+					return cli.Exit(fmt.Sprintf("Error during task monitoring: %v", err), 1)
+				}
+			}
 		},
 	}
 }
