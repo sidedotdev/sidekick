@@ -13,7 +13,9 @@ import (
 
 	"bytes"         // New import
 	"encoding/json" // New import
+	"net"           // New import for net.Error
 	"net/http"      // New import
+	"net/url"       // New import
 	"os/signal"     // New import
 	"strings"       // New import
 	"syscall"       // New import
@@ -21,7 +23,8 @@ import (
 	"sidekick/common" // New import
 	"sidekick/domain" // New import
 
-	"github.com/segmentio/ksuid" // New import
+	"github.com/gorilla/websocket" // New import
+	"github.com/segmentio/ksuid"   // New import
 	"github.com/urfave/cli/v3"
 )
 
@@ -135,6 +138,106 @@ func getTaskAPI(workspaceID string, taskID string) (map[string]interface{}, erro
 		return nil, fmt.Errorf("failed to decode API response for get task (status %s): %w. Full response body: %s", resp.Status, err, string(bodyBytes))
 	}
 	return responseData, nil
+}
+
+// streamTaskProgress connects to the WebSocket endpoint to stream flow action changes for a task.
+// It uses flowID to identify the specific flow to stream actions from.
+func streamTaskProgress(ctx context.Context, workspaceID, flowID, taskID string) {
+	serverPort := common.GetServerPort()
+	// Path: /ws/v1/workspaces/:workspaceId/flows/:flowId/action_changes_ws
+	u := url.URL{Scheme: "ws", Host: fmt.Sprintf("localhost:%d", serverPort), Path: fmt.Sprintf("/ws/v1/workspaces/%s/flows/%s/action_changes_ws", workspaceID, flowID)}
+	fmt.Printf("Attempting to stream progress for task %s (flow: %s) from %s\n", taskID, flowID, u.String())
+
+	conn, resp, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	if err != nil {
+		errMsg := fmt.Sprintf("Failed to connect to WebSocket for task progress: %v", err)
+		if resp != nil {
+			bodyBytes, readErr := io.ReadAll(resp.Body)
+			if readErr == nil {
+				errMsg = fmt.Sprintf("Failed to connect to WebSocket for task progress (status %s): %v. Response body: %s", resp.Status, err, string(bodyBytes))
+			}
+		}
+		fmt.Fprintln(os.Stderr, errMsg)
+		return
+	}
+	defer conn.Close()
+
+	fmt.Printf("Streaming progress for task %s (flow: %s)... \n", taskID, flowID) // Added a space for spinner
+
+	done := make(chan struct{})
+	spinnerChars := []string{"|", "/", "-", "\\"}
+	spinnerIndex := 0
+
+	// ticker for animating spinner when no messages are received
+	spinnerTicker := time.NewTicker(100 * time.Millisecond)
+	defer spinnerTicker.Stop()
+
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-ctx.Done(): // Ensure goroutine exits if context is cancelled
+				fmt.Printf("\rProgress streaming for task %s: context cancelled.                \n", taskID)
+				return
+			case <-spinnerTicker.C:
+				fmt.Printf("\rStreaming progress for task %s (flow: %s)... %s ", taskID, flowID, spinnerChars[spinnerIndex])
+				spinnerIndex = (spinnerIndex + 1) % len(spinnerChars)
+			default:
+				// Non-blocking read attempt
+				conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond)) // Set a short deadline
+				var action domain.FlowAction
+				if err := conn.ReadJSON(&action); err != nil {
+					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+						// This is an expected timeout, continue to allow spinner to animate
+						continue
+					}
+
+					// Clear the spinner line before printing error or closing message
+					fmt.Printf("\r                                                                                \r")
+					if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
+						fmt.Fprintf(os.Stderr, "WebSocket read error for task %s: %v\n", taskID, err)
+					} else if err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF) || websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+						fmt.Printf("WebSocket connection closed normally for task %s.\n", taskID)
+					} else {
+						select {
+						case <-ctx.Done():
+							fmt.Printf("WebSocket connection closing for task %s due to context cancellation.\n", taskID)
+						default:
+							fmt.Fprintf(os.Stderr, "WebSocket error reading message for task %s: %v\n", taskID, err)
+						}
+					}
+					return // Exit goroutine on error or normal close
+				}
+				// Clear the spinner line and print the progress
+				fmt.Printf("\r  [PROGRESS] Task %s: Action '%s' - Status '%s'                                \n", taskID, action.ActionType, action.ActionStatus)
+				// Reprint the spinner prompt for the next message/spin
+				fmt.Printf("Streaming progress for task %s (flow: %s)... %s ", taskID, flowID, spinnerChars[spinnerIndex])
+
+			}
+		}
+	}()
+
+	select {
+	case <-done:
+		// Ensure the final status line is clean
+		fmt.Printf("\r                                                                                \r")
+		fmt.Printf("Progress streaming stopped for task %s.\n", taskID)
+	case <-ctx.Done():
+		// Ensure the final status line is clean
+		fmt.Printf("\r                                                                                \r")
+		fmt.Printf("Progress streaming canceled for task %s.\n", taskID)
+		// Attempt to gracefully close the WebSocket connection.
+		err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+		if err != nil && !errors.Is(err, websocket.ErrCloseSent) && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+			fmt.Fprintf(os.Stderr, "Error sending close message to WebSocket for task %s: %v\n", taskID, err)
+		}
+		// Wait for the read loop to finish after sending close
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second): // Timeout for read loop to exit
+			fmt.Fprintf(os.Stderr, "Timeout waiting for WebSocket read loop to close for task %s.\n", taskID)
+		}
+	}
 }
 
 // cancelTaskAPI sends a request to the Sidekick server to cancel a task.
@@ -289,65 +392,143 @@ func NewTaskCommand() *cli.Command {
 				return nil
 			} else {
 				// Synchronous mode
-				fmt.Printf("Task submitted in sync mode. Waiting for completion (Task ID: %s). Press Ctrl+C to cancel.\n", taskID)
+				fmt.Printf("Task submitted in sync mode. Waiting for completion (Task ID: %s). Press Ctrl+C to cancel.\\n", taskID)
+
+				syncCtx, cancelSync := context.WithCancel(ctx)
+				defer cancelSync()
+
+				// Attempt to get flowID for progress streaming
+				var flowID string
+				// Fetch full task details once to get the flow ID.
+				taskDetailsForFlow, err := getTaskAPI(workspace.Id, taskID)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: could not fetch task details to get flow ID for progress streaming: %v\n", err)
+				} else {
+					if flowsVal, ok := taskDetailsForFlow["flows"]; ok {
+						if flowsArray, ok := flowsVal.([]interface{}); ok && len(flowsArray) > 0 {
+							if firstFlow, ok := flowsArray[0].(map[string]interface{}); ok {
+								if idVal, ok := firstFlow["id"].(string); ok && idVal != "" {
+									flowID = idVal
+								} else {
+									fmt.Fprintf(os.Stderr, "Warning: ID not found or empty for the first flow. Progress streaming will be unavailable.\n")
+								}
+							} else {
+								fmt.Fprintf(os.Stderr, "Warning: First flow data is not in the expected format (map[string]interface{}). Progress streaming will be unavailable.\n")
+							}
+						} else {
+							fmt.Fprintf(os.Stderr, "Warning: 'flows' field is not a non-empty array in task details. Progress streaming will be unavailable.\n")
+						}
+					} else {
+						fmt.Fprintf(os.Stderr, "Warning: 'flows' field not found in task details. Progress streaming will be unavailable.\n")
+					}
+				}
+
+				if flowID != "" {
+					fmt.Printf("[INFO] Starting progress streaming for Flow ID: %s\n", flowID)
+					go streamTaskProgress(syncCtx, workspace.Id, flowID, taskID)
+				} else {
+					fmt.Println("Progress streaming is unavailable as Flow ID could not be determined.")
+				}
 
 				sigChan := make(chan os.Signal, 1)
 				signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-				doneChan := make(chan string, 1) // Final status string
-				errChan := make(chan error, 1)   // Errors from polling
+				doneChan := make(chan string, 1)   // Final status string
+				errPollChan := make(chan error, 1) // Errors from polling
 
-				go func() {
-					for {
-						taskData, err := getTaskAPI(workspace.Id, taskID)
-						if err != nil {
-							// Log polling error and retry, rather than immediately failing the command
-							fmt.Fprintf(os.Stderr, "Error polling task status: %v. Retrying in 5 seconds...\n", err)
-							time.Sleep(5 * time.Second)
-							continue
+				go func() { // Polling goroutine
+					defer close(doneChan)
+					defer close(errPollChan)
+
+					ticker := time.NewTicker(2 * time.Second) // Polling interval
+					defer ticker.Stop()
+
+					checkStatus := func() (status string, done bool, err error) {
+						taskData, apiErr := getTaskAPI(workspace.Id, taskID)
+						if apiErr != nil {
+							fmt.Fprintf(os.Stderr, "Error polling task status: %v. Will retry.\n", apiErr)
+							return "", false, nil // Not a fatal error for the poller, just a failed attempt
 						}
 
-						status, ok := taskData["status"].(string)
+						currentStatus, ok := taskData["status"].(string)
 						if !ok {
-							errChan <- fmt.Errorf("task status not found or not a string in API response: %v", taskData)
-							return
+							return "", true, fmt.Errorf("task status not found or not a string in API response: %v", taskData)
 						}
 
 						// Optional: print status updates, can be refined later with a spinner
-						// fmt.Printf("Current task status: %s\\n", status)
+						// fmt.Printf("Current task status: %s\n", currentStatus)
 
-						switch status {
+						switch currentStatus {
 						case string(domain.TaskStatusComplete), string(domain.TaskStatusFailed), string(domain.TaskStatusCanceled):
-							doneChan <- status
-							return
+							return currentStatus, true, nil
 						case string(domain.TaskStatusToDo), string(domain.TaskStatusInProgress), string(domain.TaskStatusBlocked):
-							// Task is still ongoing, continue polling
-							time.Sleep(2 * time.Second) // Polling interval
+							return currentStatus, false, nil // Task is still ongoing
 						default:
-							errChan <- fmt.Errorf("unknown task status received: %s", status)
-							return
+							return "", true, fmt.Errorf("unknown task status received: %s", currentStatus)
+						}
+					}
+
+					// Initial check
+					s, d, e := checkStatus()
+					if e != nil {
+						errPollChan <- e
+						return
+					}
+					if d {
+						doneChan <- s
+						return
+					}
+
+					for {
+						select {
+						case <-syncCtx.Done():
+							return // Exit if context is cancelled
+						case <-ticker.C:
+							s, d, e := checkStatus()
+							if e != nil {
+								errPollChan <- e
+								return
+							}
+							if d {
+								doneChan <- s
+								return
+							}
 						}
 					}
 				}()
 
 				select {
+				case <-syncCtx.Done(): // Handles cancellation from defer cancelSync() or other external cancellations if cmd.Context() supports it
+					fmt.Println("\nTask operation cancelled.")
+					// Attempt to cancel the task on the server if it was due to Ctrl+C, though cancelSync might be from task completion too.
+					// If sigChan was the source, it's handled below. If doneChan or errPollChan, task is already finished/failed.
+					return nil
 				case sig := <-sigChan:
 					fmt.Printf("\nSignal %v received. Attempting to cancel task %s...\n", sig, taskID)
+					cancelSync() // Signal goroutines (polling, streaming) to stop
 					cancelErr := cancelTaskAPI(workspace.Id, taskID)
 					if cancelErr != nil {
-						// Log cancellation error, but still exit as user intended to stop.
-						fmt.Fprintf(os.Stderr, "Failed to cancel task: %v\n", cancelErr)
-						return cli.Exit("Task cancellation failed.", 1)
+						fmt.Fprintf(os.Stderr, "Failed to send cancel request for task %s: %v\n", taskID, cancelErr)
+						return cli.Exit(fmt.Sprintf("Task cancellation request failed for %s.", taskID), 1)
 					}
-					fmt.Println("Task cancellation requested successfully.")
-					return nil // Exit after cancellation attempt
+					fmt.Printf("Task %s cancellation requested successfully. Waiting for confirmation or timeout...\n", taskID)
+					// Wait for a short period to see if doneChan confirms cancellation, or timeout.
+					select {
+					case finalStatus := <-doneChan:
+						fmt.Printf("Task %s confirmed status after cancellation request: %s\n", taskID, finalStatus)
+					case <-time.After(5 * time.Second): // Give it a few seconds for server to process cancellation and poller to pick it up
+						fmt.Println("Timed out waiting for cancellation confirmation. Exiting.")
+					}
+					return nil
 				case finalStatus := <-doneChan:
+					cancelSync() // Ensure other goroutines are stopped
 					fmt.Printf("Task %s finished with status: %s\n", taskID, finalStatus)
 					if finalStatus == string(domain.TaskStatusFailed) {
 						return cli.Exit(fmt.Sprintf("Task %s failed.", taskID), 1)
 					}
 					return nil
-				case err := <-errChan:
+				case err := <-errPollChan:
+					cancelSync() // Ensure other goroutines are stopped
 					return cli.Exit(fmt.Sprintf("Error during task monitoring: %v", err), 1)
 				}
 			}
