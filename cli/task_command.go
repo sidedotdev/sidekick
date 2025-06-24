@@ -11,11 +11,100 @@ import (
 	"sort"          // New import
 	"time"
 
+	"bytes"         // New import
+	"encoding/json" // New import
+	"net/http"      // New import
+	"strings"       // New import
+
+	"sidekick/common" // New import
 	"sidekick/domain" // New import
 
 	"github.com/segmentio/ksuid" // New import
 	"github.com/urfave/cli/v3"
 )
+
+// clientTaskRequestPayload defines the structure for the task creation API request.
+// It omits fields like ID, AgentType, and Status, which are expected to be set by the server.
+type clientTaskRequestPayload struct {
+	Title       string                 `json:"title"`
+	Description string                 `json:"description"`
+	FlowType    string                 `json:"flowType"`
+	FlowOptions map[string]interface{} `json:"flowOptions"`
+}
+
+// parseFlowOptions constructs the flow options map from various command-line flags.
+func parseFlowOptions(cmd *cli.Command) (map[string]interface{}, error) {
+	flowOpts := make(map[string]interface{})
+
+	// Start with default or --flow-options.
+	// cmd.String will return the default value if the flag is not set.
+	optionsJSON := cmd.String("flow-options")
+	if err := json.Unmarshal([]byte(optionsJSON), &flowOpts); err != nil {
+		return nil, fmt.Errorf("invalid --flow-options JSON (value: %s): %w", optionsJSON, err)
+	}
+
+	// --no-requirements flag overrides the "requirements" key
+	if cmd.Bool("no-requirements") {
+		flowOpts["requirements"] = false
+	}
+
+	// --flow-option key=value pairs override any existing keys
+	for _, optStr := range cmd.StringSlice("flow-option") {
+		parts := strings.SplitN(optStr, "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid --flow-option format: '%s'. Expected key=value", optStr)
+		}
+		key := strings.TrimSpace(parts[0])
+		if key == "" {
+			return nil, fmt.Errorf("invalid --flow-option format: '%s'. Key cannot be empty", optStr)
+		}
+		valueStr := parts[1] // Raw value string
+
+		// Strip surrounding quotes "" or `` if present
+		if (strings.HasPrefix(valueStr, `"`) && strings.HasSuffix(valueStr, `"`)) ||
+			(strings.HasPrefix(valueStr, "`") && strings.HasSuffix(valueStr, "`")) {
+			if len(valueStr) >= 2 {
+				valueStr = valueStr[1 : len(valueStr)-1]
+			} else {
+				valueStr = "" // Handles cases like input "" or ``
+			}
+		}
+		// All values from --flow-option are stored as strings.
+		// For specific types (bool, number), users should use --flow-options with full JSON.
+		flowOpts[key] = valueStr
+	}
+	return flowOpts, nil
+}
+
+// createTaskAPI sends a request to the Sidekick server to create a new task.
+func createTaskAPI(workspaceID string, payload []byte) (map[string]interface{}, error) {
+	serverBaseURL := fmt.Sprintf("http://localhost:%d", common.GetServerPort())
+	reqURL := fmt.Sprintf("%s/api/v1/workspaces/%s/tasks", serverBaseURL, workspaceID)
+	resp, err := http.Post(reqURL, "application/json", bytes.NewBuffer(payload))
+	if err != nil {
+		return nil, fmt.Errorf("failed to send create task request to API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated { // Expect 201 Created
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("API request to create task failed with status %s and could not read response body: %w", resp.Status, readErr)
+		}
+		return nil, fmt.Errorf("API request to create task failed with status %s: %s", resp.Status, string(bodyBytes))
+	}
+
+	var responseData map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&responseData); err != nil {
+		// Attempt to read the body for context if JSON decoding fails
+		// Note: resp.Body might have been partially consumed by json.NewDecoder.
+		// A more robust way would be to read it fully first, then try to decode.
+		// For now, this provides some context.
+		bodyBytes, _ := io.ReadAll(resp.Body) // Read remaining
+		return nil, fmt.Errorf("failed to decode API response for create task (status %s): %w. Response body fragment: %s", resp.Status, err, string(bodyBytes))
+	}
+	return responseData, nil
+}
 
 // NewTaskCommand creates and returns the definition for the "task" CLI subcommand.
 func NewTaskCommand() *cli.Command {
@@ -78,35 +167,66 @@ func NewTaskCommand() *cli.Command {
 			if err != nil {
 				return cli.Exit(fmt.Sprintf("Workspace setup failed: %v", err), 1)
 			}
-			fmt.Printf("Using workspace: %s (ID: %s, Path: %s)\\n", workspace.Name, workspace.Id, workspace.LocalRepoDir)
+			fmt.Printf("Using workspace: %s (ID: %s, Path: %s)\n", workspace.Name, workspace.Id, workspace.LocalRepoDir) // Corrected \\\\n to \n
 
-			// If we reach here, taskDescription is a real description.
-			fmt.Printf("Task command invoked for: %q\\n", taskDescription)
-			fmt.Printf("  Disable Human in the Loop: %t\\n", disableHumanInTheLoop)
-			fmt.Printf("  Async: %t\n", cmd.Bool("async"))
+			// 1. Construct TaskRequest payload
+			// taskDescription is already validated and available.
 
 			flowType := cmd.String("flow")
 			if cmd.Bool("P") {
 				flowType = "planned_dev"
-				fmt.Println("  (Flow type overridden to 'planned_dev' by -P flag)")
-			}
-			fmt.Printf("  Flow Type: %s\n", flowType)
-
-			rawFlowOptions := cmd.String("flow-options")
-			fmt.Printf("  Flow Options (raw JSON): %s\n", rawFlowOptions)
-
-			if cmd.Bool("no-requirements") {
-				fmt.Println("  (--no-requirements specified: will set 'requirements' to false in flow options)")
-				// Actual modification of flowOptions JSON will be in a later step
 			}
 
-			flowOptionOverrides := cmd.StringSlice("flow-option")
-			if len(flowOptionOverrides) > 0 {
-				fmt.Printf("  Flow Option Overrides (key=value): %v\n", flowOptionOverrides)
-				// Actual parsing and application of these overrides will be in a later step
+			flowOpts, err := parseFlowOptions(cmd)
+			if err != nil {
+				return cli.Exit(fmt.Sprintf("Error processing flow options: %v", err), 1)
 			}
 
-			fmt.Println("\n[INFO] This is a placeholder. Task creation logic will be implemented later.")
+			// Use taskDescription for both Title and Description for now.
+			// Title could be a summarized version later if needed.
+			requestPayload := clientTaskRequestPayload{
+				Title:       taskDescription,
+				Description: taskDescription,
+				FlowType:    flowType,
+				FlowOptions: flowOpts,
+			}
+
+			payloadBytes, err := json.Marshal(requestPayload)
+			if err != nil {
+				return cli.Exit(fmt.Sprintf("Failed to marshal task creation payload: %v", err), 1)
+			}
+
+			// 2. Make the HTTP POST request
+			fmt.Printf("Attempting to create task '%s' in workspace '%s' (ID: %s)...\\n", taskDescription, workspace.Name, workspace.Id)
+			// fmt.Printf("Payload: %s\\n", string(payloadBytes)) // For debugging, can be removed later
+
+			taskResponseData, err := createTaskAPI(workspace.Id, payloadBytes)
+			if err != nil {
+				return cli.Exit(fmt.Sprintf("Failed to create task via API: %v", err), 1)
+			}
+
+			// 3. Handle the API response
+			taskID, ok := taskResponseData["id"].(string)
+			if !ok {
+				responseBytes, _ := json.Marshal(taskResponseData) // Attempt to log the full response for debugging
+				errorMsg := fmt.Sprintf("Task creation API call succeeded, but task ID was not found or not a string in the response. Full response: %s", string(responseBytes))
+				fmt.Println(errorMsg) // Print to stdout for user visibility
+				return cli.Exit(errorMsg, 1)
+			}
+
+			fmt.Printf("Successfully created task with ID: %s\n", taskID)
+			// Store taskID if needed for sync mode (next steps)
+			// e.g., cmd.Context().Set("createdTaskID", taskID) // urfave/cli/v3 context is context.Context
+
+			// Further steps (sync wait, progress streaming, Ctrl+C) will use this taskID.
+			// For now, we just print the ID.
+			if cmd.Bool("async") {
+				fmt.Println("Task submitted in async mode. CLI will now exit.")
+			} else {
+				fmt.Println("Task submitted in sync mode. CLI will wait for completion (not yet implemented).")
+				// Placeholder for sync logic
+			}
+
 			return nil
 		},
 	}
