@@ -91,11 +91,12 @@ func (ea *EmbedActivities) CachedEmbedActivity(ctx context.Context, options Cach
 			}
 		}
 
-		embedder, err := getEmbedder(options.ModelConfig)
+		embedder, err := getEmbedder(options.ModelConfig, options.AvailableProviders)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get embedder: %w", err)
 		}
 		cacheValues := make(map[string]interface{}, len(input))
+		// TODO: Batch size should ideally be obtained from the embedder or a config
 		batchSize := 2048 // 2048 is the maximum batch size for the OpenAI embedding API
 		for i := 0; i < len(input); i += batchSize {
 			end := i + batchSize
