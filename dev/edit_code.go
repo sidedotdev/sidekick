@@ -279,7 +279,9 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			// generated
 			visibleChatHistory = authorEditBlockInput.Params.Messages
 		}
-		currentExtractedBlocks, err := ExtractEditBlocksWithVisibility(chatResponse.ChatMessage.Content, visibleChatHistory)
+
+		visibilityVersion := workflow.GetVersion(dCtx, "extract-edit-blocks-for-visibility", workflow.DefaultVersion, 1)
+		currentExtractedBlocks, err := ExtractEditBlocksWithVisibility(chatResponse.ChatMessage.Content, visibleChatHistory, visibilityVersion >= 1)
 		if err != nil {
 			return []EditBlock{}, fmt.Errorf("failed to extract edit blocks: %v", err)
 		}

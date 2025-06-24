@@ -30,17 +30,17 @@ func TestValidateEditBlocksEmptyChatHistory(t *testing.T) {
 		{
 			OldLines:          []string{"func oldFunction() {"},
 			NewLines:          []string{"func newFunction() {"},
-			VisibleCodeBlocks: extractAllCodeBlocks(chatHistory),
+			VisibleCodeBlocks: extractAllCodeBlocks(chatHistory, true),
 		},
 		{
 			OldLines:          []string{},
 			NewLines:          []string{"package main"},
-			VisibleCodeBlocks: extractAllCodeBlocks(chatHistory),
+			VisibleCodeBlocks: extractAllCodeBlocks(chatHistory, true),
 		},
 		{
 			OldLines:          []string{"type OldStruct struct {"},
 			NewLines:          []string{"type NewStruct struct {"},
-			VisibleCodeBlocks: extractAllCodeBlocks(chatHistory),
+			VisibleCodeBlocks: extractAllCodeBlocks(chatHistory, true),
 		},
 	}
 
@@ -69,17 +69,17 @@ func TestValidateEditBlocksWithValidBlocks(t *testing.T) {
 		{
 			OldLines:          []string{"func oldFunction() {"},
 			NewLines:          []string{"func newFunction() {"},
-			VisibleCodeBlocks: extractAllCodeBlocks(chatHistory),
+			VisibleCodeBlocks: extractAllCodeBlocks(chatHistory, true),
 		},
 		{
 			OldLines:          []string{},
 			NewLines:          []string{"package main"},
-			VisibleCodeBlocks: extractAllCodeBlocks(chatHistory),
+			VisibleCodeBlocks: extractAllCodeBlocks(chatHistory, true),
 		},
 		{
 			OldLines:          []string{"type OldStruct struct {"},
 			NewLines:          []string{"type NewStruct struct {"},
-			VisibleCodeBlocks: extractAllCodeBlocks(chatHistory),
+			VisibleCodeBlocks: extractAllCodeBlocks(chatHistory, true),
 		},
 	}
 
@@ -108,12 +108,12 @@ func TestValidateEditBlocksWithInvalidBlocks(t *testing.T) {
 		{
 			OldLines:          []string{"func nonExistentFunction() {"},
 			NewLines:          []string{"func newFunction() {"},
-			VisibleCodeBlocks: extractAllCodeBlocks(chatHistory),
+			VisibleCodeBlocks: extractAllCodeBlocks(chatHistory, true),
 		},
 		{
 			OldLines:          []string{"type NonExistentStruct struct {"},
 			NewLines:          []string{"type NewStruct struct {"},
-			VisibleCodeBlocks: extractAllCodeBlocks(chatHistory),
+			VisibleCodeBlocks: extractAllCodeBlocks(chatHistory, true),
 		},
 	}
 

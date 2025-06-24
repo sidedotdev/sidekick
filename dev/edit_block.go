@@ -35,7 +35,7 @@ type FileRange struct {
 
 // TODO: this doesn't handle edit blocks that were applied successfully, where
 // the new lines should be returned as a code block
-func extractAllCodeBlocks(chatHistory []llm.ChatMessage) []tree_sitter.CodeBlock {
+func extractAllCodeBlocks(chatHistory []llm.ChatMessage, shouldExtractEditBlocks bool) []tree_sitter.CodeBlock {
 	codeBlocks := make([]tree_sitter.CodeBlock, 0)
 	for _, chatMessage := range chatHistory {
 		// Existing logic for symbol and search blocks from non-assistant messages
@@ -46,38 +46,38 @@ func extractAllCodeBlocks(chatHistory []llm.ChatMessage) []tree_sitter.CodeBlock
 			codeBlocks = append(codeBlocks, searchCodeBlocks...)
 		}
 
-		// New logic: Create synthetic code blocks from EditBlocks found in any message content.
-		// This allows visibility into the content of edit blocks from previous turns.
-		extractedEditBlocksInMsg, err := ExtractEditBlocks(chatMessage.Content)
-		if err == nil { // Proceed only if EditBlock extraction was successful for this message
-			for _, editBlock := range extractedEditBlocksInMsg { // editBlock is *EditBlock
-				if len(editBlock.OldLines) > 0 {
-					code := strings.Join(editBlock.OldLines, "\n")
-					syntheticBlock := tree_sitter.CodeBlock{
-						Code:          code,
-						BlockContent:  "```\n" + code + "\n```",
-						FullContent:   "```\n" + code + "\n```",
-						FilePath:      editBlock.FilePath,
-						StartLine:     -1, // Mark as synthetic
-						EndLine:       -1, // Mark as synthetic
-						HeaderContent: "",
-						Symbol:        "",
+		if shouldExtractEditBlocks {
+			editBlocks, err := ExtractEditBlocks(chatMessage.Content)
+			if err == nil {
+				for _, editBlock := range editBlocks {
+					if len(editBlock.OldLines) > 0 {
+						code := strings.Join(editBlock.OldLines, "\n")
+						syntheticBlock := tree_sitter.CodeBlock{
+							Code:          code,
+							BlockContent:  "```\n" + code + "\n```",
+							FullContent:   "```\n" + code + "\n```",
+							FilePath:      editBlock.FilePath,
+							StartLine:     -1, // Mark as synthetic
+							EndLine:       -1, // Mark as synthetic
+							HeaderContent: "",
+							Symbol:        "",
+						}
+						codeBlocks = append(codeBlocks, syntheticBlock)
 					}
-					codeBlocks = append(codeBlocks, syntheticBlock)
-				}
-				if len(editBlock.NewLines) > 0 {
-					code := strings.Join(editBlock.NewLines, "\n")
-					syntheticBlock := tree_sitter.CodeBlock{
-						Code:          code,
-						BlockContent:  "```\n" + code + "\n```",
-						FullContent:   "```\n" + code + "\n```",
-						FilePath:      editBlock.FilePath,
-						StartLine:     -1, // Mark as synthetic
-						EndLine:       -1, // Mark as synthetic
-						HeaderContent: "",
-						Symbol:        "",
+					if len(editBlock.NewLines) > 0 {
+						code := strings.Join(editBlock.NewLines, "\n")
+						syntheticBlock := tree_sitter.CodeBlock{
+							Code:          code,
+							BlockContent:  "```\n" + code + "\n```",
+							FullContent:   "```\n" + code + "\n```",
+							FilePath:      editBlock.FilePath,
+							StartLine:     -1, // Mark as synthetic
+							EndLine:       -1, // Mark as synthetic
+							HeaderContent: "",
+							Symbol:        "",
+						}
+						codeBlocks = append(codeBlocks, syntheticBlock)
 					}
-					codeBlocks = append(codeBlocks, syntheticBlock)
 				}
 			}
 		}
@@ -188,77 +188,90 @@ func ExtractEditBlocks(text string) ([]*EditBlock, error) {
 	return blocks, nil
 }
 
-func ExtractEditBlocksWithVisibility(text string, chatHistory []llm.ChatMessage) ([]EditBlock, error) {
+func ExtractEditBlocksWithVisibility(text string, chatHistory []llm.ChatMessage, shouldExtractEditBlocks bool) ([]EditBlock, error) {
 	editBlocksWithoutVisibility, err := ExtractEditBlocks(text)
 	if err != nil {
 		return nil, err
 	}
 
-	// chatHistoryCodeBlocks contains all code blocks from the chat history,
-	// including synthetic ones from edit blocks in prior messages (due to modified extractAllCodeBlocks).
-	chatHistoryCodeBlocks := extractAllCodeBlocks(chatHistory)
+	// chatHistoryCodeBlocks contains all code blocks from the chat history.
+	// If shouldExtractEditBlocks is true, this will include synthetic ones from edit blocks in prior messages.
+	chatHistoryCodeBlocks := extractAllCodeBlocks(chatHistory, shouldExtractEditBlocks)
 
 	// runningPrefixCodeBlocks will accumulate synthetic code blocks from the OldLines/NewLines
-	// of edit blocks processed so far within the current 'text'.
+	// of edit blocks processed so far within the current 'text', if enabled.
 	runningPrefixCodeBlocks := make([]tree_sitter.CodeBlock, 0)
 
 	// extractedEditBlocks will store the processed edit blocks with their visibility information.
 	extractedEditBlocks := make([]EditBlock, 0)
 
-	for _, block := range editBlocksWithoutVisibility { // block is *EditBlock
-		// For the current block, its VisibleCodeBlocks should include:
-		// 1. All code blocks from the chat history (chatHistoryCodeBlocks).
-		// 2. Synthetic code blocks from OldLines/NewLines of preceding edit blocks in the *current* message (runningPrefixCodeBlocks).
-		// slices.Clone is used to ensure chatHistoryCodeBlocks is not mutated if runningPrefixCodeBlocks is empty.
-		availableCodeBlocksForCurrentBlock := append(slices.Clone(chatHistoryCodeBlocks), runningPrefixCodeBlocks...)
+	for _, editBlock := range editBlocksWithoutVisibility { // editBlock is *EditBlock
+		var availableCodeBlocks []tree_sitter.CodeBlock
+		if shouldExtractEditBlocks {
+			// For the current editBlock, its VisibleCodeBlocks should include:
+			// 1. All code blocks from the chat history (chatHistoryCodeBlocks, which may include synthetic blocks from history).
+			// 2. Synthetic code blocks from OldLines/NewLines of preceding edit blocks in the *current* message (runningPrefixCodeBlocks).
+			availableCodeBlocks = append(slices.Clone(chatHistoryCodeBlocks), runningPrefixCodeBlocks...)
+		} else {
+			// Only use code blocks from chat history (which won't include synthetic blocks from history if the flag was false for extractAllCodeBlocks).
+			// Progressive rendering from current text is also disabled.
+			availableCodeBlocks = slices.Clone(chatHistoryCodeBlocks)
+		}
 
-		block.VisibleCodeBlocks = utils.Filter(availableCodeBlocksForCurrentBlock, func(cb tree_sitter.CodeBlock) bool {
-			return cb.FilePath == block.FilePath
+		editBlock.VisibleCodeBlocks = utils.Filter(availableCodeBlocks, func(cb tree_sitter.CodeBlock) bool {
+			return cb.FilePath == editBlock.FilePath
 		})
 
-		// VisibleFileRanges are based ONLY on code blocks from chat history (chatHistoryCodeBlocks).
-		// They should NOT be affected by synthetic blocks generated from the current 'text'.
-		block.VisibleFileRanges = codeBlocksToMergedFileRanges(block.FilePath, chatHistoryCodeBlocks)
+		// VisibleFileRanges are based ONLY on \"real\" code blocks from chat history.
+		// They should NOT be affected by synthetic blocks generated from the current \'text\' or from chat history.
+		// This filtering ensures that even if chatHistoryCodeBlocks contains synthetic blocks (because shouldExtractEditBlocks is true),
+		// they are excluded for VisibleFileRanges calculation.
+		chatHistoryCodeBlocks := utils.Filter(chatHistoryCodeBlocks, func(cb tree_sitter.CodeBlock) bool {
+			return cb.StartLine != -1 && cb.EndLine != -1 // Filter out synthetic blocks
+		})
+		editBlock.VisibleFileRanges = codeBlocksToMergedFileRanges(editBlock.FilePath, chatHistoryCodeBlocks)
 
-		// TODO /gen/req add one more visible code block (won't have
+		// TODO /gen/req add one more visible code block (won\'t have
 		// corresponding visible file range) that is based all on the
 		// content in the first message, so if the first message has code in
-		// it, we can use that code directly. We'll still force the LLM to
+		// it, we can use that code directly. We\'ll still force the LLM to
 		// look up the file, but the error will say that nothing matches in
 		// the file, vs it not being in the chat context (which it is)
 
-		extractedEditBlocks = append(extractedEditBlocks, *block) // Append a copy of the modified block.
+		extractedEditBlocks = append(extractedEditBlocks, *editBlock) // Append a copy of the modified block.
 
-		// After the current block's visibility is determined and it's added to extractedEditBlocks,
-		// generate synthetic code blocks from its OldLines and NewLines.
-		// These will be available to subsequent edit blocks within the same 'text'.
-		if len(block.OldLines) > 0 {
-			code := strings.Join(block.OldLines, "\n")
-			syntheticOldCb := tree_sitter.CodeBlock{
-				Code:          code,
-				BlockContent:  "```\n" + code + "\n```",
-				FullContent:   "```\n" + code + "\n```",
-				FilePath:      block.FilePath,
-				StartLine:     -1, // Synthetic blocks use -1 for line numbers
-				EndLine:       -1,
-				HeaderContent: "",
-				Symbol:        "",
+		if shouldExtractEditBlocks {
+			// After the current block's visibility is determined and it's added to extractedEditBlocks,
+			// generate synthetic code blocks from its OldLines and NewLines if extracing edit blocks is enabled.
+			// These will be available to subsequent edit blocks within the same 'text'.
+			if len(editBlock.OldLines) > 0 {
+				code := strings.Join(editBlock.OldLines, "\n")
+				syntheticOldCb := tree_sitter.CodeBlock{
+					Code:          code,
+					BlockContent:  "```\n" + code + "\n```",
+					FullContent:   "```\n" + code + "\n```",
+					FilePath:      editBlock.FilePath,
+					StartLine:     -1, // Synthetic blocks use -1 for line numbers
+					EndLine:       -1,
+					HeaderContent: "",
+					Symbol:        "",
+				}
+				runningPrefixCodeBlocks = append(runningPrefixCodeBlocks, syntheticOldCb)
 			}
-			runningPrefixCodeBlocks = append(runningPrefixCodeBlocks, syntheticOldCb)
-		}
-		if len(block.NewLines) > 0 {
-			code := strings.Join(block.NewLines, "\n")
-			syntheticNewCb := tree_sitter.CodeBlock{
-				Code:          code,
-				BlockContent:  "```\n" + code + "\n```",
-				FullContent:   "```\n" + code + "\n```",
-				FilePath:      block.FilePath,
-				StartLine:     -1, // Synthetic blocks use -1 for line numbers
-				EndLine:       -1,
-				HeaderContent: "",
-				Symbol:        "",
+			if len(editBlock.NewLines) > 0 {
+				code := strings.Join(editBlock.NewLines, "\n")
+				syntheticNewCb := tree_sitter.CodeBlock{
+					Code:          code,
+					BlockContent:  "```\n" + code + "\n```",
+					FullContent:   "```\n" + code + "\n```",
+					FilePath:      editBlock.FilePath,
+					StartLine:     -1, // Synthetic blocks use -1 for line numbers
+					EndLine:       -1,
+					HeaderContent: "",
+					Symbol:        "",
+				}
+				runningPrefixCodeBlocks = append(runningPrefixCodeBlocks, syntheticNewCb)
 			}
-			runningPrefixCodeBlocks = append(runningPrefixCodeBlocks, syntheticNewCb)
 		}
 	}
 
