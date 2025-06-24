@@ -1,12 +1,13 @@
 package main
 
 import (
-	"context"
-	"io"
+	"bytes"
+	"context" // Keep one context
+	"io"      // Keep one io
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+	// "strings" // Removed unused import
 	"testing"
 	"time"
 
@@ -17,51 +18,106 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/urfave/cli/v3" // Added for cli.ExitCoder
 	"github.com/zalando/go-keyring"
 )
 
 func TestHelpFlags(t *testing.T) {
-	// Save original args and exit function
-	oldArgs := os.Args
-	oldExit := osExit
-	defer func() {
-		os.Args = oldArgs
-		osExit = oldExit
-	}()
+	// Save original os.Args
+	oldOsArgs := os.Args
+	defer func() { os.Args = oldOsArgs }()
 
 	tests := []struct {
 		name     string
-		args     []string
+		args     []string // Arguments to pass to the CLI application, including program name
 		exitCode int
 		contains []string
 	}{
 		{
-			name:     "long help flag",
+			name:     "long help flag for root",
 			args:     []string{"side", "--help"},
 			exitCode: 0,
 			contains: []string{
-				"Sidekick",
-				"Available Commands:",
+				"NAME:",
+				"side - CLI for Sidekick",
+				"USAGE:",
+				"side [global options] [command [command options]]",
+				"DESCRIPTION:",
+				"",
+				"COMMANDS:",
 				"init",
 				"start",
+				"version",
+				"service",
+				"task",
+				"GLOBAL OPTIONS:",
 			},
 		},
 		{
-			name:     "short help flag",
+			name:     "short help flag for root",
 			args:     []string{"side", "-h"},
 			exitCode: 0,
 			contains: []string{
-				"Sidekick",
-				"Available Commands:",
+				"NAME:",
+				"side - CLI for Sidekick",
+				"USAGE:",
+				"DESCRIPTION:",
+				"Manages Sidekick workspaces, tasks, and server.",
+				"COMMANDS:",
 				"init",
 				"start",
+				"version",
+				"service",
+				"task",
+				"GLOBAL OPTIONS:",
 			},
 		},
 		{
-			name:     "no args shows usage",
-			args:     []string{"side"},
-			exitCode: 1,
-			contains: []string{"Usage: side init"},
+			name:     "no args shows root command help",
+			args:     []string{"side"}, // Just the program name
+			exitCode: 0,                // Root action is to show help, which typically exits 0
+			contains: []string{
+				"NAME:",
+				"side - CLI for Sidekick",
+				"USAGE:",
+				"DESCRIPTION:",
+				"Manages Sidekick workspaces, tasks, and server.",
+				"COMMANDS:",
+			},
+		},
+		{
+			name:     "task command long help flag",
+			args:     []string{"side", "task", "--help"},
+			exitCode: 0,
+			contains: []string{
+				"NAME:",
+				"side task - Create and manage a task (e.g., side task \"fix the error in my tests\")", // Actual usage string
+				"USAGE:",
+				"side task [options] <task description>", // Actual usage string
+				"OPTIONS:",                               // urfave/cli/v3 uses this term for command-specific flags
+				"--disable-human-in-the-loop",
+				"--async",
+				"--flow",
+				"-P",
+				"--flow-options",
+				"--flow-option",
+				"-o",
+				"--no-requirements",
+				"-nr",
+			},
+		},
+		{
+			name:     "task command short help flag",
+			args:     []string{"side", "task", "-h"},
+			exitCode: 0,
+			contains: []string{
+				"NAME:",
+				"side task - Create and manage a task (e.g., side task \"fix the error in my tests\")", // Actual usage string
+				"USAGE:",
+				"side task [options] <task description>", // Actual usage string
+				"OPTIONS:",
+				"--disable-human-in-the-loop",
+			},
 		},
 	}
 
@@ -69,37 +125,49 @@ func TestHelpFlags(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Capture stdout
 			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
+			r, w, pipeErr := os.Pipe()
+			require.NoError(t, pipeErr)
 			os.Stdout = w
 
-			// Mock os.Exit
-			exitCode := 0
-			osExit = func(code int) {
-				exitCode = code
-			}
-
-			// Set test args
-			os.Args = tt.args
-
-			// Run main
-			main()
-
-			// Restore stdout and get output
-			w.Close()
+			// Run the CLI app by calling the setup function from cli.go
+			// tt.args already includes the program name as os.Args[0]
+			runErr := setupAndRunInteractiveCli(tt.args)
+			// Restore stdout and read output
+			errClose := w.Close()
+			require.NoError(t, errClose)
 			os.Stdout = oldStdout
-			var output strings.Builder
-			_, _ = io.Copy(&output, r)
 
-			// Check exit code
-			if exitCode != tt.exitCode {
-				t.Errorf("expected exit code %d, got %d", tt.exitCode, exitCode)
+			var buf bytes.Buffer
+			_, errCopy := io.Copy(&buf, r)
+			require.NoError(t, errCopy)
+			output := buf.String()
+
+			// Check exit code based on the error returned by app.Run
+			if tt.exitCode == 0 {
+				if runErr != nil {
+					t.Errorf("expected exit code 0 (nil error), got error: %v. Output:\n%s", runErr, output)
+				}
+			} else {
+				if runErr == nil {
+					t.Errorf("expected exit code %d (non-nil error), but got nil error. Output:\n%s", tt.exitCode, output)
+				} else {
+					exitErr, ok := runErr.(cli.ExitCoder)
+					if !ok {
+						// urfave/cli/v3 might return a generic error for some parsing issues, often implying exit code 1
+						// For this test, we are specific about cli.ExitCoder if tt.exitCode is not 0.
+						// If it's a general error, it might not be an ExitCoder.
+						// Defaulting to checking if it's a non-zero exit if not ExitCoder might be too broad.
+						// For now, strict check for ExitCoder if non-zero expected.
+						t.Errorf("expected error to be cli.ExitCoder for non-zero exit, but it's type %T. Error: %v. Output:\n%s", runErr, runErr, output)
+					} else if exitErr.ExitCode() != tt.exitCode {
+						t.Errorf("expected exit code %d, got %d. Error: %v. Output:\n%s", tt.exitCode, exitErr.ExitCode(), runErr, output)
+					}
+				}
 			}
 
 			// Check output contains expected strings
 			for _, s := range tt.contains {
-				if !strings.Contains(output.String(), s) {
-					t.Errorf("expected output to contain %q", s)
-				}
+				assert.Contains(t, output, s, "Output does not contain expected string %q", s)
 			}
 		})
 	}

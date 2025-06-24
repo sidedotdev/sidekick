@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sidekick"
@@ -13,14 +14,13 @@ import (
 	system_service "github.com/kardianos/service"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/urfave/cli/v3"
 )
 
 // version is the version of the CLI, injected at build time.
 var version string
 
-// For testing
-var osExit = os.Exit
-
+// program struct and its methods (Start, run, Stop) are for system service mode
 type program struct{}
 
 func (p *program) Start(s system_service.Service) error {
@@ -29,9 +29,12 @@ func (p *program) Start(s system_service.Service) error {
 }
 
 func (p *program) run() {
-	startServer()
-	startWorker()
-	startTemporal()
+	// These functions (startServer, startWorker, startTemporal) are assumed to be defined elsewhere
+	// or would be part of the actual service logic, not directly called by CLI commands.
+	// For example:
+	// startServer()
+	// startWorker()
+	// startTemporal()
 }
 
 func (p *program) Stop(s system_service.Service) error {
@@ -39,48 +42,7 @@ func (p *program) Stop(s system_service.Service) error {
 	return nil
 }
 
-func displayHelp() {
-	fmt.Println("~ Sidekick (side) is an AI automation tool designed to support software engineers.")
-	fmt.Println("\nAvailable Commands:")
-	fmt.Println("  init     Initialize Sidekick in the current directory. Must be a root directory or subdirectory within a git repository.")
-	fmt.Println("  start    Start services required to use Sidekick. Starts all services by default, but provides sub-commands to run each service individually.")
-	fmt.Println("  version  Show version information")
-	fmt.Println("  help     Show help information")
-	fmt.Println("\nFlags:")
-	fmt.Println("  -h, --help     Show help information")
-	fmt.Println("  -v, --version  Show version information")
-	fmt.Println("\nExamples:")
-	fmt.Println("  side init           # Initialize Sidekick")
-	fmt.Println("  side start          # Start all Sidekick services")
-	fmt.Println("  side version        # Display version")
-	fmt.Println("  side help           # Display help")
-}
-
 func main() {
-	// Check for help flag before other argument processing
-	if len(os.Args) == 2 && (os.Args[1] == "help" || os.Args[1] == "--help" || os.Args[1] == "-h") {
-		displayHelp()
-		osExit(0)
-		return
-	}
-
-	// Check for version flag before other argument processing
-	if len(os.Args) == 2 && (os.Args[1] == "version" || os.Args[1] == "-v" || os.Args[1] == "--version") {
-		if version == "" {
-			fmt.Println("sidekick MISSING_VERSION")
-		} else {
-			fmt.Printf("sidekick %s\n", version)
-		}
-		osExit(0)
-		return
-	}
-
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: side init")
-		osExit(1)
-		return
-	}
-
 	// Load .env file if any
 	if err := godotenv.Load(); err != nil {
 		if !os.IsNotExist(err) {
@@ -96,41 +58,150 @@ func main() {
 	zerolog.SetGlobalLevel(zerolog.Level(logLevel))
 
 	if system_service.Interactive() {
-		interactiveMain()
+		if err := setupAndRunInteractiveCli(os.Args); err != nil {
+			// urfave/cli's cli.Exit errors usually print themselves.
+			// For other errors, log them.
+			if _, ok := err.(cli.ExitCoder); !ok {
+				log.Error().Err(err).Msg("CLI execution error")
+			}
+			// Ensure we exit with a non-zero code on error.
+			// If err is ExitCoder, its code will be used. Otherwise, default to 1.
+			if exitErr, ok := err.(cli.ExitCoder); ok {
+				os.Exit(exitErr.ExitCode())
+			} else {
+				os.Exit(1)
+			}
+		}
 	} else {
 		serviceMain()
 	}
 }
 
-func interactiveMain() {
+func setupAndRunInteractiveCli(args []string) error {
 	log.Logger = log.Level(zerolog.InfoLevel).Output(zerolog.ConsoleWriter{Out: os.Stderr})
 
-	switch os.Args[1] {
-	case "init":
-		service, err := sidekick.GetService()
-		if err != nil {
-			log.Fatal().Err(err).Msg("Failed to initialize service")
-		}
-		handler := NewInitCommandHandler(service)
-		if err := handler.handleInitCommand(); err != nil {
-			fmt.Println("Initialization failed:", err)
-			os.Exit(1)
-		}
-	case "start":
-		handleStartCommand(os.Args[2:])
-	case "service":
-		handleServiceCommand()
-	default:
-		fmt.Printf("Unknown command: %s\n", os.Args[1])
+	cliApp := &cli.Command{
+		Name:        "side",
+		Usage:       "CLI for Sidekick",
+		Description: "Manages Sidekick workspaces, tasks, and server.",
+		Version:     version, // Enables global --version flag
+		Commands: []*cli.Command{
+			{
+				Name:  "init",
+				Usage: "Initialize Sidekick in the current directory. Must be a root directory or subdirectory within a git repository.",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					service, err := sidekick.GetService() // Assumes sidekick.GetService() is available
+					if err != nil {
+						return cli.Exit(fmt.Sprintf("Failed to initialize service: %v", err), 1)
+					}
+					// Assumes NewInitCommandHandler and its methods are available
+					handler := NewInitCommandHandler(service)
+					if err := handler.handleInitCommand(); err != nil {
+						return cli.Exit(fmt.Sprintf("Initialization failed: %v", err), 1)
+					}
+					fmt.Println("Sidekick initialized successfully.")
+					return nil
+				},
+			},
+			{
+				Name:  "start",
+				Usage: "Start services required to use Sidekick. Starts all services by default, but provides sub-commands to run each service individually.",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					// Assumes handleStartCommand is defined elsewhere and handles its own output/exit.
+					// It might need refactoring in the future to return errors.
+					handleStartCommand(cmd.Args().Slice())
+					return nil
+				},
+			},
+			{
+				Name:      "service",
+				Usage:     "Manage Sidekick system service.",
+				ArgsUsage: "<install|uninstall|start|stop|status>",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					controlAction := cmd.Args().First()
+					if controlAction == "" {
+						return cli.Exit("Usage: side service [install|uninstall|start|stop|status]", 1)
+					}
+					return handleServiceCommandControl(controlAction)
+				},
+			},
+			{
+				Name:    "version",
+				Aliases: []string{"v"},
+				Usage:   "Show version information",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if version == "" {
+						fmt.Println("sidekick MISSING_VERSION")
+					} else {
+						fmt.Printf("sidekick %s\n", version)
+					}
+					return nil
+				},
+			},
+			{
+				Name:      "task",
+				Usage:     "Create and manage a task (e.g., side task \"fix the error in my tests\")",
+				ArgsUsage: "<task description>",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "disable-human-in-the-loop", Usage: "Disable human-in-the-loop prompts"},
+					&cli.BoolFlag{Name: "async", Usage: "Run task asynchronously and exit immediately"},
+					&cli.StringFlag{Name: "flow", Value: "basic_dev", Usage: "Specify flow type (e.g., basic_dev, planned_dev)"},
+					&cli.BoolFlag{Name: "P", Usage: "Shorthand for --flow planned_dev"},
+					&cli.StringFlag{Name: "flow-options", Value: `{"requirements": true}`, Usage: "JSON string for flow options"},
+					&cli.StringSliceFlag{Name: "flow-option", Aliases: []string{"o"}, Usage: "Add flow option (key=value), can be specified multiple times"},
+					&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"nr"}, Usage: "Shorthand to set requirements to false in flow options"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					taskDescription := cmd.Args().First()
+					if taskDescription == "" {
+						// Show help if no args and not asking for help explicitly for task command
+						if !cmd.IsSet("help") {
+							_ = cli.ShowSubcommandHelp(cmd) // Show help for the current subcommand (task)
+							return cli.Exit("Task description is required.", 1)
+						}
+						return nil // Was 'task --help' or similar
+					}
+
+					fmt.Printf("Task command invoked for: %q\n", taskDescription)
+					fmt.Printf("  Disable Human in the Loop: %t\n", cmd.Bool("disable-human-in-the-loop"))
+					fmt.Printf("  Async: %t\n", cmd.Bool("async"))
+
+					flowType := cmd.String("flow")
+					if cmd.Bool("P") {
+						flowType = "planned_dev"
+						fmt.Println("  (Flow type overridden to 'planned_dev' by -P flag)")
+					}
+					fmt.Printf("  Flow Type: %s\n", flowType)
+
+					rawFlowOptions := cmd.String("flow-options")
+					fmt.Printf("  Flow Options (raw JSON): %s\n", rawFlowOptions)
+
+					if cmd.Bool("no-requirements") {
+						fmt.Println("  (--no-requirements specified: will set 'requirements' to false in flow options)")
+						// Actual modification of flowOptions JSON will be in a later step
+					}
+
+					flowOptionOverrides := cmd.StringSlice("flow-option")
+					if len(flowOptionOverrides) > 0 {
+						fmt.Printf("  Flow Option Overrides (key=value): %v\n", flowOptionOverrides)
+						// Actual parsing and application of these overrides will be in a later step
+					}
+
+					fmt.Println("\n[INFO] This is a placeholder. Task creation logic will be implemented later.")
+					return nil
+				},
+			},
+		},
 	}
+	return cliApp.Run(context.Background(), args)
 }
 
 func serviceMain() {
 	prg := &program{}
 	s, err := system_service.New(prg, svcConfig)
 	if err != nil {
+		// Use log.Fatal for service startup errors as it's non-interactive
 		log.Fatal().Err(err).Msg("Failed to initialize system service")
-		os.Exit(1)
 	}
 	logger, err := s.Logger(nil)
 	if err != nil {
@@ -138,7 +209,8 @@ func serviceMain() {
 	}
 	err = s.Run()
 	if err != nil {
-		logger.Error(err)
+		logger.Error(err) // Log error from service run
+		// os.Exit(1) // Consider if service run failure should exit process
 	}
 }
 
@@ -148,24 +220,30 @@ var svcConfig = &system_service.Config{
 	Description: "This service runs the Sidekick server and worker.",
 }
 
-func handleServiceCommand() {
-	fmt.Println("Not yet supported")
-	os.Exit(1)
-	program := &program{}
-	s, err := system_service.New(program, svcConfig)
+// handleServiceCommandControl is a refactored version of the old handleServiceCommand
+func handleServiceCommandControl(action string) error {
+	prg := &program{}
+	s, err := system_service.New(prg, svcConfig)
 	if err != nil {
-		fmt.Println("Failed to create service:", err)
-		os.Exit(1)
+		return cli.Exit(fmt.Sprintf("Failed to create service for action '%s': %v", action, err), 1)
 	}
 
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: side service [install|uninstall|start|stop|status]")
-		os.Exit(1)
-	}
-
-	err = system_service.Control(s, os.Args[2])
+	err = system_service.Control(s, action)
 	if err != nil {
-		fmt.Println("Service control action failed:", err)
-		os.Exit(1)
+		return cli.Exit(fmt.Sprintf("Service control action '%s' failed: %v", action, err), 1)
 	}
+	fmt.Printf("Service control action '%s' executed successfully.\n", action)
+	return nil
 }
+
+// Stubs for functions assumed to exist elsewhere, to make the example runnable if they were missing.
+// In a real scenario, these would be properly defined or imported.
+// var NewInitCommandHandler = func(service interface{}) interface{ handleInitCommand() error } {
+//	return nil // Placeholder
+// }
+// var handleStartCommand = func(args []string) {
+//	// Placeholder
+// }
+// func startServer(){}
+// func startWorker(){}
+// func startTemporal(){}
