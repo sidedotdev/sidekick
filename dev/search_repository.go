@@ -10,9 +10,10 @@ import (
 	"sidekick/utils"
 	"strings"
 
+	tree_sitter "sidekick/coding/tree_sitter"
+
 	doublestar "github.com/bmatcuk/doublestar/v4"
 	"go.temporal.io/sdk/workflow"
-	tree_sitter "sidekick/coding/tree_sitter"
 )
 
 // escapeShellArg escapes a string for safe use as an argument in shell commands.
@@ -232,7 +233,13 @@ func getOrCreateCoreIgnoreFile() (string, error) {
 	return coreIgnorePath, nil
 }
 
-func (sCtx *searchContext) executeMainSearch() (string, string, error) {
+// returns:
+// 1. raw command stdOut
+// 2. raw command stdErr
+// 3. list of all files that contain search term (ignoring path glob), if useManualGlobFiltering is true
+// 4. list of files that also matched the glob too
+// 5. error
+func (sCtx *searchContext) executeMainSearch() (string, string, []string, []string, error) {
 	var searchOutput env.EnvRunCommandOutput
 	var listFilesOutput env.EnvRunCommandOutput
 	var err error
@@ -251,27 +258,27 @@ func (sCtx *searchContext) executeMainSearch() (string, string, error) {
 			Args:               []string{"-c", listFilesCmd},
 		}).Get(sCtx.ctx, &listFilesOutput)
 		if err != nil {
-			return "", "", fmt.Errorf("failed to list files for manual glob filtering: %w", err)
+			return "", "", nil, nil, fmt.Errorf("failed to list files for manual glob filtering: %w", err)
 		}
 
-		allFiles := strings.Split(strings.TrimSpace(listFilesOutput.Stdout), "\n")
-		var filteredFiles []string
+		allFilesMatchingSearchTerm := strings.Split(strings.TrimSpace(listFilesOutput.Stdout), "\n")
+		var filesMatchingGlobAndSearchTerm []string
 		if strings.TrimSpace(listFilesOutput.Stdout) != "" {
-			filteredFiles, err = filterFilesByGlob(allFiles, sCtx.input.PathGlob)
+			filesMatchingGlobAndSearchTerm, err = filterFilesByGlob(allFilesMatchingSearchTerm, sCtx.input.PathGlob)
 			if err != nil {
 				// Pass along stderr from listFilesOutput as it might contain relevant info
-				return "", listFilesOutput.Stderr, fmt.Errorf("failed to filter files by glob: %w", err)
+				return "", listFilesOutput.Stderr, allFilesMatchingSearchTerm, filesMatchingGlobAndSearchTerm, fmt.Errorf("failed to filter files by glob: %w", err)
 			}
 		}
 
-		if len(filteredFiles) == 0 {
+		if len(filesMatchingGlobAndSearchTerm) == 0 {
 			// No files matched the glob after listing.
 			// Return empty stdout, but include stderr from the listing command if any.
-			return "", listFilesOutput.Stderr, nil
+			return "", listFilesOutput.Stderr, allFilesMatchingSearchTerm, filesMatchingGlobAndSearchTerm, nil
 		} else {
 			// Run git grep on the filtered files
-			escapedFiles := make([]string, len(filteredFiles))
-			for i, file := range filteredFiles {
+			escapedFiles := make([]string, len(filesMatchingGlobAndSearchTerm))
+			for i, file := range filesMatchingGlobAndSearchTerm {
 				escapedFiles[i] = escapeShellArg(file)
 			}
 			filesArg := strings.Join(escapedFiles, " ")
@@ -285,10 +292,10 @@ func (sCtx *searchContext) executeMainSearch() (string, string, error) {
 				Args:               []string{"-c", fullCmd},
 			}).Get(sCtx.ctx, &searchOutput)
 			if err != nil {
-				return "", searchOutput.Stderr, fmt.Errorf("failed to search filtered files: %w", err)
+				return "", searchOutput.Stderr, allFilesMatchingSearchTerm, filesMatchingGlobAndSearchTerm, fmt.Errorf("failed to search filtered files: %w", err)
 			}
 			// Success, return stdout and stderr from the git grep command
-			return searchOutput.Stdout, searchOutput.Stderr, nil
+			return searchOutput.Stdout, searchOutput.Stderr, allFilesMatchingSearchTerm, filesMatchingGlobAndSearchTerm, nil
 		}
 	} else {
 		// Original behavior: use rg + git grep pipeline
@@ -301,50 +308,35 @@ func (sCtx *searchContext) executeMainSearch() (string, string, error) {
 			Args:               []string{"-c", fullCmd},
 		}).Get(sCtx.ctx, &searchOutput)
 		if err != nil {
-			return "", searchOutput.Stderr, fmt.Errorf("failed to search the repository: %w", err)
+			return "", searchOutput.Stderr, nil, nil, fmt.Errorf("failed to search the repository: %w", err)
 		}
-		return searchOutput.Stdout, searchOutput.Stderr, nil
+		return searchOutput.Stdout, searchOutput.Stderr, nil, nil, nil
 	}
 }
 
-func (sCtx *searchContext) handleOutputLengthChecks(rawOutput string) (string, bool, error) {
+func (sCtx *searchContext) handleOutputLengthChecks(rawOutput string, globMatchedFiles []string) (string, bool, error) {
 	if len(rawOutput) > refuseAtSearchOutputLength {
-		var listFilesOutput env.EnvRunCommandOutput
 		var err error
 		var filesToListCmd string
 		var fileListString string
 
 		if sCtx.useManualGlobFiltering {
-			// When manual glob filtering is used, list files matching the term, then filter by glob.
-			// sCtx.rgArgs already includes the PathGlob if it's a simple one, or it's empty if complex (handled by filterFilesByGlob).
-			// We need to find files containing the search term first.
-			baseRgCmd := strings.Replace(sCtx.rgArgs, sCtx.input.PathGlob, "", 1) // Remove PathGlob if present, it's for filtering after
-			baseRgCmd = strings.TrimSpace(baseRgCmd)
-			filesToListCmd = fmt.Sprintf(`rg %s --files-with-matches -- %s`, baseRgCmd, sCtx.escapedSearchTerm)
-			err = workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
-				EnvContainer:       sCtx.envContainer,
-				RelativeWorkingDir: "./",
-				Command:            "sh",
-				Args:               []string{"-c", filesToListCmd},
-			}).Get(sCtx.ctx, &listFilesOutput)
-			if err != nil {
-				return "", true, fmt.Errorf("failed to list files (for too long output, manual glob): %w", err)
-			}
-
-			allFiles := strings.Split(strings.TrimSpace(listFilesOutput.Stdout), "\n")
-			var filteredFiles []string
-			if strings.TrimSpace(listFilesOutput.Stdout) != "" {
-				// Now filter these files by the original PathGlob
-				filteredFiles, err = filterFilesByGlob(allFiles, sCtx.input.PathGlob)
+			v := workflow.GetVersion(sCtx.ctx, "search-repo-remove-extra-command", workflow.DefaultVersion, 1)
+			if v < 1 {
+				// fake activity execution just to ensure workflows can be
+				// replayed deterministically: we never needed this and did it
+				// by mistake
+				var listFilesOutput env.EnvRunCommandOutput
+				err = workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{}).Get(sCtx.ctx, &listFilesOutput)
 				if err != nil {
-					return "", true, fmt.Errorf("failed to filter files (for too long output, manual glob): %w", err)
+					return "", true, fmt.Errorf("failed to list files (for too long output, manual glob): %w", err)
 				}
 			}
-			fileListString = strings.Join(filteredFiles, "\n")
+
+			fileListString = strings.Join(globMatchedFiles, "\n")
 		} else {
-			// Standard behavior: list files matching the term.
-			// sCtx.rgArgs already includes the PathGlob and other necessary rg flags.
-			filesToListCmd = fmt.Sprintf(`rg %s --files-with-matches -- %s`, sCtx.rgArgs, sCtx.escapedSearchTerm)
+			var listFilesOutput env.EnvRunCommandOutput
+			filesToListCmd = fmt.Sprintf(`rg %s -- %s`, sCtx.rgArgs, sCtx.escapedSearchTerm)
 			err = workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 				EnvContainer:       sCtx.envContainer,
 				RelativeWorkingDir: "./",
@@ -388,19 +380,54 @@ func (sCtx *searchContext) handleOutputLengthChecks(rawOutput string) (string, b
 		}
 
 		// Truncate rawOutput so that rawOutput_truncated + message fits within maxSearchOutputLength
+		// Ensure there's enough space for the message. If not, the message itself might be truncated or lead to issues.
+		// A simple approach is to prioritize the message if space is very limited.
 		maxLengthForOriginalContent := maxSearchOutputLength - len(message)
-		if maxLengthForOriginalContent < 0 {
-			maxLengthForOriginalContent = 0
+
+		var finalOutput string
+		if maxLengthForOriginalContent <= 0 {
+			// Not enough space for any original content, just show the (potentially truncated) message.
+			// Ensure the message itself doesn't exceed maxSearchOutputLength.
+			if len(message) > maxSearchOutputLength {
+				finalOutput = message[:maxSearchOutputLength-len("...")] + "..." // Indicate message truncation
+			} else {
+				finalOutput = message
+			}
+		} else {
+			truncatedOutputPortion := rawOutput
+			if len(rawOutput) > maxLengthForOriginalContent {
+				// Find the last newline before or at maxLengthForOriginalContent to avoid cutting mid-line.
+				// If no newline, truncate at maxLengthForOriginalContent.
+				safeTruncatePoint := strings.LastIndex(rawOutput[:maxLengthForOriginalContent], "\n")
+				if safeTruncatePoint == -1 { // No newline found in the allowed portion
+					safeTruncatePoint = maxLengthForOriginalContent
+				}
+				// Ensure we don't take an empty string if safeTruncatePoint is 0 and original content was meant to be shown.
+				if safeTruncatePoint == 0 && maxLengthForOriginalContent > 0 {
+					truncatedOutputPortion = rawOutput[:maxLengthForOriginalContent]
+				} else {
+					truncatedOutputPortion = rawOutput[:safeTruncatePoint]
+				}
+			}
+			finalOutput = truncatedOutputPortion + message
+		}
+		// Final check to ensure we absolutely do not exceed maxSearchOutputLength.
+		// This is a safeguard; the logic above should ideally prevent this.
+		if len(finalOutput) > maxSearchOutputLength {
+			// Ensure space for the truncation indicator itself.
+			const truncationIndicator = "... (further truncated)"
+			if maxSearchOutputLength > len(truncationIndicator) {
+				finalOutput = finalOutput[:maxSearchOutputLength-len(truncationIndicator)] + truncationIndicator
+			} else {
+				// If maxSearchOutputLength is extremely small, just truncate to it.
+				finalOutput = finalOutput[:maxSearchOutputLength]
+			}
 		}
 
-		truncatedOutputPortion := rawOutput
-		if len(rawOutput) > maxLengthForOriginalContent {
-			truncatedOutputPortion = rawOutput[:maxLengthForOriginalContent]
-		}
-
-		return truncatedOutputPortion + message, false, nil
+		return finalOutput, false, nil
 	}
 
+	// Default case: output is within acceptable limits, or was already handled by refuseAtSearchOutputLength
 	return rawOutput, false, nil
 }
 
@@ -409,42 +436,24 @@ func (sCtx *searchContext) handleOutputLengthChecks(rawOutput string) (string, b
 // This approach is consistent with how matchingFiles are determined in executeMainSearch when useManualGlobFiltering is true.
 func (sCtx *searchContext) getFilesMatchingPathGlob() ([]string, error) {
 	var rgFilesOutput env.EnvRunCommandOutput
-	rgFilesCmdParts := []string{"--files", "--hidden", "--no-messages"}
+	rgFilesCmdParts := []string{"--files", "--hidden"}
 	rgFilesCmdParts = append(rgFilesCmdParts, "--ignore-file", sCtx.coreIgnorePath)
 	if sCtx.sideIgnoreExists {
 		rgFilesCmdParts = append(rgFilesCmdParts, "--ignore-file", ".sideignore")
 	}
-	// Add PathGlob as a positional argument for rg to search within.
-	// It should not be shell-escaped here as it's passed directly in Args.
-	rgFilesCmdParts = append(rgFilesCmdParts, sCtx.input.PathGlob)
 
-	// Version guard for this rg call
-	vGetFilesRg := workflow.GetVersion(sCtx.ctx, "get-files-matching-path-glob-rg-v1", workflow.DefaultVersion, 1)
-	if vGetFilesRg >= 1 {
-		err := workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
-			EnvContainer:       sCtx.envContainer,
-			RelativeWorkingDir: "./",
-			Command:            "rg",
-			Args:               rgFilesCmdParts,
-		}).Get(sCtx.ctx, &rgFilesOutput)
-
-		if err != nil {
-			return nil, fmt.Errorf("failed to execute rg to list files for glob '%s': %w", sCtx.input.PathGlob, err)
-		}
-		// rg --files exits 1 if no files match, 0 if files match, 2 for error.
-		// We are interested in stderr only if ExitStatus is 2 (error).
-		// If ExitStatus is 0 or 1, stdout contains the file list (or is empty).
-		if rgFilesOutput.ExitStatus == 2 {
-			return nil, fmt.Errorf("rg command to list files for glob '%s' failed with exit status %d: %s", sCtx.input.PathGlob, rgFilesOutput.ExitStatus, rgFilesOutput.Stderr)
-		}
-	} else {
-		return nil, fmt.Errorf("getFilesMatchingPathGlob requires workflow version 'get-files-matching-path-glob-rg-v1' or newer")
+	// version guard not needed: this already existed before
+	err := workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+		EnvContainer:       sCtx.envContainer,
+		RelativeWorkingDir: "./",
+		Command:            "rg",
+		Args:               rgFilesCmdParts,
+	}).Get(sCtx.ctx, &rgFilesOutput)
+	if err != nil {
+		return nil, fmt.Errorf("activity execution failed for rg to list files for glob '%s': %w", sCtx.input.PathGlob, err)
 	}
 
 	rawFiles := strings.TrimSpace(rgFilesOutput.Stdout)
-	if rawFiles == "" {
-		return []string{}, nil
-	}
 	files := strings.Split(rawFiles, "\n")
 
 	// Filter using filterFilesByGlob to ensure consistent glob matching (e.g., basename matching)
@@ -452,88 +461,45 @@ func (sCtx *searchContext) getFilesMatchingPathGlob() ([]string, error) {
 	return filterFilesByGlob(files, sCtx.input.PathGlob)
 }
 
-// performGlobalFallbackSearch performs a global search for the input.SearchTerm,
-// ignoring input.PathGlob but respecting other settings like case sensitivity and ignore files.
-// It returns a list of file paths where the term was found.
-func (sCtx *searchContext) performGlobalFallbackSearch() ([]string, error) {
-	var rgOutput env.EnvRunCommandOutput
-
-	// Construct the rg command string for sh -c
-	// Base options for finding files with matches, respecting ignores, case, etc.
-	rgCmdOptions := "--files-with-matches --hidden --no-messages"
-	rgCmdOptions += " --ignore-file " + escapeShellArg(sCtx.coreIgnorePath)
-	if sCtx.sideIgnoreExists {
-		rgCmdOptions += " --ignore-file .sideignore"
-	}
-	if sCtx.input.CaseInsensitive {
-		rgCmdOptions += " --ignore-case"
-	}
-	if sCtx.input.FixedStrings {
-		rgCmdOptions += " --fixed-strings"
-	}
-
-	// The command string to be executed by sh -c
-	// sCtx.escapedSearchTerm is already shell-escaped.
-	cmdStr := fmt.Sprintf("rg %s %s", rgCmdOptions, sCtx.escapedSearchTerm)
-
-	vGlobalRg := workflow.GetVersion(sCtx.ctx, "global-fallback-search-rg-v1", workflow.DefaultVersion, 1)
-	if vGlobalRg >= 1 {
-		err := workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
-			EnvContainer:       sCtx.envContainer,
-			RelativeWorkingDir: "./",
-			Command:            "sh",
-			Args:               []string{"-c", cmdStr},
-		}).Get(sCtx.ctx, &rgOutput)
-
-		if err != nil {
-			return nil, fmt.Errorf("failed to execute global rg search activity: %w", err)
-		}
-		// rg --files-with-matches exits 0 if matches found, 1 if no matches, 2 for error.
-		if rgOutput.ExitStatus == 2 {
-			return nil, fmt.Errorf("global rg search command failed with exit status %d: %s", rgOutput.ExitStatus, rgOutput.Stderr)
-		}
-		// If ExitStatus is 1 (no matches), Stdout will be empty, which is handled below.
-	} else {
-		return nil, fmt.Errorf("performGlobalFallbackSearch requires workflow version 'global-fallback-search-rg-v1' or newer")
-	}
-
-	if strings.TrimSpace(rgOutput.Stdout) == "" {
-		return []string{}, nil
-	}
-
-	files := strings.Split(strings.TrimSpace(rgOutput.Stdout), "\n")
-	var resultFiles []string
-	for _, f := range files {
-		if strings.TrimSpace(f) != "" { // Ensure no empty strings from split
-			resultFiles = append(resultFiles, f)
-		}
-	}
-	return resultFiles, nil
-}
-
 // processGlobalFallbackResults processes files found by the global fallback search.
 // It may run git grep, parse results using ExtractSearchCodeBlocks, and truncate them if necessary.
-func (sCtx *searchContext) processGlobalFallbackResults(filesFoundGlobally []string) (string, error) {
-	numFilesFound := len(filesFoundGlobally)
+func (sCtx *searchContext) processGlobalFallbackResults(allFiles []string) (string, error) {
+	v := workflow.GetVersion(sCtx.ctx, "search-repo-global-fallback", workflow.DefaultVersion, 1)
+	if v < 1 {
+		return "", nil
+	}
+
+	matchingFiles, err := filterFilesByGlob(allFiles, sCtx.input.PathGlob)
+	var matchingFilesSet map[string]bool
+	for _, file := range(matchingFiles) { 
+		matchingFilesSet[file] = true
+	}
+	var nonMatchingFiles []string
+	for _, file := range(allFiles) {
+		if _, ok := matchingFilesSet[file]; !ok {
+			nonMatchingFiles = append(nonMatchingFiles, file)
+		}
+	}
+
+	numFilesFound := len(nonMatchingFiles)
 
 	if numFilesFound == 0 {
 		return "", nil
 	}
 
 	if numFilesFound > 3 && numFilesFound < 10 {
-		// Sort files for consistent output, though rg output is usually sorted.
-		// For this small number, direct join is fine as per requirements.
-		return fmt.Sprintf("\n%s", strings.Join(filesFoundGlobally, "\n")), nil
+		return fmt.Sprintf("\n%s", strings.Join(nonMatchingFiles, "\n")), nil
 	}
 
 	if numFilesFound >= 10 {
-		return fmt.Sprintf("\nSearch term found in %d files (ignoring original path glob). TODO: Show summary of these files.", numFilesFound), nil
+		// TODO: Show summary of these file paths, eg file directories
+		return fmt.Sprintf("\nSearch term '%s' found in %d files NOT matching the path glob", sCtx.input.SearchTerm, numFilesFound), nil
 	}
 
 	// Case: 0 < numFilesFound <= 3. Execute git grep.
 	var gitGrepOutput env.EnvRunCommandOutput
-	escapedFiles := make([]string, len(filesFoundGlobally))
-	for i, f := range filesFoundGlobally {
+	escapedFiles := make([]string, len(nonMatchingFiles))
+	for i, f := range nonMatchingFiles {
 		escapedFiles[i] = escapeShellArg(f)
 	}
 
@@ -542,33 +508,18 @@ func (sCtx *searchContext) processGlobalFallbackResults(filesFoundGlobally []str
 	// sCtx.escapedSearchTerm is already shell-escaped.
 	cmdStr := fmt.Sprintf("git grep %s %s -- %s", sCtx.gitGrepArgs, sCtx.escapedSearchTerm, strings.Join(escapedFiles, " "))
 
-	vGlobalGitGrep := workflow.GetVersion(sCtx.ctx, "global-fallback-git-grep-v1", workflow.DefaultVersion, 1)
-	if vGlobalGitGrep >= 1 {
-		err := workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
-			EnvContainer:       sCtx.envContainer,
-			RelativeWorkingDir: "./",
-			Command:            "sh",
-			Args:               []string{"-c", cmdStr},
-		}).Get(sCtx.ctx, &gitGrepOutput)
+	err = workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+		EnvContainer:       sCtx.envContainer,
+		RelativeWorkingDir: "./",
+		Command:            "sh",
+		Args:               []string{"-c", cmdStr},
+	}).Get(sCtx.ctx, &gitGrepOutput)
 
-		if err != nil {
-			return "", fmt.Errorf("failed to execute git grep for global fallback: %w", err)
-		}
-		// git grep exits 0 if matches found, 1 if no matches. Exit status > 1 indicates an error.
-		if gitGrepOutput.ExitStatus > 1 {
-			return "", fmt.Errorf("git grep for global fallback failed with exit status %d: %s", gitGrepOutput.ExitStatus, gitGrepOutput.Stderr)
-		}
-	} else {
-		return "", fmt.Errorf("processGlobalFallbackResults git grep requires workflow version 'global-fallback-git-grep-v1' or newer")
+	if err != nil {
+		return "", fmt.Errorf("failed to execute git grep for global fallback: %w", err)
 	}
 
 	batchGitGrepOutput := gitGrepOutput.Stdout
-	if strings.TrimSpace(batchGitGrepOutput) == "" {
-		// This could happen if git grep finds no matches, even if rg found the files.
-		// Provide a message indicating the files where the term was expected.
-		return fmt.Sprintf("\nTerm was reported in files: %s (but no specific context or matches were retrieved by git grep).", strings.Join(filesFoundGlobally, ", ")), nil
-	}
-
 	allCodeBlocks := tree_sitter.ExtractSearchCodeBlocks(batchGitGrepOutput)
 
 	fileStats := make(map[string]struct {
@@ -615,7 +566,6 @@ func (sCtx *searchContext) processGlobalFallbackResults(filesFoundGlobally []str
 		segments = []string{batchGitGrepOutput} // Treat as a single segment
 	}
 
-	anyTruncationPerformed := false
 	for _, segment := range segments {
 		trimmedSegment := strings.TrimSpace(segment)
 		if trimmedSegment == "" {
@@ -637,7 +587,6 @@ func (sCtx *searchContext) processGlobalFallbackResults(filesFoundGlobally []str
 		stats, statsOk := fileStats[filePathFromSegment]
 		if statsOk && filesToTruncate[filePathFromSegment] {
 			resultSegments = append(resultSegments, fmt.Sprintf("%s: %d matches (results truncated due to length)", filePathFromSegment, stats.numMatches))
-			anyTruncationPerformed = true
 		} else {
 			// If file not in fileStats (e.g., header only, no blocks parsed by ExtractSearchCodeBlocks),
 			// or not marked for truncation, keep its original segment.
@@ -645,106 +594,128 @@ func (sCtx *searchContext) processGlobalFallbackResults(filesFoundGlobally []str
 		}
 	}
 
-	if !anyTruncationPerformed && len(filesToTruncate) > 0 {
-		workflow.GetLogger(sCtx.ctx).Warn("Truncation was planned based on fileStats, but no output segments were actually replaced. Check segment parsing and FilePath matching.", "filesToTruncate", filesToTruncate)
-		// Fallback to returning original output if reconstruction is problematic, or decide on a different strategy.
-		// For now, the logic proceeds, and if resultSegments is empty or malformed, it will be joined as such.
-	}
-
 	return strings.Join(resultSegments, "\n--\n"), nil
 }
 
-// SearchRepository searches the repository for the given search term, ignoring matching .gitingore or .sideignore
-// TODO: The core logic of this function will be refactored in Step 4 to use sCtx methods for retries and fallback.
-// For now, it's minimally adapted to use the results from executeMainSearch and handleOutputLengthChecks.
+func updatedInputWithFixedStrings(input SearchRepositoryInput) SearchRepositoryInput {
+	newInput := input
+	newInput.FixedStrings = true
+	return newInput
+}
+
+func updatedInputWithCaseInsensitive(input SearchRepositoryInput) SearchRepositoryInput {
+	newInput := input
+	newInput.CaseInsensitive = true
+	return newInput
+}
+
+// isNonCriticalRgError checks if the stderr from rg indicates an error that
+// shouldn't halt the search process (e.g., allow retries or fallback).
+func isNonCriticalRgError(stderr string) bool {
+	// "regex parse error" might occur if a fixed string search term is invalid as a regex.
+	// "No files were searched" can happen if rg filters out all files due to ignores or path globs,
+	// but we might still want to proceed with global fallback logic.
+	return strings.Contains(stderr, "regex parse error") || strings.Contains(stderr, "No files were searched")
+}
+
+func constructFallbackMessage(input SearchRepositoryInput, allFilesMatchingGlob []string, allFiles []string, fallbackDetails string) string {
+	var message string
+
+	detailsForDisplay := ""
+	if fallbackDetails != "" {
+		if strings.HasPrefix(fallbackDetails, "\n") {
+			detailsForDisplay = fallbackDetails // Already formatted with a leading newline
+		} else {
+			detailsForDisplay = "\n" + fallbackDetails // Prepend newline for direct content like git grep output
+		}
+	}
+
+	if len(allFilesMatchingGlob) == 0 { // No files matched original PathGlob
+		if len(allFiles) == 0 {
+			message = fmt.Sprintf("No files matched the path glob '%s', and search term '%s' was not found in any other files. Consider using a different path glob and/or search term.", input.PathGlob, input.SearchTerm)
+		} else { // Term found globally
+			message = fmt.Sprintf("No files matched the path glob '%s'. However, the search term '%s' was found in other files:%s", input.PathGlob, input.SearchTerm, detailsForDisplay)
+		}
+	} else { // Files matched the PathGlob, but term not found in them
+		baseMessage := ""
+		if len(allFilesMatchingGlob) <= 10 {
+			// utils.Map is available from "sidekick/utils" import
+			indentedFiles := utils.Map(allFilesMatchingGlob, func(file string) string {
+				return "\t" + file
+			})
+			baseMessage = fmt.Sprintf("No results found in the following files:\n%s", strings.Join(indentedFiles, "\n"))
+		} else {
+			baseMessage = fmt.Sprintf("No results found in %d matching files", len(allFilesMatchingGlob))
+		}
+
+		if len(allFiles) == 0 {
+			message = baseMessage + fmt.Sprintf("\nThe search term '%s' was also not found in any other files.", input.SearchTerm)
+		} else { // Term found globally
+			message = baseMessage + fmt.Sprintf("\nHowever, the search term '%s' was also found in other files:%s", input.SearchTerm, detailsForDisplay)
+		}
+	}
+	return message
+}
+
+// SearchRepository searches the repository for the given search term, using a searchContext
+// to manage state, retries, and fallback logic.
 func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input SearchRepositoryInput) (string, error) {
 	sCtx, err := initSearchContext(ctx, envContainer, input)
 	if err != nil {
-		return "", fmt.Errorf("failed to initialize search: %w", err)
+		return "", fmt.Errorf("failed to initialize search context: %w", err)
 	}
 
-	rawOutput, cmdStderr, err := sCtx.executeMainSearch()
+	rawOutput, cmdStderr, allFiles, globMatchedFiles, err := sCtx.executeMainSearch()
 	if err != nil {
-		// err from executeMainSearch is already descriptive (e.g., "failed to search repository")
 		return "", err
 	}
 
-	processedOutput, returnEarlyWithMessage, err := sCtx.handleOutputLengthChecks(rawOutput)
-	if err != nil {
-		// err from handleOutputLengthChecks is already descriptive
+	processedOutput, shouldReturnEarlyWithMsg, err := sCtx.handleOutputLengthChecks(rawOutput, globMatchedFiles)
+	if err != nil { // Error from handleOutputLengthChecks
 		return "", err
 	}
-
-	if returnEarlyWithMessage {
+	if shouldReturnEarlyWithMsg {
 		return addSearchPrefix(sCtx.input, processedOutput), nil
 	}
 
-	// At this point, processedOutput is the potentially truncated search output,
-	// and cmdStderr is the stderr from the main search command.
-	// The original logic for handling no results, retries, etc., will follow.
-	// For now, we use processedOutput as 'output' and cmdStderr as 'searchOutput.Stderr'.
-
-	// handle no results
+	// Output is genuinely empty (or cleared due to length checks but not returned early)
 	if strings.TrimSpace(processedOutput) == "" {
-		// Note: searchOutput.Stderr is now cmdStderr
-		if cmdStderr != "" && !strings.Contains(cmdStderr, "regex parse error") && !strings.Contains(cmdStderr, "No files were searched") {
+		// Check for significant rg errors before attempting retries or fallback.
+		// If cmdStderr is not empty and the error is critical (not a parse error or "no files searched"),
+		// return the stderr directly. rg usually prefixes its own errors, so no addSearchPrefix here.
+		if cmdStderr != "" && !isNonCriticalRgError(cmdStderr) {
 			return cmdStderr, nil
 		}
 
-		if !input.FixedStrings {
-			// retry with fixed strings search
-			input.FixedStrings = true
-			return SearchRepository(ctx, envContainer, input)
+		// Attempt retries for FixedStrings and CaseInsensitive.
+		// These recursive calls create new searchContexts internally.
+		if !sCtx.input.FixedStrings {
+			return SearchRepository(ctx, envContainer, updatedInputWithFixedStrings(sCtx.input))
+		}
+		if !sCtx.input.CaseInsensitive {
+			return SearchRepository(ctx, envContainer, updatedInputWithCaseInsensitive(sCtx.input))
 		}
 
-		if !input.CaseInsensitive {
-			// retry with case-insensitive search
-			input.CaseInsensitive = true
-			return SearchRepository(ctx, envContainer, input)
-		}
-
-		if isSpecificPathGlob(input.PathGlob) {
-			// Check if the given path glob matches any files using manual filtering to respect ignore files
-			var listOutput env.EnvRunCommandOutput
-			listAllFilesCmd := "rg --files --hidden --ignore-file " + escapeShellArg(coreIgnorePath)
-			if catOutput.ExitStatus == 0 {
-				listAllFilesCmd += " --ignore-file .sideignore"
-			}
-
-			err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
-				EnvContainer:       envContainer,
-				RelativeWorkingDir: "./",
-				Command:            "sh",
-				Args:               []string{"-c", listAllFilesCmd},
-			}).Get(ctx, &listOutput)
+		// Retries exhausted, still no results. Apply specific glob fallback logic.
+		if isSpecificPathGlob(sCtx.input.PathGlob) {
+			allFilesMatchingGlob, err := sCtx.getFilesMatchingPathGlob() // Files matching original glob
 			if err != nil {
-				return "", fmt.Errorf("failed to list all files for path glob check: %v", err)
+				return "", fmt.Errorf("failed to get files matching path glob for fallback: %w", err)
 			}
 
-			// Filter files using glob pattern
-			allFiles := strings.Split(strings.TrimSpace(listOutput.Stdout), "\n")
-			matchingFiles, err := filterFilesByGlob(allFiles, input.PathGlob)
+			fallbackDetails, err := sCtx.processGlobalFallbackResults(allFiles)
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("failed to process global fallback results: %w", err)
 			}
 
-			if len(matchingFiles) == 0 {
-				return addSearchPrefix(input, fmt.Sprintf("No files matched the path glob %s - please try a different path glob", input.PathGlob)), nil
-			}
-
-			// Show file metadata for no results when path glob is specified
-			if len(matchingFiles) <= 10 {
-				indentedFiles := utils.Map(matchingFiles, func(file string) string {
-					return "\t" + file
-				})
-				return addSearchPrefix(input, fmt.Sprintf("No results found in the following files:\n%s",
-					strings.Join(indentedFiles, "\n"))), nil
-			}
-			return addSearchPrefix(input, fmt.Sprintf("No results found in %d matching files", len(matchingFiles))), nil
+			finalMessage := constructFallbackMessage(sCtx.input, allFilesMatchingGlob, allFiles, fallbackDetails)
+			return addSearchPrefix(sCtx.input, finalMessage), nil
+		} else {
+			// Generic no results message if not a specific path glob after all retries.
+			return addSearchPrefix(sCtx.input, "No results found. Try a less restrictive search query, or try a different tool."), nil
 		}
-
-		return addSearchPrefix(input, "No results found. Try a less restrictive search query, or try a different tool."), nil
+	} else {
+		// Main search yielded results, and they were of acceptable length (or truncated and accepted).
+		return addSearchPrefix(sCtx.input, processedOutput), nil
 	}
-
-	return addSearchPrefix(input, output), nil
 }
