@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"time"
 
 	"github.com/urfave/cli/v3"
 )
@@ -46,6 +49,22 @@ func NewTaskCommand() *cli.Command {
 				return nil
 			}
 
+			// Ensure the Sidekick server is running before proceeding.
+			if !checkServerStatus() {
+				fmt.Println("Sidekick server is not running. Attempting to start it in the background...")
+				if err := startServerDetached(); err != nil {
+					return cli.Exit(fmt.Sprintf("Failed to start Sidekick server: %v. Please try 'side start server' manually.", err), 1)
+				}
+
+				fmt.Println("Waiting up to 10 seconds for Sidekick server to become available...")
+				if !waitForServer(10 * time.Second) {
+					return cli.Exit("Sidekick server did not become available in time after attempting to start. Please check server logs or start it manually using 'side start server'.", 1)
+				}
+				fmt.Println("Sidekick server started and is now available.")
+			} else {
+				fmt.Println("Sidekick server is already running.")
+			}
+
 			// If we reach here, taskDescription is a real description.
 			fmt.Printf("Task command invoked for: %q\n", taskDescription)
 			fmt.Printf("  Disable Human in the Loop: %t\n", cmd.Bool("disable-human-in-the-loop"))
@@ -76,4 +95,28 @@ func NewTaskCommand() *cli.Command {
 			return nil
 		},
 	}
+}
+
+// startServerDetached attempts to start the Sidekick server in a detached background process
+// by invoking the 'side start server' command.
+func startServerDetached() error {
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to determine executable path: %w", err)
+	}
+
+	cmd := exec.Command(executable, "start", "server")
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start Sidekick server process ('%s start server'): %w", executable, err)
+	}
+
+	if cmd.Process != nil {
+		fmt.Printf("Sidekick server process initiated with PID: %d. It will run in the background.\n", cmd.Process.Pid)
+	} else {
+		// This case should ideally not be reached if cmd.Start() succeeds without error.
+		fmt.Println("Sidekick server process initiated, but PID was not immediately available.")
+	}
+	// Not calling cmd.Wait() allows the current command to proceed while the server runs independently.
+	return nil
 }
