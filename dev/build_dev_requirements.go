@@ -8,7 +8,6 @@ import (
 	"sidekick/domain"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
-	"sidekick/utils"
 
 	"github.com/invopop/jsonschema"
 	"github.com/sashabaranov/go-openai"
@@ -238,7 +237,7 @@ func TrackedToolChat(dCtx DevContext, actionType string, options llm.ToolChatOpt
 		}
 		var chatResponse llm.ChatMessageResponse
 		var la *persisted_ai.LlmActivities // use a nil struct pointer to call activities that are part of a structure
-		err := workflow.ExecuteActivity(utils.LlmHeartbeatCtx(dCtx), la.ChatStream, chatStreamOptions).Get(dCtx, &chatResponse)
+		err := ExecuteActivityWithUserRetry(actionCtx.WithLlmHeartbeatCtx(), la.ChatStream, chatStreamOptions).Get(dCtx, &chatResponse)
 		if err != nil {
 			return nil, fmt.Errorf("error during tracked tool chat action '%s': %v", actionType, err)
 		}
