@@ -121,8 +121,35 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 	output, err := ragActivities.RankedDirSignatureOutline(options)
 	require.NoError(t, err, "RankedDirSignatureOutline returned an error")
 
-	// Placeholder for assertions in the next step
+	// Assertions for the output
 	require.NotEmpty(t, output, "RankedDirSignatureOutline output should not be empty")
+
+	// 1. Check for the presence of specific, expected directory paths
+	expectedDirPaths := []string{
+		"persisted_ai", // Contains RagActivities, interacts with DB for embeddings
+		"srv/sqlite",   // Core SQLite storage implementation
+		"srv",          // Parent package for services
+	}
+	for _, path := range expectedDirPaths {
+		require.Contains(t, output, path, "Output should contain directory path: %s", path)
+	}
+
+	// 2. Check for the presence of specific code signatures or parts of signatures
+	//    These are related to "database interaction functions"
+	expectedSignatures := []string{
+		"NewStorage",                // From srv/sqlite/storage.go
+		"GetSqliteUri",              // From srv/sqlite/storage.go
+		"GetAllWorkspaces",          // From srv/sqlite/storage.go, used in test setup
+		"RankedDirSignatureOutline", // The function under test
+		"DatabaseAccessor",          // Interface used for DB operations
+		"BatchLoadFileEmbeddings",   // A RagActivity method that interacts with DB
+		"EnsureEmbeddingsForFiles",  // A RagActivity method that interacts with DB
+	}
+	for _, sig := range expectedSignatures {
+		require.Contains(t, output, sig, "Output should contain signature: %s", sig)
+	}
+
 	t.Logf("RankedDirSignatureOutline output length: %d", len(output))
-	// t.Logf("RankedDirSignatureOutline output:\n%s", output) // Uncomment for debugging if needed
+	// For detailed debugging, uncomment the following line:
+	// t.Logf("RankedDirSignatureOutline output:\n%s", output)
 }
