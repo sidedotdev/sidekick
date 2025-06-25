@@ -125,7 +125,10 @@ helpful to configure the test command to provide shortened output - while
 Sidekick will automatically summarize long test outputs too, that comes at the
 cost of time, money and accuracy.
 
-You can optionally configure `integration_test_commands` separately from `test_commands` if you want Sidekick to run slower integration tests less frequently than unit tests.
+You can optionally configure `integration_test_commands` separately from
+`test_commands` if you want Sidekick to run slower integration tests less
+frequently than unit tests. Sidekick will run these tests only at the end of a
+task, instead of within each step or iteration.
 
 #### edit_code
 
