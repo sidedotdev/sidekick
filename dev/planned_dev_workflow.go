@@ -214,9 +214,29 @@ func ensureTestsPassAfterDevPlanExecutedSubflow(dCtx DevContext, input PlannedDe
 		if err != nil {
 			return fmt.Errorf("failed to run tests: %v", err)
 		}
+
 		if testResult.TestsPassed {
-			break
+			if len(dCtx.RepoConfig.IntegrationTestCommands) == 0 {
+				break
+			}
+
+			integrationTestResult, err := RunTests(dCtx, dCtx.RepoConfig.IntegrationTestCommands)
+			if err != nil {
+				return fmt.Errorf("failed to run integration tests: %v", err)
+			}
+			if integrationTestResult.TestsPassed {
+				break
+			}
+
+			// use the integration test results as part of the prompt
+			testResult = integrationTestResult
 		}
+
+		// TODO if it's integration tests that failed, override the configured
+		// test commands that should be run within dCtx, to include the
+		// integration tests as well, to ensure that the inner loop of editing
+		// code within completeDevStep has access to the output of integration
+		// test results too.
 		_, err = completeDevStep(dCtx, input.Requirements, planExec, DevStep{
 			Type:               "edit",
 			Title:              "Ensure Tests Pass",
@@ -226,35 +246,6 @@ func ensureTestsPassAfterDevPlanExecutedSubflow(dCtx DevContext, input PlannedDe
 
 		if err != nil {
 			return err
-		}
-	}
-
-	// Now, run integration tests if they are defined
-	if len(dCtx.RepoConfig.IntegrationTestCommands) > 0 {
-		attempts = 0 // Reset attempts for integration tests
-		for {
-			if attempts >= maxAttempts {
-				return fmt.Errorf("failed to ensure integration tests pass after dev plan executed")
-			}
-			attempts++
-
-			integrationTestResult, err := RunTests(dCtx, dCtx.RepoConfig.IntegrationTestCommands)
-			if err != nil {
-				return fmt.Errorf("failed to run integration tests: %v", err)
-			}
-			if integrationTestResult.TestsPassed {
-				break
-			}
-			_, err = completeDevStep(dCtx, input.Requirements, planExec, DevStep{
-				Type:               "edit",
-				Title:              "Ensure Integration Tests Pass",
-				Definition:         "The plan has been executed and regular tests pass, but please ensure integration tests also pass: they are unfortunately still failing. If you notice errors in the code, fix them but ensure all of the original requirements are being met with your changes. Here are the integration test results:\n\n" + integrationTestResult.Output,
-				CompletionAnalysis: "This final step will be considered complete when *all* integration tests pass. Any integration test failures mean the requirements are not met and thus the criteria have not been fulfilled. Furthermore, it's required that no changes were made that are not in line with the original requirements.",
-			})
-
-			if err != nil {
-				return err
-			}
 		}
 	}
 
