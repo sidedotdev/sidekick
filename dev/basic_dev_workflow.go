@@ -179,6 +179,20 @@ func codingSubflow(dCtx DevContext, requirements string, envType env.EnvType, st
 			continue
 		}
 
+		// Run integration tests if regular tests passed and integration tests are configured
+		if len(dCtx.RepoConfig.IntegrationTestCommands) > 0 {
+			integrationTestResult, err := RunTests(dCtx, dCtx.RepoConfig.IntegrationTestCommands)
+			if err != nil {
+				_ = signalWorkflowClosure(dCtx, "failed")
+				return "", fmt.Errorf("failed to run integration tests: %v", err)
+			}
+			if !integrationTestResult.TestsPassed {
+				promptInfo = FeedbackInfo{Feedback: integrationTestResult.Output}
+				attemptCount++
+				continue
+			}
+		}
+
 		// Step 4: check diff and confirm if requirements have been met
 		fulfillment, err = CheckWorkMeetsCriteria(dCtx, CheckWorkInfo{
 			Requirements: requirements,
