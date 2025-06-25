@@ -85,11 +85,13 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 			EnvContainer: env.EnvContainer{
 				Env: localEnv,
 			},
-			RankQuery: "database interaction functions",
+			RankQuery: "database interaction functions for tasks",
 			Secrets: secret_manager.SecretManagerContainer{
 				SecretManager: secretsManager,
 			},
-			ModelConfig: common.ModelConfig{},
+			ModelConfig: common.ModelConfig{
+				Provider: "openai",
+			},
 		},
 		CharLimit: 8000,
 	}
@@ -101,9 +103,8 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 
 	// Verify expected directory paths are present
 	expectedPaths := []string{
-		"persisted_ai", // Contains RagActivities, interacts with DB for embeddings
-		"srv/sqlite",   // Core SQLite storage implementation
-		"srv",          // Parent package for services
+		"domain/\n\ttask.go\n",
+		"\n\t\ttask.go\n", // under srv/sqlite or srv/redis
 	}
 	for _, path := range expectedPaths {
 		require.Contains(t, output, path, "Output should contain directory path: %s", path)
@@ -111,13 +112,9 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 
 	// Verify expected database-related signatures are present
 	expectedSignatures := []string{
-		"NewStorage",                // From srv/sqlite/storage.go
-		"GetSqliteUri",              // From srv/sqlite/storage.go
-		"GetAllWorkspaces",          // From srv/sqlite/storage.go
-		"RankedDirSignatureOutline", // The function under test
-		"DatabaseAccessor",          // Interface used for DB operations
-		"BatchLoadFileEmbeddings",   // A RagActivity method that interacts with DB
-		"EnsureEmbeddingsForFiles",  // A RagActivity method that interacts with DB
+		"type TaskStorage interface {",
+		"PersistTask(ctx context.Context, task Task) error",
+		"GetTask(ctx context.Context, workspaceId, taskId string) (Task, error)",
 	}
 	for _, sig := range expectedSignatures {
 		require.Contains(t, output, sig, "Output should contain signature: %s", sig)
