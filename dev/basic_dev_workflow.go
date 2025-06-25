@@ -167,7 +167,7 @@ func codingSubflow(dCtx DevContext, requirements string, envType env.EnvType, st
 		}
 
 		// Step 3: run tests
-		testResult, err = RunTests(dCtx)
+		testResult, err = RunTests(dCtx, dCtx.RepoConfig.TestCommands)
 		if err != nil {
 			_ = signalWorkflowClosure(dCtx, "failed")
 			return "", fmt.Errorf("failed to run tests: %v", err)

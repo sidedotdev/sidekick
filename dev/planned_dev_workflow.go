@@ -210,7 +210,7 @@ func ensureTestsPassAfterDevPlanExecutedSubflow(dCtx DevContext, input PlannedDe
 		}
 		attempts++
 
-		testResult, err := RunTests(dCtx)
+		testResult, err := RunTests(dCtx, dCtx.RepoConfig.TestCommands)
 		if err != nil {
 			return fmt.Errorf("failed to run tests: %v", err)
 		}
