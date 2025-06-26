@@ -61,6 +61,7 @@ type ApplyEditBlockActivityInput struct {
 	CheckCommands []common.CommandConfig
 }
 
+// DEPRECATED: use DevActivities.ApplyEditBlocks instead
 // needed for backcompat, avoiding non-deterministic temporal workflow runs
 func ApplyEditBlocksActivity(ctx context.Context, input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
 	da := DevActivities{
@@ -224,7 +225,11 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 }
 
 // notifyLSPServerOfFileChanges notifies the LSP server about file changes
-// by sending appropriate textDocument notifications based on edit type and server capabilities
+// by sending appropriate textDocument notifications based on edit type and
+// server capabilities
+// TODO: reduce number of notifications needed for performance: do the opens for
+// all the files up-front before the loop in ApplyEditBlocks, do syncs
+// throughout, then close at the end
 func (da *DevActivities) notifyLSPServerOfFileChanges(ctx context.Context, envContainer env.EnvContainer, filePath string, editType string) error {
 	switch editType {
 	case "update", "append":
@@ -1207,6 +1212,13 @@ func AutofixIfEditSucceeded(ctx context.Context, devActivities *DevActivities, e
 	runAutofixCommands(envContainer, report)
 
 	// LSP-based autofix
+
+	// first notify LSP, in case it is out of sync, to ensure we don't get back bad autofixes
+	err := devActivities.notifyLSPServerOfFileChanges(ctx, envContainer, report.OriginalEditBlock.FilePath, report.OriginalEditBlock.EditType)
+	if err != nil {
+		log.Warn().Err(err).Str("filePath", report.OriginalEditBlock.FilePath).Msg("Failed to notify LSP server of file change")
+	}
+
 	absoluteFilePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), report.OriginalEditBlock.FilePath)
 	autofixInput := lsp.AutofixActivityInput{
 		DocumentURI:  "file://" + absoluteFilePath,
@@ -1216,6 +1228,7 @@ func AutofixIfEditSucceeded(ctx context.Context, devActivities *DevActivities, e
 	if autofixErr != nil {
 		report.AutofixError += fmt.Sprintf("\nLSP autofix error: %+v", autofixErr)
 	}
+
 	report.AutofixResult = result
 }
 
