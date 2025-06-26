@@ -47,7 +47,13 @@ func (options RankedDirSignatureOutlineOptions) ActionParams() map[string]any {
 func (ra *RagActivities) RankedDirSignatureOutline(options RankedDirSignatureOutlineOptions) (string, error) {
 	// FIXME put tree sitter activities inside rag activities struct
 	t := tree_sitter.TreeSitterActivities{DatabaseAccessor: ra.DatabaseAccessor}
-	fileSignatureSubkeys, err := t.CreateDirSignatureOutlines(options.WorkspaceId, options.EnvContainer.Env.GetWorkingDirectory())
+
+	_, maxCharacterLimit, err := embedding.CalculateEmbeddingCharLimits(options.RankedViaEmbeddingOptions.ModelConfig)
+	if err != nil {
+		return "", fmt.Errorf("failed to calculate embedding char limits: %w", err)
+	}
+
+	fileSignatureSubkeys, err := t.CreateDirSignatureOutlines(options.WorkspaceId, options.EnvContainer.Env.GetWorkingDirectory(), maxCharacterLimit)
 	if err != nil {
 		return "", err
 	}
