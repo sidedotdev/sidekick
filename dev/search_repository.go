@@ -471,11 +471,11 @@ func (sCtx *searchContext) processGlobalFallbackResults(allFiles []string) (stri
 
 	matchingFiles, err := filterFilesByGlob(allFiles, sCtx.input.PathGlob)
 	var matchingFilesSet map[string]bool
-	for _, file := range(matchingFiles) { 
+	for _, file := range matchingFiles {
 		matchingFilesSet[file] = true
 	}
 	var nonMatchingFiles []string
-	for _, file := range(allFiles) {
+	for _, file := range allFiles {
 		if _, ok := matchingFilesSet[file]; !ok {
 			nonMatchingFiles = append(nonMatchingFiles, file)
 		}
