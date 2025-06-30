@@ -2,7 +2,6 @@ package persisted_ai
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"testing"
 
@@ -237,7 +236,6 @@ func TestQueryPreparedStoreMultiple(t *testing.T) {
 		embKey, _ := constructEmbeddingKey(keyOpts)
 		kvsQuery[embKey] = vecBytes
 	}
-	fmt.Println("HERE")
 	err := dbAccessor.MSet(ctx, wsID, kvsQuery)
 	if err != nil {
 		t.Fatalf("MSet failed for query test setup: %v", err)

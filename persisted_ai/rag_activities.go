@@ -17,8 +17,15 @@ import (
 	"github.com/kelindar/binary"
 )
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 type RagActivities struct {
-	DatabaseAccessor srv.Service
+	DatabaseAccessor srv.Storage
 }
 
 type RankedDirSignatureOutlineOptions struct {
@@ -88,6 +95,10 @@ type RankedSubkeysOptions struct {
 }
 
 func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, error) {
+	if options.RankQuery == "" {
+		return []string{}, nil
+	}
+
 	ea := EmbedActivities{Storage: ra.DatabaseAccessor}
 	err := ea.CachedEmbedActivity(context.Background(), CachedEmbedActivityOptions{
 		Secrets:     options.Secrets,
@@ -106,25 +117,139 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 	if err != nil {
 		return []string{}, err
 	}
-	// TODO /gen/basic cache the queryVector in memory
-	// NOTE: "code_retrieval_query" would be ideal here, but isn't supported by text-embedding-004
+
+	// Get model-specific character limits
+	goodQueryChars, maxQueryChars, err := embedding.CalculateEmbeddingCharLimits(options.ModelConfig)
+	if err != nil {
+		return []string{}, fmt.Errorf("failed to calculate embedding limits: %w", err)
+	}
+
+	// Get first query vector to determine dimensions
+	firstQueryVector, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, []string{options.RankQuery[:min(len(options.RankQuery), maxQueryChars)]}, embedding.TaskTypeRetrievalQuery)
+	if err != nil {
+		return []string{}, fmt.Errorf("failed to embed initial query: %w", err)
+	}
+
+	// Prepare vector store once for reuse
+	store, err := va.PrepareVectorStore(context.Background(), options.WorkspaceId, options.ModelConfig.Provider, options.ModelConfig.Model, options.ContentType, options.Subkeys, len(firstQueryVector[0]))
+	defer store.Destroy()
+	if err != nil {
+		return []string{}, fmt.Errorf("failed to prepare vector store: %w", err)
+	}
+
 	// TODO: dynamically decide task type based on model name
 	// TODO: change "task type" to instead be "use_case" and we'll map to task
 	// type internally in the embedder implementation
+
+	if len(options.RankQuery) > maxQueryChars {
+		// Split query into chunks if it exceeds max size
+		queryChunks := splitQueryIntoChunks(options.RankQuery, goodQueryChars, maxQueryChars)
+
+		// Embed all chunks
+		queryVectors, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, queryChunks, embedding.TaskTypeRetrievalQuery)
+		if err != nil {
+			return []string{}, fmt.Errorf("failed to embed query chunks: %w", err)
+		}
+
+		// Search with all vectors
+		results, err := va.QueryPreparedStoreMultiple(context.Background(), store, queryVectors, 1000)
+		if err != nil {
+			return []string{}, fmt.Errorf("failed multi-vector search: %w", err)
+		}
+
+		// Combine results using RRF
+		return FuseResultsRRF(results), nil
+	}
+
+	// For queries within limits, use single vector path
 	queryVector, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, []string{options.RankQuery}, embedding.TaskTypeRetrievalQuery)
 	if err != nil {
 		return []string{}, fmt.Errorf("failed to embed query: %w", err)
 	}
 
-	return va.VectorSearch(VectorSearchActivityOptions{
-		WorkspaceId: options.WorkspaceId,
-		Provider:    options.ModelConfig.Provider,
-		Model:       options.ModelConfig.Model,
-		ContentType: options.ContentType,
-		Subkeys:     options.Subkeys,
-		Query:       queryVector[0],
-		Limit:       1000,
+	results, err := va.QueryPreparedStoreSingle(context.Background(), store, queryVector[0], 1000)
+	if err != nil {
+		return []string{}, fmt.Errorf("failed single-vector search: %w", err)
+	}
+
+	return results, nil
+}
+
+// splitQueryIntoChunks splits a query into chunks based on sentence boundaries and size limits.
+// Unlike tree_sitter.splitOutlineIntoChunks which is specialized for code outlines,
+// this function is optimized for natural language queries.
+func splitQueryIntoChunks(query string, goodChunkSize int, maxChunkSize int) []string {
+	if query == "" {
+		return []string{}
+	}
+
+	// First try splitting on sentence boundaries
+	sentences := strings.FieldsFunc(query, func(r rune) bool {
+		return r == '.' || r == '?' || r == '!'
 	})
+
+	var chunks []string
+	currentChunk := ""
+
+	// Combine sentences into chunks
+	for _, sentence := range sentences {
+		sentence = strings.TrimSpace(sentence)
+		if sentence == "" {
+			continue
+		}
+
+		// Add sentence punctuation back
+		sentence = sentence + "."
+
+		// If adding this sentence would exceed goodChunkSize, start a new chunk
+		if len(currentChunk)+len(sentence)+1 > goodChunkSize && currentChunk != "" {
+			chunks = append(chunks, strings.TrimSpace(currentChunk))
+			currentChunk = sentence
+		} else {
+			if currentChunk != "" {
+				currentChunk += " "
+			}
+			currentChunk += sentence
+		}
+	}
+
+	// Add the last chunk if any
+	if currentChunk != "" {
+		chunks = append(chunks, strings.TrimSpace(currentChunk))
+	}
+
+	// If any chunks are still too large, split them on word boundaries
+	for i := 0; i < len(chunks); i++ {
+		if len(chunks[i]) > maxChunkSize {
+			words := strings.Fields(chunks[i])
+			currentChunk = ""
+			newChunks := []string{}
+
+			for _, word := range words {
+				if len(currentChunk)+len(word)+1 > maxChunkSize {
+					if currentChunk != "" {
+						newChunks = append(newChunks, strings.TrimSpace(currentChunk))
+					}
+					currentChunk = word
+				} else {
+					if currentChunk != "" {
+						currentChunk += " "
+					}
+					currentChunk += word
+				}
+			}
+
+			if currentChunk != "" {
+				newChunks = append(newChunks, strings.TrimSpace(currentChunk))
+			}
+
+			// Replace the original chunk with the new chunks
+			chunks = append(chunks[:i], append(newChunks, chunks[i+1:]...)...)
+			i += len(newChunks) - 1
+		}
+	}
+
+	return chunks
 }
 
 func getEmbedder(config common.ModelConfig) (embedding.Embedder, error) {
