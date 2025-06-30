@@ -521,7 +521,7 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 		Params: ToolChatParams{
 			ModelConfig: common.ModelConfig{
 				Provider: "google",
-				Model:    "gemini-1.5-flash-8b", // cheapest model for testing
+				Model:    "gemini-2.5-flash-preview-04-17", // need a cheap yet reliable enough model for testing
 			},
 			Messages: []ChatMessage{
 				{Role: ChatMessageRoleUser, Content: "First say hi. After that, then look up what the weather is like in New York"},
