@@ -41,7 +41,27 @@ func setupTestWorkspace(t *testing.T, ctx context.Context) (string, string) {
 		}
 	}
 
-	require.NotEmpty(t, workspaceId, "No workspace found for repository root: %s", cleanedRepoRoot)
+	if workspaceId == "" {
+		// If no workspace found, try finding the git source directory
+		cmd := exec.Command("git", "rev-parse", "--git-common-dir")
+		gitCommonDirBytes, err := cmd.Output()
+		if err == nil {
+			gitCommonDir := strings.TrimSpace(string(gitCommonDirBytes))
+			if !filepath.IsAbs(gitCommonDir) {
+				gitCommonDir = filepath.Join(cleanedRepoRoot, gitCommonDir)
+			}
+			gitSourceDir := filepath.Dir(gitCommonDir)
+			// Check if there's a workspace for the source directory
+			for _, ws := range workspaces {
+				if filepath.Clean(ws.LocalRepoDir) == filepath.Clean(gitSourceDir) {
+					workspaceId = ws.Id
+					break
+				}
+			}
+		}
+	}
+
+	require.NotEmpty(t, workspaceId, "No workspace found for repository root or git source directory")
 	return workspaceId, cleanedRepoRoot
 }
 
@@ -98,8 +118,8 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 
 	// Execute the function under test
 	output, err := ragActivities.RankedDirSignatureOutline(options)
-	require.NoError(t, err, "RankedDirSignatureOutline returned an error")
 	require.NotEmpty(t, output, "RankedDirSignatureOutline output should not be empty")
+	require.NoError(t, err, "RankedDirSignatureOutline returned an error")
 
 	// Verify expected directory paths are present
 	expectedPaths := []string{
