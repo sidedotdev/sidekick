@@ -19,12 +19,6 @@ const (
 	// providerGoogle is the normalized string for the Google provider.
 	providerGoogle = "google"
 
-	// defaultOpenAIModel is the default model used for OpenAI if not specified.
-	defaultOpenAIModel = "text-embedding-3-small"
-	// defaultGoogleModel is the default model used for Google if not specified.
-	defaultGoogleModel = "text-embedding-004"
-
-	// tokenBufferConstant is a safety buffer subtracted from the model's maximum token limit.
 	tokenBufferConstant = 500
 	// minModelCapacityTokensConstant is the minimum total token capacity a model must have to be considered usable.
 	minModelCapacityTokensConstant = 100
@@ -55,9 +49,9 @@ func GetModelMaxTokens(modelConfig common.ModelConfig) (int, error) {
 	if modelName == "" {
 		switch providerName {
 		case providerOpenAI:
-			modelName = defaultOpenAIModel
+			modelName = OpenaiDefaultModel
 		case providerGoogle:
-			modelName = defaultGoogleModel
+			modelName = GoogleDefaultModel
 		default:
 			if providerName == "" {
 				return 0, fmt.Errorf("provider name is empty and model name is empty, cannot determine default model")
@@ -84,6 +78,7 @@ func GetModelMaxTokens(modelConfig common.ModelConfig) (int, error) {
 // It derives these limits based on the model's maximum token capacity, a safety token buffer,
 // a minimum required model token capacity, and an estimated characters-per-token ratio.
 func CalculateEmbeddingCharLimits(modelConfig common.ModelConfig) (goodChunkChars int, maxChunkChars int, err error) {
+
 	maxTokens, err := GetModelMaxTokens(modelConfig)
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to get model max tokens: %w", err)
