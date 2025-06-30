@@ -21,80 +21,164 @@ type VectorSearchActivityOptions struct {
 	Provider    string
 	Model       string
 	Query       embedding.EmbeddingVector
-	Limit       int
+	Limit       uint
 }
+
+// PreparedStore holds a pre-built usearch index and the original subkeys
+// for efficient querying.
+type PreparedStore struct {
+	index   *usearch.Index
+	subkeys []string
+}
+
+// Destroy releases the resources associated with the usearch.Index.
+// It should be called when the PreparedStore is no longer needed.
+func (ps *PreparedStore) Destroy() {
+	if ps.index != nil {
+		ps.index.Destroy()
+		ps.index = nil // Avoid double destroy
+	}
+}
+
 type VectorActivities struct {
-	DatabaseAccessor db.Service
+	DatabaseAccessor db.Storage
 }
 
-func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]string, error) {
-	// get the embeddings from the (non-vector) db
-	embeddingKeys := make([]string, 0, len(options.Subkeys))
-	for _, subKey := range options.Subkeys {
-		embeddingKey, err := constructEmbeddingKey(embeddingKeyOptions{
-			provider:    options.Provider,
-			model:       options.Model,
-			contentType: options.ContentType,
-			subKey:      subKey,
-		})
-		if err != nil {
-			return []string{}, err
-		}
-		embeddingKeys = append(embeddingKeys, embeddingKey)
-	}
-	values, err := va.DatabaseAccessor.MGet(context.Background(), options.WorkspaceId, embeddingKeys)
-	if err != nil {
-		return []string{}, err
+// PrepareVectorStore builds an in-memory vector store from the given subkeys and their embeddings.
+// numDimensions is the expected dimensionality of the vectors.
+func (va VectorActivities) PrepareVectorStore(ctx context.Context, workspaceId string, provider string, model string, contentType string, subkeys []string, numDimensions int) (PreparedStore, error) {
+	if numDimensions <= 0 {
+		return PreparedStore{}, fmt.Errorf("numDimensions must be positive, got %d", numDimensions)
 	}
 
-	// initialize vector index
-	numDimensions := len(options.Query)
-	vectorsCount := len(options.Subkeys)
 	conf := usearch.DefaultConfig(uint(numDimensions))
 	index, err := usearch.NewIndex(conf)
 	if err != nil {
-		return []string{}, fmt.Errorf("failed to create Index: %v", err)
-	}
-	defer index.Destroy()
-
-	err = index.Reserve(uint(vectorsCount))
-	if err != nil {
-		return []string{}, fmt.Errorf("failed to reserve: %v", err)
+		return PreparedStore{}, fmt.Errorf("failed to create Index: %v", err)
 	}
 
-	// build up the index
+	if len(subkeys) == 0 {
+		return PreparedStore{index: index, subkeys: []string{}}, nil
+	}
+
+	if err = index.Reserve(uint(len(subkeys))); err != nil {
+		index.Destroy()
+		return PreparedStore{}, fmt.Errorf("failed to reserve space in index: %v", err)
+	}
+
+	embeddingKeys := make([]string, 0, len(subkeys))
+	for _, subKey := range subkeys {
+		embeddingKey, keyErr := constructEmbeddingKey(embeddingKeyOptions{
+			provider:    provider,
+			model:       model,
+			contentType: contentType,
+			subKey:      subKey,
+		})
+		if keyErr != nil {
+			index.Destroy()
+			return PreparedStore{}, fmt.Errorf("failed to construct embedding key for subkey %s: %w", subKey, keyErr)
+		}
+		embeddingKeys = append(embeddingKeys, embeddingKey)
+	}
+
+	values, mgetErr := va.DatabaseAccessor.MGet(ctx, workspaceId, embeddingKeys)
+	if mgetErr != nil {
+		index.Destroy()
+		return PreparedStore{}, fmt.Errorf("failed to MGet embeddings: %w", mgetErr)
+	}
+
 	for i, value := range values {
 		if value == nil {
-			return []string{}, fmt.Errorf("embedding is missing for key: %s at %d", embeddingKeys[i], i)
+			index.Destroy()
+			return PreparedStore{}, fmt.Errorf("embedding is missing for key: %s", embeddingKeys[i])
 		}
 
 		var stringValue string
-		err := binary.Unmarshal(value, &stringValue)
-		if err != nil {
-			return []string{}, fmt.Errorf("embedding value %v for key %s failed to unmarshal: %w", embeddingKeys[i], value, err)
+		if err := binary.Unmarshal(value, &stringValue); err != nil {
+			index.Destroy()
+			return PreparedStore{}, fmt.Errorf("embedding value for key %s failed to unmarshal to string: %w", embeddingKeys[i], err)
 		}
 		byteValue := []byte(stringValue)
 		var ev embedding.EmbeddingVector
 		if err := ev.UnmarshalBinary(byteValue); err != nil {
-			return []string{}, err
+			index.Destroy()
+			return PreparedStore{}, fmt.Errorf("embedding value for key %s failed to unmarshal to EmbeddingVector: %w", embeddingKeys[i], err)
 		}
 
-		err = index.Add(usearch.Key(i), ev)
-		if err != nil {
-			return []string{}, fmt.Errorf("failed to add to index: %v", err)
+		if len(ev) != numDimensions {
+			index.Destroy()
+			return PreparedStore{}, fmt.Errorf("dimension mismatch for key %s: expected %d, got %d", subkeys[i], numDimensions, len(ev))
+		}
+
+		if err := index.Add(usearch.Key(i), ev); err != nil {
+			index.Destroy()
+			return PreparedStore{}, fmt.Errorf("failed to add embedding for key %s to index: %v", subkeys[i], err)
 		}
 	}
 
-	// query the index
-	indices, _, err := index.Search(options.Query, uint(options.Limit))
+	return PreparedStore{index: index, subkeys: subkeys}, nil
+}
+
+var DefaultVectorSearchLimit uint = 1000
+
+// QueryPreparedStoreSingle performs a search for a single query vector against a pre-built PreparedStore.
+func (va VectorActivities) QueryPreparedStoreSingle(ctx context.Context, store PreparedStore, queryVector embedding.EmbeddingVector, limit uint) ([]string, error) {
+	if store.index == nil {
+		return []string{}, fmt.Errorf("PreparedStore.index is nil, cannot search")
+	}
+	if len(queryVector) == 0 {
+		return []string{}, fmt.Errorf("query vector cannot be empty")
+	}
+	if limit == 0 {
+		limit = DefaultVectorSearchLimit
+	}
+
+	keys, _, err := store.index.Search(queryVector, limit)
 	if err != nil {
-		return []string{}, fmt.Errorf("failed to search index: %v", err)
+		return nil, fmt.Errorf("error searching index: %w", err)
 	}
 
-	// map the numeric indices back to the original string hashes
-	result := make([]string, len(indices))
-	for i, idx := range indices {
-		result[i] = options.Subkeys[idx]
+	// The Search method returns keys, distances, and an error.
+	// We are interested in keys here. The matches object itself is not returned directly.
+	// Instead, the keys are directly accessible.
+	results := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if int(key) < len(store.subkeys) {
+			results = append(results, store.subkeys[int(key)])
+		} else {
+			// This should ideally not happen if PrepareVectorStore and Search are correct
+			// Consider logging this anomaly if a logger is available
+			return nil, fmt.Errorf("found key %d out of bounds of subkeys length %d", key, len(store.subkeys))
+		}
 	}
-	return result, nil
+	return results, nil
+}
+
+func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]string, error) {
+	ctx := context.Background() // Using Background context as original did.
+
+	if len(options.Query) == 0 {
+		return []string{}, fmt.Errorf("query vector cannot be empty as it defines dimensionality")
+	}
+	numDimensions := len(options.Query)
+
+	preparedStore, err := va.PrepareVectorStore(ctx,
+		options.WorkspaceId,
+		options.Provider,
+		options.Model,
+		options.ContentType,
+		options.Subkeys,
+		numDimensions,
+	)
+	if err != nil {
+		return []string{}, fmt.Errorf("failed to prepare vector store: %w", err)
+	}
+	defer preparedStore.Destroy()
+
+	results, err := va.QueryPreparedStoreSingle(ctx, preparedStore, options.Query, options.Limit)
+	if err != nil {
+		return []string{}, fmt.Errorf("failed to query prepared store: %w", err)
+	}
+
+	return results, nil
 }
