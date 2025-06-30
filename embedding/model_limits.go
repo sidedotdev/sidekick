@@ -50,7 +50,7 @@ var modelTokenLimits = map[string]int{
 // hardcoded fallback.
 func GetModelMaxTokens(modelConfig common.ModelConfig) (int, error) {
 	modelName := modelConfig.Model
-	providerName := modelConfig.NormalizedProviderName()
+	providerName := modelConfig.Provider
 
 	if modelName == "" {
 		switch providerName {
