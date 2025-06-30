@@ -920,24 +920,26 @@ func FindPotentialMatches(block EditBlock, originalLines []string, startingLineI
 			mergedFileRanges = mergedRangesForFile(block.FilePath, mergedFileRanges)
 		}
 
-		potentialMatches = utils.Filter(potentialMatches, func(m match) bool {
-			for _, visibleFileRange := range mergedFileRanges {
-				// we use a margin because lines move around from other edits blocks.
-				// also, the main reason for this check is to ensure we have the
-				// right match when there are multiple, thus we don't need to be
-				// too strict. we already have checks ensuring the llm is no:
-				// hallucinating by ensuring old lines are in the chat history.
-				margin := (visibleFileRange.EndLine - visibleFileRange.StartLine) / 8
-				margin = min(margin, minimumFileRangeVisibilityMargin)
+		if len(mergedFileRanges) > 0 {
+			potentialMatches = utils.Filter(potentialMatches, func(m match) bool {
+				for _, visibleFileRange := range mergedFileRanges {
+					// we use a margin because lines move around from other edits blocks.
+					// also, the main reason for this check is to ensure we have the
+					// right match when there are multiple, thus we don't need to be
+					// too strict. we already have checks ensuring the llm is no:
+					// hallucinating by ensuring old lines are in the chat history.
+					margin := (visibleFileRange.EndLine - visibleFileRange.StartLine) / 8
+					margin = min(margin, minimumFileRangeVisibilityMargin)
 
-				startIndex := visibleFileRange.StartLine - 1 - margin // 0-based index
-				endIndex := visibleFileRange.EndLine - 1 + margin     // 0-based index
-				if visibleFileRange.FilePath == block.FilePath && startIndex <= m.index && m.index+len(block.OldLines)-1 <= endIndex {
-					return true
+					startIndex := visibleFileRange.StartLine - 1 - margin // 0-based index
+					endIndex := visibleFileRange.EndLine - 1 + margin     // 0-based index
+					if visibleFileRange.FilePath == block.FilePath && startIndex <= m.index && m.index+len(block.OldLines)-1 <= endIndex {
+						return true
+					}
 				}
-			}
-			return false
-		})
+				return false
+			})
+		}
 	}
 
 	return potentialMatches

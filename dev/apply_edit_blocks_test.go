@@ -674,7 +674,7 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			expectedError:    nil,
 		},
 		{
-			name: "Empty Visible ranges: nothing is Visible",
+			name: "Empty Visible ranges: acts like everything is Visible",
 			block: EditBlock{
 				FilePath:          "test.txt",
 				OldLines:          []string{"line2", "line3"},
@@ -682,8 +682,8 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				VisibleFileRanges: []FileRange{},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
-			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline2\nline3\n"),
+			expectedContents: "line1\nnewLine2\nnewLine3\nline4\nline5",
+			expectedError:    nil,
 		},
 		{
 			name: "Edit spanning multiple Visible ranges and invisible range",
@@ -1012,7 +1012,7 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 			FilePath: newFilePath,
 			EditType: "update",
 			OldLines: []string{"Line 1", ""},
-			NewLines: []string{"Line 1", "Line 2"},
+			NewLines: []string{"Line 1", "Line 2", ""},
 		}
 		inputA2 := ApplyEditBlockActivityInput{
 			EditBlocks: []EditBlock{editBlockA2},
@@ -1036,11 +1036,11 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 		// Verify file content on disk
 		contentA2, err := os.ReadFile(fullNewFilePath)
 		require.NoError(t, err)
-		assert.Equal(t, "Line 1\nLine 2", string(contentA2), "File content after A2 should be 'Line 1\\nLine 2'")
+		assert.Equal(t, "Line 1\nLine 2\n", string(contentA2), "File content after A2 should be 'Line 1\\nLine 2\\n'")
 
 		// Verify staging for A2 (AC3.6)
 		stagedContentA2 := getStagedContent(t, tmpDirA, newFilePath)
-		assert.Equal(t, "Line 1\nLine 2", stagedContentA2, "Staged content after A2 should be 'Line 1\\nLine 2'")
+		assert.Equal(t, "Line 1\nLine 2\n", stagedContentA2, "Staged content after A2 should be 'Line 1\\nLine 2\\n'")
 
 		// Verify no commits (AC3.5)
 		commitsA2 := getCommitHashes(t, tmpDirA, newFilePath)
@@ -1115,7 +1115,7 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 			FilePath: existingFilePath,
 			EditType: "update",
 			OldLines: []string{"Initial line.", "Line Alpha", ""},
-			NewLines: []string{"Initial line.", "Line Alpha", "Line Beta"},
+			NewLines: []string{"Initial line.", "Line Alpha", "Line Beta", ""},
 		}
 		inputB2 := ApplyEditBlockActivityInput{
 			EditBlocks: []EditBlock{editBlockB2},
@@ -1140,11 +1140,11 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 		// Verify file content on disk
 		contentB2, err := os.ReadFile(fullExistingFilePath)
 		require.NoError(t, err)
-		assert.Equal(t, "Initial line.\nLine Alpha\nLine Beta", string(contentB2), "File content after B2 should be 'Initial line.\\nLine Alpha\\nLine Beta'")
+		assert.Equal(t, "Initial line.\nLine Alpha\nLine Beta\n", string(contentB2), "File content after B2 should be 'Initial line.\\nLine Alpha\\nLine Beta\\n'")
 
 		// Verify staging for B2 (AC3.6)
 		stagedContentB2 := getStagedContent(t, tmpDirB, existingFilePath)
-		assert.Equal(t, "Initial line.\nLine Alpha\nLine Beta", stagedContentB2, "Staged content after B2 should be 'Initial line.\\nLine Alpha\\nLine Beta'")
+		assert.Equal(t, "Initial line.\nLine Alpha\nLine Beta\n", stagedContentB2, "Staged content after B2 should be 'Initial line.\\nLine Alpha\\nLine Beta\\n'")
 
 		// Verify no new commits (AC3.5)
 		commitsB2 := getCommitHashes(t, tmpDirB, existingFilePath)
@@ -1161,6 +1161,8 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 		runGitCommand(t, tmpDirC, "config", "user.email", "test@example.com")
 		runGitCommand(t, tmpDirC, "config", "user.name", "Test User")
 		runGitCommand(t, tmpDirC, "checkout", "-b", "main") // Ensure we are on a branch
+		// Add an initial commit so git log --follow works
+		runGitCommand(t, tmpDirC, "commit", "--allow-empty", "-m", "Initial commit")
 
 		newFilePath := "sequential_new_no_range.txt"
 		fullNewFilePath := filepath.Join(tmpDirC, newFilePath)
@@ -1207,7 +1209,7 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 			FilePath:          newFilePath,
 			EditType:          "update",
 			OldLines:          []string{"Line 1", ""},
-			NewLines:          []string{"Line 1", "Line 2"},
+			NewLines:          []string{"Line 1", "Line 2", ""},
 			VisibleFileRanges: []FileRange{},
 		}
 		inputC2 := ApplyEditBlockActivityInput{
