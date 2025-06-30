@@ -2,12 +2,16 @@ package persisted_ai
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 
 	"sidekick/embedding"
 	db "sidekick/srv" // For db.Service interface
 	"sidekick/srv/sqlite"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // newTestDB is a helper to create a test DB accessor.
@@ -205,6 +209,129 @@ func TestQueryPreparedStoreSingle_NilIndexStore(t *testing.T) {
 	if err == nil {
 		t.Errorf("QueryPreparedStoreSingle() with nil index store did not return an error")
 	}
+}
+
+func TestQueryPreparedStoreMultiple(t *testing.T) {
+	ctx := context.Background()
+	dbAccessor := newTestDB(t)
+	va := VectorActivities{DatabaseAccessor: dbAccessor}
+
+	// Create test data
+	subkeys := []string{"key1", "key2", "key3"}
+	vectors := []embedding.EmbeddingVector{
+		{1.0, 0.0, 0.0},
+		{0.0, 1.0, 0.0},
+		{0.0, 0.0, 1.0},
+	}
+
+	wsID := "test-query-ws"
+	provider := "test-query-prov"
+	model := "test-query-model"
+	contentType := "text"
+	dim := 3
+
+	kvsQuery := make(map[string]interface{})
+	for i, sk := range subkeys {
+		vecBytes, _ := vectors[i].MarshalBinary()
+		keyOpts := embeddingKeyOptions{provider: provider, model: model, contentType: contentType, subKey: sk}
+		embKey, _ := constructEmbeddingKey(keyOpts)
+		kvsQuery[embKey] = vecBytes
+	}
+	fmt.Println("HERE")
+	err := dbAccessor.MSet(ctx, wsID, kvsQuery)
+	if err != nil {
+		t.Fatalf("MSet failed for query test setup: %v", err)
+	}
+
+	// Prepare store, indexing all content
+	store, err := va.PrepareVectorStore(ctx, wsID, provider, model, contentType, subkeys, dim)
+	require.NoError(t, err)
+	defer store.Destroy()
+
+	testCases := []struct {
+		name         string
+		queryVectors []embedding.EmbeddingVector
+		limit        uint
+		expectError  bool
+		expected     [][]string
+	}{
+		{
+			name: "multiple queries",
+			queryVectors: []embedding.EmbeddingVector{
+				{1.0, 0.0, 0.0},
+				{0.0, 1.0, 0.0},
+			},
+			limit:       1,
+			expectError: false,
+			expected: [][]string{
+				{"key1"},
+				{"key2"},
+			},
+		},
+		{
+			name:         "empty query vectors",
+			queryVectors: []embedding.EmbeddingVector{},
+			limit:        10,
+			expectError:  true,
+		},
+		{
+			name: "mismatched dimensions",
+			queryVectors: []embedding.EmbeddingVector{
+				{1.0, 0.0, 0.0},
+				{0.0, 1.0},
+			},
+			limit:       10,
+			expectError: true,
+		},
+		{
+			name: "empty vector",
+			queryVectors: []embedding.EmbeddingVector{
+				{},
+				{},
+			},
+			limit:       10,
+			expectError: true,
+		},
+		{
+			name: "default limit",
+			queryVectors: []embedding.EmbeddingVector{
+				{1.0, 0.0, 0.0},
+				{0.0, 1.0, 0.0},
+			},
+			limit:       0,
+			expectError: false,
+			expected: [][]string{
+				{"key1", "key3", "key2"},
+				{"key2", "key3", "key1"},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			results, err := va.QueryPreparedStoreMultiple(ctx, store, tc.queryVectors, tc.limit)
+			if tc.expectError {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, results)
+		})
+	}
+}
+
+func TestQueryPreparedStoreMultiple_NilIndexStore(t *testing.T) {
+	ctx := context.Background()
+	dbAccessor := newTestDB(t)
+	va := VectorActivities{DatabaseAccessor: dbAccessor}
+	store := PreparedStore{
+		index:   nil,
+		subkeys: []string{"key1"},
+	}
+	queryVectors := []embedding.EmbeddingVector{{1.0, 0.0, 0.0}}
+	_, err := va.QueryPreparedStoreMultiple(ctx, store, queryVectors, 10)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "PreparedStore.index is nil")
 }
 
 // It's good practice to also test the main VectorSearch activity after refactoring,

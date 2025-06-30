@@ -154,6 +154,50 @@ func (va VectorActivities) QueryPreparedStoreSingle(ctx context.Context, store P
 	return results, nil
 }
 
+// QueryPreparedStoreMultiple performs searches for multiple query vectors against a pre-built PreparedStore.
+// All query vectors must have the same dimensionality. Returns a slice of result slices, one per query vector.
+func (va VectorActivities) QueryPreparedStoreMultiple(ctx context.Context, store PreparedStore, queryVectors []embedding.EmbeddingVector, limit uint) ([][]string, error) {
+	if store.index == nil {
+		return nil, fmt.Errorf("PreparedStore.index is nil, cannot search")
+	}
+	if len(queryVectors) == 0 {
+		return nil, fmt.Errorf("queryVectors cannot be empty")
+	}
+	if limit == 0 {
+		limit = DefaultVectorSearchLimit
+	}
+
+	// Validate all vectors have same dimensionality
+	expectedDim := len(queryVectors[0])
+	if expectedDim == 0 {
+		return nil, fmt.Errorf("query vectors cannot be empty")
+	}
+	for i, vec := range queryVectors[1:] {
+		if len(vec) != expectedDim {
+			return nil, fmt.Errorf("query vector at index %d has different dimensionality (%d) than first vector (%d)", i+1, len(vec), expectedDim)
+		}
+	}
+
+	results := make([][]string, len(queryVectors))
+	for i, queryVector := range queryVectors {
+		keys, _, err := store.index.Search(queryVector, limit)
+		if err != nil {
+			return nil, fmt.Errorf("error searching index for vector %d: %w", i, err)
+		}
+
+		vectorResults := make([]string, 0, len(keys))
+		for _, key := range keys {
+			if int(key) < len(store.subkeys) {
+				vectorResults = append(vectorResults, store.subkeys[int(key)])
+			} else {
+				return nil, fmt.Errorf("found key %d out of bounds of subkeys length %d", key, len(store.subkeys))
+			}
+		}
+		results[i] = vectorResults
+	}
+	return results, nil
+}
+
 func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]string, error) {
 	ctx := context.Background() // Using Background context as original did.
 
