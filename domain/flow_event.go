@@ -164,6 +164,10 @@ func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
 		}
 		return codeDiff, nil
 
+	case "":
+		// This can happen with empty messages, just ignore them
+		return nil, nil
+
 	default:
 		return nil, fmt.Errorf("unknown flow eventType: %s", event.EventType)
 	}

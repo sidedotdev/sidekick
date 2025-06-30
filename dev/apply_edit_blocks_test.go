@@ -1150,6 +1150,100 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 		commitsB2 := getCommitHashes(t, tmpDirB, existingFilePath)
 		assert.Len(t, commitsB2, 1, "Commit count should still be 1 after B2")
 	})
+
+	// Scenario C - New File without Visible Ranges
+	t.Run("Scenario C - New File without Visible Ranges", func(t *testing.T) {
+		tmpDirC, err := os.MkdirTemp("", "sequentialNewNoRangeTest")
+		require.NoError(t, err)
+		defer os.RemoveAll(tmpDirC)
+
+		runGitCommand(t, tmpDirC, "init")
+		runGitCommand(t, tmpDirC, "config", "user.email", "test@example.com")
+		runGitCommand(t, tmpDirC, "config", "user.name", "Test User")
+		runGitCommand(t, tmpDirC, "checkout", "-b", "main") // Ensure we are on a branch
+
+		newFilePath := "sequential_new_no_range.txt"
+		fullNewFilePath := filepath.Join(tmpDirC, newFilePath)
+
+		// Block C1: Create sequential_new.txt with "Line 1"
+		editBlockC1 := EditBlock{
+			FilePath: newFilePath,
+			EditType: "create",
+			NewLines: []string{"Line 1", "", ""},
+		}
+		inputC1 := ApplyEditBlockActivityInput{
+			EditBlocks: []EditBlock{editBlockC1},
+			EnvContainer: env.EnvContainer{
+				Env: &env.LocalEnv{WorkingDirectory: tmpDirC},
+			},
+			EnabledFlags: []string{fflag.CheckEdits},
+		}
+		reportsC1, err := da.ApplyEditBlocks(context.Background(), inputC1)
+		require.NoError(t, err)
+		require.Len(t, reportsC1, 1)
+		require.True(t, reportsC1[0].DidApply, "Block C1 should have been applied. Error: %s", reportsC1[0].Error)
+		assert.Empty(t, reportsC1[0].Error, "Block C1 error should be empty: %s", reportsC1[0].Error)
+
+		// Verify diff for C1
+		assert.Contains(t, reportsC1[0].FinalDiff, "--- /dev/null", "Diff for new file C1 should be against /dev/null")
+		assert.Contains(t, reportsC1[0].FinalDiff, "+++ b/"+newFilePath, "Diff for new file C1 should show new file path")
+		assert.Contains(t, reportsC1[0].FinalDiff, "+Line 1", "Diff for C1 should show addition of 'Line 1'")
+
+		// Verify file content on disk
+		contentC1, err := os.ReadFile(fullNewFilePath)
+		require.NoError(t, err)
+		assert.Equal(t, "Line 1\n", string(contentC1), "File content after C1 should be 'Line 1\\n'")
+
+		// Verify staging for C1
+		stagedContentC1 := getStagedContent(t, tmpDirC, newFilePath)
+		assert.Equal(t, "Line 1\n", stagedContentC1, "Staged content after C1 should be 'Line 1\\n'")
+
+		// Verify no commits
+		commitsC1 := getCommitHashes(t, tmpDirC, newFilePath)
+		assert.Empty(t, commitsC1, "No commits should exist for new file after C1")
+
+		// Block C2: Append "Line 2" to the new file, with no visible ranges
+		editBlockC2 := EditBlock{
+			FilePath:          newFilePath,
+			EditType:          "update",
+			OldLines:          []string{"Line 1", ""},
+			NewLines:          []string{"Line 1", "Line 2"},
+			VisibleFileRanges: []FileRange{},
+		}
+		inputC2 := ApplyEditBlockActivityInput{
+			EditBlocks: []EditBlock{editBlockC2},
+			EnvContainer: env.EnvContainer{
+				Env: &env.LocalEnv{WorkingDirectory: tmpDirC},
+			},
+			EnabledFlags: []string{fflag.CheckEdits},
+		}
+		reportsC2, err := da.ApplyEditBlocks(context.Background(), inputC2)
+		require.NoError(t, err)
+		require.Len(t, reportsC2, 1)
+
+		// This is where the test is expected to fail due to the bug, until the fix is implemented.
+		// We assert that the edit *was* applied and no error is reported.
+		require.True(t, reportsC2[0].DidApply, "Block C2 should have been applied. Error: %s", reportsC2[0].Error)
+		assert.Empty(t, reportsC2[0].Error, "Block C2 error should be empty: %s", reportsC2[0].Error)
+
+		// Verify diff for C2
+		assert.Contains(t, reportsC2[0].FinalDiff, "--- a/"+newFilePath, "Diff for C2 should be against the previous version of the file")
+		assert.Contains(t, reportsC2[0].FinalDiff, "+++ b/"+newFilePath, "Diff for C2 should show the new version of the file")
+		assert.Contains(t, reportsC2[0].FinalDiff, "+Line 2", "Diff for C2 should show addition of 'Line 2'")
+
+		// Verify file content on disk
+		contentC2, err := os.ReadFile(fullNewFilePath)
+		require.NoError(t, err)
+		assert.Equal(t, "Line 1\nLine 2\n", string(contentC2), "File content after C2 should be 'Line 1\\nLine 2\\n'")
+
+		// Verify staging for C2
+		stagedContentC2 := getStagedContent(t, tmpDirC, newFilePath)
+		assert.Equal(t, "Line 1\nLine 2\n", stagedContentC2, "Staged content after C2 should be 'Line 1\\nLine 2\\n'")
+
+		// Verify no new commits
+		commitsC2 := getCommitHashes(t, tmpDirC, newFilePath)
+		assert.Empty(t, commitsC2, "No commits should exist for new file after C2")
+	})
 }
 
 func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
