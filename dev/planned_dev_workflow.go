@@ -210,13 +210,33 @@ func ensureTestsPassAfterDevPlanExecutedSubflow(dCtx DevContext, input PlannedDe
 		}
 		attempts++
 
-		testResult, err := RunTests(dCtx)
+		testResult, err := RunTests(dCtx, dCtx.RepoConfig.TestCommands)
 		if err != nil {
 			return fmt.Errorf("failed to run tests: %v", err)
 		}
+
 		if testResult.TestsPassed {
-			break
+			if len(dCtx.RepoConfig.IntegrationTestCommands) == 0 {
+				break
+			}
+
+			integrationTestResult, err := RunTests(dCtx, dCtx.RepoConfig.IntegrationTestCommands)
+			if err != nil {
+				return fmt.Errorf("failed to run integration tests: %v", err)
+			}
+			if integrationTestResult.TestsPassed {
+				break
+			}
+
+			// use the integration test results as part of the prompt
+			testResult = integrationTestResult
 		}
+
+		// TODO if it's integration tests that failed, override the configured
+		// test commands that should be run within dCtx, to include the
+		// integration tests as well, to ensure that the inner loop of editing
+		// code within completeDevStep has access to the output of integration
+		// test results too.
 		_, err = completeDevStep(dCtx, input.Requirements, planExec, DevStep{
 			Type:               "edit",
 			Title:              "Ensure Tests Pass",
@@ -228,5 +248,6 @@ func ensureTestsPassAfterDevPlanExecutedSubflow(dCtx DevContext, input PlannedDe
 			return err
 		}
 	}
+
 	return nil
 }

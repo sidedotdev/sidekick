@@ -116,30 +116,30 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 
 		if err != nil {
 			/*
-			If the user paused, continue the loop regardless of error.
-			UserRequestIfPaused at the next iteration's start will handle the pause.
+				If the user paused, continue the loop regardless of error.
+				UserRequestIfPaused at the next iteration's start will handle the pause.
 
-			NOTE: it's possible to check if the error was specifically was by
-			context being canceled due to pausing with code like this:
+				NOTE: it's possible to check if the error was specifically was by
+				context being canceled due to pausing with code like this:
 
-				errors.Is(iteration.ExecCtx.Err(), workflow.ErrCanceled)
+					errors.Is(iteration.ExecCtx.Err(), workflow.ErrCanceled)
 
-			However, we don't want to because when the user has paused, it
-			doesn't matter if the activity failed due to being canceled or due
-			to another reason: we are going to retry in a different way after
-			the user unpauses anyway and don't care that it originally failed
-			for another reason than the pause. This relies on us properly
-			clearing the pause state as well before retrying.
+				However, we don't want to because when the user has paused, it
+				doesn't matter if the activity failed due to being canceled or due
+				to another reason: we are going to retry in a different way after
+				the user unpauses anyway and don't care that it originally failed
+				for another reason than the pause. This relies on us properly
+				clearing the pause state as well before retrying.
 
-			One issue might be that we're ignoring when a workflow is canceled
-			on purpose, while it was paused. But sidekick currently directly
-			terminates workflows directly when the corresponding task is
-			canceled, instead of using workflow cancellation. In the future, if
-			we do wish to use workflow cancellation, we'd add a new parameter to
-			GlobalState to indicate that. But more likely, we'll always use
-			termination + a separate cleanup workflow (TODO create this
-			cleanup), since the items to clean up are limited and obvious
-			(worktrees).
+				One issue might be that we're ignoring when a workflow is canceled
+				on purpose, while it was paused. But sidekick currently directly
+				terminates workflows directly when the corresponding task is
+				canceled, instead of using workflow cancellation. In the future, if
+				we do wish to use workflow cancellation, we'd add a new parameter to
+				GlobalState to indicate that. But more likely, we'll always use
+				termination + a separate cleanup workflow (TODO create this
+				cleanup), since the items to clean up are limited and obvious
+				(worktrees).
 			*/
 			if dCtx.GlobalState != nil && dCtx.GlobalState.Paused {
 				if v >= 1 {

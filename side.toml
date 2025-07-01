@@ -23,6 +23,9 @@ command = "npm run test:unit -- --reporter=dot --no-color --run"
 working_dir = "frontend"
 command = "npm run type-check"
 
+[[integration_test_commands]]
+command = "SIDE_INTEGRATION_TEST=true go test -test.timeout 15s ./..."
+
 [edit_code]
 hints = """
 You are working on a project named "sidekick". Thus, the root directory of the

@@ -218,7 +218,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 			}
 
 			// Run tests (TODO: replace this with using the latest DevStepResult)
-			testResult, err := RunTests(dCtx)
+			testResult, err := RunTests(dCtx, dCtx.RepoConfig.TestCommands)
 			if err != nil {
 				return result, fmt.Errorf("failed to run tests: %v", err)
 			}
@@ -318,7 +318,7 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 	switch step.Type {
 	case "edit":
 		// Pass a git diff of the repo + test results to the llm and ask if it looks good
-		testResult, err := RunTests(dCtx)
+		testResult, err := RunTests(dCtx, dCtx.RepoConfig.TestCommands)
 		if err != nil {
 			return result, fmt.Errorf("failed to run tests: %v", err)
 		}

@@ -246,7 +246,6 @@ func TestGetWorkspaceByIdHandler(t *testing.T) {
 	})
 }
 
-
 // bigger test, catches more issues
 // TODO use a generative test instead, eg by performing small random edits on
 // the originalLines vs large random edits on random code snippets
