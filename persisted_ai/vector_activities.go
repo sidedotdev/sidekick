@@ -180,18 +180,9 @@ func (va VectorActivities) QueryPreparedStoreMultiple(ctx context.Context, store
 
 	results := make([][]string, len(queryVectors))
 	for i, queryVector := range queryVectors {
-		keys, _, err := store.index.Search(queryVector, limit)
+		vectorResults, err := va.QueryPreparedStoreSingle(ctx, store, queryVector, limit)
 		if err != nil {
-			return nil, fmt.Errorf("error searching index for vector %d: %w", i, err)
-		}
-
-		vectorResults := make([]string, 0, len(keys))
-		for _, key := range keys {
-			if int(key) < len(store.subkeys) {
-				vectorResults = append(vectorResults, store.subkeys[int(key)])
-			} else {
-				return nil, fmt.Errorf("found key %d out of bounds of subkeys length %d", key, len(store.subkeys))
-			}
+			return nil, fmt.Errorf("error searching for vector %d: %w", i, err)
 		}
 		results[i] = vectorResults
 	}
