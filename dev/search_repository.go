@@ -261,9 +261,15 @@ func (sCtx *searchContext) executeMainSearch() (string, string, []string, []stri
 			return "", "", nil, nil, fmt.Errorf("failed to list files for manual glob filtering: %w", err)
 		}
 
-		allFilesMatchingSearchTerm := strings.Split(strings.TrimSpace(listFilesOutput.Stdout), "\n")
+		var allFilesMatchingSearchTerm []string
+		if trimmedStdout := strings.TrimSpace(listFilesOutput.Stdout); trimmedStdout != "" {
+			allFilesMatchingSearchTerm = strings.Split(trimmedStdout, "\n")
+		} else {
+			allFilesMatchingSearchTerm = []string{}
+		}
+
 		var filesMatchingGlobAndSearchTerm []string
-		if strings.TrimSpace(listFilesOutput.Stdout) != "" {
+		if len(allFilesMatchingSearchTerm) > 0 {
 			filesMatchingGlobAndSearchTerm, err = filterFilesByGlob(allFilesMatchingSearchTerm, sCtx.input.PathGlob)
 			if err != nil {
 				// Pass along stderr from listFilesOutput as it might contain relevant info
@@ -632,7 +638,7 @@ func constructFallbackMessage(input SearchRepositoryInput, allFilesMatchingGlob 
 
 	if len(allFilesMatchingGlob) == 0 { // No files matched original PathGlob
 		if len(allFiles) == 0 {
-			message = fmt.Sprintf("No files matched the path glob '%s', and search term '%s' was not found in any other files. Consider using a different path glob and/or search term.", input.PathGlob, input.SearchTerm)
+			message = fmt.Sprintf("No files matched the path glob '%s', and the search term '%s' was not found in any other files. Consider using a different path glob and/or search term.", input.PathGlob, input.SearchTerm)
 		} else { // Term found globally
 			message = fmt.Sprintf("No files matched the path glob '%s'. However, the search term '%s' was found in other files:%s", input.PathGlob, input.SearchTerm, detailsForDisplay)
 		}
@@ -651,7 +657,7 @@ func constructFallbackMessage(input SearchRepositoryInput, allFilesMatchingGlob 
 		if len(allFiles) == 0 {
 			message = baseMessage + fmt.Sprintf("\nThe search term '%s' was also not found in any other files.", input.SearchTerm)
 		} else { // Term found globally
-			message = baseMessage + fmt.Sprintf("\nHowever, the search term '%s' was also found in other files:%s", input.SearchTerm, detailsForDisplay)
+			message = baseMessage + fmt.Sprintf("\nHowever, the search term '%s' was found in other files:%s", input.SearchTerm, detailsForDisplay)
 		}
 	}
 	return message

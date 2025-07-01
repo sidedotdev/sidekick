@@ -763,7 +763,7 @@ func (s *SearchRepositoryE2ETestSuite) TestFallbackMsg_GlobMatches_SearchTermNot
 	// This test reproduces the bug where a misleading message is shown.
 	// The glob matches, but the search term is not in the file. The search term is also not anywhere else.
 	// The corrected message should indicate no results in the glob and no results elsewhere.
-	expected := "No results found for \"nonexistent\" in files matching `file1.txt`. The search term was not found in any other files."
+	expected := "No results found in the following files:\n\tfile1.txt\nThe search term 'nonexistent' was also not found in any other files."
 	s.Contains(result, expected)
 }
 
@@ -781,7 +781,7 @@ func (s *SearchRepositoryE2ETestSuite) TestFallbackMsg_GlobMatches_SearchTermInO
 
 	// The glob matches a file, but the search term is not in it. The search term IS in another file not matching the glob.
 	// The message should indicate no results in the glob, but that the term was found elsewhere.
-	expected := "No results found for \"searchterm\" in files matching `file1.txt`. However, the search term was found in other files. Try a broader search."
+	expected := "No results found in the following files:\n\tfile1.txt\nHowever, the search term 'searchterm' was found in other files:"
 	s.Contains(result, expected)
 }
 
@@ -798,7 +798,7 @@ func (s *SearchRepositoryE2ETestSuite) TestFallbackMsg_GlobDoesNotMatch_SearchTe
 
 	// The glob does not match any files, and the search term is not found anywhere.
 	// The message should indicate that no files matched the glob and the term was not found elsewhere.
-	expected := "No files matched the glob pattern `nonexistent_glob*`. The search term 'nonexistent' was not found in any other files in the repository."
+	expected := "Searched for \"nonexistent\" in \"nonexistent_glob*\"\nNo files matched the path glob 'nonexistent_glob*', and the search term 'nonexistent' was not found in any other files."
 	s.Contains(result, expected)
 }
 
@@ -815,6 +815,6 @@ func (s *SearchRepositoryE2ETestSuite) TestFallbackMsg_GlobDoesNotMatch_SearchTe
 
 	// The glob does not match any files, but the search term IS found in other files.
 	// The message should indicate no files matched the glob, but the term was found elsewhere.
-	expected := "No files matched the glob pattern `nonexistent_glob*`. However, the search term 'searchterm' was found in other files. Try a broader search."
+	expected := "Searched for \"searchterm\" in \"nonexistent_glob*\"\nNo files matched the path glob 'nonexistent_glob*'. However, the search term 'searchterm' was found in other files:"
 	s.Contains(result, expected)
 }
