@@ -104,12 +104,6 @@ func (s *Streamer) consumeFlowEvents(ctx context.Context, consumer jetstream.Con
 			return
 		}
 
-		if event == nil {
-			// This can happen with empty messages, just ignore them
-			msg.Ack()
-			return
-		}
-
 		eventCh <- event // FIXME this can panic if eventCh is closed
 		if _, ok := event.(domain.EndStreamEvent); ok {
 			consContext.Stop()
