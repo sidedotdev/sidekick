@@ -920,6 +920,7 @@ func FindPotentialMatches(block EditBlock, originalLines []string, startingLineI
 			mergedFileRanges = mergedRangesForFile(block.FilePath, mergedFileRanges)
 		}
 
+		utils.PrettyPrint(mergedFileRanges)
 		potentialMatches = utils.Filter(potentialMatches, func(m match) bool {
 			for _, visibleFileRange := range mergedFileRanges {
 				// we use a margin because lines move around from other edits blocks.
