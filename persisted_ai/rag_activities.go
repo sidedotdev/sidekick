@@ -125,6 +125,7 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 	}
 
 	// Get first query vector to determine dimensions
+	// FIXME wrong, should instead use the content etc.
 	firstQueryVector, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, []string{options.RankQuery[:min(len(options.RankQuery), maxQueryChars)]}, embedding.TaskTypeRetrievalQuery)
 	if err != nil {
 		return []string{}, fmt.Errorf("failed to embed initial query: %w", err)
