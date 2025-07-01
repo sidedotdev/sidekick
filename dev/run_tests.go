@@ -19,13 +19,12 @@ type TestResult struct {
 	Output      string `json:"output"`
 }
 
-// RunTests runs tests configured via side.toml in a repo dir
-func RunTests(dCtx DevContext) (TestResult, error) {
-	repoConfig := dCtx.RepoConfig
-	if len(repoConfig.TestCommands) == 0 {
+// RunTests runs the provided test commands.
+func RunTests(dCtx DevContext, commandsToRun []common.CommandConfig) (TestResult, error) {
+	if len(commandsToRun) == 0 {
 		return TestResult{}, fmt.Errorf("no test commands configured")
 	}
-	for _, testCommand := range repoConfig.TestCommands {
+	for _, testCommand := range commandsToRun {
 		if testCommand.Command == "" {
 			return TestResult{}, fmt.Errorf("test command is empty")
 		}
@@ -33,14 +32,14 @@ func RunTests(dCtx DevContext) (TestResult, error) {
 
 	resultsCh := workflow.NewChannel(dCtx)
 	actionParams := map[string]any{
-		"testCommands": repoConfig.TestCommands,
+		"testCommands": commandsToRun,
 	}
 
 	actionCtx := dCtx.NewActionContext("run_tests")
 	actionCtx.ActionParams = actionParams
 	testResults, err := Track(actionCtx, func(flowAction domain.FlowAction) ([]TestResult, error) {
 		// execute all test commands in parallel
-		for _, testCommand := range repoConfig.TestCommands {
+		for _, testCommand := range commandsToRun {
 			// Capture testCommand for the goroutine
 			testCommand := testCommand
 
@@ -51,7 +50,7 @@ func RunTests(dCtx DevContext) (TestResult, error) {
 
 		// Wait for all goroutines to finish and collect the results
 		var results []TestResult
-		for i := 0; i < len(repoConfig.TestCommands); i++ {
+		for i := 0; i < len(commandsToRun); i++ {
 			var value interface{}
 			if ok := resultsCh.Receive(dCtx, &value); !ok {
 				return nil, fmt.Errorf("failed to receive test result, channel closed early")
