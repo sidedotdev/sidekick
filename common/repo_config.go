@@ -19,6 +19,13 @@ type RepoConfig struct {
 	 * completa. */
 	TestCommands []CommandConfig `toml:"test_commands,omitempty"`
 
+	/** A set of commands to run to test the code after good/checked edits that
+	 * were already fully applied. Typically expected to run a project's
+	 * integration tests. Test failure is typically provided as feedback in the
+	 * next edit iteration or used to determine whether a given step in a plan
+	 * is completa. */
+	IntegrationTestCommands []CommandConfig `toml:"integration_test_commands,omitempty"`
+
 	/** This is injected into prompts to give the LLM high-level context about
 	 * the purpose of your project. This is used especially when defining
 	 * requirements */
