@@ -2,6 +2,7 @@ package dev
 
 import (
 	"bufio"
+	"fmt"
 	"sidekick/coding/tree_sitter"
 	"sidekick/llm"
 	"sidekick/utils"
@@ -50,6 +51,8 @@ func extractAllCodeBlocks(chatHistory []llm.ChatMessage, shouldExtractEditBlocks
 			editBlocks, err := ExtractEditBlocks(chatMessage.Content)
 			if err == nil {
 				for _, editBlock := range editBlocks {
+					startLine := -1 // Synthetic blocks use -1 for line numbers
+					endLine := -1
 					if len(editBlock.OldLines) > 0 {
 						code := strings.Join(editBlock.OldLines, "\n")
 						syntheticBlock := tree_sitter.CodeBlock{
@@ -57,22 +60,28 @@ func extractAllCodeBlocks(chatHistory []llm.ChatMessage, shouldExtractEditBlocks
 							BlockContent:  "```\n" + code + "\n```",
 							FullContent:   "```\n" + code + "\n```",
 							FilePath:      editBlock.FilePath,
-							StartLine:     -1, // Mark as synthetic
-							EndLine:       -1, // Mark as synthetic
+							StartLine:     startLine,
+							EndLine:       endLine,
 							HeaderContent: "",
 							Symbol:        "",
 						}
 						codeBlocks = append(codeBlocks, syntheticBlock)
 					}
 					if len(editBlock.NewLines) > 0 {
+						// when creating a file, the whole file is visible from the edit block
+						if editBlock.EditType == "create" {
+							fmt.Println("222 CREATE -----------------------")
+							startLine = 1
+							endLine = len(editBlock.NewLines)
+						}
 						code := strings.Join(editBlock.NewLines, "\n")
 						syntheticBlock := tree_sitter.CodeBlock{
 							Code:          code,
 							BlockContent:  "```\n" + code + "\n```",
 							FullContent:   "```\n" + code + "\n```",
 							FilePath:      editBlock.FilePath,
-							StartLine:     -1, // Mark as synthetic
-							EndLine:       -1, // Mark as synthetic
+							StartLine:     startLine,
+							EndLine:       endLine,
 							HeaderContent: "",
 							Symbol:        "",
 						}
@@ -222,14 +231,13 @@ func ExtractEditBlocksWithVisibility(text string, chatHistory []llm.ChatMessage,
 			return cb.FilePath == editBlock.FilePath
 		})
 
-		// VisibleFileRanges are based ONLY on \"real\" code blocks from chat history.
-		// They should NOT be affected by synthetic blocks generated from the current \'text\' or from chat history.
-		// This filtering ensures that even if chatHistoryCodeBlocks contains synthetic blocks (because shouldExtractEditBlocks is true),
-		// they are excluded for VisibleFileRanges calculation.
-		chatHistoryCodeBlocks := utils.Filter(chatHistoryCodeBlocks, func(cb tree_sitter.CodeBlock) bool {
+		// VisibleFileRanges are based on \"real\" code blocks from chat
+		// history. An exception is made for synthetic blocks from the "create"
+		// edit blocks from any `text`, which don't have negative line numbers.
+		codeBlocksWithValidFileRanges := utils.Filter(availableCodeBlocks, func(cb tree_sitter.CodeBlock) bool {
 			return cb.StartLine != -1 && cb.EndLine != -1 // Filter out synthetic blocks
 		})
-		editBlock.VisibleFileRanges = codeBlocksToMergedFileRanges(editBlock.FilePath, chatHistoryCodeBlocks)
+		editBlock.VisibleFileRanges = codeBlocksToMergedFileRanges(editBlock.FilePath, codeBlocksWithValidFileRanges)
 
 		// TODO /gen/req add one more visible code block (won\'t have
 		// corresponding visible file range) that is based all on the
@@ -244,6 +252,8 @@ func ExtractEditBlocksWithVisibility(text string, chatHistory []llm.ChatMessage,
 			// After the current block's visibility is determined and it's added to extractedEditBlocks,
 			// generate synthetic code blocks from its OldLines and NewLines if extracing edit blocks is enabled.
 			// These will be available to subsequent edit blocks within the same 'text'.
+			startLine := -1 // Synthetic blocks use -1 for line numbers
+			endLine := -1
 			if len(editBlock.OldLines) > 0 {
 				code := strings.Join(editBlock.OldLines, "\n")
 				syntheticOldCb := tree_sitter.CodeBlock{
@@ -251,22 +261,29 @@ func ExtractEditBlocksWithVisibility(text string, chatHistory []llm.ChatMessage,
 					BlockContent:  "```\n" + code + "\n```",
 					FullContent:   "```\n" + code + "\n```",
 					FilePath:      editBlock.FilePath,
-					StartLine:     -1, // Synthetic blocks use -1 for line numbers
-					EndLine:       -1,
+					StartLine:     startLine,
+					EndLine:       endLine,
 					HeaderContent: "",
 					Symbol:        "",
 				}
 				runningPrefixCodeBlocks = append(runningPrefixCodeBlocks, syntheticOldCb)
 			}
 			if len(editBlock.NewLines) > 0 {
+				// when creating a file, the whole file is visible from the edit block
+				if editBlock.EditType == "create" {
+					fmt.Println("CREATE -----------------------")
+					startLine = 1
+					endLine = len(editBlock.NewLines)
+				}
+
 				code := strings.Join(editBlock.NewLines, "\n")
 				syntheticNewCb := tree_sitter.CodeBlock{
 					Code:          code,
 					BlockContent:  "```\n" + code + "\n```",
 					FullContent:   "```\n" + code + "\n```",
 					FilePath:      editBlock.FilePath,
-					StartLine:     -1, // Synthetic blocks use -1 for line numbers
-					EndLine:       -1,
+					StartLine:     startLine,
+					EndLine:       endLine,
 					HeaderContent: "",
 					Symbol:        "",
 				}

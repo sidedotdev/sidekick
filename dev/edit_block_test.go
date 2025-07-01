@@ -467,6 +467,45 @@ func TestExtractEditBlocksWithVisibility(t *testing.T) {
 			},
 			wantErr: false,
 		},
+
+		{
+			name: "Created files have full file visibility range",
+			chatHistory: []common.ChatMessage{},
+			text: "```\nedit_block:1\nfileA.go\n<<<<<<< CREATE_FILE\n=======\nline1\n>>>>>>> REPLACE_EXACT\n```\n\n" + 
+				"```\nedit_block:2\nfileA.go\n<<<<<<< SEARCH_EXACT\nline1\n=======\nline1b\n>>>>>>> REPLACE_EXACT\n```",
+			enableNewVisibilityLogic: true,
+			expectedEditBlocks: []EditBlock{
+				{ // EB1 for fileA.go
+					FilePath:       "fileA.go",
+					NewLines:       []string{"line1"},
+					EditType:       "create",
+					SequenceNumber: 1,
+					VisibleCodeBlocks: nil,
+					VisibleFileRanges: []FileRange{},
+				},
+				{ // EB2 for fileA.go
+					FilePath:       "fileA.go",
+					OldLines:       []string{"line1"},
+					NewLines:       []string{"line1b"},
+					EditType:       "update",
+					SequenceNumber: 2,
+					VisibleCodeBlocks: []tree_sitter.CodeBlock{
+						{
+							FilePath:      "fileA.go",
+							Code:          "line1",
+							BlockContent:  "```\nline1\n```",
+							FullContent:   "```\nline1\n```",
+							StartLine:     1,
+							EndLine:       1,
+						},
+					},
+					VisibleFileRanges: []FileRange{
+						{FilePath: "fileA.go", StartLine: 1, EndLine: 1},
+					},
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

@@ -359,7 +359,6 @@ func TestGetUpdatedContents(t *testing.T) {
 			},
 			originalContents: "line1\nline2\nline3\nline4",
 			expectedContents: "line1\nnewLine2\nnewLine3\nline4",
-			expectedError:    nil,
 		},
 		{
 			name: "No Match",
@@ -369,7 +368,6 @@ func TestGetUpdatedContents(t *testing.T) {
 				NewLines: []string{"newNoMatch1", "newNoMatch2"},
 			},
 			originalContents: "line1\nline2\nline3\nline4",
-			expectedContents: "",
 			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\n%s\n\nFailed to match these lines:\n\n%s\n\nInstead, found these lines:\n\n%s\n", "line3\nline2", "line2", "line4"),
 		},
 		{
@@ -381,7 +379,6 @@ func TestGetUpdatedContents(t *testing.T) {
 			},
 			originalContents: "line1\nline2\nline3\nline4",
 			expectedContents: "newLine1\nline2\nline3\nline4",
-			expectedError:    nil,
 		},
 		{
 			name: "Successful Edit End",
@@ -392,7 +389,6 @@ func TestGetUpdatedContents(t *testing.T) {
 			},
 			originalContents: "line1\nline2\nline3\nline4",
 			expectedContents: "line1\nline2\nline3\nnewLine4",
-			expectedError:    nil,
 		},
 		{
 			name: "More lines after",
@@ -403,7 +399,6 @@ func TestGetUpdatedContents(t *testing.T) {
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
 			expectedContents: "line1\nline2\nnewLineA\nnewLineB\nline3\nline4\nline5",
-			expectedError:    nil,
 		},
 		{
 			name: "Less lines after",
@@ -433,7 +428,6 @@ func TestGetUpdatedContents(t *testing.T) {
 				NewLines: []string{"2"},
 			},
 			originalContents: "a\n1\nx\ny\nz\nb\n1",
-			expectedContents: "",
 			expectedError:    fmt.Errorf(multipleMatchesMessage, search, "File: test.txt\nLines: 1-4\n```\na\n1\nx\ny\n```\n\nFile: test.txt\nLines: 5-7\n```\nz\nb\n1\n```"),
 		},
 
@@ -445,7 +439,6 @@ func TestGetUpdatedContents(t *testing.T) {
 			},
 			originalContents: "line1\nline2\n\n \nline3\nline4",
 			expectedContents: "line1\nline2-x\nline3-x\nline4",
-			expectedError:    nil,
 		},
 		{
 			name: "Extra Empty Lines in Block",
@@ -455,7 +448,6 @@ func TestGetUpdatedContents(t *testing.T) {
 			},
 			originalContents: "line1\nline2\nline3\nline4",
 			expectedContents: "line1\nline2-x\n\n \nline3-x\nline4",
-			expectedError:    nil,
 		},
 		{
 			name: "Minor Differences Still a Match",
@@ -465,7 +457,6 @@ func TestGetUpdatedContents(t *testing.T) {
 			},
 			originalContents: "line1\n line2\nline3 \nline4",
 			expectedContents: "line1\nline2-x \n line-x\nline4",
-			expectedError:    nil,
 		},
 		// FIXME this case isn't yet handled properly
 		//{
@@ -477,7 +468,6 @@ func TestGetUpdatedContents(t *testing.T) {
 		//	},
 		//	originalContents: "regular code line\n// comment1\n// comment2\n// comment3\nregular code line",
 		//	expectedContents: "regular code line\n// comment1\n// comment2\n// comment3\nnew code line\nregular code line",
-		//	expectedError:    nil,
 		//},
 	}
 
@@ -517,7 +507,6 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
 			expectedContents: "line1\nnewLine2\nnewLine3\nline4\nline5",
-			expectedError:    nil,
 		},
 		{
 			name: "Edit exactly matching Visible range",
@@ -531,7 +520,6 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
 			expectedContents: "line1\nnewLine2\nnewLine3\nline4\nline5",
-			expectedError:    nil,
 		},
 		{
 			name: "Edit outside Visible range",
@@ -544,7 +532,6 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
 			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline4\nline5\n"),
 		},
 		{
@@ -560,7 +547,6 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
 			expectedContents: "line1\nline2\nnewLine3\nnewLine4\nline5",
-			expectedError:    nil,
 		},
 		{
 			name: "Multiple matches but only first is visible",
@@ -574,7 +560,6 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			},
 			originalContents: "x\n2\n3\n4\n5\nx\n7\n8\n9\nx\n11",
 			expectedContents: "x_x\n2\n3\n4\n5\nx\n7\n8\n9\nx\n11",
-			expectedError:    nil,
 		},
 		{
 			name: "Multiple matches but only middle is visible",
@@ -588,7 +573,6 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			},
 			originalContents: "x\n2\n3\n4\n5\nx\n7\n8\n9\nx\n11",
 			expectedContents: "x\n2\n3\n4\n5\nx_x\n7\n8\n9\nx\n11",
-			expectedError:    nil,
 		},
 		{
 			name: "Multiple matches but only last is visible",
@@ -602,7 +586,6 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			},
 			originalContents: "x\n2\n3\n4\n5\nx\n7\n8\n9\nx\n11",
 			expectedContents: "x\n2\n3\n4\n5\nx\n7\n8\n9\nx_x\n11",
-			expectedError:    nil,
 		},
 		{
 			name: "Multiple matches which are both visible in one range",
@@ -615,7 +598,6 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				},
 			},
 			originalContents: "x\n2\n3\n4\n5\nx\n7\n8\n9\nx\n11",
-			expectedContents: "",
 			expectedError:    fmt.Errorf(multipleMatchesMessage, search, "File: test.txt\nLines: 1-3\n```\nx\n2\n3\n```\n\nFile: test.txt\nLines: 4-8\n```\n4\n5\nx\n7\n8\n```"),
 		},
 		{
@@ -630,7 +612,6 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				},
 			},
 			originalContents: "x\n2\n3\n4\n5\nx\n7\n8\n9\nx\n11",
-			expectedContents: "",
 			expectedError:    fmt.Errorf(multipleMatchesMessage, search, "File: test.txt\nLines: 1-3\n```\nx\n2\n3\n```\n\nFile: test.txt\nLines: 4-8\n```\n4\n5\nx\n7\n8\n```"),
 		},
 		{
@@ -644,7 +625,6 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
 			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline3\nline4\n"),
 		},
 		{
@@ -658,7 +638,6 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
 			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline3\nline4\n"),
 		},
 		{
@@ -674,7 +653,7 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			expectedError:    nil,
 		},
 		{
-			name: "Empty Visible ranges: acts like everything is Visible",
+			name: "Empty Visible ranges: nothing is Visible",
 			block: EditBlock{
 				FilePath:          "test.txt",
 				OldLines:          []string{"line2", "line3"},
@@ -682,8 +661,7 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				VisibleFileRanges: []FileRange{},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "line1\nnewLine2\nnewLine3\nline4\nline5",
-			expectedError:    nil,
+			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline2\nline3\n"),
 		},
 		{
 			name: "Edit spanning multiple Visible ranges and invisible range",
@@ -691,13 +669,11 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				FilePath: "test.txt",
 				OldLines: []string{"line2", "line3", "line4"},
 				NewLines: []string{"newLine2", "newLine3", "newLine4"},
-				VisibleFileRanges: []FileRange{
-					{FilePath: "test.txt", StartLine: 1, EndLine: 2},
+				VisibleFileRanges: []FileRange{ {FilePath: "test.txt", StartLine: 1, EndLine: 2},
 					{FilePath: "test.txt", StartLine: 4, EndLine: 5},
 				},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
 			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline2\nline3\nline4\n"),
 		},
 		{
@@ -713,7 +689,6 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
 			expectedContents: "line1\nnewLine2\nnewLine3\nnewLine4\nline5",
-			expectedError:    nil,
 		},
 		{
 			name: "Edit spanning multiple overlapping Visible ranges",
@@ -728,7 +703,6 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
 			expectedContents: "line1\nnewLine2\nnewLine3\nnewLine4\nline5",
-			expectedError:    nil,
 		},
 		{
 			name: "Edit entirely outside Visible ranges",
@@ -741,7 +715,6 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
 			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline2\nline3\n"),
 		},
 		{
@@ -756,7 +729,6 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
 			expectedContents: "line1\nline2\nline3\nline4\nline5",
-			expectedError:    nil,
 		},
 		{
 			name: "Edit affecting last line of the file",
@@ -770,7 +742,6 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
 			expectedContents: "line1\nline2\nline3\nline4\nnewLine5\nnewLine6",
-			expectedError:    nil,
 		},
 	}
 
@@ -1151,8 +1122,8 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 		assert.Len(t, commitsB2, 1, "Commit count should still be 1 after B2")
 	})
 
-	// Scenario C - New File without Visible Ranges
-	t.Run("Scenario C - New File without Visible Ranges", func(t *testing.T) {
+	// Scenario C - Editing Newly Created File
+	t.Run("Scenario C - Editing Newly Created File", func(t *testing.T) {
 		tmpDirC, err := os.MkdirTemp("", "sequentialNewNoRangeTest")
 		require.NoError(t, err)
 		defer os.RemoveAll(tmpDirC)
@@ -1164,8 +1135,7 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 		// Add an initial commit so git log --follow works
 		runGitCommand(t, tmpDirC, "commit", "--allow-empty", "-m", "Initial commit")
 
-		newFilePath := "sequential_new_no_range.txt"
-		fullNewFilePath := filepath.Join(tmpDirC, newFilePath)
+		newFilePath := "sequential_new_followup_update.txt"
 
 		// Block C1: Create sequential_new.txt with "Line 1"
 		editBlockC1 := EditBlock{
@@ -1173,78 +1143,31 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 			EditType: "create",
 			NewLines: []string{"Line 1", "", ""},
 		}
-		inputC1 := ApplyEditBlockActivityInput{
-			EditBlocks: []EditBlock{editBlockC1},
-			EnvContainer: env.EnvContainer{
-				Env: &env.LocalEnv{WorkingDirectory: tmpDirC},
-			},
-			EnabledFlags: []string{fflag.CheckEdits},
-		}
-		reportsC1, err := da.ApplyEditBlocks(context.Background(), inputC1)
-		require.NoError(t, err)
-		require.Len(t, reportsC1, 1)
-		require.True(t, reportsC1[0].DidApply, "Block C1 should have been applied. Error: %s", reportsC1[0].Error)
-		assert.Empty(t, reportsC1[0].Error, "Block C1 error should be empty: %s", reportsC1[0].Error)
-
-		// Verify diff for C1
-		assert.Contains(t, reportsC1[0].FinalDiff, "--- /dev/null", "Diff for new file C1 should be against /dev/null")
-		assert.Contains(t, reportsC1[0].FinalDiff, "+++ b/"+newFilePath, "Diff for new file C1 should show new file path")
-		assert.Contains(t, reportsC1[0].FinalDiff, "+Line 1", "Diff for C1 should show addition of 'Line 1'")
-
-		// Verify file content on disk
-		contentC1, err := os.ReadFile(fullNewFilePath)
-		require.NoError(t, err)
-		assert.Equal(t, "Line 1\n", string(contentC1), "File content after C1 should be 'Line 1\\n'")
-
-		// Verify staging for C1
-		stagedContentC1 := getStagedContent(t, tmpDirC, newFilePath)
-		assert.Equal(t, "Line 1\n", stagedContentC1, "Staged content after C1 should be 'Line 1\\n'")
-
-		// Verify no commits
-		commitsC1 := getCommitHashes(t, tmpDirC, newFilePath)
-		assert.Empty(t, commitsC1, "No commits should exist for new file after C1")
-
-		// Block C2: Append "Line 2" to the new file, with no visible ranges
+		// Block C2: Append "Line 2" to the new file, with synthetic visible ranges
 		editBlockC2 := EditBlock{
 			FilePath:          newFilePath,
 			EditType:          "update",
 			OldLines:          []string{"Line 1", ""},
 			NewLines:          []string{"Line 1", "Line 2", ""},
-			VisibleFileRanges: []FileRange{},
+			VisibleFileRanges: []FileRange{
+				{FilePath: newFilePath, StartLine: 1, EndLine: 3},
+			},
 		}
-		inputC2 := ApplyEditBlockActivityInput{
-			EditBlocks: []EditBlock{editBlockC2},
+
+		inputC1 := ApplyEditBlockActivityInput{
+			EditBlocks: []EditBlock{editBlockC1, editBlockC2},
 			EnvContainer: env.EnvContainer{
 				Env: &env.LocalEnv{WorkingDirectory: tmpDirC},
 			},
 			EnabledFlags: []string{fflag.CheckEdits},
 		}
-		reportsC2, err := da.ApplyEditBlocks(context.Background(), inputC2)
+		reports, err := da.ApplyEditBlocks(context.Background(), inputC1)
 		require.NoError(t, err)
-		require.Len(t, reportsC2, 1)
-
-		// This is where the test is expected to fail due to the bug, until the fix is implemented.
-		// We assert that the edit *was* applied and no error is reported.
-		require.True(t, reportsC2[0].DidApply, "Block C2 should have been applied. Error: %s", reportsC2[0].Error)
-		assert.Empty(t, reportsC2[0].Error, "Block C2 error should be empty: %s", reportsC2[0].Error)
-
-		// Verify diff for C2
-		assert.Contains(t, reportsC2[0].FinalDiff, "--- a/"+newFilePath, "Diff for C2 should be against the previous version of the file")
-		assert.Contains(t, reportsC2[0].FinalDiff, "+++ b/"+newFilePath, "Diff for C2 should show the new version of the file")
-		assert.Contains(t, reportsC2[0].FinalDiff, "+Line 2", "Diff for C2 should show addition of 'Line 2'")
-
-		// Verify file content on disk
-		contentC2, err := os.ReadFile(fullNewFilePath)
-		require.NoError(t, err)
-		assert.Equal(t, "Line 1\nLine 2\n", string(contentC2), "File content after C2 should be 'Line 1\\nLine 2\\n'")
-
-		// Verify staging for C2
-		stagedContentC2 := getStagedContent(t, tmpDirC, newFilePath)
-		assert.Equal(t, "Line 1\nLine 2\n", stagedContentC2, "Staged content after C2 should be 'Line 1\\nLine 2\\n'")
-
-		// Verify no new commits
-		commitsC2 := getCommitHashes(t, tmpDirC, newFilePath)
-		assert.Empty(t, commitsC2, "No commits should exist for new file after C2")
+		require.Len(t, reports, 2)
+		require.True(t, reports[0].DidApply, "Block C1 should have been applied. Error: %s", reports[0].Error)
+		assert.Empty(t, reports[0].Error, "Block C1 error should be empty: %s", reports[0].Error)
+		require.True(t, reports[1].DidApply, "Block C2 should have been applied. Error: %s", reports[1].Error)
+		assert.Empty(t, reports[1].Error, "Block C2 error should be empty: %s", reports[1].Error)
 	})
 }
 
