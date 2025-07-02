@@ -23,6 +23,7 @@ import (
 	"sidekick/common" // New import
 	"sidekick/domain" // New import
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/erikgeiser/promptkit/selection"
 	"github.com/gorilla/websocket" // New import
 	"github.com/segmentio/ksuid"   // New import
@@ -147,7 +148,6 @@ func streamTaskProgress(ctx context.Context, workspaceID, flowID, taskID string)
 	serverPort := common.GetServerPort()
 	// Path: /ws/v1/workspaces/:workspaceId/flows/:flowId/action_changes_ws
 	u := url.URL{Scheme: "ws", Host: fmt.Sprintf("localhost:%d", serverPort), Path: fmt.Sprintf("/ws/v1/workspaces/%s/flows/%s/action_changes_ws", workspaceID, flowID)}
-	fmt.Printf("Attempting to stream progress for task %s (flow: %s) from %s\n", taskID, flowID, u.String())
 
 	conn, resp, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
@@ -163,82 +163,62 @@ func streamTaskProgress(ctx context.Context, workspaceID, flowID, taskID string)
 	}
 	defer conn.Close()
 
-	fmt.Printf("Streaming progress for task %s (flow: %s)... \n", taskID, flowID) // Added a space for spinner
-
+	p := tea.NewProgram(newProgressModel(taskID, flowID))
 	done := make(chan struct{})
-	spinnerChars := []string{"|", "/", "-", "\\"}
-	spinnerIndex := 0
 
-	// ticker for animating spinner when no messages are received
-	spinnerTicker := time.NewTicker(100 * time.Millisecond)
-	defer spinnerTicker.Stop()
-
+	// Goroutine to read from WebSocket and send messages to Bubble Tea program
 	go func() {
 		defer close(done)
 		for {
 			select {
-			case <-ctx.Done(): // Ensure goroutine exits if context is cancelled
-				fmt.Printf("\rProgress streaming for task %s: context cancelled.                \n", taskID)
+			case <-ctx.Done():
 				return
-			case <-spinnerTicker.C:
-				fmt.Printf("\rStreaming progress for task %s (flow: %s)... %s ", taskID, flowID, spinnerChars[spinnerIndex])
-				spinnerIndex = (spinnerIndex + 1) % len(spinnerChars)
 			default:
-				// Non-blocking read attempt
-				conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond)) // Set a short deadline
+				conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 				var action domain.FlowAction
 				if err := conn.ReadJSON(&action); err != nil {
 					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-						// This is an expected timeout, continue to allow spinner to animate
-						continue
+						continue // Expected timeout, loop to check ctx.Done()
 					}
 
-					// Clear the spinner line before printing error or closing message
-					fmt.Printf("\r                                                                                \r")
-					if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
-						fmt.Fprintf(os.Stderr, "WebSocket read error for task %s: %v\n", taskID, err)
-					} else if err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF) || websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-						fmt.Printf("WebSocket connection closed normally for task %s.\n", taskID)
+					// For any other error, we want to exit the read loop.
+					// We'll send a message to bubbletea to terminate it.
+					if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+						p.Send(taskErrorMsg{err: fmt.Errorf("unexpected websocket close: %w", err)})
 					} else {
-						select {
-						case <-ctx.Done():
-							fmt.Printf("WebSocket connection closing for task %s due to context cancellation.\n", taskID)
-						default:
-							fmt.Fprintf(os.Stderr, "WebSocket error reading message for task %s: %v\n", taskID, err)
-						}
+						// Assume normal closure.
+						p.Send(taskCompleteMsg{})
 					}
-					return // Exit goroutine on error or normal close
+					return
 				}
-				// Clear the spinner line and print the progress
-				fmt.Printf("\r  [PROGRESS] Task %s: Action '%s' - Status '%s'                                \n", taskID, action.ActionType, action.ActionStatus)
-				// Reprint the spinner prompt for the next message/spin
-				fmt.Printf("Streaming progress for task %s (flow: %s)... %s ", taskID, flowID, spinnerChars[spinnerIndex])
 
+				p.Send(taskProgressMsg{
+					taskID:       taskID,
+					actionType:   action.ActionType,
+					actionStatus: action.ActionStatus,
+				})
 			}
 		}
 	}()
 
-	select {
-	case <-done:
-		// Ensure the final status line is clean
-		fmt.Printf("\r                                                                                \r")
-		fmt.Printf("Progress streaming stopped for task %s.\n", taskID)
-	case <-ctx.Done():
-		// Ensure the final status line is clean
-		fmt.Printf("\r                                                                                \r")
-		fmt.Printf("Progress streaming canceled for task %s.\n", taskID)
-		// Attempt to gracefully close the WebSocket connection.
-		err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-		if err != nil && !errors.Is(err, websocket.ErrCloseSent) && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-			fmt.Fprintf(os.Stderr, "Error sending close message to WebSocket for task %s: %v\n", taskID, err)
-		}
-		// Wait for the read loop to finish after sending close
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second): // Timeout for read loop to exit
-			fmt.Fprintf(os.Stderr, "Timeout waiting for WebSocket read loop to close for task %s.\n", taskID)
-		}
+	// Goroutine to handle context cancellation and quit Bubble Tea program
+	go func() {
+		<-ctx.Done()
+		p.Send(contextCancelledMsg{})
+	}()
+
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error running progress view: %v\n", err)
 	}
+
+	// After bubbletea program exits, attempt to gracefully close the WebSocket connection.
+	err = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	if err != nil && !errors.Is(err, websocket.ErrCloseSent) && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+		// Don't spam about errors on a connection that is already closing.
+	}
+
+	// Wait for the read loop to finish.
+	<-done
 }
 
 // cancelTaskAPI sends a request to the Sidekick server to cancel a task.
