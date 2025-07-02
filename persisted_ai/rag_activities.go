@@ -124,15 +124,25 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 		return []string{}, fmt.Errorf("failed to calculate embedding limits: %w", err)
 	}
 
-	// Get first query vector to determine dimensions
-	// FIXME wrong, should instead use the content etc.
-	firstQueryVector, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, []string{options.RankQuery[:min(len(options.RankQuery), maxQueryChars)]}, embedding.TaskTypeRetrievalQuery)
+	// Split query into chunks if it exceeds max size, otherwise it's a single chunk.
+	var queryChunks []string
+	if len(options.RankQuery) > maxQueryChars {
+		queryChunks = splitQueryIntoChunks(options.RankQuery, goodQueryChars, maxQueryChars)
+	} else {
+		queryChunks = []string{options.RankQuery}
+	}
+
+	// Embed all chunks
+	queryVectors, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, queryChunks, embedding.TaskTypeRetrievalQuery)
 	if err != nil {
-		return []string{}, fmt.Errorf("failed to embed initial query: %w", err)
+		return []string{}, fmt.Errorf("failed to embed query chunks: %w", err)
+	}
+	if len(queryVectors) == 0 {
+		return []string{}, nil
 	}
 
 	// Prepare vector store once for reuse
-	store, err := va.PrepareVectorStore(context.Background(), options.WorkspaceId, options.ModelConfig.Provider, options.ModelConfig.Model, options.ContentType, options.Subkeys, len(firstQueryVector[0]))
+	store, err := va.PrepareVectorStore(context.Background(), options.WorkspaceId, options.ModelConfig.Provider, options.ModelConfig.Model, options.ContentType, options.Subkeys, len(queryVectors[0]))
 	defer store.Destroy()
 	if err != nil {
 		return []string{}, fmt.Errorf("failed to prepare vector store: %w", err)
@@ -142,38 +152,23 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 	// TODO: change "task type" to instead be "use_case" and we'll map to task
 	// type internally in the embedder implementation
 
-	if len(options.RankQuery) > maxQueryChars {
-		// Split query into chunks if it exceeds max size
-		queryChunks := splitQueryIntoChunks(options.RankQuery, goodQueryChars, maxQueryChars)
+	// Search with all vectors
+	results, err := va.QueryPreparedStoreMultiple(context.Background(), store, queryVectors, 1000)
+	if err != nil {
+		return []string{}, fmt.Errorf("failed multi-vector search: %w", err)
+	}
 
-		// Embed all chunks
-		queryVectors, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, queryChunks, embedding.TaskTypeRetrievalQuery)
-		if err != nil {
-			return []string{}, fmt.Errorf("failed to embed query chunks: %w", err)
-		}
-
-		// Search with all vectors
-		results, err := va.QueryPreparedStoreMultiple(context.Background(), store, queryVectors, 1000)
-		if err != nil {
-			return []string{}, fmt.Errorf("failed multi-vector search: %w", err)
-		}
-
+	if len(queryChunks) > 1 {
 		// Combine results using RRF
 		return FuseResultsRRF(results), nil
 	}
 
-	// For queries within limits, use single vector path
-	queryVector, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, []string{options.RankQuery}, embedding.TaskTypeRetrievalQuery)
-	if err != nil {
-		return []string{}, fmt.Errorf("failed to embed query: %w", err)
+	// For a single chunk, return the first result set
+	if len(results) > 0 {
+		return results[0], nil
 	}
 
-	results, err := va.QueryPreparedStoreSingle(context.Background(), store, queryVector[0], 1000)
-	if err != nil {
-		return []string{}, fmt.Errorf("failed single-vector search: %w", err)
-	}
-
-	return results, nil
+	return []string{}, nil
 }
 
 // splitQueryIntoChunks splits a query into chunks based on sentence boundaries and size limits.
