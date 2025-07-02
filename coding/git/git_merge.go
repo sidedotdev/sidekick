@@ -61,10 +61,10 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 			return
 		}
 		if mergeOutput.ExitStatus != 0 {
-			if strings.Contains(mergeOutput.Stdout, "CONFLICT") {
+			if strings.Contains(mergeOutput.Stdout, "CONFLICT") || strings.Contains(mergeOutput.Stderr, "conflict") {
 				result.HasConflicts = true
-				// resultErr  is nil, since conflicts are not operational errors
-				resultErr = nil
+				// In a worktree, we don't need to abort the merge. The conflicted state is contained
+				// within the worktree and can be inspected or cleaned up later.
 				return
 			}
 			resultErr = fmt.Errorf("merge failed in worktree: %s", mergeOutput.Stderr)
@@ -130,8 +130,22 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 		return // defer will run and potentially set resultErr if it's currently nil
 	}
 	if mergeOutput.ExitStatus != 0 {
-		if strings.Contains(mergeOutput.Stdout, "CONFLICT") {
+		if strings.Contains(mergeOutput.Stdout, "CONFLICT") || strings.Contains(mergeOutput.Stderr, "conflict") {
 			result.HasConflicts = true
+			// Attempt to abort the merge to clean up the repository state.
+			abortOutput, abortErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+				EnvContainer: envContainer,
+				Command:      "git",
+				Args:         []string{"merge", "--abort"},
+			})
+			if abortErr != nil {
+				resultErr = fmt.Errorf("merge had conflicts and failed to abort: %v", abortErr)
+				return // defer will run
+			}
+			if abortOutput.ExitStatus != 0 {
+				resultErr = fmt.Errorf("merge had conflicts and failed to abort, stderr: %s", abortOutput.Stderr)
+				return // defer will run
+			}
 			// resultErr remains nil (unless defer sets it to a restore error)
 			return // defer will run
 		}
