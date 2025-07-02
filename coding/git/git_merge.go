@@ -104,6 +104,21 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 		}
 	}()
 
+	// Checkout the target branch before merging
+	checkoutOutput, checkoutErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer: envContainer,
+		Command:      "git",
+		Args:         []string{"checkout", params.TargetBranch},
+	})
+	if checkoutErr != nil {
+		resultErr = fmt.Errorf("failed to run command to checkout target branch %s: %v", params.TargetBranch, checkoutErr)
+		return // defer will run and restore original branch
+	}
+	if checkoutOutput.ExitStatus != 0 {
+		resultErr = fmt.Errorf("failed to checkout target branch %s, command stderr: %s", params.TargetBranch, checkoutOutput.Stderr)
+		return // defer will run and restore original branch
+	}
+
 	// Perform the merge
 	mergeOutput, mergeErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
