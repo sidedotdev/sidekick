@@ -505,6 +505,9 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
 	}
+	if os.Getenv("SIDE_GOOGLE_API_KEY") == "" {
+		t.Skip("Skipping integration test; SIDE_GOOGLE_API_KEY not set")
+	}
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
