@@ -59,7 +59,9 @@ func (s *RunTestsTestSuite) SetupTest() {
 		ctx = utils.NoRetryCtx(ctx)
 		dCtx := *s.devContext
 		dCtx.ExecContext.Context = ctx
-		return RunTests(dCtx)
+		// Use RepoConfig.TestCommands by default for existing tests.
+		// New tests for integration commands will need to pass a different slice.
+		return RunTests(dCtx, dCtx.RepoConfig.TestCommands)
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
 
@@ -85,12 +87,17 @@ func (s *RunTestsTestSuite) AfterTest(suiteName, testName string) {
 }
 
 func (s *RunTestsTestSuite) TestRunTestsWithNoTestCommands() {
-	s.devContext.RepoConfig = common.RepoConfig{
-		TestCommands: []common.CommandConfig{},
-	}
+	// Temporarily set an empty command list for this specific test
+	originalTestCommands := s.devContext.RepoConfig.TestCommands
+	s.devContext.RepoConfig.TestCommands = []common.CommandConfig{}
+	defer func() { s.devContext.RepoConfig.TestCommands = originalTestCommands }()
+
 	s.env.ExecuteWorkflow(s.wrapperWorkflow)
 	s.True(s.env.IsWorkflowCompleted())
-	s.Error(s.env.GetWorkflowError())
+	err := s.env.GetWorkflowError()
+	s.Require().Error(err)
+	// unwrap the error twice to get to the actual error message
+	s.Contains(err.Error(), "no test commands configured")
 }
 
 func (s *RunTestsTestSuite) TestRunTestsWithAnEmptyTestCommand() {
