@@ -23,6 +23,7 @@ import (
 	"sidekick/common" // New import
 	"sidekick/domain" // New import
 
+	"github.com/erikgeiser/promptkit/selection"
 	"github.com/gorilla/websocket" // New import
 	"github.com/segmentio/ksuid"   // New import
 	"github.com/urfave/cli/v3"
@@ -602,7 +603,7 @@ func ensureWorkspace(ctx context.Context, disableHumanInTheLoop bool) (*domain.W
 	}
 
 	// Step 3: Multiple workspaces match
-	fmt.Printf("Multiple workspaces found for directory %s:\\n", absPath)
+	fmt.Printf("Multiple workspaces found for directory %s:\n", absPath)
 	// Sort by name for consistent display order before prompting
 	sort.Slice(workspaces, func(i, j int) bool {
 		if workspaces[i].Name != workspaces[j].Name {
@@ -611,41 +612,32 @@ func ensureWorkspace(ctx context.Context, disableHumanInTheLoop bool) (*domain.W
 		return workspaces[i].Id < workspaces[j].Id // Secondary sort by ID if names are identical
 	})
 
-	for i, ws := range workspaces {
-		fmt.Printf("  %d: %s (ID: %s, Updated: %s)\\n", i+1, ws.Name, ws.Id, ws.Updated.Format(time.RFC3339))
-	}
-
 	if disableHumanInTheLoop {
 		// Sort by Updated (descending) to get the most recent one
 		sort.Slice(workspaces, func(i, j int) bool {
 			return workspaces[i].Updated.After(workspaces[j].Updated)
 		})
-		fmt.Printf("Human-in-the-loop disabled. Using the most recently updated workspace: %s\\n", workspaces[0].Name)
+		fmt.Printf("Human-in-the-loop disabled. Using the most recently updated workspace: %s\n", workspaces[0].Name)
 		return workspaces[0], nil
 	}
 
 	// Prompt user to select
-	var choice int
-	for {
-		fmt.Print("Please select a workspace by number: ")
-		// Basic prompt, consider using a library for better UX
-		var input string
-		if _, err := fmt.Scanln(&input); err != nil {
-			// Handle EOF or other scan errors
-			if errors.Is(err, io.EOF) {
-				return nil, fmt.Errorf("input aborted by user")
-			}
-			fmt.Println("Error reading input. Please try again.")
-			continue
-		}
-
-		numScanned, scanErr := fmt.Sscan(input, &choice)
-		if scanErr == nil && numScanned == 1 && choice > 0 && choice <= len(workspaces) {
-			break
-		}
-		fmt.Println("Invalid selection. Please enter a number from the list.")
+	workspaceMap := make(map[string]*domain.Workspace)
+	workspaceStrings := make([]string, len(workspaces))
+	for i, ws := range workspaces {
+		wsString := fmt.Sprintf("%s (ID: %s, Updated: %s)", ws.Name, ws.Id, ws.Updated.Format(time.RFC3339))
+		workspaceStrings[i] = wsString
+		workspaceMap[wsString] = ws
 	}
-	return workspaces[choice-1], nil // User choice is 1-based
+
+	prompt := selection.New("Please select a workspace", workspaceStrings)
+
+	selectedWorkspaceString, err := prompt.RunPrompt()
+	if err != nil {
+		return nil, fmt.Errorf("workspace selection failed: %w", err)
+	}
+
+	return workspaceMap[selectedWorkspaceString], nil
 }
 
 // --- Placeholder API client functions ---
