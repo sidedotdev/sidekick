@@ -739,6 +739,7 @@ func TestManageChatHistoryV2_InitialInstructions(t *testing.T) {
 	}
 	expected2 := []llm.ChatMessage{
 		{Content: "Is II", ContextType: ContextTypeInitialInstructions},
+		{Content: "Not II again"},
 	}
 	result2, err := ManageChatHistoryV2Activity(chatHistory2, 0)
 	assert.NoError(t, err)
@@ -926,12 +927,100 @@ func TestManageChatHistoryV2_EmptyHistory(t *testing.T) {
 	assert.Equal(t, expected, result)
 }
 
+func TestManageChatHistoryV2_LastMessageRetention(t *testing.T) {
+	tests := []struct {
+		name        string
+		chatHistory []llm.ChatMessage
+		maxLength   int
+		expected    []llm.ChatMessage
+	}{
+		{
+			name: "Last message is a regular message and should be retained",
+			chatHistory: []llm.ChatMessage{
+				{Content: "Message 1"},
+				{Content: "Message 2"},
+				{Content: "Message 3"},
+			},
+			maxLength: 10, // Not enough space for all, but last should be kept
+			expected: []llm.ChatMessage{
+				{Content: "Message 3"},
+			},
+		},
+		{
+			name: "Last message is a tool response, its call should also be retained",
+			chatHistory: []llm.ChatMessage{
+				{Content: "Message 1"},
+				{Content: "Tool Call", Role: llm.ChatMessageRoleAssistant, ToolCalls: []llm.ToolCall{{Id: "123", Name: "test"}}},
+				{Content: "Tool Response", Role: llm.ChatMessageRoleTool, ToolCallId: "123"},
+			},
+			maxLength: 15, // Not enough for all, but last two should be kept
+			expected: []llm.ChatMessage{
+				{Content: "Tool Call", Role: llm.ChatMessageRoleAssistant, ToolCalls: []llm.ToolCall{{Id: "123", Name: "test"}}},
+				{Content: "Tool Response", Role: llm.ChatMessageRoleTool, ToolCallId: "123"},
+			},
+		},
+		{
+			name: "History with only one message",
+			chatHistory: []llm.ChatMessage{
+				{Content: "Single message"},
+			},
+			maxLength: 5,
+			expected: []llm.ChatMessage{
+				{Content: "Single message"},
+			},
+		},
+		{
+			name: "History with two messages, last is tool response",
+			chatHistory: []llm.ChatMessage{
+				{Content: "Tool Call", Role: llm.ChatMessageRoleAssistant, ToolCalls: []llm.ToolCall{{Id: "123", Name: "test"}}},
+				{Content: "Tool Response", Role: llm.ChatMessageRoleTool, ToolCallId: "123"},
+			},
+			maxLength: 5,
+			expected: []llm.ChatMessage{
+				{Content: "Tool Call", Role: llm.ChatMessageRoleAssistant, ToolCalls: []llm.ToolCall{{Id: "123", Name: "test"}}},
+				{Content: "Tool Response", Role: llm.ChatMessageRoleTool, ToolCallId: "123"},
+			},
+		},
+		{
+			name: "Last message retention with other retained messages",
+			chatHistory: []llm.ChatMessage{
+				{Content: "Initial Instructions", ContextType: ContextTypeInitialInstructions},
+				{Content: "Message 2"},
+				{Content: "Message 3"},
+			},
+			maxLength: 30, // Space for II and last message
+			expected: []llm.ChatMessage{
+				{Content: "Initial Instructions", ContextType: ContextTypeInitialInstructions},
+				{Content: "Message 3"},
+			},
+		},
+		{
+			name: "Last message is tool response, but history has only one message",
+			chatHistory: []llm.ChatMessage{
+				{Content: "Tool Response", Role: llm.ChatMessageRoleTool, ToolCallId: "123"},
+			},
+			maxLength: 5,
+			expected:  []llm.ChatMessage{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ManageChatHistoryV2Activity(tt.chatHistory, tt.maxLength)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestManageChatHistoryV2_NoMarkers_OverLimit(t *testing.T) {
 	chatHistory := []llm.ChatMessage{
 		{Content: "Msg1"},
 		{Content: "Msg2"},
 	}
-	expected := []llm.ChatMessage{}
+	expected := []llm.ChatMessage{
+		{Content: "Msg2"},
+	}
 
 	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
 	assert.NoError(t, err)
@@ -1091,6 +1180,7 @@ func TestManageChatHistoryV2_Trimming_Basic(t *testing.T) {
 	// check boundary condition
 	expected2 := []llm.ChatMessage{
 		{Content: "Initial", ContextType: ContextTypeInitialInstructions},
+		{Content: strings.Repeat("C", 50)},
 	}
 	result2, err := ManageChatHistoryV2Activity(chatHistory, 56)
 	assert.NoError(t, err)
@@ -1108,6 +1198,7 @@ func TestManageChatHistoryV2_Trimming_InitialInstructionsProtected(t *testing.T)
 	// "A" and "B" should be dropped.
 	expected := []llm.ChatMessage{
 		{Content: "Initial", ContextType: ContextTypeInitialInstructions},
+		{Content: strings.Repeat("B", 50)},
 	}
 	result, err := ManageChatHistoryV2Activity(chatHistory, 10) // maxLength is 10
 	assert.NoError(t, err)

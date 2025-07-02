@@ -286,6 +286,17 @@ func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) (
 
 	isRetained := make([]bool, len(chatHistory))
 
+	// Preserve the last message and its preceding tool call if it's a tool response.
+	lastIndex := len(chatHistory) - 1
+	if lastIndex >= 0 {
+		isRetained[lastIndex] = true
+		lastMessage := chatHistory[lastIndex]
+		if lastMessage.Role == llm.ChatMessageRoleTool && lastIndex > 0 {
+			// Also retain the tool call message that precedes the tool response.
+			isRetained[lastIndex-1] = true
+		}
+	}
+
 	// Handle InitialInstructions (AC4, AC5)
 	// An InitialInstructions message's block is only itself and is always live.
 	for i, msg := range chatHistory {
