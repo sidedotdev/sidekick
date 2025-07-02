@@ -11,6 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Note: Test helpers like setupTestGitRepo, runGitCommandInTestRepo, and createCommit
+// are defined in test_helpers.go and are available here because they are in the same 'git' package.
+
 func TestListWorktrees(t *testing.T) {
 	ctx := context.Background()
 
