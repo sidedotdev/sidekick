@@ -35,6 +35,31 @@ type SymDefResults struct {
 	Failures          string
 }
 
+// SymbolRetrievalResult encapsulates the outcome for a single symbol or header retrieval.
+type SymbolRetrievalResult struct {
+	SourceBlocks   []tree_sitter.SourceBlock
+	SymbolName     string
+	RelativePath   string
+	RelatedSymbols []RelatedSymbol
+	Error          error
+}
+
+// getHeaderRetrievalResult creates a SymbolRetrievalResult for a file header
+func getHeaderRetrievalResult(blocks []tree_sitter.SourceBlock, relativePath string) SymbolRetrievalResult {
+	return SymbolRetrievalResult{
+		SourceBlocks: blocks,
+		RelativePath: relativePath,
+	}
+}
+
+// getWildcardRetrievalResult creates a SymbolRetrievalResult for a whole-file retrieval
+func getWildcardRetrievalResult(blocks []tree_sitter.SourceBlock, relativePath string) SymbolRetrievalResult {
+	return SymbolRetrievalResult{
+		SourceBlocks: blocks,
+		RelativePath: relativePath,
+	}
+}
+
 type DirectorySymDefRequest struct {
 	EnvContainer          env.EnvContainer
 	Requests              []FileSymDefRequest
