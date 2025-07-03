@@ -420,10 +420,8 @@ func shouldRetrieveFullFile(symbols []string, absolutePath string) bool {
 	return isWildcard
 }
 
-func (sde *SymbolDefinitionExtraction) RetrieveSymbolDefinitions(envContainer env.EnvContainer) ([][]tree_sitter.SourceBlock, []error, bool, map[string][]RelatedSymbol) {
-	// Attempt to retrieve all symbol definitions before writing the file header block
-	symbolDefinitions := make([][]tree_sitter.SourceBlock, len(sde.symbols))
-	symbolErrors := make([]error, len(sde.symbols))
+func (sde *SymbolDefinitionExtraction) RetrieveSymbolDefinitions(envContainer env.EnvContainer) []SymbolRetrievalResult {
+	results := make([]SymbolRetrievalResult, len(sde.symbols))
 	allSymbolsFailed := true
 	relatedSymbols := sync.Map{}
 
@@ -437,22 +435,30 @@ func (sde *SymbolDefinitionExtraction) RetrieveSymbolDefinitions(envContainer en
 		go func() {
 			defer wg.Done()
 
+			result := &results[i]
+			result.SymbolName = symbol
+			result.RelativePath = sde.filePath
+
 			// TODO optimize: don't re-parse the file for each symbol
-			symbolDefinitions[i], symbolErrors[i] = tree_sitter.GetSymbolDefinitions(sde.absolutePath, symbol, sde.numContextLines)
-			if symbolErrors[i] != nil && strings.Contains(symbol, ".") {
+			sourceBlocks, err := tree_sitter.GetSymbolDefinitions(sde.absolutePath, symbol, sde.numContextLines)
+			if err != nil && strings.Contains(symbol, ".") {
 				// If the retrieval failed and the symbol name contains a ".",
 				// retry with only the part after the "."
 				// TODO make this language-specific and try several different alternative forms
 				lastDotIndex := strings.LastIndex(symbol, ".")
 				if lastDotIndex != -1 {
-					symbolDefinitions[i], symbolErrors[i] = tree_sitter.GetSymbolDefinitions(sde.absolutePath, symbol[lastDotIndex+1:], sde.numContextLines)
+					sourceBlocks, err = tree_sitter.GetSymbolDefinitions(sde.absolutePath, symbol[lastDotIndex+1:], sde.numContextLines)
 				}
 			}
-			if symbolErrors[i] == nil {
+
+			result.SourceBlocks = sourceBlocks
+			result.Error = err
+
+			if err == nil {
 				allSymbolsFailed = false
 
 				if sde.includeRelatedSymbols {
-					symbolNameRange := sitterToLspRange(*symbolDefinitions[i][0].NameRange)
+					symbolNameRange := sitterToLspRange(*sourceBlocks[0].NameRange)
 					related, err := sde.codingActivities.RelatedSymbolsActivity(context.Background(), RelatedSymbolsActivityInput{
 						RelativeFilePath: sde.filePath,
 						SymbolText:       symbol,
@@ -460,15 +466,18 @@ func (sde *SymbolDefinitionExtraction) RetrieveSymbolDefinitions(envContainer en
 						SymbolRange:      &symbolNameRange,
 					})
 					if err == nil {
+						result.RelatedSymbols = related
 						relatedSymbols.Store(symbol, related)
 					} else {
 						// hack to make the related symbol errors appear in the UI
-						relatedSymbols.Store(symbol, []RelatedSymbol{
+						errorSymbols := []RelatedSymbol{
 							{
 								Symbol:    tree_sitter.Symbol{Content: fmt.Sprintf("error getting related symbols: %v", err)},
 								Signature: tree_sitter.Signature{Content: fmt.Sprintf("error getting related symbols: %v", err)},
 							},
-						})
+						}
+						result.RelatedSymbols = errorSymbols
+						relatedSymbols.Store(symbol, errorSymbols)
 					}
 				}
 			}
@@ -476,13 +485,15 @@ func (sde *SymbolDefinitionExtraction) RetrieveSymbolDefinitions(envContainer en
 	}
 	wg.Wait()
 
-	relatedSymbolsMap := make(map[string][]RelatedSymbol)
-	relatedSymbols.Range(func(key, value interface{}) bool {
-		relatedSymbolsMap[key.(string)] = value.([]RelatedSymbol)
-		return true
-	})
+	// Filter out empty results from skipped symbols
+	filteredResults := make([]SymbolRetrievalResult, 0, len(results))
+	for _, result := range results {
+		if result.SymbolName != "" && result.SymbolName != "*" {
+			filteredResults = append(filteredResults, result)
+		}
+	}
 
-	return symbolDefinitions, symbolErrors, allSymbolsFailed, relatedSymbolsMap
+	return filteredResults
 }
 
 func (sde *SymbolDefinitionExtraction) WriteSymbolDefinitions(
