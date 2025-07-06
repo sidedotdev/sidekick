@@ -1,6 +1,7 @@
 package coding
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -381,6 +382,45 @@ func getHintForNonExistentFile(directoryPath, absolutePath string) string {
 	}
 
 	panic("unimplemented")
+}
+
+func getWildcardRetrievalResult(symbols []string, absolutePath, relativePath, directoryPath string) SymbolRetrievalResult {
+	if !shouldRetrieveFullFile(symbols, absolutePath) {
+		return SymbolRetrievalResult{RelativePath: relativePath}
+	}
+
+	fileBytes, err := os.ReadFile(absolutePath)
+	if err != nil {
+		var errMsg string
+		if os.IsNotExist(err) {
+			errMsg = getHintForNonExistentFile(directoryPath, absolutePath)
+		} else {
+			relativeErr := errors.New(strings.ReplaceAll(err.Error(), directoryPath, ""))
+			errMsg = fmt.Sprintf("error reading file %s: %v", relativePath, relativeErr)
+		}
+		return SymbolRetrievalResult{
+			RelativePath: relativePath,
+			Error:        errors.New(errMsg),
+		}
+	}
+
+	// Create a range covering the entire file
+	lineCount := bytes.Count(fileBytes, []byte{'\n'})
+	if len(fileBytes) > 0 && !bytes.HasSuffix(fileBytes, []byte{'\n'}) {
+		lineCount++ // Account for files not ending in newline
+	}
+	fullRange := sitter.Range{
+		StartPoint: sitter.Point{Row: 0, Column: 0},
+		EndPoint:   sitter.Point{Row: uint32(lineCount), Column: 0},
+	}
+
+	return SymbolRetrievalResult{
+		SourceBlocks: []tree_sitter.SourceBlock{{
+			Source: &fileBytes,
+			Range:  fullRange,
+		}},
+		RelativePath: relativePath,
+	}
 }
 
 func shouldRetrieveFullFile(symbols []string, absolutePath string) bool {
