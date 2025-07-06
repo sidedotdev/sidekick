@@ -35,6 +35,15 @@ type SymDefResults struct {
 	Failures          string
 }
 
+// SymbolRetrievalResult encapsulates the outcome for a single symbol or header retrieval.
+type SymbolRetrievalResult struct {
+	SourceBlocks   []tree_sitter.SourceBlock
+	SymbolName     string
+	RelativePath   string
+	RelatedSymbols []RelatedSymbol
+	Error          error
+}
+
 type DirectorySymDefRequest struct {
 	EnvContainer          env.EnvContainer
 	Requests              []FileSymDefRequest
