@@ -235,6 +235,20 @@ func (sde *SymbolDefinitionExtraction) FailuresString() string {
 	return sde.failureBuilder.String()
 }
 
+func getHeaderRetrievalResult(absolutePath, relativePath string, numContextLines int) SymbolRetrievalResult {
+	headers, err := tree_sitter.GetFileHeaders(absolutePath, numContextLines)
+	if err != nil && !errors.Is(err, tree_sitter.ErrNoHeadersFound) {
+		return SymbolRetrievalResult{
+			RelativePath: relativePath,
+			Error:        fmt.Errorf("error getting file headers: %v", err),
+		}
+	}
+	return SymbolRetrievalResult{
+		SourceBlocks: headers,
+		RelativePath: relativePath,
+	}
+}
+
 func (sde *SymbolDefinitionExtraction) WriteHeaders() {
 	headers, err := tree_sitter.GetFileHeaders(sde.absolutePath, sde.numContextLines)
 	if err != nil {
