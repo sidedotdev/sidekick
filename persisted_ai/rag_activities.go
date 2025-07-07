@@ -133,6 +133,8 @@ func getEmbedder(config common.ModelConfig) (embedding.Embedder, error) {
 	case llm.GoogleToolChatProviderType:
 		embedder = &embedding.GoogleEmbedder{}
 	case llm.OpenaiCompatibleToolChatProviderType:
+		// FIXME pass in the providers in the parameters instead of loading the
+		// config directly here
 		localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
 		if err != nil {
 			return nil, fmt.Errorf("failed to load local config: %w", err)

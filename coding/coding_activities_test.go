@@ -279,11 +279,9 @@ func TestFunc() {
 				},
 			},
 			expectedOutput: SymDefResults{
-				SymbolDefinitions: `File: placeholder_tempfile
-The file at 'placeholder_tempfile' does not contain the symbol 'NonExistentFunc'. However, it does contain the following symbols: TestFunc
+				SymbolDefinitions: `The file at 'placeholder_tempfile' does not contain the symbol 'NonExistentFunc'. However, it does contain the following symbols: TestFunc
 The symbol 'NonExistentFunc' is not defined in any repo files.`,
-				Failures: `File: placeholder_tempfile
-The file at 'placeholder_tempfile' does not contain the symbol 'NonExistentFunc'. However, it does contain the following symbols: TestFunc
+				Failures: `The file at 'placeholder_tempfile' does not contain the symbol 'NonExistentFunc'. However, it does contain the following symbols: TestFunc
 The symbol 'NonExistentFunc' is not defined in any repo files.`,
 			},
 		},
@@ -301,11 +299,9 @@ func TestFunc() {
 			},
 			fileExtension: "go",
 			expectedOutput: SymDefResults{
-				SymbolDefinitions: `File: placeholder_tempfile
-The file at 'placeholder_tempfile' does not contain the symbol 'placeholder_without_extension_tempfile'. However, it does contain the following symbols: TestFunc
+				SymbolDefinitions: `The file at 'placeholder_tempfile' does not contain the symbol 'placeholder_without_extension_tempfile'. However, it does contain the following symbols: TestFunc
 The symbol 'placeholder_without_extension_tempfile' is not defined in any repo files.`,
-				Failures: `File: placeholder_tempfile
-The file at 'placeholder_tempfile' does not contain the symbol 'placeholder_without_extension_tempfile'. However, it does contain the following symbols: TestFunc
+				Failures: `The file at 'placeholder_tempfile' does not contain the symbol 'placeholder_without_extension_tempfile'. However, it does contain the following symbols: TestFunc
 The symbol 'placeholder_without_extension_tempfile' is not defined in any repo files.`,
 			},
 		},
@@ -350,12 +346,10 @@ func ExistsElsewhere() {
 				},
 			},
 			expectedOutput: SymDefResults{
-				SymbolDefinitions: `File: placeholder_tempfile
-The file at 'placeholder_tempfile' does not contain the symbol 'ExistsElsewhere'. However, it does contain the following symbols: WontExistHere
+				SymbolDefinitions: `The file at 'placeholder_tempfile' does not contain the symbol 'ExistsElsewhere'. However, it does contain the following symbols: WontExistHere
 The symbol 'ExistsElsewhere' is defined in the following files:
   - placeholder_other_tempfile`,
-				Failures: `File: placeholder_tempfile
-The file at 'placeholder_tempfile' does not contain the symbol 'ExistsElsewhere'. However, it does contain the following symbols: WontExistHere
+				Failures: `The file at 'placeholder_tempfile' does not contain the symbol 'ExistsElsewhere'. However, it does contain the following symbols: WontExistHere
 The symbol 'ExistsElsewhere' is defined in the following files:
   - placeholder_other_tempfile`,
 			},
@@ -369,11 +363,9 @@ The symbol 'ExistsElsewhere' is defined in the following files:
 				},
 			},
 			expectedOutput: SymDefResults{
-				SymbolDefinitions: `File: nonexistent.go
-No file at 'nonexistent.go' exists in the repository. Please check the file path and try again.
+				SymbolDefinitions: `No file at 'nonexistent.go' exists in the repository. Please check the file path and try again.
 The symbol 'TestFunc' is not defined in any repo files.`,
-				Failures: `File: nonexistent.go
-No file at 'nonexistent.go' exists in the repository. Please check the file path and try again.
+				Failures: `No file at 'nonexistent.go' exists in the repository. Please check the file path and try again.
 The symbol 'TestFunc' is not defined in any repo files.`,
 			},
 		},
@@ -387,11 +379,9 @@ The symbol 'TestFunc' is not defined in any repo files.`,
 				},
 			},
 			expectedOutput: SymDefResults{
-				SymbolDefinitions: `File: placeholder_tempfile
-failed to infer language: placeholder_tempfile
+				SymbolDefinitions: `failed to infer language: placeholder_tempfile
 The symbol 'NonExistentFunc' is not defined in any repo files.`,
-				Failures: `File: placeholder_tempfile
-failed to infer language: placeholder_tempfile
+				Failures: `failed to infer language: placeholder_tempfile
 The symbol 'NonExistentFunc' is not defined in any repo files.`,
 			},
 		},
@@ -405,11 +395,9 @@ The symbol 'NonExistentFunc' is not defined in any repo files.`,
 				},
 			},
 			expectedOutput: SymDefResults{
-				SymbolDefinitions: `File: nonexistent.ext
-No file at 'nonexistent.ext' exists in the repository. Please check the file path and try again.
+				SymbolDefinitions: `No file at 'nonexistent.ext' exists in the repository. Please check the file path and try again.
 The symbol 'TestFunc' is not defined in any repo files.`,
-				Failures: `File: nonexistent.ext
-No file at 'nonexistent.ext' exists in the repository. Please check the file path and try again.
+				Failures: `No file at 'nonexistent.ext' exists in the repository. Please check the file path and try again.
 The symbol 'TestFunc' is not defined in any repo files.`,
 			},
 		},
