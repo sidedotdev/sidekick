@@ -52,6 +52,9 @@ type DirectorySymDefRequest struct {
 	IncludeRelatedSymbols bool
 }
 
+const DefaultNumContextLines = 5
+const codeFenceEnd = "```\n\n"
+
 // Given a list of symbol definition requests for a directory, this method
 // outputs symbol definitions formatted per file. Any symbols that were not
 // found are included in the failures
@@ -61,7 +64,7 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(dirSymDefRequest DirectoryS
 	var results []SymbolRetrievalResult
 
 	baseDir := dirSymDefRequest.EnvContainer.Env.GetWorkingDirectory()
-	numContextLines := defaultNumContextLines
+	numContextLines := DefaultNumContextLines
 	if dirSymDefRequest.NumContextLines != nil {
 		numContextLines = *dirSymDefRequest.NumContextLines
 	}
@@ -84,8 +87,7 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(dirSymDefRequest DirectoryS
 		request := req
 		go func(req FileSymDefRequest) {
 			defer wg.Done()
-			sde := NewSymbolDefinitionExtraction(dirSymDefRequest, request, ca)
-			symbolResults := sde.RetrieveSymbolDefinitions(dirSymDefRequest.EnvContainer)
+			symbolResults := ca.retrieveSymbolDefinitions(dirSymDefRequest.EnvContainer, req, numContextLines, dirSymDefRequest.IncludeRelatedSymbols)
 
 			if symbolResults[0].Error == nil {
 				// include headers only when no failure
@@ -164,7 +166,7 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(dirSymDefRequest DirectoryS
 			if !strings.HasSuffix(content, "\n") {
 				symbolDefBuilder.WriteString("\n")
 			}
-			symbolDefBuilder.WriteString("```\n\n")
+			symbolDefBuilder.WriteString(codeFenceEnd)
 		}
 
 		// Write related symbols if any
@@ -178,8 +180,6 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(dirSymDefRequest DirectoryS
 		Failures:          failureBuilder.String(),
 	}, nil
 }
-
-const codeFenceEnd = "```\n\n"
 
 func CodeFenceStartForLanguage(langName string) string {
 	switch langName {
@@ -265,65 +265,6 @@ func getHintForSymbolDefResultFailure(err error, directory, relativePath, symbol
 	return strings.Join(hints, "\n")
 }
 
-type SymbolDefinitionExtraction struct {
-	codingActivities      *CodingActivities
-	symbolDefBuilder      strings.Builder
-	failureBuilder        strings.Builder
-	numContextLines       int
-	blockHeader           string
-	langName              string
-	absolutePath          string
-	directoryPath         string
-	filePath              string
-	symbols               []string
-	includeRelatedSymbols bool
-}
-
-const defaultNumContextLines = 5
-
-func NewSymbolDefinitionExtraction(dirSymDefRequest DirectorySymDefRequest, request FileSymDefRequest, codingActivities *CodingActivities) *SymbolDefinitionExtraction {
-	workingDir := dirSymDefRequest.EnvContainer.Env.GetWorkingDirectory()
-	blockHeader := fmt.Sprintf("File: %s\n", request.FilePath)
-	absolutePath := filepath.Join(workingDir, request.FilePath)
-	langName := utils.InferLanguageNameFromFilePath(absolutePath)
-	numContextLines := defaultNumContextLines
-	if dirSymDefRequest.NumContextLines != nil {
-		numContextLines = *dirSymDefRequest.NumContextLines
-	}
-	sde := &SymbolDefinitionExtraction{
-		codingActivities:      codingActivities,
-		symbolDefBuilder:      strings.Builder{},
-		failureBuilder:        strings.Builder{},
-		blockHeader:           blockHeader,
-		langName:              langName,
-		numContextLines:       numContextLines,
-		absolutePath:          absolutePath,
-		directoryPath:         workingDir,
-		filePath:              request.FilePath,
-		symbols:               request.SymbolNames,
-		includeRelatedSymbols: dirSymDefRequest.IncludeRelatedSymbols,
-	}
-	return sde
-}
-
-// success writes to both failure and symbol def
-func (sde *SymbolDefinitionExtraction) WriteFailure(str string) {
-	sde.symbolDefBuilder.WriteString(str)
-	sde.failureBuilder.WriteString(str)
-}
-
-func (sde *SymbolDefinitionExtraction) WriteSymbolDef(str string) {
-	sde.symbolDefBuilder.WriteString(str)
-}
-
-func (sde *SymbolDefinitionExtraction) SymbolDefinitionsString() string {
-	return sde.symbolDefBuilder.String()
-}
-
-func (sde *SymbolDefinitionExtraction) FailuresString() string {
-	return sde.failureBuilder.String()
-}
-
 func getHeaderRetrievalResult(absolutePath, relativePath string, numContextLines int) SymbolRetrievalResult {
 	headers, err := tree_sitter.GetFileHeaders(absolutePath, numContextLines)
 	if err != nil && !errors.Is(err, tree_sitter.ErrNoHeadersFound) {
@@ -336,70 +277,6 @@ func getHeaderRetrievalResult(absolutePath, relativePath string, numContextLines
 		SourceBlocks: headers,
 		RelativePath: relativePath,
 	}
-}
-
-func (sde *SymbolDefinitionExtraction) WriteHeaders() {
-	headers, err := tree_sitter.GetFileHeaders(sde.absolutePath, sde.numContextLines)
-	if err != nil {
-		if !errors.Is(err, tree_sitter.ErrNoHeadersFound) {
-			message := fmt.Sprintf("error getting file headers: %v\n\n", err)
-			// write to both sd and failure: failure is for business logic, sd is what the LLM/user sees
-			sde.WriteFailure(sde.blockHeader)
-			sde.WriteFailure(message)
-		}
-	} else {
-		for _, header := range headers {
-			headerContent := header.String()
-			sde.WriteSymbolDef(sde.blockHeader)
-			sde.WriteSymbolDef(fmt.Sprintf("Lines: %d-%d\n", header.Range.StartPoint.Row+1, header.Range.EndPoint.Row+1))
-			sde.WriteSymbolDef(CodeFenceStartForLanguage(sde.langName))
-			sde.WriteSymbolDef(headerContent)
-			if !strings.HasSuffix(headerContent, "\n") {
-				sde.WriteSymbolDef("\n")
-			}
-			sde.WriteSymbolDef(codeFenceEnd)
-		}
-	}
-}
-
-// Handles a wildcard, which means the entire file is being retrieved instead of
-// a specific symbol definition. After writing, returns whether a wildcard was
-// encountered and written
-func (sde *SymbolDefinitionExtraction) WriteWildcard() bool {
-	// If no symbol names were provided or the special wildcard "*" or "" values
-	// were provided, output the entire file
-
-	if shouldRetrieveFullFile(sde.symbols, sde.absolutePath) {
-		sde.WriteSymbolDef(sde.blockHeader)
-
-		// output the file in its entirety in this case
-		fileBytes, err := os.ReadFile(sde.absolutePath)
-		if err != nil {
-			var message string
-			if os.IsNotExist(err) {
-				message = getHintForNonExistentFile(sde.directoryPath, sde.absolutePath) + "\n"
-			} else {
-				relativeErr := errors.New(strings.ReplaceAll(err.Error(), sde.directoryPath, ""))
-				message = fmt.Sprintf("error reading file %s: %v\n", sde.filePath, relativeErr)
-			}
-			sde.WriteFailure(sde.blockHeader)
-			sde.WriteFailure(message)
-			return true
-		}
-
-		fileContent := string(fileBytes)
-		sde.WriteSymbolDef(fmt.Sprintf("Lines: %d-%d (full file)\n", 1, strings.Count(fileContent, "\n")+1))
-
-		sde.WriteSymbolDef(CodeFenceStartForLanguage(sde.langName))
-		sde.WriteSymbolDef(fileContent)
-		if !strings.HasSuffix(fileContent, "\n") {
-			sde.WriteSymbolDef("\n")
-		}
-		sde.WriteSymbolDef(codeFenceEnd)
-		return true
-	}
-
-	return false
 }
 
 type candidate struct {
@@ -549,11 +426,13 @@ func shouldRetrieveFullFile(symbols []string, absolutePath string) bool {
 	return isWildcard
 }
 
-func (sde *SymbolDefinitionExtraction) RetrieveSymbolDefinitions(envContainer env.EnvContainer) []SymbolRetrievalResult {
-	results := make([]SymbolRetrievalResult, len(sde.symbols))
+func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContainer, symDefRequest FileSymDefRequest, numContextLines int, includeRelatedSymbols bool) []SymbolRetrievalResult {
+	results := make([]SymbolRetrievalResult, len(symDefRequest.SymbolNames))
 	var wg sync.WaitGroup
 
-	for i, symbol := range sde.symbols {
+	baseDir := envContainer.Env.GetWorkingDirectory()
+	absolutePath := filepath.Join(baseDir, symDefRequest.FilePath)
+	for i, symbol := range symDefRequest.SymbolNames {
 		if symbol == "" || symbol == "*" {
 			continue
 		}
@@ -563,27 +442,27 @@ func (sde *SymbolDefinitionExtraction) RetrieveSymbolDefinitions(envContainer en
 			defer wg.Done()
 			result := &results[i]
 			result.SymbolName = symbol
-			result.RelativePath = sde.filePath
+			result.RelativePath = symDefRequest.FilePath
 
 			// TODO optimize: don't re-parse the file for each symbol
-			sourceBlocks, err := tree_sitter.GetSymbolDefinitions(sde.absolutePath, symbol, sde.numContextLines)
+			sourceBlocks, err := tree_sitter.GetSymbolDefinitions(absolutePath, symbol, numContextLines)
 			if err != nil && strings.Contains(symbol, ".") {
 				// If the retrieval failed and the symbol name contains a ".",
 				// retry with only the part after the "."
 				// TODO make this language-specific and try several different alternative forms
 				lastDotIndex := strings.LastIndex(symbol, ".")
 				if lastDotIndex != -1 {
-					sourceBlocks, err = tree_sitter.GetSymbolDefinitions(sde.absolutePath, symbol[lastDotIndex+1:], sde.numContextLines)
+					sourceBlocks, err = tree_sitter.GetSymbolDefinitions(absolutePath, symbol[lastDotIndex+1:], numContextLines)
 				}
 			}
 
 			result.SourceBlocks = sourceBlocks
 			result.Error = err
 
-			if err == nil && sde.includeRelatedSymbols && len(sourceBlocks) > 0 {
+			if err == nil && includeRelatedSymbols && len(sourceBlocks) > 0 {
 				symbolNameRange := sitterToLspRange(*sourceBlocks[0].NameRange)
-				related, err := sde.codingActivities.RelatedSymbolsActivity(context.Background(), RelatedSymbolsActivityInput{
-					RelativeFilePath: sde.filePath,
+				related, err := ca.RelatedSymbolsActivity(context.Background(), RelatedSymbolsActivityInput{
+					RelativeFilePath: symDefRequest.FilePath,
 					SymbolText:       symbol,
 					EnvContainer:     envContainer,
 					SymbolRange:      &symbolNameRange,
@@ -606,57 +485,6 @@ func (sde *SymbolDefinitionExtraction) RetrieveSymbolDefinitions(envContainer en
 	return results
 }
 
-func (sde *SymbolDefinitionExtraction) WriteSymbolDefinitions(
-	symbolDefinitions [][]tree_sitter.SourceBlock,
-	symbolErrors []error,
-	relativeFilePathsBySymbolName **map[string][]string,
-	relatedSymbols map[string][]RelatedSymbol,
-) {
-	// Write the symbol definition blocks
-	for i, symbol := range sde.symbols {
-		if symbolErrors[i] != nil {
-			if *relativeFilePathsBySymbolName == nil {
-				filePaths, err := getRelativeFilePathsBySymbolName(sde.directoryPath)
-				if err != nil {
-					sde.WriteFailure(fmt.Sprintf("error getting file paths by symbol name: %v\n", err))
-				}
-				*relativeFilePathsBySymbolName = &filePaths
-			}
-
-			message := getHintForSymbolDefResultFailure(symbolErrors[i], sde.directoryPath, sde.filePath, symbol, *relativeFilePathsBySymbolName)
-			// write to both sd and failure: failure is for business logic, sd is what the LLM/user sees
-			sde.WriteFailure(sde.blockHeader)
-			sde.WriteFailure(message)
-		} else {
-			if len(symbolDefinitions[i]) > 1 {
-				sde.WriteSymbolDef(fmt.Sprintf("NOTE: Multiple definitions were found for symbol %s:\n\n", symbol))
-
-				// Merge adjacent or overlapping source blocks when they are duplicates beside each other
-				// TODO /gen remove in favor of merging in the BulkGetSymbolDefinitions method
-				sourceCodeLines := strings.Split(string(*symbolDefinitions[i][0].Source), "\n")
-				symbolDefinitions[i] = tree_sitter.MergeAdjacentOrOverlappingSourceBlocks(symbolDefinitions[i], sourceCodeLines)
-			}
-			for _, symbolDefinition := range symbolDefinitions[i] {
-				sde.WriteSymbolDef(sde.blockHeader)
-				sde.WriteSymbolDef(fmt.Sprintf("Symbol: %s\n", symbol))
-				sde.WriteSymbolDef(fmt.Sprintf("Lines: %d-%d\n", symbolDefinition.Range.StartPoint.Row+1, symbolDefinition.Range.EndPoint.Row+1))
-				sde.WriteSymbolDef(CodeFenceStartForLanguage(sde.langName))
-				defString := symbolDefinition.String()
-				sde.WriteSymbolDef(defString)
-				if !strings.HasSuffix(defString, "\n") {
-					sde.WriteSymbolDef("\n")
-				}
-				sde.WriteSymbolDef(codeFenceEnd)
-
-				// Write related symbols information
-				if related, ok := relatedSymbols[symbol]; ok && len(related) > 0 {
-					sde.writeRelatedSymbols(symbol, related)
-				}
-			}
-		}
-	}
-}
-
 // TODO: make this configurable, and/or more dynamic depending on the codebase's symbol graph structure
 var (
 	maxSameFileRelatedSymbols   = 25
@@ -665,74 +493,6 @@ var (
 	maxSameFileSignatureLines   = 10
 	maxOtherFileSignatureLines  = 10
 )
-
-func (sde *SymbolDefinitionExtraction) writeRelatedSymbols(symbol string, related []RelatedSymbol) {
-	sameFileSymbols := make([]string, 0)
-	otherFileSymbols := make(map[string][]string)
-	numSameFileSignatureLines := 0
-	totalOtherFileSignatureLines := 0
-	numSameFileReferences := 0
-	totalOtherFileReferences := 0
-	totalOtherFileSymbols := 0
-
-	for _, r := range related {
-		if r.RelativeFilePath == sde.filePath {
-			sameFileSymbols = append(sameFileSymbols, r.Symbol.Content)
-			numSameFileReferences += len(r.Locations)
-			numSameFileSignatureLines += strings.Count(r.Signature.Content, "\n") + 1
-		} else {
-			otherFileSymbols[r.RelativeFilePath] = append(otherFileSymbols[r.RelativeFilePath], r.Symbol.Content)
-			totalOtherFileReferences += len(r.Locations)
-			totalOtherFileSignatureLines += strings.Count(r.Signature.Content, "\n") + 1
-			totalOtherFileSymbols += 1
-		}
-	}
-
-	// Write same-file references
-	if len(sameFileSymbols) > 0 {
-		if numSameFileSignatureLines <= maxSameFileSignatureLines {
-			sde.WriteSymbolDef(fmt.Sprintf("%s is referenced in the same file by:\n", symbol))
-			for _, r := range related {
-				if r.RelativeFilePath == sde.filePath {
-					sde.WriteSymbolDef(fmt.Sprintf("\t%s\n", r.Signature.Content))
-				}
-			}
-		} else if len(sameFileSymbols) <= maxSameFileRelatedSymbols {
-			sde.WriteSymbolDef(fmt.Sprintf("%s is referenced in the same file by: %s\n", symbol, strings.Join(sameFileSymbols, ", ")))
-		} else {
-			sde.WriteSymbolDef(fmt.Sprintf("%s is referenced in the same file by %d other symbols %d times\n", symbol, len(sameFileSymbols), numSameFileReferences))
-			sde.WriteSymbolDef(fmt.Sprintf("There are %d other symbols that reference %s in the same file.\n", len(sameFileSymbols), symbol))
-		}
-	}
-
-	// Write other file references
-	if len(otherFileSymbols) == 0 {
-		return
-	}
-	if len(otherFileSymbols) > maxOtherFiles {
-		sde.WriteSymbolDef(fmt.Sprintf("%s is referenced in %d other files. Total referencing symbols: %d. Total references: %d\n", symbol, len(otherFileSymbols), totalOtherFileSymbols, totalOtherFileReferences))
-		return
-	}
-
-	sde.WriteSymbolDef(fmt.Sprintf("%s is referenced in other files:\n", symbol))
-	for filePath, symbols := range otherFileSymbols {
-		if totalOtherFileSignatureLines <= maxOtherFileSignatureLines {
-			sde.WriteSymbolDef(fmt.Sprintf("\t%s:\n", filePath))
-			for _, r := range related {
-				if r.RelativeFilePath == filePath {
-					signatureLines := strings.Split(r.Signature.Content, "\n")
-					for _, line := range signatureLines {
-						sde.WriteSymbolDef(fmt.Sprintf("\t\t%s\n", line))
-					}
-				}
-			}
-		} else if totalOtherFileSymbols <= maxOtherFilesRelatedSymbols {
-			sde.WriteSymbolDef(fmt.Sprintf("\t%s: %s\n", filePath, strings.Join(symbols, ", ")))
-		} else {
-			sde.WriteSymbolDef(fmt.Sprintf("\t%s: %d symbols\n", filePath, len(symbols)))
-		}
-	}
-}
 
 func getRelatedSymbolsHint(result SymbolRetrievalResult) string {
 	sameFileSymbols := make([]string, 0)
