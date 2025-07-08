@@ -60,9 +60,9 @@ func parseFlowOptions(cmd *cli.Command) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("invalid --flow-options JSON (value: %s): %w", optionsJSON, err)
 	}
 
-	// --no-requirements flag overrides the "requirements" key
+	// --no-requirements flag overrides the "determineRequirements" key
 	if cmd.Bool("no-requirements") {
-		flowOpts["requirements"] = false
+		flowOpts["determineRequirements"] = false
 	}
 
 	// --flow-option key=value pairs override any existing keys
@@ -202,9 +202,9 @@ func NewTaskCommand() *cli.Command {
 			&cli.BoolFlag{Name: "async", Usage: "Run task asynchronously and exit immediately"},
 			&cli.StringFlag{Name: "flow", Value: "basic_dev", Usage: "Specify flow type (e.g., basic_dev, planned_dev)"},
 			&cli.BoolFlag{Name: "P", Usage: "Shorthand for --flow planned_dev"},
-			&cli.StringFlag{Name: "flow-options", Value: `{"requirements": true}`, Usage: "JSON string for flow options"},
+			&cli.StringFlag{Name: "flow-options", Value: `{"determineRequirements": true}`, Usage: "JSON string for flow options"},
 			&cli.StringSliceFlag{Name: "flow-option", Aliases: []string{"o"}, Usage: "Add flow option (key=value), can be specified multiple times"},
-			&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"nr"}, Usage: "Shorthand to set requirements to false in flow options"},
+			&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"nr"}, Usage: "Shorthand to set determineRequirements to false in flow options"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			taskDescription := cmd.Args().First()
