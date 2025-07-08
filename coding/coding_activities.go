@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"sidekick/coding/lsp"
@@ -112,7 +113,7 @@ func mergeSymbolResults(results []SymbolRetrievalResult) MergedSymbolRetrievalRe
 
 	// Sort blocks by start position
 	slices.SortFunc(allSourceBlocks, func(a, b tree_sitter.SourceBlock) int {
-		return cmp.Compare(a.Range.StartByte, b.Range.StartByte)
+		return cmp.Compare(a.Range.StartPoint.Row, b.Range.StartPoint.Row)
 	})
 
 	// Merge overlapping or adjacent blocks
@@ -148,7 +149,7 @@ func mergeSymbolResults(results []SymbolRetrievalResult) MergedSymbolRetrievalRe
 		symbolsForBlock = slices.Compact(symbolsForBlock)
 
 		// Create key from sorted symbols
-		symbolKey := strings.Join(symbolsForBlock, ",")
+		symbolKey := strings.Join(symbolsForBlock, ", ")
 
 		// Store merged block
 		mergedResult.MergedSourceBlocks[symbolKey] = append(mergedResult.MergedSourceBlocks[symbolKey], mergedBlock)
@@ -267,11 +268,19 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(dirSymDefRequest DirectoryS
 			continue
 		}
 
+		sortedSymbolNames := getSortedSymbolNames(merged.MergedSourceBlocks)
+
 		// Process each set of merged blocks
-		for symbolNames, blocks := range merged.MergedSourceBlocks {
-			symbols := strings.Split(symbolNames, ",")
+		for _, symbolNames := range sortedSymbolNames {
+			blocks := merged.MergedSourceBlocks[symbolNames]
+			symbols := strings.Split(symbolNames, ", ")
 			onlyHeaders := utils.All(symbols, func(s string) bool { return s == "" })
 			anyWildcard := slices.Contains(symbols, "*")
+
+			// Sort blocks by start position
+			slices.SortFunc(blocks, func(a, b tree_sitter.SourceBlock) int {
+				return cmp.Compare(a.Range.StartPoint.Row, b.Range.StartPoint.Row)
+			})
 
 			for _, block := range blocks {
 				// Write block header
@@ -330,6 +339,34 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(dirSymDefRequest DirectoryS
 		SymbolDefinitions: symbolDefBuilder.String(),
 		Failures:          failureBuilder.String(),
 	}, nil
+}
+
+// Sort symbol names by lowest block start row
+func getSortedSymbolNames(mergedSourceBlocks map[string][]tree_sitter.SourceBlock) []string {
+	sortedSymbolNames := make([]string, 0, len(mergedSourceBlocks))
+	for symbolName := range mergedSourceBlocks {
+		sortedSymbolNames = append(sortedSymbolNames, symbolName)
+	}
+	startRow := func(block tree_sitter.SourceBlock) int {
+		return int(block.Range.StartPoint.Row)
+	}
+	minInt := func(ints ...int) int {
+		min := math.MaxInt32
+		for _, r := range ints {
+			if r < min {
+				min = r
+			}
+		}
+		return min
+	}
+	slices.SortFunc(sortedSymbolNames, func(a, b string) int {
+		aBlocks := mergedSourceBlocks[a]
+		bBlocks := mergedSourceBlocks[b]
+		aStartRows := utils.Map(aBlocks, startRow)
+		bStartRows := utils.Map(bBlocks, startRow)
+		return cmp.Compare(minInt(aStartRows...), minInt(bStartRows...))
+	})
+	return sortedSymbolNames
 }
 
 func CodeFenceStartForLanguage(langName string) string {

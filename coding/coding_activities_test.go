@@ -432,6 +432,129 @@ func TestFunc() {
 ` + "```\n\n",
 			},
 		},
+		{
+			name: "merge whitespace-separated functions",
+			code: `package cools
+
+func FirstFunc() {
+	println("First")
+}
+
+			
+  
+func SecondFunc() {
+	println("Second")
+}`,
+			input: []FileSymDefRequest{
+				{
+					SymbolNames: []string{"FirstFunc", "SecondFunc"},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `File: placeholder_tempfile
+Symbols: FirstFunc, SecondFunc
+Lines: 1-11
+` + "```go" + `
+package cools
+
+func FirstFunc() {
+	println("First")
+}
+
+			
+  
+func SecondFunc() {
+	println("Second")
+}
+` + "```\n\n",
+			},
+		},
+		{
+			name: "no merge for adjacent functions with non-whitespace between",
+			code: `package cools
+
+func FirstFunc() {
+	println("First")
+}
+
+var foo = 123
+
+func SecondFunc() {
+	println("Second")
+}`,
+			input: []FileSymDefRequest{
+				{
+					SymbolNames: []string{"FirstFunc", "SecondFunc"},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `File: placeholder_tempfile
+Symbol: FirstFunc
+Lines: 1-5
+` + "```go" + `
+package cools
+
+func FirstFunc() {
+	println("First")
+}
+` + "```" + `
+
+File: placeholder_tempfile
+Symbol: SecondFunc
+Lines: 9-11
+` + "```go" + `
+func SecondFunc() {
+	println("Second")
+}
+` + "```\n\n",
+			},
+		},
+		{
+			name: "reorder based on file order",
+			code: `package cools
+
+var y = 1
+
+func FirstFunc() {
+	println("First")
+}
+
+var foo = 123
+
+func SecondFunc() {
+	println("Second")
+}`,
+			input: []FileSymDefRequest{
+				{
+					SymbolNames: []string{"SecondFunc", "FirstFunc"},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `File: placeholder_tempfile
+Lines: 1-1
+` + "```go" + `
+package cools
+` + "```" + `
+
+File: placeholder_tempfile
+Symbol: FirstFunc
+Lines: 5-7
+` + "```go" + `
+func FirstFunc() {
+	println("First")
+}
+` + "```" + `
+
+File: placeholder_tempfile
+Symbol: SecondFunc
+Lines: 11-13
+` + "```go" + `
+func SecondFunc() {
+	println("Second")
+}
+` + "```\n\n",
+			},
+		},
 	}
 
 	for _, tc := range testCases {
