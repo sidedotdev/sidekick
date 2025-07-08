@@ -27,7 +27,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/erikgeiser/promptkit/selection"
 	"github.com/gorilla/websocket"
-	"github.com/segmentio/ksuid"
 	"github.com/urfave/cli/v3"
 )
 
@@ -574,21 +573,33 @@ func ensureWorkspace(ctx context.Context, disableHumanInTheLoop bool) (*domain.W
 
 	fmt.Printf("Looking for workspace in directory: %s\\n", absPath)
 
-	// Step 1: Find existing workspaces for the current directory (via API call)
-	// Placeholder for API call: apiClient.GetWorkspacesByPath(ctx, absPath)
-	workspaces, err := getWorkspacesByPathAPI(ctx, absPath) // Assumed API client method
+	if apiClient == nil {
+		return nil, fmt.Errorf("API client not initialized")
+	}
+
+	// Step 1: Find existing workspaces for the current directory
+	workspacesResult, err := apiClient.GetWorkspacesByPath(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve workspaces for path %s: %w", absPath, err)
 	}
 
+	// Convert to pointer slice for consistency with existing code
+	workspaces := make([]*domain.Workspace, len(workspacesResult))
+	for i := range workspacesResult {
+		workspaces[i] = &workspacesResult[i]
+	}
+
 	if len(workspaces) == 0 {
 		// Step 2: If none exists, create one automatically
-		fmt.Printf("No existing workspace found for %s. Creating a new one.\\n", absPath)
+		fmt.Printf("No existing workspace found for %s. Creating a new one.\n", absPath)
 		dirName := filepath.Base(absPath)
-		defaultWorkspaceName := fmt.Sprintf("%s-workspace", dirName) // Default name
+		defaultWorkspaceName := fmt.Sprintf("%s-workspace", dirName)
 
-		// Placeholder for API call: apiClient.CreateWorkspace(ctx, defaultWorkspaceName, absPath)
-		createdWorkspace, err := createWorkspaceAPI(ctx, defaultWorkspaceName, absPath) // Assumed API client method
+		req := &client.CreateWorkspaceRequest{
+			Name:         defaultWorkspaceName,
+			LocalRepoDir: absPath,
+		}
+		createdWorkspace, err := apiClient.CreateWorkspace(req)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create workspace for path %s: %w", absPath, err)
 		}
@@ -641,44 +652,3 @@ func ensureWorkspace(ctx context.Context, disableHumanInTheLoop bool) (*domain.W
 }
 
 // --- Placeholder API client functions ---
-// These functions simulate what an API client would do.
-// They need to be replaced with actual HTTP calls to the Sidekick server.
-
-// getWorkspacesByPathAPI is a placeholder for an API call to the server.
-func getWorkspacesByPathAPI(ctx context.Context, path string) ([]*domain.Workspace, error) {
-	// TODO: Implement actual API call: GET /api/v1/workspaces?path={path}
-	// This function should ideally live in an API client package.
-	fmt.Printf("[INFO] STUBBED API CALL: getWorkspacesByPathAPI for path %s. Simulating NO workspace found.\\n", path)
-
-	// Simulate different scenarios for testing by uncommenting:
-	// return []*domain.Workspace{}, nil // No workspace
-
-	// return []*domain.Workspace{ // One workspace
-	// 	{Id: "ws_single_abcdef12345", Name: filepath.Base(path) + "-ws", LocalRepoDir: path, Created: time.Now(), Updated: time.Now()},
-	// }, nil
-
-	// return []*domain.Workspace{ // Multiple workspaces
-	//  {Id: "ws_multi_alpha67890", Name: filepath.Base(path) + "-alpha-ws", LocalRepoDir: path, Created: time.Now().Add(-2 * time.Hour), Updated: time.Now().Add(-time.Hour)},
-	//  {Id: "ws_multi_beta12345", Name: filepath.Base(path) + "-beta-ws", LocalRepoDir: path, Created: time.Now().Add(-time.Hour), Updated: time.Now()},
-	// }, nil
-
-	return []*domain.Workspace{}, nil // Default: Simulate no workspace found
-}
-
-// createWorkspaceAPI is a placeholder for an API call to the server.
-func createWorkspaceAPI(ctx context.Context, name string, path string) (*domain.Workspace, error) {
-	// TODO: Implement actual API call: POST /api/v1/workspaces with {name, localRepoDir}
-	// This function should ideally live in an API client package.
-	fmt.Printf("[INFO] STUBBED API CALL: createWorkspaceAPI with name '%s', path '%s'. Simulating creation.\\n", name, path)
-
-	newWorkspace := &domain.Workspace{
-		Id:           "ws_" + ksuid.New().String(), // ksuid needs "github.com/segmentio/ksuid"
-		Name:         name,
-		LocalRepoDir: path,
-		Created:      time.Now(),
-		Updated:      time.Now(),
-	}
-	return newWorkspace, nil
-}
-
-// --- End Placeholder API client functions ---
