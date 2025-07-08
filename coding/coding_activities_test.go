@@ -42,15 +42,11 @@ func TestFunc() {
 			},
 			expectedOutput: SymDefResults{
 				SymbolDefinitions: `File: placeholder_tempfile
-Lines: 1-1
+Symbol: TestFunc
+Lines: 1-5
 ` + "```go" + `
 package cools
-` + "```" + `
 
-File: placeholder_tempfile
-Symbol: TestFunc
-Lines: 3-5
-` + "```go" + `
 func TestFunc() {
 	println("Hello, world!")
 }
@@ -71,15 +67,11 @@ func (*x SomeStruct) TestFunc() {
 			},
 			expectedOutput: SymDefResults{
 				SymbolDefinitions: `File: placeholder_tempfile
-Lines: 1-1
+Symbol: SomeStruct.TestFunc
+Lines: 1-5
 ` + "```go" + `
 package cools
-` + "```" + `
 
-File: placeholder_tempfile
-Symbol: SomeStruct.TestFunc
-Lines: 3-5
-` + "```go" + `
 func (*x SomeStruct) TestFunc() {
 	println("Hello, world!")
 }
@@ -89,6 +81,8 @@ func (*x SomeStruct) TestFunc() {
 		{
 			name: "Pointer Receiver Function definition with star and dot in symbol name",
 			code: `package cools
+
+var x = 1
 
 func (*x SomeStruct) TestFunc() {
 	println("Hello, world!")
@@ -107,7 +101,7 @@ package cools
 
 File: placeholder_tempfile
 Symbol: *SomeStruct.TestFunc
-Lines: 3-5
+Lines: 5-7
 ` + "```go" + `
 func (*x SomeStruct) TestFunc() {
 	println("Hello, world!")
@@ -133,17 +127,11 @@ func TestFunc() {
 			},
 			expectedOutput: SymDefResults{
 				SymbolDefinitions: `File: placeholder_tempfile
-Lines: 1-1
+Symbol: TestFunc
+Lines: 1-9
 ` + "```go" + `
 package cools
-` + "```" + `
 
-NOTE: Multiple definitions were found for symbol TestFunc:
-
-File: placeholder_tempfile
-Symbol: TestFunc
-Lines: 3-9
-` + "```go" + `
 func TestFunc() {
 	println("Hello, world!")
 }
@@ -151,7 +139,9 @@ func TestFunc() {
 func TestFunc() {
 	println("Second one")
 }
-` + "```\n\n",
+` + "```" + `
+
+NOTE: Multiple definitions were found for symbol TestFunc`,
 			},
 		},
 		{
@@ -240,17 +230,11 @@ func TestFunc() {
 			},
 			expectedOutput: SymDefResults{
 				SymbolDefinitions: `File: placeholder_tempfile
-Lines: 1-1
+Symbol: TestFunc
+Lines: 1-5
 ` + "```go" + `
 package cools
-` + "```" + `
 
-NOTE: Multiple definitions were found for symbol TestFunc:
-
-File: placeholder_tempfile
-Symbol: TestFunc
-Lines: 3-5
-` + "```go" + `
 func TestFunc() {
 	println("Hello, world!")
 }
@@ -263,7 +247,9 @@ Lines: 9-11
 func TestFunc() {
 	println("Second one")
 }
-` + "```\n\n",
+` + "```" + `
+
+NOTE: Multiple definitions were found for symbol TestFunc`,
 			},
 		},
 		{
@@ -407,9 +393,13 @@ The symbol 'TestFunc' is not defined in any repo files.`,
 
 import "fmt"
 
+var x = 1
+
 func TestFunc() {
 	println("Hello, world!")
 }
+
+var y = 1
 
 import "os"`,
 			input: []FileSymDefRequest{
@@ -427,14 +417,14 @@ import "fmt"
 ` + "```" + `
 
 File: placeholder_tempfile
-Lines: 9-9
+Lines: 13-13
 ` + "```go" + `
 import "os"
 ` + "```" + `
 
 File: placeholder_tempfile
 Symbol: TestFunc
-Lines: 5-7
+Lines: 7-9
 ` + "```go" + `
 func TestFunc() {
 	println("Hello, world!")

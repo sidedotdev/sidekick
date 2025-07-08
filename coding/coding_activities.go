@@ -60,9 +60,9 @@ type MergedSymbolRetrievalResult struct {
 
 // mergeSymbolResults combines multiple SymbolRetrievalResults for a single file into MergedSymbolRetrievalResults,
 // where source blocks that overlap or are adjacent (separated only by whitespace) are merged together.
-func mergeSymbolResults(results []SymbolRetrievalResult) []MergedSymbolRetrievalResult {
+func mergeSymbolResults(results []SymbolRetrievalResult) MergedSymbolRetrievalResult {
 	if len(results) == 0 {
-		return nil
+		return MergedSymbolRetrievalResult{}
 	}
 
 	// All results should be for the same file
@@ -70,7 +70,7 @@ func mergeSymbolResults(results []SymbolRetrievalResult) []MergedSymbolRetrieval
 
 	// Collect all source blocks and map them back to their symbols
 	var allSourceBlocks []tree_sitter.SourceBlock
-	symbolsByRange := make(map[string][]string) // key is "startByte,endByte"
+	symbolsByRange := make(map[string][]string) // key is "startRow,endRow"
 	errors := make(map[string]error)
 	relatedSymbols := make(map[string][]RelatedSymbol)
 
@@ -83,12 +83,7 @@ func mergeSymbolResults(results []SymbolRetrievalResult) []MergedSymbolRetrieval
 		}
 	}
 	if sourceCode == nil {
-		return []MergedSymbolRetrievalResult{{
-			Errors:             errors,
-			MergedSourceBlocks: make(map[string][]tree_sitter.SourceBlock),
-			RelatedSymbols:     make(map[string][]RelatedSymbol),
-			RelativePath:       relativePath,
-		}}
+		return MergedSymbolRetrievalResult{}
 	}
 
 	// Split source code into lines for merging
@@ -103,8 +98,11 @@ func mergeSymbolResults(results []SymbolRetrievalResult) []MergedSymbolRetrieval
 		if len(result.SourceBlocks) > 0 {
 			for _, block := range result.SourceBlocks {
 				allSourceBlocks = append(allSourceBlocks, block)
-				key := fmt.Sprintf("%d,%d", block.Range.StartByte, block.Range.EndByte)
-				symbolsByRange[key] = append(symbolsByRange[key], result.SymbolName)
+				// used for the "Symbol:" or "Symbols:" line, and related symbols, so header is not relevant
+				if result.SymbolName != "" {
+					key := fmt.Sprintf("%d,%d", block.Range.StartPoint.Row, block.Range.EndPoint.Row)
+					symbolsByRange[key] = append(symbolsByRange[key], result.SymbolName)
+				}
 			}
 		}
 		if len(result.RelatedSymbols) > 0 {
@@ -131,16 +129,16 @@ func mergeSymbolResults(results []SymbolRetrievalResult) []MergedSymbolRetrieval
 	// For each merged block, determine which symbols it contains
 	for _, mergedBlock := range mergedBlocks {
 		var symbolsForBlock []string
-		mergedStart := mergedBlock.Range.StartByte
-		mergedEnd := mergedBlock.Range.EndByte
+		mergedStart := mergedBlock.Range.StartPoint.Row
+		mergedEnd := mergedBlock.Range.EndPoint.Row
 
-		// Check which original ranges overlap with this merged range
+		// Check which original ranges are contained within this merged range
 		for rangeKey, symbols := range symbolsByRange {
 			var start, end uint32
 			fmt.Sscanf(rangeKey, "%d,%d", &start, &end)
 
-			// If ranges overlap
-			if !(mergedEnd <= start || mergedStart >= end) {
+			// If range is contained within merged
+			if mergedEnd >= end && mergedStart <= start {
 				symbolsForBlock = append(symbolsForBlock, symbols...)
 			}
 		}
@@ -165,7 +163,7 @@ func mergeSymbolResults(results []SymbolRetrievalResult) []MergedSymbolRetrieval
 		}
 	}
 
-	return []MergedSymbolRetrievalResult{mergedResult}
+	return mergedResult
 }
 
 type DirectorySymDefRequest struct {
@@ -228,73 +226,103 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(dirSymDefRequest DirectoryS
 
 	wg.Wait()
 
+	// Group results by filepath
+	resultsByFile := make(map[string][]SymbolRetrievalResult)
+	for _, result := range results {
+		resultsByFile[result.RelativePath] = append(resultsByFile[result.RelativePath], result)
+	}
+
 	var relativeFilePathsBySymbolName map[string][]string
 	var symbolDefBuilder, failureBuilder strings.Builder
-	for _, result := range results {
-		if result.Error != nil {
-			if relativeFilePathsBySymbolName == nil {
-				filePaths, err := getRelativeFilePathsBySymbolName(baseDir)
-				if err != nil {
-					msg := fmt.Sprintf("error getting file paths by symbol name: %v\n", err)
-					symbolDefBuilder.WriteString(msg)
-					failureBuilder.WriteString(msg)
+
+	// Process results file by file
+	for filePath, fileResults := range resultsByFile {
+		// Handle errors first
+		for _, result := range fileResults {
+			if result.Error != nil {
+				if relativeFilePathsBySymbolName == nil {
+					filePaths, err := getRelativeFilePathsBySymbolName(baseDir)
+					if err != nil {
+						msg := fmt.Sprintf("error getting file paths by symbol name: %v\n", err)
+						symbolDefBuilder.WriteString(msg)
+						failureBuilder.WriteString(msg)
+					}
+					relativeFilePathsBySymbolName = filePaths
 				}
-				relativeFilePathsBySymbolName = filePaths
-			}
 
-			hint := getHintForSymbolDefResultFailure(result.Error, baseDir, result.RelativePath, result.SymbolName, &relativeFilePathsBySymbolName)
-
-			symbolDefBuilder.WriteString(hint)
-			symbolDefBuilder.WriteString("\n")
-			failureBuilder.WriteString(hint)
-			failureBuilder.WriteString("\n")
-			continue
-		}
-
-		if len(result.SourceBlocks) == 0 {
-			continue
-		}
-
-		if len(result.SourceBlocks) > 1 && result.SymbolName != "" {
-			symbolDefBuilder.WriteString(fmt.Sprintf("NOTE: Multiple definitions were found for symbol %s:\n\n", result.SymbolName))
-		}
-		sourceCodeLines := strings.Split(string(*result.SourceBlocks[0].Source), "\n")
-		mergedBlocks := tree_sitter.MergeAdjacentOrOverlappingSourceBlocks(result.SourceBlocks, sourceCodeLines)
-
-		langName := utils.InferLanguageNameFromFilePath(result.RelativePath)
-		for _, block := range mergedBlocks {
-			// Write block header
-			symbolDefBuilder.WriteString("File: ")
-			symbolDefBuilder.WriteString(result.RelativePath)
-			if result.SymbolName != "" && result.SymbolName != "*" {
-				symbolDefBuilder.WriteString("\nSymbol: ")
-				symbolDefBuilder.WriteString(result.SymbolName)
-			}
-
-			// Write line numbers
-			symbolDefBuilder.WriteString("\nLines: ")
-			symbolDefBuilder.WriteString(fmt.Sprintf("%d-%d",
-				block.Range.StartPoint.Row+1,
-				block.Range.EndPoint.Row+1))
-
-			if result.SymbolName == "*" {
-				symbolDefBuilder.WriteString(" (full file)")
-			}
-			symbolDefBuilder.WriteString("\n")
-
-			// Write source block content
-			symbolDefBuilder.WriteString(CodeFenceStartForLanguage(langName))
-			content := block.String()
-			symbolDefBuilder.WriteString(content)
-			if !strings.HasSuffix(content, "\n") {
+				hint := getHintForSymbolDefResultFailure(result.Error, baseDir, result.RelativePath, result.SymbolName, &relativeFilePathsBySymbolName)
+				symbolDefBuilder.WriteString(hint)
 				symbolDefBuilder.WriteString("\n")
+				failureBuilder.WriteString(hint)
+				failureBuilder.WriteString("\n")
 			}
-			symbolDefBuilder.WriteString(codeFenceEnd)
 		}
 
-		// Write related symbols if any
-		if len(result.RelatedSymbols) > 0 {
-			symbolDefBuilder.WriteString(getRelatedSymbolsHint(result))
+		// Merge results for this file
+		merged := mergeSymbolResults(fileResults)
+		langName := utils.InferLanguageNameFromFilePath(filePath)
+
+		// Skip if no source blocks
+		if len(merged.MergedSourceBlocks) == 0 {
+			continue
+		}
+
+		// Process each set of merged blocks
+		for symbolNames, blocks := range merged.MergedSourceBlocks {
+			symbols := strings.Split(symbolNames, ",")
+			onlyHeaders := utils.All(symbols, func(s string) bool { return s == "" })
+			anyWildcard := slices.Contains(symbols, "*")
+
+			for _, block := range blocks {
+				// Write block header
+				symbolDefBuilder.WriteString("File: ")
+				symbolDefBuilder.WriteString(filePath)
+				if len(symbols) > 0 && !onlyHeaders && !anyWildcard {
+					if len(symbols) == 1 {
+						symbolDefBuilder.WriteString("\nSymbol: ")
+					} else {
+						symbolDefBuilder.WriteString("\nSymbols: ")
+					}
+					symbolDefBuilder.WriteString(symbolNames)
+				}
+
+				// Write line numbers
+				symbolDefBuilder.WriteString("\nLines: ")
+				symbolDefBuilder.WriteString(fmt.Sprintf("%d-%d",
+					block.Range.StartPoint.Row+1,
+					block.Range.EndPoint.Row+1))
+
+				if anyWildcard {
+					symbolDefBuilder.WriteString(" (full file)")
+				}
+				symbolDefBuilder.WriteString("\n")
+
+				// Write source block content
+				symbolDefBuilder.WriteString(CodeFenceStartForLanguage(langName))
+				content := block.String()
+				symbolDefBuilder.WriteString(content)
+				if !strings.HasSuffix(content, "\n") {
+					symbolDefBuilder.WriteString("\n")
+				}
+				symbolDefBuilder.WriteString(codeFenceEnd)
+			}
+
+			// Write related symbols if any
+			if relatedSyms, ok := merged.RelatedSymbols[symbolNames]; ok && len(relatedSyms) > 0 {
+				symbolDefBuilder.WriteString(getRelatedSymbolsHint(merged, symbolNames))
+			}
+
+			// Warn about dups
+			for _, symbol := range symbols {
+				if symbol == "" || symbol == "*" {
+					continue
+				}
+				for _, result := range fileResults {
+					if result.SymbolName == symbol && len(result.SourceBlocks) > 1 {
+						symbolDefBuilder.WriteString(fmt.Sprintf("NOTE: Multiple definitions were found for symbol %s\n", symbol))
+					}
+				}
+			}
 		}
 	}
 
@@ -617,7 +645,7 @@ var (
 	maxOtherFileSignatureLines  = 10
 )
 
-func getRelatedSymbolsHint(result SymbolRetrievalResult) string {
+func getRelatedSymbolsHint(mergedResult MergedSymbolRetrievalResult, symbolNames string) string {
 	sameFileSymbols := make([]string, 0)
 	otherFileSymbols := make(map[string][]string)
 	numSameFileSignatureLines := 0
@@ -627,8 +655,9 @@ func getRelatedSymbolsHint(result SymbolRetrievalResult) string {
 	totalOtherFileSymbols := 0
 	hintBuilder := strings.Builder{}
 
-	for _, rs := range result.RelatedSymbols {
-		if rs.RelativeFilePath == result.RelativePath {
+	relatedSymbols := mergedResult.RelatedSymbols[symbolNames]
+	for _, rs := range relatedSymbols {
+		if rs.RelativeFilePath == mergedResult.RelativePath {
 			sameFileSymbols = append(sameFileSymbols, rs.Symbol.Content)
 			numSameFileReferences += len(rs.Locations)
 			numSameFileSignatureLines += strings.Count(rs.Signature.Content, "\n") + 1
@@ -643,17 +672,17 @@ func getRelatedSymbolsHint(result SymbolRetrievalResult) string {
 	// Write same-file references
 	if len(sameFileSymbols) > 0 {
 		if numSameFileSignatureLines <= maxSameFileSignatureLines {
-			hintBuilder.WriteString(fmt.Sprintf("%s is referenced in the same file by:\n", result.SymbolName))
-			for _, rs := range result.RelatedSymbols {
-				if rs.RelativeFilePath == result.RelativePath {
+			hintBuilder.WriteString(fmt.Sprintf("%s is referenced in the same file by:\n", symbolNames))
+			for _, rs := range relatedSymbols {
+				if rs.RelativeFilePath == mergedResult.RelativePath {
 					hintBuilder.WriteString(fmt.Sprintf("\t%s\n", rs.Signature.Content))
 				}
 			}
 		} else if len(sameFileSymbols) <= maxSameFileRelatedSymbols {
-			hintBuilder.WriteString(fmt.Sprintf("%s is referenced in the same file by: %s\n", result.SymbolName, strings.Join(sameFileSymbols, ", ")))
+			hintBuilder.WriteString(fmt.Sprintf("%s is referenced in the same file by: %s\n", symbolNames, strings.Join(sameFileSymbols, ", ")))
 		} else {
-			hintBuilder.WriteString(fmt.Sprintf("%s is referenced in the same file by %d other symbols %d times\n", result.SymbolName, len(sameFileSymbols), numSameFileReferences))
-			hintBuilder.WriteString(fmt.Sprintf("There are %d other symbols that reference %s in the same file.\n", len(sameFileSymbols), result.SymbolName))
+			hintBuilder.WriteString(fmt.Sprintf("%s is referenced in the same file by %d other symbols %d times\n", symbolNames, len(sameFileSymbols), numSameFileReferences))
+			hintBuilder.WriteString(fmt.Sprintf("There are %d other symbols that reference %s in the same file.\n", len(sameFileSymbols), symbolNames))
 		}
 	}
 
@@ -662,15 +691,15 @@ func getRelatedSymbolsHint(result SymbolRetrievalResult) string {
 		return hintBuilder.String()
 	}
 	if len(otherFileSymbols) > maxOtherFiles {
-		hintBuilder.WriteString(fmt.Sprintf("%s is referenced in %d other files. Total referencing symbols: %d. Total references: %d\n", result.SymbolName, len(otherFileSymbols), totalOtherFileSymbols, totalOtherFileReferences))
+		hintBuilder.WriteString(fmt.Sprintf("%s is referenced in %d other files. Total referencing symbols: %d. Total references: %d\n", symbolNames, len(otherFileSymbols), totalOtherFileSymbols, totalOtherFileReferences))
 		return hintBuilder.String()
 	}
 
-	hintBuilder.WriteString(fmt.Sprintf("%s is referenced in other files:\n", result.SymbolName))
+	hintBuilder.WriteString(fmt.Sprintf("%s is referenced in other files:\n", symbolNames))
 	for filePath, symbols := range otherFileSymbols {
 		if totalOtherFileSignatureLines <= maxOtherFileSignatureLines {
 			hintBuilder.WriteString(fmt.Sprintf("\t%s:\n", filePath))
-			for _, rs := range result.RelatedSymbols {
+			for _, rs := range relatedSymbols {
 				if rs.RelativeFilePath == filePath {
 					signatureLines := strings.Split(rs.Signature.Content, "\n")
 					for _, line := range signatureLines {
