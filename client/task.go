@@ -17,6 +17,11 @@ type CreateTaskRequest struct {
 	FlowOptions map[string]interface{} `json:"flowOptions"`
 }
 
+// CreateTaskResponse is the response from the CreateTask API.
+type CreateTaskResponse struct {
+	Task domain.Task `json:"task"`
+}
+
 // CreateTask sends a request to the Sidekick server to create a new task.
 func (c *Client) CreateTask(workspaceID string, req *CreateTaskRequest) (*domain.Task, error) {
 	payload, err := json.Marshal(req)
@@ -40,11 +45,11 @@ func (c *Client) CreateTask(workspaceID string, req *CreateTaskRequest) (*domain
 		return nil, fmt.Errorf("API request to create task failed with status %s: %s", resp.Status, string(bodyBytes))
 	}
 
-	var responseData domain.Task
+	var responseData CreateTaskResponse
 	if err := json.Unmarshal(bodyBytes, &responseData); err != nil {
 		return nil, fmt.Errorf("failed to decode API response for create task (status %s): %w. Full response body: %s", resp.Status, err, string(bodyBytes))
 	}
-	return &responseData, nil
+	return &responseData.Task, nil
 }
 
 // TaskWithFlows is a task with its associated flows.
