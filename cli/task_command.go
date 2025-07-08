@@ -11,10 +11,8 @@ import (
 	"sort"
 	"time"
 
-	"bytes"
 	"encoding/json"
 	"net"
-	"net/http"
 	"net/url"
 	"os/signal"
 	"strings"
@@ -95,63 +93,18 @@ func parseFlowOptions(cmd *cli.Command) (map[string]interface{}, error) {
 	return flowOpts, nil
 }
 
-// createTaskAPI sends a request to the Sidekick server to create a new task.
-func createTaskAPI(workspaceID string, payload []byte) (map[string]interface{}, error) {
-	serverBaseURL := fmt.Sprintf("http://localhost:%d", common.GetServerPort())
-	reqURL := fmt.Sprintf("%s/api/v1/workspaces/%s/tasks", serverBaseURL, workspaceID)
-	resp, err := http.Post(reqURL, "application/json", bytes.NewBuffer(payload))
-	if err != nil {
-		return nil, fmt.Errorf("failed to send create task request to API: %w", err)
+// createTaskFromPayload creates a task from raw JSON payload bytes.
+func createTaskFromPayload(workspaceID string, payload []byte) (*domain.Task, error) {
+	var req client.CreateTaskRequest
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal task request payload: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated { // Expect 201 Created
-		bodyBytes, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return nil, fmt.Errorf("API request to create task failed with status %s and could not read response body: %w", resp.Status, readErr)
-		}
-		return nil, fmt.Errorf("API request to create task failed with status %s: %s", resp.Status, string(bodyBytes))
-	}
-
-	var responseData map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&responseData); err != nil {
-		// Attempt to read the body for context if JSON decoding fails
-		// Note: resp.Body might have been partially consumed by json.NewDecoder.
-		// A more robust way would be to read it fully first, then try to decode.
-		// For now, this provides some context.
-		bodyBytes, _ := io.ReadAll(resp.Body) // Read remaining
-		return nil, fmt.Errorf("failed to decode API response for create task (status %s): %w. Response body fragment: %s", resp.Status, err, string(bodyBytes))
-	}
-	return responseData, nil
+	return apiClient.CreateTask(workspaceID, &req)
 }
 
-// getTaskAPI fetches the details of a specific task from the Sidekick server.
-func getTaskAPI(workspaceID string, taskID string) (map[string]interface{}, error) {
-	serverBaseURL := fmt.Sprintf("http://localhost:%d", common.GetServerPort())
-	reqURL := fmt.Sprintf("%s/api/v1/workspaces/%s/tasks/%s", serverBaseURL, workspaceID, taskID)
-
-	resp, err := http.Get(reqURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send get task request to API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Read the entire body first to ensure it's available for error reporting
-	bodyBytes, readErr := io.ReadAll(resp.Body)
-	if readErr != nil {
-		return nil, fmt.Errorf("failed to read response body from get task request (status %s): %w", resp.Status, readErr)
-	}
-
-	if resp.StatusCode != http.StatusOK { // Expect 200 OK
-		return nil, fmt.Errorf("API request to get task failed with status %s: %s", resp.Status, string(bodyBytes))
-	}
-
-	var responseData map[string]interface{}
-	// Now decode from the buffered bodyBytes
-	if err := json.Unmarshal(bodyBytes, &responseData); err != nil {
-		return nil, fmt.Errorf("failed to decode API response for get task (status %s): %w. Full response body: %s", resp.Status, err, string(bodyBytes))
-	}
-	return responseData, nil
+// getTaskDetails fetches the details of a specific task from the Sidekick server.
+func getTaskDetails(workspaceID string, taskID string) (*client.GetTaskResponse, error) {
+	return apiClient.GetTask(workspaceID, taskID)
 }
 
 // streamTaskProgress connects to the WebSocket endpoint to stream flow action changes for a task.
@@ -233,37 +186,9 @@ func streamTaskProgress(ctx context.Context, workspaceID, flowID, taskID string)
 	<-done
 }
 
-// cancelTaskAPI sends a request to the Sidekick server to cancel a task.
-func cancelTaskAPI(workspaceID string, taskID string) error {
-	serverBaseURL := fmt.Sprintf("http://localhost:%d", common.GetServerPort())
-	reqURL := fmt.Sprintf("%s/api/v1/workspaces/%s/tasks/%s/cancel", serverBaseURL, workspaceID, taskID)
-
-	req, err := http.NewRequest("POST", reqURL, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create cancel task request: %w", err)
-	}
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send cancel task request to API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK { // Expect 200 OK for cancellation
-		bodyBytes, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return fmt.Errorf("API request to cancel task failed with status %s and could not read response body: %w", resp.Status, readErr)
-		}
-		var errorResponse struct {
-			Error string `json:"error"`
-		}
-		if json.Unmarshal(bodyBytes, &errorResponse) == nil && errorResponse.Error != "" {
-			return fmt.Errorf("API request to cancel task failed with status %s: %s", resp.Status, errorResponse.Error)
-		}
-		return fmt.Errorf("API request to cancel task failed with status %s: %s", resp.Status, string(bodyBytes))
-	}
-	return nil
+// cancelTask sends a request to the Sidekick server to cancel a task.
+func cancelTask(workspaceID string, taskID string) error {
+	return apiClient.CancelTask(workspaceID, taskID)
 }
 
 // NewTaskCommand creates and returns the definition for the "task" CLI subcommand.
@@ -367,19 +292,12 @@ func NewTaskCommand() *cli.Command {
 			fmt.Printf("Attempting to create task '%s' in workspace '%s' (ID: %s)...\\n", taskDescription, workspace.Name, workspace.Id)
 			// fmt.Printf("Payload: %s\\n", string(payloadBytes)) // For debugging, can be removed later
 
-			taskResponseData, err := createTaskAPI(workspace.Id, payloadBytes)
+			task, err := createTaskFromPayload(workspace.Id, payloadBytes)
 			if err != nil {
 				return cli.Exit(fmt.Sprintf("Failed to create task via API: %v", err), 1)
 			}
 
-			// 3. Handle the API response
-			taskID, ok := taskResponseData["id"].(string)
-			if !ok {
-				responseBytes, _ := json.Marshal(taskResponseData) // Attempt to log the full response for debugging
-				errorMsg := fmt.Sprintf("Task creation API call succeeded, but task ID was not found or not a string in the response. Full response: %s", string(responseBytes))
-				fmt.Println(errorMsg) // Print to stdout for user visibility
-				return cli.Exit(errorMsg, 1)
-			}
+			taskID := task.Id
 
 			fmt.Printf("Successfully created task with ID: %s\n", taskID)
 			// Store taskID if needed for sync mode (next steps)
@@ -400,27 +318,13 @@ func NewTaskCommand() *cli.Command {
 				// Attempt to get flowID for progress streaming
 				var flowID string
 				// Fetch full task details once to get the flow ID.
-				taskDetailsForFlow, err := getTaskAPI(workspace.Id, taskID)
+				taskDetails, err := getTaskDetails(workspace.Id, taskID)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "Warning: could not fetch task details to get flow ID for progress streaming: %v\n", err)
+				} else if len(taskDetails.Task.Flows) > 0 {
+					flowID = taskDetails.Task.Flows[0].Id
 				} else {
-					if flowsVal, ok := taskDetailsForFlow["flows"]; ok {
-						if flowsArray, ok := flowsVal.([]interface{}); ok && len(flowsArray) > 0 {
-							if firstFlow, ok := flowsArray[0].(map[string]interface{}); ok {
-								if idVal, ok := firstFlow["id"].(string); ok && idVal != "" {
-									flowID = idVal
-								} else {
-									fmt.Fprintf(os.Stderr, "Warning: ID not found or empty for the first flow. Progress streaming will be unavailable.\n")
-								}
-							} else {
-								fmt.Fprintf(os.Stderr, "Warning: First flow data is not in the expected format (map[string]interface{}). Progress streaming will be unavailable.\n")
-							}
-						} else {
-							fmt.Fprintf(os.Stderr, "Warning: 'flows' field is not a non-empty array in task details. Progress streaming will be unavailable.\n")
-						}
-					} else {
-						fmt.Fprintf(os.Stderr, "Warning: 'flows' field not found in task details. Progress streaming will be unavailable.\n")
-					}
+					fmt.Fprintf(os.Stderr, "Warning: No flows found for task. Progress streaming will be unavailable.\n")
 				}
 
 				if flowID != "" {
@@ -444,16 +348,13 @@ func NewTaskCommand() *cli.Command {
 					defer ticker.Stop()
 
 					checkStatus := func() (status string, done bool, err error) {
-						taskData, apiErr := getTaskAPI(workspace.Id, taskID)
+						taskDetails, apiErr := getTaskDetails(workspace.Id, taskID)
 						if apiErr != nil {
 							fmt.Fprintf(os.Stderr, "Error polling task status: %v. Will retry.\n", apiErr)
 							return "", false, nil // Not a fatal error for the poller, just a failed attempt
 						}
 
-						currentStatus, ok := taskData["status"].(string)
-						if !ok {
-							return "", true, fmt.Errorf("task status not found or not a string in API response: %v", taskData)
-						}
+						currentStatus := string(taskDetails.Task.Status)
 
 						// Optional: print status updates, can be refined later with a spinner
 						// fmt.Printf("Current task status: %s\n", currentStatus)
@@ -506,7 +407,7 @@ func NewTaskCommand() *cli.Command {
 				case sig := <-sigChan:
 					fmt.Printf("\nSignal %v received. Attempting to cancel task %s...\n", sig, taskID)
 					cancelSync() // Signal goroutines (polling, streaming) to stop
-					cancelErr := cancelTaskAPI(workspace.Id, taskID)
+					cancelErr := cancelTask(workspace.Id, taskID)
 					if cancelErr != nil {
 						fmt.Fprintf(os.Stderr, "Failed to send cancel request for task %s: %v\n", taskID, cancelErr)
 						return cli.Exit(fmt.Sprintf("Task cancellation request failed for %s.", taskID), 1)
