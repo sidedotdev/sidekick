@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"encoding/json"
@@ -134,7 +135,8 @@ func waitForFlow(ctx context.Context, workspaceID, taskID string) string {
 
 // streamTaskProgress connects to the WebSocket endpoint to stream flow action changes for a task.
 // It uses flowID to identify the specific flow to stream actions from.
-func streamTaskProgress(ctx context.Context, workspaceID, flowID, taskID string) {
+func streamTaskProgress(ctx context.Context, workspaceID, flowID, taskID string, wg *sync.WaitGroup) {
+	defer wg.Done()
 	serverPort := common.GetServerPort()
 	// Path: /ws/v1/workspaces/:workspaceId/flows/:flowId/action_changes_ws
 	u := url.URL{Scheme: "ws", Host: fmt.Sprintf("localhost:%d", serverPort), Path: fmt.Sprintf("/ws/v1/workspaces/%s/flows/%s/action_changes_ws", workspaceID, flowID)}
@@ -264,7 +266,7 @@ func NewTaskCommand() *cli.Command {
 			if err != nil {
 				return cli.Exit(fmt.Sprintf("Workspace setup failed: %v", err), 1)
 			}
-			fmt.Printf("Using workspace: %s (ID: %s, Path: %s)\n", workspace.Name, workspace.Id, workspace.LocalRepoDir) // Corrected \\\\n to \n
+			fmt.Printf("Using workspace: %s (ID: %s, Path: %s)\n", workspace.Name, workspace.Id, workspace.LocalRepoDir)
 
 			flowType := cmd.String("flow")
 			if cmd.Bool("P") {
@@ -291,7 +293,7 @@ func NewTaskCommand() *cli.Command {
 			}
 
 			// 2. Make the HTTP POST request
-			fmt.Printf("Attempting to create task '%s' in workspace '%s' (ID: %s)...\\n", taskDescription, workspace.Name, workspace.Id)
+			fmt.Printf("Attempting to create task '%s' in workspace '%s' (ID: %s)...\n", taskDescription, workspace.Name, workspace.Id)
 			// fmt.Printf("Payload: %s\\n", string(payloadBytes)) // For debugging, can be removed later
 
 			task, err := createTaskFromPayload(workspace.Id, payloadBytes)
@@ -307,12 +309,15 @@ func NewTaskCommand() *cli.Command {
 
 			// Further steps (sync wait, progress streaming, Ctrl+C) will use this taskID.
 			// For now, we just print the ID.
+			// Initialize WaitGroup for sync mode
+			var wg sync.WaitGroup
+
 			if cmd.Bool("async") {
 				fmt.Println("Task submitted in async mode. CLI will now exit.")
 				return nil
 			} else {
 				// Synchronous mode
-				fmt.Printf("Task submitted in sync mode. Waiting for completion (Task ID: %s). Press Ctrl+C to cancel.\\n", taskID)
+				fmt.Printf("Task submitted in sync mode. Waiting for completion (Task ID: %s). Press Ctrl+C to cancel.\n", taskID)
 
 				syncCtx, cancelSync := context.WithCancel(ctx)
 				defer cancelSync()
@@ -324,7 +329,8 @@ func NewTaskCommand() *cli.Command {
 					fmt.Fprintf(os.Stderr, "Warning: No flows found for task. Progress streaming will be unavailable.\n")
 				} else {
 					fmt.Printf("[INFO] Starting progress streaming for Flow ID: %s\n", flowID)
-					go streamTaskProgress(syncCtx, workspace.Id, flowID, taskID)
+					wg.Add(1)
+					go streamTaskProgress(syncCtx, workspace.Id, flowID, taskID, &wg)
 				}
 
 				sigChan := make(chan os.Signal, 1)
@@ -394,6 +400,8 @@ func NewTaskCommand() *cli.Command {
 				select {
 				case <-syncCtx.Done(): // Handles cancellation from defer cancelSync() or other external cancellations if cmd.Context() supports it
 					fmt.Println("\nTask operation cancelled.")
+					// Wait for progress view to clean up
+					wg.Wait()
 					// Attempt to cancel the task on the server if it was due to Ctrl+C, though cancelSync might be from task completion too.
 					// If sigChan was the source, it's handled below. If doneChan or errPollChan, task is already finished/failed.
 					return nil
@@ -406,6 +414,8 @@ func NewTaskCommand() *cli.Command {
 						return cli.Exit(fmt.Sprintf("Task cancellation request failed for %s.", taskID), 1)
 					}
 					fmt.Printf("Task %s cancellation requested successfully. Waiting for confirmation or timeout...\n", taskID)
+					// Wait for progress view to clean up
+					wg.Wait()
 					// Wait for a short period to see if doneChan confirms cancellation, or timeout.
 					select {
 					case finalStatus := <-doneChan:
@@ -416,6 +426,7 @@ func NewTaskCommand() *cli.Command {
 					return nil
 				case finalStatus := <-doneChan:
 					cancelSync() // Ensure other goroutines are stopped
+					wg.Wait()    // Wait for progress view to clean up
 					fmt.Printf("Task %s finished with status: %s\n", taskID, finalStatus)
 					if finalStatus == string(domain.TaskStatusFailed) {
 						return cli.Exit(fmt.Sprintf("Task %s failed.", taskID), 1)
@@ -423,6 +434,7 @@ func NewTaskCommand() *cli.Command {
 					return nil
 				case err := <-errPollChan:
 					cancelSync() // Ensure other goroutines are stopped
+					wg.Wait()    // Wait for progress view to clean up
 					return cli.Exit(fmt.Sprintf("Error during task monitoring: %v", err), 1)
 				}
 			}
