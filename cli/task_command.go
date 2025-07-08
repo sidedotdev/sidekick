@@ -2,33 +2,46 @@ package main
 
 import (
 	"context"
-	"errors" // New import
+	"errors"
 	"fmt"
-	"io" // New import for io.EOF
+	"io"
 	"os"
 	"os/exec"
-	"path/filepath" // New import
-	"sort"          // New import
+	"path/filepath"
+	"sort"
 	"time"
 
-	"bytes"         // New import
-	"encoding/json" // New import
-	"net"           // New import for net.Error
-	"net/http"      // New import
-	"net/url"       // New import
-	"os/signal"     // New import
-	"strings"       // New import
-	"syscall"       // New import
+	"bytes"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/url"
+	"os/signal"
+	"strings"
+	"syscall"
 
-	"sidekick/common" // New import
-	"sidekick/domain" // New import
+	"sidekick/client"
+	"sidekick/common"
+	"sidekick/domain"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/erikgeiser/promptkit/selection"
-	"github.com/gorilla/websocket" // New import
-	"github.com/segmentio/ksuid"   // New import
+	"github.com/gorilla/websocket"
+	"github.com/segmentio/ksuid"
 	"github.com/urfave/cli/v3"
 )
+
+var apiClient *client.Client
+
+// initClient initializes the API client if not already initialized
+func initClient() (*client.Client, error) {
+	if apiClient != nil {
+		return apiClient, nil
+	}
+
+	apiClient = client.NewClient()
+	return apiClient, nil
+}
 
 // clientTaskRequestPayload defines the structure for the task creation API request.
 // It omits fields like ID, AgentType, and Status, which are expected to be set by the server.
@@ -308,6 +321,13 @@ func NewTaskCommand() *cli.Command {
 			} else {
 				fmt.Println("Sidekick server is already running.")
 			}
+
+			// Initialize API client
+			client, err := initClient()
+			if err != nil {
+				return cli.Exit(fmt.Sprintf("Failed to initialize API client: %v", err), 1)
+			}
+			_ = client // TODO: Use client in subsequent API calls
 
 			// Workspace handling
 			disableHumanInTheLoop := cmd.Bool("disable-human-in-the-loop")
