@@ -105,12 +105,23 @@ onMounted(() => {
   }
 });
 
+const filterEmptyUseCaseKeys = <T extends LLMConfig | EmbeddingConfig>(config: T): T => {
+  return {
+    ...config,
+    useCaseConfigs: Object.fromEntries(
+      Object.entries(config.useCaseConfigs)
+        .filter(([key]) => key !== '')
+        .map(([key, value]) => [key, [...value]])
+    )
+  } as T;
+};
+
 const submitWorkspace = async () => {
   const formData: Omit<Workspace, 'id'> = {
     name: name.value,
     localRepoDir: localRepoDir.value,
-    llmConfig: llmConfig.value,
-    embeddingConfig: embeddingConfig.value
+    llmConfig: filterEmptyUseCaseKeys(llmConfig.value),
+    embeddingConfig: filterEmptyUseCaseKeys(embeddingConfig.value)
   };
 
   try {
