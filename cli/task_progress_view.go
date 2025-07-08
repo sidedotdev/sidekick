@@ -103,7 +103,7 @@ func (m taskProgressModel) View() string {
 			b.WriteString(m.finalMessage + "\n")
 		}
 	} else {
-		b.WriteString(fmt.Sprintf("\n%s Press 'q' to quit\n", m.spinner.View()))
+		b.WriteString(fmt.Sprintf("\nNote: sidekick's cli-mode is *experimental* and isn't interactive (yet)\n%s Working, press ctrl+c to cancel\n", m.spinner.View()))
 	}
 
 	return b.String()

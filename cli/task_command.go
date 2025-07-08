@@ -100,8 +100,7 @@ func getTaskDetails(workspaceID string, taskID string) (*client.GetTaskResponse,
 	return apiClient.GetTask(workspaceID, taskID)
 }
 
-// waitForFlow attempts to get the flow ID for a task, retrying for up to 3 seconds.
-// Returns the flow ID if found, or an empty string if no flow is available after timeout.
+// waitForFlow polls for a task's flow ID with a 3-second timeout, returning empty if none found
 func waitForFlow(ctx context.Context, workspaceID, taskID string) string {
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
@@ -130,12 +129,12 @@ func waitForFlow(ctx context.Context, workspaceID, taskID string) string {
 	}
 }
 
-// streamTaskProgress connects to the WebSocket endpoint to stream flow action changes for a task.
-// It uses flowID to identify the specific flow to stream actions from.
+// streamTaskProgress provides real-time updates of task execution by streaming flow action changes
+// through a WebSocket connection. It handles connection lifecycle and updates a Bubble Tea UI model
+// to display progress.
 func streamTaskProgress(ctx context.Context, workspaceID, flowID, taskID string, wg *sync.WaitGroup) {
 	defer wg.Done()
 	serverPort := common.GetServerPort()
-	// Path: /ws/v1/workspaces/:workspaceId/flows/:flowId/action_changes_ws
 	u := url.URL{Scheme: "ws", Host: fmt.Sprintf("localhost:%d", serverPort), Path: fmt.Sprintf("/ws/v1/workspaces/%s/flows/%s/action_changes_ws", workspaceID, flowID)}
 
 	conn, resp, err := websocket.DefaultDialer.Dial(u.String(), nil)
@@ -198,6 +197,7 @@ func streamTaskProgress(ctx context.Context, workspaceID, flowID, taskID string,
 	<-done
 }
 
+// cancelTask gracefully terminates a running task, allowing cleanup operations to complete
 func cancelTask(workspaceID string, taskID string) error {
 	return apiClient.CancelTask(workspaceID, taskID)
 }
