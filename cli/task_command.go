@@ -49,12 +49,12 @@ type clientTaskRequestPayload struct {
 	FlowOptions map[string]interface{} `json:"flowOptions"`
 }
 
-// parseFlowOptions constructs the flow options map from various command-line flags.
+// parseFlowOptions constructs the flow options map by combining JSON from --flow-options with
+// individual key-value pairs from --flow-option flags. Values from --flow-option override
+// any existing keys from --flow-options.
 func parseFlowOptions(cmd *cli.Command) (map[string]interface{}, error) {
 	flowOpts := make(map[string]interface{})
 
-	// Start with default or --flow-options.
-	// cmd.String will return the default value if the flag is not set.
 	optionsJSON := cmd.String("flow-options")
 	if err := json.Unmarshal([]byte(optionsJSON), &flowOpts); err != nil {
 		return nil, fmt.Errorf("invalid --flow-options JSON (value: %s): %w", optionsJSON, err)
@@ -75,19 +75,18 @@ func parseFlowOptions(cmd *cli.Command) (map[string]interface{}, error) {
 		if key == "" {
 			return nil, fmt.Errorf("invalid --flow-option format: '%s'. Key cannot be empty", optStr)
 		}
-		valueStr := parts[1] // Raw value string
+		valueStr := parts[1]
 
-		// Strip surrounding quotes "" or `` if present
+		// Remove enclosing quotes to support both quoted and unquoted values
 		if (strings.HasPrefix(valueStr, `"`) && strings.HasSuffix(valueStr, `"`)) ||
 			(strings.HasPrefix(valueStr, "`") && strings.HasSuffix(valueStr, "`")) {
 			if len(valueStr) >= 2 {
 				valueStr = valueStr[1 : len(valueStr)-1]
 			} else {
-				valueStr = "" // Handles cases like input "" or ``
+				valueStr = ""
 			}
 		}
-		// All values from --flow-option are stored as strings.
-		// For specific types (bool, number), users should use --flow-options with full JSON.
+		// Values from --flow-option are always strings. Use --flow-options JSON for typed values.
 		flowOpts[key] = valueStr
 	}
 	return flowOpts, nil
@@ -209,24 +208,18 @@ func NewTaskCommand() *cli.Command {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			taskDescription := cmd.Args().First()
 
-			// Handle cases: "side task", "side task --help", "side task help", "side task help --help"
 			if taskDescription == "" {
-				// Handles "side task" (no args) and "side task --help"
-				if !cmd.IsSet("help") { // True for "side task"
-					_ = cli.ShowSubcommandHelp(cmd) // Show help for "task" command
+				if !cmd.IsSet("help") {
+					_ = cli.ShowSubcommandHelp(cmd)
 					return cli.Exit("Task description is required.", 1)
 				}
-				// For "side task --help", urfave/cli handles help output automatically.
 				return nil
 			}
 
 			if taskDescription == "help" {
-				// Handles "side task help" and "side task help --help"
-				if !cmd.IsSet("help") { // True for "side task help" (if --help is not also specified)
-					_ = cli.ShowSubcommandHelp(cmd) // Show help for "task" command
+				if !cmd.IsSet("help") {
+					_ = cli.ShowSubcommandHelp(cmd)
 				}
-				// For "side task help --help", urfave/cli handles help.
-				// For "side task help", we've shown help.
 				return nil
 			}
 
@@ -260,9 +253,6 @@ func NewTaskCommand() *cli.Command {
 				return cli.Exit(fmt.Sprintf("Workspace setup failed: %v", err), 1)
 			}
 			fmt.Printf("Using workspace: %s (ID: %s, Path: %s)\n", workspace.Name, workspace.Id, workspace.LocalRepoDir) // Corrected \\\\n to \n
-
-			// 1. Construct TaskRequest payload
-			// taskDescription is already validated and available.
 
 			flowType := cmd.String("flow")
 			if cmd.Bool("P") {
@@ -337,14 +327,14 @@ func NewTaskCommand() *cli.Command {
 				sigChan := make(chan os.Signal, 1)
 				signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-				doneChan := make(chan string, 1)   // Final status string
-				errPollChan := make(chan error, 1) // Errors from polling
+				doneChan := make(chan string, 1)
+				errPollChan := make(chan error, 1)
 
-				go func() { // Polling goroutine
+				go func() {
 					defer close(doneChan)
 					defer close(errPollChan)
 
-					ticker := time.NewTicker(2 * time.Second) // Polling interval
+					ticker := time.NewTicker(2 * time.Second)
 					defer ticker.Stop()
 
 					checkStatus := func() (status string, done bool, err error) {
