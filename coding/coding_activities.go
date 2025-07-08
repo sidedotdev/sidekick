@@ -45,6 +45,19 @@ type SymbolRetrievalResult struct {
 	Error          error
 }
 
+// MergedSymbolRetrievalResult represents multiple symbol retrieval results for a single file
+// that have been merged based on overlapping source blocks.
+type MergedSymbolRetrievalResult struct {
+	// Errors maps symbol names to their retrieval errors
+	Errors map[string]error
+	// MergedSourceBlocks maps comma-delimited symbol names to their merged source blocks
+	MergedSourceBlocks map[string][]tree_sitter.SourceBlock
+	// RelatedSymbols maps comma-delimited symbol names to their related symbols
+	RelatedSymbols map[string][]RelatedSymbol
+	// RelativePath is the file path relative to the workspace root
+	RelativePath string
+}
+
 type DirectorySymDefRequest struct {
 	EnvContainer          env.EnvContainer
 	Requests              []FileSymDefRequest
