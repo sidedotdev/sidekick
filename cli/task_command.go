@@ -92,7 +92,6 @@ func parseFlowOptions(cmd *cli.Command) (map[string]interface{}, error) {
 	return flowOpts, nil
 }
 
-// createTaskFromPayload creates a task from raw JSON payload bytes.
 func createTaskFromPayload(workspaceID string, payload []byte) (*domain.Task, error) {
 	var req client.CreateTaskRequest
 	if err := json.Unmarshal(payload, &req); err != nil {
@@ -101,7 +100,6 @@ func createTaskFromPayload(workspaceID string, payload []byte) (*domain.Task, er
 	return apiClient.CreateTask(workspaceID, &req)
 }
 
-// getTaskDetails fetches the details of a specific task from the Sidekick server.
 func getTaskDetails(workspaceID string, taskID string) (*client.GetTaskResponse, error) {
 	return apiClient.GetTask(workspaceID, taskID)
 }
@@ -215,12 +213,10 @@ func streamTaskProgress(ctx context.Context, workspaceID, flowID, taskID string)
 	<-done
 }
 
-// cancelTask sends a request to the Sidekick server to cancel a task.
 func cancelTask(workspaceID string, taskID string) error {
 	return apiClient.CancelTask(workspaceID, taskID)
 }
 
-// NewTaskCommand creates and returns the definition for the "task" CLI subcommand.
 func NewTaskCommand() *cli.Command {
 	return &cli.Command{
 		Name:      "task",
