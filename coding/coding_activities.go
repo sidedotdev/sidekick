@@ -58,6 +58,116 @@ type MergedSymbolRetrievalResult struct {
 	RelativePath string
 }
 
+// mergeSymbolResults combines multiple SymbolRetrievalResults for a single file into MergedSymbolRetrievalResults,
+// where source blocks that overlap or are adjacent (separated only by whitespace) are merged together.
+func mergeSymbolResults(results []SymbolRetrievalResult) []MergedSymbolRetrievalResult {
+	if len(results) == 0 {
+		return nil
+	}
+
+	// All results should be for the same file
+	relativePath := results[0].RelativePath
+
+	// Collect all source blocks and map them back to their symbols
+	var allSourceBlocks []tree_sitter.SourceBlock
+	symbolsByRange := make(map[string][]string) // key is "startByte,endByte"
+	errors := make(map[string]error)
+	relatedSymbols := make(map[string][]RelatedSymbol)
+
+	// Extract source code from first non-empty source block
+	var sourceCode *[]byte
+	for _, result := range results {
+		if len(result.SourceBlocks) > 0 && result.SourceBlocks[0].Source != nil {
+			sourceCode = result.SourceBlocks[0].Source
+			break
+		}
+	}
+	if sourceCode == nil {
+		return []MergedSymbolRetrievalResult{{
+			Errors:             errors,
+			MergedSourceBlocks: make(map[string][]tree_sitter.SourceBlock),
+			RelatedSymbols:     make(map[string][]RelatedSymbol),
+			RelativePath:       relativePath,
+		}}
+	}
+
+	// Split source code into lines for merging
+	sourceCodeLines := strings.Split(string(*sourceCode), "\n")
+
+	// Collect all blocks and track symbol mappings
+	for _, result := range results {
+		if result.Error != nil {
+			errors[result.SymbolName] = result.Error
+			continue
+		}
+		if len(result.SourceBlocks) > 0 {
+			for _, block := range result.SourceBlocks {
+				allSourceBlocks = append(allSourceBlocks, block)
+				key := fmt.Sprintf("%d,%d", block.Range.StartByte, block.Range.EndByte)
+				symbolsByRange[key] = append(symbolsByRange[key], result.SymbolName)
+			}
+		}
+		if len(result.RelatedSymbols) > 0 {
+			relatedSymbols[result.SymbolName] = result.RelatedSymbols
+		}
+	}
+
+	// Sort blocks by start position
+	slices.SortFunc(allSourceBlocks, func(a, b tree_sitter.SourceBlock) int {
+		return cmp.Compare(a.Range.StartByte, b.Range.StartByte)
+	})
+
+	// Merge overlapping or adjacent blocks
+	mergedBlocks := tree_sitter.MergeAdjacentOrOverlappingSourceBlocks(allSourceBlocks, sourceCodeLines)
+
+	// Create merged results
+	mergedResult := MergedSymbolRetrievalResult{
+		Errors:             errors,
+		MergedSourceBlocks: make(map[string][]tree_sitter.SourceBlock),
+		RelatedSymbols:     make(map[string][]RelatedSymbol),
+		RelativePath:       relativePath,
+	}
+
+	// For each merged block, determine which symbols it contains
+	for _, mergedBlock := range mergedBlocks {
+		var symbolsForBlock []string
+		mergedStart := mergedBlock.Range.StartByte
+		mergedEnd := mergedBlock.Range.EndByte
+
+		// Check which original ranges overlap with this merged range
+		for rangeKey, symbols := range symbolsByRange {
+			var start, end uint32
+			fmt.Sscanf(rangeKey, "%d,%d", &start, &end)
+
+			// If ranges overlap
+			if !(mergedEnd <= start || mergedStart >= end) {
+				symbolsForBlock = append(symbolsForBlock, symbols...)
+			}
+		}
+
+		// Sort and deduplicate symbols
+		slices.Sort(symbolsForBlock)
+		symbolsForBlock = slices.Compact(symbolsForBlock)
+
+		// Create key from sorted symbols
+		symbolKey := strings.Join(symbolsForBlock, ",")
+
+		// Store merged block
+		mergedResult.MergedSourceBlocks[symbolKey] = append(mergedResult.MergedSourceBlocks[symbolKey], mergedBlock)
+
+		// Combine related symbols for all symbols in this block
+		var combinedRelated []RelatedSymbol
+		for _, symbol := range symbolsForBlock {
+			combinedRelated = append(combinedRelated, relatedSymbols[symbol]...)
+		}
+		if len(combinedRelated) > 0 {
+			mergedResult.RelatedSymbols[symbolKey] = combinedRelated
+		}
+	}
+
+	return []MergedSymbolRetrievalResult{mergedResult}
+}
+
 type DirectorySymDefRequest struct {
 	EnvContainer          env.EnvContainer
 	Requests              []FileSymDefRequest
