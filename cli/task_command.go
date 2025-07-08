@@ -106,6 +106,36 @@ func getTaskDetails(workspaceID string, taskID string) (*client.GetTaskResponse,
 	return apiClient.GetTask(workspaceID, taskID)
 }
 
+// waitForFlow attempts to get the flow ID for a task, retrying for up to 3 seconds.
+// Returns the flow ID if found, or an empty string if no flow is available after timeout.
+func waitForFlow(ctx context.Context, workspaceID, taskID string) string {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.After(3 * time.Second)
+
+	var lastErr error
+	for {
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-timeout:
+			if lastErr != nil {
+				fmt.Fprintf(os.Stderr, "Warning: error fetching task details: %v\n", lastErr)
+			}
+			return ""
+		case <-ticker.C:
+			details, err := getTaskDetails(workspaceID, taskID)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if len(details.Task.Flows) > 0 {
+				return details.Task.Flows[0].Id
+			}
+		}
+	}
+}
+
 // streamTaskProgress connects to the WebSocket endpoint to stream flow action changes for a task.
 // It uses flowID to identify the specific flow to stream actions from.
 func streamTaskProgress(ctx context.Context, workspaceID, flowID, taskID string) {
@@ -305,23 +335,14 @@ func NewTaskCommand() *cli.Command {
 				syncCtx, cancelSync := context.WithCancel(ctx)
 				defer cancelSync()
 
-				// Attempt to get flowID for progress streaming
-				var flowID string
-				// Fetch full task details once to get the flow ID.
-				taskDetails, err := getTaskDetails(workspace.Id, taskID)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: could not fetch task details to get flow ID for progress streaming: %v\n", err)
-				} else if len(taskDetails.Task.Flows) > 0 {
-					flowID = taskDetails.Task.Flows[0].Id
-				} else {
-					fmt.Fprintf(os.Stderr, "Warning: No flows found for task. Progress streaming will be unavailable.\n")
-				}
+				// Wait for flow to be created and get its ID
+				flowID := waitForFlow(syncCtx, workspace.Id, taskID)
 
-				if flowID != "" {
+				if flowID == "" {
+					fmt.Fprintf(os.Stderr, "Warning: No flows found for task. Progress streaming will be unavailable.\n")
+				} else {
 					fmt.Printf("[INFO] Starting progress streaming for Flow ID: %s\n", flowID)
 					go streamTaskProgress(syncCtx, workspace.Id, flowID, taskID)
-				} else {
-					fmt.Println("Progress streaming is unavailable as Flow ID could not be determined.")
 				}
 
 				sigChan := make(chan os.Signal, 1)
