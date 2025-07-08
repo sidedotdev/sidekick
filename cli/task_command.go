@@ -132,7 +132,7 @@ func waitForFlow(ctx context.Context, workspaceID, taskID string) string {
 // streamTaskProgress provides real-time updates of task execution by streaming flow action changes
 // through a WebSocket connection. It handles connection lifecycle and updates a Bubble Tea UI model
 // to display progress.
-func streamTaskProgress(ctx context.Context, workspaceID, flowID, taskID string, wg *sync.WaitGroup) {
+func streamTaskProgress(ctx context.Context, sigChan chan os.Signal, workspaceID, flowID, taskID string, wg *sync.WaitGroup) {
 	defer wg.Done()
 	serverPort := common.GetServerPort()
 	u := url.URL{Scheme: "ws", Host: fmt.Sprintf("localhost:%d", serverPort), Path: fmt.Sprintf("/ws/v1/workspaces/%s/flows/%s/action_changes_ws", workspaceID, flowID)}
@@ -190,11 +190,13 @@ func streamTaskProgress(ctx context.Context, workspaceID, flowID, taskID string,
 		p.Send(contextCancelledMsg{})
 	}()
 
-	if _, err := p.Run(); err != nil {
+	model, err := p.Run()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error running progress view: %v\n", err)
 	}
-
-	<-done
+	if sig := model.(taskProgressModel).signal; sig != nil {
+		sigChan <- *sig
+	}
 }
 
 // cancelTask gracefully terminates a running task, allowing cleanup operations to complete
@@ -301,6 +303,9 @@ func NewTaskCommand() *cli.Command {
 				return nil
 			} else {
 				// Synchronous mode
+				sigChan := make(chan os.Signal, 1)
+				signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
 				fmt.Printf("Task submitted in sync mode. Waiting for completion (Task ID: %s). Press Ctrl+C to cancel.\n", taskID)
 
 				syncCtx, cancelSync := context.WithCancel(ctx)
@@ -314,11 +319,8 @@ func NewTaskCommand() *cli.Command {
 				} else {
 					fmt.Printf("[INFO] Starting progress streaming for Flow ID: %s\n", flowID)
 					wg.Add(1)
-					go streamTaskProgress(syncCtx, workspace.Id, flowID, taskID, &wg)
+					go streamTaskProgress(syncCtx, sigChan, workspace.Id, flowID, taskID, &wg)
 				}
-
-				sigChan := make(chan os.Signal, 1)
-				signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 				doneChan := make(chan string, 1)
 				errPollChan := make(chan error, 1)

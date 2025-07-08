@@ -4,6 +4,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"sidekick/common"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -37,6 +39,7 @@ type taskProgressModel struct {
 	quitting     bool
 	err          error
 	finalMessage string
+	signal       *os.Signal
 }
 
 func newProgressModel(taskID, flowID string) taskProgressModel {
@@ -59,9 +62,10 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "q", "ctrl+c":
+		case "ctrl+c":
 			m.quitting = true
-			m.finalMessage = fmt.Sprintf("Progress streaming canceled for task %s.", m.taskID)
+			m.signal = &os.Interrupt
+			m.finalMessage = fmt.Sprintf("Canceling task...")
 			return m, tea.Quit
 		default:
 			return m, nil
@@ -113,7 +117,10 @@ func (m taskProgressModel) View() string {
 			b.WriteString(m.finalMessage + "\n")
 		}
 	} else {
-		b.WriteString(fmt.Sprintf("\n⚠️  Sidekick's cli-only mode is *experimental* and isn't interactive (yet)\n%s Working... To cancel, press ctrl+c.\n", m.spinner.View()))
+		b.WriteString(fmt.Sprintf(`
+⚠️  Sidekick's cli-only mode is *experimental*. Interact via http://localhost:%s/flows/%s
+%s Working... To cancel, press ctrl+c.
+`, common.GetServerPort(), m.flowID, m.spinner.View()))
 	}
 
 	return b.String()
