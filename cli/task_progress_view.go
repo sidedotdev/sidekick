@@ -57,6 +57,16 @@ func (m taskProgressModel) Init() tea.Cmd {
 
 func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "ctrl+c":
+			m.quitting = true
+			m.finalMessage = fmt.Sprintf("Progress streaming canceled for task %s.", m.taskID)
+			return m, tea.Quit
+		default:
+			return m, nil
+		}
+
 	case taskProgressMsg:
 		progressLine := fmt.Sprintf("Action '%s' - Status '%s'", msg.actionType, msg.actionStatus)
 		m.messages = append(m.messages, progressLine)
