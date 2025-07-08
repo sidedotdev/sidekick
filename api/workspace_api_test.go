@@ -132,38 +132,6 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 			},
 		},
 		{
-			name:        "Ignore empty string keys in useCaseConfigs",
-			workspaceId: "existing_workspace_id",
-			workspaceRequest: WorkspaceRequest{
-				LLMConfig: common.LLMConfig{
-					UseCaseConfigs: map[string][]common.ModelConfig{
-						"":     {{Provider: "openai", Model: "gpt-4"}},
-						"code": {{Provider: "anthropic", Model: "claude-v1"}},
-					},
-				},
-			},
-			expectedStatus: http.StatusOK,
-			expectedWorkspace: &domain.Workspace{
-				Id:           "existing_workspace_id",
-				Name:         "Initial Workspace",
-				LocalRepoDir: "/path/to/repo",
-			},
-			expectedConfig: &domain.WorkspaceConfig{
-				LLM: common.LLMConfig{
-					Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-3.5-turbo"}},
-					UseCaseConfigs: map[string][]common.ModelConfig{
-						"code": {{Provider: "anthropic", Model: "claude-v1"}},
-					},
-				},
-				Embedding: common.EmbeddingConfig{
-					Defaults: []common.ModelConfig{{Provider: "openai", Model: "text-embedding-ada-002"}},
-					UseCaseConfigs: map[string][]common.ModelConfig{
-						"code": {{Provider: "openai", Model: "text-embedding-ada-002"}},
-					},
-				},
-			},
-		},
-		{
 			name:        "Update useCaseConfigs correctly",
 			workspaceId: "existing_workspace_id",
 			workspaceRequest: WorkspaceRequest{

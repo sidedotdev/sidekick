@@ -298,11 +298,9 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 			workspaceConfig.LLM.Defaults = workspaceReq.LLMConfig.Defaults
 		}
 		if len(workspaceReq.LLMConfig.UseCaseConfigs) > 0 {
-			// Merge new configs with existing ones, skipping empty keys
+			// Merge new configs with existing ones
 			for key, models := range workspaceReq.LLMConfig.UseCaseConfigs {
-				if key != "" {
-					workspaceConfig.LLM.UseCaseConfigs[key] = models
-				}
+				workspaceConfig.LLM.UseCaseConfigs[key] = models
 			}
 		}
 	}
@@ -311,11 +309,9 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 			workspaceConfig.Embedding.Defaults = workspaceReq.EmbeddingConfig.Defaults
 		}
 		if len(workspaceReq.EmbeddingConfig.UseCaseConfigs) > 0 {
-			// Merge new configs with existing ones, skipping empty keys
+			// Merge new configs with existing ones
 			for key, models := range workspaceReq.EmbeddingConfig.UseCaseConfigs {
-				if key != "" {
-					workspaceConfig.Embedding.UseCaseConfigs[key] = models
-				}
+				workspaceConfig.Embedding.UseCaseConfigs[key] = models
 			}
 		}
 	}
