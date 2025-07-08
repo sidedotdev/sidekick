@@ -540,7 +540,18 @@ func (ctrl *Controller) GetTaskHandler(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"task": task})
+	flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, taskId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	response := TaskResponse{
+		Task:  task,
+		Flows: flows,
+	}
+
+	c.JSON(http.StatusOK, gin.H{"task": response})
 }
 
 // FlowWithWorktrees represents a Flow with its associated Worktrees
