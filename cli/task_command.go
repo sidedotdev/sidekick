@@ -29,7 +29,6 @@ import (
 
 var apiClient *client.Client
 
-// initClient initializes the API client if not already initialized
 func initClient() (*client.Client, error) {
 	if apiClient != nil {
 		return apiClient, nil
@@ -39,8 +38,8 @@ func initClient() (*client.Client, error) {
 	return apiClient, nil
 }
 
-// clientTaskRequestPayload defines the structure for the task creation API request.
-// It omits fields like ID, AgentType, and Status, which are expected to be set by the server.
+// clientTaskRequestPayload represents the client-side task creation request,
+// containing only fields that can be set by clients
 type clientTaskRequestPayload struct {
 	Title       string                 `json:"title"`
 	Description string                 `json:"description"`
@@ -48,9 +47,8 @@ type clientTaskRequestPayload struct {
 	FlowOptions map[string]interface{} `json:"flowOptions"`
 }
 
-// parseFlowOptions constructs the flow options map by combining JSON from --flow-options with
-// individual key-value pairs from --flow-option flags. Values from --flow-option override
-// any existing keys from --flow-options.
+// parseFlowOptions combines --flow-options JSON with individual --flow-option key=value pairs,
+// with the latter taking precedence
 func parseFlowOptions(cmd *cli.Command) (map[string]interface{}, error) {
 	flowOpts := make(map[string]interface{})
 
@@ -85,7 +83,6 @@ func parseFlowOptions(cmd *cli.Command) (map[string]interface{}, error) {
 				valueStr = ""
 			}
 		}
-		// Values from --flow-option are always strings. Use --flow-options JSON for typed values.
 		flowOpts[key] = valueStr
 	}
 	return flowOpts, nil
