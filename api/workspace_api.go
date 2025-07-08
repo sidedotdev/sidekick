@@ -265,11 +265,23 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 			ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
 			return
 		}
-		// If the config is not found, create a new one
+		// If the config is not found, create a new one with empty maps
 		workspaceConfig = domain.WorkspaceConfig{
-			LLM:       common.LLMConfig{},
-			Embedding: common.EmbeddingConfig{},
+			LLM: common.LLMConfig{
+				UseCaseConfigs: make(map[string][]common.ModelConfig),
+			},
+			Embedding: common.EmbeddingConfig{
+				UseCaseConfigs: make(map[string][]common.ModelConfig),
+			},
 		}
+	}
+
+	// Initialize nil maps to empty to ensure they're never null in responses
+	if workspaceConfig.LLM.UseCaseConfigs == nil {
+		workspaceConfig.LLM.UseCaseConfigs = make(map[string][]common.ModelConfig)
+	}
+	if workspaceConfig.Embedding.UseCaseConfigs == nil {
+		workspaceConfig.Embedding.UseCaseConfigs = make(map[string][]common.ModelConfig)
 	}
 
 	if workspaceReq.Name != "" {
@@ -278,11 +290,27 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 	if workspaceReq.LocalRepoDir != "" {
 		workspace.LocalRepoDir = workspaceReq.LocalRepoDir
 	}
-	if workspaceReq.LLMConfig.Defaults != nil {
-		workspaceConfig.LLM.Defaults = workspaceReq.LLMConfig.Defaults
+	if workspaceReq.LLMConfig.Defaults != nil || len(workspaceReq.LLMConfig.UseCaseConfigs) > 0 {
+		if workspaceReq.LLMConfig.Defaults != nil {
+			workspaceConfig.LLM.Defaults = workspaceReq.LLMConfig.Defaults
+		}
+		if len(workspaceReq.LLMConfig.UseCaseConfigs) > 0 {
+			// Merge new configs with existing ones
+			for key, models := range workspaceReq.LLMConfig.UseCaseConfigs {
+				workspaceConfig.LLM.UseCaseConfigs[key] = models
+			}
+		}
 	}
-	if workspaceReq.EmbeddingConfig.Defaults != nil {
-		workspaceConfig.Embedding.Defaults = workspaceReq.EmbeddingConfig.Defaults
+	if workspaceReq.EmbeddingConfig.Defaults != nil || len(workspaceReq.EmbeddingConfig.UseCaseConfigs) > 0 {
+		if workspaceReq.EmbeddingConfig.Defaults != nil {
+			workspaceConfig.Embedding.Defaults = workspaceReq.EmbeddingConfig.Defaults
+		}
+		if len(workspaceReq.EmbeddingConfig.UseCaseConfigs) > 0 {
+			// Merge new configs with existing ones
+			for key, models := range workspaceReq.EmbeddingConfig.UseCaseConfigs {
+				workspaceConfig.Embedding.UseCaseConfigs[key] = models
+			}
+		}
 	}
 	workspace.Updated = time.Now()
 
