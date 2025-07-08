@@ -52,7 +52,7 @@ func (c *Client) CreateWorkspace(req *CreateWorkspaceRequest) (*domain.Workspace
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("failed to create workspace: status %d, body: %s", resp.StatusCode, string(bodyBytes))
 	}
@@ -90,7 +90,7 @@ func (c *Client) GetWorkspacesByPath(repoPath string) ([]domain.Workspace, error
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("failed to get workspaces: status %d, body: %s", resp.StatusCode, string(bodyBytes))
 	}

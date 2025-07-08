@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 
 	"sidekick/domain"
 )
@@ -37,7 +36,7 @@ func (c *Client) CreateTask(workspaceID string, req *CreateTaskRequest) (*domain
 		return nil, fmt.Errorf("failed to read response body from create task request (status %s): %w", resp.Status, readErr)
 	}
 
-	if resp.StatusCode != http.StatusCreated { // Expect 201 Created
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return nil, fmt.Errorf("API request to create task failed with status %s: %s", resp.Status, string(bodyBytes))
 	}
 
@@ -74,7 +73,7 @@ func (c *Client) GetTask(workspaceID string, taskID string) (*GetTaskResponse, e
 		return nil, fmt.Errorf("failed to read response body from get task request (status %s): %w", resp.Status, readErr)
 	}
 
-	if resp.StatusCode != http.StatusOK { // Expect 200 OK
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return nil, fmt.Errorf("API request to get task failed with status %s: %s", resp.Status, string(bodyBytes))
 	}
 
@@ -95,7 +94,7 @@ func (c *Client) CancelTask(workspaceID string, taskID string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK { // Expect 200 OK for cancellation
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		bodyBytes, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
 			return fmt.Errorf("API request to cancel task failed with status %s and could not read response body: %w", resp.Status, readErr)
