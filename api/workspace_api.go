@@ -248,7 +248,10 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		return
 	}
 
-	if workspaceReq.Name == "" && workspaceReq.LocalRepoDir == "" && workspaceReq.LLMConfig.Defaults == nil && workspaceReq.EmbeddingConfig.Defaults == nil {
+	hasLLMChanges := workspaceReq.LLMConfig.Defaults != nil || len(workspaceReq.LLMConfig.UseCaseConfigs) > 0
+	hasEmbeddingChanges := workspaceReq.EmbeddingConfig.Defaults != nil || len(workspaceReq.EmbeddingConfig.UseCaseConfigs) > 0
+
+	if workspaceReq.Name == "" && workspaceReq.LocalRepoDir == "" && !hasLLMChanges && !hasEmbeddingChanges {
 		ctrl.ErrorHandler(c, http.StatusBadRequest, errors.New("At least one of Name, LocalRepoDir, LLMConfig, or EmbeddingConfig is required"))
 		return
 	}
@@ -295,9 +298,11 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 			workspaceConfig.LLM.Defaults = workspaceReq.LLMConfig.Defaults
 		}
 		if len(workspaceReq.LLMConfig.UseCaseConfigs) > 0 {
-			// Merge new configs with existing ones
+			// Merge new configs with existing ones, skipping empty keys
 			for key, models := range workspaceReq.LLMConfig.UseCaseConfigs {
-				workspaceConfig.LLM.UseCaseConfigs[key] = models
+				if key != "" {
+					workspaceConfig.LLM.UseCaseConfigs[key] = models
+				}
 			}
 		}
 	}
@@ -306,9 +311,11 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 			workspaceConfig.Embedding.Defaults = workspaceReq.EmbeddingConfig.Defaults
 		}
 		if len(workspaceReq.EmbeddingConfig.UseCaseConfigs) > 0 {
-			// Merge new configs with existing ones
+			// Merge new configs with existing ones, skipping empty keys
 			for key, models := range workspaceReq.EmbeddingConfig.UseCaseConfigs {
-				workspaceConfig.Embedding.UseCaseConfigs[key] = models
+				if key != "" {
+					workspaceConfig.Embedding.UseCaseConfigs[key] = models
+				}
 			}
 		}
 	}

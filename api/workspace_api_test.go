@@ -59,9 +59,15 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 			expectedConfig: &domain.WorkspaceConfig{
 				LLM: common.LLMConfig{
 					Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-4"}},
+					UseCaseConfigs: map[string][]common.ModelConfig{
+						"code": {{Provider: "openai", Model: "gpt-4"}},
+					},
 				},
 				Embedding: common.EmbeddingConfig{
 					Defaults: []common.ModelConfig{{Provider: "openai", Model: "text-embedding-ada-002"}},
+					UseCaseConfigs: map[string][]common.ModelConfig{
+						"code": {{Provider: "openai", Model: "text-embedding-ada-002"}},
+					},
 				},
 			},
 		},
@@ -85,9 +91,115 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 			expectedConfig: &domain.WorkspaceConfig{
 				LLM: common.LLMConfig{
 					Defaults: []common.ModelConfig{{Provider: "anthropic", Model: "claude-v1"}},
+					UseCaseConfigs: map[string][]common.ModelConfig{
+						"code": {{Provider: "openai", Model: "gpt-4"}},
+					},
 				},
 				Embedding: common.EmbeddingConfig{
 					Defaults: []common.ModelConfig{{Provider: "cohere", Model: "embed-english-v2.0"}},
+					UseCaseConfigs: map[string][]common.ModelConfig{
+						"code": {{Provider: "openai", Model: "text-embedding-ada-002"}},
+					},
+				},
+			},
+		},
+		{
+			name:        "Preserve useCaseConfigs when updating other fields",
+			workspaceId: "existing_workspace_id",
+			workspaceRequest: WorkspaceRequest{
+				Name:         "Updated Name Only",
+				LocalRepoDir: "/updated/path",
+			},
+			expectedStatus: http.StatusOK,
+			expectedWorkspace: &domain.Workspace{
+				Id:           "existing_workspace_id",
+				Name:         "Updated Name Only",
+				LocalRepoDir: "/updated/path",
+			},
+			expectedConfig: &domain.WorkspaceConfig{
+				LLM: common.LLMConfig{
+					Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-3.5-turbo"}},
+					UseCaseConfigs: map[string][]common.ModelConfig{
+						"code": {{Provider: "openai", Model: "gpt-4"}},
+					},
+				},
+				Embedding: common.EmbeddingConfig{
+					Defaults: []common.ModelConfig{{Provider: "openai", Model: "text-embedding-ada-002"}},
+					UseCaseConfigs: map[string][]common.ModelConfig{
+						"code": {{Provider: "openai", Model: "text-embedding-ada-002"}},
+					},
+				},
+			},
+		},
+		{
+			name:        "Ignore empty string keys in useCaseConfigs",
+			workspaceId: "existing_workspace_id",
+			workspaceRequest: WorkspaceRequest{
+				LLMConfig: common.LLMConfig{
+					UseCaseConfigs: map[string][]common.ModelConfig{
+						"":     {{Provider: "openai", Model: "gpt-4"}},
+						"code": {{Provider: "anthropic", Model: "claude-v1"}},
+					},
+				},
+			},
+			expectedStatus: http.StatusOK,
+			expectedWorkspace: &domain.Workspace{
+				Id:           "existing_workspace_id",
+				Name:         "Initial Workspace",
+				LocalRepoDir: "/path/to/repo",
+			},
+			expectedConfig: &domain.WorkspaceConfig{
+				LLM: common.LLMConfig{
+					Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-3.5-turbo"}},
+					UseCaseConfigs: map[string][]common.ModelConfig{
+						"code": {{Provider: "anthropic", Model: "claude-v1"}},
+					},
+				},
+				Embedding: common.EmbeddingConfig{
+					Defaults: []common.ModelConfig{{Provider: "openai", Model: "text-embedding-ada-002"}},
+					UseCaseConfigs: map[string][]common.ModelConfig{
+						"code": {{Provider: "openai", Model: "text-embedding-ada-002"}},
+					},
+				},
+			},
+		},
+		{
+			name:        "Update useCaseConfigs correctly",
+			workspaceId: "existing_workspace_id",
+			workspaceRequest: WorkspaceRequest{
+				LLMConfig: common.LLMConfig{
+					UseCaseConfigs: map[string][]common.ModelConfig{
+						"code":    {{Provider: "anthropic", Model: "claude-v1"}},
+						"newcase": {{Provider: "openai", Model: "gpt-4"}},
+					},
+				},
+				EmbeddingConfig: common.EmbeddingConfig{
+					UseCaseConfigs: map[string][]common.ModelConfig{
+						"code":    {{Provider: "cohere", Model: "embed-english-v2.0"}},
+						"newcase": {{Provider: "openai", Model: "text-embedding-ada-002"}},
+					},
+				},
+			},
+			expectedStatus: http.StatusOK,
+			expectedWorkspace: &domain.Workspace{
+				Id:           "existing_workspace_id",
+				Name:         "Initial Workspace",
+				LocalRepoDir: "/path/to/repo",
+			},
+			expectedConfig: &domain.WorkspaceConfig{
+				LLM: common.LLMConfig{
+					Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-3.5-turbo"}},
+					UseCaseConfigs: map[string][]common.ModelConfig{
+						"code":    {{Provider: "anthropic", Model: "claude-v1"}},
+						"newcase": {{Provider: "openai", Model: "gpt-4"}},
+					},
+				},
+				Embedding: common.EmbeddingConfig{
+					Defaults: []common.ModelConfig{{Provider: "openai", Model: "text-embedding-ada-002"}},
+					UseCaseConfigs: map[string][]common.ModelConfig{
+						"code":    {{Provider: "cohere", Model: "embed-english-v2.0"}},
+						"newcase": {{Provider: "openai", Model: "text-embedding-ada-002"}},
+					},
 				},
 			},
 		},
@@ -122,9 +234,15 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 		initialConfig := &domain.WorkspaceConfig{
 			LLM: common.LLMConfig{
 				Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-3.5-turbo"}},
+				UseCaseConfigs: map[string][]common.ModelConfig{
+					"code": {{Provider: "openai", Model: "gpt-4"}},
+				},
 			},
 			Embedding: common.EmbeddingConfig{
 				Defaults: []common.ModelConfig{{Provider: "openai", Model: "text-embedding-ada-002"}},
+				UseCaseConfigs: map[string][]common.ModelConfig{
+					"code": {{Provider: "openai", Model: "text-embedding-ada-002"}},
+				},
 			},
 		}
 		err = db.PersistWorkspaceConfig(context.Background(), initialWorkspace.Id, *initialConfig)
@@ -158,6 +276,21 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 				if tc.expectedConfig != nil {
 					assert.Equal(t, tc.expectedConfig.LLM.Defaults, responseBody.Workspace.LLMConfig.Defaults)
 					assert.Equal(t, tc.expectedConfig.Embedding.Defaults, responseBody.Workspace.EmbeddingConfig.Defaults)
+
+					// Verify useCaseConfigs are as expected and never null
+					if len(tc.expectedConfig.LLM.UseCaseConfigs) > 0 {
+						assert.Equal(t, tc.expectedConfig.LLM.UseCaseConfigs, responseBody.Workspace.LLMConfig.UseCaseConfigs)
+					} else {
+						assert.NotNil(t, responseBody.Workspace.LLMConfig.UseCaseConfigs)
+						assert.Empty(t, responseBody.Workspace.LLMConfig.UseCaseConfigs)
+					}
+
+					if len(tc.expectedConfig.Embedding.UseCaseConfigs) > 0 {
+						assert.Equal(t, tc.expectedConfig.Embedding.UseCaseConfigs, responseBody.Workspace.EmbeddingConfig.UseCaseConfigs)
+					} else {
+						assert.NotNil(t, responseBody.Workspace.EmbeddingConfig.UseCaseConfigs)
+						assert.Empty(t, responseBody.Workspace.EmbeddingConfig.UseCaseConfigs)
+					}
 				}
 			} else {
 				responseBody := make(map[string]string)
