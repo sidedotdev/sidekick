@@ -251,13 +251,9 @@ func NewTaskCommand() *cli.Command {
 			}
 
 			// Initialize API client
-			client, err := initClient()
-			if err != nil {
+			if _, err := initClient(); err != nil {
 				return cli.Exit(fmt.Sprintf("Failed to initialize API client: %v", err), 1)
 			}
-			_ = client // TODO: Use client in subsequent API calls
-
-			// Workspace handling
 			disableHumanInTheLoop := cmd.Bool("disable-human-in-the-loop")
 			workspace, err := ensureWorkspace(ctx, disableHumanInTheLoop)
 			if err != nil {
@@ -275,8 +271,6 @@ func NewTaskCommand() *cli.Command {
 				return cli.Exit(fmt.Sprintf("Error processing flow options: %v", err), 1)
 			}
 
-			// Use taskDescription for both Title and Description for now.
-			// Title could be a summarized version later if needed.
 			requestPayload := clientTaskRequestPayload{
 				Title:       taskDescription,
 				Description: taskDescription,
@@ -289,9 +283,7 @@ func NewTaskCommand() *cli.Command {
 				return cli.Exit(fmt.Sprintf("Failed to marshal task creation payload: %v", err), 1)
 			}
 
-			// 2. Make the HTTP POST request
 			fmt.Printf("Attempting to create task '%s' in workspace '%s' (ID: %s)...\n", taskDescription, workspace.Name, workspace.Id)
-			// fmt.Printf("Payload: %s\\n", string(payloadBytes)) // For debugging, can be removed later
 
 			task, err := createTaskFromPayload(workspace.Id, payloadBytes)
 			if err != nil {
@@ -301,12 +293,7 @@ func NewTaskCommand() *cli.Command {
 			taskID := task.Id
 
 			fmt.Printf("Successfully created task with ID: %s\n", taskID)
-			// Store taskID if needed for sync mode (next steps)
-			// e.g., cmd.Context().Set("createdTaskID", taskID) // urfave/cli/v3 context is context.Context
 
-			// Further steps (sync wait, progress streaming, Ctrl+C) will use this taskID.
-			// For now, we just print the ID.
-			// Initialize WaitGroup for sync mode
 			var wg sync.WaitGroup
 
 			if cmd.Bool("async") {
@@ -351,9 +338,6 @@ func NewTaskCommand() *cli.Command {
 						}
 
 						currentStatus := string(taskDetails.Task.Status)
-
-						// Optional: print status updates, can be refined later with a spinner
-						// fmt.Printf("Current task status: %s\n", currentStatus)
 
 						switch currentStatus {
 						case string(domain.TaskStatusComplete), string(domain.TaskStatusFailed), string(domain.TaskStatusCanceled):
