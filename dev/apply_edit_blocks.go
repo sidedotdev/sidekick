@@ -545,7 +545,15 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 
 	var fullReports []ApplyEditBlockReport
 	_, err := Track(actionCtx, func(flowAction domain.FlowAction) ([]ApplyEditBlockReport, error) {
-		validEditBlocks, invalidReports := validateEditBlocks(editBlocks)
+		var validEditBlocks []EditBlock
+		var invalidReports []ApplyEditBlockReport
+
+		visibilityVersion := workflow.GetVersion(dCtx, "disable-context-code-visibility-check", workflow.DefaultVersion, 1)
+		if visibilityVersion >= 1 && fflag.IsEnabled(dCtx, fflag.DisableContextCodeVisibilityCheck) {
+			validEditBlocks = editBlocks
+		} else {
+			validEditBlocks, invalidReports = validateEditBlocks(editBlocks)
+		}
 		//fmt.Printf("Validated %d edit blocks\n", len(validEditBlocks))
 		//fmt.Printf("Invalid reports: %d\n", len(invalidReports))
 
