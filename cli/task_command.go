@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	"encoding/json"
-	"net"
 	"net/url"
 	"os/signal"
 	"strings"
@@ -162,40 +160,35 @@ func streamTaskProgress(ctx context.Context, workspaceID, flowID, taskID string)
 	go func() {
 		defer close(done)
 		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-				var action domain.FlowAction
-				if err := conn.ReadJSON(&action); err != nil {
-					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-						continue // Expected timeout, loop to check ctx.Done()
-					}
-
-					// For any other error, we want to exit the read loop.
-					// We'll send a message to bubbletea to terminate it.
-					if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-						p.Send(taskErrorMsg{err: fmt.Errorf("unexpected websocket close: %w", err)})
-					} else {
-						// Assume normal closure.
-						p.Send(taskCompleteMsg{})
-					}
+			var action domain.FlowAction
+			if err := conn.ReadJSON(&action); err != nil {
+				if ctx.Err() != nil {
+					// Context was cancelled, exit cleanly
 					return
 				}
 
-				p.Send(taskProgressMsg{
-					taskID:       taskID,
-					actionType:   action.ActionType,
-					actionStatus: action.ActionStatus,
-				})
+				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					// Normal closure from server or our cancellation handler
+					p.Send(taskCompleteMsg{})
+				} else {
+					// Unexpected error
+					p.Send(taskErrorMsg{err: fmt.Errorf("websocket read error: %w", err)})
+				}
+				return
 			}
+
+			p.Send(taskProgressMsg{
+				taskID:       taskID,
+				actionType:   action.ActionType,
+				actionStatus: action.ActionStatus,
+			})
 		}
 	}()
 
-	// Goroutine to handle context cancellation and quit Bubble Tea program
+	// Goroutine to handle context cancellation
 	go func() {
 		<-ctx.Done()
+		conn.Close()
 		p.Send(contextCancelledMsg{})
 	}()
 
@@ -203,13 +196,6 @@ func streamTaskProgress(ctx context.Context, workspaceID, flowID, taskID string)
 		fmt.Fprintf(os.Stderr, "Error running progress view: %v\n", err)
 	}
 
-	// After bubbletea program exits, attempt to gracefully close the WebSocket connection.
-	err = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-	if err != nil && !errors.Is(err, websocket.ErrCloseSent) && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-		// Don't spam about errors on a connection that is already closing.
-	}
-
-	// Wait for the read loop to finish.
 	<-done
 }
 
