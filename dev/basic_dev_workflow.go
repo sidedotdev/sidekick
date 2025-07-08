@@ -254,10 +254,19 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 
 	// Step 6: Handle merge if using worktree and workflow version is new enough
 	workflowVersion := workflow.GetVersion(dCtx, "git-worktree-merge", workflow.DefaultVersion, 1)
+	gitAddVersion := workflow.GetVersion(dCtx, "git-add-before-diff", workflow.DefaultVersion, 1)
 	if envType == env.EnvTypeLocalGitWorktree && workflowVersion == 1 {
 		defaultTarget := "main"
 		if startBranch != nil {
 			defaultTarget = *startBranch
+		}
+
+		// Ensure any auto-formatted changes are staged for new workflow versions
+		if gitAddVersion == 1 {
+			if err := git.GitAddAll(dCtx.ExecContext); err != nil {
+				_ = signalWorkflowClosure(dCtx, "failed")
+				return "", fmt.Errorf("failed to git add all: %v", err)
+			}
 		}
 
 		gitDiff, diffErr := git.GitDiff(dCtx.ExecContext)

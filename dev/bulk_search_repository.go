@@ -38,7 +38,7 @@ func BulkSearchRepository(ctx workflow.Context, envContainer env.EnvContainer, b
 		}
 
 		// If no results were found and the glob is just a file path, add information about available symbols
-		if result == SearchRepoNoResultsMessage && isExistentFilePath(ctx, envContainer, searchParams.PathGlob) {
+		if strings.Contains(result, "No results found") && isExistentFilePath(ctx, envContainer, searchParams.PathGlob) {
 			// File exists, get symbols
 			filePath := searchParams.PathGlob
 			symbolsMsg, err := getSymbolsMessage(ctx, envContainer, filePath)
