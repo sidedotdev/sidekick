@@ -23,6 +23,8 @@ import (
 	"sidekick/common" // New import
 	"sidekick/domain" // New import
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/erikgeiser/promptkit/selection"
 	"github.com/gorilla/websocket" // New import
 	"github.com/segmentio/ksuid"   // New import
 	"github.com/urfave/cli/v3"
@@ -146,7 +148,6 @@ func streamTaskProgress(ctx context.Context, workspaceID, flowID, taskID string)
 	serverPort := common.GetServerPort()
 	// Path: /ws/v1/workspaces/:workspaceId/flows/:flowId/action_changes_ws
 	u := url.URL{Scheme: "ws", Host: fmt.Sprintf("localhost:%d", serverPort), Path: fmt.Sprintf("/ws/v1/workspaces/%s/flows/%s/action_changes_ws", workspaceID, flowID)}
-	fmt.Printf("Attempting to stream progress for task %s (flow: %s) from %s\n", taskID, flowID, u.String())
 
 	conn, resp, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
@@ -162,82 +163,62 @@ func streamTaskProgress(ctx context.Context, workspaceID, flowID, taskID string)
 	}
 	defer conn.Close()
 
-	fmt.Printf("Streaming progress for task %s (flow: %s)... \n", taskID, flowID) // Added a space for spinner
-
+	p := tea.NewProgram(newProgressModel(taskID, flowID))
 	done := make(chan struct{})
-	spinnerChars := []string{"|", "/", "-", "\\"}
-	spinnerIndex := 0
 
-	// ticker for animating spinner when no messages are received
-	spinnerTicker := time.NewTicker(100 * time.Millisecond)
-	defer spinnerTicker.Stop()
-
+	// Goroutine to read from WebSocket and send messages to Bubble Tea program
 	go func() {
 		defer close(done)
 		for {
 			select {
-			case <-ctx.Done(): // Ensure goroutine exits if context is cancelled
-				fmt.Printf("\rProgress streaming for task %s: context cancelled.                \n", taskID)
+			case <-ctx.Done():
 				return
-			case <-spinnerTicker.C:
-				fmt.Printf("\rStreaming progress for task %s (flow: %s)... %s ", taskID, flowID, spinnerChars[spinnerIndex])
-				spinnerIndex = (spinnerIndex + 1) % len(spinnerChars)
 			default:
-				// Non-blocking read attempt
-				conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond)) // Set a short deadline
+				conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 				var action domain.FlowAction
 				if err := conn.ReadJSON(&action); err != nil {
 					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-						// This is an expected timeout, continue to allow spinner to animate
-						continue
+						continue // Expected timeout, loop to check ctx.Done()
 					}
 
-					// Clear the spinner line before printing error or closing message
-					fmt.Printf("\r                                                                                \r")
-					if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
-						fmt.Fprintf(os.Stderr, "WebSocket read error for task %s: %v\n", taskID, err)
-					} else if err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF) || websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-						fmt.Printf("WebSocket connection closed normally for task %s.\n", taskID)
+					// For any other error, we want to exit the read loop.
+					// We'll send a message to bubbletea to terminate it.
+					if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+						p.Send(taskErrorMsg{err: fmt.Errorf("unexpected websocket close: %w", err)})
 					} else {
-						select {
-						case <-ctx.Done():
-							fmt.Printf("WebSocket connection closing for task %s due to context cancellation.\n", taskID)
-						default:
-							fmt.Fprintf(os.Stderr, "WebSocket error reading message for task %s: %v\n", taskID, err)
-						}
+						// Assume normal closure.
+						p.Send(taskCompleteMsg{})
 					}
-					return // Exit goroutine on error or normal close
+					return
 				}
-				// Clear the spinner line and print the progress
-				fmt.Printf("\r  [PROGRESS] Task %s: Action '%s' - Status '%s'                                \n", taskID, action.ActionType, action.ActionStatus)
-				// Reprint the spinner prompt for the next message/spin
-				fmt.Printf("Streaming progress for task %s (flow: %s)... %s ", taskID, flowID, spinnerChars[spinnerIndex])
 
+				p.Send(taskProgressMsg{
+					taskID:       taskID,
+					actionType:   action.ActionType,
+					actionStatus: action.ActionStatus,
+				})
 			}
 		}
 	}()
 
-	select {
-	case <-done:
-		// Ensure the final status line is clean
-		fmt.Printf("\r                                                                                \r")
-		fmt.Printf("Progress streaming stopped for task %s.\n", taskID)
-	case <-ctx.Done():
-		// Ensure the final status line is clean
-		fmt.Printf("\r                                                                                \r")
-		fmt.Printf("Progress streaming canceled for task %s.\n", taskID)
-		// Attempt to gracefully close the WebSocket connection.
-		err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-		if err != nil && !errors.Is(err, websocket.ErrCloseSent) && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-			fmt.Fprintf(os.Stderr, "Error sending close message to WebSocket for task %s: %v\n", taskID, err)
-		}
-		// Wait for the read loop to finish after sending close
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second): // Timeout for read loop to exit
-			fmt.Fprintf(os.Stderr, "Timeout waiting for WebSocket read loop to close for task %s.\n", taskID)
-		}
+	// Goroutine to handle context cancellation and quit Bubble Tea program
+	go func() {
+		<-ctx.Done()
+		p.Send(contextCancelledMsg{})
+	}()
+
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error running progress view: %v\n", err)
 	}
+
+	// After bubbletea program exits, attempt to gracefully close the WebSocket connection.
+	err = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	if err != nil && !errors.Is(err, websocket.ErrCloseSent) && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+		// Don't spam about errors on a connection that is already closing.
+	}
+
+	// Wait for the read loop to finish.
+	<-done
 }
 
 // cancelTaskAPI sends a request to the Sidekick server to cancel a task.
@@ -602,7 +583,7 @@ func ensureWorkspace(ctx context.Context, disableHumanInTheLoop bool) (*domain.W
 	}
 
 	// Step 3: Multiple workspaces match
-	fmt.Printf("Multiple workspaces found for directory %s:\\n", absPath)
+	fmt.Printf("Multiple workspaces found for directory %s:\n", absPath)
 	// Sort by name for consistent display order before prompting
 	sort.Slice(workspaces, func(i, j int) bool {
 		if workspaces[i].Name != workspaces[j].Name {
@@ -611,41 +592,32 @@ func ensureWorkspace(ctx context.Context, disableHumanInTheLoop bool) (*domain.W
 		return workspaces[i].Id < workspaces[j].Id // Secondary sort by ID if names are identical
 	})
 
-	for i, ws := range workspaces {
-		fmt.Printf("  %d: %s (ID: %s, Updated: %s)\\n", i+1, ws.Name, ws.Id, ws.Updated.Format(time.RFC3339))
-	}
-
 	if disableHumanInTheLoop {
 		// Sort by Updated (descending) to get the most recent one
 		sort.Slice(workspaces, func(i, j int) bool {
 			return workspaces[i].Updated.After(workspaces[j].Updated)
 		})
-		fmt.Printf("Human-in-the-loop disabled. Using the most recently updated workspace: %s\\n", workspaces[0].Name)
+		fmt.Printf("Human-in-the-loop disabled. Using the most recently updated workspace: %s\n", workspaces[0].Name)
 		return workspaces[0], nil
 	}
 
 	// Prompt user to select
-	var choice int
-	for {
-		fmt.Print("Please select a workspace by number: ")
-		// Basic prompt, consider using a library for better UX
-		var input string
-		if _, err := fmt.Scanln(&input); err != nil {
-			// Handle EOF or other scan errors
-			if errors.Is(err, io.EOF) {
-				return nil, fmt.Errorf("input aborted by user")
-			}
-			fmt.Println("Error reading input. Please try again.")
-			continue
-		}
-
-		numScanned, scanErr := fmt.Sscan(input, &choice)
-		if scanErr == nil && numScanned == 1 && choice > 0 && choice <= len(workspaces) {
-			break
-		}
-		fmt.Println("Invalid selection. Please enter a number from the list.")
+	workspaceMap := make(map[string]*domain.Workspace)
+	workspaceStrings := make([]string, len(workspaces))
+	for i, ws := range workspaces {
+		wsString := fmt.Sprintf("%s (ID: %s, Updated: %s)", ws.Name, ws.Id, ws.Updated.Format(time.RFC3339))
+		workspaceStrings[i] = wsString
+		workspaceMap[wsString] = ws
 	}
-	return workspaces[choice-1], nil // User choice is 1-based
+
+	prompt := selection.New("Please select a workspace", workspaceStrings)
+
+	selectedWorkspaceString, err := prompt.RunPrompt()
+	if err != nil {
+		return nil, fmt.Errorf("workspace selection failed: %w", err)
+	}
+
+	return workspaceMap[selectedWorkspaceString], nil
 }
 
 // --- Placeholder API client functions ---
