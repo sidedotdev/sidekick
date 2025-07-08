@@ -68,7 +68,7 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case taskProgressMsg:
-		progressLine := fmt.Sprintf("Task %s: Action '%s' - Status '%s'", msg.taskID, msg.actionType, msg.actionStatus)
+		progressLine := fmt.Sprintf("Action '%s' - Status '%s'", msg.actionType, msg.actionStatus)
 		m.messages = append(m.messages, progressLine)
 		return m, nil
 
@@ -102,7 +102,7 @@ func (m taskProgressModel) View() string {
 	}
 
 	for _, msg := range m.messages {
-		b.WriteString(fmt.Sprintf("  [PROGRESS] %s\n", msg))
+		b.WriteString(fmt.Sprintf("  %s\n", msg))
 	}
 
 	if m.quitting {
