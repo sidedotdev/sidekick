@@ -35,16 +35,28 @@ type TaskMonitor struct {
 	taskID       string
 	statusChan   chan TaskStatus
 	progressChan chan TaskProgress
+	ctx          context.Context
+	cancel       context.CancelFunc
+}
+
+// Stop cancels the task monitoring
+func (m *TaskMonitor) Stop() {
+	if m.cancel != nil {
+		m.cancel()
+	}
 }
 
 // NewTaskMonitor creates a new TaskMonitor instance
-func NewTaskMonitor(client *client.Client, workspaceID, taskID string) *TaskMonitor {
+func NewTaskMonitor(client client.Client, workspaceID, taskID string) *TaskMonitor {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &TaskMonitor{
 		client:       client,
 		workspaceID:  workspaceID,
 		taskID:       taskID,
 		statusChan:   make(chan TaskStatus, 1),
 		progressChan: make(chan TaskProgress, 10),
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 }
 
@@ -123,7 +135,7 @@ func (m *TaskMonitor) waitForFlow(ctx context.Context) string {
 func (m *TaskMonitor) streamFlowEvents(ctx context.Context, flowID string) error {
 	u := url.URL{
 		Scheme: "ws",
-		Host:   strings.TrimPrefix(strings.TrimPrefix(m.client.BaseURL, "https://"), "http://"),
+		Host:   strings.TrimPrefix(strings.TrimPrefix(m.client.GetBaseURL(), "https://"), "http://"),
 		Path:   fmt.Sprintf("/ws/v1/workspaces/%s/flows/%s/action_changes_ws", m.workspaceID, flowID),
 	}
 

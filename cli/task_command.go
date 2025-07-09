@@ -27,9 +27,9 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-var apiClient *client.Client
+var apiClient client.Client
 
-func initClient() (*client.Client, error) {
+func initClient() (client.Client, error) {
 	if apiClient != nil {
 		return apiClient, nil
 	}
@@ -88,20 +88,7 @@ func parseFlowOptions(cmd *cli.Command) (map[string]interface{}, error) {
 	return flowOpts, nil
 }
 
-func createTaskFromPayload(workspaceID string, payload []byte) (*domain.Task, error) {
-	var req client.CreateTaskRequest
-	if err := json.Unmarshal(payload, &req); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal task request payload: %w", err)
-	}
-	return apiClient.CreateTask(workspaceID, &req)
-}
-
-func getTaskDetails(workspaceID string, taskID string) (*client.GetTaskResponse, error) {
-	return apiClient.GetTask(workspaceID, taskID)
-}
-
-// waitForFlow polls for a task's flow ID with a 3-second timeout, returning empty if none found
-func waitForFlow(ctx context.Context, workspaceID, taskID string) string {
+func waitForFlow(ctx context.Context, c client.Client, workspaceID, taskID string) string {
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 	timeout := time.After(3 * time.Second)
@@ -117,13 +104,13 @@ func waitForFlow(ctx context.Context, workspaceID, taskID string) string {
 			}
 			return ""
 		case <-ticker.C:
-			details, err := getTaskDetails(workspaceID, taskID)
+			response, err := c.GetTask(workspaceID, taskID)
 			if err != nil {
 				lastErr = err
 				continue
 			}
-			if len(details.Task.Flows) > 0 {
-				return details.Task.Flows[0].Id
+			if len(response.Task.Flows) > 0 {
+				return response.Task.Flows[0].Id
 			}
 		}
 	}
@@ -198,8 +185,89 @@ func streamTaskProgress(ctx context.Context, sigChan chan os.Signal, workspaceID
 	}
 }
 
-func cancelTask(workspaceID string, taskID string) error {
-	return apiClient.CancelTask(workspaceID, taskID)
+func executeTaskCommand(c client.Client, cmd *cli.Command) error {
+	taskDescription := cmd.Args().First()
+
+	if taskDescription == "" {
+		if !cmd.IsSet("help") {
+			_ = cli.ShowSubcommandHelp(cmd)
+			return cli.Exit("Task description is required.", 1)
+		}
+		return nil
+	}
+
+	if taskDescription == "help" {
+		if !cmd.IsSet("help") {
+			_ = cli.ShowSubcommandHelp(cmd)
+		}
+		return nil
+	}
+
+	// Ensure the Sidekick server is running before proceeding.
+	if !checkServerStatus() {
+		fmt.Println("Starting sidekick server...")
+		if err := startServerDetached(); err != nil {
+			return cli.Exit(fmt.Sprintf("Failed to start Sidekick server: %v. Please try running `side start` manually.", err), 1)
+		}
+
+		if !waitForServer(10 * time.Second) {
+			return cli.Exit("Failed to start Sidekick server. Please check logs or run 'side start server' manually.", 1)
+		}
+	}
+
+	disableHumanInTheLoop := cmd.Bool("disable-human-in-the-loop")
+	workspace, err := ensureWorkspace(context.Background(), disableHumanInTheLoop)
+	if err != nil {
+		return cli.Exit(fmt.Sprintf("Workspace setup failed: %v", err), 1)
+	}
+
+	flowType := cmd.String("flow")
+	if cmd.Bool("P") {
+		flowType = "planned_dev"
+	}
+
+	flowOpts, err := parseFlowOptions(cmd)
+	if err != nil {
+		return cli.Exit(fmt.Sprintf("Error processing flow options: %v", err), 1)
+	}
+
+	req := &client.CreateTaskRequest{
+		Title:       taskDescription,
+		Description: taskDescription,
+		FlowType:    flowType,
+		FlowOptions: flowOpts,
+	}
+
+	task, err := c.CreateTask(workspace.Id, req)
+	if err != nil {
+		return cli.Exit(fmt.Sprintf("Failed to create task via API: %v", err), 1)
+	}
+
+	if cmd.Bool("async") {
+		fmt.Println("Task submitted")
+		return nil
+	}
+
+	monitor := NewTaskMonitor(c, workspace.Id, task.Id)
+	model := newLifecycleModel(task.Id, "")
+	p := tea.NewProgram(model)
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		monitor.Stop()
+		if err := c.CancelTask(workspace.Id, task.Id); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to cancel task: %v\n", err)
+		}
+	}()
+
+	if _, err := p.Run(); err != nil {
+		return cli.Exit(fmt.Sprintf("Error running task UI: %v", err), 1)
+	}
+
+	return nil
 }
 
 func NewTaskCommand() *cli.Command {
@@ -217,189 +285,11 @@ func NewTaskCommand() *cli.Command {
 			&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"nr"}, Usage: "Shorthand to set determineRequirements to false in flow options"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			taskDescription := cmd.Args().First()
-
-			if taskDescription == "" {
-				if !cmd.IsSet("help") {
-					_ = cli.ShowSubcommandHelp(cmd)
-					return cli.Exit("Task description is required.", 1)
-				}
-				return nil
-			}
-
-			if taskDescription == "help" {
-				if !cmd.IsSet("help") {
-					_ = cli.ShowSubcommandHelp(cmd)
-				}
-				return nil
-			}
-
-			// Ensure the Sidekick server is running before proceeding.
-			if !checkServerStatus() {
-				fmt.Println("Starting sidekick server...")
-				if err := startServerDetached(); err != nil {
-					return cli.Exit(fmt.Sprintf("Failed to start Sidekick server: %v. Please try running `side start` manually.", err), 1)
-				}
-
-				if !waitForServer(10 * time.Second) {
-					return cli.Exit("Failed to start Sidekick server. Please check logs or run 'side start server' manually.", 1)
-				}
-			}
-
-			// Initialize API client
-			if _, err := initClient(); err != nil {
+			client, err := initClient()
+			if err != nil {
 				return cli.Exit(fmt.Sprintf("Failed to initialize API client: %v", err), 1)
 			}
-			disableHumanInTheLoop := cmd.Bool("disable-human-in-the-loop")
-			workspace, err := ensureWorkspace(ctx, disableHumanInTheLoop)
-			if err != nil {
-				return cli.Exit(fmt.Sprintf("Workspace setup failed: %v", err), 1)
-			}
-			flowType := cmd.String("flow")
-			if cmd.Bool("P") {
-				flowType = "planned_dev"
-			}
-
-			flowOpts, err := parseFlowOptions(cmd)
-			if err != nil {
-				return cli.Exit(fmt.Sprintf("Error processing flow options: %v", err), 1)
-			}
-
-			requestPayload := clientTaskRequestPayload{
-				Title:       taskDescription,
-				Description: taskDescription,
-				FlowType:    flowType,
-				FlowOptions: flowOpts,
-			}
-
-			payloadBytes, err := json.Marshal(requestPayload)
-			if err != nil {
-				return cli.Exit(fmt.Sprintf("Failed to marshal task creation payload: %v", err), 1)
-			}
-
-			task, err := createTaskFromPayload(workspace.Id, payloadBytes)
-			if err != nil {
-				return cli.Exit(fmt.Sprintf("Failed to create task via API: %v", err), 1)
-			}
-
-			taskID := task.Id
-
-			var wg sync.WaitGroup
-
-			if cmd.Bool("async") {
-				fmt.Println("Task submitted")
-				return nil
-			} else {
-				// Synchronous mode
-				sigChan := make(chan os.Signal, 1)
-				signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-				fmt.Printf("Starting task\n")
-
-				syncCtx, cancelSync := context.WithCancel(ctx)
-				defer cancelSync()
-
-				// Wait for flow to be created and get its ID
-				flowID := waitForFlow(syncCtx, workspace.Id, taskID)
-
-				if flowID == "" {
-					cli.Exit(fmt.Sprintf("Timeout: No flow found for %s", taskID), 1)
-				}
-
-				wg.Add(1)
-				go streamTaskProgress(syncCtx, sigChan, workspace.Id, flowID, taskID, &wg)
-
-				doneChan := make(chan string, 1)
-				errPollChan := make(chan error, 1)
-
-				go func() {
-					defer close(doneChan)
-					defer close(errPollChan)
-
-					ticker := time.NewTicker(2 * time.Second)
-					defer ticker.Stop()
-
-					checkStatus := func() (status string, done bool, err error) {
-						taskDetails, apiErr := getTaskDetails(workspace.Id, taskID)
-						if apiErr != nil {
-							fmt.Fprintf(os.Stderr, "Error polling task status: %v. Will retry.\n", apiErr)
-							return "", false, nil // Not a fatal error for the poller, just a failed attempt
-						}
-
-						currentStatus := string(taskDetails.Task.Status)
-
-						switch currentStatus {
-						case string(domain.TaskStatusComplete), string(domain.TaskStatusFailed), string(domain.TaskStatusCanceled):
-							return currentStatus, true, nil
-						case string(domain.TaskStatusToDo), string(domain.TaskStatusInProgress), string(domain.TaskStatusBlocked):
-							return currentStatus, false, nil // Task is still ongoing
-						default:
-							return "", true, fmt.Errorf("unknown task status received: %s", currentStatus)
-						}
-					}
-
-					// Initial check
-					s, d, e := checkStatus()
-					if e != nil {
-						errPollChan <- e
-						return
-					}
-					if d {
-						doneChan <- s
-						return
-					}
-
-					for {
-						select {
-						case <-syncCtx.Done():
-							return
-						case <-ticker.C:
-							s, d, e := checkStatus()
-							if e != nil {
-								errPollChan <- e
-								return
-							}
-							if d {
-								doneChan <- s
-								return
-							}
-						}
-					}
-				}()
-
-				select {
-				case <-syncCtx.Done():
-					fmt.Println("\nUnexpected context cancellation")
-					// Wait for progress view to clean up
-					wg.Wait()
-					return nil
-				case <-sigChan:
-					cancelSync() // Signal goroutines (polling, streaming) to stop
-					// Wait for progress view to clean up
-					wg.Wait()
-
-					fmt.Printf("\nCancelling task...\n")
-					cancelErr := cancelTask(workspace.Id, taskID)
-					if cancelErr != nil {
-						return cli.Exit(fmt.Sprintf("Failed to cancel task: %v", cancelErr), 1)
-					}
-					fmt.Printf("Task cancelled.\n")
-					return nil
-				case finalStatus := <-doneChan:
-					cancelSync() // Ensure other goroutines are stopped
-					wg.Wait()    // Wait for progress view to clean up
-					if finalStatus == string(domain.TaskStatusFailed) {
-						return cli.Exit("Task failed.", 1)
-					} else if finalStatus == string(domain.TaskStatusComplete) {
-						fmt.Println("Task completed successfully.")
-					}
-					return nil
-				case err := <-errPollChan:
-					cancelSync() // Ensure other goroutines are stopped
-					wg.Wait()    // Wait for progress view to clean up
-					return cli.Exit(fmt.Sprintf("Error during task monitoring: %v", err), 1)
-				}
-			}
+			return executeTaskCommand(client, cmd)
 		},
 	}
 }

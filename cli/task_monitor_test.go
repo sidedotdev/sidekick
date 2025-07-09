@@ -74,6 +74,20 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	time.Sleep(100 * time.Millisecond)
 }
 
+// Mock successful initial task status with flow ID
+var taskResp = &client.GetTaskResponse{
+	Task: struct {
+		domain.Task
+		Flows []domain.Flow `json:"flows"`
+	}{
+		Task: domain.Task{
+			Id:     "task1",
+			Status: domain.TaskStatusInProgress,
+		},
+		Flows: []domain.Flow{{Id: "flow1"}},
+	},
+}
+
 func TestNewTaskMonitor(t *testing.T) {
 	c := &mockClient{}
 	m := NewTaskMonitor(c, "workspace1", "task1")
@@ -95,20 +109,6 @@ func TestTaskMonitor_Start_WebSocketFlow(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	// Mock successful initial task status with flow ID
-	taskResp := &client.GetTaskResponse{
-		Task: struct {
-			domain.Task
-			Flows []domain.Flow `json:"flows"`
-		}{
-			Task: domain.Task{
-				Id:     "task1",
-				Status: domain.TaskStatusInProgress,
-			},
-			Flows: []domain.Flow{{Id: "flow1"}},
-		},
-	}
 
 	statusChan, progressChan := m.Start(ctx)
 
@@ -151,20 +151,6 @@ func TestTaskMonitor_Start_WebSocketError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Mock successful initial task status with flow ID
-	taskResp := &client.GetTaskResponse{
-		Task: struct {
-			domain.Task
-			Flows []domain.Flow `json:"flows"`
-		}{
-			Task: domain.Task{
-				Id:     "task1",
-				Status: domain.TaskStatusInProgress,
-			},
-			Flows: []domain.Flow{{Id: "flow1"}},
-		},
-	}
-
 	statusChan, progressChan := m.Start(ctx)
 
 	// First status update should be the initial task
@@ -197,20 +183,6 @@ func TestTaskMonitor_Start_Cancellation(t *testing.T) {
 	m := NewTaskMonitor(mockClient, "workspace1", "task1")
 
 	ctx, cancel := context.WithCancel(context.Background())
-
-	// Mock successful initial task status with flow ID
-	taskResp := &client.GetTaskResponse{
-		Task: struct {
-			domain.Task
-			Flows []domain.Flow `json:"flows"`
-		}{
-			Task: domain.Task{
-				Id:     "task1",
-				Status: domain.TaskStatusInProgress,
-			},
-			Flows: []domain.Flow{{Id: "flow1"}},
-		},
-	}
 
 	statusChan, progressChan := m.Start(ctx)
 
