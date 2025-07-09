@@ -8,8 +8,8 @@ import (
 
 // Client is a client for the Sidekick API.
 type Client interface {
-	CreateTask(workspaceID string, req *CreateTaskRequest) (*domain.Task, error)
-	GetTask(workspaceID string, taskID string) (*GetTaskResponse, error)
+	CreateTask(workspaceID string, req *CreateTaskRequest) (Task, error)
+	GetTask(workspaceID string, taskID string) (Task, error)
 	CancelTask(workspaceID string, taskID string) error
 	CreateWorkspace(req *CreateWorkspaceRequest) (*domain.Workspace, error)
 	GetWorkspacesByPath(repoPath string) ([]domain.Workspace, error)

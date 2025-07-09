@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -31,7 +32,7 @@ type taskLifecycleModel struct {
 	error     error
 	taskID    string
 	flowID    string
-	progModel *taskProgressModel
+	progModel tea.Model
 }
 
 func newLifecycleModel(taskID, flowID string) taskLifecycleModel {
@@ -54,6 +55,14 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
+			if m.progModel != nil {
+				var cmd tea.Cmd
+				m.progModel, cmd = m.progModel.Update(msg)
+				for cmd != nil {
+					msg := cmd()
+					m.progModel, cmd = m.progModel.Update(msg)
+				}
+			}
 			m.stage = stageCancelled
 			m.quitting = true
 			return m, tea.Quit
@@ -65,7 +74,6 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.stage == stageInProgress {
 			prog := newProgressModel(m.taskID, m.flowID)
 			m.progModel = &prog
-			return prog, prog.Init()
 		}
 		return m, nil
 
@@ -88,25 +96,39 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m taskLifecycleModel) View() string {
-	if m.stage == stageInProgress && m.progModel != nil {
-		return m.progModel.View()
+	var b strings.Builder
+
+	// TODO remove all "stages", replacing with a simple initMessage that changes
+	if m.progModel == nil {
+		var message string
+		switch m.stage {
+		case stageStartingServer:
+			message = fmt.Sprintf("%s Starting sidekick server...", m.spinner.View())
+		case stageSettingUpWorkspace:
+			message = fmt.Sprintf("%s Setting up workspace...", m.spinner.View())
+		case stageCreatingTask:
+			message = fmt.Sprintf("%s Creating task...", m.spinner.View())
+		}
+		b.WriteString(message)
 	}
 
-	var message string
+	if m.progModel != nil {
+		b.WriteString(m.progModel.View())
+	}
+
+	// TODO show "Canceling Task" message when cancel has been started, based on
+	// a progressMessages slice. the slice will be reset to empty when cancel is
+	// done.
+
+	// TODO remove all "stages", replacing with finalMessages slice
 	switch m.stage {
-	case stageStartingServer:
-		message = fmt.Sprintf("%s Starting sidekick server...", m.spinner.View())
-	case stageSettingUpWorkspace:
-		message = fmt.Sprintf("%s Setting up workspace...", m.spinner.View())
-	case stageCreatingTask:
-		message = fmt.Sprintf("%s Creating task...", m.spinner.View())
 	case stageCompleted:
-		message = "Task completed successfully."
+		b.WriteString("\nTask completed successfully.")
 	case stageCancelled:
-		message = "Task cancelled."
+		b.WriteString("\nTask cancelled.")
 	case stageFailed:
-		message = fmt.Sprintf("Task failed: %v", m.error)
+		b.WriteString(fmt.Sprintf("Task failed: %v", m.error))
 	}
 
-	return message + "\n"
+	return b.String()
 }

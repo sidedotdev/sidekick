@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -15,10 +16,9 @@ import (
 
 // TaskStatus represents the current state of task monitoring
 type TaskStatus struct {
-	Task      *client.GetTaskResponse
-	FlowID    string
-	Error     error
-	Completed bool
+	Task     client.Task
+	Error    error
+	Finished bool
 }
 
 // TaskProgress represents a progress update from flow events
@@ -33,6 +33,7 @@ type TaskMonitor struct {
 	client       client.Client
 	workspaceID  string
 	taskID       string
+	current      TaskStatus
 	statusChan   chan TaskStatus
 	progressChan chan TaskProgress
 	ctx          context.Context
@@ -71,32 +72,73 @@ func (m *TaskMonitor) monitorTask(ctx context.Context) {
 	defer close(m.progressChan)
 
 	// Initial task status check
-	details, err := m.client.GetTask(m.workspaceID, m.taskID)
+	task, err := m.client.GetTask(m.workspaceID, m.taskID)
 	if err != nil {
 		m.statusChan <- TaskStatus{Error: fmt.Errorf("failed to get initial task status: %w", err)}
 		return
 	}
-	m.statusChan <- TaskStatus{Task: details}
+	m.current = TaskStatus{Task: task}
+	m.statusChan <- m.current
 
-	// Wait for flow ID
-	flowID := m.waitForFlow(ctx)
-	if flowID == "" {
-		if ctx.Err() != nil {
-			return // Context was cancelled
-		}
-		m.statusChan <- TaskStatus{
-			Task:  details,
-			Error: fmt.Errorf("no flow ID available after timeout"),
-		}
-		return
+	var flowId string
+	if len(task.Flows) > 0 {
+		flowId = task.Flows[0].Id
 	}
 
+	if flowId == "" {
+		// Wait for flow ID
+		flowId = m.waitForFlow(ctx)
+		if flowId == "" {
+			if ctx.Err() != nil {
+				return // Context was cancelled
+			}
+			m.current = TaskStatus{
+				Task:  m.current.Task,
+				Error: fmt.Errorf("no flow ID available after timeout"),
+			}
+			m.statusChan <- m.current
+			return
+		}
+	}
+
+	// Async monitor task status
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+	loop:
+		for {
+			select {
+			case <-ctx.Done():
+				break loop
+			case <-ticker.C:
+				latestTask, err := m.client.GetTask(m.workspaceID, m.taskID)
+				if err != nil {
+					m.current.Error = err
+					m.statusChan <- m.current
+					continue
+				}
+				if latestTask.Status != task.Status {
+					task = latestTask
+					m.current = TaskStatus{Task: task}
+					switch task.Status {
+					case domain.TaskStatusComplete, domain.TaskStatusFailed, domain.TaskStatusCanceled:
+						m.current.Finished = true
+					default:
+						m.current.Finished = false
+					}
+					m.statusChan <- m.current
+				}
+			}
+		}
+	}()
+
 	// Start WebSocket connection for flow events
-	if err := m.streamFlowEvents(ctx, flowID); err != nil {
-		m.statusChan <- TaskStatus{
-			Task:  details,
+	if err := m.streamFlowEvents(ctx, flowId); err != nil {
+		m.current = TaskStatus{
+			Task:  m.current.Task,
 			Error: fmt.Errorf("flow event stream error: %w", err),
 		}
+		m.statusChan <- m.current
 	}
 }
 
@@ -105,38 +147,34 @@ func (m *TaskMonitor) waitForFlow(ctx context.Context) string {
 	defer ticker.Stop()
 	timeout := time.After(3 * time.Second)
 
-	var lastErr error
 	for {
 		select {
 		case <-ctx.Done():
 			return ""
 		case <-timeout:
-			if lastErr != nil {
-				m.statusChan <- TaskStatus{Error: lastErr}
-			}
+			m.current.Error = errors.New("timeout when getting task by id")
+			m.statusChan <- m.current
 			return ""
 		case <-ticker.C:
-			details, err := m.client.GetTask(m.workspaceID, m.taskID)
+			task, err := m.client.GetTask(m.workspaceID, m.taskID)
 			if err != nil {
-				lastErr = err
+				m.current.Error = err
 				continue
 			}
-			if len(details.Task.Flows) > 0 {
-				m.statusChan <- TaskStatus{
-					Task:   details,
-					FlowID: details.Task.Flows[0].Id,
-				}
-				return details.Task.Flows[0].Id
+			if len(task.Flows) > 0 {
+				m.current = TaskStatus{Task: task}
+				m.statusChan <- m.current
+				return task.Flows[0].Id
 			}
 		}
 	}
 }
 
-func (m *TaskMonitor) streamFlowEvents(ctx context.Context, flowID string) error {
+func (m *TaskMonitor) streamFlowEvents(ctx context.Context, flowId string) error {
 	u := url.URL{
 		Scheme: "ws",
 		Host:   strings.TrimPrefix(strings.TrimPrefix(m.client.GetBaseURL(), "https://"), "http://"),
-		Path:   fmt.Sprintf("/ws/v1/workspaces/%s/flows/%s/action_changes_ws", m.workspaceID, flowID),
+		Path:   fmt.Sprintf("/ws/v1/workspaces/%s/flows/%s/action_changes_ws", m.workspaceID, flowId),
 	}
 
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
@@ -166,28 +204,6 @@ func (m *TaskMonitor) streamFlowEvents(ctx context.Context, flowID string) error
 		m.progressChan <- TaskProgress{
 			ActionType:   action.ActionType,
 			ActionStatus: action.ActionStatus,
-		}
-
-		// Check task status after each action
-		details, err := m.client.GetTask(m.workspaceID, m.taskID)
-		if err != nil {
-			m.statusChan <- TaskStatus{Error: fmt.Errorf("failed to get task status: %w", err)}
-			continue
-		}
-
-		status := TaskStatus{
-			Task:   details,
-			FlowID: flowID,
-		}
-
-		// Check for completion
-		switch details.Task.Status {
-		case domain.TaskStatusComplete, domain.TaskStatusFailed, domain.TaskStatusCanceled:
-			status.Completed = true
-			m.statusChan <- status
-			return nil
-		default:
-			m.statusChan <- status
 		}
 	}
 }

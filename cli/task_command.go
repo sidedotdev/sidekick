@@ -104,13 +104,13 @@ func waitForFlow(ctx context.Context, c client.Client, workspaceID, taskID strin
 			}
 			return ""
 		case <-ticker.C:
-			response, err := c.GetTask(workspaceID, taskID)
+			task, err := c.GetTask(workspaceID, taskID)
 			if err != nil {
 				lastErr = err
 				continue
 			}
-			if len(response.Task.Flows) > 0 {
-				return response.Task.Flows[0].Id
+			if len(task.Flows) > 0 {
+				return task.Flows[0].Id
 			}
 		}
 	}

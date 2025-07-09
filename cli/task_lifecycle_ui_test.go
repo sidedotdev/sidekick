@@ -10,7 +10,6 @@ import (
 func TestLifecycleModel(t *testing.T) {
 	tests := []struct {
 		name          string
-		initialStage  lifecycleStage
 		messages      []tea.Msg
 		wantStage     lifecycleStage
 		wantQuitting  bool
@@ -19,8 +18,18 @@ func TestLifecycleModel(t *testing.T) {
 		wantNotExists []string
 	}{
 		{
-			name:         "transitions through initialization stages",
-			initialStage: stageStartingServer,
+			name:         "shows setting up workspace",
+			messages: []tea.Msg{
+				stageChangeMsg{stage: stageSettingUpWorkspace},
+			},
+			wantStage:    stageSettingUpWorkspace,
+			wantProgress: false,
+			wantContains: []string{
+				"Setting up workspace",
+			},
+		},
+		{
+			name:         "shows creating task",
 			messages: []tea.Msg{
 				stageChangeMsg{stage: stageSettingUpWorkspace},
 				stageChangeMsg{stage: stageCreatingTask},
@@ -28,23 +37,35 @@ func TestLifecycleModel(t *testing.T) {
 			wantStage:    stageCreatingTask,
 			wantProgress: false,
 			wantContains: []string{
+				"Creating task",
+			},
+			wantNotExists: []string{
+				"Setting up workspace",
+			},
+		},
+		{
+			name:         "transitions to progress model",
+			messages: []tea.Msg{
+				stageChangeMsg{stage: stageSettingUpWorkspace},
+				stageChangeMsg{stage: stageCreatingTask},
+				stageChangeMsg{stage: stageInProgress},
+			},
+			wantStage:    stageInProgress,
+			wantProgress: true,
+			wantContains: []string{
+				"Working...",
+			},
+			wantNotExists: []string{
 				"Setting up workspace",
 				"Creating task",
 			},
 		},
 		{
-			name:         "transitions to progress model",
-			initialStage: stageCreatingTask,
-			messages: []tea.Msg{
-				stageChangeMsg{stage: stageInProgress},
-			},
-			wantStage:    stageInProgress,
-			wantProgress: true,
-		},
-		{
 			name:         "handles cancellation",
-			initialStage: stageCreatingTask,
 			messages: []tea.Msg{
+				stageChangeMsg{stage: stageSettingUpWorkspace},
+				stageChangeMsg{stage: stageCreatingTask},
+				stageChangeMsg{stage: stageInProgress},
 				tea.KeyMsg{Type: tea.KeyCtrlC},
 			},
 			wantStage:    stageCancelled,
@@ -52,11 +73,18 @@ func TestLifecycleModel(t *testing.T) {
 			wantContains: []string{
 				"cancelled",
 			},
+			wantNotExists: []string{
+				"Setting up workspace",
+				"Creating task",
+				"Working...",
+			},
 		},
 		{
 			name:         "handles task error",
-			initialStage: stageCreatingTask,
+			wantQuitting: true,
 			messages: []tea.Msg{
+				stageChangeMsg{stage: stageSettingUpWorkspace},
+				stageChangeMsg{stage: stageCreatingTask},
 				taskErrorMsg{err: assert.AnError},
 			},
 			wantStage: stageFailed,
@@ -64,45 +92,47 @@ func TestLifecycleModel(t *testing.T) {
 				"failed",
 				assert.AnError.Error(),
 			},
+			wantNotExists: []string{
+				"Setting up workspace",
+				"Creating task",
+				"Working...",
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			model := newLifecycleModel("test-task", "test-flow")
-			model.stage = tt.initialStage
-
-			var finalModel tea.Model = model
-			var cmd tea.Cmd
+			var model tea.Model
+			model = newLifecycleModel("test-task", "test-flow")
 
 			// Process all messages
+			var cmd tea.Cmd
 			for _, msg := range tt.messages {
-				finalModel, cmd = finalModel.Update(msg)
-				if cmd != nil {
+				model, cmd = model.Update(msg)
+				for cmd != nil {
 					msg := cmd()
-					finalModel, cmd = finalModel.Update(msg)
+					model, cmd = model.Update(msg)
 				}
 			}
 
-			// Type assertions and state verification
-			if tt.wantProgress {
-				progModel, ok := finalModel.(*taskProgressModel)
-				assert.True(t, ok, "expected model to transition to taskProgressModel")
-				assert.NotNil(t, progModel)
-			} else {
-				lifecycleModel, ok := finalModel.(taskLifecycleModel)
-				assert.True(t, ok, "expected model to remain taskLifecycleModel")
-				assert.Equal(t, tt.wantStage, lifecycleModel.stage)
-				assert.Equal(t, tt.wantQuitting, lifecycleModel.quitting)
+			lifecycleModel, ok := model.(taskLifecycleModel)
+			assert.True(t, ok, "expected model to remain taskLifecycleModel")
 
-				// View verification
-				view := lifecycleModel.View()
-				for _, want := range tt.wantContains {
-					assert.Contains(t, view, want)
-				}
-				for _, notWant := range tt.wantNotExists {
-					assert.NotContains(t, view, notWant)
-				}
+			if tt.wantProgress {
+				progModel := lifecycleModel.progModel
+				assert.NotNil(t, progModel)
+			}
+
+			assert.Equal(t, tt.wantStage, lifecycleModel.stage)
+			assert.Equal(t, tt.wantQuitting, lifecycleModel.quitting)
+
+			// View verification
+			view := lifecycleModel.View()
+			for _, want := range tt.wantContains {
+				assert.Contains(t, view, want)
+			}
+			for _, notWant := range tt.wantNotExists {
+				assert.NotContains(t, view, notWant)
 			}
 		})
 	}
