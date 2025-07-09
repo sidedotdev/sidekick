@@ -183,7 +183,6 @@ func streamTaskProgress(ctx context.Context, sigChan chan os.Signal, workspaceID
 		}
 	}()
 
-	// Goroutine to handle context cancellation
 	go func() {
 		<-ctx.Done()
 		conn.Close()
@@ -199,7 +198,6 @@ func streamTaskProgress(ctx context.Context, sigChan chan os.Signal, workspaceID
 	}
 }
 
-// cancelTask gracefully terminates a running task, allowing cleanup operations to complete
 func cancelTask(workspaceID string, taskID string) error {
 	return apiClient.CancelTask(workspaceID, taskID)
 }
@@ -238,18 +236,14 @@ func NewTaskCommand() *cli.Command {
 
 			// Ensure the Sidekick server is running before proceeding.
 			if !checkServerStatus() {
-				fmt.Println("Sidekick server is not running. Attempting to start it in the background...")
+				fmt.Println("Starting sidekick server...")
 				if err := startServerDetached(); err != nil {
-					return cli.Exit(fmt.Sprintf("Failed to start Sidekick server: %v. Please try 'side start server' manually.", err), 1)
+					return cli.Exit(fmt.Sprintf("Failed to start Sidekick server: %v. Please try running `side start` manually.", err), 1)
 				}
 
-				fmt.Println("Waiting up to 10 seconds for Sidekick server to become available...")
 				if !waitForServer(10 * time.Second) {
-					return cli.Exit("Sidekick server did not become available in time after attempting to start. Please check server logs or start it manually using 'side start server'.", 1)
+					return cli.Exit("Failed to start Sidekick server. Please check logs or run 'side start server' manually.", 1)
 				}
-				fmt.Println("Sidekick server started and is now available.")
-			} else {
-				fmt.Println("Sidekick server is already running.")
 			}
 
 			// Initialize API client
@@ -261,8 +255,6 @@ func NewTaskCommand() *cli.Command {
 			if err != nil {
 				return cli.Exit(fmt.Sprintf("Workspace setup failed: %v", err), 1)
 			}
-			fmt.Printf("Using workspace: %s (ID: %s, Path: %s)\n", workspace.Name, workspace.Id, workspace.LocalRepoDir)
-
 			flowType := cmd.String("flow")
 			if cmd.Bool("P") {
 				flowType = "planned_dev"
@@ -285,8 +277,6 @@ func NewTaskCommand() *cli.Command {
 				return cli.Exit(fmt.Sprintf("Failed to marshal task creation payload: %v", err), 1)
 			}
 
-			fmt.Printf("Attempting to create task '%s' in workspace '%s' (ID: %s)...\n", taskDescription, workspace.Name, workspace.Id)
-
 			task, err := createTaskFromPayload(workspace.Id, payloadBytes)
 			if err != nil {
 				return cli.Exit(fmt.Sprintf("Failed to create task via API: %v", err), 1)
@@ -294,19 +284,17 @@ func NewTaskCommand() *cli.Command {
 
 			taskID := task.Id
 
-			fmt.Printf("Successfully created task with ID: %s\n", taskID)
-
 			var wg sync.WaitGroup
 
 			if cmd.Bool("async") {
-				fmt.Println("Task submitted in async mode. CLI will now exit.")
+				fmt.Println("Task submitted")
 				return nil
 			} else {
 				// Synchronous mode
 				sigChan := make(chan os.Signal, 1)
 				signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-				fmt.Printf("Task submitted in sync mode. Waiting for completion (Task ID: %s). Press Ctrl+C to cancel.\n", taskID)
+				fmt.Printf("Starting task\n")
 
 				syncCtx, cancelSync := context.WithCancel(ctx)
 				defer cancelSync()
@@ -315,12 +303,11 @@ func NewTaskCommand() *cli.Command {
 				flowID := waitForFlow(syncCtx, workspace.Id, taskID)
 
 				if flowID == "" {
-					fmt.Fprintf(os.Stderr, "Warning: No flows found for task. Progress streaming will be unavailable.\n")
-				} else {
-					fmt.Printf("[INFO] Starting progress streaming for Flow ID: %s\n", flowID)
-					wg.Add(1)
-					go streamTaskProgress(syncCtx, sigChan, workspace.Id, flowID, taskID, &wg)
+					cli.Exit(fmt.Sprintf("Timeout: No flow found for %s", taskID), 1)
 				}
+
+				wg.Add(1)
+				go streamTaskProgress(syncCtx, sigChan, workspace.Id, flowID, taskID, &wg)
 
 				doneChan := make(chan string, 1)
 				errPollChan := make(chan error, 1)
@@ -365,7 +352,7 @@ func NewTaskCommand() *cli.Command {
 					for {
 						select {
 						case <-syncCtx.Done():
-							return // Exit if context is cancelled
+							return
 						case <-ticker.C:
 							s, d, e := checkStatus()
 							if e != nil {
@@ -381,38 +368,30 @@ func NewTaskCommand() *cli.Command {
 				}()
 
 				select {
-				case <-syncCtx.Done(): // Handles cancellation from defer cancelSync() or other external cancellations if cmd.Context() supports it
-					fmt.Println("\nTask operation cancelled.")
+				case <-syncCtx.Done():
+					fmt.Println("\nUnexpected context cancellation")
 					// Wait for progress view to clean up
 					wg.Wait()
-					// Attempt to cancel the task on the server if it was due to Ctrl+C, though cancelSync might be from task completion too.
-					// If sigChan was the source, it's handled below. If doneChan or errPollChan, task is already finished/failed.
 					return nil
-				case sig := <-sigChan:
-					fmt.Printf("\nSignal %v received. Attempting to cancel task %s...\n", sig, taskID)
+				case <-sigChan:
 					cancelSync() // Signal goroutines (polling, streaming) to stop
+					// Wait for progress view to clean up
+					wg.Wait()
+
+					fmt.Printf("\nCancelling task...\n")
 					cancelErr := cancelTask(workspace.Id, taskID)
 					if cancelErr != nil {
-						fmt.Fprintf(os.Stderr, "Failed to send cancel request for task %s: %v\n", taskID, cancelErr)
-						return cli.Exit(fmt.Sprintf("Task cancellation request failed for %s.", taskID), 1)
+						return cli.Exit(fmt.Sprintf("Failed to cancel task: %v", cancelErr), 1)
 					}
-					fmt.Printf("Task %s cancellation requested successfully. Waiting for confirmation or timeout...\n", taskID)
-					// Wait for progress view to clean up
-					wg.Wait()
-					// Wait for a short period to see if doneChan confirms cancellation, or timeout.
-					select {
-					case finalStatus := <-doneChan:
-						fmt.Printf("Task %s confirmed status after cancellation request: %s\n", taskID, finalStatus)
-					case <-time.After(5 * time.Second): // Give it a few seconds for server to process cancellation and poller to pick it up
-						fmt.Println("Timed out waiting for cancellation confirmation. Exiting.")
-					}
+					fmt.Printf("Task cancelled.\n")
 					return nil
 				case finalStatus := <-doneChan:
 					cancelSync() // Ensure other goroutines are stopped
 					wg.Wait()    // Wait for progress view to clean up
-					fmt.Printf("Task %s finished with status: %s\n", taskID, finalStatus)
 					if finalStatus == string(domain.TaskStatusFailed) {
-						return cli.Exit(fmt.Sprintf("Task %s failed.", taskID), 1)
+						return cli.Exit("Task failed.", 1)
+					} else if finalStatus == string(domain.TaskStatusComplete) {
+						fmt.Println("Task completed successfully.")
 					}
 					return nil
 				case err := <-errPollChan:
@@ -460,8 +439,6 @@ func ensureWorkspace(ctx context.Context, disableHumanInTheLoop bool) (*domain.W
 		return nil, fmt.Errorf("failed to get absolute path for current directory: %w", err)
 	}
 
-	fmt.Printf("Looking for workspace in directory: %s\\n", absPath)
-
 	if apiClient == nil {
 		return nil, fmt.Errorf("API client not initialized")
 	}
@@ -480,7 +457,7 @@ func ensureWorkspace(ctx context.Context, disableHumanInTheLoop bool) (*domain.W
 
 	if len(workspaces) == 0 {
 		// Step 2: If none exists, create one automatically
-		fmt.Printf("No existing workspace found for %s. Creating a new one.\n", absPath)
+		fmt.Println("Creating workspace")
 		dirName := filepath.Base(absPath)
 		defaultWorkspaceName := fmt.Sprintf("%s-workspace", dirName)
 

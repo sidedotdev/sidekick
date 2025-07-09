@@ -83,12 +83,10 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case taskCompleteMsg:
 		m.quitting = true
-		m.finalMessage = fmt.Sprintf("Progress streaming stopped for task %s.", m.taskID)
 		return m, tea.Quit
 
 	case contextCancelledMsg:
 		m.quitting = true
-		m.finalMessage = fmt.Sprintf("Progress streaming canceled for task %s.", m.taskID)
 		return m, tea.Quit
 
 	default:
@@ -100,10 +98,6 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m taskProgressModel) View() string {
 	var b strings.Builder
-
-	if !m.quitting {
-		b.WriteString(fmt.Sprintf("Streaming progress for task %s (flow: %s)...\n\n", m.taskID, m.flowID))
-	}
 
 	for _, msg := range m.messages {
 		b.WriteString(fmt.Sprintf("  %s\n", msg))
@@ -118,7 +112,7 @@ func (m taskProgressModel) View() string {
 		}
 	} else {
 		b.WriteString(fmt.Sprintf(`
-⚠️  Sidekick's cli-only mode is *experimental*. Interact via http://localhost:%s/flows/%s
+⚠️  Sidekick's cli-only mode is *experimental*. Interact via http://localhost:%d/flows/%s
 %s Working... To cancel, press ctrl+c.
 `, common.GetServerPort(), m.flowID, m.spinner.View()))
 	}
