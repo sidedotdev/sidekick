@@ -34,13 +34,13 @@ type createWorkspaceResponseWrapper struct {
 }
 
 // CreateWorkspace sends a request to the Sidekick server to create a new workspace.
-func (c *Client) CreateWorkspace(req *CreateWorkspaceRequest) (*domain.Workspace, error) {
+func (c *clientImpl) CreateWorkspace(req *CreateWorkspaceRequest) (*domain.Workspace, error) {
 	requestBody, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/workspaces", c.baseURL), bytes.NewBuffer(requestBody))
+	httpReq, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/workspaces", c.BaseURL), bytes.NewBuffer(requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -78,8 +78,8 @@ type getWorkspacesResponseWrapper struct {
 }
 
 // GetWorkspacesByPath fetches all workspaces and filters them by the repository path.
-func (c *Client) GetWorkspacesByPath(repoPath string) ([]domain.Workspace, error) {
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/workspaces", c.baseURL), nil)
+func (c *clientImpl) GetWorkspacesByPath(repoPath string) ([]domain.Workspace, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/workspaces", c.BaseURL), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

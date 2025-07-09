@@ -34,7 +34,7 @@ func initClient() (*client.Client, error) {
 		return apiClient, nil
 	}
 
-	apiClient = client.NewClient()
+	apiClient = client.NewClient(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
 	return apiClient, nil
 }
 

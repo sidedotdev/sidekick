@@ -23,13 +23,13 @@ type CreateTaskResponse struct {
 }
 
 // CreateTask sends a request to the Sidekick server to create a new task.
-func (c *Client) CreateTask(workspaceID string, req *CreateTaskRequest) (*domain.Task, error) {
+func (c *clientImpl) CreateTask(workspaceID string, req *CreateTaskRequest) (*domain.Task, error) {
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal create task request: %w", err)
 	}
 
-	reqURL := fmt.Sprintf("%s/api/v1/workspaces/%s/tasks", c.baseURL, workspaceID)
+	reqURL := fmt.Sprintf("%s/api/v1/workspaces/%s/tasks", c.BaseURL, workspaceID)
 	resp, err := c.httpClient.Post(reqURL, "application/json", bytes.NewBuffer(payload))
 	if err != nil {
 		return nil, fmt.Errorf("failed to send create task request to API: %w", err)
@@ -61,8 +61,8 @@ type GetTaskResponse struct {
 }
 
 // GetTask fetches the details of a specific task from the Sidekick server.
-func (c *Client) GetTask(workspaceID string, taskID string) (*GetTaskResponse, error) {
-	reqURL := fmt.Sprintf("%s/api/v1/workspaces/%s/tasks/%s", c.baseURL, workspaceID, taskID)
+func (c *clientImpl) GetTask(workspaceID string, taskID string) (*GetTaskResponse, error) {
+	reqURL := fmt.Sprintf("%s/api/v1/workspaces/%s/tasks/%s", c.BaseURL, workspaceID, taskID)
 
 	resp, err := c.httpClient.Get(reqURL)
 	if err != nil {
@@ -87,8 +87,8 @@ func (c *Client) GetTask(workspaceID string, taskID string) (*GetTaskResponse, e
 }
 
 // CancelTask sends a request to the Sidekick server to cancel a task.
-func (c *Client) CancelTask(workspaceID string, taskID string) error {
-	reqURL := fmt.Sprintf("%s/api/v1/workspaces/%s/tasks/%s/cancel", c.baseURL, workspaceID, taskID)
+func (c *clientImpl) CancelTask(workspaceID string, taskID string) error {
+	reqURL := fmt.Sprintf("%s/api/v1/workspaces/%s/tasks/%s/cancel", c.BaseURL, workspaceID, taskID)
 
 	resp, err := c.httpClient.Post(reqURL, "application/json", nil)
 	if err != nil {

@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"sidekick/client"
-	"sidekick/common"
 	"sidekick/domain"
 
 	"github.com/gorilla/websocket"
@@ -30,7 +30,7 @@ type TaskProgress struct {
 
 // TaskMonitor handles WebSocket connections and status polling for tasks
 type TaskMonitor struct {
-	client       *client.Client
+	client       client.Client
 	workspaceID  string
 	taskID       string
 	statusChan   chan TaskStatus
@@ -121,10 +121,9 @@ func (m *TaskMonitor) waitForFlow(ctx context.Context) string {
 }
 
 func (m *TaskMonitor) streamFlowEvents(ctx context.Context, flowID string) error {
-	serverPort := common.GetServerPort()
 	u := url.URL{
 		Scheme: "ws",
-		Host:   fmt.Sprintf("localhost:%d", serverPort),
+		Host:   strings.TrimPrefix(strings.TrimPrefix(m.client.BaseURL, "https://"), "http://"),
 		Path:   fmt.Sprintf("/ws/v1/workspaces/%s/flows/%s/action_changes_ws", m.workspaceID, flowID),
 	}
 

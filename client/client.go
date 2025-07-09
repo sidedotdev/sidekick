@@ -1,23 +1,28 @@
 package client
 
 import (
-	"fmt"
 	"net/http"
+	"sidekick/domain"
 	"time"
-
-	"sidekick/common"
 )
 
 // Client is a client for the Sidekick API.
-type Client struct {
-	baseURL    string
+type Client interface {
+	CreateTask(workspaceID string, req *CreateTaskRequest) (*domain.Task, error)
+	GetTask(workspaceID string, taskID string) (*GetTaskResponse, error)
+	CreateWorkspace(req *CreateWorkspaceRequest) (*domain.Workspace, error)
+	GetWorkspacesByPath(repoPath string) ([]domain.Workspace, error)
+}
+
+type clientImpl struct {
+	BaseURL    string
 	httpClient *http.Client
 }
 
 // NewClient creates a new Sidekick API client.
-func NewClient() *Client {
-	return &Client{
-		baseURL: fmt.Sprintf("http://localhost:%d", common.GetServerPort()),
+func NewClient(baseURL string) Client {
+	return &clientImpl{
+		BaseURL: baseURL,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
