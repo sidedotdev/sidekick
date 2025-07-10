@@ -3,16 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"sync"
 	"time"
 
 	"encoding/json"
-	"net/url"
+
 	"os/signal"
 	"strings"
 	"syscall"
@@ -23,17 +21,28 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/erikgeiser/promptkit/selection"
-	"github.com/gorilla/websocket"
 	"github.com/urfave/cli/v3"
 )
 
-// clientTaskRequestPayload represents the client-side task creation request,
-// containing only fields that can be set by clients
-type clientTaskRequestPayload struct {
-	Title       string                 `json:"title"`
-	Description string                 `json:"description"`
-	FlowType    string                 `json:"flowType"`
-	FlowOptions map[string]interface{} `json:"flowOptions"`
+func NewTaskCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "task",
+		Usage:     "Create and manage a task (e.g., side task \"fix the error in my tests\")",
+		ArgsUsage: "<task description>",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "disable-human-in-the-loop", Usage: "Disable human-in-the-loop prompts"},
+			&cli.BoolFlag{Name: "async", Usage: "Run task asynchronously and exit immediately"},
+			&cli.StringFlag{Name: "flow", Value: "basic_dev", Usage: "Specify flow type (e.g., basic_dev, planned_dev)"},
+			&cli.BoolFlag{Name: "P", Usage: "Shorthand for --flow planned_dev"},
+			&cli.StringFlag{Name: "flow-options", Value: `{"determineRequirements": true}`, Usage: "JSON string for flow options"},
+			&cli.StringSliceFlag{Name: "flow-option", Aliases: []string{"o"}, Usage: "Add flow option (key=value), can be specified multiple times"},
+			&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"nr"}, Usage: "Shorthand to set determineRequirements to false in flow options"},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			client := client.NewClient(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
+			return executeTaskCommand(client, cmd)
+		},
+	}
 }
 
 // parseFlowOptions combines --flow-options JSON with individual --flow-option key=value pairs,
@@ -75,103 +84,6 @@ func parseFlowOptions(cmd *cli.Command) (map[string]interface{}, error) {
 		flowOpts[key] = valueStr
 	}
 	return flowOpts, nil
-}
-
-func waitForFlow(ctx context.Context, c client.Client, workspaceID, taskID string) string {
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
-	timeout := time.After(3 * time.Second)
-
-	var lastErr error
-	for {
-		select {
-		case <-ctx.Done():
-			return ""
-		case <-timeout:
-			if lastErr != nil {
-				fmt.Fprintf(os.Stderr, "Warning: error fetching task details: %v\n", lastErr)
-			}
-			return ""
-		case <-ticker.C:
-			task, err := c.GetTask(workspaceID, taskID)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			if len(task.Flows) > 0 {
-				return task.Flows[0].Id
-			}
-		}
-	}
-}
-
-// streamTaskProgress provides real-time updates of task execution by streaming flow action changes
-// through a WebSocket connection. It handles connection lifecycle and updates a Bubble Tea UI model
-// to display progress.
-func streamTaskProgress(ctx context.Context, sigChan chan os.Signal, workspaceID, flowID, taskID string, wg *sync.WaitGroup) {
-	defer wg.Done()
-	serverPort := common.GetServerPort()
-	u := url.URL{Scheme: "ws", Host: fmt.Sprintf("localhost:%d", serverPort), Path: fmt.Sprintf("/ws/v1/workspaces/%s/flows/%s/action_changes_ws", workspaceID, flowID)}
-
-	conn, resp, err := websocket.DefaultDialer.Dial(u.String(), nil)
-	if err != nil {
-		errMsg := fmt.Sprintf("Failed to connect to WebSocket for task progress: %v", err)
-		if resp != nil {
-			bodyBytes, readErr := io.ReadAll(resp.Body)
-			if readErr == nil {
-				errMsg = fmt.Sprintf("Failed to connect to WebSocket for task progress (status %s): %v. Response body: %s", resp.Status, err, string(bodyBytes))
-			}
-		}
-		fmt.Fprintln(os.Stderr, errMsg)
-		return
-	}
-	defer conn.Close()
-
-	p := tea.NewProgram(newProgressModel(taskID, flowID))
-	done := make(chan struct{})
-
-	// Goroutine to read from WebSocket and send messages to Bubble Tea program
-	go func() {
-		defer close(done)
-		for {
-			var action domain.FlowAction
-			if err := conn.ReadJSON(&action); err != nil {
-				if ctx.Err() != nil {
-					// Context was cancelled, exit cleanly
-					return
-				}
-
-				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-					// Normal closure from server or our cancellation handler
-					p.Send(taskCompleteMsg{})
-				} else {
-					// Unexpected error
-					p.Send(taskErrorMsg{err: fmt.Errorf("websocket read error: %w", err)})
-				}
-				return
-			}
-
-			p.Send(taskProgressMsg{
-				taskID:       taskID,
-				actionType:   action.ActionType,
-				actionStatus: action.ActionStatus,
-			})
-		}
-	}()
-
-	go func() {
-		<-ctx.Done()
-		conn.Close()
-		p.Send(contextCancelledMsg{})
-	}()
-
-	model, err := p.Run()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error running progress view: %v\n", err)
-	}
-	if sig := model.(taskProgressModel).signal; sig != nil {
-		sigChan <- *sig
-	}
 }
 
 func executeTaskCommand(c client.Client, cmd *cli.Command) error {
@@ -257,27 +169,6 @@ func executeTaskCommand(c client.Client, cmd *cli.Command) error {
 	}
 
 	return nil
-}
-
-func NewTaskCommand() *cli.Command {
-	return &cli.Command{
-		Name:      "task",
-		Usage:     "Create and manage a task (e.g., side task \"fix the error in my tests\")",
-		ArgsUsage: "<task description>",
-		Flags: []cli.Flag{
-			&cli.BoolFlag{Name: "disable-human-in-the-loop", Usage: "Disable human-in-the-loop prompts"},
-			&cli.BoolFlag{Name: "async", Usage: "Run task asynchronously and exit immediately"},
-			&cli.StringFlag{Name: "flow", Value: "basic_dev", Usage: "Specify flow type (e.g., basic_dev, planned_dev)"},
-			&cli.BoolFlag{Name: "P", Usage: "Shorthand for --flow planned_dev"},
-			&cli.StringFlag{Name: "flow-options", Value: `{"determineRequirements": true}`, Usage: "JSON string for flow options"},
-			&cli.StringSliceFlag{Name: "flow-option", Aliases: []string{"o"}, Usage: "Add flow option (key=value), can be specified multiple times"},
-			&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"nr"}, Usage: "Shorthand to set determineRequirements to false in flow options"},
-		},
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			client := client.NewClient(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
-			return executeTaskCommand(client, cmd)
-		},
-	}
 }
 
 // startServerDetached attempts to start the Sidekick server in a detached background process
@@ -388,5 +279,3 @@ func ensureWorkspace(ctx context.Context, c client.Client, disableHumanInTheLoop
 
 	return workspaceMap[selectedWorkspaceString], nil
 }
-
-// --- Placeholder API client functions ---
