@@ -51,6 +51,7 @@ func (c *clientImpl) CreateTask(workspaceID string, req *CreateTaskRequest) (Tas
 	}
 	return responseData.Task, nil
 }
+
 type Task struct {
 	domain.Task
 	Flows []domain.Flow `json:"flows"`
@@ -58,7 +59,7 @@ type Task struct {
 
 // GetTaskResponse is the response from the GetTask API.
 type GetTaskResponse struct {
-	Task Task  `json:"task"`
+	Task Task `json:"task"`
 }
 
 // GetTask fetches the details of a specific task from the Sidekick server.

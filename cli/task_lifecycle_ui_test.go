@@ -18,7 +18,7 @@ func TestLifecycleModel(t *testing.T) {
 		wantNotExists []string
 	}{
 		{
-			name:         "shows setting up workspace",
+			name: "shows setting up workspace",
 			messages: []tea.Msg{
 				stageChangeMsg{stage: stageSettingUpWorkspace},
 			},
@@ -29,7 +29,7 @@ func TestLifecycleModel(t *testing.T) {
 			},
 		},
 		{
-			name:         "shows creating task",
+			name: "shows creating task",
 			messages: []tea.Msg{
 				stageChangeMsg{stage: stageSettingUpWorkspace},
 				stageChangeMsg{stage: stageCreatingTask},
@@ -44,7 +44,7 @@ func TestLifecycleModel(t *testing.T) {
 			},
 		},
 		{
-			name:         "transitions to progress model",
+			name: "transitions to progress model",
 			messages: []tea.Msg{
 				stageChangeMsg{stage: stageSettingUpWorkspace},
 				stageChangeMsg{stage: stageCreatingTask},
@@ -61,7 +61,7 @@ func TestLifecycleModel(t *testing.T) {
 			},
 		},
 		{
-			name:         "handles cancellation",
+			name: "handles cancellation",
 			messages: []tea.Msg{
 				stageChangeMsg{stage: stageSettingUpWorkspace},
 				stageChangeMsg{stage: stageCreatingTask},
