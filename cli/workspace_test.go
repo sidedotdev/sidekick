@@ -107,10 +107,8 @@ func TestEnsureWorkspace(t *testing.T) {
 				}
 			}
 
-			apiClient = c
-
 			// Call the function
-			workspace, err := ensureWorkspace(context.Background(), tt.disableHumanInLoop)
+			workspace, err := ensureWorkspace(context.Background(), c, tt.disableHumanInLoop)
 
 			// Verify results
 			if tt.expectedError != "" {

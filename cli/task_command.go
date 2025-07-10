@@ -27,17 +27,6 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-var apiClient client.Client
-
-func initClient() (client.Client, error) {
-	if apiClient != nil {
-		return apiClient, nil
-	}
-
-	apiClient = client.NewClient(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
-	return apiClient, nil
-}
-
 // clientTaskRequestPayload represents the client-side task creation request,
 // containing only fields that can be set by clients
 type clientTaskRequestPayload struct {
@@ -216,7 +205,7 @@ func executeTaskCommand(c client.Client, cmd *cli.Command) error {
 	}
 
 	disableHumanInTheLoop := cmd.Bool("disable-human-in-the-loop")
-	workspace, err := ensureWorkspace(context.Background(), disableHumanInTheLoop)
+	workspace, err := ensureWorkspace(context.Background(), c, disableHumanInTheLoop)
 	if err != nil {
 		return cli.Exit(fmt.Sprintf("Workspace setup failed: %v", err), 1)
 	}
@@ -285,10 +274,7 @@ func NewTaskCommand() *cli.Command {
 			&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"nr"}, Usage: "Shorthand to set determineRequirements to false in flow options"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			client, err := initClient()
-			if err != nil {
-				return cli.Exit(fmt.Sprintf("Failed to initialize API client: %v", err), 1)
-			}
+			client := client.NewClient(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
 			return executeTaskCommand(client, cmd)
 		},
 	}
@@ -319,7 +305,7 @@ func startServerDetached() error {
 }
 
 // ensureWorkspace handles finding, creating, or selecting a workspace.
-func ensureWorkspace(ctx context.Context, disableHumanInTheLoop bool) (*domain.Workspace, error) {
+func ensureWorkspace(ctx context.Context, c client.Client, disableHumanInTheLoop bool) (*domain.Workspace, error) {
 	currentDir, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current directory: %w", err)
@@ -329,12 +315,8 @@ func ensureWorkspace(ctx context.Context, disableHumanInTheLoop bool) (*domain.W
 		return nil, fmt.Errorf("failed to get absolute path for current directory: %w", err)
 	}
 
-	if apiClient == nil {
-		return nil, fmt.Errorf("API client not initialized")
-	}
-
 	// Step 1: Find existing workspaces for the current directory
-	workspacesResult, err := apiClient.GetWorkspacesByPath(absPath)
+	workspacesResult, err := c.GetWorkspacesByPath(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve workspaces for path %s: %w", absPath, err)
 	}
@@ -355,7 +337,7 @@ func ensureWorkspace(ctx context.Context, disableHumanInTheLoop bool) (*domain.W
 			Name:         defaultWorkspaceName,
 			LocalRepoDir: absPath,
 		}
-		createdWorkspace, err := apiClient.CreateWorkspace(req)
+		createdWorkspace, err := c.CreateWorkspace(req)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create workspace for path %s: %w", absPath, err)
 		}
