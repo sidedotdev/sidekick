@@ -529,7 +529,11 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 			Tools: []*Tool{mockTool},
 		},
 		Secrets: secret_manager.SecretManagerContainer{
-			SecretManager: &secret_manager.EnvSecretManager{},
+			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+				secret_manager.EnvSecretManager{},
+				secret_manager.KeyringSecretManager{},
+				secret_manager.LocalConfigSecretManager{},
+			}),
 		},
 	}
 
