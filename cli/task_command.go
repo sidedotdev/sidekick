@@ -29,16 +29,17 @@ import (
 func NewTaskCommand() *cli.Command {
 	return &cli.Command{
 		Name:      "task",
-		Usage:     "Create and manage a task (e.g., side task \"fix the error in my tests\")",
+		Usage:     "Start a new task (e.g., side task \"fix the error in my tests\")",
 		ArgsUsage: "<task description>",
 		Flags: []cli.Flag{
-			&cli.BoolFlag{Name: "disable-human-in-the-loop", Usage: "Disable human-in-the-loop prompts"},
+			// TODO support this flag, after introducing a way to provide a customized DevConfig per invoked flow
+			//&cli.BoolFlag{Name: "disable-human-in-the-loop", Usage: "Disable human-in-the-loop prompts"},
 			&cli.BoolFlag{Name: "async", Usage: "Run task asynchronously and exit immediately"},
 			&cli.StringFlag{Name: "flow", Value: "basic_dev", Usage: "Specify flow type (e.g., basic_dev, planned_dev)"},
-			&cli.BoolFlag{Name: "P", Usage: "Shorthand for --flow planned_dev"},
+			&cli.BoolFlag{Name: "plan", Aliases: []string{"p"}, Usage: "Shorthand for --flow planned_dev"},
 			&cli.StringFlag{Name: "flow-options", Value: `{"determineRequirements": true}`, Usage: "JSON string for flow options"},
-			&cli.StringSliceFlag{Name: "flow-option", Aliases: []string{"o"}, Usage: "Add flow option (key=value), can be specified multiple times"},
-			&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"nr"}, Usage: "Shorthand to set determineRequirements to false in flow options"},
+			&cli.StringSliceFlag{Name: "flow-option", Aliases: []string{"O"}, Usage: "Add flow option (key=value), can be specified multiple times"},
+			&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"n"}, Usage: "Shorthand to set determineRequirements to false in flow options"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			client := client.NewClient(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
@@ -64,15 +65,13 @@ func parseFlowOptions(cmd *cli.Command) (map[string]interface{}, error) {
 
 	// --flow-option key=value pairs override any existing keys
 	for _, optStr := range cmd.StringSlice("flow-option") {
-		parts := strings.SplitN(optStr, "=", 2)
-		if len(parts) != 2 {
+		key, valueStr, didCut := strings.Cut(optStr, "=")
+		if !didCut {
 			return nil, fmt.Errorf("invalid --flow-option format: '%s'. Expected key=value", optStr)
 		}
-		key := strings.TrimSpace(parts[0])
 		if key == "" {
 			return nil, fmt.Errorf("invalid --flow-option format: '%s'. Key cannot be empty", optStr)
 		}
-		valueStr := parts[1]
 
 		// Remove enclosing quotes to support both quoted and unquoted values
 		if (strings.HasPrefix(valueStr, `"`) && strings.HasSuffix(valueStr, `"`)) ||
@@ -95,6 +94,7 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 	}
 
 	// TODO merge into DevConfig, which goes into FlowOptions.DevConfigOverrides
+	// in the task request
 	disableHumanInTheLoop := cmd.Bool("disable-human-in-the-loop")
 
 	sigChan := make(chan os.Signal, 1)
@@ -162,7 +162,7 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 		// started the task yet (if it has, monitor.stop will handle things).
 		// also fix race condition on checking monitor, need a lock I think.
 		<-sigChan
-		wg.Add(1)
+		wg.Add(1) // FIXME add to waitgroup before sending on channel instead
 		defer wg.Done()
 		if task.Id != "" {
 			if monitor != nil {
