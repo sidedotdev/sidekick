@@ -155,14 +155,17 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 		}
 	}()
 
-
 	wg := sync.WaitGroup{}
 	go func() {
-		// TODO make sure we interrupt the other go-routine when it hasn't
-		// started the task yet (if it has, monitor.stop will handle things).
-		// also fix race condition on checking monitor, need a lock I think.
+		// TODO make sure other go-routine returns early when it hasn't started
+		// the task yet. Use context cancellation to do this, with contexts
+		// passed in to ensureSideServer and CreateTask. ensureWorkspace takes
+		// context, but doesn't actually use it. We need to adjust some of the
+		// functions being called to take in context and be made cancellable
+		//  monitor.Start does use the context correctly already, so passing in
+		//  the same context we cancel is sufficient
 		<-sigChan
-		wg.Add(1) // FIXME add to waitgroup before sending on channel instead
+		wg.Add(1)
 		defer wg.Done()
 		if task.Id != "" {
 			if monitor != nil {
@@ -332,6 +335,9 @@ func ensureWorkspace(ctx context.Context, p teaSendable, c client.Client, disabl
 		return workspaces[i].Id < workspaces[j].Id // Secondary sort by ID if names are identical
 	})
 
+	// TODO support --workspace-id,-W flag for selecting a specific workspace
+	// instead, and fail here when human-in-the-loop is disabled without
+	// specifying a workspace
 	if disableHumanInTheLoop {
 		// Sort by Updated (descending) to get the most recent one
 		sort.Slice(workspaces, func(i, j int) bool {

@@ -58,7 +58,8 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmds []tea.Cmd
 		if msg.Type == tea.KeyCtrlC {
 			m.sigChan <- os.Interrupt
-			//cmds = append(cmds, tea.Quit)
+			// we are using a signal to handle canceling the task, for which we
+			// show more lifecycle messages, so we don't quit here
 		}
 		return m.propagateAndBatch(msg, cmds)
 
