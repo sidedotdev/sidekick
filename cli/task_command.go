@@ -42,8 +42,8 @@ func NewTaskCommand() *cli.Command {
 			&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"n"}, Usage: "Shorthand to set determineRequirements to false in flow options"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			client := client.NewClient(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
-			return executeTaskCommand(ctx, client, cmd)
+			c := client.NewClient(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
+			return executeTaskCommand(ctx, c, cmd)
 		},
 	}
 }
