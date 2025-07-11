@@ -217,7 +217,7 @@ func buildCreateTaskRequest(cmd *cli.Command) (*client.CreateTaskRequest, error)
 
 func kanbanLink(workspaceId string) string {
 	return fmt.Sprintf("http://localhost:%d/kanban?workspaceId=%s", common.GetServerPort(), workspaceId)
-} 
+}
 
 func ensureSideServer(p *tea.Program) error {
 	if !checkServerStatus() {

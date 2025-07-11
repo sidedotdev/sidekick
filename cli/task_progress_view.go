@@ -13,12 +13,12 @@ import (
 )
 
 type taskProgressModel struct {
-	spinner      spinner.Model
-	taskID       string
-	flowID       string
-	messages     []string
-	quitting     bool
-	err          error
+	spinner  spinner.Model
+	taskID   string
+	flowID   string
+	messages []string
+	quitting bool
+	err      error
 }
 
 func newProgressModel(taskID, flowID string) taskProgressModel {

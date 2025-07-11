@@ -4,11 +4,27 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+type lifecycleMessage struct {
+	content     string
+	showSpinner bool
+	timestamp   time.Time
+}
+
+type updateLifecycleMsg struct {
+	key     string
+	message lifecycleMessage
+}
+
+type clearLifecycleMsg struct {
+	key string
+}
 
 type statusUpdateMsg struct {
 	message string

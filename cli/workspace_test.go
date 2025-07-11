@@ -19,6 +19,7 @@ import (
 
 type mockProgram struct {
 }
+
 func (m mockProgram) Send(msg tea.Msg) {
 }
 
