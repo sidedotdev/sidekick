@@ -2,6 +2,7 @@ package persisted_ai
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sidekick/coding/tree_sitter"
@@ -16,13 +17,6 @@ import (
 
 	"github.com/kelindar/binary"
 )
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
 
 type RagActivities struct {
 	DatabaseAccessor srv.Storage
@@ -96,7 +90,7 @@ type RankedSubkeysOptions struct {
 
 func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, error) {
 	if options.RankQuery == "" {
-		return []string{}, nil
+		return []string{}, errors.New("Attempted to perform RAG with empty rank query")
 	}
 
 	ea := EmbedActivities{Storage: ra.DatabaseAccessor}

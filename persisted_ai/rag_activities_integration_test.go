@@ -7,17 +7,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"sidekick/common"
-	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
 	"sidekick/srv"
 	"sidekick/srv/sqlite"
 
-	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,34 +50,28 @@ func setupTestWorkspace(t *testing.T, ctx context.Context) (string, string) {
 			if !filepath.IsAbs(gitCommonDir) {
 				gitCommonDir = filepath.Join(cleanedRepoRoot, gitCommonDir)
 			}
-			gitSourceDir := filepath.Dir(gitCommonDir)
+			commonRepoDir := filepath.Clean(filepath.Dir(gitCommonDir))
 			// Check if there's a workspace for the source directory
 			for _, ws := range workspaces {
-				if filepath.Clean(ws.LocalRepoDir) == filepath.Clean(gitSourceDir) {
+				if filepath.Clean(ws.LocalRepoDir) == commonRepoDir {
 					workspaceId = ws.Id
 					break
 				}
 			}
-
-			// If still no workspace found, create one using the parent directory
-			if workspaceId == "" {
-				parentDir := filepath.Dir(gitSourceDir)
-				workspaceId = "ws_" + ksuid.New().String()
-				now := time.Now()
-				workspace := domain.Workspace{
-					Id:           workspaceId,
-					Name:         filepath.Base(parentDir),
-					LocalRepoDir: parentDir,
-					Created:      now,
-					Updated:      now,
-				}
-				err = storage.PersistWorkspace(ctx, workspace)
-				require.NoError(t, err, "Failed to persist new workspace")
-			}
 		}
 	}
 
-	require.NotEmpty(t, workspaceId, "Failed to find or create workspace")
+	/*
+		There are a reasons we prompt the developer to init instead of just creating a
+		new workspace:
+
+		1. The init process is needed to help them get set up right anyways
+		2. We want the dev to know what workspaces they init: this will end up
+		   being a real workspace they see in their local sidekick UI
+		3. We don't want CI to keep re-initializing and embedding everything,
+		   that could potentially get expensive
+	*/
+	require.NotEmpty(t, workspaceId, "Failed to find an existing workspace.\n\nPlease run `side init` in the sidekick repo root and try again.")
 	return workspaceId, cleanedRepoRoot
 }
 
