@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -9,42 +10,42 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-type lifecycleStage int
+type statusUpdateMsg struct {
+	message string
+}
 
-const (
-	stageStartingServer lifecycleStage = iota
-	stageSettingUpWorkspace
-	stageCreatingTask
-	stageInProgress
-	stageCompleted
-	stageCancelled
-	stageFailed
-)
-
-type stageChangeMsg struct {
-	stage lifecycleStage
+type finalUpdateMsg struct {
+	message string
 }
 
 type taskLifecycleModel struct {
-	spinner   spinner.Model
-	stage     lifecycleStage
-	quitting  bool
+	spinner spinner.Model
+
+	// bubbletea takes over the terminal when it starts and puts it into raw
+	// mode, and key presses just become tea.KeyMsg, so normal interrupt
+	// handling doesn't work
+	sigChan chan os.Signal
+
+	// TODO: replace both of these with map[string]tuiMessage where tuiMessage
+	// has string content, showSpinner boolean and timestamp. different keys can
+	// be used to show multiple messages in parallel. the View is just
+	// extracting all values and showing them with or without spinner, in the
+	// right order. for progModel's embedded view, we use the time we
+	// initialized that model.
+	statusMessages []string
+	finalMessages  []string
+
 	error     error
-	taskID    string
-	flowID    string
+	taskId    string
+	flowId    string
 	progModel tea.Model
 }
 
-func newLifecycleModel(taskID, flowID string) taskLifecycleModel {
+func newLifecycleModel(sigChan chan os.Signal) taskLifecycleModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	return taskLifecycleModel{
-		spinner: s,
-		stage:   stageStartingServer,
-		taskID:  taskID,
-		flowID:  flowID,
-	}
+	return taskLifecycleModel{spinner: s, sigChan: sigChan}
 }
 
 func (m taskLifecycleModel) Init() tea.Cmd {
@@ -55,79 +56,94 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
-			if m.progModel != nil {
-				var cmd tea.Cmd
-				m.progModel, cmd = m.progModel.Update(msg)
-				for cmd != nil {
-					msg := cmd()
-					m.progModel, cmd = m.progModel.Update(msg)
-				}
-			}
-			m.stage = stageCancelled
-			m.quitting = true
-			return m, tea.Quit
+			m.sigChan <- os.Interrupt
+		}
+		return m.propagateMessage(msg)
+
+	case statusUpdateMsg:
+		// for now we only keep the latest status message, but in the future
+		// we'll probably make this a map to support concurrent progress updates
+		// for things happening in parallel
+		m.statusMessages = []string{} // reset for now (in future, not needed when we use a map)
+		m.statusMessages = append(m.statusMessages, msg.message)
+		return m, nil
+
+	case finalUpdateMsg:
+		//m.statusMessages = []string{}
+		m.finalMessages = append(m.finalMessages, msg.message)
+		return m, nil
+
+	case taskChangeMsg:
+		m.taskId = msg.task.Id
+		if m.progModel == nil && len(msg.task.Flows) > 0 {
+			m.flowId = msg.task.Flows[0].Id
+			// clear status messages from initialization process
+			//m.statusMessages = []string{}
+			prog := newProgressModel(m.taskId, m.flowId)
+			cmd := prog.Init()
+			m.progModel = &prog
+			return m, cmd
 		}
 		return m, nil
 
-	case stageChangeMsg:
-		m.stage = msg.stage
-		if msg.stage == stageInProgress {
-			prog := newProgressModel(m.taskID, m.flowID)
-			m.progModel = &prog
+	case flowActionChangeMsg:
+		if m.progModel == nil {
+			// TODO queue messages until progModel is initialized
+			return m, nil
+		} else {
+			return m.propagateMessage(msg)
 		}
-		return m, nil
 
 	case taskErrorMsg:
-		m.stage = stageFailed
 		m.error = msg.err
-		m.quitting = true
-		return m, tea.Quit
+		m.statusMessages = []string{}
+		m.finalMessages = append(m.finalMessages, fmt.Sprintf("Task failed: %v", msg.err))
 
-	case taskCompleteMsg:
-		m.stage = stageCompleted
-		m.quitting = true
-		return m, tea.Quit
+		return m, nil
 
 	default:
 		var cmd tea.Cmd
+		var cmds []tea.Cmd
+
 		m.spinner, cmd = m.spinner.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
+		_, cmd = m.propagateMessage(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
+		return m, tea.Batch(cmds...)
+	}
+}
+
+func (m *taskLifecycleModel) propagateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.progModel != nil {
+		var cmd tea.Cmd
+		m.progModel, cmd = m.progModel.Update(msg)
 		return m, cmd
 	}
+	return m, nil
 }
 
 func (m taskLifecycleModel) View() string {
 	var b strings.Builder
 
-	// TODO remove all "stages", replacing with a simple initMessage that changes
-	if m.progModel == nil {
-		var message string
-		switch m.stage {
-		case stageStartingServer:
-			message = fmt.Sprintf("%s Starting sidekick server...", m.spinner.View())
-		case stageSettingUpWorkspace:
-			message = fmt.Sprintf("%s Setting up workspace...", m.spinner.View())
-		case stageCreatingTask:
-			message = fmt.Sprintf("%s Creating task...", m.spinner.View())
-		}
-		b.WriteString(message)
+	for _, message := range m.statusMessages {
+		b.WriteString(fmt.Sprintf("%s %s", m.spinner.View(), message))
+		b.WriteString("\n")
 	}
 
 	if m.progModel != nil {
+		b.WriteString("\n")
 		b.WriteString(m.progModel.View())
 	}
 
-	// TODO show "Canceling Task" message when cancel has been started, based on
-	// a progressMessages slice. the slice will be reset to empty when cancel is
-	// done.
-
-	// TODO remove all "stages", replacing with finalMessages slice
-	switch m.stage {
-	case stageCompleted:
-		b.WriteString("\nTask completed successfully.")
-	case stageCancelled:
-		b.WriteString("\nTask cancelled.")
-	case stageFailed:
-		b.WriteString(fmt.Sprintf("Task failed: %v", m.error))
+	for _, message := range m.finalMessages {
+		b.WriteString(message)
+		b.WriteString("\n")
 	}
 
 	return b.String()

@@ -4,7 +4,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"sidekick/common"
 	"strings"
 
@@ -20,8 +19,6 @@ type taskProgressModel struct {
 	messages     []string
 	quitting     bool
 	err          error
-	finalMessage string
-	signal       *os.Signal
 }
 
 func newProgressModel(taskID, flowID string) taskProgressModel {
@@ -46,30 +43,13 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c":
 			m.quitting = true
-			m.signal = &os.Interrupt
-			m.finalMessage = fmt.Sprintf("Canceling task...")
-			return m, tea.Quit
-		default:
-			return m, nil
 		}
+		return m, nil
 
-	case taskProgressMsg:
+	case flowActionChangeMsg:
 		progressLine := fmt.Sprintf("Action '%s' - Status '%s'", msg.actionType, msg.actionStatus)
 		m.messages = append(m.messages, progressLine)
 		return m, nil
-
-	case taskErrorMsg:
-		m.err = msg.err
-		m.quitting = true
-		return m, tea.Quit
-
-	case taskCompleteMsg:
-		m.quitting = true
-		return m, tea.Quit
-
-	case contextCancelledMsg:
-		m.quitting = true
-		return m, tea.Quit
 
 	default:
 		var cmd tea.Cmd
@@ -89,8 +69,6 @@ func (m taskProgressModel) View() string {
 		b.WriteString("\n")
 		if m.err != nil {
 			b.WriteString(fmt.Sprintf("Error: %v\n", m.err))
-		} else {
-			b.WriteString(m.finalMessage + "\n")
 		}
 	} else {
 		b.WriteString(fmt.Sprintf(`

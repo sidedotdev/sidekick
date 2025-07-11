@@ -83,7 +83,7 @@ func setupAndRunInteractiveCli(args []string) error {
 	cliApp := &cli.Command{
 		Name:        "side",
 		Usage:       "CLI for Sidekick",
-		Description: "Manages Sidekick workspaces, tasks, and server.",
+		Description: "~ Sidekick is an agentic AI tool for software engineers.",
 		Version:     version, // Enables global --version flag
 		Commands: []*cli.Command{
 			{
@@ -113,6 +113,7 @@ func setupAndRunInteractiveCli(args []string) error {
 					return nil
 				},
 			},
+			/*
 			{
 				Name:      "service",
 				Usage:     "Manage Sidekick system service.",
@@ -125,6 +126,7 @@ func setupAndRunInteractiveCli(args []string) error {
 					return handleServiceCommandControl(controlAction)
 				},
 			},
+			*/
 			{
 				Name:    "version",
 				Aliases: []string{"v"},

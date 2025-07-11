@@ -1,8 +1,12 @@
 package main
 
-// taskProgressMsg is a tea.Msg to send a progress update for a task.
-type taskProgressMsg struct {
-	taskID       string
+import "sidekick/client"
+
+type taskChangeMsg struct {
+	task client.Task
+}
+
+type flowActionChangeMsg struct {
 	actionType   string
 	actionStatus string
 }
@@ -11,9 +15,3 @@ type taskProgressMsg struct {
 type taskErrorMsg struct {
 	err error
 }
-
-// taskCompleteMsg is a tea.Msg to indicate task completion.
-type taskCompleteMsg struct{}
-
-// contextCancelledMsg is a tea.Msg to indicate the context was cancelled.
-type contextCancelledMsg struct{}

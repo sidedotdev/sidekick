@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"encoding/json"
@@ -40,7 +42,7 @@ func NewTaskCommand() *cli.Command {
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			client := client.NewClient(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
-			return executeTaskCommand(client, cmd)
+			return executeTaskCommand(ctx, client, cmd)
 		},
 	}
 }
@@ -86,40 +88,110 @@ func parseFlowOptions(cmd *cli.Command) (map[string]interface{}, error) {
 	return flowOpts, nil
 }
 
-func executeTaskCommand(c client.Client, cmd *cli.Command) error {
+func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) error {
+	req, err := buildCreateTaskRequest(cmd)
+	if err != nil {
+		return err
+	}
+
+	// TODO merge into DevConfig, which goes into FlowOptions.DevConfigOverrides
+	disableHumanInTheLoop := cmd.Bool("disable-human-in-the-loop")
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	p := tea.NewProgram(newLifecycleModel(sigChan))
+
+	var monitor *TaskMonitor
+	var task client.Task
+
+	go func() {
+		if err := ensureSideServer(p); err != nil {
+			p.Send(taskErrorMsg{err: err})
+			p.Quit()
+			return
+		}
+
+		workspace, err := ensureWorkspace(ctx, p, c, disableHumanInTheLoop)
+		if err != nil {
+			p.Send(taskErrorMsg{err: fmt.Errorf("Workspace setup failed: %v", err)})
+			p.Quit()
+			return
+		}
+
+		p.Send(statusUpdateMsg{message: "Starting task..."})
+
+		task, err = c.CreateTask(workspace.Id, req)
+		if err != nil {
+			p.Send(taskErrorMsg{err: fmt.Errorf("Failed to create task: %v", err)})
+			p.Quit()
+			return
+		}
+		p.Send(taskChangeMsg{task: task})
+
+		if cmd.Bool("async") {
+			message := fmt.Sprintf("Task submitted. Follow progress at %s", kanbanLink(workspace.Id))
+			p.Send(finalUpdateMsg{message: message})
+			p.Quit()
+			return
+		}
+
+		monitor = NewTaskMonitor(c, workspace.Id, task.Id)
+		statusChan, progressChan := monitor.Start(ctx)
+		for {
+			select {
+			case taskProgress := <-progressChan:
+				p.Send(flowActionChangeMsg{actionType: taskProgress.ActionType, actionStatus: taskProgress.ActionStatus})
+			case taskStatus := <-statusChan:
+				p.Send(taskChangeMsg{task: taskStatus.Task})
+				if taskStatus.Error != nil {
+					p.Send(taskErrorMsg{err: taskStatus.Error})
+				}
+				if taskStatus.Finished {
+					p.Send(finalUpdateMsg{message: finishMessage(taskStatus.Task, kanbanLink(workspace.Id))})
+					p.Quit()
+					return
+				}
+			}
+		}
+	}()
+
+
+	wg := sync.WaitGroup{}
+	go func() {
+		// TODO make sure we interrupt the other go-routine when it hasn't
+		// started the task yet (if it has, monitor.stop will handle things).
+		// also fix race condition on checking monitor, need a lock I think.
+		<-sigChan
+		wg.Add(1)
+		defer wg.Done()
+		if task.Id != "" {
+			if monitor != nil {
+				monitor.Stop()
+			}
+			p.Send(statusUpdateMsg{message: "Canceling task..."})
+			if err := c.CancelTask(task.WorkspaceId, task.Id); err != nil {
+				p.Send(taskErrorMsg{err: fmt.Errorf("Failed to cancel task: %v", err)})
+			}
+			p.Send(finalUpdateMsg{message: "Task cancelled"})
+		}
+		p.Quit()
+	}()
+
+	if _, err := p.Run(); err != nil {
+		return cli.Exit(fmt.Sprintf("Error running task UI: %v", err), 1)
+	}
+
+	// wait in case we are still canceling the task
+	wg.Wait()
+
+	return nil
+}
+
+func buildCreateTaskRequest(cmd *cli.Command) (*client.CreateTaskRequest, error) {
 	taskDescription := cmd.Args().First()
 
 	if taskDescription == "" {
-		if !cmd.IsSet("help") {
-			_ = cli.ShowSubcommandHelp(cmd)
-			return cli.Exit("Task description is required.", 1)
-		}
-		return nil
-	}
-
-	if taskDescription == "help" {
-		if !cmd.IsSet("help") {
-			_ = cli.ShowSubcommandHelp(cmd)
-		}
-		return nil
-	}
-
-	// Ensure the Sidekick server is running before proceeding.
-	if !checkServerStatus() {
-		fmt.Println("Starting sidekick server...")
-		if err := startServerDetached(); err != nil {
-			return cli.Exit(fmt.Sprintf("Failed to start Sidekick server: %v. Please try running `side start` manually.", err), 1)
-		}
-
-		if !waitForServer(10 * time.Second) {
-			return cli.Exit("Failed to start Sidekick server. Please check logs or run 'side start server' manually.", 1)
-		}
-	}
-
-	disableHumanInTheLoop := cmd.Bool("disable-human-in-the-loop")
-	workspace, err := ensureWorkspace(context.Background(), c, disableHumanInTheLoop)
-	if err != nil {
-		return cli.Exit(fmt.Sprintf("Workspace setup failed: %v", err), 1)
+		return nil, cli.Exit("ERROR:\n   A task description is required.\n\nUSAGE:\n  side task <task description>\n\nRun `side task help` to see all options.", 1)
 	}
 
 	flowType := cmd.String("flow")
@@ -129,74 +201,82 @@ func executeTaskCommand(c client.Client, cmd *cli.Command) error {
 
 	flowOpts, err := parseFlowOptions(cmd)
 	if err != nil {
-		return cli.Exit(fmt.Sprintf("Error processing flow options: %v", err), 1)
+		return nil, cli.Exit(fmt.Errorf("Error parsing flow options: %v", err), 1)
 	}
 
 	req := &client.CreateTaskRequest{
-		Title:       taskDescription,
 		Description: taskDescription,
 		FlowType:    flowType,
 		FlowOptions: flowOpts,
 	}
+	return req, nil
+}
 
-	task, err := c.CreateTask(workspace.Id, req)
-	if err != nil {
-		return cli.Exit(fmt.Sprintf("Failed to create task via API: %v", err), 1)
-	}
+func kanbanLink(workspaceId string) string {
+	return fmt.Sprintf("http://localhost:%d/kanban?workspaceId=%s", common.GetServerPort(), workspaceId)
+} 
 
-	if cmd.Bool("async") {
-		fmt.Println("Task submitted")
-		return nil
-	}
+func ensureSideServer(p *tea.Program) error {
+	if !checkServerStatus() {
+		p.Send(statusUpdateMsg{message: "Starting sidekick server..."})
+		process, err := startServerDetached()
+		defer process.Release() // don't wait, server runs in background
 
-	monitor := NewTaskMonitor(c, workspace.Id, task.Id)
-	model := newLifecycleModel(task.Id, "")
-	p := tea.NewProgram(model)
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-sigChan
-		monitor.Stop()
-		if err := c.CancelTask(workspace.Id, task.Id); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to cancel task: %v\n", err)
+		if err != nil {
+			return fmt.Errorf("Failed to start Sidekick server: %v\nTry running `side start` manually.", err)
 		}
-	}()
 
-	if _, err := p.Run(); err != nil {
-		return cli.Exit(fmt.Sprintf("Error running task UI: %v", err), 1)
+		if !waitForServer(10 * time.Second) {
+			process.Kill()
+			return errors.New("Timed out waiting for Sidekick server to be ready. Please check logs or run 'side start' manually.")
+		}
 	}
-
 	return nil
+}
+
+func finishMessage(task client.Task, kanbanLink string) string {
+	var message string
+	switch task.Status {
+	case domain.TaskStatusComplete:
+		message = "Task completed"
+	case domain.TaskStatusCanceled:
+		message = "Task canceled"
+	case domain.TaskStatusFailed:
+		message = fmt.Sprintf("Task failed. See details at %s", kanbanLink)
+	default:
+		message = fmt.Sprintf("Task finished with status %s", task.Status)
+	}
+	return message
 }
 
 // startServerDetached attempts to start the Sidekick server in a detached background process
-// by invoking the 'side start server' command.
-func startServerDetached() error {
+// by invoking the 'side start' command.
+func startServerDetached() (*os.Process, error) {
 	executable, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("failed to determine executable path: %w", err)
+		return nil, fmt.Errorf("Failed to determine executable path: %w", err)
 	}
 
-	cmd := exec.Command(executable, "start", "server")
+	cmd := exec.Command(executable, "start")
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start Sidekick server process ('%s start server'): %w", executable, err)
+		return nil, fmt.Errorf("Failed to start Sidekick server process (`%s start`): %w", executable, err)
 	}
 
-	if cmd.Process != nil {
-		fmt.Printf("Sidekick server process initiated with PID: %d. It will run in the background.\n", cmd.Process.Pid)
-	} else {
-		// This case should ideally not be reached if cmd.Start() succeeds without error.
-		fmt.Println("Sidekick server process initiated, but PID was not immediately available.")
-	}
-	// Not calling cmd.Wait() allows the current command to proceed while the server runs independently.
-	return nil
+	// TODO update/manage a new pidfile to track the process ID as well as
+	// synchronize concurrent starts system-wide through file locking
+
+	return cmd.Process, nil
+	//fmt.Printf("Sidekick server process initiated with PID: %d. It will run in the background.\n", cmd.Process.Pid)
+}
+
+type teaSendable interface {
+	Send(msg tea.Msg)
 }
 
 // ensureWorkspace handles finding, creating, or selecting a workspace.
-func ensureWorkspace(ctx context.Context, c client.Client, disableHumanInTheLoop bool) (*domain.Workspace, error) {
+func ensureWorkspace(ctx context.Context, p teaSendable, c client.Client, disableHumanInTheLoop bool) (*domain.Workspace, error) {
+	p.Send(statusUpdateMsg{message: "Looking up workspace..."})
 	currentDir, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current directory: %w", err)
@@ -220,7 +300,7 @@ func ensureWorkspace(ctx context.Context, c client.Client, disableHumanInTheLoop
 
 	if len(workspaces) == 0 {
 		// Step 2: If none exists, create one automatically
-		fmt.Println("Creating workspace")
+		p.Send(statusUpdateMsg{message: "Creating workspace..."})
 		dirName := filepath.Base(absPath)
 		defaultWorkspaceName := fmt.Sprintf("%s-workspace", dirName)
 

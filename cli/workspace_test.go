@@ -11,10 +11,16 @@ import (
 
 	"sidekick/domain"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+type mockProgram struct {
+}
+func (m mockProgram) Send(msg tea.Msg) {
+}
 
 func TestEnsureWorkspace(t *testing.T) {
 	// Save current working directory
@@ -108,7 +114,7 @@ func TestEnsureWorkspace(t *testing.T) {
 			}
 
 			// Call the function
-			workspace, err := ensureWorkspace(context.Background(), c, tt.disableHumanInLoop)
+			workspace, err := ensureWorkspace(context.Background(), mockProgram{}, c, tt.disableHumanInLoop)
 
 			// Verify results
 			if tt.expectedError != "" {

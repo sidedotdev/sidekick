@@ -22,10 +22,10 @@ type TaskStatus struct {
 }
 
 // TaskProgress represents a progress update from flow events
+// TODO replace with client.FlowAction
 type TaskProgress struct {
 	ActionType   string
 	ActionStatus string
-	Error        error
 }
 
 // TaskMonitor handles WebSocket connections and status polling for tasks

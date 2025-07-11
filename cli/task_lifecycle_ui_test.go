@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"sidekick/domain"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -8,10 +10,11 @@ import (
 )
 
 func TestLifecycleModel(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name          string
 		messages      []tea.Msg
-		wantStage     lifecycleStage
 		wantQuitting  bool
 		wantProgress  bool
 		wantContains  []string
@@ -20,24 +23,22 @@ func TestLifecycleModel(t *testing.T) {
 		{
 			name: "shows setting up workspace",
 			messages: []tea.Msg{
-				stageChangeMsg{stage: stageSettingUpWorkspace},
+				statusUpdateMsg{message: "Setting up workspace..."},
 			},
-			wantStage:    stageSettingUpWorkspace,
 			wantProgress: false,
 			wantContains: []string{
-				"Setting up workspace",
+				"Setting up workspace...",
 			},
 		},
 		{
 			name: "shows creating task",
 			messages: []tea.Msg{
-				stageChangeMsg{stage: stageSettingUpWorkspace},
-				stageChangeMsg{stage: stageCreatingTask},
+				statusUpdateMsg{message: "Setting up workspace..."},
+				statusUpdateMsg{message: "Creating task..."},
 			},
-			wantStage:    stageCreatingTask,
 			wantProgress: false,
 			wantContains: []string{
-				"Creating task",
+				"Creating task...",
 			},
 			wantNotExists: []string{
 				"Setting up workspace",
@@ -46,14 +47,17 @@ func TestLifecycleModel(t *testing.T) {
 		{
 			name: "transitions to progress model",
 			messages: []tea.Msg{
-				stageChangeMsg{stage: stageSettingUpWorkspace},
-				stageChangeMsg{stage: stageCreatingTask},
-				stageChangeMsg{stage: stageInProgress},
+				statusUpdateMsg{message: "Setting up workspace..."},
+				statusUpdateMsg{message: "Creating task..."},
+				flowActionChangeMsg{actionType: "action_1", actionStatus: domain.ActionStatusStarted},
+				flowActionChangeMsg{actionType: "action_1", actionStatus: domain.ActionStatusComplete},
+				flowActionChangeMsg{actionType: "action_2", actionStatus: domain.ActionStatusPending},
 			},
-			wantStage:    stageInProgress,
 			wantProgress: true,
 			wantContains: []string{
 				"Working...",
+				"action_1",
+				"action_2",
 			},
 			wantNotExists: []string{
 				"Setting up workspace",
@@ -63,12 +67,13 @@ func TestLifecycleModel(t *testing.T) {
 		{
 			name: "handles cancellation",
 			messages: []tea.Msg{
-				stageChangeMsg{stage: stageSettingUpWorkspace},
-				stageChangeMsg{stage: stageCreatingTask},
-				stageChangeMsg{stage: stageInProgress},
+				statusUpdateMsg{message: "Setting up workspace..."},
+				statusUpdateMsg{message: "Creating task..."},
+				flowActionChangeMsg{actionType: "action_1", actionStatus: domain.ActionStatusStarted},
+				flowActionChangeMsg{actionType: "action_1", actionStatus: domain.ActionStatusFailed},
 				tea.KeyMsg{Type: tea.KeyCtrlC},
 			},
-			wantStage:    stageCancelled,
+			wantProgress: true,
 			wantQuitting: true,
 			wantContains: []string{
 				"cancelled",
@@ -76,18 +81,17 @@ func TestLifecycleModel(t *testing.T) {
 			wantNotExists: []string{
 				"Setting up workspace",
 				"Creating task",
-				"Working...",
+				"Working",
 			},
 		},
 		{
 			name:         "handles task error",
 			wantQuitting: true,
 			messages: []tea.Msg{
-				stageChangeMsg{stage: stageSettingUpWorkspace},
-				stageChangeMsg{stage: stageCreatingTask},
+				statusUpdateMsg{message: "Setting up workspace..."},
+				statusUpdateMsg{message: "Creating task..."},
 				taskErrorMsg{err: assert.AnError},
 			},
-			wantStage: stageFailed,
 			wantContains: []string{
 				"failed",
 				assert.AnError.Error(),
@@ -95,15 +99,16 @@ func TestLifecycleModel(t *testing.T) {
 			wantNotExists: []string{
 				"Setting up workspace",
 				"Creating task",
-				"Working...",
+				"Working",
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			var model tea.Model
-			model = newLifecycleModel("test-task", "test-flow")
+			model = newLifecycleModel(make(chan os.Signal))
 
 			// Process all messages
 			var cmd tea.Cmd
@@ -121,10 +126,8 @@ func TestLifecycleModel(t *testing.T) {
 			if tt.wantProgress {
 				progModel := lifecycleModel.progModel
 				assert.NotNil(t, progModel)
+				assert.Equal(t, tt.wantQuitting, progModel.(taskProgressModel).quitting)
 			}
-
-			assert.Equal(t, tt.wantStage, lifecycleModel.stage)
-			assert.Equal(t, tt.wantQuitting, lifecycleModel.quitting)
 
 			// View verification
 			view := lifecycleModel.View()
@@ -136,10 +139,4 @@ func TestLifecycleModel(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestLifecycleModelInit(t *testing.T) {
-	model := newLifecycleModel("test-task", "test-flow")
-	cmd := model.Init()
-	assert.NotNil(t, cmd, "Init should return spinner tick command")
 }
