@@ -106,23 +106,32 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 
 	go func() {
 		if err := ensureSideServer(p); err != nil {
-			p.Send(taskErrorMsg{err: err})
+			p.Send(updateLifecycleMsg{key: "error", message: lifecycleMessage{content: err.Error(), showSpinner: false}})
 			p.Quit()
 			return
 		}
 
 		workspace, err := ensureWorkspace(ctx, p, c, disableHumanInTheLoop)
 		if err != nil {
-			p.Send(taskErrorMsg{err: fmt.Errorf("Workspace setup failed: %v", err)})
+			p.Send(updateLifecycleMsg{key: "error", message: lifecycleMessage{
+				content:     fmt.Sprintf("Workspace setup failed: %v", err),
+				showSpinner: false,
+			}})
 			p.Quit()
 			return
 		}
 
-		p.Send(statusUpdateMsg{message: "Starting task..."})
+		p.Send(updateLifecycleMsg{key: "task", message: lifecycleMessage{
+			content:     "Starting task...",
+			showSpinner: true,
+		}})
 
 		task, err = c.CreateTask(workspace.Id, req)
 		if err != nil {
-			p.Send(taskErrorMsg{err: fmt.Errorf("Failed to create task: %v", err)})
+			p.Send(updateLifecycleMsg{key: "error", message: lifecycleMessage{
+				content:     fmt.Sprintf("Failed to create task: %v", err),
+				showSpinner: false,
+			}})
 			p.Quit()
 			return
 		}
@@ -130,7 +139,10 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 
 		if cmd.Bool("async") {
 			message := fmt.Sprintf("Task submitted. Follow progress at %s", kanbanLink(workspace.Id))
-			p.Send(finalUpdateMsg{message: message})
+			p.Send(updateLifecycleMsg{key: "completion", message: lifecycleMessage{
+				content:     message,
+				showSpinner: false,
+			}})
 			p.Quit()
 			return
 		}
@@ -171,11 +183,20 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 			if monitor != nil {
 				monitor.Stop()
 			}
-			p.Send(statusUpdateMsg{message: "Canceling task..."})
+			p.Send(updateLifecycleMsg{key: "task", message: lifecycleMessage{
+				content:     "Canceling task...",
+				showSpinner: true,
+			}})
 			if err := c.CancelTask(task.WorkspaceId, task.Id); err != nil {
-				p.Send(taskErrorMsg{err: fmt.Errorf("Failed to cancel task: %v", err)})
+				p.Send(updateLifecycleMsg{key: "error", message: lifecycleMessage{
+					content:     fmt.Sprintf("Failed to cancel task: %v", err),
+					showSpinner: false,
+				}})
 			}
-			p.Send(finalUpdateMsg{message: "Task cancelled"})
+			p.Send(updateLifecycleMsg{key: "completion", message: lifecycleMessage{
+				content:     "Task cancelled",
+				showSpinner: false,
+			}})
 		}
 		p.Quit()
 	}()
@@ -221,7 +242,10 @@ func kanbanLink(workspaceId string) string {
 
 func ensureSideServer(p *tea.Program) error {
 	if !checkServerStatus() {
-		p.Send(statusUpdateMsg{message: "Starting sidekick server..."})
+		p.Send(updateLifecycleMsg{key: "startup", message: lifecycleMessage{
+			content:     "Starting sidekick server...",
+			showSpinner: true,
+		}})
 		process, err := startServerDetached()
 		defer process.Release() // don't wait, server runs in background
 
@@ -279,7 +303,10 @@ type teaSendable interface {
 
 // ensureWorkspace handles finding, creating, or selecting a workspace.
 func ensureWorkspace(ctx context.Context, p teaSendable, c client.Client, disableHumanInTheLoop bool) (*domain.Workspace, error) {
-	p.Send(statusUpdateMsg{message: "Looking up workspace..."})
+	p.Send(updateLifecycleMsg{key: "workspace", message: lifecycleMessage{
+		content:     "Looking up workspace...",
+		showSpinner: true,
+	}})
 	currentDir, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current directory: %w", err)
@@ -303,7 +330,10 @@ func ensureWorkspace(ctx context.Context, p teaSendable, c client.Client, disabl
 
 	if len(workspaces) == 0 {
 		// Step 2: If none exists, create one automatically
-		p.Send(statusUpdateMsg{message: "Creating workspace..."})
+		p.Send(updateLifecycleMsg{key: "workspace", message: lifecycleMessage{
+			content:     "Creating workspace...",
+			showSpinner: true,
+		}})
 		dirName := filepath.Base(absPath)
 		defaultWorkspaceName := fmt.Sprintf("%s-workspace", dirName)
 
