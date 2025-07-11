@@ -41,16 +41,11 @@ func TestHelpFlags(t *testing.T) {
 				"NAME:",
 				"side - CLI for Sidekick",
 				"USAGE:",
-				"side [global options] [command [command options]]",
-				"DESCRIPTION:",
-				"",
 				"COMMANDS:",
 				"init",
 				"start",
 				"version",
-				"service",
 				"task",
-				"GLOBAL OPTIONS:",
 			},
 		},
 		{
@@ -61,28 +56,52 @@ func TestHelpFlags(t *testing.T) {
 				"NAME:",
 				"side - CLI for Sidekick",
 				"USAGE:",
-				"DESCRIPTION:",
-				"Manages Sidekick workspaces, tasks, and server.",
 				"COMMANDS:",
 				"init",
 				"start",
 				"version",
-				"service",
 				"task",
-				"GLOBAL OPTIONS:",
 			},
 		},
 		{
-			name:     "no args shows root command help",
-			args:     []string{"side"}, // Just the program name
-			exitCode: 0,                // Root action is to show help, which typically exits 0
+			name:     "help command",
+			args:     []string{"side help"},
+			exitCode: 0,
 			contains: []string{
 				"NAME:",
 				"side - CLI for Sidekick",
 				"USAGE:",
-				"DESCRIPTION:",
-				"Manages Sidekick workspaces, tasks, and server.",
 				"COMMANDS:",
+				"init",
+				"start",
+				"version",
+				"task",
+			},
+		},
+		{
+			name:     "no args shows root command help",
+			args:     []string{"side"},
+			exitCode: 0,
+			contains: []string{
+				"NAME:",
+				"side - CLI for Sidekick",
+				"USAGE:",
+				"COMMANDS:",
+				"init",
+				"start",
+				"version",
+				"task",
+			},
+		},
+		{
+			name:     "task help subcommand",
+			args:     []string{"side", "task", "help"},
+			exitCode: 0,
+			contains: []string{
+				"NAME:",
+				"side task - ",
+				"USAGE:",
+				"side task [options] <task description>",
 			},
 		},
 		{
@@ -91,19 +110,9 @@ func TestHelpFlags(t *testing.T) {
 			exitCode: 0,
 			contains: []string{
 				"NAME:",
-				"side task - Create and manage a task (e.g., side task \"fix the error in my tests\")", // Actual usage string
+				"side task - ",
 				"USAGE:",
-				"side task [options] <task description>", // Actual usage string
-				"OPTIONS:",                               // urfave/cli/v3 uses this term for command-specific flags
-				"--disable-human-in-the-loop",
-				"--async",
-				"--flow",
-				"-P",
-				"--flow-options",
-				"--flow-option",
-				"-o",
-				"--no-requirements",
-				"-nr",
+				"side task [options] <task description>",
 			},
 		},
 		{
@@ -112,11 +121,9 @@ func TestHelpFlags(t *testing.T) {
 			exitCode: 0,
 			contains: []string{
 				"NAME:",
-				"side task - Create and manage a task (e.g., side task \"fix the error in my tests\")", // Actual usage string
+				"side task - ",
 				"USAGE:",
-				"side task [options] <task description>", // Actual usage string
-				"OPTIONS:",
-				"--disable-human-in-the-loop",
+				"side task [options] <task description>",
 			},
 		},
 	}

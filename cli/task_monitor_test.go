@@ -83,17 +83,29 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	conn.WriteMessage(websocket.TextMessage, actionJSON)
 }
 
-// Mock successful initial testTask status with flow ID
+// Mock successful initial testTask status without flows
 func newTestTask() client.Task {
+	return client.Task{
+		Task: domain.Task{
+			Id:     "task1",
+			Status: domain.TaskStatusToDo,
+		},
+	}
+}
+
+// testTask with flows
+func newTestTaskWithFlows() client.Task {
 	return client.Task{
 		Task: domain.Task{
 			Id:     "task1",
 			Status: domain.TaskStatusInProgress,
 		},
+		Flows: []domain.Flow{{Id: "flow1"}},
 	}
 }
 
 func TestNewTaskMonitor(t *testing.T) {
+	t.Parallel()
 	c := &mockClient{}
 	m := NewTaskMonitor(c, "workspace1", "task1")
 
@@ -112,16 +124,15 @@ func TestTaskMonitor_Start_WebSocketFlow(t *testing.T) {
 	testTask := newTestTask()
 	mockClient := &mockClient{baseURL: s.URL}
 	mockCall := mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	TaskPollInterval = 1 * time.Millisecond
+	FlowPollInterval = 1 * time.Millisecond
 	m := NewTaskMonitor(mockClient, "workspace1", "task1")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	statusChan, progressChan := m.Start(ctx)
+	statusChan, progressChan := m.Start(context.Background())
 
 	// Verify initial task status
 	status := <-statusChan
-	assert.Equal(t, domain.TaskStatusInProgress, status.Task.Status)
+	assert.Equal(t, testTask.Status, status.Task.Status)
 	assert.NoError(t, status.Error)
 	assert.Equal(t, testTask, status.Task)
 
@@ -130,6 +141,8 @@ func TestTaskMonitor_Start_WebSocketFlow(t *testing.T) {
 	mockCall.Unset()
 	mockCall = mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
 	status = <-statusChan
+	assert.Equal(t, testTask.Flows, status.Task.Flows)
+	assert.Equal(t, testTask.Status, status.Task.Status)
 	assert.NoError(t, status.Error)
 
 	// Verify progress update
@@ -143,6 +156,7 @@ func TestTaskMonitor_Start_WebSocketFlow(t *testing.T) {
 	mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
 	status = <-statusChan
 	assert.NoError(t, status.Error)
+	assert.Equal(t, testTask.Status, status.Task.Status)
 	assert.True(t, status.Finished)
 
 	_, ok := <-statusChan
@@ -161,16 +175,14 @@ func TestTaskMonitor_Start_WebSocketError(t *testing.T) {
 	testTask := newTestTask()
 	mockClient := &mockClient{baseURL: s.URL}
 	mockCall := mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	TaskPollInterval = 1 * time.Millisecond
+	FlowPollInterval = 1 * time.Millisecond
 	m := NewTaskMonitor(mockClient, "workspace1", "task1")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	statusChan, progressChan := m.Start(ctx)
+	statusChan, progressChan := m.Start(context.Background())
 
 	// First status update should be the initial task
 	status := <-statusChan
-	assert.Equal(t, domain.TaskStatusInProgress, status.Task.Status)
 	assert.NoError(t, status.Error)
 	assert.Equal(t, testTask, status.Task)
 
@@ -180,12 +192,14 @@ func TestTaskMonitor_Start_WebSocketError(t *testing.T) {
 	mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
 	status = <-statusChan
 	assert.Equal(t, testTask.Flows, status.Task.Flows)
+	assert.Equal(t, testTask.Status, status.Task.Status)
 	assert.NoError(t, status.Error)
 
 	// Third status should indicate WebSocket error
 	status = <-statusChan
 	assert.Error(t, status.Error)
 	assert.Contains(t, status.Error.Error(), "websocket connection failed")
+	assert.Equal(t, testTask.Status, status.Task.Status)
 
 	_, ok := <-statusChan
 	assert.False(t, ok, "status channel should be closed")
@@ -201,6 +215,8 @@ func TestTaskMonitor_Start_ContextCancellation(t *testing.T) {
 	testTask := newTestTask()
 	mockClient := &mockClient{baseURL: s.URL}
 	mockCall := mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	TaskPollInterval = 1 * time.Millisecond
+	FlowPollInterval = 1 * time.Millisecond
 	m := NewTaskMonitor(mockClient, "workspace1", "task1")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -218,7 +234,13 @@ func TestTaskMonitor_Start_ContextCancellation(t *testing.T) {
 	mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
 	status = <-statusChan
 	assert.Equal(t, testTask.Flows, status.Task.Flows)
+	assert.Equal(t, testTask.Status, status.Task.Status)
 	assert.NoError(t, status.Error)
+
+	// Verify progress update
+	progress := <-progressChan
+	assert.Equal(t, "test", progress.ActionType)
+	assert.Equal(t, domain.ActionStatusComplete, progress.ActionStatus)
 
 	// Cancel the context
 	cancel()

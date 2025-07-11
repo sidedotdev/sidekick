@@ -55,10 +55,12 @@ func (m taskLifecycleModel) Init() tea.Cmd {
 func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" {
+		var cmds []tea.Cmd
+		if msg.Type == tea.KeyCtrlC {
 			m.sigChan <- os.Interrupt
+			//cmds = append(cmds, tea.Quit)
 		}
-		return m.propagateMessage(msg)
+		return m.propagateAndBatch(msg, cmds)
 
 	case statusUpdateMsg:
 		// for now we only keep the latest status message, but in the future
@@ -78,10 +80,9 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.progModel == nil && len(msg.task.Flows) > 0 {
 			m.flowId = msg.task.Flows[0].Id
 			// clear status messages from initialization process
-			//m.statusMessages = []string{}
-			prog := newProgressModel(m.taskId, m.flowId)
-			cmd := prog.Init()
-			m.progModel = &prog
+			m.statusMessages = []string{}
+			m.progModel = newProgressModel(m.taskId, m.flowId)
+			cmd := m.progModel.Init()
 			return m, cmd
 		}
 		return m, nil
@@ -110,22 +111,26 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 
-		_, cmd = m.propagateMessage(msg)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-
-		return m, tea.Batch(cmds...)
+		return m.propagateAndBatch(msg, cmds)
 	}
 }
 
-func (m *taskLifecycleModel) propagateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m taskLifecycleModel) propagateMessage(msg tea.Msg) (taskLifecycleModel, tea.Cmd) {
 	if m.progModel != nil {
 		var cmd tea.Cmd
 		m.progModel, cmd = m.progModel.Update(msg)
 		return m, cmd
 	}
 	return m, nil
+}
+func (m taskLifecycleModel) propagateAndBatch(msg tea.Msg, cmds []tea.Cmd) (taskLifecycleModel, tea.Cmd) {
+	var cmd tea.Cmd
+	m, cmd = m.propagateMessage(msg)
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	return m, tea.Batch(cmds...)
 }
 
 func (m taskLifecycleModel) View() string {
