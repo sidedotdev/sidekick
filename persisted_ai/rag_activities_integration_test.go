@@ -7,14 +7,17 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
 	"sidekick/srv"
 	"sidekick/srv/sqlite"
 
+	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,10 +61,26 @@ func setupTestWorkspace(t *testing.T, ctx context.Context) (string, string) {
 					break
 				}
 			}
+
+			// If still no workspace found, create one using the parent directory
+			if workspaceId == "" {
+				parentDir := filepath.Dir(gitSourceDir)
+				workspaceId = "ws_" + ksuid.New().String()
+				now := time.Now()
+				workspace := domain.Workspace{
+					Id:           workspaceId,
+					Name:         filepath.Base(parentDir),
+					LocalRepoDir: parentDir,
+					Created:      now,
+					Updated:      now,
+				}
+				err = storage.PersistWorkspace(ctx, workspace)
+				require.NoError(t, err, "Failed to persist new workspace")
+			}
 		}
 	}
 
-	require.NotEmpty(t, workspaceId, "No workspace found for repository root or git source directory")
+	require.NotEmpty(t, workspaceId, "Failed to find or create workspace")
 	return workspaceId, cleanedRepoRoot
 }
 
