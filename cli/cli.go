@@ -114,18 +114,18 @@ func setupAndRunInteractiveCli(args []string) error {
 				},
 			},
 			/*
-			{
-				Name:      "service",
-				Usage:     "Manage Sidekick system service.",
-				ArgsUsage: "<install|uninstall|start|stop|status>",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					controlAction := cmd.Args().First()
-					if controlAction == "" {
-						return cli.Exit("Usage: side service [install|uninstall|start|stop|status]", 1)
-					}
-					return handleServiceCommandControl(controlAction)
+				{
+					Name:      "service",
+					Usage:     "Manage Sidekick system service.",
+					ArgsUsage: "<install|uninstall|start|stop|status>",
+					Action: func(ctx context.Context, cmd *cli.Command) error {
+						controlAction := cmd.Args().First()
+						if controlAction == "" {
+							return cli.Exit("Usage: side service [install|uninstall|start|stop|status]", 1)
+						}
+						return handleServiceCommandControl(controlAction)
+					},
 				},
-			},
 			*/
 			{
 				Name:    "version",
