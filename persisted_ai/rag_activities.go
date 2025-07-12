@@ -128,8 +128,13 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 		queryChunks = []string{options.RankQuery}
 	}
 
+	// TODO: dynamically decide task type based on model name, as all task types arent supported by all models.
+	// TODO: change "task type" to instead be "use_case" and we'll map to task
+	// type internally in the embedder implementation
+	taskType := embedding.TaskTypeRetrievalQuery
+
 	// Embed all chunks
-	queryVectors, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, queryChunks, embedding.TaskTypeRetrievalQuery)
+	queryVectors, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, queryChunks, taskType)
 	if err != nil {
 		return []string{}, fmt.Errorf("failed to embed query chunks: %w", err)
 	}
