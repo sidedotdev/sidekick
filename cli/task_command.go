@@ -271,7 +271,6 @@ func startServerDetached() (*os.Process, error) {
 	// synchronize concurrent starts system-wide through file locking
 
 	return cmd.Process, nil
-	//fmt.Printf("Sidekick server process initiated with PID: %d. It will run in the background.\n", cmd.Process.Pid)
 }
 
 type teaSendable interface {
@@ -321,8 +320,7 @@ func ensureWorkspace(ctx context.Context, p teaSendable, c client.Client, disabl
 	if len(workspaces) == 0 {
 		// Step 2: If none exists, create one automatically
 		p.Send(statusUpdateMsg{message: "Creating workspace..."})
-		dirName := filepath.Base(currentDir)
-		defaultWorkspaceName := fmt.Sprintf("%s-workspace", dirName)
+		defaultWorkspaceName := filepath.Base(currentDir)
 
 		req := &client.CreateWorkspaceRequest{
 			Name:         defaultWorkspaceName,
@@ -332,13 +330,11 @@ func ensureWorkspace(ctx context.Context, p teaSendable, c client.Client, disabl
 		if err != nil {
 			return nil, fmt.Errorf("failed to create workspace for path %s: %w", currentDir, err)
 		}
-		fmt.Printf("Successfully created workspace: %s (ID: %s)\n", createdWorkspace.Name, createdWorkspace.Id)
 		return createdWorkspace, nil
 	}
 
 	if len(workspaces) == 1 {
 		// Only one workspace found, use it.
-		fmt.Printf("Found existing workspace: %s\\n", workspaces[0].Name)
 		return workspaces[0], nil
 	}
 
