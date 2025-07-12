@@ -12,7 +12,6 @@ type Client interface {
 	GetTask(workspaceID string, taskID string) (Task, error)
 	CancelTask(workspaceID string, taskID string) error
 	CreateWorkspace(req *CreateWorkspaceRequest) (*domain.Workspace, error)
-	GetWorkspacesByPath(repoPath string) ([]domain.Workspace, error)
 	GetBaseURL() string
 }
 

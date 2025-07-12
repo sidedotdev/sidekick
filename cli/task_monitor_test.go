@@ -54,11 +54,6 @@ func (m *mockClient) CreateWorkspace(req *client.CreateWorkspaceRequest) (*domai
 	return args.Get(0).(*domain.Workspace), args.Error(1)
 }
 
-func (m *mockClient) GetWorkspacesByPath(repoPath string) ([]domain.Workspace, error) {
-	args := m.Called(repoPath)
-	return args.Get(0).([]domain.Workspace), args.Error(1)
-}
-
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
