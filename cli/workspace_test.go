@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -36,9 +35,6 @@ func TestEnsureWorkspace(t *testing.T) {
 
 	// Change to the temporary directory
 	err = os.Chdir(tmpDir)
-	require.NoError(t, err)
-
-	absPath, err := filepath.Abs(tmpDir)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -97,14 +93,7 @@ func TestEnsureWorkspace(t *testing.T) {
 			}
 
 			// Setup expectations
-			// Using mock.AnythingOfType for path comparison to handle symlinks in OSX (/private/var/folders/... -> /var/folders/...)
-			c.On("GetWorkspacesByPath", mock.AnythingOfType("string")).Return(tt.workspaces, tt.getWorkspacesErr).Run(func(args mock.Arguments) {
-				path := args.Get(0).(string)
-				// Verify path contains the expected path or vice versa (to handle symlinks)
-				if !strings.Contains(path, absPath) && !strings.Contains(absPath, path) {
-					t.Errorf("Path %s does not match expected path %s", path, absPath)
-				}
-			})
+			c.On("GetAllWorkspaces", mock.Anything).Return(tt.workspaces, tt.getWorkspacesErr)
 
 			if len(tt.workspaces) == 0 && tt.getWorkspacesErr == nil {
 				if tt.createWorkspaceErr != nil {

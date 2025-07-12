@@ -20,6 +20,7 @@ import (
 	"sidekick/client"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/utils"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/erikgeiser/promptkit/selection"
@@ -284,38 +285,54 @@ func ensureWorkspace(ctx context.Context, p teaSendable, c client.Client, disabl
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current directory: %w", err)
 	}
-	absPath, err := filepath.Abs(currentDir)
+
+	// Get all potential repository paths to check
+	repoPaths, err := utils.GetRepositoryPaths(ctx, currentDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get absolute path for current directory: %w", err)
+		return nil, fmt.Errorf("failed to get repository paths: %w", err)
 	}
 
-	// Step 1: Find existing workspaces for the current directory
-	workspacesResult, err := c.GetWorkspacesByPath(absPath)
+	// Get all workspaces
+	allWorkspaces, err := c.GetAllWorkspaces(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve workspaces for path %s: %w", absPath, err)
+		return nil, fmt.Errorf("failed to retrieve workspaces: %w", err)
+	}
+
+	// Find workspaces matching any of the repository paths
+	var matchingWorkspaces []domain.Workspace
+	for _, path := range repoPaths {
+		for _, ws := range allWorkspaces {
+			if filepath.Clean(ws.LocalRepoDir) == filepath.Clean(path) {
+				matchingWorkspaces = append(matchingWorkspaces, ws)
+			}
+		}
+		// If we found any workspaces for this path, stop searching further paths
+		if len(matchingWorkspaces) > 0 {
+			break
+		}
 	}
 
 	// Convert to pointer slice for consistency with existing code
-	workspaces := make([]*domain.Workspace, len(workspacesResult))
-	for i := range workspacesResult {
-		workspaces[i] = &workspacesResult[i]
+	workspaces := make([]*domain.Workspace, len(matchingWorkspaces))
+	for i := range matchingWorkspaces {
+		workspaces[i] = &matchingWorkspaces[i]
 	}
 
 	if len(workspaces) == 0 {
 		// Step 2: If none exists, create one automatically
 		p.Send(statusUpdateMsg{message: "Creating workspace..."})
-		dirName := filepath.Base(absPath)
+		dirName := filepath.Base(currentDir)
 		defaultWorkspaceName := fmt.Sprintf("%s-workspace", dirName)
 
 		req := &client.CreateWorkspaceRequest{
 			Name:         defaultWorkspaceName,
-			LocalRepoDir: absPath,
+			LocalRepoDir: currentDir,
 		}
 		createdWorkspace, err := c.CreateWorkspace(req)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create workspace for path %s: %w", absPath, err)
+			return nil, fmt.Errorf("failed to create workspace for path %s: %w", currentDir, err)
 		}
-		fmt.Printf("Successfully created workspace: %s (ID: %s)\\n", createdWorkspace.Name, createdWorkspace.Id)
+		fmt.Printf("Successfully created workspace: %s (ID: %s)\n", createdWorkspace.Name, createdWorkspace.Id)
 		return createdWorkspace, nil
 	}
 
@@ -326,7 +343,7 @@ func ensureWorkspace(ctx context.Context, p teaSendable, c client.Client, disabl
 	}
 
 	// Step 3: Multiple workspaces match
-	fmt.Printf("Multiple workspaces found for directory %s:\n", absPath)
+	fmt.Printf("Multiple workspaces found for directory %s:\n", currentDir)
 	// Sort by name for consistent display order before prompting
 	sort.Slice(workspaces, func(i, j int) bool {
 		if workspaces[i].Name != workspaces[j].Name {

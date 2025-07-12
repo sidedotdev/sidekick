@@ -21,6 +21,11 @@ type mockClient struct {
 	baseURL string
 }
 
+func (c *mockClient) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error) {
+	args := c.Called(ctx)
+	return args.Get(0).([]domain.Workspace), args.Error(1)
+}
+
 func (c *mockClient) GetBaseURL() string {
 	return c.baseURL
 }
