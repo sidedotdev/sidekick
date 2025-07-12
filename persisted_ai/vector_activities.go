@@ -14,13 +14,23 @@ type VectorIndex struct {
 	Index *usearch.Index
 }
 
-type VectorSearchActivityOptions struct {
+type VectorSearchOptions struct {
 	WorkspaceId string
 	ContentType string
 	Subkeys     []string
 	Provider    string
 	Model       string
 	Query       embedding.EmbeddingVector
+	Limit       uint
+}
+
+type MultiVectorSearchOptions struct {
+	WorkspaceId string
+	ContentType string
+	Subkeys     []string
+	Provider    string
+	Model       string
+	Queries     []embedding.EmbeddingVector
 	Limit       uint
 }
 
@@ -189,7 +199,7 @@ func (va VectorActivities) QueryPreparedStoreMultiple(ctx context.Context, store
 	return results, nil
 }
 
-func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]string, error) {
+func (va VectorActivities) VectorSearch(options VectorSearchOptions) ([]string, error) {
 	ctx := context.Background() // Using Background context as original did.
 
 	if len(options.Query) == 0 {
@@ -213,6 +223,45 @@ func (va VectorActivities) VectorSearch(options VectorSearchActivityOptions) ([]
 	results, err := va.QueryPreparedStoreSingle(ctx, preparedStore, options.Query, options.Limit)
 	if err != nil {
 		return []string{}, fmt.Errorf("failed to query prepared store: %w", err)
+	}
+
+	return results, nil
+}
+
+func (va VectorActivities) MultiVectorSearch(options MultiVectorSearchOptions) ([][]string, error) {
+	ctx := context.Background()
+
+	if len(options.Queries) == 0 {
+		return nil, fmt.Errorf("queries cannot be empty")
+	}
+
+	numDimensions := len(options.Queries[0])
+	if numDimensions == 0 {
+		return nil, fmt.Errorf("query vectors cannot be empty")
+	}
+
+	for i, query := range options.Queries[1:] {
+		if len(query) != numDimensions {
+			return nil, fmt.Errorf("query vector at index %d has different dimensionality (%d) than first vector (%d)", i+1, len(query), numDimensions)
+		}
+	}
+
+	preparedStore, err := va.PrepareVectorStore(ctx,
+		options.WorkspaceId,
+		options.Provider,
+		options.Model,
+		options.ContentType,
+		options.Subkeys,
+		numDimensions,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare vector store: %w", err)
+	}
+	defer preparedStore.Destroy()
+
+	results, err := va.QueryPreparedStoreMultiple(ctx, preparedStore, options.Queries, options.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query prepared store: %w", err)
 	}
 
 	return results, nil

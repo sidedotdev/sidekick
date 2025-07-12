@@ -52,6 +52,7 @@ func TestRankedSubkeys(t *testing.T) {
 			name:      "empty query",
 			query:     "",
 			wantEmpty: true,
+			wantErr:   true,
 		},
 		{
 			name:  "small query within limits",

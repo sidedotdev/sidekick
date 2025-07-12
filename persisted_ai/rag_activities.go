@@ -89,6 +89,8 @@ type RankedSubkeysOptions struct {
 }
 
 func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, error) {
+	// Empty queries are invalid as they provide no semantic information for ranking.
+	// This is a clear misuse since ranking requires meaningful text to compare against.
 	if options.RankQuery == "" {
 		return []string{}, errors.New("Attempted to perform RAG with empty rank query")
 	}
@@ -135,19 +137,16 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 		return []string{}, nil
 	}
 
-	// Prepare vector store once for reuse
-	store, err := va.PrepareVectorStore(context.Background(), options.WorkspaceId, options.ModelConfig.Provider, options.ModelConfig.Model, options.ContentType, options.Subkeys, len(queryVectors[0]))
-	defer store.Destroy()
-	if err != nil {
-		return []string{}, fmt.Errorf("failed to prepare vector store: %w", err)
-	}
-
-	// TODO: dynamically decide task type based on model name
-	// TODO: change "task type" to instead be "use_case" and we'll map to task
-	// type internally in the embedder implementation
-
-	// Search with all vectors
-	results, err := va.QueryPreparedStoreMultiple(context.Background(), store, queryVectors, 1000)
+	// Search with all vectors using MultiVectorSearch
+	results, err := va.MultiVectorSearch(MultiVectorSearchOptions{
+		WorkspaceId: options.WorkspaceId,
+		Provider:    options.ModelConfig.Provider,
+		Model:       options.ModelConfig.Model,
+		ContentType: options.ContentType,
+		Subkeys:     options.Subkeys,
+		Queries:     queryVectors,
+		Limit:       1000,
+	})
 	if err != nil {
 		return []string{}, fmt.Errorf("failed multi-vector search: %w", err)
 	}

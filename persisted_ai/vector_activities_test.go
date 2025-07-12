@@ -365,7 +365,7 @@ func TestVectorSearch_Refactored(t *testing.T) {
 		t.Fatalf("MSet failed for VectorSearch test setup: %v", err)
 	}
 
-	options := VectorSearchActivityOptions{ // Assuming VectorSearchActivityOptions is defined
+	options := VectorSearchOptions{
 		WorkspaceId: wsID,
 		Provider:    provider,
 		Model:       model,
@@ -385,7 +385,7 @@ func TestVectorSearch_Refactored(t *testing.T) {
 	}
 
 	// Test with empty query (should error)
-	optionsEmptyQuery := VectorSearchActivityOptions{
+	optionsEmptyQuery := VectorSearchOptions{
 		WorkspaceId: wsID, Provider: provider, Model: model, ContentType: contentType,
 		Subkeys: []string{"vsk1"},
 		Query:   embedding.EmbeddingVector{}, // Empty query
@@ -395,4 +395,80 @@ func TestVectorSearch_Refactored(t *testing.T) {
 	if err == nil {
 		t.Errorf("VectorSearch() with empty query did not return an error")
 	}
+}
+
+func TestMultiVectorSearch(t *testing.T) {
+	dbAccessor := newTestDB(t)
+	va := VectorActivities{DatabaseAccessor: dbAccessor}
+
+	wsID := "test-mvs-ws"
+	provider := "test-mvs-prov"
+	model := "test-mvs-model"
+	contentType := "text"
+
+	// Store embeddings using MSet
+	kvsSearch := make(map[string]interface{})
+	embVS1 := embedding.EmbeddingVector{1.0, 0.0}
+	embVS1Bytes, _ := embVS1.MarshalBinary()
+	keyOptsVS1 := embeddingKeyOptions{provider: provider, model: model, contentType: contentType, subKey: "mvsk1"}
+	embKeyVS1, _ := constructEmbeddingKey(keyOptsVS1)
+	kvsSearch[embKeyVS1] = embVS1Bytes
+
+	embVS2 := embedding.EmbeddingVector{0.0, 1.0}
+	embVS2Bytes, _ := embVS2.MarshalBinary()
+	keyOptsVS2 := embeddingKeyOptions{provider: provider, model: model, contentType: contentType, subKey: "mvsk2"}
+	embKeyVS2, _ := constructEmbeddingKey(keyOptsVS2)
+	kvsSearch[embKeyVS2] = embVS2Bytes
+
+	ctxMSet := context.Background()
+	err := dbAccessor.MSet(ctxMSet, wsID, kvsSearch)
+	require.NoError(t, err, "MSet failed for MultiVectorSearch test setup")
+
+	options := MultiVectorSearchOptions{
+		WorkspaceId: wsID,
+		Provider:    provider,
+		Model:       model,
+		ContentType: contentType,
+		Subkeys:     []string{"mvsk1", "mvsk2"},
+		Queries: []embedding.EmbeddingVector{
+			{0.9, 0.1}, // Close to mvsk1
+			{0.1, 0.9}, // Close to mvsk2
+		},
+		Limit: 1,
+	}
+
+	results, err := va.MultiVectorSearch(options)
+	require.NoError(t, err, "MultiVectorSearch() failed")
+
+	expectedResults := [][]string{{"mvsk1"}, {"mvsk2"}}
+	assert.Equal(t, expectedResults, results, "MultiVectorSearch() results mismatch")
+
+	// Test with empty queries
+	optionsEmptyQueries := MultiVectorSearchOptions{
+		WorkspaceId: wsID,
+		Provider:    provider,
+		Model:       model,
+		ContentType: contentType,
+		Subkeys:     []string{"mvsk1", "mvsk2"},
+		Queries:     []embedding.EmbeddingVector{},
+		Limit:       1,
+	}
+	_, err = va.MultiVectorSearch(optionsEmptyQueries)
+	assert.Error(t, err, "MultiVectorSearch() with empty queries should return error")
+
+	// Test with mismatched dimensions
+	optionsMismatchedDims := MultiVectorSearchOptions{
+		WorkspaceId: wsID,
+		Provider:    provider,
+		Model:       model,
+		ContentType: contentType,
+		Subkeys:     []string{"mvsk1", "mvsk2"},
+		Queries: []embedding.EmbeddingVector{
+			{0.9, 0.1},      // 2D
+			{0.1, 0.9, 0.5}, // 3D
+		},
+		Limit: 1,
+	}
+	_, err = va.MultiVectorSearch(optionsMismatchedDims)
+	assert.Error(t, err, "MultiVectorSearch() with mismatched dimensions should return error")
 }
