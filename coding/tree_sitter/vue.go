@@ -57,7 +57,7 @@ func getVueEmbeddedLanguageSignatures(vueTree *sitter.Tree, sourceCode *[]byte) 
 		return []Signature{}, nil
 	}
 
-	signatureSlice, err := getFileSignaturesInternal("typescript", typescript.GetLanguage(), tsTree, sourceCode)
+	signatureSlice, err := getFileSignaturesInternal("typescript", typescript.GetLanguage(), tsTree, sourceCode, true)
 	if err != nil {
 		return nil, err
 	}
