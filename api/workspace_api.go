@@ -248,17 +248,21 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		return
 	}
 
+	workspace, err := ctrl.service.GetWorkspace(c, workspaceId)
+	if err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			ctrl.ErrorHandler(c, http.StatusNotFound, err)
+		} else {
+			ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
+		}
+		return
+	}
+
 	hasLLMChanges := workspaceReq.LLMConfig.Defaults != nil || len(workspaceReq.LLMConfig.UseCaseConfigs) > 0
 	hasEmbeddingChanges := workspaceReq.EmbeddingConfig.Defaults != nil || len(workspaceReq.EmbeddingConfig.UseCaseConfigs) > 0
 
 	if workspaceReq.Name == "" && workspaceReq.LocalRepoDir == "" && !hasLLMChanges && !hasEmbeddingChanges {
 		ctrl.ErrorHandler(c, http.StatusBadRequest, errors.New("At least one of Name, LocalRepoDir, LLMConfig, or EmbeddingConfig is required"))
-		return
-	}
-
-	workspace, err := ctrl.service.GetWorkspace(c, workspaceId)
-	if err != nil {
-		ctrl.ErrorHandler(c, http.StatusNotFound, err)
 		return
 	}
 
@@ -271,6 +275,7 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		workspaceConfig = domain.WorkspaceConfig{}
 	}
 
+	// Update fields directly without preserving unspecified values
 	workspace.Name = workspaceReq.Name
 	workspace.LocalRepoDir = workspaceReq.LocalRepoDir
 	workspaceConfig.LLM = workspaceReq.LLMConfig
