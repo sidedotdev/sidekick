@@ -6,7 +6,26 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
+
+func isGitRepo(baseDir string) (bool, error) {
+	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
+	cmd.Dir = baseDir
+	err := cmd.Run()
+
+	if err != nil {
+		exitError, ok := err.(*exec.ExitError)
+		if !ok {
+			return false, err
+		}
+		if status, ok := exitError.Sys().(syscall.WaitStatus); ok && status.ExitStatus() != 0 {
+			return false, nil // Not a git repository
+		}
+	}
+
+	return true, nil
+}
 
 // GetRepositoryPaths returns a list of repository directory candidates in order:
 // 1. Current working directory
@@ -22,6 +41,14 @@ func GetRepositoryPaths(ctx context.Context, currentDir string) ([]string, error
 	absCurrentDir, err = filepath.EvalSymlinks(absCurrentDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to evaluate symlinks for current directory: %w", err)
+	}
+
+	isGit, err := isGitRepo(absCurrentDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check if current directory is a git repo: %w", err)
+	}
+	if !isGit {
+		return nil, fmt.Errorf("current directory is not a git repo: %s", absCurrentDir)
 	}
 
 	// Start with current directory

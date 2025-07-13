@@ -94,6 +94,11 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 		return err
 	}
 
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return cli.Exit(fmt.Errorf("Error getting current working directory: %w", err), 1)
+	}
+
 	// TODO merge into DevConfig, which goes into FlowOptions.DevConfigOverrides
 	// in the task request
 	disableHumanInTheLoop := cmd.Bool("disable-human-in-the-loop")
@@ -112,7 +117,7 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 			return
 		}
 
-		workspace, err := ensureWorkspace(ctx, p, c, disableHumanInTheLoop)
+		workspace, err := ensureWorkspace(ctx, currentDir, p, c, disableHumanInTheLoop)
 		if err != nil {
 			p.Send(taskErrorMsg{err: fmt.Errorf("Workspace setup failed: %v", err)})
 			p.Quit()
@@ -278,15 +283,11 @@ type teaSendable interface {
 }
 
 // ensureWorkspace handles finding, creating, or selecting a workspace.
-func ensureWorkspace(ctx context.Context, p teaSendable, c client.Client, disableHumanInTheLoop bool) (*domain.Workspace, error) {
+func ensureWorkspace(ctx context.Context, dir string, p teaSendable, c client.Client, disableHumanInTheLoop bool) (*domain.Workspace, error) {
 	p.Send(statusUpdateMsg{message: "Looking up workspace..."})
-	currentDir, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current directory: %w", err)
-	}
 
 	// Get all potential repository paths to check
-	repoPaths, err := utils.GetRepositoryPaths(ctx, currentDir)
+	repoPaths, err := utils.GetRepositoryPaths(ctx, dir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get repository paths: %w", err)
 	}
@@ -320,15 +321,15 @@ func ensureWorkspace(ctx context.Context, p teaSendable, c client.Client, disabl
 	if len(workspaces) == 0 {
 		// Step 2: If none exists, create one automatically
 		p.Send(statusUpdateMsg{message: "Creating workspace..."})
-		defaultWorkspaceName := filepath.Base(currentDir)
+		defaultWorkspaceName := filepath.Base(dir)
 
 		req := &client.CreateWorkspaceRequest{
 			Name:         defaultWorkspaceName,
-			LocalRepoDir: currentDir,
+			LocalRepoDir: dir,
 		}
 		createdWorkspace, err := c.CreateWorkspace(req)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create workspace for path %s: %w", currentDir, err)
+			return nil, fmt.Errorf("failed to create workspace for path %s: %w", dir, err)
 		}
 		return createdWorkspace, nil
 	}
@@ -339,7 +340,7 @@ func ensureWorkspace(ctx context.Context, p teaSendable, c client.Client, disabl
 	}
 
 	// Step 3: Multiple workspaces match
-	fmt.Printf("Multiple workspaces found for directory %s:\n", currentDir)
+	fmt.Printf("Multiple workspaces found for directory %s:\n", dir)
 	// Sort by name for consistent display order before prompting
 	sort.Slice(workspaces, func(i, j int) bool {
 		if workspaces[i].Name != workspaces[j].Name {
