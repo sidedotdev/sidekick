@@ -33,9 +33,17 @@ func PerformWithUserRetry(actionCtx DevActionContext, activity interface{}, valu
 		}
 
 		// Activity failed and version supports retry, prompt user to retry
-		prompt := fmt.Sprintf("%s failed: %s. Would you like to retry?", actionCtx.ActionType, err.Error())
+		prompt := fmt.Sprintf("%s failed:\n\n```\n%s\n```", actionCtx.ActionType, err.Error())
 		requestParams := map[string]any{
-			"continueTag": "Retry",
+			"continueTag": "try_again",
+		}
+
+		// pending user actions take precedence over the retry loop
+		if v := workflow.GetVersion(actionCtx, "user-action-go-next", workflow.DefaultVersion, 1); v == 1 {
+			action := actionCtx.GlobalState.GetPendingUserAction()
+			if action != nil {
+				return PendingActionError
+			}
 		}
 
 		userErr := GetUserContinue(actionCtx, prompt, requestParams)
