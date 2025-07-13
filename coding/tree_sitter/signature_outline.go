@@ -20,6 +20,7 @@ import (
 	"sidekick/logger"
 	"sidekick/utils"
 
+	"github.com/cbroglie/mustache"
 	sitter "github.com/smacker/go-tree-sitter"
 )
 
@@ -53,7 +54,7 @@ func GetFileSignatures(filePath string) ([]Signature, error) {
 	if err != nil {
 		return nil, err
 	}
-	signatureSlice, err := getFileSignaturesInternal(languageName, sitterLanguage, tree, &sourceCode)
+	signatureSlice, err := getFileSignaturesInternal(languageName, sitterLanguage, tree, &sourceCode, false)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +234,6 @@ func GetDirectorySignatureOutlines(baseDirectory string, showPaths *map[string]b
 	return outlines, err
 }
 
-// TODO /gen/req add tests for expected output, given fake directory with several subdirectories and files with code
 func GetDirectorySignatureOutlinesString(baseDirectory string) (string, error) {
 	outlines, err := GetDirectorySignatureOutlines(baseDirectory, nil, nil)
 	if err != nil {
@@ -300,8 +300,8 @@ type Signature struct {
 	EndPoint   sitter.Point
 }
 
-func getFileSignaturesInternal(languageName string, sitterLanguage *sitter.Language, tree *sitter.Tree, sourceCode *[]byte) ([]Signature, error) {
-	queryString, err := getSignatureQuery(languageName)
+func getFileSignaturesInternal(languageName string, sitterLanguage *sitter.Language, tree *sitter.Tree, sourceCode *[]byte, showComplete bool) ([]Signature, error) {
+	queryString, err := getSignatureQuery(languageName, showComplete)
 	if err != nil {
 		return []Signature{}, fmt.Errorf("error rendering symbol definition query: %w", err)
 	}
@@ -370,8 +370,8 @@ func getFileSignaturesInternal(languageName string, sitterLanguage *sitter.Langu
 }
 
 func shouldExtendSignatureRange(languageName, captureName string) bool {
-	if !strings.HasSuffix(captureName, ".declaration") && !strings.HasSuffix(captureName, ".body") {
-		// all non-declaration/non-body captures should extend the range
+	if !strings.HasSuffix(captureName, ".declaration") && !strings.HasSuffix(captureName, ".body") && !strings.HasPrefix(captureName, "parent.") {
+		// all non-declaration/non-body captures that aren't explicitly parents should extend the range
 		// FIXME /gen/req this is probably broken in the case where we capture
 		// methods within a class capture for example. we could rely on
 		// hierarchy captured in naming convention for captures, where "."
@@ -454,14 +454,22 @@ func writeSignatureCapture(languageName string, out *strings.Builder, sourceCode
 //go:embed signature_queries/*
 var signatureQueriesFS embed.FS
 
-func getSignatureQuery(languageName string) (string, error) {
-	queryPath := fmt.Sprintf("signature_queries/signature_%s.scm", languageName)
+func getSignatureQuery(languageName string, showComplete bool) (string, error) {
+	queryPath := fmt.Sprintf("signature_queries/signature_%s.scm.mustache", languageName)
 	queryBytes, err := signatureQueriesFS.ReadFile(queryPath)
 	if err != nil {
-		return "", fmt.Errorf("error reading file map query file: %w", err)
+		return "", fmt.Errorf("error reading signature query template file: %w", err)
 	}
 
-	return string(queryBytes), nil
+	// Render the template with showComplete variable
+	rendered, err := mustache.Render(string(queryBytes), map[string]interface{}{
+		"showComplete": showComplete,
+	})
+	if err != nil {
+		return "", fmt.Errorf("error rendering signature query template: %w", err)
+	}
+
+	return rendered, nil
 }
 
 func countDirectories(path string) int {

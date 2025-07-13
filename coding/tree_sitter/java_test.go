@@ -501,6 +501,113 @@ public class Container {
 	}
 }
 
+func TestShrinkJavaEmbeddedCodeContext(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name     string
+		code     string
+		expected string
+	}{
+		{
+			name: "class with private and public members",
+			code: `
+public class TestClass {
+    private int privateField;
+    public String publicField;
+    protected boolean protectedField;
+    
+    private void privateMethod() {}
+    public void publicMethod() {
+		// pad out length of this code
+	}
+    protected void protectedMethod() {}
+    
+    private class PrivateInner {}
+    public class PublicInner {}
+    protected class ProtectedInner {}
+}`,
+			expected: `Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
+` + "```" + `java-signatures
+public class TestClass
+	private int privateField
+	public String publicField
+	protected boolean protectedField
+	private void privateMethod()
+	public void publicMethod()
+	protected void protectedMethod()
+	private class PrivateInner
+	public class PublicInner
+	protected class ProtectedInner
+` + "```",
+		},
+		{
+			name: "interface with private and public methods",
+			code: `
+public interface TestInterface {
+    void publicMethod();  // implicitly public
+    private void privateMethod();  // Java 9+ private interface method
+    public static final int CONSTANT = 42;
+}`,
+			expected: `Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
+` + "```" + `java-signatures
+public interface TestInterface
+	void publicMethod()
+	private void privateMethod()
+	public static final int CONSTANT
+` + "```",
+		},
+		{
+			name: "enum with private and public members",
+			code: `
+public enum TestEnum {
+    ONE, TWO, THREE;
+    
+    private String privateField;
+    public int publicField;
+    
+    private void privateMethod() {}
+    public String publicMethod() {
+		// pad out length of this code
+		return "";
+	}
+}`,
+			expected: `Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
+` + "```" + `java-signatures
+public enum TestEnum
+	ONE
+	TWO
+	THREE
+	private void privateMethod()
+	public String publicMethod()
+` + "```",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// Call ShrinkEmbeddedCodeContext with the path to the temp file
+			embeddedCode := createMarkdownCodeBlock("java", tc.code)
+			result, didShrink := ShrinkEmbeddedCodeContext(embeddedCode, false, len(tc.code)-100)
+
+			// Normalize line endings and whitespace for comparison
+			normalizedCode := strings.TrimSpace(strings.ReplaceAll(tc.code, "\r\n", "\n"))
+			normalizedResult := strings.TrimSpace(strings.ReplaceAll(result, "\r\n", "\n"))
+			normalizedExpected := strings.TrimSpace(strings.ReplaceAll(tc.expected, "\r\n", "\n"))
+
+			if normalizedCode == normalizedResult {
+				assert.False(t, didShrink)
+			} else {
+				assert.True(t, didShrink)
+			}
+
+			if normalizedResult != normalizedExpected {
+				t.Errorf("ShrinkEmbeddedCodeContext returned incorrect result.\nExpected:\n%s\n\nGot:\n%s", normalizedExpected, normalizedResult)
+			}
+		})
+	}
+}
+
 func TestGetFileSymbolsStringJava(t *testing.T) {
 	tests := []struct {
 		name     string

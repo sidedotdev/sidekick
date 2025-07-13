@@ -54,7 +54,7 @@ func (sc SourceCode) GetSignatures() ([]Signature, error) {
 	if err != nil {
 		return nil, err
 	}
-	signatureSlice, err := getFileSignaturesInternal(sc.LanguageName, sitterLanguage, tree, &sourceBytes)
+	signatureSlice, err := getFileSignaturesInternal(sc.LanguageName, sitterLanguage, tree, &sourceBytes, true)
 	if err != nil {
 		return nil, err
 	}
@@ -93,20 +93,6 @@ func (sc SourceCode) TryGetSignaturesString() *string {
 	}
 	signaturesString := out.String()
 	return &signaturesString
-}
-
-func SignaturizeEmbeddedCode(content string) string {
-	sourceCodes := ExtractSourceCodes(content)
-	for _, sourceCode := range sourceCodes {
-		signaturesString := sourceCode.TryGetSignaturesString()
-		if signaturesString == nil {
-			continue
-		}
-		oldFenceStart := "```" + sourceCode.OriginalLanguageName + "\n"
-		newFenceStart := "```" + sourceCode.OriginalLanguageName + "-signatures" + "\n"
-		content = strings.Replace(content, oldFenceStart+sourceCode.Content, newFenceStart+*signaturesString, 1)
-	}
-	return content
 }
 
 // signaturize the source code blocks from longest to shortest, until the
@@ -180,7 +166,6 @@ func ShrinkEmbeddedCodeContext(content string, longestFirst bool, maxLength int)
 
 		didRemove, withoutComments := removeComments(sourceCode)
 		if didRemove {
-			didShrink = true
 			oldSourceCodeContent := sourceCode.Content
 			hint := "Shrank context - here are the extracted code signatures only, in lieu of full code:\n"
 			fenceStart := "```" + sourceCode.OriginalLanguageName + "\n"
