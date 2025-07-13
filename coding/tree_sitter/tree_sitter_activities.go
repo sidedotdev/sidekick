@@ -63,6 +63,8 @@ func splitOutlineIntoChunks(s string, goodChunkSize int, maxChunkSize int) []str
 	chunks := []string{}
 
 	// first split based on change in indentation from indented to outdented
+	// TODO: we could have better, more coherent chunks if we tried chunking
+	// when outdenting to 0 indentation instead
 	lines := strings.Split(s, "\n")
 	currentIndentation := -1
 	currentChunk := ""
