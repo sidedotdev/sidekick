@@ -1122,3 +1122,100 @@ func TestGetAllAlternativeFileSymbolsKotlin(t *testing.T) {
 		})
 	}
 }
+
+
+func TestShrinkKotlinEmbeddedCodeContext(t *testing.T) {
+	tests := []struct {
+		name     string
+		code     string
+		expected string
+	}{
+		{
+			name: "preserves private and protected members",
+			code: `
+package test
+
+private class PrivateClass {
+    private val secret = "hidden"
+    protected fun protectedMethod() {}
+    internal fun internalMethod() {}
+    fun publicMethod() {}
+}
+
+class PublicClass {
+    private companion object {
+        const val PRIVATE_CONST = "secret"
+    }
+    
+    protected class ProtectedNested
+    private object PrivateObject
+    
+    private var privateVar = 0
+    protected val protectedVal = ""
+    internal var internalVar = false
+    var publicVar = true
+}`,
+			expected: `
+package test
+
+private class PrivateClass {
+    private val secret = "hidden"
+    protected fun protectedMethod() {}
+    internal fun internalMethod() {}
+    fun publicMethod() {}
+}
+
+class PublicClass {
+    private companion object {
+        const val PRIVATE_CONST = "secret"
+    }
+    
+    protected class ProtectedNested
+    private object PrivateObject
+    
+    private var privateVar = 0
+    protected val protectedVal = ""
+    internal var internalVar = false
+    var publicVar = true
+}`,
+		},
+		{
+			name: "preserves private enum entries",
+			code: `
+package test
+
+enum class Visibility {
+    PUBLIC,
+    PRIVATE,
+    PROTECTED;
+
+    private fun hiddenMethod() {}
+    protected val protectedProp = ""
+}`,
+			expected: `
+package test
+
+enum class Visibility {
+    PUBLIC,
+    PRIVATE,
+    PROTECTED;
+
+    private fun hiddenMethod() {}
+    protected val protectedProp = ""
+}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Use a large maxLength to ensure no shrinking occurs
+			result, didShrink := ShrinkEmbeddedCodeContext(tt.code, true, 100000)
+			if result != tt.expected {
+				t.Errorf("ShrinkEmbeddedCodeContext() got = %v, want %v", result, tt.expected)
+			}
+			if didShrink {
+				t.Error("ShrinkEmbeddedCodeContext() unexpectedly shrank the code")
+			}
+		})
+	}
+}

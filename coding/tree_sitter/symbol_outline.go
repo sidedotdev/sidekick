@@ -13,7 +13,6 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/java"
-	"github.com/smacker/go-tree-sitter/kotlin"
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/typescript/tsx"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
@@ -189,7 +188,7 @@ func GetFileSymbolsString(filePath string) (string, error) {
 
 func getSourceSymbolsInternal(languageName string, sitterLanguage *sitter.Language, tree *sitter.Tree, sourceCode *[]byte) ([]Symbol, error) {
 	// NOTE: signature query does double-duty as the symbol query. FIXME should be renamed!
-	queryString, err := getSignatureQuery(languageName)
+	queryString, err := getSignatureQuery(languageName, false)
 	if err != nil {
 		return []Symbol{}, fmt.Errorf("error rendering symbol definition query: %w", err)
 	}
@@ -411,13 +410,13 @@ func (sc SourceCode) GetSymbols() ([]Symbol, error) {
 
 func normalizeLanguageName(s string) string {
 	switch s {
-	case "go":
+	case "go", "golang":
 		return "golang"
-	case "py":
+	case "py", "python":
 		return "python"
-	case "kt":
-		return "kotlin"
-	case "ts":
+	case "java":
+		return "java"
+	case "ts", "typescript":
 		return "typescript"
 	default:
 		return s
@@ -425,16 +424,14 @@ func normalizeLanguageName(s string) string {
 }
 
 func getSitterLanguage(languageName string) (*sitter.Language, error) {
-	switch normalizeLanguageName(languageName) {
-	case "golang":
+	switch languageName {
+	case "go", "golang":
 		return golang.GetLanguage(), nil
-	case "python":
+	case "py", "python":
 		return python.GetLanguage(), nil
 	case "java":
 		return java.GetLanguage(), nil
-	case "kotlin":
-		return kotlin.GetLanguage(), nil
-	case "typescript":
+	case "ts", "typescript":
 		return typescript.GetLanguage(), nil
 	case "tsx":
 		return tsx.GetLanguage(), nil
