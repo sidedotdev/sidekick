@@ -16,7 +16,14 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-const SignaturesEditHint = "Important note about shrunk context: in order to edit code for which we only show extracted code signatures, you must retrieve code context to get the full code from the original source using a tool."
+const SignaturesEditHint = `!! Important note about shrunk context:
+In order to edit code for which we only show extracted code signatures, you must
+retrieve code context using a tool, to see the actual code you're editing first.
+Note that the reason the code was shrunk is because the code that was requested
+was too long. When you retrieve code context, only request the specific symbols
+you really need to see/edit based on the signatures listed. If you request just
+one symbol and it's still too long, you can try utilizing search or reading
+specific lines directly instead.`
 
 var ErrMaxAttemptsReached = fmt.Errorf("reached max attempts")
 
