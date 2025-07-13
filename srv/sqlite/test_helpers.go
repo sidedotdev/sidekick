@@ -8,6 +8,7 @@ import (
 )
 
 func NewTestSqliteStorage(t *testing.T, dbName string) *Storage {
+	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	kvDb, err := sql.Open("sqlite", ":memory:")

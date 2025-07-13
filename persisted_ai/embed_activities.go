@@ -143,5 +143,5 @@ func constructEmbeddingKey(options embeddingKeyOptions) (string, error) {
 			}
 		}
 	}
-	return fmt.Sprintf("embedding:%s:%s:%s", options.model, options.contentType, options.subKey), nil
+	return fmt.Sprintf("embedding:%s:%s:%s", model, options.contentType, options.subKey), nil
 }

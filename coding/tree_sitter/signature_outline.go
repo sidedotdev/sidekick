@@ -233,6 +233,7 @@ func GetDirectorySignatureOutlines(baseDirectory string, showPaths *map[string]b
 	return outlines, err
 }
 
+// TODO /gen/req add tests for expected output, given fake directory with several subdirectories and files with code
 func GetDirectorySignatureOutlinesString(baseDirectory string) (string, error) {
 	outlines, err := GetDirectorySignatureOutlines(baseDirectory, nil, nil)
 	if err != nil {
