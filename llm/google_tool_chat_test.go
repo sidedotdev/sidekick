@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"sidekick/common"
 	"sidekick/secret_manager"
+	"sidekick/utils"
 	"strings"
 	"testing"
 
@@ -521,15 +522,21 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 		Params: ToolChatParams{
 			ModelConfig: common.ModelConfig{
 				Provider: "google",
-				Model:    "gemini-1.5-flash-8b", // cheapest model for testing
+				Model:    "gemini-2.5-flash", // need a cheap yet reliable enough model for testing
 			},
+			Temperature: utils.Ptr(float32(0)),
 			Messages: []ChatMessage{
-				{Role: ChatMessageRoleUser, Content: "First say hi. After that, then look up what the weather is like in New York"},
+				{Role: ChatMessageRoleUser, Content: "First say hi. After that, then look up what the weather is like in New York in celcius"},
 			},
-			Tools: []*Tool{mockTool},
+			Tools:      []*Tool{mockTool},
+			ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
 		},
 		Secrets: secret_manager.SecretManagerContainer{
-			SecretManager: &secret_manager.EnvSecretManager{},
+			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+				secret_manager.EnvSecretManager{},
+				secret_manager.KeyringSecretManager{},
+				secret_manager.LocalConfigSecretManager{},
+			}),
 		},
 	}
 
@@ -568,7 +575,7 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 
 	// Check that the response includes a tool call
 	if len(response.ToolCalls) == 0 {
-		t.Error("No tool calls in the response")
+		t.Errorf("No tool calls in the response. Content was: `%s`", response.Content)
 	}
 
 	// Verify tool call
@@ -576,6 +583,10 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 	if toolCall.Name != "get_current_weather" {
 		t.Errorf("Expected tool call to 'get_current_weather', got '%s'", toolCall.Name)
 	}
+
+	t.Logf("Response content: %s", response.Content)
+	t.Logf("Tool call: %+v", toolCall)
+	t.Logf("Usage: InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
 
 	// Parse tool call arguments
 	var args map[string]string
@@ -588,8 +599,8 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 	if !strings.Contains(strings.ToLower(args["location"]), "new york") {
 		t.Errorf("Expected location to contain 'New York', got '%s'", args["location"])
 	}
-	if args["unit"] != "celsius" && args["unit"] != "fahrenheit" {
-		t.Errorf("Expected unit 'celsius' or 'fahrenheit', got '%s'", args["unit"])
+	if args["unit"] != "celsius" && args["unit"] != "c" {
+		t.Errorf("Expected unit 'celsius' or 'c', got '%s'", args["unit"])
 	}
 
 	// Check usage
@@ -599,16 +610,12 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 	assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0")
 	assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0")
 
-	t.Logf("Response content: %s", response.Content)
-	t.Logf("Tool call: %+v", toolCall)
-	t.Logf("Usage: InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
-
 	// check multi-turn works
 	t.Run("MultiTurn", func(t *testing.T) {
 		options.Params.Messages = append(options.Params.Messages, response.ChatMessage)
 		options.Params.Messages = append(options.Params.Messages, ChatMessage{
 			Role:       ChatMessageRoleTool,
-			Content:    "Warm and Sunny",
+			Content:    "25",
 			ToolCallId: toolCall.Id,
 			Name:       toolCall.Name,
 			IsError:    false,
@@ -647,7 +654,7 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 		}
 
 		// Check that the response contains content
-		// Note: not needed, and the test model doesn't provide content
+		// Note: not needed, and the test model doesn't provide content typically for this turn
 		//if response.Content == "" {
 		//	t.Error("Response content is empty")
 		//}
@@ -663,6 +670,10 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 			t.Errorf("Expected tool call to 'get_current_weather', got '%s'", toolCall.Name)
 		}
 
+		t.Logf("Response content: %s", response.Content)
+		t.Logf("Tool call: %+v", toolCall)
+		t.Logf("Usage (multi-turn): InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
+
 		// Parse tool call arguments
 		var args map[string]string
 		err = json.Unmarshal([]byte(toolCall.Arguments), &args)
@@ -674,17 +685,13 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 		if !strings.Contains(strings.ToLower(args["location"]), "london") {
 			t.Errorf("Expected location to contain 'london', got '%s'", args["location"])
 		}
-		if args["unit"] != "celsius" && args["unit"] != "fahrenheit" {
-			t.Errorf("Expected unit 'celsius' or 'fahrenheit', got '%s'", args["unit"])
+		if args["unit"] != "celsius" && args["unit"] != "c" {
+			t.Errorf("Expected unit 'celsius' or 'c', got '%s'", args["unit"])
 		}
 
 		// Check usage for multi-turn
 		assert.NotNil(t, response.Usage, "Usage field should not be nil in multi-turn")
 		assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0 in multi-turn")
 		assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0 in multi-turn")
-
-		t.Logf("Response content: %s", response.Content)
-		t.Logf("Tool call: %+v", toolCall)
-		t.Logf("Usage (multi-turn): InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
 	})
 }
