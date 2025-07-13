@@ -13,20 +13,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newTestDB is a helper to create a test DB accessor.
 func newTestDB(t *testing.T) db.Storage {
 	t.Helper()
-	// NewTestSqliteStorage returns *sqlite.Storage, which implements db.Storage.
-	// Using a generic dbName for in-memory test database.
 	testDBStorage := sqlite.NewTestSqliteStorage(t, "test_vector_activities_db")
-	// t.Cleanup can be used if testDBStorage has a Close() method or similar for resource cleanup.
-	// For now, assuming in-memory SQLite handles this or it's managed within NewTestSqliteStorage.
 	return testDBStorage
 }
 
-// storeEmbedding helper function is no longer needed as tests now use MSet directly.
-
-func TestPrepareVectorStore(t *testing.T) {
+func TestBuildStaticVectorStore(t *testing.T) {
 	ctx := context.Background()
 	dbAccessor := newTestDB(t)
 	va := VectorActivities{DatabaseAccessor: dbAccessor}
@@ -66,7 +59,7 @@ func TestPrepareVectorStore(t *testing.T) {
 		wantSubkeys   []string
 		wantIndexSize uint
 	}{
-		{"successful preparation", []string{"key1", "key2"}, dim, false, []string{"key1", "key2"}, 2},
+		{"successful build", []string{"key1", "key2"}, dim, false, []string{"key1", "key2"}, 2},
 		{"empty subkeys", []string{}, dim, false, []string{}, 0},
 		{"subkey with missing embedding", []string{"key1", "key3"}, dim, true, nil, 0},
 		{"zero numDimensions", []string{"key1"}, 0, true, nil, 0},
@@ -76,13 +69,13 @@ func TestPrepareVectorStore(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			store, err := va.PrepareVectorStore(ctx, wsID, provider, model, contentType, tt.subkeys, tt.numDimensions)
+			store, err := va.buildStaticVectorStore(ctx, wsID, provider, model, contentType, tt.subkeys, tt.numDimensions)
 			if store.index != nil {
 				defer store.Destroy()
 			}
 
 			if (err != nil) != tt.wantErr {
-				t.Errorf("PrepareVectorStore() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("buildStaticVectorStore() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if tt.wantErr {
@@ -90,24 +83,24 @@ func TestPrepareVectorStore(t *testing.T) {
 			}
 
 			if !reflect.DeepEqual(store.subkeys, tt.wantSubkeys) {
-				t.Errorf("PrepareVectorStore() store.subkeys = %v, want %v", store.subkeys, tt.wantSubkeys)
+				t.Errorf("buildStaticVectorStore() store.subkeys = %v, want %v", store.subkeys, tt.wantSubkeys)
 			}
 			if store.index == nil && tt.wantIndexSize > 0 {
-				t.Errorf("PrepareVectorStore() store.index is nil, but wanted size %d", tt.wantIndexSize)
+				t.Errorf("buildStaticVectorStore() store.index is nil, but wanted size %d", tt.wantIndexSize)
 			}
 			if store.index != nil {
 				length, errLen := store.index.Len()
 				if errLen != nil {
-					t.Errorf("PrepareVectorStore() store.index.Len() returned error: %v", errLen)
+					t.Errorf("buildStaticVectorStore() store.index.Len() returned error: %v", errLen)
 				} else if length != tt.wantIndexSize {
-					t.Errorf("PrepareVectorStore() index.Len() = %d, want %d", length, tt.wantIndexSize)
+					t.Errorf("buildStaticVectorStore() index.Len() = %d, want %d", length, tt.wantIndexSize)
 				}
 			}
 		})
 	}
 }
 
-func TestQueryPreparedStoreSingle(t *testing.T) {
+func TestQuerySingle(t *testing.T) {
 	ctx := context.Background()
 	dbAccessor := newTestDB(t)
 	va := VectorActivities{DatabaseAccessor: dbAccessor}
@@ -133,7 +126,7 @@ func TestQueryPreparedStoreSingle(t *testing.T) {
 		t.Fatalf("MSet failed for query test setup: %v", err)
 	}
 
-	store, err := va.PrepareVectorStore(ctx, wsID, provider, model, contentType, subkeys, dim)
+	store, err := va.buildStaticVectorStore(ctx, wsID, provider, model, contentType, subkeys, dim)
 	if err != nil {
 		t.Fatalf("Setup: PrepareVectorStore failed: %v", err)
 	}
@@ -156,7 +149,7 @@ func TestQueryPreparedStoreSingle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			results, err := va.QueryPreparedStoreSingle(ctx, store, tt.queryVector, tt.limit)
+			results, err := va.querySingle(ctx, store, tt.queryVector, tt.limit)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("QueryPreparedStoreSingle() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -178,19 +171,19 @@ func TestQueryPreparedStoreSingle(t *testing.T) {
 	}
 }
 
-func TestQueryPreparedStoreSingle_EmptyStore(t *testing.T) {
+func TestQuerySingle_EmptyStore(t *testing.T) {
 	ctx := context.Background()
 	dbAccessor := newTestDB(t)
 	va := VectorActivities{DatabaseAccessor: dbAccessor}
 	dim := 2
 
-	emptyStore, err := va.PrepareVectorStore(ctx, "ws", "p", "m", "ct", []string{}, dim)
+	emptyStore, err := va.buildStaticVectorStore(ctx, "ws", "p", "m", "ct", []string{}, dim)
 	if err != nil {
 		t.Fatalf("PrepareVectorStore for empty store failed: %v", err)
 	}
 	defer emptyStore.Destroy()
 
-	results, err := va.QueryPreparedStoreSingle(ctx, emptyStore, embedding.EmbeddingVector{0.1, 0.2}, 5)
+	results, err := va.querySingle(ctx, emptyStore, embedding.EmbeddingVector{0.1, 0.2}, 5)
 	if err != nil {
 		t.Errorf("QueryPreparedStoreSingle() on empty store error = %v, want nil", err)
 	}
@@ -199,18 +192,16 @@ func TestQueryPreparedStoreSingle_EmptyStore(t *testing.T) {
 	}
 }
 
-func TestQueryPreparedStoreSingle_NilIndexStore(t *testing.T) {
+func TestQuerySingle_NilIndexStore(t *testing.T) {
 	ctx := context.Background()
-	va := VectorActivities{} // No DB needed for this specific test path
-
-	nilIndexStore := PreparedStore{index: nil, subkeys: []string{"a"}}
-	_, err := va.QueryPreparedStoreSingle(ctx, nilIndexStore, embedding.EmbeddingVector{0.1, 0.2}, 1)
-	if err == nil {
-		t.Errorf("QueryPreparedStoreSingle() with nil index store did not return an error")
-	}
+	va := VectorActivities{}
+	store := staticVectoreStore{index: nil, subkeys: []string{"a"}}
+	_, err := va.querySingle(ctx, store, embedding.EmbeddingVector{0.1, 0.2}, 1)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "is nil")
 }
 
-func TestQueryPreparedStoreMultiple(t *testing.T) {
+func TestQueryMultiple(t *testing.T) {
 	ctx := context.Background()
 	dbAccessor := newTestDB(t)
 	va := VectorActivities{DatabaseAccessor: dbAccessor}
@@ -242,7 +233,7 @@ func TestQueryPreparedStoreMultiple(t *testing.T) {
 	}
 
 	// Prepare store, indexing all content
-	store, err := va.PrepareVectorStore(ctx, wsID, provider, model, contentType, subkeys, dim)
+	store, err := va.buildStaticVectorStore(ctx, wsID, provider, model, contentType, subkeys, dim)
 	require.NoError(t, err)
 	defer store.Destroy()
 
@@ -307,7 +298,7 @@ func TestQueryPreparedStoreMultiple(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			results, err := va.QueryPreparedStoreMultiple(ctx, store, tc.queryVectors, tc.limit)
+			results, err := va.queryMultiple(ctx, store, tc.queryVectors, tc.limit)
 			if tc.expectError {
 				assert.Error(t, err)
 				return
@@ -318,24 +309,17 @@ func TestQueryPreparedStoreMultiple(t *testing.T) {
 	}
 }
 
-func TestQueryPreparedStoreMultiple_NilIndexStore(t *testing.T) {
+func TestQueryMultiple_NilIndexStore(t *testing.T) {
 	ctx := context.Background()
-	dbAccessor := newTestDB(t)
-	va := VectorActivities{DatabaseAccessor: dbAccessor}
-	store := PreparedStore{
-		index:   nil,
-		subkeys: []string{"key1"},
-	}
+	va := VectorActivities{}
+	store := staticVectoreStore{index: nil, subkeys: []string{"key1"}}
 	queryVectors := []embedding.EmbeddingVector{{1.0, 0.0, 0.0}}
-	_, err := va.QueryPreparedStoreMultiple(ctx, store, queryVectors, 10)
+	_, err := va.queryMultiple(ctx, store, queryVectors, 10)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "PreparedStore.index is nil")
+	assert.Contains(t, err.Error(), "is nil")
 }
 
-// It's good practice to also test the main VectorSearch activity after refactoring,
-// even if its logic is now delegated. This acts as an integration test for the new components.
-func TestVectorSearch_Refactored(t *testing.T) {
-	// ctx := context.Background() // options struct will carry context if needed by PrepareVectorStore
+func TestVectorSearch(t *testing.T) {
 	dbAccessor := newTestDB(t)
 	va := VectorActivities{DatabaseAccessor: dbAccessor}
 
@@ -343,7 +327,6 @@ func TestVectorSearch_Refactored(t *testing.T) {
 	provider := "test-vs-prov"
 	model := "test-vs-model"
 	contentType := "text"
-	// dim := 2 // dim is not directly used in this test logic for VectorSearch
 
 	// Store embeddings using MSet
 	kvsSearch := make(map[string]interface{})
