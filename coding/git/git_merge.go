@@ -112,11 +112,11 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 	})
 	if checkoutErr != nil {
 		resultErr = fmt.Errorf("failed to run command to checkout target branch %s: %v", params.TargetBranch, checkoutErr)
-		return // defer will run and restore original branch
+		return
 	}
 	if checkoutOutput.ExitStatus != 0 {
 		resultErr = fmt.Errorf("failed to checkout target branch %s, command stderr: %s", params.TargetBranch, checkoutOutput.Stderr)
-		return // defer will run and restore original branch
+		return
 	}
 
 	// Perform the merge
@@ -127,7 +127,7 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 	})
 	if mergeErr != nil {
 		resultErr = fmt.Errorf("failed to execute merge command: %v", mergeErr)
-		return // defer will run and potentially set resultErr if it's currently nil
+		return
 	}
 	if mergeOutput.ExitStatus != 0 {
 		if strings.Contains(mergeOutput.Stdout, "CONFLICT") || strings.Contains(mergeOutput.Stderr, "conflict") {
@@ -140,21 +140,21 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 			})
 			if abortErr != nil {
 				resultErr = fmt.Errorf("merge had conflicts and failed to abort: %v", abortErr)
-				return // defer will run
+				return
 			}
 			if abortOutput.ExitStatus != 0 {
 				resultErr = fmt.Errorf("merge had conflicts and failed to abort, stderr: %s", abortOutput.Stderr)
-				return // defer will run
+				return
 			}
 			// resultErr remains nil (unless defer sets it to a restore error)
-			return // defer will run
+			return
 		}
 		resultErr = fmt.Errorf("merge failed: %s", mergeOutput.Stderr)
-		return // defer will run
+		return
 	}
 
 	// Merge successful, no conflicts.
 	// result.HasConflicts is false (default).
 	// resultErr is nil (unless defer sets it to a restore error).
-	return // defer will run
+	return
 }
