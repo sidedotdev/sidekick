@@ -274,40 +274,55 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 		}
 
 		if mergeInfo.Approved {
-			// Commit any pending changes first
-			message := strings.TrimSpace(requirements)
-			if strings.Contains(message, "Overview:\n") {
-				message = strings.Split(message, "Overview:\n")[1]
-				message = strings.TrimSpace(message)
-			}
-			message = strings.Split(message, "\n")[0]
-			if len(message) > 100 {
-				message = message[:100] + "...\n\n..." + message[100:]
-			}
-			err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
-				CommitMessage: message,
-			}).Get(dCtx, nil)
-			if err != nil {
-				return "", fmt.Errorf("failed to commit changes: %v", err)
-			}
-
 			// Perform merge
 			actionCtx := dCtx.NewActionContext("merge")
 			actionCtx.ActionParams = map[string]interface{}{
 				"sourceBranch": dCtx.Worktree.Name,
 				"targetBranch": mergeInfo.TargetBranch,
 			}
+
+			// Commit any pending changes first
+			commitMessage := strings.TrimSpace(requirements)
+			if strings.Contains(commitMessage, "Overview:\n") {
+				commitMessage = strings.Split(commitMessage, "Overview:\n")[1]
+				commitMessage = strings.TrimSpace(commitMessage)
+			}
+			commitMessage = strings.Split(commitMessage, "\n")[0]
+			if len(commitMessage) > 100 {
+				commitMessage = commitMessage[:100] + "...\n\n..." + commitMessage[100:]
+			}
+
+			gitCommitVersion := workflow.GetVersion(dCtx, "git-commit-in-flow-action", workflow.DefaultVersion, 1)
+			if gitCommitVersion < 1 {
+				err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
+					CommitMessage: commitMessage,
+				}).Get(dCtx, nil)
+				if err != nil {
+					return result, fmt.Errorf("failed to commit changes: %v", err)
+				}
+			}
+
 			mergeResult, err := Track(actionCtx, func(flowAction domain.FlowAction) (git.MergeActivityResult, error) {
-				var result git.MergeActivityResult
+				var mergeResult git.MergeActivityResult
+
+				if gitCommitVersion >= 1 {
+					err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
+						CommitMessage: commitMessage,
+					}).Get(dCtx, nil)
+					if err != nil {
+						return mergeResult, fmt.Errorf("failed to commit changes: %v", err)
+					}
+				}
+
 				future := workflow.ExecuteActivity(dCtx, git.GitMergeActivity, dCtx.EnvContainer, git.GitMergeParams{
 					SourceBranch: dCtx.Worktree.Name,
 					TargetBranch: mergeInfo.TargetBranch,
 				})
-				err := future.Get(dCtx, &result)
+				err := future.Get(dCtx, &mergeResult)
 				if err != nil {
-					return result, fmt.Errorf("failed to merge branches: %v", err)
+					return mergeResult, fmt.Errorf("failed to merge branches: %v", err)
 				}
-				return result, nil
+				return mergeResult, nil
 			})
 			if err != nil {
 				return "", err
