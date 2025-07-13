@@ -3,6 +3,7 @@ package persisted_ai
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"sidekick/env"
 	"sidekick/secret_manager"
 	"sidekick/srv/sqlite"
+	"sidekick/utils"
 
 	"github.com/stretchr/testify/require"
 )
@@ -123,6 +125,89 @@ func TestRankedSubkeys(t *testing.T) {
 				if !subkeySet[result] {
 					t.Errorf("result not in original subkeys: %s", result)
 				}
+			}
+		})
+	}
+}
+
+func TestSplitQueryIntoChunks(t *testing.T) {
+	tests := []struct {
+		name          string
+		query         string
+		goodChunkSize int
+		maxChunkSize  int
+		want          []string
+	}{
+		{
+			name:          "empty input",
+			query:         "",
+			goodChunkSize: 100,
+			maxChunkSize:  200,
+			want:          []string{},
+		},
+		{
+			name:          "single short sentence",
+			query:         "This is a test.",
+			goodChunkSize: 100,
+			maxChunkSize:  200,
+			want:          []string{"This is a test."},
+		},
+		{
+			name:          "multiple sentences within good size",
+			query:         "First sentence. Second sentence. Third sentence.",
+			goodChunkSize: 100,
+			maxChunkSize:  200,
+			want:          []string{"First sentence. Second sentence. Third sentence."},
+		},
+		{
+			name:          "sentences split by good size",
+			query:         "This is the first longer sentence. This is the second longer sentence. This is the third longer sentence.",
+			goodChunkSize: 30,
+			maxChunkSize:  200,
+			want: []string{
+				"This is the first longer sentence.",
+				"This is the second longer sentence.",
+				"This is the third longer sentence.",
+			},
+		},
+		{
+			name:          "mixed punctuation",
+			query:         "Is this a question? Yes, it is! And here's a statement.",
+			goodChunkSize: 20,
+			maxChunkSize:  200,
+			want: []string{
+				"Is this a question.",
+				"Yes, it is.",
+				"And here's a statement.",
+			},
+		},
+		{
+			name:          "very long sentence exceeding max size",
+			query:         "This is an extremely long sentence that goes beyond the maximum chunk size and therefore needs to be split into multiple pieces based on word boundaries rather than sentence boundaries.",
+			goodChunkSize: 40,
+			maxChunkSize:  40,
+			want: []string{
+				"This is an extremely long sentence that",
+				"goes beyond the maximum chunk size and",
+				"therefore needs to be split into",
+				"multiple pieces based on word boundaries",
+				"rather than sentence boundaries.",
+			},
+		},
+		{
+			name:          "whitespace handling",
+			query:         "  Sentence with spaces.   Another with spaces.  ",
+			goodChunkSize: 100,
+			maxChunkSize:  200,
+			want:          []string{"Sentence with spaces. Another with spaces."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := splitQueryIntoChunks(tt.query, tt.goodChunkSize, tt.maxChunkSize)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got: %s\n want: %s", utils.PrettyJSON(got), utils.PrettyJSON(tt.want))
 			}
 		})
 	}
