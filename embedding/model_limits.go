@@ -64,14 +64,14 @@ func GetModelMaxTokens(modelConfig common.ModelConfig) (int, error) {
 		if err == nil {
 			err = fmt.Errorf("configured token limit should be above 0")
 		}
-		// if env var is set but invalid, fall through to default
+		// if env var is set but invalid, don't error but warn and fall through to default
 		log.Warn().Err(err).Msg("Invalid SIDE_EMBEDDING_DEFAULT_MAX_TOKENS environment variable, ignoring and using built-in default")
 	}
 
 	return defaultMaxTokens, nil
 }
 
-func GetEmbeddingMaxChars(modelConfig common.ModelConfig) (int, error) {
+func GetModelMaxChars(modelConfig common.ModelConfig) (int, error) {
 	maxTokens, err := GetModelMaxTokens(modelConfig)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get model max tokens: %w", err)

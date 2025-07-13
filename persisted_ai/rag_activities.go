@@ -49,7 +49,7 @@ func (ra *RagActivities) RankedDirSignatureOutline(options RankedDirSignatureOut
 	// FIXME put tree sitter activities inside rag activities struct
 	t := tree_sitter.TreeSitterActivities{DatabaseAccessor: ra.DatabaseAccessor}
 
-	maxChars, err := embedding.GetEmbeddingMaxChars(options.ModelConfig)
+	maxChars, err := embedding.GetModelMaxChars(options.ModelConfig)
 	if err != nil {
 		return "", fmt.Errorf("failed to calculate embedding char limits: %w", err)
 	}
@@ -89,10 +89,8 @@ type RankedSubkeysOptions struct {
 }
 
 func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, error) {
-	// Empty queries are invalid as they provide no semantic information for ranking.
-	// This is a clear misuse since ranking requires meaningful text to compare against.
-	if options.RankQuery == "" {
-		return []string{}, errors.New("Attempted to perform RAG with empty rank query")
+	if strings.TrimSpace(options.RankQuery) == "" {
+		return []string{}, errors.New("Attempted to perform RAG with an empty query")
 	}
 
 	ea := EmbedActivities{Storage: ra.DatabaseAccessor}
@@ -115,7 +113,7 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 	}
 
 	// Get model-specific character limits
-	maxQueryChars, err := embedding.GetEmbeddingMaxChars(options.ModelConfig)
+	maxQueryChars, err := embedding.GetModelMaxChars(options.ModelConfig)
 	goodQueryChars := min(maxQueryChars, tree_sitter.DefaultPreferredChunkChars)
 	if err != nil {
 		return []string{}, fmt.Errorf("failed to calculate embedding limits: %w", err)
@@ -145,8 +143,8 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 		return []string{}, nil
 	}
 
-	// Search with all vectors using MultiVectorSearch
-	results, err := va.MultiVectorSearch(MultiVectorSearchOptions{
+	// get closest results, one result set for each query chunk
+	resultSets, err := va.MultiVectorSearch(MultiVectorSearchOptions{
 		WorkspaceId: options.WorkspaceId,
 		Provider:    options.ModelConfig.Provider,
 		Model:       options.ModelConfig.Model,
@@ -159,17 +157,8 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 		return []string{}, fmt.Errorf("failed multi-vector search: %w", err)
 	}
 
-	if len(queryChunks) > 1 {
-		// Combine results using RRF
-		return FuseResultsRRF(results), nil
-	}
-
-	// For a single chunk, return the first result set
-	if len(results) > 0 {
-		return results[0], nil
-	}
-
-	return []string{}, nil
+	// rank-fusion to merge result sets. note: still works if there's just one result set
+	return FuseResultsRRF(resultSets), nil
 }
 
 // splitQueryIntoChunks splits a query into chunks based on sentence boundaries and size limits.
