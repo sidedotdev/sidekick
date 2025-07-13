@@ -36,7 +36,7 @@
   (function_declaration
     (modifiers)? @function.modifiers
       ; not sure if we wanna exclude internal too here
-      {{^showComplete}}(#not-match? @function.modifiers /private"){{/showComplete}}
+      {{^showComplete}}(#not-match? @function.modifiers "private"){{/showComplete}}
     (type_parameters)? @function.type_parameters
     (simple_identifier) @function.name
     (function_value_parameters) @function.parameters

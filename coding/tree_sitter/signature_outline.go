@@ -370,8 +370,8 @@ func getFileSignaturesInternal(languageName string, sitterLanguage *sitter.Langu
 }
 
 func shouldExtendSignatureRange(languageName, captureName string) bool {
-	if !strings.HasSuffix(captureName, ".declaration") && !strings.HasSuffix(captureName, ".body") {
-		// all non-declaration/non-body captures should extend the range
+	if !strings.HasSuffix(captureName, ".declaration") && !strings.HasSuffix(captureName, ".body") && !strings.HasPrefix(captureName, "parent.") {
+		// all non-declaration/non-body captures that aren't explicitly parents should extend the range
 		// FIXME /gen/req this is probably broken in the case where we capture
 		// methods within a class capture for example. we could rely on
 		// hierarchy captured in naming convention for captures, where "."
