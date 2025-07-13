@@ -1,7 +1,7 @@
 ; Capture non-private/protected classes for signatures and symbols
 (class_declaration
   (modifiers)? @class.modifiers
-    (#not-match? @class.modifiers "private|protected")
+    {{^showComplete}}(#not-match? @class.modifiers "private|protected"){{/showComplete}}
   (type_identifier) @class.name
   (type_parameters)? @class.type_parameters
   (primary_constructor)? @class.primary_constructor
@@ -24,7 +24,7 @@
 ; just like with classes, but for objects now: reusing the @class internals though, just want a different declaration
 (object_declaration
   (modifiers)? @class.modifiers
-    (#not-match? @class.modifiers "private|protected")
+    {{^showComplete}}(#not-match? @class.modifiers "private/protected"){{/showComplete}}
   (type_identifier) @class.name
   (type_parameters)? @class.type_parameters
   (class_body
@@ -36,7 +36,7 @@
   (function_declaration
     (modifiers)? @function.modifiers
       ; not sure if we wanna exclude internal too here
-      (#not-match? @function.modifiers "private")
+      {{^showComplete}}(#not-match? @function.modifiers /private"){{/showComplete}}
     (type_parameters)? @function.type_parameters
     (simple_identifier) @function.name
     (function_value_parameters) @function.parameters
@@ -45,11 +45,11 @@
 )
 (class_declaration
   (modifiers)? @parent.modifiers
-    (#not-match? @parent.modifiers "private|protected")
+    {{^showComplete}}(#not-match? @parent.modifiers "private|protected"){{/showComplete}}
     (_
       (function_declaration
         (modifiers)? @function.modifiers
-          (#not-match? @function.modifiers "private|protected")
+          {{^showComplete}}(#not-match? @function.modifiers "private|protected"){{/showComplete}}
         (type_parameters)? @function.type_parameters
         (simple_identifier) @function.name
         (function_value_parameters) @function.parameters
@@ -59,11 +59,11 @@
 )
 (object_declaration
   (modifiers)? @parent.modifiers
-    (#not-match? @parent.modifiers "private|protected")
+    {{^showComplete}}(#not-match? @parent.modifiers "private|protected"){{/showComplete}}
     (_
       (function_declaration
         (modifiers)? @function.modifiers
-          (#not-match? @function.modifiers "private|protected")
+          {{^showComplete}}(#not-match? @function.modifiers "private|protected"){{/showComplete}}
         (type_parameters)? @function.type_parameters
         (simple_identifier) @function.name
         (function_value_parameters) @function.parameters
@@ -77,7 +77,7 @@
   (property_declaration
     (modifiers)? @property.modifiers
       ; not sure if we wanna exclude internal too here
-      (#not-match? @property.modifiers "private")
+      {{^showComplete}}(#not-match? @property.modifiers "private"){{/showComplete}}
     (variable_declaration
       (simple_identifier) @property.name
     )
@@ -85,11 +85,11 @@
 )
 (class_declaration
   (modifiers)? @parent.modifiers
-    (#not-match? @parent.modifiers "private|protected")
+    {{^showComplete}}(#not-match? @parent.modifiers "private|protected"){{/showComplete}}
     (_
       (property_declaration
         (modifiers)? @property.modifiers
-          (#not-match? @property.modifiers "private|protected")
+          {{^showComplete}}(#not-match? @property.modifiers "private|protected"){{/showComplete}}
         (variable_declaration
           (simple_identifier) @property.ignored.name
         )
@@ -98,12 +98,12 @@
 )
 (object_declaration
   (modifiers)? @parent.modifiers
-    (#not-match? @parent.modifiers "private|protected")
+    {{^showComplete}}(#not-match? @parent.modifiers "private|protected"){{/showComplete}}
     (_
       (property_declaration
         (modifiers)? @property.modifiers
           ; not sure if we wanna exclude internal too here
-          (#not-match? @property.modifiers "private|protected")
+          {{^showComplete}}(#not-match? @property.modifiers "private|protected"){{/showComplete}}
         (variable_declaration
           (simple_identifier) @property.ignored.name
         )
@@ -114,7 +114,7 @@
 ; Extract enum entry names for symbol outline
 (class_declaration
   (modifiers)? @enum_entry.class.modifiers
-    (#not-match? @enum_entry.class.modifiers "private|protected")
+    {{^showComplete}}(#not-match? @enum_entry.class.modifiers "private|protected"){{/showComplete}}
   (_
     (enum_entry
       (simple_identifier) @enum_entry.name

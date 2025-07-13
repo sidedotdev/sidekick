@@ -1166,15 +1166,16 @@ func TestGetAllAlternativeFileSymbolsKotlin(t *testing.T) {
 }
 
 func TestShrinkKotlinEmbeddedCodeContext(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
-		name     string
-		code     string
-		expected string
+		name         string
+		code         string
+		expected     string
+		expectShrink bool
 	}{
 		{
 			name: "preserves private and protected members",
-			code: `
-package test
+			code: `package test
 
 private class PrivateClass {
     private val secret = "hidden"
@@ -1196,34 +1197,31 @@ class PublicClass {
     internal var internalVar = false
     var publicVar = true
 }`,
-			expected: `
+			expected: `Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
+` + "```" + `kotlin-signatures
 package test
 
-private class PrivateClass {
-    private val secret = "hidden"
-    protected fun protectedMethod() {}
-    internal fun internalMethod() {}
-    fun publicMethod() {}
-}
+private class PrivateClass
+    private val secret
+    protected fun protectedMethod()
+    internal fun internalMethod()
+    fun publicMethod()
 
-class PublicClass {
-    private companion object {
-        const val PRIVATE_CONST = "secret"
-    }
-    
+class PublicClass
+    private companion object
+        const val PRIVATE_CONST
     protected class ProtectedNested
     private object PrivateObject
-    
-    private var privateVar = 0
-    protected val protectedVal = ""
-    internal var internalVar = false
-    var publicVar = true
-}`,
+    private var privateVar
+    protected val protectedVal
+    internal var internalVar
+    var publicVar
+` + "```",
+			expectShrink: true,
 		},
 		{
 			name: "preserves private enum entries",
-			code: `
-package test
+			code: `package test
 
 enum class Visibility {
     PUBLIC,
@@ -1233,29 +1231,42 @@ enum class Visibility {
     private fun hiddenMethod() {}
     protected val protectedProp = ""
 }`,
-			expected: `
+			expected: `Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
+` + "```" + `kotlin-signatures
 package test
 
-enum class Visibility {
-    PUBLIC,
-    PRIVATE,
-    PROTECTED;
-
-    private fun hiddenMethod() {}
-    protected val protectedProp = ""
-}`,
+enum class Visibility
+    PUBLIC
+    PRIVATE
+    PROTECTED
+    private fun hiddenMethod()
+    protected val protectedProp
+` + "```",
+			expectShrink: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Use a large maxLength to ensure no shrinking occurs
-			result, didShrink := ShrinkEmbeddedCodeContext(tt.code, true, 100000)
-			if result != tt.expected {
-				t.Errorf("ShrinkEmbeddedCodeContext() got = %v, want %v", result, tt.expected)
+			t.Parallel()
+			input := createMarkdownCodeBlock("kotlin", tt.code)
+			result, didShrink := ShrinkEmbeddedCodeContext(input, false, len(tt.code)-100)
+
+			// Normalize line endings for comparison
+			normalizedCode := strings.TrimSpace(strings.ReplaceAll(tt.code, "\r\n", "\n"))
+			normalizedResult := strings.TrimSpace(strings.ReplaceAll(result, "\r\n", "\n"))
+			normalizedExpected := strings.TrimSpace(strings.ReplaceAll(tt.expected, "\r\n", "\n"))
+
+			if normalizedCode == normalizedResult {
+				assert.False(t, didShrink)
+			} else {
+				assert.True(t, didShrink)
 			}
-			if didShrink {
-				t.Error("ShrinkEmbeddedCodeContext() unexpectedly shrank the code")
+			if normalizedResult != normalizedExpected {
+				t.Errorf("ShrinkEmbeddedCodeContext() got:\n%s\n\nwant:\n%s", normalizedResult, normalizedExpected)
+			}
+			if didShrink != tt.expectShrink {
+				t.Errorf("ShrinkEmbeddedCodeContext() didShrink = %v, want %v", didShrink, tt.expectShrink)
 			}
 		})
 	}

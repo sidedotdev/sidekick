@@ -13,6 +13,7 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/java"
+	"github.com/smacker/go-tree-sitter/kotlin"
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/typescript/tsx"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
@@ -427,10 +428,12 @@ func getSitterLanguage(languageName string) (*sitter.Language, error) {
 	switch languageName {
 	case "go", "golang":
 		return golang.GetLanguage(), nil
-	case "py", "python":
-		return python.GetLanguage(), nil
+	case "kt", "kotlin":
+		return kotlin.GetLanguage(), nil
 	case "java":
 		return java.GetLanguage(), nil
+	case "py", "python":
+		return python.GetLanguage(), nil
 	case "ts", "typescript":
 		return typescript.GetLanguage(), nil
 	case "tsx":
