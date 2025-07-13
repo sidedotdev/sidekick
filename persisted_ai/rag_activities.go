@@ -128,12 +128,14 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 		queryChunks = []string{options.RankQuery}
 	}
 
+	// NOTE: "code_retrieval_query" would be ideal here, but isn't supported by text-embedding-004
 	// TODO: dynamically decide task type based on model name, as all task types arent supported by all models.
 	// TODO: change "task type" to instead be "use_case" and we'll map to task
 	// type internally in the embedder implementation
 	taskType := embedding.TaskTypeRetrievalQuery
 
 	// Embed all chunks
+	// TODO /gen/basic cache query vectors in memory, for when the same query is rerun twice
 	queryVectors, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, queryChunks, taskType)
 	if err != nil {
 		return []string{}, fmt.Errorf("failed to embed query chunks: %w", err)
