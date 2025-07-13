@@ -49,12 +49,12 @@ func (ra *RagActivities) RankedDirSignatureOutline(options RankedDirSignatureOut
 	// FIXME put tree sitter activities inside rag activities struct
 	t := tree_sitter.TreeSitterActivities{DatabaseAccessor: ra.DatabaseAccessor}
 
-	_, maxCharacterLimit, err := embedding.CalculateEmbeddingCharLimits(options.RankedViaEmbeddingOptions.ModelConfig)
+	maxChars, err := embedding.GetEmbeddingMaxChars(options.ModelConfig)
 	if err != nil {
 		return "", fmt.Errorf("failed to calculate embedding char limits: %w", err)
 	}
 
-	fileSignatureSubkeys, err := t.CreateDirSignatureOutlines(options.WorkspaceId, options.EnvContainer.Env.GetWorkingDirectory(), maxCharacterLimit)
+	fileSignatureSubkeys, err := t.CreateDirSignatureOutlines(options.WorkspaceId, options.EnvContainer.Env.GetWorkingDirectory(), maxChars)
 	if err != nil {
 		return "", err
 	}
@@ -115,7 +115,8 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 	}
 
 	// Get model-specific character limits
-	goodQueryChars, maxQueryChars, err := embedding.CalculateEmbeddingCharLimits(options.ModelConfig)
+	maxQueryChars, err := embedding.GetEmbeddingMaxChars(options.ModelConfig)
+	goodQueryChars := min(maxQueryChars, tree_sitter.DefaultPreferredChunkChars)
 	if err != nil {
 		return []string{}, fmt.Errorf("failed to calculate embedding limits: %w", err)
 	}

@@ -8,10 +8,11 @@ import (
 	"strings"
 )
 
+// TODO move to persisted_ai package
 const DefaultPreferredChunkChars = 3000
 
 type TreeSitterActivities struct {
-	DatabaseAccessor srv.Storage // Changed from srv.Service
+	DatabaseAccessor srv.Storage
 }
 
 const ContentTypeFileSignature = "file:signature"

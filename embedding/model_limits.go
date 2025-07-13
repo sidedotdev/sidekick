@@ -6,26 +6,18 @@ import (
 	"strconv"
 
 	"sidekick/common"
+
+	"github.com/rs/zerolog/log"
 )
 
 const (
-	// defaultMaxTokensEnvVarName is the environment variable for overriding the default max tokens for unlisted models.
-	defaultMaxTokensEnvVarName = "SIDE_EMBEDDING_DEFAULT_MAX_TOKENS"
-	// fallbackDefaultMaxTokens is used if the environment variable is not set or invalid for unlisted models.
-	fallbackDefaultMaxTokens = 4096
+	// defaultMaxTokens is used if the SIDE_EMBEDDING_DEFAULT_MAX_TOKENS env variable is not set and the
+	// model name is not known
+	defaultMaxTokens = 2048
 
-	// providerOpenAI is the normalized string for the OpenAI provider.
-	providerOpenAI = "openai"
-	// providerGoogle is the normalized string for the Google provider.
-	providerGoogle = "google"
-
-	tokenBufferConstant = 500
-	// minModelCapacityTokensConstant is the minimum total token capacity a model must have to be considered usable.
-	minModelCapacityTokensConstant = 100
-	// charsPerTokenConstant is the estimated number of characters per token.
-	charsPerTokenConstant = 4
-	// defaultGoodChunkCharsConstant is the default preferred character size for a chunk.
-	defaultGoodChunkCharsConstant = 3000
+	// estimated number of characters per token.
+	charsPerToken         = 4
+	defaultGoodChunkChars = 3000
 )
 
 // modelTokenLimits maps known embedding model names to their maximum input token limits.
@@ -48,9 +40,9 @@ func GetModelMaxTokens(modelConfig common.ModelConfig) (int, error) {
 
 	if modelName == "" {
 		switch providerName {
-		case providerOpenAI:
+		case string(common.OpenaiChatProvider):
 			modelName = OpenaiDefaultModel
-		case providerGoogle:
+		case string(common.GoogleChatProvider):
 			modelName = GoogleDefaultModel
 		default:
 			if providerName == "" {
@@ -64,41 +56,25 @@ func GetModelMaxTokens(modelConfig common.ModelConfig) (int, error) {
 		return limit, nil
 	}
 
-	if envVal := os.Getenv(defaultMaxTokensEnvVarName); envVal != "" {
-		if limit, err := strconv.Atoi(envVal); err == nil && limit > 0 {
+	if envVal := os.Getenv("SIDE_EMBEDDING_DEFAULT_MAX_TOKENS"); envVal != "" {
+		limit, err := strconv.Atoi(envVal)
+		if err == nil && limit > 0 {
 			return limit, nil
 		}
-		// If env var is set but invalid, fall through to default (as per plan: "silently ignore and use fallback")
+		if err == nil {
+			err = fmt.Errorf("configured token limit should be above 0")
+		}
+		// if env var is set but invalid, fall through to default
+		log.Warn().Err(err).Msg("Invalid SIDE_EMBEDDING_DEFAULT_MAX_TOKENS environment variable, ignoring and using built-in default")
 	}
 
-	return fallbackDefaultMaxTokens, nil
+	return defaultMaxTokens, nil
 }
 
-// CalculateEmbeddingCharLimits calculates the recommended good and maximum character limits for embedding chunks.
-// It derives these limits based on the model's maximum token capacity, a safety token buffer,
-// a minimum required model token capacity, and an estimated characters-per-token ratio.
-func CalculateEmbeddingCharLimits(modelConfig common.ModelConfig) (goodChunkChars int, maxChunkChars int, err error) {
-
+func GetEmbeddingMaxChars(modelConfig common.ModelConfig) (int, error) {
 	maxTokens, err := GetModelMaxTokens(modelConfig)
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to get model max tokens: %w", err)
+		return 0, fmt.Errorf("failed to get model max tokens: %w", err)
 	}
-
-	if maxTokens < minModelCapacityTokensConstant {
-		return 0, 0, fmt.Errorf("model's max token capacity %d is less than the minimum required %d", maxTokens, minModelCapacityTokensConstant)
-	}
-
-	payloadTokens := maxTokens - tokenBufferConstant
-	if payloadTokens < 1 {
-		return 0, 0, fmt.Errorf("model's token capacity %d after subtracting buffer %d results in %d tokens, which is less than 1", maxTokens, tokenBufferConstant, payloadTokens)
-	}
-
-	maxChunkChars = payloadTokens * charsPerTokenConstant
-
-	goodChunkChars = defaultGoodChunkCharsConstant
-	if maxChunkChars < goodChunkChars {
-		goodChunkChars = maxChunkChars
-	}
-
-	return goodChunkChars, maxChunkChars, nil
+	return maxTokens * charsPerToken, nil
 }
