@@ -866,6 +866,48 @@ value class Password(private val value: String) {
 }`,
 		},
 		{
+			name:       "backtick quoted identifier",
+			symbolName: "`is data`",
+			code: `class TestClass {
+    // Simple backtick-quoted function name
+    fun ` + "`is data`" + `(): Boolean {
+        return true
+    }
+}`,
+			expectedDefinition: `    // Simple backtick-quoted function name
+    fun ` + "`is data`" + `(): Boolean {
+        return true
+    }`,
+		},
+		{
+			name:       "backtick quoted identifier with special characters",
+			symbolName: "`is-valid?`",
+			code: `class TestClass {
+    // Function name with special characters
+    fun ` + "`is-valid?`" + `(): Boolean {
+        return true
+    }
+}`,
+			expectedDefinition: `    // Function name with special characters
+    fun ` + "`is-valid?`" + `(): Boolean {
+        return true
+    }`,
+		},
+		{
+			name:       "backtick quoted identifier with unicode",
+			symbolName: "`π`",
+			code: `class TestClass {
+    // Unicode symbol in function name
+    fun ` + "`π`" + `(): Double {
+        return 3.14159
+    }
+}`,
+			expectedDefinition: `    // Unicode symbol in function name
+    fun ` + "`π`" + `(): Double {
+        return 3.14159
+    }`,
+		},
+		{
 			name:       "object definition",
 			symbolName: "Singleton",
 			code: `object Singleton {
@@ -1122,7 +1164,6 @@ func TestGetAllAlternativeFileSymbolsKotlin(t *testing.T) {
 		})
 	}
 }
-
 
 func TestShrinkKotlinEmbeddedCodeContext(t *testing.T) {
 	tests := []struct {
