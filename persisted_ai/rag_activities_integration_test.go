@@ -41,7 +41,37 @@ func setupTestWorkspace(t *testing.T, ctx context.Context) (string, string) {
 		}
 	}
 
-	require.NotEmpty(t, workspaceId, "No workspace found for repository root: %s", cleanedRepoRoot)
+	if workspaceId == "" {
+		// If no workspace found, try finding the git source directory
+		cmd := exec.Command("git", "rev-parse", "--git-common-dir")
+		gitCommonDirBytes, err := cmd.Output()
+		if err == nil {
+			gitCommonDir := strings.TrimSpace(string(gitCommonDirBytes))
+			if !filepath.IsAbs(gitCommonDir) {
+				gitCommonDir = filepath.Join(cleanedRepoRoot, gitCommonDir)
+			}
+			commonRepoDir := filepath.Clean(filepath.Dir(gitCommonDir))
+			// Check if there's a workspace for the source directory
+			for _, ws := range workspaces {
+				if filepath.Clean(ws.LocalRepoDir) == commonRepoDir {
+					workspaceId = ws.Id
+					break
+				}
+			}
+		}
+	}
+
+	/*
+		There are a reasons we prompt the developer to init instead of just creating a
+		new workspace:
+
+		1. The init process is needed to help them get set up right anyways
+		2. We want the dev to know what workspaces they init: this will end up
+		   being a real workspace they see in their local sidekick UI
+		3. We don't want CI to keep re-initializing and embedding everything,
+		   that could potentially get expensive
+	*/
+	require.NotEmpty(t, workspaceId, "Failed to find an existing workspace.\n\nPlease run `side init` in the sidekick repo root and try again.")
 	return workspaceId, cleanedRepoRoot
 }
 
@@ -56,8 +86,6 @@ func setupRagService(t *testing.T, ctx context.Context, repoRoot string) *persis
 	}
 }
 
-// TestRankedDirSignatureOutline_Integration verifies that the RankedDirSignatureOutline
-// function correctly identifies and ranks code signatures related to database interactions
 func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set to true")
@@ -98,8 +126,8 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 
 	// Execute the function under test
 	output, err := ragActivities.RankedDirSignatureOutline(options)
-	require.NoError(t, err, "RankedDirSignatureOutline returned an error")
 	require.NotEmpty(t, output, "RankedDirSignatureOutline output should not be empty")
+	require.NoError(t, err, "RankedDirSignatureOutline returned an error")
 
 	// Verify expected directory paths are present
 	expectedPaths := []string{
