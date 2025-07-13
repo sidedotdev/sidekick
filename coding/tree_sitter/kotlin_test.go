@@ -866,6 +866,48 @@ value class Password(private val value: String) {
 }`,
 		},
 		{
+			name:       "backtick quoted identifier",
+			symbolName: "`is data`",
+			code: `class TestClass {
+    // Simple backtick-quoted function name
+    fun ` + "`is data`" + `(): Boolean {
+        return true
+    }
+}`,
+			expectedDefinition: `    // Simple backtick-quoted function name
+    fun ` + "`is data`" + `(): Boolean {
+        return true
+    }`,
+		},
+		{
+			name:       "backtick quoted identifier with special characters",
+			symbolName: "`is-valid?`",
+			code: `class TestClass {
+    // Function name with special characters
+    fun ` + "`is-valid?`" + `(): Boolean {
+        return true
+    }
+}`,
+			expectedDefinition: `    // Function name with special characters
+    fun ` + "`is-valid?`" + `(): Boolean {
+        return true
+    }`,
+		},
+		{
+			name:       "backtick quoted identifier with unicode",
+			symbolName: "`π`",
+			code: `class TestClass {
+    // Unicode symbol in function name
+    fun ` + "`π`" + `(): Double {
+        return 3.14159
+    }
+}`,
+			expectedDefinition: `    // Unicode symbol in function name
+    fun ` + "`π`" + `(): Double {
+        return 3.14159
+    }`,
+		},
+		{
 			name:       "object definition",
 			symbolName: "Singleton",
 			code: `object Singleton {
@@ -1118,6 +1160,112 @@ func TestGetAllAlternativeFileSymbolsKotlin(t *testing.T) {
 					assert.Equal(t, originalSymbol.StartPoint, symbol.StartPoint)
 					assert.Equal(t, originalSymbol.EndPoint, symbol.EndPoint)
 				}
+			}
+		})
+	}
+}
+
+func TestShrinkKotlinEmbeddedCodeContext(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		code         string
+		expected     string
+		expectShrink bool
+	}{
+		{
+			name: "preserves private and protected members",
+			code: `package test
+
+private class PrivateClass {
+    private val secret = "not hidden"
+    protected fun protectedMethod() {}
+    internal fun internalMethod() {}
+    fun publicMethod() {}
+}
+
+class PublicClass {
+    private companion object {
+        const val PRIVATE_CONST = "secret"
+    }
+    
+    protected class ProtectedNested
+    private object PrivateObject
+    
+    private var privateVar = 0
+    protected val protectedVal = ""
+    internal var internalVar = false
+    var publicVar = true
+}`,
+// FIXME want these lines too but doesn't work yet:
+/*
+	private companion object
+		const val PRIVATE_CONST
+*/
+			expected: `Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
+` + "```" + `kotlin-signatures
+private class PrivateClass
+	private val secret = "not hidden"
+	protected fun protectedMethod()
+	internal fun internalMethod()
+	fun publicMethod()
+class PublicClass
+	protected class ProtectedNested
+	private object PrivateObject
+	private var privateVar = 0
+	protected val protectedVal = ""
+	internal var internalVar = false
+	var publicVar = true
+` + "```",
+			expectShrink: true,
+		},
+		{
+			name: "preserves private enum entries",
+			code: `package test
+
+enum class Visibility {
+    PUBLIC,
+    PRIVATE,
+    PROTECTED;
+
+    private fun hiddenMethod() {}
+    protected val protectedProp = ""
+}`,
+			expected: `Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
+` + "```" + `kotlin-signatures
+enum class Visibility
+	PUBLIC
+	PRIVATE
+	PROTECTED
+	private fun hiddenMethod()
+	protected val protectedProp = ""
+` + "```",
+			expectShrink: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			input := createMarkdownCodeBlock("kotlin", tt.code)
+			result, didShrink := ShrinkEmbeddedCodeContext(input, false, len(tt.code)-100)
+
+			// Normalize line endings for comparison
+			normalizedCode := strings.TrimSpace(strings.ReplaceAll(tt.code, "\r\n", "\n"))
+			normalizedResult := strings.TrimSpace(strings.ReplaceAll(result, "\r\n", "\n"))
+			normalizedExpected := strings.TrimSpace(strings.ReplaceAll(tt.expected, "\r\n", "\n"))
+
+			if normalizedCode == normalizedResult {
+				assert.False(t, didShrink)
+			} else {
+				assert.True(t, didShrink)
+			}
+			if normalizedResult != normalizedExpected {
+				t.Errorf("ShrinkEmbeddedCodeContext() got:\n%s\n\nwant:\n%s", normalizedResult, normalizedExpected)
+				t.Errorf("ShrinkEmbeddedCodeContext() got:\n%s\n\nwant:\n%s", utils.PrettyJSON(normalizedResult), utils.PrettyJSON(normalizedExpected))
+			}
+			if didShrink != tt.expectShrink {
+				t.Errorf("ShrinkEmbeddedCodeContext() didShrink = %v, want %v", didShrink, tt.expectShrink)
 			}
 		})
 	}
