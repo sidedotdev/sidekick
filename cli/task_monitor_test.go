@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -201,6 +202,61 @@ func TestTaskMonitor_Start_WebSocketError(t *testing.T) {
 	assert.Contains(t, status.Error.Error(), "websocket connection failed")
 	assert.Equal(t, testTask.Status, status.Task.Status)
 
+	_, ok := <-statusChan
+	assert.False(t, ok, "status channel should be closed")
+	_, ok = <-progressChan
+	assert.False(t, ok, "progress channel should be closed")
+}
+
+func TestTaskMonitor_Start_ServerUnavailability(t *testing.T) {
+	t.Parallel()
+	// Start WebSocket server
+	s := httptest.NewServer(http.HandlerFunc(wsHandler))
+	defer s.Close()
+	testTask := newTestTaskWithFlows()
+	mockClient := &mockClient{baseURL: s.URL}
+	mockCall := mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+
+	TaskPollInterval = 100 * time.Millisecond
+	FlowPollInterval = 100 * time.Millisecond
+	m := NewTaskMonitor(mockClient, "workspace1", "task1")
+
+	statusChan, progressChan := m.Start(context.Background())
+
+	// Initial status should be successful
+	status := <-statusChan
+	assert.NoError(t, status.Error)
+	assert.Equal(t, testTask, status.Task)
+
+	// Verify progress update
+	progress := <-progressChan
+	assert.Equal(t, "test", progress.ActionType)
+	assert.Equal(t, domain.ActionStatusComplete, progress.ActionStatus)
+
+	// Simulate server unavailability
+	mockCall.Unset()
+	serverError := errors.New("connection refused")
+	mockClient.On("GetTask", "workspace1", "task1").Return(client.Task{}, serverError)
+
+	// Should receive error status but channel remains open
+	status = <-statusChan
+	assert.Error(t, status.Error)
+	assert.Contains(t, status.Error.Error(), "connection refused")
+	assert.Equal(t, testTask, status.Task) // Preserves last known task state
+
+	// Server recovers with completed task
+	completedTask := testTask
+	completedTask.Status = domain.TaskStatusComplete
+	mockCall.Unset()
+	mockCall = mockClient.On("GetTask", "workspace1", "task1").Return(completedTask, nil)
+
+	// Server recovers, task complete
+	status = <-statusChan
+	assert.NoError(t, status.Error)
+	assert.Equal(t, completedTask, status.Task)
+	assert.True(t, status.Finished)
+
+	// Channels should close after completion
 	_, ok := <-statusChan
 	assert.False(t, ok, "status channel should be closed")
 	_, ok = <-progressChan
