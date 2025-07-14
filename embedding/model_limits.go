@@ -80,6 +80,10 @@ func BatchEmbeddingRequests(inputs []string, modelConfig common.ModelConfig) ([]
 	for _, input := range inputs {
 		inputTokens := (len(input) + charsPerToken - 1) / charsPerToken
 
+		// Return an error if a single input exceeds the maximum batch token limit
+		if inputTokens > maxBatchTokens {
+			return nil, fmt.Errorf("input exceeds maximum batch token limit: %d tokens (max: %d)", inputTokens, maxBatchTokens)
+		}
 		// Start a new batch if this input would exceed either limit
 		if (currentBatchTokens > 0 && currentBatchTokens+inputTokens > maxBatchTokens) ||
 			(len(currentBatch)+1 > maxBatchSize) {
