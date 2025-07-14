@@ -30,6 +30,7 @@ type MergeApprovalParams struct {
 type MergeApprovalResponse struct {
 	Approved     bool   `json:"approved"`
 	TargetBranch string `json:"targetBranch"` // actual target branch selected by the user
+	Message      string `json:"message"`      // feedback message when not approved
 }
 
 type RequestForUser struct {
