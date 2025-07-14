@@ -53,7 +53,12 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 
 	ctx = utils.DefaultRetryCtx(ctx)
 
-	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), input.BasicDevOptions.StartBranch)
+	dCtx, err := SetupDevContext(ctx, SetupDevContextParams{
+		WorkspaceId: input.WorkspaceId,
+		RepoDir:     input.RepoDir,
+		EnvType:     string(input.EnvType),
+		StartBranch: input.BasicDevOptions.StartBranch,
+	})
 	if err != nil {
 		_ = signalWorkflowClosure(ctx, "failed")
 		return "", err
