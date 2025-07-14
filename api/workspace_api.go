@@ -49,7 +49,7 @@ func DefineWorkspaceApiRoutes(r *gin.Engine, ctrl *Controller) *gin.RouterGroup 
 	workspaceApiRoutes := r.Group("api/v1/workspaces")
 	workspaceApiRoutes.POST("", ctrl.CreateWorkspaceHandler)
 	workspaceApiRoutes.GET("", ctrl.GetWorkspacesHandler)
-	workspaceApiRoutes.GET(":workspaceId", ctrl.GetWorkspaceByIdHandler)
+	workspaceApiRoutes.GET(":workspaceId", ctrl.GetWorkspaceHandler)
 	workspaceApiRoutes.PUT(":workspaceId", ctrl.UpdateWorkspaceHandler)
 	workspaceApiRoutes.GET(":workspaceId/branches", ctrl.GetWorkspaceBranchesHandler)
 
@@ -200,7 +200,7 @@ func (ctrl *Controller) SchedulePollFailuresWorkflow() error {
 	return nil
 }
 
-func (ctrl *Controller) GetWorkspaceByIdHandler(c *gin.Context) {
+func (ctrl *Controller) GetWorkspaceHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 
 	workspace, err := ctrl.service.GetWorkspace(c, workspaceId)
