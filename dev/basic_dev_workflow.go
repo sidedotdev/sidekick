@@ -29,6 +29,31 @@ type BasicDevOptions struct {
 	StartBranch           *string     `json:"startBranch,omitempty"`
 }
 
+// formatRequirementsWithReview combines original requirements with review history and work done
+// to create comprehensive requirements for the next iteration
+func formatRequirementsWithReview(originalReqs string, reviewMsgs []string, workDone string, latestReview string) string {
+	var b strings.Builder
+	b.WriteString(originalReqs)
+	b.WriteString("\n\nReview History:\n")
+
+	for i, msg := range reviewMsgs {
+		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, msg))
+	}
+
+	if latestReview != "" {
+		b.WriteString("\nLatest Review Feedback:\n")
+		b.WriteString(latestReview)
+		b.WriteString("\n")
+	}
+
+	if workDone != "" {
+		b.WriteString("\nWork Done So Far:\n")
+		b.WriteString(workDone)
+	}
+
+	return b.String()
+}
+
 func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result string, err error) {
 	globalState := &GlobalState{}
 
@@ -81,18 +106,54 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		requirements = devRequirements.String()
 	}
 
-	v := workflow.GetVersion(dCtx, "basic-dev-parent-subflow", workflow.DefaultVersion, 1)
-	if v == 1 {
-		result, err = RunSubflow(dCtx, "coding", "Coding", func(subflow domain.Subflow) (string, error) {
-			return codingSubflow(dCtx, requirements, input.EnvType, input.BasicDevOptions.StartBranch)
-		})
-	} else {
-		result, err = codingSubflow(dCtx, requirements, input.EnvType, input.BasicDevOptions.StartBranch)
+	// Track review messages for iterative development
+	reviewMessages := []string{}
+	originalRequirements := requirements
+	var lastResult string
+
+	for {
+		v := workflow.GetVersion(dCtx, "basic-dev-parent-subflow", workflow.DefaultVersion, 1)
+		if v == 1 {
+			lastResult, err = RunSubflow(dCtx, "coding", "Coding", func(subflow domain.Subflow) (string, error) {
+				return codingSubflow(dCtx, requirements, input.EnvType, input.BasicDevOptions.StartBranch)
+			})
+		} else {
+			lastResult, err = codingSubflow(dCtx, requirements, input.EnvType, input.BasicDevOptions.StartBranch)
+		}
+
+		if err != nil {
+			if mergeErr, ok := err.(*git.MergeRejectedError); ok {
+				// Get current work done via git diff
+				gitDiff, diffErr := git.GitDiff(dCtx.ExecContext)
+				if diffErr != nil {
+					return "", fmt.Errorf("failed to get git diff after merge rejection: %v", diffErr)
+				}
+
+				// Add rejection message to history
+				reviewMessages = append(reviewMessages, mergeErr.Message)
+
+				// Format new requirements with review history
+				requirements = formatRequirementsWithReview(
+					originalRequirements,
+					reviewMessages,
+					gitDiff,
+					mergeErr.Message,
+				)
+
+				// Continue the loop with updated requirements
+				continue
+			}
+
+			// For any other error, signal failure and return
+			_ = signalWorkflowClosure(dCtx, "failed")
+			return "", err
+		}
+
+		// If we get here, the merge was approved
+		break
 	}
-	if err != nil {
-		_ = signalWorkflowClosure(dCtx, "failed")
-	}
-	return result, err
+
+	return lastResult, nil
 }
 
 func codingSubflow(dCtx DevContext, requirements string, envType env.EnvType, startBranch *string) (result string, err error) {
@@ -371,7 +432,16 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, gitDiff string) (Me
 		Diff:                gitDiff,
 	}
 
-	return GetUserMergeApproval(dCtx, "Please approve before we merge", map[string]any{
+	resp, err := GetUserMergeApproval(dCtx, "Please approve before we merge", map[string]any{
 		"mergeApprovalInfo": mergeParams,
 	})
+	if err != nil {
+		return resp, err
+	}
+
+	if !resp.Approved && resp.Message != "" {
+		return resp, &git.MergeRejectedError{Message: resp.Message}
+	}
+
+	return resp, nil
 }
