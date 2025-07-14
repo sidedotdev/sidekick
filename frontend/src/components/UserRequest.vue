@@ -111,7 +111,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import type { FlowAction } from '../lib/models';
 import AutogrowTextarea from './AutogrowTextarea.vue';
 import BranchSelector from './BranchSelector.vue'
@@ -139,6 +139,37 @@ const props = defineProps({
 const responseContent = ref('');
 const errorMessage = ref('');
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
+
+function getStorageKey(actionId: string): string {
+  return `sidekick_user_request_draft_${actionId}`;
+}
+
+function clearDraft() {
+  try {
+    localStorage.removeItem(getStorageKey(props.flowAction.id));
+  } catch (error) {
+    console.debug('Failed to clear draft:', error);
+  }
+}
+
+watch(responseContent, (newContent) => {
+  try {
+    localStorage.setItem(getStorageKey(props.flowAction.id), newContent);
+  } catch (error) {
+    console.debug('Failed to save draft:', error);
+  }
+});
+
+onMounted(() => {
+  try {
+    const savedContent = localStorage.getItem(getStorageKey(props.flowAction.id));
+    if (savedContent) {
+      responseContent.value = savedContent;
+    }
+  } catch (error) {
+    console.debug('Failed to load draft:', error);
+  }
+});
 
 const parsedActionResult = computed(() => {
   try {
@@ -217,6 +248,7 @@ async function submitUserResponse(approved: boolean) {
     // Success case - parse response once
     const result = await response.json();
     console.debug(result);
+    clearDraft();
     return true;
   } catch (error) {
     errorMessage.value = 'Network error: Failed to submit response';
