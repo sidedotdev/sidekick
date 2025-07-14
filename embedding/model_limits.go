@@ -59,13 +59,18 @@ var providerBatchSizeLimits = map[string]int{
 	string(common.GoogleChatProvider): 250,
 }
 
-// BatchEmbeddingRequests splits a list of inputs into batches that stay under token limits.
-// Each batch's total tokens will not exceed the maximum allowed by the model/provider.
+// BatchEmbeddingRequests splits a list of inputs into batches that stay under both token and size limits.
+// Each batch will not exceed the maximum tokens or maximum number of inputs allowed by the model/provider.
 // The original order of inputs is preserved across batches.
 func BatchEmbeddingRequests(inputs []string, modelConfig common.ModelConfig) ([][]string, error) {
 	maxBatchTokens, err := GetMaxBatchTokens(modelConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get max batch tokens: %w", err)
+	}
+
+	maxBatchSize, err := GetMaxBatchSize(modelConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get max batch size: %w", err)
 	}
 
 	var batches [][]string
@@ -75,8 +80,9 @@ func BatchEmbeddingRequests(inputs []string, modelConfig common.ModelConfig) ([]
 	for _, input := range inputs {
 		inputTokens := (len(input) + charsPerToken - 1) / charsPerToken
 
-		// Start a new batch if this input would exceed the limit
-		if currentBatchTokens > 0 && currentBatchTokens+inputTokens > maxBatchTokens {
+		// Start a new batch if this input would exceed either limit
+		if (currentBatchTokens > 0 && currentBatchTokens+inputTokens > maxBatchTokens) ||
+			(len(currentBatch)+1 > maxBatchSize) {
 			batches = append(batches, currentBatch)
 			currentBatch = nil
 			currentBatchTokens = 0
