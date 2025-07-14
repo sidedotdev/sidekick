@@ -248,14 +248,18 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		return
 	}
 
-	if workspaceReq.Name == "" && workspaceReq.LocalRepoDir == "" && workspaceReq.LLMConfig.Defaults == nil && workspaceReq.EmbeddingConfig.Defaults == nil {
-		ctrl.ErrorHandler(c, http.StatusBadRequest, errors.New("At least one of Name, LocalRepoDir, LLMConfig, or EmbeddingConfig is required"))
+	workspace, err := ctrl.service.GetWorkspace(c, workspaceId)
+	if err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			ctrl.ErrorHandler(c, http.StatusNotFound, err)
+		} else {
+			ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
+		}
 		return
 	}
 
-	workspace, err := ctrl.service.GetWorkspace(c, workspaceId)
-	if err != nil {
-		ctrl.ErrorHandler(c, http.StatusNotFound, err)
+	if workspaceReq.Name == "" || workspaceReq.LocalRepoDir == "" {
+		ctrl.ErrorHandler(c, http.StatusBadRequest, errors.New("Name and LocalRepoDir are required fields"))
 		return
 	}
 
@@ -265,25 +269,14 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 			ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
 			return
 		}
-		// If the config is not found, create a new one
-		workspaceConfig = domain.WorkspaceConfig{
-			LLM:       common.LLMConfig{},
-			Embedding: common.EmbeddingConfig{},
-		}
+		workspaceConfig = domain.WorkspaceConfig{}
 	}
 
-	if workspaceReq.Name != "" {
-		workspace.Name = workspaceReq.Name
-	}
-	if workspaceReq.LocalRepoDir != "" {
-		workspace.LocalRepoDir = workspaceReq.LocalRepoDir
-	}
-	if workspaceReq.LLMConfig.Defaults != nil {
-		workspaceConfig.LLM.Defaults = workspaceReq.LLMConfig.Defaults
-	}
-	if workspaceReq.EmbeddingConfig.Defaults != nil {
-		workspaceConfig.Embedding.Defaults = workspaceReq.EmbeddingConfig.Defaults
-	}
+	// Update fields directly without preserving unspecified values
+	workspace.Name = workspaceReq.Name
+	workspace.LocalRepoDir = workspaceReq.LocalRepoDir
+	workspaceConfig.LLM = workspaceReq.LLMConfig
+	workspaceConfig.Embedding = workspaceReq.EmbeddingConfig
 	workspace.Updated = time.Now()
 
 	if err := ctrl.service.PersistWorkspace(c, workspace); err != nil {

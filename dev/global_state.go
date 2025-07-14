@@ -1,6 +1,11 @@
 package dev
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
+
+var PendingActionError = errors.New("pending_action")
 
 // UserActionType defines the type for user actions.
 type UserActionType string

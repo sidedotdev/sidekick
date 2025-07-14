@@ -7,6 +7,7 @@ import (
 	db "sidekick/srv"
 
 	"github.com/kelindar/binary"
+	"github.com/rs/zerolog/log"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
@@ -117,6 +118,7 @@ func (va VectorActivities) buildStaticVectorStore(ctx context.Context, workspace
 
 		if len(ev) != numDimensions {
 			index.Destroy()
+			log.Error().Str("embeddingKey", embeddingKeys[i]).Msg("dimension mismatch")
 			return staticVectoreStore{}, fmt.Errorf("dimension mismatch for key %s: expected %d, got %d", subkeys[i], numDimensions, len(ev))
 		}
 

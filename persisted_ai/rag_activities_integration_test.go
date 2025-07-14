@@ -42,7 +42,8 @@ func setupTestWorkspace(t *testing.T, ctx context.Context) (string, string) {
 	}
 
 	if workspaceId == "" {
-		// If no workspace found, try finding the git source directory
+		// If no workspace found, this might be a worktree, so try finding the
+		// common git repo directory
 		cmd := exec.Command("git", "rev-parse", "--git-common-dir")
 		gitCommonDirBytes, err := cmd.Output()
 		if err == nil {
