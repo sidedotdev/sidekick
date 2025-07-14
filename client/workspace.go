@@ -74,12 +74,16 @@ func (c *clientImpl) CreateWorkspace(req *CreateWorkspaceRequest) (*domain.Works
 	return domainWorkspace, nil
 }
 
+type workspacesResponse struct {
+	Workspaces []domain.Workspace `json:"workspaces"`
+}
+
 // GetAllWorkspaces returns all workspaces.
 func (c *clientImpl) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error) {
-	var workspaces []domain.Workspace
-	err := c.get(ctx, "/api/v1/workspaces", &workspaces)
+	var workspacesResponse workspacesResponse
+	err := c.get(ctx, "/api/v1/workspaces", &workspacesResponse)
 	if err != nil {
 		return nil, err
 	}
-	return workspaces, nil
+	return workspacesResponse.Workspaces, nil
 }
