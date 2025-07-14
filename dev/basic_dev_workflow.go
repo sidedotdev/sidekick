@@ -24,9 +24,10 @@ type BasicDevWorkflowInput struct {
 }
 
 type BasicDevOptions struct {
-	DetermineRequirements bool        `json:"determineRequirements"`
-	EnvType               env.EnvType `json:"envType,omitempty" default:"local"`
-	StartBranch           *string     `json:"startBranch,omitempty"`
+	DetermineRequirements bool               `json:"determineRequirements"`
+	EnvType               env.EnvType        `json:"envType,omitempty" default:"local"`
+	StartBranch           *string            `json:"startBranch,omitempty"`
+	ConfigOverrides       DevConfigOverrides `json:"configOverrides,omitempty"`
 }
 
 func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result string, err error) {
@@ -58,7 +59,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		RepoDir:         input.RepoDir,
 		EnvType:         string(input.EnvType),
 		StartBranch:     input.BasicDevOptions.StartBranch,
-		ConfigOverrides: DevConfigOverrides{},
+		ConfigOverrides: input.BasicDevOptions.ConfigOverrides,
 	})
 	if err != nil {
 		_ = signalWorkflowClosure(ctx, "failed")
