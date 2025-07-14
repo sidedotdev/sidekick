@@ -159,7 +159,8 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 					p.Send(taskErrorMsg{err: taskStatus.Error})
 				}
 				if taskStatus.Finished {
-					p.Send(finalUpdateMsg{message: finishMessage(taskStatus.Task, kanbanLink(workspace.Id))})
+					finalMessage := finishMessage(taskStatus.Task, kanbanLink(workspace.Id))
+					p.Send(updateLifecycleMsg{key: "init", content: finalMessage})
 					p.Quit()
 					return
 				}
