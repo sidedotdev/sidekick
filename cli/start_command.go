@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/urfave/cli/v3"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/operatorservice/v1"
 	"go.temporal.io/sdk/client"
@@ -381,29 +382,51 @@ func waitForServer(timeout time.Duration) bool {
 	return false
 }
 
-func handleStartCommand(args []string) {
-	server := false
-	worker := false
-	temporal := false
-	natsServer := false
-	disableAutoOpen := false
-
-	// Parse optional args: `server`, `worker`, `temporal`, `--disable-auto-open`
-	for _, arg := range args {
-		switch arg {
-		case "server":
-			server = true
-		case "worker":
-			worker = true
-		case "temporal":
-			temporal = true
-		case "nats":
-			natsServer = true
-		case "--disable-auto-open":
-			disableAutoOpen = true
-		}
+func NewStartCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "start",
+		Usage: "Start services required to use Sidekick",
+		Description: "Starts the Sidekick services. By default, all services are started. " +
+			"Use flags to enable specific services if you want to run only a subset.",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:    "server",
+				Aliases: []string{"s"},
+				Usage:   "Enable the server component",
+			},
+			&cli.BoolFlag{
+				Name:    "worker",
+				Aliases: []string{"w"},
+				Usage:   "Enable the worker component",
+			},
+			&cli.BoolFlag{
+				Name:    "temporal",
+				Aliases: []string{"t"},
+				Usage:   "Enable the temporal component",
+			},
+			&cli.BoolFlag{
+				Name:    "nats",
+				Aliases: []string{"n"},
+				Usage:   "Enable the NATS server component",
+			},
+			&cli.BoolFlag{
+				Name:    "disable-auto-open",
+				Aliases: []string{"x"},
+				Usage:   "Disable automatic browser opening",
+			},
+		},
+		Action: handleStartCommand,
 	}
+}
 
+func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
+	server := cmd.Bool("server")
+	worker := cmd.Bool("worker")
+	temporal := cmd.Bool("temporal")
+	natsServer := cmd.Bool("nats")
+	disableAutoOpen := cmd.Bool("disable-auto-open")
+
+	// If no services specified, enable all by default
 	if !server && !worker && !temporal && !natsServer {
 		server = true
 		worker = true
@@ -526,6 +549,7 @@ func handleStartCommand(args []string) {
 	// Wait for all processes to complete
 	wg.Wait()
 	log.Info().Msg("Shut down gracefully")
+	return nil
 }
 
 func startServer() *http.Server {

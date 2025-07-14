@@ -103,16 +103,7 @@ func setupAndRunInteractiveCli(args []string) error {
 					return nil
 				},
 			},
-			{
-				Name:  "start",
-				Usage: "Start services required to use Sidekick. Starts all services by default, but provides sub-commands to run each service individually.",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					// Assumes handleStartCommand is defined elsewhere and handles its own output/exit.
-					// It might need refactoring in the future to return errors.
-					handleStartCommand(cmd.Args().Slice())
-					return nil
-				},
-			},
+			NewStartCommand(),
 			/*
 				{
 					Name:      "service",

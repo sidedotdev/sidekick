@@ -170,7 +170,10 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		}
 
 		if startServer {
-			handleStartCommand([]string{})
+			cmd := NewStartCommand()
+			if err := handleStartCommand(context.Background(), cmd); err != nil {
+				return fmt.Errorf("error starting server: %w", err)
+			}
 		} else {
 			fmt.Println("Please run 'side start' to start the server when you're ready")
 		}
