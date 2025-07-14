@@ -54,10 +54,11 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 	ctx = utils.DefaultRetryCtx(ctx)
 
 	dCtx, err := SetupDevContext(ctx, SetupDevContextParams{
-		WorkspaceId: input.WorkspaceId,
-		RepoDir:     input.RepoDir,
-		EnvType:     string(input.EnvType),
-		StartBranch: input.PlannedDevOptions.StartBranch,
+		WorkspaceId:     input.WorkspaceId,
+		RepoDir:         input.RepoDir,
+		EnvType:         string(input.EnvType),
+		StartBranch:     input.PlannedDevOptions.StartBranch,
+		ConfigOverrides: DevConfigOverrides{},
 	})
 	if err != nil {
 		_ = signalWorkflowClosure(ctx, "failed")
