@@ -60,14 +60,21 @@ const emit = defineEmits<{
 
 const name = ref('');
 const localRepoDir = ref('');
+const getEmptyUseCaseConfigs = () => { return {'': [{ provider: '', model: '' }]}}
 const llmConfig = ref<LLMConfig>({ 
   defaults: props.workspace.llmConfig?.defaults?.length ? [...props.workspace.llmConfig.defaults] : [{ provider: '', model: '' }], 
-  useCaseConfigs: props.workspace.llmConfig?.useCaseConfigs ? { ...props.workspace.llmConfig.useCaseConfigs } : {'': [{ provider: '', model: '' }]}
+  useCaseConfigs: props.workspace.llmConfig?.useCaseConfigs ? { ...props.workspace.llmConfig.useCaseConfigs } : getEmptyUseCaseConfigs() 
 });
+if (!Object.keys(llmConfig.value.useCaseConfigs).length) {
+  llmConfig.value.useCaseConfigs = getEmptyUseCaseConfigs() 
+}
 const embeddingConfig = ref<EmbeddingConfig>({ 
   defaults: props.workspace.embeddingConfig?.defaults?.length ? [...props.workspace.embeddingConfig.defaults] : [{ provider: '', model: '' }], 
-  useCaseConfigs: props.workspace.embeddingConfig?.useCaseConfigs ? { ...props.workspace.embeddingConfig.useCaseConfigs } : {'': [{ provider: '', model: '' }]} 
+  useCaseConfigs: props.workspace.embeddingConfig?.useCaseConfigs ? { ...props.workspace.embeddingConfig.useCaseConfigs } : getEmptyUseCaseConfigs() 
 });
+if (!Object.keys(embeddingConfig.value.useCaseConfigs).length) {
+  embeddingConfig.value.useCaseConfigs = getEmptyUseCaseConfigs() 
+}
 
 const llmAdvancedExpanded = ref(false);
 
@@ -105,12 +112,23 @@ onMounted(() => {
   }
 });
 
+const filterEmptyUseCaseKeys = <T extends LLMConfig | EmbeddingConfig>(config: T): T => {
+  return {
+    ...config,
+    useCaseConfigs: Object.fromEntries(
+      Object.entries(config.useCaseConfigs)
+        .filter(([key]) => key !== '')
+        .map(([key, value]) => [key, [...value]])
+    )
+  } as T;
+};
+
 const submitWorkspace = async () => {
   const formData: Omit<Workspace, 'id'> = {
     name: name.value,
     localRepoDir: localRepoDir.value,
-    llmConfig: llmConfig.value,
-    embeddingConfig: embeddingConfig.value
+    llmConfig: filterEmptyUseCaseKeys(llmConfig.value),
+    embeddingConfig: filterEmptyUseCaseKeys(embeddingConfig.value)
   };
 
   try {

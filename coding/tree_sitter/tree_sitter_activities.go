@@ -8,8 +8,11 @@ import (
 	"strings"
 )
 
+// TODO move to persisted_ai package
+const DefaultPreferredChunkChars = 3000
+
 type TreeSitterActivities struct {
-	DatabaseAccessor srv.Service
+	DatabaseAccessor srv.Storage
 }
 
 const ContentTypeFileSignature = "file:signature"
@@ -17,7 +20,7 @@ const ContentTypeDirChunk = "dir:chunk"
 
 // TODO move to RagActivities
 // TODO add param for context.Context
-func (t *TreeSitterActivities) CreateDirSignatureOutlines(workspaceId string, directoryPath string) ([]string, error) {
+func (t *TreeSitterActivities) CreateDirSignatureOutlines(workspaceId string, directoryPath string, maxCharacterLimit int) ([]string, error) {
 	// FIXME perf: have a way to skip getting outlines for the ones we already set in the DB, eg using checksums
 	outlines, err := GetDirectorySignatureOutlines(directoryPath, nil, nil)
 
@@ -29,7 +32,11 @@ func (t *TreeSitterActivities) CreateDirSignatureOutlines(workspaceId string, di
 	hashes := make([]string, 0, len(outlines))
 	for _, outline := range outlines {
 		if outline.OutlineType == OutlineTypeFileSignature && outline.Content != "" {
-			outlineChunks := splitOutlineIntoChunks(outline.Content, defaultGoodChunkSize, defaultMaxChunkSize)
+			goodCharacterLimit := DefaultPreferredChunkChars
+			if maxCharacterLimit < goodCharacterLimit {
+				goodCharacterLimit = maxCharacterLimit
+			}
+			outlineChunks := splitOutlineIntoChunks(outline.Content, goodCharacterLimit, maxCharacterLimit)
 			for _, chunk := range outlineChunks {
 				value := outline.Path + "\n" + chunk
 				hash := utils.Hash256(value)
@@ -48,9 +55,6 @@ func (t *TreeSitterActivities) CreateDirSignatureOutlines(workspaceId string, di
 	return hashes, nil
 }
 
-const defaultMaxChunkSize = 10000
-const defaultGoodChunkSize = 3000
-
 func splitOutlineIntoChunks(s string, goodChunkSize int, maxChunkSize int) []string {
 	if s == "" {
 		return []string{}
@@ -59,6 +63,8 @@ func splitOutlineIntoChunks(s string, goodChunkSize int, maxChunkSize int) []str
 	chunks := []string{}
 
 	// first split based on change in indentation from indented to outdented
+	// TODO: we could have better, more coherent chunks if we tried chunking
+	// when outdenting to 0 indentation instead
 	lines := strings.Split(s, "\n")
 	currentIndentation := -1
 	currentChunk := ""

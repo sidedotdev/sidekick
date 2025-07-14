@@ -189,7 +189,7 @@ func GetFileSymbolsString(filePath string) (string, error) {
 
 func getSourceSymbolsInternal(languageName string, sitterLanguage *sitter.Language, tree *sitter.Tree, sourceCode *[]byte) ([]Symbol, error) {
 	// NOTE: signature query does double-duty as the symbol query. FIXME should be renamed!
-	queryString, err := getSignatureQuery(languageName)
+	queryString, err := getSignatureQuery(languageName, false)
 	if err != nil {
 		return []Symbol{}, fmt.Errorf("error rendering symbol definition query: %w", err)
 	}
@@ -411,13 +411,13 @@ func (sc SourceCode) GetSymbols() ([]Symbol, error) {
 
 func normalizeLanguageName(s string) string {
 	switch s {
-	case "go":
+	case "go", "golang":
 		return "golang"
-	case "py":
+	case "py", "python":
 		return "python"
-	case "kt":
-		return "kotlin"
-	case "ts":
+	case "java":
+		return "java"
+	case "ts", "typescript":
 		return "typescript"
 	default:
 		return s
@@ -425,16 +425,16 @@ func normalizeLanguageName(s string) string {
 }
 
 func getSitterLanguage(languageName string) (*sitter.Language, error) {
-	switch normalizeLanguageName(languageName) {
-	case "golang":
+	switch languageName {
+	case "go", "golang":
 		return golang.GetLanguage(), nil
-	case "python":
-		return python.GetLanguage(), nil
+	case "kt", "kotlin":
+		return kotlin.GetLanguage(), nil
 	case "java":
 		return java.GetLanguage(), nil
-	case "kotlin":
-		return kotlin.GetLanguage(), nil
-	case "typescript":
+	case "py", "python":
+		return python.GetLanguage(), nil
+	case "ts", "typescript":
 		return typescript.GetLanguage(), nil
 	case "tsx":
 		return tsx.GetLanguage(), nil

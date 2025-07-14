@@ -11,6 +11,7 @@ import (
 	"sidekick/llm"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -218,7 +219,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 			}
 
 			// Run tests (TODO: replace this with using the latest DevStepResult)
-			testResult, err := RunTests(dCtx)
+			testResult, err := RunTests(dCtx, dCtx.RepoConfig.TestCommands)
 			if err != nil {
 				return result, fmt.Errorf("failed to run tests: %v", err)
 			}
@@ -242,7 +243,8 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 
 		// Step 2: execute step
 		err = performStep(dCtx, modelConfig, contextSizeExtension, chatHistory, promptInfo, step, planExecution)
-		if err != nil {
+		if err != nil && !errors.Is(err, PendingActionError) {
+			log.Warn().Err(err).Msg("Error executing step")
 			// TODO: on repeated overloaded_error from anthropic, we want to
 			// fallback to another provider higher up. similar for other provider
 			// errors.
@@ -269,6 +271,12 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 			if err != nil {
 				return result, fmt.Errorf("failed to check if requirements are fulfilled: %w", err)
 			}
+		} else {
+			// we're forcibly going to the next step, which requires this step
+			// to be considered "successful"
+			result.Summary = fmt.Sprintf("The user forcibly ended step %s's execution to go to the next step. Assume that it has been completed, though likely in a manner slightly different from what was originally specified. Take any changes in stride, but ask for clarifications if necessary.", step.StepNumber)
+			result.Successful = true
+			break
 		}
 
 		if result.Successful {
@@ -318,7 +326,7 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 	switch step.Type {
 	case "edit":
 		// Pass a git diff of the repo + test results to the llm and ask if it looks good
-		testResult, err := RunTests(dCtx)
+		testResult, err := RunTests(dCtx, dCtx.RepoConfig.TestCommands)
 		if err != nil {
 			return result, fmt.Errorf("failed to run tests: %v", err)
 		}
