@@ -170,7 +170,10 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		}
 
 		if startServer {
-			handleStartCommand([]string{})
+			cmd := NewStartCommand()
+			if err := handleStartCommand(context.Background(), cmd); err != nil {
+				return fmt.Errorf("error starting server: %w", err)
+			}
 		} else {
 			fmt.Println("Please run 'side start' to start the server when you're ready")
 		}
@@ -527,9 +530,11 @@ func ensureEmbeddingSecrets() ([]string, error) {
 	return providers, nil
 }
 
+// checkServerStatus checks if the Sidekick server is responsive by making an HTTP GET
+// request to its root path and checking for a "sidekick" keyword in the response.
 func checkServerStatus() bool {
 	client := &http.Client{
-		Timeout: 1 * time.Second,
+		Timeout: 1 * time.Second, // Short timeout for a quick check
 	}
 
 	resp, err := client.Get(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))

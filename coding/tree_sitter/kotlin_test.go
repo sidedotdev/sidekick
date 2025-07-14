@@ -1197,11 +1197,11 @@ class PublicClass {
     internal var internalVar = false
     var publicVar = true
 }`,
-// FIXME want these lines too but doesn't work yet:
-/*
-	private companion object
-		const val PRIVATE_CONST
-*/
+			// FIXME want these lines too but doesn't work yet:
+			/*
+				private companion object
+					const val PRIVATE_CONST
+			*/
 			expected: `Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
 ` + "```" + `kotlin-signatures
 private class PrivateClass
