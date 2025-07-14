@@ -33,8 +33,7 @@ func NewTaskCommand() *cli.Command {
 		Usage:     "Start a new task (e.g., side task \"fix the error in my tests\")",
 		ArgsUsage: "<task description>",
 		Flags: []cli.Flag{
-			// TODO support this flag, after introducing a way to provide a customized DevConfig per invoked flow
-			//&cli.BoolFlag{Name: "disable-human-in-the-loop", Usage: "Disable human-in-the-loop prompts"},
+			&cli.BoolFlag{Name: "disable-human-in-the-loop", Usage: "Disable human-in-the-loop prompts"},
 			&cli.BoolFlag{Name: "async", Usage: "Run task asynchronously and exit immediately"},
 			&cli.StringFlag{Name: "flow", Value: "basic_dev", Usage: "Specify flow type (e.g., basic_dev, planned_dev)"},
 			&cli.BoolFlag{Name: "plan", Aliases: []string{"p"}, Usage: "Shorthand for --flow planned_dev"},
@@ -51,27 +50,28 @@ func NewTaskCommand() *cli.Command {
 
 // parseFlowOptions combines --flow-options JSON with individual --flow-option key=value pairs,
 // with the latter taking precedence
-func parseFlowOptions(cmd *cli.Command) (map[string]interface{}, error) {
-	flowOpts := make(map[string]interface{})
+func parseFlowOptions(cmd *cli.Command) (client.FlowOptions, error) {
+	var flowOpts client.FlowOptions
+	additionalOpts := make(map[string]interface{})
 
 	optionsJSON := cmd.String("flow-options")
-	if err := json.Unmarshal([]byte(optionsJSON), &flowOpts); err != nil {
-		return nil, fmt.Errorf("invalid --flow-options JSON (value: %s): %w", optionsJSON, err)
+	if err := json.Unmarshal([]byte(optionsJSON), &additionalOpts); err != nil {
+		return flowOpts, fmt.Errorf("invalid --flow-options JSON (value: %s): %w", optionsJSON, err)
 	}
 
 	// --no-requirements flag overrides the "determineRequirements" key
 	if cmd.Bool("no-requirements") {
-		flowOpts["determineRequirements"] = false
+		additionalOpts["determineRequirements"] = false
 	}
 
 	// --flow-option key=value pairs override any existing keys
 	for _, optStr := range cmd.StringSlice("flow-option") {
 		key, valueStr, didCut := strings.Cut(optStr, "=")
 		if !didCut {
-			return nil, fmt.Errorf("invalid --flow-option format: '%s'. Expected key=value", optStr)
+			return flowOpts, fmt.Errorf("invalid --flow-option format: '%s'. Expected key=value", optStr)
 		}
 		if key == "" {
-			return nil, fmt.Errorf("invalid --flow-option format: '%s'. Key cannot be empty", optStr)
+			return flowOpts, fmt.Errorf("invalid --flow-option format: '%s'. Key cannot be empty", optStr)
 		}
 
 		// Remove enclosing quotes to support both quoted and unquoted values
@@ -83,8 +83,10 @@ func parseFlowOptions(cmd *cli.Command) (map[string]interface{}, error) {
 				valueStr = ""
 			}
 		}
-		flowOpts[key] = valueStr
+		additionalOpts[key] = valueStr
 	}
+
+	flowOpts.AdditionalOptions = additionalOpts
 	return flowOpts, nil
 }
 
@@ -98,10 +100,6 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 	if err != nil {
 		return cli.Exit(fmt.Errorf("Error getting current working directory: %w", err), 1)
 	}
-
-	// TODO merge into DevConfig, which goes into FlowOptions.DevConfigOverrides
-	// in the task request
-	disableHumanInTheLoop := cmd.Bool("disable-human-in-the-loop")
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -117,7 +115,7 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 			return
 		}
 
-		workspace, err := ensureWorkspace(ctx, currentDir, p, c, disableHumanInTheLoop)
+		workspace, err := ensureWorkspace(ctx, currentDir, p, c, false)
 		if err != nil {
 			p.Send(updateLifecycleMsg{key: "error", content: fmt.Sprintf("Workspace setup failed: %v", err)})
 			p.Quit()
@@ -218,6 +216,12 @@ func buildCreateTaskRequest(cmd *cli.Command) (*client.CreateTaskRequest, error)
 	flowOpts, err := parseFlowOptions(cmd)
 	if err != nil {
 		return nil, cli.Exit(fmt.Errorf("Error parsing flow options: %v", err), 1)
+	}
+
+	// Add disable-human-in-the-loop to DevConfigOverrides if set
+	if cmd.Bool("disable-human-in-the-loop") {
+		flowOpts.ConfigOverrides.DisableHumanInTheLoop = new(bool)
+		*flowOpts.ConfigOverrides.DisableHumanInTheLoop = true
 	}
 
 	req := &client.CreateTaskRequest{

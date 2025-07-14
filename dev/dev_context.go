@@ -20,7 +20,7 @@ type DevContext struct {
 	flow_action.ExecContext
 	GlobalState     *GlobalState
 	Worktree        *domain.Worktree
-	RepoConfig      common.RepoConfig
+	RepoConfig      DevConfig
 	Providers       []common.ModelProviderPublicConfig
 	LLMConfig       common.LLMConfig
 	EmbeddingConfig common.EmbeddingConfig
@@ -40,10 +40,10 @@ func (dCtx DevContext) WithCancelOnPause() DevContext {
 	return dCtx
 }
 
-func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, envType string, startBranch *string) (DevContext, error) {
+func SetupDevContext(ctx workflow.Context, params SetupDevContextParams) (DevContext, error) {
 	initialExecCtx := flow_action.ExecContext{
 		Context:     ctx,
-		WorkspaceId: workspaceId,
+		WorkspaceId: params.WorkspaceId,
 		FlowScope: &flow_action.FlowScope{
 			SubflowName: "Initialize",
 		},
@@ -51,12 +51,12 @@ func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, e
 	return flow_action.TrackSubflowFailureOnly(initialExecCtx, "flow_init", "Initialize", func(_ domain.Subflow) (DevContext, error) {
 		actionCtx := initialExecCtx.NewActionContext("setup_dev_context")
 		return flow_action.TrackFailureOnly(actionCtx, func(_ domain.FlowAction) (DevContext, error) {
-			return setupDevContextAction(ctx, workspaceId, repoDir, envType, startBranch)
+			return setupDevContextAction(ctx, params)
 		})
 	})
 }
 
-func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir string, envType string, startBranch *string) (DevContext, error) {
+func setupDevContextAction(ctx workflow.Context, params SetupDevContextParams) (DevContext, error) {
 	ctx = utils.NoRetryCtx(ctx)
 
 	var devEnv env.Env
@@ -64,10 +64,10 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	var envContainer env.EnvContainer
 
 	var worktree *domain.Worktree
-	switch envType {
+	switch params.EnvType {
 	case string(env.EnvTypeLocal), "":
 		devEnv, err = env.NewLocalEnv(context.Background(), env.LocalEnvParams{
-			RepoDir: repoDir,
+			RepoDir: params.RepoDir,
 		})
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
@@ -78,11 +78,11 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			Id:          ksuidSideEffect(ctx),
 			FlowId:      workflow.GetInfo(ctx).WorkflowExecution.ID,
 			Name:        workflow.GetInfo(ctx).WorkflowExecution.ID, // TODO human-readable branch name generated from task description
-			WorkspaceId: workspaceId,
+			WorkspaceId: params.WorkspaceId,
 		}
 		err = workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeActivity, env.LocalEnvParams{
-			RepoDir:     repoDir,
-			StartBranch: startBranch,
+			RepoDir:     params.RepoDir,
+			StartBranch: params.StartBranch,
 		}, *worktree).Get(ctx, &envContainer)
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
@@ -92,13 +92,13 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			return DevContext{}, fmt.Errorf("failed to persist worktree: %v", err)
 		}
 	default:
-		return DevContext{}, fmt.Errorf("unsupported environment type: %s", envType)
+		return DevContext{}, fmt.Errorf("unsupported environment type: %s", params.EnvType)
 	}
 
 	eCtx := flow_action.ExecContext{
 		FlowScope:    &flow_action.FlowScope{},
 		Context:      ctx,
-		WorkspaceId:  workspaceId,
+		WorkspaceId:  params.WorkspaceId,
 		EnvContainer: &envContainer,
 		Secrets: &secret_manager.SecretManagerContainer{
 			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
@@ -118,7 +118,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	// Get workspace configuration
 	var workspaceConfig domain.WorkspaceConfig
 	var wa *workspace.Activities
-	err = workflow.ExecuteActivity(ctx, wa.GetWorkspaceConfig, workspaceId).Get(ctx, &workspaceConfig)
+	err = workflow.ExecuteActivity(ctx, wa.GetWorkspaceConfig, params.WorkspaceId).Get(ctx, &workspaceConfig)
 	if err != nil {
 		return DevContext{}, fmt.Errorf("failed to get workspace config: %v", err)
 	}
@@ -139,17 +139,20 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	for key, models := range workspaceConfig.Embedding.UseCaseConfigs {
 		finalEmbeddingConfig.UseCaseConfigs[key] = models
 	}
-	repoConfig, err := GetRepoConfig(eCtx)
+	baseConfig, err := GetRepoConfig(eCtx)
 	if err != nil {
 		return DevContext{}, fmt.Errorf("failed to get coding config: %v", err)
 	}
 
+	// Apply any config overrides
+	devConfig := applyOverrides(baseConfig, params.ConfigOverrides)
+
 	// Execute worktree setup script if configured and using git worktree environment
-	if envType == string(env.EnvTypeLocalGitWorktree) && repoConfig.WorktreeSetup != "" {
+	if params.EnvType == string(env.EnvTypeLocalGitWorktree) && devConfig.WorktreeSetup != "" {
 		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 			EnvContainer: envContainer,
 			Command:      "/usr/bin/env",
-			Args:         []string{"sh", "-c", repoConfig.WorktreeSetup},
+			Args:         []string{"sh", "-c", devConfig.WorktreeSetup},
 		}).Get(ctx, nil)
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to execute worktree setup script: %v", err)
@@ -159,7 +162,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	devCtx := DevContext{
 		ExecContext:     eCtx,
 		Worktree:        worktree,
-		RepoConfig:      repoConfig,
+		RepoConfig:      devConfig,
 		Providers:       localConfig.Providers, // TODO merge with workspace providers
 		LLMConfig:       finalLLMConfig,
 		EmbeddingConfig: finalEmbeddingConfig,
