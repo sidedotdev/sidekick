@@ -41,11 +41,11 @@ existing color variables (in frontend/src/assets/base.css) instead of
 hard-coding colors. Don't assume light or dark theme, the existing variables
 auto-adjust based on light vs dark.
 
-When writing go tests, use a real redis DB via functions like
-newTestRedisDatabase rather than defining a mock database accessor. Prefer
-table-style tests in general, but break into separate test functions when there
-are a very large number of test cases, to keep the test function sizes
-reasonable (less than a few hundred lines).
+When writing go tests, use a real DB via sqlite.NewTestSqliteStorage for the
+srv.Storage, rather than defining a mock database accessor, which should never
+be used. Prefer table-style tests in general, but break into separate test
+functions when there are a very large number of test cases, to keep the test
+function sizes reasonable (less than a few hundred lines).
 
 Logs always use zerolog in go. JSON serialization is always in camelCase, not
 snake_case.

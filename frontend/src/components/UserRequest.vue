@@ -155,6 +155,7 @@ const tags: {[key: string]: string} = {
   "approve_plan": "Approve",
   "reject_plan": "Revise",
   "done": "Done",
+  "try_again": "Try Again",
 }
 
 function rejectCopy(): string {

@@ -161,7 +161,7 @@ func TestManageChatHistory(t *testing.T) {
 	})
 
 	t.Run("shrinks embedded code in first message when length exceeds limit", func(t *testing.T) {
-		defaultMaxChatHistoryLength = 900
+		defaultMaxChatHistoryLength = 1400
 		fullInitialCodeContext := `
 some/file.go
 ` + "```go" + `
@@ -172,6 +172,9 @@ import (
 )
 
 func main() {
+	fmt.Println("Hello, playground. Here is some more code to make this message longer. Here is some more code to make this message longer.")
+	fmt.Println("Hello, playground. Here is some more code to make this message longer. Here is some more code to make this message longer.")
+	fmt.Println("Hello, playground. Here is some more code to make this message longer. Here is some more code to make this message longer.")
 	fmt.Println("Hello, playground. Here is some more code to make this message longer. Here is some more code to make this message longer.")
 	fmt.Println("Hello, playground. Here is some more code to make this message longer. Here is some more code to make this message longer.")
 	fmt.Println("Hello, playground. Here is some more code to make this message longer. Here is some more code to make this message longer.")
@@ -190,7 +193,7 @@ func main()
 `, "\n") + SignaturesEditHint
 
 		firstMessage := fullInitialCodeContext
-		lastMessage := strings.Repeat("x", defaultMaxChatHistoryLength/2)
+		lastMessage := strings.Repeat("x", 400)
 		chatHistory := &[]llm.ChatMessage{{Content: firstMessage}, {Content: lastMessage}}
 
 		expectedFirstMessage := symbolizedCodeContent
@@ -204,7 +207,7 @@ func main()
 	})
 
 	t.Run("shrinks embedded code partially in first message when length exceeds limit", func(t *testing.T) {
-		defaultMaxChatHistoryLength = 900
+		defaultMaxChatHistoryLength = 1430
 		fullInitialCodeContext := "```" + `
 some code without a language
 ` + "```" + `
@@ -218,6 +221,10 @@ import (
 )
 
 func main() {
+	fmt.Println("Hello, playground. Here is some more code to make this message longer. Here is some more code to make this message longer.")
+	fmt.Println("Hello, playground. Here is some more code to make this message longer. Here is some more code to make this message longer.")
+	fmt.Println("Hello, playground. Here is some more code to make this message longer. Here is some more code to make this message longer.")
+	fmt.Println("Hello, playground. Here is some more code to make this message longer. Here is some more code to make this message longer.")
 	fmt.Println("Hello, playground. Here is some more code to make this message longer. Here is some more code to make this message longer.")
 	fmt.Println("Hello, playground. Here is some more code to make this message longer. Here is some more code to make this message longer.")
 	fmt.Println("Hello, playground. Here is some more code to make this message longer. Here is some more code to make this message longer.")
@@ -239,7 +246,7 @@ func main()
 ` + SignaturesEditHint
 
 		firstMessage := fullInitialCodeContext
-		lastMessage := strings.Repeat("x", defaultMaxChatHistoryLength/2)
+		lastMessage := strings.Repeat("x", 400)
 		chatHistory := &[]llm.ChatMessage{{Content: firstMessage}, {Content: lastMessage}}
 
 		expectedFirstMessage := symbolizedCodeContent

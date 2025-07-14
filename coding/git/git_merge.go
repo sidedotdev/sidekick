@@ -61,10 +61,10 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 			return
 		}
 		if mergeOutput.ExitStatus != 0 {
-			if strings.Contains(mergeOutput.Stdout, "CONFLICT") {
+			if strings.Contains(mergeOutput.Stdout, "CONFLICT") || strings.Contains(mergeOutput.Stderr, "conflict") {
 				result.HasConflicts = true
-				// resultErr  is nil, since conflicts are not operational errors
-				resultErr = nil
+				// In a worktree, we don't need to abort the merge. The conflicted state is contained
+				// within the worktree and can be inspected or cleaned up later.
 				return
 			}
 			resultErr = fmt.Errorf("merge failed in worktree: %s", mergeOutput.Stderr)
@@ -104,6 +104,21 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 		}
 	}()
 
+	// Checkout the target branch before merging
+	checkoutOutput, checkoutErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer: envContainer,
+		Command:      "git",
+		Args:         []string{"checkout", params.TargetBranch},
+	})
+	if checkoutErr != nil {
+		resultErr = fmt.Errorf("failed to run command to checkout target branch %s: %v", params.TargetBranch, checkoutErr)
+		return
+	}
+	if checkoutOutput.ExitStatus != 0 {
+		resultErr = fmt.Errorf("failed to checkout target branch %s, command stderr: %s", params.TargetBranch, checkoutOutput.Stderr)
+		return
+	}
+
 	// Perform the merge
 	mergeOutput, mergeErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
@@ -112,20 +127,34 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 	})
 	if mergeErr != nil {
 		resultErr = fmt.Errorf("failed to execute merge command: %v", mergeErr)
-		return // defer will run and potentially set resultErr if it's currently nil
+		return
 	}
 	if mergeOutput.ExitStatus != 0 {
-		if strings.Contains(mergeOutput.Stdout, "CONFLICT") {
+		if strings.Contains(mergeOutput.Stdout, "CONFLICT") || strings.Contains(mergeOutput.Stderr, "conflict") {
 			result.HasConflicts = true
+			// Attempt to abort the merge to clean up the repository state.
+			abortOutput, abortErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+				EnvContainer: envContainer,
+				Command:      "git",
+				Args:         []string{"merge", "--abort"},
+			})
+			if abortErr != nil {
+				resultErr = fmt.Errorf("merge had conflicts and failed to abort: %v", abortErr)
+				return
+			}
+			if abortOutput.ExitStatus != 0 {
+				resultErr = fmt.Errorf("merge had conflicts and failed to abort, stderr: %s", abortOutput.Stderr)
+				return
+			}
 			// resultErr remains nil (unless defer sets it to a restore error)
-			return // defer will run
+			return
 		}
 		resultErr = fmt.Errorf("merge failed: %s", mergeOutput.Stderr)
-		return // defer will run
+		return
 	}
 
 	// Merge successful, no conflicts.
 	// result.HasConflicts is false (default).
 	// resultErr is nil (unless defer sets it to a restore error).
-	return // defer will run
+	return
 }

@@ -11,7 +11,6 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
-	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/utils"
 )
@@ -84,19 +83,22 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 
 	v := workflow.GetVersion(dCtx, "basic-dev-parent-subflow", workflow.DefaultVersion, 1)
 	if v == 1 {
-		return RunSubflow(dCtx, "coding", "Coding", func(subflow domain.Subflow) (string, error) {
+		result, err = RunSubflow(dCtx, "coding", "Coding", func(subflow domain.Subflow) (string, error) {
 			return codingSubflow(dCtx, requirements, input.EnvType, input.BasicDevOptions.StartBranch)
 		})
 	} else {
-		return codingSubflow(dCtx, requirements, input.EnvType, input.BasicDevOptions.StartBranch)
+		result, err = codingSubflow(dCtx, requirements, input.EnvType, input.BasicDevOptions.StartBranch)
 	}
+	if err != nil {
+		_ = signalWorkflowClosure(dCtx, "failed")
+	}
+	return result, err
 }
 
 func codingSubflow(dCtx DevContext, requirements string, envType env.EnvType, startBranch *string) (result string, err error) {
 	codeContext, fullCodeContext, err := PrepareInitialCodeContext(dCtx, requirements, nil, nil)
 	contextSizeExtension := len(fullCodeContext) - len(codeContext)
 	if err != nil {
-		_ = signalWorkflowClosure(dCtx, "failed")
 		return "", fmt.Errorf("failed to prepare code context: %v", err)
 	}
 	testResult := TestResult{Output: ""}
@@ -125,7 +127,7 @@ func codingSubflow(dCtx DevContext, requirements string, envType env.EnvType, st
 		if subflowName == fmt.Sprintf("%s (1)", overallName) {
 			subflowName = overallName
 		}
-		dCtx.FlowScope = &flow_action.FlowScope{SubflowName: subflowName}
+		dCtx.FlowScope.SubflowName = subflowName
 
 		// TODO /gen use models slice and modelIndex and modelAttemptCount just like
 		// in completeDevStep to switch models when ErrMaxIterationsReached
@@ -150,26 +152,22 @@ func codingSubflow(dCtx DevContext, requirements string, envType env.EnvType, st
 
 			promptInfo, err = GetUserFeedback(dCtx, promptInfo, guidanceContext, chatHistory, requestParams)
 			if err != nil {
-				_ = signalWorkflowClosure(dCtx, "failed")
 				return "", fmt.Errorf("failed to get user feedback: %v", err)
 			}
 		}
 		if attemptCount >= maxAttempts {
-			_ = signalWorkflowClosure(dCtx, "failed")
 			return "", errors.New("failed to author code passing tests and fulfilling requirements, max attempts reached")
 		}
 
 		// Step 2: edit code
 		err = EditCode(dCtx, modelConfig, contextSizeExtension, chatHistory, promptInfo)
 		if err != nil {
-			_ = signalWorkflowClosure(dCtx, "failed")
 			return "", fmt.Errorf("failed to write edit blocks: %v", err)
 		}
 
 		// Step 3: run tests
 		testResult, err = RunTests(dCtx, dCtx.RepoConfig.TestCommands)
 		if err != nil {
-			_ = signalWorkflowClosure(dCtx, "failed")
 			return "", fmt.Errorf("failed to run tests: %v", err)
 		}
 
@@ -183,7 +181,6 @@ func codingSubflow(dCtx DevContext, requirements string, envType env.EnvType, st
 		if len(dCtx.RepoConfig.IntegrationTestCommands) > 0 {
 			integrationTestResult, err := RunTests(dCtx, dCtx.RepoConfig.IntegrationTestCommands)
 			if err != nil {
-				_ = signalWorkflowClosure(dCtx, "failed")
 				return "", fmt.Errorf("failed to run integration tests: %v", err)
 			}
 			if !integrationTestResult.TestsPassed {
@@ -198,7 +195,6 @@ func codingSubflow(dCtx DevContext, requirements string, envType env.EnvType, st
 			Requirements: requirements,
 		})
 		if err != nil {
-			_ = signalWorkflowClosure(dCtx, "failed")
 			return "", fmt.Errorf("failed to check if requirements are fulfilled: %v", err)
 		}
 		if fulfillment.IsFulfilled {
@@ -248,7 +244,6 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 	// Step 5: auto-format code
 	err = AutoFormatCode(dCtx)
 	if err != nil {
-		_ = signalWorkflowClosure(dCtx, "failed")
 		return "", err
 	}
 
@@ -264,62 +259,72 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 		// Ensure any auto-formatted changes are staged for new workflow versions
 		if gitAddVersion == 1 {
 			if err := git.GitAddAll(dCtx.ExecContext); err != nil {
-				_ = signalWorkflowClosure(dCtx, "failed")
 				return "", fmt.Errorf("failed to git add all: %v", err)
 			}
 		}
 
 		gitDiff, diffErr := git.GitDiff(dCtx.ExecContext)
 		if diffErr != nil {
-			_ = signalWorkflowClosure(dCtx, "failed")
 			return "", fmt.Errorf("failed to get git diff: %v", diffErr)
 		}
 
 		mergeInfo, err := getMergeApproval(dCtx, defaultTarget, gitDiff)
 		if err != nil {
-			_ = signalWorkflowClosure(dCtx, "failed")
 			return "", fmt.Errorf("failed to get merge approval: %v", err)
 		}
 
 		if mergeInfo.Approved {
-			// Commit any pending changes first
-			message := strings.TrimSpace(requirements)
-			if strings.Contains(message, "Overview:\n") {
-				message = strings.Split(message, "Overview:\n")[1]
-				message = strings.TrimSpace(message)
-			}
-			message = strings.Split(message, "\n")[0]
-			if len(message) > 100 {
-				message = message[:100] + "...\n\n..." + message[100:]
-			}
-			err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
-				CommitMessage: message,
-			}).Get(dCtx, nil)
-			if err != nil {
-				_ = signalWorkflowClosure(dCtx, "failed")
-				return "", fmt.Errorf("failed to commit changes: %v", err)
-			}
-
 			// Perform merge
 			actionCtx := dCtx.NewActionContext("merge")
 			actionCtx.ActionParams = map[string]interface{}{
 				"sourceBranch": dCtx.Worktree.Name,
 				"targetBranch": mergeInfo.TargetBranch,
 			}
+
+			// Commit any pending changes first
+			commitMessage := strings.TrimSpace(requirements)
+			if strings.Contains(commitMessage, "Overview:\n") {
+				commitMessage = strings.Split(commitMessage, "Overview:\n")[1]
+				commitMessage = strings.TrimSpace(commitMessage)
+			}
+			commitMessage = strings.Split(commitMessage, "\n")[0]
+			if len(commitMessage) > 100 {
+				commitMessage = commitMessage[:100] + "...\n\n..." + commitMessage[100:]
+			}
+
+			gitCommitVersion := workflow.GetVersion(dCtx, "git-commit-in-flow-action", workflow.DefaultVersion, 1)
+			if gitCommitVersion < 1 {
+				err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
+					CommitMessage: commitMessage,
+				}).Get(dCtx, nil)
+				if err != nil {
+					return result, fmt.Errorf("failed to commit changes: %v", err)
+				}
+			}
+
 			mergeResult, err := Track(actionCtx, func(flowAction domain.FlowAction) (git.MergeActivityResult, error) {
-				var result git.MergeActivityResult
+				var mergeResult git.MergeActivityResult
+
+				if gitCommitVersion >= 1 {
+					err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
+						CommitMessage: commitMessage,
+					}).Get(dCtx, nil)
+					if err != nil {
+						return mergeResult, fmt.Errorf("failed to commit changes: %v", err)
+					}
+				}
+
 				future := workflow.ExecuteActivity(dCtx, git.GitMergeActivity, dCtx.EnvContainer, git.GitMergeParams{
 					SourceBranch: dCtx.Worktree.Name,
 					TargetBranch: mergeInfo.TargetBranch,
 				})
-				err := future.Get(dCtx, &result)
+				err := future.Get(dCtx, &mergeResult)
 				if err != nil {
-					return result, fmt.Errorf("failed to merge branches: %v", err)
+					return mergeResult, fmt.Errorf("failed to merge branches: %v", err)
 				}
-				return result, nil
+				return mergeResult, nil
 			})
 			if err != nil {
-				_ = signalWorkflowClosure(dCtx, "failed")
 				return "", err
 			}
 
@@ -330,7 +335,6 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 					"continueTag": "done",
 				})
 				if err != nil {
-					_ = signalWorkflowClosure(dCtx, "failed")
 					return "", fmt.Errorf("failed to get continue approval: %v", err)
 				}
 			}
