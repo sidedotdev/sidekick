@@ -95,18 +95,20 @@ func (ea *EmbedActivities) CachedEmbedActivity(ctx context.Context, options Cach
 			return err
 		}
 		cacheValues := make(map[string]interface{}, len(input))
-		batchSize := 2048 // 2048 is the maximum batch size for the OpenAI embedding API
-		for i := 0; i < len(input); i += batchSize {
-			end := i + batchSize
-			if end > len(input) {
-				end = len(input)
-			}
-			embeddings, err := embedder.Embed(ctx, options.ModelConfig, options.Secrets.SecretManager, input[i:end], embedding.TaskTypeRetrievalDocument)
+		batches, err := embedding.BatchEmbeddingRequests(input, options.ModelConfig)
+		if err != nil {
+			return fmt.Errorf("failed to batch embedding requests: %w", err)
+		}
+
+		inputIndex := 0
+		for _, batch := range batches {
+			embeddings, err := embedder.Embed(ctx, options.ModelConfig, options.Secrets.SecretManager, batch, embedding.TaskTypeRetrievalDocument)
 			if err != nil {
 				return fmt.Errorf("failed to embed content: %w", err)
 			}
-			for j, embedding := range embeddings {
-				cacheValues[missingEmbeddingKeys[i+j]] = embedding
+			for _, embedding := range embeddings {
+				cacheValues[missingEmbeddingKeys[inputIndex]] = embedding
+				inputIndex++
 			}
 		}
 

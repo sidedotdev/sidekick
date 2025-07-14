@@ -13,9 +13,8 @@ const (
 	/* NOTE: free tier of google doesn't yet support "gemini-embedding-exp-03-07"
 	 * and limits are very low for that currently even with billing enabled (10
 	 * RPM and 1000 RPD) */
-	//GoogleDefaultModel = "gemini-embedding-exp-03-07"
+	//GoogleDefaultModel = "gemini-embedding-exp-03-07" // NOTE: called "text-embedding-large-exp-03-07" in Vertex AI before GA
 	GoogleDefaultModel = "text-embedding-004"
-	maxBatchSize       = 100
 )
 
 type GoogleEmbedder struct{}
@@ -39,48 +38,33 @@ func (ge GoogleEmbedder) Embed(ctx context.Context, modelConfig common.ModelConf
 		model = GoogleDefaultModel
 	}
 
-	var results []EmbeddingVector
-
-	// Process in batches of maxBatchSize
-	for i := 0; i < len(inputs); i += maxBatchSize {
-		end := i + maxBatchSize
-		if end > len(inputs) {
-			end = len(inputs)
+	contents := make([]*genai.Content, len(inputs))
+	for i, text := range inputs {
+		contents[i] = &genai.Content{
+			Parts: []*genai.Part{{Text: text}},
 		}
+	}
 
-		batch := inputs[i:end]
-		batchResults := make([]EmbeddingVector, 0, len(batch))
+	var embedConfig *genai.EmbedContentConfig
+	if taskType != "" {
+		embedConfig = &genai.EmbedContentConfig{TaskType: taskType}
+	}
 
-		contents := make([]*genai.Content, len(batch))
-		for i, text := range batch {
-			contents[i] = &genai.Content{
-				Parts: []*genai.Part{{Text: text}},
-			}
+	res, err := client.Models.EmbedContent(ctx, model, contents, embedConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate embeddings: %w", err)
+	}
+
+	if len(res.Embeddings) != len(inputs) {
+		return nil, fmt.Errorf("unexpected number of embeddings returned: got %d, want %d", len(res.Embeddings), len(inputs))
+	}
+
+	results := make([]EmbeddingVector, 0, len(inputs))
+	for _, embedding := range res.Embeddings {
+		if len(embedding.Values) == 0 {
+			return nil, fmt.Errorf("empty embedding values returned")
 		}
-
-		var embedConfig *genai.EmbedContentConfig
-		if taskType != "" {
-			embedConfig = &genai.EmbedContentConfig{TaskType: taskType}
-		}
-
-		res, err := client.Models.EmbedContent(ctx, model, contents, embedConfig)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate embeddings for batch %d/%d: %w", i/maxBatchSize+1, (len(inputs)+maxBatchSize-1)/maxBatchSize, err)
-		}
-
-		if len(res.Embeddings) != len(batch) {
-			return nil, fmt.Errorf("unexpected number of embeddings returned for batch %d/%d: got %d, want %d",
-				i/maxBatchSize+1, (len(inputs)+maxBatchSize-1)/maxBatchSize, len(res.Embeddings), len(batch))
-		}
-
-		for _, embedding := range res.Embeddings {
-			if len(embedding.Values) == 0 {
-				return nil, fmt.Errorf("empty embedding values returned in batch %d/%d", i/maxBatchSize+1, (len(inputs)+maxBatchSize-1)/maxBatchSize)
-			}
-			batchResults = append(batchResults, EmbeddingVector(embedding.Values))
-		}
-
-		results = append(results, batchResults...)
+		results = append(results, EmbeddingVector(embedding.Values))
 	}
 
 	return results, nil

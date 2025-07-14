@@ -75,6 +75,7 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.messages[msg.key] = lifecycleMessage{
 			content: msg.content,
 			spin:    msg.spin,
+			timestamp: time.Now(),
 		}
 		return m, nil
 
