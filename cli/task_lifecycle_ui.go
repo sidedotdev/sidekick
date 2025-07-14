@@ -3,12 +3,29 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+type lifecycleMessage struct {
+	content     string
+	showSpinner bool
+	timestamp   time.Time
+}
+
+type updateLifecycleMsg struct {
+	key     string
+	message lifecycleMessage
+}
+
+type clearLifecycleMsg struct {
+	key string
+}
 
 type statusUpdateMsg struct {
 	message string
@@ -26,14 +43,7 @@ type taskLifecycleModel struct {
 	// handling doesn't work
 	sigChan chan os.Signal
 
-	// TODO: replace both of these with map[string]tuiMessage where tuiMessage
-	// has string content, showSpinner boolean and timestamp. different keys can
-	// be used to show multiple messages in parallel. the View is just
-	// extracting all values and showing them with or without spinner, in the
-	// right order. for progModel's embedded view, we use the time we
-	// initialized that model.
-	statusMessages []string
-	finalMessages  []string
+	messages map[string]lifecycleMessage
 
 	error     error
 	taskId    string
@@ -45,7 +55,11 @@ func newLifecycleModel(sigChan chan os.Signal) taskLifecycleModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	return taskLifecycleModel{spinner: s, sigChan: sigChan}
+	return taskLifecycleModel{
+		spinner:  s,
+		sigChan:  sigChan,
+		messages: make(map[string]lifecycleMessage),
+	}
 }
 
 func (m taskLifecycleModel) Init() tea.Cmd {
@@ -63,17 +77,29 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.propagateAndBatch(msg, cmds)
 
+	case updateLifecycleMsg:
+		m.messages[msg.key] = msg.message
+		return m, nil
+
+	case clearLifecycleMsg:
+		delete(m.messages, msg.key)
+		return m, nil
+
 	case statusUpdateMsg:
-		// for now we only keep the latest status message, but in the future
-		// we'll probably make this a map to support concurrent progress updates
-		// for things happening in parallel
-		m.statusMessages = []string{} // reset for now (in future, not needed when we use a map)
-		m.statusMessages = append(m.statusMessages, msg.message)
+		m.messages["status"] = lifecycleMessage{
+			content:     msg.message,
+			showSpinner: true,
+			timestamp:   time.Now(),
+		}
 		return m, nil
 
 	case finalUpdateMsg:
-		//m.statusMessages = []string{}
-		m.finalMessages = append(m.finalMessages, msg.message)
+		key := fmt.Sprintf("final-%d", len(m.messages))
+		m.messages[key] = lifecycleMessage{
+			content:     msg.message,
+			showSpinner: false,
+			timestamp:   time.Now(),
+		}
 		return m, nil
 
 	case taskChangeMsg:
@@ -81,7 +107,7 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.progModel == nil && len(msg.task.Flows) > 0 {
 			m.flowId = msg.task.Flows[0].Id
 			// clear status messages from initialization process
-			m.statusMessages = []string{}
+			delete(m.messages, "status")
 			m.progModel = newProgressModel(m.taskId, m.flowId)
 			cmd := m.progModel.Init()
 			return m, cmd
@@ -98,9 +124,12 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case taskErrorMsg:
 		m.error = msg.err
-		m.statusMessages = []string{}
-		m.finalMessages = append(m.finalMessages, fmt.Sprintf("Task failed: %v", msg.err))
-
+		delete(m.messages, "status")
+		m.messages["error"] = lifecycleMessage{
+			content:     fmt.Sprintf("Task failed: %v", msg.err),
+			showSpinner: false,
+			timestamp:   time.Now(),
+		}
 		return m, nil
 
 	default:
@@ -137,19 +166,30 @@ func (m taskLifecycleModel) propagateAndBatch(msg tea.Msg, cmds []tea.Cmd) (task
 func (m taskLifecycleModel) View() string {
 	var b strings.Builder
 
-	for _, message := range m.statusMessages {
-		b.WriteString(fmt.Sprintf("%s %s", m.spinner.View(), message))
+	// Convert map to slice for sorting
+	var messages []lifecycleMessage
+	for _, msg := range m.messages {
+		messages = append(messages, msg)
+	}
+
+	// Sort by timestamp
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].timestamp.Before(messages[j].timestamp)
+	})
+
+	// Display messages
+	for _, msg := range messages {
+		if msg.showSpinner {
+			b.WriteString(fmt.Sprintf("%s %s", m.spinner.View(), msg.content))
+		} else {
+			b.WriteString(msg.content)
+		}
 		b.WriteString("\n")
 	}
 
 	if m.progModel != nil {
 		b.WriteString("\n")
 		b.WriteString(m.progModel.View())
-	}
-
-	for _, message := range m.finalMessages {
-		b.WriteString(message)
-		b.WriteString("\n")
 	}
 
 	return b.String()

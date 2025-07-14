@@ -3,7 +3,9 @@ package main
 import (
 	"os"
 	"sidekick/domain"
+	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
@@ -19,27 +21,51 @@ func TestLifecycleModel(t *testing.T) {
 		wantProgress  bool
 		wantContains  []string
 		wantNotExists []string
+		wantOrder     []string // New field to test message ordering
 	}{
 		{
 			name: "shows setting up workspace",
 			messages: []tea.Msg{
-				statusUpdateMsg{message: "Setting up workspace..."},
+				updateLifecycleMsg{
+					key: "setup",
+					message: lifecycleMessage{
+						content:     "Setting up workspace...",
+						showSpinner: true,
+						timestamp:   time.Now(),
+					},
+				},
 			},
 			wantContains: []string{
 				"Setting up workspace...",
 			},
 		},
 		{
-			name: "shows creating task",
+			name: "shows concurrent messages",
 			messages: []tea.Msg{
-				statusUpdateMsg{message: "Setting up workspace..."},
-				statusUpdateMsg{message: "Creating task..."},
+				updateLifecycleMsg{
+					key: "setup",
+					message: lifecycleMessage{
+						content:     "Setting up workspace...",
+						showSpinner: true,
+						timestamp:   time.Now(),
+					},
+				},
+				updateLifecycleMsg{
+					key: "create",
+					message: lifecycleMessage{
+						content:     "Creating task...",
+						showSpinner: true,
+						timestamp:   time.Now().Add(time.Second),
+					},
+				},
 			},
 			wantContains: []string{
+				"Setting up workspace...",
 				"Creating task...",
 			},
-			wantNotExists: []string{
-				"Setting up workspace",
+			wantOrder: []string{
+				"Setting up workspace...",
+				"Creating task...",
 			},
 		},
 		{
@@ -163,6 +189,14 @@ func TestLifecycleModel(t *testing.T) {
 			}
 			for _, notWant := range tt.wantNotExists {
 				assert.NotContains(t, view, notWant)
+			}
+			if tt.wantOrder != nil {
+				lastIndex := -1
+				for _, msg := range tt.wantOrder {
+					index := strings.Index(view, msg)
+					assert.Greater(t, index, lastIndex, "Messages not in expected order")
+					lastIndex = index
+				}
 			}
 		})
 	}
