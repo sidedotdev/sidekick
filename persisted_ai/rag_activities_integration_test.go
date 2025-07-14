@@ -1,19 +1,17 @@
-package persisted_ai_test
+package persisted_ai
 
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"sidekick/common"
 	"sidekick/env"
-	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
 	"sidekick/srv"
 	"sidekick/srv/sqlite"
+	"sidekick/utils"
 
 	"github.com/stretchr/testify/require"
 )
@@ -23,42 +21,28 @@ func setupTestWorkspace(t *testing.T, ctx context.Context) (string, string) {
 	storage, err := sqlite.NewStorage()
 	require.NoError(t, err, "Failed to initialize sqlite storage")
 
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	repoRootBytes, err := cmd.Output()
-	require.NoError(t, err, "Failed to execute git rev-parse --show-toplevel")
-	repoRoot := strings.TrimSpace(string(repoRootBytes))
-	require.NotEmpty(t, repoRoot, "Repository root path is empty")
-	cleanedRepoRoot := filepath.Clean(repoRoot)
+	// Get repository paths in order: current dir, repo root, common dir
+	repoPaths, err := utils.GetRepositoryPaths(ctx, ".")
+	require.NoError(t, err, "Failed to get repository paths")
+	require.NotEmpty(t, repoPaths, "No repository paths found")
 
 	workspaces, err := storage.GetAllWorkspaces(ctx)
 	require.NoError(t, err, "Failed to get all workspaces")
 
+	// Try each repository path in sequence
 	var workspaceId string
-	for _, ws := range workspaces {
-		if filepath.Clean(ws.LocalRepoDir) == cleanedRepoRoot {
-			workspaceId = ws.Id
-			break
+	var workspaceRepoDir string
+	for _, repoPath := range repoPaths {
+		cleanedRepoPath := filepath.Clean(repoPath)
+		for _, ws := range workspaces {
+			if filepath.Clean(ws.LocalRepoDir) == cleanedRepoPath {
+				workspaceId = ws.Id
+				workspaceRepoDir = cleanedRepoPath
+				break
+			}
 		}
-	}
-
-	if workspaceId == "" {
-		// If no workspace found, this might be a worktree, so try finding the
-		// common git repo directory
-		cmd := exec.Command("git", "rev-parse", "--git-common-dir")
-		gitCommonDirBytes, err := cmd.Output()
-		if err == nil {
-			gitCommonDir := strings.TrimSpace(string(gitCommonDirBytes))
-			if !filepath.IsAbs(gitCommonDir) {
-				gitCommonDir = filepath.Join(cleanedRepoRoot, gitCommonDir)
-			}
-			commonRepoDir := filepath.Clean(filepath.Dir(gitCommonDir))
-			// Check if there's a workspace for the source directory
-			for _, ws := range workspaces {
-				if filepath.Clean(ws.LocalRepoDir) == commonRepoDir {
-					workspaceId = ws.Id
-					break
-				}
-			}
+		if workspaceId != "" {
+			break
 		}
 	}
 
@@ -73,16 +57,16 @@ func setupTestWorkspace(t *testing.T, ctx context.Context) (string, string) {
 		   that could potentially get expensive
 	*/
 	require.NotEmpty(t, workspaceId, "Failed to find an existing workspace.\n\nPlease run `side init` in the sidekick repo root and try again.")
-	return workspaceId, cleanedRepoRoot
+	return workspaceId, workspaceRepoDir
 }
 
 // setupRagService creates and configures the RagActivities service with necessary dependencies
-func setupRagService(t *testing.T, ctx context.Context, repoRoot string) *persisted_ai.RagActivities {
+func setupRagService(t *testing.T, ctx context.Context, repoRoot string) *RagActivities {
 	storage, err := sqlite.NewStorage()
 	require.NoError(t, err, "Failed to initialize sqlite storage")
 
 	service := srv.NewDelegator(storage, nil)
-	return &persisted_ai.RagActivities{
+	return &RagActivities{
 		DatabaseAccessor: service,
 	}
 }
@@ -108,8 +92,8 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 		secret_manager.LocalConfigSecretManager{},
 	})
 
-	options := persisted_ai.RankedDirSignatureOutlineOptions{
-		RankedViaEmbeddingOptions: persisted_ai.RankedViaEmbeddingOptions{
+	options := RankedDirSignatureOutlineOptions{
+		RankedViaEmbeddingOptions: RankedViaEmbeddingOptions{
 			WorkspaceId: workspaceId,
 			EnvContainer: env.EnvContainer{
 				Env: localEnv,

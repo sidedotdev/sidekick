@@ -40,6 +40,7 @@ require (
 	github.com/temporalio/ui-server/v2 v2.32.0
 	github.com/thomaspoignant/go-feature-flag v1.26.0
 	github.com/unum-cloud/usearch/golang v0.0.0-20231126121226-c2463ca3a043
+	github.com/urfave/cli/v3 v3.3.8
 	github.com/zalando/go-keyring v0.2.5
 	go.temporal.io/api v1.38.0
 	go.temporal.io/sdk v1.27.0

@@ -1449,14 +1449,25 @@ func TestGetTaskHandler(t *testing.T) {
 	workspaceId := "ws_1"
 	taskId := "task_" + ksuid.New().String()
 
-	// Create a test task
+	// Create a test task and flow
 	task := domain.Task{
 		WorkspaceId: workspaceId,
 		Id:          taskId,
 		Status:      domain.TaskStatusToDo,
 	}
 
+	flow := domain.Flow{
+		WorkspaceId: workspaceId,
+		ParentId:    taskId,
+		Id:          "flow_" + ksuid.New().String(),
+		Type:        "test",
+		Status:      "todo",
+	}
+
 	err := redisDb.PersistTask(ctx, task)
+	assert.Nil(t, err)
+
+	err = redisDb.PersistFlow(ctx, flow)
 	assert.Nil(t, err)
 
 	// Test cases
@@ -1465,13 +1476,16 @@ func TestGetTaskHandler(t *testing.T) {
 		taskId        string
 		expectedCode  int
 		expectedError string
-		expectedTask  *domain.Task
+		expectedResp  *TaskResponse
 	}{
 		{
 			workspaceId:  workspaceId,
 			taskId:       taskId,
 			expectedCode: http.StatusOK,
-			expectedTask: &task,
+			expectedResp: &TaskResponse{
+				Task:  task,
+				Flows: []domain.Flow{flow},
+			},
 		},
 		{
 			workspaceId:   workspaceId,
@@ -1512,10 +1526,11 @@ func TestGetTaskHandler(t *testing.T) {
 				assert.Equal(t, testCase.expectedError, result["error"])
 			}
 		} else {
-			var result map[string]domain.Task
+			var result map[string]TaskResponse
 			err := json.Unmarshal(resp.Body.Bytes(), &result)
 			if assert.Nil(t, err) {
-				assert.Equal(t, *testCase.expectedTask, result["task"])
+				assert.Equal(t, testCase.expectedResp.Task, result["task"].Task)
+				assert.Equal(t, testCase.expectedResp.Flows, result["task"].Flows)
 			}
 		}
 	}

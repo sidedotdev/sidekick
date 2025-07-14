@@ -698,7 +698,7 @@ func TestGetWorkspaceByIdHandler(t *testing.T) {
 			c.Request = httptest.NewRequest("GET", "/v1/workspaces/"+tc.workspaceId, nil)
 			c.Params = gin.Params{{Key: "workspaceId", Value: tc.workspaceId}}
 
-			ctrl.GetWorkspaceByIdHandler(c)
+			ctrl.GetWorkspaceHandler(c)
 
 			assert.Equal(t, tc.expectedStatus, resp.Code)
 
