@@ -113,7 +113,44 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 			workspaceId:      "existing_workspace_id",
 			workspaceRequest: WorkspaceRequest{},
 			expectedStatus:   http.StatusBadRequest,
-			expectedError:    "At least one of Name, LocalRepoDir, LLMConfig, or EmbeddingConfig is required",
+			expectedError:    "Name and LocalRepoDir are required fields",
+		},
+		{
+			name:        "Missing name field",
+			workspaceId: "existing_workspace_id",
+			workspaceRequest: WorkspaceRequest{
+				LocalRepoDir: "/path/to/repo",
+			},
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "Name and LocalRepoDir are required fields",
+		},
+		{
+			name:        "Missing repo dir field",
+			workspaceId: "existing_workspace_id",
+			workspaceRequest: WorkspaceRequest{
+				Name: "Test Workspace",
+			},
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "Name and LocalRepoDir are required fields",
+		},
+		{
+			name:        "Update with required fields only",
+			workspaceId: "existing_workspace_id",
+			workspaceRequest: WorkspaceRequest{
+				Name:         "Updated Workspace",
+				LocalRepoDir: "/new/path/to/repo",
+			},
+			expectedStatus: http.StatusOK,
+			expectedWorkspace: &domain.Workspace{
+				Id:           "existing_workspace_id",
+				Name:         "Updated Workspace",
+				LocalRepoDir: "/new/path/to/repo",
+			},
+			expectedConfig: &domain.WorkspaceConfig{
+				// Both configs should be empty since neither was provided
+				LLM:       common.LLMConfig{},
+				Embedding: common.EmbeddingConfig{},
+			},
 		},
 		{
 			name:             "Workspace not found",

@@ -258,11 +258,8 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		return
 	}
 
-	hasLLMChanges := workspaceReq.LLMConfig.Defaults != nil || len(workspaceReq.LLMConfig.UseCaseConfigs) > 0
-	hasEmbeddingChanges := workspaceReq.EmbeddingConfig.Defaults != nil || len(workspaceReq.EmbeddingConfig.UseCaseConfigs) > 0
-
-	if workspaceReq.Name == "" && workspaceReq.LocalRepoDir == "" && !hasLLMChanges && !hasEmbeddingChanges {
-		ctrl.ErrorHandler(c, http.StatusBadRequest, errors.New("At least one of Name, LocalRepoDir, LLMConfig, or EmbeddingConfig is required"))
+	if workspaceReq.Name == "" || workspaceReq.LocalRepoDir == "" {
+		ctrl.ErrorHandler(c, http.StatusBadRequest, errors.New("Name and LocalRepoDir are required fields"))
 		return
 	}
 
