@@ -534,7 +534,7 @@ func ensureEmbeddingSecrets() ([]string, error) {
 // request to its root path and checking for a "sidekick" keyword in the response.
 func checkServerStatus() bool {
 	client := &http.Client{
-		Timeout: 1 * time.Second, // Short timeout for a quick check
+		Timeout: 1 * time.Second,
 	}
 
 	resp, err := client.Get(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
