@@ -42,15 +42,11 @@ func TestFunc() {
 			},
 			expectedOutput: SymDefResults{
 				SymbolDefinitions: `File: placeholder_tempfile
-Lines: 1-1
+Symbol: TestFunc
+Lines: 1-5
 ` + "```go" + `
 package cools
-` + "```" + `
 
-File: placeholder_tempfile
-Symbol: TestFunc
-Lines: 3-5
-` + "```go" + `
 func TestFunc() {
 	println("Hello, world!")
 }
@@ -71,15 +67,11 @@ func (*x SomeStruct) TestFunc() {
 			},
 			expectedOutput: SymDefResults{
 				SymbolDefinitions: `File: placeholder_tempfile
-Lines: 1-1
+Symbol: SomeStruct.TestFunc
+Lines: 1-5
 ` + "```go" + `
 package cools
-` + "```" + `
 
-File: placeholder_tempfile
-Symbol: SomeStruct.TestFunc
-Lines: 3-5
-` + "```go" + `
 func (*x SomeStruct) TestFunc() {
 	println("Hello, world!")
 }
@@ -89,6 +81,8 @@ func (*x SomeStruct) TestFunc() {
 		{
 			name: "Pointer Receiver Function definition with star and dot in symbol name",
 			code: `package cools
+
+var x = 1
 
 func (*x SomeStruct) TestFunc() {
 	println("Hello, world!")
@@ -107,7 +101,7 @@ package cools
 
 File: placeholder_tempfile
 Symbol: *SomeStruct.TestFunc
-Lines: 3-5
+Lines: 5-7
 ` + "```go" + `
 func (*x SomeStruct) TestFunc() {
 	println("Hello, world!")
@@ -133,17 +127,11 @@ func TestFunc() {
 			},
 			expectedOutput: SymDefResults{
 				SymbolDefinitions: `File: placeholder_tempfile
-Lines: 1-1
+Symbol: TestFunc
+Lines: 1-9
 ` + "```go" + `
 package cools
-` + "```" + `
 
-NOTE: Multiple definitions were found for symbol TestFunc:
-
-File: placeholder_tempfile
-Symbol: TestFunc
-Lines: 3-9
-` + "```go" + `
 func TestFunc() {
 	println("Hello, world!")
 }
@@ -151,7 +139,9 @@ func TestFunc() {
 func TestFunc() {
 	println("Second one")
 }
-` + "```\n\n",
+` + "```" + `
+
+NOTE: Multiple definitions were found for symbol TestFunc`,
 			},
 		},
 		{
@@ -240,17 +230,11 @@ func TestFunc() {
 			},
 			expectedOutput: SymDefResults{
 				SymbolDefinitions: `File: placeholder_tempfile
-Lines: 1-1
+Symbol: TestFunc
+Lines: 1-5
 ` + "```go" + `
 package cools
-` + "```" + `
 
-NOTE: Multiple definitions were found for symbol TestFunc:
-
-File: placeholder_tempfile
-Symbol: TestFunc
-Lines: 3-5
-` + "```go" + `
 func TestFunc() {
 	println("Hello, world!")
 }
@@ -263,7 +247,9 @@ Lines: 9-11
 func TestFunc() {
 	println("Second one")
 }
-` + "```\n\n",
+` + "```" + `
+
+NOTE: Multiple definitions were found for symbol TestFunc`,
 			},
 		},
 		{
@@ -279,11 +265,9 @@ func TestFunc() {
 				},
 			},
 			expectedOutput: SymDefResults{
-				SymbolDefinitions: `File: placeholder_tempfile
-The file at 'placeholder_tempfile' does not contain the symbol 'NonExistentFunc'. However, it does contain the following symbols: TestFunc
+				SymbolDefinitions: `The file at 'placeholder_tempfile' does not contain the symbol 'NonExistentFunc'. However, it does contain the following symbols: TestFunc
 The symbol 'NonExistentFunc' is not defined in any repo files.`,
-				Failures: `File: placeholder_tempfile
-The file at 'placeholder_tempfile' does not contain the symbol 'NonExistentFunc'. However, it does contain the following symbols: TestFunc
+				Failures: `The file at 'placeholder_tempfile' does not contain the symbol 'NonExistentFunc'. However, it does contain the following symbols: TestFunc
 The symbol 'NonExistentFunc' is not defined in any repo files.`,
 			},
 		},
@@ -301,11 +285,9 @@ func TestFunc() {
 			},
 			fileExtension: "go",
 			expectedOutput: SymDefResults{
-				SymbolDefinitions: `File: placeholder_tempfile
-The file at 'placeholder_tempfile' does not contain the symbol 'placeholder_without_extension_tempfile'. However, it does contain the following symbols: TestFunc
+				SymbolDefinitions: `The file at 'placeholder_tempfile' does not contain the symbol 'placeholder_without_extension_tempfile'. However, it does contain the following symbols: TestFunc
 The symbol 'placeholder_without_extension_tempfile' is not defined in any repo files.`,
-				Failures: `File: placeholder_tempfile
-The file at 'placeholder_tempfile' does not contain the symbol 'placeholder_without_extension_tempfile'. However, it does contain the following symbols: TestFunc
+				Failures: `The file at 'placeholder_tempfile' does not contain the symbol 'placeholder_without_extension_tempfile'. However, it does contain the following symbols: TestFunc
 The symbol 'placeholder_without_extension_tempfile' is not defined in any repo files.`,
 			},
 		},
@@ -350,12 +332,10 @@ func ExistsElsewhere() {
 				},
 			},
 			expectedOutput: SymDefResults{
-				SymbolDefinitions: `File: placeholder_tempfile
-The file at 'placeholder_tempfile' does not contain the symbol 'ExistsElsewhere'. However, it does contain the following symbols: WontExistHere
+				SymbolDefinitions: `The file at 'placeholder_tempfile' does not contain the symbol 'ExistsElsewhere'. However, it does contain the following symbols: WontExistHere
 The symbol 'ExistsElsewhere' is defined in the following files:
   - placeholder_other_tempfile`,
-				Failures: `File: placeholder_tempfile
-The file at 'placeholder_tempfile' does not contain the symbol 'ExistsElsewhere'. However, it does contain the following symbols: WontExistHere
+				Failures: `The file at 'placeholder_tempfile' does not contain the symbol 'ExistsElsewhere'. However, it does contain the following symbols: WontExistHere
 The symbol 'ExistsElsewhere' is defined in the following files:
   - placeholder_other_tempfile`,
 			},
@@ -369,11 +349,9 @@ The symbol 'ExistsElsewhere' is defined in the following files:
 				},
 			},
 			expectedOutput: SymDefResults{
-				SymbolDefinitions: `File: nonexistent.go
-No file at 'nonexistent.go' exists in the repository. Please check the file path and try again.
+				SymbolDefinitions: `No file at 'nonexistent.go' exists in the repository. Please check the file path and try again.
 The symbol 'TestFunc' is not defined in any repo files.`,
-				Failures: `File: nonexistent.go
-No file at 'nonexistent.go' exists in the repository. Please check the file path and try again.
+				Failures: `No file at 'nonexistent.go' exists in the repository. Please check the file path and try again.
 The symbol 'TestFunc' is not defined in any repo files.`,
 			},
 		},
@@ -387,11 +365,9 @@ The symbol 'TestFunc' is not defined in any repo files.`,
 				},
 			},
 			expectedOutput: SymDefResults{
-				SymbolDefinitions: `File: placeholder_tempfile
-failed to infer language: placeholder_tempfile
+				SymbolDefinitions: `failed to infer language: placeholder_tempfile
 The symbol 'NonExistentFunc' is not defined in any repo files.`,
-				Failures: `File: placeholder_tempfile
-failed to infer language: placeholder_tempfile
+				Failures: `failed to infer language: placeholder_tempfile
 The symbol 'NonExistentFunc' is not defined in any repo files.`,
 			},
 		},
@@ -405,11 +381,9 @@ The symbol 'NonExistentFunc' is not defined in any repo files.`,
 				},
 			},
 			expectedOutput: SymDefResults{
-				SymbolDefinitions: `File: nonexistent.ext
-No file at 'nonexistent.ext' exists in the repository. Please check the file path and try again.
+				SymbolDefinitions: `No file at 'nonexistent.ext' exists in the repository. Please check the file path and try again.
 The symbol 'TestFunc' is not defined in any repo files.`,
-				Failures: `File: nonexistent.ext
-No file at 'nonexistent.ext' exists in the repository. Please check the file path and try again.
+				Failures: `No file at 'nonexistent.ext' exists in the repository. Please check the file path and try again.
 The symbol 'TestFunc' is not defined in any repo files.`,
 			},
 		},
@@ -419,9 +393,13 @@ The symbol 'TestFunc' is not defined in any repo files.`,
 
 import "fmt"
 
+var x = 1
+
 func TestFunc() {
 	println("Hello, world!")
 }
+
+var y = 1
 
 import "os"`,
 			input: []FileSymDefRequest{
@@ -439,17 +417,140 @@ import "fmt"
 ` + "```" + `
 
 File: placeholder_tempfile
-Lines: 9-9
+Lines: 13-13
 ` + "```go" + `
 import "os"
 ` + "```" + `
 
 File: placeholder_tempfile
 Symbol: TestFunc
-Lines: 5-7
+Lines: 7-9
 ` + "```go" + `
 func TestFunc() {
 	println("Hello, world!")
+}
+` + "```\n\n",
+			},
+		},
+		{
+			name: "merge whitespace-separated functions",
+			code: `package cools
+
+func FirstFunc() {
+	println("First")
+}
+
+			
+  
+func SecondFunc() {
+	println("Second")
+}`,
+			input: []FileSymDefRequest{
+				{
+					SymbolNames: []string{"FirstFunc", "SecondFunc"},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `File: placeholder_tempfile
+Symbols: FirstFunc, SecondFunc
+Lines: 1-11
+` + "```go" + `
+package cools
+
+func FirstFunc() {
+	println("First")
+}
+
+			
+  
+func SecondFunc() {
+	println("Second")
+}
+` + "```\n\n",
+			},
+		},
+		{
+			name: "no merge for adjacent functions with non-whitespace between",
+			code: `package cools
+
+func FirstFunc() {
+	println("First")
+}
+
+var foo = 123
+
+func SecondFunc() {
+	println("Second")
+}`,
+			input: []FileSymDefRequest{
+				{
+					SymbolNames: []string{"FirstFunc", "SecondFunc"},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `File: placeholder_tempfile
+Symbol: FirstFunc
+Lines: 1-5
+` + "```go" + `
+package cools
+
+func FirstFunc() {
+	println("First")
+}
+` + "```" + `
+
+File: placeholder_tempfile
+Symbol: SecondFunc
+Lines: 9-11
+` + "```go" + `
+func SecondFunc() {
+	println("Second")
+}
+` + "```\n\n",
+			},
+		},
+		{
+			name: "reorder based on file order",
+			code: `package cools
+
+var y = 1
+
+func FirstFunc() {
+	println("First")
+}
+
+var foo = 123
+
+func SecondFunc() {
+	println("Second")
+}`,
+			input: []FileSymDefRequest{
+				{
+					SymbolNames: []string{"SecondFunc", "FirstFunc"},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `File: placeholder_tempfile
+Lines: 1-1
+` + "```go" + `
+package cools
+` + "```" + `
+
+File: placeholder_tempfile
+Symbol: FirstFunc
+Lines: 5-7
+` + "```go" + `
+func FirstFunc() {
+	println("First")
+}
+` + "```" + `
+
+File: placeholder_tempfile
+Symbol: SecondFunc
+Lines: 11-13
+` + "```go" + `
+func SecondFunc() {
+	println("Second")
 }
 ` + "```\n\n",
 			},

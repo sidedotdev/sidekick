@@ -26,6 +26,13 @@ type DevContext struct {
 	EmbeddingConfig common.EmbeddingConfig
 }
 
+// WithContext returns a new DevContext with the workflow.Context updated.
+func (dCtx DevContext) WithContext(ctx workflow.Context) DevContext {
+	newCtx := dCtx
+	newCtx.Context = ctx
+	return newCtx
+}
+
 func (dCtx DevContext) WithCancelOnPause() DevContext {
 	ctx, cancel := workflow.WithCancel(dCtx.Context)
 	dCtx.Context = ctx
@@ -165,6 +172,18 @@ type DevActionContext struct {
 	DevContext
 	ActionType   string
 	ActionParams map[string]interface{}
+}
+
+func (actionCtx DevActionContext) WithContext(ctx workflow.Context) DevActionContext {
+	newActionCtx := actionCtx
+	newActionCtx.DevContext = actionCtx.DevContext.WithContext(ctx)
+	return newActionCtx
+}
+
+func (actionCtx DevActionContext) WithLlmHeartbeatCtx() DevActionContext {
+	newActionCtx := actionCtx
+	newActionCtx.DevContext = actionCtx.DevContext.WithContext(utils.LlmHeartbeatCtx(actionCtx))
+	return newActionCtx
 }
 
 func (actionCtx DevActionContext) WithCancelOnPause() DevActionContext {

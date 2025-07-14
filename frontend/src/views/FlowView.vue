@@ -388,7 +388,7 @@ const goToNextStep = async () => {
     const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${flow.value.id}/user_action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action_type: 'go_next_step' }),
+      body: JSON.stringify({ actionType: 'go_next_step' }),
     });
     if (!response.ok) {
       console.error(`Failed to trigger next step: ${response.status}`, await response.text());

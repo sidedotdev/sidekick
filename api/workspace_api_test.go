@@ -38,37 +38,11 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 		expectedError     string
 	}{
 		{
-			name:        "Valid workspace update",
+			name:        "Update workspace with all fields",
 			workspaceId: "existing_workspace_id",
 			workspaceRequest: WorkspaceRequest{
 				Name:         "Updated Workspace",
 				LocalRepoDir: "/new/path/to/repo",
-				LLMConfig: common.LLMConfig{
-					Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-4"}},
-				},
-				EmbeddingConfig: common.EmbeddingConfig{
-					Defaults: []common.ModelConfig{{Provider: "openai", Model: "text-embedding-ada-002"}},
-				},
-			},
-			expectedStatus: http.StatusOK,
-			expectedWorkspace: &domain.Workspace{
-				Id:           "existing_workspace_id",
-				Name:         "Updated Workspace",
-				LocalRepoDir: "/new/path/to/repo",
-			},
-			expectedConfig: &domain.WorkspaceConfig{
-				LLM: common.LLMConfig{
-					Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-4"}},
-				},
-				Embedding: common.EmbeddingConfig{
-					Defaults: []common.ModelConfig{{Provider: "openai", Model: "text-embedding-ada-002"}},
-				},
-			},
-		},
-		{
-			name:        "Update workspace config only",
-			workspaceId: "existing_workspace_id",
-			workspaceRequest: WorkspaceRequest{
 				LLMConfig: common.LLMConfig{
 					Defaults: []common.ModelConfig{{Provider: "anthropic", Model: "claude-v1"}},
 				},
@@ -79,8 +53,8 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 			expectedStatus: http.StatusOK,
 			expectedWorkspace: &domain.Workspace{
 				Id:           "existing_workspace_id",
-				Name:         "Initial Workspace",
-				LocalRepoDir: "/path/to/repo",
+				Name:         "Updated Workspace",
+				LocalRepoDir: "/new/path/to/repo",
 			},
 			expectedConfig: &domain.WorkspaceConfig{
 				LLM: common.LLMConfig{
@@ -92,11 +66,91 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 			},
 		},
 		{
-			name:             "Missing workspace name and local repo dir",
+			name:        "Update workspace with config changes",
+			workspaceId: "existing_workspace_id",
+			workspaceRequest: WorkspaceRequest{
+				Name:         "Updated Name",
+				LocalRepoDir: "/updated/path",
+				LLMConfig: common.LLMConfig{
+					Defaults: []common.ModelConfig{{Provider: "anthropic", Model: "claude-v1"}},
+				},
+			},
+			expectedStatus: http.StatusOK,
+			expectedWorkspace: &domain.Workspace{
+				Id:           "existing_workspace_id",
+				Name:         "Updated Name",
+				LocalRepoDir: "/updated/path",
+			},
+			expectedConfig: &domain.WorkspaceConfig{
+				LLM: common.LLMConfig{
+					Defaults: []common.ModelConfig{{Provider: "anthropic", Model: "claude-v1"}},
+				},
+				// EmbeddingConfig should be nil/empty since it wasn't provided
+				Embedding: common.EmbeddingConfig{},
+			},
+		},
+		{
+			name:        "Update workspace with nil configs",
+			workspaceId: "existing_workspace_id",
+			workspaceRequest: WorkspaceRequest{
+				Name:         "Another Update",
+				LocalRepoDir: "/another/path",
+			},
+			expectedStatus: http.StatusOK,
+			expectedWorkspace: &domain.Workspace{
+				Id:           "existing_workspace_id",
+				Name:         "Another Update",
+				LocalRepoDir: "/another/path",
+			},
+			expectedConfig: &domain.WorkspaceConfig{
+				// Both configs should be nil/empty since neither was provided
+				LLM:       common.LLMConfig{},
+				Embedding: common.EmbeddingConfig{},
+			},
+		},
+		{
+			name:             "Missing all fields",
 			workspaceId:      "existing_workspace_id",
 			workspaceRequest: WorkspaceRequest{},
 			expectedStatus:   http.StatusBadRequest,
-			expectedError:    "At least one of Name, LocalRepoDir, LLMConfig, or EmbeddingConfig is required",
+			expectedError:    "Name and LocalRepoDir are required fields",
+		},
+		{
+			name:        "Missing name field",
+			workspaceId: "existing_workspace_id",
+			workspaceRequest: WorkspaceRequest{
+				LocalRepoDir: "/path/to/repo",
+			},
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "Name and LocalRepoDir are required fields",
+		},
+		{
+			name:        "Missing repo dir field",
+			workspaceId: "existing_workspace_id",
+			workspaceRequest: WorkspaceRequest{
+				Name: "Test Workspace",
+			},
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "Name and LocalRepoDir are required fields",
+		},
+		{
+			name:        "Update with required fields only",
+			workspaceId: "existing_workspace_id",
+			workspaceRequest: WorkspaceRequest{
+				Name:         "Updated Workspace",
+				LocalRepoDir: "/new/path/to/repo",
+			},
+			expectedStatus: http.StatusOK,
+			expectedWorkspace: &domain.Workspace{
+				Id:           "existing_workspace_id",
+				Name:         "Updated Workspace",
+				LocalRepoDir: "/new/path/to/repo",
+			},
+			expectedConfig: &domain.WorkspaceConfig{
+				// Both configs should be empty since neither was provided
+				LLM:       common.LLMConfig{},
+				Embedding: common.EmbeddingConfig{},
+			},
 		},
 		{
 			name:             "Workspace not found",
@@ -122,9 +176,15 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 		initialConfig := &domain.WorkspaceConfig{
 			LLM: common.LLMConfig{
 				Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-3.5-turbo"}},
+				UseCaseConfigs: map[string][]common.ModelConfig{
+					"code": {{Provider: "openai", Model: "gpt-4"}},
+				},
 			},
 			Embedding: common.EmbeddingConfig{
 				Defaults: []common.ModelConfig{{Provider: "openai", Model: "text-embedding-ada-002"}},
+				UseCaseConfigs: map[string][]common.ModelConfig{
+					"code": {{Provider: "openai", Model: "text-embedding-ada-002"}},
+				},
 			},
 		}
 		err = db.PersistWorkspaceConfig(context.Background(), initialWorkspace.Id, *initialConfig)
@@ -158,6 +218,15 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 				if tc.expectedConfig != nil {
 					assert.Equal(t, tc.expectedConfig.LLM.Defaults, responseBody.Workspace.LLMConfig.Defaults)
 					assert.Equal(t, tc.expectedConfig.Embedding.Defaults, responseBody.Workspace.EmbeddingConfig.Defaults)
+
+					// Verify useCaseConfigs are as expected
+					if len(tc.expectedConfig.LLM.UseCaseConfigs) > 0 {
+						assert.Equal(t, tc.expectedConfig.LLM.UseCaseConfigs, responseBody.Workspace.LLMConfig.UseCaseConfigs)
+					}
+
+					if len(tc.expectedConfig.Embedding.UseCaseConfigs) > 0 {
+						assert.Equal(t, tc.expectedConfig.Embedding.UseCaseConfigs, responseBody.Workspace.EmbeddingConfig.UseCaseConfigs)
+					}
 				}
 			} else {
 				responseBody := make(map[string]string)

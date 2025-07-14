@@ -98,15 +98,35 @@ func (s *Streamer) consumeFlowEvents(ctx context.Context, consumer jetstream.Con
 
 	var consContext jetstream.ConsumeContext
 	consContext, err := consumer.Consume(func(msg jetstream.Msg) {
+		// wait until done consuming this message, to try to keep eventCh open.
+		// note that this is likely not 100% fool-proof, as it depends on the
+		// interaction between Consume and closing behavior within
+		// nats/jetstream.
+		// TODO: consider guarding against a panic when sending the event over
+		// eventCh to remove any chances of an unrecoverable failure here. Same
+		// with consContext.Stop() - in fact, we might as well recover within
+		// this function from any and all panics and just log an error in that
+		// situation.
+		wg.Add(1)
+		defer wg.Done()
+
 		event, err := domain.UnmarshalFlowEvent(msg.Data())
 		if err != nil {
 			errCh <- fmt.Errorf("failed to unmarshal flow event: %w", err)
 			return
 		}
 
-		eventCh <- event // FIXME this can panic if eventCh is closed
+		eventCh <- event
 		if _, ok := event.(domain.EndStreamEvent); ok {
-			consContext.Stop()
+			// stop consumer when encountering the end stream event.
+			// but we only do this if not already closed or about to, since
+			// stopping a consumer twice seems to lead to a panic.
+			select {
+			case <-consContext.Closed():
+			case <-ctx.Done():
+			default:
+				consContext.Stop()
+			}
 		}
 		msg.Ack()
 	})

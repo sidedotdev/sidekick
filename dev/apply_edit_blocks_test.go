@@ -1620,3 +1620,151 @@ func TestFindAcceptableMatchWithMissingVisibleFileRangesButWeFigureItOut(t *test
 	assert.Equal(t, 1, len(matches))
 	assert.Greater(t, bestMatch.score, 0.0)
 }
+
+func TestApplyEditBlocks_LSPAutofixRegression(t *testing.T) {
+	// Create a temporary directory for test files
+	tmpDir := t.TempDir()
+	relativeFilePath := "test.go"
+	testFile := filepath.Join(tmpDir, relativeFilePath)
+
+	// Create initial file with imports - one unused in the middle
+	initialContent := `package test
+
+import (
+	"fmt"
+)
+
+func DoSomething() {
+	fmt.Println("x")
+}
+`
+	err := os.WriteFile(testFile, []byte(initialContent), 0644)
+	require.NoError(t, err)
+
+	// Create a tempfile under the given tmpDir with the name "side.toml". It can be empty, which is still valid.
+	_, err = os.Create(filepath.Join(tmpDir, "side.toml"))
+	require.NoError(t, err)
+
+	// Initialize git repo for diff functionality
+	cmd := exec.Command("git", "init")
+	cmd.Dir = tmpDir
+	err = cmd.Run()
+	require.NoError(t, err)
+
+	cmd = exec.Command("git", "add", ".")
+	cmd.Dir = tmpDir
+	err = cmd.Run()
+	require.NoError(t, err)
+
+	cmd = exec.Command("git", "commit", "-m", "initial commit")
+	cmd.Dir = tmpDir
+	err = cmd.Run()
+	require.NoError(t, err)
+
+	// adding lines so that we cause
+	editBlocks := []EditBlock{
+		{
+			FilePath: relativeFilePath,
+			OldLines: []string{
+				`	fmt.Println("x")`,
+			},
+			NewLines: []string{
+				`	fmt.Println(strings.ToUpper("one"))`,
+				`	fmt.Println(strings.ToUpper("two"))`,
+				`	fmt.Println(strings.ToUpper("three"))`,
+				`	fmt.Println(strings.ToUpper("four"))`,
+				`	fmt.Println(strings.ToUpper("five"))`,
+			},
+			EditType:       "update",
+			SequenceNumber: 1,
+		},
+	}
+
+	input := ApplyEditBlockActivityInput{
+		EnvContainer: env.EnvContainer{
+			Env: &env.LocalEnv{
+				WorkingDirectory: tmpDir,
+			},
+		},
+		EditBlocks:   editBlocks,
+		EnabledFlags: []string{fflag.CheckEdits},
+	}
+	devActivities := &DevActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(languageName string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: languageName,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+	}
+
+	// get LSP server to have bad state (text doc opened and never closed)
+	didOpenInput := lsp.TextDocumentDidOpenActivityInput{
+		RepoDir:  tmpDir,
+		FilePath: relativeFilePath,
+	}
+	err = devActivities.LSPActivities.TextDocumentDidOpenActivity(context.Background(), didOpenInput)
+	require.NoError(t, err)
+
+	reports, err := devActivities.ApplyEditBlocks(context.Background(), input)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+
+	// edit should be applied
+	assert.Empty(t, reports[0].Error)
+	assert.True(t, reports[0].DidApply)
+	assert.Empty(t, reports[0].AutofixError)
+	//assert.Empty(t, reports[1].Error)
+	//assert.True(t, reports[1].DidApply)
+
+	// Read final content
+	finalContent, err := os.ReadFile(testFile)
+	require.NoError(t, err)
+
+	expectedContent := `package test
+
+import (
+	"fmt"
+	"strings"
+)
+
+func DoSomething() {
+	fmt.Println(strings.ToUpper("one"))
+	fmt.Println(strings.ToUpper("two"))
+	fmt.Println(strings.ToUpper("three"))
+	fmt.Println(strings.ToUpper("four"))
+	fmt.Println(strings.ToUpper("five"))
+}
+`
+	assert.Equal(t, expectedContent, string(finalContent))
+
+	// check if autofix code actions are now fully resolved
+	documentURI := "file://" + testFile
+	key := tmpDir + ":" + "golang"
+	lines := strings.Split(string(finalContent), "\n")
+	endLine := len(lines) - 1
+	endCharacter := len(lines[endLine])
+	lspClient := devActivities.LSPActivities.InitializedClients[key]
+	actions, err := lspClient.TextDocumentCodeAction(context.Background(), lsp.CodeActionParams{
+		TextDocument: lsp.TextDocumentIdentifier{
+			URI: documentURI,
+		},
+		Range: lsp.Range{
+			Start: lsp.Position{
+				Line:      0,
+				Character: 0,
+			},
+			End: lsp.Position{
+				Line:      endLine,
+				Character: endCharacter,
+			},
+		},
+		Context: lsp.CodeActionContext{
+			Only: []lsp.CodeActionKind{lsp.CodeActionKindSourceFixAll, lsp.CodeActionKindSourceOrganizeImports},
+		},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, actions)
+}

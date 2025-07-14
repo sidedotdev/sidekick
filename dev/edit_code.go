@@ -2,6 +2,7 @@ package dev
 
 import (
 	_ "embed"
+	"errors"
 	"fmt"
 	"sidekick/coding/git"
 	"sidekick/coding/tree_sitter"
@@ -16,7 +17,14 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-const SignaturesEditHint = "Important note about shrunk context: in order to edit code for which we only show extracted code signatures, you must retrieve code context to get the full code from the original source using a tool."
+const SignaturesEditHint = `!! Important note about shrunk context:
+In order to edit code for which we only show extracted code signatures, you must
+retrieve code context using a tool, to see the actual code you're editing first.
+Note that the reason the code was shrunk is because the code that was requested
+was too long. When you retrieve code context, only request the specific symbols
+you really need to see/edit based on the signatures listed. If you request just
+one symbol and it's still too long, you can try utilizing search or reading
+specific lines directly instead.`
 
 var ErrMaxAttemptsReached = fmt.Errorf("reached max attempts")
 
@@ -49,12 +57,10 @@ editLoop:
 	for {
 		// Handle user request to go to the next step, if versioned feature is active.
 		version := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
-		if version == 1 { // New logic path for "Go Next Step" feature
+		if version == 1 {
 			action := dCtx.GlobalState.GetPendingUserAction()
-			if action != nil && *action == UserActionGoNext {
-				// Exit editCodeSubflow immediately as per requirements for "Go Next Step".
-				// The action is not consumed here.
-				return nil
+			if action != nil {
+				return PendingActionError
 			}
 		}
 
@@ -89,13 +95,19 @@ editLoop:
 
 		// Step 1: Get a list of *edit blocks* from the LLM
 		editBlocks, err = authorEditBlocks(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo)
-		if err != nil {
+		if err != nil && !errors.Is(err, PendingActionError) {
 			// The err is likely when extracting edit blocks
 			// TODO if the failure was something else, eg openai rate limit, then don't feedback like this
 			feedback := fmt.Sprintf("Please write out all the *edit blocks* again and ensure we follow the format, as we encountered this error when processing them: %v", err)
 			promptInfo = FeedbackInfo{Feedback: feedback}
 			attemptCount++
 			continue
+		}
+		if version == 1 {
+			action := dCtx.GlobalState.GetPendingUserAction()
+			if action != nil {
+				return PendingActionError
+			}
 		}
 
 		// Step 2: Try to apply all the edit blocks, reverting on check failures

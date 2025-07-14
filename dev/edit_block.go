@@ -22,7 +22,7 @@ type EditBlock struct {
 	SequenceNumber int `json:"sequenceNumber"`
 	// file ranges that were visible when this edit block was created
 	VisibleFileRanges []FileRange `json:"visibleFileRanges"`
-	// file ranges that were visible when this edit block was created
+	// code blocks that were visible when this edit block was created
 	VisibleCodeBlocks []tree_sitter.CodeBlock `json:"visibleCodeBlocks"`
 }
 

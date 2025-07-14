@@ -8,7 +8,6 @@ import (
 	"sidekick/domain"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
-	"sidekick/utils"
 
 	"github.com/invopop/jsonschema"
 	"github.com/sashabaranov/go-openai"
@@ -238,7 +237,7 @@ func TrackedToolChat(dCtx DevContext, actionType string, options llm.ToolChatOpt
 		}
 		var chatResponse llm.ChatMessageResponse
 		var la *persisted_ai.LlmActivities // use a nil struct pointer to call activities that are part of a structure
-		err := workflow.ExecuteActivity(utils.LlmHeartbeatCtx(dCtx), la.ChatStream, chatStreamOptions).Get(dCtx, &chatResponse)
+		err := PerformWithUserRetry(actionCtx.WithLlmHeartbeatCtx(), la.ChatStream, &chatResponse, chatStreamOptions)
 		if err != nil {
 			return nil, fmt.Errorf("error during tracked tool chat action '%s': %v", actionType, err)
 		}
@@ -325,6 +324,11 @@ requirements should be complete and unambiguous, and should include learnings
 that will help the engineers who will implement the requirements get started
 faster.
 
+Don't refer to anything from the chat history that would not make sense out of
+context, because these requirements will be used directly, without any of the
+associate chat history we had. The final artifact, both the acceptance criteria,
+and the learnings, must stand on their own.
+
 # INSTRUCTIONS
 
 Thinking step-by-step, analyze the request. Use it to create a set of low-level
@@ -379,9 +383,9 @@ requirements, if there were any, but add new ones if any.
 
 If there are crucial details in the original request below that need to be kept,
 then copy them into either requirements or learnings. Things like code snippets
-should be copied verbatim into learnings for instance. The original request will
-be wiped away with the final new requirements you come up with, so make sure not
-to lose any essential details.
+should be copied verbatim into learnings for instance. The original request and
+any chat history will be wiped away with the final new requirements you come up
+with, so make sure not to lose any essential details.
 
 # REQUEST
 
