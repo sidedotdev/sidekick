@@ -369,8 +369,7 @@ func isWSL() bool {
 	return strings.Contains(strings.ToLower(string(releaseData)), "microsoft")
 }
 
-// waitForServer polls the checkServerStatus function until the server is responsive
-// or the specified timeout duration is reached. It checks at regular intervals.
+// waitForServer attempts to connect to the server until it responds or times out
 func waitForServer(timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
