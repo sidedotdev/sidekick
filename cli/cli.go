@@ -29,12 +29,9 @@ func (p *program) Start(s system_service.Service) error {
 }
 
 func (p *program) run() {
-	// These functions (startServer, startWorker, startTemporal) are assumed to be defined elsewhere
-	// or would be part of the actual service logic, not directly called by CLI commands.
-	// For example:
-	// startServer()
-	// startWorker()
-	// startTemporal()
+	startServer()
+	startWorker()
+	startTemporal()
 }
 
 func (p *program) Stop(s system_service.Service) error {
@@ -90,11 +87,10 @@ func setupAndRunInteractiveCli(args []string) error {
 				Name:  "init",
 				Usage: "Initialize Sidekick in the current directory. Must be a root directory or subdirectory within a git repository.",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					service, err := sidekick.GetService() // Assumes sidekick.GetService() is available
+					service, err := sidekick.GetService()
 					if err != nil {
 						return cli.Exit(fmt.Sprintf("Failed to initialize service: %v", err), 1)
 					}
-					// Assumes NewInitCommandHandler and its methods are available
 					handler := NewInitCommandHandler(service)
 					if err := handler.handleInitCommand(); err != nil {
 						return cli.Exit(fmt.Sprintf("Initialization failed: %v", err), 1)
@@ -104,6 +100,7 @@ func setupAndRunInteractiveCli(args []string) error {
 				},
 			},
 			NewStartCommand(),
+			// NOTE: disabling the service subcommand since it isn't yet functional
 			/*
 				{
 					Name:      "service",
@@ -114,7 +111,7 @@ func setupAndRunInteractiveCli(args []string) error {
 						if controlAction == "" {
 							return cli.Exit("Usage: side service [install|uninstall|start|stop|status]", 1)
 						}
-						return handleServiceCommandControl(controlAction)
+						return handleServiceCommand(controlAction)
 					},
 				},
 			*/
@@ -161,30 +158,24 @@ var svcConfig = &system_service.Config{
 	Description: "This service runs the Sidekick server and worker.",
 }
 
-// handleServiceCommandControl is a refactored version of the old handleServiceCommand
-func handleServiceCommandControl(action string) error {
-	prg := &program{}
-	s, err := system_service.New(prg, svcConfig)
+func handleServiceCommand() {
+	fmt.Println("Not yet supported")
+	os.Exit(1)
+	program := &program{}
+	s, err := system_service.New(program, svcConfig)
 	if err != nil {
-		return cli.Exit(fmt.Sprintf("Failed to create service for action '%s': %v", action, err), 1)
+		fmt.Println("Failed to create service:", err)
+		os.Exit(1)
 	}
 
-	err = system_service.Control(s, action)
-	if err != nil {
-		return cli.Exit(fmt.Sprintf("Service control action '%s' failed: %v", action, err), 1)
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: side service [install|uninstall|start|stop|status]")
+		os.Exit(1)
 	}
-	fmt.Printf("Service control action '%s' executed successfully.\n", action)
-	return nil
+
+	err = system_service.Control(s, os.Args[2])
+	if err != nil {
+		fmt.Println("Service control action failed:", err)
+		os.Exit(1)
+	}
 }
-
-// Stubs for functions assumed to exist elsewhere, to make the example runnable if they were missing.
-// In a real scenario, these would be properly defined or imported.
-// var NewInitCommandHandler = func(service interface{}) interface{ handleInitCommand() error } {
-//	return nil // Placeholder
-// }
-// var handleStartCommand = func(args []string) {
-//	// Placeholder
-// }
-// func startServer(){}
-// func startWorker(){}
-// func startTemporal(){}

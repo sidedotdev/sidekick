@@ -2,12 +2,11 @@ package main
 
 import (
 	"bytes"
-	"context" // Keep one context
-	"io"      // Keep one io
+	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	// "strings" // Removed unused import
 	"testing"
 	"time"
 
@@ -18,7 +17,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/urfave/cli/v3" // Added for cli.ExitCoder
+	"github.com/urfave/cli/v3"
 	"github.com/zalando/go-keyring"
 )
 

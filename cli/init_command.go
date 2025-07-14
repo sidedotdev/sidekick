@@ -532,7 +532,6 @@ func ensureEmbeddingSecrets() ([]string, error) {
 
 // checkServerStatus checks if the Sidekick server is responsive by making an HTTP GET
 // request to its root path and checking for a "sidekick" keyword in the response.
-// It uses a short timeout for a quick check.
 func checkServerStatus() bool {
 	client := &http.Client{
 		Timeout: 1 * time.Second, // Short timeout for a quick check
