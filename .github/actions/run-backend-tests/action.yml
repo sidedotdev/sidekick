@@ -1,0 +1,20 @@
+name: "Run Backend Tests"
+description: "Run all Go tests. Assumes environment was setup for USearch static lib & headers"
+runs:
+  using: "composite"
+  steps:
+    - name: Install prerequisites
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git ripgrep
+    - name: Install gopls
+      shell: bash
+      run: go install golang.org/x/tools/gopls@latest
+    - name: Run all Go backend tests
+      shell: bash
+      env:
+        CGO_ENABLED: 1
+        CGO_LDFLAGS: "-L. libusearch_c.a -lstdc++ -lm"
+      run: |
+        go test -test.timeout 30s ./...

@@ -11,7 +11,7 @@ import (
 )
 
 func TestPersistAndGetWorkspace(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "workspace_test")
+	storage := NewTestStorage(t, "workspace_test")
 
 	ctx := context.Background()
 
@@ -50,7 +50,7 @@ func TestPersistAndGetWorkspace(t *testing.T) {
 }
 
 func TestGetAllWorkspaces(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "workspace_test")
+	storage := NewTestStorage(t, "workspace_test")
 	ctx := context.Background()
 
 	// Create test workspaces
@@ -77,7 +77,7 @@ func TestGetAllWorkspaces(t *testing.T) {
 }
 
 func TestDeleteWorkspace(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "workspace_test")
+	storage := NewTestStorage(t, "workspace_test")
 	ctx := context.Background()
 
 	workspace := domain.Workspace{
@@ -105,7 +105,7 @@ func TestDeleteWorkspace(t *testing.T) {
 }
 
 func TestPersistWorkspaceConfig(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "workspace_config_test")
+	storage := NewTestStorage(t, "workspace_config_test")
 	ctx := context.Background()
 
 	workspaceId := "test-config-workspace-id"
@@ -153,7 +153,7 @@ func TestPersistWorkspaceConfig(t *testing.T) {
 }
 
 func TestGetWorkspaceConfig(t *testing.T) {
-	storage := NewTestSqliteStorage(t, "workspace_config_test")
+	storage := NewTestStorage(t, "workspace_config_test")
 	ctx := context.Background()
 
 	workspaceId := "test-config-workspace-id"

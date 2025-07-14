@@ -1,0 +1,14 @@
+name: PR Tests
+
+on:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-go
+      - uses: ./.github/actions/build-usearch
+      - uses: ./.github/actions/setup-node-frontend
+      - uses: ./.github/actions/run-backend-tests

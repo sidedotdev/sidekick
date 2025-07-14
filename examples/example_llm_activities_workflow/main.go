@@ -8,9 +8,10 @@ import (
 	"os/signal"
 	"sidekick/common"
 	"sidekick/llm"
+	"sidekick/nats"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
-	"sidekick/srv/redis"
+	"sidekick/srv/jetstream"
 	sidekickworker "sidekick/worker" // Added for StartWorker
 	"syscall"
 	"time"
@@ -85,10 +86,18 @@ func ExampleLlmActivitiesWorkflow(ctx workflow.Context) (string, error) {
 	}
 
 	var chatResponse llm.ChatMessageResponse
-	// This workflow instantiates LlmActivities directly with a test streamer.
-	// Therefore, LlmActivities does not need to be registered on the worker separately for this workflow.
-	la := persisted_ai.LlmActivities{Streamer: redis.NewTestRedisStreamer()}
-	err := workflow.ExecuteActivity(ctx, la.ChatStream, chatStreamOptions).Get(ctx, &chatResponse)
+	// Create a real JetStream streamer for demonstration.
+	nc, err := nats.GetConnection()
+	if err != nil {
+		return "", fmt.Errorf("failed to connect to NATS: %w", err)
+	}
+	streamer, err := jetstream.NewStreamer(nc)
+	if err != nil {
+		return "", fmt.Errorf("failed to create JetStream streamer: %w", err)
+	}
+	// This workflow instantiates LlmActivities directly with a real streamer.
+	la := persisted_ai.LlmActivities{Streamer: streamer}
+	err = workflow.ExecuteActivity(ctx, la.ChatStream, chatStreamOptions).Get(ctx, &chatResponse)
 	if err != nil {
 		return "", err
 	}

@@ -1,0 +1,31 @@
+name: "Setup Node.js, run frontend tests, and build frontend"
+description: "Sets up Node.js 16, restores/caches npm dependencies, runs frontend tests, and builds the frontend app"
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Node.js 16 and enable npm caching
+      uses: actions/setup-node@v4
+      with:
+        node-version: '16'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Install frontend npm dependencies
+      shell: bash
+      run: npm ci
+      working-directory: frontend
+
+    - name: Run frontend unit tests
+      shell: bash
+      run: npm run test:unit -- --run
+      working-directory: frontend
+
+    - name: Run frontend type check
+      shell: bash
+      run: npm run type-check
+      working-directory: frontend
+
+    - name: Build frontend
+      shell: bash
+      run: npm run build
+      working-directory: frontend

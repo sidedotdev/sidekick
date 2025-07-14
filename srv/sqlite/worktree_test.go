@@ -13,7 +13,7 @@ import (
 
 func TestWorktreeStorage(t *testing.T) {
 	ctx := context.Background()
-	storage := NewTestSqliteStorage(t, "worktree_test")
+	storage := NewTestStorage(t, "worktree_test")
 
 	t.Run("PersistWorktree", func(t *testing.T) {
 		worktree := domain.Worktree{
