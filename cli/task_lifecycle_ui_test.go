@@ -20,7 +20,6 @@ func TestLifecycleModel(t *testing.T) {
 		wantProgress  bool
 		wantContains  []string
 		wantNotExists []string
-		wantOrder     []string // New field to test message ordering
 	}{
 		{
 			name: "shows setting up workspace",
@@ -50,10 +49,6 @@ func TestLifecycleModel(t *testing.T) {
 				},
 			},
 			wantContains: []string{
-				"Setting up workspace...",
-				"Creating task...",
-			},
-			wantOrder: []string{
 				"Setting up workspace...",
 				"Creating task...",
 			},
@@ -104,9 +99,9 @@ func TestLifecycleModel(t *testing.T) {
 			},
 			wantProgress: true,
 			wantContains: []string{
-				"Working...",
 				"action_1",
 				"action_2",
+				"Working...",
 			},
 			wantNotExists: []string{
 				"Setting up workspace",
@@ -220,13 +215,14 @@ func TestLifecycleModel(t *testing.T) {
 			for _, notWant := range tt.wantNotExists {
 				assert.NotContains(t, view, notWant)
 			}
-			if tt.wantOrder != nil {
-				lastIndex := -1
-				for _, msg := range tt.wantOrder {
-					index := strings.Index(view, msg)
-					assert.Greater(t, index, lastIndex, "Messages not in expected order")
-					lastIndex = index
-				}
+
+			// verify correct ordering
+			lastIndex := -1
+			for _, msg := range tt.wantContains {
+				index := strings.Index(view, msg)
+				t.Log(index, msg)
+				assert.Greater(t, index, lastIndex, "Messages not in expected order, got:\n"+view)
+				lastIndex = index
 			}
 		})
 	}
