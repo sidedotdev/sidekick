@@ -13,9 +13,14 @@ const (
 	/* NOTE: free tier of google doesn't yet support "gemini-embedding-exp-03-07"
 	 * and limits are very low for that currently even with billing enabled (10
 	 * RPM and 1000 RPD) */
-	//GoogleDefaultModel = "gemini-embedding-exp-03-07"
+	//GoogleDefaultModel = "gemini-embedding-exp-03-07" // NOTE: called "text-embedding-large-exp-03-07" in Vertex AI before GA
 	GoogleDefaultModel = "text-embedding-004"
-	maxBatchSize       = 100
+
+	// "For each request, you're limited to 250 input texts for non-Gemini
+	// models, and a single input text for Gemini Embedding models."
+	// https://cloud.google.com/vertex-ai/generative-ai/docs/embeddings/get-text-embeddings#get_text_embeddings_for_a_snippet_of_text
+	// this doesn't seem to cover the experimental new gemini embedding model though
+	maxBatchSize = 250
 )
 
 type GoogleEmbedder struct{}
