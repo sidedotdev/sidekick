@@ -113,20 +113,29 @@ func (m *TaskMonitor) monitorTask(ctx context.Context) {
 			case <-ticker.C:
 				latestTask, err := m.client.GetTask(m.workspaceID, m.taskID)
 				if err != nil {
-					m.current.Error = err
-					m.statusChan <- m.current
+					// Preserve last known task state while reporting error
+					errStatus := m.current
+					errStatus.Error = fmt.Errorf("failed to poll task status: %w", err)
+					m.statusChan <- errStatus
 					continue
 				}
+
+				// Only update status if it changed
 				if latestTask.Status != task.Status {
 					task = latestTask
 					m.current = TaskStatus{Task: task}
+
+					// Check for terminal states
 					switch task.Status {
 					case domain.TaskStatusComplete, domain.TaskStatusFailed, domain.TaskStatusCanceled:
 						m.current.Finished = true
 					default:
 						m.current.Finished = false
 					}
+
 					m.statusChan <- m.current
+
+					// Only stop monitoring on terminal states
 					if m.current.Finished {
 						m.Stop() // cancel context and thus flow events streaming
 						return

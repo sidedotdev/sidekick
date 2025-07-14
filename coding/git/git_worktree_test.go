@@ -212,11 +212,17 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 
 	t.Run("Missing Branch Name", func(t *testing.T) {
 		repoDir := setupTestGitRepo(t)
-		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+
+		// Create a worktree first since CleanupWorktreeActivity expects to run from within one
+		branchName := "test-branch"
+		wtDir := filepath.Join(repoDir, "..", "test-worktree")
+		createTestWorktree(t, repoDir, wtDir, branchName)
+
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: wtDir})
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		err = CleanupWorktreeActivity(ctx, envContainer, repoDir, "")
+		err = CleanupWorktreeActivity(ctx, envContainer, wtDir, "")
 		require.Error(t, err, "Should fail with empty branch name")
 		assert.Contains(t, err.Error(), "branch name is required", "Error should mention missing branch name")
 	})
