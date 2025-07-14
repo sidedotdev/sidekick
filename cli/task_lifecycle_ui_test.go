@@ -26,7 +26,7 @@ func TestLifecycleModel(t *testing.T) {
 			name: "shows setting up workspace",
 			messages: []tea.Msg{
 				updateLifecycleMsg{
-					key:     "setup",
+					key:     "init",
 					content: "Setting up workspace...",
 					spin:    true,
 				},
@@ -39,12 +39,12 @@ func TestLifecycleModel(t *testing.T) {
 			name: "shows concurrent messages",
 			messages: []tea.Msg{
 				updateLifecycleMsg{
-					key:     "setup",
+					key:     "init",
 					content: "Setting up workspace...",
 					spin:    true,
 				},
 				updateLifecycleMsg{
-					key:     "create",
+					key:     "init2",
 					content: "Creating task...",
 					spin:    true,
 				},
@@ -61,8 +61,17 @@ func TestLifecycleModel(t *testing.T) {
 		{
 			name: "shows task has started",
 			messages: []tea.Msg{
-				statusUpdateMsg{message: "Setting up workspace..."},
-				statusUpdateMsg{message: "Creating task..."},
+				updateLifecycleMsg{
+					key:     "init",
+					content: "Setting up workspace...",
+					spin:    true,
+				},
+				updateLifecycleMsg{
+					key:     "init",
+					content: "Creating task...",
+					spin:    true,
+				},
+				clearLifecycleMsg{key: "init"},
 				taskChangeMsg{task: newTestTaskWithFlows()},
 			},
 			wantProgress: true,
@@ -77,8 +86,17 @@ func TestLifecycleModel(t *testing.T) {
 		{
 			name: "shows flow actions",
 			messages: []tea.Msg{
-				statusUpdateMsg{message: "Setting up workspace..."},
-				statusUpdateMsg{message: "Creating task..."},
+				updateLifecycleMsg{
+					key:     "init",
+					content: "Setting up workspace...",
+					spin:    true,
+				},
+				updateLifecycleMsg{
+					key:     "init",
+					content: "Creating task...",
+					spin:    true,
+				},
+				clearLifecycleMsg{key: "init"},
 				taskChangeMsg{task: newTestTaskWithFlows()},
 				flowActionChangeMsg{actionType: "action_1", actionStatus: domain.ActionStatusStarted},
 				flowActionChangeMsg{actionType: "action_1", actionStatus: domain.ActionStatusComplete},
@@ -99,8 +117,17 @@ func TestLifecycleModel(t *testing.T) {
 		{
 			name: "handles cancellation",
 			messages: []tea.Msg{
-				statusUpdateMsg{message: "Setting up workspace..."},
-				statusUpdateMsg{message: "Creating task..."},
+				updateLifecycleMsg{
+					key:     "init",
+					content: "Setting up workspace...",
+					spin:    true,
+				},
+				updateLifecycleMsg{
+					key:     "init",
+					content: "Creating task...",
+					spin:    true,
+				},
+				clearLifecycleMsg{key: "init"},
 				taskChangeMsg{task: newTestTaskWithFlows()},
 				flowActionChangeMsg{actionType: "action_1", actionStatus: domain.ActionStatusStarted},
 				flowActionChangeMsg{actionType: "action_1", actionStatus: domain.ActionStatusFailed},
@@ -121,8 +148,17 @@ func TestLifecycleModel(t *testing.T) {
 			name:         "handles task error",
 			wantQuitting: true,
 			messages: []tea.Msg{
-				statusUpdateMsg{message: "Setting up workspace..."},
-				statusUpdateMsg{message: "Creating task..."},
+				updateLifecycleMsg{
+					key:     "init",
+					content: "Setting up workspace...",
+					spin:    true,
+				},
+				updateLifecycleMsg{
+					key:     "init",
+					content: "Creating task...",
+					spin:    true,
+				},
+				clearLifecycleMsg{key: "init"},
 				taskErrorMsg{err: assert.AnError},
 			},
 			wantContains: []string{
@@ -158,7 +194,11 @@ func TestLifecycleModel(t *testing.T) {
 				task := newTestTaskWithFlows()
 				task.Status = domain.TaskStatusCanceled
 				model, _ = model.Update(taskChangeMsg{task: task})
-				model, _ = model.Update(finalUpdateMsg{message: "Task canceled"})
+				model, _ = model.Update(updateLifecycleMsg{
+					key:     "cancel",
+					content: "Task canceled",
+					spin:    false,
+				})
 			default:
 				// nothing to do
 			}

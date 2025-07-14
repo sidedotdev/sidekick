@@ -29,14 +29,6 @@ type clearLifecycleMsg struct {
 	key string
 }
 
-type statusUpdateMsg struct {
-	message string
-}
-
-type finalUpdateMsg struct {
-	message string
-}
-
 type taskLifecycleModel struct {
 	spinner spinner.Model
 
@@ -90,29 +82,10 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.messages, msg.key)
 		return m, nil
 
-	case statusUpdateMsg:
-		m.messages["status"] = lifecycleMessage{
-			content:   msg.message,
-			spin:      true,
-			timestamp: time.Now(),
-		}
-		return m, nil
-
-	case finalUpdateMsg:
-		key := fmt.Sprintf("final-%d", len(m.messages))
-		m.messages[key] = lifecycleMessage{
-			content:   msg.message,
-			spin:      false,
-			timestamp: time.Now(),
-		}
-		return m, nil
-
 	case taskChangeMsg:
 		m.taskId = msg.task.Id
 		if m.progModel == nil && len(msg.task.Flows) > 0 {
 			m.flowId = msg.task.Flows[0].Id
-			// clear status messages from initialization process
-			delete(m.messages, "status")
 			m.progModel = newProgressModel(m.taskId, m.flowId)
 			cmd := m.progModel.Init()
 			return m, cmd
@@ -129,7 +102,6 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case taskErrorMsg:
 		m.error = msg.err
-		delete(m.messages, "status")
 		m.messages["error"] = lifecycleMessage{
 			content:   fmt.Sprintf("Task failed: %v", msg.err),
 			spin:      false,
@@ -178,6 +150,8 @@ func (m taskLifecycleModel) View() string {
 	}
 
 	// Sort by timestamp
+	// FIXME track when progModel was initialized, and show its View between
+	// these lifecycle messages based on that timestamp
 	sort.Slice(messages, func(i, j int) bool {
 		return messages[i].timestamp.Before(messages[j].timestamp)
 	})
