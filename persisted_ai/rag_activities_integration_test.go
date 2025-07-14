@@ -31,11 +31,13 @@ func setupTestWorkspace(t *testing.T, ctx context.Context) (string, string) {
 
 	// Try each repository path in sequence
 	var workspaceId string
+	var workspaceRepoDir string
 	for _, repoPath := range repoPaths {
 		cleanedRepoPath := filepath.Clean(repoPath)
 		for _, ws := range workspaces {
 			if filepath.Clean(ws.LocalRepoDir) == cleanedRepoPath {
 				workspaceId = ws.Id
+				workspaceRepoDir = cleanedRepoPath
 				break
 			}
 		}
@@ -55,7 +57,7 @@ func setupTestWorkspace(t *testing.T, ctx context.Context) (string, string) {
 		   that could potentially get expensive
 	*/
 	require.NotEmpty(t, workspaceId, "Failed to find an existing workspace.\n\nPlease run `side init` in the sidekick repo root and try again.")
-	return workspaceId, repoPaths[1] // Return repo root path (second path)
+	return workspaceId, workspaceRepoDir
 }
 
 // setupRagService creates and configures the RagActivities service with necessary dependencies
