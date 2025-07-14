@@ -39,6 +39,16 @@ type TaskMonitor struct {
 	cancel       context.CancelFunc
 }
 
+// sendStatus sends a status update if the context is not done
+func (m *TaskMonitor) sendStatus(ctx context.Context, status TaskStatus) {
+	select {
+	case <-ctx.Done():
+		return
+	default:
+		m.statusChan <- status
+	}
+}
+
 // Stop cancels the task monitoring
 func (m *TaskMonitor) Stop() {
 	if m.cancel != nil {
@@ -75,11 +85,11 @@ func (m *TaskMonitor) monitorTask(ctx context.Context) {
 	// Initial task status check
 	task, err := m.client.GetTask(m.workspaceID, m.taskID)
 	if err != nil {
-		m.statusChan <- TaskStatus{Error: fmt.Errorf("failed to get initial task status: %w", err)}
+		m.sendStatus(ctx, TaskStatus{Error: fmt.Errorf("failed to get initial task status: %w", err)})
 		return
 	}
 	m.current = TaskStatus{Task: task}
-	m.statusChan <- m.current
+	m.sendStatus(ctx, m.current)
 
 	var flowId string
 	if len(task.Flows) > 0 {
@@ -114,7 +124,7 @@ func (m *TaskMonitor) monitorTask(ctx context.Context) {
 				latestTask, err := m.client.GetTask(m.workspaceID, m.taskID)
 				if err != nil {
 					m.current.Error = err
-					m.statusChan <- m.current
+					m.sendStatus(ctx, m.current)
 					continue
 				}
 				if latestTask.Status != task.Status {
@@ -126,7 +136,7 @@ func (m *TaskMonitor) monitorTask(ctx context.Context) {
 					default:
 						m.current.Finished = false
 					}
-					m.statusChan <- m.current
+					m.sendStatus(ctx, m.current)
 					if m.current.Finished {
 						m.Stop() // cancel context and thus flow events streaming
 						return
@@ -142,7 +152,7 @@ func (m *TaskMonitor) monitorTask(ctx context.Context) {
 			Task:  m.current.Task,
 			Error: fmt.Errorf("flow event stream error: %w", err),
 		}
-		m.statusChan <- m.current
+		m.sendStatus(ctx, m.current)
 	}
 }
 
