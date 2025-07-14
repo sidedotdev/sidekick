@@ -24,16 +24,6 @@ type clientImpl struct {
 	httpClient *http.Client
 }
 
-// GetAllWorkspaces returns all workspaces.
-func (c *clientImpl) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error) {
-	var workspaces []domain.Workspace
-	err := c.get(ctx, "/api/workspaces", &workspaces)
-	if err != nil {
-		return nil, err
-	}
-	return workspaces, nil
-}
-
 func (c *clientImpl) GetBaseURL() string {
 	return c.BaseURL
 }

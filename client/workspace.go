@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -71,4 +72,14 @@ func (c *clientImpl) CreateWorkspace(req *CreateWorkspaceRequest) (*domain.Works
 	}
 
 	return domainWorkspace, nil
+}
+
+// GetAllWorkspaces returns all workspaces.
+func (c *clientImpl) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error) {
+	var workspaces []domain.Workspace
+	err := c.get(ctx, "/api/v1/workspaces", &workspaces)
+	if err != nil {
+		return nil, err
+	}
+	return workspaces, nil
 }
