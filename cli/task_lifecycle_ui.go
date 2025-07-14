@@ -12,15 +12,17 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// not a tea.Msg, but a representation a tui message for task lifecycle
 type lifecycleMessage struct {
-	content     string
-	showSpinner bool
-	timestamp   time.Time
+	content   string
+	spin      bool
+	timestamp time.Time
 }
 
 type updateLifecycleMsg struct {
 	key     string
-	message lifecycleMessage
+	content string
+	spin    bool
 }
 
 type clearLifecycleMsg struct {
@@ -78,7 +80,10 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.propagateAndBatch(msg, cmds)
 
 	case updateLifecycleMsg:
-		m.messages[msg.key] = msg.message
+		m.messages[msg.key] = lifecycleMessage{
+			content: msg.content,
+			spin:    msg.spin,
+		}
 		return m, nil
 
 	case clearLifecycleMsg:
@@ -87,18 +92,18 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case statusUpdateMsg:
 		m.messages["status"] = lifecycleMessage{
-			content:     msg.message,
-			showSpinner: true,
-			timestamp:   time.Now(),
+			content:   msg.message,
+			spin:      true,
+			timestamp: time.Now(),
 		}
 		return m, nil
 
 	case finalUpdateMsg:
 		key := fmt.Sprintf("final-%d", len(m.messages))
 		m.messages[key] = lifecycleMessage{
-			content:     msg.message,
-			showSpinner: false,
-			timestamp:   time.Now(),
+			content:   msg.message,
+			spin:      false,
+			timestamp: time.Now(),
 		}
 		return m, nil
 
@@ -126,9 +131,9 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.error = msg.err
 		delete(m.messages, "status")
 		m.messages["error"] = lifecycleMessage{
-			content:     fmt.Sprintf("Task failed: %v", msg.err),
-			showSpinner: false,
-			timestamp:   time.Now(),
+			content:   fmt.Sprintf("Task failed: %v", msg.err),
+			spin:      false,
+			timestamp: time.Now(),
 		}
 		return m, nil
 
@@ -179,7 +184,7 @@ func (m taskLifecycleModel) View() string {
 
 	// Display messages
 	for _, msg := range messages {
-		if msg.showSpinner {
+		if msg.spin {
 			b.WriteString(fmt.Sprintf("%s %s", m.spinner.View(), msg.content))
 		} else {
 			b.WriteString(msg.content)

@@ -112,43 +112,33 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 
 	go func() {
 		if err := ensureSideServer(p); err != nil {
-			p.Send(updateLifecycleMsg{key: "error", message: lifecycleMessage{content: err.Error(), showSpinner: false}})
+			p.Send(updateLifecycleMsg{key: "error", content: err.Error()})
 			p.Quit()
 			return
 		}
 
 		workspace, err := ensureWorkspace(ctx, currentDir, p, c, disableHumanInTheLoop)
 		if err != nil {
-			p.Send(updateLifecycleMsg{key: "error", message: lifecycleMessage{
-				content:     fmt.Sprintf("Workspace setup failed: %v", err),
-				showSpinner: false,
-			}})
+			p.Send(updateLifecycleMsg{key: "error", content: fmt.Sprintf("Workspace setup failed: %v", err)})
 			p.Quit()
 			return
 		}
 
-		p.Send(updateLifecycleMsg{key: "task", message: lifecycleMessage{
-			content:     "Starting task...",
-			showSpinner: true,
-		}})
+		p.Send(updateLifecycleMsg{key: "init", content: "Starting task...", spin: true})
 
 		task, err = c.CreateTask(workspace.Id, req)
 		if err != nil {
-			p.Send(updateLifecycleMsg{key: "error", message: lifecycleMessage{
-				content:     fmt.Sprintf("Failed to create task: %v", err),
-				showSpinner: false,
-			}})
+			p.Send(updateLifecycleMsg{key: "error", content: fmt.Sprintf("Failed to create task: %v", err)})
 			p.Quit()
 			return
 		}
+		// task was created, but starts asyncronously
+		started := false
 		p.Send(taskChangeMsg{task: task})
 
 		if cmd.Bool("async") {
 			message := fmt.Sprintf("Task submitted. Follow progress at %s", kanbanLink(workspace.Id))
-			p.Send(updateLifecycleMsg{key: "completion", message: lifecycleMessage{
-				content:     message,
-				showSpinner: false,
-			}})
+			p.Send(updateLifecycleMsg{key: "init", content: message})
 			p.Quit()
 			return
 		}
@@ -160,6 +150,10 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 			case taskProgress := <-progressChan:
 				p.Send(flowActionChangeMsg{actionType: taskProgress.ActionType, actionStatus: taskProgress.ActionStatus})
 			case taskStatus := <-statusChan:
+				if !started && len(taskStatus.Task.Flows) > 0 {
+					started = true
+					p.Send(updateLifecycleMsg{key: "init", content: "Task started"})
+				}
 				p.Send(taskChangeMsg{task: taskStatus.Task})
 				if taskStatus.Error != nil {
 					p.Send(taskErrorMsg{err: taskStatus.Error})
@@ -189,20 +183,11 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 			if monitor != nil {
 				monitor.Stop()
 			}
-			p.Send(updateLifecycleMsg{key: "task", message: lifecycleMessage{
-				content:     "Canceling task...",
-				showSpinner: true,
-			}})
+			p.Send(updateLifecycleMsg{key: "finish", content: "Canceling task...", spin: true})
 			if err := c.CancelTask(task.WorkspaceId, task.Id); err != nil {
-				p.Send(updateLifecycleMsg{key: "error", message: lifecycleMessage{
-					content:     fmt.Sprintf("Failed to cancel task: %v", err),
-					showSpinner: false,
-				}})
+				p.Send(updateLifecycleMsg{key: "error", content: fmt.Sprintf("Failed to cancel task: %v", err)})
 			}
-			p.Send(updateLifecycleMsg{key: "completion", message: lifecycleMessage{
-				content:     "Task cancelled",
-				showSpinner: false,
-			}})
+			p.Send(updateLifecycleMsg{key: "finish", content: "Task cancelled"})
 		}
 		p.Quit()
 	}()
@@ -248,10 +233,7 @@ func kanbanLink(workspaceId string) string {
 
 func ensureSideServer(p *tea.Program) error {
 	if !checkServerStatus() {
-		p.Send(updateLifecycleMsg{key: "startup", message: lifecycleMessage{
-			content:     "Starting sidekick server...",
-			showSpinner: true,
-		}})
+		p.Send(updateLifecycleMsg{key: "init", content: "Starting sidekick server...", spin: true})
 		process, err := startServerDetached()
 		defer process.Release() // don't wait, server runs in background
 
@@ -308,10 +290,7 @@ type teaSendable interface {
 
 // ensureWorkspace handles finding, creating, or selecting a workspace.
 func ensureWorkspace(ctx context.Context, dir string, p teaSendable, c client.Client, disableHumanInTheLoop bool) (*domain.Workspace, error) {
-	p.Send(updateLifecycleMsg{key: "workspace", message: lifecycleMessage{
-		content:     "Looking up workspace...",
-		showSpinner: true,
-	}})
+	p.Send(updateLifecycleMsg{key: "init", content: "Looking up workspace...", spin: true})
 
 	// Get all potential repository paths to check
 	repoPaths, err := utils.GetRepositoryPaths(ctx, dir)
@@ -347,10 +326,7 @@ func ensureWorkspace(ctx context.Context, dir string, p teaSendable, c client.Cl
 
 	if len(workspaces) == 0 {
 		// Step 2: If none exists, create one automatically
-		p.Send(updateLifecycleMsg{key: "workspace", message: lifecycleMessage{
-			content:     "Creating workspace...",
-			showSpinner: true,
-		}})
+		p.Send(updateLifecycleMsg{key: "init", content: "Creating workspace...", spin: true})
 		workspaceName := filepath.Base(dir)
 
 		req := &client.CreateWorkspaceRequest{
@@ -400,6 +376,7 @@ func ensureWorkspace(ctx context.Context, dir string, p teaSendable, c client.Cl
 		workspaceMap[wsString] = ws
 	}
 
+	// TODO move this into task lifecycle ui, sending a message and then blocking on the selection (or context cancellation)
 	prompt := selection.New("Please select a workspace", workspaceStrings)
 
 	selectedWorkspaceString, err := prompt.RunPrompt()

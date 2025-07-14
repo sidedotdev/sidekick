@@ -5,7 +5,6 @@ import (
 	"sidekick/domain"
 	"strings"
 	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
@@ -27,12 +26,9 @@ func TestLifecycleModel(t *testing.T) {
 			name: "shows setting up workspace",
 			messages: []tea.Msg{
 				updateLifecycleMsg{
-					key: "setup",
-					message: lifecycleMessage{
-						content:     "Setting up workspace...",
-						showSpinner: true,
-						timestamp:   time.Now(),
-					},
+					key:     "setup",
+					content: "Setting up workspace...",
+					spin:    true,
 				},
 			},
 			wantContains: []string{
@@ -43,20 +39,14 @@ func TestLifecycleModel(t *testing.T) {
 			name: "shows concurrent messages",
 			messages: []tea.Msg{
 				updateLifecycleMsg{
-					key: "setup",
-					message: lifecycleMessage{
-						content:     "Setting up workspace...",
-						showSpinner: true,
-						timestamp:   time.Now(),
-					},
+					key:     "setup",
+					content: "Setting up workspace...",
+					spin:    true,
 				},
 				updateLifecycleMsg{
-					key: "create",
-					message: lifecycleMessage{
-						content:     "Creating task...",
-						showSpinner: true,
-						timestamp:   time.Now().Add(time.Second),
-					},
+					key:     "create",
+					content: "Creating task...",
+					spin:    true,
 				},
 			},
 			wantContains: []string{
