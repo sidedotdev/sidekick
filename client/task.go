@@ -6,15 +6,23 @@ import (
 	"fmt"
 	"io"
 
+	"sidekick/dev"
 	"sidekick/domain"
 )
 
+// FlowOptions defines the options that can be passed to a flow
+type FlowOptions struct {
+	ConfigOverrides dev.DevConfigOverrides `json:"configOverrides,omitempty"`
+	// Preserve extensibility by keeping additional arbitrary options
+	AdditionalOptions map[string]interface{} `json:"additionalOptions,omitempty"`
+}
+
 // CreateTaskRequest defines the structure for the task creation API request.
 type CreateTaskRequest struct {
-	Title       string                 `json:"title"`
-	Description string                 `json:"description"`
-	FlowType    string                 `json:"flowType"`
-	FlowOptions map[string]interface{} `json:"flowOptions"`
+	Title       string      `json:"title"`
+	Description string      `json:"description"`
+	FlowType    string      `json:"flowType"`
+	FlowOptions FlowOptions `json:"flowOptions"`
 }
 
 // CreateTaskResponse is the response from the CreateTask API.
