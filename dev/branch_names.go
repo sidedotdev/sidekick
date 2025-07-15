@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sidekick/common"
+	"sidekick/env"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
@@ -12,11 +14,12 @@ import (
 	"unicode"
 
 	"github.com/invopop/jsonschema"
+	"go.temporal.io/sdk/workflow"
 )
 
 type BranchNameRequest struct {
 	Requirements string `json:"requirements" jsonschema:"description=The requirements text to use as context for generating branch names"`
-	EditHints    string `json:"edit_hints" jsonschema:"description=Additional edit hints that provide context for branch name generation"`
+	Hints        string `json:"editHints" jsonschema:"description=Additional hints that might provide context for branch name generation"`
 }
 
 type BranchNameResponse struct {
@@ -33,10 +36,20 @@ var generateBranchNamesPrompt = panicParseMustache(promptsFS, "branch_names/gene
 
 // GenerateBranchName generates a unique branch name using LLM-generated candidates or falls back
 // to a name derived from requirements if generation fails. The returned name includes the 'side/' prefix.
-func GenerateBranchName(dCtx DevContext, req BranchNameRequest, existingBranches []string) (string, error) {
+func GenerateBranchName(eCtx flow_action.ExecContext, req BranchNameRequest) (string, error) {
+	var output env.EnvRunCommandActivityOutput
+	err := workflow.ExecuteActivity(eCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+		Command: "git",
+		Args:    []string{"branch", "--list", "--format=%(refname:short)"},
+	}).Get(eCtx, &output)
+	if err != nil {
+		return "", fmt.Errorf("failed to get existing branches: %v", err)
+	}
+	existingBranches := strings.Split(strings.TrimSpace(output.Stdout), "\n")
+
 	// Try LLM generation with retries
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		candidates, err := generateBranchNameCandidates(dCtx, req)
+		candidates, err := generateBranchNameCandidates(eCtx, req)
 		if err != nil {
 			continue
 		}
@@ -55,6 +68,7 @@ func GenerateBranchName(dCtx DevContext, req BranchNameRequest, existingBranches
 	}
 
 	// Fallback: use first few words from requirements
+	// TODO: this fallback should be only be if we got no candidates, i.e. llm call failed
 	suffix := generateFallbackSuffix(req.Requirements)
 	if !validateBranchNameSuffix(suffix) {
 		return "", fmt.Errorf("failed to generate valid branch name after all attempts")
@@ -80,7 +94,7 @@ func GenerateBranchName(dCtx DevContext, req BranchNameRequest, existingBranches
 	return "", fmt.Errorf("failed to generate unique branch name")
 }
 
-func generateBranchNameCandidates(dCtx DevContext, req BranchNameRequest) ([]string, error) {
+func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRequest) ([]string, error) {
 	chatHistory := []llm.ChatMessage{
 		{
 			Role:    llm.ChatMessageRoleSystem,
@@ -88,14 +102,14 @@ func generateBranchNameCandidates(dCtx DevContext, req BranchNameRequest) ([]str
 		},
 	}
 
-	modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
+	modelConfig := eCtx.GetModelConfig(common.SummarizationKey, 0, "small")
 	params := llm.ToolChatParams{Messages: chatHistory, ModelConfig: modelConfig}
 
 	var branchResp BranchNameResponse
 	attempts := 0
 	for {
-		actionCtx := dCtx.ExecContext.NewActionContext("generate_branch_names")
-		chatResponse, err := persisted_ai.ForceToolCall(actionCtx, dCtx.LLMConfig, &params, &generateBranchNamesTool)
+		actionCtx := eCtx.NewActionContext("generate_branch_names")
+		chatResponse, err := persisted_ai.ForceToolCall(actionCtx, eCtx.LLMConfig, &params, &generateBranchNamesTool)
 		if err != nil {
 			return nil, fmt.Errorf("failed to force tool call: %v", err)
 		}
@@ -146,10 +160,6 @@ func generateFallbackSuffix(requirements string) string {
 		if len(suffix) >= 2 {
 			break
 		}
-	}
-
-	if len(suffix) < 2 {
-		return "new-branch"
 	}
 
 	return strings.Join(suffix, "-")
