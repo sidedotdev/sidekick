@@ -29,6 +29,16 @@ type BasicDevOptions struct {
 	StartBranch           *string     `json:"startBranch,omitempty"`
 }
 
+// MergeWithReviewParams contains parameters for the handleMergeWithReviewIterations function
+type MergeWithReviewParams struct {
+	Requirements  string
+	StartBranch   *string
+	DefaultTarget string
+	GetGitDiff    func() (string, error) // function to get git diff customized per workflow
+	SubflowType   string                 // for tracking purposes
+	SubflowName   string                 // for tracking purposes
+}
+
 // formatRequirementsWithReview combines original requirements with review history and work done
 // to create comprehensive requirements for the next iteration
 func formatRequirementsWithReview(originalReqs string, reviewMsgs []string, workDone string, latestReview string) string {
@@ -444,4 +454,149 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, gitDiff string) (Me
 	}
 
 	return resp, nil
+}
+
+// handleMergeWithReviewIterations handles the complete merge approval and review iteration flow
+func handleMergeWithReviewIterations(dCtx DevContext, params MergeWithReviewParams) error {
+	// Track review messages for iterative development
+	reviewMessages := []string{}
+	originalRequirements := params.Requirements
+	requirements := params.Requirements
+
+	for {
+		// Get current git diff
+		gitDiff, err := params.GetGitDiff()
+		if err != nil {
+			return fmt.Errorf("failed to get git diff: %v", err)
+		}
+
+		// Get merge approval
+		mergeInfo, err := getMergeApproval(dCtx, params.DefaultTarget, gitDiff)
+		if err != nil {
+			if mergeErr, ok := err.(*git.MergeRejectedError); ok {
+				// Get current work done via git diff for review context
+				workDone, diffErr := params.GetGitDiff()
+				if diffErr != nil {
+					return fmt.Errorf("failed to get git diff after merge rejection: %v", diffErr)
+				}
+
+				// Add rejection message to history
+				reviewMessages = append(reviewMessages, mergeErr.Message)
+
+				// Format new requirements with review history
+				requirements = formatRequirementsWithReview(
+					originalRequirements,
+					reviewMessages,
+					workDone,
+					mergeErr.Message,
+				)
+
+				// Execute coding subflow with updated requirements
+				v := workflow.GetVersion(dCtx, "basic-dev-parent-subflow", workflow.DefaultVersion, 1)
+				if v == 1 {
+					_, err = RunSubflow(dCtx, params.SubflowType, params.SubflowName, func(subflow domain.Subflow) (string, error) {
+						return codingSubflow(dCtx, requirements, dCtx.EnvContainer.Env.GetType(), params.StartBranch)
+					})
+				} else {
+					_, err = codingSubflow(dCtx, requirements, dCtx.EnvContainer.Env.GetType(), params.StartBranch)
+				}
+
+				if err != nil {
+					return err
+				}
+
+				// Continue the loop with updated requirements
+				continue
+			}
+
+			// For any other error, return it
+			return fmt.Errorf("failed to get merge approval: %v", err)
+		}
+
+		// If merge is approved, perform the merge
+		if mergeInfo.Approved {
+			// Perform merge
+			actionCtx := dCtx.NewActionContext("merge")
+			actionCtx.ActionParams = map[string]interface{}{
+				"sourceBranch": dCtx.Worktree.Name,
+				"targetBranch": mergeInfo.TargetBranch,
+			}
+
+			// Commit any pending changes first
+			commitMessage := strings.TrimSpace(requirements)
+			if strings.Contains(commitMessage, "Overview:\n") {
+				commitMessage = strings.Split(commitMessage, "Overview:\n")[1]
+				commitMessage = strings.TrimSpace(commitMessage)
+			}
+			commitMessage = strings.Split(commitMessage, "\n")[0]
+			if len(commitMessage) > 100 {
+				commitMessage = commitMessage[:100] + "...\n\n..." + commitMessage[100:]
+			}
+
+			gitCommitVersion := workflow.GetVersion(dCtx, "git-commit-in-flow-action", workflow.DefaultVersion, 1)
+			if gitCommitVersion < 1 {
+				err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
+					CommitMessage: commitMessage,
+				}).Get(dCtx, nil)
+				if err != nil {
+					return fmt.Errorf("failed to commit changes: %v", err)
+				}
+			}
+
+			mergeResult, err := Track(actionCtx, func(flowAction domain.FlowAction) (git.MergeActivityResult, error) {
+				var mergeResult git.MergeActivityResult
+
+				if gitCommitVersion >= 1 {
+					err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
+						CommitMessage: commitMessage,
+					}).Get(dCtx, nil)
+					if err != nil {
+						return mergeResult, fmt.Errorf("failed to commit changes: %v", err)
+					}
+				}
+
+				future := workflow.ExecuteActivity(dCtx, git.GitMergeActivity, dCtx.EnvContainer, git.GitMergeParams{
+					SourceBranch: dCtx.Worktree.Name,
+					TargetBranch: mergeInfo.TargetBranch,
+				})
+				err := future.Get(dCtx, &mergeResult)
+				if err != nil {
+					return mergeResult, fmt.Errorf("failed to merge branches: %v", err)
+				}
+				return mergeResult, nil
+			})
+			if err != nil {
+				return err
+			}
+
+			if mergeResult.HasConflicts {
+				// Present continue request with Done tag
+				actionCtx := dCtx.NewActionContext("user_request.continue")
+				err := GetUserContinue(actionCtx, "Merge conflicts detected. Please resolve conflicts and continue when done.", map[string]any{
+					"continueTag": "done",
+				})
+				if err != nil {
+					return fmt.Errorf("failed to get continue approval: %v", err)
+				}
+			}
+
+			// After successful merge, cleanup the worktree
+			if !mergeResult.HasConflicts && dCtx.Worktree != nil {
+				actionCtx := dCtx.NewActionContext("cleanup_worktree")
+				_, err := Track(actionCtx, func(flowAction domain.FlowAction) (interface{}, error) {
+					future := workflow.ExecuteActivity(dCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name)
+					return nil, future.Get(dCtx, nil)
+				})
+				if err != nil {
+					// Log the error but don't fail the workflow since merge was successful
+					workflow.GetLogger(dCtx).Error("Failed to cleanup worktree", "error", err)
+				}
+			}
+		}
+
+		// If we get here, the merge was approved and completed
+		break
+	}
+
+	return nil
 }
