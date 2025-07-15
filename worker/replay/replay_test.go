@@ -8,8 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"go.temporal.io/sdk/worker"
 	sidekick_worker "sidekick/worker"
+
+	"go.temporal.io/sdk/worker"
 )
 
 // replayTestData represents the mapping of versions to workflow IDs for replay testing
