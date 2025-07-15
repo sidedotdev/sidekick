@@ -87,6 +87,7 @@ func ForceToolCall(actionCtx flow_action.ActionContext, llmConfig common.LLMConf
 	// that succeeds. Note that this won't check for required fields and some
 	// other aspects of the schema. for this case, we need to use
 	if err == nil && len(chatResponse.ToolCalls) == 0 {
+		panic("hi")
 		(*params).Messages = append(params.Messages, llm.ChatMessage{
 			Role:    llm.ChatMessageRoleSystem,
 			Content: "Expected a tool call, but didn't get it. Embedding the json in the content is not sufficient. Please use the provided tool(s).",

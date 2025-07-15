@@ -1,19 +1,21 @@
 package dev
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sidekick/common"
 	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
-	"sidekick/secret_manager"
+	"sidekick/utils"
+	"slices"
 	"strings"
 	"unicode"
 
 	"github.com/invopop/jsonschema"
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -23,12 +25,12 @@ type BranchNameRequest struct {
 }
 
 type BranchNameResponse struct {
-	Candidates []string `json:"candidates" jsonschema:"description=List of 3 candidate branch name suffixes in kebab-case format\\, each 2-4 words long\\, without the 'side/' prefix"`
+	Candidates []string `json:"candidates" jsonschema:"description=List of 3 candidate branch name suffixes in kebab-case format\\, ordered best to worst\\, each 2-4 words long\\, without any prefix or slash etc"`
 }
 
 var generateBranchNamesTool = llm.Tool{
-	Name:        "generate_branch_names",
-	Description: "Generate meaningful, human-readable branch name suffixes based on requirements and edit hints. Returns 3 candidates in kebab-case format.",
+	Name:        "submit_branch_names",
+	Description: "Generate meaningful, descriptive, human-readable branch names based on requirements and edit hints. Returns 3 candidates in kebab-case format.",
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&BranchNameRequest{}),
 }
 
@@ -39,66 +41,70 @@ var generateBranchNamesPrompt = panicParseMustache(promptsFS, "branch_names/gene
 func GenerateBranchName(eCtx flow_action.ExecContext, req BranchNameRequest) (string, error) {
 	var output env.EnvRunCommandActivityOutput
 	err := workflow.ExecuteActivity(eCtx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
-		Command: "git",
-		Args:    []string{"branch", "--list", "--format=%(refname:short)"},
+		EnvContainer: *eCtx.EnvContainer,
+		Command:      "git",
+		Args:         []string{"branch", "--list", "--format=%(refname:short)"},
 	}).Get(eCtx, &output)
 	if err != nil {
 		return "", fmt.Errorf("failed to get existing branches: %v", err)
 	}
-	existingBranches := strings.Split(strings.TrimSpace(output.Stdout), "\n")
+	branchesSlice := strings.Split(strings.TrimSpace(output.Stdout), "\n")
+	branchesSlice = utils.Map(branchesSlice, strings.TrimSpace)
+	branches := make(map[string]bool)
+	for _, branch := range branchesSlice {
+		branches[branch] = true
+	}
 
 	// Try LLM generation with retries
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		candidates, err := generateBranchNameCandidates(eCtx, req)
-		if err != nil {
+	candidates, err := generateBranchNameCandidates(eCtx, req)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to generate branch names via LLM")
+	}
+
+	// Try each candidate
+	for _, suffix := range candidates {
+		if !validateBranchNameSuffix(suffix) {
 			continue
 		}
 
-		// Try each candidate
-		for _, suffix := range candidates {
-			if !validateBranchNameSuffix(suffix) {
-				continue
-			}
+		branchName := branchNamePrefix + suffix
+		if _, exists := branches[branchName]; !exists {
+			return branchName, nil
+		}
+	}
 
-			branchName := branchNamePrefix + suffix
-			if !containsBranchName(existingBranches, branchName) {
+	// Try with numeric suffix if needed
+	for i := 2; i <= maxNumericSuffix; i++ {
+		for _, suffix := range candidates {
+			branchName := fmt.Sprintf("%s%s-%d", branchNamePrefix, suffix, i)
+			if _, exists := branches[branchName]; !exists {
 				return branchName, nil
 			}
 		}
 	}
 
 	// Fallback: use first few words from requirements
-	// TODO: this fallback should be only be if we got no candidates, i.e. llm call failed
+	// NOTE: this fallback should be only be if we got no candidates, i.e. llm
+	// call failed, or if all candidates are taken, even with numeric suffixes
 	suffix := generateFallbackSuffix(req.Requirements)
 	if !validateBranchNameSuffix(suffix) {
 		return "", fmt.Errorf("failed to generate valid branch name after all attempts")
 	}
-
-	// Try with numeric suffix if needed
 	branchName := branchNamePrefix + suffix
-	if !containsBranchName(existingBranches, branchName) {
+	if _, exists := branches[branchName]; !exists {
 		return branchName, nil
-	}
-
-	// Add numeric suffix
-	for i := 1; i <= maxNumericSuffix; i++ {
-		numericBranchName := fmt.Sprintf("%s-%d", branchName, i)
-		if len(numericBranchName) > maxBranchLength {
-			return "", fmt.Errorf("failed to generate unique branch name within length limit")
-		}
-		if !containsBranchName(existingBranches, numericBranchName) {
-			return numericBranchName, nil
-		}
 	}
 
 	return "", fmt.Errorf("failed to generate unique branch name")
 }
 
 func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRequest) ([]string, error) {
+	reqMap := make(map[string]any)
+	utils.Transcode(req, &reqMap)
 	chatHistory := []llm.ChatMessage{
 		{
 			Role:    llm.ChatMessageRoleSystem,
-			Content: RenderPrompt(generateBranchNamesPrompt, req),
+			Content: RenderPrompt(generateBranchNamesPrompt, reqMap),
 		},
 	}
 
@@ -108,7 +114,7 @@ func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRe
 	var branchResp BranchNameResponse
 	attempts := 0
 	for {
-		actionCtx := eCtx.NewActionContext("generate_branch_names")
+		actionCtx := eCtx.NewActionContext("generate.branch_names")
 		chatResponse, err := persisted_ai.ForceToolCall(actionCtx, eCtx.LLMConfig, &params, &generateBranchNamesTool)
 		if err != nil {
 			return nil, fmt.Errorf("failed to force tool call: %v", err)
@@ -118,11 +124,15 @@ func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRe
 		jsonStr := toolCall.Arguments
 		err = json.Unmarshal([]byte(llm.RepairJson(jsonStr)), &branchResp)
 		if err == nil {
-			break
+			// if any are valid, we're done
+			if slices.ContainsFunc(branchResp.Candidates, validateBranchNameSuffix) {
+				break
+			}
+			err = errors.New("Those candidates are invalid, not following the presribed format. Let's try that again, change it up.")
 		}
 
 		attempts++
-		if attempts >= 3 {
+		if attempts >= maxBranchNameGenerationAttempts {
 			return nil, fmt.Errorf("%w: %v", llm.ErrToolCallUnmarshal, err)
 		}
 
@@ -157,7 +167,7 @@ func generateFallbackSuffix(requirements string) string {
 		if len(word) > 0 {
 			suffix = append(suffix, word)
 		}
-		if len(suffix) >= 2 {
+		if len(strings.Join(suffix, "-")) >= maxBranchLength {
 			break
 		}
 	}
@@ -165,42 +175,12 @@ func generateFallbackSuffix(requirements string) string {
 	return strings.Join(suffix, "-")
 }
 
-func containsBranchName(branches []string, name string) bool {
-	for _, branch := range branches {
-		if branch == name {
-			return true
-		}
-	}
-	return false
-}
-
 const (
-	branchNamePrefix = "side/"
-	maxBranchLength  = 80
-	maxRetries       = 3
-	maxNumericSuffix = 999
+	branchNamePrefix                = "side/"
+	maxBranchLength                 = 80
+	maxBranchNameGenerationAttempts = 3
+	maxNumericSuffix                = 9
 )
-
-type contextKey string
-
-const (
-	toolChatterKey contextKey = "tool_chatter"
-	secretsKey     contextKey = "secrets"
-)
-
-func GetToolChatter(ctx context.Context) llm.ToolChatter {
-	if chatter, ok := ctx.Value(toolChatterKey).(llm.ToolChatter); ok {
-		return chatter
-	}
-	return nil
-}
-
-func GetSecrets(ctx context.Context) secret_manager.SecretManagerContainer {
-	if secrets, ok := ctx.Value(secretsKey).(secret_manager.SecretManagerContainer); ok {
-		return secrets
-	}
-	return secret_manager.SecretManagerContainer{}
-}
 
 // validateBranchNameSuffix checks if a branch name suffix meets the required format:
 // - Must be in kebab-case (lowercase with hyphens)
