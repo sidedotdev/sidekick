@@ -116,54 +116,38 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		requirements = devRequirements.String()
 	}
 
-	// Track review messages for iterative development
-	reviewMessages := []string{}
-	originalRequirements := requirements
-	var lastResult string
-
-	for {
-		v := workflow.GetVersion(dCtx, "basic-dev-parent-subflow", workflow.DefaultVersion, 1)
-		if v == 1 {
-			lastResult, err = RunSubflow(dCtx, "coding", "Coding", func(subflow domain.Subflow) (string, error) {
-				return codingSubflow(dCtx, requirements, input.EnvType, input.BasicDevOptions.StartBranch)
-			})
-		} else {
-			lastResult, err = codingSubflow(dCtx, requirements, input.EnvType, input.BasicDevOptions.StartBranch)
-		}
-
-		if err != nil {
-			if mergeErr, ok := err.(*git.MergeRejectedError); ok {
-				// Get current work done via git diff
-				gitDiff, diffErr := git.GitDiff(dCtx.ExecContext)
-				if diffErr != nil {
-					return "", fmt.Errorf("failed to get git diff after merge rejection: %v", diffErr)
-				}
-
-				// Add rejection message to history
-				reviewMessages = append(reviewMessages, mergeErr.Message)
-
-				// Format new requirements with review history
-				requirements = formatRequirementsWithReview(
-					originalRequirements,
-					reviewMessages,
-					gitDiff,
-					mergeErr.Message,
-				)
-
-				// Continue the loop with updated requirements
-				continue
-			}
-
-			// For any other error, signal failure and return
-			_ = signalWorkflowClosure(dCtx, "failed")
-			return "", err
-		}
-
-		// If we get here, the merge was approved
-		break
+	// Determine default target branch
+	defaultTarget := "main"
+	if input.BasicDevOptions.StartBranch != nil {
+		defaultTarget = *input.BasicDevOptions.StartBranch
 	}
 
-	return lastResult, nil
+	// Create parameters for merge with review iterations
+	params := MergeWithReviewParams{
+		Requirements:  requirements,
+		StartBranch:   input.BasicDevOptions.StartBranch,
+		DefaultTarget: defaultTarget,
+		GetGitDiff: func() (string, error) {
+			return git.GitDiff(dCtx.ExecContext)
+		},
+		SubflowType: "coding",
+		SubflowName: "Coding",
+	}
+
+	// Handle merge approval and review iterations
+	err = handleMergeWithReviewIterations(dCtx, params)
+	if err != nil {
+		_ = signalWorkflowClosure(dCtx, "failed")
+		return "", err
+	}
+
+	// Emit signal when workflow ends successfully
+	err = signalWorkflowClosure(dCtx, "completed")
+	if err != nil {
+		return "", fmt.Errorf("failed to signal workflow closure: %v", err)
+	}
+
+	return "Development completed successfully", nil
 }
 
 func codingSubflow(dCtx DevContext, requirements string, envType env.EnvType, startBranch *string) (result string, err error) {
