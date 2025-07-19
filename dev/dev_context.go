@@ -112,6 +112,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		var branchName string
 		if enableBranchNameGeneration {
 			// Get task description from workflow info
+			// FIXME there is no "taskDescription" in memo fields and we won't add it, insteadd pass in a "requirements" string param
 			info := workflow.GetInfo(ctx)
 			taskDesc := info.Memo.Fields["taskDescription"]
 			if taskDesc == nil {
