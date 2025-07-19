@@ -526,7 +526,7 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 			},
 			Temperature: utils.Ptr(float32(0)),
 			Messages: []ChatMessage{
-				{Role: ChatMessageRoleUser, Content: "First say hi. After that, then look up what the weather is like in New York in celcius"},
+				{Role: ChatMessageRoleUser, Content: "First say hi. After that, then look up what the weather is like in New York in celcius. Let me know, then check London too for me."},
 			},
 			Tools:      []*Tool{mockTool},
 			ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
@@ -569,13 +569,14 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 	}
 
 	// Check that the response contains content
+	t.Logf("Response content: %s", response.Content)
 	if response.Content == "" {
 		t.Error("Response content is empty")
 	}
 
 	// Check that the response includes a tool call
 	if len(response.ToolCalls) == 0 {
-		t.Errorf("No tool calls in the response. Content was: `%s`", response.Content)
+		t.Fatal("No tool calls in the response")
 	}
 
 	// Verify tool call
@@ -584,7 +585,6 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 		t.Errorf("Expected tool call to 'get_current_weather', got '%s'", toolCall.Name)
 	}
 
-	t.Logf("Response content: %s", response.Content)
 	t.Logf("Tool call: %+v", toolCall)
 	t.Logf("Usage: InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
 
@@ -620,10 +620,6 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 			Name:       toolCall.Name,
 			IsError:    false,
 		})
-		options.Params.Messages = append(options.Params.Messages, ChatMessage{
-			Role:    ChatMessageRoleUser,
-			Content: "How about London?",
-		})
 
 		deltaChan := make(chan ChatMessageDelta)
 		var allDeltas []ChatMessageDelta
@@ -658,10 +654,12 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 		//if response.Content == "" {
 		//	t.Error("Response content is empty")
 		//}
+		t.Logf("Response content: %s", response.Content)
+		t.Logf("Usage (multi-turn): InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
 
 		// Check that the response includes a tool call
 		if len(response.ToolCalls) == 0 {
-			t.Error("No tool calls in the response")
+			t.Fatal("No tool calls in the response")
 		}
 
 		// Verify tool call
@@ -670,9 +668,7 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 			t.Errorf("Expected tool call to 'get_current_weather', got '%s'", toolCall.Name)
 		}
 
-		t.Logf("Response content: %s", response.Content)
 		t.Logf("Tool call: %+v", toolCall)
-		t.Logf("Usage (multi-turn): InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
 
 		// Parse tool call arguments
 		var args map[string]string
