@@ -40,6 +40,14 @@ func (dCtx DevContext) WithCancelOnPause() DevContext {
 	return dCtx
 }
 
+type SetupDevContextParams struct {
+	WorkspaceId     string
+	RepoDir         string
+	EnvType         string
+	StartBranch     *string
+	ConfigOverrides DevConfigOverrides
+}
+
 func SetupDevContext(ctx workflow.Context, params SetupDevContextParams) (DevContext, error) {
 	initialExecCtx := flow_action.ExecContext{
 		Context:     ctx,

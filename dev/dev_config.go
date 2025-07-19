@@ -21,15 +21,6 @@ type DevConfigOverrides struct {
 	WorktreeSetup           *string                 `json:"worktreeSetup,omitempty"`
 }
 
-// SetupDevContextParams consolidates parameters for setting up a dev context
-type SetupDevContextParams struct {
-	WorkspaceId     string
-	RepoDir         string
-	EnvType         string
-	StartBranch     *string
-	ConfigOverrides DevConfigOverrides
-}
-
 // applyOverrides creates a new DevConfig by applying any non-nil values from overrides to the base config
 func applyOverrides(base DevConfig, overrides DevConfigOverrides) DevConfig {
 	if overrides.CheckCommands != nil {
