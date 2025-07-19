@@ -59,10 +59,10 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 				FlowScope: &flow_action.FlowScope{
 					SubflowName: "AuthorEditBlocksTestSuite",
 				},
-			},
-			LLMConfig: common.LLMConfig{
-				Defaults: []common.ModelConfig{
-					{Provider: "openai"},
+				LLMConfig: common.LLMConfig{
+					Defaults: []common.ModelConfig{
+						{Provider: "openai"},
+					},
 				},
 			},
 		}
