@@ -37,7 +37,7 @@ func (dCtx DevContext) WithCancelOnPause() DevContext {
 	return dCtx
 }
 
-func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, envType string, startBranch *string) (DevContext, error) {
+func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, envType string, startBranch *string, requirements string) (DevContext, error) {
 	initialExecCtx := flow_action.ExecContext{
 		Context:     ctx,
 		WorkspaceId: workspaceId,
@@ -48,12 +48,12 @@ func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, e
 	return flow_action.TrackSubflowFailureOnly(initialExecCtx, "flow_init", "Initialize", func(_ domain.Subflow) (DevContext, error) {
 		actionCtx := initialExecCtx.NewActionContext("setup_dev_context")
 		return flow_action.TrackFailureOnly(actionCtx, func(_ domain.FlowAction) (DevContext, error) {
-			return setupDevContextAction(ctx, workspaceId, repoDir, envType, startBranch)
+			return setupDevContextAction(ctx, workspaceId, repoDir, envType, startBranch, requirements)
 		})
 	})
 }
 
-func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir string, envType string, startBranch *string) (DevContext, error) {
+func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir string, envType string, startBranch *string, requirements string) (DevContext, error) {
 	ctx = utils.NoRetryCtx(ctx)
 
 	var devEnv env.Env
@@ -111,15 +111,6 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		// Generate branch name based on workflow version
 		var branchName string
 		if enableBranchNameGeneration {
-			// Get task description from workflow info
-			// FIXME there is no "taskDescription" in memo fields and we won't add it, insteadd pass in a "requirements" string param
-			info := workflow.GetInfo(ctx)
-			taskDesc := info.Memo.Fields["taskDescription"]
-			if taskDesc == nil {
-				return DevContext{}, fmt.Errorf("task description not found in workflow memo")
-			}
-			taskDescStr := string(taskDesc.Data)
-
 			// Get edit hints from workflow info
 			tempLocalRepoConfig, err := GetRepoConfig(tempLocalExecContext)
 			if err != nil {
@@ -129,7 +120,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 			// Use LLM-based branch name generation
 			branchName, err = GenerateBranchName(tempLocalExecContext, BranchNameRequest{
-				Requirements: taskDescStr,
+				Requirements: requirements,
 				Hints:        editHints,
 			})
 			if err != nil {
