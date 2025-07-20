@@ -35,6 +35,7 @@ type MergeWithReviewParams struct {
 	GetGitDiff   func(dCtx DevContext) (string, error) // function to get git diff customized per workflow
 	SubflowType  string                                // for tracking purposes
 	SubflowName  string                                // for tracking purposes
+	CommitRequired bool
 }
 
 // formatRequirementsWithReview combines original requirements with review history and work done
@@ -131,6 +132,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	worktreeMergeVersion := workflow.GetVersion(dCtx, "worktree-merge", workflow.DefaultVersion, 1)
 	if dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree && worktreeMergeVersion >= 1 {
 		params := MergeWithReviewParams{
+			CommitRequired: true,
 			Requirements: requirements,
 			StartBranch:  input.StartBranch,
 			GetGitDiff: func(dCtx DevContext) (string, error) {
@@ -318,6 +320,7 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 
 	if dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree {
 		params := MergeWithReviewParams{
+			CommitRequired: true,
 			Requirements: requirements,
 			StartBranch:  startBranch,
 			GetGitDiff: func(dCtx DevContext) (string, error) {
@@ -379,6 +382,9 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 				// Add rejection message to history for next iteration
 				reviewMessages = append(reviewMessages, mergeInfo.Message)
 
+				// must commit before merge at this point, as codingSubflow
+				// doesn't do so inherently
+				params.CommitRequired = true
 				_, err = codingSubflow(dCtx, requirements, params.StartBranch)
 				if err != nil {
 					return err
