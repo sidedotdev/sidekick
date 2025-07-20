@@ -175,7 +175,7 @@ func getToolChatter(config common.ModelConfig) (llm.ToolChatter, error) {
 			return nil, fmt.Errorf("failed to load local config: %w", err)
 		}
 		for _, p := range localConfig.Providers {
-			if p.Type == string(providerType) {
+			if p.Type == string(providerType) && p.Name == config.Provider {
 				return llm.OpenaiToolChat{
 					BaseURL:      p.BaseURL,
 					DefaultModel: p.DefaultLLM,
