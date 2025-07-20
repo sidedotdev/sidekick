@@ -79,6 +79,51 @@ func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params 
 }
 
 func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
+	// Handle the case when both Staged and ThreeDotDiff are true
+	if params.Staged && params.ThreeDotDiff {
+		if params.BaseBranch == "" {
+			return "", fmt.Errorf("base branch is required for three-dot diff")
+		}
+
+		// Build the shell command: git diff --staged $(git merge-base BASE_BRANCH HEAD)
+		var cmdParts []string
+		cmdParts = append(cmdParts, "git", "diff", "--staged")
+		cmdParts = append(cmdParts, fmt.Sprintf("$(git merge-base %s HEAD)", params.BaseBranch))
+
+		if params.IgnoreWhitespace {
+			cmdParts = append(cmdParts, "-w")
+		}
+
+		if len(params.FilePaths) > 0 {
+			cmdParts = append(cmdParts, "--")
+			for _, fp := range params.FilePaths {
+				cleanFp := strings.TrimSpace(fp)
+				// Quote file paths for the shell command string to handle spaces, single quotes, etc.
+				quotedFp := fmt.Sprintf("'%s'", strings.ReplaceAll(cleanFp, "'", "'\\''"))
+				cmdParts = append(cmdParts, quotedFp)
+			}
+		}
+
+		shellCommand := strings.Join(cmdParts, " ")
+
+		gitDiffRunOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+			EnvContainer:       envContainer,
+			RelativeWorkingDir: "./",
+			Command:            "sh",
+			Args:               []string{"-c", shellCommand},
+		})
+		if err != nil {
+			return "", fmt.Errorf("failed to execute git diff command: %w", err)
+		}
+		// For `git diff`, exit status 1 means differences were found (not an error for content).
+		// Exit status 0 means no differences. Other exit codes are errors.
+		if gitDiffRunOutput.ExitStatus != 0 && gitDiffRunOutput.ExitStatus != 1 {
+			return "", fmt.Errorf("git diff command failed with exit status %d: %s", gitDiffRunOutput.ExitStatus, gitDiffRunOutput.Stderr)
+		}
+		return gitDiffRunOutput.Stdout, nil
+	}
+
+	// Existing logic for single flag cases
 	args := []string{"diff"}
 
 	if params.ThreeDotDiff {
