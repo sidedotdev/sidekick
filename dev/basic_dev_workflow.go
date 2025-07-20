@@ -376,7 +376,7 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 					mergeInfo.Message,
 				)
 
-				// Add rejection message to history
+				// Add rejection message to history for next iteration
 				reviewMessages = append(reviewMessages, mergeInfo.Message)
 
 				_, err = codingSubflow(dCtx, requirements, params.StartBranch)
