@@ -344,6 +344,10 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 
 func getMergeApproval(dCtx DevContext, defaultTarget string, getGitDiff func(dCtx DevContext, baseBranch string) (string, error)) (MergeApprovalResponse, string, error) {
 	// Generate initial diff with default target branch
+	// This is also the diff used in any followups (we don't use the diff
+	// against an updated target branch selection from the user, as that could
+	// show work done that was well out of scope of the task being done, thus
+	// confusing the LLM)
 	gitDiff, err := getGitDiff(dCtx, defaultTarget)
 	if err != nil {
 		return MergeApprovalResponse{}, "", fmt.Errorf("failed to generate git diff: %w", err)
@@ -358,19 +362,12 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, getGitDiff func(dCt
 
 	approvalResponse, err := GetUserMergeApproval(dCtx, "Please review these changes", map[string]any{
 		"mergeApprovalInfo": mergeParams,
-		"getGitDiff":        getGitDiff,
-	})
+	}, getGitDiff)
 	if err != nil {
 		return MergeApprovalResponse{}, "", err
 	}
 
-	// Get the final diff using the target branch from the approval response
-	finalDiff, err := getGitDiff(dCtx, approvalResponse.TargetBranch)
-	if err != nil {
-		return MergeApprovalResponse{}, "", fmt.Errorf("failed to generate final git diff: %w", err)
-	}
-
-	return approvalResponse, finalDiff, nil
+	return approvalResponse, gitDiff, nil
 }
 
 // try to review and merge if approved. if not approved, iterate by coding some

@@ -94,7 +94,12 @@ func GetUserApproval(dCtx DevContext, approvalType, approvalPrompt string, reque
 	*/
 }
 
-func GetUserMergeApproval(dCtx DevContext, approvalPrompt string, requestParams map[string]interface{}) (MergeApprovalResponse, error) {
+func GetUserMergeApproval(
+	dCtx DevContext,
+	approvalPrompt string,
+	requestParams map[string]interface{},
+	getGitDiff func(dCtx DevContext, baseBranch string) (string, error),
+) (MergeApprovalResponse, error) {
 	actionCtx := dCtx.NewActionContext("user_request.approve.merge")
 	if actionCtx.RepoConfig.DisableHumanInTheLoop {
 		// auto-approve for now if humans are not in the loop
@@ -102,12 +107,6 @@ func GetUserMergeApproval(dCtx DevContext, approvalPrompt string, requestParams 
 		approved := true
 		targetBranch := "main" // TODO: store the startBranch as part of the worktree object when creating it, then retrieve it here
 		return MergeApprovalResponse{Approved: approved, TargetBranch: targetBranch}, nil
-	}
-
-	// Extract the getGitDiff function from request parameters
-	getGitDiff, ok := requestParams["getGitDiff"].(func(dCtx DevContext, baseBranch string) (string, error))
-	if !ok {
-		return MergeApprovalResponse{}, fmt.Errorf("getGitDiff function not found in request parameters")
 	}
 
 	// Create a RequestForUser struct for approval request
@@ -124,50 +123,21 @@ func GetUserMergeApproval(dCtx DevContext, approvalPrompt string, requestParams 
 	userResponse, err := TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
 		req.FlowActionId = flowAction.Id
 
-		// Signal the workflow to initiate the user request
-		workflowInfo := workflow.GetInfo(actionCtx.DevContext)
-		parentWorkflowID := workflowInfo.ParentWorkflowExecution.ID
-		req.OriginWorkflowId = workflowInfo.WorkflowExecution.ID
-		workflowErr := workflow.SignalExternalWorkflow(actionCtx.DevContext, parentWorkflowID, "", SignalNameRequestForUser, req).Get(actionCtx.DevContext, nil)
-		if workflowErr != nil {
-			return nil, fmt.Errorf("failed to signal external workflow: %v", workflowErr)
+		// Get the initial user response
+		currentResponse, err := GetUserResponse(actionCtx.DevContext, req)
+		if err != nil {
+			return nil, err
 		}
 
-		// Update flow status to paused
-		v := workflow.GetVersion(actionCtx.DevContext, "pause-flow", workflow.DefaultVersion, 1)
-		if v == 1 {
-			var flow domain.Flow
-			err := workflow.ExecuteActivity(actionCtx.DevContext, srv.Activities.GetFlow, actionCtx.DevContext.WorkspaceId, req.OriginWorkflowId).Get(actionCtx.DevContext, &flow)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get flow: %v", err)
-			}
-			if flow.Status != domain.FlowStatusPaused {
-				flow.Status = domain.FlowStatusPaused
-				err := workflow.ExecuteActivity(actionCtx.DevContext, srv.Activities.PersistFlow, flow).Get(actionCtx.DevContext, nil)
-				if err != nil {
-					return nil, fmt.Errorf("failed to set flow status to paused: %v", err)
-				}
-			}
-		}
-
-		// Loop to handle multiple signals until final approval/rejection
+		// handle branch switching until final approval/rejection
 		for {
-			// Wait for the 'userResponse' signal
-			var userResponse UserResponse
-			selector := workflow.NewNamedSelector(actionCtx.DevContext, "userResponseSelector")
-			selector.AddReceive(workflow.GetSignalChannel(actionCtx.DevContext, SignalNameUserResponse), func(c workflow.ReceiveChannel, more bool) {
-				c.Receive(actionCtx.DevContext, &userResponse)
-			})
-			selector.Select(actionCtx.DevContext)
-
-			// If Approved is not nil, this is the final approval/rejection
-			if userResponse.Approved != nil {
-				return &userResponse, nil
+			if currentResponse.Approved != nil {
+				// final approval/rejection
+				return currentResponse, nil
 			}
 
-			// If Approved is nil, this is a branch switch update
-			// Extract the new target branch from Params
-			newTargetBranch, ok := userResponse.Params["targetBranch"].(string)
+			// if Approved is nil, this is a branch switch update
+			newTargetBranch, ok := currentResponse.Params["targetBranch"].(string)
 			if !ok {
 				return nil, fmt.Errorf("targetBranch not found in user response params")
 			}
@@ -185,17 +155,22 @@ func GetUserMergeApproval(dCtx DevContext, approvalPrompt string, requestParams 
 			req.RequestParams["mergeApprovalInfo"] = mergeApprovalInfo
 
 			// Update the flow action with the new parameters
-			updatedFlowAction := flowAction
-			updatedFlowAction.ActionParams = req.ActionParams()
+			flowAction.ActionParams = req.ActionParams()
 			var fa *flow_action.FlowActivities
-			err = workflow.ExecuteActivity(actionCtx.DevContext, fa.PersistFlowAction, updatedFlowAction).Get(actionCtx.DevContext, nil)
+			err = workflow.ExecuteActivity(actionCtx.DevContext, fa.PersistFlowAction, flowAction).Get(actionCtx.DevContext, nil)
 			if err != nil {
 				return nil, fmt.Errorf("failed to update flow action params: %v", err)
 			}
 
-			// Continue the loop to wait for the next signal
+			// wait for the next user response signal
+			selector := workflow.NewNamedSelector(actionCtx.DevContext, "mergeApprovalUserResponseSelector")
+			selector.AddReceive(workflow.GetSignalChannel(actionCtx.DevContext, SignalNameUserResponse), func(c workflow.ReceiveChannel, more bool) {
+				c.Receive(actionCtx.DevContext, &currentResponse)
+			})
+			selector.Select(actionCtx.DevContext)
 		}
 	})
+
 	if err != nil {
 		return MergeApprovalResponse{}, err
 	}
