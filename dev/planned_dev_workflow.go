@@ -60,6 +60,18 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 	}
 	dCtx.GlobalState = globalState
 
+	// Set up worktree cleanup on workflow cancellation
+	defer func() {
+		if dCtx.Worktree != nil {
+			// Use disconnected context to ensure cleanup can complete during cancellation
+			disconnectedCtx, _ := workflow.NewDisconnectedContext(ctx)
+			future := workflow.ExecuteActivity(disconnectedCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name)
+			if err := future.Get(disconnectedCtx, nil); err != nil {
+				workflow.GetLogger(ctx).Error("Failed to cleanup worktree during workflow cancellation", "error", err, "worktree", dCtx.Worktree.Name)
+			}
+		}
+	}()
+
 	// Set up the pause and user action handlers
 	SetupPauseHandler(dCtx, "Paused for user input", nil)
 	SetupUserActionHandler(dCtx)
