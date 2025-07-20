@@ -488,7 +488,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 	if !mergeResult.HasConflicts && dCtx.Worktree != nil {
 		actionCtx := dCtx.NewActionContext("cleanup_worktree")
 		_, err := Track(actionCtx, func(flowAction domain.FlowAction) (interface{}, error) {
-			future := workflow.ExecuteActivity(dCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name)
+			future := workflow.ExecuteActivity(dCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "Sidekick task completed and merged")
 			return nil, future.Get(dCtx, nil)
 		})
 		if err != nil {
