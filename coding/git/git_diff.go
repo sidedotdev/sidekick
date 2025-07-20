@@ -72,43 +72,51 @@ func GitDiffLegacy(eCtx flow_action.ExecContext) (string, error) {
 
 func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
 	if params.ThreeDotDiff || params.Staged {
-		args := []string{"diff"}
-
-		if params.ThreeDotDiff {
-			if params.BaseBranch == "" {
-				return "", fmt.Errorf("base branch is required for three-dot diff")
-			}
-			args = append(args, fmt.Sprintf("%s...HEAD", params.BaseBranch))
-		} else { // params.Staged must be true here
-			args = append(args, "--staged")
-		}
-
-		if params.IgnoreWhitespace {
-			args = append(args, "-w")
-		}
-
-		if len(params.FilePaths) > 0 {
-			args = append(args, "--")
-			args = append(args, params.FilePaths...)
-		}
-
-		gitDiffRunOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
-			EnvContainer:       envContainer,
-			RelativeWorkingDir: "./",
-			Command:            "git",
-			Args:               args,
-		})
-		if err != nil {
-			return "", fmt.Errorf("failed to execute git diff command: %w", err)
-		}
-		// For `git diff`, exit status 1 means differences were found (not an error for content).
-		// Exit status 0 means no differences. Other exit codes are errors.
-		if gitDiffRunOutput.ExitStatus != 0 && gitDiffRunOutput.ExitStatus != 1 {
-			return "", fmt.Errorf("git diff command failed with exit status %d: %s", gitDiffRunOutput.ExitStatus, gitDiffRunOutput.Stderr)
-		}
-		return gitDiffRunOutput.Stdout, nil
+		return stagedAndOrThreeDotDiff(ctx, envContainer, params)
 	}
 
+	return workingTreeAndUntrackedDiff(ctx, envContainer, params)
+}
+
+func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
+	args := []string{"diff"}
+
+	if params.ThreeDotDiff {
+		if params.BaseBranch == "" {
+			return "", fmt.Errorf("base branch is required for three-dot diff")
+		}
+		args = append(args, fmt.Sprintf("%s...HEAD", params.BaseBranch))
+	} else { // params.Staged must be true here
+		args = append(args, "--staged")
+	}
+
+	if params.IgnoreWhitespace {
+		args = append(args, "-w")
+	}
+
+	if len(params.FilePaths) > 0 {
+		args = append(args, "--")
+		args = append(args, params.FilePaths...)
+	}
+
+	gitDiffRunOutput, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer:       envContainer,
+		RelativeWorkingDir: "./",
+		Command:            "git",
+		Args:               args,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to execute git diff command: %w", err)
+	}
+	// For `git diff`, exit status 1 means differences were found (not an error for content).
+	// Exit status 0 means no differences. Other exit codes are errors.
+	if gitDiffRunOutput.ExitStatus != 0 && gitDiffRunOutput.ExitStatus != 1 {
+		return "", fmt.Errorf("git diff command failed with exit status %d: %s", gitDiffRunOutput.ExitStatus, gitDiffRunOutput.Stderr)
+	}
+	return gitDiffRunOutput.Stdout, nil
+}
+
+func workingTreeAndUntrackedDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
 	var untrackedDiffStdout string
 	var trackedDiffStdout string
 
