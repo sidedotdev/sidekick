@@ -342,7 +342,13 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 	return testResult.Output, nil
 }
 
-func getMergeApproval(dCtx DevContext, defaultTarget string, gitDiff string) (MergeApprovalResponse, error) {
+func getMergeApproval(dCtx DevContext, defaultTarget string, getGitDiff func(dCtx DevContext, baseBranch string) (string, error)) (MergeApprovalResponse, error) {
+	// Generate initial diff with default target branch
+	gitDiff, err := getGitDiff(dCtx, defaultTarget)
+	if err != nil {
+		return MergeApprovalResponse{}, fmt.Errorf("failed to generate git diff: %w", err)
+	}
+
 	// Request merge approval from user
 	mergeParams := MergeApprovalParams{
 		SourceBranch:        dCtx.Worktree.Name,
@@ -352,6 +358,7 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, gitDiff string) (Me
 
 	return GetUserMergeApproval(dCtx, "Please review these changes", map[string]any{
 		"mergeApprovalInfo": mergeParams,
+		"getGitDiff":        getGitDiff,
 	})
 }
 

@@ -21,10 +21,9 @@ const (
 
 // MergeApprovalParams contains parameters specific to merge approval requests
 type MergeApprovalParams struct {
-	DefaultTargetBranch string   `json:"defaultTargetBranch"` // the default target branch, which is to be confirmed/overridden by the user
-	SourceBranch        string   `json:"sourceBranch"`
-	Diff                string   `json:"diff"`
-	AvailableBranches   []string `json:"availableBranches"`
+	DefaultTargetBranch string `json:"defaultTargetBranch"` // the default target branch, which is to be confirmed/overridden by the user
+	SourceBranch        string `json:"sourceBranch"`
+	Diff                string `json:"diff"`
 }
 
 type MergeApprovalResponse struct {
