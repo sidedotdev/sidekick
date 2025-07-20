@@ -342,11 +342,11 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 	return testResult.Output, nil
 }
 
-func getMergeApproval(dCtx DevContext, defaultTarget string, getGitDiff func(dCtx DevContext, baseBranch string) (string, error)) (MergeApprovalResponse, error) {
+func getMergeApproval(dCtx DevContext, defaultTarget string, getGitDiff func(dCtx DevContext, baseBranch string) (string, error)) (MergeApprovalResponse, string, error) {
 	// Generate initial diff with default target branch
 	gitDiff, err := getGitDiff(dCtx, defaultTarget)
 	if err != nil {
-		return MergeApprovalResponse{}, fmt.Errorf("failed to generate git diff: %w", err)
+		return MergeApprovalResponse{}, "", fmt.Errorf("failed to generate git diff: %w", err)
 	}
 
 	// Request merge approval from user
@@ -356,10 +356,21 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, getGitDiff func(dCt
 		Diff:                gitDiff,
 	}
 
-	return GetUserMergeApproval(dCtx, "Please review these changes", map[string]any{
+	approvalResponse, err := GetUserMergeApproval(dCtx, "Please review these changes", map[string]any{
 		"mergeApprovalInfo": mergeParams,
 		"getGitDiff":        getGitDiff,
 	})
+	if err != nil {
+		return MergeApprovalResponse{}, "", err
+	}
+
+	// Get the final diff using the target branch from the approval response
+	finalDiff, err := getGitDiff(dCtx, approvalResponse.TargetBranch)
+	if err != nil {
+		return MergeApprovalResponse{}, "", fmt.Errorf("failed to generate final git diff: %w", err)
+	}
+
+	return approvalResponse, finalDiff, nil
 }
 
 // try to review and merge if approved. if not approved, iterate by coding some
@@ -421,12 +432,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 		}
 	}
 
-	gitDiff, diffErr := params.GetGitDiff(dCtx, defaultTarget)
-	if diffErr != nil {
-		return "", MergeApprovalResponse{}, fmt.Errorf("failed to get git diff: %v", diffErr)
-	}
-
-	mergeInfo, err := getMergeApproval(dCtx, defaultTarget, gitDiff)
+	mergeInfo, gitDiff, err := getMergeApproval(dCtx, defaultTarget, params.GetGitDiff)
 	if err != nil {
 		return "", MergeApprovalResponse{}, fmt.Errorf("failed to get merge approval: %v", err)
 	}
