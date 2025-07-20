@@ -30,11 +30,11 @@ type BasicDevOptions struct {
 }
 
 type MergeWithReviewParams struct {
-	Requirements string
-	StartBranch  *string
-	GetGitDiff   func(dCtx DevContext) (string, error) // function to get git diff customized per workflow
-	SubflowType  string                                // for tracking purposes
-	SubflowName  string                                // for tracking purposes
+	Requirements   string
+	StartBranch    *string
+	GetGitDiff     func(dCtx DevContext, baseBranch string) (string, error) // function to get git diff customized per workflow
+	SubflowType    string                                                   // for tracking purposes
+	SubflowName    string                                                   // for tracking purposes
 	CommitRequired bool
 }
 
@@ -133,9 +133,9 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	if dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree && worktreeMergeVersion >= 1 {
 		params := MergeWithReviewParams{
 			CommitRequired: true,
-			Requirements: requirements,
-			StartBranch:  input.StartBranch,
-			GetGitDiff: func(dCtx DevContext) (string, error) {
+			Requirements:   requirements,
+			StartBranch:    input.StartBranch,
+			GetGitDiff: func(dCtx DevContext, baseBranch string) (string, error) {
 				return git.GitDiff(dCtx.ExecContext)
 			},
 		}
@@ -321,9 +321,9 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 	if dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree {
 		params := MergeWithReviewParams{
 			CommitRequired: true,
-			Requirements: requirements,
-			StartBranch:  startBranch,
-			GetGitDiff: func(dCtx DevContext) (string, error) {
+			Requirements:   requirements,
+			StartBranch:    startBranch,
+			GetGitDiff: func(dCtx DevContext, baseBranch string) (string, error) {
 				return git.GitDiff(dCtx.ExecContext)
 			},
 		}
@@ -371,6 +371,9 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 			}
 
 			if !mergeInfo.Approved {
+				// retain new choice of target branch next iteration, in case it was changed
+				params.StartBranch = &mergeInfo.TargetBranch
+
 				// Format new requirements with review history + latest rejection message
 				requirements := formatRequirementsWithReview(
 					originalRequirements,
@@ -411,7 +414,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 		}
 	}
 
-	gitDiff, diffErr := params.GetGitDiff(dCtx)
+	gitDiff, diffErr := params.GetGitDiff(dCtx, defaultTarget)
 	if diffErr != nil {
 		return "", MergeApprovalResponse{}, fmt.Errorf("failed to get git diff: %v", diffErr)
 	}
