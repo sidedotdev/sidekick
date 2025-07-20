@@ -182,7 +182,7 @@ func TestGitDiffActivity(t *testing.T) {
 			},
 			expectError:    false,
 			expectOutput:   true,
-			outputContains: []string{"file3.txt", "staged content"},
+			outputContains: []string{"file3.txt", "staged content", "file2.txt", "feature content"},
 		},
 		{
 			name: "both_staged_and_three_dot_diff_with_empty_base_branch",
