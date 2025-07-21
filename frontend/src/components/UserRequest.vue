@@ -294,7 +294,7 @@ button:disabled:hover {
   filter: none;
 }
 
-:deep(textarea) {
+:deep(.grow-wrap) {
   margin-top: 15px;
   margin-bottom: 15px;
 }
