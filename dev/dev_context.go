@@ -213,10 +213,12 @@ func handleFlowCancel(dCtx DevContext) {
 	if !errors.Is(dCtx.Err(), workflow.ErrCanceled) {
 		return
 	}
+	// Use disconnected context to ensure cleanup can complete during cancellation
+	disconnectedCtx, _ := workflow.NewDisconnectedContext(dCtx)
+
+	_ = signalWorkflowClosure(disconnectedCtx, "canceled")
 
 	if dCtx.Worktree != nil {
-		// Use disconnected context to ensure cleanup can complete during cancellation
-		disconnectedCtx, _ := workflow.NewDisconnectedContext(dCtx)
 		future := workflow.ExecuteActivity(disconnectedCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "Sidekick task cancelled")
 		if err := future.Get(disconnectedCtx, nil); err != nil {
 			workflow.GetLogger(dCtx).Error("Failed to cleanup worktree during workflow cancellation", "error", err, "worktree", dCtx.Worktree.Name)
