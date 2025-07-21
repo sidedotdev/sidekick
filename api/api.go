@@ -930,7 +930,7 @@ func (ctrl *Controller) UpdateFlowActionHandler(c *gin.Context) {
 	userResponse := dev.UserResponse{
 		TargetWorkflowId: flowAction.FlowId,
 		Content:          body.UserResponse.Content,
-		Approved:         body.UserResponse.Approved,
+		Approved:         nil,
 		Choice:           body.UserResponse.Choice,
 		Params:           body.UserResponse.Params,
 	}
