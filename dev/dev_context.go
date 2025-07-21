@@ -146,6 +146,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
 		}
+		worktree.WorkingDirectory = envContainer.Env.GetWorkingDirectory()
 		err = workflow.ExecuteActivity(ctx, srv.Activities.PersistWorktree, *worktree).Get(ctx, nil)
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to persist worktree: %v", err)
