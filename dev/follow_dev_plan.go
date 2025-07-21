@@ -137,7 +137,7 @@ func completeDevStep(dCtx DevContext, requirements string, planExecution DevPlan
 		subflowName = step.StepNumber + ". " + step.Title
 	}
 
-	return RunSubflow(dCtx, "llm_step", subflowName, func(subflow domain.Subflow) (DevStepResult, error) {
+	return RunSubflow(dCtx, "step.dev", subflowName, func(subflow domain.Subflow) (DevStepResult, error) {
 		return completeDevStepSubflow(dCtx, requirements, planExecution, step)
 	})
 }

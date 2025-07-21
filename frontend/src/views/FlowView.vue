@@ -29,7 +29,7 @@
         definition, guided by the user who provided that.
       -->
       <button 
-        v-if="devMode && isActiveFollowDevPlanSubflow"
+        v-if="devMode && isGoNextAvailable"
         @click="goToNextStep"
         class="next-button"
       >
@@ -66,21 +66,21 @@ const flowActions = ref<FlowAction[]>([])
 const subflowTrees = ref<SubflowTree[]>([])
 const route = useRoute()
 
-// activeFollowDevPlanSubflowIds: Stores IDs of 'follow_dev_plan' subflows that are currently active.
+// activeDevStep: Stores IDs of 'step.dev' subflows that are currently active.
 // This is populated by listening to WebSocket events for subflow status changes.
-const activeFollowDevPlanSubflowIds = ref(new Set<string>());
+const activeDevStep = ref(new Set<string>());
 
 // subflowsById: A record of subflow objects, keyed by their ID.
 // This is also populated by listening to WebSocket events for subflow status changes.
 const subflowsById = ref<Record<string, Subflow>>({});
 
-// isActiveFollowDevPlanSubflow: A computed property determining the "Next" button's visibility.
-// It's true if there's at least one active 'follow_dev_plan' subflow.
+// isGoNextAvailable: A computed property determining the "Next" button's visibility.
+// It's true if there's at least one active 'step.dev' subflow.
 // This, combined with the main flow status check in the template (`!['completed', 'failed', 'canceled', 'paused'].includes(flow.status)`),
 // fulfills the visibility conditions:
 // 1. Main flow is active and not paused.
-// 2. An active 'follow_dev_plan' subflow exists.
-const isActiveFollowDevPlanSubflow = computed(() => activeFollowDevPlanSubflowIds.value.size > 0);
+// 2. An active 'step.dev' subflow exists.
+const isGoNextAvailable = computed(() => activeDevStep.value.size > 0);
 
 const updateSubflowTrees = () => {
   const relevantFlowActions = flowActions.value
@@ -156,14 +156,14 @@ const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Prom
                 if (subflowToUpdate) {
                   subflowToUpdate.status = flowEvent.status; // Update status in our cache
 
-                  if (subflowToUpdate.type === 'follow_dev_plan') {
+                  if (subflowToUpdate.type === 'step.dev') {
                     if (flowEvent.status === SubflowStatus.Started) {
-                      activeFollowDevPlanSubflowIds.value.add(subflowId);
+                      activeDevStep.value.add(subflowId);
                     } else if (
                       flowEvent.status === SubflowStatus.Complete ||
                       flowEvent.status === SubflowStatus.Failed
                     ) {
-                      activeFollowDevPlanSubflowIds.value.delete(subflowId);
+                      activeDevStep.value.delete(subflowId);
                     }
                   }
                 } else {
@@ -334,7 +334,7 @@ const setupFlow = async (newFlowId: string | undefined) => {
   if (!newFlowId) {
     flow.value = null;
     flowActions.value = [];
-    activeFollowDevPlanSubflowIds.value.clear();
+    activeDevStep.value.clear();
     subflowsById.value = {};
     isLoadingFlow.value = false;
     isStartingFlow.value = false;
@@ -361,7 +361,7 @@ const setupFlow = async (newFlowId: string | undefined) => {
   // Reset states for the new flow
   flow.value = null;
   flowActions.value = [];
-  activeFollowDevPlanSubflowIds.value.clear();
+  activeDevStep.value.clear();
   subflowsById.value = {};
   // Clear any pending subflow status update timers
   Object.keys(subflowStatusUpdateDebounceTimers).forEach(key => {

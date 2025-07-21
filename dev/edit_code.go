@@ -220,18 +220,19 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		}
 
 		if attemptCount >= maxAttempts {
-			if len(extractedEditBlocks) > 0 {
-				// make use of the results so far, given there are some that are
-				// not yet applied: it may be sufficient
-				return extractedEditBlocks, nil
-			}
-
 			// HACK: since we don't add tool call responses right away (TODO),
 			// we make sure we don't end up with a tool call missing a result
 			// here.
 			switch info := promptInfo.(type) {
 			case ToolCallResponseInfo:
 				addToolCallResponse(chatHistory, info)
+			}
+
+			// maybe this? yeah makes sense
+			if len(extractedEditBlocks) > 0 {
+				// make use of the results so far, given there are some that are
+				// not yet applied: it may be sufficient
+				return extractedEditBlocks, nil
 			}
 
 			return nil, ErrMaxAttemptsReached
