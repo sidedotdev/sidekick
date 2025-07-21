@@ -43,8 +43,6 @@ export default defineComponent({
     return {
       textValue,
       replicatedValue,
-      placeholder: toRef(props, 'placeholder'),
-      disabled: toRef(props, 'disabled'),
     }
   },
 })
