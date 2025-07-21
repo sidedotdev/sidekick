@@ -11,9 +11,12 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, onUnmounted } from 'vue'
 import type { Ref } from 'vue'
+import { useRoute } from 'vue-router'
 import KanbanBoard from '../components/KanbanBoard.vue'
 import { store } from '../lib/store'
 import type { FullTask } from '../lib/models'
+
+const route = useRoute()
 
 const parseTaskDates = (task: any): FullTask => {
   if (task.created) task.created = new Date(task.created)
@@ -105,6 +108,16 @@ const updateTasks = (newTasks: Array<FullTask>) => {
   console.debug('Updated tasks:', tasks.value);
 }
 
+const validateWorkspace = async (workspaceId: string): Promise<boolean> => {
+  try {
+    const response = await fetch(`/api/v1/workspaces/${workspaceId}`)
+    return response.ok
+  } catch (error) {
+    console.error('Error validating workspace:', error)
+    return false
+  }
+}
+
 const initialize = async () => {
   connectWebSocket(fetchTasks);
 }
@@ -120,7 +133,41 @@ const uninitialize = () => {
   }
 }
 
-onMounted(initialize);
+onMounted(async () => {
+  const queryWorkspaceId = route.query.workspaceId as string
+  
+  if (queryWorkspaceId) {
+    const previousWorkspaceId = store.workspaceId
+    
+    // Update store with query parameter workspace ID
+    store.selectWorkspaceId(queryWorkspaceId)
+    
+    // Persist to storage
+    sessionStorage.setItem('selectedWorkspaceId', queryWorkspaceId)
+    localStorage.setItem('selectedWorkspaceId', queryWorkspaceId)
+    
+    // Validate workspace asynchronously
+    const isValid = await validateWorkspace(queryWorkspaceId)
+    
+    if (!isValid) {
+      // Revert to previous workspace selection
+      if (previousWorkspaceId) {
+        store.selectWorkspaceId(previousWorkspaceId)
+        sessionStorage.setItem('selectedWorkspaceId', previousWorkspaceId)
+        localStorage.setItem('selectedWorkspaceId', previousWorkspaceId)
+      } else {
+        // Clear invalid workspace selection
+        store.selectWorkspaceId('')
+        sessionStorage.removeItem('selectedWorkspaceId')
+        localStorage.removeItem('selectedWorkspaceId')
+      }
+      
+      window.alert(`Invalid workspace ID: ${queryWorkspaceId}`)
+    }
+  }
+  
+  await initialize()
+});
 onUnmounted(uninitialize);
 
 watch(() => store.workspaceId, () => {

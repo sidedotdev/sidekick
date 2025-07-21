@@ -122,7 +122,7 @@ var SmallModels = map[ToolChatProviderType]string{
 	// too and is what claude presents as their "small" model
 	AnthropicToolChatProviderType: "claude-3-5-haiku-20241022",
 
-	GoogleToolChatProviderType: "gemini-2.5-flash-preview-04-17",
+	GoogleToolChatProviderType: "gemini-2.5-flash",
 }
 
 func (provider ToolChatProviderType) SmallModel() string {
