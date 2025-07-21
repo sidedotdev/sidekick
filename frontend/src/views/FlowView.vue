@@ -39,6 +39,8 @@
   </div>
   <div class="flow-actions-container" :class="{ 'short-content': shortContent }">
     <div class="scroll-container">
+      <div v-if="isLoadingFlow && !flow" class="loading-indicator">Loading...</div>
+      <div v-else-if="flow && isStartingFlow" class="loading-indicator">Starting Task...</div>
       <SubflowContainer v-for="(subflowTree, index) in subflowTrees" :key="index" :subflowTree="subflowTree" :defaultExpanded="index == subflowTrees.length - 1"/>
     </div>
   </div>
@@ -93,6 +95,9 @@ let eventsSocket: WebSocket | null = null
 let eventsSocketClosed = false;
 let shortContent = ref(true);
 let currentFlowIdForSockets: string | null = null;
+let isLoadingFlow = ref(false);
+let isStartingFlow = ref(false);
+let hasReceivedFirstAction = false;
 
 let subflowTreeDebounceTimer: NodeJS.Timeout;
 let subscribeStreamDebounceTimers: {[key: string]: NodeJS.Timeout} = {};
@@ -245,6 +250,25 @@ const connectActionChangesWebSocketForFlow = (flowId: string) => {
       const flowAction: FlowAction = JSON.parse(event.data);
       const index = flowActions.value.findIndex((action) => action.id === flowAction.id);
 
+      // Handle first flow action
+      if (!hasReceivedFirstAction) {
+        hasReceivedFirstAction = true;
+        isStartingFlow.value = false;
+        
+        // Reload flow data if no worktrees exist, as worktrees are created during flow execution
+        if (flow.value && (!flow.value.worktrees || flow.value.worktrees.length === 0)) {
+          try {
+            const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${flow.value.id}`);
+            if (response.ok) {
+              const flowData = await response.json();
+              flow.value = flowData.flow;
+            }
+          } catch (err) {
+            console.error(`Error reloading flow data:`, err);
+          }
+        }
+      }
+
       // ensure we get subflow
       if (flowAction.subflowId) {
         getAndSubscribeSubflowWithDebounce(flowAction.subflowId, 100);
@@ -312,6 +336,9 @@ const setupFlow = async (newFlowId: string | undefined) => {
     flowActions.value = [];
     activeFollowDevPlanSubflowIds.value.clear();
     subflowsById.value = {};
+    isLoadingFlow.value = false;
+    isStartingFlow.value = false;
+    hasReceivedFirstAction = false;
     // Clear any pending subflow status update timers
     Object.keys(subflowStatusUpdateDebounceTimers).forEach(key => {
       clearTimeout(subflowStatusUpdateDebounceTimers[key]);
@@ -327,6 +354,9 @@ const setupFlow = async (newFlowId: string | undefined) => {
   }
 
   currentFlowIdForSockets = newFlowId;
+  isLoadingFlow.value = true;
+  isStartingFlow.value = false;
+  hasReceivedFirstAction = false;
 
   // Reset states for the new flow
   flow.value = null;
@@ -355,13 +385,19 @@ const setupFlow = async (newFlowId: string | undefined) => {
     if (response.ok) {
       const flowData = await response.json();
       flow.value = flowData.flow;
+      isLoadingFlow.value = false;
+      isStartingFlow.value = true;
     } else {
       console.error(`Failed to fetch flow ${newFlowId}:`, await response.text());
       flow.value = null;
+      isLoadingFlow.value = false;
+      isStartingFlow.value = false;
     }
   } catch (err) {
     console.error(`Error fetching flow ${newFlowId}:`, err);
     flow.value = null;
+    isLoadingFlow.value = false;
+    isStartingFlow.value = false;
   }
   setShortContent();
 };
@@ -513,5 +549,15 @@ onUnmounted(() => {
 
 .next-button:hover {
   opacity: 1;
+}
+
+.loading-indicator {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem;
+  color: var(--vp-c-text-2);
+  font-size: 1rem;
+  font-style: italic;
 }
 </style>
