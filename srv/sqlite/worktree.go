@@ -10,8 +10,8 @@ import (
 
 func (s *Storage) PersistWorktree(ctx context.Context, worktree domain.Worktree) error {
 	query := `
-		INSERT OR REPLACE INTO worktrees (id, flow_id, name, created, workspace_id)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT OR REPLACE INTO worktrees (id, flow_id, name, created, workspace_id, working_directory)
+		VALUES (?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := s.db.ExecContext(ctx, query,
@@ -20,6 +20,7 @@ func (s *Storage) PersistWorktree(ctx context.Context, worktree domain.Worktree)
 		worktree.Name,
 		worktree.Created,
 		worktree.WorkspaceId,
+		worktree.WorkingDirectory,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to persist worktree: %w", err)
@@ -30,7 +31,7 @@ func (s *Storage) PersistWorktree(ctx context.Context, worktree domain.Worktree)
 
 func (s *Storage) GetWorktree(ctx context.Context, workspaceId, worktreeId string) (domain.Worktree, error) {
 	query := `
-		SELECT id, flow_id, name, created, workspace_id
+		SELECT id, flow_id, name, created, workspace_id, working_directory
 		FROM worktrees
 		WHERE workspace_id = ? AND id = ?
 	`
@@ -42,6 +43,7 @@ func (s *Storage) GetWorktree(ctx context.Context, workspaceId, worktreeId strin
 		&worktree.Name,
 		&worktree.Created,
 		&worktree.WorkspaceId,
+		&worktree.WorkingDirectory,
 	)
 
 	if err != nil {
@@ -56,7 +58,7 @@ func (s *Storage) GetWorktree(ctx context.Context, workspaceId, worktreeId strin
 
 func (s *Storage) GetWorktrees(ctx context.Context, workspaceId string) ([]domain.Worktree, error) {
 	query := `
-		SELECT id, flow_id, name, created, workspace_id
+		SELECT id, flow_id, name, created, workspace_id, working_directory
 		FROM worktrees
 		WHERE workspace_id = ?
 	`
@@ -70,7 +72,7 @@ func (s *Storage) GetWorktrees(ctx context.Context, workspaceId string) ([]domai
 
 func (s Storage) GetWorktreesForFlow(ctx context.Context, workspaceId, flowId string) ([]domain.Worktree, error) {
 	query := `
-		SELECT id, flow_id, name, created, workspace_id
+		SELECT id, flow_id, name, created, workspace_id, working_directory
 		FROM worktrees
 		WHERE workspace_id = ? AND flow_id = ?
 	`
@@ -92,6 +94,7 @@ func (s Storage) getWorktreesFromRows(rows *sql.Rows) ([]domain.Worktree, error)
 			&worktree.Name,
 			&worktree.Created,
 			&worktree.WorkspaceId,
+			&worktree.WorkingDirectory,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan worktree: %w", err)
