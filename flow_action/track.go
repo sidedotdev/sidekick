@@ -10,6 +10,11 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+// TrackOptions configures how flow actions are tracked
+type TrackOptions struct {
+	FailuresOnly bool
+}
+
 /*
 Track wraps an anonymous func with flow action tracking. It does this:
 
@@ -34,6 +39,19 @@ func TrackFailureOnly[T any](actionCtx ActionContext, f func(flowAction domain.F
 		panic("Missing FlowScope in ExecContext when tracking flow action")
 	}
 	return trackFlowActionFailureOnly(actionCtx.ExecContext, actionCtx.ActionType, actionCtx.ActionParams, f)
+}
+
+// TrackWithOptions wraps an anonymous func with flow action tracking based on the provided options
+func TrackWithOptions[T any](actionCtx ActionContext, options TrackOptions, f func(flowAction domain.FlowAction) (T, error)) (defaultT T, err error) {
+	if actionCtx.ExecContext.FlowScope == nil {
+		panic("Missing FlowScope in ExecContext when tracking flow action")
+	}
+
+	if options.FailuresOnly {
+		return trackFlowActionFailureOnly(actionCtx.ExecContext, actionCtx.ActionType, actionCtx.ActionParams, f)
+	}
+
+	return trackFlowAction(actionCtx.ExecContext, false, actionCtx.ActionType, actionCtx.ActionParams, f)
 }
 
 /*
