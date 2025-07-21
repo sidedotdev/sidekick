@@ -5,7 +5,7 @@
 </template>
 
 <script lang="ts">
-import { ref, watch, defineComponent } from 'vue'
+import { ref, watch, defineComponent, toRef } from 'vue'
 
 export default defineComponent({
   props: {
@@ -22,18 +22,29 @@ export default defineComponent({
       default: false,
     },
   },
-  setup({ modelValue, placeholder, disabled }, { emit }) {
-    const textValue = ref(modelValue)
-    const replicatedValue = ref(modelValue)
+  setup(props, { emit }) {
+    const textValue = ref(props.modelValue)
+    const replicatedValue = ref(props.modelValue)
 
     watch(textValue, (newValue) => {
       replicatedValue.value = newValue
-      emit('update:modelValue', newValue)
+      // Only emit if the new value is different from the current prop value
+      // This prevents infinite loops when prop changes update textValue
+      if (newValue !== props.modelValue) {
+        emit('update:modelValue', newValue)
+      }
+    })
+
+    watch(toRef(props, 'modelValue'), (newValue) => {
+      textValue.value = newValue
+      replicatedValue.value = newValue
     })
 
     return {
       textValue,
       replicatedValue,
+      placeholder: toRef(props, 'placeholder'),
+      disabled: toRef(props, 'disabled'),
     }
   },
 })
