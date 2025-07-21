@@ -2,8 +2,10 @@ package dev
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
@@ -196,12 +198,29 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	}
 
 	devCtx := DevContext{
+		GlobalState: &GlobalState{},
 		ExecContext: eCtx,
 		Worktree:    worktree,
 		RepoConfig:  repoConfig,
 	}
 
 	return devCtx, nil
+}
+
+// cleanup on cancel for resources created during setupDevContextAction
+func handleFlowCancel(dCtx DevContext) {
+	if !errors.Is(dCtx.Err(), workflow.ErrCanceled) {
+		return
+	}
+
+	if dCtx.Worktree != nil {
+		// Use disconnected context to ensure cleanup can complete during cancellation
+		disconnectedCtx, _ := workflow.NewDisconnectedContext(dCtx)
+		future := workflow.ExecuteActivity(disconnectedCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "Sidekick task cancelled")
+		if err := future.Get(disconnectedCtx, nil); err != nil {
+			workflow.GetLogger(dCtx).Error("Failed to cleanup worktree during workflow cancellation", "error", err, "worktree", dCtx.Worktree.Name)
+		}
+	}
 }
 
 func getConfigs(ctx workflow.Context, workspaceId string) (common.LocalPublicConfig, domain.WorkspaceConfig, common.LLMConfig, common.EmbeddingConfig, error) {

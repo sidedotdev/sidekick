@@ -64,8 +64,6 @@ func formatRequirementsWithReview(originalReqs string, reviewMsgs []string, work
 }
 
 func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result string, err error) {
-	globalState := &GlobalState{}
-
 	// don't recover panics in development so we can debug via temporal UI, at
 	// the cost of failed tasks appearing stuck without UI feedback in sidekick
 	if SideAppEnv != "development" {
@@ -92,20 +90,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		_ = signalWorkflowClosure(ctx, "failed")
 		return "", err
 	}
-	dCtx.GlobalState = globalState
-
-	// Set up worktree cleanup on workflow cancellation
-	defer func() {
-		// Only cleanup if workflow is being cancelled and worktree exists
-		if dCtx.Worktree != nil && errors.Is(ctx.Err(), workflow.ErrCanceled) {
-			// Use disconnected context to ensure cleanup can complete during cancellation
-			disconnectedCtx, _ := workflow.NewDisconnectedContext(ctx)
-			future := workflow.ExecuteActivity(disconnectedCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name)
-			if cleanupErr := future.Get(disconnectedCtx, nil); cleanupErr != nil {
-				workflow.GetLogger(ctx).Error("Failed to cleanup worktree during workflow cancellation", "error", cleanupErr, "worktree", dCtx.Worktree.Name)
-			}
-		}
-	}()
+	defer handleFlowCancel(dCtx)
 
 	// Set up the pause and user action handlers
 	SetupPauseHandler(dCtx, "Paused for user input", nil)
