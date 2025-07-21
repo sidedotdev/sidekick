@@ -236,11 +236,6 @@ func (ctrl *Controller) CancelTaskHandler(c *gin.Context) {
 	}
 
 	// Check if any of the child workflows are in progress and cancel them
-	devAgent := dev.DevAgent{
-		TemporalClient:    ctrl.temporalClient,
-		TemporalTaskQueue: ctrl.temporalTaskQueue,
-		WorkspaceId:       task.WorkspaceId,
-	}
 	for _, flow := range childFlows {
 		// Update and persist the flow status
 		flow.Status = "canceled"
@@ -251,10 +246,14 @@ func (ctrl *Controller) CancelTaskHandler(c *gin.Context) {
 			return
 		}
 
-		err = devAgent.TerminateWorkflowIfExists(c.Request.Context(), flow.Id)
+		err = ctrl.temporalClient.CancelWorkflow(c.Request.Context(), flow.Id, "")
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to terminate workflow"})
-			return
+			// Check if the error is due to workflow not found or already completed
+			var notFoundErr *serviceerror.NotFound
+			if !errors.As(err, &notFoundErr) && !strings.Contains(err.Error(), "workflow execution already completed") {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to cancel workflow"})
+				return
+			}
 		}
 	}
 
