@@ -589,7 +589,9 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 	// After successful merge, cleanup the worktree
 	if !mergeResult.HasConflicts && dCtx.Worktree != nil {
 		actionCtx := dCtx.NewActionContext("cleanup_worktree")
-		_, err := flow_action.TrackFailureOnly(actionCtx.FlowActionContext(), func(flowAction domain.FlowAction) (interface{}, error) {
+		v := workflow.GetVersion(dCtx, "hide-cleanup-worktree", workflow.DefaultVersion, 1)
+		trackOptions := flow_action.TrackOptions{FailuresOnly: v >= 1}
+		_, err := flow_action.TrackWithOptions(actionCtx.FlowActionContext(), trackOptions, func(flowAction domain.FlowAction) (interface{}, error) {
 			future := workflow.ExecuteActivity(dCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "Sidekick task completed and merged")
 			return nil, future.Get(dCtx, nil)
 		})
