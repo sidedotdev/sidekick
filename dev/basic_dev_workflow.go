@@ -11,6 +11,7 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/utils"
 )
@@ -588,7 +589,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 	// After successful merge, cleanup the worktree
 	if !mergeResult.HasConflicts && dCtx.Worktree != nil {
 		actionCtx := dCtx.NewActionContext("cleanup_worktree")
-		_, err := Track(actionCtx, func(flowAction domain.FlowAction) (interface{}, error) {
+		_, err := flow_action.TrackFailureOnly(actionCtx.FlowActionContext(), func(flowAction domain.FlowAction) (interface{}, error) {
 			future := workflow.ExecuteActivity(dCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "Sidekick task completed and merged")
 			return nil, future.Get(dCtx, nil)
 		})
