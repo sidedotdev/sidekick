@@ -32,7 +32,7 @@ type BasicDevOptions struct {
 type MergeWithReviewParams struct {
 	Requirements   string
 	StartBranch    *string
-	GetGitDiff     func(dCtx DevContext, baseBranch string) (string, error) // function to get git diff customized per workflow
+	GetGitDiff     func(dCtx DevContext, baseBranch string) (string, error) // function to get git diff customized per workflow, nil for default
 	SubflowType    string                                                   // for tracking purposes
 	SubflowName    string                                                   // for tracking purposes
 	CommitRequired bool
@@ -134,9 +134,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 			CommitRequired: true,
 			Requirements:   requirements,
 			StartBranch:    input.StartBranch,
-			GetGitDiff: func(dCtx DevContext, baseBranch string) (string, error) {
-				return git.GitDiff(dCtx.ExecContext)
-			},
+			GetGitDiff:     nil,
 		}
 		err = reviewAndResolve(dCtx, params)
 		if err != nil {
@@ -311,7 +309,7 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 	// since it affects when/where workflow closure occurs (moves it to after
 	// coding subflow ends)
 	worktreeMergeVersion := workflow.GetVersion(dCtx, "worktree-merge", workflow.DefaultVersion, 1)
-	if worktreeMergeVersion >= 2 {
+	if worktreeMergeVersion >= 1 {
 		// signal later. we want to run review iterations *after* coding and not
 		// merge here in this version
 		return testResult.Output, nil
@@ -372,6 +370,19 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, getGitDiff func(dCt
 // try to review and merge if approved. if not approved, iterate by coding some
 // more based on review feedback, then review again
 func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
+	if params.GetGitDiff == nil {
+		params.GetGitDiff = func(dCtx DevContext, baseBranch string) (string, error) {
+			// Get diff between branches using three-dot syntax (also including staged for changes made during reviewAndResolve)
+			var gitDiff string
+			err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
+				Staged:       true,
+				ThreeDotDiff: true,
+				BaseBranch:   baseBranch,
+			}).Get(dCtx, &gitDiff)
+			return gitDiff, err
+		}
+	}
+
 	return RunSubflowWithoutResult(dCtx, "review_and_resolve", "Review and resolve", func(subflow domain.Subflow) error {
 		// Track review messages for iterative development
 		reviewMessages := []string{}

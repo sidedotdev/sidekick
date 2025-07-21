@@ -3,7 +3,6 @@ package dev
 import (
 	"fmt"
 	"os"
-	"sidekick/coding/git"
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/utils"
@@ -118,16 +117,7 @@ Here is the plan for meeting the requirements, along with updates per step:
 
 ` + devPlan.String(),
 			StartBranch: input.StartBranch,
-			GetGitDiff: func(dCtx DevContext, baseBranch string) (string, error) {
-				// Get diff between branches using three-dot syntax (also including staged for changes made during reviewAndResolve)
-				var gitDiff string
-				err := workflow.ExecuteActivity(ctx, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
-					Staged:       true,
-					ThreeDotDiff: true,
-					BaseBranch:   baseBranch,
-				}).Get(dCtx, &gitDiff)
-				return gitDiff, err
-			},
+			GetGitDiff:  nil,
 		})
 	}
 
