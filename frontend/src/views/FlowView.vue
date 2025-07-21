@@ -2,14 +2,16 @@
   <div v-if="flow">
     <div class="editor-links" v-if="devMode">
       <p v-for="worktree in flow.worktrees" :key="worktree.id">
-        Open Worktree:
-        <a :href="`vscode://file/${workDir(worktree)}?windowId=_blank`">VS Code</a>
-        |
-        <a :href="`idea://open?file=${encodeURIComponent(workDir(worktree))}`" class="vs-code-button">Intellij IDEA</a>
+        Open Worktree
+        <a :href="`vscode://file/${workDir(worktree)}?windowId=_blank`">
+          <VSCodeIcon/>
+        </a>&nbsp;<a :href="`idea://open?file=${encodeURIComponent(workDir(worktree))}`">
+          <IntellijIcon/>
+        </a>
       </p>
-    <div class="debug" v-if="devMode">
-      <a :href="`http://localhost:19855/namespaces/default/workflows/${flow.id}`">Temporal {{ flow.id }}</a>
-    </div>
+      <div class="debug" v-if="devMode">
+        <a :href="`http://localhost:19855/namespaces/default/workflows/${flow.id}`">Temporal Flow</a>
+      </div>
     </div>
     <!-- TODO: In the future, we should allow going to next step even if currently paused -->
     <div 
@@ -46,6 +48,8 @@
 import { computed, onMounted, ref, onUnmounted, watch } from 'vue'
 import { useEventBus } from '@vueuse/core'
 import SubflowContainer from '@/components/SubflowContainer.vue'
+import VSCodeIcon from '@/components/icons/VSCodeIcon.vue'
+import IntellijIcon from '@/components/icons/IntellijIcon.vue'
 import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Worktree, Subflow } from '../lib/models' // Added Subflow here
 import { SubflowStatus } from '../lib/models'
 import { buildSubflowTrees } from '../lib/subflow'
@@ -460,6 +464,11 @@ onUnmounted(() => {
   z-index: 1000;
   top: 1rem;
   right: 1rem;
+}
+
+.editor-links a > * {
+  height: 1.2rem;
+  vertical-align: middle;
 }
 
 .flow-controls-container { /* Renamed from pause-button-container */
