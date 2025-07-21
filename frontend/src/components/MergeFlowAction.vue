@@ -20,7 +20,7 @@
         <strong>✅ Merge completed successfully</strong>
       </div>
     </div>
-    <div v-else-if="flowAction.actionStatus === 'complete'" class="action-result">
+    <div v-else class="action-result">
       <pre>{{ flowAction.actionResult }}</pre>
     </div>
   </div>
@@ -58,9 +58,7 @@ const mergeResult = computed<MergeActivityResult | null>(() => {
     }
     return null;
   } catch (error) {
-    if (props.flowAction.actionStatus === 'complete') {
-      console.error('Error parsing merge result:', error);
-    }
+    console.error('Error parsing merge result:', error);
     return null;
   }
 });
