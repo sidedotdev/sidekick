@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sidekick/domain"
@@ -10,7 +11,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// SetupPauseHandler is already in the dev package, so we don't need to import it
+// SetupPause is already in the dev package, so we don't need to import it
 
 type PlannedDevInput struct {
 	RepoDir      string
@@ -56,6 +57,12 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 		return DevPlanExecution{}, fmt.Errorf("failed to setup dev context: %v", err)
 	}
 	defer handleFlowCancel(dCtx)
+	defer func() {
+		if err != nil && !errors.Is(dCtx.Err(), workflow.ErrCanceled) {
+			_ = signalWorkflowClosure(dCtx, "failed")
+			return
+		}
+	}()
 
 	// Set up the pause and user action handlers
 	SetupPauseHandler(dCtx, "Paused for user input", nil)
@@ -64,14 +71,12 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	err = EnsurePrerequisites(dCtx)
 	if err != nil {
-		_ = signalWorkflowClosure(ctx, "failed")
 		return DevPlanExecution{}, err
 	}
 
 	if input.DetermineRequirements {
 		refinedRequirements, err := BuildDevRequirements(dCtx, InitialDevRequirementsInfo{Requirements: input.Requirements})
 		if err != nil {
-			_ = signalWorkflowClosure(ctx, "failed")
 			return DevPlanExecution{}, err
 		}
 		input.Requirements = refinedRequirements.String()
@@ -79,7 +84,6 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 
 	devPlan, err := BuildDevPlan(dCtx, input.Requirements, input.PlanningPrompt, input.ReproduceIssue)
 	if err != nil {
-		_ = signalWorkflowClosure(ctx, "failed")
 		return DevPlanExecution{}, err
 	}
 
@@ -90,19 +94,16 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 		Requirements: input.Requirements,
 	})
 	if err != nil {
-		_ = signalWorkflowClosure(ctx, "failed")
 		return DevPlanExecution{}, err
 	}
 
 	err = EnsureTestsPassAfterDevPlanExecuted(dCtx, input, planExec)
 	if err != nil {
-		_ = signalWorkflowClosure(ctx, "failed")
 		return DevPlanExecution{}, err
 	}
 
 	err = AutoFormatCode(dCtx)
 	if err != nil {
-		_ = signalWorkflowClosure(ctx, "failed")
 		return DevPlanExecution{}, fmt.Errorf("failed to auto-format code: %v", err)
 	}
 
@@ -120,7 +121,6 @@ Here is the plan for meeting the requirements, along with updates per step:
 			GetGitDiff:  nil,
 		})
 		if err != nil {
-			_ = signalWorkflowClosure(ctx, "failed")
 			return DevPlanExecution{}, err
 		}
 	}

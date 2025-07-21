@@ -92,6 +92,12 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		return "", err
 	}
 	defer handleFlowCancel(dCtx)
+	defer func() {
+		if err != nil && !errors.Is(dCtx.Err(), workflow.ErrCanceled) {
+			_ = signalWorkflowClosure(dCtx, "failed")
+			return
+		}
+	}()
 
 	// Set up the pause and user action handlers
 	SetupPauseHandler(dCtx, "Paused for user input", nil)
@@ -100,7 +106,6 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	err = EnsurePrerequisites(dCtx)
 	if err != nil {
-		_ = signalWorkflowClosure(ctx, "failed")
 		return "", err
 	}
 
@@ -108,7 +113,6 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	if input.DetermineRequirements {
 		devRequirements, err := BuildDevRequirements(dCtx, InitialDevRequirementsInfo{Requirements: requirements})
 		if err != nil {
-			_ = signalWorkflowClosure(dCtx, "failed")
 			return "", err
 		}
 		requirements = devRequirements.String()
@@ -124,7 +128,6 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	}
 
 	if err != nil {
-		_ = signalWorkflowClosure(dCtx, "failed")
 		return "", err
 	}
 
@@ -138,7 +141,6 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		}
 		err = reviewAndResolve(dCtx, params)
 		if err != nil {
-			_ = signalWorkflowClosure(dCtx, "failed")
 			return "", err
 		}
 	}
