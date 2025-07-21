@@ -42,23 +42,24 @@ type MergeWithReviewParams struct {
 // to create comprehensive requirements for the next iteration
 func formatRequirementsWithReview(originalReqs string, reviewMsgs []string, workDone string, latestReview string) string {
 	var b strings.Builder
+	b.WriteString("#START Original Requirements\n\n")
 	b.WriteString(originalReqs)
-	b.WriteString("\n\nReview History:\n")
+	b.WriteString("#END Original Requirements\n\n")
 
-	for i, msg := range reviewMsgs {
-		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, msg))
-	}
-
-	if latestReview != "" {
-		b.WriteString("\nLatest Review Feedback:\n")
-		b.WriteString(latestReview)
-		b.WriteString("\n")
+	if len(reviewMsgs) > 0 {
+		b.WriteString("\n\nHere is some historical review feedback that was incorporated into the work done:\n")
+		for i, msg := range reviewMsgs {
+			b.WriteString(fmt.Sprintf("%d. %s\n", i+1, msg))
+		}
 	}
 
 	if workDone != "" {
-		b.WriteString("\nWork Done So Far:\n")
+		b.WriteString("\n\nWork Done So Far:\n\n")
 		b.WriteString(workDone)
 	}
+
+	b.WriteString("\n\nGiven the above context, please address the following latest review feedback:\n\n")
+	b.WriteString(latestReview)
 
 	return b.String()
 }

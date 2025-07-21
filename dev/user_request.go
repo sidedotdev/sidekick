@@ -178,6 +178,7 @@ func GetUserMergeApproval(
 	return MergeApprovalResponse{
 		Approved:     *userResponse.Approved,
 		TargetBranch: userResponse.Params["targetBranch"].(string),
+		Message:      userResponse.Content,
 	}, nil
 }
 
