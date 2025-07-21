@@ -286,7 +286,7 @@ const summary = computed<Summary | null>(() => {
       }
     }
 
-    case 'user_request': {
+    case 'user_request.approve.merge': {
       try {
         if (actionResult.value === null || actionResult.value === undefined) {
           return null;
