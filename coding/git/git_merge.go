@@ -15,9 +15,9 @@ type GitMergeParams struct {
 
 // MergeActivityResult indicates the result of a merge operation.
 type MergeActivityResult struct {
-	HasConflicts           bool
-	ConflictDirPath        string // Directory path where conflicts exist (empty if no conflicts)
-	ConflictOnTargetBranch bool   // true if conflicts are on target branch, false if on source branch (reverse merge)
+	HasConflicts           bool   `json:"hasConflicts"`
+	ConflictDirPath        string `json:"conflictDirPath"`        // Directory path where conflicts exist (empty if no conflicts)
+	ConflictOnTargetBranch bool   `json:"conflictOnTargetBranch"` // true if conflicts are on target branch, false if on source branch (reverse merge)
 }
 
 // GitMergeActivity performs a git merge operation from a source branch into a target branch.
