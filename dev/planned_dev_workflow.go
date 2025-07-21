@@ -109,7 +109,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 	// Handle merge if using worktree and workflow version is new enough
 	v := workflow.GetVersion(ctx, "git-worktree-merge", workflow.DefaultVersion, 1)
 	if input.EnvType == env.EnvTypeLocalGitWorktree && v == 1 {
-		reviewAndResolve(dCtx, MergeWithReviewParams{
+		err := reviewAndResolve(dCtx, MergeWithReviewParams{
 			CommitRequired: false, // planned dev flow writes commits already
 			Requirements: input.Requirements + `
 
@@ -119,6 +119,10 @@ Here is the plan for meeting the requirements, along with updates per step:
 			StartBranch: input.StartBranch,
 			GetGitDiff:  nil,
 		})
+		if err != nil {
+			_ = signalWorkflowClosure(ctx, "failed")
+			return DevPlanExecution{}, err
+		}
 	}
 
 	// emit signal when workflow ends successfully

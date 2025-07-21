@@ -479,7 +479,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 	mergeResult, err := Track(actionCtx, func(flowAction domain.FlowAction) (git.MergeActivityResult, error) {
 		var mergeResult git.MergeActivityResult
 
-		if gitCommitVersion >= 1 {
+		if gitCommitVersion >= 1 && params.CommitRequired {
 			err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
 				CommitMessage: commitMessage,
 			}).Get(dCtx, nil)
