@@ -558,7 +558,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 
 			if mergeInfo.Approved {
 				// Perform final merge from source to target
-				finalActionCtx := dCtx.NewActionContext("final_merge")
+				finalActionCtx := dCtx.NewActionContext("merge")
 				finalActionCtx.ActionParams = map[string]interface{}{
 					"sourceBranch": dCtx.Worktree.Name,
 					"targetBranch": mergeInfo.TargetBranch,
