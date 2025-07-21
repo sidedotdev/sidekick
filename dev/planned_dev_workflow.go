@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sidekick/coding/git"
@@ -62,7 +63,8 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 
 	// Set up worktree cleanup on workflow cancellation
 	defer func() {
-		if dCtx.Worktree != nil {
+		// Only cleanup if workflow is being cancelled and worktree exists
+		if dCtx.Worktree != nil && errors.Is(ctx.Err(), workflow.ErrCanceled) {
 			// Use disconnected context to ensure cleanup can complete during cancellation
 			disconnectedCtx, _ := workflow.NewDisconnectedContext(ctx)
 			future := workflow.ExecuteActivity(disconnectedCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name)
