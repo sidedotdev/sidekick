@@ -110,7 +110,7 @@
     </div>
     <div v-if="/approval/.test(props.flowAction.actionParams.requestKind)">
       <!--p>{{ flowAction.actionParams.requestContent }}</p-->
-      <p>{{ parsedActionResult.Approved ? '✅ Approved' : '❌ Rejected: ' }}{{ parsedActionResult.Content }}</p>
+      <p v-if="!parsedActionResult.Approved && parsedActionResult.Content">{{ parsedActionResult.Content }}</p>
     </div>
     <div class="free-form" v-else-if="flowAction.actionParams.requestKind == 'free_form'">
       <p v-if="parsedActionResult.Content"><b>You: </b>{{ parsedActionResult.Content }}</p>
@@ -173,6 +173,7 @@ watch(responseContent, (newContent) => {
   }
 });
 
+// TODO: onmounted isn't needed here, so we should move this to the setup area
 onMounted(() => {
   try {
     const savedContent = localStorage.getItem(getStorageKey(props.flowAction.id));
@@ -193,6 +194,48 @@ const parsedActionResult = computed(() => {
 });
 
 const targetBranch = ref<string | undefined>(parsedActionResult.value?.targetBranch ?? props.flowAction.actionParams.mergeApprovalInfo?.defaultTargetBranch)
+
+// Watch for target branch changes during merge approval
+watch(targetBranch, async (newBranch, oldBranch) => {
+  // Only send update if this is a merge approval request, the action is pending,
+  // and the branch actually changed (not just initialization)
+  if (props.flowAction.actionParams.requestKind === 'merge_approval' && 
+      isPending.value && 
+      oldBranch !== undefined && 
+      newBranch !== oldBranch) {
+    await updateTargetBranch(newBranch);
+  }
+});
+
+async function updateTargetBranch(newBranch: string | undefined) {
+  if (!newBranch) return;
+
+  try {
+    const userResponse: UserResponse = {
+      params: {
+        targetBranch: newBranch,
+      },
+      // approved is intentionally undefined/null to indicate this is a branch switch, not a final decision
+    };
+
+    const response = await fetch(`/api/v1/workspaces/${props.flowAction.workspaceId}/flow_actions/${props.flowAction.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userResponse: userResponse,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error('Failed to update target branch:', response.status, response.statusText);
+      // Don't show error to user for branch updates as it's not a critical failure
+      // The user can still proceed with approval/rejection
+    }
+  } catch (error) {
+    console.error('Network error updating target branch:', error);
+    // Don't show error to user for branch updates as it's not a critical failure
+  }
+}
 
 // temporary until we set up i18n
 const tags: {[key: string]: string} = {

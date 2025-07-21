@@ -748,6 +748,218 @@ func TestCompleteFlowActionHandler_FreeFormButEmptyResponseContent(t *testing.T)
 	assert.Equal(t, flowAction.ActionStatus, retrievedFlowAction.ActionStatus)
 }
 
+func TestUpdateFlowActionHandler(t *testing.T) {
+	ctrl := NewMockController(t)
+	redisDb := ctrl.service
+	workspaceId := "ws_123"
+	ctx := context.Background()
+	task := domain.Task{
+		WorkspaceId: workspaceId,
+		Status:      domain.TaskStatusInProgress,
+		AgentType:   domain.AgentTypeLLM,
+	}
+	redisDb.PersistTask(ctx, task)
+
+	// Create a flow associated with the task
+	flow := domain.Flow{
+		ParentId:    task.Id,
+		WorkspaceId: workspaceId,
+		Id:          "flow_1",
+	}
+
+	// Create a flow action associated with the flow
+	flowAction := domain.FlowAction{
+		WorkspaceId:      workspaceId,
+		FlowId:           flow.Id,
+		Id:               "flow_action_1",
+		ActionStatus:     domain.ActionStatusPending,
+		ActionType:       "anything",
+		ActionResult:     "",
+		IsHumanAction:    true,
+		IsCallbackAction: true,
+	}
+
+	// Persist the task, flow and flow action in the database before the API call
+	err := redisDb.PersistTask(ctx, task)
+	assert.Nil(t, err)
+	err = redisDb.PersistFlow(ctx, flow)
+	assert.Nil(t, err)
+	err = redisDb.PersistFlowAction(ctx, flowAction)
+	assert.Nil(t, err)
+
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+	c.Request = httptest.NewRequest("PUT", "/v1/workspaces/"+workspaceId+"/flow_actions/"+flowAction.Id, strings.NewReader(`{"userResponse": {"params": {"targetBranch": "feature-branch"}}}`))
+	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}, {Key: "id", Value: flowAction.Id}}
+
+	ctrl.UpdateFlowActionHandler(c)
+	assert.Equal(t, http.StatusOK, resp.Code)
+
+	// Retrieve the flow action from the database after the API call
+	retrievedFlowAction, err := redisDb.GetFlowAction(ctx, workspaceId, flowAction.Id)
+	assert.NoError(t, err)
+
+	// Check that the flow action status remains pending and result is unchanged
+	assert.Equal(t, domain.ActionStatusPending, retrievedFlowAction.ActionStatus)
+	assert.Equal(t, "", retrievedFlowAction.ActionResult)
+}
+
+func TestUpdateFlowActionHandler_RejectsApprovalDecision(t *testing.T) {
+	ctrl := NewMockController(t)
+	redisDb := ctrl.service
+	workspaceId := "ws_123"
+	ctx := context.Background()
+
+	flowAction := domain.FlowAction{
+		WorkspaceId:      workspaceId,
+		FlowId:           "flow_1",
+		Id:               "flow_action_1",
+		ActionStatus:     domain.ActionStatusPending,
+		ActionType:       "anything",
+		IsHumanAction:    true,
+		IsCallbackAction: true,
+	}
+
+	err := redisDb.PersistFlowAction(ctx, flowAction)
+	assert.Nil(t, err)
+
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+	c.Request = httptest.NewRequest("PUT", "/v1/workspaces/"+workspaceId+"/flow_actions/"+flowAction.Id, strings.NewReader(`{"userResponse": {"approved": true, "params": {"targetBranch": "feature-branch"}}}`))
+	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}, {Key: "id", Value: flowAction.Id}}
+
+	ctrl.UpdateFlowActionHandler(c)
+	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	assert.Contains(t, resp.Body.String(), "Updates cannot include approval decision - use POST to complete the action")
+
+	// Retrieve the flow action from the database after the API call
+	retrievedFlowAction, err := redisDb.GetFlowAction(ctx, workspaceId, flowAction.Id)
+	assert.NoError(t, err)
+
+	// Check that the flow action was not updated
+	assert.Equal(t, domain.ActionStatusPending, retrievedFlowAction.ActionStatus)
+	assert.Equal(t, "", retrievedFlowAction.ActionResult)
+}
+
+func TestUpdateFlowActionHandler_NonHumanRequest(t *testing.T) {
+	ctrl := NewMockController(t)
+	redisDb := ctrl.service
+
+	workspaceId := "ws_1"
+	flowAction := domain.FlowAction{
+		WorkspaceId:      workspaceId,
+		FlowId:           "flow_1",
+		Id:               "flow_action_1",
+		ActionStatus:     domain.ActionStatusPending,
+		ActionType:       "anything",
+		IsHumanAction:    false,
+		IsCallbackAction: true,
+	}
+
+	ctx := context.Background()
+
+	// Persist the flow action in the database before the API call
+	err := redisDb.PersistFlowAction(ctx, flowAction)
+	assert.Nil(t, err)
+
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+	c.Request = httptest.NewRequest("PUT", "/v1/workspaces/"+workspaceId+"/flow_actions/"+flowAction.Id, strings.NewReader(`{"userResponse": {"params": {"targetBranch": "feature-branch"}}}`))
+	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}, {Key: "id", Value: flowAction.Id}}
+
+	ctrl.UpdateFlowActionHandler(c)
+	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	assert.Contains(t, resp.Body.String(), "only human actions can be updated")
+
+	// Retrieve the flow action from the database after the API call
+	retrievedFlowAction, err := redisDb.GetFlowAction(ctx, workspaceId, flowAction.Id)
+	assert.Nil(t, err)
+
+	// Check that the retrieved flow action was not updated
+	assert.Equal(t, flowAction.ActionResult, retrievedFlowAction.ActionResult)
+	assert.Equal(t, flowAction.ActionStatus, retrievedFlowAction.ActionStatus)
+}
+
+func TestUpdateFlowActionHandler_NonPending(t *testing.T) {
+	ctrl := NewMockController(t)
+	redisDb := ctrl.service
+
+	workspaceId := "ws_1"
+	flowAction := domain.FlowAction{
+		WorkspaceId:      workspaceId,
+		FlowId:           "flow_1",
+		Id:               "flow_action_1",
+		ActionStatus:     domain.ActionStatusComplete,
+		ActionType:       "anything",
+		ActionResult:     "existing response",
+		IsHumanAction:    true,
+		IsCallbackAction: true,
+	}
+
+	ctx := context.Background()
+
+	// Persist the flow action in the database before the API call
+	err := redisDb.PersistFlowAction(ctx, flowAction)
+	assert.Nil(t, err)
+
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+	c.Request = httptest.NewRequest("PUT", "/v1/workspaces/"+workspaceId+"/flow_actions/"+flowAction.Id, strings.NewReader(`{"userResponse": {"params": {"targetBranch": "feature-branch"}}}`))
+	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}, {Key: "id", Value: flowAction.Id}}
+
+	ctrl.UpdateFlowActionHandler(c)
+	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	assert.Contains(t, resp.Body.String(), "Flow action status is not pending")
+
+	// Retrieve the flow action from the database after the API call
+	retrievedFlowAction, err := redisDb.GetFlowAction(ctx, workspaceId, flowAction.Id)
+	assert.Nil(t, err)
+
+	// Check that the retrieved flow action was not updated
+	assert.Equal(t, flowAction.ActionResult, retrievedFlowAction.ActionResult)
+	assert.Equal(t, flowAction.ActionStatus, retrievedFlowAction.ActionStatus)
+}
+
+func TestUpdateFlowActionHandler_NonCallback(t *testing.T) {
+	ctrl := NewMockController(t)
+	redisDb := ctrl.service
+
+	workspaceId := "ws_1"
+	flowAction := domain.FlowAction{
+		WorkspaceId:      workspaceId,
+		FlowId:           "flow_1",
+		Id:               "flow_action_1",
+		ActionStatus:     domain.ActionStatusPending,
+		ActionType:       "anything",
+		ActionResult:     "",
+		IsHumanAction:    true,
+		IsCallbackAction: false,
+	}
+
+	ctx := context.Background()
+
+	// Persist the flow action in the database before the API call
+	err := redisDb.PersistFlowAction(ctx, flowAction)
+	assert.Nil(t, err)
+
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+	c.Request = httptest.NewRequest("PUT", "/v1/workspaces/"+workspaceId+"/flow_actions/"+flowAction.Id, strings.NewReader(`{"userResponse": {"params": {"targetBranch": "feature-branch"}}}`))
+	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}, {Key: "id", Value: flowAction.Id}}
+
+	ctrl.UpdateFlowActionHandler(c)
+	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	assert.Contains(t, resp.Body.String(), "This flow action doesn't support callback-based completion")
+
+	// Retrieve the flow action from the database after the API call
+	retrievedFlowAction, err := redisDb.GetFlowAction(ctx, workspaceId, flowAction.Id)
+	assert.Nil(t, err)
+
+	// Check that the retrieved flow action was not updated
+	assert.Equal(t, flowAction.ActionResult, retrievedFlowAction.ActionResult)
+	assert.Equal(t, flowAction.ActionStatus, retrievedFlowAction.ActionStatus)
+}
+
 func TestGetFlowActionsHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
