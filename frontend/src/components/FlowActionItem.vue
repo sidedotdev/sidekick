@@ -286,6 +286,24 @@ const summary = computed<Summary | null>(() => {
       }
     }
 
+    case 'user_request': {
+      try {
+        if (actionResult.value === null || actionResult.value === undefined) {
+          return null;
+        }
+        if (typeof actionResult.value.Approved === 'boolean') {
+          return {
+            text: actionResult.value.Approved ? 'Approved' : 'Rejected',
+            emoji: actionResult.value.Approved ? '✅' : '❌',
+          };
+        }
+        return null;
+      } catch (error) {
+        console.error('Error parsing user request result data:', error);
+        return null;
+      }
+    }
+
     default: {
       return null;
     }

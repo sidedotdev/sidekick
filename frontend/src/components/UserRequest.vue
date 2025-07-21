@@ -102,7 +102,7 @@
     </div>
     <div v-if="/approval/.test(props.flowAction.actionParams.requestKind)">
       <!--p>{{ flowAction.actionParams.requestContent }}</p-->
-      <p>{{ parsedActionResult.Approved ? '✅ Approved' : '❌ Rejected: ' }}{{ parsedActionResult.Content }}</p>
+      <p v-if="!parsedActionResult.Approved && parsedActionResult.Content">{{ parsedActionResult.Content }}</p>
     </div>
     <div class="free-form" v-else-if="flowAction.actionParams.requestKind == 'free_form'">
       <p v-if="parsedActionResult.Content"><b>You: </b>{{ parsedActionResult.Content }}</p>
