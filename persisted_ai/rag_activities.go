@@ -257,7 +257,7 @@ func getEmbedder(config common.ModelConfig) (embedding.Embedder, error) {
 			return nil, fmt.Errorf("failed to load local config: %w", err)
 		}
 		for _, p := range localConfig.Providers {
-			if p.Type == string(providerType) {
+			if p.Type == string(providerType) && p.Name == config.Provider {
 				return &embedding.OpenAIEmbedder{
 					BaseURL: p.BaseURL,
 				}, nil
