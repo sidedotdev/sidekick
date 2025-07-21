@@ -7,7 +7,7 @@
       <label>Flow</label>
       <SegmentedControl v-model="flowType" :options="flowTypeOptions" />
       </div>
-      <div v-if="devMode">
+      <div>
         <label>Workdir</label>
         <SegmentedControl v-model="envType" :options="envTypeOptions" />
 
