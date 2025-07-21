@@ -151,6 +151,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	flowRoutes.POST("/:id/user_action", ctrl.UserActionHandler)
 
 	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
+	workspaceApiRoutes.PUT("/flow_actions/:id", ctrl.UpdateFlowActionHandler)
 
 	workspaceWsRoutes := r.Group("/ws/v1/workspaces")
 	workspaceWsRoutes.GET("/:workspaceId/task_changes", ctrl.TaskChangesWebsocketHandler)
@@ -235,11 +236,6 @@ func (ctrl *Controller) CancelTaskHandler(c *gin.Context) {
 	}
 
 	// Check if any of the child workflows are in progress and cancel them
-	devAgent := dev.DevAgent{
-		TemporalClient:    ctrl.temporalClient,
-		TemporalTaskQueue: ctrl.temporalTaskQueue,
-		WorkspaceId:       task.WorkspaceId,
-	}
 	for _, flow := range childFlows {
 		// Update and persist the flow status
 		flow.Status = "canceled"
@@ -250,10 +246,14 @@ func (ctrl *Controller) CancelTaskHandler(c *gin.Context) {
 			return
 		}
 
-		err = devAgent.TerminateWorkflowIfExists(c.Request.Context(), flow.Id)
+		err = ctrl.temporalClient.CancelWorkflow(c.Request.Context(), flow.Id, "")
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to terminate workflow"})
-			return
+			// Check if the error is due to workflow not found or already completed
+			var notFoundErr *serviceerror.NotFound
+			if !errors.As(err, &notFoundErr) && !strings.Contains(err.Error(), "workflow execution already completed") {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to cancel workflow"})
+				return
+			}
 		}
 	}
 
@@ -872,6 +872,74 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update task"})
 		return
 	}
+
+	c.JSON(http.StatusOK, flowAction)
+}
+
+func (ctrl *Controller) UpdateFlowActionHandler(c *gin.Context) {
+	flowActionId := c.Param("id")
+
+	ctx := c.Request.Context()
+	workspaceId := c.Param("workspaceId")
+
+	// Retrieve the flow action from the database
+	flowAction, err := ctrl.service.GetFlowAction(ctx, workspaceId, flowActionId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve flow action"})
+		return
+	}
+
+	// minimal validation
+	if !flowAction.IsCallbackAction {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "This flow action doesn't support callback-based completion"})
+		return
+	} else if !flowAction.IsHumanAction {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "For now, only human actions can be updated via this endpoint"})
+		return
+	} else if flowAction.ActionStatus != domain.ActionStatusPending {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Flow action status is not pending"})
+		return
+	}
+
+	var body struct {
+		UserResponse struct {
+			Content  string                 `json:"content"`
+			Approved *bool                  `json:"approved"`
+			Choice   string                 `json:"choice"`
+			Params   map[string]interface{} `json:"params"`
+		} `json:"userResponse"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	// Reject requests where approved is not nil (indicates completion)
+	if body.UserResponse.Approved != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Updates cannot include approval decision - use POST to complete the action"})
+		return
+	}
+
+	devAgent := dev.DevAgent{
+		TemporalClient:    ctrl.temporalClient,
+		TemporalTaskQueue: ctrl.temporalTaskQueue,
+		WorkspaceId:       workspaceId,
+	}
+
+	userResponse := dev.UserResponse{
+		TargetWorkflowId: flowAction.FlowId,
+		Content:          body.UserResponse.Content,
+		Approved:         nil,
+		Choice:           body.UserResponse.Choice,
+		Params:           body.UserResponse.Params,
+	}
+	if err := devAgent.RelayResponse(ctx, userResponse); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to relay user response"})
+		return
+	}
+
+	// Note: Unlike CompleteFlowActionHandler, we don't update ActionStatus or ActionResult
+	// since this is an update, not a completion
 
 	c.JSON(http.StatusOK, flowAction)
 }

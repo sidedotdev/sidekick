@@ -2,8 +2,10 @@ package dev
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
@@ -18,12 +20,9 @@ import (
 
 type DevContext struct {
 	flow_action.ExecContext
-	GlobalState     *GlobalState
-	Worktree        *domain.Worktree
-	RepoConfig      common.RepoConfig
-	Providers       []common.ModelProviderPublicConfig
-	LLMConfig       common.LLMConfig
-	EmbeddingConfig common.EmbeddingConfig
+	GlobalState *GlobalState
+	Worktree    *domain.Worktree
+	RepoConfig  common.RepoConfig
 }
 
 // WithContext returns a new DevContext with the workflow.Context updated.
@@ -40,7 +39,7 @@ func (dCtx DevContext) WithCancelOnPause() DevContext {
 	return dCtx
 }
 
-func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, envType string, startBranch *string) (DevContext, error) {
+func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, envType string, startBranch *string, requirements string) (DevContext, error) {
 	initialExecCtx := flow_action.ExecContext{
 		Context:     ctx,
 		WorkspaceId: workspaceId,
@@ -51,19 +50,54 @@ func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, e
 	return flow_action.TrackSubflowFailureOnly(initialExecCtx, "flow_init", "Initialize", func(_ domain.Subflow) (DevContext, error) {
 		actionCtx := initialExecCtx.NewActionContext("setup_dev_context")
 		return flow_action.TrackFailureOnly(actionCtx, func(_ domain.FlowAction) (DevContext, error) {
-			return setupDevContextAction(ctx, workspaceId, repoDir, envType, startBranch)
+			return setupDevContextAction(ctx, workspaceId, repoDir, envType, startBranch, requirements)
 		})
 	})
 }
 
-func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir string, envType string, startBranch *string) (DevContext, error) {
+func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir string, envType string, startBranch *string, requirements string) (DevContext, error) {
 	ctx = utils.NoRetryCtx(ctx)
 
 	var devEnv env.Env
 	var err error
 	var envContainer env.EnvContainer
-
 	var worktree *domain.Worktree
+	var localConfig common.LocalPublicConfig
+	var finalLLMConfig common.LLMConfig
+	var finalEmbeddingConfig common.EmbeddingConfig
+
+	enableBranchNameGeneration := workflow.GetVersion(ctx, "branch-name-generation", workflow.DefaultVersion, 1) >= 1
+
+	// for workflow backcompat/replay, we can't do this early unless enabled
+	if enableBranchNameGeneration {
+		localConfig, _, finalLLMConfig, finalEmbeddingConfig, err = getConfigs(ctx, workspaceId)
+		if err != nil {
+			return DevContext{}, err
+		}
+	}
+
+	// this is *only* to be used temporarily during setup, until the real/full env is created
+	tempLocalEnv, err := env.NewLocalEnv(context.Background(), env.LocalEnvParams{RepoDir: repoDir})
+	if err != nil {
+		return DevContext{}, fmt.Errorf("failed to create temp local env: %v", err)
+	}
+	// this is *only* to be used temporarily during setup, until the real/full eCtx is created
+	tempLocalExecContext := flow_action.ExecContext{
+		FlowScope:    &flow_action.FlowScope{},
+		Context:      ctx,
+		WorkspaceId:  workspaceId,
+		EnvContainer: &env.EnvContainer{Env: tempLocalEnv},
+		Secrets: &secret_manager.SecretManagerContainer{
+			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+				secret_manager.KeyringSecretManager{},
+				secret_manager.LocalConfigSecretManager{},
+			}),
+		},
+		Providers:       localConfig.Providers, // TODO merge with workspace providers
+		LLMConfig:       finalLLMConfig,
+		EmbeddingConfig: finalEmbeddingConfig,
+	}
+
 	switch envType {
 	case string(env.EnvTypeLocal), "":
 		devEnv, err = env.NewLocalEnv(context.Background(), env.LocalEnvParams{
@@ -74,10 +108,35 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		}
 		envContainer = env.EnvContainer{Env: devEnv}
 	case string(env.EnvTypeLocalGitWorktree):
+		flowId := workflow.GetInfo(ctx).WorkflowExecution.ID
+
+		// Generate branch name based on workflow version
+		var branchName string
+		if enableBranchNameGeneration {
+			// Get edit hints from workflow info
+			tempLocalRepoConfig, err := GetRepoConfig(tempLocalExecContext)
+			if err != nil {
+				return DevContext{}, fmt.Errorf("failed to get coding config: %v", err)
+			}
+			editHints := tempLocalRepoConfig.EditCode.Hints
+
+			// Use LLM-based branch name generation
+			branchName, err = GenerateBranchName(tempLocalExecContext, BranchNameRequest{
+				Requirements: requirements,
+				Hints:        editHints,
+			})
+			if err != nil {
+				return DevContext{}, fmt.Errorf("failed to generate branch name: %v", err)
+			}
+		} else {
+			// Use legacy branch naming
+			branchName = flowId
+		}
+
 		worktree = &domain.Worktree{
 			Id:          ksuidSideEffect(ctx),
-			FlowId:      workflow.GetInfo(ctx).WorkflowExecution.ID,
-			Name:        workflow.GetInfo(ctx).WorkflowExecution.ID, // TODO human-readable branch name generated from task description
+			FlowId:      flowId,
+			Name:        branchName,
 			WorkspaceId: workspaceId,
 		}
 		err = workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeActivity, env.LocalEnvParams{
@@ -87,12 +146,21 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
 		}
+		worktree.WorkingDirectory = envContainer.Env.GetWorkingDirectory()
 		err = workflow.ExecuteActivity(ctx, srv.Activities.PersistWorktree, *worktree).Get(ctx, nil)
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to persist worktree: %v", err)
 		}
 	default:
 		return DevContext{}, fmt.Errorf("unsupported environment type: %s", envType)
+	}
+
+	// for workflow backcompat/replay, we have to do this later
+	if !enableBranchNameGeneration {
+		localConfig, _, finalLLMConfig, finalEmbeddingConfig, err = getConfigs(ctx, workspaceId)
+		if err != nil {
+			return DevContext{}, err
+		}
 	}
 
 	eCtx := flow_action.ExecContext{
@@ -106,21 +174,79 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				secret_manager.LocalConfigSecretManager{},
 			}),
 		},
+		Providers:       localConfig.Providers, // TODO merge with workspace providers
+		LLMConfig:       finalLLMConfig,
+		EmbeddingConfig: finalEmbeddingConfig,
 	}
 
-	// Get local configuration first
+	// NOTE: it's important to do this *after* the eCtx has been created, since
+	// that ensures we get the correct repo config for the given start branch
+	repoConfig, err := GetRepoConfig(eCtx)
+	if err != nil {
+		var hint string
+		if worktree != nil {
+			hint = "Please commit your side.toml and .sideignore files (generated via `side init`), and make sure they are available from the base branch of the worktree."
+		} else {
+			hint = "Please commit your side.toml and .sideignore files (generated via `side init`)"
+		}
+
+		return DevContext{}, fmt.Errorf("failed to get repo config: %v\n\n%s", err, hint)
+	}
+
+	// Execute worktree setup script if configured and using git worktree environment
+	if envType == string(env.EnvTypeLocalGitWorktree) && repoConfig.WorktreeSetup != "" {
+		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+			EnvContainer: envContainer,
+			Command:      "/usr/bin/env",
+			Args:         []string{"sh", "-c", repoConfig.WorktreeSetup},
+		}).Get(ctx, nil)
+		if err != nil {
+			return DevContext{}, fmt.Errorf("failed to execute worktree setup script: %v", err)
+		}
+	}
+
+	devCtx := DevContext{
+		GlobalState: &GlobalState{},
+		ExecContext: eCtx,
+		Worktree:    worktree,
+		RepoConfig:  repoConfig,
+	}
+
+	return devCtx, nil
+}
+
+// cleanup on cancel for resources created during setupDevContextAction
+func handleFlowCancel(dCtx DevContext) {
+	if !errors.Is(dCtx.Err(), workflow.ErrCanceled) {
+		return
+	}
+	// Use disconnected context to ensure cleanup can complete during cancellation
+	disconnectedCtx, _ := workflow.NewDisconnectedContext(dCtx)
+
+	_ = signalWorkflowClosure(disconnectedCtx, "canceled")
+
+	if dCtx.Worktree != nil {
+		future := workflow.ExecuteActivity(disconnectedCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "Sidekick task cancelled")
+		if err := future.Get(disconnectedCtx, nil); err != nil {
+			workflow.GetLogger(dCtx).Error("Failed to cleanup worktree during workflow cancellation", "error", err, "worktree", dCtx.Worktree.Name)
+		}
+	}
+}
+
+func getConfigs(ctx workflow.Context, workspaceId string) (common.LocalPublicConfig, domain.WorkspaceConfig, common.LLMConfig, common.EmbeddingConfig, error) {
+	var wa *workspace.Activities
 	var localConfig common.LocalPublicConfig
-	err = workflow.ExecuteActivity(ctx, common.GetLocalConfig).Get(ctx, &localConfig)
+	var workspaceConfig domain.WorkspaceConfig
+
+	err := workflow.ExecuteActivity(ctx, common.GetLocalConfig).Get(ctx, &localConfig)
 	if err != nil && !os.IsNotExist(err) {
-		return DevContext{}, fmt.Errorf("failed to get local config: %v", err)
+		return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", err)
 	}
 
 	// Get workspace configuration
-	var workspaceConfig domain.WorkspaceConfig
-	var wa *workspace.Activities
 	err = workflow.ExecuteActivity(ctx, wa.GetWorkspaceConfig, workspaceId).Get(ctx, &workspaceConfig)
 	if err != nil {
-		return DevContext{}, fmt.Errorf("failed to get workspace config: %v", err)
+		return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get workspace config: %v", err)
 	}
 
 	// Merge configurations - workspace config overrides local config if present
@@ -139,33 +265,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	for key, models := range workspaceConfig.Embedding.UseCaseConfigs {
 		finalEmbeddingConfig.UseCaseConfigs[key] = models
 	}
-	repoConfig, err := GetRepoConfig(eCtx)
-	if err != nil {
-		return DevContext{}, fmt.Errorf("failed to get coding config: %v", err)
-	}
-
-	// Execute worktree setup script if configured and using git worktree environment
-	if envType == string(env.EnvTypeLocalGitWorktree) && repoConfig.WorktreeSetup != "" {
-		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
-			EnvContainer: envContainer,
-			Command:      "/usr/bin/env",
-			Args:         []string{"sh", "-c", repoConfig.WorktreeSetup},
-		}).Get(ctx, nil)
-		if err != nil {
-			return DevContext{}, fmt.Errorf("failed to execute worktree setup script: %v", err)
-		}
-	}
-
-	devCtx := DevContext{
-		ExecContext:     eCtx,
-		Worktree:        worktree,
-		RepoConfig:      repoConfig,
-		Providers:       localConfig.Providers, // TODO merge with workspace providers
-		LLMConfig:       finalLLMConfig,
-		EmbeddingConfig: finalEmbeddingConfig,
-	}
-
-	return devCtx, nil
+	return localConfig, workspaceConfig, finalLLMConfig, finalEmbeddingConfig, nil
 }
 
 type DevActionContext struct {
@@ -219,36 +319,6 @@ func (dCtx *DevContext) NewActionContext(actionType string) DevActionContext {
 		ActionType:   actionType,
 		ActionParams: map[string]interface{}{},
 	}
-}
-
-func (dCtx *DevContext) GetModelConfig(key string, iteration int, fallback string) common.ModelConfig {
-	modelConfig, isDefault := dCtx.LLMConfig.GetModelConfig(key, iteration)
-	if isDefault && fallback != "default" {
-		if fallback == "small" {
-			provider, err := common.StringToToolChatProviderType(modelConfig.Provider)
-			if err == nil {
-				modelConfig.Model = provider.SmallModel()
-			} else {
-				// Try to find provider in configured providers
-				for _, p := range dCtx.Providers {
-					if p.Name == modelConfig.Provider {
-						if p.SmallLLM != "" {
-							modelConfig.Model = p.SmallLLM
-						}
-						break
-					}
-				}
-			}
-		} else {
-			modelConfig, _ = dCtx.LLMConfig.GetModelConfig(fallback, iteration)
-		}
-	}
-	return modelConfig
-}
-
-func (dCtx *DevContext) GetEmbeddingModelConfig(key string) common.ModelConfig {
-	modelConfig := dCtx.EmbeddingConfig.GetModelConfig(key)
-	return modelConfig
 }
 
 func (devActionCtx *DevActionContext) FlowActionContext() flow_action.ActionContext {

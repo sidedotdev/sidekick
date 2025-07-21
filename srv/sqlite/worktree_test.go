@@ -17,11 +17,12 @@ func TestWorktreeStorage(t *testing.T) {
 
 	t.Run("PersistWorktree", func(t *testing.T) {
 		worktree := domain.Worktree{
-			Id:          "wt_test1",
-			FlowId:      "flow1",
-			Name:        "Test Worktree",
-			Created:     time.Now().UTC().Round(time.Microsecond),
-			WorkspaceId: "workspace1",
+			Id:               "wt_test1",
+			FlowId:           "flow1",
+			Name:             "Test Worktree",
+			Created:          time.Now().UTC().Round(time.Microsecond),
+			WorkspaceId:      "workspace1",
+			WorkingDirectory: "/path/to/worktree1",
 		}
 
 		err := storage.PersistWorktree(ctx, worktree)
@@ -35,11 +36,12 @@ func TestWorktreeStorage(t *testing.T) {
 
 	t.Run("GetWorktree", func(t *testing.T) {
 		worktree := domain.Worktree{
-			Id:          "wt_test2",
-			FlowId:      "flow2",
-			Name:        "Test Worktree 2",
-			Created:     time.Now().UTC().Round(time.Microsecond),
-			WorkspaceId: "workspace1",
+			Id:               "wt_test2",
+			FlowId:           "flow2",
+			Name:             "Test Worktree 2",
+			Created:          time.Now().UTC().Round(time.Microsecond),
+			WorkspaceId:      "workspace1",
+			WorkingDirectory: "/path/to/worktree2",
 		}
 
 		err := storage.PersistWorktree(ctx, worktree)
@@ -57,8 +59,8 @@ func TestWorktreeStorage(t *testing.T) {
 	t.Run("GetWorktrees", func(t *testing.T) {
 		workspace := "workspace2"
 		worktrees := []domain.Worktree{
-			{Id: "wt_test3", FlowId: "flow3", Name: "Test Worktree 3", Created: time.Now().UTC().Round(time.Microsecond), WorkspaceId: workspace},
-			{Id: "wt_test4", FlowId: "flow4", Name: "Test Worktree 4", Created: time.Now().UTC().Round(time.Microsecond), WorkspaceId: workspace},
+			{Id: "wt_test3", FlowId: "flow3", Name: "Test Worktree 3", Created: time.Now().UTC().Round(time.Microsecond), WorkspaceId: workspace, WorkingDirectory: "/path/to/worktree3"},
+			{Id: "wt_test4", FlowId: "flow4", Name: "Test Worktree 4", Created: time.Now().UTC().Round(time.Microsecond), WorkspaceId: workspace, WorkingDirectory: "/path/to/worktree4"},
 		}
 
 		for _, wt := range worktrees {
@@ -82,11 +84,12 @@ func TestWorktreeStorage(t *testing.T) {
 
 	t.Run("DeleteWorktree", func(t *testing.T) {
 		worktree := domain.Worktree{
-			Id:          "wt_test5",
-			FlowId:      "flow5",
-			Name:        "Test Worktree 5",
-			Created:     time.Now().UTC().Round(time.Microsecond),
-			WorkspaceId: "workspace3",
+			Id:               "wt_test5",
+			FlowId:           "flow5",
+			Name:             "Test Worktree 5",
+			Created:          time.Now().UTC().Round(time.Microsecond),
+			WorkspaceId:      "workspace3",
+			WorkingDirectory: "/path/to/worktree5",
 		}
 
 		err := storage.PersistWorktree(ctx, worktree)
@@ -108,16 +111,17 @@ func TestWorktreeStorage(t *testing.T) {
 	t.Run("GetWorktreesForFlow", func(t *testing.T) {
 		flowId := "flow6"
 		worktreesInFlow := []domain.Worktree{
-			{Id: "wt_test6", FlowId: flowId, Name: "Test Worktree 6", Created: time.Now().UTC().Round(time.Microsecond), WorkspaceId: "workspace4"},
-			{Id: "wt_test7", FlowId: flowId, Name: "Test Worktree 7", Created: time.Now().UTC().Round(time.Microsecond), WorkspaceId: "workspace4"},
+			{Id: "wt_test6", FlowId: flowId, Name: "Test Worktree 6", Created: time.Now().UTC().Round(time.Microsecond), WorkspaceId: "workspace4", WorkingDirectory: "/path/to/worktree6"},
+			{Id: "wt_test7", FlowId: flowId, Name: "Test Worktree 7", Created: time.Now().UTC().Round(time.Microsecond), WorkspaceId: "workspace4", WorkingDirectory: "/path/to/worktree7"},
 		}
 
 		worktreeOtherFlow := domain.Worktree{
-			Id:          "wt_test8",
-			FlowId:      "flow7",
-			Name:        "Test Worktree 8",
-			Created:     time.Now().UTC().Round(time.Microsecond),
-			WorkspaceId: "workspace4",
+			Id:               "wt_test8",
+			FlowId:           "flow7",
+			Name:             "Test Worktree 8",
+			Created:          time.Now().UTC().Round(time.Microsecond),
+			WorkspaceId:      "workspace4",
+			WorkingDirectory: "/path/to/worktree8",
 		}
 
 		// Persist worktrees
