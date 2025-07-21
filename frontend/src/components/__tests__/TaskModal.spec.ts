@@ -47,9 +47,9 @@ describe('TaskModal', () => {
     expect(wrapper.find('h2').text()).toBe('Edit Task')
   })
 
-  it('renders segmented control for flow type', () => {
+  it('renders segmented control for flow type and workdir', () => {
     mountComponent()
-    expect(wrapper.findAllComponents({ name: 'SegmentedControl' })).toHaveLength(1)
+    expect(wrapper.findAllComponents({ name: 'SegmentedControl' })).toHaveLength(2)
   })
 
   it('submits form with correct API call for create', async () => {
@@ -173,16 +173,6 @@ describe('TaskModal', () => {
     const checkbox = wrapper.find('input[type="checkbox"]')
     await checkbox.setValue(false)
     expect((checkbox.element as HTMLInputElement).checked).toBe(false)
-  })
-
-  it('renders Workdir segmented control in devMode', async () => {
-    const originalEnv = import.meta.env.MODE
-    import.meta.env.MODE = 'development'
-
-    mountComponent()
-    expect(wrapper.findAllComponents({ name: 'SegmentedControl' })).toHaveLength(2)
-
-    import.meta.env.MODE = originalEnv
   })
 
   it('calls safeClose with confirmation when there are unsaved changes', async () => {
