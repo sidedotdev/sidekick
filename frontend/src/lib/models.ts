@@ -86,6 +86,7 @@ export interface Worktree {
   id: string
   flowId: string
   name: string
+  workingDirectory: string
   created: Date
   workspaceId: string
 }

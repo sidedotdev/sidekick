@@ -1,0 +1,1 @@
+ALTER TABLE worktrees ADD COLUMN working_directory TEXT NOT NULL DEFAULT '';

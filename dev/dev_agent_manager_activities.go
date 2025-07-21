@@ -69,10 +69,15 @@ func (ima *DevAgentManagerActivities) CompleteFlowParentTask(ctx context.Context
 	}
 
 	var taskStatus domain.TaskStatus
-	if flowStatus == "completed" {
+	switch flowStatus {
+	case "completed":
 		taskStatus = domain.TaskStatusComplete
-	} else {
+	case "canceled":
+		taskStatus = domain.TaskStatusCanceled
+	case "failed":
 		taskStatus = domain.TaskStatusFailed
+	default:
+		return fmt.Errorf("Unrecognized flow status: '%s'", flowStatus)
 	}
 	task.Status = taskStatus
 	task.AgentType = domain.AgentTypeNone

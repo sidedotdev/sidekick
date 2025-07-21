@@ -15,7 +15,9 @@ type GitMergeParams struct {
 
 // MergeActivityResult indicates the result of a merge operation.
 type MergeActivityResult struct {
-	HasConflicts bool
+	HasConflicts           bool   `json:"hasConflicts"`
+	ConflictDirPath        string `json:"conflictDirPath"`        // Directory path where conflicts exist (empty if no conflicts)
+	ConflictOnTargetBranch bool   `json:"conflictOnTargetBranch"` // true if conflicts are on target branch, false if on source branch (reverse merge)
 }
 
 // GitMergeActivity performs a git merge operation from a source branch into a target branch.
@@ -63,6 +65,8 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 		if mergeOutput.ExitStatus != 0 {
 			if strings.Contains(mergeOutput.Stdout, "CONFLICT") || strings.Contains(mergeOutput.Stderr, "conflict") {
 				result.HasConflicts = true
+				result.ConflictDirPath = targetWorktree.Path
+				result.ConflictOnTargetBranch = true
 				// In a worktree, we don't need to abort the merge. The conflicted state is contained
 				// within the worktree and can be inspected or cleaned up later.
 				return
@@ -75,34 +79,6 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 	}
 
 	// No worktree found, use temporary checkout approach
-
-	// Ensure we restore the original branch when we're done.
-	// The 'resultErr' variable is the named return error for GitMergeActivity.
-	// This defer can modify 'resultErr' if restoring the branch fails and no prior operational error occurred.
-	defer func() {
-		// the original branch of the working directory is expected to match the
-		// source branch. this matches the way worktrees are created in
-		// NewLocalGitWorktreeEnv
-		originalBranch := params.SourceBranch
-		restoreCheckoutOutput, restoreCheckoutErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
-			EnvContainer: envContainer,
-			Command:      "git",
-			Args:         []string{"checkout", originalBranch},
-		})
-
-		// If 'resultErr' was already set by a preceding operational error in GitMergeActivity (e.g., initial checkout failure,
-		// or merge command failed for non-conflict reasons), we keep that original error.
-		// The restoration failure is secondary in that case.
-		if resultErr == nil {
-			// If the merge operation itself was clean or resulted in conflicts (resultErr == nil at this point),
-			// then this restoration error takes precedence as the function's returned error.
-			if restoreCheckoutErr != nil {
-				resultErr = fmt.Errorf("failed to run command to restore original branch %s: %v", originalBranch, restoreCheckoutErr)
-			} else if restoreCheckoutOutput.ExitStatus != 0 {
-				resultErr = fmt.Errorf("failed to restore original branch %s, command stderr: %s", originalBranch, restoreCheckoutOutput.Stderr)
-			}
-		}
-	}()
 
 	// Checkout the target branch before merging
 	checkoutOutput, checkoutErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
@@ -146,7 +122,51 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 				resultErr = fmt.Errorf("merge had conflicts and failed to abort, stderr: %s", abortOutput.Stderr)
 				return
 			}
-			// resultErr remains nil (unless defer sets it to a restore error)
+
+			// undo the temporary checkout
+			originalBranch := params.SourceBranch
+			restoreCheckoutOutput, restoreCheckoutErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+				EnvContainer: envContainer,
+				Command:      "git",
+				Args:         []string{"checkout", originalBranch},
+			})
+			if restoreCheckoutErr != nil {
+				resultErr = fmt.Errorf("failed to run command to restore original branch %s: %v", originalBranch, restoreCheckoutErr)
+				return
+			} else if restoreCheckoutOutput.ExitStatus != 0 {
+				resultErr = fmt.Errorf("failed to restore original branch %s, command stderr: %s", originalBranch, restoreCheckoutOutput.Stderr)
+				return
+			}
+
+			// Implement reverse merge strategy: merge target branch into source
+			// branch, i.e. on the env working dir
+			sourceWorktreePath := envContainer.Env.GetWorkingDirectory()
+
+			// Perform reverse merge in source worktree
+			reverseMergeCmd := fmt.Sprintf("cd %s && git merge %s", sourceWorktreePath, params.TargetBranch)
+			reverseMergeOutput, reverseMergeErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+				EnvContainer: envContainer,
+				Command:      "sh",
+				Args:         []string{"-c", reverseMergeCmd},
+			})
+			if reverseMergeErr != nil {
+				resultErr = fmt.Errorf("failed to execute reverse merge command in source worktree: %v", reverseMergeErr)
+				return
+			}
+			if reverseMergeOutput.ExitStatus != 0 {
+				if strings.Contains(reverseMergeOutput.Stdout, "CONFLICT") || strings.Contains(reverseMergeOutput.Stderr, "conflict") {
+					// Reverse merge has conflicts - leave them in place
+					result.ConflictDirPath = sourceWorktreePath
+					result.ConflictOnTargetBranch = false
+					return
+				}
+				resultErr = fmt.Errorf("reverse merge failed in worktree: %s", reverseMergeOutput.Stderr)
+				return
+			}
+			// Reverse merge succeeded without conflicts - this shouldn't happen if original merge had conflicts
+			// but we'll handle it gracefully
+			result.ConflictDirPath = sourceWorktreePath
+			result.ConflictOnTargetBranch = false
 			return
 		}
 		resultErr = fmt.Errorf("merge failed: %s", mergeOutput.Stderr)

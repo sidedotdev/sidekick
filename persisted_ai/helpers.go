@@ -36,7 +36,7 @@ func GetOpenaiFuncArgs(ctx context.Context, la LlmActivities, toolOptions llm.To
 // reflect.Zero(tool.ParametersType). And return a slice of ToolCall, where the
 // unmarshaled parameters are included in the ToolCall struct as ParsedArguments
 // TODO move to persisted_ai package after adding AIConfig to flow_action.ActionContext
-func ForceToolCall(actionCtx flow_action.ActionContext, llmConfig common.LLMConfig, params *llm.ToolChatParams, tools ...*llm.Tool) (*llm.ChatMessageResponse, error) {
+func ForceToolCallWithTrackOptions(actionCtx flow_action.ActionContext, trackOptions flow_action.TrackOptions, llmConfig common.LLMConfig, params *llm.ToolChatParams, tools ...*llm.Tool) (*llm.ChatMessageResponse, error) {
 	var la *LlmActivities // use a nil struct pointer to call activities that are part of a structure
 
 	if params.ModelConfig.Provider == "" {
@@ -68,7 +68,7 @@ func ForceToolCall(actionCtx flow_action.ActionContext, llmConfig common.LLMConf
 	options.WorkspaceId = actionCtx.WorkspaceId
 	options.FlowId = flowId
 	actionCtx.ActionParams = options.ActionParams()
-	chatResponse, err := flow_action.Track(actionCtx, func(flowAction domain.FlowAction) (llm.ChatMessageResponse, error) {
+	chatResponse, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction domain.FlowAction) (llm.ChatMessageResponse, error) {
 		options.FlowActionId = flowAction.Id
 		var chatResponse llm.ChatMessageResponse
 		err := workflow.ExecuteActivity(utils.LlmHeartbeatCtx(actionCtx), la.ChatStream, options).Get(actionCtx, &chatResponse)
@@ -93,7 +93,7 @@ func ForceToolCall(actionCtx flow_action.ActionContext, llmConfig common.LLMConf
 		})
 		options.Params.Messages = params.Messages
 		actionCtx.ActionParams = options.ActionParams()
-		chatResponse, err = flow_action.Track(actionCtx, func(flowAction domain.FlowAction) (llm.ChatMessageResponse, error) {
+		chatResponse, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction domain.FlowAction) (llm.ChatMessageResponse, error) {
 			var chatResponse llm.ChatMessageResponse
 			options.FlowActionId = flowAction.Id
 			err := workflow.ExecuteActivity(utils.LlmHeartbeatCtx(actionCtx), la.ChatStream, options).Get(actionCtx, &chatResponse)
@@ -109,4 +109,8 @@ func ForceToolCall(actionCtx flow_action.ActionContext, llmConfig common.LLMConf
 	}
 
 	return &chatResponse, err
+}
+
+func ForceToolCall(actionCtx flow_action.ActionContext, llmConfig common.LLMConfig, params *llm.ToolChatParams, tools ...*llm.Tool) (*llm.ChatMessageResponse, error) {
+	return ForceToolCallWithTrackOptions(actionCtx, flow_action.TrackOptions{}, llmConfig, params, tools...)
 }
