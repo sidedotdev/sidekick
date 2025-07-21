@@ -24,14 +24,14 @@ type BranchNameRequest struct {
 	Hints        string `json:"editHints" jsonschema:"description=Additional hints that might provide context for branch name generation"`
 }
 
-type BranchNameResponse struct {
+type SubmitBranchNamesParams struct {
 	Candidates []string `json:"candidates" jsonschema:"description=List of 3 candidate branch name suffixes in kebab-case format\\, ordered best to worst\\, each 2-4 words long\\, without any prefix or slash etc"`
 }
 
 var generateBranchNamesTool = llm.Tool{
 	Name:        "submit_branch_names",
 	Description: "Generate meaningful, descriptive, human-readable branch names based on requirements and edit hints. Returns 3 candidates in kebab-case format.",
-	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&BranchNameRequest{}),
+	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&SubmitBranchNamesParams{}),
 }
 
 var generateBranchNamesPrompt = panicParseMustache(promptsFS, "branch_names/generate")
@@ -111,7 +111,7 @@ func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRe
 	modelConfig := eCtx.GetModelConfig(common.SummarizationKey, 0, "small")
 	params := llm.ToolChatParams{Messages: chatHistory, ModelConfig: modelConfig}
 
-	var branchResp BranchNameResponse
+	var branchResp SubmitBranchNamesParams
 	attempts := 0
 	for {
 		actionCtx := eCtx.NewActionContext("generate.branch_names")
