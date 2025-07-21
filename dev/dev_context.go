@@ -183,7 +183,14 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	// that ensures we get the correct repo config for the given start branch
 	repoConfig, err := GetRepoConfig(eCtx)
 	if err != nil {
-		return DevContext{}, fmt.Errorf("failed to get repo config: %v", err)
+		var hint string
+		if worktree != nil {
+			hint = "Please commit your side.toml and .sideignore files (generated via `side init`), and make sure they are available from the base branch of the worktree."
+		} else {
+			hint = "Please commit your side.toml and .sideignore files (generated via `side init`)"
+		}
+
+		return DevContext{}, fmt.Errorf("failed to get repo config: %v\n\n%s", err, hint)
 	}
 
 	// Execute worktree setup script if configured and using git worktree environment

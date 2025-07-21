@@ -21,7 +21,7 @@
       <JsonTree :data="flowAction.actionParams" />
       <h3>Result</h3>
       <JsonTree :data="actionResult" />
-      <div v-if="unparsedActionResult">{{ unparsedActionResult }}</div>
+      <pre v-if="unparsedActionResult">{{ unparsedActionResult }}</pre>
     </div>
   </div>
 </template>
