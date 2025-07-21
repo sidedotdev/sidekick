@@ -1,11 +1,11 @@
 <template>
   <div v-if="flow">
-    <div class="editor-links" v-if="devMode">
+    <div class="editor-links">
       <p v-for="worktree in flow.worktrees" :key="worktree.id">
         Open Worktree
-        <a :href="`vscode://file/${workDir(worktree)}?windowId=_blank`">
+        <a :href="`vscode://file/${worktree.workingDirectory}?windowId=_blank`">
           <VSCodeIcon/>
-        </a>&nbsp;<a :href="`idea://open?file=${encodeURIComponent(workDir(worktree))}`">
+        </a>&nbsp;<a :href="`idea://open?file=${encodeURIComponent(worktree.workingDirectory)}`">
           <IntellijIcon/>
         </a>
       </p>
@@ -410,10 +410,6 @@ let setShortContent = () => {
     const containerHeight = document.querySelector('.flow-actions-container')?.clientHeight || 0
     shortContent.value = contentHeight <= containerHeight
   }, 10)
-}
-
-const workDir = (worktree: Worktree): string => {
-  return `${dataDir}/worktrees/${worktree.workspaceId}/${worktree.name}`
 }
 
 const pauseFlow = async () => {
