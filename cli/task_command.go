@@ -43,7 +43,7 @@ func NewTaskCommand() *cli.Command {
 			&cli.StringSliceFlag{Name: "flow-option", Aliases: []string{"O"}, Usage: "Add flow option (key=value), can be specified multiple times"},
 			&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"n"}, Usage: "Shorthand to set determineRequirements to false in flow options"},
 			&cli.BoolFlag{Name: "worktree", Aliases: []string{"w"}, Usage: "Use git worktree environment type"},
-			&cli.StringFlag{Name: "start-branch", Usage: "Specify the starting branch for the task"},
+			&cli.StringFlag{Name: "start-branch", Aliases: []string{"B"}, Usage: "Specify the starting branch for the task"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			c := client.NewClient(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
@@ -89,8 +89,8 @@ func parseFlowOptions(ctx context.Context, cmd *cli.Command, currentDir string) 
 		flowOpts[key] = valueStr
 	}
 
-	// --worktree flag overrides envType
-	if cmd.Bool("worktree") {
+	// --worktree flag or --start-branch flag implies worktree environment
+	if cmd.Bool("worktree") || cmd.String("start-branch") != "" {
 		flowOpts["envType"] = "local_git_worktree"
 	}
 
@@ -99,16 +99,18 @@ func parseFlowOptions(ctx context.Context, cmd *cli.Command, currentDir string) 
 		flowOpts["startBranch"] = startBranch
 	}
 
-	// If --worktree is used but --start-branch is not provided, detect current branch
-	if cmd.Bool("worktree") && cmd.String("start-branch") == "" {
-		branchState, err := git.GetCurrentBranch(ctx, currentDir)
-		if err != nil {
-			return nil, fmt.Errorf("failed to detect current git branch for worktree: %w", err)
+	// If envType is local_git_worktree but startBranch is not set, detect current branch
+	if envType, ok := flowOpts["envType"]; ok && envType == "local_git_worktree" {
+		if _, hasStartBranch := flowOpts["startBranch"]; !hasStartBranch {
+			branchState, err := git.GetCurrentBranch(ctx, currentDir)
+			if err != nil {
+				return nil, fmt.Errorf("failed to detect current git branch for worktree: %w", err)
+			}
+			if branchState.IsDetached {
+				return nil, fmt.Errorf("cannot use worktree with detached HEAD state, please specify --start-branch or checkout a branch")
+			}
+			flowOpts["startBranch"] = branchState.Name
 		}
-		if branchState.IsDetached {
-			return nil, fmt.Errorf("cannot use worktree with detached HEAD state, please specify --start-branch or checkout a branch")
-		}
-		flowOpts["startBranch"] = branchState.Name
 	}
 
 	return flowOpts, nil
