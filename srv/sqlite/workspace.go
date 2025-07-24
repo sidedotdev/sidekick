@@ -14,14 +14,15 @@ import (
 
 func (s *Storage) PersistWorkspace(ctx context.Context, workspace domain.Workspace) error {
 	query := `
-		INSERT OR REPLACE INTO workspaces (id, name, local_repo_dir, created, updated)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT OR REPLACE INTO workspaces (id, name, local_repo_dir, config_mode, created, updated)
+		VALUES (?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := s.db.ExecContext(ctx, query,
 		workspace.Id,
 		workspace.Name,
 		workspace.LocalRepoDir,
+		workspace.ConfigMode,
 		workspace.Created.UTC().Truncate(time.Millisecond),
 		workspace.Updated.UTC().Truncate(time.Millisecond),
 	)
@@ -42,7 +43,7 @@ func (s *Storage) PersistWorkspace(ctx context.Context, workspace domain.Workspa
 
 func (s *Storage) GetWorkspace(ctx context.Context, workspaceId string) (domain.Workspace, error) {
 	query := `
-		SELECT id, name, local_repo_dir, created, updated
+		SELECT id, name, local_repo_dir, config_mode, created, updated
 		FROM workspaces
 		WHERE id = ?
 	`
@@ -52,6 +53,7 @@ func (s *Storage) GetWorkspace(ctx context.Context, workspaceId string) (domain.
 		&workspace.Id,
 		&workspace.Name,
 		&workspace.LocalRepoDir,
+		&workspace.ConfigMode,
 		&workspace.Created,
 		&workspace.Updated,
 	)
@@ -71,7 +73,7 @@ func (s *Storage) GetWorkspace(ctx context.Context, workspaceId string) (domain.
 
 func (s *Storage) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error) {
 	query := `
-		SELECT id, name, local_repo_dir, created, updated
+		SELECT id, name, local_repo_dir, config_mode, created, updated
 		FROM workspaces
 		ORDER BY name
 	`
@@ -90,6 +92,7 @@ func (s *Storage) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, err
 			&workspace.Id,
 			&workspace.Name,
 			&workspace.LocalRepoDir,
+			&workspace.ConfigMode,
 			&workspace.Created,
 			&workspace.Updated,
 		)
