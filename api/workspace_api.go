@@ -31,6 +31,7 @@ type BranchInfo struct {
 type WorkspaceRequest struct {
 	Name            string                 `json:"name"`
 	LocalRepoDir    string                 `json:"localRepoDir"`
+	ConfigMode      string                 `json:"configMode,omitempty"`
 	LLMConfig       common.LLMConfig       `json:"llmConfig,omitempty"`
 	EmbeddingConfig common.EmbeddingConfig `json:"embeddingConfig,omitempty"`
 }
@@ -41,8 +42,14 @@ type WorkspaceResponse struct {
 	Updated         time.Time              `json:"updated"`
 	Name            string                 `json:"name"`
 	LocalRepoDir    string                 `json:"localRepoDir"`
+	ConfigMode      string                 `json:"configMode"`
 	LLMConfig       common.LLMConfig       `json:"llmConfig,omitempty"`
 	EmbeddingConfig common.EmbeddingConfig `json:"embeddingConfig,omitempty"`
+}
+
+// isValidConfigMode validates that the configMode is one of the allowed values
+func isValidConfigMode(mode string) bool {
+	return mode == "local" || mode == "workspace" || mode == "merge"
 }
 
 func DefineWorkspaceApiRoutes(r *gin.Engine, ctrl *Controller) *gin.RouterGroup {
@@ -120,10 +127,20 @@ func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
 		return
 	}
 
+	// Set default configMode if not provided or validate if provided
+	configMode := workspaceReq.ConfigMode
+	if configMode == "" {
+		configMode = "merge"
+	} else if !isValidConfigMode(configMode) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ConfigMode must be one of: 'local', 'workspace', 'merge'"})
+		return
+	}
+
 	workspace := domain.Workspace{
 		Id:           "ws_" + ksuid.New().String(),
 		Name:         workspaceReq.Name,
 		LocalRepoDir: workspaceReq.LocalRepoDir,
+		ConfigMode:   configMode,
 		Created:      time.Now(),
 		Updated:      time.Now(),
 	}
@@ -155,6 +172,7 @@ func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
 		Updated:         workspace.Updated,
 		Name:            workspace.Name,
 		LocalRepoDir:    workspace.LocalRepoDir,
+		ConfigMode:      workspace.ConfigMode,
 		LLMConfig:       workspaceConfig.LLM,
 		EmbeddingConfig: workspaceConfig.Embedding,
 	}
@@ -219,6 +237,7 @@ func (ctrl *Controller) GetWorkspaceHandler(c *gin.Context) {
 		Updated:      workspace.Updated,
 		Name:         workspace.Name,
 		LocalRepoDir: workspace.LocalRepoDir,
+		ConfigMode:   workspace.ConfigMode,
 	}
 
 	config, err := ctrl.service.GetWorkspaceConfig(c, workspaceId)
@@ -263,6 +282,15 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		return
 	}
 
+	// Validate configMode if provided
+	configMode := workspaceReq.ConfigMode
+	if configMode == "" {
+		configMode = workspace.ConfigMode // Keep existing configMode if not provided
+	} else if !isValidConfigMode(configMode) {
+		ctrl.ErrorHandler(c, http.StatusBadRequest, errors.New("ConfigMode must be one of: 'local', 'workspace', 'merge'"))
+		return
+	}
+
 	workspaceConfig, err := ctrl.service.GetWorkspaceConfig(c, workspaceId)
 	if err != nil {
 		if !errors.Is(err, srv.ErrNotFound) {
@@ -275,6 +303,7 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 	// Update fields directly without preserving unspecified values
 	workspace.Name = workspaceReq.Name
 	workspace.LocalRepoDir = workspaceReq.LocalRepoDir
+	workspace.ConfigMode = configMode
 	workspaceConfig.LLM = workspaceReq.LLMConfig
 	workspaceConfig.Embedding = workspaceReq.EmbeddingConfig
 	workspace.Updated = time.Now()
@@ -295,6 +324,7 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		Updated:         workspace.Updated,
 		Name:            workspace.Name,
 		LocalRepoDir:    workspace.LocalRepoDir,
+		ConfigMode:      workspace.ConfigMode,
 		LLMConfig:       workspaceConfig.LLM,
 		EmbeddingConfig: workspaceConfig.Embedding,
 	}
