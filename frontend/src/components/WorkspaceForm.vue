@@ -9,6 +9,23 @@
       <input id="localRepoDir" v-model="localRepoDir" required>
     </div>
     <div>
+      <h3>Configuration Mode</h3>
+      <div class="config-mode-options">
+        <label class="radio-option">
+          <input type="radio" v-model="configMode" value="local" name="configMode">
+          Defer to local config
+        </label>
+        <label class="radio-option">
+          <input type="radio" v-model="configMode" value="workspace" name="configMode">
+          Use workspace only
+        </label>
+        <label class="radio-option">
+          <input type="radio" v-model="configMode" value="merge" name="configMode">
+          Merge configs
+        </label>
+      </div>
+    </div>
+    <div>
       <h3>LLMs</h3>
       <ModelConfigSelector
         v-model="llmConfig.defaults"
@@ -60,6 +77,7 @@ const emit = defineEmits<{
 
 const name = ref('');
 const localRepoDir = ref('');
+const configMode = ref('merge');
 const getEmptyUseCaseConfigs = () => { return {'': [{ provider: '', model: '' }]}}
 const llmConfig = ref<LLMConfig>({ 
   defaults: props.workspace.llmConfig?.defaults?.length ? [...props.workspace.llmConfig.defaults] : [{ provider: '', model: '' }], 
@@ -109,6 +127,7 @@ onMounted(() => {
   if (props.workspace) {
     name.value = props.workspace.name;
     localRepoDir.value = props.workspace.localRepoDir;
+    configMode.value = props.workspace.configMode || 'merge';
   }
 });
 
@@ -127,6 +146,7 @@ const submitWorkspace = async () => {
   const formData: Omit<Workspace, 'id'> = {
     name: name.value,
     localRepoDir: localRepoDir.value,
+    configMode: configMode.value,
     llmConfig: filterEmptyUseCaseKeys(llmConfig.value),
     embeddingConfig: filterEmptyUseCaseKeys(embeddingConfig.value)
   };
@@ -188,5 +208,22 @@ form {
   color: var(--color-text-inverse);
   border: none;
   border-radius: 0.25rem;
+}
+
+.config-mode-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.radio-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.radio-option input[type="radio"] {
+  margin: 0;
 }
 </style>
