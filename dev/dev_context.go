@@ -275,59 +275,38 @@ func getConfigs(ctx workflow.Context, workspaceId string) (common.LocalPublicCon
 			finalEmbeddingConfig = workspaceConfig.Embedding
 		case "merge":
 			// Merge configurations - workspace config overrides local config if present
-			finalLLMConfig = localConfig.LLM
-			finalEmbeddingConfig = localConfig.Embedding
-
-			if len(workspaceConfig.LLM.Defaults) > 0 {
-				finalLLMConfig.Defaults = workspaceConfig.LLM.Defaults
-			}
-			for key, models := range workspaceConfig.LLM.UseCaseConfigs {
-				finalLLMConfig.UseCaseConfigs[key] = models
-			}
-			if len(workspaceConfig.Embedding.Defaults) > 0 {
-				finalEmbeddingConfig.Defaults = workspaceConfig.Embedding.Defaults
-			}
-			for key, models := range workspaceConfig.Embedding.UseCaseConfigs {
-				finalEmbeddingConfig.UseCaseConfigs[key] = models
-			}
+			finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
 		default:
 			// Default to merge mode for backward compatibility
-			finalLLMConfig = localConfig.LLM
-			finalEmbeddingConfig = localConfig.Embedding
-
-			if len(workspaceConfig.LLM.Defaults) > 0 {
-				finalLLMConfig.Defaults = workspaceConfig.LLM.Defaults
-			}
-			for key, models := range workspaceConfig.LLM.UseCaseConfigs {
-				finalLLMConfig.UseCaseConfigs[key] = models
-			}
-			if len(workspaceConfig.Embedding.Defaults) > 0 {
-				finalEmbeddingConfig.Defaults = workspaceConfig.Embedding.Defaults
-			}
-			for key, models := range workspaceConfig.Embedding.UseCaseConfigs {
-				finalEmbeddingConfig.UseCaseConfigs[key] = models
-			}
+			finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
 		}
 	} else {
 		// Legacy behavior: always merge configurations - workspace config overrides local config if present
-		finalLLMConfig = localConfig.LLM
-		finalEmbeddingConfig = localConfig.Embedding
-
-		if len(workspaceConfig.LLM.Defaults) > 0 {
-			finalLLMConfig.Defaults = workspaceConfig.LLM.Defaults
-		}
-		for key, models := range workspaceConfig.LLM.UseCaseConfigs {
-			finalLLMConfig.UseCaseConfigs[key] = models
-		}
-		if len(workspaceConfig.Embedding.Defaults) > 0 {
-			finalEmbeddingConfig.Defaults = workspaceConfig.Embedding.Defaults
-		}
-		for key, models := range workspaceConfig.Embedding.UseCaseConfigs {
-			finalEmbeddingConfig.UseCaseConfigs[key] = models
-		}
+		finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
 	}
 
 	return localConfig, workspaceConfig, finalLLMConfig, finalEmbeddingConfig, nil
+}
+
+// mergeConfigs merges local and workspace configurations with workspace config overriding local config
+func mergeConfigs(localLLM common.LLMConfig, localEmbedding common.EmbeddingConfig, workspaceLLM common.LLMConfig, workspaceEmbedding common.EmbeddingConfig) (common.LLMConfig, common.EmbeddingConfig) {
+	finalLLMConfig := localLLM
+	finalEmbeddingConfig := localEmbedding
+
+	if len(workspaceLLM.Defaults) > 0 {
+		finalLLMConfig.Defaults = workspaceLLM.Defaults
+	}
+	for key, models := range workspaceLLM.UseCaseConfigs {
+		finalLLMConfig.UseCaseConfigs[key] = models
+	}
+	if len(workspaceEmbedding.Defaults) > 0 {
+		finalEmbeddingConfig.Defaults = workspaceEmbedding.Defaults
+	}
+	for key, models := range workspaceEmbedding.UseCaseConfigs {
+		finalEmbeddingConfig.UseCaseConfigs[key] = models
+	}
+
+	return finalLLMConfig, finalEmbeddingConfig
 }
 
 type DevActionContext struct {
