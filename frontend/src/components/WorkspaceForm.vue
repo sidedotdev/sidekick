@@ -10,22 +10,13 @@
     </div>
     <div>
       <h3>Configuration Mode</h3>
-      <div class="config-mode-options">
-        <label class="radio-option">
-          <input type="radio" v-model="configMode" value="local" name="configMode">
-          Defer to local config
-        </label>
-        <label class="radio-option">
-          <input type="radio" v-model="configMode" value="workspace" name="configMode">
-          Use workspace only
-        </label>
-        <label class="radio-option">
-          <input type="radio" v-model="configMode" value="merge" name="configMode">
-          Merge configs
-        </label>
-      </div>
+      <select v-model="configMode" class="config-mode-select">
+        <option value="local">Local only</option>
+        <option value="workspace">Workspace only</option>
+        <option value="merge">Merge</option>
+      </select>
     </div>
-    <div>
+    <div v-show="configMode !== 'local'">
       <h3>LLMs</h3>
       <ModelConfigSelector
         v-model="llmConfig.defaults"
@@ -47,7 +38,7 @@
         </template>
       </ExpandableSection>
     </div>
-    <div>
+    <div v-show="configMode !== 'local'">
       <h3>Embeddings</h3>
       <!-- Note: Embeddings do not support use case configs yet, even though
       embedding config does, so don't show them in the UI -->
@@ -210,20 +201,14 @@ form {
   border-radius: 0.25rem;
 }
 
-.config-mode-options {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.radio-option {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  cursor: pointer;
-}
-
-.radio-option input[type="radio"] {
-  margin: 0;
+select {
+  --select-background-color: var(--color-background-hover);
+  padding: 0.2rem;
+  font-size: 0.9rem;
+  background-color: var(--select-background-color);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-contrast);
+  border-radius: 0.25rem;
+  margin-right: 0.5rem;
 }
 </style>
