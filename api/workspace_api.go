@@ -282,10 +282,10 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 		return
 	}
 
-	// Validate configMode if provided
+	// Set default configMode if not provided or validate if provided
 	configMode := workspaceReq.ConfigMode
 	if configMode == "" {
-		configMode = workspace.ConfigMode // Keep existing configMode if not provided
+		configMode = "merge"
 	} else if !isValidConfigMode(configMode) {
 		ctrl.ErrorHandler(c, http.StatusBadRequest, errors.New("ConfigMode must be one of: 'local', 'workspace', 'merge'"))
 		return
