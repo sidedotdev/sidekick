@@ -13,6 +13,7 @@ type Workspace struct {
 	Id           string    `json:"id"`
 	Name         string    `json:"name"`         // name of the workspace
 	LocalRepoDir string    `json:"localRepoDir"` // local code repository directory
+	ConfigMode   string    `json:"configMode"`   // configuration mode: 'local', 'workspace', or 'merge'
 	Created      time.Time `json:"created"`      // creation timestamp of the workspace
 	Updated      time.Time `json:"updated"`      // last update timestamp of the workspace
 }

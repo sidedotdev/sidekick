@@ -9,6 +9,14 @@
       <input id="localRepoDir" v-model="localRepoDir" required>
     </div>
     <div>
+      <h3>Configuration Mode</h3>
+      <select v-model="configMode" class="config-mode-select">
+        <option value="local">Local only</option>
+        <option value="workspace">Workspace only</option>
+        <option value="merge">Merge</option>
+      </select>
+    </div>
+    <div v-show="configMode !== 'local'">
       <h3>LLMs</h3>
       <ModelConfigSelector
         v-model="llmConfig.defaults"
@@ -30,7 +38,7 @@
         </template>
       </ExpandableSection>
     </div>
-    <div>
+    <div v-show="configMode !== 'local'">
       <h3>Embeddings</h3>
       <!-- Note: Embeddings do not support use case configs yet, even though
       embedding config does, so don't show them in the UI -->
@@ -60,6 +68,7 @@ const emit = defineEmits<{
 
 const name = ref('');
 const localRepoDir = ref('');
+const configMode = ref('merge');
 const getEmptyUseCaseConfigs = () => { return {'': [{ provider: '', model: '' }]}}
 const llmConfig = ref<LLMConfig>({ 
   defaults: props.workspace.llmConfig?.defaults?.length ? [...props.workspace.llmConfig.defaults] : [{ provider: '', model: '' }], 
@@ -109,6 +118,7 @@ onMounted(() => {
   if (props.workspace) {
     name.value = props.workspace.name;
     localRepoDir.value = props.workspace.localRepoDir;
+    configMode.value = props.workspace.configMode || 'merge';
   }
 });
 
@@ -127,6 +137,7 @@ const submitWorkspace = async () => {
   const formData: Omit<Workspace, 'id'> = {
     name: name.value,
     localRepoDir: localRepoDir.value,
+    configMode: configMode.value,
     llmConfig: filterEmptyUseCaseKeys(llmConfig.value),
     embeddingConfig: filterEmptyUseCaseKeys(embeddingConfig.value)
   };
@@ -188,5 +199,16 @@ form {
   color: var(--color-text-inverse);
   border: none;
   border-radius: 0.25rem;
+}
+
+select {
+  --select-background-color: var(--color-background-hover);
+  padding: 0.2rem;
+  font-size: 0.9rem;
+  background-color: var(--select-background-color);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-contrast);
+  border-radius: 0.25rem;
+  margin-right: 0.5rem;
 }
 </style>
