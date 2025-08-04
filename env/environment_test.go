@@ -19,8 +19,7 @@ import (
 func TestLocalEnvironment(t *testing.T) {
 	ctx := context.Background()
 	params := LocalEnvParams{
-		WorkspaceId: "workspace1",
-		RepoDir:     "./",
+		RepoDir: "./",
 	}
 
 	env, err := NewLocalEnv(ctx, params)
@@ -47,7 +46,6 @@ func TestLocalGitWorktreeEnvironment(t *testing.T) {
 	repoDir, err := filepath.Abs("./")
 	require.NoError(t, err)
 	params := LocalEnvParams{
-		WorkspaceId: "workspace1",
 		RepoDir:     repoDir,
 		StartBranch: utils.Ptr("main"),
 	}
@@ -59,7 +57,7 @@ func TestLocalGitWorktreeEnvironment(t *testing.T) {
 		FlowId:      "flow_" + uniqueId,
 		Name:        "side/" + branchName,
 		Created:     time.Now(),
-		WorkspaceId: params.WorkspaceId,
+		WorkspaceId: "workspace1",
 	}
 
 	env, err := NewLocalGitWorktreeEnv(ctx, params, worktree)
@@ -89,8 +87,7 @@ func TestLocalGitWorktreeEnvironment(t *testing.T) {
 func TestLocalEnvironment_MarshalUnmarshal(t *testing.T) {
 	ctx := context.Background()
 	params := LocalEnvParams{
-		WorkspaceId: "workspace1",
-		RepoDir:     "./",
+		RepoDir: "./",
 	}
 
 	originalEnv, err := NewLocalEnv(ctx, params)
@@ -110,7 +107,6 @@ func TestLocalEnvironment_MarshalUnmarshal(t *testing.T) {
 func TestLocalGitWorktreeEnvironment_MarshalUnmarshal(t *testing.T) {
 	ctx := context.Background()
 	params := LocalEnvParams{
-		WorkspaceId: "workspace1",
 		RepoDir:     "./",
 		StartBranch: utils.Ptr("main"),
 	}
@@ -121,7 +117,7 @@ func TestLocalGitWorktreeEnvironment_MarshalUnmarshal(t *testing.T) {
 		FlowId:      "flow_" + uniqueId,
 		Name:        "side/test-feature-branch-" + uniqueId,
 		Created:     time.Now(),
-		WorkspaceId: params.WorkspaceId,
+		WorkspaceId: "workspace1",
 	}
 
 	originalEnv, err := NewLocalGitWorktreeEnv(ctx, params, worktree)

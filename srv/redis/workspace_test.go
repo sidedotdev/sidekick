@@ -15,7 +15,11 @@ import (
 func TestPersistWorkspace(t *testing.T) {
 	ctx := context.Background()
 	db := NewTestRedisStorage()
-	workspace := domain.Workspace{Id: "123", Name: "TestWorkspace"}
+	workspace := domain.Workspace{
+		Id:         "123",
+		Name:       "TestWorkspace",
+		ConfigMode: "merge",
+	}
 
 	// Test will try to persist the workspace
 	err := db.PersistWorkspace(ctx, workspace)
@@ -39,6 +43,10 @@ func TestPersistWorkspace(t *testing.T) {
 		t.Errorf("expected workspace name %s, got %s", workspace.Name, persistedWorkspace.Name)
 	}
 
+	if persistedWorkspace.ConfigMode != workspace.ConfigMode {
+		t.Errorf("expected workspace configMode %s, got %s", workspace.ConfigMode, persistedWorkspace.ConfigMode)
+	}
+
 	// Verifying storage in new sorted set structure
 	workspaceNameIds, err := db.Client.ZRange(ctx, "global:workspaces", 0, -1).Result()
 	assert.Nil(t, err)
@@ -53,6 +61,9 @@ func TestPersistWorkspace(t *testing.T) {
 	assert.Nil(t, err)
 	if workspaces[0].Id != workspace.Id {
 		t.Errorf("expected workspace id %s, got %s", workspace.Id, workspaces[0].Id)
+	}
+	if workspaces[0].ConfigMode != workspace.ConfigMode {
+		t.Errorf("expected workspace configMode %s, got %s", workspace.ConfigMode, workspaces[0].ConfigMode)
 	}
 }
 

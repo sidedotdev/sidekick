@@ -13,6 +13,7 @@ describe('WorkspaceForm.vue', () => {
         workspace: {
           name: '',
           localRepoDir: '',
+          configMode: 'merge',
           llmConfig: {
             defaults: [],
             useCaseConfigs: {}
@@ -37,6 +38,7 @@ describe('WorkspaceForm.vue', () => {
       body: JSON.stringify({
         name: 'New Workspace',
         localRepoDir: '/local/repo/dir',
+        configMode: 'merge',
         llmConfig: { defaults: [{ provider: 'openai', model: '' }], useCaseConfigs: {} },
         embeddingConfig: { defaults: [{ provider: 'openai', model: '' }], useCaseConfigs: {} }
       }),
@@ -60,6 +62,7 @@ describe('WorkspaceForm.vue', () => {
       id: '456',
       name: 'Existing Workspace',
       localRepoDir: '/existing/repo/dir',
+      configMode: 'merge',
       llmConfig: {
         defaults: [{ provider: 'anthropic', model: '' }],
         useCaseConfigs: {}
@@ -86,6 +89,7 @@ describe('WorkspaceForm.vue', () => {
       body: JSON.stringify({
         name: 'Updated Workspace',
         localRepoDir: '/updated/repo/dir',
+        configMode: 'merge',
         llmConfig: {
           defaults: [{ provider: 'openai', model: '' }],
           useCaseConfigs: {}
@@ -112,6 +116,7 @@ describe('WorkspaceForm.vue', () => {
       id: '789',
       name: 'Existing Workspace',
       localRepoDir: '/existing/repo/dir',
+      configMode: 'merge',
       llmConfig: {
         defaults: [{ provider: 'anthropic', model: '' }],
         useCaseConfigs: {}
