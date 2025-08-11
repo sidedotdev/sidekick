@@ -249,23 +249,64 @@ func getConfigs(ctx workflow.Context, workspaceId string) (common.LocalPublicCon
 		return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get workspace config: %v", err)
 	}
 
-	// Merge configurations - workspace config overrides local config if present
-	finalLLMConfig := localConfig.LLM
-	finalEmbeddingConfig := localConfig.Embedding
+	// Check if workspace config mode feature is enabled
+	enableConfigMode := workflow.GetVersion(ctx, "workspace-config-mode", workflow.DefaultVersion, 1) >= 1
 
-	if len(workspaceConfig.LLM.Defaults) > 0 {
-		finalLLMConfig.Defaults = workspaceConfig.LLM.Defaults
+	// Apply configuration based on configMode (if enabled)
+	var finalLLMConfig common.LLMConfig
+	var finalEmbeddingConfig common.EmbeddingConfig
+
+	if enableConfigMode {
+		// Get workspace details to access configMode
+		var workspace domain.Workspace
+		err = workflow.ExecuteActivity(ctx, wa.GetWorkspace, workspaceId).Get(ctx, &workspace)
+		if err != nil {
+			return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get workspace: %v", err)
+		}
+
+		switch workspace.ConfigMode {
+		case "local":
+			// Use only local config, ignore workspace config
+			finalLLMConfig = localConfig.LLM
+			finalEmbeddingConfig = localConfig.Embedding
+		case "workspace":
+			// Use only workspace config, ignore local config
+			finalLLMConfig = workspaceConfig.LLM
+			finalEmbeddingConfig = workspaceConfig.Embedding
+		case "merge":
+			// Merge configurations - workspace config overrides local config if present
+			finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
+		default:
+			// Default to merge mode for backward compatibility
+			finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
+		}
+	} else {
+		// Legacy behavior: always merge configurations - workspace config overrides local config if present
+		finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
 	}
-	for key, models := range workspaceConfig.LLM.UseCaseConfigs {
+
+	return localConfig, workspaceConfig, finalLLMConfig, finalEmbeddingConfig, nil
+}
+
+// mergeConfigs merges local and workspace configurations with workspace config overriding local config
+func mergeConfigs(localLLM common.LLMConfig, localEmbedding common.EmbeddingConfig, workspaceLLM common.LLMConfig, workspaceEmbedding common.EmbeddingConfig) (common.LLMConfig, common.EmbeddingConfig) {
+	finalLLMConfig := localLLM
+	finalEmbeddingConfig := localEmbedding
+
+	if len(workspaceLLM.Defaults) > 0 {
+		finalLLMConfig.Defaults = workspaceLLM.Defaults
+	}
+	for key, models := range workspaceLLM.UseCaseConfigs {
 		finalLLMConfig.UseCaseConfigs[key] = models
 	}
-	if len(workspaceConfig.Embedding.Defaults) > 0 {
-		finalEmbeddingConfig.Defaults = workspaceConfig.Embedding.Defaults
+	if len(workspaceEmbedding.Defaults) > 0 {
+		finalEmbeddingConfig.Defaults = workspaceEmbedding.Defaults
 	}
-	for key, models := range workspaceConfig.Embedding.UseCaseConfigs {
+	for key, models := range workspaceEmbedding.UseCaseConfigs {
 		finalEmbeddingConfig.UseCaseConfigs[key] = models
 	}
-	return localConfig, workspaceConfig, finalLLMConfig, finalEmbeddingConfig, nil
+
+	return finalLLMConfig, finalEmbeddingConfig
 }
 
 type DevActionContext struct {
