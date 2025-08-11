@@ -144,8 +144,8 @@ func ensureTestsPassAfterDevPlanExecutedSubflow(dCtx DevContext, input PlannedDe
 	maxAttempts := 3
 	attempts := 0
 	for {
-		v := workflow.GetVersion(dCtx, "no-max-unless-disabled-human", workflow.DefaultVersion, 2)
-		if attempts >= maxAttempts && (v < 2 || dCtx.RepoConfig.DisableHumanInTheLoop) {
+		v := workflow.GetVersion(dCtx, "no-max-unless-disabled-human", workflow.DefaultVersion, 1)
+		if attempts >= maxAttempts && (v < 1 || dCtx.RepoConfig.DisableHumanInTheLoop) {
 			return fmt.Errorf("failed to ensure tests pass after dev plan executed")
 		}
 		attempts++

@@ -73,7 +73,7 @@ editLoop:
 		}
 
 		v := workflow.GetVersion(dCtx, "no-max-unless-disabled-human", workflow.DefaultVersion, 1)
-		if attemptCount >= maxAttempts && (v == 0 || dCtx.RepoConfig.DisableHumanInTheLoop) {
+		if attemptCount >= maxAttempts && (v < 1 || dCtx.RepoConfig.DisableHumanInTheLoop) {
 			return ErrMaxAttemptsReached
 		}
 
