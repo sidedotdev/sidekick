@@ -239,7 +239,7 @@ func buildCreateTaskRequest(ctx context.Context, cmd *cli.Command, currentDir st
 	}
 
 	flowType := cmd.String("flow")
-	if cmd.Bool("P") {
+	if cmd.Bool("plan") {
 		flowType = "planned_dev"
 	}
 
