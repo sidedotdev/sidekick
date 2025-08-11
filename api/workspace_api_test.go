@@ -43,6 +43,7 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 			workspaceRequest: WorkspaceRequest{
 				Name:         "Updated Workspace",
 				LocalRepoDir: "/new/path/to/repo",
+				ConfigMode:   "workspace",
 				LLMConfig: common.LLMConfig{
 					Defaults: []common.ModelConfig{{Provider: "anthropic", Model: "claude-v1"}},
 				},
@@ -55,6 +56,7 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 				Id:           "existing_workspace_id",
 				Name:         "Updated Workspace",
 				LocalRepoDir: "/new/path/to/repo",
+				ConfigMode:   "workspace",
 			},
 			expectedConfig: &domain.WorkspaceConfig{
 				LLM: common.LLMConfig{
@@ -71,6 +73,7 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 			workspaceRequest: WorkspaceRequest{
 				Name:         "Updated Name",
 				LocalRepoDir: "/updated/path",
+				ConfigMode:   "local",
 				LLMConfig: common.LLMConfig{
 					Defaults: []common.ModelConfig{{Provider: "anthropic", Model: "claude-v1"}},
 				},
@@ -80,6 +83,7 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 				Id:           "existing_workspace_id",
 				Name:         "Updated Name",
 				LocalRepoDir: "/updated/path",
+				ConfigMode:   "local",
 			},
 			expectedConfig: &domain.WorkspaceConfig{
 				LLM: common.LLMConfig{
@@ -95,12 +99,14 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 			workspaceRequest: WorkspaceRequest{
 				Name:         "Another Update",
 				LocalRepoDir: "/another/path",
+				ConfigMode:   "merge",
 			},
 			expectedStatus: http.StatusOK,
 			expectedWorkspace: &domain.Workspace{
 				Id:           "existing_workspace_id",
 				Name:         "Another Update",
 				LocalRepoDir: "/another/path",
+				ConfigMode:   "merge",
 			},
 			expectedConfig: &domain.WorkspaceConfig{
 				// Both configs should be nil/empty since neither was provided
@@ -151,6 +157,47 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 				LLM:       common.LLMConfig{},
 				Embedding: common.EmbeddingConfig{},
 			},
+		},
+		{
+			name:        "Update workspace to workspace config mode",
+			workspaceId: "existing_workspace_id",
+			workspaceRequest: WorkspaceRequest{
+				Name:         "Workspace Only Mode",
+				LocalRepoDir: "/workspace/only/path",
+				ConfigMode:   "workspace",
+				LLMConfig: common.LLMConfig{
+					Defaults: []common.ModelConfig{{Provider: "anthropic", Model: "claude-v1"}},
+				},
+				EmbeddingConfig: common.EmbeddingConfig{
+					Defaults: []common.ModelConfig{{Provider: "cohere", Model: "embed-english-v2.0"}},
+				},
+			},
+			expectedStatus: http.StatusOK,
+			expectedWorkspace: &domain.Workspace{
+				Id:           "existing_workspace_id",
+				Name:         "Workspace Only Mode",
+				LocalRepoDir: "/workspace/only/path",
+				ConfigMode:   "workspace",
+			},
+			expectedConfig: &domain.WorkspaceConfig{
+				LLM: common.LLMConfig{
+					Defaults: []common.ModelConfig{{Provider: "anthropic", Model: "claude-v1"}},
+				},
+				Embedding: common.EmbeddingConfig{
+					Defaults: []common.ModelConfig{{Provider: "cohere", Model: "embed-english-v2.0"}},
+				},
+			},
+		},
+		{
+			name:        "Update workspace with invalid config mode",
+			workspaceId: "existing_workspace_id",
+			workspaceRequest: WorkspaceRequest{
+				Name:         "Invalid Config",
+				LocalRepoDir: "/invalid/path",
+				ConfigMode:   "invalid_mode",
+			},
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "ConfigMode must be one of: 'local', 'workspace', 'merge'",
 		},
 		{
 			name:             "Workspace not found",
@@ -254,6 +301,7 @@ func TestCreateWorkspaceHandler(t *testing.T) {
 			workspaceRequest: WorkspaceRequest{
 				Name:         "New Workspace",
 				LocalRepoDir: "/path/to/new/repo",
+				ConfigMode:   "merge",
 				LLMConfig: common.LLMConfig{
 					Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-4"}},
 				},
@@ -265,6 +313,7 @@ func TestCreateWorkspaceHandler(t *testing.T) {
 			expectedResponse: &WorkspaceResponse{
 				Name:         "New Workspace",
 				LocalRepoDir: "/path/to/new/repo",
+				ConfigMode:   "merge",
 				LLMConfig: common.LLMConfig{
 					Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-4"}},
 				},
@@ -274,9 +323,88 @@ func TestCreateWorkspaceHandler(t *testing.T) {
 			},
 		},
 		{
+			name: "Valid workspace creation with workspace config mode",
+			workspaceRequest: WorkspaceRequest{
+				Name:         "Workspace Config Mode",
+				LocalRepoDir: "/path/to/workspace/repo",
+				ConfigMode:   "workspace",
+				LLMConfig: common.LLMConfig{
+					Defaults: []common.ModelConfig{{Provider: "anthropic", Model: "claude-v1"}},
+				},
+				EmbeddingConfig: common.EmbeddingConfig{
+					Defaults: []common.ModelConfig{{Provider: "cohere", Model: "embed-english-v2.0"}},
+				},
+			},
+			expectedStatus: http.StatusOK,
+			expectedResponse: &WorkspaceResponse{
+				Name:         "Workspace Config Mode",
+				LocalRepoDir: "/path/to/workspace/repo",
+				ConfigMode:   "workspace",
+				LLMConfig: common.LLMConfig{
+					Defaults: []common.ModelConfig{{Provider: "anthropic", Model: "claude-v1"}},
+				},
+				EmbeddingConfig: common.EmbeddingConfig{
+					Defaults: []common.ModelConfig{{Provider: "cohere", Model: "embed-english-v2.0"}},
+				},
+			},
+		},
+		{
+			name: "Valid workspace creation with local config mode",
+			workspaceRequest: WorkspaceRequest{
+				Name:         "Local Config Mode",
+				LocalRepoDir: "/path/to/local/repo",
+				ConfigMode:   "local",
+				LLMConfig: common.LLMConfig{
+					Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-3.5-turbo"}},
+				},
+			},
+			expectedStatus: http.StatusOK,
+			expectedResponse: &WorkspaceResponse{
+				Name:         "Local Config Mode",
+				LocalRepoDir: "/path/to/local/repo",
+				ConfigMode:   "local",
+				LLMConfig: common.LLMConfig{
+					Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-3.5-turbo"}},
+				},
+				EmbeddingConfig: common.EmbeddingConfig{},
+			},
+		},
+		{
+			name: "Valid workspace creation with default config mode",
+			workspaceRequest: WorkspaceRequest{
+				Name:         "Default Config Mode",
+				LocalRepoDir: "/path/to/default/repo",
+				// ConfigMode not specified, should default to "merge"
+				LLMConfig: common.LLMConfig{
+					Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-4"}},
+				},
+			},
+			expectedStatus: http.StatusOK,
+			expectedResponse: &WorkspaceResponse{
+				Name:         "Default Config Mode",
+				LocalRepoDir: "/path/to/default/repo",
+				ConfigMode:   "merge",
+				LLMConfig: common.LLMConfig{
+					Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-4"}},
+				},
+				EmbeddingConfig: common.EmbeddingConfig{},
+			},
+		},
+		{
+			name: "Invalid workspace creation - invalid config mode",
+			workspaceRequest: WorkspaceRequest{
+				Name:         "Invalid Config Mode",
+				LocalRepoDir: "/path/to/invalid/repo",
+				ConfigMode:   "invalid",
+			},
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "ConfigMode must be one of: 'local', 'workspace', 'merge'",
+		},
+		{
 			name: "Invalid workspace creation - missing name",
 			workspaceRequest: WorkspaceRequest{
 				LocalRepoDir: "/path/to/new/repo",
+				ConfigMode:   "merge",
 			},
 			expectedStatus: http.StatusBadRequest,
 			expectedError:  "Name is required",
@@ -306,6 +434,7 @@ func TestCreateWorkspaceHandler(t *testing.T) {
 				assert.NotEmpty(t, responseBody.Workspace.Id)
 				assert.Equal(t, tc.expectedResponse.Name, responseBody.Workspace.Name)
 				assert.Equal(t, tc.expectedResponse.LocalRepoDir, responseBody.Workspace.LocalRepoDir)
+				assert.Equal(t, tc.expectedResponse.ConfigMode, responseBody.Workspace.ConfigMode)
 				assert.Equal(t, tc.expectedResponse.LLMConfig, responseBody.Workspace.LLMConfig)
 				assert.Equal(t, tc.expectedResponse.EmbeddingConfig, responseBody.Workspace.EmbeddingConfig)
 				assert.NotZero(t, responseBody.Workspace.Created)

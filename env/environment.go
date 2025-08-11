@@ -49,7 +49,6 @@ type LocalGitWorktreeEnv struct {
 }
 
 type LocalEnvParams struct {
-	WorkspaceId string
 	RepoDir     string
 	StartBranch *string
 }
