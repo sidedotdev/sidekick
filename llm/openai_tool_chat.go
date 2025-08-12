@@ -7,13 +7,14 @@ import (
 	"io"
 	"sidekick/utils"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	openai "github.com/sashabaranov/go-openai"
+	"go.temporal.io/sdk/activity"
 )
 
-const OpenaiDefaultModel = "gpt-4.1-2025-04-14"
-const OpenaiDefaultLongContextModel = "gpt-4.1-2025-04-14"
+const OpenaiDefaultModel = "gpt-5-2025-08-07"
 const OpenaiApiKeySecretName = "OPENAI_API_KEY"
 
 type OpenaiToolChat struct {
@@ -23,6 +24,30 @@ type OpenaiToolChat struct {
 
 // implements ToolChat interface
 func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta, progressChan chan<- ProgressInfo) (*ChatMessageResponse, error) {
+	// additional heartbeat until ChatStream ends: we can't rely on the delta
+	// heartbeat because thinking tokens don't stream in the chat completion API,
+	// resulting in a very long time between deltas and thus heartbeat timeouts.
+	heartbeatCtx, cancelHeartbeat := context.WithCancel(context.Background())
+	defer cancelHeartbeat()
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				{
+					if activity.IsActivity(ctx) {
+						activity.RecordHeartbeat(ctx, map[string]bool{"fake": true})
+					}
+					continue
+				}
+			}
+		}
+	}()
+
 	providerNameNormalized := options.Params.ModelConfig.NormalizedProviderName()
 	token, err := options.Secrets.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
 	if err != nil {
@@ -35,7 +60,11 @@ func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 	}
 	client := openai.NewClientWithConfig(config)
 
-	var temperature float32 = defaultTemperature
+	// some openai models don't support any temperature other than 1. to get
+	// whatever the model default is, we set it to 0 here, which means it's
+	// omitted in the json request sent to openai when using
+	// "github.com/sashabaranov/go-openai"
+	var temperature float32 = 0.0
 	if options.Params.Temperature != nil {
 		temperature = *options.Params.Temperature
 	}
