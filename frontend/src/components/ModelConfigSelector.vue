@@ -27,6 +27,15 @@
           placeholder="Default Model"
           :required="isCustomProvider(config.provider)"
         >
+        <template v-if="type === 'llm'">
+          <select :id="type + '-reasoning-effort' + index" v-model="config.reasoningEffort">
+            <option value="">Unset</option>
+            <option value="minimal">minimal</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+          </select>
+        </template>
         <button 
           type="button" 
           @click="removeConfig(index)" 
@@ -74,7 +83,8 @@ const isCustomProvider = (provider: string): boolean => {
 }
 
 const addConfig = () => {
-  const newConfigs = [...props.modelValue, { provider: '', model: '' }];
+  const newConfig: ModelConfig = { provider: '', model: '', reasoningEffort: '' };
+  const newConfigs = [...props.modelValue, newConfig];
   emit('update:modelValue', newConfigs);
 };
 
