@@ -116,7 +116,7 @@ const (
 )
 
 var SmallModels = map[ToolChatProviderType]string{
-	OpenaiToolChatProviderType: "gpt-4.1-mini-2025-04-14",
+	OpenaiToolChatProviderType: "gpt-5-mini-2025-08-07",
 
 	// NOTE: 3.5 Haiku is much more expensive than 3 Haiku, but performs better
 	// too and is what claude presents as their "small" model

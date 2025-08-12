@@ -32,7 +32,7 @@ require (
 	github.com/nats-io/nats.go v1.39.1
 	github.com/redis/go-redis/v9 v9.5.1
 	github.com/rs/zerolog v1.31.0
-	github.com/sashabaranov/go-openai v1.29.1
+	github.com/sashabaranov/go-openai v1.41.0
 	github.com/segmentio/ksuid v1.0.4
 	github.com/smacker/go-tree-sitter v0.0.0-20240423010953-8ba036550382
 	github.com/sourcegraph/jsonrpc2 v0.2.0
