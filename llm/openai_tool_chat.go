@@ -100,7 +100,7 @@ func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 			IncludeUsage: true,
 		},
 	}
-	if options.Params.ModelConfig.ReasoningEffort != "" {
+	if options.Params.ReasoningEffort != "" {
 		req.ReasoningEffort = options.Params.ModelConfig.ReasoningEffort
 	}
 	if len(req.Tools) == 0 {
