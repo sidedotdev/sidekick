@@ -245,7 +245,7 @@ func GetDirectorySignatureOutlinesString(baseDirectory string) (string, error) {
 func GetFileOutlinesString(outlines []FileOutline) (string, error) {
 	var sb strings.Builder
 	charCount := 0
-	charThreshold := 4000
+	charThreshold := 2000
 	for _, outline := range outlines {
 		indentLevel := countDirectories(outline.Path) - 1
 		indent := strings.Repeat("\t", indentLevel)
