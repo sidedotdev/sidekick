@@ -11,6 +11,7 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
+	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/utils"
@@ -184,7 +185,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 	// Version gate is required for Temporal determinism since this introduces a new activity that older histories never scheduled.
 	// Replays must follow the old path while new runs include the summary and fail fast on retrieval errors.
 	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 1)
-	if version >= 1 {
+	if version >= 1 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
 		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
 		if err != nil {
 			return "", fmt.Errorf("failed to get repo summary: %v", err)

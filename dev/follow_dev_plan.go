@@ -151,7 +151,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		return result, fmt.Errorf("failed to prepare code context: %v", err)
 	}
 
-	if v := workflow.GetVersion(dCtx, "initial-devstep-repo-summary", workflow.DefaultVersion, 1); v == 1 {
+	if v := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 1); v >= 1 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
 		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
 		if err != nil {
 			return result, fmt.Errorf("failed to retrieve repo summary: %v", err)

@@ -16,3 +16,9 @@ disable-context-code-visibility-check:
     c: false
   defaultRule:
     variation: t1
+initial-repo-summary:
+  variations:
+    t1: true
+    c: false
+  defaultRule:
+    variation: t1
