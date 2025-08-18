@@ -634,13 +634,21 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContai
 
 			// TODO optimize: don't re-parse the file for each symbol
 			sourceBlocks, err := tree_sitter.GetSymbolDefinitions(absolutePath, symbol, numContextLines)
-			if err != nil && strings.Contains(symbol, ".") {
-				// If the retrieval failed and the symbol name contains a ".",
-				// retry with only the part after the "."
-				// TODO make this language-specific and try several different alternative forms
-				lastDotIndex := strings.LastIndex(symbol, ".")
-				if lastDotIndex != -1 {
-					sourceBlocks, err = tree_sitter.GetSymbolDefinitions(absolutePath, symbol[lastDotIndex+1:], numContextLines)
+			if err != nil {
+				// Attempt to normalize snippet-like inputs to a canonical symbol name and retry.
+				langName := utils.InferLanguageNameFromFilePath(absolutePath)
+				if langName != "" {
+					if normalized, nErr := tree_sitter.NormalizeSymbolFromSnippet(langName, symbol); nErr == nil && normalized != "" && normalized != symbol {
+						sourceBlocks, err = tree_sitter.GetSymbolDefinitions(absolutePath, normalized, numContextLines)
+					}
+				}
+				// If still failing and the original contains a ".", retry with only the part after the last dot.
+				if err != nil && strings.Contains(symbol, ".") {
+					// TODO make this language-specific and try several different alternative forms
+					lastDotIndex := strings.LastIndex(symbol, ".")
+					if lastDotIndex != -1 {
+						sourceBlocks, err = tree_sitter.GetSymbolDefinitions(absolutePath, symbol[lastDotIndex+1:], numContextLines)
+					}
 				}
 			}
 
