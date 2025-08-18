@@ -82,6 +82,14 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	actionJSON, _ := json.Marshal(action)
 	conn.WriteMessage(websocket.TextMessage, actionJSON)
+
+	// Keep connection open to prevent unexpected EOF in tests, which can
+	// cause a race condition with other expected errors.
+	for {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			break
+		}
+	}
 }
 
 // Mock successful initial testTask status without flows
