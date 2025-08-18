@@ -28,11 +28,6 @@ func setupTestGitRepo(t *testing.T) string {
 	runGitCommandInTestRepo(t, repoDir, "config", "user.name", "Test User")
 	runGitCommandInTestRepo(t, repoDir, "config", "user.email", "test@example.com")
 
-	// Ensure non-interactive commits and tags in CI by disabling GPG signing locally
-	runGitCommandInTestRepo(t, repoDir, "config", "commit.gpgsign", "false")
-	runGitCommandInTestRepo(t, repoDir, "config", "tag.gpgsign", "false")
-	runGitCommandInTestRepo(t, repoDir, "config", "gpg.sign", "false")
-
 	return repoDir
 }
 
