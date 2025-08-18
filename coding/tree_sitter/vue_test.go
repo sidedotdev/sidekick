@@ -402,3 +402,34 @@ func TestGetFileHeadersStringVue(t *testing.T) {
 		})
 	}
 }
+func TestNormalizeSymbolFromSnippet_Vue(t *testing.T) {
+	tests := []struct {
+		name     string
+		snippet  string
+		expected string
+	}{
+		{
+			name:     "Template block",
+			snippet:  "<template><div>Hello</div></template>",
+			expected: "<template>",
+		},
+		{
+			name:     "Script block",
+			snippet:  "<script setup lang=\"ts\"></script>",
+			expected: "<script>",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := NormalizeSymbolFromSnippet("vue", tc.snippet)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.expected {
+				t.Fatalf("expected %q, got %q", tc.expected, got)
+			}
+		})
+	}
+}

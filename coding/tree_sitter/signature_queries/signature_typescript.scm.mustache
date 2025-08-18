@@ -1,3 +1,20 @@
+; get symbol name from signature
+(ERROR
+	(identifier) @class.name
+)
+(function_signature
+  name: (identifier) @function.name
+  type_parameters: (_)? @function.type_parameters
+  parameters: (formal_parameters) @function.parameters
+  return_type: (_)? @function.return_type
+) @function.declaration
+(function_expression
+  name: (identifier) @function.name
+  type_parameters: (_)? @function.type_parameters
+  parameters: (formal_parameters) @function.parameters
+  return_type: (_)? @function.return_type
+) @function.declaration
+
 (function_declaration
   name: (identifier) @function.name
   type_parameters: (_)? @function.type_parameters

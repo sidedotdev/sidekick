@@ -417,3 +417,34 @@ func TestGetFileHeadersStringTsx(t *testing.T) {
 		})
 	}
 }
+func TestNormalizeSymbolFromSnippet_TSX(t *testing.T) {
+	tests := []struct {
+		name     string
+		snippet  string
+		expected string
+	}{
+		{
+			name:     "Top-level function",
+			snippet:  "function comp(): JSX.Element { return <div/> }",
+			expected: "comp",
+		},
+		{
+			name:     "Class with method returns class symbol as first",
+			snippet:  "class SomeComponent { render(): JSX.Element { return <span/> } }",
+			expected: "SomeComponent",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := NormalizeSymbolFromSnippet("tsx", tc.snippet)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.expected {
+				t.Fatalf("expected %q, got %q", tc.expected, got)
+			}
+		})
+	}
+}

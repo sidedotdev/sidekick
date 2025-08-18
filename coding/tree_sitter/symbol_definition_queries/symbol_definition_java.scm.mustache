@@ -1,3 +1,15 @@
+; Broken syntax cases
+(ERROR
+  (identifier) @name
+  (#eq? @name "{{SymbolName}}")
+) @definition
+(program
+	(method_declaration
+    (identifier) @name
+    (#eq? @name "{{SymbolName}}")
+  ) @definition
+)
+
 ; Class declarations (including nested)
 (
   [

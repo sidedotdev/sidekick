@@ -112,8 +112,15 @@ diff and determine if the step has been completed correctly and its completion
 criteria fulfilled. First output your analysis of the diff against all aspects
 of the criteria. In addition, analyze whether the code changes look correct and
 maintain previous functionality that should not have been altered as part of the
-change. Review the code for any issues. If there are issues, we consider that an
-unsaid criterium for correctness that has not been fulfilled.
+change (taking into account the latest test results).
+
+Review the latest code changes for any issues. If there are major issues, we
+consider that an unsaid criterium for correctness that has not been fulfilled.
+If you're not sure if it's an issue or its something you cannot check for (eg
+whether an import already existed), assume it is correct unless test results
+tell you otherwise. If there are code changes referenced that we got user
+feedback on, then only consider the latest user feedback and the latest code,
+not the earlier code/requirements.
 
 Finally, output whether the step is complete and criteria are fulfilled or not.
 The "is_fulfilled" field should be set to true if and only if the step is
@@ -139,7 +146,7 @@ the current step and completion criteria:
 %s
 # END Completion Criteria
 
-And here is the git diff:
+And here is the latest git diff:
 
 %s
 
@@ -181,21 +188,37 @@ Thinking step-by-step as a senior software engineer, analyze the following git
 diff and determine if the requirements are fulfilled. First output your
 analysis of the diff against all aspects of the requirements. In addition,
 analyze whether the code changes look correct and maintain previous
-functionality that should not have been altered as part of the change. Review
-the code for any issues. If there are issues, we consider that an unsaid
-requirement for correctness that has not been fulfilled.
+functionality that should not have been altered as part of the change.
 
-Finally, output whether the requirements are fulfilled or not.
+Review the latest code changes for any issues. If there are major issues, we
+consider that an unsaid criterium for correctness that has not been fulfilled.
+If you're not sure if it's an issue or its something you cannot check for (eg
+whether an import already existed), assume it is correct if automated checks
+(i.e. tests) have passed.  If there are code changes referenced that we got user
+feedback on, then only consider the latest user feedback and the latest code,
+not the earlier code/requirements.
 
-Here is a reminder of the original requirements:
+Finally, output whether the relevant requirements are fulfilled or not.
+
+Here are all the requirements:
 
 # START REQUIREMENTS
 %s
 # END REQUIREMENTS
 
-And here is the git diff:
+And here is the latest git diff:
 
-%s`, promptInfo.Requirements, promptInfo.Work)
+%s
+
+If the automated tests clearly indicate a failure related to the latest changes
+made, then don't analyze other aspects after determining that the test is
+related to those changes: just indicate that the tests should be fixed. When
+they are fixed, we'll come back to analyze whether other criteria is fulfilled
+fully later.
+
+Anyways, here are the automated check results:
+
+%s`, promptInfo.Requirements, promptInfo.Work, promptInfo.AutoChecks)
 	}
 
 	newMessage := llm.ChatMessage{

@@ -85,12 +85,16 @@ type BulkReadFileParams struct {
 
 var bulkReadFileTool = llm.Tool{
 	Name:        "read_file_lines",
-	Description: "Read files from the repo given specific line numbers and a window for additional context. Most useful for debugging errors that mention a line number, or for retrieving context that you can't see another way.",
+	Description: "Read files from the repo given specific line numbers and a window for additional context. Most useful for debugging errors that mention a line number, or for retrieving context that you can't see another way. Do not use for reading code, retrieve_code_context should be favored for that.",
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&BulkReadFileParams{}),
 }
 
 // TODO add tests for bulk read file, with mock read file activity
 func BulkReadFile(dCtx DevContext, bulkReadFileParams BulkReadFileParams) (string, error) {
+	if len(bulkReadFileParams.FileLines) == 0 {
+		return "", llm.ErrToolCallUnmarshal
+	}
+
 	envContainer := dCtx.EnvContainer
 	var results []string
 

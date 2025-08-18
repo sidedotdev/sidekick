@@ -11,6 +11,7 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
+	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/utils"
@@ -48,7 +49,7 @@ func formatRequirementsWithReview(originalReqs string, reviewMsgs []string, work
 	b.WriteString("#END Original Requirements\n\n")
 
 	if len(reviewMsgs) > 0 {
-		b.WriteString("\n\nHere is some historical review feedback that was incorporated into the work done:\n")
+		b.WriteString("\n\nHere is some historical user feedback that was incorporated into the work done:\n")
 		for i, msg := range reviewMsgs {
 			b.WriteString(fmt.Sprintf("%d. %s\n", i+1, msg))
 		}
@@ -59,7 +60,7 @@ func formatRequirementsWithReview(originalReqs string, reviewMsgs []string, work
 		b.WriteString(workDone)
 	}
 
-	b.WriteString("\n\nGiven the above context, please address the following latest review feedback:\n\n")
+	b.WriteString("\n\nGiven the above context, please address the following latest user feedback:\n\n")
 	b.WriteString(latestReview)
 
 	return b.String()
@@ -179,6 +180,19 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 
 	attemptCount := 0
 	var promptInfo PromptInfo
+
+	// Retrieve a concise repository summary and prepend it to the code context for the initial prompt.
+	// Version gate is required for Temporal determinism since this introduces a new activity that older histories never scheduled.
+	// Replays must follow the old path while new runs include the summary and fail fast on retrieval errors.
+	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 1)
+	if version >= 1 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
+		if err != nil {
+			return "", fmt.Errorf("failed to get repo summary: %v", err)
+		}
+		codeContext = repoSummary + "\n\n" + codeContext
+	}
+
 	initialCodeInfo := InitialCodeInfo{CodeContext: codeContext, Requirements: requirements}
 	promptInfo = initialCodeInfo
 	var fulfillment CriteriaFulfillment
@@ -237,6 +251,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 			attemptCount++
 			continue
 		}
+		testOutput := testResult.Output
 
 		// Run integration tests if regular tests passed and integration tests are configured
 		if len(dCtx.RepoConfig.IntegrationTestCommands) > 0 {
@@ -249,11 +264,13 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 				attemptCount++
 				continue
 			}
+			testOutput += "\n\n" + integrationTestResult.Output
 		}
 
 		// Step 4: check diff and confirm if requirements have been met
 		fulfillment, err = CheckWorkMeetsCriteria(dCtx, CheckWorkInfo{
 			Requirements: requirements,
+			AutoChecks:   testOutput,
 		})
 		if err != nil {
 			return "", fmt.Errorf("failed to check if requirements are fulfilled: %v", err)

@@ -24,4 +24,12 @@ You never, I repeat, NEVER make assumptions when you can get help or input first
 instead of making an incorrect assumption.
 {{/getHelpOrInputFunctionName}}
 
+IMPORTANT: Avoid searching or retrieving code context unless absolutely necessary.
+Also important: only use read_file_lines as a last resort or when looking up a
+specific line from an error message. Don't do too many of any of these tool
+calls without outputting some edit blocks. Instead, you must start editing ASAP
+even if you don't yet know everything, as long as you have read enough code for
+the first edit. If you've been told in detail what to edit and how, just do it
+without looking up everything else.
+
 {{{editCodeHints}}}

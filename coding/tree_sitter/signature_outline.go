@@ -245,7 +245,7 @@ func GetDirectorySignatureOutlinesString(baseDirectory string) (string, error) {
 func GetFileOutlinesString(outlines []FileOutline) (string, error) {
 	var sb strings.Builder
 	charCount := 0
-	charThreshold := 4000
+	charThreshold := 2000
 	for _, outline := range outlines {
 		indentLevel := countDirectories(outline.Path) - 1
 		indent := strings.Repeat("\t", indentLevel)
@@ -256,15 +256,13 @@ func GetFileOutlinesString(outlines []FileOutline) (string, error) {
 			parentDirs := []string{}
 			remainder := filepath.Dir(outline.Path)
 			for remainder != "." {
-				indentLevelInner := countDirectories(remainder) - 1
-				indentInner := strings.Repeat("\t", indentLevelInner)
-				dir := fmt.Sprintf("%s%s/\n", indentInner, filepath.Base(remainder))
-				parentDirs = append(parentDirs, dir)
+				parentDirs = append(parentDirs, filepath.Base(remainder))
 				remainder = filepath.Dir(remainder)
 			}
 			if len(parentDirs) > 0 {
 				slices.Reverse(parentDirs)
-				sb.WriteString(strings.Join(parentDirs, "\n"))
+				sb.WriteString(filepath.Join(parentDirs...))
+				sb.WriteRune(filepath.Separator)
 				sb.WriteString("\n")
 			}
 			charCount = 0

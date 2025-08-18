@@ -1,6 +1,7 @@
 export interface ModelConfig {
   provider: string
   model: string
+  reasoningEffort?: '' | 'minimal' | 'low' | 'medium' | 'high'
 }
 
 export interface LLMConfig {

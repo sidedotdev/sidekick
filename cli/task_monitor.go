@@ -81,6 +81,9 @@ var TaskPollInterval = 1 * time.Second
 func (m *TaskMonitor) monitorTask(ctx context.Context) {
 	defer close(m.statusChan)
 	defer close(m.progressChan)
+	// Defers are LIFO, so Stop is called before closing channels, ensuring
+	// the polling goroutine is stopped before channels are closed.
+	defer m.Stop()
 
 	// Initial task status check
 	task, err := m.client.GetTask(m.workspaceID, m.taskID)

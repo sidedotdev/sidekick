@@ -1270,3 +1270,34 @@ enum class Visibility
 		})
 	}
 }
+func TestNormalizeSymbolFromSnippet_Kotlin(t *testing.T) {
+	tests := []struct {
+		name     string
+		snippet  string
+		expected string
+	}{
+		{
+			name:     "Method or Top-level function signature",
+			snippet:  "fun top(a: String): String",
+			expected: "top",
+		},
+		{
+			name:     "Class signature",
+			snippet:  "class K",
+			expected: "K",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := NormalizeSymbolFromSnippet("kotlin", tc.snippet)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.expected {
+				t.Fatalf("expected %q, got %q", tc.expected, got)
+			}
+		})
+	}
+}

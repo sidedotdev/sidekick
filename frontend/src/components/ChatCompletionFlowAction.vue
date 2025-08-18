@@ -1,16 +1,20 @@
 <template>
   <div v-if="expand">
 
+    <div class="model-summary">
+      <p class="model-provider" v-if="effectiveProvider">Provider: {{ effectiveProvider }}</p>
+      <p class="model-name" v-if="effectiveModel">
+        Model: {{ effectiveModel }}
+        <span class="model-reasoning-effort" v-if="flowAction.actionParams.reasoningEffort">
+          ({{ flowAction.actionParams.reasoningEffort }} reasoning)
+        </span>
+      </p>
+    </div>
+
     Message History: <a @click="showParams = !showParams" class="show-params">{{ showParams ? 'Hide' : 'Show' }}</a>
     <div class="action-params" v-if="showParams">
-      <p class="model-name" v-if="flowAction.actionParams.model && flowAction.actionParams.model != completion?.model">
-        Requested Model: {{ flowAction.actionParams.model }}
-      </p>
-      <p class="model-vendor" v-if="flowAction.actionParams.vendor && flowAction.actionParams.vendor != completion?.vendor">
-        Requested Vendor: {{ flowAction.actionParams.vendor }}
-      </p>
-      <p class="model-provider" v-if="flowAction.actionParams.provider && flowAction.actionParams.provider != completion?.provider">
-        Requested Provider: {{ flowAction.actionParams.provider }}
+      <p class="model-reasoning-effort" v-if="flowAction.actionParams.reasoningEffort">
+        Requested Reasoning Effort: {{ flowAction.actionParams.reasoningEffort }}
       </p>
       <div v-for="(message, index) in messages" :key="index" class="message">
         <p class="message-role"><span v-text="message.role"></span>:</p>
@@ -45,10 +49,6 @@
     </div>
 
     <div class="action-result" v-if="flowAction.actionResult != '' || (flowAction.actionStatus != 'pending' && flowAction.actionStatus != 'started')">
-      <p class="model-name" v-if="completion?.model">Model: {{ completion.model }}</p>
-      <p class="model-vendor" v-if="completion?.vendor">Vendor: {{ completion.vendor }}</p>
-      <p class="model-provider" v-if="completion?.provider">Provider: {{ completion.provider }}</p>
-      <br v-if="completion">
 
       <div v-if="completionParseFailure" class="error-message">
         <div v-if="flowAction.actionStatus != 'pending' && flowAction.actionStatus != 'started'">
@@ -117,6 +117,9 @@ const parsedActionResult = ref((() => {
 })());
 
 const completion = computed<ChatCompletionChoice>(() => parsedActionResult.value || {});
+
+const effectiveModel = computed(() => props.flowAction.actionParams.model || completion.value?.model || '')
+const effectiveProvider = computed(() => props.flowAction.actionParams.provider || completion.value?.provider || '')
 
 // Watcher for flowAction changes
 watch(() => props.flowAction, (newVal) => {
