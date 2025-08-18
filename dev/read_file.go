@@ -91,6 +91,10 @@ var bulkReadFileTool = llm.Tool{
 
 // TODO add tests for bulk read file, with mock read file activity
 func BulkReadFile(dCtx DevContext, bulkReadFileParams BulkReadFileParams) (string, error) {
+	if len(bulkReadFileParams.FileLines) == 0 {
+		return "", llm.ErrToolCallUnmarshal
+	}
+
 	envContainer := dCtx.EnvContainer
 	var results []string
 

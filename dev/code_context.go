@@ -389,6 +389,10 @@ func extractCodeContext(ctx workflow.Context, req coding.DirectorySymDefRequest)
 }
 
 func RetrieveCodeContext(dCtx DevContext, requiredCodeContext RequiredCodeContext, characterLengthThreshold int) (string, error) {
+	if len(requiredCodeContext.CodeContextRequests) == 0 {
+		return "", llm.ErrToolCallUnmarshal
+	}
+
 	dCtx.Context = utils.NoRetryCtx(dCtx)
 	result, err := extractCodeContext(dCtx, coding.DirectorySymDefRequest{
 		EnvContainer:          *dCtx.EnvContainer,
