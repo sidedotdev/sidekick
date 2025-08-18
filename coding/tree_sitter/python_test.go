@@ -522,9 +522,15 @@ class TestClass:
 		},
 		{
 			name:               "constant definition",
-			symbolName:         "TestConst",
-			code:               "const TestConst = 3.14",
-			expectedDefinition: `const TestConst = 3.14`,
+			symbolName:         "TEST_CONST",
+			code:               "TEST_CONST = 3.14",
+			expectedDefinition: `TEST_CONST = 3.14`,
+		},
+		{
+			name:               "invalid syntax",
+			symbolName:         "ok",
+			code:               "def ok()",
+			expectedDefinition: `def ok()`,
 		},
 		{
 			name:          "symbol not found",
