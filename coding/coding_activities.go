@@ -29,7 +29,7 @@ type CodingActivities struct {
 
 type FileSymDefRequest struct {
 	FilePath    string   `json:"file_path" jsonschema:"description=The name of the file\\, including relative path\\, eg: \"foo/bar/something.go\""`
-	SymbolNames []string `json:"symbol_names,omitempty" jsonschema:"description=Each string in this array is a case-sensitive name of a code symbol (eg name of a function\\, type\\, alias\\, interface\\, class\\, method\\, enum/member\\, constant\\, etc\\, depending on the language) defined in the given file\\, eg: \"someFunction\"\\, or \"SomeType\"\\, or \"SOME_CONSTANT\" etc. These are the symbol names for which the full symbol definition will be returned. Eg for a function name\\, this would be the entire function declaration including the function body. If no symbol names are provided\\, the entire file will be returned."`
+	SymbolNames []string `json:"symbol_names,omitempty" jsonschema:"description=Each string in this array is a case-sensitive name of a code symbol (eg name of a function\\, type\\, alias\\, interface\\, class\\, method\\, enum/member\\, constant\\, etc\\, depending on the language) defined in the given file\\, eg: \"someFunction\"\\, or \"SomeType\"\\, or \"SOME_CONSTANT\" etc. These are the symbol names for which the full symbol definition will be returned. Eg for a function name\\, this would be the entire function declaration including the function body. If no symbol names are provided\\, the entire file will be returned\\, but this usage is generally discouraged except for non-code files. Specifying the desired symbol names is strongly recommended\\, even when all symbols are desired."`
 }
 
 type SymDefResults struct {
