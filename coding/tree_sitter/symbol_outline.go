@@ -3,6 +3,7 @@ package tree_sitter
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -423,6 +424,24 @@ func normalizeLanguageName(s string) string {
 		return s
 	}
 }
+
+func NormalizeSymbolFromSnippet(languageName string, snippet string) (string, error) {
+	lang := normalizeLanguageName(languageName)
+	sc := SourceCode{
+		LanguageName: lang,
+		Content:      snippet,
+	}
+	symbols, err := sc.GetSymbols()
+	if err != nil {
+		return "", err
+	}
+	if len(symbols) == 0 || symbols[0].Content == "" {
+		return "", ErrNoSymbolParsed
+	}
+	return symbols[0].Content, nil
+}
+
+var ErrNoSymbolParsed = errors.New("no symbol parsed")
 
 func getSitterLanguage(languageName string) (*sitter.Language, error) {
 	switch languageName {
