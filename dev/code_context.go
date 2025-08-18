@@ -100,7 +100,7 @@ func prepareInitialCodeContextSubflow(dCtx DevContext, requirements string, plan
 }
 
 func PrepareRepoSummary(dCtx DevContext, requirements string) (string, string, error) {
-	repoSummary, err := GetRankedRepoSummary(dCtx, requirements)
+	repoSummary, err := GetRankedRepoSummary(dCtx, requirements, min(defaultMaxChatHistoryLength/2, 15000))
 	if err != nil {
 		return "", "", err
 	}
@@ -118,12 +118,14 @@ func PrepareRepoSummary(dCtx DevContext, requirements string) (string, string, e
 
 	// Append the identified needs to the requirements for second round of ranked signatures
 	rankQuery := fmt.Sprintf("%s\n\n%s", requirements, strings.Join(infoNeeds.Needs, "\n"))
-	repoSummary, err = GetRankedRepoSummary(dCtx, rankQuery)
+	repoSummary, err = GetRankedRepoSummary(dCtx, rankQuery, min(defaultMaxChatHistoryLength/2, 15000))
 
 	return repoSummary, needs, err
 }
 
-func GetRankedRepoSummary(dCtx DevContext, rankQuery string) (string, error) {
+var GetRepoSummaryForPrompt = GetRankedRepoSummary
+
+func GetRankedRepoSummary(dCtx DevContext, rankQuery string, charLimit int) (string, error) {
 	options := persisted_ai.RankedDirSignatureOutlineOptions{
 		RankedViaEmbeddingOptions: persisted_ai.RankedViaEmbeddingOptions{
 			WorkspaceId:  dCtx.WorkspaceId,
@@ -132,7 +134,7 @@ func GetRankedRepoSummary(dCtx DevContext, rankQuery string) (string, error) {
 			Secrets:      *dCtx.Secrets,
 			ModelConfig:  dCtx.GetEmbeddingModelConfig(common.DefaultKey),
 		},
-		CharLimit: min(defaultMaxChatHistoryLength/2, 15000), // ensure we leave space for other messages
+		CharLimit: charLimit,
 	}
 
 	attempts := 0
