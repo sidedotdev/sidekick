@@ -10,15 +10,15 @@ import (
 )
 
 // TODO tune this number
-// NOTE: a number as low as 10k is nice to reduce cost: often the older messages
+// NOTE: a number as low as 50k is nice to reduce cost: often the older messages
 // have low value. however, this fails when there is a lot of code context. the
 // bigger number is more wasteful however, so we need to be smarter here and
 // only keep the history that is actually useful when it's beyond the limit.
 // summarizing the history via an LLM may be cost-effective since summarization
 // is a one-time cost, but we hit the LLM multiple times for each subsequent
 // call to openai and reap the benefit of summarization each time.
-var defaultMaxChatHistoryLength = 50000
-var extendedMaxChatHistoryLength = 75000
+var defaultMaxChatHistoryLength = 100000
+var extendedMaxChatHistoryLength = 200000
 
 const testReviewStart = "# START TEST & REVIEW"
 const testReviewEnd = "# END TEST & REVIEW"
@@ -95,11 +95,23 @@ func ManageChatHistoryActivity(chatHistory []llm.ChatMessage, maxLength int) ([]
 			totalContentLength += len(newContent)
 		}
 
+		questions := make(map[string]bool)
+		answers := make(map[string]bool)
+		for i := 1; i < len(chatHistory); i++ {
+			message := &(chatHistory)[i]
+			if len(message.ToolCalls) > 0 && message.ToolCalls[0].Name == getHelpOrInputTool.Name {
+				questions[message.ToolCalls[0].Id] = true
+			} else if _, ok := questions[message.ToolCallId]; ok {
+				answers[message.ToolCallId] = true
+			}
+		}
+
 		contentLength := len(firstMessage.Content)
 		numAssistantMessagesSeen := 0
 		newMessages := make([]llm.ChatMessage, 0)
 		var lastTestReviewMessage llm.ChatMessage
 		hitLimit := false
+
 		for i := len(chatHistory) - 1; i >= 1; i-- {
 			message := &(chatHistory)[i]
 			// we retain non-summarized version of the last message from the assistant
@@ -122,20 +134,6 @@ func ManageChatHistoryActivity(chatHistory []llm.ChatMessage, maxLength int) ([]
 				numAssistantMessagesSeen++
 			}
 
-			// Check if the message contains guidance from the user (and isn't
-			// copy from our prompts retrived via tools)
-			guidanceStartIndex := strings.Index(message.Content, guidanceStart)
-			guidanceEndIndex := strings.Index(message.Content, guidanceEnd)
-			if guidanceStartIndex != -1 && guidanceEndIndex != -1 && message.Role != llm.ChatMessageRoleTool {
-				// If guidance is present, retain the guidance and drop the remainder of the message
-				// Include the '#START Guidance From the User' and '#END Guidance From the User' tags in the retained guidance
-				guidanceContent := message.Content[guidanceStartIndex : guidanceEndIndex+len(guidanceEnd)]
-				guidanceHeader := "\nguidance from the user:\n"
-				firstMessage.Content = firstMessage.Content + guidanceHeader + guidanceContent
-				contentLength += len(guidanceContent) + len(guidanceHeader)
-				continue
-			}
-
 			// check if the message contains the test/review tags
 			containsTestReview := strings.Contains(message.Content, testReviewStart) && strings.Contains(message.Content, testReviewEnd)
 			if containsTestReview && lastTestReviewMessage.Content == "" {
@@ -147,6 +145,39 @@ func ManageChatHistoryActivity(chatHistory []llm.ChatMessage, maxLength int) ([]
 				contentLength += len(message.Content)
 			} else {
 				hitLimit = true
+
+				// Check if the message contains guidance from the user (and isn't
+				// copy from our prompts retrived via tools). If so, include it.
+				// This ignores limits for this on first run (later runs include
+				// it in first message content)
+				guidanceStartIndex := strings.Index(message.Content, guidanceStart)
+				guidanceEndIndex := strings.Index(message.Content, guidanceEnd)
+				if guidanceStartIndex != -1 && guidanceEndIndex != -1 && message.Role != llm.ChatMessageRoleTool {
+					// If guidance is present, retain the guidance and drop the remainder of the message
+					// Include the '#START Guidance From the User' and '#END Guidance From the User' tags in the retained guidance
+					guidanceContent := message.Content[guidanceStartIndex : guidanceEndIndex+len(guidanceEnd)]
+					guidanceHeader := "\nguidance from the user:\n"
+					firstMessage.Content = firstMessage.Content + guidanceHeader + guidanceContent
+					continue
+				}
+
+				// if this is an answer from the user to a question via tool
+				// call, and keep both the question and answer ignoring the
+				// limits
+				if message.ToolCallId != "" {
+					_, qok := questions[message.ToolCallId]
+					_, aok := answers[message.ToolCallId]
+					if qok && aok {
+						newMessages = append(newMessages, *message)
+					}
+				}
+				if len(message.ToolCalls) > 0 {
+					_, qok := questions[message.ToolCalls[0].Id]
+					_, aok := answers[message.ToolCalls[0].Id]
+					if qok && aok {
+						newMessages = append(newMessages, *message)
+					}
+				}
 			}
 		}
 
