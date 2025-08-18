@@ -179,6 +179,19 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 
 	attemptCount := 0
 	var promptInfo PromptInfo
+
+	// Retrieve a concise repository summary and prepend it to the code context for the initial prompt.
+	// Version gate is required for Temporal determinism since this introduces a new activity that older histories never scheduled.
+	// Replays must follow the old path while new runs include the summary and fail fast on retrieval errors.
+	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 1)
+	if version >= 1 {
+		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
+		if err != nil {
+			return "", fmt.Errorf("failed to get repo summary: %v", err)
+		}
+		codeContext = repoSummary + "\n\n" + codeContext
+	}
+
 	initialCodeInfo := InitialCodeInfo{CodeContext: codeContext, Requirements: requirements}
 	promptInfo = initialCodeInfo
 	var fulfillment CriteriaFulfillment
