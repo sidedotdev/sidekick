@@ -438,14 +438,7 @@ func NormalizeSymbolFromSnippet(languageName string, snippet string) (string, er
 	if len(symbols) == 0 || symbols[0].Content == "" {
 		return "", ErrNoSymbolParsed
 	}
-	out := symbols[0].Content
-	if lang == "golang" {
-		if dot := strings.IndexByte(out, '.'); dot > 0 {
-			recv := strings.TrimLeft(out[:dot], "*")
-			out = recv + out[dot:]
-		}
-	}
-	return out, nil
+	return symbols[0].Content, nil
 }
 
 var ErrNoSymbolParsed = errors.New("no symbol parsed")

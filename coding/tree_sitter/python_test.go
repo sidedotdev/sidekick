@@ -683,3 +683,34 @@ func TestGetFileHeadersStringPython(t *testing.T) {
 		})
 	}
 }
+func TestNormalizeSymbolFromSnippet_Python(t *testing.T) {
+	tests := []struct {
+		name     string
+		snippet  string
+		expected string
+	}{
+		{
+			name:     "Top-level function",
+			snippet:  "def some_func(content)",
+			expected: "some_func",
+		},
+		{
+			name:     "Class with method returns class symbol as first",
+			snippet:  "\tdef some_method(self)",
+			expected: "some_method",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := NormalizeSymbolFromSnippet("python", tc.snippet)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.expected {
+				t.Fatalf("expected %q, got %q", tc.expected, got)
+			}
+		})
+	}
+}

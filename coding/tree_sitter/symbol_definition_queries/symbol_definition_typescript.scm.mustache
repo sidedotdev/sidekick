@@ -5,6 +5,20 @@
   (#eq? @name "{{SymbolName}}")
 ) @definition
 
+(
+  (function_expression
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (function_signature
+    name: (identifier) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
 ;(
 ;  (function
 ;    name: (identifier) @name

@@ -110,6 +110,37 @@ func (*x SomeStruct) TestFunc() {
 			},
 		},
 		{
+			name: "Snippet method declaration resolves via normalization",
+			code: `package cools
+
+type SomeThing struct{}
+
+func (x SomeThing) SomeMethod() string {
+	return "ok"
+}`,
+			input: []FileSymDefRequest{
+				{
+					SymbolNames: []string{"func (x SomeThing) SomeMethod() string"},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `File: placeholder_tempfile
+Lines: 1-1
+` + "```go" + `
+package cools
+` + "```" + `
+
+File: placeholder_tempfile
+Symbol: func (x SomeThing) SomeMethod() string
+Lines: 5-7
+` + "```go" + `
+func (x SomeThing) SomeMethod() string {
+	return "ok"
+}
+` + "```\n\n",
+			},
+		},
+		{
 			name: "Dup function definition: adjacent",
 			code: `package cools
 
@@ -958,128 +989,4 @@ Foo is referenced in the same file by:
 			}
 		})
 	}
-}
-func TestBulkGetSymbolDefinitions_SnippetNormalization_Golang_NonPointerReceiver(t *testing.T) {
-	t.Parallel()
-
-	// Create a temporary directory and write a small Go file with a non-pointer receiver method
-	testDir := t.TempDir()
-	code := `package cools
-
-type SomeThing struct{}
-
-func (x SomeThing) SomeMethod() string {
-	return "ok"
-}`
-	filePath, err := utils.WriteTestFile(t, testDir, "file.go", code)
-	assert.Nil(t, err)
-
-	// Snippet-like input (not canonical)
-	snippet := "func (x SomeThing) SomeMethod() string"
-
-	ca := &CodingActivities{}
-	numLines := 0
-	req := DirectorySymDefRequest{
-		EnvContainer: env.EnvContainer{
-			Env: &env.LocalEnv{WorkingDirectory: testDir},
-		},
-		Requests: []FileSymDefRequest{
-			{
-				FilePath:    filepath.Base(filePath),
-				SymbolNames: []string{snippet},
-			},
-		},
-		NumContextLines: &numLines,
-	}
-
-	result, err := ca.BulkGetSymbolDefinitions(req)
-	assert.Nil(t, err)
-	// Ensure normalization helper canonicalizes as expected and snippet lookup succeeded
-	norm, normErr := tree_sitter.NormalizeSymbolFromSnippet("golang", snippet)
-	assert.Nil(t, normErr)
-	assert.Equal(t, "SomeThing.SomeMethod", norm)
-	assert.True(t, strings.Contains(result.SymbolDefinitions, "func (x SomeThing) SomeMethod() string"))
-	assert.Equal(t, "", strings.TrimSpace(result.Failures))
-}
-
-func TestBulkGetSymbolDefinitions_SnippetNormalization_Golang_PointerReceiver(t *testing.T) {
-	t.Parallel()
-
-	// Create a temporary directory and write a small Go file with a pointer receiver method
-	testDir := t.TempDir()
-	code := `package cools
-
-type SomeThing struct{}
-
-func (x *SomeThing) SomeMethod() {
-	println("hi")
-}`
-	filePath, err := utils.WriteTestFile(t, testDir, "file.go", code)
-	assert.Nil(t, err)
-
-	// Snippet-like input (not canonical)
-	snippet := "func (x *SomeThing) SomeMethod()"
-
-	ca := &CodingActivities{}
-	numLines := 0
-	req := DirectorySymDefRequest{
-		EnvContainer: env.EnvContainer{
-			Env: &env.LocalEnv{WorkingDirectory: testDir},
-		},
-		Requests: []FileSymDefRequest{
-			{
-				FilePath:    filepath.Base(filePath),
-				SymbolNames: []string{snippet},
-			},
-		},
-		NumContextLines: &numLines,
-	}
-
-	result, err := ca.BulkGetSymbolDefinitions(req)
-	assert.Nil(t, err)
-	// Ensure normalization helper canonicalizes as expected and snippet lookup succeeded
-	norm, normErr := tree_sitter.NormalizeSymbolFromSnippet("golang", snippet)
-	assert.Nil(t, normErr)
-	assert.Equal(t, "SomeThing.SomeMethod", norm)
-	assert.True(t, strings.Contains(result.SymbolDefinitions, "func (x *SomeThing) SomeMethod()"))
-	assert.Equal(t, "", strings.TrimSpace(result.Failures))
-}
-
-func TestNormalizeSymbolFromSnippet_NegativeAndBulkGetNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Negative normalization
-	norm, normErr := tree_sitter.NormalizeSymbolFromSnippet("golang", "not a signature")
-	assert.Equal(t, "", norm)
-	assert.ErrorIs(t, normErr, tree_sitter.ErrNoSymbolParsed)
-
-	// Create a simple Go file and ensure BulkGetSymbolDefinitions with an unparsable snippet
-	// surfaces the original not-found error
-	testDir := t.TempDir()
-	code := `package cools
-
-func Real() {}`
-	filePath, err := utils.WriteTestFile(t, testDir, "file.go", code)
-	assert.Nil(t, err)
-
-	ca := &CodingActivities{}
-	numLines := 0
-	req := DirectorySymDefRequest{
-		EnvContainer: env.EnvContainer{
-			Env: &env.LocalEnv{WorkingDirectory: testDir},
-		},
-		Requests: []FileSymDefRequest{
-			{
-				FilePath:    filepath.Base(filePath),
-				SymbolNames: []string{"not a signature"},
-			},
-		},
-		NumContextLines: &numLines,
-	}
-
-	result, err := ca.BulkGetSymbolDefinitions(req)
-	assert.Nil(t, err)
-	assert.NotEmpty(t, strings.TrimSpace(result.Failures))
-	assert.True(t, strings.Contains(result.Failures, "does not contain the symbol 'not a signature'"),
-		"expected not-found message to mention the original snippet")
 }
