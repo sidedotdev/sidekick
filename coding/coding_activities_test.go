@@ -110,6 +110,37 @@ func (*x SomeStruct) TestFunc() {
 			},
 		},
 		{
+			name: "Snippet method declaration resolves via normalization",
+			code: `package cools
+
+type SomeThing struct{}
+
+func (x SomeThing) SomeMethod() string {
+	return "ok"
+}`,
+			input: []FileSymDefRequest{
+				{
+					SymbolNames: []string{"func (x SomeThing) SomeMethod() string"},
+				},
+			},
+			expectedOutput: SymDefResults{
+				SymbolDefinitions: `File: placeholder_tempfile
+Lines: 1-1
+` + "```go" + `
+package cools
+` + "```" + `
+
+File: placeholder_tempfile
+Symbol: func (x SomeThing) SomeMethod() string
+Lines: 5-7
+` + "```go" + `
+func (x SomeThing) SomeMethod() string {
+	return "ok"
+}
+` + "```\n\n",
+			},
+		},
+		{
 			name: "Dup function definition: adjacent",
 			code: `package cools
 

@@ -295,7 +295,11 @@ would mean to apply it to your current situation.
 	// Ensure tracking of the flow action within the guidance request
 	return TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
 		guidanceRequest.FlowActionId = flowAction.Id
-		return GetUserResponse(dCtx, *guidanceRequest)
+		response, err := GetUserResponse(dCtx, *guidanceRequest)
+		if response.Content != "" {
+			response.Content = "#START Guidance From the User\n\n" + response.Content + "\n#END Guidance From the User"
+		}
+		return response, err
 	})
 }
 
@@ -314,7 +318,8 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 
 	switch info := currentPromptInfo.(type) {
 	case FeedbackInfo:
-		info.Feedback += "\n\n#START Guidance From the User\n\nBased on all the work done so far and the above feedback, we asked the user to intervene and provide guidance, or fix the problem. Here is what they said about how to move forward from here: " + userResponse.Content + "\n#END Guidance From the User"
+
+		info.Feedback += "\n\n" + userResponse.Content
 		return info, nil
 	case SkipInfo:
 		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content}

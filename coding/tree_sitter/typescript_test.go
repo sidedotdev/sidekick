@@ -571,3 +571,34 @@ func TestGetSymbolDefinitionTypescriptEnum(t *testing.T) {
 		})
 	}
 }
+func TestNormalizeSymbolFromSnippet_Typescript(t *testing.T) {
+	tests := []struct {
+		name     string
+		snippet  string
+		expected string
+	}{
+		{
+			name:     "Top-level function or method signature",
+			snippet:  "function someFunc(content: string): string",
+			expected: "someFunc",
+		},
+		{
+			name:     "Class signature",
+			snippet:  "class SomeClass",
+			expected: "SomeClass",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := NormalizeSymbolFromSnippet("typescript", tc.snippet)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.expected {
+				t.Fatalf("expected %q, got %q", tc.expected, got)
+			}
+		})
+	}
+}

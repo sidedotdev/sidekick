@@ -64,6 +64,7 @@ func (options ToolChatOptions) ActionParams() map[string]any {
 		"tools":             options.Params.Tools,
 		"toolChoice":        options.Params.ToolChoice,
 		"model":             options.Params.Model,
+		"reasoningEffort":   options.Params.ReasoningEffort,
 		"provider":          options.Params.Provider,
 		"temperature":       options.Params.Temperature,
 		"parallelToolCalls": options.Params.ParallelToolCalls,

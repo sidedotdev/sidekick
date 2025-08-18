@@ -577,3 +577,39 @@ func TestGetFileHeadersStringGolang(t *testing.T) {
 		})
 	}
 }
+func TestNormalizeSymbolFromSnippet_Golang(t *testing.T) {
+	tests := []struct {
+		name     string
+		snippet  string
+		expected string
+	}{
+		{
+			name:     "Method with value receiver",
+			snippet:  "func (x SomeThing) SomeMethod() string { return \"ok\" }",
+			expected: "SomeThing.SomeMethod",
+		},
+		{
+			name:     "Method with pointer receiver",
+			snippet:  "func (x *SomeThing) SomeMethod() { }",
+			expected: "*SomeThing.SomeMethod",
+		},
+		{
+			name:     "Top-level function",
+			snippet:  "package p\n\nfunc top(a string) string { return a }",
+			expected: "top",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := NormalizeSymbolFromSnippet("golang", tc.snippet)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.expected {
+				t.Fatalf("expected %q, got %q", tc.expected, got)
+			}
+		})
+	}
+}

@@ -29,7 +29,7 @@ type CodingActivities struct {
 
 type FileSymDefRequest struct {
 	FilePath    string   `json:"file_path" jsonschema:"description=The name of the file\\, including relative path\\, eg: \"foo/bar/something.go\""`
-	SymbolNames []string `json:"symbol_names,omitempty" jsonschema:"description=Each string in this array is a case-sensitive name of a code symbol (eg name of a function\\, type\\, alias\\, interface\\, class\\, method\\, enum/member\\, constant\\, etc\\, depending on the language) defined in the given file\\, eg: \"someFunction\"\\, or \"SomeType\"\\, or \"SOME_CONSTANT\" etc. These are the symbol names for which the full symbol definition will be returned. Eg for a function name\\, this would be the entire function declaration including the function body. If no symbol names are provided\\, the entire file will be returned."`
+	SymbolNames []string `json:"symbol_names,omitempty" jsonschema:"description=Each string in this array is a case-sensitive name of a code symbol (eg name of a function\\, type\\, alias\\, interface\\, class\\, method\\, enum/member\\, constant\\, etc\\, depending on the language) defined in the given file\\, eg: \"someFunction\"\\, or \"SomeType\"\\, or \"SOME_CONSTANT\" etc. These are the symbol names for which the full symbol definition will be returned. Eg for a function name\\, this would be the entire function declaration including the function body. If no symbol names are provided\\, the entire file will be returned\\, but this usage is generally discouraged except for non-code files. Specifying the desired symbol names is strongly recommended\\, even when all symbols are desired."`
 }
 
 type SymDefResults struct {
@@ -634,13 +634,21 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContai
 
 			// TODO optimize: don't re-parse the file for each symbol
 			sourceBlocks, err := tree_sitter.GetSymbolDefinitions(absolutePath, symbol, numContextLines)
-			if err != nil && strings.Contains(symbol, ".") {
-				// If the retrieval failed and the symbol name contains a ".",
-				// retry with only the part after the "."
-				// TODO make this language-specific and try several different alternative forms
-				lastDotIndex := strings.LastIndex(symbol, ".")
-				if lastDotIndex != -1 {
-					sourceBlocks, err = tree_sitter.GetSymbolDefinitions(absolutePath, symbol[lastDotIndex+1:], numContextLines)
+			if err != nil {
+				// Attempt to normalize snippet-like inputs to a canonical symbol name and retry.
+				langName := utils.InferLanguageNameFromFilePath(absolutePath)
+				if langName != "" {
+					if normalized, nErr := tree_sitter.NormalizeSymbolFromSnippet(langName, symbol); nErr == nil && normalized != "" && normalized != symbol {
+						sourceBlocks, err = tree_sitter.GetSymbolDefinitions(absolutePath, normalized, numContextLines)
+					}
+				}
+				// If still failing and the original contains a ".", retry with only the part after the last dot.
+				if err != nil && strings.Contains(symbol, ".") {
+					// TODO make this language-specific and try several different alternative forms
+					lastDotIndex := strings.LastIndex(symbol, ".")
+					if lastDotIndex != -1 {
+						sourceBlocks, err = tree_sitter.GetSymbolDefinitions(absolutePath, symbol[lastDotIndex+1:], numContextLines)
+					}
 				}
 			}
 
