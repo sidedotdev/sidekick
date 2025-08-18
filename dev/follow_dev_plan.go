@@ -151,6 +151,14 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		return result, fmt.Errorf("failed to prepare code context: %v", err)
 	}
 
+	if v := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 1); v >= 1 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
+		if err != nil {
+			return result, fmt.Errorf("failed to retrieve repo summary: %v", err)
+		}
+		codeContext = repoSummary + "\n\n" + codeContext
+	}
+
 	// TODO store chat history in a way that can be referred to by id, and pass
 	// id to the activities to avoid bloating temporal db
 	chatHistory := &[]llm.ChatMessage{}
