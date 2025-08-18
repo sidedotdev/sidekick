@@ -215,6 +215,14 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			if action != nil && *action == UserActionGoNext {
 				// If UserActionGoNext is pending and version is new, skip authoring edit blocks.
 				// The action is not consumed here; it will be consumed in completeDevStepSubflow.
+
+				// HACK: since we don't add tool call responses right away (TODO),
+				// we make sure we don't end up with a tool call missing a result
+				// here.
+				switch info := promptInfo.(type) {
+				case ToolCallResponseInfo:
+					addToolCallResponse(chatHistory, info)
+				}
 				return nil, nil
 			}
 		}
@@ -223,12 +231,26 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return nil, fmt.Errorf("failed to make user request when paused: %v", err)
 		} else if response != nil && response.Content != "" {
+			// HACK: since we don't add tool call responses right away (TODO),
+			// we make sure we don't end up with a tool call missing a result
+			// here.
+			switch info := promptInfo.(type) {
+			case ToolCallResponseInfo:
+				addToolCallResponse(chatHistory, info)
+			}
 			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
 			attemptsSinceLastEditBlockOrFeedback = 0
 		}
 
 		// Inject proactive system message based on tool-call thresholds
 		if msg, ok := ThresholdMessageForCounter(feedbackIterations, attemptsSinceLastEditBlockOrFeedback); ok {
+			// HACK: since we don't add tool call responses right away (TODO),
+			// we make sure we don't end up with a tool call missing a result
+			// here.
+			switch info := promptInfo.(type) {
+			case ToolCallResponseInfo:
+				addToolCallResponse(chatHistory, info)
+			}
 			promptInfo = FeedbackInfo{Feedback: msg}
 		}
 
