@@ -77,6 +77,11 @@ editLoop:
 			return ErrMaxAttemptsReached
 		}
 
+		// Inject proactive system message based on tool-call thresholds
+		if msg, ok := ThresholdMessageForCounter(maxIterationsBeforeFeedback, attemptsSinceLastFeedback); ok {
+			promptInfo = FeedbackInfo{Feedback: msg}
+		}
+
 		// Only request feedback if we haven't received any recently from any source
 		if attemptCount > 0 && attemptsSinceLastFeedback >= maxIterationsBeforeFeedback {
 			guidanceContext := "The system has attempted to edit the code multiple times without success. Please provide some guidance."
@@ -220,6 +225,11 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		} else if response != nil && response.Content != "" {
 			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
 			attemptsSinceLastEditBlockOrFeedback = 0
+		}
+
+		// Inject proactive system message based on tool-call thresholds
+		if msg, ok := ThresholdMessageForCounter(feedbackIterations, attemptsSinceLastEditBlockOrFeedback); ok {
+			promptInfo = FeedbackInfo{Feedback: msg}
 		}
 
 		if attemptCount >= maxAttempts {
