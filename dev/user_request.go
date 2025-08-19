@@ -281,6 +281,11 @@ would mean to apply it to your current situation.
 		}, nil
 	}
 
+	v := workflow.GetVersion(dCtx, "guidance-delegate-when-paused", workflow.DefaultVersion, 1)
+	if v == 1 && dCtx.GlobalState != nil && dCtx.GlobalState.Paused {
+		return UserRequestIfPaused(dCtx, guidanceContext, requestParams)
+	}
+
 	guidanceRequest := &RequestForUser{
 		OriginWorkflowId: workflow.GetInfo(dCtx).WorkflowExecution.ID,
 		Subflow:          dCtx.FlowScope.SubflowName,
