@@ -1,4 +1,4 @@
-package main
+package client
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"sidekick/client"
 	"sidekick/domain"
 
 	"github.com/gorilla/websocket"
@@ -16,7 +15,7 @@ import (
 
 // TaskStatus represents the current state of task monitoring
 type TaskStatus struct {
-	Task     client.Task
+	Task     Task
 	Error    error
 	Finished bool
 }
@@ -30,7 +29,7 @@ type TaskProgress struct {
 
 // TaskMonitor handles WebSocket connections and status polling for tasks
 type TaskMonitor struct {
-	client       client.Client
+	client       Client
 	workspaceID  string
 	taskID       string
 	current      TaskStatus
@@ -58,7 +57,7 @@ func (m *TaskMonitor) Stop() {
 }
 
 // NewTaskMonitor creates a new TaskMonitor instance
-func NewTaskMonitor(client client.Client, workspaceID, taskID string) *TaskMonitor {
+func NewTaskMonitor(client Client, workspaceID, taskID string) *TaskMonitor {
 	return &TaskMonitor{
 		client:       client,
 		workspaceID:  workspaceID,

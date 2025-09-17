@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"sidekick/client"
 	"sidekick/domain"
 	"strings"
 	"testing"
@@ -9,6 +10,17 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 )
+
+// Local test helper function
+func newTestTaskWithFlows() client.Task {
+	return client.Task{
+		Task: domain.Task{
+			Id:     "task1",
+			Status: domain.TaskStatusInProgress,
+		},
+		Flows: []domain.Flow{{Id: "flow1"}},
+	}
+}
 
 func TestLifecycleModel(t *testing.T) {
 	t.Parallel()

@@ -17,6 +17,50 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Local test mock client
+type mockClient struct {
+	mock.Mock
+	baseURL string
+}
+
+func (c *mockClient) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error) {
+	args := c.Called(ctx)
+	return args.Get(0).([]domain.Workspace), args.Error(1)
+}
+
+func (c *mockClient) GetBaseURL() string {
+	return c.baseURL
+}
+
+func (m *mockClient) CreateTask(workspaceID string, req *client.CreateTaskRequest) (client.Task, error) {
+	args := m.Called(workspaceID, req)
+	if args.Get(0) == nil {
+		return client.Task{}, args.Error(1)
+	}
+	return args.Get(0).(client.Task), args.Error(1)
+}
+
+func (m *mockClient) GetTask(workspaceID string, taskID string) (client.Task, error) {
+	args := m.Called(workspaceID, taskID)
+	if args.Get(0) == nil {
+		return client.Task{}, args.Error(1)
+	}
+	return args.Get(0).(client.Task), args.Error(1)
+}
+
+func (m *mockClient) CancelTask(workspaceID string, taskID string) error {
+	args := m.Called(workspaceID, taskID)
+	return args.Error(0)
+}
+
+func (m *mockClient) CreateWorkspace(req *client.CreateWorkspaceRequest) (*domain.Workspace, error) {
+	args := m.Called(req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.Workspace), args.Error(1)
+}
+
 type mockProgram struct {
 }
 

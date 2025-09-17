@@ -135,7 +135,7 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	p := tea.NewProgram(newLifecycleModel(sigChan))
 
-	var monitor *TaskMonitor
+	var monitor *client.TaskMonitor
 	var task client.Task
 
 	go func() {
@@ -171,7 +171,7 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 			return
 		}
 
-		monitor = NewTaskMonitor(c, workspace.Id, task.Id)
+		monitor = client.NewTaskMonitor(c, workspace.Id, task.Id)
 		statusChan, progressChan := monitor.Start(ctx)
 		for {
 			select {

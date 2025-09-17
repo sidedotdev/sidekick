@@ -1,4 +1,4 @@
-package main
+package client
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"sidekick/client"
 	"sidekick/domain"
 
 	"github.com/gorilla/websocket"
@@ -31,20 +30,20 @@ func (c *mockClient) GetBaseURL() string {
 	return c.baseURL
 }
 
-func (m *mockClient) CreateTask(workspaceID string, req *client.CreateTaskRequest) (client.Task, error) {
+func (m *mockClient) CreateTask(workspaceID string, req *CreateTaskRequest) (Task, error) {
 	args := m.Called(workspaceID, req)
 	if args.Get(0) == nil {
-		return client.Task{}, args.Error(1)
+		return Task{}, args.Error(1)
 	}
-	return args.Get(0).(client.Task), args.Error(1)
+	return args.Get(0).(Task), args.Error(1)
 }
 
-func (m *mockClient) GetTask(workspaceID string, taskID string) (client.Task, error) {
+func (m *mockClient) GetTask(workspaceID string, taskID string) (Task, error) {
 	args := m.Called(workspaceID, taskID)
 	if args.Get(0) == nil {
-		return client.Task{}, args.Error(1)
+		return Task{}, args.Error(1)
 	}
-	return args.Get(0).(client.Task), args.Error(1)
+	return args.Get(0).(Task), args.Error(1)
 }
 
 func (m *mockClient) CancelTask(workspaceID string, taskID string) error {
@@ -52,7 +51,7 @@ func (m *mockClient) CancelTask(workspaceID string, taskID string) error {
 	return args.Error(1)
 }
 
-func (m *mockClient) CreateWorkspace(req *client.CreateWorkspaceRequest) (*domain.Workspace, error) {
+func (m *mockClient) CreateWorkspace(req *CreateWorkspaceRequest) (*domain.Workspace, error) {
 	args := m.Called(req)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -93,8 +92,8 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // Mock successful initial testTask status without flows
-func newTestTask() client.Task {
-	return client.Task{
+func newTestTask() Task {
+	return Task{
 		Task: domain.Task{
 			Id:     "task1",
 			Status: domain.TaskStatusToDo,
@@ -103,8 +102,8 @@ func newTestTask() client.Task {
 }
 
 // testTask with flows
-func newTestTaskWithFlows() client.Task {
-	return client.Task{
+func newTestTaskWithFlows() Task {
+	return Task{
 		Task: domain.Task{
 			Id:     "task1",
 			Status: domain.TaskStatusInProgress,
@@ -244,7 +243,7 @@ func TestTaskMonitor_Start_ServerUnavailability(t *testing.T) {
 	// Simulate server unavailability
 	mockCall.Unset()
 	serverError := errors.New("connection refused")
-	mockClient.On("GetTask", "workspace1", "task1").Return(client.Task{}, serverError)
+	mockClient.On("GetTask", "workspace1", "task1").Return(Task{}, serverError)
 
 	// Should receive error status but channel remains open
 	status = <-statusChan
