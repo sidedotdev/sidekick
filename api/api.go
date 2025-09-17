@@ -17,10 +17,12 @@ import (
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/frontend"
+	"sidekick/mcp"
 	"sidekick/srv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
 	"go.temporal.io/api/serviceerror"
@@ -172,12 +174,48 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 		r.StaticFileFS("/"+file.Name(), "dist/"+file.Name(), dist)
 	}
 
+	// MCP routes
+	r.GET("/mcp/v1/workspaces/:workspaceId/sse", gin.WrapH(mcpsdk.NewSSEHandler(func(req *http.Request) *mcpsdk.Server {
+		scheme := "http"
+		if req.TLS != nil {
+			scheme = "https"
+		}
+		baseURL := fmt.Sprintf("%s://%s", scheme, req.Host)
+		wsId := extractWorkspaceIdFromPath(req.URL.Path)
+		return mcp.NewWorkspaceServer(sidekickclient.NewClient(baseURL), wsId)
+	})))
+
+	r.Any("/mcp/v1/workspaces/:workspaceId", gin.WrapH(mcpsdk.NewStreamableHTTPHandler(func(req *http.Request) *mcpsdk.Server {
+		scheme := "http"
+		if req.TLS != nil {
+			scheme = "https"
+		}
+		baseURL := fmt.Sprintf("%s://%s", scheme, req.Host)
+		wsId := extractWorkspaceIdFromPath(req.URL.Path)
+		return mcp.NewWorkspaceServer(sidekickclient.NewClient(baseURL), wsId)
+	}, nil)))
+
 	// Wildcard route to serve index.html for other HTML-based frontend routes,
 	// eg /kanban etc as they get defined by the frontend. This also serves the
 	// root route rather than a custom route for the root.
 	r.NoRoute(ctrl.WildcardHandler)
 
 	return r
+}
+
+// extractWorkspaceIdFromPath extracts the workspace ID from a URL path
+// that contains "/workspaces/" followed by the workspace ID
+func extractWorkspaceIdFromPath(p string) string {
+	parts := strings.Split(p, "/workspaces/")
+	if len(parts) < 2 {
+		return ""
+	}
+	// Get the segment after "/workspaces/" and before the next "/"
+	segments := strings.Split(parts[1], "/")
+	if len(segments) > 0 {
+		return segments[0]
+	}
+	return ""
 }
 
 func NewController() (Controller, error) {
