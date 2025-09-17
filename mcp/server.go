@@ -39,7 +39,7 @@ func handleStartTask(ctx context.Context, c client.Client, workspaceId string, p
 		return &mcpsdk.CallToolResult{
 			IsError: true,
 			Content: []mcpsdk.Content{
-				{Type: "text", Text: "description parameter is required and cannot be empty"},
+				&mcpsdk.TextContent{Text: "description parameter is required and cannot be empty"},
 			},
 		}, nil, nil
 	}
@@ -56,7 +56,7 @@ func handleStartTask(ctx context.Context, c client.Client, workspaceId string, p
 		return &mcpsdk.CallToolResult{
 			IsError: true,
 			Content: []mcpsdk.Content{
-				{Type: "text", Text: fmt.Sprintf("invalid flowType: %s. Allowed values: basic_dev, planned_dev", flowType)},
+				&mcpsdk.TextContent{Text: fmt.Sprintf("invalid flowType: %s. Allowed values: basic_dev, planned_dev", flowType)},
 			},
 		}, nil, nil
 	}
@@ -81,7 +81,7 @@ func handleStartTask(ctx context.Context, c client.Client, workspaceId string, p
 		return &mcpsdk.CallToolResult{
 			IsError: true,
 			Content: []mcpsdk.Content{
-				{Type: "text", Text: fmt.Sprintf("failed to create task: %v", err)},
+				&mcpsdk.TextContent{Text: fmt.Sprintf("failed to create task: %v", err)},
 			},
 		}, nil, nil
 	}
@@ -98,7 +98,7 @@ func handleStartTask(ctx context.Context, c client.Client, workspaceId string, p
 			return &mcpsdk.CallToolResult{
 				IsError: true,
 				Content: []mcpsdk.Content{
-					{Type: "text", Text: "task creation was cancelled"},
+					&mcpsdk.TextContent{Text: "task creation was cancelled"},
 				},
 			}, nil, nil
 
@@ -107,13 +107,13 @@ func handleStartTask(ctx context.Context, c client.Client, workspaceId string, p
 				return &mcpsdk.CallToolResult{
 					IsError: true,
 					Content: []mcpsdk.Content{
-						{Type: "text", Text: "task monitoring ended unexpectedly"},
+						&mcpsdk.TextContent{Text: "task monitoring ended unexpectedly"},
 					},
 				}, nil, nil
 			}
 
 			// Check if task has started (in_progress) or reached a finished state
-			if status.Status == "in_progress" || status.Status == "complete" || status.Status == "failed" || status.Status == "canceled" {
+			if status.Task.Status == "in_progress" || status.Task.Status == "complete" || status.Task.Status == "failed" || status.Task.Status == "canceled" {
 				monitor.Stop()
 
 				// Marshal task to compact JSON
@@ -122,14 +122,14 @@ func handleStartTask(ctx context.Context, c client.Client, workspaceId string, p
 					return &mcpsdk.CallToolResult{
 						IsError: true,
 						Content: []mcpsdk.Content{
-							{Type: "text", Text: fmt.Sprintf("failed to marshal task: %v", err)},
+							&mcpsdk.TextContent{Text: fmt.Sprintf("failed to marshal task: %v", err)},
 						},
 					}, nil, nil
 				}
 
 				return &mcpsdk.CallToolResult{
 					Content: []mcpsdk.Content{
-						{Type: "text", Text: string(taskJSON)},
+						&mcpsdk.TextContent{Text: string(taskJSON)},
 					},
 					StructuredContent: status.Task,
 				}, nil, nil
@@ -140,7 +140,7 @@ func handleStartTask(ctx context.Context, c client.Client, workspaceId string, p
 			return &mcpsdk.CallToolResult{
 				IsError: true,
 				Content: []mcpsdk.Content{
-					{Type: "text", Text: "timeout waiting for task to start"},
+					&mcpsdk.TextContent{Text: "timeout waiting for task to start"},
 				},
 			}, nil, nil
 		}
