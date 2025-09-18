@@ -3,6 +3,7 @@ package jetstream
 import (
 	"context"
 	"fmt"
+	"sidekick/domain"
 	"strconv"
 	"time"
 
@@ -68,6 +69,11 @@ func (s *Streamer) Initialize(nc *nats.Conn) error {
 	}
 
 	s.js = js
+	return nil
+}
+
+func (s *Streamer) AddMCPToolCallEvent(ctx context.Context, workspaceId, sessionId string, event domain.MCPToolCallEvent) error {
+	// TODO: Implement in step 2 of the plan
 	return nil
 }
 

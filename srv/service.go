@@ -29,4 +29,5 @@ type Streamer interface {
 	domain.TaskStreamer
 	domain.FlowActionStreamer
 	domain.FlowEventStreamer
+	domain.MCPEventStreamer
 }
