@@ -183,7 +183,8 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 		}
 		baseURL := fmt.Sprintf("%s://%s", scheme, req.Host)
 		wsId := extractWorkspaceIdFromPath(req.URL.Path)
-		return mcp.NewWorkspaceServer(sidekickclient.NewClient(baseURL), wsId)
+		sessionId := req.Header.Get("mcp-session-id")
+		return mcp.NewWorkspaceServer(sidekickclient.NewClient(baseURL), wsId, ctrl.service, sessionId)
 	})))
 
 	r.Any("/mcp/v1/workspaces/:workspaceId", gin.WrapH(mcpsdk.NewStreamableHTTPHandler(func(req *http.Request) *mcpsdk.Server {
@@ -193,7 +194,8 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 		}
 		baseURL := fmt.Sprintf("%s://%s", scheme, req.Host)
 		wsId := extractWorkspaceIdFromPath(req.URL.Path)
-		return mcp.NewWorkspaceServer(sidekickclient.NewClient(baseURL), wsId)
+		sessionId := req.Header.Get("mcp-session-id")
+		return mcp.NewWorkspaceServer(sidekickclient.NewClient(baseURL), wsId, ctrl.service, sessionId)
 	}, nil)))
 
 	// Wildcard route to serve index.html for other HTML-based frontend routes,
