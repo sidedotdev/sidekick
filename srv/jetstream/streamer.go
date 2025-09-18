@@ -2,6 +2,7 @@ package jetstream
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sidekick/domain"
 	"strconv"
@@ -41,7 +42,7 @@ func (s *Streamer) Initialize(nc *nats.Conn) error {
 		// task changes is ephemeral, since it doesn't matter if they're lost.
 		// NOTE jetstream.DeliverByStartTimePolicy isn't working with this
 		// emphemeral stream, but DeliverNewPolicy is working fine.
-		Subjects: []string{"tasks.changes.*"},
+		Subjects: []string{"tasks.changes.*", "mcp_session.tool_calls.*.*"},
 		Storage:  jetstream.MemoryStorage,
 		Discard:  jetstream.DiscardOld,
 		MaxBytes: 10 * 1024 * 1024, // 10MB
@@ -73,7 +74,17 @@ func (s *Streamer) Initialize(nc *nats.Conn) error {
 }
 
 func (s *Streamer) AddMCPToolCallEvent(ctx context.Context, workspaceId, sessionId string, event domain.MCPToolCallEvent) error {
-	// TODO: Implement in step 2 of the plan
+	eventJSON, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("failed to marshal MCP tool call event: %w", err)
+	}
+
+	subject := fmt.Sprintf("mcp_session.tool_calls.%s.%s", workspaceId, sessionId)
+	_, err = s.js.Publish(ctx, subject, eventJSON)
+	if err != nil {
+		return fmt.Errorf("failed to publish MCP tool call event: %w", err)
+	}
+
 	return nil
 }
 

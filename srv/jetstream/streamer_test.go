@@ -2,6 +2,7 @@ package jetstream
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sidekick/common"
 	"sidekick/domain"
@@ -353,6 +354,49 @@ func (s *StreamerTestSuite) TestFlowEventStreaming_Cancellation() {
 
 	s.False(eventChOpen, "Event channel should be closed")
 	s.False(errChOpen, "Error channel should be closed")
+}
+
+func (s *StreamerTestSuite) TestMCPToolCallEventStreaming() {
+	s.T().Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	workspaceId := "ws1"
+	sessionId := "s1"
+	subject := fmt.Sprintf("mcp_session.tool_calls.%s.%s", workspaceId, sessionId)
+
+	// Subscribe to the subject
+	sub, err := s.nc.SubscribeSync(subject)
+	s.Require().NoError(err)
+	defer sub.Unsubscribe()
+
+	// Create test MCP tool call event
+	event := domain.MCPToolCallEvent{
+		ToolName:   "list_tasks",
+		Status:     domain.MCPToolCallStatusPending,
+		ArgsJSON:   `{"statuses":["to_do","in_progress"]}`,
+		ResultJSON: "",
+		Error:      "",
+	}
+
+	// Publish the event
+	err = s.streamer.AddMCPToolCallEvent(ctx, workspaceId, sessionId, event)
+	s.Require().NoError(err)
+
+	// Receive the message
+	msg, err := sub.NextMsgWithContext(ctx)
+	s.Require().NoError(err)
+
+	// Verify the message content
+	var receivedEvent domain.MCPToolCallEvent
+	err = json.Unmarshal(msg.Data, &receivedEvent)
+	s.Require().NoError(err)
+
+	s.Equal(event.ToolName, receivedEvent.ToolName)
+	s.Equal(event.Status, receivedEvent.Status)
+	s.Equal(event.ArgsJSON, receivedEvent.ArgsJSON)
+	s.Equal(event.ResultJSON, receivedEvent.ResultJSON)
+	s.Equal(event.Error, receivedEvent.Error)
 }
 
 func TestStreamerSuite(t *testing.T) {

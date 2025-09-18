@@ -252,3 +252,8 @@ func (d Delegator) EndFlowEventStream(ctx context.Context, workspaceId, flowId, 
 func (d Delegator) StreamFlowEvents(ctx context.Context, workspaceId, flowId string, subscriptionCh <-chan domain.FlowEventSubscription) (<-chan domain.FlowEvent, <-chan error) {
 	return d.streamer.StreamFlowEvents(ctx, workspaceId, flowId, subscriptionCh)
 }
+
+/* implements MCPEventStreamer interface */
+func (d Delegator) AddMCPToolCallEvent(ctx context.Context, workspaceId, sessionId string, event domain.MCPToolCallEvent) error {
+	return d.streamer.AddMCPToolCallEvent(ctx, workspaceId, sessionId, event)
+}
