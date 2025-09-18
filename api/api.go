@@ -754,6 +754,98 @@ func (ctrl *Controller) AgentHandleNewTask(ctx context.Context, task *domain.Tas
 	return nil
 }
 
+func (ctrl *Controller) GetFlowActionHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	actionId := c.Param("id")
+
+	if workspaceId == "" || actionId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID and Action ID are required"})
+		return
+	}
+
+	flowAction, err := ctrl.service.GetFlowAction(c, workspaceId, actionId)
+	if err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Flow action not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"flowAction": flowAction})
+}
+
+func (ctrl *Controller) GetFlowFlowActionsHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	if workspaceId == "" || flowId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID and Flow ID are required"})
+		return
+	}
+
+	// Get all flow actions first
+	flowActions, err := ctrl.service.GetFlowActions(c, workspaceId, flowId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get flow actions"})
+		return
+	}
+
+	if flowActions == nil {
+		flowActions = []domain.FlowAction{}
+		// Verify flow exists
+		_, err := ctrl.service.GetFlow(c, workspaceId, flowId)
+		if err != nil {
+			if errors.Is(err, srv.ErrNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get flow"})
+			}
+			return
+		}
+	}
+
+	// Sort by ksuid descending (newest first)
+	// KSUIDs are lexicographically sortable and encode creation time
+	for i := 0; i < len(flowActions)-1; i++ {
+		for j := i + 1; j < len(flowActions); j++ {
+			if flowActions[i].Id < flowActions[j].Id {
+				flowActions[i], flowActions[j] = flowActions[j], flowActions[i]
+			}
+		}
+	}
+
+	// Apply after parameter
+	after := c.Query("after")
+	if after != "" {
+		filteredActions := []domain.FlowAction{}
+		for _, action := range flowActions {
+			if action.Id < after {
+				filteredActions = append(filteredActions, action)
+			}
+		}
+		flowActions = filteredActions
+	}
+
+	// Apply limit parameter
+	limit := 0
+	if limitStr := c.Query("limit"); limitStr != "" {
+		var err error
+		limit, err = strconv.Atoi(limitStr)
+		if err != nil || limit < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid limit parameter"})
+			return
+		}
+	}
+
+	if limit > 0 && len(flowActions) > limit {
+		flowActions = flowActions[:limit]
+	}
+
+	c.JSON(http.StatusOK, gin.H{"flowActions": flowActions})
+}
+
 func (ctrl *Controller) GetFlowActionsHandler(c *gin.Context) {
 	flowId := c.Param("id")
 	workspaceId := c.Param("workspaceId")
