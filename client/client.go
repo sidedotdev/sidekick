@@ -16,6 +16,12 @@ type Client interface {
 	CancelTask(workspaceID string, taskID string) error
 	CreateWorkspace(req *CreateWorkspaceRequest) (*domain.Workspace, error)
 	GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error)
+	GetFlow(workspaceID, flowID string) (domain.Flow, error)
+	GetTasks(workspaceID string, statuses []string) ([]Task, error)
+	GetFlowActions(workspaceID, flowID, after string, limit int) ([]domain.FlowAction, error)
+	GetFlowAction(workspaceID, actionID string) (domain.FlowAction, error)
+	CompleteFlowAction(workspaceID, actionID string, req *CompleteFlowActionRequest) (domain.FlowAction, error)
+	GetSubflows(workspaceID, flowID string) ([]domain.Subflow, error)
 	GetBaseURL() string
 }
 

@@ -59,6 +59,36 @@ func (m *mockClient) CreateWorkspace(req *CreateWorkspaceRequest) (*domain.Works
 	return args.Get(0).(*domain.Workspace), args.Error(1)
 }
 
+func (m *mockClient) GetFlow(workspaceID, flowID string) (domain.Flow, error) {
+	args := m.Called(workspaceID, flowID)
+	return args.Get(0).(domain.Flow), args.Error(1)
+}
+
+func (m *mockClient) GetTasks(workspaceID string, statuses []string) ([]Task, error) {
+	args := m.Called(workspaceID, statuses)
+	return args.Get(0).([]Task), args.Error(1)
+}
+
+func (m *mockClient) GetFlowActions(workspaceID, flowID, after string, limit int) ([]domain.FlowAction, error) {
+	args := m.Called(workspaceID, flowID, after, limit)
+	return args.Get(0).([]domain.FlowAction), args.Error(1)
+}
+
+func (m *mockClient) GetFlowAction(workspaceID, actionID string) (domain.FlowAction, error) {
+	args := m.Called(workspaceID, actionID)
+	return args.Get(0).(domain.FlowAction), args.Error(1)
+}
+
+func (m *mockClient) CompleteFlowAction(workspaceID, actionID string, req *CompleteFlowActionRequest) (domain.FlowAction, error) {
+	args := m.Called(workspaceID, actionID, req)
+	return args.Get(0).(domain.FlowAction), args.Error(1)
+}
+
+func (m *mockClient) GetSubflows(workspaceID, flowID string) ([]domain.Subflow, error) {
+	args := m.Called(workspaceID, flowID)
+	return args.Get(0).([]domain.Subflow), args.Error(1)
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
