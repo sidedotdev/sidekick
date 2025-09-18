@@ -846,6 +846,38 @@ func (ctrl *Controller) GetFlowFlowActionsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"flowActions": flowActions})
 }
 
+func (ctrl *Controller) GetSubflowsHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	if workspaceId == "" || flowId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID and Flow ID are required"})
+		return
+	}
+
+	subflows, err := ctrl.service.GetSubflows(c, workspaceId, flowId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get subflows"})
+		return
+	}
+
+	if subflows == nil {
+		subflows = []domain.Subflow{}
+		// Verify flow exists
+		_, err := ctrl.service.GetFlow(c, workspaceId, flowId)
+		if err != nil {
+			if errors.Is(err, srv.ErrNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get flow"})
+			}
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"subflows": subflows})
+}
+
 func (ctrl *Controller) GetFlowActionsHandler(c *gin.Context) {
 	flowId := c.Param("id")
 	workspaceId := c.Param("workspaceId")

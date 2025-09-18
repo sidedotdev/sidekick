@@ -65,6 +65,7 @@ func DefineWorkspaceApiRoutes(r *gin.Engine, ctrl *Controller) *gin.RouterGroup 
 	workspaceGroup.GET("/subflows/:id", ctrl.GetSubflowHandler)
 	workspaceGroup.GET("/flow_actions/:id", ctrl.GetFlowActionHandler)
 	workspaceGroup.GET("/flows/:id/flow_actions", ctrl.GetFlowFlowActionsHandler)
+	workspaceGroup.GET("/flows/:id/subflows", ctrl.GetSubflowsHandler)
 
 	return workspaceGroup
 }
