@@ -3,6 +3,7 @@ package env
 import (
 	"context"
 	"encoding/json"
+	"os/exec"
 	"path/filepath"
 	"sidekick/common"
 	"sidekick/domain"
@@ -16,10 +17,64 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// setupTestGitRepo creates a temporary Git repository with a main branch and initial commit.
+// It returns the repo directory path and sets up cleanup via t.Cleanup.
+func setupTestGitRepo(t *testing.T) string {
+	t.Helper()
+
+	// Check if git is available
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git command not found in PATH")
+	}
+
+	repoDir := t.TempDir()
+
+	// Initialize git repo
+	cmd := exec.Command("git", "init")
+	cmd.Dir = repoDir
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git init failed: %s", string(output))
+
+	// Create main branch
+	cmd = exec.Command("git", "checkout", "-b", "main")
+	cmd.Dir = repoDir
+	output, err = cmd.CombinedOutput()
+	require.NoError(t, err, "git checkout -b main failed: %s", string(output))
+
+	// Configure local user for commits (avoid relying on global config)
+	cmd = exec.Command("git", "config", "user.name", "Test User")
+	cmd.Dir = repoDir
+	output, err = cmd.CombinedOutput()
+	require.NoError(t, err, "git config user.name failed: %s", string(output))
+
+	cmd = exec.Command("git", "config", "user.email", "test@example.com")
+	cmd.Dir = repoDir
+	output, err = cmd.CombinedOutput()
+	require.NoError(t, err, "git config user.email failed: %s", string(output))
+
+	// Create initial empty commit
+	cmd = exec.Command("git", "commit", "--allow-empty", "-m", "Initial commit")
+	cmd.Dir = repoDir
+	output, err = cmd.CombinedOutput()
+	require.NoError(t, err, "git commit failed: %s", string(output))
+
+	return repoDir
+}
+
+// setupTestDataHome creates a temporary directory for SIDE_DATA_HOME and sets it up
+// with cleanup via t.Cleanup.
+func setupTestDataHome(t *testing.T) string {
+	t.Helper()
+	tempDataHome := t.TempDir()
+	t.Setenv("SIDE_DATA_HOME", tempDataHome)
+	return tempDataHome
+}
+
 func TestLocalEnvironment(t *testing.T) {
 	ctx := context.Background()
+	tempDir := t.TempDir()
 	params := LocalEnvParams{
-		RepoDir: "./",
+		RepoDir: tempDir,
 	}
 
 	env, err := NewLocalEnv(ctx, params)
@@ -38,13 +93,15 @@ func TestLocalEnvironment(t *testing.T) {
 	assert.NotEmpty(t, output.Stdout)
 	assert.NotEmpty(t, env.GetWorkingDirectory())
 	expectedWorkDir, _ := filepath.EvalSymlinks(strings.TrimSuffix(output.Stdout, "\n"))
-	assert.Equal(t, env.GetWorkingDirectory(), expectedWorkDir)
+	actualWorkDir, _ := filepath.EvalSymlinks(env.GetWorkingDirectory())
+	assert.Equal(t, actualWorkDir, expectedWorkDir)
 }
 
 func TestLocalGitWorktreeEnvironment(t *testing.T) {
 	ctx := context.Background()
-	repoDir, err := filepath.Abs("./")
-	require.NoError(t, err)
+	setupTestDataHome(t)
+	repoDir := setupTestGitRepo(t)
+
 	params := LocalEnvParams{
 		RepoDir:     repoDir,
 		StartBranch: utils.Ptr("main"),
@@ -86,8 +143,9 @@ func TestLocalGitWorktreeEnvironment(t *testing.T) {
 
 func TestLocalEnvironment_MarshalUnmarshal(t *testing.T) {
 	ctx := context.Background()
+	tempDir := t.TempDir()
 	params := LocalEnvParams{
-		RepoDir: "./",
+		RepoDir: tempDir,
 	}
 
 	originalEnv, err := NewLocalEnv(ctx, params)
@@ -106,8 +164,11 @@ func TestLocalEnvironment_MarshalUnmarshal(t *testing.T) {
 
 func TestLocalGitWorktreeEnvironment_MarshalUnmarshal(t *testing.T) {
 	ctx := context.Background()
+	setupTestDataHome(t)
+	repoDir := setupTestGitRepo(t)
+
 	params := LocalEnvParams{
-		RepoDir:     "./",
+		RepoDir:     repoDir,
 		StartBranch: utils.Ptr("main"),
 	}
 
