@@ -1,0 +1,179 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+	"time"
+
+	"sidekick/client"
+	"sidekick/domain"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+)
+
+// mockClient implements client.Client for testing
+type mockClient struct {
+	mock.Mock
+}
+
+func (m *mockClient) CreateTask(workspaceID string, req *client.CreateTaskRequest) (client.Task, error) {
+	args := m.Called(workspaceID, req)
+	return args.Get(0).(client.Task), args.Error(1)
+}
+
+func (m *mockClient) GetTask(workspaceID string, taskID string) (client.Task, error) {
+	args := m.Called(workspaceID, taskID)
+	return args.Get(0).(client.Task), args.Error(1)
+}
+
+func (m *mockClient) CancelTask(workspaceID string, taskID string) error {
+	args := m.Called(workspaceID, taskID)
+	return args.Error(0)
+}
+
+func (m *mockClient) CreateWorkspace(req *client.CreateWorkspaceRequest) (*domain.Workspace, error) {
+	args := m.Called(req)
+	return args.Get(0).(*domain.Workspace), args.Error(1)
+}
+
+func (m *mockClient) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error) {
+	args := m.Called(ctx)
+	return args.Get(0).([]domain.Workspace), args.Error(1)
+}
+
+func (m *mockClient) GetFlow(workspaceID, flowID string) (domain.Flow, error) {
+	args := m.Called(workspaceID, flowID)
+	return args.Get(0).(domain.Flow), args.Error(1)
+}
+
+func (m *mockClient) GetTasks(workspaceID string, statuses []string) ([]client.Task, error) {
+	args := m.Called(workspaceID, statuses)
+	return args.Get(0).([]client.Task), args.Error(1)
+}
+
+func (m *mockClient) GetFlowActions(workspaceID, flowID, after string, limit int) ([]domain.FlowAction, error) {
+	args := m.Called(workspaceID, flowID, after, limit)
+	return args.Get(0).([]domain.FlowAction), args.Error(1)
+}
+
+func (m *mockClient) GetFlowAction(workspaceID, actionID string) (domain.FlowAction, error) {
+	args := m.Called(workspaceID, actionID)
+	return args.Get(0).(domain.FlowAction), args.Error(1)
+}
+
+func (m *mockClient) CompleteFlowAction(workspaceID, actionID string, req *client.CompleteFlowActionRequest) (domain.FlowAction, error) {
+	args := m.Called(workspaceID, actionID, req)
+	return args.Get(0).(domain.FlowAction), args.Error(1)
+}
+
+func (m *mockClient) GetSubflows(workspaceID, flowID string) ([]domain.Subflow, error) {
+	args := m.Called(workspaceID, flowID)
+	return args.Get(0).([]domain.Subflow), args.Error(1)
+}
+
+func (m *mockClient) GetBaseURL() string {
+	args := m.Called()
+	return args.String(0)
+}
+
+// fakeEventStreamer implements domain.MCPEventStreamer for testing
+type fakeEventStreamer struct {
+	events []domain.MCPToolCallEvent
+}
+
+func (f *fakeEventStreamer) AddMCPToolCallEvent(ctx context.Context, workspaceId, sessionId string, event domain.MCPToolCallEvent) error {
+	f.events = append(f.events, event)
+	return nil
+}
+
+func TestMCPServerEventEmission(t *testing.T) {
+	// Create mock client
+	mockClient := &mockClient{}
+
+	// Set up expected tasks response using correct domain.Task fields
+	expectedTasks := []client.Task{
+		{
+			Task: domain.Task{
+				Id:          "task_123",
+				Title:       "Test task 1",
+				Description: "Test task 1 description",
+				Status:      "in_progress",
+				WorkspaceId: "ws1",
+				Created:     time.Now(),
+				Updated:     time.Now(),
+			},
+		},
+		{
+			Task: domain.Task{
+				Id:          "task_456",
+				Title:       "Test task 2",
+				Description: "Test task 2 description",
+				Status:      "complete",
+				WorkspaceId: "ws1",
+				Created:     time.Now(),
+				Updated:     time.Now(),
+			},
+		},
+	}
+
+	// Configure mock to return tasks
+	mockClient.On("GetTasks", "ws1", []string{"to_do", "drafting", "blocked", "in_progress", "complete", "failed", "canceled"}).Return(expectedTasks, nil)
+
+	// Create fake event streamer
+	fakeStreamer := &fakeEventStreamer{}
+
+	// Test the list_tasks tool directly through the handler function
+	ctx := context.Background()
+	params := ListTasksParams{}
+
+	// Call the handler function directly since we can't easily test the MCP server's internal tool calling mechanism
+	result, _, err := handleListTasksWithEvents(ctx, mockClient, "ws1", fakeStreamer, "sess1", params, nil)
+
+	// Verify no error occurred
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.False(t, result.IsError)
+
+	// Get the structured content from the result instead of the return value
+	actualTasks, ok := result.StructuredContent.([]client.Task)
+	assert.True(t, ok, "StructuredContent should be []client.Task")
+	assert.NotNil(t, actualTasks)
+
+	// Verify mock was called
+	mockClient.AssertExpectations(t)
+
+	// Verify exactly 2 events were captured
+	assert.Len(t, fakeStreamer.events, 2)
+
+	// Verify first event is pending
+	pendingEvent := fakeStreamer.events[0]
+	assert.Equal(t, "list_tasks", pendingEvent.ToolName)
+	assert.Equal(t, domain.MCPToolCallStatusPending, pendingEvent.Status)
+	assert.NotEmpty(t, pendingEvent.ArgsJSON)
+	assert.Empty(t, pendingEvent.ResultJSON)
+	assert.Empty(t, pendingEvent.Error)
+
+	// Verify args JSON is valid
+	var argsCheck ListTasksParams
+	err = json.Unmarshal([]byte(pendingEvent.ArgsJSON), &argsCheck)
+	assert.NoError(t, err)
+
+	// Verify second event is complete
+	completeEvent := fakeStreamer.events[1]
+	assert.Equal(t, "list_tasks", completeEvent.ToolName)
+	assert.Equal(t, domain.MCPToolCallStatusComplete, completeEvent.Status)
+	assert.Empty(t, completeEvent.ArgsJSON)
+	assert.NotEmpty(t, completeEvent.ResultJSON)
+	assert.Empty(t, completeEvent.Error)
+
+	// Verify result JSON contains the expected tasks
+	var resultCheck []client.Task
+	err = json.Unmarshal([]byte(completeEvent.ResultJSON), &resultCheck)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedTasks, resultCheck)
+
+	// Also verify the structured content matches
+	assert.Equal(t, expectedTasks, actualTasks)
+}

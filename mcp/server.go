@@ -528,7 +528,7 @@ func handleListTasks(ctx context.Context, c client.Client, workspaceId string, p
 			&mcpsdk.TextContent{Text: string(tasksJSON)},
 		},
 		StructuredContent: tasks,
-	}, nil, nil
+	}, tasks, nil
 }
 
 func handleViewAction(ctx context.Context, c client.Client, workspaceId string, params ViewActionParams) (*mcpsdk.CallToolResult, any, error) {
