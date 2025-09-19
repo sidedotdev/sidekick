@@ -61,7 +61,7 @@ const toolResponse = computed(() => {
     return null
   } catch (error) {
     console.error('Error parsing action result:', error)
-    return null
+    return props.flowAction.actionResult
   }
 })
 </script>
