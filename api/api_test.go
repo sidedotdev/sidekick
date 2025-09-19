@@ -16,6 +16,7 @@ import (
 	"sidekick/srv"
 	"sidekick/srv/redis"
 	"sidekick/utils"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -973,7 +974,7 @@ func TestGetFlowActionsHandler(t *testing.T) {
 		{
 			WorkspaceId: workspaceId,
 			FlowId:      "flow_1",
-			Id:          "flowAction_" + ksuid.New().String(),
+			Id:          "flowAction_1",
 			ActionType:  "test_action_type_1",
 			ActionParams: map[string]interface{}{
 				"test_param_1": "test_value_1",
@@ -984,7 +985,7 @@ func TestGetFlowActionsHandler(t *testing.T) {
 		{
 			WorkspaceId: workspaceId,
 			FlowId:      "flow_1",
-			Id:          "flowAction_" + ksuid.New().String(),
+			Id:          "flowAction_2",
 			ActionType:  "test_action_type_2",
 			ActionParams: map[string]interface{}{
 				"test_param_2": "test_value_2",
@@ -1010,6 +1011,7 @@ func TestGetFlowActionsHandler(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.Code)
 	var result map[string][]domain.FlowAction
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
+	slices.Reverse(flowActions) // descending id order returned by default
 	if assert.Nil(t, err) {
 		assert.Equal(t, flowActions, result["flowActions"])
 	}
@@ -1019,10 +1021,11 @@ func TestGetFlowActionsHandler_NonExistentFlowId(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
+	workspaceId := "ws_1"
 	resp := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(resp)
+	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}, {Key: "id", Value: "non_existent_flow_id"}}
 	ctrl.GetFlowActionsHandler(c)
-	c.Params = []gin.Param{{Key: "id", Value: "non_existent_flow_id"}}
 
 	assert.Equal(t, http.StatusNotFound, resp.Code)
 }

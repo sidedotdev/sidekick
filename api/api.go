@@ -152,7 +152,9 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	flowRoutes.POST("/:id/pause", ctrl.PauseFlowHandler)
 	flowRoutes.POST("/:id/cancel", ctrl.CancelFlowHandler)
 	flowRoutes.POST("/:id/user_action", ctrl.UserActionHandler)
+	flowRoutes.GET("/:id/subflows", ctrl.GetSubflowsHandler)
 
+	workspaceApiRoutes.GET("/flow_actions/:id", ctrl.GetFlowActionHandler)
 	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
 	workspaceApiRoutes.PUT("/flow_actions/:id", ctrl.UpdateFlowActionHandler)
 
@@ -778,7 +780,7 @@ func (ctrl *Controller) GetFlowActionHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"flowAction": flowAction})
 }
 
-func (ctrl *Controller) GetFlowFlowActionsHandler(c *gin.Context) {
+func (ctrl *Controller) GetFlowActionsHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	flowId := c.Param("id")
 
@@ -790,21 +792,24 @@ func (ctrl *Controller) GetFlowFlowActionsHandler(c *gin.Context) {
 	// Get all flow actions first
 	flowActions, err := ctrl.service.GetFlowActions(c, workspaceId, flowId)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get flow actions"})
-		return
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Flow actions not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get flow actions"})
+			return
+		}
 	}
 
 	if flowActions == nil {
 		flowActions = []domain.FlowAction{}
-		// Verify flow exists
 		_, err := ctrl.service.GetFlow(c, workspaceId, flowId)
 		if err != nil {
 			if errors.Is(err, srv.ErrNotFound) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
 			} else {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get flow"})
+				return
 			}
-			return
 		}
 	}
 
@@ -878,33 +883,6 @@ func (ctrl *Controller) GetSubflowsHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"subflows": subflows})
-}
-
-func (ctrl *Controller) GetFlowActionsHandler(c *gin.Context) {
-	flowId := c.Param("id")
-	workspaceId := c.Param("workspaceId")
-	if ctrl.service == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database accessor not initialized"})
-		return
-	}
-	flowActions, err := ctrl.service.GetFlowActions(c, workspaceId, flowId)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get flow actions"})
-		return
-	}
-	if flowActions == nil {
-		flowActions = []domain.FlowAction{}
-		_, err := ctrl.service.GetFlow(c, workspaceId, flowId)
-		if err != nil {
-			if errors.Is(err, srv.ErrNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
-			} else {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get flow"})
-				return
-			}
-		}
-	}
-	c.JSON(http.StatusOK, gin.H{"flowActions": flowActions})
 }
 
 func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {

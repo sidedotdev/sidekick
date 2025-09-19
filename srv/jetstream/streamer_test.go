@@ -2,6 +2,8 @@ package jetstream
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sidekick/common"
@@ -361,8 +363,9 @@ func (s *StreamerTestSuite) TestMCPToolCallEventStreaming() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	workspaceId := "ws1"
-	sessionId := "s1"
+	// Generate random IDs to avoid conflicts when running tests in parallel
+	workspaceId := "ws_" + generateRandomID(8)
+	sessionId := "sess_" + generateRandomID(8)
 	subject := fmt.Sprintf("mcp_session.tool_calls.%s.%s", workspaceId, sessionId)
 
 	// Subscribe to the subject
@@ -397,6 +400,15 @@ func (s *StreamerTestSuite) TestMCPToolCallEventStreaming() {
 	s.Equal(event.ArgsJSON, receivedEvent.ArgsJSON)
 	s.Equal(event.ResultJSON, receivedEvent.ResultJSON)
 	s.Equal(event.Error, receivedEvent.Error)
+}
+
+// generateRandomID creates a random hex string of the specified length
+func generateRandomID(length int) string {
+	bytes := make([]byte, length/2)
+	if _, err := rand.Read(bytes); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(bytes)
 }
 
 func TestStreamerSuite(t *testing.T) {

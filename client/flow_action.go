@@ -27,7 +27,7 @@ type CompleteFlowActionRequest struct {
 
 // GetFlowActions fetches flow actions for a specific flow with optional pagination.
 func (c *clientImpl) GetFlowActions(workspaceID, flowID, after string, limit int) ([]domain.FlowAction, error) {
-	reqURL := fmt.Sprintf("%s/api/v1/workspaces/%s/flows/%s/flow_actions", c.BaseURL, workspaceID, flowID)
+	reqURL := fmt.Sprintf("%s/api/v1/workspaces/%s/flows/%s/actions", c.BaseURL, workspaceID, flowID)
 
 	params := url.Values{}
 	if after != "" {
