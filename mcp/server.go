@@ -48,6 +48,11 @@ type RejectActionParams struct {
 	Message  string `json:"message"`
 }
 
+// FlowProgressParams defines the parameters for the flow_progress tool
+type FlowProgressParams struct {
+	FlowId string `json:"flowId"`
+}
+
 // NewWorkspaceServer creates a new MCP server for a specific workspace
 func NewWorkspaceServer(c client.Client, workspaceId string, mcpStreamer domain.MCPEventStreamer, sessionId string) *mcpsdk.Server {
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "sidekick"}, nil)
@@ -94,6 +99,13 @@ func NewWorkspaceServer(c client.Client, workspaceId string, mcpStreamer domain.
 		return handleRejectActionWithEvents(ctx, c, workspaceId, mcpStreamer, sessionId, args, req)
 	})
 
+	mcpsdk.AddTool(server, &mcpsdk.Tool{
+		Name:        "flow_progress",
+		Description: "Get progress information for a flow including subflows and recent actions",
+	}, func(ctx context.Context, req *mcpsdk.CallToolRequest, args FlowProgressParams) (*mcpsdk.CallToolResult, any, error) {
+		return handleFlowProgressWithEvents(ctx, c, workspaceId, mcpStreamer, sessionId, args, req)
+	})
+
 	return server
 }
 
@@ -105,7 +117,10 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-// summarizeFlowAction creates a summary of a flow action based on its type
+// summarizeFlowAction creates a summary of a flow action based on its type.
+// This function provides specialized summaries for user_request.* and tool_call.*
+// action types with 100-character truncation, and includes result details for
+// completed user requests when parseable. Used by flow_progress tool.
 func summarizeFlowAction(action domain.FlowAction) map[string]interface{} {
 	summary := map[string]interface{}{
 		"type":        "flow_action",
@@ -729,4 +744,207 @@ func handleRejectAction(ctx context.Context, c client.Client, workspaceId string
 		},
 		StructuredContent: action,
 	}, nil, nil
+}
+
+func handleFlowProgressWithEvents(ctx context.Context, c client.Client, workspaceId string, mcpStreamer domain.MCPEventStreamer, sessionId string, params FlowProgressParams, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, any, error) {
+	// Emit pending event
+	argsJSON, _ := json.Marshal(params)
+	emitMCPEvent(ctx, mcpStreamer, workspaceId, sessionId, domain.MCPToolCallEvent{
+		ToolName: "flow_progress",
+		Status:   domain.MCPToolCallStatusPending,
+		ArgsJSON: string(argsJSON),
+	})
+
+	// Execute the tool
+	result, structuredContent, err := handleFlowProgress(ctx, c, workspaceId, params)
+
+	// Emit completion event
+	if err != nil {
+		emitMCPEvent(ctx, mcpStreamer, workspaceId, sessionId, domain.MCPToolCallEvent{
+			ToolName: "flow_progress",
+			Status:   domain.MCPToolCallStatusFailed,
+			Error:    err.Error(),
+		})
+	} else {
+		resultJSON, _ := json.Marshal(structuredContent)
+		emitMCPEvent(ctx, mcpStreamer, workspaceId, sessionId, domain.MCPToolCallEvent{
+			ToolName:   "flow_progress",
+			Status:     domain.MCPToolCallStatusComplete,
+			ResultJSON: string(resultJSON),
+		})
+	}
+
+	return result, structuredContent, err
+}
+
+func handleFlowProgress(ctx context.Context, c client.Client, workspaceId string, params FlowProgressParams) (*mcpsdk.CallToolResult, any, error) {
+	// Validate flowId
+	if params.FlowId == "" {
+		return &mcpsdk.CallToolResult{
+			IsError: true,
+			Content: []mcpsdk.Content{
+				&mcpsdk.TextContent{Text: "flowId parameter is required and cannot be empty"},
+			},
+		}, nil, nil
+	}
+
+	// Get the flow
+	flow, err := c.GetFlow(workspaceId, params.FlowId)
+	if err != nil {
+		return &mcpsdk.CallToolResult{
+			IsError: true,
+			Content: []mcpsdk.Content{
+				&mcpsdk.TextContent{Text: fmt.Sprintf("failed to get flow: %v", err)},
+			},
+		}, nil, nil
+	}
+
+	// Get the parent task for parentObject
+	task, err := c.GetTask(workspaceId, flow.ParentId)
+	if err != nil {
+		return &mcpsdk.CallToolResult{
+			IsError: true,
+			Content: []mcpsdk.Content{
+				&mcpsdk.TextContent{Text: fmt.Sprintf("failed to get parent task: %v", err)},
+			},
+		}, nil, nil
+	}
+
+	// Get latest 10 flow actions
+	flowActions, err := c.GetFlowActions(workspaceId, params.FlowId, "", 10)
+	if err != nil {
+		return &mcpsdk.CallToolResult{
+			IsError: true,
+			Content: []mcpsdk.Content{
+				&mcpsdk.TextContent{Text: fmt.Sprintf("failed to get flow actions: %v", err)},
+			},
+		}, nil, nil
+	}
+
+	// Get all subflows
+	subflows, err := c.GetSubflows(workspaceId, params.FlowId)
+	if err != nil {
+		return &mcpsdk.CallToolResult{
+			IsError: true,
+			Content: []mcpsdk.Content{
+				&mcpsdk.TextContent{Text: fmt.Sprintf("failed to get subflows: %v", err)},
+			},
+		}, nil, nil
+	}
+
+	// Build the actions summary tree
+	actionsSummary := buildActionsSummary(subflows, flowActions)
+
+	// Build the response
+	response := map[string]interface{}{
+		"flowStatus": flow.Status,
+		"parentObject": map[string]interface{}{
+			"id":     task.Id,
+			"status": task.Status,
+		},
+		"actions_summary": actionsSummary,
+	}
+
+	// Marshal to compact JSON
+	responseJSON, err := json.Marshal(response)
+	if err != nil {
+		return &mcpsdk.CallToolResult{
+			IsError: true,
+			Content: []mcpsdk.Content{
+				&mcpsdk.TextContent{Text: fmt.Sprintf("failed to marshal response: %v", err)},
+			},
+		}, nil, nil
+	}
+
+	return &mcpsdk.CallToolResult{
+		Content: []mcpsdk.Content{
+			&mcpsdk.TextContent{Text: string(responseJSON)},
+		},
+		StructuredContent: response,
+	}, nil, nil
+}
+
+// buildActionsSummary builds a tree structure combining subflows and flow actions
+func buildActionsSummary(subflows []domain.Subflow, flowActions []domain.FlowAction) []map[string]interface{} {
+	// Create a map of subflows by ID for quick lookup
+	subflowMap := make(map[string]domain.Subflow)
+	for _, subflow := range subflows {
+		subflowMap[subflow.Id] = subflow
+	}
+
+	// Create a map to track which subflows have been processed
+	processedSubflows := make(map[string]bool)
+
+	// Build subflow nodes with their children
+	var buildSubflowNode func(subflow domain.Subflow) map[string]interface{}
+	buildSubflowNode = func(subflow domain.Subflow) map[string]interface{} {
+		node := map[string]interface{}{
+			"type":   "subflow",
+			"id":     subflow.Id,
+			"status": subflow.Status,
+		}
+
+		if subflow.Name != "" {
+			node["name"] = subflow.Name
+		}
+		if subflow.Description != "" {
+			node["description"] = subflow.Description
+		}
+		if subflow.Result != "" {
+			node["result"] = subflow.Result
+		}
+		if subflow.ParentSubflowId != "" {
+			node["parentSubflowId"] = subflow.ParentSubflowId
+		}
+
+		// Find child subflows
+		var children []map[string]interface{}
+		for _, childSubflow := range subflows {
+			if childSubflow.ParentSubflowId == subflow.Id && !processedSubflows[childSubflow.Id] {
+				processedSubflows[childSubflow.Id] = true
+				children = append(children, buildSubflowNode(childSubflow))
+			}
+		}
+
+		// Add flow actions that belong to this subflow
+		for _, action := range flowActions {
+			if action.SubflowId == subflow.Id {
+				children = append(children, summarizeFlowAction(action))
+			}
+		}
+
+		if len(children) > 0 {
+			node["children"] = children
+		}
+
+		return node
+	}
+
+	// Start with top-level nodes
+	var result []map[string]interface{}
+
+	// Add completed subflows at top level (when parentSubflowId is empty)
+	for _, subflow := range subflows {
+		if subflow.ParentSubflowId == "" && subflow.Status == "complete" && !processedSubflows[subflow.Id] {
+			processedSubflows[subflow.Id] = true
+			result = append(result, buildSubflowNode(subflow))
+		}
+	}
+
+	// Add active subflows (multiple nested active subflows supported)
+	for _, subflow := range subflows {
+		if subflow.ParentSubflowId == "" && subflow.Status != "complete" && !processedSubflows[subflow.Id] {
+			processedSubflows[subflow.Id] = true
+			result = append(result, buildSubflowNode(subflow))
+		}
+	}
+
+	// Add flow actions that don't belong to any subflow (top-level)
+	for _, action := range flowActions {
+		if action.SubflowId == "" {
+			result = append(result, summarizeFlowAction(action))
+		}
+	}
+
+	return result
 }
