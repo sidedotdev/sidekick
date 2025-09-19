@@ -18,6 +18,7 @@ type StartTaskParams struct {
 	Description           string `json:"description"`
 	FlowType              string `json:"flowType,omitempty"`
 	DetermineRequirements *bool  `json:"determineRequirements,omitempty"`
+	StartBranch           string `json:"startBranch"`
 }
 
 // ListTasksParams defines the parameters for the list_tasks tool
@@ -199,6 +200,17 @@ func handleStartTask(ctx context.Context, c client.Client, workspaceId string, p
 		}, nil, nil
 	}
 
+	// Validate startBranch
+	startBranch := strings.TrimSpace(params.StartBranch)
+	if startBranch == "" {
+		return &mcpsdk.CallToolResult{
+			IsError: true,
+			Content: []mcpsdk.Content{
+				&mcpsdk.TextContent{Text: "startBranch parameter is required and cannot be empty"},
+			},
+		}, nil, nil
+	}
+
 	// Set default flowType if not provided
 	flowType := params.FlowType
 	if flowType == "" {
@@ -228,6 +240,8 @@ func handleStartTask(ctx context.Context, c client.Client, workspaceId string, p
 		FlowType:    flowType,
 		FlowOptions: map[string]interface{}{
 			"determineRequirements": determineRequirements,
+			"startBranch":           startBranch,
+			"envType":               "local_git_worktree",
 		},
 	}
 
