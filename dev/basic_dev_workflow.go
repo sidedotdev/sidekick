@@ -508,11 +508,10 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 			}
 		}
 
-		future := workflow.ExecuteActivity(dCtx, git.GitMergeActivity, dCtx.EnvContainer, git.GitMergeParams{
+		err := PerformWithUserRetry(actionCtx, git.GitMergeActivity, &mergeResult, dCtx.EnvContainer, git.GitMergeParams{
 			SourceBranch: dCtx.Worktree.Name,
 			TargetBranch: mergeInfo.TargetBranch,
 		})
-		err := future.Get(dCtx, &mergeResult)
 		if err != nil {
 			return mergeResult, fmt.Errorf("failed to merge branches: %v", err)
 		}
@@ -583,11 +582,10 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 
 				finalMergeResult, err := Track(finalActionCtx, func(flowAction domain.FlowAction) (git.MergeActivityResult, error) {
 					var finalResult git.MergeActivityResult
-					future := workflow.ExecuteActivity(dCtx, git.GitMergeActivity, dCtx.EnvContainer, git.GitMergeParams{
+					err := PerformWithUserRetry(finalActionCtx, git.GitMergeActivity, &finalResult, dCtx.EnvContainer, git.GitMergeParams{
 						SourceBranch: dCtx.Worktree.Name,
 						TargetBranch: mergeInfo.TargetBranch,
 					})
-					err := future.Get(dCtx, &finalResult)
 					if err != nil {
 						return finalResult, fmt.Errorf("failed to perform final merge: %v", err)
 					}

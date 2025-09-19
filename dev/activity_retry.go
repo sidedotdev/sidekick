@@ -32,6 +32,11 @@ func PerformWithUserRetry(actionCtx DevActionContext, activity interface{}, valu
 			return err
 		}
 
+		// If human-in-the-loop is disabled, don't retry to prevent infinite loops
+		if actionCtx.RepoConfig.DisableHumanInTheLoop {
+			return err
+		}
+
 		// Activity failed and version supports retry, prompt user to retry
 		prompt := fmt.Sprintf("%s failed:\n\n```\n%s\n```", actionCtx.ActionType, err.Error())
 		requestParams := map[string]any{
