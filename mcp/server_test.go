@@ -92,6 +92,9 @@ func TestMCPServerEventEmission(t *testing.T) {
 	// Create mock client
 	mockClient := &mockClient{}
 
+	// Use fixed timestamps to avoid comparison issues
+	fixedTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+
 	// Set up expected tasks response using correct domain.Task fields
 	expectedTasks := []client.Task{
 		{
@@ -101,8 +104,8 @@ func TestMCPServerEventEmission(t *testing.T) {
 				Description: "Test task 1 description",
 				Status:      "in_progress",
 				WorkspaceId: "ws1",
-				Created:     time.Now(),
-				Updated:     time.Now(),
+				Created:     fixedTime,
+				Updated:     fixedTime,
 			},
 		},
 		{
@@ -112,8 +115,8 @@ func TestMCPServerEventEmission(t *testing.T) {
 				Description: "Test task 2 description",
 				Status:      "complete",
 				WorkspaceId: "ws1",
-				Created:     time.Now(),
-				Updated:     time.Now(),
+				Created:     fixedTime,
+				Updated:     fixedTime,
 			},
 		},
 	}
