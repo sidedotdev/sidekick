@@ -230,7 +230,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		// pause checkpoint
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return nil, fmt.Errorf("failed to make user request when paused: %v", err)
-		} else if response != nil && response.Content != "" && len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)].Role != llm.ChatMessageRoleTool {
+		} else if response != nil && response.Content != "" && len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
 			// HACK: since we don't add tool call responses right away (TODO),
 			// we make sure we don't end up with a tool call missing a result
 			// here.
