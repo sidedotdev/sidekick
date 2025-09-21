@@ -10,6 +10,8 @@ import (
 	"sidekick/client"
 	"sidekick/domain"
 
+	"github.com/google/jsonschema-go/jsonschema"
+	invopop_jsonschema "github.com/invopop/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/rs/zerolog/log"
 )
@@ -17,14 +19,14 @@ import (
 // StartTaskParams defines the parameters for the start_task tool
 type StartTaskParams struct {
 	Description           string `json:"description"`
-	FlowType              string `json:"flowType,omitempty"`
-	DetermineRequirements *bool  `json:"determineRequirements,omitempty"`
+	FlowType              string `json:"flowType,omitempty" jsonschema:"enum=basic_dev,enum=planned_dev,description=Use basic_dev for very simple tasks\\, e.g. editing a few lines of code across a few files\\, and planned_dev for more complex tasks requiring many changes. If unsure which is appropriate\\, confirm with the user."`
+	DetermineRequirements *bool  `json:"determineRequirements,omitempty" jsonschema:"default=true,description=Defaults to true if not specified\\, which is strongly recommended unless you provide comprehensive and highly detailed requirements in the description"`
 	StartBranch           string `json:"startBranch"`
 }
 
 // ListTasksParams defines the parameters for the list_tasks tool
 type ListTasksParams struct {
-	Statuses []string `json:"statuses,omitempty"`
+	Statuses []string `json:"statuses,omitempty" jsonschema:"description=Defaults to all statuses if left empty. Valid statuses are: to_do in_progress complete drafting blocked failed canceled"`
 }
 
 // ViewActionParams defines the parameters for the view_action tool
@@ -69,6 +71,7 @@ func NewWorkspaceServer(c client.Client, workspaceId string, mcpStreamer domain.
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "start_task",
 		Description: "Start a new LLM-driven task in the workspace",
+		InputSchema: getInputSchema(&StartTaskParams{}),
 	}, func(ctx context.Context, req *mcpsdk.CallToolRequest, args StartTaskParams) (*mcpsdk.CallToolResult, any, error) {
 		return handleStartTaskWithEvents(ctx, c, workspaceId, mcpStreamer, req.Session.ID(), args, req)
 	})
@@ -76,6 +79,7 @@ func NewWorkspaceServer(c client.Client, workspaceId string, mcpStreamer domain.
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "list_tasks",
 		Description: "List tasks in the workspace with optional status filtering",
+		InputSchema: getInputSchema(&ListTasksParams{}),
 	}, func(ctx context.Context, req *mcpsdk.CallToolRequest, args ListTasksParams) (*mcpsdk.CallToolResult, any, error) {
 		return handleListTasksWithEvents(ctx, c, workspaceId, mcpStreamer, req.Session.ID(), args, req)
 	})
@@ -116,6 +120,19 @@ func NewWorkspaceServer(c client.Client, workspaceId string, mcpStreamer domain.
 	})
 
 	return server
+}
+
+func getInputSchema(params any) *jsonschema.Schema {
+	var inputSchema *jsonschema.Schema
+	schemaJsonBytes, err := json.Marshal((&invopop_jsonschema.Reflector{DoNotReference: true}).Reflect(params))
+	if err != nil {
+		panic(err)
+	}
+	err = json.Unmarshal(schemaJsonBytes, &inputSchema)
+	if err != nil {
+		panic(err)
+	}
+	return inputSchema
 }
 
 // truncateString truncates a string to the specified length
