@@ -178,15 +178,15 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	}
 
 	// MCP routes
-	r.GET("/mcp/v1/workspaces/:workspaceId/sse", gin.WrapH(mcpsdk.NewSSEHandler(func(req *http.Request) *mcpsdk.Server {
+	r.Any("/mcp/v1/workspaces/:workspaceId/sse", gin.WrapH(mcpsdk.NewSSEHandler(func(req *http.Request) *mcpsdk.Server {
 		scheme := "http"
 		if req.TLS != nil {
 			scheme = "https"
 		}
 		baseURL := fmt.Sprintf("%s://%s", scheme, req.Host)
 		wsId := extractWorkspaceIdFromPath(req.URL.Path)
-		sessionId := req.Header.Get("mcp-session-id")
-		return mcp.NewWorkspaceServer(sidekickclient.NewClient(baseURL), wsId, ctrl.service, sessionId)
+		log.Info().Str("workspaceId", wsId).Msg("New MCP SSE session")
+		return mcp.NewWorkspaceServer(sidekickclient.NewClient(baseURL), wsId, ctrl.service)
 	})))
 
 	r.Any("/mcp/v1/workspaces/:workspaceId", gin.WrapH(mcpsdk.NewStreamableHTTPHandler(func(req *http.Request) *mcpsdk.Server {
@@ -196,8 +196,8 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 		}
 		baseURL := fmt.Sprintf("%s://%s", scheme, req.Host)
 		wsId := extractWorkspaceIdFromPath(req.URL.Path)
-		sessionId := req.Header.Get("mcp-session-id")
-		return mcp.NewWorkspaceServer(sidekickclient.NewClient(baseURL), wsId, ctrl.service, sessionId)
+		log.Info().Str("workspaceId", wsId).Msg("New MCP streamable http session")
+		return mcp.NewWorkspaceServer(sidekickclient.NewClient(baseURL), wsId, ctrl.service)
 	}, nil)))
 
 	// Wildcard route to serve index.html for other HTML-based frontend routes,

@@ -11,6 +11,7 @@ import (
 	"sidekick/domain"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/rs/zerolog/log"
 )
 
 // StartTaskParams defines the parameters for the start_task tool
@@ -55,56 +56,63 @@ type FlowProgressParams struct {
 }
 
 // NewWorkspaceServer creates a new MCP server for a specific workspace
-func NewWorkspaceServer(c client.Client, workspaceId string, mcpStreamer domain.MCPEventStreamer, sessionId string) *mcpsdk.Server {
-	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "sidekick"}, nil)
+func NewWorkspaceServer(c client.Client, workspaceId string, mcpStreamer domain.MCPEventStreamer) *mcpsdk.Server {
+	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "sidekick"}, &mcpsdk.ServerOptions{HasTools: true})
+
+	server.AddReceivingMiddleware(func(nextHandler mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+			log.Info().Str("workspaceId", workspaceId).Str("sessionId", req.GetSession().ID()).Str("method", method).Msg("MCP request")
+			return nextHandler(ctx, method, req)
+		}
+	})
 
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "start_task",
 		Description: "Start a new LLM-driven task in the workspace",
 	}, func(ctx context.Context, req *mcpsdk.CallToolRequest, args StartTaskParams) (*mcpsdk.CallToolResult, any, error) {
-		return handleStartTaskWithEvents(ctx, c, workspaceId, mcpStreamer, sessionId, args, req)
+		return handleStartTaskWithEvents(ctx, c, workspaceId, mcpStreamer, req.Session.ID(), args, req)
 	})
 
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "list_tasks",
 		Description: "List tasks in the workspace with optional status filtering",
 	}, func(ctx context.Context, req *mcpsdk.CallToolRequest, args ListTasksParams) (*mcpsdk.CallToolResult, any, error) {
-		return handleListTasksWithEvents(ctx, c, workspaceId, mcpStreamer, sessionId, args, req)
+		return handleListTasksWithEvents(ctx, c, workspaceId, mcpStreamer, req.Session.ID(), args, req)
 	})
 
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "view_action",
 		Description: "View details of a specific flow action",
 	}, func(ctx context.Context, req *mcpsdk.CallToolRequest, args ViewActionParams) (*mcpsdk.CallToolResult, any, error) {
-		return handleViewActionWithEvents(ctx, c, workspaceId, mcpStreamer, sessionId, args, req)
+		return handleViewActionWithEvents(ctx, c, workspaceId, mcpStreamer, req.Session.ID(), args, req)
 	})
 
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "respond_text",
 		Description: "Respond to a flow action with text content",
 	}, func(ctx context.Context, req *mcpsdk.CallToolRequest, args RespondTextParams) (*mcpsdk.CallToolResult, any, error) {
-		return handleRespondTextWithEvents(ctx, c, workspaceId, mcpStreamer, sessionId, args, req)
+		return handleRespondTextWithEvents(ctx, c, workspaceId, mcpStreamer, req.Session.ID(), args, req)
 	})
 
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "approve_action",
 		Description: "Approve a flow action",
 	}, func(ctx context.Context, req *mcpsdk.CallToolRequest, args ApproveActionParams) (*mcpsdk.CallToolResult, any, error) {
-		return handleApproveActionWithEvents(ctx, c, workspaceId, mcpStreamer, sessionId, args, req)
+		return handleApproveActionWithEvents(ctx, c, workspaceId, mcpStreamer, req.Session.ID(), args, req)
 	})
 
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "reject_action",
 		Description: "Reject a flow action with a message",
 	}, func(ctx context.Context, req *mcpsdk.CallToolRequest, args RejectActionParams) (*mcpsdk.CallToolResult, any, error) {
-		return handleRejectActionWithEvents(ctx, c, workspaceId, mcpStreamer, sessionId, args, req)
+		return handleRejectActionWithEvents(ctx, c, workspaceId, mcpStreamer, req.Session.ID(), args, req)
 	})
 
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "flow_progress",
 		Description: "Get progress information for a flow including subflows and recent actions",
 	}, func(ctx context.Context, req *mcpsdk.CallToolRequest, args FlowProgressParams) (*mcpsdk.CallToolResult, any, error) {
-		return handleFlowProgressWithEvents(ctx, c, workspaceId, mcpStreamer, sessionId, args, req)
+		return handleFlowProgressWithEvents(ctx, c, workspaceId, mcpStreamer, req.Session.ID(), args, req)
 	})
 
 	return server
