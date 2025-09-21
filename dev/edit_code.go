@@ -219,9 +219,11 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 				// HACK: since we don't add tool call responses right away (TODO),
 				// we make sure we don't end up with a tool call missing a result
 				// here.
-				switch info := promptInfo.(type) {
-				case ToolCallResponseInfo:
-					addToolCallResponse(chatHistory, info)
+				if len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
+					switch info := promptInfo.(type) {
+					case ToolCallResponseInfo:
+						addToolCallResponse(chatHistory, info)
+					}
 				}
 				return nil, nil
 			}
@@ -230,13 +232,15 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		// pause checkpoint
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return nil, fmt.Errorf("failed to make user request when paused: %v", err)
-		} else if response != nil && response.Content != "" && len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
+		} else if response != nil && response.Content != "" {
 			// HACK: since we don't add tool call responses right away (TODO),
 			// we make sure we don't end up with a tool call missing a result
 			// here.
-			switch info := promptInfo.(type) {
-			case ToolCallResponseInfo:
-				addToolCallResponse(chatHistory, info)
+			if len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
+				switch info := promptInfo.(type) {
+				case ToolCallResponseInfo:
+					addToolCallResponse(chatHistory, info)
+				}
 			}
 			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
 			attemptsSinceLastEditBlockOrFeedback = 0
@@ -247,9 +251,11 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			// HACK: since we don't add tool call responses right away (TODO),
 			// we make sure we don't end up with a tool call missing a result
 			// here.
-			switch info := promptInfo.(type) {
-			case ToolCallResponseInfo:
-				addToolCallResponse(chatHistory, info)
+			if len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
+				switch info := promptInfo.(type) {
+				case ToolCallResponseInfo:
+					addToolCallResponse(chatHistory, info)
+				}
 			}
 			promptInfo = FeedbackInfo{Feedback: msg}
 		}
@@ -258,9 +264,11 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			// HACK: since we don't add tool call responses right away (TODO),
 			// we make sure we don't end up with a tool call missing a result
 			// here.
-			switch info := promptInfo.(type) {
-			case ToolCallResponseInfo:
-				addToolCallResponse(chatHistory, info)
+			if len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
+				switch info := promptInfo.(type) {
+				case ToolCallResponseInfo:
+					addToolCallResponse(chatHistory, info)
+				}
 			}
 
 			// maybe this? yeah makes sense
@@ -272,6 +280,16 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 			return nil, ErrMaxAttemptsReached
 		} else if attemptsSinceLastEditBlockOrFeedback > 0 && attemptsSinceLastEditBlockOrFeedback%feedbackIterations == 0 {
+			// HACK: since we don't add tool call responses right away (TODO),
+			// we make sure we don't end up with a tool call missing a result
+			// here.
+			if len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
+				switch info := promptInfo.(type) {
+				case ToolCallResponseInfo:
+					addToolCallResponse(chatHistory, info)
+				}
+			}
+
 			guidanceContext := "The system has attempted to generate edits multiple times without success. Please provide some guidance."
 			requestParams := map[string]any{
 				// TODO include the latest failure if any
