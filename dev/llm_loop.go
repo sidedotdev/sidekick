@@ -96,7 +96,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 		}
 
 		// Inject proactive system message when nearing per-cycle tool-call limits
-		if msg, ok := ThresholdMessageForCounter(config.maxIterationsBeforeFeedback, iteration.NumSinceLastFeedback-1); ok {
+		if msg, ok := ThresholdMessageForCounter(config.maxIterationsBeforeFeedback, iteration.NumSinceLastFeedback); ok {
 			*iteration.ChatHistory = append(*iteration.ChatHistory, llm.ChatMessage{
 				Role:    "system",
 				Content: msg,
