@@ -119,6 +119,9 @@ func GetUserMergeApproval(
 	}
 	actionCtx.ActionParams = req.ActionParams()
 
+	mergeApprovalInfo := req.RequestParams["mergeApprovalInfo"].(MergeApprovalParams)
+	finalTarget := mergeApprovalInfo.DefaultTargetBranch
+
 	// Ensure tracking of the flow action within the guidance request
 	userResponse, err := TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
 		req.FlowActionId = flowAction.Id
@@ -129,46 +132,46 @@ func GetUserMergeApproval(
 			return nil, err
 		}
 
+		v := workflow.GetVersion(dCtx, "final-merge-response-update-flow-action", workflow.DefaultVersion, 1)
+
 		// handle branch switching until final approval/rejection
 		for {
-			if currentResponse.Approved != nil {
-				// final approval/rejection - update target branch in request state for safe resolution
-				if currentResponse.Params != nil {
-					if newTargetBranch, ok := currentResponse.Params["targetBranch"].(string); ok && newTargetBranch != "" {
-						mergeApprovalInfo := req.RequestParams["mergeApprovalInfo"].(MergeApprovalParams)
-						if newTargetBranch != mergeApprovalInfo.DefaultTargetBranch {
-							mergeApprovalInfo.DefaultTargetBranch = newTargetBranch
-							req.RequestParams["mergeApprovalInfo"] = mergeApprovalInfo
-						}
-					}
-				}
+			if v < 1 && currentResponse.Approved != nil {
+				// backcompat event history
 				return currentResponse, nil
 			}
 
-			// if Approved is nil, this is a branch switch update
-			newTargetBranch, ok := currentResponse.Params["targetBranch"].(string)
-			if !ok {
-				return nil, fmt.Errorf("targetBranch not found in user response params")
+			// branch switch update
+			if currentResponse.Params != nil {
+				latestTarget, ok := currentResponse.Params["targetBranch"].(string)
+				if !ok {
+					return nil, fmt.Errorf("targetBranch not found in user response params")
+				}
+				finalTarget = latestTarget
+
+				// Regenerate the diff with the new target branch
+				newDiff, err := getGitDiff(actionCtx.DevContext, finalTarget)
+				if err != nil {
+					return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", finalTarget, err)
+				}
+
+				// Update the mergeApprovalInfo with the new diff and target branch
+				mergeApprovalInfo.Diff = newDiff
+				mergeApprovalInfo.DefaultTargetBranch = finalTarget
+				req.RequestParams["mergeApprovalInfo"] = mergeApprovalInfo
+
+				// Update the flow action with the new parameters, so the user sees the updated diff and target
+				flowAction.ActionParams = req.ActionParams()
+				var fa *flow_action.FlowActivities
+				err = workflow.ExecuteActivity(actionCtx.DevContext, fa.PersistFlowAction, flowAction).Get(actionCtx.DevContext, nil)
+				if err != nil {
+					return nil, fmt.Errorf("failed to update flow action params: %v", err)
+				}
 			}
 
-			// Regenerate the diff with the new target branch
-			newDiff, err := getGitDiff(actionCtx.DevContext, newTargetBranch)
-			if err != nil {
-				return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", newTargetBranch, err)
-			}
-
-			// Update the mergeApprovalInfo with the new diff and target branch
-			mergeApprovalInfo := req.RequestParams["mergeApprovalInfo"].(MergeApprovalParams)
-			mergeApprovalInfo.Diff = newDiff
-			mergeApprovalInfo.DefaultTargetBranch = newTargetBranch
-			req.RequestParams["mergeApprovalInfo"] = mergeApprovalInfo
-
-			// Update the flow action with the new parameters
-			flowAction.ActionParams = req.ActionParams()
-			var fa *flow_action.FlowActivities
-			err = workflow.ExecuteActivity(actionCtx.DevContext, fa.PersistFlowAction, flowAction).Get(actionCtx.DevContext, nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to update flow action params: %v", err)
+			// if Approved is non-nil, this isn't just a branch switch update, we're done either approving or rejecting
+			if currentResponse.Approved != nil {
+				return currentResponse, nil
 			}
 
 			// wait for the next user response signal
@@ -182,16 +185,6 @@ func GetUserMergeApproval(
 
 	if err != nil {
 		return MergeApprovalResponse{}, err
-	}
-
-	// Safely resolve the final target branch from the request state
-	var finalTarget string
-	if mergeApprovalInfo, ok := req.RequestParams["mergeApprovalInfo"].(MergeApprovalParams); ok && mergeApprovalInfo.DefaultTargetBranch != "" {
-		finalTarget = mergeApprovalInfo.DefaultTargetBranch
-	} else if userResponse.Params != nil {
-		if targetBranch, ok := userResponse.Params["targetBranch"].(string); ok {
-			finalTarget = targetBranch
-		}
 	}
 
 	return MergeApprovalResponse{
