@@ -144,6 +144,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	w.RegisterActivity(dev.ApplyEditBlocksActivity) // backcompat for <= v0.4.2
 	w.RegisterActivity(devActivities)
 	w.RegisterActivity(dev.ReadFileActivity)
+	w.RegisterActivity(dev.BulkReadFileActivity)
 	w.RegisterActivity(dev.ManageChatHistoryActivity)
 	w.RegisterActivity(ffa.EvalBoolFlag)
 	w.RegisterActivity(common.GetLocalConfig)
