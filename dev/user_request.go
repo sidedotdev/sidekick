@@ -132,7 +132,22 @@ func GetUserMergeApproval(
 		// handle branch switching until final approval/rejection
 		for {
 			if currentResponse.Approved != nil {
-				// final approval/rejection
+				// final approval/rejection - check if we need to update target branch one last time
+				if currentResponse.Params != nil {
+					if newTargetBranch, ok := currentResponse.Params["targetBranch"].(string); ok && newTargetBranch != "" {
+						mergeApprovalInfo := req.RequestParams["mergeApprovalInfo"].(MergeApprovalParams)
+						if newTargetBranch != mergeApprovalInfo.DefaultTargetBranch {
+							mergeApprovalInfo.DefaultTargetBranch = newTargetBranch
+							req.RequestParams["mergeApprovalInfo"] = mergeApprovalInfo
+							flowAction.ActionParams = req.ActionParams()
+							var fa *flow_action.FlowActivities
+							err = workflow.ExecuteActivity(actionCtx.DevContext, fa.PersistFlowAction, flowAction).Get(actionCtx.DevContext, nil)
+							if err != nil {
+								return nil, fmt.Errorf("failed to update flow action params for final response: %v", err)
+							}
+						}
+					}
+				}
 				return currentResponse, nil
 			}
 
@@ -175,9 +190,19 @@ func GetUserMergeApproval(
 		return MergeApprovalResponse{}, err
 	}
 
+	// Safely resolve the final target branch from the request state
+	var finalTarget string
+	if mergeApprovalInfo, ok := req.RequestParams["mergeApprovalInfo"].(MergeApprovalParams); ok && mergeApprovalInfo.DefaultTargetBranch != "" {
+		finalTarget = mergeApprovalInfo.DefaultTargetBranch
+	} else if userResponse.Params != nil {
+		if targetBranch, ok := userResponse.Params["targetBranch"].(string); ok {
+			finalTarget = targetBranch
+		}
+	}
+
 	return MergeApprovalResponse{
 		Approved:     *userResponse.Approved,
-		TargetBranch: userResponse.Params["targetBranch"].(string),
+		TargetBranch: finalTarget,
 		Message:      userResponse.Content,
 	}, nil
 }
