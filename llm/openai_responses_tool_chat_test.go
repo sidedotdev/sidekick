@@ -53,17 +53,15 @@ func TestOpenaiResponsesToolChatIntegration_Basic(t *testing.T) {
 	ctx := context.Background()
 	chat := OpenaiResponsesToolChat{}
 
-	temperature := float32(0)
 	options := ToolChatOptions{
 		Params: ToolChatParams{
 			ModelConfig: common.ModelConfig{
 				Provider: "openai",
-				Model:    "gpt-4o-mini",
+				Model:    "gpt-4.1-nano-2025-04-14",
 			},
 			Messages: []ChatMessage{
 				{Role: ChatMessageRoleUser, Content: "Say hello in one sentence."},
 			},
-			Temperature: &temperature,
 		},
 		Secrets: secret_manager.SecretManagerContainer{
 			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{

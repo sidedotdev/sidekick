@@ -139,7 +139,7 @@ loop:
 			deltas = append(deltas, delta)
 		END_TODO: uncomment this in step 4 of the plan
 		*/
-		case responses.ResponseReasoningTextDeltaEvent:
+		case responses.ResponseReasoningTextDeltaEvent, responses.ResponseTextDeltaEvent:
 			delta := ChatMessageDelta{
 				Role:    ChatMessageRoleAssistant,
 				Content: data.Delta,
