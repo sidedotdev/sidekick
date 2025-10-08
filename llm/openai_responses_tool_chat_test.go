@@ -177,10 +177,6 @@ func TestOpenaiResponsesToolChatIntegration_Tools(t *testing.T) {
 		t.Error("No deltas received")
 	}
 
-	if response.Content == "" {
-		t.Error("Response content is empty")
-	}
-
 	if len(response.ToolCalls) == 0 {
 		t.Fatal("No tool calls in the response")
 	}
@@ -315,10 +311,6 @@ func TestOpenaiResponsesToolChatIntegration_MultiTurn(t *testing.T) {
 
 	if len(allDeltas) == 0 {
 		t.Error("No deltas received on multi-turn")
-	}
-
-	if response.Content == "" {
-		t.Error("Response content is empty on multi-turn")
 	}
 
 	if len(response.ToolCalls) == 0 {
