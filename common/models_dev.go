@@ -162,3 +162,17 @@ func SupportsReasoning(provider string, model string) bool {
 
 	return false
 }
+
+func SetTestCachePath(path string) {
+	cacheLoadMutex.Lock()
+	defer cacheLoadMutex.Unlock()
+	testCachePath = path
+}
+
+func ClearTestCache() {
+	cacheLoadMutex.Lock()
+	defer cacheLoadMutex.Unlock()
+	testCachePath = ""
+	cachedModelsData = nil
+	cacheLoadedAt = time.Time{}
+}
