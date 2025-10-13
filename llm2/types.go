@@ -32,12 +32,11 @@ const (
 
 // Media references for input blocks.
 type ImageRef struct {
-	Url    string `json:"url"`
-	Detail string `json:"detail,omitempty"` // e.g. "auto","low","high"
+	Url string `json:"url,omitempty"`
 }
 
 type FileRef struct {
-	Url      string `json:"url"`
+	Url      string `json:"url,omitempty"`
 	MimeType string `json:"mimeType,omitempty"`
 }
 
@@ -48,7 +47,8 @@ type RefusalBlock struct {
 }
 
 type ReasoningBlock struct {
-	Text string `json:"text"`
+	Text    string `json:"text"`
+	Summary string `json:"summary"`
 }
 
 type McpCallBlock struct {
