@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sidekick/common"
 	"strings"
 	"time"
 
@@ -58,10 +59,21 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 		temperature = *options.Params.Temperature
 	}
 
+	maxTokensToUse := int64(8000)
+	if options.Params.MaxTokens > 0 {
+		maxTokensToUse = int64(options.Params.MaxTokens)
+	}
+
+	if modelInfo, ok := common.GetModel(options.Params.Provider, model); ok {
+		if modelInfo.Limit.Output > 0 && maxTokensToUse > int64(modelInfo.Limit.Output) {
+			maxTokensToUse = int64(modelInfo.Limit.Output)
+		}
+	}
+
 	stream := client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
 		Temperature: anthropic.F(float64(temperature)),
 		Model:       anthropic.F(model),
-		MaxTokens:   anthropic.Int(4000),
+		MaxTokens:   anthropic.Int(maxTokensToUse),
 		Messages:    anthropic.F(messages),
 		Tools:       anthropic.F(tools),
 	})

@@ -88,3 +88,86 @@ func TestActionParams_IncludesReasoningEffortWhenSet(t *testing.T) {
 		})
 	}
 }
+
+func TestActionParams_OmitsMaxTokensWhenUnset(t *testing.T) {
+	options := ToolChatOptions{
+		Params: ToolChatParams{
+			Messages: []ChatMessage{
+				{Role: "user", Content: "test"},
+			},
+			Tools: []*Tool{},
+			ModelConfig: common.ModelConfig{
+				Provider: "anthropic",
+				Model:    "claude-3-5-sonnet-latest",
+			},
+		},
+	}
+
+	params := options.ActionParams()
+
+	if _, exists := params["maxTokens"]; exists {
+		t.Errorf("Expected maxTokens key to be absent when MaxTokens is unset, but it was present")
+	}
+
+	if params["provider"] != "anthropic" {
+		t.Errorf("Expected provider to be 'anthropic', got %v", params["provider"])
+	}
+	if params["model"] != "claude-3-5-sonnet-latest" {
+		t.Errorf("Expected model to be 'claude-3-5-sonnet-latest', got %v", params["model"])
+	}
+}
+
+func TestActionParams_IncludesMaxTokensWhenSet(t *testing.T) {
+	tests := []struct {
+		name      string
+		maxTokens int
+	}{
+		{
+			name:      "small max tokens",
+			maxTokens: 123,
+		},
+		{
+			name:      "medium max tokens",
+			maxTokens: 4000,
+		},
+		{
+			name:      "large max tokens",
+			maxTokens: 8000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			options := ToolChatOptions{
+				Params: ToolChatParams{
+					Messages: []ChatMessage{
+						{Role: "user", Content: "test"},
+					},
+					Tools: []*Tool{},
+					ModelConfig: common.ModelConfig{
+						Provider:  "anthropic",
+						Model:     "claude-3-5-sonnet-latest",
+						MaxTokens: tt.maxTokens,
+					},
+				},
+			}
+
+			params := options.ActionParams()
+
+			maxTokens, exists := params["maxTokens"]
+			if !exists {
+				t.Errorf("Expected maxTokens key to be present when MaxTokens is %d, but it was absent", tt.maxTokens)
+			}
+			if maxTokens != tt.maxTokens {
+				t.Errorf("Expected maxTokens to be %d, got %v", tt.maxTokens, maxTokens)
+			}
+
+			if params["provider"] != "anthropic" {
+				t.Errorf("Expected provider to be 'anthropic', got %v", params["provider"])
+			}
+			if params["model"] != "claude-3-5-sonnet-latest" {
+				t.Errorf("Expected model to be 'claude-3-5-sonnet-latest', got %v", params["model"])
+			}
+		})
+	}
+}
