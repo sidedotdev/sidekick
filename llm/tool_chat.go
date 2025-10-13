@@ -71,5 +71,8 @@ func (options ToolChatOptions) ActionParams() map[string]any {
 	if options.Params.ReasoningEffort != "" {
 		params["reasoningEffort"] = options.Params.ReasoningEffort
 	}
+	if options.Params.MaxTokens > 0 {
+		params["maxTokens"] = options.Params.MaxTokens
+	}
 	return params
 }
