@@ -13,7 +13,10 @@ import (
 )
 
 func TestGetModelConfig_SmallFallback_ReasoningSupported(t *testing.T) {
+	common.ClearModelsCache()
 	tmpDir := t.TempDir()
+	t.Setenv("SIDE_CACHE_HOME", tmpDir)
+
 	cachePath := filepath.Join(tmpDir, "models.dev.json")
 
 	modelsData := map[string]interface{}{
@@ -30,9 +33,6 @@ func TestGetModelConfig_SmallFallback_ReasoningSupported(t *testing.T) {
 	require.NoError(t, err)
 	err = os.WriteFile(cachePath, data, 0644)
 	require.NoError(t, err)
-
-	common.SetTestCachePath(cachePath)
-	defer common.ClearTestCache()
 
 	eCtx := &ExecContext{
 		LLMConfig: common.LLMConfig{
@@ -53,7 +53,10 @@ func TestGetModelConfig_SmallFallback_ReasoningSupported(t *testing.T) {
 }
 
 func TestGetModelConfig_SmallFallback_ReasoningNotSupported(t *testing.T) {
+	common.ClearModelsCache()
 	tmpDir := t.TempDir()
+	t.Setenv("SIDE_CACHE_HOME", tmpDir)
+
 	cachePath := filepath.Join(tmpDir, "models.dev.json")
 
 	modelsData := map[string]interface{}{
@@ -70,9 +73,6 @@ func TestGetModelConfig_SmallFallback_ReasoningNotSupported(t *testing.T) {
 	require.NoError(t, err)
 	err = os.WriteFile(cachePath, data, 0644)
 	require.NoError(t, err)
-
-	common.SetTestCachePath(cachePath)
-	defer common.ClearTestCache()
 
 	eCtx := &ExecContext{
 		LLMConfig: common.LLMConfig{
@@ -93,7 +93,10 @@ func TestGetModelConfig_SmallFallback_ReasoningNotSupported(t *testing.T) {
 }
 
 func TestGetModelConfig_NoReasoningForNonReasoningModel(t *testing.T) {
+	common.ClearModelsCache()
 	tmpDir := t.TempDir()
+	t.Setenv("SIDE_CACHE_HOME", tmpDir)
+
 	cachePath := filepath.Join(tmpDir, "models.dev.json")
 
 	modelsData := map[string]interface{}{
@@ -110,9 +113,6 @@ func TestGetModelConfig_NoReasoningForNonReasoningModel(t *testing.T) {
 	require.NoError(t, err)
 	err = os.WriteFile(cachePath, data, 0644)
 	require.NoError(t, err)
-
-	common.SetTestCachePath(cachePath)
-	defer common.ClearTestCache()
 
 	eCtx := &ExecContext{
 		LLMConfig: common.LLMConfig{

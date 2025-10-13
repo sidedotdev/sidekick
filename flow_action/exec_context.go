@@ -69,7 +69,7 @@ func (eCtx *ExecContext) GetModelConfig(key string, iteration int, fallback stri
 		}
 	}
 
-	if !common.SupportsReasoning(modelConfig.Provider, modelConfig.Model) {
+	if !common.ModelSupportsReasoning(modelConfig.Provider, modelConfig.Model) {
 		modelConfig.ReasoningEffort = ""
 	}
 

@@ -21,27 +21,52 @@ const (
 	httpTimeout       = 30 * time.Second
 )
 
-type modelInfo struct {
-	Reasoning bool `json:"reasoning"`
+type Modalities struct {
+	Input  []string `json:"input"`
+	Output []string `json:"output"`
 }
 
-type providerInfo struct {
-	Models map[string]modelInfo `json:"models"`
+type Cost struct {
+	Input      float64 `json:"input"`
+	Output     float64 `json:"output"`
+	CacheRead  float64 `json:"cache_read,omitempty"`
+	CacheWrite float64 `json:"cache_write,omitempty"`
 }
 
-type modelsDevData map[string]providerInfo
+type Limit struct {
+	Context int `json:"context"`
+	Output  int `json:"output"`
+}
+
+type ModelInfo struct {
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Attachment  bool       `json:"attachment,omitempty"`
+	Reasoning   bool       `json:"reasoning"`
+	Temperature bool       `json:"temperature,omitempty"`
+	ToolCall    bool       `json:"tool_call,omitempty"`
+	Knowledge   string     `json:"knowledge,omitempty"`
+	ReleaseDate string     `json:"release_date,omitempty"`
+	LastUpdated string     `json:"last_updated,omitempty"`
+	Modalities  Modalities `json:"modalities,omitempty"`
+	OpenWeights bool       `json:"open_weights,omitempty"`
+	Cost        Cost       `json:"cost,omitempty"`
+	Limit       Limit      `json:"limit,omitempty"`
+}
+
+type ProviderInfo struct {
+	Models map[string]ModelInfo `json:"models"`
+}
+
+type modelsDevData map[string]ProviderInfo
 
 var (
 	cachedModelsData modelsDevData
 	cacheLoadMutex   sync.Mutex
 	cacheLoadedAt    time.Time
-	testCachePath    string
 )
 
 func getModelsDevCachePath() (string, error) {
-	if testCachePath != "" {
-		return testCachePath, nil
-	}
 	cacheHome, err := GetSidekickCacheHome()
 	if err != nil {
 		return "", err
@@ -138,41 +163,63 @@ func downloadModelsDev(cachePath string) (modelsDevData, error) {
 	}
 
 	if err := os.WriteFile(cachePath, body, 0644); err != nil {
-		log.Warn().Err(err).Msg("failed to write models.dev cache")
+		log.Error().Err(err).Msg("failed to write models.dev cache")
 	}
 
 	return data, nil
 }
 
-func SupportsReasoning(provider string, model string) bool {
+func GetModel(provider string, model string) (*ModelInfo, bool) {
 	data, err := loadModelsDev()
 	if err != nil {
-		return false
+		return nil, false
 	}
 
 	providerLower := strings.ToLower(provider)
 	for providerKey, providerData := range data {
 		if strings.ToLower(providerKey) == providerLower {
 			if modelData, exists := providerData.Models[model]; exists {
-				return modelData.Reasoning
+				return &modelData, true
 			}
-			return false
+			return nil, false
 		}
 	}
 
-	return false
+	isBuiltin := false
+	for _, builtinProvider := range BuiltinProviders {
+		if strings.ToLower(builtinProvider) == providerLower {
+			isBuiltin = true
+			break
+		}
+	}
+
+	if !isBuiltin {
+		for providerKey, providerData := range data {
+			if modelData, exists := providerData.Models[model]; exists {
+				log.Debug().
+					Str("requestedProvider", provider).
+					Str("matchedProvider", providerKey).
+					Str("model", model).
+					Msg("provider not found, matched model in different provider")
+				return &modelData, true
+			}
+		}
+	}
+
+	return nil, false
 }
 
-func SetTestCachePath(path string) {
-	cacheLoadMutex.Lock()
-	defer cacheLoadMutex.Unlock()
-	testCachePath = path
+func ModelSupportsReasoning(provider string, model string) bool {
+	modelInfo, found := GetModel(provider, model)
+	if !found {
+		return false
+	}
+	return modelInfo.Reasoning
 }
 
-func ClearTestCache() {
+func ClearModelsCache() {
 	cacheLoadMutex.Lock()
 	defer cacheLoadMutex.Unlock()
-	testCachePath = ""
 	cachedModelsData = nil
 	cacheLoadedAt = time.Time{}
 }
