@@ -206,9 +206,7 @@ func TestOpenaiResponsesToolChatIntegration(t *testing.T) {
 		}
 
 		assert.NotNil(t, response.Usage, "Usage field should not be nil on multi-turn")
-		if response.Usage.InputTokens > 0 || response.Usage.OutputTokens > 0 {
-			assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0 on multi-turn")
-			assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0 on multi-turn")
-		}
+		assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0 on multi-turn")
+		assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0 on multi-turn")
 	})
 }
