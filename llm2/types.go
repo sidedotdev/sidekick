@@ -47,8 +47,9 @@ type RefusalBlock struct {
 }
 
 type ReasoningBlock struct {
-	Text    string `json:"text"`
-	Summary string `json:"summary"`
+	Text             string `json:"text"`
+	Summary          string `json:"summary"`
+	EncryptedContent string `json:"encryptedContent,omitempty"`
 }
 
 type McpCallBlock struct {
@@ -127,9 +128,9 @@ const (
 	// reasoning or other auxiliary text.
 	EventSummaryTextDelta EventType = "summary_text_delta"
 
-	// Opaque signature/attestation fragment for reasoning blocks (e.g., Anthropic
-	// signature_delta or provider-encrypted reasoning content). Append Delta to
-	// a provider-specific accumulator for the block.
+	// Provider-encrypted reasoning content fragment (e.g., OpenAI Responses
+	// reasoning.encrypted_content). Accumulated into Reasoning.EncryptedContent
+	// to enable stateless multi-turn reasoning continuity.
 	EventSignatureDelta EventType = "signature_delta"
 )
 
