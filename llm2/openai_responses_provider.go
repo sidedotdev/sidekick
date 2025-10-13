@@ -85,6 +85,17 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 		}
 	}
 
+	params.Store = openai.Bool(false)
+	includeSet := make(map[responses.ResponseIncludable]bool)
+	includeSet["reasoning.encrypted_content"] = true
+	for _, inc := range params.Include {
+		includeSet[inc] = true
+	}
+	params.Include = make([]responses.ResponseIncludable, 0, len(includeSet))
+	for inc := range includeSet {
+		params.Include = append(params.Include, inc)
+	}
+
 	stream := client.Responses.NewStreaming(ctx, params)
 
 	var events []Event
@@ -148,6 +159,35 @@ loop:
 				eventChan <- evt
 				events = append(events, evt)
 				nextBlockIndex++
+
+			case responses.ResponseReasoningItem:
+				item := event.Item.AsReasoning()
+				if reasoningBlockIndex == -1 {
+					reasoningBlockIndex = nextBlockIndex
+					evt := Event{
+						Type:  EventBlockStarted,
+						Index: reasoningBlockIndex,
+						ContentBlock: &ContentBlock{
+							Type: ContentBlockTypeReasoning,
+							Reasoning: &ReasoningBlock{
+								Text:    "",
+								Summary: "",
+							},
+						},
+					}
+					eventChan <- evt
+					events = append(events, evt)
+					nextBlockIndex++
+				}
+				if item.EncryptedContent != "" {
+					evt := Event{
+						Type:  EventSignatureDelta,
+						Index: reasoningBlockIndex,
+						Delta: item.EncryptedContent,
+					}
+					eventChan <- evt
+					events = append(events, evt)
+				}
 			}
 
 		case responses.ResponseFunctionCallArgumentsDeltaEvent:
@@ -311,14 +351,21 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 				if msg.Role != RoleAssistant {
 					return nil, fmt.Errorf("reasoning blocks must be in assistant messages, got role %s", msg.Role)
 				}
+				if block.Reasoning != nil && block.Reasoning.EncryptedContent != "" {
+					reasoningItem := responses.ResponseInputItemUnionParam{}
+					reasoningItem.UnmarshalJSON([]byte(fmt.Sprintf(`{"type":"reasoning","encrypted_content":%q}`, block.Reasoning.EncryptedContent)))
+					items = append(items, reasoningItem)
+				}
 				text := ""
 				if block.Reasoning != nil {
 					text = block.Reasoning.Text
 				}
-				items = append(items, responses.ResponseInputItemParamOfMessage(
-					text,
-					responses.EasyInputMessageRoleAssistant,
-				))
+				if text != "" {
+					items = append(items, responses.ResponseInputItemParamOfMessage(
+						text,
+						responses.EasyInputMessageRoleAssistant,
+					))
+				}
 
 			case ContentBlockTypeRefusal:
 				if msg.Role != RoleAssistant {
@@ -386,6 +433,14 @@ func applyEventsToMessage(events []Event) Message {
 				} else if block.Type == ContentBlockTypeReasoning && block.Reasoning != nil {
 					block.Reasoning.Summary += evt.Delta
 				}
+			}
+
+		case EventSignatureDelta:
+			if block, ok := blocks[evt.Index]; ok {
+				if block.Reasoning == nil {
+					block.Reasoning = &ReasoningBlock{}
+				}
+				block.Reasoning.EncryptedContent += evt.Delta
 			}
 		}
 	}
