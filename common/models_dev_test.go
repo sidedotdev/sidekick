@@ -5,22 +5,24 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestSupportsReasoning(t *testing.T) {
+	ClearModelsCache()
 	tempDir := t.TempDir()
+	t.Setenv("SIDE_CACHE_HOME", tempDir)
+
 	cachePath := filepath.Join(tempDir, modelsDevFilename)
 
 	sampleData := modelsDevData{
-		"openai": providerInfo{
-			Models: map[string]modelInfo{
+		"openai": ProviderInfo{
+			Models: map[string]ModelInfo{
 				"gpt-4o":        {Reasoning: true},
 				"gpt-3.5-turbo": {Reasoning: false},
 			},
 		},
-		"anthropic": providerInfo{
-			Models: map[string]modelInfo{
+		"anthropic": ProviderInfo{
+			Models: map[string]ModelInfo{
 				"claude-3-opus": {Reasoning: false},
 			},
 		},
@@ -34,13 +36,6 @@ func TestSupportsReasoning(t *testing.T) {
 	if err := os.WriteFile(cachePath, data, 0644); err != nil {
 		t.Fatalf("failed to write cache file: %v", err)
 	}
-
-	testCachePath = cachePath
-	defer func() {
-		testCachePath = ""
-		cachedModelsData = nil
-		cacheLoadedAt = time.Time{}
-	}()
 
 	tests := []struct {
 		name     string
@@ -88,22 +83,43 @@ func TestSupportsReasoning(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := SupportsReasoning(tt.provider, tt.model)
+			got := ModelSupportsReasoning(tt.provider, tt.model)
 			if got != tt.want {
-				t.Errorf("SupportsReasoning(%q, %q) = %v, want %v", tt.provider, tt.model, got, tt.want)
+				t.Errorf("ModelSupportsReasoning(%q, %q) = %v, want %v", tt.provider, tt.model, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestLoadModelsDev_CacheFreshness(t *testing.T) {
+func TestGetModel(t *testing.T) {
+	ClearModelsCache()
 	tempDir := t.TempDir()
+	t.Setenv("SIDE_CACHE_HOME", tempDir)
+
 	cachePath := filepath.Join(tempDir, modelsDevFilename)
 
 	sampleData := modelsDevData{
-		"test": providerInfo{
-			Models: map[string]modelInfo{
-				"test-model": {Reasoning: true},
+		"openai": ProviderInfo{
+			Models: map[string]ModelInfo{
+				"gpt-4o": {
+					ID:        "gpt-4o",
+					Name:      "GPT-4o",
+					Reasoning: true,
+				},
+				"gpt-3.5-turbo": {
+					ID:        "gpt-3.5-turbo",
+					Name:      "GPT-3.5 Turbo",
+					Reasoning: false,
+				},
+			},
+		},
+		"anthropic": ProviderInfo{
+			Models: map[string]ModelInfo{
+				"claude-3-opus": {
+					ID:        "claude-3-opus",
+					Name:      "Claude 3 Opus",
+					Reasoning: false,
+				},
 			},
 		},
 	}
@@ -117,12 +133,104 @@ func TestLoadModelsDev_CacheFreshness(t *testing.T) {
 		t.Fatalf("failed to write cache file: %v", err)
 	}
 
-	testCachePath = cachePath
-	defer func() {
-		testCachePath = ""
-		cachedModelsData = nil
-		cacheLoadedAt = time.Time{}
-	}()
+	tests := []struct {
+		name          string
+		provider      string
+		model         string
+		wantFound     bool
+		wantReasoning bool
+	}{
+		{
+			name:          "known provider and model with reasoning",
+			provider:      "openai",
+			model:         "gpt-4o",
+			wantFound:     true,
+			wantReasoning: true,
+		},
+		{
+			name:          "known provider and model without reasoning",
+			provider:      "openai",
+			model:         "gpt-3.5-turbo",
+			wantFound:     true,
+			wantReasoning: false,
+		},
+		{
+			name:          "case insensitive provider match",
+			provider:      "OpenAI",
+			model:         "gpt-4o",
+			wantFound:     true,
+			wantReasoning: true,
+		},
+		{
+			name:      "unknown provider",
+			provider:  "unknown",
+			model:     "some-model",
+			wantFound: false,
+		},
+		{
+			name:      "known provider unknown model",
+			provider:  "openai",
+			model:     "unknown-model",
+			wantFound: false,
+		},
+		{
+			name:          "model not in list",
+			provider:      "anthropic",
+			model:         "nonexistent-model",
+			wantFound:     false,
+			wantReasoning: false,
+		},
+		{
+			name:          "custom provider fallback to model match",
+			provider:      "custom-openai",
+			model:         "gpt-4o",
+			wantFound:     true,
+			wantReasoning: true,
+		},
+		{
+			name:      "builtin provider no fallback",
+			provider:  "google",
+			model:     "gpt-4o",
+			wantFound: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			modelInfo, found := GetModel(tt.provider, tt.model)
+			if found != tt.wantFound {
+				t.Errorf("GetModel(%q, %q) found = %v, want %v", tt.provider, tt.model, found, tt.wantFound)
+			}
+			if found && modelInfo.Reasoning != tt.wantReasoning {
+				t.Errorf("GetModel(%q, %q) reasoning = %v, want %v", tt.provider, tt.model, modelInfo.Reasoning, tt.wantReasoning)
+			}
+		})
+	}
+}
+
+func TestLoadModelsDev_CacheFreshness(t *testing.T) {
+	ClearModelsCache()
+	tempDir := t.TempDir()
+	t.Setenv("SIDE_CACHE_HOME", tempDir)
+
+	cachePath := filepath.Join(tempDir, modelsDevFilename)
+
+	sampleData := modelsDevData{
+		"test": ProviderInfo{
+			Models: map[string]ModelInfo{
+				"test-model": {Reasoning: true},
+			},
+		},
+	}
+
+	data, err := json.Marshal(sampleData)
+	if err != nil {
+		t.Fatalf("failed to marshal sample data: %v", err)
+	}
+
+	if err := os.WriteFile(cachePath, data, 0644); err != nil {
+		t.Fatalf("failed to write cache file: %v", err)
+	}
 
 	result, err := loadModelsDev()
 	if err != nil {
