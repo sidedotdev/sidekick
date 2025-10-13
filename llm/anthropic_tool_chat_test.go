@@ -177,9 +177,8 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 	options := ToolChatOptions{
 		Params: ToolChatParams{
 			ModelConfig: common.ModelConfig{
-				Provider:  "anthropic",
-				Model:     anthropic.ModelClaude_3_Haiku_20240307, // cheapest model for integration testing
-				MaxTokens: 4000,                                   // Haiku's max output tokens is 4096
+				Provider: "anthropic",
+				Model:    anthropic.ModelClaude_3_Haiku_20240307, // cheapest model for integration testing
 			},
 			Messages: []ChatMessage{
 				{Role: ChatMessageRoleUser, Content: "First say hi. After that, then look up what the weather is like in New York"},
