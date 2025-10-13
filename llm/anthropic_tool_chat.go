@@ -58,10 +58,15 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 		temperature = *options.Params.Temperature
 	}
 
+	maxTokensToUse := int64(8000)
+	if options.Params.MaxTokens > 0 {
+		maxTokensToUse = int64(options.Params.MaxTokens)
+	}
+
 	stream := client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
 		Temperature: anthropic.F(float64(temperature)),
 		Model:       anthropic.F(model),
-		MaxTokens:   anthropic.Int(4000),
+		MaxTokens:   anthropic.Int(maxTokensToUse),
 		Messages:    anthropic.F(messages),
 		Tools:       anthropic.F(tools),
 	})
