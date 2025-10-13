@@ -156,12 +156,76 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 		t.Error("Expected response.Output.Content to include a tool_use block with Name 'get_current_weather'")
 	}
 
-	if response.Usage.InputTokens > 0 || response.Usage.OutputTokens > 0 {
-		assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0 when usage is provided")
-		assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0 when usage is provided")
-	}
+	assert.NotNil(t, response.Usage, "Usage field should not be nil")
+	assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0")
+	assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0")
 
 	t.Logf("Usage: InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
 	t.Logf("Model: %s, Provider: %s", response.Model, response.Provider)
 	t.Logf("StopReason: %s", response.StopReason)
+
+	t.Run("MultiTurn", func(t *testing.T) {
+		options.Params.Messages = append(options.Params.Messages, response.Output)
+
+		for _, block := range response.Output.Content {
+			if block.Type == ContentBlockTypeToolUse && block.ToolUse != nil {
+				options.Params.Messages = append(options.Params.Messages, Message{
+					Role: RoleUser,
+					Content: []ContentBlock{
+						{
+							Type: ContentBlockTypeToolResult,
+							ToolResult: &ToolResultBlock{
+								ToolCallId: block.ToolUse.Id,
+								Text:       "25",
+								IsError:    false,
+							},
+						},
+					},
+				})
+			}
+		}
+
+		eventChan := make(chan Event, 100)
+		var allEvents []Event
+
+		go func() {
+			for event := range eventChan {
+				allEvents = append(allEvents, event)
+			}
+		}()
+
+		response, err := provider.Stream(ctx, options, eventChan)
+		close(eventChan)
+
+		if err != nil {
+			t.Fatalf("Stream returned an error: %v", err)
+		}
+
+		if response == nil {
+			t.Fatal("Stream returned a nil response")
+		}
+
+		if len(allEvents) == 0 {
+			t.Error("No events received")
+		}
+
+		t.Logf("Response output content blocks (multi-turn): %d", len(response.Output.Content))
+		t.Logf("Usage (multi-turn): InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
+
+		var hasTextContent bool
+		for _, block := range response.Output.Content {
+			if block.Type == ContentBlockTypeText && block.Text != "" {
+				hasTextContent = true
+				break
+			}
+		}
+
+		if !hasTextContent {
+			t.Error("Response content is empty after providing tool results")
+		}
+
+		assert.NotNil(t, response.Usage, "Usage field should not be nil on multi-turn")
+		assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0 on multi-turn")
+		assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0 on multi-turn")
+	})
 }
