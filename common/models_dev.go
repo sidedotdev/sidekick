@@ -169,6 +169,9 @@ func downloadModelsDev(cachePath string) (modelsDevData, error) {
 	return data, nil
 }
 
+// returns model info and whether the provider matched the requested provider
+// (if not but model info was returned, it means the model exists in a different
+// provider)
 func GetModel(provider string, model string) (*ModelInfo, bool) {
 	data, err := loadModelsDev()
 	if err != nil {
@@ -185,24 +188,14 @@ func GetModel(provider string, model string) (*ModelInfo, bool) {
 		}
 	}
 
-	isBuiltin := false
-	for _, builtinProvider := range BuiltinProviders {
-		if strings.ToLower(builtinProvider) == providerLower {
-			isBuiltin = true
-			break
-		}
-	}
-
-	if !isBuiltin {
-		for providerKey, providerData := range data {
-			if modelData, exists := providerData.Models[model]; exists {
-				log.Debug().
-					Str("requestedProvider", provider).
-					Str("matchedProvider", providerKey).
-					Str("model", model).
-					Msg("provider not found, matched model in different provider")
-				return &modelData, true
-			}
+	for providerKey, providerData := range data {
+		if modelData, exists := providerData.Models[model]; exists {
+			log.Debug().
+				Str("requestedProvider", provider).
+				Str("matchedProvider", providerKey).
+				Str("model", model).
+				Msg("provider not found, matched model in different provider")
+			return &modelData, false
 		}
 	}
 

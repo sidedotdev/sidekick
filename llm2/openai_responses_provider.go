@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"sidekick/common"
+	"sidekick/utils"
 	"time"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 	"go.temporal.io/sdk/activity"
 )
 
@@ -85,15 +87,19 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 		}
 	}
 
+	params.Store = openai.Bool(false)
+	modelInfo, _ := common.GetModel(options.Params.Provider, model)
+	if modelInfo != nil && modelInfo.Reasoning {
+		params.Include = []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent}
+		if options.Params.ReasoningEffort != "" {
+			params.Reasoning.Effort = shared.ReasoningEffort(options.Params.ReasoningEffort)
+			params.Reasoning.Summary = shared.ReasoningSummaryAuto
+		}
+	}
+
 	stream := client.Responses.NewStreaming(ctx, params)
 
 	var events []Event
-	callIDToIndex := make(map[string]int)
-	var textBlockIndex int = -1
-	var reasoningBlockIndex int = -1
-	var lastToolCallIndex int = -1
-	nextBlockIndex := 0
-
 	var stopReason string
 	var usage Usage
 
@@ -126,109 +132,186 @@ loop:
 			}
 			break loop
 
-		case responses.ResponseOutputItemAddedEvent:
-			event := data.AsResponseOutputItemAdded()
-			switch event.Item.AsAny().(type) {
-			case responses.ResponseFunctionToolCall:
-				item := event.Item.AsFunctionCall()
-				callIDToIndex[item.CallID] = nextBlockIndex
-				lastToolCallIndex = nextBlockIndex
+		case responses.ResponseContentPartAddedEvent:
+			openaiEvent := data.AsResponseContentPartAdded()
+
+			switch openaiEvent.Part.AsAny().(type) {
+			case responses.ResponseOutputText:
+				part := openaiEvent.Part.AsOutputText()
 				evt := Event{
 					Type:  EventBlockStarted,
-					Index: nextBlockIndex,
+					Index: int(openaiEvent.OutputIndex),
 					ContentBlock: &ContentBlock{
-						Type: ContentBlockTypeToolUse,
-						ToolUse: &ToolUseBlock{
-							Id:        item.CallID,
-							Name:      item.Name,
-							Arguments: "",
+						Id:   openaiEvent.ItemID,
+						Type: ContentBlockTypeText,
+						Text: part.Text,
+					},
+				}
+				eventChan <- evt
+				events = append(events, evt)
+			case responses.ResponseOutputRefusal:
+				part := openaiEvent.Part.AsRefusal()
+				evt := Event{
+					Type:  EventBlockStarted,
+					Index: int(openaiEvent.OutputIndex),
+					ContentBlock: &ContentBlock{
+						Id:   openaiEvent.ItemID,
+						Type: ContentBlockTypeRefusal,
+						Refusal: &RefusalBlock{
+							Reason: part.Refusal,
 						},
 					},
 				}
 				eventChan <- evt
 				events = append(events, evt)
-				nextBlockIndex++
-			}
-
-		case responses.ResponseFunctionCallArgumentsDeltaEvent:
-			event := data.AsResponseFunctionCallArgumentsDelta()
-			if lastToolCallIndex >= 0 {
-				evt := Event{
-					Type:  EventTextDelta,
-					Index: lastToolCallIndex,
-					Delta: event.Delta,
-				}
-				eventChan <- evt
-				events = append(events, evt)
-			}
-
-		case responses.ResponseTextDeltaEvent:
-			if textBlockIndex == -1 {
-				textBlockIndex = nextBlockIndex
+			case responses.ResponseContentPartAddedEventPartReasoningText:
+				part := openaiEvent.Part.AsReasoningText()
 				evt := Event{
 					Type:  EventBlockStarted,
-					Index: textBlockIndex,
+					Index: int(openaiEvent.OutputIndex),
 					ContentBlock: &ContentBlock{
-						Type: ContentBlockTypeText,
-						Text: "",
+						Id:   openaiEvent.ItemID,
+						Type: ContentBlockTypeReasoning,
+						Text: part.Text,
 					},
 				}
 				eventChan <- evt
 				events = append(events, evt)
-				nextBlockIndex++
 			}
+		case responses.ResponseOutputItemAddedEvent:
+			openaiEvent := data.AsResponseOutputItemAdded()
+			switch openaiEvent.Item.AsAny().(type) {
+			// NOTE here are the other item types we might handle in the future,
+			// leaving them here for reference:
+			//
+			//	case responses.ResponseFileSearchToolCall:
+			//	case responses.ResponseFunctionWebSearch:
+			//	case responses.ResponseComputerToolCall:
+			//	case responses.ResponseOutputItemImageGenerationCall:
+			//	case responses.ResponseCodeInterpreterToolCall:
+			//	case responses.ResponseOutputItemLocalShellCall:
+			//	case responses.ResponseOutputItemMcpCall:
+			//	case responses.ResponseOutputItemMcpListTools:
+			//	case responses.ResponseOutputItemMcpApprovalRequest:
+			//	case responses.ResponseCustomToolCall:
+			case responses.ResponseOutputMessage:
+				// NOTE we don't have a type for the message yet as we don't
+				// know if it's an output_text or a refusal, so we'll wait for
+				// "response.content_part.added" before emitting the block
+				// started event
+				continue
+
+			case responses.ResponseFunctionToolCall:
+				item := openaiEvent.Item.AsFunctionCall()
+				evt := Event{
+					Type:  EventBlockStarted,
+					Index: int(openaiEvent.OutputIndex),
+					ContentBlock: &ContentBlock{
+						Id:   item.ID,
+						Type: ContentBlockTypeToolUse,
+						ToolUse: &ToolUseBlock{
+							Id:        item.CallID,
+							Name:      item.Name,
+							Arguments: item.Arguments,
+						},
+					},
+				}
+				eventChan <- evt
+				events = append(events, evt)
+
+			case responses.ResponseReasoningItem:
+				item := openaiEvent.Item.AsReasoning()
+				evt := Event{
+					Type:  EventBlockStarted,
+					Index: int(openaiEvent.OutputIndex),
+					ContentBlock: &ContentBlock{
+						Id:        item.ID,
+						Type:      ContentBlockTypeReasoning,
+						Reasoning: &ReasoningBlock{
+							//Text:             reasoningTextFromOpenaiContent(item.Content),
+							//Summary:          reasoningSummaryFromOpenaiContent(item.Summary),
+							//EncryptedContent: item.EncryptedContent,
+						},
+					},
+				}
+				eventChan <- evt
+				events = append(events, evt)
+
+				// TODO let's simplify so that block_started can include
+				// arbitrary details and we should include them in the block, to
+				// get rid of these.
+				// TODO encrypted content keeps changing across events for the
+				// same item id. so we should listen in on the final
+				// "response.completed" and emit a block done event for that,
+				// and any non-empty fields should override the given block, just like with block_started
+				if item.EncryptedContent != "" {
+					evt := Event{
+						Type:  EventSignatureDelta,
+						Index: int(openaiEvent.OutputIndex),
+						Delta: item.EncryptedContent,
+					}
+					eventChan <- evt
+					events = append(events, evt)
+				}
+
+				text := reasoningTextFromOpenaiContent(item.Content)
+				if text != "" {
+					evt := Event{
+						Type:  EventTextDelta,
+						Index: int(openaiEvent.OutputIndex),
+						Delta: text,
+					}
+					eventChan <- evt
+					events = append(events, evt)
+				}
+
+				summary := reasoningSummaryFromOpenaiContent(item.Summary)
+				if summary != "" {
+					evt := Event{
+						Type:  EventSummaryTextDelta,
+						Index: int(openaiEvent.OutputIndex),
+						Delta: summary,
+					}
+					eventChan <- evt
+					events = append(events, evt)
+				}
+			}
+
+		case responses.ResponseFunctionCallArgumentsDeltaEvent:
+			openaiEvent := data.AsResponseFunctionCallArgumentsDelta()
 			evt := Event{
 				Type:  EventTextDelta,
-				Index: textBlockIndex,
-				Delta: data.Delta,
+				Index: int(openaiEvent.OutputIndex),
+				Delta: openaiEvent.Delta,
+			}
+			eventChan <- evt
+			events = append(events, evt)
+
+		case responses.ResponseTextDeltaEvent:
+			openaiEvent := data.AsResponseOutputTextDelta()
+			evt := Event{
+				Type:  EventTextDelta,
+				Index: int(openaiEvent.OutputIndex),
+				Delta: openaiEvent.Delta,
 			}
 			eventChan <- evt
 			events = append(events, evt)
 
 		case responses.ResponseReasoningTextDeltaEvent:
-			if reasoningBlockIndex == -1 {
-				reasoningBlockIndex = nextBlockIndex
-				evt := Event{
-					Type:  EventBlockStarted,
-					Index: reasoningBlockIndex,
-					ContentBlock: &ContentBlock{
-						Type: ContentBlockTypeReasoning,
-						Reasoning: &ReasoningBlock{
-							Text:    "",
-							Summary: "",
-						},
-					},
-				}
-				eventChan <- evt
-				events = append(events, evt)
-				nextBlockIndex++
-			}
+			openaiEvent := data.AsResponseReasoningTextDelta()
 			evt := Event{
 				Type:  EventTextDelta,
-				Index: reasoningBlockIndex,
-				Delta: data.Delta,
+				Index: int(openaiEvent.OutputIndex),
+				Delta: openaiEvent.Delta,
 			}
 			eventChan <- evt
 			events = append(events, evt)
 
 		case responses.ResponseReasoningSummaryTextDeltaEvent:
-			if textBlockIndex == -1 {
-				textBlockIndex = nextBlockIndex
-				evt := Event{
-					Type:  EventBlockStarted,
-					Index: textBlockIndex,
-					ContentBlock: &ContentBlock{
-						Type: ContentBlockTypeText,
-						Text: "",
-					},
-				}
-				eventChan <- evt
-				events = append(events, evt)
-				nextBlockIndex++
-			}
+			openaiEvent := data.AsResponseReasoningSummaryTextDelta()
 			evt := Event{
-				Type:  EventSummaryTextDelta,
-				Index: textBlockIndex,
+				Type:  EventTextDelta,
+				Index: int(openaiEvent.OutputIndex),
 				Delta: data.Delta,
 			}
 			eventChan <- evt
@@ -240,7 +323,7 @@ loop:
 		return nil, err
 	}
 
-	outputMessage := applyEventsToMessage(events)
+	outputMessage := accumulateOpenaiEventsToMessage(events)
 
 	return &MessageResponse{
 		Id:           "",
@@ -253,10 +336,27 @@ loop:
 	}, nil
 }
 
+func reasoningSummaryFromOpenaiContent(responseReasoningItemSummary []responses.ResponseReasoningItemSummary) string {
+	var summary string
+	for _, summaryItem := range responseReasoningItemSummary {
+		summary += summaryItem.Text
+	}
+	return summary
+}
+
+func reasoningTextFromOpenaiContent(responseReasoningItemContent []responses.ResponseReasoningItemContent) string {
+	var text string
+	for _, content := range responseReasoningItemContent {
+		text += content.Text
+	}
+	return text
+}
+
 func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemUnionParam, error) {
 	var items []responses.ResponseInputItemUnionParam
 
 	for _, msg := range messages {
+	contentBlocksLoop:
 		for _, block := range msg.Content {
 			switch block.Type {
 			case ContentBlockTypeText:
@@ -265,12 +365,28 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 				case RoleUser:
 					role = responses.EasyInputMessageRoleUser
 				case RoleSystem:
-					role = responses.EasyInputMessageRoleSystem
+					role = responses.EasyInputMessageRoleSystem // switch to developer?
 				case RoleAssistant:
 					role = responses.EasyInputMessageRoleAssistant
+					content := []responses.ResponseOutputMessageContentUnionParam{
+						{
+							OfOutputText: &responses.ResponseOutputTextParam{
+								Text: block.Text,
+							},
+						},
+					}
+					items = append(items, responses.ResponseInputItemParamOfOutputMessage(
+						content,
+						block.Id,
+						responses.ResponseOutputMessageStatusCompleted,
+					))
+					continue contentBlocksLoop
+
 				default:
 					return nil, fmt.Errorf("unsupported role %s for text block", msg.Role)
 				}
+
+				// user or system role only here, as it's an "input" item
 				items = append(items, responses.ResponseInputItemParamOfMessage(
 					block.Text,
 					role,
@@ -311,16 +427,38 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 				if msg.Role != RoleAssistant {
 					return nil, fmt.Errorf("reasoning blocks must be in assistant messages, got role %s", msg.Role)
 				}
-				text := ""
 				if block.Reasoning != nil {
-					text = block.Reasoning.Text
+					reasoning := responses.ResponseReasoningItemParam{ID: block.Id}
+					if block.Reasoning.Text != "" {
+						reasoning.Content = append(reasoning.Content, responses.ResponseReasoningItemContentParam{
+							Text: block.Reasoning.Text,
+						})
+					}
+
+					reasoning.Summary = []responses.ResponseReasoningItemSummaryParam{}
+					if block.Reasoning.Summary != "" {
+						reasoning.Summary = append(reasoning.Summary, responses.ResponseReasoningItemSummaryParam{
+							Text: block.Reasoning.Summary,
+						})
+					}
+
+					if block.Reasoning.EncryptedContent != "" {
+						reasoning.EncryptedContent = param.NewOpt(block.Reasoning.EncryptedContent)
+					}
+
+					reasoningItem := responses.ResponseInputItemUnionParam{OfReasoning: &reasoning}
+					items = append(items, reasoningItem)
+				} else {
+					return nil, fmt.Errorf("reasoning block missing seasoning data: %s", utils.PanicJSON(block))
 				}
-				items = append(items, responses.ResponseInputItemParamOfMessage(
-					text,
-					responses.EasyInputMessageRoleAssistant,
-				))
 
 			case ContentBlockTypeRefusal:
+				// NOTE: refusals aren't represented in openai's input params,
+				// we're working around it basically here to try to keep the
+				// conversation going, as we don't have business logic to handle
+				// refusals yet. Later, this could be considered a bad request
+				// that returns a client-side validation error to disallow such
+				// inputs.
 				if msg.Role != RoleAssistant {
 					return nil, fmt.Errorf("refusal blocks must be in assistant messages, got role %s", msg.Role)
 				}
@@ -345,7 +483,7 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 	return items, nil
 }
 
-func applyEventsToMessage(events []Event) Message {
+func accumulateOpenaiEventsToMessage(events []Event) Message {
 	blocks := make(map[int]*ContentBlock)
 	maxIndex := -1
 
@@ -386,6 +524,15 @@ func applyEventsToMessage(events []Event) Message {
 				} else if block.Type == ContentBlockTypeReasoning && block.Reasoning != nil {
 					block.Reasoning.Summary += evt.Delta
 				}
+			}
+
+		case EventSignatureDelta:
+			if block, ok := blocks[evt.Index]; ok {
+				if block.Reasoning == nil {
+					block.Reasoning = &ReasoningBlock{}
+				}
+				// it's not a delta actually, it's the full encrypted content...
+				block.Reasoning.EncryptedContent = evt.Delta
 			}
 		}
 	}
