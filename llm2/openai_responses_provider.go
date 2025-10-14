@@ -362,18 +362,18 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 					if summary == "" {
 						summary = block.Reasoning.Text
 					}
+					if summary == "" {
+						return nil, fmt.Errorf("reasoning block with encrypted_content must have either Summary or Text for the summary field")
+					}
 					reasoningJSON := fmt.Sprintf(`{"type":"reasoning","encrypted_content":%q,"summary":%q}`, block.Reasoning.EncryptedContent, summary)
 					reasoningItem := responses.ResponseInputItemUnionParam{}
-					reasoningItem.UnmarshalJSON([]byte(reasoningJSON))
+					if err := reasoningItem.UnmarshalJSON([]byte(reasoningJSON)); err != nil {
+						return nil, fmt.Errorf("failed to construct reasoning input item: %w", err)
+					}
 					items = append(items, reasoningItem)
-				}
-				text := ""
-				if block.Reasoning != nil {
-					text = block.Reasoning.Text
-				}
-				if text != "" {
+				} else if block.Reasoning != nil && block.Reasoning.Text != "" {
 					items = append(items, responses.ResponseInputItemParamOfMessage(
-						text,
+						block.Reasoning.Text,
 						responses.EasyInputMessageRoleAssistant,
 					))
 				}
