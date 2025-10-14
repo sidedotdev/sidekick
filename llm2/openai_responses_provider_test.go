@@ -229,3 +229,198 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 		assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0 on multi-turn")
 	})
 }
+
+func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
+	ctx := context.Background()
+	provider := OpenAIResponsesProvider{}
+
+	options := Options{
+		Params: Params{
+			ModelConfig: common.ModelConfig{
+				Provider: "openai",
+				Model:    "gpt-5-nano",
+			},
+			Messages: []Message{
+				{
+					Role: RoleUser,
+					Content: []ContentBlock{
+						{
+							Type: ContentBlockTypeText,
+							Text: "What is 2+2? Think through it step by step.",
+						},
+					},
+				},
+			},
+		},
+		Secrets: secret_manager.SecretManagerContainer{
+			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+				&secret_manager.EnvSecretManager{},
+				&secret_manager.KeyringSecretManager{},
+				&secret_manager.LocalConfigSecretManager{},
+			}),
+		},
+	}
+
+	eventChan := make(chan Event, 100)
+	var allEvents []Event
+	var sawBlockStartedReasoning bool
+	var sawSignatureDelta bool
+
+	go func() {
+		for event := range eventChan {
+			allEvents = append(allEvents, event)
+			if event.Type == EventBlockStarted && event.ContentBlock != nil && event.ContentBlock.Type == ContentBlockTypeReasoning {
+				sawBlockStartedReasoning = true
+			}
+			if event.Type == EventSignatureDelta {
+				sawSignatureDelta = true
+			}
+		}
+	}()
+
+	response, err := provider.Stream(ctx, options, eventChan)
+	close(eventChan)
+
+	if err != nil {
+		t.Fatalf("Stream returned an error: %v", err)
+	}
+
+	if response == nil {
+		t.Fatal("Stream returned a nil response")
+	}
+
+	if len(allEvents) == 0 {
+		t.Error("No events received")
+	}
+
+	if !sawBlockStartedReasoning {
+		t.Error("Expected to see at least one block_started event with reasoning")
+	}
+
+	if !sawSignatureDelta {
+		t.Error("Expected to see at least one signature_delta event")
+	}
+
+	t.Logf("Response output content blocks: %d", len(response.Output.Content))
+
+	var foundReasoning bool
+	var encryptedContent string
+	for _, block := range response.Output.Content {
+		if block.Type == ContentBlockTypeReasoning && block.Reasoning != nil {
+			foundReasoning = true
+			encryptedContent = block.Reasoning.EncryptedContent
+			t.Logf("Found reasoning block with EncryptedContent length: %d", len(encryptedContent))
+			break
+		}
+	}
+
+	if !foundReasoning {
+		t.Error("Expected response.Output.Content to include a reasoning block")
+	}
+
+	if encryptedContent == "" {
+		t.Error("Expected reasoning block to have non-empty EncryptedContent")
+	}
+
+	assert.NotNil(t, response.Usage, "Usage field should not be nil")
+	assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0")
+	assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0")
+
+	t.Logf("Usage: InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
+	t.Logf("Model: %s, Provider: %s", response.Model, response.Provider)
+	t.Logf("StopReason: %s", response.StopReason)
+
+	t.Run("MultiTurnEncryptedReasoning", func(t *testing.T) {
+		options.Params.Messages = append(options.Params.Messages, response.Output)
+
+		options.Params.Messages = append(options.Params.Messages, Message{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeText,
+					Text: "Now what is 3+3?",
+				},
+			},
+		})
+
+		eventChan := make(chan Event, 100)
+		var allEvents []Event
+
+		go func() {
+			for event := range eventChan {
+				allEvents = append(allEvents, event)
+			}
+		}()
+
+		response, err := provider.Stream(ctx, options, eventChan)
+		close(eventChan)
+
+		if err != nil {
+			t.Fatalf("Stream returned an error on multi-turn: %v", err)
+		}
+
+		if response == nil {
+			t.Fatal("Stream returned a nil response on multi-turn")
+		}
+
+		if len(allEvents) == 0 {
+			t.Error("No events received on multi-turn")
+		}
+
+		t.Logf("Response output content blocks (multi-turn): %d", len(response.Output.Content))
+		t.Logf("Usage (multi-turn): InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
+
+		var hasTextContent bool
+		for _, block := range response.Output.Content {
+			if block.Type == ContentBlockTypeText && block.Text != "" {
+				hasTextContent = true
+				break
+			}
+		}
+
+		if !hasTextContent {
+			t.Error("Response content is empty after providing encrypted reasoning continuation")
+		}
+
+		assert.NotNil(t, response.Usage, "Usage field should not be nil on multi-turn")
+		assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0 on multi-turn")
+		assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0 on multi-turn")
+	})
+}
+
+func TestApplyEventsToMessage_SignatureDelta(t *testing.T) {
+	events := []Event{
+		{
+			Type:  EventBlockStarted,
+			Index: 0,
+			ContentBlock: &ContentBlock{
+				Type:      ContentBlockTypeReasoning,
+				Reasoning: &ReasoningBlock{},
+			},
+		},
+		{
+			Type:  EventSignatureDelta,
+			Index: 0,
+			Delta: "encrypted_fragment_1",
+		},
+		{
+			Type:  EventSignatureDelta,
+			Index: 0,
+			Delta: "encrypted_fragment_2",
+		},
+	}
+
+	message := applyEventsToMessage(events)
+
+	assert.Equal(t, RoleAssistant, message.Role)
+	assert.Len(t, message.Content, 1)
+	assert.Equal(t, ContentBlockTypeReasoning, message.Content[0].Type)
+	assert.NotNil(t, message.Content[0].Reasoning)
+	assert.Equal(t, "encrypted_fragment_1encrypted_fragment_2", message.Content[0].Reasoning.EncryptedContent)
+}
