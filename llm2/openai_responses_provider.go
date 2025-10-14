@@ -258,6 +258,15 @@ loop:
 			events = append(events, evt)
 
 		case responses.ResponseReasoningSummaryTextDeltaEvent:
+			if reasoningBlockIndex >= 0 {
+				evt := Event{
+					Type:  EventSummaryTextDelta,
+					Index: reasoningBlockIndex,
+					Delta: data.Delta,
+				}
+				eventChan <- evt
+				events = append(events, evt)
+			}
 			if textBlockIndex == -1 {
 				textBlockIndex = nextBlockIndex
 				evt := Event{
@@ -273,7 +282,7 @@ loop:
 				nextBlockIndex++
 			}
 			evt := Event{
-				Type:  EventSummaryTextDelta,
+				Type:  EventTextDelta,
 				Index: textBlockIndex,
 				Delta: data.Delta,
 			}
