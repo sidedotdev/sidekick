@@ -16,6 +16,10 @@ import (
 
 const defaultModel = "gpt-5-codex"
 
+func supportsReasoning(model string) bool {
+	return model == "gpt-5-nano" || model == "gpt-5-codex"
+}
+
 type OpenAIResponsesProvider struct{}
 
 func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
@@ -86,14 +90,16 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 	}
 
 	params.Store = openai.Bool(false)
-	includeSet := make(map[responses.ResponseIncludable]bool)
-	includeSet["reasoning.encrypted_content"] = true
-	for _, inc := range params.Include {
-		includeSet[inc] = true
-	}
-	params.Include = make([]responses.ResponseIncludable, 0, len(includeSet))
-	for inc := range includeSet {
-		params.Include = append(params.Include, inc)
+	if supportsReasoning(model) {
+		includeSet := make(map[responses.ResponseIncludable]bool)
+		includeSet["reasoning.encrypted_content"] = true
+		for _, inc := range params.Include {
+			includeSet[inc] = true
+		}
+		params.Include = make([]responses.ResponseIncludable, 0, len(includeSet))
+		for inc := range includeSet {
+			params.Include = append(params.Include, inc)
+		}
 	}
 
 	stream := client.Responses.NewStreaming(ctx, params)
@@ -352,8 +358,13 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 					return nil, fmt.Errorf("reasoning blocks must be in assistant messages, got role %s", msg.Role)
 				}
 				if block.Reasoning != nil && block.Reasoning.EncryptedContent != "" {
+					summary := block.Reasoning.Summary
+					if summary == "" {
+						summary = block.Reasoning.Text
+					}
+					reasoningJSON := fmt.Sprintf(`{"type":"reasoning","encrypted_content":%q,"summary":%q}`, block.Reasoning.EncryptedContent, summary)
 					reasoningItem := responses.ResponseInputItemUnionParam{}
-					reasoningItem.UnmarshalJSON([]byte(fmt.Sprintf(`{"type":"reasoning","encrypted_content":%q}`, block.Reasoning.EncryptedContent)))
+					reasoningItem.UnmarshalJSON([]byte(reasoningJSON))
 					items = append(items, reasoningItem)
 				}
 				text := ""
