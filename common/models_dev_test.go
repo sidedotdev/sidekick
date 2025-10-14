@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestSupportsReasoning(t *testing.T) {
+func TestModelSupportsReasoning(t *testing.T) {
 	ClearModelsCache()
 	tempDir := t.TempDir()
 	t.Setenv("SIDE_CACHE_HOME", tempDir)
@@ -17,7 +17,7 @@ func TestSupportsReasoning(t *testing.T) {
 	sampleData := modelsDevData{
 		"openai": ProviderInfo{
 			Models: map[string]ModelInfo{
-				"gpt-4o":        {Reasoning: true},
+				"gpt-5":         {Reasoning: true},
 				"gpt-3.5-turbo": {Reasoning: false},
 			},
 		},
@@ -46,7 +46,7 @@ func TestSupportsReasoning(t *testing.T) {
 		{
 			name:     "known provider and model with reasoning true",
 			provider: "openai",
-			model:    "gpt-4o",
+			model:    "gpt-5",
 			want:     true,
 		},
 		{
@@ -58,7 +58,7 @@ func TestSupportsReasoning(t *testing.T) {
 		{
 			name:     "case insensitive provider match",
 			provider: "OpenAI",
-			model:    "gpt-4o",
+			model:    "gpt-5",
 			want:     true,
 		},
 		{
@@ -101,9 +101,9 @@ func TestGetModel(t *testing.T) {
 	sampleData := modelsDevData{
 		"openai": ProviderInfo{
 			Models: map[string]ModelInfo{
-				"gpt-4o": {
-					ID:        "gpt-4o",
-					Name:      "GPT-4o",
+				"gpt-5": {
+					ID:        "gpt-5",
+					Name:      "GPT-5",
 					Reasoning: true,
 				},
 				"gpt-3.5-turbo": {
@@ -134,79 +134,72 @@ func TestGetModel(t *testing.T) {
 	}
 
 	tests := []struct {
-		name          string
-		provider      string
-		model         string
-		wantFound     bool
-		wantReasoning bool
+		name                string
+		provider            string
+		model               string
+		wantProviderMatched bool
+		wantFound           bool
 	}{
 		{
-			name:          "known provider and model with reasoning",
-			provider:      "openai",
-			model:         "gpt-4o",
-			wantFound:     true,
-			wantReasoning: true,
+			name:                "known provider and model with reasoning",
+			provider:            "openai",
+			model:               "gpt-5",
+			wantFound:           true,
+			wantProviderMatched: true,
 		},
 		{
-			name:          "known provider and model without reasoning",
-			provider:      "openai",
-			model:         "gpt-3.5-turbo",
-			wantFound:     true,
-			wantReasoning: false,
+			name:                "case insensitive provider match",
+			provider:            "OpenAI",
+			model:               "gpt-5",
+			wantFound:           true,
+			wantProviderMatched: true,
 		},
 		{
-			name:          "case insensitive provider match",
-			provider:      "OpenAI",
-			model:         "gpt-4o",
-			wantFound:     true,
-			wantReasoning: true,
+			name:                "unknown provider",
+			provider:            "unknown",
+			model:               "some-model",
+			wantFound:           false,
+			wantProviderMatched: false,
 		},
 		{
-			name:      "unknown provider",
-			provider:  "unknown",
-			model:     "some-model",
-			wantFound: false,
+			name:                "known provider unknown model",
+			provider:            "openai",
+			model:               "unknown-model",
+			wantFound:           false,
+			wantProviderMatched: false,
 		},
 		{
-			name:      "known provider unknown model",
-			provider:  "openai",
-			model:     "unknown-model",
-			wantFound: false,
+			name:                "model not in list",
+			provider:            "anthropic",
+			model:               "nonexistent-model",
+			wantFound:           false,
+			wantProviderMatched: false,
 		},
 		{
-			name:          "model not in list",
-			provider:      "anthropic",
-			model:         "nonexistent-model",
-			wantFound:     false,
-			wantReasoning: false,
+			name:                "custom provider fallback to model match",
+			provider:            "custom-gateway",
+			model:               "gpt-5",
+			wantFound:           true,
+			wantProviderMatched: false,
 		},
 		{
-			name:          "custom provider fallback to model match",
-			provider:      "custom-openai",
-			model:         "gpt-4o",
-			wantFound:     false,
-			wantReasoning: true,
-		},
-		{
-			name:      "builtin provider no fallback",
-			provider:  "google",
-			model:     "gpt-4o",
-			wantFound: false,
+			name:                "builtin provider fallback",
+			provider:            "google",
+			model:               "gpt-5",
+			wantFound:           true,
+			wantProviderMatched: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			modelInfo, found := GetModel(tt.provider, tt.model)
+			modelInfo, providerMatched := GetModel(tt.provider, tt.model)
+			if providerMatched != tt.wantProviderMatched {
+				t.Errorf("GetModel(%q, %q) provider matched = %v, want %v", tt.provider, tt.model, providerMatched, tt.wantProviderMatched)
+			}
+			found := modelInfo != nil
 			if found != tt.wantFound {
 				t.Errorf("GetModel(%q, %q) found = %v, want %v", tt.provider, tt.model, found, tt.wantFound)
-			}
-			if tt.wantFound {
-				if modelInfo == nil {
-					t.Errorf("GetModel(%q, %q) returned nil modelInfo when found = true", tt.provider, tt.model)
-				} else if modelInfo.Reasoning != tt.wantReasoning {
-					t.Errorf("GetModel(%q, %q) reasoning = %v, want %v", tt.provider, tt.model, modelInfo.Reasoning, tt.wantReasoning)
-				}
 			}
 		})
 	}
