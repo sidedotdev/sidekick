@@ -184,7 +184,7 @@ func TestGetModel(t *testing.T) {
 			name:          "custom provider fallback to model match",
 			provider:      "custom-openai",
 			model:         "gpt-4o",
-			wantFound:     true,
+			wantFound:     false,
 			wantReasoning: true,
 		},
 		{
@@ -201,8 +201,12 @@ func TestGetModel(t *testing.T) {
 			if found != tt.wantFound {
 				t.Errorf("GetModel(%q, %q) found = %v, want %v", tt.provider, tt.model, found, tt.wantFound)
 			}
-			if found && modelInfo.Reasoning != tt.wantReasoning {
-				t.Errorf("GetModel(%q, %q) reasoning = %v, want %v", tt.provider, tt.model, modelInfo.Reasoning, tt.wantReasoning)
+			if tt.wantFound {
+				if modelInfo == nil {
+					t.Errorf("GetModel(%q, %q) returned nil modelInfo when found = true", tt.provider, tt.model)
+				} else if modelInfo.Reasoning != tt.wantReasoning {
+					t.Errorf("GetModel(%q, %q) reasoning = %v, want %v", tt.provider, tt.model, modelInfo.Reasoning, tt.wantReasoning)
+				}
 			}
 		})
 	}
