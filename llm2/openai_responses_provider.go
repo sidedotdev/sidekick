@@ -368,15 +368,29 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 				}
 				if block.Reasoning != nil && block.Reasoning.EncryptedContent != "" {
 					summary := block.Reasoning.Summary
-					if summary == "" {
-						summary = block.Reasoning.Text
+					if summary == "" && block.Reasoning.Text != "" {
+						lines := []rune(block.Reasoning.Text)
+						if len(lines) > 100 {
+							summary = string(lines[:100]) + "..."
+						} else {
+							summary = block.Reasoning.Text
+						}
 					}
 					if summary == "" {
-						summary = "[reasoning]"
+						summary = "Reasoning content"
 					}
-					reasoningJSON := fmt.Sprintf(`{"type":"reasoning","encrypted_content":%q,"summary":%q}`, block.Reasoning.EncryptedContent, summary)
+
+					reasoningMap := map[string]interface{}{
+						"type":              "reasoning",
+						"encrypted_content": block.Reasoning.EncryptedContent,
+						"summary":           summary,
+					}
+					reasoningJSON, err := json.Marshal(reasoningMap)
+					if err != nil {
+						return nil, fmt.Errorf("failed to marshal reasoning input item: %w", err)
+					}
 					reasoningItem := responses.ResponseInputItemUnionParam{}
-					if err := reasoningItem.UnmarshalJSON([]byte(reasoningJSON)); err != nil {
+					if err := reasoningItem.UnmarshalJSON(reasoningJSON); err != nil {
 						return nil, fmt.Errorf("failed to construct reasoning input item: %w", err)
 					}
 					items = append(items, reasoningItem)
