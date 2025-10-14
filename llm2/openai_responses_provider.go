@@ -362,6 +362,9 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 					if summary == "" {
 						summary = block.Reasoning.Text
 					}
+					if summary == "" {
+						summary = "[reasoning]"
+					}
 					reasoningJSON := fmt.Sprintf(`{"type":"reasoning","encrypted_content":%q,"summary":%q}`, block.Reasoning.EncryptedContent, summary)
 					reasoningItem := responses.ResponseInputItemUnionParam{}
 					if err := reasoningItem.UnmarshalJSON([]byte(reasoningJSON)); err != nil {
