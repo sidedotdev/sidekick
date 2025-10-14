@@ -12,6 +12,7 @@ type Params struct {
 	ToolChoice        common.ToolChoice
 	ParallelToolCalls *bool
 	Temperature       *float32
+	MaxTokens         int `json:"maxTokens,omitempty"`
 	common.ModelConfig
 }
 
@@ -32,5 +33,6 @@ func (o Options) ActionParams() map[string]any {
 		"provider":          o.Params.Provider,
 		"temperature":       o.Params.Temperature,
 		"parallelToolCalls": o.Params.ParallelToolCalls,
+		"maxTokens":         o.Params.MaxTokens,
 	}
 }
