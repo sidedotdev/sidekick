@@ -16,10 +16,6 @@ import (
 
 const defaultModel = "gpt-5-codex"
 
-func supportsReasoning(model string) bool {
-	return model == "gpt-5-nano" || model == "gpt-5-codex"
-}
-
 type OpenAIResponsesProvider struct{}
 
 func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
@@ -90,15 +86,12 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 	}
 
 	params.Store = openai.Bool(false)
-	if supportsReasoning(model) {
-		includeSet := make(map[responses.ResponseIncludable]bool)
-		includeSet["reasoning.encrypted_content"] = true
-		for _, inc := range params.Include {
-			includeSet[inc] = true
-		}
-		params.Include = make([]responses.ResponseIncludable, 0, len(includeSet))
-		for inc := range includeSet {
-			params.Include = append(params.Include, inc)
+	modelInfo, _ := common.GetModel(options.Params.Provider, model)
+	if modelInfo.Reasoning {
+		params.Include = []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent}
+		if options.Params.ReasoningEffort != "" {
+			params.Reasoning.Effort = shared.ReasoningEffort(options.Params.ReasoningEffort)
+			params.Reasoning.Summary = shared.ReasoningSummaryAuto
 		}
 	}
 
