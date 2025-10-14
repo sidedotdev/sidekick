@@ -5,6 +5,7 @@ import (
 	"os"
 	"sidekick/common"
 	"sidekick/secret_manager"
+	"sidekick/utils"
 	"testing"
 
 	"github.com/invopop/jsonschema"
@@ -82,13 +83,14 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 					Content: []ContentBlock{
 						{
 							Type: ContentBlockTypeText,
-							Text: "First say hi. After that, then look up what the weather is like in New York in celsius. Let me know, then check London too for me.",
+							Text: "First say hi. After that, then look up what the weather is like in New York in celsius, then describe it in words.",
 						},
 					},
 				},
 			},
-			Tools:      []*common.Tool{mockTool},
-			ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
+			Temperature: utils.Ptr(float32(0)),
+			Tools:       []*common.Tool{mockTool},
+			ToolChoice:  common.ToolChoice{Type: common.ToolChoiceTypeAuto},
 		},
 		Secrets: secret_manager.SecretManagerContainer{
 			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
@@ -217,6 +219,8 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 			if block.Type == ContentBlockTypeText && block.Text != "" {
 				hasTextContent = true
 				break
+			} else {
+				t.Logf("Output Block: %s", utils.PanicJSON(block))
 			}
 		}
 
@@ -243,8 +247,9 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 	options := Options{
 		Params: Params{
 			ModelConfig: common.ModelConfig{
-				Provider: "openai",
-				Model:    "gpt-5",
+				Provider:        "openai",
+				Model:           "gpt-5-nano",
+				ReasoningEffort: "minimal",
 			},
 			Messages: []Message{
 				{
@@ -252,7 +257,7 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 					Content: []ContentBlock{
 						{
 							Type: ContentBlockTypeText,
-							Text: "What is 2+2? Think through it step by step.",
+							Text: "Hi", // gpt-5-nano wants to think even in this kind of case
 						},
 					},
 				},
@@ -344,7 +349,7 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 			Content: []ContentBlock{
 				{
 					Type: ContentBlockTypeText,
-					Text: "Now what is 3+3?",
+					Text: "How are you?",
 				},
 			},
 		})
@@ -394,7 +399,7 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 	})
 }
 
-func TestApplyEventsToMessage_SignatureDelta(t *testing.T) {
+func TestAccumulateOpenaiEventsToMessage_SignatureDelta(t *testing.T) {
 	events := []Event{
 		{
 			Type:  EventBlockStarted,
@@ -407,20 +412,20 @@ func TestApplyEventsToMessage_SignatureDelta(t *testing.T) {
 		{
 			Type:  EventSignatureDelta,
 			Index: 0,
-			Delta: "encrypted_fragment_1",
+			Delta: "encrypted_content_v1",
 		},
 		{
 			Type:  EventSignatureDelta,
 			Index: 0,
-			Delta: "encrypted_fragment_2",
+			Delta: "encrypted_content_v2",
 		},
 	}
 
-	message := applyEventsToMessage(events)
+	message := accumulateOpenaiEventsToMessage(events)
 
 	assert.Equal(t, RoleAssistant, message.Role)
 	assert.Len(t, message.Content, 1)
 	assert.Equal(t, ContentBlockTypeReasoning, message.Content[0].Type)
 	assert.NotNil(t, message.Content[0].Reasoning)
-	assert.Equal(t, "encrypted_fragment_1encrypted_fragment_2", message.Content[0].Reasoning.EncryptedContent)
+	assert.Equal(t, "encrypted_content_v2", message.Content[0].Reasoning.EncryptedContent)
 }
