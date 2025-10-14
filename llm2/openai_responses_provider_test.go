@@ -244,7 +244,7 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 		Params: Params{
 			ModelConfig: common.ModelConfig{
 				Provider: "openai",
-				Model:    "gpt-5-nano",
+				Model:    "gpt-5",
 			},
 			Messages: []Message{
 				{
