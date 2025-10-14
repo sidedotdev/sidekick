@@ -75,6 +75,7 @@ type ToolResultBlock struct {
 
 // A single content block within a message turn.
 type ContentBlock struct {
+	Id           string           `json:"id"`
 	Type         ContentBlockType `json:"type"`
 	Text         string           `json:"text,omitempty"`
 	Image        *ImageRef        `json:"image,omitempty"`
