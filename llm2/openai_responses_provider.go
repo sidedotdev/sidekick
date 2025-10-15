@@ -522,6 +522,28 @@ func accumulateOpenaiEventsToMessage(events []Event) Message {
 				// it's not a delta actually, it's the full encrypted content...
 				block.Reasoning.EncryptedContent = evt.Delta
 			}
+
+		case EventBlockDone:
+			if evt.ContentBlock != nil {
+				if block, ok := blocks[evt.Index]; ok {
+					if block.Type == ContentBlockTypeReasoning && evt.ContentBlock.Type == ContentBlockTypeReasoning {
+						if evt.ContentBlock.Reasoning != nil {
+							if block.Reasoning == nil {
+								block.Reasoning = &ReasoningBlock{}
+							}
+							if evt.ContentBlock.Reasoning.Text != "" {
+								block.Reasoning.Text = evt.ContentBlock.Reasoning.Text
+							}
+							if evt.ContentBlock.Reasoning.Summary != "" {
+								block.Reasoning.Summary = evt.ContentBlock.Reasoning.Summary
+							}
+							if evt.ContentBlock.Reasoning.EncryptedContent != "" {
+								block.Reasoning.EncryptedContent = evt.ContentBlock.Reasoning.EncryptedContent
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 
