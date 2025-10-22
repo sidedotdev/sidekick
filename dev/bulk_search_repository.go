@@ -26,6 +26,9 @@ type BulkSearchRepositoryParams struct {
 }
 
 func BulkSearchRepository(ctx workflow.Context, envContainer env.EnvContainer, bulkSearchRepositoryParams BulkSearchRepositoryParams) (string, error) {
+	if len(bulkSearchRepositoryParams.Searches) == 0 {
+		return "", llm.ErrToolCallUnmarshal
+	}
 	results := []string{}
 	for _, searchParams := range bulkSearchRepositoryParams.Searches {
 		result, err := SearchRepository(ctx, envContainer, SearchRepositoryInput{

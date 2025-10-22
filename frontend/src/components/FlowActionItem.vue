@@ -21,7 +21,7 @@
       <JsonTree :data="flowAction.actionParams" />
       <h3>Result</h3>
       <JsonTree :data="actionResult" />
-      <div v-if="unparsedActionResult">{{ unparsedActionResult }}</div>
+      <pre v-if="unparsedActionResult">{{ unparsedActionResult }}</pre>
     </div>
   </div>
 </template>
@@ -37,6 +37,7 @@ import CheckCriteriaFulfillmentFlowAction, { type CriteriaFulfillment } from './
 import ApplyEditBlocksFlowAction, { type ApplyEditBlockResult } from './ApplyEditBlocksFlowAction.vue';
 import PlaintextResultFlowAction from './PlaintextResultFlowAction.vue';
 import ToolFlowAction from './ToolFlowAction.vue';
+import MergeFlowAction from './MergeFlowAction.vue';
 import { useEventBus } from '@vueuse/core';
 
 const props = defineProps({
@@ -172,6 +173,8 @@ const actionSpecificComponent = computed(() => {
     case 'RunTests':
     case 'run_tests':
       return RunTestsFlowAction
+    case 'merge':
+      return MergeFlowAction
     default:
       if (props.flowAction.isHumanAction || /^user_request\./.test(props.flowAction.actionType)) {
         return UserRequest
@@ -263,6 +266,40 @@ const summary = computed<Summary | null>(() => {
         };
       } catch (error) {
         console.error('Error parsing criteria fulfillment data:', error);
+        return null;
+      }
+    }
+
+    case 'merge': {
+      try {
+        const mergeResult = actionResult.value;
+        if (mergeResult === null || mergeResult === undefined) {
+          return null;
+        }
+        return {
+          text: mergeResult.hasConflicts ? 'Conflicts' : '',
+          emoji: mergeResult.hasConflicts ? '❌' : '✅',
+        };
+      } catch (error) {
+        console.error('Error parsing merge result data:', error);
+        return null;
+      }
+    }
+
+    case 'user_request.approve.merge': {
+      try {
+        if (actionResult.value === null || actionResult.value === undefined) {
+          return null;
+        }
+        if (typeof actionResult.value.Approved === 'boolean') {
+          return {
+            text: actionResult.value.Approved ? 'Approved' : 'Rejected',
+            emoji: actionResult.value.Approved ? '✅' : '❌',
+          };
+        }
+        return null;
+      } catch (error) {
+        console.error('Error parsing user request result data:', error);
         return null;
       }
     }

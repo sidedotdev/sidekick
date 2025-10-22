@@ -1,10 +1,15 @@
 <template>
   <form v-if="isPending" @submit.prevent="flowAction.actionParams.requestKind === 'free_form' && submitUserResponse(true)">
-    <vue-markdown
-      :source="flowAction.actionParams.requestContent"
-      :options="{ breaks: true }"
-      class="markdown"
-    />
+    <div v-if="flowAction.actionParams.requestContent" class="markdown-container">
+      <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
+        <CopyIcon />
+      </button>
+      <vue-markdown
+        :source="flowAction.actionParams.requestContent"
+        :options="{ breaks: true }"
+        class="markdown"
+      />
+    </div>
     <div v-if="flowAction.actionParams.command">
       <pre>{{ flowAction.actionParams.command }}</pre>
     </div>
@@ -81,7 +86,10 @@
   </form>
   <!-- TODO move approved/rejected to FlowActionItem summary. Only show content here -->
   <div v-if="expand && !isPending && (!flowAction.actionParams.command || !parsedActionResult.Approved)">
-    <div v-if="flowAction.actionParams.requestContent">
+    <div v-if="flowAction.actionParams.requestContent" class="markdown-container">
+      <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
+        <CopyIcon />
+      </button>
       <vue-markdown
         :source="flowAction.actionParams.requestContent"
         :options="{ breaks: true }"
@@ -102,7 +110,7 @@
     </div>
     <div v-if="/approval/.test(props.flowAction.actionParams.requestKind)">
       <!--p>{{ flowAction.actionParams.requestContent }}</p-->
-      <p>{{ parsedActionResult.Approved ? '✅ Approved' : '❌ Rejected: ' }}{{ parsedActionResult.Content }}</p>
+      <p v-if="!parsedActionResult.Approved && parsedActionResult.Content">{{ parsedActionResult.Content }}</p>
     </div>
     <div class="free-form" v-else-if="flowAction.actionParams.requestKind == 'free_form'">
       <p v-if="parsedActionResult.Content"><b>You: </b>{{ parsedActionResult.Content }}</p>
@@ -111,12 +119,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import type { FlowAction } from '../lib/models';
 import AutogrowTextarea from './AutogrowTextarea.vue';
 import BranchSelector from './BranchSelector.vue'
 import VueMarkdown from 'vue-markdown-render'
 import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
+import CopyIcon from './icons/CopyIcon.vue';
 
 interface UserResponse {
   content?: string;
@@ -134,11 +143,47 @@ const props = defineProps({
     type: Boolean,
     required: true,
   },
+  level: {
+    type: Number,
+    default: 0,
+  },
 });
 
 const responseContent = ref('');
 const errorMessage = ref('');
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
+
+function getStorageKey(actionId: string): string {
+  return `sidekick_user_request_draft_${actionId}`;
+}
+
+function clearDraft() {
+  try {
+    localStorage.removeItem(getStorageKey(props.flowAction.id));
+  } catch (error) {
+    console.debug('Failed to clear draft:', error);
+  }
+}
+
+watch(responseContent, (newContent) => {
+  try {
+    localStorage.setItem(getStorageKey(props.flowAction.id), newContent);
+  } catch (error) {
+    console.debug('Failed to save draft:', error);
+  }
+});
+
+// TODO: onmounted isn't needed here, so we should move this to the setup area
+onMounted(() => {
+  try {
+    const savedContent = localStorage.getItem(getStorageKey(props.flowAction.id));
+    if (savedContent) {
+      responseContent.value = savedContent;
+    }
+  } catch (error) {
+    console.debug('Failed to load draft:', error);
+  }
+});
 
 const parsedActionResult = computed(() => {
   try {
@@ -149,6 +194,48 @@ const parsedActionResult = computed(() => {
 });
 
 const targetBranch = ref<string | undefined>(parsedActionResult.value?.targetBranch ?? props.flowAction.actionParams.mergeApprovalInfo?.defaultTargetBranch)
+
+// Watch for target branch changes during merge approval
+watch(targetBranch, async (newBranch, oldBranch) => {
+  // Only send update if this is a merge approval request, the action is pending,
+  // and the branch actually changed (not just initialization)
+  if (props.flowAction.actionParams.requestKind === 'merge_approval' && 
+      isPending.value && 
+      oldBranch !== undefined && 
+      newBranch !== oldBranch) {
+    await updateTargetBranch(newBranch);
+  }
+});
+
+async function updateTargetBranch(newBranch: string | undefined) {
+  if (!newBranch) return;
+
+  try {
+    const userResponse: UserResponse = {
+      params: {
+        targetBranch: newBranch,
+      },
+      // approved is intentionally undefined/null to indicate this is a branch switch, not a final decision
+    };
+
+    const response = await fetch(`/api/v1/workspaces/${props.flowAction.workspaceId}/flow_actions/${props.flowAction.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userResponse: userResponse,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error('Failed to update target branch:', response.status, response.statusText);
+      // Don't show error to user for branch updates as it's not a critical failure
+      // The user can still proceed with approval/rejection
+    }
+  } catch (error) {
+    console.error('Network error updating target branch:', error);
+    // Don't show error to user for branch updates as it's not a critical failure
+  }
+}
 
 // temporary until we set up i18n
 const tags: {[key: string]: string} = {
@@ -171,6 +258,14 @@ function approveCopy(): string {
 function continueCopy(): string {
   const tag: string | undefined = props.flowAction.actionParams.continueTag
   return tag && tags[tag] ? tags[tag] : "Continue"
+}
+
+const copyRequestContent = async () => {
+  try {
+    await navigator.clipboard.writeText(props.flowAction.actionParams.requestContent)
+  } catch (err) {
+    console.error('Failed to copy request content:', err)
+  }
 }
 
 async function submitUserResponse(approved: boolean) {
@@ -217,6 +312,7 @@ async function submitUserResponse(approved: boolean) {
     // Success case - parse response once
     const result = await response.json();
     console.debug(result);
+    clearDraft();
     return true;
   } catch (error) {
     errorMessage.value = 'Network error: Failed to submit response';
@@ -262,7 +358,7 @@ button:disabled:hover {
   filter: none;
 }
 
-:deep(textarea) {
+:deep(.grow-wrap) {
   margin-top: 15px;
   margin-bottom: 15px;
 }
@@ -329,5 +425,40 @@ label[for="targetBranch"] {
   padding: 0.75rem;
   margin: 0.5rem 0;
   font-size: 0.9rem;
+}
+
+.markdown-container {
+  position: relative;
+  --level: v-bind(level);
+}
+
+.copy-button {
+  position: sticky;
+  top: calc(var(--level) * var(--name-height)); /* --name-height is made available by FlowActionItem */
+  right: 0.5rem;
+  float: right;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 0.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+  z-index: calc(50 - var(--level));
+  margin-top: 0.5rem;
+  margin-bottom: -2rem;
+}
+
+.copy-button:hover {
+  background: var(--color-background-hover);
+}
+
+.copy-button svg {
+  width: 1rem;
+  height: 1rem;
+  fill: var(--color-text);
+  stroke: var(--color-text);
 }
 </style>

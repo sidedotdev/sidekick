@@ -1,15 +1,17 @@
 <template>
   <div v-if="flow">
-    <div class="editor-links" v-if="devMode">
+    <div class="editor-links">
       <p v-for="worktree in flow.worktrees" :key="worktree.id">
-        Open Worktree:
-        <a :href="`vscode://file/${workDir(worktree)}?windowId=_blank`">VS Code</a>
-        |
-        <a :href="`idea://open?file=${encodeURIComponent(workDir(worktree))}`" class="vs-code-button">Intellij IDEA</a>
+        Open Worktree
+        <a :href="`vscode://file/${worktree.workingDirectory}?windowId=_blank`">
+          <VSCodeIcon/>
+        </a>&nbsp;<a :href="`idea://open?file=${encodeURIComponent(worktree.workingDirectory)}`">
+          <IntellijIcon/>
+        </a>
       </p>
-    <div class="debug" v-if="devMode">
-      <a :href="`http://localhost:19855/namespaces/default/workflows/${flow.id}`">Temporal {{ flow.id }}</a>
-    </div>
+      <div class="debug" v-if="devMode">
+        <a :href="`http://localhost:19855/namespaces/default/workflows/${flow.id}`">Temporal Flow</a>
+      </div>
     </div>
     <!-- TODO: In the future, we should allow going to next step even if currently paused -->
     <div 
@@ -27,7 +29,7 @@
         definition, guided by the user who provided that.
       -->
       <button 
-        v-if="devMode && isActiveFollowDevPlanSubflow"
+        v-if="devMode && isGoNextAvailable"
         @click="goToNextStep"
         class="next-button"
       >
@@ -37,6 +39,8 @@
   </div>
   <div class="flow-actions-container" :class="{ 'short-content': shortContent }">
     <div class="scroll-container">
+      <div v-if="isLoadingFlow && !flow" class="loading-indicator">Loading...</div>
+      <div v-else-if="flow && isStartingFlow" class="loading-indicator">Starting Task...</div>
       <SubflowContainer v-for="(subflowTree, index) in subflowTrees" :key="index" :subflowTree="subflowTree" :defaultExpanded="index == subflowTrees.length - 1"/>
     </div>
   </div>
@@ -46,6 +50,8 @@
 import { computed, onMounted, ref, onUnmounted, watch } from 'vue'
 import { useEventBus } from '@vueuse/core'
 import SubflowContainer from '@/components/SubflowContainer.vue'
+import VSCodeIcon from '@/components/icons/VSCodeIcon.vue'
+import IntellijIcon from '@/components/icons/IntellijIcon.vue'
 import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Worktree, Subflow } from '../lib/models' // Added Subflow here
 import { SubflowStatus } from '../lib/models'
 import { buildSubflowTrees } from '../lib/subflow'
@@ -60,21 +66,21 @@ const flowActions = ref<FlowAction[]>([])
 const subflowTrees = ref<SubflowTree[]>([])
 const route = useRoute()
 
-// activeFollowDevPlanSubflowIds: Stores IDs of 'follow_dev_plan' subflows that are currently active.
+// activeDevStep: Stores IDs of 'step.dev' subflows that are currently active.
 // This is populated by listening to WebSocket events for subflow status changes.
-const activeFollowDevPlanSubflowIds = ref(new Set<string>());
+const activeDevStep = ref(new Set<string>());
 
 // subflowsById: A record of subflow objects, keyed by their ID.
 // This is also populated by listening to WebSocket events for subflow status changes.
 const subflowsById = ref<Record<string, Subflow>>({});
 
-// isActiveFollowDevPlanSubflow: A computed property determining the "Next" button's visibility.
-// It's true if there's at least one active 'follow_dev_plan' subflow.
+// isGoNextAvailable: A computed property determining the "Next" button's visibility.
+// It's true if there's at least one active 'step.dev' subflow.
 // This, combined with the main flow status check in the template (`!['completed', 'failed', 'canceled', 'paused'].includes(flow.status)`),
 // fulfills the visibility conditions:
 // 1. Main flow is active and not paused.
-// 2. An active 'follow_dev_plan' subflow exists.
-const isActiveFollowDevPlanSubflow = computed(() => activeFollowDevPlanSubflowIds.value.size > 0);
+// 2. An active 'step.dev' subflow exists.
+const isGoNextAvailable = computed(() => activeDevStep.value.size > 0);
 
 const updateSubflowTrees = () => {
   const relevantFlowActions = flowActions.value
@@ -89,6 +95,9 @@ let eventsSocket: WebSocket | null = null
 let eventsSocketClosed = false;
 let shortContent = ref(true);
 let currentFlowIdForSockets: string | null = null;
+let isLoadingFlow = ref(false);
+let isStartingFlow = ref(false);
+let hasReceivedFirstAction = false;
 
 let subflowTreeDebounceTimer: NodeJS.Timeout;
 let subscribeStreamDebounceTimers: {[key: string]: NodeJS.Timeout} = {};
@@ -147,14 +156,14 @@ const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Prom
                 if (subflowToUpdate) {
                   subflowToUpdate.status = flowEvent.status; // Update status in our cache
 
-                  if (subflowToUpdate.type === 'follow_dev_plan') {
+                  if (subflowToUpdate.type === 'step.dev') {
                     if (flowEvent.status === SubflowStatus.Started) {
-                      activeFollowDevPlanSubflowIds.value.add(subflowId);
+                      activeDevStep.value.add(subflowId);
                     } else if (
                       flowEvent.status === SubflowStatus.Complete ||
                       flowEvent.status === SubflowStatus.Failed
                     ) {
-                      activeFollowDevPlanSubflowIds.value.delete(subflowId);
+                      activeDevStep.value.delete(subflowId);
                     }
                   }
                 } else {
@@ -241,6 +250,25 @@ const connectActionChangesWebSocketForFlow = (flowId: string) => {
       const flowAction: FlowAction = JSON.parse(event.data);
       const index = flowActions.value.findIndex((action) => action.id === flowAction.id);
 
+      // Handle first flow action
+      if (!hasReceivedFirstAction) {
+        hasReceivedFirstAction = true;
+        isStartingFlow.value = false;
+        
+        // Reload flow data if no worktrees exist, as worktrees are created during flow execution
+        if (flow.value && (!flow.value.worktrees || flow.value.worktrees.length === 0)) {
+          try {
+            const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${flow.value.id}`);
+            if (response.ok) {
+              const flowData = await response.json();
+              flow.value = flowData.flow;
+            }
+          } catch (err) {
+            console.error(`Error reloading flow data:`, err);
+          }
+        }
+      }
+
       // ensure we get subflow
       if (flowAction.subflowId) {
         getAndSubscribeSubflowWithDebounce(flowAction.subflowId, 100);
@@ -306,8 +334,11 @@ const setupFlow = async (newFlowId: string | undefined) => {
   if (!newFlowId) {
     flow.value = null;
     flowActions.value = [];
-    activeFollowDevPlanSubflowIds.value.clear();
+    activeDevStep.value.clear();
     subflowsById.value = {};
+    isLoadingFlow.value = false;
+    isStartingFlow.value = false;
+    hasReceivedFirstAction = false;
     // Clear any pending subflow status update timers
     Object.keys(subflowStatusUpdateDebounceTimers).forEach(key => {
       clearTimeout(subflowStatusUpdateDebounceTimers[key]);
@@ -323,11 +354,14 @@ const setupFlow = async (newFlowId: string | undefined) => {
   }
 
   currentFlowIdForSockets = newFlowId;
+  isLoadingFlow.value = true;
+  isStartingFlow.value = false;
+  hasReceivedFirstAction = false;
 
   // Reset states for the new flow
   flow.value = null;
   flowActions.value = [];
-  activeFollowDevPlanSubflowIds.value.clear();
+  activeDevStep.value.clear();
   subflowsById.value = {};
   // Clear any pending subflow status update timers
   Object.keys(subflowStatusUpdateDebounceTimers).forEach(key => {
@@ -351,13 +385,19 @@ const setupFlow = async (newFlowId: string | undefined) => {
     if (response.ok) {
       const flowData = await response.json();
       flow.value = flowData.flow;
+      isLoadingFlow.value = false;
+      isStartingFlow.value = true;
     } else {
       console.error(`Failed to fetch flow ${newFlowId}:`, await response.text());
       flow.value = null;
+      isLoadingFlow.value = false;
+      isStartingFlow.value = false;
     }
   } catch (err) {
     console.error(`Error fetching flow ${newFlowId}:`, err);
     flow.value = null;
+    isLoadingFlow.value = false;
+    isStartingFlow.value = false;
   }
   setShortContent();
 };
@@ -406,10 +446,6 @@ let setShortContent = () => {
     const containerHeight = document.querySelector('.flow-actions-container')?.clientHeight || 0
     shortContent.value = contentHeight <= containerHeight
   }, 10)
-}
-
-const workDir = (worktree: Worktree): string => {
-  return `${dataDir}/worktrees/${worktree.workspaceId}/${worktree.name}`
 }
 
 const pauseFlow = async () => {
@@ -462,6 +498,11 @@ onUnmounted(() => {
   right: 1rem;
 }
 
+.editor-links a > * {
+  height: 1.2rem;
+  vertical-align: middle;
+}
+
 .flow-controls-container { /* Renamed from pause-button-container */
   position: absolute;
   right: 1.5rem;
@@ -504,5 +545,15 @@ onUnmounted(() => {
 
 .next-button:hover {
   opacity: 1;
+}
+
+.loading-indicator {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem;
+  color: var(--vp-c-text-2);
+  font-size: 1rem;
+  font-style: italic;
 }
 </style>

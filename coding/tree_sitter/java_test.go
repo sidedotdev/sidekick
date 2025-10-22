@@ -1150,3 +1150,34 @@ public enum DocEnum {
 		})
 	}
 }
+func TestNormalizeSymbolFromSnippet_Java(t *testing.T) {
+	tests := []struct {
+		name     string
+		snippet  string
+		expected string
+	}{
+		{
+			name:     "method signature",
+			snippet:  "void someMethod()",
+			expected: "someMethod",
+		},
+		{
+			name:     "Class declaration",
+			snippet:  "class AnotherClass",
+			expected: "AnotherClass",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := NormalizeSymbolFromSnippet("java", tc.snippet)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.expected {
+				t.Fatalf("expected %q, got %q", tc.expected, got)
+			}
+		})
+	}
+}

@@ -16,7 +16,9 @@ describe('ChatCompletionFlowAction', () => {
       messages: [
         { role: 'role1', content: 'content1' },
         { role: 'role2', content: 'content2' }
-      ]
+      ],
+      model: 'gpt9',
+      reasoningEffort: 'low',
     },
     actionResult: JSON.stringify({
       message: {
@@ -36,6 +38,9 @@ describe('ChatCompletionFlowAction', () => {
     const wrapper = shallowMount(ChatCompletionFlowAction, {
       propsData: { flowAction, expand: true }
     })
+
+    expect(wrapper.find('.model-reasoning-effort').text()).toBe('(low reasoning)')
+
     await wrapper.find('.show-params').trigger('click') // show action params
     expect(wrapper.findAll('.action-params .message').length).toBe(2)
   })
@@ -57,7 +62,8 @@ describe('ChatCompletionFlowAction', () => {
           arguments: JSON.stringify({ arg1: 'arg1' })
         },
       ],
-      stopReason: 'done'
+      stopReason: 'done',
+      reasoningEffort: 'medium',
     })
     const flowActionWithActionResult = { ...flowAction, actionResult }
     const wrapper = mount(ChatCompletionFlowAction, {

@@ -1,6 +1,7 @@
 export interface ModelConfig {
   provider: string
   model: string
+  reasoningEffort?: '' | 'minimal' | 'low' | 'medium' | 'high'
 }
 
 export interface LLMConfig {
@@ -17,6 +18,7 @@ export interface Workspace {
   id?: string
   name: string
   localRepoDir: string
+  configMode?: string
   llmConfig?: LLMConfig | null
   embeddingConfig?: EmbeddingConfig | null
 }
@@ -86,6 +88,7 @@ export interface Worktree {
   id: string
   flowId: string
   name: string
+  workingDirectory: string
   created: Date
   workspaceId: string
 }

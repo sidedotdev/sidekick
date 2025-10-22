@@ -137,7 +137,7 @@ func completeDevStep(dCtx DevContext, requirements string, planExecution DevPlan
 		subflowName = step.StepNumber + ". " + step.Title
 	}
 
-	return RunSubflow(dCtx, "llm_step", subflowName, func(subflow domain.Subflow) (DevStepResult, error) {
+	return RunSubflow(dCtx, "step.dev", subflowName, func(subflow domain.Subflow) (DevStepResult, error) {
 		return completeDevStepSubflow(dCtx, requirements, planExecution, step)
 	})
 }
@@ -149,6 +149,14 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 	contextSizeExtension := len(fullCodeContext) - len(codeContext)
 	if err != nil {
 		return result, fmt.Errorf("failed to prepare code context: %v", err)
+	}
+
+	if v := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 1); v >= 1 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
+		if err != nil {
+			return result, fmt.Errorf("failed to retrieve repo summary: %v", err)
+		}
+		codeContext = repoSummary + "\n\n" + codeContext
 	}
 
 	// TODO store chat history in a way that can be referred to by id, and pass

@@ -1,0 +1,1 @@
+ALTER TABLE worktrees DROP COLUMN working_directory;
