@@ -13,4 +13,5 @@ hand-in-hand.
 const CheckEdits = "check-edits"
 const InfoNeeds = "info-needs"
 const DisableContextCodeVisibilityCheck = "disable-context-code-visibility-check"
+const InitialRepoSummary = "initial-repo-summary"
 const ManageHistoryWithContextMarkers = "manage-history-with-context-markers"

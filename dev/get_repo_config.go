@@ -47,7 +47,7 @@ func GetRepoConfig(eCtx flow_action.ExecContext) (common.RepoConfig, error) {
 	var repoConfig common.RepoConfig
 	err := workflow.ExecuteActivity(eCtx, GetRepoConfigActivity, eCtx.EnvContainer).Get(eCtx, &repoConfig)
 	if err != nil {
-		return common.RepoConfig{}, fmt.Errorf("failed to get coding config: %v", err)
+		return common.RepoConfig{}, err
 	}
 	return repoConfig, nil
 }

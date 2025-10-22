@@ -1,6 +1,7 @@
 package flow_action
 
 import (
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/secret_manager"
@@ -14,10 +15,13 @@ import (
 // around.
 type ExecContext struct {
 	workflow.Context
-	WorkspaceId  string
-	EnvContainer *env.EnvContainer
-	Secrets      *secret_manager.SecretManagerContainer
-	FlowScope    *FlowScope
+	WorkspaceId     string
+	EnvContainer    *env.EnvContainer
+	Secrets         *secret_manager.SecretManagerContainer
+	FlowScope       *FlowScope
+	Providers       []common.ModelProviderPublicConfig
+	LLMConfig       common.LLMConfig
+	EmbeddingConfig common.EmbeddingConfig
 }
 
 type ActionContext struct {
@@ -26,9 +30,9 @@ type ActionContext struct {
 	ActionParams map[string]interface{}
 }
 
-func (ec *ExecContext) NewActionContext(actionType string) ActionContext {
+func (eCtx *ExecContext) NewActionContext(actionType string) ActionContext {
 	return ActionContext{
-		ExecContext:  *ec,
+		ExecContext:  *eCtx,
 		ActionType:   actionType,
 		ActionParams: map[string]interface{}{},
 	}
@@ -39,4 +43,35 @@ type FlowScope struct {
 	subflowDescription string // TODO /gen Remove this field after migration to Subflow model is complete
 	startedSubflow     bool   // TODO /gen Remove this field after migration to Subflow model is complete
 	Subflow            *domain.Subflow
+}
+
+func (eCtx *ExecContext) GetModelConfig(key string, iteration int, fallback string) common.ModelConfig {
+	modelConfig, isDefault := eCtx.LLMConfig.GetModelConfig(key, iteration)
+	if isDefault && fallback != "default" {
+		if fallback == "small" {
+			modelConfig.ReasoningEffort = "low" // no way to configure this yet so hard-coding sensible default
+			provider, err := common.StringToToolChatProviderType(modelConfig.Provider)
+			if err == nil {
+				modelConfig.Model = provider.SmallModel()
+			} else {
+				// Try to find provider in configured providers
+				for _, p := range eCtx.Providers {
+					if p.Name == modelConfig.Provider {
+						if p.SmallLLM != "" {
+							modelConfig.Model = p.SmallLLM
+						}
+						break
+					}
+				}
+			}
+		} else {
+			modelConfig, _ = eCtx.LLMConfig.GetModelConfig(fallback, iteration)
+		}
+	}
+	return modelConfig
+}
+
+func (eCtx *ExecContext) GetEmbeddingModelConfig(key string) common.ModelConfig {
+	modelConfig := eCtx.EmbeddingConfig.GetModelConfig(key)
+	return modelConfig
 }

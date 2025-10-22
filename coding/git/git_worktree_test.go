@@ -2,8 +2,10 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sidekick/domain"
 	"sidekick/env"
 	"testing"
 
@@ -168,15 +170,17 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit on main")
 
-		// Create a feature branch and worktree
-		branchName := "feature-cleanup-test"
-		runGitCommandInTestRepo(t, repoDir, "branch", branchName)
+		// Create a feature branch and worktree with unique name
+		branchName := fmt.Sprintf("feature-cleanup-test")
 
-		wtDirRelative := "../worktree-cleanup-test"
-		wtDir := filepath.Join(filepath.Dir(repoDir), "worktree-cleanup-test")
-		_ = os.RemoveAll(wtDir) // Clean up potential leftovers
-		runGitCommandInTestRepo(t, repoDir, "worktree", "add", wtDirRelative, branchName)
-		createCommit(t, wtDir, "Commit on feature branch")
+		// Create environment container and the associated worktree
+		worktree := domain.Worktree{
+			Name:        branchName,
+			WorkspaceId: "test-workspace",
+		}
+		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
 
 		// Verify the worktree and branch exist before cleanup
 		worktrees, err := ListWorktreesActivity(ctx, repoDir)
@@ -186,13 +190,8 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		branches := runGitCommandInTestRepo(t, repoDir, "branch")
 		assert.Contains(t, branches, branchName, "Feature branch should exist before cleanup")
 
-		// Create environment container for the worktree
-		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: wtDir})
-		require.NoError(t, err)
-		envContainer := env.EnvContainer{Env: devEnv}
-
 		// Perform cleanup from within the worktree
-		err = CleanupWorktreeActivity(ctx, envContainer, wtDir, branchName)
+		err = CleanupWorktreeActivity(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "Test cleanup with archive message")
 		require.NoError(t, err, "Cleanup should succeed")
 
 		// Verify the worktree was removed
@@ -206,8 +205,17 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		assert.NotContains(t, branchesAfter, branchName, "Feature branch should be deleted after cleanup")
 
 		// Verify the worktree directory no longer exists
-		_, err = os.Stat(wtDir)
+		_, err = os.Stat(devEnv.GetWorkingDirectory())
 		assert.True(t, os.IsNotExist(err), "Worktree directory should no longer exist")
+
+		// Verify the archive tag was created
+		tagOutput := runGitCommandInTestRepo(t, repoDir, "tag", "-l", "archive/*")
+		expectedTag := fmt.Sprintf("archive/%s", branchName)
+		assert.Contains(t, tagOutput, expectedTag, "Archive tag should be created")
+
+		// Verify the tag message
+		tagMessageOutput := runGitCommandInTestRepo(t, repoDir, "tag", "-l", "-n1", expectedTag)
+		assert.Contains(t, tagMessageOutput, "Test cleanup with archive message", "Archive tag should have the correct message")
 	})
 
 	t.Run("Missing Branch Name", func(t *testing.T) {
@@ -216,7 +224,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		err = CleanupWorktreeActivity(ctx, envContainer, repoDir, "")
+		err = CleanupWorktreeActivity(ctx, envContainer, repoDir, "", "")
 		require.Error(t, err, "Should fail with empty branch name")
 		assert.Contains(t, err.Error(), "branch name is required", "Error should mention missing branch name")
 	})
@@ -229,8 +237,55 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		require.NoError(t, err)
 		envContainer := env.EnvContainer{Env: devEnv}
 
-		err = CleanupWorktreeActivity(ctx, envContainer, repoDir, "non-existent-branch")
+		err = CleanupWorktreeActivity(ctx, envContainer, repoDir, "non-existent-branch", "")
 		require.Error(t, err, "Should fail with non-existent branch")
-		assert.Contains(t, err.Error(), "failed to delete branch", "Error should mention branch deletion failure")
+		assert.Contains(t, err.Error(), "failed to create archive tag", "Error should mention archive tag creation failure")
+	})
+
+	t.Run("Successful Cleanup with Empty Archive Message", func(t *testing.T) {
+		// Setup main repository
+		repoDir := setupTestGitRepo(t)
+		createCommit(t, repoDir, "Initial commit on main")
+
+		// Create a feature branch and worktree with unique name
+		branchName := fmt.Sprintf("feature-empty-message-test")
+
+		// Create environment container and the worktree
+		worktree := domain.Worktree{
+			Name:        branchName,
+			WorkspaceId: "test-workspace",
+		}
+		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		// Perform cleanup with empty archive message
+		err = CleanupWorktreeActivity(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "")
+		require.NoError(t, err, "Cleanup should succeed with empty archive message")
+
+		// Verify the worktree was removed
+		worktreesAfter, err := ListWorktreesActivity(ctx, repoDir)
+		require.NoError(t, err)
+		require.Len(t, worktreesAfter, 1, "Should only have main worktree after cleanup")
+		assert.Equal(t, "main", worktreesAfter[0].Branch, "Remaining worktree should be main")
+
+		// Verify the branch was deleted
+		branchesAfter := runGitCommandInTestRepo(t, repoDir, "branch")
+		assert.NotContains(t, branchesAfter, branchName, "Feature branch should be deleted after cleanup")
+
+		// Verify the worktree directory no longer exists
+		_, err = os.Stat(devEnv.GetWorkingDirectory())
+		assert.True(t, os.IsNotExist(err), "Worktree directory should no longer exist")
+
+		// Verify the archive tag was created
+		tagOutput := runGitCommandInTestRepo(t, repoDir, "tag", "-l", "archive/*")
+		expectedTag := fmt.Sprintf("archive/%s", branchName)
+		assert.Contains(t, tagOutput, expectedTag, "Archive tag should be created even with empty message")
+
+		// Verify the tag exists without a message (should not show message in -n1 output)
+		tagMessageOutput := runGitCommandInTestRepo(t, repoDir, "tag", "-l", "-n1", expectedTag)
+		assert.Contains(t, tagMessageOutput, expectedTag, "Archive tag should exist")
+		// The tag should appear without additional message text when created without -m
+		assert.NotContains(t, tagMessageOutput, "Test cleanup", "Tag should not have a message when created with empty archiveMessage")
 	})
 }

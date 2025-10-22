@@ -3,6 +3,7 @@ package dev
 import (
 	"fmt"
 	"sidekick/domain"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/srv"
 
@@ -21,15 +22,15 @@ const (
 
 // MergeApprovalParams contains parameters specific to merge approval requests
 type MergeApprovalParams struct {
-	DefaultTargetBranch string   `json:"defaultTargetBranch"` // the default target branch, which is to be confirmed/overridden by the user
-	SourceBranch        string   `json:"sourceBranch"`
-	Diff                string   `json:"diff"`
-	AvailableBranches   []string `json:"availableBranches"`
+	DefaultTargetBranch string `json:"defaultTargetBranch"` // the default target branch, which is to be confirmed/overridden by the user
+	SourceBranch        string `json:"sourceBranch"`
+	Diff                string `json:"diff"`
 }
 
 type MergeApprovalResponse struct {
 	Approved     bool   `json:"approved"`
 	TargetBranch string `json:"targetBranch"` // actual target branch selected by the user
+	Message      string `json:"message"`      // feedback message when not approved
 }
 
 type RequestForUser struct {
@@ -93,7 +94,12 @@ func GetUserApproval(dCtx DevContext, approvalType, approvalPrompt string, reque
 	*/
 }
 
-func GetUserMergeApproval(dCtx DevContext, approvalPrompt string, requestParams map[string]interface{}) (MergeApprovalResponse, error) {
+func GetUserMergeApproval(
+	dCtx DevContext,
+	approvalPrompt string,
+	requestParams map[string]interface{},
+	getGitDiff func(dCtx DevContext, baseBranch string) (string, error),
+) (MergeApprovalResponse, error) {
 	actionCtx := dCtx.NewActionContext("user_request.approve.merge")
 	if actionCtx.RepoConfig.DisableHumanInTheLoop {
 		// auto-approve for now if humans are not in the loop
@@ -116,8 +122,55 @@ func GetUserMergeApproval(dCtx DevContext, approvalPrompt string, requestParams 
 	// Ensure tracking of the flow action within the guidance request
 	userResponse, err := TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
 		req.FlowActionId = flowAction.Id
-		return GetUserResponse(actionCtx.DevContext, req)
+
+		// Get the initial user response
+		currentResponse, err := GetUserResponse(actionCtx.DevContext, req)
+		if err != nil {
+			return nil, err
+		}
+
+		// handle branch switching until final approval/rejection
+		for {
+			if currentResponse.Approved != nil {
+				// final approval/rejection
+				return currentResponse, nil
+			}
+
+			// if Approved is nil, this is a branch switch update
+			newTargetBranch, ok := currentResponse.Params["targetBranch"].(string)
+			if !ok {
+				return nil, fmt.Errorf("targetBranch not found in user response params")
+			}
+
+			// Regenerate the diff with the new target branch
+			newDiff, err := getGitDiff(actionCtx.DevContext, newTargetBranch)
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", newTargetBranch, err)
+			}
+
+			// Update the mergeApprovalInfo with the new diff and target branch
+			mergeApprovalInfo := req.RequestParams["mergeApprovalInfo"].(MergeApprovalParams)
+			mergeApprovalInfo.Diff = newDiff
+			mergeApprovalInfo.DefaultTargetBranch = newTargetBranch
+			req.RequestParams["mergeApprovalInfo"] = mergeApprovalInfo
+
+			// Update the flow action with the new parameters
+			flowAction.ActionParams = req.ActionParams()
+			var fa *flow_action.FlowActivities
+			err = workflow.ExecuteActivity(actionCtx.DevContext, fa.PersistFlowAction, flowAction).Get(actionCtx.DevContext, nil)
+			if err != nil {
+				return nil, fmt.Errorf("failed to update flow action params: %v", err)
+			}
+
+			// wait for the next user response signal
+			selector := workflow.NewNamedSelector(actionCtx.DevContext, "mergeApprovalUserResponseSelector")
+			selector.AddReceive(workflow.GetSignalChannel(actionCtx.DevContext, SignalNameUserResponse), func(c workflow.ReceiveChannel, more bool) {
+				c.Receive(actionCtx.DevContext, &currentResponse)
+			})
+			selector.Select(actionCtx.DevContext)
+		}
 	})
+
 	if err != nil {
 		return MergeApprovalResponse{}, err
 	}
@@ -125,6 +178,7 @@ func GetUserMergeApproval(dCtx DevContext, approvalPrompt string, requestParams 
 	return MergeApprovalResponse{
 		Approved:     *userResponse.Approved,
 		TargetBranch: userResponse.Params["targetBranch"].(string),
+		Message:      userResponse.Content,
 	}, nil
 }
 
@@ -241,7 +295,11 @@ would mean to apply it to your current situation.
 	// Ensure tracking of the flow action within the guidance request
 	return TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
 		guidanceRequest.FlowActionId = flowAction.Id
-		return GetUserResponse(dCtx, *guidanceRequest)
+		response, err := GetUserResponse(dCtx, *guidanceRequest)
+		if response.Content != "" {
+			response.Content = "#START Guidance From the User\n\n" + response.Content + "\n#END Guidance From the User"
+		}
+		return response, err
 	})
 }
 
@@ -260,7 +318,8 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 
 	switch info := currentPromptInfo.(type) {
 	case FeedbackInfo:
-		info.Feedback += "\n\n#START Guidance From the User\n\nBased on all the work done so far and the above feedback, we asked the user to intervene and provide guidance, or fix the problem. Here is what they said about how to move forward from here: " + userResponse.Content + "\n#END Guidance From the User"
+
+		info.Feedback += "\n\n" + userResponse.Content
 		return info, nil
 	case SkipInfo:
 		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content}

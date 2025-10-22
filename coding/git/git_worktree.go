@@ -9,9 +9,10 @@ import (
 )
 
 // CleanupWorktreeActivity removes a git worktree and deletes the associated branch.
+// Before deletion, it creates an archive tag with format "archive/<branchName>" pointing to the branch.
 // This should be called after successful merges to clean up temporary worktrees.
 // The function must be run from within the worktree directory that needs to be removed.
-func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer, worktreePath, branchName string) error {
+func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer, worktreePath, branchName, archiveMessage string) error {
 	if branchName == "" {
 		return fmt.Errorf("branch name is required for cleanup")
 	}
@@ -41,6 +42,27 @@ func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer,
 	}
 	if checkoutResult.ExitStatus != 0 {
 		return fmt.Errorf("failed to checkout HEAD commit %s: %s", headSHA, checkoutResult.Stderr)
+	}
+
+	// Create archive tag before deleting the branch
+	tagName := fmt.Sprintf("archive/%s", branchName)
+	var tagArgs []string
+	if archiveMessage != "" {
+		tagArgs = []string{"tag", "-m", archiveMessage, tagName, branchName}
+	} else {
+		tagArgs = []string{"tag", tagName, branchName}
+	}
+
+	tagResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer: envContainer,
+		Command:      "git",
+		Args:         tagArgs,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to execute tag creation command: %v", err)
+	}
+	if tagResult.ExitStatus != 0 {
+		return fmt.Errorf("failed to create archive tag %s: %s", tagName, tagResult.Stderr)
 	}
 
 	// Delete the branch before removing the worktree

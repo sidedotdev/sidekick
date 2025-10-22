@@ -13,13 +13,13 @@ import (
 
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLocalEnvironment(t *testing.T) {
 	ctx := context.Background()
 	params := LocalEnvParams{
-		WorkspaceId: "workspace1",
-		RepoDir:     "./",
+		RepoDir: "./",
 	}
 
 	env, err := NewLocalEnv(ctx, params)
@@ -43,18 +43,21 @@ func TestLocalEnvironment(t *testing.T) {
 
 func TestLocalGitWorktreeEnvironment(t *testing.T) {
 	ctx := context.Background()
+	repoDir, err := filepath.Abs("./")
+	require.NoError(t, err)
 	params := LocalEnvParams{
-		WorkspaceId: "workspace1",
-		RepoDir:     "./",
+		RepoDir:     repoDir,
 		StartBranch: utils.Ptr("main"),
 	}
 
+	uniqueId := ksuid.New().String()
+	branchName := "test-feature-branch-" + uniqueId
 	worktree := domain.Worktree{
-		Id:          "wt_" + ksuid.New().String(),
-		FlowId:      "flow_" + ksuid.New().String(),
-		Name:        ksuid.New().String(),
+		Id:          "wt_" + uniqueId,
+		FlowId:      "flow_" + uniqueId,
+		Name:        "side/" + branchName,
 		Created:     time.Now(),
-		WorkspaceId: params.WorkspaceId,
+		WorkspaceId: "workspace1",
 	}
 
 	env, err := NewLocalGitWorktreeEnv(ctx, params, worktree)
@@ -63,7 +66,8 @@ func TestLocalGitWorktreeEnvironment(t *testing.T) {
 	assert.Equal(t, EnvType("local_git_worktree"), env.GetType())
 
 	sidekickDataHome, _ := common.GetSidekickDataHome()
-	expectedWorkingDir := filepath.Join(sidekickDataHome, "worktrees", worktree.WorkspaceId, worktree.Name)
+	expectedDirName := filepath.Base(repoDir) + "-" + branchName
+	expectedWorkingDir := filepath.Join(sidekickDataHome, "worktrees", worktree.WorkspaceId, expectedDirName)
 	assert.Equal(t, expectedWorkingDir, env.GetWorkingDirectory())
 
 	// Test RunCommand
@@ -76,15 +80,14 @@ func TestLocalGitWorktreeEnvironment(t *testing.T) {
 	assert.Equal(t, 0, output.ExitStatus)
 	assert.NotEmpty(t, output.Stdout)
 	assert.NotEmpty(t, env.GetWorkingDirectory())
-	assert.Contains(t, output.Stdout, worktree.WorkspaceId)
-	assert.Contains(t, output.Stdout, worktree.Name)
+	assert.Contains(t, output.Stdout, expectedDirName)
+	assert.Contains(t, output.Stdout, expectedWorkingDir)
 }
 
 func TestLocalEnvironment_MarshalUnmarshal(t *testing.T) {
 	ctx := context.Background()
 	params := LocalEnvParams{
-		WorkspaceId: "workspace1",
-		RepoDir:     "./",
+		RepoDir: "./",
 	}
 
 	originalEnv, err := NewLocalEnv(ctx, params)
@@ -104,17 +107,17 @@ func TestLocalEnvironment_MarshalUnmarshal(t *testing.T) {
 func TestLocalGitWorktreeEnvironment_MarshalUnmarshal(t *testing.T) {
 	ctx := context.Background()
 	params := LocalEnvParams{
-		WorkspaceId: "workspace1",
 		RepoDir:     "./",
 		StartBranch: utils.Ptr("main"),
 	}
 
+	uniqueId := ksuid.New().String()
 	worktree := domain.Worktree{
-		Id:          "wt_" + ksuid.New().String(),
-		FlowId:      "flow_" + ksuid.New().String(),
-		Name:        ksuid.New().String(),
+		Id:          "wt_" + uniqueId,
+		FlowId:      "flow_" + uniqueId,
+		Name:        "side/test-feature-branch-" + uniqueId,
 		Created:     time.Now(),
-		WorkspaceId: params.WorkspaceId,
+		WorkspaceId: "workspace1",
 	}
 
 	originalEnv, err := NewLocalGitWorktreeEnv(ctx, params, worktree)

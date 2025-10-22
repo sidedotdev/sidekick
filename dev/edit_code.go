@@ -73,8 +73,13 @@ editLoop:
 		}
 
 		v := workflow.GetVersion(dCtx, "no-max-unless-disabled-human", workflow.DefaultVersion, 1)
-		if attemptCount >= maxAttempts && (v == 0 || dCtx.RepoConfig.DisableHumanInTheLoop) {
+		if attemptCount >= maxAttempts && (v < 1 || dCtx.RepoConfig.DisableHumanInTheLoop) {
 			return ErrMaxAttemptsReached
+		}
+
+		// Inject proactive system message based on tool-call thresholds
+		if msg, ok := ThresholdMessageForCounter(maxIterationsBeforeFeedback, attemptsSinceLastFeedback); ok {
+			promptInfo = FeedbackInfo{Feedback: msg}
 		}
 
 		// Only request feedback if we haven't received any recently from any source
@@ -96,12 +101,15 @@ editLoop:
 		// Step 1: Get a list of *edit blocks* from the LLM
 		editBlocks, err = authorEditBlocks(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo)
 		if err != nil && !errors.Is(err, PendingActionError) {
-			// The err is likely when extracting edit blocks
-			// TODO if the failure was something else, eg openai rate limit, then don't feedback like this
-			feedback := fmt.Sprintf("Please write out all the *edit blocks* again and ensure we follow the format, as we encountered this error when processing them: %v", err)
-			promptInfo = FeedbackInfo{Feedback: feedback}
-			attemptCount++
-			continue
+			v := workflow.GetVersion(dCtx, "edit-code-max-attempts-bugfix", workflow.DefaultVersion, 1)
+			if v < 0 || !errors.Is(err, ErrMaxAttemptsReached) {
+				// The err is likely when extracting edit blocks
+				// TODO if the failure was something else, eg openai rate limit, then don't feedback like this
+				feedback := fmt.Sprintf("Please write out all the *edit blocks* again and ensure we follow the format, as we encountered this error when processing them: %v", err)
+				promptInfo = FeedbackInfo{Feedback: feedback}
+				attemptCount++
+				continue
+			}
 		}
 		if version == 1 {
 			action := dCtx.GlobalState.GetPendingUserAction()
@@ -207,6 +215,14 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			if action != nil && *action == UserActionGoNext {
 				// If UserActionGoNext is pending and version is new, skip authoring edit blocks.
 				// The action is not consumed here; it will be consumed in completeDevStepSubflow.
+
+				// HACK: since we don't add tool call responses right away (TODO),
+				// we make sure we don't end up with a tool call missing a result
+				// here.
+				switch info := promptInfo.(type) {
+				case ToolCallResponseInfo:
+					addToolCallResponse(chatHistory, info)
+				}
 				return nil, nil
 			}
 		}
@@ -215,23 +231,43 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return nil, fmt.Errorf("failed to make user request when paused: %v", err)
 		} else if response != nil && response.Content != "" {
-			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
-			attemptsSinceLastEditBlockOrFeedback = 0
-		}
-
-		if attemptCount >= maxAttempts {
-			if len(extractedEditBlocks) > 0 {
-				// make use of the results so far, given there are some that are
-				// not yet applied: it may be sufficient
-				return extractedEditBlocks, nil
-			}
-
 			// HACK: since we don't add tool call responses right away (TODO),
 			// we make sure we don't end up with a tool call missing a result
 			// here.
 			switch info := promptInfo.(type) {
 			case ToolCallResponseInfo:
 				addToolCallResponse(chatHistory, info)
+			}
+			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
+			attemptsSinceLastEditBlockOrFeedback = 0
+		}
+
+		// Inject proactive system message based on tool-call thresholds
+		if msg, ok := ThresholdMessageForCounter(feedbackIterations, attemptsSinceLastEditBlockOrFeedback); ok {
+			// HACK: since we don't add tool call responses right away (TODO),
+			// we make sure we don't end up with a tool call missing a result
+			// here.
+			switch info := promptInfo.(type) {
+			case ToolCallResponseInfo:
+				addToolCallResponse(chatHistory, info)
+			}
+			promptInfo = FeedbackInfo{Feedback: msg}
+		}
+
+		if attemptCount >= maxAttempts {
+			// HACK: since we don't add tool call responses right away (TODO),
+			// we make sure we don't end up with a tool call missing a result
+			// here.
+			switch info := promptInfo.(type) {
+			case ToolCallResponseInfo:
+				addToolCallResponse(chatHistory, info)
+			}
+
+			// maybe this? yeah makes sense
+			if len(extractedEditBlocks) > 0 {
+				// make use of the results so far, given there are some that are
+				// not yet applied: it may be sufficient
+				return extractedEditBlocks, nil
 			}
 
 			return nil, ErrMaxAttemptsReached

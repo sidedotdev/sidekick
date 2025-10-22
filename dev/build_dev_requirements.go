@@ -16,18 +16,44 @@ import (
 
 var recordDevRequirementsTool = llm.Tool{
 	Name:        "record_dev_requirements",
-	Description: "Records functional and non-functional product requirements for software developers to consume.",
+	Description: "Records technical requirements for software developers to consume.",
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&DevRequirements{}),
 }
 
 /* Represents low-level requirements for a software engineer to implement a feature or fix a bug etc */
 type DevRequirements struct {
-	Overview string `json:"overview" jsonschema:"description=Overview of the product requirements"`
+	Overview string `json:"overview" jsonschema:"description=Overview of the requirements"`
 	// Move UserRequirements to a higher-level ProductRequirements struct, which is expected to require multiple tasks, each of which will later have its own DevRequirements
 	//UserRequirements []string `json:"user_facing_requirements" jsonschema:"description=List of all product requirements\\: A brief\\, unambiguous specification of the user-facing behavior of the product\\, with sufficient detail for a senior software engineer to start tech design and/or development\\, but no more. Does not specify implementation details or steps."`
-	AcceptanceCriteria []string `json:"acceptance_criteria" jsonschema:"description=Ordered acceptance criteria\\, with maximum of one level of nesting with an unordered list denoted by '    -'. Each acceptance criterium is a specific condition that must be met before the requirements are considered completely satisfied. This creates a brief\\, unambiguous specification\\, with sufficient detail for a senior software engineer to start development"`
-	Complete           bool     `json:"are_requirements_complete" jsonschema:"description=Are the product requirements complete and all ambiguity resolved by them?"`
-	Learnings          []string `json:"learnings" jsonschema:"description=List of learnings that will help the software engineer fulfill the requirements. It also contains learnings that will help us refine product requirements in the future."`
+	AcceptanceCriteria []string `json:"acceptance_criteria" jsonschema:"description=List of acceptance criteria\\, formatted with markdown including backticks for code references. Each criterium supports a single internal unordered list denoted by '    -'. Each acceptance criterium is a specific condition that must be met before the requirements are considered completely satisfied. This creates a brief\\, unambiguous specification\\, with sufficient detail for a senior software engineer to start development. Limit the length of this list to make it easier to review. Use declarative language reather than imperative."`
+	Complete           bool     `json:"requirements_finalized" jsonschema:"description=Are the requirements complete\\, unambiguous and self-consistent?"`
+	Learnings          []string `json:"learnings" jsonschema:"description=List of learnings about existing code that will help the software engineer fulfill the requirements. Does not specify approach to solution. It also contains learnings that will help us refine requirements in the future."`
+}
+
+// backcompat for rename of are_requirements_complete -> requirements_finalized
+func (d *DevRequirements) UnmarshalJSON(data []byte) error {
+	type Alias DevRequirements
+	aux := &struct {
+		*Alias
+		CompleteOld *bool `json:"are_requirements_complete"`
+		CompleteNew *bool `json:"requirements_finalized"`
+	}{
+		Alias: (*Alias)(d),
+	}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	// Priority: new field > old field
+	if aux.CompleteNew != nil {
+		d.Complete = *aux.CompleteNew
+	} else if aux.CompleteOld != nil {
+		d.Complete = *aux.CompleteOld
+	}
+	// If neither is present, Complete remains false (zero value)
+
+	return nil
 }
 
 //type ProjectRequirement struct {
@@ -148,7 +174,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 				toolResponse := ToolCallResponseInfo{Response: unmarshalErr.Error(), FunctionName: recordDevRequirementsTool.Name, ToolCallId: toolCall.Id, IsError: true}
 				addToolCallResponse(iteration.ChatHistory, toolResponse)
 			} else {
-				toolResponse := ToolCallResponseInfo{Response: "Recorded partial requirements, but requirements are not complete yet based on the \"are_requirements_complete\" boolean field value being set to false. Do some more research or thinking or get help/input to complete the plan, as needed. Once the planning is complete, record the plan again in full.", FunctionName: recordDevPlanTool.Name, ToolCallId: toolCall.Id}
+				toolResponse := ToolCallResponseInfo{Response: "Recorded partial requirements, but requirements are not finalized yet based on the \"requirements_finalized\" boolean field value being set to false. Do some more research or thinking or get help/input to finalize the requirements, as needed. Then record the finalized requirements again in full.", FunctionName: recordDevPlanTool.Name, ToolCallId: toolCall.Id}
 				addToolCallResponse(iteration.ChatHistory, toolResponse)
 			}
 		} else {
@@ -308,58 +334,76 @@ func getInitialDevRequirementsPrompt(mission, context, requirements string) stri
 
 %s
 
+Note: this context is not guaranteed to be comprehensive.
+
 # MISSION
 
 %s
 
 # ROLE
 
-You are a principal product manager.
+You are assisting a user transform their software development task description
+into a more complete one with less ambiguous requirements, while providing
+clarity around the high-level implementation approach. Your job is to understand
+the user's intent through context and questions for the user, and capture it
+accurately in a brief, readable manner.
 
 # OUTPUT
 
-You are to create a set of low-level product requirements for software
+Very concise acceptance criteria for the user to review, and for software
 developers to consume and use to implement a feature or fix a bug. The
-requirements should be complete and unambiguous, and should include learnings
-that will help the engineers who will implement the requirements get started
-faster.
+requirements should be complete, unambiguous and self-consistent. Includes
+detailed learnings that will help the engineers who will implement the
+requirements get started faster.
 
-Don't refer to anything from the chat history that would not make sense out of
-context, because these requirements will be used directly, without any of the
-associate chat history we had. The final artifact, both the acceptance criteria,
-and the learnings, must stand on their own.
+The final requirements must include anything from the chat history that is
+required to understand it out of context, because these requirements will be
+used directly, without any of the associated chat history we had. The final
+artifacts, both the acceptance criteria, and the learnings, must stand on their
+own and must not lose any critical details provided in the task description.
 
 # INSTRUCTIONS
 
-Thinking step-by-step, analyze the request. Use it to create a set of low-level
-product requirements, keeping in mind the mission of the product and the context
-gathered so far.
+Thinking step-by-step, analyze the task description. Retrieve additional context
+if needed, and then ask questions to clarify if needed. Use it to create a set
+of concise, yet reasonably comprehensive acceptance criteria, keeping in mind
+the mission of the product and the context gathered so far.
 
-Steps:
+Follow these steps precisely:
 
-1. Determine areas that require greater clarity.
-2. For each area, try to get clarity yourself with available context and tools.
-3. Think out loud about questions you would ask the requester. If those
-questions are not already answered in the request or via context/tools, ask
-them.
-4. Consider whether the requirements are now complete, unambiguous and consistent.
-5. Record the requirements, even if not yet complete, using the
+1. Determine what information is needed to finalize requirements.
+2. Try to obtain that information yourself based on existing context and tools.
+3. Before recording requirements, you must first write out a list of
+assumptions, potential questions and decisions to confirm with the user to
+clarify their intent and any aspects of the requirements or the high-level
+implementation approach.
+4. For each candidate question/decision, determine whether the answer to the
+question is consequential. If the end result would be substantially different
+based on the answer, the decision is consequential. If the decision relates to
+the recommended high-level implementation approach, but other completely
+different yet valid approaches exist, it's a consequential decision as well: the
+user is the architect & technical designer whose vision you must incorporate.
+5. If there are any consequential questions to ask the user, do so via the
+`+getHelpOrInputTool.Name+` tool. It is possible but uncommon for there to be no
+such questions.
+6. Record the requirements, even if not yet completely finalized, using the
 `+recordDevRequirementsTool.Name+` tool.
 
-The `+getHelpOrInputTool.Name+` tool will allow you to ask the requester and
-your colleagues for more information, when required. If the request is already
-very clear and unambiguous, you can skip this step, but typically there are
-important details that are not mentioned in the initial request that you will
-have to ask about before you record a complete set of requirements. You can ask
-several questions in one go and should do so if multiple areas need
-clarification.
+The `+getHelpOrInputTool.Name+` tool will allow you to ask the user for more
+information, when required. If the task description is already very clear and
+unambiguous in regards to both requirements and approach, you can skip this
+step, but usually there are important details that are not mentioned in the
+initial task and that can't be inferred with confidence that you will have to
+ask about before finalizing requirements. You can ask several questions in one
+go and should do so if multiple areas need clarification. Make your questions
+concise.
 
-As an ex-software developer, you are able to also read code via the
-`+getRetrieveCodeContextTool().Name+` tool to understand how to interpret
-technical requirements as well as understand the status quo before suggesting
-changes that software engineers will need to implement. Searching the repository
-for relevant text which may be strewn across comments or READMEs, using the `+
-		bulkSearchRepositoryTool.Name+` tool, may also be helpful.
+You are able to also read code via the `+getRetrieveCodeContextTool().Name+`
+tool to understand how to interpret technical requirements as well as understand
+the status quo before suggesting changes that software engineers will need to
+implement. Searching the repository for relevant text which may be strewn across
+comments or READMEs, using the `+bulkSearchRepositoryTool.Name+` tool, may also
+be helpful.
 
 Consider how the different requirements interact with each other in the context
 of the codebase. If the requirements clash with each other in any way, try to
@@ -369,25 +413,29 @@ confirm your resolution with the user.
 When you have enough information to produce unambiguous requirements, do so via
 the `+recordDevRequirementsTool.Name+` tool, including any helpful learnings that
 will help the engineers who will implement the requirements get started faster.
-Relevant functionality that should be maintained as-is without changes should be
-added to learnings rather than acceptance criteria.
+Existing related functionality that should be maintained as-is without changes
+should be added to learnings rather than acceptance criteria.
 
-If we already have a large amount of code context, but it's not enough to finish
-writing the requirements, DO NOT ask for more. Instead, output a partially
-complete list of requirements, with specific learnings from the process that
-will help you continue where you left off, without having all the original
-context again. Include file names and names of functions etc that are relevant
-so that we you can easily pick up right where you last left off. Don't include
-learnings that we already had recorded in the last incomplete product dev
-requirements, if there were any, but add new ones if any.
+If we already have a large amount of code context, but it's not enough for fully
+comprehensive requirements, DO NOT ask for more. Instead, record a partial list
+of requirements, with specific learnings from the process that will help you
+continue where you left off. Include file names and names of functions etc that
+are relevant so that we you can easily pick up right where you last left off.
 
-If there are crucial details in the original request below that need to be kept,
-then copy them into either requirements or learnings. Things like code snippets
-should be copied verbatim into learnings for instance. The original request and
-any chat history will be wiped away with the final new requirements you come up
-with, so make sure not to lose any essential details.
+If there are crucial details in the original task description below that need to
+be kept, then copy them into either requirements or learnings. Things like code
+snippets should almost always be copied verbatim into learnings for instance.
+The original task description and any chat history will be wiped away with the
+final new requirements you come up with, so make sure not to lose any essential
+details, examples or code.
 
-# REQUEST
+DO NOT make any consequential/top-level decisions on behalf of the user without
+checking with them, especially if there are multiple potential options, unless
+they tell you to choose on their behalf. When multiple good approaches exist and
+the codebase does not already have a strong pattern that is obviously preferred,
+definitely ask the user what they prefer.
+
+# TASK DESCRIPTION
 
 %s`, context, mission, requirements)
 }

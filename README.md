@@ -158,7 +158,6 @@ already:
 hints_path = "ai.instructions.md"
 ```
 
-<!-- TODO: uncomment when this isn't limited to developer-mode only
 #### worktree_setup
 
 The `worktree_setup` field allows you to specify a shell script that will be
@@ -167,7 +166,6 @@ let Sidekick work without polluting your main working directory, and allows
 multiple tasks to be done in parallel with conflicts. This is useful for
 performing additional setup steps that are required for your development
 environment, such as installing project-specific dependencies.
--->
 
 ### .sideignore
 

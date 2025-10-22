@@ -95,6 +95,14 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 			iteration.NumSinceLastFeedback = 0
 		}
 
+		// Inject proactive system message when nearing per-cycle tool-call limits
+		if msg, ok := ThresholdMessageForCounter(config.maxIterationsBeforeFeedback, iteration.NumSinceLastFeedback-1); ok {
+			*iteration.ChatHistory = append(*iteration.ChatHistory, llm.ChatMessage{
+				Role:    "system",
+				Content: msg,
+			})
+		}
+
 		// Get user feedback every N iterations
 		if iteration.NumSinceLastFeedback >= config.maxIterationsBeforeFeedback {
 			guidanceContext := fmt.Sprintf("The LLM has looped %d times without finalizing. Please provide guidance or just say \"continue\" if they are on track.", iteration.Num)

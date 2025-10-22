@@ -18,6 +18,7 @@ import (
 	"syscall"
 
 	"sidekick/client"
+	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/utils"
@@ -41,6 +42,8 @@ func NewTaskCommand() *cli.Command {
 			&cli.StringFlag{Name: "flow-options", Value: `{"determineRequirements": true}`, Usage: "JSON string for flow options"},
 			&cli.StringSliceFlag{Name: "flow-option", Aliases: []string{"O"}, Usage: "Add flow option (key=value), can be specified multiple times"},
 			&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"n"}, Usage: "Shorthand to set determineRequirements to false in flow options"},
+			&cli.BoolFlag{Name: "worktree", Aliases: []string{"w"}, Usage: "Use git worktree environment type"},
+			&cli.StringFlag{Name: "start-branch", Aliases: []string{"B"}, Usage: "Specify the starting branch for the task"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			c := client.NewClient(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
@@ -51,7 +54,7 @@ func NewTaskCommand() *cli.Command {
 
 // parseFlowOptions combines --flow-options JSON with individual --flow-option key=value pairs,
 // with the latter taking precedence
-func parseFlowOptions(cmd *cli.Command) (map[string]interface{}, error) {
+func parseFlowOptions(ctx context.Context, cmd *cli.Command, currentDir string) (map[string]interface{}, error) {
 	flowOpts := make(map[string]interface{})
 
 	optionsJSON := cmd.String("flow-options")
@@ -85,18 +88,43 @@ func parseFlowOptions(cmd *cli.Command) (map[string]interface{}, error) {
 		}
 		flowOpts[key] = valueStr
 	}
+
+	// --worktree flag or --start-branch flag implies worktree environment
+	if cmd.Bool("worktree") || cmd.String("start-branch") != "" {
+		flowOpts["envType"] = "local_git_worktree"
+	}
+
+	// --start-branch flag overrides startBranch
+	if startBranch := cmd.String("start-branch"); startBranch != "" {
+		flowOpts["startBranch"] = startBranch
+	}
+
+	// If envType is local_git_worktree but startBranch is not set, detect current branch
+	if envType, ok := flowOpts["envType"]; ok && envType == "local_git_worktree" {
+		if _, hasStartBranch := flowOpts["startBranch"]; !hasStartBranch {
+			branchState, err := git.GetCurrentBranch(ctx, currentDir)
+			if err != nil {
+				return nil, fmt.Errorf("failed to detect current git branch for worktree: %w", err)
+			}
+			if branchState.IsDetached {
+				return nil, fmt.Errorf("cannot use worktree with detached HEAD state, please specify --start-branch or checkout a branch")
+			}
+			flowOpts["startBranch"] = branchState.Name
+		}
+	}
+
 	return flowOpts, nil
 }
 
 func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) error {
-	req, err := buildCreateTaskRequest(cmd)
-	if err != nil {
-		return err
-	}
-
 	currentDir, err := os.Getwd()
 	if err != nil {
 		return cli.Exit(fmt.Errorf("Error getting current working directory: %w", err), 1)
+	}
+
+	req, err := buildCreateTaskRequest(ctx, cmd, currentDir)
+	if err != nil {
+		return err
 	}
 
 	// TODO merge into DevConfig, which goes into FlowOptions.DevConfigOverrides
@@ -203,7 +231,7 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 	return nil
 }
 
-func buildCreateTaskRequest(cmd *cli.Command) (*client.CreateTaskRequest, error) {
+func buildCreateTaskRequest(ctx context.Context, cmd *cli.Command, currentDir string) (*client.CreateTaskRequest, error) {
 	taskDescription := cmd.Args().First()
 
 	if taskDescription == "" {
@@ -211,11 +239,11 @@ func buildCreateTaskRequest(cmd *cli.Command) (*client.CreateTaskRequest, error)
 	}
 
 	flowType := cmd.String("flow")
-	if cmd.Bool("P") {
+	if cmd.Bool("plan") {
 		flowType = "planned_dev"
 	}
 
-	flowOpts, err := parseFlowOptions(cmd)
+	flowOpts, err := parseFlowOptions(ctx, cmd, currentDir)
 	if err != nil {
 		return nil, cli.Exit(fmt.Errorf("Error parsing flow options: %v", err), 1)
 	}

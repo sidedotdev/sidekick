@@ -149,10 +149,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	w.RegisterActivity(ffa.EvalBoolFlag)
 	w.RegisterActivity(common.GetLocalConfig)
 
-	workspaceActivities := &workspace.Activities{
-		Storage: service,
-	}
-	w.RegisterActivity(workspaceActivities.GetWorkspaceConfig)
+	w.RegisterActivity(&workspace.Activities{Storage: service})
 
 	err = w.Start()
 	if err != nil {

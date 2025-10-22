@@ -32,6 +32,10 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 
 	go func() {
 		defer func() {
+			if options.FlowActionId == "" {
+				// tracking was skipped in this case
+				return
+			}
 			// Mark the end of the stream
 			err := la.Streamer.EndFlowEventStream(context.Background(), options.WorkspaceId, options.FlowId, options.FlowActionId)
 			if err != nil {
@@ -43,6 +47,10 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 			if activity.IsActivity(ctx) {
 				activity.RecordHeartbeat(ctx, delta)
 			}
+			if options.FlowActionId == "" {
+				// tracking was skipped in this case
+				continue
+			}
 			flowEventDelta := domain.ChatMessageDeltaEvent{
 				FlowActionId:     options.FlowActionId,
 				EventType:        domain.ChatMessageDeltaEventType,
@@ -50,7 +58,10 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 			}
 			err := la.Streamer.AddFlowEvent(context.Background(), options.WorkspaceId, options.FlowId, flowEventDelta)
 			if err != nil {
-				log.Error().Err(err).Msg("failed to add chat message delta flow event to stream")
+				log.Error().Err(err).Str("workspaceId", options.WorkspaceId).
+					Str("flowId", options.FlowId).
+					Str("flowActionId", options.FlowActionId).
+					Msg("failed to add chat message delta flow event to stream")
 			}
 		}
 
@@ -175,7 +186,7 @@ func getToolChatter(config common.ModelConfig) (llm.ToolChatter, error) {
 			return nil, fmt.Errorf("failed to load local config: %w", err)
 		}
 		for _, p := range localConfig.Providers {
-			if p.Type == string(providerType) {
+			if p.Type == string(providerType) && p.Name == config.Provider {
 				return llm.OpenaiToolChat{
 					BaseURL:      p.BaseURL,
 					DefaultModel: p.DefaultLLM,

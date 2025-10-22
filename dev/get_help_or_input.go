@@ -21,14 +21,14 @@ type HelpOrInputRequest struct {
 	// TODO format enums automatically from basic list of string constants
 	//Reason string `json:"reason" jsonschema:"description=A sentence or two explaining why the request is being made. The reason MUST precede the request type and content in the json object."`
 	//RequestType string `json:"requestType" jsonschema:"enum=question,enum=clarify_requirements,enum=debug_issue,enum=run_commands,enum=fix_environment,enum=improve_tooling,enum=other,description=The type of request being made."`
-	Content string `json:"content" jsonschema:"description=The substance of the request/question\\, which the requestee/responder will read and respond to. Provide just enough context for them to understand your request easily. Follow best practices for questions\\, similar to the policy for high-quality StackOverflow questions. Don't add multiple questions inside one request\\, use the list to separate them and don't write out the question number."`
+	Content string `json:"content" jsonschema:"description=The substance of the request/question\\, which the user will read and respond to. Provide just enough context for them to understand your request easily. Follow best practices for questions\\, similar to the policy for high-quality StackOverflow questions. Use markdown withing headings\\, and ask at most 3 questions so make them count."`
 	//Target      string `json:"target"  jsonschema:"enum=requester,enum=product_owner,enum=software_engineer,enum=devops,enum=other,description=Who is likely to be able to service the request."`
-	SelfHelp SelfHelp `json:"selfHelp"  jsonschema:"description=Describes how the requester can help themselves, eg by using the tools available."`
+	SelfHelp SelfHelp `json:"selfHelp"  jsonschema:"description=Describes how you may help yourself by using the tools available."`
 }
 
 type SelfHelp struct {
-	Analysis              string   `json:"analysis" jsonschema:"description=Must precede tools list. Brief anaylsis of whether any tools provided are very likely to be able to satisfy the request."`
-	Tools                 []string `json:"functions" jsonschema:"description=List of tool names that are extremely likely be able to satisfy the request. MUST be empty if only a human can satisfy the request."`
+	Analysis              string   `json:"analysis" jsonschema:"description=Must precede tools list. Brief anaylsis of whether any tools provided are very likely to be able to satisfy the request posed to the user."`
+	Tools                 []string `json:"tools" jsonschema:"description=List of tool names that are extremely likely be able to answer the question posed or request made to the responder. MUST be empty if the question/request cannot be resolved through tool calls and must instead by addressed by the user themselves."`
 	AlreadyAttemptedTools []string `json:"alreadyAttemptedTools" jsonschema:"description=List of tools that are have already been attempted to be used to resolve this issue\\, based on chat message history."`
 }
 

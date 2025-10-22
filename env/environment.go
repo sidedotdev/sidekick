@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"sidekick/coding/unix"
 	"sidekick/common"
@@ -48,7 +49,6 @@ type LocalGitWorktreeEnv struct {
 }
 
 type LocalEnvParams struct {
-	WorkspaceId string
 	RepoDir     string
 	StartBranch *string
 }
@@ -72,11 +72,17 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 		return nil, fmt.Errorf("failed to get Sidekick data home: %w", err)
 	}
 
-	workingDir := filepath.Join(sidekickDataHome, "worktrees", worktree.WorkspaceId, worktree.Name)
+	// Create worktree directory
+	// dirName combines original repo name and suffix of branch name, for better DX
+	repoName := filepath.Base(params.RepoDir)
+	branchSuffix := strings.TrimPrefix(worktree.Name, "side/")
+	dirName := repoName + "-" + branchSuffix
+	workingDir := filepath.Join(sidekickDataHome, "worktrees", worktree.WorkspaceId, dirName)
 	if err := os.MkdirAll(workingDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create worktree directory: %w", err)
 	}
 
+	// a worktree's name refers to its branch name
 	newBranchName := worktree.Name
 	worktreeBaseRef := "HEAD"
 	if params.StartBranch != nil && *params.StartBranch != "" {
