@@ -27,14 +27,14 @@ to allow for generic return type
 TODO: /gen write a set of tests for Track. use a real redis db instance via
 the existing newTestRedisDatabase fucntion and confirm started/failed/completed statuses.
 */
-func Track[T any](actionCtx ActionContext, f func(flowAction domain.FlowAction) (T, error)) (defaultT T, err error) {
+func Track[T any](actionCtx ActionContext, f func(flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
 	if actionCtx.ExecContext.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking flow action")
 	}
 	return trackFlowAction(actionCtx.ExecContext, false, actionCtx.ActionType, actionCtx.ActionParams, f)
 }
 
-func TrackFailureOnly[T any](actionCtx ActionContext, f func(flowAction domain.FlowAction) (T, error)) (defaultT T, err error) {
+func TrackFailureOnly[T any](actionCtx ActionContext, f func(flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
 	if actionCtx.ExecContext.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking flow action")
 	}
@@ -42,7 +42,7 @@ func TrackFailureOnly[T any](actionCtx ActionContext, f func(flowAction domain.F
 }
 
 // TrackWithOptions wraps an anonymous func with flow action tracking based on the provided options
-func TrackWithOptions[T any](actionCtx ActionContext, options TrackOptions, f func(flowAction domain.FlowAction) (T, error)) (defaultT T, err error) {
+func TrackWithOptions[T any](actionCtx ActionContext, options TrackOptions, f func(flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
 	if actionCtx.ExecContext.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking flow action")
 	}
@@ -58,7 +58,7 @@ func TrackWithOptions[T any](actionCtx ActionContext, options TrackOptions, f fu
 Just like Track, but for human actions. This sets up the required metadata to
 ensure the human can complete the action.
 */
-func TrackHuman[T any](actionCtx ActionContext, f func(flowAction domain.FlowAction) (T, error)) (T, error) {
+func TrackHuman[T any](actionCtx ActionContext, f func(flowAction *domain.FlowAction) (T, error)) (T, error) {
 	if actionCtx.ExecContext.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking flow action")
 	}
@@ -202,13 +202,13 @@ func trackSubflowFailureOnly[T any](eCtx ExecContext, subflowType, subflowName s
 	return val, nil
 }
 
-func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType string, actionParams map[string]any, f func(streamId domain.FlowAction) (T, error)) (defaultT T, err error) {
+func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType string, actionParams map[string]any, f func(flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
 	initialStatus := domain.ActionStatusStarted
 	if isHumanAction {
 		initialStatus = domain.ActionStatusPending
 	}
 
-	flowAction, err := putFlowAction(eCtx, domain.FlowAction{
+	flowAction := &domain.FlowAction{
 		WorkspaceId:        eCtx.WorkspaceId,
 		SubflowName:        eCtx.FlowScope.SubflowName,
 		SubflowDescription: eCtx.FlowScope.subflowDescription,
@@ -217,10 +217,12 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 		ActionParams:       actionParams,
 		IsHumanAction:      isHumanAction,
 		IsCallbackAction:   isHumanAction, // human actions are always callback actions and the only ones for now
-	})
+	}
+	persisted, err := putFlowAction(eCtx, *flowAction)
 	if err != nil {
 		return defaultT, err
 	}
+	*flowAction = persisted
 
 	// perform the actual action being tracked
 	val, err := f(flowAction)
@@ -234,10 +236,12 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 			disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
 			updateECtx.Context = disconnectedWorkflowCtx
 		}
-		flowAction, err2 = putFlowAction(updateECtx, flowAction)
+		var persistedFailure domain.FlowAction
+		persistedFailure, err2 = putFlowAction(updateECtx, *flowAction)
 		if err2 != nil {
 			return defaultT, fmt.Errorf("failed to mark flow action as failed: %v\noriginal failure: %v", err2, err)
 		}
+		*flowAction = persistedFailure
 		return defaultT, err
 	}
 
@@ -252,17 +256,18 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 		disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
 		updateECtx.Context = disconnectedWorkflowCtx
 	}
-	flowAction, err = putFlowAction(updateECtx, flowAction)
+	persisted, err = putFlowAction(updateECtx, *flowAction)
 	if err != nil {
 		return val, fmt.Errorf("failed to mark flow action as completed: %v", err)
 	}
+	*flowAction = persisted
 
 	return val, nil
 }
 
-func trackFlowActionFailureOnly[T any](eCtx ExecContext, actionType string, actionParams map[string]any, f func(streamId domain.FlowAction) (T, error)) (defaultT T, err error) {
+func trackFlowActionFailureOnly[T any](eCtx ExecContext, actionType string, actionParams map[string]any, f func(flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
 	initialStatus := domain.ActionStatusStarted
-	flowAction := domain.FlowAction{
+	flowAction := &domain.FlowAction{
 		WorkspaceId:        eCtx.WorkspaceId,
 		SubflowName:        eCtx.FlowScope.SubflowName,
 		SubflowDescription: eCtx.FlowScope.subflowDescription,
@@ -283,10 +288,12 @@ func trackFlowActionFailureOnly[T any](eCtx ExecContext, actionType string, acti
 			disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
 			updateECtx.Context = disconnectedWorkflowCtx
 		}
-		flowAction, err2 = putFlowAction(updateECtx, flowAction)
+		var persistedFailure domain.FlowAction
+		persistedFailure, err2 = putFlowAction(updateECtx, *flowAction)
 		if err2 != nil {
 			return defaultT, fmt.Errorf("failed to mark flow action as failed: %v\noriginal failure: %v", err2, err)
 		}
+		*flowAction = persistedFailure
 		return defaultT, err
 	}
 
