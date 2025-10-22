@@ -2,6 +2,7 @@ package embedding
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 
@@ -23,8 +24,8 @@ const (
 	// both model and provider are unknown
 	defaultMaxBatchSize = 250
 
-	// estimated number of characters per token.
-	charsPerToken         = 4
+	// estimated number of characters per token (conservative under-estimate)
+	charsPerToken         = float64(3.5)
 	defaultGoodChunkChars = 3000
 )
 
@@ -78,7 +79,7 @@ func BatchEmbeddingRequests(inputs []string, modelConfig common.ModelConfig) ([]
 	currentBatchTokens := 0
 
 	for _, input := range inputs {
-		inputTokens := (len(input) + charsPerToken - 1) / charsPerToken
+		inputTokens := int(math.Ceil(float64(len(input)) / charsPerToken))
 
 		// Return an error if a single input exceeds the maximum batch token limit
 		if inputTokens > maxBatchTokens {
@@ -151,7 +152,7 @@ func GetModelMaxChars(modelConfig common.ModelConfig) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to get model max tokens: %w", err)
 	}
-	return maxTokens * charsPerToken, nil
+	return int(math.Ceil(float64(maxTokens) * charsPerToken)), nil
 }
 
 // GetMaxBatchSize determines the maximum number of inputs allowed in a batch request.
