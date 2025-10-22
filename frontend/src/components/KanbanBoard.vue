@@ -6,6 +6,16 @@
     </div>
   </div>
   <div class="kanban-board">
+    <div v-if="isSearchVisible" class="search-container">
+      <input
+        ref="searchInputRef"
+        v-model="searchQuery"
+        type="text"
+        class="search-input"
+        placeholder="Search tasks..."
+      />
+      <button class="search-clear" @click="clearSearch" title="Clear search">×</button>
+    </div>
     <div
       v-for="agentType in ['human', 'llm', 'none'] as const"
       :key="agentType"
@@ -24,7 +34,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import type { FullTask, AgentType, Task, TaskStatus } from '../lib/models'
 import TaskCard from './TaskCard.vue'
 import TaskModal from './TaskModal.vue'
@@ -43,11 +53,38 @@ const columnNames = {
 
 const emit = defineEmits(['refresh', 'dismissOverlay'])
 
+const searchQuery = ref('')
+const debouncedQuery = ref('')
+const isSearchVisible = ref(false)
+const searchInputRef = ref<HTMLInputElement | null>(null)
+
+let debounceTimeout: ReturnType<typeof setTimeout> | null = null
+
+watch(searchQuery, (newQuery) => {
+  if (debounceTimeout) {
+    clearTimeout(debounceTimeout)
+  }
+  debounceTimeout = setTimeout(() => {
+    debouncedQuery.value = newQuery
+  }, 100)
+})
+
+const filteredTasks = computed(() => {
+  const query = debouncedQuery.value.trim().toLowerCase()
+  if (!query) {
+    return props.tasks
+  }
+  return props.tasks.filter(task => {
+    const titleMatch = task.title?.toLowerCase().includes(query) ?? false
+    const descMatch = task.description?.toLowerCase().includes(query) ?? false
+    return titleMatch || descMatch
+  })
+})
+
 const groupedTasks = computed(() => {
-  return props.tasks
+  return filteredTasks.value
     .reduce((grouped, task) => {
       grouped[task.agentType] = [...(grouped[task.agentType] || []), task];
-      // sort by updated descending, if same then sort by id descending
       grouped[task.agentType].sort((a: FullTask, b: FullTask) => {
         if (b.updated === a.updated) {
           return b.id > a.id ? 1 : -1;
@@ -94,6 +131,61 @@ const closeModal = () => {
     status: 'drafting'
   }
 }
+
+const handleKeyDown = (event: KeyboardEvent) => {
+  const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
+  const isSearchShortcut = (isMac && event.metaKey && event.key === 'f') || 
+                          (!isMac && event.ctrlKey && event.key === 'f')
+  
+  if (!isSearchShortcut) {
+    return
+  }
+
+  const activeEl = document.activeElement as HTMLElement
+  const isEditableElement = activeEl && (
+    activeEl.tagName === 'INPUT' ||
+    activeEl.tagName === 'TEXTAREA' ||
+    activeEl.isContentEditable
+  )
+
+  if (isEditableElement || isModalOpen.value) {
+    return
+  }
+
+  event.preventDefault()
+  isSearchVisible.value = true
+  setTimeout(() => {
+    searchInputRef.value?.focus()
+  }, 0)
+}
+
+const handleEscape = (event: KeyboardEvent) => {
+  if (event.key === 'Escape' && isSearchVisible.value) {
+    clearSearch()
+  }
+}
+
+const clearSearch = () => {
+  searchQuery.value = ''
+  debouncedQuery.value = ''
+  isSearchVisible.value = false
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleKeyDown)
+  window.addEventListener('keydown', handleEscape)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeyDown)
+  window.removeEventListener('keydown', handleEscape)
+  if (debounceTimeout) {
+    clearTimeout(debounceTimeout)
+  }
+  searchQuery.value = ''
+  debouncedQuery.value = ''
+  isSearchVisible.value = false
+})
 
 function error(e: any) {
   // TODO /gen/req/planned use a custom component here and on any other uses of
@@ -246,5 +338,48 @@ h2 {
   border: 1px solid var(--color-border);
   border-radius: 0.5rem;
   box-shadow: 0 0.5rem 2rem rgba(0, 0, 0, 0.25);
+}
+
+.search-container {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  z-index: 100;
+}
+
+.search-input {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  background-color: var(--color-background);
+  color: var(--color-text);
+  width: 15rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.search-input:focus {
+  border-color: var(--color-border-hover);
+}
+
+.search-clear {
+  padding: 0.25rem 0.5rem;
+  font-size: 1.5rem;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+.search-clear:hover {
+  background-color: rgba(255, 255, 255, 0.07);
+  border-color: var(--color-border-hover);
 }
 </style>
