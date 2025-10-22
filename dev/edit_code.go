@@ -441,7 +441,6 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 		tools = append(tools, &getHelpOrInputTool)
 	}
 
-	var temperature float32 = 0.0
 	return llm.ToolChatOptions{
 		Secrets: *dCtx.Secrets,
 		Params: llm.ToolChatParams{
@@ -450,7 +449,6 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 			ToolChoice: llm.ToolChoice{
 				Type: llm.ToolChoiceTypeAuto,
 			},
-			Temperature: &temperature,
 			ModelConfig: codingModelConfig,
 		},
 	}

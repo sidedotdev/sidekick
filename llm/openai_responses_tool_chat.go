@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sidekick/utils"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -17,7 +18,10 @@ import (
 
 const OpenaiResponsesDefaultModel = "gpt-5-codex"
 
-type OpenaiResponsesToolChat struct{}
+type OpenaiResponsesToolChat struct {
+	BaseURL      string
+	DefaultModel string
+}
 
 func (o OpenaiResponsesToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta, progressChan chan<- ProgressInfo) (*ChatMessageResponse, error) {
 	heartbeatCtx, cancelHeartbeat := context.WithCancel(context.Background())
@@ -47,12 +51,19 @@ func (o OpenaiResponsesToolChat) ChatStream(ctx context.Context, options ToolCha
 	if err != nil {
 		return nil, err
 	}
+	clientOptions := []option.RequestOption{option.WithAPIKey(token)}
 
-	client := openai.NewClient(option.WithAPIKey(token))
+	if o.BaseURL != "" {
+		clientOptions = append(clientOptions, option.WithBaseURL(o.BaseURL))
+	}
+
+	client := openai.NewClient(clientOptions...)
 
 	var model string
 	if options.Params.Model != "" {
 		model = options.Params.Model
+	} else if o.DefaultModel != "" {
+		model = o.DefaultModel
 	} else {
 		model = OpenaiResponsesDefaultModel
 	}
@@ -72,6 +83,12 @@ func (o OpenaiResponsesToolChat) ChatStream(ctx context.Context, options ToolCha
 	if options.Params.Temperature != nil {
 		params.Temperature = openai.Float(float64(*options.Params.Temperature))
 	}
+
+	var parallelToolCalls bool = false
+	if options.Params.ParallelToolCalls != nil {
+		parallelToolCalls = *options.Params.ParallelToolCalls
+	}
+	params.ParallelToolCalls = param.NewOpt(parallelToolCalls)
 
 	if len(options.Params.Tools) > 0 {
 		toolsToUse := options.Params.Tools
@@ -100,6 +117,7 @@ func (o OpenaiResponsesToolChat) ChatStream(ctx context.Context, options ToolCha
 loop:
 	for stream.Next() {
 		data := stream.Current()
+		log.Trace().Msgf("OPENAI CHUNK: %s\n", utils.PanicJSON(data))
 
 		switch data.AsAny().(type) {
 		case responses.ResponseCompletedEvent:
@@ -163,7 +181,7 @@ loop:
 			deltaChan <- delta
 			deltas = append(deltas, delta)
 		default:
-			fmt.Printf("GOT: %s\n", data.Type)
+			log.Trace().Msgf("Unhandled event: %s\n", data.Type)
 		}
 	}
 
@@ -223,7 +241,8 @@ func buildStructuredInputFromMessages(messages []ChatMessage) ([]responses.Respo
 				msg.Content,
 			))
 		default:
-			return nil, fmt.Errorf("unsupported message role: %s", msg.Role)
+			log.Error().Any("message", msg).Msgf("unsupported message role in message: %s", utils.PanicJSON(msg))
+			return nil, fmt.Errorf("unsupported message role: %s", utils.PanicJSON(msg.Role))
 		}
 	}
 
