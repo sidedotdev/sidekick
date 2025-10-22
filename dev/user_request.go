@@ -246,19 +246,20 @@ func GetUserResponse(dCtx DevContext, req RequestForUser) (*UserResponse, error)
 	return &userResponse, nil
 }
 
-func GetUserContinue(actionCtx DevActionContext, prompt string, requestParams map[string]any) error {
-	if actionCtx.RepoConfig.DisableHumanInTheLoop {
+func GetUserContinue(dCtx DevContext, prompt string, requestParams map[string]any) error {
+	if dCtx.RepoConfig.DisableHumanInTheLoop {
 		return nil
 	}
 
 	// Create a RequestForUser struct for continue request
 	req := RequestForUser{
-		OriginWorkflowId: workflow.GetInfo(actionCtx).WorkflowExecution.ID,
+		OriginWorkflowId: workflow.GetInfo(dCtx).WorkflowExecution.ID,
 		Content:          prompt,
-		Subflow:          actionCtx.FlowScope.SubflowName,
+		Subflow:          dCtx.FlowScope.SubflowName,
 		RequestParams:    requestParams,
 		RequestKind:      RequestKindContinue,
 	}
+	actionCtx := dCtx.NewActionContext("user_request.continue")
 	actionCtx.ActionParams = req.ActionParams()
 
 	// Ensure tracking of the flow action within the guidance request
