@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sidekick/common"
 	"sidekick/utils"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/activity"
 )
@@ -89,6 +91,16 @@ func (o OpenaiResponsesToolChat) ChatStream(ctx context.Context, options ToolCha
 		parallelToolCalls = *options.Params.ParallelToolCalls
 	}
 	params.ParallelToolCalls = param.NewOpt(parallelToolCalls)
+
+	params.Store = openai.Bool(false)
+	modelInfo, _ := common.GetModel(options.Params.Provider, model)
+	if modelInfo != nil && modelInfo.Reasoning {
+		params.Include = []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent}
+		params.Reasoning.Summary = shared.ReasoningSummaryAuto
+		if options.Params.ReasoningEffort != "" {
+			params.Reasoning.Effort = shared.ReasoningEffort(options.Params.ReasoningEffort)
+		}
+	}
 
 	if len(options.Params.Tools) > 0 {
 		toolsToUse := options.Params.Tools
