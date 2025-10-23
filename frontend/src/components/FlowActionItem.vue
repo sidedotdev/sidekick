@@ -317,11 +317,13 @@ const summary = computed<Summary | null>(() => {
       try {
         const params = props.flowAction.actionParams;
         if (!params?.code_context_requests || !Array.isArray(params.code_context_requests)) {
-          return null;
+          if (!params?.requests || !Array.isArray(params.requests)) {
+            return null;
+          }
         }
         
         const fileGroups: Record<string, string[]> = {};
-        for (const request of params.code_context_requests) {
+        for (const request of (params.code_context_requests || params.requests)) {
           if (!request?.file_path) continue;
           const symbols = request.symbol_names && Array.isArray(request.symbol_names) && request.symbol_names.length > 0
             ? request.symbol_names
