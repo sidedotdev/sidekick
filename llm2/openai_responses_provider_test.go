@@ -273,8 +273,15 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 	}
 
 	eventChan := make(chan Event, 100)
+	var allEvents []Event
+	var sawSummaryTextDelta bool
+
 	go func() {
-		for range eventChan {
+		for event := range eventChan {
+			allEvents = append(allEvents, event)
+			if event.Type == EventSummaryTextDelta {
+				sawSummaryTextDelta = true
+			}
 		}
 	}()
 
@@ -287,6 +294,10 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 
 	if response == nil {
 		t.Fatal("Stream returned a nil response")
+	}
+
+	if !sawSummaryTextDelta {
+		t.Logf("Note: No summary_text_delta events received (may be expected for simple prompts)")
 	}
 
 	t.Logf("Response output content blocks: %d", len(response.Output.Content))
