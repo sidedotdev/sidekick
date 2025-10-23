@@ -39,7 +39,7 @@ func UserRequestIfPaused(dCtx DevContext, guidanceContext string, requestParams 
 	actionCtx := dCtx.NewActionContext("user_request.paused")
 	actionCtx.ActionParams = guidanceRequest.ActionParams()
 
-	response, err := TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
+	response, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
 		guidanceRequest.FlowActionId = flowAction.Id
 		return GetUserResponse(dCtx, *guidanceRequest)
 	})

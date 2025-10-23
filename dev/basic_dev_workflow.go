@@ -496,7 +496,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 		}
 	}
 
-	mergeResult, err := Track(actionCtx, func(flowAction domain.FlowAction) (git.MergeActivityResult, error) {
+	mergeResult, err := Track(actionCtx, func(flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
 		var mergeResult git.MergeActivityResult
 
 		if gitCommitVersion >= 1 && params.CommitRequired {
@@ -579,7 +579,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 					"targetBranch": mergeInfo.TargetBranch,
 				}
 
-				finalMergeResult, err := Track(finalActionCtx, func(flowAction domain.FlowAction) (git.MergeActivityResult, error) {
+				finalMergeResult, err := Track(finalActionCtx, func(flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
 					var finalResult git.MergeActivityResult
 					err := PerformWithUserRetry(finalActionCtx, git.GitMergeActivity, &finalResult, dCtx.EnvContainer, git.GitMergeParams{
 						SourceBranch: dCtx.Worktree.Name,
@@ -605,7 +605,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 		actionCtx := dCtx.NewActionContext("cleanup_worktree")
 		v := workflow.GetVersion(dCtx, "hide-cleanup-worktree", workflow.DefaultVersion, 1)
 		trackOptions := flow_action.TrackOptions{FailuresOnly: v >= 1}
-		_, err := flow_action.TrackWithOptions(actionCtx.FlowActionContext(), trackOptions, func(flowAction domain.FlowAction) (interface{}, error) {
+		_, err := flow_action.TrackWithOptions(actionCtx.FlowActionContext(), trackOptions, func(flowAction *domain.FlowAction) (interface{}, error) {
 			future := workflow.ExecuteActivity(dCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "Sidekick task completed and merged")
 			return nil, future.Get(dCtx, nil)
 		})

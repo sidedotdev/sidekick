@@ -87,7 +87,7 @@ func GetHelpOrInput(dCtx DevContext, requests []HelpOrInputRequest) (string, err
 
 	actionCtx := dCtx.NewActionContext("user_request")
 	actionCtx.ActionParams = req.ActionParams()
-	userResponse, err := TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
+	userResponse, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
 		req.FlowActionId = flowAction.Id
 		return GetUserResponse(dCtx, req)
 	})

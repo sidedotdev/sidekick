@@ -250,7 +250,7 @@ func generateDevRequirements(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*
 func TrackedToolChat(dCtx DevContext, actionType string, options llm.ToolChatOptions) (*llm.ChatMessageResponse, error) {
 	actionCtx := dCtx.NewActionContext("generate." + actionType)
 	actionCtx.ActionParams = options.ActionParams()
-	return Track(actionCtx, func(flowAction domain.FlowAction) (*llm.ChatMessageResponse, error) {
+	return Track(actionCtx, func(flowAction *domain.FlowAction) (*llm.ChatMessageResponse, error) {
 		if options.Params.Provider == "" {
 			options.Params.ModelConfig = dCtx.GetModelConfig(common.DefaultKey, 0, "default")
 		}

@@ -82,7 +82,7 @@ func GetUserApproval(dCtx DevContext, approvalType, approvalPrompt string, reque
 	actionCtx.ActionParams = req.ActionParams()
 
 	// Ensure tracking of the flow action within the guidance request
-	return TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
+	return TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
 		req.FlowActionId = flowAction.Id
 		return GetUserResponse(actionCtx.DevContext, req)
 	})
@@ -123,7 +123,7 @@ func GetUserMergeApproval(
 	finalTarget := mergeApprovalInfo.DefaultTargetBranch
 
 	// Ensure tracking of the flow action within the guidance request
-	userResponse, err := TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
+	userResponse, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
 		req.FlowActionId = flowAction.Id
 
 		// Get the initial user response
@@ -263,7 +263,7 @@ func GetUserContinue(dCtx DevContext, prompt string, requestParams map[string]an
 	actionCtx.ActionParams = req.ActionParams()
 
 	// Ensure tracking of the flow action within the guidance request
-	_, err := TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
+	_, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
 		req.FlowActionId = flowAction.Id
 		return GetUserResponse(actionCtx.DevContext, req)
 	})
@@ -311,7 +311,7 @@ would mean to apply it to your current situation.
 	actionCtx.ActionParams = guidanceRequest.ActionParams()
 
 	// Ensure tracking of the flow action within the guidance request
-	return TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
+	return TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
 		guidanceRequest.FlowActionId = flowAction.Id
 		response, err := GetUserResponse(dCtx, *guidanceRequest)
 		if response.Content != "" {

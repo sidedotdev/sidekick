@@ -146,7 +146,7 @@ func GetRankedRepoSummary(dCtx DevContext, rankQuery string, charLimit int) (str
 	for {
 		actionCtx := dCtx.NewActionContext("ranked_repo_summary")
 		actionCtx.ActionParams = options.ActionParams()
-		repoSummary, err = Track(actionCtx, func(flowAction domain.FlowAction) (string, error) {
+		repoSummary, err = Track(actionCtx, func(flowAction *domain.FlowAction) (string, error) {
 			var repoSummary string
 			var ra *persisted_ai.RagActivities // use a nil struct pointer to call activities that are part of a structure
 			err := workflow.ExecuteActivity(utils.NoRetryCtx(dCtx), ra.RankedDirSignatureOutline, options).Get(dCtx, &repoSummary)
