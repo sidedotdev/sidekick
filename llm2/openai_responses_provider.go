@@ -115,6 +115,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 	var events []Event
 	var stopReason string
 	var usage Usage
+	reasoningItemIndexByID := make(map[string]int)
 
 loop:
 	for stream.Next() {
@@ -143,6 +144,30 @@ loop:
 			if response.Usage.OutputTokens > 0 {
 				usage.OutputTokens = int(response.Usage.OutputTokens)
 			}
+
+			for _, output := range response.Output {
+				switch output.AsAny().(type) {
+				case responses.ResponseReasoningItem:
+					item := output.AsReasoning()
+					if idx, ok := reasoningItemIndexByID[item.ID]; ok {
+						evt := Event{
+							Type:  EventBlockDone,
+							Index: idx,
+							ContentBlock: &ContentBlock{
+								Type: ContentBlockTypeReasoning,
+								Reasoning: &ReasoningBlock{
+									Text:             reasoningTextFromOpenaiContent(item.Content),
+									Summary:          reasoningSummaryFromOpenaiContent(item.Summary),
+									EncryptedContent: item.EncryptedContent,
+								},
+							},
+						}
+						eventChan <- evt
+						events = append(events, evt)
+					}
+				}
+			}
+
 			break loop
 
 		case responses.ResponseContentPartAddedEvent:
@@ -234,60 +259,23 @@ loop:
 
 			case responses.ResponseReasoningItem:
 				item := openaiEvent.Item.AsReasoning()
+				blockIndex := int(openaiEvent.OutputIndex)
+				reasoningItemIndexByID[item.ID] = blockIndex
+
 				evt := Event{
 					Type:  EventBlockStarted,
-					Index: int(openaiEvent.OutputIndex),
+					Index: blockIndex,
 					ContentBlock: &ContentBlock{
-						Id:        item.ID,
-						Type:      ContentBlockTypeReasoning,
+						Id:   item.ID,
+						Type: ContentBlockTypeReasoning,
 						Reasoning: &ReasoningBlock{
-							//Text:             reasoningTextFromOpenaiContent(item.Content),
-							//Summary:          reasoningSummaryFromOpenaiContent(item.Summary),
-							//EncryptedContent: item.EncryptedContent,
+							Text:    reasoningTextFromOpenaiContent(item.Content),
+							Summary: reasoningSummaryFromOpenaiContent(item.Summary),
 						},
 					},
 				}
 				eventChan <- evt
 				events = append(events, evt)
-
-				// TODO let's simplify so that block_started can include
-				// arbitrary details and we should include them in the block, to
-				// get rid of these.
-				// TODO encrypted content keeps changing across events for the
-				// same item id. so we should listen in on the final
-				// "response.completed" and emit a block done event for that,
-				// and any non-empty fields should override the given block, just like with block_started
-				if item.EncryptedContent != "" {
-					evt := Event{
-						Type:  EventSignatureDelta,
-						Index: int(openaiEvent.OutputIndex),
-						Delta: item.EncryptedContent,
-					}
-					eventChan <- evt
-					events = append(events, evt)
-				}
-
-				text := reasoningTextFromOpenaiContent(item.Content)
-				if text != "" {
-					evt := Event{
-						Type:  EventTextDelta,
-						Index: int(openaiEvent.OutputIndex),
-						Delta: text,
-					}
-					eventChan <- evt
-					events = append(events, evt)
-				}
-
-				summary := reasoningSummaryFromOpenaiContent(item.Summary)
-				if summary != "" {
-					evt := Event{
-						Type:  EventSummaryTextDelta,
-						Index: int(openaiEvent.OutputIndex),
-						Delta: summary,
-					}
-					eventChan <- evt
-					events = append(events, evt)
-				}
 			}
 
 		case responses.ResponseFunctionCallArgumentsDeltaEvent:
@@ -323,9 +311,9 @@ loop:
 		case responses.ResponseReasoningSummaryTextDeltaEvent:
 			openaiEvent := data.AsResponseReasoningSummaryTextDelta()
 			evt := Event{
-				Type:  EventTextDelta,
+				Type:  EventSummaryTextDelta,
 				Index: int(openaiEvent.OutputIndex),
-				Delta: data.Delta,
+				Delta: openaiEvent.Delta,
 			}
 			eventChan <- evt
 			events = append(events, evt)
@@ -546,6 +534,28 @@ func accumulateOpenaiEventsToMessage(events []Event) Message {
 				}
 				// it's not a delta actually, it's the full encrypted content...
 				block.Reasoning.EncryptedContent = evt.Delta
+			}
+
+		case EventBlockDone:
+			if evt.ContentBlock != nil {
+				if block, ok := blocks[evt.Index]; ok {
+					if block.Type == ContentBlockTypeReasoning && evt.ContentBlock.Type == ContentBlockTypeReasoning {
+						if evt.ContentBlock.Reasoning != nil {
+							if block.Reasoning == nil {
+								block.Reasoning = &ReasoningBlock{}
+							}
+							if evt.ContentBlock.Reasoning.Text != "" {
+								block.Reasoning.Text = evt.ContentBlock.Reasoning.Text
+							}
+							if evt.ContentBlock.Reasoning.Summary != "" {
+								block.Reasoning.Summary = evt.ContentBlock.Reasoning.Summary
+							}
+							if evt.ContentBlock.Reasoning.EncryptedContent != "" {
+								block.Reasoning.EncryptedContent = evt.ContentBlock.Reasoning.EncryptedContent
+							}
+						}
+					}
+				}
 			}
 		}
 	}
