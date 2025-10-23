@@ -21,8 +21,8 @@ import (
 )
 
 type RequiredCodeContext struct {
-	Analysis            string                     `json:"analysis" jsonschema:"description=Brief analysis of which code symbols (functions\\, types\\, etc) are most relevant before making a final decision and outputting code_context_requests and custom_types. Let's think step by step."`
-	CodeContextRequests []coding.FileSymDefRequest `json:"code_context_requests" jsonschema:"description=Requests to retrieve full definitions of a given symbol within the given file where it is defined."`
+	Analysis string                     `json:"analysis" jsonschema:"description=Brief analysis of which code symbols (functions\\, types\\, etc) are most relevant before making a final decision and outputting code_context_requests and custom_types. Let's think step by step."`
+	Requests []coding.FileSymDefRequest `json:"code_context_requests" jsonschema:"description=Requests to retrieve full definitions of a given symbol within the given file where it is defined."`
 }
 
 var retrieveCodeContextTool = &llm.Tool{
@@ -304,7 +304,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		var result coding.SymDefResults
 		result, err = extractCodeContext(noRetryCtx, coding.DirectorySymDefRequest{
 			EnvContainer:          *actionCtx.EnvContainer,
-			Requests:              requiredCodeContext.CodeContextRequests,
+			Requests:              requiredCodeContext.Requests,
 			IncludeRelatedSymbols: true,
 		})
 
@@ -389,14 +389,14 @@ func extractCodeContext(ctx workflow.Context, req coding.DirectorySymDefRequest)
 }
 
 func RetrieveCodeContext(dCtx DevContext, requiredCodeContext RequiredCodeContext, characterLengthThreshold int) (string, error) {
-	if len(requiredCodeContext.CodeContextRequests) == 0 {
+	if len(requiredCodeContext.Requests) == 0 {
 		return "", llm.ErrToolCallUnmarshal
 	}
 
 	dCtx.Context = utils.NoRetryCtx(dCtx)
 	result, err := extractCodeContext(dCtx, coding.DirectorySymDefRequest{
 		EnvContainer:          *dCtx.EnvContainer,
-		Requests:              requiredCodeContext.CodeContextRequests,
+		Requests:              requiredCodeContext.Requests,
 		IncludeRelatedSymbols: true,
 	})
 	if err != nil {
@@ -427,7 +427,7 @@ func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *[]llm
 	err = json.Unmarshal([]byte(llm.RepairJson(jsonStr)), &requiredCodeContext)
 	if err != nil {
 		return toolCall, RequiredCodeContext{}, fmt.Errorf("%w: %v", llm.ErrToolCallUnmarshal, err)
-	} else if requiredCodeContext.CodeContextRequests == nil {
+	} else if requiredCodeContext.Requests == nil {
 		return toolCall, RequiredCodeContext{}, fmt.Errorf("%w: missing code_context_requests in tool call", llm.ErrToolCallUnmarshal)
 	}
 
@@ -516,7 +516,7 @@ func renderCodeContextRefineAndRankPrompt(info RefineCodeContextInfo) string {
 	}
 	data := map[string]interface{}{
 		"originalCodeContext":         info.OriginalCodeContext,
-		"originalCodeContextRequests": utils.PanicJSON(info.OriginalCodeContextRequest.CodeContextRequests),
+		"originalCodeContextRequests": utils.PanicJSON(info.OriginalCodeContextRequest.Requests),
 		"requirements":                info.Requirements,
 		// don't think needs are needed (hah!) when refining, as needs are about expanding vs narrowing down
 		//"needs":                       info.Needs,
