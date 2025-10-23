@@ -69,7 +69,7 @@ func TestOpenaiResponsesToolChatIntegration(t *testing.T) {
 				Model:    "gpt-4.1-nano-2025-04-14",
 			},
 			Messages: []ChatMessage{
-				{Role: ChatMessageRoleUser, Content: "First say hi. After that, then look up what the weather is like in New York in celsius. Let me know, then check London too for me."},
+				{Role: ChatMessageRoleUser, Content: "Look up what the weather is like in New York in celsius, then describe it to me concisely."},
 			},
 			Tools:      []*Tool{mockTool},
 			ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
@@ -199,10 +199,6 @@ func TestOpenaiResponsesToolChatIntegration(t *testing.T) {
 
 		if response.Content == "" {
 			t.Error("Response content is empty after providing tool results")
-		}
-
-		if !strings.Contains(strings.ToLower(response.Content), "new york") && !strings.Contains(strings.ToLower(response.Content), "london") {
-			t.Logf("Warning: Response doesn't mention the cities, but that's okay: %s", response.Content)
 		}
 
 		assert.NotNil(t, response.Usage, "Usage field should not be nil on multi-turn")
