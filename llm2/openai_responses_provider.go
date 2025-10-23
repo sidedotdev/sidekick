@@ -69,6 +69,19 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 		params.Temperature = openai.Float(float64(*options.Params.Temperature))
 	}
 
+	effectiveMaxTokens := 0
+	if options.Params.MaxTokens > 0 {
+		effectiveMaxTokens = options.Params.MaxTokens
+	}
+	if modelInfo, found := common.GetModel(options.Params.Provider, model); found {
+		if modelInfo.Limit.Output > 0 && (effectiveMaxTokens == 0 || effectiveMaxTokens > modelInfo.Limit.Output) {
+			effectiveMaxTokens = modelInfo.Limit.Output
+		}
+	}
+	if effectiveMaxTokens > 0 {
+		params.MaxOutputTokens = param.NewOpt(int64(effectiveMaxTokens))
+	}
+
 	if len(options.Params.Tools) > 0 {
 		toolsToUse := options.Params.Tools
 		if options.Params.ToolChoice.Type == common.ToolChoiceTypeTool {
