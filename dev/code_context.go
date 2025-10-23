@@ -22,7 +22,30 @@ import (
 
 type RequiredCodeContext struct {
 	Analysis string                     `json:"analysis" jsonschema:"description=Brief analysis of which code symbols (functions\\, types\\, etc) are most relevant before making a final decision and outputting code_context_requests and custom_types. Let's think step by step."`
-	Requests []coding.FileSymDefRequest `json:"code_context_requests" jsonschema:"description=Requests to retrieve full definitions of a given symbol within the given file where it is defined."`
+	Requests []coding.FileSymDefRequest `json:"requests" jsonschema:"description=Requests to retrieve full definitions of a given symbol within the given file where it is defined."`
+}
+
+func (r *RequiredCodeContext) UnmarshalJSON(data []byte) error {
+	type Alias RequiredCodeContext
+	aux := &struct {
+		RequestsNew []coding.FileSymDefRequest `json:"requests"`
+		RequestsOld []coding.FileSymDefRequest `json:"code_context_requests"`
+		*Alias
+	}{
+		Alias: (*Alias)(r),
+	}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	if len(aux.RequestsNew) > 0 {
+		r.Requests = aux.RequestsNew
+	} else if len(aux.RequestsOld) > 0 {
+		r.Requests = aux.RequestsOld
+	}
+
+	return nil
 }
 
 var retrieveCodeContextTool = &llm.Tool{
@@ -428,7 +451,7 @@ func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *[]llm
 	if err != nil {
 		return toolCall, RequiredCodeContext{}, fmt.Errorf("%w: %v", llm.ErrToolCallUnmarshal, err)
 	} else if requiredCodeContext.Requests == nil {
-		return toolCall, RequiredCodeContext{}, fmt.Errorf("%w: missing code_context_requests in tool call", llm.ErrToolCallUnmarshal)
+		return toolCall, RequiredCodeContext{}, fmt.Errorf("%w: missing requests in tool call", llm.ErrToolCallUnmarshal)
 	}
 
 	return toolCall, requiredCodeContext, nil

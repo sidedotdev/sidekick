@@ -26,13 +26,18 @@ const props = defineProps<{
 const summary = computed(() => {
   try {
     const params = props.flowAction.actionParams;
-    if (!params || !params.code_context_requests || !Array.isArray(params.code_context_requests)) {
+    if (!params) {
+      return null;
+    }
+
+    const requests = params.requests || params.code_context_requests;
+    if (!requests || !Array.isArray(requests)) {
       return null;
     }
 
     const fileGroups: Record<string, string[]> = {};
     
-    for (const request of params.code_context_requests) {
+    for (const request of requests) {
       if (!request.file_path) continue;
       
       const symbols = request.symbol_names && Array.isArray(request.symbol_names) && request.symbol_names.length > 0
