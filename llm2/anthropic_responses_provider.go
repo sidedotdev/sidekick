@@ -393,3 +393,47 @@ func toolChoiceToAnthropicParam(choice common.ToolChoice, parallelToolCalls bool
 		}
 	}
 }
+
+func applyEventsToMessage(events []Event) Message {
+	blocks := make(map[int]*ContentBlock)
+	maxIndex := -1
+
+	for _, evt := range events {
+		if evt.Index > maxIndex {
+			maxIndex = evt.Index
+		}
+
+		switch evt.Type {
+		case EventBlockStarted:
+			if evt.ContentBlock != nil {
+				blockCopy := *evt.ContentBlock
+				if blockCopy.Type == ContentBlockTypeToolUse && blockCopy.ToolUse != nil {
+					toolUseCopy := *blockCopy.ToolUse
+					blockCopy.ToolUse = &toolUseCopy
+				}
+				blocks[evt.Index] = &blockCopy
+			}
+
+		case EventTextDelta:
+			if block, ok := blocks[evt.Index]; ok {
+				if block.Type == ContentBlockTypeText {
+					block.Text += evt.Delta
+				} else if block.Type == ContentBlockTypeToolUse && block.ToolUse != nil {
+					block.ToolUse.Arguments += evt.Delta
+				}
+			}
+		}
+	}
+
+	orderedBlocks := make([]ContentBlock, 0, maxIndex+1)
+	for i := 0; i <= maxIndex; i++ {
+		if block, ok := blocks[i]; ok {
+			orderedBlocks = append(orderedBlocks, *block)
+		}
+	}
+
+	return Message{
+		Role:    RoleAssistant,
+		Content: orderedBlocks,
+	}
+}
