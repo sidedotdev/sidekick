@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
@@ -15,6 +14,7 @@ import (
 	"sidekick/utils"
 	"sidekick/workspace"
 
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -237,52 +237,130 @@ func getConfigs(ctx workflow.Context, workspaceId string) (common.LocalPublicCon
 	var wa *workspace.Activities
 	var localConfig common.LocalPublicConfig
 	var workspaceConfig domain.WorkspaceConfig
+	logger := workflow.GetLogger(ctx)
 
-	err := workflow.ExecuteActivity(ctx, common.GetLocalConfig).Get(ctx, &localConfig)
-	if err != nil && !os.IsNotExist(err) {
-		return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", err)
-	}
-
-	// Get workspace configuration
-	err = workflow.ExecuteActivity(ctx, wa.GetWorkspaceConfig, workspaceId).Get(ctx, &workspaceConfig)
-	if err != nil {
-		return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get workspace config: %v", err)
-	}
-
-	// Check if workspace config mode feature is enabled
+	workFirst := workflow.GetVersion(ctx, "getConfigs-workspace-first", workflow.DefaultVersion, 1) >= 1
 	enableConfigMode := workflow.GetVersion(ctx, "workspace-config-mode", workflow.DefaultVersion, 1) >= 1
 
-	// Apply configuration based on configMode (if enabled)
 	var finalLLMConfig common.LLMConfig
 	var finalEmbeddingConfig common.EmbeddingConfig
+	var localConfigErr error
 
-	if enableConfigMode {
-		// Get workspace details to access configMode
+	if workFirst && enableConfigMode {
+		// New path: fetch workspace config and workspace first
+		err := workflow.ExecuteActivity(ctx, wa.GetWorkspaceConfig, workspaceId).Get(ctx, &workspaceConfig)
+		if err != nil {
+			return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get workspace config: %v", err)
+		}
+
 		var workspace domain.Workspace
 		err = workflow.ExecuteActivity(ctx, wa.GetWorkspace, workspaceId).Get(ctx, &workspace)
 		if err != nil {
 			return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get workspace: %v", err)
 		}
 
-		switch workspace.ConfigMode {
-		case "local":
-			// Use only local config, ignore workspace config
-			finalLLMConfig = localConfig.LLM
-			finalEmbeddingConfig = localConfig.Embedding
-		case "workspace":
-			// Use only workspace config, ignore local config
+		if workspace.ConfigMode == "workspace" {
+			logger.Info("Local config skipped; using workspace config (mode=workspace).")
 			finalLLMConfig = workspaceConfig.LLM
 			finalEmbeddingConfig = workspaceConfig.Embedding
-		case "merge":
-			// Merge configurations - workspace config overrides local config if present
-			finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
-		default:
-			// Default to merge mode for backward compatibility
-			finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
+		} else {
+			localConfigErr = workflow.ExecuteActivity(ctx, common.GetLocalConfig).Get(ctx, &localConfig)
+			if localConfigErr != nil {
+				var appErr *temporal.ApplicationError
+				if errors.As(localConfigErr, &appErr) {
+					switch appErr.Type() {
+					case "LocalConfigNotFound":
+						if workspace.ConfigMode == "local" {
+							return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", localConfigErr)
+						}
+						logger.Info("Local config not found; proceeding with workspace config (mode=" + workspace.ConfigMode + ").")
+					case "LocalConfigNoDefaults":
+						if workspace.ConfigMode == "local" {
+							return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", localConfigErr)
+						}
+						workspaceHasDefaults := len(workspaceConfig.LLM.Defaults) > 0 || len(workspaceConfig.Embedding.Defaults) > 0
+						if workspace.ConfigMode == "merge" && !workspaceHasDefaults {
+							return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("no default models configured in local and workspace configs; configure defaults in one source or switch config mode")
+						}
+						logger.Info("Local config lacks defaults; proceeding with workspace defaults (mode=" + workspace.ConfigMode + ").")
+					default:
+						return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", localConfigErr)
+					}
+				} else {
+					return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", localConfigErr)
+				}
+			}
+
+			if workspace.ConfigMode == "local" {
+				finalLLMConfig = localConfig.LLM
+				finalEmbeddingConfig = localConfig.Embedding
+			} else {
+				finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
+			}
 		}
 	} else {
-		// Legacy behavior: always merge configurations - workspace config overrides local config if present
-		finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
+		// Legacy path: call GetLocalConfig first but don't fail immediately
+		localConfigErr = workflow.ExecuteActivity(ctx, common.GetLocalConfig).Get(ctx, &localConfig)
+
+		err := workflow.ExecuteActivity(ctx, wa.GetWorkspaceConfig, workspaceId).Get(ctx, &workspaceConfig)
+		if err != nil {
+			return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get workspace config: %v", err)
+		}
+
+		var workspace domain.Workspace
+		var configMode string
+		if enableConfigMode {
+			err = workflow.ExecuteActivity(ctx, wa.GetWorkspace, workspaceId).Get(ctx, &workspace)
+			if err != nil {
+				return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get workspace: %v", err)
+			}
+			configMode = workspace.ConfigMode
+		} else {
+			configMode = "merge"
+		}
+
+		if localConfigErr != nil {
+			var appErr *temporal.ApplicationError
+			if errors.As(localConfigErr, &appErr) {
+				switch appErr.Type() {
+				case "LocalConfigNotFound":
+					if configMode == "local" {
+						return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", localConfigErr)
+					}
+					logger.Info("Local config not found; proceeding with workspace config (mode=" + configMode + ").")
+				case "LocalConfigNoDefaults":
+					if configMode == "local" {
+						return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", localConfigErr)
+					}
+					workspaceHasDefaults := len(workspaceConfig.LLM.Defaults) > 0 || len(workspaceConfig.Embedding.Defaults) > 0
+					if !workspaceHasDefaults {
+						return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("no default models configured in local and workspace configs; configure defaults in one source or switch config mode")
+					}
+					logger.Info("Local config lacks defaults; proceeding with workspace defaults (mode=" + configMode + ").")
+				default:
+					return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", localConfigErr)
+				}
+			} else {
+				return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", localConfigErr)
+			}
+		}
+
+		if enableConfigMode {
+			switch configMode {
+			case "local":
+				finalLLMConfig = localConfig.LLM
+				finalEmbeddingConfig = localConfig.Embedding
+			case "workspace":
+				finalLLMConfig = workspaceConfig.LLM
+				finalEmbeddingConfig = workspaceConfig.Embedding
+			case "merge":
+				finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
+			default:
+				finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
+			}
+		} else {
+			finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
+		}
 	}
 
 	return localConfig, workspaceConfig, finalLLMConfig, finalEmbeddingConfig, nil
