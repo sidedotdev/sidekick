@@ -188,7 +188,7 @@ func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options,
 		return nil, fmt.Errorf("stream truncated: started %d blocks but stopped %d", startedBlocks, stoppedBlocks)
 	}
 
-	output := applyEventsToMessage(events)
+	output := accumulateAnthropicEventsToMessage(events)
 
 	responseModel := finalMessage.Model
 	if responseModel == "" {
@@ -209,6 +209,10 @@ func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options,
 	}
 
 	return response, nil
+}
+
+func accumulateAnthropicEventsToMessage(events []Event) Message {
+	return accumulateOpenaiEventsToMessage(events)
 }
 
 func roleToAnthropicParam(role Role) anthropic.MessageParamRole {
