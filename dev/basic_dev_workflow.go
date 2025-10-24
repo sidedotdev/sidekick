@@ -129,8 +129,8 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		result, err = codingSubflow(dCtx, requirements, input.BasicDevOptions.StartBranch)
 	}
 
-	goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 2)
-	if goNextVersion >= 2 && errors.Is(err, PendingActionError) && dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree {
+	goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
+	if goNextVersion >= 1 && errors.Is(err, PendingActionError) && dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree {
 		pending := dCtx.GlobalState.GetPendingUserAction()
 		if pending != nil && *pending == UserActionGoNext {
 			// skip to review/resolve subflow
@@ -417,14 +417,14 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 		// Track review messages for iterative development
 		reviewMessages := []string{}
 		originalRequirements := params.Requirements
-		goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 2)
+		goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
 
 		for {
 			// Ensure any auto-formatted changes are staged for new workflow versions
 			gitDiff, mergeInfo, err := mergeWorktreeIfApproved(dCtx, params)
 
 			if err != nil {
-				if goNextVersion >= 2 && errors.Is(err, PendingActionError) {
+				if goNextVersion >= 1 && errors.Is(err, PendingActionError) {
 					pending := dCtx.GlobalState.GetPendingUserAction()
 					if pending != nil && *pending == UserActionGoNext {
 						// retry if failed due to go-next action, the next
@@ -457,7 +457,7 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 				_, err = codingSubflow(dCtx, requirements, params.StartBranch)
 
 				if err != nil {
-					if goNextVersion >= 2 && errors.Is(err, PendingActionError) {
+					if goNextVersion >= 1 && errors.Is(err, PendingActionError) {
 						pending := dCtx.GlobalState.GetPendingUserAction()
 						if pending != nil && *pending == UserActionGoNext {
 							// if failed due to go-next action, the next action
