@@ -66,7 +66,7 @@ const flowActions = ref<FlowAction[]>([])
 const subflowTrees = ref<SubflowTree[]>([])
 const route = useRoute()
 
-// activeDevStep: Stores IDs of 'coding' or 'review_and_resolve' subflows that are currently active.
+// activeDevStep: Stores IDs of 'step.dev', 'coding', or 'review_and_resolve' subflows that are currently active.
 // This is populated by listening to WebSocket events for subflow status changes.
 const activeDevStep = ref(new Set<string>());
 
@@ -75,11 +75,11 @@ const activeDevStep = ref(new Set<string>());
 const subflowsById = ref<Record<string, Subflow>>({});
 
 // isGoNextAvailable: A computed property determining the "Next" button's visibility.
-// It's true if there's at least one active 'coding' or 'review_and_resolve' subflow.
+// It's true if there's at least one active 'step.dev', 'coding', or 'review_and_resolve' subflow.
 // This, combined with the main flow status check in the template (`!['completed', 'failed', 'canceled', 'paused'].includes(flow.status)`),
 // fulfills the visibility conditions:
 // 1. Main flow is active and not paused.
-// 2. An active 'coding' or 'review_and_resolve' subflow exists.
+// 2. An active 'step.dev', 'coding', or 'review_and_resolve' subflow exists.
 const isGoNextAvailable = computed(() => activeDevStep.value.size > 0);
 
 const updateSubflowTrees = () => {
@@ -156,7 +156,7 @@ const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Prom
                 if (subflowToUpdate) {
                   subflowToUpdate.status = flowEvent.status; // Update status in our cache
 
-                  if (subflowToUpdate.type === 'coding' || subflowToUpdate.type === 'review_and_resolve') {
+                  if (subflowToUpdate.type === 'step.dev' || subflowToUpdate.type === 'coding' || subflowToUpdate.type === 'review_and_resolve') {
                     if (flowEvent.status === SubflowStatus.Started) {
                       activeDevStep.value.add(subflowId);
                     } else if (
