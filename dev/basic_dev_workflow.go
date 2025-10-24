@@ -129,29 +129,18 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		result, err = codingSubflow(dCtx, requirements, input.BasicDevOptions.StartBranch)
 	}
 
-	didPostCodingReview := false
-	goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
+	goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 2)
 	if err != nil {
-		if errors.Is(err, PendingActionError) && goNextVersion == 1 && dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree {
+		if errors.Is(err, PendingActionError) && goNextVersion >= 2 && dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree {
 			dCtx.GlobalState.ConsumePendingUserAction()
-			params := MergeWithReviewParams{
-				CommitRequired: true,
-				Requirements:   requirements,
-				StartBranch:    input.StartBranch,
-				GetGitDiff:     nil,
-			}
-			err = reviewAndResolve(dCtx, params)
-			if err != nil {
-				return "", err
-			}
-			didPostCodingReview = true
+			err = nil
 		} else {
 			return "", err
 		}
 	}
 
 	worktreeMergeVersion := workflow.GetVersion(dCtx, "worktree-merge", workflow.DefaultVersion, 1)
-	if dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree && worktreeMergeVersion >= 1 && !didPostCodingReview {
+	if dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree && worktreeMergeVersion >= 1 {
 		params := MergeWithReviewParams{
 			CommitRequired: true,
 			Requirements:   requirements,
@@ -424,27 +413,22 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 		// Track review messages for iterative development
 		reviewMessages := []string{}
 		originalRequirements := params.Requirements
+		goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 2)
 
 		for {
 			// Ensure any auto-formatted changes are staged for new workflow versions
 			gitDiff, mergeInfo, err := mergeWorktreeIfApproved(dCtx, params)
 
-			v := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
-			if v == 1 {
-				if errors.Is(err, PendingActionError) {
-					dCtx.GlobalState.ConsumePendingUserAction()
-					continue
-				}
-				if err == nil {
+			if err != nil {
+				if goNextVersion >= 2 && errors.Is(err, PendingActionError) {
 					pending := dCtx.GlobalState.GetPendingUserAction()
 					if pending != nil && *pending == UserActionGoNext {
+						// retry if failed due to go-next action, the next
+						// action is to check for approval again
 						dCtx.GlobalState.ConsumePendingUserAction()
 						continue
 					}
 				}
-			}
-
-			if err != nil {
 				return err
 			}
 
@@ -468,21 +452,17 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 				params.CommitRequired = true
 				_, err = codingSubflow(dCtx, requirements, params.StartBranch)
 
-				if v == 1 {
-					if errors.Is(err, PendingActionError) {
-						dCtx.GlobalState.ConsumePendingUserAction()
-						continue
-					}
-					if err == nil {
+				if err != nil {
+					if goNextVersion >= 2 && errors.Is(err, PendingActionError) {
 						pending := dCtx.GlobalState.GetPendingUserAction()
 						if pending != nil && *pending == UserActionGoNext {
+							// if failed due to go-next action, the next action
+							// is give the user opportunity to approve merge
 							dCtx.GlobalState.ConsumePendingUserAction()
 							continue
 						}
 					}
-				}
 
-				if err != nil {
 					return err
 				}
 
