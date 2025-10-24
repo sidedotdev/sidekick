@@ -130,13 +130,17 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	}
 
 	goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 2)
-	if err != nil {
-		if errors.Is(err, PendingActionError) && goNextVersion >= 2 && dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree {
+	if goNextVersion >= 2 && errors.Is(err, PendingActionError) && dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree {
+		pending := dCtx.GlobalState.GetPendingUserAction()
+		if pending != nil && *pending == UserActionGoNext {
+			// skip to review/resolve subflow
 			dCtx.GlobalState.ConsumePendingUserAction()
 			err = nil
-		} else {
-			return "", err
 		}
+	}
+
+	if err != nil {
+		return "", err
 	}
 
 	worktreeMergeVersion := workflow.GetVersion(dCtx, "worktree-merge", workflow.DefaultVersion, 1)
