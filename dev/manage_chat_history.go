@@ -294,9 +294,15 @@ func containsMessage(messages []llm.ChatMessage, message llm.ChatMessage) bool {
 	return false
 }
 
-// ManageChatHistoryV2Activity manages chat history based on ContextType.
-// It implements the V2 logic for message retention and trimming, eventually
-// superseding ManageChatHistoryActivity.
+// ManageChatHistoryV2Activity manages chat history based on ContextType markers.
+// Each ContextType has different retention rules:
+// - InitialInstructions: System prompts/instructions; always retained.
+// - UserFeedback: User corrections/guidance; all instances retained with their response blocks.
+// - TestResult, SelfReviewFeedback, Summary: Status messages; only the most recent of each type retained with its response block.
+// - EditBlockReport: Feedback on applied edit blocks; only the most recent retained, along with the original proposals it references and all subsequent messages.
+//
+// Messages without ContextType are retained if they fall within a retained block (between a ContextType message and the next ContextType message),
+// or if they fit within maxLength after all marked messages are retained. maxLength is a soft limit that doesn't apply to marked messages.
 func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {
 	if len(chatHistory) == 0 {
 		return []llm.ChatMessage{}, nil
@@ -304,118 +310,96 @@ func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) (
 
 	isRetained := make([]bool, len(chatHistory))
 
-	// Preserve the last message and its preceding tool call if it's a tool response.
 	lastIndex := len(chatHistory) - 1
 	if lastIndex >= 0 {
 		isRetained[lastIndex] = true
 		lastMessage := chatHistory[lastIndex]
 		if lastMessage.Role == llm.ChatMessageRoleTool && lastIndex > 0 {
-			// Also retain the tool call message that precedes the tool response.
 			isRetained[lastIndex-1] = true
 		}
 	}
 
-	// Handle InitialInstructions (AC4, AC5)
-	// An InitialInstructions message's block is only itself and is always live.
 	for i, msg := range chatHistory {
 		if msg.ContextType == ContextTypeInitialInstructions {
 			isRetained[i] = true
 		}
 	}
 
-	// Identify latest occurrences for \"superseded by type\" messages (TestResult, SelfReviewFeedback, Summary, EditBlockReport) (AC4)
-	latestIndices := make(map[string]int) // Stores index of the latest message for each superseded type
+	latestIndices := make(map[string]int)
 	latestEditBlockReportIndex := -1
 	for i, msg := range chatHistory {
 		switch msg.ContextType {
 		case ContextTypeTestResult, ContextTypeSelfReviewFeedback, ContextTypeSummary:
 			latestIndices[msg.ContextType] = i
 		case ContextTypeEditBlockReport:
-			latestIndices[msg.ContextType] = i // Also track for general superseded logic
-			latestEditBlockReportIndex = i     // Specific for EditBlockReport's own recency check
+			latestIndices[msg.ContextType] = i
+			latestEditBlockReportIndex = i
 		}
 	}
 
-	// Process messages to define blocks for UserFeedback and live \"superseded by type\" blocks,
-	// and determine \"live\" status (AC4, AC5).
 	for i, msg := range chatHistory {
 		shouldMarkAndExtendBlock := false
 
 		switch msg.ContextType {
-		case ContextTypeUserFeedback: // Accumulating type, always live
+		case ContextTypeUserFeedback:
 			shouldMarkAndExtendBlock = true
-		case ContextTypeTestResult, ContextTypeSelfReviewFeedback, ContextTypeSummary: // Superseded by type
-			// Check if this message is the latest of its type to be considered live
+		case ContextTypeTestResult, ContextTypeSelfReviewFeedback, ContextTypeSummary:
 			if latestIdx, ok := latestIndices[msg.ContextType]; ok && i == latestIdx {
 				shouldMarkAndExtendBlock = true
 			}
 		case ContextTypeEditBlockReport:
-			// EditBlockReport is handled separately below due to its complex block definition,
-			// but its own message and forward segment are marked here if it's the latest.
-			if i == latestEditBlockReportIndex { // Only the most recent EditBlockReport is live
-				// The historical segments for EditBlockReport are handled in the dedicated section later.
-				// Here, we mark the report message itself and its forward segment.
-				isRetained[i] = true // Mark the EditBlockReport message itself
-
-				// Extend block to include *all* subsequent messages
+			if i == latestEditBlockReportIndex {
+				isRetained[i] = true
 				for j := i + 1; j < len(chatHistory); j++ {
 					isRetained[j] = true
 				}
 			}
 		}
 
-		if shouldMarkAndExtendBlock { // For UserFeedback and latest TestResult, SelfReviewFeedback, Summary
-			isRetained[i] = true // Mark the message with ContextType itself
+		if shouldMarkAndExtendBlock {
+			isRetained[i] = true
 
-			// Extend block to include subsequent unmarked messages (AC5)
-			// A block ends when the next message with *any* ContextType is encountered, or history ends.
 			for j := i + 1; j < len(chatHistory); j++ {
-				if chatHistory[j].ContextType == "" { // Unmarked message
+				if chatHistory[j].ContextType == "" {
 					isRetained[j] = true
-				} else { // Next message has a ContextType, so current block extension stops
+				} else {
 					break
 				}
 			}
 		}
 	}
 
-	// Handle ContextTypeEditBlockReport logic (AC4, AC5 from requirements)
+	// For the most recent EditBlockReport, extract sequence numbers from the report content
+	// and retain the original edit block proposals that match those sequence numbers.
+	// This ensures the model has context about which edits failed when responding to feedback.
+	// TODO: Refactor to use structured data instead of parsing strings (llm2).
 	if latestEditBlockReportIndex != -1 {
 		reportMessage := chatHistory[latestEditBlockReportIndex]
 		sequenceNumbersInReport := extractSequenceNumbersFromReportContent(reportMessage.Content)
 
-		// For each sequence number in the report, find its proposal message M_propose_i (AC5.b.i)
 		for _, seqNum := range sequenceNumbersInReport {
 			foundProposalIndex := -1
-			// Search backwards from M_report to find the latest M_propose_i for seqNum
 			for k := latestEditBlockReportIndex - 1; k >= 0; k-- {
-				// Check if chatHistory[k].Content contains an edit block proposal for seqNum
-				// This requires parsing chatHistory[k].Content using ExtractEditBlocks
-				// we ignore errors here on purpose: we'd prefer to keep going instead
 				extractedBlocks, _ := ExtractEditBlocks(chatHistory[k].Content)
 				for _, block := range extractedBlocks {
 					if block.SequenceNumber == seqNum {
 						foundProposalIndex = k
-						break // Found the latest proposal for this seqNum
+						break
 					}
 				}
 				if foundProposalIndex != -1 {
-					break // Stop backward search for this seqNum
+					break
 				}
 			}
 
 			if foundProposalIndex != -1 {
-				// Mark all messages from M_propose_i up to (but not including) M_report (AC5.b.ii)
 				for l := foundProposalIndex; l < latestEditBlockReportIndex; l++ {
 					isRetained[l] = true
 				}
 			}
 		}
-		// The EditBlockReport message (M_report) itself and its forward segment
-		// were already marked for retention if it's the latest, in the loop above.
 	}
 
-	// Get length of new history so far, based on what is force-retained
 	var totalLength = 0
 	var newChatHistory []llm.ChatMessage
 	for i, msg := range chatHistory {
@@ -424,8 +408,6 @@ func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) (
 		}
 	}
 
-	// Iterate backwards to add the latest messages that aren't force-retained,
-	// but fit under the max length. Retained messages don't care about maxLength
 	for i := len(chatHistory) - 1; i >= 0; i-- {
 		msg := chatHistory[i]
 		if isRetained[i] || len(msg.Content)+totalLength <= maxLength {
@@ -437,19 +419,14 @@ func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) (
 	}
 	slices.Reverse(newChatHistory)
 
-	// Ensure tool calls and responses are cleaned up as per requirements (AC9)
 	cleanToolCallsAndResponses(&newChatHistory)
 
 	return newChatHistory, nil
 }
 
-// extracts edit block report sequence numbers from lines formatted like:
-// - "- edit_block:N application ..."
-// It ensures that each sequence number is extracted only once, even if it appears multiple times.
+// extractSequenceNumbersFromReportContent extracts unique edit block sequence numbers
+// from EditBlockReport content formatted as "- edit_block:N application ...".
 func extractSequenceNumbersFromReportContent(content string) []int {
-	// Regex to find lines indicating an edit block application and capture the sequence number.
-	// It matches "- edit_block:(\d+) application ", which is how feedbackFromApplyEditBlockReports formats these.
-	// The "(\d+)" captures the sequence number.
 	re := regexp.MustCompile(`-\s*edit_block:(\d+)\s*application.*`)
 
 	scanner := bufio.NewScanner(strings.NewReader(content))
@@ -460,20 +437,17 @@ func extractSequenceNumbersFromReportContent(content string) []int {
 		line := scanner.Text()
 		matches := re.FindStringSubmatch(line)
 
-		if len(matches) > 1 { // matches[0] is the full string, matches[1] is the first capture group
+		if len(matches) > 1 {
 			if num, err := strconv.Atoi(matches[1]); err == nil {
 				if !seenNumbers[num] {
 					seenNumbers[num] = true
 					uniqueSequenceNumbers = append(uniqueSequenceNumbers, num)
 				}
 			}
-			// If strconv.Atoi fails, we ignore the malformed number and continue.
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		// Log or handle scanner errors if necessary, though for string.Reader it's unlikely.
-		// For now, we'll proceed with what was successfully scanned.
 		fmt.Printf("Error scanning content in extractSequenceNumbersFromReportContent: %v\n", err)
 	}
 
