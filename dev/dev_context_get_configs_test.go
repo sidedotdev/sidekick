@@ -71,6 +71,10 @@ func (s *GetConfigsTestSuite) TestWorkspaceMode_NoLocalFile() {
 		ConfigMode: "workspace",
 	}
 
+	s.env.OnActivity(common.GetLocalConfig).Return(
+		common.LocalPublicConfig{},
+		temporal.NewNonRetryableApplicationError("failed to load config: not found", "LocalConfigNotFound", nil),
+	)
 	s.env.OnActivity(wa.GetWorkspaceConfig, "ws_123").Return(workspaceConfig, nil)
 	s.env.OnActivity(wa.GetWorkspace, "ws_123").Return(ws, nil)
 
@@ -109,6 +113,10 @@ func (s *GetConfigsTestSuite) TestWorkspaceMode_InvalidLocal() {
 		ConfigMode: "workspace",
 	}
 
+	s.env.OnActivity(common.GetLocalConfig).Return(
+		common.LocalPublicConfig{},
+		temporal.NewNonRetryableApplicationError("no default models configured in local config", "LocalConfigNoDefaults", nil),
+	)
 	s.env.OnActivity(wa.GetWorkspaceConfig, "ws_456").Return(workspaceConfig, nil)
 	s.env.OnActivity(wa.GetWorkspace, "ws_456").Return(ws, nil)
 
