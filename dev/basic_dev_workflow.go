@@ -79,7 +79,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 				var ok bool
 				err, ok = r.(error)
 				if !ok {
-					err = fmt.Errorf("panic: %v", r)
+					err = fmt.Errorf("panic: %w", r)
 				}
 				// TODO create a flow event that will be displayed in the UI
 			}
@@ -160,7 +160,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	if worktreeMergeVersion >= 1 {
 		err = signalWorkflowClosure(dCtx, "completed")
 		if err != nil {
-			return "", fmt.Errorf("failed to signal workflow closure: %v", err)
+			return "", fmt.Errorf("failed to signal workflow closure: %w", err)
 		}
 	}
 
@@ -171,7 +171,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 	codeContext, fullCodeContext, err := PrepareInitialCodeContext(dCtx, requirements, nil, nil)
 	contextSizeExtension := len(fullCodeContext) - len(codeContext)
 	if err != nil {
-		return "", fmt.Errorf("failed to prepare code context: %v", err)
+		return "", fmt.Errorf("failed to prepare code context: %w", err)
 	}
 	testResult := TestResult{Output: ""}
 
@@ -198,7 +198,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 	if version >= 1 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
 		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
 		if err != nil {
-			return "", fmt.Errorf("failed to get repo summary: %v", err)
+			return "", fmt.Errorf("failed to get repo summary: %w", err)
 		}
 		codeContext = repoSummary + "\n\n" + codeContext
 	}
@@ -226,7 +226,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 			// last time we got it, if we ever did
 			gitDiff, diffErr := git.GitDiff(dCtx.ExecContext)
 			if diffErr != nil {
-				return "", fmt.Errorf("failed to get git diff: %v", diffErr)
+				return "", fmt.Errorf("failed to get git diff: %w", diffErr)
 			}
 
 			requestParams := map[string]any{
@@ -237,7 +237,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 
 			promptInfo, err = GetUserFeedback(dCtx, promptInfo, guidanceContext, chatHistory, requestParams)
 			if err != nil {
-				return "", fmt.Errorf("failed to get user feedback: %v", err)
+				return "", fmt.Errorf("failed to get user feedback: %w", err)
 			}
 		}
 		if attemptCount >= maxAttempts {
@@ -247,13 +247,13 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 		// Step 2: edit code
 		err = EditCode(dCtx, modelConfig, contextSizeExtension, chatHistory, promptInfo)
 		if err != nil {
-			return "", fmt.Errorf("failed to write edit blocks: %v", err)
+			return "", fmt.Errorf("failed to write edit blocks: %w", err)
 		}
 
 		// Step 3: run tests
 		testResult, err = RunTests(dCtx, dCtx.RepoConfig.TestCommands)
 		if err != nil {
-			return "", fmt.Errorf("failed to run tests: %v", err)
+			return "", fmt.Errorf("failed to run tests: %w", err)
 		}
 
 		if !testResult.TestsPassed {
@@ -267,7 +267,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 		if len(dCtx.RepoConfig.IntegrationTestCommands) > 0 {
 			integrationTestResult, err := RunTests(dCtx, dCtx.RepoConfig.IntegrationTestCommands)
 			if err != nil {
-				return "", fmt.Errorf("failed to run integration tests: %v", err)
+				return "", fmt.Errorf("failed to run integration tests: %w", err)
 			}
 			if !integrationTestResult.TestsPassed {
 				promptInfo = FeedbackInfo{Feedback: integrationTestResult.Output}
@@ -283,7 +283,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 			AutoChecks:   testOutput,
 		})
 		if err != nil {
-			return "", fmt.Errorf("failed to check if requirements are fulfilled: %v", err)
+			return "", fmt.Errorf("failed to check if requirements are fulfilled: %w", err)
 		}
 		if fulfillment.IsFulfilled {
 			break
@@ -356,14 +356,14 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 		}
 		_, _, err = mergeWorktreeIfApproved(dCtx, params)
 		if err != nil {
-			return "", fmt.Errorf("failed to merge if approved: %v", err)
+			return "", fmt.Errorf("failed to merge if approved: %w", err)
 		}
 	}
 
 	// Emit signal when workflow ends successfully
 	err = signalWorkflowClosure(dCtx, "completed")
 	if err != nil {
-		return "", fmt.Errorf("failed to signal workflow closure: %v", err)
+		return "", fmt.Errorf("failed to signal workflow closure: %w", err)
 	}
 
 	return testResult.Output, nil
@@ -487,13 +487,13 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 	gitAddVersion := workflow.GetVersion(dCtx, "git-add-before-diff", workflow.DefaultVersion, 1)
 	if gitAddVersion == 1 {
 		if err := git.GitAddAll(dCtx.ExecContext); err != nil {
-			return "", MergeApprovalResponse{}, fmt.Errorf("failed to git add all: %v", err)
+			return "", MergeApprovalResponse{}, fmt.Errorf("failed to git add all: %w", err)
 		}
 	}
 
 	mergeInfo, gitDiff, err := getMergeApproval(dCtx, defaultTarget, params.GetGitDiff)
 	if err != nil {
-		return "", MergeApprovalResponse{}, fmt.Errorf("failed to get merge approval: %v", err)
+		return "", MergeApprovalResponse{}, fmt.Errorf("failed to get merge approval: %w", err)
 	}
 
 	if !mergeInfo.Approved {
@@ -524,7 +524,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 			CommitMessage: commitMessage,
 		}).Get(dCtx, nil)
 		if err != nil {
-			return "", MergeApprovalResponse{}, fmt.Errorf("failed to commit changes: %v", err)
+			return "", MergeApprovalResponse{}, fmt.Errorf("failed to commit changes: %w", err)
 		}
 	}
 
@@ -536,7 +536,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 				CommitMessage: commitMessage,
 			}).Get(dCtx, nil)
 			if err != nil {
-				return mergeResult, fmt.Errorf("failed to commit changes: %v", err)
+				return mergeResult, fmt.Errorf("failed to commit changes: %w", err)
 			}
 		}
 
@@ -545,7 +545,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 			TargetBranch: mergeInfo.TargetBranch,
 		})
 		if err != nil {
-			return mergeResult, fmt.Errorf("failed to merge branches: %v", err)
+			return mergeResult, fmt.Errorf("failed to merge branches: %w", err)
 		}
 		return mergeResult, nil
 	})
@@ -566,7 +566,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 			"continueTag": "done",
 		})
 		if err != nil {
-			return "", MergeApprovalResponse{}, fmt.Errorf("failed to get continue approval: %v", err)
+			return "", MergeApprovalResponse{}, fmt.Errorf("failed to get continue approval: %w", err)
 		}
 
 		// Handle reverse conflict scenario - need final merge from source to target
@@ -582,7 +582,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 				})
 				statusErr := statusFuture.Get(dCtx, &statusOutput)
 				if statusErr != nil {
-					return "", MergeApprovalResponse{}, fmt.Errorf("failed to check git status: %v", statusErr)
+					return "", MergeApprovalResponse{}, fmt.Errorf("failed to check git status: %w", statusErr)
 				}
 
 				// Check if there are still unmerged files
@@ -592,7 +592,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 						"continueTag": "done",
 					})
 					if err != nil {
-						return "", MergeApprovalResponse{}, fmt.Errorf("failed to get continue approval: %v", err)
+						return "", MergeApprovalResponse{}, fmt.Errorf("failed to get continue approval: %w", err)
 					}
 				}
 				break
@@ -600,7 +600,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 
 			mergeInfo, gitDiff, err = getMergeApproval(dCtx, mergeInfo.TargetBranch, params.GetGitDiff)
 			if err != nil {
-				return "", MergeApprovalResponse{}, fmt.Errorf("failed to get final merge approval: %v", err)
+				return "", MergeApprovalResponse{}, fmt.Errorf("failed to get final merge approval: %w", err)
 			}
 
 			if mergeInfo.Approved {
@@ -618,7 +618,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 						TargetBranch: mergeInfo.TargetBranch,
 					})
 					if err != nil {
-						return finalResult, fmt.Errorf("failed to perform final merge: %v", err)
+						return finalResult, fmt.Errorf("failed to perform final merge: %w", err)
 					}
 					return finalResult, nil
 				})
