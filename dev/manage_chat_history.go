@@ -298,19 +298,6 @@ func containsMessage(messages []llm.ChatMessage, message llm.ChatMessage) bool {
 // It implements the V2 logic for message retention and trimming, eventually
 // superseding ManageChatHistoryActivity.
 func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {
-	// TODO: Implement V2 logic:
-	// 1. Identify messages with ContextType and define their blocks/collections.
-	//    - InitialInstructions: always kept, block is itself. (Implemented for this type)
-	//    - UserFeedback: accumulating. (Implemented for this type)
-	//    - TestResult, SelfReviewFeedback, Summary: superseded by type. (Implemented for these types)
-	//    - EditBlockReport: complex block definition, superseded by recency of this type. (Implemented for this type)
-	// 2. Determine \"live\" status for each block/collection based on rules. (Implemented for current types)
-	// 3. Consolidate all messages that fall within any \"live\" block/collection. (Implemented for current types)
-	//    - Handle overlaps: a message in multiple live blocks is retained. (Implicitly handled by isRetained array)
-	//    - InitialInstructions message is always retained. (Implemented)
-	// 4. Perform trimming: If total content length of retained messages exceeds maxLength, (TODO for Step 5 of plan)
-	//    drop oldest unprotected messages first. maxLength is a soft limit.
-
 	if len(chatHistory) == 0 {
 		return []llm.ChatMessage{}, nil
 	}
