@@ -79,7 +79,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 				var ok bool
 				err, ok = r.(error)
 				if !ok {
-					err = fmt.Errorf("panic: %w", r)
+					err = fmt.Errorf("panic: %v", r)
 				}
 				// TODO create a flow event that will be displayed in the UI
 			}
