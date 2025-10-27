@@ -34,7 +34,7 @@ type SelfHelp struct {
 
 var getHelpOrInputTool = llm.Tool{
 	Name:        "get_help_or_input",
-	Description: "Used to ask a human for help, feedback, information or input. This is a catch-all function for when you are stuck or confused and need to ask a human for something to unblock you and move forward with confidence. Do NOT use this function to ask for help finding info about repository files/code, except as as a last resort, since there are several other tools designed for that purpose to retrieve code context, read files or search the repo.",
+	Description: "Used to ask the user to make a decision or provide help, feedback or information. This is a catch-all function for when you are stuck or confused and need to ask a human for something to unblock you and move forward with confidence. Do NOT use this function to ask for help finding info about repository files/code, except as as a last resort, since there are several other tools designed for that purpose to get symbol definitions, read files or search the repo.",
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&GetHelpOrInputArguments{}),
 }
 

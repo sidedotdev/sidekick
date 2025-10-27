@@ -433,7 +433,7 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 
 	var tools []*llm.Tool
 	tools = append(tools, &bulkSearchRepositoryTool)
-	tools = append(tools, getRetrieveCodeContextTool())
+	tools = append(tools, currentGetSymbolDefinitionsTool())
 	tools = append(tools, &bulkReadFileTool)
 	tools = append(tools, &runCommandTool)
 
@@ -476,7 +476,7 @@ func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requiremen
 		"divider":                         divider,
 		"replace":                         replace,
 		"editCodeHints":                   dCtx.RepoConfig.EditCode.Hints,
-		"retrieveCodeContextFunctionName": getRetrieveCodeContextTool().Name,
+		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		data["getHelpOrInputFunctionName"] = getHelpOrInputTool.Name
@@ -498,7 +498,7 @@ func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, req
 		"divider":                         divider,
 		"replace":                         replace,
 		"editCodeHints":                   dCtx.RepoConfig.EditCode.Hints,
-		"retrieveCodeContextFunctionName": getRetrieveCodeContextTool().Name,
+		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		data["getHelpOrInputFunctionName"] = getHelpOrInputTool.Name
@@ -518,7 +518,7 @@ func renderAuthorEditBlockFeedbackPrompt(feedback string) string {
 	data := map[string]interface{}{
 		"feedback":                         feedback,
 		"hasUserGuidance":                  strings.Contains(feedback, guidanceStart),
-		"retrieveCodeContextFunctionName":  getRetrieveCodeContextTool().Name,
+		"retrieveCodeContextFunctionName":  currentGetSymbolDefinitionsTool().Name,
 		"bulkSearchRepositoryFunctionName": bulkSearchRepositoryTool.Name,
 		"bulkReadFileFunctionName":         bulkReadFileTool.Name,
 	}

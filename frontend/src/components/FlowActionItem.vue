@@ -178,6 +178,7 @@ const actionSpecificComponent = computed(() => {
       return RunTestsFlowAction
     case 'merge':
       return MergeFlowAction
+    case 'tool_call.get_symbol_definitions':
     case 'tool_call.retrieve_code_context':
       return RetrieveCodeContextFlowAction
     case 'tool_call.bulk_search_repository':
@@ -313,7 +314,8 @@ const summary = computed<Summary | null>(() => {
       }
     }
 
-    case 'tool_call.retrieve_code_context': {
+    case 'tool_call.retrieve_code_context':
+    case 'tool_call.get_symbol_definitions': {
       try {
         const params = props.flowAction.actionParams;
         if (!params?.code_context_requests || !Array.isArray(params.code_context_requests)) {
@@ -337,7 +339,7 @@ const summary = computed<Summary | null>(() => {
           emoji: '📖',
         };
       } catch (error) {
-        console.error('Error parsing retrieve_code_context params:', error);
+        console.error('Error parsing get_symbol_definitions params:', error);
         return null;
       }
     }

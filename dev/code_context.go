@@ -21,7 +21,7 @@ import (
 )
 
 type RequiredCodeContext struct {
-	Analysis string                     `json:"analysis" jsonschema:"description=Brief analysis of which code symbols (functions\\, types\\, etc) are most relevant before making a final decision and outputting code_context_requests and custom_types. Let's think step by step."`
+	Analysis string                     `json:"analysis" jsonschema:"description=Brief analysis of which code symbols (functions\\, types\\, etc) are most relevant before outputting requests."`
 	Requests []coding.FileSymDefRequest `json:"requests" jsonschema:"description=Requests to retrieve full definitions of a given symbol within the given file where it is defined."`
 }
 
@@ -48,16 +48,16 @@ func (r *RequiredCodeContext) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-var retrieveCodeContextTool = &llm.Tool{
-	Name:        "retrieve_code_context",
+var getSymbolDefinitionsTool = &llm.Tool{
+	Name:        "get_symbol_definitions",
 	Description: "When additional code context is required, analysis should be done first. Then the shortlist of functions and important custom types of interest. Returns the complete lines of code corresponding to that input, i.e., the full function and type defintion bodies. The go import block will also be included.",
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&RequiredCodeContext{}),
 }
 
 // this function doesn't do much yet, but will allow us to switch out the
 // function definition for improved versions at runtime later
-func getRetrieveCodeContextTool() *llm.Tool {
-	return retrieveCodeContextTool
+func currentGetSymbolDefinitionsTool() *llm.Tool {
+	return getSymbolDefinitionsTool
 }
 
 // PrepareInitialCodeContextResult represents the result of preparing initial code context
@@ -304,8 +304,8 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		}
 
 		// STEP 2: Decide which code to read fully
-		// TODO /gen instead of forcing just retrieve_code_context, let's force
-		// one of retrieve_code_context or bulk_search_repository. if given
+		// TODO /gen instead of forcing just get_symbol_definitions, let's force
+		// one of get_symbol_definitions or bulk_search_repository. if given
 		// bulk_search_repository,
 		var toolCall llm.ToolCall
 		chatCtx := actionCtx.WithCancelOnPause()
@@ -359,7 +359,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		}
 
 		// we'll retry if we get an error, and include the error in the feedback
-		hint := fmt.Sprintf("Have you followed the required formats exactly for all arguments? Look at the examples given in the %s schema descriptions for all the properties. Note that frontend components can be retrieved in full with empty symbol names array", getRetrieveCodeContextTool().Name)
+		hint := fmt.Sprintf("Have you followed the required formats exactly for all arguments? Look at the examples given in the %s schema descriptions for all the properties. Note that frontend components can be retrieved in full with empty symbol names array", currentGetSymbolDefinitionsTool().Name)
 		feedback := fmt.Sprintf("failed to extract code context: %v\n%s\n\nHint: %s", err, result.Failures, hint)
 		promptInfo = ToolCallResponseInfo{Response: feedback, ToolCallId: toolCall.Id, FunctionName: toolCall.Name}
 		addCodeContextPrompt(chatHistory, promptInfo)
@@ -437,7 +437,7 @@ func RetrieveCodeContext(dCtx DevContext, requiredCodeContext RequiredCodeContex
 func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *[]llm.ChatMessage) (llm.ToolCall, RequiredCodeContext, error) {
 	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "small")
 	params := llm.ToolChatParams{Messages: *chatHistory, ModelConfig: modelConfig}
-	chatResponse, err := persisted_ai.ForceToolCall(actionCtx.FlowActionContext(), actionCtx.LLMConfig, &params, getRetrieveCodeContextTool())
+	chatResponse, err := persisted_ai.ForceToolCall(actionCtx.FlowActionContext(), actionCtx.LLMConfig, &params, currentGetSymbolDefinitionsTool())
 	*chatHistory = params.Messages // update chat history with the new messages
 	if err != nil {
 		return llm.ToolCall{}, RequiredCodeContext{}, fmt.Errorf("failed to force tool call: %v", err)
@@ -501,7 +501,7 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 func renderCodeContextFeedbackPrompt(feedback string) string {
 	data := map[string]interface{}{
 		"feedback":                        feedback,
-		"retrieveCodeContextFunctionName": getRetrieveCodeContextTool().Name,
+		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,
 	}
 	return RenderPrompt(CodeContextFeedback, data)
 }

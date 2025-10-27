@@ -53,7 +53,7 @@ const summary = computed(() => {
 
     return parts.join('; ');
   } catch (error) {
-    console.error('Error computing retrieve_code_context summary:', error);
+    console.error('Error computing get_symbol_definitions summary:', error);
     return null;
   }
 });
