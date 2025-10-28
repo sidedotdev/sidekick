@@ -49,7 +49,7 @@ func (eCtx *ExecContext) GetModelConfig(key string, iteration int, fallback stri
 	modelConfig, isDefault := eCtx.LLMConfig.GetModelConfig(key, iteration)
 	if isDefault && fallback != "default" {
 		if fallback == "small" {
-			modelConfig.ReasoningEffort = "low" // no way to configure this yet so hard-coding sensible default
+			modelConfig.ReasoningEffort = "low"
 			provider, err := common.StringToToolChatProviderType(modelConfig.Provider)
 			if err == nil {
 				modelConfig.Model = provider.SmallModel()
@@ -68,6 +68,11 @@ func (eCtx *ExecContext) GetModelConfig(key string, iteration int, fallback stri
 			modelConfig, _ = eCtx.LLMConfig.GetModelConfig(fallback, iteration)
 		}
 	}
+
+	if !common.ModelSupportsReasoning(modelConfig.Provider, modelConfig.Model) {
+		modelConfig.ReasoningEffort = ""
+	}
+
 	return modelConfig
 }
 

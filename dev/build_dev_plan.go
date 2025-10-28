@@ -287,7 +287,7 @@ func unmarshalPlan(jsonStr string) (DevPlan, error) {
 func generateDevPlan(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*llm.ChatMessageResponse, error) {
 	tools := []*llm.Tool{
 		&recordDevPlanTool,
-		getRetrieveCodeContextTool(),
+		currentGetSymbolDefinitionsTool(),
 		&bulkSearchRepositoryTool,
 		&bulkReadFileTool,
 	}

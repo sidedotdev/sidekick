@@ -476,7 +476,11 @@ func (sCtx *searchContext) processGlobalFallbackResults(allFiles []string) (stri
 	}
 
 	matchingFiles, err := filterFilesByGlob(allFiles, sCtx.input.PathGlob)
-	var matchingFilesSet map[string]bool
+	if err != nil {
+		return "", fmt.Errorf("failed to filter files by glob in fallback: %w", err)
+	}
+
+	matchingFilesSet := make(map[string]bool)
 	for _, file := range matchingFiles {
 		matchingFilesSet[file] = true
 	}
@@ -512,7 +516,7 @@ func (sCtx *searchContext) processGlobalFallbackResults(allFiles []string) (stri
 	// sCtx.gitGrepArgs already includes context lines, --show-function, --heading, --line-number,
 	// and incorporates input.CaseInsensitive and input.FixedStrings.
 	// sCtx.escapedSearchTerm is already shell-escaped.
-	cmdStr := fmt.Sprintf("git grep %s %s -- %s", sCtx.gitGrepArgs, sCtx.escapedSearchTerm, strings.Join(escapedFiles, " "))
+	cmdStr := fmt.Sprintf("%s -- %s %s", sCtx.gitGrepArgs, sCtx.escapedSearchTerm, strings.Join(escapedFiles, " "))
 
 	err = workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 		EnvContainer:       sCtx.envContainer,

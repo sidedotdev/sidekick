@@ -249,7 +249,7 @@ func getEmbedder(config common.ModelConfig) (embedding.Embedder, error) {
 		embedder = &embedding.OpenAIEmbedder{}
 	case llm.GoogleToolChatProviderType:
 		embedder = &embedding.GoogleEmbedder{}
-	case llm.OpenaiCompatibleToolChatProviderType:
+	case llm.OpenaiCompatibleToolChatProviderType, llm.OpenaiResponsesCompatibleToolChatProviderType:
 		// FIXME pass in the providers in the parameters instead of loading the
 		// config directly here
 		localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())

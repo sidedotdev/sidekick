@@ -175,12 +175,20 @@ func openaiFromChatMessages(messages []ChatMessage, shouldMerge bool) []openai.C
 	// openai-compatible endpoints may require alternating user vs assistant
 	// messages, so we merge consecutive messages of the same/equivalent role
 	var mergedMessages []openai.ChatCompletionMessage
-	for _, msg := range openaiMessages {
+	for i, msg := range openaiMessages {
 		if len(mergedMessages) == 0 {
 			mergedMessages = append(mergedMessages, msg)
 			continue
 		}
 		lastMsg := &mergedMessages[len(mergedMessages)-1]
+
+		// the first system message is sometimes a separate instruction param,
+		// eg with bedrock, so should kept otherwise we are effectively
+		// providing an empty list of input messages initially
+		if i == 1 && msg.Role == string(ChatMessageRoleUser) && lastMsg.Role == string(ChatMessageRoleSystem) {
+			mergedMessages = append(mergedMessages, msg)
+			continue
+		}
 
 		// Consider tool, user, and system roles as equivalent
 		isEquivalentRole := lastMsg.Role == string(msg.Role) ||

@@ -783,6 +783,9 @@ func (s *SearchRepositoryE2ETestSuite) TestFallbackMsg_GlobMatches_SearchTermInO
 	// The message should indicate no results in the glob, but that the term was found elsewhere.
 	expected := "No results found in the following files:\n\tfile1.txt\nHowever, the search term 'searchterm' was found in other files:"
 	s.Contains(result, expected)
+
+	// Verify that fallback details are actually present - should contain the other file name
+	s.Contains(result, "file2.txt")
 }
 
 func (s *SearchRepositoryE2ETestSuite) TestFallbackMsg_GlobDoesNotMatch_SearchTermNotFoundAnywhere() {

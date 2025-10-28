@@ -1,8 +1,8 @@
 package dev
 
 const (
-	SystemWarnNearToolCallLimit = "SYSTEM MESSAGE: Warning, nearing limit for too many tool calls."
-	SystemHitToolCallLimit      = "SYSTEM MESSAGE: Hit limit for too many tool calls."
+	SystemWarnNearToolCallLimit = "SYSTEM MESSAGE: Warning, nearing limit for too many tool calls without progress. Resolution: Either start to progress the task or use just 1 more tool call."
+	SystemHitToolCallLimit      = "SYSTEM MESSAGE: ⚠️‼️ Hit limit for too many additional tool calls without task progress. Resolution: Please progress the task now."
 )
 
 // ThresholdMessageForCounter determines whether a system message should be
@@ -19,17 +19,14 @@ func ThresholdMessageForCounter(feedbackCadence, sinceLastFeedback int) (string,
 		return "", false
 	}
 
-	t1 := (feedbackCadence * 8) / 10
-	t2 := (feedbackCadence * 9) / 10
+	t1 := (feedbackCadence * 7) / 10
+	t2 := (feedbackCadence * 8) / 10
 	t3 := feedbackCadence - 1
 
-	if t3 >= 1 && t3 < feedbackCadence && r == t3 {
+	if r == t3 {
 		return SystemHitToolCallLimit, true
 	}
-	if t2 >= 1 && t2 < feedbackCadence && r == t2 {
-		return SystemWarnNearToolCallLimit, true
-	}
-	if t1 >= 1 && t1 < feedbackCadence && r == t1 {
+	if r == t2 || r == t1 {
 		return SystemWarnNearToolCallLimit, true
 	}
 	return "", false

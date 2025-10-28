@@ -46,11 +46,12 @@ func PromptToToolChatParams(prompt string, controlParams ChatControlParams) Tool
 type ToolChatProviderType = common.ToolChatProviderType
 
 const (
-	UnspecifiedToolChatProviderType      ToolChatProviderType = ToolChatProviderType(common.UnspecifiedChatProvider)
-	OpenaiToolChatProviderType           ToolChatProviderType = ToolChatProviderType(common.OpenaiChatProvider)
-	AnthropicToolChatProviderType        ToolChatProviderType = ToolChatProviderType(common.AnthropicChatProvider)
-	OpenaiCompatibleToolChatProviderType ToolChatProviderType = ToolChatProviderType(common.OpenaiCompatibleChatProvider)
-	GoogleToolChatProviderType           ToolChatProviderType = ToolChatProviderType(common.GoogleChatProvider)
+	UnspecifiedToolChatProviderType               ToolChatProviderType = ToolChatProviderType(common.UnspecifiedChatProvider)
+	OpenaiToolChatProviderType                    ToolChatProviderType = ToolChatProviderType(common.OpenaiChatProvider)
+	AnthropicToolChatProviderType                 ToolChatProviderType = ToolChatProviderType(common.AnthropicChatProvider)
+	OpenaiCompatibleToolChatProviderType          ToolChatProviderType = ToolChatProviderType(common.OpenaiCompatibleChatProvider)
+	OpenaiResponsesCompatibleToolChatProviderType ToolChatProviderType = ToolChatProviderType(common.OpenaiResponsesCompatibleChatProvider)
+	GoogleToolChatProviderType                    ToolChatProviderType = ToolChatProviderType(common.GoogleChatProvider)
 )
 
 type ToolChatOptions struct {
@@ -59,14 +60,20 @@ type ToolChatOptions struct {
 }
 
 func (options ToolChatOptions) ActionParams() map[string]any {
-	return map[string]any{
+	params := map[string]any{
 		"messages":          options.Params.Messages,
 		"tools":             options.Params.Tools,
 		"toolChoice":        options.Params.ToolChoice,
 		"model":             options.Params.Model,
-		"reasoningEffort":   options.Params.ReasoningEffort,
 		"provider":          options.Params.Provider,
 		"temperature":       options.Params.Temperature,
 		"parallelToolCalls": options.Params.ParallelToolCalls,
 	}
+	if options.Params.ReasoningEffort != "" {
+		params["reasoningEffort"] = options.Params.ReasoningEffort
+	}
+	if options.Params.MaxTokens > 0 {
+		params["maxTokens"] = options.Params.MaxTokens
+	}
+	return params
 }
