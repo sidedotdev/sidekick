@@ -146,6 +146,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	w.RegisterActivity(dev.ReadFileActivity)
 	w.RegisterActivity(dev.BulkReadFileActivity)
 	w.RegisterActivity(dev.ManageChatHistoryActivity)
+	w.RegisterActivity(dev.ManageChatHistoryV2Activity)
 	w.RegisterActivity(ffa.EvalBoolFlag)
 	w.RegisterActivity(common.GetLocalConfig)
 

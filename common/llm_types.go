@@ -19,6 +19,7 @@ type ChatMessage struct {
 
 	/* temporary, until we move to using a slice of content blocks */
 	CacheControl string `json:"cacheControl"`
+	ContextType  string `json:"contextType,omitempty"`
 }
 
 // TODO ChatMessage.Content should be changed to []ContentBlock

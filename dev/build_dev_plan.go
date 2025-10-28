@@ -365,10 +365,12 @@ func addDevPlanPrompt(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInf
 	var content string
 	role := llm.ChatMessageRoleUser
 	cacheControl := ""
+	contextType := ""
 	switch info := promptInfo.(type) {
 	case InitialPlanningInfo:
 		content = renderInitialRecordPlanPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanningPrompt, info.ReproduceIssue)
 		cacheControl = "ephemeral"
+		contextType = ContextTypeInitialInstructions
 	case FeedbackInfo:
 		content = info.Feedback
 	case ToolCallResponseInfo:
@@ -381,5 +383,6 @@ func addDevPlanPrompt(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInf
 		Role:         role,
 		Content:      content,
 		CacheControl: cacheControl,
+		ContextType:  contextType,
 	})
 }

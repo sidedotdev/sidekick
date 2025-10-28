@@ -6,6 +6,7 @@ import (
 	"os"
 	"sidekick/common"
 	"sidekick/env"
+	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
@@ -71,6 +72,8 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
 	var fa *flow_action.FlowActivities // use a nil struct pointer to call activities that are part of a structure
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil)
+	s.env.OnActivity(ManageChatHistoryActivity, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
+	s.env.OnActivity(ManageChatHistoryV2Activity, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 
 	// Create temporary directory using t.TempDir()
 	s.dir = s.T().TempDir()
@@ -109,6 +112,8 @@ func (s *AuthorEditBlocksTestSuite) TestInitialCodeInfoNoEditBlocks() {
 	},
 		nil,
 	).Once()
+	var ffa *fflag.FFlagActivities // use a nil struct pointer to call activities that are part of a structure
+	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil)
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, PromptInfoContainer{
 		InitialCodeInfo{},
 	})

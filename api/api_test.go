@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"sidekick/dev"
@@ -78,13 +77,6 @@ func NewMockController(t *testing.T) Controller {
 	return Controller{
 		temporalClient: mockTemporalClient,
 		service:        service,
-	}
-}
-
-func clearDb(client *redis.Client) {
-	_, err := client.FlushDB(context.Background()).Result()
-	if err != nil {
-		log.Panicf("failed to flush redis database: %v", err)
 	}
 }
 

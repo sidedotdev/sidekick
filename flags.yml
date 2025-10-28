@@ -22,3 +22,9 @@ initial-repo-summary:
     c: false
   defaultRule:
     variation: t1
+manage-history-with-context-markers:
+  variations:
+    t1: true
+    c: false
+  defaultRule:
+    variation: t1
