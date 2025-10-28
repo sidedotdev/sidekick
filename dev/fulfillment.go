@@ -222,8 +222,9 @@ Anyways, here are the automated check results:
 	}
 
 	newMessage := llm.ChatMessage{
-		Role:    llm.ChatMessageRoleUser,
-		Content: content,
+		Role:        llm.ChatMessageRoleUser,
+		Content:     content,
+		ContextType: ContextTypeInitialInstructions,
 	}
 	*chatHistory = append(*chatHistory, newMessage)
 	return chatHistory

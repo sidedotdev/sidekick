@@ -285,10 +285,12 @@ func addDevRequirementsPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptI
 	var content string
 	role := llm.ChatMessageRoleUser
 	cacheControl := ""
+	contextType := ""
 	switch info := promptInfo.(type) {
 	case InitialDevRequirementsInfo:
 		content = getInitialDevRequirementsPrompt(info.Mission, info.Context, info.Requirements)
 		cacheControl = "ephemeral"
+		contextType = ContextTypeInitialInstructions
 	case FeedbackInfo:
 		content = info.Feedback
 	case ToolCallResponseInfo:
@@ -301,6 +303,7 @@ func addDevRequirementsPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptI
 		Role:         role,
 		Content:      content,
 		CacheControl: cacheControl,
+		ContextType:  contextType,
 	})
 }
 

@@ -1,9 +1,14 @@
 package dev
 
 import (
+	"bufio"
+	"fmt"
+	"regexp"
 	"sidekick/coding/tree_sitter"
+	"sidekick/fflag"
 	"sidekick/llm"
 	"slices"
+	"strconv"
 	"strings"
 
 	"go.temporal.io/sdk/workflow"
@@ -27,6 +32,16 @@ const summaryEnd = "#END SUMMARY"
 const guidanceStart = "#START Guidance From the User"
 const guidanceEnd = "#END Guidance From the User"
 
+// ContextType constants
+const (
+	ContextTypeInitialInstructions string = "InitialInstructions"
+	ContextTypeUserFeedback        string = "UserFeedback"
+	ContextTypeTestResult          string = "TestResult"
+	ContextTypeEditBlockReport     string = "EditBlockReport"
+	ContextTypeSelfReviewFeedback  string = "SelfReviewFeedback"
+	ContextTypeSummary             string = "Summary"
+)
+
 //const defaultMaxChatHistoryLength = 12000
 
 //const defaultMaxChatHistoryLength = 20000 // Adjusted temporarily for gpt4-turbo
@@ -38,13 +53,28 @@ const guidanceEnd = "#END Guidance From the User"
 // each time based on the current needs or latest prompt
 func ManageChatHistory(ctx workflow.Context, chatHistory *[]llm.ChatMessage, maxLength int) {
 	var newChatHistory []llm.ChatMessage
-
-	// this activity isn't fallible. we only use it for observability
-	_ = workflow.ExecuteActivity(ctx, ManageChatHistoryActivity, chatHistory, maxLength).Get(ctx, &newChatHistory)
-
-	if newChatHistory != nil {
-		*chatHistory = newChatHistory
+	var activityFuture workflow.Future
+	v := workflow.GetVersion(ctx, "ManageChatHistoryToV2", workflow.DefaultVersion, 1)
+	if v == 1 && fflag.IsEnabled(ctx, fflag.ManageHistoryWithContextMarkers) {
+		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryV2Activity, *chatHistory, maxLength)
+	} else {
+		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryActivity, *chatHistory, maxLength)
 	}
+	err := activityFuture.Get(ctx, &newChatHistory)
+
+	// NOTE: ManageChatHistory was never supposed to be fallible. But then we
+	// made it an activity for better observability. Even though the activity
+	// never returns an err. We'll panic to make such an unexpected error visible.
+	// TODO: in the future, we'll likely add fallible logic, eg calling an LLM
+	// to summarize. At that point, adjust ManageChatHistory to return the err
+	// instead.
+	if err != nil {
+		wrapErr := fmt.Errorf("ManageChatHistory activity returned an error: %w", err)
+		workflow.GetLogger(ctx).Error("ManageChatHistory error shouldn't happen, but it did", "error", wrapErr)
+		panic(wrapErr)
+	}
+
+	*chatHistory = newChatHistory
 }
 
 func ManageChatHistoryActivity(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {
@@ -262,4 +292,164 @@ func containsMessage(messages []llm.ChatMessage, message llm.ChatMessage) bool {
 		}
 	}
 	return false
+}
+
+// ManageChatHistoryV2Activity manages chat history based on ContextType markers.
+// Each ContextType has different retention rules:
+// - InitialInstructions: System prompts/instructions; always retained.
+// - UserFeedback: User corrections/guidance; all instances retained with their response blocks.
+// - TestResult, SelfReviewFeedback, Summary: Status messages; only the most recent of each type retained with its response block.
+// - EditBlockReport: Feedback on applied edit blocks; only the most recent retained, along with the original proposals it references and all subsequent messages.
+//
+// Messages without ContextType are retained if they fall within a retained block (between a ContextType message and the next ContextType message),
+// or if they fit within maxLength after all marked messages are retained. maxLength is a soft limit that doesn't apply to marked messages.
+func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {
+	if len(chatHistory) == 0 {
+		return []llm.ChatMessage{}, nil
+	}
+
+	isRetained := make([]bool, len(chatHistory))
+
+	lastIndex := len(chatHistory) - 1
+	if lastIndex >= 0 {
+		isRetained[lastIndex] = true
+		lastMessage := chatHistory[lastIndex]
+		if lastMessage.Role == llm.ChatMessageRoleTool && lastIndex > 0 {
+			isRetained[lastIndex-1] = true
+		}
+	}
+
+	for i, msg := range chatHistory {
+		if msg.ContextType == ContextTypeInitialInstructions {
+			isRetained[i] = true
+		}
+	}
+
+	latestIndices := make(map[string]int)
+	latestEditBlockReportIndex := -1
+	for i, msg := range chatHistory {
+		switch msg.ContextType {
+		case ContextTypeTestResult, ContextTypeSelfReviewFeedback, ContextTypeSummary:
+			latestIndices[msg.ContextType] = i
+		case ContextTypeEditBlockReport:
+			latestIndices[msg.ContextType] = i
+			latestEditBlockReportIndex = i
+		}
+	}
+
+	for i, msg := range chatHistory {
+		shouldMarkAndExtendBlock := false
+
+		switch msg.ContextType {
+		case ContextTypeUserFeedback:
+			shouldMarkAndExtendBlock = true
+		case ContextTypeTestResult, ContextTypeSelfReviewFeedback, ContextTypeSummary:
+			if latestIdx, ok := latestIndices[msg.ContextType]; ok && i == latestIdx {
+				shouldMarkAndExtendBlock = true
+			}
+		case ContextTypeEditBlockReport:
+			if i == latestEditBlockReportIndex {
+				isRetained[i] = true
+				for j := i + 1; j < len(chatHistory); j++ {
+					isRetained[j] = true
+				}
+			}
+		}
+
+		if shouldMarkAndExtendBlock {
+			isRetained[i] = true
+
+			for j := i + 1; j < len(chatHistory); j++ {
+				if chatHistory[j].ContextType == "" {
+					isRetained[j] = true
+				} else {
+					break
+				}
+			}
+		}
+	}
+
+	// For the most recent EditBlockReport, extract sequence numbers from the report content
+	// and retain the original edit block proposals that match those sequence numbers.
+	// This ensures the model has context about which edits failed when responding to feedback.
+	// TODO: Refactor to use structured data instead of parsing strings (llm2).
+	if latestEditBlockReportIndex != -1 {
+		reportMessage := chatHistory[latestEditBlockReportIndex]
+		sequenceNumbersInReport := extractSequenceNumbersFromReportContent(reportMessage.Content)
+
+		for _, seqNum := range sequenceNumbersInReport {
+			foundProposalIndex := -1
+			for k := latestEditBlockReportIndex - 1; k >= 0; k-- {
+				extractedBlocks, _ := ExtractEditBlocks(chatHistory[k].Content)
+				for _, block := range extractedBlocks {
+					if block.SequenceNumber == seqNum {
+						foundProposalIndex = k
+						break
+					}
+				}
+				if foundProposalIndex != -1 {
+					break
+				}
+			}
+
+			if foundProposalIndex != -1 {
+				for l := foundProposalIndex; l < latestEditBlockReportIndex; l++ {
+					isRetained[l] = true
+				}
+			}
+		}
+	}
+
+	var totalLength = 0
+	var newChatHistory []llm.ChatMessage
+	for i, msg := range chatHistory {
+		if isRetained[i] {
+			totalLength += len(msg.Content)
+		}
+	}
+
+	for i := len(chatHistory) - 1; i >= 0; i-- {
+		msg := chatHistory[i]
+		if isRetained[i] || len(msg.Content)+totalLength <= maxLength {
+			newChatHistory = append(newChatHistory, chatHistory[i])
+			if !isRetained[i] {
+				totalLength += len(msg.Content)
+			}
+		}
+	}
+	slices.Reverse(newChatHistory)
+
+	cleanToolCallsAndResponses(&newChatHistory)
+
+	return newChatHistory, nil
+}
+
+// extractSequenceNumbersFromReportContent extracts unique edit block sequence numbers
+// from EditBlockReport content formatted as "- edit_block:N application ...".
+func extractSequenceNumbersFromReportContent(content string) []int {
+	re := regexp.MustCompile(`-\s*edit_block:(\d+)\s*application.*`)
+
+	scanner := bufio.NewScanner(strings.NewReader(content))
+	seenNumbers := make(map[int]bool)
+	var uniqueSequenceNumbers []int
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		matches := re.FindStringSubmatch(line)
+
+		if len(matches) > 1 {
+			if num, err := strconv.Atoi(matches[1]); err == nil {
+				if !seenNumbers[num] {
+					seenNumbers[num] = true
+					uniqueSequenceNumbers = append(uniqueSequenceNumbers, num)
+				}
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Printf("Error scanning content in extractSequenceNumbersFromReportContent: %v\n", err)
+	}
+
+	return uniqueSequenceNumbers
 }
