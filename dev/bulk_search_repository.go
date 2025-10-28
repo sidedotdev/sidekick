@@ -109,12 +109,12 @@ func getSymbolsMessage(ctx workflow.Context, envContainer env.EnvContainer, file
 	}
 
 	if len(symbols) == 0 {
-		return fmt.Sprintf("\nNote: The file exists and can be read in full using the retrieve_code_context tool."), nil
+		return fmt.Sprintf("\nNote: The file exists and can be read in full using the get_symbol_definitions tool."), nil
 	}
 
 	symbolNames := make([]string, len(symbols))
 	for i, symbol := range symbols {
 		symbolNames[i] = symbol.Content
 	}
-	return fmt.Sprintf("\nNote: The file exists and the full file or specific symbols in it can be read using the retrieve_code_context tool. It contains the following symbols: %s", strings.Join(symbolNames, ", ")), nil
+	return fmt.Sprintf("\nNote: The file exists and the full file or specific symbols in it can be read using the get_symbol_definitions tool. It contains the following symbols: %s", strings.Join(symbolNames, ", ")), nil
 }

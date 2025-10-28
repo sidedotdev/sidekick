@@ -503,7 +503,7 @@ Please analyze what was wrong with some of the previous *edit blocks*...`, Role:
 			ToolCalls: []llm.ToolCall{
 				{
 					Id:        "xyz",
-					Name:      "retrieve_code_context",
+					Name:      "get_symbol_definitions",
 					Arguments: "{}",
 				},
 			},

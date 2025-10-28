@@ -19,7 +19,7 @@ func writeGolangSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter
 			out.WriteString(".")
 		}
 		// NOTE: we don't yet allow the full receiver as part of a symbol in
-		// retrieve_code_context, so we don't include it here either to avoid
+		// get_symbol_definitions, so we don't include it here either to avoid
 		// confusing the LLM. we do support the dot syntax above though.
 		/*
 			case "method.receiver":

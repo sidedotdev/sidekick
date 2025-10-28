@@ -44,10 +44,10 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult Tool
 	// NOTE: the function passed in very deliberately returns
 	// ToolCallResponseInfo since what's returned is what's tracked, and we want
 	// to the entire tool call response, not just the response string
-	return Track(actionCtx, func(flowAction domain.FlowAction) (ToolCallResponseInfo, error) {
+	return Track(actionCtx, func(flowAction *domain.FlowAction) (ToolCallResponseInfo, error) {
 		var response string
 		switch toolCall.Name {
-		case getRetrieveCodeContextTool().Name:
+		case "retrieve_code_context", currentGetSymbolDefinitionsTool().Name:
 			var requiredCodeContext RequiredCodeContext
 			response, err = unmarshalAndInvoke(toolCall, &requiredCodeContext, func() (string, error) {
 				// we want to leave room for the rest of the chat history, hence this lengthThreshold

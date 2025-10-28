@@ -21,20 +21,43 @@ import (
 )
 
 type RequiredCodeContext struct {
-	Analysis            string                     `json:"analysis" jsonschema:"description=Brief analysis of which code symbols (functions\\, types\\, etc) are most relevant before making a final decision and outputting code_context_requests and custom_types. Let's think step by step."`
-	CodeContextRequests []coding.FileSymDefRequest `json:"code_context_requests" jsonschema:"description=Requests to retrieve full definitions of a given symbol within the given file where it is defined."`
+	Analysis string                     `json:"analysis" jsonschema:"description=Brief analysis of which code symbols (functions\\, types\\, etc) are most relevant before outputting requests."`
+	Requests []coding.FileSymDefRequest `json:"requests" jsonschema:"description=Requests to retrieve full definitions of a given symbol within the given file where it is defined."`
 }
 
-var retrieveCodeContextTool = &llm.Tool{
-	Name:        "retrieve_code_context",
+func (r *RequiredCodeContext) UnmarshalJSON(data []byte) error {
+	type Alias RequiredCodeContext
+	aux := &struct {
+		RequestsNew []coding.FileSymDefRequest `json:"requests"`
+		RequestsOld []coding.FileSymDefRequest `json:"code_context_requests"`
+		*Alias
+	}{
+		Alias: (*Alias)(r),
+	}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	if len(aux.RequestsNew) > 0 {
+		r.Requests = aux.RequestsNew
+	} else if len(aux.RequestsOld) > 0 {
+		r.Requests = aux.RequestsOld
+	}
+
+	return nil
+}
+
+var getSymbolDefinitionsTool = &llm.Tool{
+	Name:        "get_symbol_definitions",
 	Description: "When additional code context is required, analysis should be done first. Then the shortlist of functions and important custom types of interest. Returns the complete lines of code corresponding to that input, i.e., the full function and type defintion bodies. The go import block will also be included.",
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&RequiredCodeContext{}),
 }
 
 // this function doesn't do much yet, but will allow us to switch out the
 // function definition for improved versions at runtime later
-func getRetrieveCodeContextTool() *llm.Tool {
-	return retrieveCodeContextTool
+func currentGetSymbolDefinitionsTool() *llm.Tool {
+	return getSymbolDefinitionsTool
 }
 
 // PrepareInitialCodeContextResult represents the result of preparing initial code context
@@ -146,7 +169,7 @@ func GetRankedRepoSummary(dCtx DevContext, rankQuery string, charLimit int) (str
 	for {
 		actionCtx := dCtx.NewActionContext("ranked_repo_summary")
 		actionCtx.ActionParams = options.ActionParams()
-		repoSummary, err = Track(actionCtx, func(flowAction domain.FlowAction) (string, error) {
+		repoSummary, err = Track(actionCtx, func(flowAction *domain.FlowAction) (string, error) {
 			var repoSummary string
 			var ra *persisted_ai.RagActivities // use a nil struct pointer to call activities that are part of a structure
 			err := workflow.ExecuteActivity(utils.NoRetryCtx(dCtx), ra.RankedDirSignatureOutline, options).Get(dCtx, &repoSummary)
@@ -281,8 +304,8 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		}
 
 		// STEP 2: Decide which code to read fully
-		// TODO /gen instead of forcing just retrieve_code_context, let's force
-		// one of retrieve_code_context or bulk_search_repository. if given
+		// TODO /gen instead of forcing just get_symbol_definitions, let's force
+		// one of get_symbol_definitions or bulk_search_repository. if given
 		// bulk_search_repository,
 		var toolCall llm.ToolCall
 		chatCtx := actionCtx.WithCancelOnPause()
@@ -304,7 +327,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		var result coding.SymDefResults
 		result, err = extractCodeContext(noRetryCtx, coding.DirectorySymDefRequest{
 			EnvContainer:          *actionCtx.EnvContainer,
-			Requests:              requiredCodeContext.CodeContextRequests,
+			Requests:              requiredCodeContext.Requests,
 			IncludeRelatedSymbols: true,
 		})
 
@@ -336,7 +359,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		}
 
 		// we'll retry if we get an error, and include the error in the feedback
-		hint := fmt.Sprintf("Have you followed the required formats exactly for all arguments? Look at the examples given in the %s schema descriptions for all the properties. Note that frontend components can be retrieved in full with empty symbol names array", getRetrieveCodeContextTool().Name)
+		hint := fmt.Sprintf("Have you followed the required formats exactly for all arguments? Look at the examples given in the %s schema descriptions for all the properties. Note that frontend components can be retrieved in full with empty symbol names array", currentGetSymbolDefinitionsTool().Name)
 		feedback := fmt.Sprintf("failed to extract code context: %v\n%s\n\nHint: %s", err, result.Failures, hint)
 		promptInfo = ToolCallResponseInfo{Response: feedback, ToolCallId: toolCall.Id, FunctionName: toolCall.Name}
 		addCodeContextPrompt(chatHistory, promptInfo)
@@ -389,14 +412,14 @@ func extractCodeContext(ctx workflow.Context, req coding.DirectorySymDefRequest)
 }
 
 func RetrieveCodeContext(dCtx DevContext, requiredCodeContext RequiredCodeContext, characterLengthThreshold int) (string, error) {
-	if len(requiredCodeContext.CodeContextRequests) == 0 {
+	if len(requiredCodeContext.Requests) == 0 {
 		return "", llm.ErrToolCallUnmarshal
 	}
 
 	dCtx.Context = utils.NoRetryCtx(dCtx)
 	result, err := extractCodeContext(dCtx, coding.DirectorySymDefRequest{
 		EnvContainer:          *dCtx.EnvContainer,
-		Requests:              requiredCodeContext.CodeContextRequests,
+		Requests:              requiredCodeContext.Requests,
 		IncludeRelatedSymbols: true,
 	})
 	if err != nil {
@@ -414,7 +437,7 @@ func RetrieveCodeContext(dCtx DevContext, requiredCodeContext RequiredCodeContex
 func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *[]llm.ChatMessage) (llm.ToolCall, RequiredCodeContext, error) {
 	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "small")
 	params := llm.ToolChatParams{Messages: *chatHistory, ModelConfig: modelConfig}
-	chatResponse, err := persisted_ai.ForceToolCall(actionCtx.FlowActionContext(), actionCtx.LLMConfig, &params, getRetrieveCodeContextTool())
+	chatResponse, err := persisted_ai.ForceToolCall(actionCtx.FlowActionContext(), actionCtx.LLMConfig, &params, currentGetSymbolDefinitionsTool())
 	*chatHistory = params.Messages // update chat history with the new messages
 	if err != nil {
 		return llm.ToolCall{}, RequiredCodeContext{}, fmt.Errorf("failed to force tool call: %v", err)
@@ -427,8 +450,8 @@ func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *[]llm
 	err = json.Unmarshal([]byte(llm.RepairJson(jsonStr)), &requiredCodeContext)
 	if err != nil {
 		return toolCall, RequiredCodeContext{}, fmt.Errorf("%w: %v", llm.ErrToolCallUnmarshal, err)
-	} else if requiredCodeContext.CodeContextRequests == nil {
-		return toolCall, RequiredCodeContext{}, fmt.Errorf("%w: missing code_context_requests in tool call", llm.ErrToolCallUnmarshal)
+	} else if requiredCodeContext.Requests == nil {
+		return toolCall, RequiredCodeContext{}, fmt.Errorf("%w: missing requests in tool call", llm.ErrToolCallUnmarshal)
 	}
 
 	return toolCall, requiredCodeContext, nil
@@ -478,7 +501,7 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 func renderCodeContextFeedbackPrompt(feedback string) string {
 	data := map[string]interface{}{
 		"feedback":                        feedback,
-		"retrieveCodeContextFunctionName": getRetrieveCodeContextTool().Name,
+		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,
 	}
 	return RenderPrompt(CodeContextFeedback, data)
 }
@@ -516,7 +539,7 @@ func renderCodeContextRefineAndRankPrompt(info RefineCodeContextInfo) string {
 	}
 	data := map[string]interface{}{
 		"originalCodeContext":         info.OriginalCodeContext,
-		"originalCodeContextRequests": utils.PanicJSON(info.OriginalCodeContextRequest.CodeContextRequests),
+		"originalCodeContextRequests": utils.PanicJSON(info.OriginalCodeContextRequest.Requests),
 		"requirements":                info.Requirements,
 		// don't think needs are needed (hah!) when refining, as needs are about expanding vs narrowing down
 		//"needs":                       info.Needs,

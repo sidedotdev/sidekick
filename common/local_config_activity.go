@@ -2,6 +2,9 @@ package common
 
 import (
 	"fmt"
+	"os"
+
+	"go.temporal.io/sdk/temporal"
 )
 
 // LocalPublicConfig represents the local configuration without keys
@@ -23,7 +26,16 @@ type ModelProviderPublicConfig struct {
 // GetLocalConfig loads the local configuration and converts it to a format
 // suitable for client consumption, with sensitive data removed
 func GetLocalConfig() (LocalPublicConfig, error) {
-	config, err := LoadSidekickConfig(GetSidekickConfigPath())
+	configPath := GetSidekickConfigPath()
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		return LocalPublicConfig{}, temporal.NewNonRetryableApplicationError(
+			"failed to load config: not found",
+			"LocalConfigNotFound",
+			nil,
+		)
+	}
+
+	config, err := LoadSidekickConfig(configPath)
 	if err != nil {
 		return LocalPublicConfig{}, fmt.Errorf("failed to load config: %w", err)
 	}
@@ -73,7 +85,11 @@ func GetLocalConfig() (LocalPublicConfig, error) {
 
 	// Verify that at least one config has defaults
 	if len(llmConfig.Defaults) == 0 && len(embeddingConfig.Defaults) == 0 {
-		return LocalPublicConfig{}, fmt.Errorf("no default models configured in local config")
+		return LocalPublicConfig{}, temporal.NewNonRetryableApplicationError(
+			"no default models configured in local config",
+			"LocalConfigNoDefaults",
+			nil,
+		)
 	}
 
 	return LocalPublicConfig{

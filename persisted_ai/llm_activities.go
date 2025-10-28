@@ -144,6 +144,7 @@ Sidekick: got an unexpected empty response. Retrying with modified prompt...
 	retryResponse, err := toolChatter.ChatStream(ctx, chatOptions, deltaChan, progressChan)
 	if retryResponse != nil {
 		retryResponse.Provider = chatOptions.Params.ModelConfig.Provider
+		retryResponse.Role = llm.ChatMessageRoleAssistant
 	}
 	if err != nil {
 		return retryResponse, err
@@ -177,7 +178,7 @@ func getToolChatter(config common.ModelConfig) (llm.ToolChatter, error) {
 
 	switch providerType {
 	case llm.OpenaiToolChatProviderType:
-		return llm.OpenaiToolChat{}, nil
+		return llm.OpenaiResponsesToolChat{}, nil
 	case llm.OpenaiCompatibleToolChatProviderType:
 		// FIXME pass in the providers in the parameters instead of loading the
 		// config directly here
@@ -188,6 +189,22 @@ func getToolChatter(config common.ModelConfig) (llm.ToolChatter, error) {
 		for _, p := range localConfig.Providers {
 			if p.Type == string(providerType) && p.Name == config.Provider {
 				return llm.OpenaiToolChat{
+					BaseURL:      p.BaseURL,
+					DefaultModel: p.DefaultLLM,
+				}, nil
+			}
+		}
+		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
+	case llm.OpenaiResponsesCompatibleToolChatProviderType:
+		// FIXME pass in the providers in the parameters instead of loading the
+		// config directly here
+		localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load local config: %w", err)
+		}
+		for _, p := range localConfig.Providers {
+			if p.Type == string(providerType) && p.Name == config.Provider {
+				return llm.OpenaiResponsesToolChat{
 					BaseURL:      p.BaseURL,
 					DefaultModel: p.DefaultLLM,
 				}, nil

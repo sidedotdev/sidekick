@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
@@ -15,6 +14,7 @@ import (
 	"sidekick/utils"
 	"sidekick/workspace"
 
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -49,7 +49,7 @@ func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, e
 	}
 	return flow_action.TrackSubflowFailureOnly(initialExecCtx, "flow_init", "Initialize", func(_ domain.Subflow) (DevContext, error) {
 		actionCtx := initialExecCtx.NewActionContext("setup_dev_context")
-		return flow_action.TrackFailureOnly(actionCtx, func(_ domain.FlowAction) (DevContext, error) {
+		return flow_action.TrackFailureOnly(actionCtx, func(_ *domain.FlowAction) (DevContext, error) {
 			return setupDevContextAction(ctx, workspaceId, repoDir, envType, startBranch, requirements)
 		})
 	})
@@ -237,51 +237,68 @@ func getConfigs(ctx workflow.Context, workspaceId string) (common.LocalPublicCon
 	var wa *workspace.Activities
 	var localConfig common.LocalPublicConfig
 	var workspaceConfig domain.WorkspaceConfig
+	logger := workflow.GetLogger(ctx)
 
-	err := workflow.ExecuteActivity(ctx, common.GetLocalConfig).Get(ctx, &localConfig)
-	if err != nil && !os.IsNotExist(err) {
-		return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", err)
-	}
+	enableConfigMode := workflow.GetVersion(ctx, "workspace-config-mode", workflow.DefaultVersion, 1) >= 1
 
-	// Get workspace configuration
-	err = workflow.ExecuteActivity(ctx, wa.GetWorkspaceConfig, workspaceId).Get(ctx, &workspaceConfig)
+	var finalLLMConfig common.LLMConfig
+	var finalEmbeddingConfig common.EmbeddingConfig
+
+	localConfigErr := workflow.ExecuteActivity(ctx, common.GetLocalConfig).Get(ctx, &localConfig)
+
+	err := workflow.ExecuteActivity(ctx, wa.GetWorkspaceConfig, workspaceId).Get(ctx, &workspaceConfig)
 	if err != nil {
 		return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get workspace config: %v", err)
 	}
 
-	// Check if workspace config mode feature is enabled
-	enableConfigMode := workflow.GetVersion(ctx, "workspace-config-mode", workflow.DefaultVersion, 1) >= 1
-
-	// Apply configuration based on configMode (if enabled)
-	var finalLLMConfig common.LLMConfig
-	var finalEmbeddingConfig common.EmbeddingConfig
-
+	var workspace domain.Workspace
+	var configMode string
 	if enableConfigMode {
-		// Get workspace details to access configMode
-		var workspace domain.Workspace
 		err = workflow.ExecuteActivity(ctx, wa.GetWorkspace, workspaceId).Get(ctx, &workspace)
 		if err != nil {
 			return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get workspace: %v", err)
 		}
-
-		switch workspace.ConfigMode {
-		case "local":
-			// Use only local config, ignore workspace config
-			finalLLMConfig = localConfig.LLM
-			finalEmbeddingConfig = localConfig.Embedding
-		case "workspace":
-			// Use only workspace config, ignore local config
-			finalLLMConfig = workspaceConfig.LLM
-			finalEmbeddingConfig = workspaceConfig.Embedding
-		case "merge":
-			// Merge configurations - workspace config overrides local config if present
-			finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
-		default:
-			// Default to merge mode for backward compatibility
-			finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
-		}
+		configMode = workspace.ConfigMode
 	} else {
-		// Legacy behavior: always merge configurations - workspace config overrides local config if present
+		configMode = "merge"
+	}
+
+	if localConfigErr != nil {
+		var appErr *temporal.ApplicationError
+		if errors.As(localConfigErr, &appErr) {
+			switch appErr.Type() {
+			case "LocalConfigNotFound":
+				if configMode == "local" {
+					return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", localConfigErr)
+				}
+				logger.Info("Local config not found; proceeding with workspace config (mode=" + configMode + ").")
+			case "LocalConfigNoDefaults":
+				if configMode == "local" {
+					return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", localConfigErr)
+				}
+				workspaceHasDefaults := len(workspaceConfig.LLM.Defaults) > 0 || len(workspaceConfig.Embedding.Defaults) > 0
+				if !workspaceHasDefaults {
+					return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("no default models configured in local and workspace configs; configure defaults in one source or switch config mode")
+				}
+				logger.Info("Local config lacks defaults; proceeding with workspace defaults (mode=" + configMode + ").")
+			default:
+				return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", localConfigErr)
+			}
+		} else {
+			return localConfig, workspaceConfig, common.LLMConfig{}, common.EmbeddingConfig{}, fmt.Errorf("failed to get local config: %v", localConfigErr)
+		}
+	}
+
+	switch configMode {
+	case "local":
+		finalLLMConfig = localConfig.LLM
+		finalEmbeddingConfig = localConfig.Embedding
+	case "workspace":
+		finalLLMConfig = workspaceConfig.LLM
+		finalEmbeddingConfig = workspaceConfig.Embedding
+	case "merge":
+		finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
+	default:
 		finalLLMConfig, finalEmbeddingConfig = mergeConfigs(localConfig.LLM, localConfig.Embedding, workspaceConfig.LLM, workspaceConfig.Embedding)
 	}
 
@@ -334,13 +351,13 @@ func (actionCtx DevActionContext) WithCancelOnPause() DevActionContext {
 	return actionCtx
 }
 
-func Track[T any](devActionCtx DevActionContext, f func(flowAction domain.FlowAction) (T, error)) (defaultT T, err error) {
+func Track[T any](devActionCtx DevActionContext, f func(flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
 	// TODO /gen check if the devContext.State.Paused is true, and if so, wait
 	// indefinitely for a temporal signal to resume before continuing
 	return flow_action.Track(devActionCtx.FlowActionContext(), f)
 }
 
-func TrackHuman[T any](devActionCtx DevActionContext, f func(flowAction domain.FlowAction) (T, error)) (T, error) {
+func TrackHuman[T any](devActionCtx DevActionContext, f func(flowAction *domain.FlowAction) (T, error)) (T, error) {
 	return flow_action.TrackHuman(devActionCtx.FlowActionContext(), f)
 }
 

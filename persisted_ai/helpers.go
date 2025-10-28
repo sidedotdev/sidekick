@@ -68,7 +68,7 @@ func ForceToolCallWithTrackOptions(actionCtx flow_action.ActionContext, trackOpt
 	options.WorkspaceId = actionCtx.WorkspaceId
 	options.FlowId = flowId
 	actionCtx.ActionParams = options.ActionParams()
-	chatResponse, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction domain.FlowAction) (llm.ChatMessageResponse, error) {
+	chatResponse, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (llm.ChatMessageResponse, error) {
 		options.FlowActionId = flowAction.Id
 		var chatResponse llm.ChatMessageResponse
 		err := workflow.ExecuteActivity(utils.LlmHeartbeatCtx(actionCtx), la.ChatStream, options).Get(actionCtx, &chatResponse)
@@ -93,7 +93,7 @@ func ForceToolCallWithTrackOptions(actionCtx flow_action.ActionContext, trackOpt
 		})
 		options.Params.Messages = params.Messages
 		actionCtx.ActionParams = options.ActionParams()
-		chatResponse, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction domain.FlowAction) (llm.ChatMessageResponse, error) {
+		chatResponse, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (llm.ChatMessageResponse, error) {
 			var chatResponse llm.ChatMessageResponse
 			options.FlowActionId = flowAction.Id
 			err := workflow.ExecuteActivity(utils.LlmHeartbeatCtx(actionCtx), la.ChatStream, options).Get(actionCtx, &chatResponse)

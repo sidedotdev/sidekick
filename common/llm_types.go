@@ -98,11 +98,12 @@ type Tool struct {
 type ChatProvider string
 
 const (
-	UnspecifiedChatProvider      ChatProvider = ""
-	OpenaiChatProvider           ChatProvider = "openai"
-	AnthropicChatProvider        ChatProvider = "anthropic"
-	OpenaiCompatibleChatProvider ChatProvider = "openai_compatible"
-	GoogleChatProvider           ChatProvider = "google"
+	UnspecifiedChatProvider               ChatProvider = ""
+	OpenaiChatProvider                    ChatProvider = "openai"
+	AnthropicChatProvider                 ChatProvider = "anthropic"
+	OpenaiCompatibleChatProvider          ChatProvider = "openai_compatible"
+	OpenaiResponsesCompatibleChatProvider ChatProvider = "openai_responses_compatible"
+	GoogleChatProvider                    ChatProvider = "google"
 )
 
 type ToolChatProviderType string

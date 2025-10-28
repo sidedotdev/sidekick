@@ -215,7 +215,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 func generateDevRequirements(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*llm.ChatMessageResponse, error) {
 	tools := []*llm.Tool{
 		&recordDevRequirementsTool,
-		getRetrieveCodeContextTool(),
+		currentGetSymbolDefinitionsTool(),
 		&bulkSearchRepositoryTool,
 		&bulkReadFileTool,
 	}
@@ -250,7 +250,7 @@ func generateDevRequirements(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*
 func TrackedToolChat(dCtx DevContext, actionType string, options llm.ToolChatOptions) (*llm.ChatMessageResponse, error) {
 	actionCtx := dCtx.NewActionContext("generate." + actionType)
 	actionCtx.ActionParams = options.ActionParams()
-	return Track(actionCtx, func(flowAction domain.FlowAction) (*llm.ChatMessageResponse, error) {
+	return Track(actionCtx, func(flowAction *domain.FlowAction) (*llm.ChatMessageResponse, error) {
 		if options.Params.Provider == "" {
 			options.Params.ModelConfig = dCtx.GetModelConfig(common.DefaultKey, 0, "default")
 		}
@@ -398,7 +398,7 @@ ask about before finalizing requirements. You can ask several questions in one
 go and should do so if multiple areas need clarification. Make your questions
 concise.
 
-You are able to also read code via the `+getRetrieveCodeContextTool().Name+`
+You are able to also read code via the `+currentGetSymbolDefinitionsTool().Name+`
 tool to understand how to interpret technical requirements as well as understand
 the status quo before suggesting changes that software engineers will need to
 implement. Searching the repository for relevant text which may be strewn across

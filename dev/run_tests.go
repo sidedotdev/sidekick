@@ -37,7 +37,7 @@ func RunTests(dCtx DevContext, commandsToRun []common.CommandConfig) (TestResult
 
 	actionCtx := dCtx.NewActionContext("run_tests")
 	actionCtx.ActionParams = actionParams
-	testResults, err := Track(actionCtx, func(flowAction domain.FlowAction) ([]TestResult, error) {
+	testResults, err := Track(actionCtx, func(flowAction *domain.FlowAction) ([]TestResult, error) {
 		// execute all test commands in parallel
 		for _, testCommand := range commandsToRun {
 			// Capture testCommand for the goroutine

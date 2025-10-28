@@ -103,7 +103,7 @@ func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRe
 	utils.Transcode(req, &reqMap)
 	chatHistory := []llm.ChatMessage{
 		{
-			Role:    llm.ChatMessageRoleSystem,
+			Role:    llm.ChatMessageRoleUser,
 			Content: RenderPrompt(generateBranchNamesPrompt, reqMap),
 		},
 	}

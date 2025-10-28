@@ -51,6 +51,21 @@ func setupTestEnv(t *testing.T, sideTomlContent string, hintsFilename string, hi
 	return env.EnvContainer{Env: mock}
 }
 
+func writeFallbackFile(t *testing.T, envContainer env.EnvContainer, relativePath string, content string) {
+	t.Helper()
+	workingDir := envContainer.Env.GetWorkingDirectory()
+	absPath := filepath.Join(workingDir, relativePath)
+
+	dir := filepath.Dir(absPath)
+	if dir != "" && dir != "." {
+		err := os.MkdirAll(dir, 0755)
+		require.NoError(t, err)
+	}
+
+	err := os.WriteFile(absPath, []byte(content), 0644)
+	require.NoError(t, err)
+}
+
 func TestGetRepoConfigActivity(t *testing.T) {
 	t.Run("Scenario 1: Inline hints set, hints_path unset", func(t *testing.T) {
 		tomlContent := `
@@ -168,4 +183,79 @@ mission = "Test mission"
 		assert.Contains(t, err.Error(), "failed to read TOML file")
 		// require.ErrorIs(t, err, os.ErrNotExist) // This might require unwrapping
 	})
+}
+func TestGetRepoConfigActivity_FallbackPrecedence(t *testing.T) {
+	candidates := []string{
+		"AGENTS.md",
+		"CLAUDE.md",
+		"GEMINI.md",
+		".github/copilot-instructions.md",
+		".clinerules",
+		".cursorrules",
+		".windsurfrules",
+		"CONVENTIONS.md",
+	}
+
+	for i, candidate := range candidates {
+		candidate := candidate
+		t.Run(candidate, func(t *testing.T) {
+			envContainer := setupTestEnv(t, `
+[edit_code]
+`, "", "")
+			for j := i; j < len(candidates); j++ {
+				name := candidates[j]
+				writeFallbackFile(t, envContainer, name, "fallback for "+name)
+			}
+
+			config, err := GetRepoConfigActivity(envContainer)
+			require.NoError(t, err)
+			assert.Equal(t, "fallback for "+candidate, config.EditCode.Hints)
+			assert.Equal(t, candidate, config.EditCode.HintsPath)
+		})
+	}
+}
+
+func TestGetRepoConfigActivity_FallbackSuppressedWhenHintsConfigured(t *testing.T) {
+	t.Run("Inline hints override fallback", func(t *testing.T) {
+		tomlContent := `
+[edit_code]
+hints = "Inline value"
+`
+		envContainer := setupTestEnv(t, tomlContent, "", "")
+		writeFallbackFile(t, envContainer, "AGENTS.md", "fallback content")
+
+		config, err := GetRepoConfigActivity(envContainer)
+
+		require.NoError(t, err)
+		assert.Equal(t, "Inline value", config.EditCode.Hints)
+		assert.Empty(t, config.EditCode.HintsPath)
+	})
+
+	t.Run("Configured hints_path overrides fallback", func(t *testing.T) {
+		hintsFilename := "repo_hints.txt"
+		tomlContent := `
+[edit_code]
+hints_path = "` + hintsFilename + `"
+`
+		envContainer := setupTestEnv(t, tomlContent, hintsFilename, "configured file content")
+		writeFallbackFile(t, envContainer, "AGENTS.md", "fallback content")
+
+		config, err := GetRepoConfigActivity(envContainer)
+
+		require.NoError(t, err)
+		assert.Equal(t, "configured file content", config.EditCode.Hints)
+		assert.Equal(t, hintsFilename, config.EditCode.HintsPath)
+	})
+}
+
+func TestGetRepoConfigActivity_NoFallbackCandidates(t *testing.T) {
+	envContainer := setupTestEnv(t, `
+[edit_code]
+`, "", "")
+
+	config, err := GetRepoConfigActivity(envContainer)
+
+	require.NoError(t, err)
+	assert.Empty(t, config.EditCode.Hints)
+	assert.Empty(t, config.EditCode.HintsPath)
 }

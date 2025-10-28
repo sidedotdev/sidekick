@@ -38,6 +38,9 @@ import ApplyEditBlocksFlowAction, { type ApplyEditBlockResult } from './ApplyEdi
 import PlaintextResultFlowAction from './PlaintextResultFlowAction.vue';
 import ToolFlowAction from './ToolFlowAction.vue';
 import MergeFlowAction from './MergeFlowAction.vue';
+import RetrieveCodeContextFlowAction from './RetrieveCodeContextFlowAction.vue';
+import BulkSearchRepositoryFlowAction from './BulkSearchRepositoryFlowAction.vue';
+import ReadFileLinesFlowAction from './ReadFileLinesFlowAction.vue';
 import { useEventBus } from '@vueuse/core';
 
 const props = defineProps({
@@ -175,6 +178,13 @@ const actionSpecificComponent = computed(() => {
       return RunTestsFlowAction
     case 'merge':
       return MergeFlowAction
+    case 'tool_call.get_symbol_definitions':
+    case 'tool_call.retrieve_code_context':
+      return RetrieveCodeContextFlowAction
+    case 'tool_call.bulk_search_repository':
+      return BulkSearchRepositoryFlowAction
+    case 'tool_call.read_file_lines':
+      return ReadFileLinesFlowAction
     default:
       if (props.flowAction.isHumanAction || /^user_request\./.test(props.flowAction.actionType)) {
         return UserRequest
@@ -300,6 +310,94 @@ const summary = computed<Summary | null>(() => {
         return null;
       } catch (error) {
         console.error('Error parsing user request result data:', error);
+        return null;
+      }
+    }
+
+    case 'tool_call.retrieve_code_context':
+    case 'tool_call.get_symbol_definitions': {
+      try {
+        const params = props.flowAction.actionParams;
+        if (!params?.code_context_requests || !Array.isArray(params.code_context_requests)) {
+          if (!params?.requests || !Array.isArray(params.requests)) {
+            return null;
+          }
+        }
+        
+        const fileGroups: Record<string, string[]> = {};
+        for (const request of (params.code_context_requests || params.requests)) {
+          if (!request?.file_path) continue;
+          const symbols = request.symbol_names && Array.isArray(request.symbol_names) && request.symbol_names.length > 0
+            ? request.symbol_names
+            : ['(full)'];
+          fileGroups[request.file_path] = symbols;
+        }
+        
+        const parts = Object.entries(fileGroups).map(([file, symbols]) => `${file}: ${symbols.join(', ')}`);
+        return {
+          text: parts.join('; '),
+          emoji: '📖',
+        };
+      } catch (error) {
+        console.error('Error parsing get_symbol_definitions params:', error);
+        return null;
+      }
+    }
+
+    case 'tool_call.bulk_search_repository': {
+      try {
+        const params = props.flowAction.actionParams;
+        if (!params?.searches || !Array.isArray(params.searches)) {
+          return null;
+        }
+        
+        const globGroups: Record<string, string[]> = {};
+        for (const search of params.searches) {
+          if (!search?.path_glob || !search?.search_term) continue;
+          if (!globGroups[search.path_glob]) {
+            globGroups[search.path_glob] = [];
+          }
+          globGroups[search.path_glob].push(search.search_term);
+        }
+        
+        const parts = Object.entries(globGroups).map(([glob, terms]) => `${glob}: ${terms.join(', ')}`);
+        return {
+          text: parts.join('; '),
+          emoji: '🔎',
+        };
+      } catch (error) {
+        console.error('Error parsing bulk_search_repository params:', error);
+        return null;
+      }
+    }
+
+    case 'tool_call.read_file_lines': {
+      try {
+        const params = props.flowAction.actionParams;
+        if (!params?.file_lines || !Array.isArray(params.file_lines) || typeof params.window_size !== 'number') {
+          return null;
+        }
+        
+        const fileGroups: Record<string, string[]> = {};
+        for (const fileLine of params.file_lines) {
+          if (!fileLine?.file_path || typeof fileLine.line_number !== 'number') continue;
+          const startLine = Math.max(1, fileLine.line_number - params.window_size);
+          const endLine = fileLine.line_number + params.window_size;
+          const range = `${startLine}-${endLine}`;
+          
+          if (!fileGroups[fileLine.file_path]) {
+            fileGroups[fileLine.file_path] = [];
+          }
+          fileGroups[fileLine.file_path].push(range);
+        }
+        
+        const parts = Object.entries(fileGroups).map(([file, ranges]) => `${file}: ${ranges.join(', ')}`);
+        return {
+          text: parts.join('; '),
+          emoji: '📄',
+        };
+      } catch (error) {
+        console.error('Error parsing read_file_lines params:', error);
         return null;
       }
     }

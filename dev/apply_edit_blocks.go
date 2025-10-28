@@ -544,7 +544,7 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 	actionCtx.ActionParams = actionParams
 
 	var fullReports []ApplyEditBlockReport
-	_, err := Track(actionCtx, func(flowAction domain.FlowAction) ([]ApplyEditBlockReport, error) {
+	_, err := Track(actionCtx, func(flowAction *domain.FlowAction) ([]ApplyEditBlockReport, error) {
 		var validEditBlocks []EditBlock
 		var invalidReports []ApplyEditBlockReport
 

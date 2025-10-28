@@ -219,9 +219,11 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 				// HACK: since we don't add tool call responses right away (TODO),
 				// we make sure we don't end up with a tool call missing a result
 				// here.
-				switch info := promptInfo.(type) {
-				case ToolCallResponseInfo:
-					addToolCallResponse(chatHistory, info)
+				if len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
+					switch info := promptInfo.(type) {
+					case ToolCallResponseInfo:
+						addToolCallResponse(chatHistory, info)
+					}
 				}
 				return nil, nil
 			}
@@ -234,9 +236,11 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			// HACK: since we don't add tool call responses right away (TODO),
 			// we make sure we don't end up with a tool call missing a result
 			// here.
-			switch info := promptInfo.(type) {
-			case ToolCallResponseInfo:
-				addToolCallResponse(chatHistory, info)
+			if len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
+				switch info := promptInfo.(type) {
+				case ToolCallResponseInfo:
+					addToolCallResponse(chatHistory, info)
+				}
 			}
 			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
 			attemptsSinceLastEditBlockOrFeedback = 0
@@ -247,9 +251,11 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			// HACK: since we don't add tool call responses right away (TODO),
 			// we make sure we don't end up with a tool call missing a result
 			// here.
-			switch info := promptInfo.(type) {
-			case ToolCallResponseInfo:
-				addToolCallResponse(chatHistory, info)
+			if len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
+				switch info := promptInfo.(type) {
+				case ToolCallResponseInfo:
+					addToolCallResponse(chatHistory, info)
+				}
 			}
 			promptInfo = FeedbackInfo{Feedback: msg}
 		}
@@ -258,9 +264,11 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			// HACK: since we don't add tool call responses right away (TODO),
 			// we make sure we don't end up with a tool call missing a result
 			// here.
-			switch info := promptInfo.(type) {
-			case ToolCallResponseInfo:
-				addToolCallResponse(chatHistory, info)
+			if len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
+				switch info := promptInfo.(type) {
+				case ToolCallResponseInfo:
+					addToolCallResponse(chatHistory, info)
+				}
 			}
 
 			// maybe this? yeah makes sense
@@ -272,6 +280,16 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 			return nil, ErrMaxAttemptsReached
 		} else if attemptsSinceLastEditBlockOrFeedback > 0 && attemptsSinceLastEditBlockOrFeedback%feedbackIterations == 0 {
+			// HACK: since we don't add tool call responses right away (TODO),
+			// we make sure we don't end up with a tool call missing a result
+			// here.
+			if len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
+				switch info := promptInfo.(type) {
+				case ToolCallResponseInfo:
+					addToolCallResponse(chatHistory, info)
+				}
+			}
+
 			guidanceContext := "The system has attempted to generate edits multiple times without success. Please provide some guidance."
 			requestParams := map[string]any{
 				// TODO include the latest failure if any
@@ -415,7 +433,7 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 
 	var tools []*llm.Tool
 	tools = append(tools, &bulkSearchRepositoryTool)
-	tools = append(tools, getRetrieveCodeContextTool())
+	tools = append(tools, currentGetSymbolDefinitionsTool())
 	tools = append(tools, &bulkReadFileTool)
 	tools = append(tools, &runCommandTool)
 
@@ -423,7 +441,6 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 		tools = append(tools, &getHelpOrInputTool)
 	}
 
-	var temperature float32 = 0.0
 	return llm.ToolChatOptions{
 		Secrets: *dCtx.Secrets,
 		Params: llm.ToolChatParams{
@@ -432,7 +449,6 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 			ToolChoice: llm.ToolChoice{
 				Type: llm.ToolChoiceTypeAuto,
 			},
-			Temperature: &temperature,
 			ModelConfig: codingModelConfig,
 		},
 	}
@@ -460,7 +476,7 @@ func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requiremen
 		"divider":                         divider,
 		"replace":                         replace,
 		"editCodeHints":                   dCtx.RepoConfig.EditCode.Hints,
-		"retrieveCodeContextFunctionName": getRetrieveCodeContextTool().Name,
+		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		data["getHelpOrInputFunctionName"] = getHelpOrInputTool.Name
@@ -482,7 +498,7 @@ func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, req
 		"divider":                         divider,
 		"replace":                         replace,
 		"editCodeHints":                   dCtx.RepoConfig.EditCode.Hints,
-		"retrieveCodeContextFunctionName": getRetrieveCodeContextTool().Name,
+		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		data["getHelpOrInputFunctionName"] = getHelpOrInputTool.Name
@@ -502,7 +518,7 @@ func renderAuthorEditBlockFeedbackPrompt(feedback string) string {
 	data := map[string]interface{}{
 		"feedback":                         feedback,
 		"hasUserGuidance":                  strings.Contains(feedback, guidanceStart),
-		"retrieveCodeContextFunctionName":  getRetrieveCodeContextTool().Name,
+		"retrieveCodeContextFunctionName":  currentGetSymbolDefinitionsTool().Name,
 		"bulkSearchRepositoryFunctionName": bulkSearchRepositoryTool.Name,
 		"bulkReadFileFunctionName":         bulkReadFileTool.Name,
 	}

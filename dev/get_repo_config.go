@@ -9,6 +9,7 @@ import (
 	"sidekick/flow_action"
 
 	"github.com/BurntSushi/toml"
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -38,6 +39,34 @@ func GetRepoConfigActivity(envContainer env.EnvContainer) (common.RepoConfig, er
 			return common.RepoConfig{}, fmt.Errorf("failed to read hints file specified in side.toml (hints_path: %q): %w", config.EditCode.HintsPath, err)
 		}
 		config.EditCode.Hints = string(hintsData)
+	}
+
+	if config.EditCode.Hints == "" && config.EditCode.HintsPath == "" {
+		candidates := []string{
+			"AGENTS.md",
+			"CLAUDE.md",
+			"GEMINI.md",
+			".github/copilot-instructions.md",
+			".clinerules",
+			".cursorrules",
+			".windsurfrules",
+			"CONVENTIONS.md",
+		}
+		for _, candidate := range candidates {
+			fallbackPath := filepath.Join(envContainer.Env.GetWorkingDirectory(), candidate)
+			hintsData, err := os.ReadFile(fallbackPath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return common.RepoConfig{}, fmt.Errorf("failed to read fallback hints file %q: %w", candidate, err)
+			}
+
+			config.EditCode.HintsPath = candidate
+			config.EditCode.Hints = string(hintsData)
+			log.Info().Str("fallbackHintsFile", candidate).Msg("Loaded edit hints from fallback file")
+			break
+		}
 	}
 
 	return config, nil

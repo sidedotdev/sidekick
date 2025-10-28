@@ -9,6 +9,8 @@ type ModelConfig struct {
 	// Optional hint for models that support dedicated reasoning modes.
 	// Allowed values: minimal | low | medium | high
 	ReasoningEffort string `koanf:"reasoning_effort" json:"reasoningEffort,omitempty"`
+	// Optional maximum number of tokens to generate. Values <= 0 are treated as unset.
+	MaxTokens int `koanf:"max_tokens" json:"maxTokens,omitempty"`
 }
 
 func (c ModelConfig) NormalizedProviderName() string {

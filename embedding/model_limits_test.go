@@ -1,8 +1,10 @@
 package embedding
 
 import (
-	"sidekick/common"
+	"math"
 	"testing"
+
+	"sidekick/common"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,8 +35,8 @@ func TestBatchEmbeddingRequests(t *testing.T) {
 		{
 			name: "known model with high limit",
 			inputs: []string{
-				"a" + string(make([]byte, 8000*charsPerToken)),
-				"b" + string(make([]byte, 8000*charsPerToken)),
+				"a" + string(make([]byte, int(8000*charsPerToken))),
+				"b" + string(make([]byte, int(8000*charsPerToken))),
 			},
 			modelConfig: common.ModelConfig{
 				Model: "text-embedding-3-small",
@@ -45,8 +47,8 @@ func TestBatchEmbeddingRequests(t *testing.T) {
 		{
 			name: "known provider default limit",
 			inputs: []string{
-				"a" + string(make([]byte, 15000*charsPerToken)),
-				"b" + string(make([]byte, 15000*charsPerToken)),
+				"a" + string(make([]byte, int(15000*charsPerToken))),
+				"b" + string(make([]byte, int(15000*charsPerToken))),
 			},
 			modelConfig: common.ModelConfig{
 				Provider: string(common.GoogleChatProvider),
@@ -57,8 +59,8 @@ func TestBatchEmbeddingRequests(t *testing.T) {
 		{
 			name: "fallback default limit",
 			inputs: []string{
-				"a" + string(make([]byte, 15000*charsPerToken)),
-				"b" + string(make([]byte, 15000*charsPerToken)),
+				"a" + string(make([]byte, int(15000*charsPerToken))),
+				"b" + string(make([]byte, int(15000*charsPerToken))),
 			},
 			modelConfig: common.ModelConfig{},
 			wantBatches: 2,
@@ -131,7 +133,7 @@ func TestBatchEmbeddingRequests(t *testing.T) {
 			for _, batch := range batches {
 				batchTokens := 0
 				for _, input := range batch {
-					batchTokens += (len(input) + charsPerToken - 1) / charsPerToken
+					batchTokens += int(math.Ceil(float64(len(input)) / charsPerToken))
 				}
 				assert.LessOrEqual(t, batchTokens, maxTokens)
 			}

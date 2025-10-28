@@ -25,6 +25,10 @@ const fetchArchivedTasks = async () => {
   }
 }
 
+const handleTaskDeleted = (id: string) => {
+  archivedTasks.value = archivedTasks.value.filter(task => task.id !== id)
+}
+
 onMounted(() => {
   fetchArchivedTasks()
 })
@@ -42,6 +46,7 @@ onMounted(() => {
         :key="task.id"
         :task="task"
         :readonly="true"
+        @deleted="handleTaskDeleted"
       />
     </div>
   </div>

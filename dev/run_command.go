@@ -11,13 +11,13 @@ import (
 )
 
 type RunCommandParams struct {
-	Command    string `json:"command" jsonschema:"description=The shell command or script to execute"`
+	Command    string `json:"command" jsonschema:"description=The shell command or script to execute. Will automatically be run in the repository root working directory (cd not needed)\\, or the relative directory specified via workingDir."`
 	WorkingDir string `json:"workingDir,omitempty" jsonschema:"description=Optional working directory relative to the repository root directory"`
 }
 
 var runCommandTool = llm.Tool{
 	Name:        "run_command",
-	Description: "Not for running tests. This tool is used to execute other shell commands, subject to user approval. The command will be run through the 'sh' shell if approved. This tool should NOT be used to run tests. When asked to provide edit blocks, all tests are run automatically after no further edit blocks are provided.",
+	Description: "Not for running tests or reading code. This tool is used to execute other shell commands, subject to user approval. The command will be run through the 'sh' shell if approved. This tool should NOT be used to run tests. When asked to provide edit blocks, all tests are run automatically after no further edit blocks are provided. Also don't use this tool when a more specific tool already exists, e.g. specific tools to get symbol definitions, read files, search repo, etc",
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&RunCommandParams{}),
 }
 

@@ -82,7 +82,7 @@ func GetUserApproval(dCtx DevContext, approvalType, approvalPrompt string, reque
 	actionCtx.ActionParams = req.ActionParams()
 
 	// Ensure tracking of the flow action within the guidance request
-	return TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
+	return TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
 		req.FlowActionId = flowAction.Id
 		return GetUserResponse(actionCtx.DevContext, req)
 	})
@@ -119,8 +119,11 @@ func GetUserMergeApproval(
 	}
 	actionCtx.ActionParams = req.ActionParams()
 
+	mergeApprovalInfo := req.RequestParams["mergeApprovalInfo"].(MergeApprovalParams)
+	finalTarget := mergeApprovalInfo.DefaultTargetBranch
+
 	// Ensure tracking of the flow action within the guidance request
-	userResponse, err := TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
+	userResponse, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
 		req.FlowActionId = flowAction.Id
 
 		// Get the initial user response
@@ -129,37 +132,46 @@ func GetUserMergeApproval(
 			return nil, err
 		}
 
+		v := workflow.GetVersion(dCtx, "final-merge-response-update-flow-action", workflow.DefaultVersion, 1)
+
 		// handle branch switching until final approval/rejection
 		for {
-			if currentResponse.Approved != nil {
-				// final approval/rejection
+			if v < 1 && currentResponse.Approved != nil {
+				// backcompat event history
 				return currentResponse, nil
 			}
 
-			// if Approved is nil, this is a branch switch update
-			newTargetBranch, ok := currentResponse.Params["targetBranch"].(string)
-			if !ok {
-				return nil, fmt.Errorf("targetBranch not found in user response params")
+			// branch switch update
+			if currentResponse.Params != nil {
+				latestTarget, ok := currentResponse.Params["targetBranch"].(string)
+				if !ok {
+					return nil, fmt.Errorf("targetBranch not found in user response params")
+				}
+				finalTarget = latestTarget
+
+				// Regenerate the diff with the new target branch
+				newDiff, err := getGitDiff(actionCtx.DevContext, finalTarget)
+				if err != nil {
+					return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", finalTarget, err)
+				}
+
+				// Update the mergeApprovalInfo with the new diff and target branch
+				mergeApprovalInfo.Diff = newDiff
+				mergeApprovalInfo.DefaultTargetBranch = finalTarget
+				req.RequestParams["mergeApprovalInfo"] = mergeApprovalInfo
+
+				// Update the flow action with the new parameters, so the user sees the updated diff and target
+				flowAction.ActionParams = req.ActionParams()
+				var fa *flow_action.FlowActivities
+				err = workflow.ExecuteActivity(actionCtx.DevContext, fa.PersistFlowAction, flowAction).Get(actionCtx.DevContext, nil)
+				if err != nil {
+					return nil, fmt.Errorf("failed to update flow action params: %v", err)
+				}
 			}
 
-			// Regenerate the diff with the new target branch
-			newDiff, err := getGitDiff(actionCtx.DevContext, newTargetBranch)
-			if err != nil {
-				return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", newTargetBranch, err)
-			}
-
-			// Update the mergeApprovalInfo with the new diff and target branch
-			mergeApprovalInfo := req.RequestParams["mergeApprovalInfo"].(MergeApprovalParams)
-			mergeApprovalInfo.Diff = newDiff
-			mergeApprovalInfo.DefaultTargetBranch = newTargetBranch
-			req.RequestParams["mergeApprovalInfo"] = mergeApprovalInfo
-
-			// Update the flow action with the new parameters
-			flowAction.ActionParams = req.ActionParams()
-			var fa *flow_action.FlowActivities
-			err = workflow.ExecuteActivity(actionCtx.DevContext, fa.PersistFlowAction, flowAction).Get(actionCtx.DevContext, nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to update flow action params: %v", err)
+			// if Approved is non-nil, this isn't just a branch switch update, we're done either approving or rejecting
+			if currentResponse.Approved != nil {
+				return currentResponse, nil
 			}
 
 			// wait for the next user response signal
@@ -177,7 +189,7 @@ func GetUserMergeApproval(
 
 	return MergeApprovalResponse{
 		Approved:     *userResponse.Approved,
-		TargetBranch: userResponse.Params["targetBranch"].(string),
+		TargetBranch: finalTarget,
 		Message:      userResponse.Content,
 	}, nil
 }
@@ -234,23 +246,24 @@ func GetUserResponse(dCtx DevContext, req RequestForUser) (*UserResponse, error)
 	return &userResponse, nil
 }
 
-func GetUserContinue(actionCtx DevActionContext, prompt string, requestParams map[string]any) error {
-	if actionCtx.RepoConfig.DisableHumanInTheLoop {
+func GetUserContinue(dCtx DevContext, prompt string, requestParams map[string]any) error {
+	if dCtx.RepoConfig.DisableHumanInTheLoop {
 		return nil
 	}
 
 	// Create a RequestForUser struct for continue request
 	req := RequestForUser{
-		OriginWorkflowId: workflow.GetInfo(actionCtx).WorkflowExecution.ID,
+		OriginWorkflowId: workflow.GetInfo(dCtx).WorkflowExecution.ID,
 		Content:          prompt,
-		Subflow:          actionCtx.FlowScope.SubflowName,
+		Subflow:          dCtx.FlowScope.SubflowName,
 		RequestParams:    requestParams,
 		RequestKind:      RequestKindContinue,
 	}
+	actionCtx := dCtx.NewActionContext("user_request.continue")
 	actionCtx.ActionParams = req.ActionParams()
 
 	// Ensure tracking of the flow action within the guidance request
-	_, err := TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
+	_, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
 		req.FlowActionId = flowAction.Id
 		return GetUserResponse(actionCtx.DevContext, req)
 	})
@@ -281,6 +294,11 @@ would mean to apply it to your current situation.
 		}, nil
 	}
 
+	v := workflow.GetVersion(dCtx, "guidance-delegate-when-paused", workflow.DefaultVersion, 1)
+	if v == 1 && dCtx.GlobalState != nil && dCtx.GlobalState.Paused {
+		return UserRequestIfPaused(dCtx, guidanceContext, requestParams)
+	}
+
 	guidanceRequest := &RequestForUser{
 		OriginWorkflowId: workflow.GetInfo(dCtx).WorkflowExecution.ID,
 		Subflow:          dCtx.FlowScope.SubflowName,
@@ -293,7 +311,7 @@ would mean to apply it to your current situation.
 	actionCtx.ActionParams = guidanceRequest.ActionParams()
 
 	// Ensure tracking of the flow action within the guidance request
-	return TrackHuman(actionCtx, func(flowAction domain.FlowAction) (*UserResponse, error) {
+	return TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
 		guidanceRequest.FlowActionId = flowAction.Id
 		response, err := GetUserResponse(dCtx, *guidanceRequest)
 		if response.Content != "" {
