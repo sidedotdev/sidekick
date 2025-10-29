@@ -86,6 +86,7 @@ type ContentBlock struct {
 	Reasoning    *ReasoningBlock  `json:"reasoning,omitempty"`
 	McpCall      *McpCallBlock    `json:"mcpCall,omitempty"`
 	CacheControl string           `json:"cacheControl,omitempty"`
+	ContextType  string           `json:"contextType,omitempty"`
 }
 
 // A single chat turn (message) consisting of a role and ordered content blocks.
