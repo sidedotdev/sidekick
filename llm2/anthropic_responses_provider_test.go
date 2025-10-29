@@ -2,6 +2,7 @@ package llm2
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"sidekick/common"
 	"sidekick/secret_manager"
@@ -226,4 +227,116 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0 on multi-turn")
 		assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0 on multi-turn")
 	})
+}
+
+func TestAnthropicResponsesProvider_CacheControl(t *testing.T) {
+	testCases := []struct {
+		name        string
+		message     Message
+		expectError bool
+	}{
+		{
+			name: "text block with cache control",
+			message: Message{
+				Role: RoleUser,
+				Content: []ContentBlock{
+					{
+						Type:         ContentBlockTypeText,
+						Text:         "Hello, world!",
+						CacheControl: "ephemeral",
+					},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "tool_use block with cache control",
+			message: Message{
+				Role: RoleAssistant,
+				Content: []ContentBlock{
+					{
+						Type: ContentBlockTypeToolUse,
+						ToolUse: &ToolUseBlock{
+							Id:        "test-tool-id",
+							Name:      "test_tool",
+							Arguments: `{"arg":"value"}`,
+						},
+						CacheControl: "ephemeral",
+					},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "tool_result block with cache control",
+			message: Message{
+				Role: RoleUser,
+				Content: []ContentBlock{
+					{
+						Type: ContentBlockTypeToolResult,
+						ToolResult: &ToolResultBlock{
+							ToolCallId: "test-tool-id",
+							Text:       "result text",
+							IsError:    false,
+						},
+						CacheControl: "ephemeral",
+					},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "refusal block with cache control",
+			message: Message{
+				Role: RoleAssistant,
+				Content: []ContentBlock{
+					{
+						Type: ContentBlockTypeRefusal,
+						Refusal: &RefusalBlock{
+							Reason: "I cannot do that",
+						},
+						CacheControl: "ephemeral",
+					},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "reasoning block with cache control",
+			message: Message{
+				Role: RoleAssistant,
+				Content: []ContentBlock{
+					{
+						Type: ContentBlockTypeReasoning,
+						Reasoning: &ReasoningBlock{
+							Text:    "Let me think about this...",
+							Summary: "Thinking",
+						},
+						CacheControl: "ephemeral",
+					},
+				},
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			params, err := messagesToAnthropicParams([]Message{tc.message})
+			if tc.expectError {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.NotEmpty(t, params)
+
+			jsonBytes, err := json.Marshal(params)
+			assert.NoError(t, err)
+
+			jsonStr := string(jsonBytes)
+			assert.Contains(t, jsonStr, `"cache_control":{"type":"ephemeral"}`,
+				"Expected cache_control to be present in JSON output for %s", tc.name)
+		})
+	}
 }
