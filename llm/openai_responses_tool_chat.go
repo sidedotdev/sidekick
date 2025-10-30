@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sidekick/common"
 	"sidekick/utils"
 	"time"
@@ -53,7 +54,12 @@ func (o OpenaiResponsesToolChat) ChatStream(ctx context.Context, options ToolCha
 	if err != nil {
 		return nil, err
 	}
-	clientOptions := []option.RequestOption{option.WithAPIKey(token)}
+	httpClient := &http.Client{Timeout: 5 * time.Minute}
+	clientOptions := []option.RequestOption{
+		option.WithAPIKey(token),
+		option.WithMaxRetries(0), // retries handled by temporal
+		option.WithHTTPClient(httpClient),
+	}
 
 	if o.BaseURL != "" {
 		clientOptions = append(clientOptions, option.WithBaseURL(o.BaseURL))

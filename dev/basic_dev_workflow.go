@@ -35,8 +35,6 @@ type MergeWithReviewParams struct {
 	Requirements   string
 	StartBranch    *string
 	GetGitDiff     func(dCtx DevContext, baseBranch string) (string, error) // function to get git diff customized per workflow, nil for default
-	SubflowType    string                                                   // for tracking purposes
-	SubflowName    string                                                   // for tracking purposes
 	CommitRequired bool
 }
 
@@ -479,6 +477,7 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 }
 
 func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (string, MergeApprovalResponse, error) {
+
 	defaultTarget := "main"
 	if params.StartBranch != nil {
 		defaultTarget = *params.StartBranch
