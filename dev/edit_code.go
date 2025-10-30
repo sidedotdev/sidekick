@@ -225,7 +225,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 						addToolCallResponse(chatHistory, info)
 					}
 				}
-				return nil, nil
+				return nil, PendingActionError
 			}
 		}
 
