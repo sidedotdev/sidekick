@@ -79,11 +79,6 @@ const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
 const selectedBranch = ref<string | null>(props.task?.flowOptions?.startBranch || null)
 const workspaceId = ref<string>(props.task?.workspaceId || store.workspaceId as string)
 
-// force local envType while worktree feature is still in devMode
-if (!devMode) {
-  envType.value = 'local'
-}
-
 const dropdownOptions = [
   {
     label: 'Start Task',
@@ -117,8 +112,8 @@ const submitTask = async () => {
     envType: envType.value,
   }
 
-  // startBranch only supported in in devMode for now, and only if envType is local_git_worktree
-  if (devMode && envType.value === 'local_git_worktree') {
+  // startBranch supported only if envType is local_git_worktree
+  if (envType.value === 'local_git_worktree') {
     flowOptions.startBranch = selectedBranch.value
   }
 
