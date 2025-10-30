@@ -389,7 +389,7 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, getGitDiff func(dCt
 
 	approvalResponse, err := GetUserMergeApproval(dCtx, "Please review these changes", map[string]any{
 		"mergeApprovalInfo": mergeParams,
-	}, getGitDiff)
+	})
 	if err != nil {
 		return MergeApprovalResponse{}, "", err
 	}
