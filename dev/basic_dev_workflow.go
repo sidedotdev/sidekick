@@ -26,9 +26,10 @@ type BasicDevWorkflowInput struct {
 }
 
 type BasicDevOptions struct {
-	DetermineRequirements bool        `json:"determineRequirements"`
-	EnvType               env.EnvType `json:"envType,omitempty" default:"local"`
-	StartBranch           *string     `json:"startBranch,omitempty"`
+	DetermineRequirements bool                   `json:"determineRequirements"`
+	EnvType               env.EnvType            `json:"envType,omitempty" default:"local"`
+	StartBranch           *string                `json:"startBranch,omitempty"`
+	ConfigOverrides       common.ConfigOverrides `json:"configOverrides"`
 }
 
 type MergeWithReviewParams struct {
@@ -86,7 +87,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 
 	ctx = utils.DefaultRetryCtx(ctx)
 
-	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), input.BasicDevOptions.StartBranch, input.Requirements)
+	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), input.BasicDevOptions.StartBranch, input.Requirements, input.BasicDevOptions.ConfigOverrides)
 	if err != nil {
 		_ = signalWorkflowClosure(ctx, "failed")
 		return "", err

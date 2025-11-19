@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/utils"
@@ -20,11 +21,12 @@ type PlannedDevInput struct {
 	PlannedDevOptions
 }
 type PlannedDevOptions struct {
-	PlanningPrompt        string      `json:"planningPrompt"`
-	ReproduceIssue        bool        `json:"reproduceIssue"`
-	DetermineRequirements bool        `json:"determineRequirements"`
-	EnvType               env.EnvType `json:"envType,omitempty" default:"local"`
-	StartBranch           *string     `json:"startBranch,omitempty"` // Optional branch for git worktree env
+	PlanningPrompt        string                 `json:"planningPrompt"`
+	ReproduceIssue        bool                   `json:"reproduceIssue"`
+	DetermineRequirements bool                   `json:"determineRequirements"`
+	EnvType               env.EnvType            `json:"envType,omitempty" default:"local"`
+	StartBranch           *string                `json:"startBranch,omitempty"` // Optional branch for git worktree env
+	ConfigOverrides       common.ConfigOverrides `json:"configOverrides"`
 }
 
 var SideAppEnv = os.Getenv("SIDE_APP_ENV")
@@ -51,7 +53,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 
 	ctx = utils.DefaultRetryCtx(ctx)
 
-	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), input.PlannedDevOptions.StartBranch, input.Requirements)
+	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), input.PlannedDevOptions.StartBranch, input.Requirements, input.PlannedDevOptions.ConfigOverrides)
 	if err != nil {
 		_ = signalWorkflowClosure(ctx, "failed")
 		return DevPlanExecution{}, fmt.Errorf("failed to setup dev context: %v", err)
