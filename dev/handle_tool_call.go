@@ -17,16 +17,29 @@ import (
 // TODO /gen/planned/req move this to RepoConfig
 const maxRetrieveCodeContextLength = 15000
 
-func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers map[string]func(llm.ToolCall) (ToolCallResponseInfo, error)) ([]ToolCallResponseInfo, error) {
+func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers map[string]func(workflow.Context, llm.ToolCall) (ToolCallResponseInfo, error)) ([]ToolCallResponseInfo, error) {
 	// backward compatibility: handle-parallel-tool-calls
 	// if old version, only process the first tool call
 	version := workflow.GetVersion(dCtx, "handle-parallel-tool-calls", workflow.DefaultVersion, 1)
 	if version == workflow.DefaultVersion {
-		if len(toolCalls) > 0 {
-			toolCalls = toolCalls[:1]
-		} else {
+		if len(toolCalls) == 0 {
 			return []ToolCallResponseInfo{}, nil
 		}
+		// Process only the first tool call sequentially
+		tc := toolCalls[0]
+		var result ToolCallResponseInfo
+		var err error
+
+		if handler, ok := customHandlers[tc.Name]; ok {
+			result, err = handler(dCtx.Context, tc)
+		} else {
+			result, err = handleToolCall(dCtx, tc)
+		}
+
+		if err != nil {
+			return nil, err
+		}
+		return []ToolCallResponseInfo{result}, nil
 	}
 
 	responseChannel := workflow.NewChannel(dCtx)
@@ -42,7 +55,7 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers m
 			var err error
 
 			if handler, ok := customHandlers[tc.Name]; ok {
-				result, err = handler(tc)
+				result, err = handler(ctx, tc)
 			} else {
 				result, err = handleToolCall(localDCtx, tc)
 			}
