@@ -79,8 +79,14 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers m
 		}
 		responseChannel.Receive(dCtx, &resp)
 		results[resp.Index] = resp.Result
-		if resp.Err != nil && finalErr == nil {
-			finalErr = resp.Err
+		if resp.Err != nil {
+			results[resp.Index].IsError = true
+			if results[resp.Index].Response == "" {
+				results[resp.Index].Response = resp.Err.Error()
+			}
+			if finalErr == nil {
+				finalErr = resp.Err
+			}
 		}
 	}
 
