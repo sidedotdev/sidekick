@@ -375,13 +375,13 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 	return testResult.Output, nil
 }
 
-func getMergeApproval(dCtx DevContext, defaultTarget string) (MergeApprovalResponse, string, error) {
+func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool) (MergeApprovalResponse, string, error) {
 	v := workflow.GetVersion(dCtx, "worktree-merge", workflow.DefaultVersion, 1)
 
 	var gitDiff string
 	var err error
 
-	if v == workflow.DefaultVersion {
+	if v == workflow.DefaultVersion && commitRequired {
 		gitDiff, err = git.GitDiff(dCtx.ExecContext)
 		if err != nil {
 			return MergeApprovalResponse{}, "", fmt.Errorf("failed to generate git diff: %w", err)
@@ -492,7 +492,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 		}
 	}
 
-	mergeInfo, gitDiff, err := getMergeApproval(dCtx, defaultTarget)
+	mergeInfo, gitDiff, err := getMergeApproval(dCtx, defaultTarget, params.CommitRequired)
 	if err != nil {
 		return "", MergeApprovalResponse{}, fmt.Errorf("failed to get merge approval: %w", err)
 	}
@@ -599,7 +599,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 				break
 			}
 
-			mergeInfo, gitDiff, err = getMergeApproval(dCtx, mergeInfo.TargetBranch)
+			mergeInfo, gitDiff, err = getMergeApproval(dCtx, mergeInfo.TargetBranch, params.CommitRequired)
 			if err != nil {
 				return "", MergeApprovalResponse{}, fmt.Errorf("failed to get final merge approval: %w", err)
 			}
