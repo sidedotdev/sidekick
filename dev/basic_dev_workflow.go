@@ -34,10 +34,21 @@ type BasicDevOptions struct {
 type MergeWithReviewParams struct {
 	Requirements   string
 	StartBranch    *string
-	GetGitDiff     func(dCtx DevContext, baseBranch string) (string, error) // function to get git diff customized per workflow, nil for default
-	SubflowType    string                                                   // for tracking purposes
-	SubflowName    string                                                   // for tracking purposes
+	SubflowType    string // for tracking purposes
+	SubflowName    string // for tracking purposes
 	CommitRequired bool
+}
+
+// GetGitDiff generates a git diff for merge approval, with optional whitespace ignoring
+func GetGitDiff(dCtx DevContext, baseBranch string, ignoreWhitespace bool) (string, error) {
+	var gitDiff string
+	err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
+		Staged:           true,
+		ThreeDotDiff:     true,
+		BaseBranch:       baseBranch,
+		IgnoreWhitespace: ignoreWhitespace,
+	}).Get(dCtx, &gitDiff)
+	return gitDiff, err
 }
 
 // formatRequirementsWithReview combines original requirements with review history and work done
@@ -149,7 +160,6 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 			CommitRequired: true,
 			Requirements:   requirements,
 			StartBranch:    input.StartBranch,
-			GetGitDiff:     nil,
 		}
 		err = reviewAndResolve(dCtx, params)
 		if err != nil {
@@ -350,9 +360,6 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 			CommitRequired: true,
 			Requirements:   requirements,
 			StartBranch:    startBranch,
-			GetGitDiff: func(dCtx DevContext, baseBranch string) (string, error) {
-				return git.GitDiff(dCtx.ExecContext)
-			},
 		}
 		_, _, err = mergeWorktreeIfApproved(dCtx, params)
 		if err != nil {
@@ -369,15 +376,22 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 	return testResult.Output, nil
 }
 
-func getMergeApproval(dCtx DevContext, defaultTarget string, getGitDiff func(dCtx DevContext, baseBranch string) (string, error)) (MergeApprovalResponse, string, error) {
-	// Generate initial diff with default target branch
-	// This is also the diff used in any followups (we don't use the diff
-	// against an updated target branch selection from the user, as that could
-	// show work done that was well out of scope of the task being done, thus
-	// confusing the LLM)
-	gitDiff, err := getGitDiff(dCtx, defaultTarget)
-	if err != nil {
-		return MergeApprovalResponse{}, "", fmt.Errorf("failed to generate git diff: %w", err)
+func getMergeApproval(dCtx DevContext, defaultTarget string) (MergeApprovalResponse, string, error) {
+	v := workflow.GetVersion(dCtx, "worktree-merge", workflow.DefaultVersion, 1)
+
+	var gitDiff string
+	var err error
+
+	if v == workflow.DefaultVersion {
+		gitDiff, err = git.GitDiff(dCtx.ExecContext)
+		if err != nil {
+			return MergeApprovalResponse{}, "", fmt.Errorf("failed to generate git diff: %w", err)
+		}
+	} else {
+		gitDiff, err = GetGitDiff(dCtx, defaultTarget, false)
+		if err != nil {
+			return MergeApprovalResponse{}, "", fmt.Errorf("failed to generate git diff: %w", err)
+		}
 	}
 
 	// Request merge approval from user
@@ -400,19 +414,6 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, getGitDiff func(dCt
 // try to review and merge if approved. if not approved, iterate by coding some
 // more based on review feedback, then review again
 func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
-	if params.GetGitDiff == nil {
-		params.GetGitDiff = func(dCtx DevContext, baseBranch string) (string, error) {
-			// Get diff between branches using three-dot syntax (also including staged for changes made during reviewAndResolve)
-			var gitDiff string
-			err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
-				Staged:       true,
-				ThreeDotDiff: true,
-				BaseBranch:   baseBranch,
-			}).Get(dCtx, &gitDiff)
-			return gitDiff, err
-		}
-	}
-
 	return RunSubflowWithoutResult(dCtx, "review_and_resolve", "Review and resolve", func(subflow domain.Subflow) error {
 		// Track review messages for iterative development
 		reviewMessages := []string{}
@@ -491,7 +492,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 		}
 	}
 
-	mergeInfo, gitDiff, err := getMergeApproval(dCtx, defaultTarget, params.GetGitDiff)
+	mergeInfo, gitDiff, err := getMergeApproval(dCtx, defaultTarget)
 	if err != nil {
 		return "", MergeApprovalResponse{}, fmt.Errorf("failed to get merge approval: %w", err)
 	}
@@ -598,7 +599,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 				break
 			}
 
-			mergeInfo, gitDiff, err = getMergeApproval(dCtx, mergeInfo.TargetBranch, params.GetGitDiff)
+			mergeInfo, gitDiff, err = getMergeApproval(dCtx, mergeInfo.TargetBranch)
 			if err != nil {
 				return "", MergeApprovalResponse{}, fmt.Errorf("failed to get final merge approval: %w", err)
 			}

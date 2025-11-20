@@ -118,7 +118,6 @@ Here is the plan for meeting the requirements, along with updates per step:
 
 ` + devPlan.String(),
 			StartBranch: input.StartBranch,
-			GetGitDiff:  nil,
 		})
 		if err != nil {
 			return DevPlanExecution{}, err

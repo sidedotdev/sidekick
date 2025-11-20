@@ -19,6 +19,7 @@ type GitDiffParams struct {
 	Staged           bool
 }
 
+// GitDiff returns the diff of the current, staged changes in the working tree.
 func GitDiff(eCtx flow_action.ExecContext) (string, error) {
 	var diff string
 	var err error
