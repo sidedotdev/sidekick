@@ -2,6 +2,7 @@ package dev
 
 import (
 	"fmt"
+	"sidekick/coding/git"
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/llm"
@@ -98,7 +99,6 @@ func GetUserMergeApproval(
 	dCtx DevContext,
 	approvalPrompt string,
 	requestParams map[string]interface{},
-	getGitDiff func(dCtx DevContext, baseBranch string) (string, error),
 ) (MergeApprovalResponse, error) {
 	actionCtx := dCtx.NewActionContext("user_request.approve.merge")
 	if actionCtx.RepoConfig.DisableHumanInTheLoop {
@@ -121,6 +121,7 @@ func GetUserMergeApproval(
 
 	mergeApprovalInfo := req.RequestParams["mergeApprovalInfo"].(MergeApprovalParams)
 	finalTarget := mergeApprovalInfo.DefaultTargetBranch
+	ignoreWhitespace := false
 
 	// Ensure tracking of the flow action within the guidance request
 	userResponse, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
@@ -134,38 +135,52 @@ func GetUserMergeApproval(
 
 		v := workflow.GetVersion(dCtx, "final-merge-response-update-flow-action", workflow.DefaultVersion, 1)
 
-		// handle branch switching until final approval/rejection
+		// handle branch switching and whitespace toggle until final approval/rejection
 		for {
 			if v < 1 && currentResponse.Approved != nil {
 				// backcompat event history
 				return currentResponse, nil
 			}
 
-			// branch switch update
+			// branch switch or whitespace toggle update
 			if currentResponse.Params != nil {
-				latestTarget, ok := currentResponse.Params["targetBranch"].(string)
-				if !ok {
-					return nil, fmt.Errorf("targetBranch not found in user response params")
-				}
-				finalTarget = latestTarget
+				paramsChanged := false
 
-				// Regenerate the diff with the new target branch
-				newDiff, err := getGitDiff(actionCtx.DevContext, finalTarget)
-				if err != nil {
-					return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", finalTarget, err)
+				if latestTarget, ok := currentResponse.Params["targetBranch"].(string); ok {
+					finalTarget = latestTarget
+					paramsChanged = true
 				}
 
-				// Update the mergeApprovalInfo with the new diff and target branch
-				mergeApprovalInfo.Diff = newDiff
-				mergeApprovalInfo.DefaultTargetBranch = finalTarget
-				req.RequestParams["mergeApprovalInfo"] = mergeApprovalInfo
+				if ignoreWhitespaceVal, ok := currentResponse.Params["ignoreWhitespace"].(bool); ok {
+					ignoreWhitespace = ignoreWhitespaceVal
+					paramsChanged = true
+				}
 
-				// Update the flow action with the new parameters, so the user sees the updated diff and target
-				flowAction.ActionParams = req.ActionParams()
-				var fa *flow_action.FlowActivities
-				err = workflow.ExecuteActivity(actionCtx.DevContext, fa.PersistFlowAction, flowAction).Get(actionCtx.DevContext, nil)
-				if err != nil {
-					return nil, fmt.Errorf("failed to update flow action params: %v", err)
+				if paramsChanged {
+					// Regenerate the diff with the updated parameters
+					var newDiff string
+					err = workflow.ExecuteActivity(actionCtx.DevContext, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
+						Staged:           true,
+						ThreeDotDiff:     true,
+						BaseBranch:       finalTarget,
+						IgnoreWhitespace: ignoreWhitespace,
+					}).Get(actionCtx.DevContext, &newDiff)
+					if err != nil {
+						return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", finalTarget, err)
+					}
+
+					// Update the mergeApprovalInfo with the new diff and target branch
+					mergeApprovalInfo.Diff = newDiff
+					mergeApprovalInfo.DefaultTargetBranch = finalTarget
+					req.RequestParams["mergeApprovalInfo"] = mergeApprovalInfo
+
+					// Update the flow action with the new parameters, so the user sees the updated diff and target
+					flowAction.ActionParams = req.ActionParams()
+					var fa *flow_action.FlowActivities
+					err = workflow.ExecuteActivity(actionCtx.DevContext, fa.PersistFlowAction, flowAction).Get(actionCtx.DevContext, nil)
+					if err != nil {
+						return nil, fmt.Errorf("failed to update flow action params: %v", err)
+					}
 				}
 			}
 

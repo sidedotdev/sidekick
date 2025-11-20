@@ -17,6 +17,7 @@
       <UnifiedDiffViewer
         :diff-string="flowAction.actionParams.mergeApprovalInfo.diff"
         :default-expanded="false"
+        :diff-mode="diffMode"
       />
     </template>
 
@@ -41,13 +42,57 @@
     </div>
 
     <div v-else-if="flowAction.actionParams.requestKind === 'merge_approval'">
-      <div style="display: flex; margin-top: 0.5rem;">
+      <div style="display: flex; align-items: center; gap: 1rem; margin-top: 0.5rem;">
         <label for="targetBranch">Merge into</label>
         <BranchSelector
           id="targetBranch"
           v-model="targetBranch"
           :workspaceId="flowAction.workspaceId"
         />
+        <div class="view-options-container">
+          <button 
+            type="button" 
+            class="view-options-button" 
+            @click="showViewOptions = !showViewOptions"
+            :disabled="!isPending"
+            title="View options"
+          >
+            <GearIcon />
+          </button>
+          <div v-if="showViewOptions" class="view-options-dropdown">
+            <div class="view-option">
+              <label>
+                <input 
+                  type="checkbox" 
+                  v-model="ignoreWhitespace"
+                  :disabled="!isPending"
+                />
+                Ignore whitespace in diff
+              </label>
+            </div>
+            <div class="view-option">
+              <label>Diff view mode:</label>
+              <label class="radio-label">
+                <input 
+                  type="radio" 
+                  value="unified" 
+                  v-model="diffMode"
+                  :disabled="!isPending"
+                />
+                Unified
+              </label>
+              <label class="radio-label">
+                <input 
+                  type="radio" 
+                  value="split" 
+                  v-model="diffMode"
+                  :disabled="!isPending"
+                />
+                Split
+              </label>
+            </div>
+          </div>
+        </div>
       </div>
 
       <AutogrowTextarea v-model="responseContent" placeholder="Rejection reason" />
@@ -103,6 +148,7 @@
       <UnifiedDiffViewer
         :diff-string="flowAction.actionParams.mergeApprovalInfo.diff"
         :default-expanded="false"
+        :diff-mode="diffMode"
       />
     </template>
     <div v-if="parsedActionResult?.Params?.targetBranch">
@@ -126,6 +172,7 @@ import BranchSelector from './BranchSelector.vue'
 import VueMarkdown from 'vue-markdown-render'
 import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
 import CopyIcon from './icons/CopyIcon.vue';
+import GearIcon from './icons/GearIcon.vue';
 
 interface UserResponse {
   content?: string;
@@ -152,6 +199,9 @@ const props = defineProps({
 const responseContent = ref('');
 const errorMessage = ref('');
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
+const showViewOptions = ref(false);
+const ignoreWhitespace = ref(false);
+const diffMode = ref<'unified' | 'split'>('unified');
 
 function getStorageKey(actionId: string): string {
   return `sidekick_user_request_draft_${actionId}`;
@@ -173,7 +223,6 @@ watch(responseContent, (newContent) => {
   }
 });
 
-// TODO: onmounted isn't needed here, so we should move this to the setup area
 onMounted(() => {
   try {
     const savedContent = localStorage.getItem(getStorageKey(props.flowAction.id));
@@ -182,6 +231,25 @@ onMounted(() => {
     }
   } catch (error) {
     console.debug('Failed to load draft:', error);
+  }
+
+  try {
+    const savedIgnoreWhitespace = localStorage.getItem('mergeApproval.diff.ignoreWhitespace');
+    if (savedIgnoreWhitespace !== null) {
+      ignoreWhitespace.value = savedIgnoreWhitespace === 'true';
+    }
+    const savedDiffMode = localStorage.getItem('mergeApproval.diff.mode');
+    if (savedDiffMode === 'unified' || savedDiffMode === 'split') {
+      diffMode.value = savedDiffMode;
+    }
+  } catch (error) {
+    console.debug('Failed to load merge approval preferences:', error);
+  }
+
+  if (ignoreWhitespace.value && 
+      isPending.value && 
+      props.flowAction.actionParams.requestKind === 'merge_approval') {
+    updateMergeApprovalParams();
   }
 });
 
@@ -195,27 +263,46 @@ const parsedActionResult = computed(() => {
 
 const targetBranch = ref<string | undefined>(parsedActionResult.value?.targetBranch ?? props.flowAction.actionParams.mergeApprovalInfo?.defaultTargetBranch)
 
-// Watch for target branch changes during merge approval
 watch(targetBranch, async (newBranch, oldBranch) => {
-  // Only send update if this is a merge approval request, the action is pending,
-  // and the branch actually changed (not just initialization)
   if (props.flowAction.actionParams.requestKind === 'merge_approval' && 
       isPending.value && 
       oldBranch !== undefined && 
       newBranch !== oldBranch) {
-    await updateTargetBranch(newBranch);
+    await updateMergeApprovalParams();
   }
 });
 
-async function updateTargetBranch(newBranch: string | undefined) {
-  if (!newBranch) return;
+watch(ignoreWhitespace, async (newValue, oldValue) => {
+  if (props.flowAction.actionParams.requestKind === 'merge_approval' && 
+      isPending.value && 
+      oldValue !== undefined) {
+    await updateMergeApprovalParams();
+  }
+  
+  try {
+    localStorage.setItem('mergeApproval.diff.ignoreWhitespace', String(newValue));
+  } catch (error) {
+    console.debug('Failed to save ignoreWhitespace preference:', error);
+  }
+});
+
+watch(diffMode, (newValue) => {
+  try {
+    localStorage.setItem('mergeApproval.diff.mode', newValue);
+  } catch (error) {
+    console.debug('Failed to save diffMode preference:', error);
+  }
+});
+
+async function updateMergeApprovalParams() {
+  if (!targetBranch.value) return;
 
   try {
     const userResponse: UserResponse = {
       params: {
-        targetBranch: newBranch,
+        targetBranch: targetBranch.value,
+        ignoreWhitespace: ignoreWhitespace.value,
       },
-      // approved is intentionally undefined/null to indicate this is a branch switch, not a final decision
     };
 
     const response = await fetch(`/api/v1/workspaces/${props.flowAction.workspaceId}/flow_actions/${props.flowAction.id}`, {
@@ -227,13 +314,10 @@ async function updateTargetBranch(newBranch: string | undefined) {
     });
 
     if (!response.ok) {
-      console.error('Failed to update target branch:', response.status, response.statusText);
-      // Don't show error to user for branch updates as it's not a critical failure
-      // The user can still proceed with approval/rejection
+      console.error('Failed to update merge approval params:', response.status, response.statusText);
     }
   } catch (error) {
-    console.error('Network error updating target branch:', error);
-    // Don't show error to user for branch updates as it's not a critical failure
+    console.error('Network error updating merge approval params:', error);
   }
 }
 
@@ -283,6 +367,8 @@ async function submitUserResponse(approved: boolean) {
   if (props.flowAction.actionParams.requestKind === 'merge_approval') {
     userResponse.params = {
       targetBranch: targetBranch.value,
+      ignoreWhitespace: ignoreWhitespace.value,
+      diffMode: diffMode.value,
     };
   }
 
@@ -460,5 +546,72 @@ label[for="targetBranch"] {
   height: 1rem;
   fill: var(--color-text);
   stroke: var(--color-text);
+}
+
+.view-options-container {
+  position: relative;
+}
+
+.view-options-button {
+  background: var(--color-background-soft);
+  border: 1px solid var(--color-border);
+  padding: 0.25rem 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+}
+
+.view-options-button:hover:not(:disabled) {
+  background: var(--color-background-hover);
+}
+
+.view-options-button svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.view-options-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.25rem;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0.75rem;
+  min-width: 15rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+}
+
+.view-option {
+  margin-bottom: 0.75rem;
+}
+
+.view-option:last-child {
+  margin-bottom: 0;
+}
+
+.view-option label {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-weight: normal;
+  color: var(--color-text);
+}
+
+.view-option input[type="checkbox"] {
+  margin-right: 0.5rem;
+}
+
+.radio-label {
+  display: inline-block;
+  margin-right: 1rem;
+  margin-left: 0.5rem;
+  font-weight: normal;
+}
+
+.radio-label input[type="radio"] {
+  margin-right: 0.25rem;
 }
 </style>

@@ -29,7 +29,7 @@
       <DiffView
         :data="fileData"
         :diff-view-font-size="14"
-        :diff-view-mode="DiffModeEnum.Unified"
+        :diff-view-mode="viewMode"
         :diff-view-highlight="true"
         :diff-view-add-widget="false"
         :diff-view-wrap="true"
@@ -49,16 +49,22 @@ import { DiffView, DiffModeEnum } from "@git-diff-view/vue"
 interface Props {
   fileData: ParsedDiff
   defaultExpanded?: boolean
+  diffMode?: 'unified' | 'split'
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  defaultExpanded: false
+  defaultExpanded: false,
+  diffMode: 'unified'
 })
 
 const isExpanded = ref(props.defaultExpanded)
 
 const filePath = computed(() => {
   return props.fileData.newFile.fileName || props.fileData.oldFile.fileName || 'Unknown file'
+})
+
+const viewMode = computed(() => {
+  return props.diffMode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified
 })
 
 const toggleExpanded = () => {
