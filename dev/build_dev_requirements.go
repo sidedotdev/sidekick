@@ -156,14 +156,11 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	if len(chatResponse.ToolCalls) > 0 {
 		var recordedReqs *DevRequirements
 
-		customHandlers := map[string]func(workflow.Context, llm.ToolCall) (ToolCallResponseInfo, error){
-			recordDevRequirementsTool.Name: func(ctx workflow.Context, tc llm.ToolCall) (ToolCallResponseInfo, error) {
+		customHandlers := map[string]func(DevContext, llm.ToolCall) (ToolCallResponseInfo, error){
+			recordDevRequirementsTool.Name: func(dCtx DevContext, tc llm.ToolCall) (ToolCallResponseInfo, error) {
 				devReq, unmarshalErr := unmarshalDevRequirements(tc.Arguments)
 				if unmarshalErr == nil && devReq.Complete {
-					handlerDCtx := iteration.ExecCtx
-					handlerDCtx.Context = ctx
-
-					userResponse, approveErr := ApproveDevRequirements(handlerDCtx, devReq)
+					userResponse, approveErr := ApproveDevRequirements(dCtx, devReq)
 					if approveErr != nil {
 						return ToolCallResponseInfo{}, fmt.Errorf("error approving dev requirements: %v", approveErr)
 					}
@@ -183,10 +180,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 			},
 		}
 
-		toolCallResults, err := handleToolCalls(iteration.ExecCtx, chatResponse.ToolCalls, customHandlers)
-		if err != nil {
-			return nil, fmt.Errorf("error handling tool calls: %w", err)
-		}
+		toolCallResults := handleToolCalls(iteration.ExecCtx, chatResponse.ToolCalls, customHandlers)
 
 		for _, res := range toolCallResults {
 			addToolCallResponse(iteration.ChatHistory, res)

@@ -355,7 +355,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		extractedEditBlocks = append(extractedEditBlocks, currentExtractedBlocks...)
 
 		if len(chatResponse.ToolCalls) > 0 {
-			toolCallResponses, err := handleToolCalls(dCtx, chatResponse.ToolCalls, nil)
+			toolCallResponses := handleToolCalls(dCtx, chatResponse.ToolCalls, nil)
 			for _, toolCallResponseInfo := range toolCallResponses {
 				// Reset feedback counter if this was a getHelpOrInput response
 				if toolCallResponseInfo.FunctionName == getHelpOrInputTool.Name {
@@ -369,10 +369,6 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			}
 
 			promptInfo = SkipInfo{}
-
-			if err != nil {
-				return nil, err
-			}
 		} else {
 			// we use the fact that no tool call happened to infer that we're
 			// done with this loop

@@ -17,13 +17,13 @@ import (
 // TODO /gen/planned/req move this to RepoConfig
 const maxRetrieveCodeContextLength = 15000
 
-func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers map[string]func(workflow.Context, llm.ToolCall) (ToolCallResponseInfo, error)) ([]ToolCallResponseInfo, error) {
+func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers map[string]func(DevContext, llm.ToolCall) (ToolCallResponseInfo, error)) []ToolCallResponseInfo {
 	// backward compatibility: handle-parallel-tool-calls
 	// if old version, only process the first tool call
 	version := workflow.GetVersion(dCtx, "handle-parallel-tool-calls", workflow.DefaultVersion, 1)
 	if version == workflow.DefaultVersion {
 		if len(toolCalls) == 0 {
-			return []ToolCallResponseInfo{}, nil
+			return []ToolCallResponseInfo{}
 		}
 		// Process only the first tool call sequentially
 		tc := toolCalls[0]
@@ -31,15 +31,18 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers m
 		var err error
 
 		if handler, ok := customHandlers[tc.Name]; ok {
-			result, err = handler(dCtx.Context, tc)
+			result, err = handler(dCtx, tc)
 		} else {
 			result, err = handleToolCall(dCtx, tc)
 		}
 
 		if err != nil {
-			return nil, err
+			result.IsError = true
+			result.Response = err.Error()
+			result.FunctionName = tc.Name
+			result.ToolCallId = tc.Id
 		}
-		return []ToolCallResponseInfo{result}, nil
+		return []ToolCallResponseInfo{result}
 	}
 
 	responseChannel := workflow.NewChannel(dCtx)
@@ -55,7 +58,7 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers m
 			var err error
 
 			if handler, ok := customHandlers[tc.Name]; ok {
-				result, err = handler(ctx, tc)
+				result, err = handler(localDCtx, tc)
 			} else {
 				result, err = handleToolCall(localDCtx, tc)
 			}
@@ -69,7 +72,6 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers m
 	}
 
 	results := make([]ToolCallResponseInfo, len(toolCalls))
-	var finalErr error
 
 	for i := 0; i < len(toolCalls); i++ {
 		var resp struct {
@@ -81,16 +83,15 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers m
 		results[resp.Index] = resp.Result
 		if resp.Err != nil {
 			results[resp.Index].IsError = true
+			results[resp.Index].ToolCallId = toolCalls[resp.Index].Id
+			results[resp.Index].FunctionName = toolCalls[resp.Index].Name
 			if results[resp.Index].Response == "" {
 				results[resp.Index].Response = resp.Err.Error()
-			}
-			if finalErr == nil {
-				finalErr = resp.Err
 			}
 		}
 	}
 
-	return results, finalErr
+	return results
 }
 
 // TODO /gen/planned/req add a test for this function using WorkflowTestSuite
