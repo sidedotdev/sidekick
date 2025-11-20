@@ -39,7 +39,7 @@ func (dCtx DevContext) WithCancelOnPause() DevContext {
 	return dCtx
 }
 
-func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, envType string, startBranch *string, requirements string) (DevContext, error) {
+func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, envType string, startBranch *string, requirements string, configOverrides common.ConfigOverrides) (DevContext, error) {
 	initialExecCtx := flow_action.ExecContext{
 		Context:     ctx,
 		WorkspaceId: workspaceId,
@@ -50,12 +50,12 @@ func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, e
 	return flow_action.TrackSubflowFailureOnly(initialExecCtx, "flow_init", "Initialize", func(_ domain.Subflow) (DevContext, error) {
 		actionCtx := initialExecCtx.NewActionContext("setup_dev_context")
 		return flow_action.TrackFailureOnly(actionCtx, func(_ *domain.FlowAction) (DevContext, error) {
-			return setupDevContextAction(ctx, workspaceId, repoDir, envType, startBranch, requirements)
+			return setupDevContextAction(ctx, workspaceId, repoDir, envType, startBranch, requirements, configOverrides)
 		})
 	})
 }
 
-func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir string, envType string, startBranch *string, requirements string) (DevContext, error) {
+func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir string, envType string, startBranch *string, requirements string, configOverrides common.ConfigOverrides) (DevContext, error) {
 	ctx = utils.NoRetryCtx(ctx)
 
 	var devEnv env.Env
@@ -63,16 +63,23 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	var envContainer env.EnvContainer
 	var worktree *domain.Worktree
 	var localConfig common.LocalPublicConfig
-	var finalLLMConfig common.LLMConfig
-	var finalEmbeddingConfig common.EmbeddingConfig
+	var llmConfig common.LLMConfig
+	var embeddingConfig common.EmbeddingConfig
 
 	enableBranchNameGeneration := workflow.GetVersion(ctx, "branch-name-generation", workflow.DefaultVersion, 1) >= 1
 
 	// for workflow backcompat/replay, we can't do this early unless enabled
 	if enableBranchNameGeneration {
-		localConfig, _, finalLLMConfig, finalEmbeddingConfig, err = getConfigs(ctx, workspaceId)
+		localConfig, _, llmConfig, embeddingConfig, err = getConfigs(ctx, workspaceId)
 		if err != nil {
 			return DevContext{}, err
+		}
+
+		if configOverrides.LLM != nil {
+			llmConfig = *configOverrides.LLM
+		}
+		if configOverrides.Embedding != nil {
+			embeddingConfig = *configOverrides.Embedding
 		}
 	}
 
@@ -81,6 +88,12 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	if err != nil {
 		return DevContext{}, fmt.Errorf("failed to create temp local env: %v", err)
 	}
+
+	tempProviders := localConfig.Providers
+	if configOverrides.Providers != nil {
+		tempProviders = *configOverrides.Providers
+	}
+
 	// this is *only* to be used temporarily during setup, until the real/full eCtx is created
 	tempLocalExecContext := flow_action.ExecContext{
 		FlowScope:    &flow_action.FlowScope{},
@@ -93,9 +106,9 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				secret_manager.LocalConfigSecretManager{},
 			}),
 		},
-		Providers:       localConfig.Providers, // TODO merge with workspace providers
-		LLMConfig:       finalLLMConfig,
-		EmbeddingConfig: finalEmbeddingConfig,
+		Providers:       tempProviders, // TODO merge with workspace providers
+		LLMConfig:       llmConfig,
+		EmbeddingConfig: embeddingConfig,
 	}
 
 	switch envType {
@@ -118,6 +131,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			if err != nil {
 				return DevContext{}, fmt.Errorf("failed to get coding config: %v", err)
 			}
+			configOverrides.ApplyToRepoConfig(&tempLocalRepoConfig)
 			editHints := tempLocalRepoConfig.EditCode.Hints
 
 			// Use LLM-based branch name generation
@@ -157,10 +171,22 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 	// for workflow backcompat/replay, we have to do this later
 	if !enableBranchNameGeneration {
-		localConfig, _, finalLLMConfig, finalEmbeddingConfig, err = getConfigs(ctx, workspaceId)
+		localConfig, _, llmConfig, embeddingConfig, err = getConfigs(ctx, workspaceId)
 		if err != nil {
 			return DevContext{}, err
 		}
+
+		if configOverrides.LLM != nil {
+			llmConfig = *configOverrides.LLM
+		}
+		if configOverrides.Embedding != nil {
+			embeddingConfig = *configOverrides.Embedding
+		}
+	}
+
+	finalProviders := localConfig.Providers
+	if configOverrides.Providers != nil {
+		finalProviders = *configOverrides.Providers
 	}
 
 	eCtx := flow_action.ExecContext{
@@ -174,9 +200,9 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				secret_manager.LocalConfigSecretManager{},
 			}),
 		},
-		Providers:       localConfig.Providers, // TODO merge with workspace providers
-		LLMConfig:       finalLLMConfig,
-		EmbeddingConfig: finalEmbeddingConfig,
+		Providers:       finalProviders, // TODO merge with workspace providers
+		LLMConfig:       llmConfig,
+		EmbeddingConfig: embeddingConfig,
 	}
 
 	// NOTE: it's important to do this *after* the eCtx has been created, since
@@ -192,6 +218,8 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 		return DevContext{}, fmt.Errorf("failed to get repo config: %v\n\n%s", err, hint)
 	}
+
+	configOverrides.ApplyToRepoConfig(&repoConfig)
 
 	// Execute worktree setup script if configured and using git worktree environment
 	if envType == string(env.EnvTypeLocalGitWorktree) && repoConfig.WorktreeSetup != "" {

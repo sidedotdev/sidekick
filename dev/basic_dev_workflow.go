@@ -26,17 +26,16 @@ type BasicDevWorkflowInput struct {
 }
 
 type BasicDevOptions struct {
-	DetermineRequirements bool        `json:"determineRequirements"`
-	EnvType               env.EnvType `json:"envType,omitempty" default:"local"`
-	StartBranch           *string     `json:"startBranch,omitempty"`
+	DetermineRequirements bool                   `json:"determineRequirements"`
+	EnvType               env.EnvType            `json:"envType,omitempty" default:"local"`
+	StartBranch           *string                `json:"startBranch,omitempty"`
+	ConfigOverrides       common.ConfigOverrides `json:"configOverrides"`
 }
 
 type MergeWithReviewParams struct {
 	Requirements   string
 	StartBranch    *string
 	GetGitDiff     func(dCtx DevContext, baseBranch string) (string, error) // function to get git diff customized per workflow, nil for default
-	SubflowType    string                                                   // for tracking purposes
-	SubflowName    string                                                   // for tracking purposes
 	CommitRequired bool
 }
 
@@ -88,7 +87,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 
 	ctx = utils.DefaultRetryCtx(ctx)
 
-	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), input.BasicDevOptions.StartBranch, input.Requirements)
+	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), input.BasicDevOptions.StartBranch, input.Requirements, input.BasicDevOptions.ConfigOverrides)
 	if err != nil {
 		_ = signalWorkflowClosure(ctx, "failed")
 		return "", err
@@ -479,6 +478,7 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 }
 
 func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (string, MergeApprovalResponse, error) {
+
 	defaultTarget := "main"
 	if params.StartBranch != nil {
 		defaultTarget = *params.StartBranch
