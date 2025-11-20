@@ -354,30 +354,21 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		}
 		extractedEditBlocks = append(extractedEditBlocks, currentExtractedBlocks...)
 
-		if len(chatResponse.ToolCalls) > 0 && chatResponse.ToolCalls[0].Name != "" {
-			toolCallResponseInfo, err := handleToolCall(dCtx, chatResponse.ToolCalls[0])
-			// Reset feedback counter if this was a getHelpOrInput response
-			if chatResponse.ToolCalls[0].Name == getHelpOrInputTool.Name {
-				attemptsSinceLastEditBlockOrFeedback = 0
+		if len(chatResponse.ToolCalls) > 0 {
+			toolCallResponses := handleToolCalls(dCtx, chatResponse.ToolCalls, nil)
+			for _, toolCallResponseInfo := range toolCallResponses {
+				// Reset feedback counter if this was a getHelpOrInput response
+				if toolCallResponseInfo.FunctionName == getHelpOrInputTool.Name {
+					attemptsSinceLastEditBlockOrFeedback = 0
+				}
+				// dynamically adjust the context size extension based on the length of the response
+				if len(toolCallResponseInfo.Response) > 5000 {
+					contextSizeExtension += len(toolCallResponseInfo.Response) - 5000
+				}
+				addToolCallResponse(chatHistory, toolCallResponseInfo)
 			}
-			// dynamically adjust the context size extension based on the length of the response
-			if len(toolCallResponseInfo.Response) > 5000 {
-				contextSizeExtension += len(toolCallResponseInfo.Response) - 5000
-			}
-			// TODO: addToolCallResponse(chatHistory, toolCallResponseInfo)
-			// 		promptInfo = SkipInfo{} // TODO remove after using addX functions everywhere
-			promptInfo = toolCallResponseInfo
-			if err != nil {
-				// need a tool call response always after a tool call, so we append it here before returning
-				*chatHistory = append(*chatHistory, llm.ChatMessage{
-					Role:       llm.ChatMessageRoleTool,
-					ToolCallId: chatResponse.ToolCalls[0].Id,
-					Name:       chatResponse.ToolCalls[0].Name,
-					IsError:    true,
-					Content:    err.Error(),
-				})
-				return nil, err
-			}
+
+			promptInfo = SkipInfo{}
 		} else {
 			// we use the fact that no tool call happened to infer that we're
 			// done with this loop

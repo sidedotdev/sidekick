@@ -175,92 +175,80 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 	*iteration.ChatHistory = append(*iteration.ChatHistory, chatResponse.ChatMessage)
 
 	if len(chatResponse.ToolCalls) > 0 {
-		toolCall := chatResponse.ToolCalls[0]
-		if toolCall.Name == recordDevPlanTool.Name {
-			unvalidatedDevPlan, err := unmarshalPlan(toolCall.Arguments)
-			if err != nil {
-				addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
-					Response:     "Please output a new plan: Plan failed to be parsed and was NOT recorded: " + err.Error(),
-					FunctionName: recordDevPlanTool.Name,
+		var recordedPlan *DevPlan
+		customHandlers := map[string]func(DevContext, llm.ToolCall) (ToolCallResponseInfo, error){
+			recordDevPlanTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (ToolCallResponseInfo, error) {
+				info := ToolCallResponseInfo{
+					FunctionName: toolCall.Name,
 					ToolCallId:   toolCall.Id,
-					IsError:      true,
-				})
-				return nil, nil // continue the loop
-			}
-
-			validatedDevPlan, err := ValidateAndCleanPlan(unvalidatedDevPlan)
-			if err != nil {
-				addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
-					Response:     "Please output a new plan: Plan failed validation and was NOT recorded: " + err.Error(),
-					FunctionName: recordDevPlanTool.Name,
-					ToolCallId:   toolCall.Id,
-					IsError:      true,
-				})
-				return nil, nil // continue the loop
-			}
-
-			state.devPlan = validatedDevPlan
-			if validatedDevPlan.Complete {
-				if !state.hasRevisedPerPlanningPrompt && state.planningPrompt != "" {
-					state.hasRevisedPerPlanningPrompt = true
-					addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
-						Response:     "List out all conditions/requirements in the following instructions. Then consider whether the plan meets each one, one by one. Once you have done that, then rewrite & record the plan as needed to ensure it meets all conditions/requirements.\n\nInstructions follow:\n\n" + state.planningPrompt,
-						FunctionName: recordDevPlanTool.Name,
-						ToolCallId:   toolCall.Id,
-					})
-					return nil, nil // continue the loop
 				}
-
-				if !state.hasRevisedPerReproPrompt && state.reproduceIssue {
-					state.hasRevisedPerReproPrompt = true
-					addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
-						Response:     reviseReproPrompt,
-						FunctionName: recordDevPlanTool.Name,
-						ToolCallId:   toolCall.Id,
-					})
-					return nil, nil // continue the loop
-				}
-
-				userResponse, err := ApproveDevPlan(iteration.ExecCtx, validatedDevPlan)
+				unvalidatedDevPlan, err := unmarshalPlan(toolCall.Arguments)
 				if err != nil {
-					return nil, fmt.Errorf("error getting plan approval: %w", err)
+					info.IsError = true
+					info.Response = "Please output a new plan: Plan failed to be parsed and was NOT recorded: " + err.Error()
+					return info, nil
 				}
 
-				v := workflow.GetVersion(iteration.ExecCtx, "dev-plan", workflow.DefaultVersion, 1)
-				if v == 1 {
-					iteration.NumSinceLastFeedback = 0
+				validatedDevPlan, err := ValidateAndCleanPlan(unvalidatedDevPlan)
+				if err != nil {
+					info.IsError = true
+					info.Response = "Please output a new plan: Plan failed validation and was NOT recorded: " + err.Error()
+					return info, nil
 				}
 
-				if userResponse.Approved != nil && *userResponse.Approved {
-					return &validatedDevPlan, nil
+				state.devPlan = validatedDevPlan
+				if validatedDevPlan.Complete {
+					if !state.hasRevisedPerPlanningPrompt && state.planningPrompt != "" {
+						state.hasRevisedPerPlanningPrompt = true
+						info.Response = "List out all conditions/requirements in the following instructions. Then consider whether the plan meets each one, one by one. Once you have done that, then rewrite & record the plan as needed to ensure it meets all conditions/requirements.\n\nInstructions follow:\n\n" + state.planningPrompt
+						return info, nil
+					}
+
+					if !state.hasRevisedPerReproPrompt && state.reproduceIssue {
+						state.hasRevisedPerReproPrompt = true
+						info.Response = reviseReproPrompt
+						return info, nil
+					}
+
+					userResponse, err := ApproveDevPlan(dCtx, validatedDevPlan)
+					if err != nil {
+						return ToolCallResponseInfo{}, fmt.Errorf("error getting plan approval: %w", err)
+					}
+
+					v := workflow.GetVersion(dCtx, "dev-plan", workflow.DefaultVersion, 1)
+					if v == 1 {
+						iteration.NumSinceLastFeedback = 0
+					}
+
+					if userResponse.Approved != nil && *userResponse.Approved {
+						recordedPlan = &validatedDevPlan
+						info.Response = "Plan approved"
+						return info, nil
+					} else {
+						info.Response = "Plan was not approved and therefore not recorded. Please continue planning by taking this feedback into account:\n\n" + userResponse.Content
+						return info, nil
+					}
 				} else {
-					addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
-						Response:     "Plan was not approved and therefore not recorded. Please continue planning by taking this feedback into account:\n\n" + userResponse.Content,
-						FunctionName: toolCall.Name,
-						ToolCallId:   toolCall.Id,
-					})
+					info.Response = "Recorded plan progress, but the plan is not complete yet based on the \"is_planning_complete\" boolean field value being set to false. Do some more research or thinking or get help/input to complete the plan, as needed. Once the planning is complete, record the plan again in full."
+					return info, nil
 				}
-			} else {
-				addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
-					Response:     "Recorded plan progress, but the plan is not complete yet based on the \"is_planning_complete\" boolean field value being set to false. Do some more research or thinking or get help/input to complete the plan, as needed. Once the planning is complete, record the plan again in full.",
-					FunctionName: recordDevPlanTool.Name,
-					ToolCallId:   toolCall.Id,
-				})
-			}
-		} else {
-			toolCallResponseInfo, err := handleToolCall(iteration.ExecCtx, toolCall)
-			if err != nil {
-				return nil, fmt.Errorf("error handling tool call: %w", err)
-			}
+			},
+		}
 
-			if len(toolCallResponseInfo.Response) > 5000 {
-				state.contextSizeExtension += len(toolCallResponseInfo.Response) - 5000
-			}
+		toolCallResponses := handleToolCalls(iteration.ExecCtx, chatResponse.ToolCalls, customHandlers)
 
-			addToolCallResponse(iteration.ChatHistory, toolCallResponseInfo)
-			if toolCall.Name == getHelpOrInputTool.Name {
+		for _, response := range toolCallResponses {
+			if len(response.Response) > 5000 {
+				state.contextSizeExtension += len(response.Response) - 5000
+			}
+			addToolCallResponse(iteration.ChatHistory, response)
+			if response.FunctionName == getHelpOrInputTool.Name {
 				iteration.NumSinceLastFeedback = 0
 			}
+		}
+
+		if recordedPlan != nil {
+			return recordedPlan, nil
 		}
 	} else if chatResponse.StopReason == string(openai.FinishReasonStop) || chatResponse.StopReason == string(openai.FinishReasonToolCalls) {
 		addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
