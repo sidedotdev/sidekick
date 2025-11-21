@@ -49,50 +49,11 @@
           v-model="targetBranch"
           :workspaceId="flowAction.workspaceId"
         />
-        <div class="view-options-container">
-          <button 
-            type="button" 
-            class="view-options-button" 
-            @click="showViewOptions = !showViewOptions"
-            :disabled="!isPending"
-            title="View options"
-          >
-            <GearIcon />
-          </button>
-          <div v-if="showViewOptions" class="view-options-dropdown">
-            <div class="view-option">
-              <label>
-                <input 
-                  type="checkbox" 
-                  v-model="ignoreWhitespace"
-                  :disabled="!isPending"
-                />
-                Ignore whitespace in diff
-              </label>
-            </div>
-            <div class="view-option">
-              <label>Diff view mode:</label>
-              <label class="radio-label">
-                <input 
-                  type="radio" 
-                  value="unified" 
-                  v-model="diffMode"
-                  :disabled="!isPending"
-                />
-                Unified
-              </label>
-              <label class="radio-label">
-                <input 
-                  type="radio" 
-                  value="split" 
-                  v-model="diffMode"
-                  :disabled="!isPending"
-                />
-                Split
-              </label>
-            </div>
-          </div>
-        </div>
+        <DiffViewOptions
+          v-model:ignoreWhitespace="ignoreWhitespace"
+          v-model:diffMode="diffMode"
+          :disabled="!isPending"
+        />
       </div>
 
       <AutogrowTextarea v-model="responseContent" placeholder="Rejection reason" />
@@ -172,7 +133,7 @@ import BranchSelector from './BranchSelector.vue'
 import VueMarkdown from 'vue-markdown-render'
 import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
 import CopyIcon from './icons/CopyIcon.vue';
-import GearIcon from './icons/GearIcon.vue';
+import DiffViewOptions from './DiffViewOptions.vue';
 
 interface UserResponse {
   content?: string;
@@ -199,7 +160,6 @@ const props = defineProps({
 const responseContent = ref('');
 const errorMessage = ref('');
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
-const showViewOptions = ref(false);
 const ignoreWhitespace = ref(false);
 const diffMode = ref<'unified' | 'split'>('unified');
 
@@ -546,72 +506,5 @@ label[for="targetBranch"] {
   height: 1rem;
   fill: var(--color-text);
   stroke: var(--color-text);
-}
-
-.view-options-container {
-  position: relative;
-}
-
-.view-options-button {
-  background: var(--color-background-soft);
-  border: 1px solid var(--color-border);
-  padding: 0.25rem 0.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0;
-}
-
-.view-options-button:hover:not(:disabled) {
-  background: var(--color-background-hover);
-}
-
-.view-options-button svg {
-  width: 1.25rem;
-  height: 1.25rem;
-}
-
-.view-options-dropdown {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  margin-top: 0.25rem;
-  background: var(--color-background);
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
-  padding: 0.75rem;
-  min-width: 15rem;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  z-index: 100;
-}
-
-.view-option {
-  margin-bottom: 0.75rem;
-}
-
-.view-option:last-child {
-  margin-bottom: 0;
-}
-
-.view-option label {
-  display: block;
-  margin-bottom: 0.25rem;
-  font-weight: normal;
-  color: var(--color-text);
-}
-
-.view-option input[type="checkbox"] {
-  margin-right: 0.5rem;
-}
-
-.radio-label {
-  display: inline-block;
-  margin-right: 1rem;
-  margin-left: 0.5rem;
-  font-weight: normal;
-}
-
-.radio-label input[type="radio"] {
-  margin-right: 0.25rem;
 }
 </style>
