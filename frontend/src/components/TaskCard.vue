@@ -78,6 +78,8 @@ const statusLabel = (status: string) => {
       return 'Failed';
     case 'in_progress':
       return 'In Progress';
+    case 'in_review':
+      return 'In Review';
     case 'complete':
       return 'Complete';
     default:
@@ -87,7 +89,7 @@ const statusLabel = (status: string) => {
 
 const canArchive = computed(() => ['complete', 'failed', 'canceled'].includes(props.task.status) && !props.task.archived);
 const canDelete = computed(() => props.task.status === 'drafting' || props.task.archived);
-const canCancel = computed(() => ['to_do', 'in_progress', 'blocked'].includes(props.task.status) && !props.task.archived);
+const canCancel = computed(() => ['to_do', 'in_progress', 'blocked', 'in_review'].includes(props.task.status) && !props.task.archived);
 
 const isEditModalOpen = ref(false);
 const isCopyModalOpen = ref(false);
@@ -259,6 +261,11 @@ const cancelTask = async () => {
 
 .status-label.in_progress {
   background-color: #03a9f4;
+}
+
+.status-label.in_review {
+  background-color: var(--p-primary-color);
+  color: var(--p-primary-contrast-color);
 }
 
 .status-label.complete {

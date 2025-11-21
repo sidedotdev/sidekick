@@ -39,7 +39,7 @@ export interface ActionData {
 }
 
 // TODO add the rest
-export type TaskStatus = 'drafting' | 'to_do' | 'blocked' | 'in_progress' | 'complete' | 'failed'
+export type TaskStatus = 'drafting' | 'to_do' | 'blocked' | 'in_progress' | 'in_review' | 'complete' | 'failed'
 export type AgentType = 'human' | 'llm' | 'none'
 
 export interface TaskLink {
