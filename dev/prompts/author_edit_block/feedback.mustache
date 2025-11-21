@@ -1,13 +1,9 @@
+{{#isApplyError}}
 The previously provided *edit blocks* had some issues when we used them to make
 changes. Here is the feedback we received:
 
 {{{feedback}}}
 
-{{#hasUserGuidance}}
-If additional work is needed based on the user guidance, follow the user
-guidance to do so by providing new *edit blocks*, otherwise just say "OK".
-{{/hasUserGuidance}}
-{{^hasUserGuidance}}
 Please analyze what was wrong with some of the previous *edit blocks*, consider
 the feedback and provide new *edit blocks* accordingly that fix whatever failed.
 
@@ -30,13 +26,33 @@ see the current state of the relevant code via the {{{retrieveCodeContextFunctio
 
 Hint 4: If you see errors that include a filepath and line number, use the
 {{{bulkReadFileFunctionName}}} tool to see what's going on at those lines.
-{{/hasUserGuidance}}
 
 Hint 5: If an error indicates that a function/type/symbol doesn't exist, find
 what actual function needs to be used via tools or ask for help. Do not create
 it unless the original instructions mention doing that, as it is likely to be a
 hallucination.
+{{/isApplyError}}
+{{#isEditBlockError}}
+The previously provided *edit blocks* had some issues when we processed them.
+Here is the feedback we received:
+
+{{{feedback}}}
+
+Please analyze what was wrong with some of the previous *edit blocks*, consider
+the feedback and provide new *edit blocks* accordingly that fix whatever failed.
 
 Hint 6: If it seems like the edit failed saying it's not in chat history, but
 you think it is, then try creating multiple smaller edit blocks, one per
 function or import section etc.
+{{/isEditBlockError}}
+{{^isApplyError}}
+{{^isEditBlockError}}
+The previously provided *edit blocks* had some issues when we used them to make
+changes. Here is the feedback we received:
+
+{{{feedback}}}
+
+Please analyze what was wrong with some of the previous *edit blocks*, consider
+the feedback and provide new *edit blocks* accordingly that fix whatever failed.
+{{/isEditBlockError}}
+{{/isApplyError}}

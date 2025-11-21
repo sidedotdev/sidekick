@@ -360,7 +360,7 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	case SkipInfo:
 		skip = true
 	case FeedbackInfo:
-		content = renderAuthorEditBlockFeedbackPrompt(info.Feedback)
+		content = renderAuthorEditBlockFeedbackPrompt(info.Feedback, info.Type)
 	case ToolCallResponseInfo:
 		role = llm.ChatMessageRoleTool
 		content = info.Response
@@ -468,10 +468,15 @@ func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, req
 // TODO only provide the second hint if the feedback is about tests failing.
 // TODO only provide hint 3 if feedback includes test results
 // TODO only provide hint 4 if we see that pattern like path/to/file.extension:10:5
-func renderAuthorEditBlockFeedbackPrompt(feedback string) string {
+func renderAuthorEditBlockFeedbackPrompt(feedback, feedbackType string) string {
+	if feedbackType == FeedbackTypePause || feedbackType == FeedbackTypeUserGuidance {
+		return renderGeneralFeedbackPrompt(feedback, feedbackType)
+	}
+
 	data := map[string]interface{}{
 		"feedback":                         feedback,
-		"hasUserGuidance":                  strings.Contains(feedback, guidanceStart),
+		"isApplyError":                     feedbackType == FeedbackTypeApplyError,
+		"isEditBlockError":                 feedbackType == FeedbackTypeEditBlockError,
 		"retrieveCodeContextFunctionName":  currentGetSymbolDefinitionsTool().Name,
 		"bulkSearchRepositoryFunctionName": bulkSearchRepositoryTool.Name,
 		"bulkReadFileFunctionName":         bulkReadFileTool.Name,

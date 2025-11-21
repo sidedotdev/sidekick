@@ -464,7 +464,7 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 		skip = true
 	case ToolCallResponseInfo:
 		role = llm.ChatMessageRoleTool
-		content = renderCodeContextFeedbackPrompt(info.Response)
+		content = renderCodeContextFeedbackPrompt(info.Response, "")
 		name = info.FunctionName
 		toolCallId = info.ToolCallId
 		isError = info.IsError
@@ -495,7 +495,11 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 	}
 }
 
-func renderCodeContextFeedbackPrompt(feedback string) string {
+func renderCodeContextFeedbackPrompt(feedback, feedbackType string) string {
+	if feedbackType == FeedbackTypePause || feedbackType == FeedbackTypeUserGuidance {
+		return renderGeneralFeedbackPrompt(feedback, feedbackType)
+	}
+
 	data := map[string]interface{}{
 		"feedback":                        feedback,
 		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,
