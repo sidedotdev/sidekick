@@ -21,9 +21,8 @@ import (
 
 type DevContext struct {
 	flow_action.ExecContext
-	GlobalState *GlobalState
-	Worktree    *domain.Worktree
-	RepoConfig  common.RepoConfig
+	Worktree   *domain.Worktree
+	RepoConfig common.RepoConfig
 }
 
 // WithContext returns a new DevContext with the workflow.Context updated.
@@ -110,6 +109,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		Providers:       tempProviders, // TODO merge with workspace providers
 		LLMConfig:       llmConfig,
 		EmbeddingConfig: embeddingConfig,
+		GlobalState:     &flow_action.GlobalState{},
 	}
 
 	switch envType {
@@ -133,6 +133,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				return DevContext{}, fmt.Errorf("failed to get coding config: %v", err)
 			}
 			configOverrides.ApplyToRepoConfig(&tempLocalRepoConfig)
+			tempLocalExecContext.DisableHumanInTheLoop = tempLocalRepoConfig.DisableHumanInTheLoop
 			editHints := tempLocalRepoConfig.EditCode.Hints
 
 			// Use LLM-based branch name generation
@@ -204,6 +205,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		Providers:       finalProviders, // TODO merge with workspace providers
 		LLMConfig:       llmConfig,
 		EmbeddingConfig: embeddingConfig,
+		GlobalState:     &flow_action.GlobalState{},
 	}
 
 	// NOTE: it's important to do this *after* the eCtx has been created, since
@@ -221,6 +223,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	}
 
 	configOverrides.ApplyToRepoConfig(&repoConfig)
+	eCtx.DisableHumanInTheLoop = repoConfig.DisableHumanInTheLoop
 
 	// Execute worktree setup script if configured and using git worktree environment
 	if envType == string(env.EnvTypeLocalGitWorktree) && repoConfig.WorktreeSetup != "" {
@@ -243,7 +246,6 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	}
 
 	devCtx := DevContext{
-		GlobalState: &GlobalState{},
 		ExecContext: eCtx,
 		Worktree:    worktree,
 		RepoConfig:  repoConfig,
