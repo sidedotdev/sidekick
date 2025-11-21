@@ -255,7 +255,8 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		}
 		if userResponse != nil && userResponse.Content != "" {
 			addCodeContextPrompt(chatHistory, FeedbackInfo{
-				Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", userResponse.Content),
+				Feedback: userResponse.Content,
+				Type:     FeedbackTypePause,
 			})
 			iterationsSinceLastFeedback = 0
 			continue
@@ -469,7 +470,7 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 		toolCallId = info.ToolCallId
 		isError = info.IsError
 	case FeedbackInfo:
-		content = info.Feedback
+		content = renderCodeContextFeedbackPrompt(info.Feedback, info.Type)
 	case DetermineCodeContextInfo:
 		content = renderCodeContextInitialPrompt(info)
 		cacheControl = "ephemeral"

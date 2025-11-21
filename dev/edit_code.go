@@ -68,7 +68,7 @@ editLoop:
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return fmt.Errorf("failed to make user request when paused: %v", err)
 		} else if response != nil {
-			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
+			promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			attemptsSinceLastFeedback = 0
 		}
 
@@ -79,10 +79,11 @@ editLoop:
 
 		// Inject proactive system message based on tool-call thresholds
 		if msg, ok := ThresholdMessageForCounter(maxIterationsBeforeFeedback, attemptsSinceLastFeedback); ok {
-			*chatHistory = append(*chatHistory, llm.ChatMessage{
-				Role:    "system",
-				Content: msg,
-			})
+			//*chatHistory = append(*chatHistory, llm.ChatMessage{
+			//	Role:    "system",
+			//	Content: msg,
+			//})
+			promptInfo = FeedbackInfo{Feedback: msg, Type: FeedbackTypeSystemError}
 		}
 
 		// Only request feedback if we haven't received any recently from any source
@@ -109,7 +110,7 @@ editLoop:
 				// The err is likely when extracting edit blocks
 				// TODO if the failure was something else, eg openai rate limit, then don't feedback like this
 				feedback := fmt.Sprintf("Please write out all the *edit blocks* again and ensure we follow the format, as we encountered this error when processing them: %v", err)
-				promptInfo = FeedbackInfo{Feedback: feedback}
+				promptInfo = FeedbackInfo{Feedback: feedback, Type: FeedbackTypeEditBlockError}
 				attemptCount++
 				continue
 			}
@@ -125,7 +126,7 @@ editLoop:
 		reports, err = validateAndApplyEditBlocks(dCtx, editBlocks)
 		if err != nil {
 			feedback := fmt.Sprintf("Error encountered during ApplyEditBlockActivity. Error: %v", err)
-			promptInfo = FeedbackInfo{Feedback: feedback}
+			promptInfo = FeedbackInfo{Feedback: feedback, Type: FeedbackTypeSystemError}
 			attemptCount++
 		} else {
 			v := workflow.GetVersion(dCtx, "edit_code_diff", workflow.DefaultVersion, 1)
@@ -167,7 +168,7 @@ editLoop:
 					// the next step and let tests/critique guide this.
 					// alternatively, we could do a special subflow to repair
 					// only the broken edit blocks with more targeted prompting
-					promptInfo = FeedbackInfo{Feedback: reportMessage}
+					promptInfo = FeedbackInfo{Feedback: reportMessage, Type: FeedbackTypeApplyError}
 					attemptCount++
 					continue editLoop
 				}
@@ -226,16 +227,17 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return nil, fmt.Errorf("failed to make user request when paused: %v", err)
 		} else if response != nil && response.Content != "" {
-			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
+			promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			attemptsSinceLastEditBlockOrFeedback = 0
 		}
 
 		// Inject proactive system message based on tool-call thresholds
 		if msg, ok := ThresholdMessageForCounter(feedbackIterations, attemptsSinceLastEditBlockOrFeedback); ok {
-			*chatHistory = append(*chatHistory, llm.ChatMessage{
-				Role:    "system",
-				Content: msg,
-			})
+			//*chatHistory = append(*chatHistory, llm.ChatMessage{
+			//	Role:    "system",
+			//	Content: msg,
+			//})
+			promptInfo = FeedbackInfo{Feedback: msg, Type: FeedbackTypeSystemError}
 		}
 
 		if attemptCount >= maxAttempts {
