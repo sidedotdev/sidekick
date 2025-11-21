@@ -15,13 +15,15 @@ import (
 // around.
 type ExecContext struct {
 	workflow.Context
-	WorkspaceId     string
-	EnvContainer    *env.EnvContainer
-	Secrets         *secret_manager.SecretManagerContainer
-	FlowScope       *FlowScope
-	Providers       []common.ModelProviderPublicConfig
-	LLMConfig       common.LLMConfig
-	EmbeddingConfig common.EmbeddingConfig
+	WorkspaceId           string
+	EnvContainer          *env.EnvContainer
+	Secrets               *secret_manager.SecretManagerContainer
+	FlowScope             *FlowScope
+	Providers             []common.ModelProviderPublicConfig
+	LLMConfig             common.LLMConfig
+	EmbeddingConfig       common.EmbeddingConfig
+	GlobalState           *GlobalState
+	DisableHumanInTheLoop bool
 }
 
 type ActionContext struct {
