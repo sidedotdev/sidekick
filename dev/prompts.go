@@ -52,6 +52,7 @@ func panicParseMustache(fileSystem fs.ReadFileFS, templateName string) *mustache
 //go:embed prompts/*
 var promptsFS embed.FS
 
+var GeneralFeedback = panicParseMustache(promptsFS, "general_feedback")
 var AuthorEditBlockFeedback = panicParseMustache(promptsFS, "author_edit_block/feedback")
 var RecordPlanInitial = panicParseMustache(promptsFS, "record_plan/initial")
 var AuthorEditBlockInitial = panicParseMustache(promptsFS, "author_edit_block/initial")
