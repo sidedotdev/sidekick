@@ -90,7 +90,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 		if response != nil && response.Content != "" {
 			*iteration.ChatHistory = append(*iteration.ChatHistory, llm.ChatMessage{
 				Role:    "user",
-				Content: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content),
+				Content: renderGeneralFeedbackPrompt(response.Content, FeedbackTypePause),
 			})
 			iteration.NumSinceLastFeedback = 0
 		}
