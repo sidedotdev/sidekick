@@ -33,7 +33,7 @@ func (s Storage) PersistTask(ctx context.Context, task domain.Task) error {
 	archivedKey := fmt.Sprintf("%s:archived_tasks", task.WorkspaceId)
 	if task.Archived != nil {
 		// Remove from all kanban sets and add to archived sorted set
-		for _, status := range []domain.TaskStatus{domain.TaskStatusDrafting, domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
+		for _, status := range []domain.TaskStatus{domain.TaskStatusDrafting, domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusInReview, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
 			statusKey := fmt.Sprintf("%s:kanban:%s", task.WorkspaceId, status)
 			err = s.Client.SRem(ctx, statusKey, task.Id).Err()
 			if err != nil {
@@ -56,7 +56,7 @@ func (s Storage) PersistTask(ctx context.Context, task domain.Task) error {
 		}
 
 		// Add the task id to the appropriate kanban set based on the task status, and remove from others
-		for _, status := range []domain.TaskStatus{domain.TaskStatusDrafting, domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
+		for _, status := range []domain.TaskStatus{domain.TaskStatusDrafting, domain.TaskStatusToDo, domain.TaskStatusInProgress, domain.TaskStatusInReview, domain.TaskStatusComplete, domain.TaskStatusBlocked, domain.TaskStatusFailed, domain.TaskStatusCanceled} {
 			statusKey := fmt.Sprintf("%s:kanban:%s", task.WorkspaceId, status)
 			if status == task.Status {
 				err = s.Client.SAdd(ctx, statusKey, task.Id).Err()

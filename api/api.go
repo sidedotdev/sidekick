@@ -223,8 +223,8 @@ func (ctrl *Controller) CancelTaskHandler(c *gin.Context) {
 	}
 
 	// Check if the task status is eligible for cancellation
-	if task.Status != domain.TaskStatusToDo && task.Status != domain.TaskStatusInProgress && task.Status != domain.TaskStatusBlocked {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Only tasks with status 'to_do', 'in_progress', or 'blocked' can be canceled"})
+	if task.Status != domain.TaskStatusToDo && task.Status != domain.TaskStatusInProgress && task.Status != domain.TaskStatusBlocked && task.Status != domain.TaskStatusInReview {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Only tasks with status 'to_do', 'in_progress', 'blocked', or 'in_review' can be canceled"})
 		return
 	}
 
@@ -603,7 +603,7 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 
 	statusesStr := c.Query("statuses")
 	if statusesStr == "" || statusesStr == "all" {
-		statusesStr = "to_do,drafting,blocked,in_progress,complete,failed,canceled"
+		statusesStr = "to_do,drafting,blocked,in_review,in_progress,complete,failed,canceled"
 	}
 	statuses := strings.Split(statusesStr, ",")
 	taskStatuses := []domain.TaskStatus{}

@@ -59,16 +59,15 @@ func BulkSearchRepository(ctx workflow.Context, envContainer env.EnvContainer, b
 	return strings.Join(results, "\n"), nil
 }
 
-func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *[]llm.ChatMessage) (llm.ToolCall, error) {
+func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *[]llm.ChatMessage) ([]llm.ToolCall, error) {
 	actionCtx := dCtx.ExecContext.NewActionContext("generate.repo_search_query")
 	params := llm.ToolChatParams{Messages: *chatHistory}
 	chatResponse, err := persisted_ai.ForceToolCall(actionCtx, dCtx.LLMConfig, &params, &bulkSearchRepositoryTool)
 	*chatHistory = params.Messages // update chat history with the new messages
 	if err != nil {
-		return llm.ToolCall{}, fmt.Errorf("failed to force tool call: %v", err)
+		return nil, fmt.Errorf("failed to force tool call: %v", err)
 	}
-	toolCall := chatResponse.ToolCalls[0]
-	return toolCall, err
+	return chatResponse.ToolCalls, nil
 }
 
 // isExistentFilePath returns true if the given path is a specific file path rather than a glob pattern

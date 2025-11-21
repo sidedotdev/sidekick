@@ -147,6 +147,9 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 					} else {
 						currentBlockError += "\n" + errMsg
 					}
+				} else {
+					report.CheckResult.Success = true
+					report.CheckResult.Message = "Skipped"
 				}
 			} else { // create, update, append
 				checkResult, checkErr := checkAndStageOrRestoreFile(input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create")

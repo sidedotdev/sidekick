@@ -27,6 +27,7 @@ const (
 	TaskStatusToDo       TaskStatus = "to_do"
 	TaskStatusInProgress TaskStatus = "in_progress"
 	TaskStatusBlocked    TaskStatus = "blocked"
+	TaskStatusInReview   TaskStatus = "in_review"
 	TaskStatusComplete   TaskStatus = "complete" // considered to be "finished"
 	TaskStatusFailed     TaskStatus = "failed"   // also considered to be "finished"
 	TaskStatusCanceled   TaskStatus = "canceled" // also considered to be "finished"
@@ -37,6 +38,7 @@ var AllTaskStatuses []TaskStatus = []TaskStatus{
 	TaskStatusToDo,
 	TaskStatusInProgress,
 	TaskStatusBlocked,
+	TaskStatusInReview,
 	TaskStatusComplete,
 	TaskStatusFailed,
 	TaskStatusCanceled,
@@ -69,6 +71,8 @@ func StringToTaskStatus(s string) (TaskStatus, error) {
 		return TaskStatusDrafting, nil
 	case "blocked":
 		return TaskStatusBlocked, nil
+	case "in_review":
+		return TaskStatusInReview, nil
 	case "failed":
 		return TaskStatusFailed, nil
 	case "canceled":
