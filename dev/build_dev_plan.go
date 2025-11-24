@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/fflag"
 	"sidekick/llm"
 	"strings"
 
@@ -100,6 +101,16 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 		return nil, fmt.Errorf("failed to prepare code context: %w", err)
 	}
 	contextSizeExtension := len(fullCodeContext) - len(codeContext)
+
+	// prepend a concise repository summary to the other code context in the initial prompt
+	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
+	if version >= 2 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get repo summary: %w", err)
+		}
+		codeContext = repoSummary + "\n\n" + codeContext
+	}
 
 	chatHistory := &[]llm.ChatMessage{}
 	addDevPlanPrompt(dCtx, chatHistory, InitialPlanningInfo{

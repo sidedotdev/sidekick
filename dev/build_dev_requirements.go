@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/fflag"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
 
@@ -106,6 +107,16 @@ func buildDevRequirementsSubflow(dCtx DevContext, initialInfo InitialDevRequirem
 	}
 	if initialInfo.Mission == "" {
 		initialInfo.Mission = dCtx.RepoConfig.Mission
+	}
+
+	// prepend a concise repository summary to the other code context in the initial prompt
+	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
+	if version >= 2 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+		repoSummary, err := GetRepoSummaryForPrompt(dCtx, initialInfo.Requirements, 5000)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get repo summary: %w", err)
+		}
+		initialInfo.Context = repoSummary + "\n\n" + initialInfo.Context
 	}
 
 	// Step 2: run the dev requirements loop

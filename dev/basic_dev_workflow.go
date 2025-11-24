@@ -200,10 +200,8 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 	attemptCount := 0
 	var promptInfo PromptInfo
 
-	// Retrieve a concise repository summary and prepend it to the code context for the initial prompt.
-	// Version gate is required for Temporal determinism since this introduces a new activity that older histories never scheduled.
-	// Replays must follow the old path while new runs include the summary and fail fast on retrieval errors.
-	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 1)
+	// prepend a concise repository summary to the other code context in the initial prompt
+	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
 	if version >= 1 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
 		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
 		if err != nil {
@@ -508,7 +506,23 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 		"targetBranch": mergeInfo.TargetBranch,
 	}
 
-	// Commit any pending changes first
+	// Commit any pending changes first.
+	//
+	// This is needed due to the fact that basic dev doesn't commit itself, but
+	// planned dev does, while we need a way to get a git diff. We solved this
+	// before by parameterizing the git diff function, but this has issues since
+	// the review and resolve workflow works like basic dev, but is used in
+	// conjunction with planned dev. If we wanted to support not committing
+	// here, we'd need to make the review/resolve workflow sometimes commit and
+	// sometimes not commit, depending on the parent workflow, by setting a
+	// param. Instead, we'll just commit to... committing.
+	//
+	// TODO /task -P In fact, we should move this committing to the end of the
+	// relevant subflow instead, i.e. at the end of the coding subflow. That
+	// way, the commit message can be more relevant, eg it'll be related to
+	// handling review feedback in the review and resolve flow, and related to
+	// the overall requirements in the initial basic dev flow.
+
 	commitMessage := strings.TrimSpace(params.Requirements)
 	if strings.Contains(commitMessage, "Overview:\n") {
 		commitMessage = strings.Split(commitMessage, "Overview:\n")[1]
