@@ -321,7 +321,7 @@ func TestEnsureAISecrets_AnthropicProviderSelected(t *testing.T) {
 
 	providers, err := ensureAISecrets()
 	assert.NoError(t, err)
-	assert.Equal(t, []string{"Anthropic"}, providers)
+	assert.Equal(t, []string{"anthropic"}, providers)
 
 	apiKey, err := keyring.Get("sidekick", llm.AnthropicApiKeySecretName)
 	assert.NoError(t, err)
@@ -351,7 +351,7 @@ func TestEnsureAISecrets_OpenAIProviderSelected(t *testing.T) {
 
 	providers, err := ensureAISecrets()
 	assert.NoError(t, err)
-	assert.Equal(t, []string{"OpenAI"}, providers)
+	assert.Equal(t, []string{"openai"}, providers)
 
 	apiKey, err := keyring.Get("sidekick", llm.OpenaiApiKeySecretName)
 	assert.NoError(t, err)
