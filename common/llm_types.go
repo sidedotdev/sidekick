@@ -48,6 +48,11 @@ type ChatMessageResponse struct {
 	Usage        Usage  `json:"usage"`
 	Model        string `json:"model"`
 	Provider     string `json:"provider"`
+
+	// the reasoning effort actually applied for the provider (may not match the
+	// effort requested if the model does not support reasoning or uses a
+	// different effort enum/schema)
+	ReasoningEffort string `json:"reasoningEffort"`
 }
 
 type Usage struct {
@@ -86,6 +91,7 @@ type ToolCall struct {
 	Id        string `json:"id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
+	Signature []byte `json:"signature"`
 }
 
 type Tool struct {

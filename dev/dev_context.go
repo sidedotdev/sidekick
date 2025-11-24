@@ -14,6 +14,7 @@ import (
 	"sidekick/utils"
 	"sidekick/workspace"
 
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
@@ -223,13 +224,21 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 	// Execute worktree setup script if configured and using git worktree environment
 	if envType == string(env.EnvTypeLocalGitWorktree) && repoConfig.WorktreeSetup != "" {
+		var output env.EnvRunCommandActivityOutput
 		err = workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 			EnvContainer: envContainer,
 			Command:      "/usr/bin/env",
 			Args:         []string{"sh", "-c", repoConfig.WorktreeSetup},
-		}).Get(ctx, nil)
+		}).Get(ctx, &output)
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to execute worktree setup script: %v", err)
+		} else if output.ExitStatus != 0 {
+			err = fmt.Errorf("worktree setup script failed with exit status %d:\n\n%s", output.ExitStatus, output.Stderr)
+			if v := workflow.GetVersion(ctx, "worktree-setup-script-error", workflow.DefaultVersion, 1); v >= 1 {
+				return DevContext{}, err
+			} else {
+				log.Err(err).Msg("Ignoring failure for workflow backcompat")
+			}
 		}
 	}
 

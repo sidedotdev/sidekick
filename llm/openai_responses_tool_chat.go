@@ -99,12 +99,15 @@ func (o OpenaiResponsesToolChat) ChatStream(ctx context.Context, options ToolCha
 	params.ParallelToolCalls = param.NewOpt(parallelToolCalls)
 
 	params.Store = openai.Bool(false)
+
+	var actualReasoningEffort string
 	modelInfo, _ := common.GetModel(options.Params.Provider, model)
 	if modelInfo != nil && modelInfo.Reasoning {
 		params.Include = []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent}
 		params.Reasoning.Summary = shared.ReasoningSummaryAuto
 		if options.Params.ReasoningEffort != "" {
-			params.Reasoning.Effort = shared.ReasoningEffort(options.Params.ReasoningEffort)
+			actualReasoningEffort = options.Params.ReasoningEffort
+			params.Reasoning.Effort = shared.ReasoningEffort(actualReasoningEffort)
 		}
 	}
 
@@ -215,11 +218,12 @@ loop:
 	}
 
 	return &ChatMessageResponse{
-		ChatMessage: message,
-		StopReason:  stopReason,
-		Usage:       usage,
-		Model:       model,
-		Provider:    options.Params.Provider,
+		ChatMessage:     message,
+		StopReason:      stopReason,
+		Usage:           usage,
+		Model:           model,
+		Provider:        options.Params.Provider,
+		ReasoningEffort: actualReasoningEffort,
 	}, nil
 }
 

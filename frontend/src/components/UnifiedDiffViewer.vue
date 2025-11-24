@@ -8,6 +8,7 @@
       :key="`${fileData.oldFile.fileName || 'unknown'}-${fileData.newFile.fileName || 'unknown'}-${index}`"
       :file-data="fileData"
       :default-expanded="defaultExpanded"
+      :diff-mode="diffMode"
     />
   </div>
 </template>
@@ -20,10 +21,12 @@ import { parseDiff } from '../lib/diffUtils'
 interface Props {
   diffString: string
   defaultExpanded?: boolean
+  diffMode?: 'unified' | 'split'
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  defaultExpanded: false
+  defaultExpanded: false,
+  diffMode: 'unified'
 })
 
 const parsedFiles = computed(() => {

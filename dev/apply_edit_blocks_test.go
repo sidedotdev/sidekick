@@ -328,6 +328,8 @@ func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
 	assert.Equal(t, "", reports[0].Error, "DELETE_FILE operation should not report errors when CheckEdits is enabled")
 	assert.True(t, reports[0].DidApply, "DELETE_FILE operation should be marked as applied")
 	assert.NotEmpty(t, reports[0].FinalDiff, "DELETE_FILE operation should generate git diff output")
+	assert.True(t, reports[0].CheckResult.Success, "DELETE_FILE operation check result should be success")
+	assert.Equal(t, "Skipped", reports[0].CheckResult.Message, "DELETE_FILE operation check result message should be Skipped")
 
 	// Verify the file was actually deleted
 	_, err = os.Stat(filePath)

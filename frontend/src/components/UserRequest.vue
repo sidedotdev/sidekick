@@ -17,6 +17,7 @@
       <UnifiedDiffViewer
         :diff-string="flowAction.actionParams.mergeApprovalInfo.diff"
         :default-expanded="false"
+        :diff-mode="diffMode"
       />
     </template>
 
@@ -41,12 +42,17 @@
     </div>
 
     <div v-else-if="flowAction.actionParams.requestKind === 'merge_approval'">
-      <div style="display: flex; margin-top: 0.5rem;">
+      <div style="display: flex; align-items: center; gap: 1rem; margin-top: 0.5rem;">
         <label for="targetBranch">Merge into</label>
         <BranchSelector
           id="targetBranch"
           v-model="targetBranch"
           :workspaceId="flowAction.workspaceId"
+        />
+        <DiffViewOptions
+          v-model:ignoreWhitespace="ignoreWhitespace"
+          v-model:diffMode="diffMode"
+          :disabled="!isPending"
         />
       </div>
 
@@ -103,6 +109,7 @@
       <UnifiedDiffViewer
         :diff-string="flowAction.actionParams.mergeApprovalInfo.diff"
         :default-expanded="false"
+        :diff-mode="diffMode"
       />
     </template>
     <div v-if="parsedActionResult?.Params?.targetBranch">
@@ -126,6 +133,7 @@ import BranchSelector from './BranchSelector.vue'
 import VueMarkdown from 'vue-markdown-render'
 import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
 import CopyIcon from './icons/CopyIcon.vue';
+import DiffViewOptions from './DiffViewOptions.vue';
 
 interface UserResponse {
   content?: string;
@@ -152,6 +160,8 @@ const props = defineProps({
 const responseContent = ref('');
 const errorMessage = ref('');
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
+const ignoreWhitespace = ref(false);
+const diffMode = ref<'unified' | 'split'>('unified');
 
 function getStorageKey(actionId: string): string {
   return `sidekick_user_request_draft_${actionId}`;
@@ -173,7 +183,6 @@ watch(responseContent, (newContent) => {
   }
 });
 
-// TODO: onmounted isn't needed here, so we should move this to the setup area
 onMounted(() => {
   try {
     const savedContent = localStorage.getItem(getStorageKey(props.flowAction.id));
@@ -182,6 +191,25 @@ onMounted(() => {
     }
   } catch (error) {
     console.debug('Failed to load draft:', error);
+  }
+
+  try {
+    const savedIgnoreWhitespace = localStorage.getItem('mergeApproval.diff.ignoreWhitespace');
+    if (savedIgnoreWhitespace !== null) {
+      ignoreWhitespace.value = savedIgnoreWhitespace === 'true';
+    }
+    const savedDiffMode = localStorage.getItem('mergeApproval.diff.mode');
+    if (savedDiffMode === 'unified' || savedDiffMode === 'split') {
+      diffMode.value = savedDiffMode;
+    }
+  } catch (error) {
+    console.debug('Failed to load merge approval preferences:', error);
+  }
+
+  if (ignoreWhitespace.value && 
+      isPending.value && 
+      props.flowAction.actionParams.requestKind === 'merge_approval') {
+    updateMergeApprovalParams();
   }
 });
 
@@ -195,27 +223,46 @@ const parsedActionResult = computed(() => {
 
 const targetBranch = ref<string | undefined>(parsedActionResult.value?.targetBranch ?? props.flowAction.actionParams.mergeApprovalInfo?.defaultTargetBranch)
 
-// Watch for target branch changes during merge approval
 watch(targetBranch, async (newBranch, oldBranch) => {
-  // Only send update if this is a merge approval request, the action is pending,
-  // and the branch actually changed (not just initialization)
   if (props.flowAction.actionParams.requestKind === 'merge_approval' && 
       isPending.value && 
       oldBranch !== undefined && 
       newBranch !== oldBranch) {
-    await updateTargetBranch(newBranch);
+    await updateMergeApprovalParams();
   }
 });
 
-async function updateTargetBranch(newBranch: string | undefined) {
-  if (!newBranch) return;
+watch(ignoreWhitespace, async (newValue, oldValue) => {
+  if (props.flowAction.actionParams.requestKind === 'merge_approval' && 
+      isPending.value && 
+      oldValue !== undefined) {
+    await updateMergeApprovalParams();
+  }
+  
+  try {
+    localStorage.setItem('mergeApproval.diff.ignoreWhitespace', String(newValue));
+  } catch (error) {
+    console.debug('Failed to save ignoreWhitespace preference:', error);
+  }
+});
+
+watch(diffMode, (newValue) => {
+  try {
+    localStorage.setItem('mergeApproval.diff.mode', newValue);
+  } catch (error) {
+    console.debug('Failed to save diffMode preference:', error);
+  }
+});
+
+async function updateMergeApprovalParams() {
+  if (!targetBranch.value) return;
 
   try {
     const userResponse: UserResponse = {
       params: {
-        targetBranch: newBranch,
+        targetBranch: targetBranch.value,
+        ignoreWhitespace: ignoreWhitespace.value,
       },
-      // approved is intentionally undefined/null to indicate this is a branch switch, not a final decision
     };
 
     const response = await fetch(`/api/v1/workspaces/${props.flowAction.workspaceId}/flow_actions/${props.flowAction.id}`, {
@@ -227,13 +274,10 @@ async function updateTargetBranch(newBranch: string | undefined) {
     });
 
     if (!response.ok) {
-      console.error('Failed to update target branch:', response.status, response.statusText);
-      // Don't show error to user for branch updates as it's not a critical failure
-      // The user can still proceed with approval/rejection
+      console.error('Failed to update merge approval params:', response.status, response.statusText);
     }
   } catch (error) {
-    console.error('Network error updating target branch:', error);
-    // Don't show error to user for branch updates as it's not a critical failure
+    console.error('Network error updating merge approval params:', error);
   }
 }
 
@@ -283,6 +327,8 @@ async function submitUserResponse(approved: boolean) {
   if (props.flowAction.actionParams.requestKind === 'merge_approval') {
     userResponse.params = {
       targetBranch: targetBranch.value,
+      ignoreWhitespace: ignoreWhitespace.value,
+      diffMode: diffMode.value,
     };
   }
 

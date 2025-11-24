@@ -279,24 +279,17 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			iterationsSinceLastFeedback = 0
 		} else if attempts%3 == 0 {
 			chatCtx := actionCtx.DevContext.WithCancelOnPause()
-			toolCall, err := ForceToolBulkSearchRepository(chatCtx, chatHistory)
+			toolCalls, err := ForceToolBulkSearchRepository(chatCtx, chatHistory)
 			if actionCtx.GlobalState != nil && actionCtx.GlobalState.Paused {
 				continue // UserRequestIfPaused will handle the pause
 			}
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to force searching repository: %v", err)
 			}
-			toolCallResponseInfo, err := handleToolCall(actionCtx.DevContext, toolCall)
-			if err != nil {
-				// retry bad tool call with feedback -- TODO move into handleToolCall
-				if errors.Is(err, llm.ErrToolCallUnmarshal) {
-					addCodeContextPrompt(chatHistory, toolCallResponseInfo)
-					continue
-				}
-
-				return nil, "", err
+			toolCallResponseInfos := handleToolCalls(actionCtx.DevContext, toolCalls, nil)
+			for _, info := range toolCallResponseInfos {
+				addCodeContextPrompt(chatHistory, info)
 			}
-			addCodeContextPrompt(chatHistory, toolCallResponseInfo)
 		}
 
 		if attempts >= 17 {

@@ -7,6 +7,8 @@ import (
 	"sidekick/domain"
 	"sidekick/llm"
 	"sidekick/utils"
+
+	"go.temporal.io/sdk/workflow"
 )
 
 // TODO figure out how to make this more dynamic based on when
@@ -14,6 +16,83 @@ import (
 // large functions that exceed this limit
 // TODO /gen/planned/req move this to RepoConfig
 const maxRetrieveCodeContextLength = 15000
+
+func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers map[string]func(DevContext, llm.ToolCall) (ToolCallResponseInfo, error)) []ToolCallResponseInfo {
+	// backward compatibility: handle-parallel-tool-calls
+	// if old version, only process the first tool call
+	version := workflow.GetVersion(dCtx, "handle-parallel-tool-calls", workflow.DefaultVersion, 1)
+	if version == workflow.DefaultVersion {
+		if len(toolCalls) == 0 {
+			return []ToolCallResponseInfo{}
+		}
+		// Process only the first tool call sequentially
+		tc := toolCalls[0]
+		var result ToolCallResponseInfo
+		var err error
+
+		if handler, ok := customHandlers[tc.Name]; ok {
+			result, err = handler(dCtx, tc)
+		} else {
+			result, err = handleToolCall(dCtx, tc)
+		}
+
+		if err != nil {
+			result.IsError = true
+			result.Response = err.Error()
+			result.FunctionName = tc.Name
+			result.ToolCallId = tc.Id
+		}
+		return []ToolCallResponseInfo{result}
+	}
+
+	responseChannel := workflow.NewChannel(dCtx)
+	for i, tc := range toolCalls {
+		// capture loop variables
+		tc := tc
+		index := i
+		workflow.Go(dCtx, func(ctx workflow.Context) {
+			localDCtx := dCtx
+			localDCtx.Context = ctx
+
+			var result ToolCallResponseInfo
+			var err error
+
+			if handler, ok := customHandlers[tc.Name]; ok {
+				result, err = handler(localDCtx, tc)
+			} else {
+				result, err = handleToolCall(localDCtx, tc)
+			}
+
+			responseChannel.Send(ctx, struct {
+				Index  int
+				Result ToolCallResponseInfo
+				Err    error
+			}{index, result, err})
+		})
+	}
+
+	results := make([]ToolCallResponseInfo, len(toolCalls))
+
+	for i := 0; i < len(toolCalls); i++ {
+		var resp struct {
+			Index  int
+			Result ToolCallResponseInfo
+			Err    error
+		}
+		responseChannel.Receive(dCtx, &resp)
+		results[resp.Index] = resp.Result
+		if resp.Err != nil {
+			results[resp.Index].IsError = true
+			results[resp.Index].ToolCallId = toolCalls[resp.Index].Id
+			results[resp.Index].FunctionName = toolCalls[resp.Index].Name
+			if results[resp.Index].Response == "" {
+				results[resp.Index].Response = resp.Err.Error()
+			}
+		}
+	}
+
+	return results
+}
 
 // TODO /gen/planned/req add a test for this function using WorkflowTestSuite
 func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult ToolCallResponseInfo, err error) {

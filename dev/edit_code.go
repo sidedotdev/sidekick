@@ -79,7 +79,10 @@ editLoop:
 
 		// Inject proactive system message based on tool-call thresholds
 		if msg, ok := ThresholdMessageForCounter(maxIterationsBeforeFeedback, attemptsSinceLastFeedback); ok {
-			promptInfo = FeedbackInfo{Feedback: msg}
+			*chatHistory = append(*chatHistory, llm.ChatMessage{
+				Role:    "system",
+				Content: msg,
+			})
 		}
 
 		// Only request feedback if we haven't received any recently from any source
@@ -215,16 +218,6 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			if action != nil && *action == UserActionGoNext {
 				// If UserActionGoNext is pending and version is new, skip authoring edit blocks.
 				// The action is not consumed here; it will be consumed in completeDevStepSubflow.
-
-				// HACK: since we don't add tool call responses right away (TODO),
-				// we make sure we don't end up with a tool call missing a result
-				// here.
-				if len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
-					switch info := promptInfo.(type) {
-					case ToolCallResponseInfo:
-						addToolCallResponse(chatHistory, info)
-					}
-				}
 				return nil, PendingActionError
 			}
 		}
@@ -233,44 +226,19 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return nil, fmt.Errorf("failed to make user request when paused: %v", err)
 		} else if response != nil && response.Content != "" {
-			// HACK: since we don't add tool call responses right away (TODO),
-			// we make sure we don't end up with a tool call missing a result
-			// here.
-			if len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
-				switch info := promptInfo.(type) {
-				case ToolCallResponseInfo:
-					addToolCallResponse(chatHistory, info)
-				}
-			}
 			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
 			attemptsSinceLastEditBlockOrFeedback = 0
 		}
 
 		// Inject proactive system message based on tool-call thresholds
 		if msg, ok := ThresholdMessageForCounter(feedbackIterations, attemptsSinceLastEditBlockOrFeedback); ok {
-			// HACK: since we don't add tool call responses right away (TODO),
-			// we make sure we don't end up with a tool call missing a result
-			// here.
-			if len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
-				switch info := promptInfo.(type) {
-				case ToolCallResponseInfo:
-					addToolCallResponse(chatHistory, info)
-				}
-			}
-			promptInfo = FeedbackInfo{Feedback: msg}
+			*chatHistory = append(*chatHistory, llm.ChatMessage{
+				Role:    "system",
+				Content: msg,
+			})
 		}
 
 		if attemptCount >= maxAttempts {
-			// HACK: since we don't add tool call responses right away (TODO),
-			// we make sure we don't end up with a tool call missing a result
-			// here.
-			if len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
-				switch info := promptInfo.(type) {
-				case ToolCallResponseInfo:
-					addToolCallResponse(chatHistory, info)
-				}
-			}
-
 			// maybe this? yeah makes sense
 			if len(extractedEditBlocks) > 0 {
 				// make use of the results so far, given there are some that are
@@ -280,16 +248,6 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 			return nil, ErrMaxAttemptsReached
 		} else if attemptsSinceLastEditBlockOrFeedback > 0 && attemptsSinceLastEditBlockOrFeedback%feedbackIterations == 0 {
-			// HACK: since we don't add tool call responses right away (TODO),
-			// we make sure we don't end up with a tool call missing a result
-			// here.
-			if len(*chatHistory) >= 1 && (*chatHistory)[len(*chatHistory)-1].Role != llm.ChatMessageRoleTool {
-				switch info := promptInfo.(type) {
-				case ToolCallResponseInfo:
-					addToolCallResponse(chatHistory, info)
-				}
-			}
-
 			guidanceContext := "The system has attempted to generate edits multiple times without success. Please provide some guidance."
 			requestParams := map[string]any{
 				// TODO include the latest failure if any
@@ -354,30 +312,21 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		}
 		extractedEditBlocks = append(extractedEditBlocks, currentExtractedBlocks...)
 
-		if len(chatResponse.ToolCalls) > 0 && chatResponse.ToolCalls[0].Name != "" {
-			toolCallResponseInfo, err := handleToolCall(dCtx, chatResponse.ToolCalls[0])
-			// Reset feedback counter if this was a getHelpOrInput response
-			if chatResponse.ToolCalls[0].Name == getHelpOrInputTool.Name {
-				attemptsSinceLastEditBlockOrFeedback = 0
+		if len(chatResponse.ToolCalls) > 0 {
+			toolCallResponses := handleToolCalls(dCtx, chatResponse.ToolCalls, nil)
+			for _, toolCallResponseInfo := range toolCallResponses {
+				// Reset feedback counter if this was a getHelpOrInput response
+				if toolCallResponseInfo.FunctionName == getHelpOrInputTool.Name {
+					attemptsSinceLastEditBlockOrFeedback = 0
+				}
+				// dynamically adjust the context size extension based on the length of the response
+				if len(toolCallResponseInfo.Response) > 5000 {
+					contextSizeExtension += len(toolCallResponseInfo.Response) - 5000
+				}
+				addToolCallResponse(chatHistory, toolCallResponseInfo)
 			}
-			// dynamically adjust the context size extension based on the length of the response
-			if len(toolCallResponseInfo.Response) > 5000 {
-				contextSizeExtension += len(toolCallResponseInfo.Response) - 5000
-			}
-			// TODO: addToolCallResponse(chatHistory, toolCallResponseInfo)
-			// 		promptInfo = SkipInfo{} // TODO remove after using addX functions everywhere
-			promptInfo = toolCallResponseInfo
-			if err != nil {
-				// need a tool call response always after a tool call, so we append it here before returning
-				*chatHistory = append(*chatHistory, llm.ChatMessage{
-					Role:       llm.ChatMessageRoleTool,
-					ToolCallId: chatResponse.ToolCalls[0].Id,
-					Name:       chatResponse.ToolCalls[0].Name,
-					IsError:    true,
-					Content:    err.Error(),
-				})
-				return nil, err
-			}
+
+			promptInfo = SkipInfo{}
 		} else {
 			// we use the fact that no tool call happened to infer that we're
 			// done with this loop

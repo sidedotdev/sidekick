@@ -1,11 +1,11 @@
 <template>
   <div :class="`task-card ${task.status.toLowerCase()}`" @click="cardClicked">
     <div class="actions">
-      <button v-if="task.status == 'drafting'" class="action edit" @click.stop="openEditModal">✎️</button>
-      <button class="action copy" @click.stop="copyTask"><CopyIcon/></button>
-      <button v-if="canArchive" class="action archive" @click.stop="archiveTask">📦</button>
-      <button v-if="canCancel" class="action cancel" @click.stop="cancelTask">X</button>
-      <button v-if="canDelete" class="action delete" @click.stop="deleteTask">X</button>
+      <button v-if="task.status == 'drafting'" class="action edit" title="Edit task" @click.stop="openEditModal">✎️</button>
+      <button class="action copy" title="Duplicate task" @click.stop="copyTask"><CopyIcon/></button>
+      <button v-if="canArchive" class="action archive" title="Archive task" @click.stop="archiveTask">📦</button>
+      <button v-if="canCancel" class="action cancel" title="Cancel task" @click.stop="cancelTask">X</button>
+      <button v-if="canDelete" class="action delete" title="Delete task" @click.stop="deleteTask">X</button>
     </div>
 
     <h3>{{ task.title }}</h3>
@@ -78,6 +78,8 @@ const statusLabel = (status: string) => {
       return 'Failed';
     case 'in_progress':
       return 'In Progress';
+    case 'in_review':
+      return 'In Review';
     case 'complete':
       return 'Complete';
     default:
@@ -87,7 +89,7 @@ const statusLabel = (status: string) => {
 
 const canArchive = computed(() => ['complete', 'failed', 'canceled'].includes(props.task.status) && !props.task.archived);
 const canDelete = computed(() => props.task.status === 'drafting' || props.task.archived);
-const canCancel = computed(() => ['to_do', 'in_progress', 'blocked'].includes(props.task.status) && !props.task.archived);
+const canCancel = computed(() => ['to_do', 'in_progress', 'blocked', 'in_review'].includes(props.task.status) && !props.task.archived);
 
 const isEditModalOpen = ref(false);
 const isCopyModalOpen = ref(false);
@@ -259,6 +261,11 @@ const cancelTask = async () => {
 
 .status-label.in_progress {
   background-color: #03a9f4;
+}
+
+.status-label.in_review {
+  background-color: var(--p-primary-color);
+  color: var(--p-primary-contrast-color);
 }
 
 .status-label.complete {

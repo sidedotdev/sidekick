@@ -3,8 +3,9 @@ package llm
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"net/http"
+	"sidekick/common"
 	"sidekick/utils"
 	"strings"
 	"time"
@@ -26,8 +27,12 @@ const (
 	// paid tier! we should ideally detect which and support both automagically,
 	// and if that's not possible, guide the user in how to adjust their
 	// settings after manually enabling billing.
+	// Actually don't think that's true anymore? exp is gone, right? Need to get
+	// credentials from free-tier since my personal account no longer is in that
+	// tier, there might be other differences now?
 	//GoogleDefaultModel     = "gemini-2.5-pro-exp-03-25"
-	GoogleDefaultModel = "gemini-2.5-pro-preview-03-25"
+	//GoogleDefaultModel = "gemini-2.5-pro-preview-03-25"
+	GoogleDefaultModel = "gemini-3-pro-preview"
 	thinkingStartTag   = "<thinking>"
 	thinkingEndTag     = "</thinking>"
 )
@@ -70,9 +75,11 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		return nil, fmt.Errorf("failed to get %s API key: %w", providerName, err)
 	}
 
+	httpClient := &http.Client{Timeout: 10 * time.Minute}
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey:  apiKey,
-		Backend: genai.BackendGeminiAPI,
+		APIKey:     apiKey,
+		Backend:    genai.BackendGeminiAPI,
+		HTTPClient: httpClient,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create %s client: %w", providerName, err)
@@ -85,18 +92,37 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 
 	contents := googleFromChatMessages(options.Params.Messages)
 
-	toolConfig, err := googleFromToolChoice(options.Params.ToolChoice)
-	if err != nil {
-		return nil, err
+	config := &genai.GenerateContentConfig{}
+
+	if len(options.Params.Tools) > 0 {
+		toolConfig, err := googleFromToolChoice(options.Params.ToolChoice)
+		if err != nil {
+			return nil, err
+		}
+
+		config.ToolConfig = toolConfig
+		config.Tools = googleFromTools(options.Params.Tools)
 	}
 
-	config := &genai.GenerateContentConfig{
-		ToolConfig: toolConfig,
-		Tools:      googleFromTools(options.Params.Tools),
-		ThinkingConfig: &genai.ThinkingConfig{
+	var actualReasoningEffort string
+	modelInfo, _ := common.GetModel(options.Params.Provider, model)
+	if modelInfo != nil && modelInfo.Reasoning {
+		config.ThinkingConfig = &genai.ThinkingConfig{
 			IncludeThoughts: true,
-		},
+		}
+		if options.Params.ReasoningEffort != "" {
+			isLegacyThinkingBudget := strings.Contains(model, "2.5")
+			if isLegacyThinkingBudget {
+				budget := googleLegacyThinkingBudget[strings.ToLower(options.Params.ReasoningEffort)]
+				actualReasoningEffort = options.Params.ModelConfig.ReasoningEffort + ": " + string(budget)
+				config.ThinkingConfig.ThinkingBudget = &budget
+			} else {
+				actualReasoningEffort = strings.ToUpper(options.Params.ModelConfig.ReasoningEffort)
+				config.ThinkingConfig.ThinkingLevel = genai.ThinkingLevel(actualReasoningEffort)
+			}
+		}
 	}
+
 	if options.Params.Temperature != nil {
 		config.Temperature = options.Params.Temperature
 	}
@@ -124,22 +150,7 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		lastResult = result
 	}
 
-	message := stitchDeltasToMessage(deltas, true)
-	if message.Role == "" {
-		// It's possible to get only usage metadata without content/role in some scenarios (e.g., safety filters)
-		// If we have a lastResult with metadata, we might still want to return usage.
-		// However, the current logic requires a role. If no deltas were received at all, error out.
-		if len(deltas) == 0 && (lastResult == nil || lastResult.UsageMetadata == nil) {
-			return nil, fmt.Errorf("received no streamed events from %s backend", providerName)
-		}
-		// If we only got metadata but no actual message content/role delta, we still error for now.
-		// A valid message requires a role.
-		if len(deltas) == 0 {
-			return nil, fmt.Errorf("received no streamed events or final usage metadata from %s backend", providerName)
-		}
-		// If we got deltas but couldn't form a message (e.g., missing role), it's an error.
-		return nil, errors.New("chat message role not found after stitching deltas")
-	}
+	message := stitchDeltasToMessage(deltas, false)
 
 	// Extract usage information from the last response
 	usage := Usage{} // Default to zero values
@@ -150,10 +161,11 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 	}
 
 	return &ChatMessageResponse{
-		ChatMessage: message,
-		Model:       model,
-		Provider:    providerName,
-		Usage:       usage,
+		ChatMessage:     message,
+		Model:           model,
+		Provider:        providerName,
+		Usage:           usage,
+		ReasoningEffort: actualReasoningEffort,
 	}, nil
 }
 
@@ -279,6 +291,7 @@ func googleFromChatMessages(messages []ChatMessage) []*genai.Content {
 					Name: toolCall.Name,
 					Args: args,
 				},
+				ThoughtSignature: toolCall.Signature,
 			})
 		}
 	}
@@ -364,6 +377,7 @@ func googleToChatMessageDelta(result *genai.GenerateContentResponse) (*ChatMessa
 					Id:        part.FunctionCall.ID,
 					Name:      part.FunctionCall.Name,
 					Arguments: utils.PanicJSON(part.FunctionCall.Args),
+					Signature: part.ThoughtSignature,
 				},
 			}
 			return delta, nil
@@ -419,4 +433,11 @@ func googleToChatMessageDelta(result *genai.GenerateContentResponse) (*ChatMessa
 	}
 
 	return delta, progress
+}
+
+var googleLegacyThinkingBudget = map[string]int32{
+	"minimal": 1024,
+	"low":     1024,
+	"medium":  8192,
+	"high":    24576,
 }

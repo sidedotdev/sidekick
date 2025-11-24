@@ -163,26 +163,23 @@ func TestListLocalBranches(t *testing.T) {
 
 	t.Run("Multiple Branches Sorted by Committer Date", func(t *testing.T) {
 		repoDir := setupTestGitRepo(t) // Initializes with main
-		// Commit times need to be distinct for sorting verification.
-		// Use a longer sleep duration to increase reliability on slower/busier CIs.
-		const sleepDuration = 1100 * time.Millisecond // Slightly over 1 second
 
-		createCommit(t, repoDir, "Commit 1 on main") // ~T0
-		time.Sleep(sleepDuration)                    // Ensure commit times differ reliably
+		// Use explicit dates to control sorting order
+		baseTime := time.Now().Add(-10 * time.Hour)
+
+		createCommitWithDate(t, repoDir, "Commit 1 on main", baseTime) // T0
 
 		runGitCommandInTestRepo(t, repoDir, "branch", "feature-a")
 		runGitCommandInTestRepo(t, repoDir, "checkout", "feature-a")
-		createCommit(t, repoDir, "Commit 2 on feature-a") // ~T1
-		time.Sleep(sleepDuration)
+		createCommitWithDate(t, repoDir, "Commit 2 on feature-a", baseTime.Add(1*time.Hour)) // T1
 
 		runGitCommandInTestRepo(t, repoDir, "branch", "develop")
 		runGitCommandInTestRepo(t, repoDir, "checkout", "develop")
-		createCommit(t, repoDir, "Commit 3 on develop") // ~T2
-		time.Sleep(sleepDuration)
+		createCommitWithDate(t, repoDir, "Commit 3 on develop", baseTime.Add(2*time.Hour)) // T2
 
 		// Update main again to make it the newest
 		runGitCommandInTestRepo(t, repoDir, "checkout", "main")
-		createCommit(t, repoDir, "Commit 4 on main") // ~T3 (Newest)
+		createCommitWithDate(t, repoDir, "Commit 4 on main", baseTime.Add(3*time.Hour)) // T3 (Newest)
 
 		branches, err := ListLocalBranches(ctx, repoDir)
 		require.NoError(t, err)

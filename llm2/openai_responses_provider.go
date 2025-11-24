@@ -101,11 +101,14 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 	}
 
 	params.Store = openai.Bool(false)
+
+	var actualReasoningEffort string
 	modelInfo, _ := common.GetModel(options.Params.Provider, model)
 	if modelInfo != nil && modelInfo.Reasoning {
 		params.Include = []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent}
 		if options.Params.ReasoningEffort != "" {
-			params.Reasoning.Effort = shared.ReasoningEffort(options.Params.ReasoningEffort)
+			actualReasoningEffort = options.Params.ReasoningEffort
+			params.Reasoning.Effort = shared.ReasoningEffort(actualReasoningEffort)
 			params.Reasoning.Summary = shared.ReasoningSummaryAuto
 		}
 	}
@@ -327,13 +330,14 @@ loop:
 	outputMessage := accumulateOpenaiEventsToMessage(events)
 
 	return &MessageResponse{
-		Id:           "",
-		Model:        model,
-		Provider:     options.Params.Provider,
-		Output:       outputMessage,
-		StopReason:   stopReason,
-		StopSequence: "",
-		Usage:        usage,
+		Id:              "",
+		Model:           model,
+		Provider:        options.Params.Provider,
+		Output:          outputMessage,
+		StopReason:      stopReason,
+		StopSequence:    "",
+		Usage:           usage,
+		ReasoningEffort: actualReasoningEffort,
 	}, nil
 }
 
