@@ -1,11 +1,11 @@
 <template>
   <div :class="`task-card ${task.status.toLowerCase()}`" @click="cardClicked">
     <div class="actions">
-      <button v-if="task.status == 'drafting'" class="action edit" @click.stop="openEditModal">✎️</button>
-      <button class="action copy" @click.stop="copyTask"><CopyIcon/></button>
-      <button v-if="canArchive" class="action archive" @click.stop="archiveTask">📦</button>
-      <button v-if="canCancel" class="action cancel" @click.stop="cancelTask">X</button>
-      <button v-if="canDelete" class="action delete" @click.stop="deleteTask">X</button>
+      <button v-if="task.status == 'drafting'" class="action edit" title="Edit task" @click.stop="openEditModal">✎️</button>
+      <button class="action copy" title="Duplicate task" @click.stop="copyTask"><CopyIcon/></button>
+      <button v-if="canArchive" class="action archive" title="Archive task" @click.stop="archiveTask">📦</button>
+      <button v-if="canCancel" class="action cancel" title="Cancel task" @click.stop="cancelTask">X</button>
+      <button v-if="canDelete" class="action delete" title="Delete task" @click.stop="deleteTask">X</button>
     </div>
 
     <h3>{{ task.title }}</h3>
