@@ -1,7 +1,6 @@
 <template>
   <div class="view-options-container">
-    <button 
-      type="button" 
+    <a 
       class="view-options-button" 
       @click="toggle"
       :disabled="disabled"
@@ -9,18 +8,10 @@
       ref="trigger"
     >
       <GearIcon />
-    </button>
+    </a>
     <Popover ref="op">
       <div class="view-options-content">
-        <div class="view-option">
-          <label class="checkbox-label">
-            <input 
-              type="checkbox" 
-              v-model="localIgnoreWhitespace"
-            >
-            Ignore whitespace in diff
-          </label>
-        </div>
+        
         
         <div class="view-option">
           <label class="view-mode-label">Diff view mode:</label>
@@ -42,6 +33,16 @@
               Split
             </label>
           </div>
+        </div>
+
+        <div class="view-option">
+          <label class="checkbox-label">
+            <input 
+              type="checkbox" 
+              v-model="localIgnoreWhitespace"
+            >
+            Hide whitespace
+          </label>
         </div>
       </div>
     </Popover>
@@ -88,19 +89,13 @@ const localDiffMode = computed({
 }
 
 .view-options-button {
-  background: var(--color-background-soft);
-  border: 1px solid var(--color-border);
   padding: 0.25rem 0.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   margin: 0;
   cursor: pointer;
-  border-radius: 4px;
 }
 
-.view-options-button:hover:not(:disabled) {
-  background: var(--color-background-hover);
+.view-options-button :deep(svg *) {
+  fill: var(--color-text);
 }
 
 .view-options-button:disabled {
@@ -109,8 +104,8 @@ const localDiffMode = computed({
 }
 
 .view-options-button svg {
-  width: 1.25rem;
-  height: 1.25rem;
+  width: 1.2rem;
+  height: 1.2rem;
 }
 
 .view-options-content {
