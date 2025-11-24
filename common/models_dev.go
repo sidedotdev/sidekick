@@ -16,7 +16,7 @@ import (
 
 const (
 	modelsDevURL      = "https://models.dev/api.json"
-	modelsDevCacheTTL = 24 * time.Hour
+	modelsDevCacheTTL = 2 * time.Hour
 	modelsDevFilename = "models.dev.json"
 	httpTimeout       = 30 * time.Second
 )
@@ -169,9 +169,9 @@ func downloadModelsDev(cachePath string) (modelsDevData, error) {
 	return data, nil
 }
 
-// returns model info and whether the provider matched the requested provider
-// (if not but model info was returned, it means the model exists in a different
-// provider)
+// returns model info from models.dev, and whether the provider matched the
+// requested provider (if not, but model info was returned, it means the model
+// exists in a different provider)
 func GetModel(provider string, model string) (*ModelInfo, bool) {
 	data, err := loadModelsDev()
 	if err != nil {
