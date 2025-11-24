@@ -15,12 +15,7 @@ import (
 	"go.temporal.io/sdk/activity"
 )
 
-// 3.7 seems to underperform 3.5 for how sidekick is set up and for its target
-// of working in existing large code bases, while directed by a software engineer
-// const AnthropicDefaultModel = "claude-3-7-sonnet-latest"
-// const AnthropicDefaultLongContextModel = "claude-3-7-sonnet-latest"
-const AnthropicDefaultModel = anthropic.ModelClaude3_5SonnetLatest
-const AnthropicDefaultLongContextModel = anthropic.ModelClaude3_5SonnetLatest
+const AnthropicDefaultModel = "claude-sonnet-4-5-20250929"
 
 const AnthropicApiKeySecretName = "ANTHROPIC_API_KEY"
 

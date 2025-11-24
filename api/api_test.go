@@ -1343,8 +1343,9 @@ func TestCancelTaskHandler(t *testing.T) {
 		{"Cancel ToDo Task", domain.TaskStatusToDo, http.StatusOK, ""},
 		{"Cancel InProgress Task", domain.TaskStatusInProgress, http.StatusOK, ""},
 		{"Cancel Blocked Task", domain.TaskStatusBlocked, http.StatusOK, ""},
-		{"Cancel Completed Task", domain.TaskStatusComplete, http.StatusBadRequest, "Only tasks with status 'to_do', 'in_progress', or 'blocked' can be canceled"},
-		{"Cancel Canceled Task", domain.TaskStatusCanceled, http.StatusBadRequest, "Only tasks with status 'to_do', 'in_progress', or 'blocked' can be canceled"},
+		{"Cancel InReview Task", domain.TaskStatusInReview, http.StatusOK, ""},
+		{"Cancel Completed Task", domain.TaskStatusComplete, http.StatusBadRequest, "Only tasks with status 'to_do', 'in_progress', 'blocked', or 'in_review' can be canceled"},
+		{"Cancel Canceled Task", domain.TaskStatusCanceled, http.StatusBadRequest, "Only tasks with status 'to_do', 'in_progress', 'blocked', or 'in_review' can be canceled"},
 	}
 
 	for _, tc := range testCases {
@@ -1393,6 +1394,59 @@ func TestCancelTaskHandler(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Equal(t, domain.TaskStatusCanceled, updatedTask.Status)
 				assert.Equal(t, domain.AgentTypeNone, updatedTask.AgentType)
+			}
+		})
+	}
+}
+
+func TestGetTasksHandler_DefaultIncludesInReview(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+	ctx := context.Background()
+	workspaceId := "ws_1"
+
+	inReviewTask := domain.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task_" + ksuid.New().String(),
+		Status:      domain.TaskStatusInReview,
+	}
+	err := ctrl.service.PersistTask(ctx, inReviewTask)
+	assert.Nil(t, err)
+
+	testCases := []struct {
+		name        string
+		statusesStr string
+	}{
+		{"Empty statuses defaults to all", ""},
+		{"Explicit all statuses", "all"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(resp)
+			route := "/tasks"
+			if tc.statusesStr != "" {
+				route += "?statuses=" + tc.statusesStr
+			}
+			c.Request = httptest.NewRequest("GET", route, bytes.NewBuffer([]byte{}))
+			c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}}
+			ctrl.GetTasksHandler(c)
+
+			assert.Equal(t, http.StatusOK, resp.Code)
+			var result struct {
+				Tasks []TaskResponse `json:"tasks"`
+			}
+			err := json.Unmarshal(resp.Body.Bytes(), &result)
+			if assert.Nil(t, err) {
+				found := false
+				for _, taskResp := range result.Tasks {
+					if taskResp.Id == inReviewTask.Id {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "in_review task should be included in default/all task listing")
 			}
 		})
 	}

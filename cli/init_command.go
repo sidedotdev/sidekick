@@ -482,7 +482,7 @@ func ensureAISecrets() ([]string, error) {
 	for providerName, secretName := range secretNames {
 		key, err := keyring.Get(service, secretName)
 		if err == nil && key != "" {
-			providers = append(providers, providerName)
+			providers = append(providers, strings.ToLower(providerName))
 		}
 	}
 
@@ -499,7 +499,7 @@ func ensureEmbeddingSecrets() ([]string, error) {
 
 	openaiKey, err := keyring.Get(service, llm.OpenaiApiKeySecretName)
 	if err == nil && openaiKey != "" {
-		providers = append(providers, "OpenAI")
+		providers = append(providers, "openai")
 		fmt.Println("✔ Found existing OPENAI_API_KEY in keyring for embeddings")
 		return providers, nil
 	}
@@ -526,7 +526,7 @@ func ensureEmbeddingSecrets() ([]string, error) {
 	}
 	fmt.Println("OpenAI API Key saved to keyring")
 
-	providers = append(providers, "OpenAI")
+	providers = append(providers, "openai")
 	return providers, nil
 }
 

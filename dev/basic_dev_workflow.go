@@ -35,8 +35,19 @@ type BasicDevOptions struct {
 type MergeWithReviewParams struct {
 	Requirements   string
 	StartBranch    *string
-	GetGitDiff     func(dCtx DevContext, baseBranch string) (string, error) // function to get git diff customized per workflow, nil for default
 	CommitRequired bool
+}
+
+// GetGitDiff generates a git diff for merge approval, with optional whitespace ignoring
+func GetGitDiff(dCtx DevContext, baseBranch string, ignoreWhitespace bool) (string, error) {
+	var gitDiff string
+	err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
+		Staged:           true,
+		ThreeDotDiff:     true,
+		BaseBranch:       baseBranch,
+		IgnoreWhitespace: ignoreWhitespace,
+	}).Get(dCtx, &gitDiff)
+	return gitDiff, err
 }
 
 // formatRequirementsWithReview combines original requirements with review history and work done
@@ -148,7 +159,6 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 			CommitRequired: true,
 			Requirements:   requirements,
 			StartBranch:    input.StartBranch,
-			GetGitDiff:     nil,
 		}
 		err = reviewAndResolve(dCtx, params)
 		if err != nil {
@@ -190,10 +200,8 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 	attemptCount := 0
 	var promptInfo PromptInfo
 
-	// Retrieve a concise repository summary and prepend it to the code context for the initial prompt.
-	// Version gate is required for Temporal determinism since this introduces a new activity that older histories never scheduled.
-	// Replays must follow the old path while new runs include the summary and fail fast on retrieval errors.
-	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 1)
+	// prepend a concise repository summary to the other code context in the initial prompt
+	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
 	if version >= 1 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
 		repoSummary, err := GetRepoSummaryForPrompt(dCtx, requirements, 5000)
 		if err != nil {
@@ -349,9 +357,6 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 			CommitRequired: true,
 			Requirements:   requirements,
 			StartBranch:    startBranch,
-			GetGitDiff: func(dCtx DevContext, baseBranch string) (string, error) {
-				return git.GitDiff(dCtx.ExecContext)
-			},
 		}
 		_, _, err = mergeWorktreeIfApproved(dCtx, params)
 		if err != nil {
@@ -368,15 +373,22 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 	return testResult.Output, nil
 }
 
-func getMergeApproval(dCtx DevContext, defaultTarget string, getGitDiff func(dCtx DevContext, baseBranch string) (string, error)) (MergeApprovalResponse, string, error) {
-	// Generate initial diff with default target branch
-	// This is also the diff used in any followups (we don't use the diff
-	// against an updated target branch selection from the user, as that could
-	// show work done that was well out of scope of the task being done, thus
-	// confusing the LLM)
-	gitDiff, err := getGitDiff(dCtx, defaultTarget)
-	if err != nil {
-		return MergeApprovalResponse{}, "", fmt.Errorf("failed to generate git diff: %w", err)
+func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool) (MergeApprovalResponse, string, error) {
+	v := workflow.GetVersion(dCtx, "worktree-merge", workflow.DefaultVersion, 1)
+
+	var gitDiff string
+	var err error
+
+	if v == workflow.DefaultVersion && commitRequired {
+		gitDiff, err = git.GitDiff(dCtx.ExecContext)
+		if err != nil {
+			return MergeApprovalResponse{}, "", fmt.Errorf("failed to generate git diff: %w", err)
+		}
+	} else {
+		gitDiff, err = GetGitDiff(dCtx, defaultTarget, false)
+		if err != nil {
+			return MergeApprovalResponse{}, "", fmt.Errorf("failed to generate git diff: %w", err)
+		}
 	}
 
 	// Request merge approval from user
@@ -388,7 +400,7 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, getGitDiff func(dCt
 
 	approvalResponse, err := GetUserMergeApproval(dCtx, "Please review these changes", map[string]any{
 		"mergeApprovalInfo": mergeParams,
-	}, getGitDiff)
+	})
 	if err != nil {
 		return MergeApprovalResponse{}, "", err
 	}
@@ -399,19 +411,6 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, getGitDiff func(dCt
 // try to review and merge if approved. if not approved, iterate by coding some
 // more based on review feedback, then review again
 func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
-	if params.GetGitDiff == nil {
-		params.GetGitDiff = func(dCtx DevContext, baseBranch string) (string, error) {
-			// Get diff between branches using three-dot syntax (also including staged for changes made during reviewAndResolve)
-			var gitDiff string
-			err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
-				Staged:       true,
-				ThreeDotDiff: true,
-				BaseBranch:   baseBranch,
-			}).Get(dCtx, &gitDiff)
-			return gitDiff, err
-		}
-	}
-
 	return RunSubflowWithoutResult(dCtx, "review_and_resolve", "Review and resolve", func(subflow domain.Subflow) error {
 		// Track review messages for iterative development
 		reviewMessages := []string{}
@@ -491,7 +490,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 		}
 	}
 
-	mergeInfo, gitDiff, err := getMergeApproval(dCtx, defaultTarget, params.GetGitDiff)
+	mergeInfo, gitDiff, err := getMergeApproval(dCtx, defaultTarget, params.CommitRequired)
 	if err != nil {
 		return "", MergeApprovalResponse{}, fmt.Errorf("failed to get merge approval: %w", err)
 	}
@@ -507,7 +506,23 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 		"targetBranch": mergeInfo.TargetBranch,
 	}
 
-	// Commit any pending changes first
+	// Commit any pending changes first.
+	//
+	// This is needed due to the fact that basic dev doesn't commit itself, but
+	// planned dev does, while we need a way to get a git diff. We solved this
+	// before by parameterizing the git diff function, but this has issues since
+	// the review and resolve workflow works like basic dev, but is used in
+	// conjunction with planned dev. If we wanted to support not committing
+	// here, we'd need to make the review/resolve workflow sometimes commit and
+	// sometimes not commit, depending on the parent workflow, by setting a
+	// param. Instead, we'll just commit to... committing.
+	//
+	// TODO /task -P In fact, we should move this committing to the end of the
+	// relevant subflow instead, i.e. at the end of the coding subflow. That
+	// way, the commit message can be more relevant, eg it'll be related to
+	// handling review feedback in the review and resolve flow, and related to
+	// the overall requirements in the initial basic dev flow.
+
 	commitMessage := strings.TrimSpace(params.Requirements)
 	if strings.Contains(commitMessage, "Overview:\n") {
 		commitMessage = strings.Split(commitMessage, "Overview:\n")[1]
@@ -598,7 +613,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 				break
 			}
 
-			mergeInfo, gitDiff, err = getMergeApproval(dCtx, mergeInfo.TargetBranch, params.GetGitDiff)
+			mergeInfo, gitDiff, err = getMergeApproval(dCtx, mergeInfo.TargetBranch, params.CommitRequired)
 			if err != nil {
 				return "", MergeApprovalResponse{}, fmt.Errorf("failed to get final merge approval: %w", err)
 			}

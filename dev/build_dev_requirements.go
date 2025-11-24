@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/fflag"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
 
@@ -108,6 +109,16 @@ func buildDevRequirementsSubflow(dCtx DevContext, initialInfo InitialDevRequirem
 		initialInfo.Mission = dCtx.RepoConfig.Mission
 	}
 
+	// prepend a concise repository summary to the other code context in the initial prompt
+	version := workflow.GetVersion(dCtx, "initial-code-repo-summary", workflow.DefaultVersion, 2)
+	if version >= 2 && fflag.IsEnabled(dCtx, fflag.InitialRepoSummary) {
+		repoSummary, err := GetRepoSummaryForPrompt(dCtx, initialInfo.Requirements, 5000)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get repo summary: %w", err)
+		}
+		initialInfo.Context = repoSummary + "\n\n" + initialInfo.Context
+	}
+
 	// Step 2: run the dev requirements loop
 	chatHistory := &[]llm.ChatMessage{}
 	addDevRequirementsPrompt(chatHistory, initialInfo)
@@ -154,45 +165,48 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	*iteration.ChatHistory = append(*iteration.ChatHistory, chatResponse.ChatMessage)
 
 	if len(chatResponse.ToolCalls) > 0 {
-		toolCall := chatResponse.ToolCalls[0] // parallel tool calls are not supported
-		if toolCall.Name == recordDevRequirementsTool.Name {
-			devReq, unmarshalErr := unmarshalDevRequirements(chatResponse.ToolCalls[0].Arguments)
-			if unmarshalErr == nil && devReq.Complete {
-				userResponse, approveErr := ApproveDevRequirements(iteration.ExecCtx, devReq)
-				if approveErr != nil {
-					return nil, fmt.Errorf("error approving dev requirements: %v", approveErr)
-				}
-				iteration.NumSinceLastFeedback = 0
-				if userResponse.Approved != nil && *userResponse.Approved {
-					return &devReq, nil // break the loop with the final result
+		var recordedReqs *DevRequirements
+
+		customHandlers := map[string]func(DevContext, llm.ToolCall) (ToolCallResponseInfo, error){
+			recordDevRequirementsTool.Name: func(dCtx DevContext, tc llm.ToolCall) (ToolCallResponseInfo, error) {
+				devReq, unmarshalErr := unmarshalDevRequirements(tc.Arguments)
+				if unmarshalErr == nil && devReq.Complete {
+					userResponse, approveErr := ApproveDevRequirements(dCtx, devReq)
+					if approveErr != nil {
+						return ToolCallResponseInfo{}, fmt.Errorf("error approving dev requirements: %v", approveErr)
+					}
+					iteration.NumSinceLastFeedback = 0
+					if userResponse.Approved != nil && *userResponse.Approved {
+						recordedReqs = &devReq
+						return ToolCallResponseInfo{Response: "Requirements recorded and approved.", FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+					} else {
+						feedback := "Requirements were not approved and therefore not recorded. Please try again, taking this feedback into account:\n\n" + userResponse.Content
+						return ToolCallResponseInfo{Response: feedback, FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+					}
+				} else if unmarshalErr != nil {
+					return ToolCallResponseInfo{Response: unmarshalErr.Error(), FunctionName: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
 				} else {
-					feedback := "Requirements were not approved and therefore not recorded. Please try again, taking this feedback into account:\n\n" + userResponse.Content
-					toolResponse := ToolCallResponseInfo{Response: feedback, FunctionName: toolCall.Name, ToolCallId: toolCall.Id}
-					addToolCallResponse(iteration.ChatHistory, toolResponse)
+					return ToolCallResponseInfo{Response: "Recorded partial requirements, but requirements are not finalized yet based on the \"requirements_finalized\" boolean field value being set to false. Do some more research or thinking or get help/input to finalize the requirements, as needed. Then record the finalized requirements again in full.", FunctionName: tc.Name, ToolCallId: tc.Id}, nil
 				}
-			} else if unmarshalErr != nil {
-				toolResponse := ToolCallResponseInfo{Response: unmarshalErr.Error(), FunctionName: recordDevRequirementsTool.Name, ToolCallId: toolCall.Id, IsError: true}
-				addToolCallResponse(iteration.ChatHistory, toolResponse)
-			} else {
-				toolResponse := ToolCallResponseInfo{Response: "Recorded partial requirements, but requirements are not finalized yet based on the \"requirements_finalized\" boolean field value being set to false. Do some more research or thinking or get help/input to finalize the requirements, as needed. Then record the finalized requirements again in full.", FunctionName: recordDevPlanTool.Name, ToolCallId: toolCall.Id}
-				addToolCallResponse(iteration.ChatHistory, toolResponse)
-			}
-		} else {
-			var toolCallResult ToolCallResponseInfo
-			toolCallResult, err = handleToolCall(iteration.ExecCtx, toolCall)
-			if err != nil {
-				return nil, fmt.Errorf("error handling tool call: %w", err)
+			},
+		}
+
+		toolCallResults := handleToolCalls(iteration.ExecCtx, chatResponse.ToolCalls, customHandlers)
+
+		for _, res := range toolCallResults {
+			addToolCallResponse(iteration.ChatHistory, res)
+
+			if len(res.Response) > 5000 {
+				state.contextSizeExtension += len(res.Response) - 5000
 			}
 
-			addToolCallResponse(iteration.ChatHistory, toolCallResult)
-
-			if len(toolCallResult.Response) > 5000 {
-				state.contextSizeExtension += len(toolCallResult.Response) - 5000
-			}
-
-			if toolCall.Name == getHelpOrInputTool.Name {
+			if res.FunctionName == getHelpOrInputTool.Name {
 				iteration.NumSinceLastFeedback = 0
 			}
+		}
+
+		if recordedReqs != nil {
+			return recordedReqs, nil
 		}
 	} else if chatResponse.StopReason == string(openai.FinishReasonStop) || chatResponse.StopReason == string(openai.FinishReasonToolCalls) {
 		// TODO try to extract the dev requirements from the content in this case and treat it as if it was a tool call

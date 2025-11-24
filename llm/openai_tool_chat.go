@@ -305,16 +305,11 @@ func stitchDeltasToMessage(deltas []ChatMessageDelta, idRequired bool) ChatMessa
 	var nameBuilder strings.Builder
 	var argsBuilder strings.Builder
 	var toolCalls []ToolCall
-	var role ChatMessageRole
 
 	currentToolCall := &ToolCall{}
 	for _, delta := range deltas {
 		if delta.Content != "" {
 			contentBuilder.WriteString(delta.Content)
-		}
-
-		if delta.Role != "" {
-			role = delta.Role
 		}
 
 		if delta.ToolCalls != nil {
@@ -341,6 +336,10 @@ func stitchDeltasToMessage(deltas []ChatMessageDelta, idRequired bool) ChatMessa
 					currentToolCall.Id = toolCallDelta.Id
 				}
 
+				if len(toolCallDelta.Signature) > 0 {
+					currentToolCall.Signature = toolCallDelta.Signature
+				}
+
 				if toolCallDelta.Arguments != "" {
 					argsBuilder.WriteString(toolCallDelta.Arguments)
 				}
@@ -348,6 +347,7 @@ func stitchDeltasToMessage(deltas []ChatMessageDelta, idRequired bool) ChatMessa
 				if toolCallDelta.Name != "" {
 					nameBuilder.WriteString(toolCallDelta.Name)
 				}
+
 			}
 		}
 	}
@@ -360,7 +360,7 @@ func stitchDeltasToMessage(deltas []ChatMessageDelta, idRequired bool) ChatMessa
 	}
 
 	return ChatMessage{
-		Role:      role,
+		Role:      ChatMessageRoleAssistant,
 		Content:   contentBuilder.String(),
 		ToolCalls: toolCalls,
 	}

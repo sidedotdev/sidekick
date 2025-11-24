@@ -44,7 +44,8 @@ func RunTests(dCtx DevContext, commandsToRun []common.CommandConfig) (TestResult
 			testCommand := testCommand
 
 			workflow.Go(dCtx, func(ctx workflow.Context) {
-				runSingleTest(ctx, testCommand.WorkingDir, testCommand.Command, *dCtx.EnvContainer, resultsCh)
+				localActionCtx := actionCtx.WithContext(ctx)
+				runSingleTest(localActionCtx, testCommand.WorkingDir, testCommand.Command, *dCtx.EnvContainer, resultsCh)
 			})
 		}
 
@@ -101,7 +102,7 @@ func combineTestResults(results []TestResult) TestResult {
 	}
 }
 
-func runSingleTest(ctx workflow.Context, workingDir string, fullCommand string, envContainer env.EnvContainer, resultsCh workflow.Channel) {
+func runSingleTest(actionCtx DevActionContext, workingDir string, fullCommand string, envContainer env.EnvContainer, resultsCh workflow.Channel) {
 	runTestInput := env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
@@ -112,9 +113,9 @@ func runSingleTest(ctx workflow.Context, workingDir string, fullCommand string, 
 		runTestInput.RelativeWorkingDir = workingDir
 	}
 	var runTestOutput env.EnvRunCommandActivityOutput
-	err := workflow.ExecuteActivity(ctx, env.EnvRunCommandActivity, runTestInput).Get(ctx, &runTestOutput)
+	err := PerformWithUserRetry(actionCtx, env.EnvRunCommandActivity, &runTestOutput, runTestInput)
 	if err != nil {
-		resultsCh.Send(ctx, fmt.Errorf("failed to run test command '%s': %v", fullCommand, err))
+		resultsCh.Send(actionCtx, fmt.Errorf("failed to run test command '%s': %v", fullCommand, err))
 		return
 	}
 
@@ -134,7 +135,7 @@ func runSingleTest(ctx workflow.Context, workingDir string, fullCommand string, 
 		Output:      output,
 	}
 
-	resultsCh.Send(ctx, testResult)
+	resultsCh.Send(actionCtx, testResult)
 }
 
 func SummarizeTestOutput(dCtx DevContext, testOutput string) (string, error) {
