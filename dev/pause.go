@@ -2,6 +2,7 @@ package dev
 
 import (
 	"sidekick/domain"
+	"sidekick/flow_action"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -23,27 +24,27 @@ func SetupPauseHandler(dCtx DevContext, guidanceContext string, requestParams ma
 	})
 }
 
-func UserRequestIfPaused(dCtx DevContext, guidanceContext string, requestParams map[string]interface{}) (*UserResponse, error) {
-	if dCtx.GlobalState == nil || !dCtx.GlobalState.Paused {
+func UserRequestIfPaused(dCtx DevContext, guidanceContext string, requestParams map[string]interface{}) (*flow_action.UserResponse, error) {
+	if dCtx.ExecContext.GlobalState == nil || !dCtx.ExecContext.GlobalState.Paused {
 		return nil, nil
 	}
 
-	guidanceRequest := &RequestForUser{
+	guidanceRequest := &flow_action.RequestForUser{
 		OriginWorkflowId: workflow.GetInfo(dCtx).WorkflowExecution.ID,
 		Subflow:          dCtx.FlowScope.SubflowName,
 		Content:          guidanceContext,
-		RequestKind:      RequestKindFreeForm,
+		RequestKind:      flow_action.RequestKindFreeForm,
 		RequestParams:    requestParams,
 	}
 
 	actionCtx := dCtx.NewActionContext("user_request.paused")
 	actionCtx.ActionParams = guidanceRequest.ActionParams()
 
-	response, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
+	response, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*flow_action.UserResponse, error) {
 		guidanceRequest.FlowActionId = flowAction.Id
-		return GetUserResponse(dCtx, *guidanceRequest)
+		return flow_action.GetUserResponse(actionCtx.ExecContext, *guidanceRequest)
 	})
 
-	dCtx.GlobalState.Paused = false
+	dCtx.ExecContext.GlobalState.Paused = false
 	return response, err
 }

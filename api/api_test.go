@@ -9,8 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"sidekick/dev"
 	"sidekick/domain"
+	"sidekick/flow_action"
 	"sidekick/mocks"
 	"sidekick/secret_manager"
 	"sidekick/srv"
@@ -511,7 +511,7 @@ func TestCompleteFlowActionHandler(t *testing.T) {
 		ActionStatus: domain.ActionStatusPending,
 		ActionType:   "anything",
 		ActionParams: map[string]interface{}{
-			"requestKind": dev.RequestKindFreeForm, // requires non-empty content in user response
+			"requestKind": flow_action.RequestKindFreeForm, // requires non-empty content in user response
 		},
 		IsHumanAction:    true,
 		IsCallbackAction: true,
@@ -733,7 +733,7 @@ func TestCompleteFlowActionHandler_FreeFormButEmptyResponseContent(t *testing.T)
 		ActionStatus: domain.ActionStatusPending,
 		ActionType:   "user_request",
 		ActionParams: map[string]interface{}{
-			"requestKind": dev.RequestKindFreeForm, // requires non-empty content in user response
+			"requestKind": flow_action.RequestKindFreeForm, // requires non-empty content in user response
 		},
 		ActionResult:     "existing response",
 		IsHumanAction:    true,
@@ -2205,7 +2205,7 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("Successful go_next_step", func(t *testing.T) {
-		payload := UserActionRequest{ActionType: string(dev.UserActionGoNext)}
+		payload := UserActionRequest{ActionType: string(flow_action.UserActionGoNext)}
 		jsonPayload, _ := json.Marshal(payload)
 
 		req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/user_action", workspaceId, flowId), bytes.NewBuffer(jsonPayload))
@@ -2214,7 +2214,7 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 		router.ServeHTTP(rr, req)
 
 		assert.Equal(t, http.StatusOK, rr.Code)
-		expectedResponse := gin.H{"message": fmt.Sprintf("User action '%s' signaled successfully", dev.UserActionGoNext)}
+		expectedResponse := gin.H{"message": fmt.Sprintf("User action '%s' signaled successfully", flow_action.UserActionGoNext)}
 		jsonResponse, _ := json.Marshal(expectedResponse)
 		assert.JSONEq(t, string(jsonResponse), rr.Body.String())
 	})
@@ -2229,7 +2229,7 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 		router.ServeHTTP(rr, req)
 
 		assert.Equal(t, http.StatusBadRequest, rr.Code)
-		expectedResponse := gin.H{"message": fmt.Sprintf("Invalid actionType '%s'. Only '%s' is supported.", "invalid_action", dev.UserActionGoNext)}
+		expectedResponse := gin.H{"message": fmt.Sprintf("Invalid actionType '%s'. Only '%s' is supported.", "invalid_action", flow_action.UserActionGoNext)}
 		jsonResponse, _ := json.Marshal(expectedResponse)
 		assert.JSONEq(t, string(jsonResponse), rr.Body.String())
 	})
@@ -2266,7 +2266,7 @@ func TestUserActionHandler_FlowNotFound(t *testing.T) {
 
 	workspaceID := "test-ws-notfound-123"
 	flowID := "test-flow-notfound-123"
-	action := dev.UserActionGoNext
+	action := flow_action.UserActionGoNext
 
 	payload := fmt.Sprintf(`{"actionType": "%s"}`, action)
 	req, _ := http.NewRequest("POST", fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/user_action", workspaceID, flowID), strings.NewReader(payload))
@@ -2291,7 +2291,7 @@ func TestUserActionHandler_SignalError(t *testing.T) {
 
 	workspaceId := "test-ws-signalerr"
 	flowId := "test-flow-signalerr"
-	action := dev.UserActionGoNext
+	action := flow_action.UserActionGoNext
 
 	// persist workspace and flow to avoid 404 response
 	workspace := domain.Workspace{Id: workspaceId}

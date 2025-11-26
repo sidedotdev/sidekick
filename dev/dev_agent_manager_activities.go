@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sidekick/domain"
+	"sidekick/flow_action"
 	"sidekick/srv"
 	"strings"
 	"time"
@@ -131,7 +132,7 @@ func (ima *DevAgentManagerActivities) CompleteFlowParentTask(ctx context.Context
 	return nil
 }
 
-func (ima *DevAgentManagerActivities) PassOnUserResponse(userResponse UserResponse) (err error) {
+func (ima *DevAgentManagerActivities) PassOnUserResponse(userResponse flow_action.UserResponse) (err error) {
 	err = ima.TemporalClient.SignalWorkflow(context.Background(), userResponse.TargetWorkflowId, "", SignalNameUserResponse, userResponse)
 	if err != nil && err.Error() == "workflow execution already completed" {
 		log.Warn().Msg("we tried to pass on a user response to a workflow that already completed, something must be wrong")
@@ -150,7 +151,7 @@ func (ima *DevAgentManagerActivities) GetWorkflow(ctx context.Context, workspace
 	return flow, nil
 }
 
-func (ima *DevAgentManagerActivities) CreatePendingUserRequest(ctx context.Context, workspaceId string, req RequestForUser) error {
+func (ima *DevAgentManagerActivities) CreatePendingUserRequest(ctx context.Context, workspaceId string, req flow_action.RequestForUser) error {
 	if req.FlowActionId == "" {
 		flowAction := domain.FlowAction{
 			WorkspaceId: workspaceId,

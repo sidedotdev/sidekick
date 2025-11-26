@@ -6,6 +6,7 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/fflag"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"strings"
 
@@ -330,12 +331,12 @@ func renderInitialRecordPlanPrompt(dCtx DevContext, codeContext, requirements, p
 	return RenderPrompt(RecordPlanInitial, data)
 }
 
-func ApproveDevPlan(dCtx DevContext, devPlan DevPlan) (*UserResponse, error) {
-	req := RequestForUser{
+func ApproveDevPlan(dCtx DevContext, devPlan DevPlan) (*flow_action.UserResponse, error) {
+	req := flow_action.RequestForUser{
 		Content:       "Please approve or reject the development plan:\n\n" + devPlan.String() + "\n\nDo you approve this plan? If not, please provide feedback on what needs to be changed.",
 		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
 	}
-	return GetUserApproval(dCtx, "dev_plan", req.Content, req.RequestParams)
+	return flow_action.GetUserApproval(dCtx.ExecContext, "dev_plan", req.Content, req.RequestParams)
 }
 
 // List out all conditions/requirements in the following instructions. Then

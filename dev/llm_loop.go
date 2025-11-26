@@ -2,6 +2,7 @@ package dev
 
 import (
 	"fmt"
+	"sidekick/flow_action"
 	"sidekick/llm"
 
 	"go.temporal.io/sdk/workflow"
@@ -106,7 +107,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 		// Get user feedback every N iterations
 		if iteration.NumSinceLastFeedback >= config.maxIterationsBeforeFeedback {
 			guidanceContext := fmt.Sprintf("The LLM has looped %d times without finalizing. Please provide guidance or just say \"continue\" if they are on track.", iteration.Num)
-			userResponse, err := GetUserGuidance(dCtx, guidanceContext, nil)
+			userResponse, err := flow_action.GetUserGuidance(dCtx.ExecContext, guidanceContext, nil)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get user feedback: %v", err)
 			}

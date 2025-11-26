@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sidekick/env"
+	"sidekick/flow_action"
 	"sidekick/llm"
 
 	"github.com/invopop/jsonschema"
@@ -27,7 +28,7 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 	approvalPrompt := "Allow running the following command?"
 
 	// Get user approval
-	userResponse, err := GetUserApproval(dCtx, "run_command", approvalPrompt, map[string]any{
+	userResponse, err := flow_action.GetUserApproval(dCtx.ExecContext, "run_command", approvalPrompt, map[string]any{
 		"command":    params.Command,
 		"workingDir": params.WorkingDir,
 	})

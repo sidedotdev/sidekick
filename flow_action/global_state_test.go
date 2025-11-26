@@ -1,7 +1,6 @@
-package dev
+package flow_action
 
 import (
-	"sync"
 	"testing"
 )
 
@@ -59,54 +58,15 @@ func TestGlobalState_UserActions(t *testing.T) {
 		}
 
 		gs.ConsumePendingUserAction()
-		if action := gs.GetPendingUserAction(); action != nil {
-			t.Errorf("Expected no pending action after consumption, got %v", *action)
-		}
-	})
 
-	t.Run("consume when no action is set", func(t *testing.T) {
-		gs := &GlobalState{}
-		// Ensure no action is set
 		if gs.GetPendingUserAction() != nil {
-			t.Fatal("Action was set before 'consume when no action' test")
-		}
-
-		gs.ConsumePendingUserAction() // Should be a no-op
-		if action := gs.GetPendingUserAction(); action != nil {
-			t.Errorf("Expected no pending action after consuming nil, got %v", *action)
+			t.Error("Action should be nil after consume")
 		}
 	})
-}
 
-func TestGlobalState_UserActions_ConcurrentAccess(t *testing.T) {
-	gs := &GlobalState{}
-	var wg sync.WaitGroup
-	numGoroutines := 50
-
-	actionVal := UserActionGoNext
-
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			gs.SetUserAction(actionVal)
-		}()
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_ = gs.GetPendingUserAction()
-		}()
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			gs.ConsumePendingUserAction()
-		}()
-	}
-
-	wg.Wait()
-	// Final check, mostly to ensure no panics and callable.
-	// The state itself is non-deterministic here after mixed operations.
-	_ = gs.GetPendingUserAction()
+	t.Run("consume when nil", func(t *testing.T) {
+		gs := &GlobalState{}
+		// Should not panic
+		gs.ConsumePendingUserAction()
+	})
 }

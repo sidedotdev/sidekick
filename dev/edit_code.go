@@ -9,6 +9,7 @@ import (
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/srv"
 	"sidekick/utils"
@@ -60,9 +61,9 @@ editLoop:
 		// Handle user request to go to the next step, if versioned feature is active.
 		version := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
 		if version == 1 {
-			action := dCtx.GlobalState.GetPendingUserAction()
+			action := dCtx.ExecContext.GlobalState.GetPendingUserAction()
 			if action != nil {
-				return PendingActionError
+				return flow_action.PendingActionError
 			}
 		}
 
@@ -106,7 +107,7 @@ editLoop:
 
 		// Step 1: Get a list of *edit blocks* from the LLM
 		editBlocks, err = authorEditBlocks(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo)
-		if err != nil && !errors.Is(err, PendingActionError) {
+		if err != nil && !errors.Is(err, flow_action.PendingActionError) {
 			v := workflow.GetVersion(dCtx, "edit-code-max-attempts-bugfix", workflow.DefaultVersion, 1)
 			isMaxAttempts := errors.Is(err, ErrMaxAttemptsReached)
 			if v < 0 || !isMaxAttempts {
@@ -121,9 +122,9 @@ editLoop:
 			}
 		}
 		if version == 1 {
-			action := dCtx.GlobalState.GetPendingUserAction()
+			action := dCtx.ExecContext.GlobalState.GetPendingUserAction()
 			if action != nil {
-				return PendingActionError
+				return flow_action.PendingActionError
 			}
 		}
 
@@ -220,11 +221,11 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		// Check for UserActionGoNext and version to potentially skip this step
 		version := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
 		if version == 1 {
-			action := dCtx.GlobalState.GetPendingUserAction()
-			if action != nil && *action == UserActionGoNext {
+			action := dCtx.ExecContext.GlobalState.GetPendingUserAction()
+			if action != nil && *action == flow_action.UserActionGoNext {
 				// If UserActionGoNext is pending and version is new, skip authoring edit blocks.
 				// The action is not consumed here; it will be consumed in completeDevStepSubflow.
-				return nil, PendingActionError
+				return nil, flow_action.PendingActionError
 			}
 		}
 

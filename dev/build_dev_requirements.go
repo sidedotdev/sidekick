@@ -7,6 +7,7 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/fflag"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
 
@@ -277,7 +278,8 @@ func TrackedToolChat(dCtx DevContext, actionType string, options llm.ToolChatOpt
 		}
 		var chatResponse llm.ChatMessageResponse
 		var la *persisted_ai.LlmActivities // use a nil struct pointer to call activities that are part of a structure
-		err := PerformWithUserRetry(actionCtx.WithLlmHeartbeatCtx(), la.ChatStream, &chatResponse, chatStreamOptions)
+		heartbeatCtx := actionCtx.WithLlmHeartbeatCtx()
+		err := flow_action.PerformWithUserRetry(heartbeatCtx.FlowActionContext(), la.ChatStream, &chatResponse, chatStreamOptions)
 		if err != nil {
 			return nil, fmt.Errorf("error during tracked tool chat action '%s': %v", actionType, err)
 		}
@@ -331,13 +333,13 @@ func addToolCallResponse(chatHistory *[]llm.ChatMessage, info ToolCallResponseIn
 	})
 }
 
-func ApproveDevRequirements(dCtx DevContext, devReq DevRequirements) (*UserResponse, error) {
+func ApproveDevRequirements(dCtx DevContext, devReq DevRequirements) (*flow_action.UserResponse, error) {
 	// Create a RequestForUser struct for approval request
-	req := RequestForUser{
+	req := flow_action.RequestForUser{
 		Content:       "Please approve or reject these requirements:\n\n" + devReq.String() + "\n\nDo you approve these requirements? If not, please provide feedback on what needs to be changed.",
 		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
 	}
-	return GetUserApproval(dCtx, "dev_requirements", req.Content, req.RequestParams)
+	return flow_action.GetUserApproval(dCtx.ExecContext, "dev_requirements", req.Content, req.RequestParams)
 }
 
 // TODO we should determine if the context is too large programmatically instead

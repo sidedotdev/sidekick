@@ -17,6 +17,7 @@ import (
 	"sidekick/dev"
 	"sidekick/domain"
 	"sidekick/env"
+	"sidekick/flow_action"
 	"sidekick/frontend"
 	"sidekick/llm"
 	"sidekick/secret_manager"
@@ -477,15 +478,15 @@ func (ctrl *Controller) UserActionHandler(c *gin.Context) {
 		return
 	}
 
-	if req.ActionType != string(dev.UserActionGoNext) {
-		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("Invalid actionType '%s'. Only '%s' is supported.", req.ActionType, dev.UserActionGoNext)})
+	if req.ActionType != string(flow_action.UserActionGoNext) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("Invalid actionType '%s'. Only '%s' is supported.", req.ActionType, flow_action.UserActionGoNext)})
 		return
 	}
 
 	// Note: the only way to interact with the flow's GlobalState is by
 	// signalling it. The signal handler will then process the action within the
 	// context of the temporal workflow.
-	err = ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", dev.SignalNameUserAction, dev.UserActionGoNext)
+	err = ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", dev.SignalNameUserAction, flow_action.UserActionGoNext)
 	if err != nil {
 		var serviceErrNotFound *serviceerror.NotFound
 		if errors.As(err, &serviceErrNotFound) {
@@ -849,18 +850,18 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 
 	requestKindString, ok := flowAction.ActionParams["requestKind"].(string)
 	if ok {
-		switch dev.RequestKind(requestKindString) {
-		case dev.RequestKindFreeForm:
+		switch flow_action.RequestKind(requestKindString) {
+		case flow_action.RequestKindFreeForm:
 			if strings.TrimSpace(body.UserResponse.Content) == "" {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "User response cannot be empty"})
 				return
 			}
-		case dev.RequestKindApproval:
+		case flow_action.RequestKindApproval:
 			if body.UserResponse.Approved == nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "Approved cannot be empty"})
 				return
 			}
-		case dev.RequestKindMergeApproval:
+		case flow_action.RequestKindMergeApproval:
 			if body.UserResponse.Approved == nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "Approved cannot be empty"})
 				return
@@ -868,7 +869,7 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 			if body.UserResponse.Params["targetBranch"] == nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "Target branch cannot be empty"})
 			}
-		case dev.RequestKindMultipleChoice:
+		case flow_action.RequestKindMultipleChoice:
 			if strings.TrimSpace(body.UserResponse.Choice) == "" {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "User choice cannot be empty"})
 				return
@@ -882,7 +883,7 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 		WorkspaceId:       workspaceId,
 	}
 
-	userResponse := dev.UserResponse{
+	userResponse := flow_action.UserResponse{
 		TargetWorkflowId: flowAction.FlowId,
 		Content:          body.UserResponse.Content,
 		Approved:         body.UserResponse.Approved,
@@ -993,7 +994,7 @@ func (ctrl *Controller) UpdateFlowActionHandler(c *gin.Context) {
 		WorkspaceId:       workspaceId,
 	}
 
-	userResponse := dev.UserResponse{
+	userResponse := flow_action.UserResponse{
 		TargetWorkflowId: flowAction.FlowId,
 		Content:          body.UserResponse.Content,
 		Approved:         nil,

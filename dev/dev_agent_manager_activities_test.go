@@ -3,6 +3,7 @@ package dev
 import (
 	"context"
 	"sidekick/domain"
+	"sidekick/flow_action"
 	"sidekick/mocks"
 	"sidekick/srv/redis"
 	"sidekick/utils"
@@ -98,11 +99,11 @@ func TestCreatePendingUserRequest(t *testing.T) {
 
 	workspaceId := "testWorkspace"
 	flowId := "fakeWorkflowId"
-	request := RequestForUser{
+	request := flow_action.RequestForUser{
 		OriginWorkflowId: flowId,
 		Content:          "request content",
 		Subflow:          "fakeSubflow",
-		RequestKind:      RequestKindFreeForm,
+		RequestKind:      flow_action.RequestKindFreeForm,
 	}
 
 	err := ima.CreatePendingUserRequest(ctx, workspaceId, request)
@@ -142,12 +143,12 @@ func TestExistingUserRequest(t *testing.T) {
 	workspaceId := "testWorkspace"
 	flowId := "fakeWorkflowId"
 	flowActionId := "fakeFlowActionId"
-	request := RequestForUser{
+	request := flow_action.RequestForUser{
 		OriginWorkflowId: flowId,
 		FlowActionId:     flowActionId,
 		Content:          "request content",
 		Subflow:          "fakeSubflow",
-		RequestKind:      RequestKindApproval,
+		RequestKind:      flow_action.RequestKindApproval,
 	}
 
 	existingFlowAction := domain.FlowAction{

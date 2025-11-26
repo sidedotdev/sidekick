@@ -8,6 +8,7 @@ import (
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/fflag"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"strings"
 
@@ -251,7 +252,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 
 		// Step 2: execute step
 		err = performStep(dCtx, modelConfig, contextSizeExtension, chatHistory, promptInfo, step, planExecution)
-		if err != nil && !errors.Is(err, PendingActionError) {
+		if err != nil && !errors.Is(err, flow_action.PendingActionError) {
 			log.Warn().Err(err).Msg("Error executing step")
 			// TODO: on repeated overloaded_error from anthropic, we want to
 			// fallback to another provider higher up. similar for other provider
@@ -268,9 +269,9 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		// Step 3: evaluate completion of step
 		executeNormalStepEvaluation := true
 		if v := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1); v == 1 {
-			action := dCtx.GlobalState.GetPendingUserAction()
-			if action != nil && *action == UserActionGoNext {
-				dCtx.GlobalState.ConsumePendingUserAction()
+			action := dCtx.ExecContext.GlobalState.GetPendingUserAction()
+			if action != nil && *action == flow_action.UserActionGoNext {
+				dCtx.ExecContext.GlobalState.ConsumePendingUserAction()
 				executeNormalStepEvaluation = false
 			}
 		}

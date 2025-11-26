@@ -50,8 +50,8 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *[]llm.ChatMessage, pic PromptInfoContainer) ([]EditBlock, error) {
 		ctx1 := utils.NoRetryCtx(ctx)
 		execContext := DevContext{
-			GlobalState: &GlobalState{},
 			ExecContext: flow_action.ExecContext{
+				GlobalState:  &flow_action.GlobalState{},
 				Context:      ctx1,
 				EnvContainer: &s.envContainer,
 				Secrets: &secret_manager.SecretManagerContainer{

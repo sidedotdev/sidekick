@@ -140,11 +140,11 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	}
 
 	goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
-	if goNextVersion >= 1 && errors.Is(err, PendingActionError) && dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree {
-		pending := dCtx.GlobalState.GetPendingUserAction()
-		if pending != nil && *pending == UserActionGoNext {
+	if goNextVersion >= 1 && errors.Is(err, flow_action.PendingActionError) && dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree {
+		pending := dCtx.ExecContext.GlobalState.GetPendingUserAction()
+		if pending != nil && *pending == flow_action.UserActionGoNext {
 			// skip to review/resolve subflow
-			dCtx.GlobalState.ConsumePendingUserAction()
+			dCtx.ExecContext.GlobalState.ConsumePendingUserAction()
 			err = nil
 		}
 	}
@@ -422,12 +422,12 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 			gitDiff, mergeInfo, err := mergeWorktreeIfApproved(dCtx, params)
 
 			if err != nil {
-				if goNextVersion >= 1 && errors.Is(err, PendingActionError) {
-					pending := dCtx.GlobalState.GetPendingUserAction()
-					if pending != nil && *pending == UserActionGoNext {
+				if goNextVersion >= 1 && errors.Is(err, flow_action.PendingActionError) {
+					pending := dCtx.ExecContext.GlobalState.GetPendingUserAction()
+					if pending != nil && *pending == flow_action.UserActionGoNext {
 						// retry if failed due to go-next action, the next
 						// action is to check for approval again
-						dCtx.GlobalState.ConsumePendingUserAction()
+						dCtx.ExecContext.GlobalState.ConsumePendingUserAction()
 						continue
 					}
 				}
@@ -455,12 +455,12 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 				_, err = codingSubflow(dCtx, requirements, params.StartBranch)
 
 				if err != nil {
-					if goNextVersion >= 1 && errors.Is(err, PendingActionError) {
-						pending := dCtx.GlobalState.GetPendingUserAction()
-						if pending != nil && *pending == UserActionGoNext {
+					if goNextVersion >= 1 && errors.Is(err, flow_action.PendingActionError) {
+						pending := dCtx.ExecContext.GlobalState.GetPendingUserAction()
+						if pending != nil && *pending == flow_action.UserActionGoNext {
 							// if failed due to go-next action, the next action
 							// is give the user opportunity to approve merge
-							dCtx.GlobalState.ConsumePendingUserAction()
+							dCtx.ExecContext.GlobalState.ConsumePendingUserAction()
 							continue
 						}
 					}
@@ -555,7 +555,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 			}
 		}
 
-		err := PerformWithUserRetry(actionCtx, git.GitMergeActivity, &mergeResult, dCtx.EnvContainer, git.GitMergeParams{
+		err := flow_action.PerformWithUserRetry(actionCtx.FlowActionContext(), git.GitMergeActivity, &mergeResult, dCtx.EnvContainer, git.GitMergeParams{
 			SourceBranch: dCtx.Worktree.Name,
 			TargetBranch: mergeInfo.TargetBranch,
 		})
@@ -577,12 +577,12 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 			conflictMessage = fmt.Sprintf("Merge conflicts detected at %s. Conflicts are from merging %s into %s. Please resolve conflicts, commit the merge, then continue.", mergeResult.ConflictDirPath, mergeInfo.TargetBranch, dCtx.Worktree.Name)
 		}
 
-		err := GetUserContinue(dCtx, conflictMessage, map[string]any{
-			"continueTag": "done",
-		})
-		if err != nil {
-			return "", MergeApprovalResponse{}, fmt.Errorf("failed to get continue approval: %w", err)
-		}
+			err := flow_action.GetUserContinue(dCtx.ExecContext, conflictMessage, map[string]any{
+				"continueTag": "done",
+			})
+			if err != nil {
+				return "", MergeApprovalResponse{}, fmt.Errorf("failed to get continue approval: %w", err)
+			}
 
 		// Handle reverse conflict scenario - need final merge from source to target
 		if !mergeResult.ConflictOnTargetBranch {
@@ -603,7 +603,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 				// Check if there are still unmerged files
 				if strings.Contains(statusOutput.Stdout, "UU ") || strings.Contains(statusOutput.Stdout, "AA ") || strings.Contains(statusOutput.Stdout, "DD ") {
 					message := "Merge conflicts are not fully resolved, please resolve all conflicts and commit. Git status:\n\n" + statusOutput.Stdout
-					err := GetUserContinue(dCtx, message, map[string]any{
+					err := flow_action.GetUserContinue(dCtx.ExecContext, message, map[string]any{
 						"continueTag": "done",
 					})
 					if err != nil {
@@ -628,7 +628,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 
 				finalMergeResult, err := Track(finalActionCtx, func(flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
 					var finalResult git.MergeActivityResult
-					err := PerformWithUserRetry(finalActionCtx, git.GitMergeActivity, &finalResult, dCtx.EnvContainer, git.GitMergeParams{
+					err := flow_action.PerformWithUserRetry(finalActionCtx.FlowActionContext(), git.GitMergeActivity, &finalResult, dCtx.EnvContainer, git.GitMergeParams{
 						SourceBranch: dCtx.Worktree.Name,
 						TargetBranch: mergeInfo.TargetBranch,
 					})

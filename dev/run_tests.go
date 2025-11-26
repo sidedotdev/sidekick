@@ -5,6 +5,7 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"strings"
 
@@ -113,7 +114,7 @@ func runSingleTest(actionCtx DevActionContext, workingDir string, fullCommand st
 		runTestInput.RelativeWorkingDir = workingDir
 	}
 	var runTestOutput env.EnvRunCommandActivityOutput
-	err := PerformWithUserRetry(actionCtx, env.EnvRunCommandActivity, &runTestOutput, runTestInput)
+	err := flow_action.PerformWithUserRetry(actionCtx.FlowActionContext(), env.EnvRunCommandActivity, &runTestOutput, runTestInput)
 	if err != nil {
 		resultsCh.Send(actionCtx, fmt.Errorf("failed to run test command '%s': %v", fullCommand, err))
 		return

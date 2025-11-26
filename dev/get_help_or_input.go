@@ -3,6 +3,7 @@ package dev
 import (
 	"fmt"
 	"sidekick/domain"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"slices"
 	"strings"
@@ -77,7 +78,7 @@ func GetHelpOrInput(dCtx DevContext, requests []HelpOrInputRequest) (string, err
 	}
 
 	message := messageBuilder.String()
-	req := RequestForUser{
+	req := flow_action.RequestForUser{
 		OriginWorkflowId: workflow.GetInfo(dCtx).WorkflowExecution.ID,
 		Subflow:          dCtx.FlowScope.SubflowName,
 		Content:          message,
@@ -87,9 +88,9 @@ func GetHelpOrInput(dCtx DevContext, requests []HelpOrInputRequest) (string, err
 
 	actionCtx := dCtx.NewActionContext("user_request")
 	actionCtx.ActionParams = req.ActionParams()
-	userResponse, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
+	userResponse, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*flow_action.UserResponse, error) {
 		req.FlowActionId = flowAction.Id
-		return GetUserResponse(dCtx, req)
+		return flow_action.GetUserResponse(actionCtx.ExecContext, req)
 	})
 	return userResponse.Content, err
 }
