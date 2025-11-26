@@ -497,7 +497,7 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 }
 
 func renderCodeContextFeedbackPrompt(feedback, feedbackType string) string {
-	if feedbackType == FeedbackTypePause || feedbackType == FeedbackTypeUserGuidance {
+	if feedbackType == FeedbackTypePause || feedbackType == FeedbackTypeUserGuidance || feedbackType == FeedbackTypeSystemError {
 		return renderGeneralFeedbackPrompt(feedback, feedbackType)
 	}
 

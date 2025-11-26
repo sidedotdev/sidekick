@@ -211,6 +211,7 @@ func renderGeneralFeedbackPrompt(feedback, feedbackType string) string {
 		"feedback":       feedback,
 		"isPause":        feedbackType == FeedbackTypePause,
 		"isUserGuidance": feedbackType == FeedbackTypeUserGuidance,
+		"isSystemError":  feedbackType == FeedbackTypeSystemError,
 	}
 	return RenderPrompt(GeneralFeedback, data)
 }
