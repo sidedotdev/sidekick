@@ -829,16 +829,19 @@ func isWhitespace(s string) bool {
 	return whitespacePattern.MatchString(s)
 }
 
-// FIXME: only works for double-slash and # comment languages
 // FIXME doesn't handle slash-star comments, fix this using tree-sitter comment ranges overlap
 var commentPattern = regexp.MustCompile(`^\s*(\/\/|#).*$`)
+var htmlCommentPattern = regexp.MustCompile(`^\s*<!--.*-->\s*$`)
 
-func isComment(s string) bool {
+func isComment(s string, languageName string) bool {
+	if languageName == "markdown" {
+		return htmlCommentPattern.MatchString(s)
+	}
 	return commentPattern.MatchString(s)
 }
 
-func isWhitespaceOrComment(s string) bool {
-	return isWhitespace(s) || isComment(s)
+func isWhitespaceOrComment(s string, languageName string) bool {
+	return isWhitespace(s) || isComment(s, languageName)
 }
 
 const similarityThreshold = 0.85 // controls similarity per line for fuzzy edit block matching
@@ -969,6 +972,7 @@ func calculateStartingLineIndex(lines []string) int {
 }
 
 func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFromActualFile bool) (match, []match) {
+	languageName := utils.InferLanguageNameFromFilePath(block.FilePath)
 	startingLineIndex := calculateStartingLineIndex(block.OldLines)
 	//fmt.Printf("starting line index: %d\n", startingLineIndex)
 	potentialMatches := FindPotentialMatches(block, originalLines, startingLineIndex, isOriginalLinesFromActualFile)
@@ -1017,7 +1021,7 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 			//fmt.Printf("i:%v, adjustedIndex: %v, oldLinesOffset: %v, originalLinesOffset: %v\n", i, adjustedIndex, oldLinesOffset, originalLinesOffset)
 			// bounds check
 			if adjustedIndex+i+originalLinesOffset >= len(originalLines) {
-				if isWhitespaceOrComment(oldLine) {
+				if isWhitespaceOrComment(oldLine, languageName) {
 					continue
 				} else {
 					// not sure the `successfulMatch` variable is needed as we have highScoreRatio
@@ -1034,14 +1038,14 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 			// skip whitespace-only or comment-only lines when on one side only
 			// TODO ignore changes or added comments on the end of an existing line
 			if score < similarityThreshold {
-				if (isWhitespaceOrComment(originalLine) && !isWhitespaceOrComment(oldLine)) ||
+				if (isWhitespaceOrComment(originalLine, languageName) && !isWhitespaceOrComment(oldLine, languageName)) ||
 					(isWhitespace(originalLine) && !isWhitespace(oldLine)) {
 					matchedLines = append(matchedLines, originalLine)
 					//fmt.Println("offsetting original lines")
 					originalLinesOffset += 1
 					i--
 					continue
-				} else if (isWhitespaceOrComment(oldLine) && !isWhitespaceOrComment(originalLine)) ||
+				} else if (isWhitespaceOrComment(oldLine, languageName) && !isWhitespaceOrComment(originalLine, languageName)) ||
 					(isWhitespace(oldLine) && !isWhitespace(originalLine)) {
 					//fmt.Println("offsetting old lines")
 					oldLinesOffset += 1
