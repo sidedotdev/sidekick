@@ -51,6 +51,46 @@ func TestUpdateTaskForUserRequest(t *testing.T) {
 	assert.False(t, updatedTask.Updated.IsZero(), "Updated time should be set")
 }
 
+func TestUpdateTask(t *testing.T) {
+	ima := newDevAgentManagerActivities()
+	storage := redis.NewTestRedisStorage()
+
+	workspaceId := "testWorkspace"
+	task := domain.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task_updateTaskTest",
+		Status:      domain.TaskStatusToDo,
+		AgentType:   domain.AgentTypeLLM,
+	}
+	flow := domain.Flow{
+		WorkspaceId: workspaceId,
+		Id:          "workflow_updateTaskTest",
+		ParentId:    task.Id,
+	}
+	err := storage.PersistTask(context.Background(), task)
+	assert.Nil(t, err)
+
+	err = storage.PersistFlow(context.Background(), flow)
+	assert.Nil(t, err)
+
+	update := TaskUpdate{
+		Status:    domain.TaskStatusInReview,
+		AgentType: domain.AgentTypeHuman,
+	}
+
+	err = ima.UpdateTask(context.Background(), workspaceId, flow.Id, update)
+	assert.Nil(t, err)
+
+	// Retrieve the task from the database
+	updatedTask, err := storage.GetTask(context.Background(), workspaceId, task.Id)
+	assert.Nil(t, err)
+
+	// Check that the task was updated appropriately
+	assert.Equal(t, update.AgentType, updatedTask.AgentType)
+	assert.Equal(t, update.Status, updatedTask.Status)
+	assert.False(t, updatedTask.Updated.IsZero(), "Updated time should be set")
+}
+
 func TestCreatePendingUserRequest(t *testing.T) {
 	ima := newDevAgentManagerActivities()
 	storage := redis.NewTestRedisStorage()
