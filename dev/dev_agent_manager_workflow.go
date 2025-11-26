@@ -235,9 +235,10 @@ func handleSignals(ctx workflow.Context, input DevAgentManagerWorkflowInput, ima
 	userResponseSigChan := workflow.GetSignalChannel(ctx, SignalNameUserResponse)
 	workflowClosedSignalChan := workflow.GetSignalChannel(ctx, SignalNameWorkflowClosed)
 
+	// overallVersion is used to avoid redundant calls to get the latest version in the loop.
 	// If the workflow was started with a version that supports review status, use it.
 	overallVersion := workflow.GetVersion(ctx, "update-task-status-review-overall", workflow.DefaultVersion, 1)
-	// Track the latest version seen in the loop to avoid redundant GetVersion calls.
+	// Track the latest version seen in the loop.
 	latestVersion := workflow.DefaultVersion
 
 	for {
