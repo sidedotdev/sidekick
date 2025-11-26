@@ -109,7 +109,7 @@ func handleCancel(ctx workflow.Context, c workflow.ReceiveChannel, ima *DevAgent
 	// }
 }
 
-func handleRequestForUser(ctx workflow.Context, c workflow.ReceiveChannel, input DevAgentManagerWorkflowInput, requests *map[string]RequestForUser) {
+func handleRequestForUser(ctx workflow.Context, c workflow.ReceiveChannel, input DevAgentManagerWorkflowInput, requests *map[string]RequestForUser, version workflow.Version) {
 	var ima *DevAgentManagerActivities // use a nil struct pointer to call activities that are part of a structure
 
 	workspaceId := input.WorkspaceId
@@ -133,10 +133,26 @@ func handleRequestForUser(ctx workflow.Context, c workflow.ReceiveChannel, input
 			return
 		}
 
-		err = workflow.ExecuteActivity(ctx, ima.UpdateTaskForUserRequest, workspaceId, req.OriginWorkflowId).Get(ctx, nil)
-		if err != nil {
-			log.Error("Failed to execute UpdateTaskForUserRequest activity", "Error", err)
-			return
+		if version >= 1 {
+			status := domain.TaskStatusBlocked
+			if req.RequestKind == RequestKindMergeApproval {
+				status = domain.TaskStatusInReview
+			}
+			update := TaskUpdate{
+				Status:    status,
+				AgentType: domain.AgentTypeHuman,
+			}
+			err = workflow.ExecuteActivity(ctx, ima.UpdateTask, workspaceId, req.OriginWorkflowId, update).Get(ctx, nil)
+			if err != nil {
+				log.Error("Failed to execute UpdateTask activity", "Error", err)
+				return
+			}
+		} else {
+			err = workflow.ExecuteActivity(ctx, ima.UpdateTaskForUserRequest, workspaceId, req.OriginWorkflowId).Get(ctx, nil)
+			if err != nil {
+				log.Error("Failed to execute UpdateTaskForUserRequest activity", "Error", err)
+				return
+			}
 		}
 	} else {
 		// we just record the request here. a separate concurrent loop in the
@@ -219,10 +235,29 @@ func handleSignals(ctx workflow.Context, input DevAgentManagerWorkflowInput, ima
 	userResponseSigChan := workflow.GetSignalChannel(ctx, SignalNameUserResponse)
 	workflowClosedSignalChan := workflow.GetSignalChannel(ctx, SignalNameWorkflowClosed)
 
+	// overallVersion is used to avoid redundant calls to get the latest version in the loop.
+	// If the workflow was started with a version that supports review status, use it.
+	overallVersion := workflow.GetVersion(ctx, "update-task-status-review-overall", workflow.DefaultVersion, 1)
+	// Track the latest version seen in the loop.
+	latestVersion := workflow.DefaultVersion
+
 	for {
+		effectiveVersion := overallVersion
+		if effectiveVersion == workflow.DefaultVersion {
+			if latestVersion == workflow.DefaultVersion {
+				// If we haven't switched to the new version yet, check if this iteration should switch.
+				// This allows existing workflows to upgrade gracefully.
+				v := workflow.GetVersion(ctx, fmt.Sprintf("update-task-status-review-%d", *count), workflow.DefaultVersion, 1)
+				latestVersion = v
+			}
+			effectiveVersion = latestVersion
+		}
+
 		selector := workflow.NewNamedSelector(ctx, "signalSelector")
 		selector.AddReceive(cancelSigChan, func(c workflow.ReceiveChannel, _ bool) { handleCancel(ctx, c, ima) })
-		selector.AddReceive(requestForUserSigChan, func(c workflow.ReceiveChannel, _ bool) { handleRequestForUser(ctx, c, input, requests) })
+		selector.AddReceive(requestForUserSigChan, func(c workflow.ReceiveChannel, _ bool) {
+			handleRequestForUser(ctx, c, input, requests, effectiveVersion)
+		})
 		selector.AddReceive(userResponseSigChan, func(c workflow.ReceiveChannel, _ bool) {
 			handleUserResponse(ctx, c, ima, requests, requestNotifications)
 		})
