@@ -40,11 +40,9 @@ func DevAgentManagerWorkflow(ctx workflow.Context, input DevAgentManagerWorkflow
 	ctx = setActivityOptions(ctx)
 	var ima *DevAgentManagerActivities // use a nil struct pointer to call activities that are part of a structure
 	future, settable := workflow.NewFuture(ctx)
-	requests := make(map[string]RequestForUser)
-	requestNotifications := make(map[string]bool)
 
 	workflow.Go(ctx, func(ctx workflow.Context) {
-		err := handleSignals(ctx, input, ima, &count, &requests, &requestNotifications)
+		err := handleSignals(ctx, input, ima, &count)
 		settable.Set(nil, err)
 	})
 
@@ -109,7 +107,7 @@ func handleCancel(ctx workflow.Context, c workflow.ReceiveChannel, ima *DevAgent
 	// }
 }
 
-func handleRequestForUser(ctx workflow.Context, c workflow.ReceiveChannel, input DevAgentManagerWorkflowInput, requests *map[string]RequestForUser) {
+func handleRequestForUser(ctx workflow.Context, c workflow.ReceiveChannel, input DevAgentManagerWorkflowInput) {
 	var ima *DevAgentManagerActivities // use a nil struct pointer to call activities that are part of a structure
 
 	workspaceId := input.WorkspaceId
@@ -138,28 +136,10 @@ func handleRequestForUser(ctx workflow.Context, c workflow.ReceiveChannel, input
 			log.Error("Failed to execute UpdateTaskForUserRequest activity", "Error", err)
 			return
 		}
-	} else {
-		// we just record the request here. a separate concurrent loop in the
-		// workflow actually passes this request on to the user
-		// NOTE there can only be one request per workflow right now, as a given
-		// workflow stops while it waits for this request to be fulfilled
-		(*requests)[req.OriginWorkflowId] = RequestForUser{
-			OriginWorkflowId: req.OriginWorkflowId,
-			Content:          req.Content,
-			RequestParams:    req.RequestParams, // Use the options field from the request
-			RequestKind:      req.RequestKind,   // Use the requestKind field from the request
-		}
 	}
 }
 
-// XXX this can just go directly from the agent perform action to the relevant
-// workflow. is there a need to track requests here? i guess just to keep track
-// of them? Actually, that does seem helpful, so we can follow up when requests
-// are taking a long time to fulfill for example.
-
-func handleUserResponse(ctx workflow.Context, c workflow.ReceiveChannel, ima *DevAgentManagerActivities, requests *map[string]RequestForUser, requestNotifications *map[string]bool) {
-	// FIXME remove the argument and use the below commented out code instead
-	// var ima *DevAgentManagerActivities // use a nil struct pointer to call activities that are part of a structure
+func handleUserResponse(ctx workflow.Context, c workflow.ReceiveChannel, ima *DevAgentManagerActivities) {
 	ctx = setActivityOptions(ctx)
 	log := workflow.GetLogger(ctx)
 	log.Info("User response signal received")
@@ -174,11 +154,6 @@ func handleUserResponse(ctx workflow.Context, c workflow.ReceiveChannel, ima *De
 	if err != nil {
 		log.Error("Failed to pass on user response", "Error", err)
 	}
-
-	// NOTE there can only be one request per workflow right now, as a given
-	// workflow stops while it waits for this request to be fulfilled
-	delete(*requests, userResponse.TargetWorkflowId)
-	delete(*requestNotifications, userResponse.TargetWorkflowId)
 }
 
 func handleWorkflowClosure(ctx workflow.Context, c workflow.ReceiveChannel, input DevAgentManagerWorkflowInput, ima *DevAgentManagerActivities) {
@@ -211,9 +186,7 @@ func handleWorkflowClosure(ctx workflow.Context, c workflow.ReceiveChannel, inpu
 	}
 }
 
-func handleSignals(ctx workflow.Context, input DevAgentManagerWorkflowInput, ima *DevAgentManagerActivities, count *int, requests *map[string]RequestForUser, requestNotifications *map[string]bool) error {
-	// FIXME remove the argument and use the below commented out code instead
-	// var ima *DevAgentManagerActivities // use a nil struct pointer to call activities that are part of a structure
+func handleSignals(ctx workflow.Context, input DevAgentManagerWorkflowInput, ima *DevAgentManagerActivities, count *int) error {
 	cancelSigChan := workflow.GetSignalChannel(ctx, SignalNameCancel)
 	requestForUserSigChan := workflow.GetSignalChannel(ctx, SignalNameRequestForUser)
 	userResponseSigChan := workflow.GetSignalChannel(ctx, SignalNameUserResponse)
@@ -222,17 +195,15 @@ func handleSignals(ctx workflow.Context, input DevAgentManagerWorkflowInput, ima
 	for {
 		selector := workflow.NewNamedSelector(ctx, "signalSelector")
 		selector.AddReceive(cancelSigChan, func(c workflow.ReceiveChannel, _ bool) { handleCancel(ctx, c, ima) })
-		selector.AddReceive(requestForUserSigChan, func(c workflow.ReceiveChannel, _ bool) { handleRequestForUser(ctx, c, input, requests) })
+		selector.AddReceive(requestForUserSigChan, func(c workflow.ReceiveChannel, _ bool) { handleRequestForUser(ctx, c, input) })
 		selector.AddReceive(userResponseSigChan, func(c workflow.ReceiveChannel, _ bool) {
-			handleUserResponse(ctx, c, ima, requests, requestNotifications)
+			handleUserResponse(ctx, c, ima)
 		})
 		selector.AddReceive(workflowClosedSignalChan, func(c workflow.ReceiveChannel, _ bool) { handleWorkflowClosure(ctx, c, input, ima) })
 		selector.Select(ctx)
 
 		*count++
 		if *count >= 1000 && !selector.HasPending() {
-			// XXX despite checking HasPending, do we still need to do an async drain of signals??
-			// FIXME pass on the requests map as part of the input
 			err := workflow.NewContinueAsNewError(ctx, DevAgentManagerWorkflow, input)
 			return err
 		}
