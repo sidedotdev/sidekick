@@ -19,6 +19,48 @@ type DevAgentManagerActivities struct {
 	TemporalClient client.Client
 }
 
+type TaskUpdate struct {
+	Status    domain.TaskStatus
+	AgentType domain.AgentType
+}
+
+func (ima *DevAgentManagerActivities) UpdateTask(ctx context.Context, workspaceId, workflowId string, update TaskUpdate) error {
+	// Recursive function to find a workflow record with parent_id that starts with "task_"
+	var findWorkflowParentTaskId func(string) (string, error)
+	findWorkflowParentTaskId = func(currentWorkflowId string) (string, error) {
+		flow, err := ima.Storage.GetFlow(ctx, workspaceId, currentWorkflowId)
+		if err != nil {
+			return "", fmt.Errorf("Failed to retrieve workflow record for workflowId %s: %v", currentWorkflowId, err)
+		}
+
+		if strings.HasPrefix(flow.ParentId, "task_") {
+			return flow.ParentId, nil
+		} else if strings.HasPrefix(flow.ParentId, "workflow_") {
+			return findWorkflowParentTaskId(flow.ParentId)
+		}
+
+		return "", fmt.Errorf("No task workflow found for workflowId: %s", workflowId)
+	}
+
+	// Find the task id
+	taskId, err := findWorkflowParentTaskId(workflowId)
+	if err != nil {
+		return err
+	}
+
+	// Update the task record
+	task, err := ima.Storage.GetTask(ctx, workspaceId, taskId)
+	if err != nil {
+		return fmt.Errorf("Failed to retrieve task record for taskId %s: %v", taskId, err)
+	}
+
+	task.AgentType = update.AgentType
+	task.Status = update.Status
+	task.Updated = time.Now()
+
+	return ima.Storage.PersistTask(ctx, task)
+}
+
 func (ima *DevAgentManagerActivities) UpdateTaskForUserRequest(ctx context.Context, workspaceId, workflowId string) error {
 	// Recursive function to find a workflow record with parent_id that starts with "task_"
 	var findWorkflowParentTaskId func(string) (string, error)
