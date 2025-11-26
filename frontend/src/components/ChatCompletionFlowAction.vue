@@ -9,6 +9,9 @@
           ({{ flowAction.actionParams.reasoningEffort }} reasoning)
         </span>
       </p>
+      <p class="model-usage" v-if="parsedActionResult && !completionParseFailure && flowAction.actionStatus !== 'pending' && flowAction.actionStatus !== 'started' && usage && (usage.inputTokens || usage.outputTokens)">
+        <span v-if="usage.inputTokens">{{ formatTokens(usage.inputTokens) }} in</span><span v-if="usage.inputTokens && usage.outputTokens"> · </span><span v-if="usage.outputTokens">{{ formatTokens(usage.outputTokens) }} out</span>
+      </p>
     </div>
 
     Message History: <a @click="showParams = !showParams" class="show-params">{{ showParams ? 'Hide' : 'Show' }}</a>
@@ -75,7 +78,7 @@
 </template>
 
 <script setup lang="ts">
-import type { ChatCompletionChoice, ChatCompletionMessage, FlowAction } from '../lib/models';
+import type { ChatCompletionChoice, ChatCompletionMessage, FlowAction, Usage } from '../lib/models';
 import { computed, ref, watch } from 'vue'
 import JsonTree from './JsonTree.vue'
 import VueMarkdown from 'vue-markdown-render'
@@ -120,6 +123,16 @@ const completion = computed<ChatCompletionChoice>(() => parsedActionResult.value
 
 const effectiveModel = computed(() => props.flowAction.actionParams.model || completion.value?.model || '')
 const effectiveProvider = computed(() => props.flowAction.actionParams.provider || completion.value?.provider || '')
+
+const usage = computed<Usage | null>(() => completion.value?.usage || null)
+
+function formatTokens(n: number): string {
+  if (n >= 1000) {
+    const formatted = (n / 1000).toFixed(1)
+    return formatted.endsWith('.0') ? formatted.slice(0, -2) + 'k' : formatted + 'k'
+  }
+  return n.toString()
+}
 
 // Watcher for flowAction changes
 watch(() => props.flowAction, (newVal) => {
@@ -222,6 +235,12 @@ function toggleMessage(index: number) {
 
 .message-function-call-name {
   color: #f92;
+}
+
+.model-usage {
+  font-size: 0.85em;
+  color: var(--color-text-2);
+  font-weight: normal;
 }
 
 </style>
