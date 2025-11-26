@@ -23,9 +23,12 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/urfave/cli/v3"
 	"go.temporal.io/api/enums/v1"
+	namespacepb "go.temporal.io/api/namespace/v1"
 	"go.temporal.io/api/operatorservice/v1"
+	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 	temporal_worker "go.temporal.io/sdk/worker"
+	"google.golang.org/protobuf/types/known/durationpb"
 	zerologadapter "logur.dev/adapter/zerolog"
 	"logur.dev/logur"
 
@@ -269,12 +272,82 @@ func startTemporalServer(cfg *temporalServerConfig) temporal.Server {
 		log.Fatal().Err(err).Msg("Unable to start server")
 	}
 
+	err = ensureNamespaceRetention(cfg)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to ensure namespace retention")
+	}
+
 	err = setupSidekickTemporalSearchAttributes(cfg)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Setting up sidekick temporal search attributes failed")
 	}
 
 	return server
+}
+
+func ensureNamespaceRetention(cfg *temporalServerConfig) error {
+	logger := logur.LoggerToKV(zerologadapter.New(log.Logger))
+	clientOptions := client.Options{
+		Logger:   logger,
+		HostPort: fmt.Sprintf("%s:%d", cfg.ip, cfg.ports.frontend),
+	}
+	cl, err := client.NewLazyClient(clientOptions)
+	if err != nil {
+		return fmt.Errorf("failed to create Temporal client: %w", err)
+	}
+	defer cl.Close()
+
+	ctx := context.Background()
+	workflowService := cl.WorkflowService()
+
+	describeReq := &workflowservice.DescribeNamespaceRequest{
+		Namespace: cfg.namespace,
+	}
+	describeResp, err := workflowService.DescribeNamespace(ctx, describeReq)
+	if err != nil {
+		return fmt.Errorf("failed to describe namespace: %w", err)
+	}
+
+	targetDays := common.GetTemporalRetentionDays()
+	targetRetention := time.Duration(targetDays) * 24 * time.Hour
+
+	currentRetention := time.Duration(0)
+	if describeResp.Config != nil && describeResp.Config.WorkflowExecutionRetentionTtl != nil {
+		currentRetention = describeResp.Config.WorkflowExecutionRetentionTtl.AsDuration()
+	}
+
+	if currentRetention >= targetRetention {
+		log.Info().
+			Dur("current_retention", currentRetention).
+			Dur("target_retention", targetRetention).
+			Int("target_days", targetDays).
+			Msg("Namespace retention already meets or exceeds target, no update needed")
+		return nil
+	}
+
+	log.Info().
+		Dur("current_retention", currentRetention).
+		Dur("target_retention", targetRetention).
+		Int("target_days", targetDays).
+		Msg("Updating namespace retention")
+
+	updateReq := &workflowservice.UpdateNamespaceRequest{
+		Namespace: cfg.namespace,
+		Config: &namespacepb.NamespaceConfig{
+			WorkflowExecutionRetentionTtl: durationpb.New(targetRetention),
+		},
+	}
+
+	_, err = workflowService.UpdateNamespace(ctx, updateReq)
+	if err != nil {
+		return fmt.Errorf("failed to update namespace retention: %w", err)
+	}
+
+	log.Info().
+		Int("retention_days", targetDays).
+		Msg("Successfully updated namespace retention")
+
+	return nil
 }
 
 func setupSidekickTemporalSearchAttributes(cfg *temporalServerConfig) error {
