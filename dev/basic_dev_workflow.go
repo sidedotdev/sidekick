@@ -577,12 +577,12 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 			conflictMessage = fmt.Sprintf("Merge conflicts detected at %s. Conflicts are from merging %s into %s. Please resolve conflicts, commit the merge, then continue.", mergeResult.ConflictDirPath, mergeInfo.TargetBranch, dCtx.Worktree.Name)
 		}
 
-			err := flow_action.GetUserContinue(dCtx.ExecContext, conflictMessage, map[string]any{
-				"continueTag": "done",
-			})
-			if err != nil {
-				return "", MergeApprovalResponse{}, fmt.Errorf("failed to get continue approval: %w", err)
-			}
+		err := flow_action.GetUserContinue(dCtx.ExecContext, conflictMessage, map[string]any{
+			"continueTag": "done",
+		})
+		if err != nil {
+			return "", MergeApprovalResponse{}, fmt.Errorf("failed to get continue approval: %w", err)
+		}
 
 		// Handle reverse conflict scenario - need final merge from source to target
 		if !mergeResult.ConflictOnTargetBranch {

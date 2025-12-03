@@ -51,7 +51,7 @@ func PerformWithUserRetry(actionCtx ActionContext, activity interface{}, valuePt
 			}
 		}
 
-		userErr := GetUserContinue(actionCtx.ExecContext, prompt, requestParams)
+		userErr := GetUserContinue(actionCtx, prompt, requestParams)
 		if userErr != nil {
 			// GetUserContinue failed, return that error and break the retry loop
 			return userErr
