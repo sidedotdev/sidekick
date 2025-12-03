@@ -10,6 +10,29 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+// GetUserResponse wraps TrackHuman and delegates to flow_action.GetUserResponse
+func GetUserResponse(actionCtx DevActionContext, req flow_action.RequestForUser) (*flow_action.UserResponse, error) {
+	return TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*flow_action.UserResponse, error) {
+		req.FlowActionId = flowAction.Id
+		return flow_action.GetUserResponse(actionCtx.ExecContext, req)
+	})
+}
+
+// GetUserContinue wraps flow_action.GetUserContinue with DevActionContext
+func GetUserContinue(actionCtx DevActionContext, prompt string, params map[string]any) error {
+	return flow_action.GetUserContinue(actionCtx.FlowActionContext(), prompt, params)
+}
+
+// GetUserGuidance wraps flow_action.GetUserGuidance with DevActionContext
+func GetUserGuidance(actionCtx DevActionContext, guidanceContext string, params map[string]any) (*flow_action.UserResponse, error) {
+	return flow_action.GetUserGuidance(actionCtx.FlowActionContext(), guidanceContext, params)
+}
+
+// GetUserApproval wraps flow_action.GetUserApproval with DevActionContext
+func GetUserApproval(actionCtx DevActionContext, approvalType, approvalPrompt string, params map[string]any) (*flow_action.UserResponse, error) {
+	return flow_action.GetUserApproval(actionCtx.FlowActionContext(), approvalType, approvalPrompt, params)
+}
+
 // MergeApprovalParams contains parameters specific to merge approval requests
 type MergeApprovalParams struct {
 	DefaultTargetBranch string `json:"defaultTargetBranch"` // the default target branch, which is to be confirmed/overridden by the user
@@ -145,7 +168,7 @@ func GetUserMergeApproval(
 //
 // before replacing, we'll need a better solution for remembering user feedback too.
 func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceContext string, chatHistory *[]llm.ChatMessage, requestParams map[string]any) (FeedbackInfo, error) {
-	userResponse, err := flow_action.GetUserGuidance(dCtx.ExecContext, guidanceContext, requestParams)
+	userResponse, err := GetUserGuidance(dCtx.NewActionContext("user_feedback"), guidanceContext, requestParams)
 	if err != nil {
 		return FeedbackInfo{}, fmt.Errorf("failed to get user response: %v", err)
 	}

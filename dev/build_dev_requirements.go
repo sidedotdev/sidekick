@@ -339,7 +339,7 @@ func ApproveDevRequirements(dCtx DevContext, devReq DevRequirements) (*flow_acti
 		Content:       "Please approve or reject these requirements:\n\n" + devReq.String() + "\n\nDo you approve these requirements? If not, please provide feedback on what needs to be changed.",
 		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
 	}
-	return flow_action.GetUserApproval(dCtx.ExecContext, "dev_requirements", req.Content, req.RequestParams)
+	return GetUserApproval(dCtx.NewActionContext("dev_requirements"), "dev_requirements", req.Content, req.RequestParams)
 }
 
 // TODO we should determine if the context is too large programmatically instead

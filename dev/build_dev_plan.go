@@ -336,7 +336,7 @@ func ApproveDevPlan(dCtx DevContext, devPlan DevPlan) (*flow_action.UserResponse
 		Content:       "Please approve or reject the development plan:\n\n" + devPlan.String() + "\n\nDo you approve this plan? If not, please provide feedback on what needs to be changed.",
 		RequestParams: map[string]interface{}{"approveTag": "approve_plan", "rejectTag": "reject_plan"},
 	}
-	return flow_action.GetUserApproval(dCtx.ExecContext, "dev_plan", req.Content, req.RequestParams)
+	return GetUserApproval(dCtx.NewActionContext("dev_plan"), "dev_plan", req.Content, req.RequestParams)
 }
 
 // List out all conditions/requirements in the following instructions. Then
