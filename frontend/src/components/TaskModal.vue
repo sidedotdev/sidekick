@@ -27,6 +27,80 @@
         Determine Requirements
       </label>
 
+      <label>
+        <input type="checkbox" v-model="useCustomModels" />
+        Custom Models
+      </label>
+
+      <div v-if="useCustomModels" class="model-config-section">
+        <!-- Default Model -->
+        <div class="model-row">
+          <span class="model-label">Default</span>
+          <select v-model="defaultModelConfig.provider" class="provider-select">
+            <option value="">Select</option>
+            <option v-for="p in providerOptions" :key="p" :value="p">{{ p }}</option>
+          </select>
+          <input
+            type="text"
+            v-model="defaultModelConfig.model"
+            placeholder="Model name"
+            class="model-input"
+          />
+          <button type="button" class="options-toggle" @click="defaultOptionsExpanded = !defaultOptionsExpanded">
+            Options {{ defaultOptionsExpanded ? '▲' : '▼' }}
+          </button>
+        </div>
+        <div v-if="defaultOptionsExpanded" class="options-row">
+          <label class="option-label">
+            Reasoning Effort
+            <select v-model="defaultModelConfig.reasoningEffort" class="reasoning-select">
+              <option v-for="r in reasoningEffortOptions" :key="r" :value="r">{{ r || 'Select' }}</option>
+            </select>
+          </label>
+        </div>
+
+        <!-- Use Case Models -->
+        <template v-for="useCase in USE_CASES" :key="useCase">
+          <div class="model-row">
+            <label class="use-case-checkbox">
+              <input type="checkbox" v-model="useCaseConfigs[useCase].enabled" />
+              <span class="model-label">{{ useCase }}</span>
+            </label>
+            <select
+              v-model="useCaseConfigs[useCase].config.provider"
+              class="provider-select"
+              :disabled="!useCaseConfigs[useCase].enabled"
+            >
+              <option value="">Select</option>
+              <option v-for="p in providerOptions" :key="p" :value="p">{{ p }}</option>
+            </select>
+            <input
+              type="text"
+              v-model="useCaseConfigs[useCase].config.model"
+              placeholder="Model name"
+              class="model-input"
+              :disabled="!useCaseConfigs[useCase].enabled"
+            />
+            <button
+              type="button"
+              class="options-toggle"
+              :disabled="!useCaseConfigs[useCase].enabled"
+              @click="useCaseConfigs[useCase].optionsExpanded = !useCaseConfigs[useCase].optionsExpanded"
+            >
+              Options {{ useCaseConfigs[useCase].optionsExpanded ? '▲' : '▼' }}
+            </button>
+          </div>
+          <div v-if="useCaseConfigs[useCase].enabled && useCaseConfigs[useCase].optionsExpanded" class="options-row">
+            <label class="option-label">
+              Reasoning Effort
+              <select v-model="useCaseConfigs[useCase].config.reasoningEffort" class="reasoning-select">
+                <option v-for="r in reasoningEffortOptions" :key="r" :value="r">{{ r || 'Select' }}</option>
+              </select>
+            </label>
+          </div>
+        </template>
+      </div>
+
       <div>
         <AutogrowTextarea id="description" v-model="description" placeholder="Task description - the more detail, the better" />
       </div>
@@ -55,7 +129,7 @@ import Button from 'primevue/button';
 import SegmentedControl from './SegmentedControl.vue'
 import BranchSelector from './BranchSelector.vue'
 import { store } from '../lib/store'
-import type { Task, TaskStatus } from '../lib/models'
+import type { Task, TaskStatus, ModelConfig, LLMConfig } from '../lib/models'
 
 const devMode = import.meta.env.MODE === 'development'
 const props = defineProps<{
@@ -78,6 +152,34 @@ const determineRequirements = ref<boolean>(props.task?.flowOptions?.determineReq
 const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
 const selectedBranch = ref<string | null>(props.task?.flowOptions?.startBranch || null)
 const workspaceId = ref<string>(props.task?.workspaceId || store.workspaceId as string)
+
+// Model configuration overrides
+const existingLlmConfig = props.task?.flowOptions?.configOverrides?.llm as LLMConfig | undefined
+const useCustomModels = ref<boolean>(!!existingLlmConfig)
+const defaultModelConfig = ref<ModelConfig>(
+  existingLlmConfig?.defaults?.[0] || { provider: '', model: '', reasoningEffort: '' }
+)
+const defaultOptionsExpanded = ref(false)
+
+const USE_CASES = ['planning', 'judging', 'code_localization'] as const
+type UseCase = typeof USE_CASES[number]
+
+const initUseCaseConfigs = (): Record<UseCase, { enabled: boolean; config: ModelConfig; optionsExpanded: boolean }> => {
+  const configs = {} as Record<UseCase, { enabled: boolean; config: ModelConfig; optionsExpanded: boolean }>
+  for (const useCase of USE_CASES) {
+    const existingConfig = existingLlmConfig?.useCaseConfigs?.[useCase]?.[0]
+    configs[useCase] = {
+      enabled: !!existingConfig,
+      config: existingConfig || { provider: '', model: '', reasoningEffort: '' },
+      optionsExpanded: false,
+    }
+  }
+  return configs
+}
+const useCaseConfigs = ref(initUseCaseConfigs())
+
+const providerOptions = ['google', 'anthropic', 'openai']
+const reasoningEffortOptions = ['', 'minimal', 'low', 'medium', 'high'] as const
 
 const dropdownOptions = [
   {
@@ -105,6 +207,24 @@ const handleStatusSelect = (value: string) => {
   submitTask()
 }
 
+const buildLlmConfig = (): LLMConfig | null => {
+  if (!useCustomModels.value) return null
+  
+  const llmConfig: LLMConfig = {
+    defaults: [{ ...defaultModelConfig.value }],
+    useCaseConfigs: {},
+  }
+  
+  for (const useCase of USE_CASES) {
+    const ucConfig = useCaseConfigs.value[useCase]
+    if (ucConfig.enabled && ucConfig.config.provider && ucConfig.config.model) {
+      llmConfig.useCaseConfigs[useCase] = [{ ...ucConfig.config }]
+    }
+  }
+  
+  return llmConfig
+}
+
 const submitTask = async () => {
   const flowOptions: Record<string, any> = {
     planningPrompt: planningPrompt.value,
@@ -115,6 +235,12 @@ const submitTask = async () => {
   // startBranch supported only if envType is local_git_worktree
   if (envType.value === 'local_git_worktree') {
     flowOptions.startBranch = selectedBranch.value
+  }
+
+  // Add config overrides if custom models are enabled
+  const llmConfig = buildLlmConfig()
+  if (llmConfig) {
+    flowOptions.configOverrides = { llm: llmConfig }
   }
 
   // remove null/empty values from flowOptions
@@ -166,6 +292,39 @@ const submitTask = async () => {
   close()
 }
 
+const hasModelConfigChanges = (): boolean => {
+  const initialLlmConfig = props.task?.flowOptions?.configOverrides?.llm as LLMConfig | undefined
+  const initialUseCustomModels = !!initialLlmConfig
+  
+  if (useCustomModels.value !== initialUseCustomModels) return true
+  if (!useCustomModels.value) return false
+  
+  const initialDefault = initialLlmConfig?.defaults?.[0] || { provider: '', model: '', reasoningEffort: '' }
+  if (defaultModelConfig.value.provider !== initialDefault.provider ||
+      defaultModelConfig.value.model !== initialDefault.model ||
+      defaultModelConfig.value.reasoningEffort !== (initialDefault.reasoningEffort || '')) {
+    return true
+  }
+  
+  for (const useCase of USE_CASES) {
+    const initialConfig = initialLlmConfig?.useCaseConfigs?.[useCase]?.[0]
+    const currentConfig = useCaseConfigs.value[useCase]
+    const initialEnabled = !!initialConfig
+    
+    if (currentConfig.enabled !== initialEnabled) return true
+    if (currentConfig.enabled) {
+      const initCfg = initialConfig || { provider: '', model: '', reasoningEffort: '' }
+      if (currentConfig.config.provider !== initCfg.provider ||
+          currentConfig.config.model !== initCfg.model ||
+          currentConfig.config.reasoningEffort !== (initCfg.reasoningEffort || '')) {
+        return true
+      }
+    }
+  }
+  
+  return false
+}
+
 const safeClose = () => {
   let hasChanges = false;
   if (isEditMode.value) {
@@ -182,7 +341,8 @@ const safeClose = () => {
                  determineRequirements.value !== initialDetermineRequirements ||
                   planningPrompt.value !== initialPlanningPrompt ||
                   // Check branch change only if envType is worktree
-                  (envType.value === 'local_git_worktree' && selectedBranch.value !== initialStartBranch);
+                  (envType.value === 'local_git_worktree' && selectedBranch.value !== initialStartBranch) ||
+                  hasModelConfigChanges();
   } else {
     // Check changes for a new task: Compare current values against initial defaults
     const initialDescription = '';
@@ -197,7 +357,8 @@ const safeClose = () => {
                  flowType.value !== initialFlowType ||
                  envType.value !== initialEnvType ||
                  determineRequirements.value !== initialDetermineRequirements ||
-                 planningPrompt.value !== initialPlanningPrompt;
+                 planningPrompt.value !== initialPlanningPrompt ||
+                 hasModelConfigChanges();
   }
 
 
@@ -306,6 +467,101 @@ label {
 
 :deep(.p-select) {
   background-color: field;
+}
+
+.model-config-section {
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  background-color: var(--color-background-soft);
+}
+
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.model-label {
+  min-width: 8rem;
+  font-weight: 500;
+}
+
+.use-case-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0;
+  min-width: 8rem;
+}
+
+.use-case-checkbox input {
+  margin: 0;
+}
+
+.provider-select {
+  min-width: 6rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  background-color: var(--color-background);
+  color: var(--color-text);
+}
+
+.model-input {
+  flex: 1;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  background-color: var(--color-background);
+  color: var(--color-text);
+}
+
+.options-toggle {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  background-color: var(--color-background);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.options-toggle:hover:not(:disabled) {
+  background-color: var(--color-background-soft);
+}
+
+.options-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.options-row {
+  margin-left: 8.5rem;
+  margin-bottom: 0.75rem;
+  padding: 0.5rem;
+  background-color: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+}
+
+.option-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  min-width: auto;
+  font-size: 0.875rem;
+}
+
+.reasoning-select {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  background-color: var(--color-background);
+  color: var(--color-text);
 }
 
 </style>
