@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"sidekick"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,8 @@ import (
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/frontend"
+	"sidekick/llm"
+	"sidekick/secret_manager"
 	"sidekick/srv"
 
 	"github.com/gin-gonic/gin"
@@ -55,6 +58,7 @@ type Controller struct {
 	temporalClient    client.Client
 	temporalNamespace string
 	temporalTaskQueue string
+	secretManager     secret_manager.SecretManager
 }
 
 // UserActionRequest defines the expected request body for user actions.
@@ -130,6 +134,8 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	r.ForwardedByClientIP = true
 	r.SetTrustedProxies(nil)
 
+	r.GET("/api/v1/providers", ctrl.GetProvidersHandler)
+
 	workspaceApiRoutes := DefineWorkspaceApiRoutes(r, &ctrl)
 	workspaceApiRoutes.GET("/archived_tasks", ctrl.GetArchivedTasksHandler)
 
@@ -198,12 +204,63 @@ func NewController() (Controller, error) {
 		return Controller{}, fmt.Errorf("failed to connect to storage: %w", err)
 	}
 
+	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+		secret_manager.EnvSecretManager{},
+		secret_manager.KeyringSecretManager{},
+		secret_manager.LocalConfigSecretManager{},
+	})
+
 	return Controller{
 		service:           service,
 		temporalClient:    temporalClient,
 		temporalNamespace: common.GetTemporalNamespace(),
 		temporalTaskQueue: common.GetTemporalTaskQueue(),
+		secretManager:     secretManager,
 	}, nil
+}
+
+func (ctrl *Controller) GetProvidersHandler(c *gin.Context) {
+	providers := []string{}
+	seen := make(map[string]bool)
+
+	config, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to load sidekick config")
+	} else {
+		for _, p := range config.Providers {
+			if p.Name != "" && !seen[p.Name] {
+				providers = append(providers, p.Name)
+				seen[p.Name] = true
+			}
+		}
+	}
+
+	for _, builtinProvider := range common.BuiltinProviders {
+		if seen[builtinProvider] {
+			continue
+		}
+
+		var secretNames []string
+		switch builtinProvider {
+		case "openai":
+			secretNames = []string{llm.OpenaiApiKeySecretName}
+		case "anthropic":
+			secretNames = []string{llm.AnthropicApiKeySecretName, "ANTHROPIC_OAUTH"}
+		case "google":
+			secretNames = []string{llm.GoogleApiKeySecretName}
+		}
+
+		for _, secretName := range secretNames {
+			if _, err := ctrl.secretManager.GetSecret(secretName); err == nil {
+				if !slices.Contains(providers, builtinProvider) {
+					providers = append(providers, builtinProvider)
+				}
+				break
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"providers": providers})
 }
 
 func (ctrl *Controller) ErrorHandler(c *gin.Context, status int, err error) {
