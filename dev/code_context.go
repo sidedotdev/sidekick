@@ -317,6 +317,11 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			return nil, "", fmt.Errorf("failed to determine required code context: %v", err)
 		}
 
+		// Allow explicit empty requests for new/empty projects
+		if len(requiredCodeContext.Requests) == 0 {
+			break
+		}
+
 		// STEP 3: Read the code
 		var result coding.SymDefResults
 		result, err = extractCodeContext(noRetryCtx, coding.DirectorySymDefRequest{
@@ -406,8 +411,11 @@ func extractCodeContext(ctx workflow.Context, req coding.DirectorySymDefRequest)
 }
 
 func RetrieveCodeContext(dCtx DevContext, requiredCodeContext RequiredCodeContext, characterLengthThreshold int) (string, error) {
-	if len(requiredCodeContext.Requests) == 0 {
+	if requiredCodeContext.Requests == nil {
 		return "", llm.ErrToolCallUnmarshal
+	}
+	if len(requiredCodeContext.Requests) == 0 {
+		return "", nil
 	}
 
 	dCtx.Context = utils.NoRetryCtx(dCtx)
