@@ -97,6 +97,15 @@ func (ctrl *Controller) ArchiveTaskHandler(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+func (ctrl *Controller) GetModelsHandler(c *gin.Context) {
+	data, err := common.LoadModelsDev()
+	if err != nil {
+		ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, data)
+}
+
 // ArchiveFinishedTasksHandler handles the request to archive all finished tasks
 func (ctrl *Controller) ArchiveFinishedTasksHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
@@ -135,6 +144,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	r.SetTrustedProxies(nil)
 
 	r.GET("/api/v1/providers", ctrl.GetProvidersHandler)
+	r.GET("/api/v1/models", ctrl.GetModelsHandler)
 
 	workspaceApiRoutes := DefineWorkspaceApiRoutes(r, &ctrl)
 	workspaceApiRoutes.GET("/archived_tasks", ctrl.GetArchivedTasksHandler)

@@ -2417,3 +2417,20 @@ func TestGetProvidersHandler(t *testing.T) {
 		})
 	}
 }
+
+func TestGetModelsHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+	router := DefineRoutes(ctrl)
+
+	req, _ := http.NewRequest("GET", "/api/v1/models", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+	assert.NotEmpty(t, response, "response should contain provider data")
+}
