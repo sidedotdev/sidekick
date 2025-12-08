@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sidekick/common"
+	"sidekick/llm"
+	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -38,13 +41,27 @@ func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options,
 		}
 	}()
 
-	secretName := fmt.Sprintf("%s_API_KEY", options.Params.ModelConfig.NormalizedProviderName())
-	token, err := options.Secrets.SecretManager.GetSecret(secretName)
-	if err != nil {
-		return nil, err
+	// Try OAuth credentials first, fall back to API key
+	oauthCreds, useOAuth := llm.GetAnthropicOAuthCredentials(options.Secrets.SecretManager)
+	var client *anthropic.Client
+	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	if useOAuth {
+		client = anthropic.NewClient(
+			option.WithHTTPClient(httpClient),
+			option.WithHeader("Authorization", "Bearer "+oauthCreds.AccessToken),
+			option.WithHeader("anthropic-beta", llm.AnthropicOAuthBetaHeaders),
+		)
+	} else {
+		secretName := fmt.Sprintf("%s_API_KEY", options.Params.ModelConfig.NormalizedProviderName())
+		token, err := options.Secrets.SecretManager.GetSecret(secretName)
+		if err != nil {
+			return nil, err
+		}
+		client = anthropic.NewClient(
+			option.WithHTTPClient(httpClient),
+			option.WithAPIKey(token),
+		)
 	}
-
-	client := anthropic.NewClient(option.WithAPIKey(token))
 
 	model := options.Params.Model
 	if model == "" {
@@ -181,8 +198,93 @@ func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options,
 	}
 
 	if stream.Err() != nil {
-		return nil, stream.Err()
+		streamErr := stream.Err()
+		// If using OAuth and got an auth error, try refreshing the token
+		if useOAuth && isAuthError(streamErr) {
+			newCreds, refreshErr := llm.RefreshAnthropicOAuthToken(oauthCreds.RefreshToken)
+			if refreshErr == nil {
+				if storeErr := llm.StoreAnthropicOAuthCredentials(newCreds); storeErr == nil {
+					// Retry with new credentials
+					client = anthropic.NewClient(
+						option.WithHTTPClient(httpClient),
+						option.WithHeader("Authorization", "Bearer "+newCreds.AccessToken),
+						option.WithHeader("anthropic-beta", llm.AnthropicOAuthBetaHeaders),
+					)
+					stream = client.Messages.NewStreaming(ctx, params)
+					finalMessage = anthropic.Message{}
+					events = nil
+					nextBlockIndex = 0
+					blockIndexMap = make(map[int64]int)
+					startedBlocks = 0
+					stoppedBlocks = 0
+
+					for stream.Next() {
+						event := stream.Current()
+						err := finalMessage.Accumulate(event)
+						if err != nil {
+							return nil, fmt.Errorf("failed to accumulate message: %w", err)
+						}
+						switch evt := event.AsUnion().(type) {
+						case anthropic.ContentBlockStartEvent:
+							blockIndexMap[evt.Index] = nextBlockIndex
+							var contentBlock ContentBlock
+							switch evt.ContentBlock.Type {
+							case "text":
+								contentBlock = ContentBlock{Type: ContentBlockTypeText, Text: ""}
+							case "tool_use":
+								contentBlock = ContentBlock{
+									Type: ContentBlockTypeToolUse,
+									ToolUse: &ToolUseBlock{
+										Id:        evt.ContentBlock.ID,
+										Name:      evt.ContentBlock.Name,
+										Arguments: "",
+									},
+								}
+							default:
+								return nil, fmt.Errorf("unsupported content block type in start event: %s", evt.ContentBlock.Type)
+							}
+							ev := Event{Type: EventBlockStarted, Index: nextBlockIndex, ContentBlock: &contentBlock}
+							events = append(events, ev)
+							eventChan <- ev
+							nextBlockIndex++
+							startedBlocks++
+						case anthropic.ContentBlockDeltaEvent:
+							blockIndex, ok := blockIndexMap[evt.Index]
+							if !ok {
+								return nil, fmt.Errorf("received delta for unknown block index %d", evt.Index)
+							}
+							switch delta := evt.Delta.AsUnion().(type) {
+							case anthropic.TextDelta:
+								ev := Event{Type: EventTextDelta, Index: blockIndex, Delta: delta.Text}
+								events = append(events, ev)
+								eventChan <- ev
+							case anthropic.InputJSONDelta:
+								ev := Event{Type: EventTextDelta, Index: blockIndex, Delta: delta.PartialJSON}
+								events = append(events, ev)
+								eventChan <- ev
+							}
+						case anthropic.ContentBlockStopEvent:
+							blockIndex, ok := blockIndexMap[evt.Index]
+							if !ok {
+								return nil, fmt.Errorf("received stop for unknown block index %d", evt.Index)
+							}
+							ev := Event{Type: EventBlockDone, Index: blockIndex}
+							events = append(events, ev)
+							eventChan <- ev
+							stoppedBlocks++
+						}
+					}
+					if stream.Err() != nil {
+						return nil, stream.Err()
+					}
+					goto streamComplete
+				}
+			}
+		}
+		return nil, streamErr
 	}
+
+streamComplete:
 
 	if startedBlocks != stoppedBlocks {
 		return nil, fmt.Errorf("stream truncated: started %d blocks but stopped %d", startedBlocks, stoppedBlocks)
@@ -209,6 +311,14 @@ func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options,
 	}
 
 	return response, nil
+}
+
+func isAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "401") || strings.Contains(errStr, "unauthorized") || strings.Contains(errStr, "Unauthorized")
 }
 
 func accumulateAnthropicEventsToMessage(events []Event) Message {

@@ -41,7 +41,7 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 	httpClient := &http.Client{Timeout: 10 * time.Minute}
 
 	// Try OAuth credentials first, fall back to API key
-	oauthCreds, useOAuth := getAnthropicOAuthCredentials(options)
+	oauthCreds, useOAuth := GetAnthropicOAuthCredentials(options.Secrets.SecretManager)
 	var client *anthropic.Client
 	if useOAuth {
 		client = anthropic.NewClient(
@@ -132,9 +132,9 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 
 	if stream.Err() != nil {
 		// If using OAuth and got an auth error, try refreshing the token and retry once
-		if useOAuth && isAuthError(stream.Err()) {
+		if useOAuth && IsAuthError(stream.Err()) {
 			log.Info().Msg("OAuth token may be expired, attempting refresh")
-			newCreds, refreshErr := refreshAnthropicOAuthToken(oauthCreds.RefreshToken)
+			newCreds, refreshErr := RefreshAnthropicOAuthToken(oauthCreds.RefreshToken)
 			if refreshErr != nil {
 				log.Warn().Err(refreshErr).Msg("Failed to refresh OAuth token, falling back to API key")
 				// Fall back to API key
@@ -148,7 +148,7 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 				)
 			} else {
 				// Update stored credentials and retry with new token
-				if storeErr := storeAnthropicOAuthCredentials(newCreds); storeErr != nil {
+				if storeErr := StoreAnthropicOAuthCredentials(newCreds); storeErr != nil {
 					log.Warn().Err(storeErr).Msg("Failed to store refreshed OAuth credentials")
 				}
 				client = anthropic.NewClient(
@@ -387,8 +387,8 @@ func anthropicToChatMessageResponse(message anthropic.Message, provider string) 
 	return response, nil
 }
 
-func getAnthropicOAuthCredentials(options ToolChatOptions) (*OAuthCredentials, bool) {
-	oauthJSON, err := options.Secrets.SecretManager.GetSecret(AnthropicOAuthSecretName)
+func GetAnthropicOAuthCredentials(secretManager interface{ GetSecret(string) (string, error) }) (*OAuthCredentials, bool) {
+	oauthJSON, err := secretManager.GetSecret(AnthropicOAuthSecretName)
 	if err != nil {
 		return nil, false
 	}
@@ -406,7 +406,7 @@ func getAnthropicOAuthCredentials(options ToolChatOptions) (*OAuthCredentials, b
 	return &creds, true
 }
 
-func isAuthError(err error) bool {
+func IsAuthError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -414,7 +414,10 @@ func isAuthError(err error) bool {
 	return strings.Contains(errStr, "401") || strings.Contains(errStr, "unauthorized") || strings.Contains(errStr, "Unauthorized")
 }
 
-func refreshAnthropicOAuthToken(refreshToken string) (*OAuthCredentials, error) {
+// AnthropicOAuthBetaHeaders returns the beta headers required for OAuth authentication
+const AnthropicOAuthBetaHeaders = anthropicOAuthBetaHeaders
+
+func RefreshAnthropicOAuthToken(refreshToken string) (*OAuthCredentials, error) {
 	reqBody := map[string]string{
 		"grant_type":    "refresh_token",
 		"refresh_token": refreshToken,
@@ -462,7 +465,7 @@ func refreshAnthropicOAuthToken(refreshToken string) (*OAuthCredentials, error) 
 	}, nil
 }
 
-func storeAnthropicOAuthCredentials(creds *OAuthCredentials) error {
+func StoreAnthropicOAuthCredentials(creds *OAuthCredentials) error {
 	credsJSON, err := json.Marshal(creds)
 	if err != nil {
 		return fmt.Errorf("failed to marshal credentials: %w", err)
