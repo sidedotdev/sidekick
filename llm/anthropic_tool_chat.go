@@ -1,9 +1,11 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sidekick/common"
 	"strings"
@@ -12,27 +14,51 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/rs/zerolog/log"
+	"github.com/zalando/go-keyring"
 	"go.temporal.io/sdk/activity"
 )
 
 const AnthropicDefaultModel = "claude-sonnet-4-5-20250929"
 
 const AnthropicApiKeySecretName = "ANTHROPIC_API_KEY"
+const AnthropicOAuthSecretName = "ANTHROPIC_OAUTH"
+
+const (
+	anthropicOAuthBetaHeaders = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14"
+	anthropicTokenEndpoint    = "https://console.anthropic.com/v1/oauth/token"
+	anthropicClientID         = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+	keyringService            = "sidekick"
+)
+
+type OAuthCredentials struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+}
 
 type AnthropicToolChat struct{}
 
 func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta, progressChan chan<- ProgressInfo) (*ChatMessageResponse, error) {
-	token, err := options.Secrets.SecretManager.GetSecret(AnthropicApiKeySecretName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Anthropic API key: %w", err)
-	}
-
 	httpClient := &http.Client{Timeout: 10 * time.Minute}
-	client := anthropic.NewClient(
-		//option.WithBaseURL("https://api.anthropic.com"),
-		option.WithAPIKey(token),
-		option.WithHTTPClient(httpClient), // NOTE: WithRequestTimeout was causing failure after a single token
-	)
+
+	// Try OAuth credentials first, fall back to API key
+	oauthCreds, useOAuth := getAnthropicOAuthCredentials(options)
+	var client *anthropic.Client
+	if useOAuth {
+		client = anthropic.NewClient(
+			option.WithHeader("Authorization", "Bearer "+oauthCreds.AccessToken),
+			option.WithHeader("anthropic-beta", anthropicOAuthBetaHeaders),
+			option.WithHTTPClient(httpClient),
+		)
+	} else {
+		token, err := options.Secrets.SecretManager.GetSecret(AnthropicApiKeySecretName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get Anthropic API key: %w", err)
+		}
+		client = anthropic.NewClient(
+			option.WithAPIKey(token),
+			option.WithHTTPClient(httpClient),
+		)
+	}
 
 	messages, err := anthropicFromChatMessages(options.Params.Messages)
 	if err != nil {
@@ -65,13 +91,15 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 		}
 	}
 
-	stream := client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
+	messageParams := anthropic.MessageNewParams{
 		Temperature: anthropic.F(float64(temperature)),
 		Model:       anthropic.F(model),
 		MaxTokens:   anthropic.Int(maxTokensToUse),
 		Messages:    anthropic.F(messages),
 		Tools:       anthropic.F(tools),
-	})
+	}
+
+	stream := client.Messages.NewStreaming(ctx, messageParams)
 
 	var finalMessage anthropic.Message
 	startedBlocks := 0
@@ -103,8 +131,72 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 	}
 
 	if stream.Err() != nil {
-		log.Error().Err(stream.Err()).Msg("Anthropic tool chat stream error")
-		return nil, fmt.Errorf("stream error: %w", stream.Err())
+		// If using OAuth and got an auth error, try refreshing the token and retry once
+		if useOAuth && isAuthError(stream.Err()) {
+			log.Info().Msg("OAuth token may be expired, attempting refresh")
+			newCreds, refreshErr := refreshAnthropicOAuthToken(oauthCreds.RefreshToken)
+			if refreshErr != nil {
+				log.Warn().Err(refreshErr).Msg("Failed to refresh OAuth token, falling back to API key")
+				// Fall back to API key
+				token, err := options.Secrets.SecretManager.GetSecret(AnthropicApiKeySecretName)
+				if err != nil {
+					return nil, fmt.Errorf("OAuth refresh failed and no API key available: %w", err)
+				}
+				client = anthropic.NewClient(
+					option.WithAPIKey(token),
+					option.WithHTTPClient(httpClient),
+				)
+			} else {
+				// Update stored credentials and retry with new token
+				if storeErr := storeAnthropicOAuthCredentials(newCreds); storeErr != nil {
+					log.Warn().Err(storeErr).Msg("Failed to store refreshed OAuth credentials")
+				}
+				client = anthropic.NewClient(
+					option.WithHeader("Authorization", "Bearer "+newCreds.AccessToken),
+					option.WithHeader("anthropic-beta", anthropicOAuthBetaHeaders),
+					option.WithHTTPClient(httpClient),
+				)
+			}
+
+			// Retry the request
+			stream = client.Messages.NewStreaming(ctx, messageParams)
+			finalMessage = anthropic.Message{}
+			startedBlocks = 0
+			stoppedBlocks = 0
+			for stream.Next() {
+				event := stream.Current()
+				if activity.IsActivity(ctx) {
+					activity.RecordHeartbeat(ctx, event)
+				}
+				log.Trace().Interface("event", event).Msg("Received streamed event from Anthropic API (retry)")
+
+				err := finalMessage.Accumulate(event)
+				if err != nil {
+					return nil, fmt.Errorf("failed to accumulate message: %w", err)
+				}
+
+				switch event := event.AsUnion().(type) {
+				case anthropic.ContentBlockStartEvent:
+					deltaChan <- anthropicContentStartToChatMessageDelta(event.ContentBlock)
+					startedBlocks++
+				case anthropic.ContentBlockDeltaEvent:
+					if len(finalMessage.Content) == 0 {
+						return nil, fmt.Errorf("anthropic tool chat failure: received event of type %s but there was no content block", event.Type)
+					}
+					deltaChan <- anthropicToChatMessageDelta(event.Delta)
+				case anthropic.ContentBlockStopEvent:
+					stoppedBlocks++
+				}
+			}
+
+			if stream.Err() != nil {
+				log.Error().Err(stream.Err()).Msg("Anthropic tool chat stream error after retry")
+				return nil, fmt.Errorf("stream error: %w", stream.Err())
+			}
+		} else {
+			log.Error().Err(stream.Err()).Msg("Anthropic tool chat stream error")
+			return nil, fmt.Errorf("stream error: %w", stream.Err())
+		}
 	}
 
 	// the anthropic-go-sdk library seems to have a bug where if the stream
@@ -293,4 +385,87 @@ func anthropicToChatMessageResponse(message anthropic.Message, provider string) 
 	}
 
 	return response, nil
+}
+
+func getAnthropicOAuthCredentials(options ToolChatOptions) (*OAuthCredentials, bool) {
+	oauthJSON, err := options.Secrets.SecretManager.GetSecret(AnthropicOAuthSecretName)
+	if err != nil {
+		return nil, false
+	}
+
+	var creds OAuthCredentials
+	if err := json.Unmarshal([]byte(oauthJSON), &creds); err != nil {
+		log.Warn().Err(err).Msg("Failed to parse OAuth credentials")
+		return nil, false
+	}
+
+	if creds.AccessToken == "" {
+		return nil, false
+	}
+
+	return &creds, true
+}
+
+func isAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "401") || strings.Contains(errStr, "unauthorized") || strings.Contains(errStr, "Unauthorized")
+}
+
+func refreshAnthropicOAuthToken(refreshToken string) (*OAuthCredentials, error) {
+	reqBody := map[string]string{
+		"grant_type":    "refresh_token",
+		"refresh_token": refreshToken,
+		"client_id":     anthropicClientID,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal refresh request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", anthropicTokenEndpoint, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create refresh request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send refresh request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read refresh response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("token refresh failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to parse refresh response: %w", err)
+	}
+
+	return &OAuthCredentials{
+		AccessToken:  tokenResp.AccessToken,
+		RefreshToken: tokenResp.RefreshToken,
+	}, nil
+}
+
+func storeAnthropicOAuthCredentials(creds *OAuthCredentials) error {
+	credsJSON, err := json.Marshal(creds)
+	if err != nil {
+		return fmt.Errorf("failed to marshal credentials: %w", err)
+	}
+	return keyring.Set(keyringService, AnthropicOAuthSecretName, string(credsJSON))
 }
