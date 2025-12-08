@@ -12,6 +12,7 @@ import (
 	"sidekick/dev"
 	"sidekick/domain"
 	"sidekick/mocks"
+	"sidekick/secret_manager"
 	"sidekick/srv"
 	"sidekick/srv/redis"
 	"sidekick/utils"
@@ -31,6 +32,22 @@ import (
 )
 
 type MockWorkflow struct{}
+
+// testSecretManager is a configurable mock for testing GetProvidersHandler
+type testSecretManager struct {
+	secrets map[string]string
+}
+
+func (t testSecretManager) GetSecret(secretName string) (string, error) {
+	if secret, ok := t.secrets[secretName]; ok {
+		return secret, nil
+	}
+	return "", fmt.Errorf("secret %s not found", secretName)
+}
+
+func (t testSecretManager) GetType() secret_manager.SecretManagerType {
+	return "test"
+}
 
 func (w MockWorkflow) GetID() string {
 	return "mock_workflow_id"
@@ -77,7 +94,14 @@ func NewMockController(t *testing.T) Controller {
 	return Controller{
 		temporalClient: mockTemporalClient,
 		service:        service,
+		secretManager:  secret_manager.MockSecretManager{},
 	}
+}
+
+func NewMockControllerWithSecretManager(t *testing.T, sm secret_manager.SecretManager) Controller {
+	ctrl := NewMockController(t)
+	ctrl.secretManager = sm
+	return ctrl
 }
 
 func TestCreateTaskHandler(t *testing.T) {
@@ -2289,4 +2313,107 @@ func TestUserActionHandler_SignalError(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, rr.Code, "Response code should be Internal Server Error")
 	expectedResponse := fmt.Sprintf(`{"message":"Failed to signal workflow: %s"}`, signalErr.Error())
 	assert.JSONEq(t, expectedResponse, rr.Body.String(), "Response body mismatch")
+}
+
+func TestGetProvidersHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name                 string
+		secrets              map[string]string
+		expectedToContain    []string
+		expectedNotToContain []string
+	}{
+		{
+			name:                 "does not include openai without OPENAI_API_KEY",
+			secrets:              map[string]string{},
+			expectedToContain:    []string{},
+			expectedNotToContain: []string{"openai", "anthropic", "google"},
+		},
+		{
+			name: "includes openai when OPENAI_API_KEY is present",
+			secrets: map[string]string{
+				"OPENAI_API_KEY": "sk-test-key",
+			},
+			expectedToContain:    []string{"openai"},
+			expectedNotToContain: []string{"anthropic", "google"},
+		},
+		{
+			name: "includes anthropic when ANTHROPIC_API_KEY is present",
+			secrets: map[string]string{
+				"ANTHROPIC_API_KEY": "sk-ant-test-key",
+			},
+			expectedToContain:    []string{"anthropic"},
+			expectedNotToContain: []string{"openai", "google"},
+		},
+		{
+			name: "includes anthropic when ANTHROPIC_OAUTH is present",
+			secrets: map[string]string{
+				"ANTHROPIC_OAUTH": "oauth-token",
+			},
+			expectedToContain:    []string{"anthropic"},
+			expectedNotToContain: []string{"openai", "google"},
+		},
+		{
+			name: "includes google when GOOGLE_API_KEY is present",
+			secrets: map[string]string{
+				"GOOGLE_API_KEY": "google-api-key",
+			},
+			expectedToContain:    []string{"google"},
+			expectedNotToContain: []string{"openai", "anthropic"},
+		},
+		{
+			name: "includes all built-in providers when all keys present",
+			secrets: map[string]string{
+				"OPENAI_API_KEY":    "sk-test-key",
+				"ANTHROPIC_API_KEY": "sk-ant-test-key",
+				"GOOGLE_API_KEY":    "google-api-key",
+			},
+			expectedToContain:    []string{"openai", "anthropic", "google"},
+			expectedNotToContain: []string{},
+		},
+		{
+			name: "anthropic appears once even with both API key and OAuth",
+			secrets: map[string]string{
+				"ANTHROPIC_API_KEY": "sk-ant-test-key",
+				"ANTHROPIC_OAUTH":   "oauth-token",
+			},
+			expectedToContain:    []string{"anthropic"},
+			expectedNotToContain: []string{"openai", "google"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sm := testSecretManager{secrets: tt.secrets}
+			apiCtrl := NewMockControllerWithSecretManager(t, sm)
+			router := DefineRoutes(apiCtrl)
+
+			req, _ := http.NewRequest("GET", "/api/v1/providers", nil)
+			rr := httptest.NewRecorder()
+			router.ServeHTTP(rr, req)
+
+			require.Equal(t, http.StatusOK, rr.Code)
+
+			var response struct {
+				Providers []string `json:"providers"`
+			}
+			err := json.Unmarshal(rr.Body.Bytes(), &response)
+			require.NoError(t, err)
+
+			for _, expected := range tt.expectedToContain {
+				assert.Contains(t, response.Providers, expected, "expected provider %s to be in response", expected)
+			}
+			for _, notExpected := range tt.expectedNotToContain {
+				assert.NotContains(t, response.Providers, notExpected, "expected provider %s to NOT be in response", notExpected)
+			}
+
+			// Verify no duplicates
+			seen := make(map[string]bool)
+			for _, p := range response.Providers {
+				assert.False(t, seen[p], "provider %s appears more than once", p)
+				seen[p] = true
+			}
+		})
+	}
 }
