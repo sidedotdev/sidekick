@@ -380,7 +380,7 @@ func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) (
 		for _, seqNum := range sequenceNumbersInReport {
 			foundProposalIndex := -1
 			for k := latestEditBlockReportIndex - 1; k >= 0; k-- {
-				extractedBlocks, _ := ExtractEditBlocks(chatHistory[k].Content)
+				extractedBlocks, _ := ExtractEditBlocks(chatHistory[k].Content, false)
 				for _, block := range extractedBlocks {
 					if block.SequenceNumber == seqNum {
 						foundProposalIndex = k
