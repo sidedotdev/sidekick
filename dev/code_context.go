@@ -39,9 +39,9 @@ func (r *RequiredCodeContext) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	if len(aux.RequestsNew) > 0 {
+	if aux.RequestsNew != nil {
 		r.Requests = aux.RequestsNew
-	} else if len(aux.RequestsOld) > 0 {
+	} else if aux.RequestsOld != nil {
 		r.Requests = aux.RequestsOld
 	}
 
