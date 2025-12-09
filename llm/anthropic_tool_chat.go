@@ -103,6 +103,13 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 		Tools:       anthropic.F(tools),
 	}
 
+	if useOAuth {
+		// NOTE: OAuth tokens require using the Claude Code system prompt, otherwise you get a 400 error
+		var systemMessages []anthropic.TextBlockParam
+		systemMessages = append(systemMessages, anthropic.NewTextBlock("You are Claude Code, Anthropic's official CLI for Claude."))
+		messageParams.System = anthropic.F(systemMessages)
+	}
+
 	stream := client.Messages.NewStreaming(ctx, messageParams)
 
 	var finalMessage anthropic.Message
