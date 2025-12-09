@@ -108,11 +108,14 @@ const loadModelsData = () => {
 }
 
 const modelSupportsReasoning = (provider: string, model: string): boolean => {
-  if (!provider || !model) return false
+  if (!model) return false
   const providerInfo = modelsData.value[provider]
-  if (!providerInfo?.Models) return false
-  const modelInfo = providerInfo.Models[model]
-  return modelInfo?.Reasoning === true
+  if (!providerInfo?.models) {
+    // for unknown providers, check against all providers, any matching model is acceptable
+    return Object.values(modelsData.value).some((p) => p.models?.[model]?.reasoning === true)
+  }
+  const modelInfo = providerInfo.models[model]
+  return modelInfo?.reasoning === true
 }
 
 onMounted(() => {

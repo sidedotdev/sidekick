@@ -6,19 +6,19 @@ import { store } from '../lib/store'
 
 const mockModelsData = {
   openai: {
-    Models: {
-      'o1': { Reasoning: true },
-      'gpt-4': { Reasoning: false },
+    models: {
+      'o1': { reasoning: true },
+      'gpt-4': { reasoning: false },
     }
   },
   anthropic: {
-    Models: {
-      'claude-3': { Reasoning: false },
+    models: {
+      'claude-3': { reasoning: false },
     }
   },
   google: {
-    Models: {
-      'gemini-pro': { Reasoning: false },
+    models: {
+      'gemini-pro': { reasoning: false },
     }
   }
 }

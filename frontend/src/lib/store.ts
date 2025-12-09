@@ -7,11 +7,11 @@ export interface BranchInfo {
 }
 
 interface ModelInfo {
-  Reasoning?: boolean;
+  reasoning?: boolean;
 }
 
 interface ProviderInfo {
-  Models: Record<string, ModelInfo>;
+  models: Record<string, ModelInfo>;
 }
 
 export type ModelsData = Record<string, ProviderInfo>;
