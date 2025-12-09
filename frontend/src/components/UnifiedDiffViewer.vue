@@ -9,6 +9,7 @@
       :file-data="fileData"
       :default-expanded="defaultExpanded"
       :diff-mode="diffMode"
+      :level="level"
     />
   </div>
 </template>
@@ -22,11 +23,13 @@ interface Props {
   diffString: string
   defaultExpanded?: boolean
   diffMode?: 'unified' | 'split'
+  level?: number
 }
 
 const props = withDefaults(defineProps<Props>(), {
   defaultExpanded: false,
-  diffMode: 'unified'
+  diffMode: 'unified',
+  level: 0
 })
 
 const parsedFiles = computed(() => {
