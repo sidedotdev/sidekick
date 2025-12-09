@@ -4,12 +4,22 @@ import TaskModal from '../TaskModal.vue'
 import type { Task } from '../../lib/models'
 import { nextTick } from 'process'
 import { wrap } from 'module'
+import { h } from 'vue'
 
 vi.mock('../../lib/store', () => ({
   store: {
     workspaceId: 'test-workspace-id'
   }
 }))
+
+const DropdownStub = {
+  name: 'Dropdown',
+  props: ['modelValue', 'options', 'optionLabel', 'optionValue'],
+  emits: ['update:modelValue', 'change'],
+  template: `<select :value="modelValue" @change="$emit('change', { value: $event.target.value }); $emit('update:modelValue', $event.target.value)">
+    <option v-for="opt in options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+  </select>`
+}
 
 describe('TaskModal', () => {
   let wrapper: VueWrapper
@@ -20,7 +30,14 @@ describe('TaskModal', () => {
   })
 
   const mountComponent = (props = {}) => {
-    wrapper = mount(TaskModal, { props })
+    wrapper = mount(TaskModal, {
+      props,
+      global: {
+        stubs: {
+          Dropdown: DropdownStub
+        }
+      }
+    })
   }
 
   it('renders without errors', () => {
