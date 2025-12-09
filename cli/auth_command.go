@@ -2,9 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +15,7 @@ import (
 	"github.com/erikgeiser/promptkit/textinput"
 	"github.com/urfave/cli/v3"
 	"github.com/zalando/go-keyring"
+	"golang.org/x/oauth2"
 )
 
 const (
@@ -202,15 +200,9 @@ func handleAnthropicOAuthCreateKey() error {
 }
 
 func performOAuthFlow(authBaseURL string) (*oauthTokenResponse, error) {
-	verifier, err := generateCodeVerifier()
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate code verifier: %w", err)
-	}
+	verifier := oauth2.GenerateVerifier()
 
-	challenge := generateCodeChallenge(verifier)
-	state := generateState()
-
-	authURL := buildAuthorizationURL(authBaseURL, challenge, state)
+	authURL := buildAuthorizationURL(authBaseURL, verifier)
 
 	fmt.Println("\nOpening browser for authentication...")
 	fmt.Println("If the browser doesn't open, please visit this URL manually:")
@@ -222,16 +214,26 @@ func performOAuthFlow(authBaseURL string) (*oauthTokenResponse, error) {
 	}
 
 	codeInput := textinput.New("Paste the authorization code from the callback page: ")
-	code, err := codeInput.RunPrompt()
+	codeWithState, err := codeInput.RunPrompt()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get authorization code: %w", err)
 	}
 
-	if code == "" {
+	if codeWithState == "" {
 		return nil, fmt.Errorf("authorization code not provided")
 	}
 
-	tokens, err := exchangeCodeForTokens(code, verifier, state)
+	// Parse the code which contains state appended after #
+	parts := strings.Split(codeWithState, "#")
+	code := parts[0]
+	if len(parts) > 1 {
+		state := parts[1]
+		if state != verifier {
+			return nil, fmt.Errorf("state mismatch: expected verifier but got different state")
+		}
+	}
+
+	tokens, err := exchangeCodeForTokens(code, verifier)
 	if err != nil {
 		return nil, fmt.Errorf("failed to exchange code for tokens: %w", err)
 	}
@@ -239,33 +241,16 @@ func performOAuthFlow(authBaseURL string) (*oauthTokenResponse, error) {
 	return tokens, nil
 }
 
-func generateCodeVerifier() (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(bytes), nil
-}
+func buildAuthorizationURL(baseURL, verifier string) string {
+	challenge := oauth2.S256ChallengeFromVerifier(verifier)
 
-func generateCodeChallenge(verifier string) string {
-	hash := sha256.Sum256([]byte(verifier))
-	return base64.RawURLEncoding.EncodeToString(hash[:])
-}
-
-func generateState() string {
-	bytes := make([]byte, 16)
-	rand.Read(bytes)
-	return base64.RawURLEncoding.EncodeToString(bytes)
-}
-
-func buildAuthorizationURL(baseURL, challenge, state string) string {
 	params := url.Values{}
 	params.Set("client_id", anthropicClientID)
 	params.Set("redirect_uri", anthropicRedirectURI)
 	params.Set("response_type", "code")
 	params.Set("code_challenge", challenge)
 	params.Set("code_challenge_method", "S256")
-	params.Set("state", state)
+	params.Set("state", verifier)
 
 	params.Set("code", "true")
 
@@ -279,20 +264,26 @@ func buildAuthorizationURL(baseURL, challenge, state string) string {
 	return baseURL + "?" + params.Encode()
 }
 
-func exchangeCodeForTokens(code, verifier, state string) (*oauthTokenResponse, error) {
-	data := url.Values{}
-	data.Set("code", code)
-	data.Set("state", state)
-	data.Set("grant_type", "authorization_code")
-	data.Set("client_id", anthropicClientID)
-	data.Set("redirect_uri", anthropicRedirectURI)
-	data.Set("code_verifier", verifier)
+func exchangeCodeForTokens(code, verifier string) (*oauthTokenResponse, error) {
+	requestBody := map[string]string{
+		"code":          code,
+		"state":         verifier,
+		"grant_type":    "authorization_code",
+		"client_id":     anthropicClientID,
+		"redirect_uri":  anthropicRedirectURI,
+		"code_verifier": verifier,
+	}
 
-	req, err := http.NewRequest("POST", anthropicTokenEndpoint, strings.NewReader(data.Encode()))
+	jsonBody, err := json.Marshal(requestBody)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	req, err := http.NewRequest("POST", anthropicTokenEndpoint, strings.NewReader(string(jsonBody)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
