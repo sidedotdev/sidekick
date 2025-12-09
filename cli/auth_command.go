@@ -24,13 +24,14 @@ const (
 	AnthropicOAuthSecretName = "ANTHROPIC_OAUTH"
 	keyringService           = "sidekick"
 
-	anthropicClientID      = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-	anthropicRedirectURI   = "https://console.anthropic.com/oauth/code/callback"
-	anthropicTokenEndpoint = "https://console.anthropic.com/v1/oauth/token"
-	anthropicCreateKeyURL  = "https://api.anthropic.com/api/oauth/claude_cli/create_api_key"
-	anthropicOAuthScopes   = "org:create_api_key user:profile user:inference"
-	claudeProMaxAuthURL    = "https://claude.ai/oauth/authorize"
-	consoleAuthURL         = "https://console.anthropic.com/oauth/authorize"
+	anthropicClientID       = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+	anthropicRedirectURI    = "https://console.anthropic.com/oauth/code/callback"
+	anthropicTokenEndpoint  = "https://console.anthropic.com/v1/oauth/token"
+	anthropicCreateKeyURL   = "https://api.anthropic.com/api/oauth/claude_cli/create_api_key"
+	anthropicConsoleScopes  = "org:create_api_key user:profile user:inference"
+	anthropicClaudeAIScopes = "user:profile user:inference"
+	claudeProMaxAuthURL     = "https://claude.ai/oauth/authorize"
+	consoleAuthURL          = "https://console.anthropic.com/oauth/authorize"
 )
 
 type oauthTokenResponse struct {
@@ -261,11 +262,19 @@ func buildAuthorizationURL(baseURL, challenge, state string) string {
 	params := url.Values{}
 	params.Set("client_id", anthropicClientID)
 	params.Set("redirect_uri", anthropicRedirectURI)
-	params.Set("scope", anthropicOAuthScopes)
 	params.Set("response_type", "code")
 	params.Set("code_challenge", challenge)
 	params.Set("code_challenge_method", "S256")
 	params.Set("state", state)
+
+	params.Set("code", "true")
+
+	isClaudeAI := baseURL == claudeProMaxAuthURL
+	if isClaudeAI {
+		params.Set("scope", anthropicClaudeAIScopes)
+	} else {
+		params.Set("scope", anthropicConsoleScopes)
+	}
 
 	return baseURL + "?" + params.Encode()
 }
