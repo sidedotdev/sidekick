@@ -4,7 +4,7 @@
     <div class="model-row">
       <span class="model-label">Default</span>
       <select v-model="defaultConfig.provider" class="provider-select" @change="emitUpdate">
-        <option value="">Select</option>
+        <option value="">Provider</option>
         <option v-for="p in providerOptions" :key="p" :value="p">{{ p }}</option>
       </select>
       <input
@@ -14,17 +14,14 @@
         class="model-input"
         @input="emitUpdate"
       />
-      <button type="button" class="options-toggle" @click="defaultOptionsExpanded = !defaultOptionsExpanded">
-        Options {{ defaultOptionsExpanded ? '▲' : '▼' }}
-      </button>
-    </div>
-    <div v-if="defaultOptionsExpanded" class="options-row">
-      <label class="option-label">
-        Reasoning Effort
-        <select v-model="defaultConfig.reasoningEffort" class="reasoning-select" @change="emitUpdate">
-          <option v-for="r in reasoningEffortOptions" :key="r" :value="r">{{ r || 'Select' }}</option>
-        </select>
-      </label>
+      <select
+        v-if="modelSupportsReasoning(defaultConfig.provider, defaultConfig.model)"
+        v-model="defaultConfig.reasoningEffort"
+        class="reasoning-select-inline"
+        @change="emitUpdate"
+      >
+        <option v-for="r in reasoningEffortOptions" :key="r" :value="r">{{ r || 'Reasoning' }}</option>
+      </select>
     </div>
 
     <!-- Use Case Models -->
@@ -40,7 +37,7 @@
           :disabled="!useCaseStates[useCase].enabled"
           @change="emitUpdate"
         >
-          <option value="">Select</option>
+          <option value="">Provider</option>
           <option v-for="p in providerOptions" :key="p" :value="p">{{ p }}</option>
         </select>
         <input
@@ -51,30 +48,32 @@
           :disabled="!useCaseStates[useCase].enabled"
           @input="emitUpdate"
         />
-        <button
-          type="button"
-          class="options-toggle"
-          :disabled="!useCaseStates[useCase].enabled"
-          @click="useCaseStates[useCase].optionsExpanded = !useCaseStates[useCase].optionsExpanded"
+        <select
+          v-if="useCaseStates[useCase].enabled && modelSupportsReasoning(useCaseStates[useCase].config.provider, useCaseStates[useCase].config.model)"
+          v-model="useCaseStates[useCase].config.reasoningEffort"
+          class="reasoning-select-inline"
+          @change="emitUpdate"
         >
-          Options {{ useCaseStates[useCase].optionsExpanded ? '▲' : '▼' }}
-        </button>
-      </div>
-      <div v-if="useCaseStates[useCase].enabled && useCaseStates[useCase].optionsExpanded" class="options-row">
-        <label class="option-label">
-          Reasoning Effort
-          <select v-model="useCaseStates[useCase].config.reasoningEffort" class="reasoning-select" @change="emitUpdate">
-            <option v-for="r in reasoningEffortOptions" :key="r" :value="r">{{ r || 'Select' }}</option>
-          </select>
-        </label>
+          <option v-for="r in reasoningEffortOptions" :key="r" :value="r">{{ r || 'Reasoning' }}</option>
+        </select>
       </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch } from 'vue'
+import { ref, reactive, watch, onMounted } from 'vue'
 import type { ModelConfig, LLMConfig } from '../lib/models'
+
+interface ModelInfo {
+  Reasoning?: boolean
+}
+
+interface ProviderInfo {
+  Models: Record<string, ModelInfo>
+}
+
+type ModelsData = Record<string, ProviderInfo>
 
 const props = defineProps<{
   modelValue?: LLMConfig | null
@@ -90,14 +89,38 @@ type UseCase = typeof USE_CASES[number]
 const providerOptions = ['google', 'anthropic', 'openai']
 const reasoningEffortOptions = ['', 'minimal', 'low', 'medium', 'high'] as const
 
+const modelsData = ref<ModelsData>({})
+
+const fetchModelsData = async () => {
+  try {
+    const response = await fetch('/api/v1/models')
+    if (response.ok) {
+      modelsData.value = await response.json()
+    }
+  } catch {
+    // Silently fail - reasoning selectors will be hidden if data unavailable
+  }
+}
+
+const modelSupportsReasoning = (provider: string, model: string): boolean => {
+  if (!provider || !model) return false
+  const providerInfo = modelsData.value[provider]
+  if (!providerInfo?.Models) return false
+  const modelInfo = providerInfo.Models[model]
+  return modelInfo?.Reasoning === true
+}
+
+onMounted(() => {
+  fetchModelsData()
+})
+
 const defaultConfig = reactive<ModelConfig>(
   props.modelValue?.defaults?.[0]
     ? { ...props.modelValue.defaults[0] }
     : { provider: '', model: '', reasoningEffort: '' }
 )
-const defaultOptionsExpanded = ref(false)
 
-type UseCaseState = { enabled: boolean; config: ModelConfig; optionsExpanded: boolean }
+type UseCaseState = { enabled: boolean; config: ModelConfig }
 
 const initUseCaseStates = (): Record<UseCase, UseCaseState> => {
   const states = {} as Record<UseCase, UseCaseState>
@@ -106,7 +129,6 @@ const initUseCaseStates = (): Record<UseCase, UseCaseState> => {
     states[useCase] = {
       enabled: !!existingConfig,
       config: existingConfig ? { ...existingConfig } : { provider: '', model: '', reasoningEffort: '' },
-      optionsExpanded: false,
     }
   }
   return states
@@ -204,48 +226,13 @@ watch(() => props.modelValue, (newValue) => {
   color: var(--color-text);
 }
 
-.options-toggle {
+.reasoning-select-inline {
   padding: 0.25rem 0.5rem;
   border: 1px solid var(--color-border);
   border-radius: 0.25rem;
   background-color: var(--color-background);
   color: var(--color-text);
-  cursor: pointer;
   font-size: 0.875rem;
-}
-
-.options-toggle:hover:not(:disabled) {
-  background-color: var(--color-background-soft);
-}
-
-.options-toggle:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.options-row {
-  margin-left: 8.5rem;
-  margin-bottom: 0.75rem;
-  padding: 0.5rem;
-  background-color: var(--color-background);
-  border: 1px solid var(--color-border);
-  border-radius: 0.25rem;
-}
-
-.option-label {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin: 0;
-  min-width: auto;
-  font-size: 0.875rem;
-}
-
-.reasoning-select {
-  padding: 0.25rem 0.5rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.25rem;
-  background-color: var(--color-background);
-  color: var(--color-text);
+  min-width: 5.5rem;
 }
 </style>
