@@ -1,9 +1,43 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import LlmConfigEditor from './LlmConfigEditor.vue'
 import type { LLMConfig } from '../lib/models'
 
+const mockModelsData = {
+  openai: {
+    Models: {
+      'o1': { Reasoning: true },
+      'gpt-4': { Reasoning: false },
+    }
+  },
+  anthropic: {
+    Models: {
+      'claude-3': { Reasoning: false },
+    }
+  },
+  google: {
+    Models: {
+      'gemini-pro': { Reasoning: false },
+    }
+  }
+}
+
+const createMockFetch = (data: object = mockModelsData) => {
+  return vi.fn(() => Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve(data),
+  }))
+}
+
 describe('LlmConfigEditor', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', createMockFetch())
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   it('renders default model row with empty values when no modelValue provided', () => {
     const wrapper = mount(LlmConfigEditor)
     
@@ -82,21 +116,6 @@ describe('LlmConfigEditor', () => {
     expect(emittedValue.defaults[0].model).toBe('gpt-4')
   })
 
-  it('toggles options row visibility when options button is clicked', async () => {
-    const wrapper = mount(LlmConfigEditor)
-    
-    expect(wrapper.find('.options-row').exists()).toBe(false)
-    
-    const optionsToggle = wrapper.find('.options-toggle')
-    await optionsToggle.trigger('click')
-    
-    expect(wrapper.find('.options-row').exists()).toBe(true)
-    expect(wrapper.find('.reasoning-select').exists()).toBe(true)
-    
-    await optionsToggle.trigger('click')
-    expect(wrapper.find('.options-row').exists()).toBe(false)
-  })
-
   it('includes enabled use case in emitted config', async () => {
     const wrapper = mount(LlmConfigEditor)
     
@@ -154,17 +173,74 @@ describe('LlmConfigEditor', () => {
   })
 
   it('updates reasoning effort in emitted config', async () => {
-    const wrapper = mount(LlmConfigEditor)
+    const llmConfig: LLMConfig = {
+      defaults: [{ provider: 'openai', model: 'o1', reasoningEffort: '' }],
+      useCaseConfigs: {},
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: llmConfig }
+    })
     
-    const optionsToggle = wrapper.find('.options-toggle')
-    await optionsToggle.trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('.reasoning-select-inline').exists()).toBe(true)
+    })
     
-    const reasoningSelect = wrapper.find('.reasoning-select')
+    const reasoningSelect = wrapper.find('.reasoning-select-inline')
     await reasoningSelect.setValue('high')
     
     const emittedEvents = wrapper.emitted('update:modelValue')!
     const lastEmittedValue = emittedEvents[emittedEvents.length - 1][0] as LLMConfig
     expect(lastEmittedValue.defaults[0].reasoningEffort).toBe('high')
+  })
+
+  it('hides reasoning selector when model does not support reasoning', async () => {
+    const llmConfig: LLMConfig = {
+      defaults: [{ provider: 'anthropic', model: 'claude-3', reasoningEffort: '' }],
+      useCaseConfigs: {},
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: llmConfig }
+    })
+    
+    await vi.waitFor(() => {
+      expect(fetch).toHaveBeenCalled()
+    })
+    
+    await wrapper.vm.$nextTick()
+    
+    expect(wrapper.find('.reasoning-select-inline').exists()).toBe(false)
+  })
+
+  it('shows reasoning selector when model supports reasoning', async () => {
+    const llmConfig: LLMConfig = {
+      defaults: [{ provider: 'openai', model: 'o1', reasoningEffort: '' }],
+      useCaseConfigs: {},
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: llmConfig }
+    })
+    
+    await vi.waitFor(() => {
+      expect(wrapper.find('.reasoning-select-inline').exists()).toBe(true)
+    })
+  })
+
+  it('hides reasoning selector when model is not found in API data', async () => {
+    const llmConfig: LLMConfig = {
+      defaults: [{ provider: 'openai', model: 'unknown-model', reasoningEffort: '' }],
+      useCaseConfigs: {},
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: llmConfig }
+    })
+    
+    await vi.waitFor(() => {
+      expect(fetch).toHaveBeenCalled()
+    })
+    
+    await wrapper.vm.$nextTick()
+    
+    expect(wrapper.find('.reasoning-select-inline').exists()).toBe(false)
   })
 
   it('keeps use case checkbox checked after parent updates modelValue with emitted config', async () => {
