@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import LlmConfigEditor from './LlmConfigEditor.vue'
 import type { LLMConfig } from '../lib/models'
+import { store } from '../lib/store'
 
 const mockModelsData = {
   openai: {
@@ -32,10 +33,12 @@ const createMockFetch = (data: object = mockModelsData) => {
 describe('LlmConfigEditor', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', createMockFetch())
+    sessionStorage.clear()
   })
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    sessionStorage.clear()
   })
 
   it('renders default model row with empty values when no modelValue provided', () => {
@@ -241,6 +244,54 @@ describe('LlmConfigEditor', () => {
     await wrapper.vm.$nextTick()
     
     expect(wrapper.find('.reasoning-select-inline').exists()).toBe(false)
+  })
+
+  it('uses cached models data and does not fetch when cache is fresh', async () => {
+    store.setModelsCache(mockModelsData)
+    const fetchMock = createMockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    
+    const llmConfig: LLMConfig = {
+      defaults: [{ provider: 'openai', model: 'o1', reasoningEffort: '' }],
+      useCaseConfigs: {},
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: llmConfig }
+    })
+    
+    await wrapper.vm.$nextTick()
+    
+    expect(wrapper.find('.reasoning-select-inline').exists()).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('uses stale cache immediately and refreshes in background', async () => {
+    const staleTimestamp = Date.now() - 6 * 60 * 1000 // 6 minutes ago
+    sessionStorage.setItem('models_cache', JSON.stringify({
+      data: mockModelsData,
+      timestamp: staleTimestamp
+    }))
+    
+    const fetchMock = createMockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    
+    const llmConfig: LLMConfig = {
+      defaults: [{ provider: 'openai', model: 'o1', reasoningEffort: '' }],
+      useCaseConfigs: {},
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: llmConfig }
+    })
+    
+    await wrapper.vm.$nextTick()
+    
+    // Should show reasoning selector immediately from stale cache
+    expect(wrapper.find('.reasoning-select-inline').exists()).toBe(true)
+    
+    // Should have triggered background refresh
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled()
+    })
   })
 
   it('keeps use case checkbox checked after parent updates modelValue with emitted config', async () => {

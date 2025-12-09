@@ -64,16 +64,7 @@
 <script setup lang="ts">
 import { ref, reactive, watch, onMounted } from 'vue'
 import type { ModelConfig, LLMConfig } from '../lib/models'
-
-interface ModelInfo {
-  Reasoning?: boolean
-}
-
-interface ProviderInfo {
-  Models: Record<string, ModelInfo>
-}
-
-type ModelsData = Record<string, ProviderInfo>
+import { store, type ModelsData } from '../lib/store'
 
 const props = defineProps<{
   modelValue?: LLMConfig | null
@@ -95,10 +86,24 @@ const fetchModelsData = async () => {
   try {
     const response = await fetch('/api/v1/models')
     if (response.ok) {
-      modelsData.value = await response.json()
+      const data = await response.json()
+      modelsData.value = data
+      store.setModelsCache(data)
     }
   } catch {
     // Silently fail - reasoning selectors will be hidden if data unavailable
+  }
+}
+
+const loadModelsData = () => {
+  const cache = store.getModelsCache()
+  if (cache) {
+    modelsData.value = cache.data
+    if (store.isModelsCacheStale()) {
+      fetchModelsData()
+    }
+  } else {
+    fetchModelsData()
   }
 }
 
@@ -111,7 +116,7 @@ const modelSupportsReasoning = (provider: string, model: string): boolean => {
 }
 
 onMounted(() => {
-  fetchModelsData()
+  loadModelsData()
 })
 
 const defaultConfig = reactive<ModelConfig>(
