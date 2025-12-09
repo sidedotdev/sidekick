@@ -7,11 +7,15 @@
         <option value="">Provider</option>
         <option v-for="p in providerOptions" :key="p" :value="p">{{ p }}</option>
       </select>
-      <input
-        type="text"
+      <AutoComplete
         v-model="defaultConfig.model"
         placeholder="Model name"
-        class="model-input"
+        class="model-input-wrapper"
+        inputClass="model-input-inner"
+        :suggestions="filteredModels"
+        @complete="(e) => searchModels(e, defaultConfig.provider)"
+        @item-select="emitUpdate"
+        @change="emitUpdate"
         @input="emitUpdate"
       />
       <select
@@ -40,12 +44,16 @@
           <option value="">Provider</option>
           <option v-for="p in providerOptions" :key="p" :value="p">{{ p }}</option>
         </select>
-        <input
-          type="text"
+        <AutoComplete
           v-model="useCaseStates[useCase].config.model"
           placeholder="Model name"
-          class="model-input"
+          class="model-input-wrapper"
+          inputClass="model-input-inner"
           :disabled="!useCaseStates[useCase].enabled"
+          :suggestions="filteredModels"
+          @complete="(e) => searchModels(e, useCaseStates[useCase].config.provider)"
+          @item-select="emitUpdate"
+          @change="emitUpdate"
           @input="emitUpdate"
         />
         <select
@@ -63,6 +71,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, watch, onMounted } from 'vue'
+import AutoComplete from 'primevue/autocomplete'
 import type { ModelConfig, LLMConfig } from '../lib/models'
 import { store, type ModelsData } from '../lib/store'
 
@@ -81,6 +90,31 @@ const providerOptions = ['google', 'anthropic', 'openai']
 const reasoningEffortOptions = ['', 'minimal', 'low', 'medium', 'high'] as const
 
 const modelsData = ref<ModelsData>({})
+const filteredModels = ref<string[]>([])
+
+const searchModels = (event: { query: string }, provider: string) => {
+  const query = event.query.toLowerCase()
+
+  if (!provider) {
+    filteredModels.value = []
+    return
+  }
+
+  let candidates: string[] = []
+  if (modelsData.value[provider]) {
+    candidates = Object.keys(modelsData.value[provider].models || {})
+  } else {
+    const allModels = new Set<string>()
+    for (const p of Object.values(modelsData.value)) {
+      if (p.models) {
+        Object.keys(p.models).forEach((m) => allModels.add(m))
+      }
+    }
+    candidates = Array.from(allModels)
+  }
+
+  filteredModels.value = candidates.filter((m) => m.toLowerCase().includes(query))
+}
 
 const fetchModelsData = async () => {
   try {
@@ -225,8 +259,12 @@ watch(() => props.modelValue, (newValue) => {
   color: var(--color-text);
 }
 
-.model-input {
+.model-input-wrapper {
   flex: 1;
+}
+
+:deep(.model-input-inner) {
+  width: 100%;
   padding: 0.25rem 0.5rem;
   border: 1px solid var(--color-border);
   border-radius: 0.25rem;

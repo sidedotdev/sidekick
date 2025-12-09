@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { config, mount } from '@vue/test-utils'
+import PrimeVue from 'primevue/config'
+import AutoComplete from 'primevue/autocomplete'
 import LlmConfigEditor from './LlmConfigEditor.vue'
+
+config.global.plugins.push(PrimeVue)
 import type { LLMConfig } from '../lib/models'
 import { store } from '../lib/store'
 
@@ -48,7 +52,7 @@ describe('LlmConfigEditor', () => {
     expect(providerSelect.exists()).toBe(true)
     expect((providerSelect.element as HTMLSelectElement).value).toBe('')
     
-    const modelInput = wrapper.find('.model-input')
+    const modelInput = wrapper.find('.model-input-inner')
     expect(modelInput.exists()).toBe(true)
     expect((modelInput.element as HTMLInputElement).value).toBe('')
   })
@@ -65,7 +69,7 @@ describe('LlmConfigEditor', () => {
     const providerSelect = wrapper.find('.provider-select')
     expect((providerSelect.element as HTMLSelectElement).value).toBe('anthropic')
     
-    const modelInput = wrapper.find('.model-input')
+    const modelInput = wrapper.find('.model-input-inner')
     expect((modelInput.element as HTMLInputElement).value).toBe('claude-3')
   })
 
@@ -86,7 +90,7 @@ describe('LlmConfigEditor', () => {
     
     const useCaseCheckbox = wrapper.find('.use-case-checkbox input[type="checkbox"]')
     const useCaseProviderSelect = wrapper.findAll('.provider-select')[1]
-    const useCaseModelInput = wrapper.findAll('.model-input')[1]
+    const useCaseModelInput = wrapper.findAll('.model-input-inner')[1]
     
     expect((useCaseProviderSelect.element as HTMLSelectElement).disabled).toBe(true)
     expect((useCaseModelInput.element as HTMLInputElement).disabled).toBe(true)
@@ -111,7 +115,7 @@ describe('LlmConfigEditor', () => {
   it('emits update:modelValue when default model changes', async () => {
     const wrapper = mount(LlmConfigEditor)
     
-    const modelInput = wrapper.find('.model-input')
+    const modelInput = wrapper.find('.model-input-inner')
     await modelInput.setValue('gpt-4')
     
     expect(wrapper.emitted('update:modelValue')).toBeTruthy()
@@ -128,7 +132,7 @@ describe('LlmConfigEditor', () => {
     const useCaseProviderSelect = wrapper.findAll('.provider-select')[1]
     await useCaseProviderSelect.setValue('google')
     
-    const useCaseModelInput = wrapper.findAll('.model-input')[1]
+    const useCaseModelInput = wrapper.findAll('.model-input-inner')[1]
     await useCaseModelInput.setValue('gemini-pro')
     
     const emittedEvents = wrapper.emitted('update:modelValue')!
