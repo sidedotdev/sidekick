@@ -116,7 +116,7 @@ describe('LlmConfigEditor', () => {
     expect(lastEmittedValue.useCaseConfigs['planning'][0].model).toBe('gemini-pro')
   })
 
-  it('excludes use case from config when provider or model is empty', async () => {
+  it('includes use case in config when enabled even if provider or model is empty', async () => {
     const wrapper = mount(LlmConfigEditor)
     
     const useCaseCheckbox = wrapper.find('.use-case-checkbox input[type="checkbox"]')
@@ -128,7 +128,9 @@ describe('LlmConfigEditor', () => {
     
     const emittedEvents = wrapper.emitted('update:modelValue')!
     const lastEmittedValue = emittedEvents[emittedEvents.length - 1][0] as LLMConfig
-    expect(lastEmittedValue.useCaseConfigs['planning']).toBeUndefined()
+    expect(lastEmittedValue.useCaseConfigs['planning']).toBeDefined()
+    expect(lastEmittedValue.useCaseConfigs['planning'][0].provider).toBe('google')
+    expect(lastEmittedValue.useCaseConfigs['planning'][0].model).toBe('')
   })
 
   it('loads existing use case configs from modelValue', () => {
@@ -163,5 +165,27 @@ describe('LlmConfigEditor', () => {
     const emittedEvents = wrapper.emitted('update:modelValue')!
     const lastEmittedValue = emittedEvents[emittedEvents.length - 1][0] as LLMConfig
     expect(lastEmittedValue.defaults[0].reasoningEffort).toBe('high')
+  })
+
+  it('keeps use case checkbox checked after parent updates modelValue with emitted config', async () => {
+    const initialConfig: LLMConfig = {
+      defaults: [{ provider: 'anthropic', model: 'claude-3', reasoningEffort: '' }],
+      useCaseConfigs: {},
+    }
+    const wrapper = mount(LlmConfigEditor, {
+      props: { modelValue: initialConfig }
+    })
+    
+    const useCaseCheckbox = wrapper.find('.use-case-checkbox input[type="checkbox"]')
+    expect((useCaseCheckbox.element as HTMLInputElement).checked).toBe(false)
+    
+    await useCaseCheckbox.setValue(true)
+    
+    const emittedEvents = wrapper.emitted('update:modelValue')!
+    const emittedValue = emittedEvents[emittedEvents.length - 1][0] as LLMConfig
+    
+    await wrapper.setProps({ modelValue: emittedValue })
+    
+    expect((useCaseCheckbox.element as HTMLInputElement).checked).toBe(true)
   })
 })

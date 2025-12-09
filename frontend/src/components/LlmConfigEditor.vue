@@ -122,7 +122,7 @@ const buildLlmConfig = (): LLMConfig => {
 
   for (const useCase of USE_CASES) {
     const state = useCaseStates[useCase]
-    if (state.enabled && state.config.provider && state.config.model) {
+    if (state.enabled) {
       llmConfig.useCaseConfigs[useCase] = [{ ...state.config }]
     }
   }
