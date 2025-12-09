@@ -65,9 +65,12 @@ func GetUserResponse(ctx ExecContext, req RequestForUser) (*UserResponse, error)
 
 	// Signal the workflow
 	workflowInfo := workflow.GetInfo(ctx.Context)
-	parentWorkflowID := workflowInfo.ParentWorkflowExecution.ID
+	parentWorkflow := workflowInfo.ParentWorkflowExecution
+	if parentWorkflow == nil {
+		return nil, fmt.Errorf("failed to signal external workflow: no parent workflow found")
+	}
 	req.OriginWorkflowId = workflowInfo.WorkflowExecution.ID
-	workflowErr := workflow.SignalExternalWorkflow(ctx.Context, parentWorkflowID, "", SignalNameRequestForUser, req).Get(ctx.Context, nil)
+	workflowErr := workflow.SignalExternalWorkflow(ctx.Context, parentWorkflow.ID, "", SignalNameRequestForUser, req).Get(ctx.Context, nil)
 	if workflowErr != nil {
 		return nil, fmt.Errorf("failed to signal external workflow: %v", workflowErr)
 	}

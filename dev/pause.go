@@ -1,7 +1,6 @@
 package dev
 
 import (
-	"sidekick/domain"
 	"sidekick/flow_action"
 
 	"go.temporal.io/sdk/workflow"
@@ -40,10 +39,7 @@ func UserRequestIfPaused(dCtx DevContext, guidanceContext string, requestParams 
 	actionCtx := dCtx.NewActionContext("user_request.paused")
 	actionCtx.ActionParams = guidanceRequest.ActionParams()
 
-	response, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*flow_action.UserResponse, error) {
-		guidanceRequest.FlowActionId = flowAction.Id
-		return flow_action.GetUserResponse(actionCtx.ExecContext, *guidanceRequest)
-	})
+	response, err := GetUserResponse(actionCtx, *guidanceRequest)
 
 	dCtx.ExecContext.GlobalState.Paused = false
 	return response, err

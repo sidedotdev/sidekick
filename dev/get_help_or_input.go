@@ -2,7 +2,6 @@ package dev
 
 import (
 	"fmt"
-	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"slices"
@@ -88,9 +87,6 @@ func GetHelpOrInput(dCtx DevContext, requests []HelpOrInputRequest) (string, err
 
 	actionCtx := dCtx.NewActionContext("user_request")
 	actionCtx.ActionParams = req.ActionParams()
-	userResponse, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*flow_action.UserResponse, error) {
-		req.FlowActionId = flowAction.Id
-		return flow_action.GetUserResponse(actionCtx.ExecContext, req)
-	})
+	userResponse, err := GetUserResponse(actionCtx, req)
 	return userResponse.Content, err
 }
