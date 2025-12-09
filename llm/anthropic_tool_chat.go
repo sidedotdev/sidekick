@@ -33,6 +33,7 @@ const (
 type OAuthCredentials struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
+	ExpiresAt    int64  `json:"expires_at,omitempty"`
 }
 
 type AnthropicToolChat struct{}
@@ -41,7 +42,10 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 	httpClient := &http.Client{Timeout: 10 * time.Minute}
 
 	// Try OAuth credentials first, fall back to API key
-	oauthCreds, useOAuth := GetAnthropicOAuthCredentials(options.Secrets.SecretManager)
+	oauthCreds, useOAuth, err := GetAnthropicOAuthCredentials(options.Secrets.SecretManager)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Anthropic OAuth credentials: %w", err)
+	}
 	var client *anthropic.Client
 	if useOAuth {
 		client = anthropic.NewClient(
@@ -131,72 +135,8 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 	}
 
 	if stream.Err() != nil {
-		// If using OAuth and got an auth error, try refreshing the token and retry once
-		if useOAuth && IsAuthError(stream.Err()) {
-			log.Info().Msg("OAuth token may be expired, attempting refresh")
-			newCreds, refreshErr := RefreshAnthropicOAuthToken(oauthCreds.RefreshToken)
-			if refreshErr != nil {
-				log.Warn().Err(refreshErr).Msg("Failed to refresh OAuth token, falling back to API key")
-				// Fall back to API key
-				token, err := options.Secrets.SecretManager.GetSecret(AnthropicApiKeySecretName)
-				if err != nil {
-					return nil, fmt.Errorf("OAuth refresh failed and no API key available: %w", err)
-				}
-				client = anthropic.NewClient(
-					option.WithAPIKey(token),
-					option.WithHTTPClient(httpClient),
-				)
-			} else {
-				// Update stored credentials and retry with new token
-				if storeErr := StoreAnthropicOAuthCredentials(newCreds); storeErr != nil {
-					log.Warn().Err(storeErr).Msg("Failed to store refreshed OAuth credentials")
-				}
-				client = anthropic.NewClient(
-					option.WithHeader("Authorization", "Bearer "+newCreds.AccessToken),
-					option.WithHeader("anthropic-beta", anthropicOAuthBetaHeaders),
-					option.WithHTTPClient(httpClient),
-				)
-			}
-
-			// Retry the request
-			stream = client.Messages.NewStreaming(ctx, messageParams)
-			finalMessage = anthropic.Message{}
-			startedBlocks = 0
-			stoppedBlocks = 0
-			for stream.Next() {
-				event := stream.Current()
-				if activity.IsActivity(ctx) {
-					activity.RecordHeartbeat(ctx, event)
-				}
-				log.Trace().Interface("event", event).Msg("Received streamed event from Anthropic API (retry)")
-
-				err := finalMessage.Accumulate(event)
-				if err != nil {
-					return nil, fmt.Errorf("failed to accumulate message: %w", err)
-				}
-
-				switch event := event.AsUnion().(type) {
-				case anthropic.ContentBlockStartEvent:
-					deltaChan <- anthropicContentStartToChatMessageDelta(event.ContentBlock)
-					startedBlocks++
-				case anthropic.ContentBlockDeltaEvent:
-					if len(finalMessage.Content) == 0 {
-						return nil, fmt.Errorf("anthropic tool chat failure: received event of type %s but there was no content block", event.Type)
-					}
-					deltaChan <- anthropicToChatMessageDelta(event.Delta)
-				case anthropic.ContentBlockStopEvent:
-					stoppedBlocks++
-				}
-			}
-
-			if stream.Err() != nil {
-				log.Error().Err(stream.Err()).Msg("Anthropic tool chat stream error after retry")
-				return nil, fmt.Errorf("stream error: %w", stream.Err())
-			}
-		} else {
-			log.Error().Err(stream.Err()).Msg("Anthropic tool chat stream error")
-			return nil, fmt.Errorf("stream error: %w", stream.Err())
-		}
+		log.Error().Err(stream.Err()).Msg("Anthropic tool chat stream error")
+		return nil, fmt.Errorf("stream error: %w", stream.Err())
 	}
 
 	// the anthropic-go-sdk library seems to have a bug where if the stream
@@ -387,31 +327,36 @@ func anthropicToChatMessageResponse(message anthropic.Message, provider string) 
 	return response, nil
 }
 
-func GetAnthropicOAuthCredentials(secretManager interface{ GetSecret(string) (string, error) }) (*OAuthCredentials, bool) {
+func GetAnthropicOAuthCredentials(secretManager interface{ GetSecret(string) (string, error) }) (*OAuthCredentials, bool, error) {
 	oauthJSON, err := secretManager.GetSecret(AnthropicOAuthSecretName)
 	if err != nil {
-		return nil, false
+		// Secret not found means OAuth isn't configured, fall back to API key
+		return nil, false, nil
 	}
 
 	var creds OAuthCredentials
 	if err := json.Unmarshal([]byte(oauthJSON), &creds); err != nil {
-		log.Warn().Err(err).Msg("Failed to parse OAuth credentials")
-		return nil, false
+		return nil, false, fmt.Errorf("failed to parse OAuth credentials: %w", err)
 	}
 
 	if creds.AccessToken == "" {
-		return nil, false
+		return nil, false, fmt.Errorf("OAuth credentials missing access token")
 	}
 
-	return &creds, true
-}
-
-func IsAuthError(err error) bool {
-	if err == nil {
-		return false
+	// Refresh token proactively if it expires within 5 minutes
+	if creds.ExpiresAt > 0 && time.Now().Unix() > creds.ExpiresAt-300 {
+		log.Info().Msg("OAuth token expiring soon, refreshing proactively")
+		newCreds, err := RefreshAnthropicOAuthToken(creds.RefreshToken)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to refresh OAuth token: %w", err)
+		}
+		if storeErr := StoreAnthropicOAuthCredentials(newCreds); storeErr != nil {
+			log.Warn().Err(storeErr).Msg("Failed to store refreshed OAuth credentials")
+		}
+		return newCreds, true, nil
 	}
-	errStr := err.Error()
-	return strings.Contains(errStr, "401") || strings.Contains(errStr, "unauthorized") || strings.Contains(errStr, "Unauthorized")
+
+	return &creds, true, nil
 }
 
 // AnthropicOAuthBetaHeaders returns the beta headers required for OAuth authentication
@@ -454,14 +399,21 @@ func RefreshAnthropicOAuthToken(refreshToken string) (*OAuthCredentials, error) 
 	var tokenResp struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"`
 	}
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
 		return nil, fmt.Errorf("failed to parse refresh response: %w", err)
 	}
 
+	var expiresAt int64
+	if tokenResp.ExpiresIn > 0 {
+		expiresAt = time.Now().Unix() + tokenResp.ExpiresIn
+	}
+
 	return &OAuthCredentials{
 		AccessToken:  tokenResp.AccessToken,
 		RefreshToken: tokenResp.RefreshToken,
+		ExpiresAt:    expiresAt,
 	}, nil
 }
 

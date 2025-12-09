@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"sidekick/llm"
 	"strings"
+	"time"
 
 	"github.com/erikgeiser/promptkit/selection"
 	"github.com/erikgeiser/promptkit/textinput"
@@ -46,6 +47,7 @@ type createAPIKeyResponse struct {
 type OAuthCredentials struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
+	ExpiresAt    int64  `json:"expires_at"`
 }
 
 func NewAuthCommand() *cli.Command {
@@ -134,9 +136,15 @@ func handleAnthropicOAuthSubscription() error {
 		return err
 	}
 
+	var expiresAt int64
+	if tokens.ExpiresIn > 0 {
+		expiresAt = time.Now().Unix() + int64(tokens.ExpiresIn)
+	}
+
 	creds := OAuthCredentials{
 		AccessToken:  tokens.AccessToken,
 		RefreshToken: tokens.RefreshToken,
+		ExpiresAt:    expiresAt,
 	}
 	credsJSON, err := json.Marshal(creds)
 	if err != nil {
@@ -148,7 +156,7 @@ func handleAnthropicOAuthSubscription() error {
 		return fmt.Errorf("error storing OAuth credentials in keyring: %w", err)
 	}
 
-	fmt.Println("✔ Anthropic OAuth credentials saved to keyring.")
+	fmt.Println("✔ Anthropic OAuth credentials saved.")
 	return nil
 }
 
@@ -188,7 +196,7 @@ func handleAnthropicOAuthCreateKey() error {
 		return fmt.Errorf("error storing API key in keyring: %w", err)
 	}
 
-	fmt.Println("✔ Anthropic API Key created and saved to keyring.")
+	fmt.Println("✔ Anthropic API Key created and saved.")
 	return nil
 }
 
@@ -375,6 +383,6 @@ func handleManualAPIKeyAuth(providerName, secretName string) error {
 		return fmt.Errorf("error storing API key in keyring: %w", err)
 	}
 
-	fmt.Printf("✔ %s API Key saved to keyring.\n", providerName)
+	fmt.Printf("✔ %s API Key saved.\n", providerName)
 	return nil
 }
