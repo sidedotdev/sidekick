@@ -320,6 +320,11 @@ const handleStatusSelect = (value: string) => {
 }
 
 const submitTask = async () => {
+  if (!description.value.trim()) {
+    alert('Task description cannot be empty')
+    return
+  }
+
   // Validate and save new preset if in add preset mode
   if (isAddPresetMode.value) {
     if (!validateLlmConfig(llmConfig.value)) {
