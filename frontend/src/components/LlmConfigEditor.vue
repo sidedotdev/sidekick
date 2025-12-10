@@ -14,11 +14,11 @@
       </select>
       <AutoComplete
         v-model="defaultConfig.model"
-        placeholder="Model name"
+        placeholder="model"
         class="model-input-wrapper"
         inputClass="model-input-inner"
         :suggestions="filteredModels"
-        @complete="(e) => searchModels(e, defaultConfig.provider)"
+        @complete="(e: { query: string }) => searchModels(e, defaultConfig.provider)"
         @item-select="emitUpdate"
         @change="emitUpdate"
         @input="emitUpdate"
@@ -51,12 +51,12 @@
         </select>
         <AutoComplete
           v-model="useCaseStates[useCase].config.model"
-          placeholder="Model name"
+          placeholder="model"
           class="model-input-wrapper"
           inputClass="model-input-inner"
           :disabled="!useCaseStates[useCase].enabled"
           :suggestions="filteredModels"
-          @complete="(e) => searchModels(e, useCaseStates[useCase].config.provider)"
+          @complete="(e: { query: string }) => searchModels(e, useCaseStates[useCase].config.provider)"
           @item-select="emitUpdate"
           @change="emitUpdate"
           @input="emitUpdate"
@@ -133,11 +133,6 @@ const filteredModels = ref<string[]>([])
 
 const searchModels = (event: { query: string }, provider: string) => {
   const query = event.query.toLowerCase()
-
-  if (!provider) {
-    filteredModels.value = []
-    return
-  }
 
   let candidates: string[] = []
   if (modelsData.value[provider]) {
@@ -259,6 +254,11 @@ watch(() => props.modelValue, (newValue) => {
 </script>
 
 <style scoped>
+:disabled, :deep(.p-disabled), :deep(:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .llm-config-editor {
   padding: 0.75rem;
   border: 1px solid var(--color-border);
@@ -274,20 +274,17 @@ watch(() => props.modelValue, (newValue) => {
 }
 
 .model-label {
-  min-width: 8rem;
+  min-width: 5rem;
   font-weight: 500;
 }
 
 .use-case-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  margin: 0;
-  min-width: 8rem;
+  min-width: 5rem;
 }
 
 .use-case-checkbox input {
-  margin: 0;
+  vertical-align: middle;
+  margin-right: 0.25rem;
 }
 
 .provider-select {

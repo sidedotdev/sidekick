@@ -20,11 +20,11 @@
                   <div class="preset-name">{{ option.label }}</div>
                   <div v-if="option.preset && option.label != getModelSummary(option.preset.config)" class="preset-summary">{{ getModelSummary(option.preset.config) }}</div>
                 </div>
-                <i
+                <span
                   v-if="option.preset"
-                  class="pi pi-trash preset-delete-icon"
+                  class="preset-delete-icon"
                   @click.stop="deletePreset(option.preset.id)"
-                />
+                >x</span>
               </div>
             </div>
           </template>
@@ -285,7 +285,7 @@ const deletePreset = (presetId: string, event?: Event) => {
   const preset = presets.value.find(p => p.id === presetId)
   if (!preset) return
   
-  const name = preset.name || 'this preset'
+  const name = preset.name || getModelSummary(preset.config)
   if (!window.confirm(`Are you sure you want to delete "${name}"?`)) return
   
   presets.value = presets.value.filter(p => p.id !== presetId)
