@@ -35,7 +35,7 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 		return "", fmt.Errorf("failed to get user approval: %v", err)
 	}
 
-	if userResponse == nil || !*userResponse.Approved {
+	if userResponse == nil || userResponse.Approved == nil || !*userResponse.Approved {
 		return "Command execution was not approved by user. They said:\n\n" + userResponse.Content, nil
 	}
 
