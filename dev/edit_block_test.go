@@ -289,6 +289,172 @@ d
 	},
 }
 
+var fourBacktickFenceWithTripleInside = EditBlockTestCase{
+	name: "Four backtick fence with triple backticks inside content",
+	testInput: `Edit block with nested code:
+
+` + "````" + `markdown
+edit_block:1
+nested.md
+` + search + `
+Some text before.
+` + divider + `
+Some text before.
+
+` + "```" + `javascript
+var x = 1;
+` + "```" + `
+
+Some text after.
+` + replace + `
+` + "````" + `
+`,
+	expectedResult: []*EditBlock{
+		{
+			FilePath: "nested.md",
+			OldLines: []string{
+				"Some text before.",
+			},
+			NewLines: []string{
+				"Some text before.",
+				"",
+				"```javascript",
+				"var x = 1;",
+				"```",
+				"",
+				"Some text after.",
+			},
+			EditType:       "update",
+			SequenceNumber: 1,
+		},
+	},
+}
+
+var fiveBacktickFenceWithInfoString = EditBlockTestCase{
+	name: "Five backtick fence with four backticks inside content",
+	testInput: `Edit block with five backtick fence:
+
+` + "`````" + `markdown
+edit_block:1
+doc.md
+` + search + `
+Header text.
+` + divider + `
+Header text.
+
+` + "````" + `python
+def hello():
+    print("world")
+` + "````" + `
+
+Footer text.
+` + replace + `
+` + "`````" + `
+`,
+	expectedResult: []*EditBlock{
+		{
+			FilePath: "doc.md",
+			OldLines: []string{"Header text."},
+			NewLines: []string{
+				"Header text.",
+				"",
+				"````python",
+				"def hello():",
+				"    print(\"world\")",
+				"````",
+				"",
+				"Footer text.",
+			},
+			EditType:       "update",
+			SequenceNumber: 1,
+		},
+	},
+}
+
+var mixedFenceLengths = EditBlockTestCase{
+	name: "Mixed fence lengths in single input",
+	testInput: `Multiple blocks with different fence lengths:
+
+` + "```" + `go
+edit_block:1
+file1.go
+` + search + `
+a
+` + divider + `
+b
+` + replace + `
+` + "```" + `
+
+` + "````" + `python
+edit_block:2
+file2.py
+` + search + `
+x
+` + divider + `
+y
+` + replace + `
+` + "````" + `
+
+` + "`````" + `javascript
+edit_block:3
+file3.js
+` + search + `
+foo
+` + divider + `
+bar
+` + replace + `
+` + "`````" + `
+`,
+	expectedResult: []*EditBlock{
+		{
+			FilePath:       "file1.go",
+			OldLines:       []string{"a"},
+			NewLines:       []string{"b"},
+			EditType:       "update",
+			SequenceNumber: 1,
+		},
+		{
+			FilePath:       "file2.py",
+			OldLines:       []string{"x"},
+			NewLines:       []string{"y"},
+			EditType:       "update",
+			SequenceNumber: 2,
+		},
+		{
+			FilePath:       "file3.js",
+			OldLines:       []string{"foo"},
+			NewLines:       []string{"bar"},
+			EditType:       "update",
+			SequenceNumber: 3,
+		},
+	},
+}
+
+var standardTripleBacktickRegression = EditBlockTestCase{
+	name: "Standard triple backtick regression test",
+	testInput: `Standard triple backtick fence:
+
+` + "```" + `
+edit_block:1
+standard.go
+` + search + `
+original
+` + divider + `
+modified
+` + replace + `
+` + "```" + `
+`,
+	expectedResult: []*EditBlock{
+		{
+			FilePath:       "standard.go",
+			OldLines:       []string{"original"},
+			NewLines:       []string{"modified"},
+			EditType:       "update",
+			SequenceNumber: 1,
+		},
+	},
+}
+
 var multipleEditsInSameFile2 = EditBlockTestCase{
 	name: "Multiple edits in the same file, but second edit is missing file name so we assume it's the first one",
 	testInput: `This has multiple edits in the same file:
@@ -344,6 +510,10 @@ func TestExtractEditBlocks(t *testing.T) {
 		missingDividerCreateFile,
 		multipleEditsInSameFile,
 		multipleEditsInSameFile2,
+		fourBacktickFenceWithTripleInside,
+		fiveBacktickFenceWithInfoString,
+		mixedFenceLengths,
+		standardTripleBacktickRegression,
 	}
 
 	combinedTestInput := ""

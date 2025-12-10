@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sidekick/common"
+	"sidekick/llm"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -38,13 +40,30 @@ func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options,
 		}
 	}()
 
-	secretName := fmt.Sprintf("%s_API_KEY", options.Params.ModelConfig.NormalizedProviderName())
-	token, err := options.Secrets.SecretManager.GetSecret(secretName)
+	// Try OAuth credentials first, fall back to API key
+	oauthCreds, useOAuth, err := llm.GetAnthropicOAuthCredentials(options.Secrets.SecretManager)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get Anthropic OAuth credentials: %w", err)
 	}
-
-	client := anthropic.NewClient(option.WithAPIKey(token))
+	var client *anthropic.Client
+	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	if useOAuth {
+		client = anthropic.NewClient(
+			option.WithHTTPClient(httpClient),
+			option.WithHeader("Authorization", "Bearer "+oauthCreds.AccessToken),
+			option.WithHeader("anthropic-beta", llm.AnthropicOAuthBetaHeaders),
+		)
+	} else {
+		secretName := fmt.Sprintf("%s_API_KEY", options.Params.ModelConfig.NormalizedProviderName())
+		token, err := options.Secrets.SecretManager.GetSecret(secretName)
+		if err != nil {
+			return nil, err
+		}
+		client = anthropic.NewClient(
+			option.WithHTTPClient(httpClient),
+			option.WithAPIKey(token),
+		)
+	}
 
 	model := options.Params.Model
 	if model == "" {
@@ -85,6 +104,13 @@ func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options,
 
 		toolChoice := toolChoiceToAnthropicParam(options.Params.ToolChoice, options.Params.ParallelToolCalls != nil && *options.Params.ParallelToolCalls)
 		params.ToolChoice = anthropic.F(toolChoice)
+	}
+
+	if useOAuth {
+		// NOTE: OAuth tokens require using the Claude Code system prompt, otherwise you get a 400 error
+		var systemMessages []anthropic.TextBlockParam
+		systemMessages = append(systemMessages, anthropic.NewTextBlock("You are Claude Code, Anthropic's official CLI for Claude."))
+		params.System = anthropic.F(systemMessages)
 	}
 
 	stream := client.Messages.NewStreaming(ctx, params)

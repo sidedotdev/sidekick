@@ -267,6 +267,257 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 	}
 }
 
+func TestApplyEditBlockActivity_MarkdownAndCommentSkipping(t *testing.T) {
+	tests := []struct {
+		name            string
+		filePath        string
+		initialContent  string
+		editBlock       EditBlock
+		expectedContent string
+	}{
+		{
+			name:     "Markdown: update top-level heading",
+			filePath: "doc.md",
+			initialContent: `# Title
+
+Some content here.
+
+More content.`,
+			editBlock: EditBlock{
+				EditType: "update",
+				FilePath: "doc.md",
+				OldLines: []string{"# Title"},
+				NewLines: []string{"# New Title"},
+			},
+			expectedContent: `# New Title
+
+Some content here.
+
+More content.`,
+		},
+		{
+			name:     "Markdown: update subheading plus paragraph",
+			filePath: "doc.md",
+			initialContent: `# Main Title
+
+## Subheading
+
+This is a paragraph.
+
+More text.`,
+			editBlock: EditBlock{
+				EditType: "update",
+				FilePath: "doc.md",
+				OldLines: []string{
+					"## Subheading",
+					"",
+					"This is a paragraph.",
+				},
+				NewLines: []string{
+					"## Updated Subheading",
+					"",
+					"This is an updated paragraph.",
+				},
+			},
+			expectedContent: `# Main Title
+
+## Updated Subheading
+
+This is an updated paragraph.
+
+More text.`,
+		},
+		{
+			name:     "Markdown: replace paragraph before headings",
+			filePath: "doc.md",
+			initialContent: `Introduction paragraph.
+
+# Section One
+
+Content here.`,
+			editBlock: EditBlock{
+				EditType: "update",
+				FilePath: "doc.md",
+				OldLines: []string{"Introduction paragraph."},
+				NewLines: []string{"Updated introduction paragraph."},
+			},
+			expectedContent: `Updated introduction paragraph.
+
+# Section One
+
+Content here.`,
+		},
+		{
+			name:     "Markdown: replace paragraph after headings",
+			filePath: "doc.md",
+			initialContent: `# Section One
+
+Original content here.
+
+More content.`,
+			editBlock: EditBlock{
+				EditType: "update",
+				FilePath: "doc.md",
+				OldLines: []string{"Original content here."},
+				NewLines: []string{"Updated content here."},
+			},
+			expectedContent: `# Section One
+
+Updated content here.
+
+More content.`,
+		},
+		{
+			name:     "Go: ignore comment line in file, OldLines omit it",
+			filePath: "main.go",
+			initialContent: `package main
+
+func getValue() int {
+	// This is a comment
+	return 42
+}`,
+			editBlock: EditBlock{
+				EditType: "update",
+				FilePath: "main.go",
+				OldLines: []string{
+					"func getValue() int {",
+					"	return 42",
+					"}",
+				},
+				NewLines: []string{
+					"func getValue() int {",
+					"	return 100",
+					"}",
+				},
+			},
+			expectedContent: `package main
+
+func getValue() int {
+	return 100
+}`,
+		},
+		{
+			name:     "Go: OldLines include comment not in file",
+			filePath: "main.go",
+			initialContent: `package main
+
+func getValue() int {
+	return 42
+}`,
+			editBlock: EditBlock{
+				EditType: "update",
+				FilePath: "main.go",
+				OldLines: []string{
+					"func getValue() int {",
+					"	// This comment is not in the file",
+					"	return 42",
+					"}",
+				},
+				NewLines: []string{
+					"func getValue() int {",
+					"	// This comment is not in the file",
+					"	return 100",
+					"}",
+				},
+			},
+			expectedContent: `package main
+
+func getValue() int {
+	// This comment is not in the file
+	return 100
+}`,
+		},
+		{
+			name:     "Python: ignore comment line in file, OldLines omit it",
+			filePath: "script.py",
+			initialContent: `def get_value():
+    # This is a comment
+    return 42`,
+			editBlock: EditBlock{
+				EditType: "update",
+				FilePath: "script.py",
+				OldLines: []string{
+					"def get_value():",
+					"    return 42",
+				},
+				NewLines: []string{
+					"def get_value():",
+					"    return 100",
+				},
+			},
+			expectedContent: `def get_value():
+    return 100`,
+		},
+		{
+			name:     "Python: OldLines include comment not in file",
+			filePath: "script.py",
+			initialContent: `def get_value():
+    return 42`,
+			editBlock: EditBlock{
+				EditType: "update",
+				FilePath: "script.py",
+				OldLines: []string{
+					"def get_value():",
+					"    # This comment is not in the file",
+					"    return 42",
+				},
+				NewLines: []string{
+					"def get_value():",
+					"    # This comment is not in the file",
+					"    return 100",
+				},
+			},
+			expectedContent: `def get_value():
+    # This comment is not in the file
+    return 100`,
+		},
+	}
+
+	for _, tt := range tests {
+		devActivities := &DevActivities{
+			LSPActivities: &lsp.LSPActivities{
+				LSPClientProvider: func(languageName string) lsp.LSPClient {
+					return &lsp.Jsonrpc2LSPClient{
+						LanguageName: languageName,
+					}
+				},
+				InitializedClients: map[string]lsp.LSPClient{},
+			},
+		}
+
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+
+			filePath := filepath.Join(tmpDir, tt.filePath)
+			err := os.WriteFile(filePath, []byte(tt.initialContent), 0644)
+			require.NoError(t, err)
+
+			envContainer := env.EnvContainer{
+				Env: &env.LocalEnv{
+					WorkingDirectory: tmpDir,
+				},
+			}
+
+			reports, err := devActivities.ApplyEditBlocks(
+				context.Background(),
+				ApplyEditBlockActivityInput{
+					EnvContainer: envContainer,
+					EditBlocks:   []EditBlock{tt.editBlock},
+					EnabledFlags: []string{},
+				},
+			)
+
+			require.NoError(t, err)
+			require.Len(t, reports, 1)
+			assert.Empty(t, reports[0].Error, "Expected no error but got: %s", reports[0].Error)
+
+			content, err := os.ReadFile(filePath)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedContent, string(content))
+		})
+	}
+}
+
 func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
 	tmpDir := t.TempDir()
 

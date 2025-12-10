@@ -169,7 +169,7 @@ environment, such as installing project-specific dependencies.
 
 ### .sideignore
 
-<!-- TODO /gen how and when to use the .sideignore file -->
+Use a `.sideignore` file to control which files Sidekick sees, independent of git. It follows `.gitignore` syntax and takes precedence over `.gitignore` and `.ignore` files. This is useful for ignoring files like third-party vendored libraries that are tracked in git.
 
 ## Language and Framework Support
 

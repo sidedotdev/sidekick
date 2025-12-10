@@ -129,6 +129,7 @@ func setupAndRunInteractiveCli(args []string) error {
 				},
 			},
 			NewTaskCommand(),
+			NewAuthCommand(),
 		},
 	}
 	return cliApp.Run(context.Background(), args)

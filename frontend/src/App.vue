@@ -4,6 +4,7 @@ import { ref, onMounted } from 'vue'
 import { store } from './lib/store'
 import type { Ref } from 'vue'
 import type { Workspace } from './lib/models'
+import GearIcon from './components/icons/GearIcon.vue'
 
 // look up if system is dark mode
 const isDarkMode = ref(window.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -84,7 +85,7 @@ const selectedWorkspace = () => {
                 {{ workspace.name }}
               </option>
             </select>
-            <RouterLink v-if="mode === 'development'" :to="'/workspaces/' + store.workspaceId" class="edit-workspace-button">⚙️</RouterLink>
+            <RouterLink v-if="mode === 'development'" :to="'/workspaces/' + store.workspaceId" class="edit-workspace-button"><GearIcon /></RouterLink>
           </div>
 
           <!--RouterLink to="/kanban">Kanban</RouterLink-->
@@ -155,11 +156,14 @@ header {
 }
 
 .edit-workspace-button {
-  font-size: 1.2rem;
+  width: 1.2rem;
+  height: 1.2rem;
   color: var(--color-text);
   opacity: 0.5;
   transition: opacity 0.3s ease;
   text-decoration: none;
+  display: inline-flex;
+  align-items: center;
 }
 
 .edit-workspace-button:hover {

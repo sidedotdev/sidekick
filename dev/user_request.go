@@ -353,9 +353,10 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 	case FeedbackInfo:
 
 		info.Feedback += "\n\n" + userResponse.Content
+		info.Type = FeedbackTypeUserGuidance
 		return info, nil
 	case SkipInfo:
-		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content}
+		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content, Type: FeedbackTypeUserGuidance}
 		return feedbackInfo, nil
 	case ToolCallResponseInfo:
 		// the caller is replacing the prompt info so will lose this unless we
@@ -367,7 +368,7 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 			ToolCallId: info.ToolCallId,
 			IsError:    info.IsError,
 		})
-		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content}
+		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content, Type: FeedbackTypeUserGuidance}
 		return feedbackInfo, nil
 	case InitialDevStepInfo:
 		content := renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition)
@@ -375,7 +376,7 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 			Role:    llm.ChatMessageRoleUser,
 			Content: content,
 		})
-		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content}
+		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content, Type: FeedbackTypeUserGuidance}
 		return feedbackInfo, nil
 	default:
 		return FeedbackInfo{}, fmt.Errorf("unsupported current prompt info type: %s", currentPromptInfo.GetType())

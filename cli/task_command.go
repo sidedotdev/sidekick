@@ -301,7 +301,7 @@ func startServerDetached() (*os.Process, error) {
 		return nil, fmt.Errorf("Failed to determine executable path: %w", err)
 	}
 
-	cmd := exec.Command(executable, "start")
+	cmd := exec.Command(executable, "start", "--disable-auto-open")
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("Failed to start Sidekick server process (`%s start`): %w", executable, err)

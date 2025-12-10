@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"regexp"
 	"sidekick/coding/git"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
@@ -27,6 +28,7 @@ one symbol and it's still too long, you can try utilizing search or reading
 specific lines directly instead.`
 
 var ErrMaxAttemptsReached = fmt.Errorf("reached max attempts")
+var ErrExtractEditBlocks = fmt.Errorf("failed to extract edit blocks")
 
 // edits code in the envContainer based on code context + requirements
 func EditCode(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) error {
@@ -68,7 +70,7 @@ editLoop:
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return fmt.Errorf("failed to make user request when paused: %v", err)
 		} else if response != nil {
-			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
+			promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			attemptsSinceLastFeedback = 0
 		}
 
@@ -79,10 +81,11 @@ editLoop:
 
 		// Inject proactive system message based on tool-call thresholds
 		if msg, ok := ThresholdMessageForCounter(maxIterationsBeforeFeedback, attemptsSinceLastFeedback); ok {
-			*chatHistory = append(*chatHistory, llm.ChatMessage{
-				Role:    "system",
-				Content: msg,
-			})
+			//*chatHistory = append(*chatHistory, llm.ChatMessage{
+			//	Role:    "system",
+			//	Content: msg,
+			//})
+			promptInfo = FeedbackInfo{Feedback: msg, Type: FeedbackTypeSystemError}
 		}
 
 		// Only request feedback if we haven't received any recently from any source
@@ -105,13 +108,16 @@ editLoop:
 		editBlocks, err = authorEditBlocks(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo)
 		if err != nil && !errors.Is(err, PendingActionError) {
 			v := workflow.GetVersion(dCtx, "edit-code-max-attempts-bugfix", workflow.DefaultVersion, 1)
-			if v < 0 || !errors.Is(err, ErrMaxAttemptsReached) {
-				// The err is likely when extracting edit blocks
-				// TODO if the failure was something else, eg openai rate limit, then don't feedback like this
-				feedback := fmt.Sprintf("Please write out all the *edit blocks* again and ensure we follow the format, as we encountered this error when processing them: %v", err)
-				promptInfo = FeedbackInfo{Feedback: feedback}
-				attemptCount++
-				continue
+			isMaxAttempts := errors.Is(err, ErrMaxAttemptsReached)
+			if v < 0 || !isMaxAttempts {
+				if errors.Is(err, ErrExtractEditBlocks) {
+					feedback := fmt.Sprintf("Please write out all the *edit blocks* again and ensure we follow the format, as we encountered this error when processing them: %v", err)
+					promptInfo = FeedbackInfo{Feedback: feedback, Type: FeedbackTypeEditBlockError}
+					attemptCount++
+					continue
+				}
+
+				return err
 			}
 		}
 		if version == 1 {
@@ -125,7 +131,7 @@ editLoop:
 		reports, err = validateAndApplyEditBlocks(dCtx, editBlocks)
 		if err != nil {
 			feedback := fmt.Sprintf("Error encountered during ApplyEditBlockActivity. Error: %v", err)
-			promptInfo = FeedbackInfo{Feedback: feedback}
+			promptInfo = FeedbackInfo{Feedback: feedback, Type: FeedbackTypeSystemError}
 			attemptCount++
 		} else {
 			v := workflow.GetVersion(dCtx, "edit_code_diff", workflow.DefaultVersion, 1)
@@ -167,7 +173,7 @@ editLoop:
 					// the next step and let tests/critique guide this.
 					// alternatively, we could do a special subflow to repair
 					// only the broken edit blocks with more targeted prompting
-					promptInfo = FeedbackInfo{Feedback: reportMessage}
+					promptInfo = FeedbackInfo{Feedback: reportMessage, Type: FeedbackTypeApplyError}
 					attemptCount++
 					continue editLoop
 				}
@@ -226,16 +232,17 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return nil, fmt.Errorf("failed to make user request when paused: %v", err)
 		} else if response != nil && response.Content != "" {
-			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", response.Content)}
+			promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			attemptsSinceLastEditBlockOrFeedback = 0
 		}
 
 		// Inject proactive system message based on tool-call thresholds
 		if msg, ok := ThresholdMessageForCounter(feedbackIterations, attemptsSinceLastEditBlockOrFeedback); ok {
-			*chatHistory = append(*chatHistory, llm.ChatMessage{
-				Role:    "system",
-				Content: msg,
-			})
+			//*chatHistory = append(*chatHistory, llm.ChatMessage{
+			//	Role:    "system",
+			//	Content: msg,
+			//})
+			promptInfo = FeedbackInfo{Feedback: msg, Type: FeedbackTypeSystemError}
 		}
 
 		if attemptCount >= maxAttempts {
@@ -305,7 +312,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		}
 		currentExtractedBlocks, err := ExtractEditBlocksWithVisibility(chatResponse.ChatMessage.Content, visibleChatHistory)
 		if err != nil {
-			return []EditBlock{}, fmt.Errorf("failed to extract edit blocks: %v", err)
+			return []EditBlock{}, fmt.Errorf("%w: %v", ErrExtractEditBlocks, err)
 		}
 		if len(currentExtractedBlocks) > 0 {
 			attemptsSinceLastEditBlockOrFeedback = 0
@@ -360,7 +367,7 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	case SkipInfo:
 		skip = true
 	case FeedbackInfo:
-		content = renderAuthorEditBlockFeedbackPrompt(info.Feedback)
+		content = renderAuthorEditBlockFeedbackPrompt(info.Feedback, info.Type)
 	case ToolCallResponseInfo:
 		role = llm.ChatMessageRoleTool
 		content = info.Response
@@ -465,13 +472,26 @@ func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, req
 // into a prompt specialized for fixing issues in applying the edit block
 // TODO only provide the first hint if the feedback is about applying edit
 // blocks and if we know that this case occurred (partial edit block failure).
-// TODO only provide the second hint if the feedback is about tests failing.
-// TODO only provide hint 3 if feedback includes test results
-// TODO only provide hint 4 if we see that pattern like path/to/file.extension:10:5
-func renderAuthorEditBlockFeedbackPrompt(feedback string) string {
+func renderAuthorEditBlockFeedbackPrompt(feedback, feedbackType string) string {
+	if feedbackType == FeedbackTypePause || feedbackType == FeedbackTypeUserGuidance || feedbackType == FeedbackTypeSystemError {
+		return renderGeneralFeedbackPrompt(feedback, feedbackType)
+	}
+
+	// Simple regex for finding line numbers like "file.go:123" or "file.go:123:45"
+	hasLineNumbers, _ := regexp.MatchString(`\w+\.\w+:\d+`, feedback)
+
+	isApplyError := feedbackType == FeedbackTypeApplyError
+	hasApplyErrors := isApplyError && strings.Contains(feedback, "application failed")
+	// If it's an apply error type but no specific "application failed" message, it's a verification/test failure
+	hasVerifyErrors := isApplyError && !hasApplyErrors
+
 	data := map[string]interface{}{
 		"feedback":                         feedback,
-		"hasUserGuidance":                  strings.Contains(feedback, guidanceStart),
+		"isApplyError":                     isApplyError,
+		"isEditBlockError":                 feedbackType == FeedbackTypeEditBlockError,
+		"hasApplyErrors":                   hasApplyErrors,
+		"hasVerifyErrors":                  hasVerifyErrors,
+		"hasLineNumbers":                   hasLineNumbers,
 		"retrieveCodeContextFunctionName":  currentGetSymbolDefinitionsTool().Name,
 		"bulkSearchRepositoryFunctionName": bulkSearchRepositoryTool.Name,
 		"bulkReadFileFunctionName":         bulkReadFileTool.Name,

@@ -551,6 +551,17 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		var validEditBlocks []EditBlock
 		var invalidReports []ApplyEditBlockReport
 
+		// NOTE: there are enough cases where the LLM is able to actually infer
+		// the correct lines, but the validation fails due to being overly
+		// strict, e.g. not understanding that two separate code blocks are
+		// actually contiguous and rejecting edit blocks that span across, or
+		// ignoring other mechanisms of reading code that don't result in code
+		// blocks we understand. this hallucination check is most useful for
+		// models that are not current SOTA, which we don't recommend using
+		// anyways. If we can make the hallucination detection a bit smarter, eg
+		// by finding chunks that match and cover all lines and by incorporating
+		// code that isn't just in code blocks (e.g. raw excerpts and git
+		// diffs), then we may consider bringing back this validation.
 		visibilityVersion := workflow.GetVersion(dCtx, "disable-context-code-visibility-check", workflow.DefaultVersion, 1)
 		if visibilityVersion >= 1 && fflag.IsEnabled(dCtx, fflag.DisableContextCodeVisibilityCheck) {
 			validEditBlocks = editBlocks
@@ -829,16 +840,19 @@ func isWhitespace(s string) bool {
 	return whitespacePattern.MatchString(s)
 }
 
-// FIXME: only works for double-slash and # comment languages
 // FIXME doesn't handle slash-star comments, fix this using tree-sitter comment ranges overlap
 var commentPattern = regexp.MustCompile(`^\s*(\/\/|#).*$`)
+var htmlCommentPattern = regexp.MustCompile(`^\s*<!--.*-->\s*$`)
 
-func isComment(s string) bool {
+func isComment(s string, languageName string) bool {
+	if languageName == "markdown" {
+		return htmlCommentPattern.MatchString(s)
+	}
 	return commentPattern.MatchString(s)
 }
 
-func isWhitespaceOrComment(s string) bool {
-	return isWhitespace(s) || isComment(s)
+func isWhitespaceOrComment(s string, languageName string) bool {
+	return isWhitespace(s) || isComment(s, languageName)
 }
 
 const similarityThreshold = 0.85 // controls similarity per line for fuzzy edit block matching
@@ -856,6 +870,7 @@ const minimumAcceptableHighScoreRatio = 0.95
 
 func FindAcceptableMatch(block EditBlock, originalLines []string, isOriginalLinesFromActualFile bool) (match, []match) {
 	closestMatch, closestMatches := FindClosestMatch(block, originalLines, isOriginalLinesFromActualFile)
+
 	//fmt.Printf("closest matches: %v\n", closestMatches)
 	if closestMatch.successfulMatch && closestMatch.highScoreRatio > minimumAcceptableHighScoreRatio {
 		acceptableMatches := utils.Filter(closestMatches, func(m match) bool {
@@ -969,6 +984,7 @@ func calculateStartingLineIndex(lines []string) int {
 }
 
 func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFromActualFile bool) (match, []match) {
+	languageName := utils.InferLanguageNameFromFilePath(block.FilePath)
 	startingLineIndex := calculateStartingLineIndex(block.OldLines)
 	//fmt.Printf("starting line index: %d\n", startingLineIndex)
 	potentialMatches := FindPotentialMatches(block, originalLines, startingLineIndex, isOriginalLinesFromActualFile)
@@ -1017,7 +1033,7 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 			//fmt.Printf("i:%v, adjustedIndex: %v, oldLinesOffset: %v, originalLinesOffset: %v\n", i, adjustedIndex, oldLinesOffset, originalLinesOffset)
 			// bounds check
 			if adjustedIndex+i+originalLinesOffset >= len(originalLines) {
-				if isWhitespaceOrComment(oldLine) {
+				if isWhitespaceOrComment(oldLine, languageName) {
 					continue
 				} else {
 					// not sure the `successfulMatch` variable is needed as we have highScoreRatio
@@ -1034,14 +1050,14 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 			// skip whitespace-only or comment-only lines when on one side only
 			// TODO ignore changes or added comments on the end of an existing line
 			if score < similarityThreshold {
-				if (isWhitespaceOrComment(originalLine) && !isWhitespaceOrComment(oldLine)) ||
+				if (isWhitespaceOrComment(originalLine, languageName) && !isWhitespaceOrComment(oldLine, languageName)) ||
 					(isWhitespace(originalLine) && !isWhitespace(oldLine)) {
 					matchedLines = append(matchedLines, originalLine)
 					//fmt.Println("offsetting original lines")
 					originalLinesOffset += 1
 					i--
 					continue
-				} else if (isWhitespaceOrComment(oldLine) && !isWhitespaceOrComment(originalLine)) ||
+				} else if (isWhitespaceOrComment(oldLine, languageName) && !isWhitespaceOrComment(originalLine, languageName)) ||
 					(isWhitespace(oldLine) && !isWhitespace(originalLine)) {
 					//fmt.Println("offsetting old lines")
 					oldLinesOffset += 1

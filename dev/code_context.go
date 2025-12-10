@@ -39,9 +39,9 @@ func (r *RequiredCodeContext) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	if len(aux.RequestsNew) > 0 {
+	if aux.RequestsNew != nil {
 		r.Requests = aux.RequestsNew
-	} else if len(aux.RequestsOld) > 0 {
+	} else if aux.RequestsOld != nil {
 		r.Requests = aux.RequestsOld
 	}
 
@@ -255,7 +255,8 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		}
 		if userResponse != nil && userResponse.Content != "" {
 			addCodeContextPrompt(chatHistory, FeedbackInfo{
-				Feedback: fmt.Sprintf("-- PAUSED --\n\nIMPORTANT: The user paused and provided the following guidance:\n\n%s", userResponse.Content),
+				Feedback: userResponse.Content,
+				Type:     FeedbackTypePause,
 			})
 			iterationsSinceLastFeedback = 0
 			continue
@@ -314,6 +315,11 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 				continue
 			}
 			return nil, "", fmt.Errorf("failed to determine required code context: %v", err)
+		}
+
+		// Allow explicit empty requests for new/empty projects
+		if len(requiredCodeContext.Requests) == 0 {
+			break
 		}
 
 		// STEP 3: Read the code
@@ -405,8 +411,11 @@ func extractCodeContext(ctx workflow.Context, req coding.DirectorySymDefRequest)
 }
 
 func RetrieveCodeContext(dCtx DevContext, requiredCodeContext RequiredCodeContext, characterLengthThreshold int) (string, error) {
-	if len(requiredCodeContext.Requests) == 0 {
+	if requiredCodeContext.Requests == nil {
 		return "", llm.ErrToolCallUnmarshal
+	}
+	if len(requiredCodeContext.Requests) == 0 {
+		return "", nil
 	}
 
 	dCtx.Context = utils.NoRetryCtx(dCtx)
@@ -464,12 +473,12 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 		skip = true
 	case ToolCallResponseInfo:
 		role = llm.ChatMessageRoleTool
-		content = renderCodeContextFeedbackPrompt(info.Response)
+		content = renderCodeContextFeedbackPrompt(info.Response, "")
 		name = info.FunctionName
 		toolCallId = info.ToolCallId
 		isError = info.IsError
 	case FeedbackInfo:
-		content = info.Feedback
+		content = renderCodeContextFeedbackPrompt(info.Feedback, info.Type)
 	case DetermineCodeContextInfo:
 		content = renderCodeContextInitialPrompt(info)
 		cacheControl = "ephemeral"
@@ -495,7 +504,11 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 	}
 }
 
-func renderCodeContextFeedbackPrompt(feedback string) string {
+func renderCodeContextFeedbackPrompt(feedback, feedbackType string) string {
+	if feedbackType == FeedbackTypePause || feedbackType == FeedbackTypeUserGuidance || feedbackType == FeedbackTypeSystemError {
+		return renderGeneralFeedbackPrompt(feedback, feedbackType)
+	}
+
 	data := map[string]interface{}{
 		"feedback":                        feedback,
 		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,

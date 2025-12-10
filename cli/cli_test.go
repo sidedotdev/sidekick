@@ -388,7 +388,7 @@ func TestEnsureAISecrets_UsesExistingKeyringValue(t *testing.T) {
 
 	providers, err := ensureAISecrets()
 	assert.NoError(t, err)
-	assert.ElementsMatch(t, []string{"OpenAI", "Anthropic"}, providers)
+	assert.ElementsMatch(t, []string{"openai", "anthropic"}, providers)
 
 	retrievedOpenAIKey, err := keyring.Get(service, llm.OpenaiApiKeySecretName)
 	assert.NoError(t, err)

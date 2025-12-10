@@ -74,7 +74,7 @@ func getModelsDevCachePath() (string, error) {
 	return filepath.Join(cacheHome, modelsDevFilename), nil
 }
 
-func loadModelsDev() (modelsDevData, error) {
+func LoadModelsDev() (modelsDevData, error) {
 	cacheLoadMutex.Lock()
 	defer cacheLoadMutex.Unlock()
 
@@ -173,7 +173,7 @@ func downloadModelsDev(cachePath string) (modelsDevData, error) {
 // requested provider (if not, but model info was returned, it means the model
 // exists in a different provider)
 func GetModel(provider string, model string) (*ModelInfo, bool) {
-	data, err := loadModelsDev()
+	data, err := LoadModelsDev()
 	if err != nil {
 		return nil, false
 	}

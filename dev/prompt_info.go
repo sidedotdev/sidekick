@@ -190,11 +190,30 @@ func (p SkipInfo) GetType() string {
 // TODO include info about type feedback, eg test feedback vs apply edit feedback vs code review feedback etc
 type FeedbackInfo struct {
 	Feedback string
+	Type     string
 }
+
+const (
+	FeedbackTypePause          = "pause"
+	FeedbackTypeUserGuidance   = "user_guidance"
+	FeedbackTypeEditBlockError = "edit_block_error"
+	FeedbackTypeApplyError     = "apply_error"
+	FeedbackTypeSystemError    = "system_error"
+)
 
 // Implement the PromptInfo interface for FeedbackInfo
 func (p FeedbackInfo) GetType() string {
 	return "feedback"
+}
+
+func renderGeneralFeedbackPrompt(feedback, feedbackType string) string {
+	data := map[string]interface{}{
+		"feedback":       feedback,
+		"isPause":        feedbackType == FeedbackTypePause,
+		"isUserGuidance": feedbackType == FeedbackTypeUserGuidance,
+		"isSystemError":  feedbackType == FeedbackTypeSystemError,
+	}
+	return RenderPrompt(GeneralFeedback, data)
 }
 
 type ToolCallResponseInfo struct {

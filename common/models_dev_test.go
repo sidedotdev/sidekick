@@ -229,7 +229,7 @@ func TestLoadModelsDev_CacheFreshness(t *testing.T) {
 		t.Fatalf("failed to write cache file: %v", err)
 	}
 
-	result, err := loadModelsDev()
+	result, err := LoadModelsDev()
 	if err != nil {
 		t.Fatalf("loadModelsDev() failed: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestLoadModelsDev_CacheFreshness(t *testing.T) {
 
 	firstLoadTime := cacheLoadedAt
 
-	result2, err := loadModelsDev()
+	result2, err := LoadModelsDev()
 	if err != nil {
 		t.Fatalf("second loadModelsDev() failed: %v", err)
 	}

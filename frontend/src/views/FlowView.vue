@@ -248,7 +248,6 @@ const connectActionChangesWebSocketForFlow = (flowId: string) => {
   actionChangesSocket.onmessage = async (event) => {
     try {
       const flowAction: FlowAction = JSON.parse(event.data);
-      const index = flowActions.value.findIndex((action) => action.id === flowAction.id);
 
       // Handle first flow action
       if (!hasReceivedFirstAction) {
@@ -285,7 +284,13 @@ const connectActionChangesWebSocketForFlow = (flowId: string) => {
         setShortContent();
       }, 100);
 
+      const index = flowActions.value.findIndex((action) => action.id === flowAction.id);
       if (index !== -1) {
+        if (flowAction.updated < flowActions.value[index].updated) {
+          // events may be out of order at this point, even though the backend
+          // provides them in order, if we do any awaits in the event handlers
+          return;
+        }
         flowActions.value[index] = flowAction;
       } else {
         flowActions.value.push(flowAction);
