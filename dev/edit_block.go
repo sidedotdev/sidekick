@@ -197,7 +197,7 @@ func ExtractEditBlocksWithVisibility(text string, chatHistory []llm.ChatMessage)
 
 	var extractedEditBlocks []EditBlock
 	visibleCodeBlocks := extractAllCodeBlocks(chatHistory)
-	for _, block := range editBlocksWithoutVisibility {
+	for i, block := range editBlocksWithoutVisibility {
 		// these file ranges visible now, but might not be later after we
 		// ManageChatHistory, so we need to track visibility right now, at
 		// the point the edit block is first authored. We also track it per
@@ -207,6 +207,26 @@ func ExtractEditBlocksWithVisibility(text string, chatHistory []llm.ChatMessage)
 			return cb.FilePath == block.FilePath
 		})
 		block.VisibleFileRanges = codeBlocksToMergedFileRanges(block.FilePath, visibleCodeBlocks)
+
+		for _, previousBlock := range editBlocksWithoutVisibility[0:i] {
+			if previousBlock.FilePath == block.FilePath && previousBlock.EditType == "create" {
+				// the whole created file is visible in this case
+				fileRange := FileRange{
+					FilePath:  previousBlock.FilePath,
+					StartLine: 1,
+					EndLine:   1 + len(previousBlock.NewLines),
+				}
+				block.VisibleFileRanges = append(block.VisibleFileRanges, fileRange)
+
+				codeBlock := tree_sitter.CodeBlock{
+					FilePath:  previousBlock.FilePath,
+					Code:      strings.Join(previousBlock.NewLines, "\n"),
+					StartLine: fileRange.StartLine,
+					EndLine:   fileRange.EndLine,
+				}
+				block.VisibleCodeBlocks = append(block.VisibleCodeBlocks, codeBlock)
+			}
+		}
 
 		// TODO /gen/req add one more visible code block (won't have
 		// corresponding visible file range) that is based all on the

@@ -551,6 +551,17 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		var validEditBlocks []EditBlock
 		var invalidReports []ApplyEditBlockReport
 
+		// NOTE: there are enough cases where the LLM is able to actually infer
+		// the correct lines, but the validation fails due to being overly
+		// strict, e.g. not understanding that two separate code blocks are
+		// actually contiguous and rejecting edit blocks that span across, or
+		// ignoring other mechanisms of reading code that don't result in code
+		// blocks we understand. this hallucination check is most useful for
+		// models that are not current SOTA, which we don't recommend using
+		// anyways. If we can make the hallucination detection a bit smarter, eg
+		// by finding chunks that match and cover all lines and by incorporating
+		// code that isn't just in code blocks (e.g. raw excerpts and git
+		// diffs), then we may consider bringing back this validation.
 		visibilityVersion := workflow.GetVersion(dCtx, "disable-context-code-visibility-check", workflow.DefaultVersion, 1)
 		if visibilityVersion >= 1 && fflag.IsEnabled(dCtx, fflag.DisableContextCodeVisibilityCheck) {
 			validEditBlocks = editBlocks
@@ -859,6 +870,7 @@ const minimumAcceptableHighScoreRatio = 0.95
 
 func FindAcceptableMatch(block EditBlock, originalLines []string, isOriginalLinesFromActualFile bool) (match, []match) {
 	closestMatch, closestMatches := FindClosestMatch(block, originalLines, isOriginalLinesFromActualFile)
+
 	//fmt.Printf("closest matches: %v\n", closestMatches)
 	if closestMatch.successfulMatch && closestMatch.highScoreRatio > minimumAcceptableHighScoreRatio {
 		acceptableMatches := utils.Filter(closestMatches, func(m match) bool {
