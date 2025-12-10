@@ -18,7 +18,7 @@
     </div>
     <div v-show="configMode !== 'local'">
       <h3>LLMs</h3>
-      <LLMConfigEditor v-model="llmConfig" />
+      <LlmConfigEditor v-model="llmConfig" />
     </div>
     <div v-show="configMode !== 'local'">
       <h3>Embeddings</h3>
@@ -32,7 +32,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import LLMConfigEditor from '@/components/LLMConfigEditor.vue';
+import LlmConfigEditor from '@/components/LlmConfigEditor.vue';
 import EmbeddingConfigEditor from '@/components/EmbeddingConfigEditor.vue';
 import type { Workspace, LLMConfig, EmbeddingConfig } from '@/lib/models';
 

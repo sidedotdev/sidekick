@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { config, mount } from '@vue/test-utils';
 import PrimeVue from 'primevue/config';
 import WorkspaceForm from '../WorkspaceForm.vue';
-import LLMConfigEditor from '../LLMConfigEditor.vue';
+import LlmConfigEditor from '../LlmConfigEditor.vue';
 import EmbeddingConfigEditor from '../EmbeddingConfigEditor.vue';
 import type { Workspace } from '../../lib/models';
 
@@ -68,7 +68,7 @@ describe('WorkspaceForm.vue', () => {
     });
 
     await vi.waitFor(() => {
-      const llmEditor = wrapper.findComponent(LLMConfigEditor);
+      const llmEditor = wrapper.findComponent(LlmConfigEditor);
       const options = llmEditor.find('.provider-select').findAll('option');
       expect(options.length).toBeGreaterThan(1);
     });
@@ -76,7 +76,7 @@ describe('WorkspaceForm.vue', () => {
     await wrapper.find('#name').setValue('New Workspace');
     await wrapper.find('#localRepoDir').setValue('/local/repo/dir');
 
-    const llmEditor = wrapper.findComponent(LLMConfigEditor);
+    const llmEditor = wrapper.findComponent(LlmConfigEditor);
     await llmEditor.find('.provider-select').setValue('openai');
 
     const embeddingEditor = wrapper.findComponent(EmbeddingConfigEditor);
@@ -130,7 +130,7 @@ describe('WorkspaceForm.vue', () => {
     });
 
     await vi.waitFor(() => {
-      const llmEditor = wrapper.findComponent(LLMConfigEditor);
+      const llmEditor = wrapper.findComponent(LlmConfigEditor);
       const options = llmEditor.find('.provider-select').findAll('option');
       expect(options.length).toBeGreaterThan(1);
     });
@@ -138,7 +138,7 @@ describe('WorkspaceForm.vue', () => {
     await wrapper.find('#name').setValue('Updated Workspace');
     await wrapper.find('#localRepoDir').setValue('/updated/repo/dir');
 
-    const llmEditor = wrapper.findComponent(LLMConfigEditor);
+    const llmEditor = wrapper.findComponent(LlmConfigEditor);
     await llmEditor.find('.provider-select').setValue('openai');
 
     const embeddingEditor = wrapper.findComponent(EmbeddingConfigEditor);
@@ -198,7 +198,7 @@ describe('WorkspaceForm.vue', () => {
     });
 
     await vi.waitFor(() => {
-      const llmEditor = wrapper.findComponent(LLMConfigEditor);
+      const llmEditor = wrapper.findComponent(LlmConfigEditor);
       const options = llmEditor.find('.provider-select').findAll('option');
       expect(options.length).toBeGreaterThan(1);
     });
@@ -206,7 +206,7 @@ describe('WorkspaceForm.vue', () => {
     expect((wrapper.find('#name').element as HTMLInputElement).value).toBe('Existing Workspace');
     expect((wrapper.find('#localRepoDir').element as HTMLInputElement).value).toBe('/existing/repo/dir');
 
-    const llmEditor = wrapper.findComponent(LLMConfigEditor);
+    const llmEditor = wrapper.findComponent(LlmConfigEditor);
     expect((llmEditor.find('.provider-select').element as HTMLSelectElement).value).toBe('anthropic');
 
     const embeddingEditor = wrapper.findComponent(EmbeddingConfigEditor);
