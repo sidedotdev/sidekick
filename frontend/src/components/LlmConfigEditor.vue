@@ -5,7 +5,7 @@
       <span class="model-label">Default</span>
       <select v-model="defaultConfig.provider" class="provider-select" @change="emitUpdate">
         <option value="">Provider</option>
-        <option v-for="p in providerOptions" :key="p" :value="p">{{ p }}</option>
+        <option v-for="p in providerOptions" :key="p" :value="p">{{ getProviderLabel(p) }}</option>
       </select>
       <AutoComplete
         v-model="defaultConfig.model"
@@ -42,7 +42,7 @@
           @change="emitUpdate"
         >
           <option value="">Provider</option>
-          <option v-for="p in providerOptions" :key="p" :value="p">{{ p }}</option>
+          <option v-for="p in providerOptions" :key="p" :value="p">{{ getProviderLabel(p) }}</option>
         </select>
         <AutoComplete
           v-model="useCaseStates[useCase].config.model"
@@ -93,6 +93,15 @@ const getUseCaseLabel = (useCase: UseCase): string => {
     code_localization: 'Context',
   }
   return labels[useCase]
+}
+
+const getProviderLabel = (provider: string): string => {
+  const labels: Record<string, string> = {
+    google: 'Google',
+    anthropic: 'Anthropic',
+    openai: 'OpenAI',
+  }
+  return labels[provider] || provider
 }
 
 const providerOptions = ['google', 'anthropic', 'openai']
