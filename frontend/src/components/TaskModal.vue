@@ -39,19 +39,20 @@
         >
           <template #option="{ option }">
             <div class="preset-option">
-              <div class="preset-name">{{ option.label }}</div>
-              <div v-if="option.preset" class="preset-summary">{{ getModelSummary(option.preset.config) }}</div>
+              <div class="preset-option-content">
+                <div class="preset-option-text">
+                  <div class="preset-name">{{ option.label }}</div>
+                  <div v-if="option.preset" class="preset-summary">{{ getModelSummary(option.preset.config) }}</div>
+                </div>
+                <i
+                  v-if="option.preset"
+                  class="pi pi-trash preset-delete-icon"
+                  @click.stop="deletePreset(option.preset.id)"
+                />
+              </div>
             </div>
           </template>
         </Dropdown>
-        <Button
-          v-if="selectedPreset"
-          icon="pi pi-trash"
-          severity="danger"
-          text
-          @click="deletePreset(selectedPreset.id)"
-          class="delete-preset-btn"
-        />
       </div>
 
       <div v-if="isAddPresetMode" class="add-preset-section">
@@ -278,7 +279,12 @@ const handlePresetChange = (value: string) => {
   }
 }
 
-const deletePreset = (presetId: string) => {
+const deletePreset = (presetId: string, event?: Event) => {
+  if (event) {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+  
   const preset = presets.value.find(p => p.id === presetId)
   if (!preset) return
   
@@ -581,9 +587,21 @@ label {
 }
 
 .preset-option {
+  width: 100%;
+}
+
+.preset-option-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.preset-option-text {
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
+  flex: 1;
 }
 
 .preset-name {
@@ -595,8 +613,21 @@ label {
   color: var(--color-text-muted);
 }
 
-.delete-preset-btn {
+.preset-delete-icon {
+  visibility: hidden;
+  opacity: 0.4;
+  cursor: pointer;
   padding: 0.25rem;
+  transition: opacity 0.2s ease;
+  font-size: 0.875rem;
+}
+
+.preset-option:hover .preset-delete-icon {
+  visibility: visible;
+}
+
+.preset-delete-icon:hover {
+  opacity: 1;
 }
 
 .add-preset-section {
