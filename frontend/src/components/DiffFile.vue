@@ -60,8 +60,8 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 const stickyTop = computed(() => {
-  // Position below the parent flow action header (level + 1 accounts for the parent header)
-  return `calc(${(props.level ?? 0) + 1} * 2.5rem)`
+  // Position below the parent flow action header
+  return `calc(${(props.level ?? 0)} * 2.5rem - 0.1rem)`
 })
 
 const isExpanded = ref(props.defaultExpanded)
@@ -201,8 +201,6 @@ const getTheme = () => {
 .copy-button svg {
   width: 1rem;
   height: 1rem;
-  fill: var(--color-text);
-  stroke: var(--color-text);
 }
 
 .file-summary {
