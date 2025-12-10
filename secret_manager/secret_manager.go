@@ -32,10 +32,13 @@ const (
 type EnvSecretManager struct{}
 
 func (e EnvSecretManager) GetSecret(secretName string) (string, error) {
-	secretName = fmt.Sprintf("SIDE_%s", secretName)
-	secret := os.Getenv(secretName)
+	preferredSecretName := fmt.Sprintf("SIDE_%s", secretName)
+	secret := os.Getenv(preferredSecretName)
 	if secret == "" {
-		return "", fmt.Errorf("%w: %s not found in environment", ErrSecretNotFound, secretName)
+		secret = os.Getenv(secretName)
+		if secret == "" {
+			return "", fmt.Errorf("%w: %s not found in environment", ErrSecretNotFound, secretName)
+		}
 	}
 	return secret, nil
 }
