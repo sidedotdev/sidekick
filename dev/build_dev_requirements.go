@@ -306,7 +306,7 @@ func addDevRequirementsPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptI
 		cacheControl = "ephemeral"
 		contextType = ContextTypeInitialInstructions
 	case FeedbackInfo:
-		content = info.Feedback
+		content = renderGeneralFeedbackPrompt(info.Feedback, info.Type)
 	case ToolCallResponseInfo:
 		addToolCallResponse(chatHistory, info)
 		return

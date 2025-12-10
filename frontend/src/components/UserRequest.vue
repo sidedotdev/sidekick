@@ -18,6 +18,7 @@
         :diff-string="flowAction.actionParams.mergeApprovalInfo.diff"
         :default-expanded="false"
         :diff-mode="diffMode"
+        :level="level"
       />
     </template>
 
@@ -110,6 +111,7 @@
         :diff-string="flowAction.actionParams.mergeApprovalInfo.diff"
         :default-expanded="false"
         :diff-mode="diffMode"
+        :level="level"
       />
     </template>
     <div v-if="parsedActionResult?.Params?.targetBranch">

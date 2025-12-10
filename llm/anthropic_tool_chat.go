@@ -1,9 +1,11 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sidekick/common"
 	"strings"
@@ -12,27 +14,55 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/rs/zerolog/log"
+	"github.com/zalando/go-keyring"
 	"go.temporal.io/sdk/activity"
 )
 
 const AnthropicDefaultModel = "claude-sonnet-4-5-20250929"
 
 const AnthropicApiKeySecretName = "ANTHROPIC_API_KEY"
+const AnthropicOAuthSecretName = "ANTHROPIC_OAUTH"
+
+const (
+	anthropicOAuthBetaHeaders = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14"
+	anthropicTokenEndpoint    = "https://console.anthropic.com/v1/oauth/token"
+	anthropicClientID         = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+	keyringService            = "sidekick"
+)
+
+type OAuthCredentials struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresAt    int64  `json:"expires_at,omitempty"`
+}
 
 type AnthropicToolChat struct{}
 
 func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta, progressChan chan<- ProgressInfo) (*ChatMessageResponse, error) {
-	token, err := options.Secrets.SecretManager.GetSecret(AnthropicApiKeySecretName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Anthropic API key: %w", err)
-	}
-
 	httpClient := &http.Client{Timeout: 10 * time.Minute}
-	client := anthropic.NewClient(
-		//option.WithBaseURL("https://api.anthropic.com"),
-		option.WithAPIKey(token),
-		option.WithHTTPClient(httpClient), // NOTE: WithRequestTimeout was causing failure after a single token
-	)
+
+	// Try OAuth credentials first, fall back to API key
+	oauthCreds, useOAuth, err := GetAnthropicOAuthCredentials(options.Secrets.SecretManager)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Anthropic OAuth credentials: %w", err)
+	}
+	var client *anthropic.Client
+	if useOAuth {
+		client = anthropic.NewClient(
+			option.WithHeader("Authorization", "Bearer "+oauthCreds.AccessToken),
+			option.WithHeader("anthropic-beta", anthropicOAuthBetaHeaders),
+			option.WithHTTPClient(httpClient),
+		)
+	} else {
+		token, err := options.Secrets.SecretManager.GetSecret(AnthropicApiKeySecretName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get Anthropic API key: %w", err)
+		}
+		client = anthropic.NewClient(
+			option.WithAPIKey(token),
+			option.WithHTTPClient(httpClient),
+		)
+	}
 
 	messages, err := anthropicFromChatMessages(options.Params.Messages)
 	if err != nil {
@@ -65,13 +95,22 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 		}
 	}
 
-	stream := client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
+	messageParams := anthropic.MessageNewParams{
 		Temperature: anthropic.F(float64(temperature)),
 		Model:       anthropic.F(model),
 		MaxTokens:   anthropic.Int(maxTokensToUse),
 		Messages:    anthropic.F(messages),
 		Tools:       anthropic.F(tools),
-	})
+	}
+
+	if useOAuth {
+		// NOTE: OAuth tokens require using the Claude Code system prompt, otherwise you get a 400 error
+		var systemMessages []anthropic.TextBlockParam
+		systemMessages = append(systemMessages, anthropic.NewTextBlock("You are Claude Code, Anthropic's official CLI for Claude."))
+		messageParams.System = anthropic.F(systemMessages)
+	}
+
+	stream := client.Messages.NewStreaming(ctx, messageParams)
 
 	var finalMessage anthropic.Message
 	startedBlocks := 0
@@ -293,4 +332,102 @@ func anthropicToChatMessageResponse(message anthropic.Message, provider string) 
 	}
 
 	return response, nil
+}
+
+func GetAnthropicOAuthCredentials(secretManager interface{ GetSecret(string) (string, error) }) (*OAuthCredentials, bool, error) {
+	oauthJSON, err := secretManager.GetSecret(AnthropicOAuthSecretName)
+	if err != nil {
+		// Secret not found means OAuth isn't configured, fall back to API key
+		return nil, false, nil
+	}
+
+	var creds OAuthCredentials
+	if err := json.Unmarshal([]byte(oauthJSON), &creds); err != nil {
+		return nil, false, fmt.Errorf("failed to parse OAuth credentials: %w", err)
+	}
+
+	if creds.AccessToken == "" {
+		return nil, false, fmt.Errorf("OAuth credentials missing access token")
+	}
+
+	// Refresh token proactively if it expires within 5 minutes
+	if creds.ExpiresAt > 0 && time.Now().Unix() > creds.ExpiresAt-300 {
+		log.Info().Msg("OAuth token expiring soon, refreshing proactively")
+		newCreds, err := RefreshAnthropicOAuthToken(creds.RefreshToken)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to refresh OAuth token: %w", err)
+		}
+		if storeErr := StoreAnthropicOAuthCredentials(newCreds); storeErr != nil {
+			log.Warn().Err(storeErr).Msg("Failed to store refreshed OAuth credentials")
+		}
+		return newCreds, true, nil
+	}
+
+	return &creds, true, nil
+}
+
+// AnthropicOAuthBetaHeaders returns the beta headers required for OAuth authentication
+const AnthropicOAuthBetaHeaders = anthropicOAuthBetaHeaders
+
+func RefreshAnthropicOAuthToken(refreshToken string) (*OAuthCredentials, error) {
+	reqBody := map[string]string{
+		"grant_type":    "refresh_token",
+		"refresh_token": refreshToken,
+		"client_id":     anthropicClientID,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal refresh request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", anthropicTokenEndpoint, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create refresh request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send refresh request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read refresh response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("token refresh failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"`
+	}
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to parse refresh response: %w", err)
+	}
+
+	var expiresAt int64
+	if tokenResp.ExpiresIn > 0 {
+		expiresAt = time.Now().Unix() + tokenResp.ExpiresIn
+	}
+
+	return &OAuthCredentials{
+		AccessToken:  tokenResp.AccessToken,
+		RefreshToken: tokenResp.RefreshToken,
+		ExpiresAt:    expiresAt,
+	}, nil
+}
+
+func StoreAnthropicOAuthCredentials(creds *OAuthCredentials) error {
+	credsJSON, err := json.Marshal(creds)
+	if err != nil {
+		return fmt.Errorf("failed to marshal credentials: %w", err)
+	}
+	return keyring.Set(keyringService, AnthropicOAuthSecretName, string(credsJSON))
 }

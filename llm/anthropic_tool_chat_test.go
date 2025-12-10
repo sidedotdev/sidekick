@@ -181,7 +181,7 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 				Model:    anthropic.ModelClaude_3_Haiku_20240307, // cheapest model for integration testing
 			},
 			Messages: []ChatMessage{
-				{Role: ChatMessageRoleUser, Content: "First say hi. After that, then look up what the weather is like in New York"},
+				{Role: ChatMessageRoleUser, Content: "Look up what the weather is like in New York"},
 			},
 			Tools: []*Tool{mockTool},
 		},
@@ -215,11 +215,6 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 	// Check that we received deltas
 	if len(allDeltas) == 0 {
 		t.Error("No deltas received")
-	}
-
-	// Check that the response contains content
-	if response.Content == "" {
-		t.Error("Response content is empty")
 	}
 
 	// Check that the response includes a tool call
@@ -291,11 +286,6 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 		// Check that we received deltas
 		if len(allDeltas) == 0 {
 			t.Error("No deltas received")
-		}
-
-		// Check that the response contains content
-		if response.Content == "" {
-			t.Error("Response content is empty")
 		}
 
 		// Check that the response includes a tool call

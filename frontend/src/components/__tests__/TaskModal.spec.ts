@@ -4,6 +4,7 @@ import TaskModal from '../TaskModal.vue'
 import type { Task } from '../../lib/models'
 import { nextTick } from 'process'
 import { wrap } from 'module'
+import { h } from 'vue'
 
 vi.mock('../../lib/store', () => ({
   store: {
@@ -11,16 +12,33 @@ vi.mock('../../lib/store', () => ({
   }
 }))
 
+const DropdownStub = {
+  name: 'Dropdown',
+  props: ['modelValue', 'options', 'optionLabel', 'optionValue'],
+  emits: ['update:modelValue', 'change'],
+  template: `<select :value="modelValue" @change="$emit('change', { value: $event.target.value }); $emit('update:modelValue', $event.target.value)">
+    <option v-for="opt in options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+  </select>`
+}
+
 describe('TaskModal', () => {
   let wrapper: VueWrapper
 
   beforeEach(() => {
     localStorage.clear()
     vi.clearAllMocks()
+    vi.spyOn(window, 'alert').mockImplementation(() => {})
   })
 
   const mountComponent = (props = {}) => {
-    wrapper = mount(TaskModal, { props })
+    wrapper = mount(TaskModal, {
+      props,
+      global: {
+        stubs: {
+          Dropdown: DropdownStub
+        }
+      }
+    })
   }
 
   it('renders without errors', () => {
@@ -57,6 +75,8 @@ describe('TaskModal', () => {
     global.fetch = fetchMock
 
     mountComponent()
+    const descriptionInput = wrapper.findComponent({ name: 'AutogrowTextarea' }).find('textarea')
+    await descriptionInput.setValue('Test description')
     await wrapper.find('form').trigger('submit')
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -130,6 +150,8 @@ describe('TaskModal', () => {
     global.fetch = fetchMock
 
     mountComponent()
+    const descriptionInput = wrapper.findComponent({ name: 'AutogrowTextarea' }).find('textarea')
+    await descriptionInput.setValue('Test description')
     await wrapper.find('form').trigger('submit')
 
     expect(wrapper.emitted('created')).toBeTruthy()
@@ -159,6 +181,8 @@ describe('TaskModal', () => {
     global.fetch = fetchMock
 
     mountComponent()
+    const descriptionInput = wrapper.findComponent({ name: 'AutogrowTextarea' }).find('textarea')
+    await descriptionInput.setValue('Test description')
     const flowTypeControl = wrapper.findAllComponents({ name: 'SegmentedControl' }).find(c => c.props('options').some((opt: any) => opt.value === 'planned_dev'))
     await flowTypeControl?.vm.$emit('update:modelValue', 'planned_dev')
     await wrapper.vm.$nextTick()
@@ -210,6 +234,8 @@ describe('TaskModal', () => {
     global.fetch = fetchMock
     
     mountComponent()
+    const descriptionInput = wrapper.findComponent({ name: 'AutogrowTextarea' }).find('textarea')
+    await descriptionInput.setValue('Test description')
     const splitButton = wrapper.findComponent({ name: 'SplitButton' })
     const dropdown = splitButton.find('.p-splitbutton-dropdown')
     await dropdown.trigger('click')

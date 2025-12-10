@@ -7,6 +7,7 @@ import (
 	"sidekick/coding/lsp"
 	"sidekick/env"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -102,7 +103,11 @@ func main() {
 
 	devActivities := &DevActivities{LSPActivities: lspa} // should use same lspa
 
-	reports, err := devActivities.ApplyEditBlocks(context.Background(), applyInput)
+	// Use a context with timeout to avoid test hanging if LSP is slow
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	reports, err := devActivities.ApplyEditBlocks(ctxWithTimeout, applyInput)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
 	require.True(t, reports[0].DidApply, "Edit block should have been applied successfully")

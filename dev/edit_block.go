@@ -57,31 +57,67 @@ func ExtractEditBlocks(text string) ([]*EditBlock, error) {
 	var sequenceNumber int // the sequence number for the current block
 
 	inCodeBlock := false    // flag whether the scanner is in a code block
+	openFenceLen := 0       // the length of the opening fence (0 when not in a code block)
 	lastFilePath := ""      // keeps the last file path
 	maybeNextFilePath := "" // keeps the potential next file path
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// If a backtick fence is found, toggle the inCodeBlock flag
-		if strings.HasPrefix(line, "```") {
-			inCodeBlock = !inCodeBlock
-			if inCodeBlock {
-				// if entering a code block, reset everything
-				newLines = nil
-				oldLines = nil
-				// we'll get a new file path now, don't use the old one if any since it's a brand-new code block
-				lastFilePath = ""
-				maybeNextFilePath = ""
-			}
-			continue // skip the rest of the loop
-		}
-
-		// continue with the loop if not in a code block
+		// Check if this line is a backtick fence
 		if !inCodeBlock {
+			// Look for opening fence: must start with 3+ backticks
+			if strings.HasPrefix(line, "```") {
+				// Count leading backticks
+				fenceLen := 0
+				for _, ch := range line {
+					if ch == '`' {
+						fenceLen++
+					} else {
+						break
+					}
+				}
+				if fenceLen >= 3 {
+					inCodeBlock = true
+					openFenceLen = fenceLen
+					// if entering a code block, reset everything
+					newLines = nil
+					oldLines = nil
+					// we'll get a new file path now, don't use the old one if any since it's a brand-new code block
+					lastFilePath = ""
+					maybeNextFilePath = ""
+					continue // skip the rest of the loop
+				}
+			}
+			// Not in a code block and not a fence, skip
 			continue
 		}
 
+		// We are in a code block, check for closing fence
+		trimmed := strings.TrimSpace(line)
+		if len(trimmed) > 0 && trimmed[0] == '`' {
+			// Check if this is a valid closing fence
+			fenceLen := 0
+			for _, ch := range trimmed {
+				if ch == '`' {
+					fenceLen++
+				} else {
+					break
+				}
+			}
+			// A closing fence must:
+			// 1. Have at least as many backticks as the opening fence
+			// 2. Consist only of backticks (after trimming whitespace)
+			if fenceLen >= openFenceLen && fenceLen == len(trimmed) {
+				inCodeBlock = false
+				openFenceLen = 0
+				continue // skip the rest of the loop
+			}
+		}
+
+		// We are inside a code block, process the line
+
+		// Process edit markers and content
 		if strings.HasPrefix(line, "<<<<<<<") {
 			editType := "update" // default edit type, corresponds to SEARCH but we aren't checking that
 			switch {
@@ -161,7 +197,7 @@ func ExtractEditBlocksWithVisibility(text string, chatHistory []llm.ChatMessage)
 
 	var extractedEditBlocks []EditBlock
 	visibleCodeBlocks := extractAllCodeBlocks(chatHistory)
-	for _, block := range editBlocksWithoutVisibility {
+	for i, block := range editBlocksWithoutVisibility {
 		// these file ranges visible now, but might not be later after we
 		// ManageChatHistory, so we need to track visibility right now, at
 		// the point the edit block is first authored. We also track it per
@@ -171,6 +207,26 @@ func ExtractEditBlocksWithVisibility(text string, chatHistory []llm.ChatMessage)
 			return cb.FilePath == block.FilePath
 		})
 		block.VisibleFileRanges = codeBlocksToMergedFileRanges(block.FilePath, visibleCodeBlocks)
+
+		for _, previousBlock := range editBlocksWithoutVisibility[0:i] {
+			if previousBlock.FilePath == block.FilePath && previousBlock.EditType == "create" {
+				// the whole created file is visible in this case
+				fileRange := FileRange{
+					FilePath:  previousBlock.FilePath,
+					StartLine: 1,
+					EndLine:   1 + len(previousBlock.NewLines),
+				}
+				block.VisibleFileRanges = append(block.VisibleFileRanges, fileRange)
+
+				codeBlock := tree_sitter.CodeBlock{
+					FilePath:  previousBlock.FilePath,
+					Code:      strings.Join(previousBlock.NewLines, "\n"),
+					StartLine: fileRange.StartLine,
+					EndLine:   fileRange.EndLine,
+				}
+				block.VisibleCodeBlocks = append(block.VisibleCodeBlocks, codeBlock)
+			}
+		}
 
 		// TODO /gen/req add one more visible code block (won't have
 		// corresponding visible file range) that is based all on the

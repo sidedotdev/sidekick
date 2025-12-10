@@ -371,7 +371,7 @@ func addDevPlanPrompt(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInf
 		cacheControl = "ephemeral"
 		contextType = ContextTypeInitialInstructions
 	case FeedbackInfo:
-		content = info.Feedback
+		content = renderGeneralFeedbackPrompt(info.Feedback, info.Type)
 	case ToolCallResponseInfo:
 		addToolCallResponse(chatHistory, info)
 		return

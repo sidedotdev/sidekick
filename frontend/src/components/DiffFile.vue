@@ -50,11 +50,18 @@ interface Props {
   fileData: ParsedDiff
   defaultExpanded?: boolean
   diffMode?: 'unified' | 'split'
+  level?: number
 }
 
 const props = withDefaults(defineProps<Props>(), {
   defaultExpanded: false,
-  diffMode: 'unified'
+  diffMode: 'unified',
+  level: 0
+})
+
+const stickyTop = computed(() => {
+  // Position below the parent flow action header
+  return `calc(${(props.level ?? 0)} * 2.5rem - 0.1rem)`
 })
 
 const isExpanded = ref(props.defaultExpanded)
@@ -132,6 +139,9 @@ const getTheme = () => {
   user-select: none;
   background: var(--color-background-mute);
   border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: v-bind(stickyTop);
+  z-index: 10;
 }
 
 .file-header:hover {
@@ -191,8 +201,6 @@ const getTheme = () => {
 .copy-button svg {
   width: 1rem;
   height: 1rem;
-  fill: var(--color-text);
-  stroke: var(--color-text);
 }
 
 .file-summary {

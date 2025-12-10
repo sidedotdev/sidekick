@@ -2,6 +2,7 @@ package secret_manager
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sidekick/common"
@@ -9,6 +10,9 @@ import (
 
 	"github.com/zalando/go-keyring"
 )
+
+// ErrSecretNotFound is returned when a secret is not found in any secret manager
+var ErrSecretNotFound = errors.New("secret not found")
 
 type SecretManager interface {
 	GetSecret(secretName string) (string, error)
@@ -28,10 +32,13 @@ const (
 type EnvSecretManager struct{}
 
 func (e EnvSecretManager) GetSecret(secretName string) (string, error) {
-	secretName = fmt.Sprintf("SIDE_%s", secretName)
-	secret := os.Getenv(secretName)
+	preferredSecretName := fmt.Sprintf("SIDE_%s", secretName)
+	secret := os.Getenv(preferredSecretName)
 	if secret == "" {
-		return "", fmt.Errorf("secret %s not found in environment", secretName)
+		secret = os.Getenv(secretName)
+		if secret == "" {
+			return "", fmt.Errorf("%w: %s not found in environment", ErrSecretNotFound, secretName)
+		}
 	}
 	return secret, nil
 }
@@ -45,6 +52,9 @@ type KeyringSecretManager struct{}
 func (k KeyringSecretManager) GetSecret(secretName string) (string, error) {
 	secret, err := keyring.Get("sidekick", secretName)
 	if err != nil {
+		if errors.Is(err, keyring.ErrNotFound) {
+			return "", fmt.Errorf("%w: %s not found in keyring", ErrSecretNotFound, secretName)
+		}
 		return "", fmt.Errorf("error retrieving %s from keyring: %w", secretName, err)
 	}
 	return secret, nil
@@ -141,7 +151,7 @@ func (l LocalConfigSecretManager) GetSecret(secretName string) (string, error) {
 		return l.findProviderKey(config, providerName, "")
 	}
 
-	return "", fmt.Errorf("secret %s not found in local config", secretName)
+	return "", fmt.Errorf("%w: %s not found in local config", ErrSecretNotFound, secretName)
 }
 
 func (l LocalConfigSecretManager) findProviderKey(config common.LocalConfig, name, providerType string) (string, error) {
@@ -160,9 +170,9 @@ func (l LocalConfigSecretManager) findProviderKey(config common.LocalConfig, nam
 	}
 	if len(matches) == 0 {
 		if providerType != "" {
-			return "", fmt.Errorf("no provider found with type %s", providerType)
+			return "", fmt.Errorf("%w: no provider found with type %s", ErrSecretNotFound, providerType)
 		}
-		return "", fmt.Errorf("no provider found with name %s", name)
+		return "", fmt.Errorf("%w: no provider found with name %s", ErrSecretNotFound, name)
 	}
 	if len(matches) > 1 {
 		if providerType != "" {
@@ -176,7 +186,10 @@ func (l LocalConfigSecretManager) findProviderKey(config common.LocalConfig, nam
 type MockSecretManager struct{}
 
 func (e MockSecretManager) GetSecret(secretName string) (string, error) {
-	return "fake secret", nil
+	if strings.HasSuffix(secretName, "_API_KEY") {
+		return "fake secret", nil
+	}
+	return "", fmt.Errorf("%w: %s not found in mock", ErrSecretNotFound, secretName)
 }
 
 func (e MockSecretManager) GetType() SecretManagerType {
