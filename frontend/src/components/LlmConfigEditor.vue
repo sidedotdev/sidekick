@@ -1,5 +1,10 @@
 <template>
   <div class="llm-config-editor">
+    <!-- Error state for providers fetch -->
+    <div v-if="providersError" class="providers-error">
+      Failed to load providers. Please refresh the page.
+    </div>
+
     <!-- Default Model -->
     <div class="model-row">
       <span class="model-label">Default</span>
@@ -104,8 +109,24 @@ const getProviderLabel = (provider: string): string => {
   return labels[provider] || provider
 }
 
-const providerOptions = ['google', 'anthropic', 'openai']
+const providerOptions = ref<string[]>([])
+const providersError = ref(false)
 const reasoningEffortOptions = ['', 'minimal', 'low', 'medium', 'high'] as const
+
+const fetchProviders = async () => {
+  try {
+    const response = await fetch('/api/v1/providers')
+    if (response.ok) {
+      const data = await response.json()
+      providerOptions.value = data.providers || []
+      providersError.value = false
+    } else {
+      providersError.value = true
+    }
+  } catch {
+    providersError.value = true
+  }
+}
 
 const modelsData = ref<ModelsData>({})
 const filteredModels = ref<string[]>([])
@@ -172,6 +193,7 @@ const modelSupportsReasoning = (provider: string, model: string): boolean => {
 
 onMounted(() => {
   loadModelsData()
+  fetchProviders()
 })
 
 const defaultConfig = reactive<ModelConfig>(
@@ -298,5 +320,15 @@ watch(() => props.modelValue, (newValue) => {
   color: var(--color-text);
   font-size: 0.875rem;
   min-width: 5.5rem;
+}
+
+.providers-error {
+  padding: 0.5rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--color-error, #dc3545);
+  border-radius: 0.25rem;
+  background-color: var(--color-error-bg, rgba(220, 53, 69, 0.1));
+  color: var(--color-error, #dc3545);
+  font-size: 0.875rem;
 }
 </style>

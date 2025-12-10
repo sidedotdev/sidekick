@@ -27,11 +27,23 @@ const mockModelsData = {
   }
 }
 
-const createMockFetch = (data: object = mockModelsData) => {
-  return vi.fn(() => Promise.resolve({
-    ok: true,
-    json: () => Promise.resolve(data),
-  }))
+const mockProvidersData = {
+  providers: ['google', 'anthropic', 'openai']
+}
+
+const createMockFetch = (modelsData: object = mockModelsData, providersData: object = mockProvidersData) => {
+  return vi.fn((url: string) => {
+    if (url === '/api/v1/providers') {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(providersData),
+      })
+    }
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve(modelsData),
+    })
+  })
 }
 
 describe('LlmConfigEditor', () => {
@@ -57,7 +69,7 @@ describe('LlmConfigEditor', () => {
     expect((modelInput.element as HTMLInputElement).value).toBe('')
   })
 
-  it('renders default model row with provided values', () => {
+  it('renders default model row with provided values', async () => {
     const llmConfig: LLMConfig = {
       defaults: [{ provider: 'anthropic', model: 'claude-3', reasoningEffort: 'medium' }],
       useCaseConfigs: {},
@@ -66,8 +78,10 @@ describe('LlmConfigEditor', () => {
       props: { modelValue: llmConfig }
     })
     
-    const providerSelect = wrapper.find('.provider-select')
-    expect((providerSelect.element as HTMLSelectElement).value).toBe('anthropic')
+    await vi.waitFor(() => {
+      const providerSelect = wrapper.find('.provider-select')
+      expect((providerSelect.element as HTMLSelectElement).value).toBe('anthropic')
+    })
     
     const modelInput = wrapper.find('.model-input-inner')
     expect((modelInput.element as HTMLInputElement).value).toBe('claude-3')
@@ -104,6 +118,11 @@ describe('LlmConfigEditor', () => {
   it('emits update:modelValue when default provider changes', async () => {
     const wrapper = mount(LlmConfigEditor)
     
+    await vi.waitFor(() => {
+      const options = wrapper.find('.provider-select').findAll('option')
+      expect(options.length).toBeGreaterThan(1)
+    })
+    
     const providerSelect = wrapper.find('.provider-select')
     await providerSelect.setValue('openai')
     
@@ -126,6 +145,11 @@ describe('LlmConfigEditor', () => {
   it('includes enabled use case in emitted config', async () => {
     const wrapper = mount(LlmConfigEditor)
     
+    await vi.waitFor(() => {
+      const options = wrapper.find('.provider-select').findAll('option')
+      expect(options.length).toBeGreaterThan(1)
+    })
+    
     const useCaseCheckbox = wrapper.find('.use-case-checkbox input[type="checkbox"]')
     await useCaseCheckbox.setValue(true)
     
@@ -145,6 +169,11 @@ describe('LlmConfigEditor', () => {
   it('includes use case in config when enabled even if provider or model is empty', async () => {
     const wrapper = mount(LlmConfigEditor)
     
+    await vi.waitFor(() => {
+      const options = wrapper.find('.provider-select').findAll('option')
+      expect(options.length).toBeGreaterThan(1)
+    })
+    
     const useCaseCheckbox = wrapper.find('.use-case-checkbox input[type="checkbox"]')
     await useCaseCheckbox.setValue(true)
     
@@ -159,7 +188,7 @@ describe('LlmConfigEditor', () => {
     expect(lastEmittedValue.useCaseConfigs['planning'][0].model).toBe('')
   })
 
-  it('loads existing use case configs from modelValue', () => {
+  it('loads existing use case configs from modelValue', async () => {
     const llmConfig: LLMConfig = {
       defaults: [{ provider: 'anthropic', model: 'claude-3', reasoningEffort: '' }],
       useCaseConfigs: {
@@ -168,6 +197,11 @@ describe('LlmConfigEditor', () => {
     }
     const wrapper = mount(LlmConfigEditor, {
       props: { modelValue: llmConfig }
+    })
+    
+    await vi.waitFor(() => {
+      const options = wrapper.find('.provider-select').findAll('option')
+      expect(options.length).toBeGreaterThan(1)
     })
     
     const useCaseCheckboxes = wrapper.findAll('.use-case-checkbox input[type="checkbox"]')
@@ -250,7 +284,7 @@ describe('LlmConfigEditor', () => {
     expect(wrapper.find('.reasoning-select-inline').exists()).toBe(false)
   })
 
-  it('uses cached models data and does not fetch when cache is fresh', async () => {
+  it('uses cached models data and does not fetch models when cache is fresh', async () => {
     store.setModelsCache(mockModelsData)
     const fetchMock = createMockFetch()
     vi.stubGlobal('fetch', fetchMock)
@@ -263,10 +297,13 @@ describe('LlmConfigEditor', () => {
       props: { modelValue: llmConfig }
     })
     
-    await wrapper.vm.$nextTick()
+    await vi.waitFor(() => {
+      expect(wrapper.find('.reasoning-select-inline').exists()).toBe(true)
+    })
     
-    expect(wrapper.find('.reasoning-select-inline').exists()).toBe(true)
-    expect(fetchMock).not.toHaveBeenCalled()
+    // Providers are always fetched, but models should not be fetched when cache is fresh
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/providers')
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/v1/models')
   })
 
   it('uses stale cache immediately and refreshes in background', async () => {
