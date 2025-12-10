@@ -1,12 +1,53 @@
-import { describe, it, expect, vi } from 'vitest';
-import { mount } from '@vue/test-utils';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { config, mount } from '@vue/test-utils';
+import PrimeVue from 'primevue/config';
 import WorkspaceForm from '../WorkspaceForm.vue';
+import LLMConfigEditor from '../LLMConfigEditor.vue';
+import EmbeddingConfigEditor from '../EmbeddingConfigEditor.vue';
 import type { Workspace } from '../../lib/models';
 
+config.global.plugins.push(PrimeVue);
+
+const mockProvidersData = { providers: ['google', 'anthropic', 'openai'] };
+const mockModelsData = {
+  openai: { models: { 'gpt-4': { reasoning: false } } },
+  anthropic: { models: { 'claude-3': { reasoning: false } } },
+};
+
+const createMockFetch = (workspaceResponse: object) => {
+  return vi.fn((url: string) => {
+    if (url === '/api/v1/providers') {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(mockProvidersData),
+      });
+    }
+    if (url === '/api/v1/models') {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(mockModelsData),
+      });
+    }
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve(workspaceResponse),
+    });
+  });
+};
+
 describe('WorkspaceForm.vue', () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    sessionStorage.clear();
+  });
+
   it('emits created event and makes API request with correct data on form submission for new workspace', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({ workspace: { id: '123' } }) });
-    global.fetch = mockFetch;
+    const mockFetch = createMockFetch({ workspace: { id: '123' } });
+    vi.stubGlobal('fetch', mockFetch);
 
     const wrapper = mount(WorkspaceForm, {
       props: {
@@ -25,11 +66,22 @@ describe('WorkspaceForm.vue', () => {
         } as Workspace
       }
     });
-;
+
+    await vi.waitFor(() => {
+      const llmEditor = wrapper.findComponent(LLMConfigEditor);
+      const options = llmEditor.find('.provider-select').findAll('option');
+      expect(options.length).toBeGreaterThan(1);
+    });
+
     await wrapper.find('#name').setValue('New Workspace');
     await wrapper.find('#localRepoDir').setValue('/local/repo/dir');
-    await wrapper.find('#llm-provider0').setValue('openai');
-    await wrapper.find('#embedding-provider0').setValue('openai');
+
+    const llmEditor = wrapper.findComponent(LLMConfigEditor);
+    await llmEditor.find('.provider-select').setValue('openai');
+
+    const embeddingEditor = wrapper.findComponent(EmbeddingConfigEditor);
+    await embeddingEditor.find('.provider-select').setValue('openai');
+
     await wrapper.find('form').trigger('submit.prevent');
 
     expect(mockFetch).toHaveBeenCalledWith('/api/v1/workspaces', {
@@ -55,8 +107,8 @@ describe('WorkspaceForm.vue', () => {
   });
 
   it('emits updated event and makes API request with correct data on form submission for existing workspace', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({ workspace: { id: '456' } }) });
-    global.fetch = mockFetch;
+    const mockFetch = createMockFetch({ workspace: { id: '456' } });
+    vi.stubGlobal('fetch', mockFetch);
 
     const existingWorkspace: Workspace = {
       id: '456',
@@ -77,10 +129,21 @@ describe('WorkspaceForm.vue', () => {
       props: { workspace: existingWorkspace }
     });
 
+    await vi.waitFor(() => {
+      const llmEditor = wrapper.findComponent(LLMConfigEditor);
+      const options = llmEditor.find('.provider-select').findAll('option');
+      expect(options.length).toBeGreaterThan(1);
+    });
+
     await wrapper.find('#name').setValue('Updated Workspace');
     await wrapper.find('#localRepoDir').setValue('/updated/repo/dir');
-    await wrapper.find('#llm-provider0').setValue('openai');
-    await wrapper.find('#embedding-provider0').setValue('openai');
+
+    const llmEditor = wrapper.findComponent(LLMConfigEditor);
+    await llmEditor.find('.provider-select').setValue('openai');
+
+    const embeddingEditor = wrapper.findComponent(EmbeddingConfigEditor);
+    await embeddingEditor.find('.provider-select').setValue('openai');
+
     await wrapper.find('form').trigger('submit.prevent');
 
     expect(mockFetch).toHaveBeenCalledWith('/api/v1/workspaces/456', {
@@ -112,6 +175,9 @@ describe('WorkspaceForm.vue', () => {
   });
 
   it('populates form fields with existing workspace data when editing', async () => {
+    const mockFetch = createMockFetch({ workspace: { id: '789' } });
+    vi.stubGlobal('fetch', mockFetch);
+
     const existingWorkspace: Workspace = {
       id: '789',
       name: 'Existing Workspace',
@@ -131,12 +197,19 @@ describe('WorkspaceForm.vue', () => {
       props: { workspace: existingWorkspace }
     });
 
-    // Use await nextTick() to ensure the component has updated after mounting
-    await wrapper.vm.$nextTick();
+    await vi.waitFor(() => {
+      const llmEditor = wrapper.findComponent(LLMConfigEditor);
+      const options = llmEditor.find('.provider-select').findAll('option');
+      expect(options.length).toBeGreaterThan(1);
+    });
 
     expect((wrapper.find('#name').element as HTMLInputElement).value).toBe('Existing Workspace');
     expect((wrapper.find('#localRepoDir').element as HTMLInputElement).value).toBe('/existing/repo/dir');
-    expect((wrapper.find('#llm-provider0').element as HTMLSelectElement).value).toBe('anthropic');
-    expect((wrapper.find('#embedding-provider0').element as HTMLSelectElement).value).toBe('openai');
+
+    const llmEditor = wrapper.findComponent(LLMConfigEditor);
+    expect((llmEditor.find('.provider-select').element as HTMLSelectElement).value).toBe('anthropic');
+
+    const embeddingEditor = wrapper.findComponent(EmbeddingConfigEditor);
+    expect((embeddingEditor.find('.provider-select').element as HTMLSelectElement).value).toBe('openai');
   });
 });
