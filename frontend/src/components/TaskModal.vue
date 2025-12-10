@@ -3,30 +3,6 @@
   <div class="modal">
     <h2>{{ isEditMode ? 'Edit Task' : 'New Task' }}</h2>
     <form @submit.prevent="submitTask">
-      <div>
-      <label>Flow</label>
-      <SegmentedControl v-model="flowType" :options="flowTypeOptions" />
-      </div>
-      <div>
-        <label>Workdir</label>
-        <SegmentedControl v-model="envType" :options="envTypeOptions" />
-
-        <!-- Branch Selection -->
-        <div v-if="envType === 'local_git_worktree'" style="display: flex;">
-          <label for="startBranch">Start Branch</label>
-          <BranchSelector
-            id="startBranch"
-            v-model="selectedBranch"
-            :workspaceId="workspaceId"
-          />
-        </div>
-      </div>
-
-      <label>
-        <input type="checkbox" v-model="determineRequirements" />
-        Determine Requirements
-      </label>
-
       <div class="preset-section">
         <label>Model Config</label>
         <Dropdown
@@ -42,7 +18,7 @@
               <div class="preset-option-content">
                 <div class="preset-option-text">
                   <div class="preset-name">{{ option.label }}</div>
-                  <div v-if="option.preset" class="preset-summary">{{ getModelSummary(option.preset.config) }}</div>
+                  <div v-if="option.preset && option.label != getModelSummary(option.preset.config)" class="preset-summary">{{ getModelSummary(option.preset.config) }}</div>
                 </div>
                 <i
                   v-if="option.preset"
@@ -64,6 +40,34 @@
         />
         <LlmConfigEditor v-model="llmConfig" />
       </div>
+
+
+      <div>
+        <label>Flow</label>
+        <SegmentedControl v-model="flowType" :options="flowTypeOptions" />
+      </div>
+
+      <div>
+        <label>Workdir</label>
+        <SegmentedControl v-model="envType" :options="envTypeOptions" />
+      </div>
+
+      <div>
+        <!-- Branch Selection -->
+        <div v-if="envType === 'local_git_worktree'" style="display: flex;">
+          <label for="startBranch">Start Branch</label>
+          <BranchSelector
+            id="startBranch"
+            v-model="selectedBranch"
+            :workspaceId="workspaceId"
+          />
+        </div>
+      </div>
+
+      <label>
+        <input type="checkbox" v-model="determineRequirements" />
+        Determine Requirements
+      </label>
 
       <div>
         <AutogrowTextarea id="description" v-model="description" placeholder="Task description - the more detail, the better" />
@@ -242,23 +246,16 @@ const presetOptions = computed((): PresetOption[] => {
     { value: 'default', label: 'Default' }
   ]
   
-  presets.value.forEach((preset, index) => {
+  presets.value.forEach((preset) => {
     options.push({
       value: preset.id,
-      label: preset.name || `Unnamed config ${index + 1}`,
+      label: preset.name || getModelSummary(preset.config),
       preset
     })
   })
   
-  options.push({ value: 'add_preset', label: 'Add Preset' })
+  options.push({ value: 'add_preset', label: 'Custom' })
   return options
-})
-
-const selectedPreset = computed(() => {
-  if (selectedPresetValue.value === 'default' || selectedPresetValue.value === 'add_preset') {
-    return null
-  }
-  return presets.value.find(p => p.id === selectedPresetValue.value) || null
 })
 
 const isAddPresetMode = computed(() => selectedPresetValue.value === 'add_preset')
@@ -537,7 +534,7 @@ label {
   align-items: center;
   gap: 0.5rem;
   margin: 12px 0;
-  min-width: 100px;
+  min-width: 120px;
 }
 
 #description {
@@ -573,12 +570,6 @@ label {
 
 :deep(.p-select) {
   background-color: field;
-}
-
-.preset-section {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
 }
 
 .preset-dropdown {
