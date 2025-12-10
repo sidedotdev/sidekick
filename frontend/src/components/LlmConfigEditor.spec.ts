@@ -80,9 +80,9 @@ describe('LlmConfigEditor', () => {
     expect(useCaseCheckboxes.length).toBe(3)
     
     const labels = useCaseCheckboxes.map(cb => cb.find('.model-label').text())
-    expect(labels).toContain('planning')
-    expect(labels).toContain('judging')
-    expect(labels).toContain('code_localization')
+    expect(labels).toContain('Plan')
+    expect(labels).toContain('Review')
+    expect(labels).toContain('Context')
   })
 
   it('enables use case inputs when checkbox is checked', async () => {

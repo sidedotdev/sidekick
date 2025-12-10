@@ -33,7 +33,7 @@
       <div class="model-row">
         <label class="use-case-checkbox">
           <input type="checkbox" v-model="useCaseStates[useCase].enabled" @change="emitUpdate" />
-          <span class="model-label">{{ useCase }}</span>
+          <span class="model-label">{{ getUseCaseLabel(useCase) }}</span>
         </label>
         <select
           v-model="useCaseStates[useCase].config.provider"
@@ -85,6 +85,15 @@ const emit = defineEmits<{
 
 const USE_CASES = ['planning', 'judging', 'code_localization'] as const
 type UseCase = typeof USE_CASES[number]
+
+const getUseCaseLabel = (useCase: UseCase): string => {
+  const labels: Record<UseCase, string> = {
+    planning: 'Plan',
+    judging: 'Review',
+    code_localization: 'Context',
+  }
+  return labels[useCase]
+}
 
 const providerOptions = ['google', 'anthropic', 'openai']
 const reasoningEffortOptions = ['', 'minimal', 'low', 'medium', 'high'] as const
