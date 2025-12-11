@@ -35,7 +35,8 @@ type RequestForUser struct {
 	OriginWorkflowId string
 	FlowActionId     string
 	Content          string
-	Subflow          string // TODO add SubflowId here instead of legacy Subflow (which is the subflow name)
+	Subflow          string
+	SubflowId        string
 	RequestParams    map[string]interface{}
 	RequestKind      RequestKind
 }
@@ -119,6 +120,7 @@ func GetUserContinue(actionCtx ActionContext, prompt string, requestParams map[s
 		OriginWorkflowId: workflow.GetInfo(actionCtx.ExecContext.Context).WorkflowExecution.ID,
 		Content:          prompt,
 		Subflow:          actionCtx.ExecContext.FlowScope.SubflowName,
+		SubflowId:        actionCtx.ExecContext.FlowScope.GetSubflowId(),
 		RequestParams:    requestParams,
 		RequestKind:      RequestKindContinue,
 	}
@@ -157,6 +159,7 @@ would mean to apply it to your current situation.
 	guidanceRequest := RequestForUser{
 		OriginWorkflowId: workflow.GetInfo(actionCtx.ExecContext.Context).WorkflowExecution.ID,
 		Subflow:          actionCtx.ExecContext.FlowScope.SubflowName,
+		SubflowId:        actionCtx.ExecContext.FlowScope.GetSubflowId(),
 		Content:          guidanceContext,
 		RequestKind:      RequestKindFreeForm,
 		RequestParams:    requestParams,
@@ -182,6 +185,7 @@ func GetUserApproval(actionCtx ActionContext, approvalType, approvalPrompt strin
 		OriginWorkflowId: workflow.GetInfo(actionCtx.ExecContext.Context).WorkflowExecution.ID,
 		Content:          approvalPrompt,
 		Subflow:          actionCtx.ExecContext.FlowScope.SubflowName,
+		SubflowId:        actionCtx.ExecContext.FlowScope.GetSubflowId(),
 		RequestParams:    requestParams,
 		RequestKind:      RequestKindApproval,
 	}

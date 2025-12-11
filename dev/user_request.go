@@ -65,6 +65,7 @@ func GetUserMergeApproval(
 		OriginWorkflowId: workflow.GetInfo(actionCtx).WorkflowExecution.ID,
 		Content:          approvalPrompt,
 		Subflow:          actionCtx.FlowScope.SubflowName,
+		SubflowId:        actionCtx.FlowScope.GetSubflowId(),
 		RequestParams:    requestParams,
 		RequestKind:      flow_action.RequestKindMergeApproval,
 	}

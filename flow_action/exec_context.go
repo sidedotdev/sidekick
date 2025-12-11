@@ -47,6 +47,13 @@ type FlowScope struct {
 	Subflow            *domain.Subflow
 }
 
+func (fs *FlowScope) GetSubflowId() string {
+	if fs.Subflow != nil {
+		return fs.Subflow.Id
+	}
+	return ""
+}
+
 func (eCtx *ExecContext) GetModelConfig(key string, iteration int, fallback string) common.ModelConfig {
 	modelConfig, isDefault := eCtx.LLMConfig.GetModelConfig(key, iteration)
 	if isDefault && fallback != "default" {

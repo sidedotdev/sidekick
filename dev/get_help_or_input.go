@@ -80,6 +80,7 @@ func GetHelpOrInput(dCtx DevContext, requests []HelpOrInputRequest) (string, err
 	req := flow_action.RequestForUser{
 		OriginWorkflowId: workflow.GetInfo(dCtx).WorkflowExecution.ID,
 		Subflow:          dCtx.FlowScope.SubflowName,
+		SubflowId:        dCtx.FlowScope.GetSubflowId(),
 		Content:          message,
 		RequestParams:    nil,         // no options when using get_help_or_input
 		RequestKind:      "free_form", // free-form request is the only kind supported in get_help_or_input

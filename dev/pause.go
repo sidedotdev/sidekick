@@ -31,6 +31,7 @@ func UserRequestIfPaused(dCtx DevContext, guidanceContext string, requestParams 
 	guidanceRequest := &flow_action.RequestForUser{
 		OriginWorkflowId: workflow.GetInfo(dCtx).WorkflowExecution.ID,
 		Subflow:          dCtx.FlowScope.SubflowName,
+		SubflowId:        dCtx.FlowScope.GetSubflowId(),
 		Content:          guidanceContext,
 		RequestKind:      flow_action.RequestKindFreeForm,
 		RequestParams:    requestParams,
