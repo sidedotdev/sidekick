@@ -22,10 +22,6 @@ type replayTestData map[string][]string
 // and then attempts to replay them using the current worker's registered workflows.
 func TestReplayFromS3Integration(t *testing.T) {
 	t.Parallel()
-	// Define the Sidekick versions for which to test replay from S3.
-	// As per user guidance, "0.5.0" should have at least one history file available.
-	sidekickVersionsToTest := []string{"0.5.0"}
-
 	ctx := context.Background()
 
 	// Read test data file
@@ -39,16 +35,17 @@ func TestReplayFromS3Integration(t *testing.T) {
 		t.Fatalf("Failed to parse replay test data: %v", err)
 	}
 
-	for _, version := range sidekickVersionsToTest {
+	testedVersions := 0
+	for version, workflowIds := range testData {
+		testedVersions++
+
 		// Create a subtest for each Sidekick version to isolate test runs.
 		// Replace dots in version string for valid test name.
 		versionTestName := fmt.Sprintf("Version_%s", strings.ReplaceAll(version, ".", "_"))
 		t.Run(versionTestName, func(t *testing.T) {
 			t.Parallel()
-			workflowIds, exists := testData[version]
-			if !exists || len(workflowIds) == 0 {
-				t.Errorf("Expected workflow id list to exist and be non-empty for version %s in replay test data file", version)
-				return
+			if len(workflowIds) == 0 {
+				t.Fatalf("No workflow IDs provided for version %s", version)
 			}
 
 			for _, workflowId := range workflowIds {
@@ -74,5 +71,9 @@ func TestReplayFromS3Integration(t *testing.T) {
 				})
 			}
 		})
+	}
+
+	if testedVersions == 0 {
+		t.Fatalf("No versions provided for replay testing")
 	}
 }
