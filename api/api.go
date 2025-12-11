@@ -775,6 +775,7 @@ func (ctrl *Controller) AgentHandleNewTask(ctx context.Context, task *domain.Tas
 
 	// Update the task status to in progress
 	task.Status = domain.TaskStatusInProgress
+	task.Updated = time.Now()
 	err = ctrl.service.PersistTask(ctx, *task)
 	if err != nil {
 		return err
@@ -936,6 +937,7 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 	// Update the task status and agent type
 	task.Status = domain.TaskStatusInProgress
 	task.AgentType = domain.AgentTypeLLM
+	task.Updated = time.Now()
 	if err := ctrl.service.PersistTask(ctx, task); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update task"})
 		return
