@@ -194,7 +194,12 @@ func openaiFromChatMessages(messages []ChatMessage, shouldMerge bool) []openai.C
 		isEquivalentRole := lastMsg.Role == string(msg.Role) ||
 			(isUserLikeRole(lastMsg.Role) && isUserLikeRole(string(msg.Role)))
 
-		if isEquivalentRole {
+		// tools aren't merged to ensure we retain their tool call ids.
+		// endpoints supporting parallel tool calls are expected to also support
+		// consecutive role=tool messages
+		bothTool := lastMsg.Role == string(ChatMessageRoleTool) && msg.Role == string(ChatMessageRoleTool)
+
+		if isEquivalentRole && !bothTool {
 			lastMsg.Content += "\n\n" + string(msg.Role) + ":" + msg.Content
 		} else {
 			mergedMessages = append(mergedMessages, msg)
