@@ -123,6 +123,7 @@ func (ima *DevAgentManagerActivities) CompleteFlowParentTask(ctx context.Context
 	}
 	task.Status = taskStatus
 	task.AgentType = domain.AgentTypeNone
+	task.Updated = time.Now()
 	err = ima.Storage.PersistTask(ctx, task)
 	if err != nil {
 		return err
