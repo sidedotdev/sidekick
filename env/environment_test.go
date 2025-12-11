@@ -118,6 +118,14 @@ func TestLocalGitWorktreeEnvironment(t *testing.T) {
 	}
 
 	env, err := NewLocalGitWorktreeEnv(ctx, params, worktree)
+	defer func() {
+		cmd := exec.Command("git", "worktree", "remove", env.GetWorkingDirectory())
+		cmd.Dir = repoDir
+		err = cmd.Run()
+		if err != nil {
+			t.Fatalf("Failed to cleanup worktree: %v", err)
+		}
+	}()
 
 	assert.NoError(t, err)
 	assert.Equal(t, EnvType("local_git_worktree"), env.GetType())
