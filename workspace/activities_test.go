@@ -6,14 +6,16 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/srv"
-	"sidekick/srv/redis"
+	"sidekick/srv/sqlite"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetWorkspaceConfig(t *testing.T) {
-	db := redis.NewTestRedisStorage()
+	db := sqlite.NewTestSqliteStorage(t, "workspace_activities_test")
 	activities := Activities{Storage: db}
 
 	emptyConfig := domain.WorkspaceConfig{}
@@ -61,8 +63,19 @@ func TestGetWorkspaceConfig(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
+
+			// Ensure workspace exists for the test
+			err := db.PersistWorkspace(ctx, domain.Workspace{
+				Id:      tc.workspaceID,
+				Name:    "test-workspace",
+				Created: time.Now(),
+				Updated: time.Now(),
+			})
+			require.NoError(t, err)
+
 			if !reflect.DeepEqual(tc.workspaceConfig, emptyConfig) {
-				db.PersistWorkspaceConfig(ctx, tc.workspaceID, tc.workspaceConfig)
+				err = db.PersistWorkspaceConfig(ctx, tc.workspaceID, tc.workspaceConfig)
+				require.NoError(t, err)
 			}
 
 			config, err := activities.GetWorkspaceConfig(tc.workspaceID)
