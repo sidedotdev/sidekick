@@ -106,7 +106,11 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		if err != nil {
 			return fmt.Errorf("error prompting for test command: %w", err)
 		}
-		fmt.Println("✔ Your test command has been saved in side.toml (commit this)")
+		if len(config.TestCommands) > 0 {
+			fmt.Println("✔ Your test command has been saved in side.toml (commit this)")
+		} else {
+			fmt.Println("ℹ Skipping test command configuration. You can add test commands to side.toml later for best results.")
+		}
 	} else {
 		fmt.Println("✔ Found valid test commands in side.toml")
 	}
@@ -405,6 +409,37 @@ func saveConfig(filePath string, config common.RepoConfig) error {
 }
 
 func ensureTestCommands(config *common.RepoConfig, filePath string) error {
+	configureTests := true
+	err := huh.NewConfirm().
+		Title("Would you like to configure a test command?").
+		Description("Test commands help Sidekick verify code changes automatically.").
+		Value(&configureTests).
+		Affirmative("Yes").
+		Negative("No").
+		Run()
+
+	if err != nil {
+		return fmt.Errorf("error prompting for test command configuration: %w", err)
+	}
+
+	if !configureTests {
+		// Write a commented placeholder example to the config file
+		if err := saveConfig(filePath, *config); err != nil {
+			return err
+		}
+		// Append commented example after the encoded config
+		f, err := os.OpenFile(filePath, os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			return fmt.Errorf("error opening config file: %w", err)
+		}
+		defer f.Close()
+		comment := "\n# Uncomment and configure test commands for best results:\n# [[test_commands]]\n# command = \"pytest\"\n"
+		if _, err := f.WriteString(comment); err != nil {
+			return fmt.Errorf("error writing comment to config file: %w", err)
+		}
+		return nil
+	}
+
 	fmt.Println("\nPlease enter the command you use to run your tests")
 	fmt.Println("Examples:")
 	fmt.Println("- If you are using JavaScript, you might use: jest")
