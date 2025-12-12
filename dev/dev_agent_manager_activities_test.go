@@ -5,23 +5,23 @@ import (
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/mocks"
-	"sidekick/srv/redis"
+	"sidekick/srv/sqlite"
 	"sidekick/utils"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func newDevAgentManagerActivities() *DevAgentManagerActivities {
+func newDevAgentManagerActivities(t *testing.T) *DevAgentManagerActivities {
 	return &DevAgentManagerActivities{
-		Storage:        redis.NewTestRedisStorage(),
+		Storage:        sqlite.NewTestSqliteStorage(t, "dev_agent_test"),
 		TemporalClient: &mocks.Client{},
 	}
 }
 
 func TestUpdateTaskForUserRequest(t *testing.T) {
-	ima := newDevAgentManagerActivities()
-	storage := redis.NewTestRedisStorage()
+	ima := newDevAgentManagerActivities(t)
+	storage := ima.Storage
 
 	workspaceId := "testWorkspace"
 	task := domain.Task{
@@ -53,8 +53,8 @@ func TestUpdateTaskForUserRequest(t *testing.T) {
 }
 
 func TestUpdateTask(t *testing.T) {
-	ima := newDevAgentManagerActivities()
-	storage := redis.NewTestRedisStorage()
+	ima := newDevAgentManagerActivities(t)
+	storage := ima.Storage
 
 	workspaceId := "testWorkspace"
 	task := domain.Task{
@@ -93,8 +93,8 @@ func TestUpdateTask(t *testing.T) {
 }
 
 func TestCreatePendingUserRequest(t *testing.T) {
-	ima := newDevAgentManagerActivities()
-	storage := redis.NewTestRedisStorage()
+	ima := newDevAgentManagerActivities(t)
+	storage := ima.Storage
 	ctx := context.Background()
 
 	workspaceId := "testWorkspace"
@@ -136,8 +136,8 @@ func TestCreatePendingUserRequest(t *testing.T) {
 }
 
 func TestExistingUserRequest(t *testing.T) {
-	ima := newDevAgentManagerActivities()
-	storage := redis.NewTestRedisStorage()
+	ima := newDevAgentManagerActivities(t)
+	storage := ima.Storage
 	ctx := context.Background()
 
 	workspaceId := "testWorkspace"
