@@ -17,8 +17,18 @@ import (
 // TODO /gen define GetRepoConfigActivityInput struct that has EnvContainer
 // inside it. write tests for get coding config activity too.
 func GetRepoConfigActivity(envContainer env.EnvContainer) (common.RepoConfig, error) {
-	data, err := os.ReadFile(filepath.Join(envContainer.Env.GetWorkingDirectory(), "side.toml"))
+	workingDir := envContainer.Env.GetWorkingDirectory()
+	sideTomlPath := filepath.Join(workingDir, "side.toml")
+
+	data, err := os.ReadFile(sideTomlPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			log.Info().
+				Str("workingDir", workingDir).
+				Str("repoConfigPath", sideTomlPath).
+				Msg("Repo config side.toml not found; using default repo config")
+			return common.RepoConfig{}, nil
+		}
 		return common.RepoConfig{}, fmt.Errorf("failed to read TOML file: %v", err)
 	}
 
