@@ -94,10 +94,13 @@ func (s *RunTestsTestSuite) TestRunTestsWithNoTestCommands() {
 
 	s.env.ExecuteWorkflow(s.wrapperWorkflow)
 	s.True(s.env.IsWorkflowCompleted())
-	err := s.env.GetWorkflowError()
-	s.Require().Error(err)
-	// unwrap the error twice to get to the actual error message
-	s.Contains(err.Error(), "no test commands configured")
+	s.NoError(s.env.GetWorkflowError())
+
+	var result TestResult
+	s.NoError(s.env.GetWorkflowResult(&result))
+	s.True(result.TestsPassed)
+	s.True(result.TestsSkipped)
+	s.Empty(result.Output)
 }
 
 func (s *RunTestsTestSuite) TestRunTestsWithAnEmptyTestCommand() {

@@ -9,6 +9,7 @@ import (
 	"sidekick/llm"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -16,14 +17,16 @@ var maxTestOutputSize = min(4000, defaultMaxChatHistoryLength/4)
 
 // TestResult holds a detailed information about test run
 type TestResult struct {
-	TestsPassed bool   `json:"testsPassed"`
-	Output      string `json:"output"`
+	TestsPassed  bool   `json:"testsPassed"`
+	TestsSkipped bool   `json:"testsSkipped"`
+	Output       string `json:"output"`
 }
 
 // RunTests runs the provided test commands.
 func RunTests(dCtx DevContext, commandsToRun []common.CommandConfig) (TestResult, error) {
 	if len(commandsToRun) == 0 {
-		return TestResult{}, fmt.Errorf("no test commands configured")
+		log.Warn().Msg("No test commands configured, skipping tests")
+		return TestResult{TestsPassed: true, TestsSkipped: true}, nil
 	}
 	for _, testCommand := range commandsToRun {
 		if testCommand.Command == "" {
