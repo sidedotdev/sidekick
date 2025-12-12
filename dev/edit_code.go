@@ -311,7 +311,8 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			// generated
 			visibleChatHistory = authorEditBlockInput.Params.Messages
 		}
-		currentExtractedBlocks, err := ExtractEditBlocksWithVisibility(chatResponse.ChatMessage.Content, visibleChatHistory)
+		tildeOnly := workflow.GetVersion(dCtx, "tilde-edit-block-fence", workflow.DefaultVersion, 1) >= 1
+		currentExtractedBlocks, err := ExtractEditBlocksWithVisibility(chatResponse.ChatMessage.Content, visibleChatHistory, tildeOnly)
 		if err != nil {
 			return []EditBlock{}, fmt.Errorf("%w: %v", ErrExtractEditBlocks, err)
 		}

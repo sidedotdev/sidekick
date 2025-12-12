@@ -523,7 +523,7 @@ func TestExtractEditBlocks(t *testing.T) {
 		combinedExpectedResult = append(combinedExpectedResult, testCase.expectedResult...)
 
 		t.Run(testCase.name, func(t *testing.T) {
-			result, err := ExtractEditBlocks(testCase.testInput)
+			result, err := ExtractEditBlocks(testCase.testInput, false)
 			if err != nil {
 				t.Errorf("Error extracting edit blocks: %v", err)
 			}
@@ -543,7 +543,7 @@ func TestExtractEditBlocks(t *testing.T) {
 	// The following test case is a combination of all the test cases above, and
 	// makes sure that we don't have any issues dealing with large inputs with
 	// many edit blocks within.
-	result, err := ExtractEditBlocks(combinedTestInput)
+	result, err := ExtractEditBlocks(combinedTestInput, false)
 	if err != nil {
 		t.Fatalf("Error extracting edit blocks: %v", err)
 	}
@@ -555,5 +555,423 @@ func TestExtractEditBlocks(t *testing.T) {
 		if !reflect.DeepEqual(*result[i], *combinedExpectedResult[i]) {
 			t.Errorf("Expected:\n%v\nGot:\n%v", *combinedExpectedResult[i], *result[i])
 		}
+	}
+}
+
+// Tilde-based test cases
+
+var tildeBasicCase = EditBlockTestCase{
+	name: "Tilde basic edit block",
+	testInput: ` This is a basic edit block:
+
+~~~~go
+edit_block:1
+path/to/file.go
+` + search + `
+	if err != nil {
+		return "", err
+	}
+` + divider + `
+	if err != nil {
+		return "", err
+	}
+
+	// Deposit money.
+	var depositOutput string
+	depositErr := workflow.ExecuteActivity(ctx, Deposit, input).Get(ctx, &depositOutput)
+` + replace + `
+~~~~
+`,
+	expectedResult: []*EditBlock{
+		{
+			FilePath: "path/to/file.go",
+			OldLines: []string{
+				"	if err != nil {",
+				"		return \"\", err",
+				"	}",
+			},
+			NewLines: []string{
+				"	if err != nil {",
+				"		return \"\", err",
+				"	}",
+				"",
+				"	// Deposit money.",
+				"	var depositOutput string",
+				"	depositErr := workflow.ExecuteActivity(ctx, Deposit, input).Get(ctx, &depositOutput)",
+			},
+			EditType:       "update",
+			SequenceNumber: 1,
+		},
+	},
+}
+
+var tildeExtraContent = EditBlockTestCase{
+	name: "Tilde extra content in the code fence",
+	testInput: `
+~~~~go
+some extra stuff early on
+some extra stuff early on
+some extra stuff early on
+edit_block:2
+extra.go
+` + search + `
+a
+` + divider + `
+b
+` + replace + `
+some extra stuff later on
+some extra stuff later on
+some extra stuff later on
+~~~~
+`,
+	expectedResult: []*EditBlock{
+		{
+			FilePath:       "extra.go",
+			OldLines:       []string{"a"},
+			NewLines:       []string{"b"},
+			EditType:       "update",
+			SequenceNumber: 2,
+		},
+	},
+}
+
+var tildeMissingFileNameAndSequenceNumber = EditBlockTestCase{
+	name: "Tilde missing File Name and Sequence Number",
+	testInput: `This is missing the filename and sequence number:
+
+~~~~go
+` + search + `
+stuff
+` + divider + `
+more stuff
+` + replace + `
+~~~~
+`,
+	expectedResult: []*EditBlock{
+		{
+			FilePath: "",
+			OldLines: []string{"stuff"},
+			NewLines: []string{"more stuff"},
+			EditType: "update",
+		},
+	},
+}
+
+var tildeMissingFileName = EditBlockTestCase{
+	name: "Tilde missing File Name",
+	testInput: `This is missing the filename:
+
+~~~~go
+edit_block:1
+` + search + `
+stuff
+` + divider + `
+more stuff
+` + replace + `
+~~~~
+`,
+	expectedResult: []*EditBlock{
+		{
+			FilePath:       "",
+			OldLines:       []string{"stuff"},
+			NewLines:       []string{"more stuff"},
+			EditType:       "update",
+			SequenceNumber: 1,
+		},
+	},
+}
+
+var tildeMissingSequenceNumber = EditBlockTestCase{
+	name: "Tilde missing Sequence Number",
+	testInput: `This is missing the filename and sequence number:
+
+~~~~go
+omg.go
+` + search + `
+stuff
+` + divider + `
+more stuff
+` + replace + `
+~~~~
+`,
+	expectedResult: []*EditBlock{
+		{
+			FilePath: "omg.go",
+			OldLines: []string{"stuff"},
+			NewLines: []string{"more stuff"},
+			EditType: "update",
+		},
+	},
+}
+
+var tildeNewFile = EditBlockTestCase{
+	name:      "Tilde valid edit to create a new file",
+	testInput: "~~~~go\nedit_block:1\nnew.go\n<<<<<<< CREATE_FILE\n" + divider + "\nnew\n>>>>>>> NEW_LINES\n~~~~\n",
+	expectedResult: []*EditBlock{
+		{
+			FilePath:       "new.go",
+			OldLines:       nil,
+			NewLines:       []string{"new"},
+			EditType:       "create",
+			SequenceNumber: 1,
+		},
+	},
+}
+
+var tildeAppendFile = EditBlockTestCase{
+	name:      "Tilde valid edit to append to an existing File",
+	testInput: "~~~~go\nedit_block:1\nexisting.go\n<<<<<<< APPEND_TO_FILE\n" + divider + "\nnew\n>>>>>>> NEW_LINES\n~~~~\n",
+	expectedResult: []*EditBlock{
+		{
+			FilePath:       "existing.go",
+			OldLines:       nil,
+			NewLines:       []string{"new"},
+			EditType:       "append",
+			SequenceNumber: 1,
+		},
+	},
+}
+
+var tildeMissingDividerAppendFile = EditBlockTestCase{
+	name:      "Tilde missing divider when appending to an existing File",
+	testInput: "~~~~go\nedit_block:1\nexisting.go\n<<<<<<< APPEND_TO_FILE\nnew\n>>>>>>> NEW_LINES\n~~~~\n",
+	expectedResult: []*EditBlock{
+		{
+			FilePath:       "existing.go",
+			OldLines:       nil,
+			NewLines:       []string{"new"},
+			EditType:       "append",
+			SequenceNumber: 1,
+		},
+	},
+}
+
+var tildeMissingDividerCreateFile = EditBlockTestCase{
+	name:      "Tilde missing divider when creating a new file",
+	testInput: "~~~~go\nedit_block:1\nnew.go\n<<<<<<< CREATE_FILE\nnew\n>>>>>>> NEW_LINES\n~~~~\n",
+	expectedResult: []*EditBlock{
+		{
+			FilePath:       "new.go",
+			OldLines:       nil,
+			NewLines:       []string{"new"},
+			EditType:       "create",
+			SequenceNumber: 1,
+		},
+	},
+}
+
+var tildeMultipleEditsInSameFile = EditBlockTestCase{
+	name:      "Tilde multiple edits in the same file",
+	testInput: "~~~~go\nedit_block:1\nfile1.go\n" + search + "\na\n" + divider + "\nb\n" + replace + "\n\nedit_block:2\nfile1.go\n" + search + "\nc\n" + divider + "\nd\n" + replace + "\n~~~~\n",
+	expectedResult: []*EditBlock{
+		{
+			FilePath:       "file1.go",
+			OldLines:       []string{"a"},
+			NewLines:       []string{"b"},
+			EditType:       "update",
+			SequenceNumber: 1,
+		},
+		{
+			FilePath:       "file1.go",
+			OldLines:       []string{"c"},
+			NewLines:       []string{"d"},
+			EditType:       "update",
+			SequenceNumber: 2,
+		},
+	},
+}
+
+var tildeMultipleEditsInSameFile2 = EditBlockTestCase{
+	name:      "Tilde multiple edits in the same file, second edit missing file name",
+	testInput: "~~~~go\nedit_block:1\nfile2.go\n" + search + "\na\n" + divider + "\nb\n" + replace + "\n\nsomeOtherCode()\n\nedit_block:2\n" + search + "\nc\n" + divider + "\nd\n" + replace + "\n~~~~\n",
+	expectedResult: []*EditBlock{
+		{
+			FilePath:       "file2.go",
+			OldLines:       []string{"a"},
+			NewLines:       []string{"b"},
+			EditType:       "update",
+			SequenceNumber: 1,
+		},
+		{
+			FilePath:       "file2.go",
+			OldLines:       []string{"c"},
+			NewLines:       []string{"d"},
+			EditType:       "update",
+			SequenceNumber: 2,
+		},
+	},
+}
+
+var fiveTildeFenceWithFourInside = EditBlockTestCase{
+	name:      "Five tilde fence with four tildes inside content",
+	testInput: "~~~~~markdown\nedit_block:1\ndoc.md\n" + search + "\nHeader text.\n" + divider + "\nHeader text.\n\n~~~~python\ndef hello():\n    print(\"world\")\n~~~~\n\nFooter text.\n" + replace + "\n~~~~~\n",
+	expectedResult: []*EditBlock{
+		{
+			FilePath: "doc.md",
+			OldLines: []string{"Header text."},
+			NewLines: []string{
+				"Header text.",
+				"",
+				"~~~~python",
+				"def hello():",
+				"    print(\"world\")",
+				"~~~~",
+				"",
+				"Footer text.",
+			},
+			EditType:       "update",
+			SequenceNumber: 1,
+		},
+	},
+}
+
+var fourTildeFenceWithTripleInside = EditBlockTestCase{
+	name:      "Four tilde fence with triple tildes inside content",
+	testInput: "~~~~markdown\nedit_block:1\nnested.md\n" + search + "\nSome text before.\n" + divider + "\nSome text before.\n\n~~~javascript\nvar x = 1;\n~~~\n\nSome text after.\n" + replace + "\n~~~~\n",
+	expectedResult: []*EditBlock{
+		{
+			FilePath: "nested.md",
+			OldLines: []string{"Some text before."},
+			NewLines: []string{
+				"Some text before.",
+				"",
+				"~~~javascript",
+				"var x = 1;",
+				"~~~",
+				"",
+				"Some text after.",
+			},
+			EditType:       "update",
+			SequenceNumber: 1,
+		},
+	},
+}
+
+var mixedTildeLengths = EditBlockTestCase{
+	name:      "Mixed tilde fence lengths in single input",
+	testInput: "~~~go\nedit_block:1\nfile1.go\n" + search + "\na\n" + divider + "\nb\n" + replace + "\n~~~\n\n~~~~python\nedit_block:2\nfile2.py\n" + search + "\nx\n" + divider + "\ny\n" + replace + "\n~~~~\n\n~~~~~javascript\nedit_block:3\nfile3.js\n" + search + "\nfoo\n" + divider + "\nbar\n" + replace + "\n~~~~~\n",
+	expectedResult: []*EditBlock{
+		{
+			FilePath:       "file1.go",
+			OldLines:       []string{"a"},
+			NewLines:       []string{"b"},
+			EditType:       "update",
+			SequenceNumber: 1,
+		},
+		{
+			FilePath:       "file2.py",
+			OldLines:       []string{"x"},
+			NewLines:       []string{"y"},
+			EditType:       "update",
+			SequenceNumber: 2,
+		},
+		{
+			FilePath:       "file3.js",
+			OldLines:       []string{"foo"},
+			NewLines:       []string{"bar"},
+			EditType:       "update",
+			SequenceNumber: 3,
+		},
+	},
+}
+
+var tildeStandardTripleTildeRegression = EditBlockTestCase{
+	name:      "Standard triple tilde regression test",
+	testInput: "~~~\nedit_block:1\nstandard.go\n" + search + "\noriginal\n" + divider + "\nmodified\n" + replace + "\n~~~\n",
+	expectedResult: []*EditBlock{
+		{
+			FilePath:       "standard.go",
+			OldLines:       []string{"original"},
+			NewLines:       []string{"modified"},
+			EditType:       "update",
+			SequenceNumber: 1,
+		},
+	},
+}
+
+func TestExtractEditBlocksTildeOnly(t *testing.T) {
+	tildeTestCases := []EditBlockTestCase{
+		tildeBasicCase,
+		tildeExtraContent,
+		tildeMissingFileNameAndSequenceNumber,
+		tildeMissingFileName,
+		tildeMissingSequenceNumber,
+		tildeNewFile,
+		tildeAppendFile,
+		tildeMissingDividerAppendFile,
+		tildeMissingDividerCreateFile,
+		tildeMultipleEditsInSameFile,
+		tildeMultipleEditsInSameFile2,
+		fourTildeFenceWithTripleInside,
+		fiveTildeFenceWithFourInside,
+		mixedTildeLengths,
+		tildeStandardTripleTildeRegression,
+	}
+
+	combinedTestInput := ""
+	combinedExpectedResult := []*EditBlock{}
+	for _, testCase := range tildeTestCases {
+		combinedTestInput += testCase.testInput + "\n"
+		combinedExpectedResult = append(combinedExpectedResult, testCase.expectedResult...)
+
+		t.Run(testCase.name, func(t *testing.T) {
+			result, err := ExtractEditBlocks(testCase.testInput, true)
+			if err != nil {
+				t.Errorf("Error extracting edit blocks: %v", err)
+			}
+
+			if len(result) != len(testCase.expectedResult) {
+				t.Errorf("Expected %d blocks, got %d", len(testCase.expectedResult), len(result))
+				return
+			}
+
+			for i := range testCase.expectedResult {
+				if !reflect.DeepEqual(*result[i], *testCase.expectedResult[i]) {
+					t.Errorf("Expected:\n%v\nGot:\n%v", *testCase.expectedResult[i], *result[i])
+				}
+			}
+		})
+	}
+
+	result, err := ExtractEditBlocks(combinedTestInput, true)
+	if err != nil {
+		t.Fatalf("Error extracting edit blocks: %v", err)
+	}
+	for i := range combinedExpectedResult {
+		if len(result) <= i {
+			t.Errorf("Expected:\n%v\nGot:\n%v", *combinedExpectedResult[i], nil)
+			continue
+		}
+		if !reflect.DeepEqual(*result[i], *combinedExpectedResult[i]) {
+			t.Errorf("Expected:\n%v\nGot:\n%v", *combinedExpectedResult[i], *result[i])
+		}
+	}
+}
+
+func TestExtractEditBlocksTildeOnlyRejectsBackticks(t *testing.T) {
+	backtickInput := "```go\nedit_block:1\nfile.go\n" + search + "\na\n" + divider + "\nb\n" + replace + "\n```\n"
+	result, err := ExtractEditBlocks(backtickInput, true)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("Expected 0 blocks when tildeOnly=true with backtick input, got %d", len(result))
+	}
+}
+
+func TestExtractEditBlocksBothFenceTypes(t *testing.T) {
+	mixedInput := "~~~~go\nedit_block:1\nfile1.go\n" + search + "\na\n" + divider + "\nb\n" + replace + "\n~~~~\n\n```go\nedit_block:2\nfile2.go\n" + search + "\nx\n" + divider + "\ny\n" + replace + "\n```\n"
+	result, err := ExtractEditBlocks(mixedInput, false)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if len(result) != 2 {
+		t.Errorf("Expected 2 blocks when tildeOnly=false with mixed input, got %d", len(result))
+	}
+	if len(result) >= 1 && result[0].FilePath != "file1.go" {
+		t.Errorf("Expected first block file path 'file1.go', got '%s'", result[0].FilePath)
+	}
+	if len(result) >= 2 && result[1].FilePath != "file2.go" {
+		t.Errorf("Expected second block file path 'file2.go', got '%s'", result[1].FilePath)
 	}
 }
