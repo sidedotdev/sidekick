@@ -10,7 +10,7 @@ import (
 )
 
 func TestPersistFlowAndGetFlowsForTask(t *testing.T) {
-	db := NewTestRedisStorage()
+	db := newTestRedisStorage()
 
 	workspaceId := "TEST_WORKSPACE_ID"
 	parentId := "testParentId"
