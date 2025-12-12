@@ -43,7 +43,7 @@ func NewTaskCommand() *cli.Command {
 			&cli.StringSliceFlag{Name: "flow-option", Aliases: []string{"O"}, Usage: "Add flow option (key=value), can be specified multiple times"},
 			&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"n"}, Usage: "Shorthand to set determineRequirements to false in flow options"},
 			&cli.BoolFlag{Name: "worktree", Aliases: []string{"w"}, Usage: "Use git worktree environment type"},
-			&cli.StringFlag{Name: "start-branch", Aliases: []string{"B"}, Usage: "Specify the starting branch for the task"},
+			&cli.StringFlag{Name: "start-branch", Aliases: []string{"B"}, Usage: "Specify the starting branch for the task (defaults to current branch)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			c := client.NewClient(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
