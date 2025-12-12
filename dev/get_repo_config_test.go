@@ -268,3 +268,16 @@ func TestGetRepoConfigActivity_NoFallbackCandidates(t *testing.T) {
 	assert.Empty(t, config.EditCode.Hints)
 	assert.Empty(t, config.EditCode.HintsPath)
 }
+func TestGetRepoConfigActivity_LoadsFallbackHintsWhenSideTomlMissing(t *testing.T) {
+	tempDir := t.TempDir()
+	mock := &mockEnv{workingDir: tempDir}
+	envContainer := env.EnvContainer{Env: mock}
+
+	writeFallbackFile(t, envContainer, "AGENTS.md", "fallback agents content")
+
+	config, err := GetRepoConfigActivity(envContainer)
+
+	require.NoError(t, err)
+	assert.Equal(t, "fallback agents content", config.EditCode.Hints)
+	assert.Equal(t, "AGENTS.md", config.EditCode.HintsPath)
+}

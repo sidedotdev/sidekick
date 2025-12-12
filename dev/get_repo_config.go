@@ -20,6 +20,8 @@ func GetRepoConfigActivity(envContainer env.EnvContainer) (common.RepoConfig, er
 	workingDir := envContainer.Env.GetWorkingDirectory()
 	sideTomlPath := filepath.Join(workingDir, "side.toml")
 
+	var config common.RepoConfig
+
 	data, err := os.ReadFile(sideTomlPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -27,15 +29,14 @@ func GetRepoConfigActivity(envContainer env.EnvContainer) (common.RepoConfig, er
 				Str("workingDir", workingDir).
 				Str("repoConfigPath", sideTomlPath).
 				Msg("Repo config side.toml not found; using default repo config")
-			return common.RepoConfig{}, nil
+		} else {
+			return common.RepoConfig{}, fmt.Errorf("failed to read TOML file: %v", err)
 		}
-		return common.RepoConfig{}, fmt.Errorf("failed to read TOML file: %v", err)
-	}
-
-	var config common.RepoConfig
-	err = toml.Unmarshal(data, &config)
-	if err != nil {
-		return common.RepoConfig{}, fmt.Errorf("failed to unmarshal TOML data: %v", err)
+	} else {
+		err = toml.Unmarshal(data, &config)
+		if err != nil {
+			return common.RepoConfig{}, fmt.Errorf("failed to unmarshal TOML data: %v", err)
+		}
 	}
 
 	// If hints are not provided inline, try loading from HintsPath
