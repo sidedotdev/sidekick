@@ -177,11 +177,20 @@ mission = "Test mission"
 		envContainer := env.EnvContainer{Env: mock}
 		// Do not create side.toml
 
-		_, err := GetRepoConfigActivity(envContainer)
+		config, err := GetRepoConfigActivity(envContainer)
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to read TOML file")
-		// require.ErrorIs(t, err, os.ErrNotExist) // This might require unwrapping
+		require.NoError(t, err)
+		assert.Empty(t, config.EditCode.Hints)
+		assert.Empty(t, config.EditCode.HintsPath)
+		assert.Empty(t, config.CheckCommands)
+		assert.Empty(t, config.AutofixCommands)
+		assert.Empty(t, config.TestCommands)
+		assert.Empty(t, config.IntegrationTestCommands)
+		assert.Empty(t, config.Mission)
+		assert.False(t, config.DisableHumanInTheLoop)
+		assert.Zero(t, config.MaxIterations)
+		assert.Zero(t, config.MaxPlanningIterations)
+		assert.Empty(t, config.WorktreeSetup)
 	})
 }
 func TestGetRepoConfigActivity_FallbackPrecedence(t *testing.T) {
