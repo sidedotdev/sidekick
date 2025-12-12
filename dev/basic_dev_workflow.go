@@ -577,7 +577,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 			conflictMessage = fmt.Sprintf("Merge conflicts detected at %s. Conflicts are from merging %s into %s. Please resolve conflicts, commit the merge, then continue.", mergeResult.ConflictDirPath, mergeInfo.TargetBranch, dCtx.Worktree.Name)
 		}
 
-		err := GetUserContinue(dCtx.NewActionContext("merge_conflict_continue"), conflictMessage, map[string]any{
+		err := GetUserContinue(dCtx, conflictMessage, map[string]any{
 			"continueTag": "done",
 		})
 		if err != nil {
@@ -603,7 +603,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 				// Check if there are still unmerged files
 				if strings.Contains(statusOutput.Stdout, "UU ") || strings.Contains(statusOutput.Stdout, "AA ") || strings.Contains(statusOutput.Stdout, "DD ") {
 					message := "Merge conflicts are not fully resolved, please resolve all conflicts and commit. Git status:\n\n" + statusOutput.Stdout
-					err := GetUserContinue(dCtx.NewActionContext("merge_conflict_continue"), message, map[string]any{
+					err := GetUserContinue(dCtx, message, map[string]any{
 						"continueTag": "done",
 					})
 					if err != nil {

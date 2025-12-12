@@ -42,16 +42,12 @@ type RequestForUser struct {
 }
 
 func (r RequestForUser) ActionParams() map[string]any {
-	params := make(map[string]any)
-	if r.RequestParams != nil {
-		for k, v := range r.RequestParams {
-			params[k] = v
-		}
+	params := map[string]any{
+		"requestContent": r.Content,
+		"requestKind":    r.RequestKind,
 	}
-	params["kind"] = r.RequestKind
-	params["message"] = r.Content
-	if r.FlowActionId != "" {
-		params["flowActionId"] = r.FlowActionId
+	for k, v := range r.RequestParams {
+		params[k] = v
 	}
 	return params
 }
@@ -111,20 +107,23 @@ func GetUserResponse(ctx ExecContext, req RequestForUser) (*UserResponse, error)
 	return &userResponse, nil
 }
 
-func GetUserContinue(actionCtx ActionContext, prompt string, requestParams map[string]any) error {
-	if actionCtx.ExecContext.DisableHumanInTheLoop {
+func GetUserContinue(eCtx ExecContext, prompt string, requestParams map[string]any) error {
+	if eCtx.DisableHumanInTheLoop {
 		return nil
 	}
 
+	// Create a RequestForUser struct for continue request
 	req := RequestForUser{
-		OriginWorkflowId: workflow.GetInfo(actionCtx.ExecContext.Context).WorkflowExecution.ID,
+		OriginWorkflowId: workflow.GetInfo(eCtx).WorkflowExecution.ID,
 		Content:          prompt,
-		Subflow:          actionCtx.ExecContext.FlowScope.SubflowName,
-		SubflowId:        actionCtx.ExecContext.FlowScope.GetSubflowId(),
+		Subflow:          eCtx.FlowScope.SubflowName,
 		RequestParams:    requestParams,
 		RequestKind:      RequestKindContinue,
 	}
+	actionCtx := eCtx.NewActionContext("user_request.continue")
+	actionCtx.ActionParams = req.ActionParams()
 
+	// Ensure tracking of the flow action within the guidance request
 	_, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
 		req.FlowActionId = flowAction.Id
 		return GetUserResponse(actionCtx.ExecContext, req)
@@ -132,8 +131,8 @@ func GetUserContinue(actionCtx ActionContext, prompt string, requestParams map[s
 	return err
 }
 
-func GetUserGuidance(actionCtx ActionContext, guidanceContext string, requestParams map[string]any) (*UserResponse, error) {
-	if actionCtx.ExecContext.DisableHumanInTheLoop {
+func GetUserGuidance(eCtx ExecContext, guidanceContext string, requestParams map[string]any) (*UserResponse, error) {
+	if eCtx.DisableHumanInTheLoop {
 		return &UserResponse{
 			Content: `
 Automated response: User guidance is actually not available and will not be in
@@ -157,13 +156,16 @@ would mean to apply it to your current situation.
 	}
 
 	guidanceRequest := RequestForUser{
-		OriginWorkflowId: workflow.GetInfo(actionCtx.ExecContext.Context).WorkflowExecution.ID,
-		Subflow:          actionCtx.ExecContext.FlowScope.SubflowName,
-		SubflowId:        actionCtx.ExecContext.FlowScope.GetSubflowId(),
+		OriginWorkflowId: workflow.GetInfo(eCtx).WorkflowExecution.ID,
+		Subflow:          eCtx.FlowScope.SubflowName,
+		SubflowId:        eCtx.FlowScope.GetSubflowId(),
 		Content:          guidanceContext,
 		RequestKind:      RequestKindFreeForm,
 		RequestParams:    requestParams,
 	}
+
+	actionCtx := eCtx.NewActionContext("user_request.guidance")
+	actionCtx.ActionParams = guidanceRequest.ActionParams()
 
 	return TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
 		guidanceRequest.FlowActionId = flowAction.Id
@@ -175,20 +177,26 @@ would mean to apply it to your current situation.
 	})
 }
 
-func GetUserApproval(actionCtx ActionContext, approvalType, approvalPrompt string, requestParams map[string]interface{}) (*UserResponse, error) {
-	if actionCtx.ExecContext.DisableHumanInTheLoop {
+func GetUserApproval(eCtx ExecContext, approvalType, approvalPrompt string, requestParams map[string]interface{}) (*UserResponse, error) {
+	actionType := "approve." + approvalType
+	actionCtx := eCtx.NewActionContext("user_request." + actionType)
+
+	if actionCtx.DisableHumanInTheLoop {
+		// auto-approve for now if humans are not in the loop
+		// TODO: add a self-review process in this case
 		approved := true
 		return &UserResponse{Approved: &approved}, nil
 	}
 
 	req := RequestForUser{
-		OriginWorkflowId: workflow.GetInfo(actionCtx.ExecContext.Context).WorkflowExecution.ID,
+		OriginWorkflowId: workflow.GetInfo(actionCtx).WorkflowExecution.ID,
 		Content:          approvalPrompt,
-		Subflow:          actionCtx.ExecContext.FlowScope.SubflowName,
-		SubflowId:        actionCtx.ExecContext.FlowScope.GetSubflowId(),
+		Subflow:          actionCtx.FlowScope.SubflowName,
+		SubflowId:        actionCtx.FlowScope.GetSubflowId(),
 		RequestParams:    requestParams,
 		RequestKind:      RequestKindApproval,
 	}
+	actionCtx.ActionParams = req.ActionParams()
 
 	return TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
 		req.FlowActionId = flowAction.Id

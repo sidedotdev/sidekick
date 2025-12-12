@@ -13,28 +13,32 @@ import (
 func PerformWithUserRetry(actionCtx ActionContext, activity interface{}, valuePtr interface{}, args ...interface{}) error {
 	for {
 		// Execute the activity
-		activityFuture := workflow.ExecuteActivity(actionCtx.ExecContext.Context, activity, args...)
-
-		// Wait for the activity to complete
-		err := activityFuture.Get(actionCtx.ExecContext.Context, valuePtr)
-
+		activityFuture := workflow.ExecuteActivity(actionCtx, activity, args...)
+		err := activityFuture.Get(actionCtx, valuePtr)
 		if err == nil {
-			// Activity succeeded
 			return nil
 		}
 
 		// Activity failed, check if we should retry with user prompt based on workflow version
 		// The version "activity-user-retry" with a change ID of 1 enables this feature.
 		// Workflows started before this version was introduced will use workflow.DefaultVersion.
-		version := workflow.GetVersion(actionCtx.ExecContext.Context, "activity-user-retry", workflow.DefaultVersion, 1)
+		version := workflow.GetVersion(actionCtx, "activity-user-retry", workflow.DefaultVersion, 1)
 		if version < 1 {
 			// Version doesn't support user-prompted retry for this activity, return the original error
 			return err
 		}
 
 		// If human-in-the-loop is disabled, don't retry to prevent infinite loops
-		if actionCtx.ExecContext.DisableHumanInTheLoop {
+		if actionCtx.DisableHumanInTheLoop {
 			return err
+		}
+
+		// pending user actions take precedence over the retry loop
+		if v := workflow.GetVersion(actionCtx, "user-action-go-next", workflow.DefaultVersion, 1); v == 1 {
+			action := actionCtx.GlobalState.GetPendingUserAction()
+			if action != nil {
+				return PendingActionError
+			}
 		}
 
 		// Activity failed and version supports retry, prompt user to retry
@@ -42,16 +46,7 @@ func PerformWithUserRetry(actionCtx ActionContext, activity interface{}, valuePt
 		requestParams := map[string]any{
 			"continueTag": "try_again",
 		}
-
-		// pending user actions take precedence over the retry loop
-		if v := workflow.GetVersion(actionCtx.ExecContext.Context, "user-action-go-next", workflow.DefaultVersion, 1); v == 1 {
-			action := actionCtx.ExecContext.GlobalState.GetPendingUserAction()
-			if action != nil {
-				return PendingActionError
-			}
-		}
-
-		userErr := GetUserContinue(actionCtx, prompt, requestParams)
+		userErr := GetUserContinue(actionCtx.ExecContext, prompt, requestParams)
 		if userErr != nil {
 			// GetUserContinue failed, return that error and break the retry loop
 			return userErr

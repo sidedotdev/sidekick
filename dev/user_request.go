@@ -19,18 +19,18 @@ func GetUserResponse(actionCtx DevActionContext, req flow_action.RequestForUser)
 }
 
 // GetUserContinue wraps flow_action.GetUserContinue with DevActionContext
-func GetUserContinue(actionCtx DevActionContext, prompt string, params map[string]any) error {
-	return flow_action.GetUserContinue(actionCtx.FlowActionContext(), prompt, params)
+func GetUserContinue(dCtx DevContext, prompt string, params map[string]any) error {
+	return flow_action.GetUserContinue(dCtx.ExecContext, prompt, params)
 }
 
 // GetUserGuidance wraps flow_action.GetUserGuidance with DevActionContext
-func GetUserGuidance(actionCtx DevActionContext, guidanceContext string, params map[string]any) (*flow_action.UserResponse, error) {
-	return flow_action.GetUserGuidance(actionCtx.FlowActionContext(), guidanceContext, params)
+func GetUserGuidance(dCtx DevContext, guidanceContext string, params map[string]any) (*flow_action.UserResponse, error) {
+	return flow_action.GetUserGuidance(dCtx.ExecContext, guidanceContext, params)
 }
 
 // GetUserApproval wraps flow_action.GetUserApproval with DevActionContext
-func GetUserApproval(actionCtx DevActionContext, approvalType, approvalPrompt string, params map[string]any) (*flow_action.UserResponse, error) {
-	return flow_action.GetUserApproval(actionCtx.FlowActionContext(), approvalType, approvalPrompt, params)
+func GetUserApproval(dCtx DevContext, approvalType, approvalPrompt string, params map[string]any) (*flow_action.UserResponse, error) {
+	return flow_action.GetUserApproval(dCtx.ExecContext, approvalType, approvalPrompt, params)
 }
 
 // MergeApprovalParams contains parameters specific to merge approval requests
@@ -169,7 +169,7 @@ func GetUserMergeApproval(
 //
 // before replacing, we'll need a better solution for remembering user feedback too.
 func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceContext string, chatHistory *[]llm.ChatMessage, requestParams map[string]any) (FeedbackInfo, error) {
-	userResponse, err := GetUserGuidance(dCtx.NewActionContext("user_feedback"), guidanceContext, requestParams)
+	userResponse, err := GetUserGuidance(dCtx, guidanceContext, requestParams)
 	if err != nil {
 		return FeedbackInfo{}, fmt.Errorf("failed to get user response: %v", err)
 	}
