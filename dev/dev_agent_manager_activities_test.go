@@ -117,8 +117,8 @@ func TestCreatePendingUserRequest(t *testing.T) {
 
 	assert.Equal(t, "user_request", flowAction.ActionType)
 	assert.Equal(t, map[string]interface{}{
-		"kind":    string(request.RequestKind),
-		"message": request.Content,
+		"requestKind":    string(request.RequestKind),
+		"requestContent": request.Content,
 	}, flowAction.ActionParams)
 	assert.Equal(t, domain.ActionStatusPending, flowAction.ActionStatus)
 	assert.True(t, flowAction.IsHumanAction)
