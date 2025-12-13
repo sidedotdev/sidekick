@@ -15,6 +15,17 @@ import (
 	"golang.org/x/text/language"
 )
 
+// inputMode represents the current input state for pending actions
+type inputMode int
+
+const (
+	inputModeNone inputMode = iota
+	inputModeFreeForm
+	inputModeApproval
+	inputModeRejectionFeedback
+	inputModeContinue
+)
+
 var (
 	greenIndicator  = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("⏺")
 	redIndicator    = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("⏺")
@@ -33,6 +44,7 @@ type taskProgressModel struct {
 	client         client.Client
 	quitting       bool
 	err            error
+	inputMode      inputMode
 }
 
 func newProgressModel(taskID, flowID string, c client.Client) taskProgressModel {
@@ -74,30 +86,15 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if m.pendingAction != nil {
-			switch msg.Type {
-			case tea.KeyCtrlC:
-				m.quitting = true
-				return m, nil
-			case tea.KeyEsc:
-				m.textarea.Reset()
-				return m, nil
-			case tea.KeyEnter:
-				if msg.Alt {
-					// Shift+Enter or Alt+Enter: insert newline
-					var cmd tea.Cmd
-					m.textarea, cmd = m.textarea.Update(msg)
-					return m, cmd
-				}
-				// Enter: submit response
-				content := m.textarea.Value()
-				if content != "" {
-					return m, m.submitResponse(content)
-				}
-				return m, nil
-			default:
-				var cmd tea.Cmd
-				m.textarea, cmd = m.textarea.Update(msg)
-				return m, cmd
+			switch m.inputMode {
+			case inputModeApproval:
+				return m.handleApprovalInput(msg)
+			case inputModeRejectionFeedback:
+				return m.handleRejectionFeedbackInput(msg)
+			case inputModeContinue:
+				return m.handleContinueInput(msg)
+			case inputModeFreeForm:
+				return m.handleFreeFormInput(msg)
 			}
 		}
 		switch msg.String() {
@@ -108,6 +105,7 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case completeFlowActionMsg:
 		m.pendingAction = nil
+		m.inputMode = inputModeNone
 		m.textarea.Reset()
 		m.textarea.Blur()
 		return m, nil
@@ -127,13 +125,18 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Detect pending human action
 		if action.IsHumanAction && action.IsCallbackAction && action.ActionStatus == domain.ActionStatusPending {
 			m.pendingAction = &action
-			m.textarea.Focus()
-			return m, textarea.Blink
+			m.inputMode = getInputModeForAction(action)
+			if m.inputMode == inputModeFreeForm || m.inputMode == inputModeRejectionFeedback {
+				m.textarea.Focus()
+				return m, textarea.Blink
+			}
+			return m, nil
 		}
 
 		// Clear pending action if it's no longer pending
 		if m.pendingAction != nil && m.pendingAction.Id == action.Id && action.ActionStatus != domain.ActionStatusPending {
 			m.pendingAction = nil
+			m.inputMode = inputModeNone
 			m.textarea.Reset()
 			m.textarea.Blur()
 		}
@@ -173,6 +176,85 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m taskProgressModel) handleFreeFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		m.quitting = true
+		return m, nil
+	case tea.KeyEsc:
+		m.textarea.Reset()
+		return m, nil
+	case tea.KeyEnter:
+		if msg.Alt {
+			var cmd tea.Cmd
+			m.textarea, cmd = m.textarea.Update(msg)
+			return m, cmd
+		}
+		content := m.textarea.Value()
+		if content != "" {
+			return m, m.submitResponse(content)
+		}
+		return m, nil
+	default:
+		var cmd tea.Cmd
+		m.textarea, cmd = m.textarea.Update(msg)
+		return m, cmd
+	}
+}
+
+func (m taskProgressModel) handleApprovalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		m.quitting = true
+		return m, nil
+	}
+	switch msg.String() {
+	case "y", "Y":
+		return m, m.submitApproval(true, "")
+	case "n", "N":
+		m.inputMode = inputModeRejectionFeedback
+		m.textarea.Focus()
+		return m, textarea.Blink
+	}
+	return m, nil
+}
+
+func (m taskProgressModel) handleRejectionFeedbackInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		m.quitting = true
+		return m, nil
+	case tea.KeyEsc:
+		m.inputMode = inputModeApproval
+		m.textarea.Reset()
+		m.textarea.Blur()
+		return m, nil
+	case tea.KeyEnter:
+		if msg.Alt {
+			var cmd tea.Cmd
+			m.textarea, cmd = m.textarea.Update(msg)
+			return m, cmd
+		}
+		content := m.textarea.Value()
+		return m, m.submitApproval(false, content)
+	default:
+		var cmd tea.Cmd
+		m.textarea, cmd = m.textarea.Update(msg)
+		return m, cmd
+	}
+}
+
+func (m taskProgressModel) handleContinueInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		m.quitting = true
+		return m, nil
+	case tea.KeyEnter:
+		return m, m.submitContinue()
+	}
+	return m, nil
+}
+
 func (m taskProgressModel) submitResponse(content string) tea.Cmd {
 	return func() tea.Msg {
 		if m.client == nil || m.pendingAction == nil {
@@ -186,6 +268,97 @@ func (m taskProgressModel) submitResponse(content string) tea.Cmd {
 			return completeFlowActionErrorMsg{err: err}
 		}
 		return completeFlowActionMsg{actionID: m.pendingAction.Id}
+	}
+}
+
+func (m taskProgressModel) submitApproval(approved bool, feedback string) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil || m.pendingAction == nil {
+			return nil
+		}
+		response := client.UserResponse{
+			Content:  feedback,
+			Approved: &approved,
+		}
+		// For merge approval, include targetBranch in params
+		if requestKind, ok := m.pendingAction.ActionParams["requestKind"].(string); ok && requestKind == "merge_approval" {
+			if targetBranch, ok := m.pendingAction.ActionParams["targetBranch"].(string); ok {
+				response.Params = map[string]interface{}{
+					"targetBranch": targetBranch,
+				}
+			}
+		}
+		err := m.client.CompleteFlowAction(m.pendingAction.WorkspaceId, m.pendingAction.Id, response)
+		if err != nil {
+			return completeFlowActionErrorMsg{err: err}
+		}
+		return completeFlowActionMsg{actionID: m.pendingAction.Id}
+	}
+}
+
+func (m taskProgressModel) submitContinue() tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil || m.pendingAction == nil {
+			return nil
+		}
+		response := client.UserResponse{
+			Content: "",
+		}
+		err := m.client.CompleteFlowAction(m.pendingAction.WorkspaceId, m.pendingAction.Id, response)
+		if err != nil {
+			return completeFlowActionErrorMsg{err: err}
+		}
+		return completeFlowActionMsg{actionID: m.pendingAction.Id}
+	}
+}
+
+// Tag to label mappings for approval buttons
+var approveTagLabels = map[string]string{
+	"approve_plan": "Approve",
+}
+
+var rejectTagLabels = map[string]string{
+	"reject_plan": "Revise",
+}
+
+var continueTagLabels = map[string]string{
+	"done":      "Done",
+	"try_again": "Try Again",
+}
+
+func getApproveLabel(tag string) string {
+	if label, ok := approveTagLabels[tag]; ok {
+		return label
+	}
+	return "Approve"
+}
+
+func getRejectLabel(tag string) string {
+	if label, ok := rejectTagLabels[tag]; ok {
+		return label
+	}
+	return "Reject"
+}
+
+func getContinueLabel(tag string) string {
+	if label, ok := continueTagLabels[tag]; ok {
+		return label
+	}
+	return "Continue"
+}
+
+func getInputModeForAction(action domain.FlowAction) inputMode {
+	requestKind, ok := action.ActionParams["requestKind"].(string)
+	if !ok {
+		return inputModeFreeForm
+	}
+	switch requestKind {
+	case "approval", "merge_approval":
+		return inputModeApproval
+	case "continue":
+		return inputModeContinue
+	default:
+		return inputModeFreeForm
 	}
 }
 
@@ -276,10 +449,33 @@ func (m taskProgressModel) View() string {
 		if requestContent, ok := m.pendingAction.ActionParams["requestContent"].(string); ok && requestContent != "" {
 			b.WriteString(fmt.Sprintf("%s\n\n", requestContent))
 		}
-		b.WriteString(m.textarea.View())
-		b.WriteString("\n")
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Press Enter to submit, Shift+Enter for newline, Esc to clear"))
-		b.WriteString("\n")
+
+		switch m.inputMode {
+		case inputModeApproval:
+			approveTag, _ := m.pendingAction.ActionParams["approveTag"].(string)
+			rejectTag, _ := m.pendingAction.ActionParams["rejectTag"].(string)
+			approveLabel := getApproveLabel(approveTag)
+			rejectLabel := getRejectLabel(rejectTag)
+			b.WriteString(fmt.Sprintf("Press [y] to %s, [n] to %s\n", approveLabel, rejectLabel))
+
+		case inputModeRejectionFeedback:
+			b.WriteString("Please provide feedback:\n")
+			b.WriteString(m.textarea.View())
+			b.WriteString("\n")
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Press Enter to submit, Esc to go back"))
+			b.WriteString("\n")
+
+		case inputModeContinue:
+			continueTag, _ := m.pendingAction.ActionParams["continueTag"].(string)
+			continueLabel := getContinueLabel(continueTag)
+			b.WriteString(fmt.Sprintf("Press Enter to %s\n", continueLabel))
+
+		case inputModeFreeForm:
+			b.WriteString(m.textarea.View())
+			b.WriteString("\n")
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Press Enter to submit, Shift+Enter for newline, Esc to clear"))
+			b.WriteString("\n")
+		}
 	}
 
 	if m.quitting {

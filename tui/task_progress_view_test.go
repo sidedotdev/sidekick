@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -794,6 +795,9 @@ func TestPendingHumanActionInput(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newProgressModel("task-1", "flow-1", nil)
 			m.pendingAction = tt.pendingAction
+			if tt.pendingAction != nil {
+				m.inputMode = inputModeFreeForm
+			}
 
 			view := m.View()
 
@@ -918,5 +922,296 @@ func TestPendingActionCleared(t *testing.T) {
 
 	if m.pendingAction != nil {
 		t.Errorf("expected pendingAction to be cleared after completion, got %+v", m.pendingAction)
+	}
+}
+
+func TestGetInputModeForAction(t *testing.T) {
+	tests := []struct {
+		name     string
+		action   domain.FlowAction
+		expected inputMode
+	}{
+		{
+			name: "approval request kind",
+			action: domain.FlowAction{
+				ActionParams: map[string]interface{}{"requestKind": "approval"},
+			},
+			expected: inputModeApproval,
+		},
+		{
+			name: "merge_approval request kind",
+			action: domain.FlowAction{
+				ActionParams: map[string]interface{}{"requestKind": "merge_approval"},
+			},
+			expected: inputModeApproval,
+		},
+		{
+			name: "continue request kind",
+			action: domain.FlowAction{
+				ActionParams: map[string]interface{}{"requestKind": "continue"},
+			},
+			expected: inputModeContinue,
+		},
+		{
+			name: "free_form request kind",
+			action: domain.FlowAction{
+				ActionParams: map[string]interface{}{"requestKind": "free_form"},
+			},
+			expected: inputModeFreeForm,
+		},
+		{
+			name: "no request kind defaults to free form",
+			action: domain.FlowAction{
+				ActionParams: map[string]interface{}{},
+			},
+			expected: inputModeFreeForm,
+		},
+		{
+			name: "nil action params defaults to free form",
+			action: domain.FlowAction{
+				ActionParams: nil,
+			},
+			expected: inputModeFreeForm,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := getInputModeForAction(tt.action)
+			if result != tt.expected {
+				t.Errorf("getInputModeForAction() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestApprovalTagLabels(t *testing.T) {
+	tests := []struct {
+		name     string
+		tag      string
+		expected string
+	}{
+		{"approve_plan tag", "approve_plan", "Approve"},
+		{"unknown tag defaults to Approve", "unknown", "Approve"},
+		{"empty tag defaults to Approve", "", "Approve"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := getApproveLabel(tt.tag)
+			if result != tt.expected {
+				t.Errorf("getApproveLabel(%q) = %q, want %q", tt.tag, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestRejectTagLabels(t *testing.T) {
+	tests := []struct {
+		name     string
+		tag      string
+		expected string
+	}{
+		{"reject_plan tag", "reject_plan", "Revise"},
+		{"unknown tag defaults to Reject", "unknown", "Reject"},
+		{"empty tag defaults to Reject", "", "Reject"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := getRejectLabel(tt.tag)
+			if result != tt.expected {
+				t.Errorf("getRejectLabel(%q) = %q, want %q", tt.tag, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestContinueTagLabels(t *testing.T) {
+	tests := []struct {
+		name     string
+		tag      string
+		expected string
+	}{
+		{"done tag", "done", "Done"},
+		{"try_again tag", "try_again", "Try Again"},
+		{"unknown tag defaults to Continue", "unknown", "Continue"},
+		{"empty tag defaults to Continue", "", "Continue"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := getContinueLabel(tt.tag)
+			if result != tt.expected {
+				t.Errorf("getContinueLabel(%q) = %q, want %q", tt.tag, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestApprovalInputView(t *testing.T) {
+	tests := []struct {
+		name         string
+		actionParams map[string]interface{}
+		wantContains []string
+	}{
+		{
+			name: "approval with approve_plan and reject_plan tags",
+			actionParams: map[string]interface{}{
+				"requestKind":    "approval",
+				"requestContent": "Please approve the plan",
+				"approveTag":     "approve_plan",
+				"rejectTag":      "reject_plan",
+			},
+			wantContains: []string{"Please approve the plan", "[y] to Approve", "[n] to Revise"},
+		},
+		{
+			name: "approval with default tags",
+			actionParams: map[string]interface{}{
+				"requestKind":    "approval",
+				"requestContent": "Approve this?",
+			},
+			wantContains: []string{"Approve this?", "[y] to Approve", "[n] to Reject"},
+		},
+		{
+			name: "continue with done tag",
+			actionParams: map[string]interface{}{
+				"requestKind":    "continue",
+				"requestContent": "Conflicts resolved",
+				"continueTag":    "done",
+			},
+			wantContains: []string{"Conflicts resolved", "Press Enter to Done"},
+		},
+		{
+			name: "continue with try_again tag",
+			actionParams: map[string]interface{}{
+				"requestKind":    "continue",
+				"requestContent": "Operation failed",
+				"continueTag":    "try_again",
+			},
+			wantContains: []string{"Operation failed", "Press Enter to Try Again"},
+		},
+		{
+			name: "continue with default tag",
+			actionParams: map[string]interface{}{
+				"requestKind":    "continue",
+				"requestContent": "Ready to proceed",
+			},
+			wantContains: []string{"Ready to proceed", "Press Enter to Continue"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			action := domain.FlowAction{
+				Id:               "action-1",
+				ActionType:       "user_request",
+				ActionStatus:     domain.ActionStatusPending,
+				ActionParams:     tt.actionParams,
+				IsHumanAction:    true,
+				IsCallbackAction: true,
+			}
+
+			m := newProgressModel("task-1", "flow-1", nil)
+			m.pendingAction = &action
+			m.inputMode = getInputModeForAction(action)
+
+			view := m.View()
+			for _, want := range tt.wantContains {
+				if !strings.Contains(view, want) {
+					t.Errorf("View() missing %q\nGot:\n%s", want, view)
+				}
+			}
+		})
+	}
+}
+
+func TestApprovalInputModeTransition(t *testing.T) {
+	action := domain.FlowAction{
+		Id:           "action-1",
+		WorkspaceId:  "ws-1",
+		ActionType:   "user_request.approve.dev_plan",
+		ActionStatus: domain.ActionStatusPending,
+		ActionParams: map[string]interface{}{
+			"requestKind": "approval",
+			"approveTag":  "approve_plan",
+			"rejectTag":   "reject_plan",
+		},
+		IsHumanAction:    true,
+		IsCallbackAction: true,
+	}
+
+	m := newProgressModel("task-1", "flow-1", nil)
+
+	// Simulate receiving the pending action
+	msg := flowActionChangeMsg{action: action}
+	updated, _ := m.Update(msg)
+	m = updated.(taskProgressModel)
+
+	if m.inputMode != inputModeApproval {
+		t.Errorf("Expected inputModeApproval, got %v", m.inputMode)
+	}
+
+	// Press 'n' to reject - should transition to rejection feedback mode
+	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}
+	updated, _ = m.Update(keyMsg)
+	m = updated.(taskProgressModel)
+
+	if m.inputMode != inputModeRejectionFeedback {
+		t.Errorf("Expected inputModeRejectionFeedback after pressing 'n', got %v", m.inputMode)
+	}
+
+	// Press Esc to go back to approval mode
+	escMsg := tea.KeyMsg{Type: tea.KeyEsc}
+	updated, _ = m.Update(escMsg)
+	m = updated.(taskProgressModel)
+
+	if m.inputMode != inputModeApproval {
+		t.Errorf("Expected inputModeApproval after pressing Esc, got %v", m.inputMode)
+	}
+}
+
+func TestMergeApprovalIncludesTargetBranch(t *testing.T) {
+	var capturedResponse client.UserResponse
+	mockClient := &mockClientForProgress{}
+	mockClient.On("CompleteFlowAction", "ws-1", "action-1", mock.AnythingOfType("client.UserResponse")).
+		Run(func(args mock.Arguments) {
+			capturedResponse = args.Get(2).(client.UserResponse)
+		}).
+		Return(nil)
+
+	action := domain.FlowAction{
+		Id:           "action-1",
+		WorkspaceId:  "ws-1",
+		ActionType:   "user_request.approve.merge",
+		ActionStatus: domain.ActionStatusPending,
+		ActionParams: map[string]interface{}{
+			"requestKind":  "merge_approval",
+			"targetBranch": "main",
+		},
+		IsHumanAction:    true,
+		IsCallbackAction: true,
+	}
+
+	m := newProgressModel("task-1", "flow-1", mockClient)
+	m.pendingAction = &action
+	m.inputMode = inputModeApproval
+
+	// Call submitApproval directly to test the response construction
+	cmd := m.submitApproval(true, "")
+	if cmd != nil {
+		cmd() // Execute the command to trigger the mock
+	}
+
+	mockClient.AssertCalled(t, "CompleteFlowAction", "ws-1", "action-1", mock.AnythingOfType("client.UserResponse"))
+
+	if capturedResponse.Params == nil {
+		t.Fatal("Expected Params to be set for merge_approval")
+	}
+	if capturedResponse.Params["targetBranch"] != "main" {
+		t.Errorf("Expected targetBranch 'main', got %v", capturedResponse.Params["targetBranch"])
+	}
+	if capturedResponse.Approved == nil || *capturedResponse.Approved != true {
+		t.Errorf("Expected Approved to be true")
 	}
 }
