@@ -22,6 +22,117 @@ var recordDevRequirementsTool = llm.Tool{
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&DevRequirements{}),
 }
 
+type CriteriaUpdate struct {
+	Index     int     `json:"index" jsonschema:"description=0-based index of the acceptance criterion to update. For insert\\, this is where the new criterion will be inserted."`
+	Operation string  `json:"operation" jsonschema:"enum=edit,enum=delete,enum=insert,description=The operation to perform: edit updates existing criterion\\, delete removes it\\, insert adds a new criterion at the position."`
+	Content   *string `json:"content,omitempty" jsonschema:"description=The criterion content (for edit/insert)"`
+}
+
+type RequirementsLearningUpdate struct {
+	Index     int     `json:"index" jsonschema:"description=0-based index of the learning to update. For insert\\, this is where the new learning will be inserted."`
+	Operation string  `json:"operation" jsonschema:"enum=edit,enum=delete,enum=insert,description=The operation to perform: edit updates existing learning\\, delete removes it\\, insert adds a new learning at the position."`
+	Content   *string `json:"content,omitempty" jsonschema:"description=The learning content (for edit/insert)"`
+}
+
+type DevRequirementsUpdate struct {
+	CriteriaUpdates       []CriteriaUpdate             `json:"criteria_updates,omitempty" jsonschema:"description=Updates to apply to acceptance criteria"`
+	LearningUpdates       []RequirementsLearningUpdate `json:"learning_updates,omitempty" jsonschema:"description=Updates to apply to learnings"`
+	Overview              *string                      `json:"overview,omitempty" jsonschema:"description=Update the overview"`
+	RequirementsFinalized *bool                        `json:"requirements_finalized,omitempty" jsonschema:"description=Update the requirements finalized flag"`
+}
+
+var updateDevRequirementsTool = llm.Tool{
+	Name:        "update_dev_requirements",
+	Description: "Updates existing dev requirements incrementally without re-outputting the entire structure. Use this to edit, delete, or insert acceptance criteria and learnings.",
+	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&DevRequirementsUpdate{}),
+}
+
+func applyDevRequirementsUpdates(reqs DevRequirements, update DevRequirementsUpdate) (DevRequirements, error) {
+	// Apply criteria updates
+	for _, criteriaUpdate := range update.CriteriaUpdates {
+		switch criteriaUpdate.Operation {
+		case "edit":
+			if criteriaUpdate.Index < 0 || criteriaUpdate.Index >= len(reqs.AcceptanceCriteria) {
+				return reqs, fmt.Errorf("criteria index %d out of range for edit operation", criteriaUpdate.Index)
+			}
+			if criteriaUpdate.Content != nil {
+				reqs.AcceptanceCriteria[criteriaUpdate.Index] = *criteriaUpdate.Content
+			}
+
+		case "delete":
+			if criteriaUpdate.Index < 0 || criteriaUpdate.Index >= len(reqs.AcceptanceCriteria) {
+				return reqs, fmt.Errorf("criteria index %d out of range for delete operation", criteriaUpdate.Index)
+			}
+			reqs.AcceptanceCriteria = append(reqs.AcceptanceCriteria[:criteriaUpdate.Index], reqs.AcceptanceCriteria[criteriaUpdate.Index+1:]...)
+
+		case "insert":
+			if criteriaUpdate.Index < 0 || criteriaUpdate.Index > len(reqs.AcceptanceCriteria) {
+				return reqs, fmt.Errorf("criteria index %d out of range for insert operation", criteriaUpdate.Index)
+			}
+			content := ""
+			if criteriaUpdate.Content != nil {
+				content = *criteriaUpdate.Content
+			}
+			if criteriaUpdate.Index == len(reqs.AcceptanceCriteria) {
+				reqs.AcceptanceCriteria = append(reqs.AcceptanceCriteria, content)
+			} else {
+				reqs.AcceptanceCriteria = append(reqs.AcceptanceCriteria[:criteriaUpdate.Index], append([]string{content}, reqs.AcceptanceCriteria[criteriaUpdate.Index:]...)...)
+			}
+
+		default:
+			return reqs, fmt.Errorf("invalid operation %q for criteria update", criteriaUpdate.Operation)
+		}
+	}
+
+	// Apply learning updates
+	for _, learningUpdate := range update.LearningUpdates {
+		switch learningUpdate.Operation {
+		case "edit":
+			if learningUpdate.Index < 0 || learningUpdate.Index >= len(reqs.Learnings) {
+				return reqs, fmt.Errorf("learning index %d out of range for edit operation", learningUpdate.Index)
+			}
+			if learningUpdate.Content != nil {
+				reqs.Learnings[learningUpdate.Index] = *learningUpdate.Content
+			}
+
+		case "delete":
+			if learningUpdate.Index < 0 || learningUpdate.Index >= len(reqs.Learnings) {
+				return reqs, fmt.Errorf("learning index %d out of range for delete operation", learningUpdate.Index)
+			}
+			reqs.Learnings = append(reqs.Learnings[:learningUpdate.Index], reqs.Learnings[learningUpdate.Index+1:]...)
+
+		case "insert":
+			if learningUpdate.Index < 0 || learningUpdate.Index > len(reqs.Learnings) {
+				return reqs, fmt.Errorf("learning index %d out of range for insert operation", learningUpdate.Index)
+			}
+			content := ""
+			if learningUpdate.Content != nil {
+				content = *learningUpdate.Content
+			}
+			if learningUpdate.Index == len(reqs.Learnings) {
+				reqs.Learnings = append(reqs.Learnings, content)
+			} else {
+				reqs.Learnings = append(reqs.Learnings[:learningUpdate.Index], append([]string{content}, reqs.Learnings[learningUpdate.Index:]...)...)
+			}
+
+		default:
+			return reqs, fmt.Errorf("invalid operation %q for learning update", learningUpdate.Operation)
+		}
+	}
+
+	// Apply overview update
+	if update.Overview != nil {
+		reqs.Overview = *update.Overview
+	}
+
+	// Apply finalized flag update
+	if update.RequirementsFinalized != nil {
+		reqs.Complete = *update.RequirementsFinalized
+	}
+
+	return reqs, nil
+}
+
 /* Represents low-level requirements for a software engineer to implement a feature or fix a bug etc */
 type DevRequirements struct {
 	Overview string `json:"overview" jsonschema:"description=Overview of the requirements"`
@@ -87,6 +198,7 @@ func (r DevRequirements) String() string {
 
 type buildDevRequirementsState struct {
 	contextSizeExtension int
+	devRequirements      DevRequirements
 }
 
 func BuildDevRequirements(dCtx DevContext, initialInfo InitialDevRequirementsInfo) (*DevRequirements, error) {
@@ -148,14 +260,16 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
 	ManageChatHistory(iteration.ExecCtx.Context, iteration.ChatHistory, maxLength)
 
+	hasExistingRequirements := len(state.devRequirements.AcceptanceCriteria) > 0 || state.devRequirements.Overview != ""
+
 	var chatResponse *llm.ChatMessageResponse
 	var err error
 	if v := workflow.GetVersion(iteration.ExecCtx, "dev-requirements-cleanup-cancel-internally", workflow.DefaultVersion, 1); v == 1 {
-		chatResponse, err = generateDevRequirements(iteration.ExecCtx, iteration.ChatHistory)
+		chatResponse, err = generateDevRequirements(iteration.ExecCtx, iteration.ChatHistory, hasExistingRequirements)
 	} else {
 		// old version: new one does this in outer LlmLoop
 		chatCtx := iteration.ExecCtx.WithCancelOnPause()
-		chatResponse, err = generateDevRequirements(chatCtx, iteration.ChatHistory)
+		chatResponse, err = generateDevRequirements(chatCtx, iteration.ChatHistory, hasExistingRequirements)
 		if iteration.ExecCtx.GlobalState != nil && iteration.ExecCtx.GlobalState.Paused {
 			return nil, nil // continue the loop: UserRequestIfPaused will handle the pause
 		}
@@ -171,7 +285,11 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 		customHandlers := map[string]func(DevContext, llm.ToolCall) (ToolCallResponseInfo, error){
 			recordDevRequirementsTool.Name: func(dCtx DevContext, tc llm.ToolCall) (ToolCallResponseInfo, error) {
 				devReq, unmarshalErr := unmarshalDevRequirements(tc.Arguments)
-				if unmarshalErr == nil && devReq.Complete {
+				if unmarshalErr != nil {
+					return ToolCallResponseInfo{Response: unmarshalErr.Error(), FunctionName: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
+				}
+				state.devRequirements = devReq
+				if devReq.Complete {
 					userResponse, approveErr := ApproveDevRequirements(dCtx, devReq)
 					if approveErr != nil {
 						return ToolCallResponseInfo{}, fmt.Errorf("error approving dev requirements: %v", approveErr)
@@ -184,11 +302,39 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 						feedback := "Requirements were not approved and therefore not recorded. Please try again, taking this feedback into account:\n\n" + userResponse.Content
 						return ToolCallResponseInfo{Response: feedback, FunctionName: tc.Name, ToolCallId: tc.Id}, nil
 					}
-				} else if unmarshalErr != nil {
-					return ToolCallResponseInfo{Response: unmarshalErr.Error(), FunctionName: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
 				} else {
-					return ToolCallResponseInfo{Response: "Recorded partial requirements, but requirements are not finalized yet based on the \"requirements_finalized\" boolean field value being set to false. Do some more research or thinking or get help/input to finalize the requirements, as needed. Then record the finalized requirements again in full.", FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+					return ToolCallResponseInfo{Response: "Recorded partial requirements, but requirements are not finalized yet based on the \"requirements_finalized\" boolean field value being set to false. Do some more research or thinking or get help/input to finalize the requirements, as needed. Then record the finalized requirements again in full, or use update_dev_requirements to make incremental changes.", FunctionName: tc.Name, ToolCallId: tc.Id}, nil
 				}
+			},
+			updateDevRequirementsTool.Name: func(dCtx DevContext, tc llm.ToolCall) (ToolCallResponseInfo, error) {
+				var update DevRequirementsUpdate
+				if err := json.Unmarshal([]byte(llm.RepairJson(tc.Arguments)), &update); err != nil {
+					return ToolCallResponseInfo{Response: fmt.Sprintf("failed to unmarshal update: %v", err), FunctionName: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
+				}
+
+				updatedReqs, err := applyDevRequirementsUpdates(state.devRequirements, update)
+				if err != nil {
+					return ToolCallResponseInfo{Response: fmt.Sprintf("failed to apply updates: %v", err), FunctionName: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
+				}
+
+				state.devRequirements = updatedReqs
+
+				if updatedReqs.Complete {
+					userResponse, approveErr := ApproveDevRequirements(dCtx, updatedReqs)
+					if approveErr != nil {
+						return ToolCallResponseInfo{}, fmt.Errorf("error approving dev requirements: %v", approveErr)
+					}
+					iteration.NumSinceLastFeedback = 0
+					if userResponse.Approved != nil && *userResponse.Approved {
+						recordedReqs = &updatedReqs
+						return ToolCallResponseInfo{Response: "Requirements updated and approved.", FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+					} else {
+						feedback := "Requirements were not approved. Please try again, taking this feedback into account:\n\n" + userResponse.Content
+						return ToolCallResponseInfo{Response: feedback, FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+					}
+				}
+
+				return ToolCallResponseInfo{Response: fmt.Sprintf("Requirements updated successfully. Current state:\n%s", updatedReqs.String()), FunctionName: tc.Name, ToolCallId: tc.Id}, nil
 			},
 		}
 
@@ -227,12 +373,15 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	return nil, nil // continue the loop
 }
 
-func generateDevRequirements(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*llm.ChatMessageResponse, error) {
+func generateDevRequirements(dCtx DevContext, chatHistory *[]llm.ChatMessage, hasExistingRequirements bool) (*llm.ChatMessageResponse, error) {
 	tools := []*llm.Tool{
 		&recordDevRequirementsTool,
 		currentGetSymbolDefinitionsTool(),
 		&bulkSearchRepositoryTool,
 		&bulkReadFileTool,
+	}
+	if hasExistingRequirements {
+		tools = append(tools, &updateDevRequirementsTool)
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		tools = append(tools, &getHelpOrInputTool)
