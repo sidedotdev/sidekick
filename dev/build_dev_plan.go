@@ -253,7 +253,7 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 		codeContext = repoSummary + "\n\n" + codeContext
 	}
 
-	chatHistory := &[]llm.ChatMessage{}
+	chatHistory := &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
 	addDevPlanPrompt(dCtx, chatHistory, InitialPlanningInfo{
 		CodeContext:    codeContext,
 		Requirements:   requirements,
@@ -329,7 +329,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 		return nil, fmt.Errorf("error generating dev plan: %w", err)
 	}
 
-	*iteration.ChatHistory = append(*iteration.ChatHistory, chatResponse.ChatMessage)
+	iteration.ChatHistory.Append(chatResponse.ChatMessage)
 
 	if len(chatResponse.ToolCalls) > 0 {
 		var recordedPlan *DevPlan
@@ -494,7 +494,7 @@ func unmarshalPlan(jsonStr string) (DevPlan, error) {
 	return plan, nil
 }
 
-func generateDevPlan(dCtx DevContext, chatHistory *[]llm.ChatMessage, hasExistingPlan bool) (*llm.ChatMessageResponse, error) {
+func generateDevPlan(dCtx DevContext, chatHistory *common.ChatHistoryContainer, hasExistingPlan bool) (*llm.ChatMessageResponse, error) {
 	tools := []*llm.Tool{
 		&recordDevPlanTool,
 		currentGetSymbolDefinitionsTool(),
@@ -510,10 +510,16 @@ func generateDevPlan(dCtx DevContext, chatHistory *[]llm.ChatMessage, hasExistin
 
 	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 
+	// Convert Messages() to []llm.ChatMessage for LLM API
+	messages := make([]llm.ChatMessage, 0, chatHistory.Len())
+	for _, msg := range chatHistory.Messages() {
+		messages = append(messages, msg.(llm.ChatMessage))
+	}
+
 	chatOptions := llm.ToolChatOptions{
 		Secrets: *dCtx.Secrets,
 		Params: llm.ToolChatParams{
-			Messages: *chatHistory,
+			Messages: messages,
 			Tools:    tools,
 			ToolChoice: llm.ToolChoice{
 				Type: llm.ToolChoiceTypeAuto,
@@ -574,7 +580,7 @@ step, describe the AAA in detail, and ensure you include the predicted failure o
 the test prior to fixing the bug as part of the completion_analysis.
 `
 
-func addDevPlanPrompt(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) {
+func addDevPlanPrompt(dCtx DevContext, chatHistory *common.ChatHistoryContainer, promptInfo PromptInfo) {
 	var content string
 	role := llm.ChatMessageRoleUser
 	cacheControl := ""
@@ -592,7 +598,7 @@ func addDevPlanPrompt(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInf
 	default:
 		panic("Unsupported prompt type for dev plan: " + promptInfo.GetType())
 	}
-	*chatHistory = append(*chatHistory, llm.ChatMessage{
+	chatHistory.Append(llm.ChatMessage{
 		Role:         role,
 		Content:      content,
 		CacheControl: cacheControl,

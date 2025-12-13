@@ -233,7 +233,7 @@ func buildDevRequirementsSubflow(dCtx DevContext, initialInfo InitialDevRequirem
 	}
 
 	// Step 2: run the dev requirements loop
-	chatHistory := &[]llm.ChatMessage{}
+	chatHistory := &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
 	addDevRequirementsPrompt(chatHistory, initialInfo)
 	initialState := &buildDevRequirementsState{
 		contextSizeExtension: contextSizeExtension,
@@ -280,7 +280,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	if err != nil {
 		return nil, err
 	}
-	*iteration.ChatHistory = append(*iteration.ChatHistory, chatResponse.ChatMessage)
+	iteration.ChatHistory.Append(chatResponse.ChatMessage)
 
 	if len(chatResponse.ToolCalls) > 0 {
 		var recordedReqs *DevRequirements
@@ -376,7 +376,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	return nil, nil // continue the loop
 }
 
-func generateDevRequirements(dCtx DevContext, chatHistory *[]llm.ChatMessage, hasExistingRequirements bool) (*llm.ChatMessageResponse, error) {
+func generateDevRequirements(dCtx DevContext, chatHistory *common.ChatHistoryContainer, hasExistingRequirements bool) (*llm.ChatMessageResponse, error) {
 	tools := []*llm.Tool{
 		&recordDevRequirementsTool,
 		currentGetSymbolDefinitionsTool(),
@@ -400,10 +400,16 @@ func generateDevRequirements(dCtx DevContext, chatHistory *[]llm.ChatMessage, ha
 
 	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 
+	// Convert Messages() to []llm.ChatMessage for LLM API
+	messages := make([]llm.ChatMessage, 0, chatHistory.Len())
+	for _, msg := range chatHistory.Messages() {
+		messages = append(messages, msg.(llm.ChatMessage))
+	}
+
 	options := llm.ToolChatOptions{
 		Secrets: *dCtx.Secrets,
 		Params: llm.ToolChatParams{
-			Messages: *chatHistory,
+			Messages: messages,
 			Tools:    tools,
 			ToolChoice: llm.ToolChoice{
 				Type: llm.ToolChoiceTypeAuto, // TODO test with llm.ToolChoiceTypeRequired
@@ -449,7 +455,7 @@ func unmarshalDevRequirements(jsonStr string) (DevRequirements, error) {
 	return devRequirements, nil
 }
 
-func addDevRequirementsPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) {
+func addDevRequirementsPrompt(chatHistory *common.ChatHistoryContainer, promptInfo PromptInfo) {
 	var content string
 	role := llm.ChatMessageRoleUser
 	cacheControl := ""
@@ -467,7 +473,7 @@ func addDevRequirementsPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptI
 	default:
 		panic("Unsupported prompt type for dev requirements: " + promptInfo.GetType())
 	}
-	*chatHistory = append(*chatHistory, llm.ChatMessage{
+	chatHistory.Append(llm.ChatMessage{
 		Role:         role,
 		Content:      content,
 		CacheControl: cacheControl,
@@ -475,8 +481,8 @@ func addDevRequirementsPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptI
 	})
 }
 
-func addToolCallResponse(chatHistory *[]llm.ChatMessage, info ToolCallResponseInfo) {
-	*chatHistory = append(*chatHistory, llm.ChatMessage{
+func addToolCallResponse(chatHistory *common.ChatHistoryContainer, info ToolCallResponseInfo) {
+	chatHistory.Append(llm.ChatMessage{
 		Role:       llm.ChatMessageRoleTool,
 		Content:    info.Response,
 		Name:       info.FunctionName,
