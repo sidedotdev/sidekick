@@ -246,8 +246,8 @@ func RunTaskUI(ctx context.Context, c client.Client, req *client.CreateTaskReque
 		statusChan, progressChan := monitor.Start(ctx)
 		for {
 			select {
-			case taskProgress := <-progressChan:
-				p.Send(flowActionChangeMsg{actionType: taskProgress.ActionType, actionStatus: taskProgress.ActionStatus})
+			case action := <-progressChan:
+				p.Send(flowActionChangeMsg{action: action})
 			case taskStatus := <-statusChan:
 				if !started && len(taskStatus.Task.Flows) > 0 {
 					started = true

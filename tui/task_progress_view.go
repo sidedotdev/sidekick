@@ -45,7 +45,7 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case flowActionChangeMsg:
-		progressLine := fmt.Sprintf("Action '%s' - Status '%s'", msg.actionType, msg.actionStatus)
+		progressLine := fmt.Sprintf("Action '%s' - Status '%s'", msg.action.ActionType, msg.action.ActionStatus)
 		m.messages = append(m.messages, progressLine)
 		return m, nil
 
