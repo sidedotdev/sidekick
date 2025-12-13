@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import WorkspaceView from '@/views/WorkspaceView.vue'
 import FlowView from '@/views/FlowView.vue'
+import WorkflowResetView from '@/views/WorkflowResetView.vue'
 import KanbanView from '@/views/KanbanView.vue'
 import ChatView from '@/views/ChatView.vue'
 import ArchivedTasksView from '@/views/ArchivedTasksView.vue'
@@ -26,6 +27,11 @@ const router = createRouter({
       path: '/flows/:id',
       name: 'flow',
       component: FlowView,
+    },
+    {
+      path: '/flows/:id/reset',
+      name: 'flow-reset',
+      component: WorkflowResetView,
     },
     {
       path: '/workspaces/new',
