@@ -407,12 +407,91 @@ func TestSaveConfig_CreatesFileWithCorrectContent(t *testing.T) {
 	assert.Contains(t, string(data), "command = \"test-command\"")
 }
 
-func TestEnsureTestCommands(t *testing.T) {
-	// Note: This test cannot easily test the interactive huh.NewConfirm prompt.
-	// The ensureTestCommands function now uses huh.NewConfirm which requires
-	// a terminal. Integration testing of this function should be done manually
-	// or with a testing framework that supports terminal interaction.
-	t.Skip("Skipping: ensureTestCommands now uses interactive huh.NewConfirm prompt")
+func TestEnsureTestCommands_UserEntersCommand(t *testing.T) {
+	tmpDir, cleanup := setupTempDir(t)
+	defer cleanup()
+
+	configPath := filepath.Join(tmpDir, "side.toml")
+
+	// Mock stdin: enter test command
+	oldStdin := os.Stdin
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	go func() {
+		w.WriteString("pytest\n")
+		w.Close()
+	}()
+	defer func() {
+		os.Stdin = oldStdin
+	}()
+
+	config := &common.RepoConfig{}
+	err := ensureTestCommands(config, configPath)
+	assert.NoError(t, err)
+	assert.Len(t, config.TestCommands, 1)
+	assert.Equal(t, "pytest", config.TestCommands[0].Command)
+
+	data, err := os.ReadFile(configPath)
+	assert.NoError(t, err)
+	assert.Contains(t, string(data), "command = \"pytest\"")
+}
+
+func TestEnsureTestCommands_UserSkips(t *testing.T) {
+	tmpDir, cleanup := setupTempDir(t)
+	defer cleanup()
+
+	configPath := filepath.Join(tmpDir, "side.toml")
+
+	// Mock stdin: type "skip"
+	oldStdin := os.Stdin
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	go func() {
+		w.WriteString("skip\n")
+		w.Close()
+	}()
+	defer func() {
+		os.Stdin = oldStdin
+	}()
+
+	config := &common.RepoConfig{}
+	err := ensureTestCommands(config, configPath)
+	assert.NoError(t, err)
+	assert.Empty(t, config.TestCommands)
+
+	data, err := os.ReadFile(configPath)
+	assert.NoError(t, err)
+	assert.Contains(t, string(data), "# Uncomment and configure test commands for best results:")
+	assert.Contains(t, string(data), "# [[test_commands]]")
+	assert.Contains(t, string(data), "# command = \"pytest\"")
+}
+
+func TestEnsureTestCommands_UserSkipsCaseInsensitive(t *testing.T) {
+	tmpDir, cleanup := setupTempDir(t)
+	defer cleanup()
+
+	configPath := filepath.Join(tmpDir, "side.toml")
+
+	// Mock stdin: type "SKIP" (uppercase)
+	oldStdin := os.Stdin
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	go func() {
+		w.WriteString("SKIP\n")
+		w.Close()
+	}()
+	defer func() {
+		os.Stdin = oldStdin
+	}()
+
+	config := &common.RepoConfig{}
+	err := ensureTestCommands(config, configPath)
+	assert.NoError(t, err)
+	assert.Empty(t, config.TestCommands)
+
+	data, err := os.ReadFile(configPath)
+	assert.NoError(t, err)
+	assert.Contains(t, string(data), "# Uncomment and configure test commands for best results:")
 }
 
 func TestEnsureWorkspaceConfig(t *testing.T) {

@@ -26,7 +26,7 @@ type TestResult struct {
 func RunTests(dCtx DevContext, commandsToRun []common.CommandConfig) (TestResult, error) {
 	if len(commandsToRun) == 0 {
 		log.Warn().Msg("No test commands configured, skipping tests")
-		return TestResult{TestsPassed: true, TestsSkipped: true}, nil
+		return TestResult{TestsSkipped: true}, nil
 	}
 	for _, testCommand := range commandsToRun {
 		if testCommand.Command == "" {

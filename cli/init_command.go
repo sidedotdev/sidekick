@@ -409,20 +409,19 @@ func saveConfig(filePath string, config common.RepoConfig) error {
 }
 
 func ensureTestCommands(config *common.RepoConfig, filePath string) error {
-	configureTests := true
-	err := huh.NewConfirm().
-		Title("Would you like to configure a test command?").
-		Description("Test commands help Sidekick verify code changes automatically.").
-		Value(&configureTests).
-		Affirmative("Yes").
-		Negative("No").
-		Run()
+	fmt.Println("\nPlease enter the command you use to run your tests (or type 'skip' to skip)")
+	fmt.Println("Examples: pytest, jest, go test ./...")
+	fmt.Print("Test command: ")
 
-	if err != nil {
-		return fmt.Errorf("error prompting for test command configuration: %w", err)
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	testCommand := strings.TrimSpace(scanner.Text())
+
+	if testCommand == "" {
+		return fmt.Errorf("no command entered, exiting early")
 	}
 
-	if !configureTests {
+	if strings.EqualFold(testCommand, "skip") {
 		// Write a commented placeholder example to the config file
 		if err := saveConfig(filePath, *config); err != nil {
 			return err
@@ -438,21 +437,6 @@ func ensureTestCommands(config *common.RepoConfig, filePath string) error {
 			return fmt.Errorf("error writing comment to config file: %w", err)
 		}
 		return nil
-	}
-
-	fmt.Println("\nPlease enter the command you use to run your tests")
-	fmt.Println("Examples:")
-	fmt.Println("- If you are using JavaScript, you might use: jest")
-	fmt.Println("- If you are using Python, you might use: pytest")
-	fmt.Println("- If you are using another tool, please specify its command")
-	fmt.Print("Enter your test command: ")
-
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Scan()
-	testCommand := scanner.Text()
-
-	if testCommand == "" {
-		return fmt.Errorf("No command entered, exiting early")
 	}
 
 	config.TestCommands = []common.CommandConfig{

@@ -98,7 +98,7 @@ func (s *RunTestsTestSuite) TestRunTestsWithNoTestCommands() {
 
 	var result TestResult
 	s.NoError(s.env.GetWorkflowResult(&result))
-	s.True(result.TestsPassed)
+	s.False(result.TestsPassed)
 	s.True(result.TestsSkipped)
 	s.Empty(result.Output)
 }
