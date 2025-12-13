@@ -41,13 +41,20 @@
             <td>{{ event.eventType }}</td>
             <td>{{ event.name || '-' }}</td>
             <td>{{ formatTimestamp(event.timestamp) }}</td>
-            <td>
+            <td class="reset-buttons">
               <button
-                @click="resetToEvent(event.eventId)"
-                :disabled="isResetting"
+                @click="resetToEvent(event.resetBeforeEventId!)"
+                :disabled="isResetting || event.resetBeforeEventId === null"
                 class="reset-button"
               >
-                Reset Here
+                Reset Before
+              </button>
+              <button
+                @click="resetToEvent(event.resetAfterEventId!)"
+                :disabled="isResetting || event.resetAfterEventId === null"
+                class="reset-button"
+              >
+                Reset After
               </button>
             </td>
           </tr>
@@ -71,6 +78,8 @@ interface HistoryEvent {
   eventType: string
   name: string
   timestamp: number
+  resetBeforeEventId: number | null
+  resetAfterEventId: number | null
 }
 
 const devMode = import.meta.env.MODE === 'development'
@@ -232,6 +241,11 @@ onMounted(() => {
 
 .events-table tr:hover {
   background: var(--color-background-soft);
+}
+
+.reset-buttons {
+  display: flex;
+  gap: 0.5rem;
 }
 
 .reset-button {

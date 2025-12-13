@@ -669,10 +669,12 @@ func (ctrl *Controller) GetFlowHandler(c *gin.Context) {
 
 // HistoryEvent represents a workflow history event for the API response
 type HistoryEvent struct {
-	EventId   int64  `json:"eventId"`
-	EventType string `json:"eventType"`
-	Timestamp int64  `json:"timestamp"`
-	Name      string `json:"name,omitempty"`
+	EventId            int64  `json:"eventId"`
+	EventType          string `json:"eventType"`
+	Timestamp          int64  `json:"timestamp"`
+	Name               string `json:"name,omitempty"`
+	ResetBeforeEventId *int64 `json:"resetBeforeEventId"`
+	ResetAfterEventId  *int64 `json:"resetAfterEventId"`
 }
 
 func (ctrl *Controller) GetFlowHistoryHandler(c *gin.Context) {
@@ -687,6 +689,8 @@ func (ctrl *Controller) GetFlowHistoryHandler(c *gin.Context) {
 	iter := ctrl.temporalClient.GetWorkflowHistory(c, flowId, "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
 
 	var events []HistoryEvent
+	var workflowTaskCompletedEventIds []int64
+
 	for iter.HasNext() {
 		event, err := iter.Next()
 		if err != nil {
@@ -707,8 +711,36 @@ func (ctrl *Controller) GetFlowHistoryHandler(c *gin.Context) {
 			histEvent.Name = attrs.SignalName
 		}
 
+		if event.EventType == enums.EVENT_TYPE_WORKFLOW_TASK_COMPLETED {
+			workflowTaskCompletedEventIds = append(workflowTaskCompletedEventIds, event.EventId)
+		}
+
 		events = append(events, histEvent)
 	}
+
+	// Populate reset event IDs for each event
+	for i := range events {
+		eventId := events[i].EventId
+
+		// Find the closest WorkflowTaskCompleted before this event
+		for j := len(workflowTaskCompletedEventIds) - 1; j >= 0; j-- {
+			if workflowTaskCompletedEventIds[j] < eventId {
+				events[i].ResetBeforeEventId = &workflowTaskCompletedEventIds[j]
+				break
+			}
+		}
+
+		// Find the closest WorkflowTaskCompleted after this event
+		for j := 0; j < len(workflowTaskCompletedEventIds); j++ {
+			if workflowTaskCompletedEventIds[j] > eventId {
+				events[i].ResetAfterEventId = &workflowTaskCompletedEventIds[j]
+				break
+			}
+		}
+	}
+
+	// Reverse to return in reverse chronological order
+	slices.Reverse(events)
 
 	c.JSON(http.StatusOK, gin.H{"events": events})
 }
