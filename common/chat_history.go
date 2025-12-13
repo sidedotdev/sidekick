@@ -1,6 +1,9 @@
 package common
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // KeyValueStorage provides key-value storage operations.
 // This interface is duplicated from srv.KeyValueStorage to avoid import cycles.
@@ -63,4 +66,34 @@ func (h *LegacyChatHistory) Hydrate(ctx context.Context, storage KeyValueStorage
 
 func (h *LegacyChatHistory) Persist(ctx context.Context, storage KeyValueStorage) error {
 	return nil
+}
+
+func (h *LegacyChatHistory) MarshalJSON() ([]byte, error) {
+	if h.messages == nil {
+		return json.Marshal([]ChatMessage{})
+	}
+	return json.Marshal(h.messages)
+}
+
+// ChatHistoryContainer wraps a ChatHistory for JSON serialization.
+// It handles detection of the underlying format during unmarshaling.
+type ChatHistoryContainer struct {
+	History ChatHistory
+}
+
+func (c *ChatHistoryContainer) UnmarshalJSON(data []byte) error {
+	// Try to unmarshal as []ChatMessage (legacy format)
+	var msgs []ChatMessage
+	if err := json.Unmarshal(data, &msgs); err != nil {
+		return err
+	}
+	c.History = NewLegacyChatHistoryFromChatMessages(msgs)
+	return nil
+}
+
+func (c *ChatHistoryContainer) MarshalJSON() ([]byte, error) {
+	if c.History == nil {
+		return json.Marshal([]ChatMessage{})
+	}
+	return json.Marshal(c.History)
 }
