@@ -78,22 +78,19 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	var llmProviders []string
 	var embeddingProviders []string
 
-	// If we have valid local config, skip provider secrets setup: we assume
-	// valid secrets are stored in the local config
-	// TODO validate the key exists in local config providers and actually work
-	if len(localConfig.Providers) > 0 {
-		fmt.Printf("✔ Found existing provider configuration in %s\n", common.GetSidekickConfigPath())
-	} else {
-		// No config exists - proceed with normal setup
-		embeddingProviders, err = ensureEmbeddingSecrets()
-		if err != nil {
-			return fmt.Errorf("error checking or prompting for embedding secrets: %w", err)
-		}
+	// Handle embedding provider setup
+	embeddingProviders, err = ensureEmbeddingSecrets()
+	if err != nil {
+		return fmt.Errorf("error checking or prompting for embedding secrets: %w", err)
+	}
 
-		llmProviders, err = ensureAISecrets()
-		if err != nil {
-			return fmt.Errorf("error checking or prompting for AI secrets: %w", err)
-		}
+	// Handle LLM provider setup
+	llmProvider, err := selectLLMProvider(localConfig)
+	if err != nil {
+		return fmt.Errorf("error selecting LLM provider: %w", err)
+	}
+	if llmProvider != "" {
+		llmProviders = []string{llmProvider}
 	}
 
 	config, configCheck, err := checkConfig(baseDir)
@@ -431,66 +428,102 @@ func ensureTestCommands(config *common.RepoConfig, filePath string) error {
 	return nil
 }
 
-func ensureAISecrets() ([]string, error) {
-	service := "sidekick"
+func getConfiguredBuiltinLLMProviders() []string {
 	var providers []string
 
-	providerSelection := selection.New("Select your LLM API provider", []string{"Google", "Anthropic", "OpenAI"})
-	provider, err := providerSelection.RunPrompt()
+	// Check OpenAI
+	if key, err := keyring.Get(keyringService, llm.OpenaiApiKeySecretName); err == nil && key != "" {
+		providers = append(providers, "openai")
+	}
+
+	// Check Google
+	if key, err := keyring.Get(keyringService, llm.GoogleApiKeySecretName); err == nil && key != "" {
+		providers = append(providers, "google")
+	}
+
+	// Check Anthropic (either API key or OAuth)
+	hasAnthropicKey := false
+	if key, err := keyring.Get(keyringService, llm.AnthropicApiKeySecretName); err == nil && key != "" {
+		hasAnthropicKey = true
+	}
+	if creds, err := keyring.Get(keyringService, AnthropicOAuthSecretName); err == nil && creds != "" {
+		hasAnthropicKey = true
+	}
+	if hasAnthropicKey {
+		providers = append(providers, "anthropic")
+	}
+
+	return providers
+}
+
+func selectLLMProvider(localConfig common.LocalConfig) (string, error) {
+	// Check if LLM is already configured
+	if len(localConfig.LLM) > 0 {
+		useExisting := true
+		err := huh.NewConfirm().
+			Title("Found existing LLM configuration. Use existing?").
+			Value(&useExisting).
+			Affirmative("Use existing").
+			Negative("Customize").
+			Run()
+		if err != nil {
+			return "", fmt.Errorf("error prompting for LLM configuration: %w", err)
+		}
+		if useExisting {
+			return "", nil
+		}
+	}
+
+	// Build selection list
+	var options []string
+
+	// Add configured built-in providers
+	configuredBuiltins := getConfiguredBuiltinLLMProviders()
+	for _, p := range configuredBuiltins {
+		options = append(options, strings.Title(p))
+	}
+
+	// Add custom providers from local config
+	for _, provider := range localConfig.Providers {
+		options = append(options, provider.Name)
+	}
+
+	// If no providers configured at all, go directly to auth flow
+	if len(options) == 0 {
+		fmt.Println("No LLM providers configured. Let's set one up.")
+		if err := handleAuthCommand(); err != nil {
+			return "", err
+		}
+		// After auth, determine which provider was added
+		newProviders := getConfiguredBuiltinLLMProviders()
+		if len(newProviders) > 0 {
+			return newProviders[len(newProviders)-1], nil
+		}
+		return "", fmt.Errorf("no provider was configured")
+	}
+
+	// Add "Add new provider" option
+	options = append(options, "Add new provider")
+
+	providerSelection := selection.New("Select your LLM provider", options)
+	selected, err := providerSelection.RunPrompt()
 	if err != nil {
-		return nil, fmt.Errorf("provider selection failed: %w", err)
+		return "", fmt.Errorf("provider selection failed: %w", err)
 	}
 
-	secretNames := map[string]string{
-		"Google":    llm.GoogleApiKeySecretName,
-		"Anthropic": llm.AnthropicApiKeySecretName,
-		"OpenAI":    llm.OpenaiApiKeySecretName,
-	}
-
-	secretName, ok := secretNames[provider]
-	if !ok {
-		return nil, fmt.Errorf("invalid selection: %s", provider)
-	}
-
-	apiKey, err := keyring.Get(service, secretName)
-	if err == nil && apiKey != "" {
-		fmt.Printf("✔ Found existing %s API Key in keyring.\n", provider)
-	} else if err != nil && err != keyring.ErrNotFound {
-		return nil, fmt.Errorf("error retrieving API key from keyring: %w", err)
-	} else {
-		apiKeyInput := textinput.New(fmt.Sprintf("Enter your %s API Key: ", provider))
-		apiKeyInput.Hidden = true
-
-		apiKey, err = apiKeyInput.RunPrompt()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get %s API Key: %w", provider, err)
+	if selected == "Add new provider" {
+		if err := handleAuthCommand(); err != nil {
+			return "", err
 		}
-
-		if apiKey == "" {
-			return nil, fmt.Errorf("%s API Key not provided, exiting early", provider)
+		// After auth, determine which provider was added
+		newProviders := getConfiguredBuiltinLLMProviders()
+		if len(newProviders) > 0 {
+			return newProviders[len(newProviders)-1], nil
 		}
-
-		err = keyring.Set(service, secretName, apiKey)
-		if err != nil {
-			return nil, fmt.Errorf("error storing API key in keyring: %w", err)
-		}
-
-		fmt.Printf("%s API Key saved to keyring.\n", provider)
+		return "", fmt.Errorf("no provider was configured")
 	}
 
-	// Check for all available providers
-	for providerName, secretName := range secretNames {
-		key, err := keyring.Get(service, secretName)
-		if err == nil && key != "" {
-			providers = append(providers, strings.ToLower(providerName))
-		}
-	}
-
-	if len(providers) == 0 {
-		return nil, fmt.Errorf("no API keys found or provided")
-	}
-
-	return providers, nil
+	return strings.ToLower(selected), nil
 }
 
 func ensureEmbeddingSecrets() ([]string, error) {
