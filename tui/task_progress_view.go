@@ -8,6 +8,8 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 type taskProgressModel struct {
@@ -54,6 +56,54 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 	}
+}
+
+var actionDisplayNames = map[string]string{
+	"apply_edit_blocks":     "Applying edits",
+	"generate.code_context": "Analyzing code context",
+	"merge":                 "Merging changes",
+	"user_request":          "Waiting for input",
+	"user_request.paused":   "Paused - waiting for guidance",
+}
+
+var hiddenActionTypes = map[string]bool{
+	"ranked_repo_summary":   true,
+	"cleanup_worktree":      true,
+	"generate.branch_names": true,
+}
+
+func getActionDisplayName(actionType string) string {
+	if name, ok := actionDisplayNames[actionType]; ok {
+		return name
+	}
+
+	if strings.HasPrefix(actionType, "user_request.approve.") {
+		return "Waiting for approval"
+	}
+
+	if strings.HasPrefix(actionType, "generate.") {
+		remainder := strings.TrimPrefix(actionType, "generate.")
+		titleCaser := cases.Title(language.English)
+		words := strings.Split(remainder, "_")
+		for i, word := range words {
+			words[i] = titleCaser.String(word)
+		}
+		return "Generating " + strings.Join(words, " ")
+	}
+
+	// Fallback: remove dots, replace underscores with spaces, title case
+	titleCaser := cases.Title(language.English)
+	normalized := strings.ReplaceAll(actionType, ".", " ")
+	normalized = strings.ReplaceAll(normalized, "_", " ")
+	words := strings.Fields(normalized)
+	for i, word := range words {
+		words[i] = titleCaser.String(word)
+	}
+	return strings.Join(words, " ")
+}
+
+func shouldHideAction(actionType string) bool {
+	return hiddenActionTypes[actionType]
 }
 
 func (m taskProgressModel) View() string {
