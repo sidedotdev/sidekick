@@ -299,7 +299,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 						recordedReqs = &devReq
 						return ToolCallResponseInfo{Response: "Requirements recorded and approved.", FunctionName: tc.Name, ToolCallId: tc.Id}, nil
 					} else {
-						feedback := "Requirements were not approved and therefore not recorded. Please try again, taking this feedback into account:\n\n" + userResponse.Content
+						feedback := fmt.Sprintf("Requirements were not approved. Current state:\n%s\n\nPlease try again, taking this feedback into account:\n\n%s", devReq.String(), userResponse.Content)
 						return ToolCallResponseInfo{Response: feedback, FunctionName: tc.Name, ToolCallId: tc.Id}, nil
 					}
 				} else {
@@ -329,7 +329,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 						recordedReqs = &updatedReqs
 						return ToolCallResponseInfo{Response: "Requirements updated and approved.", FunctionName: tc.Name, ToolCallId: tc.Id}, nil
 					} else {
-						feedback := "Requirements were not approved. Please try again, taking this feedback into account:\n\n" + userResponse.Content
+						feedback := fmt.Sprintf("Requirements updated but not approved. Current state:\n%s\n\nPlease try again, taking this feedback into account:\n\n%s", updatedReqs.String(), userResponse.Content)
 						return ToolCallResponseInfo{Response: feedback, FunctionName: tc.Name, ToolCallId: tc.Id}, nil
 					}
 				}

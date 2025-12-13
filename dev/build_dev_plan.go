@@ -359,6 +359,40 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 				}
 
 				state.devPlan = validatedPlan
+
+				if validatedPlan.Complete {
+					if !state.hasRevisedPerPlanningPrompt && state.planningPrompt != "" {
+						state.hasRevisedPerPlanningPrompt = true
+						info.Response = "List out all conditions/requirements in the following instructions. Then consider whether the plan meets each one, one by one. Once you have done that, then rewrite & record the plan as needed to ensure it meets all conditions/requirements.\n\nInstructions follow:\n\n" + state.planningPrompt
+						return info, nil
+					}
+
+					if !state.hasRevisedPerReproPrompt && state.reproduceIssue {
+						state.hasRevisedPerReproPrompt = true
+						info.Response = reviseReproPrompt
+						return info, nil
+					}
+
+					userResponse, err := ApproveDevPlan(dCtx, validatedPlan)
+					if err != nil {
+						return ToolCallResponseInfo{}, fmt.Errorf("error getting plan approval: %w", err)
+					}
+
+					v := workflow.GetVersion(dCtx, "dev-plan", workflow.DefaultVersion, 1)
+					if v == 1 {
+						iteration.NumSinceLastFeedback = 0
+					}
+
+					if userResponse.Approved != nil && *userResponse.Approved {
+						recordedPlan = &validatedPlan
+						info.Response = "Plan updated and approved."
+						return info, nil
+					} else {
+						info.Response = fmt.Sprintf("Plan updated but not approved. Current plan:\n%s\n\nPlease continue planning by taking this feedback into account:\n\n%s", validatedPlan.String(), userResponse.Content)
+						return info, nil
+					}
+				}
+
 				info.Response = "Plan updated successfully. Current plan:\n" + validatedPlan.String()
 				return info, nil
 			},
@@ -410,7 +444,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 						info.Response = "Plan approved"
 						return info, nil
 					} else {
-						info.Response = "Plan was not approved and therefore not recorded. Please continue planning by taking this feedback into account:\n\n" + userResponse.Content
+						info.Response = fmt.Sprintf("Plan was not approved. Current plan:\n%s\n\nPlease continue planning by taking this feedback into account:\n\n%s", validatedDevPlan.String(), userResponse.Content)
 						return info, nil
 					}
 				} else {
