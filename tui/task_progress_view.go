@@ -1,6 +1,4 @@
-// The cli directory contains the command-line interface for the application.
-// It is a binary package on purpose, not a library package.
-package main
+package tui
 
 import (
 	"fmt"
