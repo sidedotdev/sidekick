@@ -22,6 +22,16 @@ type ChatMessage struct {
 	ContextType  string `json:"contextType,omitempty"`
 }
 
+// GetRole returns the role as a string.
+func (c ChatMessage) GetRole() string {
+	return string(c.Role)
+}
+
+// GetContentString returns the content string.
+func (c ChatMessage) GetContentString() string {
+	return c.Content
+}
+
 // TODO ChatMessage.Content should be changed to []ContentBlock
 type ContentBlock struct {
 	Type         string `json:"type"`

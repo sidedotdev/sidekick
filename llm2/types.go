@@ -98,6 +98,22 @@ type Message struct {
 	Content []ContentBlock `json:"content"`
 }
 
+// GetRole returns the role as a string.
+func (m Message) GetRole() string {
+	return string(m.Role)
+}
+
+// GetContentString concatenates text from all text content blocks.
+func (m Message) GetContentString() string {
+	var result string
+	for _, block := range m.Content {
+		if block.Type == ContentBlockTypeText {
+			result += block.Text
+		}
+	}
+	return result
+}
+
 // Provider-agnostic response with metadata and a single synthesized output message.
 type MessageResponse struct {
 	Id           string  `json:"id"`
