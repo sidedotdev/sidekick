@@ -2,6 +2,7 @@ package srv
 
 import (
 	"context"
+	"sidekick/common"
 	"sidekick/domain"
 )
 
@@ -12,11 +13,6 @@ type Service interface {
 	DeleteWorktree(ctx context.Context, workspaceId, worktreeId string) error
 }
 
-type KeyValueStorage interface {
-	MGet(ctx context.Context, workspaceId string, keys []string) ([][]byte, error)
-	MSet(ctx context.Context, workspaceId string, values map[string]interface{}) error
-}
-
 type Storage interface {
 	domain.TaskStorage
 	domain.FlowStorage
@@ -24,7 +20,7 @@ type Storage interface {
 	domain.FlowActionStorage
 	domain.WorkspaceStorage
 	domain.WorktreeStorage
-	KeyValueStorage
+	common.KeyValueStorage
 
 	CheckConnection(ctx context.Context) error
 }
