@@ -195,7 +195,7 @@ func EnsureWorkspace(ctx context.Context, dir string, p TeaSendable, c client.Cl
 func RunTaskUI(ctx context.Context, c client.Client, req *client.CreateTaskRequest, currentDir string) error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	p := tea.NewProgram(newLifecycleModel(sigChan))
+	p := tea.NewProgram(newLifecycleModel(sigChan, c))
 
 	var monitor *TaskMonitor
 	var task client.Task

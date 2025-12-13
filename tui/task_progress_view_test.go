@@ -1,10 +1,53 @@
 package tui
 
 import (
+	"context"
+	"sidekick/client"
 	"sidekick/domain"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/mock"
 )
+
+type mockClientForProgress struct {
+	mock.Mock
+}
+
+func (m *mockClientForProgress) CreateTask(workspaceID string, req *client.CreateTaskRequest) (client.Task, error) {
+	args := m.Called(workspaceID, req)
+	return args.Get(0).(client.Task), args.Error(1)
+}
+
+func (m *mockClientForProgress) GetTask(workspaceID string, taskID string) (client.Task, error) {
+	args := m.Called(workspaceID, taskID)
+	return args.Get(0).(client.Task), args.Error(1)
+}
+
+func (m *mockClientForProgress) CancelTask(workspaceID string, taskID string) error {
+	args := m.Called(workspaceID, taskID)
+	return args.Error(0)
+}
+
+func (m *mockClientForProgress) CreateWorkspace(req *client.CreateWorkspaceRequest) (*domain.Workspace, error) {
+	args := m.Called(req)
+	return args.Get(0).(*domain.Workspace), args.Error(1)
+}
+
+func (m *mockClientForProgress) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error) {
+	args := m.Called(ctx)
+	return args.Get(0).([]domain.Workspace), args.Error(1)
+}
+
+func (m *mockClientForProgress) GetBaseURL() string {
+	args := m.Called()
+	return args.String(0)
+}
+
+func (m *mockClientForProgress) CompleteFlowAction(workspaceID, flowActionID string, response client.UserResponse) error {
+	args := m.Called(workspaceID, flowActionID, response)
+	return args.Error(0)
+}
 
 func TestGetActionDisplayName(t *testing.T) {
 	tests := []struct {
@@ -262,7 +305,7 @@ func TestTaskProgressModelView(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newProgressModel("task-1", "flow-1")
+			m := newProgressModel("task-1", "flow-1", nil)
 			m.actions = tt.actions
 
 			view := m.View()
@@ -330,7 +373,7 @@ func TestTaskProgressModelUpdate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newProgressModel("task-1", "flow-1")
+			m := newProgressModel("task-1", "flow-1", nil)
 			if tt.initialAction != nil {
 				m.actions = []domain.FlowAction{*tt.initialAction}
 			}
@@ -606,7 +649,7 @@ func TestSubflowDisplay(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newProgressModel("task-1", "flow-1")
+			m := newProgressModel("task-1", "flow-1", nil)
 			m.currentSubflow = tt.currentSubflow
 			m.actions = tt.actions
 
@@ -673,7 +716,7 @@ func TestSubflowTrackingInUpdate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newProgressModel("task-1", "flow-1")
+			m := newProgressModel("task-1", "flow-1", nil)
 
 			msg := flowActionChangeMsg{action: tt.action}
 			updated, _ := m.Update(msg)
@@ -691,5 +734,189 @@ func TestSubflowTrackingInUpdate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPendingHumanActionInput(t *testing.T) {
+	tests := []struct {
+		name           string
+		pendingAction  *domain.FlowAction
+		wantContains   []string
+		wantNotContain []string
+	}{
+		{
+			name: "pending human action shows input area",
+			pendingAction: &domain.FlowAction{
+				Id:               "action-1",
+				ActionType:       "user_request",
+				ActionStatus:     domain.ActionStatusPending,
+				IsHumanAction:    true,
+				IsCallbackAction: true,
+				ActionParams: map[string]interface{}{
+					"requestContent": "Please provide more details about the feature.",
+				},
+			},
+			wantContains: []string{
+				"Please provide more details about the feature.",
+				"Press Enter to submit",
+			},
+		},
+		{
+			name: "pending human action without requestContent shows input",
+			pendingAction: &domain.FlowAction{
+				Id:               "action-2",
+				ActionType:       "user_request",
+				ActionStatus:     domain.ActionStatusPending,
+				IsHumanAction:    true,
+				IsCallbackAction: true,
+				ActionParams:     map[string]interface{}{},
+			},
+			wantContains: []string{
+				"Press Enter to submit",
+			},
+			wantNotContain: []string{
+				"Please provide",
+			},
+		},
+		{
+			name:          "no pending action shows working message",
+			pendingAction: nil,
+			wantContains: []string{
+				"Working...",
+			},
+			wantNotContain: []string{
+				"Press Enter to submit",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newProgressModel("task-1", "flow-1", nil)
+			m.pendingAction = tt.pendingAction
+
+			view := m.View()
+
+			for _, want := range tt.wantContains {
+				if !strings.Contains(view, want) {
+					t.Errorf("View() should contain %q, got:\n%s", want, view)
+				}
+			}
+
+			for _, notWant := range tt.wantNotContain {
+				if strings.Contains(view, notWant) {
+					t.Errorf("View() should not contain %q, got:\n%s", notWant, view)
+				}
+			}
+		})
+	}
+}
+
+func TestPendingActionDetection(t *testing.T) {
+	tests := []struct {
+		name              string
+		action            domain.FlowAction
+		wantPendingAction bool
+	}{
+		{
+			name: "human callback action with pending status sets pendingAction",
+			action: domain.FlowAction{
+				Id:               "action-1",
+				ActionType:       "user_request",
+				ActionStatus:     domain.ActionStatusPending,
+				IsHumanAction:    true,
+				IsCallbackAction: true,
+			},
+			wantPendingAction: true,
+		},
+		{
+			name: "human action without callback does not set pendingAction",
+			action: domain.FlowAction{
+				Id:               "action-2",
+				ActionType:       "user_request",
+				ActionStatus:     domain.ActionStatusPending,
+				IsHumanAction:    true,
+				IsCallbackAction: false,
+			},
+			wantPendingAction: false,
+		},
+		{
+			name: "callback action without human flag does not set pendingAction",
+			action: domain.FlowAction{
+				Id:               "action-3",
+				ActionType:       "user_request",
+				ActionStatus:     domain.ActionStatusPending,
+				IsHumanAction:    false,
+				IsCallbackAction: true,
+			},
+			wantPendingAction: false,
+		},
+		{
+			name: "human callback action with started status does not set pendingAction",
+			action: domain.FlowAction{
+				Id:               "action-4",
+				ActionType:       "user_request",
+				ActionStatus:     domain.ActionStatusStarted,
+				IsHumanAction:    true,
+				IsCallbackAction: true,
+			},
+			wantPendingAction: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newProgressModel("task-1", "flow-1", nil)
+
+			msg := flowActionChangeMsg{action: tt.action}
+			updated, _ := m.Update(msg)
+			updatedModel := updated.(taskProgressModel)
+
+			if tt.wantPendingAction {
+				if updatedModel.pendingAction == nil {
+					t.Error("expected pendingAction to be set, got nil")
+				}
+			} else {
+				if updatedModel.pendingAction != nil {
+					t.Errorf("expected pendingAction to be nil, got %+v", updatedModel.pendingAction)
+				}
+			}
+		})
+	}
+}
+
+func TestPendingActionCleared(t *testing.T) {
+	m := newProgressModel("task-1", "flow-1", nil)
+
+	// Set up a pending action
+	pendingAction := domain.FlowAction{
+		Id:               "action-1",
+		ActionType:       "user_request",
+		ActionStatus:     domain.ActionStatusPending,
+		IsHumanAction:    true,
+		IsCallbackAction: true,
+	}
+	msg := flowActionChangeMsg{action: pendingAction}
+	updated, _ := m.Update(msg)
+	m = updated.(taskProgressModel)
+
+	if m.pendingAction == nil {
+		t.Fatal("expected pendingAction to be set after pending action")
+	}
+
+	// Now complete the action
+	completedAction := domain.FlowAction{
+		Id:               "action-1",
+		ActionType:       "user_request",
+		ActionStatus:     domain.ActionStatusComplete,
+		IsHumanAction:    true,
+		IsCallbackAction: true,
+	}
+	msg = flowActionChangeMsg{action: completedAction}
+	updated, _ = m.Update(msg)
+	m = updated.(taskProgressModel)
+
+	if m.pendingAction != nil {
+		t.Errorf("expected pendingAction to be cleared after completion, got %+v", m.pendingAction)
 	}
 }

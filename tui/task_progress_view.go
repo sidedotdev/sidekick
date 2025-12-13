@@ -2,11 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"sidekick/client"
 	"sidekick/common"
 	"sidekick/domain"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/text/cases"
@@ -26,19 +28,31 @@ type taskProgressModel struct {
 	flowID         string
 	actions        []domain.FlowAction
 	currentSubflow *domain.FlowAction
+	pendingAction  *domain.FlowAction
+	textarea       textarea.Model
+	client         client.Client
 	quitting       bool
 	err            error
 }
 
-func newProgressModel(taskID, flowID string) taskProgressModel {
+func newProgressModel(taskID, flowID string, c client.Client) taskProgressModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+
+	ta := textarea.New()
+	ta.Placeholder = "Type your response..."
+	ta.CharLimit = 0
+	ta.SetWidth(80)
+	ta.SetHeight(3)
+
 	return taskProgressModel{
-		spinner: s,
-		taskID:  taskID,
-		flowID:  flowID,
-		actions: []domain.FlowAction{},
+		spinner:  s,
+		taskID:   taskID,
+		flowID:   flowID,
+		actions:  []domain.FlowAction{},
+		textarea: ta,
+		client:   c,
 	}
 }
 
@@ -46,13 +60,60 @@ func (m taskProgressModel) Init() tea.Cmd {
 	return m.spinner.Tick
 }
 
+// completeFlowActionMsg is sent after successfully completing a flow action
+type completeFlowActionMsg struct {
+	actionID string
+}
+
+// completeFlowActionErrorMsg is sent when completing a flow action fails
+type completeFlowActionErrorMsg struct {
+	err error
+}
+
 func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.pendingAction != nil {
+			switch msg.Type {
+			case tea.KeyCtrlC:
+				m.quitting = true
+				return m, nil
+			case tea.KeyEsc:
+				m.textarea.Reset()
+				return m, nil
+			case tea.KeyEnter:
+				if msg.Alt {
+					// Shift+Enter or Alt+Enter: insert newline
+					var cmd tea.Cmd
+					m.textarea, cmd = m.textarea.Update(msg)
+					return m, cmd
+				}
+				// Enter: submit response
+				content := m.textarea.Value()
+				if content != "" {
+					return m, m.submitResponse(content)
+				}
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.textarea, cmd = m.textarea.Update(msg)
+				return m, cmd
+			}
+		}
 		switch msg.String() {
 		case "ctrl+c":
 			m.quitting = true
 		}
+		return m, nil
+
+	case completeFlowActionMsg:
+		m.pendingAction = nil
+		m.textarea.Reset()
+		m.textarea.Blur()
+		return m, nil
+
+	case completeFlowActionErrorMsg:
+		m.err = msg.err
 		return m, nil
 
 	case flowActionChangeMsg:
@@ -61,6 +122,20 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Track current subflow from incoming action
 		if action.SubflowId != "" {
 			m.currentSubflow = &action
+		}
+
+		// Detect pending human action
+		if action.IsHumanAction && action.IsCallbackAction && action.ActionStatus == domain.ActionStatusPending {
+			m.pendingAction = &action
+			m.textarea.Focus()
+			return m, textarea.Blink
+		}
+
+		// Clear pending action if it's no longer pending
+		if m.pendingAction != nil && m.pendingAction.Id == action.Id && action.ActionStatus != domain.ActionStatusPending {
+			m.pendingAction = nil
+			m.textarea.Reset()
+			m.textarea.Blur()
 		}
 
 		if shouldHideAction(action.ActionType) {
@@ -82,9 +157,35 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	default:
+		var cmds []tea.Cmd
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if m.pendingAction != nil {
+			m.textarea, cmd = m.textarea.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+		return m, tea.Batch(cmds...)
+	}
+}
+
+func (m taskProgressModel) submitResponse(content string) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil || m.pendingAction == nil {
+			return nil
+		}
+		response := client.UserResponse{
+			Content: content,
+		}
+		err := m.client.CompleteFlowAction(m.pendingAction.WorkspaceId, m.pendingAction.Id, response)
+		if err != nil {
+			return completeFlowActionErrorMsg{err: err}
+		}
+		return completeFlowActionMsg{actionID: m.pendingAction.Id}
 	}
 }
 
@@ -169,12 +270,24 @@ func (m taskProgressModel) View() string {
 		b.WriteString(m.renderAction(action))
 	}
 
+	// Display pending action input area
+	if m.pendingAction != nil {
+		b.WriteString("\n")
+		if requestContent, ok := m.pendingAction.ActionParams["requestContent"].(string); ok && requestContent != "" {
+			b.WriteString(fmt.Sprintf("%s\n\n", requestContent))
+		}
+		b.WriteString(m.textarea.View())
+		b.WriteString("\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Press Enter to submit, Shift+Enter for newline, Esc to clear"))
+		b.WriteString("\n")
+	}
+
 	if m.quitting {
 		b.WriteString("\n")
 		if m.err != nil {
 			b.WriteString(fmt.Sprintf("Error: %v\n", m.err))
 		}
-	} else {
+	} else if m.pendingAction == nil {
 		b.WriteString(fmt.Sprintf(`
 ⚠️  Sidekick's cli-only mode is *experimental*. Interact via http://localhost:%d/flows/%s
 %s Working... To cancel, press ctrl+c.

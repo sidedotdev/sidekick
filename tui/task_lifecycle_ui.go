@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"sidekick/client"
 	"sort"
 	"strings"
 	"time"
@@ -43,9 +44,10 @@ type taskLifecycleModel struct {
 	taskId    string
 	flowId    string
 	progModel tea.Model
+	client    client.Client
 }
 
-func newLifecycleModel(sigChan chan os.Signal) taskLifecycleModel {
+func newLifecycleModel(sigChan chan os.Signal, c client.Client) taskLifecycleModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
@@ -53,6 +55,7 @@ func newLifecycleModel(sigChan chan os.Signal) taskLifecycleModel {
 		spinner:  s,
 		sigChan:  sigChan,
 		messages: make(map[string]lifecycleMessage),
+		client:   c,
 	}
 }
 
@@ -87,7 +90,7 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.taskId = msg.task.Id
 		if m.progModel == nil && len(msg.task.Flows) > 0 {
 			m.flowId = msg.task.Flows[0].Id
-			m.progModel = newProgressModel(m.taskId, m.flowId)
+			m.progModel = newProgressModel(m.taskId, m.flowId, m.client)
 			cmd := m.progModel.Init()
 			return m, cmd
 		}

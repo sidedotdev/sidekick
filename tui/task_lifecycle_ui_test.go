@@ -174,7 +174,7 @@ func TestLifecycleModel(t *testing.T) {
 			t.Parallel()
 			var model tea.Model
 			sigChan := make(chan os.Signal, 1)
-			model = newLifecycleModel(sigChan)
+			model = newLifecycleModel(sigChan, nil)
 
 			go func() {
 			}()
