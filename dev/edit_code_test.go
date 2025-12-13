@@ -34,7 +34,7 @@ type AuthorEditBlocksTestSuite struct {
 	// a wrapper is required to set the ctx1 value, so that we can a method that
 	// isn't a real workflow. otherwise we get errors about not having
 	// StartToClose or ScheduleToCloseTimeout set
-	wrapperWorkflow func(ctx workflow.Context, chatHistory *[]llm.ChatMessage, pic PromptInfoContainer) ([]EditBlock, error)
+	wrapperWorkflow func(ctx workflow.Context, chatHistory *common.ChatHistoryContainer, pic PromptInfoContainer) ([]EditBlock, error)
 }
 
 func (s *AuthorEditBlocksTestSuite) SetupTest() {
@@ -47,7 +47,7 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 
 	// s.NewTestActivityEnvironment()
-	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *[]llm.ChatMessage, pic PromptInfoContainer) ([]EditBlock, error) {
+	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *common.ChatHistoryContainer, pic PromptInfoContainer) ([]EditBlock, error) {
 		ctx1 := utils.NoRetryCtx(ctx)
 		execContext := DevContext{
 			ExecContext: flow_action.ExecContext{
@@ -98,7 +98,7 @@ func TestAuthorEditBlockTestSuite(t *testing.T) {
 }
 
 func (s *AuthorEditBlocksTestSuite) TestInitialCodeInfoNoEditBlocks() {
-	chatHistory := &[]llm.ChatMessage{}
+	chatHistory := &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
 	var la *persisted_ai.LlmActivities // use a nil struct pointer to call activities that are part of a structure
 	s.env.OnActivity(la.ChatStream, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		// Simulate progress events being handled

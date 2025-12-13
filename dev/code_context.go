@@ -241,7 +241,7 @@ func RefineAndRankCodeContext(dCtx DevContext, envContainer env.EnvContainer, pr
 func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestFirst bool, maxLength int) (*RequiredCodeContext, string, error) {
 	var requiredCodeContext RequiredCodeContext
 	var codeContext string
-	chatHistory := &[]llm.ChatMessage{}
+	chatHistory := &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
 	addCodeContextPrompt(chatHistory, promptInfo)
 	noRetryCtx := utils.NoRetryCtx(actionCtx)
 	attempts := 0
@@ -272,7 +272,18 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 
 		if iterationsSinceLastFeedback >= 5 {
 			guidanceContext := "The system has attempted to refine and rank the code context multiple times without success. Please provide some guidance."
-			userFeedback, err := GetUserFeedback(actionCtx.DevContext, SkipInfo{}, guidanceContext, chatHistory, nil)
+			// Convert to []llm.ChatMessage for GetUserFeedback (will be updated in later step)
+			messages := chatHistory.Messages()
+			chatMessages := make([]llm.ChatMessage, len(messages))
+			for i, msg := range messages {
+				chatMessages[i] = msg.(llm.ChatMessage)
+			}
+			chatMessagesPtr := &chatMessages
+			userFeedback, err := GetUserFeedback(actionCtx.DevContext, SkipInfo{}, guidanceContext, chatMessagesPtr, nil)
+			// Sync any new messages back to chatHistory
+			for i := len(messages); i < len(*chatMessagesPtr); i++ {
+				chatHistory.Append((*chatMessagesPtr)[i])
+			}
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to get user feedback: %v", err)
 			}
@@ -280,7 +291,18 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			iterationsSinceLastFeedback = 0
 		} else if attempts%3 == 0 {
 			chatCtx := actionCtx.DevContext.WithCancelOnPause()
-			toolCalls, err := ForceToolBulkSearchRepository(chatCtx, chatHistory)
+			// Convert to []llm.ChatMessage for ForceToolBulkSearchRepository (will be updated in later step)
+			messages := chatHistory.Messages()
+			chatMessages := make([]llm.ChatMessage, len(messages))
+			for i, msg := range messages {
+				chatMessages[i] = msg.(llm.ChatMessage)
+			}
+			chatMessagesPtr := &chatMessages
+			toolCalls, err := ForceToolBulkSearchRepository(chatCtx, chatMessagesPtr)
+			// Sync any new messages back to chatHistory
+			for i := len(messages); i < len(*chatMessagesPtr); i++ {
+				chatHistory.Append((*chatMessagesPtr)[i])
+			}
 			if actionCtx.GlobalState != nil && actionCtx.GlobalState.Paused {
 				continue // UserRequestIfPaused will handle the pause
 			}
@@ -449,11 +471,20 @@ type ToolCallWithCodeContext struct {
 // ForceToolRetrieveCodeContext forces the LLM to call get_symbol_definitions and
 // returns all tool calls with their parsed RequiredCodeContext. Each tool call is
 // parsed independently; if parsing fails for a tool call, its Err field is set.
-func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *[]llm.ChatMessage) ([]ToolCallWithCodeContext, error) {
+func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *common.ChatHistoryContainer) ([]ToolCallWithCodeContext, error) {
 	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "small")
-	params := llm.ToolChatParams{Messages: *chatHistory, ModelConfig: modelConfig}
+	// Convert Messages() to []llm.ChatMessage for LLM API
+	messages := chatHistory.Messages()
+	chatMessages := make([]llm.ChatMessage, len(messages))
+	for i, msg := range messages {
+		chatMessages[i] = msg.(llm.ChatMessage)
+	}
+	params := llm.ToolChatParams{Messages: chatMessages, ModelConfig: modelConfig}
 	chatResponse, err := persisted_ai.ForceToolCall(actionCtx.FlowActionContext(), actionCtx.LLMConfig, &params, currentGetSymbolDefinitionsTool())
-	*chatHistory = params.Messages // update chat history with the new messages
+	// Update chat history with the new messages from params
+	for i := len(chatMessages); i < len(params.Messages); i++ {
+		chatHistory.Append(params.Messages[i])
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to force tool call: %v", err)
 	}
@@ -564,7 +595,7 @@ func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.Env
 	return allSymbolDefinitions, feedbacks
 }
 
-func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) {
+func addCodeContextPrompt(chatHistory *common.ChatHistoryContainer, promptInfo PromptInfo) {
 	var content string
 	role := llm.ChatMessageRoleUser
 	name := ""
@@ -597,7 +628,7 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 	}
 
 	if !skip {
-		*chatHistory = append(*chatHistory, llm.ChatMessage{
+		chatHistory.Append(llm.ChatMessage{
 			Role:         role,
 			Content:      content,
 			Name:         name,
