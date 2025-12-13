@@ -9,9 +9,10 @@
           <IntellijIcon/>
         </a>
       </p>
-      <div class="debug" v-if="devMode">
-        <a :href="`http://localhost:19855/namespaces/default/workflows/${flow.id}`">Temporal Flow</a>
-      </div>
+    <div class="debug" v-if="devMode">
+      <a :href="`http://localhost:19855/namespaces/default/workflows/${flow.id}`">Temporal Flow</a>
+      | <router-link :to="{ name: 'flow-reset', params: { id: flow.id } }">Reset Workflow</router-link>
+    </div>
     </div>
     <!-- TODO: In the future, we should allow going to next step even if currently paused -->
     <div 
