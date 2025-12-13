@@ -263,12 +263,15 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 			return "", fmt.Errorf("failed to run tests: %w", err)
 		}
 
-		if !testResult.TestsPassed {
+		if !testResult.TestsPassed && !testResult.TestsSkipped {
 			promptInfo = FeedbackInfo{Feedback: testResult.Output}
 			attemptCount++
 			continue
 		}
-		testOutput := testResult.Output
+		testOutput := ""
+		if !testResult.TestsSkipped {
+			testOutput = testResult.Output
+		}
 
 		// Run integration tests if regular tests passed and integration tests are configured
 		if len(dCtx.RepoConfig.IntegrationTestCommands) > 0 {
@@ -276,12 +279,14 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 			if err != nil {
 				return "", fmt.Errorf("failed to run integration tests: %w", err)
 			}
-			if !integrationTestResult.TestsPassed {
+			if !integrationTestResult.TestsPassed && !integrationTestResult.TestsSkipped {
 				promptInfo = FeedbackInfo{Feedback: integrationTestResult.Output}
 				attemptCount++
 				continue
 			}
-			testOutput += "\n\n" + integrationTestResult.Output
+			if !integrationTestResult.TestsSkipped {
+				testOutput += "\n\n" + integrationTestResult.Output
+			}
 		}
 
 		// Step 4: check diff and confirm if requirements have been met
@@ -306,9 +311,15 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 			// this case and let the assistant "prompt itself". hoping this
 			// makes it less likely for the assistant to act confused, since it
 			// knows it itself said the requirements weren't fulfilled and why.
-			*chatHistory = append(*chatHistory, llm.ChatMessage{
-				Role: llm.ChatMessageRoleUser,
-				Content: fmt.Sprintf(`
+			userMessageContent := `
+Here is the diff:
+
+  [...] (Omitted for length)
+
+Please analyze whether the requirements have been fulfilled. If not, continue editing code as needed.
+`
+			if !testResult.TestsSkipped {
+				userMessageContent = fmt.Sprintf(`
 Here is the diff:
 
   [...] (Omitted for length)
@@ -319,7 +330,11 @@ And here are test results:
   [...] (Omitted for length)
 
 Please analyze whether the requirements have been fulfilled. If not, continue editing code as needed.
-`, testResult.TestsPassed),
+`, testResult.TestsPassed)
+			}
+			*chatHistory = append(*chatHistory, llm.ChatMessage{
+				Role:    llm.ChatMessageRoleUser,
+				Content: userMessageContent,
 			})
 			*chatHistory = append(*chatHistory, llm.ChatMessage{
 				Role: llm.ChatMessageRoleAssistant,

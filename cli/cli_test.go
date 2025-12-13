@@ -268,25 +268,14 @@ func TestGetGitBaseDirectory(t *testing.T) {
 	assert.Equal(t, normalizedTmpDir, normalizedBaseDir, "Expected the base directory to be the initialized Git repo")
 }
 
-func TestCheckConfig_CreatesPlaceholderFile(t *testing.T) {
+func TestCheckConfig_NoExistingFile(t *testing.T) {
 	tmpDir, cleanup := setupTempDir(t)
 	defer cleanup()
 
-	// Mock stdin to provide input for promptAndSaveTestCommand
-	restoreStdin := mockStdin("pytest\n")
-	defer restoreStdin()
-
 	_, checkResult, err := checkConfig(tmpDir)
 	assert.NoError(t, err, "Expected no error when checking side.toml")
-	assert.False(t, checkResult.hasTestCommands, "Expected hasTestCommands to be false when creating side.toml")
-
-	err = ensureTestCommands(&common.RepoConfig{}, filepath.Join(tmpDir, "side.toml"))
-	assert.NoError(t, err, "Expected no error when prompting for test command")
-
-	configFilePath := filepath.Join(tmpDir, "side.toml")
-	data, err := os.ReadFile(configFilePath)
-	assert.NoError(t, err)
-	assert.Contains(t, string(data), "command = \"pytest\"")
+	assert.False(t, checkResult.hasTestCommands, "Expected hasTestCommands to be false when no file exists")
+	assert.Equal(t, filepath.Join(tmpDir, "side.toml"), checkResult.filePath)
 }
 
 func TestCheckConfig_ValidFile(t *testing.T) {
@@ -418,20 +407,91 @@ func TestSaveConfig_CreatesFileWithCorrectContent(t *testing.T) {
 	assert.Contains(t, string(data), "command = \"test-command\"")
 }
 
-func TestEnsureTestCommands(t *testing.T) {
+func TestEnsureTestCommands_UserEntersCommand(t *testing.T) {
 	tmpDir, cleanup := setupTempDir(t)
 	defer cleanup()
 
-	// Mock stdin to provide input for promptAndSaveTestCommand
-	restoreStdin := mockStdin("pytest\n")
-	defer restoreStdin()
+	configPath := filepath.Join(tmpDir, "side.toml")
 
-	err := ensureTestCommands(&common.RepoConfig{}, filepath.Join(tmpDir, "side.toml"))
+	// Mock stdin: enter test command
+	oldStdin := os.Stdin
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	go func() {
+		w.WriteString("pytest\n")
+		w.Close()
+	}()
+	defer func() {
+		os.Stdin = oldStdin
+	}()
+
+	config := &common.RepoConfig{}
+	err := ensureTestCommands(config, configPath)
 	assert.NoError(t, err)
+	assert.Len(t, config.TestCommands, 1)
+	assert.Equal(t, "pytest", config.TestCommands[0].Command)
 
-	data, err := os.ReadFile(filepath.Join(tmpDir, "side.toml"))
+	data, err := os.ReadFile(configPath)
 	assert.NoError(t, err)
 	assert.Contains(t, string(data), "command = \"pytest\"")
+}
+
+func TestEnsureTestCommands_UserSkips(t *testing.T) {
+	tmpDir, cleanup := setupTempDir(t)
+	defer cleanup()
+
+	configPath := filepath.Join(tmpDir, "side.toml")
+
+	// Mock stdin: type "skip"
+	oldStdin := os.Stdin
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	go func() {
+		w.WriteString("skip\n")
+		w.Close()
+	}()
+	defer func() {
+		os.Stdin = oldStdin
+	}()
+
+	config := &common.RepoConfig{}
+	err := ensureTestCommands(config, configPath)
+	assert.NoError(t, err)
+	assert.Empty(t, config.TestCommands)
+
+	data, err := os.ReadFile(configPath)
+	assert.NoError(t, err)
+	assert.Contains(t, string(data), "# Uncomment and configure test commands for best results:")
+	assert.Contains(t, string(data), "# [[test_commands]]")
+	assert.Contains(t, string(data), "# command = \"pytest\"")
+}
+
+func TestEnsureTestCommands_UserSkipsCaseInsensitive(t *testing.T) {
+	tmpDir, cleanup := setupTempDir(t)
+	defer cleanup()
+
+	configPath := filepath.Join(tmpDir, "side.toml")
+
+	// Mock stdin: type "SKIP" (uppercase)
+	oldStdin := os.Stdin
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	go func() {
+		w.WriteString("SKIP\n")
+		w.Close()
+	}()
+	defer func() {
+		os.Stdin = oldStdin
+	}()
+
+	config := &common.RepoConfig{}
+	err := ensureTestCommands(config, configPath)
+	assert.NoError(t, err)
+	assert.Empty(t, config.TestCommands)
+
+	data, err := os.ReadFile(configPath)
+	assert.NoError(t, err)
+	assert.Contains(t, string(data), "# Uncomment and configure test commands for best results:")
 }
 
 func TestEnsureWorkspaceConfig(t *testing.T) {

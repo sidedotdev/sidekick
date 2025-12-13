@@ -106,7 +106,11 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		if err != nil {
 			return fmt.Errorf("error prompting for test command: %w", err)
 		}
-		fmt.Println("✔ Your test command has been saved in side.toml (commit this)")
+		if len(config.TestCommands) > 0 {
+			fmt.Println("✔ Your test command has been saved in side.toml (commit this)")
+		} else {
+			fmt.Println("ℹ Skipping test command configuration. You can add test commands to side.toml later for best results.")
+		}
 	} else {
 		fmt.Println("✔ Found valid test commands in side.toml")
 	}
@@ -405,19 +409,34 @@ func saveConfig(filePath string, config common.RepoConfig) error {
 }
 
 func ensureTestCommands(config *common.RepoConfig, filePath string) error {
-	fmt.Println("\nPlease enter the command you use to run your tests")
-	fmt.Println("Examples:")
-	fmt.Println("- If you are using JavaScript, you might use: jest")
-	fmt.Println("- If you are using Python, you might use: pytest")
-	fmt.Println("- If you are using another tool, please specify its command")
-	fmt.Print("Enter your test command: ")
+	fmt.Println("\nPlease enter the command you use to run your tests (or type 'skip' to skip)")
+	fmt.Println("Examples: pytest, jest, go test ./...")
+	fmt.Print("Test command: ")
 
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Scan()
-	testCommand := scanner.Text()
+	testCommand := strings.TrimSpace(scanner.Text())
 
 	if testCommand == "" {
-		return fmt.Errorf("No command entered, exiting early")
+		return fmt.Errorf("no command entered, exiting early")
+	}
+
+	if strings.EqualFold(testCommand, "skip") {
+		// Write a commented placeholder example to the config file
+		if err := saveConfig(filePath, *config); err != nil {
+			return err
+		}
+		// Append commented example after the encoded config
+		f, err := os.OpenFile(filePath, os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			return fmt.Errorf("error opening config file: %w", err)
+		}
+		defer f.Close()
+		comment := "\n# Uncomment and configure test commands for best results:\n# [[test_commands]]\n# command = \"pytest\"\n"
+		if _, err := f.WriteString(comment); err != nil {
+			return fmt.Errorf("error writing comment to config file: %w", err)
+		}
+		return nil
 	}
 
 	config.TestCommands = []common.CommandConfig{
