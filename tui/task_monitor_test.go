@@ -60,6 +60,11 @@ func (m *mockClient) CreateWorkspace(req *client.CreateWorkspaceRequest) (*domai
 	return args.Get(0).(*domain.Workspace), args.Error(1)
 }
 
+func (m *mockClient) CompleteFlowAction(workspaceID, flowActionID string, response client.UserResponse) error {
+	args := m.Called(workspaceID, flowActionID, response)
+	return args.Error(0)
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
