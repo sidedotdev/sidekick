@@ -17,6 +17,7 @@ type Client interface {
 	CreateWorkspace(req *CreateWorkspaceRequest) (*domain.Workspace, error)
 	GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error)
 	GetBaseURL() string
+	CompleteFlowAction(workspaceID, flowActionID string, response UserResponse) error
 }
 
 type clientImpl struct {

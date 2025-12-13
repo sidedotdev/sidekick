@@ -1,14 +1,16 @@
-package main
+package tui
 
-import "sidekick/client"
+import (
+	"sidekick/client"
+	"sidekick/domain"
+)
 
 type taskChangeMsg struct {
 	task client.Task
 }
 
 type flowActionChangeMsg struct {
-	actionType   string
-	actionStatus string
+	action domain.FlowAction
 }
 
 // taskErrorMsg is a tea.Msg to send an error related to a task.

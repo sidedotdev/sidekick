@@ -1,4 +1,4 @@
-package main
+package tui
 
 import (
 	"os"
@@ -93,14 +93,14 @@ func TestLifecycleModel(t *testing.T) {
 				},
 				clearLifecycleMsg{key: "init"},
 				taskChangeMsg{task: newTestTaskWithFlows()},
-				flowActionChangeMsg{actionType: "action_1", actionStatus: domain.ActionStatusStarted},
-				flowActionChangeMsg{actionType: "action_1", actionStatus: domain.ActionStatusComplete},
-				flowActionChangeMsg{actionType: "action_2", actionStatus: domain.ActionStatusPending},
+				flowActionChangeMsg{action: domain.FlowAction{Id: "a1", ActionType: "apply_edit_blocks", ActionStatus: domain.ActionStatusStarted}},
+				flowActionChangeMsg{action: domain.FlowAction{Id: "a1", ActionType: "apply_edit_blocks", ActionStatus: domain.ActionStatusComplete}},
+				flowActionChangeMsg{action: domain.FlowAction{Id: "a2", ActionType: "merge", ActionStatus: domain.ActionStatusPending}},
 			},
 			wantProgress: true,
 			wantContains: []string{
-				"action_1",
-				"action_2",
+				"Applying edits",
+				"Merging changes",
 				"Working...",
 			},
 			wantNotExists: []string{
@@ -124,8 +124,8 @@ func TestLifecycleModel(t *testing.T) {
 				},
 				clearLifecycleMsg{key: "init"},
 				taskChangeMsg{task: newTestTaskWithFlows()},
-				flowActionChangeMsg{actionType: "action_1", actionStatus: domain.ActionStatusStarted},
-				flowActionChangeMsg{actionType: "action_1", actionStatus: domain.ActionStatusFailed},
+				flowActionChangeMsg{action: domain.FlowAction{Id: "a1", ActionType: "apply_edit_blocks", ActionStatus: domain.ActionStatusStarted}},
+				flowActionChangeMsg{action: domain.FlowAction{Id: "a1", ActionType: "apply_edit_blocks", ActionStatus: domain.ActionStatusFailed}},
 				tea.KeyMsg{Type: tea.KeyCtrlC},
 			},
 			wantProgress: true,
@@ -174,7 +174,7 @@ func TestLifecycleModel(t *testing.T) {
 			t.Parallel()
 			var model tea.Model
 			sigChan := make(chan os.Signal, 1)
-			model = newLifecycleModel(sigChan)
+			model = newLifecycleModel(sigChan, nil)
 
 			go func() {
 			}()
