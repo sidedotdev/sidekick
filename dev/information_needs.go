@@ -50,7 +50,7 @@ func llmInputForIdentifyInformationNeeds(dCtx DevContext, chatHistory []llm.Chat
 	}
 }
 
-func IdentifyInformationNeeds(dCtx DevContext, chatHistory *[]llm.ChatMessage, repoSummary string, requirements string) (InformationNeeds, error) {
+func IdentifyInformationNeeds(dCtx DevContext, chatHistory *common.ChatHistoryContainer, repoSummary string, requirements string) (InformationNeeds, error) {
 	prompt := fmt.Sprintf(`Repository Summary:
 
 %s
@@ -75,7 +75,13 @@ with. If the requirements are referencing code, list specific class, function,
 and variable names.
 `, repoSummary, requirements)
 	actionName := "requirements_query_expansion"
-	options := llmInputForIdentifyInformationNeeds(dCtx, *chatHistory, prompt)
+	// Convert ChatHistoryContainer messages to []llm.ChatMessage for LLM call
+	messages := chatHistory.Messages()
+	chatMessages := make([]llm.ChatMessage, len(messages))
+	for i, msg := range messages {
+		chatMessages[i] = msg.(llm.ChatMessage)
+	}
+	options := llmInputForIdentifyInformationNeeds(dCtx, chatMessages, prompt)
 	chatResponse, err := TrackedToolChat(dCtx, actionName, options)
 	if err != nil {
 		return InformationNeeds{}, err

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sidekick/coding/tree_sitter"
+	"sidekick/common"
 	"sidekick/env"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
@@ -59,11 +60,20 @@ func BulkSearchRepository(ctx workflow.Context, envContainer env.EnvContainer, b
 	return strings.Join(results, "\n"), nil
 }
 
-func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *[]llm.ChatMessage) ([]llm.ToolCall, error) {
+func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *common.ChatHistoryContainer) ([]llm.ToolCall, error) {
 	actionCtx := dCtx.ExecContext.NewActionContext("generate.repo_search_query")
-	params := llm.ToolChatParams{Messages: *chatHistory}
+	// Convert ChatHistoryContainer messages to []llm.ChatMessage for LLM call
+	messages := chatHistory.Messages()
+	chatMessages := make([]llm.ChatMessage, len(messages))
+	for i, msg := range messages {
+		chatMessages[i] = msg.(llm.ChatMessage)
+	}
+	params := llm.ToolChatParams{Messages: chatMessages}
 	chatResponse, err := persisted_ai.ForceToolCall(actionCtx, dCtx.LLMConfig, &params, &bulkSearchRepositoryTool)
-	*chatHistory = params.Messages // update chat history with the new messages
+	// Sync any new messages back to chatHistory
+	for i := len(messages); i < len(params.Messages); i++ {
+		chatHistory.Append(params.Messages[i])
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to force tool call: %v", err)
 	}

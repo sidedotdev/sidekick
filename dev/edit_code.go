@@ -279,19 +279,8 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			requestParams := map[string]any{
 				// TODO include the latest failure if any
 			}
-			// Convert to []llm.ChatMessage for GetUserFeedback (will be updated in later step)
-			messages := chatHistory.Messages()
-			chatMessages := make([]llm.ChatMessage, len(messages))
-			for i, msg := range messages {
-				chatMessages[i] = msg.(llm.ChatMessage)
-			}
-			chatMessagesPtr := &chatMessages
 			var err error
-			promptInfo, err = GetUserFeedback(dCtx, promptInfo, guidanceContext, chatMessagesPtr, requestParams)
-			// Sync any new messages back to chatHistory
-			for i := len(messages); i < len(*chatMessagesPtr); i++ {
-				chatHistory.Append((*chatMessagesPtr)[i])
-			}
+			promptInfo, err = GetUserFeedback(dCtx, promptInfo, guidanceContext, chatHistory, requestParams)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get user feedback: %v", err)
 			}

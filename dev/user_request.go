@@ -213,7 +213,7 @@ func GetUserMergeApproval(
 // currentPromptInfo and chatHistory.
 //
 // before replacing, we'll need a better solution for remembering user feedback too.
-func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceContext string, chatHistory *[]llm.ChatMessage, requestParams map[string]any) (FeedbackInfo, error) {
+func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceContext string, chatHistory *common.ChatHistoryContainer, requestParams map[string]any) (FeedbackInfo, error) {
 	userResponse, err := GetUserGuidance(dCtx, guidanceContext, requestParams)
 	if err != nil {
 		return FeedbackInfo{}, fmt.Errorf("failed to get user response: %v", err)
@@ -231,7 +231,7 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 	case ToolCallResponseInfo:
 		// the caller is replacing the prompt info so will lose this unless we
 		// append it to chat history
-		*chatHistory = append(*chatHistory, llm.ChatMessage{
+		chatHistory.Append(llm.ChatMessage{
 			Role:       llm.ChatMessageRoleTool,
 			Content:    info.Response,
 			Name:       info.FunctionName,
@@ -244,7 +244,7 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
 		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
 		content := renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, applyImmediately)
-		*chatHistory = append(*chatHistory, llm.ChatMessage{
+		chatHistory.Append(llm.ChatMessage{
 			Role:    llm.ChatMessageRoleUser,
 			Content: content,
 		})

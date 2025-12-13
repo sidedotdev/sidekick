@@ -72,7 +72,13 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 	chatHistory := getCriteriaFulfillmentPrompt(promptInfo)
 
 	modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
-	params := llm.ToolChatParams{Messages: *chatHistory, ModelConfig: modelConfig}
+	// Convert ChatHistoryContainer messages to []llm.ChatMessage for LLM call
+	messages := chatHistory.Messages()
+	chatMessages := make([]llm.ChatMessage, len(messages))
+	for i, msg := range messages {
+		chatMessages[i] = msg.(llm.ChatMessage)
+	}
+	params := llm.ToolChatParams{Messages: chatMessages, ModelConfig: modelConfig}
 
 	var fulfillment CriteriaFulfillment
 	attempts := 0
@@ -80,7 +86,11 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 		// TODO /gen test this, assert it calls the right tool via mock of chat stream method
 		actionCtx := dCtx.ExecContext.NewActionContext("check_criteria_fulfillment")
 		chatResponse, err := persisted_ai.ForceToolCall(actionCtx, dCtx.LLMConfig, &params, &determineCriteriaFulfillmentTool)
-		*chatHistory = params.Messages // update chat history with the new messages
+		// Sync any new messages back to chatHistory
+		for i := len(chatMessages); i < len(params.Messages); i++ {
+			chatHistory.Append(params.Messages[i])
+		}
+		chatMessages = params.Messages
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to force tool call: %v", err)
 		}
@@ -104,13 +114,13 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 			Name:       toolCall.Name,
 			ToolCallId: toolCall.Id,
 		}
-		*chatHistory = append(*chatHistory, newMessage)
+		chatHistory.Append(newMessage)
 	}
 	return fulfillment, nil
 }
 
-func getCriteriaFulfillmentPrompt(promptInfo CheckWorkInfo) *[]llm.ChatMessage {
-	chatHistory := &[]llm.ChatMessage{}
+func getCriteriaFulfillmentPrompt(promptInfo CheckWorkInfo) *common.ChatHistoryContainer {
+	chatHistory := &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
 
 	var content string
 	if promptInfo.Step.Definition != "" {
@@ -246,6 +256,6 @@ Anyways, here are the automated check results:
 		Content:     content,
 		ContextType: ContextTypeInitialInstructions,
 	}
-	*chatHistory = append(*chatHistory, newMessage)
+	chatHistory.Append(newMessage)
 	return chatHistory
 }

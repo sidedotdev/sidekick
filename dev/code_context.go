@@ -132,7 +132,7 @@ func PrepareRepoSummary(dCtx DevContext, requirements string) (string, string, e
 		return repoSummary, "", nil
 	}
 	// Call IdentifyInformationNeeds to get additional information needs
-	chatHistory := &[]llm.ChatMessage{}
+	chatHistory := &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
 	infoNeeds, err := IdentifyInformationNeeds(dCtx, chatHistory, repoSummary, requirements)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to identify information needs: %v", err)
@@ -272,18 +272,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 
 		if iterationsSinceLastFeedback >= 5 {
 			guidanceContext := "The system has attempted to refine and rank the code context multiple times without success. Please provide some guidance."
-			// Convert to []llm.ChatMessage for GetUserFeedback (will be updated in later step)
-			messages := chatHistory.Messages()
-			chatMessages := make([]llm.ChatMessage, len(messages))
-			for i, msg := range messages {
-				chatMessages[i] = msg.(llm.ChatMessage)
-			}
-			chatMessagesPtr := &chatMessages
-			userFeedback, err := GetUserFeedback(actionCtx.DevContext, SkipInfo{}, guidanceContext, chatMessagesPtr, nil)
-			// Sync any new messages back to chatHistory
-			for i := len(messages); i < len(*chatMessagesPtr); i++ {
-				chatHistory.Append((*chatMessagesPtr)[i])
-			}
+			userFeedback, err := GetUserFeedback(actionCtx.DevContext, SkipInfo{}, guidanceContext, chatHistory, nil)
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to get user feedback: %v", err)
 			}
@@ -291,18 +280,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			iterationsSinceLastFeedback = 0
 		} else if attempts%3 == 0 {
 			chatCtx := actionCtx.DevContext.WithCancelOnPause()
-			// Convert to []llm.ChatMessage for ForceToolBulkSearchRepository (will be updated in later step)
-			messages := chatHistory.Messages()
-			chatMessages := make([]llm.ChatMessage, len(messages))
-			for i, msg := range messages {
-				chatMessages[i] = msg.(llm.ChatMessage)
-			}
-			chatMessagesPtr := &chatMessages
-			toolCalls, err := ForceToolBulkSearchRepository(chatCtx, chatMessagesPtr)
-			// Sync any new messages back to chatHistory
-			for i := len(messages); i < len(*chatMessagesPtr); i++ {
-				chatHistory.Append((*chatMessagesPtr)[i])
-			}
+			toolCalls, err := ForceToolBulkSearchRepository(chatCtx, chatHistory)
 			if actionCtx.GlobalState != nil && actionCtx.GlobalState.Paused {
 				continue // UserRequestIfPaused will handle the pause
 			}

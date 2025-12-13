@@ -197,12 +197,9 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 	}
 	testResult := TestResult{Output: ""}
 
-	// TODO wrap chatHistory in custom struct that has additional metadata about
-	// each message for easy manipulation of chat history and determining when
-	// we need to re-inject requirements and code context that gets lost
 	// TODO store chat history in a way that can be referred to by id, and pass
 	// id to the activities to avoid bloating temporal db
-	chatHistory := &[]llm.ChatMessage{}
+	chatHistory := &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
 
 	maxAttempts := 17
 	repoConfig := dCtx.RepoConfig
@@ -356,11 +353,11 @@ And here are test results:
 Please analyze whether the requirements have been fulfilled. If not, continue editing code as needed.
 `, testResult.TestsPassed)
 			}
-			*chatHistory = append(*chatHistory, llm.ChatMessage{
+			chatHistory.Append(llm.ChatMessage{
 				Role:    llm.ChatMessageRoleUser,
 				Content: userMessageContent,
 			})
-			*chatHistory = append(*chatHistory, llm.ChatMessage{
+			chatHistory.Append(llm.ChatMessage{
 				Role: llm.ChatMessageRoleUser,
 				Content: fmt.Sprintf(`Automated Analysis:
 
