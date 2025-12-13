@@ -2,6 +2,7 @@ package dev
 
 import (
 	"fmt"
+	"sidekick/common"
 	"sidekick/llm"
 
 	"go.temporal.io/sdk/workflow"
@@ -13,7 +14,7 @@ type LlmIteration struct {
 	Num                int
 	AutoIterationCount int
 	ExecCtx            DevContext
-	ChatHistory        *[]llm.ChatMessage
+	ChatHistory        *common.ChatHistoryContainer
 	State              interface{}
 }
 
@@ -50,7 +51,7 @@ func WithInitialState(initialState interface{}) Option {
 }
 
 // LlmLoop is a generic function that implements an interative loop for human-in-the-loop LLM invocations
-func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc func(iteration *LlmIteration) (*T, error), opts ...Option) (*T, error) {
+func LlmLoop[T any](dCtx DevContext, chatHistory *common.ChatHistoryContainer, loopFunc func(iteration *LlmIteration) (*T, error), opts ...Option) (*T, error) {
 	config := &LlmLoopConfig{
 		maxIterations:  17,
 		autoIterations: 3,
@@ -61,7 +62,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 	}
 
 	if chatHistory == nil {
-		chatHistory = &[]llm.ChatMessage{}
+		chatHistory = &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
 	}
 
 	iteration := &LlmIteration{
@@ -90,7 +91,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 			return nil, fmt.Errorf("error checking for pause: %v", err)
 		}
 		if response != nil && response.Content != "" {
-			*iteration.ChatHistory = append(*iteration.ChatHistory, llm.ChatMessage{
+			iteration.ChatHistory.Append(llm.ChatMessage{
 				Role:    "user",
 				Content: renderGeneralFeedbackPrompt(response.Content, FeedbackTypePause),
 			})
@@ -99,7 +100,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 
 		// Inject proactive system message when nearing per-cycle tool-call limits
 		if msg, ok := ThresholdMessageForCounter(config.autoIterations, iteration.AutoIterationCount); ok {
-			*iteration.ChatHistory = append(*iteration.ChatHistory, llm.ChatMessage{
+			iteration.ChatHistory.Append(llm.ChatMessage{
 				Role:    "system",
 				Content: msg,
 			})
@@ -114,7 +115,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 			}
 
 			// Add feedback to chat history
-			*iteration.ChatHistory = append(*iteration.ChatHistory, llm.ChatMessage{
+			iteration.ChatHistory.Append(llm.ChatMessage{
 				Role:    "user",
 				Content: userResponse.Content,
 			})

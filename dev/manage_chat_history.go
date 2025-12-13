@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"sidekick/coding/tree_sitter"
+	"sidekick/common"
 	"sidekick/fflag"
 	"sidekick/llm"
 	"slices"
@@ -65,14 +66,21 @@ const (
 // TODO take in the model name and use a different threshold for each model
 // TODO don't drop messages, just create a new chat history with a new summary
 // each time based on the current needs or latest prompt
-func ManageChatHistory(ctx workflow.Context, chatHistory *[]llm.ChatMessage, maxLength int) {
+func ManageChatHistory(ctx workflow.Context, chatHistory *common.ChatHistoryContainer, maxLength int) {
+	// Convert Messages() to []llm.ChatMessage for activity input
+	messages := chatHistory.Messages()
+	chatMessages := make([]llm.ChatMessage, len(messages))
+	for i, msg := range messages {
+		chatMessages[i] = msg.(llm.ChatMessage)
+	}
+
 	var newChatHistory []llm.ChatMessage
 	var activityFuture workflow.Future
 	v := workflow.GetVersion(ctx, "ManageChatHistoryToV2", workflow.DefaultVersion, 1)
 	if v == 1 && fflag.IsEnabled(ctx, fflag.ManageHistoryWithContextMarkers) {
-		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryV2Activity, *chatHistory, maxLength)
+		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryV2Activity, chatMessages, maxLength)
 	} else {
-		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryActivity, *chatHistory, maxLength)
+		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryActivity, chatMessages, maxLength)
 	}
 	err := activityFuture.Get(ctx, &newChatHistory)
 
@@ -88,7 +96,7 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *[]llm.ChatMessage, max
 		panic(wrapErr)
 	}
 
-	*chatHistory = newChatHistory
+	chatHistory.History = common.NewLegacyChatHistoryFromChatMessages(newChatHistory)
 }
 
 func ManageChatHistoryActivity(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {

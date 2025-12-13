@@ -3,6 +3,7 @@ package dev
 import (
 	"encoding/json"
 	"os"
+	"sidekick/common"
 	"sidekick/fflag"
 	"sidekick/llm"
 	"sidekick/utils"
@@ -691,13 +692,13 @@ type ManageChatHistoryWorkflowTestSuite struct {
 	// StartToClose or ScheduleToCloseTimeout set.
 	// Also, ManageChatHistory doesn't return anything, since it just mutates
 	// the given pointer, but returning at least an error is required
-	wrapperWorkflow func(ctx workflow.Context, chatHistory *[]llm.ChatMessage, maxLength int) (*[]llm.ChatMessage, error)
+	wrapperWorkflow func(ctx workflow.Context, chatHistory *common.ChatHistoryContainer, maxLength int) (*common.ChatHistoryContainer, error)
 }
 
 // SetupTest is called before each test in the suite
 func (s *ManageChatHistoryWorkflowTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
-	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *[]llm.ChatMessage, maxLength int) (*[]llm.ChatMessage, error) {
+	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *common.ChatHistoryContainer, maxLength int) (*common.ChatHistoryContainer, error) {
 		ctx = utils.NoRetryCtx(ctx)
 		ManageChatHistory(ctx, chatHistory, maxLength)
 		return chatHistory, nil
@@ -712,28 +713,33 @@ func (s *ManageChatHistoryWorkflowTestSuite) TearDownTest() {
 
 // Test_ManageChatHistory_UsesOldActivity_ByDefault tests that the old activity is called by default
 func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesOldActivity_ByDefault() {
-	chatHistory := &[]llm.ChatMessage{{Content: "test"}}
-	newChatHistory := &[]llm.ChatMessage{{Content: "_"}}
+	chatHistory := &common.ChatHistoryContainer{
+		History: common.NewLegacyChatHistoryFromChatMessages([]llm.ChatMessage{{Content: "test"}}),
+	}
+	newChatHistory := []llm.ChatMessage{{Content: "_"}}
 	maxLength := 100
 
 	// Expect GetVersion to be called and return DefaultVersion
 	s.env.OnGetVersion("ManageChatHistoryToV2", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
 
 	// Expect the old activity to be called
-	s.env.OnActivity(ManageChatHistoryActivity, *chatHistory, maxLength).Return(*newChatHistory, nil).Once()
+	s.env.OnActivity(ManageChatHistoryActivity, []llm.ChatMessage{{Content: "test"}}, maxLength).Return(newChatHistory, nil).Once()
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, maxLength)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
-	var managedChatHistory *[]llm.ChatMessage
+	var managedChatHistory *common.ChatHistoryContainer
 	s.env.GetWorkflowResult(&managedChatHistory)
-	s.Equal(newChatHistory, managedChatHistory)
+	s.Equal(1, managedChatHistory.Len())
+	s.Equal("_", managedChatHistory.Get(0).(llm.ChatMessage).Content)
 }
 
 // Test_ManageChatHistory_UsesNewActivity_WhenVersioned tests that the new activity is called when versioned
 func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesNewActivity_WhenVersioned() {
-	chatHistory := &[]llm.ChatMessage{{Content: "test"}}
-	newChatHistory := &[]llm.ChatMessage{{Content: "_"}}
+	chatHistory := &common.ChatHistoryContainer{
+		History: common.NewLegacyChatHistoryFromChatMessages([]llm.ChatMessage{{Content: "test"}}),
+	}
+	newChatHistory := []llm.ChatMessage{{Content: "_"}}
 	maxLength := 100
 
 	// enable
@@ -742,14 +748,15 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesNewActiv
 	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil).Once()
 
 	// Expect the new activity to be called
-	s.env.OnActivity(ManageChatHistoryV2Activity, *chatHistory, maxLength).Return(*newChatHistory, nil).Once()
+	s.env.OnActivity(ManageChatHistoryV2Activity, []llm.ChatMessage{{Content: "test"}}, maxLength).Return(newChatHistory, nil).Once()
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, maxLength)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
-	var managedChatHistory *[]llm.ChatMessage
+	var managedChatHistory *common.ChatHistoryContainer
 	s.env.GetWorkflowResult(&managedChatHistory)
-	s.Equal(newChatHistory, managedChatHistory)
+	s.Equal(1, managedChatHistory.Len())
+	s.Equal("_", managedChatHistory.Get(0).(llm.ChatMessage).Content)
 }
 
 // TestManageChatHistoryWorkflow is the entry point for running the test suite
