@@ -30,6 +30,146 @@ var recordDevPlanTool = llm.Tool{
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&DevPlan{}),
 }
 
+type DevStepUpdate struct {
+	StepNumber         string  `json:"step_number" jsonschema:"description=The step number to update (e.g. \"1\"\\, \"2.1\"). For insert\\, this is where the new step will be inserted."`
+	Operation          string  `json:"operation" jsonschema:"enum=edit,enum=delete,enum=insert,description=The operation to perform: edit updates existing step\\, delete removes it\\, insert adds a new step at the position."`
+	Title              *string `json:"title,omitempty" jsonschema:"description=Summary of the step's purpose (for edit/insert)"`
+	Definition         *string `json:"definition,omitempty" jsonschema:"description=Information about what to do in this step (for edit/insert)"`
+	Type               *string `json:"type,omitempty" jsonschema:"description=Step type: edit or other (for edit/insert)"`
+	CompletionAnalysis *string `json:"completion_analysis,omitempty" jsonschema:"description=Brief analysis of completion checks (for edit/insert)"`
+}
+
+type LearningUpdate struct {
+	Index     int     `json:"index" jsonschema:"description=0-based index of the learning to update. For insert\\, this is where the new learning will be inserted."`
+	Operation string  `json:"operation" jsonschema:"enum=edit,enum=delete,enum=insert,description=The operation to perform: edit updates existing learning\\, delete removes it\\, insert adds a new learning at the position."`
+	Content   *string `json:"content,omitempty" jsonschema:"description=The learning content (for edit/insert)"`
+}
+
+type DevPlanUpdate struct {
+	Updates         []DevStepUpdate  `json:"updates,omitempty" jsonschema:"description=Updates to apply to plan steps"`
+	LearningUpdates []LearningUpdate `json:"learning_updates,omitempty" jsonschema:"description=Updates to apply to learnings"`
+	IsComplete      *bool            `json:"is_planning_complete,omitempty" jsonschema:"description=Update the planning complete flag"`
+	Analysis        *string          `json:"analysis,omitempty" jsonschema:"description=Update the high-level analysis"`
+}
+
+var updateDevPlanTool = llm.Tool{
+	Name:        "update_dev_plan",
+	Description: "Incrementally updates an existing dev plan. Use this instead of record_dev_plan when making small changes to avoid re-outputting the entire plan.",
+	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&DevPlanUpdate{}),
+}
+
+func applyDevPlanUpdates(plan DevPlan, update DevPlanUpdate) (DevPlan, error) {
+	// Apply step updates
+	for _, stepUpdate := range update.Updates {
+		stepIndex := -1
+		for i, step := range plan.Steps {
+			if step.StepNumber == stepUpdate.StepNumber {
+				stepIndex = i
+				break
+			}
+		}
+
+		switch stepUpdate.Operation {
+		case "edit":
+			if stepIndex == -1 {
+				return plan, fmt.Errorf("step %s not found for edit operation", stepUpdate.StepNumber)
+			}
+			if stepUpdate.Title != nil {
+				plan.Steps[stepIndex].Title = *stepUpdate.Title
+			}
+			if stepUpdate.Definition != nil {
+				plan.Steps[stepIndex].Definition = *stepUpdate.Definition
+			}
+			if stepUpdate.Type != nil {
+				plan.Steps[stepIndex].Type = *stepUpdate.Type
+			}
+			if stepUpdate.CompletionAnalysis != nil {
+				plan.Steps[stepIndex].CompletionAnalysis = *stepUpdate.CompletionAnalysis
+			}
+
+		case "delete":
+			if stepIndex == -1 {
+				return plan, fmt.Errorf("step %s not found for delete operation", stepUpdate.StepNumber)
+			}
+			plan.Steps = append(plan.Steps[:stepIndex], plan.Steps[stepIndex+1:]...)
+
+		case "insert":
+			newStep := DevStep{
+				StepNumber: stepUpdate.StepNumber,
+			}
+			if stepUpdate.Title != nil {
+				newStep.Title = *stepUpdate.Title
+			}
+			if stepUpdate.Definition != nil {
+				newStep.Definition = *stepUpdate.Definition
+			}
+			if stepUpdate.Type != nil {
+				newStep.Type = *stepUpdate.Type
+			}
+			if stepUpdate.CompletionAnalysis != nil {
+				newStep.CompletionAnalysis = *stepUpdate.CompletionAnalysis
+			}
+
+			if stepIndex == -1 {
+				plan.Steps = append(plan.Steps, newStep)
+			} else {
+				plan.Steps = append(plan.Steps[:stepIndex], append([]DevStep{newStep}, plan.Steps[stepIndex:]...)...)
+			}
+
+		default:
+			return plan, fmt.Errorf("invalid operation %q for step update", stepUpdate.Operation)
+		}
+	}
+
+	// Apply learning updates
+	for _, learningUpdate := range update.LearningUpdates {
+		switch learningUpdate.Operation {
+		case "edit":
+			if learningUpdate.Index < 0 || learningUpdate.Index >= len(plan.Learnings) {
+				return plan, fmt.Errorf("learning index %d out of range for edit operation", learningUpdate.Index)
+			}
+			if learningUpdate.Content != nil {
+				plan.Learnings[learningUpdate.Index] = *learningUpdate.Content
+			}
+
+		case "delete":
+			if learningUpdate.Index < 0 || learningUpdate.Index >= len(plan.Learnings) {
+				return plan, fmt.Errorf("learning index %d out of range for delete operation", learningUpdate.Index)
+			}
+			plan.Learnings = append(plan.Learnings[:learningUpdate.Index], plan.Learnings[learningUpdate.Index+1:]...)
+
+		case "insert":
+			if learningUpdate.Index < 0 || learningUpdate.Index > len(plan.Learnings) {
+				return plan, fmt.Errorf("learning index %d out of range for insert operation", learningUpdate.Index)
+			}
+			content := ""
+			if learningUpdate.Content != nil {
+				content = *learningUpdate.Content
+			}
+			if learningUpdate.Index == len(plan.Learnings) {
+				plan.Learnings = append(plan.Learnings, content)
+			} else {
+				plan.Learnings = append(plan.Learnings[:learningUpdate.Index], append([]string{content}, plan.Learnings[learningUpdate.Index:]...)...)
+			}
+
+		default:
+			return plan, fmt.Errorf("invalid operation %q for learning update", learningUpdate.Operation)
+		}
+	}
+
+	// Apply analysis update
+	if update.Analysis != nil {
+		plan.Analysis = *update.Analysis
+	}
+
+	// Apply completion flag update
+	if update.IsComplete != nil {
+		plan.Complete = *update.IsComplete
+	}
+
+	return plan, nil
+}
+
 type DevPlan struct {
 	Analysis  string    `json:"analysis" jsonschema:"description=High-level analysis of what the plan will require before defining the individual steps."`
 	Steps     []DevStep `json:"steps" jsonschema:"description=The top-level steps that must be executed to fulfill the given requirements. This should be a pretty short list."`
@@ -168,14 +308,16 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
 	ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, maxLength)
 
+	hasExistingPlan := len(state.devPlan.Steps) > 0
+
 	var chatResponse *llm.ChatMessageResponse
 	var err error
 	if v := workflow.GetVersion(iteration.ExecCtx, "dev-plan-cleanup-cancel-internally", workflow.DefaultVersion, 1); v == 1 {
-		chatResponse, err = generateDevPlan(iteration.ExecCtx, iteration.ChatHistory)
+		chatResponse, err = generateDevPlan(iteration.ExecCtx, iteration.ChatHistory, hasExistingPlan)
 	} else {
 		// old version: new one does this in outer LlmLoop
 		chatCtx := iteration.ExecCtx.WithCancelOnPause()
-		chatResponse, err = generateDevPlan(chatCtx, iteration.ChatHistory)
+		chatResponse, err = generateDevPlan(chatCtx, iteration.ChatHistory, hasExistingPlan)
 		if iteration.ExecCtx.GlobalState != nil && iteration.ExecCtx.GlobalState.Paused {
 			return nil, nil // continue the loop: UserRequestIfPaused will handle the pause
 		}
@@ -189,6 +331,37 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 	if len(chatResponse.ToolCalls) > 0 {
 		var recordedPlan *DevPlan
 		customHandlers := map[string]func(DevContext, llm.ToolCall) (ToolCallResponseInfo, error){
+			updateDevPlanTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (ToolCallResponseInfo, error) {
+				info := ToolCallResponseInfo{
+					FunctionName: toolCall.Name,
+					ToolCallId:   toolCall.Id,
+				}
+
+				var planUpdate DevPlanUpdate
+				if err := json.Unmarshal([]byte(toolCall.Arguments), &planUpdate); err != nil {
+					info.IsError = true
+					info.Response = "Failed to parse update: " + err.Error()
+					return info, nil
+				}
+
+				updatedPlan, err := applyDevPlanUpdates(state.devPlan, planUpdate)
+				if err != nil {
+					info.IsError = true
+					info.Response = "Failed to apply updates: " + err.Error()
+					return info, nil
+				}
+
+				validatedPlan, err := ValidateAndCleanPlan(updatedPlan)
+				if err != nil {
+					info.IsError = true
+					info.Response = "Plan failed validation after update: " + err.Error()
+					return info, nil
+				}
+
+				state.devPlan = validatedPlan
+				info.Response = "Plan updated successfully. Current plan:\n" + validatedPlan.String()
+				return info, nil
+			},
 			recordDevPlanTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (ToolCallResponseInfo, error) {
 				info := ToolCallResponseInfo{
 					FunctionName: toolCall.Name,
@@ -284,12 +457,15 @@ func unmarshalPlan(jsonStr string) (DevPlan, error) {
 	return plan, nil
 }
 
-func generateDevPlan(dCtx DevContext, chatHistory *[]llm.ChatMessage) (*llm.ChatMessageResponse, error) {
+func generateDevPlan(dCtx DevContext, chatHistory *[]llm.ChatMessage, hasExistingPlan bool) (*llm.ChatMessageResponse, error) {
 	tools := []*llm.Tool{
 		&recordDevPlanTool,
 		currentGetSymbolDefinitionsTool(),
 		&bulkSearchRepositoryTool,
 		&bulkReadFileTool,
+	}
+	if hasExistingPlan {
+		tools = append(tools, &updateDevPlanTool)
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		tools = append(tools, &getHelpOrInputTool)
