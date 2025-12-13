@@ -6,7 +6,26 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sidekick/domain"
+	"time"
 )
+
+// FlowAction represents a flow action in the client package, mirroring domain.FlowAction
+// but omitting deprecated fields.
+type FlowAction struct {
+	Id               string                 `json:"id"`
+	SubflowId        string                 `json:"subflowId,omitempty"`
+	FlowId           string                 `json:"flowId"`
+	WorkspaceId      string                 `json:"workspaceId"`
+	Created          time.Time              `json:"created"`
+	Updated          time.Time              `json:"updated"`
+	ActionType       string                 `json:"actionType"`
+	ActionParams     map[string]interface{} `json:"actionParams"`
+	ActionStatus     domain.ActionStatus    `json:"actionStatus"`
+	ActionResult     string                 `json:"actionResult"`
+	IsHumanAction    bool                   `json:"isHumanAction"`
+	IsCallbackAction bool                   `json:"isCallbackAction"`
+}
 
 // UserResponse represents the user's response to a flow action that requires human input.
 type UserResponse struct {
