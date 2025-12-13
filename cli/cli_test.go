@@ -337,50 +337,28 @@ func TestEnsureTestCommands(t *testing.T) {
 func TestEnsureWorkspaceConfig(t *testing.T) {
 	ctx := context.Background()
 
-	//testDB := redis.NewTestRedisStorage()
 	testDB := sqlite.NewTestSqliteStorage(t, "cli_test")
 
-	// Create a new InitCommandHandler with the test database
 	handler := NewInitCommandHandler(testDB)
 
 	workspace, err := handler.findOrCreateWorkspace(ctx, "test", "/tmp/test")
 	require.NoError(t, err)
 	workspaceID := workspace.Id
 
-	// Test case 1: New configuration
-	t.Run("New configuration", func(t *testing.T) {
-		llmProviders := []string{"openai", "anthropic"}
-		embeddingProviders := []string{"openai"}
+	t.Run("New configuration with single providers", func(t *testing.T) {
+		err := handler.ensureWorkspaceConfig(ctx, workspaceID, nil, "openai", "openai")
+		require.NoError(t, err)
 
-		err := handler.ensureWorkspaceConfig(ctx, workspaceID, nil, llmProviders, embeddingProviders)
-		if err != nil {
-			t.Fatalf("ensureWorkspaceConfig failed: %v", err)
-		}
-
-		// Retrieve the persisted configuration
 		config, err := testDB.GetWorkspaceConfig(ctx, workspaceID)
-		if err != nil {
-			t.Fatalf("Failed to retrieve workspace config: %v", err)
-		}
+		require.NoError(t, err)
 
-		// Check LLM configuration
-		if len(config.LLM.Defaults) != 2 {
-			t.Errorf("Expected 2 LLM providers, got %d", len(config.LLM.Defaults))
-		}
-		if config.LLM.Defaults[0].Provider != "openai" || config.LLM.Defaults[1].Provider != "anthropic" {
-			t.Errorf("Unexpected LLM providers: %v", config.LLM.Defaults)
-		}
+		assert.Len(t, config.LLM.Defaults, 1)
+		assert.Equal(t, "openai", config.LLM.Defaults[0].Provider)
 
-		// Check Embedding configuration
-		if len(config.Embedding.Defaults) != 1 {
-			t.Errorf("Expected 1 Embedding provider, got %d", len(config.Embedding.Defaults))
-		}
-		if config.Embedding.Defaults[0].Provider != "openai" {
-			t.Errorf("Unexpected Embedding provider: %v", config.Embedding.Defaults)
-		}
+		assert.Len(t, config.Embedding.Defaults, 1)
+		assert.Equal(t, "openai", config.Embedding.Defaults[0].Provider)
 	})
 
-	// Test case 2: Update existing configuration
 	t.Run("Update existing configuration", func(t *testing.T) {
 		existingConfig := &domain.WorkspaceConfig{
 			LLM: common.LLMConfig{
@@ -391,34 +369,27 @@ func TestEnsureWorkspaceConfig(t *testing.T) {
 			},
 		}
 
-		llmProviders := []string{"new-provider"}
-		embeddingProviders := []string{"new-provider"}
+		err := handler.ensureWorkspaceConfig(ctx, workspaceID, existingConfig, "anthropic", "google")
+		require.NoError(t, err)
 
-		err := handler.ensureWorkspaceConfig(ctx, workspaceID, existingConfig, llmProviders, embeddingProviders)
-		if err != nil {
-			t.Fatalf("ensureWorkspaceConfig failed: %v", err)
-		}
-
-		// Retrieve the persisted configuration
 		config, err := testDB.GetWorkspaceConfig(ctx, workspaceID)
-		if err != nil {
-			t.Fatalf("Failed to retrieve workspace config: %v", err)
-		}
+		require.NoError(t, err)
 
-		// Check LLM configuration
-		if len(config.LLM.Defaults) != 1 {
-			t.Errorf("Expected 1 LLM provider, got %d", len(config.LLM.Defaults))
-		}
-		if config.LLM.Defaults[0].Provider != "new-provider" {
-			t.Errorf("Unexpected LLM provider: %v", config.LLM.Defaults)
-		}
+		assert.Len(t, config.LLM.Defaults, 1)
+		assert.Equal(t, "anthropic", config.LLM.Defaults[0].Provider)
 
-		// Check Embedding configuration
-		if len(config.Embedding.Defaults) != 1 {
-			t.Errorf("Expected 1 Embedding provider, got %d", len(config.Embedding.Defaults))
-		}
-		if config.Embedding.Defaults[0].Provider != "new-provider" {
-			t.Errorf("Unexpected Embedding provider: %v", config.Embedding.Defaults)
-		}
+		assert.Len(t, config.Embedding.Defaults, 1)
+		assert.Equal(t, "google", config.Embedding.Defaults[0].Provider)
+	})
+
+	t.Run("Empty providers result in empty defaults", func(t *testing.T) {
+		err := handler.ensureWorkspaceConfig(ctx, workspaceID, nil, "", "")
+		require.NoError(t, err)
+
+		config, err := testDB.GetWorkspaceConfig(ctx, workspaceID)
+		require.NoError(t, err)
+
+		assert.Empty(t, config.LLM.Defaults)
+		assert.Empty(t, config.Embedding.Defaults)
 	})
 }

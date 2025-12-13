@@ -22,7 +22,6 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/charmbracelet/huh"
 	"github.com/erikgeiser/promptkit/selection"
-	"github.com/erikgeiser/promptkit/textinput"
 	"github.com/segmentio/ksuid"
 	"github.com/zalando/go-keyring"
 )
@@ -75,22 +74,16 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		return fmt.Errorf("error loading local config: %w", err)
 	}
 
-	var llmProviders []string
-	var embeddingProviders []string
-
 	// Handle embedding provider setup
-	embeddingProviders, err = ensureEmbeddingSecrets()
+	embeddingProvider, err := selectEmbeddingProvider(localConfig)
 	if err != nil {
-		return fmt.Errorf("error checking or prompting for embedding secrets: %w", err)
+		return fmt.Errorf("error selecting embedding provider: %w", err)
 	}
 
 	// Handle LLM provider setup
 	llmProvider, err := selectLLMProvider(localConfig)
 	if err != nil {
 		return fmt.Errorf("error selecting LLM provider: %w", err)
-	}
-	if llmProvider != "" {
-		llmProviders = []string{llmProvider}
 	}
 
 	config, configCheck, err := checkConfig(baseDir)
@@ -143,7 +136,7 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		return fmt.Errorf("error retrieving workspace configuration: %w", err)
 	}
 
-	err = h.ensureWorkspaceConfig(ctx, workspace.Id, &existingConfig, llmProviders, embeddingProviders)
+	err = h.ensureWorkspaceConfig(ctx, workspace.Id, &existingConfig, llmProvider, embeddingProvider)
 	if err != nil {
 		return fmt.Errorf("error ensuring workspace configuration: %w", err)
 	}
@@ -240,27 +233,23 @@ deps/
 	return err
 }
 
-func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspaceID string, currentConfig *domain.WorkspaceConfig, llmProviders, embeddingProviders []string) error {
+func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspaceID string, currentConfig *domain.WorkspaceConfig, llmProvider, embeddingProvider string) error {
 	if currentConfig == nil {
 		currentConfig = &domain.WorkspaceConfig{}
 	}
 
 	// Set up LLM configuration
-	currentConfig.LLM.Defaults = []common.ModelConfig{}
-	for _, provider := range llmProviders {
-		modelConfig := common.ModelConfig{
-			Provider: provider,
-		}
-		currentConfig.LLM.Defaults = append(currentConfig.LLM.Defaults, modelConfig)
+	if llmProvider != "" {
+		currentConfig.LLM.Defaults = []common.ModelConfig{{Provider: llmProvider}}
+	} else {
+		currentConfig.LLM.Defaults = []common.ModelConfig{}
 	}
 
 	// Set up Embedding configuration
-	currentConfig.Embedding.Defaults = []common.ModelConfig{}
-	for _, provider := range embeddingProviders {
-		modelConfig := common.ModelConfig{
-			Provider: provider,
-		}
-		currentConfig.Embedding.Defaults = append(currentConfig.Embedding.Defaults, modelConfig)
+	if embeddingProvider != "" {
+		currentConfig.Embedding.Defaults = []common.ModelConfig{{Provider: embeddingProvider}}
+	} else {
+		currentConfig.Embedding.Defaults = []common.ModelConfig{}
 	}
 
 	// Persist the updated configuration
@@ -526,41 +515,100 @@ func selectLLMProvider(localConfig common.LocalConfig) (string, error) {
 	return strings.ToLower(selected), nil
 }
 
-func ensureEmbeddingSecrets() ([]string, error) {
-	service := "sidekick"
+func getConfiguredBuiltinEmbeddingProviders() []string {
 	var providers []string
 
-	openaiKey, err := keyring.Get(service, llm.OpenaiApiKeySecretName)
-	if err == nil && openaiKey != "" {
+	// Check OpenAI
+	if key, err := keyring.Get(keyringService, llm.OpenaiApiKeySecretName); err == nil && key != "" {
 		providers = append(providers, "openai")
-		fmt.Println("✔ Found existing OPENAI_API_KEY in keyring for embeddings")
-		return providers, nil
 	}
 
-	if err != keyring.ErrNotFound {
-		return nil, fmt.Errorf("error retrieving OpenAI API key from keyring: %w", err)
+	// Check Google
+	if key, err := keyring.Get(keyringService, llm.GoogleApiKeySecretName); err == nil && key != "" {
+		providers = append(providers, "google")
 	}
 
-	apiKeyInput := textinput.New("Enter your OpenAI API Key (required for embeddings): ")
-	apiKeyInput.Hidden = true
+	return providers
+}
 
-	apiKey, err := apiKeyInput.RunPrompt()
+func selectEmbeddingProvider(localConfig common.LocalConfig) (string, error) {
+	// Check if embedding is already configured
+	if len(localConfig.Embedding) > 0 {
+		useExisting := true
+		err := huh.NewConfirm().
+			Title("Found existing embedding configuration. Use existing?").
+			Value(&useExisting).
+			Affirmative("Use existing").
+			Negative("Customize").
+			Run()
+		if err != nil {
+			return "", fmt.Errorf("error prompting for embedding configuration: %w", err)
+		}
+		if useExisting {
+			return "", nil
+		}
+	}
+
+	// Build selection list
+	var options []string
+
+	// Add configured built-in embedding providers (OpenAI and Google only)
+	configuredBuiltins := getConfiguredBuiltinEmbeddingProviders()
+	for _, p := range configuredBuiltins {
+		options = append(options, strings.Title(p))
+	}
+
+	// Add custom providers that support embeddings (openai, google, or openai_compatible types)
+	for _, provider := range localConfig.Providers {
+		if provider.Type == "openai" || provider.Type == "google" || provider.Type == "openai_compatible" {
+			options = append(options, provider.Name)
+		}
+	}
+
+	// If no providers configured at all, show OpenAI/Google selection and run auth
+	if len(options) == 0 {
+		fmt.Println("No embedding providers configured. Let's set one up.")
+		return selectAndAuthEmbeddingProvider()
+	}
+
+	// Add "Add new provider" option
+	options = append(options, "Add new provider")
+
+	providerSelection := selection.New("Select your embedding provider", options)
+	selected, err := providerSelection.RunPrompt()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get OpenAI API Key: %w", err)
+		return "", fmt.Errorf("provider selection failed: %w", err)
 	}
 
-	if apiKey == "" {
-		return nil, fmt.Errorf("OpenAI API Key not provided, exiting early")
+	if selected == "Add new provider" {
+		return selectAndAuthEmbeddingProvider()
 	}
 
-	err = keyring.Set(service, llm.OpenaiApiKeySecretName, apiKey)
+	return strings.ToLower(selected), nil
+}
+
+func selectAndAuthEmbeddingProvider() (string, error) {
+	embeddingOptions := []string{"OpenAI", "Google"}
+	providerSelection := selection.New("Select embedding provider to configure", embeddingOptions)
+	selected, err := providerSelection.RunPrompt()
 	if err != nil {
-		return nil, fmt.Errorf("error storing OpenAI API key in keyring: %w", err)
+		return "", fmt.Errorf("provider selection failed: %w", err)
 	}
-	fmt.Println("OpenAI API Key saved to keyring")
 
-	providers = append(providers, "openai")
-	return providers, nil
+	switch selected {
+	case "OpenAI":
+		if err := handleOpenAIAuth(); err != nil {
+			return "", err
+		}
+		return "openai", nil
+	case "Google":
+		if err := handleGoogleAuth(); err != nil {
+			return "", err
+		}
+		return "google", nil
+	}
+
+	return "", fmt.Errorf("unknown provider selected: %s", selected)
 }
 
 // checkServerStatus checks if the Sidekick server is responsive by making an HTTP GET
