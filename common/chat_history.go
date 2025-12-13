@@ -97,3 +97,35 @@ func (c *ChatHistoryContainer) MarshalJSON() ([]byte, error) {
 	}
 	return json.Marshal(c.History)
 }
+
+// Append adds a message to the underlying chat history.
+func (c *ChatHistoryContainer) Append(msg Message) {
+	if c.History == nil {
+		c.History = NewLegacyChatHistoryFromChatMessages(nil)
+	}
+	c.History.Append(msg)
+}
+
+// Len returns the number of messages in the underlying chat history.
+func (c *ChatHistoryContainer) Len() int {
+	if c.History == nil {
+		return 0
+	}
+	return c.History.Len()
+}
+
+// Get returns the message at the given index from the underlying chat history.
+func (c *ChatHistoryContainer) Get(index int) Message {
+	if c.History == nil {
+		return nil
+	}
+	return c.History.Get(index)
+}
+
+// Messages returns all messages from the underlying chat history.
+func (c *ChatHistoryContainer) Messages() []Message {
+	if c.History == nil {
+		return nil
+	}
+	return c.History.Messages()
+}

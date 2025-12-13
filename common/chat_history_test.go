@@ -318,3 +318,143 @@ func TestChatHistoryContainer_RoundTrip_WithToolCalls(t *testing.T) {
 		assert.Equal(t, origMsg.ToolCallId, restoredMsg.ToolCallId)
 	}
 }
+
+func TestChatHistoryContainer_Append(t *testing.T) {
+	container := ChatHistoryContainer{
+		History: NewLegacyChatHistoryFromChatMessages(nil),
+	}
+
+	container.Append(ChatMessage{Role: ChatMessageRoleUser, Content: "First"})
+	assert.Equal(t, 1, container.Len())
+
+	container.Append(ChatMessage{Role: ChatMessageRoleAssistant, Content: "Second"})
+	assert.Equal(t, 2, container.Len())
+
+	assert.Equal(t, "First", container.Get(0).GetContentString())
+	assert.Equal(t, "Second", container.Get(1).GetContentString())
+}
+
+func TestChatHistoryContainer_Append_NilHistory(t *testing.T) {
+	container := ChatHistoryContainer{}
+
+	container.Append(ChatMessage{Role: ChatMessageRoleUser, Content: "Hello"})
+	assert.Equal(t, 1, container.Len())
+	assert.NotNil(t, container.History)
+}
+
+func TestChatHistoryContainer_Len(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []ChatMessage
+		expected int
+	}{
+		{
+			name:     "empty",
+			messages: nil,
+			expected: 0,
+		},
+		{
+			name:     "one message",
+			messages: []ChatMessage{{Role: ChatMessageRoleUser, Content: "Hi"}},
+			expected: 1,
+		},
+		{
+			name: "multiple messages",
+			messages: []ChatMessage{
+				{Role: ChatMessageRoleUser, Content: "Hi"},
+				{Role: ChatMessageRoleAssistant, Content: "Hello"},
+				{Role: ChatMessageRoleUser, Content: "How are you?"},
+			},
+			expected: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			container := ChatHistoryContainer{
+				History: NewLegacyChatHistoryFromChatMessages(tt.messages),
+			}
+			assert.Equal(t, tt.expected, container.Len())
+		})
+	}
+}
+
+func TestChatHistoryContainer_Len_NilHistory(t *testing.T) {
+	container := ChatHistoryContainer{}
+	assert.Equal(t, 0, container.Len())
+}
+
+func TestChatHistoryContainer_Get(t *testing.T) {
+	msgs := []ChatMessage{
+		{Role: ChatMessageRoleUser, Content: "First"},
+		{Role: ChatMessageRoleAssistant, Content: "Second"},
+		{Role: ChatMessageRoleUser, Content: "Third"},
+	}
+	container := ChatHistoryContainer{
+		History: NewLegacyChatHistoryFromChatMessages(msgs),
+	}
+
+	t.Run("valid indices", func(t *testing.T) {
+		msg := container.Get(0)
+		assert.NotNil(t, msg)
+		assert.Equal(t, "First", msg.GetContentString())
+
+		msg = container.Get(1)
+		assert.NotNil(t, msg)
+		assert.Equal(t, "Second", msg.GetContentString())
+
+		msg = container.Get(2)
+		assert.NotNil(t, msg)
+		assert.Equal(t, "Third", msg.GetContentString())
+	})
+
+	t.Run("negative index", func(t *testing.T) {
+		msg := container.Get(-1)
+		assert.Nil(t, msg)
+	})
+
+	t.Run("out of bounds index", func(t *testing.T) {
+		msg := container.Get(3)
+		assert.Nil(t, msg)
+
+		msg = container.Get(100)
+		assert.Nil(t, msg)
+	})
+}
+
+func TestChatHistoryContainer_Get_NilHistory(t *testing.T) {
+	container := ChatHistoryContainer{}
+	assert.Nil(t, container.Get(0))
+}
+
+func TestChatHistoryContainer_Messages(t *testing.T) {
+	msgs := []ChatMessage{
+		{Role: ChatMessageRoleUser, Content: "Hello"},
+		{Role: ChatMessageRoleAssistant, Content: "Hi"},
+	}
+	container := ChatHistoryContainer{
+		History: NewLegacyChatHistoryFromChatMessages(msgs),
+	}
+
+	messages := container.Messages()
+
+	assert.Len(t, messages, 2)
+	assert.Equal(t, "user", messages[0].GetRole())
+	assert.Equal(t, "Hello", messages[0].GetContentString())
+	assert.Equal(t, "assistant", messages[1].GetRole())
+	assert.Equal(t, "Hi", messages[1].GetContentString())
+}
+
+func TestChatHistoryContainer_Messages_NilHistory(t *testing.T) {
+	container := ChatHistoryContainer{}
+	assert.Nil(t, container.Messages())
+}
+
+func TestChatHistoryContainer_Messages_Empty(t *testing.T) {
+	container := ChatHistoryContainer{
+		History: NewLegacyChatHistoryFromChatMessages(nil),
+	}
+	messages := container.Messages()
+	assert.NotNil(t, messages)
+	assert.Len(t, messages, 0)
+}
