@@ -27,7 +27,10 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
+	commonpb "go.temporal.io/api/common/v1"
+	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 )
 
@@ -166,6 +169,8 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	flowRoutes.POST("/:id/pause", ctrl.PauseFlowHandler)
 	flowRoutes.POST("/:id/cancel", ctrl.CancelFlowHandler)
 	flowRoutes.POST("/:id/user_action", ctrl.UserActionHandler)
+	flowRoutes.GET("/:id/history", ctrl.GetFlowHistoryHandler)
+	flowRoutes.POST("/:id/reset", ctrl.ResetFlowHandler)
 
 	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
 	workspaceApiRoutes.PUT("/flow_actions/:id", ctrl.UpdateFlowActionHandler)
@@ -660,6 +665,91 @@ func (ctrl *Controller) GetFlowHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"flow": flowWithWorktrees})
+}
+
+// HistoryEvent represents a workflow history event for the API response
+type HistoryEvent struct {
+	EventId   int64  `json:"eventId"`
+	EventType string `json:"eventType"`
+	Timestamp int64  `json:"timestamp"`
+	Name      string `json:"name,omitempty"`
+}
+
+func (ctrl *Controller) GetFlowHistoryHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	if workspaceId == "" || flowId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID and Flow ID are required"})
+		return
+	}
+
+	iter := ctrl.temporalClient.GetWorkflowHistory(c, flowId, "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
+
+	var events []HistoryEvent
+	for iter.HasNext() {
+		event, err := iter.Next()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		histEvent := HistoryEvent{
+			EventId:   event.EventId,
+			EventType: event.EventType.String(),
+			Timestamp: event.EventTime.AsTime().UnixMilli(),
+		}
+
+		// Extract activity type name or signal name where applicable
+		if attrs := event.GetActivityTaskScheduledEventAttributes(); attrs != nil {
+			histEvent.Name = attrs.ActivityType.Name
+		} else if attrs := event.GetWorkflowExecutionSignaledEventAttributes(); attrs != nil {
+			histEvent.Name = attrs.SignalName
+		}
+
+		events = append(events, histEvent)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"events": events})
+}
+
+// ResetFlowRequest defines the request body for resetting a workflow
+type ResetFlowRequest struct {
+	EventId int64 `json:"eventId"`
+}
+
+func (ctrl *Controller) ResetFlowHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	if workspaceId == "" || flowId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID and Flow ID are required"})
+		return
+	}
+
+	var req ResetFlowRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	if req.EventId <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "eventId must be a positive integer"})
+		return
+	}
+
+	resp, err := ctrl.temporalClient.ResetWorkflowExecution(c, &workflowservice.ResetWorkflowExecutionRequest{
+		Namespace:                 ctrl.temporalNamespace,
+		WorkflowExecution:         &commonpb.WorkflowExecution{WorkflowId: flowId},
+		WorkflowTaskFinishEventId: req.EventId,
+		RequestId:                 ksuid.New().String(),
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"runId": resp.RunId})
 }
 
 func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
