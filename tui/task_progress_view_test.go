@@ -447,3 +447,249 @@ func TestTruncateResult(t *testing.T) {
 		})
 	}
 }
+
+func TestGetSubflowDisplayName(t *testing.T) {
+	tests := []struct {
+		name        string
+		subflowName string
+		subflowId   string
+		wantDisplay string
+		wantOk      bool
+	}{
+		{
+			name:        "dev_requirements subflow",
+			subflowName: "dev_requirements",
+			subflowId:   "sf_123",
+			wantDisplay: "Refining requirements",
+			wantOk:      true,
+		},
+		{
+			name:        "dev_plan subflow",
+			subflowName: "dev_plan",
+			subflowId:   "sf_456",
+			wantDisplay: "Planning",
+			wantOk:      true,
+		},
+		{
+			name:        "dev.step subflow displays name directly",
+			subflowName: "Step 1: Implement feature",
+			subflowId:   "sf_789",
+			wantDisplay: "Step 1: Implement feature",
+			wantOk:      true,
+		},
+		{
+			name:        "dev.step subflow with different step number",
+			subflowName: "Step 3: Add tests",
+			subflowId:   "sf_abc",
+			wantDisplay: "Step 3: Add tests",
+			wantOk:      true,
+		},
+		{
+			name:        "non-whitelisted subflow",
+			subflowName: "some_other_subflow",
+			subflowId:   "sf_xyz",
+			wantDisplay: "",
+			wantOk:      false,
+		},
+		{
+			name:        "empty subflow name",
+			subflowName: "",
+			subflowId:   "sf_empty",
+			wantDisplay: "",
+			wantOk:      false,
+		},
+		{
+			name:        "step-like name without sf_ prefix",
+			subflowName: "Step 1: Something",
+			subflowId:   "other_123",
+			wantDisplay: "",
+			wantOk:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotDisplay, gotOk := getSubflowDisplayName(tt.subflowName, tt.subflowId)
+			if gotDisplay != tt.wantDisplay {
+				t.Errorf("getSubflowDisplayName() display = %q, want %q", gotDisplay, tt.wantDisplay)
+			}
+			if gotOk != tt.wantOk {
+				t.Errorf("getSubflowDisplayName() ok = %v, want %v", gotOk, tt.wantOk)
+			}
+		})
+	}
+}
+
+func TestSubflowDisplay(t *testing.T) {
+	tests := []struct {
+		name           string
+		currentSubflow *domain.FlowAction
+		actions        []domain.FlowAction
+		wantContains   []string
+		wantNotContain []string
+	}{
+		{
+			name: "whitelisted dev_requirements subflow shows header",
+			currentSubflow: &domain.FlowAction{
+				SubflowName: "dev_requirements",
+				SubflowId:   "sf_123",
+			},
+			actions: []domain.FlowAction{
+				{
+					Id:           "action-1",
+					ActionType:   "generate.code_context",
+					ActionStatus: domain.ActionStatusComplete,
+				},
+			},
+			wantContains: []string{"Refining requirements", "Analyzing code context"},
+		},
+		{
+			name: "whitelisted dev_plan subflow shows header",
+			currentSubflow: &domain.FlowAction{
+				SubflowName: "dev_plan",
+				SubflowId:   "sf_456",
+			},
+			actions: []domain.FlowAction{
+				{
+					Id:           "action-1",
+					ActionType:   "apply_edit_blocks",
+					ActionStatus: domain.ActionStatusStarted,
+				},
+			},
+			wantContains: []string{"Planning", "Applying edits"},
+		},
+		{
+			name: "dev.step subflow shows name directly",
+			currentSubflow: &domain.FlowAction{
+				SubflowName: "Step 2: Add validation",
+				SubflowId:   "sf_789",
+			},
+			actions: []domain.FlowAction{
+				{
+					Id:           "action-1",
+					ActionType:   "merge",
+					ActionStatus: domain.ActionStatusComplete,
+				},
+			},
+			wantContains: []string{"Step 2: Add validation", "Merging changes"},
+		},
+		{
+			name: "non-whitelisted subflow does not show header",
+			currentSubflow: &domain.FlowAction{
+				SubflowName: "some_internal_subflow",
+				SubflowId:   "sf_xyz",
+			},
+			actions: []domain.FlowAction{
+				{
+					Id:           "action-1",
+					ActionType:   "apply_edit_blocks",
+					ActionStatus: domain.ActionStatusComplete,
+				},
+			},
+			wantContains:   []string{"Applying edits"},
+			wantNotContain: []string{"some_internal_subflow"},
+		},
+		{
+			name:           "no subflow shows no header",
+			currentSubflow: nil,
+			actions: []domain.FlowAction{
+				{
+					Id:           "action-1",
+					ActionType:   "generate.summary",
+					ActionStatus: domain.ActionStatusComplete,
+				},
+			},
+			wantContains:   []string{"Generating Summary"},
+			wantNotContain: []string{"Refining requirements", "Planning"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newProgressModel("task-1", "flow-1")
+			m.currentSubflow = tt.currentSubflow
+			m.actions = tt.actions
+
+			view := m.View()
+
+			for _, want := range tt.wantContains {
+				if !strings.Contains(view, want) {
+					t.Errorf("View() should contain %q, got:\n%s", want, view)
+				}
+			}
+
+			for _, notWant := range tt.wantNotContain {
+				if strings.Contains(view, notWant) {
+					t.Errorf("View() should not contain %q, got:\n%s", notWant, view)
+				}
+			}
+		})
+	}
+}
+
+func TestSubflowTrackingInUpdate(t *testing.T) {
+	tests := []struct {
+		name               string
+		action             domain.FlowAction
+		wantSubflowTracked bool
+		wantSubflowName    string
+	}{
+		{
+			name: "action with subflow updates currentSubflow",
+			action: domain.FlowAction{
+				Id:           "action-1",
+				ActionType:   "apply_edit_blocks",
+				ActionStatus: domain.ActionStatusStarted,
+				SubflowName:  "dev_plan",
+				SubflowId:    "sf_123",
+			},
+			wantSubflowTracked: true,
+			wantSubflowName:    "dev_plan",
+		},
+		{
+			name: "action without subflowId does not update currentSubflow",
+			action: domain.FlowAction{
+				Id:           "action-2",
+				ActionType:   "merge",
+				ActionStatus: domain.ActionStatusStarted,
+				SubflowName:  "",
+				SubflowId:    "",
+			},
+			wantSubflowTracked: false,
+		},
+		{
+			name: "hidden action with subflow still updates currentSubflow",
+			action: domain.FlowAction{
+				Id:           "action-3",
+				ActionType:   "ranked_repo_summary",
+				ActionStatus: domain.ActionStatusStarted,
+				SubflowName:  "dev_requirements",
+				SubflowId:    "sf_456",
+			},
+			wantSubflowTracked: true,
+			wantSubflowName:    "dev_requirements",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newProgressModel("task-1", "flow-1")
+
+			msg := flowActionChangeMsg{action: tt.action}
+			updated, _ := m.Update(msg)
+			updatedModel := updated.(taskProgressModel)
+
+			if tt.wantSubflowTracked {
+				if updatedModel.currentSubflow == nil {
+					t.Error("expected currentSubflow to be set, got nil")
+				} else if updatedModel.currentSubflow.SubflowName != tt.wantSubflowName {
+					t.Errorf("expected subflow name %q, got %q", tt.wantSubflowName, updatedModel.currentSubflow.SubflowName)
+				}
+			} else {
+				if updatedModel.currentSubflow != nil {
+					t.Errorf("expected currentSubflow to be nil, got %+v", updatedModel.currentSubflow)
+				}
+			}
+		})
+	}
+}

@@ -21,12 +21,13 @@ var (
 )
 
 type taskProgressModel struct {
-	spinner  spinner.Model
-	taskID   string
-	flowID   string
-	actions  []domain.FlowAction
-	quitting bool
-	err      error
+	spinner        spinner.Model
+	taskID         string
+	flowID         string
+	actions        []domain.FlowAction
+	currentSubflow *domain.FlowAction
+	quitting       bool
+	err            error
 }
 
 func newProgressModel(taskID, flowID string) taskProgressModel {
@@ -56,6 +57,12 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case flowActionChangeMsg:
 		action := msg.action
+
+		// Track current subflow from incoming action
+		if action.SubflowId != "" {
+			m.currentSubflow = &action
+		}
+
 		if shouldHideAction(action.ActionType) {
 			return m, nil
 		}
@@ -129,8 +136,34 @@ func shouldHideAction(actionType string) bool {
 	return hiddenActionTypes[actionType]
 }
 
+var subflowDisplayNames = map[string]string{
+	"dev_requirements": "Refining requirements",
+	"dev_plan":         "Planning",
+}
+
+func getSubflowDisplayName(subflowName, subflowId string) (string, bool) {
+	// Check for dev.step type subflows (display the SubflowName directly)
+	if strings.HasPrefix(subflowId, "sf_") && strings.HasPrefix(subflowName, "Step ") {
+		return subflowName, true
+	}
+
+	// Check whitelisted subflows
+	if displayName, ok := subflowDisplayNames[subflowName]; ok {
+		return displayName, true
+	}
+
+	return "", false
+}
+
 func (m taskProgressModel) View() string {
 	var b strings.Builder
+
+	// Display current subflow header if whitelisted
+	if m.currentSubflow != nil {
+		if displayName, ok := getSubflowDisplayName(m.currentSubflow.SubflowName, m.currentSubflow.SubflowId); ok {
+			b.WriteString(fmt.Sprintf("\n%s\n", displayName))
+		}
+	}
 
 	for _, action := range m.actions {
 		b.WriteString(m.renderAction(action))
