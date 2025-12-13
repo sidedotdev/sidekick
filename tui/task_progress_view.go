@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"sidekick/common"
+	"sidekick/domain"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -12,11 +13,18 @@ import (
 	"golang.org/x/text/language"
 )
 
+var (
+	greenIndicator  = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("⏺")
+	redIndicator    = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("⏺")
+	yellowIndicator = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("⏺")
+	resultPrefix    = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("⎿")
+)
+
 type taskProgressModel struct {
 	spinner  spinner.Model
 	taskID   string
 	flowID   string
-	messages []string
+	actions  []domain.FlowAction
 	quitting bool
 	err      error
 }
@@ -24,12 +32,12 @@ type taskProgressModel struct {
 func newProgressModel(taskID, flowID string) taskProgressModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	return taskProgressModel{
-		spinner:  s,
-		taskID:   taskID,
-		flowID:   flowID,
-		messages: []string{},
+		spinner: s,
+		taskID:  taskID,
+		flowID:  flowID,
+		actions: []domain.FlowAction{},
 	}
 }
 
@@ -47,8 +55,23 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case flowActionChangeMsg:
-		progressLine := fmt.Sprintf("Action '%s' - Status '%s'", msg.action.ActionType, msg.action.ActionStatus)
-		m.messages = append(m.messages, progressLine)
+		action := msg.action
+		if shouldHideAction(action.ActionType) {
+			return m, nil
+		}
+
+		// Update existing action or append new one
+		found := false
+		for i, a := range m.actions {
+			if a.Id == action.Id {
+				m.actions[i] = action
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.actions = append(m.actions, action)
+		}
 		return m, nil
 
 	default:
@@ -109,8 +132,8 @@ func shouldHideAction(actionType string) bool {
 func (m taskProgressModel) View() string {
 	var b strings.Builder
 
-	for _, msg := range m.messages {
-		b.WriteString(fmt.Sprintf("  %s\n", msg))
+	for _, action := range m.actions {
+		b.WriteString(m.renderAction(action))
 	}
 
 	if m.quitting {
@@ -126,4 +149,78 @@ func (m taskProgressModel) View() string {
 	}
 
 	return b.String()
+}
+
+func (m taskProgressModel) renderAction(action domain.FlowAction) string {
+	displayName := getActionDisplayName(action.ActionType)
+
+	switch action.ActionStatus {
+	case domain.ActionStatusComplete:
+		return fmt.Sprintf("  %s %s\n", greenIndicator, displayName)
+
+	case domain.ActionStatusFailed:
+		errorInfo := action.ActionResult
+		if errorInfo == "" {
+			errorInfo = "unknown error"
+		}
+		return fmt.Sprintf("  %s %s: %s\n", redIndicator, displayName, errorInfo)
+
+	case domain.ActionStatusStarted:
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("  %s %s", m.spinner.View(), displayName))
+
+		// Add relevant params on the first line
+		paramsStr := formatActionParams(action.ActionParams)
+		if paramsStr != "" {
+			sb.WriteString(fmt.Sprintf(" %s", paramsStr))
+		}
+		sb.WriteString("\n")
+
+		// Add result summary on second line if available
+		if action.ActionResult != "" {
+			sb.WriteString(fmt.Sprintf("    %s %s\n", resultPrefix, truncateResult(action.ActionResult)))
+		}
+		return sb.String()
+
+	case domain.ActionStatusPending:
+		return fmt.Sprintf("  %s %s\n", yellowIndicator, displayName)
+
+	default:
+		return fmt.Sprintf("  %s %s\n", yellowIndicator, displayName)
+	}
+}
+
+func formatActionParams(params map[string]interface{}) string {
+	if params == nil {
+		return ""
+	}
+
+	// Extract commonly useful params for display
+	var parts []string
+
+	if path, ok := params["path"].(string); ok && path != "" {
+		parts = append(parts, path)
+	}
+	if file, ok := params["file"].(string); ok && file != "" {
+		parts = append(parts, file)
+	}
+	if name, ok := params["name"].(string); ok && name != "" {
+		parts = append(parts, name)
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, ", ")
+}
+
+func truncateResult(result string) string {
+	// Take first line only and truncate if too long
+	lines := strings.SplitN(result, "\n", 2)
+	line := lines[0]
+	const maxLen = 80
+	if len(line) > maxLen {
+		return line[:maxLen-3] + "..."
+	}
+	return line
 }
