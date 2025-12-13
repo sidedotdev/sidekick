@@ -554,7 +554,11 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 			CommitMessage: commitMessage,
 		}).Get(dCtx, nil)
 		if err != nil {
-			return "", MergeApprovalResponse{}, fmt.Errorf("failed to commit changes: %w", err)
+			if strings.Contains(err.Error(), "nothing to commit") {
+				workflow.GetLogger(dCtx).Warn("nothing to commit during merge workflow")
+			} else {
+				return "", MergeApprovalResponse{}, fmt.Errorf("failed to commit changes: %w", err)
+			}
 		}
 	}
 
@@ -566,7 +570,11 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 				CommitMessage: commitMessage,
 			}).Get(dCtx, nil)
 			if err != nil {
-				return mergeResult, fmt.Errorf("failed to commit changes: %w", err)
+				if strings.Contains(err.Error(), "nothing to commit") {
+					workflow.GetLogger(dCtx).Warn("nothing to commit during merge workflow")
+				} else {
+					return mergeResult, fmt.Errorf("failed to commit changes: %w", err)
+				}
 			}
 		}
 
