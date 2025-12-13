@@ -104,6 +104,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
 				secret_manager.KeyringSecretManager{},
 				secret_manager.LocalConfigSecretManager{},
+				secret_manager.EnvSecretManager{},
 			}),
 		},
 		Providers:       tempProviders, // TODO merge with workspace providers
@@ -200,6 +201,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
 				secret_manager.KeyringSecretManager{},
 				secret_manager.LocalConfigSecretManager{},
+				secret_manager.EnvSecretManager{},
 			}),
 		},
 		Providers:       finalProviders, // TODO merge with workspace providers
