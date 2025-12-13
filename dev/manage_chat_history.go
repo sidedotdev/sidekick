@@ -249,37 +249,61 @@ func ManageChatHistoryActivity(chatHistory []llm.ChatMessage, maxLength int) ([]
  * response, to avoid these openai errors:
  *
  * 		Invalid parameter: messages with role 'tool' must be a response to a preceeding message with 'tool_calls'
- *
- * This should also handle parallel tools (repeated tool responses). TODO: test whether that's the case.
  */
-// TODO: /gen write a set of tests for cleanToolCallsAndResponses
 func cleanToolCallsAndResponses(chatHistory *[]llm.ChatMessage) {
-	// Remove tool calls followed by anything other than a tool response
+	// First pass: identify which tool call messages have ALL their responses
+	// For parallel tool calls, we need all N responses for N tool calls
+	toolCallsToKeep := make(map[int]bool)
+	for i, message := range *chatHistory {
+		if len(message.ToolCalls) == 0 {
+			continue
+		}
+
+		// Count how many tool responses follow this message
+		toolCallIds := make(map[string]bool)
+		for _, tc := range message.ToolCalls {
+			toolCallIds[tc.Id] = true
+		}
+
+		// Look at subsequent messages for tool responses
+		responseCount := 0
+		for j := i + 1; j < len(*chatHistory); j++ {
+			resp := (*chatHistory)[j]
+			if resp.Role != llm.ChatMessageRoleTool {
+				break
+			}
+			if toolCallIds[resp.ToolCallId] {
+				responseCount++
+			}
+		}
+
+		// Only keep if ALL tool calls have responses
+		if responseCount == len(message.ToolCalls) {
+			toolCallsToKeep[i] = true
+		}
+	}
+
+	// Second pass: build new message list, skipping orphaned tool calls and their partial responses
 	newMessages := make([]llm.ChatMessage, 0)
+	validToolCallIds := make(map[string]bool)
+
 	for i, message := range *chatHistory {
 		if len(message.ToolCalls) > 0 {
-			if i+1 < len(*chatHistory) && (*chatHistory)[i+1].Role != llm.ChatMessageRoleTool {
+			if !toolCallsToKeep[i] {
 				continue
 			}
-		}
-		newMessages = append(newMessages, message)
-	}
-	*chatHistory = newMessages
-
-	// Remove tool responses not preceded by a tool call with matching tool call id
-	seenToolCalls := make(map[string]bool)
-	newMessages = make([]llm.ChatMessage, 0)
-	for _, message := range *chatHistory {
-		if message.Role == llm.ChatMessageRoleTool {
-			if _, ok := seenToolCalls[message.ToolCallId]; !ok {
+			for _, tc := range message.ToolCalls {
+				validToolCallIds[tc.Id] = true
+			}
+			newMessages = append(newMessages, message)
+		} else if message.Role == llm.ChatMessageRoleTool {
+			if !validToolCallIds[message.ToolCallId] {
 				continue
 			}
-		} else if len(message.ToolCalls) > 0 {
-			for _, toolCall := range message.ToolCalls {
-				seenToolCalls[toolCall.Id] = true
-			}
+			newMessages = append(newMessages, message)
+		} else {
+			newMessages = append(newMessages, message)
 		}
-		newMessages = append(newMessages, message)
 	}
 	*chatHistory = newMessages
 }

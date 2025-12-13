@@ -83,6 +83,121 @@ func TestCleanToolCallsAndResponses(t *testing.T) {
 
 		assert.Equal(t, expectedHistory, chatHistory, "Correct sequence of tool call and response should be retained")
 	})
+
+	t.Run("parallel tool calls with all responses", func(t *testing.T) {
+		chatHistory := []llm.ChatMessage{
+			{Role: llm.ChatMessageRoleUser, Content: "Hello"},
+			{Role: llm.ChatMessageRoleAssistant, Content: "", ToolCalls: []llm.ToolCall{
+				{Id: "call1", Name: "tool_a"},
+				{Id: "call2", Name: "tool_b"},
+			}},
+			{Role: llm.ChatMessageRoleTool, Content: "Response A", ToolCallId: "call1"},
+			{Role: llm.ChatMessageRoleTool, Content: "Response B", ToolCallId: "call2"},
+			{Role: llm.ChatMessageRoleAssistant, Content: "Done"},
+		}
+		expectedHistory := chatHistory
+
+		cleanToolCallsAndResponses(&chatHistory)
+
+		assert.Equal(t, expectedHistory, chatHistory, "Parallel tool calls with all responses should be retained")
+	})
+
+	t.Run("parallel tool calls with missing response removes all", func(t *testing.T) {
+		chatHistory := []llm.ChatMessage{
+			{Role: llm.ChatMessageRoleUser, Content: "Hello"},
+			{Role: llm.ChatMessageRoleAssistant, Content: "", ToolCalls: []llm.ToolCall{
+				{Id: "call1", Name: "tool_a"},
+				{Id: "call2", Name: "tool_b"},
+			}},
+			{Role: llm.ChatMessageRoleTool, Content: "Response A", ToolCallId: "call1"},
+			// Missing response for call2
+			{Role: llm.ChatMessageRoleAssistant, Content: "Done"},
+		}
+		expectedHistory := []llm.ChatMessage{
+			{Role: llm.ChatMessageRoleUser, Content: "Hello"},
+			{Role: llm.ChatMessageRoleAssistant, Content: "Done"},
+		}
+
+		cleanToolCallsAndResponses(&chatHistory)
+
+		assert.Equal(t, expectedHistory, chatHistory, "Parallel tool calls with missing response should remove all implicated messages")
+	})
+
+	t.Run("parallel tool calls with no responses", func(t *testing.T) {
+		chatHistory := []llm.ChatMessage{
+			{Role: llm.ChatMessageRoleUser, Content: "Hello"},
+			{Role: llm.ChatMessageRoleAssistant, Content: "", ToolCalls: []llm.ToolCall{
+				{Id: "call1", Name: "tool_a"},
+				{Id: "call2", Name: "tool_b"},
+			}},
+			{Role: llm.ChatMessageRoleUser, Content: "Nevermind"},
+		}
+		expectedHistory := []llm.ChatMessage{
+			{Role: llm.ChatMessageRoleUser, Content: "Hello"},
+			{Role: llm.ChatMessageRoleUser, Content: "Nevermind"},
+		}
+
+		cleanToolCallsAndResponses(&chatHistory)
+
+		assert.Equal(t, expectedHistory, chatHistory, "Parallel tool calls with no responses should be removed")
+	})
+
+	t.Run("multiple parallel tool call sequences", func(t *testing.T) {
+		chatHistory := []llm.ChatMessage{
+			{Role: llm.ChatMessageRoleUser, Content: "Hello"},
+			// First parallel call - complete
+			{Role: llm.ChatMessageRoleAssistant, Content: "", ToolCalls: []llm.ToolCall{
+				{Id: "call1", Name: "tool_a"},
+				{Id: "call2", Name: "tool_b"},
+			}},
+			{Role: llm.ChatMessageRoleTool, Content: "Response A", ToolCallId: "call1"},
+			{Role: llm.ChatMessageRoleTool, Content: "Response B", ToolCallId: "call2"},
+			{Role: llm.ChatMessageRoleAssistant, Content: "First done"},
+			// Second parallel call - incomplete
+			{Role: llm.ChatMessageRoleAssistant, Content: "", ToolCalls: []llm.ToolCall{
+				{Id: "call3", Name: "tool_c"},
+				{Id: "call4", Name: "tool_d"},
+			}},
+			{Role: llm.ChatMessageRoleTool, Content: "Response C", ToolCallId: "call3"},
+			// Missing response for call4
+			{Role: llm.ChatMessageRoleUser, Content: "Thanks"},
+		}
+		expectedHistory := []llm.ChatMessage{
+			{Role: llm.ChatMessageRoleUser, Content: "Hello"},
+			{Role: llm.ChatMessageRoleAssistant, Content: "", ToolCalls: []llm.ToolCall{
+				{Id: "call1", Name: "tool_a"},
+				{Id: "call2", Name: "tool_b"},
+			}},
+			{Role: llm.ChatMessageRoleTool, Content: "Response A", ToolCallId: "call1"},
+			{Role: llm.ChatMessageRoleTool, Content: "Response B", ToolCallId: "call2"},
+			{Role: llm.ChatMessageRoleAssistant, Content: "First done"},
+			{Role: llm.ChatMessageRoleUser, Content: "Thanks"},
+		}
+
+		cleanToolCallsAndResponses(&chatHistory)
+
+		assert.Equal(t, expectedHistory, chatHistory, "Should handle multiple parallel sequences correctly")
+	})
+
+	t.Run("parallel tool calls with three calls all present", func(t *testing.T) {
+		chatHistory := []llm.ChatMessage{
+			{Role: llm.ChatMessageRoleUser, Content: "Hello"},
+			{Role: llm.ChatMessageRoleAssistant, Content: "", ToolCalls: []llm.ToolCall{
+				{Id: "call1", Name: "tool_a"},
+				{Id: "call2", Name: "tool_b"},
+				{Id: "call3", Name: "tool_c"},
+			}},
+			{Role: llm.ChatMessageRoleTool, Content: "Response A", ToolCallId: "call1"},
+			{Role: llm.ChatMessageRoleTool, Content: "Response B", ToolCallId: "call2"},
+			{Role: llm.ChatMessageRoleTool, Content: "Response C", ToolCallId: "call3"},
+			{Role: llm.ChatMessageRoleAssistant, Content: "All done"},
+		}
+		expectedHistory := chatHistory
+
+		cleanToolCallsAndResponses(&chatHistory)
+
+		assert.Equal(t, expectedHistory, chatHistory, "Three parallel tool calls with all responses should be retained")
+	})
 }
 
 // NOTE: we can remove this test helper after refactoring tests to separate
