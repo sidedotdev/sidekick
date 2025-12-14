@@ -157,6 +157,246 @@ abc=invalid line number`,
 	}
 }
 
+func TestExtractGitDiffCodeBlocks(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []CodeBlock
+	}{
+		{
+			name:     "Empty input",
+			input:    "",
+			expected: nil,
+		},
+		{
+			name: "Simple addition",
+			input: `diff --git a/foo/bar.go b/foo/bar.go
+index abc123..def456 100644
+--- a/foo/bar.go
++++ b/foo/bar.go
+@@ -1,3 +1,4 @@
+ package main
+ 
++import "fmt"
+ func main() {`,
+			expected: []CodeBlock{
+				{
+					FilePath:  "foo/bar.go",
+					StartLine: 1,
+					EndLine:   4,
+					Code:      "package main\n\nimport \"fmt\"\nfunc main() {",
+				},
+			},
+		},
+		{
+			name: "Simple deletion",
+			input: `diff --git a/foo/bar.go b/foo/bar.go
+--- a/foo/bar.go
++++ b/foo/bar.go
+@@ -1,4 +1,3 @@
+ package main
+ 
+-import "fmt"
+ func main() {`,
+			expected: []CodeBlock{
+				{
+					FilePath:  "foo/bar.go",
+					StartLine: 1,
+					EndLine:   3,
+					Code:      "package main\n\nfunc main() {",
+				},
+			},
+		},
+		{
+			name: "Replacement",
+			input: `diff --git a/foo/bar.go b/foo/bar.go
+--- a/foo/bar.go
++++ b/foo/bar.go
+@@ -1,3 +1,3 @@
+ package main
+ 
+-func old() {}
++func new() {}`,
+			expected: []CodeBlock{
+				{
+					FilePath:  "foo/bar.go",
+					StartLine: 1,
+					EndLine:   3,
+					Code:      "package main\n\nfunc new() {}",
+				},
+			},
+		},
+		{
+			name: "Multiple hunks in same file",
+			input: `diff --git a/foo/bar.go b/foo/bar.go
+--- a/foo/bar.go
++++ b/foo/bar.go
+@@ -1,3 +1,3 @@
+ package main
+ 
+-var x = 1
++var x = 2
+@@ -10,3 +10,3 @@
+ func foo() {
+-    return 1
++    return 2
+ }`,
+			expected: []CodeBlock{
+				{
+					FilePath:  "foo/bar.go",
+					StartLine: 1,
+					EndLine:   3,
+					Code:      "package main\n\nvar x = 2",
+				},
+				{
+					FilePath:  "foo/bar.go",
+					StartLine: 10,
+					EndLine:   12,
+					Code:      "func foo() {\n    return 2\n}",
+				},
+			},
+		},
+		{
+			name: "Multiple files",
+			input: `diff --git a/foo/bar.go b/foo/bar.go
+--- a/foo/bar.go
++++ b/foo/bar.go
+@@ -1,2 +1,2 @@
+ package main
+-var x = 1
++var x = 2
+diff --git a/foo/baz.go b/foo/baz.go
+--- a/foo/baz.go
++++ b/foo/baz.go
+@@ -5,2 +5,2 @@
+ func test() {
+-    return nil
++    return err
+`,
+			expected: []CodeBlock{
+				{
+					FilePath:  "foo/bar.go",
+					StartLine: 1,
+					EndLine:   2,
+					Code:      "package main\nvar x = 2",
+				},
+				{
+					FilePath:  "foo/baz.go",
+					StartLine: 5,
+					EndLine:   6,
+					Code:      "func test() {\n    return err",
+				},
+			},
+		},
+		{
+			name: "New file creation",
+			input: `diff --git a/new_file.go b/new_file.go
+new file mode 100644
+index 0000000..abc1234
+--- /dev/null
++++ b/new_file.go
+@@ -0,0 +1,3 @@
++package main
++
++func hello() {}`,
+			expected: []CodeBlock{
+				{
+					FilePath:  "new_file.go",
+					StartLine: 1,
+					EndLine:   3,
+					Code:      "package main\n\nfunc hello() {}",
+				},
+			},
+		},
+		{
+			name: "No newline at end of file marker",
+			input: `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -1,2 +1,2 @@
+ package main
+-var x = 1
++var x = 2
+\ No newline at end of file`,
+			expected: []CodeBlock{
+				{
+					FilePath:  "foo.go",
+					StartLine: 1,
+					EndLine:   2,
+					Code:      "package main\nvar x = 2",
+				},
+			},
+		},
+		{
+			name:     "Non-diff content",
+			input:    "This is just some regular text\nwithout any diff format",
+			expected: nil,
+		},
+		{
+			name: "Empty diff - pure rename",
+			input: `diff --git a/frontend/README.md b/frontend/x.md
+similarity index 100%
+rename from frontend/README.md
+rename to frontend/x.md`,
+			expected: nil,
+		},
+		{
+			name: "Multiple deletions - contiguous result",
+			input: `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -1,7 +1,4 @@
+ line1
+-deleted1
+ line2
+-deleted2
+-deleted3
+ line3
+ line4`,
+			expected: []CodeBlock{
+				{
+					FilePath:  "foo.go",
+					StartLine: 1,
+					EndLine:   4,
+					Code:      "line1\nline2\nline3\nline4",
+				},
+			},
+		},
+		{
+			name: "File rename with changes",
+			input: `diff --git a/old.md b/new.md
+similarity index 99%
+rename from old.md
+rename to new.md
+index dcf347e..e818d00 100644
+--- a/old.md
++++ b/new.md
+@@ -1,3 +1,4 @@
+ # Title
+ 
+ Some content.
++Added line.`,
+			expected: []CodeBlock{
+				{
+					FilePath:  "new.md",
+					StartLine: 1,
+					EndLine:   4,
+					Code:      "# Title\n\nSome content.\nAdded line.",
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ExtractGitDiffCodeBlocks(tt.input)
+			if !reflect.DeepEqual(got, tt.expected) {
+				t.Errorf("expected:\n%s\ngot:\n%s", utils.PanicJSON(tt.expected), utils.PanicJSON(got))
+			}
+		})
+	}
+}
+
 func TestExtractSymbolDefinitionBlocks(t *testing.T) {
 	tests := []struct {
 		name     string
