@@ -288,4 +288,77 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		// The tag should appear without additional message text when created without -m
 		assert.NotContains(t, tagMessageOutput, "Test cleanup", "Tag should not have a message when created with empty archiveMessage")
 	})
+
+	t.Run("Tag Fallback When Tag Already Exists", func(t *testing.T) {
+		// Setup main repository
+		repoDir := setupTestGitRepo(t)
+		createCommit(t, repoDir, "Initial commit on main")
+
+		// Create a feature branch and worktree
+		branchName := "feature-tag-fallback-test"
+
+		// Pre-create the archive tag to simulate it already existing
+		runGitCommandInTestRepo(t, repoDir, "branch", branchName)
+		runGitCommandInTestRepo(t, repoDir, "tag", fmt.Sprintf("archive/%s", branchName), branchName)
+		// Delete the branch so we can recreate it with the worktree
+		runGitCommandInTestRepo(t, repoDir, "branch", "-D", branchName)
+
+		// Create environment container and the worktree
+		worktree := domain.Worktree{
+			Name:        branchName,
+			WorkspaceId: "test-workspace",
+		}
+		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		// Perform cleanup - should succeed with fallback tag name
+		err = CleanupWorktreeActivity(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "Fallback test")
+		require.NoError(t, err, "Cleanup should succeed with fallback tag name")
+
+		// Verify both tags exist (original and fallback)
+		tagOutput := runGitCommandInTestRepo(t, repoDir, "tag", "-l", "archive/*")
+		expectedOriginalTag := fmt.Sprintf("archive/%s", branchName)
+		expectedFallbackTag := fmt.Sprintf("archive/%s-2", branchName)
+		assert.Contains(t, tagOutput, expectedOriginalTag, "Original archive tag should still exist")
+		assert.Contains(t, tagOutput, expectedFallbackTag, "Fallback archive tag should be created")
+
+		// Verify the worktree was removed
+		worktreesAfter, err := ListWorktreesActivity(ctx, repoDir)
+		require.NoError(t, err)
+		require.Len(t, worktreesAfter, 1, "Should only have main worktree after cleanup")
+	})
+
+	t.Run("Tag Fallback Multiple Existing Tags", func(t *testing.T) {
+		// Setup main repository
+		repoDir := setupTestGitRepo(t)
+		createCommit(t, repoDir, "Initial commit on main")
+
+		branchName := "feature-multi-tag-test"
+
+		// Pre-create multiple archive tags
+		runGitCommandInTestRepo(t, repoDir, "branch", branchName)
+		runGitCommandInTestRepo(t, repoDir, "tag", fmt.Sprintf("archive/%s", branchName), branchName)
+		runGitCommandInTestRepo(t, repoDir, "tag", fmt.Sprintf("archive/%s-2", branchName), branchName)
+		runGitCommandInTestRepo(t, repoDir, "tag", fmt.Sprintf("archive/%s-3", branchName), branchName)
+		runGitCommandInTestRepo(t, repoDir, "branch", "-D", branchName)
+
+		// Create environment container and the worktree
+		worktree := domain.Worktree{
+			Name:        branchName,
+			WorkspaceId: "test-workspace",
+		}
+		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		// Perform cleanup - should succeed with next available fallback tag name
+		err = CleanupWorktreeActivity(ctx, envContainer, devEnv.GetWorkingDirectory(), branchName, "")
+		require.NoError(t, err, "Cleanup should succeed with next available fallback tag name")
+
+		// Verify the new tag was created with suffix -4
+		tagOutput := runGitCommandInTestRepo(t, repoDir, "tag", "-l", "archive/*")
+		expectedFallbackTag := fmt.Sprintf("archive/%s-4", branchName)
+		assert.Contains(t, tagOutput, expectedFallbackTag, "Should create tag with next available suffix")
+	})
 }

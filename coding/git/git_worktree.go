@@ -45,24 +45,10 @@ func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer,
 	}
 
 	// Create archive tag before deleting the branch
-	tagName := fmt.Sprintf("archive/%s", branchName)
-	var tagArgs []string
-	if archiveMessage != "" {
-		tagArgs = []string{"tag", "-m", archiveMessage, tagName, branchName}
-	} else {
-		tagArgs = []string{"tag", tagName, branchName}
-	}
-
-	tagResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
-		EnvContainer: envContainer,
-		Command:      "git",
-		Args:         tagArgs,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to execute tag creation command: %v", err)
-	}
-	if tagResult.ExitStatus != 0 {
-		return fmt.Errorf("failed to create archive tag %s: %s", tagName, tagResult.Stderr)
+	// Try with incrementing suffix if tag already exists
+	baseTagName := fmt.Sprintf("archive/%s", branchName)
+	if _, err := createArchiveTag(ctx, envContainer, baseTagName, branchName, archiveMessage); err != nil {
+		return err
 	}
 
 	// Delete the branch before removing the worktree
@@ -94,6 +80,67 @@ func CleanupWorktreeActivity(ctx context.Context, envContainer env.EnvContainer,
 	}
 
 	return nil
+}
+
+// createArchiveTag creates an archive tag, using a suffixed name if the base tag already exists.
+// Returns the name of the successfully created tag.
+func createArchiveTag(ctx context.Context, envContainer env.EnvContainer, baseTagName, branchName, archiveMessage string) (string, error) {
+	// List existing tags matching the pattern
+	listResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer: envContainer,
+		Command:      "git",
+		Args:         []string{"tag", "--list", baseTagName + "*"},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to list existing tags: %v", err)
+	}
+
+	tagName := findNextAvailableTagName(baseTagName, listResult.Stdout)
+
+	var tagArgs []string
+	if archiveMessage != "" {
+		tagArgs = []string{"tag", "-m", archiveMessage, tagName, branchName}
+	} else {
+		tagArgs = []string{"tag", tagName, branchName}
+	}
+
+	tagResult, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+		EnvContainer: envContainer,
+		Command:      "git",
+		Args:         tagArgs,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to execute tag creation command: %v", err)
+	}
+
+	if tagResult.ExitStatus != 0 {
+		return "", fmt.Errorf("failed to create archive tag %s: %s", tagName, tagResult.Stderr)
+	}
+
+	return tagName, nil
+}
+
+// findNextAvailableTagName determines the next available tag name given existing tags.
+func findNextAvailableTagName(baseTagName, existingTagsOutput string) string {
+	if existingTagsOutput == "" {
+		return baseTagName
+	}
+
+	existingTags := make(map[string]bool)
+	for _, tag := range strings.Split(strings.TrimSpace(existingTagsOutput), "\n") {
+		existingTags[tag] = true
+	}
+
+	if !existingTags[baseTagName] {
+		return baseTagName
+	}
+
+	for i := 2; ; i++ {
+		tagName := fmt.Sprintf("%s-%d", baseTagName, i)
+		if !existingTags[tagName] {
+			return tagName
+		}
+	}
 }
 
 // ListWorktreesActivity lists all Git worktrees for a given repository directory.
