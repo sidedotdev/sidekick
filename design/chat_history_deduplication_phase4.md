@@ -60,6 +60,50 @@ Key locations (not exhaustive):
 - `dev/build_dev_plan.go`
 - Other files calling `ChatStream` with chat history
 
-### 4. Ensure Hydration Before Content Access
+### 4. Use ChatStream Helper
+
+Replace direct `LlmActivities.ChatStream` calls with the `ExecuteChatStream` helper from Phase 3:
+
+Before:
+```go
+var la *persisted_ai.LlmActivities
+options := persisted_ai.ChatStreamOptions{
+    ToolChatOptions: llm.ToolChatOptions{...},
+    WorkspaceId:     workspaceId,
+    FlowId:          flowId,
+    FlowActionId:    flowActionId,
+}
+var response llm.ChatMessageResponse
+err := workflow.ExecuteActivity(ctx, la.ChatStream, options).Get(ctx, &response)
+// manually append response to chat history
+```
+
+After:
+```go
+options := persisted_ai.ChatStreamOptions{
+    ToolChatOptions: llm.ToolChatOptions{...},
+    WorkspaceId:     workspaceId,
+    FlowId:          flowId,
+    FlowActionId:    flowActionId,
+}
+response, err := dev.ExecuteChatStream(ctx, options, chatHistory)
+// response messages are automatically persisted to chatHistory as non-hydrated
+```
+
+The helper internally:
+1. Translates `ChatStreamOptions` to `StreamOptions` (mapping `llm.ToolChatOptions` fields to `llm2.Options`)
+2. Hydrates the chat history if needed
+3. Calls `Llm2Activities.Stream`
+4. Persists the response messages as non-hydrated entries in the chat history
+
+This approach:
+- Minimizes changes at call sites (same `ChatStreamOptions` struct)
+- Centralizes the translation logic in one place
+- Automatically handles response persistence
+- Is gated by the same workflow version check used for `Llm2ChatHistory` initialization
+
+### 5. Ensure Hydration Before Content Access
 
 Any workflow code that accesses message content must ensure hydration first. For activities, call `Hydrate()` at the start. The `ManageV3` activity handles this internally.
+
+The `ExecuteChatStream` helper handles hydration automatically before building the `llm2.Options.Params.Messages`.

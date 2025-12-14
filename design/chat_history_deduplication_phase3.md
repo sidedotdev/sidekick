@@ -59,24 +59,81 @@ func (cha *ChatHistoryActivities) ManageV3(ctx context.Context, history ChatHist
 }
 ```
 
-### 5. Create ChatStream Helper
+### 5. Implement Llm2Activities
+
+**File:** `persisted_ai/llm2_activities.go` (new file)
+
+Create `Llm2Activities` struct with a `Stream` method that mirrors `LlmActivities.ChatStream` but uses `llm2` types:
+
+```go
+type StreamOptions struct {
+    llm2.Options
+    WorkspaceId  string
+    FlowId       string
+    FlowActionId string
+}
+
+type Llm2Activities struct {
+    Streamer srv.Streamer
+}
+
+func (la *Llm2Activities) Stream(ctx context.Context, options StreamOptions) (*llm2.MessageResponse, error)
+```
+
+Key differences from `LlmActivities.ChatStream`:
+- Uses `llm2.Options` (with `llm2.Params` containing `[]llm2.Message`) instead of `llm.ToolChatOptions`
+- Uses `llm2.Provider` interface (`AnthropicResponsesProvider`, `OpenAIResponsesProvider`) instead of `llm.ToolChatter`
+- Streams `llm2.Event` instead of `llm.ChatMessageDelta`
+- Returns `*llm2.MessageResponse` instead of `*llm.ChatMessageResponse`
+- Provider selection based on `options.Params.ModelConfig.Provider`
+
+The streaming goroutine should:
+- Convert `llm2.Event` to appropriate `domain` flow events for the Streamer
+- Record heartbeats via `activity.RecordHeartbeat`
+- Call `Streamer.EndFlowEventStream` on completion
+
+Add helper function to select provider:
+```go
+func getLlm2Provider(config common.ModelConfig) (llm2.Provider, error)
+```
+
+### 6. Create ChatStream Helper
 
 **File:** `dev/chat_stream_helper.go` (new file)
 
-Create helper function that wraps ChatStream execution:
-- Calls `Persist()` on chat history before executing (no-op for legacy)
-- Executes ChatStream via `PerformWithUserRetry`
-- Returns response
+```go
+func ExecuteChatStream(ctx workflow.Context, options persisted_ai.ChatStreamOptions, chatHistory *Llm2ChatHistory) (*llm2.MessageResponse, error)
+```
 
-This helper will be used in Phase 4 to replace direct ChatStream calls.
+This helper:
+1. Auto-translates `ChatStreamOptions` to `StreamOptions` (converting `llm.ToolChatOptions` fields to `llm2.Options`)
+2. Calls `Llm2Activities.Stream` with the translated options
+3. Persists non-hydrated messages from the response back to the chat history via `chatHistory.AppendNonHydrated()`
+4. Returns the response
 
-### 6. Register Activities
+This abstraction allows existing code to continue using `ChatStreamOptions` while internally using the new `llm2` infrastructure.
+
+### 7. Register Activities
 
 **File:** `worker/worker.go`
 
-Register `ChatHistoryActivities` with the worker, injecting `Storage`.
+Register activities with the worker:
+- `ChatHistoryActivities` (injecting `Storage`)
+- `Llm2Activities` (injecting `Streamer`)
 
-### 7. Unit Tests
+```go
+chatHistoryActivities := &common.ChatHistoryActivities{
+    Storage: service,
+}
+llm2Activities := &persisted_ai.Llm2Activities{
+    Streamer: service,
+}
+// ...
+w.RegisterActivity(chatHistoryActivities)
+w.RegisterActivity(llm2Activities)
+```
+
+### 8. Unit Tests
 
 **File:** `common/chat_history_test.go`
 
@@ -89,3 +146,11 @@ Add tests for `Llm2ChatHistory`:
 **File:** `dev/chat_history_activities_test.go` (new file)
 
 Test `ManageV3` activity with mock storage.
+
+**File:** `persisted_ai/llm2_activities_test.go` (new file)
+
+Test `Llm2Activities.Stream`:
+- Provider selection for openai/anthropic
+- Event streaming and flow event conversion
+- Heartbeat recording in activity context
+- Error handling for unknown providers
