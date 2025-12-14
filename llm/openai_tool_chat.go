@@ -201,6 +201,7 @@ func openaiFromChatMessages(messages []ChatMessage, shouldMerge bool) []openai.C
 
 		if isEquivalentRole && !bothTool {
 			lastMsg.Content += "\n\n" + string(msg.Role) + ":" + msg.Content
+			lastMsg.ToolCalls = append(lastMsg.ToolCalls, msg.ToolCalls...)
 		} else {
 			mergedMessages = append(mergedMessages, msg)
 		}
