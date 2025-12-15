@@ -1353,3 +1353,131 @@ func TestManageChatHistoryV2_Trimming_SoftLimit(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, expectedOnlyII, resultOnlyII) // Soft limit: IIs are kept even if > maxLength
 }
+
+func TestManageChatHistoryV2_ToolCallArgumentsInLength(t *testing.T) {
+	// Test that ToolCalls.Arguments are included in length calculation
+	chatHistory := []llm.ChatMessage{
+		{Content: "Init", ContextType: ContextTypeInitialInstructions}, // len 4
+		{
+			Role:    llm.ChatMessageRoleAssistant,
+			Content: "A",
+			ToolCalls: []llm.ToolCall{
+				{Id: "tc1", Name: "tool1", Arguments: strings.Repeat("X", 100)}, // 100 chars in args
+			},
+		}, // total len = 1 + 100 = 101
+		{Role: llm.ChatMessageRoleTool, Content: "response", ToolCallId: "tc1"}, // len 8
+		{Content: "Last"}, // len 4, retained as last
+	}
+
+	// maxLength = 20: Init(4) + Last(4) = 8 retained
+	// Assistant msg with tool call = 101, tool response = 8
+	// With args counted, assistant+tool (109) won't fit in remaining 12
+	result, err := ManageChatHistoryV2Activity(chatHistory, 20)
+	assert.NoError(t, err)
+
+	// Should drop the assistant+tool pair since they exceed limit
+	expected := []llm.ChatMessage{
+		{Content: "Init", ContextType: ContextTypeInitialInstructions},
+		{Content: "Last"},
+	}
+	assert.Equal(t, expected, result)
+}
+
+func TestManageChatHistoryV2_DropAllOlderBehavior(t *testing.T) {
+	// Test that once limit is hit, all older unretained messages are dropped
+	chatHistory := []llm.ChatMessage{
+		{Content: "Init", ContextType: ContextTypeInitialInstructions}, // len 4, retained
+		{Content: "A"},  // len 1, unretained
+		{Content: "B"},  // len 1, unretained
+		{Content: "CC"}, // len 2, unretained - this one exceeds limit
+		{Content: "D"},  // len 1, unretained
+		{Content: "E"},  // len 1, unretained, last message retained
+	}
+
+	// maxLength = 7: Init(4) + E(1) = 5 retained
+	// Remaining budget = 2
+	// Going backwards: D(1) fits (total=6), CC(2) would make total=8 > 7
+	// Once CC exceeds limit, B and A should also be dropped
+	result, err := ManageChatHistoryV2Activity(chatHistory, 7)
+	assert.NoError(t, err)
+
+	expected := []llm.ChatMessage{
+		{Content: "Init", ContextType: ContextTypeInitialInstructions},
+		{Content: "D"},
+		{Content: "E"},
+	}
+	assert.Equal(t, expected, result)
+}
+
+func TestManageChatHistoryV2_LargeToolResponseTruncation(t *testing.T) {
+	// Test that large tool responses are truncated before dropping
+	largeContent := strings.Repeat("X", 200) // 200 chars
+	chatHistory := []llm.ChatMessage{
+		{Content: "Init", ContextType: ContextTypeInitialInstructions}, // len 4
+		{
+			Role:      llm.ChatMessageRoleAssistant,
+			Content:   "call",
+			ToolCalls: []llm.ToolCall{{Id: "tc1", Name: "tool1", Arguments: "{}"}},
+		}, // len 4 + 2 = 6
+		{Role: llm.ChatMessageRoleTool, Content: largeContent, ToolCallId: "tc1", Name: "tool1"}, // len 200
+		{Content: "Last"}, // len 4, retained
+	}
+
+	// maxLength = 100, threshold = 5 (5% of 100)
+	// Tool response (200) > threshold (5), should be truncated
+	result, err := ManageChatHistoryV2Activity(chatHistory, 100)
+	assert.NoError(t, err)
+
+	assert.Len(t, result, 4)
+	assert.Equal(t, "Init", result[0].Content)
+	assert.Equal(t, "call", result[1].Content)
+	assert.True(t, strings.HasSuffix(result[2].Content, "[truncated]"))
+	assert.True(t, len(result[2].Content) < 200)
+	assert.Equal(t, "Last", result[3].Content)
+}
+
+func TestManageChatHistoryV2_TruncateOldestFirst(t *testing.T) {
+	// Test that oldest large tool responses are truncated first
+	largeContent1 := strings.Repeat("A", 150)
+	largeContent2 := strings.Repeat("B", 150)
+
+	chatHistory := []llm.ChatMessage{
+		{Content: "Init", ContextType: ContextTypeInitialInstructions}, // len 4
+		{
+			Role:      llm.ChatMessageRoleAssistant,
+			Content:   "c1",
+			ToolCalls: []llm.ToolCall{{Id: "tc1", Name: "tool1", Arguments: "{}"}},
+		}, // len 4
+		{Role: llm.ChatMessageRoleTool, Content: largeContent1, ToolCallId: "tc1", Name: "tool1"}, // len 150, older
+		{
+			Role:      llm.ChatMessageRoleAssistant,
+			Content:   "c2",
+			ToolCalls: []llm.ToolCall{{Id: "tc2", Name: "tool2", Arguments: "{}"}},
+		}, // len 4
+		{Role: llm.ChatMessageRoleTool, Content: largeContent2, ToolCallId: "tc2", Name: "tool2"}, // len 150, newer
+		{Content: "Last"}, // len 4, retained
+	}
+
+	// maxLength = 200, threshold = 10 (5% of 200)
+	// Both tool responses exceed threshold
+	// Oldest (A's) should be truncated first
+	result, err := ManageChatHistoryV2Activity(chatHistory, 200)
+	assert.NoError(t, err)
+
+	// Find the tool responses
+	var toolResp1, toolResp2 llm.ChatMessage
+	for _, msg := range result {
+		if msg.ToolCallId == "tc1" {
+			toolResp1 = msg
+		}
+		if msg.ToolCallId == "tc2" {
+			toolResp2 = msg
+		}
+	}
+
+	// Oldest should be truncated first
+	assert.True(t, strings.HasSuffix(toolResp1.Content, "[truncated]"), "Oldest tool response should be truncated")
+	assert.True(t, len(toolResp1.Content) < 150)
+	// Second response exists and may or may not be truncated depending on if first truncation was enough
+	assert.NotEmpty(t, toolResp2.ToolCallId)
+}

@@ -328,6 +328,18 @@ func containsMessage(messages []llm.ChatMessage, message llm.ChatMessage) bool {
 // Messages without ContextType are retained if they fall within a retained block (between a ContextType message and the next ContextType message),
 // or if they fit within maxLength after all marked messages are retained. maxLength is a soft limit that doesn't apply to marked messages.
 func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {
+	return manageChatHistoryV2(chatHistory, maxLength)
+}
+
+func messageLength(msg llm.ChatMessage) int {
+	length := len(msg.Content)
+	for _, tc := range msg.ToolCalls {
+		length += len(tc.Arguments)
+	}
+	return length
+}
+
+func manageChatHistoryV2(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {
 	if len(chatHistory) == 0 {
 		return []llm.ChatMessage{}, nil
 	}
@@ -424,20 +436,31 @@ func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) (
 		}
 	}
 
+	// Truncate large unretained tool responses before dropping messages.
+	// TODO: summarize via LLM later
+	chatHistory, isRetained = truncateLargeToolResponses(chatHistory, isRetained, maxLength)
+
 	var totalLength = 0
-	var newChatHistory []llm.ChatMessage
 	for i, msg := range chatHistory {
 		if isRetained[i] {
-			totalLength += len(msg.Content)
+			totalLength += messageLength(msg)
 		}
 	}
 
+	// Drop all older unretained messages once limit is exceeded
+	var newChatHistory []llm.ChatMessage
+	limitExceeded := false
 	for i := len(chatHistory) - 1; i >= 0; i-- {
 		msg := chatHistory[i]
-		if isRetained[i] || len(msg.Content)+totalLength <= maxLength {
-			newChatHistory = append(newChatHistory, chatHistory[i])
-			if !isRetained[i] {
-				totalLength += len(msg.Content)
+		if isRetained[i] {
+			// totalLength already includes all retained messages, no need to increment
+			newChatHistory = append(newChatHistory, msg)
+		} else if !limitExceeded {
+			if messageLength(msg)+totalLength <= maxLength {
+				newChatHistory = append(newChatHistory, msg)
+				totalLength += messageLength(msg)
+			} else {
+				limitExceeded = true
 			}
 		}
 	}
@@ -446,6 +469,58 @@ func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) (
 	cleanToolCallsAndResponses(&newChatHistory)
 
 	return newChatHistory, nil
+}
+
+func truncateLargeToolResponses(chatHistory []llm.ChatMessage, isRetained []bool, maxLength int) ([]llm.ChatMessage, []bool) {
+	threshold := maxLength / 20 // 5% of maxLength
+
+	// Find unretained tool responses exceeding threshold
+	type candidate struct {
+		index  int
+		length int
+	}
+	var candidates []candidate
+	for i, msg := range chatHistory {
+		if !isRetained[i] && msg.Role == llm.ChatMessageRoleTool && messageLength(msg) > threshold {
+			candidates = append(candidates, candidate{index: i, length: messageLength(msg)})
+		}
+	}
+
+	if len(candidates) == 0 {
+		return chatHistory, isRetained
+	}
+
+	// Calculate total length of all messages
+	totalLength := 0
+	for _, msg := range chatHistory {
+		totalLength += messageLength(msg)
+	}
+
+	// Truncate oldest large tool responses first until under limit or none left
+	result := make([]llm.ChatMessage, len(chatHistory))
+	copy(result, chatHistory)
+
+	for _, c := range candidates {
+		if totalLength <= maxLength {
+			break
+		}
+		msg := result[c.index]
+		truncatedContent := msg.Content[:min(len(msg.Content), threshold)]
+		if len(truncatedContent) < len(msg.Content) {
+			truncatedContent += "\n[truncated]"
+		}
+		oldLen := messageLength(msg)
+		result[c.index] = llm.ChatMessage{
+			Role:       msg.Role,
+			Content:    truncatedContent,
+			Name:       msg.Name,
+			ToolCallId: msg.ToolCallId,
+			IsError:    msg.IsError,
+		}
+		totalLength -= oldLen - messageLength(result[c.index])
+	}
+
+	return result, isRetained
 }
 
 // extractSequenceNumbersFromReportContent extracts unique edit block sequence numbers
