@@ -84,7 +84,9 @@ const subflowsById = ref<Record<string, Subflow>>({});
 const isGoNextAvailable = computed(() => activeDevStep.value.size > 0);
 
 const updateSubflowTrees = () => {
-  const relevantFlowActions = flowActions.value
+  const relevantFlowActions = flowActions.value.filter(
+    (action) => action.actionType !== 'user_request.continue' || action.actionStatus === 'pending'
+  )
   const newSubtrees = buildSubflowTrees(relevantFlowActions)
   subflowTrees.value = newSubtrees
 }

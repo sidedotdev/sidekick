@@ -140,57 +140,84 @@ func TestGetActionDisplayName(t *testing.T) {
 
 func TestShouldHideAction(t *testing.T) {
 	tests := []struct {
-		name       string
-		actionType string
-		want       bool
+		name         string
+		actionType   string
+		actionStatus domain.ActionStatus
+		want         bool
 	}{
 		{
-			name:       "ranked_repo_summary should be hidden",
-			actionType: "ranked_repo_summary",
-			want:       true,
+			name:         "ranked_repo_summary should be hidden",
+			actionType:   "ranked_repo_summary",
+			actionStatus: domain.ActionStatusComplete,
+			want:         true,
 		},
 		{
-			name:       "cleanup_worktree should be hidden",
-			actionType: "cleanup_worktree",
-			want:       true,
+			name:         "cleanup_worktree should be hidden",
+			actionType:   "cleanup_worktree",
+			actionStatus: domain.ActionStatusComplete,
+			want:         true,
 		},
 		{
-			name:       "generate.branch_names should be hidden",
-			actionType: "generate.branch_names",
-			want:       true,
+			name:         "generate.branch_names should be hidden",
+			actionType:   "generate.branch_names",
+			actionStatus: domain.ActionStatusComplete,
+			want:         true,
 		},
 		{
-			name:       "apply_edit_blocks should not be hidden",
-			actionType: "apply_edit_blocks",
-			want:       false,
+			name:         "apply_edit_blocks should not be hidden",
+			actionType:   "apply_edit_blocks",
+			actionStatus: domain.ActionStatusComplete,
+			want:         false,
 		},
 		{
-			name:       "generate.code_context should not be hidden",
-			actionType: "generate.code_context",
-			want:       false,
+			name:         "generate.code_context should not be hidden",
+			actionType:   "generate.code_context",
+			actionStatus: domain.ActionStatusComplete,
+			want:         false,
 		},
 		{
-			name:       "user_request should not be hidden",
-			actionType: "user_request",
-			want:       false,
+			name:         "user_request should not be hidden",
+			actionType:   "user_request",
+			actionStatus: domain.ActionStatusPending,
+			want:         false,
 		},
 		{
-			name:       "merge should not be hidden",
-			actionType: "merge",
-			want:       false,
+			name:         "merge should not be hidden",
+			actionType:   "merge",
+			actionStatus: domain.ActionStatusComplete,
+			want:         false,
 		},
 		{
-			name:       "unknown action should not be hidden",
-			actionType: "some_unknown_action",
-			want:       false,
+			name:         "unknown action should not be hidden",
+			actionType:   "some_unknown_action",
+			actionStatus: domain.ActionStatusComplete,
+			want:         false,
+		},
+		{
+			name:         "user_request.continue pending should not be hidden",
+			actionType:   "user_request.continue",
+			actionStatus: domain.ActionStatusPending,
+			want:         false,
+		},
+		{
+			name:         "user_request.continue complete should be hidden",
+			actionType:   "user_request.continue",
+			actionStatus: domain.ActionStatusComplete,
+			want:         true,
+		},
+		{
+			name:         "user_request.continue started should be hidden",
+			actionType:   "user_request.continue",
+			actionStatus: domain.ActionStatusStarted,
+			want:         true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := shouldHideAction(tt.actionType)
+			got := shouldHideAction(tt.actionType, tt.actionStatus)
 			if got != tt.want {
-				t.Errorf("shouldHideAction(%q) = %v, want %v", tt.actionType, got, tt.want)
+				t.Errorf("shouldHideAction(%q, %q) = %v, want %v", tt.actionType, tt.actionStatus, got, tt.want)
 			}
 		})
 	}
