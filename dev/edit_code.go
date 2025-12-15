@@ -159,8 +159,9 @@ editLoop:
 			// well. in the error case, we use the system message as the
 			// feedback and get it into chat history that way
 			*chatHistory = append(*chatHistory, llm.ChatMessage{
-				Role:    "system",
-				Content: reportMessage,
+				Role:        "system",
+				Content:     reportMessage,
+				ContextType: ContextTypeEditBlockReport,
 			})
 
 			break
@@ -345,6 +346,9 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 		skip = true
 	case FeedbackInfo:
 		content = renderAuthorEditBlockFeedbackPrompt(info.Feedback, info.Type)
+		if info.Type == FeedbackTypeApplyError {
+			contextType = ContextTypeEditBlockReport
+		}
 	case ToolCallResponseInfo:
 		role = llm.ChatMessageRoleTool
 		content = info.Response
