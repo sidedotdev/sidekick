@@ -48,13 +48,11 @@ func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, cont
 	// were made or not, and what feedback there may be for adjusting or
 	// gathering requirements
 	attemptCount := 0
-	attemptsSinceLastFeedback := 0
 	maxAttempts := 17
 	repoConfig := dCtx.RepoConfig
 	if repoConfig.MaxIterations > 0 {
 		maxAttempts = repoConfig.MaxIterations
 	}
-	maxIterationsBeforeFeedback := 3
 
 editLoop:
 	for {
@@ -72,34 +70,11 @@ editLoop:
 			return fmt.Errorf("failed to make user request when paused: %v", err)
 		} else if response != nil {
 			promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
-			attemptsSinceLastFeedback = 0
 		}
 
 		v := workflow.GetVersion(dCtx, "no-max-unless-disabled-human", workflow.DefaultVersion, 1)
 		if attemptCount >= maxAttempts && (v < 1 || dCtx.RepoConfig.DisableHumanInTheLoop) {
 			return ErrMaxAttemptsReached
-		}
-
-		// Inject proactive system message based on tool-call thresholds
-		if msg, ok := ThresholdMessageForCounter(maxIterationsBeforeFeedback, attemptsSinceLastFeedback); ok {
-			//*chatHistory = append(*chatHistory, llm.ChatMessage{
-			//	Role:    "system",
-			//	Content: msg,
-			//})
-			promptInfo = FeedbackInfo{Feedback: msg, Type: FeedbackTypeSystemError}
-		}
-
-		// Only request feedback if we haven't received any recently from any source
-		if attemptCount > 0 && attemptsSinceLastFeedback >= maxIterationsBeforeFeedback {
-			guidanceContext := "The system has attempted to edit the code multiple times without success. Please provide some guidance."
-			requestParams := map[string]any{
-				"editBlockReports": reports,
-			}
-			promptInfo, err = GetUserFeedback(dCtx, promptInfo, guidanceContext, chatHistory, requestParams)
-			if err != nil {
-				return fmt.Errorf("failed to get user feedback: %v", err)
-			}
-			attemptsSinceLastFeedback = 0
 		}
 
 		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
