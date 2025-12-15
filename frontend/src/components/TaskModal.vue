@@ -99,96 +99,14 @@ import SegmentedControl from './SegmentedControl.vue'
 import BranchSelector from './BranchSelector.vue'
 import LlmConfigEditor from './LlmConfigEditor.vue'
 import { store } from '../lib/store'
-import type { Task, TaskStatus, LLMConfig, ModelConfig } from '../lib/models'
-
-const PRESETS_STORAGE_KEY = 'sidekick_model_presets'
-
-const modelConfigsEqual = (a: ModelConfig[], b: ModelConfig[]): boolean => {
-  if (a.length !== b.length) return false
-  const normalize = (c: ModelConfig) => `${c.provider}|${c.model}|${c.reasoningEffort || ''}`
-  const setA = new Set(a.map(normalize))
-  const setB = new Set(b.map(normalize))
-  if (setA.size !== setB.size) return false
-  for (const item of setA) {
-    if (!setB.has(item)) return false
-  }
-  return true
-}
-
-const llmConfigsEqual = (a: LLMConfig, b: LLMConfig): boolean => {
-  if (!modelConfigsEqual(a.defaults || [], b.defaults || [])) return false
-  
-  const keysA = Object.keys(a.useCaseConfigs || {}).sort()
-  const keysB = Object.keys(b.useCaseConfigs || {}).sort()
-  if (keysA.length !== keysB.length) return false
-  if (!keysA.every((k, i) => k === keysB[i])) return false
-  
-  for (const key of keysA) {
-    if (!modelConfigsEqual(a.useCaseConfigs[key] || [], b.useCaseConfigs[key] || [])) {
-      return false
-    }
-  }
-  return true
-}
-
-interface ModelPreset {
-  id: string
-  name: string
-  config: LLMConfig
-}
+import { getModelSummary } from '../lib/llmPresets'
+import { loadPresets, savePresets, llmConfigsEqual, type ModelPreset } from '../lib/llmPresetStorage'
+import type { Task, TaskStatus, LLMConfig } from '../lib/models'
 
 type PresetOption = 
   | { value: 'default'; label: string }
   | { value: 'add_preset'; label: string }
   | { value: string; label: string; preset: ModelPreset }
-
-const loadPresets = (): ModelPreset[] => {
-  try {
-    const stored = localStorage.getItem(PRESETS_STORAGE_KEY)
-    return stored ? JSON.parse(stored) : []
-  } catch {
-    return []
-  }
-}
-
-const savePresets = (presets: ModelPreset[]) => {
-  localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets))
-}
-
-const capitalizeProvider = (provider: string): string => {
-  if (provider === 'openai') return 'OpenAI'
-  if (provider === 'anthropic') return 'Anthropic'
-  if (provider === 'google') return 'Google'
-  return provider.charAt(0).toUpperCase() + provider.slice(1)
-}
-
-const getModelSummary = (config: LLMConfig): string => {
-  const models: string[] = []
-  const defaultModel = config.defaults?.[0]
-  if (defaultModel) {
-    if (defaultModel.model) {
-      models.push(defaultModel.model)
-    } else if (defaultModel.provider) {
-      models.push(`${capitalizeProvider(defaultModel.provider)} (default)`)
-    }
-  }
-  
-  for (const [, configs] of Object.entries(config.useCaseConfigs || {})) {
-    const ucConfig = configs?.[0]
-    if (ucConfig) {
-      if (ucConfig.model && !models.includes(ucConfig.model)) {
-        models.push(ucConfig.model)
-      } else if (ucConfig.provider && !ucConfig.model) {
-        const providerDefault = `${capitalizeProvider(ucConfig.provider)} (default)`
-        if (!models.includes(providerDefault)) {
-          models.push(providerDefault)
-        }
-      }
-    }
-  }
-  
-  return models.length > 0 ? models.join(' + ') : 'No models configured'
-}
 
 const validateLlmConfig = (config: LLMConfig): boolean => {
   const defaultConfig = config.defaults?.[0]
