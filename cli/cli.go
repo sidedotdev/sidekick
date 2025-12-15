@@ -21,7 +21,9 @@ import (
 var version string
 
 // program struct and its methods (Start, run, Stop) are for system service mode
-type program struct{}
+type program struct {
+	shutdownTracer func(context.Context) error
+}
 
 func (p *program) Start(s system_service.Service) error {
 	go p.run()
@@ -29,13 +31,17 @@ func (p *program) Start(s system_service.Service) error {
 }
 
 func (p *program) run() {
-	startServer()
+	_, p.shutdownTracer = startServer()
 	startWorker()
 	startTemporal()
 }
 
 func (p *program) Stop(s system_service.Service) error {
-	// Stop should put the program into a safe state and return quickly.
+	if p.shutdownTracer != nil {
+		if err := p.shutdownTracer(context.Background()); err != nil {
+			log.Error().Err(err).Msg("Error shutting down telemetry")
+		}
+	}
 	return nil
 }
 
