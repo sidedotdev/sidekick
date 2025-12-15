@@ -141,7 +141,7 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textarea.Blur()
 		}
 
-		if shouldHideAction(action.ActionType) {
+		if shouldHideAction(action.ActionType, action.ActionStatus) {
 			return m, nil
 		}
 
@@ -406,7 +406,10 @@ func getActionDisplayName(actionType string) string {
 	return strings.Join(words, " ")
 }
 
-func shouldHideAction(actionType string) bool {
+func shouldHideAction(actionType string, actionStatus domain.ActionStatus) bool {
+	if actionType == "user_request.continue" && actionStatus != domain.ActionStatusPending {
+		return true
+	}
 	return hiddenActionTypes[actionType]
 }
 
