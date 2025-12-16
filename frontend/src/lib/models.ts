@@ -111,6 +111,7 @@ export interface FlowAction {
 
 export interface SubflowTree {
   name: string;
+  id?: string;
   description?: string | null;
   children: Array<FlowAction | SubflowTree>;
 }

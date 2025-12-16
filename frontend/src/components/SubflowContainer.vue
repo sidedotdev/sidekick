@@ -4,6 +4,7 @@
       <h2 class="subflow-name">
           <span class="caret" :class="{ 'caret-expanded': accordionState.expanded }"></span>
           {{ subflowTree.name }}
+          <span v-if="subflowStatus === 'failed'" class="error-indicator">❌</span>
       </h2>
     </div>
     <p v-if="accordionState.expanded && subflowTree.description">{{subflowTree.description}}</p>
@@ -12,16 +13,19 @@
         <template v-if="isFlowAction(child)">
           <FlowActionItem v-if="!isStartFlowAction(child)" :flowAction="child" :defaultExpanded="defaultExpanded && index === subflowTree.children.length - 1" :level="level + 1"/>
         </template>
-        <SubflowContainer v-else :subflowTree="child" :defaultExpanded="defaultExpanded && index === subflowTree.children.length - 1" :level="level + 1" />
+        <SubflowContainer v-else :subflowTree="child" :defaultExpanded="defaultExpanded && index === subflowTree.children.length - 1" :level="level + 1" :subflowsById="subflowsById" />
       </template>
+      <div v-if="subflowStatus === 'failed' && subflowResult" class="error-message">
+        {{ subflowResult }}
+      </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import FlowActionItem from './FlowActionItem.vue'
-import type { FlowAction, SubflowTree } from '../lib/models'
+import type { FlowAction, SubflowTree, Subflow } from '../lib/models'
 import { useEventBus } from '@vueuse/core';
 
 const props = defineProps({
@@ -37,6 +41,24 @@ const props = defineProps({
     type: Number,
     default: 0,
   },
+  subflowsById: {
+    type: Object as () => Record<string, Subflow>,
+    default: () => ({}),
+  },
+});
+
+const subflowStatus = computed(() => {
+  if (props.subflowTree.id && props.subflowsById[props.subflowTree.id]) {
+    return props.subflowsById[props.subflowTree.id].status;
+  }
+  return null;
+});
+
+const subflowResult = computed(() => {
+  if (props.subflowTree.id && props.subflowsById[props.subflowTree.id]) {
+    return props.subflowsById[props.subflowTree.id].result;
+  }
+  return null;
 });
 
 let wasToggled = false;
@@ -155,6 +177,24 @@ function childKey(child: FlowAction | SubflowTree, index: number): string {
 
 .caret-expanded {
   transform: rotate(90deg);
+}
+
+.error-indicator {
+  margin-left: 0.5rem;
+  font-size: 0.9em;
+}
+
+.error-message {
+  background-color: var(--color-error-background, rgba(255, 0, 0, 0.1));
+  border: 1px solid var(--color-error-border, #ff4444);
+  border-radius: 4px;
+  padding: 0.75rem 1rem;
+  margin: 0.5rem 0;
+  color: var(--color-error-text, #ff6666);
+  font-family: monospace;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* border styling */
