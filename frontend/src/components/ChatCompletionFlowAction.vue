@@ -10,7 +10,7 @@
         </span>
       </p>
       <p class="model-usage" v-if="parsedActionResult && !completionParseFailure && flowAction.actionStatus !== 'pending' && flowAction.actionStatus !== 'started' && usage && (usage.inputTokens || usage.outputTokens)">
-        <span v-if="usage.inputTokens">{{ formatTokens(usage.inputTokens) }} in</span><span v-if="usage.inputTokens && usage.outputTokens"> · </span><span v-if="usage.outputTokens">{{ formatTokens(usage.outputTokens) }} out</span>
+        <span v-if="usage.inputTokens">{{ formatTokens(usage.inputTokens) }} in</span><span v-if="usage.inputTokens && usage.cacheReadInputTokens"> ({{ formatTokens(usage.cacheReadInputTokens) }} cached)</span><span v-if="usage.inputTokens && usage.outputTokens"> · </span><span v-if="usage.outputTokens">{{ formatTokens(usage.outputTokens) }} out</span>
       </p>
     </div>
 
