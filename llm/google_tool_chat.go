@@ -157,7 +157,7 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 	if lastResult != nil && lastResult.UsageMetadata != nil {
 		usage.InputTokens = int(lastResult.UsageMetadata.PromptTokenCount)
 		usage.OutputTokens = int(lastResult.UsageMetadata.CandidatesTokenCount)
-		// Note: TotalTokenCount is also available if needed later: int(lastResult.UsageMetadata.TotalTokenCount)
+		usage.CacheReadInputTokens = int(lastResult.UsageMetadata.CachedContentTokenCount)
 	}
 
 	return &ChatMessageResponse{

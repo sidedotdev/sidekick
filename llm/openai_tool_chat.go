@@ -283,10 +283,14 @@ func openaiToUsage(usage *openai.Usage) Usage {
 	if usage == nil {
 		return Usage{}
 	}
-	return Usage{
+	result := Usage{
 		InputTokens:  usage.PromptTokens,
 		OutputTokens: usage.CompletionTokens,
 	}
+	if usage.PromptTokensDetails != nil {
+		result.CacheReadInputTokens = usage.PromptTokensDetails.CachedTokens
+	}
+	return result
 }
 
 func cleanupDelta(delta ChatMessageDelta) ChatMessageDelta {
