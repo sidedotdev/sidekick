@@ -131,15 +131,27 @@ const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Prom
           const actionIndex = flowActions.value.findIndex(action => action.id === flowEvent.flowActionId);
           if (actionIndex !== -1) {
             const action = flowActions.value[actionIndex];
-            const contentBuilder: string[] = [];
-            if (delta.content) contentBuilder.push(delta.content);
+            if (!action.streamingData) {
+              action.streamingData = { content: '', toolCalls: [] };
+            }
+            if (delta.content) {
+              action.streamingData.content += delta.content;
+            }
             if (delta.toolCalls) {
               delta.toolCalls.forEach(toolCall => {
-                if (toolCall.name) contentBuilder.push(`toolName = ${toolCall.name}\n`);
-                if (toolCall.arguments) contentBuilder.push(toolCall.arguments);
+                const existingToolCall = action.streamingData!.toolCalls.find(tc => tc.id === toolCall.id);
+                if (existingToolCall) {
+                  if (toolCall.name) existingToolCall.name = toolCall.name;
+                  if (toolCall.arguments) existingToolCall.arguments = (existingToolCall.arguments || '') + toolCall.arguments;
+                } else {
+                  action.streamingData!.toolCalls.push({
+                    id: toolCall.id,
+                    name: toolCall.name,
+                    arguments: toolCall.arguments || ''
+                  });
+                }
               });
             }
-            action.actionResult += contentBuilder.join('\n');
             flowActions.value[actionIndex] = action;
           } else {
             console.error(`FlowAction with id ${flowEvent.flowActionId} not found.`);

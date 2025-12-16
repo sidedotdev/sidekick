@@ -51,24 +51,35 @@
       </div>
     </div>
 
-    <div class="action-result" v-if="flowAction.actionResult != '' || (flowAction.actionStatus != 'pending' && flowAction.actionStatus != 'started')">
+    <div class="action-result" v-if="flowAction.actionResult != '' || flowAction.streamingData || (flowAction.actionStatus != 'pending' && flowAction.actionStatus != 'started')">
 
-      <div v-if="completionParseFailure" class="error-message">
-        <div v-if="flowAction.actionStatus != 'pending' && flowAction.actionStatus != 'started'">
-          Error: {{ completionParseFailure }}
+      <!-- Streaming state: render partial content -->
+      <template v-if="isStreaming && streamingData">
+        <vue-markdown v-if="streamingData.content" :options="{ breaks: true }" :source="streamingData.content" class="message-content markdown"/>
+        <div v-for="toolCall in streamingData.toolCalls" :key="toolCall.id" class="streaming-tool-call">
+          <p v-if="toolCall.name" class="action-result-function-name">Tool Call: {{ toolCall.name }}</p>
+          <vue-markdown :options="{ breaks: true }" :source="'```tool_call\n' + (toolCall.arguments || '') + '\n```'" class="tool-call-arguments"/>
         </div>
-        <pre>{{ flowAction.actionResult }}</pre>
-      </div>
-      <!-- legacy vue-markdown v-if="completion?.message?.content" :options="{ breaks: true }" :source="completion?.message?.content" class="action-result-content"/-->
-      <vue-markdown v-if="completion?.content" :options="{ breaks: true }" :source="completion?.content" class="message-content markdown"/>
-      <div v-for="toolCall in completion?.toolCalls" :key="toolCall.id">
-        <p class="action-result-function-name">Tool Call: {{ toolCall.name }}</p>
-        <JsonTree :deep="1" :data="toolCall.parsedArguments || JSON.parse(toolCall.arguments || '{}')" class="action-result-function-args"/>
-      </div>
-      <div v-if="parsedActionResult && !completion?.toolCalls?.length && !completion?.content">
-        <JsonTree :deep="1" :data="parsedActionResult" class="action-result-parsed"/>
-      </div>
-      <p v-if="completion?.stopReason" class="action-result-stop-reason">Stop Reason: {{ completion?.stopReason }}</p>
+      </template>
+
+      <!-- Completed state: render from parsed actionResult -->
+      <template v-else>
+        <div v-if="completionParseFailure" class="error-message">
+          <div v-if="flowAction.actionStatus != 'pending' && flowAction.actionStatus != 'started'">
+            Error: {{ completionParseFailure }}
+          </div>
+          <pre>{{ flowAction.actionResult }}</pre>
+        </div>
+        <vue-markdown v-if="completion?.content" :options="{ breaks: true }" :source="completion?.content" class="message-content markdown"/>
+        <div v-for="toolCall in completion?.toolCalls" :key="toolCall.id">
+          <p class="action-result-function-name">Tool Call: {{ toolCall.name }}</p>
+          <JsonTree :deep="1" :data="toolCall.parsedArguments || JSON.parse(toolCall.arguments || '{}')" class="action-result-function-args"/>
+        </div>
+        <div v-if="parsedActionResult && !completion?.toolCalls?.length && !completion?.content">
+          <JsonTree :deep="1" :data="parsedActionResult" class="action-result-parsed"/>
+        </div>
+        <p v-if="completion?.stopReason" class="action-result-stop-reason">Stop Reason: {{ completion?.stopReason }}</p>
+      </template>
     </div>
   </div>
   <div v-if="debug" class="action-debug">
@@ -78,7 +89,7 @@
 </template>
 
 <script setup lang="ts">
-import type { ChatCompletionChoice, ChatCompletionMessage, FlowAction, Usage } from '../lib/models';
+import type { ChatCompletionChoice, ChatCompletionMessage, FlowAction, Usage, StreamingData } from '../lib/models';
 import { computed, ref, watch } from 'vue'
 import JsonTree from './JsonTree.vue'
 import VueMarkdown from 'vue-markdown-render'
@@ -126,6 +137,9 @@ const effectiveProvider = computed(() => props.flowAction.actionParams.provider 
 
 const usage = computed<Usage | null>(() => completion.value?.usage || null)
 
+const isStreaming = computed(() => props.flowAction.actionStatus === 'started')
+const streamingData = computed<StreamingData | null>(() => props.flowAction.streamingData || null)
+
 function formatTokens(n: number): string {
   if (n >= 1000) {
     const formatted = (n / 1000).toFixed(1)
@@ -136,6 +150,11 @@ function formatTokens(n: number): string {
 
 // Watcher for flowAction changes
 watch(() => props.flowAction, (newVal) => {
+  // Skip JSON parsing during streaming - we use streamingData instead
+  if (newVal.actionStatus === 'started') {
+    return;
+  }
+
   try {
     if (newVal.actionResult) {
       parsedActionResult.value = JSON.parse(newVal.actionResult);
@@ -241,6 +260,23 @@ function toggleMessage(index: number) {
   font-size: 0.85em;
   color: var(--color-text-2);
   font-weight: normal;
+}
+
+.streaming-tool-call {
+  margin-bottom: 1rem;
+}
+
+.tool-call-arguments :deep(pre) {
+  border: 2px solid var(--color-border-contrast);
+  padding: 1rem;
+  margin: 0;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-call-arguments :deep(code) {
+  font-family: monospace;
 }
 
 </style>
