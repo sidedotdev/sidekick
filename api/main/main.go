@@ -21,16 +21,12 @@ func main() {
 		}
 	}
 
-	srv, shutdownTracer := api.RunServer()
+	srv := api.RunServer()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
 	// graceful shutdown
-	ctx := context.Background()
-	if err := shutdownTracer(ctx); err != nil {
-		log.Error().Err(err).Msg("Error shutting down telemetry")
-	}
-	srv.Shutdown(ctx)
+	srv.Shutdown(context.Background())
 }

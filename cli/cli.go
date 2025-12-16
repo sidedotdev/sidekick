@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sidekick"
+	"sidekick/api"
 	"strconv"
 
 	// Embedding the frontend build files
@@ -22,7 +23,7 @@ var version string
 
 // program struct and its methods (Start, run, Stop) are for system service mode
 type program struct {
-	shutdownTracer func(context.Context) error
+	server *api.Server
 }
 
 func (p *program) Start(s system_service.Service) error {
@@ -31,15 +32,15 @@ func (p *program) Start(s system_service.Service) error {
 }
 
 func (p *program) run() {
-	_, p.shutdownTracer = startServer()
+	p.server = startServer()
 	startWorker()
 	startTemporal()
 }
 
 func (p *program) Stop(s system_service.Service) error {
-	if p.shutdownTracer != nil {
-		if err := p.shutdownTracer(context.Background()); err != nil {
-			log.Error().Err(err).Msg("Error shutting down telemetry")
+	if p.server != nil {
+		if err := p.server.Shutdown(context.Background()); err != nil {
+			log.Error().Err(err).Msg("Error shutting down server")
 		}
 	}
 	return nil

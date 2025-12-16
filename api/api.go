@@ -36,7 +36,21 @@ import (
 	"go.temporal.io/sdk/client"
 )
 
-func RunServer() (*http.Server, func(context.Context) error) {
+type Server struct {
+	httpServer     *http.Server
+	shutdownTracer func(context.Context) error
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.shutdownTracer != nil {
+		if err := s.shutdownTracer(ctx); err != nil {
+			log.Error().Err(err).Msg("Error shutting down telemetry")
+		}
+	}
+	return s.httpServer.Shutdown(ctx)
+}
+
+func RunServer() *Server {
 	gin.SetMode(gin.ReleaseMode)
 
 	shutdownTracer, err := telemetry.InitTracer("sidekick-api")
@@ -50,19 +64,22 @@ func RunServer() (*http.Server, func(context.Context) error) {
 	}
 	router := DefineRoutes(ctrl)
 
-	srv := &http.Server{
+	httpSrv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", common.GetServerPort()),
 		Handler: router.Handler(),
 	}
 
 	// Start server in a goroutine
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal().Err(err).Msg("Failed to start API server")
 		}
 	}()
 
-	return srv, shutdownTracer
+	return &Server{
+		httpServer:     httpSrv,
+		shutdownTracer: shutdownTracer,
+	}
 }
 
 type Controller struct {
