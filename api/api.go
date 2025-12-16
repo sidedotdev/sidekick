@@ -22,11 +22,13 @@ import (
 	"sidekick/llm"
 	"sidekick/secret_manager"
 	"sidekick/srv"
+	"sidekick/telemetry"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
@@ -34,27 +36,50 @@ import (
 	"go.temporal.io/sdk/client"
 )
 
-func RunServer() *http.Server {
+type Server struct {
+	httpServer     *http.Server
+	shutdownTracer func(context.Context) error
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.shutdownTracer != nil {
+		if err := s.shutdownTracer(ctx); err != nil {
+			log.Error().Err(err).Msg("Error shutting down telemetry")
+		}
+	}
+	return s.httpServer.Shutdown(ctx)
+}
+
+func RunServer() *Server {
 	gin.SetMode(gin.ReleaseMode)
+
+	shutdownTracer, err := telemetry.InitTracer("sidekick-api")
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize telemetry")
+	}
+
 	ctrl, err := NewController()
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize controller")
 	}
 	router := DefineRoutes(ctrl)
 
-	srv := &http.Server{
+	httpSrv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", common.GetServerPort()),
 		Handler: router.Handler(),
 	}
 
 	// Start server in a goroutine
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal().Err(err).Msg("Failed to start API server")
 		}
 	}()
 
-	return srv
+	return &Server{
+		httpServer:     httpSrv,
+		shutdownTracer: shutdownTracer,
+	}
 }
 
 type Controller struct {
@@ -146,6 +171,10 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	r := gin.Default()
 	r.ForwardedByClientIP = true
 	r.SetTrustedProxies(nil)
+
+	if telemetry.IsEnabled() {
+		r.Use(otelgin.Middleware("sidekick-api"))
+	}
 
 	r.GET("/api/v1/providers", ctrl.GetProvidersHandler)
 	r.GET("/api/v1/models", ctrl.GetModelsHandler)

@@ -564,7 +564,7 @@ func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
 			<-ctx.Done()
 			log.Info().Msg("Stopping server...")
 
-			if err := srv.Shutdown(ctx); err != nil {
+			if err := srv.Shutdown(context.Background()); err != nil {
 				log.Fatal().Err(err).Msg("Graceful API server shutdown failed")
 			}
 		}()
@@ -624,7 +624,7 @@ func handleStartCommand(cliCtx context.Context, cmd *cli.Command) error {
 	return nil
 }
 
-func startServer() *http.Server {
+func startServer() *api.Server {
 	return api.RunServer()
 }
 
