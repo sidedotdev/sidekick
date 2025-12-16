@@ -182,16 +182,16 @@ function childKey(child: FlowAction | SubflowTree, index: number): string {
 .error-indicator {
   margin-left: 0.5rem;
   font-size: 0.9em;
+  color: var(--color-error-text);
 }
 
 .error-message {
-  background-color: var(--color-error-background, rgba(255, 0, 0, 0.1));
-  border: 1px solid var(--color-error-border, #ff4444);
+  background-color: var(--color-error-background);
+  border: 1px solid var(--color-error-border);
   border-radius: 4px;
   padding: 0.75rem 1rem;
   margin: 0.5rem 0;
-  color: var(--color-error-text, #ff6666);
-  font-family: monospace;
+  color: var(--color-error-text);
   font-size: 0.9rem;
   white-space: pre-wrap;
   word-break: break-word;

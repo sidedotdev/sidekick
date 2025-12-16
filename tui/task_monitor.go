@@ -10,6 +10,7 @@ import (
 
 	"sidekick/client"
 	"sidekick/domain"
+	"sidekick/logger"
 
 	"github.com/gorilla/websocket"
 )
@@ -236,6 +237,8 @@ func (m *TaskMonitor) streamSubflowStatusEvents(ctx context.Context, flowId stri
 
 		event, err := domain.UnmarshalFlowEvent(message)
 		if err != nil {
+			l := logger.Get()
+			l.Warn().Err(err).Msg("failed to unmarshal flow event")
 			continue
 		}
 
@@ -244,14 +247,16 @@ func (m *TaskMonitor) streamSubflowStatusEvents(ctx context.Context, flowId stri
 			continue
 		}
 
-		// Only process failed subflow events (TargetId indicates a subflow)
-		if statusEvent.TargetId == "" || statusEvent.Status != string(domain.SubflowStatusFailed) {
+		// Only process failed subflow events (TargetId with sf_ prefix indicates a subflow)
+		if !strings.HasPrefix(statusEvent.TargetId, "sf_") || statusEvent.Status != string(domain.SubflowStatusFailed) {
 			continue
 		}
 
 		// Fetch full subflow to get the result field
 		subflow, err := m.client.GetSubflow(m.workspaceID, statusEvent.TargetId)
 		if err != nil {
+			l := logger.Get()
+			l.Warn().Err(err).Str("subflowId", statusEvent.TargetId).Msg("failed to fetch subflow")
 			continue
 		}
 

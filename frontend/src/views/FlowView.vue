@@ -106,6 +106,32 @@ let subflowTreeDebounceTimer: NodeJS.Timeout;
 let subscribeStreamDebounceTimers: {[key: string]: NodeJS.Timeout} = {};
 let subflowStatusUpdateDebounceTimers: {[key: string]: NodeJS.Timeout} = {};
 
+const handleSubflowStatusUpdate = (subflowId: string, status: SubflowStatus, result?: string) => {
+  clearTimeout(subflowStatusUpdateDebounceTimers[subflowId]);
+  subflowStatusUpdateDebounceTimers[subflowId] = setTimeout(() => {
+    const subflowToUpdate = subflowsById.value[subflowId];
+    if (subflowToUpdate) {
+      subflowToUpdate.status = status;
+      if (result) {
+        subflowToUpdate.result = result;
+      }
+
+      if (subflowToUpdate.type === 'step.dev' || subflowToUpdate.type === 'coding' || subflowToUpdate.type === 'review_and_resolve') {
+        if (status === SubflowStatus.Started) {
+          activeDevStep.value.add(subflowId);
+        } else if (
+          status === SubflowStatus.Complete ||
+          status === SubflowStatus.Failed
+        ) {
+          activeDevStep.value.delete(subflowId);
+        }
+      }
+    } else {
+      console.warn(`Received status update for subflow ${subflowId} not found in cache.`);
+    }
+  }, 100);
+};
+
 const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Promise<Response>) => {
   eventsSocket = new WebSocket(`ws://${window.location.host}/ws/v1/workspaces/${store.workspaceId}/flows/${flowId}/events`);
 
@@ -152,30 +178,7 @@ const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Prom
             // Use targetId if present (new format), otherwise this is a flow status change
             if (flowEvent.targetId) {
               // This is a subflow status change with new format (parentId=flowId, targetId=subflowId)
-              const subflowId = flowEvent.targetId;
-              clearTimeout(subflowStatusUpdateDebounceTimers[subflowId]);
-              subflowStatusUpdateDebounceTimers[subflowId] = setTimeout(() => {
-                const subflowToUpdate = subflowsById.value[subflowId];
-                if (subflowToUpdate) {
-                  subflowToUpdate.status = flowEvent.status;
-                  if (flowEvent.result) {
-                    subflowToUpdate.result = flowEvent.result;
-                  }
-
-                  if (subflowToUpdate.type === 'step.dev' || subflowToUpdate.type === 'coding' || subflowToUpdate.type === 'review_and_resolve') {
-                    if (flowEvent.status === SubflowStatus.Started) {
-                      activeDevStep.value.add(subflowId);
-                    } else if (
-                      flowEvent.status === SubflowStatus.Complete ||
-                      flowEvent.status === SubflowStatus.Failed
-                    ) {
-                      activeDevStep.value.delete(subflowId);
-                    }
-                  }
-                } else {
-                  console.warn(`Received status update for subflow ${subflowId} not found in cache.`);
-                }
-              }, 100);
+              handleSubflowStatusUpdate(flowEvent.targetId, flowEvent.status, flowEvent.result);
             } else {
               // This is a flow status change
               flow.value.status = flowEvent.status;
@@ -183,29 +186,7 @@ const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Prom
           } else { // This is a subflow status change (legacy format: parentId=subflowId)
             const subflowId = flowEvent.parentId;
             if (subflowId) { // Ensure subflowId is present
-              clearTimeout(subflowStatusUpdateDebounceTimers[subflowId]);
-              subflowStatusUpdateDebounceTimers[subflowId] = setTimeout(() => {
-                const subflowToUpdate = subflowsById.value[subflowId];
-                if (subflowToUpdate) {
-                  subflowToUpdate.status = flowEvent.status;
-                  if (flowEvent.result) {
-                    subflowToUpdate.result = flowEvent.result;
-                  }
-
-                  if (subflowToUpdate.type === 'step.dev' || subflowToUpdate.type === 'coding' || subflowToUpdate.type === 'review_and_resolve') {
-                    if (flowEvent.status === SubflowStatus.Started) {
-                      activeDevStep.value.add(subflowId);
-                    } else if (
-                      flowEvent.status === SubflowStatus.Complete ||
-                      flowEvent.status === SubflowStatus.Failed
-                    ) {
-                      activeDevStep.value.delete(subflowId);
-                    }
-                  }
-                } else {
-                  console.warn(`Received status update for subflow ${subflowId} not found in cache.`);
-                }
-              }, 100);
+              handleSubflowStatusUpdate(subflowId, flowEvent.status, flowEvent.result);
             }
           }
           break;
