@@ -141,6 +141,8 @@ export interface ChatCompletionMessage {
 export interface Usage {
   inputTokens?: number
   outputTokens?: number
+  cacheReadInputTokens?: number
+  cacheWriteInputTokens?: number
 }
 
 export interface ToolCall {

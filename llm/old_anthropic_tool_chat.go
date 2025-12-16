@@ -162,6 +162,8 @@ func oldAnthropicToChatMessageResponse(response old_anthropic.MessageResponse) *
 		Usage: Usage{
 			InputTokens:  response.Usage.InputTokens,
 			OutputTokens: response.Usage.OutputTokens,
+			// CacheReadInputTokens and CacheWriteInputTokens not supported by
+			// the old anthropic-go SDK; this file will be removed soon.
 		},
 		Model:    string(response.Model),
 		Provider: "anthropic",
