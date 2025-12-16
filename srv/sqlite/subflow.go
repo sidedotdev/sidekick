@@ -22,8 +22,8 @@ func (s *Storage) PersistSubflow(ctx context.Context, subflow domain.Subflow) er
 
 	query := `
 		INSERT OR REPLACE INTO subflows (
-			id, workspace_id, type, name, description, status, parent_subflow_id, flow_id, result
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			id, workspace_id, type, name, description, status, parent_subflow_id, flow_id, result, updated
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 	`
 
 	result, err := json.Marshal(subflow.Result)
@@ -67,7 +67,7 @@ func (s *Storage) GetSubflows(ctx context.Context, workspaceId, flowId string) (
 	}
 
 	query := `
-		SELECT id, workspace_id, type, name, description, status, parent_subflow_id, flow_id, result
+		SELECT id, workspace_id, type, name, description, status, parent_subflow_id, flow_id, result, updated
 		FROM subflows
 		WHERE workspace_id = ? AND flow_id = ?
 	`
@@ -97,6 +97,7 @@ func (s *Storage) GetSubflows(ctx context.Context, workspaceId, flowId string) (
 			&subflow.ParentSubflowId,
 			&subflow.FlowId,
 			&result,
+			&subflow.Updated,
 		)
 		if err != nil {
 			log.Error().Err(err).
@@ -142,7 +143,7 @@ func (s *Storage) GetSubflow(ctx context.Context, workspaceId, subflowId string)
 	}
 
 	query := `
-		SELECT id, workspace_id, type, name, description, status, parent_subflow_id, flow_id, result
+		SELECT id, workspace_id, type, name, description, status, parent_subflow_id, flow_id, result, updated
 		FROM subflows
 		WHERE workspace_id = ? AND id = ?
 	`
@@ -160,6 +161,7 @@ func (s *Storage) GetSubflow(ctx context.Context, workspaceId, subflowId string)
 		&subflow.ParentSubflowId,
 		&subflow.FlowId,
 		&result,
+		&subflow.Updated,
 	)
 
 	if err != nil {

@@ -5,7 +5,9 @@ import (
 	"sidekick/client"
 	"sidekick/common"
 	"sidekick/domain"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -45,6 +47,7 @@ type taskProgressModel struct {
 	quitting       bool
 	err            error
 	inputMode      inputMode
+	failedSubflows []domain.Subflow
 }
 
 func newProgressModel(taskID, flowID string, c client.Client) taskProgressModel {
@@ -82,6 +85,10 @@ type completeFlowActionErrorMsg struct {
 	err error
 }
 
+type subflowFailedMsg struct {
+	subflow domain.Subflow
+}
+
 func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -112,6 +119,10 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case completeFlowActionErrorMsg:
 		m.err = msg.err
+		return m, nil
+
+	case subflowFailedMsg:
+		m.failedSubflows = append(m.failedSubflows, msg.subflow)
 		return m, nil
 
 	case flowActionChangeMsg:
@@ -442,8 +453,32 @@ func (m taskProgressModel) View() string {
 		}
 	}
 
+	// Merge actions and failed subflows, sorted by timestamp
+	type displayItem struct {
+		timestamp time.Time
+		isSubflow bool
+		action    domain.FlowAction
+		subflow   domain.Subflow
+	}
+
+	items := make([]displayItem, 0, len(m.actions)+len(m.failedSubflows))
 	for _, action := range m.actions {
-		b.WriteString(m.renderAction(action))
+		items = append(items, displayItem{timestamp: action.Updated, isSubflow: false, action: action})
+	}
+	for _, subflow := range m.failedSubflows {
+		items = append(items, displayItem{timestamp: subflow.Updated, isSubflow: true, subflow: subflow})
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].timestamp.Before(items[j].timestamp)
+	})
+
+	for _, item := range items {
+		if item.isSubflow {
+			b.WriteString(m.renderFailedSubflow(item.subflow))
+		} else {
+			b.WriteString(m.renderAction(item.action))
+		}
 	}
 
 	// Display pending action input area
@@ -494,6 +529,18 @@ func (m taskProgressModel) View() string {
 	}
 
 	return b.String()
+}
+
+func (m taskProgressModel) renderFailedSubflow(subflow domain.Subflow) string {
+	displayName := subflow.Name
+	if displayName == "" {
+		displayName = subflow.Id
+	}
+	errorInfo := subflow.Result
+	if errorInfo == "" {
+		errorInfo = "unknown error"
+	}
+	return fmt.Sprintf("  %s %s: %s\n", redIndicator, displayName, errorInfo)
 }
 
 func (m taskProgressModel) renderAction(action domain.FlowAction) string {

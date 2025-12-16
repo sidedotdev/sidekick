@@ -64,6 +64,13 @@
   --color-modal-background-dark: var(--vt-c-black-soft);
   --color-modal-text-light: var(--vt-c-text-light-1);
   --color-modal-text-dark: var(--color-text-dark);
+
+  --color-error-background-light: rgba(220, 38, 38, 0.1);
+  --color-error-background-dark: rgba(220, 38, 38, 0.15);
+  --color-error-border-light: #dc2626;
+  --color-error-border-dark: #ef4444;
+  --color-error-text-light: #b91c1c;
+  --color-error-text-dark: #f87171;
 }
 
 /* semantic color variables for this project. these all default to dark mode.
@@ -87,6 +94,9 @@
   --color-select-border: var(--color-select-border-dark);
   --color-modal-background: var(--color-modal-background-dark);
   --color-modal-text: var(--color-modal-text-dark);
+  --color-error-background: var(--color-error-background-dark);
+  --color-error-border: var(--color-error-border-dark);
+  --color-error-text: var(--color-error-text-dark);
 }
 
 /* override the color variables for light mode. generally only these variables
@@ -110,6 +120,9 @@
     --color-select-border: rgba(0, 0, 0, 0.5);
     --color-modal-background: var(--color-modal-background-light);
     --color-modal-text: var(--color-modal-text-light);
+    --color-error-background: var(--color-error-background-light);
+    --color-error-border: var(--color-error-border-light);
+    --color-error-text: var(--color-error-text-light);
   }
 }
 

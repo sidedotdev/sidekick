@@ -78,7 +78,7 @@ func (s *DelegatorTestSuite) TestPersistSubflow() {
 	eventCh, errCh := s.streamer.StreamFlowEvents(ctx, workspaceId, flowId, subscriptionCh)
 
 	go func() {
-		subscriptionCh <- domain.FlowEventSubscription{ParentId: subflowId, StreamMessageStartId: ""}
+		subscriptionCh <- domain.FlowEventSubscription{ParentId: flowId, StreamMessageStartId: ""}
 		close(subscriptionCh)
 	}()
 
@@ -96,7 +96,8 @@ func (s *DelegatorTestSuite) TestPersistSubflow() {
 		statusEvent, ok := event.(domain.StatusChangeEvent)
 		s.Require().True(ok, "Expected StatusChangeEvent")
 		s.Equal(domain.StatusChangeEventType, statusEvent.GetEventType())
-		s.Equal(subflowId, statusEvent.GetParentId())
+		s.Equal(flowId, statusEvent.GetParentId())
+		s.Equal(subflowId, statusEvent.TargetId)
 		s.Equal(string(domain.SubflowStatusStarted), statusEvent.Status)
 	case err := <-errCh:
 		s.Fail("Unexpected error:", err)
@@ -125,7 +126,8 @@ func (s *DelegatorTestSuite) TestPersistSubflow() {
 		statusEvent, ok := event.(domain.StatusChangeEvent)
 		s.Require().True(ok, "Expected StatusChangeEvent")
 		s.Equal(domain.StatusChangeEventType, statusEvent.GetEventType())
-		s.Equal(subflowId, statusEvent.GetParentId())
+		s.Equal(flowId, statusEvent.GetParentId())
+		s.Equal(subflowId, statusEvent.TargetId)
 		s.Equal(string(domain.SubflowStatusComplete), statusEvent.Status)
 	case err := <-errCh:
 		s.Fail("Unexpected error:", err)

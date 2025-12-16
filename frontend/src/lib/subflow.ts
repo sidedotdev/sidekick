@@ -55,6 +55,7 @@ export const buildSubflowTrees = (flowActions: FlowAction[]): SubflowTree[] => {
   const subflowTrees: SubflowTree[] = [];
   let ancestors: SubflowTree[] = [];
   const subflowDescriptions: { [subflow: string]: string } = {};
+  const subflowIds: { [subflow: string]: string } = {};
 
   for (const action of flowActions) {
     const subflows = action.subflow.split(':|:');
@@ -62,6 +63,11 @@ export const buildSubflowTrees = (flowActions: FlowAction[]): SubflowTree[] => {
     if (action.subflowDescription && action.subflowDescription.length > 0) {
       const lastSubflow = subflows[subflows.length - 1]
       subflowDescriptions[lastSubflow] = action.subflowDescription;
+    }
+
+    if (action.subflowId) {
+      const lastSubflow = subflows[subflows.length - 1]
+      subflowIds[lastSubflow] = action.subflowId;
     }
 
     let parent: SubflowTree | undefined;
@@ -83,6 +89,10 @@ export const buildSubflowTrees = (flowActions: FlowAction[]): SubflowTree[] => {
       //console.log({name: newSubflowTree.name, description})
       if (description && description.length > 0) {
         newSubflowTree.description = description;
+      }
+      const id = subflowIds[newSubflowTree.name];
+      if (id) {
+        newSubflowTree.id = id;
       }
 
       (parent ? parent.children : subflowTrees).push(newSubflowTree);

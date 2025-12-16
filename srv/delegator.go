@@ -185,7 +185,8 @@ func (d Delegator) PersistSubflow(ctx context.Context, subflow domain.Subflow) e
 	if errors.Is(err, ErrNotFound) || existingSubflow.Status != subflow.Status {
 		statusChangeEvent = &domain.StatusChangeEvent{
 			EventType: domain.StatusChangeEventType,
-			ParentId:  subflow.Id,
+			ParentId:  subflow.FlowId,
+			TargetId:  subflow.Id,
 			Status:    string(subflow.Status),
 		}
 	}
