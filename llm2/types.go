@@ -12,8 +12,10 @@ const (
 
 // Usage is surfaced on final responses (not deltas).
 type Usage struct {
-	InputTokens  int `json:"inputTokens"`
-	OutputTokens int `json:"outputTokens"`
+	InputTokens           int `json:"inputTokens"`
+	OutputTokens          int `json:"outputTokens"`
+	CacheReadInputTokens  int `json:"cacheReadInputTokens"`
+	CacheWriteInputTokens int `json:"cacheWriteInputTokens"`
 }
 
 // ContentBlockType enumerates standardized content block kinds.
