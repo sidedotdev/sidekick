@@ -196,7 +196,9 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content, Type: FeedbackTypeUserGuidance}
 		return feedbackInfo, nil
 	case InitialDevStepInfo:
-		content := renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition)
+		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
+		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
+		content := renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, applyImmediately)
 		*chatHistory = append(*chatHistory, llm.ChatMessage{
 			Role:    llm.ChatMessageRoleUser,
 			Content: content,
