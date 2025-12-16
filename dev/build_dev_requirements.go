@@ -248,6 +248,9 @@ func buildDevRequirementsSubflow(dCtx DevContext, initialInfo InitialDevRequirem
 		// Maybe provide that as a tool or even run that tool automatically.
 		feedbackIterations = 9
 	}
+	if cfg, ok := dCtx.RepoConfig.AgentConfig["requirements"]; ok && cfg.MaxIterationsBeforeFeedback > 0 {
+		feedbackIterations = cfg.MaxIterationsBeforeFeedback
+	}
 	return LlmLoop(dCtx, chatHistory, buildDevRequirementsIteration, WithInitialState(initialState), WithFeedbackEvery(feedbackIterations))
 }
 
