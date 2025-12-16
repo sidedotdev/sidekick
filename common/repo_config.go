@@ -53,11 +53,20 @@ type RepoConfig struct {
 	 * The script is executed using /usr/bin/env sh -c and must return a zero
 	 * exit code to be considered successful. */
 	WorktreeSetup string `toml:"worktree_setup,omitempty"`
+
+	// AgentConfig contains per-use-case configuration for agent loops.
+	// Keys are use case names (e.g., "requirements", "planning", "coding").
+	AgentConfig map[string]AgentUseCaseConfig `toml:"agent_config,omitempty"`
 }
 
 type CommandConfig struct {
 	WorkingDir string `toml:"working_dir,omitempty"`
 	Command    string `toml:"command"`
+}
+
+// AgentUseCaseConfig contains configuration for a specific agent use case.
+type AgentUseCaseConfig struct {
+	MaxIterationsBeforeFeedback int `toml:"max_iterations_before_feedback,omitempty"`
 }
 
 type EditCodeConfig struct {

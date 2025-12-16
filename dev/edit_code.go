@@ -219,6 +219,9 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		// Maybe provide that as a tool or even run that tool automatically.
 		feedbackIterations = 6
 	}
+	if cfg, ok := dCtx.RepoConfig.AgentConfig[common.CodingKey]; ok && cfg.MaxIterationsBeforeFeedback > 0 {
+		feedbackIterations = cfg.MaxIterationsBeforeFeedback
+	}
 
 	for {
 		// Check for UserActionGoNext and version to potentially skip this step
