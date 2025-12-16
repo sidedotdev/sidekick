@@ -309,21 +309,34 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		if err != nil {
 			return []EditBlock{}, err
 		}
-		*chatHistory = append(*chatHistory, chatResponse.ChatMessage)
 
-		visibleChatHistory := *chatHistory
-		if v := workflow.GetVersion(dCtx, "bugfix-edit-block-visibility-orig-history", workflow.DefaultVersion, 1); v == 1 {
-			// use history that is actually passed to the LLM, before
-			// ManageChatHistory was called, since that corresponds to what was
-			// actually visible to the LLM at the time edit blocks were
-			// generated
-			visibleChatHistory = authorEditBlockInput.Params.Messages
+		visibleChatHistory := authorEditBlockInput.Params.Messages
+		if v := workflow.GetVersion(dCtx, "bugfix-edit-block-visibility-orig-history", workflow.DefaultVersion, 1); v == 0 {
+			visibleChatHistory = append(*chatHistory, chatResponse.ChatMessage)
 		}
 		tildeOnly := workflow.GetVersion(dCtx, "tilde-edit-block-fence", workflow.DefaultVersion, 1) >= 1
 		currentExtractedBlocks, err := ExtractEditBlocksWithVisibility(chatResponse.ChatMessage.Content, visibleChatHistory, tildeOnly)
 		if err != nil {
 			return []EditBlock{}, fmt.Errorf("%w: %v", ErrExtractEditBlocks, err)
 		}
+
+		// Track synthetic tool call ID for edit block report
+		var syntheticToolCallId string
+		hasToolCalls := len(chatResponse.ToolCalls) > 0
+
+		if len(currentExtractedBlocks) > 0 && applyImmediately && hasToolCalls {
+			// Inject synthetic tool call for edit blocks when there are also other tool calls
+			syntheticToolCallId = fmt.Sprintf("apply_edit_blocks_%d", workflow.Now(dCtx).UnixNano())
+			syntheticToolCall := llm.ToolCall{
+				Id:        syntheticToolCallId,
+				Name:      "apply_edit_blocks",
+				Arguments: "{}",
+			}
+			chatResponse.ChatMessage.ToolCalls = append([]llm.ToolCall{syntheticToolCall}, chatResponse.ChatMessage.ToolCalls...)
+		}
+
+		*chatHistory = append(*chatHistory, chatResponse.ChatMessage)
+
 		if len(currentExtractedBlocks) > 0 {
 			attemptsSinceLastEditBlockOrFeedback = 0
 
@@ -339,11 +352,24 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 					attemptCount++
 					continue
 				} else {
-					*chatHistory = append(*chatHistory, llm.ChatMessage{
-						Role:        llm.ChatMessageRoleSystem,
-						Content:     result.ReportMessage,
-						ContextType: ContextTypeEditBlockReport,
-					})
+					if hasToolCalls {
+						// Add report as tool response for the synthetic tool call
+						reportContent := result.ReportMessage + "\n\nNote: Other tool calls from this response are being executed after the edit blocks were applied."
+						addToolCallResponse(chatHistory, ToolCallResponseInfo{
+							Response:     reportContent,
+							FunctionName: "apply_edit_blocks",
+							ToolCallId:   syntheticToolCallId,
+						})
+						// Set ContextType on the just-added message
+						(*chatHistory)[len(*chatHistory)-1].ContextType = ContextTypeEditBlockReport
+					} else {
+						// No tool calls, add as system message (existing behavior)
+						*chatHistory = append(*chatHistory, llm.ChatMessage{
+							Role:        llm.ChatMessageRoleSystem,
+							Content:     result.ReportMessage,
+							ContextType: ContextTypeEditBlockReport,
+						})
+					}
 				}
 			} else {
 				extractedEditBlocks = append(extractedEditBlocks, currentExtractedBlocks...)
