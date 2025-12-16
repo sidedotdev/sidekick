@@ -152,7 +152,13 @@ fine to add such comments if thinking out loud, not within an edit block, but
 then remove these extraneous & unnecessary comments for the final formatted edit
 blocks.
 
+{{#applyEditBlocksImmediately}}
+Edit blocks are applied immediately after each response. You will receive
+feedback about whether each edit block was applied successfully or failed.
+{{/applyEditBlocksImmediately}}
+{{^applyEditBlocksImmediately}}
 When you are done with all edit blocks, avoid using further tools: output
 without a tool call is the signal for us to finally apply those edits to the
 filesystem. Edit blocks from all messages that include tool calls will remain
 pending until that point.
+{{/applyEditBlocksImmediately}}
