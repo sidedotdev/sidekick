@@ -33,3 +33,22 @@ func (ctrl *Controller) GetSubflowHandler(c *gin.Context) {
 	// Return the subflow data
 	c.JSON(http.StatusOK, gin.H{"subflow": subflow})
 }
+
+// GetFlowSubflowsHandler handles GET requests to retrieve all subflows for a flow
+func (ctrl *Controller) GetFlowSubflowsHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	if workspaceId == "" || flowId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID and Flow ID are required"})
+		return
+	}
+
+	subflows, err := ctrl.service.GetSubflows(c, workspaceId, flowId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get subflows"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"subflows": subflows})
+}
