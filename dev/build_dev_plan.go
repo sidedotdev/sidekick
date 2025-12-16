@@ -283,7 +283,7 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 		// Maybe provide that as a tool or even run that tool automatically.
 		feedbackIterations = 9
 	}
-	if cfg, ok := dCtx.RepoConfig.AgentConfig["planning"]; ok && cfg.MaxIterationsBeforeFeedback > 0 {
+	if cfg, ok := dCtx.RepoConfig.AgentConfig[common.PlanningKey]; ok && cfg.MaxIterationsBeforeFeedback > 0 {
 		feedbackIterations = cfg.MaxIterationsBeforeFeedback
 	}
 

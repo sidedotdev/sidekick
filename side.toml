@@ -26,6 +26,9 @@ command = "npm run type-check"
 [[integration_test_commands]]
 command = "SIDE_INTEGRATION_TEST=true go test -test.timeout 30s ./..."
 
+[agent_config.coding]
+max_iterations_before_feedback = 15
+
 [edit_code]
 hints = """
 You are working on a project named "sidekick". Thus, the root directory of the
