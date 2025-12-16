@@ -18,6 +18,7 @@ type Client interface {
 	GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error)
 	GetBaseURL() string
 	CompleteFlowAction(workspaceID, flowActionID string, response UserResponse) error
+	GetSubflow(workspaceID, subflowID string) (domain.Subflow, error)
 }
 
 type clientImpl struct {
@@ -52,6 +53,17 @@ func (c *clientImpl) get(ctx context.Context, path string, v interface{}) error 
 	}
 
 	return nil
+}
+
+func (c *clientImpl) GetSubflow(workspaceID, subflowID string) (domain.Subflow, error) {
+	var response struct {
+		Subflow domain.Subflow `json:"subflow"`
+	}
+	err := c.get(context.Background(), fmt.Sprintf("/api/v1/workspaces/%s/subflows/%s", workspaceID, subflowID), &response)
+	if err != nil {
+		return domain.Subflow{}, err
+	}
+	return response.Subflow, nil
 }
 
 // NewClient creates a new Sidekick API client.

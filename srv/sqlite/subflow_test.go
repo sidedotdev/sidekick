@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"time"
 
 	"sidekick/common"
 	"sidekick/domain"
@@ -13,6 +14,36 @@ import (
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
+
+// assertSubflowEqual compares two subflows, ignoring the Updated field which is set by the database
+func assertSubflowEqual(t *testing.T, expected, actual domain.Subflow) {
+	t.Helper()
+	assert.Equal(t, expected.WorkspaceId, actual.WorkspaceId)
+	assert.Equal(t, expected.Id, actual.Id)
+	assert.Equal(t, expected.FlowId, actual.FlowId)
+	assert.Equal(t, expected.Name, actual.Name)
+	assert.Equal(t, expected.Description, actual.Description)
+	assert.Equal(t, expected.Status, actual.Status)
+	assert.Equal(t, expected.Type, actual.Type)
+	assert.Equal(t, expected.ParentSubflowId, actual.ParentSubflowId)
+	assert.Equal(t, expected.Result, actual.Result)
+	assert.WithinDuration(t, time.Now(), actual.Updated, 5*time.Second)
+}
+
+// assertSubflowsMatch compares two slices of subflows, ignoring the Updated field
+func assertSubflowsMatch(t *testing.T, expected, actual []domain.Subflow) {
+	t.Helper()
+	require.Len(t, actual, len(expected))
+	expectedMap := make(map[string]domain.Subflow)
+	for _, sf := range expected {
+		expectedMap[sf.Id] = sf
+	}
+	for _, actualSf := range actual {
+		expectedSf, ok := expectedMap[actualSf.Id]
+		require.True(t, ok, "unexpected subflow ID: %s", actualSf.Id)
+		assertSubflowEqual(t, expectedSf, actualSf)
+	}
+}
 
 func TestPersistSubflow(t *testing.T) {
 	storage := NewTestSqliteStorage(t, "subflow_test")
@@ -36,7 +67,7 @@ func TestPersistSubflow(t *testing.T) {
 		subflows, err := storage.GetSubflows(ctx, validSubflow.WorkspaceId, validSubflow.FlowId)
 		assert.NoError(t, err)
 		assert.Len(t, subflows, 1)
-		assert.Equal(t, validSubflow, subflows[0])
+		assertSubflowEqual(t, validSubflow, subflows[0])
 	})
 
 	t.Run("Attempt to persist a subflow with missing required fields", func(t *testing.T) {
@@ -63,7 +94,7 @@ func TestPersistSubflow(t *testing.T) {
 		subflows, err := storage.GetSubflows(ctx, validSubflow.WorkspaceId, validSubflow.FlowId)
 		assert.NoError(t, err)
 		assert.Len(t, subflows, 1)
-		assert.Equal(t, updatedSubflow, subflows[0])
+		assertSubflowEqual(t, updatedSubflow, subflows[0])
 	})
 }
 
@@ -101,8 +132,7 @@ func TestGetSubflows(t *testing.T) {
 	t.Run("Retrieve multiple subflows for a given workspace and flow", func(t *testing.T) {
 		retrievedSubflows, err := storage.GetSubflows(ctx, workspaceId, flowId)
 		assert.NoError(t, err)
-		assert.Len(t, retrievedSubflows, 2)
-		assert.ElementsMatch(t, subflows, retrievedSubflows)
+		assertSubflowsMatch(t, subflows, retrievedSubflows)
 	})
 
 	t.Run("Attempt to retrieve subflows with invalid workspace or flow ID", func(t *testing.T) {
@@ -152,7 +182,7 @@ func TestGetSubflow(t *testing.T) {
 	t.Run("Successfully retrieve an existing subflow", func(t *testing.T) {
 		retrievedSubflow, err := storage.GetSubflow(ctx, workspaceId, subflowId)
 		assert.NoError(t, err)
-		assert.Equal(t, testSubflow, retrievedSubflow)
+		assertSubflowEqual(t, testSubflow, retrievedSubflow)
 	})
 
 	t.Run("Attempt to retrieve subflow with empty parameters", func(t *testing.T) {

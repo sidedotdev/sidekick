@@ -29,6 +29,7 @@ type TaskMonitor struct {
 	current      TaskStatus
 	statusChan   chan TaskStatus
 	progressChan chan domain.FlowAction
+	subflowChan  chan domain.Subflow
 	cancel       context.CancelFunc
 }
 
@@ -58,15 +59,16 @@ func NewTaskMonitor(client client.Client, workspaceID, taskID string) *TaskMonit
 		taskID:       taskID,
 		statusChan:   make(chan TaskStatus, 10),
 		progressChan: make(chan domain.FlowAction, 1000),
+		subflowChan:  make(chan domain.Subflow, 50),
 	}
 }
 
 // Start begins monitoring the task, returning channels for status and progress updates
-func (m *TaskMonitor) Start(ctx context.Context) (<-chan TaskStatus, <-chan domain.FlowAction) {
+func (m *TaskMonitor) Start(ctx context.Context) (<-chan TaskStatus, <-chan domain.FlowAction, <-chan domain.Subflow) {
 	ctxWithCancel, cancel := context.WithCancel(ctx)
 	m.cancel = cancel
 	go m.monitorTask(ctxWithCancel)
-	return m.statusChan, m.progressChan
+	return m.statusChan, m.progressChan, m.subflowChan
 }
 
 var TaskPollInterval = 1 * time.Second
@@ -142,6 +144,19 @@ func (m *TaskMonitor) monitorTask(ctx context.Context) {
 		}
 	}()
 
+	// Start WebSocket connection for subflow status events
+	go func() {
+		if err := m.streamSubflowStatusEvents(ctx, flowId); err != nil {
+			if ctx.Err() == nil {
+				m.current = TaskStatus{
+					Task:  m.current.Task,
+					Error: fmt.Errorf("subflow event stream error: %w", err),
+				}
+				m.sendStatus(ctx, m.current)
+			}
+		}
+	}()
+
 	// Start WebSocket connection for flow events
 	if err := m.streamFlowEvents(ctx, flowId); err != nil {
 		m.current = TaskStatus{
@@ -178,6 +193,72 @@ func (m *TaskMonitor) waitForFlow(ctx context.Context) string {
 				m.statusChan <- m.current
 				return task.Flows[0].Id
 			}
+		}
+	}
+}
+
+func (m *TaskMonitor) streamSubflowStatusEvents(ctx context.Context, flowId string) error {
+	u := url.URL{
+		Scheme: "ws",
+		Host:   strings.TrimPrefix(strings.TrimPrefix(m.client.GetBaseURL(), "https://"), "http://"),
+		Path:   fmt.Sprintf("/ws/v1/workspaces/%s/flows/%s/events", m.workspaceID, flowId),
+	}
+
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	if err != nil {
+		return fmt.Errorf("websocket connection failed: %w", err)
+	}
+	defer conn.Close()
+
+	// Send subscription message
+	subscription := map[string]string{"parentId": flowId}
+	if err := conn.WriteJSON(subscription); err != nil {
+		return fmt.Errorf("failed to send subscription: %w", err)
+	}
+
+	// Monitor connection status
+	go func() {
+		<-ctx.Done()
+		conn.Close()
+	}()
+
+	for {
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				return nil
+			}
+			return fmt.Errorf("websocket read error: %w", err)
+		}
+
+		event, err := domain.UnmarshalFlowEvent(message)
+		if err != nil {
+			continue
+		}
+
+		statusEvent, ok := event.(domain.StatusChangeEvent)
+		if !ok {
+			continue
+		}
+
+		// Only process failed subflow events (TargetId indicates a subflow)
+		if statusEvent.TargetId == "" || statusEvent.Status != string(domain.SubflowStatusFailed) {
+			continue
+		}
+
+		// Fetch full subflow to get the result field
+		subflow, err := m.client.GetSubflow(m.workspaceID, statusEvent.TargetId)
+		if err != nil {
+			continue
+		}
+
+		select {
+		case m.subflowChan <- subflow:
+		case <-ctx.Done():
+			return nil
 		}
 	}
 }

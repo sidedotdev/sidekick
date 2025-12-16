@@ -50,6 +50,11 @@ func (m *mockClientForProgress) CompleteFlowAction(workspaceID, flowActionID str
 	return args.Error(0)
 }
 
+func (m *mockClientForProgress) GetSubflow(workspaceID, subflowID string) (domain.Subflow, error) {
+	args := m.Called(workspaceID, subflowID)
+	return args.Get(0).(domain.Subflow), args.Error(1)
+}
+
 func TestGetActionDisplayName(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1240,5 +1245,128 @@ func TestMergeApprovalIncludesTargetBranch(t *testing.T) {
 	}
 	if capturedResponse.Approved == nil || *capturedResponse.Approved != true {
 		t.Errorf("Expected Approved to be true")
+	}
+}
+
+func TestFailedSubflowDisplay(t *testing.T) {
+	tests := []struct {
+		name           string
+		failedSubflows []domain.Subflow
+		wantContains   []string
+	}{
+		{
+			name:           "no failed subflows",
+			failedSubflows: nil,
+			wantContains:   []string{},
+		},
+		{
+			name: "single failed subflow with result",
+			failedSubflows: []domain.Subflow{
+				{
+					Id:     "sf_123",
+					Name:   "Step 1: Implement feature",
+					Status: domain.SubflowStatusFailed,
+					Result: "failed: activity error",
+				},
+			},
+			wantContains: []string{"Step 1: Implement feature", "failed: activity error"},
+		},
+		{
+			name: "failed subflow without name uses ID",
+			failedSubflows: []domain.Subflow{
+				{
+					Id:     "sf_456",
+					Name:   "",
+					Status: domain.SubflowStatusFailed,
+					Result: "some error",
+				},
+			},
+			wantContains: []string{"sf_456", "some error"},
+		},
+		{
+			name: "failed subflow without result shows unknown error",
+			failedSubflows: []domain.Subflow{
+				{
+					Id:     "sf_789",
+					Name:   "Test Subflow",
+					Status: domain.SubflowStatusFailed,
+					Result: "",
+				},
+			},
+			wantContains: []string{"Test Subflow", "unknown error"},
+		},
+		{
+			name: "multiple failed subflows",
+			failedSubflows: []domain.Subflow{
+				{
+					Id:     "sf_001",
+					Name:   "First Step",
+					Status: domain.SubflowStatusFailed,
+					Result: "error one",
+				},
+				{
+					Id:     "sf_002",
+					Name:   "Second Step",
+					Status: domain.SubflowStatusFailed,
+					Result: "error two",
+				},
+			},
+			wantContains: []string{"First Step", "error one", "Second Step", "error two"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newProgressModel("task-1", "flow-1", &mockClientForProgress{})
+			m.failedSubflows = tt.failedSubflows
+
+			view := m.View()
+
+			for _, want := range tt.wantContains {
+				if !strings.Contains(view, want) {
+					t.Errorf("View() missing expected content %q\nGot: %s", want, view)
+				}
+			}
+		})
+	}
+}
+
+func TestSubflowFailedMsgUpdate(t *testing.T) {
+	m := newProgressModel("task-1", "flow-1", &mockClientForProgress{})
+
+	// Initially no failed subflows
+	if len(m.failedSubflows) != 0 {
+		t.Errorf("expected 0 failed subflows initially, got %d", len(m.failedSubflows))
+	}
+
+	// Send a subflowFailedMsg
+	subflow := domain.Subflow{
+		Id:     "sf_test",
+		Name:   "Test Subflow",
+		Status: domain.SubflowStatusFailed,
+		Result: "test error",
+	}
+	updated, _ := m.Update(subflowFailedMsg{subflow: subflow})
+	m = updated.(taskProgressModel)
+
+	if len(m.failedSubflows) != 1 {
+		t.Errorf("expected 1 failed subflow after update, got %d", len(m.failedSubflows))
+	}
+	if m.failedSubflows[0].Id != "sf_test" {
+		t.Errorf("expected subflow ID sf_test, got %s", m.failedSubflows[0].Id)
+	}
+
+	// Send another subflowFailedMsg
+	subflow2 := domain.Subflow{
+		Id:     "sf_test2",
+		Name:   "Test Subflow 2",
+		Status: domain.SubflowStatusFailed,
+		Result: "test error 2",
+	}
+	updated, _ = m.Update(subflowFailedMsg{subflow: subflow2})
+	m = updated.(taskProgressModel)
+
+	if len(m.failedSubflows) != 2 {
+		t.Errorf("expected 2 failed subflows after second update, got %d", len(m.failedSubflows))
 	}
 }

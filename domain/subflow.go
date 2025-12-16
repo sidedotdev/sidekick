@@ -1,6 +1,9 @@
 package domain
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type SubflowStatus string
 
@@ -21,6 +24,7 @@ type Subflow struct {
 	ParentSubflowId string        `json:"parentSubflowId,omitempty"` // ID of the parent subflow, if any
 	FlowId          string        `json:"flowId"`                    // ID of the flow this subflow belongs to
 	Result          string        `json:"result,omitempty"`          // Result of the subflow, if any
+	Updated         time.Time     `json:"updated,omitempty"`         // Last update timestamp
 }
 
 type SubflowStorage interface {

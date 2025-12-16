@@ -142,7 +142,7 @@ func TestTaskMonitor_Start_WebSocketFlow(t *testing.T) {
 	FlowPollInterval = 1 * time.Millisecond
 	m := NewTaskMonitor(mockClient, "workspace1", "task1")
 
-	statusChan, progressChan := m.Start(context.Background())
+	statusChan, progressChan, _ := m.Start(context.Background())
 
 	// Verify initial task status
 	status := <-statusChan
@@ -193,7 +193,7 @@ func TestTaskMonitor_Start_WebSocketError(t *testing.T) {
 	FlowPollInterval = 1 * time.Millisecond
 	m := NewTaskMonitor(mockClient, "workspace1", "task1")
 
-	statusChan, progressChan := m.Start(context.Background())
+	statusChan, progressChan, _ := m.Start(context.Background())
 
 	// First status update should be the initial task
 	status := <-statusChan
@@ -234,7 +234,7 @@ func TestTaskMonitor_Start_ServerUnavailability(t *testing.T) {
 	FlowPollInterval = 100 * time.Millisecond
 	m := NewTaskMonitor(mockClient, "workspace1", "task1")
 
-	statusChan, progressChan := m.Start(context.Background())
+	statusChan, progressChan, _ := m.Start(context.Background())
 
 	// Initial status should be successful
 	status := <-statusChan
@@ -290,7 +290,7 @@ func TestTaskMonitor_Start_ContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	statusChan, progressChan := m.Start(ctx)
+	statusChan, progressChan, _ := m.Start(ctx)
 
 	// Verify initial task status
 	status := <-statusChan
@@ -332,4 +332,9 @@ func TestTaskMonitor_Start_SigtermTaskCancellation(t *testing.T) {
 	// TODO: test by invoking ctrl+c key message on the progress model: the
 	// cancel endpoint should be called, otherwise it's the same as external
 	// task cancellation
+}
+
+func (m *mockClient) GetSubflow(workspaceID, subflowID string) (domain.Subflow, error) {
+	args := m.Called(workspaceID, subflowID)
+	return args.Get(0).(domain.Subflow), args.Error(1)
 }
