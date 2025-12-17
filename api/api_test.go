@@ -14,7 +14,6 @@ import (
 	"sidekick/mocks"
 	"sidekick/secret_manager"
 	"sidekick/srv"
-	"sidekick/srv/redis"
 	"sidekick/utils"
 	"strings"
 	"testing"
@@ -90,7 +89,7 @@ func NewMockController(t *testing.T) Controller {
 	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
 	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
 
-	service, _ := redis.NewTestRedisService()
+	service := NewTestService(t)
 	return Controller{
 		temporalClient: mockTemporalClient,
 		service:        service,
@@ -107,7 +106,6 @@ func NewMockControllerWithSecretManager(t *testing.T, sm secret_manager.SecretMa
 func TestCreateTaskHandler(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
 
 	testCases := []struct {
 		name           string
@@ -240,6 +238,7 @@ func TestCreateTaskHandler(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			ctrl := NewMockController(t)
 			resp := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(resp)
 
@@ -292,7 +291,6 @@ func TestGetTasksHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	service, _ := redis.NewTestRedisService()
 	ctx := context.Background()
 	workspaceId := "ws_1"
 
@@ -316,7 +314,7 @@ func TestGetTasksHandler(t *testing.T) {
 	}
 
 	for _, task := range tasks {
-		err := service.PersistTask(ctx, task)
+		err := ctrl.service.PersistTask(ctx, task)
 		assert.Nil(t, err)
 	}
 
@@ -1345,7 +1343,6 @@ func TestDeleteTaskHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	service, _ := redis.NewTestRedisService()
 
 	// Create a task for testing
 	task := domain.Task{
@@ -1355,7 +1352,7 @@ func TestDeleteTaskHandler(t *testing.T) {
 		AgentType:   domain.AgentTypeLLM,
 		Status:      domain.TaskStatusToDo,
 	}
-	err := service.PersistTask(context.Background(), task)
+	err := ctrl.service.PersistTask(context.Background(), task)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1383,8 +1380,6 @@ func TestCancelTaskHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 
 	testCases := []struct {
 		name           string
@@ -1403,6 +1398,9 @@ func TestCancelTaskHandler(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			ctrl := NewMockController(t)
+			db := ctrl.service
+
 			// Create a task for testing
 			task := domain.Task{
 				WorkspaceId: "ws_" + ksuid.New().String(),
@@ -1411,7 +1409,7 @@ func TestCancelTaskHandler(t *testing.T) {
 				AgentType:   domain.AgentTypeLLM,
 				Status:      tc.initialStatus,
 			}
-			err := redisDb.PersistTask(context.Background(), task)
+			err := db.PersistTask(context.Background(), task)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1437,13 +1435,13 @@ func TestCancelTaskHandler(t *testing.T) {
 				assert.Equal(t, tc.expectedError, response["error"])
 
 				// Check task status & agentType has NOT been changed
-				updatedTask, err := redisDb.GetTask(context.Background(), task.WorkspaceId, task.Id)
+				updatedTask, err := db.GetTask(context.Background(), task.WorkspaceId, task.Id)
 				assert.NoError(t, err)
 				assert.Equal(t, tc.initialStatus, updatedTask.Status)
 				assert.Equal(t, domain.AgentTypeLLM, updatedTask.AgentType)
 			} else {
 				// Check that the task status has been updated to canceled
-				updatedTask, err := redisDb.GetTask(context.Background(), task.WorkspaceId, task.Id)
+				updatedTask, err := db.GetTask(context.Background(), task.WorkspaceId, task.Id)
 				assert.NoError(t, err)
 				assert.Equal(t, domain.TaskStatusCanceled, updatedTask.Status)
 				assert.Equal(t, domain.AgentTypeNone, updatedTask.AgentType)
@@ -1740,7 +1738,7 @@ func TestGetWorkspacesHandler(t *testing.T) {
 	// Test for empty data
 	t.Run("returns empty list when no workspaces exist", func(t *testing.T) {
 		t.Parallel()
-		ctrl.service, _ = redis.NewTestRedisService() // clear the database
+		emptyCtrl := NewMockController(t)
 
 		// Creating a test HTTP context
 		resp := httptest.NewRecorder()
@@ -1748,7 +1746,7 @@ func TestGetWorkspacesHandler(t *testing.T) {
 		c.Request = httptest.NewRequest("GET", "/workspaces", nil)
 
 		// Invoking the handler
-		ctrl.GetWorkspacesHandler(c)
+		emptyCtrl.GetWorkspacesHandler(c)
 
 		// Asserting the response
 		assert.Equal(t, http.StatusOK, resp.Code)

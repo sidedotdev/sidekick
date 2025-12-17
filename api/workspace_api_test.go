@@ -26,8 +26,6 @@ import (
 func TestUpdateWorkspaceHandler(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
-	db := ctrl.service
 
 	testCases := []struct {
 		name              string
@@ -210,36 +208,38 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		// Setup initial workspace data, must do for each test case to ensure we
-		// have a clean start
-		initialWorkspace := &domain.Workspace{
-			Id:           "existing_workspace_id",
-			Name:         "Initial Workspace",
-			LocalRepoDir: "/path/to/repo",
-		}
-		err := db.PersistWorkspace(context.Background(), *initialWorkspace)
-		assert.NoError(t, err)
-
-		// Setup initial workspace config
-		initialConfig := &domain.WorkspaceConfig{
-			LLM: common.LLMConfig{
-				Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-3.5-turbo"}},
-				UseCaseConfigs: map[string][]common.ModelConfig{
-					"code": {{Provider: "openai", Model: "gpt-4"}},
-				},
-			},
-			Embedding: common.EmbeddingConfig{
-				Defaults: []common.ModelConfig{{Provider: "openai", Model: "text-embedding-ada-002"}},
-				UseCaseConfigs: map[string][]common.ModelConfig{
-					"code": {{Provider: "openai", Model: "text-embedding-ada-002"}},
-				},
-			},
-		}
-		err = db.PersistWorkspaceConfig(context.Background(), initialWorkspace.Id, *initialConfig)
-		assert.NoError(t, err)
-
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			ctrl := NewMockController(t)
+			db := ctrl.service
+
+			// Setup initial workspace data
+			initialWorkspace := &domain.Workspace{
+				Id:           "existing_workspace_id",
+				Name:         "Initial Workspace",
+				LocalRepoDir: "/path/to/repo",
+			}
+			err := db.PersistWorkspace(context.Background(), *initialWorkspace)
+			assert.NoError(t, err)
+
+			// Setup initial workspace config
+			initialConfig := &domain.WorkspaceConfig{
+				LLM: common.LLMConfig{
+					Defaults: []common.ModelConfig{{Provider: "openai", Model: "gpt-3.5-turbo"}},
+					UseCaseConfigs: map[string][]common.ModelConfig{
+						"code": {{Provider: "openai", Model: "gpt-4"}},
+					},
+				},
+				Embedding: common.EmbeddingConfig{
+					Defaults: []common.ModelConfig{{Provider: "openai", Model: "text-embedding-ada-002"}},
+					UseCaseConfigs: map[string][]common.ModelConfig{
+						"code": {{Provider: "openai", Model: "text-embedding-ada-002"}},
+					},
+				},
+			}
+			err = db.PersistWorkspaceConfig(context.Background(), initialWorkspace.Id, *initialConfig)
+			assert.NoError(t, err)
+
 			resp := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(resp)
 
@@ -290,7 +290,6 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 func TestCreateWorkspaceHandler(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
 
 	testCases := []struct {
 		name             string
@@ -417,6 +416,7 @@ func TestCreateWorkspaceHandler(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			ctrl := NewMockController(t)
 			resp := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(resp)
 
@@ -685,7 +685,6 @@ func TestGetWorkspaceBranchesHandler(t *testing.T) {
 
 	// --- Test Cases ---
 	t.Run("success - list branches excluding managed worktrees", func(t *testing.T) {
-		t.Parallel()
 		resp := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(resp)
 		c.Request = httptest.NewRequest("GET", "/v1/workspaces/"+workspace.Id+"/branches", nil)
@@ -714,14 +713,14 @@ func TestGetWorkspaceBranchesHandler(t *testing.T) {
 	})
 
 	t.Run("workspace not found", func(t *testing.T) {
-		t.Parallel()
+		notFoundCtrl := NewMockController(t)
 		resp := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(resp)
 		workspaceId := "nonexistent-ws"
 		c.Request = httptest.NewRequest("GET", "/v1/workspaces/"+workspaceId+"/branches", nil)
 		c.Params = gin.Params{{Key: "workspaceId", Value: workspaceId}}
 
-		ctrl.GetWorkspaceBranchesHandler(c)
+		notFoundCtrl.GetWorkspaceBranchesHandler(c)
 
 		assert.Equal(t, http.StatusNotFound, resp.Code)
 		var result gin.H
@@ -731,7 +730,7 @@ func TestGetWorkspaceBranchesHandler(t *testing.T) {
 	})
 
 	t.Run("repo directory does not exist", func(t *testing.T) {
-		t.Parallel()
+		badRepoCtrl := NewMockController(t)
 		// Create a workspace pointing to a non-existent directory
 		badRepoDir := filepath.Join(t.TempDir(), "nonexistent-repo")
 		badWorkspace := domain.Workspace{
@@ -741,7 +740,7 @@ func TestGetWorkspaceBranchesHandler(t *testing.T) {
 			Created:      time.Now(),
 			Updated:      time.Now(),
 		}
-		err := ctrl.service.PersistWorkspace(context.Background(), badWorkspace)
+		err := badRepoCtrl.service.PersistWorkspace(context.Background(), badWorkspace)
 		require.NoError(t, err)
 
 		resp := httptest.NewRecorder()
@@ -749,7 +748,7 @@ func TestGetWorkspaceBranchesHandler(t *testing.T) {
 		c.Request = httptest.NewRequest("GET", "/v1/workspaces/"+badWorkspace.Id+"/branches", nil)
 		c.Params = gin.Params{{Key: "workspaceId", Value: badWorkspace.Id}}
 
-		ctrl.GetWorkspaceBranchesHandler(c)
+		badRepoCtrl.GetWorkspaceBranchesHandler(c)
 
 		// Expecting an internal server error because git commands will fail
 		assert.Equal(t, http.StatusInternalServerError, resp.Code)
@@ -765,10 +764,7 @@ func TestGetWorkspaceBranchesHandler(t *testing.T) {
 func TestGetWorkspaceByIdHandler(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
-	db := ctrl.service
 
-	// Setup workspaces and configs
 	workspace1 := domain.Workspace{Id: "workspace1", Name: "Workspace One", LocalRepoDir: "/path/to/repo1"}
 	config1 := domain.WorkspaceConfig{
 		LLM: common.LLMConfig{
@@ -778,11 +774,8 @@ func TestGetWorkspaceByIdHandler(t *testing.T) {
 			Defaults: []common.ModelConfig{{Provider: "openai", Model: "text-embedding-ada-002"}},
 		},
 	}
-	db.PersistWorkspace(context.Background(), workspace1)
-	db.PersistWorkspaceConfig(context.Background(), workspace1.Id, config1)
 
 	workspace2 := domain.Workspace{Id: "workspace2", Name: "Workspace Two", LocalRepoDir: "/path/to/repo2"}
-	db.PersistWorkspace(context.Background(), workspace2)
 
 	testCases := []struct {
 		name           string
@@ -834,6 +827,14 @@ func TestGetWorkspaceByIdHandler(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			ctrl := NewMockController(t)
+			db := ctrl.service
+
+			// Setup workspaces and configs for this subtest
+			db.PersistWorkspace(context.Background(), workspace1)
+			db.PersistWorkspaceConfig(context.Background(), workspace1.Id, config1)
+			db.PersistWorkspace(context.Background(), workspace2)
+
 			resp := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(resp)
 			c.Request = httptest.NewRequest("GET", "/v1/workspaces/"+tc.workspaceId, nil)
