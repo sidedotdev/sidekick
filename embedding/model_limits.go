@@ -31,11 +31,10 @@ const (
 
 // modelTokenLimits maps known embedding model names to their maximum input token limits.
 var modelTokenLimits = map[string]int{
-	"text-embedding-3-small":     8191,
-	"text-embedding-004":         2048,
-	"gemini-embedding-001":       2048,
-	"text-embedding-005":         2048,
-	"gemini-embedding-exp-03-07": 8192,
+	"text-embedding-3-small": 8191,
+	"text-embedding-004":     2048,
+	"gemini-embedding-001":   2048,
+	"text-embedding-005":     2048,
 }
 
 // modelBatchTokenLimits maps known embedding model names to their maximum batch token limits.
@@ -45,7 +44,7 @@ var modelBatchTokenLimits = map[string]int{
 
 // modelBatchSizeLimits maps known embedding model names to their maximum batch size (number of inputs).
 var modelBatchSizeLimits = map[string]int{
-	"gemini-embedding-001": 1,
+	"gemini-embedding-001": 100,
 }
 
 // providerBatchTokenLimits maps provider names to their default maximum batch token limits.
