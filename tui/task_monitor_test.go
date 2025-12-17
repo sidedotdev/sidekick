@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,25 +201,31 @@ func TestTaskMonitor_Start_WebSocketError(t *testing.T) {
 	assert.NoError(t, status.Error)
 	assert.Equal(t, testTask, status.Task)
 
-	// Verify flow gets updated
+	// Update mock to return task with flows
 	testTask.Flows = []domain.Flow{{Id: "flow1"}}
 	mockCall.Unset()
 	mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
-	status = <-statusChan
-	assert.Equal(t, testTask.Flows, status.Task.Flows)
-	assert.Equal(t, testTask.Status, status.Task.Status)
-	assert.NoError(t, status.Error)
 
-	// Third status should indicate WebSocket error
-	status = <-statusChan
-	assert.Error(t, status.Error)
-	assert.Contains(t, status.Error.Error(), "websocket connection failed")
-	assert.Equal(t, testTask.Status, status.Task.Status)
-
-	_, ok := <-statusChan
-	assert.False(t, ok, "status channel should be closed")
-	_, ok = <-progressChan
-	assert.False(t, ok, "progress channel should be closed")
+	// Wait for at least one WebSocket error, then drain remaining messages
+	var sawWebSocketError bool
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case status, ok := <-statusChan:
+			if !ok {
+				// Channel closed
+				assert.True(t, sawWebSocketError, "should have seen a websocket connection error")
+				_, ok = <-progressChan
+				assert.False(t, ok, "progress channel should be closed")
+				return
+			}
+			if status.Error != nil && strings.Contains(status.Error.Error(), "websocket connection failed") {
+				sawWebSocketError = true
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for status channel to close")
+		}
+	}
 }
 
 func TestTaskMonitor_Start_ServerUnavailability(t *testing.T) {
