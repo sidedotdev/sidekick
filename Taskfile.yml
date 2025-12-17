@@ -1,5 +1,8 @@
 version: '3'
 
+# ensure the dev task kills other deps if any fail
+failfast: true
+
 tasks:
   dev:
     desc: Run all services concurrently for local development
@@ -8,7 +11,7 @@ tasks:
   temporal:
     desc: Run the Temporal server
     cmds:
-      - go run ./cmd/temporal
+      - go build -o temporalbin ./cmd/temporal && ./temporalbin
     watch: true
     sources:
       - temporal/**/*.go
@@ -16,7 +19,7 @@ tasks:
   api:
     desc: Run the API server
     cmds:
-      - go run ./api/main
+      - go build -o apibin ./api/main && ./apibin
     watch: true
     sources:
       - "**/*.go"
@@ -26,7 +29,7 @@ tasks:
   worker:
     desc: Run the worker server
     cmds:
-      - go run ./worker/main
+      - go build -o workerbin ./worker/main && ./workerbin
     watch: true
     sources:
       - "**/*.go"
@@ -36,5 +39,9 @@ tasks:
   frontend:
     desc: Run the frontend dev server
     dir: frontend
+    watch: true
+    sources:
+      - frontend/package.json
+      - frontend/bun.lock
     cmds:
       - bun dev

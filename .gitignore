@@ -20,6 +20,7 @@
 !.vscode/launch.json
 
 # Other
+.task/
 .env
 *.db
 *.rej
@@ -30,6 +31,9 @@
 frontend/node_modules
 main
 side
+temporalbin
+workerbin
+apibin
 libusearch_c.a
 local-temporal-db*
 .aider*
