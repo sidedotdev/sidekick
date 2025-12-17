@@ -23,6 +23,23 @@ type mockClient struct {
 	baseURL string
 }
 
+// getTaskResponse holds a response for GetTask calls
+type getTaskResponse struct {
+	task client.Task
+	err  error
+}
+
+// syncMockClient wraps mockClient with channel-based synchronization for GetTask
+type syncMockClient struct {
+	mockClient
+	responseCh chan getTaskResponse
+}
+
+func (s *syncMockClient) GetTask(workspaceID string, taskID string) (client.Task, error) {
+	resp := <-s.responseCh
+	return resp.task, resp.err
+}
+
 func (c *mockClient) GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error) {
 	args := c.Called(ctx)
 	return args.Get(0).([]domain.Workspace), args.Error(1)
@@ -234,12 +251,19 @@ func TestTaskMonitor_Start_ServerUnavailability(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(wsHandler))
 	defer s.Close()
 	testTask := newTestTaskWithFlows()
-	mockClient := &mockClient{baseURL: s.URL}
-	mockCall := mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+
+	// Use a synchronized mock to control GetTask responses precisely
+	syncMock := &syncMockClient{
+		mockClient: mockClient{baseURL: s.URL},
+		responseCh: make(chan getTaskResponse, 1),
+	}
 
 	TaskPollInterval = 100 * time.Millisecond
 	FlowPollInterval = 100 * time.Millisecond
-	m := NewTaskMonitor(mockClient, "workspace1", "task1")
+	m := NewTaskMonitor(syncMock, "workspace1", "task1")
+
+	// Queue initial successful response
+	syncMock.responseCh <- getTaskResponse{task: testTask, err: nil}
 
 	statusChan, progressChan, _ := m.Start(context.Background())
 
@@ -253,10 +277,9 @@ func TestTaskMonitor_Start_ServerUnavailability(t *testing.T) {
 	assert.Equal(t, "test", progress.ActionType)
 	assert.Equal(t, domain.ActionStatusComplete, progress.ActionStatus)
 
-	// Simulate server unavailability
-	mockCall.Unset()
+	// Queue error response for server unavailability
 	serverError := errors.New("connection refused")
-	mockClient.On("GetTask", "workspace1", "task1").Return(client.Task{}, serverError)
+	syncMock.responseCh <- getTaskResponse{task: client.Task{}, err: serverError}
 
 	// Should receive error status but channel remains open
 	status = <-statusChan
@@ -264,11 +287,10 @@ func TestTaskMonitor_Start_ServerUnavailability(t *testing.T) {
 	assert.Contains(t, status.Error.Error(), "connection refused")
 	assert.Equal(t, testTask, status.Task) // Preserves last known task state
 
-	// Server recovers with completed task
+	// Queue recovery response with completed task
 	completedTask := testTask
 	completedTask.Status = domain.TaskStatusComplete
-	mockCall.Unset()
-	mockCall = mockClient.On("GetTask", "workspace1", "task1").Return(completedTask, nil)
+	syncMock.responseCh <- getTaskResponse{task: completedTask, err: nil}
 
 	// Server recovers, task complete
 	status = <-statusChan
