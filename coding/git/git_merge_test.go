@@ -14,6 +14,7 @@ import (
 )
 
 func TestGitMergeActivity(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// Create a temporary directory to act as SIDE_DATA_HOME
@@ -21,6 +22,7 @@ func TestGitMergeActivity(t *testing.T) {
 	t.Setenv("SIDE_DATA_HOME", tempHome) // Set env var for the test duration
 
 	t.Run("no worktree, no conflicts", func(t *testing.T) {
+		t.Parallel()
 		// Setup
 		repoDir := setupTestGitRepo(t)
 		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
@@ -51,6 +53,7 @@ func TestGitMergeActivity(t *testing.T) {
 	})
 
 	t.Run("no worktree, with conflicts", func(t *testing.T) {
+		t.Parallel()
 		// Setup
 		repoDir := setupTestGitRepo(t)
 		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
@@ -100,6 +103,7 @@ func TestGitMergeActivity(t *testing.T) {
 	})
 
 	t.Run("source is worktree, with target checked out on repoDir, no conflicts", func(t *testing.T) {
+		t.Parallel()
 		// Setup
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit")
@@ -136,6 +140,7 @@ func TestGitMergeActivity(t *testing.T) {
 	})
 
 	t.Run("source is worktree, with target checked out on repoDir, with conflicts", func(t *testing.T) {
+		t.Parallel()
 		// Setup
 		repoDir := setupTestGitRepo(t)
 
@@ -188,6 +193,7 @@ func TestGitMergeActivity(t *testing.T) {
 	})
 
 	t.Run("source is worktree, with target NOT checked out anywhere, with conflicts - reverse merge strategy", func(t *testing.T) {
+		t.Parallel()
 		// Setup
 		repoDir := setupTestGitRepo(t)
 

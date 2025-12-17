@@ -14,9 +14,11 @@ import (
 )
 
 func TestListWorktrees(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("No Worktrees (Only Main)", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit")
 
@@ -35,6 +37,7 @@ func TestListWorktrees(t *testing.T) {
 	})
 
 	t.Run("Multiple Worktrees", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t) // main branch
 		createCommit(t, repoDir, "Commit 1 on main")
 
@@ -91,6 +94,7 @@ func TestListWorktrees(t *testing.T) {
 	})
 
 	t.Run("Worktree with Detached HEAD", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t) // main branch
 		hash1 := createCommit(t, repoDir, "Commit 1 on main")
 		createCommit(t, repoDir, "Commit 2 on main") // HEAD is now commit 2
@@ -124,6 +128,7 @@ func TestListWorktrees(t *testing.T) {
 	})
 
 	t.Run("Empty Repository (No Commits)", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t) // Initializes with main, but no commits
 
 		worktrees, err := ListWorktreesActivity(ctx, repoDir)
@@ -144,6 +149,7 @@ func TestListWorktrees(t *testing.T) {
 	})
 
 	t.Run("Invalid Directory", func(t *testing.T) {
+		t.Parallel()
 		nonExistentDir := filepath.Join(t.TempDir(), "non-existent-dir")
 		_ = os.RemoveAll(nonExistentDir) // Ensure it doesn't exist
 
@@ -154,6 +160,7 @@ func TestListWorktrees(t *testing.T) {
 	})
 
 	t.Run("Not a Git Repository", func(t *testing.T) {
+		t.Parallel()
 		notRepoDir := t.TempDir()
 		_, err := ListWorktreesActivity(ctx, notRepoDir)
 		require.Error(t, err, "Should return an error for a directory that is not a git repository")
@@ -163,9 +170,11 @@ func TestListWorktrees(t *testing.T) {
 }
 
 func TestCleanupWorktreeActivity(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("Successful Cleanup", func(t *testing.T) {
+		t.Parallel()
 		// Setup main repository
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit on main")
@@ -219,6 +228,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 	})
 
 	t.Run("Missing Branch Name", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t)
 		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
 		require.NoError(t, err)
@@ -230,6 +240,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 	})
 
 	t.Run("Non-existent Branch", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit")
 
@@ -243,6 +254,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 	})
 
 	t.Run("Successful Cleanup with Empty Archive Message", func(t *testing.T) {
+		t.Parallel()
 		// Setup main repository
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit on main")
@@ -290,6 +302,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 	})
 
 	t.Run("Tag Fallback When Tag Already Exists", func(t *testing.T) {
+		t.Parallel()
 		// Setup main repository
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit on main")
@@ -330,6 +343,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 	})
 
 	t.Run("Tag Fallback Multiple Existing Tags", func(t *testing.T) {
+		t.Parallel()
 		// Setup main repository
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit on main")

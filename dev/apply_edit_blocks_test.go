@@ -22,6 +22,8 @@ import (
 )
 
 func TestValidateEditBlocksEmptyChatHistory(t *testing.T) {
+	t.Parallel()
+
 	// Create an empty chat history
 	chatHistory := []llm.ChatMessage{}
 
@@ -52,6 +54,8 @@ func TestValidateEditBlocksEmptyChatHistory(t *testing.T) {
 }
 
 func TestValidateEditBlocksWithValidBlocks(t *testing.T) {
+	t.Parallel()
+
 	// Create a chat history that includes the old lines from our edit blocks
 	chatHistory := []llm.ChatMessage{
 		{
@@ -93,6 +97,8 @@ func TestValidateEditBlocksWithValidBlocks(t *testing.T) {
 }
 
 func TestValidateEditBlocksWithInvalidBlocks(t *testing.T) {
+	t.Parallel()
+
 	// Create a chat history that doesn't include the old lines from our edit blocks
 	chatHistory := []llm.ChatMessage{
 		{
@@ -131,6 +137,8 @@ func TestValidateEditBlocksWithInvalidBlocks(t *testing.T) {
 }
 
 func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name            string
 		isExistingFile  bool
@@ -218,6 +226,7 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 		}
 
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			// note: since CheckEdits isn't enabled in this test, we don't need
 			// a git repo
 			tmpDir := t.TempDir()
@@ -268,6 +277,7 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 }
 
 func TestApplyEditBlockActivity_MarkdownAndCommentSkipping(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		filePath        string
@@ -486,6 +496,7 @@ func getValue() int {
 		}
 
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			tmpDir := t.TempDir()
 
 			filePath := filepath.Join(tmpDir, tt.filePath)
@@ -519,6 +530,7 @@ func getValue() int {
 }
 
 func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	// Create a test file to delete
@@ -596,6 +608,7 @@ func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
 }
 
 func TestGetUpdatedContents(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name             string
 		block            EditBlock
@@ -736,6 +749,7 @@ func TestGetUpdatedContents(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			result, err := getUpdatedContents(tt.block, tt.originalContents)
 			if result != tt.expectedContents {
 				t.Errorf("Expected content:\n%s\n\nGot:\n%s", tt.expectedContents, result)
@@ -750,6 +764,7 @@ func TestGetUpdatedContents(t *testing.T) {
 }
 
 func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
+	t.Parallel()
 	minimumFileRangeVisibilityMargin = 0 // we don't want any margin for these tests since that adds a lot of unnecessary whitespace and thinking
 	tests := []struct {
 		name             string
@@ -1029,6 +1044,7 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			result, err := getUpdatedContents(tt.block, tt.originalContents)
 			if result != tt.expectedContents {
 				t.Errorf("Expected content:\n%s\n\nGot:\n%s", tt.expectedContents, result)
@@ -1043,6 +1059,7 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 }
 
 func TestApplyEditBlocks_withMultipleEditBlocksAndVisibleFileRanges(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	// Create a tempfile under the given tmpDir with the name "side.toml". It can be empty, which is still valid.
@@ -1198,6 +1215,7 @@ func getCommitHashes(t *testing.T, dir string, filePath string) []string {
 }
 
 func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
+	t.Parallel()
 	da := &DevActivities{
 		LSPActivities: &lsp.LSPActivities{
 			LSPClientProvider: func(languageName string) lsp.LSPClient {
@@ -1211,6 +1229,7 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 
 	// Scenario A: New File
 	t.Run("Scenario A - New File", func(t *testing.T) {
+		t.Parallel()
 		tmpDirA, err := os.MkdirTemp("", "sequentialNewTest")
 		require.NoError(t, err)
 		defer os.RemoveAll(tmpDirA)
@@ -1302,6 +1321,7 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 
 	// Scenario B: Existing File
 	t.Run("Scenario B - Existing File", func(t *testing.T) {
+		t.Parallel()
 		tmpDirB, err := os.MkdirTemp("", "sequentialExistingTest")
 		require.NoError(t, err)
 		defer os.RemoveAll(tmpDirB)
@@ -1406,6 +1426,7 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 }
 
 func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "editBlocksTest")
 	require.Nil(t, err)
 	defer os.RemoveAll(tmpDir)
@@ -1451,6 +1472,7 @@ func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			tmpDir, err := os.MkdirTemp("", "editBlocksTest")
 			assert.Nil(t, err)
 			//defer os.RemoveAll(tmpDir)
@@ -1540,6 +1562,7 @@ func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
 }
 
 func TestApplyEditBlocks_FinalDiff_AfterFailedChecksAndRestore(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "finalDiffFailedCheckTest")
 	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
@@ -1636,6 +1659,7 @@ func TestApplyEditBlocks_FinalDiff_AfterFailedChecksAndRestore(t *testing.T) {
 }
 
 func TestApplyEditBlocks_FinalDiff_NewFilePassesChecks(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "finalDiffNewFilePassCheckTest")
 	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
@@ -1782,6 +1806,7 @@ class RST(FixedWidth):
         return lines`
 
 func TestFindAcceptableMatchWithVisibleFileRangeAtEndEdge(t *testing.T) {
+	t.Parallel()
 	editBlock := EditBlock{
 		FilePath: "astropy/io/ascii/rst.py",
 		OldLines: []string{
@@ -1825,6 +1850,7 @@ func TestFindAcceptableMatchWithVisibleFileRangeAtEndEdge(t *testing.T) {
 }
 
 func TestFindAcceptableMatchWithMissingVisibleFileRangesButWeFigureItOut(t *testing.T) {
+	t.Parallel()
 	tmpFile, err := os.CreateTemp("", "*.py")
 	tmpFile.Write([]byte(rstLines))
 	if err != nil {
@@ -1875,6 +1901,7 @@ func TestFindAcceptableMatchWithMissingVisibleFileRangesButWeFigureItOut(t *test
 }
 
 func TestApplyEditBlocks_LSPAutofixRegression(t *testing.T) {
+	t.Parallel()
 	// Create a temporary directory for test files
 	tmpDir := t.TempDir()
 	relativeFilePath := "test.go"

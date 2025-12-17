@@ -84,6 +84,7 @@ func (s *GitDiffWorkflowTestSuite) AfterTest(suiteName, testName string) {
 }
 
 func TestGitDiffWorkflowTestSuite(t *testing.T) {
+	t.Parallel()
 	suite.Run(t, new(GitDiffWorkflowTestSuite))
 }
 

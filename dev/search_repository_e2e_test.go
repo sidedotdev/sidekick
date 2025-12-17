@@ -217,6 +217,7 @@ func (s *SearchRepositoryE2ETestSuite) TestRefusalForOverlyLongSearchOutput() {
 }
 
 func TestSearchRepositorySuite(t *testing.T) {
+	t.Parallel()
 	suite.Run(t, new(SearchRepositoryE2ETestSuite))
 }
 

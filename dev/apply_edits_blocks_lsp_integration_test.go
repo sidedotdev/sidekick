@@ -16,6 +16,7 @@ import (
 // become stale after file modifications via ApplyEditBlocksActivity, ensuring
 // document syncs occurred.
 func TestLSPDocumentSyncWhenApplyingEditBlocks_golang(t *testing.T) {
+	t.Parallel()
 	// Create a temporary directory for test files
 	tempDir := t.TempDir()
 
