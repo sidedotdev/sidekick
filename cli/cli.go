@@ -6,6 +6,7 @@ import (
 	"os"
 	"sidekick"
 	"sidekick/api"
+	"sidekick/temporal"
 	"strconv"
 
 	// Embedding the frontend build files
@@ -34,7 +35,7 @@ func (p *program) Start(s system_service.Service) error {
 func (p *program) run() {
 	p.server = startServer()
 	startWorker()
-	startTemporal()
+	temporal.Start()
 }
 
 func (p *program) Stop(s system_service.Service) error {
