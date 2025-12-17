@@ -1,0 +1,40 @@
+version: '3'
+
+tasks:
+  dev:
+    desc: Run all services concurrently for local development
+    deps: [temporal, api, worker, frontend]
+
+  temporal:
+    desc: Run the Temporal server
+    cmds:
+      - go run ./cmd/temporal
+    watch: true
+    sources:
+      - temporal/**/*.go
+
+  api:
+    desc: Run the API server
+    cmds:
+      - go run ./api/main
+    watch: true
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+
+  worker:
+    desc: Run the worker server
+    cmds:
+      - go run ./worker/main
+    watch: true
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+
+  frontend:
+    desc: Run the frontend dev server
+    dir: frontend
+    cmds:
+      - bun dev
