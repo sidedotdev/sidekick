@@ -344,34 +344,6 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			toolCallResponses = handleToolCalls(dCtx, chatResponse.ToolCalls, nil)
 		}
 
-		// Inject synthetic tool call + response into history if we applied edit blocks
-		if len(currentExtractedBlocks) > 0 && applyImmediately {
-			syntheticToolCallId := fmt.Sprintf("apply_edit_blocks_%d", workflow.Now(dCtx).UnixNano())
-			syntheticToolCall := llm.ToolCall{
-				Id:        syntheticToolCallId,
-				Name:      "apply_edit_blocks",
-				Arguments: "{}",
-			}
-			// Inject synthetic tool call at the beginning of the assistant message's tool calls
-			assistantMsgIdx := len(*chatHistory) - 1
-			(*chatHistory)[assistantMsgIdx].ToolCalls = append([]llm.ToolCall{syntheticToolCall}, (*chatHistory)[assistantMsgIdx].ToolCalls...)
-
-			reportContent := applyEditBlocksResult.ReportMessage
-			if len(chatResponse.ToolCalls) > 0 {
-				reportContent += "\n\nNote: The other tool calls are being executed after the edit blocks were applied."
-			}
-
-			// add synthetic tool response before handling real tool responses
-			*chatHistory = append(*chatHistory, llm.ChatMessage{
-				Role:        llm.ChatMessageRoleTool,
-				Content:     reportContent,
-				Name:        "apply_edit_blocks",
-				ToolCallId:  syntheticToolCallId,
-				IsError:     applyEditBlocksError != nil || !applyEditBlocksResult.AllApplied,
-				ContextType: ContextTypeEditBlockReport,
-			})
-		}
-
 		// Add tool call responses to history
 		for _, toolCallResponseInfo := range toolCallResponses {
 			// Reset feedback counter if this was a getHelpOrInput response
@@ -394,18 +366,22 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 				attemptCount++
 				continue
 			} else if !applyEditBlocksResult.AllApplied {
-				// NOTE: we don't actually use this feedback content since the
-				// tool response has it. the feedback prompt template omits it.
-				promptInfo = FeedbackInfo{Feedback: `"this string should never be rendered"`, Type: FeedbackTypeApplyError}
+				promptInfo = FeedbackInfo{Feedback: applyEditBlocksResult.ReportMessage, Type: FeedbackTypeApplyError}
 				attemptCount++
 				continue
+			} else {
+				*chatHistory = append(*chatHistory, llm.ChatMessage{
+					Role:        llm.ChatMessageRoleSystem,
+					Content:     applyEditBlocksResult.ReportMessage,
+					ContextType: ContextTypeEditBlockReport,
+				})
 			}
 		}
 
-		if len(toolCallResponses) > 0 {
+		if len(chatResponse.ToolCalls) > 0 {
 			promptInfo = SkipInfo{}
 		} else {
-			// we use the fact that no (non-synthetic) tool call happened to
+			// we use the fact that no tool call happened to
 			// infer that we're done with this loop
 			break
 		}
