@@ -14,6 +14,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/contrib/opentelemetry"
+	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 )
@@ -72,8 +74,14 @@ func main() {
 	}
 
 	hostPort := common.GetTemporalServerHostPort()
+	tracingInterceptor, err := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating tracing interceptor: %v\n", err)
+		os.Exit(1)
+	}
 	temporalClient, err := client.Dial(client.Options{
-		HostPort: hostPort,
+		HostPort:     hostPort,
+		Interceptors: []interceptor.ClientInterceptor{tracingInterceptor},
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error connecting to Temporal: %v\n", err)
