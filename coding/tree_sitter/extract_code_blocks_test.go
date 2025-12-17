@@ -7,6 +7,7 @@ import (
 )
 
 func TestExtractSearchCodeBlocks(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -147,7 +148,9 @@ abc=invalid line number`,
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := ExtractSearchCodeBlocks(tt.input)
 			if !reflect.DeepEqual(got, tt.expected) {
 				//t.Errorf("expected:\n%v\ngot:\n%v", tt.expected, got)
@@ -158,6 +161,7 @@ abc=invalid line number`,
 }
 
 func TestExtractGitDiffCodeBlocks(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -388,7 +392,9 @@ index dcf347e..e818d00 100644
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := ExtractGitDiffCodeBlocks(tt.input)
 			if !reflect.DeepEqual(got, tt.expected) {
 				t.Errorf("expected:\n%s\ngot:\n%s", utils.PanicJSON(tt.expected), utils.PanicJSON(got))
@@ -398,6 +404,7 @@ index dcf347e..e818d00 100644
 }
 
 func TestExtractSymbolDefinitionBlocks(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -643,7 +650,9 @@ func main() {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := ExtractSymbolDefinitionBlocks(tt.input)
 			if !reflect.DeepEqual(got, tt.expected) {
 				//t.Errorf("expected:\n%v\ngot:\n%v", tt.expected, got)

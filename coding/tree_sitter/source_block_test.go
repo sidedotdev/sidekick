@@ -18,6 +18,7 @@ type testCase struct {
 }
 
 func TestExpandContextLines(t *testing.T) {
+	t.Parallel()
 	testCases := []testCase{
 		{
 			name:            "empty source blocks",
@@ -264,7 +265,9 @@ func TestExpandContextLines(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			result := ExpandContextLines(tc.sourceBlocks, tc.numContextLines, tc.sourceCode)
 			if !reflect.DeepEqual(result, tc.expected) {
 				t.Errorf("Expected %s, Got: %s", utils.PanicJSON(tc.expected), utils.PanicJSON(result))

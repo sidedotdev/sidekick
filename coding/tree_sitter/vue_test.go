@@ -402,7 +402,9 @@ func TestGetFileHeadersStringVue(t *testing.T) {
 		})
 	}
 }
+
 func TestNormalizeSymbolFromSnippet_Vue(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		snippet  string
@@ -423,6 +425,7 @@ func TestNormalizeSymbolFromSnippet_Vue(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := NormalizeSymbolFromSnippet("vue", tc.snippet)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
