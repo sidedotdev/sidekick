@@ -1435,17 +1435,6 @@ func TestCancelTaskHandler(t *testing.T) {
 func TestGetTasksHandler_DefaultIncludesInReview(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
-	ctx := context.Background()
-	workspaceId := "ws_1"
-
-	inReviewTask := domain.Task{
-		WorkspaceId: workspaceId,
-		Id:          "task_" + ksuid.New().String(),
-		Status:      domain.TaskStatusInReview,
-	}
-	err := ctrl.service.PersistTask(ctx, inReviewTask)
-	assert.Nil(t, err)
 
 	testCases := []struct {
 		name        string
@@ -1458,6 +1447,18 @@ func TestGetTasksHandler_DefaultIncludesInReview(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			ctrl := NewMockController(t)
+			ctx := context.Background()
+			workspaceId := "ws_" + ksuid.New().String()
+
+			inReviewTask := domain.Task{
+				WorkspaceId: workspaceId,
+				Id:          "task_" + ksuid.New().String(),
+				Status:      domain.TaskStatusInReview,
+			}
+			err := ctrl.service.PersistTask(ctx, inReviewTask)
+			assert.Nil(t, err)
+
 			resp := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(resp)
 			route := "/tasks"
@@ -1472,7 +1473,7 @@ func TestGetTasksHandler_DefaultIncludesInReview(t *testing.T) {
 			var result struct {
 				Tasks []TaskResponse `json:"tasks"`
 			}
-			err := json.Unmarshal(resp.Body.Bytes(), &result)
+			err = json.Unmarshal(resp.Body.Bytes(), &result)
 			if assert.Nil(t, err) {
 				found := false
 				for _, taskResp := range result.Tasks {
@@ -2208,24 +2209,23 @@ func TestTaskChangesWebsocketHandler(t *testing.T) {
 func TestUserActionHandler_BasicCases(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
-	router := DefineRoutes(ctrl)
-
-	workspaceId := "ws_test_" + ksuid.New().String()
-	flowId := "flow_test_" + ksuid.New().String()
-
-	// persist workspace and flow to avoid 404 response
-	workspace := domain.Workspace{Id: workspaceId}
-	db := ctrl.service
-	ctx := context.Background()
-	err := db.PersistWorkspace(ctx, workspace)
-	require.NoError(t, err)
-	flow := domain.Flow{Id: flowId, WorkspaceId: workspaceId}
-	err = db.PersistFlow(ctx, flow)
-	require.NoError(t, err)
 
 	t.Run("Successful go_next_step", func(t *testing.T) {
 		t.Parallel()
+		ctrl := NewMockController(t)
+		router := DefineRoutes(ctrl)
+
+		workspaceId := "ws_test_" + ksuid.New().String()
+		flowId := "flow_test_" + ksuid.New().String()
+
+		workspace := domain.Workspace{Id: workspaceId}
+		ctx := context.Background()
+		err := ctrl.service.PersistWorkspace(ctx, workspace)
+		require.NoError(t, err)
+		flow := domain.Flow{Id: flowId, WorkspaceId: workspaceId}
+		err = ctrl.service.PersistFlow(ctx, flow)
+		require.NoError(t, err)
+
 		payload := UserActionRequest{ActionType: string(flow_action.UserActionGoNext)}
 		jsonPayload, _ := json.Marshal(payload)
 
@@ -2242,6 +2242,20 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 
 	t.Run("Invalid actionType", func(t *testing.T) {
 		t.Parallel()
+		ctrl := NewMockController(t)
+		router := DefineRoutes(ctrl)
+
+		workspaceId := "ws_test_" + ksuid.New().String()
+		flowId := "flow_test_" + ksuid.New().String()
+
+		workspace := domain.Workspace{Id: workspaceId}
+		ctx := context.Background()
+		err := ctrl.service.PersistWorkspace(ctx, workspace)
+		require.NoError(t, err)
+		flow := domain.Flow{Id: flowId, WorkspaceId: workspaceId}
+		err = ctrl.service.PersistFlow(ctx, flow)
+		require.NoError(t, err)
+
 		payload := UserActionRequest{ActionType: "invalid_action"}
 		jsonPayload, _ := json.Marshal(payload)
 
@@ -2258,19 +2272,46 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 
 	t.Run("Invalid request payload - non-JSON", func(t *testing.T) {
 		t.Parallel()
+		ctrl := NewMockController(t)
+		router := DefineRoutes(ctrl)
+
+		workspaceId := "ws_test_" + ksuid.New().String()
+		flowId := "flow_test_" + ksuid.New().String()
+
+		workspace := domain.Workspace{Id: workspaceId}
+		ctx := context.Background()
+		err := ctrl.service.PersistWorkspace(ctx, workspace)
+		require.NoError(t, err)
+		flow := domain.Flow{Id: flowId, WorkspaceId: workspaceId}
+		err = ctrl.service.PersistFlow(ctx, flow)
+		require.NoError(t, err)
+
 		req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/user_action", workspaceId, flowId), bytes.NewBufferString("not-json"))
 		req.Header.Set("Content-Type", "application/json")
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, req)
 
 		assert.Equal(t, http.StatusBadRequest, rr.Code)
-		// The exact error message for JSON parsing can vary, so we check for a prefix.
 		assert.True(t, strings.HasPrefix(rr.Body.String(), `{"message":"Invalid request payload:`))
 	})
 
 	t.Run("Invalid request payload - missing actionType", func(t *testing.T) {
 		t.Parallel()
-		payload := map[string]string{"other_field": "value"} // Missing actionType
+		ctrl := NewMockController(t)
+		router := DefineRoutes(ctrl)
+
+		workspaceId := "ws_test_" + ksuid.New().String()
+		flowId := "flow_test_" + ksuid.New().String()
+
+		workspace := domain.Workspace{Id: workspaceId}
+		ctx := context.Background()
+		err := ctrl.service.PersistWorkspace(ctx, workspace)
+		require.NoError(t, err)
+		flow := domain.Flow{Id: flowId, WorkspaceId: workspaceId}
+		err = ctrl.service.PersistFlow(ctx, flow)
+		require.NoError(t, err)
+
+		payload := map[string]string{"other_field": "value"}
 		jsonPayload, _ := json.Marshal(payload)
 
 		req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/user_action", workspaceId, flowId), bytes.NewBuffer(jsonPayload))
