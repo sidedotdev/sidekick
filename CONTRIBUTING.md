@@ -46,7 +46,7 @@ SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development go run sidekick/cli start -- --disable
 
 ```sh
 cd frontend
-bun install
+bun ci
 bun run dev
 ```
 

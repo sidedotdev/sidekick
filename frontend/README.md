@@ -24,7 +24,7 @@ See [Vite Configuration Reference](https://vitejs.dev/config/).
 ## Project Setup
 
 ```sh
-bun install
+bun ci
 ```
 
 ### Compile and Hot-Reload for Development
