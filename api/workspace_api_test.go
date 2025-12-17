@@ -474,7 +474,7 @@ func createCommit(t *testing.T, repoDir, message string) {
 }
 
 func TestDetermineManagedWorktreeBranches(t *testing.T) {
-	t.Parallel()
+	// Setenv // t.Parallel()
 	// Create a temporary directory to act as SIDE_DATA_HOME
 	tempHome := t.TempDir()
 	t.Setenv("SIDE_DATA_HOME", tempHome) // Set env var for the test duration
@@ -620,7 +620,7 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 
 // runGitCommand executes a git command in the specified directory and returns its output.
 func TestGetWorkspaceBranchesHandler(t *testing.T) {
-	t.Parallel()
+	// Setenv // t.Parallel()
 	gin.SetMode(gin.TestMode)
 
 	// --- Test Setup ---
