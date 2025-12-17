@@ -105,6 +105,7 @@ func NewMockControllerWithSecretManager(t *testing.T, sm secret_manager.SecretMa
 }
 
 func TestCreateTaskHandler(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
@@ -238,6 +239,7 @@ func TestCreateTaskHandler(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			resp := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(resp)
 
@@ -286,6 +288,7 @@ func TestCreateTaskHandler(t *testing.T) {
 }
 
 func TestGetTasksHandler(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -358,6 +361,7 @@ func TestGetTasksHandler(t *testing.T) {
 	}
 }
 func TestGetTasksHandlerWhenTasksAreEmpty(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -384,6 +388,7 @@ func TestGetTasksHandlerWhenTasksAreEmpty(t *testing.T) {
 }
 
 func TestFlowActionChangesWebsocketHandler(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	db := ctrl.service
@@ -485,6 +490,7 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 }
 
 func TestCompleteFlowActionHandler(t *testing.T) {
+	t.Parallel()
 	ctrl := NewMockController(t)
 	redisDb := ctrl.service
 	workspaceId := "ws_123"
@@ -550,6 +556,7 @@ func TestCompleteFlowActionHandler(t *testing.T) {
 }
 
 func TestCompleteFlowActionHandler_UnpausesFlow(t *testing.T) {
+	t.Parallel()
 	ctrl := NewMockController(t)
 	redisDb := ctrl.service
 	workspaceId := "ws_123"
@@ -603,6 +610,7 @@ func TestCompleteFlowActionHandler_UnpausesFlow(t *testing.T) {
 }
 
 func TestCompleteFlowActionHandler_NonHumanRequest(t *testing.T) {
+	t.Parallel()
 	ctrl := NewMockController(t)
 	redisDb := ctrl.service
 
@@ -642,6 +650,7 @@ func TestCompleteFlowActionHandler_NonHumanRequest(t *testing.T) {
 }
 
 func TestCompleteFlowActionHandler_NonPending(t *testing.T) {
+	t.Parallel()
 	ctrl := NewMockController(t)
 	redisDb := ctrl.service
 
@@ -682,6 +691,7 @@ func TestCompleteFlowActionHandler_NonPending(t *testing.T) {
 }
 
 func TestCompleteFlowActionHandler_NonCallback(t *testing.T) {
+	t.Parallel()
 	ctrl := NewMockController(t)
 	redisDb := ctrl.service
 
@@ -722,6 +732,7 @@ func TestCompleteFlowActionHandler_NonCallback(t *testing.T) {
 }
 
 func TestCompleteFlowActionHandler_FreeFormButEmptyResponseContent(t *testing.T) {
+	t.Parallel()
 	ctrl := NewMockController(t)
 	redisDb := ctrl.service
 
@@ -765,6 +776,7 @@ func TestCompleteFlowActionHandler_FreeFormButEmptyResponseContent(t *testing.T)
 }
 
 func TestUpdateFlowActionHandler(t *testing.T) {
+	t.Parallel()
 	ctrl := NewMockController(t)
 	redisDb := ctrl.service
 	workspaceId := "ws_123"
@@ -821,6 +833,7 @@ func TestUpdateFlowActionHandler(t *testing.T) {
 }
 
 func TestUpdateFlowActionHandler_RejectsApprovalDecision(t *testing.T) {
+	t.Parallel()
 	ctrl := NewMockController(t)
 	redisDb := ctrl.service
 	workspaceId := "ws_123"
@@ -858,6 +871,7 @@ func TestUpdateFlowActionHandler_RejectsApprovalDecision(t *testing.T) {
 }
 
 func TestUpdateFlowActionHandler_NonHumanRequest(t *testing.T) {
+	t.Parallel()
 	ctrl := NewMockController(t)
 	redisDb := ctrl.service
 
@@ -897,6 +911,7 @@ func TestUpdateFlowActionHandler_NonHumanRequest(t *testing.T) {
 }
 
 func TestUpdateFlowActionHandler_NonPending(t *testing.T) {
+	t.Parallel()
 	ctrl := NewMockController(t)
 	redisDb := ctrl.service
 
@@ -937,6 +952,7 @@ func TestUpdateFlowActionHandler_NonPending(t *testing.T) {
 }
 
 func TestUpdateFlowActionHandler_NonCallback(t *testing.T) {
+	t.Parallel()
 	ctrl := NewMockController(t)
 	redisDb := ctrl.service
 
@@ -977,6 +993,7 @@ func TestUpdateFlowActionHandler_NonCallback(t *testing.T) {
 }
 
 func TestGetFlowActionsHandler(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -1032,6 +1049,7 @@ func TestGetFlowActionsHandler(t *testing.T) {
 }
 
 func TestGetFlowActionsHandler_NonExistentFlowId(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
@@ -1045,6 +1063,7 @@ func TestGetFlowActionsHandler_NonExistentFlowId(t *testing.T) {
 }
 
 func TestGetFlowActionsHandler_EmptyActions(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	redisDb := ctrl.service
@@ -1075,6 +1094,7 @@ func TestGetFlowActionsHandler_EmptyActions(t *testing.T) {
 	}
 }
 func TestUpdateTaskHandler(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -1125,6 +1145,7 @@ func TestUpdateTaskHandler(t *testing.T) {
 }
 
 func TestUpdateTaskHandler_InvalidTaskID(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -1155,6 +1176,7 @@ func TestUpdateTaskHandler_InvalidTaskID(t *testing.T) {
 }
 
 func TestUpdateTaskHandler_UnparseableRequestBody(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -1189,6 +1211,7 @@ func TestUpdateTaskHandler_UnparseableRequestBody(t *testing.T) {
 }
 
 func TestUpdateTaskHandler_InvalidStatus(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -1231,6 +1254,7 @@ func TestUpdateTaskHandler_InvalidStatus(t *testing.T) {
 }
 
 func TestUpdateTaskHandler_InvalidAgentType(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -1273,6 +1297,7 @@ func TestUpdateTaskHandler_InvalidAgentType(t *testing.T) {
 }
 
 func TestUpdateTaskHandler_InvalidAgentTypeAndStatusCombo(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -1316,6 +1341,7 @@ func TestUpdateTaskHandler_InvalidAgentTypeAndStatusCombo(t *testing.T) {
 }
 
 func TestDeleteTaskHandler(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -1354,6 +1380,7 @@ func TestDeleteTaskHandler(t *testing.T) {
 }
 
 func TestCancelTaskHandler(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -1375,6 +1402,7 @@ func TestCancelTaskHandler(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Create a task for testing
 			task := domain.Task{
 				WorkspaceId: "ws_" + ksuid.New().String(),
@@ -1425,6 +1453,7 @@ func TestCancelTaskHandler(t *testing.T) {
 }
 
 func TestGetTasksHandler_DefaultIncludesInReview(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	ctx := context.Background()
@@ -1448,6 +1477,7 @@ func TestGetTasksHandler_DefaultIncludesInReview(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			resp := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(resp)
 			route := "/tasks"
@@ -1478,6 +1508,7 @@ func TestGetTasksHandler_DefaultIncludesInReview(t *testing.T) {
 }
 
 func TestCancelTaskHandler_NonExistentTask(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -1504,6 +1535,7 @@ func TestCancelTaskHandler_NonExistentTask(t *testing.T) {
 }
 
 func TestArchiveFinishedTasksHandler(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -1580,6 +1612,7 @@ func TestArchiveFinishedTasksHandler(t *testing.T) {
 }
 
 func TestArchiveTaskHandler(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -1641,6 +1674,7 @@ func TestArchiveTaskHandler(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			recorder := httptest.NewRecorder()
 			ginCtx, _ := gin.CreateTestContext(recorder)
 			ginCtx.Request = httptest.NewRequest(http.MethodPost, "/workspaces/"+tc.task.WorkspaceId+"/tasks/"+tc.task.Id+"/archive", nil)
@@ -1670,11 +1704,13 @@ func TestArchiveTaskHandler(t *testing.T) {
 }
 
 func TestGetWorkspacesHandler(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Test for correct data retrieval
 	t.Run("returns workspaces correctly", func(t *testing.T) {
+		t.Parallel()
 
 		// Persisting workspace data
 		expectedWorkspaces := []domain.Workspace{
@@ -1703,6 +1739,7 @@ func TestGetWorkspacesHandler(t *testing.T) {
 
 	// Test for empty data
 	t.Run("returns empty list when no workspaces exist", func(t *testing.T) {
+		t.Parallel()
 		ctrl.service, _ = redis.NewTestRedisService() // clear the database
 
 		// Creating a test HTTP context
@@ -1724,6 +1761,7 @@ func TestGetWorkspacesHandler(t *testing.T) {
 }
 
 func TestGetTaskHandler(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -1820,6 +1858,7 @@ func TestGetTaskHandler(t *testing.T) {
 }
 
 func TestGetFlowHandler(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -1931,6 +1970,7 @@ func TestGetFlowHandler(t *testing.T) {
 }
 
 func TestFlowEventsWebsocketHandler(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
@@ -2039,6 +2079,7 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 }
 
 func TestGetArchivedTasksHandler(t *testing.T) {
+	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
@@ -2094,6 +2135,7 @@ func TestGetArchivedTasksHandler(t *testing.T) {
 }
 
 func TestTaskChangesWebsocketHandler(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	db := ctrl.service
@@ -2189,6 +2231,7 @@ func TestTaskChangesWebsocketHandler(t *testing.T) {
 }
 
 func TestUserActionHandler_BasicCases(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	router := DefineRoutes(ctrl)
@@ -2207,6 +2250,7 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("Successful go_next_step", func(t *testing.T) {
+		t.Parallel()
 		payload := UserActionRequest{ActionType: string(flow_action.UserActionGoNext)}
 		jsonPayload, _ := json.Marshal(payload)
 
@@ -2222,6 +2266,7 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 	})
 
 	t.Run("Invalid actionType", func(t *testing.T) {
+		t.Parallel()
 		payload := UserActionRequest{ActionType: "invalid_action"}
 		jsonPayload, _ := json.Marshal(payload)
 
@@ -2237,6 +2282,7 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 	})
 
 	t.Run("Invalid request payload - non-JSON", func(t *testing.T) {
+		t.Parallel()
 		req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/workspaces/%s/flows/%s/user_action", workspaceId, flowId), bytes.NewBufferString("not-json"))
 		req.Header.Set("Content-Type", "application/json")
 		rr := httptest.NewRecorder()
@@ -2248,6 +2294,7 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 	})
 
 	t.Run("Invalid request payload - missing actionType", func(t *testing.T) {
+		t.Parallel()
 		payload := map[string]string{"other_field": "value"} // Missing actionType
 		jsonPayload, _ := json.Marshal(payload)
 
@@ -2262,6 +2309,7 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 }
 
 func TestUserActionHandler_FlowNotFound(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	apiCtrl := NewMockController(t)
 	router := DefineRoutes(apiCtrl)
@@ -2281,6 +2329,7 @@ func TestUserActionHandler_FlowNotFound(t *testing.T) {
 }
 
 func TestUserActionHandler_SignalError(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	apiCtrl := NewMockController(t)
 	router := DefineRoutes(apiCtrl)
@@ -2318,6 +2367,7 @@ func TestUserActionHandler_SignalError(t *testing.T) {
 }
 
 func TestGetProvidersHandler(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
@@ -2387,6 +2437,7 @@ func TestGetProvidersHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			sm := testSecretManager{secrets: tt.secrets}
 			apiCtrl := NewMockControllerWithSecretManager(t, sm)
 			router := DefineRoutes(apiCtrl)
@@ -2421,6 +2472,7 @@ func TestGetProvidersHandler(t *testing.T) {
 }
 
 func TestGetModelsHandler(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	router := DefineRoutes(ctrl)

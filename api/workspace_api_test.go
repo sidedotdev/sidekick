@@ -24,6 +24,7 @@ import (
 )
 
 func TestUpdateWorkspaceHandler(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	db := ctrl.service
@@ -238,6 +239,7 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 		assert.NoError(t, err)
 
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			resp := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(resp)
 
@@ -286,6 +288,7 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 }
 
 func TestCreateWorkspaceHandler(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
@@ -413,6 +416,7 @@ func TestCreateWorkspaceHandler(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			resp := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(resp)
 
@@ -470,6 +474,7 @@ func createCommit(t *testing.T, repoDir, message string) {
 }
 
 func TestDetermineManagedWorktreeBranches(t *testing.T) {
+	t.Parallel()
 	// Create a temporary directory to act as SIDE_DATA_HOME
 	tempHome := t.TempDir()
 	t.Setenv("SIDE_DATA_HOME", tempHome) // Set env var for the test duration
@@ -593,6 +598,7 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Pass the slice directly
 			managedBranches, err := determineManagedWorktreeBranches(tc.gitWorktrees)
 
@@ -614,6 +620,7 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 
 // runGitCommand executes a git command in the specified directory and returns its output.
 func TestGetWorkspaceBranchesHandler(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 
 	// --- Test Setup ---
@@ -678,6 +685,7 @@ func TestGetWorkspaceBranchesHandler(t *testing.T) {
 
 	// --- Test Cases ---
 	t.Run("success - list branches excluding managed worktrees", func(t *testing.T) {
+		t.Parallel()
 		resp := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(resp)
 		c.Request = httptest.NewRequest("GET", "/v1/workspaces/"+workspace.Id+"/branches", nil)
@@ -706,6 +714,7 @@ func TestGetWorkspaceBranchesHandler(t *testing.T) {
 	})
 
 	t.Run("workspace not found", func(t *testing.T) {
+		t.Parallel()
 		resp := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(resp)
 		workspaceId := "nonexistent-ws"
@@ -722,6 +731,7 @@ func TestGetWorkspaceBranchesHandler(t *testing.T) {
 	})
 
 	t.Run("repo directory does not exist", func(t *testing.T) {
+		t.Parallel()
 		// Create a workspace pointing to a non-existent directory
 		badRepoDir := filepath.Join(t.TempDir(), "nonexistent-repo")
 		badWorkspace := domain.Workspace{
@@ -753,6 +763,7 @@ func TestGetWorkspaceBranchesHandler(t *testing.T) {
 }
 
 func TestGetWorkspaceByIdHandler(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	db := ctrl.service
@@ -822,6 +833,7 @@ func TestGetWorkspaceByIdHandler(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			resp := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(resp)
 			c.Request = httptest.NewRequest("GET", "/v1/workspaces/"+tc.workspaceId, nil)
