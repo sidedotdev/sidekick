@@ -11,6 +11,7 @@ const (
 	SubflowStatusStarted  SubflowStatus = "started" // this more-or-less means "in-progress"
 	SubflowStatusComplete SubflowStatus = "complete"
 	SubflowStatusFailed   SubflowStatus = "failed"
+	SubflowStatusCanceled SubflowStatus = "canceled"
 )
 
 // Subflow represents a subflow within a flow
