@@ -34,6 +34,8 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/contrib/opentelemetry"
+	"go.temporal.io/sdk/interceptor"
 )
 
 type Server struct {
@@ -233,8 +235,13 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 }
 
 func NewController() (Controller, error) {
+	tracingInterceptor, err := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
+	if err != nil {
+		return Controller{}, fmt.Errorf("failed to create tracing interceptor: %w", err)
+	}
 	clientOptions := client.Options{
-		HostPort: common.GetTemporalServerHostPort(),
+		HostPort:     common.GetTemporalServerHostPort(),
+		Interceptors: []interceptor.ClientInterceptor{tracingInterceptor},
 	}
 	temporalClient, err := client.NewLazyClient(clientOptions)
 	if err != nil {

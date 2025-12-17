@@ -6,6 +6,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/contrib/opentelemetry"
+	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
 	zerologadapter "logur.dev/adapter/zerolog"
 	"logur.dev/logur"
@@ -17,6 +19,7 @@ import (
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/srv"
+	"sidekick/telemetry"
 	"sidekick/workspace"
 
 	"sidekick/dev"
@@ -27,8 +30,29 @@ import (
 	"sidekick/poll_failures"
 )
 
+// Worker wraps a Temporal worker with telemetry shutdown
+type Worker struct {
+	worker.Worker
+	shutdownTracer func(context.Context) error
+}
+
+// Stop stops the worker and shuts down the tracer
+func (w *Worker) Stop() {
+	w.Worker.Stop()
+	if w.shutdownTracer != nil {
+		if err := w.shutdownTracer(context.Background()); err != nil {
+			log.Error().Err(err).Msg("Failed to shutdown telemetry tracer")
+		}
+	}
+}
+
 // StartWorker initializes and starts a new worker
-func StartWorker(hostPort string, taskQueue string) worker.Worker {
+func StartWorker(hostPort string, taskQueue string) *Worker {
+	shutdownTracer, err := telemetry.InitTracer("sidekick-worker")
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize telemetry tracer")
+	}
+
 	featureFlag, err := fflag.NewFFlag("flags.yml")
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create go-feature-flag instance")
@@ -36,9 +60,14 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	ffa := fflag.FFlagActivities{FFlag: featureFlag}
 
 	logger := logur.LoggerToKV(zerologadapter.New(log.Logger))
+	tracingInterceptor, err := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create tracing interceptor")
+	}
 	clientOptions := client.Options{
-		Logger:   logger,
-		HostPort: hostPort,
+		Logger:       logger,
+		HostPort:     hostPort,
+		Interceptors: []interceptor.ClientInterceptor{tracingInterceptor},
 	}
 	var temporalClient client.Client
 	for i := 0; i < 5; i++ {
@@ -157,7 +186,10 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 		log.Fatal().Err(err)
 	}
 
-	return w
+	return &Worker{
+		Worker:         w,
+		shutdownTracer: shutdownTracer,
+	}
 }
 
 func RegisterWorkflows(w worker.WorkflowRegistry) {
