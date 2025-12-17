@@ -493,7 +493,7 @@ func (ctrl *Controller) UserActionHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	flowId := c.Param("id")
 
-	_, err := ctrl.service.GetFlow(c, workspaceId, flowId)
+	_, err := ctrl.service.GetFlow(c.Request.Context(), workspaceId, flowId)
 	if err != nil {
 		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
@@ -633,7 +633,8 @@ func (ctrl *Controller) GetTaskHandler(c *gin.Context) {
 		return
 	}
 
-	task, err := ctrl.service.GetTask(c, workspaceId, taskId)
+	ctx := c.Request.Context()
+	task, err := ctrl.service.GetTask(ctx, workspaceId, taskId)
 	if err != nil {
 		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
@@ -643,7 +644,7 @@ func (ctrl *Controller) GetTaskHandler(c *gin.Context) {
 		return
 	}
 
-	flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, taskId)
+	flows, err := ctrl.service.GetFlowsForTask(ctx, workspaceId, taskId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -672,7 +673,8 @@ func (ctrl *Controller) GetFlowHandler(c *gin.Context) {
 		return
 	}
 
-	flow, err := ctrl.service.GetFlow(c, workspaceId, flowId)
+	ctx := c.Request.Context()
+	flow, err := ctrl.service.GetFlow(ctx, workspaceId, flowId)
 	if err != nil {
 		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
@@ -682,7 +684,7 @@ func (ctrl *Controller) GetFlowHandler(c *gin.Context) {
 		return
 	}
 
-	worktrees, err := ctrl.service.GetWorktreesForFlow(c, workspaceId, flowId)
+	worktrees, err := ctrl.service.GetWorktreesForFlow(ctx, workspaceId, flowId)
 	if err != nil {
 		fmt.Printf("Error fetching worktrees for flow %s: %v\n", flowId, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve worktrees"})
@@ -832,11 +834,12 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 		taskStatuses = append(taskStatuses, taskStatus)
 	}
 
+	ctx := c.Request.Context()
 	var tasks []domain.Task
 	var err error
 
 	if len(taskStatuses) > 0 {
-		tasks, err = ctrl.service.GetTasks(c, workspaceId, taskStatuses)
+		tasks, err = ctrl.service.GetTasks(ctx, workspaceId, taskStatuses)
 		if err != nil {
 			log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Error fetching tasks")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -850,7 +853,7 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 
 	taskResponses := make([]TaskResponse, len(tasks))
 	for i, task := range tasks {
-		flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, task.Id)
+		flows, err := ctrl.service.GetFlowsForTask(ctx, workspaceId, task.Id)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -892,9 +895,10 @@ func (ctrl *Controller) GetArchivedTasksHandler(c *gin.Context) {
 		return
 	}
 
+	ctx := c.Request.Context()
 	taskResponses := make([]TaskResponse, len(archivedTasks))
 	for i, task := range archivedTasks {
-		flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, task.Id)
+		flows, err := ctrl.service.GetFlowsForTask(ctx, workspaceId, task.Id)
 		if err != nil {
 			fmt.Println("Error fetching flows for archived task:", task.Id, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -943,14 +947,15 @@ func (ctrl *Controller) GetFlowActionsHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database accessor not initialized"})
 		return
 	}
-	flowActions, err := ctrl.service.GetFlowActions(c, workspaceId, flowId)
+	ctx := c.Request.Context()
+	flowActions, err := ctrl.service.GetFlowActions(ctx, workspaceId, flowId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get flow actions"})
 		return
 	}
 	if flowActions == nil {
 		flowActions = []domain.FlowAction{}
-		_, err := ctrl.service.GetFlow(c, workspaceId, flowId)
+		_, err := ctrl.service.GetFlow(ctx, workspaceId, flowId)
 		if err != nil {
 			if errors.Is(err, srv.ErrNotFound) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
@@ -1201,7 +1206,7 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 	task.FlowOptions = taskReq.FlowOptions
 
 	// If the task status is 'to_do' and there is no flow record, start the flow
-	flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, task.Id)
+	flows, err := ctrl.service.GetFlowsForTask(requestCtx, workspaceId, task.Id)
 	if err != nil {
 		ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
 		return
@@ -1212,7 +1217,7 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 			ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("Failed to handle new task: %w", err))
 			task.Status = domain.TaskStatusFailed
 			task.AgentType = domain.AgentTypeNone
-			ctrl.service.PersistTask(c, task)
+			ctrl.service.PersistTask(requestCtx, task)
 			return
 		}
 	}
