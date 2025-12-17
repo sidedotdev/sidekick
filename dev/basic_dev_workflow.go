@@ -264,7 +264,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 		}
 
 		if !testResult.TestsPassed && !testResult.TestsSkipped {
-			promptInfo = FeedbackInfo{Feedback: testResult.Output}
+			promptInfo = FeedbackInfo{Feedback: testResult.Output, Type: FeedbackTypeTestFailure}
 			attemptCount++
 			continue
 		}
@@ -280,7 +280,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 				return "", fmt.Errorf("failed to run integration tests: %w", err)
 			}
 			if !integrationTestResult.TestsPassed && !integrationTestResult.TestsSkipped {
-				promptInfo = FeedbackInfo{Feedback: integrationTestResult.Output}
+				promptInfo = FeedbackInfo{Feedback: integrationTestResult.Output, Type: FeedbackTypeTestFailure}
 				attemptCount++
 				continue
 			}
