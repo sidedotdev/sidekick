@@ -36,15 +36,35 @@ export const llmConfigsEqual = (a: LLMConfig, b: LLMConfig): boolean => {
   return true
 }
 
+let cachedPresets: ModelPreset[] | null = null
+let cacheTimestamp = 0
+const CACHE_TTL_MS = 1000
+
 export const loadPresets = (): ModelPreset[] => {
+  const now = Date.now()
+  if (cachedPresets !== null && now - cacheTimestamp < CACHE_TTL_MS) {
+    return cachedPresets
+  }
   try {
     const stored = localStorage.getItem(PRESETS_STORAGE_KEY)
-    return stored ? JSON.parse(stored) : []
+    const presets: ModelPreset[] = stored ? JSON.parse(stored) : []
+    cachedPresets = presets
+    cacheTimestamp = now
+    return presets
   } catch {
-    return []
+    const presets: ModelPreset[] = []
+    cachedPresets = presets
+    cacheTimestamp = now
+    return presets
   }
+}
+
+export const invalidatePresetsCache = () => {
+  cachedPresets = null
+  cacheTimestamp = 0
 }
 
 export const savePresets = (presets: ModelPreset[]) => {
   localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets))
+  invalidatePresetsCache()
 }
