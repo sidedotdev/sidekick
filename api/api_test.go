@@ -1037,8 +1037,9 @@ func TestGetFlowActionsHandler_NonExistentFlowId(t *testing.T) {
 
 	resp := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(resp)
+	c.Request = httptest.NewRequest("GET", "/v1/workspaces/ws_test/flow/non_existent_flow_id/actions", nil)
+	c.Params = []gin.Param{{Key: "workspaceId", Value: "ws_test"}, {Key: "id", Value: "non_existent_flow_id"}}
 	ctrl.GetFlowActionsHandler(c)
-	c.Params = []gin.Param{{Key: "id", Value: "non_existent_flow_id"}}
 
 	assert.Equal(t, http.StatusNotFound, resp.Code)
 }
@@ -2058,6 +2059,7 @@ func TestGetArchivedTasksHandler(t *testing.T) {
 	// Create a new gin context with the mock controller
 	resp := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(resp)
+	c.Request = httptest.NewRequest("GET", "/v1/workspaces/test-workspace/tasks/archived", nil)
 	c.Set("Controller", ctrl)
 	c.Params = gin.Params{{Key: "workspaceId", Value: "test-workspace"}}
 
