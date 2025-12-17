@@ -28,7 +28,7 @@ details to help you get started contributing more quickly.
 All the dependencies listed in README.md are required when developing the project. In addition, you will need:
 
 1. go (min version 1.21.x): https://go.dev/doc/install
-2. node: https://nodejs.org/en/learn/getting-started/how-to-install-nodejs
+2. bun: https://bun.sh/
 3. usearch: https://unum-cloud.github.io/usearch/golang/
 4. [redis](https://redis.io/docs/install/install-redis/)
 
@@ -46,8 +46,8 @@ SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development go run sidekick/cli start -- --disable
 
 ```sh
 cd frontend
-npm ci
-npm run dev
+bun ci
+bun run dev
 ```
 
 ### Step 3: Check out the web UI

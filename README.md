@@ -111,7 +111,7 @@ command = "go test -test.timeout 15s ./..."
 
 [[test_commands]]
 working_dir = "frontend"
-command = "npm run type-check"
+command = "bun run type-check"
 ```
 
 If you do not have great test coverage, try using Sidekick to add tests prior to
