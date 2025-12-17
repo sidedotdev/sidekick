@@ -6,6 +6,7 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/nats"
+	"sync"
 	"testing"
 	"time"
 
@@ -206,11 +207,6 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 		Created:      time.Now().UTC().Truncate(time.Millisecond),
 		Updated:      time.Now().UTC().Truncate(time.Millisecond),
 	}
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		err = s.streamer.AddFlowActionChange(ctx, newAction)
-		s.Require().NoError(err)
-	}()
 
 	// Test end message
 	endAction := domain.FlowAction{
@@ -218,10 +214,21 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 		FlowId:      flowId,
 		Id:          "end",
 	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
 	go func() {
+		defer wg.Done()
+		time.Sleep(50 * time.Millisecond)
+		if err := s.streamer.AddFlowActionChange(context.Background(), newAction); err != nil {
+			s.T().Errorf("Failed to add new flow action change: %v", err)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
 		time.Sleep(100 * time.Millisecond)
-		err = s.streamer.AddFlowActionChange(ctx, endAction)
-		if err != nil {
+		if err := s.streamer.AddFlowActionChange(context.Background(), endAction); err != nil {
 			s.T().Errorf("Failed to add end flow action change: %v", err)
 		}
 	}()
@@ -231,6 +238,8 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 	case <-time.After(2 * time.Second):
 		s.T().Fatal("Test timed out")
 	}
+
+	wg.Wait()
 
 	s.Require().GreaterOrEqual(len(receivedActions), 5)
 	s.Equal(flowAction, receivedActions[0])
