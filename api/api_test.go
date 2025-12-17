@@ -490,7 +490,6 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 func TestCompleteFlowActionHandler(t *testing.T) {
 	t.Parallel()
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 	workspaceId := "ws_123"
 	ctx := context.Background()
 	task := domain.Task{
@@ -498,7 +497,7 @@ func TestCompleteFlowActionHandler(t *testing.T) {
 		Status:      domain.TaskStatusInProgress,
 		AgentType:   domain.AgentTypeLLM,
 	}
-	redisDb.PersistTask(ctx, task)
+	ctrl.service.PersistTask(ctx, task)
 
 	// Create a flow associated with the task
 	flow := domain.Flow{
@@ -522,11 +521,11 @@ func TestCompleteFlowActionHandler(t *testing.T) {
 	}
 
 	// Persist the task and the flow action in the database before the API call
-	err := redisDb.PersistTask(ctx, task)
+	err := ctrl.service.PersistTask(ctx, task)
 	assert.Nil(t, err)
-	err = redisDb.PersistFlow(ctx, flow)
+	err = ctrl.service.PersistFlow(ctx, flow)
 	assert.Nil(t, err)
-	err = redisDb.PersistFlowAction(ctx, flowAction)
+	err = ctrl.service.PersistFlowAction(ctx, flowAction)
 	assert.Nil(t, err)
 
 	resp := httptest.NewRecorder()
@@ -541,9 +540,9 @@ func TestCompleteFlowActionHandler(t *testing.T) {
 	assert.Contains(t, resp.Body.String(), `"actionStatus":"complete"`)
 
 	// Retrieve the task and the flow action from the database after the API call
-	retrievedTask, err := redisDb.GetTask(ctx, workspaceId, task.Id)
+	retrievedTask, err := ctrl.service.GetTask(ctx, workspaceId, task.Id)
 	assert.NoError(t, err)
-	retrievedFlowAction, err := redisDb.GetFlowAction(ctx, workspaceId, flowAction.Id)
+	retrievedFlowAction, err := ctrl.service.GetFlowAction(ctx, workspaceId, flowAction.Id)
 	assert.NoError(t, err)
 
 	// Check that the task and the flow action were updated correctly
@@ -556,7 +555,6 @@ func TestCompleteFlowActionHandler(t *testing.T) {
 func TestCompleteFlowActionHandler_UnpausesFlow(t *testing.T) {
 	t.Parallel()
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 	workspaceId := "ws_123"
 	ctx := context.Background()
 	task := domain.Task{
@@ -564,7 +562,7 @@ func TestCompleteFlowActionHandler_UnpausesFlow(t *testing.T) {
 		Status:      domain.TaskStatusInProgress,
 		AgentType:   domain.AgentTypeLLM,
 	}
-	redisDb.PersistTask(ctx, task)
+	ctrl.service.PersistTask(ctx, task)
 
 	// Create a paused flow associated with the task
 	flow := domain.Flow{
@@ -586,11 +584,11 @@ func TestCompleteFlowActionHandler_UnpausesFlow(t *testing.T) {
 	}
 
 	// Persist the task, flow and flow action in the database before the API call
-	err := redisDb.PersistTask(ctx, task)
+	err := ctrl.service.PersistTask(ctx, task)
 	assert.Nil(t, err)
-	err = redisDb.PersistFlow(ctx, flow)
+	err = ctrl.service.PersistFlow(ctx, flow)
 	assert.Nil(t, err)
-	err = redisDb.PersistFlowAction(ctx, flowAction)
+	err = ctrl.service.PersistFlowAction(ctx, flowAction)
 	assert.Nil(t, err)
 
 	resp := httptest.NewRecorder()
@@ -602,7 +600,7 @@ func TestCompleteFlowActionHandler_UnpausesFlow(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.Code)
 
 	// Verify flow was unpaused
-	retrievedFlow, err := redisDb.GetFlow(ctx, workspaceId, flow.Id)
+	retrievedFlow, err := ctrl.service.GetFlow(ctx, workspaceId, flow.Id)
 	assert.NoError(t, err)
 	assert.Equal(t, "in_progress", retrievedFlow.Status)
 }
@@ -610,7 +608,6 @@ func TestCompleteFlowActionHandler_UnpausesFlow(t *testing.T) {
 func TestCompleteFlowActionHandler_NonHumanRequest(t *testing.T) {
 	t.Parallel()
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 
 	workspaceId := "ws_1"
 	flowAction := domain.FlowAction{
@@ -626,7 +623,7 @@ func TestCompleteFlowActionHandler_NonHumanRequest(t *testing.T) {
 	ctx := context.Background()
 
 	// Persist the flow action in the database before the API call
-	err := redisDb.PersistFlowAction(ctx, flowAction)
+	err := ctrl.service.PersistFlowAction(ctx, flowAction)
 	assert.Nil(t, err)
 
 	resp := httptest.NewRecorder()
@@ -639,7 +636,7 @@ func TestCompleteFlowActionHandler_NonHumanRequest(t *testing.T) {
 	assert.Contains(t, resp.Body.String(), "only human actions can be completed")
 
 	// Retrieve the flow action from the database after the API call
-	retrievedFlowAction, err := redisDb.GetFlowAction(ctx, workspaceId, flowAction.Id)
+	retrievedFlowAction, err := ctrl.service.GetFlowAction(ctx, workspaceId, flowAction.Id)
 	assert.Nil(t, err)
 
 	// Check that the retrieved flow action was not updated
@@ -650,7 +647,6 @@ func TestCompleteFlowActionHandler_NonHumanRequest(t *testing.T) {
 func TestCompleteFlowActionHandler_NonPending(t *testing.T) {
 	t.Parallel()
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 
 	workspaceId := "ws_1"
 	flowAction := domain.FlowAction{
@@ -667,7 +663,7 @@ func TestCompleteFlowActionHandler_NonPending(t *testing.T) {
 	ctx := context.Background()
 
 	// Persist the flow action in the database before the API call
-	err := redisDb.PersistFlowAction(ctx, flowAction)
+	err := ctrl.service.PersistFlowAction(ctx, flowAction)
 	assert.Nil(t, err)
 
 	resp := httptest.NewRecorder()
@@ -680,7 +676,7 @@ func TestCompleteFlowActionHandler_NonPending(t *testing.T) {
 	assert.Contains(t, resp.Body.String(), "Flow action status is not pending")
 
 	// Retrieve the flow action from the database after the API call
-	retrievedFlowAction, err := redisDb.GetFlowAction(ctx, workspaceId, flowAction.Id)
+	retrievedFlowAction, err := ctrl.service.GetFlowAction(ctx, workspaceId, flowAction.Id)
 	assert.Nil(t, err)
 
 	// Check that the retrieved flow action was not updated
@@ -691,7 +687,6 @@ func TestCompleteFlowActionHandler_NonPending(t *testing.T) {
 func TestCompleteFlowActionHandler_NonCallback(t *testing.T) {
 	t.Parallel()
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 
 	workspaceId := "ws_1"
 	flowAction := domain.FlowAction{
@@ -708,7 +703,7 @@ func TestCompleteFlowActionHandler_NonCallback(t *testing.T) {
 	ctx := context.Background()
 
 	// Persist the flow action in the database before the API call
-	err := redisDb.PersistFlowAction(ctx, flowAction)
+	err := ctrl.service.PersistFlowAction(ctx, flowAction)
 	assert.Nil(t, err)
 
 	resp := httptest.NewRecorder()
@@ -721,7 +716,7 @@ func TestCompleteFlowActionHandler_NonCallback(t *testing.T) {
 	assert.Contains(t, resp.Body.String(), "This flow action doesn't support callback-based completion")
 
 	// Retrieve the flow action from the database after the API call
-	retrievedFlowAction, err := redisDb.GetFlowAction(ctx, workspaceId, flowAction.Id)
+	retrievedFlowAction, err := ctrl.service.GetFlowAction(ctx, workspaceId, flowAction.Id)
 	assert.Nil(t, err)
 
 	// Check that the retrieved flow action was not updated
@@ -732,7 +727,6 @@ func TestCompleteFlowActionHandler_NonCallback(t *testing.T) {
 func TestCompleteFlowActionHandler_FreeFormButEmptyResponseContent(t *testing.T) {
 	t.Parallel()
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 
 	workspaceId := "ws_1"
 	flowAction := domain.FlowAction{
@@ -752,7 +746,7 @@ func TestCompleteFlowActionHandler_FreeFormButEmptyResponseContent(t *testing.T)
 	ctx := context.Background()
 
 	// Persist the flow action in the database before the API call
-	err := redisDb.PersistFlowAction(ctx, flowAction)
+	err := ctrl.service.PersistFlowAction(ctx, flowAction)
 	assert.Nil(t, err)
 
 	resp := httptest.NewRecorder()
@@ -765,7 +759,7 @@ func TestCompleteFlowActionHandler_FreeFormButEmptyResponseContent(t *testing.T)
 	assert.Contains(t, resp.Body.String(), `User response cannot be empty`)
 
 	// Retrieve the flow action from the database after the API call
-	retrievedFlowAction, err := redisDb.GetFlowAction(ctx, workspaceId, flowAction.Id)
+	retrievedFlowAction, err := ctrl.service.GetFlowAction(ctx, workspaceId, flowAction.Id)
 	assert.Nil(t, err)
 
 	// Check that the retrieved flow action was not updated
@@ -776,7 +770,6 @@ func TestCompleteFlowActionHandler_FreeFormButEmptyResponseContent(t *testing.T)
 func TestUpdateFlowActionHandler(t *testing.T) {
 	t.Parallel()
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 	workspaceId := "ws_123"
 	ctx := context.Background()
 	task := domain.Task{
@@ -784,7 +777,7 @@ func TestUpdateFlowActionHandler(t *testing.T) {
 		Status:      domain.TaskStatusInProgress,
 		AgentType:   domain.AgentTypeLLM,
 	}
-	redisDb.PersistTask(ctx, task)
+	ctrl.service.PersistTask(ctx, task)
 
 	// Create a flow associated with the task
 	flow := domain.Flow{
@@ -806,11 +799,11 @@ func TestUpdateFlowActionHandler(t *testing.T) {
 	}
 
 	// Persist the task, flow and flow action in the database before the API call
-	err := redisDb.PersistTask(ctx, task)
+	err := ctrl.service.PersistTask(ctx, task)
 	assert.Nil(t, err)
-	err = redisDb.PersistFlow(ctx, flow)
+	err = ctrl.service.PersistFlow(ctx, flow)
 	assert.Nil(t, err)
-	err = redisDb.PersistFlowAction(ctx, flowAction)
+	err = ctrl.service.PersistFlowAction(ctx, flowAction)
 	assert.Nil(t, err)
 
 	resp := httptest.NewRecorder()
@@ -822,7 +815,7 @@ func TestUpdateFlowActionHandler(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.Code)
 
 	// Retrieve the flow action from the database after the API call
-	retrievedFlowAction, err := redisDb.GetFlowAction(ctx, workspaceId, flowAction.Id)
+	retrievedFlowAction, err := ctrl.service.GetFlowAction(ctx, workspaceId, flowAction.Id)
 	assert.NoError(t, err)
 
 	// Check that the flow action status remains pending and result is unchanged
@@ -833,7 +826,6 @@ func TestUpdateFlowActionHandler(t *testing.T) {
 func TestUpdateFlowActionHandler_RejectsApprovalDecision(t *testing.T) {
 	t.Parallel()
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 	workspaceId := "ws_123"
 	ctx := context.Background()
 
@@ -847,7 +839,7 @@ func TestUpdateFlowActionHandler_RejectsApprovalDecision(t *testing.T) {
 		IsCallbackAction: true,
 	}
 
-	err := redisDb.PersistFlowAction(ctx, flowAction)
+	err := ctrl.service.PersistFlowAction(ctx, flowAction)
 	assert.Nil(t, err)
 
 	resp := httptest.NewRecorder()
@@ -860,7 +852,7 @@ func TestUpdateFlowActionHandler_RejectsApprovalDecision(t *testing.T) {
 	assert.Contains(t, resp.Body.String(), "Updates cannot include approval decision - use POST to complete the action")
 
 	// Retrieve the flow action from the database after the API call
-	retrievedFlowAction, err := redisDb.GetFlowAction(ctx, workspaceId, flowAction.Id)
+	retrievedFlowAction, err := ctrl.service.GetFlowAction(ctx, workspaceId, flowAction.Id)
 	assert.NoError(t, err)
 
 	// Check that the flow action was not updated
@@ -871,7 +863,6 @@ func TestUpdateFlowActionHandler_RejectsApprovalDecision(t *testing.T) {
 func TestUpdateFlowActionHandler_NonHumanRequest(t *testing.T) {
 	t.Parallel()
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 
 	workspaceId := "ws_1"
 	flowAction := domain.FlowAction{
@@ -887,7 +878,7 @@ func TestUpdateFlowActionHandler_NonHumanRequest(t *testing.T) {
 	ctx := context.Background()
 
 	// Persist the flow action in the database before the API call
-	err := redisDb.PersistFlowAction(ctx, flowAction)
+	err := ctrl.service.PersistFlowAction(ctx, flowAction)
 	assert.Nil(t, err)
 
 	resp := httptest.NewRecorder()
@@ -900,7 +891,7 @@ func TestUpdateFlowActionHandler_NonHumanRequest(t *testing.T) {
 	assert.Contains(t, resp.Body.String(), "only human actions can be updated")
 
 	// Retrieve the flow action from the database after the API call
-	retrievedFlowAction, err := redisDb.GetFlowAction(ctx, workspaceId, flowAction.Id)
+	retrievedFlowAction, err := ctrl.service.GetFlowAction(ctx, workspaceId, flowAction.Id)
 	assert.Nil(t, err)
 
 	// Check that the retrieved flow action was not updated
@@ -911,7 +902,6 @@ func TestUpdateFlowActionHandler_NonHumanRequest(t *testing.T) {
 func TestUpdateFlowActionHandler_NonPending(t *testing.T) {
 	t.Parallel()
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 
 	workspaceId := "ws_1"
 	flowAction := domain.FlowAction{
@@ -928,7 +918,7 @@ func TestUpdateFlowActionHandler_NonPending(t *testing.T) {
 	ctx := context.Background()
 
 	// Persist the flow action in the database before the API call
-	err := redisDb.PersistFlowAction(ctx, flowAction)
+	err := ctrl.service.PersistFlowAction(ctx, flowAction)
 	assert.Nil(t, err)
 
 	resp := httptest.NewRecorder()
@@ -941,7 +931,7 @@ func TestUpdateFlowActionHandler_NonPending(t *testing.T) {
 	assert.Contains(t, resp.Body.String(), "Flow action status is not pending")
 
 	// Retrieve the flow action from the database after the API call
-	retrievedFlowAction, err := redisDb.GetFlowAction(ctx, workspaceId, flowAction.Id)
+	retrievedFlowAction, err := ctrl.service.GetFlowAction(ctx, workspaceId, flowAction.Id)
 	assert.Nil(t, err)
 
 	// Check that the retrieved flow action was not updated
@@ -952,7 +942,6 @@ func TestUpdateFlowActionHandler_NonPending(t *testing.T) {
 func TestUpdateFlowActionHandler_NonCallback(t *testing.T) {
 	t.Parallel()
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 
 	workspaceId := "ws_1"
 	flowAction := domain.FlowAction{
@@ -969,7 +958,7 @@ func TestUpdateFlowActionHandler_NonCallback(t *testing.T) {
 	ctx := context.Background()
 
 	// Persist the flow action in the database before the API call
-	err := redisDb.PersistFlowAction(ctx, flowAction)
+	err := ctrl.service.PersistFlowAction(ctx, flowAction)
 	assert.Nil(t, err)
 
 	resp := httptest.NewRecorder()
@@ -982,7 +971,7 @@ func TestUpdateFlowActionHandler_NonCallback(t *testing.T) {
 	assert.Contains(t, resp.Body.String(), "This flow action doesn't support callback-based completion")
 
 	// Retrieve the flow action from the database after the API call
-	retrievedFlowAction, err := redisDb.GetFlowAction(ctx, workspaceId, flowAction.Id)
+	retrievedFlowAction, err := ctrl.service.GetFlowAction(ctx, workspaceId, flowAction.Id)
 	assert.Nil(t, err)
 
 	// Check that the retrieved flow action was not updated
@@ -995,7 +984,6 @@ func TestGetFlowActionsHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 	ctx := context.Background()
 
 	workspaceId := "ws_1"
@@ -1026,7 +1014,7 @@ func TestGetFlowActionsHandler(t *testing.T) {
 	}
 
 	for _, flowAction := range flowActions {
-		err := redisDb.PersistFlowAction(ctx, flowAction)
+		err := ctrl.service.PersistFlowAction(ctx, flowAction)
 		assert.Nil(t, err)
 	}
 
@@ -1064,13 +1052,12 @@ func TestGetFlowActionsHandler_EmptyActions(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 
 	flow := domain.Flow{
 		WorkspaceId: "ws_" + ksuid.New().String(),
 		Id:          "flow_1",
 	}
-	err := redisDb.PersistFlow(context.Background(), flow)
+	err := ctrl.service.PersistFlow(context.Background(), flow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1096,7 +1083,6 @@ func TestUpdateTaskHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 
 	// Create a task for testing
 	task := domain.Task{
@@ -1106,7 +1092,7 @@ func TestUpdateTaskHandler(t *testing.T) {
 		AgentType:   domain.AgentTypeLLM,
 		Status:      domain.TaskStatusToDo,
 	}
-	err := redisDb.PersistTask(context.Background(), task)
+	err := ctrl.service.PersistTask(context.Background(), task)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1178,7 +1164,6 @@ func TestUpdateTaskHandler_UnparseableRequestBody(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 
 	// Create a task for testing
 	task := domain.Task{
@@ -1188,7 +1173,7 @@ func TestUpdateTaskHandler_UnparseableRequestBody(t *testing.T) {
 		AgentType:   domain.AgentTypeLLM,
 		Status:      domain.TaskStatusToDo,
 	}
-	err := redisDb.PersistTask(context.Background(), task)
+	err := ctrl.service.PersistTask(context.Background(), task)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1213,7 +1198,6 @@ func TestUpdateTaskHandler_InvalidStatus(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 
 	// Create a task for testing
 	task := domain.Task{
@@ -1223,7 +1207,7 @@ func TestUpdateTaskHandler_InvalidStatus(t *testing.T) {
 		AgentType:   domain.AgentTypeLLM,
 		Status:      domain.TaskStatusToDo,
 	}
-	err := redisDb.PersistTask(context.Background(), task)
+	err := ctrl.service.PersistTask(context.Background(), task)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1256,7 +1240,6 @@ func TestUpdateTaskHandler_InvalidAgentType(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 
 	// Create a task for testing
 	task := domain.Task{
@@ -1266,7 +1249,7 @@ func TestUpdateTaskHandler_InvalidAgentType(t *testing.T) {
 		AgentType:   domain.AgentTypeLLM,
 		Status:      domain.TaskStatusToDo,
 	}
-	err := redisDb.PersistTask(context.Background(), task)
+	err := ctrl.service.PersistTask(context.Background(), task)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1299,7 +1282,6 @@ func TestUpdateTaskHandler_InvalidAgentTypeAndStatusCombo(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 
 	// Create a task for testing
 	task := domain.Task{
@@ -1309,7 +1291,7 @@ func TestUpdateTaskHandler_InvalidAgentTypeAndStatusCombo(t *testing.T) {
 		AgentType:   domain.AgentTypeLLM,
 		Status:      domain.TaskStatusToDo,
 	}
-	err := redisDb.PersistTask(context.Background(), task)
+	err := ctrl.service.PersistTask(context.Background(), task)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1537,7 +1519,6 @@ func TestArchiveFinishedTasksHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 
 	// Create tasks for testing
 	workspaceId := "ws_" + ksuid.New().String()
@@ -1572,7 +1553,7 @@ func TestArchiveFinishedTasksHandler(t *testing.T) {
 
 	// Persist tasks
 	for _, task := range []domain.Task{completedTask, canceledTask, failedTask, inProgressTask} {
-		err := redisDb.PersistTask(context.Background(), task)
+		err := ctrl.service.PersistTask(context.Background(), task)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1613,8 +1594,6 @@ func TestArchiveTaskHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 
 	// Create tasks for testing
 	completedTask := domain.Task{
@@ -1634,15 +1613,6 @@ func TestArchiveTaskHandler(t *testing.T) {
 	nonExistentTask := domain.Task{
 		WorkspaceId: "non-existent-workspace",
 		Id:          "non-existent-task",
-	}
-
-	err := redisDb.PersistTask(context.Background(), completedTask)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = redisDb.PersistTask(context.Background(), inProgressTask)
-	if err != nil {
-		t.Fatal(err)
 	}
 
 	tests := []struct {
@@ -1672,7 +1642,16 @@ func TestArchiveTaskHandler(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+			ctrl := NewMockController(t)
+			err := ctrl.service.PersistTask(context.Background(), completedTask)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = ctrl.service.PersistTask(context.Background(), inProgressTask)
+			if err != nil {
+				t.Fatal(err)
+			}
+
 			recorder := httptest.NewRecorder()
 			ginCtx, _ := gin.CreateTestContext(recorder)
 			ginCtx.Request = httptest.NewRequest(http.MethodPost, "/workspaces/"+tc.task.WorkspaceId+"/tasks/"+tc.task.Id+"/archive", nil)
@@ -1763,7 +1742,6 @@ func TestGetTaskHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 	ctx := context.Background()
 	workspaceId := "ws_1"
 	taskId := "task_" + ksuid.New().String()
@@ -1783,10 +1761,10 @@ func TestGetTaskHandler(t *testing.T) {
 		Status:      "todo",
 	}
 
-	err := redisDb.PersistTask(ctx, task)
+	err := ctrl.service.PersistTask(ctx, task)
 	assert.Nil(t, err)
 
-	err = redisDb.PersistFlow(ctx, flow)
+	err = ctrl.service.PersistFlow(ctx, flow)
 	assert.Nil(t, err)
 
 	// Test cases
@@ -1860,7 +1838,6 @@ func TestGetFlowHandler(t *testing.T) {
 	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	redisDb := ctrl.service
 	ctx := context.Background()
 	workspaceId := "ws_1"
 	flowId := "flow_" + ksuid.New().String()
@@ -1874,7 +1851,7 @@ func TestGetFlowHandler(t *testing.T) {
 		Status:      "in_progress", // Use a string value instead of undefined constant
 	}
 
-	err := redisDb.PersistFlow(ctx, flow)
+	err := ctrl.service.PersistFlow(ctx, flow)
 	assert.Nil(t, err)
 
 	// Create test worktrees
@@ -1893,9 +1870,9 @@ func TestGetFlowHandler(t *testing.T) {
 		WorkspaceId: workspaceId,
 	}
 
-	err = redisDb.PersistWorktree(ctx, worktree1)
+	err = ctrl.service.PersistWorktree(ctx, worktree1)
 	assert.Nil(t, err)
-	err = redisDb.PersistWorktree(ctx, worktree2)
+	err = ctrl.service.PersistWorktree(ctx, worktree2)
 	assert.Nil(t, err)
 
 	// Test cases
