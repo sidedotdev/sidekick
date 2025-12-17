@@ -9,7 +9,7 @@ productive as they work within large existing code bases.
 """
 
 worktree_setup = """
-cd frontend && npm ci && touch dist/empty.txt
+cd frontend && bun ci && touch dist/empty.txt
 """
 
 [[test_commands]]
@@ -17,11 +17,11 @@ command = "go test -test.timeout 30s ./..."
 
 [[test_commands]]
 working_dir = "frontend"
-command = "npm run test:unit -- --reporter=dot --no-color --run"
+command = "bun run test:unit -- --reporter=dot --no-color --run"
 
 [[test_commands]]
 working_dir = "frontend"
-command = "npm run type-check"
+command = "bun run type-check"
 
 [[integration_test_commands]]
 command = "SIDE_INTEGRATION_TEST=true go test -test.timeout 30s ./..."
