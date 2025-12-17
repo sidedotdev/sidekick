@@ -291,7 +291,10 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		if result.Successful {
 			break
 		} else {
-			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("The step did not seem to have not been completed per its criteria. Here is the feedback: %s", result.Summary)}
+			promptInfo = FeedbackInfo{
+				Feedback: fmt.Sprintf("The step did not seem to have not been completed per its criteria. Here is the feedback: %s", result.Summary),
+				Type:     FeedbackTypeAutoReview,
+			}
 			attemptCount++
 			modelAttemptCount++
 			continue
