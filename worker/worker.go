@@ -6,6 +6,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/contrib/opentelemetry"
+	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
 	zerologadapter "logur.dev/adapter/zerolog"
 	"logur.dev/logur"
@@ -36,9 +38,14 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	ffa := fflag.FFlagActivities{FFlag: featureFlag}
 
 	logger := logur.LoggerToKV(zerologadapter.New(log.Logger))
+	tracingInterceptor, err := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create tracing interceptor")
+	}
 	clientOptions := client.Options{
-		Logger:   logger,
-		HostPort: hostPort,
+		Logger:       logger,
+		HostPort:     hostPort,
+		Interceptors: []interceptor.ClientInterceptor{tracingInterceptor},
 	}
 	var temporalClient client.Client
 	for i := 0; i < 5; i++ {

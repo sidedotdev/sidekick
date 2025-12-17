@@ -45,6 +45,7 @@ require (
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.39.0
 	go.temporal.io/api v1.38.0
 	go.temporal.io/sdk v1.27.0
+	go.temporal.io/sdk/contrib/opentelemetry v0.6.0
 	go.temporal.io/server v1.25.2
 	google.golang.org/genai v1.36.0
 	logur.dev/adapter/zerolog v0.6.0

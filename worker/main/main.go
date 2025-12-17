@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"sidekick/common"
+	"sidekick/telemetry"
 	"sidekick/worker"
 	"syscall"
 
@@ -22,6 +24,11 @@ func main() {
 		}
 	}
 
+	shutdownTracer, err := telemetry.InitTracer("sidekick-worker")
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize telemetry tracer")
+	}
+
 	w := worker.StartWorker(common.GetTemporalServerHostPort(), common.GetTemporalTaskQueue())
 
 	quit := make(chan os.Signal, 1)
@@ -30,4 +37,9 @@ func main() {
 
 	// graceful shutdown
 	w.Stop()
+	if shutdownTracer != nil {
+		if err := shutdownTracer(context.Background()); err != nil {
+			log.Error().Err(err).Msg("Failed to shutdown telemetry tracer")
+		}
+	}
 }
