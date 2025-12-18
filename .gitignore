@@ -31,9 +31,9 @@
 frontend/node_modules
 main
 side
-temporalbin
-workerbin
-apibin
+side-temporal
+side-worker
+side-api
 libusearch_c.a
 local-temporal-db*
 .aider*
