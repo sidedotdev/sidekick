@@ -94,7 +94,10 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 	taskChan, errChan := s.streamer.StreamTaskChanges(ctx, workspaceId, "")
 
 	// Add task changes in a separate goroutine
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		time.Sleep(100 * time.Millisecond)
 		for _, task := range tasks {
 			err := s.streamer.AddTaskChange(ctx, task)
@@ -126,6 +129,7 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 		s.Equal(task.FlowType, streamedTasks[i].FlowType)
 		s.Equal(task.FlowOptions, streamedTasks[i].FlowOptions)
 	}
+	wg.Wait()
 }
 
 // Test end-to-end flow action streaming
