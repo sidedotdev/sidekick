@@ -37,3 +37,15 @@ func Any[T any](s []T, f func(T) bool) bool {
 	}
 	return false
 }
+
+func Unique[T comparable](s []T) []T {
+	var result []T
+	seen := make(map[T]bool)
+	for _, v := range s {
+		if !seen[v] {
+			result = append(result, v)
+			seen[v] = true
+		}
+	}
+	return result
+}

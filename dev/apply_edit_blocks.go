@@ -571,6 +571,33 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		//fmt.Printf("Validated %d edit blocks\n", len(validEditBlocks))
 		//fmt.Printf("Invalid reports: %d\n", len(invalidReports))
 
+		// reduce size of payloads to avoid temporal issues. we only
+		// use the symbol and file path at most to get updated file
+		// ranges for those symbols. the code is used in validateEditBlocks
+		// higher up only, which doesn't cross workflow/activity boundaries
+		for i := range validEditBlocks {
+			editBlock := &validEditBlocks[i]
+			for j := range editBlock.VisibleCodeBlocks {
+				codeBlock := &(editBlock.VisibleCodeBlocks[j])
+				codeBlock.Code = ""
+				codeBlock.FullContent = ""
+				codeBlock.BlockContent = ""
+				codeBlock.HeaderContent = ""
+			}
+			editBlock.VisibleCodeBlocks = utils.Unique(editBlock.VisibleCodeBlocks)
+		}
+		for i := range invalidReports {
+			editBlock := &invalidReports[i].OriginalEditBlock
+			for j := range editBlock.VisibleCodeBlocks {
+				codeBlock := &(editBlock.VisibleCodeBlocks[j])
+				codeBlock.Code = ""
+				codeBlock.FullContent = ""
+				codeBlock.BlockContent = ""
+				codeBlock.HeaderContent = ""
+			}
+			editBlock.VisibleCodeBlocks = utils.Unique(editBlock.VisibleCodeBlocks)
+		}
+
 		enabledFlags := make([]string, 0)
 		if fflag.IsEnabled(dCtx, fflag.CheckEdits) {
 			enabledFlags = append(enabledFlags, fflag.CheckEdits)
