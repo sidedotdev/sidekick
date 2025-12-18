@@ -24,6 +24,18 @@ import (
 	"github.com/segmentio/ksuid"
 )
 
+func init() {
+	common.Llm2ChatHistoryFactory = func(refs []common.MessageRef) common.ChatHistory {
+		h := &Llm2ChatHistory{
+			refs:        refs,
+			hydrated:    false,
+			messages:    nil,
+			unpersisted: []int{},
+		}
+		return h
+	}
+}
+
 // Llm2ChatHistory stores message references in Temporal history and persists
 // actual content to KV storage for deduplication.
 type Llm2ChatHistory struct {

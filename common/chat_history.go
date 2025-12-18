@@ -19,6 +19,10 @@ type MessageRef struct {
 	Role     string   `json:"role"`
 }
 
+// Llm2ChatHistoryFactory creates a ChatHistory from MessageRefs.
+// This is set by temp_common2 package at init time to avoid import cycles.
+var Llm2ChatHistoryFactory func(refs []MessageRef) ChatHistory
+
 // ChatHistory is an interface for managing chat message history.
 type ChatHistory interface {
 	Append(msg Message)
@@ -89,13 +93,35 @@ type ChatHistoryContainer struct {
 }
 
 func (c *ChatHistoryContainer) UnmarshalJSON(data []byte) error {
-	// Try to unmarshal as []ChatMessage (legacy format)
+	// Detect format by checking for MessageRef fields (flowId, blockIds)
+	if isMessageRefFormat(data) && Llm2ChatHistoryFactory != nil {
+		var refs []MessageRef
+		if err := json.Unmarshal(data, &refs); err != nil {
+			return err
+		}
+		c.History = Llm2ChatHistoryFactory(refs)
+		return nil
+	}
+
+	// Fall back to legacy []ChatMessage format
 	var msgs []ChatMessage
 	if err := json.Unmarshal(data, &msgs); err != nil {
 		return err
 	}
 	c.History = NewLegacyChatHistoryFromChatMessages(msgs)
 	return nil
+}
+
+// isMessageRefFormat checks if the JSON data represents []MessageRef format
+// by looking for the presence of flowId and blockIds fields in the first element.
+func isMessageRefFormat(data []byte) bool {
+	var arr []map[string]json.RawMessage
+	if err := json.Unmarshal(data, &arr); err != nil || len(arr) == 0 {
+		return false
+	}
+	_, hasFlowId := arr[0]["flowId"]
+	_, hasBlockIds := arr[0]["blockIds"]
+	return hasFlowId && hasBlockIds
 }
 
 func (c *ChatHistoryContainer) MarshalJSON() ([]byte, error) {
