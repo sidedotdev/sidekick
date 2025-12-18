@@ -1,0 +1,15 @@
+version: "0.5"
+
+processes:
+  temporal:
+    command: watchexec -r -w cmd/temporal -w temporal -e go -- "go build -o side-temporal ./cmd/temporal && ./side-temporal"
+
+  api:
+    command: watchexec -r -e go,mod,sum -w . -- "go build -o side-api ./api/main && ./side-api"
+
+  worker:
+    command: watchexec -r -e go,mod,sum -w . -- "go build -o side-worker ./worker/main && ./side-worker"
+
+  frontend:
+    command: bun dev
+    working_dir: frontend
