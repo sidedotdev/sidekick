@@ -56,6 +56,7 @@ func (m *mockClientForProgress) GetSubflow(workspaceID, subflowID string) (domai
 }
 
 func TestGetActionDisplayName(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		actionType string
@@ -135,6 +136,7 @@ func TestGetActionDisplayName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := getActionDisplayName(tt.actionType)
 			if got != tt.want {
 				t.Errorf("getActionDisplayName(%q) = %q, want %q", tt.actionType, got, tt.want)
@@ -144,6 +146,7 @@ func TestGetActionDisplayName(t *testing.T) {
 }
 
 func TestShouldHideAction(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		actionType   string
@@ -220,6 +223,7 @@ func TestShouldHideAction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := shouldHideAction(tt.actionType, tt.actionStatus)
 			if got != tt.want {
 				t.Errorf("shouldHideAction(%q, %q) = %v, want %v", tt.actionType, tt.actionStatus, got, tt.want)
@@ -229,6 +233,7 @@ func TestShouldHideAction(t *testing.T) {
 }
 
 func TestTaskProgressModelView(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		actions        []domain.FlowAction
@@ -338,6 +343,7 @@ func TestTaskProgressModelView(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			m := newProgressModel("task-1", "flow-1", nil)
 			m.actions = tt.actions
 
@@ -359,6 +365,7 @@ func TestTaskProgressModelView(t *testing.T) {
 }
 
 func TestTaskProgressModelUpdate(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		initialAction *domain.FlowAction
@@ -406,6 +413,7 @@ func TestTaskProgressModelUpdate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			m := newProgressModel("task-1", "flow-1", nil)
 			if tt.initialAction != nil {
 				m.actions = []domain.FlowAction{*tt.initialAction}
@@ -427,6 +435,7 @@ func TestTaskProgressModelUpdate(t *testing.T) {
 }
 
 func TestFormatActionParams(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		params map[string]interface{}
@@ -483,6 +492,7 @@ func TestFormatActionParams(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := formatActionParams(tt.params)
 			if got != tt.want {
 				t.Errorf("formatActionParams() = %q, want %q", got, tt.want)
@@ -492,6 +502,7 @@ func TestFormatActionParams(t *testing.T) {
 }
 
 func TestTruncateResult(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		result string
@@ -516,6 +527,7 @@ func TestTruncateResult(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := truncateResult(tt.result)
 			if got != tt.want {
 				t.Errorf("truncateResult() = %q, want %q", got, tt.want)
@@ -525,6 +537,7 @@ func TestTruncateResult(t *testing.T) {
 }
 
 func TestGetSubflowDisplayName(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		subflowName string
@@ -585,6 +598,7 @@ func TestGetSubflowDisplayName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			gotDisplay, gotOk := getSubflowDisplayName(tt.subflowName, tt.subflowId)
 			if gotDisplay != tt.wantDisplay {
 				t.Errorf("getSubflowDisplayName() display = %q, want %q", gotDisplay, tt.wantDisplay)
@@ -597,6 +611,7 @@ func TestGetSubflowDisplayName(t *testing.T) {
 }
 
 func TestSubflowDisplay(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		currentSubflow *domain.FlowAction
@@ -682,6 +697,7 @@ func TestSubflowDisplay(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			m := newProgressModel("task-1", "flow-1", nil)
 			m.currentSubflow = tt.currentSubflow
 			m.actions = tt.actions
@@ -704,6 +720,7 @@ func TestSubflowDisplay(t *testing.T) {
 }
 
 func TestSubflowTrackingInUpdate(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name               string
 		action             domain.FlowAction
@@ -749,6 +766,7 @@ func TestSubflowTrackingInUpdate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			m := newProgressModel("task-1", "flow-1", nil)
 
 			msg := flowActionChangeMsg{action: tt.action}
@@ -771,6 +789,7 @@ func TestSubflowTrackingInUpdate(t *testing.T) {
 }
 
 func TestPendingHumanActionInput(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		pendingAction  *domain.FlowAction
@@ -825,6 +844,7 @@ func TestPendingHumanActionInput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			m := newProgressModel("task-1", "flow-1", nil)
 			m.pendingAction = tt.pendingAction
 			if tt.pendingAction != nil {
@@ -849,6 +869,7 @@ func TestPendingHumanActionInput(t *testing.T) {
 }
 
 func TestPendingActionDetection(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name              string
 		action            domain.FlowAction
@@ -902,6 +923,7 @@ func TestPendingActionDetection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			m := newProgressModel("task-1", "flow-1", nil)
 
 			msg := flowActionChangeMsg{action: tt.action}
@@ -922,6 +944,7 @@ func TestPendingActionDetection(t *testing.T) {
 }
 
 func TestPendingActionCleared(t *testing.T) {
+	t.Parallel()
 	m := newProgressModel("task-1", "flow-1", nil)
 
 	// Set up a pending action
@@ -958,6 +981,7 @@ func TestPendingActionCleared(t *testing.T) {
 }
 
 func TestGetInputModeForAction(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		action   domain.FlowAction
@@ -1009,6 +1033,7 @@ func TestGetInputModeForAction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			result := getInputModeForAction(tt.action)
 			if result != tt.expected {
 				t.Errorf("getInputModeForAction() = %v, want %v", result, tt.expected)
@@ -1018,6 +1043,7 @@ func TestGetInputModeForAction(t *testing.T) {
 }
 
 func TestApprovalTagLabels(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		tag      string
@@ -1030,6 +1056,7 @@ func TestApprovalTagLabels(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			result := getApproveLabel(tt.tag)
 			if result != tt.expected {
 				t.Errorf("getApproveLabel(%q) = %q, want %q", tt.tag, result, tt.expected)
@@ -1039,6 +1066,7 @@ func TestApprovalTagLabels(t *testing.T) {
 }
 
 func TestRejectTagLabels(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		tag      string
@@ -1051,6 +1079,7 @@ func TestRejectTagLabels(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			result := getRejectLabel(tt.tag)
 			if result != tt.expected {
 				t.Errorf("getRejectLabel(%q) = %q, want %q", tt.tag, result, tt.expected)
@@ -1060,6 +1089,7 @@ func TestRejectTagLabels(t *testing.T) {
 }
 
 func TestContinueTagLabels(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		tag      string
@@ -1073,6 +1103,7 @@ func TestContinueTagLabels(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			result := getContinueLabel(tt.tag)
 			if result != tt.expected {
 				t.Errorf("getContinueLabel(%q) = %q, want %q", tt.tag, result, tt.expected)
@@ -1082,6 +1113,7 @@ func TestContinueTagLabels(t *testing.T) {
 }
 
 func TestApprovalInputView(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		actionParams map[string]interface{}
@@ -1135,6 +1167,7 @@ func TestApprovalInputView(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			action := domain.FlowAction{
 				Id:               "action-1",
 				ActionType:       "user_request",
@@ -1159,6 +1192,7 @@ func TestApprovalInputView(t *testing.T) {
 }
 
 func TestApprovalInputModeTransition(t *testing.T) {
+	t.Parallel()
 	action := domain.FlowAction{
 		Id:           "action-1",
 		WorkspaceId:  "ws-1",
@@ -1204,6 +1238,7 @@ func TestApprovalInputModeTransition(t *testing.T) {
 }
 
 func TestMergeApprovalIncludesTargetBranch(t *testing.T) {
+	t.Parallel()
 	var capturedResponse client.UserResponse
 	mockClient := &mockClientForProgress{}
 	mockClient.On("CompleteFlowAction", "ws-1", "action-1", mock.AnythingOfType("client.UserResponse")).
@@ -1249,6 +1284,7 @@ func TestMergeApprovalIncludesTargetBranch(t *testing.T) {
 }
 
 func TestFailedSubflowDisplay(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		failedSubflows []domain.Subflow
@@ -1332,6 +1368,7 @@ func TestFailedSubflowDisplay(t *testing.T) {
 }
 
 func TestSubflowFailedMsgUpdate(t *testing.T) {
+	t.Parallel()
 	m := newProgressModel("task-1", "flow-1", &mockClientForProgress{})
 
 	// Initially no failed subflows
