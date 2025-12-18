@@ -88,7 +88,7 @@ const toggleExpanded = () => {
 const handleFilePathClick = (event: MouseEvent) => {
   if (openInIde) {
     event.stopPropagation()
-    openInIde(filePath.value)
+    openInIde(filePath.value, props.fileData.firstLineNumber)
   }
 }
 

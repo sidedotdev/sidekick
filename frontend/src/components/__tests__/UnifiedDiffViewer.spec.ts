@@ -68,7 +68,8 @@ index 1234567..abcdefg 100644
         hunks: [singleFileDiff],
         linesAdded: 1,
         linesRemoved: 0,
-        linesUnchanged: 2
+        linesUnchanged: 2,
+        firstLineNumber: 1
       }]
 
       mockParseDiff.mockReturnValue(mockParsedData)
@@ -117,7 +118,8 @@ index 7890123..fedcba9 100644
           hunks: ['diff --git a/file1.js b/file1.js\nindex 1234567..abcdefg 100644\n--- a/file1.js\n+++ b/file1.js\n@@ -1,2 +1,3 @@\n console.log(\'file1\');\n+console.log(\'added line\');\n '],
           linesAdded: 1,
           linesRemoved: 0,
-          linesUnchanged: 1
+          linesUnchanged: 1,
+          firstLineNumber: 1
         },
         {
           oldFile: { fileName: 'file2.py', fileLang: 'python' },
@@ -125,7 +127,8 @@ index 7890123..fedcba9 100644
           hunks: ['diff --git a/file2.py b/file2.py\nindex 7890123..fedcba9 100644\n--- a/file2.py\n+++ b/file2.py\n@@ -1,3 +1,2 @@\n def hello():\n-    print(\'removed line\')\n     return True'],
           linesAdded: 0,
           linesRemoved: 1,
-          linesUnchanged: 2
+          linesUnchanged: 2,
+          firstLineNumber: 1
         }
       ]
 
@@ -171,7 +174,8 @@ index 1234567..abcdefg 100644
         hunks: [diffString],
         linesAdded: 1,
         linesRemoved: 0,
-        linesUnchanged: 1
+        linesUnchanged: 1,
+        firstLineNumber: 1
       }]
 
       mockParseDiff.mockReturnValue(mockParsedData)
@@ -291,7 +295,8 @@ index 1234567..abcdefg 100644
         hunks: ['diff content'],
         linesAdded: 1,
         linesRemoved: 0,
-        linesUnchanged: 1
+        linesUnchanged: 1,
+        firstLineNumber: 1
       }]
 
       mockParseDiff.mockReturnValue(mockParsedData)
@@ -319,7 +324,8 @@ index 1234567..abcdefg 100644
         hunks: ['diff content'],
         linesAdded: 1,
         linesRemoved: 0,
-        linesUnchanged: 1
+        linesUnchanged: 1,
+        firstLineNumber: 1
       }]
 
       mockParseDiff.mockReturnValue(mockParsedData)
@@ -351,7 +357,8 @@ index 1234567..abcdefg 100644
           hunks: ['diff1'],
           linesAdded: 1,
           linesRemoved: 0,
-          linesUnchanged: 1
+          linesUnchanged: 1,
+          firstLineNumber: 1
         },
         {
           oldFile: { fileName: 'file2.js', fileLang: 'javascript' },
@@ -359,7 +366,8 @@ index 1234567..abcdefg 100644
           hunks: ['diff2'],
           linesAdded: 0,
           linesRemoved: 1,
-          linesUnchanged: 1
+          linesUnchanged: 1,
+          firstLineNumber: 1
         }
       ]
 
@@ -393,7 +401,8 @@ index 1234567..abcdefg 100644
         hunks: ['diff content'],
         linesAdded: 1,
         linesRemoved: 0,
-        linesUnchanged: 1
+        linesUnchanged: 1,
+        firstLineNumber: null
       }]
 
       mockParseDiff.mockReturnValue(mockParsedData)
@@ -427,7 +436,8 @@ index 1234567..abcdefg 100644
         hunks: [initialDiff],
         linesAdded: 1,
         linesRemoved: 0,
-        linesUnchanged: 1
+        linesUnchanged: 1,
+        firstLineNumber: 1
       }]
 
       const newParsedData = [{
@@ -436,7 +446,8 @@ index 1234567..abcdefg 100644
         hunks: [newDiff],
         linesAdded: 2,
         linesRemoved: 1,
-        linesUnchanged: 0
+        linesUnchanged: 0,
+        firstLineNumber: 1
       }]
 
       mockParseDiff.mockReturnValueOnce(initialParsedData)
@@ -471,7 +482,8 @@ index 1234567..abcdefg 100644
         hunks: ['diff content'],
         linesAdded: 1,
         linesRemoved: 0,
-        linesUnchanged: 1
+        linesUnchanged: 1,
+        firstLineNumber: 1
       }]
 
       mockParseDiff.mockReturnValue(mockParsedData)

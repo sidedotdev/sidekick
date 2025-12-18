@@ -5,6 +5,7 @@ export interface ParsedDiff {
   linesAdded: number;
   linesRemoved: number;
   linesUnchanged: number;
+  firstLineNumber: number | null;
 }
 
 export const getFileLanguage = (fileName: string | undefined): string | null => {
@@ -129,6 +130,7 @@ export const parseDiff = (diffString: string): ParsedDiff[] => {
         linesAdded: 0,
         linesRemoved: 0,
         linesUnchanged: 0,
+        firstLineNumber: null,
       };
     }
     
@@ -140,6 +142,11 @@ export const parseDiff = (diffString: string): ParsedDiff[] => {
     // Calculate line counts
     const { added, removed, unchanged } = calculateLineCounts(file);
     
+    // Extract first line number from the first hunk header
+    const firstHunkLine = lines.find(line => line.startsWith('@@'));
+    const hunkHeader = firstHunkLine ? parseHunkHeader(firstHunkLine) : null;
+    const firstLineNumber = hunkHeader?.newStart ?? null;
+    
     return {
       oldFile: { fileName: oldFile, fileLang: getFileLanguage(oldFile || undefined) },
       newFile: { fileName: newFile, fileLang: getFileLanguage(newFile || undefined) },
@@ -147,6 +154,7 @@ export const parseDiff = (diffString: string): ParsedDiff[] => {
       linesAdded: added,
       linesRemoved: removed,
       linesUnchanged: unchanged,
+      firstLineNumber,
     };
   });
 };

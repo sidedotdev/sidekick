@@ -7,19 +7,20 @@ const SESSION_STORAGE_KEY = 'sidekick-preferred-ide'
 export interface IdeOpener {
   showIdeSelector: Ref<boolean>
   pendingFilePath: Ref<string | null>
-  openInIde: (absoluteFilePath: string) => void
+  openInIde: (absoluteFilePath: string, lineNumber?: number | null) => void
   selectIde: (ide: IdeType) => void
   cancelIdeSelection: () => void
 }
 
-export const IDE_OPENER_KEY: InjectionKey<(relativePath: string) => void> = Symbol('ideOpener')
+export const IDE_OPENER_KEY: InjectionKey<(relativePath: string, lineNumber?: number | null) => void> = Symbol('ideOpener')
 
-function openFileInIde(absoluteFilePath: string, ide: IdeType): void {
+function openFileInIde(absoluteFilePath: string, ide: IdeType, lineNumber?: number | null): void {
   let url: string
+  const lineFragment = lineNumber ? `:${lineNumber}` : ''
   if (ide === 'vscode') {
-    url = `vscode://file/${absoluteFilePath}?windowId=_blank`
+    url = `vscode://file/${absoluteFilePath}${lineFragment}?windowId=_blank`
   } else {
-    url = `idea://open?file=${encodeURIComponent(absoluteFilePath)}`
+    url = `idea://open?file=${encodeURIComponent(absoluteFilePath)}${lineFragment}`
   }
   window.open(url, '_self')
 }
@@ -39,13 +40,15 @@ function storeIdePreference(ide: IdeType): void {
 export function useIdeOpener(): IdeOpener {
   const showIdeSelector = ref(false)
   const pendingFilePath = ref<string | null>(null)
+  const pendingLineNumber = ref<number | null>(null)
 
-  function openInIde(absoluteFilePath: string): void {
+  function openInIde(absoluteFilePath: string, lineNumber?: number | null): void {
     const storedIde = getStoredIdePreference()
     if (storedIde) {
-      openFileInIde(absoluteFilePath, storedIde)
+      openFileInIde(absoluteFilePath, storedIde, lineNumber)
     } else {
       pendingFilePath.value = absoluteFilePath
+      pendingLineNumber.value = lineNumber ?? null
       showIdeSelector.value = true
     }
   }
@@ -53,14 +56,16 @@ export function useIdeOpener(): IdeOpener {
   function selectIde(ide: IdeType): void {
     storeIdePreference(ide)
     if (pendingFilePath.value) {
-      openFileInIde(pendingFilePath.value, ide)
+      openFileInIde(pendingFilePath.value, ide, pendingLineNumber.value)
     }
     pendingFilePath.value = null
+    pendingLineNumber.value = null
     showIdeSelector.value = false
   }
 
   function cancelIdeSelection(): void {
     pendingFilePath.value = null
+    pendingLineNumber.value = null
     showIdeSelector.value = false
   }
 
