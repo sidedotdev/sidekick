@@ -4,7 +4,11 @@
       <div class="file-header-content">
         <div class="file-path-container">
           <span class="expand-icon" :class="{ expanded: isExpanded }">▶</span>
-          <span class="file-path">{{ filePath }}</span>
+          <span 
+            class="file-path" 
+            :class="{ 'file-path-clickable': openInIde }"
+            @click.stop="handleFilePathClick"
+          >{{ filePath }}</span>
           <button class="copy-button" @click.stop="copyFilePath" title="Copy file path">
             <CopyIcon />
           </button>
@@ -40,11 +44,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, inject } from 'vue'
 import CopyIcon from './icons/CopyIcon.vue'
 import type { ParsedDiff } from '../lib/diffUtils'
 import "@git-diff-view/vue/styles/diff-view.css"
 import { DiffView, DiffModeEnum } from "@git-diff-view/vue"
+import { IDE_OPENER_KEY } from '../composables/useIdeOpener'
 
 interface Props {
   fileData: ParsedDiff
@@ -58,6 +63,8 @@ const props = withDefaults(defineProps<Props>(), {
   diffMode: 'unified',
   level: 0
 })
+
+const openInIde = inject(IDE_OPENER_KEY, null)
 
 const stickyTop = computed(() => {
   // Position below the parent flow action header
@@ -76,6 +83,12 @@ const viewMode = computed(() => {
 
 const toggleExpanded = () => {
   isExpanded.value = !isExpanded.value
+}
+
+const handleFilePathClick = () => {
+  if (openInIde) {
+    openInIde(filePath.value)
+  }
 }
 
 const visualSummary = computed(() => {
@@ -179,6 +192,15 @@ const getTheme = () => {
   font-size: 0.875rem;
   color: var(--color-text);
   word-break: break-all;
+}
+
+.file-path-clickable {
+  cursor: pointer;
+}
+
+.file-path-clickable:hover {
+  text-decoration: underline;
+  color: var(--color-link);
 }
 
 .copy-button {
