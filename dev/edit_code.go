@@ -258,7 +258,8 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
 		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
 
-		if attemptCount >= maxAttempts {
+		maxAttemptsVersion := workflow.GetVersion(dCtx, "author-edit-no-max-unless-disabled-human", workflow.DefaultVersion, 1)
+		if attemptCount >= maxAttempts && (maxAttemptsVersion < 1 || dCtx.RepoConfig.DisableHumanInTheLoop) {
 			if !applyImmediately && len(extractedEditBlocks) > 0 {
 				// make use of the results so far, given there are some that are
 				// not yet applied: it may be sufficient
