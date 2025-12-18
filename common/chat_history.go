@@ -12,6 +12,13 @@ type KeyValueStorage interface {
 	MSet(ctx context.Context, workspaceId string, values map[string]interface{}) error
 }
 
+// MessageRef stores a reference to a message's content blocks in KV storage.
+type MessageRef struct {
+	FlowId   string   `json:"flowId"`
+	BlockIds []string `json:"blockIds"`
+	Role     string   `json:"role"`
+}
+
 // ChatHistory is an interface for managing chat message history.
 type ChatHistory interface {
 	Append(msg Message)

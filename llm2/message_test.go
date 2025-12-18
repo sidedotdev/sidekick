@@ -9,7 +9,7 @@ import (
 )
 
 func TestMessage_ImplementsCommonMessage(t *testing.T) {
-	var _ common.Message = Message{}
+	var _ common.Message = &Message{}
 }
 
 func TestMessage_GetRole(t *testing.T) {
