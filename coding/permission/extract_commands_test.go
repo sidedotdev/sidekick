@@ -142,6 +142,11 @@ func TestExtractCommands(t *testing.T) {
 			script:   "cmd 2>&1",
 			expected: []string{"cmd 2>&1"},
 		},
+		{
+			name:     "heredoc with redirection",
+			script:   "cat <<EOF > output.txt\nhello world\nEOF",
+			expected: []string{"cat <<EOF > output.txt\nhello world\nEOF"},
+		},
 	}
 
 	for _, tt := range tests {
