@@ -45,23 +45,46 @@
       <SubflowContainer v-for="(subflowTree, index) in subflowTrees" :key="index" :subflowTree="subflowTree" :defaultExpanded="index == subflowTrees.length - 1" :subflowsById="subflowsById"/>
     </div>
   </div>
+
+  <IdeSelectorDialog
+    :show="showIdeSelector"
+    @select="selectIde"
+    @cancel="cancelIdeSelection"
+  />
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, onUnmounted, watch } from 'vue'
+import { computed, onMounted, ref, onUnmounted, watch, provide } from 'vue'
 import { useEventBus } from '@vueuse/core'
 import SubflowContainer from '@/components/SubflowContainer.vue'
+import IdeSelectorDialog from '@/components/IdeSelectorDialog.vue'
 import VSCodeIcon from '@/components/icons/VSCodeIcon.vue'
 import IntellijIcon from '@/components/icons/IntellijIcon.vue'
-import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Worktree, Subflow } from '../lib/models' // Added Subflow here
+import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Worktree, Subflow, Workspace } from '../lib/models'
 import { SubflowStatus } from '../lib/models'
 import { buildSubflowTrees } from '../lib/subflow'
 import { useRoute } from 'vue-router'
 import { store } from '../lib/store'
+import { useIdeOpener, IDE_OPENER_KEY } from '@/composables/useIdeOpener'
 
 const dataDir = `${import.meta.env.VITE_HOME}/Library/Application Support/sidekick` // FIXME switch to API call to backend
 
 const subflowProcessingDebounceTimers = ref<Record<string, NodeJS.Timeout>>({})
+const workspace = ref<Workspace | null>(null)
+
+const { showIdeSelector, openInIde, selectIde, cancelIdeSelection } = useIdeOpener()
+
+const handleOpenInIde = (relativePath: string) => {
+  const baseDir = flow.value?.worktrees?.[0]?.workingDirectory || workspace.value?.localRepoDir
+  if (!baseDir) {
+    console.warn('No base directory available for opening file in IDE')
+    return
+  }
+  const absolutePath = `${baseDir}/${relativePath}`
+  openInIde(absolutePath)
+}
+
+provide(IDE_OPENER_KEY, handleOpenInIde)
 const devMode = import.meta.env.MODE === 'development'
 const flowActions = ref<FlowAction[]>([])
 const subflowTrees = ref<SubflowTree[]>([])
@@ -440,6 +463,19 @@ const setupFlow = async (newFlowId: string | undefined) => {
       flow.value = flowData.flow;
       isLoadingFlow.value = false;
       isStartingFlow.value = true;
+
+      // Fetch workspace for localRepoDir fallback
+      if (flow.value?.workspaceId) {
+        try {
+          const wsResponse = await fetch(`/api/v1/workspaces/${flow.value.workspaceId}`);
+          if (wsResponse.ok) {
+            const wsData = await wsResponse.json();
+            workspace.value = wsData.workspace;
+          }
+        } catch (wsErr) {
+          console.error('Error fetching workspace:', wsErr);
+        }
+      }
     } else {
       console.error(`Failed to fetch flow ${newFlowId}:`, await response.text());
       flow.value = null;
@@ -609,4 +645,5 @@ onUnmounted(() => {
   font-size: 1rem;
   font-style: italic;
 }
+
 </style>
