@@ -7,7 +7,7 @@
           <span 
             class="file-path" 
             :class="{ 'file-path-clickable': openInIde }"
-            @click.stop="handleFilePathClick"
+            @click="handleFilePathClick"
           >{{ filePath }}</span>
           <button class="copy-button" @click.stop="copyFilePath" title="Copy file path">
             <CopyIcon />
@@ -85,8 +85,9 @@ const toggleExpanded = () => {
   isExpanded.value = !isExpanded.value
 }
 
-const handleFilePathClick = () => {
+const handleFilePathClick = (event: MouseEvent) => {
   if (openInIde) {
+    event.stopPropagation()
     openInIde(filePath.value)
   }
 }
