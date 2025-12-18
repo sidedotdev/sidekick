@@ -508,6 +508,47 @@ func TestLlm2ChatHistory_SetWorkspaceId(t *testing.T) {
 	assert.Equal(t, "new-workspace-id", h.workspaceId)
 }
 
+func TestLlm2ChatHistory_SetMessages(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+
+	// Add initial message
+	h.Append(&llm2.Message{
+		Role:    llm2.RoleUser,
+		Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "initial"}},
+	})
+
+	// Replace with new messages
+	newMessages := []llm2.Message{
+		{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "first"}}},
+		{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "second"}}},
+		{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "third"}}},
+	}
+	h.SetMessages(newMessages)
+
+	assert.Equal(t, 3, h.Len())
+	assert.Equal(t, "first", h.Get(0).GetContentString())
+	assert.Equal(t, "second", h.Get(1).GetContentString())
+	assert.Equal(t, "third", h.Get(2).GetContentString())
+
+	// Verify all messages are marked as unpersisted
+	assert.Equal(t, []int{0, 1, 2}, h.unpersisted)
+
+	// Verify refs are reset
+	assert.Equal(t, 3, len(h.refs))
+}
+
+func TestLlm2ChatHistory_SetMessages_PanicsWhenNotHydrated(t *testing.T) {
+	h := &Llm2ChatHistory{
+		flowId:      "flow-123",
+		workspaceId: "workspace-456",
+		hydrated:    false,
+	}
+
+	assert.Panics(t, func() {
+		h.SetMessages([]llm2.Message{})
+	})
+}
+
 func TestLlm2ChatHistory_Hydrate_MultipleBlocksPerMessage(t *testing.T) {
 	storage := newMockKeyValueStorage()
 	block1 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Part 1"}

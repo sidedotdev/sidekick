@@ -243,3 +243,17 @@ func (h *Llm2ChatHistory) SetFlowId(flowId string) {
 func (h *Llm2ChatHistory) SetWorkspaceId(workspaceId string) {
 	h.workspaceId = workspaceId
 }
+
+// SetMessages replaces all messages in the history with the provided slice.
+// All messages are marked as unpersisted.
+func (h *Llm2ChatHistory) SetMessages(messages []llm2.Message) {
+	if !h.hydrated {
+		panic("cannot set messages on non-hydrated Llm2ChatHistory")
+	}
+	h.messages = messages
+	h.refs = make([]common.MessageRef, len(messages))
+	h.unpersisted = make([]int, len(messages))
+	for i := range messages {
+		h.unpersisted[i] = i
+	}
+}
