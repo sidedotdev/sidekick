@@ -56,6 +56,28 @@ func getLlm2MessageText(msg llm2.Message) string {
 	return text
 }
 
+// getToolUseBlocks returns all tool use blocks from a message.
+func getToolUseBlocks(msg llm2.Message) []*llm2.ToolUseBlock {
+	var blocks []*llm2.ToolUseBlock
+	for _, block := range msg.Content {
+		if block.Type == llm2.ContentBlockTypeToolUse && block.ToolUse != nil {
+			blocks = append(blocks, block.ToolUse)
+		}
+	}
+	return blocks
+}
+
+// getToolResultBlocks returns all tool result blocks from a message.
+func getToolResultBlocks(msg llm2.Message) []*llm2.ToolResultBlock {
+	var blocks []*llm2.ToolResultBlock
+	for _, block := range msg.Content {
+		if block.Type == llm2.ContentBlockTypeToolResult && block.ToolResult != nil {
+			blocks = append(blocks, block.ToolResult)
+		}
+	}
+	return blocks
+}
+
 // ChatHistoryActivities provides activities for managing chat history with KV storage.
 type ChatHistoryActivities struct {
 	Storage common.KeyValueStorage
@@ -201,5 +223,191 @@ func manageLlm2ChatHistory(messages []llm2.Message, maxLength int) ([]llm2.Messa
 		}
 	}
 
-	return messages, nil
+	// Truncate large unretained tool responses before dropping messages
+	messages, isRetained = truncateLargeLlm2ToolResponses(messages, isRetained, maxLength)
+
+	var totalLength = 0
+	for i, msg := range messages {
+		if isRetained[i] {
+			totalLength += llm2MessageLength(msg)
+		}
+	}
+
+	// Drop all older unretained messages once limit is exceeded
+	var newMessages []llm2.Message
+	limitExceeded := false
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if isRetained[i] {
+			newMessages = append(newMessages, msg)
+		} else if !limitExceeded {
+			if llm2MessageLength(msg)+totalLength <= maxLength {
+				newMessages = append(newMessages, msg)
+				totalLength += llm2MessageLength(msg)
+			} else {
+				limitExceeded = true
+			}
+		}
+	}
+
+	// Reverse to restore chronological order
+	for i, j := 0, len(newMessages)-1; i < j; i, j = i+1, j-1 {
+		newMessages[i], newMessages[j] = newMessages[j], newMessages[i]
+	}
+
+	cleanLlm2ToolCallsAndResponses(&newMessages)
+
+	return newMessages, nil
+}
+
+// truncateLargeLlm2ToolResponses truncates large unretained tool result blocks.
+func truncateLargeLlm2ToolResponses(messages []llm2.Message, isRetained []bool, maxLength int) ([]llm2.Message, []bool) {
+	threshold := maxLength / 20 // 5% of maxLength
+
+	type candidate struct {
+		msgIndex   int
+		blockIndex int
+		length     int
+	}
+	var candidates []candidate
+
+	for i, msg := range messages {
+		if isRetained[i] {
+			continue
+		}
+		for j, block := range msg.Content {
+			if block.Type == llm2.ContentBlockTypeToolResult && block.ToolResult != nil {
+				blockLen := len(block.ToolResult.Text)
+				if blockLen > threshold {
+					candidates = append(candidates, candidate{msgIndex: i, blockIndex: j, length: blockLen})
+				}
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		return messages, isRetained
+	}
+
+	totalLength := 0
+	for _, msg := range messages {
+		totalLength += llm2MessageLength(msg)
+	}
+
+	result := make([]llm2.Message, len(messages))
+	for i, msg := range messages {
+		newContent := make([]llm2.ContentBlock, len(msg.Content))
+		copy(newContent, msg.Content)
+		result[i] = llm2.Message{Role: msg.Role, Content: newContent}
+	}
+
+	for _, c := range candidates {
+		if totalLength <= maxLength {
+			break
+		}
+		block := &result[c.msgIndex].Content[c.blockIndex]
+		if block.ToolResult == nil {
+			continue
+		}
+		oldLen := len(block.ToolResult.Text)
+		truncatedText := block.ToolResult.Text[:min(len(block.ToolResult.Text), threshold)]
+		if len(truncatedText) < oldLen {
+			truncatedText += "\n[truncated]"
+		}
+		block.ToolResult = &llm2.ToolResultBlock{
+			ToolCallId: block.ToolResult.ToolCallId,
+			Name:       block.ToolResult.Name,
+			IsError:    block.ToolResult.IsError,
+			Text:       truncatedText,
+		}
+		totalLength -= oldLen - len(block.ToolResult.Text)
+	}
+
+	return result, isRetained
+}
+
+// cleanLlm2ToolCallsAndResponses removes orphaned tool calls and tool results.
+func cleanLlm2ToolCallsAndResponses(messages *[]llm2.Message) {
+	// First pass: identify which messages with tool use blocks have ALL their responses
+	toolCallsToKeep := make(map[int]bool)
+	for i, msg := range *messages {
+		toolUseBlocks := getToolUseBlocks(msg)
+		if len(toolUseBlocks) == 0 {
+			continue
+		}
+
+		toolCallIds := make(map[string]bool)
+		for _, tu := range toolUseBlocks {
+			toolCallIds[tu.Id] = true
+		}
+
+		// Look at subsequent messages for tool responses
+		responseCount := 0
+		for j := i + 1; j < len(*messages); j++ {
+			toolResultBlocks := getToolResultBlocks((*messages)[j])
+			if len(toolResultBlocks) == 0 {
+				// If message has no tool results, check if it's a different type of message
+				if len(getToolUseBlocks((*messages)[j])) > 0 || (*messages)[j].Role != llm2.RoleUser {
+					break
+				}
+				continue
+			}
+			for _, tr := range toolResultBlocks {
+				if toolCallIds[tr.ToolCallId] {
+					responseCount++
+				}
+			}
+		}
+
+		// Only keep if ALL tool calls have responses
+		if responseCount == len(toolUseBlocks) {
+			toolCallsToKeep[i] = true
+		}
+	}
+
+	// Second pass: build new message list, skipping orphaned tool calls and their partial responses
+	newMessages := make([]llm2.Message, 0)
+	validToolCallIds := make(map[string]bool)
+
+	for i, msg := range *messages {
+		toolUseBlocks := getToolUseBlocks(msg)
+		toolResultBlocks := getToolResultBlocks(msg)
+
+		if len(toolUseBlocks) > 0 {
+			if !toolCallsToKeep[i] {
+				// Remove tool use blocks but keep other content
+				newContent := make([]llm2.ContentBlock, 0)
+				for _, block := range msg.Content {
+					if block.Type != llm2.ContentBlockTypeToolUse {
+						newContent = append(newContent, block)
+					}
+				}
+				if len(newContent) > 0 {
+					newMessages = append(newMessages, llm2.Message{Role: msg.Role, Content: newContent})
+				}
+				continue
+			}
+			for _, tu := range toolUseBlocks {
+				validToolCallIds[tu.Id] = true
+			}
+			newMessages = append(newMessages, msg)
+		} else if len(toolResultBlocks) > 0 {
+			// Filter out tool results that don't have matching tool calls
+			newContent := make([]llm2.ContentBlock, 0)
+			for _, block := range msg.Content {
+				if block.Type == llm2.ContentBlockTypeToolResult && block.ToolResult != nil {
+					if !validToolCallIds[block.ToolResult.ToolCallId] {
+						continue
+					}
+				}
+				newContent = append(newContent, block)
+			}
+			if len(newContent) > 0 {
+				newMessages = append(newMessages, llm2.Message{Role: msg.Role, Content: newContent})
+			}
+		} else {
+			newMessages = append(newMessages, msg)
+		}
+	}
+	*messages = newMessages
 }
