@@ -1,5 +1,12 @@
 package common
 
+import (
+	"regexp"
+	"sidekick/coding/permission"
+	"strconv"
+	"strings"
+)
+
 // PermissionResult represents the result of evaluating command permissions
 type PermissionResult int
 
@@ -237,4 +244,122 @@ func MergeCommandPermissions(configs ...CommandPermissionConfig) CommandPermissi
 	}
 
 	return result
+}
+
+// regexMetaChars contains characters that indicate a pattern should be treated as regex
+const regexMetaChars = `\.*+?[](){}|^$`
+
+// matchPattern attempts to match a pattern against a command.
+// It first tries an exact prefix match. If that fails and the pattern contains
+// regex metacharacters, it compiles the pattern as a regex (anchored at start).
+// Returns whether it matched and any capture groups for message interpolation.
+func matchPattern(pattern string, command string) (bool, []string) {
+	// Try exact prefix match first
+	if strings.HasPrefix(command, pattern) {
+		// For prefix match, return the matched portion as $0
+		return true, []string{pattern}
+	}
+
+	// Check if pattern contains regex metacharacters
+	if !strings.ContainsAny(pattern, regexMetaChars) {
+		return false, nil
+	}
+
+	// Anchor pattern at start if not already anchored
+	regexPattern := pattern
+	if !strings.HasPrefix(regexPattern, "^") {
+		regexPattern = "^" + regexPattern
+	}
+
+	re, err := regexp.Compile(regexPattern)
+	if err != nil {
+		return false, nil
+	}
+
+	matches := re.FindStringSubmatch(command)
+	if matches == nil {
+		return false, nil
+	}
+
+	return true, matches
+}
+
+// interpolateMessage replaces $0, $1, $2, etc. in the message with capture groups.
+// $0 is the full match, $1 is the first capture group, etc.
+func interpolateMessage(message string, matches []string) string {
+	if len(matches) == 0 {
+		return message
+	}
+
+	result := message
+	for i := len(matches) - 1; i >= 0; i-- {
+		placeholder := "$" + strconv.Itoa(i)
+		result = strings.ReplaceAll(result, placeholder, matches[i])
+	}
+	return result
+}
+
+// EvaluateCommandPermission evaluates a single command against the permission config.
+// It checks deny patterns first, then require-approval, then auto-approve.
+// Returns the permission result and any associated message.
+func EvaluateCommandPermission(config CommandPermissionConfig, command string) (PermissionResult, string) {
+	// Check deny patterns first
+	for _, p := range config.Deny {
+		if matched, matches := matchPattern(p.Pattern, command); matched {
+			msg := p.Message
+			if msg != "" && len(matches) > 0 {
+				msg = interpolateMessage(msg, matches)
+			}
+			return PermissionDeny, msg
+		}
+	}
+
+	// Check require-approval patterns
+	for _, p := range config.RequireApproval {
+		if matched, _ := matchPattern(p.Pattern, command); matched {
+			return PermissionRequireApproval, ""
+		}
+	}
+
+	// Check auto-approve patterns
+	for _, p := range config.AutoApprove {
+		if matched, _ := matchPattern(p.Pattern, command); matched {
+			return PermissionAutoApprove, ""
+		}
+	}
+
+	// Default to require approval
+	return PermissionRequireApproval, ""
+}
+
+// EvaluateScriptPermission evaluates a shell script by extracting all commands
+// and checking each against the permission config.
+// Returns PermissionDeny if ANY command is denied.
+// Returns PermissionRequireApproval if ANY command requires approval (and none denied).
+// Returns PermissionAutoApprove only if ALL commands are auto-approved.
+func EvaluateScriptPermission(config CommandPermissionConfig, script string) (PermissionResult, string) {
+	commands := permission.ExtractCommands(script)
+
+	// If no commands extracted, default to require approval
+	if len(commands) == 0 {
+		return PermissionRequireApproval, ""
+	}
+
+	hasRequireApproval := false
+
+	for _, cmd := range commands {
+		result, msg := EvaluateCommandPermission(config, cmd)
+		switch result {
+		case PermissionDeny:
+			return PermissionDeny, msg
+		case PermissionRequireApproval:
+			hasRequireApproval = true
+		}
+	}
+
+	if hasRequireApproval {
+		return PermissionRequireApproval, ""
+	}
+
+	return PermissionAutoApprove, ""
 }
