@@ -633,3 +633,164 @@ func TestManageLlm2ChatHistory_OverlapHandling(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
+
+func TestManageLlm2ChatHistory_Trimming_Basic(t *testing.T) {
+	messages := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Initial", ContextTypeInitialInstructions), // len 7
+		textMsg(llm2.RoleAssistant, strings.Repeat("A", 50)),                     // len 50
+		textMsg(llm2.RoleAssistant, strings.Repeat("B", 50)),                     // len 50
+		textMsg(llm2.RoleAssistant, strings.Repeat("C", 50)),                     // len 50
+	}
+
+	expected := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Initial", ContextTypeInitialInstructions),
+		textMsg(llm2.RoleAssistant, strings.Repeat("C", 50)),
+	}
+	result, err := manageLlm2ChatHistory(messages, 57)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+
+	expected2 := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Initial", ContextTypeInitialInstructions),
+		textMsg(llm2.RoleAssistant, strings.Repeat("C", 50)),
+	}
+	result2, err := manageLlm2ChatHistory(messages, 56)
+	assert.NoError(t, err)
+	assert.Equal(t, expected2, result2)
+}
+
+func TestManageLlm2ChatHistory_Trimming_InitialInstructionsProtected(t *testing.T) {
+	messages := []llm2.Message{
+		textMsg(llm2.RoleAssistant, strings.Repeat("A", 50)),                     // len 50
+		textMsgWithCtx(llm2.RoleUser, "Initial", ContextTypeInitialInstructions), // len 7
+		textMsg(llm2.RoleAssistant, strings.Repeat("B", 50)),                     // len 50
+	}
+
+	expected := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Initial", ContextTypeInitialInstructions),
+		textMsg(llm2.RoleAssistant, strings.Repeat("B", 50)),
+	}
+	result, err := manageLlm2ChatHistory(messages, 10)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestManageLlm2ChatHistory_Trimming_SoftLimit(t *testing.T) {
+	messages := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Initial One", ContextTypeInitialInstructions), // len 11
+		textMsg(llm2.RoleAssistant, strings.Repeat("A", 50)),                         // len 50, droppable
+		textMsgWithCtx(llm2.RoleUser, "Initial Two", ContextTypeInitialInstructions), // len 11
+	}
+
+	expected := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Initial One", ContextTypeInitialInstructions),
+		textMsgWithCtx(llm2.RoleUser, "Initial Two", ContextTypeInitialInstructions),
+	}
+	result, err := manageLlm2ChatHistory(messages, 25)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+
+	messagesOnlyII := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Very Long Initial Instructions Part 1", ContextTypeInitialInstructions), // len 35
+		textMsgWithCtx(llm2.RoleUser, "Very Long Initial Instructions Part 2", ContextTypeInitialInstructions), // len 35
+	}
+	expectedOnlyII := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Very Long Initial Instructions Part 1", ContextTypeInitialInstructions),
+		textMsgWithCtx(llm2.RoleUser, "Very Long Initial Instructions Part 2", ContextTypeInitialInstructions),
+	}
+	resultOnlyII, err := manageLlm2ChatHistory(messagesOnlyII, 50)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedOnlyII, resultOnlyII)
+}
+
+func TestManageLlm2ChatHistory_ToolCallArgumentsInLength(t *testing.T) {
+	messages := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Init", ContextTypeInitialInstructions), // len 4
+		{
+			Role: llm2.RoleAssistant,
+			Content: []llm2.ContentBlock{
+				{Type: llm2.ContentBlockTypeText, Text: "A"},
+				{Type: llm2.ContentBlockTypeToolUse, ToolUse: &llm2.ToolUseBlock{Id: "tc1", Name: "tool1", Arguments: strings.Repeat("X", 100)}},
+			},
+		}, // total len = 1 + 100 = 101
+		toolResultMsg("tc1", "tool1", "response"), // len 8
+		textMsg(llm2.RoleAssistant, "Last"),       // len 4, retained as last
+	}
+
+	result, err := manageLlm2ChatHistory(messages, 20)
+	assert.NoError(t, err)
+
+	expected := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Init", ContextTypeInitialInstructions),
+		textMsg(llm2.RoleAssistant, "Last"),
+	}
+	assert.Equal(t, expected, result)
+}
+
+func TestManageLlm2ChatHistory_DropAllOlderBehavior(t *testing.T) {
+	messages := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Init", ContextTypeInitialInstructions), // len 4, retained
+		textMsg(llm2.RoleAssistant, "A"),                                      // len 1, unretained
+		textMsg(llm2.RoleAssistant, "B"),                                      // len 1, unretained
+		textMsg(llm2.RoleAssistant, "CC"),                                     // len 2, unretained - this one exceeds limit
+		textMsg(llm2.RoleAssistant, "D"),                                      // len 1, unretained
+		textMsg(llm2.RoleAssistant, "E"),                                      // len 1, unretained, last message retained
+	}
+
+	result, err := manageLlm2ChatHistory(messages, 7)
+	assert.NoError(t, err)
+
+	expected := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Init", ContextTypeInitialInstructions),
+		textMsg(llm2.RoleAssistant, "D"),
+		textMsg(llm2.RoleAssistant, "E"),
+	}
+	assert.Equal(t, expected, result)
+}
+
+func TestManageLlm2ChatHistory_TruncateOldestFirst(t *testing.T) {
+	largeContent1 := strings.Repeat("A", 150)
+	largeContent2 := strings.Repeat("B", 150)
+
+	messages := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Init", ContextTypeInitialInstructions), // len 4
+		{
+			Role: llm2.RoleAssistant,
+			Content: []llm2.ContentBlock{
+				{Type: llm2.ContentBlockTypeText, Text: "c1"},
+				{Type: llm2.ContentBlockTypeToolUse, ToolUse: &llm2.ToolUseBlock{Id: "tc1", Name: "tool1", Arguments: "{}"}},
+			},
+		}, // len 4
+		toolResultMsg("tc1", "tool1", largeContent1), // len 150, older
+		{
+			Role: llm2.RoleAssistant,
+			Content: []llm2.ContentBlock{
+				{Type: llm2.ContentBlockTypeText, Text: "c2"},
+				{Type: llm2.ContentBlockTypeToolUse, ToolUse: &llm2.ToolUseBlock{Id: "tc2", Name: "tool2", Arguments: "{}"}},
+			},
+		}, // len 4
+		toolResultMsg("tc2", "tool2", largeContent2), // len 150, newer
+		textMsg(llm2.RoleAssistant, "Last"),          // len 4, retained
+	}
+
+	result, err := manageLlm2ChatHistory(messages, 200)
+	assert.NoError(t, err)
+
+	var toolResp1Text, toolResp2Text string
+	for _, msg := range result {
+		for _, block := range msg.Content {
+			if block.Type == llm2.ContentBlockTypeToolResult && block.ToolResult != nil {
+				if block.ToolResult.ToolCallId == "tc1" {
+					toolResp1Text = block.ToolResult.Text
+				}
+				if block.ToolResult.ToolCallId == "tc2" {
+					toolResp2Text = block.ToolResult.Text
+				}
+			}
+		}
+	}
+
+	assert.True(t, strings.HasSuffix(toolResp1Text, "[truncated]"), "Oldest tool response should be truncated")
+	assert.True(t, len(toolResp1Text) < 150)
+	assert.NotEmpty(t, toolResp2Text)
+}
