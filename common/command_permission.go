@@ -1,0 +1,208 @@
+package common
+
+// PermissionResult represents the result of evaluating command permissions
+type PermissionResult int
+
+const (
+	PermissionAutoApprove PermissionResult = iota
+	PermissionRequireApproval
+	PermissionDeny
+)
+
+// CommandPattern represents a pattern for matching commands
+type CommandPattern struct {
+	Pattern string `toml:"pattern" json:"pattern" koanf:"pattern"`
+	Message string `toml:"message,omitempty" json:"message,omitempty" koanf:"message,omitempty"`
+}
+
+// CommandPermissionConfig defines permission rules for shell commands
+type CommandPermissionConfig struct {
+	AutoApprove          []CommandPattern `toml:"auto_approve" json:"autoApprove" koanf:"auto_approve"`
+	RequireApproval      []CommandPattern `toml:"require_approval" json:"requireApproval" koanf:"require_approval"`
+	Deny                 []CommandPattern `toml:"deny" json:"deny" koanf:"deny"`
+	ResetAutoApprove     bool             `toml:"reset_auto_approve" json:"resetAutoApprove" koanf:"reset_auto_approve"`
+	ResetRequireApproval bool             `toml:"reset_require_approval" json:"resetRequireApproval" koanf:"reset_require_approval"`
+}
+
+// BaseCommandPermissions returns the hardcoded base permission configuration
+// with sensible defaults for safe and dangerous commands
+func BaseCommandPermissions() CommandPermissionConfig {
+	return CommandPermissionConfig{
+		AutoApprove: []CommandPattern{
+			// Basic read-only commands
+			{Pattern: "ls"},
+			{Pattern: "cat"},
+			{Pattern: "echo"},
+			{Pattern: "pwd"},
+			{Pattern: "head"},
+			{Pattern: "tail"},
+			{Pattern: "wc"},
+			{Pattern: "grep"},
+			{Pattern: "find"},
+			{Pattern: "which"},
+			{Pattern: "env"},
+			{Pattern: "printenv"},
+			{Pattern: "date"},
+			{Pattern: "whoami"},
+			{Pattern: "hostname"},
+			{Pattern: "uname"},
+			{Pattern: "file"},
+			{Pattern: "stat"},
+			{Pattern: "du"},
+			{Pattern: "df"},
+			{Pattern: "tree"},
+			{Pattern: "less"},
+			{Pattern: "more"},
+			{Pattern: "diff"},
+			{Pattern: "sort"},
+			{Pattern: "uniq"},
+			{Pattern: "cut"},
+			{Pattern: "awk"},
+			{Pattern: "sed"},
+			{Pattern: "tr"},
+			{Pattern: "basename"},
+			{Pattern: "dirname"},
+			{Pattern: "realpath"},
+			{Pattern: "readlink"},
+			// Git read operations
+			{Pattern: "git status"},
+			{Pattern: "git log"},
+			{Pattern: "git diff"},
+			{Pattern: "git branch"},
+			{Pattern: "git show"},
+			{Pattern: "git remote"},
+			{Pattern: "git tag"},
+			{Pattern: "git describe"},
+			{Pattern: "git rev-parse"},
+			{Pattern: "git ls-files"},
+			{Pattern: "git ls-tree"},
+			{Pattern: "git cat-file"},
+			{Pattern: "git blame"},
+			{Pattern: "git shortlog"},
+			{Pattern: "git stash list"},
+			// Go commands
+			{Pattern: "go test"},
+			{Pattern: "go build"},
+			{Pattern: "go fmt"},
+			{Pattern: "go vet"},
+			{Pattern: "go mod tidy"},
+			{Pattern: "go mod download"},
+			{Pattern: "go list"},
+			{Pattern: "go version"},
+			{Pattern: "go env"},
+			{Pattern: "go doc"},
+			{Pattern: "gofmt"},
+			{Pattern: "golint"},
+			{Pattern: "staticcheck"},
+			// Node.js/npm commands
+			{Pattern: "npm test"},
+			{Pattern: "npm run lint"},
+			{Pattern: "npm run build"},
+			{Pattern: "npm run check"},
+			{Pattern: "npm run format"},
+			{Pattern: "npm list"},
+			{Pattern: "npm outdated"},
+			{Pattern: "npm version"},
+			{Pattern: "npm audit"},
+			// Yarn commands
+			{Pattern: "yarn test"},
+			{Pattern: "yarn lint"},
+			{Pattern: "yarn build"},
+			{Pattern: "yarn check"},
+			{Pattern: "yarn list"},
+			{Pattern: "yarn outdated"},
+			{Pattern: "yarn audit"},
+			// Python commands
+			{Pattern: "pytest"},
+			{Pattern: "python -m pytest"},
+			{Pattern: "python3 -m pytest"},
+			{Pattern: "pip list"},
+			{Pattern: "pip show"},
+			{Pattern: "pip check"},
+			{Pattern: "pip freeze"},
+			{Pattern: "pylint"},
+			{Pattern: "flake8"},
+			{Pattern: "mypy"},
+			{Pattern: "black --check"},
+			{Pattern: "isort --check"},
+			{Pattern: "ruff check"},
+			// Make commands
+			{Pattern: "make test"},
+			{Pattern: "make check"},
+			{Pattern: "make lint"},
+			{Pattern: "make build"},
+			{Pattern: "make fmt"},
+			// Rust commands
+			{Pattern: "cargo test"},
+			{Pattern: "cargo build"},
+			{Pattern: "cargo check"},
+			{Pattern: "cargo fmt"},
+			{Pattern: "cargo clippy"},
+			{Pattern: "rustfmt"},
+			// Ruby commands
+			{Pattern: "bundle exec rspec"},
+			{Pattern: "rspec"},
+			{Pattern: "rubocop"},
+			{Pattern: "bundle list"},
+			{Pattern: "bundle check"},
+			// Java/Maven/Gradle commands
+			{Pattern: "mvn test"},
+			{Pattern: "mvn compile"},
+			{Pattern: "mvn verify"},
+			{Pattern: "gradle test"},
+			{Pattern: "gradle build"},
+			{Pattern: "gradle check"},
+			// Other common tools
+			{Pattern: "jq"},
+			{Pattern: "yq"},
+			{Pattern: "curl --head"},
+			{Pattern: "curl -I"},
+			{Pattern: "true"},
+			{Pattern: "false"},
+			{Pattern: "test"},
+			{Pattern: "["},
+		},
+		RequireApproval: []CommandPattern{},
+		Deny: []CommandPattern{
+			// Destructive file operations
+			{Pattern: "rm -rf /", Message: "Recursive force delete of root directory is extremely dangerous"},
+			{Pattern: "rm -rf ~", Message: "Recursive force delete of home directory is extremely dangerous"},
+			{Pattern: "rm -rf /*", Message: "Recursive force delete of root contents is extremely dangerous"},
+			{Pattern: "rm -rf ~/*", Message: "Recursive force delete of home contents is extremely dangerous"},
+			{Pattern: "rm -fr /", Message: "Recursive force delete of root directory is extremely dangerous"},
+			{Pattern: "rm -fr ~", Message: "Recursive force delete of home directory is extremely dangerous"},
+			// Privilege escalation
+			{Pattern: "sudo", Message: "sudo commands require manual execution for security"},
+			{Pattern: "su ", Message: "su commands require manual execution for security"},
+			{Pattern: "doas", Message: "doas commands require manual execution for security"},
+			// Dangerous permission changes
+			{Pattern: "chmod 777", Message: "Setting world-writable permissions is a security risk"},
+			{Pattern: "chmod -R 777", Message: "Recursively setting world-writable permissions is a security risk"},
+			// Disk/filesystem operations
+			{Pattern: "mkfs", Message: "Filesystem creation commands are extremely dangerous"},
+			{Pattern: "dd if=", Message: "dd can overwrite disks and cause data loss"},
+			{Pattern: "fdisk", Message: "Disk partitioning commands are extremely dangerous"},
+			{Pattern: "parted", Message: "Disk partitioning commands are extremely dangerous"},
+			// Fork bomb
+			{Pattern: ":(){:|:&};:", Message: "Fork bomb detected - this will crash the system"},
+			// Heredoc file creation (should use edit blocks instead)
+			{Pattern: "cat << EOF >", Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
+			{Pattern: "cat <<EOF >", Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
+			{Pattern: "cat <<-EOF >", Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
+			{Pattern: "cat <<'EOF' >", Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
+			{Pattern: `cat <<\"EOF\" >`, Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
+			// Network attacks
+			{Pattern: ":(){ :|:& };:", Message: "Fork bomb detected - this will crash the system"},
+			// History manipulation
+			{Pattern: "history -c", Message: "Clearing shell history is suspicious"},
+			{Pattern: "> ~/.bash_history", Message: "Clearing bash history is suspicious"},
+			// Shutdown/reboot
+			{Pattern: "shutdown", Message: "System shutdown requires manual execution"},
+			{Pattern: "reboot", Message: "System reboot requires manual execution"},
+			{Pattern: "poweroff", Message: "System poweroff requires manual execution"},
+			{Pattern: "halt", Message: "System halt requires manual execution"},
+			{Pattern: "init 0", Message: "System shutdown requires manual execution"},
+			{Pattern: "init 6", Message: "System reboot requires manual execution"},
+		},
+	}
+}
