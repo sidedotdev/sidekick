@@ -63,6 +63,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	var envContainer env.EnvContainer
 	var worktree *domain.Worktree
 	var localConfig common.LocalPublicConfig
+	var workspaceConfig domain.WorkspaceConfig
 	var llmConfig common.LLMConfig
 	var embeddingConfig common.EmbeddingConfig
 
@@ -70,7 +71,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 	// for workflow backcompat/replay, we can't do this early unless enabled
 	if enableBranchNameGeneration {
-		localConfig, _, llmConfig, embeddingConfig, err = getConfigs(ctx, workspaceId)
+		localConfig, workspaceConfig, llmConfig, embeddingConfig, err = getConfigs(ctx, workspaceId)
 		if err != nil {
 			return DevContext{}, err
 		}
@@ -174,7 +175,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 	// for workflow backcompat/replay, we have to do this later
 	if !enableBranchNameGeneration {
-		localConfig, _, llmConfig, embeddingConfig, err = getConfigs(ctx, workspaceId)
+		localConfig, workspaceConfig, llmConfig, embeddingConfig, err = getConfigs(ctx, workspaceId)
 		if err != nil {
 			return DevContext{}, err
 		}
@@ -226,6 +227,14 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 	configOverrides.ApplyToRepoConfig(&repoConfig)
 	eCtx.DisableHumanInTheLoop = repoConfig.DisableHumanInTheLoop
+
+	// Merge command permissions from all config sources: base → local → repo → workspace
+	repoConfig.CommandPermissions = common.MergeCommandPermissions(
+		common.BaseCommandPermissions(),
+		localConfig.CommandPermissions,
+		repoConfig.CommandPermissions,
+		workspaceConfig.CommandPermissions,
+	)
 
 	// Execute worktree setup script if configured and using git worktree environment
 	if envType == string(env.EnvTypeLocalGitWorktree) && repoConfig.WorktreeSetup != "" {

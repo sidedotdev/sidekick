@@ -3,6 +3,7 @@ package dev
 import (
 	"fmt"
 	"path/filepath"
+	"sidekick/common"
 	"sidekick/env"
 	"sidekick/llm"
 
@@ -23,20 +24,26 @@ var runCommandTool = llm.Tool{
 
 // RunCommand handles the execution of shell commands with user approval
 func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
-	// Format approval prompt
-	approvalPrompt := "Allow running the following command?"
+	// Evaluate command permissions
+	permResult, permMessage := common.EvaluateScriptPermission(dCtx.RepoConfig.CommandPermissions, params.Command)
 
-	// Get user approval
-	userResponse, err := GetUserApproval(dCtx, "run_command", approvalPrompt, map[string]any{
-		"command":    params.Command,
-		"workingDir": params.WorkingDir,
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to get user approval: %v", err)
-	}
-
-	if userResponse == nil || userResponse.Approved == nil || !*userResponse.Approved {
-		return "Command execution was not approved by user. They said:\n\n" + userResponse.Content, nil
+	switch permResult {
+	case common.PermissionDeny:
+		return fmt.Sprintf("Command denied: %s", permMessage), nil
+	case common.PermissionAutoApprove:
+		// Skip user approval, proceed to execution
+	case common.PermissionRequireApproval:
+		approvalPrompt := "Allow running the following command?"
+		userResponse, err := GetUserApproval(dCtx, "run_command", approvalPrompt, map[string]any{
+			"command":    params.Command,
+			"workingDir": params.WorkingDir,
+		})
+		if err != nil {
+			return "", fmt.Errorf("failed to get user approval: %v", err)
+		}
+		if userResponse == nil || userResponse.Approved == nil || !*userResponse.Approved {
+			return "Command execution was not approved by user. They said:\n\n" + userResponse.Content, nil
+		}
 	}
 
 	// Prepare working directory
@@ -47,7 +54,7 @@ func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
 
 	// Execute command through sh
 	var output env.EnvRunCommandActivityOutput
-	err = workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+	err := workflow.ExecuteActivity(dCtx.Context, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
 		EnvContainer:       *dCtx.EnvContainer,
 		Command:            "sh",
 		Args:               []string{"-c", params.Command},
