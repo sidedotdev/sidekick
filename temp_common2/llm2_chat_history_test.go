@@ -579,3 +579,51 @@ func TestLlm2ChatHistory_Hydrate_MultipleBlocksPerMessage(t *testing.T) {
 	assert.Len(t, h.messages[1].Content, 1)
 	assert.Equal(t, "Part 3", h.messages[1].Content[0].Text)
 }
+
+func TestLlm2ChatHistory_Hydrate_RestoresFlowId(t *testing.T) {
+	storage := newMockKeyValueStorage()
+	block1 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Hello"}
+	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
+		"block-1": block1,
+	})
+
+	h := &Llm2ChatHistory{
+		workspaceId: "workspace-456",
+		refs: []common.MessageRef{
+			{FlowId: "flow-123", BlockIds: []string{"block-1"}, Role: "user"},
+		},
+		hydrated: false,
+	}
+
+	// flowId is empty before hydration
+	assert.Equal(t, "", h.flowId)
+
+	err := h.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	// flowId should be restored from refs
+	assert.Equal(t, "flow-123", h.flowId)
+}
+
+func TestLlm2ChatHistory_Hydrate_PreservesExistingFlowId(t *testing.T) {
+	storage := newMockKeyValueStorage()
+	block1 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Hello"}
+	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
+		"block-1": block1,
+	})
+
+	h := &Llm2ChatHistory{
+		flowId:      "existing-flow-id",
+		workspaceId: "workspace-456",
+		refs: []common.MessageRef{
+			{FlowId: "flow-123", BlockIds: []string{"block-1"}, Role: "user"},
+		},
+		hydrated: false,
+	}
+
+	err := h.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	// flowId should be preserved, not overwritten
+	assert.Equal(t, "existing-flow-id", h.flowId)
+}

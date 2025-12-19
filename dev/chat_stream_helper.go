@@ -59,8 +59,8 @@ func ExecuteChatStream(
 		return nil, err
 	}
 
-	// Append the response to chat history
-	llm2History.AppendNonHydrated(response.Output)
+	// Append the response to chat history (history is hydrated, so Append will work)
+	llm2History.Append(&response.Output)
 
 	return &response, nil
 }
