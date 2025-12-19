@@ -103,6 +103,12 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	llmActivities := &persisted_ai.LlmActivities{
 		Streamer: service,
 	}
+	llm2Activities := &persisted_ai.Llm2Activities{
+		Streamer: service,
+	}
+	chatHistoryActivities := &dev.ChatHistoryActivities{
+		Storage: service,
+	}
 
 	lspActivities := &lsp.LSPActivities{
 		LSPClientProvider: func(languageName string) lsp.LSPClient {
@@ -186,6 +192,8 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(dev.SummarizeDiffActivity)
 	w.RegisterActivity(dev.ManageChatHistoryActivity)
 	w.RegisterActivity(dev.ManageChatHistoryV2Activity)
+	w.RegisterActivity(chatHistoryActivities)
+	w.RegisterActivity(llm2Activities)
 	w.RegisterActivity(ffa.EvalBoolFlag)
 	w.RegisterActivity(common.GetLocalConfig)
 	w.RegisterActivity(common.BaseCommandPermissionsActivity)

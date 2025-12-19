@@ -69,6 +69,13 @@ func (h *Llm2ChatHistory) Append(msg common.Message) {
 	}
 }
 
+// AppendNonHydrated appends a message reference without requiring hydration.
+// Used when adding responses from streaming where full content is not needed.
+func (h *Llm2ChatHistory) AppendNonHydrated(msg llm2.Message) {
+	h.messages = append(h.messages, msg)
+	h.unpersisted = append(h.unpersisted, len(h.messages)-1)
+}
+
 func (h *Llm2ChatHistory) Len() int {
 	if !h.hydrated {
 		panic("cannot get length of non-hydrated Llm2ChatHistory")
