@@ -66,7 +66,22 @@ const (
 // TODO take in the model name and use a different threshold for each model
 // TODO don't drop messages, just create a new chat history with a new summary
 // each time based on the current needs or latest prompt
-func ManageChatHistory(ctx workflow.Context, chatHistory *common.ChatHistoryContainer, maxLength int) {
+func ManageChatHistory(ctx workflow.Context, chatHistory *common.ChatHistoryContainer, workspaceId string, maxLength int) {
+	// Check if we should use the new Llm2ChatHistory-based management
+	v := workflow.GetVersion(ctx, "chat-history-llm2", workflow.DefaultVersion, 1)
+	if v == 1 {
+		var managedHistory *common.ChatHistoryContainer
+		activityFuture := workflow.ExecuteActivity(ctx, (*ChatHistoryActivities).ManageV3, chatHistory, workspaceId, maxLength)
+		err := activityFuture.Get(ctx, &managedHistory)
+		if err != nil {
+			wrapErr := fmt.Errorf("ManageChatHistory ManageV3 activity returned an error: %w", err)
+			workflow.GetLogger(ctx).Error("ManageChatHistory error shouldn't happen, but it did", "error", wrapErr)
+			panic(wrapErr)
+		}
+		chatHistory.History = managedHistory.History
+		return
+	}
+
 	// Convert Messages() to []llm.ChatMessage for activity input
 	messages := chatHistory.Messages()
 	chatMessages := make([]llm.ChatMessage, len(messages))
@@ -76,8 +91,8 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *common.ChatHistoryCont
 
 	var newChatHistory []llm.ChatMessage
 	var activityFuture workflow.Future
-	v := workflow.GetVersion(ctx, "ManageChatHistoryToV2", workflow.DefaultVersion, 1)
-	if v == 1 && fflag.IsEnabled(ctx, fflag.ManageHistoryWithContextMarkers) {
+	vLegacy := workflow.GetVersion(ctx, "ManageChatHistoryToV2", workflow.DefaultVersion, 1)
+	if vLegacy == 1 && fflag.IsEnabled(ctx, fflag.ManageHistoryWithContextMarkers) {
 		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryV2Activity, chatMessages, maxLength)
 	} else {
 		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryActivity, chatMessages, maxLength)

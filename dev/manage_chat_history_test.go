@@ -700,7 +700,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *common.ChatHistoryContainer, maxLength int) (*common.ChatHistoryContainer, error) {
 		ctx = utils.NoRetryCtx(ctx)
-		ManageChatHistory(ctx, chatHistory, maxLength)
+		ManageChatHistory(ctx, chatHistory, "test-workspace-id", maxLength)
 		return chatHistory, nil
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
@@ -719,7 +719,8 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesOldActiv
 	newChatHistory := []llm.ChatMessage{{Content: "_"}}
 	maxLength := 100
 
-	// Expect GetVersion to be called and return DefaultVersion
+	// Expect GetVersion to be called and return DefaultVersion for both version checks
+	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
 	s.env.OnGetVersion("ManageChatHistoryToV2", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
 
 	// Expect the old activity to be called
@@ -742,7 +743,8 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesNewActiv
 	newChatHistory := []llm.ChatMessage{{Content: "_"}}
 	maxLength := 100
 
-	// enable
+	// Use legacy path (not llm2) but with V2 activity
+	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
 	s.env.OnGetVersion("ManageChatHistoryToV2", workflow.DefaultVersion, 1).Return(workflow.Version(1))
 	var ffa *fflag.FFlagActivities
 	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil).Once()

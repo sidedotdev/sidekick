@@ -74,6 +74,8 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil)
 	s.env.OnActivity(ManageChatHistoryActivity, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	s.env.OnActivity(ManageChatHistoryV2Activity, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
+	// Use legacy chat history path
+	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
 
 	// Create temporary directory using t.TempDir()
 	s.dir = s.T().TempDir()
