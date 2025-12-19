@@ -273,3 +273,137 @@ func unquoteString(s string) string {
 	}
 	return s
 }
+
+// handleSimpleWrapper handles commands where everything after the command name
+// is the wrapped command (e.g., nohup, doas, command, builtin, time, ltrace)
+func handleSimpleWrapper(parts []string, commands *[]string) {
+	if len(parts) < 2 {
+		return
+	}
+	innerCmd := strings.Join(parts[1:], " ")
+	if innerCmd != "" {
+		*commands = append(*commands, innerCmd)
+	}
+}
+
+// handleWrapperWithFlags handles commands with optional flags that may take arguments.
+// Skips flags (and their args if in flagsWithArgs map) until finding the actual command.
+func handleWrapperWithFlags(parts []string, commands *[]string, flagsWithArgs map[string]bool) {
+	if len(parts) < 2 {
+		return
+	}
+
+	cmdStart := 1
+	for cmdStart < len(parts) {
+		part := parts[cmdStart]
+		if strings.HasPrefix(part, "-") {
+			if flagsWithArgs[part] && cmdStart+1 < len(parts) {
+				// Skip flag and its argument
+				cmdStart += 2
+			} else {
+				// Flag without argument or flag with attached value (like --flag=value)
+				cmdStart++
+			}
+		} else {
+			break
+		}
+	}
+
+	if cmdStart < len(parts) {
+		innerCmd := strings.Join(parts[cmdStart:], " ")
+		if innerCmd != "" {
+			*commands = append(*commands, innerCmd)
+		}
+	}
+}
+
+// handleWrapperWithPositionalArg handles commands with required positional args
+// before the wrapped command (e.g., timeout has duration, flock has lockfile, ssh has host).
+// Skips flags, then skips numPositionalArgs positional arguments, then extracts the remaining.
+func handleWrapperWithPositionalArg(parts []string, commands *[]string, flagsWithArgs map[string]bool, numPositionalArgs int) {
+	if len(parts) < 2 {
+		return
+	}
+
+	cmdStart := 1
+	positionalCount := 0
+
+	for cmdStart < len(parts) {
+		part := parts[cmdStart]
+		if strings.HasPrefix(part, "-") {
+			if flagsWithArgs[part] && cmdStart+1 < len(parts) {
+				// Skip flag and its argument
+				cmdStart += 2
+			} else {
+				// Flag without argument or flag with attached value
+				cmdStart++
+			}
+		} else {
+			// This is a positional argument
+			positionalCount++
+			cmdStart++
+			if positionalCount >= numPositionalArgs {
+				break
+			}
+		}
+	}
+
+	if cmdStart < len(parts) {
+		innerCmd := strings.Join(parts[cmdStart:], " ")
+		if innerCmd != "" {
+			// Unquote if the command is a single quoted string (common for ssh)
+			if len(parts[cmdStart:]) == 1 {
+				unquoted := unquoteString(innerCmd)
+				if unquoted != innerCmd {
+					*commands = append(*commands, unquoted)
+					return
+				}
+			}
+			*commands = append(*commands, innerCmd)
+		}
+	}
+}
+
+// handleShellDashC handles -c "cmd" patterns like su -c.
+// Looks for -c flag followed by a quoted string, unquotes it, and recursively parses.
+func handleShellDashC(parts []string, commands *[]string) {
+	for i := 1; i < len(parts)-1; i++ {
+		if parts[i] == "-c" {
+			scriptArg := parts[i+1]
+			innerScript := unquoteString(scriptArg)
+			innerCommands := ExtractCommands(innerScript)
+			*commands = append(*commands, innerCommands...)
+			return
+		}
+	}
+}
+
+// handleScriptExecution handles bash script.sh patterns.
+// If no -c flag is present and there's a script argument, prepends ./ to the script path.
+func handleScriptExecution(parts []string, commands *[]string) {
+	if len(parts) < 2 {
+		return
+	}
+
+	// Check if -c flag is present - if so, this is not script execution
+	for _, part := range parts {
+		if part == "-c" {
+			return
+		}
+	}
+
+	// Skip any flags to find the script argument
+	scriptIdx := 1
+	for scriptIdx < len(parts) && strings.HasPrefix(parts[scriptIdx], "-") {
+		scriptIdx++
+	}
+
+	if scriptIdx < len(parts) {
+		scriptPath := parts[scriptIdx]
+		// Prepend ./ if not already an absolute or relative path
+		if !strings.HasPrefix(scriptPath, "/") && !strings.HasPrefix(scriptPath, "./") && !strings.HasPrefix(scriptPath, "../") {
+			scriptPath = "./" + scriptPath
+		}
+		*commands = append(*commands, scriptPath)
+	}
+}
