@@ -180,6 +180,10 @@ func (h *Llm2ChatHistory) Hydrate(ctx context.Context, storage common.KeyValueSt
 	return nil
 }
 
+func (h *Llm2ChatHistory) IsHydrated() bool {
+	return h.hydrated
+}
+
 func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueStorage) error {
 	if !h.hydrated {
 		return fmt.Errorf("cannot persist non-hydrated Llm2ChatHistory")

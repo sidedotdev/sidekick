@@ -29,6 +29,7 @@ type ChatHistory interface {
 	Len() int
 	Get(index int) Message
 	Messages() []Message
+	IsHydrated() bool
 	Hydrate(ctx context.Context, storage KeyValueStorage) error
 	Persist(ctx context.Context, storage KeyValueStorage) error
 }
@@ -69,6 +70,10 @@ func (h *LegacyChatHistory) Messages() []Message {
 		result[i] = msg
 	}
 	return result
+}
+
+func (h *LegacyChatHistory) IsHydrated() bool {
+	return true
 }
 
 func (h *LegacyChatHistory) Hydrate(ctx context.Context, storage KeyValueStorage) error {
