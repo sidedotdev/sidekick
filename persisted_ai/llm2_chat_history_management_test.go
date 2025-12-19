@@ -474,3 +474,162 @@ func TestManageLlm2ChatHistory_EditBlockReport_RetainsProposals(t *testing.T) {
 	assert.Contains(t, result[2].Content[0].Text, "edit_block:1 application failed")
 	assert.Equal(t, "I'll fix it", result[3].Content[0].Text)
 }
+
+func TestManageLlm2ChatHistory_MixedTypes_Complex(t *testing.T) {
+	ca := &ChatHistoryActivities{}
+	messages := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "II1", ContextTypeInitialInstructions), // Kept
+		textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),        // Kept
+		textMsg(llm2.RoleAssistant, "U1 for UF1"),                            // Kept
+		textMsgWithCtx(llm2.RoleUser, "TR1", ContextTypeTestResult),          // Superseded by TR2
+		textMsg(llm2.RoleAssistant, "U1 for TR1"),                            // Not kept
+		textMsgWithCtx(llm2.RoleUser, "UF2", ContextTypeUserFeedback),        // Kept
+		textMsg(llm2.RoleAssistant, "U1 for UF2"),                            // Kept
+		textMsgWithCtx(llm2.RoleUser, "TR2", ContextTypeTestResult),          // Kept (latest TR)
+		textMsg(llm2.RoleAssistant, "U1 for TR2"),                            // Kept
+		textMsg(llm2.RoleAssistant, "Unmarked after TR2"),                    // Kept
+		textMsgWithCtx(llm2.RoleUser, "II2", ContextTypeInitialInstructions), // Kept
+	}
+	expected := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "II1", ContextTypeInitialInstructions),
+		textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),
+		textMsg(llm2.RoleAssistant, "U1 for UF1"),
+		textMsgWithCtx(llm2.RoleUser, "UF2", ContextTypeUserFeedback),
+		textMsg(llm2.RoleAssistant, "U1 for UF2"),
+		textMsgWithCtx(llm2.RoleUser, "TR2", ContextTypeTestResult),
+		textMsg(llm2.RoleAssistant, "U1 for TR2"),
+		textMsg(llm2.RoleAssistant, "Unmarked after TR2"),
+		textMsgWithCtx(llm2.RoleUser, "II2", ContextTypeInitialInstructions),
+	}
+
+	result, err := ca.ManageLlm2ChatHistory(messages, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestManageLlm2ChatHistory_NoMarkers_OverLimit(t *testing.T) {
+	ca := &ChatHistoryActivities{}
+	messages := []llm2.Message{
+		textMsg(llm2.RoleUser, "Msg1"),
+		textMsg(llm2.RoleAssistant, "Msg2"),
+	}
+	expected := []llm2.Message{
+		textMsg(llm2.RoleAssistant, "Msg2"),
+	}
+
+	result, err := ca.ManageLlm2ChatHistory(messages, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestManageLlm2ChatHistory_NoMarkers_UnderLimit(t *testing.T) {
+	ca := &ChatHistoryActivities{}
+	messages := []llm2.Message{
+		textMsg(llm2.RoleUser, "Msg1"),
+		textMsg(llm2.RoleAssistant, "Msg2"),
+	}
+	expected := []llm2.Message{
+		textMsg(llm2.RoleUser, "Msg1"),
+		textMsg(llm2.RoleAssistant, "Msg2"),
+	}
+
+	result, err := ca.ManageLlm2ChatHistory(messages, 1000)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestManageLlm2ChatHistory_BlockEndingConditions(t *testing.T) {
+	ca := &ChatHistoryActivities{}
+	messages := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),        // UF1 Block Start
+		textMsg(llm2.RoleAssistant, "Unmarked after UF1"),                    // Part of UF1 Block
+		textMsgWithCtx(llm2.RoleUser, "TR1", ContextTypeTestResult),          // TR1 Block Start (Latest TR), ends UF1 block
+		textMsg(llm2.RoleAssistant, "Unmarked after TR1"),                    // Part of TR1 Block
+		textMsgWithCtx(llm2.RoleUser, "UF2", ContextTypeUserFeedback),        // UF2 Block Start, ends TR1 block
+		textMsg(llm2.RoleAssistant, "Unmarked after UF2"),                    // Part of UF2 Block
+		textMsgWithCtx(llm2.RoleUser, "II1", ContextTypeInitialInstructions), // II1, ends UF2 block
+	}
+	expected := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),
+		textMsg(llm2.RoleAssistant, "Unmarked after UF1"),
+		textMsgWithCtx(llm2.RoleUser, "TR1", ContextTypeTestResult),
+		textMsg(llm2.RoleAssistant, "Unmarked after TR1"),
+		textMsgWithCtx(llm2.RoleUser, "UF2", ContextTypeUserFeedback),
+		textMsg(llm2.RoleAssistant, "Unmarked after UF2"),
+		textMsgWithCtx(llm2.RoleUser, "II1", ContextTypeInitialInstructions),
+	}
+	result, err := ca.ManageLlm2ChatHistory(messages, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestManageLlm2ChatHistory_EditBlockReport_NoSequenceNumbersInReport(t *testing.T) {
+	ca := &ChatHistoryActivities{}
+	messages := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Initial instructions", ContextTypeInitialInstructions),
+		textMsg(llm2.RoleAssistant, "Some other message"),
+		textMsgWithCtx(llm2.RoleAssistant, "Report: all edits failed.", ContextTypeEditBlockReport),
+		textMsg(llm2.RoleUser, "Follow up to report"),
+	}
+	expected := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Initial instructions", ContextTypeInitialInstructions),
+		textMsgWithCtx(llm2.RoleAssistant, "Report: all edits failed.", ContextTypeEditBlockReport),
+		textMsg(llm2.RoleUser, "Follow up to report"),
+	}
+
+	result, err := ca.ManageLlm2ChatHistory(messages, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestManageLlm2ChatHistory_EditBlockReport_TrimmingBeforeProtectedEBR(t *testing.T) {
+	ca := &ChatHistoryActivities{}
+	messages := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "Initial instructions", ContextTypeInitialInstructions),
+		textMsg(llm2.RoleUser, strings.Repeat("a", 100)),
+		textMsg(llm2.RoleAssistant, testEditBlock),
+		textMsg(llm2.RoleUser, strings.Repeat("b", 100)),
+		textMsgWithCtx(llm2.RoleSystem, "- edit_block:1 application failed", ContextTypeEditBlockReport),
+		textMsg(llm2.RoleUser, strings.Repeat("c", 100)),
+		textMsg(llm2.RoleUser, strings.Repeat("d", 100)),
+	}
+
+	expected := []llm2.Message{
+		messages[0],
+		messages[2],
+		messages[3],
+		messages[4],
+		messages[5],
+		messages[6],
+	}
+
+	result, err := ca.ManageLlm2ChatHistory(messages, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+var testEditBlock = "```\nedit_block:1\nfile.go\n<<<<<<< SEARCH_EXACT\nOLD_CONTENT\n=======\nNEW_CONTENT\n>>>>>>> REPLACE_EXACT\n```"
+
+func TestManageLlm2ChatHistory_OverlapHandling(t *testing.T) {
+	ca := &ChatHistoryActivities{}
+	messages := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),
+		textMsg(llm2.RoleAssistant, "Unmarked after UF1"),
+		textMsg(llm2.RoleAssistant, testEditBlock),
+		textMsg(llm2.RoleUser, "Unmarked between proposal and report"),
+		textMsgWithCtx(llm2.RoleAssistant, "Report for Edit 1: Sequence 1 processed", ContextTypeEditBlockReport),
+		textMsg(llm2.RoleUser, "Unmarked after Report"),
+	}
+	expected := []llm2.Message{
+		textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),
+		textMsg(llm2.RoleAssistant, "Unmarked after UF1"),
+		textMsg(llm2.RoleAssistant, testEditBlock),
+		textMsg(llm2.RoleUser, "Unmarked between proposal and report"),
+		textMsgWithCtx(llm2.RoleAssistant, "Report for Edit 1: Sequence 1 processed", ContextTypeEditBlockReport),
+		textMsg(llm2.RoleUser, "Unmarked after Report"),
+	}
+
+	result, err := ca.ManageLlm2ChatHistory(messages, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
