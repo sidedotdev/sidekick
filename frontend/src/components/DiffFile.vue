@@ -4,13 +4,12 @@
       <div class="file-header-content">
         <div class="file-path-container">
           <span class="expand-icon" :class="{ expanded: isExpanded }">▶</span>
-          <span 
-            class="file-path" 
-            :class="{ 'file-path-clickable': openInIde }"
-            @click="handleFilePathClick"
-          >{{ filePath }}</span>
+          <span class="file-path">{{ filePath }}</span>
           <button class="copy-button" @click.stop="copyFilePath" title="Copy file path">
             <CopyIcon />
+          </button>
+          <button v-if="openInIde" class="open-button" @click.stop="handleOpenInIde" title="Open in IDE">
+            <OpenIcon />
           </button>
         </div>
         <div class="file-summary">
@@ -46,6 +45,7 @@
 <script setup lang="ts">
 import { computed, ref, inject } from 'vue'
 import CopyIcon from './icons/CopyIcon.vue'
+import OpenIcon from './icons/OpenIcon.vue'
 import type { ParsedDiff } from '../lib/diffUtils'
 import "@git-diff-view/vue/styles/diff-view.css"
 import { DiffView, DiffModeEnum } from "@git-diff-view/vue"
@@ -85,9 +85,8 @@ const toggleExpanded = () => {
   isExpanded.value = !isExpanded.value
 }
 
-const handleFilePathClick = (event: MouseEvent) => {
+const handleOpenInIde = () => {
   if (openInIde) {
-    event.stopPropagation()
     openInIde(filePath.value, props.fileData.firstLineNumber)
   }
 }
@@ -195,16 +194,8 @@ const getTheme = () => {
   word-break: break-all;
 }
 
-.file-path-clickable {
-  cursor: pointer;
-}
-
-.file-path-clickable:hover {
-  text-decoration: underline;
-  color: var(--color-link);
-}
-
-.copy-button {
+.copy-button,
+.open-button {
   background: none;
   border: none;
   cursor: pointer;
@@ -217,11 +208,13 @@ const getTheme = () => {
   flex-shrink: 0;
 }
 
-.copy-button:hover {
+.copy-button:hover,
+.open-button:hover {
   background: var(--color-background-hover);
 }
 
-.copy-button svg {
+.copy-button svg,
+.open-button svg {
   width: 1rem;
   height: 1rem;
 }

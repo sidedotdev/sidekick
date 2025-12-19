@@ -46,7 +46,7 @@ describe('useIdeOpener', () => {
       expect(windowOpenSpy).not.toHaveBeenCalled()
     })
 
-    it('opens file directly in VSCode when preference is stored', () => {
+    it('opens file directly in VSCode when preference is stored (no baseDir)', () => {
       mockSessionStorage['sidekick-preferred-ide'] = 'vscode'
       const { showIdeSelector, openInIde } = useIdeOpener()
       
@@ -72,6 +72,67 @@ describe('useIdeOpener', () => {
       )
     })
 
+    it('opens VSCode with two-step flow when baseDir is provided', async () => {
+      vi.useFakeTimers()
+      mockSessionStorage['sidekick-preferred-ide'] = 'vscode'
+      const { openInIde } = useIdeOpener()
+      
+      openInIde('/workspace/path/to/file.ts', null, '/workspace')
+      
+      expect(windowOpenSpy).toHaveBeenCalledTimes(1)
+      expect(windowOpenSpy).toHaveBeenCalledWith(
+        'vscode://file//workspace?windowId=_blank',
+        '_self'
+      )
+      
+      await vi.advanceTimersByTimeAsync(250)
+      
+      expect(windowOpenSpy).toHaveBeenCalledTimes(2)
+      expect(windowOpenSpy).toHaveBeenLastCalledWith(
+        'vscode://file//workspace/path/to/file.ts?windowId=_blank',
+        '_self'
+      )
+      
+      vi.useRealTimers()
+    })
+
+    it('opens VSCode with two-step flow including line number when baseDir is provided', async () => {
+      vi.useFakeTimers()
+      mockSessionStorage['sidekick-preferred-ide'] = 'vscode'
+      const { openInIde } = useIdeOpener()
+      
+      openInIde('/workspace/path/to/file.ts', 42, '/workspace')
+      
+      expect(windowOpenSpy).toHaveBeenCalledTimes(1)
+      expect(windowOpenSpy).toHaveBeenCalledWith(
+        'vscode://file//workspace?windowId=_blank',
+        '_self'
+      )
+      
+      await vi.advanceTimersByTimeAsync(250)
+      
+      expect(windowOpenSpy).toHaveBeenCalledTimes(2)
+      expect(windowOpenSpy).toHaveBeenLastCalledWith(
+        'vscode://file//workspace/path/to/file.ts:42?windowId=_blank',
+        '_self'
+      )
+      
+      vi.useRealTimers()
+    })
+
+    it('opens IntelliJ without two-step flow even when baseDir is provided', () => {
+      mockSessionStorage['sidekick-preferred-ide'] = 'intellij'
+      const { openInIde } = useIdeOpener()
+      
+      openInIde('/workspace/path/to/file.ts', null, '/workspace')
+      
+      expect(windowOpenSpy).toHaveBeenCalledTimes(1)
+      expect(windowOpenSpy).toHaveBeenCalledWith(
+        'idea://open?file=%2Fworkspace%2Fpath%2Fto%2Ffile.ts',
+        '_self'
+      )
+    })
+
     it('ignores invalid stored preference and shows selector', () => {
       mockSessionStorage['sidekick-preferred-ide'] = 'invalid-ide'
       const { showIdeSelector, pendingFilePath, openInIde } = useIdeOpener()
@@ -85,7 +146,7 @@ describe('useIdeOpener', () => {
   })
 
   describe('selectIde', () => {
-    it('stores VSCode preference and opens pending file', () => {
+    it('stores VSCode preference and opens pending file (no baseDir)', () => {
       const { showIdeSelector, pendingFilePath, openInIde, selectIde } = useIdeOpener()
       
       openInIde('/path/to/file.ts')
@@ -98,6 +159,33 @@ describe('useIdeOpener', () => {
       )
       expect(showIdeSelector.value).toBe(false)
       expect(pendingFilePath.value).toBe(null)
+    })
+
+    it('stores VSCode preference and opens pending file with two-step flow when baseDir was provided', async () => {
+      vi.useFakeTimers()
+      const { showIdeSelector, pendingFilePath, openInIde, selectIde } = useIdeOpener()
+      
+      openInIde('/workspace/path/to/file.ts', null, '/workspace')
+      selectIde('vscode')
+      
+      expect(mockSessionStorage['sidekick-preferred-ide']).toBe('vscode')
+      expect(windowOpenSpy).toHaveBeenCalledTimes(1)
+      expect(windowOpenSpy).toHaveBeenCalledWith(
+        'vscode://file//workspace?windowId=_blank',
+        '_self'
+      )
+      
+      await vi.advanceTimersByTimeAsync(250)
+      
+      expect(windowOpenSpy).toHaveBeenCalledTimes(2)
+      expect(windowOpenSpy).toHaveBeenLastCalledWith(
+        'vscode://file//workspace/path/to/file.ts?windowId=_blank',
+        '_self'
+      )
+      expect(showIdeSelector.value).toBe(false)
+      expect(pendingFilePath.value).toBe(null)
+      
+      vi.useRealTimers()
     })
 
     it('stores IntelliJ preference and opens pending file', () => {
@@ -164,6 +252,49 @@ describe('useIdeOpener', () => {
         'vscode://file//path/with spaces/file.ts?windowId=_blank',
         '_self'
       )
+    })
+  })
+
+  describe('baseDir handling', () => {
+    it('stores baseDir when showing selector and uses it when IDE is selected', async () => {
+      vi.useFakeTimers()
+      const { showIdeSelector, openInIde, selectIde } = useIdeOpener()
+      
+      openInIde('/workspace/file.ts', 10, '/workspace')
+      
+      expect(showIdeSelector.value).toBe(true)
+      expect(windowOpenSpy).not.toHaveBeenCalled()
+      
+      selectIde('vscode')
+      
+      expect(windowOpenSpy).toHaveBeenCalledWith(
+        'vscode://file//workspace?windowId=_blank',
+        '_self'
+      )
+      
+      await vi.advanceTimersByTimeAsync(250)
+      
+      expect(windowOpenSpy).toHaveBeenLastCalledWith(
+        'vscode://file//workspace/file.ts:10?windowId=_blank',
+        '_self'
+      )
+      
+      vi.useRealTimers()
+    })
+
+    it('clears baseDir when selection is cancelled', () => {
+      const { showIdeSelector, openInIde, cancelIdeSelection, selectIde } = useIdeOpener()
+      
+      openInIde('/workspace/file.ts', null, '/workspace')
+      expect(showIdeSelector.value).toBe(true)
+      
+      cancelIdeSelection()
+      expect(showIdeSelector.value).toBe(false)
+      
+      // Now if we select an IDE, it should not use the old baseDir
+      // (though there's no pending file, so nothing happens)
+      selectIde('vscode')
+      expect(windowOpenSpy).not.toHaveBeenCalled()
     })
   })
 })

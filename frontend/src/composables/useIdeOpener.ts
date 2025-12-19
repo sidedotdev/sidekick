@@ -7,22 +7,28 @@ const SESSION_STORAGE_KEY = 'sidekick-preferred-ide'
 export interface IdeOpener {
   showIdeSelector: Ref<boolean>
   pendingFilePath: Ref<string | null>
-  openInIde: (absoluteFilePath: string, lineNumber?: number | null) => void
+  openInIde: (absoluteFilePath: string, lineNumber?: number | null, baseDir?: string) => void
   selectIde: (ide: IdeType) => void
   cancelIdeSelection: () => void
 }
 
-export const IDE_OPENER_KEY: InjectionKey<(relativePath: string, lineNumber?: number | null) => void> = Symbol('ideOpener')
+export const IDE_OPENER_KEY: InjectionKey<(relativePath: string, lineNumber?: number | null, baseDir?: string) => void> = Symbol('ideOpener')
 
-function openFileInIde(absoluteFilePath: string, ide: IdeType, lineNumber?: number | null): void {
-  let url: string
+function openFileInIde(absoluteFilePath: string, ide: IdeType, lineNumber?: number | null, baseDir?: string): void {
   const lineFragment = lineNumber ? `:${lineNumber}` : ''
   if (ide === 'vscode') {
-    url = `vscode://file/${absoluteFilePath}${lineFragment}?windowId=_blank`
+    if (baseDir) {
+      window.open(`vscode://file/${baseDir}?windowId=_blank`, '_self')
+      setTimeout(() => {
+        window.open(`vscode://file/${absoluteFilePath}${lineFragment}?windowId=_blank`, '_self')
+      }, 250)
+    } else {
+      window.open(`vscode://file/${absoluteFilePath}${lineFragment}?windowId=_blank`, '_self')
+    }
   } else {
-    url = `idea://open?file=${encodeURIComponent(absoluteFilePath)}${lineFragment}`
+    const url = `idea://open?file=${encodeURIComponent(absoluteFilePath)}${lineFragment}`
+    window.open(url, '_self')
   }
-  window.open(url, '_self')
 }
 
 function getStoredIdePreference(): IdeType | null {
@@ -41,14 +47,16 @@ export function useIdeOpener(): IdeOpener {
   const showIdeSelector = ref(false)
   const pendingFilePath = ref<string | null>(null)
   const pendingLineNumber = ref<number | null>(null)
+  const pendingBaseDir = ref<string | null>(null)
 
-  function openInIde(absoluteFilePath: string, lineNumber?: number | null): void {
+  function openInIde(absoluteFilePath: string, lineNumber?: number | null, baseDir?: string): void {
     const storedIde = getStoredIdePreference()
     if (storedIde) {
-      openFileInIde(absoluteFilePath, storedIde, lineNumber)
+      openFileInIde(absoluteFilePath, storedIde, lineNumber, baseDir)
     } else {
       pendingFilePath.value = absoluteFilePath
       pendingLineNumber.value = lineNumber ?? null
+      pendingBaseDir.value = baseDir ?? null
       showIdeSelector.value = true
     }
   }
@@ -56,16 +64,18 @@ export function useIdeOpener(): IdeOpener {
   function selectIde(ide: IdeType): void {
     storeIdePreference(ide)
     if (pendingFilePath.value) {
-      openFileInIde(pendingFilePath.value, ide, pendingLineNumber.value)
+      openFileInIde(pendingFilePath.value, ide, pendingLineNumber.value, pendingBaseDir.value ?? undefined)
     }
     pendingFilePath.value = null
     pendingLineNumber.value = null
+    pendingBaseDir.value = null
     showIdeSelector.value = false
   }
 
   function cancelIdeSelection(): void {
     pendingFilePath.value = null
     pendingLineNumber.value = null
+    pendingBaseDir.value = null
     showIdeSelector.value = false
   }
 

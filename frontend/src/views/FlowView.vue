@@ -74,14 +74,14 @@ const workspace = ref<Workspace | null>(null)
 
 const { showIdeSelector, openInIde, selectIde, cancelIdeSelection } = useIdeOpener()
 
-const handleOpenInIde = (relativePath: string) => {
+const handleOpenInIde = (relativePath: string, lineNumber?: number | null) => {
   const baseDir = flow.value?.worktrees?.[0]?.workingDirectory || workspace.value?.localRepoDir
   if (!baseDir) {
     console.warn('No base directory available for opening file in IDE')
     return
   }
   const absolutePath = `${baseDir}/${relativePath}`
-  openInIde(absolutePath)
+  openInIde(absolutePath, lineNumber, baseDir)
 }
 
 provide(IDE_OPENER_KEY, handleOpenInIde)
