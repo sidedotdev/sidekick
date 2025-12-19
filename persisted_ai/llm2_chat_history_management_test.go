@@ -171,6 +171,27 @@ func TestManageLlm2ChatHistory_SupersededTypes(t *testing.T) {
 				textMsg(llm2.RoleAssistant, "U2"),
 			},
 		},
+		{
+			name: "Superseded type block ends at next marked message",
+			messages: []llm2.Message{
+				textMsgWithCtx(llm2.RoleUser, "TR1", ContextTypeTestResult),
+				textMsg(llm2.RoleAssistant, "U_TR1"),
+				textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),
+				textMsg(llm2.RoleAssistant, "U_UF1"),
+				textMsgWithCtx(llm2.RoleUser, "TR2", ContextTypeTestResult),
+				textMsg(llm2.RoleAssistant, "U_TR2"),
+				textMsgWithCtx(llm2.RoleUser, "UF2", ContextTypeUserFeedback),
+				textMsg(llm2.RoleAssistant, "U_UF2"),
+			},
+			expected: []llm2.Message{
+				textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),
+				textMsg(llm2.RoleAssistant, "U_UF1"),
+				textMsgWithCtx(llm2.RoleUser, "TR2", ContextTypeTestResult),
+				textMsg(llm2.RoleAssistant, "U_TR2"),
+				textMsgWithCtx(llm2.RoleUser, "UF2", ContextTypeUserFeedback),
+				textMsg(llm2.RoleAssistant, "U_UF2"),
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -286,19 +307,90 @@ func TestManageLlm2ChatHistory_EmptyHistory(t *testing.T) {
 }
 
 func TestManageLlm2ChatHistory_LastMessageRetention(t *testing.T) {
-	ca := &ChatHistoryActivities{}
-	messages := []llm2.Message{
-		textMsg(llm2.RoleUser, "First"),
-		textMsg(llm2.RoleAssistant, "Second"),
-		textMsg(llm2.RoleUser, "Last"),
+	tests := []struct {
+		name      string
+		messages  []llm2.Message
+		maxLength int
+		expected  []llm2.Message
+	}{
+		{
+			name: "Last message is a regular message and should be retained",
+			messages: []llm2.Message{
+				textMsg(llm2.RoleUser, "Message 1"),
+				textMsg(llm2.RoleAssistant, "Message 2"),
+				textMsg(llm2.RoleUser, "Message 3"),
+			},
+			maxLength: 10,
+			expected: []llm2.Message{
+				textMsg(llm2.RoleUser, "Message 3"),
+			},
+		},
+		{
+			name: "Last message is a tool response, its call should also be retained",
+			messages: []llm2.Message{
+				textMsg(llm2.RoleUser, "Message 1"),
+				toolUseMsg("123", "test", "{}"),
+				toolResultMsg("123", "test", "Tool Response"),
+			},
+			maxLength: 15,
+			expected: []llm2.Message{
+				toolUseMsg("123", "test", "{}"),
+				toolResultMsg("123", "test", "Tool Response"),
+			},
+		},
+		{
+			name: "History with only one message",
+			messages: []llm2.Message{
+				textMsg(llm2.RoleUser, "Single message"),
+			},
+			maxLength: 5,
+			expected: []llm2.Message{
+				textMsg(llm2.RoleUser, "Single message"),
+			},
+		},
+		{
+			name: "History with two messages, last is tool response",
+			messages: []llm2.Message{
+				toolUseMsg("123", "test", "{}"),
+				toolResultMsg("123", "test", "Tool Response"),
+			},
+			maxLength: 5,
+			expected: []llm2.Message{
+				toolUseMsg("123", "test", "{}"),
+				toolResultMsg("123", "test", "Tool Response"),
+			},
+		},
+		{
+			name: "Last message retention with other retained messages",
+			messages: []llm2.Message{
+				textMsgWithCtx(llm2.RoleUser, "Initial Instructions", ContextTypeInitialInstructions),
+				textMsg(llm2.RoleAssistant, "Message 2"),
+				textMsg(llm2.RoleUser, "Message 3"),
+			},
+			maxLength: 30,
+			expected: []llm2.Message{
+				textMsgWithCtx(llm2.RoleUser, "Initial Instructions", ContextTypeInitialInstructions),
+				textMsg(llm2.RoleUser, "Message 3"),
+			},
+		},
+		{
+			name: "Last message is tool response, but history has only one message",
+			messages: []llm2.Message{
+				toolResultMsg("123", "test", "Tool Response"),
+			},
+			maxLength: 5,
+			expected:  []llm2.Message{},
+		},
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 0)
-	assert.NoError(t, err)
-	assert.NotEmpty(t, result)
-
-	lastMsg := result[len(result)-1]
-	assert.Equal(t, "Last", lastMsg.Content[0].Text)
+	ca := &ChatHistoryActivities{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ca.ManageLlm2ChatHistory(tt.messages, tt.maxLength)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }
 
 func TestManageLlm2ChatHistory_LastMessageIsToolResult(t *testing.T) {
