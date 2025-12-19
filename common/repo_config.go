@@ -57,6 +57,8 @@ type RepoConfig struct {
 	// AgentConfig contains per-use-case configuration for agent loops.
 	// Keys are use case names (e.g., "requirements", "planning", "coding").
 	AgentConfig map[string]AgentUseCaseConfig `toml:"agent_config,omitempty"`
+
+	CommandPermissions CommandPermissionConfig `toml:"command_permissions,omitempty"`
 }
 
 type CommandConfig struct {

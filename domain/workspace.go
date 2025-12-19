@@ -22,8 +22,9 @@ type Workspace struct {
 // methods to new Accessor type within workspace package, extracted from db
 // package.
 type WorkspaceConfig struct {
-	LLM       common.LLMConfig       `json:"llm"`
-	Embedding common.EmbeddingConfig `json:"embedding"`
+	LLM                common.LLMConfig               `json:"llm"`
+	Embedding          common.EmbeddingConfig         `json:"embedding"`
+	CommandPermissions common.CommandPermissionConfig `json:"commandPermissions,omitempty"`
 }
 
 // WorkspaceStorage defines the interface for workspace-related database operations
