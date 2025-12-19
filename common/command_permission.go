@@ -206,3 +206,35 @@ func BaseCommandPermissions() CommandPermissionConfig {
 		},
 	}
 }
+
+// MergeCommandPermissions merges multiple permission configs in order.
+// Later configs append to earlier ones by default.
+// If ResetAutoApprove is true, that config's AutoApprove replaces all previous.
+// If ResetRequireApproval is true, that config's RequireApproval replaces all previous.
+// Deny lists always accumulate (no reset option for safety).
+func MergeCommandPermissions(configs ...CommandPermissionConfig) CommandPermissionConfig {
+	var result CommandPermissionConfig
+
+	for _, cfg := range configs {
+		// Handle auto-approve: reset or append
+		if cfg.ResetAutoApprove {
+			result.AutoApprove = make([]CommandPattern, len(cfg.AutoApprove))
+			copy(result.AutoApprove, cfg.AutoApprove)
+		} else {
+			result.AutoApprove = append(result.AutoApprove, cfg.AutoApprove...)
+		}
+
+		// Handle require-approval: reset or append
+		if cfg.ResetRequireApproval {
+			result.RequireApproval = make([]CommandPattern, len(cfg.RequireApproval))
+			copy(result.RequireApproval, cfg.RequireApproval)
+		} else {
+			result.RequireApproval = append(result.RequireApproval, cfg.RequireApproval...)
+		}
+
+		// Deny always accumulates (no reset for safety)
+		result.Deny = append(result.Deny, cfg.Deny...)
+	}
+
+	return result
+}
