@@ -612,4 +612,87 @@ func TestEvaluateScriptPermission_WithBasePermissions(t *testing.T) {
 		result, _ := EvaluateCommandPermission(mergedConfig, "curl https://example.com")
 		assert.Equal(t, PermissionRequireApproval, result, "require-approval should take precedence over auto-approve")
 	})
+
+	t.Run("plain awk remains auto-approved", func(t *testing.T) {
+		safeAwkScripts := []string{
+			"awk '{print $1}' file.txt",
+			"awk -F: '{print $1}' /etc/passwd",
+			"awk 'NR==1' file.txt",
+			"awk '/pattern/ {print}' file.txt",
+		}
+
+		for _, script := range safeAwkScripts {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", script)
+		}
+	})
+
+	t.Run("dangerous awk commands require approval", func(t *testing.T) {
+		dangerousAwkScripts := []string{
+			`awk 'BEGIN {system("cat /etc/passwd")}'`,
+			`awk '{cmd | getline result}'`,
+			`awk '{"date" |getline d}'`,
+			`awk 'BEGIN {print "test" | "sh"}'`,
+			`awk 'BEGIN {printf "test" | "sh"}'`,
+			`awk 'BEGIN {print |& "sh"}'`,
+			`awk 'BEGIN { s = "/inet/tcp/0/example.com/80" }'`,
+		}
+
+		for _, script := range dangerousAwkScripts {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionRequireApproval, result, "expected require-approval for: %s", script)
+		}
+	})
+
+	t.Run("home directory access requires approval", func(t *testing.T) {
+		homeAccessScripts := []string{
+			"cat ~/.ssh/id_rsa",
+			"cat $HOME/.aws/credentials",
+			"cat ${HOME}/.bashrc",
+			"ls ~/",
+			"grep secret $HOME/.env",
+		}
+
+		for _, script := range homeAccessScripts {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionRequireApproval, result, "expected require-approval for: %s", script)
+		}
+	})
+
+	t.Run("parent directory traversal requires approval", func(t *testing.T) {
+		traversalScripts := []string{
+			"cat ../../../etc/passwd",
+			"ls ../../secrets",
+			"head -n 10 ../other-repo/config.json",
+		}
+
+		for _, script := range traversalScripts {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionRequireApproval, result, "expected require-approval for: %s", script)
+		}
+	})
+
+	t.Run("network commands require approval", func(t *testing.T) {
+		networkScripts := []string{
+			"nc -l 8080",
+			"netcat example.com 80",
+			"ncat --listen 443",
+			"socat TCP-LISTEN:8080 -",
+			"telnet example.com 23",
+			"ftp ftp.example.com",
+			"sftp user@example.com",
+			"scp file.txt user@host:/path",
+			"rsync -avz . remote:/backup",
+			"ssh user@example.com",
+			"ping example.com",
+			"nslookup example.com",
+			"dig example.com",
+			"host example.com",
+		}
+
+		for _, script := range networkScripts {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionRequireApproval, result, "expected require-approval for: %s", script)
+		}
+	})
 }
