@@ -28,9 +28,14 @@ func init() {
 	common.Llm2ChatHistoryFactory = func(refs []common.MessageRef) common.ChatHistory {
 		h := &Llm2ChatHistory{
 			refs:        refs,
-			hydrated:    false,
-			messages:    nil,
 			unpersisted: []int{},
+		}
+		if len(refs) == 0 {
+			h.hydrated = true
+			h.messages = []llm2.Message{}
+		} else {
+			h.hydrated = false
+			h.messages = nil
 		}
 		return h
 	}

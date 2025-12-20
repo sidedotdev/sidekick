@@ -530,6 +530,34 @@ func TestChatHistoryContainer_UnmarshalJSON_DetectsLlm2Format(t *testing.T) {
 	assert.True(t, ok, "History should be *Llm2ChatHistory")
 }
 
+func TestChatHistoryContainer_UnmarshalJSON_EmptyRefsIsHydrated(t *testing.T) {
+	// Ensure the factory is registered
+	_ = NewLlm2ChatHistory("", "")
+
+	wrapper := struct {
+		Type string              `json:"type"`
+		Refs []common.MessageRef `json:"refs"`
+	}{
+		Type: "llm2",
+		Refs: []common.MessageRef{},
+	}
+	data, err := json.Marshal(wrapper)
+	require.NoError(t, err)
+
+	var container common.ChatHistoryContainer
+	err = json.Unmarshal(data, &container)
+	require.NoError(t, err)
+
+	assert.NotNil(t, container.History)
+	h, ok := container.History.(*Llm2ChatHistory)
+	require.True(t, ok, "History should be *Llm2ChatHistory")
+
+	assert.True(t, h.hydrated, "empty refs should be considered hydrated")
+	assert.NotNil(t, h.messages)
+	assert.Len(t, h.messages, 0)
+	assert.Len(t, h.refs, 0)
+}
+
 func TestChatHistoryContainer_UnmarshalJSON_FallsBackToLegacy(t *testing.T) {
 	msgs := []common.ChatMessage{
 		{Role: common.ChatMessageRoleUser, Content: "Hello"},
