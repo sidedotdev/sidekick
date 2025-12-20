@@ -195,6 +195,27 @@ func TestLlm2ChatHistory_UnmarshalJSON_SetsNotHydrated(t *testing.T) {
 	assert.Equal(t, "user", h.refs[0].Role)
 }
 
+func TestLlm2ChatHistory_UnmarshalJSON_EmptyRefsIsHydrated(t *testing.T) {
+	wrapper := struct {
+		Type string              `json:"type"`
+		Refs []common.MessageRef `json:"refs"`
+	}{
+		Type: "llm2",
+		Refs: []common.MessageRef{},
+	}
+	data, err := json.Marshal(wrapper)
+	require.NoError(t, err)
+
+	h := &Llm2ChatHistory{}
+	err = h.UnmarshalJSON(data)
+	require.NoError(t, err)
+
+	assert.True(t, h.hydrated, "empty refs should be considered hydrated")
+	assert.NotNil(t, h.messages)
+	assert.Len(t, h.messages, 0)
+	assert.Len(t, h.refs, 0)
+}
+
 func TestLlm2ChatHistory_Hydrate_RestoresContent(t *testing.T) {
 	// Create storage with pre-populated content blocks
 	storage := newMockKeyValueStorage()

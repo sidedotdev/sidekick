@@ -247,9 +247,14 @@ func (h *Llm2ChatHistory) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	h.refs = wrapper.Refs
-	h.hydrated = false
-	h.messages = nil
 	h.unpersisted = []int{}
+	if len(wrapper.Refs) == 0 {
+		h.hydrated = true
+		h.messages = []llm2.Message{}
+	} else {
+		h.hydrated = false
+		h.messages = nil
+	}
 	return nil
 }
 
