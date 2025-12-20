@@ -296,6 +296,16 @@ func TestExtractCommands(t *testing.T) {
 			expected: []string{"find . -execdir cmd {} +", "cmd {}"},
 		},
 		{
+			name:     "find with -ok",
+			script:   `find . -ok echo {} \;`,
+			expected: []string{`find . -ok echo {} \;`, "echo {}"},
+		},
+		{
+			name:     "find with -okdir",
+			script:   `find . -okdir printf "%s\n" {} \;`,
+			expected: []string{`find . -okdir printf "%s\n" {} \;`, `printf "%s\n" {}`},
+		},
+		{
 			name:     "fd with -x flag",
 			script:   "fd . -x cmd",
 			expected: []string{"fd . -x cmd", "cmd"},

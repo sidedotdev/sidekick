@@ -592,10 +592,10 @@ func handleSshCommand(parts []string, commands *[]string) {
 	handleWrapperWithPositionalArg(parts, commands, flagsWithArgs, 1)
 }
 
-// handleFindCommand extracts commands from -exec/-execdir clauses
+// handleFindCommand extracts commands from -exec/-execdir/-ok/-okdir clauses
 func handleFindCommand(parts []string, commands *[]string) {
 	for i := 0; i < len(parts); i++ {
-		if parts[i] == "-exec" || parts[i] == "-execdir" {
+		if parts[i] == "-exec" || parts[i] == "-execdir" || parts[i] == "-ok" || parts[i] == "-okdir" {
 			// Find the terminator (\; or +)
 			cmdParts := []string{}
 			for j := i + 1; j < len(parts); j++ {
