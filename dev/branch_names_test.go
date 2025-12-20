@@ -2,14 +2,17 @@ package dev
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"sidekick/common"
 	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/llm"
+	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
+	"sidekick/temp_common2"
 	"sidekick/utils"
 	"testing"
 
@@ -66,6 +69,28 @@ func (s *BranchNameTestSuite) SetupTest() {
 	var fa *flow_action.FlowActivities // use a nil struct pointer to call activities that are part of a structure
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil)
 
+	// Use version 1 for chat-history-llm2 (Llm2ChatHistory path) - called multiple times
+	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
+
+	// Mock Hydrate activity - marks the chat history as hydrated and returns it
+	var cha *ChatHistoryActivities
+	s.env.OnActivity(cha.Hydrate, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, chatHistory *common.ChatHistoryContainer, workspaceId string) (*common.ChatHistoryContainer, error) {
+			// The Hydrate activity should mark the history as hydrated
+			// For Llm2ChatHistory, we need to call Hydrate on it
+			if llm2History, ok := chatHistory.History.(*temp_common2.Llm2ChatHistory); ok {
+				// Hydrate with nil storage works for empty history
+				err := llm2History.Hydrate(ctx, nil)
+				if err != nil {
+					return nil, err
+				}
+				return chatHistory, nil
+			} else {
+				panic(fmt.Sprintf("not llm 2 chat history in hydrate: %v", chatHistory))
+			}
+		},
+	).Maybe()
+
 	// Mock git command to simulate existing branches
 	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
 		ExitStatus: 0,
@@ -86,10 +111,10 @@ func (s *BranchNameTestSuite) SetupTest() {
 }
 
 func (s *BranchNameTestSuite) TestSuccessfulBranchNameGeneration() {
-	var la *persisted_ai.LlmActivities
+	var la *persisted_ai.Llm2Activities
 
-	validResponse := testBranchNameToolResponse(s.T(), `{"candidates": ["user-auth-feature", "implement-login", "setup-authentication"]}`)
-	s.env.OnActivity(la.ChatStream, mock.Anything, mock.Anything).Return(validResponse, nil).Once()
+	validResponse := testBranchNameToolResponseLlm2(s.T(), `{"candidates": ["user-auth-feature", "implement-login", "setup-authentication"]}`)
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(validResponse, nil).Once()
 
 	req := BranchNameRequest{
 		Requirements: "Add user authn/login functionality",
@@ -106,10 +131,10 @@ func (s *BranchNameTestSuite) TestSuccessfulBranchNameGeneration() {
 }
 
 func (s *BranchNameTestSuite) TestNumericBranchNameGeneration() {
-	var la *persisted_ai.LlmActivities
+	var la *persisted_ai.Llm2Activities
 
-	validResponse := testBranchNameToolResponse(s.T(), `{"candidates": ["add-user-auth"]}`)
-	s.env.OnActivity(la.ChatStream, mock.Anything, mock.Anything).Return(validResponse, nil).Once()
+	validResponse := testBranchNameToolResponseLlm2(s.T(), `{"candidates": ["add-user-auth"]}`)
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(validResponse, nil).Once()
 
 	req := BranchNameRequest{
 		Requirements: "Add user authn/login functionality",
@@ -126,13 +151,13 @@ func (s *BranchNameTestSuite) TestNumericBranchNameGeneration() {
 }
 
 func (s *BranchNameTestSuite) TestInvalidBranchNameFormat() {
-	var la *persisted_ai.LlmActivities
-	invalidResponse := testBranchNameToolResponse(s.T(), `{"candidates": ["Invalid_Branch", "has spaces in it", "UPPERCASE-NAME"]}`)
-	s.env.OnActivity(la.ChatStream, mock.Anything, mock.Anything).Return(invalidResponse, nil).Once()
+	var la *persisted_ai.Llm2Activities
+	invalidResponse := testBranchNameToolResponseLlm2(s.T(), `{"candidates": ["Invalid_Branch", "has spaces in it", "UPPERCASE-NAME"]}`)
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(invalidResponse, nil).Once()
 
 	// Second attempt returns valid names
-	validResponse := testBranchNameToolResponse(s.T(), `{"candidates": ["user-auth-second-valid", "implement-login", "setup-authentication"]}`)
-	s.env.OnActivity(la.ChatStream, mock.Anything, mock.Anything).Return(validResponse, nil).Once()
+	validResponse := testBranchNameToolResponseLlm2(s.T(), `{"candidates": ["user-auth-second-valid", "implement-login", "setup-authentication"]}`)
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(validResponse, nil).Once()
 
 	req := BranchNameRequest{
 		Requirements: "Add user authn/login functionality",
@@ -148,9 +173,9 @@ func (s *BranchNameTestSuite) TestInvalidBranchNameFormat() {
 }
 
 func (s *BranchNameTestSuite) TestLLMFailureFallback() {
-	var la *persisted_ai.LlmActivities
+	var la *persisted_ai.Llm2Activities
 	// Simulate continuously failed LLM attempts
-	s.env.OnActivity(la.ChatStream, mock.Anything, mock.Anything).Return(nil, assert.AnError)
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(nil, assert.AnError)
 
 	req := BranchNameRequest{
 		Requirements: "Add user authn/login functionality",
@@ -167,9 +192,9 @@ func (s *BranchNameTestSuite) TestLLMFailureFallback() {
 }
 
 func (s *BranchNameTestSuite) TestBranchNameUniqueness() {
-	var la *persisted_ai.LlmActivities
-	validResponse := testBranchNameToolResponse(s.T(), `{"candidates": ["add-user-auth", "implement-login", "setup-authentication"]}`)
-	s.env.OnActivity(la.ChatStream, mock.Anything, mock.Anything).Return(validResponse, nil).Once()
+	var la *persisted_ai.Llm2Activities
+	validResponse := testBranchNameToolResponseLlm2(s.T(), `{"candidates": ["add-user-auth", "implement-login", "setup-authentication"]}`)
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Return(validResponse, nil).Once()
 
 	req := BranchNameRequest{
 		Requirements: "Add user authn/login functionality",
@@ -203,4 +228,22 @@ func testBranchNameToolResponse(t *testing.T, args string) *llm.ChatMessageRespo
 		Name:      generateBranchNamesTool.Name,
 		Arguments: args,
 	})
+}
+
+func testBranchNameToolResponseLlm2(t *testing.T, args string) *llm2.MessageResponse {
+	t.Helper()
+	return &llm2.MessageResponse{
+		Output: llm2.Message{
+			Role: "assistant",
+			Content: []llm2.ContentBlock{
+				{
+					Type: llm2.ContentBlockTypeToolUse,
+					ToolUse: &llm2.ToolUseBlock{
+						Name:      generateBranchNamesTool.Name,
+						Arguments: args,
+					},
+				},
+			},
+		},
+	}
 }

@@ -473,8 +473,8 @@ func TestLlm2ChatHistory_AccessorsPanicWhenNotHydrated(t *testing.T) {
 		},
 	}
 
-	t.Run("Len panics", func(t *testing.T) {
-		assert.Panics(t, func() {
+	t.Run("Len does not panic", func(t *testing.T) {
+		assert.NotPanics(t, func() {
 			h.Len()
 		})
 	})

@@ -199,7 +199,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 
 	// TODO store chat history in a way that can be referred to by id, and pass
 	// id to the activities to avoid bloating temporal db
-	chatHistory := &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
+	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 
 	maxAttempts := 17
 	repoConfig := dCtx.RepoConfig

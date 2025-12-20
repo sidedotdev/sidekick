@@ -176,27 +176,27 @@ type MessageResponse struct {
 }
 
 // GetMessage returns the Output message as a common.Message interface.
-func (r *MessageResponse) GetMessage() common.Message {
+func (r MessageResponse) GetMessage() common.Message {
 	return &r.Output
 }
 
 // GetStopReason returns the stop reason.
-func (r *MessageResponse) GetStopReason() string {
+func (r MessageResponse) GetStopReason() string {
 	return r.StopReason
 }
 
 // GetId returns the response ID.
-func (r *MessageResponse) GetId() string {
+func (r MessageResponse) GetId() string {
 	return r.Id
 }
 
 // GetInputTokens returns the number of input tokens used.
-func (r *MessageResponse) GetInputTokens() int {
+func (r MessageResponse) GetInputTokens() int {
 	return r.Usage.InputTokens
 }
 
 // GetOutputTokens returns the number of output tokens used.
-func (r *MessageResponse) GetOutputTokens() int {
+func (r MessageResponse) GetOutputTokens() int {
 	return r.Usage.OutputTokens
 }
 

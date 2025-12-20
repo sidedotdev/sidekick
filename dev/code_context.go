@@ -132,7 +132,7 @@ func PrepareRepoSummary(dCtx DevContext, requirements string) (string, string, e
 		return repoSummary, "", nil
 	}
 	// Call IdentifyInformationNeeds to get additional information needs
-	chatHistory := &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
+	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 	infoNeeds, err := IdentifyInformationNeeds(dCtx, chatHistory, repoSummary, requirements)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to identify information needs: %v", err)
@@ -241,7 +241,7 @@ func RefineAndRankCodeContext(dCtx DevContext, envContainer env.EnvContainer, pr
 func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestFirst bool, maxLength int) (*RequiredCodeContext, string, error) {
 	var requiredCodeContext RequiredCodeContext
 	var codeContext string
-	chatHistory := &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
+	chatHistory := NewVersionedChatHistory(actionCtx, actionCtx.WorkspaceId)
 	addCodeContextPrompt(chatHistory, promptInfo)
 	noRetryCtx := utils.NoRetryCtx(actionCtx)
 	attempts := 0

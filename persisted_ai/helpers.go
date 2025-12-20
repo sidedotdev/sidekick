@@ -8,6 +8,7 @@ import (
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/llm"
+	"sidekick/llm2"
 	"sidekick/utils"
 
 	"go.temporal.io/sdk/workflow"
@@ -162,10 +163,15 @@ func ForceToolCallWithTrackOptionsV2(
 
 	// single retry in case the llm is being dumb and not returning a tool call
 	if err == nil && len(response.GetMessage().GetToolCalls()) == 0 {
-		chatHistory.Append(llm.ChatMessage{
-			Role:    llm.ChatMessageRoleSystem,
-			Content: "Expected a tool call, but didn't get it. Embedding the json in the content is not sufficient. Please use the provided tool(s).",
-		})
+		msg := llm2.Message{
+			Role: llm2.RoleSystem,
+			Content: []llm2.ContentBlock{
+				{
+					Text: "Expected a tool call, but didn't get it. Embedding the json in the content is not sufficient. Please use the provided tool(s).",
+				},
+			},
+		}
+		chatHistory.Append(&msg)
 
 		actionCtx.ActionParams = options.ActionParams()
 		response, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {

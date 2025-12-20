@@ -161,7 +161,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 
 	// TODO store chat history in a way that can be referred to by id, and pass
 	// id to the activities to avoid bloating temporal db
-	chatHistory := &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
+	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 
 	modelConfigs, _ := dCtx.LLMConfig.GetModelsOrDefault(common.CodingKey)
 	modelAttemptCount := 0
@@ -208,7 +208,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		if modelIndex < len(modelConfigs) {
 			// TODO /gen capture the git checkout head all in a "Revert Edits" flow action
 			promptInfo = initialPromptInfo
-			chatHistory = &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
+			chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 			err := git.GitCheckoutHeadAll(dCtx.ExecContext)
 			if err != nil {
 				return fmt.Errorf("failed to reset working directory via git checkout: %v", err)

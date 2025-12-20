@@ -253,7 +253,7 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 		codeContext = repoSummary + "\n\n" + codeContext
 	}
 
-	chatHistory := &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
+	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 	addDevPlanPrompt(dCtx, chatHistory, InitialPlanningInfo{
 		CodeContext:    codeContext,
 		Requirements:   requirements,

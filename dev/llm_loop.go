@@ -62,7 +62,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *common.ChatHistoryContainer, l
 	}
 
 	if chatHistory == nil {
-		chatHistory = &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
+		chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 	}
 
 	iteration := &LlmIteration{

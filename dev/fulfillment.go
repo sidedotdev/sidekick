@@ -69,7 +69,7 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 	// were required to fulfill the requirements (eg already done in previous
 	// step), in which case we need more info in the chat history, eg summary of
 	// chat, and include that in the CheckWorkInfo struct.
-	chatHistory := getCriteriaFulfillmentPrompt(promptInfo)
+	chatHistory := getCriteriaFulfillmentPrompt(dCtx, dCtx.WorkspaceId, promptInfo)
 
 	modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
 	// Convert ChatHistoryContainer messages to []llm.ChatMessage for LLM call
@@ -119,8 +119,8 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 	return fulfillment, nil
 }
 
-func getCriteriaFulfillmentPrompt(promptInfo CheckWorkInfo) *common.ChatHistoryContainer {
-	chatHistory := &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
+func getCriteriaFulfillmentPrompt(ctx workflow.Context, workspaceId string, promptInfo CheckWorkInfo) *common.ChatHistoryContainer {
+	chatHistory := NewVersionedChatHistory(ctx, workspaceId)
 
 	var content string
 	if promptInfo.Step.Definition != "" {

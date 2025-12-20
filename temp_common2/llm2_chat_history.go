@@ -76,7 +76,7 @@ func (h *Llm2ChatHistory) Append(msg common.Message) {
 
 func (h *Llm2ChatHistory) Len() int {
 	if !h.hydrated {
-		panic("cannot get length of non-hydrated Llm2ChatHistory")
+		return len(h.refs)
 	}
 	return len(h.messages)
 }
@@ -120,7 +120,7 @@ func (h *Llm2ChatHistory) Messages() []common.Message {
 // Llm2Messages returns the underlying llm2.Message slice directly.
 func (h *Llm2ChatHistory) Llm2Messages() []llm2.Message {
 	if !h.hydrated {
-		panic("cannot get messages from non-hydrated Llm2ChatHistory")
+		panic("cannot get llm2 messages from non-hydrated Llm2ChatHistory")
 	}
 	return h.messages
 }

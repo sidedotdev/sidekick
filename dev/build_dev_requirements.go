@@ -233,7 +233,7 @@ func buildDevRequirementsSubflow(dCtx DevContext, initialInfo InitialDevRequirem
 	}
 
 	// Step 2: run the dev requirements loop
-	chatHistory := &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
+	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 	addDevRequirementsPrompt(chatHistory, initialInfo)
 	initialState := &buildDevRequirementsState{
 		contextSizeExtension: contextSizeExtension,
