@@ -18,9 +18,8 @@ const (
 
 // CommandPattern represents a pattern for matching commands
 type CommandPattern struct {
-	Pattern   string `toml:"pattern" json:"pattern" koanf:"pattern"`
-	Message   string `toml:"message,omitempty" json:"message,omitempty" koanf:"message,omitempty"`
-	Rationale string `toml:"rationale,omitempty" json:"rationale,omitempty" koanf:"rationale,omitempty"`
+	Pattern string `toml:"pattern" json:"pattern" koanf:"pattern"`
+	Message string `toml:"message,omitempty" json:"message,omitempty" koanf:"message,omitempty"`
 }
 
 // CommandPermissionConfig defines permission rules for shell commands
@@ -214,52 +213,52 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "dig"},
 			{Pattern: "host"},
 			// Shell redirection to network endpoints
-			{Pattern: `^.*/dev/(tcp|udp)/`, Rationale: "Shell redirection to TCP/UDP endpoints enables network exfiltration via otherwise safe commands and FD operations (e.g., echo, exec)."},
+			{Pattern: `^.*/dev/(tcp|udp)/`, Message: "Shell redirection to TCP/UDP endpoints enables network exfiltration via otherwise safe commands and FD operations (e.g., echo, exec)."},
 			// GNU sed command execution (s///e flag)
-			{Pattern: `^sed\b.*s.*/e\b`, Rationale: "GNU sed substitution with execute flag runs shell commands, enabling exfiltration or side effects."},
+			{Pattern: `^sed\b.*s.*/e\b`, Message: "GNU sed substitution with execute flag runs shell commands, enabling exfiltration or side effects."},
 			// GNU sed e command (standalone, with optional address like 1e or $e)
-			{Pattern: `^sed\b.*'[0-9$]*e[[:space:]]`, Rationale: "GNU sed `e` command executes shell commands for addressed lines, enabling exfiltration or side effects."},
+			{Pattern: `^sed\b.*'[0-9$]*e[[:space:]]`, Message: "GNU sed `e` command executes shell commands for addressed lines, enabling exfiltration or side effects."},
 		},
 		Deny: []CommandPattern{
 			// Destructive file operations
-			{Pattern: "rm -rf /", Message: "Recursive force delete of root directory is extremely dangerous", Rationale: "Deletes entire filesystem recursively without confirmation."},
-			{Pattern: "rm -rf ~", Message: "Recursive force delete of home directory is extremely dangerous", Rationale: "Deletes entire home directory recursively without confirmation."},
-			{Pattern: "rm -rf /*", Message: "Recursive force delete of root contents is extremely dangerous", Rationale: "Deletes all root directory contents recursively without confirmation."},
-			{Pattern: "rm -rf ~/*", Message: "Recursive force delete of home contents is extremely dangerous", Rationale: "Deletes all home directory contents recursively without confirmation."},
-			{Pattern: "rm -fr /", Message: "Recursive force delete of root directory is extremely dangerous", Rationale: "Deletes entire filesystem recursively without confirmation."},
-			{Pattern: "rm -fr ~", Message: "Recursive force delete of home directory is extremely dangerous", Rationale: "Deletes entire home directory recursively without confirmation."},
+			{Pattern: "rm -rf /", Message: "Recursive force delete of root directory is extremely dangerous"},
+			{Pattern: "rm -rf ~", Message: "Recursive force delete of home directory is extremely dangerous"},
+			{Pattern: "rm -rf /*", Message: "Recursive force delete of root contents is extremely dangerous"},
+			{Pattern: "rm -rf ~/*", Message: "Recursive force delete of home contents is extremely dangerous"},
+			{Pattern: "rm -fr /", Message: "Recursive force delete of root directory is extremely dangerous"},
+			{Pattern: "rm -fr ~", Message: "Recursive force delete of home directory is extremely dangerous"},
 			// Privilege escalation
-			{Pattern: "sudo", Message: "sudo commands require manual execution for security", Rationale: "Privilege escalation bypasses permission boundaries."},
-			{Pattern: "su ", Message: "su commands require manual execution for security", Rationale: "User switching bypasses permission boundaries."},
-			{Pattern: "doas", Message: "doas commands require manual execution for security", Rationale: "Privilege escalation bypasses permission boundaries."},
+			{Pattern: "sudo", Message: "sudo commands require manual execution for security"},
+			{Pattern: "su ", Message: "su commands require manual execution for security"},
+			{Pattern: "doas", Message: "doas commands require manual execution for security"},
 			// Dangerous permission changes
-			{Pattern: "chmod 777", Message: "Setting world-writable permissions is a security risk", Rationale: "World-writable permissions allow any user to modify files."},
-			{Pattern: "chmod -R 777", Message: "Recursively setting world-writable permissions is a security risk", Rationale: "Recursively setting world-writable permissions exposes entire directory trees."},
+			{Pattern: "chmod 777", Message: "Setting world-writable permissions is a security risk"},
+			{Pattern: "chmod -R 777", Message: "Recursively setting world-writable permissions is a security risk"},
 			// Disk/filesystem operations
-			{Pattern: "mkfs", Message: "Filesystem creation commands are extremely dangerous", Rationale: "Filesystem creation overwrites disk contents causing data loss."},
-			{Pattern: "dd if=", Message: "dd can overwrite disks and cause data loss", Rationale: "Low-level disk copying can overwrite partitions or devices."},
-			{Pattern: "fdisk", Message: "Disk partitioning commands are extremely dangerous", Rationale: "Partition table modifications can cause complete data loss."},
-			{Pattern: "parted", Message: "Disk partitioning commands are extremely dangerous", Rationale: "Partition table modifications can cause complete data loss."},
+			{Pattern: "mkfs", Message: "Filesystem creation commands are extremely dangerous"},
+			{Pattern: "dd if=", Message: "dd can overwrite disks and cause data loss"},
+			{Pattern: "fdisk", Message: "Disk partitioning commands are extremely dangerous"},
+			{Pattern: "parted", Message: "Disk partitioning commands are extremely dangerous"},
 			// Fork bomb
-			{Pattern: ":(){:|:&};:", Message: "Fork bomb detected - this will crash the system", Rationale: "Exponential process spawning exhausts system resources."},
+			{Pattern: ":(){:|:&};:", Message: "Fork bomb detected - this will crash the system"},
 			// Heredoc file creation (should use edit blocks instead)
-			{Pattern: "cat << EOF >", Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already", Rationale: "Heredoc redirections bypass edit block tracking and review."},
-			{Pattern: "cat <<EOF >", Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already", Rationale: "Heredoc redirections bypass edit block tracking and review."},
-			{Pattern: "cat <<-EOF >", Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already", Rationale: "Heredoc redirections bypass edit block tracking and review."},
-			{Pattern: "cat <<'EOF' >", Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already", Rationale: "Heredoc redirections bypass edit block tracking and review."},
-			{Pattern: `cat <<\"EOF\" >`, Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already", Rationale: "Heredoc redirections bypass edit block tracking and review."},
+			{Pattern: "cat << EOF >", Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
+			{Pattern: "cat <<EOF >", Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
+			{Pattern: "cat <<-EOF >", Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
+			{Pattern: "cat <<'EOF' >", Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
+			{Pattern: `cat <<\"EOF\" >`, Message: "Use edit blocks with APPEND_TO_FILE instead, or DELETE_FILE and CREATE_FILE to replace a file if it has been read in full already"},
 			// Network attacks
-			{Pattern: ":(){ :|:& };:", Message: "Fork bomb detected - this will crash the system", Rationale: "Exponential process spawning exhausts system resources."},
+			{Pattern: ":(){ :|:& };:", Message: "Fork bomb detected - this will crash the system"},
 			// History manipulation
-			{Pattern: "history -c", Message: "Clearing shell history is suspicious", Rationale: "History clearing may indicate attempt to hide malicious activity."},
-			{Pattern: "> ~/.bash_history", Message: "Clearing bash history is suspicious", Rationale: "History clearing may indicate attempt to hide malicious activity."},
+			{Pattern: "history -c", Message: "Clearing shell history is suspicious"},
+			{Pattern: "> ~/.bash_history", Message: "Clearing bash history is suspicious"},
 			// Shutdown/reboot
-			{Pattern: "shutdown", Message: "System shutdown requires manual execution", Rationale: "System shutdown causes service interruption."},
-			{Pattern: "reboot", Message: "System reboot requires manual execution", Rationale: "System reboot causes service interruption."},
-			{Pattern: "poweroff", Message: "System poweroff requires manual execution", Rationale: "System poweroff causes service interruption."},
-			{Pattern: "halt", Message: "System halt requires manual execution", Rationale: "System halt causes service interruption."},
-			{Pattern: "init 0", Message: "System shutdown requires manual execution", Rationale: "Runlevel 0 triggers system shutdown."},
-			{Pattern: "init 6", Message: "System reboot requires manual execution", Rationale: "Runlevel 6 triggers system reboot."},
+			{Pattern: "shutdown", Message: "System shutdown requires manual execution"},
+			{Pattern: "reboot", Message: "System reboot requires manual execution"},
+			{Pattern: "poweroff", Message: "System poweroff requires manual execution"},
+			{Pattern: "halt", Message: "System halt requires manual execution"},
+			{Pattern: "init 0", Message: "System shutdown requires manual execution"},
+			{Pattern: "init 6", Message: "System reboot requires manual execution"},
 		},
 	}
 }
