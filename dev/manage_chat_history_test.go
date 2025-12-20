@@ -761,6 +761,35 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesNewActiv
 	s.Equal("_", managedChatHistory.Get(0).(llm.ChatMessage).Content)
 }
 
+// Test_ManageChatHistory_UsesManageV3_WhenLlm2Version tests that ManageV3 is called for version 1
+func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesManageV3_WhenLlm2Version() {
+	chatHistory := &common.ChatHistoryContainer{
+		History: common.NewLegacyChatHistoryFromChatMessages([]llm.ChatMessage{{Content: "test"}}),
+	}
+	maxLength := 100
+
+	// Return version 1 for chat-history-llm2 to trigger ManageV3 path
+	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1))
+
+	// Expect ManageV3 activity to be called with (chatHistory, workspaceId, maxLength)
+	var ca *ChatHistoryActivities
+	s.env.OnActivity(ca.ManageV3, mock.Anything, mock.Anything, "test-workspace-id", maxLength).Return(
+		&common.ChatHistoryContainer{
+			History: common.NewLegacyChatHistoryFromChatMessages([]llm.ChatMessage{{Content: "managed"}}),
+		},
+		nil,
+	).Once()
+
+	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, maxLength)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var managedChatHistory *common.ChatHistoryContainer
+	s.env.GetWorkflowResult(&managedChatHistory)
+	s.Equal(1, managedChatHistory.Len())
+	s.Equal("managed", managedChatHistory.Get(0).(llm.ChatMessage).Content)
+}
+
 // TestManageChatHistoryWorkflow is the entry point for running the test suite
 func TestManageChatHistoryWorkflow(t *testing.T) {
 	t.Parallel()
