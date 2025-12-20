@@ -3,6 +3,7 @@ package dev
 import (
 	"fmt"
 	"path/filepath"
+	"sidekick/common"
 	"sidekick/env"
 	"sidekick/llm"
 
@@ -21,22 +22,50 @@ var runCommandTool = llm.Tool{
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&RunCommandParams{}),
 }
 
-// RunCommand handles the execution of shell commands with user approval
-func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
-	// Format approval prompt
-	approvalPrompt := "Allow running the following command?"
+// checkCommandPermission evaluates command permissions and handles user approval if needed.
+// Returns (proceed, message, error) where proceed indicates whether to execute the command,
+// message contains any early return message (for denied or unapproved commands), and error
+// for any failures during approval.
+func checkCommandPermission(dCtx DevContext, command string, workingDir string) (proceed bool, message string, err error) {
+	enableCommandPermissions := workflow.GetVersion(dCtx.Context, "command-permissions", workflow.DefaultVersion, 1) >= 1
 
-	// Get user approval
-	userResponse, err := GetUserApproval(dCtx, "run_command", approvalPrompt, map[string]any{
-		"command":    params.Command,
-		"workingDir": params.WorkingDir,
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to get user approval: %v", err)
+	if enableCommandPermissions {
+		permResult, permMessage := common.EvaluateScriptPermission(dCtx.RepoConfig.CommandPermissions, command)
+
+		switch permResult {
+		case common.PermissionDeny:
+			return false, fmt.Sprintf("Command denied: %s", permMessage), nil
+		case common.PermissionAutoApprove:
+			return true, "", nil
+		case common.PermissionRequireApproval:
+			// Fall through to request approval
+		}
 	}
 
+	// Request user approval (legacy behavior or when permission requires approval)
+	approvalPrompt := "Allow running the following command?"
+	userResponse, err := GetUserApproval(dCtx, "run_command", approvalPrompt, map[string]any{
+		"command":    command,
+		"workingDir": workingDir,
+	})
+	if err != nil {
+		return false, "", fmt.Errorf("failed to get user approval: %v", err)
+	}
 	if userResponse == nil || userResponse.Approved == nil || !*userResponse.Approved {
-		return "Command execution was not approved by user. They said:\n\n" + userResponse.Content, nil
+		return false, "Command execution was not approved by user. They said:\n\n" + userResponse.Content, nil
+	}
+
+	return true, "", nil
+}
+
+// RunCommand handles the execution of shell commands with user approval
+func RunCommand(dCtx DevContext, params RunCommandParams) (string, error) {
+	proceed, message, err := checkCommandPermission(dCtx, params.Command, params.WorkingDir)
+	if err != nil {
+		return "", err
+	}
+	if !proceed {
+		return message, nil
 	}
 
 	// Prepare working directory
