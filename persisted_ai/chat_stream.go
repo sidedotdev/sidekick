@@ -24,13 +24,16 @@ type ChatHistoryHydrateActivity func(
 // It uses workflow versioning to determine which path to take:
 // - Version 1 (Llm2ChatHistory): hydrates via Hydrate activity, calls Llm2Activities.Stream
 // - Default (LegacyChatHistory): calls LlmActivities.ChatStream
+//
+// Returns the updated chat history and the response as a common.MessageResponse.
+// Note: Callers are responsible for appending the response message to chat history.
 func ExecuteChatStream(
 	ctx workflow.Context,
 	options ChatStreamOptions,
 	chatHistory *common.ChatHistoryContainer,
 	workspaceId string,
 	hydrateActivity ChatHistoryHydrateActivity,
-) (*common.ChatHistoryContainer, error) {
+) (*common.ChatHistoryContainer, common.MessageResponse, error) {
 	v := workflow.GetVersion(ctx, "chat-history-llm2", workflow.DefaultVersion, 1)
 
 	if v == 1 {
@@ -46,16 +49,16 @@ func executeChatStreamV1(
 	chatHistory *common.ChatHistoryContainer,
 	workspaceId string,
 	hydrateActivity ChatHistoryHydrateActivity,
-) (*common.ChatHistoryContainer, error) {
+) (*common.ChatHistoryContainer, common.MessageResponse, error) {
 	// Hydrate the chat history first
 	err := workflow.ExecuteActivity(ctx, hydrateActivity, chatHistory, workspaceId).Get(ctx, &chatHistory)
 	if err != nil {
-		return nil, fmt.Errorf("failed to hydrate chat history: %w", err)
+		return nil, nil, fmt.Errorf("failed to hydrate chat history: %w", err)
 	}
 
 	llm2History, ok := chatHistory.History.(*temp_common2.Llm2ChatHistory)
 	if !ok {
-		return nil, fmt.Errorf("ExecuteChatStream version 1 requires Llm2ChatHistory, got %T", chatHistory.History)
+		return nil, nil, fmt.Errorf("ExecuteChatStream version 1 requires Llm2ChatHistory, got %T", chatHistory.History)
 	}
 
 	streamOptions := StreamOptions{
@@ -83,13 +86,10 @@ func executeChatStreamV1(
 	var response llm2.MessageResponse
 	err = workflow.ExecuteActivity(ctx, la.Stream, streamOptions).Get(ctx, &response)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	// Append the response to chat history
-	llm2History.Append(&response.Output)
-
-	return chatHistory, nil
+	return chatHistory, &response, nil
 }
 
 // executeChatStreamLegacy handles the LegacyChatHistory path.
@@ -97,10 +97,10 @@ func executeChatStreamLegacy(
 	ctx workflow.Context,
 	options ChatStreamOptions,
 	chatHistory *common.ChatHistoryContainer,
-) (*common.ChatHistoryContainer, error) {
+) (*common.ChatHistoryContainer, common.MessageResponse, error) {
 	legacyHistory, ok := chatHistory.History.(*common.LegacyChatHistory)
 	if !ok {
-		return nil, fmt.Errorf("ExecuteChatStream default version requires LegacyChatHistory, got %T", chatHistory.History)
+		return nil, nil, fmt.Errorf("ExecuteChatStream default version requires LegacyChatHistory, got %T", chatHistory.History)
 	}
 
 	// Convert messages to []llm.ChatMessage for the legacy API
@@ -136,11 +136,8 @@ func executeChatStreamLegacy(
 	var chatResponse llm.ChatMessageResponse
 	err := workflow.ExecuteActivity(ctx, la.ChatStream, legacyOptions).Get(ctx, &chatResponse)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	// Append the response to chat history
-	chatHistory.Append(chatResponse.ChatMessage)
-
-	return chatHistory, nil
+	return chatHistory, &chatResponse, nil
 }

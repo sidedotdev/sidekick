@@ -72,6 +72,31 @@ type Usage struct {
 	CacheWriteInputTokens int `json:"cacheWriteInputTokens"`
 }
 
+// GetMessage returns the embedded ChatMessage as a Message interface.
+func (r *ChatMessageResponse) GetMessage() Message {
+	return r.ChatMessage
+}
+
+// GetStopReason returns the stop reason.
+func (r *ChatMessageResponse) GetStopReason() string {
+	return r.StopReason
+}
+
+// GetId returns the response ID.
+func (r *ChatMessageResponse) GetId() string {
+	return r.Id
+}
+
+// GetInputTokens returns the number of input tokens used.
+func (r *ChatMessageResponse) GetInputTokens() int {
+	return r.Usage.InputTokens
+}
+
+// GetOutputTokens returns the number of output tokens used.
+func (r *ChatMessageResponse) GetOutputTokens() int {
+	return r.Usage.OutputTokens
+}
+
 /* based on openai's delta format */
 type ChatMessageDelta struct {
 	Role      ChatMessageRole `json:"role"`

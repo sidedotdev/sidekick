@@ -313,29 +313,35 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 		// call Open AI to get back messages that contain edit blocks
 		chatCtx := dCtx.WithCancelOnPause()
-		chatResponse, err := TrackedToolChat(chatCtx, "code_edits", authorEditBlockInput)
+		chatResponse, err := TrackedToolChatWithHistory(chatCtx, "code_edits", authorEditBlockInput, chatHistory)
 		if dCtx.GlobalState.Paused {
 			continue // UserRequestIfPaused will handle the pause
 		}
 		if err != nil {
 			return []EditBlock{}, err
 		}
-		chatHistory.Append(chatResponse.ChatMessage)
+		chatHistory.Append(chatResponse.GetMessage())
 
 		// Use history that is actually passed to the LLM, before
 		// ManageChatHistory was called, since that corresponds to what was
 		// actually visible to the LLM at the time edit blocks were generated
-		historyMessages := chatHistory.Messages()
-		visibleChatHistory := make([]llm.ChatMessage, len(historyMessages))
-		for i, msg := range historyMessages {
-			visibleChatHistory[i] = msg.(llm.ChatMessage)
-		}
+		/*
+			historyMessages := chatHistory.Messages()
+			visibleChatHistory := make([]llm.ChatMessage, len(historyMessages))
+			for i, msg := range historyMessages {
+				visibleChatHistory[i] = msg.(llm.ChatMessage)
+			}
+		*/
+		visibleChatHistory := authorEditBlockInput.Params.Messages
+
+		chatHistory.Append(chatResponse.GetMessage())
 		if v := workflow.GetVersion(dCtx, "bugfix-edit-block-visibility-orig-history", workflow.DefaultVersion, 1); v == 1 {
 			// this maintains the buggy behavior on older workflows to still replay them
-			visibleChatHistory = append(visibleChatHistory, chatResponse.ChatMessage)
+			visibleChatHistory = append(visibleChatHistory, chatResponse.GetMessage().(llm.ChatMessage))
 		}
+
 		tildeOnly := workflow.GetVersion(dCtx, "tilde-edit-block-fence", workflow.DefaultVersion, 1) >= 1
-		currentExtractedBlocks, err := ExtractEditBlocksWithVisibility(chatResponse.ChatMessage.Content, visibleChatHistory, tildeOnly)
+		currentExtractedBlocks, err := ExtractEditBlocksWithVisibility(chatResponse.GetMessage().GetContentString(), visibleChatHistory, tildeOnly)
 		if err != nil {
 			return []EditBlock{}, fmt.Errorf("%w: %v", ErrExtractEditBlocks, err)
 		}
@@ -353,8 +359,8 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		}
 
 		var toolCallResponses []ToolCallResponseInfo
-		if len(chatResponse.ToolCalls) > 0 {
-			toolCallResponses = handleToolCalls(dCtx, chatResponse.ToolCalls, nil)
+		if len(chatResponse.GetMessage().GetToolCalls()) > 0 {
+			toolCallResponses = handleToolCalls(dCtx, chatResponse.GetMessage().GetToolCalls(), nil)
 		}
 
 		// Add tool call responses to history

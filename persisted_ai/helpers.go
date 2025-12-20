@@ -113,6 +113,80 @@ func ForceToolCallWithTrackOptions(actionCtx flow_action.ActionContext, trackOpt
 	return &chatResponse, err
 }
 
+// ForceToolCallWithTrackOptionsV2 is like ForceToolCallWithTrackOptions but works with
+// ChatHistoryContainer and delegates to ExecuteChatStream for version-aware LLM calls.
+// Returns common.MessageResponse which provides GetMessage().GetToolCalls() for accessing tool calls.
+func ForceToolCallWithTrackOptionsV2(
+	ctx workflow.Context,
+	actionCtx flow_action.ActionContext,
+	trackOptions flow_action.TrackOptions,
+	llmConfig common.LLMConfig,
+	chatHistory *common.ChatHistoryContainer,
+	hydrateActivity ChatHistoryHydrateActivity,
+	tools ...*llm.Tool,
+) (common.MessageResponse, error) {
+	modelConfig, _ := llmConfig.GetModelConfig(common.DefaultKey, 0)
+
+	// Build options without messages - they come from chatHistory
+	options := ChatStreamOptions{
+		ToolChatOptions: llm.ToolChatOptions{
+			Secrets: *actionCtx.Secrets,
+			Params: llm.ToolChatParams{
+				ModelConfig: modelConfig,
+				Tools:       tools,
+				ToolChoice: llm.ToolChoice{
+					Type: llm.ToolChoiceTypeRequired,
+				},
+			},
+		},
+		WorkspaceId: actionCtx.WorkspaceId,
+		FlowId:      workflow.GetInfo(ctx).WorkflowExecution.ID,
+	}
+
+	if len(tools) == 1 {
+		options.Params.ToolChoice.Type = llm.ToolChoiceTypeTool
+		options.Params.ToolChoice.Name = tools[0].Name
+	}
+
+	actionCtx.ActionParams = options.ActionParams()
+	response, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
+		options.FlowActionId = flowAction.Id
+
+		_, msgResponse, err := ExecuteChatStream(ctx, options, chatHistory, actionCtx.WorkspaceId, hydrateActivity)
+		if err != nil {
+			return nil, err
+		}
+
+		return msgResponse, nil
+	})
+
+	// single retry in case the llm is being dumb and not returning a tool call
+	if err == nil && len(response.GetMessage().GetToolCalls()) == 0 {
+		chatHistory.Append(llm.ChatMessage{
+			Role:    llm.ChatMessageRoleSystem,
+			Content: "Expected a tool call, but didn't get it. Embedding the json in the content is not sufficient. Please use the provided tool(s).",
+		})
+
+		actionCtx.ActionParams = options.ActionParams()
+		response, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
+			options.FlowActionId = flowAction.Id
+
+			_, msgResponse, err := ExecuteChatStream(ctx, options, chatHistory, actionCtx.WorkspaceId, hydrateActivity)
+			if err != nil {
+				return nil, err
+			}
+
+			if len(msgResponse.GetMessage().GetToolCalls()) == 0 {
+				return nil, fmt.Errorf("no tool calls found in llm response")
+			}
+
+			return msgResponse, nil
+		})
+	}
+
+	return response, err
+}
+
 func ForceToolCall(actionCtx flow_action.ActionContext, llmConfig common.LLMConfig, params *llm.ToolChatParams, tools ...*llm.Tool) (*llm.ChatMessageResponse, error) {
 	return ForceToolCallWithTrackOptions(actionCtx, flow_action.TrackOptions{}, llmConfig, params, tools...)
 }

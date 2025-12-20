@@ -175,6 +175,31 @@ type MessageResponse struct {
 	ReasoningEffort string `json:"reasoningEffort"`
 }
 
+// GetMessage returns the Output message as a common.Message interface.
+func (r *MessageResponse) GetMessage() common.Message {
+	return &r.Output
+}
+
+// GetStopReason returns the stop reason.
+func (r *MessageResponse) GetStopReason() string {
+	return r.StopReason
+}
+
+// GetId returns the response ID.
+func (r *MessageResponse) GetId() string {
+	return r.Id
+}
+
+// GetInputTokens returns the number of input tokens used.
+func (r *MessageResponse) GetInputTokens() int {
+	return r.Usage.InputTokens
+}
+
+// GetOutputTokens returns the number of output tokens used.
+func (r *MessageResponse) GetOutputTokens() int {
+	return r.Usage.OutputTokens
+}
+
 // EventType enumerates provider-agnostic streaming event kinds for content blocks.
 // This is a small whitelist we can reliably map from OpenAI/Anthropic, etc.
 // No message-level start/stop or usage events are included by design.
