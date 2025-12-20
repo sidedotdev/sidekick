@@ -217,8 +217,8 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: `^.*/dev/(tcp|udp)/`, Rationale: "Shell redirection to TCP/UDP endpoints enables network exfiltration via otherwise safe commands and FD operations (e.g., echo, exec)."},
 			// GNU sed command execution (s///e flag)
 			{Pattern: `^sed\b.*s.*/e\b`, Rationale: "GNU sed substitution with execute flag runs shell commands, enabling exfiltration or side effects."},
-			// GNU sed e command
-			{Pattern: `^sed\b.*(^|[[:space:];])(\d+|\$)?e([[:space:];]|$)`, Rationale: "GNU sed `e` command executes shell commands for addressed lines, enabling exfiltration or side effects."},
+			// GNU sed e command (standalone, with optional address like 1e or $e)
+			{Pattern: `^sed\b.*'[0-9$]*e[[:space:]]`, Rationale: "GNU sed `e` command executes shell commands for addressed lines, enabling exfiltration or side effects."},
 		},
 		Deny: []CommandPattern{
 			// Destructive file operations
