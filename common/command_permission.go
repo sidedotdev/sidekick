@@ -177,6 +177,34 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			// Commands referencing secret files (regex patterns)
 			{Pattern: `.*\.env`},
 			{Pattern: `.*\.envrc`},
+			// Dangerous awk patterns that can execute commands or access network
+			{Pattern: `awk.*system\(`},
+			{Pattern: `awk.*\| *getline`},
+			{Pattern: `awk.*\|&`},
+			{Pattern: `awk.*/inet/`},
+			{Pattern: `awk.*print.*\|`},
+			{Pattern: `awk.*printf.*\|`},
+			// Home directory access (potential secret exfiltration)
+			{Pattern: `.*~`},
+			{Pattern: `.*\$HOME`},
+			{Pattern: `.*\$\{HOME\}`},
+			// Parent directory traversal (escaping repo context)
+			{Pattern: `.*\.\./`},
+			// Additional network commands
+			{Pattern: "nc"},
+			{Pattern: "netcat"},
+			{Pattern: "ncat"},
+			{Pattern: "socat"},
+			{Pattern: "telnet"},
+			{Pattern: "ftp"},
+			{Pattern: "sftp"},
+			{Pattern: "scp"},
+			{Pattern: "rsync"},
+			{Pattern: "ssh"},
+			{Pattern: "ping"},
+			{Pattern: "nslookup"},
+			{Pattern: "dig"},
+			{Pattern: "host"},
 		},
 		Deny: []CommandPattern{
 			// Destructive file operations
