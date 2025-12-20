@@ -400,6 +400,11 @@ func handleWrapperWithFlags(parts []string, commands *[]string, flagsWithArgs ma
 		innerCmd := strings.Join(parts[cmdStart:], " ")
 		if innerCmd != "" {
 			*commands = append(*commands, innerCmd)
+			// Recursively handle the inner command for nested wrappers
+			innerParts := parseCommandParts(innerCmd)
+			if len(innerParts) > 0 {
+				handleSpecialCommands(innerCmd, commands)
+			}
 		}
 	}
 }
@@ -567,6 +572,11 @@ func handleEnvCommand(parts []string, commands *[]string) {
 		innerCmd := strings.Join(parts[cmdStart:], " ")
 		if innerCmd != "" {
 			*commands = append(*commands, innerCmd)
+			// Recursively handle the inner command for nested wrappers
+			innerParts := parseCommandParts(innerCmd)
+			if len(innerParts) > 0 {
+				handleSpecialCommands(innerCmd, commands)
+			}
 		}
 	}
 }
