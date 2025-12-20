@@ -90,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import AutogrowTextarea from './AutogrowTextarea.vue'
 import SplitButton from 'primevue/splitbutton'
 import Button from 'primevue/button'
@@ -133,14 +133,41 @@ const emit = defineEmits<{
 
 const isEditMode = computed(() => !!props.task?.id)
 
-const description = ref(props.task?.description || '')
+const workspaceId = ref<string>(props.task?.workspaceId || store.workspaceId as string)
+
+const getDraftDescriptionKey = () => `draftDescription_${workspaceId.value}`
+const getLastBranchKey = () => `lastSelectedBranch_${workspaceId.value}`
+
+const getInitialDescription = (): string => {
+  if (props.task?.id) return props.task.description ?? ''
+  return localStorage.getItem(getDraftDescriptionKey()) || ''
+}
+
+const getInitialBranch = (): string | null => {
+  if (props.task?.id) return props.task.flowOptions?.startBranch ?? null
+  return localStorage.getItem(getLastBranchKey()) || null
+}
+
+const initialDescriptionValue = getInitialDescription()
+const initialBranchValue = getInitialBranch()
+
+const description = ref(initialDescriptionValue)
 const status = ref<TaskStatus>(props.task?.status || 'to_do')
 const flowType = ref(props.task?.flowType || localStorage.getItem('lastUsedFlowType') || 'basic_dev')
 const envType = ref<string>(props.task?.flowOptions?.envType || localStorage.getItem('lastUsedEnvType') || 'local')
 const determineRequirements = ref<boolean>(props.task?.flowOptions?.determineRequirements ?? true)
 const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
-const selectedBranch = ref<string | null>(props.task?.flowOptions?.startBranch || null)
-const workspaceId = ref<string>(props.task?.workspaceId || store.workspaceId as string)
+const selectedBranch = ref<string | null>(initialBranchValue)
+
+watch(description, (newVal) => {
+  if (!isEditMode.value) {
+    if (newVal.trim()) {
+      localStorage.setItem(getDraftDescriptionKey(), newVal)
+    } else {
+      localStorage.removeItem(getDraftDescriptionKey())
+    }
+  }
+})
 
 // Model configuration presets
 const presets = ref<ModelPreset[]>(loadPresets())
@@ -314,6 +341,10 @@ const submitTask = async () => {
   localStorage.setItem('lastUsedEnvType', envType.value)
 
   if (!isEditMode.value) {
+    localStorage.removeItem(getDraftDescriptionKey())
+    if (selectedBranch.value) {
+      localStorage.setItem(getLastBranchKey(), selectedBranch.value)
+    }
     description.value = ''
     flowType.value = ''
     status.value = 'to_do'
@@ -366,15 +397,13 @@ const safeClose = () => {
                   hasModelConfigChanges();
   } else {
     // Check changes for a new task: Compare current values against initial defaults
-    const initialDescription = '';
-    const initialSelectedBranch = null;
     const initialFlowType = localStorage.getItem('lastUsedFlowType') || 'basic_dev';
     const initialEnvType = localStorage.getItem('lastUsedEnvType') || 'local';
-    const initialDetermineRequirements = true; // Default for new task
+    const initialDetermineRequirements = true;
     const initialPlanningPrompt = '';
 
-    hasChanges = description.value !== initialDescription ||
-                 selectedBranch.value !== initialSelectedBranch ||
+    hasChanges = description.value !== initialDescriptionValue ||
+                 selectedBranch.value !== initialBranchValue ||
                  flowType.value !== initialFlowType ||
                  envType.value !== initialEnvType ||
                  determineRequirements.value !== initialDetermineRequirements ||
