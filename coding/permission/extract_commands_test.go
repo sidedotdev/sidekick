@@ -159,6 +159,26 @@ func TestExtractCommands(t *testing.T) {
 			expected: []string{"sudo -u user cmd", "cmd"},
 		},
 		{
+			name:     "sudo with -g flag",
+			script:   "sudo -g group cmd",
+			expected: []string{"sudo -g group cmd", "cmd"},
+		},
+		{
+			name:     "sudo with -C flag",
+			script:   "sudo -C 3 cmd",
+			expected: []string{"sudo -C 3 cmd", "cmd"},
+		},
+		{
+			name:     "sudo with -p flag",
+			script:   "sudo -p 'Password:' cmd",
+			expected: []string{"sudo -p 'Password:' cmd", "cmd"},
+		},
+		{
+			name:     "sudo with multiple flags",
+			script:   "sudo -u root -g wheel cmd",
+			expected: []string{"sudo -u root -g wheel cmd", "cmd"},
+		},
+		{
 			name:     "su -c command",
 			script:   `su -c "cmd"`,
 			expected: []string{`su -c "cmd"`, "cmd"},
@@ -200,14 +220,44 @@ func TestExtractCommands(t *testing.T) {
 			expected: []string{"nice -n 10 cmd", "cmd"},
 		},
 		{
+			name:     "nice with --adjustment flag",
+			script:   "nice --adjustment=10 cmd",
+			expected: []string{"nice --adjustment=10 cmd", "cmd"},
+		},
+		{
 			name:     "ionice with -c flag",
 			script:   "ionice -c 2 cmd",
 			expected: []string{"ionice -c 2 cmd", "cmd"},
 		},
 		{
+			name:     "ionice with -c and -n flags",
+			script:   "ionice -c 2 -n 7 cmd",
+			expected: []string{"ionice -c 2 -n 7 cmd", "cmd"},
+		},
+		{
+			name:     "ionice with -t flag",
+			script:   "ionice -t cmd",
+			expected: []string{"ionice -t cmd", "cmd"},
+		},
+		{
+			name:     "ionice with -c -n and -t flags",
+			script:   "ionice -c 2 -n 7 -t cmd",
+			expected: []string{"ionice -c 2 -n 7 -t cmd", "cmd"},
+		},
+		{
 			name:     "timeout with duration",
 			script:   "timeout 5s cmd",
 			expected: []string{"timeout 5s cmd", "cmd"},
+		},
+		{
+			name:     "timeout with -k flag",
+			script:   "timeout -k 5s 10s cmd",
+			expected: []string{"timeout -k 5s 10s cmd", "cmd"},
+		},
+		{
+			name:     "timeout with -s flag",
+			script:   "timeout -s KILL 5s cmd",
+			expected: []string{"timeout -s KILL 5s cmd", "cmd"},
 		},
 		{
 			name:     "stdbuf with -oL flag",
@@ -224,6 +274,16 @@ func TestExtractCommands(t *testing.T) {
 			name:     "ssh with -p flag",
 			script:   `ssh -p 22 host "cmd"`,
 			expected: []string{`ssh -p 22 host "cmd"`, "cmd"},
+		},
+		{
+			name:     "ssh with -i flag",
+			script:   `ssh -i ~/.ssh/key host "cmd"`,
+			expected: []string{`ssh -i ~/.ssh/key host "cmd"`, "cmd"},
+		},
+		{
+			name:     "ssh with multiple flags",
+			script:   `ssh -p 22 -i ~/.ssh/key host "cmd"`,
+			expected: []string{`ssh -p 22 -i ~/.ssh/key host "cmd"`, "cmd"},
 		},
 		{
 			name:     "find with -exec",
@@ -273,6 +333,21 @@ func TestExtractCommands(t *testing.T) {
 			expected: []string{"strace -f cmd", "cmd"},
 		},
 		{
+			name:     "strace with -p flag",
+			script:   "strace -p 1234 cmd",
+			expected: []string{"strace -p 1234 cmd", "cmd"},
+		},
+		{
+			name:     "strace with -o flag",
+			script:   "strace -o output.log cmd",
+			expected: []string{"strace -o output.log cmd", "cmd"},
+		},
+		{
+			name:     "strace with -e flag",
+			script:   "strace -e trace=open cmd",
+			expected: []string{"strace -e trace=open cmd", "cmd"},
+		},
+		{
 			name:     "ltrace command",
 			script:   "ltrace cmd",
 			expected: []string{"ltrace cmd", "cmd"},
@@ -288,6 +363,16 @@ func TestExtractCommands(t *testing.T) {
 			script:   "flock -n /lockfile cmd",
 			expected: []string{"flock -n /lockfile cmd", "cmd"},
 		},
+		{
+			name:     "flock with -w flag",
+			script:   "flock -w 10 /lockfile cmd",
+			expected: []string{"flock -w 10 /lockfile cmd", "cmd"},
+		},
+		{
+			name:     "flock with -c flag",
+			script:   `flock /lockfile -c "cmd1; cmd2"`,
+			expected: []string{`flock /lockfile -c "cmd1; cmd2"`, "cmd1", "cmd2"},
+		},
 		// Watching/repeating
 		{
 			name:     "watch simple",
@@ -298,6 +383,16 @@ func TestExtractCommands(t *testing.T) {
 			name:     "watch with -n flag",
 			script:   "watch -n 5 cmd",
 			expected: []string{"watch -n 5 cmd", "cmd"},
+		},
+		{
+			name:     "watch with -d flag",
+			script:   "watch -d cmd",
+			expected: []string{"watch -d cmd", "cmd"},
+		},
+		{
+			name:     "watch with -n and -d flags",
+			script:   "watch -n 5 -d cmd",
+			expected: []string{"watch -n 5 -d cmd", "cmd"},
 		},
 		{
 			name:     "entr command",
@@ -311,6 +406,11 @@ func TestExtractCommands(t *testing.T) {
 			expected: []string{"setpriv --reuid=1000 cmd", "cmd"},
 		},
 		{
+			name:     "setpriv with separate flag value",
+			script:   "setpriv --reuid 1000 cmd",
+			expected: []string{"setpriv --reuid 1000 cmd", "cmd"},
+		},
+		{
 			name:     "capsh with -- -c",
 			script:   `capsh -- -c "cmd"`,
 			expected: []string{`capsh -- -c "cmd"`, "cmd"},
@@ -320,11 +420,46 @@ func TestExtractCommands(t *testing.T) {
 			script:   "cgexec -g cpu:mygroup cmd",
 			expected: []string{"cgexec -g cpu:mygroup cmd", "cmd"},
 		},
+		{
+			name:     "cgexec with --sticky flag",
+			script:   "cgexec --sticky -g cpu:mygroup cmd",
+			expected: []string{"cgexec --sticky -g cpu:mygroup cmd", "cmd"},
+		},
+		{
+			name:     "cgexec with multiple -g flags",
+			script:   "cgexec -g cpu:mygroup -g memory:mygroup cmd",
+			expected: []string{"cgexec -g cpu:mygroup -g memory:mygroup cmd", "cmd"},
+		},
 		// Misc wrappers
 		{
 			name:     "systemd-run command",
 			script:   "systemd-run cmd",
 			expected: []string{"systemd-run cmd", "cmd"},
+		},
+		{
+			name:     "systemd-run with -u flag",
+			script:   "systemd-run -u myunit cmd",
+			expected: []string{"systemd-run -u myunit cmd", "cmd"},
+		},
+		{
+			name:     "systemd-run with -p flag",
+			script:   "systemd-run -p CPUQuota=50% cmd",
+			expected: []string{"systemd-run -p CPUQuota=50% cmd", "cmd"},
+		},
+		{
+			name:     "systemd-run with -t flag",
+			script:   "systemd-run -t cmd",
+			expected: []string{"systemd-run -t cmd", "cmd"},
+		},
+		{
+			name:     "systemd-run with --pty flag",
+			script:   "systemd-run --pty cmd",
+			expected: []string{"systemd-run --pty cmd", "cmd"},
+		},
+		{
+			name:     "systemd-run with -t and -u flags",
+			script:   "systemd-run -t -u myunit cmd",
+			expected: []string{"systemd-run -t -u myunit cmd", "cmd"},
 		},
 		{
 			name:     "dbus-run-session command",

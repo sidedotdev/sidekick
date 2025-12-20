@@ -158,7 +158,7 @@ func handleSpecialCommands(cmdText string, commands *[]string) {
 	case "nice":
 		handleWrapperWithFlags(parts, commands, map[string]bool{"-n": true})
 	case "ionice":
-		handleWrapperWithFlags(parts, commands, map[string]bool{"-c": true, "-n": true, "-t": true})
+		handleWrapperWithFlags(parts, commands, map[string]bool{"-c": true, "-n": true})
 	case "timeout":
 		handleWrapperWithPositionalArg(parts, commands, map[string]bool{"-k": true, "--kill-after": true, "-s": true, "--signal": true}, 1)
 	case "stdbuf":
@@ -194,7 +194,7 @@ func handleSpecialCommands(cmdText string, commands *[]string) {
 
 	// Watching/repeating
 	case "watch":
-		handleWrapperWithFlags(parts, commands, map[string]bool{"-n": true, "-d": true})
+		handleWrapperWithFlags(parts, commands, map[string]bool{"-n": true})
 	case "entr":
 		handleSimpleWrapper(parts, commands)
 
@@ -204,11 +204,11 @@ func handleSpecialCommands(cmdText string, commands *[]string) {
 	case "capsh":
 		handleCapshCommand(parts, commands)
 	case "cgexec":
-		handleWrapperWithFlags(parts, commands, map[string]bool{"-g": true, "--sticky": true})
+		handleWrapperWithFlags(parts, commands, map[string]bool{"-g": true})
 
 	// Misc wrappers
 	case "systemd-run":
-		handleWrapperWithFlags(parts, commands, map[string]bool{"-u": true, "--unit": true, "-p": true, "--property": true, "-t": true, "--pty": true, "-M": true, "--machine": true, "-E": true, "--setenv": true, "--uid": true, "--gid": true, "--nice": true, "--working-directory": true})
+		handleWrapperWithFlags(parts, commands, map[string]bool{"-u": true, "--unit": true, "-p": true, "--property": true, "-M": true, "--machine": true, "-E": true, "--setenv": true, "--uid": true, "--gid": true, "--nice": true, "--working-directory": true})
 	case "dbus-run-session":
 		handleSimpleWrapper(parts, commands)
 
