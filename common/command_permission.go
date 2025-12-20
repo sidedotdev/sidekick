@@ -117,6 +117,13 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "yarn list"},
 			{Pattern: "yarn outdated"},
 			{Pattern: "yarn audit"},
+			// Bun commands
+			{Pattern: "bun test"},
+			{Pattern: "bun run lint"},
+			{Pattern: "bun run build"},
+			{Pattern: "bun run check"},
+			{Pattern: "bun run format"},
+			{Pattern: "bun pm ls"},
 			// Python commands
 			{Pattern: "pytest"},
 			{Pattern: "python -m pytest"},
