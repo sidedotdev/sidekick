@@ -47,8 +47,6 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "grep"},
 			{Pattern: "find"},
 			{Pattern: "which"},
-			{Pattern: "env"},
-			{Pattern: "printenv"},
 			{Pattern: "date"},
 			{Pattern: "whoami"},
 			{Pattern: "hostname"},
@@ -162,14 +160,24 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			// Other common tools
 			{Pattern: "jq"},
 			{Pattern: "yq"},
-			{Pattern: "curl --head"},
-			{Pattern: "curl -I"},
 			{Pattern: "true"},
 			{Pattern: "false"},
 			{Pattern: "test"},
 			{Pattern: "["},
 		},
-		RequireApproval: []CommandPattern{},
+		RequireApproval: []CommandPattern{
+			// Commands that can expose secrets
+			{Pattern: "env"},
+			{Pattern: "printenv"},
+			// Network requests
+			{Pattern: "curl"},
+			{Pattern: "wget"},
+			{Pattern: "http"},
+			{Pattern: "https"},
+			// Commands referencing secret files (regex patterns)
+			{Pattern: `.*\.env`},
+			{Pattern: `.*\.envrc`},
+		},
 		Deny: []CommandPattern{
 			// Destructive file operations
 			{Pattern: "rm -rf /", Message: "Recursive force delete of root directory is extremely dangerous"},

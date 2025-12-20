@@ -580,4 +580,36 @@ func TestEvaluateScriptPermission_WithBasePermissions(t *testing.T) {
 			require.NotEmpty(t, msg, "expected message for denied command: %s", script)
 		}
 	})
+
+	t.Run("sensitive commands require approval", func(t *testing.T) {
+		sensitiveScripts := []string{
+			"env",
+			"printenv",
+			"curl https://example.com",
+			"wget http://example.com/file",
+			"cat .env",
+			"cat .envrc",
+			"source .env",
+			"grep password .env",
+		}
+
+		for _, script := range sensitiveScripts {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionRequireApproval, result, "expected require-approval for: %s", script)
+		}
+	})
+
+	t.Run("require-approval takes precedence over user auto-approve", func(t *testing.T) {
+		// Simulate a user config that tries to auto-approve curl
+		userConfig := CommandPermissionConfig{
+			AutoApprove: []CommandPattern{
+				{Pattern: "curl"},
+			},
+		}
+		mergedConfig := MergeCommandPermissions(BaseCommandPermissions(), userConfig)
+
+		// curl should still require approval because base RequireApproval takes precedence
+		result, _ := EvaluateCommandPermission(mergedConfig, "curl https://example.com")
+		assert.Equal(t, PermissionRequireApproval, result, "require-approval should take precedence over auto-approve")
+	})
 }

@@ -158,6 +158,44 @@ already:
 hints_path = "ai.instructions.md"
 ```
 
+#### command_permissions
+
+The `command_permissions` section controls which shell commands Sidekick can run automatically, which require user approval, and which are blocked entirely.
+
+```toml
+[command_permissions]
+auto_approve = [
+    { pattern = "go test" },
+    { pattern = "npm run lint" },
+]
+require_approval = [
+    { pattern = "git push" },
+]
+deny = [
+    { pattern = "rm -rf", message = "Recursive force delete is not allowed" },
+]
+```
+
+Patterns are matched as literal prefixes by default. If a pattern contains regex metacharacters (`\.*+?[](){}|^$`), it's compiled as a regex anchored at the start.
+
+Sidekick includes sensible defaults: common read-only commands like `ls`, `cat`, `git status`, `go test`, etc. are auto-approved, while dangerous commands like `sudo`, `rm -rf /`, `chmod 777` are denied.
+
+Permission configs are merged in order: base defaults → local config → repo config → workspace config. Use `reset_auto_approve = true` or `reset_require_approval = true` to replace (rather than append to) previous rules. Deny rules always accumulate.
+
+#### agent_config
+
+The `agent_config` section allows per-use-case configuration for agent loops.
+
+```toml
+[agent_config.coding]
+max_iterations_before_feedback = 10
+
+[agent_config.planning]
+max_iterations_before_feedback = 5
+```
+
+Use case names include `requirements`, `planning`, and `coding`.
+
 #### worktree_setup
 
 The `worktree_setup` field allows you to specify a shell script that will be
