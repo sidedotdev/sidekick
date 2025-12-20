@@ -98,13 +98,15 @@ type ChatHistoryContainer struct {
 }
 
 func (c *ChatHistoryContainer) UnmarshalJSON(data []byte) error {
-	// Detect format by checking for MessageRef fields (flowId, blockIds)
-	if isMessageRefFormat(data) && Llm2ChatHistoryFactory != nil {
-		var refs []MessageRef
-		if err := json.Unmarshal(data, &refs); err != nil {
+	// Detect Llm2 format by checking for {"type": "llm2", ...} wrapper object
+	if isLlm2Format(data) && Llm2ChatHistoryFactory != nil {
+		var wrapper struct {
+			Refs []MessageRef `json:"refs"`
+		}
+		if err := json.Unmarshal(data, &wrapper); err != nil {
 			return err
 		}
-		c.History = Llm2ChatHistoryFactory(refs)
+		c.History = Llm2ChatHistoryFactory(wrapper.Refs)
 		return nil
 	}
 
@@ -117,16 +119,16 @@ func (c *ChatHistoryContainer) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// isMessageRefFormat checks if the JSON data represents []MessageRef format
-// by looking for the presence of flowId and blockIds fields in the first element.
-func isMessageRefFormat(data []byte) bool {
-	var arr []map[string]json.RawMessage
-	if err := json.Unmarshal(data, &arr); err != nil || len(arr) == 0 {
+// isLlm2Format checks if the JSON data represents the Llm2ChatHistory wrapper format
+// by looking for {"type": "llm2", ...} structure.
+func isLlm2Format(data []byte) bool {
+	var obj struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
 		return false
 	}
-	_, hasFlowId := arr[0]["flowId"]
-	_, hasBlockIds := arr[0]["blockIds"]
-	return hasFlowId && hasBlockIds
+	return obj.Type == "llm2"
 }
 
 func (c *ChatHistoryContainer) MarshalJSON() ([]byte, error) {

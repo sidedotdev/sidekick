@@ -133,7 +133,7 @@ func TestLlm2ChatHistory_Messages(t *testing.T) {
 	assert.Equal(t, "Hi", messages[1].GetContentString())
 }
 
-func TestLlm2ChatHistory_MarshalJSON_ProducesRefsOnly(t *testing.T) {
+func TestLlm2ChatHistory_MarshalJSON_ProducesWrapperFormat(t *testing.T) {
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
 	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello world"}}})
 	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hi there"}}})
@@ -143,22 +143,26 @@ func TestLlm2ChatHistory_MarshalJSON_ProducesRefsOnly(t *testing.T) {
 	err := h.Persist(context.Background(), storage)
 	require.NoError(t, err)
 
-	// Marshal should produce refs-only JSON
+	// Marshal should produce wrapper format JSON
 	data, err := h.MarshalJSON()
 	require.NoError(t, err)
 
-	// Verify it's an array of refs
-	var refs []common.MessageRef
-	err = json.Unmarshal(data, &refs)
+	// Verify it's a wrapper object with type and refs
+	var wrapper struct {
+		Type string              `json:"type"`
+		Refs []common.MessageRef `json:"refs"`
+	}
+	err = json.Unmarshal(data, &wrapper)
 	require.NoError(t, err)
 
-	assert.Len(t, refs, 2)
-	assert.Equal(t, "flow-123", refs[0].FlowId)
-	assert.Equal(t, "user", refs[0].Role)
-	assert.NotEmpty(t, refs[0].BlockIds)
-	assert.Equal(t, "flow-123", refs[1].FlowId)
-	assert.Equal(t, "assistant", refs[1].Role)
-	assert.NotEmpty(t, refs[1].BlockIds)
+	assert.Equal(t, "llm2", wrapper.Type)
+	assert.Len(t, wrapper.Refs, 2)
+	assert.Equal(t, "flow-123", wrapper.Refs[0].FlowId)
+	assert.Equal(t, "user", wrapper.Refs[0].Role)
+	assert.NotEmpty(t, wrapper.Refs[0].BlockIds)
+	assert.Equal(t, "flow-123", wrapper.Refs[1].FlowId)
+	assert.Equal(t, "assistant", wrapper.Refs[1].Role)
+	assert.NotEmpty(t, wrapper.Refs[1].BlockIds)
 
 	// Verify message content is NOT in the JSON
 	jsonStr := string(data)
@@ -167,11 +171,17 @@ func TestLlm2ChatHistory_MarshalJSON_ProducesRefsOnly(t *testing.T) {
 }
 
 func TestLlm2ChatHistory_UnmarshalJSON_SetsNotHydrated(t *testing.T) {
-	refs := []common.MessageRef{
-		{FlowId: "flow-123", BlockIds: []string{"block-1"}, Role: "user"},
-		{FlowId: "flow-123", BlockIds: []string{"block-2"}, Role: "assistant"},
+	wrapper := struct {
+		Type string              `json:"type"`
+		Refs []common.MessageRef `json:"refs"`
+	}{
+		Type: "llm2",
+		Refs: []common.MessageRef{
+			{FlowId: "flow-123", BlockIds: []string{"block-1"}, Role: "user"},
+			{FlowId: "flow-123", BlockIds: []string{"block-2"}, Role: "assistant"},
+		},
 	}
-	data, err := json.Marshal(refs)
+	data, err := json.Marshal(wrapper)
 	require.NoError(t, err)
 
 	h := &Llm2ChatHistory{}
@@ -403,6 +413,37 @@ func TestLlm2ChatHistory_RoundTrip_WithToolCalls(t *testing.T) {
 	assert.Equal(t, "search", toolCalls[0].Name)
 }
 
+func TestLlm2ChatHistory_EmptyRoundTrip(t *testing.T) {
+	// Ensure the factory is registered
+	_ = NewLlm2ChatHistory("", "")
+
+	// Create empty history
+	original := NewLlm2ChatHistory("flow-123", "workspace-456")
+
+	// Marshal via container
+	container := common.ChatHistoryContainer{History: original}
+	data, err := json.Marshal(&container)
+	require.NoError(t, err)
+
+	// Verify the JSON has the wrapper format
+	var wrapper struct {
+		Type string `json:"type"`
+	}
+	err = json.Unmarshal(data, &wrapper)
+	require.NoError(t, err)
+	assert.Equal(t, "llm2", wrapper.Type)
+
+	// Unmarshal into new container
+	var restored common.ChatHistoryContainer
+	err = json.Unmarshal(data, &restored)
+	require.NoError(t, err)
+
+	// Verify it's still Llm2ChatHistory, not LegacyChatHistory
+	assert.NotNil(t, restored.History)
+	_, ok := restored.History.(*Llm2ChatHistory)
+	assert.True(t, ok, "Empty Llm2ChatHistory should round-trip as Llm2ChatHistory, not LegacyChatHistory")
+}
+
 func TestLlm2ChatHistory_AccessorsPanicWhenNotHydrated(t *testing.T) {
 	h := &Llm2ChatHistory{
 		hydrated: false,
@@ -442,15 +483,21 @@ func TestLlm2ChatHistory_AccessorsPanicWhenNotHydrated(t *testing.T) {
 	})
 }
 
-func TestChatHistoryContainer_UnmarshalJSON_DetectsMessageRefFormat(t *testing.T) {
+func TestChatHistoryContainer_UnmarshalJSON_DetectsLlm2Format(t *testing.T) {
 	// Ensure the factory is registered
 	_ = NewLlm2ChatHistory("", "")
 
-	refs := []common.MessageRef{
-		{FlowId: "flow-123", BlockIds: []string{"block-1", "block-2"}, Role: "user"},
-		{FlowId: "flow-123", BlockIds: []string{"block-3"}, Role: "assistant"},
+	wrapper := struct {
+		Type string              `json:"type"`
+		Refs []common.MessageRef `json:"refs"`
+	}{
+		Type: "llm2",
+		Refs: []common.MessageRef{
+			{FlowId: "flow-123", BlockIds: []string{"block-1", "block-2"}, Role: "user"},
+			{FlowId: "flow-123", BlockIds: []string{"block-3"}, Role: "assistant"},
+		},
 	}
-	data, err := json.Marshal(refs)
+	data, err := json.Marshal(wrapper)
 	require.NoError(t, err)
 
 	var container common.ChatHistoryContainer

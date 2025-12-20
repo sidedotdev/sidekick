@@ -228,16 +228,25 @@ func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueSt
 	return nil
 }
 
+// llm2ChatHistoryJSON is the wrapper format for Llm2ChatHistory serialization.
+type llm2ChatHistoryJSON struct {
+	Type string              `json:"type"`
+	Refs []common.MessageRef `json:"refs"`
+}
+
 func (h *Llm2ChatHistory) MarshalJSON() ([]byte, error) {
-	return json.Marshal(h.refs)
+	return json.Marshal(llm2ChatHistoryJSON{
+		Type: "llm2",
+		Refs: h.refs,
+	})
 }
 
 func (h *Llm2ChatHistory) UnmarshalJSON(data []byte) error {
-	var refs []common.MessageRef
-	if err := json.Unmarshal(data, &refs); err != nil {
+	var wrapper llm2ChatHistoryJSON
+	if err := json.Unmarshal(data, &wrapper); err != nil {
 		return err
 	}
-	h.refs = refs
+	h.refs = wrapper.Refs
 	h.hydrated = false
 	h.messages = nil
 	h.unpersisted = []int{}
