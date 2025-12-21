@@ -139,12 +139,12 @@ const getDraftDescriptionKey = () => `draftDescription_${workspaceId.value}`
 const getLastBranchKey = () => `lastSelectedBranch_${workspaceId.value}`
 
 const getInitialDescription = (): string => {
-  if (props.task?.id) return props.task.description ?? ''
+  if (props.task) return props.task.description ?? ''
   return localStorage.getItem(getDraftDescriptionKey()) || ''
 }
 
 const getInitialBranch = (): string | null => {
-  if (props.task?.id) return props.task.flowOptions?.startBranch ?? null
+  if (props.task) return props.task.flowOptions?.startBranch ?? null
   return localStorage.getItem(getLastBranchKey()) || null
 }
 
