@@ -11,6 +11,7 @@ import (
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/llm"
+	"sidekick/llm2"
 	"sidekick/srv"
 	"sidekick/utils"
 	"sort"
@@ -288,7 +289,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		}
 
 		// NOTE: this also ensures the tool call response is added to chat history
-		authorEditBlockInput := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo)
+		authorEditBlockInput, visibleChatHistory := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo)
 		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
 
 		// NOTE this MUST be below authorEditBlockInput to ensure tool call
@@ -322,17 +323,8 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		}
 		chatHistory.Append(chatResponse.GetMessage())
 
-		// Use history that is actually passed to the LLM, before
-		// ManageChatHistory was called, since that corresponds to what was
-		// actually visible to the LLM at the time edit blocks were generated
-		/*
-			historyMessages := chatHistory.Messages()
-			visibleChatHistory := make([]llm.ChatMessage, len(historyMessages))
-			for i, msg := range historyMessages {
-				visibleChatHistory[i] = msg.(llm.ChatMessage)
-			}
-		*/
-		visibleChatHistory := authorEditBlockInput.Params.Messages
+		// visibleChatHistory is captured before ManageChatHistory to reflect
+		// what was actually visible to the LLM when edit blocks were generated
 
 		chatHistory.Append(chatResponse.GetMessage())
 		if v := workflow.GetVersion(dCtx, "bugfix-edit-block-visibility-orig-history", workflow.DefaultVersion, 1); v == 1 {
@@ -409,8 +401,9 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	return extractedEditBlocks, nil
 }
 
-// TODO move to a coding-related package, eg coding/edit_block
-func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *common.ChatHistoryContainer, promptInfo PromptInfo) llm.ToolChatOptions {
+// buildAuthorEditBlockInput builds the LLM options for authoring edit blocks.
+// Returns the options and the visible messages (for edit block extraction).
+func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *common.ChatHistoryContainer, promptInfo PromptInfo) (llm2.Options, []llm.ChatMessage) {
 	// TODO extract chat message building into a separate function
 	var content string
 	role := llm.ChatMessageRoleUser
@@ -474,24 +467,25 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 		tools = append(tools, &getHelpOrInputTool)
 	}
 
-	// Convert Messages() to []llm.ChatMessage for LLM API
+	// Convert Messages() to []llm.ChatMessage for visibility tracking
 	messages := chatHistory.Messages()
 	chatMessages := make([]llm.ChatMessage, len(messages))
 	for i, msg := range messages {
 		chatMessages[i] = msg.(llm.ChatMessage)
 	}
 
-	return llm.ToolChatOptions{
+	options := llm2.Options{
 		Secrets: *dCtx.Secrets,
-		Params: llm.ToolChatParams{
-			Messages: chatMessages,
-			Tools:    tools,
+		Params: llm2.Params{
+			Tools: tools,
 			ToolChoice: llm.ToolChoice{
 				Type: llm.ToolChoiceTypeAuto,
 			},
 			ModelConfig: codingModelConfig,
 		},
 	}
+
+	return options, chatMessages
 }
 
 // we use these variable names so that code extracting edit blocks and merge conflict

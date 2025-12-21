@@ -73,7 +73,7 @@ func (s *BranchNameTestSuite) SetupTest() {
 	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
 
 	// Mock Hydrate activity - marks the chat history as hydrated and returns it
-	var cha *ChatHistoryActivities
+	var cha *persisted_ai.ChatHistoryActivities
 	s.env.OnActivity(cha.Hydrate, mock.Anything, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, chatHistory *common.ChatHistoryContainer, workspaceId string) (*common.ChatHistoryContainer, error) {
 			// The Hydrate activity should mark the history as hydrated

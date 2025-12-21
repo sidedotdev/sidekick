@@ -9,6 +9,7 @@ import (
 	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
+	"sidekick/llm2"
 	"sidekick/persisted_ai"
 
 	"github.com/invopop/jsonschema"
@@ -400,17 +401,10 @@ func generateDevRequirements(dCtx DevContext, chatHistory *common.ChatHistoryCon
 
 	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 
-	// Convert Messages() to []llm.ChatMessage for LLM API
-	messages := make([]llm.ChatMessage, 0, chatHistory.Len())
-	for _, msg := range chatHistory.Messages() {
-		messages = append(messages, msg.(llm.ChatMessage))
-	}
-
-	options := llm.ToolChatOptions{
+	options := llm2.Options{
 		Secrets: *dCtx.Secrets,
-		Params: llm.ToolChatParams{
-			Messages: messages,
-			Tools:    tools,
+		Params: llm2.Params{
+			Tools: tools,
 			ToolChoice: llm.ToolChoice{
 				Type: llm.ToolChoiceTypeAuto, // TODO test with llm.ToolChoiceTypeRequired
 			},
@@ -420,47 +414,22 @@ func generateDevRequirements(dCtx DevContext, chatHistory *common.ChatHistoryCon
 	return TrackedToolChatWithHistory(dCtx, "dev_requirements", options, chatHistory)
 }
 
-func TrackedToolChat(dCtx DevContext, actionType string, options llm.ToolChatOptions) (*llm.ChatMessageResponse, error) {
+// TrackedToolChatWithHistory works with ChatHistoryContainer
+// and delegates to persisted_ai.ExecuteChatStream for LLM calls.
+func TrackedToolChatWithHistory(dCtx DevContext, actionType string, options llm2.Options, chatHistory *common.ChatHistoryContainer) (common.MessageResponse, error) {
 	actionCtx := dCtx.NewActionContext("generate." + actionType)
-	actionCtx.ActionParams = options.ActionParams()
-	return Track(actionCtx, func(flowAction *domain.FlowAction) (*llm.ChatMessageResponse, error) {
-		if options.Params.Provider == "" {
-			options.Params.ModelConfig = dCtx.GetModelConfig(common.DefaultKey, 0, "default")
-		}
-		flowId := workflow.GetInfo(dCtx).WorkflowExecution.ID
-		chatStreamOptions := persisted_ai.ChatStreamOptions{
-			ToolChatOptions: options,
-			WorkspaceId:     dCtx.WorkspaceId,
-			FlowId:          flowId,
-			FlowActionId:    flowAction.Id,
-		}
-		var chatResponse llm.ChatMessageResponse
-		var la *persisted_ai.LlmActivities // use a nil struct pointer to call activities that are part of a structure
-		heartbeatCtx := actionCtx.WithLlmHeartbeatCtx()
-		err := flow_action.PerformWithUserRetry(heartbeatCtx.FlowActionContext(), la.ChatStream, &chatResponse, chatStreamOptions)
-		if err != nil {
-			return nil, fmt.Errorf("error during tracked tool chat action '%s': %v", actionType, err)
-		}
-
-		return &chatResponse, nil
-	})
-}
-
-// TrackedToolChatWithHistory is like TrackedToolChat but works with ChatHistoryContainer
-// and delegates to persisted_ai.ExecuteChatStream for version-aware LLM calls.
-func TrackedToolChatWithHistory(dCtx DevContext, actionType string, options llm.ToolChatOptions, chatHistory *common.ChatHistoryContainer) (common.MessageResponse, error) {
-	actionCtx := dCtx.NewActionContext("generate." + actionType)
-	actionCtx.ActionParams = options.ActionParams()
+	actionCtx.ActionParams = llm.ToolChatOptions{Secrets: options.Secrets, Params: llm.ToolChatParams{ModelConfig: options.Params.ModelConfig}}.ActionParams()
 	return Track(actionCtx, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
-		if options.Params.Provider == "" {
+		if options.Params.ModelConfig.Provider == "" {
 			options.Params.ModelConfig = dCtx.GetModelConfig(common.DefaultKey, 0, "default")
 		}
 		flowId := workflow.GetInfo(dCtx).WorkflowExecution.ID
-		chatStreamOptions := persisted_ai.ChatStreamOptions{
-			ToolChatOptions: options,
-			WorkspaceId:     dCtx.WorkspaceId,
-			FlowId:          flowId,
-			FlowActionId:    flowAction.Id,
+
+		chatStreamOptions := persisted_ai.ChatStreamOptionsV2{
+			Options:      options,
+			WorkspaceId:  dCtx.WorkspaceId,
+			FlowId:       flowId,
+			FlowActionId: flowAction.Id,
 		}
 
 		_, response, err := persisted_ai.ExecuteChatStream(
@@ -468,7 +437,6 @@ func TrackedToolChatWithHistory(dCtx DevContext, actionType string, options llm.
 			chatStreamOptions,
 			chatHistory,
 			dCtx.WorkspaceId,
-			HydrateActivityFunc(),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("error during tracked tool chat action '%s': %v", actionType, err)

@@ -8,6 +8,7 @@ import (
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/llm"
+	"sidekick/llm2"
 	"sidekick/utils"
 
 	"go.temporal.io/sdk/workflow"
@@ -114,7 +115,7 @@ func ForceToolCallWithTrackOptions(actionCtx flow_action.ActionContext, trackOpt
 }
 
 // ForceToolCallWithTrackOptionsV2 is like ForceToolCallWithTrackOptions but works with
-// ChatHistoryContainer and delegates to ExecuteChatStream for version-aware LLM calls.
+// ChatHistoryContainer and delegates to ExecuteChatStream for LLM calls.
 // Returns common.MessageResponse which provides GetMessage().GetToolCalls() for accessing tool calls.
 func ForceToolCallWithTrackOptionsV2(
 	ctx workflow.Context,
@@ -122,37 +123,36 @@ func ForceToolCallWithTrackOptionsV2(
 	trackOptions flow_action.TrackOptions,
 	llmConfig common.LLMConfig,
 	chatHistory *common.ChatHistoryContainer,
-	hydrateActivity ChatHistoryHydrateActivity,
 	tools ...*llm.Tool,
 ) (common.MessageResponse, error) {
 	modelConfig, _ := llmConfig.GetModelConfig(common.DefaultKey, 0)
 
-	// Build options without messages - they come from chatHistory
-	options := ChatStreamOptions{
-		ToolChatOptions: llm.ToolChatOptions{
+	toolChoice := llm.ToolChoice{
+		Type: llm.ToolChoiceTypeRequired,
+	}
+	if len(tools) == 1 {
+		toolChoice.Type = llm.ToolChoiceTypeTool
+		toolChoice.Name = tools[0].Name
+	}
+
+	options := ChatStreamOptionsV2{
+		Options: llm2.Options{
 			Secrets: *actionCtx.Secrets,
-			Params: llm.ToolChatParams{
+			Params: llm2.Params{
 				ModelConfig: modelConfig,
 				Tools:       tools,
-				ToolChoice: llm.ToolChoice{
-					Type: llm.ToolChoiceTypeRequired,
-				},
+				ToolChoice:  toolChoice,
 			},
 		},
 		WorkspaceId: actionCtx.WorkspaceId,
 		FlowId:      workflow.GetInfo(ctx).WorkflowExecution.ID,
 	}
 
-	if len(tools) == 1 {
-		options.Params.ToolChoice.Type = llm.ToolChoiceTypeTool
-		options.Params.ToolChoice.Name = tools[0].Name
-	}
-
-	actionCtx.ActionParams = options.ActionParams()
+	actionCtx.ActionParams = llm.ToolChatOptions{Secrets: options.Secrets, Params: llm.ToolChatParams{ModelConfig: modelConfig}}.ActionParams()
 	response, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		options.FlowActionId = flowAction.Id
 
-		_, msgResponse, err := ExecuteChatStream(ctx, options, chatHistory, actionCtx.WorkspaceId, hydrateActivity)
+		_, msgResponse, err := ExecuteChatStream(ctx, options, chatHistory, actionCtx.WorkspaceId)
 		if err != nil {
 			return nil, err
 		}
@@ -174,11 +174,11 @@ func ForceToolCallWithTrackOptionsV2(
 		}
 		chatHistory.Append(retryMsg)
 
-		actionCtx.ActionParams = options.ActionParams()
+		actionCtx.ActionParams = llm.ToolChatOptions{Secrets: options.Secrets, Params: llm.ToolChatParams{ModelConfig: modelConfig}}.ActionParams()
 		response, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
 			options.FlowActionId = flowAction.Id
 
-			_, msgResponse, err := ExecuteChatStream(ctx, options, chatHistory, actionCtx.WorkspaceId, hydrateActivity)
+			_, msgResponse, err := ExecuteChatStream(ctx, options, chatHistory, actionCtx.WorkspaceId)
 			if err != nil {
 				return nil, err
 			}

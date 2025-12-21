@@ -8,6 +8,7 @@ import (
 	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
+	"sidekick/llm2"
 	"strings"
 
 	"github.com/invopop/jsonschema"
@@ -510,17 +511,10 @@ func generateDevPlan(dCtx DevContext, chatHistory *common.ChatHistoryContainer, 
 
 	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 
-	// Convert Messages() to []llm.ChatMessage for LLM API
-	messages := make([]llm.ChatMessage, 0, chatHistory.Len())
-	for _, msg := range chatHistory.Messages() {
-		messages = append(messages, msg.(llm.ChatMessage))
-	}
-
-	chatOptions := llm.ToolChatOptions{
+	chatOptions := llm2.Options{
 		Secrets: *dCtx.Secrets,
-		Params: llm.ToolChatParams{
-			Messages: messages,
-			Tools:    tools,
+		Params: llm2.Params{
+			Tools: tools,
 			ToolChoice: llm.ToolChoice{
 				Type: llm.ToolChoiceTypeAuto,
 			},

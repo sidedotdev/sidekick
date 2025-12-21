@@ -7,6 +7,7 @@ import (
 	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/llm"
+	"sidekick/llm2"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -292,17 +293,24 @@ Here is the test result output to summarize:
 
 	modelConfig := dCtx.GetModelConfig(common.SummarizationKey, 0, "small")
 
-	toolChatOptions := llm.ToolChatOptions{
+	// Create a versioned chat history with just the prompt
+	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+	chatHistory.Append(llm.ChatMessage{
+		Role:    llm.ChatMessageRoleUser,
+		Content: prompt,
+	})
+
+	options := llm2.Options{
 		Secrets: *dCtx.Secrets,
-		Params: llm.PromptToToolChatParams(prompt, llm.ChatControlParams{
+		Params: llm2.Params{
 			ModelConfig: modelConfig,
-		}),
+		},
 	}
-	chatResponse, err := TrackedToolChat(dCtx, "summarize_tests", toolChatOptions)
+	chatResponse, err := TrackedToolChatWithHistory(dCtx, "summarize_tests", options, chatHistory)
 	if err != nil {
 		return "", err
 	}
-	summarizedOutput := chatResponse.Content
+	summarizedOutput := chatResponse.GetMessage().GetContentString()
 
 	if len(summarizedOutput) > maxTestOutputSize {
 		messageFormat := "\n...\nNote: the summarized test output was too long, so we truncated the last %d characters.\n\n"

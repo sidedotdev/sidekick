@@ -1,7 +1,6 @@
 package persisted_ai
 
 import (
-	"context"
 	"fmt"
 
 	"sidekick/common"
@@ -12,46 +11,62 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// ChatHistoryHydrateActivity is a function type matching the Hydrate activity signature.
-// This allows ExecuteChatStream to call the activity without importing the dev package.
-type ChatHistoryHydrateActivity func(
-	ctx context.Context,
-	chatHistory *common.ChatHistoryContainer,
-	workspaceId string,
-) (*common.ChatHistoryContainer, error)
+// ChatStreamOptionsV2 combines llm2.Options with workflow/flow context identifiers.
+// Used for the llm2 path in ExecuteChatStream.
+type ChatStreamOptionsV2 struct {
+	llm2.Options
+	WorkspaceId  string
+	FlowId       string
+	FlowActionId string
+}
 
 // ExecuteChatStream executes an LLM chat stream and appends the response to the chat history.
 // It uses workflow versioning to determine which path to take:
-// - Version 1 (Llm2ChatHistory): hydrates via Hydrate activity, calls Llm2Activities.Stream
+// - Version 1 (Llm2ChatHistory): calls Llm2Activities.Stream
 // - Default (LegacyChatHistory): calls LlmActivities.ChatStream
 //
 // Returns the updated chat history and the response as a common.MessageResponse.
 // Note: Callers are responsible for appending the response message to chat history.
 func ExecuteChatStream(
 	ctx workflow.Context,
-	options ChatStreamOptions,
+	options ChatStreamOptionsV2,
 	chatHistory *common.ChatHistoryContainer,
 	workspaceId string,
-	hydrateActivity ChatHistoryHydrateActivity,
 ) (*common.ChatHistoryContainer, common.MessageResponse, error) {
 	v := workflow.GetVersion(ctx, "chat-history-llm2", workflow.DefaultVersion, 1)
 
 	if v == 1 {
-		return executeChatStreamV1(ctx, options, chatHistory, workspaceId, hydrateActivity)
+		return executeChatStreamV1(ctx, options, chatHistory, workspaceId)
 	}
-	return executeChatStreamLegacy(ctx, options, chatHistory)
+
+	legacyOptions := ChatStreamOptions{
+		ToolChatOptions: llm.ToolChatOptions{
+			Secrets: options.Secrets,
+			Params: llm.ToolChatParams{
+				Tools:             options.Params.Tools,
+				ToolChoice:        options.Params.ToolChoice,
+				Temperature:       options.Params.Temperature,
+				ModelConfig:       options.Params.ModelConfig,
+				ParallelToolCalls: options.Params.ParallelToolCalls,
+			},
+		},
+		WorkspaceId:  options.WorkspaceId,
+		FlowId:       options.FlowId,
+		FlowActionId: options.FlowActionId,
+	}
+	return executeChatStreamLegacy(ctx, legacyOptions, chatHistory)
 }
 
 // executeChatStreamV1 handles the Llm2ChatHistory path.
 func executeChatStreamV1(
 	ctx workflow.Context,
-	options ChatStreamOptions,
+	options ChatStreamOptionsV2,
 	chatHistory *common.ChatHistoryContainer,
 	workspaceId string,
-	hydrateActivity ChatHistoryHydrateActivity,
 ) (*common.ChatHistoryContainer, common.MessageResponse, error) {
 	// Hydrate the chat history first
-	err := workflow.ExecuteActivity(ctx, hydrateActivity, chatHistory, workspaceId).Get(ctx, &chatHistory)
+	var cha *ChatHistoryActivities
+	err := workflow.ExecuteActivity(ctx, cha.Hydrate, chatHistory, workspaceId).Get(ctx, &chatHistory)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to hydrate chat history: %w", err)
 	}
@@ -61,26 +76,14 @@ func executeChatStreamV1(
 		return nil, nil, fmt.Errorf("ExecuteChatStream version 1 requires Llm2ChatHistory, got %T", chatHistory.History)
 	}
 
+	// Pass options directly to StreamOptions, only adding messages from history
 	streamOptions := StreamOptions{
-		Options: llm2.Options{
-			Secrets: options.Secrets,
-			Params: llm2.Params{
-				Messages:    llm2History.Llm2Messages(),
-				Tools:       options.Params.Tools,
-				ToolChoice:  options.Params.ToolChoice,
-				Temperature: options.Params.Temperature,
-				MaxTokens:   options.Params.MaxTokens,
-				ModelConfig: options.Params.ModelConfig,
-			},
-		},
+		Options:      options.Options,
 		WorkspaceId:  options.WorkspaceId,
 		FlowId:       options.FlowId,
 		FlowActionId: options.FlowActionId,
 	}
-
-	if options.Params.ParallelToolCalls != nil {
-		streamOptions.Params.ParallelToolCalls = options.Params.ParallelToolCalls
-	}
+	streamOptions.Params.Messages = llm2History.Llm2Messages()
 
 	var la *Llm2Activities
 	var response llm2.MessageResponse

@@ -8,6 +8,7 @@ import (
 	"sidekick/common"
 	"sidekick/fflag"
 	"sidekick/llm"
+	"sidekick/persisted_ai"
 	"slices"
 	"strconv"
 	"strings"
@@ -71,7 +72,8 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *common.ChatHistoryCont
 	v := workflow.GetVersion(ctx, "chat-history-llm2", workflow.DefaultVersion, 1)
 	if v == 1 {
 		var managedHistory *common.ChatHistoryContainer
-		activityFuture := workflow.ExecuteActivity(ctx, (*ChatHistoryActivities).ManageV3, chatHistory, workspaceId, maxLength)
+		var cha *persisted_ai.ChatHistoryActivities
+		activityFuture := workflow.ExecuteActivity(ctx, cha.ManageV3, chatHistory, workspaceId, maxLength)
 		err := activityFuture.Get(ctx, &managedHistory)
 		if err != nil {
 			wrapErr := fmt.Errorf("ManageChatHistory ManageV3 activity returned an error: %w", err)

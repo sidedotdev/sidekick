@@ -6,6 +6,7 @@ import (
 	"sidekick/common"
 	"sidekick/fflag"
 	"sidekick/llm"
+	"sidekick/persisted_ai"
 	"sidekick/utils"
 	"strings"
 	"testing"
@@ -772,7 +773,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesManageV3
 	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1))
 
 	// Expect ManageV3 activity to be called with (chatHistory, workspaceId, maxLength)
-	var ca *ChatHistoryActivities
+	var ca *persisted_ai.ChatHistoryActivities
 	s.env.OnActivity(ca.ManageV3, mock.Anything, mock.Anything, "test-workspace-id", maxLength).Return(
 		&common.ChatHistoryContainer{
 			History: common.NewLegacyChatHistoryFromChatMessages([]llm.ChatMessage{{Content: "managed"}}),

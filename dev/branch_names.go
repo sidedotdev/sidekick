@@ -115,7 +115,7 @@ func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRe
 	attempts := 0
 	for {
 		actionCtx := eCtx.NewActionContext("generate.branch_names")
-		msgResponse, err := persisted_ai.ForceToolCallWithTrackOptionsV2(eCtx, actionCtx, flow_action.TrackOptions{FailuresOnly: true}, eCtx.LLMConfig, chatHistory, HydrateActivityFunc(), &generateBranchNamesTool)
+		msgResponse, err := persisted_ai.ForceToolCallWithTrackOptionsV2(eCtx, actionCtx, flow_action.TrackOptions{FailuresOnly: true}, eCtx.LLMConfig, chatHistory, &generateBranchNamesTool)
 		if err != nil {
 			return nil, fmt.Errorf("failed to force tool call: %v", err)
 		}
