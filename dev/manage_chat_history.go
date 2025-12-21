@@ -588,6 +588,11 @@ func applyCacheControlBreakpoints(chatHistory *[]llm.ChatMessage, retainReasons 
 		return
 	}
 
+	// Clear all existing CacheControl values before applying new breakpoints
+	for i := range *chatHistory {
+		(*chatHistory)[i].CacheControl = ""
+	}
+
 	// After cleanToolCallsAndResponses, chatHistory may be shorter than retainReasons.
 	// We need to rebuild retainReasons to match the current chatHistory.
 	// For now, we'll work with what we have, but limit to the shorter length.

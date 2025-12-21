@@ -1648,6 +1648,45 @@ func TestApplyCacheControlBreakpoints_NoDuplicateBreakpoints(t *testing.T) {
 	assertMaxFourBreakpoints(t, chatHistory)
 }
 
+func TestApplyCacheControlBreakpoints_ClearsPreExistingBreakpoints(t *testing.T) {
+	// Messages with pre-existing CacheControl values that should be cleared
+	chatHistory := []llm.ChatMessage{
+		{Content: "A", ContextType: ContextTypeInitialInstructions, CacheControl: "ephemeral"},
+		{Content: "B", CacheControl: "ephemeral"},
+		{Content: "C", CacheControl: "ephemeral"},
+		{Content: "D", CacheControl: "ephemeral"},
+		{Content: "E", CacheControl: "ephemeral"},
+		{Content: "F"},
+	}
+	// Only 3 distinct blocks, so we expect at most 4 breakpoints
+	retainReasons := []map[string]bool{
+		{RetainReasonInitialInstructions: true},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonLatestTestResult: true},
+		{RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// Verify only strategically-chosen positions have breakpoints
+	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl, "InitialInstructions should have breakpoint")
+	assert.Equal(t, "ephemeral", chatHistory[5].CacheControl, "Last message should have breakpoint")
+
+	// Pre-existing breakpoints on non-strategic positions should be cleared
+	assertMaxFourBreakpoints(t, chatHistory)
+
+	// Count total breakpoints to ensure we don't exceed 4
+	breakpointCount := 0
+	for _, msg := range chatHistory {
+		if msg.CacheControl == "ephemeral" {
+			breakpointCount++
+		}
+	}
+	assert.LessOrEqual(t, breakpointCount, 4, "Should have at most 4 breakpoints")
+}
+
 func TestApplyCacheControlBreakpoints_ContiguousBlocksWithSharedReasons(t *testing.T) {
 	chatHistory := []llm.ChatMessage{
 		{Content: "A"},
