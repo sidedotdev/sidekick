@@ -2,19 +2,20 @@ package dev
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"sidekick/common"
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/flow_action"
-	"sidekick/llm"
+	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
+	"sidekick/temp_common2"
 	"sidekick/utils"
 	"testing"
 
-	"github.com/sashabaranov/go-openai"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -74,8 +75,32 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil)
 	s.env.OnActivity(ManageChatHistoryActivity, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	s.env.OnActivity(ManageChatHistoryV2Activity, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
-	// Use legacy chat history path
-	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
+
+	// Use version 1 for chat-history-llm2 (Llm2ChatHistory path)
+	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
+
+	// Mock Hydrate activity - marks the chat history as hydrated and returns it
+	var cha *ChatHistoryActivities
+	s.env.OnActivity(cha.Hydrate, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, chatHistory *common.ChatHistoryContainer, workspaceId string) (*common.ChatHistoryContainer, error) {
+			if llm2History, ok := chatHistory.History.(*temp_common2.Llm2ChatHistory); ok {
+				err := llm2History.Hydrate(ctx, nil)
+				if err != nil {
+					return nil, err
+				}
+				return chatHistory, nil
+			} else {
+				panic(fmt.Sprintf("not llm 2 chat history in hydrate: %v", chatHistory))
+			}
+		},
+	).Maybe()
+
+	// Mock ManageV3 activity - manages chat history for llm2 path
+	s.env.OnActivity(cha.ManageV3, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, chatHistory *common.ChatHistoryContainer, workspaceId string, maxLength int) (*common.ChatHistoryContainer, error) {
+			return chatHistory, nil
+		},
+	).Maybe()
 
 	// Create temporary directory using t.TempDir()
 	s.dir = s.T().TempDir()
@@ -100,22 +125,28 @@ func TestAuthorEditBlockTestSuite(t *testing.T) {
 }
 
 func (s *AuthorEditBlocksTestSuite) TestInitialCodeInfoNoEditBlocks() {
-	chatHistory := &common.ChatHistoryContainer{History: common.NewLegacyChatHistoryFromChatMessages(nil)}
-	var la *persisted_ai.LlmActivities // use a nil struct pointer to call activities that are part of a structure
-	s.env.OnActivity(la.ChatStream, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+	chatHistory := &common.ChatHistoryContainer{History: temp_common2.NewLlm2ChatHistory("", "")}
+	var la *persisted_ai.Llm2Activities // use a nil struct pointer to call activities that are part of a structure
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		// Simulate progress events being handled
-		opts := args[1].(persisted_ai.ChatStreamOptions)
+		opts := args[1].(persisted_ai.StreamOptions)
 		s.NotEmpty(opts.FlowActionId)
-	}).Return(&llm.ChatMessageResponse{
-		StopReason: string(openai.FinishReasonStop),
-		ChatMessage: llm.ChatMessage{
-			Content: "No edit blocks",
+	}).Return(&llm2.MessageResponse{
+		StopReason: "stop",
+		Output: llm2.Message{
+			Role: "assistant",
+			Content: []llm2.ContentBlock{
+				{
+					Type: llm2.ContentBlockTypeText,
+					Text: "No edit blocks",
+				},
+			},
 		},
 	},
 		nil,
 	).Once()
 	var ffa *fflag.FFlagActivities // use a nil struct pointer to call activities that are part of a structure
-	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil)
+	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, PromptInfoContainer{
 		InitialCodeInfo{},
 	})
