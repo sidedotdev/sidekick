@@ -221,12 +221,22 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 		}
 		dCtx.FlowScope.SubflowName = subflowName
 
+		// Determine autoIterations from config with workflow versioning
+		autoIterations := 3
+		v := workflow.GetVersion(dCtx, "coding-subflow-auto-iterations", workflow.DefaultVersion, 1)
+		if v == 1 {
+			autoIterations = 7
+		}
+		if cfg, ok := dCtx.RepoConfig.AgentConfig[common.CodingAndVerificationKey]; ok && cfg.AutoIterations > 0 {
+			autoIterations = cfg.AutoIterations
+		}
+
 		// TODO /gen use models slice and modelIndex and modelAttemptCount just like
 		// in completeDevStep to switch models when ErrMaxIterationsReached
-		modelConfig := dCtx.GetModelConfig(common.CodingKey, attemptCount/3, "default")
+		modelConfig := dCtx.GetModelConfig(common.CodingKey, attemptCount/autoIterations, "default")
 
 		// TODO don't force getting help if it just got help recently already
-		if attemptCount > 0 && attemptCount%3 == 0 {
+		if attemptCount > 0 && attemptCount%autoIterations == 0 {
 			guidanceContext := "Failing repeatedly to pass tests and/or fulfill requirements, please provide guidance."
 
 			// get the latest git diff, since it could be different from the

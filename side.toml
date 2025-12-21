@@ -27,7 +27,10 @@ command = "bun run type-check"
 command = "SIDE_INTEGRATION_TEST=true go test -test.timeout 30s ./..."
 
 [agent_config.coding]
-max_iterations_before_feedback = 15
+auto_iterations = 15
+
+[agent_config.coding_and_verification]
+auto_iterations = 7
 
 [edit_code]
 hints = """

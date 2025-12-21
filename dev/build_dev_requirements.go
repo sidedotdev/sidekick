@@ -248,8 +248,8 @@ func buildDevRequirementsSubflow(dCtx DevContext, initialInfo InitialDevRequirem
 		// Maybe provide that as a tool or even run that tool automatically.
 		feedbackIterations = 9
 	}
-	if cfg, ok := dCtx.RepoConfig.AgentConfig[common.PlanningKey]; ok && cfg.MaxIterationsBeforeFeedback > 0 {
-		feedbackIterations = cfg.MaxIterationsBeforeFeedback
+	if cfg, ok := dCtx.RepoConfig.AgentConfig[common.PlanningKey]; ok && cfg.AutoIterations > 0 {
+		feedbackIterations = cfg.AutoIterations
 	}
 	return LlmLoop(dCtx, chatHistory, buildDevRequirementsIteration, WithInitialState(initialState), WithFeedbackEvery(feedbackIterations))
 }
@@ -297,7 +297,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 					if approveErr != nil {
 						return ToolCallResponseInfo{}, fmt.Errorf("error approving dev requirements: %v", approveErr)
 					}
-					iteration.NumSinceLastFeedback = 0
+					iteration.AutoIterationCount = 0
 					if userResponse.Approved != nil && *userResponse.Approved {
 						recordedReqs = &devReq
 						return ToolCallResponseInfo{Response: "Requirements recorded and approved.", FunctionName: tc.Name, ToolCallId: tc.Id}, nil
@@ -327,7 +327,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 					if approveErr != nil {
 						return ToolCallResponseInfo{}, fmt.Errorf("error approving dev requirements: %v", approveErr)
 					}
-					iteration.NumSinceLastFeedback = 0
+					iteration.AutoIterationCount = 0
 					if userResponse.Approved != nil && *userResponse.Approved {
 						recordedReqs = &updatedReqs
 						return ToolCallResponseInfo{Response: "Requirements updated and approved.", FunctionName: tc.Name, ToolCallId: tc.Id}, nil
@@ -351,7 +351,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 			}
 
 			if res.FunctionName == getHelpOrInputTool.Name {
-				iteration.NumSinceLastFeedback = 0
+				iteration.AutoIterationCount = 0
 			}
 		}
 

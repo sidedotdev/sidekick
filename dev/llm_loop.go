@@ -10,20 +10,20 @@ import (
 // LlmIteration represents a single iteration in the LLM loop.
 type LlmIteration struct {
 	LlmLoopConfig
-	Num                  int
-	NumSinceLastFeedback int
-	ExecCtx              DevContext
-	ChatHistory          *[]llm.ChatMessage
-	State                interface{}
+	Num                int
+	AutoIterationCount int
+	ExecCtx            DevContext
+	ChatHistory        *[]llm.ChatMessage
+	State              interface{}
 }
 
 // Option is a functional option for configuring LlmLoop
 type Option func(*LlmLoopConfig)
 
 type LlmLoopConfig struct {
-	maxIterations               int
-	maxIterationsBeforeFeedback int
-	initialState                interface{}
+	maxIterations  int
+	autoIterations int
+	initialState   interface{}
 }
 
 // WithMaxIterations sets the maximum number of iterations for the loop
@@ -33,10 +33,12 @@ func WithMaxIterations(max int) Option {
 	}
 }
 
-// WithFeedbackEvery sets the number of iterations before requesting feedback
+// WithFeedbackEvery sets the number of auto-iterations before requesting user
+// feedback. When auto-iterations are exhausted, user feedback is requested.
+// The function name is kept for readability.
 func WithFeedbackEvery(max int) Option {
 	return func(c *LlmLoopConfig) {
-		c.maxIterationsBeforeFeedback = max
+		c.autoIterations = max
 	}
 }
 
@@ -50,8 +52,8 @@ func WithInitialState(initialState interface{}) Option {
 // LlmLoop is a generic function that implements an interative loop for human-in-the-loop LLM invocations
 func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc func(iteration *LlmIteration) (*T, error), opts ...Option) (*T, error) {
 	config := &LlmLoopConfig{
-		maxIterations:               17,
-		maxIterationsBeforeFeedback: 3,
+		maxIterations:  17,
+		autoIterations: 3,
 	}
 
 	for _, opt := range opts {
@@ -63,17 +65,17 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 	}
 
 	iteration := &LlmIteration{
-		LlmLoopConfig:        *config,
-		Num:                  0,
-		NumSinceLastFeedback: 0,
-		ExecCtx:              dCtx,
-		ChatHistory:          chatHistory,
-		State:                config.initialState,
+		LlmLoopConfig:      *config,
+		Num:                0,
+		AutoIterationCount: 0,
+		ExecCtx:            dCtx,
+		ChatHistory:        chatHistory,
+		State:              config.initialState,
 	}
 
 	for {
 		iteration.Num++
-		iteration.NumSinceLastFeedback++
+		iteration.AutoIterationCount++
 		// Use WithCancelOnPause for long-running operations, ensuring a fresh context for each iteration.
 		iteration.ExecCtx = dCtx.WithCancelOnPause()
 
@@ -92,11 +94,11 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 				Role:    "user",
 				Content: renderGeneralFeedbackPrompt(response.Content, FeedbackTypePause),
 			})
-			iteration.NumSinceLastFeedback = 0
+			iteration.AutoIterationCount = 0
 		}
 
 		// Inject proactive system message when nearing per-cycle tool-call limits
-		if msg, ok := ThresholdMessageForCounter(config.maxIterationsBeforeFeedback, iteration.NumSinceLastFeedback); ok {
+		if msg, ok := ThresholdMessageForCounter(config.autoIterations, iteration.AutoIterationCount); ok {
 			*iteration.ChatHistory = append(*iteration.ChatHistory, llm.ChatMessage{
 				Role:    "system",
 				Content: msg,
@@ -104,7 +106,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 		}
 
 		// Get user feedback every N iterations
-		if iteration.NumSinceLastFeedback >= config.maxIterationsBeforeFeedback {
+		if iteration.AutoIterationCount >= config.autoIterations {
 			guidanceContext := fmt.Sprintf("The LLM has looped %d times without finalizing. Please provide guidance or just say \"continue\" if they are on track.", iteration.Num)
 			userResponse, err := GetUserGuidance(dCtx, guidanceContext, nil)
 			if err != nil {
@@ -117,7 +119,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 				Content: userResponse.Content,
 			})
 
-			iteration.NumSinceLastFeedback = 0
+			iteration.AutoIterationCount = 0
 		}
 
 		result, err := loopFunc(iteration)
@@ -153,7 +155,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 				if v >= 1 {
 					// ensure we don't break due to max iterations in this case
 					iteration.Num--
-					iteration.NumSinceLastFeedback--
+					iteration.AutoIterationCount--
 				}
 				continue
 			}

@@ -68,7 +68,7 @@ type CommandConfig struct {
 
 // AgentUseCaseConfig contains configuration for a specific agent use case.
 type AgentUseCaseConfig struct {
-	MaxIterationsBeforeFeedback int `toml:"max_iterations_before_feedback,omitempty"`
+	AutoIterations int `toml:"auto_iterations,omitempty"`
 }
 
 type EditCodeConfig struct {
