@@ -16,6 +16,29 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+// clearCacheControl removes CacheControl from all messages for test comparison.
+// This allows tests to focus on retention logic without being affected by cache control.
+func clearCacheControl(messages []llm.ChatMessage) []llm.ChatMessage {
+	result := make([]llm.ChatMessage, len(messages))
+	for i, msg := range messages {
+		result[i] = msg
+		result[i].CacheControl = ""
+	}
+	return result
+}
+
+// assertMaxFourBreakpoints verifies that at most 4 cache control breakpoints are set.
+func assertMaxFourBreakpoints(t *testing.T, chatHistory []llm.ChatMessage) {
+	t.Helper()
+	breakpointCount := 0
+	for _, msg := range chatHistory {
+		if msg.CacheControl == "ephemeral" {
+			breakpointCount++
+		}
+	}
+	assert.LessOrEqual(t, breakpointCount, 4)
+}
+
 func TestCleanToolCallsAndResponses(t *testing.T) {
 	t.Run("empty chat history", func(t *testing.T) {
 		chatHistory := []llm.ChatMessage{}
@@ -845,7 +868,7 @@ func TestManageChatHistoryV2_InitialInstructions(t *testing.T) {
 
 	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
 	assert.NoError(t, err)
-	assert.Equal(t, expected, result)
+	assert.Equal(t, expected, clearCacheControl(result))
 
 	chatHistory2 := []llm.ChatMessage{
 		{Content: "Not II"},
@@ -858,7 +881,7 @@ func TestManageChatHistoryV2_InitialInstructions(t *testing.T) {
 	}
 	result2, err := ManageChatHistoryV2Activity(chatHistory2, 0)
 	assert.NoError(t, err)
-	assert.Equal(t, expected2, result2)
+	assert.Equal(t, expected2, clearCacheControl(result2))
 }
 
 func TestManageChatHistoryV2_UserFeedback(t *testing.T) {
@@ -885,7 +908,7 @@ func TestManageChatHistoryV2_UserFeedback(t *testing.T) {
 
 	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
 	assert.NoError(t, err)
-	assert.Equal(t, expected, result)
+	assert.Equal(t, expected, clearCacheControl(result))
 
 	chatHistory2 := []llm.ChatMessage{
 		{Content: "UF1", ContextType: ContextTypeUserFeedback},
@@ -897,7 +920,7 @@ func TestManageChatHistoryV2_UserFeedback(t *testing.T) {
 	}
 	result2, err := ManageChatHistoryV2Activity(chatHistory2, 0)
 	assert.NoError(t, err)
-	assert.Equal(t, expected2, result2)
+	assert.Equal(t, expected2, clearCacheControl(result2))
 }
 
 func TestManageChatHistoryV2_SupersededTypes(t *testing.T) {
@@ -996,7 +1019,7 @@ func TestManageChatHistoryV2_SupersededTypes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := ManageChatHistoryV2Activity(tt.chatHistory, 0)
 			assert.NoError(t, err)
-			assert.Equal(t, tt.expected, result)
+			assert.Equal(t, tt.expected, clearCacheControl(result))
 		})
 	}
 }
@@ -1030,7 +1053,7 @@ func TestManageChatHistoryV2_MixedTypes_Complex(t *testing.T) {
 
 	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
 	assert.NoError(t, err)
-	assert.Equal(t, expected, result)
+	assert.Equal(t, expected, clearCacheControl(result))
 }
 
 func TestManageChatHistoryV2_EmptyHistory(t *testing.T) {
@@ -1123,7 +1146,7 @@ func TestManageChatHistoryV2_LastMessageRetention(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := ManageChatHistoryV2Activity(tt.chatHistory, tt.maxLength)
 			assert.NoError(t, err)
-			assert.Equal(t, tt.expected, result)
+			assert.Equal(t, tt.expected, clearCacheControl(result))
 		})
 	}
 }
@@ -1139,7 +1162,7 @@ func TestManageChatHistoryV2_NoMarkers_OverLimit(t *testing.T) {
 
 	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
 	assert.NoError(t, err)
-	assert.Equal(t, expected, result)
+	assert.Equal(t, expected, clearCacheControl(result))
 }
 
 func TestManageChatHistoryV2_NoMarkers_UnderLimit(t *testing.T) {
@@ -1154,7 +1177,7 @@ func TestManageChatHistoryV2_NoMarkers_UnderLimit(t *testing.T) {
 
 	result, err := ManageChatHistoryV2Activity(chatHistory, 1000)
 	assert.NoError(t, err)
-	assert.Equal(t, expected, result)
+	assert.Equal(t, expected, clearCacheControl(result))
 }
 
 func TestManageChatHistoryV2_BlockEndingConditions(t *testing.T) {
@@ -1178,7 +1201,7 @@ func TestManageChatHistoryV2_BlockEndingConditions(t *testing.T) {
 	}
 	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
 	assert.NoError(t, err)
-	assert.Equal(t, expected, result)
+	assert.Equal(t, expected, clearCacheControl(result))
 }
 
 // Test to ensure cleanToolCallsAndResponses is effective at the end
@@ -1202,7 +1225,7 @@ func TestManageChatHistoryV2_WithToolCallsCleanup(t *testing.T) {
 
 	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
 	assert.NoError(t, err)
-	assert.Equal(t, expected, result)
+	assert.Equal(t, expected, clearCacheControl(result))
 }
 
 // TestManageChatHistoryV2_EditBlockReport_NoSequenceNumbersInReport tests that an EditBlockReport
@@ -1222,7 +1245,7 @@ func TestManageChatHistoryV2_EditBlockReport_NoSequenceNumbersInReport(t *testin
 
 	updatedHistory, err := ManageChatHistoryV2Activity(chatHistory, 0)
 	assert.NoError(t, err)
-	assert.Equal(t, expectedChatHistory, updatedHistory)
+	assert.Equal(t, expectedChatHistory, clearCacheControl(updatedHistory))
 }
 
 // TestManageChatHistoryV2_EditBlockReport_TrimmingBeforeProtectedEBR tests that EBR context
@@ -1246,7 +1269,7 @@ func TestManageChatHistoryV2_EditBlockReport_TrimmingBeforeProtectedEBR(t *testi
 	expectedChatHistory = append(expectedChatHistory, chatHistory[2:]...)
 	updatedHistory, err := ManageChatHistoryV2Activity(chatHistory, 0)
 	assert.NoError(t, err)
-	assert.Equal(t, expectedChatHistory, updatedHistory, "Chat history does not match expected after trimming")
+	assert.Equal(t, expectedChatHistory, clearCacheControl(updatedHistory), "Chat history does not match expected after trimming")
 }
 
 var testEditBlock = "```\nedit_block:1\nfile.go\n<<<<<<< SEARCH_EXACT\nOLD_CONTENT\n=======\nNEW_CONTENT\n>>>>>>> REPLACE_EXACT\n```"
@@ -1271,7 +1294,7 @@ func TestManageChatHistoryV2_OverlapHandling(t *testing.T) {
 
 	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
 	assert.NoError(t, err)
-	assert.Equal(t, expected, result)
+	assert.Equal(t, expected, clearCacheControl(result))
 }
 
 func TestManageChatHistoryV2_Trimming_Basic(t *testing.T) {
@@ -1290,7 +1313,7 @@ func TestManageChatHistoryV2_Trimming_Basic(t *testing.T) {
 	}
 	result, err := ManageChatHistoryV2Activity(chatHistory, 57)
 	assert.NoError(t, err)
-	assert.Equal(t, expected, result)
+	assert.Equal(t, expected, clearCacheControl(result))
 
 	// check boundary condition
 	expected2 := []llm.ChatMessage{
@@ -1299,7 +1322,7 @@ func TestManageChatHistoryV2_Trimming_Basic(t *testing.T) {
 	}
 	result2, err := ManageChatHistoryV2Activity(chatHistory, 56)
 	assert.NoError(t, err)
-	assert.Equal(t, expected2, result2)
+	assert.Equal(t, expected2, clearCacheControl(result2))
 }
 
 func TestManageChatHistoryV2_Trimming_InitialInstructionsProtected(t *testing.T) {
@@ -1317,7 +1340,7 @@ func TestManageChatHistoryV2_Trimming_InitialInstructionsProtected(t *testing.T)
 	}
 	result, err := ManageChatHistoryV2Activity(chatHistory, 10) // maxLength is 10
 	assert.NoError(t, err)
-	assert.Equal(t, expected, result)
+	assert.Equal(t, expected, clearCacheControl(result))
 }
 
 func TestManageChatHistoryV2_Trimming_SoftLimit(t *testing.T) {
@@ -1338,7 +1361,7 @@ func TestManageChatHistoryV2_Trimming_SoftLimit(t *testing.T) {
 	}
 	result, err := ManageChatHistoryV2Activity(chatHistory, 25)
 	assert.NoError(t, err)
-	assert.Equal(t, expected, result)
+	assert.Equal(t, expected, clearCacheControl(result))
 
 	// Case: Only InitialInstructions, and they exceed maxLength
 	chatHistoryOnlyII := []llm.ChatMessage{
@@ -1351,7 +1374,7 @@ func TestManageChatHistoryV2_Trimming_SoftLimit(t *testing.T) {
 	}
 	resultOnlyII, err := ManageChatHistoryV2Activity(chatHistoryOnlyII, 50) // maxLength 50, but II total 70
 	assert.NoError(t, err)
-	assert.Equal(t, expectedOnlyII, resultOnlyII) // Soft limit: IIs are kept even if > maxLength
+	assert.Equal(t, expectedOnlyII, clearCacheControl(resultOnlyII)) // Soft limit: IIs are kept even if > maxLength
 }
 
 func TestManageChatHistoryV2_ToolCallArgumentsInLength(t *testing.T) {
@@ -1380,7 +1403,7 @@ func TestManageChatHistoryV2_ToolCallArgumentsInLength(t *testing.T) {
 		{Content: "Init", ContextType: ContextTypeInitialInstructions},
 		{Content: "Last"},
 	}
-	assert.Equal(t, expected, result)
+	assert.Equal(t, expected, clearCacheControl(result))
 }
 
 func TestManageChatHistoryV2_DropAllOlderBehavior(t *testing.T) {
@@ -1406,7 +1429,7 @@ func TestManageChatHistoryV2_DropAllOlderBehavior(t *testing.T) {
 		{Content: "D"},
 		{Content: "E"},
 	}
-	assert.Equal(t, expected, result)
+	assert.Equal(t, expected, clearCacheControl(result))
 }
 
 func TestManageChatHistoryV2_LargeToolResponseTruncation(t *testing.T) {
@@ -1480,4 +1503,423 @@ func TestManageChatHistoryV2_TruncateOldestFirst(t *testing.T) {
 	assert.True(t, len(toolResp1.Content) < 150)
 	// Second response exists and may or may not be truncated depending on if first truncation was enough
 	assert.NotEmpty(t, toolResp2.ToolCallId)
+}
+
+func TestApplyCacheControlBreakpoints_EmptyHistory(t *testing.T) {
+	chatHistory := []llm.ChatMessage{}
+	retainReasons := []map[string]bool{}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	assert.Empty(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_SingleMessage(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "Hello"},
+	}
+	retainReasons := []map[string]bool{
+		{RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_LastMessageAlwaysGetsBreakpoint(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "First"},
+		{Content: "Middle"},
+		{Content: "Last"},
+	}
+	retainReasons := []map[string]bool{
+		{RetainReasonUnderLimit: true},
+		{RetainReasonUnderLimit: true},
+		{RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	assert.Equal(t, "ephemeral", chatHistory[2].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_InitialInstructionsGetsBreakpoint(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "Init", ContextType: ContextTypeInitialInstructions},
+		{Content: "Middle"},
+		{Content: "Last"},
+	}
+	retainReasons := []map[string]bool{
+		{RetainReasonInitialInstructions: true},
+		{RetainReasonUnderLimit: true},
+		{RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl)
+	assert.Equal(t, "ephemeral", chatHistory[2].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_LargestBlocksGetBreakpoints(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "A"},
+		{Content: "B"},
+		{Content: "C"},
+		{Content: "D"},
+		{Content: "E"},
+		{Content: "F"},
+	}
+	// Block 1: indices 0-2 (size 3, reason UserFeedback)
+	// Block 2: indices 3-4 (size 2, reason TestResult)
+	// Block 3: index 5 (size 1, reason LastMessage)
+	retainReasons := []map[string]bool{
+		{RetainReasonUserFeedback: true},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonLatestTestResult: true},
+		{RetainReasonLatestTestResult: true},
+		{RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// Last message always gets breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[5].CacheControl)
+	// Largest block (size 3) starts at index 0
+	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl)
+	// Second largest block (size 2) starts at index 3
+	assert.Equal(t, "ephemeral", chatHistory[3].CacheControl)
+	// Middle messages should not have breakpoints
+	assert.Empty(t, chatHistory[1].CacheControl)
+	assert.Empty(t, chatHistory[2].CacheControl)
+	assert.Empty(t, chatHistory[4].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_MaxFourBreakpoints(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "A", ContextType: ContextTypeInitialInstructions},
+		{Content: "B"},
+		{Content: "C"},
+		{Content: "D"},
+		{Content: "E"},
+		{Content: "F"},
+		{Content: "G"},
+		{Content: "H"},
+	}
+	// Create 6 distinct blocks to test the 4-breakpoint limit
+	retainReasons := []map[string]bool{
+		{RetainReasonInitialInstructions: true},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonLatestTestResult: true},
+		{RetainReasonLatestTestResult: true},
+		{RetainReasonLatestTestResult: true},
+		{RetainReasonLatestSummary: true},
+		{RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// Last message must have breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[7].CacheControl)
+	// First message (InitialInstructions) must have breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_NoDuplicateBreakpoints(t *testing.T) {
+	// Single message that is both InitialInstructions and LastMessage
+	chatHistory := []llm.ChatMessage{
+		{Content: "Only", ContextType: ContextTypeInitialInstructions},
+	}
+	retainReasons := []map[string]bool{
+		{RetainReasonInitialInstructions: true, RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_ContiguousBlocksWithSharedReasons(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "A"},
+		{Content: "B"},
+		{Content: "C"},
+		{Content: "D"},
+	}
+	// Messages 0-2 share UserFeedback reason, forming one block
+	// Message 3 has a different reason
+	retainReasons := []map[string]bool{
+		{RetainReasonUserFeedback: true, RetainReasonUnderLimit: true},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// Block of 3 (indices 0-2) should get breakpoint at start
+	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl)
+	// Last message gets breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[3].CacheControl)
+	// Middle of block should not have breakpoints
+	assert.Empty(t, chatHistory[1].CacheControl)
+	assert.Empty(t, chatHistory[2].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_ReasonsShorterThanHistory(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "A"},
+		{Content: "B"},
+		{Content: "C"},
+	}
+	// Simulate case where retainReasons is shorter (e.g., after cleanup)
+	retainReasons := []map[string]bool{
+		{RetainReasonUserFeedback: true},
+		{RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// Should not panic, last message still gets breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[2].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_FirstMessageNotInitialInstructions(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "Not II"},
+		{Content: "Middle"},
+		{Content: "Last"},
+	}
+	retainReasons := []map[string]bool{
+		{RetainReasonUserFeedback: true},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// First message should NOT get breakpoint (not InitialInstructions)
+	// But it might get one as start of largest block
+	// Last message always gets breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[2].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_BlockSizeTiebreaker(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "A"},
+		{Content: "B"},
+		{Content: "C"},
+		{Content: "D"},
+		{Content: "E"},
+		{Content: "F"},
+	}
+	// Two blocks of size 2, one block of size 2
+	retainReasons := []map[string]bool{
+		{RetainReasonUserFeedback: true},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonLatestTestResult: true},
+		{RetainReasonLatestTestResult: true},
+		{RetainReasonLatestSummary: true},
+		{RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// Last message always gets breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[5].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_EmptyReasonsBreakBlocks(t *testing.T) {
+	// Messages with empty reasons (not retained) should break contiguous blocks
+	chatHistory := []llm.ChatMessage{
+		{Content: "A"},
+		{Content: "B"},
+		{Content: "C"},
+		{Content: "D"},
+		{Content: "E"},
+	}
+	// Message at index 2 has no reasons (empty map), breaking the block
+	retainReasons := []map[string]bool{
+		{RetainReasonUserFeedback: true},
+		{RetainReasonUserFeedback: true},
+		{},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// Last message always gets breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[4].CacheControl)
+	// Block 0-1 (size 2) should get breakpoint at start
+	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_AllEmptyReasons(t *testing.T) {
+	// All messages have empty reasons - edge case
+	// Each empty-reason message forms its own block of size 1
+	chatHistory := []llm.ChatMessage{
+		{Content: "A"},
+		{Content: "B"},
+		{Content: "C"},
+	}
+	retainReasons := []map[string]bool{
+		{},
+		{},
+		{},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// Last message should still get breakpoint regardless of reasons
+	assert.Equal(t, "ephemeral", chatHistory[2].CacheControl)
+	// First message gets breakpoint as start of a block (even with empty reasons)
+	// The algorithm places breakpoints on largest blocks, and all blocks here are size 1
+	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_MixedRetainedAndUnretained(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "A", ContextType: ContextTypeInitialInstructions},
+		{Content: "B"},
+		{Content: "C"},
+		{Content: "D"},
+		{Content: "E"},
+		{Content: "F"},
+	}
+	// Alternating retained and unretained messages
+	retainReasons := []map[string]bool{
+		{RetainReasonInitialInstructions: true},
+		{},
+		{RetainReasonUserFeedback: true},
+		{},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// InitialInstructions gets breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl)
+	// Last message gets breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[5].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_UnretainedAtStart(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "A"},
+		{Content: "B"},
+		{Content: "C"},
+		{Content: "D"},
+	}
+	// First two messages have no reasons
+	retainReasons := []map[string]bool{
+		{},
+		{},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// Last message gets breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[3].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_UnretainedAtEnd(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "A", ContextType: ContextTypeInitialInstructions},
+		{Content: "B"},
+		{Content: "C"},
+		{Content: "D"},
+	}
+	// Last message has no reasons (unusual but possible edge case)
+	retainReasons := []map[string]bool{
+		{RetainReasonInitialInstructions: true},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonUserFeedback: true},
+		{},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// Last message still gets breakpoint (always)
+	assert.Equal(t, "ephemeral", chatHistory[3].CacheControl)
+	// InitialInstructions gets breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_LargeUnretainedBlock(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "A", ContextType: ContextTypeInitialInstructions},
+		{Content: "B"},
+		{Content: "C"},
+		{Content: "D"},
+		{Content: "E"},
+		{Content: "F"},
+		{Content: "G"},
+	}
+	// Large block of unretained messages in the middle
+	retainReasons := []map[string]bool{
+		{RetainReasonInitialInstructions: true},
+		{},
+		{},
+		{},
+		{},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// InitialInstructions gets breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl)
+	// Last message gets breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[6].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+func TestApplyCacheControlBreakpoints_EmptyReasonsEachFormOwnBlock(t *testing.T) {
+	// Multiple consecutive empty-reason messages each form their own block of size 1
+	// since intersecting two empty maps yields an empty result
+	chatHistory := []llm.ChatMessage{
+		{Content: "A"},
+		{Content: "B"},
+		{Content: "C"},
+		{Content: "D"},
+		{Content: "E"},
+	}
+	retainReasons := []map[string]bool{
+		{RetainReasonUserFeedback: true},
+		{},
+		{},
+		{},
+		{RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// Last message gets breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[4].CacheControl)
+	// First message (block of 1) gets breakpoint as one of the largest blocks
+	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
 }
