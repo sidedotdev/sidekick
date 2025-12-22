@@ -171,6 +171,21 @@ mission = "Test mission"
 		assert.Contains(t, err.Error(), "failed to unmarshal TOML data")
 	})
 
+	t.Run("AgentConfig: deserializes auto_iterations for a use case", func(t *testing.T) {
+		tomlContent := `
+[agent_config.coding]
+auto_iterations = 15
+`
+		envContainer := setupTestEnv(t, tomlContent, "", "")
+
+		config, err := GetRepoConfigActivity(envContainer)
+
+		require.NoError(t, err)
+		require.NotNil(t, config.AgentConfig)
+		require.Contains(t, config.AgentConfig, "coding")
+		assert.Equal(t, 15, config.AgentConfig["coding"].AutoIterations)
+	})
+
 	t.Run("Handles missing side.toml file", func(t *testing.T) {
 		tempDir := t.TempDir()
 		mock := &mockEnv{workingDir: tempDir}
