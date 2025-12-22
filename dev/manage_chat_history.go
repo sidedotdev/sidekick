@@ -619,7 +619,8 @@ func applyCacheControlBreakpoints(chatHistory *[]llm.ChatMessage, retainReasons 
 
 		for i := 1; i < reasonsLen; i++ {
 			sharedReasons := intersectReasons(currentBlock.reasons, retainReasons[i])
-			if len(sharedReasons) > 0 {
+			bothUnretained := (len(retainReasons[i]) == 0 && len(currentBlock.reasons) == 0)
+			if len(sharedReasons) > 0 || bothUnretained {
 				currentBlock.endIndex = i + 1
 				currentBlock.reasons = sharedReasons
 			} else {
@@ -637,14 +638,19 @@ func applyCacheControlBreakpoints(chatHistory *[]llm.ChatMessage, retainReasons 
 	// Collect candidate breakpoint positions
 	breakpointPositions := make(map[int]bool)
 
-	// Last message always gets a breakpoint
+	// First & Last message always gets a breakpoint
 	lastIdx := len(*chatHistory) - 1
+	breakpointPositions[0] = true // expected to be InitialInstructions
 	breakpointPositions[lastIdx] = true
 
-	// First message gets a breakpoint if it's InitialInstructions
-	if len(*chatHistory) > 0 && reasonsLen > 0 {
-		if retainReasons[0][RetainReasonInitialInstructions] {
-			breakpointPositions[0] = true
+	// make sure these 1-2 important spots get cache control set first
+	numBreakpoints := 0
+	for pos := range breakpointPositions {
+		if pos >= 0 && pos < len(*chatHistory) {
+			if (*chatHistory)[pos].CacheControl != "ephemeral" {
+				numBreakpoints++
+				(*chatHistory)[pos].CacheControl = "ephemeral"
+			}
 		}
 	}
 
@@ -659,15 +665,19 @@ func applyCacheControlBreakpoints(chatHistory *[]llm.ChatMessage, retainReasons 
 		if len(breakpointPositions) >= 4 {
 			break
 		}
-		if !breakpointPositions[b.startIndex] {
-			breakpointPositions[b.startIndex] = true
-		}
+		breakpointPositions[b.startIndex] = true
 	}
 
 	// Apply cache control to selected positions
 	for pos := range breakpointPositions {
+		if numBreakpoints >= 4 {
+			break
+		}
 		if pos >= 0 && pos < len(*chatHistory) {
-			(*chatHistory)[pos].CacheControl = "ephemeral"
+			if (*chatHistory)[pos].CacheControl != "ephemeral" {
+				numBreakpoints++
+				(*chatHistory)[pos].CacheControl = "ephemeral"
+			}
 		}
 	}
 }
