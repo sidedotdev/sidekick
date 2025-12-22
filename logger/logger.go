@@ -16,15 +16,19 @@ var once sync.Once
 
 var log zerolog.Logger
 
+func GetLogLevel() zerolog.Level {
+	logLevel, err := strconv.Atoi(os.Getenv("SIDE_LOG_LEVEL"))
+	if err != nil {
+		logLevel = int(zerolog.InfoLevel) // default to INFO
+	}
+
+	return zerolog.Level(logLevel)
+}
+
 func Get() zerolog.Logger {
 	once.Do(func() {
 		zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
 		zerolog.TimeFieldFormat = time.RFC3339Nano
-
-		logLevel, err := strconv.Atoi(os.Getenv("SIDE_LOG_LEVEL"))
-		if err != nil {
-			logLevel = int(zerolog.InfoLevel) // default to INFO
-		}
 
 		var output io.Writer = zerolog.ConsoleWriter{
 			Out:        os.Stdout,
@@ -57,7 +61,7 @@ func Get() zerolog.Logger {
 		}
 
 		log = zerolog.New(output).
-			Level(zerolog.Level(logLevel)).
+			Level(zerolog.Level(GetLogLevel())).
 			With().
 			Timestamp().
 			Str("git_revision", gitRevision).

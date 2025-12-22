@@ -27,10 +27,10 @@ var runCommandTool = llm.Tool{
 // message contains any early return message (for denied or unapproved commands), and error
 // for any failures during approval.
 func checkCommandPermission(dCtx DevContext, command string, workingDir string) (proceed bool, message string, err error) {
-	enableCommandPermissions := workflow.GetVersion(dCtx.Context, "command-permissions", workflow.DefaultVersion, 1) >= 1
-
+	enableCommandPermissions := workflow.GetVersion(dCtx, "command-permissions", workflow.DefaultVersion, 1) >= 1
 	if enableCommandPermissions {
 		permResult, permMessage := common.EvaluateScriptPermission(dCtx.RepoConfig.CommandPermissions, command)
+		workflow.GetLogger(dCtx).Debug("Command permission evaluation result", "command", command, "result", permResult, "message", permMessage)
 
 		switch permResult {
 		case common.PermissionDeny:
@@ -40,6 +40,8 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 		case common.PermissionRequireApproval:
 			// Fall through to request approval
 		}
+	} else {
+		workflow.GetLogger(dCtx).Warn("Command permissions are not enabled")
 	}
 
 	// Request user approval (legacy behavior or when permission requires approval)

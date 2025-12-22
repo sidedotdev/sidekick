@@ -18,6 +18,7 @@ import (
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
+	sidekicklogger "sidekick/logger"
 	"sidekick/srv"
 	"sidekick/telemetry"
 	"sidekick/workspace"
@@ -59,7 +60,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	}
 	ffa := fflag.FFlagActivities{FFlag: featureFlag}
 
-	logger := logur.LoggerToKV(zerologadapter.New(log.Logger))
+	logger := logur.LoggerToKV(zerologadapter.New(sidekicklogger.Get()))
 	tracingInterceptor, err := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create tracing interceptor")
