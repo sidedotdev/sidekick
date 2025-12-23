@@ -218,6 +218,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	flowRoutes.POST("/:id/reset", ctrl.ResetFlowHandler)
 	flowRoutes.GET("/:id/subflows", ctrl.GetFlowSubflowsHandler)
 	flowRoutes.POST("/:id/query", ctrl.QueryFlowHandler)
+	flowRoutes.POST("/:id/chat_history/hydrate", ctrl.HydrateChatHistoryHandler)
 
 	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
 	workspaceApiRoutes.PUT("/flow_actions/:id", ctrl.UpdateFlowActionHandler)
