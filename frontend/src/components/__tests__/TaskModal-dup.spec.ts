@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { config, mount, flushPromises } from '@vue/test-utils'
 import PrimeVue from 'primevue/config'
-import TaskModal from './TaskModal.vue'
-import { store } from '../lib/store'
-import type { Task } from '../lib/models'
+import TaskModal from '../TaskModal.vue'
+import { store } from '../../lib/store'
+import type { Task } from '../../lib/models'
 
 config.global.plugins.push(PrimeVue)
 
