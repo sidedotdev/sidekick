@@ -377,6 +377,18 @@ func manageChatHistoryV2(chatHistory []llm.ChatMessage, maxLength int) ([]llm.Ch
 		return []llm.ChatMessage{}, nil
 	}
 
+	// Compute input total length to determine if we need to trim
+	inputTotalLength := 0
+	for _, msg := range chatHistory {
+		inputTotalLength += messageLength(msg)
+	}
+
+	// When over limit, trim to 90% of maxLength to create headroom for prompt caching
+	budget := maxLength
+	if inputTotalLength > maxLength {
+		budget = (maxLength*9 + 5) / 10 // round(0.9 * maxLength)
+	}
+
 	retainReasons := make([]map[string]bool, len(chatHistory))
 	for i := range retainReasons {
 		retainReasons[i] = make(map[string]bool)
@@ -487,7 +499,7 @@ func manageChatHistoryV2(chatHistory []llm.ChatMessage, maxLength int) ([]llm.Ch
 
 	// Truncate large unretained tool responses before dropping messages.
 	// TODO: summarize via LLM later
-	chatHistory, retainReasons = truncateLargeToolResponses(chatHistory, retainReasons, maxLength)
+	chatHistory, retainReasons = truncateLargeToolResponses(chatHistory, retainReasons, budget)
 
 	var totalLength = 0
 	for i, msg := range chatHistory {
@@ -507,7 +519,7 @@ func manageChatHistoryV2(chatHistory []llm.ChatMessage, maxLength int) ([]llm.Ch
 			newChatHistory = append(newChatHistory, msg)
 			newRetainReasons = append(newRetainReasons, retainReasons[i])
 		} else if !limitExceeded {
-			if messageLength(msg)+totalLength <= maxLength {
+			if messageLength(msg)+totalLength <= budget {
 				newChatHistory = append(newChatHistory, msg)
 				reasons := map[string]bool{RetainReasonUnderLimit: true}
 				newRetainReasons = append(newRetainReasons, reasons)
@@ -527,8 +539,8 @@ func manageChatHistoryV2(chatHistory []llm.ChatMessage, maxLength int) ([]llm.Ch
 	return newChatHistory, nil
 }
 
-func truncateLargeToolResponses(chatHistory []llm.ChatMessage, retainReasons []map[string]bool, maxLength int) ([]llm.ChatMessage, []map[string]bool) {
-	threshold := maxLength / 20 // 5% of maxLength
+func truncateLargeToolResponses(chatHistory []llm.ChatMessage, retainReasons []map[string]bool, budget int) ([]llm.ChatMessage, []map[string]bool) {
+	threshold := budget / 20 // 5% of budget
 
 	// Find unretained tool responses exceeding threshold
 	type candidate struct {
@@ -557,7 +569,7 @@ func truncateLargeToolResponses(chatHistory []llm.ChatMessage, retainReasons []m
 	copy(result, chatHistory)
 
 	for _, c := range candidates {
-		if totalLength <= maxLength {
+		if totalLength <= budget {
 			break
 		}
 		msg := result[c.index]
