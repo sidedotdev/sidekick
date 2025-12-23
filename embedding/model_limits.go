@@ -24,8 +24,8 @@ const (
 	// both model and provider are unknown
 	defaultMaxBatchSize = 250
 
-	// estimated number of characters per token (conservative under-estimate)
-	charsPerToken         = float64(3.5)
+	// estimated number of characters per token (conservative under-estimate for code/technical content)
+	charsPerToken         = float64(3.3)
 	defaultGoodChunkChars = 3000
 )
 
