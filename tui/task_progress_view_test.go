@@ -199,13 +199,13 @@ func TestShouldHideAction(t *testing.T) {
 func TestTaskProgressModelView(t *testing.T) {
 	tests := []struct {
 		name           string
-		actions        []domain.FlowAction
+		actions        []client.FlowAction
 		wantContains   []string
 		wantNotContain []string
 	}{
 		{
 			name: "completed action shows green indicator",
-			actions: []domain.FlowAction{
+			actions: []client.FlowAction{
 				{
 					Id:           "action-1",
 					ActionType:   "apply_edit_blocks",
@@ -216,7 +216,7 @@ func TestTaskProgressModelView(t *testing.T) {
 		},
 		{
 			name: "failed action shows red indicator and error",
-			actions: []domain.FlowAction{
+			actions: []client.FlowAction{
 				{
 					Id:           "action-1",
 					ActionType:   "merge",
@@ -228,7 +228,7 @@ func TestTaskProgressModelView(t *testing.T) {
 		},
 		{
 			name: "failed action with no result shows unknown error",
-			actions: []domain.FlowAction{
+			actions: []client.FlowAction{
 				{
 					Id:           "action-1",
 					ActionType:   "merge",
@@ -240,7 +240,7 @@ func TestTaskProgressModelView(t *testing.T) {
 		},
 		{
 			name: "in-progress action shows expanded format",
-			actions: []domain.FlowAction{
+			actions: []client.FlowAction{
 				{
 					Id:           "action-1",
 					ActionType:   "generate.code_context",
@@ -251,7 +251,7 @@ func TestTaskProgressModelView(t *testing.T) {
 		},
 		{
 			name: "in-progress action with result shows result line",
-			actions: []domain.FlowAction{
+			actions: []client.FlowAction{
 				{
 					Id:           "action-1",
 					ActionType:   "generate.summary",
@@ -263,7 +263,7 @@ func TestTaskProgressModelView(t *testing.T) {
 		},
 		{
 			name: "in-progress action with params shows params",
-			actions: []domain.FlowAction{
+			actions: []client.FlowAction{
 				{
 					Id:           "action-1",
 					ActionType:   "apply_edit_blocks",
@@ -277,7 +277,7 @@ func TestTaskProgressModelView(t *testing.T) {
 		},
 		{
 			name: "pending action shows yellow indicator",
-			actions: []domain.FlowAction{
+			actions: []client.FlowAction{
 				{
 					Id:           "action-1",
 					ActionType:   "user_request",
@@ -288,7 +288,7 @@ func TestTaskProgressModelView(t *testing.T) {
 		},
 		{
 			name: "multiple actions render in order",
-			actions: []domain.FlowAction{
+			actions: []client.FlowAction{
 				{
 					Id:           "action-1",
 					ActionType:   "generate.code_context",
@@ -329,15 +329,15 @@ func TestTaskProgressModelView(t *testing.T) {
 func TestTaskProgressModelUpdate(t *testing.T) {
 	tests := []struct {
 		name          string
-		initialAction *domain.FlowAction
-		updateAction  domain.FlowAction
+		initialAction *client.FlowAction
+		updateAction  client.FlowAction
 		wantCount     int
 		wantStatus    domain.ActionStatus
 	}{
 		{
 			name:          "adds new action",
 			initialAction: nil,
-			updateAction: domain.FlowAction{
+			updateAction: client.FlowAction{
 				Id:           "action-1",
 				ActionType:   "apply_edit_blocks",
 				ActionStatus: domain.ActionStatusStarted,
@@ -347,12 +347,12 @@ func TestTaskProgressModelUpdate(t *testing.T) {
 		},
 		{
 			name: "updates existing action",
-			initialAction: &domain.FlowAction{
+			initialAction: &client.FlowAction{
 				Id:           "action-1",
 				ActionType:   "apply_edit_blocks",
 				ActionStatus: domain.ActionStatusStarted,
 			},
-			updateAction: domain.FlowAction{
+			updateAction: client.FlowAction{
 				Id:           "action-1",
 				ActionType:   "apply_edit_blocks",
 				ActionStatus: domain.ActionStatusComplete,
@@ -363,7 +363,7 @@ func TestTaskProgressModelUpdate(t *testing.T) {
 		{
 			name:          "hidden action not added",
 			initialAction: nil,
-			updateAction: domain.FlowAction{
+			updateAction: client.FlowAction{
 				Id:           "action-1",
 				ActionType:   "ranked_repo_summary",
 				ActionStatus: domain.ActionStatusStarted,
@@ -376,7 +376,7 @@ func TestTaskProgressModelUpdate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newProgressModel("task-1", "flow-1", nil)
 			if tt.initialAction != nil {
-				m.actions = []domain.FlowAction{*tt.initialAction}
+				m.actions = []client.FlowAction{*tt.initialAction}
 			}
 
 			msg := flowActionChangeMsg{action: tt.updateAction}
@@ -495,57 +495,31 @@ func TestTruncateResult(t *testing.T) {
 func TestGetSubflowDisplayName(t *testing.T) {
 	tests := []struct {
 		name        string
-		subflowName string
 		subflowId   string
 		wantDisplay string
 		wantOk      bool
 	}{
 		{
 			name:        "dev_requirements subflow",
-			subflowName: "dev_requirements",
-			subflowId:   "sf_123",
+			subflowId:   "sf_dev_requirements_123",
 			wantDisplay: "Refining requirements",
 			wantOk:      true,
 		},
 		{
 			name:        "dev_plan subflow",
-			subflowName: "dev_plan",
-			subflowId:   "sf_456",
+			subflowId:   "sf_dev_plan_456",
 			wantDisplay: "Planning",
 			wantOk:      true,
 		},
 		{
-			name:        "dev.step subflow displays name directly",
-			subflowName: "Step 1: Implement feature",
-			subflowId:   "sf_789",
-			wantDisplay: "Step 1: Implement feature",
-			wantOk:      true,
-		},
-		{
-			name:        "dev.step subflow with different step number",
-			subflowName: "Step 3: Add tests",
-			subflowId:   "sf_abc",
-			wantDisplay: "Step 3: Add tests",
-			wantOk:      true,
-		},
-		{
 			name:        "non-whitelisted subflow",
-			subflowName: "some_other_subflow",
 			subflowId:   "sf_xyz",
 			wantDisplay: "",
 			wantOk:      false,
 		},
 		{
-			name:        "empty subflow name",
-			subflowName: "",
-			subflowId:   "sf_empty",
-			wantDisplay: "",
-			wantOk:      false,
-		},
-		{
-			name:        "step-like name without sf_ prefix",
-			subflowName: "Step 1: Something",
-			subflowId:   "other_123",
+			name:        "empty subflow id",
+			subflowId:   "",
 			wantDisplay: "",
 			wantOk:      false,
 		},
@@ -553,7 +527,7 @@ func TestGetSubflowDisplayName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotDisplay, gotOk := getSubflowDisplayName(tt.subflowName, tt.subflowId)
+			gotDisplay, gotOk := getSubflowDisplayName(tt.subflowId)
 			if gotDisplay != tt.wantDisplay {
 				t.Errorf("getSubflowDisplayName() display = %q, want %q", gotDisplay, tt.wantDisplay)
 			}
@@ -567,18 +541,17 @@ func TestGetSubflowDisplayName(t *testing.T) {
 func TestSubflowDisplay(t *testing.T) {
 	tests := []struct {
 		name           string
-		currentSubflow *domain.FlowAction
-		actions        []domain.FlowAction
+		currentSubflow *client.FlowAction
+		actions        []client.FlowAction
 		wantContains   []string
 		wantNotContain []string
 	}{
 		{
 			name: "whitelisted dev_requirements subflow shows header",
-			currentSubflow: &domain.FlowAction{
-				SubflowName: "dev_requirements",
-				SubflowId:   "sf_123",
+			currentSubflow: &client.FlowAction{
+				SubflowId: "sf_dev_requirements_123",
 			},
-			actions: []domain.FlowAction{
+			actions: []client.FlowAction{
 				{
 					Id:           "action-1",
 					ActionType:   "generate.code_context",
@@ -589,11 +562,10 @@ func TestSubflowDisplay(t *testing.T) {
 		},
 		{
 			name: "whitelisted dev_plan subflow shows header",
-			currentSubflow: &domain.FlowAction{
-				SubflowName: "dev_plan",
-				SubflowId:   "sf_456",
+			currentSubflow: &client.FlowAction{
+				SubflowId: "sf_dev_plan_456",
 			},
-			actions: []domain.FlowAction{
+			actions: []client.FlowAction{
 				{
 					Id:           "action-1",
 					ActionType:   "apply_edit_blocks",
@@ -603,27 +575,11 @@ func TestSubflowDisplay(t *testing.T) {
 			wantContains: []string{"Planning", "Applying edits"},
 		},
 		{
-			name: "dev.step subflow shows name directly",
-			currentSubflow: &domain.FlowAction{
-				SubflowName: "Step 2: Add validation",
-				SubflowId:   "sf_789",
-			},
-			actions: []domain.FlowAction{
-				{
-					Id:           "action-1",
-					ActionType:   "merge",
-					ActionStatus: domain.ActionStatusComplete,
-				},
-			},
-			wantContains: []string{"Step 2: Add validation", "Merging changes"},
-		},
-		{
 			name: "non-whitelisted subflow does not show header",
-			currentSubflow: &domain.FlowAction{
-				SubflowName: "some_internal_subflow",
-				SubflowId:   "sf_xyz",
+			currentSubflow: &client.FlowAction{
+				SubflowId: "sf_xyz",
 			},
-			actions: []domain.FlowAction{
+			actions: []client.FlowAction{
 				{
 					Id:           "action-1",
 					ActionType:   "apply_edit_blocks",
@@ -636,7 +592,7 @@ func TestSubflowDisplay(t *testing.T) {
 		{
 			name:           "no subflow shows no header",
 			currentSubflow: nil,
-			actions: []domain.FlowAction{
+			actions: []client.FlowAction{
 				{
 					Id:           "action-1",
 					ActionType:   "generate.summary",
@@ -674,44 +630,41 @@ func TestSubflowDisplay(t *testing.T) {
 func TestSubflowTrackingInUpdate(t *testing.T) {
 	tests := []struct {
 		name               string
-		action             domain.FlowAction
+		action             client.FlowAction
 		wantSubflowTracked bool
-		wantSubflowName    string
+		wantSubflowId      string
 	}{
 		{
 			name: "action with subflow updates currentSubflow",
-			action: domain.FlowAction{
+			action: client.FlowAction{
 				Id:           "action-1",
 				ActionType:   "apply_edit_blocks",
 				ActionStatus: domain.ActionStatusStarted,
-				SubflowName:  "dev_plan",
 				SubflowId:    "sf_123",
 			},
 			wantSubflowTracked: true,
-			wantSubflowName:    "dev_plan",
+			wantSubflowId:      "sf_123",
 		},
 		{
 			name: "action without subflowId does not update currentSubflow",
-			action: domain.FlowAction{
+			action: client.FlowAction{
 				Id:           "action-2",
 				ActionType:   "merge",
 				ActionStatus: domain.ActionStatusStarted,
-				SubflowName:  "",
 				SubflowId:    "",
 			},
 			wantSubflowTracked: false,
 		},
 		{
 			name: "hidden action with subflow still updates currentSubflow",
-			action: domain.FlowAction{
+			action: client.FlowAction{
 				Id:           "action-3",
 				ActionType:   "ranked_repo_summary",
 				ActionStatus: domain.ActionStatusStarted,
-				SubflowName:  "dev_requirements",
 				SubflowId:    "sf_456",
 			},
 			wantSubflowTracked: true,
-			wantSubflowName:    "dev_requirements",
+			wantSubflowId:      "sf_456",
 		},
 	}
 
@@ -726,8 +679,8 @@ func TestSubflowTrackingInUpdate(t *testing.T) {
 			if tt.wantSubflowTracked {
 				if updatedModel.currentSubflow == nil {
 					t.Error("expected currentSubflow to be set, got nil")
-				} else if updatedModel.currentSubflow.SubflowName != tt.wantSubflowName {
-					t.Errorf("expected subflow name %q, got %q", tt.wantSubflowName, updatedModel.currentSubflow.SubflowName)
+				} else if updatedModel.currentSubflow.SubflowId != tt.wantSubflowId {
+					t.Errorf("expected subflow id %q, got %q", tt.wantSubflowId, updatedModel.currentSubflow.SubflowId)
 				}
 			} else {
 				if updatedModel.currentSubflow != nil {
@@ -741,13 +694,13 @@ func TestSubflowTrackingInUpdate(t *testing.T) {
 func TestPendingHumanActionInput(t *testing.T) {
 	tests := []struct {
 		name           string
-		pendingAction  *domain.FlowAction
+		pendingAction  *client.FlowAction
 		wantContains   []string
 		wantNotContain []string
 	}{
 		{
 			name: "pending human action shows input area",
-			pendingAction: &domain.FlowAction{
+			pendingAction: &client.FlowAction{
 				Id:               "action-1",
 				ActionType:       "user_request",
 				ActionStatus:     domain.ActionStatusPending,
@@ -764,7 +717,7 @@ func TestPendingHumanActionInput(t *testing.T) {
 		},
 		{
 			name: "pending human action without requestContent shows input",
-			pendingAction: &domain.FlowAction{
+			pendingAction: &client.FlowAction{
 				Id:               "action-2",
 				ActionType:       "user_request",
 				ActionStatus:     domain.ActionStatusPending,
@@ -819,12 +772,12 @@ func TestPendingHumanActionInput(t *testing.T) {
 func TestPendingActionDetection(t *testing.T) {
 	tests := []struct {
 		name              string
-		action            domain.FlowAction
+		action            client.FlowAction
 		wantPendingAction bool
 	}{
 		{
 			name: "human callback action with pending status sets pendingAction",
-			action: domain.FlowAction{
+			action: client.FlowAction{
 				Id:               "action-1",
 				ActionType:       "user_request",
 				ActionStatus:     domain.ActionStatusPending,
@@ -835,7 +788,7 @@ func TestPendingActionDetection(t *testing.T) {
 		},
 		{
 			name: "human action without callback does not set pendingAction",
-			action: domain.FlowAction{
+			action: client.FlowAction{
 				Id:               "action-2",
 				ActionType:       "user_request",
 				ActionStatus:     domain.ActionStatusPending,
@@ -846,7 +799,7 @@ func TestPendingActionDetection(t *testing.T) {
 		},
 		{
 			name: "callback action without human flag does not set pendingAction",
-			action: domain.FlowAction{
+			action: client.FlowAction{
 				Id:               "action-3",
 				ActionType:       "user_request",
 				ActionStatus:     domain.ActionStatusPending,
@@ -857,7 +810,7 @@ func TestPendingActionDetection(t *testing.T) {
 		},
 		{
 			name: "human callback action with started status does not set pendingAction",
-			action: domain.FlowAction{
+			action: client.FlowAction{
 				Id:               "action-4",
 				ActionType:       "user_request",
 				ActionStatus:     domain.ActionStatusStarted,
@@ -893,7 +846,7 @@ func TestPendingActionCleared(t *testing.T) {
 	m := newProgressModel("task-1", "flow-1", nil)
 
 	// Set up a pending action
-	pendingAction := domain.FlowAction{
+	pendingAction := client.FlowAction{
 		Id:               "action-1",
 		ActionType:       "user_request",
 		ActionStatus:     domain.ActionStatusPending,
@@ -909,7 +862,7 @@ func TestPendingActionCleared(t *testing.T) {
 	}
 
 	// Now complete the action
-	completedAction := domain.FlowAction{
+	completedAction := client.FlowAction{
 		Id:               "action-1",
 		ActionType:       "user_request",
 		ActionStatus:     domain.ActionStatusComplete,
@@ -928,47 +881,47 @@ func TestPendingActionCleared(t *testing.T) {
 func TestGetInputModeForAction(t *testing.T) {
 	tests := []struct {
 		name     string
-		action   domain.FlowAction
+		action   client.FlowAction
 		expected inputMode
 	}{
 		{
 			name: "approval request kind",
-			action: domain.FlowAction{
+			action: client.FlowAction{
 				ActionParams: map[string]interface{}{"requestKind": "approval"},
 			},
 			expected: inputModeApproval,
 		},
 		{
 			name: "merge_approval request kind",
-			action: domain.FlowAction{
+			action: client.FlowAction{
 				ActionParams: map[string]interface{}{"requestKind": "merge_approval"},
 			},
 			expected: inputModeApproval,
 		},
 		{
 			name: "continue request kind",
-			action: domain.FlowAction{
+			action: client.FlowAction{
 				ActionParams: map[string]interface{}{"requestKind": "continue"},
 			},
 			expected: inputModeContinue,
 		},
 		{
 			name: "free_form request kind",
-			action: domain.FlowAction{
+			action: client.FlowAction{
 				ActionParams: map[string]interface{}{"requestKind": "free_form"},
 			},
 			expected: inputModeFreeForm,
 		},
 		{
 			name: "no request kind defaults to free form",
-			action: domain.FlowAction{
+			action: client.FlowAction{
 				ActionParams: map[string]interface{}{},
 			},
 			expected: inputModeFreeForm,
 		},
 		{
 			name: "nil action params defaults to free form",
-			action: domain.FlowAction{
+			action: client.FlowAction{
 				ActionParams: nil,
 			},
 			expected: inputModeFreeForm,
@@ -1103,7 +1056,7 @@ func TestApprovalInputView(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			action := domain.FlowAction{
+			action := client.FlowAction{
 				Id:               "action-1",
 				ActionType:       "user_request",
 				ActionStatus:     domain.ActionStatusPending,
@@ -1127,7 +1080,7 @@ func TestApprovalInputView(t *testing.T) {
 }
 
 func TestApprovalInputModeTransition(t *testing.T) {
-	action := domain.FlowAction{
+	action := client.FlowAction{
 		Id:           "action-1",
 		WorkspaceId:  "ws-1",
 		ActionType:   "user_request.approve.dev_plan",
@@ -1180,7 +1133,7 @@ func TestMergeApprovalIncludesTargetBranch(t *testing.T) {
 		}).
 		Return(nil)
 
-	action := domain.FlowAction{
+	action := client.FlowAction{
 		Id:           "action-1",
 		WorkspaceId:  "ws-1",
 		ActionType:   "user_request.approve.merge",

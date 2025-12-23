@@ -80,7 +80,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	// defer conn.Close()
 
 	// Send a flow action
-	action := domain.FlowAction{
+	action := client.FlowAction{
 		FlowId:       "flow1",
 		ActionType:   "test",
 		ActionStatus: domain.ActionStatusComplete,
