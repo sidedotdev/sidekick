@@ -728,7 +728,17 @@ var multipleMatchesMessage = "Multiple matches found for the given edit block %s
 
 func getUpdatedContents(block EditBlock, originalContents string) (string, error) {
 	originalLines := strings.Split(originalContents, "\n")
-	bestMatch, allMatches := FindAcceptableMatch(block, originalLines, true)
+
+	// Phase 1: match using the block as-is with DefaultMatchOptions
+	bestMatch, allMatches := FindAcceptableMatchWithOptions(block, originalLines, true, DefaultMatchOptions)
+
+	// Phase 2 fallback: if Phase 1 found zero matches and visibility filtering was enabled,
+	// retry with visibility filtering disabled but stricter thresholds
+	if len(allMatches) == 0 && block.VisibleFileRanges != nil {
+		fallbackBlock := block
+		fallbackBlock.VisibleFileRanges = nil
+		bestMatch, allMatches = FindAcceptableMatchWithOptions(fallbackBlock, originalLines, true, FallbackNoVisibilityMatchOptions)
+	}
 
 	if len(allMatches) > 1 {
 		// TODO while all the matches have met the "threshold" for similarity,
@@ -902,6 +912,15 @@ var DefaultMatchOptions = MatchOptions{
 	SimilarityThreshold:         0.85,
 	HighScoreLineCutoff:         0.925,
 	MinAcceptableHighScoreRatio: 0.95,
+}
+
+// FallbackNoVisibilityMatchOptions provides stricter thresholds for Phase 2 fallback
+// matching when visibility filtering is disabled. These stricter thresholds reduce
+// false positives when matching without visibility constraints.
+var FallbackNoVisibilityMatchOptions = MatchOptions{
+	SimilarityThreshold:         0.95,
+	HighScoreLineCutoff:         0.975,
+	MinAcceptableHighScoreRatio: 0.99,
 }
 
 type match struct {
