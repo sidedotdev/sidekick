@@ -136,6 +136,8 @@ func TestBuildAuthorEditBlockInitialPrompt(t *testing.T) {
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
 	assert.Contains(t, prompt, getHelpOrInputTool.Name)
+	assert.Contains(t, prompt, doneTool.Name)
+	assert.NotContains(t, prompt, "#START SUMMARY")
 
 	dCtx.RepoConfig.DisableHumanInTheLoop = true
 	prompt = renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false)
@@ -143,6 +145,8 @@ func TestBuildAuthorEditBlockInitialPrompt(t *testing.T) {
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
 	assert.NotContains(t, prompt, getHelpOrInputTool.Name)
+	assert.Contains(t, prompt, doneTool.Name)
+	assert.NotContains(t, prompt, "#START SUMMARY")
 }
 
 func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
@@ -158,6 +162,8 @@ func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
 	assert.Contains(t, prompt, "plan")
 	assert.Contains(t, prompt, "step")
 	assert.Contains(t, prompt, getHelpOrInputTool.Name)
+	assert.Contains(t, prompt, doneTool.Name)
+	assert.NotContains(t, prompt, "#START SUMMARY")
 
 	dCtx.RepoConfig.DisableHumanInTheLoop = true
 	prompt = renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false)
@@ -167,4 +173,6 @@ func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
 	assert.Contains(t, prompt, "plan")
 	assert.Contains(t, prompt, "step")
 	assert.NotContains(t, prompt, getHelpOrInputTool.Name)
+	assert.Contains(t, prompt, doneTool.Name)
+	assert.NotContains(t, prompt, "#START SUMMARY")
 }

@@ -530,14 +530,13 @@ func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requiremen
 		"requirements":                    requirements,
 		"startInitialCodeContext":         startInitialCodeContext,
 		"endInitialCodeContext":           endInitialCodeContext,
-		"summaryStart":                    summaryStart,
-		"summaryEnd":                      summaryEnd,
 		"search":                          search,
 		"divider":                         divider,
 		"replace":                         replace,
 		"editCodeHints":                   dCtx.RepoConfig.EditCode.Hints,
 		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,
 		"applyEditBlocksImmediately":      applyEditBlocksImmediately,
+		"doneFunctionName":                doneTool.Name,
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		data["getHelpOrInputFunctionName"] = getHelpOrInputTool.Name
@@ -553,14 +552,13 @@ func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, req
 		"currentStep":                     currentStep,
 		"startInitialCodeContext":         startInitialCodeContext,
 		"endInitialCodeContext":           endInitialCodeContext,
-		"summaryStart":                    summaryStart,
-		"summaryEnd":                      summaryEnd,
 		"search":                          search,
 		"divider":                         divider,
 		"replace":                         replace,
 		"editCodeHints":                   dCtx.RepoConfig.EditCode.Hints,
 		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,
 		"applyEditBlocksImmediately":      applyEditBlocksImmediately,
+		"doneFunctionName":                doneTool.Name,
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		data["getHelpOrInputFunctionName"] = getHelpOrInputTool.Name
