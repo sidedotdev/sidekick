@@ -455,7 +455,8 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 	}
 
 	approvalResponse, err := GetUserMergeApproval(dCtx, "Please review these changes", map[string]any{
-		"mergeApprovalInfo": mergeParams,
+		"mergeApprovalInfo":  mergeParams,
+		"lastReviewTreeHash": lastReviewTreeHash,
 	})
 	if err != nil {
 		return MergeApprovalResponse{}, "", "", err
