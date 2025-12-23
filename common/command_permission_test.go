@@ -388,9 +388,9 @@ func TestEvaluateCommandPermission(t *testing.T) {
 			expectedMsg:    "",
 		},
 		{
-			name:           "auto-approve prefix match",
+			name:           "auto-approve prefix match with absolute path requires approval",
 			command:        "ls -la /tmp",
-			expectedResult: PermissionAutoApprove,
+			expectedResult: PermissionRequireApproval,
 			expectedMsg:    "",
 		},
 		{
@@ -436,6 +436,449 @@ func TestEvaluateCommandPermission(t *testing.T) {
 			result, msg := EvaluateCommandPermission(config, tt.command)
 			assert.Equal(t, tt.expectedResult, result)
 			assert.Equal(t, tt.expectedMsg, msg)
+		})
+	}
+}
+
+func TestContainsAbsolutePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		command  string
+		expected bool
+	}{
+		{
+			name:     "no absolute path",
+			command:  "ls -la",
+			expected: false,
+		},
+		{
+			name:     "relative path",
+			command:  "cat ./foo/bar.txt",
+			expected: false,
+		},
+		{
+			name:     "absolute path argument",
+			command:  "cat /etc/passwd",
+			expected: true,
+		},
+		{
+			name:     "absolute path in middle",
+			command:  "cp /etc/passwd /tmp/passwd",
+			expected: true,
+		},
+		{
+			name:     "safe path /dev/null",
+			command:  "echo hello > /dev/null",
+			expected: false,
+		},
+		{
+			name:     "safe path /dev/stdin",
+			command:  "cat /dev/stdin",
+			expected: false,
+		},
+		{
+			name:     "safe path /dev/stdout",
+			command:  "echo hello > /dev/stdout",
+			expected: false,
+		},
+		{
+			name:     "safe path /dev/stderr",
+			command:  "echo error > /dev/stderr",
+			expected: false,
+		},
+		{
+			name:     "absolute path in quotes",
+			command:  `cat "/etc/passwd"`,
+			expected: true,
+		},
+		{
+			name:     "absolute path in single quotes",
+			command:  `cat '/etc/passwd'`,
+			expected: true,
+		},
+		{
+			name:     "path with spaces in quotes",
+			command:  `cat "/path/with spaces/file.txt"`,
+			expected: true,
+		},
+		{
+			name:     "command starting with absolute path",
+			command:  "/usr/bin/ls -la",
+			expected: true,
+		},
+		{
+			name:     "piped command with absolute path",
+			command:  "cat /etc/passwd | grep root",
+			expected: true,
+		},
+		{
+			name:     "command with flag looking like path",
+			command:  "ls --color=auto",
+			expected: false,
+		},
+		{
+			name:     "flag with absolute path value",
+			command:  "myapp --config=/etc/myapp/config.yaml",
+			expected: true,
+		},
+		{
+			name:     "flag with absolute path using equals",
+			command:  "tar -xf archive.tar --directory=/tmp/extract",
+			expected: true,
+		},
+		{
+			name:     "path with trailing slash",
+			command:  "ls /etc/",
+			expected: true,
+		},
+		{
+			name:     "path with glob pattern",
+			command:  "ls /var/log/*.log",
+			expected: true,
+		},
+		{
+			name:     "colon-separated paths",
+			command:  "export PATH=/usr/local/bin:/usr/bin",
+			expected: true,
+		},
+		{
+			name:     "awk regex pattern detected as path",
+			command:  "awk '/pattern/ {print}' file.txt",
+			expected: true,
+		},
+		{
+			name:     "sed regex not a path",
+			command:  "sed 's/foo/bar/g' file.txt",
+			expected: false,
+		},
+		{
+			name:     "path with shell variable",
+			command:  "cat /etc/$FILE",
+			expected: true,
+		},
+		{
+			name:     "path with shell variable in braces",
+			command:  "cat /tmp/${dir}/file.txt",
+			expected: true,
+		},
+		{
+			name:     "path with command substitution",
+			command:  "cat /tmp/$(whoami)/file.txt",
+			expected: true,
+		},
+		{
+			name:     "PATH assignment before command",
+			command:  "PATH=$PATH:/some/path ls",
+			expected: true,
+		},
+		{
+			name:     "URL with http scheme not a path",
+			command:  "curl http://localhost:3000/some/path",
+			expected: false,
+		},
+		{
+			name:     "URL with http scheme in quotes not a path",
+			command:  `curl "http://localhost:3000/some/path"`,
+			expected: false,
+		},
+		{
+			name:     "URL without scheme not a path",
+			command:  "curl localhost:3000/some/path",
+			expected: false,
+		},
+		{
+			name:     "path with trailing slash data",
+			command:  "ls /data/",
+			expected: true,
+		},
+		{
+			name:     "path with trailing slash workspace",
+			command:  "ls /workspace/",
+			expected: true,
+		},
+		{
+			name:     "path with trailing slash custom dir",
+			command:  "ls /mydir/",
+			expected: true,
+		},
+		{
+			name:     "sed substitution not a path",
+			command:  "sed 's/old/new/g' file.txt",
+			expected: false,
+		},
+		{
+			name:     "sed delete pattern not a path",
+			command:  "sed '/pattern/d' file.txt",
+			expected: false,
+		},
+		{
+			name:     "sed print pattern not a path",
+			command:  "sed -n '/pattern/p' file.txt",
+			expected: false,
+		},
+		{
+			name:     "sed in-place substitution not a path",
+			command:  "sed -i 's/old/new/g' file.txt",
+			expected: false,
+		},
+		{
+			name:     "sed with absolute path file argument",
+			command:  "sed 's/foo/bar/g' /etc/passwd",
+			expected: true,
+		},
+		{
+			name:     "sed in-place with absolute path",
+			command:  "sed -i 's/old/new/g' /etc/config",
+			expected: true,
+		},
+		{
+			name:     "perl pie substitution not a path",
+			command:  "perl -pi -e 's/foo/bar/g' file.txt",
+			expected: false,
+		},
+		{
+			name:     "perl pe substitution not a path",
+			command:  "perl -pe 's/foo/bar/g' file.txt",
+			expected: false,
+		},
+		{
+			name:     "perl pie with absolute path file",
+			command:  "perl -pi -e 's/foo/bar/g' /etc/passwd",
+			expected: true,
+		},
+		{
+			name:     "grep regex not a path",
+			command:  "grep '/^test/' file.txt",
+			expected: false,
+		},
+		{
+			name:     "awk pattern with absolute path file still detected",
+			command:  "awk '/pattern/ {print}' /etc/passwd",
+			expected: true,
+		},
+		{
+			name:     "awk with absolute path still detected",
+			command:  "awk -F: '{print $1}' /etc/passwd",
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := containsAbsolutePath(tt.command)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestEvaluateCommandPermission_AbsolutePaths(t *testing.T) {
+	config := CommandPermissionConfig{
+		AutoApprove: []CommandPattern{
+			{Pattern: "ls"},
+			{Pattern: "cat"},
+			{Pattern: "echo"},
+			{Pattern: "cp"},
+			{Pattern: "tar"},
+			{Pattern: "myapp"},
+			{Pattern: "export"},
+			{Pattern: "curl"},
+			{Pattern: "sed"},
+			{Pattern: "perl"},
+		},
+	}
+
+	tests := []struct {
+		name           string
+		command        string
+		expectedResult PermissionResult
+	}{
+		// Basic cases - relative paths auto-approved
+		{
+			name:           "auto-approve ls with flags only",
+			command:        "ls -la",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "auto-approve ls with relative path",
+			command:        "ls ./mydir",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "require approval ls with absolute path",
+			command:        "ls /etc",
+			expectedResult: PermissionRequireApproval,
+		},
+		{
+			name:           "require approval ls with absolute path trailing slash",
+			command:        "ls /etc/",
+			expectedResult: PermissionRequireApproval,
+		},
+		// cat command
+		{
+			name:           "auto-approve cat with relative path",
+			command:        "cat ./file.txt",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "require approval cat with absolute path",
+			command:        "cat /etc/passwd",
+			expectedResult: PermissionRequireApproval,
+		},
+		// Safe /dev paths remain auto-approved
+		{
+			name:           "auto-approve echo with safe /dev/null",
+			command:        "echo hello > /dev/null",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "auto-approve cat /dev/stdin",
+			command:        "cat /dev/stdin",
+			expectedResult: PermissionAutoApprove,
+		},
+		// cp command
+		{
+			name:           "auto-approve cp with relative paths",
+			command:        "cp ./src.txt ./dest.txt",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "require approval cp with absolute source",
+			command:        "cp /etc/passwd ./local.txt",
+			expectedResult: PermissionRequireApproval,
+		},
+		{
+			name:           "require approval cp with absolute dest",
+			command:        "cp ./local.txt /tmp/dest.txt",
+			expectedResult: PermissionRequireApproval,
+		},
+		// Flag-style paths
+		{
+			name:           "auto-approve tar with relative directory",
+			command:        "tar -xf archive.tar --directory=./extract",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "require approval tar with absolute directory flag",
+			command:        "tar -xf archive.tar --directory=/tmp/extract",
+			expectedResult: PermissionRequireApproval,
+		},
+		{
+			name:           "auto-approve myapp with relative config",
+			command:        "myapp --config=./config.yaml",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "require approval myapp with absolute config flag",
+			command:        "myapp --config=/etc/myapp/config.yaml",
+			expectedResult: PermissionRequireApproval,
+		},
+		// Glob patterns
+		{
+			name:           "auto-approve ls with relative glob",
+			command:        "ls ./*.log",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "require approval ls with absolute glob",
+			command:        "ls /var/log/*.log",
+			expectedResult: PermissionRequireApproval,
+		},
+		// Colon-separated paths (like PATH exports)
+		{
+			name:           "auto-approve export with relative paths",
+			command:        "export PATH=./bin:../lib",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "require approval export with absolute paths",
+			command:        "export PATH=/usr/local/bin:/usr/bin",
+			expectedResult: PermissionRequireApproval,
+		},
+		// Custom directory paths with trailing slash (regression test for /data/ etc)
+		{
+			name:           "require approval ls with /data/ path",
+			command:        "ls /data/",
+			expectedResult: PermissionRequireApproval,
+		},
+		{
+			name:           "require approval ls with /workspace/ path",
+			command:        "ls /workspace/",
+			expectedResult: PermissionRequireApproval,
+		},
+		{
+			name:           "require approval cat with /data/file.txt",
+			command:        "cat /data/file.txt",
+			expectedResult: PermissionRequireApproval,
+		},
+		// URLs should not trigger absolute path detection
+		{
+			name:           "auto-approve curl with http URL",
+			command:        "curl http://localhost:3000/some/path",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "auto-approve curl with quoted http URL",
+			command:        `curl "http://localhost:3000/some/path"`,
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "auto-approve curl with localhost URL without scheme",
+			command:        "curl localhost:3000/some/path",
+			expectedResult: PermissionAutoApprove,
+		},
+		// sed regex patterns should be auto-approved when file args are relative
+		{
+			name:           "auto-approve sed substitution with relative file",
+			command:        "sed 's/foo/bar/g' file.txt",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "auto-approve sed delete pattern with relative file",
+			command:        "sed '/pattern/d' file.txt",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "auto-approve sed print pattern with relative file",
+			command:        "sed -n '/pattern/p' file.txt",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "auto-approve sed in-place with relative file",
+			command:        "sed -i 's/old/new/g' file.txt",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "require approval sed with absolute path file",
+			command:        "sed 's/foo/bar/g' /etc/passwd",
+			expectedResult: PermissionRequireApproval,
+		},
+		{
+			name:           "require approval sed in-place with absolute path",
+			command:        "sed -i 's/old/new/g' /etc/config",
+			expectedResult: PermissionRequireApproval,
+		},
+		// perl -pi -e and -pe patterns should be auto-approved when file args are relative
+		{
+			name:           "auto-approve perl pie with relative file",
+			command:        "perl -pi -e 's/foo/bar/g' file.txt",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "auto-approve perl pe with relative file",
+			command:        "perl -pe 's/foo/bar/g' file.txt",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "require approval perl pie with absolute path file",
+			command:        "perl -pi -e 's/foo/bar/g' /etc/passwd",
+			expectedResult: PermissionRequireApproval,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, _ := EvaluateCommandPermission(config, tt.command)
+			assert.Equal(t, tt.expectedResult, result)
 		})
 	}
 }
@@ -613,17 +1056,39 @@ func TestEvaluateScriptPermission_WithBasePermissions(t *testing.T) {
 		assert.Equal(t, PermissionRequireApproval, result, "require-approval should take precedence over auto-approve")
 	})
 
-	t.Run("plain awk remains auto-approved", func(t *testing.T) {
+	t.Run("plain awk without absolute paths remains auto-approved", func(t *testing.T) {
 		safeAwkScripts := []string{
 			"awk '{print $1}' file.txt",
-			"awk -F: '{print $1}' /etc/passwd",
 			"awk 'NR==1' file.txt",
-			"awk '/pattern/ {print}' file.txt",
 		}
 
 		for _, script := range safeAwkScripts {
 			result, _ := EvaluateScriptPermission(config, script)
 			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", script)
+		}
+	})
+
+	t.Run("awk with regex pattern requires approval", func(t *testing.T) {
+		// awk regex patterns like /pattern/ are detected as potential paths
+		// since we can't reliably distinguish them without a full awk parser
+		awkWithRegex := []string{
+			"awk '/pattern/ {print}' file.txt",
+		}
+
+		for _, script := range awkWithRegex {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionRequireApproval, result, "expected require-approval for: %s", script)
+		}
+	})
+
+	t.Run("awk with absolute paths requires approval", func(t *testing.T) {
+		awkWithAbsolutePaths := []string{
+			"awk -F: '{print $1}' /etc/passwd",
+		}
+
+		for _, script := range awkWithAbsolutePaths {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionRequireApproval, result, "expected require-approval for: %s", script)
 		}
 	})
 
@@ -651,6 +1116,9 @@ func TestEvaluateScriptPermission_WithBasePermissions(t *testing.T) {
 			"cat ${HOME}/.bashrc",
 			"ls ~/",
 			"grep secret $HOME/.env",
+			"cat ~root/.ssh/id_rsa",
+			"ls ~root",
+			"cat ~user/file",
 		}
 
 		for _, script := range homeAccessScripts {

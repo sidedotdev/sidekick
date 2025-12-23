@@ -193,6 +193,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: `awk.*printf.*\|`},
 			// Home directory access (potential secret exfiltration)
 			{Pattern: `.*~`},
+			{Pattern: `.*~[a-zA-Z]`},
 			{Pattern: `.*\$HOME`},
 			{Pattern: `.*\$\{HOME\}`},
 			// Parent directory traversal (escaping repo context)
@@ -348,6 +349,325 @@ func interpolateMessage(message string, matches []string) string {
 	return result
 }
 
+// containsAbsolutePath checks if a command contains an absolute path argument.
+// Returns true if any argument contains an absolute path (excluding common safe paths).
+func containsAbsolutePath(command string) bool {
+	parts := parseCommandForPaths(command)
+
+	// Detect if this is a sed or perl regex command context
+	regexArgIndices := detectRegexArguments(parts)
+
+	for i, part := range parts {
+		// Skip parts that are known regex arguments in sed/perl context
+		if regexArgIndices[i] {
+			continue
+		}
+		if containsAbsolutePathInPart(part) {
+			return true
+		}
+	}
+	return false
+}
+
+// detectRegexArguments identifies which command parts are regex arguments
+// in known regex-based commands (sed, perl -pe/-pie). Returns a map of
+// part indices that should be treated as regex patterns, not paths.
+func detectRegexArguments(parts []string) map[int]bool {
+	result := make(map[int]bool)
+	if len(parts) == 0 {
+		return result
+	}
+
+	cmd := parts[0]
+
+	// Handle sed commands: sed [options] 'pattern' or sed [options] '/pattern/d'
+	if cmd == "sed" {
+		for i := 1; i < len(parts); i++ {
+			part := parts[i]
+			// Skip flags like -i, -n, -e, etc.
+			if strings.HasPrefix(part, "-") {
+				continue
+			}
+			// The first non-flag argument is the sed expression
+			if isSedExpression(part) {
+				result[i] = true
+				break
+			}
+		}
+	}
+
+	// Handle perl -pe or -pi -e commands
+	if cmd == "perl" {
+		for i := 1; i < len(parts); i++ {
+			part := parts[i]
+			// Look for -e flag followed by expression, or -pe/-pie combined flags
+			if part == "-e" && i+1 < len(parts) {
+				if isPerlExpression(parts[i+1]) {
+					result[i+1] = true
+				}
+			} else if (part == "-pe" || part == "-pie" || part == "-pi") && i+1 < len(parts) {
+				// -pi is followed by -e, then expression
+				if part == "-pi" && i+1 < len(parts) && parts[i+1] == "-e" && i+2 < len(parts) {
+					if isPerlExpression(parts[i+2]) {
+						result[i+2] = true
+					}
+				}
+			} else if strings.HasPrefix(part, "-") && strings.Contains(part, "e") {
+				// Combined flags like -pie, -pe, -npe, etc.
+				// Next non-flag argument after -e containing flag is the expression
+				if i+1 < len(parts) && isPerlExpression(parts[i+1]) {
+					result[i+1] = true
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+// isSedExpression checks if a string looks like a sed expression
+// (substitution, deletion, print commands, etc.)
+func isSedExpression(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	// Common sed expression patterns:
+	// s/pattern/replacement/flags - substitution
+	// /pattern/d - delete
+	// /pattern/p - print
+	// /pattern/! - negation
+	// Address ranges like 1,5d or /start/,/end/d
+	if s[0] == 's' || s[0] == 'y' {
+		return true
+	}
+	if s[0] == '/' {
+		return true
+	}
+	// Numeric address like "1d", "1,5d"
+	if len(s) > 0 && s[0] >= '0' && s[0] <= '9' {
+		return true
+	}
+	return false
+}
+
+// isPerlExpression checks if a string looks like a perl one-liner expression
+func isPerlExpression(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	// Common perl expressions start with s/, tr/, y/, or contain typical perl code
+	if strings.HasPrefix(s, "s/") || strings.HasPrefix(s, "tr/") || strings.HasPrefix(s, "y/") {
+		return true
+	}
+	// Also match expressions that start with quotes containing these
+	if len(s) > 1 && (s[0] == '\'' || s[0] == '"') {
+		inner := s[1:]
+		if strings.HasPrefix(inner, "s/") || strings.HasPrefix(inner, "tr/") || strings.HasPrefix(inner, "y/") {
+			return true
+		}
+	}
+	return false
+}
+
+// containsAbsolutePathInPart checks if a single command part contains an absolute path.
+func containsAbsolutePathInPart(part string) bool {
+	// Common safe absolute paths that don't require extra approval
+	safePaths := []string{
+		"/dev/null",
+		"/dev/stdin",
+		"/dev/stdout",
+		"/dev/stderr",
+	}
+
+	// Find all potential absolute paths in the part (handles --flag=/path cases)
+	paths := extractAbsolutePaths(part)
+	for _, path := range paths {
+		// Skip if it looks like code (awk programs, etc.) rather than a path
+		if looksLikeCode(path) {
+			continue
+		}
+
+		// Check against safe paths
+		isSafe := false
+		for _, safePath := range safePaths {
+			if path == safePath || strings.HasPrefix(path, safePath+"/") || strings.HasPrefix(path, safePath) && len(path) == len(safePath) {
+				isSafe = true
+				break
+			}
+		}
+		if !isSafe {
+			return true
+		}
+	}
+	return false
+}
+
+// extractAbsolutePaths finds all absolute paths within a string.
+// Handles cases like "/etc/passwd", "--file=/etc/passwd", "prefix/etc" (not absolute).
+func extractAbsolutePaths(s string) []string {
+	var paths []string
+
+	// Look for absolute paths starting with /
+	for i := 0; i < len(s); i++ {
+		if s[i] == '/' {
+			// Check if this is the start of an absolute path
+			// It's absolute if it's at the start OR preceded by = or :
+			if i == 0 || s[i-1] == '=' || s[i-1] == ':' {
+				// Skip URL schemes like http:// or https://
+				if i > 0 && s[i-1] == ':' && i+1 < len(s) && s[i+1] == '/' {
+					continue
+				}
+				// Extract the path starting from this position
+				path := extractPathFrom(s, i)
+				if len(path) > 1 && looksLikePathContent(path) && !looksLikeRegex(path) {
+					paths = append(paths, path)
+				}
+			}
+		}
+	}
+
+	return paths
+}
+
+// looksLikeRegex checks if a string looks like a regex pattern (e.g., /pattern/)
+// rather than an absolute path. Only returns true for patterns that contain
+// obvious regex metacharacters, to avoid false positives on paths like /data/.
+func looksLikeRegex(s string) bool {
+	if len(s) < 3 || s[0] != '/' {
+		return false
+	}
+
+	// Must end with / to be a regex delimiter
+	if s[len(s)-1] != '/' {
+		return false
+	}
+
+	// Check if there are any slashes in the middle (would indicate a multi-level path)
+	middle := s[1 : len(s)-1]
+	if strings.Contains(middle, "/") {
+		return false
+	}
+
+	// Only treat as regex if it contains obvious regex metacharacters
+	// This is conservative to avoid false negatives on real paths like /data/
+	regexChars := []byte{'^', '$', '*', '+', '?', '[', ']', '(', ')', '{', '}', '|', '\\', '.'}
+	for _, c := range regexChars {
+		if strings.ContainsRune(middle, rune(c)) {
+			return true
+		}
+	}
+
+	// No regex metacharacters found - treat as a path, not a regex
+	return false
+}
+
+// extractPathFrom extracts a path starting at the given index.
+func extractPathFrom(s string, start int) string {
+	end := start
+	for end < len(s) {
+		c := s[end]
+		// Stop at characters that typically end a path in shell contexts
+		if c == ':' || c == '=' || c == ',' || c == ';' || c == ' ' || c == '\t' {
+			break
+		}
+		end++
+	}
+	return s[start:end]
+}
+
+// looksLikePathContent checks if a string looks like path content (not code).
+// Allows typical path chars including globs and shell variable expansions,
+// but rejects obvious code constructs like pipes, redirects, and semicolons.
+func looksLikePathContent(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+
+	// Must start with /
+	if s[0] != '/' {
+		return false
+	}
+
+	// Check for obvious code patterns that indicate this isn't a path
+	// Pipes, redirects, semicolons, and backticks indicate code, not paths
+	// We allow $, {, }, (, ) since they're used in shell variable expansions
+	for _, c := range s {
+		if c == '`' || c == '\'' || c == '"' ||
+			c == '|' || c == '&' || c == '<' || c == '>' ||
+			c == ';' || c == '#' || c == '+' {
+			return false
+		}
+	}
+
+	return true
+}
+
+// looksLikeCode checks if a string looks like code rather than a path
+// (contains programming constructs like pipes, redirects, semicolons, etc.)
+// We allow $, {, }, (, ) since they're used in shell variable expansions
+func looksLikeCode(s string) bool {
+	for _, c := range s {
+		if c == '`' || c == '\'' || c == '"' ||
+			c == '|' || c == '&' || c == '<' || c == '>' ||
+			c == ';' || c == '#' || c == '+' {
+			return true
+		}
+	}
+	return false
+}
+
+// parseCommandForPaths splits a command into parts for path detection,
+// handling quotes and escapes.
+func parseCommandForPaths(cmd string) []string {
+	var parts []string
+	var current strings.Builder
+	inSingleQuote := false
+	inDoubleQuote := false
+	escaped := false
+
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+
+		if escaped {
+			current.WriteByte(c)
+			escaped = false
+			continue
+		}
+
+		if c == '\\' && !inSingleQuote {
+			escaped = true
+			continue
+		}
+
+		if c == '\'' && !inDoubleQuote {
+			inSingleQuote = !inSingleQuote
+			continue
+		}
+
+		if c == '"' && !inSingleQuote {
+			inDoubleQuote = !inDoubleQuote
+			continue
+		}
+
+		// Split on whitespace and common shell operators
+		if !inSingleQuote && !inDoubleQuote && (c == ' ' || c == '\t' || c == ';' || c == '|' || c == '&' || c == '>' || c == '<') {
+			if current.Len() > 0 {
+				parts = append(parts, current.String())
+				current.Reset()
+			}
+			continue
+		}
+
+		current.WriteByte(c)
+	}
+
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+
+	return parts
+}
+
 // EvaluateCommandPermission evaluates a single command against the permission config.
 // It checks deny patterns first, then require-approval, then auto-approve.
 // Returns the permission result and any associated message.
@@ -373,6 +693,10 @@ func EvaluateCommandPermission(config CommandPermissionConfig, command string) (
 	// Check auto-approve patterns
 	for _, p := range config.AutoApprove {
 		if matched, _ := matchPattern(p.Pattern, command); matched {
+			// Even if auto-approved, require approval for commands with absolute paths
+			if containsAbsolutePath(command) {
+				return PermissionRequireApproval, ""
+			}
 			return PermissionAutoApprove, ""
 		}
 	}
