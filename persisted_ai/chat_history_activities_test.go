@@ -62,8 +62,7 @@ func noopManageLlm2ChatHistory(messages []llm2.Message, maxLength int) ([]llm2.M
 func TestManageV3_HydratesHistory(t *testing.T) {
 	storage := newMockKVStorage()
 	activities := &ChatHistoryActivities{
-		Storage:                   storage,
-		ManageLlm2ChatHistoryFunc: noopManageLlm2ChatHistory,
+		Storage: storage,
 	}
 
 	original := temp_common2.NewLlm2ChatHistory("flow-123", "workspace-456")
@@ -93,8 +92,7 @@ func TestManageV3_HydratesHistory(t *testing.T) {
 func TestManageV3_PersistsHistory(t *testing.T) {
 	storage := newMockKVStorage()
 	activities := &ChatHistoryActivities{
-		Storage:                   storage,
-		ManageLlm2ChatHistoryFunc: noopManageLlm2ChatHistory,
+		Storage: storage,
 	}
 
 	history := temp_common2.NewLlm2ChatHistory("flow-123", "workspace-456")
@@ -115,8 +113,7 @@ func TestManageV3_HydrationError(t *testing.T) {
 	storage := newMockKVStorage()
 	storage.mgetErr = errors.New("hydration failed")
 	activities := &ChatHistoryActivities{
-		Storage:                   storage,
-		ManageLlm2ChatHistoryFunc: noopManageLlm2ChatHistory,
+		Storage: storage,
 	}
 
 	original := temp_common2.NewLlm2ChatHistory("flow-123", "workspace-456")
@@ -147,8 +144,7 @@ func TestManageV3_PersistError(t *testing.T) {
 	storage := newMockKVStorage()
 	storage.msetErr = errors.New("persist failed")
 	activities := &ChatHistoryActivities{
-		Storage:                   storage,
-		ManageLlm2ChatHistoryFunc: noopManageLlm2ChatHistory,
+		Storage: storage,
 	}
 
 	history := temp_common2.NewLlm2ChatHistory("flow-123", "workspace-456")
@@ -167,8 +163,7 @@ func TestManageV3_PersistError(t *testing.T) {
 func TestManageV3_WrongHistoryType(t *testing.T) {
 	storage := newMockKVStorage()
 	activities := &ChatHistoryActivities{
-		Storage:                   storage,
-		ManageLlm2ChatHistoryFunc: noopManageLlm2ChatHistory,
+		Storage: storage,
 	}
 
 	legacyHistory := common.NewLegacyChatHistoryFromChatMessages([]common.ChatMessage{})

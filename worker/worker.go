@@ -107,8 +107,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 		Streamer: service,
 	}
 	chatHistoryActivities := &persisted_ai.ChatHistoryActivities{
-		Storage:                   service,
-		ManageLlm2ChatHistoryFunc: dev.ManageLlm2ChatHistory,
+		Storage: service,
 	}
 
 	lspActivities := &lsp.LSPActivities{

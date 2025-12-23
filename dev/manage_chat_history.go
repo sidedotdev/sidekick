@@ -1,16 +1,13 @@
 package dev
 
 import (
-	"bufio"
 	"fmt"
-	"regexp"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/fflag"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
 	"slices"
-	"strconv"
 	"strings"
 
 	"go.temporal.io/sdk/workflow"
@@ -34,14 +31,14 @@ const summaryEnd = "#END SUMMARY"
 const guidanceStart = "#START Guidance From the User"
 const guidanceEnd = "#END Guidance From the User"
 
-// ContextType constants
+// ContextType aliases for backward compatibility within dev package.
 const (
-	ContextTypeInitialInstructions string = "InitialInstructions"
-	ContextTypeUserFeedback        string = "UserFeedback"
-	ContextTypeTestResult          string = "TestResult"
-	ContextTypeEditBlockReport     string = "EditBlockReport"
-	ContextTypeSelfReviewFeedback  string = "SelfReviewFeedback"
-	ContextTypeSummary             string = "Summary"
+	ContextTypeInitialInstructions = persisted_ai.ContextTypeInitialInstructions
+	ContextTypeUserFeedback        = persisted_ai.ContextTypeUserFeedback
+	ContextTypeTestResult          = persisted_ai.ContextTypeTestResult
+	ContextTypeEditBlockReport     = persisted_ai.ContextTypeEditBlockReport
+	ContextTypeSelfReviewFeedback  = persisted_ai.ContextTypeSelfReviewFeedback
+	ContextTypeSummary             = persisted_ai.ContextTypeSummary
 )
 
 // Retention reason constants for cache control optimization
@@ -497,7 +494,7 @@ func manageChatHistoryV2(chatHistory []llm.ChatMessage, maxLength int) ([]llm.Ch
 	// TODO: Refactor to use structured data instead of parsing strings (llm2).
 	if latestEditBlockReportIndex != -1 {
 		reportMessage := chatHistory[latestEditBlockReportIndex]
-		sequenceNumbersInReport := extractSequenceNumbersFromReportContent(reportMessage.Content)
+		sequenceNumbersInReport := common.ExtractSequenceNumbersFromReportContent(reportMessage.Content)
 
 		for _, seqNum := range sequenceNumbersInReport {
 			foundProposalIndex := -1
@@ -742,34 +739,4 @@ func intersectReasons(a, b map[string]bool) map[string]bool {
 		}
 	}
 	return result
-}
-
-// extractSequenceNumbersFromReportContent extracts unique edit block sequence numbers
-// from EditBlockReport content formatted as "- edit_block:N application ...".
-func extractSequenceNumbersFromReportContent(content string) []int {
-	re := regexp.MustCompile(`-\s*edit_block:(\d+)\s*application.*`)
-
-	scanner := bufio.NewScanner(strings.NewReader(content))
-	seenNumbers := make(map[int]bool)
-	var uniqueSequenceNumbers []int
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		matches := re.FindStringSubmatch(line)
-
-		if len(matches) > 1 {
-			if num, err := strconv.Atoi(matches[1]); err == nil {
-				if !seenNumbers[num] {
-					seenNumbers[num] = true
-					uniqueSequenceNumbers = append(uniqueSequenceNumbers, num)
-				}
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		fmt.Printf("Error scanning content in extractSequenceNumbersFromReportContent: %v\n", err)
-	}
-
-	return uniqueSequenceNumbers
 }

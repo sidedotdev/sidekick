@@ -1,7 +1,18 @@
-package dev
+package persisted_ai
 
 import (
+	"sidekick/common"
 	"sidekick/llm2"
+)
+
+// ContextType constants for categorizing chat messages.
+const (
+	ContextTypeInitialInstructions string = "InitialInstructions"
+	ContextTypeUserFeedback        string = "UserFeedback"
+	ContextTypeTestResult          string = "TestResult"
+	ContextTypeEditBlockReport     string = "EditBlockReport"
+	ContextTypeSelfReviewFeedback  string = "SelfReviewFeedback"
+	ContextTypeSummary             string = "Summary"
 )
 
 // llm2MessageLength calculates the total length of a message by summing
@@ -75,7 +86,7 @@ func getToolResultBlocks(msg llm2.Message) []*llm2.ToolResultBlock {
 
 // ManageLlm2ChatHistory applies retention logic to llm2 messages.
 // This mirrors the logic in manageChatHistoryV2 but operates on llm2.Message types.
-func ManageLlm2ChatHistory(messages []llm2.Message, maxLength int) ([]llm2.Message, error) {
+func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, maxLength int) ([]llm2.Message, error) {
 	if len(messages) == 0 {
 		return []llm2.Message{}, nil
 	}
@@ -153,15 +164,15 @@ func ManageLlm2ChatHistory(messages []llm2.Message, maxLength int) ([]llm2.Messa
 	if latestEditBlockReportIndex != -1 {
 		reportMessage := messages[latestEditBlockReportIndex]
 		reportText := getLlm2MessageText(reportMessage)
-		sequenceNumbersInReport := extractSequenceNumbersFromReportContent(reportText)
+		sequenceNumbersInReport := common.ExtractSequenceNumbersFromReportContent(reportText)
 
 		for _, seqNum := range sequenceNumbersInReport {
 			foundProposalIndex := -1
 			for k := latestEditBlockReportIndex - 1; k >= 0; k-- {
 				msgText := getLlm2MessageText(messages[k])
-				extractedBlocks, _ := ExtractEditBlocks(msgText, false)
-				for _, block := range extractedBlocks {
-					if block.SequenceNumber == seqNum {
+				blockSeqNums := common.ExtractEditBlockSequenceNumbers(msgText)
+				for _, blockSeqNum := range blockSeqNums {
+					if blockSeqNum == seqNum {
 						foundProposalIndex = k
 						break
 					}

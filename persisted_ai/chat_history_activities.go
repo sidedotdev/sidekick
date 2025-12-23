@@ -5,17 +5,12 @@ import (
 	"fmt"
 
 	"sidekick/common"
-	"sidekick/llm2"
 	"sidekick/temp_common2"
 )
 
-// ManageLlm2ChatHistoryFunc is the function signature for managing llm2 chat history.
-type ManageLlm2ChatHistoryFunc func(messages []llm2.Message, maxLength int) ([]llm2.Message, error)
-
 // ChatHistoryActivities provides activities for managing chat history with KV storage.
 type ChatHistoryActivities struct {
-	Storage                   common.KeyValueStorage
-	ManageLlm2ChatHistoryFunc ManageLlm2ChatHistoryFunc
+	Storage common.KeyValueStorage
 }
 
 // Hydrate hydrates the chat history from KV storage.
@@ -58,7 +53,7 @@ func (ca *ChatHistoryActivities) ManageV3(
 	}
 
 	messages := llm2History.Llm2Messages()
-	managedMessages, err := ca.ManageLlm2ChatHistoryFunc(messages, maxLength)
+	managedMessages, err := ca.ManageLlm2ChatHistory(messages, maxLength)
 	if err != nil {
 		return nil, fmt.Errorf("failed to manage chat history: %w", err)
 	}

@@ -880,8 +880,7 @@ General status: issues found.`,
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Need to import "bufio" in manage_chat_history.go if not already present
-			actual := extractSequenceNumbersFromReportContent(tt.content)
+			actual := common.ExtractSequenceNumbersFromReportContent(tt.content)
 			// Sort for consistent comparison, as order of extraction isn't guaranteed
 			// if multiple regexes were used (though current one processes line by line).
 			// For this specific implementation, order should be preserved, but good practice for sets.
