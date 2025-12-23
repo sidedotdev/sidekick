@@ -157,8 +157,6 @@ Edit blocks are applied immediately after each response. You will receive
 feedback about whether each edit block was applied successfully or failed.
 {{/applyEditBlocksImmediately}}
 {{^applyEditBlocksImmediately}}
-When you are done with all edit blocks, avoid using further tools: output
-without a tool call is the signal for us to finally apply those edits to the
-filesystem. Edit blocks from all messages that include tool calls will remain
-pending until that point.
+Edit blocks from all messages that include tool calls will remain pending until
+you call the `{{{doneFunctionName}}}` tool to signal completion.
 {{/applyEditBlocksImmediately}}
