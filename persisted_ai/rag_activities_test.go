@@ -201,6 +201,17 @@ func TestSplitQueryIntoChunks(t *testing.T) {
 			maxChunkSize:  200,
 			want:          []string{"Sentence with spaces. Another with spaces."},
 		},
+		{
+			name:          "query near token limit boundary splits correctly",
+			query:         "Find the function that handles user authentication. It should validate credentials and return a session token. The implementation uses bcrypt for password hashing.",
+			goodChunkSize: 50,
+			maxChunkSize:  80,
+			want: []string{
+				"Find the function that handles user authentication.",
+				"It should validate credentials and return a session token.",
+				"The implementation uses bcrypt for password hashing.",
+			},
+		},
 	}
 
 	for _, tt := range tests {
