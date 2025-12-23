@@ -41,6 +41,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "cat"},
 			{Pattern: "echo"},
 			{Pattern: "pwd"},
+			{Pattern: "cd"},
 			{Pattern: "head"},
 			{Pattern: "tail"},
 			{Pattern: "wc"},

@@ -1002,6 +1002,7 @@ func TestEvaluateScriptPermission_WithBasePermissions(t *testing.T) {
 			"git log --oneline",
 			"go test ./...",
 			"pwd",
+			"cd worker/replay && cat replay_test_data.json | head -50",
 		}
 
 		for _, script := range safeScripts {
