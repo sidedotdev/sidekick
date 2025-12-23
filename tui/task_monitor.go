@@ -24,14 +24,16 @@ type TaskStatus struct {
 
 // TaskMonitor handles WebSocket connections and status polling for tasks
 type TaskMonitor struct {
-	client       client.Client
-	workspaceID  string
-	taskID       string
-	current      TaskStatus
-	statusChan   chan TaskStatus
-	progressChan chan domain.FlowAction
-	subflowChan  chan domain.Subflow
-	cancel       context.CancelFunc
+	client           client.Client
+	workspaceID      string
+	taskID           string
+	current          TaskStatus
+	statusChan       chan TaskStatus
+	progressChan     chan domain.FlowAction
+	subflowChan      chan domain.Subflow
+	cancel           context.CancelFunc
+	TaskPollInterval time.Duration
+	FlowPollInterval time.Duration
 }
 
 // sendStatus sends a status update if the context is not done
@@ -55,12 +57,14 @@ func (m *TaskMonitor) Stop() {
 // NewTaskMonitor creates a new TaskMonitor instance
 func NewTaskMonitor(client client.Client, workspaceID, taskID string) *TaskMonitor {
 	return &TaskMonitor{
-		client:       client,
-		workspaceID:  workspaceID,
-		taskID:       taskID,
-		statusChan:   make(chan TaskStatus, 10),
-		progressChan: make(chan domain.FlowAction, 1000),
-		subflowChan:  make(chan domain.Subflow, 50),
+		client:           client,
+		workspaceID:      workspaceID,
+		taskID:           taskID,
+		statusChan:       make(chan TaskStatus, 10),
+		progressChan:     make(chan domain.FlowAction, 1000),
+		subflowChan:      make(chan domain.Subflow, 50),
+		TaskPollInterval: 1 * time.Second,
+		FlowPollInterval: 200 * time.Millisecond,
 	}
 }
 
@@ -71,8 +75,6 @@ func (m *TaskMonitor) Start(ctx context.Context) (<-chan TaskStatus, <-chan doma
 	go m.monitorTask(ctxWithCancel)
 	return m.statusChan, m.progressChan, m.subflowChan
 }
-
-var TaskPollInterval = 1 * time.Second
 
 func (m *TaskMonitor) monitorTask(ctx context.Context) {
 	defer close(m.statusChan)
@@ -113,7 +115,7 @@ func (m *TaskMonitor) monitorTask(ctx context.Context) {
 
 	// Async monitor task status
 	go func() {
-		ticker := time.NewTicker(TaskPollInterval)
+		ticker := time.NewTicker(m.TaskPollInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -168,10 +170,8 @@ func (m *TaskMonitor) monitorTask(ctx context.Context) {
 	}
 }
 
-var FlowPollInterval = 200 * time.Millisecond
-
 func (m *TaskMonitor) waitForFlow(ctx context.Context) string {
-	ticker := time.NewTicker(FlowPollInterval)
+	ticker := time.NewTicker(m.FlowPollInterval)
 	defer ticker.Stop()
 	timeout := time.After(3 * time.Second)
 
