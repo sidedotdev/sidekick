@@ -82,7 +82,7 @@ func TestHydrateChatHistoryHandler_HappyPath(t *testing.T) {
 	assert.Equal(t, "test_tool", resp.Messages[1].Content[1].ToolUse.Name)
 }
 
-func TestHydrateChatHistoryHandler_MissingBlocksOmitted(t *testing.T) {
+func TestHydrateChatHistoryHandler_MissingBlocksShowError(t *testing.T) {
 	ctrl := NewMockController(t)
 	router := DefineRoutes(ctrl)
 
@@ -120,8 +120,9 @@ func TestHydrateChatHistoryHandler_MissingBlocksOmitted(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, resp.Messages, 1)
-	require.Len(t, resp.Messages[0].Content, 1)
+	require.Len(t, resp.Messages[0].Content, 2)
 	assert.Equal(t, "Exists", resp.Messages[0].Content[0].Text)
+	assert.Contains(t, resp.Messages[0].Content[1].Text, "[hydrate error: missing block block-missing]")
 }
 
 func TestHydrateChatHistoryHandler_MismatchedFlowId(t *testing.T) {
@@ -213,6 +214,45 @@ func TestHydrateChatHistoryHandler_EmptyRefs(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Len(t, resp.Messages, 0)
+}
+
+func TestHydrateChatHistoryHandler_MalformedBlockShowsError(t *testing.T) {
+	ctrl := NewMockController(t)
+	router := DefineRoutes(ctrl)
+
+	workspaceId := "test-workspace"
+	flowId := "test-flow"
+
+	ctx := context.Background()
+	// Store invalid data that will fail binary unmarshal
+	err := ctrl.service.MSet(ctx, workspaceId, map[string]interface{}{
+		"block-bad": []byte("not valid binary data"),
+	})
+	require.NoError(t, err)
+
+	reqBody := HydrateChatHistoryRequest{
+		Refs: []common.MessageRef{
+			{FlowId: flowId, BlockIds: []string{"block-bad"}, Role: "user"},
+		},
+	}
+	reqJSON, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+workspaceId+"/flows/"+flowId+"/chat_history/hydrate", bytes.NewReader(reqJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp HydrateChatHistoryResponse
+	err = json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	require.Len(t, resp.Messages, 1)
+	require.Len(t, resp.Messages[0].Content, 1)
+	assert.Contains(t, resp.Messages[0].Content[0].Text, "[hydrate error:")
+	assert.Contains(t, resp.Messages[0].Content[0].Text, "block-bad")
 }
 
 func TestHydrateChatHistoryHandler_PreservesOrder(t *testing.T) {

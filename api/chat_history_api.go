@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"sidekick/common"
@@ -61,31 +62,50 @@ func (ctrl *Controller) HydrateChatHistoryHandler(c *gin.Context) {
 		}
 	}
 
-	// Build blockId -> ContentBlock map
-	blockMap := make(map[string]llm2.ContentBlock)
+	// Build blockId -> raw bytes map
+	blockDataMap := make(map[string][]byte)
 	for i, blockId := range allBlockIds {
 		if i < len(blockData) && blockData[i] != nil {
-			// First binary-unmarshal to get the original []byte that was stored
-			var jsonBytes []byte
-			if err := binary.Unmarshal(blockData[i], &jsonBytes); err != nil {
-				continue
-			}
-			// Then JSON-unmarshal the content block
-			var block llm2.ContentBlock
-			if err := json.Unmarshal(jsonBytes, &block); err == nil {
-				blockMap[blockId] = block
-			}
+			blockDataMap[blockId] = blockData[i]
 		}
 	}
 
-	// Construct messages in refs order, omitting missing blocks
+	// Construct messages in refs order, with error placeholders for missing/malformed blocks
 	messages := make([]llm2.Message, 0, len(req.Refs))
 	for _, ref := range req.Refs {
 		var content []llm2.ContentBlock
 		for _, blockId := range ref.BlockIds {
-			if block, ok := blockMap[blockId]; ok {
-				content = append(content, block)
+			raw, ok := blockDataMap[blockId]
+			if !ok {
+				content = append(content, llm2.ContentBlock{
+					Id:   blockId,
+					Type: llm2.ContentBlockTypeText,
+					Text: fmt.Sprintf("[hydrate error: missing block %s]", blockId),
+				})
+				continue
 			}
+
+			var jsonBytes []byte
+			if err := binary.Unmarshal(raw, &jsonBytes); err != nil {
+				content = append(content, llm2.ContentBlock{
+					Id:   blockId,
+					Type: llm2.ContentBlockTypeText,
+					Text: fmt.Sprintf("[hydrate error: malformed block %s: %v]", blockId, err),
+				})
+				continue
+			}
+
+			var block llm2.ContentBlock
+			if err := json.Unmarshal(jsonBytes, &block); err != nil {
+				content = append(content, llm2.ContentBlock{
+					Id:   blockId,
+					Type: llm2.ContentBlockTypeText,
+					Text: fmt.Sprintf("[hydrate error: invalid JSON in block %s: %v]", blockId, err),
+				})
+				continue
+			}
+
+			content = append(content, block)
 		}
 		messages = append(messages, llm2.Message{
 			Role:    llm2.Role(ref.Role),

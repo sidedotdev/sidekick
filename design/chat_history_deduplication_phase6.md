@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add cleanup mechanism to delete stored content blocks when a flow completes, preventing unbounded storage growth.
+Add cleanup mechanism to delete stored content blocks when a flow is deleted (i.e. the parent task is deleted), preventing unbounded storage growth.
 
 ## Tasks
 
@@ -17,12 +17,6 @@ func (cha *ChatHistoryActivities) CleanupFlowContent(ctx context.Context, worksp
 
 May need to add a `DeleteByPrefix` method to `KeyValueStorage` interface.
 
-### 2. Call Cleanup on Flow Completion
+### 2. Call Cleanup on Task Deletion
 
-**File:** `dev/dev_agent_manager_workflow.go`
-
-At flow completion (success or failure), execute cleanup activity. Cleanup failures should be logged but not fail the workflow.
-
-### 3. Consider TTL Alternative
-
-If the KV storage supports TTL, consider setting TTL on content blocks instead of explicit cleanup. This provides automatic cleanup even if the workflow crashes.
+...
