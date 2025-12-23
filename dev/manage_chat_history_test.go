@@ -1432,6 +1432,30 @@ func TestManageChatHistoryV2_DropAllOlderBehavior(t *testing.T) {
 	assert.Equal(t, expected, clearCacheControl(result))
 }
 
+func TestManageChatHistoryV2_TargetBudget90Percent(t *testing.T) {
+	// Test that when input exceeds maxLength, trimming uses 90% target budget
+	// maxLength=10 => targetMaxLength=round(0.9*10)=9
+	chatHistory := []llm.ChatMessage{
+		{Content: "Init!", ContextType: ContextTypeInitialInstructions}, // len 5, retained
+		{Content: "AA"},   // len 2, unretained
+		{Content: "X"},    // len 1, unretained - would fit under maxLength=10 but not targetMaxLength=9
+		{Content: "Last"}, // len 4, retained (last message)
+	}
+	// Total input = 5 + 2 + 1 + 4 = 12 > maxLength=10, so target budgeting applies
+	// Retained total = 5 + 4 = 9 = targetMaxLength
+	// No room for unretained messages under targetMaxLength=9
+	// Under old maxLength=10 budget, "X" (1 char) would have fit (9+1=10)
+
+	result, err := ManageChatHistoryV2Activity(chatHistory, 10)
+	assert.NoError(t, err)
+
+	expected := []llm.ChatMessage{
+		{Content: "Init!", ContextType: ContextTypeInitialInstructions},
+		{Content: "Last"},
+	}
+	assert.Equal(t, expected, clearCacheControl(result))
+}
+
 func TestManageChatHistoryV2_LargeToolResponseTruncation(t *testing.T) {
 	// Test that large tool responses are truncated before dropping
 	largeContent := strings.Repeat("X", 200) // 200 chars
