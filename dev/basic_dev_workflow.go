@@ -468,10 +468,10 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 // more based on review feedback, then review again
 func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 	return RunSubflowWithoutResult(dCtx, "review_and_resolve", "Review and resolve", func(subflow domain.Subflow) error {
-		// Track review messages for iterative development
 		reviewMessages := []string{}
 		originalRequirements := params.Requirements
 		goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
+		// Used to generate "diff since last review" on subsequent iterations
 		lastReviewTreeHash := ""
 
 		for {
@@ -492,10 +492,8 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 			}
 
 			if !mergeInfo.Approved {
-				// retain new choice of target branch next iteration, in case it was changed
+				// Retain new choice of target branch next iteration, in case it was changed
 				params.StartBranch = &mergeInfo.TargetBranch
-
-				// Track tree hash for generating diff since last review
 				lastReviewTreeHash = treeHash
 
 				// Format new requirements with review history + latest rejection message
