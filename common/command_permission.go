@@ -1,6 +1,7 @@
 package common
 
 import (
+	"context"
 	"regexp"
 	"sidekick/coding/permission"
 	"strconv"
@@ -29,6 +30,11 @@ type CommandPermissionConfig struct {
 	Deny                 []CommandPattern `toml:"deny" json:"deny" koanf:"deny"`
 	ResetAutoApprove     bool             `toml:"reset_auto_approve" json:"resetAutoApprove" koanf:"reset_auto_approve"`
 	ResetRequireApproval bool             `toml:"reset_require_approval" json:"resetRequireApproval" koanf:"reset_require_approval"`
+}
+
+// BaseCommandPermissionsActivity is a Temporal activity wrapper for BaseCommandPermissions
+func BaseCommandPermissionsActivity(ctx context.Context) (CommandPermissionConfig, error) {
+	return BaseCommandPermissions(), nil
 }
 
 // BaseCommandPermissions returns the hardcoded base permission configuration

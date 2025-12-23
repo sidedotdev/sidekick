@@ -229,8 +229,17 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	eCtx.DisableHumanInTheLoop = repoConfig.DisableHumanInTheLoop
 
 	// Merge command permissions from all config sources: base → local → repo → workspace
+	var baseCommandPermissions common.CommandPermissionConfig
+	if v := workflow.GetVersion(ctx, "base-command-permissions-activity", workflow.DefaultVersion, 1); v >= 1 {
+		err = workflow.ExecuteActivity(ctx, common.BaseCommandPermissionsActivity).Get(ctx, &baseCommandPermissions)
+		if err != nil {
+			return DevContext{}, fmt.Errorf("failed to get base command permissions: %v", err)
+		}
+	} else {
+		baseCommandPermissions = common.BaseCommandPermissions()
+	}
 	repoConfig.CommandPermissions = common.MergeCommandPermissions(
-		common.BaseCommandPermissions(),
+		baseCommandPermissions,
 		localConfig.CommandPermissions,
 		repoConfig.CommandPermissions,
 		workspaceConfig.CommandPermissions,
