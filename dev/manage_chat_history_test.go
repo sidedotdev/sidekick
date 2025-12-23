@@ -1937,8 +1937,8 @@ func TestApplyCacheControlBreakpoints_LargeUnretainedBlock(t *testing.T) {
 }
 
 func TestApplyCacheControlBreakpoints_EmptyReasonsEachFormOwnBlock(t *testing.T) {
-	// Multiple consecutive empty-reason messages each form their own block of size 1
-	// since intersecting two empty maps yields an empty result
+	// With bothUnretained logic, consecutive empty-reason messages merge into
+	// a single contiguous block rather than forming separate size-1 blocks
 	chatHistory := []llm.ChatMessage{
 		{Content: "A"},
 		{Content: "B"},
@@ -1958,7 +1958,189 @@ func TestApplyCacheControlBreakpoints_EmptyReasonsEachFormOwnBlock(t *testing.T)
 
 	// Last message gets breakpoint
 	assert.Equal(t, "ephemeral", chatHistory[4].CacheControl)
-	// First message (block of 1) gets breakpoint as one of the largest blocks
+	// First message gets breakpoint (always set for index 0)
 	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl)
+	// Index 1 is start of merged empty block (size 3), should get breakpoint
+	// as one of the largest blocks
+	assert.Equal(t, "ephemeral", chatHistory[1].CacheControl)
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+// TestApplyCacheControlBreakpoints_ManyMessagesAllPresetEphemeral tests that when
+// many messages all start with CacheControl: "ephemeral", exactly 4 breakpoints
+// remain at deterministic positions: first, last, and the starts of the two largest
+// non-(first,last) blocks.
+func TestApplyCacheControlBreakpoints_ManyMessagesAllPresetEphemeral(t *testing.T) {
+	// 20 messages, all starting with CacheControl: "ephemeral"
+	chatHistory := make([]llm.ChatMessage, 20)
+	for i := range chatHistory {
+		chatHistory[i] = llm.ChatMessage{
+			Content:      string(rune('A' + i)),
+			CacheControl: "ephemeral",
+		}
+	}
+	chatHistory[0].ContextType = ContextTypeInitialInstructions
+
+	// Create >4 distinct blocks with unique sizes to ensure deterministic selection:
+	// Block 0: indices 0-0 (size 1) - InitialInstructions
+	// Block 1: indices 1-6 (size 6) - UserFeedback - LARGEST non-(0,last)
+	// Block 2: indices 7-8 (size 2) - LatestTestResult
+	// Block 3: indices 9-13 (size 5) - LatestSummary - SECOND LARGEST non-(0,last)
+	// Block 4: indices 14-16 (size 3) - EditBlockProposal
+	// Block 5: indices 17-18 (size 2) - ForwardSegment
+	// Block 6: index 19 (size 1) - LastMessage
+	retainReasons := []map[string]bool{
+		{RetainReasonInitialInstructions: true}, // 0
+		{RetainReasonUserFeedback: true},        // 1
+		{RetainReasonUserFeedback: true},        // 2
+		{RetainReasonUserFeedback: true},        // 3
+		{RetainReasonUserFeedback: true},        // 4
+		{RetainReasonUserFeedback: true},        // 5
+		{RetainReasonUserFeedback: true},        // 6
+		{RetainReasonLatestTestResult: true},    // 7
+		{RetainReasonLatestTestResult: true},    // 8
+		{RetainReasonLatestSummary: true},       // 9
+		{RetainReasonLatestSummary: true},       // 10
+		{RetainReasonLatestSummary: true},       // 11
+		{RetainReasonLatestSummary: true},       // 12
+		{RetainReasonLatestSummary: true},       // 13
+		{RetainReasonEditBlockProposal: true},   // 14
+		{RetainReasonEditBlockProposal: true},   // 15
+		{RetainReasonEditBlockProposal: true},   // 16
+		{RetainReasonForwardSegment: true},      // 17
+		{RetainReasonForwardSegment: true},      // 18
+		{RetainReasonLastMessage: true},         // 19
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// Count total breakpoints - must be exactly 4
+	breakpointCount := 0
+	for _, msg := range chatHistory {
+		if msg.CacheControl == "ephemeral" {
+			breakpointCount++
+		}
+	}
+	assert.Equal(t, 4, breakpointCount, "Should have exactly 4 breakpoints")
+
+	// First message (index 0) must have breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl, "First message must have breakpoint")
+
+	// Last message (index 19) must have breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[19].CacheControl, "Last message must have breakpoint")
+
+	// Index 1 (start of largest non-(0,last) block, size 6) must have breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[1].CacheControl, "Start of largest block (index 1) must have breakpoint")
+
+	// Index 9 (start of second largest non-(0,last) block, size 5) must have breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[9].CacheControl, "Start of second largest block (index 9) must have breakpoint")
+
+	// Verify some non-selected indices that started as "ephemeral" are now cleared
+	assert.Equal(t, "", chatHistory[7].CacheControl, "Index 7 should be cleared (was ephemeral)")
+	assert.Equal(t, "", chatHistory[14].CacheControl, "Index 14 should be cleared (was ephemeral)")
+	assert.Equal(t, "", chatHistory[17].CacheControl, "Index 17 should be cleared (was ephemeral)")
+}
+
+// TestApplyCacheControlBreakpoints_BothUnretainedMergesIntoLargeBlock tests that
+// consecutive empty reason maps are merged into a single contiguous block via the
+// bothUnretained logic, and that this merged block can become one of the largest
+// blocks selected for breakpoints, bumping out a smaller retained block that would
+// otherwise have been selected.
+func TestApplyCacheControlBreakpoints_BothUnretainedMergesIntoLargeBlock(t *testing.T) {
+	// 18 messages
+	chatHistory := make([]llm.ChatMessage, 18)
+	for i := range chatHistory {
+		chatHistory[i] = llm.ChatMessage{Content: string(rune('A' + i))}
+	}
+
+	// Create blocks with unique sizes to demonstrate bothUnretained merging effect:
+	// Block 0: index 0 (size 1) - InitialInstructions (always gets breakpoint)
+	// Block 1: indices 1-6 (size 6) - EMPTY (merged via bothUnretained) - LARGEST non-(0,last)
+	// Block 2: indices 7-11 (size 5) - UserFeedback - 2nd LARGEST non-(0,last)
+	// Block 3: indices 12-15 (size 4) - LatestTestResult - 3rd largest, WOULD be 2nd if empties not merged
+	// Block 4: indices 16-16 (size 1) - LatestSummary
+	// Block 5: index 17 (size 1) - LastMessage (always gets breakpoint)
+	//
+	// With bothUnretained merging: blocks are sizes 1, 6, 5, 4, 1, 1
+	//   -> breakpoints at: 0 (first), 17 (last), 1 (size 6), 7 (size 5)
+	//   -> index 12 (size 4) does NOT get breakpoint
+	//
+	// WITHOUT merging (counterfactual): empty indices 1-6 would each be size-1 blocks
+	//   -> blocks would be sizes 1, 1, 1, 1, 1, 1, 1, 5, 4, 1, 1
+	//   -> breakpoints at: 0 (first), 17 (last), 7 (size 5), 12 (size 4)
+	//   -> index 12 WOULD get breakpoint as 2nd largest
+	retainReasons := []map[string]bool{
+		{RetainReasonInitialInstructions: true}, // 0
+		{},                                      // 1 - start of merged empty block
+		{},                                      // 2
+		{},                                      // 3
+		{},                                      // 4
+		{},                                      // 5
+		{},                                      // 6 - end of merged empty block
+		{RetainReasonUserFeedback: true},        // 7
+		{RetainReasonUserFeedback: true},        // 8
+		{RetainReasonUserFeedback: true},        // 9
+		{RetainReasonUserFeedback: true},        // 10
+		{RetainReasonUserFeedback: true},        // 11
+		{RetainReasonLatestTestResult: true},    // 12
+		{RetainReasonLatestTestResult: true},    // 13
+		{RetainReasonLatestTestResult: true},    // 14
+		{RetainReasonLatestTestResult: true},    // 15
+		{RetainReasonLatestSummary: true},       // 16
+		{RetainReasonLastMessage: true},         // 17
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// First and last always get breakpoints
+	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl, "First message must have breakpoint")
+	assert.Equal(t, "ephemeral", chatHistory[17].CacheControl, "Last message must have breakpoint")
+
+	// Index 1 (start of merged empty block, size 6) should have breakpoint
+	// because it's the largest non-(0,last) block due to bothUnretained merging
+	assert.Equal(t, "ephemeral", chatHistory[1].CacheControl, "Start of merged empty block (index 1) must have breakpoint")
+
+	// Index 7 (start of UserFeedback block, size 5) should have breakpoint
+	// as the second largest non-(0,last) block
+	assert.Equal(t, "ephemeral", chatHistory[7].CacheControl, "Start of UserFeedback block (index 7) must have breakpoint")
+
+	// Index 12 (start of LatestTestResult block, size 4) should NOT have breakpoint.
+	// This is the key assertion: without bothUnretained merging, index 12 would be
+	// selected as the 2nd largest block (size 4 > all the size-1 unmerged empties).
+	// But with merging, the empty block (size 6) takes one of the two available slots,
+	// pushing index 12 out.
+	assert.Equal(t, "", chatHistory[12].CacheControl, "Index 12 should NOT have breakpoint (bumped by merged empty block)")
+
+	assertMaxFourBreakpoints(t, chatHistory)
+}
+
+// TestApplyCacheControlBreakpoints_FirstAndLastAlwaysBreakpointWithoutInitialInstructions
+// verifies that the first and last messages always get breakpoints even when
+// retainReasons[0] does not include RetainReasonInitialInstructions.
+func TestApplyCacheControlBreakpoints_FirstAndLastAlwaysBreakpointWithoutInitialInstructions(t *testing.T) {
+	chatHistory := []llm.ChatMessage{
+		{Content: "A"}, // No ContextType, no InitialInstructions reason
+		{Content: "B"},
+		{Content: "C"},
+		{Content: "D"},
+		{Content: "E"},
+	}
+	// First message has UserFeedback reason, NOT InitialInstructions
+	retainReasons := []map[string]bool{
+		{RetainReasonUserFeedback: true},
+		{RetainReasonUserFeedback: true},
+		{RetainReasonLatestTestResult: true},
+		{RetainReasonLatestTestResult: true},
+		{RetainReasonLastMessage: true},
+	}
+
+	applyCacheControlBreakpoints(&chatHistory, retainReasons)
+
+	// First message (index 0) must have breakpoint regardless of reason
+	assert.Equal(t, "ephemeral", chatHistory[0].CacheControl, "First message must have breakpoint even without InitialInstructions reason")
+
+	// Last message (index 4) must have breakpoint
+	assert.Equal(t, "ephemeral", chatHistory[4].CacheControl, "Last message must have breakpoint")
+
 	assertMaxFourBreakpoints(t, chatHistory)
 }
