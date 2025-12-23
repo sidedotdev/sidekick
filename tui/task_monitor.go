@@ -29,7 +29,7 @@ type TaskMonitor struct {
 	taskID           string
 	current          TaskStatus
 	statusChan       chan TaskStatus
-	progressChan     chan domain.FlowAction
+	progressChan     chan client.FlowAction
 	subflowChan      chan domain.Subflow
 	cancel           context.CancelFunc
 	TaskPollInterval time.Duration
@@ -55,13 +55,13 @@ func (m *TaskMonitor) Stop() {
 }
 
 // NewTaskMonitor creates a new TaskMonitor instance
-func NewTaskMonitor(client client.Client, workspaceID, taskID string) *TaskMonitor {
+func NewTaskMonitor(c client.Client, workspaceID, taskID string) *TaskMonitor {
 	return &TaskMonitor{
-		client:           client,
+		client:           c,
 		workspaceID:      workspaceID,
 		taskID:           taskID,
 		statusChan:       make(chan TaskStatus, 10),
-		progressChan:     make(chan domain.FlowAction, 1000),
+		progressChan:     make(chan client.FlowAction, 1000),
 		subflowChan:      make(chan domain.Subflow, 50),
 		TaskPollInterval: 1 * time.Second,
 		FlowPollInterval: 200 * time.Millisecond,
@@ -69,7 +69,7 @@ func NewTaskMonitor(client client.Client, workspaceID, taskID string) *TaskMonit
 }
 
 // Start begins monitoring the task, returning channels for status and progress updates
-func (m *TaskMonitor) Start(ctx context.Context) (<-chan TaskStatus, <-chan domain.FlowAction, <-chan domain.Subflow) {
+func (m *TaskMonitor) Start(ctx context.Context) (<-chan TaskStatus, <-chan client.FlowAction, <-chan domain.Subflow) {
 	ctxWithCancel, cancel := context.WithCancel(ctx)
 	m.cancel = cancel
 	go m.monitorTask(ctxWithCancel)
@@ -288,7 +288,7 @@ func (m *TaskMonitor) streamFlowEvents(ctx context.Context, flowId string) error
 	}()
 
 	for {
-		var action domain.FlowAction
+		var action client.FlowAction
 		if err := conn.ReadJSON(&action); err != nil {
 			if ctx.Err() != nil {
 				return nil // Context cancelled

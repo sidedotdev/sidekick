@@ -2,6 +2,7 @@ package tui
 
 import (
 	"os"
+	"sidekick/client"
 	"sidekick/domain"
 	"strings"
 	"testing"
@@ -93,9 +94,9 @@ func TestLifecycleModel(t *testing.T) {
 				},
 				clearLifecycleMsg{key: "init"},
 				taskChangeMsg{task: newTestTaskWithFlows()},
-				flowActionChangeMsg{action: domain.FlowAction{Id: "a1", ActionType: "apply_edit_blocks", ActionStatus: domain.ActionStatusStarted}},
-				flowActionChangeMsg{action: domain.FlowAction{Id: "a1", ActionType: "apply_edit_blocks", ActionStatus: domain.ActionStatusComplete}},
-				flowActionChangeMsg{action: domain.FlowAction{Id: "a2", ActionType: "merge", ActionStatus: domain.ActionStatusPending}},
+				flowActionChangeMsg{action: client.FlowAction{Id: "a1", ActionType: "apply_edit_blocks", ActionStatus: domain.ActionStatusStarted}},
+				flowActionChangeMsg{action: client.FlowAction{Id: "a1", ActionType: "apply_edit_blocks", ActionStatus: domain.ActionStatusComplete}},
+				flowActionChangeMsg{action: client.FlowAction{Id: "a2", ActionType: "merge", ActionStatus: domain.ActionStatusPending}},
 			},
 			wantProgress: true,
 			wantContains: []string{
@@ -124,8 +125,8 @@ func TestLifecycleModel(t *testing.T) {
 				},
 				clearLifecycleMsg{key: "init"},
 				taskChangeMsg{task: newTestTaskWithFlows()},
-				flowActionChangeMsg{action: domain.FlowAction{Id: "a1", ActionType: "apply_edit_blocks", ActionStatus: domain.ActionStatusStarted}},
-				flowActionChangeMsg{action: domain.FlowAction{Id: "a1", ActionType: "apply_edit_blocks", ActionStatus: domain.ActionStatusFailed}},
+				flowActionChangeMsg{action: client.FlowAction{Id: "a1", ActionType: "apply_edit_blocks", ActionStatus: domain.ActionStatusStarted}},
+				flowActionChangeMsg{action: client.FlowAction{Id: "a1", ActionType: "apply_edit_blocks", ActionStatus: domain.ActionStatusFailed}},
 				tea.KeyMsg{Type: tea.KeyCtrlC},
 			},
 			wantProgress: true,

@@ -24,7 +24,7 @@ import (
 	"github.com/erikgeiser/promptkit/selection"
 )
 
-func KanbanLink(workspaceId string) string {
+func kanbanLink(workspaceId string) string {
 	return fmt.Sprintf("http://localhost:%d/kanban?workspaceId=%s", common.GetServerPort(), workspaceId)
 }
 
@@ -53,7 +53,7 @@ func waitForServer(timeout time.Duration) bool {
 	return false
 }
 
-func EnsureSideServer(p *tea.Program) error {
+func ensureSideServer(p *tea.Program) error {
 	if !checkServerStatus() {
 		p.Send(updateLifecycleMsg{key: "init", content: "Starting sidekick server...", spin: true})
 		process, err := startServerDetached()
@@ -71,7 +71,7 @@ func EnsureSideServer(p *tea.Program) error {
 	return nil
 }
 
-func FinishMessage(task client.Task, kanbanLink string) string {
+func finishMessage(task client.Task, link string) string {
 	var message string
 	switch task.Status {
 	case domain.TaskStatusComplete:
@@ -79,7 +79,7 @@ func FinishMessage(task client.Task, kanbanLink string) string {
 	case domain.TaskStatusCanceled:
 		message = "Task canceled"
 	case domain.TaskStatusFailed:
-		message = fmt.Sprintf("Task failed. See details at %s", kanbanLink)
+		message = fmt.Sprintf("Task failed. See details at %s", link)
 	default:
 		message = fmt.Sprintf("Task finished with status %s", task.Status)
 	}
@@ -103,12 +103,12 @@ func startServerDetached() (*os.Process, error) {
 	return cmd.Process, nil
 }
 
-type TeaSendable interface {
+type teaSendable interface {
 	Send(msg tea.Msg)
 }
 
-// EnsureWorkspace handles finding, creating, or selecting a workspace.
-func EnsureWorkspace(ctx context.Context, dir string, p TeaSendable, c client.Client, disableHumanInTheLoop bool) (*domain.Workspace, error) {
+// ensureWorkspace handles finding, creating, or selecting a workspace.
+func ensureWorkspace(ctx context.Context, dir string, p teaSendable, c client.Client, disableHumanInTheLoop bool) (*domain.Workspace, error) {
 	p.Send(updateLifecycleMsg{key: "init", content: "Looking up workspace...", spin: true})
 
 	repoPaths, err := utils.GetRepositoryPaths(ctx, dir)
@@ -192,7 +192,7 @@ func EnsureWorkspace(ctx context.Context, dir string, p TeaSendable, c client.Cl
 }
 
 // RunTaskUI runs the task UI with the given request, handling all lifecycle events.
-func RunTaskUI(ctx context.Context, c client.Client, req *client.CreateTaskRequest, currentDir string) error {
+func RunTaskUI(ctx context.Context, c client.Client, req *client.CreateTaskRequest, currentDir string, async bool) error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	p := tea.NewProgram(newLifecycleModel(sigChan, c))
@@ -211,13 +211,13 @@ func RunTaskUI(ctx context.Context, c client.Client, req *client.CreateTaskReque
 	}
 
 	go func() {
-		if err := EnsureSideServer(p); err != nil {
+		if err := ensureSideServer(p); err != nil {
 			p.Send(updateLifecycleMsg{key: "error", content: err.Error()})
 			p.Quit()
 			return
 		}
 
-		workspace, err := EnsureWorkspace(ctx, currentDir, p, c, disableHumanInTheLoop)
+		workspace, err := ensureWorkspace(ctx, currentDir, p, c, disableHumanInTheLoop)
 		if err != nil {
 			p.Send(updateLifecycleMsg{key: "error", content: fmt.Sprintf("Workspace setup failed: %v", err)})
 			p.Quit()
@@ -235,8 +235,8 @@ func RunTaskUI(ctx context.Context, c client.Client, req *client.CreateTaskReque
 		started := false
 		p.Send(taskChangeMsg{task: task})
 
-		if req.Async {
-			message := fmt.Sprintf("Task submitted. Follow progress at %s", KanbanLink(workspace.Id))
+		if async {
+			message := fmt.Sprintf("Task submitted. Follow progress at %s", kanbanLink(workspace.Id))
 			p.Send(updateLifecycleMsg{key: "init", content: message})
 			p.Quit()
 			return
@@ -260,7 +260,7 @@ func RunTaskUI(ctx context.Context, c client.Client, req *client.CreateTaskReque
 					p.Send(taskErrorMsg{err: taskStatus.Error})
 				}
 				if taskStatus.Finished {
-					finalMessage := FinishMessage(taskStatus.Task, KanbanLink(workspace.Id))
+					finalMessage := finishMessage(taskStatus.Task, kanbanLink(workspace.Id))
 					p.Send(updateLifecycleMsg{key: "init", content: finalMessage})
 					p.Quit()
 					return

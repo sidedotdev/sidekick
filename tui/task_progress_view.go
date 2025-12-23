@@ -39,9 +39,9 @@ type taskProgressModel struct {
 	spinner        spinner.Model
 	taskID         string
 	flowID         string
-	actions        []domain.FlowAction
-	currentSubflow *domain.FlowAction
-	pendingAction  *domain.FlowAction
+	actions        []client.FlowAction
+	currentSubflow *client.FlowAction
+	pendingAction  *client.FlowAction
 	textarea       textarea.Model
 	client         client.Client
 	quitting       bool
@@ -65,7 +65,7 @@ func newProgressModel(taskID, flowID string, c client.Client) taskProgressModel 
 		spinner:  s,
 		taskID:   taskID,
 		flowID:   flowID,
-		actions:  []domain.FlowAction{},
+		actions:  []client.FlowAction{},
 		textarea: ta,
 		client:   c,
 	}
@@ -358,7 +358,7 @@ func getContinueLabel(tag string) string {
 	return "Continue"
 }
 
-func getInputModeForAction(action domain.FlowAction) inputMode {
+func getInputModeForAction(action client.FlowAction) inputMode {
 	requestKind, ok := action.ActionParams["requestKind"].(string)
 	if !ok {
 		return inputModeFreeForm
@@ -429,15 +429,12 @@ var subflowDisplayNames = map[string]string{
 	"dev_plan":         "Planning",
 }
 
-func getSubflowDisplayName(subflowName, subflowId string) (string, bool) {
-	// Check for dev.step type subflows (display the SubflowName directly)
-	if strings.HasPrefix(subflowId, "sf_") && strings.HasPrefix(subflowName, "Step ") {
-		return subflowName, true
-	}
-
-	// Check whitelisted subflows
-	if displayName, ok := subflowDisplayNames[subflowName]; ok {
-		return displayName, true
+func getSubflowDisplayName(subflowId string) (string, bool) {
+	// Check whitelisted subflows by subflowId prefix
+	for name, displayName := range subflowDisplayNames {
+		if strings.Contains(subflowId, name) {
+			return displayName, true
+		}
 	}
 
 	return "", false
@@ -448,7 +445,7 @@ func (m taskProgressModel) View() string {
 
 	// Display current subflow header if whitelisted
 	if m.currentSubflow != nil {
-		if displayName, ok := getSubflowDisplayName(m.currentSubflow.SubflowName, m.currentSubflow.SubflowId); ok {
+		if displayName, ok := getSubflowDisplayName(m.currentSubflow.SubflowId); ok {
 			b.WriteString(fmt.Sprintf("\n%s\n", displayName))
 		}
 	}
@@ -457,7 +454,7 @@ func (m taskProgressModel) View() string {
 	type displayItem struct {
 		timestamp time.Time
 		isSubflow bool
-		action    domain.FlowAction
+		action    client.FlowAction
 		subflow   domain.Subflow
 	}
 
@@ -543,7 +540,7 @@ func (m taskProgressModel) renderFailedSubflow(subflow domain.Subflow) string {
 	return fmt.Sprintf("  %s %s: %s\n", redIndicator, displayName, errorInfo)
 }
 
-func (m taskProgressModel) renderAction(action domain.FlowAction) string {
+func (m taskProgressModel) renderAction(action client.FlowAction) string {
 	displayName := getActionDisplayName(action.ActionType)
 
 	switch action.ActionStatus {

@@ -215,7 +215,7 @@ func TestEnsureWorkspace(t *testing.T) {
 			}
 
 			// Call the function
-			workspace, err := EnsureWorkspace(context.Background(), tt.currentDir, mockProgram{}, c, tt.disableHumanInLoop)
+			workspace, err := ensureWorkspace(context.Background(), tt.currentDir, mockProgram{}, c, tt.disableHumanInLoop)
 
 			// Verify results
 			if tt.expectedError != "" {
