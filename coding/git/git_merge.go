@@ -143,7 +143,8 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 			sourceWorktreePath := envContainer.Env.GetWorkingDirectory()
 
 			// Perform reverse merge in source worktree
-			reverseMergeCmd := fmt.Sprintf("cd %s && git merge %s", sourceWorktreePath, params.TargetBranch)
+			reverseMergeCmd := fmt.Sprintf("cd \"%s\" && git merge %s", sourceWorktreePath, params.TargetBranch)
+
 			reverseMergeOutput, reverseMergeErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 				EnvContainer: envContainer,
 				Command:      "sh",
