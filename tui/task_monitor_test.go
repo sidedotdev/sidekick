@@ -156,9 +156,9 @@ func TestTaskMonitor_Start_WebSocketFlow(t *testing.T) {
 	testTask := newTestTask()
 	mockClient := &mockClient{baseURL: s.URL}
 	mockCall := mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
-	TaskPollInterval = 1 * time.Millisecond
-	FlowPollInterval = 1 * time.Millisecond
 	m := NewTaskMonitor(mockClient, "workspace1", "task1")
+	m.TaskPollInterval = 1 * time.Millisecond
+	m.FlowPollInterval = 1 * time.Millisecond
 
 	statusChan, progressChan, _ := m.Start(context.Background())
 
@@ -207,9 +207,9 @@ func TestTaskMonitor_Start_WebSocketError(t *testing.T) {
 	testTask := newTestTask()
 	mockClient := &mockClient{baseURL: s.URL}
 	mockCall := mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
-	TaskPollInterval = 1 * time.Millisecond
-	FlowPollInterval = 1 * time.Millisecond
 	m := NewTaskMonitor(mockClient, "workspace1", "task1")
+	m.TaskPollInterval = 1 * time.Millisecond
+	m.FlowPollInterval = 1 * time.Millisecond
 
 	statusChan, progressChan, _ := m.Start(context.Background())
 
@@ -258,9 +258,9 @@ func TestTaskMonitor_Start_ServerUnavailability(t *testing.T) {
 		responseCh: make(chan getTaskResponse, 1),
 	}
 
-	TaskPollInterval = 100 * time.Millisecond
-	FlowPollInterval = 100 * time.Millisecond
 	m := NewTaskMonitor(syncMock, "workspace1", "task1")
+	m.TaskPollInterval = 100 * time.Millisecond
+	m.FlowPollInterval = 100 * time.Millisecond
 
 	// Queue initial successful response
 	syncMock.responseCh <- getTaskResponse{task: testTask, err: nil}
@@ -293,7 +293,20 @@ func TestTaskMonitor_Start_ServerUnavailability(t *testing.T) {
 	syncMock.responseCh <- getTaskResponse{task: completedTask, err: nil}
 
 	// Server recovers, task complete
-	status = <-statusChan
+	// Poll until we get the success status or timeout to handle potential duplicate errors
+	timeout := time.After(1 * time.Second)
+	found := false
+	for !found {
+		select {
+		case status = <-statusChan:
+			if status.Error == nil && status.Finished {
+				found = true
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for task completion")
+		}
+	}
+
 	assert.NoError(t, status.Error)
 	assert.Equal(t, completedTask, status.Task)
 	assert.True(t, status.Finished)
@@ -313,9 +326,9 @@ func TestTaskMonitor_Start_ContextCancellation(t *testing.T) {
 	testTask := newTestTask()
 	mockClient := &mockClient{baseURL: s.URL}
 	mockCall := mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
-	TaskPollInterval = 1 * time.Millisecond
-	FlowPollInterval = 1 * time.Millisecond
 	m := NewTaskMonitor(mockClient, "workspace1", "task1")
+	m.TaskPollInterval = 1 * time.Millisecond
+	m.FlowPollInterval = 1 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
 
