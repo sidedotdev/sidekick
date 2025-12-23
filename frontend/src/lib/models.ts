@@ -189,3 +189,62 @@ export interface Subflow {
   result?: string; // Result of the subflow, if any
 }
 // --- End From Go definition ---
+
+// --- llm2 Chat History Types ---
+export type MessageRef = {
+  flowId: string
+  blockIds: string[]
+  role: string
+}
+
+export type Llm2TextBlock = {
+  type: 'text'
+  text: string
+}
+
+export type Llm2ToolUseBlock = {
+  type: 'tool_use'
+  toolUse: {
+    id: string
+    name: string
+    arguments: string
+  }
+}
+
+export type Llm2ToolResultBlock = {
+  type: 'tool_result'
+  toolResult: {
+    toolCallId: string
+    name?: string
+    isError?: boolean
+    text?: string
+  }
+}
+
+export type Llm2UnknownBlock = {
+  type: 'unknown'
+  raw: unknown
+}
+
+export type Llm2ContentBlock =
+  | Llm2TextBlock
+  | Llm2ToolUseBlock
+  | Llm2ToolResultBlock
+  | Llm2UnknownBlock
+
+export type Llm2Message = {
+  role: string
+  content: Llm2ContentBlock[]
+}
+
+export type Llm2ChatHistoryWrapper = {
+  type: 'llm2'
+  refs: MessageRef[]
+}
+
+export type ChatHistoryParamPayload = ChatCompletionMessage[] | Llm2ChatHistoryWrapper
+
+export function isLlm2ChatHistoryWrapper(payload: ChatHistoryParamPayload | undefined): payload is Llm2ChatHistoryWrapper {
+  return payload !== undefined && !Array.isArray(payload) && payload.type === 'llm2'
+}
+// --- End llm2 Chat History Types ---
