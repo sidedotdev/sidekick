@@ -51,7 +51,9 @@ When writing go tests, use a real DB via sqlite.NewTestSqliteStorage for the
 srv.Storage, rather than defining a mock database accessor, which should never
 be used. Prefer table-style tests in general, but break into separate test
 functions when there are a very large number of test cases, to keep the test
-function sizes reasonable (less than a few hundred lines).
+function sizes reasonable (less than a few hundred lines). Make tests parallel
+with t.Parallel() as much as possible (including subtests) when it is safe to do
+so.
 
 Logs always use zerolog in go. JSON serialization is always in camelCase, not
 snake_case.
