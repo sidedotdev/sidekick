@@ -14,7 +14,6 @@ type CreateTaskRequest struct {
 	Title       string                 `json:"title"`
 	Description string                 `json:"description"`
 	FlowType    string                 `json:"flowType"`
-	Async       bool                   `json:"-"` // client-side only, not sent to server
 	FlowOptions map[string]interface{} `json:"flowOptions"`
 }
 

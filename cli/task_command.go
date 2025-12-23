@@ -120,11 +120,7 @@ func executeTaskCommand(ctx context.Context, c client.Client, cmd *cli.Command) 
 		return err
 	}
 
-	if cmd.Bool("async") {
-		req.Async = true
-	}
-
-	if err := tui.RunTaskUI(ctx, c, req, currentDir); err != nil {
+	if err := tui.RunTaskUI(ctx, c, req, currentDir, cmd.Bool("async")); err != nil {
 		return cli.Exit(err, 1)
 	}
 

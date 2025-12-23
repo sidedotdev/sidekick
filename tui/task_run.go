@@ -192,7 +192,7 @@ func EnsureWorkspace(ctx context.Context, dir string, p TeaSendable, c client.Cl
 }
 
 // RunTaskUI runs the task UI with the given request, handling all lifecycle events.
-func RunTaskUI(ctx context.Context, c client.Client, req *client.CreateTaskRequest, currentDir string) error {
+func RunTaskUI(ctx context.Context, c client.Client, req *client.CreateTaskRequest, currentDir string, async bool) error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	p := tea.NewProgram(newLifecycleModel(sigChan, c))
@@ -235,7 +235,7 @@ func RunTaskUI(ctx context.Context, c client.Client, req *client.CreateTaskReque
 		started := false
 		p.Send(taskChangeMsg{task: task})
 
-		if req.Async {
+		if async {
 			message := fmt.Sprintf("Task submitted. Follow progress at %s", KanbanLink(workspace.Id))
 			p.Send(updateLifecycleMsg{key: "init", content: message})
 			p.Quit()
