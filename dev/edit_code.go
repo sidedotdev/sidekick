@@ -208,6 +208,10 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	attemptsSinceLastEditBlockOrFeedback := 0
 	maxAttempts := 7 // Default value
 
+	// Version gate for done-required protocol
+	doneRequiredVersion := workflow.GetVersion(dCtx, "done-required-protocol", workflow.DefaultVersion, 1)
+	doneToolCalled := false
+
 	repoConfig := dCtx.RepoConfig
 	if repoConfig.MaxIterations > 0 {
 		maxAttempts = repoConfig.MaxIterations
@@ -350,7 +354,18 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 		var toolCallResponses []ToolCallResponseInfo
 		if len(chatResponse.ToolCalls) > 0 {
-			toolCallResponses = handleToolCalls(dCtx, chatResponse.ToolCalls, nil)
+			customHandlers := map[string]func(DevContext, llm.ToolCall) (ToolCallResponseInfo, error){
+				doneTool.Name: handleDoneToolCall,
+			}
+			toolCallResponses = handleToolCalls(dCtx, chatResponse.ToolCalls, customHandlers)
+
+			// Check if done tool was called successfully
+			for _, resp := range toolCallResponses {
+				if resp.FunctionName == doneTool.Name && !resp.IsError {
+					doneToolCalled = true
+					break
+				}
+			}
 		}
 
 		// Add tool call responses to history
@@ -388,11 +403,32 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		}
 
 		if len(chatResponse.ToolCalls) > 0 {
+			// If done tool was called successfully, terminate the loop
+			if doneToolCalled {
+				return extractedEditBlocks, nil
+			}
 			promptInfo = SkipInfo{}
 		} else {
-			// we use the fact that no tool call happened to
-			// infer that we're done with this loop
-			break
+			// No tool calls in this response
+			if doneRequiredVersion >= 1 {
+				// New version: require done tool to terminate
+				if len(currentExtractedBlocks) == 0 {
+					// No edit blocks and no tool calls - provide feedback
+					promptInfo = FeedbackInfo{
+						Feedback: "No edit blocks or tool calls were provided. Please either provide edit blocks, use tools to gather more information, or call the `done` tool if no changes are required.",
+						Type:     FeedbackTypeSystemError,
+					}
+				} else {
+					// Edit blocks were provided but done wasn't called
+					promptInfo = FeedbackInfo{
+						Feedback: "Edit blocks were applied. When you have completed all necessary edits, call the `done` tool to finish. If more edits are needed, continue providing edit blocks.",
+						Type:     FeedbackTypeSystemError,
+					}
+				}
+			} else {
+				// Old version: no tool calls means we're done
+				break
+			}
 		}
 	}
 
