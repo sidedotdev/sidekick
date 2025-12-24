@@ -19,7 +19,7 @@ import (
 // setupTestEnvironment sets up the necessary mocked and real components for testing.
 func setupTestEnvironment(t *testing.T) (*PollFailuresActivities, *mocks.Client) {
 	// Create a real Redis database instance
-	service, _ := redis.NewTestRedisService()
+	service, _ := redis.NewTestRedisServiceT(t)
 
 	// Create a mocked Temporal client
 	mockTemporalClient := mocks.NewClient(t)

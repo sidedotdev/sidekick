@@ -3,12 +3,46 @@ package redis
 import (
 	"context"
 	"sidekick/srv"
+	"testing"
 
 	"log"
 
 	"github.com/redis/go-redis/v9"
 )
 
+func NewTestRedisServiceT(t *testing.T) (*srv.Delegator, *redis.Client) {
+	t.Helper()
+	storage := newTestRedisStorageT(t)
+	streamer := NewTestRedisStreamerT(t)
+	streamer.Client = storage.Client
+	return srv.NewDelegator(storage, streamer), storage.Client
+}
+
+func newTestRedisStorageT(t *testing.T) *Storage {
+	t.Helper()
+	db := &Storage{Client: NewTestRedisClient()}
+
+	_, err := db.Client.FlushDB(context.Background()).Result()
+	if err != nil {
+		t.Skipf("Skipping test; Redis not available: %v", err)
+	}
+
+	return db
+}
+
+func NewTestRedisStreamerT(t *testing.T) *Streamer {
+	t.Helper()
+	streamer := &Streamer{Client: NewTestRedisClient()}
+
+	_, err := streamer.Client.FlushDB(context.Background()).Result()
+	if err != nil {
+		t.Skipf("Skipping test; Redis not available: %v", err)
+	}
+
+	return streamer
+}
+
+// Deprecated: Use NewTestRedisServiceT instead
 func NewTestRedisService() (*srv.Delegator, *redis.Client) {
 	storage := newTestRedisStorage()
 	streamer := NewTestRedisStreamer()

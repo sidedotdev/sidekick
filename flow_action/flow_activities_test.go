@@ -12,7 +12,7 @@ import (
 )
 
 func TestPersistFlowAction(t *testing.T) {
-	service, client := redis.NewTestRedisService()
+	service, client := redis.NewTestRedisServiceT(t)
 	fa := FlowActivities{
 		Service: service,
 	}
