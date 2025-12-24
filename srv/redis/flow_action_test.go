@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"sidekick/domain"
+	"sidekick/srv"
 	"testing"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 
 func TestGetFlowActions(t *testing.T) {
 	ctx := context.Background()
-	db := newTestRedisStorageT(t)
+	db := newTestRedisStorage(t)
 	flowAction1 := domain.FlowAction{
 		WorkspaceId: "TEST_WORKSPACE_ID",
 		FlowId:      "test-flow-id",
@@ -43,8 +44,9 @@ func TestGetFlowActions(t *testing.T) {
 
 func TestPersistFlowAction(t *testing.T) {
 	ctx := context.Background()
-	service, _ := NewTestRedisServiceT(t)
-	streamer := NewTestRedisStreamerT(t)
+	storage := newTestRedisStorage(t)
+	streamer := newTestRedisStreamer(t)
+	service := srv.NewDelegator(storage, streamer)
 	flowAction := domain.FlowAction{
 		WorkspaceId:  "TEST_WORKSPACE_ID",
 		FlowId:       "flow_" + ksuid.New().String(),
@@ -79,7 +81,7 @@ func TestPersistFlowAction(t *testing.T) {
 
 func TestPersistFlowAction_MissingId(t *testing.T) {
 	ctx := context.Background()
-	db := newTestRedisStorageT(t)
+	db := newTestRedisStorage(t)
 	flowAction := domain.FlowAction{
 		WorkspaceId: "TEST_WORKSPACE_ID",
 		FlowId:      "flow_" + ksuid.New().String(),
@@ -91,7 +93,7 @@ func TestPersistFlowAction_MissingId(t *testing.T) {
 
 func TestPersistFlowAction_MissingFlowId(t *testing.T) {
 	ctx := context.Background()
-	db := newTestRedisStorageT(t)
+	db := newTestRedisStorage(t)
 	flowAction := domain.FlowAction{
 		Id:          "id_" + ksuid.New().String(),
 		WorkspaceId: "TEST_WORKSPACE_ID",
@@ -103,7 +105,7 @@ func TestPersistFlowAction_MissingFlowId(t *testing.T) {
 
 func TestPersistFlowAction_MissingWorkspaceId(t *testing.T) {
 	ctx := context.Background()
-	db := newTestRedisStorageT(t)
+	db := newTestRedisStorage(t)
 	flowAction := domain.FlowAction{
 		Id:     "id_" + ksuid.New().String(),
 		FlowId: "flow_" + ksuid.New().String(),
@@ -117,7 +119,7 @@ func TestStreamFlowActionChanges(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	streamer := NewTestRedisStreamerT(t)
+	streamer := newTestRedisStreamer(t)
 	defer streamer.Client.Close()
 
 	// Clear the stream used by this test

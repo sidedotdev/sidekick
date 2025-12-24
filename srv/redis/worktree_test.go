@@ -13,7 +13,7 @@ import (
 
 func TestWorktreeStorage(t *testing.T) {
 	ctx := context.Background()
-	storage := newTestRedisStorageT(t)
+	storage := newTestRedisStorage(t)
 
 	t.Run("PersistWorktree", func(t *testing.T) {
 		worktree := domain.Worktree{

@@ -13,7 +13,7 @@ import (
 )
 
 func TestAddChatMessageDeltaFlowEvent(t *testing.T) {
-	db := NewTestRedisStreamerT(t)
+	db := newTestRedisStreamer(t)
 	workspaceId := "TEST_WORKSPACE_ID"
 	flowId := "TEST_FLOW_ID"
 	flowEvent := domain.ChatMessageDeltaEvent{
@@ -56,7 +56,7 @@ func TestAddChatMessageDeltaFlowEvent(t *testing.T) {
 }
 
 func TestAddProgressTextFlowEvent(t *testing.T) {
-	db := NewTestRedisStreamerT(t)
+	db := newTestRedisStreamer(t)
 	workspaceId := "TEST_WORKSPACE_ID"
 	flowId := "TEST_FLOW_ID"
 	flowEvent := domain.ProgressTextEvent{
@@ -86,7 +86,7 @@ func TestAddProgressTextFlowEvent(t *testing.T) {
 }
 
 func TestStreamFlowEvents(t *testing.T) {
-	db := NewTestRedisStreamerT(t)
+	db := newTestRedisStreamer(t)
 	workspaceId := "TEST_WORKSPACE_ID"
 	flowId := "TEST_FLOW_ID"
 	eventParentId1 := "TEST_PARENT_ID_1"
