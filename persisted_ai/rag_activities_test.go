@@ -3,6 +3,7 @@ package persisted_ai
 import (
 	"context"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -17,6 +18,10 @@ import (
 )
 
 func TestRankedSubkeys(t *testing.T) {
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
 	dbAccessor := sqlite.NewTestSqliteStorage(t, "test-ranked-subkeys")
 	ra := RagActivities{DatabaseAccessor: dbAccessor}
 
