@@ -179,6 +179,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(dev.ManageChatHistoryV2Activity)
 	w.RegisterActivity(ffa.EvalBoolFlag)
 	w.RegisterActivity(common.GetLocalConfig)
+	w.RegisterActivity(common.BaseCommandPermissionsActivity)
 
 	w.RegisterActivity(&workspace.Activities{Storage: service})
 
