@@ -164,6 +164,9 @@ loop:
 			if response.Usage.OutputTokens > 0 {
 				usage.OutputTokens = int(response.Usage.OutputTokens)
 			}
+			if response.Usage.InputTokensDetails.CachedTokens > 0 {
+				usage.CacheReadInputTokens = int(response.Usage.InputTokensDetails.CachedTokens)
+			}
 			break loop
 		case responses.ResponseReasoningSummaryTextDeltaEvent:
 			if progressChan == nil {
