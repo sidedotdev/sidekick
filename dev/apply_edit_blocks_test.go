@@ -1111,8 +1111,8 @@ func TestApplyEditBlocks_withMultipleEditBlocksAndVisibleFileRanges(t *testing.T
 	t.Parallel()
 	tmpDir := t.TempDir()
 
-	// Create a tempfile under the given tmpDir with the name "side.toml". It can be empty, which is still valid.
-	_, err := os.Create(filepath.Join(tmpDir, "side.toml"))
+	// Create an empty repo config file
+	_, err := os.Create(filepath.Join(tmpDir, "side.yml"))
 	require.NoError(t, err)
 
 	// Create a temporary file with initial content
@@ -1526,8 +1526,8 @@ func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
 			assert.Nil(t, err)
 			//defer os.RemoveAll(tmpDir)
 
-			// Create a tempfile under the given tmpDir with the name "side.toml". It can be empty, which is still valid.
-			_, err = os.Create(filepath.Join(tmpDir, "side.toml"))
+			// Create an empty repo config file
+			_, err = os.Create(filepath.Join(tmpDir, "side.yml"))
 			require.NoError(t, err)
 
 			initCmd := exec.Command("git", "init")
@@ -1654,9 +1654,8 @@ func TestApplyEditBlocks_FinalDiff_AfterFailedChecksAndRestore(t *testing.T) {
 		},
 	}
 
-	// Create side.toml for valid project context if needed by checks
-	// This is often needed for git operations or other environment setups within activities.
-	_, err = os.Create(filepath.Join(tmpDir, "side.toml"))
+	// Create an empty repo config file for valid project context
+	_, err = os.Create(filepath.Join(tmpDir, "side.yml"))
 	require.NoError(t, err)
 
 	input := ApplyEditBlockActivityInput{
@@ -1719,8 +1718,8 @@ func TestApplyEditBlocks_FinalDiff_NewFilePassesChecks(t *testing.T) {
 	err = initCmd.Run()
 	require.NoError(t, err)
 
-	// Create side.toml for valid project context if needed by checks
-	_, err = os.Create(filepath.Join(tmpDir, "side.toml"))
+	// Create an empty repo config file for valid project context
+	_, err = os.Create(filepath.Join(tmpDir, "side.yml"))
 	require.NoError(t, err)
 
 	newFilePath := "new_file.txt"
@@ -1970,8 +1969,8 @@ func DoSomething() {
 	err := os.WriteFile(testFile, []byte(initialContent), 0644)
 	require.NoError(t, err)
 
-	// Create a tempfile under the given tmpDir with the name "side.toml". It can be empty, which is still valid.
-	_, err = os.Create(filepath.Join(tmpDir, "side.toml"))
+	// Create an empty repo config file
+	_, err = os.Create(filepath.Join(tmpDir, "side.yml"))
 	require.NoError(t, err)
 
 	// Initialize git repo for diff functionality

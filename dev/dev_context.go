@@ -217,9 +217,9 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	if err != nil {
 		var hint string
 		if worktree != nil {
-			hint = "Please commit your side.toml and .sideignore files (generated via `side init`), and make sure they are available from the base branch of the worktree."
+			hint = "Please commit your repo config (side.yml or side.yaml) and .sideignore files (generated via `side init`), and make sure they are available from the base branch of the worktree."
 		} else {
-			hint = "Please commit your side.toml and .sideignore files (generated via `side init`)"
+			hint = "Please commit your repo config (side.yml or side.yaml) and .sideignore files (generated via `side init`)"
 		}
 
 		return DevContext{}, fmt.Errorf("failed to get repo config: %v\n\n%s", err, hint)
