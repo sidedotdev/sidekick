@@ -96,6 +96,10 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 		Storage:        service,
 		TemporalClient: temporalClient,
 	}
+	cascadeDeleteActivities := &srv.CascadeDeleteTaskActivities{
+		Service:        service,
+		TemporalClient: temporalClient,
+	}
 	flowActivities := &flow_action.FlowActivities{Service: service}
 	embedActivities := &persisted_ai.EmbedActivities{
 		Storage: service,
@@ -200,6 +204,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(common.BaseCommandPermissionsActivity)
 
 	w.RegisterActivity(&workspace.Activities{Storage: service})
+	w.RegisterActivity(cascadeDeleteActivities)
 
 	err = w.Start()
 	if err != nil {
@@ -218,4 +223,5 @@ func RegisterWorkflows(w worker.WorkflowRegistry) {
 	w.RegisterWorkflow(dev.PlannedDevWorkflow)
 	w.RegisterWorkflow(dev.BasicDevWorkflow)
 	w.RegisterWorkflow(poll_failures.PollFailuresWorkflow)
+	w.RegisterWorkflow(srv.CascadeDeleteTaskWorkflow)
 }
