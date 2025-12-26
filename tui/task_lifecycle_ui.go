@@ -30,6 +30,10 @@ type clearLifecycleMsg struct {
 	key string
 }
 
+type ctrlCTimeoutMsg struct {
+	pressedAt time.Time
+}
+
 type taskLifecycleModel struct {
 	spinner spinner.Model
 
@@ -40,11 +44,12 @@ type taskLifecycleModel struct {
 
 	messages map[string]lifecycleMessage
 
-	error     error
-	taskId    string
-	flowId    string
-	progModel tea.Model
-	client    client.Client
+	error          error
+	taskId         string
+	flowId         string
+	progModel      tea.Model
+	client         client.Client
+	ctrlCPressedAt time.Time
 }
 
 func newLifecycleModel(sigChan chan os.Signal, c client.Client) taskLifecycleModel {
@@ -68,11 +73,25 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		var cmds []tea.Cmd
 		if msg.Type == tea.KeyCtrlC {
-			m.sigChan <- os.Interrupt
-			// we are using a signal to handle canceling the task, for which we
-			// show more lifecycle messages, so we don't quit here
+			if !m.ctrlCPressedAt.IsZero() && time.Since(m.ctrlCPressedAt) < 2*time.Second {
+				m.sigChan <- os.Interrupt
+				return m.propagateAndBatch(msg, cmds)
+			} else {
+				pressedAt := time.Now()
+				m.ctrlCPressedAt = pressedAt
+				cmds = append(cmds, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+					return ctrlCTimeoutMsg{pressedAt: pressedAt}
+				}))
+				return m, tea.Batch(cmds...)
+			}
 		}
 		return m.propagateAndBatch(msg, cmds)
+
+	case ctrlCTimeoutMsg:
+		if m.ctrlCPressedAt.Equal(msg.pressedAt) {
+			m.ctrlCPressedAt = time.Time{}
+		}
+		return m, nil
 
 	case updateLifecycleMsg:
 		m.messages[msg.key] = lifecycleMessage{
@@ -172,7 +191,13 @@ func (m taskLifecycleModel) View() string {
 
 	if m.progModel != nil {
 		b.WriteString("\n")
-		b.WriteString(m.progModel.View())
+		progView := m.progModel.View()
+		if !m.ctrlCPressedAt.IsZero() && time.Since(m.ctrlCPressedAt) < 2*time.Second {
+			progView = strings.Replace(progView, "To cancel, press ctrl+c.", "Press Ctrl+C again to exit.", 1)
+		}
+		b.WriteString(progView)
+	} else if !m.ctrlCPressedAt.IsZero() && time.Since(m.ctrlCPressedAt) < 2*time.Second {
+		b.WriteString("\nPress Ctrl+C again to exit.")
 	}
 
 	return b.String()
