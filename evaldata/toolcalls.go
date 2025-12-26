@@ -44,6 +44,11 @@ func ExtractToolCalls(c Case) []ToolCallSpec {
 			}
 		}
 
+		// Capture tool result if available
+		if action.ActionResult != "" {
+			spec.ResultJson = action.ActionResult
+		}
+
 		specs = append(specs, spec)
 	}
 
