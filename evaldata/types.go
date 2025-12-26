@@ -20,6 +20,7 @@ type ToolCallSpec struct {
 	ToolCallId    string      `json:"toolCallId"`
 	ArgumentsJson string      `json:"argumentsJson"`
 	Arguments     interface{} `json:"arguments,omitempty"`
+	ResultJson    string      `json:"resultJson,omitempty"`
 	ParseError    string      `json:"parseError,omitempty"`
 }
 
