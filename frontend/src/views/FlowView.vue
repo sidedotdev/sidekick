@@ -290,7 +290,7 @@ const getAndSubscribeSubflowWithDebounce = (subflowId: string, delay: number) =>
 };
 
 const connectActionChangesWebSocketForFlow = (flowId: string) => {
-  actionChangesSocket = new WebSocket(`ws://${window.location.host}/ws/v1/workspaces/${store.workspaceId}/flows/${flowId}/action_changes_ws`);
+  actionChangesSocket = new WebSocket(`ws://${window.location.host}/ws/v1/workspaces/${store.workspaceId}/flows/${flowId}/action_changes_ws?streamMessageStartId=$`);
 
   actionChangesSocket.onopen = () => {
     console.log("WebSocket connection opened for flow:", flowId);
@@ -369,6 +369,43 @@ const connectActionChangesWebSocketForFlow = (flowId: string) => {
       }
     }, 1000);
   };
+};
+
+const fetchAndMergeFlowActions = async (flowId: string) => {
+  try {
+    const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${flowId}/actions`);
+    if (response.ok) {
+      const data = await response.json();
+      const fetchedActions = data.flowActions as FlowAction[];
+      
+      for (const action of fetchedActions) {
+        const index = flowActions.value.findIndex((a) => a.id === action.id);
+        if (index !== -1) {
+          // Only replace if REST action is not older than in-memory action
+          if (action.updated >= flowActions.value[index].updated) {
+            flowActions.value[index] = action;
+          }
+        } else {
+          flowActions.value.push(action);
+        }
+
+        if (action.subflowId) {
+          getAndSubscribeSubflowWithDebounce(action.subflowId, 100);
+        }
+      }
+
+      if (fetchedActions.length > 0 && !hasReceivedFirstAction) {
+        hasReceivedFirstAction = true;
+        isStartingFlow.value = false;
+      }
+
+      updateSubflowTrees();
+    } else {
+      console.error(`Failed to fetch flow actions for flow ${flowId}:`, await response.text());
+    }
+  } catch (err) {
+    console.error(`Error fetching flow actions for flow ${flowId}:`, err);
+  }
 };
 
 const fetchFlowSubflows = async (flowId: string) => {
@@ -452,6 +489,9 @@ const setupFlow = async (newFlowId: string | undefined) => {
 
   connectEventsWebSocketForFlow(newFlowId, flowPromise);
   connectActionChangesWebSocketForFlow(newFlowId);
+
+  // Fetch historical flow actions via REST after websocket is established
+  fetchAndMergeFlowActions(newFlowId);
 
   // Fetch all subflows for this flow to populate subflowsById
   fetchFlowSubflows(newFlowId);
