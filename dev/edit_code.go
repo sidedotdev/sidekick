@@ -33,7 +33,7 @@ var ErrMaxAttemptsReached = fmt.Errorf("reached max attempts")
 var ErrExtractEditBlocks = fmt.Errorf("failed to extract edit blocks")
 
 // edits code in the envContainer based on code context + requirements
-func EditCode(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *common.ChatHistoryContainer, promptInfo PromptInfo) error {
+func EditCode(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *llm2.ChatHistoryContainer, promptInfo PromptInfo) error {
 	return RunSubflowWithoutResult(dCtx, "edit_code", "Edit Code", func(_ domain.Subflow) error {
 		return editCodeSubflow(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo)
 	})
@@ -96,7 +96,7 @@ func applyEditBlocksAndReport(dCtx DevContext, editBlocks []EditBlock) (applyEdi
 	}, nil
 }
 
-func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *common.ChatHistoryContainer, promptInfo PromptInfo) error {
+func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *llm2.ChatHistoryContainer, promptInfo PromptInfo) error {
 	var err error
 	var editBlocks []EditBlock
 
@@ -202,7 +202,7 @@ editLoop:
 	return nil
 }
 
-func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *common.ChatHistoryContainer, promptInfo PromptInfo) ([]EditBlock, error) {
+func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *llm2.ChatHistoryContainer, promptInfo PromptInfo) ([]EditBlock, error) {
 	var extractedEditBlocks []EditBlock
 
 	attemptCount := 0
@@ -404,7 +404,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 // buildAuthorEditBlockInput builds the LLM options for authoring edit blocks.
 // Returns the options and the visible messages (for edit block extraction).
-func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *common.ChatHistoryContainer, promptInfo PromptInfo) (llm2.Options, []llm.ChatMessage) {
+func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *llm2.ChatHistoryContainer, promptInfo PromptInfo) (llm2.Options, []llm.ChatMessage) {
 	// TODO extract chat message building into a separate function
 	var content string
 	role := llm.ChatMessageRoleUser

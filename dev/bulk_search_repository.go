@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"sidekick/coding/tree_sitter"
-	"sidekick/common"
 	"sidekick/env"
 	"sidekick/llm"
+	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"strings"
 
@@ -60,7 +60,7 @@ func BulkSearchRepository(ctx workflow.Context, envContainer env.EnvContainer, b
 	return strings.Join(results, "\n"), nil
 }
 
-func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *common.ChatHistoryContainer) ([]llm.ToolCall, error) {
+func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *llm2.ChatHistoryContainer) ([]llm.ToolCall, error) {
 	actionCtx := dCtx.ExecContext.NewActionContext("generate.repo_search_query")
 	// Convert ChatHistoryContainer messages to []llm.ChatMessage for LLM call
 	messages := chatHistory.Messages()

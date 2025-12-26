@@ -7,27 +7,10 @@ import (
 	"sidekick/domain"
 	"sidekick/llm2"
 	"sidekick/srv"
-	"sidekick/temp_common2"
 
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/activity"
 )
-
-func init() {
-	llm2.MessagesFromChatHistory = messagesFromChatHistory
-}
-
-// messagesFromChatHistory extracts llm2.Message slice from a ChatHistoryContainer.
-// Returns nil if the history is not an Llm2ChatHistory (legacy histories use a different path).
-func messagesFromChatHistory(c *common.ChatHistoryContainer) []llm2.Message {
-	if c == nil || c.History == nil {
-		return nil
-	}
-	if llm2History, ok := c.History.(*temp_common2.Llm2ChatHistory); ok {
-		return llm2History.Llm2Messages()
-	}
-	return nil
-}
 
 // StreamInput is the activity input for LLM streaming that carries chat history for hydration.
 type StreamInput struct {

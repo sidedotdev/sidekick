@@ -6,9 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"sidekick/common"
 	"sidekick/llm2"
-	"sidekick/temp_common2"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -65,7 +63,7 @@ func TestManageV3_HydratesHistory(t *testing.T) {
 		Storage: storage,
 	}
 
-	original := temp_common2.NewLlm2ChatHistory("flow-123", "workspace-456")
+	original := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
 	original.Append(&llm2.Message{
 		Role:    llm2.RoleUser,
 		Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}},
@@ -76,11 +74,11 @@ func TestManageV3_HydratesHistory(t *testing.T) {
 	data, err := original.MarshalJSON()
 	require.NoError(t, err)
 
-	restored := &temp_common2.Llm2ChatHistory{}
+	restored := &llm2.Llm2ChatHistory{}
 	err = restored.UnmarshalJSON(data)
 	require.NoError(t, err)
 
-	container := &common.ChatHistoryContainer{History: restored}
+	container := &llm2.ChatHistoryContainer{History: restored}
 	storage.mgetCalled = false
 
 	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 0)
@@ -95,13 +93,13 @@ func TestManageV3_PersistsHistory(t *testing.T) {
 		Storage: storage,
 	}
 
-	history := temp_common2.NewLlm2ChatHistory("flow-123", "workspace-456")
+	history := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
 	history.Append(&llm2.Message{
 		Role:    llm2.RoleUser,
 		Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}},
 	})
 
-	container := &common.ChatHistoryContainer{History: history}
+	container := &llm2.ChatHistoryContainer{History: history}
 
 	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 0)
 	require.NoError(t, err)
@@ -116,7 +114,7 @@ func TestManageV3_HydrationError(t *testing.T) {
 		Storage: storage,
 	}
 
-	original := temp_common2.NewLlm2ChatHistory("flow-123", "workspace-456")
+	original := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
 	original.Append(&llm2.Message{
 		Role:    llm2.RoleUser,
 		Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}},
@@ -129,11 +127,11 @@ func TestManageV3_HydrationError(t *testing.T) {
 	data, err := original.MarshalJSON()
 	require.NoError(t, err)
 
-	restored := &temp_common2.Llm2ChatHistory{}
+	restored := &llm2.Llm2ChatHistory{}
 	err = restored.UnmarshalJSON(data)
 	require.NoError(t, err)
 
-	container := &common.ChatHistoryContainer{History: restored}
+	container := &llm2.ChatHistoryContainer{History: restored}
 
 	_, err = activities.ManageV3(context.Background(), container, "workspace-456", 0)
 	require.Error(t, err)
@@ -147,13 +145,13 @@ func TestManageV3_PersistError(t *testing.T) {
 		Storage: storage,
 	}
 
-	history := temp_common2.NewLlm2ChatHistory("flow-123", "workspace-456")
+	history := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
 	history.Append(&llm2.Message{
 		Role:    llm2.RoleUser,
 		Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}},
 	})
 
-	container := &common.ChatHistoryContainer{History: history}
+	container := &llm2.ChatHistoryContainer{History: history}
 
 	_, err := activities.ManageV3(context.Background(), container, "workspace-456", 0)
 	require.Error(t, err)
@@ -166,8 +164,8 @@ func TestManageV3_WrongHistoryType(t *testing.T) {
 		Storage: storage,
 	}
 
-	legacyHistory := common.NewLegacyChatHistoryFromChatMessages([]common.ChatMessage{})
-	container := &common.ChatHistoryContainer{History: legacyHistory}
+	legacyHistory := llm2.NewLegacyChatHistoryFromChatMessages(nil)
+	container := &llm2.ChatHistoryContainer{History: legacyHistory}
 
 	_, err := activities.ManageV3(context.Background(), container, "workspace-456", 0)
 	require.Error(t, err)

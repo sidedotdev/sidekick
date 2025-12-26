@@ -3,10 +3,10 @@ package dev
 import (
 	"fmt"
 	"sidekick/coding/git"
-	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/llm"
+	"sidekick/llm2"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -213,7 +213,7 @@ func GetUserMergeApproval(
 // currentPromptInfo and chatHistory.
 //
 // before replacing, we'll need a better solution for remembering user feedback too.
-func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceContext string, chatHistory *common.ChatHistoryContainer, requestParams map[string]any) (FeedbackInfo, error) {
+func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceContext string, chatHistory *llm2.ChatHistoryContainer, requestParams map[string]any) (FeedbackInfo, error) {
 	userResponse, err := GetUserGuidance(dCtx, guidanceContext, requestParams)
 	if err != nil {
 		return FeedbackInfo{}, fmt.Errorf("failed to get user response: %v", err)

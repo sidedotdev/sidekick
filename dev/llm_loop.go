@@ -2,8 +2,8 @@ package dev
 
 import (
 	"fmt"
-	"sidekick/common"
 	"sidekick/llm"
+	"sidekick/llm2"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -14,7 +14,7 @@ type LlmIteration struct {
 	Num                int
 	AutoIterationCount int
 	ExecCtx            DevContext
-	ChatHistory        *common.ChatHistoryContainer
+	ChatHistory        *llm2.ChatHistoryContainer
 	State              interface{}
 }
 
@@ -51,7 +51,7 @@ func WithInitialState(initialState interface{}) Option {
 }
 
 // LlmLoop is a generic function that implements an interative loop for human-in-the-loop LLM invocations
-func LlmLoop[T any](dCtx DevContext, chatHistory *common.ChatHistoryContainer, loopFunc func(iteration *LlmIteration) (*T, error), opts ...Option) (*T, error) {
+func LlmLoop[T any](dCtx DevContext, chatHistory *llm2.ChatHistoryContainer, loopFunc func(iteration *LlmIteration) (*T, error), opts ...Option) (*T, error) {
 	config := &LlmLoopConfig{
 		maxIterations:  17,
 		autoIterations: 3,

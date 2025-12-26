@@ -122,7 +122,7 @@ func ForceToolCallWithTrackOptionsV2(
 	actionCtx flow_action.ActionContext,
 	trackOptions flow_action.TrackOptions,
 	llmConfig common.LLMConfig,
-	chatHistory *common.ChatHistoryContainer,
+	chatHistory *llm2.ChatHistoryContainer,
 	tools ...*llm.Tool,
 ) (common.MessageResponse, error) {
 	modelConfig, _ := llmConfig.GetModelConfig(common.DefaultKey, 0)

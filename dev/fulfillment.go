@@ -6,6 +6,7 @@ import (
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/llm"
+	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"strings"
 
@@ -119,7 +120,7 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 	return fulfillment, nil
 }
 
-func getCriteriaFulfillmentPrompt(ctx workflow.Context, workspaceId string, promptInfo CheckWorkInfo) *common.ChatHistoryContainer {
+func getCriteriaFulfillmentPrompt(ctx workflow.Context, workspaceId string, promptInfo CheckWorkInfo) *llm2.ChatHistoryContainer {
 	chatHistory := NewVersionedChatHistory(ctx, workspaceId)
 
 	var content string

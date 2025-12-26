@@ -495,7 +495,7 @@ func unmarshalPlan(jsonStr string) (DevPlan, error) {
 	return plan, nil
 }
 
-func generateDevPlan(dCtx DevContext, chatHistory *common.ChatHistoryContainer, hasExistingPlan bool) (common.MessageResponse, error) {
+func generateDevPlan(dCtx DevContext, chatHistory *llm2.ChatHistoryContainer, hasExistingPlan bool) (common.MessageResponse, error) {
 	tools := []*llm.Tool{
 		&recordDevPlanTool,
 		currentGetSymbolDefinitionsTool(),
@@ -575,7 +575,7 @@ step, describe the AAA in detail, and ensure you include the predicted failure o
 the test prior to fixing the bug as part of the completion_analysis.
 `
 
-func addDevPlanPrompt(dCtx DevContext, chatHistory *common.ChatHistoryContainer, promptInfo PromptInfo) {
+func addDevPlanPrompt(dCtx DevContext, chatHistory *llm2.ChatHistoryContainer, promptInfo PromptInfo) {
 	var content string
 	role := llm.ChatMessageRoleUser
 	cacheControl := ""

@@ -6,6 +6,7 @@ import (
 	"sidekick/common"
 	"sidekick/fflag"
 	"sidekick/llm"
+	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"slices"
 	"strings"
@@ -64,11 +65,11 @@ const (
 // TODO take in the model name and use a different threshold for each model
 // TODO don't drop messages, just create a new chat history with a new summary
 // each time based on the current needs or latest prompt
-func ManageChatHistory(ctx workflow.Context, chatHistory *common.ChatHistoryContainer, workspaceId string, maxLength int) {
+func ManageChatHistory(ctx workflow.Context, chatHistory *llm2.ChatHistoryContainer, workspaceId string, maxLength int) {
 	// Check if we should use the new Llm2ChatHistory-based management
 	v := workflow.GetVersion(ctx, "chat-history-llm2", workflow.DefaultVersion, 1)
 	if v == 1 {
-		var managedHistory *common.ChatHistoryContainer
+		var managedHistory *llm2.ChatHistoryContainer
 		var cha *persisted_ai.ChatHistoryActivities
 		activityFuture := workflow.ExecuteActivity(ctx, cha.ManageV3, chatHistory, workspaceId, maxLength)
 		err := activityFuture.Get(ctx, &managedHistory)
@@ -110,7 +111,7 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *common.ChatHistoryCont
 		panic(wrapErr)
 	}
 
-	chatHistory.History = common.NewLegacyChatHistoryFromChatMessages(newChatHistory)
+	chatHistory.History = llm2.NewLegacyChatHistoryFromChatMessages(newChatHistory)
 }
 
 func ManageChatHistoryActivity(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {

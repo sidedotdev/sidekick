@@ -9,6 +9,7 @@ import (
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/flow_action"
+	"sidekick/llm2"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -400,7 +401,7 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 	return result, nil
 }
 
-func performStep(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *common.ChatHistoryContainer, promptInfo PromptInfo, step DevStep, planExec DevPlanExecution) error {
+func performStep(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *llm2.ChatHistoryContainer, promptInfo PromptInfo, step DevStep, planExec DevPlanExecution) error {
 	v := workflow.GetVersion(dCtx, "performStep", workflow.DefaultVersion, 1)
 	if v == workflow.DefaultVersion {
 		return RunSubflowWithoutResult(dCtx, "perform_step", "Perform Step", func(_ domain.Subflow) error {
@@ -413,7 +414,7 @@ func performStep(dCtx DevContext, codingModelConfig common.ModelConfig, contextS
 	}
 }
 
-func performStepSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *common.ChatHistoryContainer, promptInfo PromptInfo, step DevStep, planExec DevPlanExecution) error {
+func performStepSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *llm2.ChatHistoryContainer, promptInfo PromptInfo, step DevStep, planExec DevPlanExecution) error {
 	switch step.Type {
 	case "edit":
 		return EditCode(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo)

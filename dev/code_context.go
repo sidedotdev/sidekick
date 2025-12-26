@@ -11,6 +11,7 @@ import (
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/llm"
+	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/utils"
 	"strings"
@@ -449,7 +450,7 @@ type ToolCallWithCodeContext struct {
 // ForceToolRetrieveCodeContext forces the LLM to call get_symbol_definitions and
 // returns all tool calls with their parsed RequiredCodeContext. Each tool call is
 // parsed independently; if parsing fails for a tool call, its Err field is set.
-func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *common.ChatHistoryContainer) ([]ToolCallWithCodeContext, error) {
+func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *llm2.ChatHistoryContainer) ([]ToolCallWithCodeContext, error) {
 	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "small")
 	// Convert Messages() to []llm.ChatMessage for LLM API
 	messages := chatHistory.Messages()
@@ -573,7 +574,7 @@ func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.Env
 	return allSymbolDefinitions, feedbacks
 }
 
-func addCodeContextPrompt(chatHistory *common.ChatHistoryContainer, promptInfo PromptInfo) {
+func addCodeContextPrompt(chatHistory *llm2.ChatHistoryContainer, promptInfo PromptInfo) {
 	var content string
 	role := llm.ChatMessageRoleUser
 	name := ""

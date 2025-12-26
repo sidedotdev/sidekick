@@ -12,7 +12,6 @@ import (
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
-	"sidekick/temp_common2"
 	"sidekick/utils"
 	"testing"
 
@@ -35,7 +34,7 @@ type AuthorEditBlocksTestSuite struct {
 	// a wrapper is required to set the ctx1 value, so that we can a method that
 	// isn't a real workflow. otherwise we get errors about not having
 	// StartToClose or ScheduleToCloseTimeout set
-	wrapperWorkflow func(ctx workflow.Context, chatHistory *common.ChatHistoryContainer, pic PromptInfoContainer) ([]EditBlock, error)
+	wrapperWorkflow func(ctx workflow.Context, chatHistory *llm2.ChatHistoryContainer, pic PromptInfoContainer) ([]EditBlock, error)
 }
 
 func (s *AuthorEditBlocksTestSuite) SetupTest() {
@@ -48,7 +47,7 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 
 	// s.NewTestActivityEnvironment()
-	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *common.ChatHistoryContainer, pic PromptInfoContainer) ([]EditBlock, error) {
+	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *llm2.ChatHistoryContainer, pic PromptInfoContainer) ([]EditBlock, error) {
 		ctx1 := utils.NoRetryCtx(ctx)
 		execContext := DevContext{
 			ExecContext: flow_action.ExecContext{
@@ -82,8 +81,8 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	// Mock Hydrate activity - marks the chat history as hydrated and returns it
 	var cha *persisted_ai.ChatHistoryActivities
 	s.env.OnActivity(cha.Hydrate, mock.Anything, mock.Anything, mock.Anything).Return(
-		func(ctx context.Context, chatHistory *common.ChatHistoryContainer, workspaceId string) (*common.ChatHistoryContainer, error) {
-			if llm2History, ok := chatHistory.History.(*temp_common2.Llm2ChatHistory); ok {
+		func(ctx context.Context, chatHistory *llm2.ChatHistoryContainer, workspaceId string) (*llm2.ChatHistoryContainer, error) {
+			if llm2History, ok := chatHistory.History.(*llm2.Llm2ChatHistory); ok {
 				err := llm2History.Hydrate(ctx, nil)
 				if err != nil {
 					return nil, err
@@ -97,7 +96,7 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 
 	// Mock ManageV3 activity - manages chat history for llm2 path
 	s.env.OnActivity(cha.ManageV3, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
-		func(ctx context.Context, chatHistory *common.ChatHistoryContainer, workspaceId string, maxLength int) (*common.ChatHistoryContainer, error) {
+		func(ctx context.Context, chatHistory *llm2.ChatHistoryContainer, workspaceId string, maxLength int) (*llm2.ChatHistoryContainer, error) {
 			return chatHistory, nil
 		},
 	).Maybe()
@@ -125,7 +124,7 @@ func TestAuthorEditBlockTestSuite(t *testing.T) {
 }
 
 func (s *AuthorEditBlocksTestSuite) TestInitialCodeInfoNoEditBlocks() {
-	chatHistory := &common.ChatHistoryContainer{History: temp_common2.NewLlm2ChatHistory("", "")}
+	chatHistory := &llm2.ChatHistoryContainer{History: llm2.NewLlm2ChatHistory("", "")}
 	var la *persisted_ai.Llm2Activities // use a nil struct pointer to call activities that are part of a structure
 	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		// Simulate progress events being handled

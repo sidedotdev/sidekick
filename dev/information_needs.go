@@ -45,7 +45,7 @@ func llmInputForIdentifyInformationNeeds(dCtx DevContext) llm2.Options {
 	}
 }
 
-func IdentifyInformationNeeds(dCtx DevContext, chatHistory *common.ChatHistoryContainer, repoSummary string, requirements string) (InformationNeeds, error) {
+func IdentifyInformationNeeds(dCtx DevContext, chatHistory *llm2.ChatHistoryContainer, repoSummary string, requirements string) (InformationNeeds, error) {
 	prompt := fmt.Sprintf(`Repository Summary:
 
 %s

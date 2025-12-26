@@ -6,7 +6,6 @@ import (
 	"sidekick/common"
 	"sidekick/llm"
 	"sidekick/llm2"
-	"sidekick/temp_common2"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -66,7 +65,7 @@ func executeChatStreamV1(
 	options ChatStreamOptionsV2,
 ) (common.MessageResponse, error) {
 	chatHistory := options.Params.ChatHistory
-	_, ok := chatHistory.History.(*temp_common2.Llm2ChatHistory)
+	_, ok := chatHistory.History.(*llm2.Llm2ChatHistory)
 	if !ok {
 		return nil, fmt.Errorf("ExecuteChatStream version 1 requires Llm2ChatHistory, got %T", chatHistory.History)
 	}
@@ -102,9 +101,9 @@ func executeChatStreamV1(
 func executeChatStreamLegacy(
 	ctx workflow.Context,
 	options ChatStreamOptions,
-	chatHistory *common.ChatHistoryContainer,
+	chatHistory *llm2.ChatHistoryContainer,
 ) (common.MessageResponse, error) {
-	legacyHistory, ok := chatHistory.History.(*common.LegacyChatHistory)
+	legacyHistory, ok := chatHistory.History.(*llm2.LegacyChatHistory)
 	if !ok {
 		return nil, fmt.Errorf("ExecuteChatStream default version requires LegacyChatHistory, got %T", chatHistory.History)
 	}

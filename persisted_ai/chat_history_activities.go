@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"sidekick/common"
-	"sidekick/temp_common2"
+	"sidekick/llm2"
 )
 
 // ChatHistoryActivities provides activities for managing chat history with KV storage.
@@ -16,10 +16,10 @@ type ChatHistoryActivities struct {
 // Hydrate hydrates the chat history from KV storage.
 func (ca *ChatHistoryActivities) Hydrate(
 	ctx context.Context,
-	chatHistory *common.ChatHistoryContainer,
+	chatHistory *llm2.ChatHistoryContainer,
 	workspaceId string,
-) (*common.ChatHistoryContainer, error) {
-	llm2History, ok := chatHistory.History.(*temp_common2.Llm2ChatHistory)
+) (*llm2.ChatHistoryContainer, error) {
+	llm2History, ok := chatHistory.History.(*llm2.Llm2ChatHistory)
 	if !ok {
 		return nil, fmt.Errorf("Hydrate requires Llm2ChatHistory, got %T", chatHistory.History)
 	}
@@ -37,11 +37,11 @@ func (ca *ChatHistoryActivities) Hydrate(
 // It hydrates the history, runs management logic, and persists the result.
 func (ca *ChatHistoryActivities) ManageV3(
 	ctx context.Context,
-	chatHistory *common.ChatHistoryContainer,
+	chatHistory *llm2.ChatHistoryContainer,
 	workspaceId string,
 	maxLength int,
-) (*common.ChatHistoryContainer, error) {
-	llm2History, ok := chatHistory.History.(*temp_common2.Llm2ChatHistory)
+) (*llm2.ChatHistoryContainer, error) {
+	llm2History, ok := chatHistory.History.(*llm2.Llm2ChatHistory)
 	if !ok {
 		return nil, fmt.Errorf("ManageV3 requires Llm2ChatHistory, got %T", chatHistory.History)
 	}

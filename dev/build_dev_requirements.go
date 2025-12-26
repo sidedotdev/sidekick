@@ -377,7 +377,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	return nil, nil // continue the loop
 }
 
-func generateDevRequirements(dCtx DevContext, chatHistory *common.ChatHistoryContainer, hasExistingRequirements bool) (common.MessageResponse, error) {
+func generateDevRequirements(dCtx DevContext, chatHistory *llm2.ChatHistoryContainer, hasExistingRequirements bool) (common.MessageResponse, error) {
 	tools := []*llm.Tool{
 		&recordDevRequirementsTool,
 		currentGetSymbolDefinitionsTool(),
@@ -457,7 +457,7 @@ func unmarshalDevRequirements(jsonStr string) (DevRequirements, error) {
 	return devRequirements, nil
 }
 
-func addDevRequirementsPrompt(chatHistory *common.ChatHistoryContainer, promptInfo PromptInfo) {
+func addDevRequirementsPrompt(chatHistory *llm2.ChatHistoryContainer, promptInfo PromptInfo) {
 	var content string
 	role := llm.ChatMessageRoleUser
 	cacheControl := ""
@@ -483,7 +483,7 @@ func addDevRequirementsPrompt(chatHistory *common.ChatHistoryContainer, promptIn
 	})
 }
 
-func addToolCallResponse(chatHistory *common.ChatHistoryContainer, info ToolCallResponseInfo) {
+func addToolCallResponse(chatHistory *llm2.ChatHistoryContainer, info ToolCallResponseInfo) {
 	chatHistory.Append(llm.ChatMessage{
 		Role:       llm.ChatMessageRoleTool,
 		Content:    info.Response,
