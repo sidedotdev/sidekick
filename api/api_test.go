@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1438,9 +1437,10 @@ func TestUpdateTaskHandler_InvalidAgentTypeAndStatusCombo(t *testing.T) {
 
 func TestDeleteTaskHandler(t *testing.T) {
 	t.Parallel()
-	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
+
+	mockTemporalClient := mocks.NewClient(t)
+	service := NewTestService(t)
 
 	// Create a task for testing
 	task := domain.Task{
@@ -1450,28 +1450,43 @@ func TestDeleteTaskHandler(t *testing.T) {
 		AgentType:   domain.AgentTypeLLM,
 		Status:      domain.TaskStatusToDo,
 	}
-	err := ctrl.service.PersistTask(context.Background(), task)
-	if err != nil {
-		t.Fatal(err)
+	err := service.PersistTask(context.Background(), task)
+	require.NoError(t, err)
+
+	var capturedInput srv.CascadeDeleteTaskInput
+	mockTemporalClient.On("ExecuteWorkflow",
+		mock.Anything,
+		mock.MatchedBy(func(opts client.StartWorkflowOptions) bool {
+			return opts.TaskQueue == "test-task-queue"
+		}),
+		mock.Anything,
+		mock.MatchedBy(func(input srv.CascadeDeleteTaskInput) bool {
+			capturedInput = input
+			return true
+		}),
+	).Return(MockWorkflow{}, nil).Once()
+
+	ctrl := Controller{
+		temporalClient:    mockTemporalClient,
+		temporalTaskQueue: "test-task-queue",
+		service:           service,
+		secretManager:     secret_manager.MockSecretManager{},
 	}
 
-	// Prepare the request
-	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
 	ginCtx.Request = httptest.NewRequest(http.MethodDelete, "/workspaces/"+task.WorkspaceId+"/tasks/"+task.Id, nil)
 	ginCtx.Params = []gin.Param{
 		{Key: "workspaceId", Value: task.WorkspaceId},
 		{Key: "id", Value: task.Id},
 	}
 
-	// Call the handler
 	ctrl.DeleteTaskHandler(ginCtx)
 
-	// Check the response
-	assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
-
-	// Check that the task has been deleted
-	_, err = ctrl.service.GetTask(ginCtx.Request.Context(), task.WorkspaceId, task.Id)
-	assert.True(t, errors.Is(err, srv.ErrNotFound))
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, task.WorkspaceId, capturedInput.WorkspaceId)
+	assert.Equal(t, task.Id, capturedInput.TaskId)
+	mockTemporalClient.AssertExpectations(t)
 }
 
 func TestCancelTaskHandler(t *testing.T) {

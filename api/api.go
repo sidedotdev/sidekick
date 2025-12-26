@@ -401,38 +401,29 @@ func (ctrl *Controller) DeleteTaskHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	taskId := c.Param("id")
 
-	task, err := ctrl.service.GetTask(c.Request.Context(), workspaceId, taskId)
+	_, err := ctrl.service.GetTask(c.Request.Context(), workspaceId, taskId)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
 		return
 	}
 
-	// Get the child workflows of the task
-	childFlows, err := ctrl.service.GetFlowsForTask(c.Request.Context(), workspaceId, taskId)
+	workflowOptions := client.StartWorkflowOptions{
+		TaskQueue: ctrl.temporalTaskQueue,
+	}
+	input := srv.CascadeDeleteTaskInput{
+		WorkspaceId: workspaceId,
+		TaskId:      taskId,
+	}
+	workflowRun, err := ctrl.temporalClient.ExecuteWorkflow(c.Request.Context(), workflowOptions, srv.CascadeDeleteTaskWorkflow, input)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get child workflows"})
+		log.Error().Err(err).Str("taskId", taskId).Msg("Failed to start cascade delete workflow")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete task"})
 		return
 	}
 
-	// Check if any of the child workflows are in progress and cancel them
-	devAgent := dev.DevAgent{
-		TemporalClient:    ctrl.temporalClient,
-		TemporalTaskQueue: ctrl.temporalTaskQueue,
-		WorkspaceId:       task.WorkspaceId,
-	}
-	for _, flow := range childFlows {
-		err = devAgent.TerminateWorkflowIfExists(c.Request.Context(), flow.Id)
-		if err != nil {
-			log.Error().Err(err).Str("flowId", flow.Id).Msg("Error terminating workflow")
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to terminate workflow"})
-			return
-		}
-
-		// TODO delete the flow from the database
-	}
-
-	err = ctrl.service.DeleteTask(c.Request.Context(), workspaceId, taskId)
+	err = workflowRun.Get(c.Request.Context(), nil)
 	if err != nil {
+		log.Error().Err(err).Str("taskId", taskId).Msg("Cascade delete workflow failed")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete task"})
 		return
 	}
