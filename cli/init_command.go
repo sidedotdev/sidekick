@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +24,9 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/charmbracelet/huh"
 	"github.com/erikgeiser/promptkit/selection"
+	"github.com/goccy/go-yaml"
+	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/v2"
 	"github.com/segmentio/ksuid"
 	"github.com/zalando/go-keyring"
 )
@@ -97,12 +102,12 @@ func (h *InitCommandHandler) handleInitCommand() error {
 			return fmt.Errorf("error prompting for test command: %w", err)
 		}
 		if len(config.TestCommands) > 0 {
-			fmt.Println("✔ Your test command has been saved in side.toml (commit this)")
+			fmt.Println("✔ Your test command has been saved in side.yml (commit this)")
 		} else {
-			fmt.Println("ℹ Skipping test command configuration. You can add test commands to side.toml later for best results.")
+			fmt.Println("ℹ Skipping test command configuration. You can add test commands to side.yml later for best results.")
 		}
 	} else {
-		fmt.Println("✔ Found valid test commands in side.toml")
+		fmt.Println("✔ Found valid test commands in repo config")
 	}
 
 	ctx := context.Background()
@@ -356,39 +361,66 @@ type configCheckResult struct {
 	hasTestCommands bool
 }
 
+var repoConfigCandidates = []string{"side.yml", "side.yaml", "side.toml", "side.json"}
+
 func checkConfig(baseDir string) (common.RepoConfig, configCheckResult, error) {
 	var config common.RepoConfig
 	var result configCheckResult
-	result.filePath = filepath.Join(baseDir, "side.toml")
 
-	_, err := os.Stat(result.filePath)
-	fileExists := !os.IsNotExist(err)
-	if !fileExists {
+	discovery := common.DiscoverConfigFile(baseDir, repoConfigCandidates)
+	if discovery.ChosenPath == "" {
+		result.filePath = filepath.Join(baseDir, "side.yml")
 		return config, result, nil
 	}
 
-	if fileExists {
-		_, err := toml.DecodeFile(result.filePath, &config)
-		if err != nil {
-			return config, result, fmt.Errorf("error decoding config file: %w", err)
-		}
-		if len(config.TestCommands) > 0 {
-			result.hasTestCommands = true
-		}
+	result.filePath = discovery.ChosenPath
+
+	k := koanf.New(".")
+	parser := common.GetParserForExtension(discovery.ChosenPath)
+	if parser == nil {
+		return config, result, fmt.Errorf("unsupported config file format: %s", discovery.ChosenPath)
+	}
+
+	if err := k.Load(file.Provider(discovery.ChosenPath), parser); err != nil {
+		return config, result, fmt.Errorf("error loading config file: %w", err)
+	}
+
+	if err := k.UnmarshalWithConf("", &config, koanf.UnmarshalConf{Tag: "toml"}); err != nil {
+		return config, result, fmt.Errorf("error decoding config file: %w", err)
+	}
+
+	if len(config.TestCommands) > 0 {
+		result.hasTestCommands = true
 	}
 
 	return config, result, nil
 }
 
 func saveConfig(filePath string, config common.RepoConfig) error {
-	file, err := os.Create(filePath)
-	if err != nil {
-		return fmt.Errorf("error creating config file: %w", err)
-	}
-	defer file.Close()
+	ext := strings.ToLower(filepath.Ext(filePath))
 
-	if err := toml.NewEncoder(file).Encode(config); err != nil {
-		return fmt.Errorf("error writing to config file: %w", err)
+	var data []byte
+	var err error
+
+	switch ext {
+	case ".yml", ".yaml":
+		data, err = yaml.Marshal(config)
+	case ".toml":
+		var buf bytes.Buffer
+		err = toml.NewEncoder(&buf).Encode(config)
+		data = buf.Bytes()
+	case ".json":
+		data, err = json.MarshalIndent(config, "", "  ")
+	default:
+		return fmt.Errorf("unsupported config file format: %s", ext)
+	}
+
+	if err != nil {
+		return fmt.Errorf("error encoding config: %w", err)
+	}
+
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return fmt.Errorf("error writing config file: %w", err)
 	}
 
 	return nil
@@ -412,15 +444,23 @@ func ensureTestCommands(config *common.RepoConfig, filePath string) error {
 		if err := saveConfig(filePath, *config); err != nil {
 			return err
 		}
-		// Append commented example after the encoded config
-		f, err := os.OpenFile(filePath, os.O_APPEND|os.O_WRONLY, 0644)
-		if err != nil {
-			return fmt.Errorf("error opening config file: %w", err)
-		}
-		defer f.Close()
-		comment := "\n# Uncomment and configure test commands for best results:\n# [[test_commands]]\n# command = \"pytest\"\n"
-		if _, err := f.WriteString(comment); err != nil {
-			return fmt.Errorf("error writing comment to config file: %w", err)
+		// Append commented example after the encoded config (JSON doesn't support comments)
+		ext := strings.ToLower(filepath.Ext(filePath))
+		if ext != ".json" {
+			f, err := os.OpenFile(filePath, os.O_APPEND|os.O_WRONLY, 0644)
+			if err != nil {
+				return fmt.Errorf("error opening config file: %w", err)
+			}
+			defer f.Close()
+			var comment string
+			if ext == ".toml" {
+				comment = "\n# Uncomment and configure test commands for best results:\n# [[test_commands]]\n# command = \"pytest\"\n"
+			} else {
+				comment = "\n# Uncomment and configure test commands for best results:\n# test_commands:\n#   - command: pytest\n"
+			}
+			if _, err := f.WriteString(comment); err != nil {
+				return fmt.Errorf("error writing comment to config file: %w", err)
+			}
 		}
 		return nil
 	}

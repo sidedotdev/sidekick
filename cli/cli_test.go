@@ -270,22 +270,22 @@ func TestCheckConfig_NoExistingFile(t *testing.T) {
 	defer cleanup()
 
 	_, checkResult, err := checkConfig(tmpDir)
-	assert.NoError(t, err, "Expected no error when checking side.toml")
+	assert.NoError(t, err, "Expected no error when checking repo config")
 	assert.False(t, checkResult.hasTestCommands, "Expected hasTestCommands to be false when no file exists")
-	assert.Equal(t, filepath.Join(tmpDir, "side.toml"), checkResult.filePath)
+	assert.Equal(t, filepath.Join(tmpDir, "side.yml"), checkResult.filePath)
 }
 
 func TestCheckConfig_ValidFile(t *testing.T) {
 	tmpDir, cleanup := setupTempDir(t)
 	defer cleanup()
 
-	configFilePath := filepath.Join(tmpDir, "side.toml")
-	err := os.WriteFile(configFilePath, []byte("[[test_commands]]\ncommand = \"jest\"\n\n[ai]\ndefault=[{provider = \"openai\"}]"), 0644)
+	configFilePath := filepath.Join(tmpDir, "side.yml")
+	err := os.WriteFile(configFilePath, []byte("test_commands:\n  - command: jest\n"), 0644)
 	assert.NoError(t, err)
 
 	_, checkResult, err := checkConfig(tmpDir)
-	assert.NoError(t, err, "Expected no error with valid side.toml")
-	assert.True(t, checkResult.hasTestCommands, "Expected hasTestCommands to be true with valid side.toml")
+	assert.NoError(t, err, "Expected no error with valid side.yml")
+	assert.True(t, checkResult.hasTestCommands, "Expected hasTestCommands to be true with valid side.yml")
 }
 
 func TestSaveConfig_CreatesFileWithCorrectContent(t *testing.T) {
@@ -298,20 +298,20 @@ func TestSaveConfig_CreatesFileWithCorrectContent(t *testing.T) {
 		},
 	}
 
-	err := saveConfig(filepath.Join(tmpDir, "side.toml"), config)
+	err := saveConfig(filepath.Join(tmpDir, "side.yml"), config)
 	assert.NoError(t, err)
 
-	configFilePath := filepath.Join(tmpDir, "side.toml")
+	configFilePath := filepath.Join(tmpDir, "side.yml")
 	data, err := os.ReadFile(configFilePath)
 	assert.NoError(t, err)
-	assert.Contains(t, string(data), "command = \"test-command\"")
+	assert.Contains(t, string(data), "command: test-command")
 }
 
 func TestEnsureTestCommands_UserEntersCommand(t *testing.T) {
 	tmpDir, cleanup := setupTempDir(t)
 	defer cleanup()
 
-	configPath := filepath.Join(tmpDir, "side.toml")
+	configPath := filepath.Join(tmpDir, "side.yml")
 
 	// Mock stdin: enter test command
 	oldStdin := os.Stdin
@@ -333,14 +333,14 @@ func TestEnsureTestCommands_UserEntersCommand(t *testing.T) {
 
 	data, err := os.ReadFile(configPath)
 	assert.NoError(t, err)
-	assert.Contains(t, string(data), "command = \"pytest\"")
+	assert.Contains(t, string(data), "command: pytest")
 }
 
 func TestEnsureTestCommands_UserSkips(t *testing.T) {
 	tmpDir, cleanup := setupTempDir(t)
 	defer cleanup()
 
-	configPath := filepath.Join(tmpDir, "side.toml")
+	configPath := filepath.Join(tmpDir, "side.yml")
 
 	// Mock stdin: type "skip"
 	oldStdin := os.Stdin
@@ -362,15 +362,49 @@ func TestEnsureTestCommands_UserSkips(t *testing.T) {
 	data, err := os.ReadFile(configPath)
 	assert.NoError(t, err)
 	assert.Contains(t, string(data), "# Uncomment and configure test commands for best results:")
-	assert.Contains(t, string(data), "# [[test_commands]]")
-	assert.Contains(t, string(data), "# command = \"pytest\"")
+	assert.Contains(t, string(data), "# test_commands:")
+	assert.Contains(t, string(data), "#   - command: pytest")
+}
+
+func TestCheckConfig_ExistingTomlFile(t *testing.T) {
+	tmpDir, cleanup := setupTempDir(t)
+	defer cleanup()
+
+	configFilePath := filepath.Join(tmpDir, "side.toml")
+	err := os.WriteFile(configFilePath, []byte("[[test_commands]]\ncommand = \"jest\"\n"), 0644)
+	assert.NoError(t, err)
+
+	config, checkResult, err := checkConfig(tmpDir)
+	assert.NoError(t, err, "Expected no error with valid side.toml")
+	assert.True(t, checkResult.hasTestCommands, "Expected hasTestCommands to be true")
+	assert.Equal(t, configFilePath, checkResult.filePath, "Expected filePath to be the existing TOML file")
+	assert.Equal(t, "jest", config.TestCommands[0].Command)
+}
+
+func TestSaveConfig_PreservesTomlFormat(t *testing.T) {
+	tmpDir, cleanup := setupTempDir(t)
+	defer cleanup()
+
+	config := common.RepoConfig{
+		TestCommands: []common.CommandConfig{
+			{Command: "test-command"},
+		},
+	}
+
+	configPath := filepath.Join(tmpDir, "side.toml")
+	err := saveConfig(configPath, config)
+	assert.NoError(t, err)
+
+	data, err := os.ReadFile(configPath)
+	assert.NoError(t, err)
+	assert.Contains(t, string(data), "command = \"test-command\"")
 }
 
 func TestEnsureTestCommands_UserSkipsCaseInsensitive(t *testing.T) {
 	tmpDir, cleanup := setupTempDir(t)
 	defer cleanup()
 
-	configPath := filepath.Join(tmpDir, "side.toml")
+	configPath := filepath.Join(tmpDir, "side.yml")
 
 	// Mock stdin: type "SKIP" (uppercase)
 	oldStdin := os.Stdin
