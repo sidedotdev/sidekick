@@ -303,10 +303,11 @@ Here is the test result output to summarize:
 	options := llm2.Options{
 		Secrets: *dCtx.Secrets,
 		Params: llm2.Params{
+			ChatHistory: chatHistory,
 			ModelConfig: modelConfig,
 		},
 	}
-	chatResponse, err := TrackedToolChatWithHistory(dCtx, "summarize_tests", options, chatHistory)
+	chatResponse, err := TrackedToolChat(dCtx, "summarize_tests", options)
 	if err != nil {
 		return "", err
 	}

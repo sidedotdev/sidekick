@@ -139,6 +139,7 @@ func ForceToolCallWithTrackOptionsV2(
 		Options: llm2.Options{
 			Secrets: *actionCtx.Secrets,
 			Params: llm2.Params{
+				ChatHistory: chatHistory,
 				ModelConfig: modelConfig,
 				Tools:       tools,
 				ToolChoice:  toolChoice,
@@ -152,7 +153,7 @@ func ForceToolCallWithTrackOptionsV2(
 	response, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		options.FlowActionId = flowAction.Id
 
-		_, msgResponse, err := ExecuteChatStream(ctx, options, chatHistory, actionCtx.WorkspaceId)
+		msgResponse, err := ExecuteChatStream(ctx, options)
 		if err != nil {
 			return nil, err
 		}
@@ -178,7 +179,7 @@ func ForceToolCallWithTrackOptionsV2(
 		response, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
 			options.FlowActionId = flowAction.Id
 
-			_, msgResponse, err := ExecuteChatStream(ctx, options, chatHistory, actionCtx.WorkspaceId)
+			msgResponse, err := ExecuteChatStream(ctx, options)
 			if err != nil {
 				return nil, err
 			}

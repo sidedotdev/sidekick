@@ -514,7 +514,8 @@ func generateDevPlan(dCtx DevContext, chatHistory *common.ChatHistoryContainer, 
 	chatOptions := llm2.Options{
 		Secrets: *dCtx.Secrets,
 		Params: llm2.Params{
-			Tools: tools,
+			ChatHistory: chatHistory,
+			Tools:       tools,
 			ToolChoice: llm.ToolChoice{
 				Type: llm.ToolChoiceTypeAuto,
 			},
@@ -522,7 +523,7 @@ func generateDevPlan(dCtx DevContext, chatHistory *common.ChatHistoryContainer, 
 		},
 	}
 
-	return TrackedToolChatWithHistory(dCtx, "dev_plan", chatOptions, chatHistory)
+	return TrackedToolChat(dCtx, "dev_plan", chatOptions)
 }
 
 // TODO we should determine if the code context is too large programmatically

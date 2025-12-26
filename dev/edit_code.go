@@ -314,7 +314,8 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 		// call Open AI to get back messages that contain edit blocks
 		chatCtx := dCtx.WithCancelOnPause()
-		chatResponse, err := TrackedToolChatWithHistory(chatCtx, "code_edits", authorEditBlockInput, chatHistory)
+		authorEditBlockInput.Params.ChatHistory = chatHistory
+		chatResponse, err := TrackedToolChat(chatCtx, "code_edits", authorEditBlockInput)
 		if dCtx.GlobalState.Paused {
 			continue // UserRequestIfPaused will handle the pause
 		}

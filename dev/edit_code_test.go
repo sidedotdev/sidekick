@@ -129,7 +129,7 @@ func (s *AuthorEditBlocksTestSuite) TestInitialCodeInfoNoEditBlocks() {
 	var la *persisted_ai.Llm2Activities // use a nil struct pointer to call activities that are part of a structure
 	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		// Simulate progress events being handled
-		opts := args[1].(persisted_ai.StreamOptions)
+		opts := args[1].(persisted_ai.StreamInput)
 		s.NotEmpty(opts.FlowActionId)
 	}).Return(&llm2.MessageResponse{
 		StopReason: "stop",

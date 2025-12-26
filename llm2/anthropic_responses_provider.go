@@ -20,6 +20,7 @@ const anthropicDefaultMaxTokens = 16000
 type AnthropicResponsesProvider struct{}
 
 func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
+	messages := MessagesFromChatHistory(options.Params.ChatHistory)
 	done := make(chan struct{})
 	defer close(done)
 
@@ -89,11 +90,11 @@ func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options,
 		params.Temperature = anthropic.F(float64(*options.Params.Temperature))
 	}
 
-	messages, err := messagesToAnthropicParams(options.Params.Messages)
+	anthropicMessages, err := messagesToAnthropicParams(messages)
 	if err != nil {
 		return nil, err
 	}
-	params.Messages = anthropic.F(messages)
+	params.Messages = anthropic.F(anthropicMessages)
 
 	if len(options.Params.Tools) > 0 {
 		tools, err := toolsToAnthropicParams(options.Params.Tools)

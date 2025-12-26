@@ -169,3 +169,27 @@ func (c *ChatHistoryContainer) Messages() []Message {
 	}
 	return c.History.Messages()
 }
+
+// Hydrate hydrates the underlying chat history from storage.
+func (c *ChatHistoryContainer) Hydrate(ctx context.Context, storage KeyValueStorage) error {
+	if c.History == nil {
+		return nil
+	}
+	return c.History.Hydrate(ctx, storage)
+}
+
+// Persist persists the underlying chat history to storage.
+func (c *ChatHistoryContainer) Persist(ctx context.Context, storage KeyValueStorage) error {
+	if c.History == nil {
+		return nil
+	}
+	return c.History.Persist(ctx, storage)
+}
+
+// IsHydrated returns whether the underlying chat history is hydrated.
+func (c *ChatHistoryContainer) IsHydrated() bool {
+	if c.History == nil {
+		return true
+	}
+	return c.History.IsHydrated()
+}

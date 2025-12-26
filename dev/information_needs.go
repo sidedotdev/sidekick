@@ -76,8 +76,9 @@ and variable names.
 		Content: []llm2.ContentBlock{{Type: "text", Text: prompt}},
 	})
 	options := llmInputForIdentifyInformationNeeds(dCtx)
+	options.Params.ChatHistory = chatHistory
 
-	chatResponse, err := TrackedToolChatWithHistory(dCtx, actionName, options, chatHistory)
+	chatResponse, err := TrackedToolChat(dCtx, actionName, options)
 	if err != nil {
 		return InformationNeeds{}, err
 	}

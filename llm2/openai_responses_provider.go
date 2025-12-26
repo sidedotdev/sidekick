@@ -21,6 +21,7 @@ const defaultModel = "gpt-5-codex"
 type OpenAIResponsesProvider struct{}
 
 func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
+	messages := MessagesFromChatHistory(options.Params.ChatHistory)
 	heartbeatCtx, cancelHeartbeat := context.WithCancel(context.Background())
 	defer cancelHeartbeat()
 	go func() {
@@ -53,7 +54,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 		model = defaultModel
 	}
 
-	inputItems, err := messageToResponsesInput(options.Params.Messages)
+	inputItems, err := messageToResponsesInput(messages)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build input: %w", err)
 	}

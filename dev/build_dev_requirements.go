@@ -404,19 +404,23 @@ func generateDevRequirements(dCtx DevContext, chatHistory *common.ChatHistoryCon
 	options := llm2.Options{
 		Secrets: *dCtx.Secrets,
 		Params: llm2.Params{
-			Tools: tools,
+			ChatHistory: chatHistory,
+			Tools:       tools,
 			ToolChoice: llm.ToolChoice{
 				Type: llm.ToolChoiceTypeAuto, // TODO test with llm.ToolChoiceTypeRequired
 			},
 			ModelConfig: modelConfig,
 		},
 	}
-	return TrackedToolChatWithHistory(dCtx, "dev_requirements", options, chatHistory)
+	return TrackedToolChat(dCtx, "dev_requirements", options)
 }
 
-// TrackedToolChatWithHistory works with ChatHistoryContainer
+// TrackedToolChat works with ChatHistoryContainer embedded in options
 // and delegates to persisted_ai.ExecuteChatStream for LLM calls.
-func TrackedToolChatWithHistory(dCtx DevContext, actionType string, options llm2.Options, chatHistory *common.ChatHistoryContainer) (common.MessageResponse, error) {
+func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options) (common.MessageResponse, error) {
+	if options.Params.ChatHistory == nil {
+		return nil, fmt.Errorf("ChatHistory is required in options.Params for TrackedToolChat")
+	}
 	actionCtx := dCtx.NewActionContext("generate." + actionType)
 	actionCtx.ActionParams = llm.ToolChatOptions{Secrets: options.Secrets, Params: llm.ToolChatParams{ModelConfig: options.Params.ModelConfig}}.ActionParams()
 	return Track(actionCtx, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
@@ -432,11 +436,9 @@ func TrackedToolChatWithHistory(dCtx DevContext, actionType string, options llm2
 			FlowActionId: flowAction.Id,
 		}
 
-		_, response, err := persisted_ai.ExecuteChatStream(
+		response, err := persisted_ai.ExecuteChatStream(
 			dCtx,
 			chatStreamOptions,
-			chatHistory,
-			dCtx.WorkspaceId,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("error during tracked tool chat action '%s': %v", actionType, err)

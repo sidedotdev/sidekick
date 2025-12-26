@@ -7,14 +7,31 @@ import (
 	"sidekick/domain"
 	"sidekick/llm2"
 	"sidekick/srv"
+	"sidekick/temp_common2"
 
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/activity"
 )
 
-// StreamOptions combines llm2.Options with workflow/flow context identifiers.
-type StreamOptions struct {
-	llm2.Options
+func init() {
+	llm2.MessagesFromChatHistory = messagesFromChatHistory
+}
+
+// messagesFromChatHistory extracts llm2.Message slice from a ChatHistoryContainer.
+// Returns nil if the history is not an Llm2ChatHistory (legacy histories use a different path).
+func messagesFromChatHistory(c *common.ChatHistoryContainer) []llm2.Message {
+	if c == nil || c.History == nil {
+		return nil
+	}
+	if llm2History, ok := c.History.(*temp_common2.Llm2ChatHistory); ok {
+		return llm2History.Llm2Messages()
+	}
+	return nil
+}
+
+// StreamInput is the activity input for LLM streaming that carries chat history for hydration.
+type StreamInput struct {
+	Options      llm2.Options
 	WorkspaceId  string
 	FlowId       string
 	FlowActionId string
@@ -23,18 +40,28 @@ type StreamOptions struct {
 // Llm2Activities provides LLM streaming activities using the llm2 package types.
 type Llm2Activities struct {
 	Streamer srv.Streamer
+	Storage  common.KeyValueStorage
 }
 
 // Stream executes an LLM streaming request and sends events to the flow event stream.
-func (la *Llm2Activities) Stream(ctx context.Context, options StreamOptions) (*llm2.MessageResponse, error) {
+// It hydrates the chat history from storage and derives messages at runtime.
+func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.MessageResponse, error) {
+	if input.Options.Params.ChatHistory == nil {
+		return nil, fmt.Errorf("ChatHistory is required in StreamInput.Options.Params")
+	}
+
+	if err := input.Options.Params.ChatHistory.Hydrate(ctx, la.Storage); err != nil {
+		return nil, fmt.Errorf("failed to hydrate chat history: %w", err)
+	}
+
 	eventChan := make(chan llm2.Event, 10)
 
 	go func() {
 		defer func() {
-			if options.FlowActionId == "" {
+			if input.FlowActionId == "" {
 				return
 			}
-			err := la.Streamer.EndFlowEventStream(context.Background(), options.WorkspaceId, options.FlowId, options.FlowActionId)
+			err := la.Streamer.EndFlowEventStream(context.Background(), input.WorkspaceId, input.FlowId, input.FlowActionId)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to mark the end of the flow event stream")
 			}
@@ -44,39 +71,39 @@ func (la *Llm2Activities) Stream(ctx context.Context, options StreamOptions) (*l
 			if activity.IsActivity(ctx) {
 				activity.RecordHeartbeat(ctx, event)
 			}
-			if options.FlowActionId == "" {
+			if input.FlowActionId == "" {
 				continue
 			}
 
 			// Convert llm2.Event to domain flow event
-			flowEvent := convertLlm2EventToFlowEvent(event, options.FlowActionId)
+			flowEvent := convertLlm2EventToFlowEvent(event, input.FlowActionId)
 			if flowEvent == nil {
 				continue
 			}
 
-			err := la.Streamer.AddFlowEvent(context.Background(), options.WorkspaceId, options.FlowId, flowEvent)
+			err := la.Streamer.AddFlowEvent(context.Background(), input.WorkspaceId, input.FlowId, flowEvent)
 			if err != nil {
 				log.Error().Err(err).
-					Str("workspaceId", options.WorkspaceId).
-					Str("flowId", options.FlowId).
-					Str("flowActionId", options.FlowActionId).
+					Str("workspaceId", input.WorkspaceId).
+					Str("flowId", input.FlowId).
+					Str("flowActionId", input.FlowActionId).
 					Msg("failed to add llm2 event to flow event stream")
 			}
 		}
 	}()
 
-	provider, err := getLlm2Provider(options.Params.ModelConfig)
+	provider, err := getLlm2Provider(input.Options.Params.ModelConfig)
 	if err != nil {
 		close(eventChan)
 		log.Error().Err(err).Msg("failed to get llm2 provider")
 		return nil, err
 	}
 
-	response, err := provider.Stream(ctx, options.Options, eventChan)
+	response, err := provider.Stream(ctx, input.Options, eventChan)
 	close(eventChan)
 
 	if response != nil {
-		response.Provider = options.Params.ModelConfig.Provider
+		response.Provider = input.Options.Params.ModelConfig.Provider
 	}
 
 	return response, err

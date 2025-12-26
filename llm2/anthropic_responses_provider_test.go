@@ -24,19 +24,20 @@ func TestAnthropicResponsesProvider_Unauthorized(t *testing.T) {
 	mockSecretManager := &secret_manager.MockSecretManager{}
 	provider := AnthropicResponsesProvider{}
 
-	options := Options{
-		Params: Params{
-			Messages: []Message{
+	messages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
 				{
-					Role: RoleUser,
-					Content: []ContentBlock{
-						{
-							Type: ContentBlockTypeText,
-							Text: "Hello",
-						},
-					},
+					Type: ContentBlockTypeText,
+					Text: "Hello",
 				},
 			},
+		},
+	}
+
+	options := Options{
+		Params: Params{
 			ModelConfig: common.ModelConfig{
 				Provider: "anthropic",
 				Model:    "claude-sonnet-4-5",
@@ -46,6 +47,9 @@ func TestAnthropicResponsesProvider_Unauthorized(t *testing.T) {
 			SecretManager: mockSecretManager,
 		},
 	}
+
+	options.Params.ChatHistory = &common.ChatHistoryContainer{}
+	MessagesFromChatHistory = func(c *common.ChatHistoryContainer) []Message { return messages }
 
 	eventChan := make(chan Event, 10)
 	defer close(eventChan)
@@ -71,22 +75,23 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&getCurrentWeather{}),
 	}
 
+	messages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeText,
+					Text: "First say hi. After that, then look up what the weather is like in New York in celsius. Let me know, then check London too for me.",
+				},
+			},
+		},
+	}
+
 	options := Options{
 		Params: Params{
 			ModelConfig: common.ModelConfig{
 				Provider: "anthropic",
 				Model:    "",
-			},
-			Messages: []Message{
-				{
-					Role: RoleUser,
-					Content: []ContentBlock{
-						{
-							Type: ContentBlockTypeText,
-							Text: "First say hi. After that, then look up what the weather is like in New York in celsius. Let me know, then check London too for me.",
-						},
-					},
-				},
 			},
 			Tools:      []*common.Tool{mockTool},
 			ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
@@ -116,6 +121,9 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 			}
 		}
 	}()
+
+	options.Params.ChatHistory = &common.ChatHistoryContainer{}
+	MessagesFromChatHistory = func(c *common.ChatHistoryContainer) []Message { return messages }
 
 	response, err := provider.Stream(ctx, options, eventChan)
 	close(eventChan)
@@ -168,11 +176,11 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 	t.Logf("StopReason: %s", response.StopReason)
 
 	t.Run("MultiTurn", func(t *testing.T) {
-		options.Params.Messages = append(options.Params.Messages, response.Output)
+		messages = append(messages, response.Output)
 
 		for _, block := range response.Output.Content {
 			if block.Type == ContentBlockTypeToolUse && block.ToolUse != nil {
-				options.Params.Messages = append(options.Params.Messages, Message{
+				messages = append(messages, Message{
 					Role: RoleUser,
 					Content: []ContentBlock{
 						{
@@ -197,6 +205,7 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 			}
 		}()
 
+		MessagesFromChatHistory = func(c *common.ChatHistoryContainer) []Message { return messages }
 		response, err := provider.Stream(ctx, options, eventChan)
 		close(eventChan)
 
