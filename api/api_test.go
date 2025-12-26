@@ -487,6 +487,72 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "Expected 404 status code for invalid flow")
 }
 
+func TestFlowActionChangesWebsocketHandler_NewOnly(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+	ctrl := NewMockController(t)
+	db := ctrl.service
+	ctx := context.Background()
+
+	workspaceId := "test-workspace-id-" + uuid.New().String()
+	flowId := "test-flow-id-" + uuid.New().String()
+
+	workspace := domain.Workspace{Id: workspaceId}
+	err := db.PersistWorkspace(ctx, workspace)
+	require.NoError(t, err, "Persisting workspace failed")
+	flow := domain.Flow{Id: flowId, WorkspaceId: workspaceId}
+	err = db.PersistFlow(ctx, flow)
+	require.NoError(t, err, "Persisting workflow failed")
+
+	// Persist an action BEFORE connecting to websocket
+	preExistingAction := domain.FlowAction{
+		Id:          "pre-existing-action",
+		ActionType:  "pre-existing-type",
+		FlowId:      flowId,
+		WorkspaceId: workspaceId,
+	}
+	err = db.PersistFlowAction(ctx, preExistingAction)
+	require.NoError(t, err, "Persisting pre-existing flow action failed")
+
+	router := DefineRoutes(ctrl)
+	s := httptest.NewServer(router)
+	defer s.Close()
+
+	// Connect with streamMessageStartId=$
+	wsURL := "ws" + strings.TrimPrefix(s.URL, "http") + "/ws/v1/workspaces/" + workspaceId + "/flows/" + flowId + "/action_changes_ws?streamMessageStartId=$"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err, "Failed to connect to WebSocket")
+	defer ws.Close()
+
+	// Give the websocket connection time to establish
+	time.Sleep(50 * time.Millisecond)
+
+	// Persist an action AFTER connecting
+	postConnectAction := domain.FlowAction{
+		Id:          "post-connect-action",
+		ActionType:  "post-connect-type",
+		FlowId:      flowId,
+		WorkspaceId: workspaceId,
+	}
+	err = db.PersistFlowAction(ctx, postConnectAction)
+	require.NoError(t, err, "Persisting post-connect flow action failed")
+
+	// Read from websocket with timeout
+	ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var receivedAction domain.FlowAction
+	err = ws.ReadJSON(&receivedAction)
+	require.NoError(t, err, "Failed to read flow action")
+
+	// Should receive only the post-connect action, not the pre-existing one
+	assert.Equal(t, postConnectAction.Id, receivedAction.Id)
+	assert.Equal(t, postConnectAction.ActionType, receivedAction.ActionType)
+
+	// Verify no more messages (the pre-existing action should not be received)
+	ws.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	err = ws.ReadJSON(&receivedAction)
+	assert.Error(t, err, "Should not receive any more messages")
+}
+
 func TestCompleteFlowActionHandler(t *testing.T) {
 	t.Parallel()
 	ctrl := NewMockController(t)

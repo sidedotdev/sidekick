@@ -1328,7 +1328,10 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 	}
 	defer conn.Close()
 
-	streamMessageStartId := "0"
+	streamMessageStartId := c.Query("streamMessageStartId")
+	if streamMessageStartId == "" {
+		streamMessageStartId = "0"
+	}
 
 	flowActionChan, errChan := ctrl.service.StreamFlowActionChanges(ctx, workspaceId, flowId, streamMessageStartId)
 

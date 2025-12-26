@@ -18,8 +18,9 @@ type memoryStreamer struct {
 	tasks         []domain.Task
 	taskListeners []chan domain.Task
 
-	flowActions         []domain.FlowAction
-	flowActionListeners []chan domain.FlowAction
+	flowActions                []domain.FlowAction
+	flowActionListeners        []chan domain.FlowAction
+	flowActionListenersNewOnly map[chan domain.FlowAction]bool // true if listener only wants new actions
 
 	flowEvents         map[string][]domain.FlowEvent // keyed by flowId
 	flowEventListeners map[string][]chan domain.FlowEvent
@@ -28,9 +29,10 @@ type memoryStreamer struct {
 
 func newMemoryStreamer() *memoryStreamer {
 	return &memoryStreamer{
-		flowEvents:         make(map[string][]domain.FlowEvent),
-		flowEventListeners: make(map[string][]chan domain.FlowEvent),
-		endedStreams:       make(map[string]bool),
+		flowEvents:                 make(map[string][]domain.FlowEvent),
+		flowEventListeners:         make(map[string][]chan domain.FlowEvent),
+		endedStreams:               make(map[string]bool),
+		flowActionListenersNewOnly: make(map[chan domain.FlowAction]bool),
 	}
 }
 
@@ -89,6 +91,19 @@ func (m *memoryStreamer) StreamFlowActionChanges(ctx context.Context, workspaceI
 	actionCh := make(chan domain.FlowAction, 100)
 	errCh := make(chan error, 1)
 	m.flowActionListeners = append(m.flowActionListeners, actionCh)
+
+	newOnly := streamMessageStartId == "$"
+	m.flowActionListenersNewOnly[actionCh] = newOnly
+
+	// For non-"$" start IDs, send existing actions
+	if !newOnly {
+		for _, action := range m.flowActions {
+			select {
+			case actionCh <- action:
+			default:
+			}
+		}
+	}
 	m.mu.Unlock()
 
 	go func() {
@@ -100,6 +115,7 @@ func (m *memoryStreamer) StreamFlowActionChanges(ctx context.Context, workspaceI
 				break
 			}
 		}
+		delete(m.flowActionListenersNewOnly, actionCh)
 		m.mu.Unlock()
 		close(actionCh)
 		close(errCh)
