@@ -7,6 +7,7 @@ import ChatView from '@/views/ChatView.vue'
 import ArchivedTasksView from '@/views/ArchivedTasksView.vue'
 import BlockedView from '@/views/BlockedView.vue'
 import { isBlockedNow } from '@/lib/offHours'
+import EvalDataValidatorView from '@/views/EvalDataValidatorView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -55,6 +56,11 @@ const router = createRouter({
       path: '/blocked',
       name: 'blocked',
       component: BlockedView,
+    },
+    {
+      path: '/dev/evaldata',
+      name: 'eval-data-validator',
+      component: EvalDataValidatorView,
     },
   ],
 })
