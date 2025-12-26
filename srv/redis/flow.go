@@ -98,5 +98,25 @@ func (s Storage) GetFlow(ctx context.Context, workspaceId, flowId string) (domai
 }
 
 func (s Storage) DeleteFlow(ctx context.Context, workspaceId, flowId string) error {
-	panic("DeleteFlow not implemented for redis storage")
+	// Load the flow to get the ParentId for set removal
+	flow, err := s.GetFlow(ctx, workspaceId, flowId)
+	if err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			return nil // Already deleted, idempotent
+		}
+		return fmt.Errorf("failed to get flow for deletion: %w", err)
+	}
+
+	flowKey := fmt.Sprintf("%s:%s", workspaceId, flowId)
+	parentFlowsKey := fmt.Sprintf("%s:%s:flows", workspaceId, flow.ParentId)
+
+	pipe := s.Client.Pipeline()
+	pipe.Del(ctx, flowKey)
+	pipe.SRem(ctx, parentFlowsKey, flowId)
+	_, err = pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to delete flow: %w", err)
+	}
+
+	return nil
 }

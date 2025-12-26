@@ -54,7 +54,31 @@ func (s Storage) MSet(ctx context.Context, workspaceId string, values map[string
 }
 
 func (s Storage) DeletePrefix(ctx context.Context, workspaceId string, prefix string) error {
-	panic("DeletePrefix not implemented for redis storage")
+	pattern := fmt.Sprintf("%s:%s*", workspaceId, prefix)
+	var cursor uint64
+	for {
+		keys, nextCursor, err := s.Client.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			return fmt.Errorf("redis scan failed: %w", err)
+		}
+
+		if len(keys) > 0 {
+			pipe := s.Client.Pipeline()
+			for _, key := range keys {
+				pipe.Del(ctx, key)
+			}
+			_, err = pipe.Exec(ctx)
+			if err != nil {
+				return fmt.Errorf("redis pipeline del failed: %w", err)
+			}
+		}
+
+		cursor = nextCursor
+		if cursor == 0 {
+			break
+		}
+	}
+	return nil
 }
 
 func toMap(something interface{}) (map[string]interface{}, error) {
