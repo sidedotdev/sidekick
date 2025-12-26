@@ -48,6 +48,7 @@ type taskProgressModel struct {
 	err            error
 	inputMode      inputMode
 	failedSubflows []domain.Subflow
+	width          int
 }
 
 func newProgressModel(taskID, flowID string, c client.Client) taskProgressModel {
@@ -91,6 +92,11 @@ type subflowFailedMsg struct {
 
 func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.textarea.SetWidth(min(msg.Width-4, 80))
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.pendingAction != nil {
 			switch m.inputMode {
@@ -482,7 +488,12 @@ func (m taskProgressModel) View() string {
 	if m.pendingAction != nil {
 		b.WriteString("\n")
 		if requestContent, ok := m.pendingAction.ActionParams["requestContent"].(string); ok && requestContent != "" {
-			b.WriteString(fmt.Sprintf("%s\n\n", requestContent))
+			if m.width > 0 {
+				wrapped := lipgloss.NewStyle().Width(m.width).Render(requestContent)
+				b.WriteString(fmt.Sprintf("%s\n\n", wrapped))
+			} else {
+				b.WriteString(fmt.Sprintf("%s\n\n", requestContent))
+			}
 		}
 
 		switch m.inputMode {
