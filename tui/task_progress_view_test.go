@@ -799,9 +799,8 @@ func TestPendingHumanActionInput(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newProgressModel("task-1", "flow-1", nil)
-			m.pendingAction = tt.pendingAction
 			if tt.pendingAction != nil {
-				m.inputMode = inputModeFreeForm
+				m.approvalInput.SetAction(tt.pendingAction)
 			}
 
 			view := m.View()
@@ -884,12 +883,12 @@ func TestPendingActionDetection(t *testing.T) {
 			updatedModel := updated.(taskProgressModel)
 
 			if tt.wantPendingAction {
-				if updatedModel.pendingAction == nil {
+				if !updatedModel.approvalInput.HasPendingAction() {
 					t.Error("expected pendingAction to be set, got nil")
 				}
 			} else {
-				if updatedModel.pendingAction != nil {
-					t.Errorf("expected pendingAction to be nil, got %+v", updatedModel.pendingAction)
+				if updatedModel.approvalInput.HasPendingAction() {
+					t.Error("expected pendingAction to be nil, but it was set")
 				}
 			}
 		})
@@ -912,7 +911,7 @@ func TestPendingActionCleared(t *testing.T) {
 	updated, _ := m.Update(msg)
 	m = updated.(taskProgressModel)
 
-	if m.pendingAction == nil {
+	if !m.approvalInput.HasPendingAction() {
 		t.Fatal("expected pendingAction to be set after pending action")
 	}
 
@@ -928,8 +927,8 @@ func TestPendingActionCleared(t *testing.T) {
 	updated, _ = m.Update(msg)
 	m = updated.(taskProgressModel)
 
-	if m.pendingAction != nil {
-		t.Errorf("expected pendingAction to be cleared after completion, got %+v", m.pendingAction)
+	if m.approvalInput.HasPendingAction() {
+		t.Error("expected pendingAction to be cleared after completion")
 	}
 }
 
@@ -938,58 +937,58 @@ func TestGetInputModeForAction(t *testing.T) {
 	tests := []struct {
 		name     string
 		action   client.FlowAction
-		expected inputMode
+		expected approvalInputMode
 	}{
 		{
 			name: "approval request kind",
 			action: client.FlowAction{
 				ActionParams: map[string]interface{}{"requestKind": "approval"},
 			},
-			expected: inputModeApproval,
+			expected: approvalInputModeApproval,
 		},
 		{
 			name: "merge_approval request kind",
 			action: client.FlowAction{
 				ActionParams: map[string]interface{}{"requestKind": "merge_approval"},
 			},
-			expected: inputModeApproval,
+			expected: approvalInputModeApproval,
 		},
 		{
 			name: "continue request kind",
 			action: client.FlowAction{
 				ActionParams: map[string]interface{}{"requestKind": "continue"},
 			},
-			expected: inputModeContinue,
+			expected: approvalInputModeContinue,
 		},
 		{
 			name: "free_form request kind",
 			action: client.FlowAction{
 				ActionParams: map[string]interface{}{"requestKind": "free_form"},
 			},
-			expected: inputModeFreeForm,
+			expected: approvalInputModeFreeForm,
 		},
 		{
 			name: "no request kind defaults to free form",
 			action: client.FlowAction{
 				ActionParams: map[string]interface{}{},
 			},
-			expected: inputModeFreeForm,
+			expected: approvalInputModeFreeForm,
 		},
 		{
 			name: "nil action params defaults to free form",
 			action: client.FlowAction{
 				ActionParams: nil,
 			},
-			expected: inputModeFreeForm,
+			expected: approvalInputModeFreeForm,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := getInputModeForAction(tt.action)
+			result := getApprovalInputMode(tt.action)
 			if result != tt.expected {
-				t.Errorf("getInputModeForAction() = %v, want %v", result, tt.expected)
+				t.Errorf("getApprovalInputMode() = %v, want %v", result, tt.expected)
 			}
 		})
 	}
@@ -1010,9 +1009,9 @@ func TestApprovalTagLabels(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := getApproveLabel(tt.tag)
+			result := getApprovalApproveLabel(tt.tag)
 			if result != tt.expected {
-				t.Errorf("getApproveLabel(%q) = %q, want %q", tt.tag, result, tt.expected)
+				t.Errorf("getApprovalApproveLabel(%q) = %q, want %q", tt.tag, result, tt.expected)
 			}
 		})
 	}
@@ -1033,9 +1032,9 @@ func TestRejectTagLabels(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := getRejectLabel(tt.tag)
+			result := getApprovalRejectLabel(tt.tag)
 			if result != tt.expected {
-				t.Errorf("getRejectLabel(%q) = %q, want %q", tt.tag, result, tt.expected)
+				t.Errorf("getApprovalRejectLabel(%q) = %q, want %q", tt.tag, result, tt.expected)
 			}
 		})
 	}
@@ -1057,9 +1056,9 @@ func TestContinueTagLabels(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := getContinueLabel(tt.tag)
+			result := getApprovalContinueLabel(tt.tag)
 			if result != tt.expected {
-				t.Errorf("getContinueLabel(%q) = %q, want %q", tt.tag, result, tt.expected)
+				t.Errorf("getApprovalContinueLabel(%q) = %q, want %q", tt.tag, result, tt.expected)
 			}
 		})
 	}
@@ -1116,6 +1115,25 @@ func TestApprovalInputView(t *testing.T) {
 			},
 			wantContains: []string{"Ready to proceed", "Press Enter to Continue"},
 		},
+		{
+			name: "approval with command and workingDir",
+			actionParams: map[string]interface{}{
+				"requestKind":    "approval",
+				"requestContent": "Allow running the following command?",
+				"command":        "npm test",
+				"workingDir":     "/path/to/project",
+			},
+			wantContains: []string{"Allow running the following command?", "npm test", "Working directory: /path/to/project", "[y] to Approve"},
+		},
+		{
+			name: "approval with command only",
+			actionParams: map[string]interface{}{
+				"requestKind":    "approval",
+				"requestContent": "Allow running the following command?",
+				"command":        "go build ./...",
+			},
+			wantContains: []string{"Allow running the following command?", "go build ./...", "[y] to Approve"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1131,8 +1149,7 @@ func TestApprovalInputView(t *testing.T) {
 			}
 
 			m := newProgressModel("task-1", "flow-1", nil)
-			m.pendingAction = &action
-			m.inputMode = getInputModeForAction(action)
+			m.approvalInput.SetAction(&action)
 
 			view := m.View()
 			for _, want := range tt.wantContains {
@@ -1167,8 +1184,8 @@ func TestApprovalInputModeTransition(t *testing.T) {
 	updated, _ := m.Update(msg)
 	m = updated.(taskProgressModel)
 
-	if m.inputMode != inputModeApproval {
-		t.Errorf("Expected inputModeApproval, got %v", m.inputMode)
+	if !m.approvalInput.HasPendingAction() {
+		t.Error("Expected pending action to be set")
 	}
 
 	// Press 'n' to reject - should transition to rejection feedback mode
@@ -1176,8 +1193,10 @@ func TestApprovalInputModeTransition(t *testing.T) {
 	updated, _ = m.Update(keyMsg)
 	m = updated.(taskProgressModel)
 
-	if m.inputMode != inputModeRejectionFeedback {
-		t.Errorf("Expected inputModeRejectionFeedback after pressing 'n', got %v", m.inputMode)
+	// Verify the view shows rejection feedback UI
+	view := m.View()
+	if !strings.Contains(view, "Please provide feedback") {
+		t.Errorf("Expected rejection feedback UI, got:\n%s", view)
 	}
 
 	// Press Esc to go back to approval mode
@@ -1185,8 +1204,10 @@ func TestApprovalInputModeTransition(t *testing.T) {
 	updated, _ = m.Update(escMsg)
 	m = updated.(taskProgressModel)
 
-	if m.inputMode != inputModeApproval {
-		t.Errorf("Expected inputModeApproval after pressing Esc, got %v", m.inputMode)
+	// Verify the view shows approval UI again
+	view = m.View()
+	if !strings.Contains(view, "[y] to Approve") {
+		t.Errorf("Expected approval UI after pressing Esc, got:\n%s", view)
 	}
 }
 
@@ -1213,12 +1234,12 @@ func TestMergeApprovalIncludesTargetBranch(t *testing.T) {
 		IsCallbackAction: true,
 	}
 
-	m := newProgressModel("task-1", "flow-1", mockClient)
-	m.pendingAction = &action
-	m.inputMode = inputModeApproval
+	approvalInput := NewApprovalInputModel()
+	approvalInput.SetClient(mockClient)
+	approvalInput.SetAction(&action)
 
 	// Call submitApproval directly to test the response construction
-	cmd := m.submitApproval(true, "")
+	cmd := approvalInput.submitApproval(true, "")
 	if cmd != nil {
 		cmd() // Execute the command to trigger the mock
 	}
