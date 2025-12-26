@@ -767,11 +767,12 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 	t.Parallel()
 	minimumFileRangeVisibilityMargin = 0 // we don't want any margin for these tests since that adds a lot of unnecessary whitespace and thinking
 	tests := []struct {
-		name             string
-		block            EditBlock
-		originalContents string
-		expectedContents string
-		expectedError    error
+		name               string
+		block              EditBlock
+		originalContents   string
+		expectedContents   string
+		expectedError      error
+		expectedErrorStart string
 	}{
 		{
 			name: "Edit within Visible range",
@@ -802,7 +803,7 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			expectedError:    nil,
 		},
 		{
-			name: "Edit outside Visible range",
+			name: "Edit outside Visible range succeeds via fallback",
 			block: EditBlock{
 				FilePath: "test.txt",
 				OldLines: []string{"line4", "line5"},
@@ -812,8 +813,8 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
-			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline4\nline5\n"),
+			expectedContents: "line1\nline2\nline3\nnewLine4\nnewLine5",
+			expectedError:    nil,
 		},
 		{
 			name: "Multiple non-adjacent visible ranges",
@@ -902,7 +903,7 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			expectedError:    fmt.Errorf(multipleMatchesMessage, search, "File: test.txt\nLines: 1-3\n```\nx\n2\n3\n```\n\nFile: test.txt\nLines: 4-8\n```\n4\n5\nx\n7\n8\n```"),
 		},
 		{
-			name: "Edit partially overlapping Visible range start",
+			name: "Edit partially overlapping Visible range start succeeds via fallback",
 			block: EditBlock{
 				FilePath: "test.txt",
 				OldLines: []string{"line3", "line4"},
@@ -912,11 +913,11 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
-			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline3\nline4\n"),
+			expectedContents: "line1\nline2\nnewLine3\nnewLine4\nline5",
+			expectedError:    nil,
 		},
 		{
-			name: "Edit partially overlapping Visible range end",
+			name: "Edit partially overlapping Visible range end succeeds via fallback",
 			block: EditBlock{
 				FilePath: "test.txt",
 				OldLines: []string{"line3", "line4"},
@@ -926,8 +927,8 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
-			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline3\nline4\n"),
+			expectedContents: "line1\nline2\nnewLine3\nnewLine4\nline5",
+			expectedError:    nil,
 		},
 		{
 			name: "Nil Visible ranges: acts like everything is Visible",
@@ -942,7 +943,7 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			expectedError:    nil,
 		},
 		{
-			name: "Empty Visible ranges: nothing is Visible",
+			name: "Empty Visible ranges succeeds via fallback",
 			block: EditBlock{
 				FilePath:          "test.txt",
 				OldLines:          []string{"line2", "line3"},
@@ -950,11 +951,11 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				VisibleFileRanges: []FileRange{},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
-			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline2\nline3\n"),
+			expectedContents: "line1\nnewLine2\nnewLine3\nline4\nline5",
+			expectedError:    nil,
 		},
 		{
-			name: "Edit spanning multiple Visible ranges and invisible range",
+			name: "Edit spanning multiple Visible ranges and invisible range succeeds via fallback",
 			block: EditBlock{
 				FilePath: "test.txt",
 				OldLines: []string{"line2", "line3", "line4"},
@@ -965,8 +966,8 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
-			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline2\nline3\nline4\n"),
+			expectedContents: "line1\nnewLine2\nnewLine3\nnewLine4\nline5",
+			expectedError:    nil,
 		},
 		{
 			name: "Edit spanning multiple adjacent Visible ranges",
@@ -999,7 +1000,7 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			expectedError:    nil,
 		},
 		{
-			name: "Edit entirely outside Visible ranges",
+			name: "Edit entirely outside Visible ranges succeeds via fallback",
 			block: EditBlock{
 				FilePath: "test.txt",
 				OldLines: []string{"line2", "line3"},
@@ -1009,8 +1010,8 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
-			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline2\nline3\n"),
+			expectedContents: "line1\nnewLine2\nnewLine3\nline4\nline5",
+			expectedError:    nil,
 		},
 		{
 			name: "Empty edit block (no changes)",
@@ -1040,6 +1041,48 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			expectedContents: "line1\nline2\nline3\nline4\nnewLine5\nnewLine6",
 			expectedError:    nil,
 		},
+		{
+			name: "Two matches outside visible range returns multiple matches error",
+			block: EditBlock{
+				FilePath: "test.txt",
+				OldLines: []string{"x"},
+				NewLines: []string{"x_x"},
+				VisibleFileRanges: []FileRange{
+					{FilePath: "test.txt", StartLine: 3, EndLine: 5},
+				},
+			},
+			originalContents: "x\n2\n3\n4\n5\nx\n7\n8\n9\n10\n11",
+			expectedContents: "",
+			expectedError:    fmt.Errorf(multipleMatchesMessage, search, "File: test.txt\nLines: 1-3\n```\nx\n2\n3\n```\n\nFile: test.txt\nLines: 4-8\n```\n4\n5\nx\n7\n8\n```"),
+		},
+		{
+			name: "Fallback safety: similar regions rejected by stricter thresholds",
+			block: EditBlock{
+				FilePath: "test.txt",
+				OldLines: []string{"func processData() {", "    handleInput(data)", "    return result", "}"},
+				NewLines: []string{"func processData() {", "    handleInputNew(data)", "    return result", "}"},
+				VisibleFileRanges: []FileRange{
+					{FilePath: "test.txt", StartLine: 100, EndLine: 110},
+				},
+			},
+			originalContents: "package main\n\nfunc processData() {\n    handleInput(items)\n    return result\n}\n\nfunc processData() {\n    handleInput(values)\n    return result\n}",
+			expectedContents: "",
+			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nfunc processData() {\n    handleInput(data)\n    return result\n}\n"),
+		},
+		{
+			name: "Fallback with exact unique match succeeds",
+			block: EditBlock{
+				FilePath: "test.txt",
+				OldLines: []string{"func uniqueFunction() {", "    doSomething()", "}"},
+				NewLines: []string{"func uniqueFunction() {", "    doSomethingNew()", "}"},
+				VisibleFileRanges: []FileRange{
+					{FilePath: "test.txt", StartLine: 100, EndLine: 110},
+				},
+			},
+			originalContents: "package main\n\nfunc uniqueFunction() {\n    doSomething()\n}\n\nfunc otherFunction() {\n    otherThing()\n}",
+			expectedContents: "package main\n\nfunc uniqueFunction() {\n    doSomethingNew()\n}\n\nfunc otherFunction() {\n    otherThing()\n}",
+			expectedError:    nil,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1049,7 +1092,13 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			if result != tt.expectedContents {
 				t.Errorf("Expected content:\n%s\n\nGot:\n%s", tt.expectedContents, result)
 			}
-			if (err != nil && tt.expectedError == nil) ||
+			if tt.expectedErrorStart != "" {
+				if err == nil {
+					t.Errorf("Expected error starting with %q, got nil", tt.expectedErrorStart)
+				} else if !strings.HasPrefix(err.Error(), tt.expectedErrorStart) {
+					t.Errorf("Expected error starting with %q, got: %v", tt.expectedErrorStart, err)
+				}
+			} else if (err != nil && tt.expectedError == nil) ||
 				(err == nil && tt.expectedError != nil) ||
 				(err != nil && err.Error() != tt.expectedError.Error()) {
 				t.Errorf("Expected error: %v, got: %v", tt.expectedError, err)

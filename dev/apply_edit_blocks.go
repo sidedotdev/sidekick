@@ -728,7 +728,17 @@ var multipleMatchesMessage = "Multiple matches found for the given edit block %s
 
 func getUpdatedContents(block EditBlock, originalContents string) (string, error) {
 	originalLines := strings.Split(originalContents, "\n")
-	bestMatch, allMatches := FindAcceptableMatch(block, originalLines, true)
+
+	// Phase 1: match using the block as-is with DefaultMatchOptions
+	bestMatch, allMatches := FindAcceptableMatchWithOptions(block, originalLines, true, DefaultMatchOptions)
+
+	// Phase 2 fallback: if Phase 1 found zero matches and visibility filtering was enabled,
+	// retry with visibility filtering disabled but stricter thresholds
+	if len(allMatches) == 0 && block.VisibleFileRanges != nil {
+		fallbackBlock := block
+		fallbackBlock.VisibleFileRanges = nil
+		bestMatch, allMatches = FindAcceptableMatchWithOptions(fallbackBlock, originalLines, true, FallbackNoVisibilityMatchOptions)
+	}
 
 	if len(allMatches) > 1 {
 		// TODO while all the matches have met the "threshold" for similarity,
@@ -882,7 +892,37 @@ func isWhitespaceOrComment(s string, languageName string) bool {
 	return isWhitespace(s) || isComment(s, languageName)
 }
 
-const similarityThreshold = 0.85 // controls similarity per line for fuzzy edit block matching
+// MatchOptions contains configurable thresholds for fuzzy edit block matching.
+type MatchOptions struct {
+	// SimilarityThreshold controls the minimum similarity score per line for
+	// candidate seeding and mismatch handling in FindPotentialMatches/FindClosestMatch.
+	SimilarityThreshold float64
+
+	// HighScoreLineCutoff is the score above which a line is considered a "high score" line
+	// when computing the high score ratio in FindClosestMatch.
+	HighScoreLineCutoff float64
+
+	// MinAcceptableHighScoreRatio is the minimum ratio of high-score lines required
+	// for a match to be considered acceptable in FindAcceptableMatch.
+	MinAcceptableHighScoreRatio float64
+}
+
+// DefaultMatchOptions provides the standard matching thresholds used for Phase 1 matching.
+var DefaultMatchOptions = MatchOptions{
+	SimilarityThreshold:         0.85,
+	HighScoreLineCutoff:         0.925,
+	MinAcceptableHighScoreRatio: 0.95,
+}
+
+// FallbackNoVisibilityMatchOptions provides stricter thresholds for Phase 2 fallback
+// matching when visibility filtering is disabled. These stricter thresholds reduce
+// false positives when matching without visibility constraints.
+var FallbackNoVisibilityMatchOptions = MatchOptions{
+	SimilarityThreshold:         0.95,
+	HighScoreLineCutoff:         0.975,
+	MinAcceptableHighScoreRatio: 0.99,
+}
+
 type match struct {
 	index           int
 	successfulMatch bool
@@ -893,15 +933,17 @@ type match struct {
 	foundInstead    []string
 }
 
-const minimumAcceptableHighScoreRatio = 0.95
-
 func FindAcceptableMatch(block EditBlock, originalLines []string, isOriginalLinesFromActualFile bool) (match, []match) {
-	closestMatch, closestMatches := FindClosestMatch(block, originalLines, isOriginalLinesFromActualFile)
+	return FindAcceptableMatchWithOptions(block, originalLines, isOriginalLinesFromActualFile, DefaultMatchOptions)
+}
+
+func FindAcceptableMatchWithOptions(block EditBlock, originalLines []string, isOriginalLinesFromActualFile bool, opts MatchOptions) (match, []match) {
+	closestMatch, closestMatches := FindClosestMatchWithOptions(block, originalLines, isOriginalLinesFromActualFile, opts)
 
 	//fmt.Printf("closest matches: %v\n", closestMatches)
-	if closestMatch.successfulMatch && closestMatch.highScoreRatio > minimumAcceptableHighScoreRatio {
+	if closestMatch.successfulMatch && closestMatch.highScoreRatio > opts.MinAcceptableHighScoreRatio {
 		acceptableMatches := utils.Filter(closestMatches, func(m match) bool {
-			return m.successfulMatch && m.highScoreRatio > minimumAcceptableHighScoreRatio
+			return m.successfulMatch && m.highScoreRatio > opts.MinAcceptableHighScoreRatio
 		})
 		return closestMatch, acceptableMatches
 	} else {
@@ -912,6 +954,10 @@ func FindAcceptableMatch(block EditBlock, originalLines []string, isOriginalLine
 var minimumFileRangeVisibilityMargin = 5
 
 func FindPotentialMatches(block EditBlock, originalLines []string, startingLineIndex int, isOriginalLinesFromActualFile bool) []match {
+	return FindPotentialMatchesWithOptions(block, originalLines, startingLineIndex, isOriginalLinesFromActualFile, DefaultMatchOptions)
+}
+
+func FindPotentialMatchesWithOptions(block EditBlock, originalLines []string, startingLineIndex int, isOriginalLinesFromActualFile bool, opts MatchOptions) []match {
 	var potentialMatches []match
 
 	// Return no potential matches if there are no lines in the EditBlock
@@ -941,7 +987,7 @@ func FindPotentialMatches(block EditBlock, originalLines []string, startingLineI
 	if len(potentialMatches) == 0 {
 		for idx, line := range originalLines {
 			score := utils.StringSimilarity(line, startingLine)
-			if score >= similarityThreshold {
+			if score >= opts.SimilarityThreshold {
 				potentialMatches = append(potentialMatches, match{index: idx, score: score})
 			}
 		}
@@ -1011,17 +1057,21 @@ func calculateStartingLineIndex(lines []string) int {
 }
 
 func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFromActualFile bool) (match, []match) {
+	return FindClosestMatchWithOptions(block, originalLines, isOriginalLinesFromActualFile, DefaultMatchOptions)
+}
+
+func FindClosestMatchWithOptions(block EditBlock, originalLines []string, isOriginalLinesFromActualFile bool, opts MatchOptions) (match, []match) {
 	languageName := utils.InferLanguageNameFromFilePath(block.FilePath)
 	startingLineIndex := calculateStartingLineIndex(block.OldLines)
 	//fmt.Printf("starting line index: %d\n", startingLineIndex)
-	potentialMatches := FindPotentialMatches(block, originalLines, startingLineIndex, isOriginalLinesFromActualFile)
+	potentialMatches := FindPotentialMatchesWithOptions(block, originalLines, startingLineIndex, isOriginalLinesFromActualFile, opts)
 
 	// if no potential matches based on first line, go to the next line and try again
 	skippedOldLines := 0
 	if len(potentialMatches) == 0 && startingLineIndex+1 < len(block.OldLines) {
 		skippedOldLines = 1
 		startingLineIndex = startingLineIndex + 1 + calculateStartingLineIndex(block.OldLines[startingLineIndex+1:])
-		potentialMatches = FindPotentialMatches(block, originalLines, startingLineIndex, isOriginalLinesFromActualFile)
+		potentialMatches = FindPotentialMatchesWithOptions(block, originalLines, startingLineIndex, isOriginalLinesFromActualFile, opts)
 	}
 
 	var allMatches []match
@@ -1076,7 +1126,7 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 
 			// skip whitespace-only or comment-only lines when on one side only
 			// TODO ignore changes or added comments on the end of an existing line
-			if score < similarityThreshold {
+			if score < opts.SimilarityThreshold {
 				if (isWhitespaceOrComment(originalLine, languageName) && !isWhitespaceOrComment(oldLine, languageName)) ||
 					(isWhitespace(originalLine) && !isWhitespace(oldLine)) {
 					matchedLines = append(matchedLines, originalLine)
@@ -1112,7 +1162,7 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 							// skipping original line gives us a better match, so we
 							// should skip, but account for this as a scored line
 							// that got a bad score
-							if nextScore >= similarityThreshold {
+							if nextScore >= opts.SimilarityThreshold {
 								numScoredLines++
 								totalScore += score
 								originalLinesOffset += 1
@@ -1128,7 +1178,7 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 							// skipping old line gives us a better match, so we
 							// should skip, but account for this as a scored line
 							// that got a bad score
-							if nextScore >= similarityThreshold {
+							if nextScore >= opts.SimilarityThreshold {
 								numScoredLines++
 								totalScore += score
 								oldLinesOffset += 1
@@ -1145,7 +1195,7 @@ func FindClosestMatch(block EditBlock, originalLines []string, isOriginalLinesFr
 			matchedLines = append(matchedLines, originalLine)
 
 			numScoredLines++
-			if score > 0.925 {
+			if score > opts.HighScoreLineCutoff {
 				numHighScoreLines++
 			} else {
 				failedToMatch = append(failedToMatch, oldLine)
