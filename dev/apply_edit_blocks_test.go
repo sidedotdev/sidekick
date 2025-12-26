@@ -1042,6 +1042,20 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			expectedError:    nil,
 		},
 		{
+			name: "Two matches outside visible range returns multiple matches error",
+			block: EditBlock{
+				FilePath: "test.txt",
+				OldLines: []string{"x"},
+				NewLines: []string{"x_x"},
+				VisibleFileRanges: []FileRange{
+					{FilePath: "test.txt", StartLine: 3, EndLine: 5},
+				},
+			},
+			originalContents: "x\n2\n3\n4\n5\nx\n7\n8\n9\n10\n11",
+			expectedContents: "",
+			expectedError:    fmt.Errorf(multipleMatchesMessage, search, "File: test.txt\nLines: 1-3\n```\nx\n2\n3\n```\n\nFile: test.txt\nLines: 4-8\n```\n4\n5\nx\n7\n8\n```"),
+		},
+		{
 			name: "Fallback safety: similar regions rejected by stricter thresholds",
 			block: EditBlock{
 				FilePath: "test.txt",
