@@ -48,8 +48,7 @@ func TestAnthropicResponsesProvider_Unauthorized(t *testing.T) {
 		},
 	}
 
-	options.Params.ChatHistory = &common.ChatHistoryContainer{}
-	MessagesFromChatHistory = func(c *common.ChatHistoryContainer) []Message { return messages }
+	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 
 	eventChan := make(chan Event, 10)
 	defer close(eventChan)
@@ -122,8 +121,7 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		}
 	}()
 
-	options.Params.ChatHistory = &common.ChatHistoryContainer{}
-	MessagesFromChatHistory = func(c *common.ChatHistoryContainer) []Message { return messages }
+	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 
 	response, err := provider.Stream(ctx, options, eventChan)
 	close(eventChan)
@@ -205,7 +203,7 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 			}
 		}()
 
-		MessagesFromChatHistory = func(c *common.ChatHistoryContainer) []Message { return messages }
+		options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 		response, err := provider.Stream(ctx, options, eventChan)
 		close(eventChan)
 

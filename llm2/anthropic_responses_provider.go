@@ -20,7 +20,7 @@ const anthropicDefaultMaxTokens = 16000
 type AnthropicResponsesProvider struct{}
 
 func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
-	messages := MessagesFromChatHistory(options.Params.ChatHistory)
+	messages := options.Params.ChatHistory.Llm2Messages()
 	done := make(chan struct{})
 	defer close(done)
 

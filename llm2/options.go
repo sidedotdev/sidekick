@@ -5,13 +5,9 @@ import (
 	"sidekick/secret_manager"
 )
 
-// MessagesFromChatHistory is set by persisted_ai package at init time to extract
-// []Message from a ChatHistoryContainer without import cycles.
-var MessagesFromChatHistory func(c *common.ChatHistoryContainer) []Message
-
 // Params holds the LLM request parameters including tools, model configuration, and chat history.
 type Params struct {
-	ChatHistory       *common.ChatHistoryContainer
+	ChatHistory       *ChatHistoryContainer
 	Tools             []*common.Tool
 	ToolChoice        common.ToolChoice
 	ParallelToolCalls *bool

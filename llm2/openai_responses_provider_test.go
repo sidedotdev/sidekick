@@ -14,6 +14,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func newTestChatHistoryWithMessages(messages []Message) *ChatHistoryContainer {
+	chatHistory := NewLlm2ChatHistory("test-flow", "test-workspace")
+	chatHistory.SetMessages(messages)
+	return &ChatHistoryContainer{History: chatHistory}
+}
+
 type getCurrentWeather struct {
 	Location string `json:"location"`
 	Unit     string `json:"unit" jsonschema:"enum=celsius,fahrenheit"`
@@ -48,8 +54,7 @@ func TestOpenAIResponsesProvider_Unauthorized(t *testing.T) {
 		},
 	}
 
-	options.Params.ChatHistory = &common.ChatHistoryContainer{}
-	MessagesFromChatHistory = func(c *common.ChatHistoryContainer) []Message { return messages }
+	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 
 	eventChan := make(chan Event, 10)
 	defer close(eventChan)
@@ -123,8 +128,7 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 		}
 	}()
 
-	options.Params.ChatHistory = &common.ChatHistoryContainer{}
-	MessagesFromChatHistory = func(c *common.ChatHistoryContainer) []Message { return messages }
+	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 
 	response, err := provider.Stream(ctx, options, eventChan)
 	close(eventChan)
@@ -204,7 +208,7 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 			}
 		}()
 
-		MessagesFromChatHistory = func(c *common.ChatHistoryContainer) []Message { return messages }
+		options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 		response, err := provider.Stream(ctx, options, eventChan)
 		close(eventChan)
 
@@ -295,8 +299,7 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 		}
 	}()
 
-	options.Params.ChatHistory = &common.ChatHistoryContainer{}
-	MessagesFromChatHistory = func(c *common.ChatHistoryContainer) []Message { return messages }
+	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 
 	response, err := provider.Stream(ctx, options, eventChan)
 	close(eventChan)
@@ -361,7 +364,7 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 			}
 		}()
 
-		MessagesFromChatHistory = func(c *common.ChatHistoryContainer) []Message { return messages }
+		options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 		response, err := provider.Stream(ctx, options, eventChan)
 		close(eventChan)
 

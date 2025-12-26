@@ -466,3 +466,15 @@ func (c *ChatHistoryContainer) IsHydrated() bool {
 	}
 	return c.History.IsHydrated()
 }
+
+// Llm2Messages returns the underlying []Message if the history is an Llm2ChatHistory,
+// otherwise returns nil.
+func (c *ChatHistoryContainer) Llm2Messages() []Message {
+	if c == nil || c.History == nil {
+		return nil
+	}
+	if llm2History, ok := c.History.(*Llm2ChatHistory); ok {
+		return llm2History.Llm2Messages()
+	}
+	return nil
+}
