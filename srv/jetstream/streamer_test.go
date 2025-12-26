@@ -132,13 +132,46 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 	wg.Wait()
 }
 
-// Test end-to-end flow action streaming
+// Test end-to-end flow action streaming with new-only (default) behavior
 func (s *StreamerTestSuite) TestFlowActionStreaming() {
 	s.T().Parallel()
 
-	ctx := context.Background()
-	workspaceId := "test-workspace"
-	flowId := "test-flow"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	workspaceId := "test-workspace-new"
+	flowId := "test-flow-new"
+
+	// Start streaming first (default is "$" = new-only)
+	flowActionChan, errChan := s.streamer.StreamFlowActionChanges(ctx, workspaceId, flowId, "")
+
+	receivedActions := make([]domain.FlowAction, 0)
+	done := make(chan bool)
+
+	go func() {
+		for {
+			select {
+			case action, ok := <-flowActionChan:
+				if !ok {
+					done <- true
+					return
+				}
+				receivedActions = append(receivedActions, action)
+			case err, ok := <-errChan:
+				if ok {
+					s.T().Errorf("Received error: %v", err)
+					done <- true
+					return
+				}
+			case <-ctx.Done():
+				done <- true
+				return
+			}
+		}
+	}()
+
+	// Add flow action changes after subscription is established
+	time.Sleep(100 * time.Millisecond)
 
 	flowAction := domain.FlowAction{
 		WorkspaceId:  workspaceId,
@@ -152,53 +185,7 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 		Created:      time.Now().UTC().Truncate(time.Millisecond),
 		Updated:      time.Now().UTC().Truncate(time.Millisecond),
 	}
-	flowActionUpdated := domain.FlowAction(flowAction)
-	flowActionUpdated.ActionStatus = "completed"
-	flowActionFailed := domain.FlowAction(flowAction)
-	flowActionFailed.ActionStatus = "failed"
 
-	// add the flow action changes
-	err := s.streamer.AddFlowActionChange(ctx, flowAction)
-	s.Require().NoError(err)
-	err = s.streamer.AddFlowActionChange(ctx, flowActionUpdated)
-	s.Require().NoError(err)
-	err = s.streamer.AddFlowActionChange(ctx, flowActionFailed)
-	s.Require().NoError(err)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	flowActionChan, errChan := s.streamer.StreamFlowActionChanges(ctx, workspaceId, flowId, "")
-
-	receivedActions := make([]domain.FlowAction, 0)
-	done := make(chan bool)
-
-	go func() {
-		for {
-			select {
-			case action, ok := <-flowActionChan:
-				fmt.Printf("Received action: %v\n", action)
-				if !ok {
-					done <- true
-					return
-				}
-				receivedActions = append(receivedActions, action)
-			case err, ok := <-errChan:
-				if ok {
-					fmt.Printf("Received error: %v\n", err)
-					s.T().Errorf("Received error: %v", err)
-					done <- true
-					return
-				}
-			case <-ctx.Done():
-				fmt.Print("Context done\n")
-				done <- true
-				return
-			}
-		}
-	}()
-
-	// Add a new flow action change
 	newAction := domain.FlowAction{
 		WorkspaceId:  workspaceId,
 		FlowId:       flowId,
@@ -212,7 +199,6 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 		Updated:      time.Now().UTC().Truncate(time.Millisecond),
 	}
 
-	// Test end message
 	endAction := domain.FlowAction{
 		WorkspaceId: workspaceId,
 		FlowId:      flowId,
@@ -220,7 +206,14 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		if err := s.streamer.AddFlowActionChange(context.Background(), flowAction); err != nil {
+			s.T().Errorf("Failed to add flow action change: %v", err)
+		}
+	}()
+
 	go func() {
 		defer wg.Done()
 		time.Sleep(50 * time.Millisecond)
@@ -245,12 +238,10 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 
 	wg.Wait()
 
-	s.Require().GreaterOrEqual(len(receivedActions), 5)
+	s.Require().Len(receivedActions, 3)
 	s.Equal(flowAction, receivedActions[0])
-	s.Equal(flowActionUpdated, receivedActions[1])
-	s.Equal(flowActionFailed, receivedActions[2])
-	s.Equal(newAction, receivedActions[3])
-	s.Equal(endAction, receivedActions[4])
+	s.Equal(newAction, receivedActions[1])
+	s.Equal(endAction, receivedActions[2])
 }
 
 func (s *StreamerTestSuite) TestFlowEventStreaming() {
