@@ -22,6 +22,22 @@
   return_type: (_)? @function.return_type
 ) @function.declaration
 
+(generator_function_declaration
+  name: (identifier) @function.name
+  type_parameters: (_)? @function.type_parameters
+  parameters: (formal_parameters) @function.parameters
+  return_type: (_)? @function.return_type
+) @function.declaration
+
+(ambient_declaration
+  (function_signature
+    name: (identifier) @function.name
+    type_parameters: (_)? @function.type_parameters
+    parameters: (formal_parameters) @function.parameters
+    return_type: (_)? @function.return_type
+  )
+) @function.declaration
+
 (interface_declaration
   name: (_) @interface.name
 ) @interface.declaration
@@ -79,6 +95,13 @@
         parameters: (_) @class.method.parameters
         return_type: (_)? @class.method.return_type
         body: (_) @class.method.body
+      ) @class.method.declaration
+
+      (abstract_method_signature
+        "abstract" @class.method.mod
+        name: (_) @class.method.name
+        parameters: (_) @class.method.parameters
+        return_type: (_)? @class.method.return_type
       ) @class.method.declaration
 
       (_)

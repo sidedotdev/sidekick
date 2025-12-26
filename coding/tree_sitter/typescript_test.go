@@ -77,6 +77,33 @@ func TestGetFileSignaturesStringTypescript(t *testing.T) {
 ---
 `,
 		},
+		{
+			name: "abstract class declaration",
+			code: `export abstract class BaseTokenStorage implements TokenStorage {
+    abstract getCredentials(serverName: string): Promise<OAuthCredentials | null>;
+}`,
+			expected: `class BaseTokenStorage implements TokenStorage
+	abstract getCredentials(serverName: string): Promise<OAuthCredentials | null>
+---
+`,
+		},
+		{
+			name: "generator function declaration",
+			code: `function* myGenerator(): Generator<number> {
+	yield 1;
+	yield 2;
+}`,
+			expected: `function myGenerator(): Generator<number>
+---
+`,
+		},
+		{
+			name: "ambient declaration function",
+			code: `declare function externalFunc(x: number): string;`,
+			expected: `function externalFunc(x: number): string
+---
+`,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -277,6 +304,50 @@ func TestGetSymbolDefinitionTypescript(t *testing.T) {
 		this.name = name;
 		this.age = age;
 	}
+}`,
+		},
+		{
+			name:       "abstract class definition",
+			symbolName: "BaseTokenStorage",
+			code: `export abstract class BaseTokenStorage implements TokenStorage {
+    abstract getCredentials(serverName: string): Promise<OAuthCredentials | null>;
+}`,
+			expectedDefinition: `export abstract class BaseTokenStorage implements TokenStorage {
+    abstract getCredentials(serverName: string): Promise<OAuthCredentials | null>;
+}`,
+		},
+		{
+			name:       "generator function definition",
+			symbolName: "myGenerator",
+			code: `function* myGenerator() {
+	yield 1;
+	yield 2;
+	yield 3;
+}`,
+			expectedDefinition: `function* myGenerator() {
+	yield 1;
+	yield 2;
+	yield 3;
+}`,
+		},
+		{
+			name:               "ambient declaration function",
+			symbolName:         "externalFunc",
+			code:               `declare function externalFunc(x: number): string;`,
+			expectedDefinition: `declare function externalFunc(x: number): string;`,
+		},
+		{
+			name:       "function overload signature",
+			symbolName: "greet",
+			code: `function greet(name: string): string;
+function greet(name: string, age: number): string;
+function greet(name: string, age?: number): string {
+    return age ? name + " is " + age : name;
+}`,
+			expectedDefinition: `function greet(name: string): string;
+function greet(name: string, age: number): string;
+function greet(name: string, age?: number): string {
+    return age ? name + " is " + age : name;
 }`,
 		},
 		// TODO bring back once this is fixed: https://github.com/tree-sitter/tree-sitter/issues/2799#issue-2016383906
