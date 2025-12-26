@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"sidekick/common"
 	"sidekick/llm2"
 
 	"github.com/stretchr/testify/assert"
@@ -48,7 +47,7 @@ func TestHydrateChatHistoryHandler_HappyPath(t *testing.T) {
 
 	// Create request with refs
 	reqBody := HydrateChatHistoryRequest{
-		Refs: []common.MessageRef{
+		Refs: []llm2.MessageRef{
 			{FlowId: flowId, BlockIds: []string{"block-1"}, Role: "user"},
 			{FlowId: flowId, BlockIds: []string{"block-2", "block-3"}, Role: "assistant"},
 		},
@@ -101,7 +100,7 @@ func TestHydrateChatHistoryHandler_MissingBlocksShowError(t *testing.T) {
 
 	// Request includes a missing block
 	reqBody := HydrateChatHistoryRequest{
-		Refs: []common.MessageRef{
+		Refs: []llm2.MessageRef{
 			{FlowId: flowId, BlockIds: []string{"block-exists", "block-missing"}, Role: "assistant"},
 		},
 	}
@@ -133,7 +132,7 @@ func TestHydrateChatHistoryHandler_MismatchedFlowId(t *testing.T) {
 	flowId := "test-flow"
 
 	reqBody := HydrateChatHistoryRequest{
-		Refs: []common.MessageRef{
+		Refs: []llm2.MessageRef{
 			{FlowId: "different-flow", BlockIds: []string{"block-1"}, Role: "user"},
 		},
 	}
@@ -166,7 +165,7 @@ func TestHydrateChatHistoryHandler_EmptyFlowIdInRefAllowed(t *testing.T) {
 
 	// Empty flowId in ref should be allowed
 	reqBody := HydrateChatHistoryRequest{
-		Refs: []common.MessageRef{
+		Refs: []llm2.MessageRef{
 			{FlowId: "", BlockIds: []string{"block-1"}, Role: "user"},
 		},
 	}
@@ -197,7 +196,7 @@ func TestHydrateChatHistoryHandler_EmptyRefs(t *testing.T) {
 	flowId := "test-flow"
 
 	reqBody := HydrateChatHistoryRequest{
-		Refs: []common.MessageRef{},
+		Refs: []llm2.MessageRef{},
 	}
 	reqJSON, _ := json.Marshal(reqBody)
 
@@ -231,7 +230,7 @@ func TestHydrateChatHistoryHandler_MalformedBlockShowsError(t *testing.T) {
 	require.NoError(t, err)
 
 	reqBody := HydrateChatHistoryRequest{
-		Refs: []common.MessageRef{
+		Refs: []llm2.MessageRef{
 			{FlowId: flowId, BlockIds: []string{"block-bad"}, Role: "user"},
 		},
 	}
@@ -274,7 +273,7 @@ func TestHydrateChatHistoryHandler_PreservesOrder(t *testing.T) {
 
 	// Request with specific order
 	reqBody := HydrateChatHistoryRequest{
-		Refs: []common.MessageRef{
+		Refs: []llm2.MessageRef{
 			{FlowId: flowId, BlockIds: []string{"block-3", "block-1"}, Role: "user"},
 			{FlowId: flowId, BlockIds: []string{"block-5", "block-2", "block-4"}, Role: "assistant"},
 		},

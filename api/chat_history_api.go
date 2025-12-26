@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"sidekick/common"
 	"sidekick/llm2"
 
 	"github.com/gin-gonic/gin"
@@ -13,7 +12,7 @@ import (
 )
 
 type HydrateChatHistoryRequest struct {
-	Refs []common.MessageRef `json:"refs"`
+	Refs []llm2.MessageRef `json:"refs"`
 }
 
 type HydrateChatHistoryResponse struct {
