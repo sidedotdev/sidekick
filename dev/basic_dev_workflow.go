@@ -41,8 +41,9 @@ type MergeWithReviewParams struct {
 // getDiffSinceLastReview generates a diff comparing the last review tree to current staged changes
 func getDiffSinceLastReview(dCtx DevContext, lastReviewTreeHash string, ignoreWhitespace bool) (string, error) {
 	var diffOutput string
-	err := workflow.ExecuteActivity(dCtx, git.GitDiffTreeActivity, dCtx.EnvContainer, git.GitDiffTreeParams{
-		TreeHash:         lastReviewTreeHash,
+	err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
+		Staged:           true,
+		BaseRef:          lastReviewTreeHash,
 		IgnoreWhitespace: ignoreWhitespace,
 	}).Get(dCtx, &diffOutput)
 	return diffOutput, err
@@ -51,10 +52,10 @@ func getDiffSinceLastReview(dCtx DevContext, lastReviewTreeHash string, ignoreWh
 // GetGitDiff generates a git diff for merge approval, with optional whitespace ignoring
 func GetGitDiff(dCtx DevContext, baseBranch string, ignoreWhitespace bool) (string, error) {
 	var gitDiff string
-	err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
+	err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
 		Staged:           true,
 		ThreeDotDiff:     true,
-		BaseBranch:       baseBranch,
+		BaseRef:          baseBranch,
 		IgnoreWhitespace: ignoreWhitespace,
 	}).Get(dCtx, &gitDiff)
 	return gitDiff, err

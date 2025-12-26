@@ -13,16 +13,10 @@ import (
 
 type GitDiffParams struct {
 	FilePaths        []string
-	BaseBranch       string
+	BaseRef          string
 	ThreeDotDiff     bool
 	IgnoreWhitespace bool
 	Staged           bool
-}
-
-// GitDiffTreeParams contains parameters for diffing against a tree hash
-type GitDiffTreeParams struct {
-	TreeHash         string
-	IgnoreWhitespace bool
 }
 
 // GitDiff returns the diff of the current, staged changes in the working tree.
@@ -85,32 +79,9 @@ func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params 
 	return workingTreeAndUntrackedDiff(ctx, envContainer, params)
 }
 
-// GitDiffTreeActivity generates a diff comparing a tree hash to the current staged changes
-func GitDiffTreeActivity(ctx context.Context, envContainer *env.EnvContainer, params GitDiffTreeParams) (string, error) {
-	args := []string{"diff", "--staged", params.TreeHash}
-	if params.IgnoreWhitespace {
-		args = append(args, "-w")
-	}
-
-	output, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
-		EnvContainer:       *envContainer,
-		RelativeWorkingDir: "./",
-		Command:            "git",
-		Args:               args,
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to run git diff against tree: %w", err)
-	}
-	// Exit status 1 means differences were found (not an error)
-	if output.ExitStatus != 0 && output.ExitStatus != 1 {
-		return "", fmt.Errorf("git diff failed with exit status %d: %s", output.ExitStatus, output.Stderr)
-	}
-	return output.Stdout, nil
-}
-
 func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
-	if params.ThreeDotDiff && params.BaseBranch == "" {
-		return "", fmt.Errorf("base branch is required for three-dot diff")
+	if params.ThreeDotDiff && params.BaseRef == "" {
+		return "", fmt.Errorf("base ref is required for three-dot diff")
 	}
 
 	var cmdParts []string
@@ -119,11 +90,14 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 	// Handle different combinations of flags
 	if params.Staged && params.ThreeDotDiff {
 		cmdParts = append(cmdParts, "--staged")
-		cmdParts = append(cmdParts, fmt.Sprintf("$(git merge-base %s HEAD)", params.BaseBranch))
+		cmdParts = append(cmdParts, fmt.Sprintf("$(git merge-base %s HEAD)", params.BaseRef))
 	} else if params.ThreeDotDiff {
-		cmdParts = append(cmdParts, fmt.Sprintf("%s...HEAD", params.BaseBranch))
-	} else { // params.Staged must be true here
+		cmdParts = append(cmdParts, fmt.Sprintf("%s...HEAD", params.BaseRef))
+	} else if params.Staged {
 		cmdParts = append(cmdParts, "--staged")
+		if params.BaseRef != "" {
+			cmdParts = append(cmdParts, params.BaseRef)
+		}
 	}
 
 	if params.IgnoreWhitespace {

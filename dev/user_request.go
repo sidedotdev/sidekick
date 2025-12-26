@@ -118,10 +118,10 @@ func GetUserMergeApproval(
 				if paramsChanged {
 					// Regenerate the diff with the updated parameters
 					var newDiff string
-					err = workflow.ExecuteActivity(actionCtx.DevContext, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
+					err = workflow.ExecuteActivity(actionCtx.DevContext, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
 						Staged:           true,
 						ThreeDotDiff:     true,
-						BaseBranch:       finalTarget,
+						BaseRef:          finalTarget,
 						IgnoreWhitespace: ignoreWhitespace,
 					}).Get(actionCtx.DevContext, &newDiff)
 					if err != nil {
@@ -131,8 +131,9 @@ func GetUserMergeApproval(
 					// Regenerate diffSinceLastReview if we have a tree hash from a previous review
 					var newDiffSinceLastReview string
 					if lastReviewTreeHash != "" {
-						err = workflow.ExecuteActivity(actionCtx.DevContext, git.GitDiffTreeActivity, dCtx.EnvContainer, git.GitDiffTreeParams{
-							TreeHash:         lastReviewTreeHash,
+						err = workflow.ExecuteActivity(actionCtx.DevContext, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
+							Staged:           true,
+							BaseRef:          lastReviewTreeHash,
 							IgnoreWhitespace: ignoreWhitespace,
 						}).Get(actionCtx.DevContext, &newDiffSinceLastReview)
 						if err != nil {
