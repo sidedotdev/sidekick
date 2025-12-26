@@ -8,46 +8,66 @@ import (
 	"sidekick/env"
 	"sidekick/flow_action"
 
-	"github.com/BurntSushi/toml"
+	"github.com/knadh/koanf/v2"
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/workflow"
 )
 
-// GetRepoConfigActivity reads the side.toml file and returns a RepoConfig object
+// repoConfigCandidates defines the precedence order for repo config files
+var repoConfigCandidates = []string{"side.yml", "side.yaml", "side.toml", "side.json"}
+
+// GetRepoConfigActivity reads the repo config file and returns a RepoConfig object.
+// It searches for config files in order: side.yml, side.yaml, side.toml, side.json.
 // TODO /gen define GetRepoConfigActivityInput struct that has EnvContainer
 // inside it. write tests for get coding config activity too.
 func GetRepoConfigActivity(envContainer env.EnvContainer) (common.RepoConfig, error) {
 	workingDir := envContainer.Env.GetWorkingDirectory()
-	sideTomlPath := filepath.Join(workingDir, "side.toml")
+	discovery := common.DiscoverConfigFile(workingDir, repoConfigCandidates)
 
 	var config common.RepoConfig
 
-	data, err := os.ReadFile(sideTomlPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			log.Info().
-				Str("workingDir", workingDir).
-				Str("repoConfigPath", sideTomlPath).
-				Msg("Repo config side.toml not found; using default repo config")
-		} else {
-			return common.RepoConfig{}, fmt.Errorf("failed to read TOML file: %v", err)
-		}
+	if discovery.ChosenPath == "" {
+		log.Info().
+			Str("workingDir", workingDir).
+			Msg("No repo config found (side.yml/yaml/toml/json); using default repo config")
 	} else {
-		err = toml.Unmarshal(data, &config)
+		if len(discovery.AllFound) > 1 {
+			log.Warn().
+				Str("chosenPath", discovery.ChosenPath).
+				Strs("allFound", discovery.AllFound).
+				Msg("Multiple repo config files found; using highest precedence file")
+		}
+
+		data, err := os.ReadFile(discovery.ChosenPath)
 		if err != nil {
-			return common.RepoConfig{}, fmt.Errorf("failed to unmarshal TOML data: %v", err)
+			return common.RepoConfig{}, fmt.Errorf("failed to read repo config file %q: %w", discovery.ChosenPath, err)
+		}
+
+		parser := common.GetParserForExtension(discovery.ChosenPath)
+		if parser == nil {
+			return common.RepoConfig{}, fmt.Errorf("unsupported config file format: %s", discovery.ChosenPath)
+		}
+
+		k := koanf.New(".")
+		if err := k.Load(rawBytesProvider(data), parser); err != nil {
+			return common.RepoConfig{}, fmt.Errorf("failed to parse repo config %q: %w", discovery.ChosenPath, err)
+		}
+
+		if err := k.UnmarshalWithConf("", &config, koanf.UnmarshalConf{Tag: "toml"}); err != nil {
+			return common.RepoConfig{}, fmt.Errorf("failed to unmarshal repo config %q: %w", discovery.ChosenPath, err)
 		}
 	}
 
 	// If hints are not provided inline, try loading from HintsPath
-	// EditCode is a struct value, so a nil check is invalid and causes a build error.
-	// If the [edit_code] section is missing, Hints and HintsPath will be zero-valued (empty strings),
-	// so the condition correctly handles this case without the nil check.
 	if config.EditCode.Hints == "" && config.EditCode.HintsPath != "" {
 		hintsFilePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), config.EditCode.HintsPath)
 		hintsData, err := os.ReadFile(hintsFilePath)
 		if err != nil {
-			return common.RepoConfig{}, fmt.Errorf("failed to read hints file specified in side.toml (hints_path: %q): %w", config.EditCode.HintsPath, err)
+			configName := "repo config"
+			if discovery.ChosenPath != "" {
+				configName = filepath.Base(discovery.ChosenPath)
+			}
+			return common.RepoConfig{}, fmt.Errorf("failed to read hints file specified in %s (hints_path: %q): %w", configName, config.EditCode.HintsPath, err)
 		}
 		config.EditCode.Hints = string(hintsData)
 	}
@@ -90,4 +110,15 @@ func GetRepoConfig(eCtx flow_action.ExecContext) (common.RepoConfig, error) {
 		return common.RepoConfig{}, err
 	}
 	return repoConfig, nil
+}
+
+// rawBytesProvider is a simple koanf.Provider that returns raw bytes
+type rawBytesProvider []byte
+
+func (r rawBytesProvider) ReadBytes() ([]byte, error) {
+	return r, nil
+}
+
+func (r rawBytesProvider) Read() (map[string]interface{}, error) {
+	return nil, fmt.Errorf("rawBytesProvider does not support Read()")
 }
