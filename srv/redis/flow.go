@@ -96,3 +96,7 @@ func (s Storage) GetFlow(ctx context.Context, workspaceId, flowId string) (domai
 
 	return flow, nil
 }
+
+func (s Storage) DeleteFlow(ctx context.Context, workspaceId, flowId string) error {
+	panic("DeleteFlow not implemented for redis storage")
+}

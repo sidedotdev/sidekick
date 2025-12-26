@@ -113,6 +113,10 @@ func (s Storage) GetFlowAction(ctx context.Context, workspaceId, flowActionId st
 	return flowAction, nil
 }
 
+func (s Storage) DeleteFlowActionsForFlow(ctx context.Context, workspaceId, flowId string) error {
+	panic("DeleteFlowActionsForFlow not implemented for redis storage")
+}
+
 // AddFlowActionChange persists a flow action to the changes stream.
 func (s Streamer) AddFlowActionChange(ctx context.Context, flowAction domain.FlowAction) error {
 	streamKey := fmt.Sprintf("%s:%s:flow_action_changes", flowAction.WorkspaceId, flowAction.FlowId)

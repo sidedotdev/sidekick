@@ -58,4 +58,5 @@ type FlowStorage interface {
 	PersistFlow(ctx context.Context, flow Flow) error
 	GetFlow(ctx context.Context, workspaceId, flowId string) (Flow, error)
 	GetFlowsForTask(ctx context.Context, workspaceId, taskId string) ([]Flow, error)
+	DeleteFlow(ctx context.Context, workspaceId, flowId string) error
 }

@@ -64,6 +64,11 @@ func (d Delegator) MSet(ctx context.Context, workspaceId string, values map[stri
 	return d.storage.MSet(ctx, workspaceId, values)
 }
 
+/* implements KeyValueStorage interface */
+func (d Delegator) DeletePrefix(ctx context.Context, workspaceId string, prefix string) error {
+	return d.storage.DeletePrefix(ctx, workspaceId, prefix)
+}
+
 /* implements WorkspaceStorage interface */
 func (d Delegator) PersistWorkspace(ctx context.Context, workspace domain.Workspace) error {
 	return d.storage.PersistWorkspace(ctx, workspace)
@@ -172,6 +177,11 @@ func (d Delegator) GetFlowsForTask(ctx context.Context, workspaceId string, task
 }
 
 /* implements FlowStorage interface */
+func (d Delegator) DeleteFlow(ctx context.Context, workspaceId string, flowId string) error {
+	return d.storage.DeleteFlow(ctx, workspaceId, flowId)
+}
+
+/* implements FlowStorage interface */
 func (d Delegator) PersistSubflow(ctx context.Context, subflow domain.Subflow) error {
 	// Attempt to get the existing subflow
 	existingSubflow, err := d.storage.GetSubflow(ctx, subflow.WorkspaceId, subflow.Id)
@@ -233,6 +243,11 @@ func (d Delegator) GetFlowActions(ctx context.Context, workspaceId string, flowI
 /* implements FlowStorage interface */
 func (d Delegator) GetFlowAction(ctx context.Context, workspaceId string, flowActionId string) (domain.FlowAction, error) {
 	return d.storage.GetFlowAction(ctx, workspaceId, flowActionId)
+}
+
+/* implements FlowActionStorage interface */
+func (d Delegator) DeleteFlowActionsForFlow(ctx context.Context, workspaceId string, flowId string) error {
+	return d.storage.DeleteFlowActionsForFlow(ctx, workspaceId, flowId)
 }
 
 /* implements FlowStreamer interface */

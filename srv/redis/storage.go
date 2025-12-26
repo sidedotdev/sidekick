@@ -53,6 +53,10 @@ func (s Storage) MSet(ctx context.Context, workspaceId string, values map[string
 	return s.Client.MSet(ctx, prefixedValues).Err()
 }
 
+func (s Storage) DeletePrefix(ctx context.Context, workspaceId string, prefix string) error {
+	panic("DeletePrefix not implemented for redis storage")
+}
+
 func toMap(something interface{}) (map[string]interface{}, error) {
 	// Convert the thing to JSON
 	jsonData, err := json.Marshal(something)

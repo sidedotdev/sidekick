@@ -41,6 +41,10 @@ func (m *mockKeyValueStorage) MSet(ctx context.Context, workspaceId string, valu
 	return nil
 }
 
+func (m *mockKeyValueStorage) DeletePrefix(ctx context.Context, workspaceId string, prefix string) error {
+	return nil
+}
+
 func TestLlm2ChatHistory_NewLlm2ChatHistory(t *testing.T) {
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
 

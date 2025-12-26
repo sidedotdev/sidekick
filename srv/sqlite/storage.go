@@ -190,3 +190,12 @@ func (s *Storage) MSet(ctx context.Context, workspaceId string, values map[strin
 
 	return nil
 }
+
+func (s *Storage) DeletePrefix(ctx context.Context, workspaceId string, prefix string) error {
+	query := "DELETE FROM kv WHERE workspace_id = ? AND key LIKE ?"
+	_, err := s.kvDb.ExecContext(ctx, query, workspaceId, prefix+"%")
+	if err != nil {
+		return fmt.Errorf("failed to delete keys with prefix %s: %w", prefix, err)
+	}
+	return nil
+}
