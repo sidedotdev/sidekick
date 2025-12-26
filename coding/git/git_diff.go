@@ -13,7 +13,7 @@ import (
 
 type GitDiffParams struct {
 	FilePaths        []string
-	BaseBranch       string
+	BaseRef          string
 	ThreeDotDiff     bool
 	IgnoreWhitespace bool
 	Staged           bool
@@ -80,8 +80,8 @@ func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params 
 }
 
 func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
-	if params.ThreeDotDiff && params.BaseBranch == "" {
-		return "", fmt.Errorf("base branch is required for three-dot diff")
+	if params.ThreeDotDiff && params.BaseRef == "" {
+		return "", fmt.Errorf("base ref is required for three-dot diff")
 	}
 
 	var cmdParts []string
@@ -90,11 +90,14 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 	// Handle different combinations of flags
 	if params.Staged && params.ThreeDotDiff {
 		cmdParts = append(cmdParts, "--staged")
-		cmdParts = append(cmdParts, fmt.Sprintf("$(git merge-base %s HEAD)", params.BaseBranch))
+		cmdParts = append(cmdParts, fmt.Sprintf("$(git merge-base %s HEAD)", params.BaseRef))
 	} else if params.ThreeDotDiff {
-		cmdParts = append(cmdParts, fmt.Sprintf("%s...HEAD", params.BaseBranch))
-	} else { // params.Staged must be true here
+		cmdParts = append(cmdParts, fmt.Sprintf("%s...HEAD", params.BaseRef))
+	} else if params.Staged {
 		cmdParts = append(cmdParts, "--staged")
+		if params.BaseRef != "" {
+			cmdParts = append(cmdParts, params.BaseRef)
+		}
 	}
 
 	if params.IgnoreWhitespace {

@@ -38,6 +38,7 @@ type MergeApprovalParams struct {
 	DefaultTargetBranch string `json:"defaultTargetBranch"` // the default target branch, which is to be confirmed/overridden by the user
 	SourceBranch        string `json:"sourceBranch"`
 	Diff                string `json:"diff"`
+	DiffSinceLastReview string `json:"diffSinceLastReview,omitempty"`
 }
 
 type MergeApprovalResponse struct {
@@ -75,6 +76,12 @@ func GetUserMergeApproval(
 	finalTarget := mergeApprovalInfo.DefaultTargetBranch
 	ignoreWhitespace := false
 
+	// Extract tree hash for regenerating diffSinceLastReview (internal implementation detail)
+	var lastReviewTreeHash string
+	if hash, ok := req.RequestParams["lastReviewTreeHash"].(string); ok {
+		lastReviewTreeHash = hash
+	}
+
 	// Ensure tracking of the flow action within the guidance request
 	userResponse, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*flow_action.UserResponse, error) {
 		req.FlowActionId = flowAction.Id
@@ -111,18 +118,32 @@ func GetUserMergeApproval(
 				if paramsChanged {
 					// Regenerate the diff with the updated parameters
 					var newDiff string
-					err = workflow.ExecuteActivity(actionCtx.DevContext, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
+					err = workflow.ExecuteActivity(actionCtx.DevContext, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
 						Staged:           true,
 						ThreeDotDiff:     true,
-						BaseBranch:       finalTarget,
+						BaseRef:          finalTarget,
 						IgnoreWhitespace: ignoreWhitespace,
 					}).Get(actionCtx.DevContext, &newDiff)
 					if err != nil {
 						return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", finalTarget, err)
 					}
 
+					// Regenerate diffSinceLastReview if we have a tree hash from a previous review
+					var newDiffSinceLastReview string
+					if lastReviewTreeHash != "" {
+						err = workflow.ExecuteActivity(actionCtx.DevContext, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
+							Staged:           true,
+							BaseRef:          lastReviewTreeHash,
+							IgnoreWhitespace: ignoreWhitespace,
+						}).Get(actionCtx.DevContext, &newDiffSinceLastReview)
+						if err != nil {
+							return nil, fmt.Errorf("failed to generate diff since last review: %v", err)
+						}
+					}
+
 					// Update the mergeApprovalInfo with the new diff and target branch
 					mergeApprovalInfo.Diff = newDiff
+					mergeApprovalInfo.DiffSinceLastReview = newDiffSinceLastReview
 					mergeApprovalInfo.DefaultTargetBranch = finalTarget
 					req.RequestParams["mergeApprovalInfo"] = mergeApprovalInfo
 

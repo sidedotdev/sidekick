@@ -14,8 +14,12 @@
       <pre>{{ flowAction.actionParams.command }}</pre>
     </div>
     <template v-if="flowAction.actionParams.mergeApprovalInfo?.diff">
+      <div v-if="showEmptyDiffMessage" class="empty-diff-message">
+        No changes since last review
+      </div>
       <UnifiedDiffViewer
-        :diff-string="flowAction.actionParams.mergeApprovalInfo.diff"
+        v-else
+        :diff-string="currentDiffString"
         :default-expanded="false"
         :diff-mode="diffMode"
         :level="level"
@@ -55,6 +59,14 @@
           v-model:diffMode="diffMode"
           :disabled="!isPending"
         />
+        <select
+          v-if="hasDiffSinceLastReview"
+          v-model="diffScope"
+          class="diff-scope-select"
+        >
+          <option value="all">All changes</option>
+          <option value="since_last_review">Changes since last review</option>
+        </select>
       </div>
 
       <AutogrowTextarea v-model="responseContent" placeholder="Rejection reason" />
@@ -107,8 +119,12 @@
       <pre>{{ flowAction.actionParams.command }}</pre>
     </div>
     <template v-if="flowAction.actionParams.mergeApprovalInfo?.diff">
+      <div v-if="showEmptyDiffMessage" class="empty-diff-message">
+        No changes since last review
+      </div>
       <UnifiedDiffViewer
-        :diff-string="flowAction.actionParams.mergeApprovalInfo.diff"
+        v-else
+        :diff-string="currentDiffString"
         :default-expanded="false"
         :diff-mode="diffMode"
         :level="level"
@@ -164,6 +180,27 @@ const errorMessage = ref('');
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
 const ignoreWhitespace = ref(false);
 const diffMode = ref<'unified' | 'split'>('unified');
+const diffScope = ref<'all' | 'since_last_review'>('all');
+
+const hasDiffSinceLastReview = computed(() => {
+  const diffSinceLastReview = props.flowAction.actionParams.mergeApprovalInfo?.diffSinceLastReview;
+  return typeof diffSinceLastReview === 'string';
+});
+
+const currentDiffString = computed(() => {
+  if (diffScope.value === 'since_last_review' && hasDiffSinceLastReview.value) {
+    return props.flowAction.actionParams.mergeApprovalInfo.diffSinceLastReview;
+  }
+  return props.flowAction.actionParams.mergeApprovalInfo?.diff;
+});
+
+const showEmptyDiffMessage = computed(() => {
+  if (diffScope.value !== 'since_last_review' || !hasDiffSinceLastReview.value) {
+    return false;
+  }
+  const diffSinceLastReview = props.flowAction.actionParams.mergeApprovalInfo.diffSinceLastReview;
+  return diffSinceLastReview.trim() === '';
+});
 
 function getStorageKey(actionId: string): string {
   return `sidekick_user_request_draft_${actionId}`;
@@ -203,6 +240,10 @@ onMounted(() => {
     const savedDiffMode = localStorage.getItem('mergeApproval.diff.mode');
     if (savedDiffMode === 'unified' || savedDiffMode === 'split') {
       diffMode.value = savedDiffMode;
+    }
+    const savedDiffScope = localStorage.getItem('mergeApproval.diff.scope');
+    if (savedDiffScope === 'all' || savedDiffScope === 'since_last_review') {
+      diffScope.value = savedDiffScope;
     }
   } catch (error) {
     console.debug('Failed to load merge approval preferences:', error);
@@ -253,6 +294,14 @@ watch(diffMode, (newValue) => {
     localStorage.setItem('mergeApproval.diff.mode', newValue);
   } catch (error) {
     console.debug('Failed to save diffMode preference:', error);
+  }
+});
+
+watch(diffScope, (newValue) => {
+  try {
+    localStorage.setItem('mergeApproval.diff.scope', newValue);
+  } catch (error) {
+    console.debug('Failed to save diffScope preference:', error);
   }
 });
 
@@ -508,5 +557,29 @@ label[for="targetBranch"] {
   height: 1rem;
   fill: var(--color-text);
   stroke: var(--color-text);
+}
+
+.diff-scope-select {
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background-color: var(--color-background);
+  color: var(--color-text);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.diff-scope-select:hover {
+  border-color: var(--color-border-hover);
+}
+
+.empty-diff-message {
+  padding: 1rem;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-style: italic;
+  border: 1px dashed var(--color-border);
+  border-radius: 4px;
+  margin: 0.5rem 0;
 }
 </style>
