@@ -111,7 +111,28 @@ func TestLifecycleModel(t *testing.T) {
 			},
 		},
 		{
-			name: "handles cancellation",
+			name: "first ctrl+c shows confirmation message",
+			messages: []tea.Msg{
+				updateLifecycleMsg{
+					key:     "init",
+					content: "Setting up workspace...",
+					spin:    true,
+				},
+				clearLifecycleMsg{key: "init"},
+				taskChangeMsg{task: newTestTaskWithFlows()},
+				tea.KeyMsg{Type: tea.KeyCtrlC},
+			},
+			wantProgress: true,
+			wantContains: []string{
+				"Working...",
+				"Press Ctrl+C again to exit.",
+			},
+			wantNotExists: []string{
+				"To cancel, press ctrl+c",
+			},
+		},
+		{
+			name: "handles cancellation with double ctrl+c",
 			messages: []tea.Msg{
 				updateLifecycleMsg{
 					key:     "init",
@@ -127,6 +148,7 @@ func TestLifecycleModel(t *testing.T) {
 				taskChangeMsg{task: newTestTaskWithFlows()},
 				flowActionChangeMsg{action: client.FlowAction{Id: "a1", ActionType: "apply_edit_blocks", ActionStatus: domain.ActionStatusStarted}},
 				flowActionChangeMsg{action: client.FlowAction{Id: "a1", ActionType: "apply_edit_blocks", ActionStatus: domain.ActionStatusFailed}},
+				tea.KeyMsg{Type: tea.KeyCtrlC},
 				tea.KeyMsg{Type: tea.KeyCtrlC},
 			},
 			wantProgress: true,
