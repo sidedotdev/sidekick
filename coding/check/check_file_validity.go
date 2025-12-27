@@ -3,7 +3,6 @@ package check
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sidekick/coding/tree_sitter"
 	"sidekick/env"
@@ -41,7 +40,7 @@ const SyntaxError = "Syntax error(s)"
 // edits.
 func CheckFileValidity(envContainer env.EnvContainer, relativeFilePath string) (bool, string, error) {
 	filePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), relativeFilePath)
-	tree, err := tree_sitter.GetTree(filePath)
+	tree, sourceCode, err := tree_sitter.GetTreeWithSource(filePath)
 	if err != nil {
 		if errors.Is(err, tree_sitter.ErrFailedInferLanguage) {
 			return true, fmt.Sprintf("Warning: Failed to infer language from file extension: %v", err), nil
@@ -49,19 +48,12 @@ func CheckFileValidity(envContainer env.EnvContainer, relativeFilePath string) (
 			return false, fmt.Sprintf("Failed to get tree: %v", err), err
 		}
 	}
-	sourceCode, err := os.ReadFile(filePath)
 	hasError := tree.RootNode().HasError()
 	if hasError {
-		if err != nil {
-			return false, "", fmt.Errorf("failed to obtain source code: %v", err)
-		}
 		errorDetails := ExtractErrorMessages(sourceCode, tree.RootNode())
 		return false, errorDetails, nil
 	}
 
-	if err != nil {
-		return false, fmt.Sprintf("Failed to read file: %v", err), err
-	}
 	if strings.TrimSpace(string(sourceCode)) == "" {
 		return false, "File is blank", nil
 	}

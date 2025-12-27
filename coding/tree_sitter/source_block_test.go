@@ -262,6 +262,58 @@ func TestExpandContextLines(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "out of bounds byte range clamped",
+			sourceBlocks: []SourceBlock{
+				{
+					Range: sitter.Range{
+						StartByte:  100,
+						EndByte:    200,
+						StartPoint: sitter.Point{Row: 50, Column: 0},
+						EndPoint:   sitter.Point{Row: 60, Column: 0},
+					},
+				},
+			},
+			numContextLines: 2,
+			sourceCode:      []byte("line1\nline2\nline3"),
+			expectedStrings: []string{"line2\nline3"},
+			expected: []SourceBlock{
+				{
+					Range: sitter.Range{
+						StartByte:  6,
+						EndByte:    uint32(len([]byte("line1\nline2\nline3"))),
+						StartPoint: sitter.Point{Row: 0, Column: 0},
+						EndPoint:   sitter.Point{Row: 2, Column: 5},
+					},
+				},
+			},
+		},
+		{
+			name: "end byte exceeds source length",
+			sourceBlocks: []SourceBlock{
+				{
+					Range: sitter.Range{
+						StartByte:  6,
+						EndByte:    100,
+						StartPoint: sitter.Point{Row: 1, Column: 0},
+						EndPoint:   sitter.Point{Row: 10, Column: 0},
+					},
+				},
+			},
+			numContextLines: 1,
+			sourceCode:      []byte("line1\nline2\nline3"),
+			expectedStrings: []string{"line1\nline2\nline3"},
+			expected: []SourceBlock{
+				{
+					Range: sitter.Range{
+						StartByte:  0,
+						EndByte:    uint32(len([]byte("line1\nline2\nline3"))),
+						StartPoint: sitter.Point{Row: 0, Column: 0},
+						EndPoint:   sitter.Point{Row: 2, Column: 5},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -281,6 +333,82 @@ func TestExpandContextLines(t *testing.T) {
 				if result[i].String() != tc.expected[i].String() {
 					t.Errorf("Expected %s, Got: %s", utils.PanicJSON(tc.expected[i].String()), utils.PanicJSON(result[i].String()))
 				}
+			}
+		})
+	}
+}
+
+func TestSourceBlockString_OutOfBounds(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name      string
+		source    []byte
+		startByte uint32
+		endByte   uint32
+		expected  string
+	}{
+		{
+			name:      "nil source",
+			source:    nil,
+			startByte: 0,
+			endByte:   10,
+			expected:  "",
+		},
+		{
+			name:      "empty source",
+			source:    []byte{},
+			startByte: 0,
+			endByte:   10,
+			expected:  "",
+		},
+		{
+			name:      "start and end beyond length",
+			source:    []byte("hello"),
+			startByte: 100,
+			endByte:   200,
+			expected:  "",
+		},
+		{
+			name:      "end beyond length",
+			source:    []byte("hello"),
+			startByte: 2,
+			endByte:   100,
+			expected:  "llo",
+		},
+		{
+			name:      "start greater than end",
+			source:    []byte("hello"),
+			startByte: 10,
+			endByte:   5,
+			expected:  "",
+		},
+		{
+			name:      "valid range",
+			source:    []byte("hello"),
+			startByte: 1,
+			endByte:   4,
+			expected:  "ell",
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var sourcePtr *[]byte
+			if tc.source != nil {
+				sourcePtr = &tc.source
+			}
+			sb := SourceBlock{
+				Source: sourcePtr,
+				Range: sitter.Range{
+					StartByte: tc.startByte,
+					EndByte:   tc.endByte,
+				},
+			}
+			result := sb.String()
+			if result != tc.expected {
+				t.Errorf("Expected %q, got %q", tc.expected, result)
 			}
 		})
 	}
