@@ -54,19 +54,28 @@
           v-model="targetBranch"
           :workspaceId="flowAction.workspaceId"
         />
+      </div>
+      <div v-if="hasDiffSinceLastReview" class="diff-options-row">
+        <label for="diffScope">Show</label>
+        <Dropdown
+          id="diffScope"
+          v-model="diffScope"
+          :options="diffScopeOptions"
+          optionLabel="label"
+          optionValue="value"
+        />
         <DiffViewOptions
           v-model:ignoreWhitespace="ignoreWhitespace"
           v-model:diffMode="diffMode"
           :disabled="!isPending"
         />
-        <select
-          v-if="hasDiffSinceLastReview"
-          v-model="diffScope"
-          class="diff-scope-select"
-        >
-          <option value="all">All changes</option>
-          <option value="since_last_review">Changes since last review</option>
-        </select>
+      </div>
+      <div v-else class="diff-options-row">
+        <DiffViewOptions
+          v-model:ignoreWhitespace="ignoreWhitespace"
+          v-model:diffMode="diffMode"
+          :disabled="!isPending"
+        />
       </div>
 
       <AutogrowTextarea v-model="responseContent" placeholder="Rejection reason" />
@@ -152,6 +161,7 @@ import VueMarkdown from 'vue-markdown-render'
 import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
 import CopyIcon from './icons/CopyIcon.vue';
 import DiffViewOptions from './DiffViewOptions.vue';
+import Dropdown from 'primevue/dropdown';
 
 interface UserResponse {
   content?: string;
@@ -186,6 +196,11 @@ const hasDiffSinceLastReview = computed(() => {
   const diffSinceLastReview = props.flowAction.actionParams.mergeApprovalInfo?.diffSinceLastReview;
   return typeof diffSinceLastReview === 'string';
 });
+
+const diffScopeOptions = [
+  { label: 'All changes', value: 'all' },
+  { label: 'Changes since last review', value: 'since_last_review' },
+];
 
 const currentDiffString = computed(() => {
   if (diffScope.value === 'since_last_review' && hasDiffSinceLastReview.value) {
@@ -471,6 +486,17 @@ b {
 label[for="targetBranch"] {
   align-self: center;
   margin-right: 1rem;
+}
+
+.diff-options-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.diff-options-row label {
+  white-space: nowrap;
 }
 
 .markdown {
