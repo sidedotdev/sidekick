@@ -87,3 +87,50 @@ func TestPersistFlowWithExplicitTimestamps(t *testing.T) {
 	assert.Equal(t, 123456789, retrieved.Created.Nanosecond())
 	assert.Equal(t, 987654321, retrieved.Updated.Nanosecond())
 }
+
+func TestDeleteFlow(t *testing.T) {
+	db := newTestRedisStorage()
+	ctx := context.Background()
+	workspaceId := "TEST_WORKSPACE_ID"
+	parentId := "testParentId"
+
+	t.Run("Delete existing flow", func(t *testing.T) {
+		flow := domain.Flow{
+			WorkspaceId: workspaceId,
+			Id:          "flow_to_delete_" + ksuid.New().String(),
+			Type:        "testType",
+			ParentId:    parentId,
+			Status:      "active",
+		}
+		err := db.PersistFlow(ctx, flow)
+		assert.NoError(t, err)
+
+		// Verify flow exists
+		retrieved, err := db.GetFlow(ctx, workspaceId, flow.Id)
+		assert.NoError(t, err)
+		assert.Equal(t, flow, retrieved)
+
+		// Verify flow is in parent's flow set
+		flows, err := db.GetFlowsForTask(ctx, workspaceId, parentId)
+		assert.NoError(t, err)
+		assert.Contains(t, flows, flow)
+
+		// Delete the flow
+		err = db.DeleteFlow(ctx, workspaceId, flow.Id)
+		assert.NoError(t, err)
+
+		// Verify flow is deleted
+		_, err = db.GetFlow(ctx, workspaceId, flow.Id)
+		assert.Error(t, err)
+
+		// Verify flow is removed from parent's flow set
+		flows, err = db.GetFlowsForTask(ctx, workspaceId, parentId)
+		assert.NoError(t, err)
+		assert.NotContains(t, flows, flow)
+	})
+
+	t.Run("Delete non-existent flow is idempotent", func(t *testing.T) {
+		err := db.DeleteFlow(ctx, workspaceId, "non-existent-flow-id")
+		assert.NoError(t, err)
+	})
+}

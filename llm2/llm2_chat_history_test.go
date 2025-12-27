@@ -45,6 +45,14 @@ func (m *mockKeyValueStorage) DeletePrefix(ctx context.Context, workspaceId stri
 	return nil
 }
 
+func (m *mockKeyValueStorage) GetKeysWithPrefix(ctx context.Context, workspaceId string, prefix string) ([]string, error) {
+	return nil, nil
+}
+
+func (m *mockKeyValueStorage) MSetRaw(ctx context.Context, workspaceId string, values map[string][]byte) error {
+	return nil
+}
+
 func TestLlm2ChatHistory_NewLlm2ChatHistory(t *testing.T) {
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
 

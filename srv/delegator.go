@@ -65,8 +65,18 @@ func (d Delegator) MSet(ctx context.Context, workspaceId string, values map[stri
 }
 
 /* implements KeyValueStorage interface */
+func (d Delegator) MSetRaw(ctx context.Context, workspaceId string, values map[string][]byte) error {
+	return d.storage.MSetRaw(ctx, workspaceId, values)
+}
+
+/* implements KeyValueStorage interface */
 func (d Delegator) DeletePrefix(ctx context.Context, workspaceId string, prefix string) error {
 	return d.storage.DeletePrefix(ctx, workspaceId, prefix)
+}
+
+/* implements KeyValueStorage interface */
+func (d Delegator) GetKeysWithPrefix(ctx context.Context, workspaceId string, prefix string) ([]string, error) {
+	return d.storage.GetKeysWithPrefix(ctx, workspaceId, prefix)
 }
 
 /* implements WorkspaceStorage interface */
@@ -248,6 +258,11 @@ func (d Delegator) GetFlowAction(ctx context.Context, workspaceId string, flowAc
 /* implements FlowActionStorage interface */
 func (d Delegator) DeleteFlowActionsForFlow(ctx context.Context, workspaceId string, flowId string) error {
 	return d.storage.DeleteFlowActionsForFlow(ctx, workspaceId, flowId)
+}
+
+/* implements SubflowStorage interface */
+func (d Delegator) DeleteSubflowsForFlow(ctx context.Context, workspaceId string, flowId string) error {
+	return d.storage.DeleteSubflowsForFlow(ctx, workspaceId, flowId)
 }
 
 /* implements FlowStreamer interface */

@@ -191,6 +191,33 @@ func (s *Storage) MSet(ctx context.Context, workspaceId string, values map[strin
 	return nil
 }
 
+func (s *Storage) MSetRaw(ctx context.Context, workspaceId string, values map[string][]byte) error {
+	tx, err := s.kvDb.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, "INSERT OR REPLACE INTO kv (workspace_id, key, value) VALUES (?, ?, ?)")
+	if err != nil {
+		return fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for key, value := range values {
+		_, err = stmt.ExecContext(ctx, workspaceId, key, value)
+		if err != nil {
+			return fmt.Errorf("failed to insert/update key %s: %w", key, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
 func (s *Storage) DeletePrefix(ctx context.Context, workspaceId string, prefix string) error {
 	query := "DELETE FROM kv WHERE workspace_id = ? AND key LIKE ?"
 	_, err := s.kvDb.ExecContext(ctx, query, workspaceId, prefix+"%")
@@ -198,4 +225,23 @@ func (s *Storage) DeletePrefix(ctx context.Context, workspaceId string, prefix s
 		return fmt.Errorf("failed to delete keys with prefix %s: %w", prefix, err)
 	}
 	return nil
+}
+
+func (s *Storage) GetKeysWithPrefix(ctx context.Context, workspaceId string, prefix string) ([]string, error) {
+	query := "SELECT key FROM kv WHERE workspace_id = ? AND key LIKE ? ORDER BY key"
+	rows, err := s.kvDb.QueryContext(ctx, query, workspaceId, prefix+"%")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get keys with prefix %s: %w", prefix, err)
+	}
+	defer rows.Close()
+
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, fmt.Errorf("failed to scan key: %w", err)
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
 }

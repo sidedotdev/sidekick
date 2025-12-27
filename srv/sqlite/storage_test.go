@@ -132,3 +132,75 @@ func (ev *embeddingVector) UnmarshalBinary(data []byte) error {
 	}
 	return nil
 }
+
+func TestDeletePrefix(t *testing.T) {
+	ctx := context.Background()
+	storage := NewTestSqliteStorage(t, "test_delete_prefix")
+	workspaceID := "test-workspace"
+
+	t.Run("DeletePrefix removes matching keys", func(t *testing.T) {
+		// Set up keys with different prefixes
+		err := storage.MSet(ctx, workspaceID, map[string]interface{}{
+			"flow1:msg:block1": "value1",
+			"flow1:msg:block2": "value2",
+			"flow1:msg:block3": "value3",
+			"flow2:msg:block1": "other-value",
+			"unrelated-key":    "keep-me",
+		})
+		require.NoError(t, err)
+
+		// Delete keys with flow1:msg: prefix
+		err = storage.DeletePrefix(ctx, workspaceID, "flow1:msg:")
+		require.NoError(t, err)
+
+		// Verify flow1:msg: keys are deleted
+		results, err := storage.MGet(ctx, workspaceID, []string{
+			"flow1:msg:block1",
+			"flow1:msg:block2",
+			"flow1:msg:block3",
+		})
+		require.NoError(t, err)
+		for _, result := range results {
+			assert.Nil(t, result, "flow1:msg: keys should be deleted")
+		}
+
+		// Verify other keys still exist
+		results, err = storage.MGet(ctx, workspaceID, []string{"flow2:msg:block1", "unrelated-key"})
+		require.NoError(t, err)
+		assert.NotNil(t, results[0], "flow2:msg:block1 should still exist")
+		assert.NotNil(t, results[1], "unrelated-key should still exist")
+	})
+
+	t.Run("DeletePrefix with no matching keys", func(t *testing.T) {
+		err := storage.DeletePrefix(ctx, workspaceID, "nonexistent-prefix:")
+		assert.NoError(t, err)
+	})
+
+	t.Run("DeletePrefix is workspace-scoped", func(t *testing.T) {
+		otherWorkspace := "other-workspace"
+
+		// Set up keys in both workspaces
+		err := storage.MSet(ctx, workspaceID, map[string]interface{}{
+			"shared:key1": "ws1-value",
+		})
+		require.NoError(t, err)
+		err = storage.MSet(ctx, otherWorkspace, map[string]interface{}{
+			"shared:key1": "ws2-value",
+		})
+		require.NoError(t, err)
+
+		// Delete from first workspace only
+		err = storage.DeletePrefix(ctx, workspaceID, "shared:")
+		require.NoError(t, err)
+
+		// Verify first workspace key is deleted
+		results, err := storage.MGet(ctx, workspaceID, []string{"shared:key1"})
+		require.NoError(t, err)
+		assert.Nil(t, results[0])
+
+		// Verify second workspace key still exists
+		results, err = storage.MGet(ctx, otherWorkspace, []string{"shared:key1"})
+		require.NoError(t, err)
+		assert.NotNil(t, results[0])
+	})
+}

@@ -57,6 +57,14 @@ func (m *mockKVStorage) DeletePrefix(ctx context.Context, workspaceId string, pr
 	return nil
 }
 
+func (m *mockKVStorage) GetKeysWithPrefix(ctx context.Context, workspaceId string, prefix string) ([]string, error) {
+	return nil, nil
+}
+
+func (m *mockKVStorage) MSetRaw(ctx context.Context, workspaceId string, values map[string][]byte) error {
+	return nil
+}
+
 func noopManageLlm2ChatHistory(messages []llm2.Message, maxLength int) ([]llm2.Message, error) {
 	return messages, nil
 }
