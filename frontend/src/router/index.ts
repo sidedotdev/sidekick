@@ -5,6 +5,8 @@ import WorkflowResetView from '@/views/WorkflowResetView.vue'
 import KanbanView from '@/views/KanbanView.vue'
 import ChatView from '@/views/ChatView.vue'
 import ArchivedTasksView from '@/views/ArchivedTasksView.vue'
+import BlockedView from '@/views/BlockedView.vue'
+import { isBlockedNow } from '@/lib/offHours'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -49,7 +51,29 @@ const router = createRouter({
       name: 'archived-tasks',
       component: ArchivedTasksView,
     },
+    {
+      path: '/blocked',
+      name: 'blocked',
+      component: BlockedView,
+    },
   ],
+})
+
+router.beforeEach(async (to, _from, next) => {
+  if (to.name === 'blocked') {
+    next()
+    return
+  }
+
+  const status = await isBlockedNow()
+  if (status.blocked) {
+    next({
+      name: 'blocked',
+      query: { redirect: to.fullPath },
+    })
+  } else {
+    next()
+  }
 })
 
 export default router
