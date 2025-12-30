@@ -123,6 +123,19 @@ func TestApplyTextEdit(t *testing.T) {
 			expectedContents: "Hi, Hello, world!",
 			expectErr:        false,
 		},
+		{
+			name:             "EmptyOriginalContents",
+			originalContents: "",
+			edit: TextEdit{
+				Range: Range{
+					Start: Position{Line: 0, Character: 0},
+					End:   Position{Line: 0, Character: 0},
+				},
+				NewText: "Hello, World!",
+			},
+			expectedContents: "Hello, World!",
+			expectErr:        false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -139,34 +152,6 @@ func TestApplyTextEdit(t *testing.T) {
 	}
 }
 
-func TestApplyTextDocumentEdit_EmptyOriginalContents(t *testing.T) { // TODO move this test case to TestApplyTextEdit
-	// Create a TextDocumentEdit with some edits
-	textDocumentEdit := TextDocumentEdit{
-		Edits: []TextEdit{
-			{
-				Range: Range{
-					Start: Position{Line: 0, Character: 0},
-					End:   Position{Line: 0, Character: 0},
-				},
-				NewText: "Hello, World!",
-			},
-		},
-	}
-
-	// Call applyTextDocumentEdit with an empty string as the originalContents
-	updatedContents, err := applyTextDocumentEdit("", textDocumentEdit)
-
-	// Assert no error
-	if err != nil {
-		t.Fatalf("expected no error, but got: %v", err)
-	}
-
-	// Assert that the returned string is as expected
-	expectedContents := "Hello, World!"
-	if updatedContents != expectedContents {
-		t.Errorf("expected: %s, but got: %s", expectedContents, updatedContents)
-	}
-}
 func TestApplyTextDocumentEdit_NoEdits(t *testing.T) {
 	// Create a TextDocumentEdit with no edits
 	textDocumentEdit := TextDocumentEdit{
