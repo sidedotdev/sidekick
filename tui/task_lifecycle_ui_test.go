@@ -313,7 +313,7 @@ func TestLifecycleModelBlockedMode(t *testing.T) {
 				offHoursBlockedMsg{status: OffHoursStatus{
 					Blocked:   true,
 					Message:   "Blocked",
-					UnblockAt: timePtr(time.Date(2024, 1, 1, 7, 0, 0, 0, time.Local)),
+					UnblockAt: timePtr(time.Now().Add(time.Hour)),
 				}},
 			},
 			wantBlocked: true,
@@ -394,6 +394,29 @@ func TestLifecycleModelBlockedMode(t *testing.T) {
 			},
 			wantNotExists: []string{
 				"Off hours!",
+			},
+		},
+		{
+			name: "clears blocked state when unblock time has passed",
+			messages: []tea.Msg{
+				updateLifecycleMsg{
+					key:     "init",
+					content: "Starting task...",
+					spin:    true,
+				},
+				offHoursBlockedMsg{status: OffHoursStatus{
+					Blocked:   true,
+					Message:   "Time to rest!",
+					UnblockAt: timePtr(time.Now().Add(-time.Hour)),
+				}},
+			},
+			wantBlocked: false,
+			wantContains: []string{
+				"Starting task...",
+			},
+			wantNotExists: []string{
+				"Time to rest!",
+				"Unblocks at",
 			},
 		},
 	}

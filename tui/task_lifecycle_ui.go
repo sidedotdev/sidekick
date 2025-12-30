@@ -87,6 +87,16 @@ func scheduleOffHoursCheck() tea.Cmd {
 	})
 }
 
+func scheduleOffHoursCheckAt(unblockAt time.Time) tea.Cmd {
+	delay := time.Until(unblockAt)
+	if delay <= 0 {
+		return checkOffHoursCmd()
+	}
+	return tea.Tick(delay, func(t time.Time) tea.Msg {
+		return offHoursCheckMsg{}
+	})
+}
+
 func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -113,10 +123,23 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case offHoursBlockedMsg:
-		m.blocked = msg.status.Blocked
-		m.blockedMessage = msg.status.Message
-		m.unblockAt = msg.status.UnblockAt
-		return m, scheduleOffHoursCheck()
+		// If unblock time has passed, treat as unblocked
+		if msg.status.Blocked && msg.status.UnblockAt != nil && time.Now().After(*msg.status.UnblockAt) {
+			m.blocked = false
+			m.blockedMessage = ""
+			m.unblockAt = nil
+		} else {
+			m.blocked = msg.status.Blocked
+			m.blockedMessage = msg.status.Message
+			m.unblockAt = msg.status.UnblockAt
+		}
+		// Schedule check at unblock time for immediate state update, plus regular polling
+		var cmds []tea.Cmd
+		cmds = append(cmds, scheduleOffHoursCheck())
+		if m.blocked && m.unblockAt != nil {
+			cmds = append(cmds, scheduleOffHoursCheckAt(*m.unblockAt))
+		}
+		return m, tea.Batch(cmds...)
 
 	case offHoursCheckMsg:
 		return m, checkOffHoursCmd()
