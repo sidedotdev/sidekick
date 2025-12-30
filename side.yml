@@ -32,7 +32,6 @@ command_permissions:
     - pattern: "bun type-check"
     - pattern: "(npm|bun) run test:unit.*--run"
     - pattern: "bun test:unit.*--run"
-"
 
 edit_code:
   hints: |
