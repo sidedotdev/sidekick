@@ -568,11 +568,15 @@ const goToNextStep = async () => {
 };
 
 let setShortContent = () => {
-  setTimeout(() => {
+  const innerSet = () => {
     const contentHeight = document.querySelector('.scroll-container')?.scrollHeight || 0
     const containerHeight = document.querySelector('.flow-actions-container')?.clientHeight || 0
     shortContent.value = contentHeight <= containerHeight
-  }, 10)
+  }
+  // HACK: set it fast to get immediate feedback, but slower too when rendering takes longer
+  setTimeout(innerSet, 10)
+  setTimeout(innerSet, 50)
+  setTimeout(innerSet, 250)
 }
 
 const pauseFlow = async () => {
