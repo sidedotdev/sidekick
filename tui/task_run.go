@@ -226,6 +226,26 @@ func RunTaskUI(ctx context.Context, c client.Client, req *client.CreateTaskReque
 
 		p.Send(updateLifecycleMsg{key: "init", content: "Starting task...", spin: true})
 
+		// Check off-hours blocking before creating task
+		for {
+			status := CheckOffHours()
+			if !status.Blocked {
+				break
+			}
+			p.Send(offHoursBlockedMsg{status: status})
+
+			// Wait until unblock time or poll every 30 seconds
+			var waitDuration time.Duration
+			if status.UnblockAt != nil {
+				waitDuration = time.Until(*status.UnblockAt) + time.Second
+			} else {
+				waitDuration = 30 * time.Second
+			}
+			time.Sleep(waitDuration)
+		}
+		// Clear blocked state
+		p.Send(offHoursBlockedMsg{status: OffHoursStatus{Blocked: false}})
+
 		task, err = c.CreateTask(workspace.Id, req)
 		if err != nil {
 			p.Send(updateLifecycleMsg{key: "error", content: fmt.Sprintf("Failed to create task: %v", err)})

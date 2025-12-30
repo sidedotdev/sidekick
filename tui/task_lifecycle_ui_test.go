@@ -6,6 +6,7 @@ import (
 	"sidekick/domain"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
@@ -249,4 +250,156 @@ func TestLifecycleModel(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLifecycleModelBlockedMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		messages      []tea.Msg
+		wantBlocked   bool
+		wantContains  []string
+		wantNotExists []string
+	}{
+		{
+			name: "enters blocked mode when off-hours blocked",
+			messages: []tea.Msg{
+				updateLifecycleMsg{
+					key:     "init",
+					content: "Setting up workspace...",
+					spin:    true,
+				},
+				offHoursBlockedMsg{status: OffHoursStatus{
+					Blocked: true,
+					Message: "Time to sleep!",
+				}},
+			},
+			wantBlocked: true,
+			wantContains: []string{
+				"Time to sleep!",
+			},
+			wantNotExists: []string{
+				"Setting up workspace",
+			},
+		},
+		{
+			name: "shows unblock time when provided",
+			messages: []tea.Msg{
+				offHoursBlockedMsg{status: OffHoursStatus{
+					Blocked:   true,
+					Message:   "Blocked",
+					UnblockAt: timePtr(time.Date(2024, 1, 1, 7, 0, 0, 0, time.Local)),
+				}},
+			},
+			wantBlocked: true,
+			wantContains: []string{
+				"Blocked",
+				"Unblocks at",
+			},
+		},
+		{
+			name: "uses default message when none provided",
+			messages: []tea.Msg{
+				offHoursBlockedMsg{status: OffHoursStatus{
+					Blocked: true,
+					Message: "",
+				}},
+			},
+			wantBlocked: true,
+			wantContains: []string{
+				"Time to rest!",
+			},
+		},
+		{
+			name: "exits blocked mode when unblocked",
+			messages: []tea.Msg{
+				offHoursBlockedMsg{status: OffHoursStatus{
+					Blocked: true,
+					Message: "Blocked",
+				}},
+				offHoursBlockedMsg{status: OffHoursStatus{
+					Blocked: false,
+				}},
+				updateLifecycleMsg{
+					key:     "init",
+					content: "Starting task...",
+					spin:    true,
+				},
+			},
+			wantBlocked: false,
+			wantContains: []string{
+				"Starting task...",
+			},
+			wantNotExists: []string{
+				"Blocked",
+			},
+		},
+		{
+			name: "preserves task state when entering blocked mode",
+			messages: []tea.Msg{
+				taskChangeMsg{task: newTestTaskWithFlows()},
+				offHoursBlockedMsg{status: OffHoursStatus{
+					Blocked: true,
+					Message: "Off hours!",
+				}},
+			},
+			wantBlocked: true,
+			wantContains: []string{
+				"Off hours!",
+			},
+			wantNotExists: []string{
+				"Working",
+			},
+		},
+		{
+			name: "restores task view when exiting blocked mode",
+			messages: []tea.Msg{
+				taskChangeMsg{task: newTestTaskWithFlows()},
+				offHoursBlockedMsg{status: OffHoursStatus{
+					Blocked: true,
+					Message: "Off hours!",
+				}},
+				offHoursBlockedMsg{status: OffHoursStatus{
+					Blocked: false,
+				}},
+			},
+			wantBlocked: false,
+			wantContains: []string{
+				"Working",
+			},
+			wantNotExists: []string{
+				"Off hours!",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var model tea.Model
+			sigChan := make(chan os.Signal, 1)
+			model = newLifecycleModel(sigChan, nil)
+
+			for _, msg := range tt.messages {
+				model, _ = model.Update(msg)
+			}
+
+			lifecycleModel, ok := model.(taskLifecycleModel)
+			assert.True(t, ok, "expected model to remain taskLifecycleModel")
+			assert.Equal(t, tt.wantBlocked, lifecycleModel.blocked)
+
+			view := lifecycleModel.View()
+			for _, want := range tt.wantContains {
+				assert.Contains(t, view, want)
+			}
+			for _, notWant := range tt.wantNotExists {
+				assert.NotContains(t, view, notWant)
+			}
+		})
+	}
+}
+
+func timePtr(t time.Time) *time.Time {
+	return &t
 }
