@@ -18,6 +18,7 @@ type LocalConfig struct {
 	LLM                map[string][]ModelConfig `koanf:"llm,omitempty"`
 	Embedding          map[string][]ModelConfig `koanf:"embedding,omitempty"`
 	CommandPermissions CommandPermissionConfig  `koanf:"command_permissions,omitempty"`
+	OffHours           OffHoursConfig           `koanf:"off_hours,omitempty"`
 }
 
 // getCustomProviderNames returns a slice of custom provider names

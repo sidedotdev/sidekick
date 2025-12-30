@@ -50,6 +50,11 @@ type taskLifecycleModel struct {
 	progModel      tea.Model
 	client         client.Client
 	ctrlCPressedAt time.Time
+
+	// off-hours blocking state
+	blocked        bool
+	blockedMessage string
+	unblockAt      *time.Time
 }
 
 func newLifecycleModel(sigChan chan os.Signal, c client.Client) taskLifecycleModel {
@@ -65,7 +70,20 @@ func newLifecycleModel(sigChan chan os.Signal, c client.Client) taskLifecycleMod
 }
 
 func (m taskLifecycleModel) Init() tea.Cmd {
-	return m.spinner.Tick
+	return tea.Batch(m.spinner.Tick, checkOffHoursCmd())
+}
+
+func checkOffHoursCmd() tea.Cmd {
+	return func() tea.Msg {
+		status := CheckOffHours()
+		return offHoursBlockedMsg{status: status}
+	}
+}
+
+func scheduleOffHoursCheck() tea.Cmd {
+	return tea.Tick(30*time.Second, func(t time.Time) tea.Msg {
+		return offHoursCheckMsg{}
+	})
 }
 
 func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -92,6 +110,15 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ctrlCPressedAt = time.Time{}
 		}
 		return m, nil
+
+	case offHoursBlockedMsg:
+		m.blocked = msg.status.Blocked
+		m.blockedMessage = msg.status.Message
+		m.unblockAt = msg.status.UnblockAt
+		return m, scheduleOffHoursCheck()
+
+	case offHoursCheckMsg:
+		return m, checkOffHoursCmd()
 
 	case updateLifecycleMsg:
 		m.messages[msg.key] = lifecycleMessage{
@@ -165,6 +192,22 @@ func (m taskLifecycleModel) propagateAndBatch(msg tea.Msg, cmds []tea.Cmd) (task
 
 func (m taskLifecycleModel) View() string {
 	var b strings.Builder
+
+	// When blocked, show only the blocking message
+	if m.blocked {
+		message := m.blockedMessage
+		if message == "" {
+			message = "Time to rest!"
+		}
+		b.WriteString(fmt.Sprintf("%s %s\n", m.spinner.View(), message))
+		if m.unblockAt != nil {
+			b.WriteString(fmt.Sprintf("Unblocks at %s\n", m.unblockAt.Format("3:04 PM")))
+		}
+		if !m.ctrlCPressedAt.IsZero() && time.Since(m.ctrlCPressedAt) < 2*time.Second {
+			b.WriteString("\nPress Ctrl+C again to exit.")
+		}
+		return b.String()
+	}
 
 	// Convert map to slice for sorting
 	var messages []lifecycleMessage

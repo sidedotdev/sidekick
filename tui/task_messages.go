@@ -16,3 +16,11 @@ type flowActionChangeMsg struct {
 type taskErrorMsg struct {
 	err error
 }
+
+// offHoursBlockedMsg is sent when off-hours blocking status changes.
+type offHoursBlockedMsg struct {
+	status OffHoursStatus
+}
+
+// offHoursCheckMsg triggers a periodic off-hours check.
+type offHoursCheckMsg struct{}
