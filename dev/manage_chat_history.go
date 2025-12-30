@@ -666,32 +666,39 @@ func applyCacheControlBreakpoints(chatHistory *[]llm.ChatMessage, retainReasons 
 		}
 	}
 
-	// Sort blocks by size (descending) and add their start positions
-	slices.SortFunc(blocks, func(a, b block) int {
-		sizeA := a.endIndex - a.startIndex
-		sizeB := b.endIndex - b.startIndex
-		return sizeB - sizeA // descending
-	})
+	/*
+	 * FIXME something is buggy so we'll return early for now and skip the rest
+	 * of the logic. This means we only set breakpoints at the start & end
+	 * (which are the most important anyway)
+	 */
+	/*
+		// Sort blocks by size (descending) and add their start positions
+		slices.SortFunc(blocks, func(a, b block) int {
+			sizeA := a.endIndex - a.startIndex
+			sizeB := b.endIndex - b.startIndex
+			return sizeB - sizeA // descending
+		})
 
-	for _, b := range blocks {
-		if len(breakpointPositions) >= 4 {
-			break
+		for _, b := range blocks {
+			if len(breakpointPositions) >= 4 {
+				break
+			}
+			breakpointPositions[b.startIndex] = true
 		}
-		breakpointPositions[b.startIndex] = true
-	}
 
-	// Apply cache control to selected positions
-	for pos := range breakpointPositions {
-		if numBreakpoints >= 4 {
-			break
-		}
-		if pos >= 0 && pos < len(*chatHistory) {
-			if (*chatHistory)[pos].CacheControl != "ephemeral" {
-				numBreakpoints++
-				(*chatHistory)[pos].CacheControl = "ephemeral"
+		// Apply cache control to selected positions
+		for pos := range breakpointPositions {
+			if numBreakpoints >= 4 {
+				break
+			}
+			if pos >= 0 && pos < len(*chatHistory) {
+				if (*chatHistory)[pos].CacheControl != "ephemeral" {
+					numBreakpoints++
+					(*chatHistory)[pos].CacheControl = "ephemeral"
+				}
 			}
 		}
-	}
+	*/
 }
 
 func copyReasons(reasons map[string]bool) map[string]bool {
