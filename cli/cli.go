@@ -8,6 +8,7 @@ import (
 	"sidekick/api"
 	"sidekick/temporal"
 	"strconv"
+	"time"
 
 	// Embedding the frontend build files
 	_ "embed"
@@ -40,7 +41,9 @@ func (p *program) run() {
 
 func (p *program) Stop(s system_service.Service) error {
 	if p.server != nil {
-		if err := p.server.Shutdown(context.Background()); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := p.server.Shutdown(ctx); err != nil {
 			log.Error().Err(err).Msg("Error shutting down server")
 		}
 	}
