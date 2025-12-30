@@ -89,7 +89,7 @@ describe('useIdeOpener', () => {
       
       expect(windowOpenSpy).toHaveBeenCalledTimes(2)
       expect(windowOpenSpy).toHaveBeenLastCalledWith(
-        'vscode://file//workspace/path/to/file.ts?windowId=_blank',
+        'vscode://file//workspace/path/to/file.ts',
         '_self'
       )
       
@@ -113,7 +113,7 @@ describe('useIdeOpener', () => {
       
       expect(windowOpenSpy).toHaveBeenCalledTimes(2)
       expect(windowOpenSpy).toHaveBeenLastCalledWith(
-        'vscode://file//workspace/path/to/file.ts:42?windowId=_blank',
+        'vscode://file//workspace/path/to/file.ts:42',
         '_self'
       )
       
@@ -179,7 +179,7 @@ describe('useIdeOpener', () => {
       
       expect(windowOpenSpy).toHaveBeenCalledTimes(2)
       expect(windowOpenSpy).toHaveBeenLastCalledWith(
-        'vscode://file//workspace/path/to/file.ts?windowId=_blank',
+        'vscode://file//workspace/path/to/file.ts',
         '_self'
       )
       expect(showIdeSelector.value).toBe(false)
@@ -275,7 +275,7 @@ describe('useIdeOpener', () => {
       await vi.advanceTimersByTimeAsync(250)
       
       expect(windowOpenSpy).toHaveBeenLastCalledWith(
-        'vscode://file//workspace/file.ts:10?windowId=_blank',
+        'vscode://file//workspace/file.ts:10',
         '_self'
       )
       
