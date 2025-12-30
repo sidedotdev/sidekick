@@ -20,19 +20,19 @@ type OffHoursWindow struct {
 	// Days specifies which days of the week this window applies to.
 	// Use lowercase day names: "monday", "tuesday", etc.
 	// If empty, applies to all days.
-	Days []string `koanf:"days,omitempty"`
+	Days []string `koanf:"days,omitempty" json:"days,omitempty"`
 	// Start is the start time in "HH:MM" 24-hour format (local time).
-	Start string `koanf:"start"`
+	Start string `koanf:"start" json:"start"`
 	// End is the end time in "HH:MM" 24-hour format (local time).
 	// If End < Start, the window crosses midnight.
-	End string `koanf:"end"`
+	End string `koanf:"end" json:"end"`
 }
 
 // OffHoursStatus represents the current blocking status.
 type OffHoursStatus struct {
-	Blocked   bool
-	UnblockAt *time.Time
-	Message   string
+	Blocked   bool       `json:"blocked"`
+	UnblockAt *time.Time `json:"unblock_at,omitempty"`
+	Message   string     `json:"message,omitempty"`
 }
 
 var dayNameToWeekday = map[string]time.Weekday{
