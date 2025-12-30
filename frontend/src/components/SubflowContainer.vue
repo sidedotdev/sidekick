@@ -1,7 +1,7 @@
 <template>
   <div class="subflow-container" :class="{ 'odd': level % 2 === 1, 'container-expanded': accordionState.expanded }" ref="container">
     <div class="subflow-name-container" @click="toggleAccordion" ref="heading">
-      <h2 class="subflow-name">
+      <h2 class="subflow-name" :class="{'name-expanded': accordionState.expanded}">
           <span class="caret" :class="{ 'caret-expanded': accordionState.expanded }"></span>
           {{ subflowTree.name }}
           <span v-if="subflowStatus === 'failed'" class="error-indicator">❌</span>
@@ -62,11 +62,7 @@ const subflowResult = computed(() => {
 });
 
 let wasToggled = false;
-// FIXME autoExpandThreshold is set to 4 based on flow actions being doubled
-// inadvertently (we're not updating correctly on started -> complete), we
-// really just want 2 once we fix that bug. the doubling doesn't show up due to
-// the childKey function used as :key in the template's v-for
-const autoExpandThreshold = 4;
+const autoExpandThreshold = 2;
 const accordionState = ref({ expanded: props.defaultExpanded || props.subflowTree.children.length <= autoExpandThreshold });
 watch(() => props.defaultExpanded, (newVal: boolean) => {
   if (!wasToggled) {
@@ -134,7 +130,13 @@ function childKey(child: FlowAction | SubflowTree, index: number): string {
   display: flex;
   align-items: center;
   justify-content: stretch;
-  height: var(--name-height);
+  /*
+    NOTE: min-height instead of height makes the nested sticky headers slightly
+    off when text wraps, but makes this case render more pleasingly.
+    Fixing the sticky header positions to account for dynamic height requires
+    using IntersectionObserver, which we might do later.
+  */
+  min-height: var(--name-height);
   padding-left: 0.7rem;
   margin: 0px -1rem;
   background-color: inherit;
@@ -142,10 +144,19 @@ function childKey(child: FlowAction | SubflowTree, index: number): string {
   position: sticky;
   cursor: pointer;
 }
+
 .subflow-name {
   flex-grow: 1;
   display: block;
   font-size: 1.3rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subflow-name.name-expanded  {
+  overflow: visible;
+  white-space: wrap;
 }
 
 .subflow-name + p {

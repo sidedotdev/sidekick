@@ -65,6 +65,7 @@ type ToolUseBlock struct {
 	Id        string `json:"id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"` // JSON string
+	Signature []byte `json:"signature"`
 }
 
 // Tool result content provided back to the assistant, modeled within a user-role message.

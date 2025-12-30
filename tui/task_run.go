@@ -9,8 +9,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -36,9 +36,9 @@ func checkServerStatus() bool {
 		return false
 	}
 	defer resp.Body.Close()
-	buf := make([]byte, 1024)
+	buf := make([]byte, 1024*1024)
 	n, _ := resp.Body.Read(buf)
-	return strings.Contains(string(buf[:n]), "sidekick")
+	return regexp.MustCompile("(?i)sidekick").Match(buf[:n])
 }
 
 // waitForServer waits for the server to become responsive.

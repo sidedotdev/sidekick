@@ -58,7 +58,7 @@ func TestGitWriteTreeActivity(t *testing.T) {
 			require.NoError(t, err)
 			envContainer := env.EnvContainer{Env: devEnv}
 
-			result, err := GitWriteTreeActivity(ctx, envContainer)
+			result, err := WriteTreeActivity(ctx, envContainer)
 
 			if tt.expectError {
 				require.Error(t, err)
@@ -88,10 +88,10 @@ func TestGitWriteTreeActivity_ConsistentHash(t *testing.T) {
 	envContainer := env.EnvContainer{Env: devEnv}
 
 	// Call twice with same index state
-	hash1, err := GitWriteTreeActivity(ctx, envContainer)
+	hash1, err := WriteTreeActivity(ctx, envContainer)
 	require.NoError(t, err)
 
-	hash2, err := GitWriteTreeActivity(ctx, envContainer)
+	hash2, err := WriteTreeActivity(ctx, envContainer)
 	require.NoError(t, err)
 
 	require.Equal(t, hash1, hash2, "Same index state should produce same tree hash")
@@ -110,7 +110,7 @@ func TestGitWriteTreeActivity_DifferentHashAfterChange(t *testing.T) {
 	require.NoError(t, err)
 	envContainer := env.EnvContainer{Env: devEnv}
 
-	hash1, err := GitWriteTreeActivity(ctx, envContainer)
+	hash1, err := WriteTreeActivity(ctx, envContainer)
 	require.NoError(t, err)
 
 	// Stage a new file
@@ -118,7 +118,7 @@ func TestGitWriteTreeActivity_DifferentHashAfterChange(t *testing.T) {
 	require.NoError(t, err)
 	runGitCommandInTestRepo(t, repoDir, "add", "file2.txt")
 
-	hash2, err := GitWriteTreeActivity(ctx, envContainer)
+	hash2, err := WriteTreeActivity(ctx, envContainer)
 	require.NoError(t, err)
 
 	require.NotEqual(t, hash1, hash2, "Different index state should produce different tree hash")

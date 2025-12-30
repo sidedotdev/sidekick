@@ -15,7 +15,7 @@ type Streamer struct {
 }
 
 const (
-	EphemeralStreamName = "SIDEKICK_EPHEMERAL"
+	EphemeralStreamName = "SIDEKICK_EPHEMERAL_V2"
 )
 
 func NewStreamer(nc *nats.Conn) (*Streamer, error) {
@@ -31,6 +31,12 @@ func (s *Streamer) Initialize(nc *nats.Conn) error {
 	js, err := jetstream.New(nc)
 	if err != nil {
 		return fmt.Errorf("failed to get JetStream context: %w", err)
+	}
+
+	// remove old stream we no longer use
+	err = js.DeleteStream(context.Background(), "SIDEKICK_PERSISTENT")
+	if err != nil && err != jetstream.ErrStreamNotFound {
+		return fmt.Errorf("failed to delete old stream: %w", err)
 	}
 
 	// Ensure the ephemeral stream exists (this is idempotent)

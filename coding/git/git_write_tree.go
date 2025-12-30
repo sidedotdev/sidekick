@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-func GitWriteTreeActivity(ctx context.Context, envContainer env.EnvContainer) (string, error) {
+func WriteTreeActivity(ctx context.Context, envContainer env.EnvContainer) (string, error) {
 	output, err := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",

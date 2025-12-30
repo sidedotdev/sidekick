@@ -40,8 +40,10 @@ func extractAllCodeBlocks(chatHistory []llm.ChatMessage) []tree_sitter.CodeBlock
 		if chatMessage.Role != llm.ChatMessageRoleAssistant {
 			symDefCodeBlocks := tree_sitter.ExtractSymbolDefinitionBlocks(chatMessage.Content)
 			searchCodeBlocks := tree_sitter.ExtractSearchCodeBlocks(chatMessage.Content)
+			gitDiffCodeBlocks := tree_sitter.ExtractGitDiffCodeBlocks(chatMessage.Content)
 			codeBlocks = append(codeBlocks, symDefCodeBlocks...)
 			codeBlocks = append(codeBlocks, searchCodeBlocks...)
+			codeBlocks = append(codeBlocks, gitDiffCodeBlocks...)
 		}
 	}
 	return codeBlocks

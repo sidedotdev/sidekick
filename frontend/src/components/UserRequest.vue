@@ -47,34 +47,27 @@
     </div>
 
     <div v-else-if="flowAction.actionParams.requestKind === 'merge_approval'">
+      <div  class="diff-options-row">
+        <label for="diffScope">Show</label>
+        <Select
+          id="diffScope"
+          v-model="diffScope"
+          :options="diffScopeOptions"
+          optionLabel="label"
+          optionValue="value"
+        ></Select>
+        <DiffViewOptions
+          v-model:ignoreWhitespace="ignoreWhitespace"
+          v-model:diffMode="diffMode"
+          :disabled="!isPending"
+        />
+      </div>
       <div style="display: flex; align-items: center; gap: 1rem; margin-top: 0.5rem;">
         <label for="targetBranch">Merge into</label>
         <BranchSelector
           id="targetBranch"
           v-model="targetBranch"
           :workspaceId="flowAction.workspaceId"
-        />
-      </div>
-      <div v-if="hasDiffSinceLastReview" class="diff-options-row">
-        <label for="diffScope">Show</label>
-        <Dropdown
-          id="diffScope"
-          v-model="diffScope"
-          :options="diffScopeOptions"
-          optionLabel="label"
-          optionValue="value"
-        />
-        <DiffViewOptions
-          v-model:ignoreWhitespace="ignoreWhitespace"
-          v-model:diffMode="diffMode"
-          :disabled="!isPending"
-        />
-      </div>
-      <div v-else class="diff-options-row">
-        <DiffViewOptions
-          v-model:ignoreWhitespace="ignoreWhitespace"
-          v-model:diffMode="diffMode"
-          :disabled="!isPending"
         />
       </div>
 
@@ -161,7 +154,7 @@ import VueMarkdown from 'vue-markdown-render'
 import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
 import CopyIcon from './icons/CopyIcon.vue';
 import DiffViewOptions from './DiffViewOptions.vue';
-import Dropdown from 'primevue/dropdown';
+import Select from 'primevue/select';
 
 interface UserResponse {
   content?: string;
@@ -197,10 +190,15 @@ const hasDiffSinceLastReview = computed(() => {
   return typeof diffSinceLastReview === 'string';
 });
 
-const diffScopeOptions = [
-  { label: 'All changes', value: 'all' },
-  { label: 'Changes since last review', value: 'since_last_review' },
-];
+const diffScopeOptions = computed(() => {
+  let options = [
+    { label: 'All changes', value: 'all' },
+  ]
+  if (hasDiffSinceLastReview.value) {
+    options.push({ label: 'Changes since last review', value: 'since_last_review' });
+  }
+  return options;
+})
 
 const currentDiffString = computed(() => {
   if (diffScope.value === 'since_last_review' && hasDiffSinceLastReview.value) {
@@ -506,6 +504,21 @@ label[for="targetBranch"] {
 .markdown :deep(h4) {
   font-size: 120%;
   margin: 2rem 0 1rem;
+}
+
+.markdown :deep(h3) {
+  font-size: 130%;
+  margin: 2rem 0 1rem;
+}
+
+.markdown :deep(h2) {
+  font-size: 140%;
+  margin: 2.25rem 0 1.125rem;
+}
+
+.markdown :deep(h1) {
+  font-size: 150%;
+  margin: 2.5rem 0 1.25rem;
 }
 
 .markdown :deep(pre) {

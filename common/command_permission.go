@@ -9,12 +9,12 @@ import (
 )
 
 // PermissionResult represents the result of evaluating command permissions
-type PermissionResult int
+type PermissionResult string
 
 const (
-	PermissionAutoApprove PermissionResult = iota
-	PermissionRequireApproval
-	PermissionDeny
+	PermissionAutoApprove     PermissionResult = "auto_approve"
+	PermissionRequireApproval PermissionResult = "require_approval"
+	PermissionDeny            PermissionResult = "deny"
 )
 
 // CommandPattern represents a pattern for matching commands
@@ -96,9 +96,11 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "go test"},
 			{Pattern: "go build"},
 			{Pattern: "go fmt"},
+			{Pattern: "go generate"},
 			{Pattern: "go vet"},
 			{Pattern: "go mod tidy"},
 			{Pattern: "go mod download"},
+			{Pattern: "go mod why"},
 			{Pattern: "go list"},
 			{Pattern: "go version"},
 			{Pattern: "go env"},
@@ -172,6 +174,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "gradle build"},
 			{Pattern: "gradle check"},
 			// Other common tools
+			{Pattern: "lima"},
 			{Pattern: "jq"},
 			{Pattern: "yq"},
 			{Pattern: "true"},

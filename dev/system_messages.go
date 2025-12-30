@@ -1,8 +1,8 @@
 package dev
 
 const (
-	SystemWarnNearToolCallLimit = "SYSTEM MESSAGE: Warning, nearing limit for too many tool calls without progress. Resolution: Either start to progress the task or use just 1 more tool call."
-	SystemHitToolCallLimit      = "SYSTEM MESSAGE: ⚠️‼️ Hit limit for too many additional tool calls without task progress. Resolution: Please progress the task now."
+	SystemWarnNearToolCallLimit = "SYSTEM MESSAGE: Warning, nearing limit for too many tool calls without progress. Resolution: Optionally call at most one more tool if you need to (skip it ideally), then start performing the task immediately."
+	SystemHitToolCallLimit      = "SYSTEM MESSAGE: ⚠️‼️ Hit limit for too many additional tool calls without task progress. Resolution: Please start performing the task NOW."
 )
 
 // ThresholdMessageForCounter determines whether a system message should be

@@ -88,6 +88,11 @@ func TestExtractCommands(t *testing.T) {
 			expected: []string{"exec python script.py", "python script.py"},
 		},
 		{
+			name:     "lima shell command",
+			script:   "lima python script.py",
+			expected: []string{"lima python script.py", "python script.py"},
+		},
+		{
 			name:     "xargs simple",
 			script:   "find . | xargs rm",
 			expected: []string{"find .", "xargs rm", "rm"},

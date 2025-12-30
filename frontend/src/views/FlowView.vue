@@ -67,8 +67,6 @@ import { useRoute } from 'vue-router'
 import { store } from '../lib/store'
 import { useIdeOpener, IDE_OPENER_KEY } from '@/composables/useIdeOpener'
 
-const dataDir = `${import.meta.env.VITE_HOME}/Library/Application Support/sidekick` // FIXME switch to API call to backend
-
 const subflowProcessingDebounceTimers = ref<Record<string, NodeJS.Timeout>>({})
 const workspace = ref<Workspace | null>(null)
 
@@ -77,7 +75,7 @@ const { showIdeSelector, openInIde, selectIde, cancelIdeSelection } = useIdeOpen
 const handleOpenInIde = (relativePath: string, lineNumber?: number | null) => {
   const baseDir = flow.value?.worktrees?.[0]?.workingDirectory || workspace.value?.localRepoDir
   if (!baseDir) {
-    console.warn('No base directory available for opening file in IDE')
+    alert('Error: No base directory available for opening file in IDE')
     return
   }
   const absolutePath = `${baseDir}/${relativePath}`

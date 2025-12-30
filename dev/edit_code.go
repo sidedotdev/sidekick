@@ -327,6 +327,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		// actually visible to the LLM at the time edit blocks were generated
 		visibleChatHistory := authorEditBlockInput.Params.Messages
 		if v := workflow.GetVersion(dCtx, "bugfix-edit-block-visibility-orig-history", workflow.DefaultVersion, 1); v == 0 {
+			// this maintains the buggy behavior on older workflows to still replay them
 			visibleChatHistory = append(*chatHistory, chatResponse.ChatMessage)
 		}
 		tildeOnly := workflow.GetVersion(dCtx, "tilde-edit-block-fence", workflow.DefaultVersion, 1) >= 1

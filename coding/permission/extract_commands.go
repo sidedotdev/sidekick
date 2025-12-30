@@ -135,7 +135,7 @@ func handleSpecialCommands(cmdText string, commands *[]string) {
 		handleShellCommand(parts, commands)
 	case "eval":
 		handleEvalCommand(parts, commands)
-	case "exec":
+	case "exec", "lima":
 		handleExecCommand(parts, commands)
 	case "xargs":
 		handleXargsCommand(parts, commands)

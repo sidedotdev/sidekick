@@ -6,6 +6,7 @@ import (
 	"sidekick/common"
 	"sidekick/env"
 	"sidekick/llm"
+	"sidekick/logger"
 
 	"github.com/invopop/jsonschema"
 	"go.temporal.io/sdk/workflow"
@@ -43,6 +44,9 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 	} else {
 		workflow.GetLogger(dCtx).Warn("Command permissions are not enabled")
 	}
+
+	l := logger.Get()
+	l.Debug().Str("cmd", command).Bool("auto-approved", proceed).Str("message", message).Msg("checkCommandPermission auto result")
 
 	// Request user approval (legacy behavior or when permission requires approval)
 	approvalPrompt := "Allow running the following command?"

@@ -20,7 +20,7 @@ function openFileInIde(absoluteFilePath: string, ide: IdeType, lineNumber?: numb
     if (baseDir) {
       window.open(`vscode://file/${baseDir}?windowId=_blank`, '_self')
       setTimeout(() => {
-        window.open(`vscode://file/${absoluteFilePath}${lineFragment}?windowId=_blank`, '_self')
+        window.open(`vscode://file/${absoluteFilePath}${lineFragment}`, '_self')
       }, 250)
     } else {
       window.open(`vscode://file/${absoluteFilePath}${lineFragment}?windowId=_blank`, '_self')

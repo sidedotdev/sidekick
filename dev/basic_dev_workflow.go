@@ -268,7 +268,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 				return "", fmt.Errorf("failed to get user feedback: %w", err)
 			}
 		}
-		if attemptCount >= maxAttempts {
+		if attemptCount >= maxAttempts && dCtx.DisableHumanInTheLoop {
 			return "", errors.New("failed to author code passing tests and fulfilling requirements, max attempts reached")
 		}
 
@@ -433,7 +433,7 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 	diffSinceLastReviewVersion := workflow.GetVersion(dCtx, "diff-since-last-review", workflow.DefaultVersion, 1)
 	if diffSinceLastReviewVersion >= 1 {
 		// Capture current tree hash before getting approval
-		err = workflow.ExecuteActivity(dCtx, git.GitWriteTreeActivity, *dCtx.EnvContainer).Get(dCtx, &currentTreeHash)
+		err = workflow.ExecuteActivity(dCtx, git.WriteTreeActivity, *dCtx.EnvContainer).Get(dCtx, &currentTreeHash)
 		if err != nil {
 			return MergeApprovalResponse{}, "", "", fmt.Errorf("failed to get current tree hash: %w", err)
 		}
