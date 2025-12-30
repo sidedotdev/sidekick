@@ -280,8 +280,11 @@ func RunTaskUI(ctx context.Context, c client.Client, req *client.CreateTaskReque
 					p.Send(taskErrorMsg{err: taskStatus.Error})
 				}
 				if taskStatus.Finished {
+					// Clear blocked state so the final message is visible
+					p.Send(offHoursBlockedMsg{status: OffHoursStatus{Blocked: false}})
+					p.Send(taskFinishedMsg{})
 					finalMessage := finishMessage(taskStatus.Task, kanbanLink(workspace.Id))
-					p.Send(updateLifecycleMsg{key: "init", content: finalMessage})
+					p.Send(updateLifecycleMsg{key: "finish", content: finalMessage})
 					p.Quit()
 					return
 				}

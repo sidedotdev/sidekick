@@ -191,6 +191,30 @@ func TestLifecycleModel(t *testing.T) {
 				"canceled",
 			},
 		},
+		{
+			name: "finish messages appear after progress view based on timestamp",
+			messages: []tea.Msg{
+				updateLifecycleMsg{
+					key:     "init",
+					content: "Task started",
+					spin:    false,
+				},
+				taskChangeMsg{task: newTestTaskWithFlows()},
+				taskFinishedMsg{},
+				updateLifecycleMsg{
+					key:     "finish",
+					content: "Task completed!",
+				},
+			},
+			wantProgress: true,
+			wantQuitting: true,
+			wantContains: []string{
+				"Task completed!",
+			},
+			wantNotExists: []string{
+				"Working...",
+			},
+		},
 	}
 
 	for _, tt := range tests {

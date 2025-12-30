@@ -17,6 +17,9 @@ type taskErrorMsg struct {
 	err error
 }
 
+// taskFinishedMsg signals that the task has completed (success, failure, or canceled).
+type taskFinishedMsg struct{}
+
 // offHoursBlockedMsg is sent when off-hours blocking status changes.
 type offHoursBlockedMsg struct {
 	status OffHoursStatus

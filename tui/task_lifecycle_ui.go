@@ -44,12 +44,13 @@ type taskLifecycleModel struct {
 
 	messages map[string]lifecycleMessage
 
-	error          error
-	taskId         string
-	flowId         string
-	progModel      tea.Model
-	client         client.Client
-	ctrlCPressedAt time.Time
+	error           error
+	taskId          string
+	flowId          string
+	progModel       tea.Model
+	progModelInitAt time.Time
+	client          client.Client
+	ctrlCPressedAt  time.Time
 
 	// off-hours blocking state
 	blocked        bool
@@ -137,10 +138,14 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.progModel == nil && len(msg.task.Flows) > 0 {
 			m.flowId = msg.task.Flows[0].Id
 			m.progModel = newProgressModel(m.taskId, m.flowId, m.client)
+			m.progModelInitAt = time.Now()
 			cmd := m.progModel.Init()
 			return m, cmd
 		}
 		return m, nil
+
+	case taskFinishedMsg:
+		return m.propagateMessage(msg)
 
 	case flowActionChangeMsg:
 		if m.progModel == nil {
@@ -209,21 +214,27 @@ func (m taskLifecycleModel) View() string {
 		return b.String()
 	}
 
-	// Convert map to slice for sorting
-	var messages []lifecycleMessage
+	// Separate messages into before/after progress model based on timestamp
+	var beforeProgMessages []lifecycleMessage
+	var afterProgMessages []lifecycleMessage
 	for _, msg := range m.messages {
-		messages = append(messages, msg)
+		if !m.progModelInitAt.IsZero() && msg.timestamp.After(m.progModelInitAt) {
+			afterProgMessages = append(afterProgMessages, msg)
+		} else {
+			beforeProgMessages = append(beforeProgMessages, msg)
+		}
 	}
 
 	// Sort by timestamp
-	// FIXME track when progModel was initialized, and show its View between
-	// these lifecycle messages based on that timestamp
-	sort.Slice(messages, func(i, j int) bool {
-		return messages[i].timestamp.Before(messages[j].timestamp)
+	sort.Slice(beforeProgMessages, func(i, j int) bool {
+		return beforeProgMessages[i].timestamp.Before(beforeProgMessages[j].timestamp)
+	})
+	sort.Slice(afterProgMessages, func(i, j int) bool {
+		return afterProgMessages[i].timestamp.Before(afterProgMessages[j].timestamp)
 	})
 
-	// Display messages
-	for _, msg := range messages {
+	// Display messages before progress model
+	for _, msg := range beforeProgMessages {
 		if msg.spin {
 			b.WriteString(fmt.Sprintf("%s %s", m.spinner.View(), msg.content))
 		} else {
@@ -241,6 +252,12 @@ func (m taskLifecycleModel) View() string {
 		b.WriteString(progView)
 	} else if !m.ctrlCPressedAt.IsZero() && time.Since(m.ctrlCPressedAt) < 2*time.Second {
 		b.WriteString("\nPress Ctrl+C again to exit.")
+	}
+
+	// Display messages after progress model
+	for _, msg := range afterProgMessages {
+		b.WriteString("\n")
+		b.WriteString(msg.content)
 	}
 
 	return b.String()

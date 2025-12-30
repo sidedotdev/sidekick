@@ -107,6 +107,10 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.failedSubflows = append(m.failedSubflows, msg.subflow)
 		return m, nil
 
+	case taskFinishedMsg:
+		m.quitting = true
+		return m, nil
+
 	case flowActionChangeMsg:
 		action := msg.action
 
