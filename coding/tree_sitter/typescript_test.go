@@ -100,7 +100,7 @@ func TestGetFileSignaturesStringTypescript(t *testing.T) {
 		{
 			name: "ambient declaration function",
 			code: `declare function externalFunc(x: number): string;`,
-			expected: `function externalFunc(x: number): string
+			expected: `declare function externalFunc(x: number): string
 ---
 `,
 		},
