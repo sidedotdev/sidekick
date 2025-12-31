@@ -13,7 +13,7 @@ import (
 
 func TestGetFlowActions(t *testing.T) {
 	ctx := context.Background()
-	db := NewTestRedisStorage()
+	db := newTestRedisStorage()
 	flowAction1 := domain.FlowAction{
 		WorkspaceId: "TEST_WORKSPACE_ID",
 		FlowId:      "test-flow-id",
@@ -80,7 +80,7 @@ func TestPersistFlowAction(t *testing.T) {
 
 func TestPersistFlowAction_MissingId(t *testing.T) {
 	ctx := context.Background()
-	db := NewTestRedisStorage()
+	db := newTestRedisStorage()
 	flowAction := domain.FlowAction{
 		WorkspaceId: "TEST_WORKSPACE_ID",
 		FlowId:      "flow_" + ksuid.New().String(),
@@ -92,7 +92,7 @@ func TestPersistFlowAction_MissingId(t *testing.T) {
 
 func TestPersistFlowAction_MissingFlowId(t *testing.T) {
 	ctx := context.Background()
-	db := NewTestRedisStorage()
+	db := newTestRedisStorage()
 	flowAction := domain.FlowAction{
 		Id:          "id_" + ksuid.New().String(),
 		WorkspaceId: "TEST_WORKSPACE_ID",
@@ -104,7 +104,7 @@ func TestPersistFlowAction_MissingFlowId(t *testing.T) {
 
 func TestPersistFlowAction_MissingWorkspaceId(t *testing.T) {
 	ctx := context.Background()
-	db := NewTestRedisStorage()
+	db := newTestRedisStorage()
 	flowAction := domain.FlowAction{
 		Id:     "id_" + ksuid.New().String(),
 		FlowId: "flow_" + ksuid.New().String(),

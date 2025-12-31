@@ -1,4 +1,4 @@
-package main
+package tui
 
 import (
 	"context"
@@ -68,6 +68,7 @@ func setupGitWorktree(t *testing.T, mainDir string) string {
 }
 
 func TestEnsureWorkspace(t *testing.T) {
+	t.Parallel()
 	repoDir, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	setupGitRepo(t, repoDir)

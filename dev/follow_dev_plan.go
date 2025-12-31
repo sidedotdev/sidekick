@@ -8,6 +8,7 @@ import (
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/fflag"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"strings"
 
@@ -251,7 +252,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 
 		// Step 2: execute step
 		err = performStep(dCtx, modelConfig, contextSizeExtension, chatHistory, promptInfo, step, planExecution)
-		if err != nil && !errors.Is(err, PendingActionError) {
+		if err != nil && !errors.Is(err, flow_action.PendingActionError) {
 			log.Warn().Err(err).Msg("Error executing step")
 			// TODO: on repeated overloaded_error from anthropic, we want to
 			// fallback to another provider higher up. similar for other provider
@@ -268,9 +269,9 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		// Step 3: evaluate completion of step
 		executeNormalStepEvaluation := true
 		if v := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1); v == 1 {
-			action := dCtx.GlobalState.GetPendingUserAction()
-			if action != nil && *action == UserActionGoNext {
-				dCtx.GlobalState.ConsumePendingUserAction()
+			action := dCtx.ExecContext.GlobalState.GetPendingUserAction()
+			if action != nil && *action == flow_action.UserActionGoNext {
+				dCtx.ExecContext.GlobalState.ConsumePendingUserAction()
 				executeNormalStepEvaluation = false
 			}
 		}
@@ -290,7 +291,10 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		if result.Successful {
 			break
 		} else {
-			promptInfo = FeedbackInfo{Feedback: fmt.Sprintf("The step did not seem to have not been completed per its criteria. Here is the feedback: %s", result.Summary)}
+			promptInfo = FeedbackInfo{
+				Feedback: fmt.Sprintf("The step did not seem to have not been completed per its criteria. Here is the feedback: %s", result.Summary),
+				Type:     FeedbackTypeAutoReview,
+			}
 			attemptCount++
 			modelAttemptCount++
 			continue
@@ -338,12 +342,16 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 		if err != nil {
 			return result, fmt.Errorf("failed to run tests: %v", err)
 		}
+		autoChecks := ""
+		if !testResult.TestsSkipped {
+			autoChecks = testResult.Output
+		}
 		fulfillment, err := CheckWorkMeetsCriteria(dCtx, CheckWorkInfo{
 			CodeContext:   "", // TODO providing the code context will help with checking for criteria fulfillment
 			Requirements:  overallRequirements,
 			Step:          step,
 			PlanExecution: planExecution,
-			AutoChecks:    testResult.Output,
+			AutoChecks:    autoChecks,
 		})
 		if err != nil {
 			return result, fmt.Errorf("error checking if criteria are fulfilled: %w", err)
@@ -356,7 +364,11 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 		if result.Successful {
 			result.Summary = result.Summary + "\n" + fulfillment.WorkDescription
 		} else {
-			result.Summary = result.Summary + "\n" + testResult.Output + "\n" + fulfillment.FeedbackMessage
+			if testResult.TestsSkipped {
+				result.Summary = result.Summary + "\n" + fulfillment.FeedbackMessage
+			} else {
+				result.Summary = result.Summary + "\n" + testResult.Output + "\n" + fulfillment.FeedbackMessage
+			}
 		}
 		// TODO add a result.Details field to store the diff and other details (maybe test results when successful)
 	default:

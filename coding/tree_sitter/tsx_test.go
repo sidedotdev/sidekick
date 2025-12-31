@@ -417,7 +417,9 @@ func TestGetFileHeadersStringTsx(t *testing.T) {
 		})
 	}
 }
+
 func TestNormalizeSymbolFromSnippet_TSX(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		snippet  string
@@ -438,6 +440,7 @@ func TestNormalizeSymbolFromSnippet_TSX(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := NormalizeSymbolFromSnippet("tsx", tc.snippet)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)

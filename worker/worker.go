@@ -6,6 +6,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/contrib/opentelemetry"
+	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
 	zerologadapter "logur.dev/adapter/zerolog"
 	"logur.dev/logur"
@@ -16,7 +18,9 @@ import (
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
+	sidekicklogger "sidekick/logger"
 	"sidekick/srv"
+	"sidekick/telemetry"
 	"sidekick/workspace"
 
 	"sidekick/dev"
@@ -27,18 +31,44 @@ import (
 	"sidekick/poll_failures"
 )
 
+// Worker wraps a Temporal worker with telemetry shutdown
+type Worker struct {
+	worker.Worker
+	shutdownTracer func(context.Context) error
+}
+
+// Stop stops the worker and shuts down the tracer
+func (w *Worker) Stop() {
+	w.Worker.Stop()
+	if w.shutdownTracer != nil {
+		if err := w.shutdownTracer(context.Background()); err != nil {
+			log.Error().Err(err).Msg("Failed to shutdown telemetry tracer")
+		}
+	}
+}
+
 // StartWorker initializes and starts a new worker
-func StartWorker(hostPort string, taskQueue string) worker.Worker {
+func StartWorker(hostPort string, taskQueue string) *Worker {
+	shutdownTracer, err := telemetry.InitTracer("sidekick-worker")
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize telemetry tracer")
+	}
+
 	featureFlag, err := fflag.NewFFlag("flags.yml")
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create go-feature-flag instance")
 	}
 	ffa := fflag.FFlagActivities{FFlag: featureFlag}
 
-	logger := logur.LoggerToKV(zerologadapter.New(log.Logger))
+	logger := logur.LoggerToKV(zerologadapter.New(sidekicklogger.Get()))
+	tracingInterceptor, err := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create tracing interceptor")
+	}
 	clientOptions := client.Options{
-		Logger:   logger,
-		HostPort: hostPort,
+		Logger:       logger,
+		HostPort:     hostPort,
+		Interceptors: []interceptor.ClientInterceptor{tracingInterceptor},
 	}
 	var temporalClient client.Client
 	for i := 0; i < 5; i++ {
@@ -134,6 +164,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	w.RegisterActivity(git.GetCurrentBranch)
 	w.RegisterActivity(git.GetDefaultBranch)
 	w.RegisterActivity(git.ListLocalBranches)
+	w.RegisterActivity(git.WriteTreeActivity)
 	w.RegisterActivity(embedActivities)
 	w.RegisterActivity(vectorActivities)
 	w.RegisterActivity(flowActivities)
@@ -149,6 +180,7 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 	w.RegisterActivity(dev.ManageChatHistoryV2Activity)
 	w.RegisterActivity(ffa.EvalBoolFlag)
 	w.RegisterActivity(common.GetLocalConfig)
+	w.RegisterActivity(common.BaseCommandPermissionsActivity)
 
 	w.RegisterActivity(&workspace.Activities{Storage: service})
 
@@ -157,7 +189,10 @@ func StartWorker(hostPort string, taskQueue string) worker.Worker {
 		log.Fatal().Err(err)
 	}
 
-	return w
+	return &Worker{
+		Worker:         w,
+		shutdownTracer: shutdownTracer,
+	}
 }
 
 func RegisterWorkflows(w worker.WorkflowRegistry) {

@@ -21,9 +21,8 @@ import (
 
 type DevContext struct {
 	flow_action.ExecContext
-	GlobalState *GlobalState
-	Worktree    *domain.Worktree
-	RepoConfig  common.RepoConfig
+	Worktree   *domain.Worktree
+	RepoConfig common.RepoConfig
 }
 
 // WithContext returns a new DevContext with the workflow.Context updated.
@@ -64,6 +63,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	var envContainer env.EnvContainer
 	var worktree *domain.Worktree
 	var localConfig common.LocalPublicConfig
+	var workspaceConfig domain.WorkspaceConfig
 	var llmConfig common.LLMConfig
 	var embeddingConfig common.EmbeddingConfig
 
@@ -71,7 +71,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 	// for workflow backcompat/replay, we can't do this early unless enabled
 	if enableBranchNameGeneration {
-		localConfig, _, llmConfig, embeddingConfig, err = getConfigs(ctx, workspaceId)
+		localConfig, workspaceConfig, llmConfig, embeddingConfig, err = getConfigs(ctx, workspaceId)
 		if err != nil {
 			return DevContext{}, err
 		}
@@ -105,11 +105,13 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
 				secret_manager.KeyringSecretManager{},
 				secret_manager.LocalConfigSecretManager{},
+				secret_manager.EnvSecretManager{},
 			}),
 		},
 		Providers:       tempProviders, // TODO merge with workspace providers
 		LLMConfig:       llmConfig,
 		EmbeddingConfig: embeddingConfig,
+		GlobalState:     &flow_action.GlobalState{},
 	}
 
 	switch envType {
@@ -133,6 +135,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				return DevContext{}, fmt.Errorf("failed to get coding config: %v", err)
 			}
 			configOverrides.ApplyToRepoConfig(&tempLocalRepoConfig)
+			tempLocalExecContext.DisableHumanInTheLoop = tempLocalRepoConfig.DisableHumanInTheLoop
 			editHints := tempLocalRepoConfig.EditCode.Hints
 
 			// Use LLM-based branch name generation
@@ -172,7 +175,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 	// for workflow backcompat/replay, we have to do this later
 	if !enableBranchNameGeneration {
-		localConfig, _, llmConfig, embeddingConfig, err = getConfigs(ctx, workspaceId)
+		localConfig, workspaceConfig, llmConfig, embeddingConfig, err = getConfigs(ctx, workspaceId)
 		if err != nil {
 			return DevContext{}, err
 		}
@@ -199,11 +202,13 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
 				secret_manager.KeyringSecretManager{},
 				secret_manager.LocalConfigSecretManager{},
+				secret_manager.EnvSecretManager{},
 			}),
 		},
 		Providers:       finalProviders, // TODO merge with workspace providers
 		LLMConfig:       llmConfig,
 		EmbeddingConfig: embeddingConfig,
+		GlobalState:     &flow_action.GlobalState{},
 	}
 
 	// NOTE: it's important to do this *after* the eCtx has been created, since
@@ -212,15 +217,33 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	if err != nil {
 		var hint string
 		if worktree != nil {
-			hint = "Please commit your side.toml and .sideignore files (generated via `side init`), and make sure they are available from the base branch of the worktree."
+			hint = "Please commit your repo config (side.yml or side.yaml) and .sideignore files (generated via `side init`), and make sure they are available from the base branch of the worktree."
 		} else {
-			hint = "Please commit your side.toml and .sideignore files (generated via `side init`)"
+			hint = "Please commit your repo config (side.yml or side.yaml) and .sideignore files (generated via `side init`)"
 		}
 
 		return DevContext{}, fmt.Errorf("failed to get repo config: %v\n\n%s", err, hint)
 	}
 
 	configOverrides.ApplyToRepoConfig(&repoConfig)
+	eCtx.DisableHumanInTheLoop = repoConfig.DisableHumanInTheLoop
+
+	// Merge command permissions from all config sources: base → local → repo → workspace
+	var baseCommandPermissions common.CommandPermissionConfig
+	if v := workflow.GetVersion(ctx, "base-command-permissions-activity", workflow.DefaultVersion, 1); v >= 1 {
+		err = workflow.ExecuteActivity(ctx, common.BaseCommandPermissionsActivity).Get(ctx, &baseCommandPermissions)
+		if err != nil {
+			return DevContext{}, fmt.Errorf("failed to get base command permissions: %v", err)
+		}
+	} else {
+		baseCommandPermissions = common.BaseCommandPermissions()
+	}
+	repoConfig.CommandPermissions = common.MergeCommandPermissions(
+		baseCommandPermissions,
+		localConfig.CommandPermissions,
+		repoConfig.CommandPermissions,
+		workspaceConfig.CommandPermissions,
+	)
 
 	// Execute worktree setup script if configured and using git worktree environment
 	if envType == string(env.EnvTypeLocalGitWorktree) && repoConfig.WorktreeSetup != "" {
@@ -243,7 +266,6 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	}
 
 	devCtx := DevContext{
-		GlobalState: &GlobalState{},
 		ExecContext: eCtx,
 		Worktree:    worktree,
 		RepoConfig:  repoConfig,

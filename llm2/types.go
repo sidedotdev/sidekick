@@ -12,8 +12,10 @@ const (
 
 // Usage is surfaced on final responses (not deltas).
 type Usage struct {
-	InputTokens  int `json:"inputTokens"`
-	OutputTokens int `json:"outputTokens"`
+	InputTokens           int `json:"inputTokens"`
+	OutputTokens          int `json:"outputTokens"`
+	CacheReadInputTokens  int `json:"cacheReadInputTokens"`
+	CacheWriteInputTokens int `json:"cacheWriteInputTokens"`
 }
 
 // ContentBlockType enumerates standardized content block kinds.
@@ -63,6 +65,7 @@ type ToolUseBlock struct {
 	Id        string `json:"id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"` // JSON string
+	Signature []byte `json:"signature"`
 }
 
 // Tool result content provided back to the assistant, modeled within a user-role message.

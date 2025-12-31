@@ -1,13 +1,14 @@
 package common
 
 const (
-	DefaultKey          = "default"
-	PlanningKey         = "planning"
-	CodingKey           = "coding"
-	CodeLocalizationKey = "code_localization"
-	JudgingKey          = "judging"
-	SummarizationKey    = "summarization"
-	QueryExpansionKey   = "query_expansion"
+	DefaultKey               = "default"
+	PlanningKey              = "planning"
+	CodingKey                = "coding"
+	CodingAndVerificationKey = "coding_and_verification"
+	CodeLocalizationKey      = "code_localization"
+	JudgingKey               = "judging"
+	SummarizationKey         = "summarization"
+	QueryExpansionKey        = "query_expansion"
 )
 
 type LLMConfig struct {

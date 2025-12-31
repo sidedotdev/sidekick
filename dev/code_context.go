@@ -365,7 +365,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 
 		// Check if the operation was paused
 		if actionCtx.DevContext.GlobalState != nil && actionCtx.DevContext.GlobalState.Paused {
-			return nil, "", fmt.Errorf("operation paused by user")
+			continue // UserRequestIfPaused will handle the pause
 		}
 	}
 

@@ -71,7 +71,8 @@ func ForceToolCallWithTrackOptions(actionCtx flow_action.ActionContext, trackOpt
 	chatResponse, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (llm.ChatMessageResponse, error) {
 		options.FlowActionId = flowAction.Id
 		var chatResponse llm.ChatMessageResponse
-		err := workflow.ExecuteActivity(utils.LlmHeartbeatCtx(actionCtx), la.ChatStream, options).Get(actionCtx, &chatResponse)
+		actionCtx.Context = utils.LlmHeartbeatCtx(actionCtx)
+		err := flow_action.PerformWithUserRetry(actionCtx, la.ChatStream, &chatResponse, options)
 		if err == nil {
 			(*params).Messages = append(params.Messages, chatResponse.ChatMessage)
 		}
@@ -96,7 +97,8 @@ func ForceToolCallWithTrackOptions(actionCtx flow_action.ActionContext, trackOpt
 		chatResponse, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (llm.ChatMessageResponse, error) {
 			var chatResponse llm.ChatMessageResponse
 			options.FlowActionId = flowAction.Id
-			err := workflow.ExecuteActivity(utils.LlmHeartbeatCtx(actionCtx), la.ChatStream, options).Get(actionCtx, &chatResponse)
+			actionCtx.Context = utils.LlmHeartbeatCtx(actionCtx.Context)
+			err := flow_action.PerformWithUserRetry(actionCtx, la.ChatStream, &chatResponse, options)
 			if err == nil {
 				(*params).Messages = append(params.Messages, chatResponse.ChatMessage)
 

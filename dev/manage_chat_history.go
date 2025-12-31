@@ -42,6 +42,20 @@ const (
 	ContextTypeSummary             string = "Summary"
 )
 
+// Retention reason constants for cache control optimization
+const (
+	RetainReasonLastMessage              = "LastMessage"
+	RetainReasonInitialInstructions      = "InitialInstructions"
+	RetainReasonUserFeedback             = "UserFeedback"
+	RetainReasonLatestTestResult         = "LatestTestResult"
+	RetainReasonLatestSelfReviewFeedback = "LatestSelfReviewFeedback"
+	RetainReasonLatestSummary            = "LatestSummary"
+	RetainReasonLatestEditBlockReport    = "LatestEditBlockReport"
+	RetainReasonEditBlockProposal        = "EditBlockProposal"
+	RetainReasonForwardSegment           = "ForwardSegment"
+	RetainReasonUnderLimit               = "UnderLimit"
+)
+
 //const defaultMaxChatHistoryLength = 12000
 
 //const defaultMaxChatHistoryLength = 20000 // Adjusted temporarily for gpt4-turbo
@@ -249,39 +263,82 @@ func ManageChatHistoryActivity(chatHistory []llm.ChatMessage, maxLength int) ([]
  * response, to avoid these openai errors:
  *
  * 		Invalid parameter: messages with role 'tool' must be a response to a preceeding message with 'tool_calls'
- *
- * This should also handle parallel tools (repeated tool responses). TODO: test whether that's the case.
  */
-// TODO: /gen write a set of tests for cleanToolCallsAndResponses
 func cleanToolCallsAndResponses(chatHistory *[]llm.ChatMessage) {
-	// Remove tool calls followed by anything other than a tool response
-	newMessages := make([]llm.ChatMessage, 0)
-	for i, message := range *chatHistory {
-		if len(message.ToolCalls) > 0 {
-			if i+1 < len(*chatHistory) && (*chatHistory)[i+1].Role != llm.ChatMessageRoleTool {
-				continue
-			}
-		}
-		newMessages = append(newMessages, message)
-	}
-	*chatHistory = newMessages
+	cleanToolCallsAndResponsesWithReasons(chatHistory, nil)
+}
 
-	// Remove tool responses not preceded by a tool call with matching tool call id
-	seenToolCalls := make(map[string]bool)
-	newMessages = make([]llm.ChatMessage, 0)
-	for _, message := range *chatHistory {
-		if message.Role == llm.ChatMessageRoleTool {
-			if _, ok := seenToolCalls[message.ToolCallId]; !ok {
-				continue
+// cleanToolCallsAndResponsesWithReasons removes orphaned tool calls and their partial responses,
+// and updates retainReasons in lockstep if provided.
+func cleanToolCallsAndResponsesWithReasons(chatHistory *[]llm.ChatMessage, retainReasons *[]map[string]bool) {
+	// First pass: identify which tool call messages have ALL their responses
+	// For parallel tool calls, we need all N responses for N tool calls
+	toolCallsToKeep := make(map[int]bool)
+	for i, message := range *chatHistory {
+		if len(message.ToolCalls) == 0 {
+			continue
+		}
+
+		// Count how many tool responses follow this message
+		toolCallIds := make(map[string]bool)
+		for _, tc := range message.ToolCalls {
+			toolCallIds[tc.Id] = true
+		}
+
+		// Look at subsequent messages for tool responses
+		responseCount := 0
+		for j := i + 1; j < len(*chatHistory); j++ {
+			resp := (*chatHistory)[j]
+			if resp.Role != llm.ChatMessageRoleTool {
+				break
 			}
-		} else if len(message.ToolCalls) > 0 {
-			for _, toolCall := range message.ToolCalls {
-				seenToolCalls[toolCall.Id] = true
+			if toolCallIds[resp.ToolCallId] {
+				responseCount++
 			}
 		}
-		newMessages = append(newMessages, message)
+
+		// Only keep if ALL tool calls have responses
+		if responseCount == len(message.ToolCalls) {
+			toolCallsToKeep[i] = true
+		}
+	}
+
+	// Second pass: build new message list, skipping orphaned tool calls and their partial responses
+	newMessages := make([]llm.ChatMessage, 0)
+	var newReasons []map[string]bool
+	if retainReasons != nil {
+		newReasons = make([]map[string]bool, 0)
+	}
+	validToolCallIds := make(map[string]bool)
+
+	for i, message := range *chatHistory {
+		keep := false
+		if len(message.ToolCalls) > 0 {
+			if toolCallsToKeep[i] {
+				for _, tc := range message.ToolCalls {
+					validToolCallIds[tc.Id] = true
+				}
+				keep = true
+			}
+		} else if message.Role == llm.ChatMessageRoleTool {
+			if validToolCallIds[message.ToolCallId] {
+				keep = true
+			}
+		} else {
+			keep = true
+		}
+
+		if keep {
+			newMessages = append(newMessages, message)
+			if retainReasons != nil && i < len(*retainReasons) {
+				newReasons = append(newReasons, (*retainReasons)[i])
+			}
+		}
 	}
 	*chatHistory = newMessages
+	if retainReasons != nil {
+		*retainReasons = newReasons
+	}
 }
 
 // containsMessage checks if a given message is in the list of messages.
@@ -304,24 +361,51 @@ func containsMessage(messages []llm.ChatMessage, message llm.ChatMessage) bool {
 // Messages without ContextType are retained if they fall within a retained block (between a ContextType message and the next ContextType message),
 // or if they fit within maxLength after all marked messages are retained. maxLength is a soft limit that doesn't apply to marked messages.
 func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {
+	return manageChatHistoryV2(chatHistory, maxLength)
+}
+
+func messageLength(msg llm.ChatMessage) int {
+	length := len(msg.Content)
+	for _, tc := range msg.ToolCalls {
+		length += len(tc.Arguments)
+	}
+	return length
+}
+
+func manageChatHistoryV2(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {
 	if len(chatHistory) == 0 {
 		return []llm.ChatMessage{}, nil
 	}
 
-	isRetained := make([]bool, len(chatHistory))
+	// Compute input total length to determine if we need to trim
+	inputTotalLength := 0
+	for _, msg := range chatHistory {
+		inputTotalLength += messageLength(msg)
+	}
+
+	// When over limit, trim to 90% of maxLength to create headroom for prompt caching
+	budget := maxLength
+	if inputTotalLength > maxLength {
+		budget = (maxLength*9 + 5) / 10 // round(0.9 * maxLength)
+	}
+
+	retainReasons := make([]map[string]bool, len(chatHistory))
+	for i := range retainReasons {
+		retainReasons[i] = make(map[string]bool)
+	}
 
 	lastIndex := len(chatHistory) - 1
 	if lastIndex >= 0 {
-		isRetained[lastIndex] = true
+		retainReasons[lastIndex][RetainReasonLastMessage] = true
 		lastMessage := chatHistory[lastIndex]
 		if lastMessage.Role == llm.ChatMessageRoleTool && lastIndex > 0 {
-			isRetained[lastIndex-1] = true
+			retainReasons[lastIndex-1][RetainReasonLastMessage] = true
 		}
 	}
 
 	for i, msg := range chatHistory {
 		if msg.ContextType == ContextTypeInitialInstructions {
-			isRetained[i] = true
+			retainReasons[i][RetainReasonInitialInstructions] = true
 		}
 	}
 
@@ -338,30 +422,43 @@ func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) (
 	}
 
 	for i, msg := range chatHistory {
+		var primaryReason string
 		shouldMarkAndExtendBlock := false
 
 		switch msg.ContextType {
 		case ContextTypeUserFeedback:
+			primaryReason = RetainReasonUserFeedback
 			shouldMarkAndExtendBlock = true
-		case ContextTypeTestResult, ContextTypeSelfReviewFeedback, ContextTypeSummary:
+		case ContextTypeTestResult:
 			if latestIdx, ok := latestIndices[msg.ContextType]; ok && i == latestIdx {
+				primaryReason = RetainReasonLatestTestResult
+				shouldMarkAndExtendBlock = true
+			}
+		case ContextTypeSelfReviewFeedback:
+			if latestIdx, ok := latestIndices[msg.ContextType]; ok && i == latestIdx {
+				primaryReason = RetainReasonLatestSelfReviewFeedback
+				shouldMarkAndExtendBlock = true
+			}
+		case ContextTypeSummary:
+			if latestIdx, ok := latestIndices[msg.ContextType]; ok && i == latestIdx {
+				primaryReason = RetainReasonLatestSummary
 				shouldMarkAndExtendBlock = true
 			}
 		case ContextTypeEditBlockReport:
 			if i == latestEditBlockReportIndex {
-				isRetained[i] = true
+				retainReasons[i][RetainReasonLatestEditBlockReport] = true
 				for j := i + 1; j < len(chatHistory); j++ {
-					isRetained[j] = true
+					retainReasons[j][RetainReasonLatestEditBlockReport] = true
 				}
 			}
 		}
 
 		if shouldMarkAndExtendBlock {
-			isRetained[i] = true
+			retainReasons[i][primaryReason] = true
 
 			for j := i + 1; j < len(chatHistory); j++ {
 				if chatHistory[j].ContextType == "" {
-					isRetained[j] = true
+					retainReasons[j][primaryReason] = true
 				} else {
 					break
 				}
@@ -380,7 +477,7 @@ func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) (
 		for _, seqNum := range sequenceNumbersInReport {
 			foundProposalIndex := -1
 			for k := latestEditBlockReportIndex - 1; k >= 0; k-- {
-				extractedBlocks, _ := ExtractEditBlocks(chatHistory[k].Content)
+				extractedBlocks, _ := ExtractEditBlocks(chatHistory[k].Content, false)
 				for _, block := range extractedBlocks {
 					if block.SequenceNumber == seqNum {
 						foundProposalIndex = k
@@ -394,34 +491,232 @@ func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) (
 
 			if foundProposalIndex != -1 {
 				for l := foundProposalIndex; l < latestEditBlockReportIndex; l++ {
-					isRetained[l] = true
+					retainReasons[l][RetainReasonEditBlockProposal] = true
 				}
 			}
 		}
 	}
 
+	// Truncate large unretained tool responses before dropping messages.
+	// TODO: summarize via LLM later
+	chatHistory, retainReasons = truncateLargeToolResponses(chatHistory, retainReasons, budget)
+
 	var totalLength = 0
-	var newChatHistory []llm.ChatMessage
 	for i, msg := range chatHistory {
-		if isRetained[i] {
-			totalLength += len(msg.Content)
+		if len(retainReasons[i]) > 0 {
+			totalLength += messageLength(msg)
 		}
 	}
 
+	// Drop all older unretained messages once limit is exceeded
+	var newChatHistory []llm.ChatMessage
+	var newRetainReasons []map[string]bool
+	limitExceeded := false
 	for i := len(chatHistory) - 1; i >= 0; i-- {
 		msg := chatHistory[i]
-		if isRetained[i] || len(msg.Content)+totalLength <= maxLength {
-			newChatHistory = append(newChatHistory, chatHistory[i])
-			if !isRetained[i] {
-				totalLength += len(msg.Content)
+		if len(retainReasons[i]) > 0 {
+			// totalLength already includes all retained messages, no need to increment
+			newChatHistory = append(newChatHistory, msg)
+			newRetainReasons = append(newRetainReasons, retainReasons[i])
+		} else if !limitExceeded {
+			if messageLength(msg)+totalLength <= budget {
+				newChatHistory = append(newChatHistory, msg)
+				reasons := map[string]bool{RetainReasonUnderLimit: true}
+				newRetainReasons = append(newRetainReasons, reasons)
+				totalLength += messageLength(msg)
+			} else {
+				limitExceeded = true
 			}
 		}
 	}
 	slices.Reverse(newChatHistory)
+	slices.Reverse(newRetainReasons)
 
-	cleanToolCallsAndResponses(&newChatHistory)
+	cleanToolCallsAndResponsesWithReasons(&newChatHistory, &newRetainReasons)
+
+	applyCacheControlBreakpoints(&newChatHistory, newRetainReasons)
 
 	return newChatHistory, nil
+}
+
+func truncateLargeToolResponses(chatHistory []llm.ChatMessage, retainReasons []map[string]bool, budget int) ([]llm.ChatMessage, []map[string]bool) {
+	threshold := budget / 20 // 5% of budget
+
+	// Find unretained tool responses exceeding threshold
+	type candidate struct {
+		index  int
+		length int
+	}
+	var candidates []candidate
+	for i, msg := range chatHistory {
+		if len(retainReasons[i]) == 0 && msg.Role == llm.ChatMessageRoleTool && messageLength(msg) > threshold {
+			candidates = append(candidates, candidate{index: i, length: messageLength(msg)})
+		}
+	}
+
+	if len(candidates) == 0 {
+		return chatHistory, retainReasons
+	}
+
+	// Calculate total length of all messages
+	totalLength := 0
+	for _, msg := range chatHistory {
+		totalLength += messageLength(msg)
+	}
+
+	// Truncate oldest large tool responses first until under limit or none left
+	result := make([]llm.ChatMessage, len(chatHistory))
+	copy(result, chatHistory)
+
+	for _, c := range candidates {
+		if totalLength <= budget {
+			break
+		}
+		msg := result[c.index]
+		truncatedContent := msg.Content[:min(len(msg.Content), threshold)]
+		if len(truncatedContent) < len(msg.Content) {
+			truncatedContent += "\n[truncated]"
+		}
+		oldLen := messageLength(msg)
+		result[c.index] = llm.ChatMessage{
+			Role:       msg.Role,
+			Content:    truncatedContent,
+			Name:       msg.Name,
+			ToolCallId: msg.ToolCallId,
+			IsError:    msg.IsError,
+		}
+		totalLength -= oldLen - messageLength(result[c.index])
+	}
+
+	return result, retainReasons
+}
+
+// applyCacheControlBreakpoints sets CacheControl: "ephemeral" on strategically chosen
+// messages to maximize Anthropic prompt cache hits. It identifies contiguous blocks
+// of messages retained for the same reason, sorts by size, and places breakpoints
+// at the start of the largest blocks (up to 4 total).
+func applyCacheControlBreakpoints(chatHistory *[]llm.ChatMessage, retainReasons []map[string]bool) {
+	if len(*chatHistory) == 0 {
+		return
+	}
+
+	// Clear all existing CacheControl values before applying new breakpoints
+	for i := range *chatHistory {
+		(*chatHistory)[i].CacheControl = ""
+	}
+
+	// After cleanToolCallsAndResponses, chatHistory may be shorter than retainReasons.
+	// We need to rebuild retainReasons to match the current chatHistory.
+	// For now, we'll work with what we have, but limit to the shorter length.
+	reasonsLen := len(retainReasons)
+	historyLen := len(*chatHistory)
+	if reasonsLen > historyLen {
+		reasonsLen = historyLen
+	}
+
+	// Identify contiguous blocks of messages that share at least one common reason
+	type block struct {
+		startIndex int
+		endIndex   int // exclusive
+		reasons    map[string]bool
+	}
+	var blocks []block
+
+	if reasonsLen > 0 {
+		currentBlock := block{
+			startIndex: 0,
+			endIndex:   1,
+			reasons:    copyReasons(retainReasons[0]),
+		}
+
+		for i := 1; i < reasonsLen; i++ {
+			sharedReasons := intersectReasons(currentBlock.reasons, retainReasons[i])
+			bothUnretained := (len(retainReasons[i]) == 0 && len(currentBlock.reasons) == 0)
+			if len(sharedReasons) > 0 || bothUnretained {
+				currentBlock.endIndex = i + 1
+				currentBlock.reasons = sharedReasons
+			} else {
+				blocks = append(blocks, currentBlock)
+				currentBlock = block{
+					startIndex: i,
+					endIndex:   i + 1,
+					reasons:    copyReasons(retainReasons[i]),
+				}
+			}
+		}
+		blocks = append(blocks, currentBlock)
+	}
+
+	// Collect candidate breakpoint positions
+	breakpointPositions := make(map[int]bool)
+
+	// First & Last message always gets a breakpoint
+	lastIdx := len(*chatHistory) - 1
+	breakpointPositions[0] = true // expected to be InitialInstructions
+	breakpointPositions[lastIdx] = true
+
+	// make sure these 1-2 important spots get cache control set first
+	numBreakpoints := 0
+	for pos := range breakpointPositions {
+		if pos >= 0 && pos < len(*chatHistory) {
+			if (*chatHistory)[pos].CacheControl != "ephemeral" {
+				numBreakpoints++
+				(*chatHistory)[pos].CacheControl = "ephemeral"
+			}
+		}
+	}
+
+	/*
+	 * FIXME something is buggy so we'll return early for now and skip the rest
+	 * of the logic. This means we only set breakpoints at the start & end
+	 * (which are the most important anyway)
+	 */
+	/*
+		// Sort blocks by size (descending) and add their start positions
+		slices.SortFunc(blocks, func(a, b block) int {
+			sizeA := a.endIndex - a.startIndex
+			sizeB := b.endIndex - b.startIndex
+			return sizeB - sizeA // descending
+		})
+
+		for _, b := range blocks {
+			if len(breakpointPositions) >= 4 {
+				break
+			}
+			breakpointPositions[b.startIndex] = true
+		}
+
+		// Apply cache control to selected positions
+		for pos := range breakpointPositions {
+			if numBreakpoints >= 4 {
+				break
+			}
+			if pos >= 0 && pos < len(*chatHistory) {
+				if (*chatHistory)[pos].CacheControl != "ephemeral" {
+					numBreakpoints++
+					(*chatHistory)[pos].CacheControl = "ephemeral"
+				}
+			}
+		}
+	*/
+}
+
+func copyReasons(reasons map[string]bool) map[string]bool {
+	result := make(map[string]bool, len(reasons))
+	for k, v := range reasons {
+		result[k] = v
+	}
+	return result
+}
+
+func intersectReasons(a, b map[string]bool) map[string]bool {
+	result := make(map[string]bool)
+	for k := range a {
+		if b[k] {
+			result[k] = true
+		}
+	}
+	return result
 }
 
 // extractSequenceNumbersFromReportContent extracts unique edit block sequence numbers

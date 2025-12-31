@@ -99,6 +99,7 @@ func (s *BulkSearchRepositoryE2ETestSuite) executeBulkSearchRepository(params Bu
 }
 
 func TestBulkSearchRepositorySuite(t *testing.T) {
+	t.Parallel()
 	suite.Run(t, new(BulkSearchRepositoryE2ETestSuite))
 }
 

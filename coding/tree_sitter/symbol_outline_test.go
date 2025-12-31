@@ -18,6 +18,7 @@ func symbolToStringSlice(symbols []Symbol) []string {
 
 // TODO use this for examples to use to test ExtractSourceCodes
 func TestSymbolizeEmbeddedCode(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name     string
 		input    string
@@ -219,7 +220,9 @@ Some postamble
 	}
 
 	for _, tc := range testCases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			result := SymbolizeEmbeddedCode(tc.input)
 			if result != tc.expected {
 				t.Errorf("expected %q, got %q", tc.expected, result)

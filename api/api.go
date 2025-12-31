@@ -17,40 +17,71 @@ import (
 	"sidekick/dev"
 	"sidekick/domain"
 	"sidekick/env"
+	"sidekick/flow_action"
 	"sidekick/frontend"
 	"sidekick/llm"
 	"sidekick/secret_manager"
 	"sidekick/srv"
+	"sidekick/telemetry"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	commonpb "go.temporal.io/api/common/v1"
+	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/contrib/opentelemetry"
+	"go.temporal.io/sdk/interceptor"
 )
 
-func RunServer() *http.Server {
+type Server struct {
+	httpServer     *http.Server
+	shutdownTracer func(context.Context) error
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.shutdownTracer != nil {
+		if err := s.shutdownTracer(ctx); err != nil {
+			log.Error().Err(err).Msg("Error shutting down telemetry")
+		}
+	}
+	return s.httpServer.Shutdown(ctx)
+}
+
+func RunServer() *Server {
 	gin.SetMode(gin.ReleaseMode)
+
+	shutdownTracer, err := telemetry.InitTracer("sidekick-api")
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize telemetry")
+	}
+
 	ctrl, err := NewController()
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize controller")
 	}
 	router := DefineRoutes(ctrl)
 
-	srv := &http.Server{
+	httpSrv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", common.GetServerPort()),
 		Handler: router.Handler(),
 	}
 
 	// Start server in a goroutine
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal().Err(err).Msg("Failed to start API server")
 		}
 	}()
 
-	return srv
+	return &Server{
+		httpServer:     httpSrv,
+		shutdownTracer: shutdownTracer,
+	}
 }
 
 type Controller struct {
@@ -143,8 +174,13 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	r.ForwardedByClientIP = true
 	r.SetTrustedProxies(nil)
 
+	if telemetry.IsEnabled() {
+		r.Use(otelgin.Middleware("sidekick-api"))
+	}
+
 	r.GET("/api/v1/providers", ctrl.GetProvidersHandler)
 	r.GET("/api/v1/models", ctrl.GetModelsHandler)
+	r.GET("/api/v1/off_hours", ctrl.GetOffHoursHandler)
 
 	workspaceApiRoutes := DefineWorkspaceApiRoutes(r, &ctrl)
 	workspaceApiRoutes.GET("/archived_tasks", ctrl.GetArchivedTasksHandler)
@@ -165,6 +201,9 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	flowRoutes.POST("/:id/pause", ctrl.PauseFlowHandler)
 	flowRoutes.POST("/:id/cancel", ctrl.CancelFlowHandler)
 	flowRoutes.POST("/:id/user_action", ctrl.UserActionHandler)
+	flowRoutes.GET("/:id/history", ctrl.GetFlowHistoryHandler)
+	flowRoutes.POST("/:id/reset", ctrl.ResetFlowHandler)
+	flowRoutes.GET("/:id/subflows", ctrl.GetFlowSubflowsHandler)
 
 	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
 	workspaceApiRoutes.PUT("/flow_actions/:id", ctrl.UpdateFlowActionHandler)
@@ -197,8 +236,13 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 }
 
 func NewController() (Controller, error) {
+	tracingInterceptor, err := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
+	if err != nil {
+		return Controller{}, fmt.Errorf("failed to create tracing interceptor: %w", err)
+	}
 	clientOptions := client.Options{
-		HostPort: common.GetTemporalServerHostPort(),
+		HostPort:     common.GetTemporalServerHostPort(),
+		Interceptors: []interceptor.ClientInterceptor{tracingInterceptor},
 	}
 	temporalClient, err := client.NewLazyClient(clientOptions)
 	if err != nil {
@@ -215,9 +259,9 @@ func NewController() (Controller, error) {
 	}
 
 	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		secret_manager.EnvSecretManager{},
 		secret_manager.KeyringSecretManager{},
 		secret_manager.LocalConfigSecretManager{},
+		secret_manager.EnvSecretManager{},
 	})
 
 	return Controller{
@@ -457,7 +501,7 @@ func (ctrl *Controller) UserActionHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	flowId := c.Param("id")
 
-	_, err := ctrl.service.GetFlow(c, workspaceId, flowId)
+	_, err := ctrl.service.GetFlow(c.Request.Context(), workspaceId, flowId)
 	if err != nil {
 		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
@@ -477,15 +521,15 @@ func (ctrl *Controller) UserActionHandler(c *gin.Context) {
 		return
 	}
 
-	if req.ActionType != string(dev.UserActionGoNext) {
-		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("Invalid actionType '%s'. Only '%s' is supported.", req.ActionType, dev.UserActionGoNext)})
+	if req.ActionType != string(flow_action.UserActionGoNext) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("Invalid actionType '%s'. Only '%s' is supported.", req.ActionType, flow_action.UserActionGoNext)})
 		return
 	}
 
 	// Note: the only way to interact with the flow's GlobalState is by
 	// signalling it. The signal handler will then process the action within the
 	// context of the temporal workflow.
-	err = ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", dev.SignalNameUserAction, dev.UserActionGoNext)
+	err = ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", dev.SignalNameUserAction, flow_action.UserActionGoNext)
 	if err != nil {
 		var serviceErrNotFound *serviceerror.NotFound
 		if errors.As(err, &serviceErrNotFound) {
@@ -597,7 +641,8 @@ func (ctrl *Controller) GetTaskHandler(c *gin.Context) {
 		return
 	}
 
-	task, err := ctrl.service.GetTask(c, workspaceId, taskId)
+	ctx := c.Request.Context()
+	task, err := ctrl.service.GetTask(ctx, workspaceId, taskId)
 	if err != nil {
 		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
@@ -607,7 +652,7 @@ func (ctrl *Controller) GetTaskHandler(c *gin.Context) {
 		return
 	}
 
-	flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, taskId)
+	flows, err := ctrl.service.GetFlowsForTask(ctx, workspaceId, taskId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -636,7 +681,8 @@ func (ctrl *Controller) GetFlowHandler(c *gin.Context) {
 		return
 	}
 
-	flow, err := ctrl.service.GetFlow(c, workspaceId, flowId)
+	ctx := c.Request.Context()
+	flow, err := ctrl.service.GetFlow(ctx, workspaceId, flowId)
 	if err != nil {
 		if errors.Is(err, srv.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
@@ -646,7 +692,7 @@ func (ctrl *Controller) GetFlowHandler(c *gin.Context) {
 		return
 	}
 
-	worktrees, err := ctrl.service.GetWorktreesForFlow(c, workspaceId, flowId)
+	worktrees, err := ctrl.service.GetWorktreesForFlow(ctx, workspaceId, flowId)
 	if err != nil {
 		fmt.Printf("Error fetching worktrees for flow %s: %v\n", flowId, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve worktrees"})
@@ -659,6 +705,123 @@ func (ctrl *Controller) GetFlowHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"flow": flowWithWorktrees})
+}
+
+// HistoryEvent represents a workflow history event for the API response
+type HistoryEvent struct {
+	EventId            int64  `json:"eventId"`
+	EventType          string `json:"eventType"`
+	Timestamp          int64  `json:"timestamp"`
+	Name               string `json:"name,omitempty"`
+	ResetBeforeEventId *int64 `json:"resetBeforeEventId"`
+	ResetAfterEventId  *int64 `json:"resetAfterEventId"`
+}
+
+func (ctrl *Controller) GetFlowHistoryHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	if workspaceId == "" || flowId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID and Flow ID are required"})
+		return
+	}
+
+	iter := ctrl.temporalClient.GetWorkflowHistory(c, flowId, "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
+
+	var events []HistoryEvent
+	var workflowTaskCompletedEventIds []int64
+
+	for iter.HasNext() {
+		event, err := iter.Next()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		histEvent := HistoryEvent{
+			EventId:   event.EventId,
+			EventType: event.EventType.String(),
+			Timestamp: event.EventTime.AsTime().UnixMilli(),
+		}
+
+		// Extract activity type name or signal name where applicable
+		if attrs := event.GetActivityTaskScheduledEventAttributes(); attrs != nil {
+			histEvent.Name = attrs.ActivityType.Name
+		} else if attrs := event.GetWorkflowExecutionSignaledEventAttributes(); attrs != nil {
+			histEvent.Name = attrs.SignalName
+		}
+
+		if event.EventType == enums.EVENT_TYPE_WORKFLOW_TASK_COMPLETED {
+			workflowTaskCompletedEventIds = append(workflowTaskCompletedEventIds, event.EventId)
+		}
+
+		events = append(events, histEvent)
+	}
+
+	// Populate reset event IDs for each event
+	for i := range events {
+		eventId := events[i].EventId
+
+		// Find the closest WorkflowTaskCompleted before this event
+		for j := len(workflowTaskCompletedEventIds) - 1; j >= 0; j-- {
+			if workflowTaskCompletedEventIds[j] < eventId {
+				events[i].ResetBeforeEventId = &workflowTaskCompletedEventIds[j]
+				break
+			}
+		}
+
+		// Find the closest WorkflowTaskCompleted after this event
+		for j := 0; j < len(workflowTaskCompletedEventIds); j++ {
+			if workflowTaskCompletedEventIds[j] > eventId {
+				events[i].ResetAfterEventId = &workflowTaskCompletedEventIds[j]
+				break
+			}
+		}
+	}
+
+	// Reverse to return in reverse chronological order
+	slices.Reverse(events)
+
+	c.JSON(http.StatusOK, gin.H{"events": events})
+}
+
+// ResetFlowRequest defines the request body for resetting a workflow
+type ResetFlowRequest struct {
+	EventId int64 `json:"eventId"`
+}
+
+func (ctrl *Controller) ResetFlowHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	if workspaceId == "" || flowId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace ID and Flow ID are required"})
+		return
+	}
+
+	var req ResetFlowRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	if req.EventId <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "eventId must be a positive integer"})
+		return
+	}
+
+	resp, err := ctrl.temporalClient.ResetWorkflowExecution(c, &workflowservice.ResetWorkflowExecutionRequest{
+		Namespace:                 ctrl.temporalNamespace,
+		WorkflowExecution:         &commonpb.WorkflowExecution{WorkflowId: flowId},
+		WorkflowTaskFinishEventId: req.EventId,
+		RequestId:                 ksuid.New().String(),
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"runId": resp.RunId})
 }
 
 func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
@@ -679,11 +842,12 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 		taskStatuses = append(taskStatuses, taskStatus)
 	}
 
+	ctx := c.Request.Context()
 	var tasks []domain.Task
 	var err error
 
 	if len(taskStatuses) > 0 {
-		tasks, err = ctrl.service.GetTasks(c, workspaceId, taskStatuses)
+		tasks, err = ctrl.service.GetTasks(ctx, workspaceId, taskStatuses)
 		if err != nil {
 			log.Error().Err(err).Str("workspaceId", workspaceId).Msg("Error fetching tasks")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -697,7 +861,7 @@ func (ctrl *Controller) GetTasksHandler(c *gin.Context) {
 
 	taskResponses := make([]TaskResponse, len(tasks))
 	for i, task := range tasks {
-		flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, task.Id)
+		flows, err := ctrl.service.GetFlowsForTask(ctx, workspaceId, task.Id)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -739,9 +903,10 @@ func (ctrl *Controller) GetArchivedTasksHandler(c *gin.Context) {
 		return
 	}
 
+	ctx := c.Request.Context()
 	taskResponses := make([]TaskResponse, len(archivedTasks))
 	for i, task := range archivedTasks {
-		flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, task.Id)
+		flows, err := ctrl.service.GetFlowsForTask(ctx, workspaceId, task.Id)
 		if err != nil {
 			fmt.Println("Error fetching flows for archived task:", task.Id, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -790,14 +955,15 @@ func (ctrl *Controller) GetFlowActionsHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database accessor not initialized"})
 		return
 	}
-	flowActions, err := ctrl.service.GetFlowActions(c, workspaceId, flowId)
+	ctx := c.Request.Context()
+	flowActions, err := ctrl.service.GetFlowActions(ctx, workspaceId, flowId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get flow actions"})
 		return
 	}
 	if flowActions == nil {
 		flowActions = []domain.FlowAction{}
-		_, err := ctrl.service.GetFlow(c, workspaceId, flowId)
+		_, err := ctrl.service.GetFlow(ctx, workspaceId, flowId)
 		if err != nil {
 			if errors.Is(err, srv.ErrNotFound) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
@@ -850,18 +1016,18 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 
 	requestKindString, ok := flowAction.ActionParams["requestKind"].(string)
 	if ok {
-		switch dev.RequestKind(requestKindString) {
-		case dev.RequestKindFreeForm:
+		switch flow_action.RequestKind(requestKindString) {
+		case flow_action.RequestKindFreeForm:
 			if strings.TrimSpace(body.UserResponse.Content) == "" {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "User response cannot be empty"})
 				return
 			}
-		case dev.RequestKindApproval:
+		case flow_action.RequestKindApproval:
 			if body.UserResponse.Approved == nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "Approved cannot be empty"})
 				return
 			}
-		case dev.RequestKindMergeApproval:
+		case flow_action.RequestKindMergeApproval:
 			if body.UserResponse.Approved == nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "Approved cannot be empty"})
 				return
@@ -869,7 +1035,7 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 			if body.UserResponse.Params["targetBranch"] == nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "Target branch cannot be empty"})
 			}
-		case dev.RequestKindMultipleChoice:
+		case flow_action.RequestKindMultipleChoice:
 			if strings.TrimSpace(body.UserResponse.Choice) == "" {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "User choice cannot be empty"})
 				return
@@ -883,7 +1049,7 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 		WorkspaceId:       workspaceId,
 	}
 
-	userResponse := dev.UserResponse{
+	userResponse := flow_action.UserResponse{
 		TargetWorkflowId: flowAction.FlowId,
 		Content:          body.UserResponse.Content,
 		Approved:         body.UserResponse.Approved,
@@ -995,7 +1161,7 @@ func (ctrl *Controller) UpdateFlowActionHandler(c *gin.Context) {
 		WorkspaceId:       workspaceId,
 	}
 
-	userResponse := dev.UserResponse{
+	userResponse := flow_action.UserResponse{
 		TargetWorkflowId: flowAction.FlowId,
 		Content:          body.UserResponse.Content,
 		Approved:         nil,
@@ -1048,7 +1214,7 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 	task.FlowOptions = taskReq.FlowOptions
 
 	// If the task status is 'to_do' and there is no flow record, start the flow
-	flows, err := ctrl.service.GetFlowsForTask(c, workspaceId, task.Id)
+	flows, err := ctrl.service.GetFlowsForTask(requestCtx, workspaceId, task.Id)
 	if err != nil {
 		ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
 		return
@@ -1059,7 +1225,7 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 			ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("Failed to handle new task: %w", err))
 			task.Status = domain.TaskStatusFailed
 			task.AgentType = domain.AgentTypeNone
-			ctrl.service.PersistTask(c, task)
+			ctrl.service.PersistTask(requestCtx, task)
 			return
 		}
 	}
@@ -1163,7 +1329,10 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 	}
 	defer conn.Close()
 
-	streamMessageStartId := "0"
+	streamMessageStartId := c.Query("streamMessageStartId")
+	if streamMessageStartId == "" {
+		streamMessageStartId = "0"
+	}
 
 	flowActionChan, errChan := ctrl.service.StreamFlowActionChanges(ctx, workspaceId, flowId, streamMessageStartId)
 

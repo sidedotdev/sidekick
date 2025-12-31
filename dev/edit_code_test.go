@@ -50,8 +50,8 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *[]llm.ChatMessage, pic PromptInfoContainer) ([]EditBlock, error) {
 		ctx1 := utils.NoRetryCtx(ctx)
 		execContext := DevContext{
-			GlobalState: &GlobalState{},
 			ExecContext: flow_action.ExecContext{
+				GlobalState:  &flow_action.GlobalState{},
 				Context:      ctx1,
 				EnvContainer: &s.envContainer,
 				Secrets: &secret_manager.SecretManagerContainer{
@@ -131,14 +131,14 @@ func TestBuildAuthorEditBlockInitialPrompt(t *testing.T) {
 			DisableHumanInTheLoop: false,
 		},
 	}
-	prompt := renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements")
+	prompt := renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false)
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
 	assert.Contains(t, prompt, getHelpOrInputTool.Name)
 
 	dCtx.RepoConfig.DisableHumanInTheLoop = true
-	prompt = renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements")
+	prompt = renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false)
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
@@ -151,7 +151,7 @@ func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
 			DisableHumanInTheLoop: false,
 		},
 	}
-	prompt := renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step")
+	prompt := renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false)
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
@@ -160,7 +160,7 @@ func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
 	assert.Contains(t, prompt, getHelpOrInputTool.Name)
 
 	dCtx.RepoConfig.DisableHumanInTheLoop = true
-	prompt = renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step")
+	prompt = renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false)
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")

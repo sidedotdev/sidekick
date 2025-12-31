@@ -14,6 +14,7 @@ import (
 )
 
 func TestGitCommitActivity_CommitAll(t *testing.T) {
+	t.Parallel()
 	// Create a temporary git repository
 	repoDir, cleanup := createTempGitRepo(t)
 	defer cleanup()
@@ -63,6 +64,7 @@ func TestGitCommitActivity_CommitAll(t *testing.T) {
 }
 
 func TestGitCommitActivity_NoCommitAll(t *testing.T) {
+	t.Parallel()
 	// Create a temporary git repository
 	repoDir, cleanup := createTempGitRepo(t)
 	defer cleanup()
@@ -111,6 +113,7 @@ func TestGitCommitActivity_NoCommitAll(t *testing.T) {
 	}
 }
 func TestGitCommitActivity_NoChangesToCommit(t *testing.T) {
+	t.Parallel()
 	// Create a temporary git repository
 	repoDir, cleanup := createTempGitRepo(t)
 	defer cleanup()

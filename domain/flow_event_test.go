@@ -130,6 +130,7 @@ func TestFlowEventContainer_MarshalUnmarshal_RoundTrip(t *testing.T) {
 				FlowEvent: StatusChangeEvent{
 					EventType: StatusChangeEventType,
 					ParentId:  "flow_abc",
+					TargetId:  "sf_xyz",
 					Status:    "COMPLETED",
 				},
 			},

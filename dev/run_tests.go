@@ -5,9 +5,11 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -15,14 +17,16 @@ var maxTestOutputSize = min(4000, defaultMaxChatHistoryLength/4)
 
 // TestResult holds a detailed information about test run
 type TestResult struct {
-	TestsPassed bool   `json:"testsPassed"`
-	Output      string `json:"output"`
+	TestsPassed  bool   `json:"testsPassed"`
+	TestsSkipped bool   `json:"testsSkipped"`
+	Output       string `json:"output"`
 }
 
 // RunTests runs the provided test commands.
 func RunTests(dCtx DevContext, commandsToRun []common.CommandConfig) (TestResult, error) {
 	if len(commandsToRun) == 0 {
-		return TestResult{}, fmt.Errorf("no test commands configured")
+		log.Warn().Msg("No test commands configured, skipping tests")
+		return TestResult{TestsSkipped: true}, nil
 	}
 	for _, testCommand := range commandsToRun {
 		if testCommand.Command == "" {
@@ -113,7 +117,7 @@ func runSingleTest(actionCtx DevActionContext, workingDir string, fullCommand st
 		runTestInput.RelativeWorkingDir = workingDir
 	}
 	var runTestOutput env.EnvRunCommandActivityOutput
-	err := PerformWithUserRetry(actionCtx, env.EnvRunCommandActivity, &runTestOutput, runTestInput)
+	err := flow_action.PerformWithUserRetry(actionCtx.FlowActionContext(), env.EnvRunCommandActivity, &runTestOutput, runTestInput)
 	if err != nil {
 		resultsCh.Send(actionCtx, fmt.Errorf("failed to run test command '%s': %v", fullCommand, err))
 		return

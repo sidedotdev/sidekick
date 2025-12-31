@@ -38,6 +38,7 @@ var lessLongFunction = `func lessLong() {
 }`
 
 func TestShrinkEmbeddedCodeContext(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		input         string
@@ -212,7 +213,9 @@ func main() {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			gotContent, gotDidShrink := ShrinkEmbeddedCodeContext(tt.input, tt.longestFirst, tt.maxLength)
 			if normalizeWhitespace(gotContent) != normalizeWhitespace(tt.wantContent) {
 				t.Errorf("%s: mismatch\nwant:\n%s\ngot:\n%s", tt.name, tt.wantContent, gotContent)
@@ -228,6 +231,7 @@ func main() {
 
 // TODO move to golang_test.go
 func TestRemoveCommentsGolang(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name              string
 		sourceCode        SourceCode
@@ -325,7 +329,9 @@ func main() {
 	}
 
 	for _, tc := range testCases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			didRemove, result := removeComments(tc.sourceCode)
 			if didRemove != tc.expectedDidRemove {
 				t.Errorf("Expected didRemove: %t Got: %t", tc.expectedDidRemove, didRemove)
@@ -340,6 +346,7 @@ func main() {
 
 // TODO move to python_test.go
 func TestRemoveCommentsPython(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name              string
 		sourceCode        SourceCode
@@ -491,7 +498,9 @@ def main():
 	}
 
 	for _, tc := range testCases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			didRemove, result := removeComments(tc.sourceCode)
 			if didRemove != tc.expectedDidRemove {
 				t.Errorf("Expected didRemove: %t Got: %t", tc.expectedDidRemove, didRemove)
@@ -505,6 +514,7 @@ def main():
 }
 
 func TestRemoveCommentsPythonSignatures(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name              string
 		sourceCode        SourceCode
@@ -654,7 +664,9 @@ def main()
 	}
 
 	for _, tc := range testCases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			didRemove, result := removeComments(tc.sourceCode)
 			if didRemove != tc.expectedDidRemove {
 				t.Errorf("Expected didRemove: %t Got: %t", tc.expectedDidRemove, didRemove)

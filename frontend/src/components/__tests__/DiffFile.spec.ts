@@ -51,6 +51,7 @@ describe('DiffFile', () => {
     linesAdded: 5,
     linesRemoved: 2,
     linesUnchanged: 10,
+    firstLineNumber: 1,
     ...overrides
   })
 

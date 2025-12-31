@@ -14,8 +14,12 @@
       <pre>{{ flowAction.actionParams.command }}</pre>
     </div>
     <template v-if="flowAction.actionParams.mergeApprovalInfo?.diff">
+      <div v-if="showEmptyDiffMessage" class="empty-diff-message">
+        No changes since last review
+      </div>
       <UnifiedDiffViewer
-        :diff-string="flowAction.actionParams.mergeApprovalInfo.diff"
+        v-else
+        :diff-string="currentDiffString"
         :default-expanded="false"
         :diff-mode="diffMode"
         :level="level"
@@ -43,17 +47,27 @@
     </div>
 
     <div v-else-if="flowAction.actionParams.requestKind === 'merge_approval'">
+      <div  class="diff-options-row">
+        <label for="diffScope">Show</label>
+        <Select
+          id="diffScope"
+          v-model="diffScope"
+          :options="diffScopeOptions"
+          optionLabel="label"
+          optionValue="value"
+        ></Select>
+        <DiffViewOptions
+          v-model:ignoreWhitespace="ignoreWhitespace"
+          v-model:diffMode="diffMode"
+          :disabled="!isPending"
+        />
+      </div>
       <div style="display: flex; align-items: center; gap: 1rem; margin-top: 0.5rem;">
         <label for="targetBranch">Merge into</label>
         <BranchSelector
           id="targetBranch"
           v-model="targetBranch"
           :workspaceId="flowAction.workspaceId"
-        />
-        <DiffViewOptions
-          v-model:ignoreWhitespace="ignoreWhitespace"
-          v-model:diffMode="diffMode"
-          :disabled="!isPending"
         />
       </div>
 
@@ -107,8 +121,12 @@
       <pre>{{ flowAction.actionParams.command }}</pre>
     </div>
     <template v-if="flowAction.actionParams.mergeApprovalInfo?.diff">
+      <div v-if="showEmptyDiffMessage" class="empty-diff-message">
+        No changes since last review
+      </div>
       <UnifiedDiffViewer
-        :diff-string="flowAction.actionParams.mergeApprovalInfo.diff"
+        v-else
+        :diff-string="currentDiffString"
         :default-expanded="false"
         :diff-mode="diffMode"
         :level="level"
@@ -136,6 +154,7 @@ import VueMarkdown from 'vue-markdown-render'
 import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
 import CopyIcon from './icons/CopyIcon.vue';
 import DiffViewOptions from './DiffViewOptions.vue';
+import Select from 'primevue/select';
 
 interface UserResponse {
   content?: string;
@@ -164,6 +183,37 @@ const errorMessage = ref('');
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
 const ignoreWhitespace = ref(false);
 const diffMode = ref<'unified' | 'split'>('unified');
+const diffScope = ref<'all' | 'since_last_review'>('all');
+
+const hasDiffSinceLastReview = computed(() => {
+  const diffSinceLastReview = props.flowAction.actionParams.mergeApprovalInfo?.diffSinceLastReview;
+  return typeof diffSinceLastReview === 'string';
+});
+
+const diffScopeOptions = computed(() => {
+  let options = [
+    { label: 'All changes', value: 'all' },
+  ]
+  if (hasDiffSinceLastReview.value) {
+    options.push({ label: 'Changes since last review', value: 'since_last_review' });
+  }
+  return options;
+})
+
+const currentDiffString = computed(() => {
+  if (diffScope.value === 'since_last_review' && hasDiffSinceLastReview.value) {
+    return props.flowAction.actionParams.mergeApprovalInfo.diffSinceLastReview;
+  }
+  return props.flowAction.actionParams.mergeApprovalInfo?.diff;
+});
+
+const showEmptyDiffMessage = computed(() => {
+  if (diffScope.value !== 'since_last_review' || !hasDiffSinceLastReview.value) {
+    return false;
+  }
+  const diffSinceLastReview = props.flowAction.actionParams.mergeApprovalInfo.diffSinceLastReview;
+  return diffSinceLastReview.trim() === '';
+});
 
 function getStorageKey(actionId: string): string {
   return `sidekick_user_request_draft_${actionId}`;
@@ -203,6 +253,10 @@ onMounted(() => {
     const savedDiffMode = localStorage.getItem('mergeApproval.diff.mode');
     if (savedDiffMode === 'unified' || savedDiffMode === 'split') {
       diffMode.value = savedDiffMode;
+    }
+    const savedDiffScope = localStorage.getItem('mergeApproval.diff.scope');
+    if (savedDiffScope === 'all' || savedDiffScope === 'since_last_review') {
+      diffScope.value = savedDiffScope;
     }
   } catch (error) {
     console.debug('Failed to load merge approval preferences:', error);
@@ -253,6 +307,14 @@ watch(diffMode, (newValue) => {
     localStorage.setItem('mergeApproval.diff.mode', newValue);
   } catch (error) {
     console.debug('Failed to save diffMode preference:', error);
+  }
+});
+
+watch(diffScope, (newValue) => {
+  try {
+    localStorage.setItem('mergeApproval.diff.scope', newValue);
+  } catch (error) {
+    console.debug('Failed to save diffScope preference:', error);
   }
 });
 
@@ -424,6 +486,17 @@ label[for="targetBranch"] {
   margin-right: 1rem;
 }
 
+.diff-options-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.diff-options-row label {
+  white-space: nowrap;
+}
+
 .markdown {
   max-width: 60rem;
 }
@@ -431,6 +504,21 @@ label[for="targetBranch"] {
 .markdown :deep(h4) {
   font-size: 120%;
   margin: 2rem 0 1rem;
+}
+
+.markdown :deep(h3) {
+  font-size: 130%;
+  margin: 2rem 0 1rem;
+}
+
+.markdown :deep(h2) {
+  font-size: 140%;
+  margin: 2.25rem 0 1.125rem;
+}
+
+.markdown :deep(h1) {
+  font-size: 150%;
+  margin: 2.5rem 0 1.25rem;
 }
 
 .markdown :deep(pre) {
@@ -508,5 +596,29 @@ label[for="targetBranch"] {
   height: 1rem;
   fill: var(--color-text);
   stroke: var(--color-text);
+}
+
+.diff-scope-select {
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background-color: var(--color-background);
+  color: var(--color-text);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.diff-scope-select:hover {
+  border-color: var(--color-border-hover);
+}
+
+.empty-diff-message {
+  padding: 1rem;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-style: italic;
+  border: 1px dashed var(--color-border);
+  border-radius: 4px;
+  margin: 0.5rem 0;
 }
 </style>
