@@ -94,6 +94,9 @@ func createArchiveTag(ctx context.Context, envContainer env.EnvContainer, baseTa
 	if err != nil {
 		return "", fmt.Errorf("failed to list existing tags: %v", err)
 	}
+	if listResult.ExitStatus != 0 {
+		return "", fmt.Errorf("failed to list existing tags: %s", listResult.Stderr)
+	}
 
 	tagName := findNextAvailableTagName(baseTagName, listResult.Stdout)
 
