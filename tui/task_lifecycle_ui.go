@@ -280,7 +280,11 @@ func (m taskLifecycleModel) View() string {
 	// Display messages after progress model
 	for _, msg := range afterProgMessages {
 		b.WriteString("\n")
-		b.WriteString(msg.content)
+		if msg.spin {
+			b.WriteString(fmt.Sprintf("%s %s", m.spinner.View(), msg.content))
+		} else {
+			b.WriteString(msg.content)
+		}
 	}
 
 	return b.String()
