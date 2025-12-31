@@ -765,7 +765,6 @@ func TestGetUpdatedContents(t *testing.T) {
 
 func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 	t.Parallel()
-	minimumFileRangeVisibilityMargin = 0 // we don't want any margin for these tests since that adds a lot of unnecessary whitespace and thinking
 	tests := []struct {
 		name               string
 		block              EditBlock
@@ -1085,10 +1084,13 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 		},
 	}
 
+	opts := DefaultMatchOptions
+	opts.MinFileRangeVisibilityMargin = 0 // we don't want any margin for these tests since that adds a lot of unnecessary whitespace and thinking
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result, err := getUpdatedContents(tt.block, tt.originalContents)
+			result, err := getUpdatedContentsWithOptions(tt.block, tt.originalContents, opts)
 			if result != tt.expectedContents {
 				t.Errorf("Expected content:\n%s\n\nGot:\n%s", tt.expectedContents, result)
 			}
@@ -1891,7 +1893,6 @@ func TestFindAcceptableMatchWithVisibleFileRangeAtEndEdge(t *testing.T) {
 			},
 		},
 	}
-	minimumFileRangeVisibilityMargin = 5
 	bestMatch, matches := FindAcceptableMatch(editBlock, strings.Split(rstLines, "\n"), true)
 	assert.Equal(t, 1, len(matches))
 	assert.Greater(t, bestMatch.score, 0.0)
@@ -1942,7 +1943,6 @@ func TestFindAcceptableMatchWithMissingVisibleFileRangesButWeFigureItOut(t *test
 			},
 		},
 	}
-	minimumFileRangeVisibilityMargin = 5
 	bestMatch, matches := FindAcceptableMatch(editBlock, strings.Split(rstLines, "\n"), true)
 	assert.Equal(t, 1, len(matches))
 	assert.Greater(t, bestMatch.score, 0.0)

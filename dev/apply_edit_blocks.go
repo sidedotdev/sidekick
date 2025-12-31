@@ -727,17 +727,23 @@ func firstLines(strs []string, n int) string {
 var multipleMatchesMessage = "Multiple matches found for the given edit block %s section, but expected only one match. Here are the matches with sufficient additional context from the current state of the file to disambiguate. Provide the edit block again with the specific full expanded context:\n\n%s"
 
 func getUpdatedContents(block EditBlock, originalContents string) (string, error) {
+	return getUpdatedContentsWithOptions(block, originalContents, DefaultMatchOptions)
+}
+
+func getUpdatedContentsWithOptions(block EditBlock, originalContents string, opts MatchOptions) (string, error) {
 	originalLines := strings.Split(originalContents, "\n")
 
-	// Phase 1: match using the block as-is with DefaultMatchOptions
-	bestMatch, allMatches := FindAcceptableMatchWithOptions(block, originalLines, true, DefaultMatchOptions)
+	// Phase 1: match using the block as-is with provided options
+	bestMatch, allMatches := FindAcceptableMatchWithOptions(block, originalLines, true, opts)
 
 	// Phase 2 fallback: if Phase 1 found zero matches and visibility filtering was enabled,
 	// retry with visibility filtering disabled but stricter thresholds
 	if len(allMatches) == 0 && block.VisibleFileRanges != nil {
 		fallbackBlock := block
 		fallbackBlock.VisibleFileRanges = nil
-		bestMatch, allMatches = FindAcceptableMatchWithOptions(fallbackBlock, originalLines, true, FallbackNoVisibilityMatchOptions)
+		fallbackOpts := FallbackNoVisibilityMatchOptions
+		fallbackOpts.MinFileRangeVisibilityMargin = opts.MinFileRangeVisibilityMargin
+		bestMatch, allMatches = FindAcceptableMatchWithOptions(fallbackBlock, originalLines, true, fallbackOpts)
 	}
 
 	if len(allMatches) > 1 {
@@ -905,22 +911,29 @@ type MatchOptions struct {
 	// MinAcceptableHighScoreRatio is the minimum ratio of high-score lines required
 	// for a match to be considered acceptable in FindAcceptableMatch.
 	MinAcceptableHighScoreRatio float64
+
+	// MinFileRangeVisibilityMargin is the minimum margin (in lines) added to visible
+	// file ranges when filtering potential matches. This allows for some flexibility
+	// when lines move around from other edit blocks.
+	MinFileRangeVisibilityMargin int
 }
 
 // DefaultMatchOptions provides the standard matching thresholds used for Phase 1 matching.
 var DefaultMatchOptions = MatchOptions{
-	SimilarityThreshold:         0.85,
-	HighScoreLineCutoff:         0.925,
-	MinAcceptableHighScoreRatio: 0.95,
+	SimilarityThreshold:          0.85,
+	HighScoreLineCutoff:          0.925,
+	MinAcceptableHighScoreRatio:  0.95,
+	MinFileRangeVisibilityMargin: 5,
 }
 
 // FallbackNoVisibilityMatchOptions provides stricter thresholds for Phase 2 fallback
 // matching when visibility filtering is disabled. These stricter thresholds reduce
 // false positives when matching without visibility constraints.
 var FallbackNoVisibilityMatchOptions = MatchOptions{
-	SimilarityThreshold:         0.95,
-	HighScoreLineCutoff:         0.975,
-	MinAcceptableHighScoreRatio: 0.99,
+	SimilarityThreshold:          0.95,
+	HighScoreLineCutoff:          0.975,
+	MinAcceptableHighScoreRatio:  0.99,
+	MinFileRangeVisibilityMargin: 5,
 }
 
 type match struct {
@@ -950,8 +963,6 @@ func FindAcceptableMatchWithOptions(block EditBlock, originalLines []string, isO
 		return match{}, []match{}
 	}
 }
-
-var minimumFileRangeVisibilityMargin = 5
 
 func FindPotentialMatches(block EditBlock, originalLines []string, startingLineIndex int, isOriginalLinesFromActualFile bool) []match {
 	return FindPotentialMatchesWithOptions(block, originalLines, startingLineIndex, isOriginalLinesFromActualFile, DefaultMatchOptions)
@@ -1032,7 +1043,7 @@ func FindPotentialMatchesWithOptions(block EditBlock, originalLines []string, st
 				// too strict. we already have checks ensuring the llm is no:
 				// hallucinating by ensuring old lines are in the chat history.
 				margin := (visibleFileRange.EndLine - visibleFileRange.StartLine) / 8
-				margin = min(margin, minimumFileRangeVisibilityMargin)
+				margin = min(margin, opts.MinFileRangeVisibilityMargin)
 
 				startIndex := visibleFileRange.StartLine - 1 - margin // 0-based index
 				endIndex := visibleFileRange.EndLine - 1 + margin     // 0-based index
