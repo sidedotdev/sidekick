@@ -497,6 +497,7 @@ d
 }
 
 func TestExtractEditBlocks(t *testing.T) {
+	t.Parallel()
 	testCases := []EditBlockTestCase{
 		basicCase,
 		extraContent,
@@ -522,19 +523,21 @@ func TestExtractEditBlocks(t *testing.T) {
 		combinedTestInput += testCase.testInput + "\n"
 		combinedExpectedResult = append(combinedExpectedResult, testCase.expectedResult...)
 
-		t.Run(testCase.name, func(t *testing.T) {
-			result, err := ExtractEditBlocks(testCase.testInput, false)
+		tc := testCase
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := ExtractEditBlocks(tc.testInput, false)
 			if err != nil {
 				t.Errorf("Error extracting edit blocks: %v", err)
 			}
 
-			for i := range testCase.expectedResult {
-				if len(result) != len(testCase.expectedResult) {
-					t.Errorf("Expected:\n%v\nGot:\n%v", len(testCase.expectedResult), len(result))
+			for i := range tc.expectedResult {
+				if len(result) != len(tc.expectedResult) {
+					t.Errorf("Expected:\n%v\nGot:\n%v", len(tc.expectedResult), len(result))
 				}
 
-				if !reflect.DeepEqual(*result[i], *testCase.expectedResult[i]) {
-					t.Errorf("Expected:\n%v\nGot:\n%v", *testCase.expectedResult[i], *result[i])
+				if !reflect.DeepEqual(*result[i], *tc.expectedResult[i]) {
+					t.Errorf("Expected:\n%v\nGot:\n%v", *tc.expectedResult[i], *result[i])
 				}
 			}
 		})
@@ -890,6 +893,7 @@ var tildeStandardTripleTildeRegression = EditBlockTestCase{
 }
 
 func TestExtractEditBlocksTildeOnly(t *testing.T) {
+	t.Parallel()
 	tildeTestCases := []EditBlockTestCase{
 		tildeBasicCase,
 		tildeExtraContent,
@@ -914,20 +918,22 @@ func TestExtractEditBlocksTildeOnly(t *testing.T) {
 		combinedTestInput += testCase.testInput + "\n"
 		combinedExpectedResult = append(combinedExpectedResult, testCase.expectedResult...)
 
-		t.Run(testCase.name, func(t *testing.T) {
-			result, err := ExtractEditBlocks(testCase.testInput, true)
+		tc := testCase
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := ExtractEditBlocks(tc.testInput, true)
 			if err != nil {
 				t.Errorf("Error extracting edit blocks: %v", err)
 			}
 
-			if len(result) != len(testCase.expectedResult) {
-				t.Errorf("Expected %d blocks, got %d", len(testCase.expectedResult), len(result))
+			if len(result) != len(tc.expectedResult) {
+				t.Errorf("Expected %d blocks, got %d", len(tc.expectedResult), len(result))
 				return
 			}
 
-			for i := range testCase.expectedResult {
-				if !reflect.DeepEqual(*result[i], *testCase.expectedResult[i]) {
-					t.Errorf("Expected:\n%v\nGot:\n%v", *testCase.expectedResult[i], *result[i])
+			for i := range tc.expectedResult {
+				if !reflect.DeepEqual(*result[i], *tc.expectedResult[i]) {
+					t.Errorf("Expected:\n%v\nGot:\n%v", *tc.expectedResult[i], *result[i])
 				}
 			}
 		})
@@ -949,6 +955,7 @@ func TestExtractEditBlocksTildeOnly(t *testing.T) {
 }
 
 func TestExtractEditBlocksTildeOnlyRejectsBackticks(t *testing.T) {
+	t.Parallel()
 	backtickInput := "```go\nedit_block:1\nfile.go\n" + search + "\na\n" + divider + "\nb\n" + replace + "\n```\n"
 	result, err := ExtractEditBlocks(backtickInput, true)
 	if err != nil {
@@ -960,6 +967,7 @@ func TestExtractEditBlocksTildeOnlyRejectsBackticks(t *testing.T) {
 }
 
 func TestExtractEditBlocksBothFenceTypes(t *testing.T) {
+	t.Parallel()
 	mixedInput := "~~~~go\nedit_block:1\nfile1.go\n" + search + "\na\n" + divider + "\nb\n" + replace + "\n~~~~\n\n```go\nedit_block:2\nfile2.go\n" + search + "\nx\n" + divider + "\ny\n" + replace + "\n```\n"
 	result, err := ExtractEditBlocks(mixedInput, false)
 	if err != nil {
