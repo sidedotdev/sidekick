@@ -280,11 +280,12 @@ func (m taskProgressModel) View() string {
 		if m.err != nil {
 			b.WriteString(fmt.Sprintf("Error: %v\n", m.err))
 		}
-	} else if !m.approvalInput.HasPendingAction() {
-		b.WriteString(fmt.Sprintf(`
-⚠️  Sidekick's cli-only mode is *experimental*. Interact via http://localhost:%d/flows/%s
-%s Working... To cancel, press ctrl+c.
-`, common.GetServerPort(), m.flowID, m.spinner.View()))
+	} else {
+		if !m.approvalInput.HasPendingAction() {
+			b.WriteString(fmt.Sprintf("\n%s Working... To cancel, press ctrl+c.", m.spinner.View()))
+		}
+
+		b.WriteString(fmt.Sprintf("\n⚠️  Sidekick's cli-only mode is *experimental*. Interact via http://localhost:%d/flows/%s", common.GetServerPort(), m.flowID))
 	}
 
 	return b.String()
