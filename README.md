@@ -175,7 +175,7 @@ Patterns are matched as literal prefixes by default. If a pattern contains regex
 
 Sidekick includes sensible defaults: common read-only commands like `ls`, `cat`, `git status`, `go test`, etc. are auto-approved, while dangerous commands like `sudo`, `rm -rf /`, `chmod 777` are denied.
 
-Permission configs are merged in order: base defaults → local config → repo config → workspace config. Use `reset_auto_approve = true` or `reset_require_approval = true` to replace (rather than append to) previous rules. Deny rules always accumulate.
+Permission configs are merged in order: base defaults → local config → repo config → workspace config. Use `reset_auto_approve: true` or `reset_require_approval: true` to replace (rather than append to) previous rules. Deny rules always accumulate.
 
 #### agent_config
 
