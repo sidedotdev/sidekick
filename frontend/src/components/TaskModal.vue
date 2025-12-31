@@ -144,7 +144,8 @@ const getInitialDescription = (): string => {
 }
 
 const getInitialBranch = (): string | null => {
-  if (props.task) return props.task.flowOptions?.startBranch ?? null
+  const provided = props.task?.flowOptions?.startBranch ?? null
+  if (provided) return provided
   return localStorage.getItem(getLastBranchKey()) || null
 }
 
