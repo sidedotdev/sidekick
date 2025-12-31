@@ -27,6 +27,10 @@ func (c ChatMessage) GetRole() string {
 	return string(c.Role)
 }
 
+func (c ChatMessage) GetToolCalls() []ToolCall {
+	return c.ToolCalls
+}
+
 // GetContentString returns the content string.
 func (c ChatMessage) GetContentString() string {
 	return c.Content

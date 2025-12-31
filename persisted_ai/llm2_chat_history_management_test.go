@@ -635,6 +635,7 @@ func TestManageLlm2ChatHistory_OverlapHandling(t *testing.T) {
 }
 
 func TestManageLlm2ChatHistory_Trimming_Basic(t *testing.T) {
+	ca := &ChatHistoryActivities{}
 	messages := []llm2.Message{
 		textMsgWithCtx(llm2.RoleUser, "Initial", ContextTypeInitialInstructions), // len 7
 		textMsg(llm2.RoleAssistant, strings.Repeat("A", 50)),                     // len 50
@@ -646,7 +647,7 @@ func TestManageLlm2ChatHistory_Trimming_Basic(t *testing.T) {
 		textMsgWithCtx(llm2.RoleUser, "Initial", ContextTypeInitialInstructions),
 		textMsg(llm2.RoleAssistant, strings.Repeat("C", 50)),
 	}
-	result, err := manageLlm2ChatHistory(messages, 57)
+	result, err := ca.ManageLlm2ChatHistory(messages, 57)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 
@@ -654,12 +655,13 @@ func TestManageLlm2ChatHistory_Trimming_Basic(t *testing.T) {
 		textMsgWithCtx(llm2.RoleUser, "Initial", ContextTypeInitialInstructions),
 		textMsg(llm2.RoleAssistant, strings.Repeat("C", 50)),
 	}
-	result2, err := manageLlm2ChatHistory(messages, 56)
+	result2, err := ca.ManageLlm2ChatHistory(messages, 56)
 	assert.NoError(t, err)
 	assert.Equal(t, expected2, result2)
 }
 
 func TestManageLlm2ChatHistory_Trimming_InitialInstructionsProtected(t *testing.T) {
+	ca := &ChatHistoryActivities{}
 	messages := []llm2.Message{
 		textMsg(llm2.RoleAssistant, strings.Repeat("A", 50)),                     // len 50
 		textMsgWithCtx(llm2.RoleUser, "Initial", ContextTypeInitialInstructions), // len 7
@@ -670,12 +672,13 @@ func TestManageLlm2ChatHistory_Trimming_InitialInstructionsProtected(t *testing.
 		textMsgWithCtx(llm2.RoleUser, "Initial", ContextTypeInitialInstructions),
 		textMsg(llm2.RoleAssistant, strings.Repeat("B", 50)),
 	}
-	result, err := manageLlm2ChatHistory(messages, 10)
+	result, err := ca.ManageLlm2ChatHistory(messages, 10)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
 
 func TestManageLlm2ChatHistory_Trimming_SoftLimit(t *testing.T) {
+	ca := &ChatHistoryActivities{}
 	messages := []llm2.Message{
 		textMsgWithCtx(llm2.RoleUser, "Initial One", ContextTypeInitialInstructions), // len 11
 		textMsg(llm2.RoleAssistant, strings.Repeat("A", 50)),                         // len 50, droppable
@@ -686,7 +689,7 @@ func TestManageLlm2ChatHistory_Trimming_SoftLimit(t *testing.T) {
 		textMsgWithCtx(llm2.RoleUser, "Initial One", ContextTypeInitialInstructions),
 		textMsgWithCtx(llm2.RoleUser, "Initial Two", ContextTypeInitialInstructions),
 	}
-	result, err := manageLlm2ChatHistory(messages, 25)
+	result, err := ca.ManageLlm2ChatHistory(messages, 25)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 
@@ -698,12 +701,13 @@ func TestManageLlm2ChatHistory_Trimming_SoftLimit(t *testing.T) {
 		textMsgWithCtx(llm2.RoleUser, "Very Long Initial Instructions Part 1", ContextTypeInitialInstructions),
 		textMsgWithCtx(llm2.RoleUser, "Very Long Initial Instructions Part 2", ContextTypeInitialInstructions),
 	}
-	resultOnlyII, err := manageLlm2ChatHistory(messagesOnlyII, 50)
+	resultOnlyII, err := ca.ManageLlm2ChatHistory(messagesOnlyII, 50)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedOnlyII, resultOnlyII)
 }
 
 func TestManageLlm2ChatHistory_ToolCallArgumentsInLength(t *testing.T) {
+	ca := &ChatHistoryActivities{}
 	messages := []llm2.Message{
 		textMsgWithCtx(llm2.RoleUser, "Init", ContextTypeInitialInstructions), // len 4
 		{
@@ -717,7 +721,7 @@ func TestManageLlm2ChatHistory_ToolCallArgumentsInLength(t *testing.T) {
 		textMsg(llm2.RoleAssistant, "Last"),       // len 4, retained as last
 	}
 
-	result, err := manageLlm2ChatHistory(messages, 20)
+	result, err := ca.ManageLlm2ChatHistory(messages, 20)
 	assert.NoError(t, err)
 
 	expected := []llm2.Message{
@@ -728,6 +732,7 @@ func TestManageLlm2ChatHistory_ToolCallArgumentsInLength(t *testing.T) {
 }
 
 func TestManageLlm2ChatHistory_DropAllOlderBehavior(t *testing.T) {
+	ca := &ChatHistoryActivities{}
 	messages := []llm2.Message{
 		textMsgWithCtx(llm2.RoleUser, "Init", ContextTypeInitialInstructions), // len 4, retained
 		textMsg(llm2.RoleAssistant, "A"),                                      // len 1, unretained
@@ -737,7 +742,7 @@ func TestManageLlm2ChatHistory_DropAllOlderBehavior(t *testing.T) {
 		textMsg(llm2.RoleAssistant, "E"),                                      // len 1, unretained, last message retained
 	}
 
-	result, err := manageLlm2ChatHistory(messages, 7)
+	result, err := ca.ManageLlm2ChatHistory(messages, 7)
 	assert.NoError(t, err)
 
 	expected := []llm2.Message{
@@ -749,6 +754,7 @@ func TestManageLlm2ChatHistory_DropAllOlderBehavior(t *testing.T) {
 }
 
 func TestManageLlm2ChatHistory_TruncateOldestFirst(t *testing.T) {
+	ca := &ChatHistoryActivities{}
 	largeContent1 := strings.Repeat("A", 150)
 	largeContent2 := strings.Repeat("B", 150)
 
@@ -773,7 +779,7 @@ func TestManageLlm2ChatHistory_TruncateOldestFirst(t *testing.T) {
 		textMsg(llm2.RoleAssistant, "Last"),          // len 4, retained
 	}
 
-	result, err := manageLlm2ChatHistory(messages, 200)
+	result, err := ca.ManageLlm2ChatHistory(messages, 200)
 	assert.NoError(t, err)
 
 	var toolResp1Text, toolResp2Text string
