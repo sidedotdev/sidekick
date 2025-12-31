@@ -437,8 +437,13 @@ func detectRegexArguments(parts []string) map[int]bool {
 					result[i+1] = true
 				}
 			} else if (part == "-pe" || part == "-pie" || part == "-pi") && i+1 < len(parts) {
-				// -pi is followed by -e, then expression
-				if part == "-pi" && i+1 < len(parts) && parts[i+1] == "-e" && i+2 < len(parts) {
+				// -pe and -pie: expression follows immediately
+				// -pi: followed by -e, then expression
+				if part == "-pe" || part == "-pie" {
+					if isPerlExpression(parts[i+1]) {
+						result[i+1] = true
+					}
+				} else if part == "-pi" && parts[i+1] == "-e" && i+2 < len(parts) {
 					if isPerlExpression(parts[i+2]) {
 						result[i+2] = true
 					}
