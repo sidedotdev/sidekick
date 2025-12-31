@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-func ExtractSymbolDefinitionBlocks(content string) []CodeBlock {
+func ExtractSymbolDefinitionBlocks(content string) ([]CodeBlock, error) {
 	var blocks []CodeBlock
 	var currentBlock CodeBlock
 	var inCodeBlock bool
@@ -59,11 +59,15 @@ func ExtractSymbolDefinitionBlocks(content string) []CodeBlock {
 		blocks = append(blocks, currentBlock)
 	}
 
-	if len(blocks) == 0 {
-		return nil
+	if err := scanner.Err(); err != nil {
+		return blocks, err
 	}
 
-	return blocks
+	if len(blocks) == 0 {
+		return nil, nil
+	}
+
+	return blocks, nil
 }
 
 func parseHeaderContent(block *CodeBlock) {
@@ -95,7 +99,7 @@ func parseHeaderContent(block *CodeBlock) {
 }
 
 // ExtractSearchCodeBlocks parses a string containing search results and returns a slice of CodeBlocks.
-func ExtractSearchCodeBlocks(content string) []CodeBlock {
+func ExtractSearchCodeBlocks(content string) ([]CodeBlock, error) {
 	var blocks []CodeBlock
 	var currentBlock *CodeBlock
 	var currentFilePath string
@@ -151,7 +155,11 @@ func ExtractSearchCodeBlocks(content string) []CodeBlock {
 		blocks = append(blocks, *currentBlock)
 	}
 
-	return blocks
+	if err := scanner.Err(); err != nil {
+		return blocks, err
+	}
+
+	return blocks, nil
 }
 
 func parseInt(s string) int {
@@ -162,7 +170,7 @@ func parseInt(s string) int {
 // ExtractGitDiffCodeBlocks parses git diff output and returns CodeBlocks
 // representing the state of the code after the diff is applied.
 // Each block contains a contiguous set of lines from the new file state.
-func ExtractGitDiffCodeBlocks(content string) []CodeBlock {
+func ExtractGitDiffCodeBlocks(content string) ([]CodeBlock, error) {
 	var blocks []CodeBlock
 	var currentFilePath string
 	var currentBlock *CodeBlock
@@ -241,7 +249,11 @@ func ExtractGitDiffCodeBlocks(content string) []CodeBlock {
 		blocks = append(blocks, *currentBlock)
 	}
 
-	return blocks
+	if err := scanner.Err(); err != nil {
+		return blocks, err
+	}
+
+	return blocks, nil
 }
 
 type CodeBlock struct {
