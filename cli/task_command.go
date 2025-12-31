@@ -21,8 +21,7 @@ func NewTaskCommand() *cli.Command {
 		Usage:     "Start a new task (e.g., side task \"fix the error in my tests\")",
 		ArgsUsage: "<task description>",
 		Flags: []cli.Flag{
-			// TODO support this flag, after introducing a way to provide a customized DevConfig per invoked flow
-			//&cli.BoolFlag{Name: "disable-human-in-the-loop", Usage: "Disable human-in-the-loop prompts"},
+			&cli.BoolFlag{Name: "disable-human-in-the-loop", Usage: "Disable human-in-the-loop prompts"},
 			&cli.BoolFlag{Name: "async", Usage: "Run task asynchronously and exit immediately"},
 			&cli.StringFlag{Name: "flow", Value: "basic_dev", Usage: "Specify flow type (e.g., basic_dev, planned_dev)"},
 			&cli.BoolFlag{Name: "plan", Aliases: []string{"p"}, Usage: "Shorthand for --flow planned_dev"},
