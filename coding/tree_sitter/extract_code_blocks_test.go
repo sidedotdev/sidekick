@@ -151,7 +151,10 @@ abc=invalid line number`,
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := ExtractSearchCodeBlocks(tt.input)
+			got, err := ExtractSearchCodeBlocks(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			if !reflect.DeepEqual(got, tt.expected) {
 				//t.Errorf("expected:\n%v\ngot:\n%v", tt.expected, got)
 				t.Errorf("expected:\n%s\ngot:\n%s", utils.PanicJSON(tt.expected), utils.PanicJSON(got))
@@ -395,7 +398,10 @@ index dcf347e..e818d00 100644
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := ExtractGitDiffCodeBlocks(tt.input)
+			got, err := ExtractGitDiffCodeBlocks(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			if !reflect.DeepEqual(got, tt.expected) {
 				t.Errorf("expected:\n%s\ngot:\n%s", utils.PanicJSON(tt.expected), utils.PanicJSON(got))
 			}
@@ -653,7 +659,10 @@ func main() {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := ExtractSymbolDefinitionBlocks(tt.input)
+			got, err := ExtractSymbolDefinitionBlocks(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			if !reflect.DeepEqual(got, tt.expected) {
 				//t.Errorf("expected:\n%v\ngot:\n%v", tt.expected, got)
 				t.Errorf("expected:\n%s\ngot:\n%s", utils.PrettyJSON(tt.expected), utils.PrettyJSON(got))

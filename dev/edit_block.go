@@ -5,8 +5,10 @@ import (
 	"sidekick/coding/tree_sitter"
 	"sidekick/llm"
 	"sidekick/utils"
-	"strconv" // Added to use the Atoi function
+	"strconv"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // EditBlock represents a block of edits, including the file path, old lines, and new lines.
@@ -38,9 +40,18 @@ func extractAllCodeBlocks(chatHistory []llm.ChatMessage) []tree_sitter.CodeBlock
 	codeBlocks := make([]tree_sitter.CodeBlock, 0)
 	for _, chatMessage := range chatHistory {
 		if chatMessage.Role != llm.ChatMessageRoleAssistant {
-			symDefCodeBlocks := tree_sitter.ExtractSymbolDefinitionBlocks(chatMessage.Content)
-			searchCodeBlocks := tree_sitter.ExtractSearchCodeBlocks(chatMessage.Content)
-			gitDiffCodeBlocks := tree_sitter.ExtractGitDiffCodeBlocks(chatMessage.Content)
+			symDefCodeBlocks, err := tree_sitter.ExtractSymbolDefinitionBlocks(chatMessage.Content)
+			if err != nil {
+				log.Warn().Err(err).Msg("failed to extract symbol definition blocks")
+			}
+			searchCodeBlocks, err := tree_sitter.ExtractSearchCodeBlocks(chatMessage.Content)
+			if err != nil {
+				log.Warn().Err(err).Msg("failed to extract search code blocks")
+			}
+			gitDiffCodeBlocks, err := tree_sitter.ExtractGitDiffCodeBlocks(chatMessage.Content)
+			if err != nil {
+				log.Warn().Err(err).Msg("failed to extract git diff code blocks")
+			}
 			codeBlocks = append(codeBlocks, symDefCodeBlocks...)
 			codeBlocks = append(codeBlocks, searchCodeBlocks...)
 			codeBlocks = append(codeBlocks, gitDiffCodeBlocks...)
