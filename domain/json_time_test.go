@@ -277,3 +277,62 @@ func TestWorkspace_MarshalJSON_UTC(t *testing.T) {
 		t.Errorf("created time mismatch: got %v, want %v", parsedCreated, created)
 	}
 }
+
+func TestSubflow_MarshalJSON_UTC(t *testing.T) {
+	t.Parallel()
+
+	// Use a non-UTC timezone with sub-millisecond precision
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Fatalf("failed to load location: %v", err)
+	}
+
+	updated := time.Date(2025, 6, 15, 10, 30, 45, 123456789, loc)
+
+	subflow := Subflow{
+		WorkspaceId: "ws-id",
+		Id:          "sf_test-id",
+		Name:        "Test Subflow",
+		FlowId:      "flow-id",
+		Status:      SubflowStatusStarted,
+		Updated:     updated,
+	}
+
+	data, err := json.Marshal(subflow)
+	if err != nil {
+		t.Fatalf("failed to marshal Subflow: %v", err)
+	}
+
+	jsonStr := string(data)
+
+	// Verify UTC format (ends with Z, not timezone offset)
+	if strings.Contains(jsonStr, "-08:00") || strings.Contains(jsonStr, "-07:00") {
+		t.Errorf("JSON contains timezone offset instead of UTC: %s", jsonStr)
+	}
+
+	// Verify sub-millisecond precision is preserved
+	if !strings.Contains(jsonStr, "123456789") {
+		t.Errorf("JSON missing sub-millisecond precision for updated: %s", jsonStr)
+	}
+
+	// Unmarshal and verify the time is correct
+	var result map[string]interface{}
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	updatedStr := result["updated"].(string)
+
+	if !strings.HasSuffix(updatedStr, "Z") {
+		t.Errorf("updated should end with Z: %s", updatedStr)
+	}
+
+	// Parse and verify the actual time value is equivalent
+	parsedUpdated, err := time.Parse(time.RFC3339Nano, updatedStr)
+	if err != nil {
+		t.Fatalf("failed to parse updated: %v", err)
+	}
+	if !parsedUpdated.Equal(updated) {
+		t.Errorf("updated time mismatch: got %v, want %v", parsedUpdated, updated)
+	}
+}
