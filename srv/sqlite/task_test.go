@@ -103,8 +103,8 @@ func TestGetTask(t *testing.T) {
 		},
 		AgentType: domain.AgentTypeHuman,
 		FlowType:  domain.FlowTypeBasicDev,
-		Created:   time.Now().UTC().Truncate(time.Millisecond),
-		Updated:   time.Now().UTC().Truncate(time.Millisecond),
+		Created:   time.Now().UTC(),
+		Updated:   time.Now().UTC(),
 		FlowOptions: map[string]interface{}{
 			"option1": "value1",
 		},
@@ -145,24 +145,24 @@ func TestGetTasks(t *testing.T) {
 			Id:          "task1",
 			Title:       "Task 1",
 			Status:      domain.TaskStatusToDo,
-			Created:     time.Now().UTC().Truncate(time.Millisecond),
-			Updated:     time.Now().UTC().Truncate(time.Millisecond),
+			Created:     time.Now().UTC(),
+			Updated:     time.Now().UTC(),
 		},
 		{
 			WorkspaceId: "workspace1",
 			Id:          "task2",
 			Title:       "Task 2",
 			Status:      domain.TaskStatusInProgress,
-			Created:     time.Now().UTC().Truncate(time.Millisecond),
-			Updated:     time.Now().UTC().Truncate(time.Millisecond),
+			Created:     time.Now().UTC(),
+			Updated:     time.Now().UTC(),
 		},
 		{
 			WorkspaceId: "workspace1",
 			Id:          "task3",
 			Title:       "Task 3",
 			Status:      domain.TaskStatusComplete,
-			Created:     time.Now().UTC().Truncate(time.Millisecond),
-			Updated:     time.Now().UTC().Truncate(time.Millisecond),
+			Created:     time.Now().UTC(),
+			Updated:     time.Now().UTC(),
 		},
 	}
 
@@ -192,7 +192,7 @@ func TestGetArchivedTasks(t *testing.T) {
 	ctx := context.Background()
 
 	// Create multiple tasks, some archived
-	now := time.Now().UTC().Truncate(time.Millisecond)
+	now := time.Now().UTC()
 	archivedTime := now.Add(-24 * time.Hour)
 	tasks := []domain.Task{
 		{

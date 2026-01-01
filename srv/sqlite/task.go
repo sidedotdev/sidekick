@@ -49,11 +49,11 @@ func (s *Storage) PersistTask(ctx context.Context, task domain.Task) error {
 	`
 
 	if task.Archived != nil {
-		truncated := task.Archived.UTC().Truncate(time.Millisecond)
-		task.Archived = &truncated
+		utc := task.Archived.UTC()
+		task.Archived = &utc
 	}
-	task.Created = task.Created.UTC().Truncate(time.Millisecond)
-	task.Updated = task.Updated.UTC().Truncate(time.Millisecond)
+	task.Created = task.Created.UTC()
+	task.Updated = task.Updated.UTC()
 
 	_, err = s.db.ExecContext(ctx, query,
 		task.WorkspaceId, task.Id, task.Title, task.Description, task.Status, linksJSON, task.AgentType,
@@ -138,7 +138,7 @@ func (s *Storage) GetTask(ctx context.Context, workspaceId, taskId string) (doma
 	}
 
 	if archivedStr != nil {
-		archived, err := time.Parse(time.RFC3339, *archivedStr)
+		archived, err := time.Parse(time.RFC3339Nano, *archivedStr)
 		if err != nil {
 			return domain.Task{}, fmt.Errorf("failed to parse archived time: %w", err)
 		}
