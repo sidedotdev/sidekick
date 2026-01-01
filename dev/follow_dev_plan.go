@@ -174,6 +174,11 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		maxAttempts = repoConfig.MaxIterations
 	}
 
+	autoIterations := 2
+	if cfg, ok := repoConfig.AgentConfig[common.StepExecutionAndVerificationKey]; ok && cfg.AutoIterations > 0 {
+		autoIterations = cfg.AutoIterations
+	}
+
 	// TODO decide how to set the dev step info based on the step type, eg
 	// perhaps different structs per step type
 	initialPromptInfo := InitialDevStepInfo{
@@ -217,7 +222,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		// get_help_or_input tool recently already, i.e. keep track of count
 		// of attempts since last helped and use that here instead
 		// TODO figure out best way to do this when human is in the loop
-		if modelAttemptCount > 0 && modelAttemptCount%2 == 0 && len(*chatHistory) > 0 {
+		if modelAttemptCount > 0 && modelAttemptCount%autoIterations == 0 && len(*chatHistory) > 0 {
 			guidanceContext := "The system looped 2 times attempting to complete this step and failed, so the LLM probably needs some help. Please provide some guidance for the next step based on the above log. Look at the latest test result and git diff for an idea of what's going wrong."
 
 			// get the latest git diff, since it could be different from the
