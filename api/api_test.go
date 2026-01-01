@@ -30,6 +30,10 @@ import (
 	"go.temporal.io/sdk/client"
 )
 
+func init() {
+	gin.SetMode(gin.TestMode)
+}
+
 type MockWorkflow struct{}
 
 // testSecretManager is a configurable mock for testing GetProvidersHandler
@@ -105,7 +109,6 @@ func NewMockControllerWithSecretManager(t *testing.T, sm secret_manager.SecretMa
 
 func TestCreateTaskHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	testCases := []struct {
 		name           string
@@ -289,7 +292,6 @@ func TestCreateTaskHandler(t *testing.T) {
 func TestGetTasksHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	ctx := context.Background()
 	workspaceId := "ws_1"
@@ -361,7 +363,6 @@ func TestGetTasksHandler(t *testing.T) {
 func TestGetTasksHandlerWhenTasksAreEmpty(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create a new gin context with the mock controller
@@ -387,7 +388,6 @@ func TestGetTasksHandlerWhenTasksAreEmpty(t *testing.T) {
 
 func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	db := ctrl.service
 	ctx := context.Background()
@@ -489,7 +489,6 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 
 func TestFlowActionChangesWebsocketHandler_NewOnly(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	db := ctrl.service
 	ctx := context.Background()
@@ -1048,7 +1047,6 @@ func TestUpdateFlowActionHandler_NonCallback(t *testing.T) {
 func TestGetFlowActionsHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	ctx := context.Background()
 
@@ -1102,7 +1100,6 @@ func TestGetFlowActionsHandler(t *testing.T) {
 
 func TestGetFlowActionsHandler_NonExistentFlowId(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	resp := httptest.NewRecorder()
@@ -1116,7 +1113,6 @@ func TestGetFlowActionsHandler_NonExistentFlowId(t *testing.T) {
 
 func TestGetFlowActionsHandler_EmptyActions(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	flow := domain.Flow{
@@ -1147,7 +1143,6 @@ func TestGetFlowActionsHandler_EmptyActions(t *testing.T) {
 func TestUpdateTaskHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create a task for testing
@@ -1197,7 +1192,6 @@ func TestUpdateTaskHandler(t *testing.T) {
 func TestUpdateTaskHandler_InvalidTaskID(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Prepare the request body
@@ -1228,7 +1222,6 @@ func TestUpdateTaskHandler_InvalidTaskID(t *testing.T) {
 func TestUpdateTaskHandler_UnparseableRequestBody(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create a task for testing
@@ -1262,7 +1255,6 @@ func TestUpdateTaskHandler_UnparseableRequestBody(t *testing.T) {
 func TestUpdateTaskHandler_InvalidStatus(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create a task for testing
@@ -1304,7 +1296,6 @@ func TestUpdateTaskHandler_InvalidStatus(t *testing.T) {
 func TestUpdateTaskHandler_InvalidAgentType(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create a task for testing
@@ -1346,7 +1337,6 @@ func TestUpdateTaskHandler_InvalidAgentType(t *testing.T) {
 func TestUpdateTaskHandler_InvalidAgentTypeAndStatusCombo(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create a task for testing
@@ -1389,7 +1379,6 @@ func TestUpdateTaskHandler_InvalidAgentTypeAndStatusCombo(t *testing.T) {
 func TestDeleteTaskHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create a task for testing
@@ -1427,7 +1416,6 @@ func TestDeleteTaskHandler(t *testing.T) {
 func TestCancelTaskHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 
 	testCases := []struct {
 		name           string
@@ -1500,7 +1488,6 @@ func TestCancelTaskHandler(t *testing.T) {
 
 func TestGetTasksHandler_DefaultIncludesInReview(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	testCases := []struct {
 		name        string
@@ -1557,7 +1544,6 @@ func TestGetTasksHandler_DefaultIncludesInReview(t *testing.T) {
 func TestCancelTaskHandler_NonExistentTask(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Prepare the request with non-existent task ID
@@ -1584,7 +1570,6 @@ func TestCancelTaskHandler_NonExistentTask(t *testing.T) {
 func TestArchiveFinishedTasksHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create tasks for testing
@@ -1660,7 +1645,6 @@ func TestArchiveFinishedTasksHandler(t *testing.T) {
 func TestArchiveTaskHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 
 	// Create tasks for testing
 	completedTask := domain.Task{
@@ -1749,7 +1733,6 @@ func TestArchiveTaskHandler(t *testing.T) {
 
 func TestGetWorkspacesHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Test for correct data retrieval
@@ -1807,7 +1790,6 @@ func TestGetWorkspacesHandler(t *testing.T) {
 func TestGetTaskHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	ctx := context.Background()
 	workspaceId := "ws_1"
@@ -1915,7 +1897,6 @@ func TestGetTaskHandler(t *testing.T) {
 func TestGetFlowHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	ctx := context.Background()
 	workspaceId := "ws_1"
@@ -2025,7 +2006,6 @@ func TestGetFlowHandler(t *testing.T) {
 
 func TestFlowEventsWebsocketHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	workspaceId := "test-workspace-id-" + uuid.New().String()
@@ -2142,7 +2122,6 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 func TestGetArchivedTasksHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create and archive a task
@@ -2197,7 +2176,6 @@ func TestGetArchivedTasksHandler(t *testing.T) {
 
 func TestTaskChangesWebsocketHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	db := ctrl.service
 	ctx := context.Background()
@@ -2295,7 +2273,6 @@ func TestTaskChangesWebsocketHandler(t *testing.T) {
 
 func TestUserActionHandler_BasicCases(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	t.Run("Successful go_next_step", func(t *testing.T) {
 		t.Parallel()
@@ -2413,7 +2390,6 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 
 func TestUserActionHandler_FlowNotFound(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	apiCtrl := NewMockController(t)
 	router := DefineRoutes(apiCtrl)
 
@@ -2433,7 +2409,6 @@ func TestUserActionHandler_FlowNotFound(t *testing.T) {
 
 func TestUserActionHandler_SignalError(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	apiCtrl := NewMockController(t)
 	router := DefineRoutes(apiCtrl)
 	signalErr := serviceerror.DeadlineExceeded{Message: "deadline exceeded"}
@@ -2471,7 +2446,6 @@ func TestUserActionHandler_SignalError(t *testing.T) {
 
 func TestGetProvidersHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
 		name                 string
@@ -2576,7 +2550,6 @@ func TestGetProvidersHandler(t *testing.T) {
 
 func TestGetModelsHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	router := DefineRoutes(ctrl)
 
