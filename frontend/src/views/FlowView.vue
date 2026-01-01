@@ -117,6 +117,7 @@ let actionChangesSocket: WebSocket | null = null
 let actionChangesSocketClosed = false
 let eventsSocket: WebSocket | null = null
 let eventsSocketClosed = false;
+let pendingEventSubscriptions: string[] = [];
 let shortContent = ref(true);
 let currentFlowIdForSockets: string | null = null;
 let isLoadingFlow = ref(false);
@@ -153,6 +154,14 @@ const handleSubflowStatusUpdate = (subflowId: string, status: SubflowStatus, res
   }, 100);
 };
 
+const sendEventSubscription = (parentId: string) => {
+  if (eventsSocket && eventsSocket.readyState === WebSocket.OPEN) {
+    eventsSocket.send(JSON.stringify({ parentId }));
+  } else {
+    pendingEventSubscriptions.push(parentId);
+  }
+};
+
 const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Promise<Response>) => {
   eventsSocket = new WebSocket(`ws://${window.location.host}/ws/v1/workspaces/${store.workspaceId}/flows/${flowId}/events`);
 
@@ -165,6 +174,12 @@ const connectEventsWebSocketForFlow = (flowId: string, initialFlowPromise?: Prom
       // Send message to subscribe to events for the main flow itself
       const message = JSON.stringify({parentId: flowId});
       eventsSocket?.send(message);
+
+      // Process any pending subscriptions that were queued before the socket opened
+      for (const parentId of pendingEventSubscriptions) {
+        eventsSocket?.send(JSON.stringify({ parentId }));
+      }
+      pendingEventSubscriptions = [];
     }, 10);
   };
 
@@ -273,7 +288,7 @@ const getAndSubscribeSubflowWithDebounce = (subflowId: string, delay: number) =>
       }
       
       // Send subscription message for the current subflowId
-      eventsSocket?.send(JSON.stringify({ parentId: subflowId }));
+      sendEventSubscription(subflowId);
 
       // If there's a parent subflow, process it with a 10ms debounce
       if (subflowData.parentSubflowId) {
@@ -328,7 +343,7 @@ const connectActionChangesWebSocketForFlow = (flowId: string) => {
         let latestFlowAction = flowActions.value.find((action) => action.id === flowAction.id);
         if (latestFlowAction?.actionStatus === 'started') {
           // Subscribe to events for the flow action itself (e.g., for chat messages)
-          eventsSocket?.send(JSON.stringify({ parentId: flowAction.id }));
+          sendEventSubscription(flowAction.id);
         }
         setShortContent();
       }, 100);
@@ -390,6 +405,11 @@ const fetchAndMergeFlowActions = async (flowId: string) => {
         if (action.subflowId) {
           getAndSubscribeSubflowWithDebounce(action.subflowId, 100);
         }
+
+        // Subscribe to events for in-progress actions (e.g., for chat message streaming)
+        if (action.actionStatus === 'started') {
+          sendEventSubscription(action.id);
+        }
       }
 
       if (fetchedActions.length > 0 && !hasReceivedFirstAction) {
@@ -437,6 +457,7 @@ const setupFlow = async (newFlowId: string | undefined) => {
   }
   actionChangesSocketClosed = false; // Reset for new connections
   eventsSocketClosed = false;
+  pendingEventSubscriptions = [];
   currentFlowIdForSockets = null; // Reset
 
   if (!newFlowId) {
