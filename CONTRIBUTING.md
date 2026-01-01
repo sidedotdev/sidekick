@@ -31,28 +31,42 @@ All the dependencies listed in README.md are required when developing the projec
 2. bun: https://bun.sh/
 3. usearch: https://unum-cloud.github.io/usearch/golang/
 4. [redis](https://redis.io/docs/install/install-redis/)
-5. process-compose: https://f1bonacc1.github.io/process-compose/installation/
-6. watchexec: https://github.com/watchexec/watchexec
 
 ## Development Workflow
 
-### Step 1: Start all services
+### Step 1: Install frontend dependencies
 
-Start all services (temporal, api, worker, frontend) using process-compose:
+On first setup (and after dependency lockfile changes), install frontend dependencies:
 
 ```sh
-SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development process-compose
+cd frontend
+bun ci
 ```
 
-This will start all services with file watching enabled. Changes to Go files will automatically trigger rebuilds.
+### Step 2: Run the frontend dev server
 
-### Step 2: Check out the web UI
+In a separate terminal, start the frontend dev server:
 
-Open http://localhost:5173/kanban
+```sh
+cd frontend
+bun dev
+```
+
+### Step 3: Start all services
+
+Start all services (temporal, nats, server, worker):
+
+```sh
+SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development go run sidekick/cli start -- --disable-auto-open
+```
+
+### Step 4: Check out the web UI
+
+Open http://localhost:8855/kanban
 
 This assumes you have already run `side init` in at least one project.
 
-### Step 3: Run Tests
+### Step 5: Run Tests
 
 ```sh
 go test -test.timeout 10s sidekick/... 
