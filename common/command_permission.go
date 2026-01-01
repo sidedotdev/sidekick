@@ -120,6 +120,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "npm outdated"},
 			{Pattern: "npm version"},
 			{Pattern: "npm audit"},
+			{Pattern: "npm update"},
 			// Yarn commands
 			{Pattern: "yarn test"},
 			{Pattern: "yarn lint"},
@@ -154,7 +155,6 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "bun why"},
 			{Pattern: "bun pm view"},
 			{Pattern: "bun pm version"},
-			{Pattern: "bun info"},
 			// Python commands
 			{Pattern: "pytest"},
 			{Pattern: "python -m pytest"},
@@ -202,6 +202,8 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "true"},
 			{Pattern: "false"},
 			{Pattern: "test"},
+			{Pattern: "xxd"},
+			{Pattern: "od"},
 			{Pattern: "["},
 		},
 		RequireApproval: []CommandPattern{
