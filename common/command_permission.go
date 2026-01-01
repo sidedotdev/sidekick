@@ -95,6 +95,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			// Go commands
 			{Pattern: "go test"},
 			{Pattern: "go build"},
+			{Pattern: "go clean"},
 			{Pattern: "go fmt"},
 			{Pattern: "go generate"},
 			{Pattern: "go vet"},
