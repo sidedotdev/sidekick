@@ -55,7 +55,8 @@ type RepoConfig struct {
 	WorktreeSetup string `toml:"worktree_setup,omitempty"`
 
 	// AgentConfig contains per-use-case configuration for agent loops.
-	// Keys are use case names (e.g., "planning", "coding", "coding_and_verification").
+	// Keys are use case names (e.g., "planning", "coding", "coding_and_verification",
+	// "step_execution_and_verification").
 	AgentConfig map[string]AgentUseCaseConfig `toml:"agent_config,omitempty"`
 
 	CommandPermissions CommandPermissionConfig `toml:"command_permissions,omitempty"`
