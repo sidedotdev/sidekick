@@ -20,8 +20,9 @@ import (
 )
 
 type BranchNameRequest struct {
-	Requirements string `json:"requirements" jsonschema:"description=The requirements text to use as context for generating branch names"`
-	Hints        string `json:"editHints" jsonschema:"description=Additional hints that might provide context for branch name generation"`
+	Requirements    string   `json:"requirements" jsonschema:"description=The requirements text to use as context for generating branch names"`
+	Hints           string   `json:"editHints" jsonschema:"description=Additional hints that might provide context for branch name generation"`
+	ExcludeBranches []string `json:"-"` // Branch names to exclude (e.g., from prior failed attempts)
 }
 
 type SubmitBranchNamesParams struct {
@@ -52,6 +53,10 @@ func GenerateBranchName(eCtx flow_action.ExecContext, req BranchNameRequest) (st
 	branchesSlice = utils.Map(branchesSlice, strings.TrimSpace)
 	branches := make(map[string]bool)
 	for _, branch := range branchesSlice {
+		branches[branch] = true
+	}
+	// Also exclude branches from prior failed attempts (race condition handling)
+	for _, branch := range req.ExcludeBranches {
 		branches[branch] = true
 	}
 
