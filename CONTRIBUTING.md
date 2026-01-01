@@ -34,39 +34,29 @@ All the dependencies listed in README.md are required when developing the projec
 
 ## Development Workflow
 
-### Step 1: Install frontend dependencies
+### Step 1: Start backend
 
-On first setup (and after dependency lockfile changes), install frontend dependencies:
-
-```sh
-cd frontend
-bun ci
-```
-
-### Step 2: Run the frontend dev server
-
-In a separate terminal, start the frontend dev server:
-
-```sh
-cd frontend
-bun dev
-```
-
-### Step 3: Start all services
-
-Start all services (temporal, nats, server, worker):
+Build the side cli and start all servers:
 
 ```sh
 SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development go run sidekick/cli start -- --disable-auto-open
 ```
 
-### Step 4: Check out the web UI
+### Step 2: Run the frontend
 
-Open http://localhost:8855/kanban
+```sh
+cd frontend
+bun ci # just on first run
+bun dev
+```
+
+### Step 3: Check out the web UI
+
+Open http://localhost:5173/kanban
 
 This assumes you have already run `side init` in at least one project.
 
-### Step 5: Run Tests
+### Step 4: Run Tests
 
 ```sh
 go test -test.timeout 10s sidekick/... 
