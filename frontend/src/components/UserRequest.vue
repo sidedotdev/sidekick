@@ -200,6 +200,12 @@ const diffScopeOptions = computed(() => {
   return options;
 })
 
+watch(diffScopeOptions, (newOptions) => {
+  if (newOptions.length === 1 && newOptions[0]?.value === 'all') {
+    diffScope.value = 'all';
+  }
+}, { immediate: true });
+
 const currentDiffString = computed(() => {
   if (diffScope.value === 'since_last_review' && hasDiffSinceLastReview.value) {
     return props.flowAction.actionParams.mergeApprovalInfo.diffSinceLastReview;
@@ -255,7 +261,9 @@ onMounted(() => {
       diffMode.value = savedDiffMode;
     }
     const savedDiffScope = localStorage.getItem('mergeApproval.diff.scope');
-    if (savedDiffScope === 'all' || savedDiffScope === 'since_last_review') {
+    if (savedDiffScope === 'all') {
+      diffScope.value = savedDiffScope;
+    } else if (savedDiffScope === 'since_last_review' && hasDiffSinceLastReview.value) {
       diffScope.value = savedDiffScope;
     }
   } catch (error) {
