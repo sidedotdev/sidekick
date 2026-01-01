@@ -135,31 +135,58 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			configOverrides.ApplyToRepoConfig(&tempLocalRepoConfig)
 			editHints := tempLocalRepoConfig.EditCode.Hints
 
-			// Use LLM-based branch name generation
-			branchName, err = GenerateBranchName(tempLocalExecContext, BranchNameRequest{
-				Requirements: requirements,
-				Hints:        editHints,
-			})
-			if err != nil {
-				return DevContext{}, fmt.Errorf("failed to generate branch name: %v", err)
+			// Generate branch name and create worktree, with retry for race conditions
+			var excludeBranches []string
+			for {
+				branchName, err = GenerateBranchName(tempLocalExecContext, BranchNameRequest{
+					Requirements:    requirements,
+					Hints:           editHints,
+					ExcludeBranches: excludeBranches,
+				})
+				if err != nil {
+					return DevContext{}, fmt.Errorf("failed to generate branch name: %v", err)
+				}
+
+				worktree = &domain.Worktree{
+					Id:          ksuidSideEffect(ctx),
+					FlowId:      flowId,
+					Name:        branchName,
+					WorkspaceId: workspaceId,
+				}
+				err = workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeActivity, env.LocalEnvParams{
+					RepoDir:     repoDir,
+					StartBranch: startBranch,
+				}, *worktree).Get(ctx, &envContainer)
+				if err == nil {
+					break
+				}
+
+				// If branch already exists (race condition), exclude it and retry
+				var appErr *temporal.ApplicationError
+				if errors.As(err, &appErr) && appErr.Type() == env.ErrTypeBranchAlreadyExists {
+					log.Warn().Err(err).Str("branch", branchName).Msg("Branch already exists, retrying with new name")
+					excludeBranches = append(excludeBranches, branchName)
+					continue
+				}
+				return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
 			}
 		} else {
 			// Use legacy branch naming
 			branchName = flowId
-		}
 
-		worktree = &domain.Worktree{
-			Id:          ksuidSideEffect(ctx),
-			FlowId:      flowId,
-			Name:        branchName,
-			WorkspaceId: workspaceId,
-		}
-		err = workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeActivity, env.LocalEnvParams{
-			RepoDir:     repoDir,
-			StartBranch: startBranch,
-		}, *worktree).Get(ctx, &envContainer)
-		if err != nil {
-			return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
+			worktree = &domain.Worktree{
+				Id:          ksuidSideEffect(ctx),
+				FlowId:      flowId,
+				Name:        branchName,
+				WorkspaceId: workspaceId,
+			}
+			err = workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeActivity, env.LocalEnvParams{
+				RepoDir:     repoDir,
+				StartBranch: startBranch,
+			}, *worktree).Get(ctx, &envContainer)
+			if err != nil {
+				return DevContext{}, fmt.Errorf("failed to create environment: %v", err)
+			}
 		}
 		worktree.WorkingDirectory = envContainer.Env.GetWorkingDirectory()
 		err = workflow.ExecuteActivity(ctx, srv.Activities.PersistWorktree, *worktree).Get(ctx, nil)
