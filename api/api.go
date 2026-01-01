@@ -685,6 +685,22 @@ type FlowWithWorktrees struct {
 	Worktrees []domain.Worktree `json:"worktrees"`
 }
 
+func (f FlowWithWorktrees) MarshalJSON() ([]byte, error) {
+	flowBytes, err := json.Marshal(f.Flow)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse the flow JSON and add worktrees
+	var m map[string]interface{}
+	if err := json.Unmarshal(flowBytes, &m); err != nil {
+		return nil, err
+	}
+	m["worktrees"] = f.Worktrees
+
+	return json.Marshal(m)
+}
+
 func (ctrl *Controller) GetFlowHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	flowId := c.Param("id")
