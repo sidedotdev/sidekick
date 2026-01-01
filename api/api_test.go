@@ -2075,14 +2075,19 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 		},
 	}
 
+	// Channel to propagate errors from the event-producing goroutine
+	eventErrCh := make(chan error, 1)
+
 	// Start a goroutine to add the events over time, simulating a real-time scenario
 	go func() {
 		for _, event := range flowEvents {
 			time.Sleep(100 * time.Millisecond)
-			err = ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, event)
-			fmt.Printf("Added event: %v\n", event)
-			assert.NoError(t, err, "Failed to add flow event")
+			if addErr := ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, event); addErr != nil {
+				eventErrCh <- addErr
+				return
+			}
 		}
+		close(eventErrCh)
 	}()
 
 	// Connect to the WebSocket server
@@ -2099,30 +2104,32 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	assert.NoError(t, err, "Failed to send subscription for flowEvent2")
 
 	// Verify if the flow events are streamed correctly
-	timeout := time.After(5 * time.Second)
 	receivedEvents := make([]domain.FlowEvent, 0, len(flowEvents))
 
-	fmt.Print("Waiting for flow events...\n")
 	for i := 0; i < len(flowEvents); i++ {
-		select {
-		case <-timeout:
-			t.Fatalf("Timeout waiting for flow events. Received %d events so far", len(receivedEvents))
-		default:
-			_, r, err := ws.NextReader()
-			if err != nil {
-				t.Fatalf("Failed to get next reader: %v", err)
-			}
-			bytes, err := io.ReadAll(r)
-			if err != nil {
-				t.Fatalf("Failed to read ws bytes: %v", err)
-			}
-			receivedEvent, err := domain.UnmarshalFlowEvent(bytes)
-			if err != nil {
-				t.Fatalf("Failed to unmarshal flow event: %v", err)
-			}
-			t.Logf("Received event: %+v", receivedEvent)
-			receivedEvents = append(receivedEvents, receivedEvent)
+		// Set a read deadline for each message
+		err = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+		require.NoError(t, err, "Failed to set read deadline")
+
+		_, r, err := ws.NextReader()
+		if err != nil {
+			t.Fatalf("Failed to get next reader: %v", err)
 		}
+		msgBytes, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatalf("Failed to read ws bytes: %v", err)
+		}
+		receivedEvent, err := domain.UnmarshalFlowEvent(msgBytes)
+		if err != nil {
+			t.Fatalf("Failed to unmarshal flow event: %v", err)
+		}
+		t.Logf("Received event: %+v", receivedEvent)
+		receivedEvents = append(receivedEvents, receivedEvent)
+	}
+
+	// Check for errors from the event-producing goroutine
+	if eventErr := <-eventErrCh; eventErr != nil {
+		t.Fatalf("Failed to add flow event: %v", eventErr)
 	}
 
 	// Assert if the flow events match the expected structure/content
@@ -2236,43 +2243,47 @@ func TestTaskChangesWebsocketHandler(t *testing.T) {
 		Status:      domain.TaskStatusComplete,
 		StreamId:    "stream_id_2",
 	}
+
+	// Channel to propagate errors from the task-persisting goroutine
+	persistErrCh := make(chan error, 1)
 	go func() {
 		time.Sleep(time.Millisecond)
-		err = db.PersistTask(ctx, task2)
-		assert.NoError(t, err, "Persisting task 2 failed")
+		persistErrCh <- db.PersistTask(ctx, task2)
 	}()
 
+	// Set a read deadline so the test doesn't hang indefinitely
+	err = ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+	require.NoError(t, err, "Failed to set read deadline")
+
 	// Verify if the task is streamed correctly
-	timeout := time.After(2 * time.Second)
 	var receivedTask domain.Task
-
-	select {
-	case <-timeout:
-		t.Fatalf("Timeout waiting for task")
-	default:
-		var response map[string]interface{}
-		err = ws.ReadJSON(&response)
-		if err != nil {
-			t.Fatalf("Failed to read task: %v", err)
-		}
-		t.Logf("Received response: %+v", response)
-
-		tasks, ok := response["tasks"].([]interface{})
-		assert.True(t, ok, "tasks is not an array")
-		assert.Equal(t, 1, len(tasks), "expected 1 task")
-
-		taskJSON, err := json.Marshal(tasks[0])
-		assert.NoError(t, err, "Failed to marshal task")
-		err = json.Unmarshal(taskJSON, &receivedTask)
-		assert.NoError(t, err, "Failed to unmarshal task")
-
-		lastTaskStreamId, ok := response["lastTaskStreamId"].(string)
-		assert.True(t, ok, "lastTaskStreamId is not a string")
-		assert.Equal(t, "stream_id_2", lastTaskStreamId, "unexpected lastTaskStreamId")
+	var response map[string]interface{}
+	err = ws.ReadJSON(&response)
+	if err != nil {
+		t.Fatalf("Failed to read task: %v", err)
 	}
+	t.Logf("Received response: %+v", response)
+
+	tasks, ok := response["tasks"].([]interface{})
+	assert.True(t, ok, "tasks is not an array")
+	assert.Equal(t, 1, len(tasks), "expected 1 task")
+
+	taskJSON, err := json.Marshal(tasks[0])
+	assert.NoError(t, err, "Failed to marshal task")
+	err = json.Unmarshal(taskJSON, &receivedTask)
+	assert.NoError(t, err, "Failed to unmarshal task")
+
+	lastTaskStreamId, ok := response["lastTaskStreamId"].(string)
+	assert.True(t, ok, "lastTaskStreamId is not a string")
+	assert.Equal(t, "stream_id_2", lastTaskStreamId, "unexpected lastTaskStreamId")
 
 	// Assert if the task matches the expected structure/content
 	assert.Equal(t, task2, receivedTask, "Received task does not match expected task")
+
+	// Check for errors from the task-persisting goroutine
+	if persistErr := <-persistErrCh; persistErr != nil {
+		t.Fatalf("Failed to persist task 2: %v", persistErr)
+	}
 
 	// Close the WebSocket connection
 	err = ws.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
@@ -2280,8 +2291,6 @@ func TestTaskChangesWebsocketHandler(t *testing.T) {
 
 	// Wait for a short time to allow for cleanup
 	time.Sleep(100 * time.Millisecond)
-
-	// Additional assertions can be added here if needed
 }
 
 func TestUserActionHandler_BasicCases(t *testing.T) {
