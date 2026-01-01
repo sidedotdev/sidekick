@@ -453,6 +453,55 @@ func TestCreateWorkspaceHandler(t *testing.T) {
 	}
 }
 
+func TestCreateWorkspaceHandler_TimestampFormat(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	ctrl := NewMockController(t)
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+
+	workspaceReq := WorkspaceRequest{
+		Name:         "Timestamp Test Workspace",
+		LocalRepoDir: "/path/to/repo",
+		ConfigMode:   "merge",
+	}
+
+	jsonData, err := json.Marshal(workspaceReq)
+	require.NoError(t, err)
+
+	c.Request = httptest.NewRequest("POST", "/v1/workspaces", bytes.NewBuffer(jsonData))
+	ctrl.CreateWorkspaceHandler(c)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	// Check raw JSON for UTC format
+	rawJSON := resp.Body.String()
+
+	// Verify timestamps end with Z (UTC) and not timezone offset
+	assert.NotContains(t, rawJSON, "-08:00", "JSON should not contain timezone offset")
+	assert.NotContains(t, rawJSON, "-07:00", "JSON should not contain timezone offset")
+	assert.NotContains(t, rawJSON, "+00:00", "JSON should use Z suffix, not +00:00")
+
+	// Parse and verify structure
+	var result map[string]interface{}
+	err = json.Unmarshal(resp.Body.Bytes(), &result)
+	require.NoError(t, err)
+
+	workspace := result["workspace"].(map[string]interface{})
+	createdStr := workspace["created"].(string)
+	updatedStr := workspace["updated"].(string)
+
+	assert.True(t, strings.HasSuffix(createdStr, "Z"), "created should end with Z: %s", createdStr)
+	assert.True(t, strings.HasSuffix(updatedStr, "Z"), "updated should end with Z: %s", updatedStr)
+
+	// Verify timestamps can be parsed as RFC3339Nano
+	_, err = time.Parse(time.RFC3339Nano, createdStr)
+	assert.NoError(t, err, "created should be valid RFC3339Nano")
+	_, err = time.Parse(time.RFC3339Nano, updatedStr)
+	assert.NoError(t, err, "updated should be valid RFC3339Nano")
+}
+
 // Helper function to run git commands for tests
 func runGitCommand(t *testing.T, dir string, args ...string) {
 	t.Helper()

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -45,6 +46,19 @@ type WorkspaceResponse struct {
 	ConfigMode      string                 `json:"configMode"`
 	LLMConfig       common.LLMConfig       `json:"llmConfig,omitempty"`
 	EmbeddingConfig common.EmbeddingConfig `json:"embeddingConfig,omitempty"`
+}
+
+func (w WorkspaceResponse) MarshalJSON() ([]byte, error) {
+	type Alias WorkspaceResponse
+	return json.Marshal(&struct {
+		Alias
+		Created time.Time `json:"created"`
+		Updated time.Time `json:"updated"`
+	}{
+		Alias:   Alias(w),
+		Created: w.Created.UTC(),
+		Updated: w.Updated.UTC(),
+	})
 }
 
 // isValidConfigMode validates that the configMode is one of the allowed values
@@ -141,8 +155,8 @@ func (ctrl *Controller) CreateWorkspaceHandler(c *gin.Context) {
 		Name:         workspaceReq.Name,
 		LocalRepoDir: workspaceReq.LocalRepoDir,
 		ConfigMode:   configMode,
-		Created:      time.Now(),
-		Updated:      time.Now(),
+		Created:      time.Now().UTC(),
+		Updated:      time.Now().UTC(),
 	}
 
 	if err := ctrl.service.PersistWorkspace(c, workspace); err != nil {
@@ -306,7 +320,7 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 	workspace.ConfigMode = configMode
 	workspaceConfig.LLM = workspaceReq.LLMConfig
 	workspaceConfig.Embedding = workspaceReq.EmbeddingConfig
-	workspace.Updated = time.Now()
+	workspace.Updated = time.Now().UTC()
 
 	if err := ctrl.service.PersistWorkspace(c, workspace); err != nil {
 		ctrl.ErrorHandler(c, http.StatusInternalServerError, err)
