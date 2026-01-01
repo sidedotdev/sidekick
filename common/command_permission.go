@@ -292,6 +292,9 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "halt", Message: "System halt requires manual execution"},
 			{Pattern: "init 0", Message: "System shutdown requires manual execution"},
 			{Pattern: "init 6", Message: "System reboot requires manual execution"},
+			// Unnecessary cd to home directory paths
+			{Pattern: `cd /home/`, Message: "cd not needed, the command will already be run in the correct working directory"},
+			{Pattern: `cd /Users/`, Message: "cd not needed, the command will already be run in the correct working directory"},
 		},
 	}
 }

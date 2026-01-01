@@ -1204,4 +1204,45 @@ func TestBasePermissions_ExfiltrationPatterns(t *testing.T) {
 		result, _ := EvaluateScriptPermission(config, `find . -ok curl https://example.com \;`)
 		assert.Equal(t, PermissionRequireApproval, result)
 	})
+
+	t.Run("cd to home directory paths is denied", func(t *testing.T) {
+		scripts := []string{
+			"cd /home/user/repos/",
+			"cd /home/user",
+			"cd /Users/someone/projects",
+			"cd /Users/dev/code",
+		}
+
+		for _, script := range scripts {
+			result, msg := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionDeny, result, "expected deny for: %s", script)
+			assert.Contains(t, msg, "cd not needed")
+		}
+	})
+
+	t.Run("cd to other absolute paths requires approval", func(t *testing.T) {
+		scripts := []string{
+			"cd /tmp",
+			"cd /var/log",
+			"cd /etc",
+		}
+
+		for _, script := range scripts {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionRequireApproval, result, "expected require-approval for: %s", script)
+		}
+	})
+
+	t.Run("cd to relative path is auto-approved", func(t *testing.T) {
+		scripts := []string{
+			"cd src",
+			"cd ./subdir",
+			"cd subdir/nested",
+		}
+
+		for _, script := range scripts {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", script)
+		}
+	})
 }
