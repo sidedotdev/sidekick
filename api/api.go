@@ -632,6 +632,19 @@ type TaskResponse struct {
 	Flows []domain.Flow `json:"flows"`
 }
 
+func (tr TaskResponse) MarshalJSON() ([]byte, error) {
+	taskBytes, err := json.Marshal(tr.Task)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(taskBytes, &m); err != nil {
+		return nil, err
+	}
+	m["flows"] = tr.Flows
+	return json.Marshal(m)
+}
+
 func (ctrl *Controller) GetTaskHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	taskId := c.Param("id")
