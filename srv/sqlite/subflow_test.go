@@ -15,7 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// assertSubflowEqual compares two subflows, ignoring the Updated field which is set by the database
+// assertSubflowEqual compares two subflows
 func assertSubflowEqual(t *testing.T, expected, actual domain.Subflow) {
 	t.Helper()
 	assert.Equal(t, expected.WorkspaceId, actual.WorkspaceId)
@@ -27,7 +27,12 @@ func assertSubflowEqual(t *testing.T, expected, actual domain.Subflow) {
 	assert.Equal(t, expected.Type, actual.Type)
 	assert.Equal(t, expected.ParentSubflowId, actual.ParentSubflowId)
 	assert.Equal(t, expected.Result, actual.Result)
-	assert.WithinDuration(t, time.Now(), actual.Updated, 5*time.Second)
+	assert.Equal(t, "UTC", actual.Updated.Location().String(), "Updated should be in UTC")
+	if expected.Updated.IsZero() {
+		assert.WithinDuration(t, time.Now(), actual.Updated, 5*time.Second)
+	} else {
+		assert.Equal(t, expected.Updated.UTC(), actual.Updated)
+	}
 }
 
 // assertSubflowsMatch compares two slices of subflows, ignoring the Updated field
@@ -152,6 +157,59 @@ func TestGetSubflows(t *testing.T) {
 		retrievedSubflows, err := storage.GetSubflows(ctx, nonExistentWorkspaceId, nonExistentFlowId)
 		assert.NoError(t, err)
 		assert.Len(t, retrievedSubflows, 0)
+	})
+}
+
+func TestPersistSubflow_UpdatedTimestamp(t *testing.T) {
+	storage := NewTestSqliteStorage(t, "subflow_test")
+	ctx := context.Background()
+
+	t.Run("Preserves sub-millisecond precision and converts to UTC", func(t *testing.T) {
+		// Use a non-UTC timezone with sub-millisecond precision
+		loc, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+		updatedTime := time.Date(2025, 6, 15, 10, 30, 45, 123456789, loc)
+
+		subflow := domain.Subflow{
+			WorkspaceId: ksuid.New().String(),
+			Id:          "sf_" + ksuid.New().String(),
+			FlowId:      ksuid.New().String(),
+			Name:        "Precision Test",
+			Status:      domain.SubflowStatusStarted,
+			Updated:     updatedTime,
+		}
+
+		err = storage.PersistSubflow(ctx, subflow)
+		require.NoError(t, err)
+
+		retrieved, err := storage.GetSubflow(ctx, subflow.WorkspaceId, subflow.Id)
+		require.NoError(t, err)
+
+		assert.Equal(t, "UTC", retrieved.Updated.Location().String())
+		assert.Equal(t, updatedTime.UTC(), retrieved.Updated)
+		assert.Equal(t, 123456789, retrieved.Updated.Nanosecond())
+	})
+
+	t.Run("Sets Updated to now UTC when zero", func(t *testing.T) {
+		subflow := domain.Subflow{
+			WorkspaceId: ksuid.New().String(),
+			Id:          "sf_" + ksuid.New().String(),
+			FlowId:      ksuid.New().String(),
+			Name:        "Zero Updated Test",
+			Status:      domain.SubflowStatusStarted,
+		}
+
+		beforePersist := time.Now().UTC()
+		err := storage.PersistSubflow(ctx, subflow)
+		require.NoError(t, err)
+		afterPersist := time.Now().UTC()
+
+		retrieved, err := storage.GetSubflow(ctx, subflow.WorkspaceId, subflow.Id)
+		require.NoError(t, err)
+
+		assert.Equal(t, "UTC", retrieved.Updated.Location().String())
+		assert.True(t, !retrieved.Updated.Before(beforePersist), "Updated should be >= beforePersist")
+		assert.True(t, !retrieved.Updated.After(afterPersist), "Updated should be <= afterPersist")
 	})
 }
 

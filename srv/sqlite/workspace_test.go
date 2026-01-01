@@ -19,8 +19,8 @@ func TestPersistAndGetWorkspace(t *testing.T) {
 		Id:           "test-workspace-id",
 		Name:         "Test Workspace",
 		LocalRepoDir: "/path/to/repo",
-		Created:      time.Now().UTC().Truncate(time.Millisecond),
-		Updated:      time.Now().UTC().Truncate(time.Millisecond),
+		Created:      time.Now().UTC(),
+		Updated:      time.Now().UTC(),
 	}
 
 	// Test PersistWorkspace
@@ -39,7 +39,7 @@ func TestPersistAndGetWorkspace(t *testing.T) {
 	// Test updating an existing workspace
 	updatedWorkspace := workspace
 	updatedWorkspace.Name = "Updated Test Workspace"
-	updatedWorkspace.Updated = time.Now().UTC().Truncate(time.Millisecond)
+	updatedWorkspace.Updated = time.Now().UTC()
 
 	err = storage.PersistWorkspace(ctx, updatedWorkspace)
 	assert.NoError(t, err)
@@ -55,9 +55,9 @@ func TestGetAllWorkspaces(t *testing.T) {
 
 	// Create test workspaces
 	workspaces := []domain.Workspace{
-		{Id: "ws-2", Name: "Workspace B", LocalRepoDir: "/path/b", Created: time.Now().UTC().Truncate(time.Millisecond), Updated: time.Now().UTC().Truncate(time.Millisecond)},
-		{Id: "ws-1", Name: "Workspace A", LocalRepoDir: "/path/a", Created: time.Now().UTC().Truncate(time.Millisecond), Updated: time.Now().UTC().Truncate(time.Millisecond)},
-		{Id: "ws-3", Name: "Workspace C", LocalRepoDir: "/path/c", Created: time.Now().UTC().Truncate(time.Millisecond), Updated: time.Now().UTC().Truncate(time.Millisecond)},
+		{Id: "ws-2", Name: "Workspace B", LocalRepoDir: "/path/b", Created: time.Now().UTC(), Updated: time.Now().UTC()},
+		{Id: "ws-1", Name: "Workspace A", LocalRepoDir: "/path/a", Created: time.Now().UTC(), Updated: time.Now().UTC()},
+		{Id: "ws-3", Name: "Workspace C", LocalRepoDir: "/path/c", Created: time.Now().UTC(), Updated: time.Now().UTC()},
 	}
 
 	for _, w := range workspaces {
@@ -84,8 +84,8 @@ func TestDeleteWorkspace(t *testing.T) {
 		Id:           "test-delete-id",
 		Name:         "Test Delete Workspace",
 		LocalRepoDir: "/test/delete/path",
-		Created:      time.Now().UTC().Truncate(time.Millisecond),
-		Updated:      time.Now().UTC().Truncate(time.Millisecond),
+		Created:      time.Now().UTC(),
+		Updated:      time.Now().UTC(),
 	}
 
 	err := storage.PersistWorkspace(ctx, workspace)

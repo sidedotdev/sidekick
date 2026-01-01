@@ -62,6 +62,11 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 	defer cancel()
 	workspaceId := "test-workspace"
 
+	// Use non-UTC timezone with nanosecond precision to verify UTC normalization
+	loc, err := time.LoadLocation("America/New_York")
+	s.Require().NoError(err)
+	baseTime := time.Date(2025, 6, 15, 10, 30, 45, 123456789, loc)
+
 	// Create test tasks
 	tasks := []domain.Task{
 		{
@@ -72,8 +77,8 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 			Status:      domain.TaskStatusToDo,
 			AgentType:   domain.AgentTypeLLM,
 			FlowType:    domain.FlowTypeBasicDev,
-			Created:     time.Now().UTC().Truncate(time.Millisecond),
-			Updated:     time.Now().UTC().Truncate(time.Millisecond),
+			Created:     baseTime,
+			Updated:     baseTime.Add(time.Hour),
 			FlowOptions: map[string]interface{}{"test": "value1"},
 		},
 		{
@@ -84,8 +89,8 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 			Status:      domain.TaskStatusInProgress,
 			AgentType:   domain.AgentTypeLLM,
 			FlowType:    domain.FlowTypeBasicDev,
-			Created:     time.Now().UTC().Truncate(time.Millisecond),
-			Updated:     time.Now().UTC().Truncate(time.Millisecond),
+			Created:     baseTime.Add(2 * time.Hour),
+			Updated:     baseTime.Add(3 * time.Hour),
 			FlowOptions: map[string]interface{}{"test": "value2"},
 		},
 	}
@@ -128,6 +133,13 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 		s.Equal(task.AgentType, streamedTasks[i].AgentType)
 		s.Equal(task.FlowType, streamedTasks[i].FlowType)
 		s.Equal(task.FlowOptions, streamedTasks[i].FlowOptions)
+		// Verify timestamps are in UTC and preserve nanosecond precision
+		s.Equal(time.UTC, streamedTasks[i].Created.Location())
+		s.Equal(time.UTC, streamedTasks[i].Updated.Location())
+		s.True(streamedTasks[i].Created.Equal(task.Created))
+		s.True(streamedTasks[i].Updated.Equal(task.Updated))
+		s.Equal(task.Created.Nanosecond(), streamedTasks[i].Created.Nanosecond())
+		s.Equal(task.Updated.Nanosecond(), streamedTasks[i].Updated.Nanosecond())
 	}
 	wg.Wait()
 }
@@ -173,6 +185,11 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 	// Add flow action changes after subscription is established
 	time.Sleep(100 * time.Millisecond)
 
+	// Use non-UTC timezone with nanosecond precision to verify UTC normalization
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	s.Require().NoError(err)
+	baseTime := time.Date(2025, 6, 15, 10, 30, 45, 123456789, loc)
+
 	flowAction := domain.FlowAction{
 		WorkspaceId:  workspaceId,
 		FlowId:       flowId,
@@ -182,8 +199,8 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 		ActionStatus: "pending",
 		ActionParams: map[string]interface{}{"test": "value"},
 		ActionResult: "test-result",
-		Created:      time.Now().UTC().Truncate(time.Millisecond),
-		Updated:      time.Now().UTC().Truncate(time.Millisecond),
+		Created:      baseTime,
+		Updated:      baseTime.Add(time.Hour),
 	}
 
 	newAction := domain.FlowAction{
@@ -195,8 +212,8 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 		ActionStatus: "pending",
 		ActionParams: map[string]interface{}{"test": "value2"},
 		ActionResult: "test-result-2",
-		Created:      time.Now().UTC().Truncate(time.Millisecond),
-		Updated:      time.Now().UTC().Truncate(time.Millisecond),
+		Created:      baseTime.Add(2 * time.Hour),
+		Updated:      baseTime.Add(3 * time.Hour),
 	}
 
 	endAction := domain.FlowAction{
@@ -239,9 +256,24 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 	wg.Wait()
 
 	s.Require().Len(receivedActions, 3)
-	s.Equal(flowAction, receivedActions[0])
-	s.Equal(newAction, receivedActions[1])
-	s.Equal(endAction, receivedActions[2])
+	// Verify first action with timestamp checks
+	s.Equal(flowAction.Id, receivedActions[0].Id)
+	s.Equal(flowAction.SubflowName, receivedActions[0].SubflowName)
+	s.Equal(flowAction.ActionType, receivedActions[0].ActionType)
+	s.Equal(time.UTC, receivedActions[0].Created.Location())
+	s.Equal(time.UTC, receivedActions[0].Updated.Location())
+	s.True(receivedActions[0].Created.Equal(flowAction.Created))
+	s.True(receivedActions[0].Updated.Equal(flowAction.Updated))
+	s.Equal(flowAction.Created.Nanosecond(), receivedActions[0].Created.Nanosecond())
+	s.Equal(flowAction.Updated.Nanosecond(), receivedActions[0].Updated.Nanosecond())
+	// Verify second action with timestamp checks
+	s.Equal(newAction.Id, receivedActions[1].Id)
+	s.Equal(time.UTC, receivedActions[1].Created.Location())
+	s.Equal(time.UTC, receivedActions[1].Updated.Location())
+	s.True(receivedActions[1].Created.Equal(newAction.Created))
+	s.True(receivedActions[1].Updated.Equal(newAction.Updated))
+	// Verify end action
+	s.Equal(endAction.Id, receivedActions[2].Id)
 }
 
 func (s *StreamerTestSuite) TestFlowEventStreaming() {

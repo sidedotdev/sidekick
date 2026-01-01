@@ -1894,7 +1894,19 @@ func TestGetTaskHandler(t *testing.T) {
 			err := json.Unmarshal(resp.Body.Bytes(), &result)
 			if assert.Nil(t, err) {
 				assert.Equal(t, testCase.expectedResp.Task, result["task"].Task)
-				assert.Equal(t, testCase.expectedResp.Flows, result["task"].Flows)
+				require.Len(t, result["task"].Flows, len(testCase.expectedResp.Flows))
+				for i, expectedFlow := range testCase.expectedResp.Flows {
+					actualFlow := result["task"].Flows[i]
+					assert.Equal(t, expectedFlow.WorkspaceId, actualFlow.WorkspaceId)
+					assert.Equal(t, expectedFlow.Id, actualFlow.Id)
+					assert.Equal(t, expectedFlow.Type, actualFlow.Type)
+					assert.Equal(t, expectedFlow.ParentId, actualFlow.ParentId)
+					assert.Equal(t, expectedFlow.Status, actualFlow.Status)
+					assert.False(t, actualFlow.Created.IsZero())
+					assert.False(t, actualFlow.Updated.IsZero())
+					assert.Equal(t, time.UTC, actualFlow.Created.Location())
+					assert.Equal(t, time.UTC, actualFlow.Updated.Location())
+				}
 			}
 		}
 	}

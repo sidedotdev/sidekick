@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"sidekick/common"
 	"time"
 )
@@ -16,6 +17,19 @@ type Workspace struct {
 	ConfigMode   string    `json:"configMode"`   // configuration mode: 'local', 'workspace', or 'merge'
 	Created      time.Time `json:"created"`      // creation timestamp of the workspace
 	Updated      time.Time `json:"updated"`      // last update timestamp of the workspace
+}
+
+func (w Workspace) MarshalJSON() ([]byte, error) {
+	type Alias Workspace
+	return json.Marshal(&struct {
+		Alias
+		Created time.Time `json:"created"`
+		Updated time.Time `json:"updated"`
+	}{
+		Alias:   Alias(w),
+		Created: UTCTime(w.Created),
+		Updated: UTCTime(w.Updated),
+	})
 }
 
 // TODO /gen move to workspace package, along with corresponding accessor

@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -26,6 +27,17 @@ type Subflow struct {
 	FlowId          string        `json:"flowId"`                    // ID of the flow this subflow belongs to
 	Result          string        `json:"result,omitempty"`          // Result of the subflow, if any
 	Updated         time.Time     `json:"updated,omitempty"`         // Last update timestamp
+}
+
+func (s Subflow) MarshalJSON() ([]byte, error) {
+	type Alias Subflow
+	return json.Marshal(&struct {
+		Alias
+		Updated time.Time `json:"updated,omitempty"`
+	}{
+		Alias:   Alias(s),
+		Updated: UTCTime(s.Updated),
+	})
 }
 
 type SubflowStorage interface {

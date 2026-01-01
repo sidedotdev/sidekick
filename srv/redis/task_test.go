@@ -376,3 +376,67 @@ func TestStreamTaskChanges(t *testing.T) {
 		t.Fatal("Timed out waiting for error channel to close")
 	}
 }
+
+func TestStreamTaskChanges_TimestampUTC(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	streamer := NewStreamer()
+	defer streamer.Client.Close()
+
+	workspaceId := "test-workspace-" + ksuid.New().String()
+
+	// Clear the stream used by this test
+	streamKey := fmt.Sprintf("%s:task_changes", workspaceId)
+	if err := streamer.Client.Del(ctx, streamKey).Err(); err != nil {
+		t.Fatalf("Failed to clear test stream: %v", err)
+	}
+
+	// Use non-UTC timezone with nanosecond precision
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("Failed to load timezone: %v", err)
+	}
+	baseTime := time.Date(2025, 6, 15, 10, 30, 45, 123456789, loc)
+
+	task := domain.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task-" + ksuid.New().String(),
+		Title:       "Test Task",
+		Status:      domain.TaskStatusToDo,
+		Created:     baseTime,
+		Updated:     baseTime.Add(time.Hour),
+	}
+
+	taskChan, errChan := streamer.StreamTaskChanges(ctx, workspaceId, "0")
+
+	// Add task change
+	if err := streamer.AddTaskChange(ctx, task); err != nil {
+		t.Fatalf("Failed to add task change: %v", err)
+	}
+
+	select {
+	case received := <-taskChan:
+		if received.Id != task.Id {
+			t.Errorf("Task ID mismatch: got %s, want %s", received.Id, task.Id)
+		}
+		// Verify timestamps are in UTC
+		if received.Created.Location() != time.UTC {
+			t.Errorf("Created not in UTC: got location %v", received.Created.Location())
+		}
+		if received.Updated.Location() != time.UTC {
+			t.Errorf("Updated not in UTC: got location %v", received.Updated.Location())
+		}
+		// Verify time values are equivalent
+		if !received.Created.Equal(task.Created) {
+			t.Errorf("Created time mismatch: got %v, want %v", received.Created, task.Created)
+		}
+		if !received.Updated.Equal(task.Updated) {
+			t.Errorf("Updated time mismatch: got %v, want %v", received.Updated, task.Updated)
+		}
+	case err := <-errChan:
+		t.Fatalf("Received error: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for task")
+	}
+}
