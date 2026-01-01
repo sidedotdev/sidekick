@@ -336,3 +336,62 @@ func TestSubflow_MarshalJSON_UTC(t *testing.T) {
 		t.Errorf("updated time mismatch: got %v, want %v", parsedUpdated, updated)
 	}
 }
+
+func TestWorktree_MarshalJSON_UTC(t *testing.T) {
+	t.Parallel()
+
+	// Use a non-UTC timezone with sub-millisecond precision
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Fatalf("failed to load location: %v", err)
+	}
+
+	created := time.Date(2025, 6, 15, 10, 30, 45, 123456789, loc)
+
+	worktree := Worktree{
+		Id:               "wt_test-id",
+		FlowId:           "flow-id",
+		Name:             "test-branch",
+		Created:          created,
+		WorkspaceId:      "ws-id",
+		WorkingDirectory: "/path/to/worktree",
+	}
+
+	data, err := json.Marshal(worktree)
+	if err != nil {
+		t.Fatalf("failed to marshal Worktree: %v", err)
+	}
+
+	jsonStr := string(data)
+
+	// Verify UTC format (ends with Z, not timezone offset)
+	if strings.Contains(jsonStr, "-08:00") || strings.Contains(jsonStr, "-07:00") {
+		t.Errorf("JSON contains timezone offset instead of UTC: %s", jsonStr)
+	}
+
+	// Verify sub-millisecond precision is preserved
+	if !strings.Contains(jsonStr, "123456789") {
+		t.Errorf("JSON missing sub-millisecond precision for created: %s", jsonStr)
+	}
+
+	// Unmarshal and verify the time is correct
+	var result map[string]interface{}
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	createdStr := result["created"].(string)
+
+	if !strings.HasSuffix(createdStr, "Z") {
+		t.Errorf("created should end with Z: %s", createdStr)
+	}
+
+	// Parse and verify the actual time value is equivalent
+	parsedCreated, err := time.Parse(time.RFC3339Nano, createdStr)
+	if err != nil {
+		t.Fatalf("failed to parse created: %v", err)
+	}
+	if !parsedCreated.Equal(created) {
+		t.Errorf("created time mismatch: got %v, want %v", parsedCreated, created)
+	}
+}

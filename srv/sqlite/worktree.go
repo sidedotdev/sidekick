@@ -6,9 +6,16 @@ import (
 	"fmt"
 	"sidekick/common"
 	"sidekick/domain"
+	"time"
 )
 
 func (s *Storage) PersistWorktree(ctx context.Context, worktree domain.Worktree) error {
+	if worktree.Created.IsZero() {
+		worktree.Created = time.Now().UTC()
+	} else {
+		worktree.Created = worktree.Created.UTC()
+	}
+
 	query := `
 		INSERT OR REPLACE INTO worktrees (id, flow_id, name, created, workspace_id, working_directory)
 		VALUES (?, ?, ?, ?, ?, ?)
@@ -18,7 +25,7 @@ func (s *Storage) PersistWorktree(ctx context.Context, worktree domain.Worktree)
 		worktree.Id,
 		worktree.FlowId,
 		worktree.Name,
-		worktree.Created,
+		worktree.Created.Format(time.RFC3339Nano),
 		worktree.WorkspaceId,
 		worktree.WorkingDirectory,
 	)
@@ -37,11 +44,12 @@ func (s *Storage) GetWorktree(ctx context.Context, workspaceId, worktreeId strin
 	`
 
 	var worktree domain.Worktree
+	var createdStr string
 	err := s.db.QueryRowContext(ctx, query, workspaceId, worktreeId).Scan(
 		&worktree.Id,
 		&worktree.FlowId,
 		&worktree.Name,
-		&worktree.Created,
+		&createdStr,
 		&worktree.WorkspaceId,
 		&worktree.WorkingDirectory,
 	)
@@ -51,6 +59,11 @@ func (s *Storage) GetWorktree(ctx context.Context, workspaceId, worktreeId strin
 			return domain.Worktree{}, common.ErrNotFound
 		}
 		return domain.Worktree{}, fmt.Errorf("failed to get worktree: %w", err)
+	}
+
+	worktree.Created, err = time.Parse(time.RFC3339Nano, createdStr)
+	if err != nil {
+		return domain.Worktree{}, fmt.Errorf("failed to parse created timestamp: %w", err)
 	}
 
 	return worktree, nil
@@ -88,16 +101,21 @@ func (s Storage) getWorktreesFromRows(rows *sql.Rows) ([]domain.Worktree, error)
 	var worktrees []domain.Worktree
 	for rows.Next() {
 		var worktree domain.Worktree
+		var createdStr string
 		err := rows.Scan(
 			&worktree.Id,
 			&worktree.FlowId,
 			&worktree.Name,
-			&worktree.Created,
+			&createdStr,
 			&worktree.WorkspaceId,
 			&worktree.WorkingDirectory,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan worktree: %w", err)
+		}
+		worktree.Created, err = time.Parse(time.RFC3339Nano, createdStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse created timestamp: %w", err)
 		}
 		worktrees = append(worktrees, worktree)
 	}
