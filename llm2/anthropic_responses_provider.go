@@ -15,7 +15,7 @@ import (
 )
 
 const anthropicDefaultModel = "claude-sonnet-4-5"
-const anthropicDefaultMaxTokens = 8000
+const anthropicDefaultMaxTokens = 16000
 
 type AnthropicResponsesProvider struct{}
 
