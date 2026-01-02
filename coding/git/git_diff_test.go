@@ -365,6 +365,86 @@ func TestGitDiffActivity(t *testing.T) {
 			expectError:  false,
 			expectOutput: false,
 		},
+		{
+			name: "three_dot_diff_with_shell_metachar_in_branch_name",
+			params: GitDiffParams{
+				ThreeDotDiff: true,
+				BaseRef:      "base's-branch",
+			},
+			setupRepo: func(t *testing.T, repoDir string) {
+				// Create initial commit on main
+				createFileAndCommit(t, repoDir, "file1.txt", "main content", "main commit")
+
+				// Create branch with shell metacharacter (single quote) in name
+				runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "base's-branch")
+
+				// Add a commit on this branch
+				createFileAndCommit(t, repoDir, "base.txt", "base content", "base commit")
+
+				// Create and switch to feature branch
+				runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
+
+				// Add commits on feature branch
+				createFileAndCommit(t, repoDir, "file2.txt", "feature content", "feature commit")
+			},
+			expectError:    false,
+			expectOutput:   true,
+			outputContains: []string{"file2.txt", "feature content"},
+		},
+		{
+			name: "staged_with_shell_metachar_in_base_ref",
+			params: GitDiffParams{
+				Staged:  true,
+				BaseRef: "base's-branch",
+			},
+			setupRepo: func(t *testing.T, repoDir string) {
+				// Create initial commit on main
+				createFileAndCommit(t, repoDir, "file1.txt", "initial", "initial commit")
+
+				// Create branch with shell metacharacter and add a commit
+				runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "base's-branch")
+				createFileAndCommit(t, repoDir, "base.txt", "base content", "base commit")
+
+				// Create feature branch
+				runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
+
+				// Stage some changes
+				err := os.WriteFile(filepath.Join(repoDir, "staged.txt"), []byte("staged content"), fs.FileMode(0644))
+				require.NoError(t, err)
+				runGitCommandInTestRepo(t, repoDir, "add", "staged.txt")
+			},
+			expectError:    false,
+			expectOutput:   true,
+			outputContains: []string{"staged.txt", "staged content"},
+		},
+		{
+			name: "staged_and_three_dot_diff_with_shell_metachar_in_branch_name",
+			params: GitDiffParams{
+				Staged:       true,
+				ThreeDotDiff: true,
+				BaseRef:      "base's-branch",
+			},
+			setupRepo: func(t *testing.T, repoDir string) {
+				// Create initial commit on main
+				createFileAndCommit(t, repoDir, "file1.txt", "initial", "initial commit")
+
+				// Create branch with shell metacharacter
+				runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "base's-branch")
+				createFileAndCommit(t, repoDir, "base.txt", "base content", "base commit")
+
+				// Create feature branch
+				runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
+				createFileAndCommit(t, repoDir, "committed.txt", "committed content", "feature commit")
+
+				// Stage some changes
+				err := os.WriteFile(filepath.Join(repoDir, "staged.txt"), []byte("staged content"), fs.FileMode(0644))
+				require.NoError(t, err)
+				runGitCommandInTestRepo(t, repoDir, "add", "staged.txt")
+			},
+			expectError:    false,
+			expectOutput:   true,
+			outputContains: []string{"staged.txt", "staged content", "committed.txt", "committed content"},
+		},
 	}
 
 	for _, tt := range tests {
