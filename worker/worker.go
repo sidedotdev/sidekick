@@ -71,13 +71,13 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 		Interceptors: []interceptor.ClientInterceptor{tracingInterceptor},
 	}
 	var temporalClient client.Client
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 30; i++ {
 		temporalClient, err = client.Dial(clientOptions)
 		if err == nil {
 			break
 		}
-		log.Debug().Err(err).Msgf("Failed to create Temporal client, retrying in 500ms (attempt %d/5)", i+1)
-		time.Sleep(500 * time.Millisecond)
+		log.Debug().Err(err).Msgf("Failed to create Temporal client, retrying in 1s (attempt %d/30)", i+1)
+		time.Sleep(1 * time.Second)
 	}
 	if err != nil {
 		log.Fatal().Err(err).Msg("Unable to create Temporal client after multiple retries.")
