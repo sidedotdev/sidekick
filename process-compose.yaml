@@ -2,13 +2,13 @@ version: "0.5"
 
 processes:
   temporal:
-    command: watchexec --delay-run 3000ms -r -w cmd/temporal -w temporal -e go -- "go build -o side-temporal ./cmd/temporal && SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development ./side-temporal"
+    command: go build -o side-temporal ./cmd/temporal && SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development ./side-temporal
 
   api:
-    command: watchexec --delay-run 10000ms -r -e go,mod,sum -w . -- "go build -o side-api ./api/main && SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development ./side-api"
+    command: go build -o side-api ./api/main && SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development ./side-api
 
   worker:
-    command: watchexec --delay-run 3000ms -r -e go,mod,sum -w . -- "go build -o side-worker ./worker/main && SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development ./side-worker"
+    command: go build -o side-worker ./worker/main && SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development ./side-worker
 
   frontend:
     command: bun dev
