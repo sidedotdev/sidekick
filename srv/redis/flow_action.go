@@ -196,8 +196,22 @@ func (s Streamer) GetFlowActionChanges(ctx context.Context, workspaceId, flowId,
 			if !ok {
 				isCallbackAction = ""
 			}
-			created, _ := time.Parse(message.Values["created"].(string), time.RFC3339)
-			updated, _ := time.Parse(message.Values["updated"].(string), time.RFC3339)
+			createdStr, ok := message.Values["created"].(string)
+			if !ok {
+				return nil, "", fmt.Errorf("missing 'created' key in flow_action_changes message %d: %v", i, message)
+			}
+			created, err := time.Parse(time.RFC3339Nano, createdStr)
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to parse 'created' timestamp in message %d: %v", i, err)
+			}
+			updatedStr, ok := message.Values["updated"].(string)
+			if !ok {
+				return nil, "", fmt.Errorf("missing 'updated' key in flow_action_changes message %d: %v", i, message)
+			}
+			updated, err := time.Parse(time.RFC3339Nano, updatedStr)
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to parse 'updated' timestamp in message %d: %v", i, err)
+			}
 			flowActions = append(flowActions, domain.FlowAction{
 				WorkspaceId:        workspaceId,
 				FlowId:             flowId,

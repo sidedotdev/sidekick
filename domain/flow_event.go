@@ -80,6 +80,7 @@ var _ FlowEvent = ChatMessageDeltaEvent{}
 type StatusChangeEvent struct {
 	EventType FlowEventType `json:"eventType"`
 	ParentId  string        `json:"parentId"`
+	TargetId  string        `json:"targetId,omitempty"`
 	Status    string        `json:"status"`
 }
 

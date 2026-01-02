@@ -40,7 +40,7 @@ func LlmHeartbeatCtx(ctx workflow.Context) workflow.Context {
 	// context. maybe incorporating ping message events will fix this, though
 	// openai-compatible providers will not provide this, so it doesn't matter.
 	options := workflow.ActivityOptions{
-		StartToCloseTimeout: 5 * time.Minute,
+		StartToCloseTimeout: 10 * time.Minute, // This is so long because LLM calls with thinking can take a *very* long time
 		HeartbeatTimeout:    40 * time.Second,
 		RetryPolicy:         retrypolicy,
 	}

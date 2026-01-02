@@ -530,7 +530,10 @@ func (sCtx *searchContext) processGlobalFallbackResults(allFiles []string) (stri
 	}
 
 	batchGitGrepOutput := gitGrepOutput.Stdout
-	allCodeBlocks := tree_sitter.ExtractSearchCodeBlocks(batchGitGrepOutput)
+	allCodeBlocks, err := tree_sitter.ExtractSearchCodeBlocks(batchGitGrepOutput)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse git grep output: %w", err)
+	}
 
 	fileStats := make(map[string]struct {
 		totalCodeChars int

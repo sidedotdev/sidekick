@@ -17,8 +17,17 @@ func TestGitMergeActivity(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a temporary directory to act as SIDE_DATA_HOME
-	tempHome := t.TempDir()
-	t.Setenv("SIDE_DATA_HOME", tempHome) // Set env var for the test duration
+	tempDir := t.TempDir()
+	// spaces in path to exercise our command execution (the built-in
+	// SIDE_DATA_HOME on macos has spaces in "Application Support")
+	tempDataHome := filepath.Join(tempDir, "dir with spaces")
+	err := os.Mkdir(tempDataHome, 0755)
+	require.NoError(t, err)
+	// TODO make the tests parallel by setting not needed to set env. this can
+	// be done by cloning LocalEnvParams into LocalGitWorktreeEnvParams and
+	// adding an optional worktree path there, which the tests will make use of,
+	// with separate directories for each.
+	t.Setenv("SIDE_DATA_HOME", tempDataHome) // Set env var for the test duration
 
 	t.Run("no worktree, no conflicts", func(t *testing.T) {
 		// Setup

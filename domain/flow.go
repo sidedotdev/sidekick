@@ -2,16 +2,33 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // record that is 1:1 with a temporal workflow
 type Flow struct {
-	WorkspaceId string   `json:"workspaceId"`
-	Id          string   `json:"id"`
-	Type        FlowType `json:"type"`     // flow type
-	ParentId    string   `json:"parentId"` // parent id of arbitrary type (eg task)
-	Status      string   `json:"status"`   // flow status
+	WorkspaceId string    `json:"workspaceId"`
+	Id          string    `json:"id"`
+	Type        FlowType  `json:"type"`     // flow type
+	ParentId    string    `json:"parentId"` // parent id of arbitrary type (eg task)
+	Status      string    `json:"status"`   // flow status
+	Created     time.Time `json:"created"`
+	Updated     time.Time `json:"updated"`
+}
+
+func (f Flow) MarshalJSON() ([]byte, error) {
+	type Alias Flow
+	return json.Marshal(&struct {
+		Alias
+		Created time.Time `json:"created"`
+		Updated time.Time `json:"updated"`
+	}{
+		Alias:   Alias(f),
+		Created: UTCTime(f.Created),
+		Updated: UTCTime(f.Updated),
+	})
 }
 
 const FlowStatusPaused = "paused"

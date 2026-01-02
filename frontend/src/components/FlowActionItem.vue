@@ -255,7 +255,7 @@ const summary = computed<Summary | null>(() => {
         };
       }
       const totalEdits = editResults.length;
-      const successfulEdits = editResults.filter(result => result.didApply && (!result.checkResult || result.checkResult.success)).length;
+      const successfulEdits = editResults.filter(result => result.didApply).length;
       const allApplied = successfulEdits === totalEdits;
       return {
         text: allApplied ? `${successfulEdits} edit${ successfulEdits !== 1 ? 's' : ''} applied` : `${successfulEdits}/${totalEdits} edits applied`,
@@ -432,7 +432,7 @@ const summary = computed<Summary | null>(() => {
   z-index: calc(50 - var(--level, 0));
   background-color: inherit;
   top: calc(v-bind(level) * var(--name-height) - 1px);
-  height: var(--name-height);
+  min-height: var(--name-height);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -451,9 +451,9 @@ const summary = computed<Summary | null>(() => {
 
 .flow-action a {
   padding-left: var(--pad);
-  height: var(--name-height);
-  display: flex;
+  min-height: var(--name-height);
   align-items: center;
+  display: flex;
 }
 
 h3 + p {

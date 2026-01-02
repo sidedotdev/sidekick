@@ -6,6 +6,7 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/nats"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,6 +62,11 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 	defer cancel()
 	workspaceId := "test-workspace"
 
+	// Use non-UTC timezone with nanosecond precision to verify UTC normalization
+	loc, err := time.LoadLocation("America/New_York")
+	s.Require().NoError(err)
+	baseTime := time.Date(2025, 6, 15, 10, 30, 45, 123456789, loc)
+
 	// Create test tasks
 	tasks := []domain.Task{
 		{
@@ -71,8 +77,8 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 			Status:      domain.TaskStatusToDo,
 			AgentType:   domain.AgentTypeLLM,
 			FlowType:    domain.FlowTypeBasicDev,
-			Created:     time.Now().UTC().Truncate(time.Millisecond),
-			Updated:     time.Now().UTC().Truncate(time.Millisecond),
+			Created:     baseTime,
+			Updated:     baseTime.Add(time.Hour),
 			FlowOptions: map[string]interface{}{"test": "value1"},
 		},
 		{
@@ -83,8 +89,8 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 			Status:      domain.TaskStatusInProgress,
 			AgentType:   domain.AgentTypeLLM,
 			FlowType:    domain.FlowTypeBasicDev,
-			Created:     time.Now().UTC().Truncate(time.Millisecond),
-			Updated:     time.Now().UTC().Truncate(time.Millisecond),
+			Created:     baseTime.Add(2 * time.Hour),
+			Updated:     baseTime.Add(3 * time.Hour),
 			FlowOptions: map[string]interface{}{"test": "value2"},
 		},
 	}
@@ -93,7 +99,10 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 	taskChan, errChan := s.streamer.StreamTaskChanges(ctx, workspaceId, "")
 
 	// Add task changes in a separate goroutine
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		time.Sleep(100 * time.Millisecond)
 		for _, task := range tasks {
 			err := s.streamer.AddTaskChange(ctx, task)
@@ -124,16 +133,62 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 		s.Equal(task.AgentType, streamedTasks[i].AgentType)
 		s.Equal(task.FlowType, streamedTasks[i].FlowType)
 		s.Equal(task.FlowOptions, streamedTasks[i].FlowOptions)
+		// Verify timestamps are in UTC and preserve nanosecond precision
+		s.Equal(time.UTC, streamedTasks[i].Created.Location())
+		s.Equal(time.UTC, streamedTasks[i].Updated.Location())
+		s.True(streamedTasks[i].Created.Equal(task.Created))
+		s.True(streamedTasks[i].Updated.Equal(task.Updated))
+		s.Equal(task.Created.Nanosecond(), streamedTasks[i].Created.Nanosecond())
+		s.Equal(task.Updated.Nanosecond(), streamedTasks[i].Updated.Nanosecond())
 	}
+	wg.Wait()
 }
 
-// Test end-to-end flow action streaming
+// Test end-to-end flow action streaming with new-only (default) behavior
 func (s *StreamerTestSuite) TestFlowActionStreaming() {
 	s.T().Parallel()
 
-	ctx := context.Background()
-	workspaceId := "test-workspace"
-	flowId := "test-flow"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	workspaceId := "test-workspace-new"
+	flowId := "test-flow-new"
+
+	// Start streaming first (default is "$" = new-only)
+	flowActionChan, errChan := s.streamer.StreamFlowActionChanges(ctx, workspaceId, flowId, "")
+
+	receivedActions := make([]domain.FlowAction, 0)
+	done := make(chan bool)
+
+	go func() {
+		for {
+			select {
+			case action, ok := <-flowActionChan:
+				if !ok {
+					done <- true
+					return
+				}
+				receivedActions = append(receivedActions, action)
+			case err, ok := <-errChan:
+				if ok {
+					s.T().Errorf("Received error: %v", err)
+					done <- true
+					return
+				}
+			case <-ctx.Done():
+				done <- true
+				return
+			}
+		}
+	}()
+
+	// Add flow action changes after subscription is established
+	time.Sleep(100 * time.Millisecond)
+
+	// Use non-UTC timezone with nanosecond precision to verify UTC normalization
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	s.Require().NoError(err)
+	baseTime := time.Date(2025, 6, 15, 10, 30, 45, 123456789, loc)
 
 	flowAction := domain.FlowAction{
 		WorkspaceId:  workspaceId,
@@ -144,56 +199,10 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 		ActionStatus: "pending",
 		ActionParams: map[string]interface{}{"test": "value"},
 		ActionResult: "test-result",
-		Created:      time.Now().UTC().Truncate(time.Millisecond),
-		Updated:      time.Now().UTC().Truncate(time.Millisecond),
+		Created:      baseTime,
+		Updated:      baseTime.Add(time.Hour),
 	}
-	flowActionUpdated := domain.FlowAction(flowAction)
-	flowActionUpdated.ActionStatus = "completed"
-	flowActionFailed := domain.FlowAction(flowAction)
-	flowActionFailed.ActionStatus = "failed"
 
-	// add the flow action changes
-	err := s.streamer.AddFlowActionChange(ctx, flowAction)
-	s.Require().NoError(err)
-	err = s.streamer.AddFlowActionChange(ctx, flowActionUpdated)
-	s.Require().NoError(err)
-	err = s.streamer.AddFlowActionChange(ctx, flowActionFailed)
-	s.Require().NoError(err)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	flowActionChan, errChan := s.streamer.StreamFlowActionChanges(ctx, workspaceId, flowId, "")
-
-	receivedActions := make([]domain.FlowAction, 0)
-	done := make(chan bool)
-
-	go func() {
-		for {
-			select {
-			case action, ok := <-flowActionChan:
-				fmt.Printf("Received action: %v\n", action)
-				if !ok {
-					done <- true
-					return
-				}
-				receivedActions = append(receivedActions, action)
-			case err, ok := <-errChan:
-				if ok {
-					fmt.Printf("Received error: %v\n", err)
-					s.T().Errorf("Received error: %v", err)
-					done <- true
-					return
-				}
-			case <-ctx.Done():
-				fmt.Print("Context done\n")
-				done <- true
-				return
-			}
-		}
-	}()
-
-	// Add a new flow action change
 	newAction := domain.FlowAction{
 		WorkspaceId:  workspaceId,
 		FlowId:       flowId,
@@ -203,25 +212,37 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 		ActionStatus: "pending",
 		ActionParams: map[string]interface{}{"test": "value2"},
 		ActionResult: "test-result-2",
-		Created:      time.Now().UTC().Truncate(time.Millisecond),
-		Updated:      time.Now().UTC().Truncate(time.Millisecond),
+		Created:      baseTime.Add(2 * time.Hour),
+		Updated:      baseTime.Add(3 * time.Hour),
 	}
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		err = s.streamer.AddFlowActionChange(ctx, newAction)
-		s.Require().NoError(err)
-	}()
 
-	// Test end message
 	endAction := domain.FlowAction{
 		WorkspaceId: workspaceId,
 		FlowId:      flowId,
 		Id:          "end",
 	}
+
+	var wg sync.WaitGroup
+	wg.Add(3)
 	go func() {
+		defer wg.Done()
+		if err := s.streamer.AddFlowActionChange(context.Background(), flowAction); err != nil {
+			s.T().Errorf("Failed to add flow action change: %v", err)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		time.Sleep(50 * time.Millisecond)
+		if err := s.streamer.AddFlowActionChange(context.Background(), newAction); err != nil {
+			s.T().Errorf("Failed to add new flow action change: %v", err)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
 		time.Sleep(100 * time.Millisecond)
-		err = s.streamer.AddFlowActionChange(ctx, endAction)
-		if err != nil {
+		if err := s.streamer.AddFlowActionChange(context.Background(), endAction); err != nil {
 			s.T().Errorf("Failed to add end flow action change: %v", err)
 		}
 	}()
@@ -232,12 +253,27 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 		s.T().Fatal("Test timed out")
 	}
 
-	s.Require().GreaterOrEqual(len(receivedActions), 5)
-	s.Equal(flowAction, receivedActions[0])
-	s.Equal(flowActionUpdated, receivedActions[1])
-	s.Equal(flowActionFailed, receivedActions[2])
-	s.Equal(newAction, receivedActions[3])
-	s.Equal(endAction, receivedActions[4])
+	wg.Wait()
+
+	s.Require().Len(receivedActions, 3)
+	// Verify first action with timestamp checks
+	s.Equal(flowAction.Id, receivedActions[0].Id)
+	s.Equal(flowAction.SubflowName, receivedActions[0].SubflowName)
+	s.Equal(flowAction.ActionType, receivedActions[0].ActionType)
+	s.Equal(time.UTC, receivedActions[0].Created.Location())
+	s.Equal(time.UTC, receivedActions[0].Updated.Location())
+	s.True(receivedActions[0].Created.Equal(flowAction.Created))
+	s.True(receivedActions[0].Updated.Equal(flowAction.Updated))
+	s.Equal(flowAction.Created.Nanosecond(), receivedActions[0].Created.Nanosecond())
+	s.Equal(flowAction.Updated.Nanosecond(), receivedActions[0].Updated.Nanosecond())
+	// Verify second action with timestamp checks
+	s.Equal(newAction.Id, receivedActions[1].Id)
+	s.Equal(time.UTC, receivedActions[1].Created.Location())
+	s.Equal(time.UTC, receivedActions[1].Updated.Location())
+	s.True(receivedActions[1].Created.Equal(newAction.Created))
+	s.True(receivedActions[1].Updated.Equal(newAction.Updated))
+	// Verify end action
+	s.Equal(endAction.Id, receivedActions[2].Id)
 }
 
 func (s *StreamerTestSuite) TestFlowEventStreaming() {

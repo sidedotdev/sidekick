@@ -14,7 +14,7 @@ import (
 
 func TestPersistWorkspace(t *testing.T) {
 	ctx := context.Background()
-	db := NewTestRedisStorage()
+	db := newTestRedisStorage()
 	workspace := domain.Workspace{
 		Id:         "123",
 		Name:       "TestWorkspace",
@@ -69,7 +69,7 @@ func TestPersistWorkspace(t *testing.T) {
 
 func TestPersistWorkspaceConfig(t *testing.T) {
 	ctx := context.Background()
-	db := NewTestRedisStorage()
+	db := newTestRedisStorage()
 	workspaceId := "test-workspace-id"
 
 	config := domain.WorkspaceConfig{
@@ -105,7 +105,7 @@ func TestPersistWorkspaceConfig(t *testing.T) {
 
 func TestGetWorkspaceConfig(t *testing.T) {
 	ctx := context.Background()
-	s := NewTestRedisStorage()
+	s := newTestRedisStorage()
 	workspaceId := "test-workspace-id"
 
 	// Test retrieving a non-existent config

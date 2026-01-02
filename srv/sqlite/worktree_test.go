@@ -154,3 +154,101 @@ func TestWorktreeStorage(t *testing.T) {
 		assert.Empty(t, emptyFlowWorktrees)
 	})
 }
+
+func TestPersistWorktree_CreatedTimestamp(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("converts non-UTC to UTC", func(t *testing.T) {
+		t.Parallel()
+		storage := NewTestSqliteStorage(t, "worktree_utc_test")
+
+		loc, err := time.LoadLocation("America/Los_Angeles")
+		require.NoError(t, err)
+
+		// Use a non-UTC time with nanosecond precision
+		nonUTCTime := time.Date(2025, 6, 15, 10, 30, 45, 123456789, loc)
+
+		worktree := domain.Worktree{
+			Id:               "wt_utc_test1",
+			FlowId:           "flow_utc1",
+			Name:             "UTC Test Worktree",
+			Created:          nonUTCTime,
+			WorkspaceId:      "workspace_utc1",
+			WorkingDirectory: "/path/to/utc_worktree1",
+		}
+
+		err = storage.PersistWorktree(ctx, worktree)
+		require.NoError(t, err)
+
+		retrieved, err := storage.GetWorktree(ctx, worktree.WorkspaceId, worktree.Id)
+		require.NoError(t, err)
+
+		// Verify the time is in UTC
+		assert.Equal(t, time.UTC, retrieved.Created.Location())
+
+		// Verify the time value is equivalent
+		assert.True(t, retrieved.Created.Equal(nonUTCTime), "times should be equal: got %v, want %v", retrieved.Created, nonUTCTime)
+
+		// Verify nanosecond precision is preserved
+		assert.Equal(t, 123456789, retrieved.Created.Nanosecond())
+	})
+
+	t.Run("sets zero time to current UTC", func(t *testing.T) {
+		t.Parallel()
+		storage := NewTestSqliteStorage(t, "worktree_zero_test")
+
+		before := time.Now().UTC()
+
+		worktree := domain.Worktree{
+			Id:               "wt_zero_test",
+			FlowId:           "flow_zero",
+			Name:             "Zero Time Worktree",
+			WorkspaceId:      "workspace_zero",
+			WorkingDirectory: "/path/to/zero_worktree",
+			// Created is zero
+		}
+
+		err := storage.PersistWorktree(ctx, worktree)
+		require.NoError(t, err)
+
+		after := time.Now().UTC()
+
+		retrieved, err := storage.GetWorktree(ctx, worktree.WorkspaceId, worktree.Id)
+		require.NoError(t, err)
+
+		// Verify the time is in UTC
+		assert.Equal(t, time.UTC, retrieved.Created.Location())
+
+		// Verify the time was set to approximately now
+		assert.True(t, !retrieved.Created.Before(before), "created should be >= before")
+		assert.True(t, !retrieved.Created.After(after), "created should be <= after")
+	})
+
+	t.Run("preserves sub-millisecond precision", func(t *testing.T) {
+		t.Parallel()
+		storage := NewTestSqliteStorage(t, "worktree_precision_test")
+
+		// Use a time with specific nanoseconds that would be lost with millisecond truncation
+		created := time.Date(2025, 1, 15, 12, 0, 0, 123456789, time.UTC)
+
+		worktree := domain.Worktree{
+			Id:               "wt_precision_test",
+			FlowId:           "flow_precision",
+			Name:             "Precision Test Worktree",
+			Created:          created,
+			WorkspaceId:      "workspace_precision",
+			WorkingDirectory: "/path/to/precision_worktree",
+		}
+
+		err := storage.PersistWorktree(ctx, worktree)
+		require.NoError(t, err)
+
+		retrieved, err := storage.GetWorktree(ctx, worktree.WorkspaceId, worktree.Id)
+		require.NoError(t, err)
+
+		// Verify exact nanosecond precision
+		assert.Equal(t, created, retrieved.Created)
+		assert.Equal(t, 123456789, retrieved.Created.Nanosecond())
+	})
+}

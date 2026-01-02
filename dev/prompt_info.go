@@ -199,6 +199,8 @@ const (
 	FeedbackTypeEditBlockError = "edit_block_error"
 	FeedbackTypeApplyError     = "apply_error"
 	FeedbackTypeSystemError    = "system_error"
+	FeedbackTypeTestFailure    = "test_failure"
+	FeedbackTypeAutoReview     = "auto_review"
 )
 
 // Implement the PromptInfo interface for FeedbackInfo

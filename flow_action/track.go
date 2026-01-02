@@ -2,6 +2,7 @@ package flow_action
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sidekick/domain"
 	"sidekick/utils"
@@ -128,8 +129,13 @@ func trackSubflow[T any](eCtx ExecContext, detached bool, subflowType, subflowNa
 	val, err := f(subflow)
 
 	if err != nil {
-		subflow.Status = domain.SubflowStatusFailed
-		subflow.Result = fmt.Sprintf("failed: %v", err)
+		if errors.Is(err, PendingActionError) {
+			subflow.Status = domain.SubflowStatusCanceled
+			subflow.Result = fmt.Sprintf("canceled: %v", err)
+		} else {
+			subflow.Status = domain.SubflowStatusFailed
+			subflow.Result = fmt.Sprintf("failed: %v", err)
+		}
 		updateECtx := eCtx
 		if v := workflow.GetVersion(eCtx, "disconnected-context", workflow.DefaultVersion, 1); v == 1 {
 			disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
@@ -137,7 +143,7 @@ func trackSubflow[T any](eCtx ExecContext, detached bool, subflowType, subflowNa
 		}
 		_, err2 := putSubflow(updateECtx, subflow)
 		if err2 != nil {
-			return defaultT, fmt.Errorf("failed to mark subflow as failed: %v\noriginal failure: %v", err2, err)
+			return defaultT, fmt.Errorf("failed to mark subflow as %s: %v\noriginal error: %v", subflow.Status, err2, err)
 		}
 		return defaultT, err
 	}
@@ -185,8 +191,13 @@ func trackSubflowFailureOnly[T any](eCtx ExecContext, subflowType, subflowName s
 	val, err := f(subflow)
 
 	if err != nil {
-		subflow.Status = domain.SubflowStatusFailed
-		subflow.Result = fmt.Sprintf("failed: %v", err)
+		if errors.Is(err, PendingActionError) {
+			subflow.Status = domain.SubflowStatusCanceled
+			subflow.Result = fmt.Sprintf("canceled: %v", err)
+		} else {
+			subflow.Status = domain.SubflowStatusFailed
+			subflow.Result = fmt.Sprintf("failed: %v", err)
+		}
 		updateECtx := eCtx
 		if v := workflow.GetVersion(eCtx, "disconnected-context", workflow.DefaultVersion, 1); v == 1 {
 			disconnectedWorkflowCtx, _ := workflow.NewDisconnectedContext(eCtx.Context)
@@ -194,7 +205,7 @@ func trackSubflowFailureOnly[T any](eCtx ExecContext, subflowType, subflowName s
 		}
 		_, err2 := putSubflow(updateECtx, subflow)
 		if err2 != nil {
-			return defaultT, fmt.Errorf("failed to mark subflow as failed: %v\noriginal failure: %v", err2, err)
+			return defaultT, fmt.Errorf("failed to mark subflow as %s: %v\noriginal error: %v", subflow.Status, err2, err)
 		}
 		return defaultT, err
 	}

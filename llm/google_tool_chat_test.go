@@ -121,7 +121,105 @@ func TestGoogleFromChatMessages(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := googleFromChatMessages(tt.messages)
+			got := googleFromChatMessages(tt.messages, false)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestGoogleFromChatMessagesReasoningModel(t *testing.T) {
+	tests := []struct {
+		name             string
+		messages         []ChatMessage
+		isReasoningModel bool
+		want             []*genai.Content
+	}{
+		{
+			name: "tool call with empty signature on reasoning model",
+			messages: []ChatMessage{
+				{
+					Role: "assistant",
+					ToolCalls: []ToolCall{
+						{Id: "call1", Name: "test_tool", Arguments: `{"arg": "value"}`},
+					},
+				},
+			},
+			isReasoningModel: true,
+			want: []*genai.Content{
+				{
+					Role: "model",
+					Parts: []*genai.Part{
+						{
+							FunctionCall: &genai.FunctionCall{
+								ID:   "call1",
+								Name: "test_tool",
+								Args: map[string]any{"arg": "value"},
+							},
+							ThoughtSignature: []byte("skip_thought_signature_validator"),
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "tool call with existing signature on reasoning model",
+			messages: []ChatMessage{
+				{
+					Role: "assistant",
+					ToolCalls: []ToolCall{
+						{Id: "call1", Name: "test_tool", Arguments: `{"arg": "value"}`, Signature: []byte("existing_signature")},
+					},
+				},
+			},
+			isReasoningModel: true,
+			want: []*genai.Content{
+				{
+					Role: "model",
+					Parts: []*genai.Part{
+						{
+							FunctionCall: &genai.FunctionCall{
+								ID:   "call1",
+								Name: "test_tool",
+								Args: map[string]any{"arg": "value"},
+							},
+							ThoughtSignature: []byte("existing_signature"),
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "tool call with empty signature on non-reasoning model",
+			messages: []ChatMessage{
+				{
+					Role: "assistant",
+					ToolCalls: []ToolCall{
+						{Id: "call1", Name: "test_tool", Arguments: `{"arg": "value"}`},
+					},
+				},
+			},
+			isReasoningModel: false,
+			want: []*genai.Content{
+				{
+					Role: "model",
+					Parts: []*genai.Part{
+						{
+							FunctionCall: &genai.FunctionCall{
+								ID:   "call1",
+								Name: "test_tool",
+								Args: map[string]any{"arg": "value"},
+							},
+							ThoughtSignature: nil,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := googleFromChatMessages(tt.messages, tt.isReasoningModel)
 			assert.Equal(t, tt.want, got)
 		})
 	}

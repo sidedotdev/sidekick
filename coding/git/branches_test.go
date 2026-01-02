@@ -12,9 +12,11 @@ import (
 )
 
 func TestGetCurrentBranch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("On Branch", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit")
 		runGitCommandInTestRepo(t, repoDir, "branch", "develop")
@@ -27,6 +29,7 @@ func TestGetCurrentBranch(t *testing.T) {
 	})
 
 	t.Run("Detached HEAD", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t)
 		commitHash := createCommit(t, repoDir, "Initial commit")
 		runGitCommandInTestRepo(t, repoDir, "checkout", commitHash) // Detach HEAD by checking out commit hash
@@ -38,6 +41,7 @@ func TestGetCurrentBranch(t *testing.T) {
 	})
 
 	t.Run("Empty Repository (Initialized)", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t) // Sets up repo with 'main' but no commits
 
 		// `git symbolic-ref --short HEAD` should return the initial branch name even before the first commit.
@@ -48,6 +52,7 @@ func TestGetCurrentBranch(t *testing.T) {
 	})
 
 	t.Run("Invalid Directory", func(t *testing.T) {
+		t.Parallel()
 		// Use a path that definitely doesn't exist.
 		nonExistentDir := filepath.Join(t.TempDir(), "non-existent-dir")
 		// Ensure the directory does not exist before the call
@@ -62,6 +67,7 @@ func TestGetCurrentBranch(t *testing.T) {
 	})
 
 	t.Run("Not a Git Repository", func(t *testing.T) {
+		t.Parallel()
 		// Create a directory but don't initialize git in it.
 		notRepoDir := t.TempDir()
 		state, err := GetCurrentBranch(ctx, notRepoDir)
@@ -74,9 +80,11 @@ func TestGetCurrentBranch(t *testing.T) {
 }
 
 func TestGetDefaultBranch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("Main Exists and Verifiable", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t) // Initializes with main
 		createCommit(t, repoDir, "Initial commit on main")
 
@@ -86,6 +94,7 @@ func TestGetDefaultBranch(t *testing.T) {
 	})
 
 	t.Run("Master Exists and Verifiable (Main does not)", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t) // Initializes with main
 		createCommit(t, repoDir, "Initial commit")
 		// Rename main to master
@@ -97,6 +106,7 @@ func TestGetDefaultBranch(t *testing.T) {
 	})
 
 	t.Run("Both Main and Master Exist (Main preferred)", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t) // Initializes with main
 		createCommit(t, repoDir, "Commit on main")
 		// Create master branch and add a commit so it's verifiable
@@ -112,6 +122,7 @@ func TestGetDefaultBranch(t *testing.T) {
 	})
 
 	t.Run("Neither Main nor Master Exists (Verifiable)", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t) // Initializes with main
 		createCommit(t, repoDir, "Initial commit")
 		// Rename main to something else
@@ -123,6 +134,7 @@ func TestGetDefaultBranch(t *testing.T) {
 	})
 
 	t.Run("Empty Repository (No Commits)", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t) // Initializes with main, but no commits
 
 		// `git rev-parse --verify main` fails if no commits exist on the branch.
@@ -133,6 +145,7 @@ func TestGetDefaultBranch(t *testing.T) {
 	})
 
 	t.Run("Invalid Directory", func(t *testing.T) {
+		t.Parallel()
 		nonExistentDir := filepath.Join(t.TempDir(), "non-existent-dir")
 		_ = os.RemoveAll(nonExistentDir)
 
@@ -142,6 +155,7 @@ func TestGetDefaultBranch(t *testing.T) {
 	})
 
 	t.Run("Not a Git Repository", func(t *testing.T) {
+		t.Parallel()
 		notGitDir := t.TempDir()
 		_, err := GetDefaultBranch(ctx, notGitDir)
 		require.Error(t, err, "Should return an error for a directory that is not a git repository")
@@ -150,9 +164,11 @@ func TestGetDefaultBranch(t *testing.T) {
 }
 
 func TestListLocalBranches(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("Single Branch", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t) // Initializes with main
 		createCommit(t, repoDir, "Initial commit")
 
@@ -162,6 +178,7 @@ func TestListLocalBranches(t *testing.T) {
 	})
 
 	t.Run("Multiple Branches Sorted by Committer Date", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t) // Initializes with main
 
 		// Use explicit dates to control sorting order
@@ -188,6 +205,7 @@ func TestListLocalBranches(t *testing.T) {
 	})
 
 	t.Run("Empty Repository (No Commits)", func(t *testing.T) {
+		t.Parallel()
 		repoDir := setupTestGitRepo(t) // Initializes with main, but no commits
 
 		branches, err := ListLocalBranches(ctx, repoDir)
@@ -197,6 +215,7 @@ func TestListLocalBranches(t *testing.T) {
 	})
 
 	t.Run("Invalid Directory", func(t *testing.T) {
+		t.Parallel()
 		nonExistentDir := filepath.Join(t.TempDir(), "non-existent-dir")
 		_ = os.RemoveAll(nonExistentDir)
 
@@ -206,6 +225,7 @@ func TestListLocalBranches(t *testing.T) {
 	})
 
 	t.Run("Not a Git Repository", func(t *testing.T) {
+		t.Parallel()
 		notRepoDir := t.TempDir()
 		_, err := ListLocalBranches(ctx, notRepoDir)
 		require.Error(t, err, "Should return an error for a directory that is not a git repository")

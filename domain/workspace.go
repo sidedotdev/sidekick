@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"sidekick/common"
 	"time"
 )
@@ -18,12 +19,26 @@ type Workspace struct {
 	Updated      time.Time `json:"updated"`      // last update timestamp of the workspace
 }
 
+func (w Workspace) MarshalJSON() ([]byte, error) {
+	type Alias Workspace
+	return json.Marshal(&struct {
+		Alias
+		Created time.Time `json:"created"`
+		Updated time.Time `json:"updated"`
+	}{
+		Alias:   Alias(w),
+		Created: UTCTime(w.Created),
+		Updated: UTCTime(w.Updated),
+	})
+}
+
 // TODO /gen move to workspace package, along with corresponding accessor
 // methods to new Accessor type within workspace package, extracted from db
 // package.
 type WorkspaceConfig struct {
-	LLM       common.LLMConfig       `json:"llm"`
-	Embedding common.EmbeddingConfig `json:"embedding"`
+	LLM                common.LLMConfig               `json:"llm"`
+	Embedding          common.EmbeddingConfig         `json:"embedding"`
+	CommandPermissions common.CommandPermissionConfig `json:"commandPermissions,omitempty"`
 }
 
 // WorkspaceStorage defines the interface for workspace-related database operations

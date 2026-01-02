@@ -1,6 +1,8 @@
 package dev
 
 import (
+	"sidekick/flow_action"
+
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -14,12 +16,12 @@ func SetupUserActionHandler(dCtx DevContext) {
 		for {
 			selector := workflow.NewSelector(ctx)
 			selector.AddReceive(signalChan, func(c workflow.ReceiveChannel, more bool) {
-				var action UserActionType
+				var action flow_action.UserActionType
 				c.Receive(ctx, &action) // Receive the UserActionType from the signal
 
 				// Check if the received action is UserActionGoNext
-				if action == UserActionGoNext {
-					dCtx.GlobalState.SetUserAction(UserActionGoNext)
+				if action == flow_action.UserActionGoNext {
+					dCtx.ExecContext.GlobalState.SetUserAction(flow_action.UserActionGoNext)
 				}
 				// Other actions could be handled here in the future with an else if or switch.
 			})

@@ -202,3 +202,54 @@ func TestLocalGitWorktreeEnvironment_MarshalUnmarshal(t *testing.T) {
 
 	assert.Equal(t, originalEnv, unmarshaledEnvContainer.Env.(*LocalGitWorktreeEnv))
 }
+
+func TestEnvContainer_MarshalJSON_NilEnv(t *testing.T) {
+	// Create an EnvContainer with nil Env
+	envContainer := EnvContainer{Env: nil}
+
+	// Attempt to marshal - this should not panic and should succeed
+	jsonBytes, err := json.Marshal(envContainer)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, jsonBytes)
+
+	// Unmarshal back to EnvContainer
+	var unmarshaledEnvContainer EnvContainer
+	err = json.Unmarshal(jsonBytes, &unmarshaledEnvContainer)
+	assert.NoError(t, err)
+
+	// The unmarshaled EnvContainer should also have nil Env
+	assert.Nil(t, unmarshaledEnvContainer.Env)
+}
+
+func TestNewLocalGitWorktreeActivity_Error(t *testing.T) {
+	ctx := context.Background()
+	setupTestDataHome(t)
+
+	// Use a non-existent repo directory to cause an error
+	params := LocalEnvParams{
+		RepoDir:     "/non/existent/path/that/does/not/exist",
+		StartBranch: utils.Ptr("main"),
+	}
+
+	worktree := domain.Worktree{
+		Id:          "wt_test",
+		FlowId:      "flow_test",
+		Name:        "side/test-branch",
+		Created:     time.Now(),
+		WorkspaceId: "workspace1",
+	}
+
+	// Call NewLocalGitWorktreeActivity with invalid params
+	envContainer, err := NewLocalGitWorktreeActivity(ctx, params, worktree)
+
+	// Should return an error
+	assert.Error(t, err)
+
+	// When an error is returned, the EnvContainer's Env should be nil
+	assert.Nil(t, envContainer.Env)
+
+	// Attempting to marshal the returned EnvContainer should not panic and should succeed
+	jsonBytes, err := json.Marshal(envContainer)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, jsonBytes)
+}

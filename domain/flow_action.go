@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -30,6 +31,19 @@ type FlowAction struct {
 	ActionResult       string                 `json:"actionResult"`
 	IsHumanAction      bool                   `json:"isHumanAction"`
 	IsCallbackAction   bool                   `json:"isCallbackAction"`
+}
+
+func (fa FlowAction) MarshalJSON() ([]byte, error) {
+	type Alias FlowAction
+	return json.Marshal(&struct {
+		Alias
+		Created time.Time `json:"created"`
+		Updated time.Time `json:"updated"`
+	}{
+		Alias:   Alias(fa),
+		Created: UTCTime(fa.Created),
+		Updated: UTCTime(fa.Updated),
+	})
 }
 
 // FlowStorage defines the interface for flow-related database operations

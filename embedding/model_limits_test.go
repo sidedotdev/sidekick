@@ -67,12 +67,27 @@ func TestBatchEmbeddingRequests(t *testing.T) {
 			wantErr:     false,
 		},
 		{
-			name:   "gemini model strict batch size of 1",
+			name:   "gemini model batch size limit of 100",
 			inputs: []string{"small1", "small2", "small3"},
 			modelConfig: common.ModelConfig{
 				Model: "gemini-embedding-001",
 			},
-			wantBatches: 3,
+			wantBatches: 1,
+			wantErr:     false,
+		},
+		{
+			name: "gemini model batch size limit exceeded",
+			inputs: func() []string {
+				inputs := make([]string, 150)
+				for i := range inputs {
+					inputs[i] = "small"
+				}
+				return inputs
+			}(),
+			modelConfig: common.ModelConfig{
+				Model: "gemini-embedding-001",
+			},
+			wantBatches: 2,
 			wantErr:     false,
 		},
 		{
@@ -87,7 +102,7 @@ func TestBatchEmbeddingRequests(t *testing.T) {
 			modelConfig: common.ModelConfig{
 				Provider: string(common.GoogleChatProvider),
 			},
-			wantBatches: 2,
+			wantBatches: 3,
 			wantErr:     false,
 		},
 		{

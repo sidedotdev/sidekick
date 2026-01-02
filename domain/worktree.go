@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -14,6 +15,17 @@ type Worktree struct {
 	Created          time.Time `json:"created"`
 	WorkspaceId      string    `json:"workspaceId"`
 	WorkingDirectory string    `json:"workingDirectory"`
+}
+
+func (w Worktree) MarshalJSON() ([]byte, error) {
+	type Alias Worktree
+	return json.Marshal(&struct {
+		Alias
+		Created time.Time `json:"created"`
+	}{
+		Alias:   Alias(w),
+		Created: UTCTime(w.Created),
+	})
 }
 
 // WorktreeStorage defines the interface for worktree-related database operations

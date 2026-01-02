@@ -9,6 +9,86 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDiscoverConfigFile(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no files exist", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		result := DiscoverConfigFile(tmpDir, []string{"config.yml", "config.yaml", "config.toml"})
+		assert.Empty(t, result.ChosenPath)
+		assert.Empty(t, result.AllFound)
+	})
+
+	t.Run("single file exists", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+		require.NoError(t, os.WriteFile(configPath, []byte(""), 0644))
+
+		result := DiscoverConfigFile(tmpDir, []string{"config.yml", "config.yaml", "config.toml"})
+		assert.Equal(t, configPath, result.ChosenPath)
+		assert.Equal(t, []string{configPath}, result.AllFound)
+	})
+
+	t.Run("multiple files exist - returns highest precedence", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		ymlPath := filepath.Join(tmpDir, "config.yml")
+		yamlPath := filepath.Join(tmpDir, "config.yaml")
+		tomlPath := filepath.Join(tmpDir, "config.toml")
+		require.NoError(t, os.WriteFile(ymlPath, []byte(""), 0644))
+		require.NoError(t, os.WriteFile(yamlPath, []byte(""), 0644))
+		require.NoError(t, os.WriteFile(tomlPath, []byte(""), 0644))
+
+		result := DiscoverConfigFile(tmpDir, []string{"config.yml", "config.yaml", "config.toml"})
+		assert.Equal(t, ymlPath, result.ChosenPath)
+		assert.Equal(t, []string{ymlPath, yamlPath, tomlPath}, result.AllFound)
+	})
+
+	t.Run("lower precedence file exists alone", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		tomlPath := filepath.Join(tmpDir, "config.toml")
+		require.NoError(t, os.WriteFile(tomlPath, []byte(""), 0644))
+
+		result := DiscoverConfigFile(tmpDir, []string{"config.yml", "config.yaml", "config.toml"})
+		assert.Equal(t, tomlPath, result.ChosenPath)
+		assert.Equal(t, []string{tomlPath}, result.AllFound)
+	})
+}
+
+func TestGetParserForExtension(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		path      string
+		expectNil bool
+	}{
+		{"config.yml", false},
+		{"config.yaml", false},
+		{"config.YAML", false},
+		{"config.toml", false},
+		{"config.TOML", false},
+		{"config.json", false},
+		{"config.JSON", false},
+		{"config.txt", true},
+		{"config", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			t.Parallel()
+			parser := GetParserForExtension(tt.path)
+			if tt.expectNil {
+				assert.Nil(t, parser)
+			} else {
+				assert.NotNil(t, parser)
+			}
+		})
+	}
+}
+
 func TestGetSidekickConfig(t *testing.T) {
 	// Create temp dir for test configs
 	tmpDir := t.TempDir()
@@ -117,5 +197,95 @@ providers:
 		_, err := LoadSidekickConfig(configPath)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid provider type: invalid_type")
+	})
+
+	t.Run("valid TOML config file", func(t *testing.T) {
+		tomlConfigPath := filepath.Join(tmpDir, "config.toml")
+		configTOML := `
+[[providers]]
+name = "custom_llm"
+type = "openai_compatible"
+base_url = "https://example.com"
+key = "abc123"
+default_llm = "custom-model"
+
+[[providers]]
+type = "openai"
+key = "xyz456"
+
+[[llm.defaults]]
+provider = "custom_llm"
+
+[[llm.defaults]]
+provider = "openai"
+`
+		require.NoError(t, os.WriteFile(tomlConfigPath, []byte(configTOML), 0644))
+
+		config, err := LoadSidekickConfig(tomlConfigPath)
+		require.NoError(t, err)
+
+		assert.Len(t, config.Providers, 2)
+		assert.Equal(t, "custom_llm", config.Providers[0].Name)
+		assert.Equal(t, "openai_compatible", config.Providers[0].Type)
+		assert.Equal(t, "https://example.com", config.Providers[0].BaseURL)
+		assert.Equal(t, "abc123", config.Providers[0].Key)
+		assert.Equal(t, "custom-model", config.Providers[0].DefaultLLM)
+		assert.Equal(t, "openai", config.Providers[1].Type)
+		assert.Equal(t, "openai", config.Providers[1].Name)
+
+		assert.Len(t, config.LLM["defaults"], 2)
+		assert.Equal(t, "custom_llm", config.LLM["defaults"][0].Provider)
+		assert.Equal(t, "openai", config.LLM["defaults"][1].Provider)
+	})
+
+	t.Run("valid JSON config file", func(t *testing.T) {
+		jsonConfigPath := filepath.Join(tmpDir, "config.json")
+		configJSON := `{
+  "providers": [
+    {
+      "name": "custom_llm",
+      "type": "openai_compatible",
+      "base_url": "https://example.com",
+      "key": "abc123",
+      "default_llm": "custom-model"
+    },
+    {
+      "type": "openai",
+      "key": "xyz456"
+    }
+  ],
+  "llm": {
+    "defaults": [
+      {"provider": "custom_llm"},
+      {"provider": "openai"}
+    ]
+  }
+}`
+		require.NoError(t, os.WriteFile(jsonConfigPath, []byte(configJSON), 0644))
+
+		config, err := LoadSidekickConfig(jsonConfigPath)
+		require.NoError(t, err)
+
+		assert.Len(t, config.Providers, 2)
+		assert.Equal(t, "custom_llm", config.Providers[0].Name)
+		assert.Equal(t, "openai_compatible", config.Providers[0].Type)
+		assert.Equal(t, "https://example.com", config.Providers[0].BaseURL)
+		assert.Equal(t, "abc123", config.Providers[0].Key)
+		assert.Equal(t, "custom-model", config.Providers[0].DefaultLLM)
+		assert.Equal(t, "openai", config.Providers[1].Type)
+		assert.Equal(t, "openai", config.Providers[1].Name)
+
+		assert.Len(t, config.LLM["defaults"], 2)
+		assert.Equal(t, "custom_llm", config.LLM["defaults"][0].Provider)
+		assert.Equal(t, "openai", config.LLM["defaults"][1].Provider)
+	})
+
+	t.Run("unsupported config format", func(t *testing.T) {
+		txtConfigPath := filepath.Join(tmpDir, "config.txt")
+		require.NoError(t, os.WriteFile(txtConfigPath, []byte("some content"), 0644))
+
+		_, err := LoadSidekickConfig(txtConfigPath)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported config file format")
 	})
 }

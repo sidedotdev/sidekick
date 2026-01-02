@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"sidekick"
+	"sidekick/api"
+	"sidekick/temporal"
 	"strconv"
+	"time"
 
 	// Embedding the frontend build files
 	_ "embed"
@@ -21,7 +24,9 @@ import (
 var version string
 
 // program struct and its methods (Start, run, Stop) are for system service mode
-type program struct{}
+type program struct {
+	server *api.Server
+}
 
 func (p *program) Start(s system_service.Service) error {
 	go p.run()
@@ -29,13 +34,19 @@ func (p *program) Start(s system_service.Service) error {
 }
 
 func (p *program) run() {
-	startServer()
+	p.server = startServer()
 	startWorker()
-	startTemporal()
+	temporal.Start()
 }
 
 func (p *program) Stop(s system_service.Service) error {
-	// Stop should put the program into a safe state and return quickly.
+	if p.server != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := p.server.Shutdown(ctx); err != nil {
+			log.Error().Err(err).Msg("Error shutting down server")
+		}
+	}
 	return nil
 }
 

@@ -301,71 +301,73 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		// TODO /gen instead of forcing just get_symbol_definitions, let's force
 		// one of get_symbol_definitions or bulk_search_repository. if given
 		// bulk_search_repository,
-		var toolCall llm.ToolCall
 		chatCtx := actionCtx.WithCancelOnPause()
-		toolCall, requiredCodeContext, err = ForceToolRetrieveCodeContext(chatCtx, chatHistory)
+		toolCallResults, err := ForceToolRetrieveCodeContext(chatCtx, chatHistory)
 		if actionCtx.GlobalState != nil && actionCtx.GlobalState.Paused {
 			continue // UserRequestIfPaused will handle the pause
 		}
 		if err != nil {
-			if errors.Is(err, llm.ErrToolCallUnmarshal) {
-				response := fmt.Sprintf("%s\n\nHint: To fix this, follow the json schema correctly. In particular, don't put json within a string.", err.Error())
-				toolCallResponseInfo := ToolCallResponseInfo{Response: response, ToolCallId: toolCall.Id, FunctionName: toolCall.Name}
-				addCodeContextPrompt(chatHistory, toolCallResponseInfo)
-				continue
-			}
 			return nil, "", fmt.Errorf("failed to determine required code context: %v", err)
 		}
+
+		// Check for unmarshal errors in any tool call and provide feedback
+		feedbacks, hasUnmarshalError, fatalErr := checkToolCallUnmarshalErrors(toolCallResults)
+		if fatalErr != nil {
+			return nil, "", fatalErr
+		}
+		if hasUnmarshalError {
+			for _, feedback := range feedbacks {
+				addCodeContextPrompt(chatHistory, feedback)
+			}
+			continue
+		}
+
+		// Merge all RequiredCodeContext requests in tool-call order
+		requiredCodeContext = mergeToolCallRequests(toolCallResults)
 
 		// Allow explicit empty requests for new/empty projects
 		if len(requiredCodeContext.Requests) == 0 {
 			break
 		}
 
-		// STEP 3: Read the code
-		var result coding.SymDefResults
-		result, err = extractCodeContext(noRetryCtx, coding.DirectorySymDefRequest{
-			EnvContainer:          *actionCtx.EnvContainer,
-			Requests:              requiredCodeContext.Requests,
-			IncludeRelatedSymbols: true,
-		})
-
-		if err == nil && result.Failures == "" {
-			var didShrink bool
-			codeContext, didShrink = tree_sitter.ShrinkEmbeddedCodeContext(result.SymbolDefinitions, longestFirst, maxLength)
-			if didShrink && !strings.Contains(codeContext, SignaturesEditHint) {
-				codeContext = strings.TrimSpace(codeContext) + "\n\n-------------\n" + SignaturesEditHint
+		// STEP 3: Read the code for each tool call separately and concatenate
+		allSymbolDefinitions, retrievalFeedbacks := retrieveCodeContextForToolCalls(noRetryCtx, actionCtx.EnvContainer, toolCallResults)
+		if len(retrievalFeedbacks) > 0 {
+			for _, feedback := range retrievalFeedbacks {
+				addCodeContextPrompt(chatHistory, feedback)
 			}
-
-			currentMax := maxLength
-			v := workflow.GetVersion(actionCtx, "code_context_max_length", workflow.DefaultVersion, 1)
-			if v == 1 {
-				currentMax = currentMax + len("\n\n-------------\n"+SignaturesEditHint)
-			}
-
-			// TODO use tiktoken to count exact tokens and compare with specific model being used + margin
-			if len(codeContext) > currentMax {
-				// TODO if this happens, we could try partially symbolizing the code context too
-				feedback := "Error: the code context requested is too long to include. YOU MUST SHORTEN THE CODE CONTEXT REQUESTED. DO NOT REQUEST SO MANY FUNCTIONS AND TYPES IN SO MANY FILES. If you're not asking for too many symbols, then be more specific in your request - eg request just a few methods instead of a big class."
-				promptInfo = ToolCallResponseInfo{Response: feedback, ToolCallId: toolCall.Id, FunctionName: toolCall.Name}
-				addCodeContextPrompt(chatHistory, promptInfo)
-				continue
-			} else {
-				// TODO check for empty code context too. we should use
-				// alternate methods if we get empty code context repeatedly.
-				break
-			}
+			continue
 		}
 
-		// we'll retry if we get an error, and include the error in the feedback
-		hint := fmt.Sprintf("Have you followed the required formats exactly for all arguments? Look at the examples given in the %s schema descriptions for all the properties. Note that frontend components can be retrieved in full with empty symbol names array", currentGetSymbolDefinitionsTool().Name)
-		feedback := fmt.Sprintf("failed to extract code context: %v\n%s\n\nHint: %s", err, result.Failures, hint)
-		promptInfo = ToolCallResponseInfo{Response: feedback, ToolCallId: toolCall.Id, FunctionName: toolCall.Name}
-		addCodeContextPrompt(chatHistory, promptInfo)
+		// Concatenate all symbol definitions
+		combinedSymbolDefinitions := strings.Join(allSymbolDefinitions, "\n\n")
 
-		// Check if the operation was paused
-		if actionCtx.DevContext.GlobalState != nil && actionCtx.DevContext.GlobalState.Paused {
-			return nil, "", fmt.Errorf("operation paused by user")
+		var didShrink bool
+		codeContext, didShrink = tree_sitter.ShrinkEmbeddedCodeContext(combinedSymbolDefinitions, longestFirst, maxLength)
+		if didShrink && !strings.Contains(codeContext, SignaturesEditHint) {
+			codeContext = strings.TrimSpace(codeContext) + "\n\n-------------\n" + SignaturesEditHint
+		}
+
+		currentMax := maxLength
+		v := workflow.GetVersion(actionCtx, "code_context_max_length", workflow.DefaultVersion, 1)
+		if v == 1 {
+			currentMax = currentMax + len("\n\n-------------\n"+SignaturesEditHint)
+		}
+
+		// TODO use tiktoken to count exact tokens and compare with specific model being used + margin
+		if len(codeContext) > currentMax {
+			// TODO if this happens, we could try partially symbolizing the code context too
+			// Provide feedback for all tool calls when combined context is too long
+			feedback := "Error: the code context requested is too long to include. YOU MUST SHORTEN THE CODE CONTEXT REQUESTED. DO NOT REQUEST SO MANY FUNCTIONS AND TYPES IN SO MANY FILES. If you're not asking for too many symbols, then be more specific in your request - eg request just a few methods instead of a big class."
+			for _, tcResult := range toolCallResults {
+				promptInfo = ToolCallResponseInfo{Response: feedback, ToolCallId: tcResult.ToolCall.Id, FunctionName: tcResult.ToolCall.Name}
+				addCodeContextPrompt(chatHistory, promptInfo)
+			}
+			continue
+		} else {
+			// TODO check for empty code context too. we should use
+			// alternate methods if we get empty code context repeatedly.
+			break
 		}
 	}
 
@@ -436,27 +438,124 @@ func RetrieveCodeContext(dCtx DevContext, requiredCodeContext RequiredCodeContex
 	return codeContext, nil
 }
 
-func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *[]llm.ChatMessage) (llm.ToolCall, RequiredCodeContext, error) {
+// ToolCallWithCodeContext pairs a tool call with its parsed RequiredCodeContext.
+// If Err is non-nil, the tool call failed to unmarshal.
+type ToolCallWithCodeContext struct {
+	ToolCall            llm.ToolCall
+	RequiredCodeContext RequiredCodeContext
+	Err                 error
+}
+
+// ForceToolRetrieveCodeContext forces the LLM to call get_symbol_definitions and
+// returns all tool calls with their parsed RequiredCodeContext. Each tool call is
+// parsed independently; if parsing fails for a tool call, its Err field is set.
+func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *[]llm.ChatMessage) ([]ToolCallWithCodeContext, error) {
 	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "small")
 	params := llm.ToolChatParams{Messages: *chatHistory, ModelConfig: modelConfig}
 	chatResponse, err := persisted_ai.ForceToolCall(actionCtx.FlowActionContext(), actionCtx.LLMConfig, &params, currentGetSymbolDefinitionsTool())
 	*chatHistory = params.Messages // update chat history with the new messages
 	if err != nil {
-		return llm.ToolCall{}, RequiredCodeContext{}, fmt.Errorf("failed to force tool call: %v", err)
-	}
-	toolCall := chatResponse.ToolCalls[0]
-	jsonStr := toolCall.Arguments
-	var requiredCodeContext RequiredCodeContext
-
-	// TODO move unmarshaling into the force tool call function, using reflect.Zero(tool.ParametersType)
-	err = json.Unmarshal([]byte(llm.RepairJson(jsonStr)), &requiredCodeContext)
-	if err != nil {
-		return toolCall, RequiredCodeContext{}, fmt.Errorf("%w: %v", llm.ErrToolCallUnmarshal, err)
-	} else if requiredCodeContext.Requests == nil {
-		return toolCall, RequiredCodeContext{}, fmt.Errorf("%w: missing requests in tool call", llm.ErrToolCallUnmarshal)
+		return nil, fmt.Errorf("failed to force tool call: %v", err)
 	}
 
-	return toolCall, requiredCodeContext, nil
+	return parseToolCallsToCodeContext(chatResponse.ToolCalls), nil
+}
+
+// parseToolCallsToCodeContext parses multiple tool calls into ToolCallWithCodeContext structs.
+// Each tool call is parsed independently; if parsing fails, the Err field is set.
+func parseToolCallsToCodeContext(toolCalls []llm.ToolCall) []ToolCallWithCodeContext {
+	results := make([]ToolCallWithCodeContext, len(toolCalls))
+	for i, toolCall := range toolCalls {
+		results[i].ToolCall = toolCall
+		jsonStr := toolCall.Arguments
+		var requiredCodeContext RequiredCodeContext
+
+		err := json.Unmarshal([]byte(llm.RepairJson(jsonStr)), &requiredCodeContext)
+		if err != nil {
+			results[i].Err = fmt.Errorf("%w: %v", llm.ErrToolCallUnmarshal, err)
+		} else if requiredCodeContext.Requests == nil {
+			results[i].Err = fmt.Errorf("%w: missing requests in tool call", llm.ErrToolCallUnmarshal)
+		} else {
+			results[i].RequiredCodeContext = requiredCodeContext
+		}
+	}
+	return results
+}
+
+// mergeToolCallRequests combines all successful tool call requests into a single RequiredCodeContext.
+// Tool calls with errors are skipped. Order is preserved.
+func mergeToolCallRequests(results []ToolCallWithCodeContext) RequiredCodeContext {
+	var merged RequiredCodeContext
+	merged.Requests = []coding.FileSymDefRequest{}
+	for _, result := range results {
+		if result.Err == nil {
+			merged.Requests = append(merged.Requests, result.RequiredCodeContext.Requests...)
+			if merged.Analysis == "" {
+				merged.Analysis = result.RequiredCodeContext.Analysis
+			} else if result.RequiredCodeContext.Analysis != "" {
+				merged.Analysis += "\n" + result.RequiredCodeContext.Analysis
+			}
+		}
+	}
+	return merged
+}
+
+// checkToolCallUnmarshalErrors checks for unmarshal errors in tool call results.
+// Returns feedback for each malformed tool call, whether any unmarshal errors were found,
+// and a fatal error if a non-unmarshal error is encountered.
+func checkToolCallUnmarshalErrors(results []ToolCallWithCodeContext) ([]ToolCallResponseInfo, bool, error) {
+	var feedbacks []ToolCallResponseInfo
+	hasUnmarshalError := false
+	for _, tcResult := range results {
+		if tcResult.Err != nil {
+			if errors.Is(tcResult.Err, llm.ErrToolCallUnmarshal) {
+				response := fmt.Sprintf("%s\n\nHint: To fix this, follow the json schema correctly. In particular, don't put json within a string.", tcResult.Err.Error())
+				feedbacks = append(feedbacks, ToolCallResponseInfo{
+					Response:     response,
+					ToolCallId:   tcResult.ToolCall.Id,
+					FunctionName: tcResult.ToolCall.Name,
+				})
+				hasUnmarshalError = true
+			} else {
+				return nil, false, fmt.Errorf("failed to determine required code context: %v", tcResult.Err)
+			}
+		}
+	}
+	return feedbacks, hasUnmarshalError, nil
+}
+
+// retrieveCodeContextForToolCalls retrieves code context for each tool call and returns
+// the concatenated symbol definitions. If any retrieval fails, it returns feedback for
+// those failures instead of symbol definitions.
+func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.EnvContainer, results []ToolCallWithCodeContext) ([]string, []ToolCallResponseInfo) {
+	var allSymbolDefinitions []string
+	var feedbacks []ToolCallResponseInfo
+
+	for _, tcResult := range results {
+		if len(tcResult.RequiredCodeContext.Requests) == 0 {
+			continue
+		}
+
+		result, err := extractCodeContext(ctx, coding.DirectorySymDefRequest{
+			EnvContainer:          *envContainer,
+			Requests:              tcResult.RequiredCodeContext.Requests,
+			IncludeRelatedSymbols: true,
+		})
+
+		if err != nil || result.Failures != "" {
+			hint := fmt.Sprintf("Have you followed the required formats exactly for all arguments? Look at the examples given in the %s schema descriptions for all the properties. Note that frontend components can be retrieved in full with empty symbol names array", currentGetSymbolDefinitionsTool().Name)
+			feedback := fmt.Sprintf("failed to extract code context: %v\n%s\n\nHint: %s", err, result.Failures, hint)
+			feedbacks = append(feedbacks, ToolCallResponseInfo{
+				Response:     feedback,
+				ToolCallId:   tcResult.ToolCall.Id,
+				FunctionName: tcResult.ToolCall.Name,
+			})
+		} else {
+			allSymbolDefinitions = append(allSymbolDefinitions, result.SymbolDefinitions)
+		}
+	}
+
+	return allSymbolDefinitions, feedbacks
 }
 
 func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) {

@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,7 +24,9 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/charmbracelet/huh"
 	"github.com/erikgeiser/promptkit/selection"
-	"github.com/erikgeiser/promptkit/textinput"
+	"github.com/goccy/go-yaml"
+	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/v2"
 	"github.com/segmentio/ksuid"
 	"github.com/zalando/go-keyring"
 )
@@ -75,25 +79,16 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		return fmt.Errorf("error loading local config: %w", err)
 	}
 
-	var llmProviders []string
-	var embeddingProviders []string
+	// Handle embedding provider setup
+	embeddingProvider, err := selectEmbeddingProvider(localConfig)
+	if err != nil {
+		return fmt.Errorf("error selecting embedding provider: %w", err)
+	}
 
-	// If we have valid local config, skip provider secrets setup: we assume
-	// valid secrets are stored in the local config
-	// TODO validate the key exists in local config providers and actually work
-	if len(localConfig.Providers) > 0 {
-		fmt.Printf("✔ Found existing provider configuration in %s\n", common.GetSidekickConfigPath())
-	} else {
-		// No config exists - proceed with normal setup
-		embeddingProviders, err = ensureEmbeddingSecrets()
-		if err != nil {
-			return fmt.Errorf("error checking or prompting for embedding secrets: %w", err)
-		}
-
-		llmProviders, err = ensureAISecrets()
-		if err != nil {
-			return fmt.Errorf("error checking or prompting for AI secrets: %w", err)
-		}
+	// Handle LLM provider setup
+	llmProvider, err := selectLLMProvider(localConfig)
+	if err != nil {
+		return fmt.Errorf("error selecting LLM provider: %w", err)
 	}
 
 	config, configCheck, err := checkConfig(baseDir)
@@ -106,9 +101,13 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		if err != nil {
 			return fmt.Errorf("error prompting for test command: %w", err)
 		}
-		fmt.Println("✔ Your test command has been saved in side.toml (commit this)")
+		if len(config.TestCommands) > 0 {
+			fmt.Println("✔ Your test command has been saved in side.yml (commit this)")
+		} else {
+			fmt.Println("ℹ Skipping test command configuration. You can add test commands to side.yml later for best results.")
+		}
 	} else {
-		fmt.Println("✔ Found valid test commands in side.toml")
+		fmt.Println("✔ Found valid test commands in repo config")
 	}
 
 	ctx := context.Background()
@@ -146,7 +145,7 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		return fmt.Errorf("error retrieving workspace configuration: %w", err)
 	}
 
-	err = h.ensureWorkspaceConfig(ctx, workspace.Id, &existingConfig, llmProviders, embeddingProviders)
+	err = h.ensureWorkspaceConfig(ctx, workspace.Id, &existingConfig, llmProvider, embeddingProvider)
 	if err != nil {
 		return fmt.Errorf("error ensuring workspace configuration: %w", err)
 	}
@@ -243,27 +242,23 @@ deps/
 	return err
 }
 
-func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspaceID string, currentConfig *domain.WorkspaceConfig, llmProviders, embeddingProviders []string) error {
+func (h *InitCommandHandler) ensureWorkspaceConfig(ctx context.Context, workspaceID string, currentConfig *domain.WorkspaceConfig, llmProvider, embeddingProvider string) error {
 	if currentConfig == nil {
 		currentConfig = &domain.WorkspaceConfig{}
 	}
 
 	// Set up LLM configuration
-	currentConfig.LLM.Defaults = []common.ModelConfig{}
-	for _, provider := range llmProviders {
-		modelConfig := common.ModelConfig{
-			Provider: provider,
-		}
-		currentConfig.LLM.Defaults = append(currentConfig.LLM.Defaults, modelConfig)
+	if llmProvider != "" {
+		currentConfig.LLM.Defaults = []common.ModelConfig{{Provider: llmProvider}}
+	} else {
+		currentConfig.LLM.Defaults = []common.ModelConfig{}
 	}
 
 	// Set up Embedding configuration
-	currentConfig.Embedding.Defaults = []common.ModelConfig{}
-	for _, provider := range embeddingProviders {
-		modelConfig := common.ModelConfig{
-			Provider: provider,
-		}
-		currentConfig.Embedding.Defaults = append(currentConfig.Embedding.Defaults, modelConfig)
+	if embeddingProvider != "" {
+		currentConfig.Embedding.Defaults = []common.ModelConfig{{Provider: embeddingProvider}}
+	} else {
+		currentConfig.Embedding.Defaults = []common.ModelConfig{}
 	}
 
 	// Persist the updated configuration
@@ -366,58 +361,108 @@ type configCheckResult struct {
 	hasTestCommands bool
 }
 
+var repoConfigCandidates = []string{"side.yml", "side.yaml", "side.toml", "side.json"}
+
 func checkConfig(baseDir string) (common.RepoConfig, configCheckResult, error) {
 	var config common.RepoConfig
 	var result configCheckResult
-	result.filePath = filepath.Join(baseDir, "side.toml")
 
-	_, err := os.Stat(result.filePath)
-	fileExists := !os.IsNotExist(err)
-	if !fileExists {
+	discovery := common.DiscoverConfigFile(baseDir, repoConfigCandidates)
+	if discovery.ChosenPath == "" {
+		result.filePath = filepath.Join(baseDir, "side.yml")
 		return config, result, nil
 	}
 
-	if fileExists {
-		_, err := toml.DecodeFile(result.filePath, &config)
-		if err != nil {
-			return config, result, fmt.Errorf("error decoding config file: %w", err)
-		}
-		if len(config.TestCommands) > 0 {
-			result.hasTestCommands = true
-		}
+	result.filePath = discovery.ChosenPath
+
+	k := koanf.New(".")
+	parser := common.GetParserForExtension(discovery.ChosenPath)
+	if parser == nil {
+		return config, result, fmt.Errorf("unsupported config file format: %s", discovery.ChosenPath)
+	}
+
+	if err := k.Load(file.Provider(discovery.ChosenPath), parser); err != nil {
+		return config, result, fmt.Errorf("error loading config file: %w", err)
+	}
+
+	if err := k.UnmarshalWithConf("", &config, koanf.UnmarshalConf{Tag: "toml"}); err != nil {
+		return config, result, fmt.Errorf("error decoding config file: %w", err)
+	}
+
+	if len(config.TestCommands) > 0 {
+		result.hasTestCommands = true
 	}
 
 	return config, result, nil
 }
 
 func saveConfig(filePath string, config common.RepoConfig) error {
-	file, err := os.Create(filePath)
-	if err != nil {
-		return fmt.Errorf("error creating config file: %w", err)
-	}
-	defer file.Close()
+	ext := strings.ToLower(filepath.Ext(filePath))
 
-	if err := toml.NewEncoder(file).Encode(config); err != nil {
-		return fmt.Errorf("error writing to config file: %w", err)
+	var data []byte
+	var err error
+
+	switch ext {
+	case ".yml", ".yaml":
+		data, err = yaml.Marshal(config)
+	case ".toml":
+		var buf bytes.Buffer
+		err = toml.NewEncoder(&buf).Encode(config)
+		data = buf.Bytes()
+	case ".json":
+		data, err = json.MarshalIndent(config, "", "  ")
+	default:
+		return fmt.Errorf("unsupported config file format: %s", ext)
+	}
+
+	if err != nil {
+		return fmt.Errorf("error encoding config: %w", err)
+	}
+
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return fmt.Errorf("error writing config file: %w", err)
 	}
 
 	return nil
 }
 
 func ensureTestCommands(config *common.RepoConfig, filePath string) error {
-	fmt.Println("\nPlease enter the command you use to run your tests")
-	fmt.Println("Examples:")
-	fmt.Println("- If you are using JavaScript, you might use: jest")
-	fmt.Println("- If you are using Python, you might use: pytest")
-	fmt.Println("- If you are using another tool, please specify its command")
-	fmt.Print("Enter your test command: ")
+	fmt.Println("\nPlease enter the command you use to run your tests (or type 'skip' to skip)")
+	fmt.Println("Examples: pytest, jest, go test ./...")
+	fmt.Print("Test command: ")
 
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Scan()
-	testCommand := scanner.Text()
+	testCommand := strings.TrimSpace(scanner.Text())
 
 	if testCommand == "" {
-		return fmt.Errorf("No command entered, exiting early")
+		return fmt.Errorf("no command entered, exiting early")
+	}
+
+	if strings.EqualFold(testCommand, "skip") {
+		// Write a commented placeholder example to the config file
+		if err := saveConfig(filePath, *config); err != nil {
+			return err
+		}
+		// Append commented example after the encoded config (JSON doesn't support comments)
+		ext := strings.ToLower(filepath.Ext(filePath))
+		if ext != ".json" {
+			f, err := os.OpenFile(filePath, os.O_APPEND|os.O_WRONLY, 0644)
+			if err != nil {
+				return fmt.Errorf("error opening config file: %w", err)
+			}
+			defer f.Close()
+			var comment string
+			if ext == ".toml" {
+				comment = "\n# Uncomment and configure test commands for best results:\n# [[test_commands]]\n# command = \"pytest\"\n"
+			} else {
+				comment = "\n# Uncomment and configure test commands for best results:\n# test_commands:\n#   - command: pytest\n"
+			}
+			if _, err := f.WriteString(comment); err != nil {
+				return fmt.Errorf("error writing comment to config file: %w", err)
+			}
+		}
+		return nil
 	}
 
 	config.TestCommands = []common.CommandConfig{
@@ -431,103 +476,198 @@ func ensureTestCommands(config *common.RepoConfig, filePath string) error {
 	return nil
 }
 
-func ensureAISecrets() ([]string, error) {
-	service := "sidekick"
+func getConfiguredBuiltinLLMProviders() []string {
 	var providers []string
 
-	providerSelection := selection.New("Select your LLM API provider", []string{"Google", "Anthropic", "OpenAI"})
-	provider, err := providerSelection.RunPrompt()
-	if err != nil {
-		return nil, fmt.Errorf("provider selection failed: %w", err)
+	// Check OpenAI
+	if key, err := keyring.Get(keyringService, llm.OpenaiApiKeySecretName); err == nil && key != "" {
+		providers = append(providers, "openai")
 	}
 
-	secretNames := map[string]string{
-		"Google":    llm.GoogleApiKeySecretName,
-		"Anthropic": llm.AnthropicApiKeySecretName,
-		"OpenAI":    llm.OpenaiApiKeySecretName,
+	// Check Google
+	if key, err := keyring.Get(keyringService, llm.GoogleApiKeySecretName); err == nil && key != "" {
+		providers = append(providers, "google")
 	}
 
-	secretName, ok := secretNames[provider]
-	if !ok {
-		return nil, fmt.Errorf("invalid selection: %s", provider)
+	// Check Anthropic (either API key or OAuth)
+	hasAnthropicKey := false
+	if key, err := keyring.Get(keyringService, llm.AnthropicApiKeySecretName); err == nil && key != "" {
+		hasAnthropicKey = true
+	}
+	if creds, err := keyring.Get(keyringService, AnthropicOAuthSecretName); err == nil && creds != "" {
+		hasAnthropicKey = true
+	}
+	if hasAnthropicKey {
+		providers = append(providers, "anthropic")
 	}
 
-	apiKey, err := keyring.Get(service, secretName)
-	if err == nil && apiKey != "" {
-		fmt.Printf("✔ Found existing %s API Key in keyring.\n", provider)
-	} else if err != nil && err != keyring.ErrNotFound {
-		return nil, fmt.Errorf("error retrieving API key from keyring: %w", err)
-	} else {
-		apiKeyInput := textinput.New(fmt.Sprintf("Enter your %s API Key: ", provider))
-		apiKeyInput.Hidden = true
-
-		apiKey, err = apiKeyInput.RunPrompt()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get %s API Key: %w", provider, err)
-		}
-
-		if apiKey == "" {
-			return nil, fmt.Errorf("%s API Key not provided, exiting early", provider)
-		}
-
-		err = keyring.Set(service, secretName, apiKey)
-		if err != nil {
-			return nil, fmt.Errorf("error storing API key in keyring: %w", err)
-		}
-
-		fmt.Printf("%s API Key saved to keyring.\n", provider)
-	}
-
-	// Check for all available providers
-	for providerName, secretName := range secretNames {
-		key, err := keyring.Get(service, secretName)
-		if err == nil && key != "" {
-			providers = append(providers, strings.ToLower(providerName))
-		}
-	}
-
-	if len(providers) == 0 {
-		return nil, fmt.Errorf("no API keys found or provided")
-	}
-
-	return providers, nil
+	return providers
 }
 
-func ensureEmbeddingSecrets() ([]string, error) {
-	service := "sidekick"
+func selectLLMProvider(localConfig common.LocalConfig) (string, error) {
+	// Check if LLM is already configured
+	if len(localConfig.LLM) > 0 {
+		useExisting := true
+		err := huh.NewConfirm().
+			Title("Found existing LLM configuration. Use existing?").
+			Value(&useExisting).
+			Affirmative("Use existing").
+			Negative("Customize").
+			Run()
+		if err != nil {
+			return "", fmt.Errorf("error prompting for LLM configuration: %w", err)
+		}
+		if useExisting {
+			return "", nil
+		}
+	}
+
+	// Build selection list
+	var options []string
+
+	// Add configured built-in providers
+	configuredBuiltins := getConfiguredBuiltinLLMProviders()
+	for _, p := range configuredBuiltins {
+		options = append(options, strings.Title(p))
+	}
+
+	// Add custom providers from local config
+	for _, provider := range localConfig.Providers {
+		options = append(options, provider.Name)
+	}
+
+	// If no providers configured at all, go directly to auth flow
+	if len(options) == 0 {
+		fmt.Println("No LLM providers configured. Let's set one up.")
+		if err := handleAuthCommand(); err != nil {
+			return "", err
+		}
+		// After auth, determine which provider was added
+		newProviders := getConfiguredBuiltinLLMProviders()
+		if len(newProviders) > 0 {
+			return newProviders[len(newProviders)-1], nil
+		}
+		return "", fmt.Errorf("no provider was configured")
+	}
+
+	// Add "Add new provider" option
+	options = append(options, "Add new provider")
+
+	providerSelection := selection.New("Select your LLM provider", options)
+	selected, err := providerSelection.RunPrompt()
+	if err != nil {
+		return "", fmt.Errorf("provider selection failed: %w", err)
+	}
+
+	if selected == "Add new provider" {
+		if err := handleAuthCommand(); err != nil {
+			return "", err
+		}
+		// After auth, determine which provider was added
+		newProviders := getConfiguredBuiltinLLMProviders()
+		if len(newProviders) > 0 {
+			return newProviders[len(newProviders)-1], nil
+		}
+		return "", fmt.Errorf("no provider was configured")
+	}
+
+	return strings.ToLower(selected), nil
+}
+
+func getConfiguredBuiltinEmbeddingProviders() []string {
 	var providers []string
 
-	openaiKey, err := keyring.Get(service, llm.OpenaiApiKeySecretName)
-	if err == nil && openaiKey != "" {
+	// Check OpenAI
+	if key, err := keyring.Get(keyringService, llm.OpenaiApiKeySecretName); err == nil && key != "" {
 		providers = append(providers, "openai")
-		fmt.Println("✔ Found existing OPENAI_API_KEY in keyring for embeddings")
-		return providers, nil
 	}
 
-	if err != keyring.ErrNotFound {
-		return nil, fmt.Errorf("error retrieving OpenAI API key from keyring: %w", err)
+	// Check Google
+	if key, err := keyring.Get(keyringService, llm.GoogleApiKeySecretName); err == nil && key != "" {
+		providers = append(providers, "google")
 	}
 
-	apiKeyInput := textinput.New("Enter your OpenAI API Key (required for embeddings): ")
-	apiKeyInput.Hidden = true
+	return providers
+}
 
-	apiKey, err := apiKeyInput.RunPrompt()
+func selectEmbeddingProvider(localConfig common.LocalConfig) (string, error) {
+	// Check if embedding is already configured
+	if len(localConfig.Embedding) > 0 {
+		useExisting := true
+		err := huh.NewConfirm().
+			Title("Found existing embedding configuration. Use existing?").
+			Value(&useExisting).
+			Affirmative("Use existing").
+			Negative("Customize").
+			Run()
+		if err != nil {
+			return "", fmt.Errorf("error prompting for embedding configuration: %w", err)
+		}
+		if useExisting {
+			return "", nil
+		}
+	}
+
+	// Build selection list
+	var options []string
+
+	// Add configured built-in embedding providers (OpenAI and Google only)
+	configuredBuiltins := getConfiguredBuiltinEmbeddingProviders()
+	for _, p := range configuredBuiltins {
+		options = append(options, strings.Title(p))
+	}
+
+	// Add custom providers that support embeddings (openai, google, or openai_compatible types)
+	for _, provider := range localConfig.Providers {
+		if provider.Type == "openai" || provider.Type == "google" || provider.Type == "openai_compatible" {
+			options = append(options, provider.Name)
+		}
+	}
+
+	// If no providers configured at all, show OpenAI/Google selection and run auth
+	if len(options) == 0 {
+		fmt.Println("No embedding providers configured. Let's set one up.")
+		return selectAndAuthEmbeddingProvider()
+	}
+
+	// Add "Add new provider" option
+	options = append(options, "Add new provider")
+
+	providerSelection := selection.New("Select your embedding provider", options)
+	selected, err := providerSelection.RunPrompt()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get OpenAI API Key: %w", err)
+		return "", fmt.Errorf("provider selection failed: %w", err)
 	}
 
-	if apiKey == "" {
-		return nil, fmt.Errorf("OpenAI API Key not provided, exiting early")
+	if selected == "Add new provider" {
+		return selectAndAuthEmbeddingProvider()
 	}
 
-	err = keyring.Set(service, llm.OpenaiApiKeySecretName, apiKey)
+	return strings.ToLower(selected), nil
+}
+
+func selectAndAuthEmbeddingProvider() (string, error) {
+	embeddingOptions := []string{"OpenAI", "Google"}
+	providerSelection := selection.New("Select embedding provider to configure", embeddingOptions)
+	selected, err := providerSelection.RunPrompt()
 	if err != nil {
-		return nil, fmt.Errorf("error storing OpenAI API key in keyring: %w", err)
+		return "", fmt.Errorf("provider selection failed: %w", err)
 	}
-	fmt.Println("OpenAI API Key saved to keyring")
 
-	providers = append(providers, "openai")
-	return providers, nil
+	switch selected {
+	case "OpenAI":
+		if err := handleOpenAIAuth(); err != nil {
+			return "", err
+		}
+		return "openai", nil
+	case "Google":
+		if err := handleGoogleAuth(); err != nil {
+			return "", err
+		}
+		return "google", nil
+	}
+
+	return "", fmt.Errorf("unknown provider selected: %s", selected)
 }
 
 // checkServerStatus checks if the Sidekick server is responsive by making an HTTP GET

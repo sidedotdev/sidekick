@@ -15,13 +15,15 @@ import (
 // around.
 type ExecContext struct {
 	workflow.Context
-	WorkspaceId     string
-	EnvContainer    *env.EnvContainer
-	Secrets         *secret_manager.SecretManagerContainer
-	FlowScope       *FlowScope
-	Providers       []common.ModelProviderPublicConfig
-	LLMConfig       common.LLMConfig
-	EmbeddingConfig common.EmbeddingConfig
+	WorkspaceId           string
+	EnvContainer          *env.EnvContainer
+	Secrets               *secret_manager.SecretManagerContainer
+	FlowScope             *FlowScope
+	Providers             []common.ModelProviderPublicConfig
+	LLMConfig             common.LLMConfig
+	EmbeddingConfig       common.EmbeddingConfig
+	GlobalState           *GlobalState
+	DisableHumanInTheLoop bool
 }
 
 type ActionContext struct {
@@ -43,6 +45,13 @@ type FlowScope struct {
 	subflowDescription string // TODO /gen Remove this field after migration to Subflow model is complete
 	startedSubflow     bool   // TODO /gen Remove this field after migration to Subflow model is complete
 	Subflow            *domain.Subflow
+}
+
+func (fs *FlowScope) GetSubflowId() string {
+	if fs.Subflow != nil {
+		return fs.Subflow.Id
+	}
+	return ""
 }
 
 func (eCtx *ExecContext) GetModelConfig(key string, iteration int, fallback string) common.ModelConfig {

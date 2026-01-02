@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sidekick/domain"
 	"sidekick/llm"
 	"sidekick/utils"
+	"strings"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -42,7 +44,8 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers m
 			result.FunctionName = tc.Name
 			result.ToolCallId = tc.Id
 		}
-		return []ToolCallResponseInfo{result}
+
+		return cleanupWorkingDirFromResults(dCtx, []ToolCallResponseInfo{result})
 	}
 
 	responseChannel := workflow.NewChannel(dCtx)
@@ -91,6 +94,16 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers m
 		}
 	}
 
+	return cleanupWorkingDirFromResults(dCtx, results)
+}
+
+func cleanupWorkingDirFromResults(dCtx DevContext, results []ToolCallResponseInfo) []ToolCallResponseInfo {
+	if dCtx.EnvContainer != nil && dCtx.EnvContainer.Env != nil {
+		workingDir := dCtx.EnvContainer.Env.GetWorkingDirectory()
+		for i := range results {
+			results[i].Response = removeWorkingDirFromPaths(results[i].Response, workingDir)
+		}
+	}
 	return results
 }
 
@@ -199,4 +212,33 @@ func unmarshalAndInvoke(toolCall llm.ToolCall, target interface{}, fn func() (st
 	}
 
 	return response, nil
+}
+
+// removeWorkingDirFromPaths removes the working directory prefix from paths in
+// the given string. It matches patterns like /path/to/workdir/some/file and
+// replaces them with some/file. It only removes the prefix when followed by
+// path-like content (non-whitespace after the trailing slash).
+func removeWorkingDirFromPaths(s, workingDir string) string {
+	if workingDir == "" {
+		return s
+	}
+
+	// Ensure workingDir doesn't have a trailing slash for consistent matching
+	workingDir = strings.TrimSuffix(workingDir, "/")
+
+	// Match workingDir/ followed by non-whitespace, non-quote characters (a path)
+	// This avoids replacing when it's just the directory alone or followed by whitespace/quotes
+	pattern := regexp.MustCompile(regexp.QuoteMeta(workingDir) + `/(\S+)`)
+
+	return pattern.ReplaceAllStringFunc(s, func(match string) string {
+		// Extract what comes after workingDir/
+		suffix := strings.TrimPrefix(match, workingDir+"/")
+
+		// Check if the suffix starts with a quote or is empty, if so leave it alone
+		if suffix == "" || suffix[0] == '"' || suffix[0] == '\'' {
+			return match
+		}
+
+		return suffix
+	})
 }

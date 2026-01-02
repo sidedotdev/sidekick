@@ -308,6 +308,56 @@ class MyClass:
 	}
 }
 
+func TestCheckFileValidity_Golang_NoTrailingNewline(t *testing.T) {
+	testCases := []struct {
+		name           string
+		fileContent    string
+		wantPass       bool
+		expectedErrors []string
+	}{
+		{
+			name:           "syntax error in file without trailing newline",
+			fileContent:    "package main\n\nfunc main() {",
+			wantPass:       false,
+			expectedErrors: []string{"Syntax error"},
+		},
+		{
+			name:           "syntax error at EOF without trailing newline",
+			fileContent:    "package main\n\nvar x =",
+			wantPass:       false,
+			expectedErrors: []string{"Syntax error"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, filename, err := writeTempFile(t, "go", tc.fileContent)
+			if err != nil {
+				t.Fatalf("Failed to write temp file: %v", err)
+			}
+			defer os.Remove(filepath.Join(dir, filename))
+
+			envContainer := env.EnvContainer{
+				Env: &env.LocalEnv{
+					WorkingDirectory: dir,
+				},
+			}
+			passed, errorString, err := CheckFileValidity(envContainer, filename)
+			assert.NoError(t, err)
+			if passed != tc.wantPass {
+				t.Errorf("Want check pass = %v, got: %v", tc.wantPass, passed)
+			}
+			if !tc.wantPass {
+				for _, expectedError := range tc.expectedErrors {
+					if !strings.Contains(errorString, expectedError) {
+						t.Errorf("Expected error string to contain '%s', but it was '%s'", expectedError, errorString)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestExtractErrors_NoErrors(t *testing.T) {
 	// Setup a tree with no error nodes
 	// Simulating the process of reading source code and parsing it to create a tree-sitter tree

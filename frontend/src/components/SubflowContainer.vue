@@ -1,9 +1,10 @@
 <template>
   <div class="subflow-container" :class="{ 'odd': level % 2 === 1, 'container-expanded': accordionState.expanded }" ref="container">
     <div class="subflow-name-container" @click="toggleAccordion" ref="heading">
-      <h2 class="subflow-name">
+      <h2 class="subflow-name" :class="{'name-expanded': accordionState.expanded}">
           <span class="caret" :class="{ 'caret-expanded': accordionState.expanded }"></span>
           {{ subflowTree.name }}
+          <span v-if="subflowStatus === 'failed'" class="error-indicator">❌</span>
       </h2>
     </div>
     <p v-if="accordionState.expanded && subflowTree.description">{{subflowTree.description}}</p>
@@ -12,16 +13,19 @@
         <template v-if="isFlowAction(child)">
           <FlowActionItem v-if="!isStartFlowAction(child)" :flowAction="child" :defaultExpanded="defaultExpanded && index === subflowTree.children.length - 1" :level="level + 1"/>
         </template>
-        <SubflowContainer v-else :subflowTree="child" :defaultExpanded="defaultExpanded && index === subflowTree.children.length - 1" :level="level + 1" />
+        <SubflowContainer v-else :subflowTree="child" :defaultExpanded="defaultExpanded && index === subflowTree.children.length - 1" :level="level + 1" :subflowsById="subflowsById" />
       </template>
+      <div v-if="subflowStatus === 'failed' && subflowResult" class="error-message">
+        {{ subflowResult }}
+      </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import FlowActionItem from './FlowActionItem.vue'
-import type { FlowAction, SubflowTree } from '../lib/models'
+import type { FlowAction, SubflowTree, Subflow } from '../lib/models'
 import { useEventBus } from '@vueuse/core';
 
 const props = defineProps({
@@ -37,14 +41,28 @@ const props = defineProps({
     type: Number,
     default: 0,
   },
+  subflowsById: {
+    type: Object as () => Record<string, Subflow>,
+    default: () => ({}),
+  },
+});
+
+const subflowStatus = computed(() => {
+  if (props.subflowTree.id && props.subflowsById[props.subflowTree.id]) {
+    return props.subflowsById[props.subflowTree.id].status;
+  }
+  return null;
+});
+
+const subflowResult = computed(() => {
+  if (props.subflowTree.id && props.subflowsById[props.subflowTree.id]) {
+    return props.subflowsById[props.subflowTree.id].result;
+  }
+  return null;
 });
 
 let wasToggled = false;
-// FIXME autoExpandThreshold is set to 4 based on flow actions being doubled
-// inadvertently (we're not updating correctly on started -> complete), we
-// really just want 2 once we fix that bug. the doubling doesn't show up due to
-// the childKey function used as :key in the template's v-for
-const autoExpandThreshold = 4;
+const autoExpandThreshold = 2;
 const accordionState = ref({ expanded: props.defaultExpanded || props.subflowTree.children.length <= autoExpandThreshold });
 watch(() => props.defaultExpanded, (newVal: boolean) => {
   if (!wasToggled) {
@@ -112,7 +130,13 @@ function childKey(child: FlowAction | SubflowTree, index: number): string {
   display: flex;
   align-items: center;
   justify-content: stretch;
-  height: var(--name-height);
+  /*
+    NOTE: min-height instead of height makes the nested sticky headers slightly
+    off when text wraps, but makes this case render more pleasingly.
+    Fixing the sticky header positions to account for dynamic height requires
+    using IntersectionObserver, which we might do later.
+  */
+  min-height: var(--name-height);
   padding-left: 0.7rem;
   margin: 0px -1rem;
   background-color: inherit;
@@ -120,10 +144,19 @@ function childKey(child: FlowAction | SubflowTree, index: number): string {
   position: sticky;
   cursor: pointer;
 }
+
 .subflow-name {
   flex-grow: 1;
   display: block;
   font-size: 1.3rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subflow-name.name-expanded  {
+  overflow: visible;
+  white-space: wrap;
 }
 
 .subflow-name + p {
@@ -155,6 +188,24 @@ function childKey(child: FlowAction | SubflowTree, index: number): string {
 
 .caret-expanded {
   transform: rotate(90deg);
+}
+
+.error-indicator {
+  margin-left: 0.5rem;
+  font-size: 0.9em;
+  color: var(--color-error-text);
+}
+
+.error-message {
+  background-color: var(--color-error-background);
+  border: 1px solid var(--color-error-border);
+  border-radius: 4px;
+  padding: 0.75rem 1rem;
+  margin: 0.5rem 0;
+  color: var(--color-error-text);
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* border styling */

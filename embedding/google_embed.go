@@ -10,11 +10,7 @@ import (
 )
 
 const (
-	/* NOTE: free tier of google doesn't yet support "gemini-embedding-exp-03-07"
-	 * and limits are very low for that currently even with billing enabled (10
-	 * RPM and 1000 RPD) */
-	//GoogleDefaultModel = "gemini-embedding-exp-03-07" // NOTE: called "text-embedding-large-exp-03-07" in Vertex AI before GA
-	GoogleDefaultModel = "text-embedding-004"
+	GoogleDefaultModel = "gemini-embedding-001"
 )
 
 type GoogleEmbedder struct{}

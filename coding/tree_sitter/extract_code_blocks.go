@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-func ExtractSymbolDefinitionBlocks(content string) []CodeBlock {
+func ExtractSymbolDefinitionBlocks(content string) ([]CodeBlock, error) {
 	var blocks []CodeBlock
 	var currentBlock CodeBlock
 	var inCodeBlock bool
@@ -59,11 +59,15 @@ func ExtractSymbolDefinitionBlocks(content string) []CodeBlock {
 		blocks = append(blocks, currentBlock)
 	}
 
-	if len(blocks) == 0 {
-		return nil
+	if err := scanner.Err(); err != nil {
+		return blocks, err
 	}
 
-	return blocks
+	if len(blocks) == 0 {
+		return nil, nil
+	}
+
+	return blocks, nil
 }
 
 func parseHeaderContent(block *CodeBlock) {
@@ -95,7 +99,7 @@ func parseHeaderContent(block *CodeBlock) {
 }
 
 // ExtractSearchCodeBlocks parses a string containing search results and returns a slice of CodeBlocks.
-func ExtractSearchCodeBlocks(content string) []CodeBlock {
+func ExtractSearchCodeBlocks(content string) ([]CodeBlock, error) {
 	var blocks []CodeBlock
 	var currentBlock *CodeBlock
 	var currentFilePath string
@@ -151,12 +155,105 @@ func ExtractSearchCodeBlocks(content string) []CodeBlock {
 		blocks = append(blocks, *currentBlock)
 	}
 
-	return blocks
+	if err := scanner.Err(); err != nil {
+		return blocks, err
+	}
+
+	return blocks, nil
 }
 
 func parseInt(s string) int {
 	result, _ := strconv.Atoi(s)
 	return result
+}
+
+// ExtractGitDiffCodeBlocks parses git diff output and returns CodeBlocks
+// representing the state of the code after the diff is applied.
+// Each block contains a contiguous set of lines from the new file state.
+func ExtractGitDiffCodeBlocks(content string) ([]CodeBlock, error) {
+	var blocks []CodeBlock
+	var currentFilePath string
+	var currentBlock *CodeBlock
+	var currentNewLineNum int
+
+	scanner := bufio.NewScanner(strings.NewReader(content))
+
+	diffHeaderRegex := regexp.MustCompile(`^diff --git a/.+ b/(.+)$`)
+	hunkHeaderRegex := regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if match := diffHeaderRegex.FindStringSubmatch(line); match != nil {
+			if currentBlock != nil {
+				blocks = append(blocks, *currentBlock)
+				currentBlock = nil
+			}
+			currentFilePath = match[1]
+			continue
+		}
+
+		if match := hunkHeaderRegex.FindStringSubmatch(line); match != nil {
+			if currentBlock != nil {
+				blocks = append(blocks, *currentBlock)
+				currentBlock = nil
+			}
+			currentNewLineNum, _ = strconv.Atoi(match[1])
+			continue
+		}
+
+		if currentFilePath == "" || currentNewLineNum == 0 {
+			continue
+		}
+
+		if strings.HasPrefix(line, "-") {
+			// Removed line - doesn't exist in new file, don't advance line number
+			continue
+		}
+
+		// Skip diff metadata lines
+		if strings.HasPrefix(line, "diff ") || strings.HasPrefix(line, "index ") ||
+			strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") ||
+			strings.HasPrefix(line, "@@") || strings.HasPrefix(line, "\\") {
+			continue
+		}
+
+		var codeContent string
+		if strings.HasPrefix(line, "+") {
+			codeContent = line[1:]
+		} else if strings.HasPrefix(line, " ") {
+			codeContent = line[1:]
+		} else {
+			// Context line without prefix (some diff formats)
+			codeContent = line
+		}
+
+		if currentBlock == nil || currentNewLineNum != currentBlock.EndLine+1 {
+			if currentBlock != nil {
+				blocks = append(blocks, *currentBlock)
+			}
+			currentBlock = &CodeBlock{
+				FilePath:  currentFilePath,
+				StartLine: currentNewLineNum,
+				EndLine:   currentNewLineNum,
+				Code:      codeContent,
+			}
+		} else {
+			currentBlock.EndLine = currentNewLineNum
+			currentBlock.Code += "\n" + codeContent
+		}
+		currentNewLineNum++
+	}
+
+	if currentBlock != nil {
+		blocks = append(blocks, *currentBlock)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return blocks, err
+	}
+
+	return blocks, nil
 }
 
 type CodeBlock struct {

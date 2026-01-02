@@ -9,9 +9,10 @@ import (
 
 // LocalPublicConfig represents the local configuration without keys
 type LocalPublicConfig struct {
-	Providers []ModelProviderPublicConfig `json:"providers,omitempty"`
-	LLM       LLMConfig                   `json:"llm"`
-	Embedding EmbeddingConfig             `json:"embedding"`
+	Providers          []ModelProviderPublicConfig `json:"providers,omitempty"`
+	LLM                LLMConfig                   `json:"llm"`
+	Embedding          EmbeddingConfig             `json:"embedding"`
+	CommandPermissions CommandPermissionConfig     `json:"commandPermissions,omitempty"`
 }
 
 // ModelProviderPublicConfig represents the model provider configuration without keys
@@ -93,8 +94,9 @@ func GetLocalConfig() (LocalPublicConfig, error) {
 	}
 
 	return LocalPublicConfig{
-		Providers: providers,
-		LLM:       llmConfig,
-		Embedding: embeddingConfig,
+		Providers:          providers,
+		LLM:                llmConfig,
+		Embedding:          embeddingConfig,
+		CommandPermissions: config.CommandPermissions,
 	}, nil
 }

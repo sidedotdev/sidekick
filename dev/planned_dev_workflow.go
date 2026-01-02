@@ -156,6 +156,10 @@ func ensureTestsPassAfterDevPlanExecutedSubflow(dCtx DevContext, input PlannedDe
 			return fmt.Errorf("failed to run tests: %v", err)
 		}
 
+		if testResult.TestsSkipped {
+			return nil
+		}
+
 		if testResult.TestsPassed {
 			if len(dCtx.RepoConfig.IntegrationTestCommands) == 0 {
 				break
@@ -165,7 +169,7 @@ func ensureTestsPassAfterDevPlanExecutedSubflow(dCtx DevContext, input PlannedDe
 			if err != nil {
 				return fmt.Errorf("failed to run integration tests: %v", err)
 			}
-			if integrationTestResult.TestsPassed {
+			if integrationTestResult.TestsPassed || integrationTestResult.TestsSkipped {
 				break
 			}
 

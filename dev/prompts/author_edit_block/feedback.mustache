@@ -1,25 +1,31 @@
+Consider the following the feedback and provide new *edit blocks* if necessary:
+
 {{#isApplyError}}
-The previously provided *edit blocks* had some issues when we used them to make
-changes. Here is the feedback we received:
+The previously provided *edit block(s)* did not all apply successfully. Please
+analyze what went wrong and provide new *edit blocks*, if needed only.
 
-{{{feedback}}}
-
-Please analyze what was wrong with some of the previous *edit blocks*, consider
-the feedback and provide new *edit blocks* accordingly that fix whatever failed.
-
-{{#hasApplyErrors}}
 Hint: Take a look at the current state of the relevant code via the {{{retrieveCodeContextFunctionName}}}
 tool or the {{{bulkSearchRepositoryFunctionName}}} tool.
 
-Hint: If the edit block that failed isn't your first one for that file since the beginning or the
-last test run, it's possible that applying the previous edit blocks changed the
-file in a way that made the later edit blocks fail to match. We'd only want to
-provide the rest of the edit blocks in this case, i.e. the one that failed and
-everything after, and omit the previous ones which we can infer were applied
-successfully.
-{{/hasApplyErrors}}
+Hint: If the edit block that failed was in the same batch as and others were
+successfully applied on the same file, it's possible that applying the previous
+edit blocks changed the file in a way that made the later edit blocks fail to
+match. We'd only want to provide the rest of the edit blocks in this case, i.e.
+the one that failed and everything after, and omit the previous ones which we
+can infer were applied successfully.
 
-{{#hasVerifyErrors}}
+{{#isContextCodeVisibilityCheckEnabled}}
+Hint: If it seems like the edit failed saying it's not in chat history, but
+you think it is, then try creating multiple smaller edit blocks, one per
+function or import section etc.
+{{/isContextCodeVisibilityCheckEnabled}}
+{{/isApplyError}}
+
+{{#isTestFailure}}
+Tests failed:
+
+{{{feedback}}}
+
 Hint: All previous edit blocks have already been applied successfully. If you want to make further
 changes to portions of functions you've already edited, it may be helpful to
 see the current state of the relevant code via the {{{retrieveCodeContextFunctionName}}} tool.
@@ -28,34 +34,31 @@ Hint: If an error indicates that a function/type/symbol doesn't exist, find
 what actual function needs to be used via tools or ask for help. Do not create
 it unless the original instructions mention doing that, as it is likely to be a
 hallucination.
-{{/hasVerifyErrors}}
+{{/isTestFailure}}
+
+{{#isEditBlockError}}
+The previously provided *edit blocks* resulted in some errors when we tried to parse them:
+
+{{{feedback}}}
+{{/isEditBlockError}}
+
+{{#isAutoReview}}
+Automated review:
+{{{feedback}}}
+{{/isAutoReview}}
+
+{{^isApplyError}}
+    {{^isEditBlockError}}
+        {{^isTestFailure}}
+
+[unknown feedback source]
+{{{feedback}}}
+
+        {{/isTestFailure}}
+    {{/isEditBlockError}}
+{{/isApplyError}}
 
 {{#hasLineNumbers}}
 Hint: If you see errors that include a filepath and line number, use the
 {{{bulkReadFileFunctionName}}} tool to see what's going on at those lines.
 {{/hasLineNumbers}}
-{{/isApplyError}}
-{{#isEditBlockError}}
-The previously provided *edit blocks* had some issues when we processed them.
-Here is the feedback we received:
-
-{{{feedback}}}
-
-Please analyze what was wrong with some of the previous *edit blocks*, consider
-the feedback and provide new *edit blocks* accordingly that fix whatever failed.
-
-Hint: If it seems like the edit failed saying it's not in chat history, but
-you think it is, then try creating multiple smaller edit blocks, one per
-function or import section etc.
-{{/isEditBlockError}}
-{{^isApplyError}}
-{{^isEditBlockError}}
-The previously provided *edit blocks* had some issues when we used them to make
-changes. Here is the feedback we received:
-
-{{{feedback}}}
-
-Please analyze what was wrong with some of the previous *edit blocks*, consider
-the feedback and provide new *edit blocks* accordingly that fix whatever failed.
-{{/isEditBlockError}}
-{{/isApplyError}}

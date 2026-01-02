@@ -7,6 +7,7 @@ import (
 )
 
 func TestSplitOutlineIntoChunks(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name           string
 		input          string
@@ -83,6 +84,7 @@ func TestSplitOutlineIntoChunks(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			result := splitOutlineIntoChunks(tc.input, tc.goodChunkSize, tc.maxChunkSize)
 			if !reflect.DeepEqual(result, tc.expectedOutput) {
 				t.Errorf("Expected %s, but got %s", utils.PrettyJSON(tc.expectedOutput), utils.PrettyJSON(result))

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sidekick/common"
 	"sidekick/domain"
-	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -23,8 +22,8 @@ func (s *Storage) PersistWorkspace(ctx context.Context, workspace domain.Workspa
 		workspace.Name,
 		workspace.LocalRepoDir,
 		workspace.ConfigMode,
-		workspace.Created.UTC().Truncate(time.Millisecond),
-		workspace.Updated.UTC().Truncate(time.Millisecond),
+		workspace.Created.UTC(),
+		workspace.Updated.UTC(),
 	)
 
 	if err != nil {

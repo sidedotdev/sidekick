@@ -56,8 +56,10 @@ type ChatMessageResponse struct {
 }
 
 type Usage struct {
-	InputTokens  int `json:"inputTokens"`
-	OutputTokens int `json:"outputTokens"`
+	InputTokens           int `json:"inputTokens"`
+	OutputTokens          int `json:"outputTokens"`
+	CacheReadInputTokens  int `json:"cacheReadInputTokens"`
+	CacheWriteInputTokens int `json:"cacheWriteInputTokens"`
 }
 
 /* based on openai's delta format */

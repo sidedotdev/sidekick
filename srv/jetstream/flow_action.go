@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sidekick/domain"
-	"strconv"
-	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -30,9 +28,9 @@ func (s *Streamer) AddFlowActionChange(ctx context.Context, flowAction domain.Fl
 }
 
 func (s *Streamer) StreamFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string) (<-chan domain.FlowAction, <-chan error) {
-	// default to starting from the start of the stream for flow action changes
+	// default to new-only streaming for flow action changes
 	if streamMessageStartId == "" {
-		streamMessageStartId = "0"
+		streamMessageStartId = "$"
 	}
 
 	flowActionChan := make(chan domain.FlowAction)
@@ -44,28 +42,7 @@ func (s *Streamer) StreamFlowActionChanges(ctx context.Context, workspaceId, flo
 
 		subject := fmt.Sprintf("flow_actions.changes.%s.%s", workspaceId, flowId)
 
-		var deliveryPolicy jetstream.DeliverPolicy
-		var startSeq uint64
-		if streamMessageStartId == "0" {
-			deliveryPolicy = jetstream.DeliverAllPolicy
-		} else if streamMessageStartId == "$" {
-			deliveryPolicy = jetstream.DeliverNewPolicy
-		} else {
-			deliveryPolicy = jetstream.DeliverByStartSequencePolicy
-			var err error
-			startSeq, err = strconv.ParseUint(streamMessageStartId, 10, 64)
-			if err != nil {
-				errChan <- fmt.Errorf("invalid stream message start id: %w", err)
-				return
-			}
-		}
-
-		consumer, err := s.js.OrderedConsumer(ctx, PersistentStreamName, jetstream.OrderedConsumerConfig{
-			FilterSubjects:    []string{subject},
-			InactiveThreshold: 5 * time.Minute,
-			DeliverPolicy:     deliveryPolicy,
-			OptStartSeq:       startSeq,
-		})
+		consumer, err := s.createConsumer(ctx, subject, streamMessageStartId)
 		if err != nil {
 			errChan <- fmt.Errorf("failed to create consumer: %w", err)
 			return

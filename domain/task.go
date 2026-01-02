@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -97,6 +98,21 @@ type Task struct {
 	Updated     time.Time              `json:"updated"`
 	FlowOptions map[string]interface{} `json:"flowOptions,omitempty"`
 	StreamId    string                 `json:"streamId,omitempty"`
+}
+
+func (t Task) MarshalJSON() ([]byte, error) {
+	type Alias Task
+	return json.Marshal(&struct {
+		Alias
+		Archived *time.Time `json:"archived,omitempty"`
+		Created  time.Time  `json:"created"`
+		Updated  time.Time  `json:"updated"`
+	}{
+		Alias:    Alias(t),
+		Archived: UTCTimePtr(t.Archived),
+		Created:  UTCTime(t.Created),
+		Updated:  UTCTime(t.Updated),
+	})
 }
 
 type AgentType string

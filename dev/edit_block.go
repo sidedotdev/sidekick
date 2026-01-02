@@ -5,8 +5,10 @@ import (
 	"sidekick/coding/tree_sitter"
 	"sidekick/llm"
 	"sidekick/utils"
-	"strconv" // Added to use the Atoi function
+	"strconv"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // EditBlock represents a block of edits, including the file path, old lines, and new lines.
@@ -38,17 +40,30 @@ func extractAllCodeBlocks(chatHistory []llm.ChatMessage) []tree_sitter.CodeBlock
 	codeBlocks := make([]tree_sitter.CodeBlock, 0)
 	for _, chatMessage := range chatHistory {
 		if chatMessage.Role != llm.ChatMessageRoleAssistant {
-			symDefCodeBlocks := tree_sitter.ExtractSymbolDefinitionBlocks(chatMessage.Content)
-			searchCodeBlocks := tree_sitter.ExtractSearchCodeBlocks(chatMessage.Content)
+			symDefCodeBlocks, err := tree_sitter.ExtractSymbolDefinitionBlocks(chatMessage.Content)
+			if err != nil {
+				log.Warn().Err(err).Msg("failed to extract symbol definition blocks")
+			}
+			searchCodeBlocks, err := tree_sitter.ExtractSearchCodeBlocks(chatMessage.Content)
+			if err != nil {
+				log.Warn().Err(err).Msg("failed to extract search code blocks")
+			}
+			gitDiffCodeBlocks, err := tree_sitter.ExtractGitDiffCodeBlocks(chatMessage.Content)
+			if err != nil {
+				log.Warn().Err(err).Msg("failed to extract git diff code blocks")
+			}
 			codeBlocks = append(codeBlocks, symDefCodeBlocks...)
 			codeBlocks = append(codeBlocks, searchCodeBlocks...)
+			codeBlocks = append(codeBlocks, gitDiffCodeBlocks...)
 		}
 	}
 	return codeBlocks
 }
 
 // ExtractEditBlocks extracts edit blocks from the given string.
-func ExtractEditBlocks(text string) ([]*EditBlock, error) {
+// When tildeOnly is true, only tilde fences (~~~) are recognized.
+// When tildeOnly is false, both tilde (~~~) and backtick (```) fences are recognized.
+func ExtractEditBlocks(text string, tildeOnly bool) ([]*EditBlock, error) {
 	scanner := bufio.NewScanner(strings.NewReader(text))
 
 	var blocks []*EditBlock // the blocks of edits
@@ -56,20 +71,32 @@ func ExtractEditBlocks(text string) ([]*EditBlock, error) {
 	var oldLines, newLines *[]string
 	var sequenceNumber int // the sequence number for the current block
 
-	inCodeBlock := false    // flag whether the scanner is in a code block
-	openFenceLen := 0       // the length of the opening fence (0 when not in a code block)
-	lastFilePath := ""      // keeps the last file path
-	maybeNextFilePath := "" // keeps the potential next file path
+	inCodeBlock := false     // flag whether the scanner is in a code block
+	openFenceLen := 0        // the length of the opening fence (0 when not in a code block)
+	openFenceChar := rune(0) // the character used for the opening fence ('~' or '`')
+	lastFilePath := ""       // keeps the last file path
+	maybeNextFilePath := ""  // keeps the potential next file path
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Check if this line is a backtick fence
+		// Check if this line is a fence
 		if !inCodeBlock {
-			// Look for opening fence: must start with 3+ backticks
-			if strings.HasPrefix(line, "```") {
-				// Count leading backticks
-				fenceLen := 0
+			// Look for opening fence: must start with 3+ tildes or backticks
+			var fenceChar rune
+			var fenceLen int
+
+			if strings.HasPrefix(line, "~~~") {
+				fenceChar = '~'
+				for _, ch := range line {
+					if ch == '~' {
+						fenceLen++
+					} else {
+						break
+					}
+				}
+			} else if !tildeOnly && strings.HasPrefix(line, "```") {
+				fenceChar = '`'
 				for _, ch := range line {
 					if ch == '`' {
 						fenceLen++
@@ -77,17 +104,19 @@ func ExtractEditBlocks(text string) ([]*EditBlock, error) {
 						break
 					}
 				}
-				if fenceLen >= 3 {
-					inCodeBlock = true
-					openFenceLen = fenceLen
-					// if entering a code block, reset everything
-					newLines = nil
-					oldLines = nil
-					// we'll get a new file path now, don't use the old one if any since it's a brand-new code block
-					lastFilePath = ""
-					maybeNextFilePath = ""
-					continue // skip the rest of the loop
-				}
+			}
+
+			if fenceLen >= 3 {
+				inCodeBlock = true
+				openFenceLen = fenceLen
+				openFenceChar = fenceChar
+				// if entering a code block, reset everything
+				newLines = nil
+				oldLines = nil
+				// we'll get a new file path now, don't use the old one if any since it's a brand-new code block
+				lastFilePath = ""
+				maybeNextFilePath = ""
+				continue // skip the rest of the loop
 			}
 			// Not in a code block and not a fence, skip
 			continue
@@ -95,22 +124,23 @@ func ExtractEditBlocks(text string) ([]*EditBlock, error) {
 
 		// We are in a code block, check for closing fence
 		trimmed := strings.TrimSpace(line)
-		if len(trimmed) > 0 && trimmed[0] == '`' {
+		if len(trimmed) > 0 && rune(trimmed[0]) == openFenceChar {
 			// Check if this is a valid closing fence
 			fenceLen := 0
 			for _, ch := range trimmed {
-				if ch == '`' {
+				if ch == openFenceChar {
 					fenceLen++
 				} else {
 					break
 				}
 			}
 			// A closing fence must:
-			// 1. Have at least as many backticks as the opening fence
-			// 2. Consist only of backticks (after trimming whitespace)
+			// 1. Have at least as many fence chars as the opening fence
+			// 2. Consist only of fence chars (after trimming whitespace)
 			if fenceLen >= openFenceLen && fenceLen == len(trimmed) {
 				inCodeBlock = false
 				openFenceLen = 0
+				openFenceChar = 0
 				continue // skip the rest of the loop
 			}
 		}
@@ -189,8 +219,8 @@ func ExtractEditBlocks(text string) ([]*EditBlock, error) {
 	return blocks, nil
 }
 
-func ExtractEditBlocksWithVisibility(text string, chatHistory []llm.ChatMessage) ([]EditBlock, error) {
-	editBlocksWithoutVisibility, err := ExtractEditBlocks(text)
+func ExtractEditBlocksWithVisibility(text string, chatHistory []llm.ChatMessage, tildeOnly bool) ([]EditBlock, error) {
+	editBlocksWithoutVisibility, err := ExtractEditBlocks(text, tildeOnly)
 	if err != nil {
 		return nil, err
 	}

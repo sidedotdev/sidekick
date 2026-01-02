@@ -2,7 +2,7 @@ package dev
 
 import (
 	"fmt"
-	"sidekick/domain"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"slices"
 	"strings"
@@ -77,9 +77,10 @@ func GetHelpOrInput(dCtx DevContext, requests []HelpOrInputRequest) (string, err
 	}
 
 	message := messageBuilder.String()
-	req := RequestForUser{
+	req := flow_action.RequestForUser{
 		OriginWorkflowId: workflow.GetInfo(dCtx).WorkflowExecution.ID,
 		Subflow:          dCtx.FlowScope.SubflowName,
+		SubflowId:        dCtx.FlowScope.GetSubflowId(),
 		Content:          message,
 		RequestParams:    nil,         // no options when using get_help_or_input
 		RequestKind:      "free_form", // free-form request is the only kind supported in get_help_or_input
@@ -87,9 +88,6 @@ func GetHelpOrInput(dCtx DevContext, requests []HelpOrInputRequest) (string, err
 
 	actionCtx := dCtx.NewActionContext("user_request")
 	actionCtx.ActionParams = req.ActionParams()
-	userResponse, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
-		req.FlowActionId = flowAction.Id
-		return GetUserResponse(dCtx, req)
-	})
+	userResponse, err := GetUserResponse(actionCtx, req)
 	return userResponse.Content, err
 }

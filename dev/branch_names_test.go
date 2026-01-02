@@ -58,6 +58,7 @@ func (s *BranchNameTestSuite) SetupTest() {
 					{Provider: "openai"},
 				},
 			},
+			GlobalState: &flow_action.GlobalState{},
 		}
 		return GenerateBranchName(execContext, req)
 	}

@@ -6,7 +6,7 @@ import (
 	"sidekick/common"
 	"sidekick/embedding"
 	"sidekick/secret_manager"
-	"sidekick/srv/redis"
+	"sidekick/srv/sqlite"
 	"testing"
 
 	"github.com/kelindar/binary"
@@ -14,7 +14,7 @@ import (
 )
 
 func TestCachedEmbedActivity_AllCached(t *testing.T) {
-	storage := redis.NewTestRedisStorage()
+	storage := sqlite.NewTestSqliteStorage(t, "embed_test_all_cached")
 
 	oa := &EmbedActivities{
 		Storage: storage,
@@ -36,18 +36,19 @@ func TestCachedEmbedActivity_AllCached(t *testing.T) {
 	require.NoError(t, err)
 
 	// Check if the expected keys are in the cache and if their values are the expected embeddings.
-	for _, key := range expectedKeys {
-		value, err := storage.Client.Get(context.Background(), options.WorkspaceId+":"+key).Result()
-		require.NoError(t, err)
+	values, err := storage.MGet(context.Background(), options.WorkspaceId, expectedKeys)
+	require.NoError(t, err)
+	for _, value := range values {
+		require.NotNil(t, value)
 		var embedding embedding.EmbeddingVector
-		err = binary.Unmarshal([]byte(value), &embedding)
+		err = binary.Unmarshal(value, &embedding)
 		require.NoError(t, err)
 		require.Equal(t, expectedEmbedding, embedding)
 	}
 }
 
 func TestCachedEmbedActivity_NoKeys(t *testing.T) {
-	db := redis.NewTestRedisStorage()
+	db := sqlite.NewTestSqliteStorage(t, "embed_test_no_keys")
 
 	oa := &EmbedActivities{
 		Storage: db,
@@ -64,7 +65,7 @@ func TestCachedEmbedActivity_NoKeys(t *testing.T) {
 }
 
 func TestCachedEmbedActivity_MissedCache(t *testing.T) {
-	storage := redis.NewTestRedisStorage()
+	storage := sqlite.NewTestSqliteStorage(t, "embed_test_missed_cache")
 
 	oa := &EmbedActivities{
 		Storage: storage,
@@ -99,13 +100,10 @@ func TestCachedEmbedActivity_MissedCache(t *testing.T) {
 
 	// Check if all the expected keys are in the cache and if their values are the expected embeddings.
 	for _, subKey := range options.Subkeys {
-		key := fmt.Sprintf("%s:%s:%s:ada2", options.WorkspaceId, options.ModelConfig.Model, subKey)
-		exists, err := storage.Client.Exists(context.Background(), key).Result()
+		key := fmt.Sprintf("embedding:%s:%s:%s", options.ModelConfig.Model, options.ContentType, subKey)
+		values, err := storage.MGet(context.Background(), options.WorkspaceId, []string{key})
 		require.NoError(t, err)
-		if exists > 0 {
-			value, err := storage.Client.Get(context.Background(), key).Result()
-			require.NoError(t, err)
-			require.NotNil(t, value)
-		}
+		require.Len(t, values, 1)
+		require.NotNil(t, values[0])
 	}
 }

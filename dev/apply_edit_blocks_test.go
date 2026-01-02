@@ -22,6 +22,8 @@ import (
 )
 
 func TestValidateEditBlocksEmptyChatHistory(t *testing.T) {
+	t.Parallel()
+
 	// Create an empty chat history
 	chatHistory := []llm.ChatMessage{}
 
@@ -52,6 +54,8 @@ func TestValidateEditBlocksEmptyChatHistory(t *testing.T) {
 }
 
 func TestValidateEditBlocksWithValidBlocks(t *testing.T) {
+	t.Parallel()
+
 	// Create a chat history that includes the old lines from our edit blocks
 	chatHistory := []llm.ChatMessage{
 		{
@@ -93,6 +97,8 @@ func TestValidateEditBlocksWithValidBlocks(t *testing.T) {
 }
 
 func TestValidateEditBlocksWithInvalidBlocks(t *testing.T) {
+	t.Parallel()
+
 	// Create a chat history that doesn't include the old lines from our edit blocks
 	chatHistory := []llm.ChatMessage{
 		{
@@ -131,6 +137,8 @@ func TestValidateEditBlocksWithInvalidBlocks(t *testing.T) {
 }
 
 func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name            string
 		isExistingFile  bool
@@ -218,6 +226,7 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 		}
 
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			// note: since CheckEdits isn't enabled in this test, we don't need
 			// a git repo
 			tmpDir := t.TempDir()
@@ -268,6 +277,7 @@ func TestApplyEditBlockActivity_basicCRUD(t *testing.T) {
 }
 
 func TestApplyEditBlockActivity_MarkdownAndCommentSkipping(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		filePath        string
@@ -486,6 +496,7 @@ func getValue() int {
 		}
 
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			tmpDir := t.TempDir()
 
 			filePath := filepath.Join(tmpDir, tt.filePath)
@@ -519,6 +530,7 @@ func getValue() int {
 }
 
 func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	// Create a test file to delete
@@ -596,6 +608,7 @@ func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
 }
 
 func TestGetUpdatedContents(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name             string
 		block            EditBlock
@@ -736,6 +749,7 @@ func TestGetUpdatedContents(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			result, err := getUpdatedContents(tt.block, tt.originalContents)
 			if result != tt.expectedContents {
 				t.Errorf("Expected content:\n%s\n\nGot:\n%s", tt.expectedContents, result)
@@ -750,13 +764,14 @@ func TestGetUpdatedContents(t *testing.T) {
 }
 
 func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
-	minimumFileRangeVisibilityMargin = 0 // we don't want any margin for these tests since that adds a lot of unnecessary whitespace and thinking
+	t.Parallel()
 	tests := []struct {
-		name             string
-		block            EditBlock
-		originalContents string
-		expectedContents string
-		expectedError    error
+		name               string
+		block              EditBlock
+		originalContents   string
+		expectedContents   string
+		expectedError      error
+		expectedErrorStart string
 	}{
 		{
 			name: "Edit within Visible range",
@@ -787,7 +802,7 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			expectedError:    nil,
 		},
 		{
-			name: "Edit outside Visible range",
+			name: "Edit outside Visible range succeeds via fallback",
 			block: EditBlock{
 				FilePath: "test.txt",
 				OldLines: []string{"line4", "line5"},
@@ -797,8 +812,8 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
-			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline4\nline5\n"),
+			expectedContents: "line1\nline2\nline3\nnewLine4\nnewLine5",
+			expectedError:    nil,
 		},
 		{
 			name: "Multiple non-adjacent visible ranges",
@@ -887,7 +902,7 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			expectedError:    fmt.Errorf(multipleMatchesMessage, search, "File: test.txt\nLines: 1-3\n```\nx\n2\n3\n```\n\nFile: test.txt\nLines: 4-8\n```\n4\n5\nx\n7\n8\n```"),
 		},
 		{
-			name: "Edit partially overlapping Visible range start",
+			name: "Edit partially overlapping Visible range start succeeds via fallback",
 			block: EditBlock{
 				FilePath: "test.txt",
 				OldLines: []string{"line3", "line4"},
@@ -897,11 +912,11 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
-			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline3\nline4\n"),
+			expectedContents: "line1\nline2\nnewLine3\nnewLine4\nline5",
+			expectedError:    nil,
 		},
 		{
-			name: "Edit partially overlapping Visible range end",
+			name: "Edit partially overlapping Visible range end succeeds via fallback",
 			block: EditBlock{
 				FilePath: "test.txt",
 				OldLines: []string{"line3", "line4"},
@@ -911,8 +926,8 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
-			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline3\nline4\n"),
+			expectedContents: "line1\nline2\nnewLine3\nnewLine4\nline5",
+			expectedError:    nil,
 		},
 		{
 			name: "Nil Visible ranges: acts like everything is Visible",
@@ -927,7 +942,7 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			expectedError:    nil,
 		},
 		{
-			name: "Empty Visible ranges: nothing is Visible",
+			name: "Empty Visible ranges succeeds via fallback",
 			block: EditBlock{
 				FilePath:          "test.txt",
 				OldLines:          []string{"line2", "line3"},
@@ -935,11 +950,11 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				VisibleFileRanges: []FileRange{},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
-			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline2\nline3\n"),
+			expectedContents: "line1\nnewLine2\nnewLine3\nline4\nline5",
+			expectedError:    nil,
 		},
 		{
-			name: "Edit spanning multiple Visible ranges and invisible range",
+			name: "Edit spanning multiple Visible ranges and invisible range succeeds via fallback",
 			block: EditBlock{
 				FilePath: "test.txt",
 				OldLines: []string{"line2", "line3", "line4"},
@@ -950,8 +965,8 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
-			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline2\nline3\nline4\n"),
+			expectedContents: "line1\nnewLine2\nnewLine3\nnewLine4\nline5",
+			expectedError:    nil,
 		},
 		{
 			name: "Edit spanning multiple adjacent Visible ranges",
@@ -984,7 +999,7 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			expectedError:    nil,
 		},
 		{
-			name: "Edit entirely outside Visible ranges",
+			name: "Edit entirely outside Visible ranges succeeds via fallback",
 			block: EditBlock{
 				FilePath: "test.txt",
 				OldLines: []string{"line2", "line3"},
@@ -994,8 +1009,8 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 				},
 			},
 			originalContents: "line1\nline2\nline3\nline4\nline5",
-			expectedContents: "",
-			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nline2\nline3\n"),
+			expectedContents: "line1\nnewLine2\nnewLine3\nline4\nline5",
+			expectedError:    nil,
 		},
 		{
 			name: "Empty edit block (no changes)",
@@ -1025,15 +1040,67 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 			expectedContents: "line1\nline2\nline3\nline4\nnewLine5\nnewLine6",
 			expectedError:    nil,
 		},
+		{
+			name: "Two matches outside visible range returns multiple matches error",
+			block: EditBlock{
+				FilePath: "test.txt",
+				OldLines: []string{"x"},
+				NewLines: []string{"x_x"},
+				VisibleFileRanges: []FileRange{
+					{FilePath: "test.txt", StartLine: 3, EndLine: 5},
+				},
+			},
+			originalContents: "x\n2\n3\n4\n5\nx\n7\n8\n9\n10\n11",
+			expectedContents: "",
+			expectedError:    fmt.Errorf(multipleMatchesMessage, search, "File: test.txt\nLines: 1-3\n```\nx\n2\n3\n```\n\nFile: test.txt\nLines: 4-8\n```\n4\n5\nx\n7\n8\n```"),
+		},
+		{
+			name: "Fallback safety: similar regions rejected by stricter thresholds",
+			block: EditBlock{
+				FilePath: "test.txt",
+				OldLines: []string{"func processData() {", "    handleInput(data)", "    return result", "}"},
+				NewLines: []string{"func processData() {", "    handleInputNew(data)", "    return result", "}"},
+				VisibleFileRanges: []FileRange{
+					{FilePath: "test.txt", StartLine: 100, EndLine: 110},
+				},
+			},
+			originalContents: "package main\n\nfunc processData() {\n    handleInput(items)\n    return result\n}\n\nfunc processData() {\n    handleInput(values)\n    return result\n}",
+			expectedContents: "",
+			expectedError:    fmt.Errorf("no good match found for the following edit block old lines:\n\nfunc processData() {\n    handleInput(data)\n    return result\n}\n"),
+		},
+		{
+			name: "Fallback with exact unique match succeeds",
+			block: EditBlock{
+				FilePath: "test.txt",
+				OldLines: []string{"func uniqueFunction() {", "    doSomething()", "}"},
+				NewLines: []string{"func uniqueFunction() {", "    doSomethingNew()", "}"},
+				VisibleFileRanges: []FileRange{
+					{FilePath: "test.txt", StartLine: 100, EndLine: 110},
+				},
+			},
+			originalContents: "package main\n\nfunc uniqueFunction() {\n    doSomething()\n}\n\nfunc otherFunction() {\n    otherThing()\n}",
+			expectedContents: "package main\n\nfunc uniqueFunction() {\n    doSomethingNew()\n}\n\nfunc otherFunction() {\n    otherThing()\n}",
+			expectedError:    nil,
+		},
 	}
+
+	opts := DefaultMatchOptions
+	opts.MinFileRangeVisibilityMargin = 0 // we don't want any margin for these tests since that adds a lot of unnecessary whitespace and thinking
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := getUpdatedContents(tt.block, tt.originalContents)
+			t.Parallel()
+			result, err := getUpdatedContentsWithOptions(tt.block, tt.originalContents, opts)
 			if result != tt.expectedContents {
 				t.Errorf("Expected content:\n%s\n\nGot:\n%s", tt.expectedContents, result)
 			}
-			if (err != nil && tt.expectedError == nil) ||
+			if tt.expectedErrorStart != "" {
+				if err == nil {
+					t.Errorf("Expected error starting with %q, got nil", tt.expectedErrorStart)
+				} else if !strings.HasPrefix(err.Error(), tt.expectedErrorStart) {
+					t.Errorf("Expected error starting with %q, got: %v", tt.expectedErrorStart, err)
+				}
+			} else if (err != nil && tt.expectedError == nil) ||
 				(err == nil && tt.expectedError != nil) ||
 				(err != nil && err.Error() != tt.expectedError.Error()) {
 				t.Errorf("Expected error: %v, got: %v", tt.expectedError, err)
@@ -1043,10 +1110,11 @@ func TestGetUpdatedContentsWithVisibleRanges(t *testing.T) {
 }
 
 func TestApplyEditBlocks_withMultipleEditBlocksAndVisibleFileRanges(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
-	// Create a tempfile under the given tmpDir with the name "side.toml". It can be empty, which is still valid.
-	_, err := os.Create(filepath.Join(tmpDir, "side.toml"))
+	// Create an empty repo config file
+	_, err := os.Create(filepath.Join(tmpDir, "side.yml"))
 	require.NoError(t, err)
 
 	// Create a temporary file with initial content
@@ -1198,6 +1266,7 @@ func getCommitHashes(t *testing.T, dir string, filePath string) []string {
 }
 
 func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
+	t.Parallel()
 	da := &DevActivities{
 		LSPActivities: &lsp.LSPActivities{
 			LSPClientProvider: func(languageName string) lsp.LSPClient {
@@ -1211,6 +1280,7 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 
 	// Scenario A: New File
 	t.Run("Scenario A - New File", func(t *testing.T) {
+		t.Parallel()
 		tmpDirA, err := os.MkdirTemp("", "sequentialNewTest")
 		require.NoError(t, err)
 		defer os.RemoveAll(tmpDirA)
@@ -1302,6 +1372,7 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 
 	// Scenario B: Existing File
 	t.Run("Scenario B - Existing File", func(t *testing.T) {
+		t.Parallel()
 		tmpDirB, err := os.MkdirTemp("", "sequentialExistingTest")
 		require.NoError(t, err)
 		defer os.RemoveAll(tmpDirB)
@@ -1406,6 +1477,7 @@ func TestApplyEditBlocks_SequentialEditsSameFile(t *testing.T) {
 }
 
 func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "editBlocksTest")
 	require.Nil(t, err)
 	defer os.RemoveAll(tmpDir)
@@ -1451,12 +1523,13 @@ func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			tmpDir, err := os.MkdirTemp("", "editBlocksTest")
 			assert.Nil(t, err)
 			//defer os.RemoveAll(tmpDir)
 
-			// Create a tempfile under the given tmpDir with the name "side.toml". It can be empty, which is still valid.
-			_, err = os.Create(filepath.Join(tmpDir, "side.toml"))
+			// Create an empty repo config file
+			_, err = os.Create(filepath.Join(tmpDir, "side.yml"))
 			require.NoError(t, err)
 
 			initCmd := exec.Command("git", "init")
@@ -1540,6 +1613,7 @@ func TestApplyEditBlocks_checkEditsFeatureFlagEnabled_goLang(t *testing.T) {
 }
 
 func TestApplyEditBlocks_FinalDiff_AfterFailedChecksAndRestore(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "finalDiffFailedCheckTest")
 	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
@@ -1582,9 +1656,8 @@ func TestApplyEditBlocks_FinalDiff_AfterFailedChecksAndRestore(t *testing.T) {
 		},
 	}
 
-	// Create side.toml for valid project context if needed by checks
-	// This is often needed for git operations or other environment setups within activities.
-	_, err = os.Create(filepath.Join(tmpDir, "side.toml"))
+	// Create an empty repo config file for valid project context
+	_, err = os.Create(filepath.Join(tmpDir, "side.yml"))
 	require.NoError(t, err)
 
 	input := ApplyEditBlockActivityInput{
@@ -1636,6 +1709,7 @@ func TestApplyEditBlocks_FinalDiff_AfterFailedChecksAndRestore(t *testing.T) {
 }
 
 func TestApplyEditBlocks_FinalDiff_NewFilePassesChecks(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "finalDiffNewFilePassCheckTest")
 	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
@@ -1646,8 +1720,8 @@ func TestApplyEditBlocks_FinalDiff_NewFilePassesChecks(t *testing.T) {
 	err = initCmd.Run()
 	require.NoError(t, err)
 
-	// Create side.toml for valid project context if needed by checks
-	_, err = os.Create(filepath.Join(tmpDir, "side.toml"))
+	// Create an empty repo config file for valid project context
+	_, err = os.Create(filepath.Join(tmpDir, "side.yml"))
 	require.NoError(t, err)
 
 	newFilePath := "new_file.txt"
@@ -1782,6 +1856,7 @@ class RST(FixedWidth):
         return lines`
 
 func TestFindAcceptableMatchWithVisibleFileRangeAtEndEdge(t *testing.T) {
+	t.Parallel()
 	editBlock := EditBlock{
 		FilePath: "astropy/io/ascii/rst.py",
 		OldLines: []string{
@@ -1818,13 +1893,13 @@ func TestFindAcceptableMatchWithVisibleFileRangeAtEndEdge(t *testing.T) {
 			},
 		},
 	}
-	minimumFileRangeVisibilityMargin = 5
 	bestMatch, matches := FindAcceptableMatch(editBlock, strings.Split(rstLines, "\n"), true)
 	assert.Equal(t, 1, len(matches))
 	assert.Greater(t, bestMatch.score, 0.0)
 }
 
 func TestFindAcceptableMatchWithMissingVisibleFileRangesButWeFigureItOut(t *testing.T) {
+	t.Parallel()
 	tmpFile, err := os.CreateTemp("", "*.py")
 	tmpFile.Write([]byte(rstLines))
 	if err != nil {
@@ -1868,13 +1943,13 @@ func TestFindAcceptableMatchWithMissingVisibleFileRangesButWeFigureItOut(t *test
 			},
 		},
 	}
-	minimumFileRangeVisibilityMargin = 5
 	bestMatch, matches := FindAcceptableMatch(editBlock, strings.Split(rstLines, "\n"), true)
 	assert.Equal(t, 1, len(matches))
 	assert.Greater(t, bestMatch.score, 0.0)
 }
 
 func TestApplyEditBlocks_LSPAutofixRegression(t *testing.T) {
+	t.Parallel()
 	// Create a temporary directory for test files
 	tmpDir := t.TempDir()
 	relativeFilePath := "test.go"
@@ -1894,8 +1969,8 @@ func DoSomething() {
 	err := os.WriteFile(testFile, []byte(initialContent), 0644)
 	require.NoError(t, err)
 
-	// Create a tempfile under the given tmpDir with the name "side.toml". It can be empty, which is still valid.
-	_, err = os.Create(filepath.Join(tmpDir, "side.toml"))
+	// Create an empty repo config file
+	_, err = os.Create(filepath.Join(tmpDir, "side.yml"))
 	require.NoError(t, err)
 
 	// Initialize git repo for diff functionality

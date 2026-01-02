@@ -2,12 +2,15 @@ package dev
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"sidekick/common"
+	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/secret_manager"
+	"sidekick/srv"
 	"sidekick/utils"
 	"testing"
 
@@ -42,8 +45,8 @@ func (s *RunTestsTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 
 	s.devContext = &DevContext{
-		GlobalState: &GlobalState{},
 		ExecContext: flow_action.ExecContext{
+			GlobalState:  &flow_action.GlobalState{},
 			EnvContainer: &s.envContainer,
 			Secrets: &secret_manager.SecretManagerContainer{
 				SecretManager: secret_manager.MockSecretManager{},
@@ -68,6 +71,11 @@ func (s *RunTestsTestSuite) SetupTest() {
 	// mock common activity responses that are the same for all test cases
 	var fa *flow_action.FlowActivities
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	// mock activities used by GetUserResponse for pause-flow version
+	var srvActivities srv.Activities
+	s.env.OnActivity(srvActivities.GetFlow, mock.Anything, mock.Anything, mock.Anything).Return(domain.Flow{}, nil).Maybe()
+	s.env.OnActivity(srvActivities.PersistFlow, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	dir := s.T().TempDir()
 	devEnv, err := env.NewLocalEnv(context.Background(), env.LocalEnvParams{
@@ -94,10 +102,13 @@ func (s *RunTestsTestSuite) TestRunTestsWithNoTestCommands() {
 
 	s.env.ExecuteWorkflow(s.wrapperWorkflow)
 	s.True(s.env.IsWorkflowCompleted())
-	err := s.env.GetWorkflowError()
-	s.Require().Error(err)
-	// unwrap the error twice to get to the actual error message
-	s.Contains(err.Error(), "no test commands configured")
+	s.NoError(s.env.GetWorkflowError())
+
+	var result TestResult
+	s.NoError(s.env.GetWorkflowResult(&result))
+	s.False(result.TestsPassed)
+	s.True(result.TestsSkipped)
+	s.Empty(result.Output)
 }
 
 func (s *RunTestsTestSuite) TestRunTestsWithAnEmptyTestCommand() {
@@ -230,6 +241,200 @@ func (s *RunTestsTestSuite) TestRunTestsWithMultipleTestsMixedResult() {
 	s.NotContains(result.Output, "test1 pass") // leave out passing tests
 	s.Contains(result.Output, "test3 fail out")
 	s.Contains(result.Output, "test3 fail err")
+}
+
+func (s *RunTestsTestSuite) TestRunTestsWithActivityErrorReturnsError() {
+	// Test that when an activity fails with an error (not a test failure),
+	// and human-in-the-loop is disabled, we get an error back
+	s.devContext.RepoConfig = common.RepoConfig{
+		TestCommands: []common.CommandConfig{
+			{WorkingDir: ".", Command: "timeout command"},
+		},
+	}
+	s.devContext.ExecContext.DisableHumanInTheLoop = true
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
+		env.EnvRunCommandActivityOutput{}, errors.New("activity timeout"),
+	).Times(1)
+
+	s.env.ExecuteWorkflow(s.wrapperWorkflow)
+	s.True(s.env.IsWorkflowCompleted())
+	s.Error(s.env.GetWorkflowError())
+	s.Contains(s.env.GetWorkflowError().Error(), "activity timeout")
+}
+
+func (s *RunTestsTestSuite) TestRunTestsWithRetryOnActivityError() {
+	// Test that when an activity fails and user chooses to retry,
+	// the failed command is retried and succeeds
+	s.devContext.RepoConfig = common.RepoConfig{
+		TestCommands: []common.CommandConfig{
+			{WorkingDir: ".", Command: "flaky command"},
+		},
+	}
+	s.devContext.ExecContext.DisableHumanInTheLoop = false
+
+	callCount := 0
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
+			callCount++
+			if callCount == 1 {
+				return env.EnvRunCommandActivityOutput{}, errors.New("temporary failure")
+			}
+			return env.EnvRunCommandActivityOutput{
+				Stdout:     "success output",
+				ExitStatus: 0,
+			}, nil
+		},
+	)
+
+	// Create a parent workflow that runs the test as a child workflow
+	parentWorkflow := func(ctx workflow.Context) (TestResult, error) {
+		// Handle signal from child workflow requesting user response
+		signalCh := workflow.GetSignalChannel(ctx, flow_action.SignalNameRequestForUser)
+		workflow.Go(ctx, func(ctx workflow.Context) {
+			var req flow_action.RequestForUser
+			signalCh.Receive(ctx, &req)
+			// Simulate user responding to retry prompt
+			workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "", flow_action.SignalNameUserResponse, flow_action.UserResponse{}).Get(ctx, nil)
+		})
+
+		// Execute the child workflow
+		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+			WorkflowID: "child-test-workflow",
+		})
+		var result TestResult
+		err := workflow.ExecuteChildWorkflow(childCtx, s.wrapperWorkflow).Get(ctx, &result)
+		return result, err
+	}
+	s.env.RegisterWorkflow(parentWorkflow)
+
+	s.env.ExecuteWorkflow(parentWorkflow)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var result TestResult
+	s.NoError(s.env.GetWorkflowResult(&result))
+	s.True(result.TestsPassed)
+	s.Equal(2, callCount)
+}
+
+func (s *RunTestsTestSuite) TestRunTestsWithMultipleCommandsPartialActivityErrorAndRetry() {
+	// Regression test: when multiple commands fail with activity errors,
+	// user gets a single retry prompt, and all failed commands are retried
+	s.devContext.RepoConfig = common.RepoConfig{
+		TestCommands: []common.CommandConfig{
+			{WorkingDir: ".", Command: "passing command"},
+			{WorkingDir: ".", Command: "flaky command 1"},
+			{WorkingDir: ".", Command: "flaky command 2"},
+		},
+	}
+	s.devContext.ExecContext.DisableHumanInTheLoop = false
+
+	flakyCallCounts := map[string]int{}
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+		return input.Args[2] == "passing command"
+	})).Return(env.EnvRunCommandActivityOutput{
+		Stdout:     "pass output",
+		ExitStatus: 0,
+	}, nil).Times(1)
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+		return input.Args[2] == "flaky command 1"
+	})).Return(
+		func(ctx context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
+			flakyCallCounts["flaky1"]++
+			if flakyCallCounts["flaky1"] == 1 {
+				return env.EnvRunCommandActivityOutput{}, errors.New("timeout error 1")
+			}
+			return env.EnvRunCommandActivityOutput{
+				Stdout:     "flaky1 success",
+				ExitStatus: 0,
+			}, nil
+		},
+	)
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+		return input.Args[2] == "flaky command 2"
+	})).Return(
+		func(ctx context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
+			flakyCallCounts["flaky2"]++
+			if flakyCallCounts["flaky2"] == 1 {
+				return env.EnvRunCommandActivityOutput{}, errors.New("timeout error 2")
+			}
+			return env.EnvRunCommandActivityOutput{
+				Stdout:     "flaky2 success",
+				ExitStatus: 0,
+			}, nil
+		},
+	)
+
+	// Create a parent workflow that runs the test as a child workflow
+	parentWorkflow := func(ctx workflow.Context) (TestResult, error) {
+		// Handle signal from child workflow requesting user response
+		signalCh := workflow.GetSignalChannel(ctx, flow_action.SignalNameRequestForUser)
+		workflow.Go(ctx, func(ctx workflow.Context) {
+			var req flow_action.RequestForUser
+			signalCh.Receive(ctx, &req)
+			// Simulate user responding to retry prompt
+			workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "", flow_action.SignalNameUserResponse, flow_action.UserResponse{}).Get(ctx, nil)
+		})
+
+		// Execute the child workflow
+		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+			WorkflowID: "child-test-workflow",
+		})
+		var result TestResult
+		err := workflow.ExecuteChildWorkflow(childCtx, s.wrapperWorkflow).Get(ctx, &result)
+		return result, err
+	}
+	s.env.RegisterWorkflow(parentWorkflow)
+
+	s.env.ExecuteWorkflow(parentWorkflow)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var result TestResult
+	s.NoError(s.env.GetWorkflowResult(&result))
+	s.True(result.TestsPassed)
+	// Both flaky commands should have been called twice (initial + retry)
+	s.Equal(2, flakyCallCounts["flaky1"])
+	s.Equal(2, flakyCallCounts["flaky2"])
+}
+
+func (s *RunTestsTestSuite) TestRunTestsWithMultipleCommandsPartialActivityError() {
+	// Regression test: when multiple commands are configured and only some fail
+	// with activity errors, verify that the error message includes all failures
+	s.devContext.RepoConfig = common.RepoConfig{
+		TestCommands: []common.CommandConfig{
+			{WorkingDir: ".", Command: "passing command"},
+			{WorkingDir: ".", Command: "timeout command 1"},
+			{WorkingDir: ".", Command: "timeout command 2"},
+		},
+	}
+	s.devContext.ExecContext.DisableHumanInTheLoop = true
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+		return input.Args[2] == "passing command"
+	})).Return(env.EnvRunCommandActivityOutput{
+		Stdout:     "pass output",
+		ExitStatus: 0,
+	}, nil).Times(1)
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+		return input.Args[2] == "timeout command 1"
+	})).Return(env.EnvRunCommandActivityOutput{}, errors.New("timeout error 1")).Times(1)
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+		return input.Args[2] == "timeout command 2"
+	})).Return(env.EnvRunCommandActivityOutput{}, errors.New("timeout error 2")).Times(1)
+
+	s.env.ExecuteWorkflow(s.wrapperWorkflow)
+	s.True(s.env.IsWorkflowCompleted())
+	s.Error(s.env.GetWorkflowError())
+	// Both timeout errors should be reported
+	errMsg := s.env.GetWorkflowError().Error()
+	s.Contains(errMsg, "timeout error 1")
+	s.Contains(errMsg, "timeout error 2")
 }
 
 func TestRunTestsTestSuite(t *testing.T) {

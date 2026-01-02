@@ -3,24 +3,25 @@ package dev
 import (
 	"context"
 	"sidekick/domain"
+	"sidekick/flow_action"
 	"sidekick/mocks"
-	"sidekick/srv/redis"
+	"sidekick/srv/sqlite"
 	"sidekick/utils"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func newDevAgentManagerActivities() *DevAgentManagerActivities {
+func newDevAgentManagerActivities(t *testing.T) *DevAgentManagerActivities {
 	return &DevAgentManagerActivities{
-		Storage:        redis.NewTestRedisStorage(),
+		Storage:        sqlite.NewTestSqliteStorage(t, "dev_agent_test"),
 		TemporalClient: &mocks.Client{},
 	}
 }
 
 func TestUpdateTaskForUserRequest(t *testing.T) {
-	ima := newDevAgentManagerActivities()
-	storage := redis.NewTestRedisStorage()
+	ima := newDevAgentManagerActivities(t)
+	storage := ima.Storage
 
 	workspaceId := "testWorkspace"
 	task := domain.Task{
@@ -52,8 +53,8 @@ func TestUpdateTaskForUserRequest(t *testing.T) {
 }
 
 func TestUpdateTask(t *testing.T) {
-	ima := newDevAgentManagerActivities()
-	storage := redis.NewTestRedisStorage()
+	ima := newDevAgentManagerActivities(t)
+	storage := ima.Storage
 
 	workspaceId := "testWorkspace"
 	task := domain.Task{
@@ -92,17 +93,17 @@ func TestUpdateTask(t *testing.T) {
 }
 
 func TestCreatePendingUserRequest(t *testing.T) {
-	ima := newDevAgentManagerActivities()
-	storage := redis.NewTestRedisStorage()
+	ima := newDevAgentManagerActivities(t)
+	storage := ima.Storage
 	ctx := context.Background()
 
 	workspaceId := "testWorkspace"
 	flowId := "fakeWorkflowId"
-	request := RequestForUser{
+	request := flow_action.RequestForUser{
 		OriginWorkflowId: flowId,
 		Content:          "request content",
 		Subflow:          "fakeSubflow",
-		RequestKind:      RequestKindFreeForm,
+		RequestKind:      flow_action.RequestKindFreeForm,
 	}
 
 	err := ima.CreatePendingUserRequest(ctx, workspaceId, request)
@@ -116,8 +117,8 @@ func TestCreatePendingUserRequest(t *testing.T) {
 
 	assert.Equal(t, "user_request", flowAction.ActionType)
 	assert.Equal(t, map[string]interface{}{
-		"requestContent": request.Content,
 		"requestKind":    string(request.RequestKind),
+		"requestContent": request.Content,
 	}, flowAction.ActionParams)
 	assert.Equal(t, domain.ActionStatusPending, flowAction.ActionStatus)
 	assert.True(t, flowAction.IsHumanAction)
@@ -135,19 +136,19 @@ func TestCreatePendingUserRequest(t *testing.T) {
 }
 
 func TestExistingUserRequest(t *testing.T) {
-	ima := newDevAgentManagerActivities()
-	storage := redis.NewTestRedisStorage()
+	ima := newDevAgentManagerActivities(t)
+	storage := ima.Storage
 	ctx := context.Background()
 
 	workspaceId := "testWorkspace"
 	flowId := "fakeWorkflowId"
 	flowActionId := "fakeFlowActionId"
-	request := RequestForUser{
+	request := flow_action.RequestForUser{
 		OriginWorkflowId: flowId,
 		FlowActionId:     flowActionId,
 		Content:          "request content",
 		Subflow:          "fakeSubflow",
-		RequestKind:      RequestKindApproval,
+		RequestKind:      flow_action.RequestKindApproval,
 	}
 
 	existingFlowAction := domain.FlowAction{

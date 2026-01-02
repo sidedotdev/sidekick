@@ -8,17 +8,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"sidekick/common"
 	"sidekick/domain"
-	"sidekick/llm"
 	"sidekick/srv/sqlite"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/urfave/cli/v3"
-	"github.com/zalando/go-keyring"
 )
 
 func TestHelpFlags(t *testing.T) {
@@ -268,135 +265,27 @@ func TestGetGitBaseDirectory(t *testing.T) {
 	assert.Equal(t, normalizedTmpDir, normalizedBaseDir, "Expected the base directory to be the initialized Git repo")
 }
 
-func TestCheckConfig_CreatesPlaceholderFile(t *testing.T) {
+func TestCheckConfig_NoExistingFile(t *testing.T) {
 	tmpDir, cleanup := setupTempDir(t)
 	defer cleanup()
 
-	// Mock stdin to provide input for promptAndSaveTestCommand
-	restoreStdin := mockStdin("pytest\n")
-	defer restoreStdin()
-
 	_, checkResult, err := checkConfig(tmpDir)
-	assert.NoError(t, err, "Expected no error when checking side.toml")
-	assert.False(t, checkResult.hasTestCommands, "Expected hasTestCommands to be false when creating side.toml")
-
-	err = ensureTestCommands(&common.RepoConfig{}, filepath.Join(tmpDir, "side.toml"))
-	assert.NoError(t, err, "Expected no error when prompting for test command")
-
-	configFilePath := filepath.Join(tmpDir, "side.toml")
-	data, err := os.ReadFile(configFilePath)
-	assert.NoError(t, err)
-	assert.Contains(t, string(data), "command = \"pytest\"")
+	assert.NoError(t, err, "Expected no error when checking repo config")
+	assert.False(t, checkResult.hasTestCommands, "Expected hasTestCommands to be false when no file exists")
+	assert.Equal(t, filepath.Join(tmpDir, "side.yml"), checkResult.filePath)
 }
 
 func TestCheckConfig_ValidFile(t *testing.T) {
 	tmpDir, cleanup := setupTempDir(t)
 	defer cleanup()
 
-	configFilePath := filepath.Join(tmpDir, "side.toml")
-	err := os.WriteFile(configFilePath, []byte("[[test_commands]]\ncommand = \"jest\"\n\n[ai]\ndefault=[{provider = \"openai\"}]"), 0644)
+	configFilePath := filepath.Join(tmpDir, "side.yml")
+	err := os.WriteFile(configFilePath, []byte("test_commands:\n  - command: jest\n"), 0644)
 	assert.NoError(t, err)
 
 	_, checkResult, err := checkConfig(tmpDir)
-	assert.NoError(t, err, "Expected no error with valid side.toml")
-	assert.True(t, checkResult.hasTestCommands, "Expected hasTestCommands to be true with valid side.toml")
-}
-
-func TestEnsureAISecrets_AnthropicProviderSelected(t *testing.T) {
-	keyring.MockInit()
-
-	// Mock stdin to provide input for ensureAISecrets
-	oldStdin := os.Stdin
-	r, w, _ := os.Pipe()
-	os.Stdin = r
-	go func() {
-		w.WriteString("Anthropic\r\n")
-		time.Sleep(100 * time.Millisecond) // wait a bit till next tui prompt
-		w.WriteString("dummy-api-key-anthropic\r\n")
-	}()
-	defer func() {
-		w.Close()
-		os.Stdin = oldStdin
-	}()
-
-	providers, err := ensureAISecrets()
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"anthropic"}, providers)
-
-	apiKey, err := keyring.Get("sidekick", llm.AnthropicApiKeySecretName)
-	assert.NoError(t, err)
-	assert.Equal(t, "dummy-api-key-anthropic", apiKey)
-
-	// Ensure OpenAI key is not present
-	_, err = keyring.Get("sidekick", llm.OpenaiApiKeySecretName)
-	assert.Error(t, err)
-}
-
-func TestEnsureAISecrets_OpenAIProviderSelected(t *testing.T) {
-	keyring.MockInit()
-
-	// Mock stdin to provide input for ensureAISecrets
-	oldStdin := os.Stdin
-	r, w, _ := os.Pipe()
-	os.Stdin = r
-	go func() {
-		w.WriteString("OpenAI\r\n")
-		time.Sleep(100 * time.Millisecond) // wait a bit till next tui prompt
-		w.WriteString("dummy-api-key\r\n")
-	}()
-	defer func() {
-		w.Close()
-		os.Stdin = oldStdin
-	}()
-
-	providers, err := ensureAISecrets()
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"openai"}, providers)
-
-	apiKey, err := keyring.Get("sidekick", llm.OpenaiApiKeySecretName)
-	assert.NoError(t, err)
-	assert.Equal(t, "dummy-api-key", apiKey)
-
-	// Ensure Anthropic key is not present
-	_, err = keyring.Get("sidekick", llm.AnthropicApiKeySecretName)
-	assert.Error(t, err)
-}
-
-func TestEnsureAISecrets_UsesExistingKeyringValue(t *testing.T) {
-	keyring.MockInit()
-
-	service := "sidekick"
-	expectedOpenAIKey := "existing-openai-key"
-	expectedAnthropicKey := "existing-anthropic-key"
-
-	err := keyring.Set(service, llm.OpenaiApiKeySecretName, expectedOpenAIKey)
-	assert.NoError(t, err)
-	err = keyring.Set(service, llm.AnthropicApiKeySecretName, expectedAnthropicKey)
-	assert.NoError(t, err)
-
-	// Mock stdin to provide input for ensureAISecrets
-	oldStdin := os.Stdin
-	r, w, _ := os.Pipe()
-	os.Stdin = r
-	go func() {
-		w.WriteString("OpenAI\r\n")
-	}()
-	defer func() {
-		w.Close()
-		os.Stdin = oldStdin
-	}()
-
-	providers, err := ensureAISecrets()
-	assert.NoError(t, err)
-	assert.ElementsMatch(t, []string{"openai", "anthropic"}, providers)
-
-	retrievedOpenAIKey, err := keyring.Get(service, llm.OpenaiApiKeySecretName)
-	assert.NoError(t, err)
-	assert.Equal(t, expectedOpenAIKey, retrievedOpenAIKey)
-
-	retrievedAnthropicKey, err := keyring.Get(service, llm.AnthropicApiKeySecretName)
-	assert.NoError(t, err)
-	assert.Equal(t, expectedAnthropicKey, retrievedAnthropicKey)
+	assert.NoError(t, err, "Expected no error with valid side.yml")
+	assert.True(t, checkResult.hasTestCommands, "Expected hasTestCommands to be true with valid side.yml")
 }
 
 func TestSaveConfig_CreatesFileWithCorrectContent(t *testing.T) {
@@ -409,78 +298,161 @@ func TestSaveConfig_CreatesFileWithCorrectContent(t *testing.T) {
 		},
 	}
 
-	err := saveConfig(filepath.Join(tmpDir, "side.toml"), config)
+	err := saveConfig(filepath.Join(tmpDir, "side.yml"), config)
 	assert.NoError(t, err)
 
-	configFilePath := filepath.Join(tmpDir, "side.toml")
+	configFilePath := filepath.Join(tmpDir, "side.yml")
 	data, err := os.ReadFile(configFilePath)
+	assert.NoError(t, err)
+	assert.Contains(t, string(data), "command: test-command")
+}
+
+func TestEnsureTestCommands_UserEntersCommand(t *testing.T) {
+	tmpDir, cleanup := setupTempDir(t)
+	defer cleanup()
+
+	configPath := filepath.Join(tmpDir, "side.yml")
+
+	// Mock stdin: enter test command
+	oldStdin := os.Stdin
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	go func() {
+		w.WriteString("pytest\n")
+		w.Close()
+	}()
+	defer func() {
+		os.Stdin = oldStdin
+	}()
+
+	config := &common.RepoConfig{}
+	err := ensureTestCommands(config, configPath)
+	assert.NoError(t, err)
+	assert.Len(t, config.TestCommands, 1)
+	assert.Equal(t, "pytest", config.TestCommands[0].Command)
+
+	data, err := os.ReadFile(configPath)
+	assert.NoError(t, err)
+	assert.Contains(t, string(data), "command: pytest")
+}
+
+func TestEnsureTestCommands_UserSkips(t *testing.T) {
+	tmpDir, cleanup := setupTempDir(t)
+	defer cleanup()
+
+	configPath := filepath.Join(tmpDir, "side.yml")
+
+	// Mock stdin: type "skip"
+	oldStdin := os.Stdin
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	go func() {
+		w.WriteString("skip\n")
+		w.Close()
+	}()
+	defer func() {
+		os.Stdin = oldStdin
+	}()
+
+	config := &common.RepoConfig{}
+	err := ensureTestCommands(config, configPath)
+	assert.NoError(t, err)
+	assert.Empty(t, config.TestCommands)
+
+	data, err := os.ReadFile(configPath)
+	assert.NoError(t, err)
+	assert.Contains(t, string(data), "# Uncomment and configure test commands for best results:")
+	assert.Contains(t, string(data), "# test_commands:")
+	assert.Contains(t, string(data), "#   - command: pytest")
+}
+
+func TestCheckConfig_ExistingTomlFile(t *testing.T) {
+	tmpDir, cleanup := setupTempDir(t)
+	defer cleanup()
+
+	configFilePath := filepath.Join(tmpDir, "side.toml")
+	err := os.WriteFile(configFilePath, []byte("[[test_commands]]\ncommand = \"jest\"\n"), 0644)
+	assert.NoError(t, err)
+
+	config, checkResult, err := checkConfig(tmpDir)
+	assert.NoError(t, err, "Expected no error with valid side.toml")
+	assert.True(t, checkResult.hasTestCommands, "Expected hasTestCommands to be true")
+	assert.Equal(t, configFilePath, checkResult.filePath, "Expected filePath to be the existing TOML file")
+	assert.Equal(t, "jest", config.TestCommands[0].Command)
+}
+
+func TestSaveConfig_PreservesTomlFormat(t *testing.T) {
+	tmpDir, cleanup := setupTempDir(t)
+	defer cleanup()
+
+	config := common.RepoConfig{
+		TestCommands: []common.CommandConfig{
+			{Command: "test-command"},
+		},
+	}
+
+	configPath := filepath.Join(tmpDir, "side.toml")
+	err := saveConfig(configPath, config)
+	assert.NoError(t, err)
+
+	data, err := os.ReadFile(configPath)
 	assert.NoError(t, err)
 	assert.Contains(t, string(data), "command = \"test-command\"")
 }
 
-func TestEnsureTestCommands(t *testing.T) {
+func TestEnsureTestCommands_UserSkipsCaseInsensitive(t *testing.T) {
 	tmpDir, cleanup := setupTempDir(t)
 	defer cleanup()
 
-	// Mock stdin to provide input for promptAndSaveTestCommand
-	restoreStdin := mockStdin("pytest\n")
-	defer restoreStdin()
+	configPath := filepath.Join(tmpDir, "side.yml")
 
-	err := ensureTestCommands(&common.RepoConfig{}, filepath.Join(tmpDir, "side.toml"))
-	assert.NoError(t, err)
+	// Mock stdin: type "SKIP" (uppercase)
+	oldStdin := os.Stdin
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	go func() {
+		w.WriteString("SKIP\n")
+		w.Close()
+	}()
+	defer func() {
+		os.Stdin = oldStdin
+	}()
 
-	data, err := os.ReadFile(filepath.Join(tmpDir, "side.toml"))
+	config := &common.RepoConfig{}
+	err := ensureTestCommands(config, configPath)
 	assert.NoError(t, err)
-	assert.Contains(t, string(data), "command = \"pytest\"")
+	assert.Empty(t, config.TestCommands)
+
+	data, err := os.ReadFile(configPath)
+	assert.NoError(t, err)
+	assert.Contains(t, string(data), "# Uncomment and configure test commands for best results:")
 }
 
 func TestEnsureWorkspaceConfig(t *testing.T) {
 	ctx := context.Background()
 
-	//testDB := redis.NewTestRedisStorage()
 	testDB := sqlite.NewTestSqliteStorage(t, "cli_test")
 
-	// Create a new InitCommandHandler with the test database
 	handler := NewInitCommandHandler(testDB)
 
 	workspace, err := handler.findOrCreateWorkspace(ctx, "test", "/tmp/test")
 	require.NoError(t, err)
 	workspaceID := workspace.Id
 
-	// Test case 1: New configuration
-	t.Run("New configuration", func(t *testing.T) {
-		llmProviders := []string{"openai", "anthropic"}
-		embeddingProviders := []string{"openai"}
+	t.Run("New configuration with single providers", func(t *testing.T) {
+		err := handler.ensureWorkspaceConfig(ctx, workspaceID, nil, "openai", "openai")
+		require.NoError(t, err)
 
-		err := handler.ensureWorkspaceConfig(ctx, workspaceID, nil, llmProviders, embeddingProviders)
-		if err != nil {
-			t.Fatalf("ensureWorkspaceConfig failed: %v", err)
-		}
-
-		// Retrieve the persisted configuration
 		config, err := testDB.GetWorkspaceConfig(ctx, workspaceID)
-		if err != nil {
-			t.Fatalf("Failed to retrieve workspace config: %v", err)
-		}
+		require.NoError(t, err)
 
-		// Check LLM configuration
-		if len(config.LLM.Defaults) != 2 {
-			t.Errorf("Expected 2 LLM providers, got %d", len(config.LLM.Defaults))
-		}
-		if config.LLM.Defaults[0].Provider != "openai" || config.LLM.Defaults[1].Provider != "anthropic" {
-			t.Errorf("Unexpected LLM providers: %v", config.LLM.Defaults)
-		}
+		assert.Len(t, config.LLM.Defaults, 1)
+		assert.Equal(t, "openai", config.LLM.Defaults[0].Provider)
 
-		// Check Embedding configuration
-		if len(config.Embedding.Defaults) != 1 {
-			t.Errorf("Expected 1 Embedding provider, got %d", len(config.Embedding.Defaults))
-		}
-		if config.Embedding.Defaults[0].Provider != "openai" {
-			t.Errorf("Unexpected Embedding provider: %v", config.Embedding.Defaults)
-		}
+		assert.Len(t, config.Embedding.Defaults, 1)
+		assert.Equal(t, "openai", config.Embedding.Defaults[0].Provider)
 	})
 
-	// Test case 2: Update existing configuration
 	t.Run("Update existing configuration", func(t *testing.T) {
 		existingConfig := &domain.WorkspaceConfig{
 			LLM: common.LLMConfig{
@@ -491,34 +463,27 @@ func TestEnsureWorkspaceConfig(t *testing.T) {
 			},
 		}
 
-		llmProviders := []string{"new-provider"}
-		embeddingProviders := []string{"new-provider"}
+		err := handler.ensureWorkspaceConfig(ctx, workspaceID, existingConfig, "anthropic", "google")
+		require.NoError(t, err)
 
-		err := handler.ensureWorkspaceConfig(ctx, workspaceID, existingConfig, llmProviders, embeddingProviders)
-		if err != nil {
-			t.Fatalf("ensureWorkspaceConfig failed: %v", err)
-		}
-
-		// Retrieve the persisted configuration
 		config, err := testDB.GetWorkspaceConfig(ctx, workspaceID)
-		if err != nil {
-			t.Fatalf("Failed to retrieve workspace config: %v", err)
-		}
+		require.NoError(t, err)
 
-		// Check LLM configuration
-		if len(config.LLM.Defaults) != 1 {
-			t.Errorf("Expected 1 LLM provider, got %d", len(config.LLM.Defaults))
-		}
-		if config.LLM.Defaults[0].Provider != "new-provider" {
-			t.Errorf("Unexpected LLM provider: %v", config.LLM.Defaults)
-		}
+		assert.Len(t, config.LLM.Defaults, 1)
+		assert.Equal(t, "anthropic", config.LLM.Defaults[0].Provider)
 
-		// Check Embedding configuration
-		if len(config.Embedding.Defaults) != 1 {
-			t.Errorf("Expected 1 Embedding provider, got %d", len(config.Embedding.Defaults))
-		}
-		if config.Embedding.Defaults[0].Provider != "new-provider" {
-			t.Errorf("Unexpected Embedding provider: %v", config.Embedding.Defaults)
-		}
+		assert.Len(t, config.Embedding.Defaults, 1)
+		assert.Equal(t, "google", config.Embedding.Defaults[0].Provider)
+	})
+
+	t.Run("Empty providers result in empty defaults", func(t *testing.T) {
+		err := handler.ensureWorkspaceConfig(ctx, workspaceID, nil, "", "")
+		require.NoError(t, err)
+
+		config, err := testDB.GetWorkspaceConfig(ctx, workspaceID)
+		require.NoError(t, err)
+
+		assert.Empty(t, config.LLM.Defaults)
+		assert.Empty(t, config.Embedding.Defaults)
 	})
 }

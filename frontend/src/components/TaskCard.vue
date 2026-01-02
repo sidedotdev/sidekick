@@ -12,6 +12,8 @@
     <p>{{ task.description }}</p>
     <span :class="`status-label ${task.status.toLowerCase()}`">{{ statusLabel(task.status) }}</span>
     <span v-if="task.archived" class="archived-label">Archived</span>
+
+    <span v-if="llmPresetLabel" class="llm-preset-label">{{ llmPresetLabel }}</span>
   </div>
 
   <TaskModal v-if="isCopyModalOpen" :task="copiedTask" @close="closeCopyModal" @updated="onUpdated" />
@@ -20,7 +22,9 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { FullTask, Task } from '../lib/models'
+import type { FullTask, Task, LLMConfig } from '../lib/models'
+import { getModelSummary } from '../lib/llmPresets'
+import { loadPresets, llmConfigsEqual } from '../lib/llmPresetStorage'
 import TaskModal from './TaskModal.vue'
 import CopyIcon from './icons/CopyIcon.vue'
 import router from '@/router'
@@ -30,6 +34,20 @@ const props = defineProps({
     type: Object as () => FullTask,
     required: true,
   },
+})
+
+const llmPresetLabel = computed(() => {
+  const llmOverride = props.task.flowOptions?.configOverrides?.llm as LLMConfig | undefined
+  if (!llmOverride) return ''
+
+  const presets = loadPresets()
+  const match = presets.find(p => llmConfigsEqual(p.config, llmOverride))
+  if (match) {
+    const name = (match.name || '').trim()
+    return name ? name : getModelSummary(match.config)
+  }
+
+  return getModelSummary(llmOverride)
 })
 
 const copiedTask = computed(() => {
@@ -363,6 +381,24 @@ const cancelTask = async () => {
   background-color: #808080;
   color: var(--status-label-color);
   font-family: "JetBrains Mono", monospace;
+}
+
+.llm-preset-label {
+  position: absolute;
+  right: calc(var(--task-pad) / 2);
+  bottom: calc(var(--task-pad) / 2);
+  max-width: calc(100% - var(--task-pad));
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.2rem;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  opacity: 0.75;
+  background-color: var(--color-background-mute);
+  color: var(--color-text);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .action.copy {

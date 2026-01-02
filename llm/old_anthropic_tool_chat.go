@@ -46,7 +46,7 @@ func (OldAnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOpti
 	request := &old_anthropic.MessageRequest{
 		Model:             old_anthropic.Model(model),
 		Temperature:       float64(temperature),
-		MaxTokensToSample: 4000,
+		MaxTokensToSample: 8000,
 		Messages:          oldAnthropicFromChatMessages(options.Params.Messages),
 		ToolChoice:        oldAnthropicFromToolChoice(options.Params.ToolChoice, options.Params.Tools),
 		Tools:             oldAnthropicFromTools(options.Params.Tools),
@@ -162,6 +162,8 @@ func oldAnthropicToChatMessageResponse(response old_anthropic.MessageResponse) *
 		Usage: Usage{
 			InputTokens:  response.Usage.InputTokens,
 			OutputTokens: response.Usage.OutputTokens,
+			// CacheReadInputTokens and CacheWriteInputTokens not supported by
+			// the old anthropic-go SDK; this file will be removed soon.
 		},
 		Model:    string(response.Model),
 		Provider: "anthropic",

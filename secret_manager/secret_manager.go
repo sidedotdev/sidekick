@@ -22,11 +22,12 @@ type SecretManager interface {
 type SecretManagerType string
 
 const (
-	EnvSecretManagerType         SecretManagerType = "env"
-	MockSecretManagerType        SecretManagerType = "mock"
-	KeyringSecretManagerType     SecretManagerType = "keyring"
-	LocalConfigSecretManagerType SecretManagerType = "local_config"
-	CompositeSecretManagerType   SecretManagerType = "composite"
+	EnvSecretManagerType          SecretManagerType = "env"
+	MockSecretManagerType         SecretManagerType = "mock"
+	KeyringSecretManagerType      SecretManagerType = "keyring"
+	LocalConfigSecretManagerType  SecretManagerType = "local_config"
+	CompositeSecretManagerType    SecretManagerType = "composite"
+	InterceptingSecretManagerType SecretManagerType = "intercepting"
 )
 
 type EnvSecretManager struct{}
@@ -250,6 +251,12 @@ func (sc *SecretManagerContainer) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		sc.SecretManager = csm
+	case string(InterceptingSecretManagerType):
+		var ism *InterceptingSecretManager
+		if err := json.Unmarshal(v.Manager, &ism); err != nil {
+			return err
+		}
+		sc.SecretManager = ism
 	default:
 		return fmt.Errorf("unknown SecretManager type: %s", v.Type)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sidekick/domain"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"strings"
 	"time"
@@ -58,7 +59,7 @@ func (ia *DevAgent) workRequest(ctx context.Context, parentId, request, flowType
 	return flow, nil
 }
 
-func (ia *DevAgent) RelayResponse(ctx context.Context, userResponse UserResponse) error {
+func (ia *DevAgent) RelayResponse(ctx context.Context, userResponse flow_action.UserResponse) error {
 	log.Printf("relaying response to workflow: %s\n", userResponse.TargetWorkflowId)
 	devManagerWorkflowId, err := ia.findOrStartDevAgentManagerWorkflow(ctx, ia.WorkspaceId)
 	if err != nil {

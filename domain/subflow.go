@@ -1,6 +1,10 @@
 package domain
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+	"time"
+)
 
 type SubflowStatus string
 
@@ -8,6 +12,7 @@ const (
 	SubflowStatusStarted  SubflowStatus = "started" // this more-or-less means "in-progress"
 	SubflowStatusComplete SubflowStatus = "complete"
 	SubflowStatusFailed   SubflowStatus = "failed"
+	SubflowStatusCanceled SubflowStatus = "canceled"
 )
 
 // Subflow represents a subflow within a flow
@@ -21,6 +26,18 @@ type Subflow struct {
 	ParentSubflowId string        `json:"parentSubflowId,omitempty"` // ID of the parent subflow, if any
 	FlowId          string        `json:"flowId"`                    // ID of the flow this subflow belongs to
 	Result          string        `json:"result,omitempty"`          // Result of the subflow, if any
+	Updated         time.Time     `json:"updated,omitempty"`         // Last update timestamp
+}
+
+func (s Subflow) MarshalJSON() ([]byte, error) {
+	type Alias Subflow
+	return json.Marshal(&struct {
+		Alias
+		Updated time.Time `json:"updated,omitempty"`
+	}{
+		Alias:   Alias(s),
+		Updated: UTCTime(s.Updated),
+	})
 }
 
 type SubflowStorage interface {

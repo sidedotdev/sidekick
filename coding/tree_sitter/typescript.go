@@ -11,7 +11,10 @@ func writeTypescriptSignatureCapture(out *strings.Builder, sourceCode *[]byte, c
 	switch name {
 	case "function.declaration":
 		{
-			if strings.HasPrefix(content, "async ") {
+			if strings.HasPrefix(content, "declare ") {
+				out.WriteString("declare ")
+			}
+			if strings.HasPrefix(content, "async ") || strings.Contains(content, " async ") {
 				out.WriteString("async ")
 			}
 		}

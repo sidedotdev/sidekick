@@ -11,6 +11,7 @@ import (
 )
 
 func TestGetFileSignaturesStringKotlin(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -404,7 +405,9 @@ val oldValue = ""
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			// Create a temporary file with the test case code
 			tmpfile, err := os.CreateTemp("", "test*.kt")
 			if err != nil {
@@ -428,6 +431,7 @@ val oldValue = ""
 }
 
 func TestGetFileSymbolsStringKotlin(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		code     string
@@ -662,6 +666,7 @@ val oldValue = ""
 }
 
 func TestGetSymbolDefinitionKotlin(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name               string
 		symbolName         string
@@ -1245,6 +1250,7 @@ enum class Visibility
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			input := createMarkdownCodeBlock("kotlin", tt.code)
@@ -1270,7 +1276,9 @@ enum class Visibility
 		})
 	}
 }
+
 func TestNormalizeSymbolFromSnippet_Kotlin(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		snippet  string
@@ -1291,6 +1299,7 @@ func TestNormalizeSymbolFromSnippet_Kotlin(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := NormalizeSymbolFromSnippet("kotlin", tc.snippet)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)

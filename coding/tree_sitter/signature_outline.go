@@ -187,9 +187,9 @@ func GetDirectorySignatureOutlines(baseDirectory string, showPaths *map[string]b
 			if err != nil {
 				l := logger.Get()
 				if strings.Contains(err.Error(), path) {
-					l.Debug().Err(err).Msg("error getting signatures")
+					l.Trace().Err(err).Msg("error getting signatures")
 				} else {
-					l.Debug().Err(err).Msg(fmt.Sprintf("error getting signatures for file %s", relativePath))
+					l.Trace().Err(err).Msg(fmt.Sprintf("error getting signatures for file %s", relativePath))
 				}
 				outlines = append(outlines, FileOutline{
 					Path:        relativePath,

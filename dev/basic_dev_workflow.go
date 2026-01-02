@@ -38,13 +38,24 @@ type MergeWithReviewParams struct {
 	CommitRequired bool
 }
 
+// getDiffSinceLastReview generates a diff comparing the last review tree to current staged changes
+func getDiffSinceLastReview(dCtx DevContext, lastReviewTreeHash string, ignoreWhitespace bool) (string, error) {
+	var diffOutput string
+	err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
+		Staged:           true,
+		BaseRef:          lastReviewTreeHash,
+		IgnoreWhitespace: ignoreWhitespace,
+	}).Get(dCtx, &diffOutput)
+	return diffOutput, err
+}
+
 // GetGitDiff generates a git diff for merge approval, with optional whitespace ignoring
 func GetGitDiff(dCtx DevContext, baseBranch string, ignoreWhitespace bool) (string, error) {
 	var gitDiff string
-	err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, dCtx.EnvContainer, git.GitDiffParams{
+	err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
 		Staged:           true,
 		ThreeDotDiff:     true,
-		BaseBranch:       baseBranch,
+		BaseRef:          baseBranch,
 		IgnoreWhitespace: ignoreWhitespace,
 	}).Get(dCtx, &gitDiff)
 	return gitDiff, err
@@ -140,11 +151,11 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	}
 
 	goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
-	if goNextVersion >= 1 && errors.Is(err, PendingActionError) && dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree {
-		pending := dCtx.GlobalState.GetPendingUserAction()
-		if pending != nil && *pending == UserActionGoNext {
+	if goNextVersion >= 1 && errors.Is(err, flow_action.PendingActionError) && dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree {
+		pending := dCtx.ExecContext.GlobalState.GetPendingUserAction()
+		if pending != nil && *pending == flow_action.UserActionGoNext {
 			// skip to review/resolve subflow
-			dCtx.GlobalState.ConsumePendingUserAction()
+			dCtx.ExecContext.GlobalState.ConsumePendingUserAction()
 			err = nil
 		}
 	}
@@ -221,12 +232,22 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 		}
 		dCtx.FlowScope.SubflowName = subflowName
 
+		// Determine autoIterations from config with workflow versioning
+		autoIterations := 3
+		v := workflow.GetVersion(dCtx, "coding-subflow-auto-iterations", workflow.DefaultVersion, 1)
+		if v == 1 {
+			autoIterations = 7
+		}
+		if cfg, ok := dCtx.RepoConfig.AgentConfig[common.CodingAndVerificationKey]; ok && cfg.AutoIterations > 0 {
+			autoIterations = cfg.AutoIterations
+		}
+
 		// TODO /gen use models slice and modelIndex and modelAttemptCount just like
 		// in completeDevStep to switch models when ErrMaxIterationsReached
-		modelConfig := dCtx.GetModelConfig(common.CodingKey, attemptCount/3, "default")
+		modelConfig := dCtx.GetModelConfig(common.CodingKey, attemptCount/autoIterations, "default")
 
 		// TODO don't force getting help if it just got help recently already
-		if attemptCount > 0 && attemptCount%3 == 0 {
+		if attemptCount > 0 && attemptCount%autoIterations == 0 {
 			guidanceContext := "Failing repeatedly to pass tests and/or fulfill requirements, please provide guidance."
 
 			// get the latest git diff, since it could be different from the
@@ -247,7 +268,7 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 				return "", fmt.Errorf("failed to get user feedback: %w", err)
 			}
 		}
-		if attemptCount >= maxAttempts {
+		if attemptCount >= maxAttempts && dCtx.DisableHumanInTheLoop {
 			return "", errors.New("failed to author code passing tests and fulfilling requirements, max attempts reached")
 		}
 
@@ -263,12 +284,15 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 			return "", fmt.Errorf("failed to run tests: %w", err)
 		}
 
-		if !testResult.TestsPassed {
-			promptInfo = FeedbackInfo{Feedback: testResult.Output}
+		if !testResult.TestsPassed && !testResult.TestsSkipped {
+			promptInfo = FeedbackInfo{Feedback: testResult.Output, Type: FeedbackTypeTestFailure}
 			attemptCount++
 			continue
 		}
-		testOutput := testResult.Output
+		testOutput := ""
+		if !testResult.TestsSkipped {
+			testOutput = testResult.Output
+		}
 
 		// Run integration tests if regular tests passed and integration tests are configured
 		if len(dCtx.RepoConfig.IntegrationTestCommands) > 0 {
@@ -276,12 +300,14 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 			if err != nil {
 				return "", fmt.Errorf("failed to run integration tests: %w", err)
 			}
-			if !integrationTestResult.TestsPassed {
-				promptInfo = FeedbackInfo{Feedback: integrationTestResult.Output}
+			if !integrationTestResult.TestsPassed && !integrationTestResult.TestsSkipped {
+				promptInfo = FeedbackInfo{Feedback: integrationTestResult.Output, Type: FeedbackTypeTestFailure}
 				attemptCount++
 				continue
 			}
-			testOutput += "\n\n" + integrationTestResult.Output
+			if !integrationTestResult.TestsSkipped {
+				testOutput += "\n\n" + integrationTestResult.Output
+			}
 		}
 
 		// Step 4: check diff and confirm if requirements have been met
@@ -306,9 +332,15 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 			// this case and let the assistant "prompt itself". hoping this
 			// makes it less likely for the assistant to act confused, since it
 			// knows it itself said the requirements weren't fulfilled and why.
-			*chatHistory = append(*chatHistory, llm.ChatMessage{
-				Role: llm.ChatMessageRoleUser,
-				Content: fmt.Sprintf(`
+			userMessageContent := `
+Here is the diff:
+
+  [...] (Omitted for length)
+
+Please analyze whether the requirements have been fulfilled. If not, continue editing code as needed.
+`
+			if !testResult.TestsSkipped {
+				userMessageContent = fmt.Sprintf(`
 Here is the diff:
 
   [...] (Omitted for length)
@@ -319,7 +351,11 @@ And here are test results:
   [...] (Omitted for length)
 
 Please analyze whether the requirements have been fulfilled. If not, continue editing code as needed.
-`, testResult.TestsPassed),
+`, testResult.TestsPassed)
+			}
+			*chatHistory = append(*chatHistory, llm.ChatMessage{
+				Role:    llm.ChatMessageRoleUser,
+				Content: userMessageContent,
 			})
 			*chatHistory = append(*chatHistory, llm.ChatMessage{
 				Role: llm.ChatMessageRoleAssistant,
@@ -358,7 +394,7 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 			Requirements:   requirements,
 			StartBranch:    startBranch,
 		}
-		_, _, err = mergeWorktreeIfApproved(dCtx, params)
+		_, _, _, err = mergeWorktreeIfApproved(dCtx, params, "")
 		if err != nil {
 			return "", fmt.Errorf("failed to merge if approved: %w", err)
 		}
@@ -373,7 +409,7 @@ Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
 	return testResult.Output, nil
 }
 
-func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool) (MergeApprovalResponse, string, error) {
+func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool, lastReviewTreeHash string) (MergeApprovalResponse, string, string, error) {
 	v := workflow.GetVersion(dCtx, "worktree-merge", workflow.DefaultVersion, 1)
 
 	var gitDiff string
@@ -382,12 +418,32 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 	if v == workflow.DefaultVersion && commitRequired {
 		gitDiff, err = git.GitDiff(dCtx.ExecContext)
 		if err != nil {
-			return MergeApprovalResponse{}, "", fmt.Errorf("failed to generate git diff: %w", err)
+			return MergeApprovalResponse{}, "", "", fmt.Errorf("failed to generate git diff: %w", err)
 		}
 	} else {
 		gitDiff, err = GetGitDiff(dCtx, defaultTarget, false)
 		if err != nil {
-			return MergeApprovalResponse{}, "", fmt.Errorf("failed to generate git diff: %w", err)
+			return MergeApprovalResponse{}, "", "", fmt.Errorf("failed to generate git diff: %w", err)
+		}
+	}
+
+	// Track tree hash and diff since last review for new workflow versions
+	var currentTreeHash string
+	var diffSinceLastReview string
+	diffSinceLastReviewVersion := workflow.GetVersion(dCtx, "diff-since-last-review", workflow.DefaultVersion, 1)
+	if diffSinceLastReviewVersion >= 1 {
+		// Capture current tree hash before getting approval
+		err = workflow.ExecuteActivity(dCtx, git.WriteTreeActivity, *dCtx.EnvContainer).Get(dCtx, &currentTreeHash)
+		if err != nil {
+			return MergeApprovalResponse{}, "", "", fmt.Errorf("failed to get current tree hash: %w", err)
+		}
+
+		// Generate diff since last review if we have a previous tree hash
+		if lastReviewTreeHash != "" {
+			diffSinceLastReview, err = getDiffSinceLastReview(dCtx, lastReviewTreeHash, false)
+			if err != nil {
+				return MergeApprovalResponse{}, "", "", fmt.Errorf("failed to generate diff since last review: %w", err)
+			}
 		}
 	}
 
@@ -396,38 +452,41 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 		SourceBranch:        dCtx.Worktree.Name,
 		DefaultTargetBranch: defaultTarget,
 		Diff:                gitDiff,
+		DiffSinceLastReview: diffSinceLastReview,
 	}
 
 	approvalResponse, err := GetUserMergeApproval(dCtx, "Please review these changes", map[string]any{
-		"mergeApprovalInfo": mergeParams,
+		"mergeApprovalInfo":  mergeParams,
+		"lastReviewTreeHash": lastReviewTreeHash,
 	})
 	if err != nil {
-		return MergeApprovalResponse{}, "", err
+		return MergeApprovalResponse{}, "", "", err
 	}
 
-	return approvalResponse, gitDiff, nil
+	return approvalResponse, gitDiff, currentTreeHash, nil
 }
 
 // try to review and merge if approved. if not approved, iterate by coding some
 // more based on review feedback, then review again
 func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 	return RunSubflowWithoutResult(dCtx, "review_and_resolve", "Review and resolve", func(subflow domain.Subflow) error {
-		// Track review messages for iterative development
 		reviewMessages := []string{}
 		originalRequirements := params.Requirements
 		goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
+		// Used to generate "diff since last review" on subsequent iterations
+		lastReviewTreeHash := ""
 
 		for {
 			// Ensure any auto-formatted changes are staged for new workflow versions
-			gitDiff, mergeInfo, err := mergeWorktreeIfApproved(dCtx, params)
+			gitDiff, mergeInfo, treeHash, err := mergeWorktreeIfApproved(dCtx, params, lastReviewTreeHash)
 
 			if err != nil {
-				if goNextVersion >= 1 && errors.Is(err, PendingActionError) {
-					pending := dCtx.GlobalState.GetPendingUserAction()
-					if pending != nil && *pending == UserActionGoNext {
+				if goNextVersion >= 1 && errors.Is(err, flow_action.PendingActionError) {
+					pending := dCtx.ExecContext.GlobalState.GetPendingUserAction()
+					if pending != nil && *pending == flow_action.UserActionGoNext {
 						// retry if failed due to go-next action, the next
 						// action is to check for approval again
-						dCtx.GlobalState.ConsumePendingUserAction()
+						dCtx.ExecContext.GlobalState.ConsumePendingUserAction()
 						continue
 					}
 				}
@@ -435,8 +494,9 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 			}
 
 			if !mergeInfo.Approved {
-				// retain new choice of target branch next iteration, in case it was changed
+				// Retain new choice of target branch next iteration, in case it was changed
 				params.StartBranch = &mergeInfo.TargetBranch
+				lastReviewTreeHash = treeHash
 
 				// Format new requirements with review history + latest rejection message
 				requirements := formatRequirementsWithReview(
@@ -455,12 +515,12 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 				_, err = codingSubflow(dCtx, requirements, params.StartBranch)
 
 				if err != nil {
-					if goNextVersion >= 1 && errors.Is(err, PendingActionError) {
-						pending := dCtx.GlobalState.GetPendingUserAction()
-						if pending != nil && *pending == UserActionGoNext {
+					if goNextVersion >= 1 && errors.Is(err, flow_action.PendingActionError) {
+						pending := dCtx.ExecContext.GlobalState.GetPendingUserAction()
+						if pending != nil && *pending == flow_action.UserActionGoNext {
 							// if failed due to go-next action, the next action
 							// is give the user opportunity to approve merge
-							dCtx.GlobalState.ConsumePendingUserAction()
+							dCtx.ExecContext.GlobalState.ConsumePendingUserAction()
 							continue
 						}
 					}
@@ -476,7 +536,7 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 	})
 }
 
-func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (string, MergeApprovalResponse, error) {
+func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, lastReviewTreeHash string) (string, MergeApprovalResponse, string, error) {
 
 	defaultTarget := "main"
 	if params.StartBranch != nil {
@@ -486,17 +546,17 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 	gitAddVersion := workflow.GetVersion(dCtx, "git-add-before-diff", workflow.DefaultVersion, 1)
 	if gitAddVersion == 1 {
 		if err := git.GitAddAll(dCtx.ExecContext); err != nil {
-			return "", MergeApprovalResponse{}, fmt.Errorf("failed to git add all: %w", err)
+			return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to git add all: %w", err)
 		}
 	}
 
-	mergeInfo, gitDiff, err := getMergeApproval(dCtx, defaultTarget, params.CommitRequired)
+	mergeInfo, gitDiff, currentTreeHash, err := getMergeApproval(dCtx, defaultTarget, params.CommitRequired, lastReviewTreeHash)
 	if err != nil {
-		return "", MergeApprovalResponse{}, fmt.Errorf("failed to get merge approval: %w", err)
+		return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get merge approval: %w", err)
 	}
 
 	if !mergeInfo.Approved {
-		return gitDiff, mergeInfo, err
+		return gitDiff, mergeInfo, currentTreeHash, nil
 	}
 
 	// Perform merge
@@ -539,7 +599,11 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 			CommitMessage: commitMessage,
 		}).Get(dCtx, nil)
 		if err != nil {
-			return "", MergeApprovalResponse{}, fmt.Errorf("failed to commit changes: %w", err)
+			if strings.Contains(err.Error(), "nothing to commit") {
+				workflow.GetLogger(dCtx).Warn("nothing to commit during merge workflow")
+			} else {
+				return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to commit changes: %w", err)
+			}
 		}
 	}
 
@@ -551,11 +615,15 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 				CommitMessage: commitMessage,
 			}).Get(dCtx, nil)
 			if err != nil {
-				return mergeResult, fmt.Errorf("failed to commit changes: %w", err)
+				if strings.Contains(err.Error(), "nothing to commit") {
+					workflow.GetLogger(dCtx).Warn("nothing to commit during merge workflow")
+				} else {
+					return mergeResult, fmt.Errorf("failed to commit changes: %w", err)
+				}
 			}
 		}
 
-		err := PerformWithUserRetry(actionCtx, git.GitMergeActivity, &mergeResult, dCtx.EnvContainer, git.GitMergeParams{
+		err := flow_action.PerformWithUserRetry(actionCtx.FlowActionContext(), git.GitMergeActivity, &mergeResult, dCtx.EnvContainer, git.GitMergeParams{
 			SourceBranch: dCtx.Worktree.Name,
 			TargetBranch: mergeInfo.TargetBranch,
 		})
@@ -565,7 +633,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 		return mergeResult, nil
 	})
 	if err != nil {
-		return "", MergeApprovalResponse{}, err
+		return "", MergeApprovalResponse{}, "", err
 	}
 
 	if mergeResult.HasConflicts {
@@ -581,7 +649,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 			"continueTag": "done",
 		})
 		if err != nil {
-			return "", MergeApprovalResponse{}, fmt.Errorf("failed to get continue approval: %w", err)
+			return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get continue approval: %w", err)
 		}
 
 		// Handle reverse conflict scenario - need final merge from source to target
@@ -597,7 +665,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 				})
 				statusErr := statusFuture.Get(dCtx, &statusOutput)
 				if statusErr != nil {
-					return "", MergeApprovalResponse{}, fmt.Errorf("failed to check git status: %w", statusErr)
+					return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to check git status: %w", statusErr)
 				}
 
 				// Check if there are still unmerged files
@@ -607,15 +675,15 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 						"continueTag": "done",
 					})
 					if err != nil {
-						return "", MergeApprovalResponse{}, fmt.Errorf("failed to get continue approval: %w", err)
+						return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get continue approval: %w", err)
 					}
 				}
 				break
 			}
 
-			mergeInfo, gitDiff, err = getMergeApproval(dCtx, mergeInfo.TargetBranch, params.CommitRequired)
+			mergeInfo, gitDiff, currentTreeHash, err = getMergeApproval(dCtx, mergeInfo.TargetBranch, params.CommitRequired, "")
 			if err != nil {
-				return "", MergeApprovalResponse{}, fmt.Errorf("failed to get final merge approval: %w", err)
+				return "", MergeApprovalResponse{}, "", fmt.Errorf("failed to get final merge approval: %w", err)
 			}
 
 			if mergeInfo.Approved {
@@ -628,7 +696,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 
 				finalMergeResult, err := Track(finalActionCtx, func(flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
 					var finalResult git.MergeActivityResult
-					err := PerformWithUserRetry(finalActionCtx, git.GitMergeActivity, &finalResult, dCtx.EnvContainer, git.GitMergeParams{
+					err := flow_action.PerformWithUserRetry(finalActionCtx.FlowActionContext(), git.GitMergeActivity, &finalResult, dCtx.EnvContainer, git.GitMergeParams{
 						SourceBranch: dCtx.Worktree.Name,
 						TargetBranch: mergeInfo.TargetBranch,
 					})
@@ -638,7 +706,7 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 					return finalResult, nil
 				})
 				if err != nil {
-					return "", MergeApprovalResponse{}, err
+					return "", MergeApprovalResponse{}, "", err
 				}
 
 				// Update mergeResult to reflect final merge result
@@ -662,5 +730,5 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams) (str
 		}
 	}
 
-	return gitDiff, mergeInfo, err
+	return gitDiff, mergeInfo, currentTreeHash, err
 }

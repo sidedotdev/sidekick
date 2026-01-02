@@ -48,7 +48,6 @@ func GitCommit(eCtx flow_action.ExecContext, commitMessage string) error {
 	}
 	commitErr := workflow.ExecuteActivity(eCtx, GitCommitActivity, eCtx.EnvContainer, commitParams).Get(eCtx, nil)
 	if commitErr != nil {
-		// TODO add test for nothing to commit case
 		if !strings.Contains(commitErr.Error(), "nothing to commit") {
 			return fmt.Errorf("failed to commit changes: %v", commitErr)
 		}
