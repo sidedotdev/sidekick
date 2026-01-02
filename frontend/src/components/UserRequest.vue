@@ -106,7 +106,7 @@
     </div>
   </form>
   <!-- TODO move approved/rejected to FlowActionItem summary. Only show content here -->
-  <div v-if="expand && !isPending && (!flowAction.actionParams.command || !parsedActionResult.Approved)">
+  <div v-if="expand && !isPending && (!flowAction.actionParams.command || !parsedActionResult?.Approved)">
     <div v-if="flowAction.actionParams.requestContent" class="markdown-container">
       <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
         <CopyIcon />
@@ -137,10 +137,10 @@
     </div>
     <div v-if="/approval/.test(props.flowAction.actionParams.requestKind)">
       <!--p>{{ flowAction.actionParams.requestContent }}</p-->
-      <p v-if="!parsedActionResult.Approved && parsedActionResult.Content">{{ parsedActionResult.Content }}</p>
+      <p v-if="!parsedActionResult?.Approved && parsedActionResult?.Content">{{ parsedActionResult.Content }}</p>
     </div>
     <div class="free-form" v-else-if="flowAction.actionParams.requestKind == 'free_form'">
-      <p v-if="parsedActionResult.Content"><b>You: </b>{{ parsedActionResult.Content }}</p>
+      <p v-if="parsedActionResult?.Content"><b>You: </b>{{ parsedActionResult.Content }}</p>
     </div>
   </div>
 </template>
@@ -277,7 +277,10 @@ onMounted(() => {
   }
 });
 
-const parsedActionResult = computed(() => {
+interface keyable {
+    [key: string]: any
+}
+const parsedActionResult = computed<keyable | null>(() => {
   try {
     return JSON.parse(props.flowAction.actionResult);
   } catch (error) {
