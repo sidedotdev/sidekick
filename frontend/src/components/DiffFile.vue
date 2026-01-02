@@ -8,6 +8,9 @@
           <button class="copy-button" @click.stop="copyFilePath" title="Copy file path">
             <CopyIcon />
           </button>
+          <button v-if="openInIde" class="open-button" @click.stop="handleOpenInIde" title="Open in IDE">
+            <OpenIcon />
+          </button>
         </div>
         <div class="file-summary">
           <div class="visual-summary">
@@ -40,11 +43,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, inject } from 'vue'
 import CopyIcon from './icons/CopyIcon.vue'
+import OpenIcon from './icons/OpenIcon.vue'
 import type { ParsedDiff } from '../lib/diffUtils'
 import "@git-diff-view/vue/styles/diff-view.css"
 import { DiffView, DiffModeEnum } from "@git-diff-view/vue"
+import { IDE_OPENER_KEY } from '../composables/useIdeOpener'
 
 interface Props {
   fileData: ParsedDiff
@@ -58,6 +63,8 @@ const props = withDefaults(defineProps<Props>(), {
   diffMode: 'unified',
   level: 0
 })
+
+const openInIde = inject(IDE_OPENER_KEY, null)
 
 const stickyTop = computed(() => {
   // Position below the parent flow action header
@@ -76,6 +83,12 @@ const viewMode = computed(() => {
 
 const toggleExpanded = () => {
   isExpanded.value = !isExpanded.value
+}
+
+const handleOpenInIde = () => {
+  if (openInIde) {
+    openInIde(filePath.value, props.fileData.firstLineNumber)
+  }
 }
 
 const visualSummary = computed(() => {
@@ -181,7 +194,8 @@ const getTheme = () => {
   word-break: break-all;
 }
 
-.copy-button {
+.copy-button,
+.open-button {
   background: none;
   border: none;
   cursor: pointer;
@@ -194,11 +208,13 @@ const getTheme = () => {
   flex-shrink: 0;
 }
 
-.copy-button:hover {
+.copy-button:hover,
+.open-button:hover {
   background: var(--color-background-hover);
 }
 
-.copy-button svg {
+.copy-button svg,
+.open-button svg {
   width: 1rem;
   height: 1rem;
 }

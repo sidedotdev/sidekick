@@ -90,4 +90,36 @@ func TestFlowActionStorage(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Empty(t, flowActions)
 	})
+
+	t.Run("Preserves sub-millisecond precision and converts to UTC", func(t *testing.T) {
+		loc, err := time.LoadLocation("America/New_York")
+		assert.NoError(t, err)
+
+		created := time.Date(2025, 6, 15, 10, 30, 45, 123456789, loc)
+		updated := time.Date(2025, 6, 15, 11, 45, 30, 987654321, loc)
+
+		fa := domain.FlowAction{
+			Id:           "test-action-precision",
+			FlowId:       "precision-flow",
+			WorkspaceId:  workspaceId,
+			Created:      created,
+			Updated:      updated,
+			ActionType:   "test-type",
+			ActionParams: map[string]interface{}{},
+			ActionStatus: domain.ActionStatusPending,
+		}
+
+		err = storage.PersistFlowAction(ctx, fa)
+		assert.NoError(t, err)
+
+		retrieved, err := storage.GetFlowAction(ctx, workspaceId, "test-action-precision")
+		assert.NoError(t, err)
+
+		assert.Equal(t, time.UTC, retrieved.Created.Location())
+		assert.Equal(t, time.UTC, retrieved.Updated.Location())
+		assert.True(t, retrieved.Created.Equal(created.UTC()))
+		assert.True(t, retrieved.Updated.Equal(updated.UTC()))
+		assert.Equal(t, 123456789, retrieved.Created.Nanosecond())
+		assert.Equal(t, 987654321, retrieved.Updated.Nanosecond())
+	})
 }

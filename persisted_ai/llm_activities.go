@@ -10,6 +10,7 @@ import (
 	"sidekick/srv"
 
 	"github.com/rs/zerolog/log"
+	"github.com/segmentio/ksuid"
 	"go.temporal.io/sdk/activity"
 )
 
@@ -95,6 +96,7 @@ func (la *LlmActivities) ChatStream(ctx context.Context, options ChatStreamOptio
 	response, err := toolChatter.ChatStream(ctx, options.ToolChatOptions, deltaChan, progressChan)
 	if response != nil {
 		response.Provider = options.Params.ModelConfig.Provider
+		ensureToolCallIds(response)
 	}
 	if err != nil {
 		return response, err
@@ -145,6 +147,7 @@ Sidekick: got an unexpected empty response. Retrying with modified prompt...
 	if retryResponse != nil {
 		retryResponse.Provider = chatOptions.Params.ModelConfig.Provider
 		retryResponse.Role = llm.ChatMessageRoleAssistant
+		ensureToolCallIds(retryResponse)
 	}
 	if err != nil {
 		return retryResponse, err
@@ -168,6 +171,14 @@ Sidekick: got an unexpected empty response. Retrying with modified prompt...
 	}
 
 	return retryResponse, nil
+}
+
+func ensureToolCallIds(response *llm.ChatMessageResponse) {
+	for i := range response.ToolCalls {
+		if response.ToolCalls[i].Id == "" {
+			response.ToolCalls[i].Id = "sidetc_" + ksuid.New().String()
+		}
+	}
 }
 
 func getToolChatter(config common.ModelConfig) (llm.ToolChatter, error) {

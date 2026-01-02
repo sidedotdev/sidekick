@@ -15,7 +15,7 @@ import (
 )
 
 const anthropicDefaultModel = "claude-sonnet-4-5"
-const anthropicDefaultMaxTokens = 8000
+const anthropicDefaultMaxTokens = 16000
 
 type AnthropicResponsesProvider struct{}
 
@@ -229,8 +229,10 @@ func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options,
 		StopReason:   string(finalMessage.StopReason),
 		StopSequence: finalMessage.StopSequence,
 		Usage: Usage{
-			InputTokens:  int(finalMessage.Usage.InputTokens),
-			OutputTokens: int(finalMessage.Usage.OutputTokens),
+			InputTokens:           int(finalMessage.Usage.InputTokens),
+			OutputTokens:          int(finalMessage.Usage.OutputTokens),
+			CacheReadInputTokens:  int(finalMessage.Usage.CacheReadInputTokens),
+			CacheWriteInputTokens: int(finalMessage.Usage.CacheCreationInputTokens),
 		},
 	}
 

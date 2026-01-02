@@ -6,14 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestGetFlowActions(t *testing.T) {
 	ctx := context.Background()
-	db := NewTestRedisStorage()
+	db := newTestRedisStorage()
 	flowAction1 := domain.FlowAction{
 		WorkspaceId: "TEST_WORKSPACE_ID",
 		FlowId:      "test-flow-id",
@@ -80,7 +79,7 @@ func TestPersistFlowAction(t *testing.T) {
 
 func TestPersistFlowAction_MissingId(t *testing.T) {
 	ctx := context.Background()
-	db := NewTestRedisStorage()
+	db := newTestRedisStorage()
 	flowAction := domain.FlowAction{
 		WorkspaceId: "TEST_WORKSPACE_ID",
 		FlowId:      "flow_" + ksuid.New().String(),
@@ -92,7 +91,7 @@ func TestPersistFlowAction_MissingId(t *testing.T) {
 
 func TestPersistFlowAction_MissingFlowId(t *testing.T) {
 	ctx := context.Background()
-	db := NewTestRedisStorage()
+	db := newTestRedisStorage()
 	flowAction := domain.FlowAction{
 		Id:          "id_" + ksuid.New().String(),
 		WorkspaceId: "TEST_WORKSPACE_ID",
@@ -104,7 +103,7 @@ func TestPersistFlowAction_MissingFlowId(t *testing.T) {
 
 func TestPersistFlowAction_MissingWorkspaceId(t *testing.T) {
 	ctx := context.Background()
-	db := NewTestRedisStorage()
+	db := newTestRedisStorage()
 	flowAction := domain.FlowAction{
 		Id:     "id_" + ksuid.New().String(),
 		FlowId: "flow_" + ksuid.New().String(),
@@ -118,19 +117,14 @@ func TestStreamFlowActionChanges(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Use a test Redis instance
-	redisClient := redis.NewClient(&redis.Options{
-		Addr: "localhost:6379",
-		DB:   15, // Use a separate database for testing
-	})
-	defer redisClient.Close()
-
-	// Clear the test database before starting
-	if err := redisClient.FlushDB(ctx).Err(); err != nil {
-		t.Fatalf("Failed to flush test database: %v", err)
-	}
-
 	streamer := NewStreamer()
+	defer streamer.Client.Close()
+
+	// Clear the stream used by this test
+	streamKey := "test-workspace:test-flow:flow_action_changes"
+	if err := streamer.Client.Del(ctx, streamKey).Err(); err != nil {
+		t.Fatalf("Failed to clear test stream: %v", err)
+	}
 
 	workspaceId := "test-workspace"
 	flowId := "test-flow"
@@ -138,10 +132,17 @@ func TestStreamFlowActionChanges(t *testing.T) {
 	// Test initial data streaming
 	flowActionChan, errChan := streamer.StreamFlowActionChanges(ctx, workspaceId, flowId, "0")
 
+	// Use non-UTC timestamps with nanosecond precision to validate UTC normalization
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("Failed to load timezone: %v", err)
+	}
+	baseTime := time.Date(2025, 6, 15, 10, 30, 45, 123456789, loc)
+
 	// Add some initial flow actions
 	initialFlowActions := []domain.FlowAction{
-		{Id: "1", WorkspaceId: workspaceId, FlowId: flowId, ActionType: "type1"},
-		{Id: "2", WorkspaceId: workspaceId, FlowId: flowId, ActionType: "type2"},
+		{Id: "1", WorkspaceId: workspaceId, FlowId: flowId, ActionType: "type1", Created: baseTime, Updated: baseTime.Add(time.Hour)},
+		{Id: "2", WorkspaceId: workspaceId, FlowId: flowId, ActionType: "type2", Created: baseTime.Add(2 * time.Hour), Updated: baseTime.Add(3 * time.Hour)},
 	}
 
 	for _, fa := range initialFlowActions {
@@ -157,6 +158,28 @@ func TestStreamFlowActionChanges(t *testing.T) {
 			if fa.Id != initialFlowActions[i].Id || fa.ActionType != initialFlowActions[i].ActionType {
 				t.Errorf("Received unexpected flow action: got %v, want %v", fa, initialFlowActions[i])
 			}
+			// Verify timestamps are in UTC and preserve nanosecond precision
+			expectedCreated := initialFlowActions[i].Created.UTC()
+			expectedUpdated := initialFlowActions[i].Updated.UTC()
+			if !fa.Created.Equal(expectedCreated) {
+				t.Errorf("Created timestamp mismatch: got %v, want %v", fa.Created, expectedCreated)
+			}
+			if fa.Created.Location() != time.UTC {
+				t.Errorf("Created timestamp not in UTC: got location %v", fa.Created.Location())
+			}
+			if !fa.Updated.Equal(expectedUpdated) {
+				t.Errorf("Updated timestamp mismatch: got %v, want %v", fa.Updated, expectedUpdated)
+			}
+			if fa.Updated.Location() != time.UTC {
+				t.Errorf("Updated timestamp not in UTC: got location %v", fa.Updated.Location())
+			}
+			// Verify nanosecond precision is preserved
+			if fa.Created.Nanosecond() != expectedCreated.Nanosecond() {
+				t.Errorf("Created nanoseconds not preserved: got %d, want %d", fa.Created.Nanosecond(), expectedCreated.Nanosecond())
+			}
+			if fa.Updated.Nanosecond() != expectedUpdated.Nanosecond() {
+				t.Errorf("Updated nanoseconds not preserved: got %d, want %d", fa.Updated.Nanosecond(), expectedUpdated.Nanosecond())
+			}
 		case err := <-errChan:
 			t.Fatalf("Received unexpected error: %v", err)
 		case <-time.After(time.Second):
@@ -165,7 +188,14 @@ func TestStreamFlowActionChanges(t *testing.T) {
 	}
 
 	// Test streaming of new data
-	newFlowAction := domain.FlowAction{Id: "3", WorkspaceId: workspaceId, FlowId: flowId, ActionType: "type3"}
+	newFlowAction := domain.FlowAction{
+		Id:          "3",
+		WorkspaceId: workspaceId,
+		FlowId:      flowId,
+		ActionType:  "type3",
+		Created:     baseTime.Add(4 * time.Hour),
+		Updated:     baseTime.Add(5 * time.Hour),
+	}
 	if err := streamer.AddFlowActionChange(ctx, newFlowAction); err != nil {
 		t.Fatalf("Failed to add new flow action: %v", err)
 	}
@@ -174,6 +204,15 @@ func TestStreamFlowActionChanges(t *testing.T) {
 	case fa := <-flowActionChan:
 		if fa.Id != newFlowAction.Id || fa.ActionType != newFlowAction.ActionType {
 			t.Errorf("Received unexpected flow action: got %v, want %v", fa, newFlowAction)
+		}
+		// Verify timestamps for new flow action
+		expectedCreated := newFlowAction.Created.UTC()
+		expectedUpdated := newFlowAction.Updated.UTC()
+		if !fa.Created.Equal(expectedCreated) || fa.Created.Location() != time.UTC {
+			t.Errorf("New flow action Created timestamp issue: got %v (loc: %v), want %v UTC", fa.Created, fa.Created.Location(), expectedCreated)
+		}
+		if !fa.Updated.Equal(expectedUpdated) || fa.Updated.Location() != time.UTC {
+			t.Errorf("New flow action Updated timestamp issue: got %v (loc: %v), want %v UTC", fa.Updated, fa.Updated.Location(), expectedUpdated)
 		}
 	case err := <-errChan:
 		t.Fatalf("Received unexpected error: %v", err)

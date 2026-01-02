@@ -90,7 +90,10 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		model = options.Params.ModelConfig.Model
 	}
 
-	contents := googleFromChatMessages(options.Params.Messages)
+	modelInfo, _ := common.GetModel(options.Params.Provider, model)
+	isReasoningModel := modelInfo != nil && modelInfo.Reasoning
+
+	contents := googleFromChatMessages(options.Params.Messages, isReasoningModel)
 
 	config := &genai.GenerateContentConfig{}
 
@@ -105,8 +108,7 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 	}
 
 	var actualReasoningEffort string
-	modelInfo, _ := common.GetModel(options.Params.Provider, model)
-	if modelInfo != nil && modelInfo.Reasoning {
+	if isReasoningModel {
 		config.ThinkingConfig = &genai.ThinkingConfig{
 			IncludeThoughts: true,
 		}
@@ -156,8 +158,8 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 	usage := Usage{} // Default to zero values
 	if lastResult != nil && lastResult.UsageMetadata != nil {
 		usage.InputTokens = int(lastResult.UsageMetadata.PromptTokenCount)
-		usage.OutputTokens = int(lastResult.UsageMetadata.CandidatesTokenCount)
-		// Note: TotalTokenCount is also available if needed later: int(lastResult.UsageMetadata.TotalTokenCount)
+		usage.OutputTokens = int(lastResult.UsageMetadata.CandidatesTokenCount) + int(lastResult.UsageMetadata.ThoughtsTokenCount)
+		usage.CacheReadInputTokens = int(lastResult.UsageMetadata.CachedContentTokenCount)
 	}
 
 	return &ChatMessageResponse{
@@ -192,7 +194,7 @@ func googleFromToolChoice(toolChoice ToolChoice) (*genai.ToolConfig, error) {
 	}, nil
 }
 
-func googleFromChatMessages(messages []ChatMessage) []*genai.Content {
+func googleFromChatMessages(messages []ChatMessage, isReasoningModel bool) []*genai.Content {
 	var contents []*genai.Content
 	var currentRole string
 	var currentParts []*genai.Part
@@ -285,13 +287,18 @@ func googleFromChatMessages(messages []ChatMessage) []*genai.Content {
 				args["invalid_json_stringified"] = toolCall.Arguments
 			}
 
+			thoughtSignature := toolCall.Signature
+			if isReasoningModel && len(toolCall.Signature) == 0 {
+				thoughtSignature = []byte("skip_thought_signature_validator")
+			}
+
 			currentParts = append(currentParts, &genai.Part{
 				FunctionCall: &genai.FunctionCall{
 					ID:   toolCall.Id,
 					Name: toolCall.Name,
 					Args: args,
 				},
-				ThoughtSignature: toolCall.Signature,
+				ThoughtSignature: thoughtSignature,
 			})
 		}
 	}

@@ -1,6 +1,6 @@
 An *edit block* is formatted like so:
 
-- The first line is "```" (without quotes), optionally followed by the
+- The first line is "~~~~" (without quotes), optionally followed by the
   language name, as in regular code blocks.
 - The second line is "edit_block:" followed by the edit block sequence number,
   which must start at 1 and be auto-incremented for each edit block.
@@ -16,7 +16,7 @@ An *edit block* is formatted like so:
 - The next lines are the new lines of text that replace the old lines
 - The second-last line is "{{{replace}}}" (without quotes) when searching.
   When creating or appending to file, instead of "REPLACE_EXACT" it should be "NEW_LINES"
-- The last line is "```" (without quotes)
+- The last line is "~~~~" (without quotes)
 
 We use the above format for each *edit block*. Do not place multiple conflict
 markers within a single *edit block*. Above the OLD LINES section, write the path
@@ -26,7 +26,7 @@ LINES section, write out the new code, also verbatim, as it should appear in the
 final file. Here's an example of an *edit block*, adding a new method named
 another_method above an existing method:
 
-```python
+~~~~python
 edit_block:1
 foo/bar/something.py
 {{{search}}}
@@ -38,11 +38,11 @@ foo/bar/something.py
 
 	def existing_method(x):
 {{{replace}}}
-```
+~~~~
 
 Here's another example, redefining the method added above:
 
-```python
+~~~~python
 edit_block:2
 foo/bar/something.py
 {{{search}}}
@@ -55,11 +55,11 @@ foo/bar/something.py
 		print(b)
 		return a + b
 {{{replace}}}
-```
+~~~~
 
 An example adding a new class above an existing one:
 
-```python
+~~~~python
 edit_block:3
 foo/bar/something.py
 {{{search}}}
@@ -70,14 +70,14 @@ class TheNewClass():
 
 class SomeExistingClass():
 {{{replace}}}
-```
+~~~~
 
 Notice we add last lines in the search section as the last lines in the replace
 section, to ensure we don't break the existing class.
 
 Anther example, this time adding a new method to the top of an existing class:
 
-```python
+~~~~python
 edit_block:4
 foo/bar/something.py
 {{{search}}}
@@ -87,9 +87,9 @@ class SomeExistingClass():
 	def the_new_method():
 		pass
 {{{replace}}}
-```
+~~~~
 
-Every edit block must be fenced with '```'. The first
+Every edit block must be fenced with '~~~~'. The first
 line after the fencing should be the file name, followed directly by the
 conflict markers.
 
@@ -100,14 +100,14 @@ To create new files, provide a new file path, use "CREATE_FILE" instead of
 "SEARCH_EXACT" and 0 lines in the OLD LINES section. For example, the following edit
 block creates the file at path "foo/bar/newfile.json":
 
-```json
+~~~~json
 edit_block:5
 foo/bar/newfile.json
 <<<<<<< CREATE_FILE
 {{{divider}}}
 {"key": "value"}
 >>>>>>> NEW_LINES
-```
+~~~~
 
 To append at the end (emphasis: THE END), of an existing file, use
 "APPEND_TO_FILE" instead of "CREATE_FILE" and 0 lines in the OLD LINES section.
@@ -139,7 +139,7 @@ imports at the top of the file: edit those import lines to add the new imports
 instead.
 11. Edit a single symbol (function/type/etc) at a time per edit block. For
 multiple edits to multiple symbols, use multiple separate edit blocks, each
-closed via the last line "```". Do this even if the symbols are beside each
+closed via the last line "~~~~". Do this even if the symbols are beside each
 other in the same file.
 12. Never try to edit any lines of code that you don't see. Instead, use tools
 to view all the lines of code you want to edit first if the lines you want to
@@ -152,7 +152,13 @@ fine to add such comments if thinking out loud, not within an edit block, but
 then remove these extraneous & unnecessary comments for the final formatted edit
 blocks.
 
+{{#applyEditBlocksImmediately}}
+Edit blocks are applied immediately after each response. You will receive
+feedback about whether each edit block was applied successfully or failed.
+{{/applyEditBlocksImmediately}}
+{{^applyEditBlocksImmediately}}
 When you are done with all edit blocks, avoid using further tools: output
 without a tool call is the signal for us to finally apply those edits to the
 filesystem. Edit blocks from all messages that include tool calls will remain
 pending until that point.
+{{/applyEditBlocksImmediately}}

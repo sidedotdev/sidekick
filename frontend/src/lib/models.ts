@@ -107,10 +107,12 @@ export interface FlowAction {
   actionStatus: ActionStatus
   actionResult: string
   isHumanAction: boolean
+  streamingData?: StreamingData
 }
 
 export interface SubflowTree {
   name: string;
+  id?: string;
   description?: string | null;
   children: Array<FlowAction | SubflowTree>;
 }
@@ -139,6 +141,8 @@ export interface ChatCompletionMessage {
 export interface Usage {
   inputTokens?: number
   outputTokens?: number
+  cacheReadInputTokens?: number
+  cacheWriteInputTokens?: number
 }
 
 export interface ToolCall {
@@ -159,6 +163,11 @@ export interface ChatMessageDelta {
   content: string;
   toolCalls: ToolCall[];
   usage: Usage;
+}
+
+export interface StreamingData {
+  content: string;
+  toolCalls: ToolCall[];
 }
 
 // --- From Go definition ---

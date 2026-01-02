@@ -82,17 +82,24 @@ const filteredTasks = computed(() => {
 })
 
 const groupedTasks = computed(() => {
-  return filteredTasks.value
-    .reduce((grouped, task) => {
-      grouped[task.agentType] = [...(grouped[task.agentType] || []), task];
-      grouped[task.agentType].sort((a: FullTask, b: FullTask) => {
-        if (b.updated === a.updated) {
-          return b.id > a.id ? 1 : -1;
-        }
-        return b.updated > a.updated ? 1 : -1;
-      });
-      return grouped;
-    }, {} as Record<AgentType, FullTask[]>);
+  const grouped = filteredTasks.value.reduce((acc, task) => {
+    if (!acc[task.agentType]) {
+      acc[task.agentType] = [];
+    }
+    acc[task.agentType].push(task);
+    return acc;
+  }, {} as Record<AgentType, FullTask[]>);
+
+  for (const agentType in grouped) {
+    grouped[agentType as AgentType].sort((a: FullTask, b: FullTask) => {
+      if (b.updated === a.updated) {
+        return b.id > a.id ? 1 : -1;
+      }
+      return b.updated > a.updated ? 1 : -1;
+    });
+  }
+
+  return grouped;
 })
 
 

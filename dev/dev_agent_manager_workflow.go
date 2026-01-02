@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sidekick/domain"
+	"sidekick/flow_action"
 	"sidekick/utils"
 	"strings"
 	"time"
@@ -114,7 +115,7 @@ func handleRequestForUser(ctx workflow.Context, c workflow.ReceiveChannel, input
 	ctx = setActivityOptions(ctx)
 	log := workflow.GetLogger(ctx)
 	log.Info("Request for user signal received")
-	var req RequestForUser
+	var req flow_action.RequestForUser
 	c.Receive(ctx, &req)
 
 	var flow domain.Flow
@@ -133,7 +134,7 @@ func handleRequestForUser(ctx workflow.Context, c workflow.ReceiveChannel, input
 
 		if version >= 1 {
 			status := domain.TaskStatusBlocked
-			if req.RequestKind == RequestKindMergeApproval {
+			if req.RequestKind == flow_action.RequestKindMergeApproval {
 				status = domain.TaskStatusInReview
 			}
 			update := TaskUpdate{
@@ -159,7 +160,7 @@ func handleUserResponse(ctx workflow.Context, c workflow.ReceiveChannel, ima *De
 	ctx = setActivityOptions(ctx)
 	log := workflow.GetLogger(ctx)
 	log.Info("User response signal received")
-	var userResponse UserResponse
+	var userResponse flow_action.UserResponse
 	c.Receive(ctx, &userResponse)
 
 	// NOTE: it's expected that the workflow we're signaling will handle

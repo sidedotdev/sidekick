@@ -10,13 +10,13 @@ import (
 )
 
 func NewTestRedisService() (*srv.Delegator, *redis.Client) {
-	storage := NewTestRedisStorage()
+	storage := newTestRedisStorage()
 	streamer := NewTestRedisStreamer()
 	streamer.Client = storage.Client
 	return srv.NewDelegator(storage, streamer), storage.Client
 }
 
-func NewTestRedisStorage() *Storage {
+func newTestRedisStorage() *Storage {
 	db := &Storage{Client: NewTestRedisClient()}
 
 	// Flush the database synchronously to ensure a clean state for each test

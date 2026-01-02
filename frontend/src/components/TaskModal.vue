@@ -90,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import AutogrowTextarea from './AutogrowTextarea.vue'
 import SplitButton from 'primevue/splitbutton'
 import Button from 'primevue/button'
@@ -99,96 +99,14 @@ import SegmentedControl from './SegmentedControl.vue'
 import BranchSelector from './BranchSelector.vue'
 import LlmConfigEditor from './LlmConfigEditor.vue'
 import { store } from '../lib/store'
-import type { Task, TaskStatus, LLMConfig, ModelConfig } from '../lib/models'
-
-const PRESETS_STORAGE_KEY = 'sidekick_model_presets'
-
-const modelConfigsEqual = (a: ModelConfig[], b: ModelConfig[]): boolean => {
-  if (a.length !== b.length) return false
-  const normalize = (c: ModelConfig) => `${c.provider}|${c.model}|${c.reasoningEffort || ''}`
-  const setA = new Set(a.map(normalize))
-  const setB = new Set(b.map(normalize))
-  if (setA.size !== setB.size) return false
-  for (const item of setA) {
-    if (!setB.has(item)) return false
-  }
-  return true
-}
-
-const llmConfigsEqual = (a: LLMConfig, b: LLMConfig): boolean => {
-  if (!modelConfigsEqual(a.defaults || [], b.defaults || [])) return false
-  
-  const keysA = Object.keys(a.useCaseConfigs || {}).sort()
-  const keysB = Object.keys(b.useCaseConfigs || {}).sort()
-  if (keysA.length !== keysB.length) return false
-  if (!keysA.every((k, i) => k === keysB[i])) return false
-  
-  for (const key of keysA) {
-    if (!modelConfigsEqual(a.useCaseConfigs[key] || [], b.useCaseConfigs[key] || [])) {
-      return false
-    }
-  }
-  return true
-}
-
-interface ModelPreset {
-  id: string
-  name: string
-  config: LLMConfig
-}
+import { getModelSummary } from '../lib/llmPresets'
+import { loadPresets, savePresets, llmConfigsEqual, type ModelPreset } from '../lib/llmPresetStorage'
+import type { Task, TaskStatus, LLMConfig } from '../lib/models'
 
 type PresetOption = 
   | { value: 'default'; label: string }
   | { value: 'add_preset'; label: string }
   | { value: string; label: string; preset: ModelPreset }
-
-const loadPresets = (): ModelPreset[] => {
-  try {
-    const stored = localStorage.getItem(PRESETS_STORAGE_KEY)
-    return stored ? JSON.parse(stored) : []
-  } catch {
-    return []
-  }
-}
-
-const savePresets = (presets: ModelPreset[]) => {
-  localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets))
-}
-
-const capitalizeProvider = (provider: string): string => {
-  if (provider === 'openai') return 'OpenAI'
-  if (provider === 'anthropic') return 'Anthropic'
-  if (provider === 'google') return 'Google'
-  return provider.charAt(0).toUpperCase() + provider.slice(1)
-}
-
-const getModelSummary = (config: LLMConfig): string => {
-  const models: string[] = []
-  const defaultModel = config.defaults?.[0]
-  if (defaultModel) {
-    if (defaultModel.model) {
-      models.push(defaultModel.model)
-    } else if (defaultModel.provider) {
-      models.push(`${capitalizeProvider(defaultModel.provider)} (default)`)
-    }
-  }
-  
-  for (const [, configs] of Object.entries(config.useCaseConfigs || {})) {
-    const ucConfig = configs?.[0]
-    if (ucConfig) {
-      if (ucConfig.model && !models.includes(ucConfig.model)) {
-        models.push(ucConfig.model)
-      } else if (ucConfig.provider && !ucConfig.model) {
-        const providerDefault = `${capitalizeProvider(ucConfig.provider)} (default)`
-        if (!models.includes(providerDefault)) {
-          models.push(providerDefault)
-        }
-      }
-    }
-  }
-  
-  return models.length > 0 ? models.join(' + ') : 'No models configured'
-}
 
 const validateLlmConfig = (config: LLMConfig): boolean => {
   const defaultConfig = config.defaults?.[0]
@@ -215,14 +133,42 @@ const emit = defineEmits<{
 
 const isEditMode = computed(() => !!props.task?.id)
 
-const description = ref(props.task?.description || '')
+const workspaceId = ref<string>(props.task?.workspaceId || store.workspaceId as string)
+
+const getDraftDescriptionKey = () => `draftDescription_${workspaceId.value}`
+const getLastBranchKey = () => `lastSelectedBranch_${workspaceId.value}`
+
+const getInitialDescription = (): string => {
+  if (props.task) return props.task.description ?? ''
+  return localStorage.getItem(getDraftDescriptionKey()) || ''
+}
+
+const getInitialBranch = (): string | null => {
+  const provided = props.task?.flowOptions?.startBranch ?? null
+  if (provided) return provided
+  return localStorage.getItem(getLastBranchKey()) || null
+}
+
+const initialDescriptionValue = getInitialDescription()
+const initialBranchValue = getInitialBranch()
+
+const description = ref(initialDescriptionValue)
 const status = ref<TaskStatus>(props.task?.status || 'to_do')
 const flowType = ref(props.task?.flowType || localStorage.getItem('lastUsedFlowType') || 'basic_dev')
 const envType = ref<string>(props.task?.flowOptions?.envType || localStorage.getItem('lastUsedEnvType') || 'local')
 const determineRequirements = ref<boolean>(props.task?.flowOptions?.determineRequirements ?? true)
 const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
-const selectedBranch = ref<string | null>(props.task?.flowOptions?.startBranch || null)
-const workspaceId = ref<string>(props.task?.workspaceId || store.workspaceId as string)
+const selectedBranch = ref<string | null>(initialBranchValue)
+
+watch(description, (newVal) => {
+  if (!isEditMode.value) {
+    if (newVal.trim()) {
+      localStorage.setItem(getDraftDescriptionKey(), newVal)
+    } else {
+      localStorage.removeItem(getDraftDescriptionKey())
+    }
+  }
+})
 
 // Model configuration presets
 const presets = ref<ModelPreset[]>(loadPresets())
@@ -396,6 +342,10 @@ const submitTask = async () => {
   localStorage.setItem('lastUsedEnvType', envType.value)
 
   if (!isEditMode.value) {
+    localStorage.removeItem(getDraftDescriptionKey())
+    if (selectedBranch.value) {
+      localStorage.setItem(getLastBranchKey(), selectedBranch.value)
+    }
     description.value = ''
     flowType.value = ''
     status.value = 'to_do'
@@ -448,15 +398,13 @@ const safeClose = () => {
                   hasModelConfigChanges();
   } else {
     // Check changes for a new task: Compare current values against initial defaults
-    const initialDescription = '';
-    const initialSelectedBranch = null;
     const initialFlowType = localStorage.getItem('lastUsedFlowType') || 'basic_dev';
     const initialEnvType = localStorage.getItem('lastUsedEnvType') || 'local';
-    const initialDetermineRequirements = true; // Default for new task
+    const initialDetermineRequirements = true;
     const initialPlanningPrompt = '';
 
-    hasChanges = description.value !== initialDescription ||
-                 selectedBranch.value !== initialSelectedBranch ||
+    hasChanges = description.value !== initialDescriptionValue ||
+                 selectedBranch.value !== initialBranchValue ||
                  flowType.value !== initialFlowType ||
                  envType.value !== initialEnvType ||
                  determineRequirements.value !== initialDetermineRequirements ||

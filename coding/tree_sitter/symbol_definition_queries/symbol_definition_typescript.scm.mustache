@@ -1,3 +1,10 @@
+; TypeScript symbol definition query
+; Covers: function_declaration, function_expression, function_signature,
+;         generator_function_declaration, interface_declaration, type_alias_declaration,
+;         class_declaration, abstract_class_declaration, call_expression,
+;         variable_declaration, lexical_declaration, method_definition, enum_declaration,
+;         ambient_declaration (declare statements)
+
 (
   (function_declaration
     name: (identifier) @name
@@ -12,6 +19,9 @@
   (#eq? @name "{{SymbolName}}")
 ) @definition
 
+; function_signature appears in two contexts:
+; 1. Inside ambient_declaration (e.g., `declare function foo(): void;`)
+; 2. As standalone overload signatures before a function implementation
 (
   (function_signature
     name: (identifier) @name
@@ -43,6 +53,20 @@
 (
   (class_declaration
     name: (_) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (abstract_class_declaration
+    name: (_) @name
+  )
+  (#eq? @name "{{SymbolName}}")
+) @definition
+
+(
+  (generator_function_declaration
+    name: (identifier) @name
   )
   (#eq? @name "{{SymbolName}}")
 ) @definition

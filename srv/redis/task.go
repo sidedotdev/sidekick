@@ -297,6 +297,12 @@ func (s Streamer) getTaskChanges(ctx context.Context, workspaceId, streamMessage
 	for _, message := range streams[0].Messages {
 		var task domain.Task
 		utils.Transcode(message.Values, &task)
+		task.Created = task.Created.UTC()
+		task.Updated = task.Updated.UTC()
+		if task.Archived != nil {
+			utc := task.Archived.UTC()
+			task.Archived = &utc
+		}
 		tasks = append(tasks, task)
 	}
 

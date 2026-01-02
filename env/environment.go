@@ -3,6 +3,7 @@ package env
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,7 +12,16 @@ import (
 	"sidekick/coding/unix"
 	"sidekick/common"
 	"sidekick/domain"
+
+	"go.temporal.io/sdk/temporal"
 )
+
+// ErrBranchAlreadyExists is returned when attempting to create a worktree
+// with a branch name that already exists
+var ErrBranchAlreadyExists = errors.New("branch already exists")
+
+// ErrTypeBranchAlreadyExists is the application error type for branch already exists errors
+const ErrTypeBranchAlreadyExists = "BranchAlreadyExists"
 
 type EnvType string
 
@@ -63,7 +73,17 @@ func NewLocalEnv(ctx context.Context, params LocalEnvParams) (Env, error) {
 
 func NewLocalGitWorktreeActivity(ctx context.Context, params LocalEnvParams, worktree domain.Worktree) (EnvContainer, error) {
 	env, err := NewLocalGitWorktreeEnv(ctx, params, worktree)
-	return EnvContainer{Env: env}, err
+	if err != nil {
+		if errors.Is(err, ErrBranchAlreadyExists) {
+			return EnvContainer{}, temporal.NewNonRetryableApplicationError(
+				err.Error(),
+				ErrTypeBranchAlreadyExists,
+				err,
+			)
+		}
+		return EnvContainer{}, err
+	}
+	return EnvContainer{Env: env}, nil
 }
 
 func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree domain.Worktree) (Env, error) {
@@ -100,7 +120,11 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 	}
 
 	if addWorktreeOutput.ExitStatus != 0 {
-		return nil, fmt.Errorf("git worktree add command failed with exit status %d: %s", addWorktreeOutput.ExitStatus, addWorktreeOutput.Stderr)
+		err := fmt.Errorf("git worktree add command failed with exit status %d: %s", addWorktreeOutput.ExitStatus, addWorktreeOutput.Stderr)
+		if strings.Contains(addWorktreeOutput.Stderr, "already exists") {
+			return nil, fmt.Errorf("%w: %v", ErrBranchAlreadyExists, err)
+		}
+		return nil, err
 	}
 
 	return &LocalGitWorktreeEnv{WorkingDirectory: workingDir}, nil
@@ -150,6 +174,15 @@ type EnvContainer struct {
 
 // MarshalJSON returns the JSON encoding of the EnvContainer.
 func (ec EnvContainer) MarshalJSON() ([]byte, error) {
+	if ec.Env == nil {
+		return json.Marshal(struct {
+			Type string
+			Env  Env
+		}{
+			Type: "",
+			Env:  nil,
+		})
+	}
 	// Marshal to type and actual data to handle unmarshaling to specific interface type
 	return json.Marshal(struct {
 		Type string
@@ -183,6 +216,8 @@ func (ec *EnvContainer) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		ec.Env = lgwe
+	case "":
+		ec.Env = nil
 	default:
 		return fmt.Errorf("unknown Env type: %s", v.Type)
 	}

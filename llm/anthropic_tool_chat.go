@@ -84,7 +84,7 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 		temperature = *options.Params.Temperature
 	}
 
-	maxTokensToUse := int64(8000)
+	maxTokensToUse := int64(16000)
 	if options.Params.MaxTokens > 0 {
 		maxTokensToUse = int64(options.Params.MaxTokens)
 	}
@@ -311,8 +311,10 @@ func anthropicToChatMessageResponse(message anthropic.Message, provider string) 
 		StopReason:   string(message.StopReason),
 		StopSequence: message.StopSequence,
 		Usage: Usage{
-			InputTokens:  int(message.Usage.InputTokens),
-			OutputTokens: int(message.Usage.OutputTokens),
+			InputTokens:           int(message.Usage.InputTokens),
+			OutputTokens:          int(message.Usage.OutputTokens),
+			CacheReadInputTokens:  int(message.Usage.CacheReadInputTokens),
+			CacheWriteInputTokens: int(message.Usage.CacheCreationInputTokens),
 		},
 		Model:    message.Model,
 		Provider: provider,

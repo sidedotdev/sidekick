@@ -84,6 +84,7 @@ func (s *GitDiffWorkflowTestSuite) AfterTest(suiteName, testName string) {
 }
 
 func TestGitDiffWorkflowTestSuite(t *testing.T) {
+	t.Parallel()
 	suite.Run(t, new(GitDiffWorkflowTestSuite))
 }
 
@@ -163,7 +164,7 @@ func TestGitDiffActivity(t *testing.T) {
 			params: GitDiffParams{
 				Staged:       true,
 				ThreeDotDiff: true,
-				BaseBranch:   "main",
+				BaseRef:      "main",
 			},
 			setupRepo: func(t *testing.T, repoDir string) {
 				// Create initial commit on main
@@ -189,14 +190,14 @@ func TestGitDiffActivity(t *testing.T) {
 			params: GitDiffParams{
 				Staged:       true,
 				ThreeDotDiff: true,
-				BaseBranch:   "",
+				BaseRef:      "",
 			},
 			setupRepo: func(t *testing.T, repoDir string) {
 				// Minimal setup since this should error
 				createFileAndCommit(t, repoDir, "file1.txt", "content", "commit")
 			},
 			expectError:   true,
-			errorContains: "base branch is required for three-dot diff",
+			errorContains: "base ref is required for three-dot diff",
 		},
 		{
 			name: "only_staged_true",
@@ -220,7 +221,7 @@ func TestGitDiffActivity(t *testing.T) {
 			name: "only_three_dot_diff_true",
 			params: GitDiffParams{
 				ThreeDotDiff: true,
-				BaseBranch:   "main",
+				BaseRef:      "main",
 			},
 			setupRepo: func(t *testing.T, repoDir string) {
 				// Create initial commit on main
@@ -240,13 +241,13 @@ func TestGitDiffActivity(t *testing.T) {
 			name: "only_three_dot_diff_true_empty_base_branch",
 			params: GitDiffParams{
 				ThreeDotDiff: true,
-				BaseBranch:   "",
+				BaseRef:      "",
 			},
 			setupRepo: func(t *testing.T, repoDir string) {
 				createFileAndCommit(t, repoDir, "file1.txt", "content", "commit")
 			},
 			expectError:   true,
-			errorContains: "base branch is required for three-dot diff",
+			errorContains: "base ref is required for three-dot diff",
 		},
 		{
 			name: "neither_flag_true_working_tree_changes",
@@ -329,7 +330,7 @@ func TestGitDiffActivity(t *testing.T) {
 			params: GitDiffParams{
 				Staged:           true,
 				ThreeDotDiff:     true,
-				BaseBranch:       "main",
+				BaseRef:          "main",
 				IgnoreWhitespace: true,
 				FilePaths:        []string{"target.txt"},
 			},
@@ -364,6 +365,86 @@ func TestGitDiffActivity(t *testing.T) {
 			expectError:  false,
 			expectOutput: false,
 		},
+		{
+			name: "three_dot_diff_with_shell_metachar_in_branch_name",
+			params: GitDiffParams{
+				ThreeDotDiff: true,
+				BaseRef:      "base's-branch",
+			},
+			setupRepo: func(t *testing.T, repoDir string) {
+				// Create initial commit on main
+				createFileAndCommit(t, repoDir, "file1.txt", "main content", "main commit")
+
+				// Create branch with shell metacharacter (single quote) in name
+				runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "base's-branch")
+
+				// Add a commit on this branch
+				createFileAndCommit(t, repoDir, "base.txt", "base content", "base commit")
+
+				// Create and switch to feature branch
+				runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
+
+				// Add commits on feature branch
+				createFileAndCommit(t, repoDir, "file2.txt", "feature content", "feature commit")
+			},
+			expectError:    false,
+			expectOutput:   true,
+			outputContains: []string{"file2.txt", "feature content"},
+		},
+		{
+			name: "staged_with_shell_metachar_in_base_ref",
+			params: GitDiffParams{
+				Staged:  true,
+				BaseRef: "base's-branch",
+			},
+			setupRepo: func(t *testing.T, repoDir string) {
+				// Create initial commit on main
+				createFileAndCommit(t, repoDir, "file1.txt", "initial", "initial commit")
+
+				// Create branch with shell metacharacter and add a commit
+				runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "base's-branch")
+				createFileAndCommit(t, repoDir, "base.txt", "base content", "base commit")
+
+				// Create feature branch
+				runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
+
+				// Stage some changes
+				err := os.WriteFile(filepath.Join(repoDir, "staged.txt"), []byte("staged content"), fs.FileMode(0644))
+				require.NoError(t, err)
+				runGitCommandInTestRepo(t, repoDir, "add", "staged.txt")
+			},
+			expectError:    false,
+			expectOutput:   true,
+			outputContains: []string{"staged.txt", "staged content"},
+		},
+		{
+			name: "staged_and_three_dot_diff_with_shell_metachar_in_branch_name",
+			params: GitDiffParams{
+				Staged:       true,
+				ThreeDotDiff: true,
+				BaseRef:      "base's-branch",
+			},
+			setupRepo: func(t *testing.T, repoDir string) {
+				// Create initial commit on main
+				createFileAndCommit(t, repoDir, "file1.txt", "initial", "initial commit")
+
+				// Create branch with shell metacharacter
+				runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "base's-branch")
+				createFileAndCommit(t, repoDir, "base.txt", "base content", "base commit")
+
+				// Create feature branch
+				runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
+				createFileAndCommit(t, repoDir, "committed.txt", "committed content", "feature commit")
+
+				// Stage some changes
+				err := os.WriteFile(filepath.Join(repoDir, "staged.txt"), []byte("staged content"), fs.FileMode(0644))
+				require.NoError(t, err)
+				runGitCommandInTestRepo(t, repoDir, "add", "staged.txt")
+			},
+			expectError:    false,
+			expectOutput:   true,
+			outputContains: []string{"staged.txt", "staged content", "committed.txt", "committed content"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -397,6 +478,121 @@ func TestGitDiffActivity(t *testing.T) {
 			require.NoError(t, err)
 
 			// Check output expectations
+			if tt.expectOutput {
+				require.NotEmpty(t, result, "Expected non-empty output")
+				for _, contains := range tt.outputContains {
+					require.Contains(t, result, contains, "Expected output to contain: %s", contains)
+				}
+			} else {
+				require.Empty(t, result, "Expected empty output")
+			}
+		})
+	}
+}
+
+func TestGitDiffActivity_StagedWithTreeHash(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		setupRepo      func(t *testing.T, repoDir string) string // returns tree hash to diff against
+		ignoreWS       bool
+		expectError    bool
+		expectOutput   bool
+		outputContains []string
+	}{
+		{
+			name: "shows_diff_between_tree_and_staged_changes",
+			setupRepo: func(t *testing.T, repoDir string) string {
+				createFileAndCommit(t, repoDir, "file1.txt", "initial content", "initial commit")
+
+				// Get tree hash before making changes
+				treeHash := runGitCommandInTestRepo(t, repoDir, "write-tree")
+
+				// Stage new changes
+				err := os.WriteFile(filepath.Join(repoDir, "file1.txt"), []byte("modified content"), fs.FileMode(0644))
+				require.NoError(t, err)
+				runGitCommandInTestRepo(t, repoDir, "add", "file1.txt")
+
+				return treeHash
+			},
+			expectError:    false,
+			expectOutput:   true,
+			outputContains: []string{"file1.txt", "modified content"},
+		},
+		{
+			name: "empty_diff_when_no_changes",
+			setupRepo: func(t *testing.T, repoDir string) string {
+				createFileAndCommit(t, repoDir, "file1.txt", "content", "initial commit")
+				treeHash := runGitCommandInTestRepo(t, repoDir, "write-tree")
+				return treeHash
+			},
+			expectError:  false,
+			expectOutput: false,
+		},
+		{
+			name: "shows_new_file_in_diff",
+			setupRepo: func(t *testing.T, repoDir string) string {
+				createFileAndCommit(t, repoDir, "file1.txt", "content", "initial commit")
+				treeHash := runGitCommandInTestRepo(t, repoDir, "write-tree")
+
+				// Add a new file
+				err := os.WriteFile(filepath.Join(repoDir, "newfile.txt"), []byte("new file content"), fs.FileMode(0644))
+				require.NoError(t, err)
+				runGitCommandInTestRepo(t, repoDir, "add", "newfile.txt")
+
+				return treeHash
+			},
+			expectError:    false,
+			expectOutput:   true,
+			outputContains: []string{"newfile.txt", "new file content"},
+		},
+		{
+			name: "ignore_whitespace_flag",
+			setupRepo: func(t *testing.T, repoDir string) string {
+				createFileAndCommit(t, repoDir, "file1.txt", "line1\nline2", "initial commit")
+				treeHash := runGitCommandInTestRepo(t, repoDir, "write-tree")
+
+				// Stage changes with only whitespace differences
+				err := os.WriteFile(filepath.Join(repoDir, "file1.txt"), []byte("line1  \n  line2"), fs.FileMode(0644))
+				require.NoError(t, err)
+				runGitCommandInTestRepo(t, repoDir, "add", "file1.txt")
+
+				return treeHash
+			},
+			ignoreWS:     true,
+			expectError:  false,
+			expectOutput: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			repoDir := setupTestGitRepo(t)
+			treeHash := tt.setupRepo(t, repoDir)
+
+			ctx := context.Background()
+			devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{
+				RepoDir: repoDir,
+			})
+			require.NoError(t, err)
+			envContainer := env.EnvContainer{Env: devEnv}
+
+			result, err := GitDiffActivity(ctx, envContainer, GitDiffParams{
+				Staged:           true,
+				BaseRef:          treeHash,
+				IgnoreWhitespace: tt.ignoreWS,
+			})
+
+			if tt.expectError {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+
 			if tt.expectOutput {
 				require.NotEmpty(t, result, "Expected non-empty output")
 				for _, contains := range tt.outputContains {

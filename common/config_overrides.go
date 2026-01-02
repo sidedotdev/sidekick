@@ -15,6 +15,10 @@ type ConfigOverrides struct {
 	IntegrationTestCommands *[]CommandConfig `json:"integrationTestCommands,omitempty"`
 	WorktreeSetup           *string          `json:"worktreeSetup,omitempty"`
 
+	AgentConfig map[string]*AgentUseCaseConfig `json:"agentConfig,omitempty"`
+
+	CommandPermissions *CommandPermissionConfig `json:"commandPermissions,omitempty"`
+
 	// LocalConfig overrides
 	LLM       *LLMConfig                   `json:"llm,omitempty"`
 	Embedding *EmbeddingConfig             `json:"embedding,omitempty"`
@@ -49,5 +53,18 @@ func (o ConfigOverrides) ApplyToRepoConfig(c *RepoConfig) {
 	}
 	if o.WorktreeSetup != nil {
 		c.WorktreeSetup = *o.WorktreeSetup
+	}
+	if o.AgentConfig != nil {
+		if c.AgentConfig == nil {
+			c.AgentConfig = make(map[string]AgentUseCaseConfig)
+		}
+		for key, val := range o.AgentConfig {
+			if val != nil {
+				c.AgentConfig[key] = *val
+			}
+		}
+	}
+	if o.CommandPermissions != nil {
+		c.CommandPermissions = *o.CommandPermissions
 	}
 }

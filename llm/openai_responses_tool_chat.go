@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sidekick/common"
 	"sidekick/utils"
+	"strings"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -163,8 +164,17 @@ loop:
 			if response.Usage.OutputTokens > 0 {
 				usage.OutputTokens = int(response.Usage.OutputTokens)
 			}
+			if response.Usage.InputTokensDetails.CachedTokens > 0 {
+				usage.CacheReadInputTokens = int(response.Usage.InputTokensDetails.CachedTokens)
+			}
 			break loop
 		case responses.ResponseReasoningSummaryTextDeltaEvent:
+			if progressChan == nil {
+				continue
+			}
+			if progress := openaiProgressFromReasoningSummaryDelta(data.Delta); progress != nil {
+				progressChan <- *progress
+			}
 			continue
 
 		case responses.ResponseOutputItemAddedEvent:
@@ -269,6 +279,41 @@ func buildStructuredInputFromMessages(messages []ChatMessage) ([]responses.Respo
 	}
 
 	return items, nil
+}
+
+func openaiProgressFromReasoningSummaryDelta(delta string) *ProgressInfo {
+	text := strings.TrimSpace(delta)
+	if text == "" {
+		return nil
+	}
+
+	lines := strings.Split(text, "\n")
+	if len(lines) == 0 {
+		return nil
+	}
+
+	title := strings.TrimSpace(lines[0])
+	title = strings.TrimPrefix(title, "**")
+	title = strings.TrimSuffix(title, "**")
+	title = strings.TrimSpace(title)
+
+	if len(title) > 120 {
+		lastSpace := strings.LastIndex(title[:120], " ")
+		if lastSpace == -1 {
+			lastSpace = 117
+		}
+		title = title[:lastSpace] + "..."
+	}
+
+	details := ""
+	if len(lines) > 1 {
+		details = strings.Join(lines[1:], "\n")
+	}
+
+	return &ProgressInfo{
+		Title:   title,
+		Details: details,
+	}
 }
 
 func openaiResponsesFromTools(tools []*Tool) ([]responses.ToolUnionParam, error) {

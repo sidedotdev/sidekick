@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"sidekick/common"
 	"sidekick/secret_manager"
@@ -163,6 +165,13 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
 	}
 
+	secret_manager.RegisterSecretInterceptor("anthropic_oauth_disabled", func(secretName string) (string, error, bool) {
+		if secretName == AnthropicOAuthSecretName {
+			return "", fmt.Errorf("%w: oauth disabled for integration test", secret_manager.ErrSecretNotFound), true
+		}
+		return "", nil, false
+	})
+
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
 	chat := AnthropicToolChat{}
@@ -186,8 +195,21 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 			Tools: []*Tool{mockTool},
 		},
 		Secrets: secret_manager.SecretManagerContainer{
-			SecretManager: &secret_manager.KeyringSecretManager{},
+			SecretManager: &secret_manager.InterceptingSecretManager{
+				Underlying: secret_manager.SecretManagerContainer{
+					SecretManager: &secret_manager.KeyringSecretManager{},
+				},
+				InterceptorName: "anthropic_oauth_disabled",
+			},
 		},
+	}
+
+	// Ensure we exercise the API-key path by making OAuth look unconfigured.
+	{
+		v, err := options.Secrets.GetSecret(AnthropicOAuthSecretName)
+		assert.Empty(t, v)
+		assert.Error(t, err)
+		assert.True(t, errors.Is(err, secret_manager.ErrSecretNotFound))
 	}
 
 	deltaChan := make(chan ChatMessageDelta)

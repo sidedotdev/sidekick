@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sidekick/common"
 	"sidekick/domain"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -20,10 +21,16 @@ func (s *Storage) PersistSubflow(ctx context.Context, subflow domain.Subflow) er
 		return errors.New("workspaceId, subflow.Id, and subflow.FlowId cannot be empty")
 	}
 
+	if subflow.Updated.IsZero() {
+		subflow.Updated = time.Now().UTC()
+	} else {
+		subflow.Updated = subflow.Updated.UTC()
+	}
+
 	query := `
 		INSERT OR REPLACE INTO subflows (
-			id, workspace_id, type, name, description, status, parent_subflow_id, flow_id, result
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			id, workspace_id, type, name, description, status, parent_subflow_id, flow_id, result, updated
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	result, err := json.Marshal(subflow.Result)
@@ -41,6 +48,7 @@ func (s *Storage) PersistSubflow(ctx context.Context, subflow domain.Subflow) er
 		subflow.ParentSubflowId,
 		subflow.FlowId,
 		result,
+		subflow.Updated.Format(time.RFC3339Nano),
 	)
 
 	if err != nil {
@@ -67,7 +75,7 @@ func (s *Storage) GetSubflows(ctx context.Context, workspaceId, flowId string) (
 	}
 
 	query := `
-		SELECT id, workspace_id, type, name, description, status, parent_subflow_id, flow_id, result
+		SELECT id, workspace_id, type, name, description, status, parent_subflow_id, flow_id, result, updated
 		FROM subflows
 		WHERE workspace_id = ? AND flow_id = ?
 	`
@@ -86,6 +94,7 @@ func (s *Storage) GetSubflows(ctx context.Context, workspaceId, flowId string) (
 	for rows.Next() {
 		var subflow domain.Subflow
 		var result []byte
+		var updatedStr string
 
 		err := rows.Scan(
 			&subflow.Id,
@@ -97,6 +106,7 @@ func (s *Storage) GetSubflows(ctx context.Context, workspaceId, flowId string) (
 			&subflow.ParentSubflowId,
 			&subflow.FlowId,
 			&result,
+			&updatedStr,
 		)
 		if err != nil {
 			log.Error().Err(err).
@@ -104,6 +114,14 @@ func (s *Storage) GetSubflows(ctx context.Context, workspaceId, flowId string) (
 				Str("flowId", flowId).
 				Msg("Failed to scan subflow row")
 			return nil, fmt.Errorf("failed to scan subflow row: %w", err)
+		}
+
+		subflow.Updated, err = time.Parse(time.RFC3339Nano, updatedStr)
+		if err != nil {
+			log.Error().Err(err).
+				Str("subflowId", subflow.Id).
+				Msg("Failed to parse subflow updated timestamp")
+			return nil, fmt.Errorf("failed to parse subflow updated timestamp: %w", err)
 		}
 
 		if len(result) > 0 {
@@ -142,13 +160,14 @@ func (s *Storage) GetSubflow(ctx context.Context, workspaceId, subflowId string)
 	}
 
 	query := `
-		SELECT id, workspace_id, type, name, description, status, parent_subflow_id, flow_id, result
+		SELECT id, workspace_id, type, name, description, status, parent_subflow_id, flow_id, result, updated
 		FROM subflows
 		WHERE workspace_id = ? AND id = ?
 	`
 
 	var subflow domain.Subflow
 	var result []byte
+	var updatedStr string
 
 	err := s.db.QueryRowContext(ctx, query, workspaceId, subflowId).Scan(
 		&subflow.Id,
@@ -160,6 +179,7 @@ func (s *Storage) GetSubflow(ctx context.Context, workspaceId, subflowId string)
 		&subflow.ParentSubflowId,
 		&subflow.FlowId,
 		&result,
+		&updatedStr,
 	)
 
 	if err != nil {
@@ -171,6 +191,14 @@ func (s *Storage) GetSubflow(ctx context.Context, workspaceId, subflowId string)
 			Str("subflowId", subflowId).
 			Msg("Failed to get subflow")
 		return domain.Subflow{}, fmt.Errorf("failed to get subflow: %w", err)
+	}
+
+	subflow.Updated, err = time.Parse(time.RFC3339Nano, updatedStr)
+	if err != nil {
+		log.Error().Err(err).
+			Str("subflowId", subflowId).
+			Msg("Failed to parse subflow updated timestamp")
+		return domain.Subflow{}, fmt.Errorf("failed to parse subflow updated timestamp: %w", err)
 	}
 
 	if len(result) > 0 {

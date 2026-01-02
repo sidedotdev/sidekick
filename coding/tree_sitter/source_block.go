@@ -3,6 +3,7 @@ package tree_sitter
 import (
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	sitter "github.com/smacker/go-tree-sitter"
 )
 
@@ -13,7 +14,33 @@ type SourceBlock struct {
 }
 
 func (sb SourceBlock) String() string {
-	return string((*sb.Source)[sb.Range.StartByte:sb.Range.EndByte])
+	if sb.Source == nil || len(*sb.Source) == 0 {
+		return ""
+	}
+	sourceLen := uint32(len(*sb.Source))
+	startByte := sb.Range.StartByte
+	endByte := sb.Range.EndByte
+	clamped := false
+	if startByte > sourceLen {
+		startByte = sourceLen
+		clamped = true
+	}
+	if endByte > sourceLen {
+		endByte = sourceLen
+		clamped = true
+	}
+	if startByte > endByte {
+		startByte = endByte
+		clamped = true
+	}
+	if clamped {
+		log.Warn().
+			Uint32("originalStartByte", sb.Range.StartByte).
+			Uint32("originalEndByte", sb.Range.EndByte).
+			Uint32("sourceLen", sourceLen).
+			Msg("SourceBlock.String: clamped out-of-bounds range, possible upstream bug")
+	}
+	return string((*sb.Source)[startByte:endByte])
 }
 
 func MergeAdjacentOrOverlappingSourceBlocks(sourceBlocks []SourceBlock, sourceCodeLines []string) []SourceBlock {
@@ -52,8 +79,13 @@ func MergeAdjacentOrOverlappingSourceBlocks(sourceBlocks []SourceBlock, sourceCo
 }
 
 func countBytesInLines(startByte uint32, numLines int, sourceCode []byte, direction string) uint32 {
-	if numLines <= 0 {
+	if numLines <= 0 || len(sourceCode) == 0 {
 		return 0
+	}
+
+	sourceLen := uint32(len(sourceCode))
+	if startByte > sourceLen {
+		startByte = sourceLen
 	}
 
 	count := uint32(0)
@@ -75,7 +107,7 @@ func countBytesInLines(startByte uint32, numLines int, sourceCode []byte, direct
 			return 0
 		}
 
-		if sourceCode[startByte] == '\n' && startByte == 1 {
+		if startByte < sourceLen && sourceCode[startByte] == '\n' && startByte == 1 {
 			// due to index decrement, and on an empty line, we need to adjust
 			return 1
 		}
@@ -96,15 +128,40 @@ func countBytesInLines(startByte uint32, numLines int, sourceCode []byte, direct
 // expands the source blocks to include the specified number of additional lines of context before and after
 func ExpandContextLines(sourceBlocks []SourceBlock, numContextLines int, sourceCode []byte) []SourceBlock {
 	sourceCodeLines := strings.Split(string(sourceCode), "\n")
+	sourceLen := uint32(len(sourceCode))
+	numLines := uint32(len(sourceCodeLines))
+
 	for i := range sourceBlocks {
 		sb := sourceBlocks[i]
+
+		// Clamp initial range values to valid bounds
+		if sb.Range.StartByte > sourceLen {
+			sb.Range.StartByte = sourceLen
+		}
+		if sb.Range.EndByte > sourceLen {
+			sb.Range.EndByte = sourceLen
+		}
+		if sb.Range.StartByte > sb.Range.EndByte {
+			sb.Range.StartByte = sb.Range.EndByte
+		}
+		if numLines > 0 {
+			if sb.Range.StartPoint.Row >= numLines {
+				sb.Range.StartPoint.Row = numLines - 1
+			}
+			if sb.Range.EndPoint.Row >= numLines {
+				sb.Range.EndPoint.Row = numLines - 1
+			}
+		}
 
 		// NOTE: range is start-inclusive and end-exclusive
 
 		startRow := sb.Range.StartPoint.Row
 		endRow := sb.Range.EndPoint.Row
 		contextBefore := min(uint32(numContextLines), startRow)
-		contextAfter := min(uint32(numContextLines), uint32(len(sourceCodeLines))-endRow-1)
+		contextAfter := uint32(0)
+		if numLines > 0 && endRow < numLines-1 {
+			contextAfter = min(uint32(numContextLines), numLines-endRow-1)
+		}
 		sb.Range.StartPoint.Row -= contextBefore
 		sb.Range.EndPoint.Row += contextAfter
 		reduceBytes := countBytesInLines(sb.Range.StartByte, numContextLines, sourceCode, "backward")
@@ -112,19 +169,26 @@ func ExpandContextLines(sourceBlocks []SourceBlock, numContextLines int, sourceC
 		sb.Range.StartPoint.Column = 0
 		sb.Range.EndByte += countBytesInLines(sb.Range.EndByte, numContextLines, sourceCode, "forward")
 		// using len instead of len-1 since end is exclusive
-		sb.Range.EndPoint.Column = uint32(len(sourceCodeLines[sb.Range.EndPoint.Row]))
+		if numLines > 0 && sb.Range.EndPoint.Row < numLines {
+			sb.Range.EndPoint.Column = uint32(len(sourceCodeLines[sb.Range.EndPoint.Row]))
+		}
 
 		// startByte is in the middle of a line, so we need to go back to the start of the line
-		if sb.Range.StartByte >= 1 && sourceCode[sb.Range.StartByte-1] != '\n' {
+		if sb.Range.StartByte >= 1 && sb.Range.StartByte <= sourceLen && sourceCode[sb.Range.StartByte-1] != '\n' {
 			sb.Range.StartByte -= countBytesInLines(sb.Range.StartByte, 1, sourceCode, "backward") + 1
 		}
 
 		// endByte is in the middle of a line, so we need to go to the end of the line
-		if sb.Range.EndByte >= 1 && sourceCode[sb.Range.EndByte-1] != '\n' {
+		if sb.Range.EndByte >= 1 && sb.Range.EndByte <= sourceLen && sourceCode[sb.Range.EndByte-1] != '\n' {
 			sb.Range.EndByte += countBytesInLines(sb.Range.EndByte, 1, sourceCode, "forward")
 		}
 
-		if sb.Range.EndByte >= 1 && sourceCode[sb.Range.EndByte-1] == '\n' && int(sb.Range.EndByte) < len(sourceCode) {
+		// Clamp final EndByte to source length
+		if sb.Range.EndByte > sourceLen {
+			sb.Range.EndByte = sourceLen
+		}
+
+		if sb.Range.EndByte >= 1 && sb.Range.EndByte <= sourceLen && sourceCode[sb.Range.EndByte-1] == '\n' && sb.Range.EndByte < sourceLen {
 			sb.Range.EndPoint.Column += 1 // one past the *next* newline
 		}
 

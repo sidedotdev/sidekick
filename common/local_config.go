@@ -7,16 +7,18 @@ import (
 	"slices"
 
 	"github.com/adrg/xdg"
-	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
+	"github.com/rs/zerolog/log"
 )
 
 // LocalConfig represents the local configuration file structure
 type LocalConfig struct {
-	Providers []ModelProviderConfig    `koanf:"providers,omitempty"`
-	LLM       map[string][]ModelConfig `koanf:"llm,omitempty"`
-	Embedding map[string][]ModelConfig `koanf:"embedding,omitempty"`
+	Providers          []ModelProviderConfig    `koanf:"providers,omitempty"`
+	LLM                map[string][]ModelConfig `koanf:"llm,omitempty"`
+	Embedding          map[string][]ModelConfig `koanf:"embedding,omitempty"`
+	CommandPermissions CommandPermissionConfig  `koanf:"command_permissions,omitempty"`
+	OffHours           OffHoursConfig           `koanf:"off_hours,omitempty"`
 }
 
 // getCustomProviderNames returns a slice of custom provider names
@@ -79,7 +81,7 @@ func (c LocalConfig) Validate() error {
 
 // LoadSidekickConfig loads the sidekick configuration from the given file path.
 // If the config file doesn't exist, returns an empty config.
-// The config file is expected to be in YAML format.
+// Supports YAML (.yml, .yaml), TOML (.toml), and JSON (.json) formats.
 func LoadSidekickConfig(configPath string) (LocalConfig, error) {
 	k := koanf.New(".")
 
@@ -87,8 +89,12 @@ func LoadSidekickConfig(configPath string) (LocalConfig, error) {
 		return LocalConfig{}, nil
 	}
 
-	// Load YAML config
-	if err := k.Load(file.Provider(configPath), yaml.Parser()); err != nil {
+	parser := GetParserForExtension(configPath)
+	if parser == nil {
+		return LocalConfig{}, fmt.Errorf("unsupported config file format: %s", configPath)
+	}
+
+	if err := k.Load(file.Provider(configPath), parser); err != nil {
 		return LocalConfig{}, fmt.Errorf("error loading config: %w", err)
 	}
 
@@ -126,6 +132,24 @@ func GetSidekickConfigDir() string {
 	return filepath.Join(configDir, "sidekick")
 }
 
+// localConfigCandidates defines the config file names in order of precedence
+var localConfigCandidates = []string{"config.yml", "config.yaml", "config.toml", "config.json"}
+
 func GetSidekickConfigPath() string {
-	return filepath.Join(GetSidekickConfigDir(), "config.yml")
+	configDir := GetSidekickConfigDir()
+	result := DiscoverConfigFile(configDir, localConfigCandidates)
+
+	if len(result.AllFound) > 1 {
+		log.Warn().
+			Strs("found", result.AllFound).
+			Str("using", result.ChosenPath).
+			Msg("Multiple sidekick config files found; using highest precedence")
+	}
+
+	if result.ChosenPath != "" {
+		return result.ChosenPath
+	}
+
+	// Default to config.yml when no config exists
+	return filepath.Join(configDir, "config.yml")
 }

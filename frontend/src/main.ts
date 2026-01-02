@@ -6,6 +6,7 @@ import { definePreset } from '@primeuix/themes';
 import Aura from '@primeuix/themes/aura';
 import App from './App.vue'
 import router from './router'
+import { isBlockedNow, clearOffHoursCache } from './lib/offHours'
 
 const app = createApp(App)
 
@@ -38,3 +39,17 @@ app.use(PrimeVue, {
 app.use(router)
 
 app.mount('#app')
+
+setInterval(async () => {
+  if (router.currentRoute.value.name === 'blocked') {
+    return
+  }
+  clearOffHoursCache()
+  const status = await isBlockedNow()
+  if (status.blocked) {
+    router.push({
+      name: 'blocked',
+      query: { redirect: router.currentRoute.value.fullPath },
+    })
+  }
+}, 30000)

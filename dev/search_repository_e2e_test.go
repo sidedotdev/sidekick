@@ -163,7 +163,8 @@ func (s *SearchRepositoryE2ETestSuite) TestTruncatedLongSearchOutputWithMultiple
 	s.Require().NoError(err)
 
 	// Verify content is present but truncated
-	searchBlocks := tree_sitter.ExtractSearchCodeBlocks(result)
+	searchBlocks, err := tree_sitter.ExtractSearchCodeBlocks(result)
+	s.Require().NoError(err)
 	s.Assertions.Len(searchBlocks, 2)
 	s.Contains(result, "file1.txt")
 	s.Contains(searchBlocks[0].Code, strings.TrimSpace(uniqueContent1))
@@ -217,6 +218,7 @@ func (s *SearchRepositoryE2ETestSuite) TestRefusalForOverlyLongSearchOutput() {
 }
 
 func TestSearchRepositorySuite(t *testing.T) {
+	t.Parallel()
 	suite.Run(t, new(SearchRepositoryE2ETestSuite))
 }
 

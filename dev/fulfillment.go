@@ -171,6 +171,9 @@ if you think the automatic check failure is not meant to be fixed in the current
 step. If there's no such step, consider the criteria not fulfilled due to the
 failure.
 
+`, promptInfo.Requirements, promptInfo.PlanExecution.String(), promptInfo.Step.Definition, promptInfo.Step.CompletionAnalysis, promptInfo.Work)
+		if promptInfo.AutoChecks != "" {
+			content += fmt.Sprintf(`
 If the automated tests clearly indicate a failure related to the changes made in
 the current step or a previous one without a followup step explicitly defined to
 fix it, then don't analyze too much after determining that fact: just indicate
@@ -180,7 +183,8 @@ whether criteria is fulfilled fully later.
 Anyways, here are the automated check results:
 
 %s
-`, promptInfo.Requirements, promptInfo.PlanExecution.String(), promptInfo.Step.Definition, promptInfo.Step.CompletionAnalysis, promptInfo.Work, promptInfo.AutoChecks)
+`, promptInfo.AutoChecks)
+		}
 	} else {
 		// TODO /gen adjust this to use RenderPrompt, followiing the same pattern as other functions calling RenderPrompt
 		content = fmt.Sprintf(`
@@ -210,6 +214,9 @@ And here is the latest git diff:
 
 %s
 
+`, promptInfo.Requirements, promptInfo.Work)
+		if promptInfo.AutoChecks != "" {
+			content += fmt.Sprintf(`
 If the automated tests clearly indicate a failure related to the latest changes
 made, then don't analyze other aspects after determining that the test is
 related to those changes: just indicate that the tests should be fixed. When
@@ -218,7 +225,8 @@ fully later.
 
 Anyways, here are the automated check results:
 
-%s`, promptInfo.Requirements, promptInfo.Work, promptInfo.AutoChecks)
+%s`, promptInfo.AutoChecks)
+		}
 	}
 
 	newMessage := llm.ChatMessage{

@@ -8,11 +8,24 @@ import (
 	"log"
 	"sidekick/domain"
 	"sidekick/srv"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
 func (s Storage) PersistFlow(ctx context.Context, flow domain.Flow) error {
+	now := time.Now().UTC()
+	if flow.Created.IsZero() {
+		flow.Created = now
+	} else {
+		flow.Created = flow.Created.UTC()
+	}
+	if flow.Updated.IsZero() {
+		flow.Updated = now
+	} else {
+		flow.Updated = flow.Updated.UTC()
+	}
+
 	workflowJson, err := json.Marshal(flow)
 	if err != nil {
 		log.Println("Failed to convert topic record to JSON: ", err)

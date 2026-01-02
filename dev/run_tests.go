@@ -5,9 +5,11 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -15,14 +17,16 @@ var maxTestOutputSize = min(4000, defaultMaxChatHistoryLength/4)
 
 // TestResult holds a detailed information about test run
 type TestResult struct {
-	TestsPassed bool   `json:"testsPassed"`
-	Output      string `json:"output"`
+	TestsPassed  bool   `json:"testsPassed"`
+	TestsSkipped bool   `json:"testsSkipped"`
+	Output       string `json:"output"`
 }
 
 // RunTests runs the provided test commands.
 func RunTests(dCtx DevContext, commandsToRun []common.CommandConfig) (TestResult, error) {
 	if len(commandsToRun) == 0 {
-		return TestResult{}, fmt.Errorf("no test commands configured")
+		log.Warn().Msg("No test commands configured, skipping tests")
+		return TestResult{TestsSkipped: true}, nil
 	}
 	for _, testCommand := range commandsToRun {
 		if testCommand.Command == "" {
@@ -38,35 +42,7 @@ func RunTests(dCtx DevContext, commandsToRun []common.CommandConfig) (TestResult
 	actionCtx := dCtx.NewActionContext("run_tests")
 	actionCtx.ActionParams = actionParams
 	testResults, err := Track(actionCtx, func(flowAction *domain.FlowAction) ([]TestResult, error) {
-		// execute all test commands in parallel
-		for _, testCommand := range commandsToRun {
-			// Capture testCommand for the goroutine
-			testCommand := testCommand
-
-			workflow.Go(dCtx, func(ctx workflow.Context) {
-				localActionCtx := actionCtx.WithContext(ctx)
-				runSingleTest(localActionCtx, testCommand.WorkingDir, testCommand.Command, *dCtx.EnvContainer, resultsCh)
-			})
-		}
-
-		// Wait for all goroutines to finish and collect the results
-		var results []TestResult
-		for i := 0; i < len(commandsToRun); i++ {
-			var value interface{}
-			if ok := resultsCh.Receive(dCtx, &value); !ok {
-				return nil, fmt.Errorf("failed to receive test result, channel closed early")
-			}
-			switch v := value.(type) {
-			case TestResult:
-				results = append(results, v)
-			case error:
-				return nil, fmt.Errorf("error running test command: %v", v)
-			default:
-				panic(fmt.Sprintf("unexpected test result type %T", v))
-			}
-		}
-
-		return results, nil
+		return runTestsWithRetry(dCtx, actionCtx, commandsToRun, resultsCh)
 	})
 
 	if err != nil {
@@ -86,6 +62,100 @@ func RunTests(dCtx DevContext, commandsToRun []common.CommandConfig) (TestResult
 	return combineTestResults(testResults), nil
 }
 
+type indexedCommand struct {
+	index int
+	cmd   common.CommandConfig
+}
+
+func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRun []common.CommandConfig, resultsCh workflow.Channel) ([]TestResult, error) {
+	// Build indexed commands for tracking across retries
+	pendingCommands := make([]indexedCommand, len(commandsToRun))
+	for i, cmd := range commandsToRun {
+		pendingCommands[i] = indexedCommand{index: i, cmd: cmd}
+	}
+
+	// Accumulate results across retry iterations
+	allResults := make([]TestResult, len(commandsToRun))
+	completed := make([]bool, len(commandsToRun))
+
+	for {
+		// execute pending test commands in parallel
+		for _, ic := range pendingCommands {
+			ic := ic
+			workflow.Go(dCtx, func(ctx workflow.Context) {
+				localActionCtx := actionCtx.WithContext(ctx)
+				runSingleTest(localActionCtx, ic.index, ic.cmd.WorkingDir, ic.cmd.Command, *dCtx.EnvContainer, resultsCh)
+			})
+		}
+
+		// Wait for all goroutines to finish and collect the results
+		var failedCommands []indexedCommand
+		var activityErrors []string
+		for i := 0; i < len(pendingCommands); i++ {
+			var value interface{}
+			if ok := resultsCh.Receive(dCtx, &value); !ok {
+				return nil, fmt.Errorf("failed to receive test result, channel closed early")
+			}
+			result := value.(singleTestResult)
+			if result.err != nil {
+				// Activity error (timeout, etc) - candidate for retry
+				activityErrors = append(activityErrors, result.err.Error())
+				failedCommands = append(failedCommands, indexedCommand{
+					index: result.commandIndex,
+					cmd:   commandsToRun[result.commandIndex],
+				})
+			} else {
+				allResults[result.commandIndex] = result.result
+				completed[result.commandIndex] = true
+			}
+		}
+
+		// If no activity errors, we're done
+		if len(activityErrors) == 0 {
+			// Collect only completed results
+			var results []TestResult
+			for i, done := range completed {
+				if done {
+					results = append(results, allResults[i])
+				}
+			}
+			return results, nil
+		}
+
+		// Check version for user-prompted retry support
+		version := workflow.GetVersion(actionCtx, "activity-user-retry", workflow.DefaultVersion, 1)
+		if version < 1 {
+			return nil, fmt.Errorf("error running test command(s): %v", activityErrors)
+		}
+
+		// If human-in-the-loop is disabled, don't retry
+		if actionCtx.DisableHumanInTheLoop {
+			return nil, fmt.Errorf("error running test command(s): %v", activityErrors)
+		}
+
+		// Check for pending user action
+		if v := workflow.GetVersion(actionCtx, "user-action-go-next", workflow.DefaultVersion, 1); v == 1 {
+			action := actionCtx.GlobalState.GetPendingUserAction()
+			if action != nil {
+				return nil, flow_action.PendingActionError
+			}
+		}
+
+		// Prompt user once for all failed commands
+		prompt := fmt.Sprintf("run_tests failed for %d command(s):\n\n```\n%s\n```", len(activityErrors), strings.Join(activityErrors, "\n"))
+		requestParams := map[string]any{
+			"continueTag": "try_again",
+		}
+		userErr := flow_action.GetUserContinue(actionCtx.ExecContext, prompt, requestParams)
+		if userErr != nil {
+			return nil, userErr
+		}
+
+		// User chose to retry - only retry the failed commands
+		pendingCommands = failedCommands
+	}
+}
+
 func combineTestResults(results []TestResult) TestResult {
 	allPassed := true
 	var combinedOutput strings.Builder
@@ -102,7 +172,13 @@ func combineTestResults(results []TestResult) TestResult {
 	}
 }
 
-func runSingleTest(actionCtx DevActionContext, workingDir string, fullCommand string, envContainer env.EnvContainer, resultsCh workflow.Channel) {
+type singleTestResult struct {
+	commandIndex int
+	result       TestResult
+	err          error
+}
+
+func runSingleTest(actionCtx DevActionContext, commandIndex int, workingDir string, fullCommand string, envContainer env.EnvContainer, resultsCh workflow.Channel) {
 	runTestInput := env.EnvRunCommandActivityInput{
 		EnvContainer:       envContainer,
 		RelativeWorkingDir: "./",
@@ -113,9 +189,13 @@ func runSingleTest(actionCtx DevActionContext, workingDir string, fullCommand st
 		runTestInput.RelativeWorkingDir = workingDir
 	}
 	var runTestOutput env.EnvRunCommandActivityOutput
-	err := PerformWithUserRetry(actionCtx, env.EnvRunCommandActivity, &runTestOutput, runTestInput)
+	activityFuture := workflow.ExecuteActivity(actionCtx, env.EnvRunCommandActivity, runTestInput)
+	err := activityFuture.Get(actionCtx, &runTestOutput)
 	if err != nil {
-		resultsCh.Send(actionCtx, fmt.Errorf("failed to run test command '%s': %v", fullCommand, err))
+		resultsCh.Send(actionCtx, singleTestResult{
+			commandIndex: commandIndex,
+			err:          fmt.Errorf("failed to run test command '%s': %v", fullCommand, err),
+		})
 		return
 	}
 
@@ -135,7 +215,10 @@ func runSingleTest(actionCtx DevActionContext, workingDir string, fullCommand st
 		Output:      output,
 	}
 
-	resultsCh.Send(actionCtx, testResult)
+	resultsCh.Send(actionCtx, singleTestResult{
+		commandIndex: commandIndex,
+		result:       testResult,
+	})
 }
 
 func SummarizeTestOutput(dCtx DevContext, testOutput string) (string, error) {
