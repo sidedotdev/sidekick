@@ -93,6 +93,16 @@ const route = useRoute()
 const activeDevStep = ref(new Set<string>());
 
 // subflowsById: A record of subflow objects, keyed by their ID.
+
+const updateActiveDevStep = (subflowId: string, subflowType: string | undefined, status: SubflowStatus) => {
+  if (subflowType === 'step.dev' || subflowType === 'coding' || subflowType === 'review_and_resolve') {
+    if (status === SubflowStatus.Started) {
+      activeDevStep.value.add(subflowId);
+    } else if (status === SubflowStatus.Complete || status === SubflowStatus.Failed) {
+      activeDevStep.value.delete(subflowId);
+    }
+  }
+};
 // This is also populated by listening to WebSocket events for subflow status changes.
 const subflowsById = ref<Record<string, Subflow>>({});
 
@@ -137,17 +147,7 @@ const handleSubflowStatusUpdate = (subflowId: string, status: SubflowStatus, res
       if (result) {
         subflowToUpdate.result = result;
       }
-
-      if (subflowToUpdate.type === 'step.dev' || subflowToUpdate.type === 'coding' || subflowToUpdate.type === 'review_and_resolve') {
-        if (status === SubflowStatus.Started) {
-          activeDevStep.value.add(subflowId);
-        } else if (
-          status === SubflowStatus.Complete ||
-          status === SubflowStatus.Failed
-        ) {
-          activeDevStep.value.delete(subflowId);
-        }
-      }
+      updateActiveDevStep(subflowId, subflowToUpdate.type, status);
     } else {
       console.warn(`Received status update for subflow ${subflowId} not found in cache.`);
     }
@@ -434,6 +434,7 @@ const fetchFlowSubflows = async (flowId: string) => {
       const subflows = data.subflows as Subflow[];
       for (const subflow of subflows) {
         subflowsById.value[subflow.id] = subflow;
+        updateActiveDevStep(subflow.id, subflow.type, subflow.status);
       }
     } else {
       console.error(`Failed to fetch subflows for flow ${flowId}:`, await response.text());
