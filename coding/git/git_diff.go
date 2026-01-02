@@ -79,6 +79,10 @@ func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params 
 	return workingTreeAndUntrackedDiff(ctx, envContainer, params)
 }
 
+func shellQuote(s string) string {
+	return fmt.Sprintf("'%s'", strings.ReplaceAll(s, "'", "'\\''"))
+}
+
 func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
 	if params.ThreeDotDiff && params.BaseRef == "" {
 		return "", fmt.Errorf("base ref is required for three-dot diff")
@@ -90,13 +94,13 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 	// Handle different combinations of flags
 	if params.Staged && params.ThreeDotDiff {
 		cmdParts = append(cmdParts, "--staged")
-		cmdParts = append(cmdParts, fmt.Sprintf("$(git merge-base %s HEAD)", params.BaseRef))
+		cmdParts = append(cmdParts, fmt.Sprintf("$(git merge-base %s HEAD)", shellQuote(params.BaseRef)))
 	} else if params.ThreeDotDiff {
-		cmdParts = append(cmdParts, fmt.Sprintf("%s...HEAD", params.BaseRef))
+		cmdParts = append(cmdParts, fmt.Sprintf("%s...HEAD", shellQuote(params.BaseRef)))
 	} else if params.Staged {
 		cmdParts = append(cmdParts, "--staged")
 		if params.BaseRef != "" {
-			cmdParts = append(cmdParts, params.BaseRef)
+			cmdParts = append(cmdParts, shellQuote(params.BaseRef))
 		}
 	}
 
@@ -107,9 +111,7 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 	if len(params.FilePaths) > 0 {
 		cmdParts = append(cmdParts, "--")
 		for _, fp := range params.FilePaths {
-			cleanFp := strings.TrimSpace(fp)
-			quotedFp := fmt.Sprintf("'%s'", strings.ReplaceAll(cleanFp, "'", "'\\''"))
-			cmdParts = append(cmdParts, quotedFp)
+			cmdParts = append(cmdParts, shellQuote(strings.TrimSpace(fp)))
 		}
 	}
 
