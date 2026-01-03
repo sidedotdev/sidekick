@@ -965,6 +965,10 @@ func (ctrl *Controller) ResetFlowHandler(c *gin.Context) {
 		WorkflowExecution:         &commonpb.WorkflowExecution{WorkflowId: flowId},
 		WorkflowTaskFinishEventId: req.EventId,
 		RequestId:                 ksuid.New().String(),
+		ResetReapplyExcludeTypes: []enums.ResetReapplyExcludeType{
+			enums.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL,
+			enums.RESET_REAPPLY_EXCLUDE_TYPE_UPDATE,
+		},
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
