@@ -89,16 +89,71 @@ Note: All language-specific dependencies are also dev dependencies for language-
 
 ## Configuration
 
+### AI Providers
+
+Sidekick requires two types of AI providers:
+
+- LLM providers: Anthropic, OpenAI, Google, or [custom](#custom-providers)
+- Embedding providers: Currently only OpenAI or Google.
+
+Emebddings are used for faster/cheaper semantic code context retrieval. While
+this will still be recommended, it will become optional in the future, for those
+who don't have access to a supported embedding provider.
+
+#### Built-in Providers
+
+The built-in providers are `openai`, `anthropic`, and `google`. The easiest way
+to configure them is the interactive setup via `side init` (or when running
+`side task` for the first time). You can also update credentials via `side auth`.
+Credentials set up in this manner are stored securely in your OS
+keychain/keyring.
+
+**Anthropic** supports two authentication methods via `side auth`:
+- **Claude Pro/Max (OAuth subscription)**: AKA Claude Code subscription. Choose Anthropic → Claude Pro/Max (OAuth subscription), then complete the browser-based OAuth flow.
+- **API key**: Choose Anthropic → Manually enter API Key
+
+Other providers require an API key for now.
+
+#### Environment Variables (Fallback)
+
+For non-interactive setup, set environment variables (with or without `SIDE_` prefix):
+- `OPENAI_API_KEY`
+- `GOOGLE_API_KEY`
+- `ANTHROPIC_API_KEY` or `ANTHROPIC_OAUTH`
+
+#### Custom Providers
+
+Custom providers (e.g., self-hosted or alternative API-compatible services) are configured via [local config](#local-config). See that section for details.
+
+### Local config
+
+Sidekick reads local configuration from the XDG config directory, typically `~/.config/sidekick/config.yml`. Supported formats: YAML, TOML, JSON, in that order of precedence.
+
+Custom providers are currently configured via local config, using the `providers` list:
+
+```yaml
+providers:
+  - name: my-provider # for built-in provider types (openai, anthropic, google), omit the name to use the default built-in llm configs
+    type: openai_compatible  # openai, anthropic, google, openai_compatible, openai_responses_compatible
+    base_url: https://my-llm-api.example.com/v1
+    key: ${MY_API_KEY}
+    default_llm: my-model-name
+    small_llm: my-small-model
+```
+
 ### AGENTS.md
 
 Sidekick automatically loads repository-specific instructions from an `AGENTS.md`
 file in your project root. These instructions are included in prompts to the LLM
 when planning changes and editing code. Use this to provide general instructions
-related to coding conventions, explanations of the project's structure, etc.
+related to coding conventions, explanations of the project's structure, etc. See
+[agents.md](https://agents.md) to learn more.
 
 If `AGENTS.md` is not present, Sidekick will look for other common agent
-instruction files such as `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`,
-and others. See the full list [in the source code](dev/get_repo_config.go). If you have a file that is unsupported, you can configure it in `side.yml` [like so](#edit_code).
+instruction files such as `CLAUDE.md`, `GEMINI.md`,
+`.github/copilot-instructions.md`, and others. See the full list [in the source
+code](dev/get_repo_config.go). If you have a file that is unsupported, you can
+configure it in `side.yml` [like so](#edit_code).
 
 ### side.yml
 
