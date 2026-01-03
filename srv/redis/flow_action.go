@@ -238,6 +238,7 @@ func (s Streamer) GetFlowActionChanges(ctx context.Context, workspaceId, flowId,
 
 	return flowActions, lastMessageId, nil
 }
+
 func (s *Streamer) StreamFlowActionChanges(ctx context.Context, workspaceId, flowId, streamMessageStartId string) (<-chan domain.FlowAction, <-chan error) {
 	flowActionChan := make(chan domain.FlowAction)
 	errChan := make(chan error, 1)
