@@ -2,7 +2,6 @@ package dev
 
 import (
 	"encoding/json"
-	"sidekick/domain"
 	"sidekick/llm"
 
 	"github.com/invopop/jsonschema"
@@ -24,19 +23,14 @@ func handleDoneToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallRespons
 		ToolCallId:   toolCall.Id,
 	}
 
-	actionParams := make(map[string]interface{})
-	err := json.Unmarshal([]byte(llm.RepairJson(toolCall.Arguments)), &actionParams)
+	var args DoneArguments
+	err := json.Unmarshal([]byte(llm.RepairJson(toolCall.Arguments)), &args)
 	if err != nil {
 		toolCallResult.IsError = true
 		toolCallResult.Response = "Failed to parse done tool arguments: " + err.Error()
 		return toolCallResult, err
 	}
 
-	actionCtx := dCtx.NewActionContext("tool_call.done")
-	actionCtx.ActionParams = actionParams
-
-	return Track(actionCtx, func(flowAction *domain.FlowAction) (ToolCallResponseInfo, error) {
-		toolCallResult.Response = "Acknowledged. Completing the edit session."
-		return toolCallResult, nil
-	})
+	toolCallResult.Response = "Continuing to test & review stages."
+	return toolCallResult, nil
 }
