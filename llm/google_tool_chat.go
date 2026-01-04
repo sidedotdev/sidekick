@@ -129,6 +129,10 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		config.Temperature = options.Params.Temperature
 	}
 
+	if options.Params.MaxTokens > 0 {
+		config.MaxOutputTokens = int32(options.Params.MaxTokens)
+	}
+
 	stream := client.Models.GenerateContentStream(ctx, model, contents, config)
 	var deltas []ChatMessageDelta
 	var lastResult *genai.GenerateContentResponse // Store the last response for usage metadata
