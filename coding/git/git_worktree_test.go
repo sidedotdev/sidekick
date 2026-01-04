@@ -185,7 +185,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		// Create environment container and the associated worktree
 		worktree := domain.Worktree{
 			Name:        branchName,
-			WorkspaceId: "test-workspace",
+			WorkspaceId: filepath.Base(repoDir),
 		}
 		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
 		require.NoError(t, err)
@@ -265,7 +265,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		// Create environment container and the worktree
 		worktree := domain.Worktree{
 			Name:        branchName,
-			WorkspaceId: "test-workspace",
+			WorkspaceId: filepath.Base(repoDir),
 		}
 		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
 		require.NoError(t, err)
@@ -319,7 +319,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		// Create environment container and the worktree
 		worktree := domain.Worktree{
 			Name:        branchName,
-			WorkspaceId: "test-workspace",
+			WorkspaceId: filepath.Base(repoDir),
 		}
 		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
 		require.NoError(t, err)
@@ -360,7 +360,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		// Create environment container and the worktree
 		worktree := domain.Worktree{
 			Name:        branchName,
-			WorkspaceId: "test-workspace",
+			WorkspaceId: filepath.Base(repoDir),
 		}
 		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
 		require.NoError(t, err)
