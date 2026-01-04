@@ -109,7 +109,9 @@ Credentials set up in this manner are stored securely in your OS
 keychain/keyring.
 
 **Anthropic** supports two authentication methods via `side auth`:
-- **Claude Pro/Max (OAuth subscription)**: AKA Claude Code subscription. Choose Anthropic → Claude Pro/Max (OAuth subscription), then complete the browser-based OAuth flow.
+- **Claude Pro/Max (OAuth subscription)**: AKA Claude Code subscription. Choose
+  Anthropic → Claude Pro/Max (OAuth subscription), then complete the browser-based
+  OAuth flow.
 - **API key**: Choose Anthropic → Manually enter API Key
 
 Other providers require an API key for now.
@@ -123,23 +125,31 @@ For non-interactive setup, set environment variables (with or without `SIDE_` pr
 
 #### Custom Providers
 
-Custom providers (e.g., self-hosted or alternative API-compatible services) are configured via [local config](#local-config). See that section for details.
 
 ### Local config
 
-Sidekick reads local configuration from the XDG config directory, typically `~/.config/sidekick/config.yml`. Supported formats: YAML, TOML, JSON, in that order of precedence.
+Sidekick reads local configuration from the XDG config directory, typically
+`~/.config/sidekick/config.yml`. Supported formats: YAML, TOML, JSON, in that
+order of precedence.
 
-Custom providers are currently configured via local config, using the `providers` list:
+#### Custom Providers
+
+Custom providers (e.g., self-hosted or alternative API-compatible services) may
+be configured via in the local config file using the `providers` list:
 
 ```yaml
 providers:
-  - name: my-provider # for built-in provider types (openai, anthropic, google), omit the name to use the default built-in llm configs
-    type: openai_compatible  # openai, anthropic, google, openai_compatible, openai_responses_compatible
+  - name: my-provider
+    type: openai_compatible # openai, anthropic, google, openai_compatible, openai_responses_compatible
     base_url: https://my-llm-api.example.com/v1
     key: ${MY_API_KEY}
     default_llm: my-model-name
     small_llm: my-small-model
 ```
+
+Note: for built-in provider types (openai, anthropic, google), omit the name to
+use the default built-in llm configs, or set it to match the type. Setting a
+different name will prevent the default llm configs from being used.
 
 ### AGENTS.md
 
