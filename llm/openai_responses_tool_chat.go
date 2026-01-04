@@ -99,6 +99,10 @@ func (o OpenaiResponsesToolChat) ChatStream(ctx context.Context, options ToolCha
 	}
 	params.ParallelToolCalls = param.NewOpt(parallelToolCalls)
 
+	if options.Params.MaxTokens > 0 {
+		params.MaxOutputTokens = param.NewOpt(int64(options.Params.MaxTokens))
+	}
+
 	params.Store = openai.Bool(false)
 
 	var actualReasoningEffort string
