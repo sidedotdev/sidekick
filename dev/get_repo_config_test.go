@@ -407,3 +407,66 @@ edit_code:
 		assert.Equal(t, "yaml hints", config.EditCode.Hints)
 	})
 }
+
+func TestGetRepoConfigActivityV2(t *testing.T) {
+	t.Run("returns chosen path when config exists", func(t *testing.T) {
+		yamlContent := `
+mission: test mission
+`
+		envContainer := setupTestEnv(t, yamlContent, "", "")
+
+		result, err := GetRepoConfigActivityV2(envContainer)
+
+		require.NoError(t, err)
+		assert.Equal(t, "test mission", result.Config.Mission)
+		assert.Contains(t, result.ChosenPath, "side.yml")
+	})
+
+	t.Run("returns empty chosen path when no config exists", func(t *testing.T) {
+		tempDir := t.TempDir()
+		mock := &mockEnv{workingDir: tempDir}
+		envContainer := env.EnvContainer{Env: mock}
+
+		result, err := GetRepoConfigActivityV2(envContainer)
+
+		require.NoError(t, err)
+		assert.Empty(t, result.ChosenPath)
+		assert.Empty(t, result.Config.Mission)
+	})
+
+	t.Run("returns full path for chosen config", func(t *testing.T) {
+		tempDir := t.TempDir()
+		configPath := filepath.Join(tempDir, "side.toml")
+		err := os.WriteFile(configPath, []byte(`mission = "toml mission"`), 0644)
+		require.NoError(t, err)
+
+		mock := &mockEnv{workingDir: tempDir}
+		envContainer := env.EnvContainer{Env: mock}
+
+		result, err := GetRepoConfigActivityV2(envContainer)
+
+		require.NoError(t, err)
+		assert.Equal(t, configPath, result.ChosenPath)
+		assert.Equal(t, "toml mission", result.Config.Mission)
+	})
+
+	t.Run("config parsing matches GetRepoConfigActivity", func(t *testing.T) {
+		yamlContent := `
+mission: test mission
+edit_code:
+  hints: inline hints
+agent_config:
+  coding:
+    auto_iterations: 10
+`
+		envContainer := setupTestEnv(t, yamlContent, "", "")
+
+		resultV2, err := GetRepoConfigActivityV2(envContainer)
+		require.NoError(t, err)
+
+		resultV1, err := GetRepoConfigActivity(envContainer)
+		require.NoError(t, err)
+
+		assert.Equal(t, resultV1, resultV2.Config)
+	})
+}

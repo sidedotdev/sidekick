@@ -16,6 +16,12 @@ import (
 // repoConfigCandidates defines the precedence order for repo config files
 var repoConfigCandidates = []string{"side.yml", "side.yaml", "side.toml", "side.json"}
 
+// GetRepoConfigActivityResult wraps RepoConfig with discovery metadata
+type GetRepoConfigActivityResult struct {
+	Config     common.RepoConfig
+	ChosenPath string
+}
+
 // GetRepoConfigActivity reads the repo config file and returns a RepoConfig object.
 // It searches for config files in order: side.yml, side.yaml, side.toml, side.json.
 // TODO /gen define GetRepoConfigActivityInput struct that has EnvContainer
@@ -103,7 +109,105 @@ func GetRepoConfigActivity(envContainer env.EnvContainer) (common.RepoConfig, er
 	return config, nil
 }
 
+// GetRepoConfigActivityV2 reads the repo config file and returns a result with config and discovery metadata.
+// It searches for config files in order: side.yml, side.yaml, side.toml, side.json.
+func GetRepoConfigActivityV2(envContainer env.EnvContainer) (GetRepoConfigActivityResult, error) {
+	workingDir := envContainer.Env.GetWorkingDirectory()
+	discovery := common.DiscoverConfigFile(workingDir, repoConfigCandidates)
+
+	var config common.RepoConfig
+
+	if discovery.ChosenPath == "" {
+		log.Info().
+			Str("workingDir", workingDir).
+			Msg("No repo config found (side.yml/yaml/toml/json); using default repo config")
+	} else {
+		if len(discovery.AllFound) > 1 {
+			log.Warn().
+				Str("chosenPath", discovery.ChosenPath).
+				Strs("allFound", discovery.AllFound).
+				Msg("Multiple repo config files found; using highest precedence file")
+		}
+
+		data, err := os.ReadFile(discovery.ChosenPath)
+		if err != nil {
+			return GetRepoConfigActivityResult{}, fmt.Errorf("failed to read repo config file %q: %w", discovery.ChosenPath, err)
+		}
+
+		parser := common.GetParserForExtension(discovery.ChosenPath)
+		if parser == nil {
+			return GetRepoConfigActivityResult{}, fmt.Errorf("unsupported config file format: %s", discovery.ChosenPath)
+		}
+
+		k := koanf.New(".")
+		if err := k.Load(rawBytesProvider(data), parser); err != nil {
+			return GetRepoConfigActivityResult{}, fmt.Errorf("failed to parse repo config %q: %w", discovery.ChosenPath, err)
+		}
+
+		if err := k.UnmarshalWithConf("", &config, koanf.UnmarshalConf{Tag: "toml"}); err != nil {
+			return GetRepoConfigActivityResult{}, fmt.Errorf("failed to unmarshal repo config %q: %w", discovery.ChosenPath, err)
+		}
+	}
+
+	// If hints are not provided inline, try loading from HintsPath
+	if config.EditCode.Hints == "" && config.EditCode.HintsPath != "" {
+		hintsFilePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), config.EditCode.HintsPath)
+		hintsData, err := os.ReadFile(hintsFilePath)
+		if err != nil {
+			configName := "repo config"
+			if discovery.ChosenPath != "" {
+				configName = filepath.Base(discovery.ChosenPath)
+			}
+			return GetRepoConfigActivityResult{}, fmt.Errorf("failed to read hints file specified in %s (hints_path: %q): %w", configName, config.EditCode.HintsPath, err)
+		}
+		config.EditCode.Hints = string(hintsData)
+	}
+
+	if config.EditCode.Hints == "" && config.EditCode.HintsPath == "" {
+		candidates := []string{
+			"AGENTS.md",
+			"CLAUDE.md",
+			"GEMINI.md",
+			".github/copilot-instructions.md",
+			".clinerules",
+			".cursorrules",
+			".windsurfrules",
+			"CONVENTIONS.md",
+		}
+		for _, candidate := range candidates {
+			fallbackPath := filepath.Join(envContainer.Env.GetWorkingDirectory(), candidate)
+			hintsData, err := os.ReadFile(fallbackPath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return GetRepoConfigActivityResult{}, fmt.Errorf("failed to read fallback hints file %q: %w", candidate, err)
+			}
+
+			config.EditCode.HintsPath = candidate
+			config.EditCode.Hints = string(hintsData)
+			log.Info().Str("fallbackHintsFile", candidate).Msg("Loaded edit hints from fallback file")
+			break
+		}
+	}
+
+	return GetRepoConfigActivityResult{
+		Config:     config,
+		ChosenPath: discovery.ChosenPath,
+	}, nil
+}
+
 func GetRepoConfig(eCtx flow_action.ExecContext) (common.RepoConfig, error) {
+	v := workflow.GetVersion(eCtx, "get-repo-config-v2", workflow.DefaultVersion, 1)
+	if v >= 1 {
+		var result GetRepoConfigActivityResult
+		err := workflow.ExecuteActivity(eCtx, GetRepoConfigActivityV2, eCtx.EnvContainer).Get(eCtx, &result)
+		if err != nil {
+			return common.RepoConfig{}, err
+		}
+		return result.Config, nil
+	}
+
 	var repoConfig common.RepoConfig
 	err := workflow.ExecuteActivity(eCtx, GetRepoConfigActivity, eCtx.EnvContainer).Get(eCtx, &repoConfig)
 	if err != nil {
