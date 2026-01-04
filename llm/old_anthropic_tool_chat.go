@@ -43,10 +43,15 @@ func (OldAnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOpti
 		temperature = *options.Params.Temperature
 	}
 
+	maxTokens := 8000
+	if options.Params.MaxTokens > 0 {
+		maxTokens = options.Params.MaxTokens
+	}
+
 	request := &old_anthropic.MessageRequest{
 		Model:             old_anthropic.Model(model),
 		Temperature:       float64(temperature),
-		MaxTokensToSample: 8000,
+		MaxTokensToSample: maxTokens,
 		Messages:          oldAnthropicFromChatMessages(options.Params.Messages),
 		ToolChoice:        oldAnthropicFromToolChoice(options.Params.ToolChoice, options.Params.Tools),
 		Tools:             oldAnthropicFromTools(options.Params.Tools),
