@@ -103,6 +103,9 @@ func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 	if options.Params.ReasoningEffort != "" {
 		req.ReasoningEffort = options.Params.ModelConfig.ReasoningEffort
 	}
+	if options.Params.MaxTokens > 0 {
+		req.MaxTokens = options.Params.MaxTokens
+	}
 	if len(req.Tools) == 0 {
 		req.ParallelToolCalls = nil
 	}
