@@ -16,6 +16,10 @@ import (
 	"go.temporal.io/sdk/temporal"
 )
 
+// envVarsToInject are environment variables injected into all commands run via Env.
+// GIT_EDITOR=true prevents git from opening an editor for interactive commands.
+var envVarsToInject = []string{"GIT_EDITOR=true"}
+
 // ErrBranchAlreadyExists is returned when attempting to create a worktree
 // with a branch name that already exists
 var ErrBranchAlreadyExists = errors.New("branch already exists")
@@ -143,7 +147,7 @@ func (e *LocalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 		WorkingDir: filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir),
 		Command:    input.Command,
 		Args:       input.Args,
-		EnvVars:    input.EnvVars,
+		EnvVars:    append(input.EnvVars, envVarsToInject...),
 	}
 	return unix.RunCommandActivity(ctx, runCommandInput)
 }
@@ -161,7 +165,7 @@ func (e *LocalGitWorktreeEnv) RunCommand(ctx context.Context, input EnvRunComman
 		WorkingDir: filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir),
 		Command:    input.Command,
 		Args:       input.Args,
-		EnvVars:    input.EnvVars,
+		EnvVars:    append(input.EnvVars, envVarsToInject...),
 	}
 	return unix.RunCommandActivity(ctx, runCommandInput)
 }
