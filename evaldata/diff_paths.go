@@ -5,12 +5,13 @@ import (
 	"strings"
 )
 
-// Source constants for file path discovery.
+// Source constants for file path and line range discovery.
 const (
 	SourceReviewMergeDiff = "review_merge_diff"
 	SourceToolCallArgs    = "tool_call_args"
 	SourceToolCallResult  = "tool_call_result"
 	SourceDiff            = "diff"
+	SourceGoldenDiff      = "golden_diff"
 )
 
 // diffHeaderRegex matches "diff --git a/<path> b/<path>" lines.
@@ -159,4 +160,151 @@ func ParseBulkSearchResultPaths(result string) []string {
 // ContainsDiff checks if a string contains unified diff content.
 func ContainsDiff(s string) bool {
 	return diffHeaderRegex.MatchString(s)
+}
+
+// hunkHeaderRegex matches unified diff hunk headers: @@ -start,count +start,count @@
+// Examples: @@ -1,3 +1,4 @@, @@ -10 +10,2 @@, @@ -0,0 +1,5 @@
+var hunkHeaderRegex = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
+
+// DiffHunk represents a single hunk from a unified diff.
+type DiffHunk struct {
+	OldStart int
+	OldCount int
+	NewStart int
+	NewCount int
+}
+
+// ParseDiffHunks extracts file paths and their associated line ranges from a unified diff.
+// Returns a map of file path to list of hunks (line ranges) for that file.
+func ParseDiffHunks(diff string) map[string][]DiffHunk {
+	if diff == "" {
+		return nil
+	}
+
+	result := make(map[string][]DiffHunk)
+	lines := strings.Split(diff, "\n")
+	var currentPath string
+
+	for i, line := range lines {
+		// Check for diff header to get current file
+		if matches := diffHeaderRegex.FindStringSubmatch(line); matches != nil {
+			aPath := matches[1]
+			bPath := matches[2]
+
+			// Look ahead for rename, new file, or deleted file indicators
+			isNewFile := false
+			isDeletedFile := false
+			var renameTo string
+
+			for j := i + 1; j < len(lines) && j < i+10; j++ {
+				nextLine := lines[j]
+				if strings.HasPrefix(nextLine, "diff --git") {
+					break
+				}
+				if strings.HasPrefix(nextLine, "new file mode") {
+					isNewFile = true
+				}
+				if strings.HasPrefix(nextLine, "deleted file mode") {
+					isDeletedFile = true
+				}
+				if m := renameToRegex.FindStringSubmatch(nextLine); m != nil {
+					renameTo = m[1]
+				}
+			}
+
+			// Determine the relevant path
+			if renameTo != "" {
+				currentPath = normalizePath(renameTo)
+			} else if isNewFile {
+				currentPath = normalizePath(bPath)
+			} else if isDeletedFile {
+				currentPath = normalizePath(aPath)
+			} else {
+				currentPath = normalizePath(bPath)
+			}
+			continue
+		}
+
+		// Check for hunk header
+		if currentPath != "" {
+			if matches := hunkHeaderRegex.FindStringSubmatch(line); matches != nil {
+				hunk := DiffHunk{
+					OldStart: parseInt(matches[1]),
+					OldCount: 1,
+					NewStart: parseInt(matches[3]),
+					NewCount: 1,
+				}
+				if matches[2] != "" {
+					hunk.OldCount = parseInt(matches[2])
+				}
+				if matches[4] != "" {
+					hunk.NewCount = parseInt(matches[4])
+				}
+				result[currentPath] = append(result[currentPath], hunk)
+			}
+		}
+	}
+
+	return result
+}
+
+// parseInt parses a string to int, returning 0 on error.
+func parseInt(s string) int {
+	var n int
+	for _, c := range s {
+		if c >= '0' && c <= '9' {
+			n = n*10 + int(c-'0')
+		}
+	}
+	return n
+}
+
+// DiffHunksToLineRanges converts diff hunks to FileLineRange entries.
+// Uses the "new" side of the diff (the +start,count) as the relevant lines.
+func DiffHunksToLineRanges(hunks map[string][]DiffHunk, source string) []FileLineRange {
+	if len(hunks) == 0 {
+		return nil
+	}
+
+	var ranges []FileLineRange
+	// Sort paths for deterministic output
+	var paths []string
+	for path := range hunks {
+		paths = append(paths, path)
+	}
+	sortStrings(paths)
+
+	for _, path := range paths {
+		for _, hunk := range hunks[path] {
+			// For new files or additions, use the new side
+			// For deletions (NewCount=0), we still record the range as it indicates relevant context
+			startLine := hunk.NewStart
+			endLine := hunk.NewStart + hunk.NewCount - 1
+			if hunk.NewCount == 0 {
+				// Deletion: use old side to indicate where lines were removed
+				startLine = hunk.OldStart
+				endLine = hunk.OldStart + hunk.OldCount - 1
+			}
+			if endLine < startLine {
+				endLine = startLine
+			}
+			ranges = append(ranges, FileLineRange{
+				Path:      path,
+				StartLine: startLine,
+				EndLine:   endLine,
+				Sources:   []string{source},
+			})
+		}
+	}
+
+	return ranges
+}
+
+// sortStrings sorts a slice of strings in place.
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
 }

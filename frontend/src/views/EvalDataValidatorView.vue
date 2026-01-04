@@ -8,7 +8,7 @@ import {
   type ValidatedRow,
   type ValidatorState,
   type RowKey,
-  type ToolCallSpec,
+  type FileLineRange,
   makeRowKey,
   parseJSONL,
   serializeJSONL,
@@ -263,37 +263,40 @@ function formatBlockingRowKey(key: string): string {
   return `Case ${row.datasetA.caseIndex + 1} (${row.datasetA.flowId.slice(0, 8)})`
 }
 
-function addToolCall() {
+function addLineRange() {
   if (!currentRow.value) return
-  currentRow.value.datasetB.toolCalls.push({ toolName: 'get_symbol_definitions', toolCallId: '', argumentsJson: '{}' })
+  currentRow.value.datasetB.lineRanges.push({ path: '', startLine: 1, endLine: 1, sources: ['manual'] })
   save()
 }
 
-function removeToolCall(index: number) {
+function removeLineRange(index: number) {
   if (!currentRow.value) return
-  currentRow.value.datasetB.toolCalls.splice(index, 1)
+  currentRow.value.datasetB.lineRanges.splice(index, 1)
   save()
 }
 
-function moveToolCallUp(index: number) {
+function moveLineRangeUp(index: number) {
   if (!currentRow.value || index <= 0) return
-  const calls = currentRow.value.datasetB.toolCalls
-  ;[calls[index - 1], calls[index]] = [calls[index], calls[index - 1]]
+  const ranges = currentRow.value.datasetB.lineRanges
+  ;[ranges[index - 1], ranges[index]] = [ranges[index], ranges[index - 1]]
   save()
 }
 
-function moveToolCallDown(index: number) {
+function moveLineRangeDown(index: number) {
   if (!currentRow.value) return
-  const calls = currentRow.value.datasetB.toolCalls
-  if (index >= calls.length - 1) return
-  ;[calls[index], calls[index + 1]] = [calls[index + 1], calls[index]]
+  const ranges = currentRow.value.datasetB.lineRanges
+  if (index >= ranges.length - 1) return
+  ;[ranges[index], ranges[index + 1]] = [ranges[index + 1], ranges[index]]
   save()
 }
 
-function updateToolCall(index: number, field: keyof ToolCallSpec, value: string) {
+function updateLineRange(index: number, field: keyof FileLineRange, value: string | number) {
   if (!currentRow.value) return
-  const call = currentRow.value.datasetB.toolCalls[index]
-  if (field === 'toolName' || field === 'toolCallId' || field === 'argumentsJson') call[field] = value
+  const range = currentRow.value.datasetB.lineRanges[index]
+  if (field === 'path') range.path = value as string
+  else if (field === 'startLine') range.startLine = typeof value === 'number' ? value : parseInt(value) || 1
+  else if (field === 'endLine') range.endLine = typeof value === 'number' ? value : parseInt(value) || 1
+  else if (field === 'sources') range.sources = (value as string).split(',').map(s => s.trim()).filter(s => s)
   save()
 }
 
@@ -440,26 +443,25 @@ function formatJson(json: string): string {
         </section>
 
         <section class="field-section">
-          <h3>Dataset B: Tool Calls <span class="count">({{ currentRow.datasetB.toolCalls.length }})</span></h3>
+          <h3>Dataset B: Line Ranges <span class="count">({{ currentRow.datasetB.lineRanges.length }})</span></h3>
           <div class="list-editor">
-            <div v-for="(tc, index) in currentRow.datasetB.toolCalls" :key="index" class="list-item tool-call">
+            <div v-for="(lr, index) in currentRow.datasetB.lineRanges" :key="index" class="list-item line-range-item">
               <div class="item-controls">
-                <button @click="moveToolCallUp(index)" :disabled="index === 0" class="btn icon">↑</button>
-                <button @click="moveToolCallDown(index)" :disabled="index === currentRow.datasetB.toolCalls.length - 1" class="btn icon">↓</button>
+                <button @click="moveLineRangeUp(index)" :disabled="index === 0" class="btn icon">↑</button>
+                <button @click="moveLineRangeDown(index)" :disabled="index === currentRow.datasetB.lineRanges.length - 1" class="btn icon">↓</button>
               </div>
-              <div class="tool-call-fields">
-                <select :value="tc.toolName" @change="e => updateToolCall(index, 'toolName', (e.target as HTMLSelectElement).value)">
-                  <option value="get_symbol_definitions">get_symbol_definitions</option>
-                  <option value="bulk_search_repository">bulk_search_repository</option>
-                  <option value="read_file_lines">read_file_lines</option>
-                </select>
-                <input type="text" :value="tc.toolCallId" @input="e => updateToolCall(index, 'toolCallId', (e.target as HTMLInputElement).value)" placeholder="Tool Call ID" />
-                <textarea :value="tc.argumentsJson" @input="e => updateToolCall(index, 'argumentsJson', (e.target as HTMLTextAreaElement).value)" rows="2"></textarea>
-                <div v-if="tc.parseError" class="parse-error">{{ tc.parseError }}</div>
+              <div class="line-range-fields">
+                <input type="text" :value="lr.path" @input="e => updateLineRange(index, 'path', (e.target as HTMLInputElement).value)" placeholder="file/path.go" class="path-input" />
+                <div class="line-numbers">
+                  <input type="number" :value="lr.startLine" @input="e => updateLineRange(index, 'startLine', (e.target as HTMLInputElement).value)" placeholder="Start" min="1" class="line-input" />
+                  <span>-</span>
+                  <input type="number" :value="lr.endLine" @input="e => updateLineRange(index, 'endLine', (e.target as HTMLInputElement).value)" placeholder="End" min="1" class="line-input" />
+                </div>
+                <input type="text" :value="lr.sources.join(', ')" @input="e => updateLineRange(index, 'sources', (e.target as HTMLInputElement).value)" placeholder="sources" class="sources-input" />
               </div>
-              <button @click="removeToolCall(index)" class="btn icon danger">×</button>
+              <button @click="removeLineRange(index)" class="btn icon danger">×</button>
             </div>
-            <button @click="addToolCall" class="btn small">+ Add Tool Call</button>
+            <button @click="addLineRange" class="btn small">+ Add Line Range</button>
           </div>
         </section>
 
@@ -561,11 +563,12 @@ function formatJson(json: string): string {
 .file-path-fields { flex: 1; display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
 .file-path-fields input { padding: 0.375rem; background: var(--color-background-soft); border: 1px solid var(--color-border); border-radius: 0.25rem; color: var(--color-text); }
 .sources-input { font-size: 0.75rem; }
-.tool-call { flex-wrap: wrap; }
-.tool-call-fields { flex: 1; display: flex; flex-direction: column; gap: 0.375rem; min-width: 0; }
-.tool-call-fields select, .tool-call-fields input, .tool-call-fields textarea { padding: 0.375rem; background: var(--color-background-soft); border: 1px solid var(--color-border); border-radius: 0.25rem; color: var(--color-text); font-family: inherit; }
-.tool-call-fields textarea { resize: vertical; font-family: monospace; font-size: 0.75rem; }
-.parse-error { color: #ef4444; font-size: 0.75rem; }
+.line-range-item { flex-wrap: wrap; }
+.line-range-fields { flex: 1; display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+.line-range-fields input { padding: 0.375rem; background: var(--color-background-soft); border: 1px solid var(--color-border); border-radius: 0.25rem; color: var(--color-text); }
+.line-range-fields .path-input { width: 100%; }
+.line-range-fields .line-numbers { display: flex; align-items: center; gap: 0.25rem; }
+.line-range-fields .line-input { width: 5rem; }
 .validation-actions { margin: 1.5rem 0; text-align: center; }
 .evidence-panel { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--color-border); }
 .evidence-panel h3 { margin: 0 0 1rem; }

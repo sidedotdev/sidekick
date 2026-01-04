@@ -88,6 +88,7 @@ func DeriveBaseCommit(ctx context.Context, repoDir string, c Case) (string, bool
 }
 
 // GetWorktreeDir extracts the working directory from worktrees associated with a flow.
+// Deprecated: Worktree directories are deleted when flows end. Use workspace.LocalRepoDir instead.
 func GetWorktreeDir(worktrees []domain.Worktree) string {
 	if len(worktrees) == 0 {
 		return ""

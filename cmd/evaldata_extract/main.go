@@ -18,7 +18,8 @@ func main() {
 
 	workspaceId := flag.String("workspace-id", "", "Workspace ID to extract data from (required)")
 	outDir := flag.String("out-dir", ".", "Output directory for dataset files")
-	repoDir := flag.String("repo-dir", "", "Repository directory for commit derivation (optional, uses worktree dir if not set)")
+	repoDir := flag.String("repo-dir", "", "Repository directory for commit derivation (optional, uses workspace's LocalRepoDir if not set)")
+	fullExtract := flag.Bool("full", false, "Force full extraction, ignoring existing data")
 	flag.Parse()
 
 	if *workspaceId == "" {
@@ -29,7 +30,29 @@ func main() {
 		Str("workspaceId", *workspaceId).
 		Str("outDir", *outDir).
 		Str("repoDir", *repoDir).
+		Bool("fullExtract", *fullExtract).
 		Msg("Starting evaluation data extraction")
+
+	// Ensure output directory exists
+	if err := os.MkdirAll(*outDir, 0755); err != nil {
+		log.Fatal().Err(err).Msg("Failed to create output directory")
+	}
+
+	datasetAPath := filepath.Join(*outDir, "dataset_a_file_paths.unvalidated.jsonl")
+	datasetBPath := filepath.Join(*outDir, "dataset_b_line_ranges.unvalidated.jsonl")
+
+	// Load existing case IDs for incremental extraction
+	var existingCaseIds map[string]bool
+	var existingRowCount int
+	if !*fullExtract {
+		if existingRows, err := evaldata.ReadDatasetAJSONL(datasetAPath); err == nil {
+			existingCaseIds = evaldata.ExtractCaseIds(existingRows)
+			existingRowCount = len(existingRows)
+			log.Info().
+				Int("existingCases", len(existingCaseIds)).
+				Msg("Found existing dataset, will extract incrementally")
+		}
+	}
 
 	// Open storage
 	storage, err := sqlite.NewStorage()
@@ -38,7 +61,10 @@ func main() {
 	}
 
 	// Create extractor and run extraction
-	opts := evaldata.ExtractOptions{RepoDir: *repoDir}
+	opts := evaldata.ExtractOptions{
+		RepoDir:         *repoDir,
+		ExistingCaseIds: existingCaseIds,
+	}
 	extractor := evaldata.NewExtractorWithOptions(storage, opts)
 	ctx := context.Background()
 
@@ -48,26 +74,41 @@ func main() {
 	}
 
 	log.Info().
-		Int("datasetARows", len(result.DatasetA)).
-		Int("datasetBRows", len(result.DatasetB)).
+		Int("newDatasetARows", len(result.DatasetA)).
+		Int("newDatasetBRows", len(result.DatasetB)).
+		Int("existingRows", existingRowCount).
 		Msg("Extraction complete")
 
-	// Ensure output directory exists
-	if err := os.MkdirAll(*outDir, 0755); err != nil {
-		log.Fatal().Err(err).Msg("Failed to create output directory")
+	if len(result.DatasetA) == 0 {
+		log.Info().Msg("No new cases to extract")
+		return
 	}
 
-	// Write Dataset A
-	datasetAPath := filepath.Join(*outDir, "dataset_a_file_paths.unvalidated.jsonl")
-	if err := evaldata.WriteDatasetAJSONL(datasetAPath, result.DatasetA); err != nil {
-		log.Fatal().Err(err).Msg("Failed to write Dataset A")
+	// Write or append datasets
+	if existingCaseIds == nil || *fullExtract {
+		// Full write
+		if err := evaldata.WriteDatasetAJSONL(datasetAPath, result.DatasetA); err != nil {
+			log.Fatal().Err(err).Msg("Failed to write Dataset A")
+		}
+		if err := evaldata.WriteDatasetBJSONL(datasetBPath, result.DatasetB); err != nil {
+			log.Fatal().Err(err).Msg("Failed to write Dataset B")
+		}
+		log.Info().
+			Str("datasetA", datasetAPath).
+			Str("datasetB", datasetBPath).
+			Msg("Wrote datasets")
+	} else {
+		// Incremental append
+		if err := evaldata.AppendDatasetAJSONL(datasetAPath, result.DatasetA); err != nil {
+			log.Fatal().Err(err).Msg("Failed to append to Dataset A")
+		}
+		if err := evaldata.AppendDatasetBJSONL(datasetBPath, result.DatasetB); err != nil {
+			log.Fatal().Err(err).Msg("Failed to append to Dataset B")
+		}
+		log.Info().
+			Str("datasetA", datasetAPath).
+			Str("datasetB", datasetBPath).
+			Int("appendedRows", len(result.DatasetA)).
+			Msg("Appended to existing datasets")
 	}
-	log.Info().Str("path", datasetAPath).Msg("Wrote Dataset A")
-
-	// Write Dataset B
-	datasetBPath := filepath.Join(*outDir, "dataset_b_context_calls.unvalidated.jsonl")
-	if err := evaldata.WriteDatasetBJSONL(datasetBPath, result.DatasetB); err != nil {
-		log.Fatal().Err(err).Msg("Failed to write Dataset B")
-	}
-	log.Info().Str("path", datasetBPath).Msg("Wrote Dataset B")
 }

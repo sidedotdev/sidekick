@@ -20,6 +20,10 @@ func TestExtractor_SelectsCompletedTasksWithWorktrees(t *testing.T) {
 	wsId := "ws-1"
 	now := time.Now().UTC()
 
+	require.NoError(t, storage.PersistWorkspace(ctx, domain.Workspace{
+		Id: wsId, Name: "Test Workspace", LocalRepoDir: "/tmp/test-repo",
+		Created: now, Updated: now,
+	}))
 	require.NoError(t, storage.PersistTask(ctx, domain.Task{
 		WorkspaceId: wsId, Id: "task-complete", Status: domain.TaskStatusComplete,
 		Created: now, Updated: now,
@@ -57,6 +61,10 @@ func TestExtractor_MultipleCases(t *testing.T) {
 	wsId := "ws-2"
 	now := time.Now().UTC()
 
+	require.NoError(t, storage.PersistWorkspace(ctx, domain.Workspace{
+		Id: wsId, Name: "Test Workspace", LocalRepoDir: "/tmp/test-repo",
+		Created: now, Updated: now,
+	}))
 	require.NoError(t, storage.PersistTask(ctx, domain.Task{
 		WorkspaceId: wsId, Id: "task-1", Status: domain.TaskStatusComplete,
 		Created: now, Updated: now,
@@ -91,6 +99,10 @@ func TestExtractor_DeterministicOrdering(t *testing.T) {
 	wsId := "ws-3"
 	now := time.Now().UTC()
 
+	require.NoError(t, storage.PersistWorkspace(ctx, domain.Workspace{
+		Id: wsId, Name: "Test Workspace", LocalRepoDir: "/tmp/test-repo",
+		Created: now, Updated: now,
+	}))
 	require.NoError(t, storage.PersistTask(ctx, domain.Task{
 		WorkspaceId: wsId, Id: "task-b", Status: domain.TaskStatusComplete,
 		Created: now, Updated: now,
@@ -138,6 +150,10 @@ func TestExtractor_QueryExtraction(t *testing.T) {
 	wsId := "ws-4"
 	now := time.Now().UTC()
 
+	require.NoError(t, storage.PersistWorkspace(ctx, domain.Workspace{
+		Id: wsId, Name: "Test Workspace", LocalRepoDir: "/tmp/test-repo",
+		Created: now, Updated: now,
+	}))
 	require.NoError(t, storage.PersistTask(ctx, domain.Task{
 		WorkspaceId: wsId, Id: "task-1", Status: domain.TaskStatusComplete,
 		Created: now, Updated: now,
@@ -175,6 +191,10 @@ func TestExtractor_NeedsFlags(t *testing.T) {
 	wsId := "ws-5"
 	now := time.Now().UTC()
 
+	require.NoError(t, storage.PersistWorkspace(ctx, domain.Workspace{
+		Id: wsId, Name: "Test Workspace", LocalRepoDir: "/tmp/test-repo",
+		Created: now, Updated: now,
+	}))
 	require.NoError(t, storage.PersistTask(ctx, domain.Task{
 		WorkspaceId: wsId, Id: "task-1", Status: domain.TaskStatusComplete,
 		Created: now, Updated: now,
@@ -204,10 +224,72 @@ func TestExtractor_EmptyWorkspace(t *testing.T) {
 	t.Parallel()
 	storage := sqlite.NewTestSqliteStorage(t, "extract_empty")
 	ctx := context.Background()
+	now := time.Now().UTC()
+
+	require.NoError(t, storage.PersistWorkspace(ctx, domain.Workspace{
+		Id: "ws-empty", Name: "Empty Workspace", LocalRepoDir: "/tmp/test-repo",
+		Created: now, Updated: now,
+	}))
 
 	result, err := evaldata.NewExtractor(storage).Extract(ctx, "ws-empty")
 	require.NoError(t, err)
 
 	assert.Empty(t, result.DatasetA)
 	assert.Empty(t, result.DatasetB)
+}
+
+func TestExtractor_IncrementalExtraction(t *testing.T) {
+	t.Parallel()
+	storage := sqlite.NewTestSqliteStorage(t, "extract_incremental")
+	ctx := context.Background()
+	wsId := "ws-incr"
+	now := time.Now().UTC()
+
+	require.NoError(t, storage.PersistWorkspace(ctx, domain.Workspace{
+		Id: wsId, Name: "Test Workspace", LocalRepoDir: "/tmp/test-repo",
+		Created: now, Updated: now,
+	}))
+	require.NoError(t, storage.PersistTask(ctx, domain.Task{
+		WorkspaceId: wsId, Id: "task-1", Status: domain.TaskStatusComplete,
+		Created: now, Updated: now,
+	}))
+	require.NoError(t, storage.PersistFlow(ctx, domain.Flow{
+		WorkspaceId: wsId, Id: "flow-1", ParentId: "task-1", Type: "dev",
+	}))
+	require.NoError(t, storage.PersistWorktree(ctx, domain.Worktree{
+		Id: "wt-1", FlowId: "flow-1", WorkspaceId: wsId, Created: now,
+	}))
+	require.NoError(t, storage.PersistFlowAction(ctx, domain.FlowAction{
+		Id: "merge-1", FlowId: "flow-1", WorkspaceId: wsId,
+		ActionType: evaldata.ActionTypeMergeApproval, Created: now, Updated: now,
+	}))
+	require.NoError(t, storage.PersistFlowAction(ctx, domain.FlowAction{
+		Id: "merge-2", FlowId: "flow-1", WorkspaceId: wsId,
+		ActionType: evaldata.ActionTypeMergeApproval, Created: now.Add(time.Hour), Updated: now.Add(time.Hour),
+	}))
+
+	// First extraction - get all cases
+	result1, err := evaldata.NewExtractor(storage).Extract(ctx, wsId)
+	require.NoError(t, err)
+	assert.Len(t, result1.DatasetA, 2)
+
+	// Second extraction with existing case IDs - should skip them
+	existingIds := map[string]bool{"merge-1": true}
+	opts := evaldata.ExtractOptions{ExistingCaseIds: existingIds}
+	extractor := evaldata.NewExtractorWithOptions(storage, opts)
+
+	result2, err := extractor.Extract(ctx, wsId)
+	require.NoError(t, err)
+	assert.Len(t, result2.DatasetA, 1)
+	assert.Equal(t, "merge-2", result2.DatasetA[0].CaseId)
+
+	// Third extraction with all existing - should return empty
+	allIds := map[string]bool{"merge-1": true, "merge-2": true}
+	opts2 := evaldata.ExtractOptions{ExistingCaseIds: allIds}
+	extractor2 := evaldata.NewExtractorWithOptions(storage, opts2)
+
+	result3, err := extractor2.Extract(ctx, wsId)
+	require.NoError(t, err)
+	assert.Empty(t, result3.DatasetA)
+	assert.Empty(t, result3.DatasetB)
 }
