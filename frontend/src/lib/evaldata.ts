@@ -14,6 +14,13 @@ export interface ToolCallSpec {
   parseError?: string
 }
 
+export interface FileLineRange {
+  path: string
+  startLine: number
+  endLine: number
+  sources: string[]
+}
+
 export interface DatasetARow {
   workspaceId: string
   taskId: string
@@ -37,7 +44,7 @@ export interface DatasetBRow {
   baseCommit: string
   needsQuery?: boolean
   needsBaseCommit?: boolean
-  toolCalls: ToolCallSpec[]
+  lineRanges: FileLineRange[]
 }
 
 export interface ValidatedRow {
@@ -113,7 +120,7 @@ export function mergeImportedRows(
   for (const [key, row] of Object.entries(existing)) {
     result[key] = {
       datasetA: { ...row.datasetA, filePaths: [...row.datasetA.filePaths.map(fp => ({ ...fp, sources: [...fp.sources] }))] },
-      datasetB: { ...row.datasetB, toolCalls: [...row.datasetB.toolCalls.map(tc => ({ ...tc }))] },
+      datasetB: { ...row.datasetB, lineRanges: [...row.datasetB.lineRanges.map(lr => ({ ...lr, sources: [...lr.sources] }))] },
       validated: row.validated
     }
   }
@@ -144,7 +151,7 @@ export function mergeImportedRows(
           baseCommit: rowA.baseCommit,
           needsQuery: rowA.needsQuery,
           needsBaseCommit: rowA.needsBaseCommit,
-          toolCalls: []
+          lineRanges: []
         },
         validated: false
       }

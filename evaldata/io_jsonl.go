@@ -103,3 +103,52 @@ func ReadDatasetBFromReader(r io.Reader) ([]DatasetBRow, error) {
 	}
 	return rows, scanner.Err()
 }
+
+// ExtractCaseIds returns a set of case IDs from Dataset A rows.
+func ExtractCaseIds(rows []DatasetARow) map[string]bool {
+	ids := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		ids[row.CaseId] = true
+	}
+	return ids
+}
+
+// AppendDatasetAJSONL appends Dataset A rows to an existing JSONL file.
+func AppendDatasetAJSONL(path string, rows []DatasetARow) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open file for append: %w", err)
+	}
+	defer f.Close()
+
+	w := bufio.NewWriter(f)
+	for _, row := range rows {
+		data, err := json.Marshal(row)
+		if err != nil {
+			return fmt.Errorf("failed to marshal row: %w", err)
+		}
+		w.Write(data)
+		w.WriteString("\n")
+	}
+	return w.Flush()
+}
+
+// AppendDatasetBJSONL appends Dataset B rows to an existing JSONL file.
+func AppendDatasetBJSONL(path string, rows []DatasetBRow) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open file for append: %w", err)
+	}
+	defer f.Close()
+
+	w := bufio.NewWriter(f)
+	for _, row := range rows {
+		data, err := json.Marshal(row)
+		if err != nil {
+			return fmt.Errorf("failed to marshal row: %w", err)
+		}
+		w.Write(data)
+		w.WriteString("\n")
+	}
+	return w.Flush()
+}

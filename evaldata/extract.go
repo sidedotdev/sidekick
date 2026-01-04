@@ -12,10 +12,15 @@ type ExtractOptions struct {
 	// RepoDir overrides the repository directory for commit derivation.
 	// If empty, uses the working directory from worktrees.
 	RepoDir string
+
+	// ExistingCaseIds is a set of case IDs that have already been extracted.
+	// Cases with these IDs will be skipped during extraction.
+	ExistingCaseIds map[string]bool
 }
 
 // Storage defines the interface for data access needed by the extractor.
 type Storage interface {
+	GetWorkspace(ctx context.Context, workspaceId string) (domain.Workspace, error)
 	GetTasks(ctx context.Context, workspaceId string, statuses []domain.TaskStatus) ([]domain.Task, error)
 	GetFlowsForTask(ctx context.Context, workspaceId, taskId string) ([]domain.Flow, error)
 	GetWorktreesForFlow(ctx context.Context, workspaceId, flowId string) ([]domain.Worktree, error)
@@ -46,6 +51,12 @@ func NewExtractorWithOptions(storage Storage, opts ExtractOptions) *Extractor {
 
 // Extract extracts evaluation datasets from all eligible flows in a workspace.
 func (e *Extractor) Extract(ctx context.Context, workspaceId string) (*ExtractResult, error) {
+	// Fetch workspace to get LocalRepoDir for commit derivation
+	workspace, err := e.storage.GetWorkspace(ctx, workspaceId)
+	if err != nil {
+		return nil, err
+	}
+
 	tasks, err := e.storage.GetTasks(ctx, workspaceId, []domain.TaskStatus{domain.TaskStatusComplete})
 	if err != nil {
 		return nil, err
@@ -54,6 +65,12 @@ func (e *Extractor) Extract(ctx context.Context, workspaceId string) (*ExtractRe
 	sort.Slice(tasks, func(i, j int) bool {
 		return tasks[i].Id < tasks[j].Id
 	})
+
+	// Determine repo directory for commit derivation
+	repoDir := e.opts.RepoDir
+	if repoDir == "" {
+		repoDir = workspace.LocalRepoDir
+	}
 
 	var datasetA []DatasetARow
 	var datasetB []DatasetBRow
@@ -82,15 +99,13 @@ func (e *Extractor) Extract(ctx context.Context, workspaceId string) (*ExtractRe
 				return nil, err
 			}
 
-			// Determine repo directory for commit derivation
-			repoDir := e.opts.RepoDir
-			if repoDir == "" {
-				repoDir = GetWorktreeDir(worktrees)
-			}
-
 			cases := SplitIntoCases(actions)
 
 			for _, c := range cases {
+				// Skip cases that have already been extracted
+				if e.opts.ExistingCaseIds != nil && e.opts.ExistingCaseIds[c.CaseId] {
+					continue
+				}
 				rowA, rowB := extractCaseRows(ctx, workspaceId, task.Id, c, repoDir)
 				datasetA = append(datasetA, rowA)
 				datasetB = append(datasetB, rowB)
@@ -135,7 +150,7 @@ func extractCaseRows(ctx context.Context, workspaceId, taskId string, c Case, re
 		BaseCommit:      baseCommit,
 		NeedsQuery:      needsQuery,
 		NeedsBaseCommit: needsBaseCommit,
-		ToolCalls:       ExtractRankedToolCalls(c),
+		LineRanges:      ExtractLineRanges(c),
 	}
 
 	return rowA, rowB

@@ -80,18 +80,26 @@ type FilePath struct {
 	Sources []string `json:"sources"`
 }
 
-// DatasetBRow represents a row in Dataset B (context tool call specs).
+// DatasetBRow represents a row in Dataset B (required line ranges).
 type DatasetBRow struct {
-	WorkspaceId     string         `json:"workspaceId"`
-	TaskId          string         `json:"taskId"`
-	FlowId          string         `json:"flowId"`
-	CaseId          string         `json:"caseId"`
-	CaseIndex       int            `json:"caseIndex"`
-	Query           string         `json:"query"`
-	BaseCommit      string         `json:"baseCommit"`
-	NeedsQuery      bool           `json:"needsQuery,omitempty"`
-	NeedsBaseCommit bool           `json:"needsBaseCommit,omitempty"`
-	ToolCalls       []ToolCallSpec `json:"toolCalls"`
+	WorkspaceId     string          `json:"workspaceId"`
+	TaskId          string          `json:"taskId"`
+	FlowId          string          `json:"flowId"`
+	CaseId          string          `json:"caseId"`
+	CaseIndex       int             `json:"caseIndex"`
+	Query           string          `json:"query"`
+	BaseCommit      string          `json:"baseCommit"`
+	NeedsQuery      bool            `json:"needsQuery,omitempty"`
+	NeedsBaseCommit bool            `json:"needsBaseCommit,omitempty"`
+	LineRanges      []FileLineRange `json:"lineRanges"`
+}
+
+// FileLineRange represents a range of lines in a file that are relevant.
+type FileLineRange struct {
+	Path      string   `json:"path"`
+	StartLine int      `json:"startLine"`
+	EndLine   int      `json:"endLine"`
+	Sources   []string `json:"sources"`
 }
 
 // ActionType constants for case splitting and tool call extraction.
