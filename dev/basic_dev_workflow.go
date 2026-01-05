@@ -358,8 +358,9 @@ Please analyze whether the requirements have been fulfilled. If not, continue ed
 				Content: userMessageContent,
 			})
 			*chatHistory = append(*chatHistory, llm.ChatMessage{
-				Role: llm.ChatMessageRoleAssistant,
-				Content: fmt.Sprintf(`
+				Role: llm.ChatMessageRoleUser,
+				Content: fmt.Sprintf(`Automated Analysis:
+
 The requirements were not fulfilled.
 
 Analysis: %s

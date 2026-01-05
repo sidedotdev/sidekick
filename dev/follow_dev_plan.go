@@ -244,6 +244,14 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 				"testResult":  testResult,
 				"fulfillment": result.Fulfillment,
 			}
+			if info, ok := promptInfo.(FeedbackInfo); ok {
+				// don't overwrite automated feedback from the LLM
+				// TODO don't assume we're authoring edit blocks (when dev plan
+				// step types expand in the future)
+				content := renderAuthorEditBlockFeedbackPrompt(info.Feedback, info.Type)
+				*chatHistory = append(*chatHistory, llm.ChatMessage{Role: "user", Content: content})
+			}
+
 			feedbackInfo, err := GetUserFeedback(dCtx, promptInfo, guidanceContext, chatHistory, requestParams)
 			if err != nil {
 				return result, fmt.Errorf("failed to get user feedback: %v", err)
@@ -257,6 +265,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 
 		// Step 2: execute step
 		err = performStep(dCtx, modelConfig, contextSizeExtension, chatHistory, promptInfo, step, planExecution)
+		promptInfo = SkipInfo{} // never reuse the prompt info from the previous attempt
 		if err != nil && !errors.Is(err, flow_action.PendingActionError) {
 			log.Warn().Err(err).Msg("Error executing step")
 			// TODO: on repeated overloaded_error from anthropic, we want to
