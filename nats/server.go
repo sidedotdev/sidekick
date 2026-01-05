@@ -101,6 +101,13 @@ func newServerWithOptions(opts ServerOptions) (*Server, error) {
 		JetStreamMaxMemory: opts.JetStreamMaxMemory,
 		JetStreamMaxStore:  opts.JetStreamMaxStore,
 		Port:               opts.Port,
+
+		// configure allowed payload size to as big as the max recommended, as
+		// command results tracked in a flow action change event can be huge.
+		// TODO: we should switch to identifiers + separate blob storage instead
+		// to avoid such large event payloads in the future
+		MaxPayload: server.MAX_PAYLOAD_MAX_SIZE,
+
 		// we'll always use the port to communication, never in-process.
 		// simplifies development when we have multiple binaries that need to
 		// communicate over nats/jetstream
