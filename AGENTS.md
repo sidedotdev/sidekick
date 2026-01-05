@@ -19,6 +19,12 @@ function sizes reasonable (less than a few hundred lines). Make tests parallel
 with t.Parallel() as much as possible (including subtests) when it is safe to do
 so.
 
+Temporal: New activities/workflows should be registered in the worker. Changes
+to workflow logic should be "deterministic", meaning that the same set of
+activities & side effects should be called in workflow replays. If that's not
+possible, add a new workflow version that gates the new logic, while retaining
+the old logic for old workflow executions.
+
 Logs always use zerolog in go. JSON serialization is always in camelCase, not
 snake_case.
 
