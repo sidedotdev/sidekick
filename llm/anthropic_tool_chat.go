@@ -103,6 +103,35 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 		Tools:       anthropic.F(tools),
 	}
 
+	// TODO move into helper function
+	switch options.Params.ToolChoice.Type {
+	case ToolChoiceTypeAuto:
+		messageParams.ToolChoice = anthropic.F(
+			anthropic.ToolChoiceUnionParam(
+				anthropic.ToolChoiceAutoParam{
+					Type: anthropic.F(anthropic.ToolChoiceAutoTypeAuto),
+				},
+			),
+		)
+	case ToolChoiceTypeRequired:
+		messageParams.ToolChoice = anthropic.F(
+			anthropic.ToolChoiceUnionParam(
+				anthropic.ToolChoiceAnyParam{
+					Type: anthropic.F(anthropic.ToolChoiceAnyTypeAny),
+				},
+			),
+		)
+	case ToolChoiceTypeTool:
+		messageParams.ToolChoice = anthropic.F(
+			anthropic.ToolChoiceUnionParam(
+				anthropic.ToolChoiceToolParam{
+					Type: anthropic.F(anthropic.ToolChoiceToolTypeTool),
+					Name: anthropic.F(options.Params.ToolChoice.Name),
+				},
+			),
+		)
+	}
+
 	if useOAuth {
 		// NOTE: OAuth tokens require using the Claude Code system prompt, otherwise you get a 400 error
 		var systemMessages []anthropic.TextBlockParam
