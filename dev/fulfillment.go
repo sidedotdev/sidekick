@@ -29,9 +29,19 @@ type CriteriaFulfillment struct {
 
 // TODO /gen add a test for this function
 func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (CriteriaFulfillment, error) {
-	diff, err := git.GitDiff(dCtx.ExecContext)
-	if err != nil {
-		return CriteriaFulfillment{}, fmt.Errorf("failed to get git diff: %v", err)
+	var diff string
+	var err error
+
+	if promptInfo.LastReviewTreeHash != "" {
+		diff, err = getDiffSinceLastReview(dCtx, promptInfo.LastReviewTreeHash, false)
+		if err != nil {
+			return CriteriaFulfillment{}, fmt.Errorf("failed to get diff since last review: %v", err)
+		}
+	} else {
+		diff, err = git.GitDiff(dCtx.ExecContext)
+		if err != nil {
+			return CriteriaFulfillment{}, fmt.Errorf("failed to get git diff: %v", err)
+		}
 	}
 
 	promptInfo.Work = diff

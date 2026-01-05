@@ -564,6 +564,31 @@ func TestGitDiffActivity_StagedWithTreeHash(t *testing.T) {
 			expectError:  false,
 			expectOutput: false,
 		},
+		{
+			name: "shows_deleted_file_that_was_never_committed",
+			setupRepo: func(t *testing.T, repoDir string) string {
+				// Create initial commit so repo is not empty
+				createFileAndCommit(t, repoDir, "initial.txt", "initial", "initial commit")
+
+				// Add a new file and stage it (never committed)
+				err := os.WriteFile(filepath.Join(repoDir, "newfile.txt"), []byte("new file content"), fs.FileMode(0644))
+				require.NoError(t, err)
+				runGitCommandInTestRepo(t, repoDir, "add", "newfile.txt")
+
+				// Get tree hash that includes the new staged file
+				treeHash := runGitCommandInTestRepo(t, repoDir, "write-tree")
+
+				// Now delete the file and remove from staging
+				err = os.Remove(filepath.Join(repoDir, "newfile.txt"))
+				require.NoError(t, err)
+				runGitCommandInTestRepo(t, repoDir, "rm", "--cached", "newfile.txt")
+
+				return treeHash
+			},
+			expectError:    false,
+			expectOutput:   true,
+			outputContains: []string{"newfile.txt"},
+		},
 	}
 
 	for _, tt := range tests {
