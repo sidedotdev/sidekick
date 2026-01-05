@@ -144,10 +144,10 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	v := workflow.GetVersion(dCtx, "basic-dev-parent-subflow", workflow.DefaultVersion, 1)
 	if v == 1 {
 		result, err = RunSubflow(dCtx, "coding", "Coding", func(subflow domain.Subflow) (string, error) {
-			return codingSubflow(dCtx, requirements, input.BasicDevOptions.StartBranch)
+			return codingSubflow(dCtx, requirements, input.BasicDevOptions.StartBranch, "")
 		})
 	} else {
-		result, err = codingSubflow(dCtx, requirements, input.BasicDevOptions.StartBranch)
+		result, err = codingSubflow(dCtx, requirements, input.BasicDevOptions.StartBranch, "")
 	}
 
 	goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
@@ -187,7 +187,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	return result, nil
 }
 
-func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (result string, err error) {
+func codingSubflow(dCtx DevContext, requirements string, startBranch *string, lastReviewTreeHash string) (result string, err error) {
 	codeContext, fullCodeContext, err := PrepareInitialCodeContext(dCtx, requirements, nil, nil)
 	contextSizeExtension := len(fullCodeContext) - len(codeContext)
 	if err != nil {
@@ -312,8 +312,9 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string) (r
 
 		// Step 4: check diff and confirm if requirements have been met
 		fulfillment, err = CheckWorkMeetsCriteria(dCtx, CheckWorkInfo{
-			Requirements: requirements,
-			AutoChecks:   testOutput,
+			Requirements:       requirements,
+			AutoChecks:         testOutput,
+			LastReviewTreeHash: lastReviewTreeHash,
 		})
 		if err != nil {
 			return "", fmt.Errorf("failed to check if requirements are fulfilled: %w", err)
@@ -513,7 +514,7 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 				// must commit before merge at this point, as codingSubflow
 				// doesn't do so inherently
 				params.CommitRequired = true
-				_, err = codingSubflow(dCtx, requirements, params.StartBranch)
+				_, err = codingSubflow(dCtx, requirements, params.StartBranch, lastReviewTreeHash)
 
 				if err != nil {
 					if goNextVersion >= 1 && errors.Is(err, flow_action.PendingActionError) {

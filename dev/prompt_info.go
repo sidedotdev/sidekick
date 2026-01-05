@@ -167,12 +167,13 @@ func (p InitialDevStepInfo) GetType() string {
 // TODO consider having prompt template names separate from prompt info, or
 // passing a customized prompt string in full even
 type CheckWorkInfo struct {
-	CodeContext   string
-	Requirements  string
-	PlanExecution DevPlanExecution
-	Step          DevStep
-	Work          string
-	AutoChecks    string
+	CodeContext        string
+	Requirements       string
+	PlanExecution      DevPlanExecution
+	Step               DevStep
+	Work               string
+	AutoChecks         string
+	LastReviewTreeHash string
 }
 
 // Implement the PromptInfo interface for InitialDevStepInfo
