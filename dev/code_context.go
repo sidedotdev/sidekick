@@ -531,7 +531,13 @@ func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.Env
 	var allSymbolDefinitions []string
 	var feedbacks []ToolCallResponseInfo
 
-	for _, tcResult := range results {
+	v := workflow.GetVersion(ctx, "handle-multiple-required-code-context", workflow.DefaultVersion, 1)
+	for i, tcResult := range results {
+		if v == workflow.DefaultVersion && i > 0 {
+			// legacy behavior: only use the first tool call
+			break
+		}
+
 		if len(tcResult.RequiredCodeContext.Requests) == 0 {
 			continue
 		}
