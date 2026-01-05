@@ -47,8 +47,8 @@ func TestBatchEmbeddingRequests(t *testing.T) {
 		{
 			name: "known provider default limit",
 			inputs: []string{
-				"a" + string(make([]byte, int(15000*charsPerToken))),
-				"b" + string(make([]byte, int(15000*charsPerToken))),
+				"a" + string(make([]byte, int(10000*charsPerToken))),
+				"b" + string(make([]byte, int(10000*charsPerToken))),
 			},
 			modelConfig: common.ModelConfig{
 				Provider: string(common.GoogleChatProvider),
