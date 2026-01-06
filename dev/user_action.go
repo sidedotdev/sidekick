@@ -34,10 +34,16 @@ func SetupUserActionHandler(dCtx DevContext) {
 					dCtx.ExecContext.GlobalState.SetUserAction(flow_action.UserActionGoNext)
 
 				case string(UserActionDevRunStart):
-					handleDevRunStart(dCtx)
+					// Spawn a new coroutine to avoid blocking inside the selector callback
+					workflow.Go(ctx, func(goCtx workflow.Context) {
+						handleDevRunStart(dCtx.WithContext(goCtx))
+					})
 
 				case string(UserActionDevRunStop):
-					handleDevRunStop(dCtx)
+					// Spawn a new coroutine to avoid blocking inside the selector callback
+					workflow.Go(ctx, func(goCtx workflow.Context) {
+						handleDevRunStop(dCtx.WithContext(goCtx))
+					})
 				}
 			})
 			selector.Select(ctx)
