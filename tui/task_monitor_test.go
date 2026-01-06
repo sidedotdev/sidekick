@@ -385,3 +385,8 @@ func (m *mockClient) SendUserAction(workspaceID, flowID, actionType string) erro
 	args := m.Called(workspaceID, flowID, actionType)
 	return args.Error(0)
 }
+
+func (m *mockClient) QueryFlow(workspaceID, flowID, query string, queryArgs any) (any, error) {
+	args := m.Called(workspaceID, flowID, query, queryArgs)
+	return args.Get(0), args.Error(1)
+}

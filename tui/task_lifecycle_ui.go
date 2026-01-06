@@ -163,7 +163,7 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.taskId = msg.task.Id
 		if m.progModel == nil && len(msg.task.Flows) > 0 {
 			m.flowId = msg.task.Flows[0].Id
-			m.progModel = newProgressModel(m.taskId, m.flowId, m.client)
+			m.progModel = newProgressModel(m.taskId, m.flowId, msg.task.WorkspaceId, m.client)
 			m.progModelInitAt = time.Now()
 			cmd := m.progModel.Init()
 			return m, cmd
