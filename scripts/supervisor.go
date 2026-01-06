@@ -290,12 +290,13 @@ const (
 
 // Process represents a running process
 type Process struct {
-	Config  ProcessConfig
-	Cmd     *exec.Cmd
-	Output  []string
-	mu      sync.RWMutex
-	running bool
-	cancel  context.CancelFunc
+	Config   ProcessConfig
+	Cmd      *exec.Cmd
+	Output   []string
+	mu       sync.RWMutex
+	running  bool
+	stopping bool
+	cancel   context.CancelFunc
 }
 
 func (p *Process) appendOutput(line string) {
@@ -326,6 +327,18 @@ func (p *Process) setRunning(running bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.running = running
+}
+
+func (p *Process) isStopping() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.stopping
+}
+
+func (p *Process) setStopping(stopping bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stopping = stopping
 }
 
 // ephemeralConn tracks an active ephemeral connection
@@ -458,6 +471,7 @@ func (s *Supervisor) StopProcess(p *Process) {
 	if !p.isRunning() {
 		return
 	}
+	p.setStopping(true)
 	if p.cancel != nil {
 		p.cancel()
 	}
@@ -515,6 +529,7 @@ func (s *Supervisor) RestartProcess(ctx context.Context, p *Process, outputChan 
 	}
 	p.mu.Lock()
 	p.Output = []string{}
+	p.stopping = false
 	p.mu.Unlock()
 	s.StartProcess(ctx, p, outputChan)
 }
@@ -1153,6 +1168,9 @@ func (m model) renderProcessPanel(idx int) string {
 }
 
 func (m model) getStatusIndicator(p *Process) string {
+	if p.isStopping() {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Render("● Stopping")
+	}
 	if p.isRunning() {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("●")
 	}
