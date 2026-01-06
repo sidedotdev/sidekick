@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -889,6 +890,22 @@ type model struct {
 	outputChan chan processOutputMsg
 	ctx        context.Context
 	quitting   bool
+
+	// Search state
+	searchMode    bool
+	searchInput   textinput.Model
+	searchTerm    string
+	searchMatches []searchMatch
+	currentMatch  int
+	contextMode   bool // true = show matches in context, false = filter to matches only
+}
+
+type searchMatch struct {
+	processIdx int
+	lineIdx    int
+	line       string
+	startPos   int
+	endPos     int
 }
 
 func newModel(ctx context.Context, sup *Supervisor, outputChan chan processOutputMsg) model {
@@ -901,13 +918,20 @@ func newModel(ctx context.Context, sup *Supervisor, outputChan chan processOutpu
 		viewports[i] = viewport.New(80, 20)
 	}
 
+	ti := textinput.New()
+	ti.Placeholder = "Search..."
+	ti.CharLimit = 256
+	ti.Width = 40
+
 	return model{
-		supervisor: sup,
-		viewMode:   viewTiled,
-		viewports:  viewports,
-		spinner:    s,
-		outputChan: outputChan,
-		ctx:        ctx,
+		supervisor:  sup,
+		viewMode:    viewTiled,
+		viewports:   viewports,
+		spinner:     s,
+		outputChan:  outputChan,
+		ctx:         ctx,
+		searchInput: ti,
+		contextMode: false,
 	}
 }
 
@@ -937,10 +961,70 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Handle search mode input
+		if m.searchMode {
+			switch msg.String() {
+			case "ctrl+c":
+				m.quitting = true
+				return m, tea.Quit
+			case "esc":
+				m.searchMode = false
+				m.searchInput.Blur()
+				if m.searchTerm == "" {
+					m.searchMatches = nil
+					m.currentMatch = 0
+				}
+				m.updateViewportContent()
+				return m, nil
+			case "enter":
+				m.searchMode = false
+				m.searchInput.Blur()
+				m.searchTerm = m.searchInput.Value()
+				m.currentMatch = 0
+				m.performSearch()
+				m.updateViewportContent()
+				if len(m.searchMatches) > 0 {
+					m.jumpToMatch(0)
+				}
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.searchInput, cmd = m.searchInput.Update(msg)
+				return m, cmd
+			}
+		}
+
+		// Handle search result navigation when not in input mode but have active search
+		if m.searchTerm != "" {
+			switch msg.String() {
+			case "n":
+				m.nextMatch()
+				return m, nil
+			case "N":
+				m.prevMatch()
+				return m, nil
+			case "c":
+				m.contextMode = !m.contextMode
+				m.updateViewportContent()
+				if m.contextMode && len(m.searchMatches) > 0 {
+					m.jumpToMatch(m.currentMatch)
+				}
+				return m, nil
+			case "esc":
+				m.clearSearch()
+				m.updateViewportContent()
+				return m, nil
+			}
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
+		case "/", "ctrl+f":
+			m.searchMode = true
+			m.searchInput.Focus()
+			return m, textinput.Blink
 		case "tab":
 			m.viewMode = (m.viewMode + 1) % 2
 			m.updateViewportSizes()
@@ -1001,6 +1085,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportSizes()
 
 	case processOutputMsg:
+		if m.searchTerm != "" {
+			m.performSearch()
+			// Clamp currentMatch if matches were reduced
+			if m.currentMatch >= len(m.searchMatches) {
+				if len(m.searchMatches) > 0 {
+					m.currentMatch = len(m.searchMatches) - 1
+				} else {
+					m.currentMatch = 0
+				}
+			}
+		}
 		m.updateViewportContent()
 		cmds = append(cmds, m.waitForOutput())
 
@@ -1016,13 +1111,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Update viewports: only pass key messages to the active viewport to avoid
 	// all viewports responding to scroll keys, but pass other messages to all
 	_, isKeyMsg := msg.(tea.KeyMsg)
-	for i := range m.viewports {
-		if isKeyMsg && i != m.activeTab {
-			continue
+	if !m.searchMode {
+		for i := range m.viewports {
+			if isKeyMsg && i != m.activeTab {
+				continue
+			}
+			var cmd tea.Cmd
+			m.viewports[i], cmd = m.viewports[i].Update(msg)
+			cmds = append(cmds, cmd)
 		}
-		var cmd tea.Cmd
-		m.viewports[i], cmd = m.viewports[i].Update(msg)
-		cmds = append(cmds, cmd)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -1062,12 +1159,190 @@ func (m *model) updateViewportSizes() {
 }
 
 func (m *model) updateViewportContent() {
+	highlightStyle := lipgloss.NewStyle().Background(lipgloss.Color("226")).Foreground(lipgloss.Color("0"))
+	currentMatchStyle := lipgloss.NewStyle().Background(lipgloss.Color("208")).Foreground(lipgloss.Color("0"))
+
 	for i, p := range m.supervisor.processes {
 		output := p.getOutput()
-		content := strings.Join(output, "\n")
-		m.viewports[i].SetContent(content)
-		m.viewports[i].GotoBottom()
+
+		if m.searchTerm == "" {
+			content := strings.Join(output, "\n")
+			m.viewports[i].SetContent(content)
+			m.viewports[i].GotoBottom()
+			continue
+		}
+
+		if m.contextMode {
+			// Show all lines with matches highlighted
+			var lines []string
+			for lineIdx, line := range output {
+				highlighted := m.highlightLine(i, lineIdx, line, highlightStyle, currentMatchStyle)
+				lines = append(lines, highlighted)
+			}
+			m.viewports[i].SetContent(strings.Join(lines, "\n"))
+		} else {
+			// Filter to only matching lines
+			var matchingLines []string
+			for lineIdx, line := range output {
+				if strings.Contains(strings.ToLower(line), strings.ToLower(m.searchTerm)) {
+					highlighted := m.highlightLine(i, lineIdx, line, highlightStyle, currentMatchStyle)
+					matchingLines = append(matchingLines, fmt.Sprintf("[%s:%d] %s", p.Config.Name, lineIdx+1, highlighted))
+				}
+			}
+			if len(matchingLines) == 0 {
+				m.viewports[i].SetContent("(no matches)")
+			} else {
+				m.viewports[i].SetContent(strings.Join(matchingLines, "\n"))
+			}
+		}
 	}
+}
+
+func (m *model) highlightLine(processIdx, lineIdx int, line string, highlightStyle, currentMatchStyle lipgloss.Style) string {
+	lowerLine := strings.ToLower(line)
+	lowerTerm := strings.ToLower(m.searchTerm)
+
+	var result strings.Builder
+	lastEnd := 0
+
+	for {
+		idx := strings.Index(lowerLine[lastEnd:], lowerTerm)
+		if idx == -1 {
+			result.WriteString(line[lastEnd:])
+			break
+		}
+
+		matchStart := lastEnd + idx
+		matchEnd := matchStart + len(m.searchTerm)
+
+		result.WriteString(line[lastEnd:matchStart])
+
+		// Check if this is the current match
+		isCurrentMatch := false
+		if m.currentMatch < len(m.searchMatches) {
+			cm := m.searchMatches[m.currentMatch]
+			if cm.processIdx == processIdx && cm.lineIdx == lineIdx && cm.startPos == matchStart {
+				isCurrentMatch = true
+			}
+		}
+
+		matchText := line[matchStart:matchEnd]
+		if isCurrentMatch {
+			result.WriteString(currentMatchStyle.Render(matchText))
+		} else {
+			result.WriteString(highlightStyle.Render(matchText))
+		}
+
+		lastEnd = matchEnd
+	}
+
+	return result.String()
+}
+
+func (m *model) performSearch() {
+	m.searchMatches = nil
+	if m.searchTerm == "" {
+		return
+	}
+
+	lowerTerm := strings.ToLower(m.searchTerm)
+
+	for i, p := range m.supervisor.processes {
+		output := p.getOutput()
+		for lineIdx, line := range output {
+			lowerLine := strings.ToLower(line)
+			pos := 0
+			for {
+				idx := strings.Index(lowerLine[pos:], lowerTerm)
+				if idx == -1 {
+					break
+				}
+				matchStart := pos + idx
+				m.searchMatches = append(m.searchMatches, searchMatch{
+					processIdx: i,
+					lineIdx:    lineIdx,
+					line:       line,
+					startPos:   matchStart,
+					endPos:     matchStart + len(m.searchTerm),
+				})
+				pos = matchStart + 1
+			}
+		}
+	}
+}
+
+func (m *model) nextMatch() {
+	if len(m.searchMatches) == 0 {
+		return
+	}
+	m.currentMatch = (m.currentMatch + 1) % len(m.searchMatches)
+	m.jumpToMatch(m.currentMatch)
+}
+
+func (m *model) prevMatch() {
+	if len(m.searchMatches) == 0 {
+		return
+	}
+	m.currentMatch--
+	if m.currentMatch < 0 {
+		m.currentMatch = len(m.searchMatches) - 1
+	}
+	m.jumpToMatch(m.currentMatch)
+}
+
+func (m *model) jumpToMatch(matchIdx int) {
+	if matchIdx < 0 || matchIdx >= len(m.searchMatches) {
+		return
+	}
+
+	match := m.searchMatches[matchIdx]
+	m.activeTab = match.processIdx
+	m.updateViewportContent()
+
+	// Scroll viewport to show the matching line
+	if match.processIdx < len(m.viewports) {
+		vp := &m.viewports[match.processIdx]
+
+		var linePos int
+		if m.contextMode {
+			// In context mode, line index maps directly to viewport line
+			linePos = match.lineIdx - vp.Height/2
+		} else {
+			// In filter mode, find which filtered line this match corresponds to
+			filteredLineIdx := m.getFilteredLineIndex(match)
+			linePos = filteredLineIdx - vp.Height/2
+		}
+
+		if linePos < 0 {
+			linePos = 0
+		}
+		vp.SetYOffset(linePos)
+	}
+}
+
+func (m *model) getFilteredLineIndex(targetMatch searchMatch) int {
+	// Count how many unique matching lines come before this match in the same process
+	lowerTerm := strings.ToLower(m.searchTerm)
+	p := m.supervisor.processes[targetMatch.processIdx]
+	output := p.getOutput()
+
+	filteredIdx := 0
+	for lineIdx, line := range output {
+		if strings.Contains(strings.ToLower(line), lowerTerm) {
+			if lineIdx == targetMatch.lineIdx {
+				return filteredIdx
+			}
+			filteredIdx++
+		}
+	}
+	return filteredIdx
+}
+
+func (m *model) clearSearch() {
+	m.searchTerm = ""
+	m.searchInput.SetValue("")
+	m.searchMatches = nil
+	m.currentMatch = 0
 }
 
 func (m model) View() string {
@@ -1098,6 +1373,31 @@ func (m model) View() string {
 	b.WriteString(headerStyle.Render(fmt.Sprintf("Sidekick Supervisor - %s%s%s", modeStr, ephemeralStr, suspendedStr)))
 	b.WriteString("\n")
 
+	// Search bar
+	if m.searchMode {
+		searchStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("205")).
+			Bold(true)
+		b.WriteString(searchStyle.Render("Search: "))
+		b.WriteString(m.searchInput.View())
+		b.WriteString("\n\n")
+	} else if m.searchTerm != "" {
+		searchInfoStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("226"))
+		modeLabel := "context"
+		if !m.contextMode {
+			modeLabel = "filter"
+		}
+		var matchInfo string
+		if len(m.searchMatches) == 0 {
+			matchInfo = fmt.Sprintf("Search: %q (no matches)", m.searchTerm)
+		} else {
+			matchInfo = fmt.Sprintf("Search: %q (%d/%d matches, %s mode)", m.searchTerm, m.currentMatch+1, len(m.searchMatches), modeLabel)
+		}
+		b.WriteString(searchInfoStyle.Render(matchInfo))
+		b.WriteString("\n\n")
+	}
+
 	if m.supervisor.IsSuspended() {
 		suspendedStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("214")).
@@ -1115,7 +1415,14 @@ func (m model) View() string {
 		Foreground(lipgloss.Color("241")).
 		MarginTop(1)
 
-	footer := "Tab: view | 1-9/←→: select | r: restart | R: all | ↑↓/jk: scroll | g/G: top/bottom | q: quit"
+	var footer string
+	if m.searchMode {
+		footer = "Enter: search | Esc: cancel"
+	} else if m.searchTerm != "" {
+		footer = "n/N: next/prev | c: toggle context/filter | Esc: clear | /: new search"
+	} else {
+		footer = "Tab: view | 1-9/←→: select | r: restart | R: all | ↑↓/jk: scroll | g/G: top/bottom | /: search | q: quit"
+	}
 	b.WriteString("\n")
 	b.WriteString(footerStyle.Render(footer))
 
