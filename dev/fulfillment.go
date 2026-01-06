@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/invopop/jsonschema"
+	"go.temporal.io/sdk/workflow"
 )
 
 var determineCriteriaFulfillmentTool = llm.Tool{
@@ -32,7 +33,8 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 	var diff string
 	var err error
 
-	if promptInfo.LastReviewTreeHash != "" {
+	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 1)
+	if v >= 1 && promptInfo.LastReviewTreeHash != "" {
 		diff, err = getDiffSinceLastReview(dCtx, promptInfo.LastReviewTreeHash, false)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get diff since last review: %v", err)
