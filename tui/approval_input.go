@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sidekick/client"
 	"strings"
 
@@ -29,7 +32,18 @@ type ApprovalInputModel struct {
 	width    int
 	client   client.Client
 	quitting bool
+
+	// Merge approval specific state
+	mergeStrategy string // "squash" or "merge"
 }
+
+// MergeStrategyPrefs holds persisted merge strategy preferences
+type MergeStrategyPrefs struct {
+	MergeStrategy string `json:"mergeStrategy"`
+}
+
+// mergeStrategyPrefsPathOverride allows tests to override the config path
+var mergeStrategyPrefsPathOverride string
 
 // ApprovalSubmittedMsg is sent when an approval response is submitted
 type ApprovalSubmittedMsg struct {
@@ -49,10 +63,61 @@ func NewApprovalInputModel() ApprovalInputModel {
 	ta.SetWidth(80)
 	ta.SetHeight(3)
 
+	// Load persisted merge strategy preference
+	mergeStrategy := loadMergeStrategyPref()
+
 	return ApprovalInputModel{
-		textarea: ta,
-		mode:     approvalInputModeNone,
+		textarea:      ta,
+		mode:          approvalInputModeNone,
+		mergeStrategy: mergeStrategy,
 	}
+}
+
+func getMergeStrategyPrefsPath() string {
+	if mergeStrategyPrefsPathOverride != "" {
+		return mergeStrategyPrefsPathOverride
+	}
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(configDir, "sidekick", "merge_strategy_prefs.json")
+}
+
+func loadMergeStrategyPref() string {
+	path := getMergeStrategyPrefsPath()
+	if path == "" {
+		return "squash"
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "squash"
+	}
+	var prefs MergeStrategyPrefs
+	if err := json.Unmarshal(data, &prefs); err != nil {
+		return "squash"
+	}
+	if prefs.MergeStrategy == "" {
+		return "squash"
+	}
+	return prefs.MergeStrategy
+}
+
+func saveMergeStrategyPref(strategy string) {
+	path := getMergeStrategyPrefsPath()
+	if path == "" {
+		return
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return
+	}
+	prefs := MergeStrategyPrefs{MergeStrategy: strategy}
+	data, err := json.Marshal(prefs)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(path, data, 0644)
 }
 
 // SetAction sets the pending action and determines the input mode
@@ -65,11 +130,34 @@ func (m *ApprovalInputModel) SetAction(action *client.FlowAction) tea.Cmd {
 		return nil
 	}
 	m.mode = getApprovalInputMode(*action)
+
+	// For merge approval, initialize merge strategy from action params or persisted pref
+	if requestKind, ok := action.ActionParams["requestKind"].(string); ok && requestKind == "merge_approval" {
+		if defaultStrategy, ok := action.ActionParams["defaultMergeStrategy"].(string); ok && defaultStrategy != "" {
+			// Use default from server if we don't have a persisted preference
+			if m.mergeStrategy == "" {
+				m.mergeStrategy = defaultStrategy
+			}
+		}
+		if m.mergeStrategy == "" {
+			m.mergeStrategy = "squash"
+		}
+	}
+
 	if m.mode == approvalInputModeFreeForm || m.mode == approvalInputModeRejectionFeedback {
 		m.textarea.Focus()
 		return textarea.Blink
 	}
 	return nil
+}
+
+// IsMergeApproval returns true if the current action is a merge approval
+func (m *ApprovalInputModel) IsMergeApproval() bool {
+	if m.action == nil {
+		return false
+	}
+	requestKind, ok := m.action.ActionParams["requestKind"].(string)
+	return ok && requestKind == "merge_approval"
 }
 
 // SetClient sets the client for API calls
@@ -94,6 +182,11 @@ func (m ApprovalInputModel) GetActionID() string {
 		return ""
 	}
 	return m.action.Id
+}
+
+// GetAction returns the pending action, or nil if none
+func (m ApprovalInputModel) GetAction() *client.FlowAction {
+	return m.action
 }
 
 // IsQuitting returns true if the user requested to quit
@@ -167,6 +260,22 @@ func (m ApprovalInputModel) handleApprovalInput(msg tea.KeyMsg) (ApprovalInputMo
 		m.quitting = true
 		return m, nil
 	}
+
+	// Handle merge approval specific keys
+	if m.IsMergeApproval() {
+		switch msg.String() {
+		case "s", "S":
+			// Toggle merge strategy
+			if m.mergeStrategy == "squash" {
+				m.mergeStrategy = "merge"
+			} else {
+				m.mergeStrategy = "squash"
+			}
+			saveMergeStrategyPref(m.mergeStrategy)
+			return m, nil
+		}
+	}
+
 	switch msg.String() {
 	case "y", "Y":
 		return m, m.submitApproval(true, "")
@@ -239,12 +348,14 @@ func (m ApprovalInputModel) submitApproval(approved bool, feedback string) tea.C
 			Content:  feedback,
 			Approved: &approved,
 		}
-		// For merge approval, include targetBranch in params
+		// For merge approval, include targetBranch and mergeStrategy in params
 		if requestKind, ok := m.action.ActionParams["requestKind"].(string); ok && requestKind == "merge_approval" {
+			response.Params = map[string]interface{}{}
 			if targetBranch, ok := m.action.ActionParams["targetBranch"].(string); ok {
-				response.Params = map[string]interface{}{
-					"targetBranch": targetBranch,
-				}
+				response.Params["targetBranch"] = targetBranch
+			}
+			if m.mergeStrategy != "" {
+				response.Params["mergeStrategy"] = m.mergeStrategy
 			}
 		}
 		err := m.client.CompleteFlowAction(m.action.WorkspaceId, m.action.Id, response)
@@ -361,6 +472,17 @@ func (m ApprovalInputModel) View() string {
 		rejectTag, _ := m.action.ActionParams["rejectTag"].(string)
 		approveLabel := getApprovalApproveLabel(approveTag)
 		rejectLabel := getApprovalRejectLabel(rejectTag)
+
+		// For merge approval, show merge strategy
+		if m.IsMergeApproval() {
+			strategyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+			strategyLabel := "Squash merge"
+			if m.mergeStrategy == "merge" {
+				strategyLabel = "Regular merge"
+			}
+			b.WriteString(fmt.Sprintf("Merge strategy: %s  [s] to toggle\n\n", strategyStyle.Render(strategyLabel)))
+		}
+
 		b.WriteString(fmt.Sprintf("Press [y] to %s, [n] to %s\n", approveLabel, rejectLabel))
 
 	case approvalInputModeRejectionFeedback:

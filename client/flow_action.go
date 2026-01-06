@@ -67,3 +67,36 @@ func (c *clientImpl) CompleteFlowAction(workspaceID, flowActionID string, respon
 
 	return nil
 }
+
+type userActionRequest struct {
+	ActionType string `json:"actionType"`
+}
+
+// SendUserAction sends a user action to a flow (e.g., dev_run_start, dev_run_stop).
+func (c *clientImpl) SendUserAction(workspaceID, flowID, actionType string) error {
+	reqBody := userActionRequest{ActionType: actionType}
+	requestBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/v1/workspaces/%s/flows/%s/user_action", c.BaseURL, workspaceID, flowID)
+	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(requestBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("failed to send user action: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to send user action: status %d, body: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	return nil
+}

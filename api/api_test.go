@@ -2343,7 +2343,7 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 		router.ServeHTTP(rr, req)
 
 		assert.Equal(t, http.StatusBadRequest, rr.Code)
-		expectedResponse := gin.H{"message": fmt.Sprintf("Invalid actionType '%s'. Only '%s' is supported.", "invalid_action", flow_action.UserActionGoNext)}
+		expectedResponse := gin.H{"message": fmt.Sprintf("Invalid actionType '%s'. Supported: [go_next_step dev_run_start dev_run_stop]", "invalid_action")}
 		jsonResponse, _ := json.Marshal(expectedResponse)
 		assert.JSONEq(t, string(jsonResponse), rr.Body.String())
 	})

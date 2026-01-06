@@ -50,6 +50,11 @@ func (m *mockClientForProgress) CompleteFlowAction(workspaceID, flowActionID str
 	return args.Error(0)
 }
 
+func (m *mockClientForProgress) SendUserAction(workspaceID, flowID, actionType string) error {
+	args := m.Called(workspaceID, flowID, actionType)
+	return args.Error(0)
+}
+
 func (m *mockClientForProgress) GetSubflow(workspaceID, subflowID string) (domain.Subflow, error) {
 	args := m.Called(workspaceID, subflowID)
 	return args.Get(0).(domain.Subflow), args.Error(1)
@@ -1208,6 +1213,285 @@ func TestApprovalInputModeTransition(t *testing.T) {
 	view = m.View()
 	if !strings.Contains(view, "[y] to Approve") {
 		t.Errorf("Expected approval UI after pressing Esc, got:\n%s", view)
+	}
+}
+
+func TestMergeStrategyPersistence(t *testing.T) {
+	// Not parallel - modifies package-level variable
+	// Use temp dir for isolated config
+	tmpDir := t.TempDir()
+	oldOverride := mergeStrategyPrefsPathOverride
+	mergeStrategyPrefsPathOverride = tmpDir + "/merge_strategy.json"
+	t.Cleanup(func() {
+		mergeStrategyPrefsPathOverride = oldOverride
+	})
+
+	// Test that merge strategy defaults to squash when no file exists
+	m := NewApprovalInputModel()
+	if m.mergeStrategy != "squash" {
+		t.Errorf("Expected default merge strategy 'squash', got %q", m.mergeStrategy)
+	}
+
+	// Save "merge" preference
+	saveMergeStrategyPref("merge")
+
+	// Create new model - should load persisted preference
+	m2 := NewApprovalInputModel()
+	if m2.mergeStrategy != "merge" {
+		t.Errorf("Expected persisted merge strategy 'merge', got %q", m2.mergeStrategy)
+	}
+
+	// Save "squash" preference
+	saveMergeStrategyPref("squash")
+
+	// Create new model - should load updated preference
+	m3 := NewApprovalInputModel()
+	if m3.mergeStrategy != "squash" {
+		t.Errorf("Expected persisted merge strategy 'squash', got %q", m3.mergeStrategy)
+	}
+}
+
+func TestMergeStrategyToggle(t *testing.T) {
+	t.Parallel()
+
+	action := client.FlowAction{
+		Id:           "action-1",
+		WorkspaceId:  "ws-1",
+		ActionType:   "user_request.approve.merge",
+		ActionStatus: domain.ActionStatusPending,
+		ActionParams: map[string]interface{}{
+			"requestKind":  "merge_approval",
+			"targetBranch": "main",
+		},
+		IsHumanAction:    true,
+		IsCallbackAction: true,
+	}
+
+	m := NewApprovalInputModel()
+	m.SetAction(&action)
+
+	// Default should be squash
+	if m.mergeStrategy != "squash" {
+		t.Errorf("Expected default merge strategy 'squash', got %q", m.mergeStrategy)
+	}
+
+	// Press 's' to toggle to merge
+	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}
+	m, _ = m.Update(keyMsg)
+
+	if m.mergeStrategy != "merge" {
+		t.Errorf("Expected merge strategy 'merge' after toggle, got %q", m.mergeStrategy)
+	}
+
+	// Press 's' again to toggle back to squash
+	m, _ = m.Update(keyMsg)
+
+	if m.mergeStrategy != "squash" {
+		t.Errorf("Expected merge strategy 'squash' after second toggle, got %q", m.mergeStrategy)
+	}
+}
+
+func TestMergeApprovalIncludesMergeStrategy(t *testing.T) {
+	t.Parallel()
+	var capturedResponse client.UserResponse
+	mockClient := &mockClientForProgress{}
+	mockClient.On("CompleteFlowAction", "ws-1", "action-1", mock.AnythingOfType("client.UserResponse")).
+		Run(func(args mock.Arguments) {
+			capturedResponse = args.Get(2).(client.UserResponse)
+		}).
+		Return(nil)
+
+	action := client.FlowAction{
+		Id:           "action-1",
+		WorkspaceId:  "ws-1",
+		ActionType:   "user_request.approve.merge",
+		ActionStatus: domain.ActionStatusPending,
+		ActionParams: map[string]interface{}{
+			"requestKind":  "merge_approval",
+			"targetBranch": "main",
+		},
+		IsHumanAction:    true,
+		IsCallbackAction: true,
+	}
+
+	approvalInput := NewApprovalInputModel()
+	approvalInput.SetClient(mockClient)
+	approvalInput.SetAction(&action)
+
+	// Set merge strategy to "merge"
+	approvalInput.mergeStrategy = "merge"
+
+	// Submit approval
+	cmd := approvalInput.submitApproval(true, "")
+	if cmd != nil {
+		cmd()
+	}
+
+	mockClient.AssertCalled(t, "CompleteFlowAction", "ws-1", "action-1", mock.AnythingOfType("client.UserResponse"))
+
+	if capturedResponse.Params == nil {
+		t.Fatal("Expected Params to be set for merge_approval")
+	}
+	if capturedResponse.Params["mergeStrategy"] != "merge" {
+		t.Errorf("Expected mergeStrategy 'merge', got %v", capturedResponse.Params["mergeStrategy"])
+	}
+	if capturedResponse.Params["targetBranch"] != "main" {
+		t.Errorf("Expected targetBranch 'main', got %v", capturedResponse.Params["targetBranch"])
+	}
+}
+
+func TestDevRunStartStopParamUpdates(t *testing.T) {
+	t.Parallel()
+	mockClient := &mockClientForProgress{}
+	mockClient.On("SendUserAction", "ws-1", "flow-1", "dev_run_start").Return(nil)
+
+	action := client.FlowAction{
+		Id:           "action-1",
+		WorkspaceId:  "ws-1",
+		ActionType:   "user_request.approve.merge",
+		ActionStatus: domain.ActionStatusPending,
+		ActionParams: map[string]interface{}{
+			"requestKind":  "merge_approval",
+			"targetBranch": "main",
+			"mergeApprovalInfo": map[string]interface{}{
+				"devRunContext": map[string]interface{}{},
+			},
+		},
+		IsHumanAction:    true,
+		IsCallbackAction: true,
+	}
+
+	m := newProgressModel("task-1", "flow-1", mockClient)
+
+	// Set up the pending action
+	msg := flowActionChangeMsg{action: action}
+	updated, _ := m.Update(msg)
+	m = updated.(taskProgressModel)
+
+	// Submit Dev Run start action via the progress model
+	cmd := m.submitDevRunAction("dev_run_start")
+	if cmd != nil {
+		cmd()
+	}
+
+	mockClient.AssertCalled(t, "SendUserAction", "ws-1", "flow-1", "dev_run_start")
+}
+
+func TestDevRunOutputToggle(t *testing.T) {
+	t.Parallel()
+
+	action := client.FlowAction{
+		Id:           "action-1",
+		WorkspaceId:  "ws-1",
+		ActionType:   "user_request.approve.merge",
+		ActionStatus: domain.ActionStatusPending,
+		ActionParams: map[string]interface{}{
+			"requestKind":  "merge_approval",
+			"targetBranch": "main",
+			"mergeApprovalInfo": map[string]interface{}{
+				"devRunContext": map[string]interface{}{},
+			},
+		},
+		IsHumanAction:    true,
+		IsCallbackAction: true,
+	}
+
+	m := newProgressModel("task-1", "flow-1", nil)
+
+	// Set up the pending action with dev run context
+	msg := flowActionChangeMsg{action: action}
+	updated, _ := m.Update(msg)
+	m = updated.(taskProgressModel)
+
+	// Simulate Dev Run started
+	startedMsg := devRunStartedMsg{devRunId: "devrun-123"}
+	updated, _ = m.Update(startedMsg)
+	m = updated.(taskProgressModel)
+
+	if !m.devRunIsRunning {
+		t.Error("Expected Dev Run to be running")
+	}
+
+	// Output should be hidden by default
+	if m.showDevRunOutput {
+		t.Error("Expected Dev Run output to be hidden by default")
+	}
+
+	// Press 'o' to toggle output on
+	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}}
+	updated, _ = m.Update(keyMsg)
+	m = updated.(taskProgressModel)
+
+	if !m.showDevRunOutput {
+		t.Error("Expected Dev Run output to be shown after toggle")
+	}
+
+	// Press 'o' again to toggle output off
+	updated, _ = m.Update(keyMsg)
+	m = updated.(taskProgressModel)
+
+	if m.showDevRunOutput {
+		t.Error("Expected Dev Run output to be hidden after second toggle")
+	}
+}
+
+func TestDevRunStateFromEvents(t *testing.T) {
+	t.Parallel()
+
+	m := newProgressModel("task-1", "flow-1", nil)
+
+	// Simulate Dev Run started event
+	startedMsg := devRunStartedMsg{devRunId: "devrun-123"}
+	updated, _ := m.Update(startedMsg)
+	m = updated.(taskProgressModel)
+
+	if !m.devRunIsRunning {
+		t.Error("Expected Dev Run to be running after started event")
+	}
+	if m.devRunId != "devrun-123" {
+		t.Errorf("Expected devRunId 'devrun-123', got %q", m.devRunId)
+	}
+
+	// Simulate Dev Run ended event
+	endedMsg := devRunEndedMsg{devRunId: "devrun-123"}
+	updated, _ = m.Update(endedMsg)
+	m = updated.(taskProgressModel)
+
+	if m.devRunIsRunning {
+		t.Error("Expected Dev Run to not be running after ended event")
+	}
+}
+
+func TestDevRunOutputOnlyWhenToggled(t *testing.T) {
+	t.Parallel()
+
+	m := newProgressModel("task-1", "flow-1", nil)
+
+	// Simulate Dev Run started
+	m.devRunIsRunning = true
+	m.devRunId = "devrun-123"
+
+	// Output is not toggled on, so output messages should be ignored
+	outputMsg := devRunOutputMsg{devRunId: "devrun-123", stream: "stdout", chunk: "test output"}
+	updated, _ := m.Update(outputMsg)
+	m = updated.(taskProgressModel)
+
+	if len(m.devRunOutput) != 0 {
+		t.Error("Expected no output when output display is not toggled on")
+	}
+
+	// Toggle output on
+	m.showDevRunOutput = true
+
+	// Now output should be captured
+	updated, _ = m.Update(outputMsg)
+	m = updated.(taskProgressModel)
+
+	if len(m.devRunOutput) != 1 {
+		t.Errorf("Expected 1 output line, got %d", len(m.devRunOutput))
+	}
+	if m.devRunOutput[0] != "test output" {
+		t.Errorf("Expected output 'test output', got %q", m.devRunOutput[0])
 	}
 }
 

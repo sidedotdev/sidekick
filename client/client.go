@@ -18,6 +18,7 @@ type Client interface {
 	GetAllWorkspaces(ctx context.Context) ([]domain.Workspace, error)
 	GetBaseURL() string
 	CompleteFlowAction(workspaceID, flowActionID string, response UserResponse) error
+	SendUserAction(workspaceID, flowID, actionType string) error
 	GetSubflow(workspaceID, subflowID string) (domain.Subflow, error)
 }
 

@@ -7,6 +7,7 @@ import (
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/utils"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -255,5 +256,162 @@ func TestGitMergeActivity(t *testing.T) {
 		// Verify original branch remains unchanged
 		currentBranch := runGitCommandInTestRepo(t, repoDir, "rev-parse", "--abbrev-ref", "HEAD")
 		assert.Equal(t, "unused_feature", currentBranch)
+	})
+}
+
+// createCommitWithFile creates a commit with an actual file change
+func createCommitWithFile(t *testing.T, repoDir, message, filename, content string) {
+	t.Helper()
+	filePath := filepath.Join(repoDir, filename)
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+	runGitCommandInTestRepo(t, repoDir, "add", filename)
+	runGitCommandInTestRepo(t, repoDir, "commit", "-m", message)
+}
+
+func TestGitMergeActivitySquash(t *testing.T) {
+	ctx := context.Background()
+
+	// Create a temporary directory to act as SIDE_DATA_HOME
+	tempDir := t.TempDir()
+	tempDataHome := filepath.Join(tempDir, "data home")
+	err := os.Mkdir(tempDataHome, 0755)
+	require.NoError(t, err)
+	t.Setenv("SIDE_DATA_HOME", tempDataHome)
+
+	t.Run("squash merge no worktree", func(t *testing.T) {
+		// Setup
+		repoDir := setupTestGitRepo(t)
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+		createCommitWithFile(t, repoDir, "Initial commit on main", "initial.txt", "initial content")
+
+		// Create feature branch and add multiple commits with file changes
+		runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
+		createCommitWithFile(t, repoDir, "Feature commit 1", "feature1.txt", "feature 1 content")
+		createCommitWithFile(t, repoDir, "Feature commit 2", "feature2.txt", "feature 2 content")
+
+		// Squash merge
+		params := GitMergeParams{
+			SourceBranch:  "feature",
+			TargetBranch:  "main",
+			MergeStrategy: MergeStrategySquash,
+			CommitMessage: "Squashed feature changes",
+		}
+		result, err := GitMergeActivity(ctx, envContainer, params)
+
+		// Assertions
+		require.NoError(t, err)
+		assert.False(t, result.HasConflicts)
+
+		// Verify we're on main and there's a single squash commit
+		runGitCommandInTestRepo(t, repoDir, "checkout", "main")
+		logOutput := runGitCommandInTestRepo(t, repoDir, "log", "--oneline")
+		// Should have 2 commits: initial + squash commit
+		lines := strings.Split(strings.TrimSpace(logOutput), "\n")
+		assert.Equal(t, 2, len(lines), "Expected 2 commits (initial + squash), got: %s", logOutput)
+		assert.Contains(t, logOutput, "Squashed feature changes")
+	})
+
+	t.Run("squash merge with worktree", func(t *testing.T) {
+		// Setup
+		repoDir := setupTestGitRepo(t)
+		createCommitWithFile(t, repoDir, "Initial commit", "initial.txt", "initial content")
+
+		worktree := domain.Worktree{
+			Name:        "feature",
+			WorkspaceId: t.Name(),
+		}
+		envContainer, err := env.NewLocalGitWorktreeActivity(context.Background(), env.LocalEnvParams{RepoDir: repoDir}, worktree)
+		require.NoError(t, err)
+		defer func() {
+			runGitCommandInTestRepo(t, repoDir, "worktree", "remove", envContainer.Env.GetWorkingDirectory())
+		}()
+
+		// Add multiple commits with file changes to feature branch
+		createCommitWithFile(t, envContainer.Env.GetWorkingDirectory(), "Feature commit 1", "feature1.txt", "feature 1 content")
+		createCommitWithFile(t, envContainer.Env.GetWorkingDirectory(), "Feature commit 2", "feature2.txt", "feature 2 content")
+
+		// Squash merge
+		params := GitMergeParams{
+			SourceBranch:  worktree.Name,
+			TargetBranch:  "main",
+			MergeStrategy: MergeStrategySquash,
+			CommitMessage: "Squashed worktree changes",
+		}
+		result, err := GitMergeActivity(ctx, envContainer, params)
+
+		// Assertions
+		require.NoError(t, err)
+		assert.False(t, result.HasConflicts)
+
+		// Verify main has squash commit
+		logOutput := runGitCommandInTestRepo(t, repoDir, "log", "--oneline", "main")
+		lines := strings.Split(strings.TrimSpace(logOutput), "\n")
+		assert.Equal(t, 2, len(lines), "Expected 2 commits (initial + squash), got: %s", logOutput)
+		assert.Contains(t, logOutput, "Squashed worktree changes")
+	})
+
+	t.Run("squash merge default commit message", func(t *testing.T) {
+		// Setup
+		repoDir := setupTestGitRepo(t)
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+		createCommitWithFile(t, repoDir, "Initial commit on main", "initial.txt", "initial content")
+
+		// Create feature branch with file change
+		runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
+		createCommitWithFile(t, repoDir, "Feature commit", "feature.txt", "feature content")
+
+		// Squash merge without commit message
+		params := GitMergeParams{
+			SourceBranch:  "feature",
+			TargetBranch:  "main",
+			MergeStrategy: MergeStrategySquash,
+		}
+		result, err := GitMergeActivity(ctx, envContainer, params)
+
+		// Assertions
+		require.NoError(t, err)
+		assert.False(t, result.HasConflicts)
+
+		// Verify default commit message
+		runGitCommandInTestRepo(t, repoDir, "checkout", "main")
+		logOutput := runGitCommandInTestRepo(t, repoDir, "log", "--oneline")
+		assert.Contains(t, logOutput, "Squash merge branch 'feature'")
+	})
+
+	t.Run("regular merge preserves commits", func(t *testing.T) {
+		// Setup
+		repoDir := setupTestGitRepo(t)
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+		createCommitWithFile(t, repoDir, "Initial commit on main", "initial.txt", "initial content")
+
+		// Create feature branch and add multiple commits with file changes
+		runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
+		createCommitWithFile(t, repoDir, "Feature commit 1", "feature1.txt", "feature 1 content")
+		createCommitWithFile(t, repoDir, "Feature commit 2", "feature2.txt", "feature 2 content")
+
+		// Regular merge (not squash)
+		params := GitMergeParams{
+			SourceBranch:  "feature",
+			TargetBranch:  "main",
+			MergeStrategy: MergeStrategyMerge,
+		}
+		result, err := GitMergeActivity(ctx, envContainer, params)
+
+		// Assertions
+		require.NoError(t, err)
+		assert.False(t, result.HasConflicts)
+
+		// Verify all commits are preserved
+		runGitCommandInTestRepo(t, repoDir, "checkout", "main")
+		logOutput := runGitCommandInTestRepo(t, repoDir, "log", "--oneline")
+		assert.Contains(t, logOutput, "Feature commit 1")
+		assert.Contains(t, logOutput, "Feature commit 2")
 	})
 }

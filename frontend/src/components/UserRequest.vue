@@ -70,6 +70,25 @@
           :workspaceId="flowAction.workspaceId"
         />
       </div>
+      <div style="display: flex; align-items: center; gap: 1rem; margin-top: 0.5rem;">
+        <label for="mergeStrategy">Merge strategy</label>
+        <Select
+          id="mergeStrategy"
+          v-model="mergeStrategy"
+          :options="mergeStrategyOptions"
+          optionLabel="label"
+          optionValue="value"
+        ></Select>
+      </div>
+
+      <DevRunControls
+        v-if="flowAction.actionParams.mergeApprovalInfo?.devRunContext"
+        :workspaceId="flowAction.workspaceId"
+        :flowId="flowAction.flowId"
+        :disabled="!isPending"
+        @start="handleDevRunStart"
+        @stop="handleDevRunStop"
+      />
 
       <AutogrowTextarea v-model="responseContent" placeholder="Rejection reason" />
       <div v-if="errorMessage" class="error-message">
@@ -155,6 +174,7 @@ import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
 import CopyIcon from './icons/CopyIcon.vue';
 import DiffViewOptions from './DiffViewOptions.vue';
 import Select from 'primevue/select';
+import DevRunControls from './DevRunControls.vue';
 
 interface UserResponse {
   content?: string;
@@ -184,6 +204,7 @@ const isPending = computed(() => props.flowAction.actionStatus === 'pending');
 const ignoreWhitespace = ref(false);
 const diffMode = ref<'unified' | 'split'>('unified');
 const diffScope = ref<'all' | 'since_last_review'>('all');
+const mergeStrategy = ref<'squash' | 'merge'>('squash');
 
 const hasDiffSinceLastReview = computed(() => {
   const diffSinceLastReview = props.flowAction.actionParams.mergeApprovalInfo?.diffSinceLastReview;
@@ -199,6 +220,11 @@ const diffScopeOptions = computed(() => {
   }
   return options;
 })
+
+const mergeStrategyOptions = [
+  { label: 'Squash merge', value: 'squash' },
+  { label: 'Merge commit', value: 'merge' },
+];
 
 watch(diffScopeOptions, (newOptions) => {
   if (newOptions.length === 1 && newOptions[0]?.value === 'all') {
@@ -266,6 +292,10 @@ onMounted(() => {
     } else if (savedDiffScope === 'since_last_review' && hasDiffSinceLastReview.value) {
       diffScope.value = savedDiffScope;
     }
+    const savedMergeStrategy = localStorage.getItem('mergeApproval.mergeStrategy');
+    if (savedMergeStrategy === 'squash' || savedMergeStrategy === 'merge') {
+      mergeStrategy.value = savedMergeStrategy;
+    }
   } catch (error) {
     console.debug('Failed to load merge approval preferences:', error);
   }
@@ -328,6 +358,38 @@ watch(diffScope, (newValue) => {
     console.debug('Failed to save diffScope preference:', error);
   }
 });
+
+watch(mergeStrategy, (newValue) => {
+  try {
+    localStorage.setItem('mergeApproval.mergeStrategy', newValue);
+  } catch (error) {
+    console.debug('Failed to save mergeStrategy preference:', error);
+  }
+});
+
+async function handleDevRunStart() {
+  await sendDevRunAction('dev_run_start');
+}
+
+async function handleDevRunStop() {
+  await sendDevRunAction('dev_run_stop');
+}
+
+async function sendDevRunAction(actionType: 'dev_run_start' | 'dev_run_stop') {
+  try {
+    const response = await fetch(`/api/v1/workspaces/${props.flowAction.workspaceId}/flows/${props.flowAction.flowId}/user_action`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actionType }),
+    });
+
+    if (!response.ok) {
+      console.error('Failed to send dev run action:', response.status, response.statusText);
+    }
+  } catch (error) {
+    console.error('Network error sending dev run action:', error);
+  }
+}
 
 async function updateMergeApprovalParams() {
   if (!targetBranch.value) return;
@@ -404,6 +466,7 @@ async function submitUserResponse(approved: boolean) {
       targetBranch: targetBranch.value,
       ignoreWhitespace: ignoreWhitespace.value,
       diffMode: diffMode.value,
+      mergeStrategy: mergeStrategy.value,
     };
   }
 

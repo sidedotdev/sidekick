@@ -115,6 +115,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		return "", err
 	}
 	defer handleFlowCancel(dCtx)
+	defer stopActiveDevRun(dCtx)
 	defer func() {
 		if err != nil && !errors.Is(dCtx.Err(), workflow.ErrCanceled) {
 			_ = signalWorkflowClosure(dCtx, "failed")
@@ -449,12 +450,25 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 		}
 	}
 
+	// Build DevRunContext for Dev Run operations during merge approval
+	flowInfo := workflow.GetInfo(dCtx)
+	devRunCtx := &DevRunContext{
+		WorkspaceId:  dCtx.WorkspaceId,
+		FlowId:       flowInfo.WorkflowExecution.ID,
+		WorktreeDir:  dCtx.EnvContainer.Env.GetWorkingDirectory(),
+		SourceBranch: dCtx.Worktree.Name,
+		BaseBranch:   defaultTarget,
+		TargetBranch: defaultTarget,
+	}
+
 	// Request merge approval from user
 	mergeParams := MergeApprovalParams{
-		SourceBranch:        dCtx.Worktree.Name,
-		DefaultTargetBranch: defaultTarget,
-		Diff:                gitDiff,
-		DiffSinceLastReview: diffSinceLastReview,
+		SourceBranch:         dCtx.Worktree.Name,
+		DefaultTargetBranch:  defaultTarget,
+		Diff:                 gitDiff,
+		DiffSinceLastReview:  diffSinceLastReview,
+		DefaultMergeStrategy: MergeStrategySquash,
+		DevRunContext:        devRunCtx,
 	}
 
 	approvalResponse, err := GetUserMergeApproval(dCtx, "Please review these changes", map[string]any{
@@ -626,8 +640,10 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		}
 
 		err := flow_action.PerformWithUserRetry(actionCtx.FlowActionContext(), git.GitMergeActivity, &mergeResult, dCtx.EnvContainer, git.GitMergeParams{
-			SourceBranch: dCtx.Worktree.Name,
-			TargetBranch: mergeInfo.TargetBranch,
+			SourceBranch:  dCtx.Worktree.Name,
+			TargetBranch:  mergeInfo.TargetBranch,
+			MergeStrategy: git.MergeStrategy(mergeInfo.MergeStrategy),
+			CommitMessage: commitMessage,
 		})
 		if err != nil {
 			return mergeResult, fmt.Errorf("failed to merge branches: %w", err)
@@ -699,8 +715,10 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 				finalMergeResult, err := Track(finalActionCtx, func(flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
 					var finalResult git.MergeActivityResult
 					err := flow_action.PerformWithUserRetry(finalActionCtx.FlowActionContext(), git.GitMergeActivity, &finalResult, dCtx.EnvContainer, git.GitMergeParams{
-						SourceBranch: dCtx.Worktree.Name,
-						TargetBranch: mergeInfo.TargetBranch,
+						SourceBranch:  dCtx.Worktree.Name,
+						TargetBranch:  mergeInfo.TargetBranch,
+						MergeStrategy: git.MergeStrategy(mergeInfo.MergeStrategy),
+						CommitMessage: commitMessage,
 					})
 					if err != nil {
 						return finalResult, fmt.Errorf("failed to perform final merge: %w", err)

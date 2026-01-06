@@ -301,6 +301,48 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	return devCtx, nil
 }
 
+// stopActiveDevRun stops any active Dev Run for the workflow (best-effort, for cleanup).
+// Only runs for workflows that support Dev Run (version check for replay compatibility).
+func stopActiveDevRun(dCtx DevContext) {
+	if dCtx.Worktree == nil {
+		return
+	}
+
+	// Version gate: only stop Dev Run for new workflows to avoid replay nondeterminism
+	v := workflow.GetVersion(dCtx, "dev-run-cleanup", workflow.DefaultVersion, 1)
+	if v < 1 {
+		return
+	}
+
+	// Retrieve Dev Run entry from GlobalState
+	entry := GetDevRunEntry(dCtx.ExecContext.GlobalState)
+	if entry == nil {
+		return
+	}
+
+	flowInfo := workflow.GetInfo(dCtx)
+	devRunCtx := DevRunContext{
+		DevRunId:     entry.DevRunId,
+		WorkspaceId:  dCtx.WorkspaceId,
+		FlowId:       flowInfo.WorkflowExecution.ID,
+		WorktreeDir:  dCtx.EnvContainer.Env.GetWorkingDirectory(),
+		SourceBranch: dCtx.Worktree.Name,
+	}
+	var dra *DevRunActivities
+	var stopOutput StopDevRunOutput
+	err := workflow.ExecuteActivity(dCtx, dra.StopDevRun, StopDevRunInput{
+		DevRunConfig: dCtx.RepoConfig.DevRun,
+		Context:      devRunCtx,
+		Entry:        entry,
+	}).Get(dCtx, &stopOutput)
+	if err != nil {
+		workflow.GetLogger(dCtx).Warn("Failed to stop Dev Run during cleanup", "error", err)
+	}
+
+	// Clear stored Dev Run state
+	ClearDevRunEntry(dCtx.ExecContext.GlobalState)
+}
+
 // cleanup on cancel for resources created during setupDevContextAction
 func handleFlowCancel(dCtx DevContext) {
 	if !errors.Is(dCtx.Err(), workflow.ErrCanceled) {
@@ -310,6 +352,35 @@ func handleFlowCancel(dCtx DevContext) {
 	disconnectedCtx, _ := workflow.NewDisconnectedContext(dCtx)
 
 	_ = signalWorkflowClosure(disconnectedCtx, "canceled")
+
+	// Stop any active Dev Run before worktree cleanup (version gated for replay compatibility)
+	if dCtx.Worktree != nil {
+		v := workflow.GetVersion(disconnectedCtx, "dev-run-cleanup", workflow.DefaultVersion, 1)
+		if v >= 1 {
+			entry := GetDevRunEntry(dCtx.ExecContext.GlobalState)
+			if entry != nil {
+				flowInfo := workflow.GetInfo(dCtx)
+				devRunCtx := DevRunContext{
+					DevRunId:     entry.DevRunId,
+					WorkspaceId:  dCtx.WorkspaceId,
+					FlowId:       flowInfo.WorkflowExecution.ID,
+					WorktreeDir:  dCtx.EnvContainer.Env.GetWorkingDirectory(),
+					SourceBranch: dCtx.Worktree.Name,
+				}
+				var dra *DevRunActivities
+				var stopOutput StopDevRunOutput
+				err := workflow.ExecuteActivity(disconnectedCtx, dra.StopDevRun, StopDevRunInput{
+					DevRunConfig: dCtx.RepoConfig.DevRun,
+					Context:      devRunCtx,
+					Entry:        entry,
+				}).Get(disconnectedCtx, &stopOutput)
+				if err != nil {
+					workflow.GetLogger(dCtx).Warn("Failed to stop Dev Run during workflow cancellation", "error", err)
+				}
+				ClearDevRunEntry(dCtx.ExecContext.GlobalState)
+			}
+		}
+	}
 
 	if dCtx.Worktree != nil {
 		future := workflow.ExecuteActivity(disconnectedCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "Sidekick task cancelled")
