@@ -290,13 +290,14 @@ const (
 
 // Process represents a running process
 type Process struct {
-	Config   ProcessConfig
-	Cmd      *exec.Cmd
-	Output   []string
-	mu       sync.RWMutex
-	running  bool
-	stopping bool
-	cancel   context.CancelFunc
+	Config     ProcessConfig
+	Cmd        *exec.Cmd
+	Output     []string
+	mu         sync.RWMutex
+	running    bool
+	stopping   bool
+	cancel     context.CancelFunc
+	generation uint64
 }
 
 func (p *Process) appendOutput(line string) {
@@ -307,6 +308,31 @@ func (p *Process) appendOutput(line string) {
 	if len(p.Output) > 1000 {
 		p.Output = p.Output[len(p.Output)-1000:]
 	}
+}
+
+func (p *Process) appendOutputIfGeneration(line string, gen uint64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.generation != gen {
+		return
+	}
+	p.Output = append(p.Output, line)
+	if len(p.Output) > 1000 {
+		p.Output = p.Output[len(p.Output)-1000:]
+	}
+}
+
+func (p *Process) getGeneration() uint64 {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.generation
+}
+
+func (p *Process) clearOutputAndIncrementGeneration() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.Output = []string{}
+	p.generation++
 }
 
 func (p *Process) getOutput() []string {
@@ -327,12 +353,25 @@ func (p *Process) setRunning(running bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.running = running
+	if running {
+		p.stopping = false
+	}
 }
 
 func (p *Process) isStopping() bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.stopping
+}
+
+func (p *Process) setExitedIfGeneration(gen uint64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.generation != gen {
+		return
+	}
+	p.running = false
+	p.stopping = false
 }
 
 func (p *Process) setStopping(stopping bool) {
@@ -435,18 +474,19 @@ func (s *Supervisor) StartProcess(ctx context.Context, p *Process, outputChan ch
 		return err
 	}
 
-	// Stream output
-	go s.streamOutput(p, stdout, outputChan)
-	go s.streamOutput(p, stderr, outputChan)
+	// Stream output, capturing current generation to ignore output from old runs
+	gen := p.getGeneration()
+	go s.streamOutput(p, stdout, outputChan, gen)
+	go s.streamOutput(p, stderr, outputChan, gen)
 
 	// Wait for process to finish
 	go func() {
 		err := cmd.Wait()
-		p.setRunning(false)
+		p.setExitedIfGeneration(gen)
 		if err != nil && procCtx.Err() == nil {
-			p.appendOutput(fmt.Sprintf("[Process exited with error: %v]", err))
+			p.appendOutputIfGeneration(fmt.Sprintf("[Process exited with error: %v]", err), gen)
 		} else {
-			p.appendOutput("[Process exited]")
+			p.appendOutputIfGeneration("[Process exited]", gen)
 		}
 		if outputChan != nil {
 			outputChan <- processOutputMsg{name: p.Config.Name}
@@ -456,11 +496,11 @@ func (s *Supervisor) StartProcess(ctx context.Context, p *Process, outputChan ch
 	return nil
 }
 
-func (s *Supervisor) streamOutput(p *Process, r io.Reader, outputChan chan<- processOutputMsg) {
+func (s *Supervisor) streamOutput(p *Process, r io.Reader, outputChan chan<- processOutputMsg, gen uint64) {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Text()
-		p.appendOutput(line)
+		p.appendOutputIfGeneration(line, gen)
 		if outputChan != nil {
 			outputChan <- processOutputMsg{name: p.Config.Name}
 		}
@@ -527,10 +567,11 @@ func (s *Supervisor) RestartProcess(ctx context.Context, p *Process, outputChan 
 	for i := 0; i < 50 && p.isRunning(); i++ {
 		time.Sleep(100 * time.Millisecond)
 	}
-	p.mu.Lock()
-	p.Output = []string{}
-	p.stopping = false
-	p.mu.Unlock()
+	// Clear logs and increment generation so old streamOutput goroutines are ignored
+	p.clearOutputAndIncrementGeneration()
+	if outputChan != nil {
+		outputChan <- processOutputMsg{name: p.Config.Name}
+	}
 	s.StartProcess(ctx, p, outputChan)
 }
 
