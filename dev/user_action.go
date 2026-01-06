@@ -17,6 +17,16 @@ const (
 	UserActionDevRunStop UserActionType = "dev_run_stop"
 )
 
+// QueryNameDevRunConfig is the name of the query for retrieving dev run configuration.
+const QueryNameDevRunConfig = "dev_run_config"
+
+// SetupDevRunConfigQuery registers a query handler that returns the dev run configuration.
+func SetupDevRunConfigQuery(dCtx DevContext) {
+	_ = workflow.SetQueryHandler(dCtx, QueryNameDevRunConfig, func() (common.DevRunConfig, error) {
+		return dCtx.RepoConfig.DevRun, nil
+	})
+}
+
 // SetupUserActionHandler sets up a signal handler for user actions like "go_next_step"
 // and Dev Run start/stop. It listens on the "user_action" signal channel.
 func SetupUserActionHandler(dCtx DevContext) {

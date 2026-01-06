@@ -97,6 +97,17 @@ type UserActionRequest struct {
 	ActionType string `json:"actionType"`
 }
 
+// FlowQueryRequest defines the expected request body for flow queries.
+type FlowQueryRequest struct {
+	Query string `json:"query"`
+	Args  any    `json:"args,omitempty"`
+}
+
+// FlowQueryResponse defines the response body for flow queries.
+type FlowQueryResponse struct {
+	Result any `json:"result"`
+}
+
 // ArchiveTaskHandler handles the request to archive a task
 func (ctrl *Controller) ArchiveTaskHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
@@ -204,6 +215,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	flowRoutes.GET("/:id/history", ctrl.GetFlowHistoryHandler)
 	flowRoutes.POST("/:id/reset", ctrl.ResetFlowHandler)
 	flowRoutes.GET("/:id/subflows", ctrl.GetFlowSubflowsHandler)
+	flowRoutes.POST("/:id/query", ctrl.QueryFlowHandler)
 
 	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
 	workspaceApiRoutes.PUT("/flow_actions/:id", ctrl.UpdateFlowActionHandler)
@@ -548,6 +560,58 @@ func (ctrl *Controller) UserActionHandler(c *gin.Context) {
 
 	log.Info().Str("workspaceId", workspaceId).Str("flowId", flowId).Str("action", req.ActionType).Msg("User action signaled to workflow")
 	c.JSON(http.StatusOK, gin.H{"message": "User action '" + req.ActionType + "' signaled successfully"})
+}
+
+// QueryFlowHandler handles requests to query a workflow.
+func (ctrl *Controller) QueryFlowHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	flowId := c.Param("id")
+
+	_, err := ctrl.service.GetFlow(c.Request.Context(), workspaceId, flowId)
+	if err != nil {
+		if errors.Is(err, srv.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	var req FlowQueryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload: " + err.Error()})
+		return
+	}
+	if req.Query == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload: missing or blank query"})
+		return
+	}
+
+	queryResult, err := ctrl.temporalClient.QueryWorkflow(c.Request.Context(), flowId, "", req.Query, req.Args)
+	if err != nil {
+		var serviceErrNotFound *serviceerror.NotFound
+		var serviceErrQueryFailed *serviceerror.QueryFailed
+		if errors.As(err, &serviceErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Flow with ID %s not found", flowId)})
+			return
+		}
+		if errors.As(err, &serviceErrQueryFailed) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Query not supported: " + err.Error()})
+			return
+		}
+		log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Str("query", req.Query).Msg("Failed to query workflow")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query workflow: " + err.Error()})
+		return
+	}
+
+	var result any
+	if err := queryResult.Get(&result); err != nil {
+		log.Error().Err(err).Str("workspaceId", workspaceId).Str("flowId", flowId).Str("query", req.Query).Msg("Failed to decode query result")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode query result: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, FlowQueryResponse{Result: result})
 }
 
 type TaskRequest struct {

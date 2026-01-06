@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"sidekick/client"
 	"sidekick/domain"
 	"strings"
@@ -58,6 +59,11 @@ func (m *mockClientForProgress) SendUserAction(workspaceID, flowID, actionType s
 func (m *mockClientForProgress) GetSubflow(workspaceID, subflowID string) (domain.Subflow, error) {
 	args := m.Called(workspaceID, subflowID)
 	return args.Get(0).(domain.Subflow), args.Error(1)
+}
+
+func (m *mockClientForProgress) QueryFlow(workspaceID, flowID, query string, queryArgs any) (any, error) {
+	args := m.Called(workspaceID, flowID, query, queryArgs)
+	return args.Get(0), args.Error(1)
 }
 
 func TestGetActionDisplayName(t *testing.T) {
@@ -349,7 +355,7 @@ func TestTaskProgressModelView(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			m := newProgressModel("task-1", "flow-1", nil)
+			m := newProgressModel("task-1", "flow-1", "ws-1", nil)
 			m.actions = tt.actions
 
 			view := m.View()
@@ -419,7 +425,7 @@ func TestTaskProgressModelUpdate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			m := newProgressModel("task-1", "flow-1", nil)
+			m := newProgressModel("task-1", "flow-1", "ws-1", nil)
 			if tt.initialAction != nil {
 				m.actions = []client.FlowAction{*tt.initialAction}
 			}
@@ -659,7 +665,7 @@ func TestSubflowDisplay(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			m := newProgressModel("task-1", "flow-1", nil)
+			m := newProgressModel("task-1", "flow-1", "ws-1", nil)
 			m.currentSubflow = tt.currentSubflow
 			m.actions = tt.actions
 
@@ -725,7 +731,7 @@ func TestSubflowTrackingInUpdate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			m := newProgressModel("task-1", "flow-1", nil)
+			m := newProgressModel("task-1", "flow-1", "ws-1", nil)
 
 			msg := flowActionChangeMsg{action: tt.action}
 			updated, _ := m.Update(msg)
@@ -803,7 +809,7 @@ func TestPendingHumanActionInput(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			m := newProgressModel("task-1", "flow-1", nil)
+			m := newProgressModel("task-1", "flow-1", "ws-1", nil)
 			if tt.pendingAction != nil {
 				m.approvalInput.SetAction(tt.pendingAction)
 			}
@@ -881,7 +887,7 @@ func TestPendingActionDetection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			m := newProgressModel("task-1", "flow-1", nil)
+			m := newProgressModel("task-1", "flow-1", "ws-1", nil)
 
 			msg := flowActionChangeMsg{action: tt.action}
 			updated, _ := m.Update(msg)
@@ -902,7 +908,7 @@ func TestPendingActionDetection(t *testing.T) {
 
 func TestPendingActionCleared(t *testing.T) {
 	t.Parallel()
-	m := newProgressModel("task-1", "flow-1", nil)
+	m := newProgressModel("task-1", "flow-1", "ws-1", nil)
 
 	// Set up a pending action
 	pendingAction := client.FlowAction{
@@ -1153,7 +1159,7 @@ func TestApprovalInputView(t *testing.T) {
 				IsCallbackAction: true,
 			}
 
-			m := newProgressModel("task-1", "flow-1", nil)
+			m := newProgressModel("task-1", "flow-1", "ws-1", nil)
 			m.approvalInput.SetAction(&action)
 
 			view := m.View()
@@ -1182,7 +1188,7 @@ func TestApprovalInputModeTransition(t *testing.T) {
 		IsCallbackAction: true,
 	}
 
-	m := newProgressModel("task-1", "flow-1", nil)
+	m := newProgressModel("task-1", "flow-1", "ws-1", nil)
 
 	// Simulate receiving the pending action
 	msg := flowActionChangeMsg{action: action}
@@ -1353,15 +1359,12 @@ func TestDevRunStartStopParamUpdates(t *testing.T) {
 		ActionParams: map[string]interface{}{
 			"requestKind":  "merge_approval",
 			"targetBranch": "main",
-			"mergeApprovalInfo": map[string]interface{}{
-				"devRunContext": map[string]interface{}{},
-			},
 		},
 		IsHumanAction:    true,
 		IsCallbackAction: true,
 	}
 
-	m := newProgressModel("task-1", "flow-1", mockClient)
+	m := newProgressModel("task-1", "flow-1", "ws-1", mockClient)
 
 	// Set up the pending action
 	msg := flowActionChangeMsg{action: action}
@@ -1388,19 +1391,21 @@ func TestDevRunOutputToggle(t *testing.T) {
 		ActionParams: map[string]interface{}{
 			"requestKind":  "merge_approval",
 			"targetBranch": "main",
-			"mergeApprovalInfo": map[string]interface{}{
-				"devRunContext": map[string]interface{}{},
-			},
 		},
 		IsHumanAction:    true,
 		IsCallbackAction: true,
 	}
 
-	m := newProgressModel("task-1", "flow-1", nil)
+	m := newProgressModel("task-1", "flow-1", "ws-1", nil)
 
-	// Set up the pending action with dev run context
+	// Set up the pending action
 	msg := flowActionChangeMsg{action: action}
 	updated, _ := m.Update(msg)
+	m = updated.(taskProgressModel)
+
+	// Simulate dev run config query result indicating dev run is available
+	configMsg := devRunConfigResultMsg{hasDevRun: true}
+	updated, _ = m.Update(configMsg)
 	m = updated.(taskProgressModel)
 
 	// Simulate Dev Run started
@@ -1438,7 +1443,7 @@ func TestDevRunOutputToggle(t *testing.T) {
 func TestDevRunStateFromEvents(t *testing.T) {
 	t.Parallel()
 
-	m := newProgressModel("task-1", "flow-1", nil)
+	m := newProgressModel("task-1", "flow-1", "ws-1", nil)
 
 	// Simulate Dev Run started event
 	startedMsg := devRunStartedMsg{devRunId: "devrun-123"}
@@ -1465,7 +1470,7 @@ func TestDevRunStateFromEvents(t *testing.T) {
 func TestDevRunOutputOnlyWhenToggled(t *testing.T) {
 	t.Parallel()
 
-	m := newProgressModel("task-1", "flow-1", nil)
+	m := newProgressModel("task-1", "flow-1", "ws-1", nil)
 
 	// Simulate Dev Run started
 	m.devRunIsRunning = true
@@ -1493,6 +1498,92 @@ func TestDevRunOutputOnlyWhenToggled(t *testing.T) {
 	if m.devRunOutput[0] != "test output" {
 		t.Errorf("Expected output 'test output', got %q", m.devRunOutput[0])
 	}
+}
+
+func TestDevRunConfigQuery(t *testing.T) {
+	t.Parallel()
+
+	t.Run("queries with correct workspaceID and flowID", func(t *testing.T) {
+		t.Parallel()
+		mockClient := &mockClientForProgress{}
+		mockClient.On("QueryFlow", "ws-1", "flow-1", "dev_run_config", nil).Return(
+			map[string]interface{}{"start": []interface{}{"npm", "run", "dev"}},
+			nil,
+		)
+
+		m := newProgressModel("task-1", "flow-1", "ws-1", mockClient)
+
+		// Execute the query command
+		cmd := m.queryDevRunConfig()
+		msg := cmd()
+
+		result := msg.(devRunConfigResultMsg)
+		if !result.hasDevRun {
+			t.Error("Expected hasDevRun to be true when start command is non-empty")
+		}
+
+		mockClient.AssertCalled(t, "QueryFlow", "ws-1", "flow-1", "dev_run_config", nil)
+	})
+
+	t.Run("returns false when start is empty", func(t *testing.T) {
+		t.Parallel()
+		mockClient := &mockClientForProgress{}
+		mockClient.On("QueryFlow", "ws-1", "flow-1", "dev_run_config", nil).Return(
+			map[string]interface{}{"start": []interface{}{}},
+			nil,
+		)
+
+		m := newProgressModel("task-1", "flow-1", "ws-1", mockClient)
+
+		cmd := m.queryDevRunConfig()
+		msg := cmd()
+
+		result := msg.(devRunConfigResultMsg)
+		if result.hasDevRun {
+			t.Error("Expected hasDevRun to be false when start command is empty")
+		}
+	})
+
+	t.Run("returns false on query error", func(t *testing.T) {
+		t.Parallel()
+		mockClient := &mockClientForProgress{}
+		mockClient.On("QueryFlow", "ws-1", "flow-1", "dev_run_config", nil).Return(
+			nil,
+			fmt.Errorf("query not supported"),
+		)
+
+		m := newProgressModel("task-1", "flow-1", "ws-1", mockClient)
+
+		cmd := m.queryDevRunConfig()
+		msg := cmd()
+
+		result := msg.(devRunConfigResultMsg)
+		if result.hasDevRun {
+			t.Error("Expected hasDevRun to be false on query error")
+		}
+	})
+
+	t.Run("does not query when workspaceID is empty", func(t *testing.T) {
+		t.Parallel()
+		mockClient := &mockClientForProgress{}
+
+		m := newProgressModel("task-1", "flow-1", "", mockClient)
+
+		action := client.FlowAction{
+			Id:               "action-1",
+			WorkspaceId:      "ws-1",
+			ActionType:       "user_request.approve.merge",
+			ActionStatus:     domain.ActionStatusPending,
+			IsHumanAction:    true,
+			IsCallbackAction: true,
+		}
+
+		msg := flowActionChangeMsg{action: action}
+		_, _ = m.Update(msg)
+
+		// QueryFlow should not have been called since workspaceID is empty
+		mockClient.AssertNotCalled(t, "QueryFlow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
 }
 
 func TestMergeApprovalIncludesTargetBranch(t *testing.T) {
@@ -1611,7 +1702,7 @@ func TestFailedSubflowDisplay(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newProgressModel("task-1", "flow-1", &mockClientForProgress{})
+			m := newProgressModel("task-1", "flow-1", "ws-1", &mockClientForProgress{})
 			m.failedSubflows = tt.failedSubflows
 
 			view := m.View()
@@ -1627,7 +1718,7 @@ func TestFailedSubflowDisplay(t *testing.T) {
 
 func TestSubflowFailedMsgUpdate(t *testing.T) {
 	t.Parallel()
-	m := newProgressModel("task-1", "flow-1", &mockClientForProgress{})
+	m := newProgressModel("task-1", "flow-1", "ws-1", &mockClientForProgress{})
 
 	// Initially no failed subflows
 	if len(m.failedSubflows) != 0 {

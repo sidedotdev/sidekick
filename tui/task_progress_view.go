@@ -27,6 +27,7 @@ type taskProgressModel struct {
 	spinner        spinner.Model
 	taskID         string
 	flowID         string
+	workspaceID    string
 	actions        []client.FlowAction
 	currentSubflow *client.FlowAction
 	approvalInput  ApprovalInputModel
@@ -37,14 +38,15 @@ type taskProgressModel struct {
 	width          int
 
 	// Dev Run state (orthogonal to approval input)
-	devRunIsRunning  bool
-	devRunId         string
-	showDevRunOutput bool
-	devRunOutput     []string
-	hasDevRunContext bool
+	devRunIsRunning     bool
+	devRunId            string
+	showDevRunOutput    bool
+	devRunOutput        []string
+	hasDevRunContext    bool
+	checkedDevRunConfig bool
 }
 
-func newProgressModel(taskID, flowID string, c client.Client) taskProgressModel {
+func newProgressModel(taskID, flowID, workspaceID string, c client.Client) taskProgressModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
@@ -56,6 +58,7 @@ func newProgressModel(taskID, flowID string, c client.Client) taskProgressModel 
 		spinner:       s,
 		taskID:        taskID,
 		flowID:        flowID,
+		workspaceID:   workspaceID,
 		actions:       []client.FlowAction{},
 		approvalInput: approvalInput,
 		client:        c,
@@ -151,13 +154,12 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Detect pending human action
 		if action.IsHumanAction && action.IsCallbackAction && action.ActionStatus == domain.ActionStatusPending {
-			// Check for dev run context in merge approval (nested under mergeApprovalInfo)
-			if mergeInfo, ok := action.ActionParams["mergeApprovalInfo"].(map[string]interface{}); ok {
-				if _, hasDevRun := mergeInfo["devRunContext"]; hasDevRun {
-					m.hasDevRunContext = true
-				}
-			}
 			cmd := m.approvalInput.SetAction(&action)
+			// Query for dev run config if not already checked
+			if !m.checkedDevRunConfig && m.flowID != "" && m.workspaceID != "" {
+				m.checkedDevRunConfig = true
+				return m, tea.Batch(cmd, m.queryDevRunConfig())
+			}
 			return m, cmd
 		}
 
@@ -204,6 +206,10 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.devRunOutput = m.devRunOutput[len(m.devRunOutput)-100:]
 			}
 		}
+		return m, nil
+
+	case devRunConfigResultMsg:
+		m.hasDevRunContext = msg.hasDevRun
 		return m, nil
 
 	default:
@@ -424,6 +430,28 @@ func (m taskProgressModel) renderAction(action client.FlowAction) string {
 
 	default:
 		return fmt.Sprintf("  %s %s\n", yellowIndicator, displayName)
+	}
+}
+
+// devRunConfigResultMsg is sent when the dev run config query completes.
+type devRunConfigResultMsg struct {
+	hasDevRun bool
+}
+
+// queryDevRunConfig queries the workflow for dev run configuration.
+func (m taskProgressModel) queryDevRunConfig() tea.Cmd {
+	return func() tea.Msg {
+		result, err := m.client.QueryFlow(m.workspaceID, m.flowID, "dev_run_config", nil)
+		if err != nil {
+			return devRunConfigResultMsg{hasDevRun: false}
+		}
+		// Check if the result has a non-empty start command list
+		if configMap, ok := result.(map[string]interface{}); ok {
+			if startList, ok := configMap["start"].([]interface{}); ok && len(startList) > 0 {
+				return devRunConfigResultMsg{hasDevRun: true}
+			}
+		}
+		return devRunConfigResultMsg{hasDevRun: false}
 	}
 }
 

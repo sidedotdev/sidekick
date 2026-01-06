@@ -123,9 +123,10 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 		}
 	}()
 
-	// Set up the pause and user action handlers
+	// Set up the pause, user action, and query handlers
 	SetupPauseHandler(dCtx, "Paused for user input", nil)
 	SetupUserActionHandler(dCtx)
+	SetupDevRunConfigQuery(dCtx)
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	err = EnsurePrerequisites(dCtx)

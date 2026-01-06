@@ -82,7 +82,7 @@
       </div>
 
       <DevRunControls
-        v-if="flowAction.actionParams.mergeApprovalInfo?.devRunContext"
+        v-if="hasDevRunConfig"
         :workspaceId="flowAction.workspaceId"
         :flowId="flowAction.flowId"
         :disabled="!isPending"
@@ -319,6 +319,34 @@ const parsedActionResult = computed<keyable | null>(() => {
 });
 
 const targetBranch = ref<string | undefined>(parsedActionResult.value?.targetBranch ?? props.flowAction.actionParams.mergeApprovalInfo?.defaultTargetBranch)
+
+const hasDevRunConfig = ref(false)
+
+async function queryDevRunConfig() {
+  try {
+    const response = await fetch(`/api/v1/workspaces/${props.flowAction.workspaceId}/flows/${props.flowAction.flowId}/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'dev_run_config' })
+    })
+    if (!response.ok) {
+      console.debug('Dev run config query failed or unsupported:', response.status)
+      return
+    }
+    const data = await response.json()
+    // Check if result has non-empty start command list
+    if (data.result?.start && Array.isArray(data.result.start) && data.result.start.length > 0) {
+      hasDevRunConfig.value = true
+    }
+  } catch (err) {
+    console.debug('Dev run config query error:', err)
+  }
+}
+
+// Query dev run config on mount if this is a merge approval
+if (props.flowAction.actionParams.requestKind === 'merge_approval') {
+  queryDevRunConfig()
+}
 
 watch(targetBranch, async (newBranch, oldBranch) => {
   if (props.flowAction.actionParams.requestKind === 'merge_approval' && 

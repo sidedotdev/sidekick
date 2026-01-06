@@ -20,6 +20,7 @@ type Client interface {
 	CompleteFlowAction(workspaceID, flowActionID string, response UserResponse) error
 	SendUserAction(workspaceID, flowID, actionType string) error
 	GetSubflow(workspaceID, subflowID string) (domain.Subflow, error)
+	QueryFlow(workspaceID, flowID, query string, args any) (any, error)
 }
 
 type clientImpl struct {
