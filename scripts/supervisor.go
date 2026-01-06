@@ -1,5 +1,4 @@
 ///usr/bin/env true; exec /usr/bin/env go run "$0" "$@"
-//go:build supervisor
 
 package main
 
@@ -354,9 +353,6 @@ func (p *Process) setRunning(running bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.running = running
-	if running {
-		p.stopping = false
-	}
 }
 
 func (p *Process) isStopping() bool {
@@ -365,9 +361,11 @@ func (p *Process) isStopping() bool {
 	return p.stopping
 }
 
-func (p *Process) setExitedIfGeneration(gen uint64) {
+func (p *Process) setExited(gen uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// Only update state if generation matches - prevents old process exit
+	// from affecting state after a restart has begun
 	if p.generation != gen {
 		return
 	}
@@ -483,7 +481,7 @@ func (s *Supervisor) StartProcess(ctx context.Context, p *Process, outputChan ch
 	// Wait for process to finish
 	go func() {
 		err := cmd.Wait()
-		p.setExitedIfGeneration(gen)
+		p.setExited(gen)
 		if err != nil && procCtx.Err() == nil {
 			p.appendOutputIfGeneration(fmt.Sprintf("[Process exited with error: %v]", err), gen)
 		} else {
@@ -562,18 +560,84 @@ func (s *Supervisor) StartAll(ctx context.Context, outputChan chan<- processOutp
 	}
 }
 
-func (s *Supervisor) RestartProcess(ctx context.Context, p *Process, outputChan chan<- processOutputMsg) {
-	s.StopProcess(p)
-	// Wait for it to stop
-	for i := 0; i < 50 && p.isRunning(); i++ {
-		time.Sleep(100 * time.Millisecond)
+// processHasExited checks if the process has actually exited at the OS level.
+// It first checks cmd.ProcessState (set by cmd.Wait()), then falls back to
+// checking if the process exists via kill(pid, 0).
+func processHasExited(cmd *exec.Cmd) bool {
+	if cmd == nil || cmd.Process == nil {
+		return true
 	}
-	// Clear logs and increment generation so old streamOutput goroutines are ignored
+	// ProcessState is set by cmd.Wait() when the process exits
+	if cmd.ProcessState != nil {
+		return true
+	}
+	// Fallback: check if process exists at OS level
+	// kill(pid, 0) returns error if process doesn't exist
+	err := syscall.Kill(cmd.Process.Pid, 0)
+	return err != nil
+}
+
+func (s *Supervisor) RestartProcess(ctx context.Context, p *Process, outputChan chan<- processOutputMsg) {
+	// Clear logs and increment generation BEFORE stopping, so any pending
+	// output from the old process (including "[Process exited]") is ignored.
+	// Note: Update() may have already called these for immediate UI feedback,
+	// but calling them again is harmless.
 	p.clearOutputAndIncrementGeneration()
+
+	s.StopProcess(p)
+
+	// Notify UI to show "Stopping" status and cleared logs
 	if outputChan != nil {
 		outputChan <- processOutputMsg{name: p.Config.Name}
 	}
+
+	cmd := p.Cmd
+
+	// Wait for process to exit (up to 5 seconds after SIGTERM)
+	for i := 0; i < 50 && !processHasExited(cmd); i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Force kill if still running after 5 seconds
+	if !processHasExited(cmd) {
+		if cmd != nil && cmd.Process != nil {
+			pid := cmd.Process.Pid
+			pgid, err := syscall.Getpgid(pid)
+			if err == nil {
+				syscall.Kill(-pgid, syscall.SIGKILL)
+			} else {
+				cmd.Process.Kill()
+			}
+		}
+		// Wait for it to actually exit after SIGKILL (up to 2 more seconds)
+		for i := 0; i < 20 && !processHasExited(cmd); i++ {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	// Update running state based on actual process status
+	if processHasExited(cmd) {
+		p.mu.Lock()
+		p.running = false
+		p.mu.Unlock()
+	}
+
+	// Start the new process
 	s.StartProcess(ctx, p, outputChan)
+
+	// Reset stopping state after new process starts
+	p.setStopping(false)
+
+	// Send final notification so UI updates to show "Running" status
+	if outputChan != nil {
+		outputChan <- processOutputMsg{name: p.Config.Name}
+	}
+}
+
+func (s *Supervisor) RestartAll(ctx context.Context, outputChan chan<- processOutputMsg) {
+	for _, p := range s.processes {
+		s.RestartProcess(ctx, p, outputChan)
+	}
 }
 
 func (s *Supervisor) IsSuspended() bool {
@@ -1037,14 +1101,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Restart current process
 			if m.activeTab < len(m.supervisor.processes) {
 				p := m.supervisor.processes[m.activeTab]
+				// Set stopping state and clear logs immediately so UI updates
+				p.clearOutputAndIncrementGeneration()
+				p.setStopping(true)
+				m.updateViewportContent()
 				go m.supervisor.RestartProcess(m.ctx, p, m.outputChan)
 			}
 		case "R":
 			// Restart all processes
-			go func() {
-				m.supervisor.StopAll()
-				m.supervisor.StartAll(m.ctx, m.outputChan)
-			}()
+			for _, p := range m.supervisor.processes {
+				p.clearOutputAndIncrementGeneration()
+				p.setStopping(true)
+			}
+			m.updateViewportContent()
+			go m.supervisor.RestartAll(m.ctx, m.outputChan)
 		case "left", "h":
 			if m.activeTab > 0 {
 				m.activeTab--
