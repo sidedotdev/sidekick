@@ -60,6 +60,30 @@ type RepoConfig struct {
 	AgentConfig map[string]AgentUseCaseConfig `toml:"agent_config,omitempty"`
 
 	CommandPermissions CommandPermissionConfig `toml:"command_permissions,omitempty"`
+
+	// DevRun configures commands for running a dev server or supervisor
+	// for pre-approval manual QA in the worktree environment.
+	DevRun DevRunConfig `toml:"dev_run,omitempty"`
+}
+
+// GlobalState keys for workflow-specific state
+const (
+	KeyCurrentTargetBranch = "currentTargetBranch"
+)
+
+// DevRunConfig configures dev-run commands for manual QA in worktree environments.
+type DevRunConfig struct {
+	// Start contains commands to start the dev-run process(es).
+	// Commands are executed in order; if any fails, subsequent commands are not run.
+	Start []CommandConfig `toml:"start,omitempty"`
+
+	// Stop contains optional commands to stop the dev-run process(es).
+	// If empty, Sidekick will send SIGINT then SIGKILL after timeout.
+	Stop []CommandConfig `toml:"stop,omitempty"`
+
+	// StopTimeoutSeconds is the time to wait after SIGINT before sending SIGKILL.
+	// Defaults to 10 seconds if not specified.
+	StopTimeoutSeconds int `toml:"stop_timeout_seconds,omitempty"`
 }
 
 type CommandConfig struct {

@@ -263,13 +263,23 @@ func RunTaskUI(ctx context.Context, c client.Client, req *client.CreateTaskReque
 		}
 
 		monitor = NewTaskMonitor(c, workspace.Id, task.Id)
-		statusChan, progressChan, subflowChan := monitor.Start(ctx)
+		p.Send(setMonitorMsg{monitor: monitor})
+		statusChan, progressChan, subflowChan, flowEventChan := monitor.Start(ctx)
 		for {
 			select {
 			case action := <-progressChan:
 				p.Send(flowActionChangeMsg{action: action})
 			case subflow := <-subflowChan:
 				p.Send(subflowFailedMsg{subflow: subflow})
+			case flowEvent := <-flowEventChan:
+				switch e := flowEvent.(type) {
+				case domain.DevRunStartedEvent:
+					p.Send(devRunStartedMsg{devRunId: e.DevRunId})
+				case domain.DevRunEndedEvent:
+					p.Send(devRunEndedMsg{devRunId: e.DevRunId})
+				case domain.DevRunOutputEvent:
+					p.Send(devRunOutputMsg{devRunId: e.DevRunId, stream: e.Stream, chunk: e.Chunk})
+				}
 			case taskStatus := <-statusChan:
 				if !started && len(taskStatus.Task.Flows) > 0 {
 					started = true

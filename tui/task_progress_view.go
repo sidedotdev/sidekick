@@ -35,6 +35,13 @@ type taskProgressModel struct {
 	err            error
 	failedSubflows []domain.Subflow
 	width          int
+
+	// Dev Run state (orthogonal to approval input)
+	devRunIsRunning  bool
+	devRunId         string
+	showDevRunOutput bool
+	devRunOutput     []string
+	hasDevRunContext bool
 }
 
 func newProgressModel(taskID, flowID string, c client.Client) taskProgressModel {
@@ -81,6 +88,29 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Handle Dev Run keys globally when context is available
+		if m.hasDevRunContext {
+			switch msg.String() {
+			case "d", "D":
+				if m.devRunIsRunning {
+					return m, m.submitDevRunAction("dev_run_stop")
+				}
+				return m, m.submitDevRunAction("dev_run_start")
+			case "o", "O":
+				if m.devRunIsRunning {
+					m.showDevRunOutput = !m.showDevRunOutput
+					// Send message to start/stop the output subscription
+					return m, func() tea.Msg {
+						return devRunToggleOutputMsg{
+							devRunId:   m.devRunId,
+							showOutput: m.showDevRunOutput,
+						}
+					}
+				}
+				return m, nil
+			}
+		}
+
 		if m.approvalInput.HasPendingAction() {
 			var cmd tea.Cmd
 			m.approvalInput, cmd = m.approvalInput.Update(msg)
@@ -121,6 +151,12 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Detect pending human action
 		if action.IsHumanAction && action.IsCallbackAction && action.ActionStatus == domain.ActionStatusPending {
+			// Check for dev run context in merge approval (nested under mergeApprovalInfo)
+			if mergeInfo, ok := action.ActionParams["mergeApprovalInfo"].(map[string]interface{}); ok {
+				if _, hasDevRun := mergeInfo["devRunContext"]; hasDevRun {
+					m.hasDevRunContext = true
+				}
+			}
 			cmd := m.approvalInput.SetAction(&action)
 			return m, cmd
 		}
@@ -145,6 +181,28 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !found {
 			m.actions = append(m.actions, action)
+		}
+		return m, nil
+
+	case devRunStartedMsg:
+		m.devRunIsRunning = true
+		m.devRunId = msg.devRunId
+		return m, nil
+
+	case devRunEndedMsg:
+		m.devRunIsRunning = false
+		m.devRunId = ""
+		m.showDevRunOutput = false
+		m.devRunOutput = nil
+		return m, nil
+
+	case devRunOutputMsg:
+		if m.showDevRunOutput && m.devRunId == msg.devRunId {
+			m.devRunOutput = append(m.devRunOutput, msg.chunk)
+			// Keep only last 100 lines
+			if len(m.devRunOutput) > 100 {
+				m.devRunOutput = m.devRunOutput[len(m.devRunOutput)-100:]
+			}
 		}
 		return m, nil
 
@@ -270,6 +328,33 @@ func (m taskProgressModel) View() string {
 		}
 	}
 
+	// Display Dev Run status if context is available
+	if m.hasDevRunContext {
+		b.WriteString("\n")
+		if m.devRunIsRunning {
+			runningStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
+			b.WriteString(fmt.Sprintf("Dev Run: %s  [d] to stop", runningStyle.Render("Running")))
+			if m.showDevRunOutput {
+				b.WriteString("  [o] to hide output\n")
+			} else {
+				b.WriteString("  [o] to show output\n")
+			}
+			// Show Dev Run output if toggled on
+			if m.showDevRunOutput && len(m.devRunOutput) > 0 {
+				outputStyle := lipgloss.NewStyle().
+					Foreground(lipgloss.Color("245")).
+					Border(lipgloss.RoundedBorder()).
+					BorderForeground(lipgloss.Color("238")).
+					Padding(0, 1)
+				outputLines := strings.Join(m.devRunOutput, "\n")
+				b.WriteString(outputStyle.Render(outputLines))
+				b.WriteString("\n")
+			}
+		} else {
+			b.WriteString("Dev Run: Stopped  [d] to start\n")
+		}
+	}
+
 	// Display pending action input area
 	if m.approvalInput.HasPendingAction() {
 		b.WriteString(m.approvalInput.View())
@@ -339,6 +424,24 @@ func (m taskProgressModel) renderAction(action client.FlowAction) string {
 
 	default:
 		return fmt.Sprintf("  %s %s\n", yellowIndicator, displayName)
+	}
+}
+
+// submitDevRunAction sends a dev run start/stop request via the user action API
+func (m taskProgressModel) submitDevRunAction(action string) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil || !m.approvalInput.HasPendingAction() {
+			return nil
+		}
+		pendingAction := m.approvalInput.GetAction()
+		if pendingAction == nil {
+			return nil
+		}
+		err := m.client.SendUserAction(pendingAction.WorkspaceId, m.flowID, action)
+		if err != nil {
+			return ApprovalErrorMsg{Err: err}
+		}
+		return devRunActionMsg{action: action}
 	}
 }
 

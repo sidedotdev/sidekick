@@ -59,6 +59,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 		return DevPlanExecution{}, fmt.Errorf("failed to setup dev context: %v", err)
 	}
 	defer handleFlowCancel(dCtx)
+	defer stopActiveDevRun(dCtx)
 	defer func() {
 		if err != nil && !errors.Is(dCtx.Err(), workflow.ErrCanceled) {
 			_ = signalWorkflowClosure(dCtx, "failed")

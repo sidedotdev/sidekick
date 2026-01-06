@@ -160,7 +160,7 @@ func TestTaskMonitor_Start_WebSocketFlow(t *testing.T) {
 	m.TaskPollInterval = 1 * time.Millisecond
 	m.FlowPollInterval = 1 * time.Millisecond
 
-	statusChan, progressChan, _ := m.Start(context.Background())
+	statusChan, progressChan, _, _ := m.Start(context.Background())
 
 	// Verify initial task status
 	status := <-statusChan
@@ -211,7 +211,7 @@ func TestTaskMonitor_Start_WebSocketError(t *testing.T) {
 	m.TaskPollInterval = 1 * time.Millisecond
 	m.FlowPollInterval = 1 * time.Millisecond
 
-	statusChan, progressChan, _ := m.Start(context.Background())
+	statusChan, progressChan, _, _ := m.Start(context.Background())
 
 	// First status update should be the initial task
 	status := <-statusChan
@@ -265,7 +265,7 @@ func TestTaskMonitor_Start_ServerUnavailability(t *testing.T) {
 	// Queue initial successful response
 	syncMock.responseCh <- getTaskResponse{task: testTask, err: nil}
 
-	statusChan, progressChan, _ := m.Start(context.Background())
+	statusChan, progressChan, _, _ := m.Start(context.Background())
 
 	// Initial status should be successful
 	status := <-statusChan
@@ -332,7 +332,7 @@ func TestTaskMonitor_Start_ContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	statusChan, progressChan, _ := m.Start(ctx)
+	statusChan, progressChan, _, _ := m.Start(ctx)
 
 	// Verify initial task status
 	status := <-statusChan
@@ -379,4 +379,9 @@ func TestTaskMonitor_Start_SigtermTaskCancellation(t *testing.T) {
 func (m *mockClient) GetSubflow(workspaceID, subflowID string) (domain.Subflow, error) {
 	args := m.Called(workspaceID, subflowID)
 	return args.Get(0).(domain.Subflow), args.Error(1)
+}
+
+func (m *mockClient) SendUserAction(workspaceID, flowID, actionType string) error {
+	args := m.Called(workspaceID, flowID, actionType)
+	return args.Error(0)
 }

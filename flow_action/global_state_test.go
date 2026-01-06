@@ -70,3 +70,91 @@ func TestGlobalState_UserActions(t *testing.T) {
 		gs.ConsumePendingUserAction()
 	})
 }
+
+func TestGlobalState_Values(t *testing.T) {
+	t.Run("get returns nil for missing key", func(t *testing.T) {
+		gs := &GlobalState{}
+		if value := gs.GetValue("nonexistent"); value != nil {
+			t.Errorf("Expected nil for missing key, got %v", value)
+		}
+	})
+
+	t.Run("get string returns empty for missing key", func(t *testing.T) {
+		gs := &GlobalState{}
+		if value := gs.GetStringValue("nonexistent"); value != "" {
+			t.Errorf("Expected empty string for missing key, got %q", value)
+		}
+	})
+
+	t.Run("set and get value", func(t *testing.T) {
+		gs := &GlobalState{}
+		gs.SetValue("testKey", "testValue")
+
+		value := gs.GetValue("testKey")
+		if value != "testValue" {
+			t.Errorf("Expected 'testValue', got %v", value)
+		}
+	})
+
+	t.Run("set and get string value", func(t *testing.T) {
+		gs := &GlobalState{}
+		gs.SetValue("branch", "main")
+
+		value := gs.GetStringValue("branch")
+		if value != "main" {
+			t.Errorf("Expected 'main', got %q", value)
+		}
+	})
+
+	t.Run("get string value returns empty for non-string", func(t *testing.T) {
+		gs := &GlobalState{}
+		gs.SetValue("number", 42)
+
+		value := gs.GetStringValue("number")
+		if value != "" {
+			t.Errorf("Expected empty string for non-string value, got %q", value)
+		}
+	})
+
+	t.Run("overwrite value", func(t *testing.T) {
+		gs := &GlobalState{}
+		gs.SetValue("key", "value1")
+		gs.SetValue("key", "value2")
+
+		value := gs.GetStringValue("key")
+		if value != "value2" {
+			t.Errorf("Expected 'value2' after overwrite, got %q", value)
+		}
+	})
+
+	t.Run("multiple keys", func(t *testing.T) {
+		gs := &GlobalState{}
+		gs.SetValue("key1", "value1")
+		gs.SetValue("key2", "value2")
+
+		if gs.GetStringValue("key1") != "value1" {
+			t.Errorf("Expected 'value1' for key1")
+		}
+		if gs.GetStringValue("key2") != "value2" {
+			t.Errorf("Expected 'value2' for key2")
+		}
+	})
+
+	t.Run("stores arbitrary types", func(t *testing.T) {
+		gs := &GlobalState{}
+		gs.SetValue("int", 42)
+		gs.SetValue("bool", true)
+		gs.SetValue("slice", []string{"a", "b"})
+
+		if gs.GetValue("int") != 42 {
+			t.Errorf("Expected 42 for int key")
+		}
+		if gs.GetValue("bool") != true {
+			t.Errorf("Expected true for bool key")
+		}
+		slice, ok := gs.GetValue("slice").([]string)
+		if !ok || len(slice) != 2 {
+			t.Errorf("Expected []string{'a', 'b'} for slice key")
+		}
+	})
+}

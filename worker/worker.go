@@ -136,6 +136,10 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 		LSPActivities: lspActivities,
 	}
 
+	devRunActivities := &dev.DevRunActivities{
+		Streamer: service,
+	}
+
 	w := worker.New(temporalClient, taskQueue, worker.Options{
 		OnFatalError: func(err error) {
 			log.Fatal().Err(err).Msg("Worker encountered a fatal error")
@@ -175,6 +179,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(devManagerActivities)
 	w.RegisterActivity(dev.ApplyEditBlocksActivity) // backcompat for <= v0.4.2
 	w.RegisterActivity(devActivities)
+	w.RegisterActivity(devRunActivities)
 	w.RegisterActivity(dev.ReadFileActivity)
 	w.RegisterActivity(dev.BulkReadFileActivity)
 	w.RegisterActivity(dev.ManageChatHistoryActivity)

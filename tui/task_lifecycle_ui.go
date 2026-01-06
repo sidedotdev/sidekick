@@ -56,6 +56,9 @@ type taskLifecycleModel struct {
 	blocked        bool
 	blockedMessage string
 	unblockAt      *time.Time
+
+	// monitor reference for dev run output toggle
+	monitor *TaskMonitor
 }
 
 func newLifecycleModel(sigChan chan os.Signal, c client.Client) taskLifecycleModel {
@@ -186,6 +189,16 @@ func (m taskLifecycleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			timestamp: time.Now(),
 		}
 		return m, nil
+
+	case setMonitorMsg:
+		m.monitor = msg.monitor
+		return m, nil
+
+	case devRunToggleOutputMsg:
+		if m.monitor != nil {
+			m.monitor.ToggleDevRunOutput(msg.devRunId, msg.showOutput)
+		}
+		return m.propagateMessage(msg)
 
 	default:
 		var cmd tea.Cmd

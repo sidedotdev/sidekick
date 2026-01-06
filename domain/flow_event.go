@@ -16,6 +16,9 @@ const (
 	ChatMessageDeltaEventType FlowEventType = "chat_message_delta"
 	EndStreamEventType        FlowEventType = "end_stream"
 	CodeDiffEventType         FlowEventType = "code_diff"
+	DevRunStartedEventType    FlowEventType = "dev_run_started"
+	DevRunOutputEventType     FlowEventType = "dev_run_output"
+	DevRunEndedEventType      FlowEventType = "dev_run_ended"
 )
 
 // EndStreamEvent represents the end of a flow event stream.
@@ -113,6 +116,67 @@ func (e CodeDiffEvent) GetEventType() FlowEventType {
 
 var _ FlowEvent = (*CodeDiffEvent)(nil)
 
+// DevRunStartedEvent is emitted when a Dev Run process starts.
+type DevRunStartedEvent struct {
+	EventType      FlowEventType `json:"eventType"`
+	FlowId         string        `json:"flowId"`
+	DevRunId       string        `json:"devRunId"`
+	CommandSummary string        `json:"commandSummary"`
+	WorkingDir     string        `json:"workingDir"`
+	Pid            int           `json:"pid"`
+	Pgid           int           `json:"pgid"`
+}
+
+func (e DevRunStartedEvent) GetParentId() string {
+	return e.FlowId
+}
+
+func (e DevRunStartedEvent) GetEventType() FlowEventType {
+	return e.EventType
+}
+
+var _ FlowEvent = (*DevRunStartedEvent)(nil)
+
+// DevRunOutputEvent streams stdout/stderr output from a running Dev Run.
+type DevRunOutputEvent struct {
+	EventType FlowEventType `json:"eventType"`
+	DevRunId  string        `json:"devRunId"`
+	Stream    string        `json:"stream"` // "stdout" or "stderr"
+	Chunk     string        `json:"chunk"`
+	Sequence  int64         `json:"sequence"`
+	Timestamp int64         `json:"timestamp"`
+}
+
+func (e DevRunOutputEvent) GetParentId() string {
+	return e.DevRunId
+}
+
+func (e DevRunOutputEvent) GetEventType() FlowEventType {
+	return e.EventType
+}
+
+var _ FlowEvent = (*DevRunOutputEvent)(nil)
+
+// DevRunEndedEvent is emitted when a Dev Run process ends.
+type DevRunEndedEvent struct {
+	EventType  FlowEventType `json:"eventType"`
+	FlowId     string        `json:"flowId"`
+	DevRunId   string        `json:"devRunId"`
+	ExitStatus *int          `json:"exitStatus,omitempty"`
+	Signal     string        `json:"signal,omitempty"`
+	Error      string        `json:"error,omitempty"`
+}
+
+func (e DevRunEndedEvent) GetParentId() string {
+	return e.FlowId
+}
+
+func (e DevRunEndedEvent) GetEventType() FlowEventType {
+	return e.EventType
+}
+
+var _ FlowEvent = (*DevRunEndedEvent)(nil)
+
 // UnmarshalFlowEvent unmarshals a JSON byte slice into a FlowEvent based on the "eventType" field.
 func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
 	var event struct {
@@ -164,6 +228,30 @@ func UnmarshalFlowEvent(data []byte) (FlowEvent, error) {
 			return nil, err
 		}
 		return codeDiff, nil
+
+	case DevRunStartedEventType:
+		var devRunStarted DevRunStartedEvent
+		err := json.Unmarshal(data, &devRunStarted)
+		if err != nil {
+			return nil, err
+		}
+		return devRunStarted, nil
+
+	case DevRunOutputEventType:
+		var devRunOutput DevRunOutputEvent
+		err := json.Unmarshal(data, &devRunOutput)
+		if err != nil {
+			return nil, err
+		}
+		return devRunOutput, nil
+
+	case DevRunEndedEventType:
+		var devRunEnded DevRunEndedEvent
+		err := json.Unmarshal(data, &devRunEnded)
+		if err != nil {
+			return nil, err
+		}
+		return devRunEnded, nil
 
 	default:
 		return nil, fmt.Errorf("unknown flow eventType: %s", event.EventType)

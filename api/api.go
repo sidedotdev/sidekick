@@ -521,15 +521,20 @@ func (ctrl *Controller) UserActionHandler(c *gin.Context) {
 		return
 	}
 
-	if req.ActionType != string(flow_action.UserActionGoNext) {
-		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("Invalid actionType '%s'. Only '%s' is supported.", req.ActionType, flow_action.UserActionGoNext)})
+	validActions := []string{
+		string(flow_action.UserActionGoNext),
+		string(dev.UserActionDevRunStart),
+		string(dev.UserActionDevRunStop),
+	}
+	if !slices.Contains(validActions, req.ActionType) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("Invalid actionType '%s'. Supported: %v", req.ActionType, validActions)})
 		return
 	}
 
 	// Note: the only way to interact with the flow's GlobalState is by
 	// signalling it. The signal handler will then process the action within the
 	// context of the temporal workflow.
-	err = ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", dev.SignalNameUserAction, flow_action.UserActionGoNext)
+	err = ctrl.temporalClient.SignalWorkflow(c.Request.Context(), flowId, "", dev.SignalNameUserAction, req.ActionType)
 	if err != nil {
 		var serviceErrNotFound *serviceerror.NotFound
 		if errors.As(err, &serviceErrNotFound) {

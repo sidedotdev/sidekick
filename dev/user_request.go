@@ -3,6 +3,7 @@ package dev
 import (
 	"fmt"
 	"sidekick/coding/git"
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/llm"
@@ -33,18 +34,30 @@ func GetUserApproval(dCtx DevContext, approvalType, approvalPrompt string, param
 	return flow_action.GetUserApproval(dCtx.ExecContext, approvalType, approvalPrompt, params)
 }
 
+// MergeStrategy represents the type of merge to perform
+type MergeStrategy string
+
+const (
+	MergeStrategySquash MergeStrategy = "squash"
+	MergeStrategyMerge  MergeStrategy = "merge"
+)
+
 // MergeApprovalParams contains parameters specific to merge approval requests
 type MergeApprovalParams struct {
-	DefaultTargetBranch string `json:"defaultTargetBranch"` // the default target branch, which is to be confirmed/overridden by the user
-	SourceBranch        string `json:"sourceBranch"`
-	Diff                string `json:"diff"`
-	DiffSinceLastReview string `json:"diffSinceLastReview,omitempty"`
+	DefaultTargetBranch  string        `json:"defaultTargetBranch"` // the default target branch, which is to be confirmed/overridden by the user
+	SourceBranch         string        `json:"sourceBranch"`
+	Diff                 string        `json:"diff"`
+	DiffSinceLastReview  string        `json:"diffSinceLastReview,omitempty"`
+	DefaultMergeStrategy MergeStrategy `json:"defaultMergeStrategy,omitempty"` // default merge strategy, defaults to squash
+	// DevRunContext provides context for Dev Run start/stop operations
+	DevRunContext *DevRunContext `json:"devRunContext,omitempty"`
 }
 
 type MergeApprovalResponse struct {
-	Approved     bool   `json:"approved"`
-	TargetBranch string `json:"targetBranch"` // actual target branch selected by the user
-	Message      string `json:"message"`      // feedback message when not approved
+	Approved      bool          `json:"approved"`
+	TargetBranch  string        `json:"targetBranch"`  // actual target branch selected by the user
+	Message       string        `json:"message"`       // feedback message when not approved
+	MergeStrategy MergeStrategy `json:"mergeStrategy"` // selected merge strategy (squash or merge)
 }
 
 func GetUserMergeApproval(
@@ -58,7 +71,7 @@ func GetUserMergeApproval(
 		// TODO: add a self-review process in this case
 		approved := true
 		targetBranch := "main" // TODO: store the startBranch as part of the worktree object when creating it, then retrieve it here
-		return MergeApprovalResponse{Approved: approved, TargetBranch: targetBranch}, nil
+		return MergeApprovalResponse{Approved: approved, TargetBranch: targetBranch, MergeStrategy: MergeStrategySquash}, nil
 	}
 
 	// Create a RequestForUser struct for approval request
@@ -74,6 +87,12 @@ func GetUserMergeApproval(
 
 	mergeApprovalInfo := req.RequestParams["mergeApprovalInfo"].(MergeApprovalParams)
 	finalTarget := mergeApprovalInfo.DefaultTargetBranch
+	// Initialize GlobalState with the default target branch so Dev Run can access it
+	dCtx.ExecContext.GlobalState.SetValue(common.KeyCurrentTargetBranch, finalTarget)
+	finalMergeStrategy := mergeApprovalInfo.DefaultMergeStrategy
+	if finalMergeStrategy == "" {
+		finalMergeStrategy = MergeStrategySquash
+	}
 	ignoreWhitespace := false
 
 	// Extract tree hash for regenerating diffSinceLastReview (internal implementation detail)
@@ -108,11 +127,17 @@ func GetUserMergeApproval(
 				if latestTarget, ok := currentResponse.Params["targetBranch"].(string); ok {
 					finalTarget = latestTarget
 					paramsChanged = true
+					// Update GlobalState so Dev Run can access the current target branch
+					dCtx.ExecContext.GlobalState.SetValue(common.KeyCurrentTargetBranch, finalTarget)
 				}
 
 				if ignoreWhitespaceVal, ok := currentResponse.Params["ignoreWhitespace"].(bool); ok {
 					ignoreWhitespace = ignoreWhitespaceVal
 					paramsChanged = true
+				}
+
+				if strategyVal, ok := currentResponse.Params["mergeStrategy"].(string); ok {
+					finalMergeStrategy = MergeStrategy(strategyVal)
 				}
 
 				if paramsChanged {
@@ -176,9 +201,10 @@ func GetUserMergeApproval(
 	}
 
 	return MergeApprovalResponse{
-		Approved:     *userResponse.Approved,
-		TargetBranch: finalTarget,
-		Message:      userResponse.Content,
+		Approved:      *userResponse.Approved,
+		TargetBranch:  finalTarget,
+		MergeStrategy: finalMergeStrategy,
+		Message:       userResponse.Content,
 	}, nil
 }
 

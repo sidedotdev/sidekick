@@ -18,6 +18,7 @@ type ConfigOverrides struct {
 	AgentConfig map[string]*AgentUseCaseConfig `json:"agentConfig,omitempty"`
 
 	CommandPermissions *CommandPermissionConfig `json:"commandPermissions,omitempty"`
+	DevRun             *DevRunConfig            `json:"devRun,omitempty"`
 
 	// LocalConfig overrides
 	LLM       *LLMConfig                   `json:"llm,omitempty"`
@@ -66,5 +67,8 @@ func (o ConfigOverrides) ApplyToRepoConfig(c *RepoConfig) {
 	}
 	if o.CommandPermissions != nil {
 		c.CommandPermissions = *o.CommandPermissions
+	}
+	if o.DevRun != nil {
+		c.DevRun = *o.DevRun
 	}
 }

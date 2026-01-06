@@ -7,10 +7,19 @@ import (
 	"strings"
 )
 
+// MergeStrategy represents the type of merge to perform
+type MergeStrategy string
+
+const (
+	MergeStrategySquash MergeStrategy = "squash"
+	MergeStrategyMerge  MergeStrategy = "merge"
+)
+
 type GitMergeParams struct {
-	SourceBranch  string // The branch to merge from (typically the worktree branch)
-	TargetBranch  string // The branch to merge into (typically the base branch)
-	CommitMessage string // Required for basic workflows to create initial commit
+	SourceBranch  string        // The branch to merge from (typically the worktree branch)
+	TargetBranch  string        // The branch to merge into (typically the base branch)
+	CommitMessage string        // Required for basic workflows to create initial commit
+	MergeStrategy MergeStrategy // The merge strategy to use (squash or merge); defaults to merge if empty
 }
 
 // MergeActivityResult indicates the result of a merge operation.
@@ -52,7 +61,11 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 
 	if targetWorktree != nil {
 		// Use worktree path for merge
-		mergeCmd := fmt.Sprintf("cd %s && git merge %s", targetWorktree.Path, params.SourceBranch)
+		mergeArgs := params.SourceBranch
+		if params.MergeStrategy == MergeStrategySquash {
+			mergeArgs = "--squash " + params.SourceBranch
+		}
+		mergeCmd := fmt.Sprintf("cd %s && git merge %s", targetWorktree.Path, mergeArgs)
 		mergeOutput, mergeErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 			EnvContainer: envContainer,
 			Command:      "sh",
@@ -74,7 +87,28 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 			resultErr = fmt.Errorf("merge failed in worktree: %s", mergeOutput.Stderr)
 			return
 		}
-		// Merge successful, no conflicts. result.HasConflicts is false (default), resultErr is nil.
+		// Merge successful, no conflicts.
+		// For squash merge, we need to commit the staged changes
+		if params.MergeStrategy == MergeStrategySquash {
+			commitMsg := params.CommitMessage
+			if commitMsg == "" {
+				commitMsg = fmt.Sprintf("Squash merge branch '%s'", params.SourceBranch)
+			}
+			commitCmd := fmt.Sprintf("cd %s && git commit -m %q", targetWorktree.Path, commitMsg)
+			commitOutput, commitErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+				EnvContainer: envContainer,
+				Command:      "sh",
+				Args:         []string{"-c", commitCmd},
+			})
+			if commitErr != nil {
+				resultErr = fmt.Errorf("failed to commit squash merge in worktree: %v", commitErr)
+				return
+			}
+			if commitOutput.ExitStatus != 0 {
+				resultErr = fmt.Errorf("failed to commit squash merge in worktree: %s", commitOutput.Stderr)
+				return
+			}
+		}
 		return
 	}
 
@@ -96,10 +130,15 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 	}
 
 	// Perform the merge
+	mergeArgs := []string{"merge"}
+	if params.MergeStrategy == MergeStrategySquash {
+		mergeArgs = append(mergeArgs, "--squash")
+	}
+	mergeArgs = append(mergeArgs, params.SourceBranch)
 	mergeOutput, mergeErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "git",
-		Args:         []string{"merge", params.SourceBranch},
+		Args:         mergeArgs,
 	})
 	if mergeErr != nil {
 		resultErr = fmt.Errorf("failed to execute merge command: %v", mergeErr)
@@ -175,6 +214,26 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 	}
 
 	// Merge successful, no conflicts.
+	// For squash merge, we need to commit the staged changes
+	if params.MergeStrategy == MergeStrategySquash {
+		commitMsg := params.CommitMessage
+		if commitMsg == "" {
+			commitMsg = fmt.Sprintf("Squash merge branch '%s'", params.SourceBranch)
+		}
+		commitOutput, commitErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
+			EnvContainer: envContainer,
+			Command:      "git",
+			Args:         []string{"commit", "-m", commitMsg},
+		})
+		if commitErr != nil {
+			resultErr = fmt.Errorf("failed to commit squash merge: %v", commitErr)
+			return
+		}
+		if commitOutput.ExitStatus != 0 {
+			resultErr = fmt.Errorf("failed to commit squash merge: %s", commitOutput.Stderr)
+			return
+		}
+	}
 	// result.HasConflicts is false (default).
 	// resultErr is nil (unless defer sets it to a restore error).
 	return
