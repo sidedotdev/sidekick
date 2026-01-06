@@ -49,8 +49,6 @@ type MergeApprovalParams struct {
 	Diff                 string        `json:"diff"`
 	DiffSinceLastReview  string        `json:"diffSinceLastReview,omitempty"`
 	DefaultMergeStrategy MergeStrategy `json:"defaultMergeStrategy,omitempty"` // default merge strategy, defaults to squash
-	// DevRunContext provides context for Dev Run start/stop operations
-	DevRunContext *DevRunContext `json:"devRunContext,omitempty"`
 }
 
 type MergeApprovalResponse struct {

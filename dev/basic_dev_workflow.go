@@ -450,17 +450,6 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 		}
 	}
 
-	// Build DevRunContext for Dev Run operations during merge approval
-	flowInfo := workflow.GetInfo(dCtx)
-	devRunCtx := &DevRunContext{
-		WorkspaceId:  dCtx.WorkspaceId,
-		FlowId:       flowInfo.WorkflowExecution.ID,
-		WorktreeDir:  dCtx.EnvContainer.Env.GetWorkingDirectory(),
-		SourceBranch: dCtx.Worktree.Name,
-		BaseBranch:   defaultTarget,
-		TargetBranch: defaultTarget,
-	}
-
 	// Request merge approval from user
 	mergeParams := MergeApprovalParams{
 		SourceBranch:         dCtx.Worktree.Name,
@@ -468,7 +457,6 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 		Diff:                 gitDiff,
 		DiffSinceLastReview:  diffSinceLastReview,
 		DefaultMergeStrategy: MergeStrategySquash,
-		DevRunContext:        devRunCtx,
 	}
 
 	approvalResponse, err := GetUserMergeApproval(dCtx, "Please review these changes", map[string]any{
