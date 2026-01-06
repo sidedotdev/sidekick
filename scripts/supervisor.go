@@ -1044,8 +1044,9 @@ func (m *model) updateViewportSizes() {
 		if rows == 0 {
 			rows = 1
 		}
-		vpWidth := (m.width / cols) - 2
-		vpHeight := (contentHeight / rows) - 2
+		// Per-panel overhead: border (2) + padding (2) for width, border (2) + title (1) for height
+		vpWidth := m.width/cols - 4
+		vpHeight := contentHeight/rows - 3
 		for i := range m.viewports {
 			m.viewports[i].Width = vpWidth
 			m.viewports[i].Height = vpHeight
@@ -1092,11 +1093,10 @@ func (m model) View() string {
 
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("205")).
-		MarginBottom(1)
+		Foreground(lipgloss.Color("205"))
 
 	b.WriteString(headerStyle.Render(fmt.Sprintf("Sidekick Supervisor - %s%s%s", modeStr, ephemeralStr, suspendedStr)))
-	b.WriteString("\n\n")
+	b.WriteString("\n")
 
 	if m.supervisor.IsSuspended() {
 		suspendedStyle := lipgloss.NewStyle().
@@ -1172,12 +1172,9 @@ func (m model) renderTabsView() string {
 	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, tabs...))
 	b.WriteString("\n\n")
 
-	// Active viewport
+	// Active viewport (no border in tabs view)
 	if m.activeTab < len(m.viewports) {
-		panelStyle := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("205"))
-		b.WriteString(panelStyle.Render(m.viewports[m.activeTab].View()))
+		b.WriteString(m.viewports[m.activeTab].View())
 	}
 
 	return b.String()
