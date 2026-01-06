@@ -2,6 +2,7 @@ package dev
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -11,6 +12,7 @@ import (
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/srv"
 	"sidekick/utils"
@@ -102,6 +104,63 @@ func (s *DevRunWorkflowTestSuite) TestDevRunUserActionTypes() {
 	// Test that the action type values are correctly defined
 	s.Equal("dev_run_start", string(UserActionDevRunStart))
 	s.Equal("dev_run_stop", string(UserActionDevRunStop))
+}
+
+// TestDevRunStartSignalDoesNotBlockSelectorCallback tests that sending a dev_run_start
+// signal does not cause a panic due to blocking inside the selector callback.
+// This reproduces the bug: "trying to block on coroutine which is already blocked"
+func (s *DevRunWorkflowTestSuite) TestDevRunStartSignalDoesNotBlockSelectorCallback() {
+	testWorkflow := func(ctx workflow.Context) error {
+		gs := &flow_action.GlobalState{}
+		gs.InitValues()
+
+		// Set up activity options so the activity can be executed
+		activityCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			StartToCloseTimeout: 10 * time.Second,
+		})
+
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context:     activityCtx,
+				WorkspaceId: "test-workspace",
+				GlobalState: gs,
+				EnvContainer: &env.EnvContainer{
+					Env: &env.LocalEnv{
+						WorkingDirectory: "/tmp/test-repo",
+					},
+				},
+			},
+			RepoConfig: common.RepoConfig{},
+			Worktree: &domain.Worktree{
+				Name: "side/test-branch",
+			},
+		}
+
+		SetupUserActionHandler(dCtx)
+
+		// Wait briefly to allow signal processing
+		_ = workflow.Sleep(ctx, 100*time.Millisecond)
+
+		return nil
+	}
+
+	s.env.RegisterWorkflow(testWorkflow)
+
+	// Mock the StartDevRun activity to return immediately (no start commands configured)
+	var dra *DevRunActivities
+	s.env.OnActivity(dra.StartDevRun, mock.Anything, mock.Anything).Return(StartDevRunOutput{
+		Started: false,
+	}, nil)
+
+	// Send the signal after workflow starts
+	s.env.RegisterDelayedCallback(func() {
+		s.env.SignalWorkflow(SignalNameUserAction, string(UserActionDevRunStart))
+	}, 10*time.Millisecond)
+
+	s.env.ExecuteWorkflow(testWorkflow)
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
 }
 
 // TestDevRunContextBranchUpdate tests that both TargetBranch and BaseBranch
