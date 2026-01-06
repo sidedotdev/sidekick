@@ -14,7 +14,7 @@ import (
 	"go.temporal.io/sdk/activity"
 )
 
-const anthropicDefaultModel = "claude-sonnet-4-5"
+const anthropicDefaultModel = "claude-opus-4-5"
 const anthropicDefaultMaxTokens = 16000
 
 type AnthropicResponsesProvider struct{}

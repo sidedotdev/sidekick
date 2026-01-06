@@ -18,7 +18,7 @@ import (
 	"go.temporal.io/sdk/activity"
 )
 
-const AnthropicDefaultModel = "claude-sonnet-4-5-20250929"
+const AnthropicDefaultModel = "claude-opus-4-5"
 
 const AnthropicApiKeySecretName = "ANTHROPIC_API_KEY"
 const AnthropicOAuthSecretName = "ANTHROPIC_OAUTH"
