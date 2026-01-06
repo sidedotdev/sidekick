@@ -187,7 +187,7 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 		Params: ToolChatParams{
 			ModelConfig: common.ModelConfig{
 				Provider: "anthropic",
-				Model:    anthropic.ModelClaude_3_Haiku_20240307, // cheapest model for integration testing
+				Model:    "claude-haiku-4-5",
 			},
 			Messages: []ChatMessage{
 				{Role: ChatMessageRoleUser, Content: "Look up what the weather is like in New York"},
