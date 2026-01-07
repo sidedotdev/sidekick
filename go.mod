@@ -3,6 +3,7 @@ module sidekick
 go 1.24.0
 
 require (
+	al.essio.dev/pkg/shellescape v1.6.0
 	github.com/BurntSushi/toml v1.3.2
 	github.com/adrg/strutil v0.3.0
 	github.com/adrg/xdg v0.5.3
@@ -17,12 +18,15 @@ require (
 	github.com/erikgeiser/promptkit v0.9.0
 	github.com/gin-gonic/gin v1.11.0
 	github.com/go-git/go-git/v5 v5.13.0
+	github.com/goccy/go-yaml v1.19.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/invopop/jsonschema v0.12.0
 	github.com/joho/godotenv v1.5.1
 	github.com/kardianos/service v1.2.2
 	github.com/kelindar/binary v1.0.19
+	github.com/knadh/koanf/parsers/json v1.0.0
+	github.com/knadh/koanf/parsers/toml v0.1.0
 	github.com/knadh/koanf/parsers/yaml v0.1.0
 	github.com/knadh/koanf/providers/file v0.1.0
 	github.com/knadh/koanf/v2 v2.1.2
@@ -80,10 +84,7 @@ require (
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
-	github.com/goccy/go-yaml v1.19.0 // indirect
 	github.com/knadh/koanf/maps v0.1.1 // indirect
-	github.com/knadh/koanf/parsers/json v1.0.0 // indirect
-	github.com/knadh/koanf/parsers/toml v0.1.0 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/hashstructure/v2 v2.0.2 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect

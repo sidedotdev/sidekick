@@ -8,6 +8,7 @@ import (
 	"sidekick/flow_action"
 	"strings"
 
+	"al.essio.dev/pkg/shellescape"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -80,7 +81,7 @@ func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params 
 }
 
 func shellQuote(s string) string {
-	return fmt.Sprintf("'%s'", strings.ReplaceAll(s, "'", "'\\''"))
+	return shellescape.Quote(s)
 }
 
 func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
@@ -153,8 +154,7 @@ func workingTreeAndUntrackedDiff(ctx context.Context, envContainer env.EnvContai
 				// This quoting is for the benefit of the outer `sh -c` execution,
 				// as `git ls-files` itself (with -z) handles paths robustly.
 				// However, if a path itself contains a single quote, it needs escaping for the shell.
-				quotedFp := fmt.Sprintf("'%s'", strings.ReplaceAll(cleanFp, "'", "'\\''"))
-				lsFilesCmdParts = append(lsFilesCmdParts, quotedFp)
+				lsFilesCmdParts = append(lsFilesCmdParts, shellQuote(cleanFp))
 			}
 		}
 		lsFilesCmdString := strings.Join(lsFilesCmdParts, " ")

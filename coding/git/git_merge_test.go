@@ -362,12 +362,12 @@ func TestGitMergeActivitySquash(t *testing.T) {
 		createCommitWithFile(t, repoDir, "Initial commit on main", "initial.txt", "initial content")
 
 		// Create feature branch with file change
-		runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
+		runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "side/feature")
 		createCommitWithFile(t, repoDir, "Feature commit", "feature.txt", "feature content")
 
 		// Squash merge without commit message
 		params := GitMergeParams{
-			SourceBranch:  "feature",
+			SourceBranch:  "side/feature",
 			TargetBranch:  "main",
 			MergeStrategy: MergeStrategySquash,
 		}
@@ -380,7 +380,7 @@ func TestGitMergeActivitySquash(t *testing.T) {
 		// Verify default commit message
 		runGitCommandInTestRepo(t, repoDir, "checkout", "main")
 		logOutput := runGitCommandInTestRepo(t, repoDir, "log", "--oneline")
-		assert.Contains(t, logOutput, "Squash merge branch 'feature'")
+		assert.Contains(t, logOutput, "Squash merge branch side/feature")
 	})
 
 	t.Run("regular merge preserves commits", func(t *testing.T) {
