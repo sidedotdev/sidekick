@@ -607,12 +607,12 @@ func TestTruncateMiddle(t *testing.T) {
 		{"short", 10, "short"},
 		{"exactly10!", 10, "exactly10!"},
 		{"hello_world", 11, "hello_world"},
-		{"hello_world", 10, "hel…orld"},  // 3 + 3-byte ellipsis + 4 = 10
-		{"abcdefghij", 9, "abc…hij"},     // 3 + 3 + 3 = 9 (remaining=6, left=3, right=3)
-		{"abcdefghij", 7, "ab…ij"},       // 2 + 3 + 2 = 7
-		{"abcdefghij", 5, "a…j"},         // 1 + 3 + 1 = 5
-		{"abcdefghij", 4, "…j"},          // 0 + 3 + 1 = 4
-		{"abcdefghij", 3, "abc"},         // fallback: just take first 3
+		{"hello_world", 10, "hel…orld"}, // 3 + 3-byte ellipsis + 4 = 10
+		{"abcdefghij", 9, "abc…hij"},    // 3 + 3 + 3 = 9 (remaining=6, left=3, right=3)
+		{"abcdefghij", 7, "ab…ij"},      // 2 + 3 + 2 = 7
+		{"abcdefghij", 5, "a…j"},        // 1 + 3 + 1 = 5
+		{"abcdefghij", 4, "…j"},         // 0 + 3 + 1 = 4
+		{"abcdefghij", 3, "abc"},        // fallback: just take first 3
 		{"ab", 1, "a"},
 	}
 
@@ -2051,4 +2051,456 @@ done:
 	}
 
 	sup.StopAll()
+}
+
+func TestSearchPerformSearch(t *testing.T) {
+	t.Parallel()
+
+	// Create a supervisor with mock processes
+	sup := &Supervisor{
+		processes: []*Process{
+			{
+				Config: ProcessConfig{Name: "proc1"},
+				Output: []string{
+					"line 1: hello world",
+					"line 2: foo bar",
+					"line 3: hello again",
+					"line 4: baz qux",
+				},
+			},
+			{
+				Config: ProcessConfig{Name: "proc2"},
+				Output: []string{
+					"line 1: hello there",
+					"line 2: goodbye",
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	outputChan := make(chan processOutputMsg, 10)
+	m := newModel(ctx, sup, outputChan)
+	m.width = 100
+	m.height = 40
+	m.updateViewportSizes()
+
+	// Test searching for "hello"
+	m.searchTerm = "hello"
+	m.performSearch()
+
+	// Should find 3 matches: 2 in proc1, 1 in proc2
+	if len(m.searchMatches) != 3 {
+		t.Errorf("expected 3 matches, got %d", len(m.searchMatches))
+	}
+
+	// Verify match positions
+	expectedMatches := []struct {
+		processIdx int
+		lineIdx    int
+		startPos   int
+	}{
+		{0, 0, 8}, // "hello" in "line 1: hello world" (0-indexed)
+		{0, 2, 8}, // "hello" in "line 3: hello again"
+		{1, 0, 8}, // "hello" in "line 1: hello there"
+	}
+
+	for i, expected := range expectedMatches {
+		if i >= len(m.searchMatches) {
+			break
+		}
+		match := m.searchMatches[i]
+		if match.processIdx != expected.processIdx {
+			t.Errorf("match %d: expected processIdx %d, got %d", i, expected.processIdx, match.processIdx)
+		}
+		if match.lineIdx != expected.lineIdx {
+			t.Errorf("match %d: expected lineIdx %d, got %d", i, expected.lineIdx, match.lineIdx)
+		}
+		if match.startPos != expected.startPos {
+			t.Errorf("match %d: expected startPos %d, got %d", i, expected.startPos, match.startPos)
+		}
+	}
+}
+
+func TestSearchCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	sup := &Supervisor{
+		processes: []*Process{
+			{
+				Config: ProcessConfig{Name: "proc1"},
+				Output: []string{
+					"HELLO world",
+					"hello world",
+					"HeLLo world",
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	outputChan := make(chan processOutputMsg, 10)
+	m := newModel(ctx, sup, outputChan)
+
+	m.searchTerm = "hello"
+	m.performSearch()
+
+	if len(m.searchMatches) != 3 {
+		t.Errorf("expected 3 case-insensitive matches, got %d", len(m.searchMatches))
+	}
+}
+
+func TestSearchNextPrevMatch(t *testing.T) {
+	t.Parallel()
+
+	sup := &Supervisor{
+		processes: []*Process{
+			{
+				Config: ProcessConfig{Name: "proc1"},
+				Output: []string{
+					"target1 here",
+					"nothing",
+					"target2 here",
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	outputChan := make(chan processOutputMsg, 10)
+	m := newModel(ctx, sup, outputChan)
+	m.width = 100
+	m.height = 40
+	m.updateViewportSizes()
+
+	m.searchTerm = "target"
+	m.performSearch()
+
+	if len(m.searchMatches) != 2 {
+		t.Fatalf("expected 2 matches, got %d", len(m.searchMatches))
+	}
+
+	// Initial state
+	if m.currentMatch != 0 {
+		t.Errorf("expected currentMatch 0, got %d", m.currentMatch)
+	}
+
+	// Next match
+	m.nextMatch()
+	if m.currentMatch != 1 {
+		t.Errorf("after nextMatch: expected currentMatch 1, got %d", m.currentMatch)
+	}
+
+	// Next match wraps around
+	m.nextMatch()
+	if m.currentMatch != 0 {
+		t.Errorf("after nextMatch wrap: expected currentMatch 0, got %d", m.currentMatch)
+	}
+
+	// Prev match wraps around
+	m.prevMatch()
+	if m.currentMatch != 1 {
+		t.Errorf("after prevMatch wrap: expected currentMatch 1, got %d", m.currentMatch)
+	}
+
+	// Prev match
+	m.prevMatch()
+	if m.currentMatch != 0 {
+		t.Errorf("after prevMatch: expected currentMatch 0, got %d", m.currentMatch)
+	}
+}
+
+func TestSearchJumpToMatch(t *testing.T) {
+	t.Parallel()
+
+	sup := &Supervisor{
+		processes: []*Process{
+			{
+				Config: ProcessConfig{Name: "proc1"},
+				Output: generateLines(100, "proc1"),
+			},
+			{
+				Config: ProcessConfig{Name: "proc2"},
+				Output: generateLines(100, "proc2"),
+			},
+		},
+	}
+
+	ctx := context.Background()
+	outputChan := make(chan processOutputMsg, 10)
+	m := newModel(ctx, sup, outputChan)
+	m.width = 100
+	m.height = 40
+	m.updateViewportSizes()
+
+	// Search for something that appears at specific lines
+	m.searchTerm = "line 50"
+	m.performSearch()
+
+	if len(m.searchMatches) < 2 {
+		t.Fatalf("expected at least 2 matches, got %d", len(m.searchMatches))
+	}
+
+	// Jump to first match (should be in proc1)
+	m.jumpToMatch(0)
+	if m.activeTab != 0 {
+		t.Errorf("expected activeTab 0 after jumpToMatch(0), got %d", m.activeTab)
+	}
+
+	// Jump to second match (should be in proc2)
+	m.jumpToMatch(1)
+	if m.activeTab != 1 {
+		t.Errorf("expected activeTab 1 after jumpToMatch(1), got %d", m.activeTab)
+	}
+}
+
+func TestSearchJumpToMatchScrollsViewport(t *testing.T) {
+	t.Parallel()
+
+	// Create a process with many lines
+	lines := make([]string, 200)
+	for i := range lines {
+		if i == 150 {
+			lines[i] = fmt.Sprintf("line %d: FINDME target", i)
+		} else {
+			lines[i] = fmt.Sprintf("line %d: regular content", i)
+		}
+	}
+
+	sup := &Supervisor{
+		processes: []*Process{
+			{
+				Config: ProcessConfig{Name: "proc1"},
+				Output: lines,
+			},
+		},
+	}
+
+	ctx := context.Background()
+	outputChan := make(chan processOutputMsg, 10)
+	m := newModel(ctx, sup, outputChan)
+	m.width = 100
+	m.height = 40
+	m.updateViewportSizes()
+
+	// Enable context mode so line indices map directly
+	m.contextMode = true
+	m.searchTerm = "FINDME"
+	m.performSearch()
+
+	if len(m.searchMatches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(m.searchMatches))
+	}
+
+	// Verify the match is at line 150
+	if m.searchMatches[0].lineIdx != 150 {
+		t.Fatalf("expected match at line 150, got %d", m.searchMatches[0].lineIdx)
+	}
+
+	// Jump to the match
+	m.jumpToMatch(0)
+
+	// The viewport should have scrolled to show line 150
+	// With height 40 and centering, YOffset should be around 150 - 20 = 130
+	vp := m.viewports[0]
+	yOffset := vp.YOffset
+
+	// The match should be visible in the viewport
+	// Viewport shows lines from yOffset to yOffset + height
+	matchLine := 150
+	if matchLine < yOffset || matchLine >= yOffset+vp.Height {
+		t.Errorf("match at line %d not visible in viewport (YOffset=%d, Height=%d)",
+			matchLine, yOffset, vp.Height)
+	}
+}
+
+func TestSearchFilteredLineIndex(t *testing.T) {
+	t.Parallel()
+
+	sup := &Supervisor{
+		processes: []*Process{
+			{
+				Config: ProcessConfig{Name: "proc1"},
+				Output: []string{
+					"nothing line 0",
+					"target line 1",
+					"nothing line 2",
+					"nothing line 3",
+					"target line 4",
+					"target line 5",
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	outputChan := make(chan processOutputMsg, 10)
+	m := newModel(ctx, sup, outputChan)
+
+	m.searchTerm = "target"
+	m.performSearch()
+
+	// Should have 3 matches at lines 1, 4, 5
+	if len(m.searchMatches) != 3 {
+		t.Fatalf("expected 3 matches, got %d", len(m.searchMatches))
+	}
+
+	// In filter mode, these should map to filtered indices 0, 1, 2
+	testCases := []struct {
+		matchIdx            int
+		expectedFilteredIdx int
+	}{
+		{0, 0}, // match at line 1 -> filtered index 0
+		{1, 1}, // match at line 4 -> filtered index 1
+		{2, 2}, // match at line 5 -> filtered index 2
+	}
+
+	for _, tc := range testCases {
+		filteredIdx := m.getFilteredLineIndex(m.searchMatches[tc.matchIdx])
+		if filteredIdx != tc.expectedFilteredIdx {
+			t.Errorf("match %d: expected filtered index %d, got %d",
+				tc.matchIdx, tc.expectedFilteredIdx, filteredIdx)
+		}
+	}
+}
+
+func TestSearchClearSearch(t *testing.T) {
+	t.Parallel()
+
+	sup := &Supervisor{
+		processes: []*Process{
+			{
+				Config: ProcessConfig{Name: "proc1"},
+				Output: []string{"hello world"},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	outputChan := make(chan processOutputMsg, 10)
+	m := newModel(ctx, sup, outputChan)
+
+	// Set up a search
+	m.searchTerm = "hello"
+	m.searchInput.SetValue("hello")
+	m.performSearch()
+	m.currentMatch = 0
+
+	if len(m.searchMatches) == 0 {
+		t.Fatal("expected matches before clear")
+	}
+
+	// Clear the search
+	m.clearSearch()
+
+	if m.searchTerm != "" {
+		t.Errorf("expected empty searchTerm after clear, got %q", m.searchTerm)
+	}
+	if m.searchInput.Value() != "" {
+		t.Errorf("expected empty searchInput after clear, got %q", m.searchInput.Value())
+	}
+	if len(m.searchMatches) != 0 {
+		t.Errorf("expected no matches after clear, got %d", len(m.searchMatches))
+	}
+	if m.currentMatch != 0 {
+		t.Errorf("expected currentMatch 0 after clear, got %d", m.currentMatch)
+	}
+}
+
+func TestSearchMultipleMatchesOnSameLine(t *testing.T) {
+	t.Parallel()
+
+	sup := &Supervisor{
+		processes: []*Process{
+			{
+				Config: ProcessConfig{Name: "proc1"},
+				Output: []string{
+					"foo foo foo",
+					"bar",
+					"foo",
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	outputChan := make(chan processOutputMsg, 10)
+	m := newModel(ctx, sup, outputChan)
+
+	m.searchTerm = "foo"
+	m.performSearch()
+
+	// Should find 4 matches: 3 on line 0, 1 on line 2
+	if len(m.searchMatches) != 4 {
+		t.Errorf("expected 4 matches, got %d", len(m.searchMatches))
+	}
+
+	// Verify positions on first line
+	expectedPositions := []int{0, 4, 8}
+	for i, pos := range expectedPositions {
+		if i >= len(m.searchMatches) {
+			break
+		}
+		if m.searchMatches[i].startPos != pos {
+			t.Errorf("match %d: expected startPos %d, got %d", i, pos, m.searchMatches[i].startPos)
+		}
+	}
+}
+
+func TestSearchReenterSearchModeRetainsValue(t *testing.T) {
+	t.Parallel()
+
+	sup := &Supervisor{
+		processes: []*Process{
+			{
+				Config: ProcessConfig{Name: "proc1"},
+				Output: []string{"hello world"},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	outputChan := make(chan processOutputMsg, 10)
+	m := newModel(ctx, sup, outputChan)
+	m.width = 100
+	m.height = 40
+	m.updateViewportSizes()
+
+	// Enter search mode and type a search term
+	m.searchMode = true
+	m.searchInput.SetValue("hello")
+	m.searchTerm = "hello"
+	m.performSearch()
+
+	// Exit search mode (like pressing Enter)
+	m.searchMode = false
+	m.searchInput.Blur()
+
+	// Verify search is still active but not in edit mode
+	if m.searchMode {
+		t.Error("expected searchMode to be false after exiting")
+	}
+	if m.searchTerm != "hello" {
+		t.Errorf("expected searchTerm 'hello', got %q", m.searchTerm)
+	}
+	if m.searchInput.Value() != "hello" {
+		t.Errorf("expected searchInput value 'hello', got %q", m.searchInput.Value())
+	}
+
+	// Re-enter search mode (like pressing "/")
+	m.searchMode = true
+	m.searchInput.Focus()
+
+	// The search input should still have the previous value for editing
+	if m.searchInput.Value() != "hello" {
+		t.Errorf("after re-entering search mode, expected searchInput value 'hello', got %q", m.searchInput.Value())
+	}
+}
+
+func generateLines(count int, prefix string) []string {
+	lines := make([]string, count)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("%s line %d: content here", prefix, i)
+	}
+	return lines
 }
