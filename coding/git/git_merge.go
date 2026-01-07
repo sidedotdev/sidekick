@@ -61,11 +61,11 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 
 	if targetWorktree != nil {
 		// Use worktree path for merge
-		mergeArgs := params.SourceBranch
+		mergeArgs := shellQuote(params.SourceBranch)
 		if params.MergeStrategy == MergeStrategySquash {
-			mergeArgs = "--squash " + params.SourceBranch
+			mergeArgs = "--squash " + shellQuote(params.SourceBranch)
 		}
-		mergeCmd := fmt.Sprintf("cd %s && git merge %s", targetWorktree.Path, mergeArgs)
+		mergeCmd := fmt.Sprintf("cd %s && git merge %s", shellQuote(targetWorktree.Path), mergeArgs)
 		mergeOutput, mergeErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 			EnvContainer: envContainer,
 			Command:      "sh",
@@ -92,9 +92,9 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 		if params.MergeStrategy == MergeStrategySquash {
 			commitMsg := params.CommitMessage
 			if commitMsg == "" {
-				commitMsg = fmt.Sprintf("Squash merge branch '%s'", params.SourceBranch)
+				commitMsg = fmt.Sprintf("Squash merge branch %s", shellQuote(params.SourceBranch))
 			}
-			commitCmd := fmt.Sprintf("cd %s && git commit -m %q", targetWorktree.Path, commitMsg)
+			commitCmd := fmt.Sprintf("cd %s && git commit -m %s", shellQuote(targetWorktree.Path), shellQuote(commitMsg))
 			commitOutput, commitErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 				EnvContainer: envContainer,
 				Command:      "sh",
@@ -118,7 +118,7 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 	checkoutOutput, checkoutErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "git",
-		Args:         []string{"checkout", params.TargetBranch},
+		Args:         []string{"checkout", shellQuote(params.TargetBranch)},
 	})
 	if checkoutErr != nil {
 		resultErr = fmt.Errorf("failed to run command to checkout target branch %s: %v", params.TargetBranch, checkoutErr)
@@ -134,7 +134,7 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 	if params.MergeStrategy == MergeStrategySquash {
 		mergeArgs = append(mergeArgs, "--squash")
 	}
-	mergeArgs = append(mergeArgs, params.SourceBranch)
+	mergeArgs = append(mergeArgs, shellQuote(params.SourceBranch))
 	mergeOutput, mergeErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 		EnvContainer: envContainer,
 		Command:      "git",
@@ -182,7 +182,7 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 			sourceWorktreePath := envContainer.Env.GetWorkingDirectory()
 
 			// Perform reverse merge in source worktree
-			reverseMergeCmd := fmt.Sprintf("cd \"%s\" && git merge %s", sourceWorktreePath, params.TargetBranch)
+			reverseMergeCmd := fmt.Sprintf("cd %s && git merge %s", shellQuote(sourceWorktreePath), shellQuote(params.TargetBranch))
 
 			reverseMergeOutput, reverseMergeErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 				EnvContainer: envContainer,
@@ -218,12 +218,12 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 	if params.MergeStrategy == MergeStrategySquash {
 		commitMsg := params.CommitMessage
 		if commitMsg == "" {
-			commitMsg = fmt.Sprintf("Squash merge branch '%s'", params.SourceBranch)
+			commitMsg = fmt.Sprintf("Squash merge branch %s", shellQuote(params.SourceBranch))
 		}
 		commitOutput, commitErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 			EnvContainer: envContainer,
 			Command:      "git",
-			Args:         []string{"commit", "-m", commitMsg},
+			Args:         []string{"-c", "user.name='Sidekick'", "-c", "user.email='sidekick@side.dev'", "commit", "-m", commitMsg},
 		})
 		if commitErr != nil {
 			resultErr = fmt.Errorf("failed to commit squash merge: %v", commitErr)
