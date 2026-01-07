@@ -280,11 +280,11 @@ type IPCMessage struct {
 }
 
 const (
-	msgTakeover          = "takeover"
-	msgRelease           = "release"
-	msgAck               = "ack"
-	msgHeartbeat         = "heartbeat"
-	msgStopAck           = "stop_ack"
+	msgTakeover           = "takeover"
+	msgRelease            = "release"
+	msgAck                = "ack"
+	msgHeartbeat          = "heartbeat"
+	msgStopAck            = "stop_ack"
 	msgPersistentTakeover = "persistent_takeover"
 )
 
@@ -1200,8 +1200,8 @@ func (m *model) updateViewportSizes() {
 		return
 	}
 
-	headerHeight := 3
-	footerHeight := 2
+	headerHeight := 1
+	footerHeight := 1
 	contentHeight := m.height - headerHeight - footerHeight
 
 	if m.viewMode == viewTiled {
@@ -1214,15 +1214,18 @@ func (m *model) updateViewportSizes() {
 		// Per-panel overhead: border (2) + padding (2) for width, border (2) + title (1) for height
 		vpWidth := m.width/cols - 4
 		vpHeight := contentHeight/rows - 3
+		// TODO on the last row, extend the height by 1 if there is any remaining space
 		for i := range m.viewports {
 			m.viewports[i].Width = vpWidth
 			m.viewports[i].Height = vpHeight
 		}
 	} else {
-		// Full width for tabs
+		headerHeight = 3 // tabs
+		contentHeight = m.height - headerHeight - footerHeight
+		// no borders for tabs, and title is part of header
 		for i := range m.viewports {
-			m.viewports[i].Width = m.width - 4
-			m.viewports[i].Height = contentHeight - 2
+			m.viewports[i].Width = m.width
+			m.viewports[i].Height = contentHeight
 		}
 	}
 	m.updateViewportContent()
@@ -1493,7 +1496,6 @@ func (m model) View() string {
 	} else {
 		footer = "Tab: view | 1-9/←→: select | r: restart | R: all | ↑↓/jk: scroll | g/G: top/bottom | /: search | q: quit"
 	}
-	b.WriteString("\n")
 	b.WriteString(footerStyle.Render(footer))
 
 	return b.String()
