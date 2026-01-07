@@ -1044,16 +1044,50 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchMode = false
 				m.searchInput.Blur()
 				m.searchTerm = m.searchInput.Value()
-				m.currentMatch = 0
-				m.performSearch()
-				m.updateViewportContent()
 				if len(m.searchMatches) > 0 {
-					m.jumpToMatch(0)
+					m.jumpToMatch(m.currentMatch)
+				}
+				return m, nil
+			case "ctrl+n":
+				m.nextMatch()
+				return m, nil
+			case "ctrl+p":
+				m.prevMatch()
+				return m, nil
+			case "up":
+				if m.activeTab < len(m.viewports) {
+					m.viewports[m.activeTab].LineUp(1)
+				}
+				return m, nil
+			case "down":
+				if m.activeTab < len(m.viewports) {
+					m.viewports[m.activeTab].LineDown(1)
+				}
+				return m, nil
+			case "pgup":
+				if m.activeTab < len(m.viewports) {
+					m.viewports[m.activeTab].HalfViewUp()
+				}
+				return m, nil
+			case "pgdown":
+				if m.activeTab < len(m.viewports) {
+					m.viewports[m.activeTab].HalfViewDown()
 				}
 				return m, nil
 			default:
 				var cmd tea.Cmd
 				m.searchInput, cmd = m.searchInput.Update(msg)
+				// Search as you type
+				newTerm := m.searchInput.Value()
+				if newTerm != m.searchTerm {
+					m.searchTerm = newTerm
+					m.currentMatch = 0
+					m.performSearch()
+					m.updateViewportContent()
+					if len(m.searchMatches) > 0 {
+						m.jumpToMatch(0)
+					}
+				}
 				return m, cmd
 			}
 		}
@@ -1064,7 +1098,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "n":
 				m.nextMatch()
 				return m, nil
-			case "N":
+			case "p", "N":
 				m.prevMatch()
 				return m, nil
 			case "c":
@@ -1374,22 +1408,22 @@ func (m *model) jumpToMatch(matchIdx int) {
 
 	// Scroll viewport to show the matching line
 	if match.processIdx < len(m.viewports) {
-		vp := &m.viewports[match.processIdx]
+		vpHeight := m.viewports[match.processIdx].Height
 
 		var linePos int
 		if m.contextMode {
 			// In context mode, line index maps directly to viewport line
-			linePos = match.lineIdx - vp.Height/2
+			linePos = match.lineIdx - vpHeight/2
 		} else {
 			// In filter mode, find which filtered line this match corresponds to
 			filteredLineIdx := m.getFilteredLineIndex(match)
-			linePos = filteredLineIdx - vp.Height/2
+			linePos = filteredLineIdx - vpHeight/2
 		}
 
 		if linePos < 0 {
 			linePos = 0
 		}
-		vp.SetYOffset(linePos)
+		m.viewports[match.processIdx].SetYOffset(linePos)
 	}
 }
 
@@ -1490,9 +1524,9 @@ func (m model) View() string {
 
 	var footer string
 	if m.searchMode {
-		footer = "Enter: search | Esc: cancel"
+		footer = "Ctrl+n/p: next/prev | ↑↓: scroll | Enter: confirm | Esc: cancel"
 	} else if m.searchTerm != "" {
-		footer = "n/N: next/prev | c: toggle context/filter | Esc: clear | /: new search"
+		footer = "n/p: next/prev | c: toggle context/filter | Esc: clear | /: edit search"
 	} else {
 		footer = "Tab: view | 1-9/←→: select | r: restart | R: all | ↑↓/jk: scroll | g/G: top/bottom | /: search | q: quit"
 	}
