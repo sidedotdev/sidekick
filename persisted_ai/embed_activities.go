@@ -90,26 +90,13 @@ func (ea *EmbedActivities) CachedEmbedActivity(ctx context.Context, options Cach
 			}
 		}
 
-		embedder, err := getEmbedder(options.ModelConfig)
+		embeddings, err := BatchEmbed(ctx, options.ModelConfig, options.Secrets.SecretManager, input, embedding.TaskTypeRetrievalDocument)
 		if err != nil {
 			return err
 		}
 		cacheValues := make(map[string]interface{}, len(input))
-		batches, err := embedding.BatchEmbeddingRequests(input, options.ModelConfig)
-		if err != nil {
-			return fmt.Errorf("failed to batch embedding requests: %w", err)
-		}
-
-		inputIndex := 0
-		for _, batch := range batches {
-			embeddings, err := embedder.Embed(ctx, options.ModelConfig, options.Secrets.SecretManager, batch, embedding.TaskTypeRetrievalDocument)
-			if err != nil {
-				return fmt.Errorf("failed to embed content: %w", err)
-			}
-			for _, embedding := range embeddings {
-				cacheValues[missingEmbeddingKeys[inputIndex]] = embedding
-				inputIndex++
-			}
+		for i, emb := range embeddings {
+			cacheValues[missingEmbeddingKeys[i]] = emb
 		}
 
 		err = ea.Storage.MSet(ctx, options.WorkspaceId, cacheValues)
@@ -118,6 +105,31 @@ func (ea *EmbedActivities) CachedEmbedActivity(ctx context.Context, options Cach
 		}
 	}
 	return nil
+}
+
+// BatchEmbed batches inputs according to model limits and embeds them.
+// Returns embedding vectors in the same order as inputs.
+func BatchEmbed(ctx context.Context, modelConfig common.ModelConfig, secretManager secret_manager.SecretManager, inputs []string, taskType string) ([]embedding.EmbeddingVector, error) {
+	embedder, err := getEmbedder(modelConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	batches, err := embedding.BatchEmbeddingRequests(inputs, modelConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to batch embedding requests: %w", err)
+	}
+
+	var allEmbeddings []embedding.EmbeddingVector
+	for _, batch := range batches {
+		embeddings, err := embedder.Embed(ctx, modelConfig, secretManager, batch, taskType)
+		if err != nil {
+			return nil, fmt.Errorf("failed to embed content: %w", err)
+		}
+		allEmbeddings = append(allEmbeddings, embeddings...)
+	}
+
+	return allEmbeddings, nil
 }
 
 type embeddingKeyOptions struct {

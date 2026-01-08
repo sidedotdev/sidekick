@@ -107,11 +107,6 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 
 	va := VectorActivities{DatabaseAccessor: ra.DatabaseAccessor}
 
-	embedder, err := getEmbedder(options.ModelConfig)
-	if err != nil {
-		return []string{}, err
-	}
-
 	// Get model-specific character limits
 	maxQueryChars, err := embedding.GetModelMaxChars(options.ModelConfig)
 	goodQueryChars := min(maxQueryChars, tree_sitter.DefaultPreferredChunkChars)
@@ -135,7 +130,7 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 
 	// Embed all chunks
 	// TODO /gen/basic cache query vectors in memory, for when the same query is rerun twice
-	queryVectors, err := embedder.Embed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, queryChunks, taskType)
+	queryVectors, err := BatchEmbed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, queryChunks, taskType)
 	if err != nil {
 		return []string{}, fmt.Errorf("failed to embed query chunks: %w", err)
 	}
