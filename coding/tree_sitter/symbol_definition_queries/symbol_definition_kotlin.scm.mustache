@@ -8,7 +8,7 @@
   (class_declaration
     (type_identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
@@ -20,7 +20,7 @@
   (object_declaration
     (type_identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 ; Function declarations
@@ -33,11 +33,11 @@
   (function_declaration
     (simple_identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 ; enum members
 (enum_entry
   (simple_identifier) @name
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition

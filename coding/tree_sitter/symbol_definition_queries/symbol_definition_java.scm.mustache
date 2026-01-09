@@ -1,12 +1,12 @@
 ; Broken syntax cases
 (ERROR
   (identifier) @name
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 (program
 	(method_declaration
     (identifier) @name
-    (#eq? @name "{{SymbolName}}")
+    {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
   ) @definition
 )
 
@@ -20,7 +20,7 @@
   (class_declaration
     name: (identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 ; Interface declarations
@@ -33,7 +33,7 @@
   (interface_declaration
     name: (identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 ; Annotation type declarations
@@ -46,7 +46,7 @@
   (annotation_type_declaration
     name: (identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 ; Method declarations
@@ -59,7 +59,7 @@
   (method_declaration
     name: (identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 ; Field declarations
@@ -74,7 +74,7 @@
       name: (identifier) @name
     )
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 ; Enum declarations
@@ -87,7 +87,7 @@
   (enum_declaration
     name: (identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 ; Enum constant
@@ -104,5 +104,5 @@
       )
     )
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition

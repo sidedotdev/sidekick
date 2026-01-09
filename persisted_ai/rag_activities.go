@@ -9,7 +9,6 @@ import (
 	"sidekick/common"
 	"sidekick/embedding"
 	"sidekick/env"
-	"sidekick/llm"
 	"sidekick/secret_manager"
 	"sidekick/srv"
 	"sidekick/utils"
@@ -231,40 +230,6 @@ func splitQueryIntoChunks(query string, goodChunkSize int, maxChunkSize int) []s
 	}
 
 	return chunks
-}
-
-func getEmbedder(config common.ModelConfig) (embedding.Embedder, error) {
-	var embedder embedding.Embedder
-	providerType, err := getProviderType(config.Provider)
-	if err != nil {
-		return nil, err
-	}
-	switch providerType {
-	case llm.OpenaiToolChatProviderType:
-		embedder = &embedding.OpenAIEmbedder{}
-	case llm.GoogleToolChatProviderType:
-		embedder = &embedding.GoogleEmbedder{}
-	case llm.OpenaiCompatibleToolChatProviderType, llm.OpenaiResponsesCompatibleToolChatProviderType:
-		// FIXME pass in the providers in the parameters instead of loading the
-		// config directly here
-		localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
-		if err != nil {
-			return nil, fmt.Errorf("failed to load local config: %w", err)
-		}
-		for _, p := range localConfig.Providers {
-			if p.Type == string(providerType) && p.Name == config.Provider {
-				return &embedding.OpenAIEmbedder{
-					BaseURL: p.BaseURL,
-				}, nil
-			}
-		}
-		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
-	case llm.ToolChatProviderType("mock"):
-		return &embedding.MockEmbedder{}, nil
-	default:
-		return nil, fmt.Errorf("unsupported provider type %s for provider %s", providerType, config.Provider)
-	}
-	return embedder, nil
 }
 
 type DirSignatureOutlineOptions struct {
