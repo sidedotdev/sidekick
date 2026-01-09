@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -22,8 +23,17 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 )
+
+var debugEnabled = os.Getenv("DEBUG") == "true"
+
+func debug(format string, args ...interface{}) {
+	if debugEnabled {
+		fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
+	}
+}
 
 // encodeProjectID converts a project ID to a filesystem-safe string using
 // reversible escaping: _ -> __, / -> _s, \ -> _b, : -> _c, space -> _p
@@ -274,9 +284,10 @@ var defaultProcesses = []ProcessConfig{
 
 // IPC message types
 type IPCMessage struct {
-	Type      string `json:"type"`
-	Token     string `json:"token,omitempty"`
-	Ephemeral bool   `json:"ephemeral,omitempty"`
+	Type       string `json:"type"`
+	Token      string `json:"token,omitempty"`
+	Ephemeral  bool   `json:"ephemeral,omitempty"`
+	WorkingDir string `json:"workingDir,omitempty"`
 }
 
 const (
@@ -399,7 +410,7 @@ type Supervisor struct {
 	ephemeral     bool
 	suspended     bool
 	mu            sync.RWMutex
-	listener      net.Listener
+	listener      *net.UnixListener
 	parentConn    net.Conn
 	projectID     string
 	executionRoot string
@@ -415,6 +426,9 @@ type Supervisor struct {
 
 	// For ephemeral: channel to receive takeover notifications
 	takeoverChan chan struct{}
+
+	// Info about the process that took over (for exit message)
+	takenOverBy string
 }
 
 func NewSupervisor(configs []ProcessConfig, ephemeral bool, projectID, executionRoot string) *Supervisor {
@@ -658,10 +672,14 @@ func (s *Supervisor) StartIPCServer(ctx context.Context, outputChan chan<- proce
 		return nil // Ephemeral instances don't run IPC server
 	}
 
-	// Remove existing socket only if we're persistent
+	// Remove any stale socket file from a previous instance
 	os.Remove(s.socketPath)
 
-	listener, err := net.Listen("unix", s.socketPath)
+	addr, err := net.ResolveUnixAddr("unix", s.socketPath)
+	if err != nil {
+		return err
+	}
+	listener, err := net.ListenUnix("unix", addr)
 	if err != nil {
 		return err
 	}
@@ -716,7 +734,7 @@ func (s *Supervisor) handleIPCConnection(ctx context.Context, conn net.Conn, out
 
 				// Notify all active ephemerals to stop
 				for _, ec := range activeEphemerals {
-					ec.send(IPCMessage{Type: msgTakeover})
+					ec.send(IPCMessage{Type: msgTakeover, WorkingDir: msg.WorkingDir})
 				}
 
 				// Wait for ephemerals to acknowledge (with timeout)
@@ -728,8 +746,18 @@ func (s *Supervisor) handleIPCConnection(ctx context.Context, conn net.Conn, out
 					}
 				}
 
+				// Store info about who took over for exit message
+				s.mu.Lock()
+				s.takenOverBy = msg.WorkingDir
+				s.mu.Unlock()
+
 				// Now stop our own processes
 				s.StopAll()
+
+				// Prevent our listener from removing the socket file when closed.
+				// The new supervisor will create its own socket at the same path.
+				s.listener.SetUnlinkOnClose(false)
+
 				encoder.Encode(IPCMessage{Type: msgAck})
 				// Signal main to exit
 				select {
@@ -835,7 +863,9 @@ func (s *Supervisor) releaseOwnership(token string, ctx context.Context, outputC
 func (s *Supervisor) CloseIPC() {
 	if s.listener != nil {
 		s.listener.Close()
-		os.Remove(s.socketPath)
+		// Don't remove the socket file - leave it for the next supervisor to clean up.
+		// This ensures that if a new supervisor starts before this one fully exits,
+		// it can still detect and connect to us during the shutdown window.
 	}
 	if s.parentConn != nil {
 		s.parentConn.Close()
@@ -853,8 +883,8 @@ func (s *Supervisor) ConnectToPersistent() error {
 	encoder := json.NewEncoder(conn)
 	decoder := json.NewDecoder(conn)
 
-	// Send takeover request with ephemeral flag
-	msg := IPCMessage{Type: msgTakeover, Ephemeral: s.ephemeral}
+	// Send takeover request with ephemeral flag and working directory
+	msg := IPCMessage{Type: msgTakeover, Ephemeral: s.ephemeral, WorkingDir: s.executionRoot}
 	if err := encoder.Encode(msg); err != nil {
 		conn.Close()
 		s.parentConn = nil
@@ -891,6 +921,11 @@ func (s *Supervisor) listenForTakeover(decoder *json.Decoder, encoder *json.Enco
 			return
 		}
 		if msg.Type == msgTakeover {
+			// Store info about who took over for exit message
+			s.mu.Lock()
+			s.takenOverBy = msg.WorkingDir
+			s.mu.Unlock()
+
 			// Another ephemeral has taken over, stop our processes
 			s.StopAll()
 			s.SetSuspended(true)
@@ -914,6 +949,13 @@ func (s *Supervisor) listenForTakeover(decoder *json.Decoder, encoder *json.Enco
 // WaitForTakeover returns a channel that receives when another ephemeral takes over
 func (s *Supervisor) WaitForTakeover() <-chan struct{} {
 	return s.takeoverChan
+}
+
+// TakenOverBy returns the working directory of the process that took over
+func (s *Supervisor) TakenOverBy() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.takenOverBy
 }
 
 func (s *Supervisor) ReleaseToPersistent() {
@@ -1702,6 +1744,33 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
+	// Check if there's an existing supervisor running
+	existingRunning := false
+	debug("Checking for existing supervisor at socket: %s", sup.socketPath)
+	if conn, err := net.DialTimeout("unix", sup.socketPath, 100*time.Millisecond); err == nil {
+		conn.Close()
+		existingRunning = true
+		debug("Found existing supervisor, connection successful")
+	} else {
+		debug("No existing supervisor found: %v", err)
+	}
+
+	// For persistent supervisors, ask for confirmation before taking over
+	if existingRunning && !ephemeral {
+		confirm := false
+		err := huh.NewConfirm().
+			Title("A supervisor is already running for this project.").
+			Description("Taking over will stop the existing supervisor. Run with --ephemeral (-e) for temporary use.").
+			Value(&confirm).
+			Affirmative("Take over").
+			Negative("Cancel").
+			Run()
+		if err != nil || !confirm {
+			fmt.Println("Cancelled.")
+			os.Exit(0)
+		}
+	}
+
 	// Try to connect to any existing supervisor and take over
 	if err := sup.ConnectToPersistent(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to connect to existing supervisor: %v\n", err)
@@ -1722,6 +1791,9 @@ func main() {
 	// Run TUI
 	p := tea.NewProgram(newModel(ctx, sup, outputChan), tea.WithAltScreen())
 
+	// Track if we were taken over (for exit message)
+	var takenOver atomic.Bool
+
 	// Handle signals and takeover notifications
 	go func() {
 		select {
@@ -1729,9 +1801,9 @@ func main() {
 			sup.StopAll()
 			p.Quit()
 		case <-sup.WaitForTakeover():
-			// Another ephemeral has taken over
+			// Another instance has taken over
 			// Processes already stopped and ownership released in listenForTakeover
-			// Exit gracefully
+			takenOver.Store(true)
 			p.Quit()
 		}
 	}()
@@ -1739,6 +1811,15 @@ func main() {
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Print exit message if taken over
+	if takenOver.Load() {
+		if takenOverBy := sup.TakenOverBy(); takenOverBy != "" {
+			fmt.Printf("Exiting: taken over by supervisor in %s\n", takenOverBy)
+		} else {
+			fmt.Println("Exiting: taken over by another supervisor")
+		}
 	}
 
 	// Cleanup
