@@ -108,6 +108,132 @@ func TestPersistentTakeoverFromPersistent(t *testing.T) {
 	sup2.StopAll()
 }
 
+func TestDoublePersistentTakeover(t *testing.T) {
+	t.Parallel()
+
+	// Create a temp directory for the socket
+	tmpDir, err := os.MkdirTemp("", "supervisor-test-double-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:    "test1",
+			Command: "sleep",
+			Args:    []string{"30"},
+		},
+	}
+
+	// === SUPERVISOR 1 ===
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	outputChan1 := make(chan processOutputMsg, 100)
+
+	sup1 := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	t.Logf("sup1 socket path: %s", sup1.socketPath)
+
+	if err := sup1.StartIPCServer(ctx1, outputChan1); err != nil {
+		t.Fatalf("failed to start IPC server for sup1: %v", err)
+	}
+
+	sup1.StartAll(ctx1, outputChan1)
+	time.Sleep(100 * time.Millisecond)
+
+	if !sup1.processes[0].isRunning() {
+		t.Fatal("sup1 process should be running")
+	}
+
+	// === SUPERVISOR 2 takes over from 1 (simulating real main() flow) ===
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	outputChan2 := make(chan processOutputMsg, 100)
+
+	sup2 := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	t.Logf("sup2 socket path: %s", sup2.socketPath)
+
+	// Connect and takeover (like main does)
+	if err := sup2.ConnectToPersistent(); err != nil {
+		t.Fatalf("sup2 failed to connect to sup1: %v", err)
+	}
+
+	// Immediately start IPC server (like main does - BEFORE sup1 closes)
+	if err := sup2.StartIPCServer(ctx2, outputChan2); err != nil {
+		t.Fatalf("failed to start IPC server for sup2: %v", err)
+	}
+
+	sup2.StartAll(ctx2, outputChan2)
+
+	// Now sup1 receives takeover and closes (simulating the goroutine in main)
+	select {
+	case <-sup1.WaitForTakeover():
+		t.Log("sup1 received takeover signal")
+	case <-time.After(2 * time.Second):
+		t.Fatal("sup1 should have received takeover signal")
+	}
+	sup1.CloseIPC()
+	t.Log("sup1 closed IPC")
+
+	time.Sleep(100 * time.Millisecond)
+
+	if !sup2.processes[0].isRunning() {
+		t.Fatal("sup2 process should be running")
+	}
+
+	// Verify sup2's socket is accessible AFTER sup1 has closed
+	socketPath := sup2.socketPath
+	if _, err := os.Stat(socketPath); os.IsNotExist(err) {
+		t.Fatalf("sup2 socket file does not exist at %s after sup1 closed", socketPath)
+	}
+	t.Logf("sup2 socket exists at %s", socketPath)
+
+	// === SUPERVISOR 3 takes over from 2 ===
+	ctx3, cancel3 := context.WithCancel(context.Background())
+	defer cancel3()
+	outputChan3 := make(chan processOutputMsg, 100)
+
+	sup3 := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	t.Logf("sup3 socket path: %s", sup3.socketPath)
+
+	// Connect and takeover
+	if err := sup3.ConnectToPersistent(); err != nil {
+		t.Fatalf("sup3 failed to connect to sup2: %v", err)
+	}
+
+	// Immediately start IPC server (like main does)
+	if err := sup3.StartIPCServer(ctx3, outputChan3); err != nil {
+		t.Fatalf("failed to start IPC server for sup3: %v", err)
+	}
+
+	sup3.StartAll(ctx3, outputChan3)
+
+	// Now sup2 receives takeover and closes
+	select {
+	case <-sup2.WaitForTakeover():
+		t.Log("sup2 received takeover signal")
+	case <-time.After(2 * time.Second):
+		t.Fatal("sup2 should have received takeover signal - THIS IS THE BUG")
+	}
+	sup2.CloseIPC()
+	t.Log("sup2 closed IPC")
+
+	time.Sleep(100 * time.Millisecond)
+
+	if !sup3.processes[0].isRunning() {
+		t.Fatal("sup3 process should be running")
+	}
+
+	// Verify sup3's socket is accessible
+	if _, err := os.Stat(socketPath); os.IsNotExist(err) {
+		t.Fatalf("sup3 socket file does not exist at %s after sup2 closed", socketPath)
+	}
+	t.Logf("sup3 socket exists at %s", socketPath)
+
+	sup3.CloseIPC()
+	sup3.StopAll()
+}
+
 func TestEphemeralTakeoverFromPersistent(t *testing.T) {
 	t.Parallel()
 
