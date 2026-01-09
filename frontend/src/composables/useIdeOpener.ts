@@ -14,20 +14,28 @@ export interface IdeOpener {
 
 export const IDE_OPENER_KEY: InjectionKey<(relativePath: string, lineNumber?: number | null, baseDir?: string) => void> = Symbol('ideOpener')
 
-function openFileInIde(absoluteFilePath: string, ide: IdeType, lineNumber?: number | null, baseDir?: string): void {
-  const lineFragment = lineNumber ? `:${lineNumber}` : ''
-  if (ide === 'vscode') {
-    if (baseDir) {
-      window.open(`vscode://file/${baseDir}?windowId=_blank`, '_self')
-      setTimeout(() => {
-        window.open(`vscode://file/${absoluteFilePath}${lineFragment}`, '_self')
-      }, 250)
-    } else {
-      window.open(`vscode://file/${absoluteFilePath}${lineFragment}?windowId=_blank`, '_self')
-    }
-  } else {
-    const url = `idea://open?file=${encodeURIComponent(absoluteFilePath)}${lineFragment}`
-    window.open(url, '_self')
+async function openFileInIde(absoluteFilePath: string, ide: IdeType, lineNumber?: number | null, baseDir?: string): Promise<void> {
+  const payload: { ide: IdeType; filePath: string; line?: number; baseDir?: string } = {
+    ide,
+    filePath: absoluteFilePath,
+  }
+  if (lineNumber) {
+    payload.line = lineNumber
+  }
+  if (baseDir) {
+    payload.baseDir = baseDir
+  }
+
+  const response = await fetch('/api/v1/open-in-ide', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    console.error('Failed to open file in IDE:', await response.text())
   }
 }
 
