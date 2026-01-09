@@ -402,14 +402,14 @@ const summary = computed<Summary | null>(() => {
       }
     }
 
-    case 'tool.run_command': {
+    case 'tool_call.run_command': {
       try {
         const params = props.flowAction.actionParams;
         if (!params?.command) {
-          return null;
+          return null
         }
         
-        const command = params.workingDir ? `${params.workingDir}$ ${params.command}` : `$ ${params.command}`;
+        const command = params.workingDir ? `${params.workingDir}$ ${params.command}` : `${params.command}`;
         
         let exitStatus: number | null = null;
         try {
