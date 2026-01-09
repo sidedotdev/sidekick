@@ -402,6 +402,39 @@ const summary = computed<Summary | null>(() => {
       }
     }
 
+    case 'tool.run_command': {
+      try {
+        const params = props.flowAction.actionParams;
+        if (!params?.command) {
+          return null;
+        }
+        
+        const command = params.workingDir ? `${params.workingDir}$ ${params.command}` : `$ ${params.command}`;
+        
+        let exitStatus: number | null = null;
+        try {
+          const parsed = JSON.parse(props.flowAction.actionResult);
+          if (parsed && typeof parsed.exitStatus === 'number') {
+            exitStatus = parsed.exitStatus;
+          }
+        } catch {
+          // ignore parse errors
+        }
+        
+        const text = exitStatus !== null && exitStatus !== 0 
+          ? `${command} (exit ${exitStatus})`
+          : command;
+        
+        return {
+          text,
+          emoji: exitStatus !== null && exitStatus !== 0 ? '❌' : '',
+        };
+      } catch (error) {
+        console.error('Error parsing run_command params:', error);
+        return null;
+      }
+    }
+
     default: {
       return null;
     }
