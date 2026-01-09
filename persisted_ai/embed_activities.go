@@ -5,12 +5,49 @@ import (
 	"fmt"
 	"sidekick/common"
 	"sidekick/embedding"
+	"sidekick/llm"
 	"sidekick/secret_manager"
 	"sidekick/srv"
 
 	"github.com/kelindar/binary"
 	"github.com/rs/zerolog/log"
 )
+
+// GetEmbedder returns an embedder for the given model config.
+func GetEmbedder(config common.ModelConfig) (embedding.Embedder, error) {
+	var embedder embedding.Embedder
+
+	providerType, err := getProviderType(config.Provider)
+	if err != nil {
+		return nil, err
+	}
+	switch providerType {
+	case llm.OpenaiToolChatProviderType:
+		embedder = &embedding.OpenAIEmbedder{}
+	case llm.GoogleToolChatProviderType:
+		embedder = &embedding.GoogleEmbedder{}
+	case llm.OpenaiCompatibleToolChatProviderType, llm.OpenaiResponsesCompatibleToolChatProviderType:
+		// FIXME pass in the providers in the parameters instead of loading the
+		// config directly here
+		localConfig, err := common.LoadSidekickConfig(common.GetSidekickConfigPath())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load local config: %w", err)
+		}
+		for _, p := range localConfig.Providers {
+			if p.Type == string(providerType) && p.Name == config.Provider {
+				return &embedding.OpenAIEmbedder{
+					BaseURL: p.BaseURL,
+				}, nil
+			}
+		}
+		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
+	case llm.ToolChatProviderType("mock"):
+		return &embedding.MockEmbedder{}, nil
+	default:
+		return nil, fmt.Errorf("unsupported provider type %s for provider %s", providerType, config.Provider)
+	}
+	return embedder, nil
+}
 
 type CachedEmbedActivityOptions struct {
 	Secrets     secret_manager.SecretManagerContainer
@@ -110,11 +147,16 @@ func (ea *EmbedActivities) CachedEmbedActivity(ctx context.Context, options Cach
 // BatchEmbed batches inputs according to model limits and embeds them.
 // Returns embedding vectors in the same order as inputs.
 func BatchEmbed(ctx context.Context, modelConfig common.ModelConfig, secretManager secret_manager.SecretManager, inputs []string, taskType string) ([]embedding.EmbeddingVector, error) {
-	embedder, err := getEmbedder(modelConfig)
+	embedder, err := GetEmbedder(modelConfig)
 	if err != nil {
 		return nil, err
 	}
+	return BatchEmbedWithEmbedder(ctx, embedder, modelConfig, secretManager, inputs, taskType)
+}
 
+// BatchEmbedWithEmbedder batches inputs according to model limits and embeds them using the provided embedder.
+// This allows injecting a custom embedder for testing.
+func BatchEmbedWithEmbedder(ctx context.Context, embedder embedding.Embedder, modelConfig common.ModelConfig, secretManager secret_manager.SecretManager, inputs []string, taskType string) ([]embedding.EmbeddingVector, error) {
 	batches, err := embedding.BatchEmbeddingRequests(inputs, modelConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to batch embedding requests: %w", err)

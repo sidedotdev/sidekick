@@ -258,3 +258,127 @@ type FileSymbols struct {
 	FilePath string
 	Symbols  []string
 }
+
+// SymbolDefinition represents a symbol with its full definition range and name.
+type SymbolDefinition struct {
+	SourceBlock
+	SymbolName string
+}
+
+// GetAllSymbolDefinitions returns all symbol definitions in a file with their ranges.
+// This is useful for determining which symbols overlap with changed line ranges.
+func GetAllSymbolDefinitions(filePath string) ([]SymbolDefinition, error) {
+	languageName, sitterLanguage, err := inferLanguageFromFilePath(filePath)
+	if err != nil {
+		return nil, err
+	}
+	sourceCode, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read source code: %w", err)
+	}
+	parser := sitter.NewParser()
+	parser.SetLanguage(sitterLanguage)
+	transformedSource := sourceTransform(languageName, &sourceCode)
+	tree, err := parser.ParseCtx(context.Background(), nil, transformedSource)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse source code: %w", err)
+	}
+	return getAllSymbolDefinitionsInternal(languageName, sitterLanguage, tree, &transformedSource)
+}
+
+// GetAllSymbolDefinitionsFromSource returns all symbol definitions from source code content.
+func GetAllSymbolDefinitionsFromSource(languageName string, sourceCode []byte) ([]SymbolDefinition, error) {
+	sitterLanguage, err := getSitterLanguage(languageName)
+	if err != nil {
+		return nil, err
+	}
+	parser := sitter.NewParser()
+	parser.SetLanguage(sitterLanguage)
+	transformedSource := sourceTransform(languageName, &sourceCode)
+	tree, err := parser.ParseCtx(context.Background(), nil, transformedSource)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse source code: %w", err)
+	}
+	return getAllSymbolDefinitionsInternal(languageName, sitterLanguage, tree, &transformedSource)
+}
+
+func getAllSymbolDefinitionsInternal(languageName string, sitterLanguage *sitter.Language, tree *sitter.Tree, sourceCode *[]byte) ([]SymbolDefinition, error) {
+	// Render query with empty SymbolName to get all symbols
+	queryString, err := renderSymbolDefinitionQuery(languageName, "")
+	if err != nil {
+		return nil, fmt.Errorf("error rendering symbol definition query: %w", err)
+	}
+
+	q, err := sitter.NewQuery([]byte(queryString), sitterLanguage)
+	if err != nil {
+		return nil, fmt.Errorf("error creating sitter symbol definition query: %w", err)
+	}
+
+	var definitions []SymbolDefinition
+	qc := sitter.NewQueryCursor()
+	qc.Exec(q, tree.RootNode())
+
+	var tempSourceBlock *SourceBlock
+	var tempSymbolName string
+	for {
+		m, ok := qc.NextMatch()
+		if !ok {
+			break
+		}
+		m = qc.FilterPredicates(m, *sourceCode)
+
+		// First pass: collect name and definition captures from this match
+		var nameRange sitter.Range
+		var symbolName string
+		var definitionNode *sitter.Node
+
+		for _, c := range m.Captures {
+			captureName := q.CaptureNameForId(c.Index)
+			if captureName == "name" {
+				nameRange = sitter.Range{
+					StartPoint: c.Node.StartPoint(),
+					EndPoint:   c.Node.EndPoint(),
+					StartByte:  c.Node.StartByte(),
+					EndByte:    c.Node.EndByte(),
+				}
+				symbolName = c.Node.Content(*sourceCode)
+			} else if captureName == "definition" {
+				definitionNode = c.Node
+			}
+		}
+
+		// Second pass: process the definition now that we have the name
+		if definitionNode != nil {
+			sourceBlock := SourceBlock{
+				Source: sourceCode,
+				Range: sitter.Range{
+					StartPoint: definitionNode.StartPoint(),
+					EndPoint:   definitionNode.EndPoint(),
+					StartByte:  definitionNode.StartByte(),
+					EndByte:    definitionNode.EndByte(),
+				},
+				NameRange: &nameRange,
+			}
+			if definitionNode.Type() == "comment" {
+				tempSourceBlock = &sourceBlock
+				tempSymbolName = symbolName
+			} else {
+				if tempSourceBlock != nil {
+					sourceBlock.Range.StartByte = tempSourceBlock.Range.StartByte
+					sourceBlock.Range.StartPoint = tempSourceBlock.Range.StartPoint
+					tempSourceBlock = nil
+				}
+				definitions = append(definitions, SymbolDefinition{
+					SourceBlock: sourceBlock,
+					SymbolName:  symbolName,
+				})
+				// Reset tempSymbolName after use
+				if tempSymbolName != "" {
+					tempSymbolName = ""
+				}
+			}
+		}
+	}
+
+	return definitions, nil
+}

@@ -9,14 +9,14 @@
   (function_declaration
     name: (identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
   (function_expression
     name: (identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 ; function_signature appears in two contexts:
@@ -26,7 +26,7 @@
   (function_signature
     name: (identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 ;(
@@ -40,42 +40,42 @@
   (interface_declaration
     name: (type_identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
   (type_alias_declaration
     name: (type_identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
   (class_declaration
     name: (_) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
   (abstract_class_declaration
     name: (_) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
   (generator_function_declaration
     name: (identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
   (call_expression
     function: (identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
@@ -84,7 +84,7 @@
       name: (identifier) @name
     )
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
@@ -93,14 +93,14 @@
       name: (identifier) @name
     )
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
   (method_definition
     name: (_) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
@@ -111,19 +111,19 @@
       )
     )
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
   (interface_declaration
     name: (_) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 )
 
 (
   (enum_declaration
     name: (_) @name ; note: type_identifier is not correct in this position, and in fact, we don't care what the node type is as long as it's the name
   ) @definition
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 )

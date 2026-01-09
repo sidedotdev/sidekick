@@ -503,11 +503,32 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 				params.StartBranch = &mergeInfo.TargetBranch
 				lastReviewTreeHash = treeHash
 
+				// Summarize diff if it exceeds the character budget
+				diffForRequirements := gitDiff
+				summarizeDiffVersion := workflow.GetVersion(dCtx, "summarize-diff-for-review", workflow.DefaultVersion, 1)
+				if summarizeDiffVersion >= 1 && len(gitDiff) > 0 {
+					modelConfig := dCtx.ExecContext.GetEmbeddingModelConfig("diff_summarize")
+					var summarizedDiff string
+					err = workflow.ExecuteActivity(dCtx, SummarizeDiffActivity, SummarizeDiffActivityInput{
+						GitDiff:                gitDiff,
+						ReviewFeedback:         mergeInfo.Message,
+						EnvContainer:           *dCtx.EnvContainer,
+						ModelConfig:            modelConfig,
+						SecretManagerContainer: *dCtx.Secrets,
+					}).Get(dCtx, &summarizedDiff)
+					if err == nil {
+						diffForRequirements = summarizedDiff
+					} else if len(gitDiff) > DiffSummarizeMaxChars {
+						// Hard-truncate as fallback to guarantee budget compliance
+						diffForRequirements = gitDiff[:DiffSummarizeMaxChars]
+					}
+				}
+
 				// Format new requirements with review history + latest rejection message
 				requirements := formatRequirementsWithReview(
 					originalRequirements,
 					reviewMessages,
-					gitDiff,
+					diffForRequirements,
 					mergeInfo.Message,
 				)
 

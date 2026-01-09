@@ -8,7 +8,7 @@
   ) @declaration
   (#strip! @doc "^//\\s*")
   (#select-adjacent! @doc @declaration)
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
@@ -21,7 +21,7 @@
   ) @declaration
   (#strip! @doc "^//\\s*")
   (#select-adjacent! @doc @declaration)
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
@@ -32,7 +32,7 @@
   ) @declaration
   (#strip! @doc "^//\\s*")
   (#select-adjacent! @doc @declaration)
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
@@ -43,7 +43,7 @@
   ) @declaration
   (#strip! @doc "^//\\s*")
   (#select-adjacent! @doc @declaration)
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
@@ -56,7 +56,7 @@
   ) @declaration
   (#strip! @doc "^//\\s*")
   (#select-adjacent! @doc @declaration)
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
@@ -74,5 +74,5 @@
   ) @declaration
   (#strip! @doc "^//\\s*")
   (#select-adjacent! @doc @declaration)
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition

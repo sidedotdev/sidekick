@@ -1,7 +1,7 @@
 ; Broken syntax cases
 (ERROR
   (identifier) @name
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 ;(module
@@ -17,14 +17,14 @@
   (type_alias_statement
     (type (identifier) @name)
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (expression_statement
   (assignment
     left: (identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
@@ -33,7 +33,7 @@
   (class_definition
     name: (identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
@@ -42,5 +42,5 @@
   (function_definition
     name: (identifier) @name
   )
-  (#eq? @name "{{SymbolName}}")
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
