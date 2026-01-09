@@ -44,8 +44,8 @@ func (options RankedDirSignatureOutlineOptions) ActionParams() map[string]any {
 	}
 }
 
-// TODO add param for context.Context
-func (ra *RagActivities) RankedDirSignatureOutline(options RankedDirSignatureOutlineOptions) (string, error) {
+// RankedDirSignatureOutline generates a ranked outline of the directory structure based on the query.
+func (ra *RagActivities) RankedDirSignatureOutline(ctx context.Context, options RankedDirSignatureOutlineOptions) (string, error) {
 	// FIXME put tree sitter activities inside rag activities struct
 	t := tree_sitter.TreeSitterActivities{DatabaseAccessor: ra.DatabaseAccessor}
 
@@ -59,7 +59,7 @@ func (ra *RagActivities) RankedDirSignatureOutline(options RankedDirSignatureOut
 		return "", err
 	}
 
-	rankedFileSignatureSubkeys, err := ra.RankedSubkeys(RankedSubkeysOptions{
+	rankedFileSignatureSubkeys, err := ra.RankedSubkeys(ctx, RankedSubkeysOptions{
 		RankedViaEmbeddingOptions: options.RankedViaEmbeddingOptions,
 		ContentType:               tree_sitter.ContentTypeFileSignature,
 		Subkeys:                   fileSignatureSubkeys,
@@ -68,7 +68,7 @@ func (ra *RagActivities) RankedDirSignatureOutline(options RankedDirSignatureOut
 		return "", err
 	}
 
-	rankedDirChunkSubkeys, err := ra.RankedDirChunkSubkeys(RankedDirChunkSubkeysOptions{options.RankedViaEmbeddingOptions})
+	rankedDirChunkSubkeys, err := ra.RankedDirChunkSubkeys(ctx, RankedDirChunkSubkeysOptions{options.RankedViaEmbeddingOptions})
 	if err != nil {
 		return "", err
 	}
@@ -88,13 +88,13 @@ type RankedSubkeysOptions struct {
 	Subkeys     []string
 }
 
-func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, error) {
+func (ra *RagActivities) RankedSubkeys(ctx context.Context, options RankedSubkeysOptions) ([]string, error) {
 	if strings.TrimSpace(options.RankQuery) == "" {
 		return []string{}, errors.New("Attempted to perform RAG with an empty query")
 	}
 
 	ea := EmbedActivities{Storage: ra.DatabaseAccessor}
-	err := ea.CachedEmbedActivity(context.Background(), CachedEmbedActivityOptions{
+	err := ea.CachedEmbedActivity(ctx, CachedEmbedActivityOptions{
 		Secrets:     options.Secrets,
 		WorkspaceId: options.WorkspaceId,
 		ModelConfig: options.ModelConfig,
@@ -130,7 +130,7 @@ func (ra *RagActivities) RankedSubkeys(options RankedSubkeysOptions) ([]string, 
 
 	// Embed all chunks
 	// TODO /gen/basic cache query vectors in memory, for when the same query is rerun twice
-	queryVectors, err := BatchEmbed(context.Background(), options.ModelConfig, options.Secrets.SecretManager, queryChunks, taskType)
+	queryVectors, err := BatchEmbed(ctx, options.ModelConfig, options.Secrets.SecretManager, queryChunks, taskType)
 	if err != nil {
 		return []string{}, fmt.Errorf("failed to embed query chunks: %w", err)
 	}
@@ -398,7 +398,7 @@ type RankedDirChunkSubkeysOptions struct {
 	RankedViaEmbeddingOptions
 }
 
-func (ra *RagActivities) RankedDirChunkSubkeys(options RankedDirChunkSubkeysOptions) ([]string, error) {
+func (ra *RagActivities) RankedDirChunkSubkeys(ctx context.Context, options RankedDirChunkSubkeysOptions) ([]string, error) {
 	basePath := options.EnvContainer.Env.GetWorkingDirectory()
 	chunks := GetDirectoryChunks(basePath)
 
@@ -412,13 +412,13 @@ func (ra *RagActivities) RankedDirChunkSubkeys(options RankedDirChunkSubkeysOpti
 		key := fmt.Sprintf("%s:%s", tree_sitter.ContentTypeDirChunk, hash)
 		values[key] = value
 	}
-	err := ra.DatabaseAccessor.MSet(context.Background(), options.WorkspaceId, values)
+	err := ra.DatabaseAccessor.MSet(ctx, options.WorkspaceId, values)
 	if err != nil {
 		return []string{}, fmt.Errorf("error persisting dir chunk content: %w", err)
 	}
 
 	dirChunkSubkeys := hashes
-	return ra.RankedSubkeys(RankedSubkeysOptions{
+	return ra.RankedSubkeys(ctx, RankedSubkeysOptions{
 		RankedViaEmbeddingOptions: options.RankedViaEmbeddingOptions,
 		ContentType:               tree_sitter.ContentTypeDirChunk,
 		Subkeys:                   dirChunkSubkeys,

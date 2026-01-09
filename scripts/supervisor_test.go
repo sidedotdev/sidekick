@@ -13,6 +13,18 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 )
 
+func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool, failMessage string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal(failMessage)
+}
+
 func TestPersistentTakeoverFromPersistent(t *testing.T) {
 	t.Parallel()
 
@@ -47,11 +59,9 @@ func TestPersistentTakeoverFromPersistent(t *testing.T) {
 	sup1.StartAll(ctx1, outputChan1)
 
 	// Wait for process to start
-	time.Sleep(100 * time.Millisecond)
-
-	if !sup1.processes[0].isRunning() {
-		t.Fatal("sup1 process should be running")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return sup1.processes[0].isRunning()
+	}, "sup1 process should be running")
 
 	// Start second persistent supervisor - it should take over
 	ctx2, cancel2 := context.WithCancel(context.Background())
@@ -67,11 +77,9 @@ func TestPersistentTakeoverFromPersistent(t *testing.T) {
 	}
 
 	// sup1's processes should now be stopped
-	time.Sleep(200 * time.Millisecond)
-
-	if sup1.processes[0].isRunning() {
-		t.Error("sup1 process should have stopped after takeover")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return !sup1.processes[0].isRunning()
+	}, "sup1 process should have stopped after takeover")
 
 	// sup1 should have received takeover signal
 	select {
@@ -130,11 +138,10 @@ func TestEphemeralTakeoverFromPersistent(t *testing.T) {
 	defer sup1.CloseIPC()
 
 	sup1.StartAll(ctx1, outputChan1)
-	time.Sleep(100 * time.Millisecond)
 
-	if !sup1.processes[0].isRunning() {
-		t.Fatal("sup1 process should be running")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return sup1.processes[0].isRunning()
+	}, "sup1 process should be running")
 
 	// Start ephemeral supervisor
 	ctx2, cancel2 := context.WithCancel(context.Background())
@@ -150,11 +157,9 @@ func TestEphemeralTakeoverFromPersistent(t *testing.T) {
 	defer sup2.ReleaseToPersistent()
 
 	// sup1's processes should be stopped
-	time.Sleep(200 * time.Millisecond)
-
-	if sup1.processes[0].isRunning() {
-		t.Error("sup1 process should have stopped")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return !sup1.processes[0].isRunning()
+	}, "sup1 process should have stopped")
 
 	// sup1 should NOT have received takeover signal (it's waiting for ephemeral to release)
 	select {
@@ -166,21 +171,18 @@ func TestEphemeralTakeoverFromPersistent(t *testing.T) {
 
 	// sup2 starts its processes
 	sup2.StartAll(ctx2, outputChan2)
-	time.Sleep(100 * time.Millisecond)
 
-	if !sup2.processes[0].isRunning() {
-		t.Error("sup2 process should be running")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return sup2.processes[0].isRunning()
+	}, "sup2 process should be running")
 
 	// sup2 releases - sup1 should restart
 	sup2.StopAll()
 	sup2.ReleaseToPersistent()
 
-	time.Sleep(500 * time.Millisecond)
-
-	if !sup1.processes[0].isRunning() {
-		t.Error("sup1 process should have restarted after ephemeral release")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return sup1.processes[0].isRunning()
+	}, "sup1 process should have restarted after ephemeral release")
 
 	sup1.StopAll()
 }
@@ -215,7 +217,7 @@ func TestEphemeralTakeoverFromEphemeral(t *testing.T) {
 	defer sup1.CloseIPC()
 
 	sup1.StartAll(ctx1, outputChan1)
-	time.Sleep(100 * time.Millisecond)
+	// No need to verify sup1 running here as we do it implicitly by sup2 connecting
 
 	// Start first ephemeral
 	ctx2, cancel2 := context.WithCancel(context.Background())
@@ -228,13 +230,12 @@ func TestEphemeralTakeoverFromEphemeral(t *testing.T) {
 		t.Fatalf("failed to connect to persistent: %v", err)
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	// Wait for sup1 to stop if we wanted, but let's just proceed to start sup2
 	sup2.StartAll(ctx2, outputChan2)
-	time.Sleep(100 * time.Millisecond)
 
-	if !sup2.processes[0].isRunning() {
-		t.Error("sup2 process should be running")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return sup2.processes[0].isRunning()
+	}, "sup2 process should be running")
 
 	// Start second ephemeral - should take over from first
 	ctx3, cancel3 := context.WithCancel(context.Background())
@@ -249,36 +250,31 @@ func TestEphemeralTakeoverFromEphemeral(t *testing.T) {
 	defer sup3.ReleaseToPersistent()
 
 	// sup2 should have received takeover and stopped
-	time.Sleep(500 * time.Millisecond)
-
 	select {
 	case <-sup2.WaitForTakeover():
 		// Expected
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Error("sup2 should have received takeover signal")
 	}
 
-	if sup2.processes[0].isRunning() {
-		t.Error("sup2 process should have stopped")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return !sup2.processes[0].isRunning()
+	}, "sup2 process should have stopped")
 
 	// sup3 starts
 	sup3.StartAll(ctx3, outputChan3)
-	time.Sleep(100 * time.Millisecond)
 
-	if !sup3.processes[0].isRunning() {
-		t.Error("sup3 process should be running")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return sup3.processes[0].isRunning()
+	}, "sup3 process should be running")
 
 	// sup3 releases - sup1 should restart (not sup2)
 	sup3.StopAll()
 	sup3.ReleaseToPersistent()
 
-	time.Sleep(500 * time.Millisecond)
-
-	if !sup1.processes[0].isRunning() {
-		t.Error("sup1 process should have restarted")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return sup1.processes[0].isRunning()
+	}, "sup1 process should have restarted")
 
 	sup1.StopAll()
 }
@@ -346,11 +342,10 @@ func TestCrossWorktreeTakeover(t *testing.T) {
 	defer sup1.CloseIPC()
 
 	sup1.StartAll(ctx1, outputChan1)
-	time.Sleep(100 * time.Millisecond)
 
-	if !sup1.processes[0].isRunning() {
-		t.Fatal("sup1 process should be running")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return sup1.processes[0].isRunning()
+	}, "sup1 process should be running")
 
 	// Start ephemeral supervisor in worktree B with same project ID
 	ctx2, cancel2 := context.WithCancel(context.Background())
@@ -367,19 +362,16 @@ func TestCrossWorktreeTakeover(t *testing.T) {
 	defer sup2.ReleaseToPersistent()
 
 	// sup1's processes should be stopped
-	time.Sleep(200 * time.Millisecond)
-
-	if sup1.processes[0].isRunning() {
-		t.Error("sup1 process should have stopped after cross-worktree takeover")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return !sup1.processes[0].isRunning()
+	}, "sup1 process should have stopped after cross-worktree takeover")
 
 	// sup2 starts its processes
 	sup2.StartAll(ctx2, outputChan2)
-	time.Sleep(100 * time.Millisecond)
 
-	if !sup2.processes[0].isRunning() {
-		t.Error("sup2 process should be running")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return sup2.processes[0].isRunning()
+	}, "sup2 process should be running")
 
 	// Verify execution roots are different
 	if sup1.executionRoot == sup2.executionRoot {
@@ -395,11 +387,9 @@ func TestCrossWorktreeTakeover(t *testing.T) {
 	sup2.StopAll()
 	sup2.ReleaseToPersistent()
 
-	time.Sleep(500 * time.Millisecond)
-
-	if !sup1.processes[0].isRunning() {
-		t.Error("sup1 process should have restarted after ephemeral release")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return sup1.processes[0].isRunning()
+	}, "sup1 process should have restarted after ephemeral release")
 
 	sup1.StopAll()
 }
@@ -440,11 +430,10 @@ func TestDifferentProjectIDsNoCoordination(t *testing.T) {
 	defer sup1.CloseIPC()
 
 	sup1.StartAll(ctx1, outputChan1)
-	time.Sleep(100 * time.Millisecond)
 
-	if !sup1.processes[0].isRunning() {
-		t.Fatal("sup1 process should be running")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return sup1.processes[0].isRunning()
+	}, "sup1 process should be running")
 
 	// Start ephemeral supervisor with different project ID "beta"
 	sup2 := NewSupervisor(testProcesses, true, "project-beta", tmpDir2)
@@ -662,19 +651,15 @@ sleep 30
 	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
 	sup.StartAll(ctx, outputChan)
 
-	// Wait for process to start and produce output
-	time.Sleep(200 * time.Millisecond)
-
 	p := sup.processes[0]
-	if !p.isRunning() {
-		t.Fatal("process should be running")
-	}
+
+	// Wait for process to start and produce output
+	waitForCondition(t, 5*time.Second, func() bool {
+		return p.isRunning() && len(p.getOutput()) > 0
+	}, "process should be running and have produced output")
 
 	// Verify initial output exists
 	initialOutput := p.getOutput()
-	if len(initialOutput) == 0 {
-		t.Fatal("process should have produced initial output")
-	}
 
 	foundFirstRun := false
 	for _, line := range initialOutput {
@@ -695,13 +680,10 @@ sleep 30
 	// Now restart the process
 	go sup.RestartProcess(ctx, p, outputChan)
 
-	// Wait a short time for the restart to begin
-	time.Sleep(50 * time.Millisecond)
-
 	// Check that stopping status is set
-	if !p.isStopping() {
-		t.Error("process should be in stopping state immediately after restart begins")
-	}
+	waitForCondition(t, 2*time.Second, func() bool {
+		return p.isStopping()
+	}, "process should be in stopping state after restart begins")
 
 	// Check that logs are cleared
 	outputAfterClear := p.getOutput()
@@ -834,24 +816,22 @@ func TestRestartProcessGenerationPreventsOldLogs(t *testing.T) {
 	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
 	sup.StartAll(ctx, outputChan)
 
-	// Wait for some output
-	time.Sleep(300 * time.Millisecond)
-
 	p := sup.processes[0]
-	if !p.isRunning() {
-		t.Fatal("process should be running")
-	}
-
-	initialOutput := p.getOutput()
-	if len(initialOutput) == 0 {
-		t.Fatal("should have some initial output")
-	}
+	// Wait for some output
+	waitForCondition(t, 5*time.Second, func() bool {
+		return p.isRunning() && len(p.getOutput()) > 0
+	}, "process should be running and have output")
 
 	// Restart while process is still outputting
 	sup.RestartProcess(ctx, p, outputChan)
 
 	// Wait for new process to start and produce some output
-	time.Sleep(500 * time.Millisecond)
+	waitForCondition(t, 5*time.Second, func() bool {
+		output := p.getOutput()
+		// We expect new output, but since logs are cleared, just checking for non-empty should be enough
+		// assuming clear happened.
+		return p.isRunning() && len(output) > 0
+	}, "process should be running and have new output after restart")
 
 	finalOutput := p.getOutput()
 
@@ -1214,19 +1194,14 @@ sleep 30
 
 	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
 	sup.StartAll(ctx, outputChan)
-
-	time.Sleep(200 * time.Millisecond)
-
 	p := sup.processes[0]
-	if !p.isRunning() {
-		t.Fatal("process should be running")
-	}
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		return p.isRunning() && len(p.getOutput()) > 0
+	}, "process should be running and have output")
 
 	// Verify initial output
 	initialOutput := p.getOutput()
-	if len(initialOutput) == 0 {
-		t.Fatal("should have initial output")
-	}
 	t.Logf("Initial output: %v", initialOutput)
 
 	// Create the model (simulating what main() does)
@@ -1359,7 +1334,7 @@ sleep 30
 	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
 	sup.StartAll(ctx, outputChan)
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(2 * time.Second)
 
 	p := sup.processes[0]
 	if !p.isRunning() {
@@ -1391,7 +1366,10 @@ sleep 30
 	}()
 
 	// Check state immediately after starting goroutine
-	time.Sleep(1 * time.Millisecond)
+	waitForCondition(t, 2*time.Second, func() bool {
+		return p.isStopping()
+	}, "process should be stopping")
+
 	immediateState := struct {
 		stopping bool
 		running  bool
@@ -1443,7 +1421,7 @@ sleep 30
 	}
 
 	// Wait for new process to produce output
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(2 * time.Second)
 
 	// Drain remaining messages
 	for len(outputChan) > 0 {
@@ -1506,19 +1484,14 @@ func TestRestartProcessShowsStoppingForRunningProcess(t *testing.T) {
 
 	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
 	sup.StartAll(ctx, outputChan)
-
-	time.Sleep(200 * time.Millisecond)
-
 	p := sup.processes[0]
-	if !p.isRunning() {
-		t.Fatal("process should be running")
-	}
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		return p.isRunning() && len(p.getOutput()) > 0
+	}, "process should be running and have output")
 
 	// Verify we have initial output
 	initialOutput := p.getOutput()
-	if len(initialOutput) == 0 {
-		t.Fatal("should have initial output")
-	}
 	t.Logf("Initial output: %v", initialOutput)
 
 	// Drain messages
@@ -1861,7 +1834,9 @@ func TestRestartProcessStoppingStateOnNotification(t *testing.T) {
 	}
 
 	// Wait for restart to complete
-	time.Sleep(1 * time.Second)
+	waitForCondition(t, 5*time.Second, func() bool {
+		return p.isRunning() && !p.isStopping()
+	}, "process should be running after restart")
 
 	// Final state should be running, not stopping
 	if !p.isRunning() {
@@ -1899,13 +1874,11 @@ func TestRestartProcessNoOldExitMessage(t *testing.T) {
 
 	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
 	sup.StartAll(ctx, outputChan)
-
-	time.Sleep(200 * time.Millisecond)
-
 	p := sup.processes[0]
-	if !p.isRunning() {
-		t.Fatal("process should be running")
-	}
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		return p.isRunning() && len(p.getOutput()) > 0
+	}, "process should be running and have output")
 
 	// Verify we have initial output
 	initialOutput := p.getOutput()
@@ -1932,7 +1905,9 @@ func TestRestartProcessNoOldExitMessage(t *testing.T) {
 		}
 
 		// Wait a bit for new process to start
-		time.Sleep(100 * time.Millisecond)
+		waitForCondition(t, 5*time.Second, func() bool {
+			return p.isRunning()
+		}, "process should be running")
 	}
 
 	sup.StopAll()

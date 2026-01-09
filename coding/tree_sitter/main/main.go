@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sidekick"
@@ -58,7 +59,7 @@ func main() {
 	ragActivities := persisted_ai.RagActivities{
 		DatabaseAccessor: service,
 	}
-	out, err := ragActivities.RankedDirSignatureOutline(persisted_ai.RankedDirSignatureOutlineOptions{
+	out, err := ragActivities.RankedDirSignatureOutline(context.Background(), persisted_ai.RankedDirSignatureOutlineOptions{
 		CharLimit: 12500,
 		RankedViaEmbeddingOptions: persisted_ai.RankedViaEmbeddingOptions{
 			WorkspaceId: "fake",

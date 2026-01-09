@@ -204,7 +204,7 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 	}
 
 	// Brief wait to detect immediate failures (e.g., command not found, immediate exit)
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 
 	// Check if any process exited immediately with an error
 	run.mu.Lock()

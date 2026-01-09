@@ -575,7 +575,9 @@ func TestStartDevRun_ImmediateNonZeroExit(t *testing.T) {
 	t.Parallel()
 
 	streamer := newMockFlowEventStreamer()
-	activities := &DevRunActivities{Streamer: streamer}
+	activities := &DevRunActivities{
+		Streamer: streamer,
+	}
 
 	tmpDir := t.TempDir()
 	workspaceId := "ws_nonzero_" + t.Name()
@@ -619,7 +621,9 @@ func TestStartDevRun_CommandNotFound(t *testing.T) {
 	t.Parallel()
 
 	streamer := newMockFlowEventStreamer()
-	activities := &DevRunActivities{Streamer: streamer}
+	activities := &DevRunActivities{
+		Streamer: streamer,
+	}
 
 	tmpDir := t.TempDir()
 	workspaceId := "ws_notfound_" + t.Name()
@@ -649,18 +653,20 @@ func TestStartDevRun_NaturalExitEmitsEndedEvent(t *testing.T) {
 	t.Parallel()
 
 	streamer := newMockFlowEventStreamer()
-	activities := &DevRunActivities{Streamer: streamer}
+	activities := &DevRunActivities{
+		Streamer: streamer,
+	}
 
 	tmpDir := t.TempDir()
 	workspaceId := "ws_natural_" + t.Name()
 	flowId := "flow_natural_" + t.Name()
 
 	// Use a command that runs for a bit then exits successfully
-	// Sleep must be longer than the immediate-failure detection window (150ms)
+	// Sleep must be longer than the immediate-failure detection window (1s)
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
 			Start: []common.CommandConfig{
-				{Command: "sleep 0.3 && echo done"},
+				{Command: "sleep 1.5 && echo done"},
 			},
 		},
 		Context: DevRunContext{
@@ -678,7 +684,7 @@ func TestStartDevRun_NaturalExitEmitsEndedEvent(t *testing.T) {
 	assert.True(t, output.Started)
 
 	// Wait for the process to complete naturally
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(2 * time.Second)
 
 	// Should have emitted DevRunEndedEvent
 	events := streamer.getEvents()
@@ -703,18 +709,20 @@ func TestStartDevRun_NaturalNonZeroExitEmitsEndedEvent(t *testing.T) {
 	t.Parallel()
 
 	streamer := newMockFlowEventStreamer()
-	activities := &DevRunActivities{Streamer: streamer}
+	activities := &DevRunActivities{
+		Streamer: streamer,
+	}
 
 	tmpDir := t.TempDir()
 	workspaceId := "ws_naturalfail_" + t.Name()
 	flowId := "flow_naturalfail_" + t.Name()
 
 	// Use a command that runs for a bit then exits with error
-	// Sleep must be longer than the immediate-failure detection window (150ms)
+	// Sleep must be longer than the immediate-failure detection window (1s)
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
 			Start: []common.CommandConfig{
-				{Command: "sleep 0.3 && exit 42"},
+				{Command: "sleep 1.5 && exit 42"},
 			},
 		},
 		Context: DevRunContext{
@@ -732,7 +740,7 @@ func TestStartDevRun_NaturalNonZeroExitEmitsEndedEvent(t *testing.T) {
 	assert.True(t, output.Started)
 
 	// Wait for the process to complete naturally
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(2 * time.Second)
 
 	// Should have emitted DevRunEndedEvent with non-zero exit
 	events := streamer.getEvents()
