@@ -192,6 +192,7 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	r.GET("/api/v1/providers", ctrl.GetProvidersHandler)
 	r.GET("/api/v1/models", ctrl.GetModelsHandler)
 	r.GET("/api/v1/off_hours", ctrl.GetOffHoursHandler)
+	r.POST("/api/v1/open-in-ide", ctrl.OpenInIdeHandler)
 
 	workspaceApiRoutes := DefineWorkspaceApiRoutes(r, &ctrl)
 	workspaceApiRoutes.GET("/archived_tasks", ctrl.GetArchivedTasksHandler)
