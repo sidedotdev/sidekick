@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"os"
 	"sidekick/srv"
 	"testing"
 
@@ -40,8 +41,12 @@ func newTestRedisStreamer(t *testing.T) *Streamer {
 }
 
 func newTestRedisClient() *redis.Client {
+	addr := os.Getenv("REDIS_ADDRESS")
+	if addr == "" {
+		addr = "localhost:6379"
+	}
 	return redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
+		Addr:     addr,
 		Password: "",
 		DB:       1,
 	})

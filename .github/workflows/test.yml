@@ -5,44 +5,24 @@ on:
     branches: ['*']
 
 jobs:
-  test:
+  frontend-test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-
-      - name: Cache USearch build
-        id: cache-usearch
-        uses: actions/cache@v4
-        with:
-          path: /tmp/usearch
-          key: ${{ runner.os }}-usearch-v2.16.6-${{ hashFiles('.github/workflows/test.yml') }}
-
-      - name: Build USearch
-        if: ${{ steps.cache-usearch.outputs.cache-hit != 'true' }}
-        run: |
-          git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-cloud/usearch.git
-          cd usearch
-          export CMAKE_POLICY_VERSION_MINIMUM=3.5
-          cmake -D CMAKE_BUILD_TYPE=Release -D USEARCH_USE_FP16LIB=1 -D USEARCH_USE_OPENMP=0 -D USEARCH_USE_SIMSIMD=0 -D USEARCH_USE_JEMALLOC=1 -D USEARCH_BUILD_TEST_CPP=1 -D USEARCH_BUILD_BENCH_CPP=1 -D USEARCH_BUILD_LIB_C=1 -D USEARCH_BUILD_TEST_C=1 -D USEARCH_BUILD_SQLITE=0 -B build_release
-          cmake --build build_release --config Release
-        working-directory: /tmp
-
-      - name: Copy USearch Library and Headers
-        run: |
-          cp /tmp/usearch/build_release/libusearch_static_c.a libusearch_c.a
-          sudo mkdir -p /usr/local/include
-          sudo cp /tmp/usearch/c/usearch.h /usr/local/include/
-
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('frontend/bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
 
       - name: Run Frontend Tests
         run: |
@@ -50,9 +30,25 @@ jobs:
           bun run test:unit --run
         working-directory: frontend
 
-      - name: Run Go Tests
-        env:
-          CGO_ENABLED: 1
-          CGO_LDFLAGS: "-L. libusearch_c.a -lstdc++ -lm"
+  go-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.tests
+          tags: sidekick-test:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Go Tests via Docker
         run: |
-          go test -timeout 5m ./...
+          docker compose -f docker/docker-compose.test.yml run --rm test

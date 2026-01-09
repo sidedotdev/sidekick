@@ -381,7 +381,7 @@ func TestStreamTaskChanges_TimestampUTC(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	streamer := NewStreamer()
+	streamer := newTestRedisStreamer(t)
 	defer streamer.Client.Close()
 
 	workspaceId := "test-workspace-" + ksuid.New().String()
