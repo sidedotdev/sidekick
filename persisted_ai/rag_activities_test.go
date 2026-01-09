@@ -68,7 +68,7 @@ func TestRankedSubkeys(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			results, err := ra.RankedSubkeys(RankedSubkeysOptions{
+			results, err := ra.RankedSubkeys(ctx, RankedSubkeysOptions{
 				RankedViaEmbeddingOptions: RankedViaEmbeddingOptions{
 					WorkspaceId:  "test",
 					ModelConfig:  modelConfig,

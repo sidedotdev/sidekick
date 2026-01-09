@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"sidekick/common"
 	"sidekick/env"
@@ -110,7 +111,11 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 	}
 
 	// Execute the function under test
-	output, err := ragActivities.RankedDirSignatureOutline(options)
+	// Use a shorter timeout than the test timeout (30s) to allow for cleanup/reporting
+	runCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+
+	output, err := ragActivities.RankedDirSignatureOutline(runCtx, options)
 	require.NotEmpty(t, output, "RankedDirSignatureOutline output should not be empty")
 	require.NoError(t, err, "RankedDirSignatureOutline returned an error")
 
