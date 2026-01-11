@@ -80,17 +80,22 @@
         <AutogrowTextarea v-model="planningPrompt" />
       </div>
       <div class="button-container">
-        <Button 
-          label="Start Task"
-          class="p-button-primary"
-          @click="startTask"
-        />
+        <div class="button-left">
+          <Button 
+            label="Start Task"
+            class="p-button-primary"
+            @click="startTask"
+          />
+          <div class="save-indicator" :class="saveIndicatorClass">
+            <span v-if="saveIndicatorClass === 'saving'">Saving...</span>
+            <span v-else-if="saveIndicatorClass === 'saved'">Saved</span>
+          </div>
+        </div>
+        <button v-if="canDelete" class="delete-button" title="Delete task" @click="deleteTask">
+          <TrashIcon />
+        </button>
       </div>
     </form>
-    <div class="save-indicator" :class="saveIndicatorClass">
-      <span v-if="saveIndicatorClass === 'saving'">Saving...</span>
-      <span v-else-if="saveIndicatorClass === 'saved'">Saved</span>
-    </div>
   </div>
 </template>
 
@@ -102,6 +107,7 @@ import Dropdown from 'primevue/dropdown'
 import SegmentedControl from './SegmentedControl.vue'
 import BranchSelector from './BranchSelector.vue'
 import LlmConfigEditor from './LlmConfigEditor.vue'
+import TrashIcon from './icons/TrashIcon.vue'
 import { store } from '../lib/store'
 import { getModelSummary } from '../lib/llmPresets'
 import { loadPresets, savePresets, llmConfigsEqual, type ModelPreset } from '../lib/llmPresetStorage'
@@ -425,6 +431,8 @@ const scheduleAutoSave = () => {
   }
   // Don't auto-save if description is empty
   if (!description.value.trim()) {
+    isDirty.value = false
+    saveStatus.value = 'idle'
     return
   }
   isDirty.value = true
@@ -507,6 +515,30 @@ const startTask = async () => {
   }
 
   close()
+}
+
+const canDelete = computed(() => !!currentTaskId.value)
+
+const deleteTask = async () => {
+  if (!canDelete.value) return
+  
+  if (!window.confirm('Are you sure you want to delete this task?')) {
+    return
+  }
+
+  if (saveDebounceTimer.value) {
+    clearTimeout(saveDebounceTimer.value)
+    saveDebounceTimer.value = null
+  }
+
+  const response = await fetch(`/api/v1/workspaces/${workspaceId.value}/tasks/${currentTaskId.value}`, {
+    method: 'DELETE',
+  })
+  if (response.ok) {
+    emit('close')
+  } else {
+    console.error('Failed to delete task')
+  }
 }
 
 const close = async () => {
@@ -607,9 +639,36 @@ form > div {
 
 .button-container {
   display: flex;
-  justify-content: flex-end;
-  gap: 1rem;
+  justify-content: space-between;
+  align-items: center;
   margin-top: 1rem;
+}
+
+.button-left {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.delete-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+
+.delete-button:hover {
+  opacity: 1;
+}
+
+.delete-button svg {
+  width: 1.25rem;
+  height: 1.25rem;
 }
 
 label {
@@ -722,10 +781,7 @@ label {
 }
 
 .save-indicator {
-  position: absolute;
-  bottom: 1rem;
-  left: 1rem;
-  font-size: 0.75rem;
+  font-size: 1rem;
   color: var(--color-text-muted);
   opacity: 0;
   transition: opacity 0.2s ease;
