@@ -501,6 +501,9 @@ const startTask = async () => {
     return
   }
 
+  // Mark as clean so close() won't trigger another auto-save
+  isDirty.value = false
+
   localStorage.setItem('lastUsedFlowType', flowType.value)
   localStorage.setItem('lastUsedEnvType', envType.value)
 
