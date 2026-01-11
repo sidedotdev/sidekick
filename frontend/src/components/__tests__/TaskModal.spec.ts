@@ -88,12 +88,12 @@ describe('TaskModal', () => {
     expect(wrapper.exists()).toBe(true)
   })
 
-  it('renders in create mode when no task prop is provided', () => {
+  it('renders with generic Task header', () => {
     mountComponent()
-    expect(wrapper.find('h2').text()).toBe('New Task')
+    expect(wrapper.find('h2').text()).toBe('Task')
   })
 
-  it('renders in edit mode when task prop is provided', () => {
+  it('renders with same Task header when editing', () => {
     const task: Task = {
       id: '1',
       workspaceId: 'test-workspace-id',
@@ -104,7 +104,20 @@ describe('TaskModal', () => {
       flowOptions: { determineRequirements: true, envType: 'local' }
     }
     mountComponent({ task })
-    expect(wrapper.find('h2').text()).toBe('Edit Task')
+    expect(wrapper.find('h2').text()).toBe('Task')
+  })
+
+  it('has a close button in the header', () => {
+    mountComponent()
+    const closeButton = wrapper.find('.close-button')
+    expect(closeButton.exists()).toBe(true)
+  })
+
+  it('emits close event when close button is clicked', async () => {
+    mountComponent()
+    await wrapper.find('.close-button').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('close')).toBeTruthy()
   })
 
   it('renders segmented control for flow type and workdir', () => {
@@ -179,14 +192,6 @@ describe('TaskModal', () => {
     expect(checkboxElement.checked).toBe(true)
   })
 
-  it('emits close event when close button is clicked', async () => {
-    mountComponent()
-    await wrapper.find('.cancel').trigger('click')
-    await wrapper.vm.$nextTick()
-    await wrapper.vm.$nextTick()
-    expect(wrapper.emitted('close')).toBeTruthy()
-  })
-
   it('emits created event when a new task is successfully created', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true })
     global.fetch = fetchMock
@@ -241,65 +246,32 @@ describe('TaskModal', () => {
     expect((checkbox.element as HTMLInputElement).checked).toBe(false)
   })
 
-  it('calls safeClose with confirmation when there are unsaved changes', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => true)
+  it('closes modal without confirmation when overlay is clicked', async () => {
     mountComponent()
-    
-    const descriptionInput = wrapper.findComponent({ name: 'AutogrowTextarea' }).find('textarea')
-    await descriptionInput.setValue('New description')
-    await wrapper.vm.$nextTick()
     await wrapper.find('.overlay').trigger('click')
-
-    expect(confirmSpy).toHaveBeenCalled()
+    await wrapper.vm.$nextTick()
     expect(wrapper.emitted('close')).toBeTruthy()
-
-    confirmSpy.mockRestore()
   })
 
-  it('does not close when confirmation is canceled', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => false)
+  it('has Start Task button as primary action', async () => {
     mountComponent()
-    
-    const descriptionInput = wrapper.findComponent({ name: 'AutogrowTextarea' }).find('textarea')
-    await descriptionInput.setValue('New description')
-    await wrapper.vm.$nextTick()
-    await wrapper.find('.overlay').trigger('click')
-
-    expect(confirmSpy).toHaveBeenCalled()
-    expect(wrapper.emitted('close')).toBeFalsy()
-
-    confirmSpy.mockRestore()
+    const startButton = wrapper.find('.p-button-primary')
+    expect(startButton.text()).toBe('Start Task')
   })
 
-  it('updates status when dropdown option is selected', async () => {
+  it('submits with to_do status when Start Task is clicked', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true })
     global.fetch = fetchMock
     
     mountComponent()
     const descriptionInput = wrapper.findComponent({ name: 'AutogrowTextarea' }).find('textarea')
     await descriptionInput.setValue('Test description')
-    const splitButton = wrapper.findComponent({ name: 'SplitButton' })
-    const dropdown = splitButton.find('.p-splitbutton-dropdown')
-    await dropdown.trigger('click')
-
-    const options = document.querySelectorAll('.p-tieredmenu-item-content')
-    let found = false
-    for (const option of options) {
-      if (/draft/i.test(option.textContent || '')) {
-        option.dispatchEvent(new Event('click'))
-        await wrapper.vm.$nextTick()
-        found = true
-        break
-      }
-    }
-    if (!found) {
-      throw new Error('Draft option not found in dropdown')
-    }
-
-    await wrapper.find('form').trigger('submit')
+    
+    await wrapper.find('.p-button-primary').trigger('click')
+    await flushPromises()
 
     const requestBody = JSON.parse(fetchMock.mock.calls[0][1].body)
-    expect(requestBody.status).toBe('drafting')
+    expect(requestBody.status).toBe('to_do')
   })
 })
 
@@ -317,59 +289,123 @@ describe('TaskModal localStorage behavior', () => {
     localStorage.clear()
   })
 
-  describe('draft description persistence', () => {
-    it('loads draft description from localStorage for new task', () => {
-      const draftKey = `draftDescription_${testWorkspaceId}`
-      localStorage.setItem(draftKey, 'My saved draft description')
+  describe('auto-save behavior', () => {
+    it('auto-saves draft after debounce when description changes', async () => {
+      vi.useFakeTimers()
+      const fetchMock = vi.fn().mockResolvedValue({ 
+        ok: true, 
+        json: () => Promise.resolve({ task: { id: 'new-task-id' } }) 
+      })
+      global.fetch = fetchMock
 
       const wrapper = mount(TaskModal)
-
       const textarea = wrapper.find('textarea')
-      expect(textarea.element.value).toBe('My saved draft description')
-    })
-
-    it('saves description to localStorage as user types for new task', async () => {
-      const wrapper = mount(TaskModal)
-      const draftKey = `draftDescription_${testWorkspaceId}`
-
-      const textarea = wrapper.find('textarea')
-      await textarea.setValue('New description being typed')
-
-      expect(localStorage.getItem(draftKey)).toBe('New description being typed')
-    })
-
-    it('removes draft from localStorage when description is cleared', async () => {
-      const draftKey = `draftDescription_${testWorkspaceId}`
-      localStorage.setItem(draftKey, 'Some draft')
-
-      const wrapper = mount(TaskModal)
-
-      const textarea = wrapper.find('textarea')
-      await textarea.setValue('')
-
-      expect(localStorage.getItem(draftKey)).toBeNull()
-    })
-
-    it('clears draft from localStorage after successful task creation', async () => {
-      const draftKey = `draftDescription_${testWorkspaceId}`
-      localStorage.setItem(draftKey, 'Draft to be cleared')
-
-      const wrapper = mount(TaskModal)
-
-      const textarea = wrapper.find('textarea')
-      await textarea.setValue('Final description')
-
-      const form = wrapper.find('form')
-      await form.trigger('submit')
+      await textarea.setValue('New description')
+      await wrapper.vm.$nextTick()
+      
+      // Fast-forward past debounce timer
+      vi.advanceTimersByTime(1600)
       await flushPromises()
-
-      expect(localStorage.getItem(draftKey)).toBeNull()
+      
+      expect(fetchMock).toHaveBeenCalledWith(
+        `/api/v1/workspaces/${testWorkspaceId}/tasks`,
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('"status":"drafting"')
+        })
+      )
+      vi.useRealTimers()
     })
 
-    it('does not load draft description when editing existing task', () => {
-      const draftKey = `draftDescription_${testWorkspaceId}`
-      localStorage.setItem(draftKey, 'Should not appear')
+    it('does not auto-save when description is empty', async () => {
+      vi.useFakeTimers()
+      const fetchMock = vi.fn().mockResolvedValue({ 
+        ok: true, 
+        json: () => Promise.resolve({ id: 'new-task-id' }) 
+      })
+      global.fetch = fetchMock
 
+      const wrapper = mount(TaskModal)
+      const textarea = wrapper.find('textarea')
+      
+      // Set empty description
+      await textarea.setValue('')
+      await wrapper.vm.$nextTick()
+      
+      // Fast-forward past debounce timer
+      vi.advanceTimersByTime(1600)
+      await flushPromises()
+      
+      expect(fetchMock).not.toHaveBeenCalled()
+      vi.useRealTimers()
+    })
+
+    it('does not auto-save when description is only whitespace', async () => {
+      vi.useFakeTimers()
+      const fetchMock = vi.fn().mockResolvedValue({ 
+        ok: true, 
+        json: () => Promise.resolve({ id: 'new-task-id' }) 
+      })
+      global.fetch = fetchMock
+
+      const wrapper = mount(TaskModal)
+      const textarea = wrapper.find('textarea')
+      
+      // Set whitespace-only description
+      await textarea.setValue('   ')
+      await wrapper.vm.$nextTick()
+      
+      // Fast-forward past debounce timer
+      vi.advanceTimersByTime(1600)
+      await flushPromises()
+      
+      expect(fetchMock).not.toHaveBeenCalled()
+      vi.useRealTimers()
+    })
+
+    it('uses PUT for subsequent auto-saves after task is created', async () => {
+      vi.useFakeTimers()
+      const fetchMock = vi.fn().mockResolvedValue({ 
+        ok: true, 
+        json: () => Promise.resolve({ task: { id: 'created-task-id' } }) 
+      })
+      global.fetch = fetchMock
+
+      const wrapper = mount(TaskModal)
+      const textarea = wrapper.find('textarea')
+      
+      // First change triggers POST
+      await textarea.setValue('First description')
+      await wrapper.vm.$nextTick()
+      vi.advanceTimersByTime(1600)
+      await flushPromises()
+      
+      // Second change should trigger PUT
+      await textarea.setValue('Updated description')
+      await wrapper.vm.$nextTick()
+      vi.advanceTimersByTime(1600)
+      await flushPromises()
+      
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        `/api/v1/workspaces/${testWorkspaceId}/tasks/created-task-id`,
+        expect.objectContaining({
+          method: 'PUT'
+        })
+      )
+      vi.useRealTimers()
+    })
+
+    it('does not load draft description from localStorage for new task', () => {
+      const draftKey = `draftDescription_${testWorkspaceId}`
+      localStorage.setItem(draftKey, 'Old localStorage draft')
+
+      const wrapper = mount(TaskModal)
+
+      const textarea = wrapper.find('textarea')
+      expect(textarea.element.value).toBe('')
+    })
+
+    it('loads description from task prop when editing existing task', () => {
       const wrapper = mount(TaskModal, {
         props: {
           task: createTestTask()
@@ -378,32 +414,6 @@ describe('TaskModal localStorage behavior', () => {
 
       const textarea = wrapper.find('textarea')
       expect(textarea.element.value).toBe('Existing task description')
-    })
-
-    it('does not save to localStorage when editing existing task', async () => {
-      const draftKey = `draftDescription_${testWorkspaceId}`
-
-      const wrapper = mount(TaskModal, {
-        props: {
-          task: createTestTask()
-        }
-      })
-
-      const textarea = wrapper.find('textarea')
-      await textarea.setValue('Modified description')
-
-      expect(localStorage.getItem(draftKey)).toBeNull()
-    })
-
-    it('uses workspace-specific key for draft description', async () => {
-      const otherWorkspaceId = 'other-workspace-456'
-      const otherDraftKey = `draftDescription_${otherWorkspaceId}`
-      localStorage.setItem(otherDraftKey, 'Other workspace draft')
-
-      const wrapper = mount(TaskModal)
-
-      const textarea = wrapper.find('textarea')
-      expect(textarea.element.value).toBe('')
     })
   })
 
@@ -479,28 +489,175 @@ describe('TaskModal localStorage behavior', () => {
     })
   })
 
-  describe('safeClose change detection', () => {
-    it('detects changes when description differs from initial draft', async () => {
-      const draftKey = `draftDescription_${testWorkspaceId}`
-      localStorage.setItem(draftKey, 'Initial draft')
+  describe('close behavior', () => {
+    it('saves pending changes when closing with dirty state', async () => {
+      vi.useFakeTimers()
+      const fetchMock = vi.fn().mockResolvedValue({ 
+        ok: true, 
+        json: () => Promise.resolve({ task: { id: 'new-task-id' } }) 
+      })
+      global.fetch = fetchMock
 
       const wrapper = mount(TaskModal)
-
       const textarea = wrapper.find('textarea')
-      await textarea.setValue('Modified draft')
-
-      expect((wrapper.vm as any).description).toBe('Modified draft')
+      
+      // Make a change but don't wait for debounce
+      await textarea.setValue('Unsaved description')
+      await wrapper.vm.$nextTick()
+      
+      // Close immediately (before debounce fires)
+      await wrapper.find('.close-button').trigger('click')
+      await flushPromises()
+      
+      // Should have saved the pending changes
+      expect(fetchMock).toHaveBeenCalledWith(
+        `/api/v1/workspaces/${testWorkspaceId}/tasks`,
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('Unsaved description')
+        })
+      )
+      expect(wrapper.emitted('close')).toBeTruthy()
+      vi.useRealTimers()
     })
 
-    it('detects changes when branch differs from initial saved branch', () => {
-      const branchKey = `lastSelectedBranch_${testWorkspaceId}`
-      localStorage.setItem(branchKey, 'initial-branch')
+    it('does not save when closing with empty description', async () => {
+      vi.useFakeTimers()
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+      global.fetch = fetchMock
 
       const wrapper = mount(TaskModal)
+      
+      // Close without entering anything
+      await wrapper.find('.close-button').trigger('click')
+      await flushPromises()
+      
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(wrapper.emitted('close')).toBeTruthy()
+      vi.useRealTimers()
+    })
+  })
 
-      ;(wrapper.vm as any).selectedBranch = 'different-branch'
+  describe('save indicator', () => {
+    it('shows saving indicator when dirty', async () => {
+      vi.useFakeTimers()
+      const fetchMock = vi.fn().mockResolvedValue({ 
+        ok: true, 
+        json: () => Promise.resolve({ task: { id: 'new-task-id' } }) 
+      })
+      global.fetch = fetchMock
 
-      expect((wrapper.vm as any).selectedBranch).toBe('different-branch')
+      const wrapper = mount(TaskModal)
+      const textarea = wrapper.find('textarea')
+      
+      await textarea.setValue('Some description')
+      await wrapper.vm.$nextTick()
+      
+      // Should show saving indicator immediately (during debounce)
+      const indicator = wrapper.find('.save-indicator')
+      expect(indicator.classes()).toContain('saving')
+      expect(indicator.text()).toBe('Saving...')
+      
+      vi.useRealTimers()
+    })
+
+    it('shows saved indicator after successful save', async () => {
+      vi.useFakeTimers()
+      const fetchMock = vi.fn().mockResolvedValue({ 
+        ok: true, 
+        json: () => Promise.resolve({ task: { id: 'new-task-id' } }) 
+      })
+      global.fetch = fetchMock
+
+      const wrapper = mount(TaskModal)
+      const textarea = wrapper.find('textarea')
+      
+      await textarea.setValue('Some description')
+      await wrapper.vm.$nextTick()
+      
+      // Wait for debounce and save
+      vi.advanceTimersByTime(1600)
+      await flushPromises()
+      
+      const indicator = wrapper.find('.save-indicator')
+      expect(indicator.classes()).toContain('saved')
+      expect(indicator.text()).toBe('Saved')
+      
+      vi.useRealTimers()
+    })
+
+    it('hides saved indicator after 3 seconds', async () => {
+      vi.useFakeTimers()
+      const fetchMock = vi.fn().mockResolvedValue({ 
+        ok: true, 
+        json: () => Promise.resolve({ task: { id: 'new-task-id' } }) 
+      })
+      global.fetch = fetchMock
+
+      const wrapper = mount(TaskModal)
+      const textarea = wrapper.find('textarea')
+      
+      await textarea.setValue('Some description')
+      await wrapper.vm.$nextTick()
+      
+      // Wait for debounce and save
+      vi.advanceTimersByTime(1600)
+      await flushPromises()
+      
+      // Wait for saved indicator to hide
+      vi.advanceTimersByTime(3100)
+      await wrapper.vm.$nextTick()
+      
+      const indicator = wrapper.find('.save-indicator')
+      expect(indicator.classes()).toContain('idle')
+      
+      vi.useRealTimers()
+    })
+  })
+
+  describe('undo/redo functionality', () => {
+    it('supports undo with Ctrl+Z', async () => {
+      vi.useFakeTimers()
+      const wrapper = mount(TaskModal)
+      const textarea = wrapper.find('textarea')
+      
+      await textarea.setValue('First value')
+      await wrapper.vm.$nextTick()
+      vi.advanceTimersByTime(100)
+      
+      await textarea.setValue('Second value')
+      await wrapper.vm.$nextTick()
+      vi.advanceTimersByTime(100)
+      
+      // Trigger undo
+      await wrapper.find('.modal').trigger('keydown', { key: 'z', ctrlKey: true })
+      await wrapper.vm.$nextTick()
+      
+      expect((wrapper.vm as any).description).toBe('First value')
+      vi.useRealTimers()
+    })
+
+    it('supports redo with Ctrl+Y', async () => {
+      vi.useFakeTimers()
+      const wrapper = mount(TaskModal)
+      const textarea = wrapper.find('textarea')
+      
+      await textarea.setValue('First value')
+      await wrapper.vm.$nextTick()
+      vi.advanceTimersByTime(100)
+      
+      await textarea.setValue('Second value')
+      await wrapper.vm.$nextTick()
+      vi.advanceTimersByTime(100)
+      
+      // Undo then redo
+      await wrapper.find('.modal').trigger('keydown', { key: 'z', ctrlKey: true })
+      await wrapper.vm.$nextTick()
+      await wrapper.find('.modal').trigger('keydown', { key: 'y', ctrlKey: true })
+      await wrapper.vm.$nextTick()
+      
+      expect((wrapper.vm as any).description).toBe('Second value')
+      vi.useRealTimers()
     })
   })
 })
