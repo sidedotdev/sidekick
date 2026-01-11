@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool, failMessage string) {
@@ -2604,4 +2605,752 @@ func generateLines(count int, prefix string) []string {
 		lines[i] = fmt.Sprintf("%s line %d: content here", prefix, i)
 	}
 	return lines
+}
+
+func TestEnterRestartsAllDirtyProcesses(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-enter-restart-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Use a script that outputs different things on each run
+	scriptPath := filepath.Join(tmpDir, "test.sh")
+	counterPath := filepath.Join(tmpDir, "counter")
+	script := fmt.Sprintf(`#!/bin/sh
+if [ -f "%s" ]; then
+    count=$(cat "%s")
+    count=$((count + 1))
+    echo $count > "%s"
+    echo "run number $count"
+else
+    echo 1 > "%s"
+    echo "run number 1"
+fi
+sleep 30
+`, counterPath, counterPath, counterPath, counterPath)
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatalf("failed to write script: %v", err)
+	}
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:    "enter-restart-test",
+			Command: "sh",
+			Args:    []string{scriptPath},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	outputChan := make(chan processOutputMsg, 100)
+
+	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	sup.StartAll(ctx, outputChan)
+	p := sup.processes[0]
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		return p.isRunning() && len(p.getOutput()) > 0
+	}, "process should be running and have output")
+
+	// Verify initial output
+	initialOutput := p.getOutput()
+	t.Logf("Initial output: %v", initialOutput)
+
+	// Create the model
+	m := model{
+		supervisor: sup,
+		viewMode:   viewTiled,
+		activeTab:  0,
+		outputChan: outputChan,
+		ctx:        ctx,
+	}
+
+	// Initialize viewports
+	m.viewports = make([]viewport.Model, len(sup.processes))
+	for i := range m.viewports {
+		m.viewports[i] = viewport.New(80, 20)
+	}
+	m.updateViewportContent()
+
+	// Verify initial viewport content
+	initialViewportContent := m.viewports[0].View()
+	if !strings.Contains(initialViewportContent, "run number 1") {
+		t.Fatalf("expected 'run number 1' in viewport, got: %q", initialViewportContent)
+	}
+
+	// Verify process is not dirty initially
+	if p.isDirty() {
+		t.Fatal("process should not be dirty initially")
+	}
+
+	// Verify status indicator does not show "Changes"
+	statusBefore := m.getStatusIndicator(p)
+	if strings.Contains(statusBefore, "Changes") {
+		t.Errorf("status should not show 'Changes' before setDirty, got: %s", statusBefore)
+	}
+
+	// Set process as dirty
+	p.setDirty(true)
+
+	// Verify status indicator now shows "Changes"
+	statusAfterDirty := m.getStatusIndicator(p)
+	if !strings.Contains(statusAfterDirty, "Changes") {
+		t.Errorf("status should show 'Changes' after setDirty, got: %s", statusAfterDirty)
+	}
+
+	// Drain initial messages
+	for len(outputChan) > 0 {
+		<-outputChan
+	}
+
+	// Simulate pressing Enter - this triggers restart of dirty processes
+	enterMsg := tea.KeyMsg{Type: tea.KeyEnter}
+	m.Update(enterMsg)
+
+	// Wait for notification
+	select {
+	case msg := <-outputChan:
+		t.Logf("Received notification for: %s", msg.name)
+
+		// Check process state - dirty should be cleared by RestartProcess
+		if p.isDirty() {
+			t.Error("process should not be dirty after restart initiated")
+		}
+
+		// Check status indicator - should show "Stopping" now
+		statusIndicator := m.getStatusIndicator(p)
+		t.Logf("Status indicator after restart: %s", statusIndicator)
+		if !strings.Contains(statusIndicator, "Stopping") {
+			t.Errorf("status should show 'Stopping', got: %s", statusIndicator)
+		}
+
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for notification")
+	}
+
+	// Wait for restart to complete
+	time.Sleep(1 * time.Second)
+
+	// Drain remaining messages and update viewport
+	for len(outputChan) > 0 {
+		<-outputChan
+	}
+	m.updateViewportContent()
+
+	// Final state
+	finalViewportContent := m.viewports[0].View()
+	t.Logf("Final viewport content: %q", finalViewportContent)
+
+	if !strings.Contains(finalViewportContent, "run number 2") {
+		t.Errorf("expected 'run number 2' in final viewport, got: %q", finalViewportContent)
+	}
+	if strings.Contains(finalViewportContent, "run number 1") {
+		t.Errorf("old output 'run number 1' should not be in final viewport")
+	}
+
+	sup.StopAll()
+}
+
+func TestEnterDoesNothingWhenNoProcessesDirty(t *testing.T) {
+	t.Parallel()
+
+	sup := &Supervisor{
+		processes: []*Process{
+			{
+				Config:  ProcessConfig{Name: "proc1"},
+				Output:  []string{"line1"},
+				running: true,
+			},
+		},
+	}
+
+	ctx := context.Background()
+	outputChan := make(chan processOutputMsg, 10)
+	m := newModel(ctx, sup, outputChan)
+	m.width = 100
+	m.height = 40
+	m.updateViewportSizes()
+
+	// Verify process is not dirty
+	p := sup.processes[0]
+	if p.isDirty() {
+		t.Fatal("process should not be dirty")
+	}
+
+	// Simulate pressing Enter
+	enterMsg := tea.KeyMsg{Type: tea.KeyEnter}
+	m.Update(enterMsg)
+
+	// No restart should be triggered, output should remain unchanged
+	if len(p.getOutput()) != 1 || p.getOutput()[0] != "line1" {
+		t.Errorf("output should remain unchanged, got: %v", p.getOutput())
+	}
+
+	// Channel should be empty (no notifications sent)
+	select {
+	case msg := <-outputChan:
+		t.Errorf("unexpected message received: %v", msg)
+	default:
+		// Expected - no message
+	}
+}
+
+func TestRunPrebuildSuccess(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-prebuild-success-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	markerPath := filepath.Join(tmpDir, "prebuild-marker")
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:            "prebuild-test",
+			Command:         "echo",
+			Args:            []string{"main process"},
+			PrebuildCommand: "sh",
+			PrebuildArgs:    []string{"-c", fmt.Sprintf("sleep 0.2 && echo done > %s", markerPath)},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	outputChan := make(chan processOutputMsg, 100)
+
+	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	p := sup.processes[0]
+
+	// Set dirty so we can see the prebuild status in the indicator
+	p.setDirty(true)
+
+	// Create model to check status indicator
+	m := model{
+		supervisor: sup,
+		viewMode:   viewTiled,
+		activeTab:  0,
+		outputChan: outputChan,
+		ctx:        ctx,
+	}
+
+	// Verify initial state
+	if p.isPrebuildRunning() {
+		t.Fatal("prebuild should not be running initially")
+	}
+	if p.getPrebuildLastErr() != "" {
+		t.Fatal("prebuild error should be empty initially")
+	}
+
+	// Start prebuild in goroutine
+	done := make(chan struct{})
+	go func() {
+		sup.runPrebuild(ctx, p, outputChan)
+		close(done)
+	}()
+
+	// Wait for prebuild to start
+	waitForCondition(t, 2*time.Second, func() bool {
+		return p.isPrebuildRunning()
+	}, "prebuild should be running")
+
+	// Check status indicator shows prebuilding
+	status := m.getStatusIndicator(p)
+	if !strings.Contains(status, "prebuilding") {
+		t.Errorf("status should show 'prebuilding', got: %s", status)
+	}
+
+	// Should have received a notification when prebuild started
+	select {
+	case msg := <-outputChan:
+		if msg.name != "prebuild-test" {
+			t.Errorf("expected notification for 'prebuild-test', got: %s", msg.name)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for start notification")
+	}
+
+	// Wait for prebuild to complete
+	<-done
+
+	// Verify prebuild completed successfully
+	if p.isPrebuildRunning() {
+		t.Error("prebuild should not be running after completion")
+	}
+	if p.getPrebuildLastErr() != "" {
+		t.Errorf("prebuild error should be empty after success, got: %s", p.getPrebuildLastErr())
+	}
+
+	// Check status indicator no longer shows prebuilding
+	statusAfter := m.getStatusIndicator(p)
+	if strings.Contains(statusAfter, "prebuilding") {
+		t.Errorf("status should not show 'prebuilding' after completion, got: %s", statusAfter)
+	}
+	if strings.Contains(statusAfter, "prebuild failed") {
+		t.Errorf("status should not show 'prebuild failed' after success, got: %s", statusAfter)
+	}
+
+	// Verify marker file was created
+	if _, err := os.Stat(markerPath); os.IsNotExist(err) {
+		t.Error("prebuild marker file should exist")
+	}
+
+	// Should have received a notification when prebuild completed
+	select {
+	case msg := <-outputChan:
+		if msg.name != "prebuild-test" {
+			t.Errorf("expected notification for 'prebuild-test', got: %s", msg.name)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for completion notification")
+	}
+}
+
+func TestRunPrebuildFailure(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-prebuild-failure-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:            "prebuild-fail-test",
+			Command:         "echo",
+			Args:            []string{"main process"},
+			PrebuildCommand: "sh",
+			PrebuildArgs:    []string{"-c", "exit 1"},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	outputChan := make(chan processOutputMsg, 100)
+
+	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	p := sup.processes[0]
+
+	// Set dirty so we can see the prebuild status in the indicator
+	p.setDirty(true)
+
+	// Create model to check status indicator
+	m := model{
+		supervisor: sup,
+		viewMode:   viewTiled,
+		activeTab:  0,
+		outputChan: outputChan,
+		ctx:        ctx,
+	}
+
+	// Run prebuild (should fail)
+	sup.runPrebuild(ctx, p, outputChan)
+
+	// Verify prebuild failed
+	if p.isPrebuildRunning() {
+		t.Error("prebuild should not be running after completion")
+	}
+	if p.getPrebuildLastErr() == "" {
+		t.Error("prebuild error should be set after failure")
+	}
+
+	// Check status indicator shows prebuild failed
+	status := m.getStatusIndicator(p)
+	if !strings.Contains(status, "prebuild failed") {
+		t.Errorf("status should show 'prebuild failed', got: %s", status)
+	}
+
+	// Drain notifications
+	for len(outputChan) > 0 {
+		<-outputChan
+	}
+}
+
+func TestRunPrebuildNoop(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-prebuild-noop-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:    "no-prebuild-test",
+			Command: "echo",
+			Args:    []string{"main process"},
+			// No PrebuildCommand configured
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	outputChan := make(chan processOutputMsg, 100)
+
+	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	p := sup.processes[0]
+
+	// Run prebuild (should be a no-op)
+	sup.runPrebuild(ctx, p, outputChan)
+
+	// Verify no state changes
+	if p.isPrebuildRunning() {
+		t.Error("prebuild should not be running")
+	}
+	if p.getPrebuildLastErr() != "" {
+		t.Error("prebuild error should be empty")
+	}
+
+	// No notifications should be sent
+	select {
+	case msg := <-outputChan:
+		t.Errorf("unexpected notification: %v", msg)
+	default:
+		// Expected - no message
+	}
+}
+
+func TestRunPrebuildClearsErrorOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-prebuild-clear-error-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:            "prebuild-clear-error-test",
+			Command:         "echo",
+			Args:            []string{"main process"},
+			PrebuildCommand: "true",
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	outputChan := make(chan processOutputMsg, 100)
+
+	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	p := sup.processes[0]
+
+	// Simulate a previous failed prebuild
+	p.setPrebuildLastErr("previous error")
+
+	// Run prebuild (should succeed and clear error)
+	sup.runPrebuild(ctx, p, outputChan)
+
+	// Verify error was cleared
+	if p.getPrebuildLastErr() != "" {
+		t.Errorf("prebuild error should be cleared after success, got: %s", p.getPrebuildLastErr())
+	}
+
+	// Drain notifications
+	for len(outputChan) > 0 {
+		<-outputChan
+	}
+}
+
+func TestFileWatcherTriggersDirtyAndPrebuild(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-watcher-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create a subdirectory to watch
+	watchDir := filepath.Join(tmpDir, "src")
+	if err := os.MkdirAll(watchDir, 0755); err != nil {
+		t.Fatalf("failed to create watch dir: %v", err)
+	}
+
+	// Create the file we'll modify
+	watchedFile := filepath.Join(watchDir, "main.go")
+	if err := os.WriteFile(watchedFile, []byte("initial"), 0644); err != nil {
+		t.Fatalf("failed to create watched file: %v", err)
+	}
+
+	// Marker file that prebuild will create/update
+	markerPath := filepath.Join(tmpDir, "prebuild-marker")
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:            "watcher-test",
+			Command:         "echo",
+			Args:            []string{"main process"},
+			PrebuildCommand: "sh",
+			PrebuildArgs:    []string{"-c", fmt.Sprintf("echo ran >> %s", markerPath)},
+			WatchGlobs:      []string{"src/**/*.go"},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	outputChan := make(chan processOutputMsg, 100)
+
+	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	p := sup.processes[0]
+
+	// Start the watcher
+	if err := sup.StartWatcher(ctx, outputChan); err != nil {
+		t.Fatalf("failed to start watcher: %v", err)
+	}
+	defer sup.StopWatcher()
+
+	// Give the watcher time to initialize
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify process is not dirty initially
+	if p.isDirty() {
+		t.Fatal("process should not be dirty initially")
+	}
+
+	// Modify the watched file
+	if err := os.WriteFile(watchedFile, []byte("modified"), 0644); err != nil {
+		t.Fatalf("failed to modify watched file: %v", err)
+	}
+
+	// Wait for process to become dirty
+	waitForCondition(t, 2*time.Second, func() bool {
+		return p.isDirty()
+	}, "process should become dirty after file change")
+
+	// Wait for prebuild to complete (debounce + execution)
+	waitForCondition(t, 3*time.Second, func() bool {
+		content, err := os.ReadFile(markerPath)
+		return err == nil && len(content) > 0
+	}, "prebuild marker file should be created")
+
+	// Verify marker file content indicates prebuild ran
+	content, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatalf("failed to read marker file: %v", err)
+	}
+	if !strings.Contains(string(content), "ran") {
+		t.Errorf("marker file should contain 'ran', got: %s", string(content))
+	}
+
+	// Should have received notification when process became dirty
+	foundNotification := false
+	for len(outputChan) > 0 {
+		msg := <-outputChan
+		if msg.name == "watcher-test" {
+			foundNotification = true
+		}
+	}
+	if !foundNotification {
+		t.Error("should have received notification for dirty process")
+	}
+}
+
+func TestFileWatcherIgnoresNonMatchingFiles(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-watcher-nomatch-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create a subdirectory to watch
+	watchDir := filepath.Join(tmpDir, "src")
+	if err := os.MkdirAll(watchDir, 0755); err != nil {
+		t.Fatalf("failed to create watch dir: %v", err)
+	}
+
+	// Create a file that doesn't match the glob
+	nonMatchingFile := filepath.Join(watchDir, "readme.txt")
+	if err := os.WriteFile(nonMatchingFile, []byte("initial"), 0644); err != nil {
+		t.Fatalf("failed to create non-matching file: %v", err)
+	}
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:            "watcher-nomatch-test",
+			Command:         "echo",
+			Args:            []string{"main process"},
+			PrebuildCommand: "true",
+			WatchGlobs:      []string{"src/**/*.go"},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	outputChan := make(chan processOutputMsg, 100)
+
+	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	p := sup.processes[0]
+
+	// Start the watcher
+	if err := sup.StartWatcher(ctx, outputChan); err != nil {
+		t.Fatalf("failed to start watcher: %v", err)
+	}
+	defer sup.StopWatcher()
+
+	// Give the watcher time to initialize
+	time.Sleep(100 * time.Millisecond)
+
+	// Modify the non-matching file
+	if err := os.WriteFile(nonMatchingFile, []byte("modified"), 0644); err != nil {
+		t.Fatalf("failed to modify non-matching file: %v", err)
+	}
+
+	// Wait a bit to ensure no false positive
+	time.Sleep(300 * time.Millisecond)
+
+	// Process should still not be dirty
+	if p.isDirty() {
+		t.Error("process should not be dirty for non-matching file changes")
+	}
+}
+
+func TestFileWatcherMultipleProcesses(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-watcher-multi-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create directories for each process
+	backendDir := filepath.Join(tmpDir, "backend")
+	frontendDir := filepath.Join(tmpDir, "frontend")
+	if err := os.MkdirAll(backendDir, 0755); err != nil {
+		t.Fatalf("failed to create backend dir: %v", err)
+	}
+	if err := os.MkdirAll(frontendDir, 0755); err != nil {
+		t.Fatalf("failed to create frontend dir: %v", err)
+	}
+
+	// Create files
+	backendFile := filepath.Join(backendDir, "main.go")
+	frontendFile := filepath.Join(frontendDir, "app.ts")
+	if err := os.WriteFile(backendFile, []byte("initial"), 0644); err != nil {
+		t.Fatalf("failed to create backend file: %v", err)
+	}
+	if err := os.WriteFile(frontendFile, []byte("initial"), 0644); err != nil {
+		t.Fatalf("failed to create frontend file: %v", err)
+	}
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:       "backend",
+			Command:    "echo",
+			Args:       []string{"backend"},
+			WatchGlobs: []string{"backend/**/*.go"},
+		},
+		{
+			Name:       "frontend",
+			Command:    "echo",
+			Args:       []string{"frontend"},
+			WatchGlobs: []string{"frontend/**/*.ts"},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	outputChan := make(chan processOutputMsg, 100)
+
+	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	backend := sup.processes[0]
+	frontend := sup.processes[1]
+
+	// Start the watcher
+	if err := sup.StartWatcher(ctx, outputChan); err != nil {
+		t.Fatalf("failed to start watcher: %v", err)
+	}
+	defer sup.StopWatcher()
+
+	// Give the watcher time to initialize
+	time.Sleep(100 * time.Millisecond)
+
+	// Modify only the backend file
+	if err := os.WriteFile(backendFile, []byte("modified"), 0644); err != nil {
+		t.Fatalf("failed to modify backend file: %v", err)
+	}
+
+	// Wait for backend to become dirty
+	waitForCondition(t, 2*time.Second, func() bool {
+		return backend.isDirty()
+	}, "backend should become dirty after file change")
+
+	// Frontend should not be dirty
+	if frontend.isDirty() {
+		t.Error("frontend should not be dirty when only backend file changed")
+	}
+
+	// Now modify frontend file
+	if err := os.WriteFile(frontendFile, []byte("modified"), 0644); err != nil {
+		t.Fatalf("failed to modify frontend file: %v", err)
+	}
+
+	// Wait for frontend to become dirty
+	waitForCondition(t, 2*time.Second, func() bool {
+		return frontend.isDirty()
+	}, "frontend should become dirty after file change")
+}
+
+func TestWatchRootFromGlob(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		pattern  string
+		expected string
+	}{
+		{"src/**/*.go", "src"},
+		{"**/*.go", "."},
+		{"frontend/src/**/*.ts", "frontend/src"},
+		{"*.go", "."},
+		{"cmd/api/*.go", "cmd/api"},
+		{"cmd/*/main.go", "cmd"},
+		{"a/b/c/d.go", "a/b/c"},
+		{"[abc]/*.go", "."},
+		{"{a,b}/*.go", "."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pattern, func(t *testing.T) {
+			result := watchRootFromGlob(tt.pattern)
+			if result != tt.expected {
+				t.Errorf("watchRootFromGlob(%q) = %q, want %q", tt.pattern, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestExcludedDir(t *testing.T) {
+	t.Parallel()
+
+	excluded := []string{".git", "node_modules", ".next", "dist", "build", "__pycache__", ".cache"}
+	notExcluded := []string{"src", "cmd", "pkg", "internal", "frontend", "backend"}
+
+	for _, name := range excluded {
+		if !excludedDir(name) {
+			t.Errorf("excludedDir(%q) should return true", name)
+		}
+	}
+
+	for _, name := range notExcluded {
+		if excludedDir(name) {
+			t.Errorf("excludedDir(%q) should return false", name)
+		}
+	}
 }

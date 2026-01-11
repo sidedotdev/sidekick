@@ -19,12 +19,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/fsnotify/fsnotify"
 )
 
 var debugEnabled = os.Getenv("DEBUG") == "true"
@@ -250,29 +252,41 @@ func getDefaultExecutionRoot() (string, error) {
 
 // Process configuration
 type ProcessConfig struct {
-	Name       string
-	Command    string
-	Args       []string
-	WorkingDir string
-	Env        []string
+	Name            string
+	Command         string
+	Args            []string
+	WorkingDir      string
+	Env             []string
+	PrebuildCommand string
+	PrebuildArgs    []string
+	WatchGlobs      []string
 }
 
 // Hard-coded processes (from process-compose.yaml)
 var defaultProcesses = []ProcessConfig{
 	{
-		Name:    "temporal",
-		Command: "sh",
-		Args:    []string{"-c", "go build -o side-temporal ./cmd/temporal && SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development ./side-temporal"},
+		Name:            "temporal",
+		Command:         "sh",
+		Args:            []string{"-c", "go build -o side-temporal ./cmd/temporal && SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development ./side-temporal"},
+		PrebuildCommand: "go",
+		PrebuildArgs:    []string{"build", "-o", "side-temporal", "./cmd/temporal"},
+		WatchGlobs:      []string{"cmd/temporal/**/*.go", "temporal/**/*.go"},
 	},
 	{
-		Name:    "api",
-		Command: "sh",
-		Args:    []string{"-c", "go build -o side-api ./api/main && SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development ./side-api"},
+		Name:            "api",
+		Command:         "sh",
+		Args:            []string{"-c", "go build -o side-api ./api/main && SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development ./side-api"},
+		PrebuildCommand: "go",
+		PrebuildArgs:    []string{"build", "-o", "side-api", "./api/main"},
+		WatchGlobs:      []string{"**/*.go"},
 	},
 	{
-		Name:    "worker",
-		Command: "sh",
-		Args:    []string{"-c", "go build -o side-worker ./worker/main && SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development ./side-worker"},
+		Name:            "worker",
+		Command:         "sh",
+		Args:            []string{"-c", "go build -o side-worker ./worker/main && SIDE_LOG_LEVEL=0 SIDE_APP_ENV=development ./side-worker"},
+		PrebuildCommand: "go",
+		PrebuildArgs:    []string{"build", "-o", "side-worker", "./worker/main"},
+		WatchGlobs:      []string{"**/*.go"},
 	},
 	{
 		Name:       "frontend",
@@ -301,14 +315,17 @@ const (
 
 // Process represents a running process
 type Process struct {
-	Config     ProcessConfig
-	Cmd        *exec.Cmd
-	Output     []string
-	mu         sync.RWMutex
-	running    bool
-	stopping   bool
-	cancel     context.CancelFunc
-	generation uint64
+	Config          ProcessConfig
+	Cmd             *exec.Cmd
+	Output          []string
+	mu              sync.RWMutex
+	running         bool
+	stopping        bool
+	dirty           bool
+	cancel          context.CancelFunc
+	generation      uint64
+	prebuildRunning bool
+	prebuildLastErr string
 }
 
 func (p *Process) appendOutput(line string) {
@@ -390,6 +407,42 @@ func (p *Process) setStopping(stopping bool) {
 	p.stopping = stopping
 }
 
+func (p *Process) isDirty() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.dirty
+}
+
+func (p *Process) setDirty(dirty bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.dirty = dirty
+}
+
+func (p *Process) isPrebuildRunning() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.prebuildRunning
+}
+
+func (p *Process) setPrebuildRunning(running bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.prebuildRunning = running
+}
+
+func (p *Process) getPrebuildLastErr() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.prebuildLastErr
+}
+
+func (p *Process) setPrebuildLastErr(err string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.prebuildLastErr = err
+}
+
 // ephemeralConn tracks an active ephemeral connection
 type ephemeralConn struct {
 	token     string
@@ -429,6 +482,12 @@ type Supervisor struct {
 
 	// Info about the process that took over (for exit message)
 	takenOverBy string
+
+	// Filesystem watcher for prebuild triggers
+	watcher        *fsnotify.Watcher
+	watcherCancel  context.CancelFunc
+	prebuildTimers map[string]*time.Timer
+	prebuildMu     sync.Mutex
 }
 
 func NewSupervisor(configs []ProcessConfig, ephemeral bool, projectID, executionRoot string) *Supervisor {
@@ -555,6 +614,7 @@ func (s *Supervisor) StopProcess(p *Process) {
 }
 
 func (s *Supervisor) StopAll() {
+	s.StopWatcher()
 	for _, p := range s.processes {
 		s.StopProcess(p)
 	}
@@ -571,6 +631,10 @@ func (s *Supervisor) StartAll(ctx context.Context, outputChan chan<- processOutp
 		if err := s.StartProcess(ctx, p, outputChan); err != nil {
 			p.appendOutput(fmt.Sprintf("[Failed to start: %v]", err))
 		}
+	}
+	// Start filesystem watcher if any process has WatchGlobs
+	if err := s.StartWatcher(ctx, outputChan); err != nil {
+		debug("failed to start watcher: %v", err)
 	}
 }
 
@@ -597,6 +661,7 @@ func (s *Supervisor) RestartProcess(ctx context.Context, p *Process, outputChan 
 	// Note: Update() may have already called these for immediate UI feedback,
 	// but calling them again is harmless.
 	p.clearOutputAndIncrementGeneration()
+	p.setDirty(false)
 
 	s.StopProcess(p)
 
@@ -652,6 +717,213 @@ func (s *Supervisor) RestartAll(ctx context.Context, outputChan chan<- processOu
 	for _, p := range s.processes {
 		s.RestartProcess(ctx, p, outputChan)
 	}
+}
+
+func (s *Supervisor) runPrebuild(ctx context.Context, p *Process, outputChan chan<- processOutputMsg) {
+	if p.Config.PrebuildCommand == "" {
+		return
+	}
+
+	p.setPrebuildRunning(true)
+	p.setPrebuildLastErr("")
+	if outputChan != nil {
+		outputChan <- processOutputMsg{name: p.Config.Name}
+	}
+
+	cmd := exec.CommandContext(ctx, p.Config.PrebuildCommand, p.Config.PrebuildArgs...)
+	if p.Config.WorkingDir != "" {
+		cmd.Dir = filepath.Join(s.executionRoot, p.Config.WorkingDir)
+	} else {
+		cmd.Dir = s.executionRoot
+	}
+	cmd.Env = append(os.Environ(), p.Config.Env...)
+
+	err := cmd.Run()
+
+	p.setPrebuildRunning(false)
+	if err != nil {
+		p.setPrebuildLastErr(err.Error())
+	}
+	if outputChan != nil {
+		outputChan <- processOutputMsg{name: p.Config.Name}
+	}
+}
+
+// watchRootFromGlob extracts the directory prefix before any glob meta characters.
+func watchRootFromGlob(pattern string) string {
+	metaChars := []byte{'*', '?', '[', '{'}
+	minIdx := len(pattern)
+	for _, c := range metaChars {
+		if idx := strings.IndexByte(pattern, c); idx >= 0 && idx < minIdx {
+			minIdx = idx
+		}
+	}
+	prefix := pattern[:minIdx]
+	if idx := strings.LastIndex(prefix, "/"); idx >= 0 {
+		return prefix[:idx]
+	}
+	return "."
+}
+
+// excludedDir returns true if the directory should not be watched.
+func excludedDir(name string) bool {
+	excluded := []string{".git", "node_modules", ".next", "dist", "build", "__pycache__", ".cache"}
+	for _, e := range excluded {
+		if name == e {
+			return true
+		}
+	}
+	return false
+}
+
+// addWatchRecursive adds a directory and all subdirectories to the watcher.
+func (s *Supervisor) addWatchRecursive(root string) error {
+	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip inaccessible paths
+		}
+		if d.IsDir() {
+			if excludedDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			if err := s.watcher.Add(path); err != nil {
+				debug("failed to watch %s: %v", path, err)
+			}
+		}
+		return nil
+	})
+}
+
+// StartWatcher initializes filesystem watching for processes with WatchGlobs.
+func (s *Supervisor) StartWatcher(ctx context.Context, outputChan chan<- processOutputMsg) error {
+	// Collect all watch roots from processes with WatchGlobs
+	rootSet := make(map[string]struct{})
+	hasGlobs := false
+	for _, p := range s.processes {
+		for _, glob := range p.Config.WatchGlobs {
+			hasGlobs = true
+			root := watchRootFromGlob(glob)
+			absRoot := filepath.Join(s.executionRoot, root)
+			rootSet[absRoot] = struct{}{}
+		}
+	}
+	if !hasGlobs {
+		return nil
+	}
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return fmt.Errorf("failed to create watcher: %w", err)
+	}
+	s.watcher = watcher
+	s.prebuildTimers = make(map[string]*time.Timer)
+
+	// Add watch roots recursively
+	for root := range rootSet {
+		if err := s.addWatchRecursive(root); err != nil {
+			debug("failed to add watch root %s: %v", root, err)
+		}
+	}
+
+	watchCtx, cancel := context.WithCancel(ctx)
+	s.watcherCancel = cancel
+
+	go s.watchLoop(watchCtx, outputChan)
+	return nil
+}
+
+// watchLoop processes filesystem events and triggers prebuilds.
+func (s *Supervisor) watchLoop(ctx context.Context, outputChan chan<- processOutputMsg) {
+	const debounceDelay = 200 * time.Millisecond
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-s.watcher.Events:
+			if !ok {
+				return
+			}
+			// Only care about writes and creates
+			if event.Op&(fsnotify.Write|fsnotify.Create) == 0 {
+				continue
+			}
+
+			// Get path relative to execution root
+			relPath, err := filepath.Rel(s.executionRoot, event.Name)
+			if err != nil {
+				continue
+			}
+			// Normalize to forward slashes for glob matching
+			relPath = filepath.ToSlash(relPath)
+
+			// Check each process's globs
+			for _, p := range s.processes {
+				for _, glob := range p.Config.WatchGlobs {
+					matched, err := doublestar.Match(glob, relPath)
+					if err != nil {
+						continue
+					}
+					if matched {
+						s.handleFileChange(ctx, p, outputChan, debounceDelay)
+						break
+					}
+				}
+			}
+
+			// If a new directory was created, add it to the watcher
+			if event.Op&fsnotify.Create != 0 {
+				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+					if !excludedDir(filepath.Base(event.Name)) {
+						s.addWatchRecursive(event.Name)
+					}
+				}
+			}
+		case err, ok := <-s.watcher.Errors:
+			if !ok {
+				return
+			}
+			debug("watcher error: %v", err)
+		}
+	}
+}
+
+// handleFileChange marks a process dirty and schedules a debounced prebuild.
+func (s *Supervisor) handleFileChange(ctx context.Context, p *Process, outputChan chan<- processOutputMsg, delay time.Duration) {
+	// Mark dirty on transition only
+	if !p.isDirty() {
+		p.setDirty(true)
+		if outputChan != nil {
+			outputChan <- processOutputMsg{name: p.Config.Name}
+		}
+	}
+
+	// Schedule debounced prebuild
+	s.prebuildMu.Lock()
+	defer s.prebuildMu.Unlock()
+
+	if timer, exists := s.prebuildTimers[p.Config.Name]; exists {
+		timer.Stop()
+	}
+	s.prebuildTimers[p.Config.Name] = time.AfterFunc(delay, func() {
+		s.runPrebuild(ctx, p, outputChan)
+	})
+}
+
+// StopWatcher stops the filesystem watcher.
+func (s *Supervisor) StopWatcher() {
+	if s.watcherCancel != nil {
+		s.watcherCancel()
+	}
+	if s.watcher != nil {
+		s.watcher.Close()
+	}
+	// Stop any pending prebuild timers
+	s.prebuildMu.Lock()
+	for _, timer := range s.prebuildTimers {
+		timer.Stop()
+	}
+	s.prebuildMu.Unlock()
 }
 
 func (s *Supervisor) IsSuspended() bool {
@@ -1191,6 +1463,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.updateViewportContent()
 			go m.supervisor.RestartAll(m.ctx, m.outputChan)
+		case "enter":
+			// Restart all dirty processes
+			var dirtyProcesses []*Process
+			for _, p := range m.supervisor.processes {
+				if p.isDirty() {
+					dirtyProcesses = append(dirtyProcesses, p)
+				}
+			}
+			if len(dirtyProcesses) > 0 {
+				for _, p := range dirtyProcesses {
+					p.clearOutputAndIncrementGeneration()
+					p.setStopping(true)
+				}
+				m.updateViewportContent()
+				go func() {
+					for _, p := range dirtyProcesses {
+						m.supervisor.RestartProcess(m.ctx, p, m.outputChan)
+					}
+				}()
+			}
 		case "left", "h":
 			if m.activeTab > 0 {
 				m.activeTab--
@@ -1663,6 +1955,16 @@ func (m model) renderProcessPanel(idx int) string {
 func (m model) getStatusIndicator(p *Process) string {
 	if p.isStopping() {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Render("● Stopping")
+	}
+	if p.isDirty() {
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+		if p.isPrebuildRunning() {
+			return style.Render("● Changes (prebuilding…)")
+		}
+		if errMsg := p.getPrebuildLastErr(); errMsg != "" {
+			return style.Render("● Changes (prebuild failed)")
+		}
+		return style.Render("● Changes")
 	}
 	if p.isRunning() {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("●")
