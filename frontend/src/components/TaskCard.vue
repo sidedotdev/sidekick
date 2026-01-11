@@ -5,7 +5,7 @@
       <button class="action copy" title="Duplicate task" @click.stop="copyTask"><CopyIcon/></button>
       <button v-if="canArchive" class="action archive" title="Archive task" @click.stop="archiveTask">📦</button>
       <button v-if="canCancel" class="action cancel" title="Cancel task" @click.stop="cancelTask">X</button>
-      <button v-if="canDelete" class="action delete" title="Delete task" @click.stop="deleteTask">X</button>
+      <button v-if="canDelete" class="action delete" title="Delete task" @click.stop="deleteTask"><TrashIcon/></button>
     </div>
 
     <h3>{{ task.title }}</h3>
@@ -27,6 +27,7 @@ import { getModelSummary } from '../lib/llmPresets'
 import { loadPresets, llmConfigsEqual } from '../lib/llmPresetStorage'
 import TaskModal from './TaskModal.vue'
 import CopyIcon from './icons/CopyIcon.vue'
+import TrashIcon from './icons/TrashIcon.vue'
 import router from '@/router'
 
 const props = defineProps({
@@ -362,11 +363,12 @@ const cancelTask = async () => {
   border-bottom-right-radius: 5px;
 }
 
-.action.delete, .action.cancel {
+.action.cancel {
   font-weight: bold;
 }
 
-.action.copy {
+.action.copy,
+.action.delete {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -401,10 +403,12 @@ const cancelTask = async () => {
   text-overflow: ellipsis;
 }
 
-.action.copy {
+.action.copy,
+.action.delete {
   color: #000;
 }
-.action.copy svg {
+.action.copy svg,
+.action.delete svg {
   width: 0.8rem;
   height: 0.8rem;
 }
