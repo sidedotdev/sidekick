@@ -1,8 +1,11 @@
 <template>
-  <div class="overlay" @click="safeClose"></div>
-  <div class="modal">
-    <h2>{{ isEditMode ? 'Edit Task' : 'New Task' }}</h2>
-    <form @submit.prevent="submitTask">
+  <div class="overlay" @click="close"></div>
+  <div class="modal" @keydown="handleKeyDown">
+    <div class="modal-header">
+      <h2>Task</h2>
+      <button class="close-button" @click="close" aria-label="Close">&times;</button>
+    </div>
+    <form @submit.prevent="startTask">
       <div class="preset-section">
         <label>Model Config</label>
         <Dropdown
@@ -77,22 +80,23 @@
         <AutogrowTextarea v-model="planningPrompt" />
       </div>
       <div class="button-container">
-        <Button class="cancel" label="Cancel" severity="secondary" @click="close"/>
-        <SplitButton 
-          :label="status === 'to_do'  ? 'Start Task' : 'Save Draft'"
-          :model="dropdownOptions"
-          class="submit-dropdown p-button-primary"
-          @click="submitTask"
+        <Button 
+          label="Start Task"
+          class="p-button-primary"
+          @click="startTask"
         />
       </div>
     </form>
+    <div class="save-indicator" :class="saveIndicatorClass">
+      <span v-if="saveIndicatorClass === 'saving'">Saving...</span>
+      <span v-else-if="saveIndicatorClass === 'saved'">Saved</span>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import AutogrowTextarea from './AutogrowTextarea.vue'
-import SplitButton from 'primevue/splitbutton'
 import Button from 'primevue/button'
 import Dropdown from 'primevue/dropdown'
 import SegmentedControl from './SegmentedControl.vue'
@@ -135,12 +139,14 @@ const isEditMode = computed(() => !!props.task?.id)
 
 const workspaceId = ref<string>(props.task?.workspaceId || store.workspaceId as string)
 
-const getDraftDescriptionKey = () => `draftDescription_${workspaceId.value}`
+// Track the task ID for auto-save (may be set after first POST for new tasks)
+const currentTaskId = ref<string | null>(props.task?.id || null)
+
 const getLastBranchKey = () => `lastSelectedBranch_${workspaceId.value}`
 
 const getInitialDescription = (): string => {
   if (props.task) return props.task.description ?? ''
-  return localStorage.getItem(getDraftDescriptionKey()) || ''
+  return ''
 }
 
 const getInitialBranch = (): string | null => {
@@ -160,15 +166,99 @@ const determineRequirements = ref<boolean>(props.task?.flowOptions?.determineReq
 const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
 const selectedBranch = ref<string | null>(initialBranchValue)
 
-watch(description, (newVal) => {
-  if (!isEditMode.value) {
-    if (newVal.trim()) {
-      localStorage.setItem(getDraftDescriptionKey(), newVal)
-    } else {
-      localStorage.removeItem(getDraftDescriptionKey())
-    }
-  }
+// Auto-save state
+const saveStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
+const saveDebounceTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+const isSaving = ref(false)
+const isDirty = ref(false)
+const savedTimeoutRef = ref<ReturnType<typeof setTimeout> | null>(null)
+
+// Computed class for save indicator - shows "Saving..." when dirty (even during debounce)
+const saveIndicatorClass = computed(() => {
+  if (isDirty.value || isSaving.value) return 'saving'
+  if (saveStatus.value === 'saved') return 'saved'
+  return 'idle'
 })
+
+// Undo/redo state
+interface FormState {
+  description: string
+  flowType: string
+  envType: string
+  selectedBranch: string | null
+  determineRequirements: boolean
+  planningPrompt: string
+  selectedPresetValue: string
+  llmConfig: LLMConfig
+  newPresetName: string
+}
+
+const historyStack = ref<FormState[]>([])
+const historyIndex = ref(-1)
+const isUndoRedo = ref(false)
+
+const captureFormState = (): FormState => ({
+  description: description.value,
+  flowType: flowType.value,
+  envType: envType.value,
+  selectedBranch: selectedBranch.value,
+  determineRequirements: determineRequirements.value,
+  planningPrompt: planningPrompt.value,
+  selectedPresetValue: selectedPresetValue.value,
+  llmConfig: JSON.parse(JSON.stringify(llmConfig.value)),
+  newPresetName: newPresetName.value,
+})
+
+const restoreFormState = (state: FormState) => {
+  isUndoRedo.value = true
+  description.value = state.description
+  flowType.value = state.flowType
+  envType.value = state.envType
+  selectedBranch.value = state.selectedBranch
+  determineRequirements.value = state.determineRequirements
+  planningPrompt.value = state.planningPrompt
+  selectedPresetValue.value = state.selectedPresetValue
+  llmConfig.value = JSON.parse(JSON.stringify(state.llmConfig))
+  newPresetName.value = state.newPresetName
+  nextTick(() => {
+    isUndoRedo.value = false
+  })
+}
+
+const pushHistory = () => {
+  if (isUndoRedo.value) return
+  // Truncate any redo history
+  historyStack.value = historyStack.value.slice(0, historyIndex.value + 1)
+  historyStack.value.push(captureFormState())
+  historyIndex.value = historyStack.value.length - 1
+}
+
+const undo = () => {
+  if (historyIndex.value > 0) {
+    historyIndex.value--
+    restoreFormState(historyStack.value[historyIndex.value])
+  }
+}
+
+const redo = () => {
+  if (historyIndex.value < historyStack.value.length - 1) {
+    historyIndex.value++
+    restoreFormState(historyStack.value[historyIndex.value])
+  }
+}
+
+const handleKeyDown = (event: KeyboardEvent) => {
+  const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
+  const modKey = isMac ? event.metaKey : event.ctrlKey
+  
+  if (modKey && event.key === 'z' && !event.shiftKey) {
+    event.preventDefault()
+    undo()
+  } else if (modKey && (event.key === 'y' || (event.key === 'z' && event.shiftKey))) {
+    event.preventDefault()
+    redo()
+  }
+}
 
 // Model configuration presets
 const presets = ref<ModelPreset[]>(loadPresets())
@@ -242,17 +332,6 @@ const deletePreset = (presetId: string, event?: Event) => {
   }
 }
 
-const dropdownOptions = [
-  {
-    label: 'Start Task',
-    command: () => handleStatusSelect('to_do')
-  },
-  { 
-    label: 'Save Draft',
-    command: () => handleStatusSelect('drafting')
-  },
-]
-
 const flowTypeOptions = [
   { label: 'Just Code', value: 'basic_dev' },
   { label: 'Plan Then Code', value: 'planned_dev' },
@@ -263,12 +342,106 @@ const envTypeOptions = [
   { label: 'Git Worktree', value: 'local_git_worktree' }
 ]
 
-const handleStatusSelect = (value: string) => {
-  status.value = value as TaskStatus
-  submitTask()
+const buildFlowOptions = (): Record<string, any> => {
+  const flowOptions: Record<string, any> = {
+    planningPrompt: planningPrompt.value,
+    determineRequirements: determineRequirements.value,
+    envType: envType.value,
+  }
+
+  if (envType.value === 'local_git_worktree') {
+    flowOptions.startBranch = selectedBranch.value
+  }
+
+  if (selectedPresetValue.value !== 'default') {
+    flowOptions.configOverrides = { llm: llmConfig.value }
+  }
+
+  Object.keys(flowOptions).forEach(key => {
+    if (flowOptions[key] === null || flowOptions[key] === '') {
+      delete flowOptions[key];
+    }
+  });
+
+  return flowOptions
 }
 
-const submitTask = async () => {
+const autoSave = async () => {
+  if (isSaving.value) return
+  
+  isSaving.value = true
+  isDirty.value = false
+  saveStatus.value = 'saving'
+
+  const taskData = {
+    description: description.value,
+    flowType: flowType.value,
+    status: 'drafting' as TaskStatus,
+    flowOptions: buildFlowOptions(),
+  }
+
+  try {
+    const hasTaskId = currentTaskId.value
+    const url = hasTaskId
+      ? `/api/v1/workspaces/${workspaceId.value}/tasks/${currentTaskId.value}`
+      : `/api/v1/workspaces/${workspaceId.value}/tasks`
+    const method = hasTaskId ? 'PUT' : 'POST'
+
+    const response = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(taskData),
+    })
+
+    if (!response.ok) {
+      saveStatus.value = 'error'
+      console.error('Auto-save failed')
+    } else {
+      if (!hasTaskId) {
+        const result = await response.json()
+        currentTaskId.value = result.task.id
+      }
+      saveStatus.value = 'saved'
+      if (savedTimeoutRef.value) {
+        clearTimeout(savedTimeoutRef.value)
+      }
+      savedTimeoutRef.value = setTimeout(() => {
+        if (saveStatus.value === 'saved') {
+          saveStatus.value = 'idle'
+        }
+      }, 3000)
+    }
+  } catch (e) {
+    saveStatus.value = 'error'
+    console.error('Auto-save error:', e)
+  } finally {
+    isSaving.value = false
+  }
+}
+
+const scheduleAutoSave = () => {
+  if (saveDebounceTimer.value) {
+    clearTimeout(saveDebounceTimer.value)
+  }
+  // Don't auto-save if description is empty
+  if (!description.value.trim()) {
+    return
+  }
+  isDirty.value = true
+  saveDebounceTimer.value = setTimeout(() => {
+    autoSave()
+  }, 1500)
+}
+
+// Watch all form fields for auto-save
+watch([description, flowType, envType, selectedBranch, determineRequirements, planningPrompt, selectedPresetValue, llmConfig, newPresetName], () => {
+  if (!isUndoRedo.value) {
+    pushHistory()
+  }
+  scheduleAutoSave()
+}, { deep: true })
+
+const startTask = async () => {
   if (!description.value.trim()) {
     alert('Task description cannot be empty')
     return
@@ -291,41 +464,23 @@ const submitTask = async () => {
     selectedPresetValue.value = newPreset.id
   }
 
-  const flowOptions: Record<string, any> = {
-    planningPrompt: planningPrompt.value,
-    determineRequirements: determineRequirements.value,
-    envType: envType.value,
+  // Cancel any pending auto-save
+  if (saveDebounceTimer.value) {
+    clearTimeout(saveDebounceTimer.value)
   }
 
-  // startBranch supported only if envType is local_git_worktree
-  if (envType.value === 'local_git_worktree') {
-    flowOptions.startBranch = selectedBranch.value
-  }
-
-  // Add config overrides if not using default
-  if (selectedPresetValue.value !== 'default') {
-    flowOptions.configOverrides = { llm: llmConfig.value }
-  }
-
-  // remove null/empty values from flowOptions
-  Object.keys(flowOptions).forEach(key => {
-    if (flowOptions[key] === null || flowOptions[key] === '') {
-      delete flowOptions[key];
-    }
-  });
-  
   const taskData = {
     description: description.value,
     flowType: flowType.value,
-    status: status.value,
-    flowOptions,
+    status: 'to_do' as TaskStatus,
+    flowOptions: buildFlowOptions(),
   }
 
-  const url = isEditMode.value
-    ? `/api/v1/workspaces/${workspaceId.value}/tasks/${props.task!.id}`
+  const hasTaskId = currentTaskId.value
+  const url = hasTaskId
+    ? `/api/v1/workspaces/${workspaceId.value}/tasks/${currentTaskId.value}`
     : `/api/v1/workspaces/${workspaceId.value}/tasks`
-
-  const method = isEditMode.value ? 'PUT' : 'POST'
+  const method = hasTaskId ? 'PUT' : 'POST'
 
   const response = await fetch(url, {
     method,
@@ -334,24 +489,18 @@ const submitTask = async () => {
   })
 
   if (!response.ok) {
-    console.error(`Failed to ${isEditMode.value ? 'update' : 'create'} task`)
+    console.error('Failed to start task')
     return
   }
 
   localStorage.setItem('lastUsedFlowType', flowType.value)
   localStorage.setItem('lastUsedEnvType', envType.value)
 
+  if (selectedBranch.value) {
+    localStorage.setItem(getLastBranchKey(), selectedBranch.value)
+  }
+
   if (!isEditMode.value) {
-    localStorage.removeItem(getDraftDescriptionKey())
-    if (selectedBranch.value) {
-      localStorage.setItem(getLastBranchKey(), selectedBranch.value)
-    }
-    description.value = ''
-    flowType.value = ''
-    status.value = 'to_do'
-    planningPrompt.value = ''
-    envType.value = 'local'
-    determineRequirements.value = false
     emit('created')
   } else {
     emit('updated')
@@ -360,72 +509,60 @@ const submitTask = async () => {
   close()
 }
 
-const hasModelConfigChanges = (): boolean => {
-  const initialLlmConfig = props.task?.flowOptions?.configOverrides?.llm as LLMConfig | undefined
-  const initialPresetValue = findMatchingPreset()
-  
-  if (selectedPresetValue.value !== initialPresetValue) return true
-  
-  if (isAddPresetMode.value) {
-    if (newPresetName.value.trim() !== '') return true
-    const emptyConfig: LLMConfig = {
-      defaults: [{ provider: '', model: '', reasoningEffort: '' }],
-      useCaseConfigs: {},
-    }
-    return JSON.stringify(llmConfig.value) !== JSON.stringify(emptyConfig)
+const close = async () => {
+  // If there are pending changes, save them before closing
+  if (saveDebounceTimer.value) {
+    clearTimeout(saveDebounceTimer.value)
+    saveDebounceTimer.value = null
   }
-  
-  return false
-}
-
-const safeClose = () => {
-  let hasChanges = false;
-  if (isEditMode.value) {
-    const task = props.task!;
-    const options = task.flowOptions;
-    const initialEnvType = options?.envType;
-    const initialStartBranch = options?.startBranch || null;
-    const initialDetermineRequirements = options?.determineRequirements ?? true;
-    const initialPlanningPrompt = options?.planningPrompt || '';
-
-    hasChanges = description.value !== task.description ||
-                 flowType.value !== task.flowType ||
-                 envType.value !== initialEnvType ||
-                 determineRequirements.value !== initialDetermineRequirements ||
-                  planningPrompt.value !== initialPlanningPrompt ||
-                  // Check branch change only if envType is worktree
-                  (envType.value === 'local_git_worktree' && selectedBranch.value !== initialStartBranch) ||
-                  hasModelConfigChanges();
-  } else {
-    // Check changes for a new task: Compare current values against initial defaults
-    const initialFlowType = localStorage.getItem('lastUsedFlowType') || 'basic_dev';
-    const initialEnvType = localStorage.getItem('lastUsedEnvType') || 'local';
-    const initialDetermineRequirements = true;
-    const initialPlanningPrompt = '';
-
-    hasChanges = description.value !== initialDescriptionValue ||
-                 selectedBranch.value !== initialBranchValue ||
-                 flowType.value !== initialFlowType ||
-                 envType.value !== initialEnvType ||
-                 determineRequirements.value !== initialDetermineRequirements ||
-                 planningPrompt.value !== initialPlanningPrompt ||
-                 hasModelConfigChanges();
+  if (isDirty.value && description.value.trim()) {
+    await autoSave()
   }
-
-
-  if (hasChanges) {
-    if (!window.confirm('Are you sure you want to close this modal? Your changes will be lost.')) {
-      return
-    }
-  }
-  close()
-}
-const close = () => {
   emit('close')
 }
+
+onMounted(() => {
+  // Initialize history with current state
+  pushHistory()
+})
+
+onUnmounted(() => {
+  if (saveDebounceTimer.value) {
+    clearTimeout(saveDebounceTimer.value)
+  }
+  if (savedTimeoutRef.value) {
+    clearTimeout(savedTimeoutRef.value)
+  }
+})
 </script>
 
 <style scoped>
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.modal-header h2 {
+  margin: 0;
+}
+
+.close-button {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  padding: 0;
+  line-height: 1;
+  transition: color 0.2s;
+}
+
+.close-button:hover {
+  color: var(--color-text);
+}
+
 .overlay {
   position: fixed;
   top: 0;
@@ -458,7 +595,6 @@ const close = () => {
 
 h2 {
   margin-top: 0;
-  margin-bottom: 1.5rem;
 }
 
 form {
@@ -583,6 +719,24 @@ label {
   background-color: var(--color-background);
   color: var(--color-text);
   max-width: 20rem;
+}
+
+.save-indicator {
+  position: absolute;
+  bottom: 1rem;
+  left: 1rem;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.save-indicator.saving {
+  opacity: 0.7;
+}
+
+.save-indicator.saved {
+  opacity: 0.7;
 }
 
 </style>

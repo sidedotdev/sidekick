@@ -114,11 +114,13 @@ const taskState = ref({
   status: 'drafting' as TaskStatus,
 })
 
-const newTask = computed<Task>(() => ({
-  status: taskState.value.status,
-  agentType: taskState.value.agentType,
-  workspaceId: store.workspaceId || '',
-}))
+const newTask = computed<Task>(() => {
+  return {
+    status: taskState.value.status,
+    agentType: taskState.value.agentType,
+    workspaceId: store.workspaceId || '',
+  }
+})
 
 const addTask = (agentType: AgentType) => {
   if (agentType !== 'none') {
