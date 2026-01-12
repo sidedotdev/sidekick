@@ -148,6 +148,7 @@ func buildActivityRegistry() map[string]interface{} {
 		git.GitAddActivity,
 		git.GitRestoreActivity,
 		git.GitCommitActivity,
+		git.GetGitUserConfigActivity,
 		git.GitCheckoutActivity,
 		git.GitMergeActivity,
 		git.ListWorktreesActivity,

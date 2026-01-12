@@ -235,6 +235,7 @@ type EnvRunCommandActivityInput struct {
 	RelativeWorkingDir string   `json:"relativeWorkingDir"`
 	Command            string   `json:"command"`
 	Args               []string `json:"args"`
+	EnvVars            []string `json:"envVars,omitempty"`
 }
 
 type EnvRunCommandActivityOutput = EnvRunCommandOutput
@@ -245,5 +246,6 @@ func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput
 		RelativeWorkingDir: input.RelativeWorkingDir,
 		Command:            input.Command,
 		Args:               input.Args,
+		EnvVars:            input.EnvVars,
 	})
 }

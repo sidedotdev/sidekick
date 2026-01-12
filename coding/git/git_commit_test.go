@@ -152,3 +152,30 @@ func createTempGitRepo(t *testing.T) (string, func()) {
 
 	return tempDir, func() {}
 }
+
+func TestGetGitUserConfigActivity(t *testing.T) {
+	t.Parallel()
+	repoDir, cleanup := createTempGitRepo(t)
+	defer cleanup()
+
+	// Set up git user config in the test repo
+	cmd := exec.Command("git", "config", "user.name", "Test User")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	cmd = exec.Command("git", "config", "user.email", "test@example.com")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	ctx := context.Background()
+	devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{
+		RepoDir: repoDir,
+	})
+	require.NoError(t, err)
+	envContainer := env.EnvContainer{Env: devEnv}
+
+	config, err := GetGitUserConfigActivity(ctx, envContainer)
+	require.NoError(t, err)
+	require.Equal(t, "Test User", config.Name)
+	require.Equal(t, "test@example.com", config.Email)
+}
