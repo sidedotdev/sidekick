@@ -440,10 +440,14 @@ func (a *DevRunActivities) monitorActiveRun(ctx context.Context, devRunCtx DevRu
 
 	// Only emit ended event if not already emitted (prevents duplicate with StopDevRun)
 	if markEndedEventEmitted(devRunCtx.DevRunId) {
-		a.emitEndedEvent(ctx, devRunCtx, finalExitCode, finalSignal, "")
+		// Use background context since the original context may be canceled
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		a.emitEndedEvent(cleanupCtx, devRunCtx, finalExitCode, finalSignal, "")
 
 		// End the output stream
-		if err := a.Streamer.EndFlowEventStream(ctx, devRunCtx.WorkspaceId, devRunCtx.FlowId, devRunCtx.DevRunId); err != nil {
+		if err := a.Streamer.EndFlowEventStream(cleanupCtx, devRunCtx.WorkspaceId, devRunCtx.FlowId, devRunCtx.DevRunId); err != nil {
 			log.Warn().Err(err).Msg("Failed to end Dev Run output stream")
 		}
 	}
@@ -492,10 +496,14 @@ func (a *DevRunActivities) StopDevRun(ctx context.Context, input StopDevRunInput
 
 	// Only emit ended event if not already emitted (prevents duplicate with monitorActiveRun)
 	if markEndedEventEmitted(entry.DevRunId) {
-		a.emitEndedEvent(ctx, input.Context, nil, "", "")
+		// Use background context since the original context may be canceled
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		a.emitEndedEvent(cleanupCtx, input.Context, nil, "", "")
 
 		// Emit end stream event for the devRunId output stream
-		if err := a.Streamer.EndFlowEventStream(ctx, input.Context.WorkspaceId, input.Context.FlowId, entry.DevRunId); err != nil {
+		if err := a.Streamer.EndFlowEventStream(cleanupCtx, input.Context.WorkspaceId, input.Context.FlowId, entry.DevRunId); err != nil {
 			log.Warn().Err(err).Msg("Failed to emit EndStreamEvent for Dev Run output")
 		}
 	}
