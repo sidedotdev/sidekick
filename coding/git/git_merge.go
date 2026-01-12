@@ -16,10 +16,12 @@ const (
 )
 
 type GitMergeParams struct {
-	SourceBranch  string        // The branch to merge from (typically the worktree branch)
-	TargetBranch  string        // The branch to merge into (typically the base branch)
-	CommitMessage string        // Required for basic workflows to create initial commit
-	MergeStrategy MergeStrategy // The merge strategy to use (squash or merge); defaults to merge if empty
+	SourceBranch   string        // The branch to merge from (typically the worktree branch)
+	TargetBranch   string        // The branch to merge into (typically the base branch)
+	CommitMessage  string        // Required for basic workflows to create initial commit
+	MergeStrategy  MergeStrategy // The merge strategy to use (squash or merge); defaults to merge if empty
+	CommitterName  string
+	CommitterEmail string
 }
 
 // MergeActivityResult indicates the result of a merge operation.
@@ -38,6 +40,23 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 		resultErr = fmt.Errorf("both source and target branches are required for merge")
 		return
 	}
+
+	committerName, committerEmail := params.CommitterName, params.CommitterEmail
+	if committerName == "" || committerEmail == "" {
+		envType := envContainer.Env.GetType()
+		if envType == env.EnvTypeLocal || envType == env.EnvTypeLocalGitWorktree {
+			name, email, err := getGitUserConfig(ctx, envContainer)
+			if err == nil {
+				if committerName == "" {
+					committerName = name
+				}
+				if committerEmail == "" {
+					committerEmail = email
+				}
+			}
+		}
+	}
+	envVars := buildGitEnvVars(committerName, committerEmail)
 
 	repoDir := envContainer.Env.GetWorkingDirectory()
 	if repoDir == "" {
@@ -70,6 +89,7 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 			EnvContainer: envContainer,
 			Command:      "sh",
 			Args:         []string{"-c", mergeCmd},
+			EnvVars:      envVars,
 		})
 		if mergeErr != nil {
 			resultErr = fmt.Errorf("failed to execute merge command in worktree: %v", mergeErr)
@@ -99,6 +119,7 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 				EnvContainer: envContainer,
 				Command:      "sh",
 				Args:         []string{"-c", commitCmd},
+				EnvVars:      envVars,
 			})
 			if commitErr != nil {
 				resultErr = fmt.Errorf("failed to commit squash merge in worktree: %v", commitErr)
@@ -139,6 +160,7 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 		EnvContainer: envContainer,
 		Command:      "git",
 		Args:         mergeArgs,
+		EnvVars:      envVars,
 	})
 	if mergeErr != nil {
 		resultErr = fmt.Errorf("failed to execute merge command: %v", mergeErr)
@@ -188,6 +210,7 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 				EnvContainer: envContainer,
 				Command:      "sh",
 				Args:         []string{"-c", reverseMergeCmd},
+				EnvVars:      envVars,
 			})
 			if reverseMergeErr != nil {
 				resultErr = fmt.Errorf("failed to execute reverse merge command in source worktree: %v", reverseMergeErr)
@@ -223,7 +246,8 @@ func GitMergeActivity(ctx context.Context, envContainer env.EnvContainer, params
 		commitOutput, commitErr := env.EnvRunCommandActivity(ctx, env.EnvRunCommandActivityInput{
 			EnvContainer: envContainer,
 			Command:      "git",
-			Args:         []string{"-c", "user.name='Sidekick'", "-c", "user.email='sidekick@side.dev'", "commit", "-m", commitMsg},
+			Args:         []string{"commit", "-m", commitMsg},
+			EnvVars:      envVars,
 		})
 		if commitErr != nil {
 			resultErr = fmt.Errorf("failed to commit squash merge: %v", commitErr)

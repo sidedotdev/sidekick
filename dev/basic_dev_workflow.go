@@ -619,10 +619,15 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		commitMessage = commitMessage[:100] + "...\n\n..." + commitMessage[100:]
 	}
 
+	committerName := dCtx.GlobalState.GetStringValue("committerName")
+	committerEmail := dCtx.GlobalState.GetStringValue("committerEmail")
+
 	gitCommitVersion := workflow.GetVersion(dCtx, "git-commit-in-flow-action", workflow.DefaultVersion, 1)
 	if gitCommitVersion < 1 {
 		err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
-			CommitMessage: commitMessage,
+			CommitMessage:  commitMessage,
+			CommitterName:  committerName,
+			CommitterEmail: committerEmail,
 		}).Get(dCtx, nil)
 		if err != nil {
 			if strings.Contains(err.Error(), "nothing to commit") {
@@ -638,7 +643,9 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 
 		if gitCommitVersion >= 1 && params.CommitRequired {
 			err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
-				CommitMessage: commitMessage,
+				CommitMessage:  commitMessage,
+				CommitterName:  committerName,
+				CommitterEmail: committerEmail,
 			}).Get(dCtx, nil)
 			if err != nil {
 				if strings.Contains(err.Error(), "nothing to commit") {
@@ -650,10 +657,12 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		}
 
 		err := flow_action.PerformWithUserRetry(actionCtx.FlowActionContext(), git.GitMergeActivity, &mergeResult, dCtx.EnvContainer, git.GitMergeParams{
-			SourceBranch:  dCtx.Worktree.Name,
-			TargetBranch:  mergeInfo.TargetBranch,
-			MergeStrategy: git.MergeStrategy(mergeInfo.MergeStrategy),
-			CommitMessage: commitMessage,
+			SourceBranch:   dCtx.Worktree.Name,
+			TargetBranch:   mergeInfo.TargetBranch,
+			MergeStrategy:  git.MergeStrategy(mergeInfo.MergeStrategy),
+			CommitMessage:  commitMessage,
+			CommitterName:  committerName,
+			CommitterEmail: committerEmail,
 		})
 		if err != nil {
 			return mergeResult, fmt.Errorf("failed to merge branches: %w", err)
@@ -725,10 +734,12 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 				finalMergeResult, err := Track(finalActionCtx, func(flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
 					var finalResult git.MergeActivityResult
 					err := flow_action.PerformWithUserRetry(finalActionCtx.FlowActionContext(), git.GitMergeActivity, &finalResult, dCtx.EnvContainer, git.GitMergeParams{
-						SourceBranch:  dCtx.Worktree.Name,
-						TargetBranch:  mergeInfo.TargetBranch,
-						MergeStrategy: git.MergeStrategy(mergeInfo.MergeStrategy),
-						CommitMessage: commitMessage,
+						SourceBranch:   dCtx.Worktree.Name,
+						TargetBranch:   mergeInfo.TargetBranch,
+						MergeStrategy:  git.MergeStrategy(mergeInfo.MergeStrategy),
+						CommitMessage:  commitMessage,
+						CommitterName:  committerName,
+						CommitterEmail: committerEmail,
 					})
 					if err != nil {
 						return finalResult, fmt.Errorf("failed to perform final merge: %w", err)

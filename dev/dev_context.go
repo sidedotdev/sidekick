@@ -298,6 +298,19 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		RepoConfig:  repoConfig,
 	}
 
+	// Fetch and store git user config for commit authorship
+	if v := workflow.GetVersion(ctx, "git-user-config-in-global-state", workflow.DefaultVersion, 1); v >= 1 {
+		var gitUserConfig git.GitUserConfig
+		err = workflow.ExecuteActivity(ctx, git.GetGitUserConfigActivity, envContainer).Get(ctx, &gitUserConfig)
+		if err != nil {
+			// Log but don't fail - the activity will fall back to git config lookup
+			log.Warn().Err(err).Msg("Failed to get git user config, will fall back to git config lookup")
+		} else {
+			eCtx.GlobalState.SetValue("committerName", gitUserConfig.Name)
+			eCtx.GlobalState.SetValue("committerEmail", gitUserConfig.Email)
+		}
+	}
+
 	return devCtx, nil
 }
 
