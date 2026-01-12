@@ -355,7 +355,8 @@ func (a *DevRunActivities) startCommand(
 				Sequence:  nextSeq(),
 				Timestamp: time.Now().UnixMilli(),
 			}
-			if err := a.Streamer.AddFlowEvent(ctx, devRunCtx.WorkspaceId, devRunCtx.FlowId, outputEvent); err != nil {
+			// Use background context since this runs after the activity returns
+			if err := a.Streamer.AddFlowEvent(context.Background(), devRunCtx.WorkspaceId, devRunCtx.FlowId, outputEvent); err != nil {
 				log.Warn().Err(err).Str("stream", stream).Msg("Failed to emit DevRunOutputEvent")
 			}
 		}
