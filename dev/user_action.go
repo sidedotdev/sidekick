@@ -3,6 +3,7 @@ package dev
 import (
 	"sidekick/common"
 	"sidekick/flow_action"
+	"time"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -112,6 +113,25 @@ func handleDevRunStart(dCtx DevContext) {
 		// Store Dev Run instance in GlobalState (replayed on worker restart)
 		if startOutput.Started {
 			SetDevRunInstance(dCtx.ExecContext.GlobalState, startOutput.Instance)
+
+			// Start long-lived monitoring activity (non-blocking)
+			// This activity tails output, streams to JetStream, and heartbeats
+			monitorCtx := workflow.WithActivityOptions(dCtx, workflow.ActivityOptions{
+				StartToCloseTimeout: 24 * time.Hour,
+				HeartbeatTimeout:    30 * time.Second,
+			})
+			workflow.Go(dCtx, func(ctx workflow.Context) {
+				var monitorOutput MonitorDevRunOutput
+				err := workflow.ExecuteActivity(monitorCtx, dra.MonitorDevRun, MonitorDevRunInput{
+					DevRunConfig: dCtx.RepoConfig.DevRun,
+					CommandId:    commandId,
+					Context:      devRunCtx,
+					Instance:     startOutput.Instance,
+				}).Get(ctx, &monitorOutput)
+				if err != nil {
+					workflow.GetLogger(ctx).Debug("MonitorDevRun ended", "commandId", commandId, "error", err)
+				}
+			})
 		}
 	}
 }
