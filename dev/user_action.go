@@ -8,6 +8,11 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+// DevRunState represents the current state of dev runs for the query response.
+type DevRunState struct {
+	ActiveRuns map[string]*DevRunInstance `json:"activeRuns"`
+}
+
 // UserActionType defines the type for user actions.
 type UserActionType string
 
@@ -21,10 +26,24 @@ const (
 // QueryNameDevRunConfig is the name of the query for retrieving dev run configuration.
 const QueryNameDevRunConfig = "dev_run_config"
 
+// QueryNameDevRunState is the name of the query for retrieving current dev run state.
+const QueryNameDevRunState = "dev_run_state"
+
 // SetupDevRunConfigQuery registers a query handler that returns the dev run configuration.
 func SetupDevRunConfigQuery(dCtx DevContext) {
 	_ = workflow.SetQueryHandler(dCtx, QueryNameDevRunConfig, func() (common.DevRunConfig, error) {
 		return dCtx.RepoConfig.DevRun, nil
+	})
+}
+
+// SetupDevRunStateQuery registers a query handler that returns the current dev run state.
+func SetupDevRunStateQuery(dCtx DevContext) {
+	_ = workflow.SetQueryHandler(dCtx, QueryNameDevRunState, func() (DevRunState, error) {
+		entry := GetDevRunEntry(dCtx.ExecContext.GlobalState)
+		if entry == nil {
+			return DevRunState{ActiveRuns: make(map[string]*DevRunInstance)}, nil
+		}
+		return DevRunState{ActiveRuns: entry}, nil
 	})
 }
 
@@ -76,16 +95,11 @@ func handleDevRunStart(dCtx DevContext) {
 	// Start all configured dev run commands
 	for commandId := range dCtx.RepoConfig.DevRun.Commands {
 		// Check if this command is already active
+		var existingInstance *DevRunInstance
 		existingEntry := GetDevRunEntry(dCtx.ExecContext.GlobalState)
 		if existingEntry != nil {
 			if instance, ok := existingEntry[commandId]; ok {
-				// Check if the session is still alive
-				if IsSessionAlive(instance.SessionId) {
-					workflow.GetLogger(dCtx).Warn("Dev Run already active for command", "commandId", commandId)
-					continue
-				}
-				// Session exited naturally, clear stale instance
-				ClearDevRunInstance(dCtx.ExecContext.GlobalState, commandId)
+				existingInstance = instance
 			}
 		}
 
@@ -101,9 +115,10 @@ func handleDevRunStart(dCtx DevContext) {
 		var dra *DevRunActivities
 		var startOutput StartDevRunOutput
 		err := workflow.ExecuteActivity(dCtx, dra.StartDevRun, StartDevRunInput{
-			DevRunConfig: dCtx.RepoConfig.DevRun,
-			CommandId:    commandId,
-			Context:      devRunCtx,
+			DevRunConfig:     dCtx.RepoConfig.DevRun,
+			CommandId:        commandId,
+			Context:          devRunCtx,
+			ExistingInstance: existingInstance,
 		}).Get(dCtx, &startOutput)
 		if err != nil {
 			workflow.GetLogger(dCtx).Warn("Failed to start Dev Run", "commandId", commandId, "error", err)

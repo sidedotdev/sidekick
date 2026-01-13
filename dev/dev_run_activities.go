@@ -45,9 +45,10 @@ type DevRunContext struct {
 
 // StartDevRunInput contains the input for starting a Dev Run.
 type StartDevRunInput struct {
-	DevRunConfig common.DevRunConfig
-	CommandId    string
-	Context      DevRunContext
+	DevRunConfig     common.DevRunConfig
+	CommandId        string
+	Context          DevRunContext
+	ExistingInstance *DevRunInstance
 }
 
 // StartDevRunOutput contains the output from starting a Dev Run.
@@ -201,10 +202,36 @@ func ClearDevRunEntry(gs *flow_action.GlobalState) {
 }
 
 // StartDevRun starts a Dev Run by executing the configured start commands.
+// If an ExistingInstance is provided and the process is still alive, it reconnects
+// to the existing run instead of starting a new one.
 func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInput) (StartDevRunOutput, error) {
 	cmdConfig, ok := input.DevRunConfig.Commands[input.CommandId]
 	if !ok {
 		return StartDevRunOutput{}, fmt.Errorf("command ID %q not found in dev run config", input.CommandId)
+	}
+
+	// Recovery: if an existing instance is provided, check if it's still alive
+	if input.ExistingInstance != nil {
+		if IsSessionAlive(input.ExistingInstance.SessionId) {
+			// Process is still running - reconnect by returning the existing instance
+			log.Info().
+				Str("devRunId", input.ExistingInstance.DevRunId).
+				Str("commandId", input.CommandId).
+				Int("sessionId", input.ExistingInstance.SessionId).
+				Msg("Reconnecting to existing Dev Run process")
+
+			return StartDevRunOutput{
+				DevRunId: input.ExistingInstance.DevRunId,
+				Started:  true,
+				Instance: input.ExistingInstance,
+			}, nil
+		}
+		// Process is dead - log and proceed with fresh start
+		log.Info().
+			Str("devRunId", input.ExistingInstance.DevRunId).
+			Str("commandId", input.CommandId).
+			Int("sessionId", input.ExistingInstance.SessionId).
+			Msg("Existing Dev Run process is dead, starting fresh")
 	}
 
 	// Generate a new devRunId
