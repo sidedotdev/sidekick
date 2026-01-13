@@ -672,62 +672,6 @@ func terminateBySessionId(sessionId int, timeoutSeconds int) {
 	}
 }
 
-// terminateProcessGroupsByPgid terminates process groups by PGID.
-// Sends SIGINT, waits up to timeoutSeconds for exit, then sends SIGKILL if needed.
-func (a *DevRunActivities) terminateProcessGroupsByPgid(pgids []int, timeoutSeconds int) {
-	if len(pgids) == 0 {
-		return
-	}
-
-	// Send SIGINT to all process groups
-	for _, pgid := range pgids {
-		if err := syscall.Kill(-pgid, syscall.SIGINT); err != nil {
-			// ESRCH means process doesn't exist, which is fine
-			if err != syscall.ESRCH {
-				log.Warn().Err(err).Int("pgid", pgid).Msg("Failed to send SIGINT to process group")
-			}
-		}
-	}
-
-	if timeoutSeconds <= 0 {
-		timeoutSeconds = defaultStopTimeoutSeconds
-	}
-
-	// Poll for process exit, up to timeout
-	timeout := time.After(time.Duration(timeoutSeconds) * time.Second)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-timeout:
-			// Force kill remaining processes
-			for _, pgid := range pgids {
-				if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil {
-					if err != syscall.ESRCH {
-						log.Warn().Err(err).Int("pgid", pgid).Msg("Failed to send SIGKILL to process group")
-					}
-				}
-			}
-			// Brief wait for SIGKILL to take effect
-			time.Sleep(500 * time.Millisecond)
-			return
-		case <-ticker.C:
-			// Check if all processes have exited
-			allDone := true
-			for _, pgid := range pgids {
-				if err := syscall.Kill(-pgid, 0); err == nil {
-					allDone = false
-					break
-				}
-			}
-			if allDone {
-				return
-			}
-		}
-	}
-}
-
 // waitForProcesses waits for all processes to exit, with a maximum timeout.
 func (a *DevRunActivities) waitForProcesses(processes []*runningProcess, maxWait time.Duration) {
 	deadline := time.After(maxWait)
