@@ -1,10 +1,10 @@
 package dev
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -344,20 +344,30 @@ func (a *DevRunActivities) startCommand(
 		return seq
 	}
 
-	streamOutput := func(scanner *bufio.Scanner, stream string) {
-		for scanner.Scan() {
-			chunk := scanner.Text()
-			outputEvent := domain.DevRunOutputEvent{
-				EventType: domain.DevRunOutputEventType,
-				DevRunId:  devRunCtx.DevRunId,
-				Stream:    stream,
-				Chunk:     chunk,
-				Sequence:  nextSeq(),
-				Timestamp: time.Now().UnixMilli(),
+	streamOutput := func(reader io.Reader, stream string) {
+		buf := make([]byte, 4096)
+		for {
+			n, err := reader.Read(buf)
+			if n > 0 {
+				chunk := string(buf[:n])
+				outputEvent := domain.DevRunOutputEvent{
+					EventType: domain.DevRunOutputEventType,
+					DevRunId:  devRunCtx.DevRunId,
+					Stream:    stream,
+					Chunk:     chunk,
+					Sequence:  nextSeq(),
+					Timestamp: time.Now().UnixMilli(),
+				}
+				// Use background context since this runs after the activity returns
+				if err := a.Streamer.AddFlowEvent(context.Background(), devRunCtx.WorkspaceId, devRunCtx.FlowId, outputEvent); err != nil {
+					log.Warn().Err(err).Str("stream", stream).Msg("Failed to emit DevRunOutputEvent")
+				}
 			}
-			// Use background context since this runs after the activity returns
-			if err := a.Streamer.AddFlowEvent(context.Background(), devRunCtx.WorkspaceId, devRunCtx.FlowId, outputEvent); err != nil {
-				log.Warn().Err(err).Str("stream", stream).Msg("Failed to emit DevRunOutputEvent")
+			if err != nil {
+				if err != io.EOF {
+					log.Warn().Err(err).Str("stream", stream).Msg("Error reading stream")
+				}
+				break
 			}
 		}
 	}
@@ -367,14 +377,12 @@ func (a *DevRunActivities) startCommand(
 
 	go func() {
 		defer wg.Done()
-		scanner := bufio.NewScanner(stdout)
-		streamOutput(scanner, "stdout")
+		streamOutput(stdout, "stdout")
 	}()
 
 	go func() {
 		defer wg.Done()
-		scanner := bufio.NewScanner(stderr)
-		streamOutput(scanner, "stderr")
+		streamOutput(stderr, "stderr")
 	}()
 
 	// Wait for process completion in background

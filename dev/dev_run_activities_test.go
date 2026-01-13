@@ -128,17 +128,17 @@ func TestStartDevRun_EmitsStartedAndOutputEvents(t *testing.T) {
 	assert.Greater(t, startedEvent.Pid, 0)
 	assert.Greater(t, startedEvent.Pgid, 0)
 
-	// Check for at least one output event with "hello"
+	// Check for output containing "hello"
 	require.GreaterOrEqual(t, len(outputEvents), 1, "should have at least one DevRunOutputEvent")
-	foundHello := false
+	var stdoutContent string
 	for _, oe := range outputEvents {
 		assert.Equal(t, domain.DevRunOutputEventType, oe.EventType)
 		assert.Equal(t, output.DevRunId, oe.DevRunId)
-		if oe.Chunk == "hello" && oe.Stream == "stdout" {
-			foundHello = true
+		if oe.Stream == "stdout" {
+			stdoutContent += oe.Chunk
 		}
 	}
-	assert.True(t, foundHello, "should have output event with 'hello'")
+	assert.Contains(t, stdoutContent, "hello", "stdout should contain 'hello'")
 
 	// Clean up
 	activities.StopDevRun(context.Background(), StopDevRunInput{
@@ -484,15 +484,14 @@ func TestStartDevRun_EnvVarsPassedToCommand(t *testing.T) {
 	require.GreaterOrEqual(t, len(outputEvents), 1)
 
 	// Check that env vars were expanded in output
-	foundEnvOutput := false
-	expectedOutput := workspaceId + " " + flowId + " feature/env develop main"
+	var stdoutContent string
 	for _, oe := range outputEvents {
-		if oe.Stream == "stdout" && oe.Chunk == expectedOutput {
-			foundEnvOutput = true
-			break
+		if oe.Stream == "stdout" {
+			stdoutContent += oe.Chunk
 		}
 	}
-	assert.True(t, foundEnvOutput, "should have output with expanded env vars")
+	expectedOutput := workspaceId + " " + flowId + " feature/env develop main"
+	assert.Contains(t, stdoutContent, expectedOutput, "stdout should contain expanded env vars")
 
 	// Clean up
 	activities.StopDevRun(context.Background(), StopDevRunInput{
@@ -809,14 +808,13 @@ func TestStartDevRun_RelativeWorkingDir(t *testing.T) {
 
 	// The pwd output should show the resolved path (tmpDir/frontend)
 	require.GreaterOrEqual(t, len(outputEvents), 1)
-	foundExpectedPath := false
+	var stdoutContent string
 	for _, oe := range outputEvents {
-		if oe.Stream == "stdout" && oe.Chunk == resolvedSubDir {
-			foundExpectedPath = true
-			break
+		if oe.Stream == "stdout" {
+			stdoutContent += oe.Chunk
 		}
 	}
-	assert.True(t, foundExpectedPath, "expected pwd output to be %s, got events: %v", resolvedSubDir, outputEvents)
+	assert.Contains(t, stdoutContent, resolvedSubDir, "expected pwd output to contain %s, got: %s", resolvedSubDir, stdoutContent)
 
 	// Clean up
 	activities.StopDevRun(context.Background(), StopDevRunInput{
@@ -877,14 +875,13 @@ func TestStartDevRun_AbsoluteWorkingDir(t *testing.T) {
 
 	// The pwd output should show the absolute path
 	require.GreaterOrEqual(t, len(outputEvents), 1)
-	foundExpectedPath := false
+	var stdoutContent string
 	for _, oe := range outputEvents {
-		if oe.Stream == "stdout" && oe.Chunk == resolvedAbsDir {
-			foundExpectedPath = true
-			break
+		if oe.Stream == "stdout" {
+			stdoutContent += oe.Chunk
 		}
 	}
-	assert.True(t, foundExpectedPath, "expected pwd output to be %s, got events: %v", resolvedAbsDir, outputEvents)
+	assert.Contains(t, stdoutContent, resolvedAbsDir, "expected pwd output to contain %s, got: %s", resolvedAbsDir, stdoutContent)
 
 	// Clean up
 	activities.StopDevRun(context.Background(), StopDevRunInput{
