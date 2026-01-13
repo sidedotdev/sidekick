@@ -9,8 +9,11 @@ import (
 	"github.com/cbroglie/mustache"
 )
 
-func RenderPrompt(template *mustache.Template, data interface{}) string {
+func init() {
 	mustache.AllowMissingVariables = false
+}
+
+func RenderPrompt(template *mustache.Template, data interface{}) string {
 	result, err := template.Render(data)
 	if err != nil {
 		panic(err)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"sidekick/client"
@@ -34,12 +35,14 @@ type TaskMonitor struct {
 	workspaceID         string
 	taskID              string
 	current             TaskStatus
+	currentMu           sync.Mutex
 	statusChan          chan TaskStatus
 	progressChan        chan client.FlowAction
 	subflowChan         chan domain.Subflow
 	flowEventChan       chan domain.FlowEvent
 	toggleChan          chan DevRunOutputToggle
 	cancel              context.CancelFunc
+	cancelMu            sync.Mutex
 	TaskPollInterval    time.Duration
 	FlowPollInterval    time.Duration
 	devRunOutputCancel  context.CancelFunc
@@ -60,10 +63,34 @@ func (m *TaskMonitor) sendStatus(ctx context.Context, status TaskStatus) {
 
 // Stop cancels the task monitoring
 func (m *TaskMonitor) Stop() {
+	m.cancelMu.Lock()
+	defer m.cancelMu.Unlock()
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
 	}
+}
+
+// getCurrent returns the current task status safely
+func (m *TaskMonitor) getCurrent() TaskStatus {
+	m.currentMu.Lock()
+	defer m.currentMu.Unlock()
+	return m.current
+}
+
+// setCurrent sets the current task status safely
+func (m *TaskMonitor) setCurrent(status TaskStatus) {
+	m.currentMu.Lock()
+	defer m.currentMu.Unlock()
+	m.current = status
+}
+
+// setCurrentError sets an error on the current status safely
+func (m *TaskMonitor) setCurrentError(err error) TaskStatus {
+	m.currentMu.Lock()
+	defer m.currentMu.Unlock()
+	m.current.Error = err
+	return m.current
 }
 
 // NewTaskMonitor creates a new TaskMonitor instance
@@ -94,17 +121,21 @@ func (m *TaskMonitor) ToggleDevRunOutput(devRunId string, showOutput bool) {
 // Start begins monitoring the task, returning channels for status and progress updates
 func (m *TaskMonitor) Start(ctx context.Context) (<-chan TaskStatus, <-chan client.FlowAction, <-chan domain.Subflow, <-chan domain.FlowEvent) {
 	ctxWithCancel, cancel := context.WithCancel(ctx)
+	m.cancelMu.Lock()
 	m.cancel = cancel
+	m.cancelMu.Unlock()
 	go m.monitorTask(ctxWithCancel)
 	return m.statusChan, m.progressChan, m.subflowChan, m.flowEventChan
 }
 
 func (m *TaskMonitor) monitorTask(ctx context.Context) {
-	defer close(m.statusChan)
-	defer close(m.progressChan)
-	// Defers are LIFO, so Stop is called before closing channels, ensuring
-	// the polling goroutine is stopped before channels are closed.
-	defer m.Stop()
+	var wg sync.WaitGroup
+	defer func() {
+		m.Stop()
+		wg.Wait()
+		close(m.statusChan)
+		close(m.progressChan)
+	}()
 
 	// Initial task status check
 	task, err := m.client.GetTask(m.workspaceID, m.taskID)
@@ -112,8 +143,8 @@ func (m *TaskMonitor) monitorTask(ctx context.Context) {
 		m.sendStatus(ctx, TaskStatus{Error: fmt.Errorf("failed to get initial task status: %w", err)})
 		return
 	}
-	m.current = TaskStatus{Task: task}
-	m.sendStatus(ctx, m.current)
+	m.setCurrent(TaskStatus{Task: task})
+	m.sendStatus(ctx, m.getCurrent())
 
 	var flowId string
 	if len(task.Flows) > 0 {
@@ -127,11 +158,12 @@ func (m *TaskMonitor) monitorTask(ctx context.Context) {
 			if ctx.Err() != nil {
 				return // Context was cancelled
 			}
-			m.current = TaskStatus{
-				Task:  m.current.Task,
+			current := m.getCurrent()
+			m.setCurrent(TaskStatus{
+				Task:  current.Task,
 				Error: fmt.Errorf("no flow ID available after timeout"),
-			}
-			m.statusChan <- m.current
+			})
+			m.statusChan <- m.getCurrent()
 			return
 		}
 	}
@@ -141,7 +173,9 @@ func (m *TaskMonitor) monitorTask(ctx context.Context) {
 	m.currentFlowId = flowId
 
 	// Async monitor task status
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ticker := time.NewTicker(m.TaskPollInterval)
 		defer ticker.Stop()
 		for {
@@ -151,21 +185,21 @@ func (m *TaskMonitor) monitorTask(ctx context.Context) {
 			case <-ticker.C:
 				latestTask, err := m.client.GetTask(m.workspaceID, m.taskID)
 				if err != nil {
-					m.current.Error = err
-					m.sendStatus(ctx, m.current)
+					m.sendStatus(ctx, m.setCurrentError(err))
 					continue
 				}
 				if latestTask.Status != task.Status {
 					task = latestTask
-					m.current = TaskStatus{Task: task}
+					newStatus := TaskStatus{Task: task}
 					switch task.Status {
 					case domain.TaskStatusComplete, domain.TaskStatusFailed, domain.TaskStatusCanceled:
-						m.current.Finished = true
+						newStatus.Finished = true
 					default:
-						m.current.Finished = false
+						newStatus.Finished = false
 					}
-					m.sendStatus(ctx, m.current)
-					if m.current.Finished {
+					m.setCurrent(newStatus)
+					m.sendStatus(ctx, newStatus)
+					if newStatus.Finished {
 						m.Stop() // cancel context and thus flow events streaming
 						return
 					}
@@ -175,14 +209,18 @@ func (m *TaskMonitor) monitorTask(ctx context.Context) {
 	}()
 
 	// Start WebSocket connection for subflow status events
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		if err := m.streamSubflowStatusEvents(ctx, flowId); err != nil {
 			if ctx.Err() == nil {
-				m.current = TaskStatus{
-					Task:  m.current.Task,
+				current := m.getCurrent()
+				newStatus := TaskStatus{
+					Task:  current.Task,
 					Error: fmt.Errorf("subflow event stream error: %w", err),
 				}
-				m.sendStatus(ctx, m.current)
+				m.setCurrent(newStatus)
+				m.sendStatus(ctx, newStatus)
 			}
 		}
 	}()
@@ -205,11 +243,13 @@ func (m *TaskMonitor) monitorTask(ctx context.Context) {
 
 	// Start WebSocket connection for flow events
 	if err := m.streamFlowEvents(ctx, flowId); err != nil {
-		m.current = TaskStatus{
-			Task:  m.current.Task,
+		current := m.getCurrent()
+		newStatus := TaskStatus{
+			Task:  current.Task,
 			Error: fmt.Errorf("flow event stream error: %w", err),
 		}
-		m.sendStatus(ctx, m.current)
+		m.setCurrent(newStatus)
+		m.sendStatus(ctx, newStatus)
 	}
 }
 
@@ -223,18 +263,18 @@ func (m *TaskMonitor) waitForFlow(ctx context.Context) string {
 		case <-ctx.Done():
 			return ""
 		case <-timeout:
-			m.current.Error = errors.New("timeout when getting task by id")
-			m.statusChan <- m.current
+			m.statusChan <- m.setCurrentError(errors.New("timeout when getting task by id"))
 			return ""
 		case <-ticker.C:
 			task, err := m.client.GetTask(m.workspaceID, m.taskID)
 			if err != nil {
-				m.current.Error = err
+				m.setCurrentError(err)
 				continue
 			}
 			if len(task.Flows) > 0 {
-				m.current = TaskStatus{Task: task}
-				m.statusChan <- m.current
+				newStatus := TaskStatus{Task: task}
+				m.setCurrent(newStatus)
+				m.statusChan <- newStatus
 				return task.Flows[0].Id
 			}
 		}
