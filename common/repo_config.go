@@ -71,15 +71,22 @@ const (
 	KeyCurrentTargetBranch = "currentTargetBranch"
 )
 
+// DevRunCommandConfig configures a single named dev-run command.
+type DevRunCommandConfig struct {
+	// Start is the command to start the dev-run process.
+	Start CommandConfig `toml:"start"`
+
+	// Stop is an optional command to stop the dev-run process.
+	// If not specified, Sidekick will send SIGINT then SIGKILL after timeout.
+	Stop *CommandConfig `toml:"stop,omitempty"`
+}
+
 // DevRunConfig configures dev-run commands for manual QA in worktree environments.
 type DevRunConfig struct {
-	// Start contains commands to start the dev-run process(es).
-	// Commands are executed in order; if any fails, subsequent commands are not run.
-	Start []CommandConfig `toml:"start,omitempty"`
-
-	// Stop contains optional commands to stop the dev-run process(es).
-	// If empty, Sidekick will send SIGINT then SIGKILL after timeout.
-	Stop []CommandConfig `toml:"stop,omitempty"`
+	// Commands maps command IDs to their configurations.
+	// Each command ID can only have one instance running at a time,
+	// but multiple different command IDs can run in parallel.
+	Commands map[string]DevRunCommandConfig `toml:"commands,omitempty"`
 
 	// StopTimeoutSeconds is the time to wait after SIGINT before sending SIGKILL.
 	// Defaults to 10 seconds if not specified.

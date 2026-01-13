@@ -108,12 +108,13 @@ func TestConfigOverrides_ApplyToRepoConfig(t *testing.T) {
 	t.Run("dev run override", func(t *testing.T) {
 		t.Parallel()
 		config := RepoConfig{}
+		stopCmd := CommandConfig{Command: "pkill -f 'npm run dev'"}
 		devRun := DevRunConfig{
-			Start: []CommandConfig{
-				{Command: "npm run dev", WorkingDir: "frontend"},
-			},
-			Stop: []CommandConfig{
-				{Command: "pkill -f 'npm run dev'"},
+			Commands: map[string]DevRunCommandConfig{
+				"frontend": {
+					Start: CommandConfig{Command: "npm run dev", WorkingDir: "frontend"},
+					Stop:  &stopCmd,
+				},
 			},
 			StopTimeoutSeconds: 15,
 		}
@@ -122,10 +123,10 @@ func TestConfigOverrides_ApplyToRepoConfig(t *testing.T) {
 		overrides.ApplyToRepoConfig(&config)
 
 		assert.Equal(t, devRun, config.DevRun)
-		assert.Len(t, config.DevRun.Start, 1)
-		assert.Equal(t, "npm run dev", config.DevRun.Start[0].Command)
-		assert.Equal(t, "frontend", config.DevRun.Start[0].WorkingDir)
-		assert.Len(t, config.DevRun.Stop, 1)
+		assert.Len(t, config.DevRun.Commands, 1)
+		assert.Equal(t, "npm run dev", config.DevRun.Commands["frontend"].Start.Command)
+		assert.Equal(t, "frontend", config.DevRun.Commands["frontend"].Start.WorkingDir)
+		assert.NotNil(t, config.DevRun.Commands["frontend"].Stop)
 		assert.Equal(t, 15, config.DevRun.StopTimeoutSeconds)
 	})
 
@@ -133,21 +134,25 @@ func TestConfigOverrides_ApplyToRepoConfig(t *testing.T) {
 		t.Parallel()
 		config := RepoConfig{
 			DevRun: DevRunConfig{
-				Start:              []CommandConfig{{Command: "old command"}},
+				Commands: map[string]DevRunCommandConfig{
+					"old": {Start: CommandConfig{Command: "old command"}},
+				},
 				StopTimeoutSeconds: 5,
 			},
 		}
 		newDevRun := DevRunConfig{
-			Start:              []CommandConfig{{Command: "new command"}},
+			Commands: map[string]DevRunCommandConfig{
+				"new": {Start: CommandConfig{Command: "new command"}},
+			},
 			StopTimeoutSeconds: 30,
 		}
 		overrides := ConfigOverrides{DevRun: &newDevRun}
 
 		overrides.ApplyToRepoConfig(&config)
 
-		assert.Equal(t, "new command", config.DevRun.Start[0].Command)
+		assert.Equal(t, "new command", config.DevRun.Commands["new"].Start.Command)
 		assert.Equal(t, 30, config.DevRun.StopTimeoutSeconds)
-		assert.Empty(t, config.DevRun.Stop)
+		assert.NotContains(t, config.DevRun.Commands, "old")
 	})
 
 	t.Run("multiple overrides applied together", func(t *testing.T) {
@@ -159,7 +164,9 @@ func TestConfigOverrides_ApplyToRepoConfig(t *testing.T) {
 		newMission := "updated mission"
 		newMax := 50
 		devRun := DevRunConfig{
-			Start: []CommandConfig{{Command: "make dev"}},
+			Commands: map[string]DevRunCommandConfig{
+				"dev": {Start: CommandConfig{Command: "make dev"}},
+			},
 		}
 		overrides := ConfigOverrides{
 			Mission:       &newMission,
@@ -171,6 +178,6 @@ func TestConfigOverrides_ApplyToRepoConfig(t *testing.T) {
 
 		assert.Equal(t, "updated mission", config.Mission)
 		assert.Equal(t, 50, config.MaxIterations)
-		assert.Equal(t, "make dev", config.DevRun.Start[0].Command)
+		assert.Equal(t, "make dev", config.DevRun.Commands["dev"].Start.Command)
 	})
 }

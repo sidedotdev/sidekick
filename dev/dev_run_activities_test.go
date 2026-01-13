@@ -81,10 +81,11 @@ func TestStartDevRun_EmitsStartedAndOutputEvents(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "echo hello"},
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "echo hello"}},
 			},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -161,10 +162,11 @@ func TestStopDevRun_EmitsEndedAndEndStreamEvents(t *testing.T) {
 	// Start a long-running process
 	startInput := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "sleep 60"},
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "sleep 60"}},
 			},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -237,10 +239,11 @@ func TestStopDevRun_TimeoutEscalation(t *testing.T) {
 	// that runs the command directly (no intermediate script)
 	startInput := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "trap '' INT; while true; do sleep 1; done"},
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "trap '' INT; while true; do sleep 1; done"}},
 			},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -303,13 +306,19 @@ func TestStopDevRun_WithStopCommand(t *testing.T) {
 	workspaceId := "ws_stopcmd_" + t.Name()
 	flowId := "flow_stopcmd_" + t.Name()
 
+	stopCmd := common.CommandConfig{Command: "echo stopping"}
 	// Start a process
 	startInput := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "sleep 60"},
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {
+					Start: common.CommandConfig{Command: "sleep 60"},
+					Stop:  &stopCmd,
+				},
 			},
+			StopTimeoutSeconds: 2,
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -328,12 +337,8 @@ func TestStopDevRun_WithStopCommand(t *testing.T) {
 
 	// Stop with a custom stop command
 	stopInput := StopDevRunInput{
-		DevRunConfig: common.DevRunConfig{
-			Stop: []common.CommandConfig{
-				{Command: "echo stopping"},
-			},
-			StopTimeoutSeconds: 2,
-		},
+		DevRunConfig: startInput.DevRunConfig,
+		CommandId:    "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -363,6 +368,7 @@ func TestStopDevRun_Idempotent(t *testing.T) {
 	// Stop when nothing is running should succeed
 	stopInput := StopDevRunInput{
 		DevRunConfig: common.DevRunConfig{},
+		CommandId:    "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -390,10 +396,12 @@ func TestStartDevRun_FailsIfAlreadyActive(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "sleep 60"},
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "sleep 60"}},
 			},
+			StopTimeoutSeconds: 1,
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -412,7 +420,8 @@ func TestStartDevRun_FailsIfAlreadyActive(t *testing.T) {
 
 	// Clean up
 	activities.StopDevRun(context.Background(), StopDevRunInput{
-		DevRunConfig: common.DevRunConfig{StopTimeoutSeconds: 1},
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
 		Context:      input.Context,
 		Entry:        output1.Entry,
 	})
@@ -426,8 +435,9 @@ func TestStartDevRun_NoStartCommands(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{},
+			Commands: map[string]common.DevRunCommandConfig{},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId: "ws_nocmd_" + t.Name(),
 			FlowId:      "flow_nocmd_" + t.Name(),
@@ -437,7 +447,7 @@ func TestStartDevRun_NoStartCommands(t *testing.T) {
 
 	_, err := activities.StartDevRun(context.Background(), input)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no start commands")
+	assert.Contains(t, err.Error(), "command ID")
 }
 
 func TestStartDevRun_EnvVarsPassedToCommand(t *testing.T) {
@@ -452,10 +462,11 @@ func TestStartDevRun_EnvVarsPassedToCommand(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "echo $WORKSPACE_ID $FLOW_ID $SOURCE_BRANCH $BASE_BRANCH $TARGET_BRANCH"},
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "echo $WORKSPACE_ID $FLOW_ID $SOURCE_BRANCH $BASE_BRANCH $TARGET_BRANCH"}},
 			},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -584,10 +595,11 @@ func TestStartDevRun_ImmediateNonZeroExit(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "exit 1"},
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "exit 1"}},
 			},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -630,10 +642,11 @@ func TestStartDevRun_CommandNotFound(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "nonexistent_command_xyz_123"},
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "nonexistent_command_xyz_123"}},
 			},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -664,10 +677,11 @@ func TestStartDevRun_NaturalExitEmitsEndedEvent(t *testing.T) {
 	// Sleep must be longer than the immediate-failure detection window (1s)
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "sleep 1.5 && echo done"},
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "sleep 1.5 && echo done"}},
 			},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -720,10 +734,11 @@ func TestStartDevRun_NaturalNonZeroExitEmitsEndedEvent(t *testing.T) {
 	// Sleep must be longer than the immediate-failure detection window (1s)
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "sleep 1.5 && exit 42"},
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "sleep 1.5 && exit 42"}},
 			},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -777,10 +792,11 @@ func TestStartDevRun_RelativeWorkingDir(t *testing.T) {
 	// Use a relative WorkingDir - should be resolved against WorktreeDir
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "pwd", WorkingDir: "frontend"},
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "pwd", WorkingDir: "frontend"}},
 			},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -844,10 +860,11 @@ func TestStartDevRun_AbsoluteWorkingDir(t *testing.T) {
 	// Use an absolute WorkingDir - should be used as-is
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "pwd", WorkingDir: absDir},
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "pwd", WorkingDir: absDir}},
 			},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -904,10 +921,11 @@ func TestStopDevRun_DoesNotDoubleEmitIfAlreadyExited(t *testing.T) {
 	// Start a short-lived command
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "sleep 0.1"},
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "sleep 0.1"}},
 			},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -928,6 +946,7 @@ func TestStopDevRun_DoesNotDoubleEmitIfAlreadyExited(t *testing.T) {
 	// Now try to stop - should be idempotent
 	stopInput := StopDevRunInput{
 		DevRunConfig: common.DevRunConfig{},
+		CommandId:    "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
