@@ -122,7 +122,7 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 
 	if err != nil {
 		if contains(err.Error(), "overloaded_error") || contains(err.Error(), "Overloaded") {
-			t.Skipf("Skipping test due to API overload: %v", err)
+			t.Skipf("Skipping test due to Anthropic API being overloaded: %v", err)
 		}
 		t.Fatalf("Stream returned an error: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 
 		if err != nil {
 			if contains(err.Error(), "overloaded_error") || contains(err.Error(), "Overloaded") {
-				t.Skipf("Skipping test due to API overload: %v", err)
+				t.Skipf("Skipping multi-turn test due to Anthropic API being overloaded: %v", err)
 			}
 			t.Fatalf("Stream returned an error: %v", err)
 		}

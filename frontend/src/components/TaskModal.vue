@@ -130,6 +130,43 @@ const validateLlmConfig = (config: LLMConfig): boolean => {
   return true
 }
 
+const saveOrUpdatePreset = (options: { showAlert?: boolean } = {}): boolean => {
+  const { showAlert = false } = options
+  
+  if (!isAddPresetMode.value && !currentPresetId.value) return true
+  
+  const isValid = validateLlmConfig(llmConfig.value)
+  if (!isValid) {
+    if (showAlert) {
+      alert('Invalid configuration: Default config must have a provider selected, and any enabled use case must have a provider.')
+    }
+    return false
+  }
+  
+  const existingPresetIndex = presets.value.findIndex(p => p.id === currentPresetId.value)
+  
+  if (existingPresetIndex >= 0) {
+    presets.value[existingPresetIndex] = {
+      id: currentPresetId.value!,
+      name: newPresetName.value.trim(),
+      config: JSON.parse(JSON.stringify(llmConfig.value))
+    }
+  } else {
+    const newId = crypto.randomUUID()
+    currentPresetId.value = newId
+    const newPreset: ModelPreset = {
+      id: newId,
+      name: newPresetName.value.trim(),
+      config: JSON.parse(JSON.stringify(llmConfig.value))
+    }
+    presets.value.push(newPreset)
+    selectedPresetValue.value = newId
+  }
+  
+  savePresets(presets.value)
+  return true
+}
+
 const devMode = import.meta.env.MODE === 'development'
 const props = defineProps<{
   task?: Task
@@ -277,6 +314,7 @@ const findMatchingPreset = (): string => {
 }
 
 const selectedPresetValue = ref<string>(findMatchingPreset())
+const currentPresetId = ref<string | null>(null)
 const newPresetName = ref('')
 const llmConfig = ref<LLMConfig>(existingLlmConfig || {
   defaults: [{ provider: '', model: '', reasoningEffort: '' }],
@@ -304,6 +342,7 @@ const isAddPresetMode = computed(() => selectedPresetValue.value === 'add_preset
 
 const handlePresetChange = (value: string) => {
   selectedPresetValue.value = value
+  currentPresetId.value = null
   if (value !== 'default' && value !== 'add_preset') {
     const preset = presets.value.find(p => p.id === value)
     if (preset) {
@@ -378,6 +417,8 @@ const autoSave = async () => {
   isSaving.value = true
   isDirty.value = false
   saveStatus.value = 'saving'
+
+  saveOrUpdatePreset()
 
   const taskData = {
     description: description.value,
@@ -455,21 +496,8 @@ const startTask = async () => {
     return
   }
 
-  // Validate and save new preset if in add preset mode
-  if (isAddPresetMode.value) {
-    if (!validateLlmConfig(llmConfig.value)) {
-      alert('Invalid configuration: Default config must have a provider selected, and any enabled use case must have a provider.')
-      return
-    }
-    
-    const newPreset: ModelPreset = {
-      id: crypto.randomUUID(),
-      name: newPresetName.value.trim(),
-      config: JSON.parse(JSON.stringify(llmConfig.value))
-    }
-    presets.value.push(newPreset)
-    savePresets(presets.value)
-    selectedPresetValue.value = newPreset.id
+  if (!saveOrUpdatePreset({ showAlert: true })) {
+    return
   }
 
   // Cancel any pending auto-save
