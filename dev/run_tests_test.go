@@ -12,6 +12,7 @@ import (
 	"sidekick/secret_manager"
 	"sidekick/srv"
 	"sidekick/utils"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -330,6 +331,7 @@ func (s *RunTestsTestSuite) TestRunTestsWithMultipleCommandsPartialActivityError
 	}
 	s.devContext.ExecContext.DisableHumanInTheLoop = false
 
+	var mu sync.Mutex
 	flakyCallCounts := map[string]int{}
 	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
 		return input.Args[2] == "passing command"
@@ -342,8 +344,11 @@ func (s *RunTestsTestSuite) TestRunTestsWithMultipleCommandsPartialActivityError
 		return input.Args[2] == "flaky command 1"
 	})).Return(
 		func(ctx context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
+			mu.Lock()
 			flakyCallCounts["flaky1"]++
-			if flakyCallCounts["flaky1"] == 1 {
+			count := flakyCallCounts["flaky1"]
+			mu.Unlock()
+			if count == 1 {
 				return env.EnvRunCommandActivityOutput{}, errors.New("timeout error 1")
 			}
 			return env.EnvRunCommandActivityOutput{
@@ -357,8 +362,11 @@ func (s *RunTestsTestSuite) TestRunTestsWithMultipleCommandsPartialActivityError
 		return input.Args[2] == "flaky command 2"
 	})).Return(
 		func(ctx context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
+			mu.Lock()
 			flakyCallCounts["flaky2"]++
-			if flakyCallCounts["flaky2"] == 1 {
+			count := flakyCallCounts["flaky2"]
+			mu.Unlock()
+			if count == 1 {
 				return env.EnvRunCommandActivityOutput{}, errors.New("timeout error 2")
 			}
 			return env.EnvRunCommandActivityOutput{
@@ -397,8 +405,12 @@ func (s *RunTestsTestSuite) TestRunTestsWithMultipleCommandsPartialActivityError
 	s.NoError(s.env.GetWorkflowResult(&result))
 	s.True(result.TestsPassed)
 	// Both flaky commands should have been called twice (initial + retry)
-	s.Equal(2, flakyCallCounts["flaky1"])
-	s.Equal(2, flakyCallCounts["flaky2"])
+	mu.Lock()
+	flaky1Count := flakyCallCounts["flaky1"]
+	flaky2Count := flakyCallCounts["flaky2"]
+	mu.Unlock()
+	s.Equal(2, flaky1Count)
+	s.Equal(2, flaky2Count)
 }
 
 func (s *RunTestsTestSuite) TestRunTestsWithMultipleCommandsPartialActivityError() {

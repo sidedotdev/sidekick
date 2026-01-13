@@ -57,7 +57,6 @@ func (s *StreamerTestSuite) TearDownSuite() {
 }
 
 func (s *StreamerTestSuite) TestTaskStreaming() {
-	s.T().Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	workspaceId := "test-workspace"
@@ -146,8 +145,6 @@ func (s *StreamerTestSuite) TestTaskStreaming() {
 
 // Test end-to-end flow action streaming with new-only (default) behavior
 func (s *StreamerTestSuite) TestFlowActionStreaming() {
-	s.T().Parallel()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -277,8 +274,6 @@ func (s *StreamerTestSuite) TestFlowActionStreaming() {
 }
 
 func (s *StreamerTestSuite) TestFlowEventStreaming() {
-	s.T().Parallel()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -346,8 +341,6 @@ func (s *StreamerTestSuite) TestFlowEventStreaming() {
 }
 
 func (s *StreamerTestSuite) TestFlowEventStreaming_InvalidFlowEvent() {
-	s.T().Parallel()
-
 	ctx := context.Background()
 	flowId := "test-flow-2"
 	workspaceId := "test-workspace2"
@@ -371,8 +364,6 @@ func (s *StreamerTestSuite) TestFlowEventStreaming_InvalidFlowEvent() {
 }
 
 func (s *StreamerTestSuite) TestFlowEventStreaming_Cancellation() {
-	s.T().Parallel()
-
 	flowId := "test-flow-3"
 	workspaceId := "test-workspace3"
 
@@ -392,6 +383,5 @@ func (s *StreamerTestSuite) TestFlowEventStreaming_Cancellation() {
 }
 
 func TestStreamerSuite(t *testing.T) {
-	t.Parallel()
 	suite.Run(t, new(StreamerTestSuite))
 }

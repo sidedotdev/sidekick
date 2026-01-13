@@ -2076,12 +2076,17 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	}
 
 	// Start a goroutine to add the events over time, simulating a real-time scenario
+	addErrCh := make(chan error, len(flowEvents))
 	go func() {
+		defer close(addErrCh)
 		for _, event := range flowEvents {
 			time.Sleep(100 * time.Millisecond)
-			err = ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, event)
+			addErr := ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, event)
 			fmt.Printf("Added event: %v\n", event)
-			assert.NoError(t, err, "Failed to add flow event")
+			if addErr != nil {
+				addErrCh <- addErr
+				return
+			}
 		}
 	}()
 
@@ -2123,6 +2128,11 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 			t.Logf("Received event: %+v", receivedEvent)
 			receivedEvents = append(receivedEvents, receivedEvent)
 		}
+	}
+
+	// Check for errors from the goroutine
+	for addErr := range addErrCh {
+		assert.NoError(t, addErr, "Failed to add flow event")
 	}
 
 	// Assert if the flow events match the expected structure/content
@@ -2236,10 +2246,12 @@ func TestTaskChangesWebsocketHandler(t *testing.T) {
 		Status:      domain.TaskStatusComplete,
 		StreamId:    "stream_id_2",
 	}
+	persistErrCh := make(chan error, 1)
 	go func() {
 		time.Sleep(time.Millisecond)
-		err = db.PersistTask(ctx, task2)
-		assert.NoError(t, err, "Persisting task 2 failed")
+		persistErr := db.PersistTask(ctx, task2)
+		persistErrCh <- persistErr
+		close(persistErrCh)
 	}()
 
 	// Verify if the task is streamed correctly
@@ -2269,6 +2281,11 @@ func TestTaskChangesWebsocketHandler(t *testing.T) {
 		lastTaskStreamId, ok := response["lastTaskStreamId"].(string)
 		assert.True(t, ok, "lastTaskStreamId is not a string")
 		assert.Equal(t, "stream_id_2", lastTaskStreamId, "unexpected lastTaskStreamId")
+	}
+
+	// Check for errors from the goroutine
+	if persistErr := <-persistErrCh; persistErr != nil {
+		assert.NoError(t, persistErr, "Persisting task 2 failed")
 	}
 
 	// Assert if the task matches the expected structure/content
