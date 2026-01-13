@@ -6,6 +6,7 @@ import type { Task } from '../../lib/models'
 import { nextTick } from 'process'
 import { wrap } from 'module'
 import { h } from 'vue'
+import { invalidatePresetsCache } from '../../lib/llmPresetStorage'
 
 config.global.plugins.push(PrimeVue)
 
@@ -13,6 +14,9 @@ const mockStore = vi.hoisted(() => ({
   workspaceId: 'test-workspace-id',
   getBranchCache: () => null,
   setBranchCache: () => {},
+  getModelsCache: () => null,
+  setModelsCache: () => {},
+  isModelsCacheStale: () => true,
 }))
 
 vi.mock('../../lib/store', () => ({
@@ -63,6 +67,13 @@ const DropdownStub = {
   </select>`
 }
 
+const LlmConfigEditorStub = {
+  name: 'LlmConfigEditor',
+  props: ['modelValue'],
+  emits: ['update:modelValue'],
+  template: '<div class="llm-config-editor-stub"></div>'
+}
+
 describe('TaskModal', () => {
   let wrapper: VueWrapper
 
@@ -77,7 +88,8 @@ describe('TaskModal', () => {
       props,
       global: {
         stubs: {
-          Dropdown: DropdownStub
+          Dropdown: DropdownStub,
+          LlmConfigEditor: LlmConfigEditorStub
         }
       }
     })
@@ -658,6 +670,388 @@ describe('TaskModal localStorage behavior', () => {
       
       expect((wrapper.vm as any).description).toBe('Second value')
       vi.useRealTimers()
+    })
+  })
+
+  describe('model preset management', () => {
+    beforeEach(() => {
+      localStorage.clear()
+      sessionStorage.clear()
+      invalidatePresetsCache()
+      vi.clearAllMocks()
+    })
+
+    afterEach(() => {
+      localStorage.clear()
+      sessionStorage.clear()
+      invalidatePresetsCache()
+    })
+
+    it('creates a new preset when in add preset mode', async () => {
+      const wrapper = mount(TaskModal, {
+        global: {
+          stubs: {
+            Dropdown: DropdownStub,
+            LlmConfigEditor: LlmConfigEditorStub
+          }
+        }
+      })
+      const vm = wrapper.vm as any
+
+      vm.selectedPresetValue = 'add_preset'
+      vm.newPresetName = 'My Custom Preset'
+      vm.llmConfig = {
+        defaults: [{ provider: 'anthropic', model: 'claude-3-5-sonnet-20241022', reasoningEffort: '' }],
+        useCaseConfigs: {}
+      }
+
+      await wrapper.vm.$nextTick()
+
+      const result = vm.saveOrUpdatePreset()
+      expect(result).toBe(true)
+
+      const savedPresets = JSON.parse(localStorage.getItem('sidekick_model_presets') || '[]')
+      expect(savedPresets).toHaveLength(1)
+      expect(savedPresets[0].name).toBe('My Custom Preset')
+      expect(savedPresets[0].config.defaults[0].provider).toBe('anthropic')
+      expect(vm.currentPresetId).toBeTruthy()
+      expect(vm.selectedPresetValue).toBe(vm.currentPresetId)
+    })
+
+    it('updates an existing preset when currentPresetId is set', async () => {
+      const existingPreset = {
+        id: 'preset-123',
+        name: 'Original Name',
+        config: {
+          defaults: [{ provider: 'anthropic', model: 'claude-3-5-sonnet-20241022', reasoningEffort: '' }],
+          useCaseConfigs: {}
+        }
+      }
+      localStorage.setItem('sidekick_model_presets', JSON.stringify([existingPreset]))
+
+      const wrapper = mount(TaskModal, {
+        global: {
+          stubs: {
+            Dropdown: DropdownStub,
+            LlmConfigEditor: LlmConfigEditorStub
+          }
+        }
+      })
+      const vm = wrapper.vm as any
+
+      vm.presets = [existingPreset]
+      vm.selectedPresetValue = 'add_preset'
+      vm.currentPresetId = 'preset-123'
+      vm.newPresetName = 'Updated Name'
+      vm.llmConfig = {
+        defaults: [{ provider: 'openai', model: 'gpt-4', reasoningEffort: '' }],
+        useCaseConfigs: {}
+      }
+
+      await wrapper.vm.$nextTick()
+
+      const result = vm.saveOrUpdatePreset()
+      expect(result).toBe(true)
+
+      const savedPresets = JSON.parse(localStorage.getItem('sidekick_model_presets') || '[]')
+      expect(savedPresets).toHaveLength(1)
+      expect(savedPresets[0].id).toBe('preset-123')
+      expect(savedPresets[0].name).toBe('Updated Name')
+      expect(savedPresets[0].config.defaults[0].provider).toBe('openai')
+    })
+
+    it('validates config when validate option is true', async () => {
+      const wrapper = mount(TaskModal, {
+        global: {
+          stubs: {
+            Dropdown: DropdownStub,
+            LlmConfigEditor: LlmConfigEditorStub
+          }
+        }
+      })
+      const vm = wrapper.vm as any
+
+      vm.selectedPresetValue = 'add_preset'
+      vm.newPresetName = 'Invalid Preset'
+      vm.llmConfig = {
+        defaults: [{ provider: '', model: '', reasoningEffort: '' }],
+        useCaseConfigs: {}
+      }
+
+      await wrapper.vm.$nextTick()
+
+      const result = vm.saveOrUpdatePreset({ showAlert: true })
+      expect(result).toBe(false)
+      expect(window.alert).toHaveBeenCalledWith(
+        'Invalid configuration: Default config must have a provider selected, and any enabled use case must have a provider.'
+      )
+
+      const savedPresets = JSON.parse(localStorage.getItem('sidekick_model_presets') || '[]')
+      expect(savedPresets).toHaveLength(0)
+    })
+
+    it('validates without showing alert when showAlert is false', async () => {
+      const wrapper = mount(TaskModal, {
+        global: {
+          stubs: {
+            Dropdown: DropdownStub,
+            LlmConfigEditor: LlmConfigEditorStub
+          }
+        }
+      })
+      const vm = wrapper.vm as any
+
+      vm.selectedPresetValue = 'add_preset'
+      vm.newPresetName = 'Incomplete Preset'
+      vm.llmConfig = {
+        defaults: [{ provider: '', model: '', reasoningEffort: '' }],
+        useCaseConfigs: {}
+      }
+
+      await wrapper.vm.$nextTick()
+
+      const result = vm.saveOrUpdatePreset({ showAlert: false })
+      expect(result).toBe(false)
+      expect(window.alert).not.toHaveBeenCalled()
+
+      const savedPresets = JSON.parse(localStorage.getItem('sidekick_model_presets') || '[]')
+      expect(savedPresets).toHaveLength(0)
+    })
+
+    it('returns true when not in add preset mode', async () => {
+      const wrapper = mount(TaskModal, {
+        global: {
+          stubs: {
+            Dropdown: DropdownStub,
+            LlmConfigEditor: LlmConfigEditorStub
+          }
+        }
+      })
+      const vm = wrapper.vm as any
+
+      vm.selectedPresetValue = 'default'
+
+      const result = vm.saveOrUpdatePreset()
+      expect(result).toBe(true)
+
+      const savedPresets = JSON.parse(localStorage.getItem('sidekick_model_presets') || '[]')
+      expect(savedPresets).toHaveLength(0)
+    })
+
+    it('validates use case configs', async () => {
+      const wrapper = mount(TaskModal, {
+        global: {
+          stubs: {
+            Dropdown: DropdownStub,
+            LlmConfigEditor: LlmConfigEditorStub
+          }
+        }
+      })
+      const vm = wrapper.vm as any
+
+      vm.selectedPresetValue = 'add_preset'
+      vm.newPresetName = 'Invalid Use Case'
+      vm.llmConfig = {
+        defaults: [{ provider: 'anthropic', model: 'claude-3-5-sonnet-20241022', reasoningEffort: '' }],
+        useCaseConfigs: {
+          'code_editing': [{ provider: '', model: '', reasoningEffort: '' }]
+        }
+      }
+
+      await wrapper.vm.$nextTick()
+
+      const result = vm.saveOrUpdatePreset({ showAlert: true })
+      expect(result).toBe(false)
+      expect(window.alert).toHaveBeenCalled()
+    })
+
+    it('auto-saves preset during auto-save', async () => {
+      vi.useFakeTimers()
+      const fetchMock = vi.fn().mockResolvedValue({ 
+        ok: true, 
+        json: () => Promise.resolve({ task: { id: 'new-task-id' } }) 
+      })
+      global.fetch = fetchMock
+
+      const wrapper = mount(TaskModal, {
+        global: {
+          stubs: {
+            Dropdown: DropdownStub,
+            LlmConfigEditor: LlmConfigEditorStub
+          }
+        }
+      })
+      const vm = wrapper.vm as any
+
+      vm.selectedPresetValue = 'add_preset'
+      vm.newPresetName = 'Auto-saved Preset'
+      vm.llmConfig = {
+        defaults: [{ provider: 'anthropic', model: 'claude-3-5-sonnet-20241022', reasoningEffort: '' }],
+        useCaseConfigs: {}
+      }
+
+      const textarea = wrapper.find('textarea')
+      await textarea.setValue('Task description')
+      await wrapper.vm.$nextTick()
+
+      vi.advanceTimersByTime(1600)
+      await flushPromises()
+
+      const savedPresets = JSON.parse(localStorage.getItem('sidekick_model_presets') || '[]')
+      expect(savedPresets).toHaveLength(1)
+      expect(savedPresets[0].name).toBe('Auto-saved Preset')
+
+      vi.useRealTimers()
+    })
+
+    it('updates preset in-place during subsequent auto-saves', async () => {
+      vi.useFakeTimers()
+      const fetchMock = vi.fn().mockResolvedValue({ 
+        ok: true, 
+        json: () => Promise.resolve({ task: { id: 'new-task-id' } }) 
+      })
+      global.fetch = fetchMock
+
+      const wrapper = mount(TaskModal, {
+        global: {
+          stubs: {
+            Dropdown: DropdownStub,
+            LlmConfigEditor: LlmConfigEditorStub
+          }
+        }
+      })
+      const vm = wrapper.vm as any
+
+      vm.selectedPresetValue = 'add_preset'
+      vm.newPresetName = 'Initial Name'
+      vm.llmConfig = {
+        defaults: [{ provider: 'anthropic', model: 'claude-3-5-sonnet-20241022', reasoningEffort: '' }],
+        useCaseConfigs: {}
+      }
+
+      const textarea = wrapper.find('textarea')
+      await textarea.setValue('Task description')
+      await wrapper.vm.$nextTick()
+
+      vi.advanceTimersByTime(1600)
+      await flushPromises()
+
+      const firstSave = JSON.parse(localStorage.getItem('sidekick_model_presets') || '[]')
+      expect(firstSave).toHaveLength(1)
+      const presetId = firstSave[0].id
+      expect(vm.currentPresetId).toBe(presetId)
+      expect(vm.presets).toHaveLength(1)
+      expect(vm.presets[0].id).toBe(presetId)
+
+      vm.newPresetName = 'Updated Name'
+      await textarea.setValue('Task description updated')
+      await wrapper.vm.$nextTick()
+
+      vi.advanceTimersByTime(1600)
+      await flushPromises()
+
+      const secondSave = JSON.parse(localStorage.getItem('sidekick_model_presets') || '[]')
+      expect(secondSave).toHaveLength(1)
+      expect(secondSave[0].id).toBe(presetId)
+      expect(secondSave[0].name).toBe('Updated Name')
+
+      vi.useRealTimers()
+    })
+
+    it('resets currentPresetId when changing preset selection', async () => {
+      const existingPreset = {
+        id: 'preset-456',
+        name: 'Existing Preset',
+        config: {
+          defaults: [{ provider: 'anthropic', model: 'claude-3-5-sonnet-20241022', reasoningEffort: '' }],
+          useCaseConfigs: {}
+        }
+      }
+      localStorage.setItem('sidekick_model_presets', JSON.stringify([existingPreset]))
+
+      const wrapper = mount(TaskModal, {
+        global: {
+          stubs: {
+            Dropdown: DropdownStub,
+            LlmConfigEditor: LlmConfigEditorStub
+          }
+        }
+      })
+      const vm = wrapper.vm as any
+
+      vm.currentPresetId = 'preset-123'
+      vm.handlePresetChange('preset-456')
+
+      expect(vm.currentPresetId).toBeNull()
+      expect(vm.selectedPresetValue).toBe('preset-456')
+    })
+
+    it('validates and saves preset on startTask', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ 
+        ok: true, 
+        json: () => Promise.resolve({ id: 'new-task-id' }) 
+      })
+      global.fetch = fetchMock
+
+      const wrapper = mount(TaskModal, {
+        global: {
+          stubs: {
+            Dropdown: DropdownStub,
+            LlmConfigEditor: LlmConfigEditorStub
+          }
+        }
+      })
+      const vm = wrapper.vm as any
+
+      vm.description = 'Test task'
+      vm.selectedPresetValue = 'add_preset'
+      vm.newPresetName = 'Start Task Preset'
+      vm.llmConfig = {
+        defaults: [{ provider: 'anthropic', model: 'claude-3-5-sonnet-20241022', reasoningEffort: '' }],
+        useCaseConfigs: {}
+      }
+
+      await wrapper.vm.$nextTick()
+      await vm.startTask()
+      await flushPromises()
+
+      const savedPresets = JSON.parse(localStorage.getItem('sidekick_model_presets') || '[]')
+      expect(savedPresets).toHaveLength(1)
+      expect(savedPresets[0].name).toBe('Start Task Preset')
+      expect(fetchMock).toHaveBeenCalled()
+    })
+
+    it('prevents startTask when preset validation fails', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ 
+        ok: true, 
+        json: () => Promise.resolve({ id: 'new-task-id' }) 
+      })
+      global.fetch = fetchMock
+
+      const wrapper = mount(TaskModal, {
+        global: {
+          stubs: {
+            Dropdown: DropdownStub,
+            LlmConfigEditor: LlmConfigEditorStub
+          }
+        }
+      })
+      const vm = wrapper.vm as any
+
+      vm.description = 'Test task'
+      vm.selectedPresetValue = 'add_preset'
+      vm.newPresetName = 'Invalid Preset'
+      vm.llmConfig = {
+        defaults: [{ provider: '', model: '', reasoningEffort: '' }],
+        useCaseConfigs: {}
+      }
+
+      await wrapper.vm.$nextTick()
+      await vm.startTask()
+      await flushPromises()
+
+      expect(window.alert).toHaveBeenCalled()
+      expect(fetchMock).not.toHaveBeenCalled()
     })
   })
 })
