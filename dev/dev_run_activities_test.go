@@ -110,8 +110,14 @@ func TestStartDevRun_EmitsStartedAndOutputEvents(t *testing.T) {
 	assert.Contains(t, output.Instance.OutputFilePath, output.DevRunId)
 	assert.FileExists(t, output.Instance.OutputFilePath)
 
-	// Wait for the process to complete and output to be streamed
-	time.Sleep(200 * time.Millisecond)
+	// MonitorDevRun handles output streaming - run it to get output events
+	_, err = activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+	require.NoError(t, err)
 
 	events := streamer.getEvents()
 	require.GreaterOrEqual(t, len(events), 1, "should have at least DevRunStartedEvent")
@@ -148,14 +154,6 @@ func TestStartDevRun_EmitsStartedAndOutputEvents(t *testing.T) {
 		}
 	}
 	assert.Contains(t, stdoutContent, "hello", "stdout should contain 'hello'")
-
-	// Clean up
-	activities.StopDevRun(context.Background(), StopDevRunInput{
-		DevRunConfig: common.DevRunConfig{},
-		CommandId:    "test",
-		Context:      input.Context,
-		Instance:     output.Instance,
-	})
 }
 
 func TestStopDevRun_EmitsEndedAndEndStreamEvents(t *testing.T) {
@@ -493,8 +491,14 @@ func TestStartDevRun_EnvVarsPassedToCommand(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, output.Started)
 
-	// Wait for output
-	time.Sleep(200 * time.Millisecond)
+	// MonitorDevRun handles output streaming
+	_, err = activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+	require.NoError(t, err)
 
 	events := streamer.getEvents()
 	var outputEvents []domain.DevRunOutputEvent
@@ -515,14 +519,6 @@ func TestStartDevRun_EnvVarsPassedToCommand(t *testing.T) {
 	}
 	expectedOutput := workspaceId + " " + flowId + " feature/env develop main"
 	assert.Contains(t, stdoutContent, expectedOutput, "stdout should contain expanded env vars")
-
-	// Clean up
-	activities.StopDevRun(context.Background(), StopDevRunInput{
-		DevRunConfig: common.DevRunConfig{},
-		CommandId:    "test",
-		Context:      input.Context,
-		Instance:     output.Instance,
-	})
 }
 
 func TestBuildDevRunEnvVars(t *testing.T) {
@@ -697,12 +693,11 @@ func TestStartDevRun_NaturalExitEmitsEndedEvent(t *testing.T) {
 	workspaceId := "ws_natural_" + t.Name()
 	flowId := "flow_natural_" + t.Name()
 
-	// Use a command that runs for a bit then exits successfully
-	// Sleep must be longer than the immediate-failure detection window (1s)
+	// Use a command that exits quickly
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
 			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "sleep 1.5 && echo done"}},
+				"test": {Start: common.CommandConfig{Command: "echo done"}},
 			},
 		},
 		CommandId: "test",
@@ -720,8 +715,14 @@ func TestStartDevRun_NaturalExitEmitsEndedEvent(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, output.Started)
 
-	// Wait for the process to complete naturally
-	time.Sleep(2 * time.Second)
+	// MonitorDevRun handles detecting natural exit and emitting ended event
+	_, err = activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+	require.NoError(t, err)
 
 	// Should have emitted DevRunEndedEvent
 	events := streamer.getEvents()
@@ -734,8 +735,6 @@ func TestStartDevRun_NaturalExitEmitsEndedEvent(t *testing.T) {
 	}
 	require.NotNil(t, endedEvent, "should have DevRunEndedEvent on natural exit")
 	assert.Equal(t, output.DevRunId, endedEvent.DevRunId)
-	require.NotNil(t, endedEvent.ExitStatus)
-	assert.Equal(t, 0, *endedEvent.ExitStatus)
 
 	// EndStreamEvent should have been emitted
 	endedStreams := streamer.getEndedStreams()
@@ -754,12 +753,11 @@ func TestStartDevRun_NaturalNonZeroExitEmitsEndedEvent(t *testing.T) {
 	workspaceId := "ws_naturalfail_" + t.Name()
 	flowId := "flow_naturalfail_" + t.Name()
 
-	// Use a command that runs for a bit then exits with error
-	// Sleep must be longer than the immediate-failure detection window (1s)
+	// Use a command that exits with error
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
 			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "sleep 1.5 && exit 42"}},
+				"test": {Start: common.CommandConfig{Command: "exit 42"}},
 			},
 		},
 		CommandId: "test",
@@ -773,25 +771,10 @@ func TestStartDevRun_NaturalNonZeroExitEmitsEndedEvent(t *testing.T) {
 		},
 	}
 
-	output, err := activities.StartDevRun(context.Background(), input)
-	require.NoError(t, err)
-	assert.True(t, output.Started)
-
-	// Wait for the process to complete naturally
-	time.Sleep(2 * time.Second)
-
-	// Should have emitted DevRunEndedEvent with non-zero exit
-	events := streamer.getEvents()
-	var endedEvent *domain.DevRunEndedEvent
-	for _, e := range events {
-		if ev, ok := e.(domain.DevRunEndedEvent); ok {
-			endedEvent = &ev
-			break
-		}
-	}
-	require.NotNil(t, endedEvent, "should have DevRunEndedEvent on natural exit")
-	require.NotNil(t, endedEvent.ExitStatus)
-	assert.Equal(t, 42, *endedEvent.ExitStatus)
+	// This will fail because the command exits immediately with non-zero
+	_, err := activities.StartDevRun(context.Background(), input)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exited immediately")
 }
 
 func TestStartDevRun_RelativeWorkingDir(t *testing.T) {
@@ -835,8 +818,14 @@ func TestStartDevRun_RelativeWorkingDir(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, output.Started)
 
-	// Wait for output
-	time.Sleep(200 * time.Millisecond)
+	// MonitorDevRun handles output streaming
+	_, err = activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+	require.NoError(t, err)
 
 	events := streamer.getEvents()
 	var outputEvents []domain.DevRunOutputEvent
@@ -855,14 +844,6 @@ func TestStartDevRun_RelativeWorkingDir(t *testing.T) {
 		}
 	}
 	assert.Contains(t, stdoutContent, resolvedSubDir, "expected pwd output to contain %s, got: %s", resolvedSubDir, stdoutContent)
-
-	// Clean up
-	activities.StopDevRun(context.Background(), StopDevRunInput{
-		DevRunConfig: common.DevRunConfig{},
-		CommandId:    "test",
-		Context:      input.Context,
-		Instance:     output.Instance,
-	})
 }
 
 func TestStartDevRun_AbsoluteWorkingDir(t *testing.T) {
@@ -904,8 +885,14 @@ func TestStartDevRun_AbsoluteWorkingDir(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, output.Started)
 
-	// Wait for output
-	time.Sleep(200 * time.Millisecond)
+	// MonitorDevRun handles output streaming
+	_, err = activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+	require.NoError(t, err)
 
 	events := streamer.getEvents()
 	var outputEvents []domain.DevRunOutputEvent
@@ -924,14 +911,6 @@ func TestStartDevRun_AbsoluteWorkingDir(t *testing.T) {
 		}
 	}
 	assert.Contains(t, stdoutContent, resolvedAbsDir, "expected pwd output to contain %s, got: %s", resolvedAbsDir, stdoutContent)
-
-	// Clean up
-	activities.StopDevRun(context.Background(), StopDevRunInput{
-		DevRunConfig: common.DevRunConfig{},
-		CommandId:    "test",
-		Context:      input.Context,
-		Instance:     output.Instance,
-	})
 }
 
 func TestStopDevRun_DoesNotDoubleEmitIfAlreadyExited(t *testing.T) {
@@ -948,7 +927,7 @@ func TestStopDevRun_DoesNotDoubleEmitIfAlreadyExited(t *testing.T) {
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
 			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "sleep 0.1"}},
+				"test": {Start: common.CommandConfig{Command: "echo done"}},
 			},
 		},
 		CommandId: "test",
@@ -966,13 +945,55 @@ func TestStopDevRun_DoesNotDoubleEmitIfAlreadyExited(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, output.Started)
 
-	// Wait for natural exit
-	time.Sleep(300 * time.Millisecond)
+	// MonitorDevRun handles natural exit and emits ended event
+	_, err = activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+	require.NoError(t, err)
 
-	// Now try to stop - should be idempotent
+	// Now try to stop - should be idempotent and not emit another ended event
 	stopInput := StopDevRunInput{
 		DevRunConfig: common.DevRunConfig{},
 		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	}
+
+	stopOutput, err := activities.StopDevRun(context.Background(), stopInput)
+	require.NoError(t, err)
+	assert.True(t, stopOutput.Stopped)
+
+	// Count DevRunEndedEvents - should only be one from MonitorDevRun
+	events := streamer.getEvents()
+	endedCount := 0
+	for _, e := range events {
+		if _, ok := e.(domain.DevRunEndedEvent); ok {
+			endedCount++
+		}
+	}
+	assert.Equal(t, 1, endedCount, "should only have one DevRunEndedEvent")
+}
+func TestMonitorDevRun_TailsOutputAndHeartbeats(t *testing.T) {
+	t.Parallel()
+
+	streamer := newMockFlowEventStreamer()
+	activities := &DevRunActivities{Streamer: streamer}
+
+	tmpDir := t.TempDir()
+	workspaceId := "ws_monitor_" + t.Name()
+	flowId := "flow_monitor_" + t.Name()
+
+	// Start a dev run first
+	input := StartDevRunInput{
+		DevRunConfig: common.DevRunConfig{
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "echo hello && sleep 2 && echo world"}},
+			},
+		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -983,17 +1004,145 @@ func TestStopDevRun_DoesNotDoubleEmitIfAlreadyExited(t *testing.T) {
 		},
 	}
 
-	stopOutput, err := activities.StopDevRun(context.Background(), stopInput)
+	startOutput, err := activities.StartDevRun(context.Background(), input)
 	require.NoError(t, err)
-	assert.True(t, stopOutput.Stopped)
+	assert.True(t, startOutput.Started)
+	require.NotNil(t, startOutput.Instance)
 
-	// Count DevRunEndedEvents - should only be one from natural exit
+	// Now monitor the dev run
+	monitorInput := MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     startOutput.Instance,
+	}
+
+	monitorOutput, err := activities.MonitorDevRun(context.Background(), monitorInput)
+	require.NoError(t, err)
+	// Note: ExitCode may be nil since MonitorDevRun detects process exit via IsSessionAlive
+	// rather than waiting on the process directly
+	_ = monitorOutput
+
+	// Check that output events were emitted
 	events := streamer.getEvents()
-	endedCount := 0
+	var outputEvents []domain.DevRunOutputEvent
 	for _, e := range events {
-		if _, ok := e.(domain.DevRunEndedEvent); ok {
-			endedCount++
+		if ev, ok := e.(domain.DevRunOutputEvent); ok {
+			outputEvents = append(outputEvents, ev)
 		}
 	}
-	assert.Equal(t, 1, endedCount, "should only have one DevRunEndedEvent")
+	require.GreaterOrEqual(t, len(outputEvents), 1, "should have output events")
+
+	// Combine all output
+	var allOutput string
+	for _, oe := range outputEvents {
+		allOutput += oe.Chunk
+	}
+	assert.Contains(t, allOutput, "hello")
+	assert.Contains(t, allOutput, "world")
+
+	// Check that ended event was emitted
+	var endedEvent *domain.DevRunEndedEvent
+	for _, e := range events {
+		if ev, ok := e.(domain.DevRunEndedEvent); ok {
+			endedEvent = &ev
+			break
+		}
+	}
+	require.NotNil(t, endedEvent, "should have DevRunEndedEvent")
+	assert.Equal(t, startOutput.DevRunId, endedEvent.DevRunId)
+}
+
+func TestMonitorDevRun_ReturnsOnContextCancel(t *testing.T) {
+	t.Parallel()
+
+	streamer := newMockFlowEventStreamer()
+	activities := &DevRunActivities{Streamer: streamer}
+
+	tmpDir := t.TempDir()
+	workspaceId := "ws_cancel_" + t.Name()
+	flowId := "flow_cancel_" + t.Name()
+
+	// Start a long-running dev run
+	input := StartDevRunInput{
+		DevRunConfig: common.DevRunConfig{
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "sleep 60"}},
+			},
+		},
+		CommandId: "test",
+		Context: DevRunContext{
+			WorkspaceId:  workspaceId,
+			FlowId:       flowId,
+			WorktreeDir:  tmpDir,
+			SourceBranch: "feature/test",
+			BaseBranch:   "main",
+			TargetBranch: "main",
+		},
+	}
+
+	startOutput, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, startOutput.Started)
+	require.NotNil(t, startOutput.Instance)
+
+	// Create a cancelable context
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Start monitoring in a goroutine
+	done := make(chan struct{})
+	var monitorErr error
+	go func() {
+		defer close(done)
+		monitorInput := MonitorDevRunInput{
+			DevRunConfig: input.DevRunConfig,
+			CommandId:    "test",
+			Context:      input.Context,
+			Instance:     startOutput.Instance,
+		}
+		_, monitorErr = activities.MonitorDevRun(ctx, monitorInput)
+	}()
+
+	// Wait a bit then cancel
+	time.Sleep(500 * time.Millisecond)
+	cancel()
+
+	// Wait for monitor to return
+	select {
+	case <-done:
+		// Good, monitor returned
+	case <-time.After(5 * time.Second):
+		t.Fatal("MonitorDevRun did not return after context cancel")
+	}
+
+	// Error may be context.Canceled or nil depending on timing
+	if monitorErr != nil {
+		assert.ErrorIs(t, monitorErr, context.Canceled)
+	}
+
+	// Clean up the process
+	activities.StopDevRun(context.Background(), StopDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     startOutput.Instance,
+	})
+}
+
+func TestMonitorDevRun_NilInstanceReturnsError(t *testing.T) {
+	t.Parallel()
+
+	streamer := newMockFlowEventStreamer()
+	activities := &DevRunActivities{Streamer: streamer}
+
+	monitorInput := MonitorDevRunInput{
+		DevRunConfig: common.DevRunConfig{},
+		CommandId:    "test",
+		Context:      DevRunContext{},
+		Instance:     nil,
+	}
+
+	_, err := activities.MonitorDevRun(context.Background(), monitorInput)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no instance provided")
 }

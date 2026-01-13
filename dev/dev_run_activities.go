@@ -15,6 +15,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
+	"go.temporal.io/sdk/activity"
 
 	"sidekick/common"
 	"sidekick/domain"
@@ -69,6 +70,20 @@ type StopDevRunInput struct {
 // StopDevRunOutput contains the output from stopping a Dev Run.
 type StopDevRunOutput struct {
 	Stopped bool
+}
+
+// MonitorDevRunInput contains the input for monitoring a Dev Run.
+type MonitorDevRunInput struct {
+	DevRunConfig common.DevRunConfig
+	CommandId    string
+	Context      DevRunContext
+	Instance     *DevRunInstance
+}
+
+// MonitorDevRunOutput contains the output from monitoring a Dev Run.
+type MonitorDevRunOutput struct {
+	ExitCode *int
+	Signal   string
 }
 
 // DevRunInstance tracks a single active Dev Run instance.
@@ -270,9 +285,6 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 		// Process still running, good
 	}
 
-	// Start background monitor to handle natural process exit
-	go a.monitorActiveRun(ctx, input.Context, run, input.DevRunConfig.StopTimeoutSeconds)
-
 	// Get session ID and output file path from the first process
 	run.mu.Lock()
 	sessionId := run.processes[0].sessionId
@@ -363,9 +375,6 @@ func (a *DevRunActivities) startCommand(
 	if err := a.Streamer.AddFlowEvent(ctx, devRunCtx.WorkspaceId, devRunCtx.FlowId, startedEvent); err != nil {
 		log.Warn().Err(err).Msg("Failed to emit DevRunStartedEvent")
 	}
-
-	// Start tailing the output file and streaming to JetStream
-	go a.tailOutputFile(ctx, devRunCtx, outputFilePath, proc.doneCh)
 
 	// Wait for process completion in background
 	go func() {
@@ -561,6 +570,127 @@ func (a *DevRunActivities) StopDevRun(ctx context.Context, input StopDevRunInput
 	clearEndedEventTracker(instance.DevRunId)
 
 	return StopDevRunOutput{Stopped: true}, nil
+}
+
+// MonitorDevRun is a long-lived activity that monitors a running Dev Run process.
+// It tails the output file, streams content to JetStream, and periodically heartbeats.
+// Returns when the process exits or the context is canceled.
+func (a *DevRunActivities) MonitorDevRun(ctx context.Context, input MonitorDevRunInput) (MonitorDevRunOutput, error) {
+	instance := input.Instance
+	if instance == nil {
+		return MonitorDevRunOutput{}, fmt.Errorf("no instance provided")
+	}
+
+	input.Context.DevRunId = instance.DevRunId
+
+	// Open the output file for tailing
+	file, err := os.Open(instance.OutputFilePath)
+	if err != nil {
+		return MonitorDevRunOutput{}, fmt.Errorf("failed to open output file: %w", err)
+	}
+	defer file.Close()
+
+	// Channel to signal when process exits
+	doneCh := make(chan struct{})
+	var exitCode *int
+	var signal string
+
+	// Monitor process exit in background
+	go func() {
+		defer close(doneCh)
+		for {
+			if !IsSessionAlive(instance.SessionId) {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+				// Continue checking
+			}
+		}
+	}()
+
+	var sequence int64
+	buf := make([]byte, 4096)
+	heartbeatTicker := time.NewTicker(10 * time.Second)
+	defer heartbeatTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Context canceled (workflow stopped or worker shutting down)
+			return MonitorDevRunOutput{ExitCode: exitCode, Signal: signal}, ctx.Err()
+
+		case <-doneCh:
+			// Process exited - do final read and emit ended event
+			for {
+				n, readErr := file.Read(buf)
+				if n > 0 {
+					chunk := string(buf[:n])
+					outputEvent := domain.DevRunOutputEvent{
+						EventType: domain.DevRunOutputEventType,
+						DevRunId:  instance.DevRunId,
+						Stream:    "stdout",
+						Chunk:     chunk,
+						Sequence:  sequence,
+						Timestamp: time.Now().UnixMilli(),
+					}
+					sequence++
+					if err := a.Streamer.AddFlowEvent(ctx, input.Context.WorkspaceId, input.Context.FlowId, outputEvent); err != nil {
+						log.Warn().Err(err).Msg("Failed to emit DevRunOutputEvent")
+					}
+				}
+				if readErr != nil {
+					break
+				}
+			}
+
+			// Emit ended event if not already emitted
+			if markEndedEventEmitted(instance.DevRunId) {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				a.emitEndedEvent(cleanupCtx, input.Context, exitCode, signal, "")
+				if err := a.Streamer.EndFlowEventStream(cleanupCtx, input.Context.WorkspaceId, input.Context.FlowId, instance.DevRunId); err != nil {
+					log.Warn().Err(err).Msg("Failed to end Dev Run output stream")
+				}
+				cancel()
+			}
+
+			return MonitorDevRunOutput{ExitCode: exitCode, Signal: signal}, nil
+
+		case <-heartbeatTicker.C:
+			activity.RecordHeartbeat(ctx, map[string]interface{}{
+				"devRunId":  instance.DevRunId,
+				"commandId": instance.CommandId,
+			})
+
+		default:
+			// Try to read from file
+			n, readErr := file.Read(buf)
+			if n > 0 {
+				chunk := string(buf[:n])
+				outputEvent := domain.DevRunOutputEvent{
+					EventType: domain.DevRunOutputEventType,
+					DevRunId:  instance.DevRunId,
+					Stream:    "stdout",
+					Chunk:     chunk,
+					Sequence:  sequence,
+					Timestamp: time.Now().UnixMilli(),
+				}
+				sequence++
+				if err := a.Streamer.AddFlowEvent(ctx, input.Context.WorkspaceId, input.Context.FlowId, outputEvent); err != nil {
+					log.Warn().Err(err).Msg("Failed to emit DevRunOutputEvent")
+				}
+			}
+			if readErr != nil {
+				if readErr != io.EOF {
+					log.Warn().Err(readErr).Msg("Error reading output file")
+				}
+				// EOF or error - wait a bit before trying again
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}
 }
 
 func (a *DevRunActivities) terminateActiveRun(run *activeDevRun, timeoutSeconds int) {
