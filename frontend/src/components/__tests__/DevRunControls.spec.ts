@@ -156,6 +156,10 @@ describe('DevRunControls', () => {
     await new Promise(resolve => setTimeout(resolve, 10))
 
     const flowSocket = MockWebSocket.instances.find(s => s.url.includes('/events'))
+
+    // Initially only one socket (flow events)
+    const initialSocketCount = MockWebSocket.instances.length
+
     flowSocket?.simulateMessage({
       eventType: 'dev_run_started',
       flowId: 'test-flow',
@@ -167,17 +171,10 @@ describe('DevRunControls', () => {
     })
 
     await wrapper.vm.$nextTick()
+    // Wait for the 250ms debounce timer to fire
+    await new Promise(resolve => setTimeout(resolve, 300))
 
-    // Initially only one socket (flow events)
-    const initialSocketCount = MockWebSocket.instances.length
-
-    // Toggle output on
-    const toggleButton = wrapper.find('.dev-run-toggle')
-    await toggleButton.trigger('click')
-    await wrapper.vm.$nextTick()
-    await new Promise(resolve => setTimeout(resolve, 10))
-
-    // Should have created a second socket for output
+    // Should have created a second socket for output after debounce
     expect(MockWebSocket.instances.length).toBeGreaterThan(initialSocketCount)
 
     // Find the output socket and verify it subscribed to devRunId

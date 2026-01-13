@@ -1026,6 +1026,11 @@ func (s *Supervisor) handleIPCConnection(ctx context.Context, conn net.Conn, out
 				// Now stop our own processes
 				s.StopAll()
 
+				// Clear output for all processes after they've stopped
+				for _, p := range s.processes {
+					p.clearOutputAndIncrementGeneration()
+				}
+
 				// Prevent our listener from removing the socket file when closed.
 				// The new supervisor will create its own socket at the same path.
 				s.listener.SetUnlinkOnClose(false)
