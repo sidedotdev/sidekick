@@ -44,7 +44,9 @@ func (s *DevRunWorkflowTestSuite) TestDevRunStartStopViaUserAction() {
 
 	// Verify StartDevRunInput/StopDevRunInput can be constructed
 	devRunConfig := common.DevRunConfig{
-		Start: []common.CommandConfig{{Command: "echo 'starting'"}},
+		Commands: map[string]common.DevRunCommandConfig{
+			"test": {Start: common.CommandConfig{Command: "echo 'starting'"}},
+		},
 	}
 	devRunCtx := DevRunContext{
 		WorkspaceId:  "test-workspace",

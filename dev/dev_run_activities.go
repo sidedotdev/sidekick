@@ -45,6 +45,7 @@ type DevRunContext struct {
 // StartDevRunInput contains the input for starting a Dev Run.
 type StartDevRunInput struct {
 	DevRunConfig common.DevRunConfig
+	CommandId    string
 	Context      DevRunContext
 }
 
@@ -59,6 +60,7 @@ type StartDevRunOutput struct {
 // StopDevRunInput contains the input for stopping a Dev Run.
 type StopDevRunInput struct {
 	DevRunConfig common.DevRunConfig
+	CommandId    string
 	Context      DevRunContext
 	// Entry contains the Dev Run entry from GlobalState (required).
 	Entry *DevRunEntry
@@ -156,8 +158,9 @@ func ClearDevRunEntry(gs *flow_action.GlobalState) {
 
 // StartDevRun starts a Dev Run by executing the configured start commands.
 func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInput) (StartDevRunOutput, error) {
-	if len(input.DevRunConfig.Start) == 0 {
-		return StartDevRunOutput{}, fmt.Errorf("no start commands configured for Dev Run")
+	cmdConfig, ok := input.DevRunConfig.Commands[input.CommandId]
+	if !ok {
+		return StartDevRunOutput{}, fmt.Errorf("command ID %q not found in dev run config", input.CommandId)
 	}
 
 	// Generate a new devRunId
@@ -172,74 +175,70 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 	// Build environment variables for the commands
 	envVars := buildDevRunEnvVars(input.Context)
 
-	// Execute start commands in order
-	for i, cmdConfig := range input.DevRunConfig.Start {
-		workingDir := input.Context.WorktreeDir
-		if cmdConfig.WorkingDir != "" {
-			if filepath.IsAbs(cmdConfig.WorkingDir) {
-				workingDir = cmdConfig.WorkingDir
-			} else {
-				// Resolve relative paths against the worktree directory
-				workingDir = filepath.Join(input.Context.WorktreeDir, cmdConfig.WorkingDir)
-			}
+	// Determine working directory
+	workingDir := input.Context.WorktreeDir
+	if cmdConfig.Start.WorkingDir != "" {
+		if filepath.IsAbs(cmdConfig.Start.WorkingDir) {
+			workingDir = cmdConfig.Start.WorkingDir
+		} else {
+			// Resolve relative paths against the worktree directory
+			workingDir = filepath.Join(input.Context.WorktreeDir, cmdConfig.Start.WorkingDir)
 		}
+	}
 
-		proc, err := a.startCommand(ctx, input.Context, cmdConfig.Command, workingDir, envVars, i)
-		if err != nil {
-			// Clean up any processes we started with proper timeout escalation
+	proc, err := a.startCommand(ctx, input.Context, cmdConfig.Start.Command, workingDir, envVars, 0)
+	if err != nil {
+		// Clean up any processes we started with proper timeout escalation
+		timeout := input.DevRunConfig.StopTimeoutSeconds
+		if timeout <= 0 {
+			timeout = defaultStopTimeoutSeconds
+		}
+		a.terminateActiveRun(run, timeout)
+
+		// Emit ended event with error
+		a.emitEndedEvent(ctx, input.Context, nil, "", err.Error())
+		return StartDevRunOutput{}, fmt.Errorf("failed to start command: %w", err)
+	}
+
+	run.mu.Lock()
+	run.processes = append(run.processes, proc)
+	run.mu.Unlock()
+
+	// Brief wait to detect immediate failures (e.g., command not found, immediate exit)
+	time.Sleep(1 * time.Second)
+
+	// Check if the process exited immediately with an error
+	run.mu.Lock()
+	proc = run.processes[0]
+	run.mu.Unlock()
+
+	select {
+	case <-proc.doneCh:
+		// Process already exited - check if it was an error
+		exitCode := proc.exitCode.Load()
+		signal := proc.signal.Load()
+		signalStr, _ := signal.(string)
+
+		if signalStr != "" || (exitCode != nil && *exitCode != 0) {
+			// Clean up remaining processes
 			timeout := input.DevRunConfig.StopTimeoutSeconds
 			if timeout <= 0 {
 				timeout = defaultStopTimeoutSeconds
 			}
 			a.terminateActiveRun(run, timeout)
 
-			// Emit ended event with error
-			a.emitEndedEvent(ctx, input.Context, nil, "", err.Error())
-			return StartDevRunOutput{}, fmt.Errorf("failed to start command %d: %w", i, err)
-		}
-
-		run.mu.Lock()
-		run.processes = append(run.processes, proc)
-		run.mu.Unlock()
-	}
-
-	// Brief wait to detect immediate failures (e.g., command not found, immediate exit)
-	time.Sleep(1 * time.Second)
-
-	// Check if any process exited immediately with an error
-	run.mu.Lock()
-	processes := run.processes
-	run.mu.Unlock()
-
-	for i, proc := range processes {
-		select {
-		case <-proc.doneCh:
-			// Process already exited - check if it was an error
-			exitCode := proc.exitCode.Load()
-			signal := proc.signal.Load()
-			signalStr, _ := signal.(string)
-
-			if signalStr != "" || (exitCode != nil && *exitCode != 0) {
-				// Clean up remaining processes
-				timeout := input.DevRunConfig.StopTimeoutSeconds
-				if timeout <= 0 {
-					timeout = defaultStopTimeoutSeconds
-				}
-				a.terminateActiveRun(run, timeout)
-
-				errMsg := fmt.Sprintf("command %d exited immediately", i)
-				if exitCode != nil {
-					errMsg = fmt.Sprintf("command %d exited immediately with status %d", i, *exitCode)
-				} else if signalStr != "" {
-					errMsg = fmt.Sprintf("command %d terminated by signal %s", i, signalStr)
-				}
-
-				a.emitEndedEvent(ctx, input.Context, exitCode, signalStr, errMsg)
-				return StartDevRunOutput{}, errors.New(errMsg)
+			errMsg := "command exited immediately"
+			if exitCode != nil {
+				errMsg = fmt.Sprintf("command exited immediately with status %d", *exitCode)
+			} else if signalStr != "" {
+				errMsg = fmt.Sprintf("command terminated by signal %s", signalStr)
 			}
-		default:
-			// Process still running, good
+
+			a.emitEndedEvent(ctx, input.Context, exitCode, signalStr, errMsg)
+			return StartDevRunOutput{}, errors.New(errMsg)
 		}
+	default:
+		// Process still running, good
 	}
 
 	// Start background monitor to handle natural process exit
@@ -476,26 +475,24 @@ func (a *DevRunActivities) StopDevRun(ctx context.Context, input StopDevRunInput
 
 	input.Context.DevRunId = entry.DevRunId
 
-	// Execute stop commands if configured
-	if len(input.DevRunConfig.Stop) > 0 {
+	// Execute stop command if configured for this command ID
+	if cmdConfig, ok := input.DevRunConfig.Commands[input.CommandId]; ok && cmdConfig.Stop != nil {
 		envVars := buildDevRunEnvVars(input.Context)
-		for i, cmdConfig := range input.DevRunConfig.Stop {
-			workingDir := input.Context.WorktreeDir
-			if cmdConfig.WorkingDir != "" {
-				if filepath.IsAbs(cmdConfig.WorkingDir) {
-					workingDir = cmdConfig.WorkingDir
-				} else {
-					workingDir = filepath.Join(input.Context.WorktreeDir, cmdConfig.WorkingDir)
-				}
+		workingDir := input.Context.WorktreeDir
+		if cmdConfig.Stop.WorkingDir != "" {
+			if filepath.IsAbs(cmdConfig.Stop.WorkingDir) {
+				workingDir = cmdConfig.Stop.WorkingDir
+			} else {
+				workingDir = filepath.Join(input.Context.WorktreeDir, cmdConfig.Stop.WorkingDir)
 			}
+		}
 
-			cmd := exec.CommandContext(ctx, "sh", "-c", cmdConfig.Command)
-			cmd.Dir = workingDir
-			cmd.Env = append(os.Environ(), envVars...)
+		cmd := exec.CommandContext(ctx, "sh", "-c", cmdConfig.Stop.Command)
+		cmd.Dir = workingDir
+		cmd.Env = append(os.Environ(), envVars...)
 
-			if err := cmd.Run(); err != nil {
-				log.Warn().Err(err).Int("index", i).Msg("Stop command failed")
-			}
+		if err := cmd.Run(); err != nil {
+			log.Warn().Err(err).Str("commandId", input.CommandId).Msg("Stop command failed")
 		}
 	}
 
