@@ -151,17 +151,30 @@ function connectFlowEventsSocket() {
   };
 }
 
+let startedDebounceTimer = ref<NodeJS.Timeout | null>(null);
+
 function handleFlowEvent(event: DevRunFlowEvent) {
   switch (event.eventType) {
     case 'dev_run_started':
       isRunning.value = true;
       currentDevRunId.value = event.devRunId;
       outputLines.value = [];
-      if (showOutput.value) {
-        connectOutputEventsSocket(event.devRunId);
+
+      // connect whether or not showing output, so showing it is instant
+      // but debounce so we don't connect to previous dev runs that ended already
+      if (startedDebounceTimer.value) {
+        clearTimeout(startedDebounceTimer.value);
       }
+      startedDebounceTimer.value = setTimeout(() => {
+        if (currentDevRunId.value === event.devRunId && isRunning.value) {
+          connectOutputEventsSocket(event.devRunId);
+        }
+      }, 250);
       break;
     case 'dev_run_ended':
+      if (startedDebounceTimer.value) {
+        clearTimeout(startedDebounceTimer.value);
+      }
       isRunning.value = false;
       disconnectOutputEventsSocket();
       break;
@@ -170,7 +183,8 @@ function handleFlowEvent(event: DevRunFlowEvent) {
 
 function connectOutputEventsSocket(devRunId: string) {
   if (outputEventsSocket) {
-    disconnectOutputEventsSocket();
+    // already connected, no need to connect again
+    return
   }
 
   outputSocketClosed = false;
@@ -224,14 +238,6 @@ function scrollOutputToBottom() {
     outputRef.value.scrollTop = outputRef.value.scrollHeight;
   }
 }
-
-watch(showOutput, (newValue) => {
-  if (newValue && isRunning.value && currentDevRunId.value) {
-    connectOutputEventsSocket(currentDevRunId.value);
-  } else if (!newValue) {
-    disconnectOutputEventsSocket();
-  }
-});
 
 watch(() => props.flowId, () => {
   disconnectFlowEventsSocket();
