@@ -132,7 +132,13 @@ func (s *DevRunWorkflowTestSuite) TestDevRunStartSignalDoesNotBlockSelectorCallb
 					},
 				},
 			},
-			RepoConfig: common.RepoConfig{},
+			RepoConfig: common.RepoConfig{
+				DevRun: common.DevRunConfig{
+					Commands: map[string]common.DevRunCommandConfig{
+						"test": {Start: common.CommandConfig{Command: "echo test"}},
+					},
+				},
+			},
 			Worktree: &domain.Worktree{
 				Name: "side/test-branch",
 			},
