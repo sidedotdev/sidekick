@@ -1146,3 +1146,166 @@ func TestMonitorDevRun_NilInstanceReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no instance provided")
 }
+
+func TestStartDevRun_RecoveryReconnectsToAliveProcess(t *testing.T) {
+	t.Parallel()
+
+	streamer := newMockFlowEventStreamer()
+	activities := &DevRunActivities{Streamer: streamer}
+
+	tmpDir := t.TempDir()
+	workspaceId := "ws_recovery_alive_" + t.Name()
+	flowId := "flow_recovery_alive_" + t.Name()
+
+	input := StartDevRunInput{
+		DevRunConfig: common.DevRunConfig{
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "sleep 60"}},
+			},
+			StopTimeoutSeconds: 1,
+		},
+		CommandId: "test",
+		Context: DevRunContext{
+			WorkspaceId:  workspaceId,
+			FlowId:       flowId,
+			WorktreeDir:  tmpDir,
+			SourceBranch: "feature/test",
+			BaseBranch:   "main",
+			TargetBranch: "main",
+		},
+	}
+
+	// Start the first dev run
+	output1, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output1.Started)
+	require.NotNil(t, output1.Instance)
+
+	// Simulate recovery by passing the existing instance
+	input.ExistingInstance = output1.Instance
+	output2, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output2.Started)
+
+	// Should return the same instance (reconnected)
+	assert.Equal(t, output1.Instance.DevRunId, output2.Instance.DevRunId)
+	assert.Equal(t, output1.Instance.SessionId, output2.Instance.SessionId)
+	assert.Equal(t, output1.Instance.OutputFilePath, output2.Instance.OutputFilePath)
+
+	// Clean up
+	activities.StopDevRun(context.Background(), StopDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output1.Instance,
+	})
+}
+
+func TestStartDevRun_RecoveryStartsFreshWhenProcessDead(t *testing.T) {
+	t.Parallel()
+
+	streamer := newMockFlowEventStreamer()
+	activities := &DevRunActivities{Streamer: streamer}
+
+	tmpDir := t.TempDir()
+	workspaceId := "ws_recovery_dead_" + t.Name()
+	flowId := "flow_recovery_dead_" + t.Name()
+
+	input := StartDevRunInput{
+		DevRunConfig: common.DevRunConfig{
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "echo hello && sleep 60"}},
+			},
+			StopTimeoutSeconds: 1,
+		},
+		CommandId: "test",
+		Context: DevRunContext{
+			WorkspaceId:  workspaceId,
+			FlowId:       flowId,
+			WorktreeDir:  tmpDir,
+			SourceBranch: "feature/test",
+			BaseBranch:   "main",
+			TargetBranch: "main",
+		},
+	}
+
+	// Start the first dev run
+	output1, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output1.Started)
+	require.NotNil(t, output1.Instance)
+
+	// Stop the process
+	_, err = activities.StopDevRun(context.Background(), StopDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output1.Instance,
+	})
+	require.NoError(t, err)
+
+	// Wait for process to fully terminate
+	time.Sleep(500 * time.Millisecond)
+
+	// Simulate recovery with the now-dead instance
+	input.ExistingInstance = output1.Instance
+	output2, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output2.Started)
+
+	// Should have started a new instance with different DevRunId
+	assert.NotEqual(t, output1.Instance.DevRunId, output2.Instance.DevRunId)
+	assert.NotEqual(t, output1.Instance.SessionId, output2.Instance.SessionId)
+
+	// Clean up
+	activities.StopDevRun(context.Background(), StopDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output2.Instance,
+	})
+}
+
+func TestStartDevRun_NoExistingInstanceStartsFresh(t *testing.T) {
+	t.Parallel()
+
+	streamer := newMockFlowEventStreamer()
+	activities := &DevRunActivities{Streamer: streamer}
+
+	tmpDir := t.TempDir()
+	workspaceId := "ws_no_existing_" + t.Name()
+	flowId := "flow_no_existing_" + t.Name()
+
+	input := StartDevRunInput{
+		DevRunConfig: common.DevRunConfig{
+			Commands: map[string]common.DevRunCommandConfig{
+				"test": {Start: common.CommandConfig{Command: "sleep 60"}},
+			},
+			StopTimeoutSeconds: 1,
+		},
+		CommandId:        "test",
+		ExistingInstance: nil, // No existing instance
+		Context: DevRunContext{
+			WorkspaceId:  workspaceId,
+			FlowId:       flowId,
+			WorktreeDir:  tmpDir,
+			SourceBranch: "feature/test",
+			BaseBranch:   "main",
+			TargetBranch: "main",
+		},
+	}
+
+	output, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output.Started)
+	require.NotNil(t, output.Instance)
+	assert.NotEmpty(t, output.Instance.DevRunId)
+
+	// Clean up
+	activities.StopDevRun(context.Background(), StopDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+}

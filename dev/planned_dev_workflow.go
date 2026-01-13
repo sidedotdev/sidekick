@@ -71,6 +71,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 	SetupPauseHandler(dCtx, "Paused for user input", nil)
 	SetupUserActionHandler(dCtx)
 	SetupDevRunConfigQuery(dCtx)
+	SetupDevRunStateQuery(dCtx)
 
 	// TODO move environment creation to an activity within EnsurePrerequisites
 	err = EnsurePrerequisites(dCtx)
