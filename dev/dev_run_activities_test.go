@@ -102,6 +102,14 @@ func TestStartDevRun_EmitsStartedAndOutputEvents(t *testing.T) {
 	assert.NotEmpty(t, output.DevRunId)
 	assert.True(t, len(output.DevRunId) > 7)
 
+	// Verify Instance fields are set correctly
+	require.NotNil(t, output.Instance)
+	assert.Equal(t, output.DevRunId, output.Instance.DevRunId)
+	assert.Equal(t, "test", output.Instance.CommandId)
+	assert.Greater(t, output.Instance.SessionId, 0)
+	assert.Contains(t, output.Instance.OutputFilePath, output.DevRunId)
+	assert.FileExists(t, output.Instance.OutputFilePath)
+
 	// Wait for the process to complete and output to be streamed
 	time.Sleep(200 * time.Millisecond)
 
