@@ -111,12 +111,13 @@ func clearEndedEventTracker(devRunId string) {
 
 // runningProcess tracks a running Dev Run process.
 type runningProcess struct {
-	cmd      *exec.Cmd
-	pgid     int
-	cancel   context.CancelFunc
-	doneCh   chan struct{}
-	exitCode atomic.Pointer[int]
-	signal   atomic.Value // stores string
+	cmd            *exec.Cmd
+	sessionId      int
+	outputFilePath string
+	cancel         context.CancelFunc
+	doneCh         chan struct{}
+	exitCode       atomic.Pointer[int]
+	signal         atomic.Value // stores string
 }
 
 // activeDevRun tracks a running Dev Run's processes in memory.
@@ -272,15 +273,16 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 	// Start background monitor to handle natural process exit
 	go a.monitorActiveRun(ctx, input.Context, run, input.DevRunConfig.StopTimeoutSeconds)
 
-	// Get session ID from the first process (session leader)
+	// Get session ID and output file path from the first process
 	run.mu.Lock()
-	sessionId := run.processes[0].pgid
+	sessionId := run.processes[0].sessionId
+	outputFilePath := run.processes[0].outputFilePath
 	run.mu.Unlock()
 
 	instance := &DevRunInstance{
 		DevRunId:       devRunId,
 		SessionId:      sessionId,
-		OutputFilePath: "", // Will be set in step 3 when file-based output is implemented
+		OutputFilePath: outputFilePath,
 		CommandId:      input.CommandId,
 	}
 
@@ -305,38 +307,42 @@ func (a *DevRunActivities) startCommand(
 	cmd.Dir = workingDir
 	cmd.Env = append(os.Environ(), envVars...)
 
-	// Create a new process group so we can kill all child processes
+	// Create a new session so processes survive worker restarts
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
+		Setsid: true,
 	}
 
-	// Set up pipes for stdout/stderr
-	stdout, err := cmd.StdoutPipe()
+	// Create output file for capturing stdout/stderr
+	outputFilePath := fmt.Sprintf("/tmp/sidekick-devrun-%s.log", devRunCtx.DevRunId)
+	outputFile, err := os.Create(outputFilePath)
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+		return nil, fmt.Errorf("failed to create output file: %w", err)
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
-	}
+
+	// Redirect stdout and stderr to the output file
+	cmd.Stdout = outputFile
+	cmd.Stderr = outputFile
 
 	if err := cmd.Start(); err != nil {
+		outputFile.Close()
+		os.Remove(outputFilePath)
 		cancel()
 		return nil, fmt.Errorf("failed to start command: %w", err)
 	}
 
-	pgid, err := syscall.Getpgid(cmd.Process.Pid)
+	// With Setsid, the session ID equals the PID of the session leader
+	sessionId, err := syscall.Getsid(cmd.Process.Pid)
 	if err != nil {
-		pgid = cmd.Process.Pid
+		sessionId = cmd.Process.Pid
 	}
 
 	proc := &runningProcess{
-		cmd:    cmd,
-		pgid:   pgid,
-		cancel: cancel,
-		doneCh: make(chan struct{}),
+		cmd:            cmd,
+		sessionId:      sessionId,
+		outputFilePath: outputFilePath,
+		cancel:         cancel,
+		doneCh:         make(chan struct{}),
 	}
 
 	// Emit started event
@@ -352,69 +358,19 @@ func (a *DevRunActivities) startCommand(
 		CommandSummary: commandSummary,
 		WorkingDir:     workingDir,
 		Pid:            cmd.Process.Pid,
-		Pgid:           pgid,
+		Pgid:           sessionId, // Session ID (with Setsid, this equals the process group ID)
 	}
 	if err := a.Streamer.AddFlowEvent(ctx, devRunCtx.WorkspaceId, devRunCtx.FlowId, startedEvent); err != nil {
 		log.Warn().Err(err).Msg("Failed to emit DevRunStartedEvent")
 	}
 
-	// Stream output in background goroutines
-	var sequence int64
-	var seqMu sync.Mutex
-
-	nextSeq := func() int64 {
-		seqMu.Lock()
-		defer seqMu.Unlock()
-		seq := sequence
-		sequence++
-		return seq
-	}
-
-	streamOutput := func(reader io.Reader, stream string) {
-		buf := make([]byte, 4096)
-		for {
-			n, err := reader.Read(buf)
-			if n > 0 {
-				chunk := string(buf[:n])
-				outputEvent := domain.DevRunOutputEvent{
-					EventType: domain.DevRunOutputEventType,
-					DevRunId:  devRunCtx.DevRunId,
-					Stream:    stream,
-					Chunk:     chunk,
-					Sequence:  nextSeq(),
-					Timestamp: time.Now().UnixMilli(),
-				}
-				// Use background context since this runs after the activity returns
-				if err := a.Streamer.AddFlowEvent(context.Background(), devRunCtx.WorkspaceId, devRunCtx.FlowId, outputEvent); err != nil {
-					log.Warn().Err(err).Str("stream", stream).Msg("Failed to emit DevRunOutputEvent")
-				}
-			}
-			if err != nil {
-				if err != io.EOF {
-					log.Warn().Err(err).Str("stream", stream).Msg("Error reading stream")
-				}
-				break
-			}
-		}
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		streamOutput(stdout, "stdout")
-	}()
-
-	go func() {
-		defer wg.Done()
-		streamOutput(stderr, "stderr")
-	}()
+	// Start tailing the output file and streaming to JetStream
+	go a.tailOutputFile(ctx, devRunCtx, outputFilePath, proc.doneCh)
 
 	// Wait for process completion in background
 	go func() {
 		defer close(proc.doneCh)
-		wg.Wait()
+		defer outputFile.Close()
 		err := cmd.Wait()
 		if err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {
@@ -434,6 +390,67 @@ func (a *DevRunActivities) startCommand(
 	}()
 
 	return proc, nil
+}
+
+// tailOutputFile tails the output file and streams content to JetStream.
+func (a *DevRunActivities) tailOutputFile(ctx context.Context, devRunCtx DevRunContext, outputFilePath string, doneCh <-chan struct{}) {
+	file, err := os.Open(outputFilePath)
+	if err != nil {
+		log.Warn().Err(err).Str("path", outputFilePath).Msg("Failed to open output file for tailing")
+		return
+	}
+	defer file.Close()
+
+	var sequence int64
+	buf := make([]byte, 4096)
+
+	for {
+		n, err := file.Read(buf)
+		if n > 0 {
+			chunk := string(buf[:n])
+			outputEvent := domain.DevRunOutputEvent{
+				EventType: domain.DevRunOutputEventType,
+				DevRunId:  devRunCtx.DevRunId,
+				Stream:    "stdout", // Combined output, labeled as stdout
+				Chunk:     chunk,
+				Sequence:  sequence,
+				Timestamp: time.Now().UnixMilli(),
+			}
+			sequence++
+			// Use background context since this runs after the activity returns
+			if err := a.Streamer.AddFlowEvent(context.Background(), devRunCtx.WorkspaceId, devRunCtx.FlowId, outputEvent); err != nil {
+				log.Warn().Err(err).Msg("Failed to emit DevRunOutputEvent")
+			}
+		}
+		if err != nil {
+			if err != io.EOF {
+				log.Warn().Err(err).Msg("Error reading output file")
+				return
+			}
+			// EOF reached, check if process is done
+			select {
+			case <-doneCh:
+				// Process exited, do one final read to catch any remaining output
+				n, _ := file.Read(buf)
+				if n > 0 {
+					chunk := string(buf[:n])
+					outputEvent := domain.DevRunOutputEvent{
+						EventType: domain.DevRunOutputEventType,
+						DevRunId:  devRunCtx.DevRunId,
+						Stream:    "stdout",
+						Chunk:     chunk,
+						Sequence:  sequence,
+						Timestamp: time.Now().UnixMilli(),
+					}
+					a.Streamer.AddFlowEvent(context.Background(), devRunCtx.WorkspaceId, devRunCtx.FlowId, outputEvent)
+				}
+				return
+			default:
+				// Process still running, wait a bit before trying again
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}
 }
 
 // monitorActiveRun watches for natural process exit and handles cleanup.
@@ -562,9 +579,9 @@ func (a *DevRunActivities) terminateActiveRun(run *activeDevRun, timeoutSeconds 
 		default:
 		}
 
-		// Send SIGINT to the process group
-		if err := syscall.Kill(-proc.pgid, syscall.SIGINT); err != nil {
-			log.Warn().Err(err).Int("pgid", proc.pgid).Msg("Failed to send SIGINT to process group")
+		// Send SIGINT to the session (negative session ID signals all processes in session)
+		if err := syscall.Kill(-proc.sessionId, syscall.SIGINT); err != nil {
+			log.Warn().Err(err).Int("sessionId", proc.sessionId).Msg("Failed to send SIGINT to session")
 		}
 	}
 
@@ -587,8 +604,8 @@ func (a *DevRunActivities) terminateActiveRun(run *activeDevRun, timeoutSeconds 
 					continue
 				default:
 				}
-				if err := syscall.Kill(-proc.pgid, syscall.SIGKILL); err != nil {
-					log.Warn().Err(err).Int("pgid", proc.pgid).Msg("Failed to send SIGKILL to process group")
+				if err := syscall.Kill(-proc.sessionId, syscall.SIGKILL); err != nil {
+					log.Warn().Err(err).Int("sessionId", proc.sessionId).Msg("Failed to send SIGKILL to session")
 				}
 				proc.cancel()
 			}
