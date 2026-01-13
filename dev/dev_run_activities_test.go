@@ -144,8 +144,9 @@ func TestStartDevRun_EmitsStartedAndOutputEvents(t *testing.T) {
 	// Clean up
 	activities.StopDevRun(context.Background(), StopDevRunInput{
 		DevRunConfig: common.DevRunConfig{},
+		CommandId:    "test",
 		Context:      input.Context,
-		Entry:        output.Entry,
+		Instance:     output.Instance,
 	})
 }
 
@@ -189,6 +190,7 @@ func TestStopDevRun_EmitsEndedAndEndStreamEvents(t *testing.T) {
 		DevRunConfig: common.DevRunConfig{
 			StopTimeoutSeconds: 2,
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -197,7 +199,7 @@ func TestStopDevRun_EmitsEndedAndEndStreamEvents(t *testing.T) {
 			BaseBranch:   "main",
 			TargetBranch: "main",
 		},
-		Entry: startOutput.Entry,
+		Instance: startOutput.Instance,
 	}
 
 	stopOutput, err := activities.StopDevRun(context.Background(), stopInput)
@@ -263,12 +265,14 @@ func TestStopDevRun_TimeoutEscalation(t *testing.T) {
 
 	// Stop with a short timeout to trigger SIGKILL escalation
 	gs := &flow_action.GlobalState{}
-	SetDevRunEntry(gs, startOutput.DevRunId, startOutput.Entry)
+	gs.InitValues()
+	SetDevRunInstance(gs, startOutput.Instance)
 
 	stopInput := StopDevRunInput{
 		DevRunConfig: common.DevRunConfig{
 			StopTimeoutSeconds: 1,
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -277,7 +281,7 @@ func TestStopDevRun_TimeoutEscalation(t *testing.T) {
 			BaseBranch:   "main",
 			TargetBranch: "main",
 		},
-		Entry: startOutput.Entry,
+		Instance: startOutput.Instance,
 	}
 
 	start := time.Now()
@@ -347,7 +351,7 @@ func TestStopDevRun_WithStopCommand(t *testing.T) {
 			BaseBranch:   "main",
 			TargetBranch: "main",
 		},
-		Entry: startOutput.Entry,
+		Instance: startOutput.Instance,
 	}
 
 	stopOutput, err := activities.StopDevRun(context.Background(), stopInput)
@@ -416,14 +420,14 @@ func TestStartDevRun_FailsIfAlreadyActive(t *testing.T) {
 	output1, err := activities.StartDevRun(context.Background(), input)
 	require.NoError(t, err)
 	assert.True(t, output1.Started)
-	assert.NotNil(t, output1.Entry)
+	assert.NotNil(t, output1.Instance)
 
 	// Clean up
 	activities.StopDevRun(context.Background(), StopDevRunInput{
 		DevRunConfig: input.DevRunConfig,
 		CommandId:    "test",
 		Context:      input.Context,
-		Entry:        output1.Entry,
+		Instance:     output1.Instance,
 	})
 }
 
@@ -507,8 +511,9 @@ func TestStartDevRun_EnvVarsPassedToCommand(t *testing.T) {
 	// Clean up
 	activities.StopDevRun(context.Background(), StopDevRunInput{
 		DevRunConfig: common.DevRunConfig{},
+		CommandId:    "test",
 		Context:      input.Context,
-		Entry:        output.Entry,
+		Instance:     output.Instance,
 	})
 }
 
@@ -549,18 +554,24 @@ func TestGetDevRunEntry(t *testing.T) {
 	// No entry should return nil
 	assert.Nil(t, GetDevRunEntry(gs))
 
-	// Set an entry
-	entry := &DevRunEntry{DevRunId: "devrun_test", Pgids: []int{123}}
-	SetDevRunEntry(gs, entry.DevRunId, entry)
+	// Set an instance
+	instance := &DevRunInstance{
+		DevRunId:       "devrun_test",
+		SessionId:      123,
+		OutputFilePath: "/tmp/test.log",
+		CommandId:      "test-cmd",
+	}
+	SetDevRunInstance(gs, instance)
 
-	// Should retrieve the entry
+	// Should retrieve the entry with the instance
 	retrieved := GetDevRunEntry(gs)
 	assert.NotNil(t, retrieved)
-	assert.Equal(t, "devrun_test", retrieved.DevRunId)
-	assert.Equal(t, []int{123}, retrieved.Pgids)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, "devrun_test", retrieved["test-cmd"].DevRunId)
+	assert.Equal(t, 123, retrieved["test-cmd"].SessionId)
 
-	// Clear the entry
-	ClearDevRunEntry(gs)
+	// Clear the instance
+	ClearDevRunInstance(gs, "test-cmd")
 	assert.Nil(t, GetDevRunEntry(gs))
 }
 
@@ -572,12 +583,17 @@ func TestIsDevRunActive(t *testing.T) {
 
 	assert.False(t, IsDevRunActive(gs))
 
-	entry := &DevRunEntry{DevRunId: "devrun_test", Pgids: []int{123}}
-	SetDevRunEntry(gs, entry.DevRunId, entry)
+	instance := &DevRunInstance{
+		DevRunId:       "devrun_test",
+		SessionId:      123,
+		OutputFilePath: "/tmp/test.log",
+		CommandId:      "test-cmd",
+	}
+	SetDevRunInstance(gs, instance)
 
 	assert.True(t, IsDevRunActive(gs))
 
-	ClearDevRunEntry(gs)
+	ClearDevRunInstance(gs, "test-cmd")
 	assert.False(t, IsDevRunActive(gs))
 }
 
@@ -835,8 +851,9 @@ func TestStartDevRun_RelativeWorkingDir(t *testing.T) {
 	// Clean up
 	activities.StopDevRun(context.Background(), StopDevRunInput{
 		DevRunConfig: common.DevRunConfig{},
+		CommandId:    "test",
 		Context:      input.Context,
-		Entry:        output.Entry,
+		Instance:     output.Instance,
 	})
 }
 
@@ -903,8 +920,9 @@ func TestStartDevRun_AbsoluteWorkingDir(t *testing.T) {
 	// Clean up
 	activities.StopDevRun(context.Background(), StopDevRunInput{
 		DevRunConfig: common.DevRunConfig{},
+		CommandId:    "test",
 		Context:      input.Context,
-		Entry:        output.Entry,
+		Instance:     output.Instance,
 	})
 }
 
