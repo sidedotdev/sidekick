@@ -6,6 +6,7 @@ import (
 	"os"
 	"sidekick/common"
 	"sidekick/secret_manager"
+	"strings"
 	"testing"
 
 	"github.com/invopop/jsonschema"
@@ -13,6 +14,10 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 )
+
+func contains(s, substr string) bool {
+	return strings.Contains(s, substr)
+}
 
 func TestAnthropicResponsesProvider_Unauthorized(t *testing.T) {
 	ctx := context.Background()
@@ -116,6 +121,9 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 	close(eventChan)
 
 	if err != nil {
+		if contains(err.Error(), "overloaded_error") || contains(err.Error(), "Overloaded") {
+			t.Skipf("Skipping test due to API overload: %v", err)
+		}
 		t.Fatalf("Stream returned an error: %v", err)
 	}
 
@@ -193,6 +201,9 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		close(eventChan)
 
 		if err != nil {
+			if contains(err.Error(), "overloaded_error") || contains(err.Error(), "Overloaded") {
+				t.Skipf("Skipping test due to API overload: %v", err)
+			}
 			t.Fatalf("Stream returned an error: %v", err)
 		}
 
