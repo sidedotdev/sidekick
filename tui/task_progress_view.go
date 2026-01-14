@@ -38,12 +38,17 @@ type taskProgressModel struct {
 	width          int
 
 	// Dev Run state (orthogonal to approval input)
-	devRunIsRunning     bool
-	devRunId            string
+	// Track multiple active dev runs by command ID
+	activeDevRuns       map[string]string // commandId -> devRunId
 	showDevRunOutput    bool
+	currentDevRunId     string // which dev run's output to show
 	devRunOutput        []string
 	hasDevRunContext    bool
 	checkedDevRunConfig bool
+}
+
+func hasActiveDevRuns(m taskProgressModel) bool {
+	return len(m.activeDevRuns) > 0
 }
 
 func newProgressModel(taskID, flowID, workspaceID string, c client.Client) taskProgressModel {
@@ -62,6 +67,7 @@ func newProgressModel(taskID, flowID, workspaceID string, c client.Client) taskP
 		actions:       []client.FlowAction{},
 		approvalInput: approvalInput,
 		client:        c,
+		activeDevRuns: make(map[string]string),
 	}
 }
 
@@ -95,17 +101,17 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.hasDevRunContext {
 			switch msg.String() {
 			case "d", "D":
-				if m.devRunIsRunning {
+				if hasActiveDevRuns(m) {
 					return m, m.submitDevRunAction("dev_run_stop")
 				}
 				return m, m.submitDevRunAction("dev_run_start")
 			case "o", "O":
-				if m.devRunIsRunning {
+				if hasActiveDevRuns(m) {
 					m.showDevRunOutput = !m.showDevRunOutput
 					// Send message to start/stop the output subscription
 					return m, func() tea.Msg {
 						return devRunToggleOutputMsg{
-							devRunId:   m.devRunId,
+							devRunId:   m.currentDevRunId,
 							showOutput: m.showDevRunOutput,
 						}
 					}
@@ -187,19 +193,32 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case devRunStartedMsg:
-		m.devRunIsRunning = true
-		m.devRunId = msg.devRunId
+		if m.activeDevRuns == nil {
+			m.activeDevRuns = make(map[string]string)
+		}
+		m.activeDevRuns[msg.commandId] = msg.devRunId
+		// Track the first/current dev run for output display
+		if m.currentDevRunId == "" {
+			m.currentDevRunId = msg.devRunId
+		}
 		return m, nil
 
 	case devRunEndedMsg:
-		m.devRunIsRunning = false
-		m.devRunId = ""
-		m.showDevRunOutput = false
-		m.devRunOutput = nil
+		delete(m.activeDevRuns, msg.commandId)
+		if m.currentDevRunId == msg.devRunId {
+			m.currentDevRunId = ""
+			m.showDevRunOutput = false
+			m.devRunOutput = nil
+			// Switch to another active run if available
+			for _, devRunId := range m.activeDevRuns {
+				m.currentDevRunId = devRunId
+				break
+			}
+		}
 		return m, nil
 
 	case devRunOutputMsg:
-		if m.showDevRunOutput && m.devRunId == msg.devRunId {
+		if m.showDevRunOutput && m.currentDevRunId == msg.devRunId {
 			m.devRunOutput = append(m.devRunOutput, msg.chunk)
 			// Keep only last 100 lines
 			if len(m.devRunOutput) > 100 {
@@ -337,9 +356,14 @@ func (m taskProgressModel) View() string {
 	// Display Dev Run status if context is available
 	if m.hasDevRunContext {
 		b.WriteString("\n")
-		if m.devRunIsRunning {
+		if hasActiveDevRuns(m) {
 			runningStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
-			b.WriteString(fmt.Sprintf("Dev Run: %s  [d] to stop", runningStyle.Render("Running")))
+			runCount := len(m.activeDevRuns)
+			if runCount == 1 {
+				b.WriteString(fmt.Sprintf("Dev Run: %s  [d] to stop", runningStyle.Render("Running")))
+			} else {
+				b.WriteString(fmt.Sprintf("Dev Run: %s (%d)  [d] to stop", runningStyle.Render("Running"), runCount))
+			}
 			if m.showDevRunOutput {
 				b.WriteString("  [o] to hide output\n")
 			} else {
@@ -445,9 +469,9 @@ func (m taskProgressModel) queryDevRunConfig() tea.Cmd {
 		if err != nil {
 			return devRunConfigResultMsg{hasDevRun: false}
 		}
-		// Check if the result has a non-empty start command list
+		// Check if the result has a non-empty commands map
 		if configMap, ok := result.(map[string]interface{}); ok {
-			if startList, ok := configMap["start"].([]interface{}); ok && len(startList) > 0 {
+			if commands, ok := configMap["commands"].(map[string]interface{}); ok && len(commands) > 0 {
 				return devRunConfigResultMsg{hasDevRun: true}
 			}
 		}

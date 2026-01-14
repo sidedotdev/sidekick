@@ -35,6 +35,7 @@ type DevRunActivities struct {
 // DevRunContext contains context information passed to Dev Run commands.
 type DevRunContext struct {
 	DevRunId     string
+	CommandId    string
 	WorkspaceId  string
 	FlowId       string
 	WorktreeDir  string
@@ -394,10 +395,11 @@ func (a *DevRunActivities) startCommand(
 		EventType:      domain.DevRunStartedEventType,
 		FlowId:         devRunCtx.FlowId,
 		DevRunId:       devRunCtx.DevRunId,
+		CommandId:      devRunCtx.CommandId,
 		CommandSummary: commandSummary,
 		WorkingDir:     workingDir,
 		Pid:            cmd.Process.Pid,
-		Pgid:           sessionId, // Session ID (with Setsid, this equals the process group ID)
+		SessionId:      sessionId,
 	}
 	if err := a.Streamer.AddFlowEvent(ctx, devRunCtx.WorkspaceId, devRunCtx.FlowId, startedEvent); err != nil {
 		log.Warn().Err(err).Msg("Failed to emit DevRunStartedEvent")
@@ -846,6 +848,7 @@ func (a *DevRunActivities) emitEndedEvent(ctx context.Context, devRunCtx DevRunC
 		EventType:  domain.DevRunEndedEventType,
 		FlowId:     devRunCtx.FlowId,
 		DevRunId:   devRunCtx.DevRunId,
+		CommandId:  devRunCtx.CommandId,
 		ExitStatus: exitStatus,
 		Signal:     signal,
 		Error:      errMsg,

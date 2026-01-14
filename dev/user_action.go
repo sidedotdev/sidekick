@@ -104,6 +104,7 @@ func handleDevRunStart(dCtx DevContext) {
 		}
 
 		devRunCtx := DevRunContext{
+			CommandId:    commandId,
 			WorkspaceId:  dCtx.WorkspaceId,
 			FlowId:       flowInfo.WorkflowExecution.ID,
 			WorktreeDir:  dCtx.EnvContainer.Env.GetWorkingDirectory(),
@@ -172,6 +173,7 @@ func handleDevRunStop(dCtx DevContext) {
 	for commandId, instance := range entry {
 		devRunCtx := DevRunContext{
 			DevRunId:     instance.DevRunId,
+			CommandId:    commandId,
 			WorkspaceId:  dCtx.WorkspaceId,
 			FlowId:       flowInfo.WorkflowExecution.ID,
 			WorktreeDir:  dCtx.EnvContainer.Env.GetWorkingDirectory(),

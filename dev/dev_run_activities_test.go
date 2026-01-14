@@ -141,7 +141,7 @@ func TestStartDevRun_EmitsStartedAndOutputEvents(t *testing.T) {
 	assert.Equal(t, "echo hello", startedEvent.CommandSummary)
 	assert.Equal(t, tmpDir, startedEvent.WorkingDir)
 	assert.Greater(t, startedEvent.Pid, 0)
-	assert.Greater(t, startedEvent.Pgid, 0)
+	assert.Greater(t, startedEvent.SessionId, 0)
 
 	// Check for output containing "hello"
 	require.GreaterOrEqual(t, len(outputEvents), 1, "should have at least one DevRunOutputEvent")
