@@ -3,7 +3,7 @@
     <div class="dev-run-header">
       <span class="dev-run-label">Dev Run</span>
       <button
-        v-if="!isRunning"
+        v-if="!hasActiveRuns"
         type="button"
         class="dev-run-button start"
         :disabled="disabled"
@@ -21,7 +21,7 @@
         Stop
       </button>
       <button
-        v-if="isRunning || hasOutput"
+        v-if="hasActiveRuns || hasOutput"
         type="button"
         class="dev-run-toggle"
         @click="toggleOutput"
@@ -29,23 +29,35 @@
         {{ showOutput ? 'Hide Output' : 'Show Output' }}
       </button>
     </div>
-    <div v-if="showOutput && (isRunning || hasOutput)" class="dev-run-output">
+    <div v-if="showOutput && (hasActiveRuns || hasOutput)" class="dev-run-output">
       <pre ref="outputRef">{{ outputText }}</pre>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onUnmounted } from 'vue';
+import { ref, computed, watch, onUnmounted, onMounted } from 'vue';
+
+interface DevRunInstance {
+  devRunId: string;
+  sessionId: number;
+  outputFilePath: string;
+  commandId: string;
+}
+
+interface DevRunState {
+  activeRuns: Record<string, DevRunInstance>;
+}
 
 interface DevRunStartedEvent {
   eventType: 'dev_run_started';
   flowId: string;
   devRunId: string;
+  commandId: string;
   commandSummary: string;
   workingDir: string;
   pid: number;
-  pgid: number;
+  sessionId: number;
 }
 
 interface DevRunOutputEvent {
@@ -61,6 +73,7 @@ interface DevRunEndedEvent {
   eventType: 'dev_run_ended';
   flowId: string;
   devRunId: string;
+  commandId: string;
   exitStatus?: number;
   signal?: string;
   error?: string;
@@ -84,19 +97,21 @@ const emit = defineEmits<{
   (e: 'stop'): void;
 }>();
 
-const isRunning = ref(false);
-const currentDevRunId = ref<string | null>(null);
+// Track active dev runs by command ID
+const activeRuns = ref<Map<string, DevRunInstance>>(new Map());
 const showOutput = ref(false);
 const outputLines = ref<string[]>([]);
 const outputRef = ref<HTMLPreElement | null>(null);
 
 let flowEventsSocket: WebSocket | null = null;
-let outputEventsSocket: WebSocket | null = null;
+// Track output sockets per dev run ID
+const outputEventsSockets = new Map<string, WebSocket>();
 let flowSocketClosed = false;
-let outputSocketClosed = false;
+const outputSocketsClosed = new Set<string>();
 
 const outputText = computed(() => outputLines.value.join(''));
 const hasOutput = computed(() => outputLines.value.length > 0);
+const hasActiveRuns = computed(() => activeRuns.value.size > 0);
 
 function handleStart() {
   emit('start');
@@ -113,6 +128,34 @@ function toggleOutput() {
 function getWebSocketUrl(path: string): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${protocol}//${window.location.host}${path}`;
+}
+
+async function queryDevRunState(): Promise<DevRunState | null> {
+  try {
+    const response = await fetch(`/api/v1/workspaces/${props.workspaceId}/flows/${props.flowId}/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'dev_run_state' })
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const data = await response.json();
+    return data.result as DevRunState;
+  } catch (err) {
+    console.debug('Dev run state query error:', err);
+    return null;
+  }
+}
+
+async function recoverActiveRuns() {
+  const state = await queryDevRunState();
+  if (!state?.activeRuns) return;
+
+  for (const [commandId, instance] of Object.entries(state.activeRuns)) {
+    activeRuns.value.set(commandId, instance);
+    connectOutputEventsSocket(instance.devRunId);
+  }
 }
 
 function connectFlowEventsSocket() {
@@ -151,85 +194,104 @@ function connectFlowEventsSocket() {
   };
 }
 
-let startedDebounceTimer = ref<NodeJS.Timeout | null>(null);
+const startedDebounceTimers = new Map<string, NodeJS.Timeout>();
 
 function handleFlowEvent(event: DevRunFlowEvent) {
   switch (event.eventType) {
-    case 'dev_run_started':
-      isRunning.value = true;
-      currentDevRunId.value = event.devRunId;
-      outputLines.value = [];
+    case 'dev_run_started': {
+      const instance: DevRunInstance = {
+        devRunId: event.devRunId,
+        sessionId: event.sessionId,
+        outputFilePath: '',
+        commandId: event.commandId,
+      };
+      activeRuns.value.set(event.commandId, instance);
 
-      // connect whether or not showing output, so showing it is instant
-      // but debounce so we don't connect to previous dev runs that ended already
-      if (startedDebounceTimer.value) {
-        clearTimeout(startedDebounceTimer.value);
+      // Debounce connection to avoid connecting to runs that end immediately
+      const existingTimer = startedDebounceTimers.get(event.commandId);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
       }
-      startedDebounceTimer.value = setTimeout(() => {
-        if (currentDevRunId.value === event.devRunId && isRunning.value) {
+      startedDebounceTimers.set(event.commandId, setTimeout(() => {
+        if (activeRuns.value.has(event.commandId)) {
           connectOutputEventsSocket(event.devRunId);
         }
-      }, 250);
+        startedDebounceTimers.delete(event.commandId);
+      }, 250));
       break;
-    case 'dev_run_ended':
-      if (startedDebounceTimer.value) {
-        clearTimeout(startedDebounceTimer.value);
+    }
+    case 'dev_run_ended': {
+      const commandId = event.commandId;
+      const timer = startedDebounceTimers.get(commandId);
+      if (timer) {
+        clearTimeout(timer);
+        startedDebounceTimers.delete(commandId);
       }
-      isRunning.value = false;
-      disconnectOutputEventsSocket();
+      activeRuns.value.delete(commandId);
+      disconnectOutputEventsSocket(event.devRunId);
       break;
+    }
   }
 }
 
 function connectOutputEventsSocket(devRunId: string) {
-  if (outputEventsSocket) {
-    // already connected, no need to connect again
-    return
+  if (outputEventsSockets.has(devRunId)) {
+    return;
   }
 
-  outputSocketClosed = false;
-  outputEventsSocket = new WebSocket(
+  outputSocketsClosed.delete(devRunId);
+  const socket = new WebSocket(
     getWebSocketUrl(`/ws/v1/workspaces/${props.workspaceId}/flows/${props.flowId}/events`)
   );
+  outputEventsSockets.set(devRunId, socket);
 
-  outputEventsSocket.onopen = () => {
-    outputEventsSocket?.send(JSON.stringify({ parentId: devRunId }));
+  socket.onopen = () => {
+    socket.send(JSON.stringify({ parentId: devRunId }));
   };
 
-  outputEventsSocket.onmessage = (event) => {
+  socket.onmessage = (event) => {
     try {
       const flowEvent = JSON.parse(event.data) as DevRunFlowEvent;
       if (flowEvent.eventType === 'dev_run_output') {
         outputLines.value.push(flowEvent.chunk);
         scrollOutputToBottom();
       } else if (flowEvent.eventType === 'end_stream') {
-        disconnectOutputEventsSocket();
+        disconnectOutputEventsSocket(devRunId);
       }
     } catch (err) {
       console.error('Error parsing output event:', err);
     }
   };
 
-  outputEventsSocket.onerror = (error) => {
+  socket.onerror = (error) => {
     console.error('Output events WebSocket error:', error);
   };
 
-  outputEventsSocket.onclose = () => {
-    if (outputSocketClosed) return;
+  socket.onclose = () => {
+    if (outputSocketsClosed.has(devRunId)) return;
+    outputEventsSockets.delete(devRunId);
     setTimeout(() => {
-      if (!outputSocketClosed && currentDevRunId.value === devRunId && isRunning.value) {
-        outputEventsSocket = null;
+      // Reconnect if the run is still active
+      const isStillActive = Array.from(activeRuns.value.values()).some(r => r.devRunId === devRunId);
+      if (!outputSocketsClosed.has(devRunId) && isStillActive) {
         connectOutputEventsSocket(devRunId);
       }
     }, 1000);
   };
 }
 
-function disconnectOutputEventsSocket() {
-  outputSocketClosed = true;
-  if (outputEventsSocket) {
-    outputEventsSocket.close();
-    outputEventsSocket = null;
+function disconnectOutputEventsSocket(devRunId: string) {
+  outputSocketsClosed.add(devRunId);
+  const socket = outputEventsSockets.get(devRunId);
+  if (socket) {
+    socket.close();
+    outputEventsSockets.delete(devRunId);
+  }
+}
+
+function disconnectAllOutputEventsSockets() {
+  for (const devRunId of outputEventsSockets.keys()) {
+    disconnectOutputEventsSocket(devRunId);
   }
 }
 
@@ -239,12 +301,13 @@ function scrollOutputToBottom() {
   }
 }
 
-watch(() => props.flowId, () => {
+watch(() => props.flowId, async () => {
   disconnectFlowEventsSocket();
-  isRunning.value = false;
-  currentDevRunId.value = null;
+  disconnectAllOutputEventsSockets();
+  activeRuns.value.clear();
   outputLines.value = [];
   connectFlowEventsSocket();
+  await recoverActiveRuns();
 }, { immediate: true });
 
 function disconnectFlowEventsSocket() {
@@ -257,7 +320,7 @@ function disconnectFlowEventsSocket() {
 
 onUnmounted(() => {
   disconnectFlowEventsSocket();
-  disconnectOutputEventsSocket();
+  disconnectAllOutputEventsSockets();
 });
 </script>
 

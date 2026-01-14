@@ -334,8 +334,8 @@ async function queryDevRunConfig() {
       return
     }
     const data = await response.json()
-    // Check if result has non-empty start command list
-    if (data.result?.start && Array.isArray(data.result.start) && data.result.start.length > 0) {
+    // Check if result has non-empty commands map
+    if (data.result?.commands && typeof data.result.commands === 'object' && Object.keys(data.result.commands).length > 0) {
       hasDevRunConfig.value = true
     }
   } catch (err) {

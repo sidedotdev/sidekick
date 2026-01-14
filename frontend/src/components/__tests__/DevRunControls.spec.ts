@@ -90,10 +90,11 @@ describe('DevRunControls', () => {
       eventType: 'dev_run_started',
       flowId: 'test-flow',
       devRunId: 'dev-run-123',
+      commandId: 'dev-server',
       commandSummary: 'npm run dev',
       workingDir: '/tmp/worktree',
       pid: 1234,
-      pgid: 1234
+      sessionId: 1234
     })
 
     await wrapper.vm.$nextTick()
@@ -113,10 +114,11 @@ describe('DevRunControls', () => {
       eventType: 'dev_run_started',
       flowId: 'test-flow',
       devRunId: 'dev-run-123',
+      commandId: 'dev-server',
       commandSummary: 'npm run dev',
       workingDir: '/tmp/worktree',
       pid: 1234,
-      pgid: 1234
+      sessionId: 1234
     })
 
     await wrapper.vm.$nextTick()
@@ -137,10 +139,11 @@ describe('DevRunControls', () => {
       eventType: 'dev_run_started',
       flowId: 'test-flow',
       devRunId: 'dev-run-123',
+      commandId: 'dev-server',
       commandSummary: 'npm run dev',
       workingDir: '/tmp/worktree',
       pid: 1234,
-      pgid: 1234
+      sessionId: 1234
     })
 
     await wrapper.vm.$nextTick()
@@ -164,10 +167,11 @@ describe('DevRunControls', () => {
       eventType: 'dev_run_started',
       flowId: 'test-flow',
       devRunId: 'dev-run-123',
+      commandId: 'dev-server',
       commandSummary: 'npm run dev',
       workingDir: '/tmp/worktree',
       pid: 1234,
-      pgid: 1234
+      sessionId: 1234
     })
 
     await wrapper.vm.$nextTick()
@@ -194,10 +198,11 @@ describe('DevRunControls', () => {
       eventType: 'dev_run_started',
       flowId: 'test-flow',
       devRunId: 'dev-run-123',
+      commandId: 'dev-server',
       commandSummary: 'npm run dev',
       workingDir: '/tmp/worktree',
       pid: 1234,
-      pgid: 1234
+      sessionId: 1234
     })
 
     await wrapper.vm.$nextTick()
@@ -208,6 +213,7 @@ describe('DevRunControls', () => {
       eventType: 'dev_run_ended',
       flowId: 'test-flow',
       devRunId: 'dev-run-123',
+      commandId: 'dev-server',
       exitStatus: 0
     })
 
