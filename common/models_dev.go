@@ -203,8 +203,8 @@ func GetModel(provider string, model string) (*ModelInfo, bool) {
 }
 
 func ModelSupportsReasoning(provider string, model string) bool {
-	modelInfo, found := GetModel(provider, model)
-	if !found {
+	modelInfo, _ := GetModel(provider, model)
+	if modelInfo == nil {
 		return false
 	}
 	return modelInfo.Reasoning
