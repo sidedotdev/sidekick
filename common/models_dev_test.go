@@ -79,6 +79,12 @@ func TestModelSupportsReasoning(t *testing.T) {
 			model:    "claude-3-opus",
 			want:     false,
 		},
+		{
+			name:     "custom provider fallback to model match with reasoning",
+			provider: "custom-gateway",
+			model:    "gpt-5",
+			want:     true,
+		},
 	}
 
 	for _, tt := range tests {
