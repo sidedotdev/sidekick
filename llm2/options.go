@@ -24,15 +24,20 @@ type Options struct {
 
 // ActionParams returns a map of action parameters suitable for logging or workflow metadata.
 func (o Options) ActionParams() map[string]any {
-	return map[string]any{
+	params := map[string]any{
 		"messages":          o.Params.Messages,
 		"tools":             o.Params.Tools,
 		"toolChoice":        o.Params.ToolChoice,
 		"model":             o.Params.Model,
-		"reasoningEffort":   o.Params.ReasoningEffort,
 		"provider":          o.Params.Provider,
 		"temperature":       o.Params.Temperature,
 		"parallelToolCalls": o.Params.ParallelToolCalls,
-		"maxTokens":         o.Params.MaxTokens,
 	}
+	if o.Params.ReasoningEffort != "" {
+		params["reasoningEffort"] = o.Params.ReasoningEffort
+	}
+	if o.Params.MaxTokens > 0 {
+		params["maxTokens"] = o.Params.MaxTokens
+	}
+	return params
 }
