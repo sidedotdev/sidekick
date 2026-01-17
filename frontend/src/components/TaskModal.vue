@@ -82,16 +82,18 @@
       <div class="button-container">
         <div class="button-left">
           <Button 
-            label="Start Task"
-            class="p-button-primary"
+            class="p-button-primary start-task-button"
             @click="startTask"
-          />
+          >
+            Start Task
+            <span class="shortcut-hint">{{ shortcutLabel }}</span>
+          </Button>
           <div class="save-indicator" :class="saveIndicatorClass">
             <span v-if="saveIndicatorClass === 'saving'">Saving...</span>
             <span v-else-if="saveIndicatorClass === 'saved'">Saved</span>
           </div>
         </div>
-        <button v-if="canDelete" class="delete-button" title="Delete task" @click="deleteTask">
+        <button v-if="canDelete" type="button" class="delete-button" title="Delete task" @click="deleteTask">
           <TrashIcon />
         </button>
       </div>
@@ -292,11 +294,16 @@ const redo = () => {
   }
 }
 
+const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
+const shortcutLabel = computed(() => isMac ? '⌘↵' : 'Ctrl+↵')
+
 const handleKeyDown = (event: KeyboardEvent) => {
-  const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
   const modKey = isMac ? event.metaKey : event.ctrlKey
   
-  if (modKey && event.key === 'z' && !event.shiftKey) {
+  if (modKey && event.key === 'Enter') {
+    event.preventDefault()
+    startTask()
+  } else if (modKey && event.key === 'z' && !event.shiftKey) {
     event.preventDefault()
     undo()
   } else if (modKey && (event.key === 'y' || (event.key === 'z' && event.shiftKey))) {
@@ -811,6 +818,25 @@ label {
   background-color: var(--color-background);
   color: var(--color-text);
   max-width: 20rem;
+}
+
+.start-task-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.shortcut-hint {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 0.6875rem;
+  line-height: 1;
+  opacity: 0.7;
+  padding: 0.1875rem 0.3125rem;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 0.25rem;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
 }
 
 .save-indicator {
