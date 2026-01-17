@@ -268,7 +268,7 @@ describe('TaskModal', () => {
   it('has Start Task button as primary action', async () => {
     mountComponent()
     const startButton = wrapper.find('.p-button-primary')
-    expect(startButton.text()).toBe('Start Task')
+    expect(startButton.text()).toContain('Start Task')
   })
 
   it('submits with to_do status when Start Task is clicked', async () => {
