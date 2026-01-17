@@ -5,6 +5,7 @@ import (
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/secret_manager"
+	"strings"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -58,7 +59,6 @@ func (eCtx *ExecContext) GetModelConfig(key string, iteration int, fallback stri
 	modelConfig, isDefault := eCtx.LLMConfig.GetModelConfig(key, iteration)
 	if isDefault && fallback != "default" {
 		if fallback == "small" {
-			modelConfig.ReasoningEffort = "low"
 			provider, err := common.StringToToolChatProviderType(modelConfig.Provider)
 			if err == nil {
 				modelConfig.Model = provider.SmallModel()
@@ -72,6 +72,13 @@ func (eCtx *ExecContext) GetModelConfig(key string, iteration int, fallback stri
 						break
 					}
 				}
+			}
+			// Set low reasoning effort for non-Claude reasoning models.
+			// Claude models are excluded because they error with "Thinking may
+			// not be enabled when tool_choice forces tool use."
+			if common.ModelSupportsReasoning(modelConfig.Provider, modelConfig.Model) &&
+				!strings.Contains(strings.ToLower(modelConfig.Model), "claude") {
+				modelConfig.ReasoningEffort = "low"
 			}
 		} else {
 			modelConfig, _ = eCtx.LLMConfig.GetModelConfig(fallback, iteration)
