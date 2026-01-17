@@ -130,14 +130,14 @@ const validateLlmConfig = (config: LLMConfig): boolean => {
   return true
 }
 
-const saveOrUpdatePreset = (options: { showAlert?: boolean } = {}): boolean => {
-  const { showAlert = false } = options
+const saveOrUpdatePreset = (options: { finalSave?: boolean } = {}): boolean => {
+  const { finalSave = false } = options
   
   if (!isAddPresetMode.value && !currentPresetId.value) return true
   
   const isValid = validateLlmConfig(llmConfig.value)
   if (!isValid) {
-    if (showAlert) {
+    if (finalSave) {
       alert('Invalid configuration: Default config must have a provider selected, and any enabled use case must have a provider.')
     }
     return false
@@ -160,7 +160,9 @@ const saveOrUpdatePreset = (options: { showAlert?: boolean } = {}): boolean => {
       config: JSON.parse(JSON.stringify(llmConfig.value))
     }
     presets.value.push(newPreset)
-    selectedPresetValue.value = newId
+    if (finalSave) {
+      selectedPresetValue.value = newId
+    }
   }
   
   savePresets(presets.value)
@@ -496,7 +498,7 @@ const startTask = async () => {
     return
   }
 
-  if (!saveOrUpdatePreset({ showAlert: true })) {
+  if (!saveOrUpdatePreset({ finalSave: true })) {
     return
   }
 
