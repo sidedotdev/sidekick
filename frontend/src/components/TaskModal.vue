@@ -73,7 +73,7 @@
       </label>
 
       <div>
-        <AutogrowTextarea id="description" v-model="description" placeholder="Task description - the more detail, the better" />
+        <AutogrowTextarea ref="descriptionRef" id="description" v-model="description" placeholder="Task description - the more detail, the better" />
       </div>
       <div v-if="devMode && flowType === 'planned_dev'">
         <label>Planning Prompt</label>
@@ -206,6 +206,7 @@ const initialDescriptionValue = getInitialDescription()
 const initialBranchValue = getInitialBranch()
 
 const description = ref(initialDescriptionValue)
+const descriptionRef = ref<{ focus: () => void } | null>(null)
 const status = ref<TaskStatus>(props.task?.status || 'to_do')
 const flowType = ref(props.task?.flowType || localStorage.getItem('lastUsedFlowType') || 'basic_dev')
 const envType = ref<string>(props.task?.flowOptions?.envType || localStorage.getItem('lastUsedEnvType') || 'local')
@@ -596,6 +597,7 @@ const close = async () => {
 onMounted(() => {
   // Initialize history with current state
   pushHistory()
+  descriptionRef.value?.focus()
 })
 
 onUnmounted(() => {

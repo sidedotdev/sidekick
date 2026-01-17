@@ -707,7 +707,7 @@ describe('TaskModal localStorage behavior', () => {
 
       await wrapper.vm.$nextTick()
 
-      const result = vm.saveOrUpdatePreset()
+      const result = vm.saveOrUpdatePreset({ finalSave: true })
       expect(result).toBe(true)
 
       const savedPresets = JSON.parse(localStorage.getItem('sidekick_model_presets') || '[]')
@@ -780,7 +780,7 @@ describe('TaskModal localStorage behavior', () => {
 
       await wrapper.vm.$nextTick()
 
-      const result = vm.saveOrUpdatePreset({ showAlert: true })
+      const result = vm.saveOrUpdatePreset({ finalSave: true })
       expect(result).toBe(false)
       expect(window.alert).toHaveBeenCalledWith(
         'Invalid configuration: Default config must have a provider selected, and any enabled use case must have a provider.'
@@ -790,7 +790,7 @@ describe('TaskModal localStorage behavior', () => {
       expect(savedPresets).toHaveLength(0)
     })
 
-    it('validates without showing alert when showAlert is false', async () => {
+    it('validates without showing alert when finalSave is false', async () => {
       const wrapper = mount(TaskModal, {
         global: {
           stubs: {
@@ -810,7 +810,7 @@ describe('TaskModal localStorage behavior', () => {
 
       await wrapper.vm.$nextTick()
 
-      const result = vm.saveOrUpdatePreset({ showAlert: false })
+      const result = vm.saveOrUpdatePreset({ finalSave: false })
       expect(result).toBe(false)
       expect(window.alert).not.toHaveBeenCalled()
 
@@ -860,7 +860,7 @@ describe('TaskModal localStorage behavior', () => {
 
       await wrapper.vm.$nextTick()
 
-      const result = vm.saveOrUpdatePreset({ showAlert: true })
+      const result = vm.saveOrUpdatePreset({ finalSave: true })
       expect(result).toBe(false)
       expect(window.alert).toHaveBeenCalled()
     })
