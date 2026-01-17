@@ -22,6 +22,7 @@
         @item-select="emitUpdate"
         @change="emitUpdate"
         @input="emitUpdate"
+        @keydown.enter.stop
       />
       <select
         v-if="modelSupportsReasoning(defaultConfig.provider, defaultConfig.model)"
@@ -60,6 +61,7 @@
           @item-select="emitUpdate"
           @change="emitUpdate"
           @input="emitUpdate"
+          @keydown.enter.stop
         />
         <select
           v-if="useCaseStates[useCase].enabled && modelSupportsReasoning(useCaseStates[useCase].config.provider, useCaseStates[useCase].config.model)"
