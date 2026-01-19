@@ -3,7 +3,10 @@
   <div class="modal" @keydown="handleKeyDown">
     <div class="modal-header">
       <h2>Task</h2>
-      <button class="close-button" @click="close" aria-label="Close">&times;</button>
+      <button class="close-button" @click="close" aria-label="Close">
+        <span class="close-shortcut-hint">Esc</span>
+        &times;
+      </button>
     </div>
     <form @submit.prevent="startTask">
       <div class="preset-section">
@@ -301,7 +304,10 @@ const shortcutLabel = computed(() => isMac ? '⌘↵' : 'Ctrl+↵')
 const handleKeyDown = (event: KeyboardEvent) => {
   const modKey = isMac ? event.metaKey : event.ctrlKey
   
-  if (modKey && event.key === 'Enter') {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    close()
+  } else if (modKey && event.key === 'Enter') {
     event.preventDefault()
     startTask()
   } else if (modKey && event.key === 'z' && !event.shiftKey) {
@@ -635,6 +641,23 @@ onUnmounted(() => {
 
 .close-button:hover {
   color: var(--color-text);
+}
+
+.close-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.close-shortcut-hint {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 0.625rem;
+  line-height: 1;
+  opacity: 0.6;
+  padding: 0.125rem 0.25rem;
+  background: var(--color-background-soft);
+  border-radius: 0.1875rem;
+  vertical-align: middle;
 }
 
 .overlay {
