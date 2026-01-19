@@ -196,6 +196,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "gradle build"},
 			{Pattern: "gradle check"},
 			// Other common tools
+			{Pattern: "mkdir"},
 			{Pattern: "lima"},
 			{Pattern: "jq"},
 			{Pattern: "yq"},
