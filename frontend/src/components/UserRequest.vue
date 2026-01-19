@@ -27,7 +27,7 @@
     </template>
 
     <div v-if="flowAction.actionParams.requestKind === 'approval'">
-      <AutogrowTextarea v-model="responseContent" placeholder="Rejection reason" />
+      <AutogrowTextarea ref="textareaRef" v-model="responseContent" placeholder="Rejection reason" />
       <div v-if="errorMessage" class="error-message">
         {{ errorMessage }}
       </div>
@@ -90,7 +90,7 @@
         @stop="handleDevRunStop"
       />
 
-      <AutogrowTextarea v-model="responseContent" placeholder="Rejection reason" />
+      <AutogrowTextarea ref="textareaRef" v-model="responseContent" placeholder="Rejection reason" />
       <div v-if="errorMessage" class="error-message">
         {{ errorMessage }}
       </div>
@@ -117,7 +117,7 @@
       </button>
     </div>
     <div v-else>
-      <AutogrowTextarea v-model="responseContent"/>
+      <AutogrowTextarea ref="textareaRef" v-model="responseContent"/>
       <div v-if="errorMessage" class="error-message">
         {{ errorMessage }}
       </div>
@@ -203,6 +203,7 @@ const props = defineProps({
 
 const responseContent = ref('');
 const errorMessage = ref('');
+const textareaRef = ref<{ focus: () => void } | null>(null);
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
 const ignoreWhitespace = ref(false);
 const diffMode = ref<'unified' | 'split'>('unified');
@@ -307,6 +308,14 @@ onMounted(() => {
       isPending.value && 
       props.flowAction.actionParams.requestKind === 'merge_approval') {
     updateMergeApprovalParams();
+  }
+
+  if (isPending.value) {
+    setTimeout(() => {
+      if (isPending.value) {
+        textareaRef.value?.focus();
+      }
+    }, 200);
   }
 });
 
