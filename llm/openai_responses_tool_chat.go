@@ -134,7 +134,12 @@ func (o OpenaiResponsesToolChat) ChatStream(ctx context.Context, options ToolCha
 		}
 	}
 
-	stream := client.Responses.NewStreaming(ctx, params)
+	var extraBodyOptions []option.RequestOption
+	for key, value := range options.Params.ExtraBody {
+		extraBodyOptions = append(extraBodyOptions, option.WithJSONSet(key, value))
+	}
+
+	stream := client.Responses.NewStreaming(ctx, params, extraBodyOptions...)
 
 	var deltas []ChatMessageDelta
 	var stopReason string
