@@ -1,5 +1,5 @@
 <template>
-  <form v-if="isPending" @submit.prevent="flowAction.actionParams.requestKind === 'free_form' && submitUserResponse(true)">
+  <form v-if="isPending" @submit.prevent="flowAction.actionParams.requestKind === 'free_form' && submitUserResponse(true)" @keydown="handleKeyDown">
     <div v-if="flowAction.actionParams.requestContent" class="markdown-container">
       <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
         <CopyIcon />
@@ -121,7 +121,10 @@
       <div v-if="errorMessage" class="error-message">
         {{ errorMessage }}
       </div>
-      <button :disabled="responseContent.length == 0" class="cta-button-color" type="submit">Submit</button>
+      <button :disabled="responseContent.length == 0" class="cta-button-color submit-button" type="submit">
+        Submit
+        <span class="shortcut-hint">{{ shortcutLabel }}</span>
+      </button>
     </div>
   </form>
   <!-- TODO move approved/rejected to FlowActionItem summary. Only show content here -->
@@ -321,6 +324,20 @@ const parsedActionResult = computed<keyable | null>(() => {
 const targetBranch = ref<string | undefined>(parsedActionResult.value?.targetBranch ?? props.flowAction.actionParams.mergeApprovalInfo?.defaultTargetBranch)
 
 const hasDevRunConfig = ref(false)
+
+const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
+const shortcutLabel = computed(() => isMac ? '⌘↵' : 'Ctrl+↵')
+
+const handleKeyDown = (event: KeyboardEvent) => {
+  const modKey = isMac ? event.metaKey : event.ctrlKey
+  
+  if (modKey && event.key === 'Enter') {
+    if (props.flowAction.actionParams.requestKind === 'free_form' && responseContent.value.length > 0) {
+      event.preventDefault()
+      submitUserResponse(true)
+    }
+  }
+}
 
 async function queryDevRunConfig() {
   try {
@@ -722,5 +739,24 @@ label[for="targetBranch"] {
   border: 1px dashed var(--color-border);
   border-radius: 4px;
   margin: 0.5rem 0;
+}
+
+.submit-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.shortcut-hint {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 0.6875rem;
+  line-height: 1;
+  opacity: 0.7;
+  padding: 0.1875rem 0.3125rem;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 0.25rem;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
 }
 </style>
