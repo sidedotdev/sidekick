@@ -32,17 +32,19 @@
         {{ errorMessage }}
       </div>
       <button type="button" class="cta-button-color"
-        :disabled="responseContent.trim() !== ''"
+        :disabled="hasResponseText"
         @click="submitUserResponse(true)"
       >
         {{ approveCopy() }}
+        <span v-if="!hasResponseText" class="shortcut-hint">{{ shortcutLabel }}</span>
       </button>
 
       <button type="button" class="secondary"
-        :disabled="responseContent.trim() === ''"
+        :disabled="!hasResponseText"
         @click="submitUserResponse(false)"
       >
         {{ rejectCopy() }}
+        <span v-if="hasResponseText" class="shortcut-hint">{{ shortcutLabel }}</span>
       </button>
     </div>
 
@@ -95,17 +97,19 @@
         {{ errorMessage }}
       </div>
       <button type="button" class="cta-button-color"
-        :disabled="responseContent.trim() !== ''"
+        :disabled="hasResponseText"
         @click="submitUserResponse(true)"
       >
         {{ approveCopy() }}
+        <span v-if="!hasResponseText" class="shortcut-hint">{{ shortcutLabel }}</span>
       </button>
 
       <button type="button" class="secondary"
-        :disabled="responseContent.trim() === ''"
+        :disabled="!hasResponseText"
         @click="submitUserResponse(false)"
       >
         {{ rejectCopy() }}
+        <span v-if="hasResponseText" class="shortcut-hint">{{ shortcutLabel }}</span>
       </button>
     </div>
     <div v-else-if="flowAction.actionParams.requestKind === 'continue'">
@@ -204,6 +208,7 @@ const props = defineProps({
 const responseContent = ref('');
 const errorMessage = ref('');
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
+const hasResponseText = computed(() => responseContent.value.trim() !== '');
 const ignoreWhitespace = ref(false);
 const diffMode = ref<'unified' | 'split'>('unified');
 const diffScope = ref<'all' | 'since_last_review'>('all');
@@ -332,9 +337,13 @@ const handleKeyDown = (event: KeyboardEvent) => {
   const modKey = isMac ? event.metaKey : event.ctrlKey
   
   if (modKey && event.key === 'Enter') {
-    if (props.flowAction.actionParams.requestKind === 'free_form' && responseContent.value.length > 0) {
+    const requestKind = props.flowAction.actionParams.requestKind
+    if (requestKind === 'free_form' && responseContent.value.length > 0) {
       event.preventDefault()
       submitUserResponse(true)
+    } else if (requestKind === 'approval' || requestKind === 'merge_approval') {
+      event.preventDefault()
+      submitUserResponse(!hasResponseText.value)
     }
   }
 }
