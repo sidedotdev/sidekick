@@ -11,6 +11,8 @@ type ModelConfig struct {
 	ReasoningEffort string `koanf:"reasoning_effort" json:"reasoningEffort,omitempty"`
 	// Optional maximum number of tokens to generate. Values <= 0 are treated as unset.
 	MaxTokens int `koanf:"max_tokens" json:"maxTokens,omitempty"`
+	// Optional extra body parameters to pass to the provider API.
+	ExtraBody map[string]any `koanf:"extra_body" json:"extraBody,omitempty"`
 }
 
 func (c ModelConfig) NormalizedProviderName() string {
