@@ -113,7 +113,12 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 		}
 	}
 
-	stream := client.Responses.NewStreaming(ctx, params)
+	var extraBodyOptions []option.RequestOption
+	for key, value := range options.Params.ExtraBody {
+		extraBodyOptions = append(extraBodyOptions, option.WithJSONSet(key, value))
+	}
+
+	stream := client.Responses.NewStreaming(ctx, params, extraBodyOptions...)
 
 	var events []Event
 	var stopReason string
