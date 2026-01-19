@@ -648,7 +648,8 @@ func TestEvaluateCommandPermission_EnvVarPrefix(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result, msg := EvaluateCommandPermission(config, tt.command)
+			opts := EvaluatePermissionOptions{StripEnvVarPrefix: true}
+			result, msg := EvaluateCommandPermissionWithOptions(config, tt.command, opts)
 			assert.Equal(t, tt.expectedResult, result)
 			assert.Equal(t, tt.expectedMsg, msg)
 		})
@@ -709,7 +710,8 @@ func TestEvaluateCommandPermission_PatternWithEnvVarAssignment(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result, msg := EvaluateCommandPermission(config, tt.command)
+			opts := EvaluatePermissionOptions{StripEnvVarPrefix: true}
+			result, msg := EvaluateCommandPermissionWithOptions(config, tt.command, opts)
 			assert.Equal(t, tt.expectedResult, result)
 			assert.Equal(t, tt.expectedMsg, msg)
 		})

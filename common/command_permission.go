@@ -736,12 +736,30 @@ func parseCommandForPaths(cmd string) []string {
 	return parts
 }
 
+// EvaluatePermissionOptions controls behavior of permission evaluation functions.
+type EvaluatePermissionOptions struct {
+	// StripEnvVarPrefix controls whether leading env var assignments are stripped
+	// from commands before matching against patterns that don't reference env vars.
+	StripEnvVarPrefix bool
+}
+
 // EvaluateCommandPermission evaluates a single command against the permission config.
 // It checks deny patterns first, then require-approval, then auto-approve.
 // Returns the permission result and any associated message.
+// This version does NOT strip env var prefixes for backward compatibility.
 func EvaluateCommandPermission(config CommandPermissionConfig, command string) (PermissionResult, string) {
-	// Strip env var prefix for matching against patterns that don't reference env vars
-	strippedCommand := stripEnvVarPrefix(command)
+	return EvaluateCommandPermissionWithOptions(config, command, EvaluatePermissionOptions{
+		StripEnvVarPrefix: false,
+	})
+}
+
+// EvaluateCommandPermissionWithOptions evaluates a single command against the permission config
+// with configurable options.
+func EvaluateCommandPermissionWithOptions(config CommandPermissionConfig, command string, opts EvaluatePermissionOptions) (PermissionResult, string) {
+	strippedCommand := command
+	if opts.StripEnvVarPrefix {
+		strippedCommand = stripEnvVarPrefix(command)
+	}
 
 	// Check deny patterns first
 	for _, p := range config.Deny {
@@ -800,7 +818,15 @@ func EvaluateCommandPermission(config CommandPermissionConfig, command string) (
 // Returns PermissionDeny if ANY command is denied.
 // Returns PermissionRequireApproval if ANY command requires approval (and none denied).
 // Returns PermissionAutoApprove only if ALL commands are auto-approved.
+// This version does NOT strip env var prefixes for backward compatibility.
 func EvaluateScriptPermission(config CommandPermissionConfig, script string) (PermissionResult, string) {
+	return EvaluateScriptPermissionWithOptions(config, script, EvaluatePermissionOptions{
+		StripEnvVarPrefix: false,
+	})
+}
+
+// EvaluateScriptPermissionWithOptions evaluates a shell script with configurable options.
+func EvaluateScriptPermissionWithOptions(config CommandPermissionConfig, script string, opts EvaluatePermissionOptions) (PermissionResult, string) {
 	commands := permission.ExtractCommands(script)
 
 	// If no commands extracted, default to require approval
@@ -811,7 +837,7 @@ func EvaluateScriptPermission(config CommandPermissionConfig, script string) (Pe
 	hasRequireApproval := false
 
 	for _, cmd := range commands {
-		result, msg := EvaluateCommandPermission(config, cmd)
+		result, msg := EvaluateCommandPermissionWithOptions(config, cmd, opts)
 		switch result {
 		case PermissionDeny:
 			return PermissionDeny, msg
