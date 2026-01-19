@@ -90,6 +90,7 @@ type Controller struct {
 	temporalNamespace string
 	temporalTaskQueue string
 	secretManager     secret_manager.SecretManager
+	taskStartTimeout  time.Duration
 }
 
 // UserActionRequest defines the expected request body for user actions.
@@ -283,6 +284,7 @@ func NewController() (Controller, error) {
 		temporalNamespace: common.GetTemporalNamespace(),
 		temporalTaskQueue: common.GetTemporalTaskQueue(),
 		secretManager:     secretManager,
+		taskStartTimeout:  common.GetTaskStartTimeout(),
 	}, nil
 }
 
@@ -684,16 +686,48 @@ func (ctrl *Controller) CreateTaskHandler(c *gin.Context) {
 	}
 
 	if agentType == domain.AgentTypeLLM {
-		if err := ctrl.AgentHandleNewTask(c, &task); err != nil {
-			ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("Failed to handle new task: %w", err))
-			task.Status = domain.TaskStatusFailed
-			task.AgentType = domain.AgentTypeNone
-			ctrl.service.PersistTask(c, task)
+		if err := ctrl.startTaskWithTimeout(c, &task); err != nil {
 			return
 		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"task": task})
+}
+
+// startTaskWithTimeout starts a task with a configurable timeout.
+// On timeout or error, it reverts the task to drafting status and sends an error response.
+// Returns an error if the task start failed (caller should return early), nil on success.
+func (ctrl *Controller) startTaskWithTimeout(c *gin.Context, task *domain.Task) error {
+	timeout := ctrl.taskStartTimeout
+	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- ctrl.AgentHandleNewTask(ctx, task)
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			ctrl.revertTaskToDrafting(c, task)
+			ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("failed to start task: %w", err))
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		ctrl.revertTaskToDrafting(c, task)
+		ctrl.ErrorHandler(c, http.StatusGatewayTimeout, fmt.Errorf("task start timed out after %v", timeout))
+		return ctx.Err()
+	}
+}
+
+// revertTaskToDrafting reverts a task to drafting status so the user can retry.
+func (ctrl *Controller) revertTaskToDrafting(c *gin.Context, task *domain.Task) {
+	task.Status = domain.TaskStatusDrafting
+	task.AgentType = domain.AgentTypeHuman
+	task.Updated = time.Now()
+	ctrl.service.PersistTask(c, *task)
 }
 
 // API response object for a task
@@ -1036,6 +1070,11 @@ func (ctrl *Controller) AgentHandleNewTask(ctx context.Context, task *domain.Tas
 		return err
 	}
 
+	// Check if context was cancelled (e.g., due to timeout) before persisting
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	// Update the task status to in progress
 	task.Status = domain.TaskStatusInProgress
 	task.Updated = time.Now()
@@ -1320,11 +1359,7 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 	}
 
 	if task.Status == domain.TaskStatusToDo && len(flows) == 0 {
-		if err := ctrl.AgentHandleNewTask(requestCtx, &task); err != nil {
-			ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("Failed to handle new task: %w", err))
-			task.Status = domain.TaskStatusFailed
-			task.AgentType = domain.AgentTypeNone
-			ctrl.service.PersistTask(requestCtx, task)
+		if err := ctrl.startTaskWithTimeout(c, &task); err != nil {
 			return
 		}
 	}

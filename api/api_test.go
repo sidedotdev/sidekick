@@ -91,9 +91,10 @@ func NewMockController(t *testing.T) Controller {
 
 	service := NewTestService(t)
 	return Controller{
-		temporalClient: mockTemporalClient,
-		service:        service,
-		secretManager:  secret_manager.MockSecretManager{},
+		temporalClient:   mockTemporalClient,
+		service:          service,
+		secretManager:    secret_manager.MockSecretManager{},
+		taskStartTimeout: 5 * time.Second,
 	}
 }
 
@@ -2598,4 +2599,291 @@ func TestGetModelsHandler(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
 	assert.NotEmpty(t, response, "response should contain provider data")
+}
+
+func TestCreateTaskHandler_StartTimeout(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	mockTemporalClient := mocks.NewClient(t)
+	mockScheduleClient := mocks.NewScheduleClient(t)
+	mockScheduleHandle := mocks.NewScheduleHandle(t)
+
+	// Mock ExecuteWorkflow to block longer than the timeout, respecting context cancellation
+	mockTemporalClient.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			ctx := args.Get(0).(context.Context)
+			select {
+			case <-time.After(500 * time.Millisecond):
+			case <-ctx.Done():
+			}
+		}).
+		Return(MockWorkflow{}, nil).Maybe()
+	mockTemporalClient.On("GetWorkflow", mock.Anything, mock.Anything, mock.Anything).Return(MockWorkflow{}, nil).Maybe()
+	mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Return(MockWorkflowUpdateHandle{}, nil).Maybe()
+	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
+	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
+
+	service := NewTestService(t)
+	ctrl := Controller{
+		temporalClient:   mockTemporalClient,
+		service:          service,
+		secretManager:    secret_manager.MockSecretManager{},
+		taskStartTimeout: 100 * time.Millisecond,
+	}
+
+	workspaceId := "ws_" + ksuid.New().String()
+	taskReq := TaskRequest{
+		Description: "test task that will timeout",
+		AgentType:   string(domain.AgentTypeLLM),
+		FlowType:    domain.FlowTypeBasicDev,
+	}
+	reqBody, _ := json.Marshal(taskReq)
+
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+	c.Request = httptest.NewRequest("POST", "/workspaces/"+workspaceId+"/tasks", bytes.NewBuffer(reqBody))
+	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}}
+
+	start := time.Now()
+	ctrl.CreateTaskHandler(c)
+	elapsed := time.Since(start)
+
+	// Should return within ~timeout, not wait for the full sleep
+	assert.Less(t, elapsed, 300*time.Millisecond, "should timeout quickly")
+	assert.Equal(t, http.StatusGatewayTimeout, resp.Code)
+
+	var response map[string]string
+	json.Unmarshal(resp.Body.Bytes(), &response)
+	assert.Contains(t, response["error"], "timed out")
+
+	// Wait for background goroutine to finish to avoid mock assertion failures
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify task was reverted to drafting
+	tasks, _ := service.GetTasks(context.Background(), workspaceId, []domain.TaskStatus{domain.TaskStatusDrafting})
+	require.Len(t, tasks, 1)
+	assert.Equal(t, domain.TaskStatusDrafting, tasks[0].Status)
+	assert.Equal(t, domain.AgentTypeHuman, tasks[0].AgentType)
+}
+
+func TestCreateTaskHandler_StartError(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	mockTemporalClient := mocks.NewClient(t)
+	mockScheduleClient := mocks.NewScheduleClient(t)
+	mockScheduleHandle := mocks.NewScheduleHandle(t)
+
+	// Mock ExecuteWorkflow to return an error immediately
+	mockTemporalClient.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("workflow start failed")).Maybe()
+	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
+	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
+
+	service := NewTestService(t)
+	ctrl := Controller{
+		temporalClient:   mockTemporalClient,
+		service:          service,
+		secretManager:    secret_manager.MockSecretManager{},
+		taskStartTimeout: 5 * time.Second,
+	}
+
+	workspaceId := "ws_" + ksuid.New().String()
+	taskReq := TaskRequest{
+		Description: "test task that will fail",
+		AgentType:   string(domain.AgentTypeLLM),
+		FlowType:    domain.FlowTypeBasicDev,
+	}
+	reqBody, _ := json.Marshal(taskReq)
+
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+	c.Request = httptest.NewRequest("POST", "/workspaces/"+workspaceId+"/tasks", bytes.NewBuffer(reqBody))
+	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}}
+
+	ctrl.CreateTaskHandler(c)
+
+	assert.Equal(t, http.StatusInternalServerError, resp.Code)
+
+	var response map[string]string
+	json.Unmarshal(resp.Body.Bytes(), &response)
+	assert.Contains(t, response["error"], "workflow start failed")
+
+	// Verify task was reverted to drafting
+	tasks, _ := service.GetTasks(context.Background(), workspaceId, []domain.TaskStatus{domain.TaskStatusDrafting})
+	require.Len(t, tasks, 1)
+	assert.Equal(t, domain.TaskStatusDrafting, tasks[0].Status)
+	assert.Equal(t, domain.AgentTypeHuman, tasks[0].AgentType)
+}
+
+func TestCreateTaskHandler_StartSuccess(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	// Use default mock controller which has successful ExecuteWorkflow
+	ctrl := NewMockController(t)
+
+	workspaceId := "ws_" + ksuid.New().String()
+	taskReq := TaskRequest{
+		Description: "test task that will succeed",
+		AgentType:   string(domain.AgentTypeLLM),
+		FlowType:    domain.FlowTypeBasicDev,
+	}
+	reqBody, _ := json.Marshal(taskReq)
+
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+	c.Request = httptest.NewRequest("POST", "/workspaces/"+workspaceId+"/tasks", bytes.NewBuffer(reqBody))
+	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}}
+
+	ctrl.CreateTaskHandler(c)
+
+	assert.Equal(t, http.StatusOK, resp.Code)
+
+	var response map[string]domain.Task
+	json.Unmarshal(resp.Body.Bytes(), &response)
+	task := response["task"]
+	assert.Equal(t, domain.TaskStatusInProgress, task.Status)
+	assert.Equal(t, domain.AgentTypeLLM, task.AgentType)
+}
+
+func TestUpdateTaskHandler_StartTimeout(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	mockTemporalClient := mocks.NewClient(t)
+	mockScheduleClient := mocks.NewScheduleClient(t)
+	mockScheduleHandle := mocks.NewScheduleHandle(t)
+
+	// Mock ExecuteWorkflow to block longer than the timeout, respecting context cancellation
+	mockTemporalClient.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			ctx := args.Get(0).(context.Context)
+			select {
+			case <-time.After(500 * time.Millisecond):
+			case <-ctx.Done():
+			}
+		}).
+		Return(MockWorkflow{}, nil).Maybe()
+	mockTemporalClient.On("GetWorkflow", mock.Anything, mock.Anything, mock.Anything).Return(MockWorkflow{}, nil).Maybe()
+	mockTemporalClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Return(MockWorkflowUpdateHandle{}, nil).Maybe()
+	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
+	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
+
+	service := NewTestService(t)
+	ctrl := Controller{
+		temporalClient:   mockTemporalClient,
+		service:          service,
+		secretManager:    secret_manager.MockSecretManager{},
+		taskStartTimeout: 100 * time.Millisecond,
+	}
+
+	// Create a task in drafting status first
+	workspaceId := "ws_" + ksuid.New().String()
+	task := domain.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task_" + ksuid.New().String(),
+		Description: "test task",
+		AgentType:   domain.AgentTypeHuman,
+		Status:      domain.TaskStatusDrafting,
+		FlowType:    domain.FlowTypeBasicDev,
+	}
+	err := service.PersistTask(context.Background(), task)
+	require.NoError(t, err)
+
+	// Update to to_do status to trigger start
+	taskReq := TaskRequest{
+		Description: task.Description,
+		AgentType:   string(domain.AgentTypeLLM),
+		Status:      string(domain.TaskStatusToDo),
+		FlowType:    domain.FlowTypeBasicDev,
+	}
+	reqBody, _ := json.Marshal(taskReq)
+
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+	c.Request = httptest.NewRequest("PUT", "/workspaces/"+workspaceId+"/tasks/"+task.Id, bytes.NewBuffer(reqBody))
+	c.Params = []gin.Param{
+		{Key: "workspaceId", Value: workspaceId},
+		{Key: "id", Value: task.Id},
+	}
+
+	start := time.Now()
+	ctrl.UpdateTaskHandler(c)
+	elapsed := time.Since(start)
+
+	// Should return within ~timeout, not wait for the full sleep
+	assert.Less(t, elapsed, 300*time.Millisecond, "should timeout quickly")
+	assert.Equal(t, http.StatusGatewayTimeout, resp.Code)
+
+	// Verify task was reverted to drafting
+	updatedTask, _ := service.GetTask(context.Background(), workspaceId, task.Id)
+	assert.Equal(t, domain.TaskStatusDrafting, updatedTask.Status)
+	assert.Equal(t, domain.AgentTypeHuman, updatedTask.AgentType)
+
+	// Wait for background goroutine to finish to avoid mock assertion failures
+	time.Sleep(500 * time.Millisecond)
+}
+
+func TestUpdateTaskHandler_StartError(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	mockTemporalClient := mocks.NewClient(t)
+	mockScheduleClient := mocks.NewScheduleClient(t)
+	mockScheduleHandle := mocks.NewScheduleHandle(t)
+
+	// Mock ExecuteWorkflow to return an error immediately
+	mockTemporalClient.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("workflow start failed")).Maybe()
+	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
+	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
+
+	service := NewTestService(t)
+	ctrl := Controller{
+		temporalClient:   mockTemporalClient,
+		service:          service,
+		secretManager:    secret_manager.MockSecretManager{},
+		taskStartTimeout: 5 * time.Second,
+	}
+
+	// Create a task in drafting status first
+	workspaceId := "ws_" + ksuid.New().String()
+	task := domain.Task{
+		WorkspaceId: workspaceId,
+		Id:          "task_" + ksuid.New().String(),
+		Description: "test task",
+		AgentType:   domain.AgentTypeHuman,
+		Status:      domain.TaskStatusDrafting,
+		FlowType:    domain.FlowTypeBasicDev,
+	}
+	err := service.PersistTask(context.Background(), task)
+	require.NoError(t, err)
+
+	// Update to to_do status to trigger start
+	taskReq := TaskRequest{
+		Description: task.Description,
+		AgentType:   string(domain.AgentTypeLLM),
+		Status:      string(domain.TaskStatusToDo),
+		FlowType:    domain.FlowTypeBasicDev,
+	}
+	reqBody, _ := json.Marshal(taskReq)
+
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+	c.Request = httptest.NewRequest("PUT", "/workspaces/"+workspaceId+"/tasks/"+task.Id, bytes.NewBuffer(reqBody))
+	c.Params = []gin.Param{
+		{Key: "workspaceId", Value: workspaceId},
+		{Key: "id", Value: task.Id},
+	}
+
+	ctrl.UpdateTaskHandler(c)
+
+	assert.Equal(t, http.StatusInternalServerError, resp.Code)
+
+	// Verify task was reverted to drafting
+	updatedTask, _ := service.GetTask(context.Background(), workspaceId, task.Id)
+	assert.Equal(t, domain.TaskStatusDrafting, updatedTask.Status)
+	assert.Equal(t, domain.AgentTypeHuman, updatedTask.AgentType)
 }
