@@ -336,6 +336,31 @@ func MergeCommandPermissions(configs ...CommandPermissionConfig) CommandPermissi
 // regexMetaChars contains characters that indicate a pattern should be treated as regex
 const regexMetaChars = `\.*+?[](){}|^$`
 
+// envVarPrefixRegex matches environment variable assignments at the start of a command
+// e.g., "VAR=value", "FOO_BAR=123", etc.
+var envVarPrefixRegex = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+)+`)
+
+// stripEnvVarPrefix removes leading environment variable assignments from a command.
+// For example, "FOO=bar BAZ=qux go test" becomes "go test".
+func stripEnvVarPrefix(command string) string {
+	return envVarPrefixRegex.ReplaceAllString(command, "")
+}
+
+// envVarRefRegex matches actual environment variable references like $VAR, ${VAR},
+// but not regex anchors like $ at end of line. Also matches escaped versions
+// like \$HOME or \$\{HOME\} that appear in regex patterns.
+var envVarRefRegex = regexp.MustCompile(`\\?\$[A-Za-z_]|\\?\$\\?\{`)
+
+// envVarAssignRegex matches environment variable assignments like VAR=value at the
+// start of a pattern (possibly after regex anchor ^)
+var envVarAssignRegex = regexp.MustCompile(`^(\^|\\^)?[A-Za-z_][A-Za-z0-9_]*=`)
+
+// patternContainsEnvVar returns true if the pattern contains env var references
+// (like $HOME, ${HOME}) or env var assignments (like FOO=bar at the start).
+func patternContainsEnvVar(pattern string) bool {
+	return envVarRefRegex.MatchString(pattern) || envVarAssignRegex.MatchString(pattern)
+}
+
 // matchPattern attempts to match a pattern against a command.
 // It first tries an exact prefix match. If that fails and the pattern contains
 // regex metacharacters, it compiles the pattern as a regex (anchored at start).
@@ -714,9 +739,17 @@ func parseCommandForPaths(cmd string) []string {
 // It checks deny patterns first, then require-approval, then auto-approve.
 // Returns the permission result and any associated message.
 func EvaluateCommandPermission(config CommandPermissionConfig, command string) (PermissionResult, string) {
+	// Strip env var prefix for matching against patterns that don't reference env vars
+	strippedCommand := stripEnvVarPrefix(command)
+
 	// Check deny patterns first
 	for _, p := range config.Deny {
-		if matched, matches := matchPattern(p.Pattern, command); matched {
+		// Use original command if pattern contains env vars, otherwise use stripped
+		cmdToMatch := command
+		if !patternContainsEnvVar(p.Pattern) {
+			cmdToMatch = strippedCommand
+		}
+		if matched, matches := matchPattern(p.Pattern, cmdToMatch); matched {
 			msg := p.Message
 			if msg != "" && len(matches) > 0 {
 				msg = interpolateMessage(msg, matches)
@@ -727,19 +760,33 @@ func EvaluateCommandPermission(config CommandPermissionConfig, command string) (
 
 	// Check require-approval patterns
 	for _, p := range config.RequireApproval {
-		if matched, _ := matchPattern(p.Pattern, command); matched {
+		// Use original command if pattern contains env vars, otherwise use stripped
+		cmdToMatch := command
+		if !patternContainsEnvVar(p.Pattern) {
+			cmdToMatch = strippedCommand
+		}
+		if matched, _ := matchPattern(p.Pattern, cmdToMatch); matched {
 			return PermissionRequireApproval, ""
 		}
 	}
 
 	// Check auto-approve patterns
 	for _, p := range config.AutoApprove {
-		if matched, _ := matchPattern(p.Pattern, command); matched {
+		// Use original command if pattern contains env vars, otherwise use stripped
+		cmdToMatch := command
+		if !patternContainsEnvVar(p.Pattern) {
+			cmdToMatch = strippedCommand
+		}
+		if matched, matches := matchPattern(p.Pattern, cmdToMatch); matched {
 			// Even if auto-approved, require approval for commands with absolute paths
 			if containsAbsolutePath(command) {
 				return PermissionRequireApproval, ""
 			}
-			return PermissionAutoApprove, ""
+			msg := p.Message
+			if msg != "" && len(matches) > 0 {
+				msg = interpolateMessage(msg, matches)
+			}
+			return PermissionAutoApprove, msg
 		}
 	}
 
