@@ -9,7 +9,7 @@
 
 <style scoped>
 .trash-icon .filled {
-  fill: white;
+  fill: transparent;
   stroke: black;
 }
 
@@ -19,7 +19,7 @@
 
 @media (prefers-color-scheme: dark) {
   .trash-icon .filled {
-    fill: black;
+    fill: transparent;
     stroke: white;
   }
 
