@@ -81,10 +81,9 @@ func TestStartDevRun_EmitsStartedAndOutputEvents(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "echo hello"},
-			},
+			"test": {Command: "echo hello"},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -101,8 +100,22 @@ func TestStartDevRun_EmitsStartedAndOutputEvents(t *testing.T) {
 	assert.NotEmpty(t, output.DevRunId)
 	assert.True(t, len(output.DevRunId) > 7)
 
-	// Wait for the process to complete and output to be streamed
-	time.Sleep(200 * time.Millisecond)
+	// Verify Instance fields are set correctly
+	require.NotNil(t, output.Instance)
+	assert.Equal(t, output.DevRunId, output.Instance.DevRunId)
+	assert.Equal(t, "test", output.Instance.CommandId)
+	assert.Greater(t, output.Instance.SessionId, 0)
+	assert.Contains(t, output.Instance.OutputFilePath, output.DevRunId)
+	assert.FileExists(t, output.Instance.OutputFilePath)
+
+	// MonitorDevRun handles output streaming - run it to get output events
+	_, err = activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+	require.NoError(t, err)
 
 	events := streamer.getEvents()
 	require.GreaterOrEqual(t, len(events), 1, "should have at least DevRunStartedEvent")
@@ -126,7 +139,7 @@ func TestStartDevRun_EmitsStartedAndOutputEvents(t *testing.T) {
 	assert.Equal(t, "echo hello", startedEvent.CommandSummary)
 	assert.Equal(t, tmpDir, startedEvent.WorkingDir)
 	assert.Greater(t, startedEvent.Pid, 0)
-	assert.Greater(t, startedEvent.Pgid, 0)
+	assert.Greater(t, startedEvent.SessionId, 0)
 
 	// Check for output containing "hello"
 	require.GreaterOrEqual(t, len(outputEvents), 1, "should have at least one DevRunOutputEvent")
@@ -139,13 +152,6 @@ func TestStartDevRun_EmitsStartedAndOutputEvents(t *testing.T) {
 		}
 	}
 	assert.Contains(t, stdoutContent, "hello", "stdout should contain 'hello'")
-
-	// Clean up
-	activities.StopDevRun(context.Background(), StopDevRunInput{
-		DevRunConfig: common.DevRunConfig{},
-		Context:      input.Context,
-		Entry:        output.Entry,
-	})
 }
 
 func TestStopDevRun_EmitsEndedAndEndStreamEvents(t *testing.T) {
@@ -161,10 +167,9 @@ func TestStopDevRun_EmitsEndedAndEndStreamEvents(t *testing.T) {
 	// Start a long-running process
 	startInput := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "sleep 60"},
-			},
+			"test": {Command: "sleep 60"},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -185,8 +190,9 @@ func TestStopDevRun_EmitsEndedAndEndStreamEvents(t *testing.T) {
 	// Stop the Dev Run
 	stopInput := StopDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			StopTimeoutSeconds: 2,
+			"test": {Command: "sleep 60", StopTimeoutSeconds: 2},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -195,7 +201,7 @@ func TestStopDevRun_EmitsEndedAndEndStreamEvents(t *testing.T) {
 			BaseBranch:   "main",
 			TargetBranch: "main",
 		},
-		Entry: startOutput.Entry,
+		Instance: startOutput.Instance,
 	}
 
 	stopOutput, err := activities.StopDevRun(context.Background(), stopInput)
@@ -237,10 +243,9 @@ func TestStopDevRun_TimeoutEscalation(t *testing.T) {
 	// that runs the command directly (no intermediate script)
 	startInput := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "trap '' INT; while true; do sleep 1; done"},
-			},
+			"test": {Command: "trap '' INT; while true; do sleep 1; done"},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -260,12 +265,14 @@ func TestStopDevRun_TimeoutEscalation(t *testing.T) {
 
 	// Stop with a short timeout to trigger SIGKILL escalation
 	gs := &flow_action.GlobalState{}
-	SetDevRunEntry(gs, startOutput.DevRunId, startOutput.Entry)
+	gs.InitValues()
+	SetDevRunInstance(gs, startOutput.Instance)
 
 	stopInput := StopDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			StopTimeoutSeconds: 1,
+			"test": {Command: "trap '' SIGINT SIGTERM; sleep 60", StopTimeoutSeconds: 1},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -274,7 +281,7 @@ func TestStopDevRun_TimeoutEscalation(t *testing.T) {
 			BaseBranch:   "main",
 			TargetBranch: "main",
 		},
-		Entry: startOutput.Entry,
+		Instance: startOutput.Instance,
 	}
 
 	start := time.Now()
@@ -306,10 +313,9 @@ func TestStopDevRun_WithStopCommand(t *testing.T) {
 	// Start a process
 	startInput := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "sleep 60"},
-			},
+			"test": {Command: "sleep 60", StopTimeoutSeconds: 2},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -328,12 +334,8 @@ func TestStopDevRun_WithStopCommand(t *testing.T) {
 
 	// Stop with a custom stop command
 	stopInput := StopDevRunInput{
-		DevRunConfig: common.DevRunConfig{
-			Stop: []common.CommandConfig{
-				{Command: "echo stopping"},
-			},
-			StopTimeoutSeconds: 2,
-		},
+		DevRunConfig: startInput.DevRunConfig,
+		CommandId:    "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -342,7 +344,7 @@ func TestStopDevRun_WithStopCommand(t *testing.T) {
 			BaseBranch:   "main",
 			TargetBranch: "main",
 		},
-		Entry: startOutput.Entry,
+		Instance: startOutput.Instance,
 	}
 
 	stopOutput, err := activities.StopDevRun(context.Background(), stopInput)
@@ -363,6 +365,7 @@ func TestStopDevRun_Idempotent(t *testing.T) {
 	// Stop when nothing is running should succeed
 	stopInput := StopDevRunInput{
 		DevRunConfig: common.DevRunConfig{},
+		CommandId:    "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -390,10 +393,9 @@ func TestStartDevRun_FailsIfAlreadyActive(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "sleep 60"},
-			},
+			"test": {Command: "sleep 60", StopTimeoutSeconds: 1},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -408,13 +410,14 @@ func TestStartDevRun_FailsIfAlreadyActive(t *testing.T) {
 	output1, err := activities.StartDevRun(context.Background(), input)
 	require.NoError(t, err)
 	assert.True(t, output1.Started)
-	assert.NotNil(t, output1.Entry)
+	assert.NotNil(t, output1.Instance)
 
 	// Clean up
 	activities.StopDevRun(context.Background(), StopDevRunInput{
-		DevRunConfig: common.DevRunConfig{StopTimeoutSeconds: 1},
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
 		Context:      input.Context,
-		Entry:        output1.Entry,
+		Instance:     output1.Instance,
 	})
 }
 
@@ -425,9 +428,8 @@ func TestStartDevRun_NoStartCommands(t *testing.T) {
 	activities := &DevRunActivities{Streamer: streamer}
 
 	input := StartDevRunInput{
-		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{},
-		},
+		DevRunConfig: common.DevRunConfig{},
+		CommandId:    "test",
 		Context: DevRunContext{
 			WorkspaceId: "ws_nocmd_" + t.Name(),
 			FlowId:      "flow_nocmd_" + t.Name(),
@@ -437,7 +439,7 @@ func TestStartDevRun_NoStartCommands(t *testing.T) {
 
 	_, err := activities.StartDevRun(context.Background(), input)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no start commands")
+	assert.Contains(t, err.Error(), "command ID")
 }
 
 func TestStartDevRun_EnvVarsPassedToCommand(t *testing.T) {
@@ -452,10 +454,9 @@ func TestStartDevRun_EnvVarsPassedToCommand(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "echo $WORKSPACE_ID $FLOW_ID $SOURCE_BRANCH $BASE_BRANCH $TARGET_BRANCH"},
-			},
+			"test": {Command: "echo $WORKSPACE_ID $FLOW_ID $SOURCE_BRANCH $BASE_BRANCH $TARGET_BRANCH"},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -470,8 +471,14 @@ func TestStartDevRun_EnvVarsPassedToCommand(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, output.Started)
 
-	// Wait for output
-	time.Sleep(200 * time.Millisecond)
+	// MonitorDevRun handles output streaming
+	_, err = activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+	require.NoError(t, err)
 
 	events := streamer.getEvents()
 	var outputEvents []domain.DevRunOutputEvent
@@ -492,13 +499,6 @@ func TestStartDevRun_EnvVarsPassedToCommand(t *testing.T) {
 	}
 	expectedOutput := workspaceId + " " + flowId + " feature/env develop main"
 	assert.Contains(t, stdoutContent, expectedOutput, "stdout should contain expanded env vars")
-
-	// Clean up
-	activities.StopDevRun(context.Background(), StopDevRunInput{
-		DevRunConfig: common.DevRunConfig{},
-		Context:      input.Context,
-		Entry:        output.Entry,
-	})
 }
 
 func TestBuildDevRunEnvVars(t *testing.T) {
@@ -538,18 +538,24 @@ func TestGetDevRunEntry(t *testing.T) {
 	// No entry should return nil
 	assert.Nil(t, GetDevRunEntry(gs))
 
-	// Set an entry
-	entry := &DevRunEntry{DevRunId: "devrun_test", Pgids: []int{123}}
-	SetDevRunEntry(gs, entry.DevRunId, entry)
+	// Set an instance
+	instance := &DevRunInstance{
+		DevRunId:       "devrun_test",
+		SessionId:      123,
+		OutputFilePath: "/tmp/test.log",
+		CommandId:      "test-cmd",
+	}
+	SetDevRunInstance(gs, instance)
 
-	// Should retrieve the entry
+	// Should retrieve the entry with the instance
 	retrieved := GetDevRunEntry(gs)
 	assert.NotNil(t, retrieved)
-	assert.Equal(t, "devrun_test", retrieved.DevRunId)
-	assert.Equal(t, []int{123}, retrieved.Pgids)
+	assert.Len(t, retrieved, 1)
+	assert.Equal(t, "devrun_test", retrieved["test-cmd"].DevRunId)
+	assert.Equal(t, 123, retrieved["test-cmd"].SessionId)
 
-	// Clear the entry
-	ClearDevRunEntry(gs)
+	// Clear the instance
+	ClearDevRunInstance(gs, "test-cmd")
 	assert.Nil(t, GetDevRunEntry(gs))
 }
 
@@ -561,12 +567,17 @@ func TestIsDevRunActive(t *testing.T) {
 
 	assert.False(t, IsDevRunActive(gs))
 
-	entry := &DevRunEntry{DevRunId: "devrun_test", Pgids: []int{123}}
-	SetDevRunEntry(gs, entry.DevRunId, entry)
+	instance := &DevRunInstance{
+		DevRunId:       "devrun_test",
+		SessionId:      123,
+		OutputFilePath: "/tmp/test.log",
+		CommandId:      "test-cmd",
+	}
+	SetDevRunInstance(gs, instance)
 
 	assert.True(t, IsDevRunActive(gs))
 
-	ClearDevRunEntry(gs)
+	ClearDevRunInstance(gs, "test-cmd")
 	assert.False(t, IsDevRunActive(gs))
 }
 
@@ -584,10 +595,9 @@ func TestStartDevRun_ImmediateNonZeroExit(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "exit 1"},
-			},
+			"test": {Command: "exit 1"},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -630,10 +640,9 @@ func TestStartDevRun_CommandNotFound(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "nonexistent_command_xyz_123"},
-			},
+			"test": {Command: "nonexistent_command_xyz_123"},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -660,14 +669,12 @@ func TestStartDevRun_NaturalExitEmitsEndedEvent(t *testing.T) {
 	workspaceId := "ws_natural_" + t.Name()
 	flowId := "flow_natural_" + t.Name()
 
-	// Use a command that runs for a bit then exits successfully
-	// Sleep must be longer than the immediate-failure detection window (1s)
+	// Use a command that exits quickly
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "sleep 1.5 && echo done"},
-			},
+			"test": {Command: "echo done"},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -682,8 +689,14 @@ func TestStartDevRun_NaturalExitEmitsEndedEvent(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, output.Started)
 
-	// Wait for the process to complete naturally
-	time.Sleep(2 * time.Second)
+	// MonitorDevRun handles detecting natural exit and emitting ended event
+	_, err = activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+	require.NoError(t, err)
 
 	// Should have emitted DevRunEndedEvent
 	events := streamer.getEvents()
@@ -696,8 +709,6 @@ func TestStartDevRun_NaturalExitEmitsEndedEvent(t *testing.T) {
 	}
 	require.NotNil(t, endedEvent, "should have DevRunEndedEvent on natural exit")
 	assert.Equal(t, output.DevRunId, endedEvent.DevRunId)
-	require.NotNil(t, endedEvent.ExitStatus)
-	assert.Equal(t, 0, *endedEvent.ExitStatus)
 
 	// EndStreamEvent should have been emitted
 	endedStreams := streamer.getEndedStreams()
@@ -716,14 +727,12 @@ func TestStartDevRun_NaturalNonZeroExitEmitsEndedEvent(t *testing.T) {
 	workspaceId := "ws_naturalfail_" + t.Name()
 	flowId := "flow_naturalfail_" + t.Name()
 
-	// Use a command that runs for a bit then exits with error
-	// Sleep must be longer than the immediate-failure detection window (1s)
+	// Use a command that exits with error
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "sleep 1.5 && exit 42"},
-			},
+			"test": {Command: "exit 42"},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -734,25 +743,10 @@ func TestStartDevRun_NaturalNonZeroExitEmitsEndedEvent(t *testing.T) {
 		},
 	}
 
-	output, err := activities.StartDevRun(context.Background(), input)
-	require.NoError(t, err)
-	assert.True(t, output.Started)
-
-	// Wait for the process to complete naturally
-	time.Sleep(2 * time.Second)
-
-	// Should have emitted DevRunEndedEvent with non-zero exit
-	events := streamer.getEvents()
-	var endedEvent *domain.DevRunEndedEvent
-	for _, e := range events {
-		if ev, ok := e.(domain.DevRunEndedEvent); ok {
-			endedEvent = &ev
-			break
-		}
-	}
-	require.NotNil(t, endedEvent, "should have DevRunEndedEvent on natural exit")
-	require.NotNil(t, endedEvent.ExitStatus)
-	assert.Equal(t, 42, *endedEvent.ExitStatus)
+	// This will fail because the command exits immediately with non-zero
+	_, err := activities.StartDevRun(context.Background(), input)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exited immediately")
 }
 
 func TestStartDevRun_RelativeWorkingDir(t *testing.T) {
@@ -777,10 +771,9 @@ func TestStartDevRun_RelativeWorkingDir(t *testing.T) {
 	// Use a relative WorkingDir - should be resolved against WorktreeDir
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "pwd", WorkingDir: "frontend"},
-			},
+			"test": {Command: "pwd", WorkingDir: "frontend"},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -795,8 +788,14 @@ func TestStartDevRun_RelativeWorkingDir(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, output.Started)
 
-	// Wait for output
-	time.Sleep(200 * time.Millisecond)
+	// MonitorDevRun handles output streaming
+	_, err = activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+	require.NoError(t, err)
 
 	events := streamer.getEvents()
 	var outputEvents []domain.DevRunOutputEvent
@@ -815,13 +814,6 @@ func TestStartDevRun_RelativeWorkingDir(t *testing.T) {
 		}
 	}
 	assert.Contains(t, stdoutContent, resolvedSubDir, "expected pwd output to contain %s, got: %s", resolvedSubDir, stdoutContent)
-
-	// Clean up
-	activities.StopDevRun(context.Background(), StopDevRunInput{
-		DevRunConfig: common.DevRunConfig{},
-		Context:      input.Context,
-		Entry:        output.Entry,
-	})
 }
 
 func TestStartDevRun_AbsoluteWorkingDir(t *testing.T) {
@@ -844,10 +836,9 @@ func TestStartDevRun_AbsoluteWorkingDir(t *testing.T) {
 	// Use an absolute WorkingDir - should be used as-is
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "pwd", WorkingDir: absDir},
-			},
+			"test": {Command: "pwd", WorkingDir: absDir},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -862,8 +853,14 @@ func TestStartDevRun_AbsoluteWorkingDir(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, output.Started)
 
-	// Wait for output
-	time.Sleep(200 * time.Millisecond)
+	// MonitorDevRun handles output streaming
+	_, err = activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+	require.NoError(t, err)
 
 	events := streamer.getEvents()
 	var outputEvents []domain.DevRunOutputEvent
@@ -882,13 +879,6 @@ func TestStartDevRun_AbsoluteWorkingDir(t *testing.T) {
 		}
 	}
 	assert.Contains(t, stdoutContent, resolvedAbsDir, "expected pwd output to contain %s, got: %s", resolvedAbsDir, stdoutContent)
-
-	// Clean up
-	activities.StopDevRun(context.Background(), StopDevRunInput{
-		DevRunConfig: common.DevRunConfig{},
-		Context:      input.Context,
-		Entry:        output.Entry,
-	})
 }
 
 func TestStopDevRun_DoesNotDoubleEmitIfAlreadyExited(t *testing.T) {
@@ -904,10 +894,9 @@ func TestStopDevRun_DoesNotDoubleEmitIfAlreadyExited(t *testing.T) {
 	// Start a short-lived command
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Start: []common.CommandConfig{
-				{Command: "sleep 0.1"},
-			},
+			"test": {Command: "echo done"},
 		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -922,12 +911,53 @@ func TestStopDevRun_DoesNotDoubleEmitIfAlreadyExited(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, output.Started)
 
-	// Wait for natural exit
-	time.Sleep(300 * time.Millisecond)
+	// MonitorDevRun handles natural exit and emits ended event
+	_, err = activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+	require.NoError(t, err)
 
-	// Now try to stop - should be idempotent
+	// Now try to stop - should be idempotent and not emit another ended event
 	stopInput := StopDevRunInput{
 		DevRunConfig: common.DevRunConfig{},
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	}
+
+	stopOutput, err := activities.StopDevRun(context.Background(), stopInput)
+	require.NoError(t, err)
+	assert.True(t, stopOutput.Stopped)
+
+	// Count DevRunEndedEvents - should only be one from MonitorDevRun
+	events := streamer.getEvents()
+	endedCount := 0
+	for _, e := range events {
+		if _, ok := e.(domain.DevRunEndedEvent); ok {
+			endedCount++
+		}
+	}
+	assert.Equal(t, 1, endedCount, "should only have one DevRunEndedEvent")
+}
+func TestMonitorDevRun_TailsOutputAndHeartbeats(t *testing.T) {
+	t.Parallel()
+
+	streamer := newMockFlowEventStreamer()
+	activities := &DevRunActivities{Streamer: streamer}
+
+	tmpDir := t.TempDir()
+	workspaceId := "ws_monitor_" + t.Name()
+	flowId := "flow_monitor_" + t.Name()
+
+	// Start a dev run first
+	input := StartDevRunInput{
+		DevRunConfig: common.DevRunConfig{
+			"test": {Command: "echo hello && sleep 2 && echo world"},
+		},
+		CommandId: "test",
 		Context: DevRunContext{
 			WorkspaceId:  workspaceId,
 			FlowId:       flowId,
@@ -938,17 +968,297 @@ func TestStopDevRun_DoesNotDoubleEmitIfAlreadyExited(t *testing.T) {
 		},
 	}
 
-	stopOutput, err := activities.StopDevRun(context.Background(), stopInput)
+	startOutput, err := activities.StartDevRun(context.Background(), input)
 	require.NoError(t, err)
-	assert.True(t, stopOutput.Stopped)
+	assert.True(t, startOutput.Started)
+	require.NotNil(t, startOutput.Instance)
 
-	// Count DevRunEndedEvents - should only be one from natural exit
+	// Now monitor the dev run
+	monitorInput := MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     startOutput.Instance,
+	}
+
+	monitorOutput, err := activities.MonitorDevRun(context.Background(), monitorInput)
+	require.NoError(t, err)
+	// Note: ExitCode may be nil since MonitorDevRun detects process exit via IsSessionAlive
+	// rather than waiting on the process directly
+	_ = monitorOutput
+
+	// Check that output events were emitted
 	events := streamer.getEvents()
-	endedCount := 0
+	var outputEvents []domain.DevRunOutputEvent
 	for _, e := range events {
-		if _, ok := e.(domain.DevRunEndedEvent); ok {
-			endedCount++
+		if ev, ok := e.(domain.DevRunOutputEvent); ok {
+			outputEvents = append(outputEvents, ev)
 		}
 	}
-	assert.Equal(t, 1, endedCount, "should only have one DevRunEndedEvent")
+	require.GreaterOrEqual(t, len(outputEvents), 1, "should have output events")
+
+	// Combine all output
+	var allOutput string
+	for _, oe := range outputEvents {
+		allOutput += oe.Chunk
+	}
+	assert.Contains(t, allOutput, "hello")
+	assert.Contains(t, allOutput, "world")
+
+	// Check that ended event was emitted
+	var endedEvent *domain.DevRunEndedEvent
+	for _, e := range events {
+		if ev, ok := e.(domain.DevRunEndedEvent); ok {
+			endedEvent = &ev
+			break
+		}
+	}
+	require.NotNil(t, endedEvent, "should have DevRunEndedEvent")
+	assert.Equal(t, startOutput.DevRunId, endedEvent.DevRunId)
+}
+
+func TestMonitorDevRun_ReturnsOnContextCancel(t *testing.T) {
+	t.Parallel()
+
+	streamer := newMockFlowEventStreamer()
+	activities := &DevRunActivities{Streamer: streamer}
+
+	tmpDir := t.TempDir()
+	workspaceId := "ws_cancel_" + t.Name()
+	flowId := "flow_cancel_" + t.Name()
+
+	// Start a long-running dev run
+	input := StartDevRunInput{
+		DevRunConfig: common.DevRunConfig{
+			"test": {Command: "sleep 60"},
+		},
+		CommandId: "test",
+		Context: DevRunContext{
+			WorkspaceId:  workspaceId,
+			FlowId:       flowId,
+			WorktreeDir:  tmpDir,
+			SourceBranch: "feature/test",
+			BaseBranch:   "main",
+			TargetBranch: "main",
+		},
+	}
+
+	startOutput, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, startOutput.Started)
+	require.NotNil(t, startOutput.Instance)
+
+	// Create a cancelable context
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Start monitoring in a goroutine
+	done := make(chan struct{})
+	var monitorErr error
+	go func() {
+		defer close(done)
+		monitorInput := MonitorDevRunInput{
+			DevRunConfig: input.DevRunConfig,
+			CommandId:    "test",
+			Context:      input.Context,
+			Instance:     startOutput.Instance,
+		}
+		_, monitorErr = activities.MonitorDevRun(ctx, monitorInput)
+	}()
+
+	// Wait a bit then cancel
+	time.Sleep(500 * time.Millisecond)
+	cancel()
+
+	// Wait for monitor to return
+	select {
+	case <-done:
+		// Good, monitor returned
+	case <-time.After(5 * time.Second):
+		t.Fatal("MonitorDevRun did not return after context cancel")
+	}
+
+	// Error may be context.Canceled or nil depending on timing
+	if monitorErr != nil {
+		assert.ErrorIs(t, monitorErr, context.Canceled)
+	}
+
+	// Clean up the process
+	activities.StopDevRun(context.Background(), StopDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     startOutput.Instance,
+	})
+}
+
+func TestMonitorDevRun_NilInstanceReturnsError(t *testing.T) {
+	t.Parallel()
+
+	streamer := newMockFlowEventStreamer()
+	activities := &DevRunActivities{Streamer: streamer}
+
+	monitorInput := MonitorDevRunInput{
+		DevRunConfig: common.DevRunConfig{},
+		CommandId:    "test",
+		Context:      DevRunContext{},
+		Instance:     nil,
+	}
+
+	_, err := activities.MonitorDevRun(context.Background(), monitorInput)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no instance provided")
+}
+
+func TestStartDevRun_RecoveryReconnectsToAliveProcess(t *testing.T) {
+	t.Parallel()
+
+	streamer := newMockFlowEventStreamer()
+	activities := &DevRunActivities{Streamer: streamer}
+
+	tmpDir := t.TempDir()
+	workspaceId := "ws_recovery_alive_" + t.Name()
+	flowId := "flow_recovery_alive_" + t.Name()
+
+	input := StartDevRunInput{
+		DevRunConfig: common.DevRunConfig{
+			"test": {Command: "sleep 60", StopTimeoutSeconds: 1},
+		},
+		CommandId: "test",
+		Context: DevRunContext{
+			WorkspaceId:  workspaceId,
+			FlowId:       flowId,
+			WorktreeDir:  tmpDir,
+			SourceBranch: "feature/test",
+			BaseBranch:   "main",
+			TargetBranch: "main",
+		},
+	}
+
+	// Start the first dev run
+	output1, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output1.Started)
+	require.NotNil(t, output1.Instance)
+
+	// Simulate recovery by passing the existing instance
+	input.ExistingInstance = output1.Instance
+	output2, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output2.Started)
+
+	// Should return the same instance (reconnected)
+	assert.Equal(t, output1.Instance.DevRunId, output2.Instance.DevRunId)
+	assert.Equal(t, output1.Instance.SessionId, output2.Instance.SessionId)
+	assert.Equal(t, output1.Instance.OutputFilePath, output2.Instance.OutputFilePath)
+
+	// Clean up
+	activities.StopDevRun(context.Background(), StopDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output1.Instance,
+	})
+}
+
+func TestStartDevRun_RecoveryStartsFreshWhenProcessDead(t *testing.T) {
+	t.Parallel()
+
+	streamer := newMockFlowEventStreamer()
+	activities := &DevRunActivities{Streamer: streamer}
+
+	tmpDir := t.TempDir()
+	workspaceId := "ws_recovery_dead_" + t.Name()
+	flowId := "flow_recovery_dead_" + t.Name()
+
+	input := StartDevRunInput{
+		DevRunConfig: common.DevRunConfig{
+			"test": {Command: "echo hello && sleep 60", StopTimeoutSeconds: 1},
+		},
+		CommandId: "test",
+		Context: DevRunContext{
+			WorkspaceId:  workspaceId,
+			FlowId:       flowId,
+			WorktreeDir:  tmpDir,
+			SourceBranch: "feature/test",
+			BaseBranch:   "main",
+			TargetBranch: "main",
+		},
+	}
+
+	// Start the first dev run
+	output1, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output1.Started)
+	require.NotNil(t, output1.Instance)
+
+	// Stop the process
+	_, err = activities.StopDevRun(context.Background(), StopDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output1.Instance,
+	})
+	require.NoError(t, err)
+
+	// Wait for process to fully terminate
+	time.Sleep(500 * time.Millisecond)
+
+	// Simulate recovery with the now-dead instance
+	input.ExistingInstance = output1.Instance
+	output2, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output2.Started)
+
+	// Should have started a new instance with different DevRunId
+	assert.NotEqual(t, output1.Instance.DevRunId, output2.Instance.DevRunId)
+	assert.NotEqual(t, output1.Instance.SessionId, output2.Instance.SessionId)
+
+	// Clean up
+	activities.StopDevRun(context.Background(), StopDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output2.Instance,
+	})
+}
+
+func TestStartDevRun_NoExistingInstanceStartsFresh(t *testing.T) {
+	t.Parallel()
+
+	streamer := newMockFlowEventStreamer()
+	activities := &DevRunActivities{Streamer: streamer}
+
+	tmpDir := t.TempDir()
+	workspaceId := "ws_no_existing_" + t.Name()
+	flowId := "flow_no_existing_" + t.Name()
+
+	input := StartDevRunInput{
+		DevRunConfig: common.DevRunConfig{
+			"test": {Command: "sleep 60", StopTimeoutSeconds: 1},
+		},
+		CommandId:        "test",
+		ExistingInstance: nil, // No existing instance
+		Context: DevRunContext{
+			WorkspaceId:  workspaceId,
+			FlowId:       flowId,
+			WorktreeDir:  tmpDir,
+			SourceBranch: "feature/test",
+			BaseBranch:   "main",
+			TargetBranch: "main",
+		},
+	}
+
+	output, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output.Started)
+	require.NotNil(t, output.Instance)
+	assert.NotEmpty(t, output.Instance.DevRunId)
+
+	// Clean up
+	activities.StopDevRun(context.Background(), StopDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
 }

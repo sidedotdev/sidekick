@@ -15,6 +15,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
+	"go.temporal.io/sdk/activity"
 
 	"sidekick/common"
 	"sidekick/domain"
@@ -34,6 +35,7 @@ type DevRunActivities struct {
 // DevRunContext contains context information passed to Dev Run commands.
 type DevRunContext struct {
 	DevRunId     string
+	CommandId    string
 	WorkspaceId  string
 	FlowId       string
 	WorktreeDir  string
@@ -44,24 +46,27 @@ type DevRunContext struct {
 
 // StartDevRunInput contains the input for starting a Dev Run.
 type StartDevRunInput struct {
-	DevRunConfig common.DevRunConfig
-	Context      DevRunContext
+	DevRunConfig     common.DevRunConfig
+	CommandId        string
+	Context          DevRunContext
+	ExistingInstance *DevRunInstance
 }
 
 // StartDevRunOutput contains the output from starting a Dev Run.
 type StartDevRunOutput struct {
 	DevRunId string
 	Started  bool
-	// Entry contains the Dev Run entry to be stored in GlobalState.
-	Entry *DevRunEntry
+	// Instance contains the Dev Run instance to be stored in GlobalState.
+	Instance *DevRunInstance
 }
 
 // StopDevRunInput contains the input for stopping a Dev Run.
 type StopDevRunInput struct {
 	DevRunConfig common.DevRunConfig
+	CommandId    string
 	Context      DevRunContext
-	// Entry contains the Dev Run entry from GlobalState (required).
-	Entry *DevRunEntry
+	// Instance contains the Dev Run instance from GlobalState (required).
+	Instance *DevRunInstance
 }
 
 // StopDevRunOutput contains the output from stopping a Dev Run.
@@ -69,12 +74,32 @@ type StopDevRunOutput struct {
 	Stopped bool
 }
 
-// DevRunEntry tracks an active Dev Run and is stored in GlobalState.
-// This struct is serializable and survives workflow replay.
-type DevRunEntry struct {
-	DevRunId string `json:"devRunId"`
-	Pgids    []int  `json:"pgids"`
+// MonitorDevRunInput contains the input for monitoring a Dev Run.
+type MonitorDevRunInput struct {
+	DevRunConfig common.DevRunConfig
+	CommandId    string
+	Context      DevRunContext
+	Instance     *DevRunInstance
 }
+
+// MonitorDevRunOutput contains the output from monitoring a Dev Run.
+type MonitorDevRunOutput struct {
+	ExitCode *int
+	Signal   string
+}
+
+// DevRunInstance tracks a single active Dev Run instance.
+// This struct is serializable and survives workflow replay.
+type DevRunInstance struct {
+	DevRunId       string `json:"devRunId"`
+	SessionId      int    `json:"sessionId"`
+	OutputFilePath string `json:"outputFilePath"`
+	CommandId      string `json:"commandId"`
+}
+
+// DevRunEntry tracks active Dev Runs keyed by command ID.
+// Stored in GlobalState and survives workflow replay.
+type DevRunEntry map[string]*DevRunInstance
 
 // endedEventTracker tracks which Dev Runs have already emitted ended events
 // to prevent duplicate emissions from both natural exit and explicit stop.
@@ -103,12 +128,13 @@ func clearEndedEventTracker(devRunId string) {
 
 // runningProcess tracks a running Dev Run process.
 type runningProcess struct {
-	cmd      *exec.Cmd
-	pgid     int
-	cancel   context.CancelFunc
-	doneCh   chan struct{}
-	exitCode atomic.Pointer[int]
-	signal   atomic.Value // stores string
+	cmd            *exec.Cmd
+	sessionId      int
+	outputFilePath string
+	cancel         context.CancelFunc
+	doneCh         chan struct{}
+	exitCode       atomic.Pointer[int]
+	signal         atomic.Value // stores string
 }
 
 // activeDevRun tracks a running Dev Run's processes in memory.
@@ -123,7 +149,7 @@ type activeDevRun struct {
 // The Dev Run entry is stored in GlobalState which survives workflow replay.
 
 // GetDevRunEntry retrieves the Dev Run entry from GlobalState.
-func GetDevRunEntry(gs *flow_action.GlobalState) *DevRunEntry {
+func GetDevRunEntry(gs *flow_action.GlobalState) DevRunEntry {
 	if gs == nil {
 		return nil
 	}
@@ -131,22 +157,44 @@ func GetDevRunEntry(gs *flow_action.GlobalState) *DevRunEntry {
 	if value == nil {
 		return nil
 	}
-	entry, ok := value.(*DevRunEntry)
+	entry, ok := value.(DevRunEntry)
 	if !ok {
 		return nil
 	}
 	return entry
 }
 
-// SetDevRunEntry stores the Dev Run entry in GlobalState.
-func SetDevRunEntry(gs *flow_action.GlobalState, devRunId string, entry *DevRunEntry) {
-	if gs == nil {
+// SetDevRunInstance stores a Dev Run instance in GlobalState keyed by command ID.
+func SetDevRunInstance(gs *flow_action.GlobalState, instance *DevRunInstance) {
+	if gs == nil || instance == nil {
 		return
 	}
+	entry := GetDevRunEntry(gs)
+	if entry == nil {
+		entry = make(DevRunEntry)
+	}
+	entry[instance.CommandId] = instance
 	gs.SetValue(devRunEntryKey, entry)
 }
 
-// ClearDevRunEntry removes the Dev Run entry from GlobalState.
+// ClearDevRunInstance removes a Dev Run instance from GlobalState by command ID.
+func ClearDevRunInstance(gs *flow_action.GlobalState, commandId string) {
+	if gs == nil {
+		return
+	}
+	entry := GetDevRunEntry(gs)
+	if entry == nil {
+		return
+	}
+	delete(entry, commandId)
+	if len(entry) == 0 {
+		gs.SetValue(devRunEntryKey, nil)
+	} else {
+		gs.SetValue(devRunEntryKey, entry)
+	}
+}
+
+// ClearDevRunEntry removes all Dev Run entries from GlobalState.
 func ClearDevRunEntry(gs *flow_action.GlobalState) {
 	if gs == nil {
 		return
@@ -155,9 +203,36 @@ func ClearDevRunEntry(gs *flow_action.GlobalState) {
 }
 
 // StartDevRun starts a Dev Run by executing the configured start commands.
+// If an ExistingInstance is provided and the process is still alive, it reconnects
+// to the existing run instead of starting a new one.
 func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInput) (StartDevRunOutput, error) {
-	if len(input.DevRunConfig.Start) == 0 {
-		return StartDevRunOutput{}, fmt.Errorf("no start commands configured for Dev Run")
+	cmdConfig, ok := input.DevRunConfig[input.CommandId]
+	if !ok {
+		return StartDevRunOutput{}, fmt.Errorf("command ID %q not found in dev run config", input.CommandId)
+	}
+
+	// Recovery: if an existing instance is provided, check if it's still alive
+	if input.ExistingInstance != nil {
+		if IsSessionAlive(input.ExistingInstance.SessionId) {
+			// Process is still running - reconnect by returning the existing instance
+			log.Info().
+				Str("devRunId", input.ExistingInstance.DevRunId).
+				Str("commandId", input.CommandId).
+				Int("sessionId", input.ExistingInstance.SessionId).
+				Msg("Reconnecting to existing Dev Run process")
+
+			return StartDevRunOutput{
+				DevRunId: input.ExistingInstance.DevRunId,
+				Started:  true,
+				Instance: input.ExistingInstance,
+			}, nil
+		}
+		// Process is dead - log and proceed with fresh start
+		log.Info().
+			Str("devRunId", input.ExistingInstance.DevRunId).
+			Str("commandId", input.CommandId).
+			Int("sessionId", input.ExistingInstance.SessionId).
+			Msg("Existing Dev Run process is dead, starting fresh")
 	}
 
 	// Generate a new devRunId
@@ -172,96 +247,89 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 	// Build environment variables for the commands
 	envVars := buildDevRunEnvVars(input.Context)
 
-	// Execute start commands in order
-	for i, cmdConfig := range input.DevRunConfig.Start {
-		workingDir := input.Context.WorktreeDir
-		if cmdConfig.WorkingDir != "" {
-			if filepath.IsAbs(cmdConfig.WorkingDir) {
-				workingDir = cmdConfig.WorkingDir
-			} else {
-				// Resolve relative paths against the worktree directory
-				workingDir = filepath.Join(input.Context.WorktreeDir, cmdConfig.WorkingDir)
-			}
+	// Determine working directory
+	workingDir := input.Context.WorktreeDir
+	if cmdConfig.WorkingDir != "" {
+		if filepath.IsAbs(cmdConfig.WorkingDir) {
+			workingDir = cmdConfig.WorkingDir
+		} else {
+			// Resolve relative paths against the worktree directory
+			workingDir = filepath.Join(input.Context.WorktreeDir, cmdConfig.WorkingDir)
 		}
+	}
 
-		proc, err := a.startCommand(ctx, input.Context, cmdConfig.Command, workingDir, envVars, i)
-		if err != nil {
-			// Clean up any processes we started with proper timeout escalation
-			timeout := input.DevRunConfig.StopTimeoutSeconds
+	proc, err := a.startCommand(ctx, input.Context, cmdConfig.Command, workingDir, envVars, 0)
+	if err != nil {
+		// Clean up any processes we started with proper timeout escalation
+		timeout := cmdConfig.StopTimeoutSeconds
+		if timeout <= 0 {
+			timeout = defaultStopTimeoutSeconds
+		}
+		a.terminateActiveRun(run, timeout)
+
+		// Emit ended event with error
+		a.emitEndedEvent(ctx, input.Context, nil, "", err.Error())
+		return StartDevRunOutput{}, fmt.Errorf("failed to start command: %w", err)
+	}
+
+	run.mu.Lock()
+	run.processes = append(run.processes, proc)
+	run.mu.Unlock()
+
+	// Brief wait to detect immediate failures (e.g., command not found, immediate exit)
+	time.Sleep(1 * time.Second)
+
+	// Check if the process exited immediately with an error
+	run.mu.Lock()
+	proc = run.processes[0]
+	run.mu.Unlock()
+
+	select {
+	case <-proc.doneCh:
+		// Process already exited - check if it was an error
+		exitCode := proc.exitCode.Load()
+		signal := proc.signal.Load()
+		signalStr, _ := signal.(string)
+
+		if signalStr != "" || (exitCode != nil && *exitCode != 0) {
+			// Clean up remaining processes
+			timeout := cmdConfig.StopTimeoutSeconds
 			if timeout <= 0 {
 				timeout = defaultStopTimeoutSeconds
 			}
 			a.terminateActiveRun(run, timeout)
 
-			// Emit ended event with error
-			a.emitEndedEvent(ctx, input.Context, nil, "", err.Error())
-			return StartDevRunOutput{}, fmt.Errorf("failed to start command %d: %w", i, err)
-		}
-
-		run.mu.Lock()
-		run.processes = append(run.processes, proc)
-		run.mu.Unlock()
-	}
-
-	// Brief wait to detect immediate failures (e.g., command not found, immediate exit)
-	time.Sleep(1 * time.Second)
-
-	// Check if any process exited immediately with an error
-	run.mu.Lock()
-	processes := run.processes
-	run.mu.Unlock()
-
-	for i, proc := range processes {
-		select {
-		case <-proc.doneCh:
-			// Process already exited - check if it was an error
-			exitCode := proc.exitCode.Load()
-			signal := proc.signal.Load()
-			signalStr, _ := signal.(string)
-
-			if signalStr != "" || (exitCode != nil && *exitCode != 0) {
-				// Clean up remaining processes
-				timeout := input.DevRunConfig.StopTimeoutSeconds
-				if timeout <= 0 {
-					timeout = defaultStopTimeoutSeconds
-				}
-				a.terminateActiveRun(run, timeout)
-
-				errMsg := fmt.Sprintf("command %d exited immediately", i)
-				if exitCode != nil {
-					errMsg = fmt.Sprintf("command %d exited immediately with status %d", i, *exitCode)
-				} else if signalStr != "" {
-					errMsg = fmt.Sprintf("command %d terminated by signal %s", i, signalStr)
-				}
-
-				a.emitEndedEvent(ctx, input.Context, exitCode, signalStr, errMsg)
-				return StartDevRunOutput{}, errors.New(errMsg)
+			errMsg := "command exited immediately"
+			if exitCode != nil {
+				errMsg = fmt.Sprintf("command exited immediately with status %d", *exitCode)
+			} else if signalStr != "" {
+				errMsg = fmt.Sprintf("command terminated by signal %s", signalStr)
 			}
-		default:
-			// Process still running, good
+
+			a.emitEndedEvent(ctx, input.Context, exitCode, signalStr, errMsg)
+			return StartDevRunOutput{}, errors.New(errMsg)
 		}
+	default:
+		// Process still running, good
 	}
 
-	// Start background monitor to handle natural process exit
-	go a.monitorActiveRun(ctx, input.Context, run, input.DevRunConfig.StopTimeoutSeconds)
-
-	// Collect PGIDs for the entry
+	// Get session ID and output file path from the first process
 	run.mu.Lock()
-	pgids := make([]int, len(run.processes))
-	for i, proc := range run.processes {
-		pgids[i] = proc.pgid
-	}
+	sessionId := run.processes[0].sessionId
+	outputFilePath := run.processes[0].outputFilePath
 	run.mu.Unlock()
 
-	entry := &DevRunEntry{
-		DevRunId: devRunId,
-		Pgids:    pgids,
+	instance := &DevRunInstance{
+		DevRunId:       devRunId,
+		SessionId:      sessionId,
+		OutputFilePath: outputFilePath,
+		CommandId:      input.CommandId,
 	}
 
 	return StartDevRunOutput{
 		DevRunId: devRunId,
 		Started:  true,
-		Entry:    entry,
+		Instance: instance,
 	}, nil
 }
 
@@ -279,38 +347,42 @@ func (a *DevRunActivities) startCommand(
 	cmd.Dir = workingDir
 	cmd.Env = append(os.Environ(), envVars...)
 
-	// Create a new process group so we can kill all child processes
+	// Create a new session so processes survive worker restarts
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
+		Setsid: true,
 	}
 
-	// Set up pipes for stdout/stderr
-	stdout, err := cmd.StdoutPipe()
+	// Create output file for capturing stdout/stderr
+	outputFilePath := fmt.Sprintf("/tmp/sidekick-devrun-%s.log", devRunCtx.DevRunId)
+	outputFile, err := os.Create(outputFilePath)
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+		return nil, fmt.Errorf("failed to create output file: %w", err)
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
-	}
+
+	// Redirect stdout and stderr to the output file
+	cmd.Stdout = outputFile
+	cmd.Stderr = outputFile
 
 	if err := cmd.Start(); err != nil {
+		outputFile.Close()
+		os.Remove(outputFilePath)
 		cancel()
 		return nil, fmt.Errorf("failed to start command: %w", err)
 	}
 
-	pgid, err := syscall.Getpgid(cmd.Process.Pid)
+	// With Setsid, the session ID equals the PID of the session leader
+	sessionId, err := syscall.Getsid(cmd.Process.Pid)
 	if err != nil {
-		pgid = cmd.Process.Pid
+		sessionId = cmd.Process.Pid
 	}
 
 	proc := &runningProcess{
-		cmd:    cmd,
-		pgid:   pgid,
-		cancel: cancel,
-		doneCh: make(chan struct{}),
+		cmd:            cmd,
+		sessionId:      sessionId,
+		outputFilePath: outputFilePath,
+		cancel:         cancel,
+		doneCh:         make(chan struct{}),
 	}
 
 	// Emit started event
@@ -323,72 +395,20 @@ func (a *DevRunActivities) startCommand(
 		EventType:      domain.DevRunStartedEventType,
 		FlowId:         devRunCtx.FlowId,
 		DevRunId:       devRunCtx.DevRunId,
+		CommandId:      devRunCtx.CommandId,
 		CommandSummary: commandSummary,
 		WorkingDir:     workingDir,
 		Pid:            cmd.Process.Pid,
-		Pgid:           pgid,
+		SessionId:      sessionId,
 	}
 	if err := a.Streamer.AddFlowEvent(ctx, devRunCtx.WorkspaceId, devRunCtx.FlowId, startedEvent); err != nil {
 		log.Warn().Err(err).Msg("Failed to emit DevRunStartedEvent")
 	}
 
-	// Stream output in background goroutines
-	var sequence int64
-	var seqMu sync.Mutex
-
-	nextSeq := func() int64 {
-		seqMu.Lock()
-		defer seqMu.Unlock()
-		seq := sequence
-		sequence++
-		return seq
-	}
-
-	streamOutput := func(reader io.Reader, stream string) {
-		buf := make([]byte, 4096)
-		for {
-			n, err := reader.Read(buf)
-			if n > 0 {
-				chunk := string(buf[:n])
-				outputEvent := domain.DevRunOutputEvent{
-					EventType: domain.DevRunOutputEventType,
-					DevRunId:  devRunCtx.DevRunId,
-					Stream:    stream,
-					Chunk:     chunk,
-					Sequence:  nextSeq(),
-					Timestamp: time.Now().UnixMilli(),
-				}
-				// Use background context since this runs after the activity returns
-				if err := a.Streamer.AddFlowEvent(context.Background(), devRunCtx.WorkspaceId, devRunCtx.FlowId, outputEvent); err != nil {
-					log.Warn().Err(err).Str("stream", stream).Msg("Failed to emit DevRunOutputEvent")
-				}
-			}
-			if err != nil {
-				if err != io.EOF {
-					log.Warn().Err(err).Str("stream", stream).Msg("Error reading stream")
-				}
-				break
-			}
-		}
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		streamOutput(stdout, "stdout")
-	}()
-
-	go func() {
-		defer wg.Done()
-		streamOutput(stderr, "stderr")
-	}()
-
 	// Wait for process completion in background
 	go func() {
 		defer close(proc.doneCh)
-		wg.Wait()
+		defer outputFile.Close()
 		err := cmd.Wait()
 		if err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {
@@ -463,47 +483,24 @@ func (a *DevRunActivities) monitorActiveRun(ctx context.Context, devRunCtx DevRu
 
 // StopDevRun stops an active Dev Run.
 func (a *DevRunActivities) StopDevRun(ctx context.Context, input StopDevRunInput) (StopDevRunOutput, error) {
-	entry := input.Entry
-	if entry == nil {
+	instance := input.Instance
+	if instance == nil {
 		// No active Dev Run, nothing to stop - this is idempotent behavior
 		return StopDevRunOutput{Stopped: true}, nil
 	}
 
-	timeout := input.DevRunConfig.StopTimeoutSeconds
-	if timeout <= 0 {
-		timeout = defaultStopTimeoutSeconds
+	timeout := defaultStopTimeoutSeconds
+	if cmdConfig, ok := input.DevRunConfig[input.CommandId]; ok && cmdConfig.StopTimeoutSeconds > 0 {
+		timeout = cmdConfig.StopTimeoutSeconds
 	}
 
-	input.Context.DevRunId = entry.DevRunId
+	input.Context.DevRunId = instance.DevRunId
 
-	// Execute stop commands if configured
-	if len(input.DevRunConfig.Stop) > 0 {
-		envVars := buildDevRunEnvVars(input.Context)
-		for i, cmdConfig := range input.DevRunConfig.Stop {
-			workingDir := input.Context.WorktreeDir
-			if cmdConfig.WorkingDir != "" {
-				if filepath.IsAbs(cmdConfig.WorkingDir) {
-					workingDir = cmdConfig.WorkingDir
-				} else {
-					workingDir = filepath.Join(input.Context.WorktreeDir, cmdConfig.WorkingDir)
-				}
-			}
-
-			cmd := exec.CommandContext(ctx, "sh", "-c", cmdConfig.Command)
-			cmd.Dir = workingDir
-			cmd.Env = append(os.Environ(), envVars...)
-
-			if err := cmd.Run(); err != nil {
-				log.Warn().Err(err).Int("index", i).Msg("Stop command failed")
-			}
-		}
-	}
-
-	// Terminate processes by PGID
-	a.terminateProcessGroupsByPgid(entry.Pgids, timeout)
+	// Terminate process by session ID
+	terminateBySessionId(instance.SessionId, timeout)
 
 	// Only emit ended event if not already emitted (prevents duplicate with monitorActiveRun)
-	if markEndedEventEmitted(entry.DevRunId) {
+	if markEndedEventEmitted(instance.DevRunId) {
 		// Use background context since the original context may be canceled
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -511,15 +508,136 @@ func (a *DevRunActivities) StopDevRun(ctx context.Context, input StopDevRunInput
 		a.emitEndedEvent(cleanupCtx, input.Context, nil, "", "")
 
 		// Emit end stream event for the devRunId output stream
-		if err := a.Streamer.EndFlowEventStream(cleanupCtx, input.Context.WorkspaceId, input.Context.FlowId, entry.DevRunId); err != nil {
+		if err := a.Streamer.EndFlowEventStream(cleanupCtx, input.Context.WorkspaceId, input.Context.FlowId, instance.DevRunId); err != nil {
 			log.Warn().Err(err).Msg("Failed to emit EndStreamEvent for Dev Run output")
 		}
 	}
 
 	// Clean up the tracker entry
-	clearEndedEventTracker(entry.DevRunId)
+	clearEndedEventTracker(instance.DevRunId)
 
 	return StopDevRunOutput{Stopped: true}, nil
+}
+
+// MonitorDevRun is a long-lived activity that monitors a running Dev Run process.
+// It tails the output file, streams content to JetStream, and periodically heartbeats.
+// Returns when the process exits or the context is canceled.
+func (a *DevRunActivities) MonitorDevRun(ctx context.Context, input MonitorDevRunInput) (MonitorDevRunOutput, error) {
+	instance := input.Instance
+	if instance == nil {
+		return MonitorDevRunOutput{}, fmt.Errorf("no instance provided")
+	}
+
+	input.Context.DevRunId = instance.DevRunId
+
+	// Open the output file for tailing
+	file, err := os.Open(instance.OutputFilePath)
+	if err != nil {
+		return MonitorDevRunOutput{}, fmt.Errorf("failed to open output file: %w", err)
+	}
+	defer file.Close()
+
+	// Channel to signal when process exits
+	doneCh := make(chan struct{})
+	var exitCode *int
+	var signal string
+
+	// Monitor process exit in background
+	go func() {
+		defer close(doneCh)
+		for {
+			if !IsSessionAlive(instance.SessionId) {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+				// Continue checking
+			}
+		}
+	}()
+
+	var sequence int64
+	buf := make([]byte, 4096)
+	heartbeatTicker := time.NewTicker(10 * time.Second)
+	defer heartbeatTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Context canceled (workflow stopped or worker shutting down)
+			return MonitorDevRunOutput{ExitCode: exitCode, Signal: signal}, ctx.Err()
+
+		case <-doneCh:
+			// Process exited - do final read and emit ended event
+			for {
+				n, readErr := file.Read(buf)
+				if n > 0 {
+					chunk := string(buf[:n])
+					outputEvent := domain.DevRunOutputEvent{
+						EventType: domain.DevRunOutputEventType,
+						DevRunId:  instance.DevRunId,
+						Stream:    "stdout",
+						Chunk:     chunk,
+						Sequence:  sequence,
+						Timestamp: time.Now().UnixMilli(),
+					}
+					sequence++
+					if err := a.Streamer.AddFlowEvent(ctx, input.Context.WorkspaceId, input.Context.FlowId, outputEvent); err != nil {
+						log.Warn().Err(err).Msg("Failed to emit DevRunOutputEvent")
+					}
+				}
+				if readErr != nil {
+					break
+				}
+			}
+
+			// Emit ended event if not already emitted
+			if markEndedEventEmitted(instance.DevRunId) {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				a.emitEndedEvent(cleanupCtx, input.Context, exitCode, signal, "")
+				if err := a.Streamer.EndFlowEventStream(cleanupCtx, input.Context.WorkspaceId, input.Context.FlowId, instance.DevRunId); err != nil {
+					log.Warn().Err(err).Msg("Failed to end Dev Run output stream")
+				}
+				cancel()
+			}
+
+			return MonitorDevRunOutput{ExitCode: exitCode, Signal: signal}, nil
+
+		case <-heartbeatTicker.C:
+			activity.RecordHeartbeat(ctx, map[string]interface{}{
+				"devRunId":  instance.DevRunId,
+				"commandId": instance.CommandId,
+			})
+
+		default:
+			// Try to read from file
+			n, readErr := file.Read(buf)
+			if n > 0 {
+				chunk := string(buf[:n])
+				outputEvent := domain.DevRunOutputEvent{
+					EventType: domain.DevRunOutputEventType,
+					DevRunId:  instance.DevRunId,
+					Stream:    "stdout",
+					Chunk:     chunk,
+					Sequence:  sequence,
+					Timestamp: time.Now().UnixMilli(),
+				}
+				sequence++
+				if err := a.Streamer.AddFlowEvent(ctx, input.Context.WorkspaceId, input.Context.FlowId, outputEvent); err != nil {
+					log.Warn().Err(err).Msg("Failed to emit DevRunOutputEvent")
+				}
+			}
+			if readErr != nil {
+				if readErr != io.EOF {
+					log.Warn().Err(readErr).Msg("Error reading output file")
+				}
+				// EOF or error - wait a bit before trying again
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}
 }
 
 func (a *DevRunActivities) terminateActiveRun(run *activeDevRun, timeoutSeconds int) {
@@ -538,9 +656,9 @@ func (a *DevRunActivities) terminateActiveRun(run *activeDevRun, timeoutSeconds 
 		default:
 		}
 
-		// Send SIGINT to the process group
-		if err := syscall.Kill(-proc.pgid, syscall.SIGINT); err != nil {
-			log.Warn().Err(err).Int("pgid", proc.pgid).Msg("Failed to send SIGINT to process group")
+		// Send SIGINT to the session (negative session ID signals all processes in session)
+		if err := syscall.Kill(-proc.sessionId, syscall.SIGINT); err != nil {
+			log.Warn().Err(err).Int("sessionId", proc.sessionId).Msg("Failed to send SIGINT to session")
 		}
 	}
 
@@ -563,8 +681,8 @@ func (a *DevRunActivities) terminateActiveRun(run *activeDevRun, timeoutSeconds 
 					continue
 				default:
 				}
-				if err := syscall.Kill(-proc.pgid, syscall.SIGKILL); err != nil {
-					log.Warn().Err(err).Int("pgid", proc.pgid).Msg("Failed to send SIGKILL to process group")
+				if err := syscall.Kill(-proc.sessionId, syscall.SIGKILL); err != nil {
+					log.Warn().Err(err).Int("sessionId", proc.sessionId).Msg("Failed to send SIGKILL to session")
 				}
 				proc.cancel()
 			}
@@ -587,20 +705,17 @@ func (a *DevRunActivities) terminateActiveRun(run *activeDevRun, timeoutSeconds 
 	}
 }
 
-// terminateProcessGroupsByPgid terminates process groups by PGID.
+// terminateBySessionId terminates a process session by session ID.
 // Sends SIGINT, waits up to timeoutSeconds for exit, then sends SIGKILL if needed.
-func (a *DevRunActivities) terminateProcessGroupsByPgid(pgids []int, timeoutSeconds int) {
-	if len(pgids) == 0 {
+func terminateBySessionId(sessionId int, timeoutSeconds int) {
+	if sessionId <= 0 {
 		return
 	}
 
-	// Send SIGINT to all process groups
-	for _, pgid := range pgids {
-		if err := syscall.Kill(-pgid, syscall.SIGINT); err != nil {
-			// ESRCH means process doesn't exist, which is fine
-			if err != syscall.ESRCH {
-				log.Warn().Err(err).Int("pgid", pgid).Msg("Failed to send SIGINT to process group")
-			}
+	// Send SIGINT to the session
+	if err := syscall.Kill(-sessionId, syscall.SIGINT); err != nil {
+		if err != syscall.ESRCH {
+			log.Warn().Err(err).Int("sessionId", sessionId).Msg("Failed to send SIGINT to session")
 		}
 	}
 
@@ -616,27 +731,18 @@ func (a *DevRunActivities) terminateProcessGroupsByPgid(pgids []int, timeoutSeco
 	for {
 		select {
 		case <-timeout:
-			// Force kill remaining processes
-			for _, pgid := range pgids {
-				if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil {
-					if err != syscall.ESRCH {
-						log.Warn().Err(err).Int("pgid", pgid).Msg("Failed to send SIGKILL to process group")
-					}
+			// Force kill the session
+			if err := syscall.Kill(-sessionId, syscall.SIGKILL); err != nil {
+				if err != syscall.ESRCH {
+					log.Warn().Err(err).Int("sessionId", sessionId).Msg("Failed to send SIGKILL to session")
 				}
 			}
 			// Brief wait for SIGKILL to take effect
 			time.Sleep(500 * time.Millisecond)
 			return
 		case <-ticker.C:
-			// Check if all processes have exited
-			allDone := true
-			for _, pgid := range pgids {
-				if err := syscall.Kill(-pgid, 0); err == nil {
-					allDone = false
-					break
-				}
-			}
-			if allDone {
+			// Check if session has exited
+			if err := syscall.Kill(-sessionId, 0); err != nil {
 				return
 			}
 		}
@@ -660,6 +766,7 @@ func (a *DevRunActivities) emitEndedEvent(ctx context.Context, devRunCtx DevRunC
 		EventType:  domain.DevRunEndedEventType,
 		FlowId:     devRunCtx.FlowId,
 		DevRunId:   devRunCtx.DevRunId,
+		CommandId:  devRunCtx.CommandId,
 		ExitStatus: exitStatus,
 		Signal:     signal,
 		Error:      errMsg,
@@ -683,16 +790,13 @@ func buildDevRunEnvVars(ctx DevRunContext) []string {
 
 // IsDevRunActive returns whether a Dev Run is currently active based on GlobalState.
 func IsDevRunActive(gs *flow_action.GlobalState) bool {
-	return GetDevRunEntry(gs) != nil
+	entry := GetDevRunEntry(gs)
+	return entry != nil && len(entry) > 0
 }
 
-// AreProcessesAlive checks if any of the given process groups are still alive.
-func AreProcessesAlive(pgids []int) bool {
-	for _, pgid := range pgids {
-		// Signal 0 checks if process exists without sending a signal
-		if err := syscall.Kill(-pgid, 0); err == nil {
-			return true
-		}
-	}
-	return false
+// IsSessionAlive checks if a process session is still alive.
+func IsSessionAlive(sessionId int) bool {
+	// Signal 0 checks if process exists without sending a signal
+	// Negative value signals the entire process group/session
+	return syscall.Kill(-sessionId, 0) == nil
 }

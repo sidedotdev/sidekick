@@ -939,6 +939,36 @@ func TestContainsAbsolutePath(t *testing.T) {
 			command:  "awk -F: '{print $1}' /etc/passwd",
 			expected: true,
 		},
+		{
+			name:     "command substitution with path suffix is absolute",
+			command:  "cat $(go env GOPATH)/pkg/mod/github.com/example/pkg@v1.0.0/file.go",
+			expected: true,
+		},
+		{
+			name:     "command substitution with nested parens is absolute",
+			command:  "ls $(dirname $(which go))/pkg",
+			expected: true,
+		},
+		{
+			name:     "command substitution followed by absolute path",
+			command:  "cat $(echo test) /etc/passwd",
+			expected: true,
+		},
+		{
+			name:     "pwd substitution with path suffix is absolute",
+			command:  "ls $(pwd)/subdir",
+			expected: true,
+		},
+		{
+			name:     "command substitution with pipe inside is absolute",
+			command:  "cat $(echo /etc | head -1)/passwd",
+			expected: true,
+		},
+		{
+			name:     "command substitution with nested parens and pipe is absolute",
+			command:  "ls $(echo (a|b))/file",
+			expected: true,
+		},
 	}
 
 	for _, tt := range tests {

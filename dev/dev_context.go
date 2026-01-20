@@ -334,22 +334,27 @@ func stopActiveDevRun(dCtx DevContext) {
 	}
 
 	flowInfo := workflow.GetInfo(dCtx)
-	devRunCtx := DevRunContext{
-		DevRunId:     entry.DevRunId,
-		WorkspaceId:  dCtx.WorkspaceId,
-		FlowId:       flowInfo.WorkflowExecution.ID,
-		WorktreeDir:  dCtx.EnvContainer.Env.GetWorkingDirectory(),
-		SourceBranch: dCtx.Worktree.Name,
-	}
-	var dra *DevRunActivities
-	var stopOutput StopDevRunOutput
-	err := workflow.ExecuteActivity(dCtx, dra.StopDevRun, StopDevRunInput{
-		DevRunConfig: dCtx.RepoConfig.DevRun,
-		Context:      devRunCtx,
-		Entry:        entry,
-	}).Get(dCtx, &stopOutput)
-	if err != nil {
-		workflow.GetLogger(dCtx).Warn("Failed to stop Dev Run during cleanup", "error", err)
+
+	// Stop all active dev run instances
+	for commandId, instance := range entry {
+		devRunCtx := DevRunContext{
+			DevRunId:     instance.DevRunId,
+			WorkspaceId:  dCtx.WorkspaceId,
+			FlowId:       flowInfo.WorkflowExecution.ID,
+			WorktreeDir:  dCtx.EnvContainer.Env.GetWorkingDirectory(),
+			SourceBranch: dCtx.Worktree.Name,
+		}
+		var dra *DevRunActivities
+		var stopOutput StopDevRunOutput
+		err := workflow.ExecuteActivity(dCtx, dra.StopDevRun, StopDevRunInput{
+			DevRunConfig: dCtx.RepoConfig.DevRun,
+			CommandId:    commandId,
+			Context:      devRunCtx,
+			Instance:     instance,
+		}).Get(dCtx, &stopOutput)
+		if err != nil {
+			workflow.GetLogger(dCtx).Warn("Failed to stop Dev Run during cleanup", "commandId", commandId, "error", err)
+		}
 	}
 
 	// Clear stored Dev Run state
@@ -373,22 +378,25 @@ func handleFlowCancel(dCtx DevContext) {
 			entry := GetDevRunEntry(dCtx.ExecContext.GlobalState)
 			if entry != nil {
 				flowInfo := workflow.GetInfo(dCtx)
-				devRunCtx := DevRunContext{
-					DevRunId:     entry.DevRunId,
-					WorkspaceId:  dCtx.WorkspaceId,
-					FlowId:       flowInfo.WorkflowExecution.ID,
-					WorktreeDir:  dCtx.EnvContainer.Env.GetWorkingDirectory(),
-					SourceBranch: dCtx.Worktree.Name,
-				}
-				var dra *DevRunActivities
-				var stopOutput StopDevRunOutput
-				err := workflow.ExecuteActivity(disconnectedCtx, dra.StopDevRun, StopDevRunInput{
-					DevRunConfig: dCtx.RepoConfig.DevRun,
-					Context:      devRunCtx,
-					Entry:        entry,
-				}).Get(disconnectedCtx, &stopOutput)
-				if err != nil {
-					workflow.GetLogger(dCtx).Warn("Failed to stop Dev Run during workflow cancellation", "error", err)
+				for commandId, instance := range entry {
+					devRunCtx := DevRunContext{
+						DevRunId:     instance.DevRunId,
+						WorkspaceId:  dCtx.WorkspaceId,
+						FlowId:       flowInfo.WorkflowExecution.ID,
+						WorktreeDir:  dCtx.EnvContainer.Env.GetWorkingDirectory(),
+						SourceBranch: dCtx.Worktree.Name,
+					}
+					var dra *DevRunActivities
+					var stopOutput StopDevRunOutput
+					err := workflow.ExecuteActivity(disconnectedCtx, dra.StopDevRun, StopDevRunInput{
+						DevRunConfig: dCtx.RepoConfig.DevRun,
+						CommandId:    commandId,
+						Context:      devRunCtx,
+						Instance:     instance,
+					}).Get(disconnectedCtx, &stopOutput)
+					if err != nil {
+						workflow.GetLogger(dCtx).Warn("Failed to stop Dev Run during workflow cancellation", "commandId", commandId, "error", err)
+					}
 				}
 				ClearDevRunEntry(dCtx.ExecContext.GlobalState)
 			}

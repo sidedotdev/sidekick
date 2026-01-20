@@ -34,5 +34,5 @@ command_permissions:
     - pattern: "bun test:unit.*--run"
 
 dev_run:
-  start:
-    - command: "./scripts/supervisor.go --ephemeral"
+  supervisor:
+    command: "./scripts/supervisor.go --ephemeral"
