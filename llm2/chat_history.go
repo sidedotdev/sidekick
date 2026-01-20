@@ -100,12 +100,13 @@ func (h *LegacyChatHistory) MarshalJSON() ([]byte, error) {
 // Llm2ChatHistory stores message references in Temporal history and persists
 // actual content to KV storage for deduplication.
 type Llm2ChatHistory struct {
-	flowId      string
-	workspaceId string
-	refs        []MessageRef
-	messages    []Message
-	hydrated    bool
-	unpersisted []int
+	flowId         string
+	workspaceId    string
+	refs           []MessageRef
+	messages       []Message
+	hydrated       bool
+	unpersisted    []int
+	hydratedBlocks map[string]ContentBlock
 }
 
 // NewLlm2ChatHistory creates an empty, hydrated Llm2ChatHistory instance.
@@ -205,38 +206,61 @@ func (h *Llm2ChatHistory) Hydrate(ctx context.Context, storage common.KeyValueSt
 		h.flowId = h.refs[0].FlowId
 	}
 
-	// Collect all block IDs to fetch
-	var allKeys []string
-	for _, ref := range h.refs {
-		allKeys = append(allKeys, ref.BlockIds...)
+	// Initialize cache if needed
+	if h.hydratedBlocks == nil {
+		h.hydratedBlocks = make(map[string]ContentBlock)
 	}
 
-	if len(allKeys) == 0 {
+	// Populate cache from existing in-memory messages+refs before overwriting
+	if h.messages != nil && len(h.messages) == len(h.refs) {
+		for i, ref := range h.refs {
+			if i < len(h.messages) {
+				msg := h.messages[i]
+				for j, blockId := range ref.BlockIds {
+					if j < len(msg.Content) {
+						h.hydratedBlocks[blockId] = msg.Content[j]
+					}
+				}
+			}
+		}
+	}
+
+	// Collect missing block IDs to fetch
+	var missingKeys []string
+	for _, ref := range h.refs {
+		for _, blockId := range ref.BlockIds {
+			if _, ok := h.hydratedBlocks[blockId]; !ok {
+				missingKeys = append(missingKeys, blockId)
+			}
+		}
+	}
+
+	if len(missingKeys) == 0 && len(h.refs) == 0 {
 		h.messages = []Message{}
 		h.hydrated = true
 		return nil
 	}
 
-	// Fetch all content blocks
-	values, err := storage.MGet(ctx, h.workspaceId, allKeys)
-	if err != nil {
-		return fmt.Errorf("failed to fetch content blocks: %w", err)
+	// Fetch only missing content blocks
+	if len(missingKeys) > 0 {
+		values, err := storage.MGet(ctx, h.workspaceId, missingKeys)
+		if err != nil {
+			return fmt.Errorf("failed to fetch content blocks: %w", err)
+		}
+
+		for i, key := range missingKeys {
+			if values[i] == nil {
+				continue
+			}
+			var block ContentBlock
+			if err := json.Unmarshal(values[i], &block); err != nil {
+				return fmt.Errorf("failed to unmarshal content block %s: %w", key, err)
+			}
+			h.hydratedBlocks[key] = block
+		}
 	}
 
-	// Build a map of block ID to content block
-	blockMap := make(map[string]ContentBlock)
-	for i, key := range allKeys {
-		if values[i] == nil {
-			continue
-		}
-		var block ContentBlock
-		if err := json.Unmarshal(values[i], &block); err != nil {
-			return fmt.Errorf("failed to unmarshal content block %s: %w", key, err)
-		}
-		blockMap[key] = block
-	}
-
-	// Reconstruct messages from refs
+	// Reconstruct messages from refs using the cache
 	h.messages = make([]Message, len(h.refs))
 	for i, ref := range h.refs {
 		h.messages[i] = Message{
@@ -244,7 +268,7 @@ func (h *Llm2ChatHistory) Hydrate(ctx context.Context, storage common.KeyValueSt
 			Content: make([]ContentBlock, 0, len(ref.BlockIds)),
 		}
 		for _, blockId := range ref.BlockIds {
-			if block, ok := blockMap[blockId]; ok {
+			if block, ok := h.hydratedBlocks[blockId]; ok {
 				h.messages[i].Content = append(h.messages[i].Content, block)
 			}
 		}
@@ -268,6 +292,11 @@ func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueSt
 		return nil
 	}
 
+	// Initialize cache if needed
+	if h.hydratedBlocks == nil {
+		h.hydratedBlocks = make(map[string]ContentBlock)
+	}
+
 	// Ensure refs slice is large enough
 	for len(h.refs) < len(h.messages) {
 		h.refs = append(h.refs, MessageRef{})
@@ -285,6 +314,7 @@ func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueSt
 			blockId := fmt.Sprintf("%s:msg:%d:block:%s", h.flowId, idx, ksuid.New().String())
 			blockIds[j] = blockId
 			values[blockId] = block
+			h.hydratedBlocks[blockId] = block
 		}
 		h.refs[idx] = MessageRef{
 			FlowId:   h.flowId,
@@ -341,6 +371,46 @@ func (h *Llm2ChatHistory) SetFlowId(flowId string) {
 // SetWorkspaceId sets the workspace ID for the chat history.
 func (h *Llm2ChatHistory) SetWorkspaceId(workspaceId string) {
 	h.workspaceId = workspaceId
+}
+
+// Refs returns a defensive copy of the message refs.
+func (h *Llm2ChatHistory) Refs() []MessageRef {
+	result := make([]MessageRef, len(h.refs))
+	for i, ref := range h.refs {
+		result[i] = MessageRef{
+			FlowId:   ref.FlowId,
+			BlockIds: append([]string(nil), ref.BlockIds...),
+			Role:     ref.Role,
+		}
+	}
+	return result
+}
+
+// SetRefs replaces the refs and marks the history as non-hydrated.
+// The existing in-memory messages are preserved in the hydratedBlocks cache
+// so that subsequent Hydrate calls can reuse already-fetched content.
+func (h *Llm2ChatHistory) SetRefs(refs []MessageRef) {
+	// Populate cache from existing messages+refs before changing refs
+	if h.hydratedBlocks == nil {
+		h.hydratedBlocks = make(map[string]ContentBlock)
+	}
+	if h.hydrated && h.messages != nil && len(h.messages) == len(h.refs) {
+		for i, ref := range h.refs {
+			if i < len(h.messages) {
+				msg := h.messages[i]
+				for j, blockId := range ref.BlockIds {
+					if j < len(msg.Content) {
+						h.hydratedBlocks[blockId] = msg.Content[j]
+					}
+				}
+			}
+		}
+	}
+
+	h.refs = refs
+	h.hydrated = false
+	h.messages = nil
+	h.unpersisted = []int{}
 }
 
 // SetMessages replaces all messages in the history with the provided slice.

@@ -725,3 +725,170 @@ func TestLlm2ChatHistory_Hydrate_PreservesExistingFlowId(t *testing.T) {
 	// flowId should be preserved, not overwritten
 	assert.Equal(t, "existing-flow-id", h.flowId)
 }
+
+func TestLlm2ChatHistory_Refs_ReturnsDefensiveCopy(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
+
+	storage := newMockKeyValueStorage()
+	err := h.Persist(context.Background(), storage)
+	require.NoError(t, err)
+
+	refs := h.Refs()
+	require.Len(t, refs, 1)
+
+	// Modify the returned refs
+	refs[0].FlowId = "modified-flow"
+	refs[0].BlockIds[0] = "modified-block"
+
+	// Original refs should be unchanged
+	originalRefs := h.Refs()
+	assert.Equal(t, "flow-123", originalRefs[0].FlowId)
+	assert.NotEqual(t, "modified-block", originalRefs[0].BlockIds[0])
+}
+
+func TestLlm2ChatHistory_SetRefs_MarksNotHydrated(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
+
+	assert.True(t, h.IsHydrated())
+
+	newRefs := []MessageRef{
+		{FlowId: "flow-123", BlockIds: []string{"new-block-1"}, Role: "user"},
+	}
+	h.SetRefs(newRefs)
+
+	assert.False(t, h.IsHydrated())
+	assert.Equal(t, 1, h.Len())
+}
+
+func TestLlm2ChatHistory_SetRefs_CachesExistingBlocks(t *testing.T) {
+	// Create and persist a history with two messages
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "First message"}}})
+	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Second message"}}})
+
+	storage := newMockKeyValueStorage()
+	err := h.Persist(context.Background(), storage)
+	require.NoError(t, err)
+
+	originalRefs := h.Refs()
+	require.Len(t, originalRefs, 2)
+
+	// SetRefs with a subset that reuses one existing block and adds a new one
+	newBlock := ContentBlock{Type: ContentBlockTypeText, Text: "New message"}
+	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
+		"new-block-id": newBlock,
+	})
+
+	newRefs := []MessageRef{
+		originalRefs[1], // Reuse second message's ref
+		{FlowId: "flow-123", BlockIds: []string{"new-block-id"}, Role: "user"},
+	}
+	h.SetRefs(newRefs)
+
+	assert.False(t, h.IsHydrated())
+
+	// Hydrate should only fetch the new block, not the cached one
+	err = h.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	assert.True(t, h.IsHydrated())
+	assert.Len(t, h.Llm2Messages(), 2)
+	assert.Equal(t, "Second message", h.Llm2Messages()[0].Content[0].Text)
+	assert.Equal(t, "New message", h.Llm2Messages()[1].Content[0].Text)
+}
+
+func TestLlm2ChatHistory_Hydrate_OnlyFetchesMissingBlocks(t *testing.T) {
+	// Create a tracking mock storage to verify which keys are fetched
+	storage := &trackingMockStorage{
+		mockKeyValueStorage: newMockKeyValueStorage(),
+		fetchedKeys:         make([]string, 0),
+	}
+
+	// Pre-populate storage with blocks
+	block1 := ContentBlock{Type: ContentBlockTypeText, Text: "First"}
+	block2 := ContentBlock{Type: ContentBlockTypeText, Text: "Second"}
+	block3 := ContentBlock{Type: ContentBlockTypeText, Text: "Third"}
+	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
+		"block-1": block1,
+		"block-2": block2,
+		"block-3": block3,
+	})
+
+	// Create a hydrated history with two messages
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{block1}})
+	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{block2}})
+
+	// Manually set refs to match the blocks
+	h.refs = []MessageRef{
+		{FlowId: "flow-123", BlockIds: []string{"block-1"}, Role: "user"},
+		{FlowId: "flow-123", BlockIds: []string{"block-2"}, Role: "assistant"},
+	}
+
+	// SetRefs to a new set that reuses block-2 and adds block-3
+	newRefs := []MessageRef{
+		{FlowId: "flow-123", BlockIds: []string{"block-2"}, Role: "assistant"},
+		{FlowId: "flow-123", BlockIds: []string{"block-3"}, Role: "user"},
+	}
+	h.SetRefs(newRefs)
+
+	// Clear fetch tracking
+	storage.fetchedKeys = nil
+
+	// Hydrate
+	err := h.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	// Only block-3 should have been fetched (block-1 and block-2 were cached)
+	assert.Equal(t, []string{"block-3"}, storage.fetchedKeys)
+
+	// Verify content is correct
+	assert.True(t, h.IsHydrated())
+	messages := h.Llm2Messages()
+	assert.Len(t, messages, 2)
+	assert.Equal(t, "Second", messages[0].Content[0].Text)
+	assert.Equal(t, "Third", messages[1].Content[0].Text)
+}
+
+func TestLlm2ChatHistory_Persist_PopulatesCache(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
+
+	storage := newMockKeyValueStorage()
+	err := h.Persist(context.Background(), storage)
+	require.NoError(t, err)
+
+	refs := h.Refs()
+	require.Len(t, refs, 1)
+	require.Len(t, refs[0].BlockIds, 1)
+
+	// SetRefs to the same refs (simulating workflow receiving refs back)
+	h.SetRefs(refs)
+
+	// Create a tracking storage to verify no fetch happens
+	trackingStorage := &trackingMockStorage{
+		mockKeyValueStorage: storage,
+		fetchedKeys:         make([]string, 0),
+	}
+
+	// Hydrate should use cached blocks, not fetch from storage
+	err = h.Hydrate(context.Background(), trackingStorage)
+	require.NoError(t, err)
+
+	assert.Empty(t, trackingStorage.fetchedKeys)
+	assert.True(t, h.IsHydrated())
+	assert.Equal(t, "Hello", h.Llm2Messages()[0].Content[0].Text)
+}
+
+// trackingMockStorage wraps mockKeyValueStorage to track which keys are fetched
+type trackingMockStorage struct {
+	*mockKeyValueStorage
+	fetchedKeys []string
+}
+
+func (t *trackingMockStorage) MGet(ctx context.Context, workspaceId string, keys []string) ([][]byte, error) {
+	t.fetchedKeys = append(t.fetchedKeys, keys...)
+	return t.mockKeyValueStorage.MGet(ctx, workspaceId, keys)
+}
