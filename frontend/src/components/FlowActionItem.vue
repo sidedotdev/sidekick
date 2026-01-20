@@ -41,6 +41,7 @@ import MergeFlowAction from './MergeFlowAction.vue';
 import RetrieveCodeContextFlowAction from './RetrieveCodeContextFlowAction.vue';
 import BulkSearchRepositoryFlowAction from './BulkSearchRepositoryFlowAction.vue';
 import ReadFileLinesFlowAction from './ReadFileLinesFlowAction.vue';
+import RunCommandFlowAction from './RunCommandFlowAction.vue';
 import { useEventBus } from '@vueuse/core';
 
 const props = defineProps({
@@ -185,6 +186,8 @@ const actionSpecificComponent = computed(() => {
       return BulkSearchRepositoryFlowAction
     case 'tool_call.read_file_lines':
       return ReadFileLinesFlowAction
+    case 'tool_call.run_command':
+      return RunCommandFlowAction
     default:
       if (props.flowAction.isHumanAction || /^user_request\./.test(props.flowAction.actionType)) {
         return UserRequest
@@ -225,14 +228,13 @@ interface Summary {
 }
 
 const summary = computed<Summary | null>(() => {
-  if (props.flowAction.actionStatus !== 'complete') {
-    return null;
-  }
-
   switch (props.flowAction.actionType) {
     case 'Run Tests':
     case 'run_tests':
     case 'RunTests': {
+      if (props.flowAction.actionStatus !== 'complete') {
+        return null;
+      }
       // NOTE: shoving non-arrays into an array is to support extremely legacy data
       const results = Array.isArray(actionResult.value) ? actionResult.value : (actionResult.value != null ? [actionResult.value] : []);
       const totalTests = results.length;
@@ -247,6 +249,9 @@ const summary = computed<Summary | null>(() => {
 
     case 'apply_edit_blocks':
     case 'Apply Edit Blocks': {
+      if (props.flowAction.actionStatus !== 'complete') {
+        return null;
+      }
       const editResults = actionResult.value as ApplyEditBlockResult[] | null;
       if (editResults == null) {
         return {
@@ -265,6 +270,9 @@ const summary = computed<Summary | null>(() => {
 
     case 'check_criteria_fulfillment':
     case 'Check Criteria Fulfillment': {
+      if (props.flowAction.actionStatus !== 'complete') {
+        return null;
+      }
       try {
         const criteriaFulfillment = JSON.parse(actionResult.value?.toolCalls[0]?.arguments || "null") as CriteriaFulfillment | null;
         if (criteriaFulfillment === null) {
@@ -281,6 +289,9 @@ const summary = computed<Summary | null>(() => {
     }
 
     case 'merge': {
+      if (props.flowAction.actionStatus !== 'complete') {
+        return null;
+      }
       try {
         const mergeResult = actionResult.value;
         if (mergeResult === null || mergeResult === undefined) {
@@ -297,6 +308,9 @@ const summary = computed<Summary | null>(() => {
     }
 
     case 'user_request.approve.merge': {
+      if (props.flowAction.actionStatus !== 'complete') {
+        return null;
+      }
       try {
         if (actionResult.value === null || actionResult.value === undefined) {
           return null;
@@ -406,28 +420,37 @@ const summary = computed<Summary | null>(() => {
       try {
         const params = props.flowAction.actionParams;
         if (!params?.command) {
-          return null
+          return null;
         }
         
         const command = params.workingDir ? `${params.workingDir}$ ${params.command}` : `${params.command}`;
         
-        let exitStatus: number | null = null;
-        try {
-          const parsed = JSON.parse(props.flowAction.actionResult);
-          if (parsed && typeof parsed.exitStatus === 'number') {
-            exitStatus = parsed.exitStatus;
+        // Only check exit status if action is complete
+        if (props.flowAction.actionStatus === 'complete') {
+          let exitStatus: number | null = null;
+          try {
+            const parsed = JSON.parse(props.flowAction.actionResult);
+            if (parsed && typeof parsed.exitStatus === 'number') {
+              exitStatus = parsed.exitStatus;
+            }
+          } catch {
+            // ignore parse errors
           }
-        } catch {
-          // ignore parse errors
+          
+          const text = exitStatus !== null && exitStatus !== 0 
+            ? `${command} (exit ${exitStatus})`
+            : command;
+          
+          return {
+            text,
+            emoji: exitStatus !== null && exitStatus !== 0 ? '❌' : '',
+          };
         }
         
-        const text = exitStatus !== null && exitStatus !== 0 
-          ? `${command} (exit ${exitStatus})`
-          : command;
-        
+        // Return command without exit status while running
         return {
-          text,
-          emoji: exitStatus !== null && exitStatus !== 0 ? '❌' : '',
+          text: command,
+          emoji: '',
         };
       } catch (error) {
         console.error('Error parsing run_command params:', error);
