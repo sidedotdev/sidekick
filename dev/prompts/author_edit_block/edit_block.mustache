@@ -1,5 +1,6 @@
 An *edit block* is formatted like so:
 
+- Use 2 newlines before the first line of the edit block.
 - The first line is "~~~~" (without quotes), optionally followed by the
   language name, as in regular code blocks.
 - The second line is "edit_block:" followed by the edit block sequence number,
@@ -13,7 +14,7 @@ An *edit block* is formatted like so:
   replaced or provide context, if any. Only provide old lines that are present
   in your code context, and ensure they are copied verbatim
 - Then comes a line with "{{{divider}}}" (without quotes)
-- The next lines are the new lines of text that replace the old lines
+- The next lines are the updated text that replace the old lines
 - The second-last line is "{{{replace}}}" (without quotes) when searching.
   When creating or appending to file, instead of "REPLACE_EXACT" it should be "NEW_LINES"
 - The last line is "~~~~" (without quotes)
@@ -151,6 +152,7 @@ must ALWAYS make sense outside of the context of a specific edit and task. It's
 fine to add such comments if thinking out loud, not within an edit block, but
 then remove these extraneous & unnecessary comments for the final formatted edit
 blocks.
+14. ALWAYS include two newlines (i.e. \n\n) before each edit block.
 
 {{#applyEditBlocksImmediately}}
 Edit blocks are applied immediately after each response. You will receive
