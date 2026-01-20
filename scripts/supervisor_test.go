@@ -1806,13 +1806,35 @@ func TestRestartProcessFastRestartRace(t *testing.T) {
 	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
 	sup.StartAll(ctx, outputChan)
 
-	time.Sleep(200 * time.Millisecond)
-
 	p := sup.processes[0]
 
+	// Wait for process to start and produce output to ensure we don't get
+	// delayed initial notifications interfering with the test
+	waitForCondition(t, 2*time.Second, func() bool {
+		output := p.getOutput()
+		for _, line := range output {
+			if strings.Contains(line, "started") {
+				return true
+			}
+		}
+		return false
+	}, "process did not output 'started'")
+
 	// Drain initial messages
-	for len(outputChan) > 0 {
-		<-outputChan
+	// We wait until channel is empty for a short duration to ensure all initial
+	// output notifications are cleared
+	drainTimeout := time.After(time.Second)
+drainLoop:
+	for {
+		select {
+		case <-outputChan:
+			// keep draining
+		case <-time.After(100 * time.Millisecond):
+			// Channel has been empty for 100ms, assume drained
+			break drainLoop
+		case <-drainTimeout:
+			break drainLoop
+		}
 	}
 
 	// Simulate what the UI does: call RestartProcess and collect all notifications
@@ -1907,16 +1929,39 @@ func TestRestartProcessStoppingStateOnNotification(t *testing.T) {
 	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
 	sup.StartAll(ctx, outputChan)
 
-	time.Sleep(200 * time.Millisecond)
-
 	p := sup.processes[0]
+
+	// Wait for process to start and produce output to ensure we don't get
+	// delayed initial notifications interfering with the test
+	waitForCondition(t, 2*time.Second, func() bool {
+		output := p.getOutput()
+		for _, line := range output {
+			if strings.Contains(line, "started") {
+				return true
+			}
+		}
+		return false
+	}, "process did not output 'started'")
+
 	if !p.isRunning() {
 		t.Fatal("process should be running")
 	}
 
 	// Drain initial messages
-	for len(outputChan) > 0 {
-		<-outputChan
+	// We wait until channel is empty for a short duration to ensure all initial
+	// output notifications are cleared
+	drainTimeout := time.After(time.Second)
+drainLoop:
+	for {
+		select {
+		case <-outputChan:
+			// keep draining
+		case <-time.After(100 * time.Millisecond):
+			// Channel has been empty for 100ms, assume drained
+			break drainLoop
+		case <-drainTimeout:
+			break drainLoop
+		}
 	}
 
 	// Track all notifications and their states
