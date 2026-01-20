@@ -1,6 +1,6 @@
 <template>
-  <div class="diff-file">
-    <div class="file-header" @click="toggleExpanded">
+  <div class="diff-file" tabindex="-1">
+    <div class="file-header" tabindex="0" @click="toggleExpanded" @keydown.enter.exact="toggleExpanded" @keydown.space.prevent="toggleExpanded">
       <div class="file-header-content">
         <div class="file-path-container">
           <span class="expand-icon" :class="{ expanded: isExpanded }">▶</span>
@@ -28,7 +28,7 @@
         </div>
       </div>
     </div>
-    <div v-if="isExpanded" class="diff-content">
+    <div v-if="isExpanded" class="diff-content" tabindex="-1">
       <DiffView
         :data="fileData"
         :diff-view-font-size="14"
