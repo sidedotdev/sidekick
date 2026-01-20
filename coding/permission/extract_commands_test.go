@@ -128,6 +128,16 @@ func TestExtractCommands(t *testing.T) {
 			expected: []string{"echo $(cat $(ls))", "cat $(ls)", "ls"},
 		},
 		{
+			name:     "command substitution with pipe",
+			script:   "cat $(echo /etc | head -1)/passwd",
+			expected: []string{"cat $(echo /etc | head -1)/passwd", "echo /etc", "head -1"},
+		},
+		{
+			name:     "command substitution with path suffix",
+			script:   "cat $(go env GOPATH)/pkg/mod/file.go",
+			expected: []string{"cat $(go env GOPATH)/pkg/mod/file.go", "go env GOPATH"},
+		},
+		{
 			name:     "backtick command substitution",
 			script:   "echo `ls -la`",
 			expected: []string{"echo `ls -la`", "ls -la"},
