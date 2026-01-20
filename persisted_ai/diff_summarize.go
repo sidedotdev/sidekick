@@ -20,9 +20,11 @@ import (
 
 // DiffChunk represents a chunk of diff content for ranking.
 type DiffChunk struct {
-	FilePath   string
-	Content    string
-	ChunkIndex int // For multi-chunk files, tracks the chunk order
+	FilePath     string
+	Content      string
+	ChunkIndex   int // For multi-chunk files, tracks the chunk order
+	LinesAdded   int
+	LinesRemoved int
 }
 
 // FileContentProvider is a function that returns the current content of a file.
@@ -166,10 +168,13 @@ func chunkFileDiffs(fileDiffs []diffanalysis.FileDiff, maxChars int) []DiffChunk
 	for _, fd := range fileDiffs {
 		rawContent := fd.RawContent
 		if len(rawContent) <= targetChunkSize {
+			added, removed := countDiffLines(fd)
 			chunks = append(chunks, DiffChunk{
-				FilePath:   fd.NewPath,
-				Content:    rawContent,
-				ChunkIndex: 0,
+				FilePath:     fd.NewPath,
+				Content:      rawContent,
+				ChunkIndex:   0,
+				LinesAdded:   added,
+				LinesRemoved: removed,
 			})
 		} else {
 			// Split large file diffs
@@ -180,10 +185,41 @@ func chunkFileDiffs(fileDiffs []diffanalysis.FileDiff, maxChars int) []DiffChunk
 	return chunks
 }
 
+// countDiffLines counts added and removed lines in a FileDiff.
+func countDiffLines(fd diffanalysis.FileDiff) (added, removed int) {
+	for _, hunk := range fd.Hunks {
+		for _, line := range hunk.Lines {
+			switch line.Type {
+			case diffanalysis.LineAdded:
+				added++
+			case diffanalysis.LineRemoved:
+				removed++
+			}
+		}
+	}
+	return added, removed
+}
+
+// countHunkLines counts added and removed lines in a slice of Hunks.
+func countHunkLines(hunks []diffanalysis.Hunk) (added, removed int) {
+	for _, hunk := range hunks {
+		for _, line := range hunk.Lines {
+			switch line.Type {
+			case diffanalysis.LineAdded:
+				added++
+			case diffanalysis.LineRemoved:
+				removed++
+			}
+		}
+	}
+	return added, removed
+}
+
 // splitLargeFileDiff splits a large file diff into smaller chunks by hunks.
 func splitLargeFileDiff(fd diffanalysis.FileDiff, targetSize int) []DiffChunk {
 	var chunks []DiffChunk
 	var currentContent strings.Builder
+	var currentHunks []diffanalysis.Hunk
 	chunkIndex := 0
 
 	// Extract the original header from RawContent to preserve rename/delete/new file markers
@@ -194,24 +230,32 @@ func splitLargeFileDiff(fd diffanalysis.FileDiff, targetSize int) []DiffChunk {
 
 		// If adding this hunk would exceed target, start a new chunk
 		if currentContent.Len() > 0 && currentContent.Len()+len(hunkContent) > targetSize {
+			added, removed := countHunkLines(currentHunks)
 			chunks = append(chunks, DiffChunk{
-				FilePath:   fd.NewPath,
-				Content:    header + currentContent.String(),
-				ChunkIndex: chunkIndex,
+				FilePath:     fd.NewPath,
+				Content:      header + currentContent.String(),
+				ChunkIndex:   chunkIndex,
+				LinesAdded:   added,
+				LinesRemoved: removed,
 			})
 			chunkIndex++
 			currentContent.Reset()
+			currentHunks = nil
 		}
 
 		currentContent.WriteString(hunkContent)
+		currentHunks = append(currentHunks, hunk)
 	}
 
 	// Add remaining content
 	if currentContent.Len() > 0 {
+		added, removed := countHunkLines(currentHunks)
 		chunks = append(chunks, DiffChunk{
-			FilePath:   fd.NewPath,
-			Content:    header + currentContent.String(),
-			ChunkIndex: chunkIndex,
+			FilePath:     fd.NewPath,
+			Content:      header + currentContent.String(),
+			ChunkIndex:   chunkIndex,
+			LinesAdded:   added,
+			LinesRemoved: removed,
 		})
 	}
 
@@ -531,8 +575,10 @@ func buildSummarizedOutput(rankedChunks []DiffChunk, symbolSummaries map[string]
 
 	// Track which chunks have been expanded (by file:chunkIndex)
 	type chunkKey struct {
-		filePath   string
-		chunkIndex int
+		filePath     string
+		chunkIndex   int
+		linesAdded   int
+		linesRemoved int
 	}
 	expandedChunks := make(map[chunkKey]bool)
 	var omittedChunks []chunkKey
@@ -540,7 +586,7 @@ func buildSummarizedOutput(rankedChunks []DiffChunk, symbolSummaries map[string]
 	// Add ranked chunks until we hit the limit
 	var diffContent strings.Builder
 	for _, chunk := range rankedChunks {
-		key := chunkKey{filePath: chunk.FilePath, chunkIndex: chunk.ChunkIndex}
+		key := chunkKey{filePath: chunk.FilePath, chunkIndex: chunk.ChunkIndex, linesAdded: chunk.LinesAdded, linesRemoved: chunk.LinesRemoved}
 		chunkSize := len(chunk.Content) + 1 // +1 for newline
 		if chunkSize <= remainingChars {
 			diffContent.WriteString(chunk.Content)
@@ -555,25 +601,35 @@ func buildSummarizedOutput(rankedChunks []DiffChunk, symbolSummaries map[string]
 	// Build truncation note for omitted chunks
 	var truncationNote string
 	if len(omittedChunks) > 0 {
-		// Group by file and count chunks
-		fileChunkCounts := make(map[string]int)
+		// Group by file and sum lines added/removed
+		type fileStats struct {
+			added   int
+			removed int
+		}
+		fileLineStats := make(map[string]fileStats)
 		for _, key := range omittedChunks {
-			fileChunkCounts[key.filePath]++
+			stats := fileLineStats[key.filePath]
+			stats.added += key.linesAdded
+			stats.removed += key.linesRemoved
+			fileLineStats[key.filePath] = stats
 		}
 
-		// Build summary
+		// Build summary with lines added/removed
 		var fileSummaries []string
-		for file, count := range fileChunkCounts {
-			if count == 1 {
-				fileSummaries = append(fileSummaries, file)
-			} else {
-				fileSummaries = append(fileSummaries, fmt.Sprintf("%s (%d chunks)", file, count))
-			}
+		for file, stats := range fileLineStats {
+			fileSummaries = append(fileSummaries, fmt.Sprintf("%s (+%d/-%d)", file, stats.added, stats.removed))
 		}
 		sort.Strings(fileSummaries)
 
-		truncationNote = fmt.Sprintf("\n[Truncated: %d chunk(s) not shown from: %s]\n",
-			len(omittedChunks), strings.Join(fileSummaries, ", "))
+		// Calculate totals
+		var totalAdded, totalRemoved int
+		for _, stats := range fileLineStats {
+			totalAdded += stats.added
+			totalRemoved += stats.removed
+		}
+
+		truncationNote = fmt.Sprintf("\n[Truncated: +%d/-%d lines not shown from: %s]\n",
+			totalAdded, totalRemoved, strings.Join(fileSummaries, ", "))
 	}
 
 	// Assemble final output
