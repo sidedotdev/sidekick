@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"context"
 	"fmt"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
@@ -69,6 +70,13 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *llm2.ChatHistoryContai
 	// Check if we should use the new Llm2ChatHistory-based management
 	v := workflow.GetVersion(ctx, "chat-history-llm2", workflow.DefaultVersion, 1)
 	if v == 1 {
+		llm2History, ok := chatHistory.History.(*llm2.Llm2ChatHistory)
+		if !ok {
+			wrapErr := fmt.Errorf("ManageChatHistory v3 path requires Llm2ChatHistory, got %T", chatHistory.History)
+			workflow.GetLogger(ctx).Error("ManageChatHistory wrong history type", "error", wrapErr)
+			panic(wrapErr)
+		}
+
 		var managedHistory *llm2.ChatHistoryContainer
 		var cha *persisted_ai.ChatHistoryActivities
 		activityFuture := workflow.ExecuteActivity(ctx, cha.ManageV3, chatHistory, workspaceId, maxLength)
@@ -78,7 +86,29 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *llm2.ChatHistoryContai
 			workflow.GetLogger(ctx).Error("ManageChatHistory error shouldn't happen, but it did", "error", wrapErr)
 			panic(wrapErr)
 		}
-		chatHistory.History = managedHistory.History
+
+		// Extract new refs from the returned (refs-only) history
+		managedLlm2History, ok := managedHistory.History.(*llm2.Llm2ChatHistory)
+		if !ok {
+			wrapErr := fmt.Errorf("ManageChatHistory ManageV3 returned unexpected history type: %T", managedHistory.History)
+			workflow.GetLogger(ctx).Error("ManageChatHistory unexpected return type", "error", wrapErr)
+			panic(wrapErr)
+		}
+		newRefs := managedLlm2History.Refs()
+
+		// Update the existing in-memory history with new refs (preserves cached blocks)
+		llm2History.SetRefs(newRefs)
+
+		// Ensure workspaceId is set (may be lost during JSON marshaling across activity boundary)
+		llm2History.SetWorkspaceId(workspaceId)
+
+		// Hydrate only missing/changed blocks using workflow-safe storage
+		workflowSafeStorage := &WorkflowSafeKVStorage{Ctx: ctx, WorkspaceId: workspaceId}
+		if err := llm2History.Hydrate(context.Background(), workflowSafeStorage); err != nil {
+			wrapErr := fmt.Errorf("ManageChatHistory hydration failed: %w", err)
+			workflow.GetLogger(ctx).Error("ManageChatHistory hydration error", "error", wrapErr)
+			panic(wrapErr)
+		}
 		return
 	}
 

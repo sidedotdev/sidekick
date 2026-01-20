@@ -440,6 +440,21 @@ func (h *Llm2ChatHistory) SetUnpersisted(indices []int) {
 func (h *Llm2ChatHistory) SetHydratedWithMessages(messages []Message) {
 	h.messages = messages
 	h.hydrated = true
+
+	// Populate the cache from the new messages and current refs
+	if h.hydratedBlocks == nil {
+		h.hydratedBlocks = make(map[string]ContentBlock)
+	}
+	if len(h.messages) == len(h.refs) {
+		for i, ref := range h.refs {
+			msg := h.messages[i]
+			for j, blockId := range ref.BlockIds {
+				if j < len(msg.Content) {
+					h.hydratedBlocks[blockId] = msg.Content[j]
+				}
+			}
+		}
+	}
 }
 
 // ChatHistoryContainer wraps a ChatHistory for JSON serialization.
