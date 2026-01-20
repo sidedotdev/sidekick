@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sidekick/common"
 	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/llm"
@@ -111,11 +112,13 @@ func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRe
 		Content: RenderPrompt(generateBranchNamesPrompt, reqMap),
 	})
 
+	modelConfig := eCtx.GetModelConfig(common.SummarizationKey, 0, "small")
+
 	var branchResp SubmitBranchNamesParams
 	attempts := 0
 	for {
 		actionCtx := eCtx.NewActionContext("generate.branch_names")
-		msgResponse, err := persisted_ai.ForceToolCallWithTrackOptionsV2(eCtx, actionCtx, flow_action.TrackOptions{FailuresOnly: true}, eCtx.LLMConfig, chatHistory, &generateBranchNamesTool)
+		msgResponse, err := persisted_ai.ForceToolCallWithTrackOptionsV2(eCtx, actionCtx, flow_action.TrackOptions{FailuresOnly: true}, modelConfig, chatHistory, &generateBranchNamesTool)
 		if err != nil {
 			return nil, fmt.Errorf("failed to force tool call: %v", err)
 		}

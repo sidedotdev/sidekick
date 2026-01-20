@@ -452,11 +452,12 @@ type ToolCallWithCodeContext struct {
 // returns all tool calls with their parsed RequiredCodeContext. Each tool call is
 // parsed independently; if parsing fails for a tool call, its Err field is set.
 func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *llm2.ChatHistoryContainer) ([]ToolCallWithCodeContext, error) {
+	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
 	response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(
 		actionCtx,
 		actionCtx.FlowActionContext(),
 		flow_action.TrackOptions{},
-		actionCtx.LLMConfig,
+		modelConfig,
 		chatHistory,
 		currentGetSymbolDefinitionsTool(),
 	)
