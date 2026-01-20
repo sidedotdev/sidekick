@@ -10,6 +10,7 @@ import (
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/fflag"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
@@ -451,24 +452,18 @@ type ToolCallWithCodeContext struct {
 // returns all tool calls with their parsed RequiredCodeContext. Each tool call is
 // parsed independently; if parsing fails for a tool call, its Err field is set.
 func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *llm2.ChatHistoryContainer) ([]ToolCallWithCodeContext, error) {
-	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "small")
-	// Convert Messages() to []llm.ChatMessage for LLM API
-	messages := chatHistory.Messages()
-	chatMessages := make([]llm.ChatMessage, len(messages))
-	for i, msg := range messages {
-		chatMessages[i] = msg.(llm.ChatMessage)
-	}
-	params := llm.ToolChatParams{Messages: chatMessages, ModelConfig: modelConfig}
-	chatResponse, err := persisted_ai.ForceToolCall(actionCtx.FlowActionContext(), actionCtx.LLMConfig, &params, currentGetSymbolDefinitionsTool())
-	// Update chat history with the new messages from params
-	for i := len(chatMessages); i < len(params.Messages); i++ {
-		chatHistory.Append(params.Messages[i])
-	}
+	response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(
+		actionCtx,
+		actionCtx.FlowActionContext(),
+		flow_action.TrackOptions{},
+		actionCtx.LLMConfig,
+		chatHistory,
+		currentGetSymbolDefinitionsTool(),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to force tool call: %v", err)
 	}
-
-	return parseToolCallsToCodeContext(chatResponse.ToolCalls), nil
+	return parseToolCallsToCodeContext(response.GetMessage().GetToolCalls()), nil
 }
 
 // parseToolCallsToCodeContext parses multiple tool calls into ToolCallWithCodeContext structs.
