@@ -287,6 +287,55 @@ func TestCreateTaskHandler(t *testing.T) {
 	}
 }
 
+func TestCreateTaskHandler_TemporalFailure(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	// Create a controller with a mock Temporal client that fails
+	mockTemporalClient := mocks.NewClient(t)
+	mockTemporalClient.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("connection refused"))
+
+	service := NewTestService(t)
+	ctrl := Controller{
+		temporalClient:   mockTemporalClient,
+		service:          service,
+		secretManager:    secret_manager.MockSecretManager{},
+		taskStartTimeout: 5 * time.Second,
+	}
+
+	resp := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(resp)
+
+	taskRequest := TaskRequest{
+		Description: "test description",
+		AgentType:   string(domain.AgentTypeLLM),
+		FlowType:    domain.FlowTypeBasicDev,
+	}
+	jsonData, err := json.Marshal(taskRequest)
+	require.NoError(t, err)
+
+	c.Request = httptest.NewRequest("POST", "/tasks", bytes.NewBuffer(jsonData))
+	ctrl.CreateTaskHandler(c)
+
+	// Should return 503 Service Unavailable
+	assert.Equal(t, http.StatusServiceUnavailable, resp.Code)
+
+	// Error message should contain guidance
+	responseBody := make(map[string]string)
+	json.Unmarshal(resp.Body.Bytes(), &responseBody)
+	assert.Contains(t, responseBody["error"], "Failed to start flow in Temporal")
+	assert.Contains(t, responseBody["error"], "drafting")
+	assert.Contains(t, responseBody["error"], "restart the Temporal server")
+
+	// Task should be persisted with drafting status
+	ctx := context.Background()
+	tasks, err := ctrl.service.GetTasks(ctx, "", []domain.TaskStatus{domain.TaskStatusDrafting})
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	assert.Equal(t, domain.TaskStatusDrafting, tasks[0].Status)
+}
+
 func TestGetTasksHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
@@ -2651,11 +2700,11 @@ func TestCreateTaskHandler_StartTimeout(t *testing.T) {
 
 	// Should return within ~timeout, not wait for the full sleep
 	assert.Less(t, elapsed, 300*time.Millisecond, "should timeout quickly")
-	assert.Equal(t, http.StatusGatewayTimeout, resp.Code)
+	assert.Equal(t, http.StatusServiceUnavailable, resp.Code)
 
 	var response map[string]string
 	json.Unmarshal(resp.Body.Bytes(), &response)
-	assert.Contains(t, response["error"], "timed out")
+	assert.Contains(t, response["error"], "Timed out starting flow in Temporal")
 
 	// Wait for background goroutine to finish to avoid mock assertion failures
 	time.Sleep(500 * time.Millisecond)
@@ -2704,10 +2753,11 @@ func TestCreateTaskHandler_StartError(t *testing.T) {
 
 	ctrl.CreateTaskHandler(c)
 
-	assert.Equal(t, http.StatusInternalServerError, resp.Code)
+	assert.Equal(t, http.StatusServiceUnavailable, resp.Code)
 
 	var response map[string]string
 	json.Unmarshal(resp.Body.Bytes(), &response)
+	assert.Contains(t, response["error"], "Failed to start flow in Temporal")
 	assert.Contains(t, response["error"], "workflow start failed")
 
 	// Verify task was reverted to drafting
@@ -2815,7 +2865,7 @@ func TestUpdateTaskHandler_StartTimeout(t *testing.T) {
 
 	// Should return within ~timeout, not wait for the full sleep
 	assert.Less(t, elapsed, 300*time.Millisecond, "should timeout quickly")
-	assert.Equal(t, http.StatusGatewayTimeout, resp.Code)
+	assert.Equal(t, http.StatusServiceUnavailable, resp.Code)
 
 	// Verify task was reverted to drafting
 	updatedTask, _ := service.GetTask(context.Background(), workspaceId, task.Id)
@@ -2880,7 +2930,7 @@ func TestUpdateTaskHandler_StartError(t *testing.T) {
 
 	ctrl.UpdateTaskHandler(c)
 
-	assert.Equal(t, http.StatusInternalServerError, resp.Code)
+	assert.Equal(t, http.StatusServiceUnavailable, resp.Code)
 
 	// Verify task was reverted to drafting
 	updatedTask, _ := service.GetTask(context.Background(), workspaceId, task.Id)
