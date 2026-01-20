@@ -117,11 +117,10 @@ describe('UserRequest', () => {
       // Click on diff container
       await diffContainer.trigger('click')
       
-      // Wait for setTimeout in restoreFocus
-      await new Promise(resolve => setTimeout(resolve, 10))
-      
-      // Form should be focused
-      expect(document.activeElement).toBe(form.element)
+      // Wait for restoreFocus's setTimeout(0) to complete
+      await vi.waitFor(() => {
+        expect(document.activeElement).toBe(form.element)
+      })
       
       wrapper.unmount()
     })
