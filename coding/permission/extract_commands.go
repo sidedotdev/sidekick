@@ -40,12 +40,9 @@ func extractCommandsFromNode(node *sitter.Node, sourceCode []byte, commands *[]s
 			*commands = append(*commands, cmdText)
 			handleSpecialCommands(cmdText, commands)
 		}
-		// Still recurse into children for command substitutions
+		// Recurse into children to find command substitutions (may be nested in concatenations)
 		for i := 0; i < int(node.ChildCount()); i++ {
-			child := node.Child(i)
-			if child.Type() == "command_substitution" {
-				extractCommandsFromNode(child, sourceCode, commands)
-			}
+			findAndExtractCommandSubstitutions(node.Child(i), sourceCode, commands)
 		}
 		return
 
@@ -58,17 +55,9 @@ func extractCommandsFromNode(node *sitter.Node, sourceCode []byte, commands *[]s
 			*commands = append(*commands, cmdText)
 			handleSpecialCommands(cmdText, commands)
 		}
-		// Recurse into children for command substitutions
+		// Recurse into children to find command substitutions (may be nested)
 		for i := 0; i < int(node.ChildCount()); i++ {
-			child := node.Child(i)
-			if child.Type() == "command" {
-				for j := 0; j < int(child.ChildCount()); j++ {
-					grandchild := child.Child(j)
-					if grandchild.Type() == "command_substitution" {
-						extractCommandsFromNode(grandchild, sourceCode, commands)
-					}
-				}
-			}
+			findAndExtractCommandSubstitutions(node.Child(i), sourceCode, commands)
 		}
 		return
 
@@ -97,6 +86,24 @@ func extractCommandsFromNode(node *sitter.Node, sourceCode []byte, commands *[]s
 	// For all other node types, recurse into children
 	for i := 0; i < int(node.ChildCount()); i++ {
 		extractCommandsFromNode(node.Child(i), sourceCode, commands)
+	}
+}
+
+// findAndExtractCommandSubstitutions recursively searches for command_substitution
+// nodes and extracts commands from them. This handles cases where substitutions
+// are nested inside concatenations or other node types.
+func findAndExtractCommandSubstitutions(node *sitter.Node, sourceCode []byte, commands *[]string) {
+	if node == nil {
+		return
+	}
+
+	if node.Type() == "command_substitution" {
+		extractCommandsFromNode(node, sourceCode, commands)
+		return
+	}
+
+	for i := 0; i < int(node.ChildCount()); i++ {
+		findAndExtractCommandSubstitutions(node.Child(i), sourceCode, commands)
 	}
 }
 
