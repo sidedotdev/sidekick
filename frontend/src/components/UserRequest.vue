@@ -1,5 +1,5 @@
 <template>
-  <form v-if="isPending" @submit.prevent="flowAction.actionParams.requestKind === 'free_form' && submitUserResponse(true)" @keydown="handleKeyDown">
+  <form ref="formRef" tabindex="-1" v-if="isPending" @submit.prevent="flowAction.actionParams.requestKind === 'free_form' && submitUserResponse(true)" @keydown="handleKeyDown">
     <div v-if="flowAction.actionParams.requestContent" class="markdown-container">
       <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
         <CopyIcon />
@@ -13,7 +13,7 @@
     <div v-if="flowAction.actionParams.command">
       <pre>{{ flowAction.actionParams.command }}</pre>
     </div>
-    <template v-if="flowAction.actionParams.mergeApprovalInfo?.diff">
+    <div v-if="flowAction.actionParams.mergeApprovalInfo?.diff" class="diff-container" @click="restoreFocus">
       <div v-if="showEmptyDiffMessage" class="empty-diff-message">
         No changes since last review
       </div>
@@ -24,7 +24,7 @@
         :diff-mode="diffMode"
         :level="level"
       />
-    </template>
+    </div>
 
     <div v-if="flowAction.actionParams.requestKind === 'approval'">
       <AutogrowTextarea ref="textareaRef" v-model="responseContent" placeholder="Rejection reason" />
@@ -205,6 +205,7 @@ const props = defineProps({
   },
 });
 
+const formRef = ref<HTMLFormElement | null>(null);
 const responseContent = ref('');
 const errorMessage = ref('');
 const textareaRef = ref<{ focus: () => void } | null>(null);
@@ -355,6 +356,14 @@ const handleKeyDown = (event: KeyboardEvent) => {
       submitUserResponse(!hasResponseText.value)
     }
   }
+}
+
+const restoreFocus = () => {
+  // Restore focus to form after clicking in diff area
+  // Use setTimeout to run after the click event completes
+  setTimeout(() => {
+    formRef.value?.focus()
+  }, 0)
 }
 
 async function queryDevRunConfig() {

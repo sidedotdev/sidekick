@@ -1,5 +1,5 @@
 <template>
-  <div class="unified-diff-viewer">
+  <div class="unified-diff-viewer" tabindex="-1">
     <div v-if="parsedFiles.length === 0" class="no-diff-message">
       No diff content to display
     </div>
