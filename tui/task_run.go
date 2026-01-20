@@ -274,9 +274,9 @@ func RunTaskUI(ctx context.Context, c client.Client, req *client.CreateTaskReque
 			case flowEvent := <-flowEventChan:
 				switch e := flowEvent.(type) {
 				case domain.DevRunStartedEvent:
-					p.Send(devRunStartedMsg{devRunId: e.DevRunId})
+					p.Send(devRunStartedMsg{devRunId: e.DevRunId, commandId: e.CommandId})
 				case domain.DevRunEndedEvent:
-					p.Send(devRunEndedMsg{devRunId: e.DevRunId})
+					p.Send(devRunEndedMsg{devRunId: e.DevRunId, commandId: e.CommandId})
 				case domain.DevRunOutputEvent:
 					p.Send(devRunOutputMsg{devRunId: e.DevRunId, stream: e.Stream, chunk: e.Chunk})
 				}

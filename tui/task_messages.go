@@ -22,12 +22,14 @@ type taskFinishedMsg struct{}
 
 // devRunStartedMsg signals that a Dev Run has started
 type devRunStartedMsg struct {
-	devRunId string
+	devRunId  string
+	commandId string
 }
 
 // devRunEndedMsg signals that a Dev Run has ended
 type devRunEndedMsg struct {
-	devRunId string
+	devRunId  string
+	commandId string
 }
 
 // devRunOutputMsg contains output from a running Dev Run
