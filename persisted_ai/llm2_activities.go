@@ -119,9 +119,9 @@ func getLlm2Provider(config common.ModelConfig) (llm2.Provider, error) {
 	providerName := config.NormalizedProviderName()
 
 	switch providerName {
-	case "openai":
+	case "OPENAI":
 		return llm2.OpenAIResponsesProvider{}, nil
-	case "anthropic":
+	case "ANTHROPIC":
 		return llm2.AnthropicResponsesProvider{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported llm2 provider: %s", config.Provider)
