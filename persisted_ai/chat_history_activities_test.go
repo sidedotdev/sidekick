@@ -62,6 +62,13 @@ func (m *mockKVStorage) GetKeysWithPrefix(ctx context.Context, workspaceId strin
 }
 
 func (m *mockKVStorage) MSetRaw(ctx context.Context, workspaceId string, values map[string][]byte) error {
+	m.msetCalled = true
+	if m.msetErr != nil {
+		return m.msetErr
+	}
+	for key, value := range values {
+		m.data[key] = value
+	}
 	return nil
 }
 

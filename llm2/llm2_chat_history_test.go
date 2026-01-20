@@ -50,6 +50,9 @@ func (m *mockKeyValueStorage) GetKeysWithPrefix(ctx context.Context, workspaceId
 }
 
 func (m *mockKeyValueStorage) MSetRaw(ctx context.Context, workspaceId string, values map[string][]byte) error {
+	for key, value := range values {
+		m.data[key] = value
+	}
 	return nil
 }
 

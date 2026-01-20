@@ -313,7 +313,7 @@ func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueSt
 	}
 
 	// Collect all content blocks to persist
-	values := make(map[string]interface{})
+	values := make(map[string][]byte)
 	for _, idx := range h.unpersisted {
 		if idx < 0 || idx >= len(h.messages) {
 			continue
@@ -323,7 +323,11 @@ func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueSt
 		for j, block := range msg.Content {
 			blockId := fmt.Sprintf("%s:msg:%d:block:%s", h.flowId, idx, ksuid.New().String())
 			blockIds[j] = blockId
-			values[blockId] = block
+			blockBytes, err := json.Marshal(block)
+			if err != nil {
+				return fmt.Errorf("failed to marshal content block: %w", err)
+			}
+			values[blockId] = blockBytes
 			h.hydratedBlocks[blockId] = block
 		}
 		h.refs[idx] = MessageRef{
@@ -334,7 +338,7 @@ func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueSt
 	}
 
 	if len(values) > 0 {
-		if err := storage.MSet(ctx, h.workspaceId, values); err != nil {
+		if err := storage.MSetRaw(ctx, h.workspaceId, values); err != nil {
 			return fmt.Errorf("failed to persist content blocks: %w", err)
 		}
 	}

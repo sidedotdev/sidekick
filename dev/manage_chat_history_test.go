@@ -790,6 +790,10 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesManageV3
 	// Return version 1 for chat-history-llm2 to trigger ManageV3 path
 	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1))
 
+	// Mock KVActivities.MSetRaw for persistence before ManageV3
+	var ka *common.KVActivities
+	s.env.OnActivity(ka.MSetRaw, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
 	// ManageV3 returns refs-only (simulating JSON marshaling)
 	managedRefs := []llm2.MessageRef{
 		{FlowId: "test-flow", BlockIds: []string{"block-managed"}, Role: "user"},
@@ -809,7 +813,6 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesManageV3
 	).Once()
 
 	// Mock KVActivities.MGet to return the block content for hydration
-	var ka *common.KVActivities
 	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"block-managed"}).Return(
 		[][]byte{mustMarshal(llm2.ContentBlock{Type: "text", Text: "managed"})},
 		nil,
@@ -850,6 +853,10 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_HydratesA
 	// Return version 1 for chat-history-llm2 to trigger ManageV3 path
 	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1))
 
+	// Mock KVActivities.MSetRaw for persistence before ManageV3
+	var ka *common.KVActivities
+	s.env.OnActivity(ka.MSetRaw, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
 	// ManageV3 returns refs-only (simulating what happens after JSON marshaling)
 	// The refs point to KV storage keys
 	managedRefs := []llm2.MessageRef{
@@ -870,7 +877,6 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_HydratesA
 	).Once()
 
 	// Mock KVActivities.MGet to return the block content
-	var ka *common.KVActivities
 	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"block-1", "block-2"}).Return(
 		[][]byte{
 			mustMarshal(llm2.ContentBlock{Type: "text", Text: "hello"}),
@@ -996,6 +1002,10 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_VerifiesH
 
 	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1))
 
+	// Mock KVActivities.MSetRaw for persistence before ManageV3
+	var ka *common.KVActivities
+	s.env.OnActivity(ka.MSetRaw, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
 	managedRefs := []llm2.MessageRef{
 		{FlowId: "test-flow", BlockIds: []string{"block-1"}, Role: "user"},
 	}
@@ -1012,7 +1022,6 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_VerifiesH
 		nil,
 	).Once()
 
-	var ka *common.KVActivities
 	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"block-1"}).Return(
 		[][]byte{mustMarshal(llm2.ContentBlock{Type: "text", Text: "hello"})},
 		nil,
