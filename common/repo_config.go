@@ -71,26 +71,19 @@ const (
 	KeyCurrentTargetBranch = "currentTargetBranch"
 )
 
+// DevRunConfig maps command IDs to their configurations.
+// Each command ID can only have one instance running at a time,
+// but multiple different command IDs can run in parallel.
+type DevRunConfig map[string]DevRunCommandConfig
+
 // DevRunCommandConfig configures a single named dev-run command.
 type DevRunCommandConfig struct {
-	// Start is the command to start the dev-run process.
-	Start CommandConfig `toml:"start"`
-
-	// Stop is an optional command to stop the dev-run process.
-	// If not specified, Sidekick will send SIGINT then SIGKILL after timeout.
-	Stop *CommandConfig `toml:"stop,omitempty"`
-}
-
-// DevRunConfig configures dev-run commands for manual QA in worktree environments.
-type DevRunConfig struct {
-	// Commands maps command IDs to their configurations.
-	// Each command ID can only have one instance running at a time,
-	// but multiple different command IDs can run in parallel.
-	Commands map[string]DevRunCommandConfig `toml:"commands,omitempty" json:"commands,omitempty"`
+	WorkingDir string `toml:"working_dir,omitempty"`
+	Command    string `toml:"command"`
 
 	// StopTimeoutSeconds is the time to wait after SIGINT before sending SIGKILL.
 	// Defaults to 10 seconds if not specified.
-	StopTimeoutSeconds int `toml:"stop_timeout_seconds,omitempty" json:"stop_timeout_seconds,omitempty"`
+	StopTimeoutSeconds int `toml:"stop_timeout_seconds,omitempty" json:"stopTimeoutSeconds,omitempty"`
 }
 
 type CommandConfig struct {

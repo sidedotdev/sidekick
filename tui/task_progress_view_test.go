@@ -1511,10 +1511,8 @@ func TestDevRunConfigQuery(t *testing.T) {
 		mockClient := &mockClientForProgress{}
 		mockClient.On("QueryFlow", "ws-1", "flow-1", "dev_run_config", nil).Return(
 			map[string]interface{}{
-				"commands": map[string]interface{}{
-					"dev-server": map[string]interface{}{
-						"start": map[string]interface{}{"command": "npm run dev"},
-					},
+				"dev-server": map[string]interface{}{
+					"command": "npm run dev",
 				},
 			},
 			nil,
@@ -1528,17 +1526,17 @@ func TestDevRunConfigQuery(t *testing.T) {
 
 		result := msg.(devRunConfigResultMsg)
 		if !result.hasDevRun {
-			t.Error("Expected hasDevRun to be true when commands map is non-empty")
+			t.Error("Expected hasDevRun to be true when config map is non-empty")
 		}
 
 		mockClient.AssertCalled(t, "QueryFlow", "ws-1", "flow-1", "dev_run_config", nil)
 	})
 
-	t.Run("returns false when commands is empty", func(t *testing.T) {
+	t.Run("returns false when config is empty", func(t *testing.T) {
 		t.Parallel()
 		mockClient := &mockClientForProgress{}
 		mockClient.On("QueryFlow", "ws-1", "flow-1", "dev_run_config", nil).Return(
-			map[string]interface{}{"commands": map[string]interface{}{}},
+			map[string]interface{}{},
 			nil,
 		)
 
@@ -1549,7 +1547,7 @@ func TestDevRunConfigQuery(t *testing.T) {
 
 		result := msg.(devRunConfigResultMsg)
 		if result.hasDevRun {
-			t.Error("Expected hasDevRun to be false when commands map is empty")
+			t.Error("Expected hasDevRun to be false when config map is empty")
 		}
 	})
 

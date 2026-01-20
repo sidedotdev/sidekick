@@ -81,9 +81,7 @@ func TestStartDevRun_EmitsStartedAndOutputEvents(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "echo hello"}},
-			},
+			"test": {Command: "echo hello"},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -169,9 +167,7 @@ func TestStopDevRun_EmitsEndedAndEndStreamEvents(t *testing.T) {
 	// Start a long-running process
 	startInput := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "sleep 60"}},
-			},
+			"test": {Command: "sleep 60"},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -194,7 +190,7 @@ func TestStopDevRun_EmitsEndedAndEndStreamEvents(t *testing.T) {
 	// Stop the Dev Run
 	stopInput := StopDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			StopTimeoutSeconds: 2,
+			"test": {Command: "sleep 60", StopTimeoutSeconds: 2},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -247,9 +243,7 @@ func TestStopDevRun_TimeoutEscalation(t *testing.T) {
 	// that runs the command directly (no intermediate script)
 	startInput := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "trap '' INT; while true; do sleep 1; done"}},
-			},
+			"test": {Command: "trap '' INT; while true; do sleep 1; done"},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -276,7 +270,7 @@ func TestStopDevRun_TimeoutEscalation(t *testing.T) {
 
 	stopInput := StopDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			StopTimeoutSeconds: 1,
+			"test": {Command: "trap '' SIGINT SIGTERM; sleep 60", StopTimeoutSeconds: 1},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -316,17 +310,10 @@ func TestStopDevRun_WithStopCommand(t *testing.T) {
 	workspaceId := "ws_stopcmd_" + t.Name()
 	flowId := "flow_stopcmd_" + t.Name()
 
-	stopCmd := common.CommandConfig{Command: "echo stopping"}
 	// Start a process
 	startInput := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {
-					Start: common.CommandConfig{Command: "sleep 60"},
-					Stop:  &stopCmd,
-				},
-			},
-			StopTimeoutSeconds: 2,
+			"test": {Command: "sleep 60", StopTimeoutSeconds: 2},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -406,10 +393,7 @@ func TestStartDevRun_FailsIfAlreadyActive(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "sleep 60"}},
-			},
-			StopTimeoutSeconds: 1,
+			"test": {Command: "sleep 60", StopTimeoutSeconds: 1},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -444,10 +428,8 @@ func TestStartDevRun_NoStartCommands(t *testing.T) {
 	activities := &DevRunActivities{Streamer: streamer}
 
 	input := StartDevRunInput{
-		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{},
-		},
-		CommandId: "test",
+		DevRunConfig: common.DevRunConfig{},
+		CommandId:    "test",
 		Context: DevRunContext{
 			WorkspaceId: "ws_nocmd_" + t.Name(),
 			FlowId:      "flow_nocmd_" + t.Name(),
@@ -472,9 +454,7 @@ func TestStartDevRun_EnvVarsPassedToCommand(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "echo $WORKSPACE_ID $FLOW_ID $SOURCE_BRANCH $BASE_BRANCH $TARGET_BRANCH"}},
-			},
+			"test": {Command: "echo $WORKSPACE_ID $FLOW_ID $SOURCE_BRANCH $BASE_BRANCH $TARGET_BRANCH"},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -615,9 +595,7 @@ func TestStartDevRun_ImmediateNonZeroExit(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "exit 1"}},
-			},
+			"test": {Command: "exit 1"},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -662,9 +640,7 @@ func TestStartDevRun_CommandNotFound(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "nonexistent_command_xyz_123"}},
-			},
+			"test": {Command: "nonexistent_command_xyz_123"},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -696,9 +672,7 @@ func TestStartDevRun_NaturalExitEmitsEndedEvent(t *testing.T) {
 	// Use a command that exits quickly
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "echo done"}},
-			},
+			"test": {Command: "echo done"},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -756,9 +730,7 @@ func TestStartDevRun_NaturalNonZeroExitEmitsEndedEvent(t *testing.T) {
 	// Use a command that exits with error
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "exit 42"}},
-			},
+			"test": {Command: "exit 42"},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -799,9 +771,7 @@ func TestStartDevRun_RelativeWorkingDir(t *testing.T) {
 	// Use a relative WorkingDir - should be resolved against WorktreeDir
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "pwd", WorkingDir: "frontend"}},
-			},
+			"test": {Command: "pwd", WorkingDir: "frontend"},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -866,9 +836,7 @@ func TestStartDevRun_AbsoluteWorkingDir(t *testing.T) {
 	// Use an absolute WorkingDir - should be used as-is
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "pwd", WorkingDir: absDir}},
-			},
+			"test": {Command: "pwd", WorkingDir: absDir},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -926,9 +894,7 @@ func TestStopDevRun_DoesNotDoubleEmitIfAlreadyExited(t *testing.T) {
 	// Start a short-lived command
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "echo done"}},
-			},
+			"test": {Command: "echo done"},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -989,9 +955,7 @@ func TestMonitorDevRun_TailsOutputAndHeartbeats(t *testing.T) {
 	// Start a dev run first
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "echo hello && sleep 2 && echo world"}},
-			},
+			"test": {Command: "echo hello && sleep 2 && echo world"},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -1066,9 +1030,7 @@ func TestMonitorDevRun_ReturnsOnContextCancel(t *testing.T) {
 	// Start a long-running dev run
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "sleep 60"}},
-			},
+			"test": {Command: "sleep 60"},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -1159,10 +1121,7 @@ func TestStartDevRun_RecoveryReconnectsToAliveProcess(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "sleep 60"}},
-			},
-			StopTimeoutSeconds: 1,
+			"test": {Command: "sleep 60", StopTimeoutSeconds: 1},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -1213,10 +1172,7 @@ func TestStartDevRun_RecoveryStartsFreshWhenProcessDead(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "echo hello && sleep 60"}},
-			},
-			StopTimeoutSeconds: 1,
+			"test": {Command: "echo hello && sleep 60", StopTimeoutSeconds: 1},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -1278,10 +1234,7 @@ func TestStartDevRun_NoExistingInstanceStartsFresh(t *testing.T) {
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			Commands: map[string]common.DevRunCommandConfig{
-				"test": {Start: common.CommandConfig{Command: "sleep 60"}},
-			},
-			StopTimeoutSeconds: 1,
+			"test": {Command: "sleep 60", StopTimeoutSeconds: 1},
 		},
 		CommandId:        "test",
 		ExistingInstance: nil, // No existing instance
