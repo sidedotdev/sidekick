@@ -2,7 +2,6 @@ package dev
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"sidekick/common"
@@ -78,23 +77,8 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	// Use version 1 for chat-history-llm2 (Llm2ChatHistory path)
 	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
 
-	// Mock Hydrate activity - marks the chat history as hydrated and returns it
-	var cha *persisted_ai.ChatHistoryActivities
-	s.env.OnActivity(cha.Hydrate, mock.Anything, mock.Anything, mock.Anything).Return(
-		func(ctx context.Context, chatHistory *llm2.ChatHistoryContainer, workspaceId string) (*llm2.ChatHistoryContainer, error) {
-			if llm2History, ok := chatHistory.History.(*llm2.Llm2ChatHistory); ok {
-				err := llm2History.Hydrate(ctx, nil)
-				if err != nil {
-					return nil, err
-				}
-				return chatHistory, nil
-			} else {
-				panic(fmt.Sprintf("not llm 2 chat history in hydrate: %v", chatHistory))
-			}
-		},
-	).Maybe()
-
 	// Mock ManageV3 activity - manages chat history for llm2 path
+	var cha *persisted_ai.ChatHistoryActivities
 	s.env.OnActivity(cha.ManageV3, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
 		func(ctx context.Context, chatHistory *llm2.ChatHistoryContainer, workspaceId string, maxLength int) (*llm2.ChatHistoryContainer, error) {
 			return chatHistory, nil

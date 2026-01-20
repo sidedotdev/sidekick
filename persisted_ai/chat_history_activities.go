@@ -14,26 +14,6 @@ type ChatHistoryActivities struct {
 	Storage common.KeyValueStorage
 }
 
-// Hydrate hydrates the chat history from KV storage.
-func (ca *ChatHistoryActivities) Hydrate(
-	ctx context.Context,
-	chatHistory *llm2.ChatHistoryContainer,
-	workspaceId string,
-) (*llm2.ChatHistoryContainer, error) {
-	llm2History, ok := chatHistory.History.(*llm2.Llm2ChatHistory)
-	if !ok {
-		return nil, fmt.Errorf("Hydrate requires Llm2ChatHistory, got %T", chatHistory.History)
-	}
-
-	llm2History.SetWorkspaceId(workspaceId)
-
-	if err := llm2History.Hydrate(ctx, ca.Storage); err != nil {
-		return nil, fmt.Errorf("failed to hydrate chat history: %w", err)
-	}
-
-	return chatHistory, nil
-}
-
 // ManageV3 manages chat history using the llm2 message format with KV storage.
 // It hydrates the history, runs management logic, and persists the result.
 // It preserves refs for unchanged messages to avoid regenerating KV block IDs.

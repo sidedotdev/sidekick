@@ -2,7 +2,6 @@ package dev
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"sidekick/common"
@@ -70,25 +69,6 @@ func (s *BranchNameTestSuite) SetupTest() {
 
 	// Use version 1 for chat-history-llm2 (Llm2ChatHistory path) - called multiple times
 	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
-
-	// Mock Hydrate activity - marks the chat history as hydrated and returns it
-	var cha *persisted_ai.ChatHistoryActivities
-	s.env.OnActivity(cha.Hydrate, mock.Anything, mock.Anything, mock.Anything).Return(
-		func(ctx context.Context, chatHistory *llm2.ChatHistoryContainer, workspaceId string) (*llm2.ChatHistoryContainer, error) {
-			// The Hydrate activity should mark the history as hydrated
-			// For Llm2ChatHistory, we need to call Hydrate on it
-			if llm2History, ok := chatHistory.History.(*llm2.Llm2ChatHistory); ok {
-				// Hydrate with nil storage works for empty history
-				err := llm2History.Hydrate(ctx, nil)
-				if err != nil {
-					return nil, err
-				}
-				return chatHistory, nil
-			} else {
-				panic(fmt.Sprintf("not llm 2 chat history in hydrate: %v", chatHistory))
-			}
-		},
-	).Maybe()
 
 	// Mock git command to simulate existing branches
 	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{

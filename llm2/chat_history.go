@@ -144,6 +144,16 @@ func (h *Llm2ChatHistory) Append(msg common.Message) {
 	if mp, ok := msg.(*Message); ok {
 		h.messages = append(h.messages, *mp)
 		h.unpersisted = append(h.unpersisted, len(h.messages)-1)
+	} else if cm, ok := msg.(common.ChatMessage); ok {
+		h.messages = append(h.messages, MessageFromChatMessage(cm))
+		h.unpersisted = append(h.unpersisted, len(h.messages)-1)
+	}
+}
+
+func MessageFromChatMessage(cm common.ChatMessage) Message {
+	return Message{
+		Role:    Role(cm.Role),
+		Content: []ContentBlock{{Type: "text", Text: cm.Content}},
 	}
 }
 

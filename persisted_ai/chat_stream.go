@@ -1,6 +1,7 @@
 package persisted_ai
 
 import (
+	"context"
 	"fmt"
 
 	"sidekick/common"
@@ -71,11 +72,10 @@ func executeChatStreamV1(
 		return nil, fmt.Errorf("ExecuteChatStream version 1 requires Llm2ChatHistory, got %T", chatHistory.History)
 	}
 
-	// Hydrate the chat history first
-	var cha *ChatHistoryActivities
-	err := workflow.ExecuteActivity(ctx, cha.Hydrate, chatHistory, options.WorkspaceId).Get(ctx, &chatHistory)
-	if err != nil {
-		return nil, fmt.Errorf("failed to hydrate chat history: %w", err)
+	// have to ensure we persist before we call stream
+	workflowSafeStorage := &common.WorkflowSafeKVStorage{Ctx: ctx}
+	if err := chatHistory.Persist(context.Background(), workflowSafeStorage); err != nil {
+		return nil, fmt.Errorf("failed to persist chat history: %w", err)
 	}
 
 	// Update options with hydrated chat history
@@ -91,7 +91,7 @@ func executeChatStreamV1(
 
 	var la *Llm2Activities
 	var response llm2.MessageResponse
-	err = workflow.ExecuteActivity(ctx, la.Stream, streamInput).Get(ctx, &response)
+	err := workflow.ExecuteActivity(ctx, la.Stream, streamInput).Get(ctx, &response)
 	if err != nil {
 		return nil, err
 	}

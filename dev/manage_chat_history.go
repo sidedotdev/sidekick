@@ -77,6 +77,14 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *llm2.ChatHistoryContai
 			panic(wrapErr)
 		}
 
+		// Must persist before managing chat history is possible
+		workflowSafeStorage := &common.WorkflowSafeKVStorage{Ctx: ctx}
+		if err := llm2History.Persist(context.Background(), workflowSafeStorage); err != nil {
+			wrapErr := fmt.Errorf("ManageChatHistory persist failed: %w", err)
+			workflow.GetLogger(ctx).Error("ManageChatHistory persist error", "error", wrapErr)
+			panic(wrapErr)
+		}
+
 		var managedHistory *llm2.ChatHistoryContainer
 		var cha *persisted_ai.ChatHistoryActivities
 		activityFuture := workflow.ExecuteActivity(ctx, cha.ManageV3, chatHistory, workspaceId, maxLength)
@@ -103,7 +111,6 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *llm2.ChatHistoryContai
 		llm2History.SetWorkspaceId(workspaceId)
 
 		// Hydrate only missing/changed blocks using workflow-safe storage
-		workflowSafeStorage := &common.WorkflowSafeKVStorage{Ctx: ctx}
 		if err := llm2History.Hydrate(context.Background(), workflowSafeStorage); err != nil {
 			wrapErr := fmt.Errorf("ManageChatHistory hydration failed: %w", err)
 			workflow.GetLogger(ctx).Error("ManageChatHistory hydration error", "error", wrapErr)
