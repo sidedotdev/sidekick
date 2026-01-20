@@ -28,6 +28,17 @@ type BranchInfo struct {
 	IsDefault bool   `json:"isDefault"`
 }
 
+// DetermineRequirementsConfig holds configuration for the determine requirements checkbox.
+type DetermineRequirementsConfig struct {
+	DefaultValue          bool `json:"defaultValue"`
+	RememberLastSelection bool `json:"rememberLastSelection"`
+}
+
+// TaskConfig holds task-creation UI defaults/config.
+type TaskConfig struct {
+	DetermineRequirements DetermineRequirementsConfig `json:"determineRequirements"`
+}
+
 // WorkspaceRequest defines the structure for workspace creation and update requests.
 type WorkspaceRequest struct {
 	Name            string                 `json:"name"`
@@ -73,6 +84,7 @@ func DefineWorkspaceApiRoutes(r *gin.Engine, ctrl *Controller) *gin.RouterGroup 
 	workspaceApiRoutes.GET(":workspaceId", ctrl.GetWorkspaceHandler)
 	workspaceApiRoutes.PUT(":workspaceId", ctrl.UpdateWorkspaceHandler)
 	workspaceApiRoutes.GET(":workspaceId/branches", ctrl.GetWorkspaceBranchesHandler)
+	workspaceApiRoutes.GET(":workspaceId/task_config", ctrl.GetTaskConfigHandler)
 
 	// Create a group with workspaceId parameter for nested routes
 	workspaceGroup := workspaceApiRoutes.Group(":workspaceId")
@@ -344,6 +356,33 @@ func (ctrl *Controller) UpdateWorkspaceHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"workspace": response})
+}
+
+// GetTaskConfigHandler returns task-creation UI defaults/config for a workspace.
+func (ctrl *Controller) GetTaskConfigHandler(c *gin.Context) {
+	workspaceId := c.Param("workspaceId")
+	if workspaceId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "workspaceId is required"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	config, err := ctrl.service.GetWorkspaceConfig(ctx, workspaceId)
+
+	rememberLastSelection := true
+	if err == nil && len(config.LLM.Defaults) > 0 {
+		defaultModel := config.LLM.Defaults[0].Model
+		rememberLastSelection = strings.Contains(defaultModel, "opus-4.5")
+	}
+
+	taskConfig := TaskConfig{
+		DetermineRequirements: DetermineRequirementsConfig{
+			DefaultValue:          true,
+			RememberLastSelection: rememberLastSelection,
+		},
+	}
+
+	c.JSON(http.StatusOK, gin.H{"taskConfig": taskConfig})
 }
 
 // GetWorkspacesHandler handles the request for listing all workspaces

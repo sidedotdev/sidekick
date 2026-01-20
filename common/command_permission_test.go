@@ -440,6 +440,284 @@ func TestEvaluateCommandPermission(t *testing.T) {
 	}
 }
 
+func TestStripEnvVarPrefix(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		command  string
+		expected string
+	}{
+		{
+			name:     "no env var prefix",
+			command:  "go test ./...",
+			expected: "go test ./...",
+		},
+		{
+			name:     "single env var prefix",
+			command:  "FOO=bar go test ./...",
+			expected: "go test ./...",
+		},
+		{
+			name:     "multiple env var prefixes",
+			command:  "FOO=bar BAZ=qux go test ./...",
+			expected: "go test ./...",
+		},
+		{
+			name:     "env var with underscore",
+			command:  "SIDE_INTEGRATION_TEST=true go test ./...",
+			expected: "go test ./...",
+		},
+		{
+			name:     "env var with numbers",
+			command:  "VAR123=value go test ./...",
+			expected: "go test ./...",
+		},
+		{
+			name:     "complex real-world command",
+			command:  "SIDE_INTEGRATION_TEST=true go test -test.timeout 30s ./persisted_ai/... -run TestRankedDirSignatureOutline_Integration -v 2>&1",
+			expected: "go test -test.timeout 30s ./persisted_ai/... -run TestRankedDirSignatureOutline_Integration -v 2>&1",
+		},
+		{
+			name:     "env var in middle of command is not stripped",
+			command:  "echo FOO=bar",
+			expected: "echo FOO=bar",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := stripEnvVarPrefix(tt.command)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestPatternContainsEnvVar(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		pattern  string
+		expected bool
+	}{
+		{
+			name:     "no env var reference",
+			pattern:  "go test",
+			expected: false,
+		},
+		{
+			name:     "HOME env var",
+			pattern:  `.*\$HOME`,
+			expected: true,
+		},
+		{
+			name:     "braced env var",
+			pattern:  `.*\$\{HOME\}`,
+			expected: true,
+		},
+		{
+			name:     "regex end anchor is not env var",
+			pattern:  `^sed\b.*'[0-9$]*e[[:space:]]`,
+			expected: false,
+		},
+		{
+			name:     "dollar at end of pattern is not env var",
+			pattern:  `^foo$`,
+			expected: false,
+		},
+		{
+			name:     "dollar in character class is not env var",
+			pattern:  `[a-z$]+`,
+			expected: false,
+		},
+		{
+			name:     "actual env var after other content",
+			pattern:  `cat $HOME`,
+			expected: true,
+		},
+		{
+			name:     "env var with underscore",
+			pattern:  `.*$FOO_BAR`,
+			expected: true,
+		},
+		{
+			name:     "env var assignment at start",
+			pattern:  `FOO=bar go test`,
+			expected: true,
+		},
+		{
+			name:     "env var assignment with regex anchor",
+			pattern:  `^FOO=bar\s+go test`,
+			expected: true,
+		},
+		{
+			name:     "env var assignment with underscore",
+			pattern:  `SIDE_INTEGRATION_TEST=true go test`,
+			expected: true,
+		},
+		{
+			name:     "escaped anchor followed by text is not env var assignment",
+			pattern:  `\^FOO=bar`,
+			expected: false,
+		},
+		{
+			name:     "not env var assignment - equals in middle",
+			pattern:  `go test -count=1`,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := patternContainsEnvVar(tt.pattern)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestEvaluateCommandPermission_EnvVarPrefix(t *testing.T) {
+	t.Parallel()
+	config := CommandPermissionConfig{
+		AutoApprove: []CommandPattern{
+			{Pattern: "go test"},
+			{Pattern: "ls"},
+		},
+		RequireApproval: []CommandPattern{
+			{Pattern: `.*\$HOME`},
+			{Pattern: "curl"},
+		},
+		Deny: []CommandPattern{
+			{Pattern: "sudo", Message: "sudo commands require manual execution"},
+		},
+	}
+
+	tests := []struct {
+		name           string
+		command        string
+		expectedResult PermissionResult
+		expectedMsg    string
+	}{
+		{
+			name:           "env var prefix with auto-approve command",
+			command:        "SIDE_INTEGRATION_TEST=true go test ./...",
+			expectedResult: PermissionAutoApprove,
+			expectedMsg:    "",
+		},
+		{
+			name:           "multiple env var prefixes with auto-approve command",
+			command:        "FOO=bar BAZ=qux go test ./...",
+			expectedResult: PermissionAutoApprove,
+			expectedMsg:    "",
+		},
+		{
+			name:           "complex real-world command",
+			command:        "SIDE_INTEGRATION_TEST=true go test -test.timeout 30s ./persisted_ai/... -run TestRankedDirSignatureOutline_Integration -v 2>&1",
+			expectedResult: PermissionAutoApprove,
+			expectedMsg:    "",
+		},
+		{
+			name:           "env var prefix with denied command",
+			command:        "FOO=bar sudo apt-get install",
+			expectedResult: PermissionDeny,
+			expectedMsg:    "sudo commands require manual execution",
+		},
+		{
+			name:           "env var prefix with require-approval command",
+			command:        "FOO=bar curl http://example.com",
+			expectedResult: PermissionRequireApproval,
+			expectedMsg:    "",
+		},
+		{
+			name:           "pattern with env var reference still matches original command",
+			command:        "cat $HOME/.bashrc",
+			expectedResult: PermissionRequireApproval,
+			expectedMsg:    "",
+		},
+		{
+			name:           "env var prefix does not affect pattern with env var reference",
+			command:        "FOO=bar cat $HOME/.bashrc",
+			expectedResult: PermissionRequireApproval,
+			expectedMsg:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			opts := EvaluatePermissionOptions{StripEnvVarPrefix: true}
+			result, msg := EvaluateCommandPermissionWithOptions(config, tt.command, opts)
+			assert.Equal(t, tt.expectedResult, result)
+			assert.Equal(t, tt.expectedMsg, msg)
+		})
+	}
+}
+
+func TestEvaluateCommandPermission_PatternWithEnvVarAssignment(t *testing.T) {
+	t.Parallel()
+	config := CommandPermissionConfig{
+		AutoApprove: []CommandPattern{
+			{Pattern: "SIDE_INTEGRATION_TEST=true go test", Message: "matched env var pattern"},
+			{Pattern: "go test", Message: "matched go test pattern"},
+		},
+		Deny: []CommandPattern{
+			{Pattern: "DEBUG=1 rm", Message: "debug rm is dangerous"},
+		},
+	}
+
+	tests := []struct {
+		name           string
+		command        string
+		expectedResult PermissionResult
+		expectedMsg    string
+	}{
+		{
+			name:           "pattern with env var assignment matches command with same prefix",
+			command:        "SIDE_INTEGRATION_TEST=true go test ./...",
+			expectedResult: PermissionAutoApprove,
+			expectedMsg:    "matched env var pattern",
+		},
+		{
+			name:           "pattern with env var assignment does not match command without prefix",
+			command:        "go test ./...",
+			expectedResult: PermissionAutoApprove,
+			expectedMsg:    "matched go test pattern",
+		},
+		{
+			name:           "pattern with env var assignment does not match different prefix",
+			command:        "OTHER_VAR=true go test ./...",
+			expectedResult: PermissionAutoApprove,
+			expectedMsg:    "matched go test pattern",
+		},
+		{
+			name:           "deny pattern with env var assignment matches",
+			command:        "DEBUG=1 rm -rf ./tmp",
+			expectedResult: PermissionDeny,
+			expectedMsg:    "debug rm is dangerous",
+		},
+		{
+			name:           "deny pattern with env var assignment does not match without prefix",
+			command:        "rm -rf ./tmp",
+			expectedResult: PermissionRequireApproval,
+			expectedMsg:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			opts := EvaluatePermissionOptions{StripEnvVarPrefix: true}
+			result, msg := EvaluateCommandPermissionWithOptions(config, tt.command, opts)
+			assert.Equal(t, tt.expectedResult, result)
+			assert.Equal(t, tt.expectedMsg, msg)
+		})
+	}
+}
+
 func TestContainsAbsolutePath(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -659,6 +937,36 @@ func TestContainsAbsolutePath(t *testing.T) {
 		{
 			name:     "awk with absolute path still detected",
 			command:  "awk -F: '{print $1}' /etc/passwd",
+			expected: true,
+		},
+		{
+			name:     "command substitution with path suffix is absolute",
+			command:  "cat $(go env GOPATH)/pkg/mod/github.com/example/pkg@v1.0.0/file.go",
+			expected: true,
+		},
+		{
+			name:     "command substitution with nested parens is absolute",
+			command:  "ls $(dirname $(which go))/pkg",
+			expected: true,
+		},
+		{
+			name:     "command substitution followed by absolute path",
+			command:  "cat $(echo test) /etc/passwd",
+			expected: true,
+		},
+		{
+			name:     "pwd substitution with path suffix is absolute",
+			command:  "ls $(pwd)/subdir",
+			expected: true,
+		},
+		{
+			name:     "command substitution with pipe inside is absolute",
+			command:  "cat $(echo /etc | head -1)/passwd",
+			expected: true,
+		},
+		{
+			name:     "command substitution with nested parens and pipe is absolute",
+			command:  "ls $(echo (a|b))/file",
 			expected: true,
 		},
 	}

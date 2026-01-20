@@ -86,11 +86,11 @@ type DevRunConfig struct {
 	// Commands maps command IDs to their configurations.
 	// Each command ID can only have one instance running at a time,
 	// but multiple different command IDs can run in parallel.
-	Commands map[string]DevRunCommandConfig `toml:"commands,omitempty"`
+	Commands map[string]DevRunCommandConfig `toml:"commands,omitempty" json:"commands,omitempty"`
 
 	// StopTimeoutSeconds is the time to wait after SIGINT before sending SIGKILL.
 	// Defaults to 10 seconds if not specified.
-	StopTimeoutSeconds int `toml:"stop_timeout_seconds,omitempty"`
+	StopTimeoutSeconds int `toml:"stop_timeout_seconds,omitempty" json:"stop_timeout_seconds,omitempty"`
 }
 
 type CommandConfig struct {

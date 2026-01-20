@@ -21,6 +21,20 @@ interface ModelsCache {
   timestamp: number;
 }
 
+interface TaskConfigCache {
+  data: TaskConfigData;
+  timestamp: number;
+}
+
+export interface DetermineRequirementsConfig {
+  defaultValue: boolean;
+  rememberLastSelection: boolean;
+}
+
+export interface TaskConfigData {
+  determineRequirements: DetermineRequirementsConfig;
+}
+
 const MODELS_CACHE_KEY = 'models_cache';
 const MODELS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -32,6 +46,8 @@ export const store = reactive<{
   getModelsCache(): ModelsCache | null;
   setModelsCache(data: ModelsData): void;
   isModelsCacheStale(): boolean;
+  getTaskConfigCache(workspaceId: string): TaskConfigCache | null;
+  setTaskConfigCache(workspaceId: string, data: TaskConfigData): void;
 }>({
   workspaceId: null,
   selectWorkspaceId(workspaceId: string) {
@@ -58,5 +74,15 @@ export const store = reactive<{
     const cache = this.getModelsCache();
     if (!cache) return true;
     return Date.now() - cache.timestamp > MODELS_CACHE_TTL_MS;
+  },
+  getTaskConfigCache(workspaceId: string): TaskConfigCache | null {
+    if (!workspaceId) return null;
+    const cached = sessionStorage.getItem(`workspace_${workspaceId}_task_config`);
+    return cached ? JSON.parse(cached) : null;
+  },
+  setTaskConfigCache(workspaceId: string, data: TaskConfigData) {
+    if (!workspaceId) return;
+    const cache: TaskConfigCache = { data, timestamp: Date.now() };
+    sessionStorage.setItem(`workspace_${workspaceId}_task_config`, JSON.stringify(cache));
   }
 });

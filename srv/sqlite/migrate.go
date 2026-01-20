@@ -3,11 +3,16 @@ package sqlite
 import (
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/sqlite"
+	"github.com/golang-migrate/migrate/v4/source"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/rs/zerolog/log"
 )
 
 //go:embed migrations/*.sql
@@ -42,8 +47,65 @@ func migrateUp(db *sql.DB, dbName string) error {
 	}
 
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		if strings.Contains(err.Error(), "no migration found for version") {
+			shouldSkip, handleErr := shouldSkipMigration(m, migrationsSource, dbName)
+			if handleErr != nil {
+				return handleErr
+			}
+			if shouldSkip {
+				return nil
+			}
+		}
 		return fmt.Errorf("failed to apply migrations: %w", err)
 	}
 
 	return nil
+}
+
+// shouldSkipMigration checks if we should skip migrations because the database
+// has a higher migration version than available in the current codebase. This
+// can happen when switching between git branches where one branch has newer
+// migrations. Returns true if DB is ahead and we should skip, false otherwise.
+func shouldSkipMigration(m *migrate.Migrate, src source.Driver, dbName string) (bool, error) {
+	dbVersion, dirty, err := m.Version()
+	if err != nil {
+		return false, fmt.Errorf("failed to get current migration version: %w", err)
+	}
+	if dirty {
+		return false, fmt.Errorf("database is in dirty state at version %d", dbVersion)
+	}
+
+	highestAvailable, err := findHighestMigrationVersion(src)
+	if err != nil {
+		return false, fmt.Errorf("failed to find highest available migration: %w", err)
+	}
+
+	if dbVersion > highestAvailable {
+		log.Warn().
+			Str("database", dbName).
+			Uint("dbVersion", dbVersion).
+			Uint("availableVersion", highestAvailable).
+			Msg("Database migration version is higher than available migrations; skipping migration")
+		return true, nil
+	}
+
+	return false, nil
+}
+
+func findHighestMigrationVersion(src source.Driver) (uint, error) {
+	version, err := src.First()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get first migration version: %w", err)
+	}
+
+	for {
+		next, err := src.Next(version)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return version, nil
+			}
+			return 0, fmt.Errorf("failed to get next migration version: %w", err)
+		}
+		version = next
+	}
 }
