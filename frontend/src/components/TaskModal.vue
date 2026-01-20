@@ -114,7 +114,7 @@ import BranchSelector from './BranchSelector.vue'
 import LlmConfigEditor from './LlmConfigEditor.vue'
 import TrashIcon from './icons/TrashIcon.vue'
 import ShortcutHint from './ShortcutHint.vue'
-import { store } from '../lib/store'
+import { store, type TaskConfigData } from '../lib/store'
 import { getModelSummary } from '../lib/llmPresets'
 import { loadPresets, savePresets, llmConfigsEqual, type ModelPreset } from '../lib/llmPresetStorage'
 import type { Task, TaskStatus, LLMConfig } from '../lib/models'
@@ -214,7 +214,30 @@ const descriptionRef = ref<{ focus: () => void } | null>(null)
 const status = ref<TaskStatus>(props.task?.status || 'to_do')
 const flowType = ref(props.task?.flowType || localStorage.getItem('lastUsedFlowType') || 'basic_dev')
 const envType = ref<string>(props.task?.flowOptions?.envType || localStorage.getItem('lastUsedEnvType') || 'local')
-const determineRequirements = ref<boolean>(props.task?.flowOptions?.determineRequirements ?? true)
+
+const getLastDetermineRequirementsKey = () => `lastDetermineRequirements_${workspaceId.value}`
+
+const getInitialDetermineRequirements = (): boolean => {
+  if (props.task?.flowOptions?.determineRequirements !== undefined) {
+    return props.task.flowOptions.determineRequirements
+  }
+  const cachedConfig = store.getTaskConfigCache(workspaceId.value)
+  if (cachedConfig?.data.determineRequirements.rememberLastSelection) {
+    const stored = localStorage.getItem(getLastDetermineRequirementsKey())
+    return stored !== null ? stored === 'true' : true
+  }
+  if (cachedConfig) {
+    return cachedConfig.data.determineRequirements.defaultValue
+  }
+  // Fallback: use localStorage if available, else true
+  const stored = localStorage.getItem(getLastDetermineRequirementsKey())
+  return stored !== null ? stored === 'true' : true
+}
+
+const determineRequirements = ref<boolean>(getInitialDetermineRequirements())
+const userModifiedDetermineRequirements = ref(false)
+const isApplyingTaskConfig = ref(false)
+const taskConfig = ref<TaskConfigData | null>(store.getTaskConfigCache(workspaceId.value)?.data ?? null)
 const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
 const selectedBranch = ref<string | null>(initialBranchValue)
 
@@ -501,11 +524,56 @@ const scheduleAutoSave = () => {
 
 // Watch all form fields for auto-save
 watch([description, flowType, envType, selectedBranch, determineRequirements, planningPrompt, selectedPresetValue, llmConfig, newPresetName], () => {
+  if (isApplyingTaskConfig.value) return
   if (!isUndoRedo.value) {
     pushHistory()
   }
   scheduleAutoSave()
 }, { deep: true })
+
+// Track user modifications to determineRequirements and persist to localStorage
+watch(determineRequirements, (newValue) => {
+  if (isApplyingTaskConfig.value) return
+  userModifiedDetermineRequirements.value = true
+  if (taskConfig.value?.determineRequirements.rememberLastSelection) {
+    localStorage.setItem(getLastDetermineRequirementsKey(), String(newValue))
+  }
+})
+
+const fetchTaskConfig = async () => {
+  try {
+    const response = await fetch(`/api/v1/workspaces/${workspaceId.value}/task_config`)
+    if (!response.ok) return
+    const data = await response.json()
+    const fetchedConfig: TaskConfigData = data.taskConfig
+    store.setTaskConfigCache(workspaceId.value, fetchedConfig)
+    
+    // Only update if user hasn't modified the checkbox and we're creating a new task
+    if (!userModifiedDetermineRequirements.value && props.task?.flowOptions?.determineRequirements === undefined) {
+      const cachedConfig = taskConfig.value
+      const configChanged = !cachedConfig || 
+        cachedConfig.determineRequirements.rememberLastSelection !== fetchedConfig.determineRequirements.rememberLastSelection ||
+        cachedConfig.determineRequirements.defaultValue !== fetchedConfig.determineRequirements.defaultValue
+      
+      if (configChanged) {
+        isApplyingTaskConfig.value = true
+        taskConfig.value = fetchedConfig
+        if (fetchedConfig.determineRequirements.rememberLastSelection) {
+          const stored = localStorage.getItem(getLastDetermineRequirementsKey())
+          determineRequirements.value = stored !== null ? stored === 'true' : true
+        } else {
+          determineRequirements.value = fetchedConfig.determineRequirements.defaultValue
+        }
+        nextTick(() => {
+          isApplyingTaskConfig.value = false
+        })
+      }
+    }
+    taskConfig.value = fetchedConfig
+  } catch {
+    // On failure, continue with cached config or default behavior
+  }
+}
 
 const startTask = async () => {
   if (!description.value.trim()) {
@@ -605,6 +673,7 @@ onMounted(() => {
   // Initialize history with current state
   pushHistory()
   descriptionRef.value?.focus()
+  fetchTaskConfig()
 })
 
 onUnmounted(() => {
