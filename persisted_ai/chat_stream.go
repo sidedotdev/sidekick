@@ -17,6 +17,7 @@ type ChatStreamOptionsV2 struct {
 	WorkspaceId  string
 	FlowId       string
 	FlowActionId string
+	Providers    []common.ModelProviderPublicConfig
 }
 
 // ExecuteChatStream executes an LLM chat stream using the chat history from options.
@@ -85,6 +86,7 @@ func executeChatStreamV1(
 		WorkspaceId:  options.WorkspaceId,
 		FlowId:       options.FlowId,
 		FlowActionId: options.FlowActionId,
+		Providers:    options.Providers,
 	}
 
 	var la *Llm2Activities
