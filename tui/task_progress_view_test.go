@@ -1409,11 +1409,11 @@ func TestDevRunOutputToggle(t *testing.T) {
 	m = updated.(taskProgressModel)
 
 	// Simulate Dev Run started
-	startedMsg := devRunStartedMsg{devRunId: "devrun-123"}
+	startedMsg := devRunStartedMsg{devRunId: "devrun-123", commandId: "dev-server"}
 	updated, _ = m.Update(startedMsg)
 	m = updated.(taskProgressModel)
 
-	if !m.devRunIsRunning {
+	if !hasActiveDevRuns(m) {
 		t.Error("Expected Dev Run to be running")
 	}
 
@@ -1446,23 +1446,26 @@ func TestDevRunStateFromEvents(t *testing.T) {
 	m := newProgressModel("task-1", "flow-1", "ws-1", nil)
 
 	// Simulate Dev Run started event
-	startedMsg := devRunStartedMsg{devRunId: "devrun-123"}
+	startedMsg := devRunStartedMsg{devRunId: "devrun-123", commandId: "dev-server"}
 	updated, _ := m.Update(startedMsg)
 	m = updated.(taskProgressModel)
 
-	if !m.devRunIsRunning {
+	if !hasActiveDevRuns(m) {
 		t.Error("Expected Dev Run to be running after started event")
 	}
-	if m.devRunId != "devrun-123" {
-		t.Errorf("Expected devRunId 'devrun-123', got %q", m.devRunId)
+	if m.activeDevRuns["dev-server"] != "devrun-123" {
+		t.Errorf("Expected devRunId 'devrun-123' for 'dev-server', got %q", m.activeDevRuns["dev-server"])
+	}
+	if m.currentDevRunId != "devrun-123" {
+		t.Errorf("Expected currentDevRunId 'devrun-123', got %q", m.currentDevRunId)
 	}
 
 	// Simulate Dev Run ended event
-	endedMsg := devRunEndedMsg{devRunId: "devrun-123"}
+	endedMsg := devRunEndedMsg{devRunId: "devrun-123", commandId: "dev-server"}
 	updated, _ = m.Update(endedMsg)
 	m = updated.(taskProgressModel)
 
-	if m.devRunIsRunning {
+	if hasActiveDevRuns(m) {
 		t.Error("Expected Dev Run to not be running after ended event")
 	}
 }
@@ -1473,8 +1476,8 @@ func TestDevRunOutputOnlyWhenToggled(t *testing.T) {
 	m := newProgressModel("task-1", "flow-1", "ws-1", nil)
 
 	// Simulate Dev Run started
-	m.devRunIsRunning = true
-	m.devRunId = "devrun-123"
+	m.activeDevRuns = map[string]string{"dev-server": "devrun-123"}
+	m.currentDevRunId = "devrun-123"
 
 	// Output is not toggled on, so output messages should be ignored
 	outputMsg := devRunOutputMsg{devRunId: "devrun-123", stream: "stdout", chunk: "test output"}
@@ -1507,7 +1510,11 @@ func TestDevRunConfigQuery(t *testing.T) {
 		t.Parallel()
 		mockClient := &mockClientForProgress{}
 		mockClient.On("QueryFlow", "ws-1", "flow-1", "dev_run_config", nil).Return(
-			map[string]interface{}{"start": []interface{}{"npm", "run", "dev"}},
+			map[string]interface{}{
+				"dev-server": map[string]interface{}{
+					"command": "npm run dev",
+				},
+			},
 			nil,
 		)
 
@@ -1519,17 +1526,17 @@ func TestDevRunConfigQuery(t *testing.T) {
 
 		result := msg.(devRunConfigResultMsg)
 		if !result.hasDevRun {
-			t.Error("Expected hasDevRun to be true when start command is non-empty")
+			t.Error("Expected hasDevRun to be true when config map is non-empty")
 		}
 
 		mockClient.AssertCalled(t, "QueryFlow", "ws-1", "flow-1", "dev_run_config", nil)
 	})
 
-	t.Run("returns false when start is empty", func(t *testing.T) {
+	t.Run("returns false when config is empty", func(t *testing.T) {
 		t.Parallel()
 		mockClient := &mockClientForProgress{}
 		mockClient.On("QueryFlow", "ws-1", "flow-1", "dev_run_config", nil).Return(
-			map[string]interface{}{"start": []interface{}{}},
+			map[string]interface{}{},
 			nil,
 		)
 
@@ -1540,7 +1547,7 @@ func TestDevRunConfigQuery(t *testing.T) {
 
 		result := msg.(devRunConfigResultMsg)
 		if result.hasDevRun {
-			t.Error("Expected hasDevRun to be false when start command is empty")
+			t.Error("Expected hasDevRun to be false when config map is empty")
 		}
 	})
 

@@ -44,7 +44,7 @@ func (s *DevRunWorkflowTestSuite) TestDevRunStartStopViaUserAction() {
 
 	// Verify StartDevRunInput/StopDevRunInput can be constructed
 	devRunConfig := common.DevRunConfig{
-		Start: []common.CommandConfig{{Command: "echo 'starting'"}},
+		"test": {Command: "echo 'starting'"},
 	}
 	devRunCtx := DevRunContext{
 		WorkspaceId:  "test-workspace",
@@ -87,16 +87,17 @@ func (s *DevRunWorkflowTestSuite) TestDevRunCleanupOnWorkflowCompletion() {
 
 	stopInput := StopDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			StopTimeoutSeconds: 30,
+			"test": {Command: "echo test", StopTimeoutSeconds: 30},
 		},
-		Context: devRunCtx,
+		CommandId: "test",
+		Context:   devRunCtx,
 	}
 
 	s.Equal("workspace-123", stopInput.Context.WorkspaceId)
 	s.Equal("flow-456", stopInput.Context.FlowId)
 	s.Equal("/path/to/worktree", stopInput.Context.WorktreeDir)
 	s.Equal("side/feature-branch", stopInput.Context.SourceBranch)
-	s.Equal(30, stopInput.DevRunConfig.StopTimeoutSeconds)
+	s.Equal(30, stopInput.DevRunConfig["test"].StopTimeoutSeconds)
 }
 
 // TestDevRunUserActionTypes tests that Dev Run action types are correctly defined
@@ -130,7 +131,11 @@ func (s *DevRunWorkflowTestSuite) TestDevRunStartSignalDoesNotBlockSelectorCallb
 					},
 				},
 			},
-			RepoConfig: common.RepoConfig{},
+			RepoConfig: common.RepoConfig{
+				DevRun: common.DevRunConfig{
+					"test": {Command: "echo test"},
+				},
+			},
 			Worktree: &domain.Worktree{
 				Name: "side/test-branch",
 			},
@@ -435,4 +440,105 @@ func (s *MergeStrategyRoundTripTestSuite) TestMergeStrategyDefaultsToSquashInRes
 
 func TestMergeStrategyRoundTripTestSuite(t *testing.T) {
 	suite.Run(t, new(MergeStrategyRoundTripTestSuite))
+}
+
+// TestDevRunStateQuery tests that the dev_run_state query returns the current dev run state.
+func (s *DevRunWorkflowTestSuite) TestDevRunStateQuery() {
+	testWorkflow := func(ctx workflow.Context) error {
+		gs := &flow_action.GlobalState{}
+		gs.InitValues()
+
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context:     ctx,
+				WorkspaceId: "test-workspace",
+				GlobalState: gs,
+			},
+			RepoConfig: common.RepoConfig{},
+		}
+
+		// Set up the query handler
+		SetupDevRunStateQuery(dCtx)
+
+		// Initially, there should be no active runs
+		// Add a dev run instance to GlobalState
+		instance := &DevRunInstance{
+			DevRunId:       "devrun_test123",
+			SessionId:      12345,
+			OutputFilePath: "/tmp/test-output.log",
+			CommandId:      "dev-server",
+		}
+		SetDevRunInstance(gs, instance)
+
+		// Wait to allow query to be processed
+		_ = workflow.Sleep(ctx, 100*time.Millisecond)
+
+		return nil
+	}
+
+	s.env.RegisterWorkflow(testWorkflow)
+
+	// Query the dev run state after workflow starts
+	var queryResult DevRunState
+	s.env.RegisterDelayedCallback(func() {
+		result, err := s.env.QueryWorkflow(QueryNameDevRunState)
+		s.NoError(err)
+		s.NoError(result.Get(&queryResult))
+	}, 50*time.Millisecond)
+
+	s.env.ExecuteWorkflow(testWorkflow)
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	// Verify the query result contains the instance we added
+	s.NotNil(queryResult.ActiveRuns)
+	s.Len(queryResult.ActiveRuns, 1)
+	s.Contains(queryResult.ActiveRuns, "dev-server")
+	s.Equal("devrun_test123", queryResult.ActiveRuns["dev-server"].DevRunId)
+	s.Equal(12345, queryResult.ActiveRuns["dev-server"].SessionId)
+}
+
+// TestDevRunStateQueryEmpty tests that the dev_run_state query returns empty state when no runs are active.
+func (s *DevRunWorkflowTestSuite) TestDevRunStateQueryEmpty() {
+	testWorkflow := func(ctx workflow.Context) error {
+		gs := &flow_action.GlobalState{}
+		gs.InitValues()
+
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context:     ctx,
+				WorkspaceId: "test-workspace",
+				GlobalState: gs,
+			},
+			RepoConfig: common.RepoConfig{},
+		}
+
+		// Set up the query handler
+		SetupDevRunStateQuery(dCtx)
+
+		// Wait to allow query to be processed
+		_ = workflow.Sleep(ctx, 100*time.Millisecond)
+
+		return nil
+	}
+
+	s.env.RegisterWorkflow(testWorkflow)
+
+	// Query the dev run state after workflow starts
+	var queryResult DevRunState
+	s.env.RegisterDelayedCallback(func() {
+		result, err := s.env.QueryWorkflow(QueryNameDevRunState)
+		s.NoError(err)
+		s.NoError(result.Get(&queryResult))
+	}, 50*time.Millisecond)
+
+	s.env.ExecuteWorkflow(testWorkflow)
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	// Verify the query result is empty
+	s.NotNil(queryResult.ActiveRuns)
+	s.Len(queryResult.ActiveRuns, 0)
 }

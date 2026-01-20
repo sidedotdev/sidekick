@@ -121,10 +121,11 @@ type DevRunStartedEvent struct {
 	EventType      FlowEventType `json:"eventType"`
 	FlowId         string        `json:"flowId"`
 	DevRunId       string        `json:"devRunId"`
+	CommandId      string        `json:"commandId"`
 	CommandSummary string        `json:"commandSummary"`
 	WorkingDir     string        `json:"workingDir"`
 	Pid            int           `json:"pid"`
-	Pgid           int           `json:"pgid"`
+	SessionId      int           `json:"sessionId"`
 }
 
 func (e DevRunStartedEvent) GetParentId() string {
@@ -162,6 +163,7 @@ type DevRunEndedEvent struct {
 	EventType  FlowEventType `json:"eventType"`
 	FlowId     string        `json:"flowId"`
 	DevRunId   string        `json:"devRunId"`
+	CommandId  string        `json:"commandId"`
 	ExitStatus *int          `json:"exitStatus,omitempty"`
 	Signal     string        `json:"signal,omitempty"`
 	Error      string        `json:"error,omitempty"`
