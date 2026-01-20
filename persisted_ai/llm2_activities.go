@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/srv"
 
@@ -18,6 +19,7 @@ type StreamInput struct {
 	WorkspaceId  string
 	FlowId       string
 	FlowActionId string
+	Providers    []common.ModelProviderPublicConfig
 }
 
 // Llm2Activities provides LLM streaming activities using the llm2 package types.
@@ -75,7 +77,7 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		}
 	}()
 
-	provider, err := getLlm2Provider(input.Options.Params.ModelConfig)
+	provider, err := getLlm2Provider(input.Options.Params.ModelConfig, input.Providers)
 	if err != nil {
 		close(eventChan)
 		log.Error().Err(err).Msg("failed to get llm2 provider")
@@ -115,14 +117,41 @@ func convertLlm2EventToFlowEvent(event llm2.Event, flowActionId string) domain.F
 }
 
 // getLlm2Provider returns the appropriate llm2.Provider based on the model configuration.
-func getLlm2Provider(config common.ModelConfig) (llm2.Provider, error) {
-	providerName := config.NormalizedProviderName()
+func getLlm2Provider(config common.ModelConfig, providers []common.ModelProviderPublicConfig) (llm2.Provider, error) {
+	providerType, err := getProviderType(config.Provider)
+	if err != nil {
+		return nil, err
+	}
 
-	switch providerName {
-	case "OPENAI":
+	switch providerType {
+	case llm.OpenaiToolChatProviderType:
 		return llm2.OpenAIResponsesProvider{}, nil
-	case "ANTHROPIC":
+	case llm.OpenaiCompatibleToolChatProviderType:
+		for _, p := range providers {
+			if p.Type == string(providerType) && p.Name == config.Provider {
+				return llm2.OpenAIResponsesProvider{
+					BaseURL:      p.BaseURL,
+					DefaultModel: p.DefaultLLM,
+				}, nil
+			}
+		}
+		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
+	case llm.OpenaiResponsesCompatibleToolChatProviderType:
+		for _, p := range providers {
+			if p.Type == string(providerType) && p.Name == config.Provider {
+				return llm2.OpenAIResponsesProvider{
+					BaseURL:      p.BaseURL,
+					DefaultModel: p.DefaultLLM,
+				}, nil
+			}
+		}
+		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
+	case llm.AnthropicToolChatProviderType:
 		return llm2.AnthropicResponsesProvider{}, nil
+	case llm.GoogleToolChatProviderType:
+		return nil, fmt.Errorf("google provider not yet supported in llm2")
+	case llm.UnspecifiedToolChatProviderType:
+		return nil, fmt.Errorf("llm2 provider was not specified")
 	default:
 		return nil, fmt.Errorf("unsupported llm2 provider: %s", config.Provider)
 	}

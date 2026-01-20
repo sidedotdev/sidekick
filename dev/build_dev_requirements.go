@@ -434,6 +434,7 @@ func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options) (
 			WorkspaceId:  dCtx.WorkspaceId,
 			FlowId:       flowId,
 			FlowActionId: flowAction.Id,
+			Providers:    dCtx.Providers,
 		}
 
 		response, err := persisted_ai.ExecuteChatStream(

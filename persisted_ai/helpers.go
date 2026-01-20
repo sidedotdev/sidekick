@@ -147,6 +147,7 @@ func ForceToolCallWithTrackOptionsV2(
 		},
 		WorkspaceId: actionCtx.WorkspaceId,
 		FlowId:      workflow.GetInfo(ctx).WorkflowExecution.ID,
+		Providers:   actionCtx.Providers,
 	}
 
 	actionCtx.ActionParams = llm.ToolChatOptions{Secrets: options.Secrets, Params: llm.ToolChatParams{ModelConfig: modelConfig}}.ActionParams()
