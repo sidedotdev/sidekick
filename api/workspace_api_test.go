@@ -926,3 +926,100 @@ func TestGetWorkspaceByIdHandler(t *testing.T) {
 		})
 	}
 }
+
+func TestGetTaskConfigHandler(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	testCases := []struct {
+		name                          string
+		workspaceId                   string
+		workspaceConfig               *domain.WorkspaceConfig
+		expectedStatus                int
+		expectedRememberLastSelection bool
+	}{
+		{
+			name:        "returns rememberLastSelection true when model contains opus-4.5",
+			workspaceId: "ws_test1",
+			workspaceConfig: &domain.WorkspaceConfig{
+				LLM: common.LLMConfig{
+					Defaults: []common.ModelConfig{
+						{Model: "claude-opus-4.5-20250101"},
+					},
+				},
+			},
+			expectedStatus:                http.StatusOK,
+			expectedRememberLastSelection: true,
+		},
+		{
+			name:        "returns rememberLastSelection false when model does not contain opus-4.5",
+			workspaceId: "ws_test2",
+			workspaceConfig: &domain.WorkspaceConfig{
+				LLM: common.LLMConfig{
+					Defaults: []common.ModelConfig{
+						{Model: "claude-sonnet-4-20250514"},
+					},
+				},
+			},
+			expectedStatus:                http.StatusOK,
+			expectedRememberLastSelection: false,
+		},
+		{
+			name:        "returns rememberLastSelection true when no config exists",
+			workspaceId: "ws_test3",
+			workspaceConfig: nil,
+			expectedStatus:                http.StatusOK,
+			expectedRememberLastSelection: true,
+		},
+		{
+			name:        "returns rememberLastSelection true when defaults is empty",
+			workspaceId: "ws_test4",
+			workspaceConfig: &domain.WorkspaceConfig{
+				LLM: common.LLMConfig{
+					Defaults: []common.ModelConfig{},
+				},
+			},
+			expectedStatus:                http.StatusOK,
+			expectedRememberLastSelection: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctrl := NewMockController(t)
+
+			// Create workspace
+			workspace := domain.Workspace{
+				Id:           tc.workspaceId,
+				Name:         "Test Workspace",
+				LocalRepoDir: "/tmp/test",
+			}
+			err := ctrl.service.PersistWorkspace(context.Background(), workspace)
+			require.NoError(t, err)
+
+			if tc.workspaceConfig != nil {
+				err = ctrl.service.PersistWorkspaceConfig(context.Background(), tc.workspaceId, *tc.workspaceConfig)
+				require.NoError(t, err)
+			}
+
+			resp := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(resp)
+			c.Params = gin.Params{{Key: "workspaceId", Value: tc.workspaceId}}
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+tc.workspaceId+"/task_config", nil)
+
+			ctrl.GetTaskConfigHandler(c)
+
+			assert.Equal(t, tc.expectedStatus, resp.Code)
+
+			var response struct {
+				TaskConfig TaskConfig `json:"taskConfig"`
+			}
+			err = json.Unmarshal(resp.Body.Bytes(), &response)
+			require.NoError(t, err)
+
+			assert.True(t, response.TaskConfig.DetermineRequirements.DefaultValue)
+			assert.Equal(t, tc.expectedRememberLastSelection, response.TaskConfig.DetermineRequirements.RememberLastSelection)
+		})
+	}
+}
