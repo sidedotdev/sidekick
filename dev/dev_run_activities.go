@@ -430,67 +430,6 @@ func (a *DevRunActivities) startCommand(
 	return proc, nil
 }
 
-// tailOutputFile tails the output file and streams content to JetStream.
-func (a *DevRunActivities) tailOutputFile(ctx context.Context, devRunCtx DevRunContext, outputFilePath string, doneCh <-chan struct{}) {
-	file, err := os.Open(outputFilePath)
-	if err != nil {
-		log.Warn().Err(err).Str("path", outputFilePath).Msg("Failed to open output file for tailing")
-		return
-	}
-	defer file.Close()
-
-	var sequence int64
-	buf := make([]byte, 4096)
-
-	for {
-		n, err := file.Read(buf)
-		if n > 0 {
-			chunk := string(buf[:n])
-			outputEvent := domain.DevRunOutputEvent{
-				EventType: domain.DevRunOutputEventType,
-				DevRunId:  devRunCtx.DevRunId,
-				Stream:    "stdout", // Combined output, labeled as stdout
-				Chunk:     chunk,
-				Sequence:  sequence,
-				Timestamp: time.Now().UnixMilli(),
-			}
-			sequence++
-			// Use background context since this runs after the activity returns
-			if err := a.Streamer.AddFlowEvent(context.Background(), devRunCtx.WorkspaceId, devRunCtx.FlowId, outputEvent); err != nil {
-				log.Warn().Err(err).Msg("Failed to emit DevRunOutputEvent")
-			}
-		}
-		if err != nil {
-			if err != io.EOF {
-				log.Warn().Err(err).Msg("Error reading output file")
-				return
-			}
-			// EOF reached, check if process is done
-			select {
-			case <-doneCh:
-				// Process exited, do one final read to catch any remaining output
-				n, _ := file.Read(buf)
-				if n > 0 {
-					chunk := string(buf[:n])
-					outputEvent := domain.DevRunOutputEvent{
-						EventType: domain.DevRunOutputEventType,
-						DevRunId:  devRunCtx.DevRunId,
-						Stream:    "stdout",
-						Chunk:     chunk,
-						Sequence:  sequence,
-						Timestamp: time.Now().UnixMilli(),
-					}
-					a.Streamer.AddFlowEvent(context.Background(), devRunCtx.WorkspaceId, devRunCtx.FlowId, outputEvent)
-				}
-				return
-			default:
-				// Process still running, wait a bit before trying again
-				time.Sleep(100 * time.Millisecond)
-			}
-		}
-	}
-}
-
 // monitorActiveRun watches for natural process exit and handles cleanup.
 func (a *DevRunActivities) monitorActiveRun(ctx context.Context, devRunCtx DevRunContext, run *activeDevRun, stopTimeoutSeconds int) {
 	run.mu.Lock()
