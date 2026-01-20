@@ -1612,9 +1612,12 @@ func (m *model) updateViewportContent() {
 		output := p.getOutput()
 
 		if m.searchTerm == "" {
+			wasAtBottom := m.viewports[i].AtBottom()
 			content := strings.Join(output, "\n")
 			m.viewports[i].SetContent(content)
-			m.viewports[i].GotoBottom()
+			if wasAtBottom {
+				m.viewports[i].GotoBottom()
+			}
 			continue
 		}
 
