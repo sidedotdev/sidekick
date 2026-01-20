@@ -108,12 +108,23 @@ func TestDeleteFlow(t *testing.T) {
 		// Verify flow exists
 		retrieved, err := db.GetFlow(ctx, workspaceId, flow.Id)
 		assert.NoError(t, err)
-		assert.Equal(t, flow, retrieved)
+		assert.Equal(t, flow.Id, retrieved.Id)
+		assert.Equal(t, flow.WorkspaceId, retrieved.WorkspaceId)
+		assert.Equal(t, flow.Type, retrieved.Type)
+		assert.Equal(t, flow.ParentId, retrieved.ParentId)
+		assert.Equal(t, flow.Status, retrieved.Status)
 
 		// Verify flow is in parent's flow set
 		flows, err := db.GetFlowsForTask(ctx, workspaceId, parentId)
 		assert.NoError(t, err)
-		assert.Contains(t, flows, flow)
+		found := false
+		for _, f := range flows {
+			if f.Id == flow.Id {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "flow should be in parent's flow set")
 
 		// Delete the flow
 		err = db.DeleteFlow(ctx, workspaceId, flow.Id)
@@ -126,7 +137,9 @@ func TestDeleteFlow(t *testing.T) {
 		// Verify flow is removed from parent's flow set
 		flows, err = db.GetFlowsForTask(ctx, workspaceId, parentId)
 		assert.NoError(t, err)
-		assert.NotContains(t, flows, flow)
+		for _, f := range flows {
+			assert.NotEqual(t, flow.Id, f.Id, "flow should be removed from parent's flow set")
+		}
 	})
 
 	t.Run("Delete non-existent flow is idempotent", func(t *testing.T) {

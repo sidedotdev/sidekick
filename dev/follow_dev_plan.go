@@ -258,7 +258,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 				// TODO don't assume we're authoring edit blocks (when dev plan
 				// step types expand in the future)
 				content := renderAuthorEditBlockFeedbackPrompt(info.Feedback, info.Type)
-				*chatHistory = append(*chatHistory, llm.ChatMessage{Role: "user", Content: content})
+				chatHistory.Append(common.ChatMessage{Role: "user", Content: content})
 			}
 
 			feedbackInfo, err := GetUserFeedback(dCtx, promptInfo, guidanceContext, chatHistory, requestParams)
