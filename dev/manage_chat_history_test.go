@@ -809,7 +809,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesManageV3
 	).Once()
 
 	// Mock KVActivities.MGet to return the block content for hydration
-	var ka *persisted_ai.KVActivities
+	var ka *common.KVActivities
 	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"block-managed"}).Return(
 		[][]byte{mustMarshal(llm2.ContentBlock{Type: "text", Text: "managed"})},
 		nil,
@@ -870,7 +870,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_HydratesA
 	).Once()
 
 	// Mock KVActivities.MGet to return the block content
-	var ka *persisted_ai.KVActivities
+	var ka *common.KVActivities
 	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"block-1", "block-2"}).Return(
 		[][]byte{
 			mustMarshal(llm2.ContentBlock{Type: "text", Text: "hello"}),
@@ -920,7 +920,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_ReusesHyd
 	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1))
 
 	// First MGet: initial hydration before ManageChatHistory
-	var ka *persisted_ai.KVActivities
+	var ka *common.KVActivities
 	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"existing-block-1", "existing-block-2", "existing-block-3"}).Return(
 		[][]byte{
 			mustMarshal(llm2.ContentBlock{Type: "text", Text: "first"}),
@@ -1012,7 +1012,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_VerifiesH
 		nil,
 	).Once()
 
-	var ka *persisted_ai.KVActivities
+	var ka *common.KVActivities
 	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"block-1"}).Return(
 		[][]byte{mustMarshal(llm2.ContentBlock{Type: "text", Text: "hello"})},
 		nil,
@@ -1039,7 +1039,7 @@ func hydrateFirstWorkflow(ctx workflow.Context, ch *llm2.ChatHistoryContainer, m
 	}
 
 	// Hydrate the history first (simulating previous workflow operations)
-	workflowSafeStorage := &WorkflowSafeKVStorage{Ctx: ctx, WorkspaceId: "test-workspace-id"}
+	workflowSafeStorage := &common.WorkflowSafeKVStorage{Ctx: ctx}
 	if err := ch.Hydrate(context.Background(), workflowSafeStorage); err != nil {
 		return nil, fmt.Errorf("initial hydration failed: %w", err)
 	}

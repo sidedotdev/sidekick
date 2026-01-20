@@ -103,7 +103,7 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *llm2.ChatHistoryContai
 		llm2History.SetWorkspaceId(workspaceId)
 
 		// Hydrate only missing/changed blocks using workflow-safe storage
-		workflowSafeStorage := &WorkflowSafeKVStorage{Ctx: ctx, WorkspaceId: workspaceId}
+		workflowSafeStorage := &common.WorkflowSafeKVStorage{Ctx: ctx}
 		if err := llm2History.Hydrate(context.Background(), workflowSafeStorage); err != nil {
 			wrapErr := fmt.Errorf("ManageChatHistory hydration failed: %w", err)
 			workflow.GetLogger(ctx).Error("ManageChatHistory hydration error", "error", wrapErr)

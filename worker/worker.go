@@ -114,7 +114,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	chatHistoryActivities := &persisted_ai.ChatHistoryActivities{
 		Storage: service,
 	}
-	kvActivities := &persisted_ai.KVActivities{
+	kvActivities := &common.KVActivities{
 		Storage: service,
 	}
 

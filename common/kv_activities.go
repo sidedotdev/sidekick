@@ -1,15 +1,13 @@
-package persisted_ai
+package common
 
 import (
 	"context"
-
-	"sidekick/common"
 )
 
 // KVActivities provides Temporal activities for key-value storage operations.
 // This allows workflows to access KV storage through activity calls.
 type KVActivities struct {
-	Storage common.KeyValueStorage
+	Storage KeyValueStorage
 }
 
 func (ka *KVActivities) MGet(ctx context.Context, workspaceId string, keys []string) ([][]byte, error) {
