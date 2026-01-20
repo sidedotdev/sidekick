@@ -7,13 +7,13 @@
 
 <style scoped>
 .copy-icon rect {
-  fill: white;
+  fill: transparent;
   stroke: black;
 }
 
 @media (prefers-color-scheme: dark) {
   .copy-icon rect {
-    fill: black;
+    fill: transparent;
     stroke: white;
   }
 }
