@@ -75,20 +75,20 @@ const (
 type DevRunConfig struct {
 	// Start contains commands to start the dev-run process(es).
 	// Commands are executed in order; if any fails, subsequent commands are not run.
-	Start []CommandConfig `toml:"start,omitempty"`
+	Start []CommandConfig `toml:"start,omitempty" json:"start"`
 
 	// Stop contains optional commands to stop the dev-run process(es).
 	// If empty, Sidekick will send SIGINT then SIGKILL after timeout.
-	Stop []CommandConfig `toml:"stop,omitempty"`
+	Stop []CommandConfig `toml:"stop,omitempty" json:"stop,omitempty"`
 
 	// StopTimeoutSeconds is the time to wait after SIGINT before sending SIGKILL.
 	// Defaults to 10 seconds if not specified.
-	StopTimeoutSeconds int `toml:"stop_timeout_seconds,omitempty"`
+	StopTimeoutSeconds int `toml:"stop_timeout_seconds,omitempty" json:"stop_timeout_seconds,omitempty"`
 }
 
 type CommandConfig struct {
-	WorkingDir string `toml:"working_dir,omitempty"`
-	Command    string `toml:"command"`
+	WorkingDir string `toml:"working_dir,omitempty" json:"working_dir,omitempty"`
+	Command    string `toml:"command" json:"command"`
 }
 
 // AgentUseCaseConfig contains configuration for a specific agent use case.
