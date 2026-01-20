@@ -1,5 +1,5 @@
 <template>
-  <form v-if="isPending" @submit.prevent="flowAction.actionParams.requestKind === 'free_form' && submitUserResponse(true)">
+  <form ref="formRef" tabindex="-1" v-if="isPending" @submit.prevent="flowAction.actionParams.requestKind === 'free_form' && submitUserResponse(true)" @keydown="handleKeyDown">
     <div v-if="flowAction.actionParams.requestContent" class="markdown-container">
       <button v-if="flowAction.actionParams.requestKind === 'approval'" class="copy-button" @click.stop="copyRequestContent" title="Copy request content">
         <CopyIcon />
@@ -13,7 +13,7 @@
     <div v-if="flowAction.actionParams.command">
       <pre>{{ flowAction.actionParams.command }}</pre>
     </div>
-    <template v-if="flowAction.actionParams.mergeApprovalInfo?.diff">
+    <div v-if="flowAction.actionParams.mergeApprovalInfo?.diff" class="diff-container" @click="restoreFocus">
       <div v-if="showEmptyDiffMessage" class="empty-diff-message">
         No changes since last review
       </div>
@@ -24,25 +24,27 @@
         :diff-mode="diffMode"
         :level="level"
       />
-    </template>
+    </div>
 
     <div v-if="flowAction.actionParams.requestKind === 'approval'">
-      <AutogrowTextarea v-model="responseContent" placeholder="Rejection reason" />
+      <AutogrowTextarea ref="textareaRef" v-model="responseContent" placeholder="Rejection reason" />
       <div v-if="errorMessage" class="error-message">
         {{ errorMessage }}
       </div>
       <button type="button" class="cta-button-color"
-        :disabled="responseContent.trim() !== ''"
+        :disabled="hasResponseText"
         @click="submitUserResponse(true)"
       >
         {{ approveCopy() }}
+        <span v-if="!hasResponseText" class="shortcut-hint">{{ shortcutLabel }}</span>
       </button>
 
       <button type="button" class="secondary"
-        :disabled="responseContent.trim() === ''"
+        :disabled="!hasResponseText"
         @click="submitUserResponse(false)"
       >
         {{ rejectCopy() }}
+        <span v-if="hasResponseText" class="shortcut-hint">{{ shortcutLabel }}</span>
       </button>
     </div>
 
@@ -90,22 +92,24 @@
         @stop="handleDevRunStop"
       />
 
-      <AutogrowTextarea v-model="responseContent" placeholder="Rejection reason" />
+      <AutogrowTextarea ref="textareaRef" v-model="responseContent" placeholder="Rejection reason" />
       <div v-if="errorMessage" class="error-message">
         {{ errorMessage }}
       </div>
       <button type="button" class="cta-button-color"
-        :disabled="responseContent.trim() !== ''"
+        :disabled="hasResponseText"
         @click="submitUserResponse(true)"
       >
         {{ approveCopy() }}
+        <span v-if="!hasResponseText" class="shortcut-hint">{{ shortcutLabel }}</span>
       </button>
 
       <button type="button" class="secondary"
-        :disabled="responseContent.trim() === ''"
+        :disabled="!hasResponseText"
         @click="submitUserResponse(false)"
       >
         {{ rejectCopy() }}
+        <span v-if="hasResponseText" class="shortcut-hint">{{ shortcutLabel }}</span>
       </button>
     </div>
     <div v-else-if="flowAction.actionParams.requestKind === 'continue'">
@@ -117,11 +121,14 @@
       </button>
     </div>
     <div v-else>
-      <AutogrowTextarea v-model="responseContent"/>
+      <AutogrowTextarea ref="textareaRef" v-model="responseContent"/>
       <div v-if="errorMessage" class="error-message">
         {{ errorMessage }}
       </div>
-      <button :disabled="responseContent.length == 0" class="cta-button-color" type="submit">Submit</button>
+      <button :disabled="responseContent.length == 0" class="cta-button-color submit-button" type="submit">
+        Submit
+        <span class="shortcut-hint">{{ shortcutLabel }}</span>
+      </button>
     </div>
   </form>
   <!-- TODO move approved/rejected to FlowActionItem summary. Only show content here -->
@@ -198,9 +205,12 @@ const props = defineProps({
   },
 });
 
+const formRef = ref<HTMLFormElement | null>(null);
 const responseContent = ref('');
 const errorMessage = ref('');
+const textareaRef = ref<{ focus: () => void } | null>(null);
 const isPending = computed(() => props.flowAction.actionStatus === 'pending');
+const hasResponseText = computed(() => responseContent.value.trim() !== '');
 const ignoreWhitespace = ref(false);
 const diffMode = ref<'unified' | 'split'>('unified');
 const diffScope = ref<'all' | 'since_last_review'>('all');
@@ -305,6 +315,14 @@ onMounted(() => {
       props.flowAction.actionParams.requestKind === 'merge_approval') {
     updateMergeApprovalParams();
   }
+
+  if (isPending.value) {
+    setTimeout(() => {
+      if (isPending.value) {
+        textareaRef.value?.focus();
+      }
+    }, 200);
+  }
 });
 
 interface keyable {
@@ -321,6 +339,32 @@ const parsedActionResult = computed<keyable | null>(() => {
 const targetBranch = ref<string | undefined>(parsedActionResult.value?.targetBranch ?? props.flowAction.actionParams.mergeApprovalInfo?.defaultTargetBranch)
 
 const hasDevRunConfig = ref(false)
+
+const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
+const shortcutLabel = computed(() => isMac ? '⌘↵' : 'Ctrl+↵')
+
+const handleKeyDown = (event: KeyboardEvent) => {
+  const modKey = isMac ? event.metaKey : event.ctrlKey
+  
+  if (modKey && event.key === 'Enter') {
+    const requestKind = props.flowAction.actionParams.requestKind
+    if (requestKind === 'free_form' && responseContent.value.length > 0) {
+      event.preventDefault()
+      submitUserResponse(true)
+    } else if (requestKind === 'approval' || requestKind === 'merge_approval') {
+      event.preventDefault()
+      submitUserResponse(!hasResponseText.value)
+    }
+  }
+}
+
+const restoreFocus = () => {
+  // Restore focus to form after clicking in diff area
+  // Use setTimeout to run after the click event completes
+  setTimeout(() => {
+    formRef.value?.focus()
+  }, 0)
+}
 
 async function queryDevRunConfig() {
   try {
@@ -722,5 +766,24 @@ label[for="targetBranch"] {
   border: 1px dashed var(--color-border);
   border-radius: 4px;
   margin: 0.5rem 0;
+}
+
+.submit-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.shortcut-hint {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 0.6875rem;
+  line-height: 1;
+  opacity: 0.7;
+  padding: 0.1875rem 0.3125rem;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 0.25rem;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
 }
 </style>

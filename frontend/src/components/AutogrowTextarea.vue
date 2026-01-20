@@ -1,6 +1,6 @@
 <template>
   <div class="grow-wrap" :data-replicated-value="replicatedValue">
-    <textarea :disabled="disabled" v-model="textValue" :placeholder="placeholder"></textarea>
+    <textarea ref="textareaRef" :disabled="disabled" v-model="textValue" :placeholder="placeholder"></textarea>
   </div>
 </template>
 
@@ -22,9 +22,16 @@ export default defineComponent({
       default: false,
     },
   },
-  setup(props, { emit }) {
+  setup(props, { emit, expose }) {
     const textValue = ref(props.modelValue)
     const replicatedValue = ref(props.modelValue)
+    const textareaRef = ref<HTMLTextAreaElement | null>(null)
+
+    const focus = () => {
+      textareaRef.value?.focus()
+    }
+
+    expose({ focus })
 
     watch(textValue, (newValue) => {
       replicatedValue.value = newValue
@@ -43,6 +50,7 @@ export default defineComponent({
     return {
       textValue,
       replicatedValue,
+      textareaRef,
     }
   },
 })

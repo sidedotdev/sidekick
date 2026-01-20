@@ -3,7 +3,10 @@
   <div class="modal" @keydown="handleKeyDown">
     <div class="modal-header">
       <h2>Task</h2>
-      <button class="close-button" @click="close" aria-label="Close">&times;</button>
+      <button class="close-button" @click="close" aria-label="Close">
+        <span class="close-shortcut-hint">Esc</span>
+        &times;
+      </button>
     </div>
     <form @submit.prevent="startTask">
       <div class="preset-section">
@@ -73,7 +76,7 @@
       </label>
 
       <div>
-        <AutogrowTextarea id="description" v-model="description" placeholder="Task description - the more detail, the better" />
+        <AutogrowTextarea ref="descriptionRef" id="description" v-model="description" placeholder="Task description - the more detail, the better" />
       </div>
       <div v-if="devMode && flowType === 'planned_dev'">
         <label>Planning Prompt</label>
@@ -82,16 +85,18 @@
       <div class="button-container">
         <div class="button-left">
           <Button 
-            label="Start Task"
-            class="p-button-primary"
+            class="p-button-primary start-task-button"
             @click="startTask"
-          />
+          >
+            Start Task
+            <ShortcutHint :label="shortcutLabel" />
+          </Button>
           <div class="save-indicator" :class="saveIndicatorClass">
             <span v-if="saveIndicatorClass === 'saving'">Saving...</span>
             <span v-else-if="saveIndicatorClass === 'saved'">Saved</span>
           </div>
         </div>
-        <button v-if="canDelete" class="delete-button" title="Delete task" @click="deleteTask">
+        <button v-if="canDelete" type="button" class="delete-button" title="Delete task" @click="deleteTask">
           <TrashIcon />
         </button>
       </div>
@@ -108,7 +113,8 @@ import SegmentedControl from './SegmentedControl.vue'
 import BranchSelector from './BranchSelector.vue'
 import LlmConfigEditor from './LlmConfigEditor.vue'
 import TrashIcon from './icons/TrashIcon.vue'
-import { store } from '../lib/store'
+import ShortcutHint from './ShortcutHint.vue'
+import { store, type TaskConfigData } from '../lib/store'
 import { getModelSummary } from '../lib/llmPresets'
 import { loadPresets, savePresets, llmConfigsEqual, type ModelPreset } from '../lib/llmPresetStorage'
 import type { Task, TaskStatus, LLMConfig } from '../lib/models'
@@ -130,14 +136,14 @@ const validateLlmConfig = (config: LLMConfig): boolean => {
   return true
 }
 
-const saveOrUpdatePreset = (options: { showAlert?: boolean } = {}): boolean => {
-  const { showAlert = false } = options
+const saveOrUpdatePreset = (options: { finalSave?: boolean } = {}): boolean => {
+  const { finalSave = false } = options
   
   if (!isAddPresetMode.value && !currentPresetId.value) return true
   
   const isValid = validateLlmConfig(llmConfig.value)
   if (!isValid) {
-    if (showAlert) {
+    if (finalSave) {
       alert('Invalid configuration: Default config must have a provider selected, and any enabled use case must have a provider.')
     }
     return false
@@ -160,7 +166,9 @@ const saveOrUpdatePreset = (options: { showAlert?: boolean } = {}): boolean => {
       config: JSON.parse(JSON.stringify(llmConfig.value))
     }
     presets.value.push(newPreset)
-    selectedPresetValue.value = newId
+    if (finalSave) {
+      selectedPresetValue.value = newId
+    }
   }
   
   savePresets(presets.value)
@@ -202,10 +210,34 @@ const initialDescriptionValue = getInitialDescription()
 const initialBranchValue = getInitialBranch()
 
 const description = ref(initialDescriptionValue)
+const descriptionRef = ref<{ focus: () => void } | null>(null)
 const status = ref<TaskStatus>(props.task?.status || 'to_do')
 const flowType = ref(props.task?.flowType || localStorage.getItem('lastUsedFlowType') || 'basic_dev')
 const envType = ref<string>(props.task?.flowOptions?.envType || localStorage.getItem('lastUsedEnvType') || 'local')
-const determineRequirements = ref<boolean>(props.task?.flowOptions?.determineRequirements ?? true)
+
+const getLastDetermineRequirementsKey = () => `lastDetermineRequirements_${workspaceId.value}`
+
+const getInitialDetermineRequirements = (): boolean => {
+  if (props.task?.flowOptions?.determineRequirements !== undefined) {
+    return props.task.flowOptions.determineRequirements
+  }
+  const cachedConfig = store.getTaskConfigCache(workspaceId.value)
+  if (cachedConfig?.data.determineRequirements.rememberLastSelection) {
+    const stored = localStorage.getItem(getLastDetermineRequirementsKey())
+    return stored !== null ? stored === 'true' : true
+  }
+  if (cachedConfig) {
+    return cachedConfig.data.determineRequirements.defaultValue
+  }
+  // Fallback: use localStorage if available, else true
+  const stored = localStorage.getItem(getLastDetermineRequirementsKey())
+  return stored !== null ? stored === 'true' : true
+}
+
+const determineRequirements = ref<boolean>(getInitialDetermineRequirements())
+const userModifiedDetermineRequirements = ref(false)
+const isApplyingTaskConfig = ref(false)
+const taskConfig = ref<TaskConfigData | null>(store.getTaskConfigCache(workspaceId.value)?.data ?? null)
 const planningPrompt = ref(props.task?.flowOptions?.planningPrompt || '')
 const selectedBranch = ref<string | null>(initialBranchValue)
 
@@ -290,11 +322,19 @@ const redo = () => {
   }
 }
 
+const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
+const shortcutLabel = computed(() => isMac ? '⌘↵' : 'Ctrl+↵')
+
 const handleKeyDown = (event: KeyboardEvent) => {
-  const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
   const modKey = isMac ? event.metaKey : event.ctrlKey
   
-  if (modKey && event.key === 'z' && !event.shiftKey) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    close()
+  } else if (modKey && event.key === 'Enter') {
+    event.preventDefault()
+    startTask()
+  } else if (modKey && event.key === 'z' && !event.shiftKey) {
     event.preventDefault()
     undo()
   } else if (modKey && (event.key === 'y' || (event.key === 'z' && event.shiftKey))) {
@@ -484,11 +524,56 @@ const scheduleAutoSave = () => {
 
 // Watch all form fields for auto-save
 watch([description, flowType, envType, selectedBranch, determineRequirements, planningPrompt, selectedPresetValue, llmConfig, newPresetName], () => {
+  if (isApplyingTaskConfig.value) return
   if (!isUndoRedo.value) {
     pushHistory()
   }
   scheduleAutoSave()
 }, { deep: true })
+
+// Track user modifications to determineRequirements and persist to localStorage
+watch(determineRequirements, (newValue) => {
+  if (isApplyingTaskConfig.value) return
+  userModifiedDetermineRequirements.value = true
+  if (taskConfig.value?.determineRequirements.rememberLastSelection) {
+    localStorage.setItem(getLastDetermineRequirementsKey(), String(newValue))
+  }
+})
+
+const fetchTaskConfig = async () => {
+  try {
+    const response = await fetch(`/api/v1/workspaces/${workspaceId.value}/task_config`)
+    if (!response.ok) return
+    const data = await response.json()
+    const fetchedConfig: TaskConfigData = data.taskConfig
+    store.setTaskConfigCache(workspaceId.value, fetchedConfig)
+    
+    // Only update if user hasn't modified the checkbox and we're creating a new task
+    if (!userModifiedDetermineRequirements.value && props.task?.flowOptions?.determineRequirements === undefined) {
+      const cachedConfig = taskConfig.value
+      const configChanged = !cachedConfig || 
+        cachedConfig.determineRequirements.rememberLastSelection !== fetchedConfig.determineRequirements.rememberLastSelection ||
+        cachedConfig.determineRequirements.defaultValue !== fetchedConfig.determineRequirements.defaultValue
+      
+      if (configChanged) {
+        isApplyingTaskConfig.value = true
+        taskConfig.value = fetchedConfig
+        if (fetchedConfig.determineRequirements.rememberLastSelection) {
+          const stored = localStorage.getItem(getLastDetermineRequirementsKey())
+          determineRequirements.value = stored !== null ? stored === 'true' : true
+        } else {
+          determineRequirements.value = fetchedConfig.determineRequirements.defaultValue
+        }
+        nextTick(() => {
+          isApplyingTaskConfig.value = false
+        })
+      }
+    }
+    taskConfig.value = fetchedConfig
+  } catch {
+    // On failure, continue with cached config or default behavior
+  }
+}
 
 const startTask = async () => {
   if (!description.value.trim()) {
@@ -496,7 +581,7 @@ const startTask = async () => {
     return
   }
 
-  if (!saveOrUpdatePreset({ showAlert: true })) {
+  if (!saveOrUpdatePreset({ finalSave: true })) {
     return
   }
 
@@ -587,6 +672,8 @@ const close = async () => {
 onMounted(() => {
   // Initialize history with current state
   pushHistory()
+  descriptionRef.value?.focus()
+  fetchTaskConfig()
 })
 
 onUnmounted(() => {
@@ -624,6 +711,23 @@ onUnmounted(() => {
 
 .close-button:hover {
   color: var(--color-text);
+}
+
+.close-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.close-shortcut-hint {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 0.625rem;
+  line-height: 1;
+  opacity: 0.6;
+  padding: 0.125rem 0.25rem;
+  background: var(--color-background-soft);
+  border-radius: 0.1875rem;
+  vertical-align: middle;
 }
 
 .overlay {
@@ -809,6 +913,12 @@ label {
   background-color: var(--color-background);
   color: var(--color-text);
   max-width: 20rem;
+}
+
+.start-task-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .save-indicator {

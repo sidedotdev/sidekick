@@ -13,6 +13,8 @@ config.global.plugins.push(PrimeVue)
 const mockStore = vi.hoisted(() => ({
   workspaceId: 'test-workspace-id',
   getBranchCache: () => null,
+  getTaskConfigCache: (() => null) as () => { data: { determineRequirements: { defaultValue: boolean; rememberLastSelection: boolean } }; timestamp: number } | null,
+  setTaskConfigCache: vi.fn(),
   setBranchCache: () => {},
   getModelsCache: () => null,
   setModelsCache: () => {},
@@ -27,24 +29,43 @@ const mockBranchesResponse = {
   branches: ['main', 'feature-1', 'feature-2']
 }
 
-const createMockFetch = () => {
-  return vi.fn((url: string, _options?: RequestInit) => {
-    if (url.includes('/branches')) {
+const mockTaskConfigResponse = {
+  taskConfig: {
+    determineRequirements: {
+      defaultValue: true,
+      rememberLastSelection: true
+    }
+  }
+}
+
+const createMockFetch = (taskConfigOverride?: { rememberLastSelection: boolean }) => {
+  return vi.fn((url: RequestInfo | URL, _options?: RequestInit) => {
+    const urlStr = url.toString()
+    if (urlStr.includes('/branches')) {
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve(mockBranchesResponse),
-      })
+      } as Response)
     }
-    if (url.includes('/tasks')) {
+    if (urlStr.includes('/task_config')) {
+      const config = taskConfigOverride 
+        ? { taskConfig: { determineRequirements: { defaultValue: true, rememberLastSelection: taskConfigOverride.rememberLastSelection } } }
+        : mockTaskConfigResponse
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(config),
+      } as Response)
+    }
+    if (urlStr.includes('/tasks')) {
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve({ id: 'new-task-id' }),
-      })
+      } as Response)
     }
     return Promise.resolve({
       ok: true,
       json: () => Promise.resolve({}),
-    })
+    } as Response)
   })
 }
 
@@ -138,7 +159,7 @@ describe('TaskModal', () => {
   })
 
   it('submits form with correct API call for create', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true } as Response)
     global.fetch = fetchMock
 
     mountComponent()
@@ -157,7 +178,7 @@ describe('TaskModal', () => {
   })
 
   it('submits form with correct API call for edit', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true } as Response)
     global.fetch = fetchMock
 
     const task: Task = {
@@ -205,7 +226,7 @@ describe('TaskModal', () => {
   })
 
   it('emits created event when a new task is successfully created', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true } as Response)
     global.fetch = fetchMock
 
     mountComponent()
@@ -217,7 +238,7 @@ describe('TaskModal', () => {
   })
 
   it('emits updated event when an existing task is successfully updated', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true } as Response)
     global.fetch = fetchMock
 
     const task: Task = {
@@ -268,11 +289,11 @@ describe('TaskModal', () => {
   it('has Start Task button as primary action', async () => {
     mountComponent()
     const startButton = wrapper.find('.p-button-primary')
-    expect(startButton.text()).toBe('Start Task')
+    expect(startButton.text()).toContain('Start Task')
   })
 
   it('submits with to_do status when Start Task is clicked', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    const fetchMock = createMockFetch()
     global.fetch = fetchMock
     
     mountComponent()
@@ -282,7 +303,9 @@ describe('TaskModal', () => {
     await wrapper.find('.p-button-primary').trigger('click')
     await flushPromises()
 
-    const requestBody = JSON.parse(fetchMock.mock.calls[0][1].body)
+    const taskCalls = fetchMock.mock.calls.filter((call) => call[0].toString().includes('/tasks'))
+    expect(taskCalls.length).toBeGreaterThan(0)
+    const requestBody = JSON.parse(taskCalls[0][1]?.body as string)
     expect(requestBody.status).toBe('to_do')
   })
 })
@@ -331,10 +354,7 @@ describe('TaskModal localStorage behavior', () => {
 
     it('does not auto-save when description is empty', async () => {
       vi.useFakeTimers()
-      const fetchMock = vi.fn().mockResolvedValue({ 
-        ok: true, 
-        json: () => Promise.resolve({ id: 'new-task-id' }) 
-      })
+      const fetchMock = createMockFetch()
       global.fetch = fetchMock
 
       const wrapper = mount(TaskModal)
@@ -348,16 +368,14 @@ describe('TaskModal localStorage behavior', () => {
       vi.advanceTimersByTime(1600)
       await flushPromises()
       
-      expect(fetchMock).not.toHaveBeenCalled()
+      const taskCalls = fetchMock.mock.calls.filter((call) => call[0].toString().includes('/tasks'))
+      expect(taskCalls).toHaveLength(0)
       vi.useRealTimers()
     })
 
     it('does not auto-save when description is only whitespace', async () => {
       vi.useFakeTimers()
-      const fetchMock = vi.fn().mockResolvedValue({ 
-        ok: true, 
-        json: () => Promise.resolve({ id: 'new-task-id' }) 
-      })
+      const fetchMock = createMockFetch()
       global.fetch = fetchMock
 
       const wrapper = mount(TaskModal)
@@ -371,15 +389,22 @@ describe('TaskModal localStorage behavior', () => {
       vi.advanceTimersByTime(1600)
       await flushPromises()
       
-      expect(fetchMock).not.toHaveBeenCalled()
+      const taskCalls = fetchMock.mock.calls.filter((call) => call[0].toString().includes('/tasks'))
+      expect(taskCalls).toHaveLength(0)
       vi.useRealTimers()
     })
 
     it('uses PUT for subsequent auto-saves after task is created', async () => {
       vi.useFakeTimers()
-      const fetchMock = vi.fn().mockResolvedValue({ 
-        ok: true, 
-        json: () => Promise.resolve({ task: { id: 'created-task-id' } }) 
+      const fetchMock = vi.fn((url: RequestInfo | URL, _options?: RequestInit) => {
+        const urlStr = url.toString()
+        if (urlStr.includes('/branches')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(mockBranchesResponse) } as Response)
+        }
+        if (urlStr.includes('/task_config')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(mockTaskConfigResponse) } as Response)
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ task: { id: 'created-task-id' } }) } as Response)
       })
       global.fetch = fetchMock
 
@@ -398,12 +423,11 @@ describe('TaskModal localStorage behavior', () => {
       vi.advanceTimersByTime(1600)
       await flushPromises()
       
-      expect(fetchMock).toHaveBeenLastCalledWith(
-        `/api/v1/workspaces/${testWorkspaceId}/tasks/created-task-id`,
-        expect.objectContaining({
-          method: 'PUT'
-        })
-      )
+      const taskCalls = fetchMock.mock.calls.filter((call) => call[0].toString().includes('/tasks'))
+      expect(taskCalls.length).toBeGreaterThanOrEqual(2)
+      const lastTaskCall = taskCalls[taskCalls.length - 1]
+      expect(lastTaskCall[0].toString()).toBe(`/api/v1/workspaces/${testWorkspaceId}/tasks/created-task-id`)
+      expect(lastTaskCall[1]).toMatchObject({ method: 'PUT' })
       vi.useRealTimers()
     })
 
@@ -535,7 +559,7 @@ describe('TaskModal localStorage behavior', () => {
 
     it('does not save when closing with empty description', async () => {
       vi.useFakeTimers()
-      const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+      const fetchMock = createMockFetch()
       global.fetch = fetchMock
 
       const wrapper = mount(TaskModal)
@@ -544,7 +568,8 @@ describe('TaskModal localStorage behavior', () => {
       await wrapper.find('.close-button').trigger('click')
       await flushPromises()
       
-      expect(fetchMock).not.toHaveBeenCalled()
+      const taskCalls = fetchMock.mock.calls.filter((call) => call[0].toString().includes('/tasks'))
+      expect(taskCalls).toHaveLength(0)
       expect(wrapper.emitted('close')).toBeTruthy()
       vi.useRealTimers()
     })
@@ -556,7 +581,7 @@ describe('TaskModal localStorage behavior', () => {
       const fetchMock = vi.fn().mockResolvedValue({ 
         ok: true, 
         json: () => Promise.resolve({ task: { id: 'new-task-id' } }) 
-      })
+      } as Response)
       global.fetch = fetchMock
 
       const wrapper = mount(TaskModal)
@@ -578,7 +603,7 @@ describe('TaskModal localStorage behavior', () => {
       const fetchMock = vi.fn().mockResolvedValue({ 
         ok: true, 
         json: () => Promise.resolve({ task: { id: 'new-task-id' } }) 
-      })
+      } as Response)
       global.fetch = fetchMock
 
       const wrapper = mount(TaskModal)
@@ -603,7 +628,7 @@ describe('TaskModal localStorage behavior', () => {
       const fetchMock = vi.fn().mockResolvedValue({ 
         ok: true, 
         json: () => Promise.resolve({ task: { id: 'new-task-id' } }) 
-      })
+      } as Response)
       global.fetch = fetchMock
 
       const wrapper = mount(TaskModal)
@@ -707,7 +732,7 @@ describe('TaskModal localStorage behavior', () => {
 
       await wrapper.vm.$nextTick()
 
-      const result = vm.saveOrUpdatePreset()
+      const result = vm.saveOrUpdatePreset({ finalSave: true })
       expect(result).toBe(true)
 
       const savedPresets = JSON.parse(localStorage.getItem('sidekick_model_presets') || '[]')
@@ -780,7 +805,7 @@ describe('TaskModal localStorage behavior', () => {
 
       await wrapper.vm.$nextTick()
 
-      const result = vm.saveOrUpdatePreset({ showAlert: true })
+      const result = vm.saveOrUpdatePreset({ finalSave: true })
       expect(result).toBe(false)
       expect(window.alert).toHaveBeenCalledWith(
         'Invalid configuration: Default config must have a provider selected, and any enabled use case must have a provider.'
@@ -790,7 +815,7 @@ describe('TaskModal localStorage behavior', () => {
       expect(savedPresets).toHaveLength(0)
     })
 
-    it('validates without showing alert when showAlert is false', async () => {
+    it('validates without showing alert when finalSave is false', async () => {
       const wrapper = mount(TaskModal, {
         global: {
           stubs: {
@@ -810,7 +835,7 @@ describe('TaskModal localStorage behavior', () => {
 
       await wrapper.vm.$nextTick()
 
-      const result = vm.saveOrUpdatePreset({ showAlert: false })
+      const result = vm.saveOrUpdatePreset({ finalSave: false })
       expect(result).toBe(false)
       expect(window.alert).not.toHaveBeenCalled()
 
@@ -860,16 +885,22 @@ describe('TaskModal localStorage behavior', () => {
 
       await wrapper.vm.$nextTick()
 
-      const result = vm.saveOrUpdatePreset({ showAlert: true })
+      const result = vm.saveOrUpdatePreset({ finalSave: true })
       expect(result).toBe(false)
       expect(window.alert).toHaveBeenCalled()
     })
 
     it('auto-saves preset during auto-save', async () => {
       vi.useFakeTimers()
-      const fetchMock = vi.fn().mockResolvedValue({ 
-        ok: true, 
-        json: () => Promise.resolve({ task: { id: 'new-task-id' } }) 
+      const fetchMock = vi.fn((url: RequestInfo | URL, _options?: RequestInit) => {
+        const urlStr = url.toString()
+        if (urlStr.includes('/branches')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(mockBranchesResponse) } as Response)
+        }
+        if (urlStr.includes('/task_config')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(mockTaskConfigResponse) } as Response)
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ task: { id: 'new-task-id' } }) } as Response)
       })
       global.fetch = fetchMock
 
@@ -906,9 +937,15 @@ describe('TaskModal localStorage behavior', () => {
 
     it('updates preset in-place during subsequent auto-saves', async () => {
       vi.useFakeTimers()
-      const fetchMock = vi.fn().mockResolvedValue({ 
-        ok: true, 
-        json: () => Promise.resolve({ task: { id: 'new-task-id' } }) 
+      const fetchMock = vi.fn((url: RequestInfo | URL, _options?: RequestInit) => {
+        const urlStr = url.toString()
+        if (urlStr.includes('/branches')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(mockBranchesResponse) } as Response)
+        }
+        if (urlStr.includes('/task_config')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(mockTaskConfigResponse) } as Response)
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ task: { id: 'new-task-id' } }) } as Response)
       })
       global.fetch = fetchMock
 
@@ -1022,10 +1059,7 @@ describe('TaskModal localStorage behavior', () => {
     })
 
     it('prevents startTask when preset validation fails', async () => {
-      const fetchMock = vi.fn().mockResolvedValue({ 
-        ok: true, 
-        json: () => Promise.resolve({ id: 'new-task-id' }) 
-      })
+      const fetchMock = createMockFetch()
       global.fetch = fetchMock
 
       const wrapper = mount(TaskModal, {
@@ -1051,7 +1085,224 @@ describe('TaskModal localStorage behavior', () => {
       await flushPromises()
 
       expect(window.alert).toHaveBeenCalled()
-      expect(fetchMock).not.toHaveBeenCalled()
+      const taskCalls = fetchMock.mock.calls.filter((call) => call[0].toString().includes('/tasks'))
+      expect(taskCalls).toHaveLength(0)
     })
+  })
+})
+
+describe('TaskModal determineRequirements behavior', () => {
+  const testWorkspaceId = 'test-workspace-123'
+
+  beforeEach(() => {
+    localStorage.clear()
+    mockStore.workspaceId = testWorkspaceId
+    mockStore.getTaskConfigCache = () => null
+    mockStore.setTaskConfigCache = vi.fn()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('uses existing task flowOptions.determineRequirements when editing', async () => {
+    vi.stubGlobal('fetch', createMockFetch())
+    
+    const task = createTestTask({
+      flowOptions: { determineRequirements: false }
+    })
+
+    const wrapper = mount(TaskModal, {
+      props: { task },
+      global: {
+        stubs: {
+          Dropdown: DropdownStub,
+          LlmConfigEditor: LlmConfigEditorStub
+        }
+      }
+    })
+
+    const checkbox = wrapper.find('input[type="checkbox"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('uses localStorage value when rememberLastSelection is true', async () => {
+    mockStore.getTaskConfigCache = () => ({
+      data: { determineRequirements: { defaultValue: true, rememberLastSelection: true } },
+      timestamp: Date.now()
+    })
+    localStorage.setItem(`lastDetermineRequirements_${testWorkspaceId}`, 'false')
+    vi.stubGlobal('fetch', createMockFetch({ rememberLastSelection: true }))
+
+    const wrapper = mount(TaskModal, {
+      global: {
+        stubs: {
+          Dropdown: DropdownStub,
+          LlmConfigEditor: LlmConfigEditorStub
+        }
+      }
+    })
+
+    const checkbox = wrapper.find('input[type="checkbox"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('uses defaultValue when rememberLastSelection is false', async () => {
+    mockStore.getTaskConfigCache = () => ({
+      data: { determineRequirements: { defaultValue: true, rememberLastSelection: false } },
+      timestamp: Date.now()
+    })
+    localStorage.setItem(`lastDetermineRequirements_${testWorkspaceId}`, 'false')
+    vi.stubGlobal('fetch', createMockFetch({ rememberLastSelection: false }))
+
+    const wrapper = mount(TaskModal, {
+      global: {
+        stubs: {
+          Dropdown: DropdownStub,
+          LlmConfigEditor: LlmConfigEditorStub
+        }
+      }
+    })
+
+    const checkbox = wrapper.find('input[type="checkbox"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('persists checkbox value to localStorage when rememberLastSelection is true', async () => {
+    mockStore.getTaskConfigCache = () => ({
+      data: { determineRequirements: { defaultValue: true, rememberLastSelection: true } },
+      timestamp: Date.now()
+    })
+    vi.stubGlobal('fetch', createMockFetch({ rememberLastSelection: true }))
+
+    const wrapper = mount(TaskModal, {
+      global: {
+        stubs: {
+          Dropdown: DropdownStub,
+          LlmConfigEditor: LlmConfigEditorStub
+        }
+      }
+    })
+    await flushPromises()
+
+    const vm = wrapper.vm as any
+    vm.taskConfig = { determineRequirements: { defaultValue: true, rememberLastSelection: true } }
+    
+    const checkbox = wrapper.find('input[type="checkbox"]')
+    await checkbox.setValue(false)
+    await flushPromises()
+
+    expect(localStorage.getItem(`lastDetermineRequirements_${testWorkspaceId}`)).toBe('false')
+  })
+
+  it('does not overwrite user-modified checkbox when fetch completes', async () => {
+    mockStore.getTaskConfigCache = () => null
+    
+    let resolveTaskConfig: (value: any) => void
+    const taskConfigPromise = new Promise(resolve => { resolveTaskConfig = resolve })
+    
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('/task_config')) {
+        return taskConfigPromise.then(data => ({
+          ok: true,
+          json: () => Promise.resolve(data)
+        }))
+      }
+      if (url.includes('/branches')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockBranchesResponse)
+        })
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = mount(TaskModal, {
+      global: {
+        stubs: {
+          Dropdown: DropdownStub,
+          LlmConfigEditor: LlmConfigEditorStub
+        }
+      }
+    })
+
+    // User modifies checkbox before fetch completes
+    const checkbox = wrapper.find('input[type="checkbox"]')
+    await checkbox.setValue(false)
+    
+    // Now resolve the fetch
+    resolveTaskConfig!({
+      taskConfig: { determineRequirements: { defaultValue: true, rememberLastSelection: false } }
+    })
+    await flushPromises()
+
+    // Checkbox should still be false (user's choice)
+    expect((checkbox.element as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('applies cached config immediately without waiting for fetch', async () => {
+    mockStore.getTaskConfigCache = () => ({
+      data: { determineRequirements: { defaultValue: true, rememberLastSelection: true } },
+      timestamp: Date.now()
+    })
+    localStorage.setItem(`lastDetermineRequirements_${testWorkspaceId}`, 'false')
+
+    let resolveTaskConfig: (value: any) => void
+    const taskConfigPromise = new Promise(resolve => { resolveTaskConfig = resolve })
+    
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('/task_config')) {
+        return taskConfigPromise.then(data => ({
+          ok: true,
+          json: () => Promise.resolve(data)
+        }))
+      }
+      if (url.includes('/branches')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockBranchesResponse)
+        })
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = mount(TaskModal, {
+      global: {
+        stubs: {
+          Dropdown: DropdownStub,
+          LlmConfigEditor: LlmConfigEditorStub
+        }
+      }
+    })
+
+    // Checkbox should immediately reflect cached config + localStorage
+    const checkbox = wrapper.find('input[type="checkbox"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(false)
+
+    // Resolve fetch (shouldn't change anything since user hasn't modified)
+    resolveTaskConfig!({
+      taskConfig: { determineRequirements: { defaultValue: true, rememberLastSelection: true } }
+    })
+    await flushPromises()
+  })
+
+  it('defaults to true when no cache and no localStorage', async () => {
+    mockStore.getTaskConfigCache = () => null
+    vi.stubGlobal('fetch', createMockFetch())
+
+    const wrapper = mount(TaskModal, {
+      global: {
+        stubs: {
+          Dropdown: DropdownStub,
+          LlmConfigEditor: LlmConfigEditorStub
+        }
+      }
+    })
+
+    const checkbox = wrapper.find('input[type="checkbox"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
   })
 })

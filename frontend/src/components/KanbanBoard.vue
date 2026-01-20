@@ -27,8 +27,13 @@
         <button v-if="agentType === 'none' && groupedTasks[agentType]?.length > 0" class="new-task mini-button" @click="confirmArchiveFinished">📦</button>
       </h2>
       <TaskCard v-for="task in groupedTasks[agentType]" :key="task.id" :task="task" @deleted="refresh" @canceled="refresh" @archived="refresh" @updated="refresh" @error="error" />
-      <button class="new-task" v-if="agentType == 'human'" @click="addTask(agentType)">+ Draft Task</button>
-      <button class="new-task" v-if="agentType == 'llm'" @click="addTask(agentType)">+ Queue Task</button>
+      <button class="new-task" v-if="agentType == 'human'" @click="addTask(agentType)">
+        + Draft Task
+        <ShortcutHint :label="newTaskShortcutLabel" />
+      </button>
+      <button class="new-task" v-if="agentType == 'llm'" @click="addTask(agentType)">
+        + Queue Task
+      </button>
     </div>
   </div>
 </template>
@@ -38,6 +43,7 @@ import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import type { FullTask, AgentType, Task, TaskStatus } from '../lib/models'
 import TaskCard from './TaskCard.vue'
 import TaskModal from './TaskModal.vue'
+import ShortcutHint from './ShortcutHint.vue'
 import { store } from '../lib/store'
 
 const props = defineProps<{
@@ -141,20 +147,26 @@ const closeModal = () => {
   }
 }
 
+const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
+const newTaskShortcutLabel = 'T'
+
 const handleKeyDown = (event: KeyboardEvent) => {
-  const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
-  const isSearchShortcut = (isMac && event.metaKey && event.key === 'f') || 
-                          (!isMac && event.ctrlKey && event.key === 'f')
+  const modKey = isMac ? event.metaKey : event.ctrlKey
+  const isSearchShortcut = modKey && event.key === 'f'
+  const hasAnyModifier = event.metaKey || event.ctrlKey || event.altKey
+  const isNewTaskShortcut = !hasAnyModifier && (event.key === 't' || event.key === 'T')
   
-  if (!isSearchShortcut) {
+  if (!isSearchShortcut && !isNewTaskShortcut) {
     return
   }
 
-  const activeEl = document.activeElement as HTMLElement
-  const isEditableElement = activeEl && (
-    activeEl.tagName === 'INPUT' ||
-    activeEl.tagName === 'TEXTAREA' ||
-    activeEl.isContentEditable
+  const target = event.target as HTMLElement
+  const isEditableElement = target && (
+    target.tagName === 'INPUT' ||
+    target.tagName === 'TEXTAREA' ||
+    target.tagName === 'SELECT' ||
+    target.isContentEditable ||
+    target.getAttribute('role') === 'textbox'
   )
 
   if (isEditableElement || isModalOpen.value) {
@@ -162,10 +174,15 @@ const handleKeyDown = (event: KeyboardEvent) => {
   }
 
   event.preventDefault()
-  isSearchVisible.value = true
-  setTimeout(() => {
-    searchInputRef.value?.focus()
-  }, 0)
+  
+  if (isSearchShortcut) {
+    isSearchVisible.value = true
+    setTimeout(() => {
+      searchInputRef.value?.focus()
+    }, 0)
+  } else if (isNewTaskShortcut) {
+    addTask('human')
+  }
 }
 
 const handleEscape = (event: KeyboardEvent) => {
@@ -269,7 +286,9 @@ h2 {
   font-family: "JetBrains Mono", monospace;
   margin-top: calc(var(--kanban-gap) / 2);
   padding: calc(5px + var(--task-pad) / 2) calc(var(--task-pad) / 2);
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-size: 1.0rem;
   line-height: 1.0;
   background: transparent;

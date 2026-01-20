@@ -196,6 +196,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "gradle build"},
 			{Pattern: "gradle check"},
 			// Other common tools
+			{Pattern: "mkdir"},
 			{Pattern: "lima"},
 			{Pattern: "jq"},
 			{Pattern: "yq"},
@@ -335,6 +336,31 @@ func MergeCommandPermissions(configs ...CommandPermissionConfig) CommandPermissi
 
 // regexMetaChars contains characters that indicate a pattern should be treated as regex
 const regexMetaChars = `\.*+?[](){}|^$`
+
+// envVarPrefixRegex matches environment variable assignments at the start of a command
+// e.g., "VAR=value", "FOO_BAR=123", etc.
+var envVarPrefixRegex = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+)+`)
+
+// stripEnvVarPrefix removes leading environment variable assignments from a command.
+// For example, "FOO=bar BAZ=qux go test" becomes "go test".
+func stripEnvVarPrefix(command string) string {
+	return envVarPrefixRegex.ReplaceAllString(command, "")
+}
+
+// envVarRefRegex matches actual environment variable references like $VAR, ${VAR},
+// but not regex anchors like $ at end of line. Also matches escaped versions
+// like \$HOME or \$\{HOME\} that appear in regex patterns.
+var envVarRefRegex = regexp.MustCompile(`\\?\$[A-Za-z_]|\\?\$\\?\{`)
+
+// envVarAssignRegex matches environment variable assignments like VAR=value at the
+// start of a pattern (possibly after regex anchor ^)
+var envVarAssignRegex = regexp.MustCompile(`^(\^|\\^)?[A-Za-z_][A-Za-z0-9_]*=`)
+
+// patternContainsEnvVar returns true if the pattern contains env var references
+// (like $HOME, ${HOME}) or env var assignments (like FOO=bar at the start).
+func patternContainsEnvVar(pattern string) bool {
+	return envVarRefRegex.MatchString(pattern) || envVarAssignRegex.MatchString(pattern)
+}
 
 // matchPattern attempts to match a pattern against a command.
 // It first tries an exact prefix match. If that fails and the pattern contains
@@ -552,6 +578,15 @@ func extractAbsolutePaths(s string) []string {
 	// Look for absolute paths starting with /
 	for i := 0; i < len(s); i++ {
 		if s[i] == '/' {
+			// Paths following command substitution $(...) are absolute at runtime
+			// e.g., $(go env GOPATH)/pkg or $(pwd)/subdir
+			if i > 0 && s[i-1] == ')' && isCommandSubstitution(s, i-1) {
+				path := extractPathFrom(s, i)
+				if len(path) > 1 {
+					paths = append(paths, path)
+				}
+				continue
+			}
 			// Check if this is the start of an absolute path
 			// It's absolute if it's at the start OR preceded by = or :
 			if i == 0 || s[i-1] == '=' || s[i-1] == ':' {
@@ -569,6 +604,31 @@ func extractAbsolutePaths(s string) []string {
 	}
 
 	return paths
+}
+
+// isCommandSubstitution checks if the closing paren at position closeParenIdx
+// is part of a $(...) command substitution.
+func isCommandSubstitution(s string, closeParenIdx int) bool {
+	if closeParenIdx < 2 || s[closeParenIdx] != ')' {
+		return false
+	}
+	// Find the matching opening paren, tracking nesting
+	depth := 1
+	for i := closeParenIdx - 1; i >= 0; i-- {
+		if s[i] == ')' {
+			depth++
+		} else if s[i] == '(' {
+			depth--
+			if depth == 0 {
+				// Found matching open paren, check if preceded by $
+				if i > 0 && s[i-1] == '$' {
+					return true
+				}
+				return false
+			}
+		}
+	}
+	return false
 }
 
 // looksLikeRegex checks if a string looks like a regex pattern (e.g., /pattern/)
@@ -659,13 +719,14 @@ func looksLikeCode(s string) bool {
 }
 
 // parseCommandForPaths splits a command into parts for path detection,
-// handling quotes and escapes.
+// handling quotes, escapes, and command substitutions.
 func parseCommandForPaths(cmd string) []string {
 	var parts []string
 	var current strings.Builder
 	inSingleQuote := false
 	inDoubleQuote := false
 	escaped := false
+	parenDepth := 0 // Track depth inside $(...) command substitutions
 
 	for i := 0; i < len(cmd); i++ {
 		c := cmd[i]
@@ -691,7 +752,26 @@ func parseCommandForPaths(cmd string) []string {
 			continue
 		}
 
-		// Split on whitespace and common shell operators
+		// Track $(...) command substitutions to avoid splitting inside them
+		if !inSingleQuote && c == '$' && i+1 < len(cmd) && cmd[i+1] == '(' {
+			parenDepth++
+			current.WriteByte(c)
+			current.WriteByte('(')
+			i++
+			continue
+		}
+
+		if !inSingleQuote && parenDepth > 0 {
+			if c == '(' {
+				parenDepth++
+			} else if c == ')' {
+				parenDepth--
+			}
+			current.WriteByte(c)
+			continue
+		}
+
+		// Split on whitespace and shell operators
 		if !inSingleQuote && !inDoubleQuote && (c == ' ' || c == '\t' || c == ';' || c == '|' || c == '&' || c == '>' || c == '<') {
 			if current.Len() > 0 {
 				parts = append(parts, current.String())
@@ -710,13 +790,39 @@ func parseCommandForPaths(cmd string) []string {
 	return parts
 }
 
+// EvaluatePermissionOptions controls behavior of permission evaluation functions.
+type EvaluatePermissionOptions struct {
+	// StripEnvVarPrefix controls whether leading env var assignments are stripped
+	// from commands before matching against patterns that don't reference env vars.
+	StripEnvVarPrefix bool
+}
+
 // EvaluateCommandPermission evaluates a single command against the permission config.
 // It checks deny patterns first, then require-approval, then auto-approve.
 // Returns the permission result and any associated message.
+// This version does NOT strip env var prefixes for backward compatibility.
 func EvaluateCommandPermission(config CommandPermissionConfig, command string) (PermissionResult, string) {
+	return EvaluateCommandPermissionWithOptions(config, command, EvaluatePermissionOptions{
+		StripEnvVarPrefix: false,
+	})
+}
+
+// EvaluateCommandPermissionWithOptions evaluates a single command against the permission config
+// with configurable options.
+func EvaluateCommandPermissionWithOptions(config CommandPermissionConfig, command string, opts EvaluatePermissionOptions) (PermissionResult, string) {
+	strippedCommand := command
+	if opts.StripEnvVarPrefix {
+		strippedCommand = stripEnvVarPrefix(command)
+	}
+
 	// Check deny patterns first
 	for _, p := range config.Deny {
-		if matched, matches := matchPattern(p.Pattern, command); matched {
+		// Use original command if pattern contains env vars, otherwise use stripped
+		cmdToMatch := command
+		if !patternContainsEnvVar(p.Pattern) {
+			cmdToMatch = strippedCommand
+		}
+		if matched, matches := matchPattern(p.Pattern, cmdToMatch); matched {
 			msg := p.Message
 			if msg != "" && len(matches) > 0 {
 				msg = interpolateMessage(msg, matches)
@@ -727,19 +833,33 @@ func EvaluateCommandPermission(config CommandPermissionConfig, command string) (
 
 	// Check require-approval patterns
 	for _, p := range config.RequireApproval {
-		if matched, _ := matchPattern(p.Pattern, command); matched {
+		// Use original command if pattern contains env vars, otherwise use stripped
+		cmdToMatch := command
+		if !patternContainsEnvVar(p.Pattern) {
+			cmdToMatch = strippedCommand
+		}
+		if matched, _ := matchPattern(p.Pattern, cmdToMatch); matched {
 			return PermissionRequireApproval, ""
 		}
 	}
 
 	// Check auto-approve patterns
 	for _, p := range config.AutoApprove {
-		if matched, _ := matchPattern(p.Pattern, command); matched {
+		// Use original command if pattern contains env vars, otherwise use stripped
+		cmdToMatch := command
+		if !patternContainsEnvVar(p.Pattern) {
+			cmdToMatch = strippedCommand
+		}
+		if matched, matches := matchPattern(p.Pattern, cmdToMatch); matched {
 			// Even if auto-approved, require approval for commands with absolute paths
 			if containsAbsolutePath(command) {
 				return PermissionRequireApproval, ""
 			}
-			return PermissionAutoApprove, ""
+			msg := p.Message
+			if msg != "" && len(matches) > 0 {
+				msg = interpolateMessage(msg, matches)
+			}
+			return PermissionAutoApprove, msg
 		}
 	}
 
@@ -752,7 +872,15 @@ func EvaluateCommandPermission(config CommandPermissionConfig, command string) (
 // Returns PermissionDeny if ANY command is denied.
 // Returns PermissionRequireApproval if ANY command requires approval (and none denied).
 // Returns PermissionAutoApprove only if ALL commands are auto-approved.
+// This version does NOT strip env var prefixes for backward compatibility.
 func EvaluateScriptPermission(config CommandPermissionConfig, script string) (PermissionResult, string) {
+	return EvaluateScriptPermissionWithOptions(config, script, EvaluatePermissionOptions{
+		StripEnvVarPrefix: false,
+	})
+}
+
+// EvaluateScriptPermissionWithOptions evaluates a shell script with configurable options.
+func EvaluateScriptPermissionWithOptions(config CommandPermissionConfig, script string, opts EvaluatePermissionOptions) (PermissionResult, string) {
 	commands := permission.ExtractCommands(script)
 
 	// If no commands extracted, default to require approval
@@ -763,7 +891,7 @@ func EvaluateScriptPermission(config CommandPermissionConfig, script string) (Pe
 	hasRequireApproval := false
 
 	for _, cmd := range commands {
-		result, msg := EvaluateCommandPermission(config, cmd)
+		result, msg := EvaluateCommandPermissionWithOptions(config, cmd, opts)
 		switch result {
 		case PermissionDeny:
 			return PermissionDeny, msg

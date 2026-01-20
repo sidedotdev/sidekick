@@ -175,8 +175,17 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 	}
 
 	autoIterations := 2
-	if cfg, ok := repoConfig.AgentConfig[common.StepExecutionAndVerificationKey]; ok && cfg.AutoIterations > 0 {
+	if v := workflow.GetVersion(dCtx, "higher-default-step-auto-iterations", workflow.DefaultVersion, 1); v == 1 {
+		// the best models are better these days, so provide more opportunities
+		// for the model to complete the step before asking for help
+		autoIterations = 5
+	}
+	if cfg, ok := repoConfig.AgentConfig[common.StepKey]; ok && cfg.AutoIterations > 0 {
 		autoIterations = cfg.AutoIterations
+	} else if cfg, ok := repoConfig.AgentConfig[common.CodingAndVerificationKey]; ok && cfg.AutoIterations > 0 {
+		if v := workflow.GetVersion(dCtx, "step-auto-iterations-config-fallback", workflow.DefaultVersion, 1); v == 1 {
+			autoIterations = cfg.AutoIterations
+		}
 	}
 
 	// TODO decide how to set the dev step info based on the step type, eg

@@ -29,8 +29,12 @@ var runCommandTool = llm.Tool{
 // for any failures during approval.
 func checkCommandPermission(dCtx DevContext, command string, workingDir string) (proceed bool, message string, err error) {
 	enableCommandPermissions := workflow.GetVersion(dCtx, "command-permissions", workflow.DefaultVersion, 1) >= 1
+	stripEnvVarPrefix := workflow.GetVersion(dCtx, "command-permissions-strip-env-var", workflow.DefaultVersion, 1) >= 1
 	if enableCommandPermissions {
-		permResult, permMessage := common.EvaluateScriptPermission(dCtx.RepoConfig.CommandPermissions, command)
+		opts := common.EvaluatePermissionOptions{
+			StripEnvVarPrefix: stripEnvVarPrefix,
+		}
+		permResult, permMessage := common.EvaluateScriptPermissionWithOptions(dCtx.RepoConfig.CommandPermissions, command, opts)
 		workflow.GetLogger(dCtx).Debug("Command permission evaluation result", "command", command, "result", permResult, "message", permMessage)
 
 		switch permResult {
