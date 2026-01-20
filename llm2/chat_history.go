@@ -427,6 +427,21 @@ func (h *Llm2ChatHistory) SetMessages(messages []Message) {
 	}
 }
 
+// SetUnpersisted sets the list of message indices that need to be persisted.
+// This allows callers to narrow persistence to only changed messages.
+func (h *Llm2ChatHistory) SetUnpersisted(indices []int) {
+	h.unpersisted = indices
+}
+
+// SetHydratedWithMessages sets the messages and marks the history as hydrated.
+// Unlike SetMessages, this does not reset refs or mark messages as unpersisted.
+// This is useful when the caller has already set refs via SetRefs and wants to
+// restore the hydrated state with known messages.
+func (h *Llm2ChatHistory) SetHydratedWithMessages(messages []Message) {
+	h.messages = messages
+	h.hydrated = true
+}
+
 // ChatHistoryContainer wraps a ChatHistory for JSON serialization.
 // It handles detection of the underlying format during unmarshaling.
 type ChatHistoryContainer struct {
