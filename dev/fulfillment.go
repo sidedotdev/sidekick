@@ -73,29 +73,18 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 	chatHistory := getCriteriaFulfillmentPrompt(dCtx, dCtx.WorkspaceId, promptInfo)
 
 	modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
-	// Convert ChatHistoryContainer messages to []llm.ChatMessage for LLM call
-	messages := chatHistory.Messages()
-	chatMessages := make([]llm.ChatMessage, len(messages))
-	for i, msg := range messages {
-		chatMessages[i] = msg.(llm.ChatMessage)
-	}
-	params := llm.ToolChatParams{Messages: chatMessages, ModelConfig: modelConfig}
 
 	var fulfillment CriteriaFulfillment
 	attempts := 0
 	for {
 		// TODO /gen test this, assert it calls the right tool via mock of chat stream method
 		actionCtx := dCtx.ExecContext.NewActionContext("check_criteria_fulfillment")
-		chatResponse, err := persisted_ai.ForceToolCall(actionCtx, dCtx.LLMConfig, &params, &determineCriteriaFulfillmentTool)
-		// Sync any new messages back to chatHistory
-		for i := len(chatMessages); i < len(params.Messages); i++ {
-			chatHistory.Append(params.Messages[i])
-		}
-		chatMessages = params.Messages
+		response, err := persisted_ai.ForceToolCall(dCtx, actionCtx, modelConfig, chatHistory, &determineCriteriaFulfillmentTool)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to force tool call: %v", err)
 		}
-		toolCall := chatResponse.ToolCalls[0]
+		toolCalls := response.GetMessage().GetToolCalls()
+		toolCall := toolCalls[0]
 		jsonStr := toolCall.Arguments
 		err = json.Unmarshal([]byte(llm.RepairJson(jsonStr)), &fulfillment)
 		if err == nil {
@@ -108,9 +97,9 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 		}
 
 		// we have an error. get the llm to self-correct with the error message
-		newMessage := llm.ChatMessage{
+		newMessage := common.ChatMessage{
 			IsError:    true,
-			Role:       llm.ChatMessageRoleTool,
+			Role:       common.ChatMessageRoleTool,
 			Content:    err.Error(),
 			Name:       toolCall.Name,
 			ToolCallId: toolCall.Id,

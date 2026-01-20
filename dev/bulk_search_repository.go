@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sidekick/coding/tree_sitter"
+	"sidekick/common"
 	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/llm"
@@ -63,11 +64,12 @@ func BulkSearchRepository(ctx workflow.Context, envContainer env.EnvContainer, b
 
 func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *llm2.ChatHistoryContainer) ([]llm.ToolCall, error) {
 	actionCtx := dCtx.ExecContext.NewActionContext("generate.repo_search_query")
+	modelConfig := dCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
 	response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(
 		dCtx,
 		actionCtx,
 		flow_action.TrackOptions{},
-		dCtx.LLMConfig,
+		modelConfig,
 		chatHistory,
 		&bulkSearchRepositoryTool,
 	)
