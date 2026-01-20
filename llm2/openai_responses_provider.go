@@ -18,9 +18,13 @@ import (
 
 const defaultModel = "gpt-5-codex"
 
-type OpenAIResponsesProvider struct{}
+type OpenAIResponsesProvider struct {
+	BaseURL      string
+	DefaultModel string
+}
 
 func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
+	messages := options.Params.ChatHistory.Llm2Messages()
 	heartbeatCtx, cancelHeartbeat := context.WithCancel(context.Background())
 	defer cancelHeartbeat()
 	go func() {
@@ -46,14 +50,24 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 		return nil, err
 	}
 
-	client := openai.NewClient(option.WithAPIKey(token))
+	clientOptions := []option.RequestOption{
+		option.WithAPIKey(token),
+	}
+	if p.BaseURL != "" {
+		clientOptions = append(clientOptions, option.WithBaseURL(p.BaseURL))
+	}
+	client := openai.NewClient(clientOptions...)
 
 	model := options.Params.Model
 	if model == "" {
-		model = defaultModel
+		if p.DefaultModel != "" {
+			model = p.DefaultModel
+		} else {
+			model = defaultModel
+		}
 	}
 
-	inputItems, err := messageToResponsesInput(options.Params.Messages)
+	inputItems, err := messageToResponsesInput(messages)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build input: %w", err)
 	}

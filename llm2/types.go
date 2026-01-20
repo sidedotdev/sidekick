@@ -1,5 +1,11 @@
 package llm2
 
+import (
+	"sidekick/common"
+)
+
+// Role for the v2 message model. Provider-specific synonyms like "developer" should be
+
 // Role for the v2 message model. Provider-specific synonyms like "developer" should be
 // handled in adapters (map to RoleSystem on ingest/emit as needed).
 type Role string
@@ -98,6 +104,61 @@ type Message struct {
 	Content []ContentBlock `json:"content"`
 }
 
+// GetRole returns the role as a string.
+func (m Message) GetRole() string {
+	return string(m.Role)
+}
+
+// GetContentString concatenates text from all text content blocks.
+func (m Message) GetContentString() string {
+	var result string
+	for _, block := range m.Content {
+		if block.Type == ContentBlockTypeText {
+			result += block.Text
+		}
+	}
+	return result
+}
+
+// GetToolCalls returns tool calls from content blocks as common.ToolCall slice.
+func (m Message) GetToolCalls() []common.ToolCall {
+	var calls []common.ToolCall
+	for _, block := range m.Content {
+		if block.Type == ContentBlockTypeToolUse && block.ToolUse != nil {
+			calls = append(calls, common.ToolCall{
+				Id:        block.ToolUse.Id,
+				Name:      block.ToolUse.Name,
+				Arguments: block.ToolUse.Arguments,
+			})
+		}
+	}
+	return calls
+}
+
+// SetToolCalls replaces tool use content blocks with the provided tool calls.
+func (m *Message) SetToolCalls(toolCalls []common.ToolCall) {
+	// Remove existing tool use blocks
+	var newContent []ContentBlock
+	for _, block := range m.Content {
+		if block.Type != ContentBlockTypeToolUse {
+			newContent = append(newContent, block)
+		}
+	}
+	// Add new tool use blocks
+	for _, tc := range toolCalls {
+		newContent = append(newContent, ContentBlock{
+			Id:   tc.Id,
+			Type: ContentBlockTypeToolUse,
+			ToolUse: &ToolUseBlock{
+				Id:        tc.Id,
+				Name:      tc.Name,
+				Arguments: tc.Arguments,
+			},
+		})
+	}
+	m.Content = newContent
+}
+
 // Provider-agnostic response with metadata and a single synthesized output message.
 type MessageResponse struct {
 	Id           string  `json:"id"`
@@ -112,6 +173,31 @@ type MessageResponse struct {
 	// effort requested if the model does not support reasoning or uses a
 	// different effort enum/schema)
 	ReasoningEffort string `json:"reasoningEffort"`
+}
+
+// GetMessage returns the Output message as a common.Message interface.
+func (r MessageResponse) GetMessage() common.Message {
+	return &r.Output
+}
+
+// GetStopReason returns the stop reason.
+func (r MessageResponse) GetStopReason() string {
+	return r.StopReason
+}
+
+// GetId returns the response ID.
+func (r MessageResponse) GetId() string {
+	return r.Id
+}
+
+// GetInputTokens returns the number of input tokens used.
+func (r MessageResponse) GetInputTokens() int {
+	return r.Usage.InputTokens
+}
+
+// GetOutputTokens returns the number of output tokens used.
+func (r MessageResponse) GetOutputTokens() int {
+	return r.Usage.OutputTokens
 }
 
 // EventType enumerates provider-agnostic streaming event kinds for content blocks.

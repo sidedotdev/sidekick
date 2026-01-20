@@ -14,6 +14,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func newTestChatHistoryWithMessages(messages []Message) *ChatHistoryContainer {
+	chatHistory := NewLlm2ChatHistory("test-flow", "test-workspace")
+	chatHistory.SetMessages(messages)
+	return &ChatHistoryContainer{History: chatHistory}
+}
+
 type getCurrentWeather struct {
 	Location string `json:"location"`
 	Unit     string `json:"unit" jsonschema:"enum=celsius,fahrenheit"`
@@ -24,19 +30,20 @@ func TestOpenAIResponsesProvider_Unauthorized(t *testing.T) {
 	mockSecretManager := &secret_manager.MockSecretManager{}
 	provider := OpenAIResponsesProvider{}
 
-	options := Options{
-		Params: Params{
-			Messages: []Message{
+	messages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
 				{
-					Role: RoleUser,
-					Content: []ContentBlock{
-						{
-							Type: ContentBlockTypeText,
-							Text: "Hello",
-						},
-					},
+					Type: ContentBlockTypeText,
+					Text: "Hello",
 				},
 			},
+		},
+	}
+
+	options := Options{
+		Params: Params{
 			ModelConfig: common.ModelConfig{
 				Provider: "openai",
 				Model:    "gpt-5-codex",
@@ -46,6 +53,8 @@ func TestOpenAIResponsesProvider_Unauthorized(t *testing.T) {
 			SecretManager: mockSecretManager,
 		},
 	}
+
+	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 
 	eventChan := make(chan Event, 10)
 	defer close(eventChan)
@@ -71,22 +80,23 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 		Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&getCurrentWeather{}),
 	}
 
+	messages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeText,
+					Text: "First say hi. After that, then look up what the weather is like in New York in celsius, then describe it in words.",
+				},
+			},
+		},
+	}
+
 	options := Options{
 		Params: Params{
 			ModelConfig: common.ModelConfig{
 				Provider: "openai",
 				Model:    "gpt-4.1-nano-2025-04-14",
-			},
-			Messages: []Message{
-				{
-					Role: RoleUser,
-					Content: []ContentBlock{
-						{
-							Type: ContentBlockTypeText,
-							Text: "First say hi. After that, then look up what the weather is like in New York in celsius, then describe it in words.",
-						},
-					},
-				},
 			},
 			Temperature: utils.Ptr(float32(0)),
 			Tools:       []*common.Tool{mockTool},
@@ -117,6 +127,8 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 			}
 		}
 	}()
+
+	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 
 	response, err := provider.Stream(ctx, options, eventChan)
 	close(eventChan)
@@ -167,11 +179,11 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 	t.Logf("StopReason: %s", response.StopReason)
 
 	t.Run("MultiTurn", func(t *testing.T) {
-		options.Params.Messages = append(options.Params.Messages, response.Output)
+		messages = append(messages, response.Output)
 
 		for _, block := range response.Output.Content {
 			if block.Type == ContentBlockTypeToolUse && block.ToolUse != nil {
-				options.Params.Messages = append(options.Params.Messages, Message{
+				messages = append(messages, Message{
 					Role: RoleUser,
 					Content: []ContentBlock{
 						{
@@ -196,6 +208,7 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 			}
 		}()
 
+		options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 		response, err := provider.Stream(ctx, options, eventChan)
 		close(eventChan)
 
@@ -244,23 +257,24 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 	ctx := context.Background()
 	provider := OpenAIResponsesProvider{}
 
+	messages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeText,
+					Text: "Hi",
+				},
+			},
+		},
+	}
+
 	options := Options{
 		Params: Params{
 			ModelConfig: common.ModelConfig{
 				Provider:        "openai",
 				Model:           "gpt-5-nano",
 				ReasoningEffort: "minimal",
-			},
-			Messages: []Message{
-				{
-					Role: RoleUser,
-					Content: []ContentBlock{
-						{
-							Type: ContentBlockTypeText,
-							Text: "Hi",
-						},
-					},
-				},
 			},
 		},
 		Secrets: secret_manager.SecretManagerContainer{
@@ -284,6 +298,8 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 			}
 		}
 	}()
+
+	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 
 	response, err := provider.Stream(ctx, options, eventChan)
 	close(eventChan)
@@ -330,9 +346,9 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 	t.Logf("StopReason: %s", response.StopReason)
 
 	t.Run("MultiTurnEncryptedReasoning", func(t *testing.T) {
-		options.Params.Messages = append(options.Params.Messages, response.Output)
+		messages = append(messages, response.Output)
 
-		options.Params.Messages = append(options.Params.Messages, Message{
+		messages = append(messages, Message{
 			Role: RoleUser,
 			Content: []ContentBlock{
 				{
@@ -348,6 +364,7 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 			}
 		}()
 
+		options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 		response, err := provider.Stream(ctx, options, eventChan)
 		close(eventChan)
 

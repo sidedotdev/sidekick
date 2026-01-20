@@ -51,6 +51,7 @@ type FlowActionStorage interface {
 	PersistFlowAction(ctx context.Context, flowAction FlowAction) error
 	GetFlowActions(ctx context.Context, workspaceId, flowId string) ([]FlowAction, error)
 	GetFlowAction(ctx context.Context, workspaceId, flowActionId string) (FlowAction, error)
+	DeleteFlowActionsForFlow(ctx context.Context, workspaceId, flowId string) error
 }
 
 // FlowActionStreamer defines the interface for flow-related stream operations
