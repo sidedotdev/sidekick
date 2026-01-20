@@ -965,9 +965,9 @@ func TestGetTaskConfigHandler(t *testing.T) {
 			expectedRememberLastSelection: false,
 		},
 		{
-			name:        "returns rememberLastSelection true when no config exists",
-			workspaceId: "ws_test3",
-			workspaceConfig: nil,
+			name:                          "returns rememberLastSelection true when no config exists",
+			workspaceId:                   "ws_test3",
+			workspaceConfig:               nil,
 			expectedStatus:                http.StatusOK,
 			expectedRememberLastSelection: true,
 		},
