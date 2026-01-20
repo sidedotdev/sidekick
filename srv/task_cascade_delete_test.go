@@ -159,7 +159,7 @@ func (s *CascadeDeleteTaskTestSuite) seedTestData() (domain.Task, []domain.Flow,
 			},
 		}
 		chatHistory.Append(msg)
-		s.Require().NoError(chatHistory.Persist(ctx, s.storage))
+		s.Require().NoError(chatHistory.Persist(ctx, s.storage, llm2.NewKsuidGenerator()))
 
 		// Extract block IDs from the marshaled chat history
 		data, err := chatHistory.MarshalJSON()

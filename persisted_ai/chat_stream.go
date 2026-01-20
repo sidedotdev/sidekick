@@ -7,6 +7,7 @@ import (
 	"sidekick/common"
 	"sidekick/llm"
 	"sidekick/llm2"
+	"sidekick/utils"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -74,7 +75,8 @@ func executeChatStreamV1(
 
 	// have to ensure we persist before we call stream
 	workflowSafeStorage := &common.WorkflowSafeKVStorage{Ctx: ctx}
-	if err := chatHistory.Persist(context.Background(), workflowSafeStorage); err != nil {
+	gen := func() string { return utils.KsuidSideEffect(ctx) }
+	if err := chatHistory.Persist(context.Background(), workflowSafeStorage, gen); err != nil {
 		return nil, fmt.Errorf("failed to persist chat history: %w", err)
 	}
 

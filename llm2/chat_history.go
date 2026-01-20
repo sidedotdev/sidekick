@@ -10,6 +10,18 @@ import (
 	"github.com/segmentio/ksuid"
 )
 
+// BlockIdGenerator is a function that generates unique block IDs.
+// For workflow code, this should be backed by a deterministic side effect.
+// For non-workflow code, this can use ksuid.New().String() directly.
+type BlockIdGenerator func() string
+
+// NewKsuidGenerator returns a BlockIdGenerator that uses ksuid.New().
+func NewKsuidGenerator() BlockIdGenerator {
+	return func() string {
+		return ksuid.New().String()
+	}
+}
+
 // MessageRef stores a reference to a message's content blocks in KV storage.
 type MessageRef struct {
 	FlowId   string   `json:"flowId"`
@@ -26,7 +38,7 @@ type ChatHistory interface {
 	Messages() []common.Message
 	IsHydrated() bool
 	Hydrate(ctx context.Context, storage common.KeyValueStorage) error
-	Persist(ctx context.Context, storage common.KeyValueStorage) error
+	Persist(ctx context.Context, storage common.KeyValueStorage, gen BlockIdGenerator) error
 }
 
 // LegacyChatHistory wraps a slice of ChatMessage to implement ChatHistory.
@@ -86,7 +98,7 @@ func (h *LegacyChatHistory) Hydrate(ctx context.Context, storage common.KeyValue
 	return nil
 }
 
-func (h *LegacyChatHistory) Persist(ctx context.Context, storage common.KeyValueStorage) error {
+func (h *LegacyChatHistory) Persist(ctx context.Context, storage common.KeyValueStorage, gen BlockIdGenerator) error {
 	return nil
 }
 
@@ -293,7 +305,7 @@ func (h *Llm2ChatHistory) IsHydrated() bool {
 	return h.hydrated
 }
 
-func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueStorage) error {
+func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueStorage, gen BlockIdGenerator) error {
 	if !h.hydrated {
 		return fmt.Errorf("cannot persist non-hydrated Llm2ChatHistory")
 	}
@@ -321,7 +333,7 @@ func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueSt
 		msg := h.messages[idx]
 		blockIds := make([]string, len(msg.Content))
 		for j, block := range msg.Content {
-			blockId := fmt.Sprintf("%s:msg:%d:block:%s", h.flowId, idx, ksuid.New().String())
+			blockId := fmt.Sprintf("%s:msg:%s", h.flowId, gen())
 			blockIds[j] = blockId
 			values[blockId] = block
 			h.hydratedBlocks[blockId] = block
@@ -562,11 +574,11 @@ func (c *ChatHistoryContainer) Hydrate(ctx context.Context, storage common.KeyVa
 }
 
 // Persist persists the underlying chat history to storage.
-func (c *ChatHistoryContainer) Persist(ctx context.Context, storage common.KeyValueStorage) error {
+func (c *ChatHistoryContainer) Persist(ctx context.Context, storage common.KeyValueStorage, gen BlockIdGenerator) error {
 	if c.History == nil {
 		return nil
 	}
-	return c.History.Persist(ctx, storage)
+	return c.History.Persist(ctx, storage, gen)
 }
 
 // IsHydrated returns whether the underlying chat history is hydrated.

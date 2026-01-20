@@ -3,6 +3,8 @@ package llm2
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"sidekick/common"
@@ -151,7 +153,7 @@ func TestLlm2ChatHistory_MarshalJSON_ProducesWrapperFormat(t *testing.T) {
 
 	// Persist to generate refs
 	storage := newMockKeyValueStorage()
-	err := h.Persist(context.Background(), storage)
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
 	require.NoError(t, err)
 
 	// Marshal should produce wrapper format JSON
@@ -301,7 +303,7 @@ func TestLlm2ChatHistory_Persist_StoresContentBlocks(t *testing.T) {
 	})
 
 	storage := newMockKeyValueStorage()
-	err := h.Persist(context.Background(), storage)
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
 	require.NoError(t, err)
 
 	// Verify refs were updated
@@ -324,7 +326,7 @@ func TestLlm2ChatHistory_Persist_NothingToPersist(t *testing.T) {
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
 
 	storage := newMockKeyValueStorage()
-	err := h.Persist(context.Background(), storage)
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
 	require.NoError(t, err)
 
 	assert.Empty(t, storage.data)
@@ -335,7 +337,7 @@ func TestLlm2ChatHistory_Persist_NotHydrated(t *testing.T) {
 		hydrated: false,
 	}
 
-	err := h.Persist(context.Background(), newMockKeyValueStorage())
+	err := h.Persist(context.Background(), newMockKeyValueStorage(), NewKsuidGenerator())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "non-hydrated")
 }
@@ -364,7 +366,7 @@ func TestLlm2ChatHistory_RoundTrip(t *testing.T) {
 
 	// Persist to storage
 	storage := newMockKeyValueStorage()
-	err := original.Persist(context.Background(), storage)
+	err := original.Persist(context.Background(), storage, NewKsuidGenerator())
 	require.NoError(t, err)
 
 	// Marshal to JSON
@@ -423,7 +425,7 @@ func TestLlm2ChatHistory_RoundTrip_WithToolCalls(t *testing.T) {
 	})
 
 	storage := newMockKeyValueStorage()
-	err := original.Persist(context.Background(), storage)
+	err := original.Persist(context.Background(), storage, NewKsuidGenerator())
 	require.NoError(t, err)
 
 	data, err := original.MarshalJSON()
@@ -731,7 +733,7 @@ func TestLlm2ChatHistory_Refs_ReturnsDefensiveCopy(t *testing.T) {
 	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
 
 	storage := newMockKeyValueStorage()
-	err := h.Persist(context.Background(), storage)
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
 	require.NoError(t, err)
 
 	refs := h.Refs()
@@ -769,7 +771,7 @@ func TestLlm2ChatHistory_SetRefs_CachesExistingBlocks(t *testing.T) {
 	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Second message"}}})
 
 	storage := newMockKeyValueStorage()
-	err := h.Persist(context.Background(), storage)
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
 	require.NoError(t, err)
 
 	originalRefs := h.Refs()
@@ -857,7 +859,7 @@ func TestLlm2ChatHistory_Persist_PopulatesCache(t *testing.T) {
 	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
 
 	storage := newMockKeyValueStorage()
-	err := h.Persist(context.Background(), storage)
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
 	require.NoError(t, err)
 
 	refs := h.Refs()
@@ -891,4 +893,212 @@ type trackingMockStorage struct {
 func (t *trackingMockStorage) MGet(ctx context.Context, workspaceId string, keys []string) ([][]byte, error) {
 	t.fetchedKeys = append(t.fetchedKeys, keys...)
 	return t.mockKeyValueStorage.MGet(ctx, workspaceId, keys)
+}
+
+func TestLlm2ChatHistory_Persist_UsesDeterministicGenerator(t *testing.T) {
+	t.Parallel()
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
+	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "World"}}})
+
+	storage := newMockKeyValueStorage()
+
+	// Use a deterministic generator that yields predictable IDs
+	idCounter := 0
+	deterministicGen := func() string {
+		idCounter++
+		return fmt.Sprintf("id-%d", idCounter)
+	}
+
+	err := h.Persist(context.Background(), storage, deterministicGen)
+	require.NoError(t, err)
+
+	refs := h.Refs()
+	require.Len(t, refs, 2)
+
+	// Verify exact block IDs based on deterministic generator
+	assert.Equal(t, "flow-123:msg:id-1", refs[0].BlockIds[0])
+	assert.Equal(t, "flow-123:msg:id-2", refs[1].BlockIds[0])
+
+	// Verify the keys exist in storage
+	_, ok := storage.data["flow-123:msg:id-1"]
+	assert.True(t, ok, "expected block id-1 to exist in storage")
+	_, ok = storage.data["flow-123:msg:id-2"]
+	assert.True(t, ok, "expected block id-2 to exist in storage")
+}
+
+func TestLlm2ChatHistory_Persist_BlockIdsDoNotContainMessageIndex(t *testing.T) {
+	t.Parallel()
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "First"}}})
+	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Second"}}})
+	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Third"}}})
+
+	storage := newMockKeyValueStorage()
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	refs := h.Refs()
+	for idx, ref := range refs {
+		for _, blockId := range ref.BlockIds {
+			// Block IDs should NOT contain patterns like ":msg:0:", ":msg:1:", etc.
+			assert.NotContains(t, blockId, fmt.Sprintf(":msg:%d:", idx),
+				"block ID should not contain message index")
+			// Should contain the flow-namespaced prefix
+			assert.True(t, strings.HasPrefix(blockId, "flow-123:msg:"),
+				"block ID should have flow-namespaced prefix")
+		}
+	}
+}
+
+func TestLlm2ChatHistory_Persist_ModifiedMessageGetsNewBlockIds(t *testing.T) {
+	t.Parallel()
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Original"}}})
+
+	storage := newMockKeyValueStorage()
+
+	// First persist
+	idCounter := 0
+	gen := func() string {
+		idCounter++
+		return fmt.Sprintf("id-%d", idCounter)
+	}
+	err := h.Persist(context.Background(), storage, gen)
+	require.NoError(t, err)
+
+	originalRefs := h.Refs()
+	require.Len(t, originalRefs, 1)
+	originalBlockId := originalRefs[0].BlockIds[0]
+	assert.Equal(t, "flow-123:msg:id-1", originalBlockId)
+
+	// Modify the message via Set
+	h.Set(0, &Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Modified"}}})
+
+	// Second persist - should generate new block IDs
+	err = h.Persist(context.Background(), storage, gen)
+	require.NoError(t, err)
+
+	newRefs := h.Refs()
+	require.Len(t, newRefs, 1)
+	newBlockId := newRefs[0].BlockIds[0]
+
+	// New block ID should be different from original
+	assert.NotEqual(t, originalBlockId, newBlockId)
+	assert.Equal(t, "flow-123:msg:id-2", newBlockId)
+
+	// Both old and new blocks should exist in storage (orphaned blocks cleaned up later)
+	_, oldExists := storage.data[originalBlockId]
+	assert.True(t, oldExists, "original block should still exist")
+	_, newExists := storage.data[newBlockId]
+	assert.True(t, newExists, "new block should exist")
+
+	// New block should have the modified content
+	var block ContentBlock
+	json.Unmarshal(storage.data[newBlockId], &block)
+	assert.Equal(t, "Modified", block.Text)
+}
+
+func TestLlm2ChatHistory_Persist_SetFlowIdUsesNewNamespace(t *testing.T) {
+	t.Parallel()
+	h := NewLlm2ChatHistory("old-flow", "workspace-456")
+	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
+
+	storage := newMockKeyValueStorage()
+
+	idCounter := 0
+	gen := func() string {
+		idCounter++
+		return fmt.Sprintf("id-%d", idCounter)
+	}
+
+	// First persist with old flow ID
+	err := h.Persist(context.Background(), storage, gen)
+	require.NoError(t, err)
+
+	originalRefs := h.Refs()
+	assert.Equal(t, "old-flow:msg:id-1", originalRefs[0].BlockIds[0])
+
+	// Change flow ID and modify message
+	h.SetFlowId("new-flow")
+	h.Set(0, &Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Updated"}}})
+
+	// Second persist should use new flow namespace
+	err = h.Persist(context.Background(), storage, gen)
+	require.NoError(t, err)
+
+	newRefs := h.Refs()
+	assert.Equal(t, "new-flow", newRefs[0].FlowId)
+	assert.True(t, strings.HasPrefix(newRefs[0].BlockIds[0], "new-flow:msg:"),
+		"new block ID should use new flow namespace")
+}
+
+func TestLlm2ChatHistory_Persist_RefsConsistentWithMessages(t *testing.T) {
+	t.Parallel()
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{
+		{Type: ContentBlockTypeText, Text: "Block1"},
+		{Type: ContentBlockTypeText, Text: "Block2"},
+	}})
+	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{
+		{Type: ContentBlockTypeText, Text: "Response"},
+	}})
+
+	storage := newMockKeyValueStorage()
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	refs := h.Refs()
+	messages := h.Llm2Messages()
+
+	require.Len(t, refs, len(messages))
+
+	for idx, ref := range refs {
+		msg := messages[idx]
+		// Role should match
+		assert.Equal(t, string(msg.Role), ref.Role)
+		// FlowId should match
+		assert.Equal(t, "flow-123", ref.FlowId)
+		// Number of block IDs should match number of content blocks
+		assert.Equal(t, len(msg.Content), len(ref.BlockIds))
+		// All block IDs should be non-empty
+		for _, blockId := range ref.BlockIds {
+			assert.NotEmpty(t, blockId)
+		}
+	}
+}
+
+func TestLlm2ChatHistory_Persist_StoredBlocksDeserializeCorrectly(t *testing.T) {
+	t.Parallel()
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	originalBlock := ContentBlock{
+		Type:         ContentBlockTypeText,
+		Text:         "Hello World",
+		CacheControl: "ephemeral",
+	}
+	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{originalBlock}})
+
+	storage := newMockKeyValueStorage()
+
+	idCounter := 0
+	gen := func() string {
+		idCounter++
+		return fmt.Sprintf("id-%d", idCounter)
+	}
+
+	err := h.Persist(context.Background(), storage, gen)
+	require.NoError(t, err)
+
+	refs := h.Refs()
+	blockId := refs[0].BlockIds[0]
+
+	// Retrieve and deserialize the stored block
+	storedData := storage.data[blockId]
+	var retrievedBlock ContentBlock
+	err = json.Unmarshal(storedData, &retrievedBlock)
+	require.NoError(t, err)
+
+	assert.Equal(t, originalBlock.Type, retrievedBlock.Type)
+	assert.Equal(t, originalBlock.Text, retrievedBlock.Text)
+	assert.Equal(t, originalBlock.CacheControl, retrievedBlock.CacheControl)
 }

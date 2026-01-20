@@ -80,7 +80,7 @@ func TestManageV3_HydratesHistory(t *testing.T) {
 		Role:    llm2.RoleUser,
 		Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}},
 	})
-	err := original.Persist(context.Background(), storage)
+	err := original.Persist(context.Background(), storage, llm2.NewKsuidGenerator())
 	require.NoError(t, err)
 
 	data, err := original.MarshalJSON()
@@ -133,7 +133,7 @@ func TestManageV3_HydrationError(t *testing.T) {
 	})
 
 	initialStorage := newMockKVStorage()
-	err := original.Persist(context.Background(), initialStorage)
+	err := original.Persist(context.Background(), initialStorage, llm2.NewKsuidGenerator())
 	require.NoError(t, err)
 
 	data, err := original.MarshalJSON()
@@ -215,7 +215,7 @@ func TestManageV3_PreservesRefsForUnchangedMessages(t *testing.T) {
 	})
 
 	// Persist to get initial refs
-	err := history.Persist(context.Background(), storage)
+	err := history.Persist(context.Background(), storage, llm2.NewKsuidGenerator())
 	require.NoError(t, err)
 	originalRefs := history.Refs()
 
@@ -264,7 +264,7 @@ func TestManageV3_ChangesRefsForMarkerOnlyChanges(t *testing.T) {
 	})
 
 	// Persist to get initial refs
-	err := history.Persist(context.Background(), storage)
+	err := history.Persist(context.Background(), storage, llm2.NewKsuidGenerator())
 	require.NoError(t, err)
 	originalRefs := history.Refs()
 
@@ -423,7 +423,7 @@ func TestManageV3_DroppingOlderMessagesPreservesRetainedRefs(t *testing.T) {
 	})
 
 	// Persist to get initial refs
-	err := history.Persist(context.Background(), storage)
+	err := history.Persist(context.Background(), storage, llm2.NewKsuidGenerator())
 	require.NoError(t, err)
 	originalRefs := history.Refs()
 

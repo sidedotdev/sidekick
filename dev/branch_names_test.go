@@ -70,6 +70,10 @@ func (s *BranchNameTestSuite) SetupTest() {
 	// Use version 1 for chat-history-llm2 (Llm2ChatHistory path) - called multiple times
 	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
 
+	// Mock MSet for chat history persistence
+	var ka *common.KVActivities
+	s.env.OnActivity(ka.MSet, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
 	// Mock git command to simulate existing branches
 	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
 		ExitStatus: 0,

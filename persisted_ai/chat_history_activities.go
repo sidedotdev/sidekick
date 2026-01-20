@@ -63,7 +63,7 @@ func (ca *ChatHistoryActivities) ManageV3(
 	// Narrow persistence to only changed messages
 	llm2History.SetUnpersisted(changedIndices)
 
-	if err := llm2History.Persist(ctx, ca.Storage); err != nil {
+	if err := llm2History.Persist(ctx, ca.Storage, llm2.NewKsuidGenerator()); err != nil {
 		return nil, fmt.Errorf("failed to persist chat history: %w", err)
 	}
 

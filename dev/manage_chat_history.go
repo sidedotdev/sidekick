@@ -9,6 +9,7 @@ import (
 	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
+	"sidekick/utils"
 	"slices"
 	"strings"
 
@@ -79,7 +80,8 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *llm2.ChatHistoryContai
 
 		// Must persist before managing chat history is possible
 		workflowSafeStorage := &common.WorkflowSafeKVStorage{Ctx: ctx}
-		if err := llm2History.Persist(context.Background(), workflowSafeStorage); err != nil {
+		gen := func() string { return utils.KsuidSideEffect(ctx) }
+		if err := llm2History.Persist(context.Background(), workflowSafeStorage, gen); err != nil {
 			wrapErr := fmt.Errorf("ManageChatHistory persist failed: %w", err)
 			workflow.GetLogger(ctx).Error("ManageChatHistory persist error", "error", wrapErr)
 			panic(wrapErr)
