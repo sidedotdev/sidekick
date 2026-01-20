@@ -89,7 +89,7 @@
             @click="startTask"
           >
             Start Task
-            <span class="shortcut-hint">{{ shortcutLabel }}</span>
+            <ShortcutHint :label="shortcutLabel" />
           </Button>
           <div class="save-indicator" :class="saveIndicatorClass">
             <span v-if="saveIndicatorClass === 'saving'">Saving...</span>
@@ -113,6 +113,7 @@ import SegmentedControl from './SegmentedControl.vue'
 import BranchSelector from './BranchSelector.vue'
 import LlmConfigEditor from './LlmConfigEditor.vue'
 import TrashIcon from './icons/TrashIcon.vue'
+import ShortcutHint from './ShortcutHint.vue'
 import { store } from '../lib/store'
 import { getModelSummary } from '../lib/llmPresets'
 import { loadPresets, savePresets, llmConfigsEqual, type ModelPreset } from '../lib/llmPresetStorage'
@@ -849,19 +850,6 @@ label {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-}
-
-.shortcut-hint {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  font-size: 0.6875rem;
-  line-height: 1;
-  opacity: 0.7;
-  padding: 0.1875rem 0.3125rem;
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: 0.25rem;
-  display: inline-flex;
-  align-items: center;
-  vertical-align: middle;
 }
 
 .save-indicator {
