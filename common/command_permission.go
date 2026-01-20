@@ -578,6 +578,15 @@ func extractAbsolutePaths(s string) []string {
 	// Look for absolute paths starting with /
 	for i := 0; i < len(s); i++ {
 		if s[i] == '/' {
+			// Paths following command substitution $(...) are absolute at runtime
+			// e.g., $(go env GOPATH)/pkg or $(pwd)/subdir
+			if i > 0 && s[i-1] == ')' && isCommandSubstitution(s, i-1) {
+				path := extractPathFrom(s, i)
+				if len(path) > 1 {
+					paths = append(paths, path)
+				}
+				continue
+			}
 			// Check if this is the start of an absolute path
 			// It's absolute if it's at the start OR preceded by = or :
 			if i == 0 || s[i-1] == '=' || s[i-1] == ':' {
@@ -595,6 +604,31 @@ func extractAbsolutePaths(s string) []string {
 	}
 
 	return paths
+}
+
+// isCommandSubstitution checks if the closing paren at position closeParenIdx
+// is part of a $(...) command substitution.
+func isCommandSubstitution(s string, closeParenIdx int) bool {
+	if closeParenIdx < 2 || s[closeParenIdx] != ')' {
+		return false
+	}
+	// Find the matching opening paren, tracking nesting
+	depth := 1
+	for i := closeParenIdx - 1; i >= 0; i-- {
+		if s[i] == ')' {
+			depth++
+		} else if s[i] == '(' {
+			depth--
+			if depth == 0 {
+				// Found matching open paren, check if preceded by $
+				if i > 0 && s[i-1] == '$' {
+					return true
+				}
+				return false
+			}
+		}
+	}
+	return false
 }
 
 // looksLikeRegex checks if a string looks like a regex pattern (e.g., /pattern/)
@@ -685,13 +719,14 @@ func looksLikeCode(s string) bool {
 }
 
 // parseCommandForPaths splits a command into parts for path detection,
-// handling quotes and escapes.
+// handling quotes, escapes, and command substitutions.
 func parseCommandForPaths(cmd string) []string {
 	var parts []string
 	var current strings.Builder
 	inSingleQuote := false
 	inDoubleQuote := false
 	escaped := false
+	parenDepth := 0 // Track depth inside $(...) command substitutions
 
 	for i := 0; i < len(cmd); i++ {
 		c := cmd[i]
@@ -717,7 +752,26 @@ func parseCommandForPaths(cmd string) []string {
 			continue
 		}
 
-		// Split on whitespace and common shell operators
+		// Track $(...) command substitutions to avoid splitting inside them
+		if !inSingleQuote && c == '$' && i+1 < len(cmd) && cmd[i+1] == '(' {
+			parenDepth++
+			current.WriteByte(c)
+			current.WriteByte('(')
+			i++
+			continue
+		}
+
+		if !inSingleQuote && parenDepth > 0 {
+			if c == '(' {
+				parenDepth++
+			} else if c == ')' {
+				parenDepth--
+			}
+			current.WriteByte(c)
+			continue
+		}
+
+		// Split on whitespace and shell operators
 		if !inSingleQuote && !inDoubleQuote && (c == ' ' || c == '\t' || c == ';' || c == '|' || c == '&' || c == '>' || c == '<') {
 			if current.Len() > 0 {
 				parts = append(parts, current.String())
