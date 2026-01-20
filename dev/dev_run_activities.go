@@ -206,7 +206,7 @@ func ClearDevRunEntry(gs *flow_action.GlobalState) {
 // If an ExistingInstance is provided and the process is still alive, it reconnects
 // to the existing run instead of starting a new one.
 func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInput) (StartDevRunOutput, error) {
-	cmdConfig, ok := input.DevRunConfig.Commands[input.CommandId]
+	cmdConfig, ok := input.DevRunConfig[input.CommandId]
 	if !ok {
 		return StartDevRunOutput{}, fmt.Errorf("command ID %q not found in dev run config", input.CommandId)
 	}
@@ -249,19 +249,19 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 
 	// Determine working directory
 	workingDir := input.Context.WorktreeDir
-	if cmdConfig.Start.WorkingDir != "" {
-		if filepath.IsAbs(cmdConfig.Start.WorkingDir) {
-			workingDir = cmdConfig.Start.WorkingDir
+	if cmdConfig.WorkingDir != "" {
+		if filepath.IsAbs(cmdConfig.WorkingDir) {
+			workingDir = cmdConfig.WorkingDir
 		} else {
 			// Resolve relative paths against the worktree directory
-			workingDir = filepath.Join(input.Context.WorktreeDir, cmdConfig.Start.WorkingDir)
+			workingDir = filepath.Join(input.Context.WorktreeDir, cmdConfig.WorkingDir)
 		}
 	}
 
-	proc, err := a.startCommand(ctx, input.Context, cmdConfig.Start.Command, workingDir, envVars, 0)
+	proc, err := a.startCommand(ctx, input.Context, cmdConfig.Command, workingDir, envVars, 0)
 	if err != nil {
 		// Clean up any processes we started with proper timeout escalation
-		timeout := input.DevRunConfig.StopTimeoutSeconds
+		timeout := cmdConfig.StopTimeoutSeconds
 		if timeout <= 0 {
 			timeout = defaultStopTimeoutSeconds
 		}
@@ -293,7 +293,7 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 
 		if signalStr != "" || (exitCode != nil && *exitCode != 0) {
 			// Clean up remaining processes
-			timeout := input.DevRunConfig.StopTimeoutSeconds
+			timeout := cmdConfig.StopTimeoutSeconds
 			if timeout <= 0 {
 				timeout = defaultStopTimeoutSeconds
 			}
@@ -489,33 +489,12 @@ func (a *DevRunActivities) StopDevRun(ctx context.Context, input StopDevRunInput
 		return StopDevRunOutput{Stopped: true}, nil
 	}
 
-	timeout := input.DevRunConfig.StopTimeoutSeconds
-	if timeout <= 0 {
-		timeout = defaultStopTimeoutSeconds
+	timeout := defaultStopTimeoutSeconds
+	if cmdConfig, ok := input.DevRunConfig[input.CommandId]; ok && cmdConfig.StopTimeoutSeconds > 0 {
+		timeout = cmdConfig.StopTimeoutSeconds
 	}
 
 	input.Context.DevRunId = instance.DevRunId
-
-	// Execute stop command if configured for this command ID
-	if cmdConfig, ok := input.DevRunConfig.Commands[input.CommandId]; ok && cmdConfig.Stop != nil {
-		envVars := buildDevRunEnvVars(input.Context)
-		workingDir := input.Context.WorktreeDir
-		if cmdConfig.Stop.WorkingDir != "" {
-			if filepath.IsAbs(cmdConfig.Stop.WorkingDir) {
-				workingDir = cmdConfig.Stop.WorkingDir
-			} else {
-				workingDir = filepath.Join(input.Context.WorktreeDir, cmdConfig.Stop.WorkingDir)
-			}
-		}
-
-		cmd := exec.CommandContext(ctx, "sh", "-c", cmdConfig.Stop.Command)
-		cmd.Dir = workingDir
-		cmd.Env = append(os.Environ(), envVars...)
-
-		if err := cmd.Run(); err != nil {
-			log.Warn().Err(err).Str("commandId", input.CommandId).Msg("Stop command failed")
-		}
-	}
 
 	// Terminate process by session ID
 	terminateBySessionId(instance.SessionId, timeout)

@@ -44,9 +44,7 @@ func (s *DevRunWorkflowTestSuite) TestDevRunStartStopViaUserAction() {
 
 	// Verify StartDevRunInput/StopDevRunInput can be constructed
 	devRunConfig := common.DevRunConfig{
-		Commands: map[string]common.DevRunCommandConfig{
-			"test": {Start: common.CommandConfig{Command: "echo 'starting'"}},
-		},
+		"test": {Command: "echo 'starting'"},
 	}
 	devRunCtx := DevRunContext{
 		WorkspaceId:  "test-workspace",
@@ -89,16 +87,17 @@ func (s *DevRunWorkflowTestSuite) TestDevRunCleanupOnWorkflowCompletion() {
 
 	stopInput := StopDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			StopTimeoutSeconds: 30,
+			"test": {Command: "echo test", StopTimeoutSeconds: 30},
 		},
-		Context: devRunCtx,
+		CommandId: "test",
+		Context:   devRunCtx,
 	}
 
 	s.Equal("workspace-123", stopInput.Context.WorkspaceId)
 	s.Equal("flow-456", stopInput.Context.FlowId)
 	s.Equal("/path/to/worktree", stopInput.Context.WorktreeDir)
 	s.Equal("side/feature-branch", stopInput.Context.SourceBranch)
-	s.Equal(30, stopInput.DevRunConfig.StopTimeoutSeconds)
+	s.Equal(30, stopInput.DevRunConfig["test"].StopTimeoutSeconds)
 }
 
 // TestDevRunUserActionTypes tests that Dev Run action types are correctly defined
@@ -134,9 +133,7 @@ func (s *DevRunWorkflowTestSuite) TestDevRunStartSignalDoesNotBlockSelectorCallb
 			},
 			RepoConfig: common.RepoConfig{
 				DevRun: common.DevRunConfig{
-					Commands: map[string]common.DevRunCommandConfig{
-						"test": {Start: common.CommandConfig{Command: "echo test"}},
-					},
+					"test": {Command: "echo test"},
 				},
 			},
 			Worktree: &domain.Worktree{

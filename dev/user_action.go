@@ -93,7 +93,7 @@ func handleDevRunStart(dCtx DevContext) {
 	targetBranch := dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch)
 
 	// Start all configured dev run commands
-	for commandId := range dCtx.RepoConfig.DevRun.Commands {
+	for commandId := range dCtx.RepoConfig.DevRun {
 		// Check if this command is already active
 		var existingInstance *DevRunInstance
 		existingEntry := GetDevRunEntry(dCtx.ExecContext.GlobalState)

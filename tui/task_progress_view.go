@@ -469,11 +469,9 @@ func (m taskProgressModel) queryDevRunConfig() tea.Cmd {
 		if err != nil {
 			return devRunConfigResultMsg{hasDevRun: false}
 		}
-		// Check if the result has a non-empty commands map
-		if configMap, ok := result.(map[string]interface{}); ok {
-			if commands, ok := configMap["commands"].(map[string]interface{}); ok && len(commands) > 0 {
-				return devRunConfigResultMsg{hasDevRun: true}
-			}
+		// Check if the result is a non-empty map (DevRunConfig is map[string]DevRunCommandConfig)
+		if configMap, ok := result.(map[string]interface{}); ok && len(configMap) > 0 {
+			return devRunConfigResultMsg{hasDevRun: true}
 		}
 		return devRunConfigResultMsg{hasDevRun: false}
 	}
