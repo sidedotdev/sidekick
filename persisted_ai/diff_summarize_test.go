@@ -390,6 +390,113 @@ func TestChunkFileDiffs(t *testing.T) {
 	assert.Len(t, chunks, 1, "small file should produce single chunk")
 	assert.Equal(t, "small.go", chunks[0].FilePath)
 	assert.Equal(t, 0, chunks[0].ChunkIndex)
+	assert.Equal(t, 1, chunks[0].LinesAdded)
+	assert.Equal(t, 0, chunks[0].LinesRemoved)
+}
+
+func TestChunkFileDiffs_TracksLineStats(t *testing.T) {
+	t.Parallel()
+
+	diff := `diff --git a/file.go b/file.go
+--- a/file.go
++++ b/file.go
+@@ -1,5 +1,6 @@
+ package main
+-func oldFunc() {}
++func newFunc() {}
++func anotherFunc() {}
+ func main() {}
+`
+
+	fileDiffs, err := diffanalysis.ParseUnifiedDiff(diff)
+	require.NoError(t, err)
+	require.Len(t, fileDiffs, 1)
+
+	chunks := chunkFileDiffs(fileDiffs, 10000)
+	require.Len(t, chunks, 1)
+	assert.Equal(t, 2, chunks[0].LinesAdded)
+	assert.Equal(t, 1, chunks[0].LinesRemoved)
+}
+
+func TestCountDiffLines(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		diff            string
+		expectedAdded   int
+		expectedRemoved int
+	}{
+		{
+			name: "additions only",
+			diff: `diff --git a/file.go b/file.go
+--- a/file.go
++++ b/file.go
+@@ -1,2 +1,4 @@
+ package main
++func a() {}
++func b() {}
+`,
+			expectedAdded:   2,
+			expectedRemoved: 0,
+		},
+		{
+			name: "deletions only",
+			diff: `diff --git a/file.go b/file.go
+--- a/file.go
++++ b/file.go
+@@ -1,4 +1,2 @@
+ package main
+-func a() {}
+-func b() {}
+`,
+			expectedAdded:   0,
+			expectedRemoved: 2,
+		},
+		{
+			name: "mixed changes",
+			diff: `diff --git a/file.go b/file.go
+--- a/file.go
++++ b/file.go
+@@ -1,3 +1,4 @@
+ package main
+-func old() {}
++func new1() {}
++func new2() {}
+`,
+			expectedAdded:   2,
+			expectedRemoved: 1,
+		},
+		{
+			name: "multiple hunks",
+			diff: `diff --git a/file.go b/file.go
+--- a/file.go
++++ b/file.go
+@@ -1,3 +1,4 @@
+ package main
++func top() {}
+ func middle() {}
+@@ -10,3 +11,2 @@
+ func bottom() {}
+-func removed() {}
+`,
+			expectedAdded:   1,
+			expectedRemoved: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fileDiffs, err := diffanalysis.ParseUnifiedDiff(tt.diff)
+			require.NoError(t, err)
+			require.Len(t, fileDiffs, 1)
+
+			added, removed := countDiffLines(fileDiffs[0])
+			assert.Equal(t, tt.expectedAdded, added, "lines added")
+			assert.Equal(t, tt.expectedRemoved, removed, "lines removed")
+		})
+	}
 }
 
 func TestSummarizeDiff_RetainsDeletedFileInfo(t *testing.T) {
@@ -491,6 +598,41 @@ deleted file mode 100644
 
 	// The deleted file info should be retained in the output
 	assert.Contains(t, result, "deleted file mode", "deleted file marker should be retained in summarized output")
+}
+
+func TestSummarizeDiff_TruncationShowsLineStats(t *testing.T) {
+	t.Parallel()
+
+	// Create a large diff that will be truncated
+	var largeDiff strings.Builder
+	for i := 0; i < 20; i++ {
+		largeDiff.WriteString(fmt.Sprintf("diff --git a/file%d.go b/file%d.go\n", i, i))
+		largeDiff.WriteString(fmt.Sprintf("--- a/file%d.go\n", i))
+		largeDiff.WriteString(fmt.Sprintf("+++ b/file%d.go\n", i))
+		largeDiff.WriteString("@@ -1,5 +1,8 @@\n")
+		largeDiff.WriteString(" package main\n")
+		largeDiff.WriteString("-func removed() {}\n")
+		for j := 0; j < 5; j++ {
+			largeDiff.WriteString(fmt.Sprintf("+func added%d_%d() {}\n", i, j))
+		}
+	}
+
+	opts := DiffSummarizeOptions{
+		GitDiff:        largeDiff.String(),
+		ReviewFeedback: "review changes",
+		MaxChars:       1500,
+		Embedder:       &embedding.MockEmbedder{},
+		ModelConfig:    common.ModelConfig{Provider: "mock", Model: "test"},
+	}
+
+	result, err := SummarizeDiff(context.Background(), opts)
+	require.NoError(t, err)
+
+	// Verify truncation note shows line stats format
+	assert.Contains(t, result, "[Truncated:", "should have truncation note")
+	assert.Contains(t, result, "lines not shown from:", "should mention lines not shown")
+	assert.Regexp(t, `\+\d+/-\d+ lines not shown`, result, "should show total lines format")
+	assert.Regexp(t, `file\d+\.go \(\+\d+/-\d+\)`, result, "should show per-file line stats")
 }
 
 func TestSummarizeDiff_LargeDiffRetainsRenamedFileInfo(t *testing.T) {
