@@ -31,6 +31,58 @@ func GetFinalCommit(c Case) string {
 	return ""
 }
 
+// GetSourceBranch extracts the source branch name from the merge approval action.
+// Returns empty string if no source branch can be found.
+func GetSourceBranch(c Case) string {
+	for _, action := range c.Actions {
+		if action.ActionType == ActionTypeMergeApproval {
+			if branch := findSourceBranchInParams(action.ActionParams); branch != "" {
+				return branch
+			}
+		}
+	}
+	return ""
+}
+
+// GetTargetBranch extracts the target branch (base ref) from the merge approval action.
+// Returns empty string if no target branch can be found.
+func GetTargetBranch(c Case) string {
+	for _, action := range c.Actions {
+		if action.ActionType == ActionTypeMergeApproval {
+			if branch := findTargetBranchInParams(action.ActionParams); branch != "" {
+				return branch
+			}
+		}
+	}
+	return ""
+}
+
+// findSourceBranchInParams looks for sourceBranch in action params.
+func findSourceBranchInParams(params map[string]interface{}) string {
+	// Check top-level sourceBranch
+	if branch, ok := params["sourceBranch"].(string); ok && branch != "" {
+		return branch
+	}
+	// Check nested in mergeApprovalInfo
+	if info, ok := params["mergeApprovalInfo"].(map[string]interface{}); ok {
+		if branch, ok := info["sourceBranch"].(string); ok && branch != "" {
+			return branch
+		}
+	}
+	return ""
+}
+
+// findTargetBranchInParams looks for defaultTargetBranch in action params.
+func findTargetBranchInParams(params map[string]interface{}) string {
+	// Check nested in mergeApprovalInfo
+	if info, ok := params["mergeApprovalInfo"].(map[string]interface{}); ok {
+		if branch, ok := info["defaultTargetBranch"].(string); ok && branch != "" {
+			return branch
+		}
+	}
+	return ""
+}
+
 // findCommitSha searches for a 40-char hex SHA in a string.
 func findCommitSha(s string) string {
 	match := commitShaPattern.FindString(s)
@@ -74,17 +126,59 @@ func ComputeBaseCommit(ctx context.Context, repoDir, finalCommit string) string 
 // DeriveBaseCommit attempts to derive baseCommit for a case.
 // Returns the baseCommit and whether it was successfully derived.
 func DeriveBaseCommit(ctx context.Context, repoDir string, c Case) (string, bool) {
+	// Primary: try to compute base from final commit's parent
 	finalCommit := GetFinalCommit(c)
-	if finalCommit == "" {
-		return "", false
+	if finalCommit == "" && repoDir != "" {
+		if sourceBranch := GetSourceBranch(c); sourceBranch != "" {
+			finalCommit = ResolveBranchToCommit(ctx, repoDir, sourceBranch)
+		}
 	}
 
-	baseCommit := ComputeBaseCommit(ctx, repoDir, finalCommit)
-	if baseCommit == "" {
-		return "", false
+	if finalCommit != "" {
+		baseCommit := ComputeBaseCommit(ctx, repoDir, finalCommit)
+		if baseCommit != "" {
+			return baseCommit, true
+		}
 	}
 
-	return baseCommit, true
+	// Fallback: resolve the target branch (base ref) directly
+	if repoDir != "" {
+		if targetBranch := GetTargetBranch(c); targetBranch != "" {
+			baseCommit := ResolveBranchToCommit(ctx, repoDir, targetBranch)
+			if baseCommit != "" {
+				return baseCommit, true
+			}
+		}
+	}
+
+	return "", false
+}
+
+// ResolveBranchToCommit resolves a branch name to its commit SHA.
+// Tries the branch name directly first, then falls back to origin/<branch>.
+// Returns empty string if resolution fails.
+func ResolveBranchToCommit(ctx context.Context, repoDir, branch string) string {
+	if branch == "" || repoDir == "" {
+		return ""
+	}
+
+	// Try direct branch name first
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", branch)
+	cmd.Dir = repoDir
+	output, err := cmd.Output()
+	if err == nil {
+		return strings.TrimSpace(string(output))
+	}
+
+	// Fallback: try origin/<branch>
+	cmd = exec.CommandContext(ctx, "git", "rev-parse", "origin/"+branch)
+	cmd.Dir = repoDir
+	output, err = cmd.Output()
+	if err == nil {
+		return strings.TrimSpace(string(output))
+	}
+
+	return ""
 }
 
 // GetWorktreeDir extracts the working directory from worktrees associated with a flow.

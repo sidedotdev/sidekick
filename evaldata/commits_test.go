@@ -225,3 +225,64 @@ func TestActionCreatedAt(t *testing.T) {
 	assert.Equal(t, "test-id", action.Id)
 	assert.Equal(t, ts, action.Created)
 }
+
+func TestGetTargetBranch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		c        Case
+		expected string
+	}{
+		{
+			name: "no merge approval action",
+			c: Case{
+				Actions: []domain.FlowAction{
+					{ActionType: "tool_call.get_symbol_definitions"},
+				},
+			},
+			expected: "",
+		},
+		{
+			name: "merge approval with target branch in mergeApprovalInfo",
+			c: Case{
+				Actions: []domain.FlowAction{
+					{
+						ActionType: ActionTypeMergeApproval,
+						ActionParams: map[string]interface{}{
+							"mergeApprovalInfo": map[string]interface{}{
+								"defaultTargetBranch": "main",
+								"sourceBranch":        "side/feature",
+							},
+						},
+					},
+				},
+			},
+			expected: "main",
+		},
+		{
+			name: "merge approval without target branch",
+			c: Case{
+				Actions: []domain.FlowAction{
+					{
+						ActionType: ActionTypeMergeApproval,
+						ActionParams: map[string]interface{}{
+							"mergeApprovalInfo": map[string]interface{}{
+								"sourceBranch": "side/feature",
+							},
+						},
+					},
+				},
+			},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := GetTargetBranch(tt.c)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
