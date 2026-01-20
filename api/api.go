@@ -711,15 +711,32 @@ func (ctrl *Controller) startTaskWithTimeout(c *gin.Context, task *domain.Task) 
 	case err := <-errCh:
 		if err != nil {
 			ctrl.revertTaskToDrafting(c, task)
-			ctrl.ErrorHandler(c, http.StatusInternalServerError, fmt.Errorf("failed to start task: %w", err))
+			ctrl.ErrorHandler(c, http.StatusServiceUnavailable, ctrl.temporalStartError(err, false))
 			return err
 		}
 		return nil
 	case <-ctx.Done():
 		ctrl.revertTaskToDrafting(c, task)
-		ctrl.ErrorHandler(c, http.StatusGatewayTimeout, fmt.Errorf("task start timed out after %v", timeout))
+		ctrl.ErrorHandler(c, http.StatusServiceUnavailable, ctrl.temporalStartError(ctx.Err(), true))
 		return ctx.Err()
 	}
+}
+
+func (ctrl *Controller) temporalStartError(err error, isTimeout bool) error {
+	if isTimeout {
+		return fmt.Errorf(
+			"Timed out starting flow in Temporal: %w. "+
+				"The task has been saved in 'drafting' status and can be retried later. "+
+				"To resolve: restart the Temporal server, or check the Temporal server logs for errors.",
+			err,
+		)
+	}
+	return fmt.Errorf(
+		"Failed to start flow in Temporal: %w. "+
+			"The task has been saved in 'drafting' status and can be retried later. "+
+			"To resolve: restart the Temporal server, or check the Temporal server logs for errors.",
+		err,
+	)
 }
 
 // revertTaskToDrafting reverts a task to drafting status so the user can retry.
@@ -1068,11 +1085,6 @@ func (ctrl *Controller) AgentHandleNewTask(ctx context.Context, task *domain.Tas
 	err := devAgent.HandleNewTask(ctx, task)
 	if err != nil {
 		return err
-	}
-
-	// Check if context was cancelled (e.g., due to timeout) before persisting
-	if ctx.Err() != nil {
-		return ctx.Err()
 	}
 
 	// Update the task status to in progress
