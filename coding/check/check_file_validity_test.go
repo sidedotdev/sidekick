@@ -90,6 +90,41 @@ import "os"`,
 			wantPass:       false,
 			expectedErrors: []string{"File is blank"},
 		},
+		{
+			name: "Valid Go file with cgo import C and separate import",
+			fileContent: `package main
+
+import "C"
+import "unsafe"
+
+func main() {}`,
+			wantPass: true,
+		},
+		{
+			name: "Valid Go file with cgo import C and grouped imports",
+			fileContent: `package main
+
+import "C"
+import (
+	"fmt"
+	"unsafe"
+)
+
+func main() { fmt.Println(unsafe.Sizeof(0)) }`,
+			wantPass: true,
+		},
+		{
+			name: "Invalid Go file with three separate import statements",
+			fileContent: `package main
+
+import "C"
+import "fmt"
+import "unsafe"
+
+func main() {}`,
+			wantPass:       false,
+			expectedErrors: []string{"Multiple import statements found"},
+		},
 	}
 
 	for _, tc := range testCases {

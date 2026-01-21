@@ -68,7 +68,7 @@ func CheckFileValidity(envContainer env.EnvContainer, relativeFilePath string) (
 	switch languageName {
 	case "golang":
 		var err error
-		valid, errorString := checkGoTree(tree.RootNode())
+		valid, errorString := checkGoTree(sourceCode, tree.RootNode())
 
 		if valid {
 			valid, errorString, err = CheckViaGoBuild(envContainer, relativeFilePath)
@@ -83,7 +83,7 @@ func CheckFileValidity(envContainer env.EnvContainer, relativeFilePath string) (
 	}
 }
 
-func checkGoTree(node *sitter.Node) (bool, string) {
+func checkGoTree(sourceCode []byte, node *sitter.Node) (bool, string) {
 	// check for multiple import declarations, which is not allowed in go and
 	// LLMs tend to keep adding and have a hard time fixing
 	var importDeclarations []*sitter.Node
@@ -96,10 +96,44 @@ func checkGoTree(node *sitter.Node) (bool, string) {
 
 	// TODO include the line number of the error and the content around those lines
 	if len(importDeclarations) > 1 {
+		// Allow exactly 2 import declarations if one is `import "C"` (cgo requirement)
+		if len(importDeclarations) == 2 && hasImportC(sourceCode, importDeclarations) {
+			return true, ""
+		}
 		return false, "Multiple import statements found"
 	}
 
 	return true, ""
+}
+
+// hasImportC checks if any of the import declarations is `import "C"` (cgo)
+func hasImportC(sourceCode []byte, importDeclarations []*sitter.Node) bool {
+	for _, decl := range importDeclarations {
+		if isCgoImport(sourceCode, decl) {
+			return true
+		}
+	}
+	return false
+}
+
+// isCgoImport checks if an import declaration is specifically `import "C"`
+func isCgoImport(sourceCode []byte, importDecl *sitter.Node) bool {
+	for i := 0; i < int(importDecl.ChildCount()); i++ {
+		child := importDecl.Child(i)
+		if child.Type() == "import_spec" {
+			// import_spec directly contains interpreted_string_literal
+			for j := 0; j < int(child.ChildCount()); j++ {
+				specChild := child.Child(j)
+				if specChild.Type() == "interpreted_string_literal" {
+					content := specChild.Content(sourceCode)
+					if content == `"C"` {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 func checkPythonTree(sourceCode *[]byte, node *sitter.Node) (bool, string) {
