@@ -419,9 +419,11 @@ func getFilteredBranches(ctx context.Context, repoDir string, workspace *domain.
 	}
 	currentBranchName, isDetached := branchState.Name, branchState.IsDetached
 
+	// Default branch detection is best-effort; don't fail if we can't determine it
 	defaultBranchName, err := git.GetDefaultBranch(ctx, repoDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get default branch: %w", err)
+		log.Warn().Err(err).Str("repoDir", repoDir).Msg("Could not determine default branch")
+		defaultBranchName = ""
 	}
 
 	localBranchNames, err := git.ListLocalBranches(ctx, repoDir)

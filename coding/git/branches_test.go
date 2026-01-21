@@ -83,6 +83,50 @@ func TestGetDefaultBranch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
+	t.Run("Origin HEAD Set", func(t *testing.T) {
+		t.Parallel()
+		repoDir := setupTestGitRepo(t)
+		createCommit(t, repoDir, "Initial commit")
+
+		// Create a bare repo to act as remote
+		remoteDir := t.TempDir()
+		runGitCommandInTestRepo(t, remoteDir, "init", "--bare")
+
+		// Add remote and push
+		runGitCommandInTestRepo(t, repoDir, "remote", "add", "origin", remoteDir)
+		runGitCommandInTestRepo(t, repoDir, "push", "-u", "origin", "main")
+
+		// origin/HEAD should now be set
+		branch, err := GetDefaultBranch(ctx, repoDir)
+		require.NoError(t, err)
+		assert.Equal(t, "main", branch)
+	})
+
+	t.Run("Origin HEAD Set to Non-Standard Branch", func(t *testing.T) {
+		t.Parallel()
+		repoDir := setupTestGitRepo(t)
+		createCommit(t, repoDir, "Initial commit")
+
+		// Create and switch to a custom default branch
+		runGitCommandInTestRepo(t, repoDir, "branch", "-M", "main", "trunk")
+
+		// Create a bare repo to act as remote
+		remoteDir := t.TempDir()
+		runGitCommandInTestRepo(t, remoteDir, "init", "--bare")
+
+		// Add remote and push trunk
+		runGitCommandInTestRepo(t, repoDir, "remote", "add", "origin", remoteDir)
+		runGitCommandInTestRepo(t, repoDir, "push", "-u", "origin", "trunk")
+
+		// Manually set origin/HEAD to trunk
+		runGitCommandInTestRepo(t, repoDir, "remote", "set-head", "origin", "trunk")
+
+		// Should return trunk from origin/HEAD even though main/master don't exist
+		branch, err := GetDefaultBranch(ctx, repoDir)
+		require.NoError(t, err)
+		assert.Equal(t, "trunk", branch)
+	})
+
 	t.Run("Main Exists and Verifiable", func(t *testing.T) {
 		t.Parallel()
 		repoDir := setupTestGitRepo(t) // Initializes with main
