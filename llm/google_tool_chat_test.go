@@ -654,6 +654,9 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 	close(deltaChan)
 
 	if err != nil {
+		if strings.Contains(err.Error(), "429") {
+			t.Skip("Skipping test due to Google API rate limit (429)")
+		}
 		t.Fatalf("ChatStream returned an error: %v", err)
 	}
 
