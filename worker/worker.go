@@ -9,6 +9,7 @@ import (
 	"go.temporal.io/sdk/contrib/opentelemetry"
 	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 	zerologadapter "logur.dev/adapter/zerolog"
 	"logur.dev/logur"
 
@@ -203,7 +204,15 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	}
 }
 
-func RegisterWorkflows(w worker.WorkflowRegistry) {
+// WorkflowRegistrar is a minimal interface for registering workflows.
+// This is needed because worker.WorkflowReplayer doesn't implement the full
+// worker.WorkflowRegistry interface (missing RegisterDynamicWorkflow).
+type WorkflowRegistrar interface {
+	RegisterWorkflow(w interface{})
+	RegisterWorkflowWithOptions(w interface{}, options workflow.RegisterOptions)
+}
+
+func RegisterWorkflows(w WorkflowRegistrar) {
 	w.RegisterWorkflow(persisted_ai.TestOpenAiEmbedActivityWorkflow)
 	w.RegisterWorkflow(dev.DevAgentManagerWorkflow)
 	w.RegisterWorkflow(dev.PlannedDevWorkflow)
