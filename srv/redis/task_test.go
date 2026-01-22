@@ -14,7 +14,7 @@ import (
 )
 
 func TestPersistTask(t *testing.T) {
-	db := newTestRedisStorage()
+	db := newTestRedisStorage(t)
 
 	taskRecord := domain.Task{
 		WorkspaceId: "test-workspace",
@@ -98,7 +98,7 @@ func TestPersistTask(t *testing.T) {
 }
 
 func TestGetTasks(t *testing.T) {
-	db := newTestRedisStorage()
+	db := newTestRedisStorage(t)
 	ctx := context.Background()
 
 	taskRecords := []domain.Task{
@@ -148,7 +148,7 @@ func TestGetTasks(t *testing.T) {
 }
 
 func TestDeleteTask(t *testing.T) {
-	db := newTestRedisStorage()
+	db := newTestRedisStorage(t)
 	ctx := context.Background()
 
 	// Create a new task
@@ -198,7 +198,7 @@ func TestDeleteTask(t *testing.T) {
 }
 
 func TestGetArchivedTasks(t *testing.T) {
-	db := newTestRedisStorage()
+	db := newTestRedisStorage(t)
 	ctx := context.Background()
 
 	workspaceId := "test-workspace"
@@ -260,7 +260,7 @@ func TestGetArchivedTasks(t *testing.T) {
 }
 
 func TestAddTaskChange(t *testing.T) {
-	db := NewTestRedisStreamer()
+	db := newTestRedisStreamer(t)
 	workspaceId := "TEST_WORKSPACE_ID"
 	taskRecord := domain.Task{
 		WorkspaceId: workspaceId,
@@ -302,7 +302,7 @@ func TestAddTaskChange(t *testing.T) {
 }
 
 func TestStreamTaskChanges(t *testing.T) {
-	db := NewTestRedisStreamer()
+	db := newTestRedisStreamer(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -381,7 +381,7 @@ func TestStreamTaskChanges_TimestampUTC(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	streamer := NewStreamer()
+	streamer := newTestRedisStreamer(t)
 	defer streamer.Client.Close()
 
 	workspaceId := "test-workspace-" + ksuid.New().String()

@@ -25,7 +25,6 @@ import (
 
 func TestUpdateWorkspaceHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	testCases := []struct {
 		name              string
@@ -289,7 +288,6 @@ func TestUpdateWorkspaceHandler(t *testing.T) {
 
 func TestCreateWorkspaceHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	testCases := []struct {
 		name             string
@@ -670,7 +668,6 @@ func TestDetermineManagedWorktreeBranches(t *testing.T) {
 // runGitCommand executes a git command in the specified directory and returns its output.
 func TestGetWorkspaceBranchesHandler(t *testing.T) {
 	// Setenv // t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	// --- Test Setup ---
 	ctrl := NewMockController(t) // Uses test Redis instance
@@ -812,7 +809,6 @@ func TestGetWorkspaceBranchesHandler(t *testing.T) {
 
 func TestGetWorkspaceByIdHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	workspace1 := domain.Workspace{Id: "workspace1", Name: "Workspace One", LocalRepoDir: "/path/to/repo1"}
 	config1 := domain.WorkspaceConfig{

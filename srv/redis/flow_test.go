@@ -12,7 +12,7 @@ import (
 )
 
 func TestPersistFlowAndGetFlowsForTask(t *testing.T) {
-	db := newTestRedisStorage()
+	db := newTestRedisStorage(t)
 
 	workspaceId := "TEST_WORKSPACE_ID_" + ksuid.New().String()
 	parentId := "testParentId"
@@ -56,7 +56,7 @@ func TestPersistFlowAndGetFlowsForTask(t *testing.T) {
 }
 
 func TestPersistFlowWithExplicitTimestamps(t *testing.T) {
-	db := newTestRedisStorage()
+	db := newTestRedisStorage(t)
 
 	workspaceId := "TEST_WORKSPACE_ID_" + ksuid.New().String()
 	created := time.Date(2025, 3, 20, 14, 30, 45, 123456789, time.FixedZone("PST", -8*3600))

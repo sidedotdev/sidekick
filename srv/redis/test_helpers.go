@@ -2,47 +2,51 @@ package redis
 
 import (
 	"context"
+	"os"
 	"sidekick/srv"
-
-	"log"
+	"testing"
 
 	"github.com/redis/go-redis/v9"
 )
 
-func NewTestRedisService() (*srv.Delegator, *redis.Client) {
-	storage := newTestRedisStorage()
-	streamer := NewTestRedisStreamer()
-	streamer.Client = storage.Client
-	return srv.NewDelegator(storage, streamer), storage.Client
+func newTestRedisService(t *testing.T) *srv.Delegator {
+	t.Helper()
+	storage := newTestRedisStorage(t)
+	streamer := newTestRedisStreamer(t)
+	return srv.NewDelegator(storage, streamer)
 }
 
-func newTestRedisStorage() *Storage {
-	db := &Storage{Client: NewTestRedisClient()}
+func newTestRedisStorage(t *testing.T) *Storage {
+	t.Helper()
+	db := &Storage{Client: newTestRedisClient()}
 
-	// Flush the database synchronously to ensure a clean state for each test
 	_, err := db.Client.FlushDB(context.Background()).Result()
 	if err != nil {
-		log.Panicf("failed to flush redis database: %v", err)
+		t.Skipf("Skipping test; Redis not available: %v", err)
 	}
 
 	return db
 }
 
-func NewTestRedisStreamer() *Streamer {
-	streamer := &Streamer{Client: NewTestRedisClient()}
+func newTestRedisStreamer(t *testing.T) *Streamer {
+	t.Helper()
+	streamer := &Streamer{Client: newTestRedisClient()}
 
-	// Flush the database synchronously to ensure a clean state for each test
 	_, err := streamer.Client.FlushDB(context.Background()).Result()
 	if err != nil {
-		log.Panicf("failed to flush redis database: %v", err)
+		t.Skipf("Skipping test; Redis not available: %v", err)
 	}
 
 	return streamer
 }
 
-func NewTestRedisClient() *redis.Client {
+func newTestRedisClient() *redis.Client {
+	addr := os.Getenv("REDIS_ADDRESS")
+	if addr == "" {
+		addr = "localhost:6379"
+	}
 	return redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
+		Addr:     addr,
 		Password: "",
 		DB:       1,
 	})
