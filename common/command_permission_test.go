@@ -1554,3 +1554,35 @@ func TestBasePermissions_ExfiltrationPatterns(t *testing.T) {
 		}
 	})
 }
+
+func TestBasePermissions_TeeCommand(t *testing.T) {
+	config := BaseCommandPermissions()
+
+	t.Run("tee with relative path in pipeline is auto-approved", func(t *testing.T) {
+		safeScripts := []string{
+			"cd cli && go test -tags=e2e -v -run TestE2E_SimpleTaskCompletion -timeout 300s 2>&1 | tee e2e_output.txt | tail -150",
+			"echo hello | tee output.txt",
+			"cat file.txt | tee copy.txt",
+			"go test ./... 2>&1 | tee test_results.txt",
+			"tee log.txt",
+		}
+
+		for _, script := range safeScripts {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", script)
+		}
+	})
+
+	t.Run("tee with absolute path requires approval", func(t *testing.T) {
+		riskyScripts := []string{
+			"tee /tmp/out.txt",
+			"echo secret | tee /var/log/output.txt",
+			"cat file | tee /etc/something",
+		}
+
+		for _, script := range riskyScripts {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionRequireApproval, result, "expected require-approval for: %s", script)
+		}
+	})
+}
