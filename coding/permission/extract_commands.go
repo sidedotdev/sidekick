@@ -47,7 +47,22 @@ func extractCommandsFromNode(node *sitter.Node, sourceCode []byte, commands *[]s
 		return
 
 	case "redirected_statement":
-		// Extract the full text including redirections
+		// Check if the body is a compound structure (list, pipeline, etc.)
+		// If so, we need to recurse into it to extract individual commands
+		if node.ChildCount() > 0 {
+			body := node.Child(0)
+			bodyType := body.Type()
+			if bodyType == "list" || bodyType == "pipeline" {
+				// Recurse into the compound structure to extract individual commands
+				extractCommandsFromNode(body, sourceCode, commands)
+				// Also check for command substitutions in redirections
+				for i := 1; i < int(node.ChildCount()); i++ {
+					findAndExtractCommandSubstitutions(node.Child(i), sourceCode, commands)
+				}
+				return
+			}
+		}
+		// For simple redirected commands, extract the full text including redirections
 		cmdText := strings.TrimSpace(node.Content(sourceCode))
 		// Check for background operator at parent level
 		cmdText = appendBackgroundIfPresent(node, sourceCode, cmdText)

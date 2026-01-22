@@ -1489,6 +1489,20 @@ func TestEvaluateScriptPermission_WithBasePermissions(t *testing.T) {
 			assert.Equal(t, PermissionRequireApproval, result, "expected require-approval for: %s", script)
 		}
 	})
+
+	t.Run("chained commands with unapproved command require approval", func(t *testing.T) {
+		// go run is not in the auto-approve list, so the whole script should require approval
+		scriptsRequiringApproval := []string{
+			`echo "=== Original workflow (flow_38EKf7eKG9ghgzczrdliGtchPaT) ===" && go run ./worker/replay -id flow_38EKf7eKG9ghgzczrdliGtchPaT 2>&1; echo "Exit code: $?"`,
+			`echo "hello" && go run main.go`,
+			`ls -la && go run ./cmd/server`,
+		}
+
+		for _, script := range scriptsRequiringApproval {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionRequireApproval, result, "expected require-approval for: %s", script)
+		}
+	})
 }
 
 func TestBasePermissions_ExfiltrationPatterns(t *testing.T) {
