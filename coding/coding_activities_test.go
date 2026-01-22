@@ -990,3 +990,133 @@ Foo is referenced in the same file by:
 		})
 	}
 }
+
+func TestBulkGetSymbolDefinitionsTruncation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("single large file exceeding 1MB is truncated with NOTE", func(t *testing.T) {
+		t.Parallel()
+
+		testDir := t.TempDir()
+
+		// Create a file larger than 1MB (1024 * 1024 bytes)
+		// Using a simple repeating pattern to create large content
+		largeContent := strings.Repeat("x", 1024*1024+10000) // ~1MB + 10KB
+
+		filePath := filepath.Join(testDir, "large_file.txt")
+		err := os.WriteFile(filePath, []byte(largeContent), 0644)
+		assert.Nil(t, err)
+
+		ca := &CodingActivities{}
+		numLines := 0
+
+		// Request the file with empty symbol names (wildcard/full file read)
+		result, err := ca.BulkGetSymbolDefinitions(DirectorySymDefRequest{
+			EnvContainer: env.EnvContainer{
+				Env: &env.LocalEnv{WorkingDirectory: testDir},
+			},
+			Requests: []FileSymDefRequest{
+				{FilePath: "large_file.txt", SymbolNames: []string{}},
+			},
+			NumContextLines: &numLines,
+		})
+		assert.Nil(t, err)
+
+		// The output should contain a truncation NOTE
+		assert.Contains(t, result.SymbolDefinitions, "NOTE:")
+		assert.Contains(t, result.SymbolDefinitions, "bytes were truncated from this file's output")
+
+		// The output should be under 1MB
+		assert.LessOrEqual(t, len(result.SymbolDefinitions), 1024*1024)
+	})
+
+	t.Run("multiple files exceeding 1MB total - largest excluded first", func(t *testing.T) {
+		t.Parallel()
+
+		testDir := t.TempDir()
+
+		// Create multiple files that together exceed 1MB
+		// File 1: 600KB
+		content1 := strings.Repeat("a", 600*1024)
+		err := os.WriteFile(filepath.Join(testDir, "file1.txt"), []byte(content1), 0644)
+		assert.Nil(t, err)
+
+		// File 2: 600KB (total now 1.2MB, exceeds limit)
+		content2 := strings.Repeat("b", 600*1024)
+		err = os.WriteFile(filepath.Join(testDir, "file2.txt"), []byte(content2), 0644)
+		assert.Nil(t, err)
+
+		ca := &CodingActivities{}
+		numLines := 0
+
+		result, err := ca.BulkGetSymbolDefinitions(DirectorySymDefRequest{
+			EnvContainer: env.EnvContainer{
+				Env: &env.LocalEnv{WorkingDirectory: testDir},
+			},
+			Requests: []FileSymDefRequest{
+				{FilePath: "file1.txt", SymbolNames: []string{}},
+				{FilePath: "file2.txt", SymbolNames: []string{}},
+			},
+			NumContextLines: &numLines,
+		})
+		assert.Nil(t, err)
+
+		// The output should be under 1MB
+		assert.LessOrEqual(t, len(result.SymbolDefinitions), 1024*1024)
+
+		// At least one file should be truncated or have a truncation note
+		hasTruncation := strings.Contains(result.SymbolDefinitions, "NOTE:") ||
+			strings.Contains(result.SymbolDefinitions, "exceeded 1MB limit")
+		assert.True(t, hasTruncation, "Expected truncation note or exclusion message in output")
+	})
+
+	t.Run("file completely excluded when too large shows exclusion message", func(t *testing.T) {
+		t.Parallel()
+
+		testDir := t.TempDir()
+
+		// Create multiple large files that together far exceed 1MB
+		// When one file alone exceeds the limit and there are other files,
+		// the largest file gets excluded entirely
+		veryLargeContent := strings.Repeat("x", 900*1024) // 900KB
+		err := os.WriteFile(filepath.Join(testDir, "huge_file.txt"), []byte(veryLargeContent), 0644)
+		assert.Nil(t, err)
+
+		// Create another large file (total now ~1.8MB, well over limit)
+		largeContent2 := strings.Repeat("y", 900*1024) // 900KB
+		err = os.WriteFile(filepath.Join(testDir, "large_file2.txt"), []byte(largeContent2), 0644)
+		assert.Nil(t, err)
+
+		// Create a small file
+		smallContent := "small content"
+		err = os.WriteFile(filepath.Join(testDir, "small_file.txt"), []byte(smallContent), 0644)
+		assert.Nil(t, err)
+
+		ca := &CodingActivities{}
+		numLines := 0
+
+		result, err := ca.BulkGetSymbolDefinitions(DirectorySymDefRequest{
+			EnvContainer: env.EnvContainer{
+				Env: &env.LocalEnv{WorkingDirectory: testDir},
+			},
+			Requests: []FileSymDefRequest{
+				{FilePath: "huge_file.txt", SymbolNames: []string{}},
+				{FilePath: "large_file2.txt", SymbolNames: []string{}},
+				{FilePath: "small_file.txt", SymbolNames: []string{}},
+			},
+			NumContextLines: &numLines,
+		})
+		assert.Nil(t, err)
+
+		// At least one file should be excluded or truncated
+		hasExclusionOrTruncation := strings.Contains(result.SymbolDefinitions, "exceeded 1MB limit for a single bulk request") ||
+			strings.Contains(result.SymbolDefinitions, "bytes were truncated")
+		assert.True(t, hasExclusionOrTruncation, "Expected exclusion or truncation message in output")
+
+		// The small file content should still be present
+		assert.Contains(t, result.SymbolDefinitions, "small content")
+
+		// The output should be under 1MB
+		assert.LessOrEqual(t, len(result.SymbolDefinitions), 1024*1024)
+	})
+}
