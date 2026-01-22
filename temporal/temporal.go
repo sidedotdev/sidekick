@@ -210,11 +210,8 @@ func startServer(cfg *serverConfig) temporal.Server {
 	}
 
 	// Setup namespace
-	nsConfig, err := sqliteschema.NewNamespaceConfig(cfg.clusterName, cfg.namespace, false, nil)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Unable to create namespace config")
-	}
-	if err := sqliteschema.CreateNamespaces(conf.Persistence.DataStores["sqlite-default"].SQL, nsConfig); err != nil {
+	if err := sqliteschema.CreateNamespaces(conf.Persistence.DataStores["sqlite-default"].SQL,
+		sqliteschema.NewNamespaceConfig(cfg.clusterName, cfg.namespace, false)); err != nil {
 		log.Fatal().Err(err).Msg("Unable to create namespace")
 	}
 
