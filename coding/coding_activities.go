@@ -176,6 +176,14 @@ type DirectorySymDefRequest struct {
 
 const DefaultNumContextLines = 5
 const codeFenceEnd = "```\n\n"
+const maxBulkSymDefOutputBytes = 1024 * 1024 // 1MB limit for bulk symbol definition output
+
+type fileOutput struct {
+	filePath string
+	content  string
+	failures string
+	size     int
+}
 
 // Given a list of symbol definition requests for a directory, this method
 // outputs symbol definitions formatted per file. Any symbols that were not
@@ -234,10 +242,12 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(dirSymDefRequest DirectoryS
 	}
 
 	var relativeFilePathsBySymbolName map[string][]string
-	var symbolDefBuilder, failureBuilder strings.Builder
+	fileOutputs := make([]fileOutput, 0, len(resultsByFile))
 
 	// Process results file by file
 	for filePath, fileResults := range resultsByFile {
+		var fileContentBuilder, fileFailureBuilder strings.Builder
+
 		// Handle errors first
 		for _, result := range fileResults {
 			if result.Error != nil {
@@ -245,17 +255,17 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(dirSymDefRequest DirectoryS
 					filePaths, err := getRelativeFilePathsBySymbolName(baseDir)
 					if err != nil {
 						msg := fmt.Sprintf("error getting file paths by symbol name: %v\n", err)
-						symbolDefBuilder.WriteString(msg)
-						failureBuilder.WriteString(msg)
+						fileContentBuilder.WriteString(msg)
+						fileFailureBuilder.WriteString(msg)
 					}
 					relativeFilePathsBySymbolName = filePaths
 				}
 
 				hint := getHintForSymbolDefResultFailure(result.Error, baseDir, result.RelativePath, result.SymbolName, &relativeFilePathsBySymbolName)
-				symbolDefBuilder.WriteString(hint)
-				symbolDefBuilder.WriteString("\n")
-				failureBuilder.WriteString(hint)
-				failureBuilder.WriteString("\n")
+				fileContentBuilder.WriteString(hint)
+				fileContentBuilder.WriteString("\n")
+				fileFailureBuilder.WriteString(hint)
+				fileFailureBuilder.WriteString("\n")
 			}
 		}
 
@@ -265,6 +275,14 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(dirSymDefRequest DirectoryS
 
 		// Skip if no source blocks
 		if len(merged.MergedSourceBlocks) == 0 {
+			if fileContentBuilder.Len() > 0 {
+				fileOutputs = append(fileOutputs, fileOutput{
+					filePath: filePath,
+					content:  fileContentBuilder.String(),
+					failures: fileFailureBuilder.String(),
+					size:     fileContentBuilder.Len(),
+				})
+			}
 			continue
 		}
 
@@ -284,41 +302,41 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(dirSymDefRequest DirectoryS
 
 			for _, block := range blocks {
 				// Write block header
-				symbolDefBuilder.WriteString("File: ")
-				symbolDefBuilder.WriteString(filePath)
+				fileContentBuilder.WriteString("File: ")
+				fileContentBuilder.WriteString(filePath)
 				if len(symbols) > 0 && !onlyHeaders && !anyWildcard {
 					if len(symbols) == 1 {
-						symbolDefBuilder.WriteString("\nSymbol: ")
+						fileContentBuilder.WriteString("\nSymbol: ")
 					} else {
-						symbolDefBuilder.WriteString("\nSymbols: ")
+						fileContentBuilder.WriteString("\nSymbols: ")
 					}
-					symbolDefBuilder.WriteString(symbolNames)
+					fileContentBuilder.WriteString(symbolNames)
 				}
 
 				// Write line numbers
-				symbolDefBuilder.WriteString("\nLines: ")
-				symbolDefBuilder.WriteString(fmt.Sprintf("%d-%d",
+				fileContentBuilder.WriteString("\nLines: ")
+				fileContentBuilder.WriteString(fmt.Sprintf("%d-%d",
 					block.Range.StartPoint.Row+1,
 					block.Range.EndPoint.Row+1))
 
 				if anyWildcard {
-					symbolDefBuilder.WriteString(" (full file)")
+					fileContentBuilder.WriteString(" (full file)")
 				}
-				symbolDefBuilder.WriteString("\n")
+				fileContentBuilder.WriteString("\n")
 
 				// Write source block content
-				symbolDefBuilder.WriteString(CodeFenceStartForLanguage(langName))
+				fileContentBuilder.WriteString(CodeFenceStartForLanguage(langName))
 				content := block.String()
-				symbolDefBuilder.WriteString(content)
+				fileContentBuilder.WriteString(content)
 				if !strings.HasSuffix(content, "\n") {
-					symbolDefBuilder.WriteString("\n")
+					fileContentBuilder.WriteString("\n")
 				}
-				symbolDefBuilder.WriteString(codeFenceEnd)
+				fileContentBuilder.WriteString(codeFenceEnd)
 			}
 
 			// Write related symbols if any
 			if relatedSyms, ok := merged.RelatedSymbols[symbolNames]; ok && len(relatedSyms) > 0 {
-				symbolDefBuilder.WriteString(getRelatedSymbolsHint(merged, symbolNames))
+				fileContentBuilder.WriteString(getRelatedSymbolsHint(merged, symbolNames))
 			}
 
 			// Warn about dups
@@ -328,10 +346,144 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(dirSymDefRequest DirectoryS
 				}
 				for _, result := range fileResults {
 					if result.SymbolName == symbol && len(result.SourceBlocks) > 1 {
-						symbolDefBuilder.WriteString(fmt.Sprintf("NOTE: Multiple definitions were found for symbol %s\n", symbol))
+						fileContentBuilder.WriteString(fmt.Sprintf("NOTE: Multiple definitions were found for symbol %s\n", symbol))
 					}
 				}
 			}
+		}
+
+		fileOutputs = append(fileOutputs, fileOutput{
+			filePath: filePath,
+			content:  fileContentBuilder.String(),
+			failures: fileFailureBuilder.String(),
+			size:     fileContentBuilder.Len(),
+		})
+	}
+
+	return applyTruncationToFileOutputs(fileOutputs)
+}
+
+func applyTruncationToFileOutputs(fileOutputs []fileOutput) (SymDefResults, error) {
+	// Calculate total size of content (SymbolDefinitions output)
+	totalSize := 0
+	for _, fo := range fileOutputs {
+		totalSize += fo.size
+	}
+
+	// If under limit, just concatenate everything
+	if totalSize <= maxBulkSymDefOutputBytes {
+		var symbolDefBuilder, failureBuilder strings.Builder
+		for _, fo := range fileOutputs {
+			symbolDefBuilder.WriteString(fo.content)
+			failureBuilder.WriteString(fo.failures)
+		}
+		return SymDefResults{
+			SymbolDefinitions: symbolDefBuilder.String(),
+			Failures:          failureBuilder.String(),
+		}, nil
+	}
+
+	// Sort by size descending - we'll truncate/exclude largest files first
+	slices.SortFunc(fileOutputs, func(a, b fileOutput) int {
+		return cmp.Compare(b.size, a.size) // descending
+	})
+
+	// Track the effective size of each file's output (content or exclusion message)
+	type fileStatus struct {
+		fo              fileOutput
+		excluded        bool
+		truncatedAmount int
+		effectiveSize   int // size this file contributes to final output
+	}
+	statuses := make([]fileStatus, len(fileOutputs))
+	for i, fo := range fileOutputs {
+		statuses[i] = fileStatus{fo: fo, effectiveSize: fo.size}
+	}
+
+	// Iteratively reduce from largest files until under limit
+	// Process files from largest to smallest
+	for i := range statuses {
+		currentTotal := 0
+		for j := range statuses {
+			currentTotal += statuses[j].effectiveSize
+		}
+		if currentTotal <= maxBulkSymDefOutputBytes {
+			break
+		}
+
+		// Calculate how much we need to remove
+		excess := currentTotal - maxBulkSymDefOutputBytes
+
+		// Try to handle this file
+		fileSize := statuses[i].fo.size
+		exclusionMsgSize := len(fmt.Sprintf("%d bytes: exceeded 1MB limit for a single bulk request\n\n", fileSize))
+
+		// Calculate savings from excluding this file entirely
+		savingsFromExclusion := statuses[i].effectiveSize - exclusionMsgSize
+
+		if savingsFromExclusion >= excess {
+			// Partial truncation is sufficient
+			// We need to remove 'excess' bytes, but add a truncation notice
+			// Find the right truncation amount that results in exactly the right size
+			// truncatedSize = originalSize - truncatedAmount + noticeSize <= limit
+			// So: truncatedAmount >= originalSize + noticeSize - limit + otherFilesSize
+			// But we want minimal truncation, so: truncatedAmount = excess + noticeSize
+			truncationNoticeSize := len(fmt.Sprintf("NOTE: %d bytes were truncated from this file's output.\n", excess))
+			truncatedAmount := excess + truncationNoticeSize
+
+			// Recalculate with actual truncation amount (notice size may change)
+			truncationNoticeSize = len(fmt.Sprintf("NOTE: %d bytes were truncated from this file's output.\n", truncatedAmount))
+			truncatedAmount = excess + truncationNoticeSize
+
+			// One more iteration to stabilize
+			truncationNoticeSize = len(fmt.Sprintf("NOTE: %d bytes were truncated from this file's output.\n", truncatedAmount))
+			truncatedAmount = excess + truncationNoticeSize
+
+			if truncatedAmount < statuses[i].effectiveSize {
+				statuses[i].truncatedAmount = truncatedAmount
+				statuses[i].effectiveSize = statuses[i].fo.size - truncatedAmount + truncationNoticeSize
+				continue
+			}
+		}
+
+		// Exclude this file entirely
+		if savingsFromExclusion > 0 {
+			statuses[i].excluded = true
+			statuses[i].truncatedAmount = 0
+			statuses[i].effectiveSize = exclusionMsgSize
+		} else {
+			// Exclusion message is larger than content - just keep the content
+			// This shouldn't happen for reasonably sized files, but handle it
+			statuses[i].excluded = false
+			statuses[i].truncatedAmount = 0
+			statuses[i].effectiveSize = statuses[i].fo.size
+		}
+	}
+
+	// Build final output, sorted by file path for consistent ordering
+	slices.SortFunc(statuses, func(a, b fileStatus) int {
+		return cmp.Compare(a.fo.filePath, b.fo.filePath)
+	})
+
+	var symbolDefBuilder, failureBuilder strings.Builder
+
+	for _, status := range statuses {
+		// Always include failures
+		failureBuilder.WriteString(status.fo.failures)
+
+		if status.excluded {
+			// Output only the size and the required message
+			symbolDefBuilder.WriteString(fmt.Sprintf("%d bytes: exceeded 1MB limit for a single bulk request\n\n", status.fo.size))
+		} else if status.truncatedAmount > 0 {
+			// Prepend truncation notice at the start of this file's output
+			symbolDefBuilder.WriteString(fmt.Sprintf("NOTE: %d bytes were truncated from this file's output.\n", status.truncatedAmount))
+			// Truncate from the end of the content
+			keepBytes := status.fo.size - status.truncatedAmount
+			if keepBytes > 0 {
+				symbolDefBuilder.WriteString(status.fo.content[:keepBytes])
+			}
+		} else {
+			symbolDefBuilder.WriteString(status.fo.content)
 		}
 	}
 
