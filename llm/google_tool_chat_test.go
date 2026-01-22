@@ -655,7 +655,7 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 
 	if err != nil {
 		if strings.Contains(err.Error(), "RESOURCE_EXHAUSTED") {
-			t.Skip("Skipping test due to Google API quota exhaustion (429)")
+			t.Skip("Skipping test due to Google API quota exceeded")
 		}
 		t.Fatalf("ChatStream returned an error: %v", err)
 	}
