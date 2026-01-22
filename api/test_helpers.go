@@ -181,3 +181,17 @@ func NewTestService(t *testing.T) *srv.Delegator {
 	storage := sqlite.NewTestSqliteStorage(t, dbName)
 	return srv.NewDelegator(storage, newMemoryStreamer())
 }
+
+// TestAllowedOrigins returns an AllowedOrigins that allows all origins for testing.
+// This is permissive to avoid breaking existing tests that don't set Origin headers.
+func TestAllowedOrigins() *AllowedOrigins {
+	return &AllowedOrigins{
+		origins: map[string]struct{}{
+			"http://localhost:8855": {},
+			"http://127.0.0.1:8855": {},
+			"http://[::1]:8855":     {},
+			"http://localhost:5173": {},
+			"http://127.0.0.1:5173": {},
+		},
+	}
+}
