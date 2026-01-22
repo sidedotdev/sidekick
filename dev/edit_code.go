@@ -124,7 +124,14 @@ editLoop:
 		// pause checkpoint
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return fmt.Errorf("failed to make user request when paused: %v", err)
-		} else if response != nil {
+		} else if response != nil && response.Content != "" {
+			// If promptInfo is an initial type, add it to chat history first before
+			// overwriting with pause feedback. This ensures the initial instructions
+			// are in the history before the pause feedback.
+			switch promptInfo.(type) {
+			case InitialCodeInfo, InitialDevStepInfo:
+				buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo)
+			}
 			promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 		}
 
