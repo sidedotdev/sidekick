@@ -42,6 +42,8 @@ func BaseCommandPermissionsActivity(ctx context.Context) (CommandPermissionConfi
 func BaseCommandPermissions() CommandPermissionConfig {
 	return CommandPermissionConfig{
 		AutoApprove: []CommandPattern{
+			// Shell comments (no-op)
+			{Pattern: "#"},
 			// Basic read-only commands
 			{Pattern: "ls"},
 			{Pattern: "cat"},
