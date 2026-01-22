@@ -73,7 +73,8 @@ func checkCommandPermission(dCtx DevContext, command string, workingDir string) 
 			permMessage = output.Message
 		} else {
 			opts := common.EvaluatePermissionOptions{
-				StripEnvVarPrefix: stripEnvVarPrefix,
+				StripEnvVarPrefix:          stripEnvVarPrefix,
+				UseLegacyCommandExtraction: true,
 			}
 			permResult, permMessage = common.EvaluateScriptPermissionWithOptions(dCtx.RepoConfig.CommandPermissions, command, opts)
 		}

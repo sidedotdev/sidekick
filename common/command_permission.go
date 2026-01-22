@@ -797,6 +797,10 @@ type EvaluatePermissionOptions struct {
 	// StripEnvVarPrefix controls whether leading env var assignments are stripped
 	// from commands before matching against patterns that don't reference env vars.
 	StripEnvVarPrefix bool
+	// UseLegacyCommandExtraction uses the legacy command extraction behavior that
+	// does not recurse into list/pipeline bodies within redirected statements.
+	// This preserves determinism for in-workflow permission evaluation.
+	UseLegacyCommandExtraction bool
 }
 
 // EvaluateCommandPermission evaluates a single command against the permission config.
@@ -883,7 +887,12 @@ func EvaluateScriptPermission(config CommandPermissionConfig, script string) (Pe
 
 // EvaluateScriptPermissionWithOptions evaluates a shell script with configurable options.
 func EvaluateScriptPermissionWithOptions(config CommandPermissionConfig, script string, opts EvaluatePermissionOptions) (PermissionResult, string) {
-	commands := permission.ExtractCommands(script)
+	var commands []string
+	if opts.UseLegacyCommandExtraction {
+		commands = permission.ExtractCommandsLegacy(script)
+	} else {
+		commands = permission.ExtractCommands(script)
+	}
 
 	// If no commands extracted, default to require approval
 	if len(commands) == 0 {
