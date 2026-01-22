@@ -56,6 +56,7 @@ func (s *GitDiffWorkflowTestSuite) SetupTest() {
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
 	s.env.RegisterActivity(env.EnvRunCommandActivity)
+	s.env.RegisterActivity(DiffUntrackedFilesActivity)
 
 	// Create temporary directory using t.TempDir()
 	s.dir = s.T().TempDir()
