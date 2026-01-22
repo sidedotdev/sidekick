@@ -1311,6 +1311,7 @@ func TestEvaluateScriptPermission_WithBasePermissions(t *testing.T) {
 			"go test ./...",
 			"pwd",
 			"cd worker/replay && cat replay_test_data.json | head -50",
+			"cd cli && go test -tags=e2e -v -run TestE2E_SimpleTaskCompletion -timeout 300s 2>&1 | tee e2e_output.txt | tail -150",
 		}
 
 		for _, script := range safeScripts {
@@ -1343,6 +1344,7 @@ func TestEvaluateScriptPermission_WithBasePermissions(t *testing.T) {
 			"cat .envrc",
 			"source .env",
 			"grep password .env",
+			"tee /tmp/out.txt",
 		}
 
 		for _, script := range sensitiveScripts {
@@ -1553,4 +1555,5 @@ func TestBasePermissions_ExfiltrationPatterns(t *testing.T) {
 			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", script)
 		}
 	})
+
 }
