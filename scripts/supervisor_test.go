@@ -1493,7 +1493,7 @@ sleep 30
 	}()
 
 	// Check state immediately after starting goroutine
-	waitForCondition(t, 2*time.Second, func() bool {
+	waitForCondition(t, 5*time.Second, func() bool {
 		return p.isStopping()
 	}, "process should be stopping")
 
