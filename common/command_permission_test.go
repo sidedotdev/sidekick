@@ -969,6 +969,21 @@ func TestContainsAbsolutePath(t *testing.T) {
 			command:  "ls $(echo (a|b))/file",
 			expected: true,
 		},
+		{
+			name:     "git diff with relative path after double dash",
+			command:  "git diff HEAD~1 -- coding/git/",
+			expected: false,
+		},
+		{
+			name:     "git diff with relative path no trailing slash",
+			command:  "git diff HEAD~1 -- coding/git",
+			expected: false,
+		},
+		{
+			name:     "git show with relative path",
+			command:  "git show HEAD:coding/git/file.go",
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1553,4 +1568,50 @@ func TestBasePermissions_ExfiltrationPatterns(t *testing.T) {
 			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", script)
 		}
 	})
+}
+
+func TestEvaluateCommandPermission_GitDiffRelativePath(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	tests := []struct {
+		name           string
+		command        string
+		expectedResult PermissionResult
+	}{
+		{
+			name:           "git diff with relative path should be auto-approved",
+			command:        "git diff HEAD~1 -- coding/git/",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "git diff with relative path no trailing slash",
+			command:        "git diff HEAD~1 -- coding/git",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "git show with colon path syntax",
+			command:        "git show HEAD:coding/git/file.go",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "git diff with absolute path should require approval",
+			command:        "git diff HEAD~1 -- /etc/passwd",
+			expectedResult: PermissionRequireApproval,
+		},
+		{
+			name:           "git log with relative path",
+			command:        "git log --oneline -- src/main.go",
+			expectedResult: PermissionAutoApprove,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt // capture range variable for parallel subtests
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, _ := EvaluateCommandPermission(config, tt.command)
+			assert.Equal(t, tt.expectedResult, result, "command: %s", tt.command)
+		})
+	}
 }

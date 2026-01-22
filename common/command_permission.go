@@ -227,8 +227,9 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: `awk.*print.*\|`},
 			{Pattern: `awk.*printf.*\|`},
 			// Home directory access (potential secret exfiltration)
-			{Pattern: `.*~`},
-			{Pattern: `.*~[a-zA-Z]`},
+			// Match ~ when NOT preceded by alphanumeric (excludes git refs like HEAD~1)
+			{Pattern: `.*(^|[^a-zA-Z0-9])~($|/| )`},
+			{Pattern: `.*(^|[^a-zA-Z0-9])~[a-zA-Z]`},
 			{Pattern: `.*\$HOME`},
 			{Pattern: `.*\$\{HOME\}`},
 			// Parent directory traversal (escaping repo context)
