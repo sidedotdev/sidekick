@@ -206,32 +206,6 @@ func (_m *Client) DescribeWorkflowExecution(ctx context.Context, workflowID stri
 	return r0, r1
 }
 
-// DescribeWorkflow provides a mock function with given fields: ctx, workflowID, runID
-func (_m *Client) DescribeWorkflow(ctx context.Context, workflowID string, runID string) (*client.WorkflowExecutionDescription, error) {
-	ret := _m.Called(ctx, workflowID, runID)
-
-	var r0 *client.WorkflowExecutionDescription
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string) (*client.WorkflowExecutionDescription, error)); ok {
-		return rf(ctx, workflowID, runID)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context, string, string) *client.WorkflowExecutionDescription); ok {
-		r0 = rf(ctx, workflowID, runID)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*client.WorkflowExecutionDescription)
-		}
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
-		r1 = rf(ctx, workflowID, runID)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
 // ExecuteWorkflow provides a mock function with given fields: ctx, options, workflow, args
 func (_m *Client) ExecuteWorkflow(ctx context.Context, options client.StartWorkflowOptions, workflow interface{}, args ...interface{}) (client.WorkflowRun, error) {
 	var _ca []interface{}
@@ -407,25 +381,6 @@ func (_m *Client) GetWorkflowUpdateHandle(ref client.GetWorkflowUpdateHandleOpti
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(client.WorkflowUpdateHandle)
-		}
-	}
-
-	return r0
-}
-
-// NewWithStartWorkflowOperation provides a mock function with given fields: options, workflow, args
-func (_m *Client) NewWithStartWorkflowOperation(options client.StartWorkflowOptions, workflow interface{}, args ...interface{}) client.WithStartWorkflowOperation {
-	var _ca []interface{}
-	_ca = append(_ca, options, workflow)
-	_ca = append(_ca, args...)
-	ret := _m.Called(_ca...)
-
-	var r0 client.WithStartWorkflowOperation
-	if rf, ok := ret.Get(0).(func(client.StartWorkflowOptions, interface{}, ...interface{}) client.WithStartWorkflowOperation); ok {
-		r0 = rf(options, workflow, args...)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(client.WithStartWorkflowOperation)
 		}
 	}
 
@@ -835,56 +790,6 @@ func (_m *Client) UpdateWorkflow(ctx context.Context, options client.UpdateWorkf
 	return r0, r1
 }
 
-// UpdateWorkflowExecutionOptions provides a mock function with given fields: ctx, options
-func (_m *Client) UpdateWorkflowExecutionOptions(ctx context.Context, options client.UpdateWorkflowExecutionOptionsRequest) (client.WorkflowExecutionOptions, error) {
-	ret := _m.Called(ctx, options)
-
-	var r0 client.WorkflowExecutionOptions
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, client.UpdateWorkflowExecutionOptionsRequest) (client.WorkflowExecutionOptions, error)); ok {
-		return rf(ctx, options)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context, client.UpdateWorkflowExecutionOptionsRequest) client.WorkflowExecutionOptions); ok {
-		r0 = rf(ctx, options)
-	} else {
-		r0 = ret.Get(0).(client.WorkflowExecutionOptions)
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context, client.UpdateWorkflowExecutionOptionsRequest) error); ok {
-		r1 = rf(ctx, options)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// UpdateWithStartWorkflow provides a mock function with given fields: ctx, options
-func (_m *Client) UpdateWithStartWorkflow(ctx context.Context, options client.UpdateWithStartWorkflowOptions) (client.WorkflowUpdateHandle, error) {
-	ret := _m.Called(ctx, options)
-
-	var r0 client.WorkflowUpdateHandle
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, client.UpdateWithStartWorkflowOptions) (client.WorkflowUpdateHandle, error)); ok {
-		return rf(ctx, options)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context, client.UpdateWithStartWorkflowOptions) client.WorkflowUpdateHandle); ok {
-		r0 = rf(ctx, options)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(client.WorkflowUpdateHandle)
-		}
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context, client.UpdateWithStartWorkflowOptions) error); ok {
-		r1 = rf(ctx, options)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
 // WorkflowService provides a mock function with given fields:
 func (_m *Client) WorkflowService() workflowservice.WorkflowServiceClient {
 	ret := _m.Called()
@@ -895,38 +800,6 @@ func (_m *Client) WorkflowService() workflowservice.WorkflowServiceClient {
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(workflowservice.WorkflowServiceClient)
-		}
-	}
-
-	return r0
-}
-
-// DeploymentClient provides a mock function with given fields:
-func (_m *Client) DeploymentClient() client.DeploymentClient {
-	ret := _m.Called()
-
-	var r0 client.DeploymentClient
-	if rf, ok := ret.Get(0).(func() client.DeploymentClient); ok {
-		r0 = rf()
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(client.DeploymentClient)
-		}
-	}
-
-	return r0
-}
-
-// WorkerDeploymentClient provides a mock function with given fields:
-func (_m *Client) WorkerDeploymentClient() client.WorkerDeploymentClient {
-	ret := _m.Called()
-
-	var r0 client.WorkerDeploymentClient
-	if rf, ok := ret.Get(0).(func() client.WorkerDeploymentClient); ok {
-		r0 = rf()
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(client.WorkerDeploymentClient)
 		}
 	}
 
