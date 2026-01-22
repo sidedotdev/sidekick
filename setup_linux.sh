@@ -27,7 +27,7 @@ fi
 # Install Go if not present
 if ! command -v go &> /dev/null; then
     echo "Installing Go..."
-    GO_VERSION="1.23.0"
+    GO_VERSION="1.24.0"
     ARCH=$(uname -m)
     if [ "$ARCH" = "aarch64" ]; then
         GO_ARCH="arm64"
