@@ -125,7 +125,7 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	dirName := filepath.Base(baseDir)
 	workspaceName := dirName
 	repoName, err := getRepoName(baseDir)
-	if err != nil && repoName != dirName && existingWorkspace == nil {
+	if err == nil && repoName != dirName && existingWorkspace == nil {
 		workspaceNameSelection := selection.New("Which workspace name do you prefer?", []string{dirName, repoName})
 		selectedWorkspaceName, err := workspaceNameSelection.RunPrompt()
 		if err != nil {
