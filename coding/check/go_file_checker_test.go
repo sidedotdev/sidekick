@@ -25,6 +25,256 @@ func writeTempFile(t *testing.T, extension, code string) (string, string, error)
 
 	return testDir, filepath.Base(tmpfile.Name()), nil
 }
+
+func writeNamedTempFile(t *testing.T, dir, filename, code string) error {
+	return os.WriteFile(filepath.Join(dir, filename), []byte(code), 0644)
+}
+func TestCheckGoFile_BuildTagsPreventFalseRedeclaration(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+
+	// Create a file with unix build tag
+	unixCode := `//go:build unix
+
+package main
+
+const maxOutputTail = 100
+`
+	err := writeNamedTempFile(t, testDir, "process_unix.go", unixCode)
+	assert.NoError(t, err)
+
+	// Create a file with windows build tag - same constant name
+	windowsCode := `//go:build windows
+
+package main
+
+const maxOutputTail = 100
+`
+	err = writeNamedTempFile(t, testDir, "process_windows.go", windowsCode)
+	assert.NoError(t, err)
+
+	// Create a main file without build tags
+	mainCode := `package main
+
+func main() {}
+`
+	err = writeNamedTempFile(t, testDir, "main.go", mainCode)
+	assert.NoError(t, err)
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{
+			WorkingDirectory: testDir,
+		},
+	}
+
+	// Check the unix file - should pass because windows file is filtered out (conflicting constraint)
+	passed, errStr, err := CheckViaGoBuild(envContainer, "process_unix.go")
+	assert.NoError(t, err)
+	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
+
+	// Check the windows file - should also pass (unix file filtered out)
+	passed, errStr, err = CheckViaGoBuild(envContainer, "process_windows.go")
+	assert.NoError(t, err)
+	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
+
+	// Check the main file - has no constraint, so we filter mutually conflicting files
+	// keeping only one of the conflicting pair
+	passed, errStr, err = CheckViaGoBuild(envContainer, "main.go")
+	assert.NoError(t, err)
+	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
+}
+
+func TestCheckGoFile_LegacyBuildTags(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+
+	// Create a file with legacy unix build tag
+	unixCode := `// +build unix
+
+package main
+
+const platformName = "unix"
+`
+	err := writeNamedTempFile(t, testDir, "platform_unix.go", unixCode)
+	assert.NoError(t, err)
+
+	// Create a file with legacy windows build tag
+	windowsCode := `// +build windows
+
+package main
+
+const platformName = "windows"
+`
+	err = writeNamedTempFile(t, testDir, "platform_windows.go", windowsCode)
+	assert.NoError(t, err)
+
+	mainCode := `package main
+
+func main() {}
+`
+	err = writeNamedTempFile(t, testDir, "main.go", mainCode)
+	assert.NoError(t, err)
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{
+			WorkingDirectory: testDir,
+		},
+	}
+
+	passed, errStr, err := CheckViaGoBuild(envContainer, "platform_unix.go")
+	assert.NoError(t, err)
+	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
+}
+
+func TestCheckGoFile_CgoBuildTags(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+
+	// Create a file with cgo build tag
+	cgoCode := `//go:build cgo
+
+package main
+
+const buildMode = "cgo"
+`
+	err := writeNamedTempFile(t, testDir, "build_cgo.go", cgoCode)
+	assert.NoError(t, err)
+
+	// Create a file with negated cgo build tag
+	noCgoCode := `//go:build !cgo
+
+package main
+
+const buildMode = "nocgo"
+`
+	err = writeNamedTempFile(t, testDir, "build_nocgo.go", noCgoCode)
+	assert.NoError(t, err)
+
+	mainCode := `package main
+
+func main() {}
+`
+	err = writeNamedTempFile(t, testDir, "main.go", mainCode)
+	assert.NoError(t, err)
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{
+			WorkingDirectory: testDir,
+		},
+	}
+
+	// Check the cgo file - should pass because nocgo file is filtered out
+	passed, errStr, err := CheckViaGoBuild(envContainer, "build_cgo.go")
+	assert.NoError(t, err)
+	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
+
+	// Check the nocgo file - should also pass
+	passed, errStr, err = CheckViaGoBuild(envContainer, "build_nocgo.go")
+	assert.NoError(t, err)
+	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
+}
+
+func TestCheckGoFile_CustomBuildTags(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+
+	// Create a file with custom build tag
+	integrationCode := `//go:build integration
+
+package main
+
+const testMode = "integration"
+`
+	err := writeNamedTempFile(t, testDir, "test_integration.go", integrationCode)
+	assert.NoError(t, err)
+
+	// Create a file with negated custom build tag
+	unitCode := `//go:build !integration
+
+package main
+
+const testMode = "unit"
+`
+	err = writeNamedTempFile(t, testDir, "test_unit.go", unitCode)
+	assert.NoError(t, err)
+
+	mainCode := `package main
+
+func main() {}
+`
+	err = writeNamedTempFile(t, testDir, "main.go", mainCode)
+	assert.NoError(t, err)
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{
+			WorkingDirectory: testDir,
+		},
+	}
+
+	// Check the integration file - should pass because unit file is filtered out
+	passed, errStr, err := CheckViaGoBuild(envContainer, "test_integration.go")
+	assert.NoError(t, err)
+	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
+
+	// Check the unit file - should also pass
+	passed, errStr, err = CheckViaGoBuild(envContainer, "test_unit.go")
+	assert.NoError(t, err)
+	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
+}
+
+func TestCheckGoFile_NegatedBuildTags(t *testing.T) {
+	t.Parallel()
+
+	testDir := t.TempDir()
+
+	// Create a file with negated windows build tag (common pattern for unix files)
+	unixCode := `//go:build !windows
+
+package main
+
+const maxOutputTail = 100
+`
+	err := writeNamedTempFile(t, testDir, "process_unix.go", unixCode)
+	assert.NoError(t, err)
+
+	// Create a file with positive windows build tag
+	windowsCode := `//go:build windows
+
+package main
+
+const maxOutputTail = 100
+`
+	err = writeNamedTempFile(t, testDir, "process_windows.go", windowsCode)
+	assert.NoError(t, err)
+
+	mainCode := `package main
+
+func main() {}
+`
+	err = writeNamedTempFile(t, testDir, "main.go", mainCode)
+	assert.NoError(t, err)
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{
+			WorkingDirectory: testDir,
+		},
+	}
+
+	// Check the unix file - should pass because windows file is filtered out
+	passed, errStr, err := CheckViaGoBuild(envContainer, "process_unix.go")
+	assert.NoError(t, err)
+	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
+
+	// Check the windows file - should also pass
+	passed, errStr, err = CheckViaGoBuild(envContainer, "process_windows.go")
+	assert.NoError(t, err)
+	assert.True(t, passed, "Expected check to pass but got errors: %s", errStr)
+}
+
 func TestCheckGoFile(t *testing.T) {
 
 	testCases := []struct {

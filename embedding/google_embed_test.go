@@ -5,6 +5,7 @@ import (
 	"os"
 	"sidekick/common"
 	"sidekick/secret_manager"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,6 +36,9 @@ func TestGoogleEmbedderIntegration(t *testing.T) {
 
 	inputs := []string{"hello world", "test embedding"}
 	results, err := embedder.Embed(ctx, modelConfig, secrets, inputs, TaskTypeRetrievalDocument)
+	if err != nil && strings.Contains(err.Error(), "429") {
+		t.Skip("Skipping test due to API rate limit (429)")
+	}
 	require.NoError(t, err)
 	assert.Len(t, results, 2)
 	assert.Greater(t, len(results[0]), 0)
