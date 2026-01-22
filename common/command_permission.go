@@ -50,6 +50,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "cd"},
 			{Pattern: "head"},
 			{Pattern: "tail"},
+			{Pattern: "tee"},
 			{Pattern: "wc"},
 			{Pattern: "grep"},
 			{Pattern: "find"},
