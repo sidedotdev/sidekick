@@ -10,6 +10,15 @@ import (
 
 // TODO register/reserve default port with IANA
 const defaultServerPort = 8855
+const defaultServerHost = "127.0.0.1"
+
+func GetServerHost() string {
+	host := os.Getenv("SIDE_SERVER_HOST")
+	if host == "" {
+		return defaultServerHost
+	}
+	return host
+}
 
 func GetServerPort() int {
 	port := os.Getenv("SIDE_SERVER_PORT")

@@ -33,7 +33,7 @@ providers: []
 		xdg.Reload()
 
 		apiCtrl := NewMockController(t)
-		router := DefineRoutes(apiCtrl)
+		router := DefineRoutes(apiCtrl, TestAllowedOrigins())
 
 		req, _ := http.NewRequest("GET", "/api/v1/off_hours", nil)
 		rr := httptest.NewRecorder()
@@ -61,7 +61,7 @@ providers: []
 		xdg.Reload()
 
 		apiCtrl := NewMockController(t)
-		router := DefineRoutes(apiCtrl)
+		router := DefineRoutes(apiCtrl, TestAllowedOrigins())
 
 		req, _ := http.NewRequest("GET", "/api/v1/off_hours", nil)
 		rr := httptest.NewRecorder()
@@ -99,7 +99,7 @@ off_hours:
 		xdg.Reload()
 
 		apiCtrl := NewMockController(t)
-		router := DefineRoutes(apiCtrl)
+		router := DefineRoutes(apiCtrl, TestAllowedOrigins())
 
 		req, _ := http.NewRequest("GET", "/api/v1/off_hours", nil)
 		rr := httptest.NewRecorder()
@@ -139,7 +139,7 @@ off_hours:
 		xdg.Reload()
 
 		apiCtrl := NewMockController(t)
-		router := DefineRoutes(apiCtrl)
+		router := DefineRoutes(apiCtrl, TestAllowedOrigins())
 
 		req, _ := http.NewRequest("GET", "/api/v1/off_hours", nil)
 		rr := httptest.NewRecorder()
@@ -174,7 +174,7 @@ off_hours:
 		xdg.Reload()
 
 		apiCtrl := NewMockController(t)
-		router := DefineRoutes(apiCtrl)
+		router := DefineRoutes(apiCtrl, TestAllowedOrigins())
 
 		req, _ := http.NewRequest("GET", "/api/v1/off_hours", nil)
 		rr := httptest.NewRecorder()
@@ -211,7 +211,7 @@ off_hours:
 		xdg.Reload()
 
 		apiCtrl := NewMockController(t)
-		router := DefineRoutes(apiCtrl)
+		router := DefineRoutes(apiCtrl, TestAllowedOrigins())
 
 		req, _ := http.NewRequest("GET", "/api/v1/off_hours", nil)
 		rr := httptest.NewRecorder()
