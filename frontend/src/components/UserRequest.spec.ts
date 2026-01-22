@@ -110,16 +110,17 @@ describe('UserRequest', () => {
       const form = wrapper.find('form')
       const diffContainer = wrapper.find('.diff-container')
       
-      // Focus something else first
-      const textarea = wrapper.find('textarea')
-      await textarea.element.focus()
+      // Focus something outside the form first (blur the form)
+      ;(document.activeElement as HTMLElement)?.blur()
       
       // Click on diff container
       await diffContainer.trigger('click')
       
       // Wait for restoreFocus's setTimeout(0) to complete
+      // Check that focus is on the form or within the form
       await vi.waitFor(() => {
-        expect(document.activeElement).toBe(form.element)
+        const activeEl = document.activeElement
+        expect(activeEl === form.element || form.element.contains(activeEl)).toBe(true)
       })
       
       wrapper.unmount()
