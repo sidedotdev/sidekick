@@ -56,6 +56,7 @@ func (s *GitDiffWorkflowTestSuite) SetupTest() {
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
 	s.env.RegisterActivity(env.EnvRunCommandActivity)
+	s.env.RegisterActivity(DiffUntrackedFilesActivity)
 
 	// Create temporary directory using t.TempDir()
 	s.dir = s.T().TempDir()
@@ -642,4 +643,56 @@ func createFileAndCommit(t *testing.T, repoDir, filename, content, commitMsg str
 	// Add and commit
 	runGitCommandInTestRepo(t, repoDir, "add", filename)
 	runGitCommandInTestRepo(t, repoDir, "commit", "-m", commitMsg)
+}
+
+func TestGitDiffActivity_BinaryFilesNotShown(t *testing.T) {
+	t.Parallel()
+
+	// Sentinel strings that should NOT appear in diff output for binary files
+	const stagedBinarySentinel = "STAGED_BINARY_SECRET_CONTENT"
+	const untrackedBinarySentinel = "UNTRACKED_BINARY_SECRET_CONTENT"
+
+	// Setup test repository
+	repoDir := setupTestGitRepo(t)
+
+	// Create initial commit so we have a valid HEAD
+	createFileAndCommit(t, repoDir, "initial.txt", "initial content", "initial commit")
+
+	// Commit .gitattributes that marks specific files as binary
+	// Using "binary" attribute which is a macro for "-diff -merge -text"
+	gitattributesContent := "binaryfile binary\nuntrackedbinary binary\n"
+	createFileAndCommit(t, repoDir, ".gitattributes", gitattributesContent, "add gitattributes")
+
+	// Create and stage a binary file (marked as binary via .gitattributes)
+	err := os.WriteFile(filepath.Join(repoDir, "binaryfile"), []byte(stagedBinarySentinel), fs.FileMode(0644))
+	require.NoError(t, err)
+	runGitCommandInTestRepo(t, repoDir, "add", "binaryfile")
+
+	// Create an untracked binary file (marked as binary via .gitattributes)
+	err = os.WriteFile(filepath.Join(repoDir, "untrackedbinary"), []byte(untrackedBinarySentinel), fs.FileMode(0644))
+	require.NoError(t, err)
+
+	// Create environment container
+	ctx := context.Background()
+	devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{
+		RepoDir: repoDir,
+	})
+	require.NoError(t, err)
+	envContainer := env.EnvContainer{Env: devEnv}
+
+	// Test 1: Staged diff should mention binaryfile but NOT show its content
+	t.Run("staged_binary_file_content_not_shown", func(t *testing.T) {
+		result, err := GitDiffActivity(ctx, envContainer, GitDiffParams{Staged: true})
+		require.NoError(t, err)
+		require.Contains(t, result, "binaryfile", "Expected diff to mention the binary file name")
+		require.NotContains(t, result, stagedBinarySentinel, "Binary file content should not appear in staged diff")
+	})
+
+	// Test 2: Working tree/untracked diff should mention untrackedbinary but NOT show its content
+	t.Run("untracked_binary_file_content_not_shown", func(t *testing.T) {
+		result, err := GitDiffActivity(ctx, envContainer, GitDiffParams{})
+		require.NoError(t, err)
+		require.Contains(t, result, "untrackedbinary", "Expected diff to mention the untracked binary file name")
+		require.NotContains(t, result, untrackedBinarySentinel, "Binary file content should not appear in untracked diff")
+	})
 }
