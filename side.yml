@@ -7,19 +7,18 @@ mission: |
   engaging them. The core mission of Sidekick is to make developers more
   productive as they work within large existing code bases.
 
-#worktree_setup: |
-#  cd frontend && bun ci && touch dist/empty.txt
+worktree_setup: |
+  cd frontend && bun ci && touch dist/empty.txt
 
 test_commands:
   - command: "go test -test.timeout 30s ./..."
-  - command: "lima go test -test.timeout 30s ./..."
-#  - working_dir: "frontend"
-#    command: "bun run test:unit -- --reporter=dot --no-color --run"
-#  - working_dir: "frontend"
-#    command: "bun run type-check"
-#
-#integration_test_commands:
-#  - command: "SIDE_INTEGRATION_TEST=true go test -test.timeout 30s ./..."
+  - working_dir: "frontend"
+    command: "bun run test:unit -- --reporter=dot --no-color --run"
+  - working_dir: "frontend"
+    command: "bun run type-check"
+
+integration_test_commands:
+  - command: "SIDE_INTEGRATION_TEST=true go test -test.timeout 30s ./..."
 
 agent_config:
   coding:
@@ -33,7 +32,6 @@ command_permissions:
     - pattern: "bun type-check"
     - pattern: "(npm|bun) run test:unit.*--run"
     - pattern: "bun test:unit.*--run"
-    - pattern: "docker run"
     - pattern: "docker build"
     - pattern: "docker logs"
     - pattern: "docker ps"
