@@ -190,6 +190,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(ffa.EvalBoolFlag)
 	w.RegisterActivity(common.GetLocalConfig)
 	w.RegisterActivity(common.BaseCommandPermissionsActivity)
+	w.RegisterActivity(dev.CheckCommandPermissionActivity)
 
 	w.RegisterActivity(&workspace.Activities{Storage: service})
 

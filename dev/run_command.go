@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sidekick/common"
@@ -23,6 +24,28 @@ var runCommandTool = llm.Tool{
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&RunCommandParams{}),
 }
 
+type CheckCommandPermissionInput struct {
+	CommandPermissions common.CommandPermissionConfig
+	Command            string
+	StripEnvVarPrefix  bool
+}
+
+type CheckCommandPermissionOutput struct {
+	Result  common.PermissionResult
+	Message string
+}
+
+func CheckCommandPermissionActivity(ctx context.Context, input CheckCommandPermissionInput) (CheckCommandPermissionOutput, error) {
+	opts := common.EvaluatePermissionOptions{
+		StripEnvVarPrefix: input.StripEnvVarPrefix,
+	}
+	result, message := common.EvaluateScriptPermissionWithOptions(input.CommandPermissions, input.Command, opts)
+	return CheckCommandPermissionOutput{
+		Result:  result,
+		Message: message,
+	}, nil
+}
+
 // checkCommandPermission evaluates command permissions and handles user approval if needed.
 // Returns (proceed, message, error) where proceed indicates whether to execute the command,
 // message contains any early return message (for denied or unapproved commands), and error
@@ -30,11 +53,31 @@ var runCommandTool = llm.Tool{
 func checkCommandPermission(dCtx DevContext, command string, workingDir string) (proceed bool, message string, err error) {
 	enableCommandPermissions := workflow.GetVersion(dCtx, "command-permissions", workflow.DefaultVersion, 1) >= 1
 	stripEnvVarPrefix := workflow.GetVersion(dCtx, "command-permissions-strip-env-var", workflow.DefaultVersion, 1) >= 1
+	usePermissionActivity := workflow.GetVersion(dCtx, "command-permissions-activity", workflow.DefaultVersion, 1) >= 1
+
 	if enableCommandPermissions {
-		opts := common.EvaluatePermissionOptions{
-			StripEnvVarPrefix: stripEnvVarPrefix,
+		var permResult common.PermissionResult
+		var permMessage string
+
+		if usePermissionActivity {
+			var output CheckCommandPermissionOutput
+			err := workflow.ExecuteActivity(dCtx.Context, CheckCommandPermissionActivity, CheckCommandPermissionInput{
+				CommandPermissions: dCtx.RepoConfig.CommandPermissions,
+				Command:            command,
+				StripEnvVarPrefix:  stripEnvVarPrefix,
+			}).Get(dCtx.Context, &output)
+			if err != nil {
+				return false, "", fmt.Errorf("failed to check command permission: %v", err)
+			}
+			permResult = output.Result
+			permMessage = output.Message
+		} else {
+			opts := common.EvaluatePermissionOptions{
+				StripEnvVarPrefix: stripEnvVarPrefix,
+			}
+			permResult, permMessage = common.EvaluateScriptPermissionWithOptions(dCtx.RepoConfig.CommandPermissions, command, opts)
 		}
-		permResult, permMessage := common.EvaluateScriptPermissionWithOptions(dCtx.RepoConfig.CommandPermissions, command, opts)
+
 		workflow.GetLogger(dCtx).Debug("Command permission evaluation result", "command", command, "result", permResult, "message", permMessage)
 
 		switch permResult {
