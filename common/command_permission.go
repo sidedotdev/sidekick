@@ -260,13 +260,13 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: `^sed\b.*'[0-9$]*e[[:space:]]`, Message: "GNU sed `e` command executes shell commands for addressed lines, enabling exfiltration or side effects."},
 		},
 		Deny: []CommandPattern{
-			// Destructive file operations
-			{Pattern: "rm -rf /", Message: "Recursive force delete of root directory is extremely dangerous"},
-			{Pattern: "rm -rf ~", Message: "Recursive force delete of home directory is extremely dangerous"},
-			{Pattern: "rm -rf /*", Message: "Recursive force delete of root contents is extremely dangerous"},
-			{Pattern: "rm -rf ~/*", Message: "Recursive force delete of home contents is extremely dangerous"},
-			{Pattern: "rm -fr /", Message: "Recursive force delete of root directory is extremely dangerous"},
-			{Pattern: "rm -fr ~", Message: "Recursive force delete of home directory is extremely dangerous"},
+			// Destructive file operations - patterns use regex to avoid false positives on paths like /Users/...
+			{Pattern: `^rm -rf /(\s|;|&|\||$)`, Message: "Recursive force delete of root directory is extremely dangerous"},
+			{Pattern: `^rm -rf ~(\s|;|&|\||$)`, Message: "Recursive force delete of home directory is extremely dangerous"},
+			{Pattern: `^rm -rf /\*`, Message: "Recursive force delete of root contents is extremely dangerous"},
+			{Pattern: `^rm -rf ~/\*`, Message: "Recursive force delete of home contents is extremely dangerous"},
+			{Pattern: `^rm -fr /(\s|;|&|\||$)`, Message: "Recursive force delete of root directory is extremely dangerous"},
+			{Pattern: `^rm -fr ~(\s|;|&|\||$)`, Message: "Recursive force delete of home directory is extremely dangerous"},
 			// Privilege escalation
 			{Pattern: "sudo", Message: "sudo commands require manual execution for security"},
 			{Pattern: "su ", Message: "su commands require manual execution for security"},

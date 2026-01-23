@@ -1632,3 +1632,63 @@ func TestEvaluateCommandPermission_GitDiffRelativePath(t *testing.T) {
 		})
 	}
 }
+
+func TestBasePermissions_RmRfPatterns(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	t.Run("dangerous rm -rf patterns are denied", func(t *testing.T) {
+		t.Parallel()
+		tests := []struct {
+			command string
+			message string
+		}{
+			{"rm -rf /", "Recursive force delete of root directory is extremely dangerous"},
+			{"rm -rf / ", "Recursive force delete of root directory is extremely dangerous"},
+			{"rm -rf /;", "Recursive force delete of root directory is extremely dangerous"},
+			{"rm -rf /&", "Recursive force delete of root directory is extremely dangerous"},
+			{"rm -rf /|", "Recursive force delete of root directory is extremely dangerous"},
+			{"rm -rf ~", "Recursive force delete of home directory is extremely dangerous"},
+			{"rm -rf ~ ", "Recursive force delete of home directory is extremely dangerous"},
+			{"rm -rf ~;", "Recursive force delete of home directory is extremely dangerous"},
+			{"rm -rf /*", "Recursive force delete of root contents is extremely dangerous"},
+			{"rm -rf ~/*", "Recursive force delete of home contents is extremely dangerous"},
+			{"rm -fr /", "Recursive force delete of root directory is extremely dangerous"},
+			{"rm -fr ~", "Recursive force delete of home directory is extremely dangerous"},
+		}
+
+		for _, tt := range tests {
+			result, msg := EvaluateCommandPermission(config, tt.command)
+			assert.Equal(t, PermissionDeny, result, "expected deny for: %s", tt.command)
+			assert.Equal(t, tt.message, msg, "wrong message for: %s", tt.command)
+		}
+	})
+
+	t.Run("legitimate rm -rf paths require approval", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			`rm -rf "/Users/ehsanhoque/Library/Application Support/sidekick/worktrees/001"`,
+			`rm -rf "/Users/ehsanhoque/Library/Application Support/sidekick/worktrees/001" 2>&1 || echo "Directory doesn't exist"`,
+			"rm -rf /tmp/test",
+			"rm -rf /var/tmp/build",
+			"rm -rf ~/projects/old-backup",
+			"rm -rf /home/user/temp",
+			"rm -rf ./node_modules",
+			"rm -rf build/",
+			"rm -fr /tmp/cache",
+			"rm -fr ~/Downloads/temp",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionRequireApproval, result, "legitimate rm -rf path should require approval: %s", cmd)
+		}
+	})
+
+	t.Run("rm without -rf requires approval", func(t *testing.T) {
+		t.Parallel()
+		// rm is not auto-approved since it's a destructive operation
+		result, _ := EvaluateCommandPermission(config, "rm file.txt")
+		assert.Equal(t, PermissionRequireApproval, result)
+	})
+}
