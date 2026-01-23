@@ -325,6 +325,15 @@ h2 {
   background-color: rgba(255, 255, 255, 0.07);
 }
 
+.new-task :deep(.shortcut-hint) {
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.new-task:hover :deep(.shortcut-hint) {
+  opacity: 0.7;
+}
+
 .guided-overlay {
   position: fixed;
   top: 0;
