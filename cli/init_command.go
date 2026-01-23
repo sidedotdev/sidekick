@@ -427,7 +427,7 @@ func saveConfig(filePath string, config common.RepoConfig) error {
 }
 
 func ensureTestCommands(config *common.RepoConfig, filePath string) error {
-	fmt.Println("\nPlease enter the command you use to run your tests (or type 'skip' to skip)")
+	fmt.Println("\nPlease enter the command you use to run your tests (or press Enter to skip)")
 	fmt.Println("Examples: pytest, jest, go test ./...")
 	fmt.Print("Test command: ")
 
@@ -435,11 +435,7 @@ func ensureTestCommands(config *common.RepoConfig, filePath string) error {
 	scanner.Scan()
 	testCommand := strings.TrimSpace(scanner.Text())
 
-	if testCommand == "" {
-		return fmt.Errorf("no command entered, exiting early")
-	}
-
-	if strings.EqualFold(testCommand, "skip") {
+	if testCommand == "" || strings.EqualFold(testCommand, "skip") {
 		// Write a commented placeholder example to the config file
 		if err := saveConfig(filePath, *config); err != nil {
 			return err
