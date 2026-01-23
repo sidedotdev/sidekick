@@ -179,8 +179,8 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit on main")
 
-		// Create a feature branch and worktree with unique name
-		branchName := fmt.Sprintf("feature-cleanup-test")
+		// Create a feature branch and worktree with unique name based on repo dir
+		branchName := fmt.Sprintf("feature-cleanup-test-%s", filepath.Base(repoDir))
 
 		// Create environment container and the associated worktree
 		worktree := domain.Worktree{
