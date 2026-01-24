@@ -5,7 +5,7 @@ import (
 	"sidekick/utils"
 	"testing"
 
-	sitter "github.com/smacker/go-tree-sitter"
+	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 type testCase struct {
@@ -32,11 +32,11 @@ func TestExpandContextLines(t *testing.T) {
 			name: "empty source code",
 			sourceBlocks: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  0,
 						EndByte:    0,
-						StartPoint: sitter.Point{Row: 0, Column: 0},
-						EndPoint:   sitter.Point{Row: 0, Column: 0},
+						StartPoint: tree_sitter.Point{Row: 0, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 0, Column: 0},
 					},
 				},
 			},
@@ -45,11 +45,11 @@ func TestExpandContextLines(t *testing.T) {
 			expectedStrings: []string{""},
 			expected: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  0,
 						EndByte:    0,
-						StartPoint: sitter.Point{Row: 0, Column: 0},
-						EndPoint:   sitter.Point{Row: 0, Column: 0},
+						StartPoint: tree_sitter.Point{Row: 0, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 0, Column: 0},
 					},
 				},
 			},
@@ -58,11 +58,11 @@ func TestExpandContextLines(t *testing.T) {
 			name: "zero context lines expands partial line",
 			sourceBlocks: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  6,
 						EndByte:    7,
-						StartPoint: sitter.Point{Row: 1, Column: 0},
-						EndPoint:   sitter.Point{Row: 1, Column: 1},
+						StartPoint: tree_sitter.Point{Row: 1, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 1, Column: 1},
 					},
 				},
 			},
@@ -71,11 +71,11 @@ func TestExpandContextLines(t *testing.T) {
 			expectedStrings: []string{"line2\n"},
 			expected: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  6,
 						EndByte:    12,
-						StartPoint: sitter.Point{Row: 1, Column: 0},
-						EndPoint:   sitter.Point{Row: 1, Column: 6},
+						StartPoint: tree_sitter.Point{Row: 1, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 1, Column: 6},
 					},
 				},
 			},
@@ -84,11 +84,11 @@ func TestExpandContextLines(t *testing.T) {
 			name: "context lines greater than available lines, no newline at end of source code",
 			sourceBlocks: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  6,
 						EndByte:    12,
-						StartPoint: sitter.Point{Row: 1, Column: 0},
-						EndPoint:   sitter.Point{Row: 1, Column: 6},
+						StartPoint: tree_sitter.Point{Row: 1, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 1, Column: 6},
 					},
 				},
 			},
@@ -97,11 +97,11 @@ func TestExpandContextLines(t *testing.T) {
 			expectedStrings: []string{"line1\nline2\nline3"},
 			expected: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  0,
-						EndByte:    uint32(len([]byte("line1\nline2\nline3"))),
-						StartPoint: sitter.Point{Row: 0, Column: 0},
-						EndPoint:   sitter.Point{Row: 2, Column: 5},
+						EndByte:    uint(len([]byte("line1\nline2\nline3"))),
+						StartPoint: tree_sitter.Point{Row: 0, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 2, Column: 5},
 					},
 				},
 			},
@@ -110,11 +110,11 @@ func TestExpandContextLines(t *testing.T) {
 			name: "context lines not able to be expanded",
 			sourceBlocks: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  0,
-						EndByte:    uint32(len([]byte("line1\nline2\nline3"))),
-						StartPoint: sitter.Point{Row: 0, Column: 0},
-						EndPoint:   sitter.Point{Row: 2, Column: 5},
+						EndByte:    uint(len([]byte("line1\nline2\nline3"))),
+						StartPoint: tree_sitter.Point{Row: 0, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 2, Column: 5},
 					},
 				},
 			},
@@ -123,11 +123,11 @@ func TestExpandContextLines(t *testing.T) {
 			expectedStrings: []string{"line1\nline2\nline3"},
 			expected: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  0,
-						EndByte:    uint32(len([]byte("line1\nline2\nline3"))),
-						StartPoint: sitter.Point{Row: 0, Column: 0},
-						EndPoint:   sitter.Point{Row: 2, Column: 5},
+						EndByte:    uint(len([]byte("line1\nline2\nline3"))),
+						StartPoint: tree_sitter.Point{Row: 0, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 2, Column: 5},
 					},
 				},
 			},
@@ -136,11 +136,11 @@ func TestExpandContextLines(t *testing.T) {
 			name: "context lines greater than available lines, with newline at end of source code",
 			sourceBlocks: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  6,
 						EndByte:    12,
-						StartPoint: sitter.Point{Row: 1, Column: 0},
-						EndPoint:   sitter.Point{Row: 1, Column: 6},
+						StartPoint: tree_sitter.Point{Row: 1, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 1, Column: 6},
 					},
 				},
 			},
@@ -149,11 +149,11 @@ func TestExpandContextLines(t *testing.T) {
 			expectedStrings: []string{"line1\nline2\nline3\n"},
 			expected: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  0,
-						EndByte:    uint32(len([]byte("line1\nline2\nline3\n"))),
-						StartPoint: sitter.Point{Row: 0, Column: 0},
-						EndPoint:   sitter.Point{Row: 3, Column: 0},
+						EndByte:    uint(len([]byte("line1\nline2\nline3\n"))),
+						StartPoint: tree_sitter.Point{Row: 0, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 3, Column: 0},
 					},
 				},
 			},
@@ -162,11 +162,11 @@ func TestExpandContextLines(t *testing.T) {
 			name: "context lines well within available lines",
 			sourceBlocks: []SourceBlock{
 				{
-					Range: sitter.Range{
-						StartByte:  uint32(len([]byte("line1\nline2\n"))),
-						EndByte:    uint32(len([]byte("line1\nline2\nline3\n"))),
-						StartPoint: sitter.Point{Row: 2, Column: 0},
-						EndPoint:   sitter.Point{Row: 2, Column: 6},
+					Range: tree_sitter.Range{
+						StartByte:  uint(len([]byte("line1\nline2\n"))),
+						EndByte:    uint(len([]byte("line1\nline2\nline3\n"))),
+						StartPoint: tree_sitter.Point{Row: 2, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 2, Column: 6},
 					},
 				},
 			},
@@ -175,11 +175,11 @@ func TestExpandContextLines(t *testing.T) {
 			expectedStrings: []string{"line2\nline3\nline4\n"},
 			expected: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  6,
-						EndByte:    uint32(len([]byte("line1\nline2\nline3\nline4\n"))),
-						StartPoint: sitter.Point{Row: 1, Column: 0},
-						EndPoint:   sitter.Point{Row: 3, Column: 6},
+						EndByte:    uint(len([]byte("line1\nline2\nline3\nline4\n"))),
+						StartPoint: tree_sitter.Point{Row: 1, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 3, Column: 6},
 					},
 				},
 			},
@@ -188,11 +188,11 @@ func TestExpandContextLines(t *testing.T) {
 			name: "context lines exactly matching available lines",
 			sourceBlocks: []SourceBlock{
 				{
-					Range: sitter.Range{
-						StartByte:  uint32(len([]byte("line1\nline2\n"))),
-						EndByte:    uint32(len([]byte("line1\nline2\nline3\n"))),
-						StartPoint: sitter.Point{Row: 2, Column: 0},
-						EndPoint:   sitter.Point{Row: 2, Column: 6},
+					Range: tree_sitter.Range{
+						StartByte:  uint(len([]byte("line1\nline2\n"))),
+						EndByte:    uint(len([]byte("line1\nline2\nline3\n"))),
+						StartPoint: tree_sitter.Point{Row: 2, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 2, Column: 6},
 					},
 				},
 			},
@@ -201,11 +201,11 @@ func TestExpandContextLines(t *testing.T) {
 			expectedStrings: []string{"line1\nline2\nline3\nline4\nline5"},
 			expected: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  0,
-						EndByte:    uint32(len([]byte("line1\nline2\nline3\nline4\nline5"))),
-						StartPoint: sitter.Point{Row: 0, Column: 0},
-						EndPoint:   sitter.Point{Row: 4, Column: 5},
+						EndByte:    uint(len([]byte("line1\nline2\nline3\nline4\nline5"))),
+						StartPoint: tree_sitter.Point{Row: 0, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 4, Column: 5},
 					},
 				},
 			},
@@ -214,11 +214,11 @@ func TestExpandContextLines(t *testing.T) {
 			name: "all empty lines, expand less than full available",
 			sourceBlocks: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  1,
 						EndByte:    2,
-						StartPoint: sitter.Point{Row: 1, Column: 0},
-						EndPoint:   sitter.Point{Row: 1, Column: 0},
+						StartPoint: tree_sitter.Point{Row: 1, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 1, Column: 0},
 					},
 				},
 			},
@@ -227,11 +227,11 @@ func TestExpandContextLines(t *testing.T) {
 			expectedStrings: []string{"\n\n\n"},
 			expected: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  0,
-						EndByte:    uint32(len([]byte("\n\n\n"))),
-						StartPoint: sitter.Point{Row: 0, Column: 0},
-						EndPoint:   sitter.Point{Row: 2, Column: 0},
+						EndByte:    uint(len([]byte("\n\n\n"))),
+						StartPoint: tree_sitter.Point{Row: 0, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 2, Column: 0},
 					},
 				},
 			},
@@ -240,11 +240,11 @@ func TestExpandContextLines(t *testing.T) {
 			name: "all empty lines, expand more than full available",
 			sourceBlocks: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  1,
 						EndByte:    2,
-						StartPoint: sitter.Point{Row: 1, Column: 0},
-						EndPoint:   sitter.Point{Row: 1, Column: 0},
+						StartPoint: tree_sitter.Point{Row: 1, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 1, Column: 0},
 					},
 				},
 			},
@@ -253,11 +253,11 @@ func TestExpandContextLines(t *testing.T) {
 			expectedStrings: []string{"\n\n\n"},
 			expected: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  0,
-						EndByte:    uint32(len([]byte("\n\n\n"))),
-						StartPoint: sitter.Point{Row: 0, Column: 0},
-						EndPoint:   sitter.Point{Row: 3, Column: 0},
+						EndByte:    uint(len([]byte("\n\n\n"))),
+						StartPoint: tree_sitter.Point{Row: 0, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 3, Column: 0},
 					},
 				},
 			},
@@ -266,11 +266,11 @@ func TestExpandContextLines(t *testing.T) {
 			name: "out of bounds byte range clamped",
 			sourceBlocks: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  100,
 						EndByte:    200,
-						StartPoint: sitter.Point{Row: 50, Column: 0},
-						EndPoint:   sitter.Point{Row: 60, Column: 0},
+						StartPoint: tree_sitter.Point{Row: 50, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 60, Column: 0},
 					},
 				},
 			},
@@ -279,11 +279,11 @@ func TestExpandContextLines(t *testing.T) {
 			expectedStrings: []string{"line2\nline3"},
 			expected: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  6,
-						EndByte:    uint32(len([]byte("line1\nline2\nline3"))),
-						StartPoint: sitter.Point{Row: 0, Column: 0},
-						EndPoint:   sitter.Point{Row: 2, Column: 5},
+						EndByte:    uint(len([]byte("line1\nline2\nline3"))),
+						StartPoint: tree_sitter.Point{Row: 0, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 2, Column: 5},
 					},
 				},
 			},
@@ -292,11 +292,11 @@ func TestExpandContextLines(t *testing.T) {
 			name: "end byte exceeds source length",
 			sourceBlocks: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  6,
 						EndByte:    100,
-						StartPoint: sitter.Point{Row: 1, Column: 0},
-						EndPoint:   sitter.Point{Row: 10, Column: 0},
+						StartPoint: tree_sitter.Point{Row: 1, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 10, Column: 0},
 					},
 				},
 			},
@@ -305,11 +305,11 @@ func TestExpandContextLines(t *testing.T) {
 			expectedStrings: []string{"line1\nline2\nline3"},
 			expected: []SourceBlock{
 				{
-					Range: sitter.Range{
+					Range: tree_sitter.Range{
 						StartByte:  0,
-						EndByte:    uint32(len([]byte("line1\nline2\nline3"))),
-						StartPoint: sitter.Point{Row: 0, Column: 0},
-						EndPoint:   sitter.Point{Row: 2, Column: 5},
+						EndByte:    uint(len([]byte("line1\nline2\nline3"))),
+						StartPoint: tree_sitter.Point{Row: 0, Column: 0},
+						EndPoint:   tree_sitter.Point{Row: 2, Column: 5},
 					},
 				},
 			},
@@ -343,8 +343,8 @@ func TestSourceBlockString_OutOfBounds(t *testing.T) {
 	testCases := []struct {
 		name      string
 		source    []byte
-		startByte uint32
-		endByte   uint32
+		startByte uint
+		endByte   uint
 		expected  string
 	}{
 		{
@@ -401,7 +401,7 @@ func TestSourceBlockString_OutOfBounds(t *testing.T) {
 			}
 			sb := SourceBlock{
 				Source: sourcePtr,
-				Range: sitter.Range{
+				Range: tree_sitter.Range{
 					StartByte: tc.startByte,
 					EndByte:   tc.endByte,
 				},

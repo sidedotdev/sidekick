@@ -1,15 +1,15 @@
 package tree_sitter
 
 import (
-	"context"
 	"embed"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"unsafe"
 
-	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/typescript/typescript"
+	tree_sitter "github.com/tree-sitter/go-tree-sitter"
+	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
 
 func GetFileHeaders(filePath string, numContextLines int) ([]SourceBlock, error) {
@@ -21,11 +21,12 @@ func GetFileHeaders(filePath string, numContextLines int) ([]SourceBlock, error)
 	if err != nil {
 		return nil, fmt.Errorf("failed to obtain source code when getting headers for file %s: %v", filePath, err)
 	}
-	parser := sitter.NewParser()
+	parser := tree_sitter.NewParser()
+	defer parser.Close()
 	parser.SetLanguage(sitterLanguage)
-	tree, err := parser.ParseCtx(context.Background(), nil, sourceTransform(languageName, &sourceCode))
-	if err != nil {
-		return nil, err
+	tree := parser.Parse(sourceTransform(languageName, &sourceCode), nil)
+	if tree != nil {
+		defer tree.Close()
 	}
 	headers, err := getHeadersInternal(languageName, sitterLanguage, tree, &sourceCode)
 	if err != nil && !errors.Is(err, ErrNoHeadersFound) {
@@ -64,33 +65,30 @@ func FormatHeaders(headers []SourceBlock) string {
 
 var ErrNoHeadersFound = errors.New("no headers found")
 
-func getHeadersInternal(languageName string, sitterLanguage *sitter.Language, tree *sitter.Tree, sourceCode *[]byte) (headers []SourceBlock, err error) {
+func getHeadersInternal(languageName string, sitterLanguage *tree_sitter.Language, tree *tree_sitter.Tree, sourceCode *[]byte) (headers []SourceBlock, err error) {
 	queryString, err := getHeaderQuery(languageName)
 	if err != nil {
 		return headers, fmt.Errorf("error getting header query: %w", err)
 	}
 
-	q, err := sitter.NewQuery([]byte(queryString), sitterLanguage)
-	if err != nil {
-		return headers, fmt.Errorf("error creating sitter header query: %w", err)
+	q, qErr := tree_sitter.NewQuery(sitterLanguage, queryString)
+	if qErr != nil {
+		return headers, fmt.Errorf("error creating sitter header query: %s", qErr.Message)
 	}
+	defer q.Close()
 
-	qc := sitter.NewQueryCursor()
-	qc.Exec(q, tree.RootNode())
-	for {
-		m, ok := qc.NextMatch()
-		if !ok {
-			break
-		}
-		m = qc.FilterPredicates(m, *sourceCode)
-		for _, c := range m.Captures {
-			name := q.CaptureNameForId(c.Index)
+	qc := tree_sitter.NewQueryCursor()
+	defer qc.Close()
+	matches := qc.Matches(q, tree.RootNode(), *sourceCode)
+	for match := matches.Next(); match != nil; match = matches.Next() {
+		for _, c := range match.Captures {
+			name := q.CaptureNames()[c.Index]
 			if name == "header" {
 				header := SourceBlock{
 					Source: sourceCode,
-					Range: sitter.Range{
-						StartPoint: c.Node.StartPoint(),
-						EndPoint:   c.Node.EndPoint(),
+					Range: tree_sitter.Range{
+						StartPoint: c.Node.StartPosition(),
+						EndPoint:   c.Node.EndPosition(),
 						StartByte:  c.Node.StartByte(),
 						EndByte:    c.Node.EndByte(),
 					},
@@ -114,7 +112,7 @@ func getHeadersInternal(languageName string, sitterLanguage *sitter.Language, tr
 	return headers, nil
 }
 
-func getEmbeddedLanguageHeaders(languageName string, tree *sitter.Tree, sourceCode *[]byte) (headers []SourceBlock, err error) {
+func getEmbeddedLanguageHeaders(languageName string, tree *tree_sitter.Tree, sourceCode *[]byte) (headers []SourceBlock, err error) {
 	switch languageName {
 	case "vue":
 		{
@@ -124,7 +122,7 @@ func getEmbeddedLanguageHeaders(languageName string, tree *sitter.Tree, sourceCo
 	return headers, nil
 }
 
-func getVueEmbeddedLanguageHeaders(vueTree *sitter.Tree, sourceCode *[]byte) (headers []SourceBlock, err error) {
+func getVueEmbeddedLanguageHeaders(vueTree *tree_sitter.Tree, sourceCode *[]byte) (headers []SourceBlock, err error) {
 	tsTree, err := GetVueEmbeddedTypescriptTree(vueTree, sourceCode)
 	if err != nil {
 		return headers, err
@@ -133,7 +131,8 @@ func getVueEmbeddedLanguageHeaders(vueTree *sitter.Tree, sourceCode *[]byte) (he
 		return headers, nil
 	}
 
-	return getHeadersInternal("typescript", typescript.GetLanguage(), tsTree, sourceCode)
+	tsLang := tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_typescript.LanguageTypescript()))
+	return getHeadersInternal("typescript", tsLang, tsTree, sourceCode)
 }
 
 //go:embed header_queries/*

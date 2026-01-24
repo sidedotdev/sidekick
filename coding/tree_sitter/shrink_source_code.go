@@ -1,7 +1,6 @@
 package tree_sitter
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"regexp"
@@ -9,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	sitter "github.com/smacker/go-tree-sitter"
+	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 var editBlockRegex = regexp.MustCompile(`(?m)^edit_block:[0-9]+$`)
@@ -47,12 +46,13 @@ func (sc SourceCode) GetSignatures() ([]Signature, error) {
 	if err != nil {
 		return nil, err
 	}
-	parser := sitter.NewParser()
+	parser := tree_sitter.NewParser()
+	defer parser.Close()
 	parser.SetLanguage(sitterLanguage)
 	sourceBytes := []byte(sc.Content)
-	tree, err := parser.ParseCtx(context.Background(), nil, sourceTransform(sc.LanguageName, &sourceBytes))
-	if err != nil {
-		return nil, err
+	tree := parser.Parse(sourceTransform(sc.LanguageName, &sourceBytes), nil)
+	if tree != nil {
+		defer tree.Close()
 	}
 	signatureSlice, err := getFileSignaturesInternal(sc.LanguageName, sitterLanguage, tree, &sourceBytes, true)
 	if err != nil {
@@ -186,7 +186,8 @@ func ShrinkEmbeddedCodeContext(content string, longestFirst bool, maxLength int)
 
 func removeComments(sourceCode SourceCode) (bool, SourceCode) {
 	newSourceCode := SourceCode(sourceCode)
-	parser := sitter.NewParser()
+	parser := tree_sitter.NewParser()
+	defer parser.Close()
 	sitterLanguage, err := getSitterLanguage(sourceCode.LanguageName)
 	if err != nil {
 		// skip unsupported languages
@@ -194,9 +195,9 @@ func removeComments(sourceCode SourceCode) (bool, SourceCode) {
 	}
 	parser.SetLanguage(sitterLanguage)
 	sourceBytes := []byte(sourceCode.Content)
-	tree, err := parser.ParseCtx(context.Background(), nil, sourceTransform(newSourceCode.LanguageName, &sourceBytes))
-	if err != nil {
-		panic(err)
+	tree := parser.Parse(sourceTransform(newSourceCode.LanguageName, &sourceBytes), nil)
+	if tree != nil {
+		defer tree.Close()
 	}
 
 	var queryString string
@@ -252,7 +253,7 @@ func removeComments(sourceCode SourceCode) (bool, SourceCode) {
 	case "kotlin", "kotlin-signatures":
 		queryString = `
 (line_comment) @comment
-(multiline_comment) @comment
+(block_comment) @comment
 `
 	}
 
@@ -261,27 +262,22 @@ func removeComments(sourceCode SourceCode) (bool, SourceCode) {
 		return false, sourceCode
 	}
 
-	q, err := sitter.NewQuery([]byte(queryString), sitterLanguage)
-	if err != nil {
-		panic(err)
+	q, qErr := tree_sitter.NewQuery(sitterLanguage, queryString)
+	if qErr != nil {
+		panic(qErr.Message)
 	}
-	qc := sitter.NewQueryCursor()
-	qc.Exec(q, tree.RootNode())
+	defer q.Close()
+	qc := tree_sitter.NewQueryCursor()
+	defer qc.Close()
+	matches := qc.Matches(q, tree.RootNode(), sourceBytes)
 
 	// Iterate over query results
 	didRemove := false
-	for {
-		m, ok := qc.NextMatch()
-		if !ok {
-			break
-		}
-
-		// Apply predicates filtering
-		m = qc.FilterPredicates(m, sourceBytes)
-		for _, c := range m.Captures {
-			name := q.CaptureNameForId(c.Index)
+	for match := matches.Next(); match != nil; match = matches.Next() {
+		for _, c := range match.Captures {
+			name := q.CaptureNames()[c.Index]
 			if name == "comment" {
-				comment := c.Node.Content(sourceBytes)
+				comment := c.Node.Utf8Text(sourceBytes)
 				newSourceCode.Content = strings.Replace(newSourceCode.Content, comment, "", 1)
 				didRemove = true
 			}
