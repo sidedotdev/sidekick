@@ -2,7 +2,7 @@
 (class_declaration
   (modifiers)? @class.modifiers
     {{^showComplete}}(#not-match? @class.modifiers "private|protected"){{/showComplete}}
-  (type_identifier) @class.name
+  (identifier) @class.name
   (type_parameters)? @class.type_parameters
   (primary_constructor)? @class.primary_constructor
 
@@ -12,7 +12,7 @@
   (enum_class_body
     [
       (enum_entry
-        (simple_identifier) @class.enum_entry.name
+        (identifier) @class.enum_entry.name
       ) @class.enum_entry.declaration
       
       _
@@ -25,7 +25,7 @@
 (object_declaration
   (modifiers)? @class.modifiers
     {{^showComplete}}(#not-match? @class.modifiers "private/protected"){{/showComplete}}
-  (type_identifier) @class.name
+  (identifier) @class.name
   (type_parameters)? @class.type_parameters
   (class_body
   )? @class.body
@@ -38,7 +38,7 @@
       ; not sure if we wanna exclude internal too here
       {{^showComplete}}(#not-match? @function.modifiers "private"){{/showComplete}}
     (type_parameters)? @function.type_parameters
-    (simple_identifier) @function.name
+    (identifier) @function.name
     (function_value_parameters) @function.parameters
     (user_type)? @function.return_type
   ) @function.declaration
@@ -51,7 +51,7 @@
         (modifiers)? @function.modifiers
           {{^showComplete}}(#not-match? @function.modifiers "private|protected"){{/showComplete}}
         (type_parameters)? @function.type_parameters
-        (simple_identifier) @function.name
+        (identifier) @function.name
         (function_value_parameters) @function.parameters
         (user_type)? @function.return_type
       ) @function.declaration
@@ -65,7 +65,7 @@
         (modifiers)? @function.modifiers
           {{^showComplete}}(#not-match? @function.modifiers "private|protected"){{/showComplete}}
         (type_parameters)? @function.type_parameters
-        (simple_identifier) @function.name
+        (identifier) @function.name
         (function_value_parameters) @function.parameters
         (user_type)? @function.return_type
       ) @function.declaration
@@ -79,7 +79,7 @@
       ; not sure if we wanna exclude internal too here
       {{^showComplete}}(#not-match? @property.modifiers "private"){{/showComplete}}
     (variable_declaration
-      (simple_identifier) @property.name
+      (identifier) @property.name
     )
   ) @property.declaration
 )
@@ -91,7 +91,7 @@
         (modifiers)? @property.modifiers
           {{^showComplete}}(#not-match? @property.modifiers "private|protected"){{/showComplete}}
         (variable_declaration
-          (simple_identifier) @property.ignored.name
+          (identifier) @property.ignored.name
         )
       ) @property.declaration
     )
@@ -105,7 +105,7 @@
           ; not sure if we wanna exclude internal too here
           {{^showComplete}}(#not-match? @property.modifiers "private|protected"){{/showComplete}}
         (variable_declaration
-          (simple_identifier) @property.ignored.name
+          (identifier) @property.ignored.name
         )
       ) @property.declaration
     )
@@ -117,7 +117,7 @@
     {{^showComplete}}(#not-match? @enum_entry.class.modifiers "private|protected"){{/showComplete}}
   (_
     (enum_entry
-      (simple_identifier) @enum_entry.name
+      (identifier) @enum_entry.name
     )
   )
 )

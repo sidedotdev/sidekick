@@ -1,18 +1,18 @@
 package tree_sitter
 
 import (
-	"context"
 	"embed"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"strings"
+	"unsafe"
 
 	"github.com/cbroglie/mustache"
 	"github.com/rs/zerolog/log"
-	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/typescript/typescript"
+	tree_sitter "github.com/tree-sitter/go-tree-sitter"
+	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
 
 func GetSymbolDefinitions(filePath string, symbolName string, numContextLines int) ([]SourceBlock, error) {
@@ -25,11 +25,12 @@ func GetSymbolDefinitions(filePath string, symbolName string, numContextLines in
 	if err != nil {
 		return []SourceBlock{}, err
 	}
-	parser := sitter.NewParser()
+	parser := tree_sitter.NewParser()
+	defer parser.Close()
 	parser.SetLanguage(sitterLanguage)
-	tree, err := parser.ParseCtx(context.Background(), nil, sourceTransform(languageName, &sourceCodeBytes))
-	if err != nil {
-		return []SourceBlock{}, err
+	tree := parser.Parse(sourceTransform(languageName, &sourceCodeBytes), nil)
+	if tree != nil {
+		defer tree.Close()
 	}
 	symbolDefinitions, err := getSymbolDefinitionsInternal(languageName, sitterLanguage, tree, &sourceCodeBytes, symbolName)
 	if err != nil {
@@ -58,7 +59,7 @@ func GetSymbolDefinitionsString(filePath string, symbolName string, numContextLi
 	return out.String(), nil
 }
 
-func getSymbolDefinitionsInternal(languageName string, sitterLanguage *sitter.Language, tree *sitter.Tree, sourceCode *[]byte, symbolName string) ([]SourceBlock, error) {
+func getSymbolDefinitionsInternal(languageName string, sitterLanguage *tree_sitter.Language, tree *tree_sitter.Tree, sourceCode *[]byte, symbolName string) ([]SourceBlock, error) {
 	childSymbolName, parentSymbolName := splitSymbolNameIntoChildAndParent(symbolName)
 	if parentSymbolName != "" {
 		return getSymbolDefinitionsWithParent(languageName, sitterLanguage, tree, sourceCode, childSymbolName, parentSymbolName)
@@ -68,10 +69,11 @@ func getSymbolDefinitionsInternal(languageName string, sitterLanguage *sitter.La
 	if err != nil {
 		return nil, fmt.Errorf("error rendering symbol definition query: %w", err)
 	}
-	q, err := sitter.NewQuery([]byte(queryString), sitterLanguage)
-	if err != nil {
-		return nil, fmt.Errorf("error creating sitter symbol definition query: %w", err)
+	q, qErr := tree_sitter.NewQuery(sitterLanguage, queryString)
+	if qErr != nil {
+		return nil, fmt.Errorf("error creating sitter symbol definition query: %s", qErr.Message)
 	}
+	defer q.Close()
 	sourceBlocks := symbolDefinitionSourceBlocks(q, tree, sourceCode, symbolName)
 
 	if len(sourceBlocks) == 0 {
@@ -88,7 +90,7 @@ func getSymbolDefinitionsInternal(languageName string, sitterLanguage *sitter.La
 	return sourceBlocks, nil
 }
 
-func getSymbolDefinitionsWithParent(languageName string, sitterLanguage *sitter.Language, tree *sitter.Tree, sourceCode *[]byte, childSymbolName, parentSymbolName string) ([]SourceBlock, error) {
+func getSymbolDefinitionsWithParent(languageName string, sitterLanguage *tree_sitter.Language, tree *tree_sitter.Tree, sourceCode *[]byte, childSymbolName, parentSymbolName string) ([]SourceBlock, error) {
 	queryString, err := renderSymbolDefinitionWithParentQuery(languageName, childSymbolName, parentSymbolName)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -98,10 +100,11 @@ func getSymbolDefinitionsWithParent(languageName string, sitterLanguage *sitter.
 		}
 		return nil, fmt.Errorf("error rendering symbol definition query: %w", err)
 	}
-	q, err := sitter.NewQuery([]byte(queryString), sitterLanguage)
-	if err != nil {
-		return nil, fmt.Errorf("error creating sitter symbol definition query: %w", err)
+	q, qErr := tree_sitter.NewQuery(sitterLanguage, queryString)
+	if qErr != nil {
+		return nil, fmt.Errorf("error creating sitter symbol definition query: %s", qErr.Message)
 	}
+	defer q.Close()
 	sourceBlocks := symbolDefinitionSourceBlocks(q, tree, sourceCode, childSymbolName)
 
 	if len(sourceBlocks) > 0 {
@@ -129,42 +132,37 @@ func splitSymbolNameIntoChildAndParent(symbolName string) (string, string) {
 	return symbolName, ""
 }
 
-func symbolDefinitionSourceBlocks(q *sitter.Query, tree *sitter.Tree, sourceCode *[]byte, symbolName string) []SourceBlock {
+func symbolDefinitionSourceBlocks(q *tree_sitter.Query, tree *tree_sitter.Tree, sourceCode *[]byte, symbolName string) []SourceBlock {
 	var sourceBlocks []SourceBlock
-	qc := sitter.NewQueryCursor()
-	qc.Exec(q, tree.RootNode())
+	qc := tree_sitter.NewQueryCursor()
+	defer qc.Close()
+	matches := qc.Matches(q, tree.RootNode(), *sourceCode)
 
 	// Iterate over query results
 	var tempSourceBlock *SourceBlock
-	for {
-		m, ok := qc.NextMatch()
-		if !ok {
-			break
-		}
-		// Apply predicates filtering
-		m = qc.FilterPredicates(m, *sourceCode)
-		var nameRange sitter.Range
-		for _, c := range m.Captures {
-			name := q.CaptureNameForId(c.Index)
+	for match := matches.Next(); match != nil; match = matches.Next() {
+		var nameRange tree_sitter.Range
+		for _, c := range match.Captures {
+			name := q.CaptureNames()[c.Index]
 			if name == "name" {
-				nameRange = sitter.Range{
-					StartPoint: c.Node.StartPoint(),
-					EndPoint:   c.Node.EndPoint(),
+				nameRange = tree_sitter.Range{
+					StartPoint: c.Node.StartPosition(),
+					EndPoint:   c.Node.EndPosition(),
 					StartByte:  c.Node.StartByte(),
 					EndByte:    c.Node.EndByte(),
 				}
 			} else if name == "definition" || name == symbolName {
 				sourceBlock := SourceBlock{
 					Source: sourceCode,
-					Range: sitter.Range{
-						StartPoint: c.Node.StartPoint(),
-						EndPoint:   c.Node.EndPoint(),
+					Range: tree_sitter.Range{
+						StartPoint: c.Node.StartPosition(),
+						EndPoint:   c.Node.EndPosition(),
 						StartByte:  c.Node.StartByte(),
 						EndByte:    c.Node.EndByte(),
 					},
 					NameRange: &nameRange,
 				}
-				if c.Node.Type() == "comment" {
+				if c.Node.Kind() == "comment" {
 					tempSourceBlock = &sourceBlock
 				} else {
 					if tempSourceBlock != nil {
@@ -184,7 +182,7 @@ func symbolDefinitionSourceBlocks(q *sitter.Query, tree *sitter.Tree, sourceCode
 	return sourceBlocks
 }
 
-func getEmbeddedLanguageSymbolDefinition(languageName string, tree *sitter.Tree, sourceCode *[]byte, symbolName string) ([]SourceBlock, error) {
+func getEmbeddedLanguageSymbolDefinition(languageName string, tree *tree_sitter.Tree, sourceCode *[]byte, symbolName string) ([]SourceBlock, error) {
 	switch languageName {
 	case "vue":
 		{
@@ -194,7 +192,7 @@ func getEmbeddedLanguageSymbolDefinition(languageName string, tree *sitter.Tree,
 	return []SourceBlock{}, nil
 }
 
-func getVueEmbeddedLanguageSymbolDefinition(vueTree *sitter.Tree, sourceCode *[]byte, symbolName string) ([]SourceBlock, error) {
+func getVueEmbeddedLanguageSymbolDefinition(vueTree *tree_sitter.Tree, sourceCode *[]byte, symbolName string) ([]SourceBlock, error) {
 	// Call GetVueEmbeddedTypescriptTree to get the embedded typescript
 	tsTree, err := GetVueEmbeddedTypescriptTree(vueTree, sourceCode)
 	if err != nil {
@@ -204,7 +202,8 @@ func getVueEmbeddedLanguageSymbolDefinition(vueTree *sitter.Tree, sourceCode *[]
 		return []SourceBlock{}, nil
 	}
 
-	return getSymbolDefinitionsInternal("typescript", typescript.GetLanguage(), tsTree, sourceCode, symbolName)
+	tsLang := tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_typescript.LanguageTypescript()))
+	return getSymbolDefinitionsInternal("typescript", tsLang, tsTree, sourceCode, symbolName)
 }
 
 //go:embed symbol_definition_queries/*
@@ -276,12 +275,13 @@ func GetAllSymbolDefinitions(filePath string) ([]SymbolDefinition, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read source code: %w", err)
 	}
-	parser := sitter.NewParser()
+	parser := tree_sitter.NewParser()
+	defer parser.Close()
 	parser.SetLanguage(sitterLanguage)
 	transformedSource := sourceTransform(languageName, &sourceCode)
-	tree, err := parser.ParseCtx(context.Background(), nil, transformedSource)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse source code: %w", err)
+	tree := parser.Parse(transformedSource, nil)
+	if tree != nil {
+		defer tree.Close()
 	}
 	return getAllSymbolDefinitionsInternal(languageName, sitterLanguage, tree, &transformedSource)
 }
@@ -292,58 +292,55 @@ func GetAllSymbolDefinitionsFromSource(languageName string, sourceCode []byte) (
 	if err != nil {
 		return nil, err
 	}
-	parser := sitter.NewParser()
+	parser := tree_sitter.NewParser()
+	defer parser.Close()
 	parser.SetLanguage(sitterLanguage)
 	transformedSource := sourceTransform(languageName, &sourceCode)
-	tree, err := parser.ParseCtx(context.Background(), nil, transformedSource)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse source code: %w", err)
+	tree := parser.Parse(transformedSource, nil)
+	if tree != nil {
+		defer tree.Close()
 	}
 	return getAllSymbolDefinitionsInternal(languageName, sitterLanguage, tree, &transformedSource)
 }
 
-func getAllSymbolDefinitionsInternal(languageName string, sitterLanguage *sitter.Language, tree *sitter.Tree, sourceCode *[]byte) ([]SymbolDefinition, error) {
+func getAllSymbolDefinitionsInternal(languageName string, sitterLanguage *tree_sitter.Language, tree *tree_sitter.Tree, sourceCode *[]byte) ([]SymbolDefinition, error) {
 	// Render query with empty SymbolName to get all symbols
 	queryString, err := renderSymbolDefinitionQuery(languageName, "")
 	if err != nil {
 		return nil, fmt.Errorf("error rendering symbol definition query: %w", err)
 	}
 
-	q, err := sitter.NewQuery([]byte(queryString), sitterLanguage)
-	if err != nil {
-		return nil, fmt.Errorf("error creating sitter symbol definition query: %w", err)
+	q, qErr := tree_sitter.NewQuery(sitterLanguage, queryString)
+	if qErr != nil {
+		return nil, fmt.Errorf("error creating sitter symbol definition query: %s", qErr.Message)
 	}
+	defer q.Close()
 
 	var definitions []SymbolDefinition
-	qc := sitter.NewQueryCursor()
-	qc.Exec(q, tree.RootNode())
+	qc := tree_sitter.NewQueryCursor()
+	defer qc.Close()
+	matches := qc.Matches(q, tree.RootNode(), *sourceCode)
 
 	var tempSourceBlock *SourceBlock
 	var tempSymbolName string
-	for {
-		m, ok := qc.NextMatch()
-		if !ok {
-			break
-		}
-		m = qc.FilterPredicates(m, *sourceCode)
-
+	for match := matches.Next(); match != nil; match = matches.Next() {
 		// First pass: collect name and definition captures from this match
-		var nameRange sitter.Range
+		var nameRange tree_sitter.Range
 		var symbolName string
-		var definitionNode *sitter.Node
+		var definitionNode *tree_sitter.Node
 
-		for _, c := range m.Captures {
-			captureName := q.CaptureNameForId(c.Index)
+		for _, c := range match.Captures {
+			captureName := q.CaptureNames()[c.Index]
 			if captureName == "name" {
-				nameRange = sitter.Range{
-					StartPoint: c.Node.StartPoint(),
-					EndPoint:   c.Node.EndPoint(),
+				nameRange = tree_sitter.Range{
+					StartPoint: c.Node.StartPosition(),
+					EndPoint:   c.Node.EndPosition(),
 					StartByte:  c.Node.StartByte(),
 					EndByte:    c.Node.EndByte(),
 				}
-				symbolName = c.Node.Content(*sourceCode)
+				symbolName = c.Node.Utf8Text(*sourceCode)
 			} else if captureName == "definition" {
-				definitionNode = c.Node
+				definitionNode = &c.Node
 			}
 		}
 
@@ -351,15 +348,15 @@ func getAllSymbolDefinitionsInternal(languageName string, sitterLanguage *sitter
 		if definitionNode != nil {
 			sourceBlock := SourceBlock{
 				Source: sourceCode,
-				Range: sitter.Range{
-					StartPoint: definitionNode.StartPoint(),
-					EndPoint:   definitionNode.EndPoint(),
+				Range: tree_sitter.Range{
+					StartPoint: definitionNode.StartPosition(),
+					EndPoint:   definitionNode.EndPosition(),
 					StartByte:  definitionNode.StartByte(),
 					EndByte:    definitionNode.EndByte(),
 				},
 				NameRange: &nameRange,
 			}
-			if definitionNode.Type() == "comment" {
+			if definitionNode.Kind() == "comment" {
 				tempSourceBlock = &sourceBlock
 				tempSymbolName = symbolName
 			} else {

@@ -1,16 +1,16 @@
 package check
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"sidekick/env"
 	"strings"
 	"testing"
+	"unsafe"
 
-	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/stretchr/testify/assert"
+	sitter "github.com/tree-sitter/go-tree-sitter"
+	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
 )
 
 func TestCheckFileValidity_Golang(t *testing.T) {
@@ -361,12 +361,14 @@ func TestCheckFileValidity_Golang_NoTrailingNewline(t *testing.T) {
 func TestExtractErrors_NoErrors(t *testing.T) {
 	// Setup a tree with no error nodes
 	// Simulating the process of reading source code and parsing it to create a tree-sitter tree
-	sitterLanguage := golang.GetLanguage()
+	sitterLanguage := sitter.NewLanguage(unsafe.Pointer(tree_sitter_go.Language()))
 	sourceCode := []byte("package main")
 	parser := sitter.NewParser()
-	parser.SetLanguage(sitterLanguage)
-	tree, err := parser.ParseCtx(context.Background(), nil, sourceCode)
+	defer parser.Close()
+	err := parser.SetLanguage(sitterLanguage)
 	assert.Nil(t, err)
+	tree := parser.Parse(sourceCode, nil)
+	defer tree.Close()
 	assert.NotNil(t, tree)
 
 	// Call ExtractErrors
@@ -377,12 +379,14 @@ func TestExtractErrors_NoErrors(t *testing.T) {
 func TestExtractErrors_MultipleErrors(t *testing.T) {
 	// Setup a tree with multiple error nodes
 	// Simulating the creation of a tree with multiple error nodes
-	sitterLanguage := golang.GetLanguage()
+	sitterLanguage := sitter.NewLanguage(unsafe.Pointer(tree_sitter_go.Language()))
 	parser := sitter.NewParser()
-	parser.SetLanguage(sitterLanguage)
-	sourceCode := []byte("int x = y // error here")
-	tree, err := parser.ParseCtx(context.Background(), nil, sourceCode)
+	defer parser.Close()
+	err := parser.SetLanguage(sitterLanguage)
 	assert.Nil(t, err)
+	sourceCode := []byte("int x = y; int z = w")
+	tree := parser.Parse(sourceCode, nil)
+	defer tree.Close()
 	assert.NotNil(t, tree)
 
 	// Call ExtractErrors
@@ -393,12 +397,14 @@ func TestExtractErrors_MultipleErrors(t *testing.T) {
 func TestExtractErrors_NestedErrors(t *testing.T) {
 	// Setup a tree with nested error nodes
 	// Simulating the creation of a tree with nested error nodes
-	sitterLanguage := golang.GetLanguage()
+	sitterLanguage := sitter.NewLanguage(unsafe.Pointer(tree_sitter_go.Language()))
 	parser := sitter.NewParser()
-	parser.SetLanguage(sitterLanguage)
-	sourceCode := []byte("package main\n\nfunc main() { int x = } // error here")
-	tree, err := parser.ParseCtx(context.Background(), nil, sourceCode)
+	defer parser.Close()
+	err := parser.SetLanguage(sitterLanguage)
 	assert.Nil(t, err)
+	sourceCode := []byte("package main\n\nfunc main() { int x = } // error here")
+	tree := parser.Parse(sourceCode, nil)
+	defer tree.Close()
 	assert.NotNil(t, tree)
 
 	// Call ExtractErrors

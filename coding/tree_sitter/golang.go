@@ -3,11 +3,11 @@ package tree_sitter
 import (
 	"strings"
 
-	sitter "github.com/smacker/go-tree-sitter"
+	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
-func writeGolangSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
-	content := c.Node.Content(*sourceCode)
+func writeGolangSymbolCapture(out *strings.Builder, sourceCode *[]byte, c tree_sitter.QueryCapture, name string) {
+	content := c.Node.Utf8Text(*sourceCode)
 	switch name {
 	case "function.name", "method.name", "const.name", "type.name", "var.name":
 		{
@@ -31,8 +31,8 @@ func writeGolangSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter
 	}
 }
 
-func writeGolangSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
-	content := c.Node.Content(*sourceCode)
+func writeGolangSignatureCapture(out *strings.Builder, sourceCode *[]byte, c tree_sitter.QueryCapture, name string) {
+	content := c.Node.Utf8Text(*sourceCode)
 	switch name {
 	case "method.doc", "function.doc", "type.doc":
 		{

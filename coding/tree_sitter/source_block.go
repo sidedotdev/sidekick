@@ -4,20 +4,20 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
-	sitter "github.com/smacker/go-tree-sitter"
+	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 type SourceBlock struct {
 	Source    *[]byte
-	Range     sitter.Range
-	NameRange *sitter.Range
+	Range     tree_sitter.Range
+	NameRange *tree_sitter.Range
 }
 
 func (sb SourceBlock) String() string {
 	if sb.Source == nil || len(*sb.Source) == 0 {
 		return ""
 	}
-	sourceLen := uint32(len(*sb.Source))
+	sourceLen := uint(len(*sb.Source))
 	startByte := sb.Range.StartByte
 	endByte := sb.Range.EndByte
 	clamped := false
@@ -35,9 +35,9 @@ func (sb SourceBlock) String() string {
 	}
 	if clamped {
 		log.Warn().
-			Uint32("originalStartByte", sb.Range.StartByte).
-			Uint32("originalEndByte", sb.Range.EndByte).
-			Uint32("sourceLen", sourceLen).
+			Uint("originalStartByte", sb.Range.StartByte).
+			Uint("originalEndByte", sb.Range.EndByte).
+			Uint("sourceLen", sourceLen).
 			Msg("SourceBlock.String: clamped out-of-bounds range, possible upstream bug")
 	}
 	return string((*sb.Source)[startByte:endByte])
@@ -78,19 +78,19 @@ func MergeAdjacentOrOverlappingSourceBlocks(sourceBlocks []SourceBlock, sourceCo
 	return mergedSourceBlocks
 }
 
-func countBytesInLines(startByte uint32, numLines int, sourceCode []byte, direction string) uint32 {
+func countBytesInLines(startByte uint, numLines int, sourceCode []byte, direction string) uint {
 	if numLines <= 0 || len(sourceCode) == 0 {
 		return 0
 	}
 
-	sourceLen := uint32(len(sourceCode))
+	sourceLen := uint(len(sourceCode))
 	if startByte > sourceLen {
 		startByte = sourceLen
 	}
 
-	count := uint32(0)
+	count := uint(0)
 	if direction == "forward" {
-		for i := int(startByte + 1); i <= len(sourceCode); i++ {
+		for i := uint(startByte + 1); i <= uint(len(sourceCode)); i++ {
 			count++
 			if sourceCode[i-1] == '\n' { // end byte is exclusive and includes the newline
 				numLines--
@@ -112,7 +112,7 @@ func countBytesInLines(startByte uint32, numLines int, sourceCode []byte, direct
 			return 1
 		}
 
-		for i := int(startByte - 1); i > 0; i-- {
+		for i := startByte - 1; i > 0; i-- {
 			if sourceCode[i-1] == '\n' { // start byte for a line is inclusive anod has no starting newline
 				numLines--
 				if numLines == 0 {
@@ -128,8 +128,8 @@ func countBytesInLines(startByte uint32, numLines int, sourceCode []byte, direct
 // expands the source blocks to include the specified number of additional lines of context before and after
 func ExpandContextLines(sourceBlocks []SourceBlock, numContextLines int, sourceCode []byte) []SourceBlock {
 	sourceCodeLines := strings.Split(string(sourceCode), "\n")
-	sourceLen := uint32(len(sourceCode))
-	numLines := uint32(len(sourceCodeLines))
+	sourceLen := uint(len(sourceCode))
+	numLines := uint(len(sourceCodeLines))
 
 	for i := range sourceBlocks {
 		sb := sourceBlocks[i]
@@ -157,10 +157,10 @@ func ExpandContextLines(sourceBlocks []SourceBlock, numContextLines int, sourceC
 
 		startRow := sb.Range.StartPoint.Row
 		endRow := sb.Range.EndPoint.Row
-		contextBefore := min(uint32(numContextLines), startRow)
-		contextAfter := uint32(0)
+		contextBefore := min(uint(numContextLines), startRow)
+		contextAfter := uint(0)
 		if numLines > 0 && endRow < numLines-1 {
-			contextAfter = min(uint32(numContextLines), numLines-endRow-1)
+			contextAfter = min(uint(numContextLines), numLines-endRow-1)
 		}
 		sb.Range.StartPoint.Row -= contextBefore
 		sb.Range.EndPoint.Row += contextAfter
@@ -170,7 +170,7 @@ func ExpandContextLines(sourceBlocks []SourceBlock, numContextLines int, sourceC
 		sb.Range.EndByte += countBytesInLines(sb.Range.EndByte, numContextLines, sourceCode, "forward")
 		// using len instead of len-1 since end is exclusive
 		if numLines > 0 && sb.Range.EndPoint.Row < numLines {
-			sb.Range.EndPoint.Column = uint32(len(sourceCodeLines[sb.Range.EndPoint.Row]))
+			sb.Range.EndPoint.Column = uint(len(sourceCodeLines[sb.Range.EndPoint.Row]))
 		}
 
 		// startByte is in the middle of a line, so we need to go back to the start of the line

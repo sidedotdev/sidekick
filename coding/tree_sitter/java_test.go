@@ -1,24 +1,22 @@
 package tree_sitter
 
 import (
-	"context"
 	"os"
 	"sidekick/utils"
 	"strings"
 	"testing"
+	"unsafe"
 
-	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/java"
 	"github.com/stretchr/testify/assert"
+	tree_sitter "github.com/tree-sitter/go-tree-sitter"
+	tree_sitter_java "github.com/tree-sitter/tree-sitter-java/bindings/go"
 )
 
-func parseJavaString(code string) *sitter.Tree {
-	parser := sitter.NewParser()
-	parser.SetLanguage(java.GetLanguage())
-	tree, err := parser.ParseCtx(context.Background(), nil, []byte(code))
-	if err != nil {
-		panic(err)
-	}
+func parseJavaString(code string) *tree_sitter.Tree {
+	parser := tree_sitter.NewParser()
+	javaLang := tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_java.Language()))
+	parser.SetLanguage(javaLang)
+	tree := parser.Parse([]byte(code), nil)
 	return tree
 }
 
@@ -59,9 +57,9 @@ func TestGetDeclarationIndentLevel(t *testing.T) {
 			node := tree.RootNode()
 			for _, pathElement := range tc.nodePath {
 				found := false
-				for i := 0; i < int(node.ChildCount()); i++ {
+				for i := uint(0); i < node.ChildCount(); i++ {
 					child := node.Child(i)
-					if child.Type() == pathElement {
+					if child.Kind() == pathElement {
 						node = child
 						found = true
 						break

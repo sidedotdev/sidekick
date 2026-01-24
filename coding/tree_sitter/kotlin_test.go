@@ -323,6 +323,7 @@ class ResourceManager {
 	fun registerResource(resource: Resource)
 ---
 	val allResources: Collection<Resource>
+        get() = resources
 ---
 `,
 		},
@@ -345,6 +346,7 @@ object ResourceManager {
 	fun registerResource(resource: Resource)
 ---
 	val allResources: Collection<Resource>
+        get() = resources
 ---
 `,
 		},

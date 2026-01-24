@@ -19,7 +19,7 @@ import (
 	"strings"
 	"sync"
 
-	sitter "github.com/smacker/go-tree-sitter"
+	tree_sitter_lib "github.com/tree-sitter/go-tree-sitter"
 )
 
 type CodingActivities struct {
@@ -135,7 +135,7 @@ func mergeSymbolResults(results []SymbolRetrievalResult) MergedSymbolRetrievalRe
 
 		// Check which original ranges are contained within this merged range
 		for rangeKey, symbols := range symbolsByRange {
-			var start, end uint32
+			var start, end uint
 			fmt.Sscanf(rangeKey, "%d,%d", &start, &end)
 
 			// If range is contained within merged
@@ -562,11 +562,11 @@ func getWildcardRetrievalResult(symbols []string, absolutePath, relativePath, di
 	if len(fileBytes) > 0 && !bytes.HasSuffix(fileBytes, []byte{'\n'}) {
 		lineCount++ // Account for files not ending in newline
 	}
-	fullRange := sitter.Range{
-		StartPoint: sitter.Point{Row: 0, Column: 0},
+	fullRange := tree_sitter_lib.Range{
+		StartPoint: tree_sitter_lib.Point{Row: 0, Column: 0},
 		StartByte:  0,
-		EndPoint:   sitter.Point{Row: uint32(lineCount) - 1, Column: 0},
-		EndByte:    uint32(len(fileBytes)),
+		EndPoint:   tree_sitter_lib.Point{Row: uint(lineCount) - 1, Column: 0},
+		EndByte:    uint(len(fileBytes)),
 	}
 
 	return SymbolRetrievalResult{
@@ -761,7 +761,7 @@ func getRelatedSymbolsHint(mergedResult MergedSymbolRetrievalResult, symbolNames
 	return hintBuilder.String()
 }
 
-func sitterToLspRange(r sitter.Range) lsp.Range {
+func sitterToLspRange(r tree_sitter_lib.Range) lsp.Range {
 	return lsp.Range{
 		Start: lsp.Position{
 			Line:      int(r.StartPoint.Row),
