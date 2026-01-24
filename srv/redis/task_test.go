@@ -362,18 +362,27 @@ func TestStreamTaskChanges(t *testing.T) {
 
 	// Test context cancellation
 	cancel()
-	select {
-	case _, ok := <-taskChan:
-		assert.False(t, ok, "Task channel should be closed after context cancellation")
-	case <-time.After(2 * time.Second):
-		t.Fatal("Timed out waiting for task channel to close")
-	}
 
-	select {
-	case _, ok := <-errChan:
-		assert.False(t, ok, "Error channel should be closed after context cancellation")
-	case <-time.After(2 * time.Second):
-		t.Fatal("Timed out waiting for error channel to close")
+	// Wait for both channels to close with a single timeout
+	timeout := time.After(2 * time.Second)
+	taskClosed := false
+	errClosed := false
+
+	for !taskClosed || !errClosed {
+		select {
+		case _, ok := <-taskChan:
+			if !ok {
+				taskClosed = true
+				taskChan = nil // prevent further receives
+			}
+		case _, ok := <-errChan:
+			if !ok {
+				errClosed = true
+				errChan = nil // prevent further receives
+			}
+		case <-timeout:
+			t.Fatalf("Timed out waiting for channels to close (taskClosed=%v, errClosed=%v)", taskClosed, errClosed)
+		}
 	}
 }
 
