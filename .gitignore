@@ -27,6 +27,7 @@
 *.patch
 *.swp
 *.DS_Store
+.tmp/
 
 frontend/node_modules
 main
