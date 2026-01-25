@@ -1,0 +1,64 @@
+; JavaScript symbol definition query
+; Covers: function_declaration, function_expression, generator_function_declaration,
+;         class_declaration, call_expression, variable_declaration, lexical_declaration,
+;         method_definition
+
+(
+  (function_declaration
+    name: (identifier) @name
+  )
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
+) @definition
+
+(
+  (function_expression
+    name: (identifier) @name
+  )
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
+) @definition
+
+(
+  (generator_function_declaration
+    name: (identifier) @name
+  )
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
+) @definition
+
+(
+  (class_declaration
+    name: (_) @name
+  )
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
+) @definition
+
+(
+  (call_expression
+    function: (identifier) @name
+  )
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
+) @definition
+
+(
+  (variable_declaration
+    (variable_declarator
+      name: (identifier) @name
+    )
+  )
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
+) @definition
+
+(
+  (lexical_declaration
+    (variable_declarator
+      name: (identifier) @name
+    )
+  )
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
+) @definition
+
+(
+  (method_definition
+    name: (_) @name
+  )
+  {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
+) @definition

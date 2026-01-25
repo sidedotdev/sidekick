@@ -450,6 +450,235 @@ function add(a, b) {
 	}
 }
 
+func TestGetSymbolDefinitionJavascript(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name               string
+		symbolName         string
+		code               string
+		extension          string
+		expectedDefinition string
+		expectedError      string
+	}{
+		{
+			name:          "empty code",
+			symbolName:    "TestVar",
+			code:          "",
+			expectedError: `symbol not found: TestVar`,
+		},
+		{
+			name:       "function definition",
+			symbolName: "TestFunc",
+			code: `function TestFunc() {
+	console.log("Hello, world!");
+}`,
+			expectedDefinition: `function TestFunc() {
+	console.log("Hello, world!");
+}`,
+		},
+		{
+			name:       "class definition",
+			symbolName: "TestClass",
+			code: `class TestClass {
+	constructor(name, age) {
+		this.name = name;
+		this.age = age;
+	}
+}`,
+			expectedDefinition: `class TestClass {
+	constructor(name, age) {
+		this.name = name;
+		this.age = age;
+	}
+}`,
+		},
+		{
+			name:       "generator function definition",
+			symbolName: "myGenerator",
+			code: `function* myGenerator() {
+	yield 1;
+	yield 2;
+	yield 3;
+}`,
+			expectedDefinition: `function* myGenerator() {
+	yield 1;
+	yield 2;
+	yield 3;
+}`,
+		},
+		{
+			name:               "const definition",
+			symbolName:         "TestConst",
+			code:               `const TestConst = "test";`,
+			expectedDefinition: `const TestConst = "test";`,
+		},
+		{
+			name:               "let definition",
+			symbolName:         "TestLet",
+			code:               `let TestLet = "test";`,
+			expectedDefinition: `let TestLet = "test";`,
+		},
+		{
+			name:               "var definition",
+			symbolName:         "TestVar",
+			code:               `var TestVar = "test";`,
+			expectedDefinition: `var TestVar = "test";`,
+		},
+		{
+			name:          "symbol not found",
+			symbolName:    "NonExistentSymbol",
+			code:          `var TestVar = "test";`,
+			expectedError: `symbol not found: NonExistentSymbol`,
+		},
+		{
+			name:       "call expression",
+			symbolName: "someFunction",
+			code: `somethingElse();
+
+const x = someFunction({
+	foo: 'bar'
+});`,
+			expectedDefinition: `const x = someFunction({
+	foo: 'bar'
+});`,
+		},
+		{
+			name:       "exported call expression",
+			symbolName: "someFunction",
+			code: `somethingElse();
+
+export const x = someFunction({
+	foo: 'bar'
+});`,
+			expectedDefinition: `export const x = someFunction({
+	foo: 'bar'
+});`,
+		},
+		{
+			name:       "async function definition",
+			symbolName: "fetchData",
+			code: `async function fetchData(url) {
+	return await fetch(url);
+}`,
+			expectedDefinition: `async function fetchData(url) {
+	return await fetch(url);
+}`,
+		},
+		{
+			name:       "arrow function const",
+			symbolName: "myFunc",
+			code: `const myFunc = (a, b) => {
+	return a + b;
+};`,
+			expectedDefinition: `const myFunc = (a, b) => {
+	return a + b;
+};`,
+		},
+		{
+			name:       "class method definition",
+			symbolName: "TestClass.greet",
+			code: `class TestClass {
+	constructor(name) {
+		this.name = name;
+	}
+	greet() {
+		return 'Hello ' + this.name;
+	}
+}`,
+			expectedDefinition: `	greet() {
+		return 'Hello ' + this.name;
+	}`,
+		},
+		{
+			name:       "export function",
+			symbolName: "greet",
+			code: `export function greet(name) {
+	return 'Hello ' + name;
+}`,
+			expectedDefinition: `export function greet(name) {
+	return 'Hello ' + name;
+}`,
+		},
+		{
+			name:       "export default function",
+			symbolName: "main",
+			code: `export default function main() {
+	console.log('main');
+}`,
+			expectedDefinition: `export default function main() {
+	console.log('main');
+}`,
+		},
+		{
+			name:       "jsx function component",
+			symbolName: "App",
+			extension:  "jsx",
+			code: `function App() {
+	return <div>Hello</div>;
+}`,
+			expectedDefinition: `function App() {
+	return <div>Hello</div>;
+}`,
+		},
+		{
+			name:       "jsx class component",
+			symbolName: "App",
+			extension:  "jsx",
+			code: `class App extends React.Component {
+	render() {
+		return <div>Hello</div>;
+	}
+}`,
+			expectedDefinition: `class App extends React.Component {
+	render() {
+		return <div>Hello</div>;
+	}
+}`,
+		},
+		{
+			name:       "jsx class component method",
+			symbolName: "App.render",
+			extension:  "jsx",
+			code: `class App extends React.Component {
+	render() {
+		return <div>Hello</div>;
+	}
+}`,
+			expectedDefinition: `	render() {
+		return <div>Hello</div>;
+	}`,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ext := tc.extension
+			if ext == "" {
+				ext = "js"
+			}
+			filePath, err := utils.WriteTestTempFile(t, ext, tc.code)
+			if err != nil {
+				t.Fatalf("Failed to write temp file: %v", err)
+			}
+			defer os.Remove(filePath)
+
+			definition, err := GetSymbolDefinitionsString(filePath, tc.symbolName, 0)
+			if err != nil {
+				if tc.expectedError == "" {
+					t.Fatalf("Unexpected error: %v", err)
+				} else if !strings.Contains(err.Error(), tc.expectedError) {
+					t.Fatalf("Expected error: %s, got: %v", tc.expectedError, err)
+				}
+			}
+
+			if strings.TrimSuffix(definition, "\n") != strings.TrimSuffix(tc.expectedDefinition, "\n") {
+				t.Errorf("Expected definition:\n%s\nGot:\n%s", utils.PanicJSON(tc.expectedDefinition), utils.PanicJSON(definition))
+			}
+		})
+	}
+}
+
 func TestNormalizeSymbolFromSnippet_Javascript(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
