@@ -906,3 +906,212 @@ func TestRemoveCommentsMarkdownSignatures(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoveCommentsJavascript(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name              string
+		sourceCode        SourceCode
+		expectedDidRemove bool
+		expectedContent   string
+	}{
+		{
+			name: "single line comment",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "javascript",
+				Content: `// This is a comment
+function main() {
+	console.log("Hello, World!");
+}
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `function main() {
+	console.log("Hello, World!");
+}
+`,
+		},
+		{
+			name: "multi-line comment",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "javascript",
+				Content: `/* This is a
+multi-line comment */
+function main() {
+	console.log("Hello, World!");
+}
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `function main() {
+	console.log("Hello, World!");
+}
+`,
+		},
+		{
+			name: "mixed comments",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "javascript",
+				Content: `// Single line comment
+/* Multi-line
+comment */
+function main() {
+	console.log("Hello, World!");
+}
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `function main() {
+	console.log("Hello, World!");
+}
+`,
+		},
+		{
+			name: "JSDoc comment",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "javascript",
+				Content: `/**
+ * This is a JSDoc comment
+ * @param {string} name - The name
+ */
+function greet(name) {
+	console.log("Hello, " + name);
+}
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `function greet(name) {
+	console.log("Hello, " + name);
+}
+`,
+		},
+		{
+			name: "empty source code",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "javascript",
+				Content:              ``,
+			},
+			expectedDidRemove: false,
+			expectedContent:   ``,
+		},
+		{
+			name: "non-empty source code without comments",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "javascript",
+				Content: `function main() {
+	console.log("Hello, World!");
+}
+`,
+			},
+			expectedDidRemove: false,
+			expectedContent: `function main() {
+	console.log("Hello, World!");
+}
+`,
+		},
+		{
+			name: "jsx with comments",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "jsx",
+				Content: `// Component comment
+function MyComponent() {
+	return <div>Hello</div>;
+}
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `function MyComponent() {
+	return <div>Hello</div>;
+}
+`,
+		},
+		{
+			name: "js alias with comments",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "js",
+				Content: `// A comment
+const x = 1;
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `const x = 1;
+`,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			didRemove, result := removeComments(tc.sourceCode)
+			if didRemove != tc.expectedDidRemove {
+				t.Errorf("Expected didRemove: %t Got: %t", tc.expectedDidRemove, didRemove)
+			}
+			if normalizeWhitespace(result.Content) != normalizeWhitespace(tc.expectedContent) {
+				t.Errorf("Expected: \n%s\nGot:\n%s", normalizeWhitespace(tc.expectedContent), normalizeWhitespace(result.Content))
+				t.Errorf("\nExpected: %s\nGot_____: %s", utils.PanicJSON(normalizeWhitespace(tc.expectedContent)), utils.PanicJSON(normalizeWhitespace(result.Content)))
+			}
+		})
+	}
+}
+
+func TestRemoveCommentsJavascriptSignatures(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name              string
+		sourceCode        SourceCode
+		expectedDidRemove bool
+		expectedContent   string
+	}{
+		{
+			name: "comment in signatures",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "javascript-signatures",
+				Content: `// Comment
+function main()
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `function main()
+`,
+		},
+		{
+			name: "no comments in signatures",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "javascript-signatures",
+				Content: `function main()
+class MyClass
+`,
+			},
+			expectedDidRemove: false,
+			expectedContent: `function main()
+class MyClass
+`,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			didRemove, result := removeComments(tc.sourceCode)
+			if didRemove != tc.expectedDidRemove {
+				t.Errorf("Expected didRemove: %t Got: %t", tc.expectedDidRemove, didRemove)
+			}
+			if normalizeWhitespace(result.Content) != normalizeWhitespace(tc.expectedContent) {
+				t.Errorf("Expected: \n%s\nGot:\n%s", normalizeWhitespace(tc.expectedContent), normalizeWhitespace(result.Content))
+				t.Errorf("\nExpected: %s\nGot_____: %s", utils.PanicJSON(normalizeWhitespace(tc.expectedContent)), utils.PanicJSON(normalizeWhitespace(result.Content)))
+			}
+		})
+	}
+}
