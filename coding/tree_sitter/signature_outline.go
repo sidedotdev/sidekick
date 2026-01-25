@@ -2,7 +2,6 @@ package tree_sitter
 
 import (
 	"cmp"
-	"context"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -21,7 +20,7 @@ import (
 	"sidekick/utils"
 
 	"github.com/cbroglie/mustache"
-	sitter "github.com/smacker/go-tree-sitter"
+	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 type FileOutline struct {
@@ -48,11 +47,12 @@ func GetFileSignatures(filePath string) ([]Signature, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to obtain source code when getting file signatures: %v", err)
 	}
-	parser := sitter.NewParser()
+	parser := tree_sitter.NewParser()
+	defer parser.Close()
 	parser.SetLanguage(sitterLanguage)
-	tree, err := parser.ParseCtx(context.Background(), nil, sourceTransform(languageName, &sourceCode))
-	if err != nil {
-		return nil, err
+	tree := parser.Parse(sourceTransform(languageName, &sourceCode), nil)
+	if tree != nil {
+		defer tree.Close()
 	}
 	signatureSlice, err := getFileSignaturesInternal(languageName, sitterLanguage, tree, &sourceCode, false)
 	if err != nil {
@@ -294,46 +294,41 @@ func GetFileOutlinesString(outlines []FileOutline) (string, error) {
 
 type Signature struct {
 	Content    string
-	StartPoint sitter.Point
-	EndPoint   sitter.Point
+	StartPoint tree_sitter.Point
+	EndPoint   tree_sitter.Point
 }
 
-func getFileSignaturesInternal(languageName string, sitterLanguage *sitter.Language, tree *sitter.Tree, sourceCode *[]byte, showComplete bool) ([]Signature, error) {
+func getFileSignaturesInternal(languageName string, sitterLanguage *tree_sitter.Language, tree *tree_sitter.Tree, sourceCode *[]byte, showComplete bool) ([]Signature, error) {
 	queryString, err := getSignatureQuery(languageName, showComplete)
 	if err != nil {
 		return []Signature{}, fmt.Errorf("error rendering symbol definition query: %w", err)
 	}
 
-	q, err := sitter.NewQuery([]byte(queryString), sitterLanguage)
-	if err != nil {
-		return []Signature{}, fmt.Errorf("error creating sitter symbol definition query: %w", err)
+	q, qErr := tree_sitter.NewQuery(sitterLanguage, queryString)
+	if qErr != nil {
+		return []Signature{}, fmt.Errorf("error creating sitter symbol definition query: %s", qErr.Message)
 	}
+	defer q.Close()
 
 	var signatures []Signature
-	qc := sitter.NewQueryCursor()
-	qc.Exec(q, tree.RootNode())
+	qc := tree_sitter.NewQueryCursor()
+	defer qc.Close()
+	matches := qc.Matches(q, tree.RootNode(), []byte(*sourceCode))
 	// Iterate over query results
-	for {
-		m, ok := qc.NextMatch()
-		if !ok {
-			break
-		}
-
+	for match := matches.Next(); match != nil; match = matches.Next() {
 		sigWriter := strings.Builder{}
 
-		// Apply predicates filtering
-		m = qc.FilterPredicates(m, *sourceCode)
-		startPoint := sitter.Point{Row: ^uint32(0), Column: ^uint32(0)}
-		endPoint := sitter.Point{Row: 0, Column: 0}
-		for _, c := range m.Captures {
-			name := q.CaptureNameForId(c.Index)
+		startPoint := tree_sitter.Point{Row: ^uint(0), Column: ^uint(0)}
+		endPoint := tree_sitter.Point{Row: 0, Column: 0}
+		for _, c := range match.Captures {
+			name := q.CaptureNames()[c.Index]
 			writeSignatureCapture(languageName, &sigWriter, sourceCode, c, name)
 			if shouldExtendSignatureRange(languageName, name) {
-				if c.Node.StartPoint().Row < startPoint.Row || (c.Node.StartPoint().Row == startPoint.Row && c.Node.StartPoint().Column < startPoint.Column) {
-					startPoint = c.Node.StartPoint()
+				if c.Node.StartPosition().Row < startPoint.Row || (c.Node.StartPosition().Row == startPoint.Row && c.Node.StartPosition().Column < startPoint.Column) {
+					startPoint = c.Node.StartPosition()
 				}
-				if c.Node.EndPoint().Row > endPoint.Row || (c.Node.EndPoint().Row == endPoint.Row && c.Node.EndPoint().Column > endPoint.Column) {
-					endPoint = c.Node.EndPoint()
+				if c.Node.EndPosition().Row > endPoint.Row || (c.Node.EndPosition().Row == endPoint.Row && c.Node.EndPosition().Column > endPoint.Column) {
+					endPoint = c.Node.EndPosition()
 				}
 			}
 		}
@@ -399,7 +394,7 @@ func shouldExtendSignatureRange(languageName, captureName string) bool {
 	return false // declaration is inclusive of the body so usually shouldn't extend
 }
 
-func getEmbeddedLanguageSignatures(languageName string, tree *sitter.Tree, sourceCode *[]byte) ([]Signature, error) {
+func getEmbeddedLanguageSignatures(languageName string, tree *tree_sitter.Tree, sourceCode *[]byte) ([]Signature, error) {
 	switch languageName {
 	case "vue":
 		{
@@ -409,7 +404,7 @@ func getEmbeddedLanguageSignatures(languageName string, tree *sitter.Tree, sourc
 	return []Signature{}, nil
 }
 
-func writeSignatureCapture(languageName string, out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
+func writeSignatureCapture(languageName string, out *strings.Builder, sourceCode *[]byte, c tree_sitter.QueryCapture, name string) {
 	//out.WriteString(name + "\n")
 	//out.WriteString(c.Node.Type() + "\n")
 	switch languageName {
@@ -441,10 +436,14 @@ func writeSignatureCapture(languageName string, out *strings.Builder, sourceCode
 		{
 			writeKotlinSignatureCapture(out, sourceCode, c, name)
 		}
+	case "markdown":
+		{
+			writeMarkdownSignatureCapture(out, sourceCode, c, name)
+		}
 	default:
 		{
 			// NOTE this is expected to provide quite bad output until tweaked per language
-			out.WriteString(c.Node.Content(*sourceCode))
+			out.WriteString(c.Node.Utf8Text(*sourceCode))
 		}
 	}
 }

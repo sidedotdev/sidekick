@@ -1,24 +1,24 @@
 ; All class declarations (including value classes, enums, and regular classes)
 (
   [
-    (multiline_comment)
+    (block_comment)
     (line_comment)
   ]* @doc
   .
   (class_declaration
-    (type_identifier) @name
+    (identifier) @name
   )
   {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 (
   [
-    (multiline_comment)
+    (block_comment)
     (line_comment)
   ]* @doc
   .
   (object_declaration
-    (type_identifier) @name
+    (identifier) @name
   )
   {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
@@ -26,18 +26,18 @@
 ; Function declarations
 (
   [
-    (multiline_comment)
+    (block_comment)
     (line_comment)
   ]* @doc
   .
   (function_declaration
-    (simple_identifier) @name
+    (identifier) @name
   )
   {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
 
 ; enum members
 (enum_entry
-  (simple_identifier) @name
+  (identifier) @name
   {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition

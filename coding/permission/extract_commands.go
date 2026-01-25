@@ -1,11 +1,11 @@
 package permission
 
 import (
-	"context"
 	"strings"
+	"unsafe"
 
-	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/bash"
+	sitter "github.com/tree-sitter/go-tree-sitter"
+	tree_sitter_bash "github.com/tree-sitter/tree-sitter-bash/bindings/go"
 )
 
 // extractOpts controls extraction behavior for backward compatibility.
@@ -30,11 +30,13 @@ func ExtractCommandsLegacy(script string) []string {
 
 func extractCommandsWithOpts(script string, opts extractOpts) []string {
 	parser := sitter.NewParser()
-	parser.SetLanguage(bash.GetLanguage())
-	tree, err := parser.ParseCtx(context.Background(), nil, []byte(script))
-	if err != nil {
+	defer parser.Close()
+	bashLang := sitter.NewLanguage(unsafe.Pointer(tree_sitter_bash.Language()))
+	if err := parser.SetLanguage(bashLang); err != nil {
 		return nil
 	}
+	tree := parser.Parse([]byte(script), nil)
+	defer tree.Close()
 
 	sourceCode := []byte(script)
 	var commands []string
@@ -48,7 +50,7 @@ func extractCommandsFromNode(node *sitter.Node, sourceCode []byte, commands *[]s
 		return
 	}
 
-	nodeType := node.Type()
+	nodeType := node.Kind()
 
 	switch nodeType {
 	case "command":
@@ -58,7 +60,7 @@ func extractCommandsFromNode(node *sitter.Node, sourceCode []byte, commands *[]s
 			handleSpecialCommands(cmdText, commands, opts)
 		}
 		// Recurse into children to find command substitutions (may be nested in concatenations)
-		for i := 0; i < int(node.ChildCount()); i++ {
+		for i := uint(0); i < node.ChildCount(); i++ {
 			findAndExtractCommandSubstitutions(node.Child(i), sourceCode, commands, opts)
 		}
 		return
@@ -80,8 +82,10 @@ func extractCommandsFromNode(node *sitter.Node, sourceCode []byte, commands *[]s
 				return
 			}
 		}
-		// For simple redirected commands, extract the full text including redirections
-		cmdText := strings.TrimSpace(node.Content(sourceCode))
+
+		// Extract the full text including redirections
+		cmdText := strings.TrimSpace(node.Utf8Text(sourceCode))
+
 		// Check for background operator at parent level
 		cmdText = appendBackgroundIfPresent(node, sourceCode, cmdText)
 		if cmdText != "" {
@@ -89,35 +93,35 @@ func extractCommandsFromNode(node *sitter.Node, sourceCode []byte, commands *[]s
 			handleSpecialCommands(cmdText, commands, opts)
 		}
 		// Recurse into children to find command substitutions (may be nested)
-		for i := 0; i < int(node.ChildCount()); i++ {
+		for i := uint(0); i < node.ChildCount(); i++ {
 			findAndExtractCommandSubstitutions(node.Child(i), sourceCode, commands, opts)
 		}
 		return
 
 	case "subshell":
 		// Extract commands from within subshell, don't add subshell itself
-		for i := 0; i < int(node.ChildCount()); i++ {
+		for i := uint(0); i < node.ChildCount(); i++ {
 			extractCommandsFromNode(node.Child(i), sourceCode, commands, opts)
 		}
 		return
 
 	case "compound_statement":
 		// Extract commands from within brace groups { cmd; }, don't add group itself
-		for i := 0; i < int(node.ChildCount()); i++ {
+		for i := uint(0); i < node.ChildCount(); i++ {
 			extractCommandsFromNode(node.Child(i), sourceCode, commands, opts)
 		}
 		return
 
 	case "command_substitution":
 		// Recurse into command substitution to extract inner commands
-		for i := 0; i < int(node.ChildCount()); i++ {
+		for i := uint(0); i < node.ChildCount(); i++ {
 			extractCommandsFromNode(node.Child(i), sourceCode, commands, opts)
 		}
 		return
 	}
 
 	// For all other node types, recurse into children
-	for i := 0; i < int(node.ChildCount()); i++ {
+	for i := uint(0); i < node.ChildCount(); i++ {
 		extractCommandsFromNode(node.Child(i), sourceCode, commands, opts)
 	}
 }
@@ -130,19 +134,19 @@ func findAndExtractCommandSubstitutions(node *sitter.Node, sourceCode []byte, co
 		return
 	}
 
-	if node.Type() == "command_substitution" {
+	if node.Kind() == "command_substitution" {
 		extractCommandsFromNode(node, sourceCode, commands, opts)
 		return
 	}
 
-	for i := 0; i < int(node.ChildCount()); i++ {
+	for i := uint(0); i < node.ChildCount(); i++ {
 		findAndExtractCommandSubstitutions(node.Child(i), sourceCode, commands, opts)
 	}
 }
 
 // getFullCommandText returns the command text including any trailing & for background
 func getFullCommandText(node *sitter.Node, sourceCode []byte) string {
-	cmdText := strings.TrimSpace(node.Content(sourceCode))
+	cmdText := strings.TrimSpace(node.Utf8Text(sourceCode))
 	return appendBackgroundIfPresent(node, sourceCode, cmdText)
 }
 
@@ -150,9 +154,9 @@ func getFullCommandText(node *sitter.Node, sourceCode []byte) string {
 func appendBackgroundIfPresent(node *sitter.Node, sourceCode []byte, cmdText string) string {
 	parent := node.Parent()
 	if parent != nil {
-		for i := 0; i < int(parent.ChildCount()); i++ {
+		for i := uint(0); i < parent.ChildCount(); i++ {
 			sibling := parent.Child(i)
-			if sibling.Type() == "&" {
+			if sibling.Kind() == "&" {
 				return cmdText + " &"
 			}
 		}
