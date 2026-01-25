@@ -436,7 +436,7 @@ func writeSignatureCapture(languageName string, out *strings.Builder, sourceCode
 		{
 			writeKotlinSignatureCapture(out, sourceCode, c, name)
 		}
-	case "javascript":
+	case "javascript", "js", "jsx", "mjs", "cjs":
 		{
 			writeJavascriptSignatureCapture(out, sourceCode, c, name)
 		}
@@ -456,7 +456,8 @@ func writeSignatureCapture(languageName string, out *strings.Builder, sourceCode
 var signatureQueriesFS embed.FS
 
 func getSignatureQuery(languageName string, showComplete bool) (string, error) {
-	queryPath := fmt.Sprintf("signature_queries/signature_%s.scm.mustache", languageName)
+	queryLang := normalizeLanguageForQueryFile(languageName)
+	queryPath := fmt.Sprintf("signature_queries/signature_%s.scm.mustache", queryLang)
 	queryBytes, err := signatureQueriesFS.ReadFile(queryPath)
 	if err != nil {
 		return "", fmt.Errorf("error reading signature query template file: %w", err)

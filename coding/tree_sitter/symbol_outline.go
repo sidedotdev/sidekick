@@ -405,7 +405,7 @@ func writeSymbolCapture(languageName string, out *strings.Builder, sourceCode *[
 		{
 			writeKotlinSymbolCapture(out, sourceCode, c, name)
 		}
-	case "javascript":
+	case "javascript", "js", "jsx", "mjs", "cjs":
 		{
 			writeJavascriptSymbolCapture(out, sourceCode, c, name)
 		}
@@ -479,8 +479,21 @@ func normalizeLanguageName(s string) string {
 		return "typescript"
 	case "md", "markdown":
 		return "markdown"
+	case "js", "jsx", "javascript", "mjs", "cjs":
+		return "javascript"
 	default:
 		return s
+	}
+}
+
+// normalizeLanguageForQueryFile maps language aliases to the canonical name
+// used for query file paths (e.g., jsx -> javascript)
+func normalizeLanguageForQueryFile(languageName string) string {
+	switch languageName {
+	case "jsx":
+		return "javascript"
+	default:
+		return languageName
 	}
 }
 
@@ -520,7 +533,7 @@ func getSitterLanguage(languageName string) (*tree_sitter.Language, error) {
 		return tree_sitter.NewLanguage(vue.Language()), nil
 	case "md", "markdown":
 		return getMarkdownLanguage(), nil
-	case "js", "jsx", "javascript", "javascript-signatures":
+	case "javascript", "js", "jsx", "mjs", "cjs", "javascript-signatures", "js-signatures", "jsx-signatures", "mjs-signatures", "cjs-signatures":
 		return tree_sitter.NewLanguage(tree_sitter_javascript.Language()), nil
 	default:
 		return nil, fmt.Errorf("unsupported language: %s", languageName)
