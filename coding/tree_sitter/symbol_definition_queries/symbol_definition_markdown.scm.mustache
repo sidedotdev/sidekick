@@ -1,0 +1,44 @@
+; ATX headings - capture heading content for matching and the full heading for definition
+(atx_heading
+  (atx_h1_marker) @heading.marker
+  heading_content: (inline) @heading.content
+) @definition
+
+(atx_heading
+  (atx_h2_marker) @heading.marker
+  heading_content: (inline) @heading.content
+) @definition
+
+(atx_heading
+  (atx_h3_marker) @heading.marker
+  heading_content: (inline) @heading.content
+) @definition
+
+(atx_heading
+  (atx_h4_marker) @heading.marker
+  heading_content: (inline) @heading.content
+) @definition
+
+(atx_heading
+  (atx_h5_marker) @heading.marker
+  heading_content: (inline) @heading.content
+) @definition
+
+(atx_heading
+  (atx_h6_marker) @heading.marker
+  heading_content: (inline) @heading.content
+) @definition
+
+; Setext headings
+(setext_heading
+  (paragraph) @setext_heading.content
+  (setext_h1_underline) @setext_heading.underline
+) @definition
+
+(setext_heading
+  (paragraph) @setext_heading.content
+  (setext_h2_underline) @setext_heading.underline
+) @definition
+
+; YAML frontmatter
+(minus_metadata) @frontmatter.definition

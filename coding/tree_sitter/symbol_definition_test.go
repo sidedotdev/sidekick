@@ -112,8 +112,8 @@ type MyInterface interface {
 
 			for i, def := range defs {
 				assert.Equal(t, tc.expectedSymbols[i], def.SymbolName, "symbol name mismatch at index %d", i)
-				assert.Equal(t, uint32(tc.expectedRanges[i][0]), def.Range.StartPoint.Row, "start line mismatch for %s", tc.expectedSymbols[i])
-				assert.Equal(t, uint32(tc.expectedRanges[i][1]), def.Range.EndPoint.Row, "end line mismatch for %s", tc.expectedSymbols[i])
+				assert.Equal(t, uint(tc.expectedRanges[i][0]), def.Range.StartPoint.Row, "start line mismatch for %s", tc.expectedSymbols[i])
+				assert.Equal(t, uint(tc.expectedRanges[i][1]), def.Range.EndPoint.Row, "end line mismatch for %s", tc.expectedSymbols[i])
 			}
 		})
 	}
@@ -161,8 +161,8 @@ func TestGetAllSymbolDefinitionsFromSource_Python(t *testing.T) {
 
 			for i, def := range defs {
 				assert.Equal(t, tc.expectedSymbols[i], def.SymbolName, "symbol name mismatch at index %d", i)
-				assert.Equal(t, uint32(tc.expectedRanges[i][0]), def.Range.StartPoint.Row, "start line mismatch for %s", tc.expectedSymbols[i])
-				assert.Equal(t, uint32(tc.expectedRanges[i][1]), def.Range.EndPoint.Row, "end line mismatch for %s", tc.expectedSymbols[i])
+				assert.Equal(t, uint(tc.expectedRanges[i][0]), def.Range.StartPoint.Row, "start line mismatch for %s", tc.expectedSymbols[i])
+				assert.Equal(t, uint(tc.expectedRanges[i][1]), def.Range.EndPoint.Row, "end line mismatch for %s", tc.expectedSymbols[i])
 			}
 		})
 	}
@@ -223,8 +223,8 @@ func TestGetAllSymbolDefinitionsFromSource_TypeScript(t *testing.T) {
 
 			for i, def := range defs {
 				assert.Equal(t, tc.expectedSymbols[i], def.SymbolName, "symbol name mismatch at index %d", i)
-				assert.Equal(t, uint32(tc.expectedRanges[i][0]), def.Range.StartPoint.Row, "start line mismatch for %s", tc.expectedSymbols[i])
-				assert.Equal(t, uint32(tc.expectedRanges[i][1]), def.Range.EndPoint.Row, "end line mismatch for %s", tc.expectedSymbols[i])
+				assert.Equal(t, uint(tc.expectedRanges[i][0]), def.Range.StartPoint.Row, "start line mismatch for %s", tc.expectedSymbols[i])
+				assert.Equal(t, uint(tc.expectedRanges[i][1]), def.Range.EndPoint.Row, "end line mismatch for %s", tc.expectedSymbols[i])
 			}
 		})
 	}

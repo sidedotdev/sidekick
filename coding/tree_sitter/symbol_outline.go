@@ -2,7 +2,6 @@ package tree_sitter
 
 import (
 	"cmp"
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -11,13 +10,12 @@ import (
 	"slices"
 	"strings"
 
-	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/golang"
-	"github.com/smacker/go-tree-sitter/java"
-	"github.com/smacker/go-tree-sitter/kotlin"
-	"github.com/smacker/go-tree-sitter/python"
-	"github.com/smacker/go-tree-sitter/typescript/tsx"
-	"github.com/smacker/go-tree-sitter/typescript/typescript"
+	tree_sitter_kotlin "github.com/tree-sitter-grammars/tree-sitter-kotlin/bindings/go"
+	tree_sitter "github.com/tree-sitter/go-tree-sitter"
+	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
+	tree_sitter_java "github.com/tree-sitter/tree-sitter-java/bindings/go"
+	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
+	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
 
 type SourceCapture struct {
@@ -28,15 +26,15 @@ type SourceCapture struct {
 type Symbol struct {
 	Content        string
 	SymbolType     string
-	StartPoint     sitter.Point
-	EndPoint       sitter.Point
+	StartPoint     tree_sitter.Point
+	EndPoint       tree_sitter.Point
 	SourceCaptures []SourceCapture
 	Declaration    Declaration
 }
 
 type Declaration struct {
-	StartPoint sitter.Point
-	EndPoint   sitter.Point
+	StartPoint tree_sitter.Point
+	EndPoint   tree_sitter.Point
 }
 
 func GetFileSymbols(filePath string) ([]Symbol, error) {
@@ -48,11 +46,12 @@ func GetFileSymbols(filePath string) ([]Symbol, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to obtain source code when getting symbol definition for file %s: %v", filePath, err)
 	}
-	parser := sitter.NewParser()
+	parser := tree_sitter.NewParser()
+	defer parser.Close()
 	parser.SetLanguage(sitterLanguage)
-	tree, err := parser.ParseCtx(context.Background(), nil, sourceTransform(languageName, &sourceCode))
-	if err != nil {
-		return nil, err
+	tree := parser.Parse(sourceTransform(languageName, &sourceCode), nil)
+	if tree != nil {
+		defer tree.Close()
 	}
 	symbolSlice, err := getSourceSymbolsInternal(languageName, sitterLanguage, tree, &sourceCode)
 	if err != nil {
@@ -77,11 +76,12 @@ func GetAllAlternativeFileSymbols(filePath string) ([]Symbol, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to obtain source code when getting symbol definition for file %s: %v", filePath, err)
 	}
-	parser := sitter.NewParser()
+	parser := tree_sitter.NewParser()
+	defer parser.Close()
 	parser.SetLanguage(sitterLanguage)
-	tree, err := parser.ParseCtx(context.Background(), nil, sourceTransform(languageName, &sourceCode))
-	if err != nil {
-		return nil, err
+	tree := parser.Parse(sourceTransform(languageName, &sourceCode), nil)
+	if tree != nil {
+		defer tree.Close()
 	}
 	symbolSlice, err := getSourceSymbolsInternal(languageName, sitterLanguage, tree, &sourceCode)
 	if err != nil {
@@ -104,7 +104,7 @@ func GetAllAlternativeFileSymbols(filePath string) ([]Symbol, error) {
 // TODO: provide the canonical form of the symbol name as well in the result (need a new type or field for this)
 // TODO: make this language-specific
 // TODO in golang, append the module name to the symbol name with a dot as well as another alternative symbol
-func expandWithAlternativeSymbols(languageName string, sitterLanguage *sitter.Language, tree *sitter.Tree, sourceCode *[]byte, symbolSlice []Symbol) []Symbol {
+func expandWithAlternativeSymbols(languageName string, sitterLanguage *tree_sitter.Language, tree *tree_sitter.Tree, sourceCode *[]byte, symbolSlice []Symbol) []Symbol {
 	for _, symbol := range symbolSlice {
 		// Handle Kotlin backtick-escaped symbols
 		if languageName == "kotlin" {
@@ -117,6 +117,43 @@ func expandWithAlternativeSymbols(languageName string, sitterLanguage *sitter.La
 					StartPoint: symbol.StartPoint,
 					EndPoint:   symbol.EndPoint,
 				})
+			}
+		}
+
+		// Handle Markdown heading symbols
+		if languageName == "markdown" && (symbol.SymbolType == "heading" || symbol.SymbolType == "setext_heading") {
+			var headingContent, headingMarker string
+			for _, capture := range symbol.SourceCaptures {
+				switch capture.Name {
+				case "heading.content":
+					headingContent = strings.TrimSpace(capture.Content)
+				case "setext_heading.h1.content", "setext_heading.h2.content":
+					// Setext heading content may have trailing newlines
+					headingContent = strings.TrimSpace(capture.Content)
+				case "heading.marker":
+					headingMarker = capture.Content
+				}
+			}
+
+			if headingContent != "" {
+				slug := slugifyHeading(headingContent)
+				alternativeSymbols := []string{
+					headingContent, // Raw heading text without any # prefix
+					slug,           // Slug only (without leading #)
+				}
+				// Original heading line (including # prefix for ATX headings only)
+				if headingMarker != "" {
+					alternativeSymbols = append(alternativeSymbols, headingMarker+" "+headingContent)
+				}
+
+				for _, altSymbol := range alternativeSymbols {
+					symbolSlice = append(symbolSlice, Symbol{
+						Content:    altSymbol,
+						SymbolType: "alt_" + symbol.SymbolType,
+						StartPoint: symbol.StartPoint,
+						EndPoint:   symbol.EndPoint,
+					})
+				}
 			}
 		}
 
@@ -188,45 +225,40 @@ func GetFileSymbolsString(filePath string) (string, error) {
 	return FormatSymbols(symbolSlice), nil
 }
 
-func getSourceSymbolsInternal(languageName string, sitterLanguage *sitter.Language, tree *sitter.Tree, sourceCode *[]byte) ([]Symbol, error) {
+func getSourceSymbolsInternal(languageName string, sitterLanguage *tree_sitter.Language, tree *tree_sitter.Tree, sourceCode *[]byte) ([]Symbol, error) {
 	// NOTE: signature query does double-duty as the symbol query. FIXME should be renamed!
 	queryString, err := getSignatureQuery(languageName, false)
 	if err != nil {
 		return []Symbol{}, fmt.Errorf("error rendering symbol definition query: %w", err)
 	}
 
-	q, err := sitter.NewQuery([]byte(queryString), sitterLanguage)
-	if err != nil {
-		return []Symbol{}, fmt.Errorf("error creating sitter symbol definition query: %w", err)
+	q, qErr := tree_sitter.NewQuery(sitterLanguage, queryString)
+	if qErr != nil {
+		return []Symbol{}, fmt.Errorf("error creating sitter symbol definition query: %s", qErr.Message)
 	}
+	defer q.Close()
 
 	var symbols []Symbol
-	qc := sitter.NewQueryCursor()
-	qc.Exec(q, tree.RootNode())
+	qc := tree_sitter.NewQueryCursor()
+	defer qc.Close()
+	matches := qc.Matches(q, tree.RootNode(), []byte(*sourceCode))
 	// Iterate over query results
-	for {
-		m, ok := qc.NextMatch()
-		if !ok {
-			break
-		}
-
+	for match := matches.Next(); match != nil; match = matches.Next() {
 		sigWriter := strings.Builder{}
 
-		// Apply predicates filtering
-		m = qc.FilterPredicates(m, *sourceCode)
 		var names []string
 		var sourceCaptures []SourceCapture
 		var declaration Declaration
-		startPoint := sitter.Point{Row: ^uint32(0), Column: ^uint32(0)}
-		endPoint := sitter.Point{Row: 0, Column: 0}
-		for _, c := range m.Captures {
-			name := q.CaptureNameForId(c.Index)
+		startPoint := tree_sitter.Point{Row: ^uint(0), Column: ^uint(0)}
+		endPoint := tree_sitter.Point{Row: 0, Column: 0}
+		for _, c := range match.Captures {
+			name := q.CaptureNames()[c.Index]
 			names = append(names, name)
-			content := c.Node.Content(*sourceCode)
+			content := c.Node.Utf8Text(*sourceCode)
 			if strings.HasSuffix(name, ".declaration") {
 				declaration = Declaration{
-					StartPoint: c.Node.StartPoint(),
-					EndPoint:   c.Node.EndPoint(),
+					StartPoint: c.Node.StartPosition(),
+					EndPoint:   c.Node.EndPosition(),
 				}
 			} else {
 				sourceCaptures = append(sourceCaptures, SourceCapture{
@@ -236,11 +268,11 @@ func getSourceSymbolsInternal(languageName string, sitterLanguage *sitter.Langua
 			}
 			writeSymbolCapture(languageName, &sigWriter, sourceCode, c, name)
 			if shouldExtendSymbolRange(languageName, name) {
-				if c.Node.StartPoint().Row < startPoint.Row || (c.Node.StartPoint().Row == startPoint.Row && c.Node.StartPoint().Column < startPoint.Column) {
-					startPoint = c.Node.StartPoint()
+				if c.Node.StartPosition().Row < startPoint.Row || (c.Node.StartPosition().Row == startPoint.Row && c.Node.StartPosition().Column < startPoint.Column) {
+					startPoint = c.Node.StartPosition()
 				}
-				if c.Node.EndPoint().Row > endPoint.Row || (c.Node.EndPoint().Row == endPoint.Row && c.Node.EndPoint().Column > endPoint.Column) {
-					endPoint = c.Node.EndPoint()
+				if c.Node.EndPosition().Row > endPoint.Row || (c.Node.EndPosition().Row == endPoint.Row && c.Node.EndPosition().Column > endPoint.Column) {
+					endPoint = c.Node.EndPosition()
 				}
 			}
 
@@ -273,6 +305,11 @@ func getSourceSymbolsInternal(languageName string, sitterLanguage *sitter.Langua
 		return c
 	})
 
+	// Markdown-specific: compute section ranges for headings
+	if languageName == "markdown" {
+		symbols = computeMarkdownSectionRanges(symbols, sourceCode)
+	}
+
 	return symbols, nil
 }
 
@@ -297,6 +334,13 @@ func shouldExtendSymbolRange(languageName, captureName string) bool {
 				return false
 			}
 		}
+	case "markdown":
+		{
+			// Markdown heading and frontmatter captures extend the range
+			if captureName == "heading.name" || captureName == "setext_heading.name" || captureName == "frontmatter.name" {
+				return true
+			}
+		}
 	}
 
 	return false
@@ -304,16 +348,19 @@ func shouldExtendSymbolRange(languageName, captureName string) bool {
 
 // cross language symbol types
 var nameToSymbolType map[string]string = map[string]string{
-	"function.name":   "function",
-	"method.name":     "method",
-	"type.name":       "type",
-	"type_alias.name": "type",
-	"lexical.name":    "variable",
-	"var.name":        "non_lexical_variable",
-	"const.name":      "const_variable",
-	"interface.name":  "interface",
-	"class.name":      "class",
-	"enum.name":       "enum",
+	"function.name":       "function",
+	"method.name":         "method",
+	"type.name":           "type",
+	"type_alias.name":     "type",
+	"lexical.name":        "variable",
+	"var.name":            "non_lexical_variable",
+	"const.name":          "const_variable",
+	"interface.name":      "interface",
+	"class.name":          "class",
+	"enum.name":           "enum",
+	"heading.name":        "heading",
+	"setext_heading.name": "setext_heading",
+	"frontmatter.name":    "frontmatter",
 }
 
 func getSymbolType(languageName string, names []string) string {
@@ -325,7 +372,7 @@ func getSymbolType(languageName string, names []string) string {
 	return ""
 }
 
-func writeSymbolCapture(languageName string, out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
+func writeSymbolCapture(languageName string, out *strings.Builder, sourceCode *[]byte, c tree_sitter.QueryCapture, name string) {
 	//out.WriteString(name + "\n")
 	//out.WriteString(c.Node.Type() + "\n")
 	switch languageName {
@@ -357,11 +404,15 @@ func writeSymbolCapture(languageName string, out *strings.Builder, sourceCode *[
 		{
 			writeKotlinSymbolCapture(out, sourceCode, c, name)
 		}
+	case "markdown":
+		{
+			writeMarkdownSymbolCapture(out, sourceCode, c, name)
+		}
 	default:
 		{
 			// NOTE this is expected to provide quite bad output until tweaked per language
 			if strings.HasSuffix(name, ".name") {
-				out.WriteString(c.Node.Content(*sourceCode))
+				out.WriteString(c.Node.Utf8Text(*sourceCode))
 			}
 		}
 	}
@@ -380,7 +431,7 @@ func FormatSymbols(symbols []Symbol) string {
 
 // getEmbeddedLanguageSymbols is a placeholder function for getting embedded language symbols.
 // This function needs to be implemented.
-func getEmbeddedLanguageSymbols(languageName string, tree *sitter.Tree, sourceCode *[]byte) ([]Symbol, error) {
+func getEmbeddedLanguageSymbols(languageName string, tree *tree_sitter.Tree, sourceCode *[]byte) ([]Symbol, error) {
 	switch languageName {
 	case "vue":
 		{
@@ -395,12 +446,13 @@ func (sc SourceCode) GetSymbols() ([]Symbol, error) {
 	if err != nil {
 		return nil, err
 	}
-	parser := sitter.NewParser()
+	parser := tree_sitter.NewParser()
+	defer parser.Close()
 	parser.SetLanguage(sitterLanguage)
 	sourceBytes := []byte(sc.Content)
-	tree, err := parser.ParseCtx(context.Background(), nil, sourceTransform(sc.LanguageName, &sourceBytes))
-	if err != nil {
-		return nil, err
+	tree := parser.Parse(sourceTransform(sc.LanguageName, &sourceBytes), nil)
+	if tree != nil {
+		defer tree.Close()
 	}
 	symbolSlice, err := getSourceSymbolsInternal(sc.LanguageName, sitterLanguage, tree, &sourceBytes)
 	if err != nil {
@@ -420,6 +472,8 @@ func normalizeLanguageName(s string) string {
 		return "java"
 	case "ts", "typescript":
 		return "typescript"
+	case "md", "markdown":
+		return "markdown"
 	default:
 		return s
 	}
@@ -443,23 +497,24 @@ func NormalizeSymbolFromSnippet(languageName string, snippet string) (string, er
 
 var ErrNoSymbolParsed = errors.New("no symbol parsed")
 
-func getSitterLanguage(languageName string) (*sitter.Language, error) {
+func getSitterLanguage(languageName string) (*tree_sitter.Language, error) {
 	switch languageName {
 	case "go", "golang":
-		return golang.GetLanguage(), nil
+		return tree_sitter.NewLanguage(tree_sitter_go.Language()), nil
 	case "kt", "kotlin":
-		return kotlin.GetLanguage(), nil
+		return tree_sitter.NewLanguage(tree_sitter_kotlin.Language()), nil
 	case "java":
-		return java.GetLanguage(), nil
+		return tree_sitter.NewLanguage(tree_sitter_java.Language()), nil
 	case "py", "python":
-		return python.GetLanguage(), nil
+		return tree_sitter.NewLanguage(tree_sitter_python.Language()), nil
 	case "ts", "typescript":
-		return typescript.GetLanguage(), nil
+		return tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript()), nil
 	case "tsx":
-		return tsx.GetLanguage(), nil
+		return tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTSX()), nil
 	case "vue":
-		return vue.GetLanguage(), nil
-	// Add more languages as needed
+		return tree_sitter.NewLanguage(vue.Language()), nil
+	case "md", "markdown":
+		return getMarkdownLanguage(), nil
 	default:
 		return nil, fmt.Errorf("unsupported language: %s", languageName)
 	}
@@ -485,10 +540,10 @@ func getFilenameSymbols(langName, filename string) ([]Symbol, error) {
 				Content:    maybeComponentName,
 				SymbolType: "sfc",
 				Declaration: Declaration{
-					StartPoint: sitter.Point{},
-					EndPoint: sitter.Point{
-						Row:    uint32(len(lines) - 1),
-						Column: uint32(len(lines[len(lines)-1]) - 1),
+					StartPoint: tree_sitter.Point{},
+					EndPoint: tree_sitter.Point{
+						Row:    uint(len(lines) - 1),
+						Column: uint(len(lines[len(lines)-1]) - 1),
 					},
 				},
 			})

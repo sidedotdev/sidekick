@@ -3,11 +3,11 @@ package tree_sitter
 import (
 	"strings"
 
-	sitter "github.com/smacker/go-tree-sitter"
+	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
-func writeTypescriptSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
-	content := c.Node.Content(*sourceCode)
+func writeTypescriptSignatureCapture(out *strings.Builder, sourceCode *[]byte, c tree_sitter.QueryCapture, name string) {
+	content := c.Node.Utf8Text(*sourceCode)
 	switch name {
 	case "function.declaration":
 		{
@@ -25,7 +25,7 @@ func writeTypescriptSignatureCapture(out *strings.Builder, sourceCode *[]byte, c
 		}
 	case "class.declaration":
 		{
-			writeTypescriptIndentLevel(c.Node, out)
+			writeTypescriptIndentLevel(&c.Node, out)
 			out.WriteString("class ")
 		}
 	case "class.body", "class.method.body":
@@ -49,7 +49,7 @@ func writeTypescriptSignatureCapture(out *strings.Builder, sourceCode *[]byte, c
 	case "class.method.declaration", "class.field.declaration":
 		{
 			out.WriteString("\n")
-			writeTypescriptIndentLevel(c.Node, out)
+			writeTypescriptIndentLevel(&c.Node, out)
 		}
 	case "lexical.declaration":
 		{
@@ -86,8 +86,8 @@ func writeTypescriptSignatureCapture(out *strings.Builder, sourceCode *[]byte, c
 	}
 }
 
-func writeTypescriptSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
-	content := c.Node.Content(*sourceCode)
+func writeTypescriptSymbolCapture(out *strings.Builder, sourceCode *[]byte, c tree_sitter.QueryCapture, name string) {
+	content := c.Node.Utf8Text(*sourceCode)
 	switch name {
 	case "method.class_name":
 		{
@@ -102,11 +102,11 @@ func writeTypescriptSymbolCapture(out *strings.Builder, sourceCode *[]byte, c si
 }
 
 // getTypescriptIndentLevel returns the number of declaration ancestors between the node and the program node
-func getTypescriptIndentLevel(node *sitter.Node) int {
+func getTypescriptIndentLevel(node *tree_sitter.Node) int {
 	level := 0
 	current := node.Parent()
 	for current != nil {
-		if strings.HasSuffix(current.Type(), "_declaration") || current.Type() == "class" {
+		if strings.HasSuffix(current.Kind(), "_declaration") || current.Kind() == "class" {
 			level++
 		}
 		current = current.Parent()
@@ -114,7 +114,7 @@ func getTypescriptIndentLevel(node *sitter.Node) int {
 	return level
 }
 
-func writeTypescriptIndentLevel(node *sitter.Node, out *strings.Builder) {
+func writeTypescriptIndentLevel(node *tree_sitter.Node, out *strings.Builder) {
 	level := getTypescriptIndentLevel(node)
 	for i := 0; i < level; i++ {
 		out.WriteString("\t")
