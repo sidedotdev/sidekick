@@ -371,7 +371,8 @@ var symbolDefinitionQueriesFS embed.FS
 
 func renderSymbolDefinitionQuery(languageName, symbolName string) (string, error) {
 	// Read the mustache template file
-	templatePath := fmt.Sprintf("symbol_definition_queries/symbol_definition_%s.scm.mustache", languageName)
+	queryLang := normalizeLanguageForQueryFile(languageName)
+	templatePath := fmt.Sprintf("symbol_definition_queries/symbol_definition_%s.scm.mustache", queryLang)
 	templateBytes, err := symbolDefinitionQueriesFS.ReadFile(templatePath)
 	if err != nil {
 		return "", fmt.Errorf("error reading mustache template file: %w", err)
@@ -392,7 +393,8 @@ func renderSymbolDefinitionQuery(languageName, symbolName string) (string, error
 
 func renderSymbolDefinitionWithParentQuery(languageName, childSymbolName, parentSymbolName string) (string, error) {
 	// Read the mustache template file
-	templatePath := fmt.Sprintf("symbol_definition_queries/symbol_definition_with_parent_%s.scm.mustache", languageName)
+	queryLang := normalizeLanguageForQueryFile(languageName)
+	templatePath := fmt.Sprintf("symbol_definition_queries/symbol_definition_with_parent_%s.scm.mustache", queryLang)
 	templateBytes, err := symbolDefinitionQueriesFS.ReadFile(templatePath)
 	if err != nil {
 		return "", fmt.Errorf("error reading mustache template file: %w", err)

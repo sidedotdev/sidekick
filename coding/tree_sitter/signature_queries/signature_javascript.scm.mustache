@@ -1,0 +1,115 @@
+; get symbol name from signature (for partial/incomplete code)
+(ERROR
+	(identifier) @class.name
+)
+
+; function declarations - matches all, writer checks for export parent
+(function_declaration
+  name: (identifier) @function.name
+  parameters: (formal_parameters) @function.parameters
+) @function.declaration
+
+; function expressions (also matches partial/incomplete function code)
+(function_expression
+  name: (identifier) @function.name
+  parameters: (formal_parameters) @function.parameters
+) @function.declaration
+
+(generator_function_declaration
+  name: (identifier) @function.name
+  parameters: (formal_parameters) @function.parameters
+) @function.declaration
+
+; top-level lexical declarations
+(program
+  (lexical_declaration
+    (variable_declarator
+      name: (identifier) @lexical.name
+    )
+  ) @lexical.declaration
+)
+
+; exported lexical declarations
+(program
+  (export_statement
+    (lexical_declaration
+      (variable_declarator
+        name: (identifier) @lexical.name
+      )
+    ) @lexical.declaration
+  ) @export.declaration
+)
+
+; top-level variable declarations
+(program
+  (variable_declaration
+    (variable_declarator
+      name: (identifier) @var.name
+    )
+  ) @var.declaration
+)
+
+; class_declaration with methods/fields
+(class_declaration
+  name: (identifier) @class.name
+  (class_heritage)? @class.heritage
+  body: (class_body
+    [
+      (field_definition
+        property: (_) @class.field.name
+      ) @class.field.declaration
+
+      (method_definition
+        name: (_) @class.method.name
+        parameters: (formal_parameters) @class.method.parameters
+        body: (_) @class.method.body
+      ) @class.method.declaration
+
+      (_)
+
+      ";"
+    ]*
+  ) @class.body
+) @class.declaration
+
+; class expression with methods/fields
+(class
+  name: (identifier) @class.name
+  (class_heritage)? @class.heritage
+  body: (class_body
+    [
+      (field_definition
+        property: (_) @class.field.name
+      ) @class.field.declaration
+
+      (method_definition
+        name: (_) @class.method.name
+        parameters: (formal_parameters) @class.method.parameters
+        body: (_) @class.method.body
+      ) @class.method.declaration
+
+      (_)
+
+      ";"
+    ]*
+  ) @class.body
+) @class.declaration
+
+; for symbol outline - capture class name for Class.method format
+(class_declaration
+  name: (identifier) @method.class_name
+  body: (class_body
+    (method_definition
+      name: (_) @method.name
+    )
+  )
+)
+
+(class
+  name: (identifier) @method.class_name
+  body: (class_body
+    (method_definition
+      name: (_) @method.name
+    )
+  )
+)

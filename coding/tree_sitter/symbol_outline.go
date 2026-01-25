@@ -14,6 +14,7 @@ import (
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
 	tree_sitter_java "github.com/tree-sitter/tree-sitter-java/bindings/go"
+	tree_sitter_javascript "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
 	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
 	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
@@ -404,6 +405,10 @@ func writeSymbolCapture(languageName string, out *strings.Builder, sourceCode *[
 		{
 			writeKotlinSymbolCapture(out, sourceCode, c, name)
 		}
+	case "javascript", "js", "jsx", "mjs", "cjs":
+		{
+			writeJavascriptSymbolCapture(out, sourceCode, c, name)
+		}
 	case "markdown":
 		{
 			writeMarkdownSymbolCapture(out, sourceCode, c, name)
@@ -474,8 +479,21 @@ func normalizeLanguageName(s string) string {
 		return "typescript"
 	case "md", "markdown":
 		return "markdown"
+	case "js", "jsx", "javascript", "mjs", "cjs":
+		return "javascript"
 	default:
 		return s
+	}
+}
+
+// normalizeLanguageForQueryFile maps language aliases to the canonical name
+// used for query file paths (e.g., jsx -> javascript)
+func normalizeLanguageForQueryFile(languageName string) string {
+	switch languageName {
+	case "jsx":
+		return "javascript"
+	default:
+		return languageName
 	}
 }
 
@@ -515,6 +533,8 @@ func getSitterLanguage(languageName string) (*tree_sitter.Language, error) {
 		return tree_sitter.NewLanguage(vue.Language()), nil
 	case "md", "markdown":
 		return getMarkdownLanguage(), nil
+	case "javascript", "js", "jsx", "mjs", "cjs", "javascript-signatures", "js-signatures", "jsx-signatures", "mjs-signatures", "cjs-signatures":
+		return tree_sitter.NewLanguage(tree_sitter_javascript.Language()), nil
 	default:
 		return nil, fmt.Errorf("unsupported language: %s", languageName)
 	}

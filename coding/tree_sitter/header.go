@@ -233,7 +233,8 @@ func createKeySourceBlock(frontmatter SourceBlock, lineOffset int, keyLines []st
 var headerQueriesFS embed.FS
 
 func getHeaderQuery(languageName string) (string, error) {
-	queryPath := fmt.Sprintf("header_queries/header_%s.scm", languageName)
+	queryLang := normalizeLanguageForQueryFile(languageName)
+	queryPath := fmt.Sprintf("header_queries/header_%s.scm", queryLang)
 	queryBytes, err := headerQueriesFS.ReadFile(queryPath)
 	if err != nil {
 		return "", fmt.Errorf("error reading header query file: %w", err)

@@ -1,0 +1,13 @@
+; JavaScript symbol definition with parent query
+; Supports parent/child lookups like Class.method
+
+(class_declaration
+  name: (identifier) @parentName
+  body: (class_body
+    (method_definition
+      name: (_) @childName
+    ) @definition
+    (#eq? @childName "{{childSymbolName}}")
+  )
+  (#eq? @parentName "{{parentSymbolName}}")
+)
