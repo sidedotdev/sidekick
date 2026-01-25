@@ -405,6 +405,10 @@ func writeSymbolCapture(languageName string, out *strings.Builder, sourceCode *[
 		{
 			writeKotlinSymbolCapture(out, sourceCode, c, name)
 		}
+	case "javascript":
+		{
+			writeJavascriptSymbolCapture(out, sourceCode, c, name)
+		}
 	case "markdown":
 		{
 			writeMarkdownSymbolCapture(out, sourceCode, c, name)
