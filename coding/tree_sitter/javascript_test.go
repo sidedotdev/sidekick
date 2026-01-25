@@ -734,3 +734,143 @@ func TestNormalizeSymbolFromSnippet_Javascript(t *testing.T) {
 		})
 	}
 }
+
+func TestShrinkJavascriptEmbeddedCodeContext(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name     string
+		code     string
+		expected string
+	}{
+		{
+			name: "class with methods",
+			code: `
+class TestClass {
+    constructor(name) {
+        this.name = name;
+    }
+    
+    greet() {
+        // pad out length of this code
+        console.log("Hello, " + this.name);
+        return this.name;
+    }
+    
+    static create(name) {
+        return new TestClass(name);
+    }
+}`,
+			expected: `Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
+` + "```" + `javascript-signatures
+class TestClass
+	constructor(name)
+	greet()
+	create(name)
+` + "```",
+		},
+		{
+			name: "functions and variables",
+			code: `
+function processData(data) {
+    // pad out length of this code
+    const result = data.map(x => x * 2);
+    return result;
+}
+
+const CONFIG = {
+    apiUrl: "https://api.example.com",
+    timeout: 5000
+};
+
+async function fetchData(url) {
+    // pad out length of this code
+    const response = await fetch(url);
+    return response.json();
+}`,
+			expected: `Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
+` + "```" + `javascript-signatures
+function processData(data)
+const CONFIG = {
+    apiUrl: "https://api.example.com",
+    timeout: 5000
+    [...]
+async function fetchData(url)
+` + "```",
+		},
+		{
+			name: "jsx component",
+			code: `
+function MyComponent({ title, children }) {
+    // pad out length of this code
+    const [count, setCount] = useState(0);
+    
+    return (
+        <div className="container">
+            <h1>{title}</h1>
+            <button onClick={() => setCount(count + 1)}>
+                Count: {count}
+            </button>
+            {children}
+        </div>
+    );
+}
+
+class ClassComponent extends React.Component {
+    render() {
+        // pad out length of this code
+        return <div>{this.props.message}</div>;
+    }
+}`,
+			expected: `Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
+` + "```" + `javascript-signatures
+function MyComponent({ title, children })
+class ClassComponent extends React.Component
+	render()
+` + "```",
+		},
+		{
+			name: "exports",
+			code: `
+export function exportedFunc(arg) {
+    // pad out length of this code
+    console.log(arg);
+    return arg;
+}
+
+export const EXPORTED_CONST = "value";
+
+export default function defaultExport() {
+    // pad out length of this code
+    return "default";
+}`,
+			expected: `Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
+` + "```" + `javascript-signatures
+export function exportedFunc(arg)
+export const EXPORTED_CONST = "value";
+export default function defaultExport()
+` + "```",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			embeddedCode := createMarkdownCodeBlock("javascript", tc.code)
+			result, didShrink := ShrinkEmbeddedCodeContext(embeddedCode, false, len(tc.code)-100)
+
+			normalizedCode := strings.TrimSpace(strings.ReplaceAll(tc.code, "\r\n", "\n"))
+			normalizedResult := strings.TrimSpace(strings.ReplaceAll(result, "\r\n", "\n"))
+			normalizedExpected := strings.TrimSpace(strings.ReplaceAll(tc.expected, "\r\n", "\n"))
+
+			if normalizedCode == normalizedResult {
+				assert.False(t, didShrink)
+			} else {
+				assert.True(t, didShrink)
+			}
+
+			if normalizedResult != normalizedExpected {
+				t.Errorf("ShrinkEmbeddedCodeContext returned incorrect result.\nExpected:\n%s\n\nGot:\n%s", normalizedExpected, normalizedResult)
+			}
+		})
+	}
+}
