@@ -73,7 +73,7 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	var fa *flow_action.FlowActivities // use a nil struct pointer to call activities that are part of a structure
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil)
 	s.env.OnActivity(ManageChatHistoryActivity, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
-	s.env.OnActivity(ManageChatHistoryV2Activity, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
+	s.env.OnActivity(ManageChatHistoryV2Activity, mock.Anything, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 
 	// Create temporary directory using t.TempDir()
 	s.dir = s.T().TempDir()

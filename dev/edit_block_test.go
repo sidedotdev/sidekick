@@ -496,6 +496,25 @@ d
 	},
 }
 
+// Test that ExtractEditBlocks handles stray conflict markers without panicking
+func TestExtractEditBlocks_StrayConflictMarkers(t *testing.T) {
+	t.Parallel()
+
+	// Content with ======= inside a code block but no preceding <<<<<<<
+	// This can happen when parsing chat history that contains test expected output
+	testInput := "```\n\texpected := `Main Title\n===========\n---\n`\n```"
+
+	result, err := ExtractEditBlocks(testInput, false)
+	if err != nil {
+		t.Errorf("Error extracting edit blocks: %v", err)
+	}
+
+	// Should return empty result, not panic
+	if len(result) != 0 {
+		t.Errorf("Expected 0 edit blocks, got %d", len(result))
+	}
+}
+
 func TestExtractEditBlocks(t *testing.T) {
 	t.Parallel()
 	testCases := []EditBlockTestCase{
