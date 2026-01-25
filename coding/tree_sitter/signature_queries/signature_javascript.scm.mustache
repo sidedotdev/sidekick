@@ -1,0 +1,101 @@
+; get symbol name from signature
+(ERROR
+	(identifier) @class.name
+)
+
+(function_expression
+  name: (identifier) @function.name
+  parameters: (formal_parameters) @function.parameters
+) @function.declaration
+
+; only top-level non-exported function declarations
+(program
+  (function_declaration
+    name: (identifier) @function.name
+    parameters: (formal_parameters) @function.parameters
+  ) @function.declaration
+)
+
+(program
+  (generator_function_declaration
+    name: (identifier) @function.name
+    parameters: (formal_parameters) @function.parameters
+  ) @function.declaration
+)
+
+; only top-level lexical declarations are included in signatures
+(program
+  (lexical_declaration
+    (variable_declarator
+      name: (identifier) @lexical.name
+    )
+  ) @lexical.declaration
+)
+
+; only top-level variable declarations are included in signatures
+(program
+  (variable_declaration
+    (variable_declarator
+      name: (identifier) @var.name
+    )
+  ) @var.declaration
+)
+
+; export statements - captures the export_statement node to check for default in writer
+(export_statement
+  (function_declaration
+    name: (identifier) @function.name
+    parameters: (formal_parameters) @function.parameters
+  ) @function.declaration
+) @export.declaration
+
+(export_statement
+  (lexical_declaration
+    (variable_declarator
+      name: (identifier) @lexical.name
+    )
+  ) @lexical.declaration
+) @export.declaration
+
+; class declarations - matches both class_declaration and class (expression)
+; using (_ to match any node type with name and class_body children
+(_
+  name: (_) @class.name
+  (class_heritage)? @class.heritage
+  (class_body
+    [
+      (field_definition
+        property: (_) @class.field.name
+      ) @class.field.declaration
+
+      (method_definition
+        name: (_) @class.method.name
+        parameters: (_) @class.method.parameters
+        body: (_) @class.method.body
+      ) @class.method.declaration
+
+      (_)
+
+      ";"
+    ]*
+  ) @class.body
+) @class.declaration
+
+; for symbol outline - capture class name for Class.method format
+(class_declaration
+  name: (_) @method.class_name
+  body: (class_body
+    (method_definition
+      name: (_) @method.name
+    )
+  )
+)
+
+(class
+  name: (_) @method.class_name
+  body: (class_body
+    (method_definition
+      name: (_) @method.name
+    )
+  )
+)
