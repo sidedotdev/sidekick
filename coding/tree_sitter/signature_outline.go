@@ -436,6 +436,10 @@ func writeSignatureCapture(languageName string, out *strings.Builder, sourceCode
 		{
 			writeKotlinSignatureCapture(out, sourceCode, c, name)
 		}
+	case "markdown":
+		{
+			writeMarkdownSignatureCapture(out, sourceCode, c, name)
+		}
 	default:
 		{
 			// NOTE this is expected to provide quite bad output until tweaked per language
