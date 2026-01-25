@@ -731,3 +731,214 @@ Content.
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "symbol not found")
 }
+
+func TestGetFileHeadersString_Markdown_WithFrontmatter(t *testing.T) {
+	t.Parallel()
+
+	content := `---
+name: My Document
+title: A Great Title
+description: This is a description
+  that spans multiple lines
+  with indentation.
+tags:
+  - tag1
+  - tag2
+  - tag3
+author: John Doe
+---
+
+# Main Content
+
+Some text here.
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	result, err := GetFileHeadersString(filePath, 0)
+	require.NoError(t, err)
+
+	// Should contain the supported keys
+	assert.Contains(t, result, "name: My Document")
+	assert.Contains(t, result, "title: A Great Title")
+	assert.Contains(t, result, "description: This is a description")
+	assert.Contains(t, result, "that spans multiple lines")
+	assert.Contains(t, result, "tags:")
+	assert.Contains(t, result, "- tag1")
+	assert.Contains(t, result, "- tag2")
+
+	// Should NOT contain unsupported keys
+	assert.NotContains(t, result, "author: John Doe")
+}
+
+func TestGetFileHeadersString_Markdown_SingleKey(t *testing.T) {
+	t.Parallel()
+
+	content := `---
+title: Just a Title
+author: Someone
+---
+
+# Content
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	result, err := GetFileHeadersString(filePath, 0)
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "title: Just a Title")
+	assert.NotContains(t, result, "author")
+}
+
+func TestGetFileHeadersString_Markdown_NoSupportedKeys(t *testing.T) {
+	t.Parallel()
+
+	content := `---
+author: John Doe
+version: 1.0
+---
+
+# Content
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	result, err := GetFileHeadersString(filePath, 0)
+	require.NoError(t, err)
+
+	// Should return empty string when no supported keys exist
+	assert.Empty(t, result)
+}
+
+func TestGetFileHeadersString_Markdown_NoFrontmatter(t *testing.T) {
+	t.Parallel()
+
+	content := `# Just a Heading
+
+Some content without frontmatter.
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	result, err := GetFileHeadersString(filePath, 0)
+	require.NoError(t, err)
+
+	// Should return empty string when no frontmatter exists
+	assert.Empty(t, result)
+}
+
+func TestGetFileHeadersString_Markdown_MultilineDescription(t *testing.T) {
+	t.Parallel()
+
+	content := `---
+description: |
+  This is a multiline description
+  using YAML block scalar syntax.
+  It preserves newlines.
+name: Test
+---
+
+# Content
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	result, err := GetFileHeadersString(filePath, 0)
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "description: |")
+	assert.Contains(t, result, "This is a multiline description")
+	assert.Contains(t, result, "name: Test")
+}
+
+func TestGetFileHeadersString_Markdown_TagsList(t *testing.T) {
+	t.Parallel()
+
+	content := `---
+tags:
+  - documentation
+  - markdown
+  - tree-sitter
+---
+
+# Content
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	result, err := GetFileHeadersString(filePath, 0)
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "tags:")
+	assert.Contains(t, result, "- documentation")
+	assert.Contains(t, result, "- markdown")
+	assert.Contains(t, result, "- tree-sitter")
+}
+
+func TestGetFileHeadersString_Markdown_BlockScalarWithDashes(t *testing.T) {
+	t.Parallel()
+
+	content := `---
+description: |
+  This is a block scalar
+  ---
+  with dashes inside
+title: My Title
+---
+
+# Content
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	result, err := GetFileHeadersString(filePath, 0)
+	require.NoError(t, err)
+
+	// Should preserve the indented --- inside the block scalar
+	assert.Contains(t, result, "description: |")
+	assert.Contains(t, result, "  ---")
+	assert.Contains(t, result, "with dashes inside")
+	assert.Contains(t, result, "title: My Title")
+}
+
+func TestGetFileHeaders_Markdown_FormattingWithSeparators(t *testing.T) {
+	t.Parallel()
+
+	content := `---
+name: Doc Name
+title: Doc Title
+---
+
+# Content
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	headers, err := GetFileHeaders(filePath, 0)
+	require.NoError(t, err)
+	require.Len(t, headers, 2)
+
+	// Verify FormatHeaders produces correct output with separators
+	formatted := FormatHeaders(headers)
+	assert.Contains(t, formatted, "name: Doc Name")
+	assert.Contains(t, formatted, "title: Doc Title")
+	// FormatHeaders uses "\n---\n" as separator between multiple blocks
+	assert.Contains(t, formatted, "\n---\n")
+}
