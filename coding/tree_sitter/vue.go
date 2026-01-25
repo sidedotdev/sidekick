@@ -2,7 +2,6 @@ package tree_sitter
 
 import (
 	"strings"
-	"unsafe"
 
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
@@ -30,7 +29,7 @@ func getVueEmbeddedLanguageSymbols(vueTree *tree_sitter.Tree, sourceCode *[]byte
 	}
 	defer tsTree.Close()
 	// Get symbols from tsTree and return them
-	tsLang := tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_typescript.LanguageTypescript()))
+	tsLang := tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript())
 	symbols, err := getSourceSymbolsInternal("typescript", tsLang, tsTree, sourceCode)
 	if err != nil {
 		return nil, err
@@ -60,7 +59,7 @@ func getVueEmbeddedLanguageSignatures(vueTree *tree_sitter.Tree, sourceCode *[]b
 	}
 	defer tsTree.Close()
 
-	tsLang := tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_typescript.LanguageTypescript()))
+	tsLang := tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript())
 	signatureSlice, err := getFileSignaturesInternal("typescript", tsLang, tsTree, sourceCode, true)
 	if err != nil {
 		return nil, err
@@ -98,7 +97,7 @@ func GetVueEmbeddedTypescriptTree(vueTree *tree_sitter.Tree, sourceCode *[]byte)
 	parser := tree_sitter.NewParser()
 	defer parser.Close()
 	// TODO make sure the lang attribute is ts before committing to typescript
-	tsLang := tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_typescript.LanguageTypescript()))
+	tsLang := tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript())
 	parser.SetLanguage(tsLang)
 	parser.SetIncludedRanges(tsRanges)
 	return parser.Parse(*sourceCode, nil), nil

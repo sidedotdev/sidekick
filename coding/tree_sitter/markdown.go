@@ -4,7 +4,6 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
-	"unsafe"
 
 	// tree-sitter-grammars/tree-sitter-markdown doesn't have Go bindings yet;
 	// using ehsanul fork's golang-language-bindings branch (see replace in go.mod)
@@ -13,7 +12,7 @@ import (
 )
 
 func getMarkdownLanguage() *tree_sitter.Language {
-	return tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_markdown.Language()))
+	return tree_sitter.NewLanguage(tree_sitter_markdown.Language())
 }
 
 // writeMarkdownSignatureCapture emits heading signatures in original source form.

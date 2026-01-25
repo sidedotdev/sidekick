@@ -7,7 +7,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"unsafe"
 
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
@@ -142,7 +141,7 @@ func getVueEmbeddedLanguageHeaders(vueTree *tree_sitter.Tree, sourceCode *[]byte
 		return headers, nil
 	}
 
-	tsLang := tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_typescript.LanguageTypescript()))
+	tsLang := tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript())
 	return getHeadersInternal("typescript", tsLang, tsTree, sourceCode)
 }
 

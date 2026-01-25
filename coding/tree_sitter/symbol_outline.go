@@ -9,7 +9,6 @@ import (
 	"sidekick/coding/tree_sitter/language_bindings/vue"
 	"slices"
 	"strings"
-	"unsafe"
 
 	tree_sitter_kotlin "github.com/tree-sitter-grammars/tree-sitter-kotlin/bindings/go"
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
@@ -501,19 +500,19 @@ var ErrNoSymbolParsed = errors.New("no symbol parsed")
 func getSitterLanguage(languageName string) (*tree_sitter.Language, error) {
 	switch languageName {
 	case "go", "golang":
-		return tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_go.Language())), nil
+		return tree_sitter.NewLanguage(tree_sitter_go.Language()), nil
 	case "kt", "kotlin":
-		return tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_kotlin.Language())), nil
+		return tree_sitter.NewLanguage(tree_sitter_kotlin.Language()), nil
 	case "java":
-		return tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_java.Language())), nil
+		return tree_sitter.NewLanguage(tree_sitter_java.Language()), nil
 	case "py", "python":
-		return tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_python.Language())), nil
+		return tree_sitter.NewLanguage(tree_sitter_python.Language()), nil
 	case "ts", "typescript":
-		return tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_typescript.LanguageTypescript())), nil
+		return tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript()), nil
 	case "tsx":
-		return tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_typescript.LanguageTSX())), nil
+		return tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTSX()), nil
 	case "vue":
-		return tree_sitter.NewLanguage(unsafe.Pointer(vue.Language())), nil
+		return tree_sitter.NewLanguage(vue.Language()), nil
 	case "md", "markdown":
 		return getMarkdownLanguage(), nil
 	default:
