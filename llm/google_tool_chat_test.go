@@ -654,6 +654,12 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 	close(deltaChan)
 
 	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "429") || strings.Contains(errStr, "RESOURCE_EXHAUSTED") ||
+			strings.Contains(errStr, "quota") || strings.Contains(errStr, "401") ||
+			strings.Contains(errStr, "authentication") {
+			t.Skipf("Skipping due to API quota/auth issue: %v", err)
+		}
 		t.Fatalf("ChatStream returned an error: %v", err)
 	}
 
@@ -735,6 +741,12 @@ func TestGoogleToolChatIntegration(t *testing.T) {
 		close(deltaChan)
 
 		if err != nil {
+			errStr := err.Error()
+			if strings.Contains(errStr, "429") || strings.Contains(errStr, "RESOURCE_EXHAUSTED") ||
+				strings.Contains(errStr, "quota") || strings.Contains(errStr, "401") ||
+				strings.Contains(errStr, "authentication") {
+				t.Skipf("Skipping due to API quota/auth issue: %v", err)
+			}
 			t.Fatalf("ChatStream returned an error: %v", err)
 		}
 
