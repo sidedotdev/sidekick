@@ -255,6 +255,10 @@ func removeComments(sourceCode SourceCode) (bool, SourceCode) {
 (line_comment) @comment
 (block_comment) @comment
 `
+	case "markdown", "markdown-signatures":
+		queryString = `
+(html_block) @comment
+`
 	}
 
 	// no query
