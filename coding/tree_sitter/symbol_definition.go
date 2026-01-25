@@ -65,6 +65,10 @@ func getSymbolDefinitionsInternal(languageName string, sitterLanguage *tree_sitt
 		return getSymbolDefinitionsWithParent(languageName, sitterLanguage, tree, sourceCode, childSymbolName, parentSymbolName)
 	}
 
+	if languageName == "markdown" {
+		return getMarkdownSymbolDefinitions(sitterLanguage, tree, sourceCode, symbolName, "")
+	}
+
 	queryString, err := renderSymbolDefinitionQuery(languageName, symbolName)
 	if err != nil {
 		return nil, fmt.Errorf("error rendering symbol definition query: %w", err)
@@ -91,6 +95,10 @@ func getSymbolDefinitionsInternal(languageName string, sitterLanguage *tree_sitt
 }
 
 func getSymbolDefinitionsWithParent(languageName string, sitterLanguage *tree_sitter.Language, tree *tree_sitter.Tree, sourceCode *[]byte, childSymbolName, parentSymbolName string) ([]SourceBlock, error) {
+	if languageName == "markdown" {
+		return getMarkdownSymbolDefinitions(sitterLanguage, tree, sourceCode, childSymbolName, parentSymbolName)
+	}
+
 	queryString, err := renderSymbolDefinitionWithParentQuery(languageName, childSymbolName, parentSymbolName)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -130,6 +138,204 @@ func splitSymbolNameIntoChildAndParent(symbolName string) (string, string) {
 		return childSymbolName, parentSymbolName
 	}
 	return symbolName, ""
+}
+
+// getMarkdownSymbolDefinitions handles markdown-specific symbol definition retrieval.
+// It normalizes the symbol name and filters matches in Go since tree-sitter queries
+// cannot perform slugification. If parentSymbolName is non-empty, it restricts matches
+// to headings whose nearest ancestor heading matches the parent.
+func getMarkdownSymbolDefinitions(sitterLanguage *tree_sitter.Language, tree *tree_sitter.Tree, sourceCode *[]byte, symbolName, parentSymbolName string) ([]SourceBlock, error) {
+	queryString, err := renderSymbolDefinitionQuery("markdown", "")
+	if err != nil {
+		return nil, fmt.Errorf("error rendering markdown symbol definition query: %w", err)
+	}
+	q, qErr := tree_sitter.NewQuery(sitterLanguage, queryString)
+	if qErr != nil {
+		return nil, fmt.Errorf("error creating markdown symbol definition query: %s", qErr.Message)
+	}
+	defer q.Close()
+
+	// Normalize the target symbol name
+	normalizedTarget := NormalizeMarkdownSymbol(symbolName)
+
+	// Collect all heading candidates with their metadata
+	candidates := collectMarkdownDefinitionCandidates(q, tree, sourceCode)
+
+	// Filter candidates by normalized symbol name
+	var matches []markdownDefinitionCandidate
+	for _, c := range candidates {
+		if c.normalizedSymbol == normalizedTarget {
+			matches = append(matches, c)
+		}
+	}
+
+	// If parent is specified, filter to only those with matching parent
+	if parentSymbolName != "" && len(matches) > 0 {
+		normalizedParent := NormalizeMarkdownSymbol(parentSymbolName)
+		parentMatches := filterByParentHeading(matches, candidates, normalizedParent)
+		if len(parentMatches) > 0 {
+			matches = parentMatches
+		}
+		// If no parent matches, fall through to return all matches (fallback behavior)
+	}
+
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("symbol not found: %s", symbolName)
+	}
+
+	// Compute section ranges and convert to SourceBlocks
+	sourceBlocks := computeMarkdownDefinitionRanges(matches, candidates, sourceCode)
+	return sourceBlocks, nil
+}
+
+type markdownDefinitionCandidate struct {
+	normalizedSymbol string
+	headingLevel     int
+	startRow         uint
+	startByte        uint
+	endRow           uint
+	endByte          uint
+	isFrontmatter    bool
+}
+
+func collectMarkdownDefinitionCandidates(q *tree_sitter.Query, tree *tree_sitter.Tree, sourceCode *[]byte) []markdownDefinitionCandidate {
+	var candidates []markdownDefinitionCandidate
+	qc := tree_sitter.NewQueryCursor()
+	defer qc.Close()
+	matches := qc.Matches(q, tree.RootNode(), *sourceCode)
+
+	for match := matches.Next(); match != nil; match = matches.Next() {
+		var headingContent string
+		var headingLevel int
+		var definitionNode *tree_sitter.Node
+		var isFrontmatter bool
+
+		for _, c := range match.Captures {
+			name := q.CaptureNames()[c.Index]
+			switch name {
+			case "heading.content", "setext_heading.content":
+				headingContent = c.Node.Utf8Text(*sourceCode)
+			case "heading.marker":
+				headingLevel = getMarkdownHeadingLevel(c.Node.Utf8Text(*sourceCode))
+			case "setext_heading.underline":
+				underline := c.Node.Utf8Text(*sourceCode)
+				if len(underline) > 0 && underline[0] == '=' {
+					headingLevel = 1
+				} else {
+					headingLevel = 2
+				}
+			case "definition":
+				definitionNode = &c.Node
+			case "frontmatter.definition":
+				definitionNode = &c.Node
+				isFrontmatter = true
+			}
+		}
+
+		if definitionNode != nil {
+			var normalizedSymbol string
+			if isFrontmatter {
+				normalizedSymbol = "yaml_frontmatter"
+			} else if headingContent != "" {
+				slug := slugifyHeading(headingContent)
+				normalizedSymbol = "#" + slug
+			}
+
+			if normalizedSymbol != "" {
+				candidates = append(candidates, markdownDefinitionCandidate{
+					normalizedSymbol: normalizedSymbol,
+					headingLevel:     headingLevel,
+					startRow:         definitionNode.StartPosition().Row,
+					startByte:        definitionNode.StartByte(),
+					endRow:           definitionNode.EndPosition().Row,
+					endByte:          definitionNode.EndByte(),
+					isFrontmatter:    isFrontmatter,
+				})
+			}
+		}
+	}
+
+	return candidates
+}
+
+// filterByParentHeading filters matches to only those whose nearest ancestor heading
+// matches the normalized parent symbol.
+func filterByParentHeading(matches, allCandidates []markdownDefinitionCandidate, normalizedParent string) []markdownDefinitionCandidate {
+	var filtered []markdownDefinitionCandidate
+
+	for _, m := range matches {
+		// Find the nearest ancestor heading (a heading that appears before this one
+		// with a lower level number, i.e., higher in the hierarchy)
+		var nearestAncestor *markdownDefinitionCandidate
+		for i := range allCandidates {
+			c := &allCandidates[i]
+			if c.isFrontmatter || c.startRow >= m.startRow {
+				continue
+			}
+			if c.headingLevel < m.headingLevel {
+				// This is a potential ancestor (higher level heading before this one)
+				if nearestAncestor == nil || c.startRow > nearestAncestor.startRow {
+					nearestAncestor = c
+				}
+			}
+		}
+
+		if nearestAncestor != nil && nearestAncestor.normalizedSymbol == normalizedParent {
+			filtered = append(filtered, m)
+		}
+	}
+
+	return filtered
+}
+
+// computeMarkdownDefinitionRanges computes section ranges for matched headings.
+// Each heading's range extends from its start to just before the next heading
+// of the same or higher level (or EOF). Frontmatter uses its captured node range.
+func computeMarkdownDefinitionRanges(matches, allCandidates []markdownDefinitionCandidate, sourceCode *[]byte) []SourceBlock {
+	// Count total lines in source
+	totalLines := uint(strings.Count(string(*sourceCode), "\n"))
+	if len(*sourceCode) > 0 && (*sourceCode)[len(*sourceCode)-1] != '\n' {
+		totalLines++
+	}
+
+	var sourceBlocks []SourceBlock
+
+	for _, m := range matches {
+		var endRow, endByte uint
+
+		if m.isFrontmatter {
+			// Frontmatter uses its captured node range exactly
+			endRow = m.endRow
+			endByte = m.endByte
+		} else {
+			// Headings extend to the next heading of same or higher level (or EOF)
+			endRow = totalLines
+			endByte = uint(len(*sourceCode))
+
+			for _, c := range allCandidates {
+				if c.isFrontmatter || c.startRow <= m.startRow {
+					continue
+				}
+				if c.headingLevel <= m.headingLevel {
+					endRow = c.startRow
+					endByte = c.startByte
+					break
+				}
+			}
+		}
+
+		sourceBlocks = append(sourceBlocks, SourceBlock{
+			Source: sourceCode,
+			Range: tree_sitter.Range{
+				StartPoint: tree_sitter.Point{Row: m.startRow, Column: 0},
+				EndPoint:   tree_sitter.Point{Row: endRow, Column: 0},
+				StartByte:  m.startByte,
+				EndByte:    endByte,
+			},
+		})
+	}
+
+	return sourceBlocks
 }
 
 func symbolDefinitionSourceBlocks(q *tree_sitter.Query, tree *tree_sitter.Tree, sourceCode *[]byte, symbolName string) []SourceBlock {
