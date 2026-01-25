@@ -741,6 +741,7 @@ func TestShrinkJavascriptEmbeddedCodeContext(t *testing.T) {
 		name     string
 		code     string
 		expected string
+		lang     string // optional, defaults to "javascript"
 	}{
 		{
 			name: "class with methods",
@@ -822,11 +823,12 @@ class ClassComponent extends React.Component {
     }
 }`,
 			expected: `Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
-` + "```" + `javascript-signatures
+` + "```" + `jsx-signatures
 function MyComponent({ title, children })
 class ClassComponent extends React.Component
 	render()
 ` + "```",
+			lang: "jsx",
 		},
 		{
 			name: "exports",
@@ -855,7 +857,11 @@ export default function defaultExport()
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			embeddedCode := createMarkdownCodeBlock("javascript", tc.code)
+			lang := tc.lang
+			if lang == "" {
+				lang = "javascript"
+			}
+			embeddedCode := createMarkdownCodeBlock(lang, tc.code)
 			result, didShrink := ShrinkEmbeddedCodeContext(embeddedCode, false, len(tc.code)-100)
 
 			normalizedCode := strings.TrimSpace(strings.ReplaceAll(tc.code, "\r\n", "\n"))

@@ -10,77 +10,62 @@ func writeJavascriptSignatureCapture(out *strings.Builder, sourceCode *[]byte, c
 	content := c.Node.Utf8Text(*sourceCode)
 	switch name {
 	case "function.declaration":
-		{
-			if strings.HasPrefix(content, "async ") || strings.Contains(content, " async ") {
-				out.WriteString("async ")
-			}
-		}
-	case "function.name":
-		{
-			out.WriteString("function ")
-			out.WriteString(content)
-		}
-	case "class.declaration":
-		{
-			writeJavascriptIndentLevel(&c.Node, out)
-			// Check if parent is an export_statement
-			if parent := c.Node.Parent(); parent != nil && parent.Kind() == "export_statement" {
-				content := parent.Utf8Text(*sourceCode)
-				if strings.HasPrefix(content, "export default ") {
-					out.WriteString("export default ")
-				} else {
-					out.WriteString("export ")
-				}
-			}
-			out.WriteString("class ")
-		}
-	case "class.body", "class.method.body":
-		{
-			// no output for body
-		}
-	case "class.heritage":
-		{
-			out.WriteString(" ")
-			out.WriteString(content)
-		}
-	case "class.method.declaration", "class.field.declaration":
-		{
-			out.WriteString("\n")
-			writeJavascriptIndentLevel(&c.Node, out)
-		}
-	case "class.field.name":
-		{
-			out.WriteString(content)
-		}
-	case "lexical.declaration", "var.declaration":
-		{
-			lines := strings.Split(content, "\n")
-			for i, line := range lines {
-				out.WriteString(line)
-				out.WriteRune('\n')
-				// only output first 3 lines at most
-				if i >= 2 && i < len(lines)-1 {
-					lastIndent := line[:len(line)-len(strings.TrimLeft(line, "\t "))]
-					out.WriteString(lastIndent)
-					out.WriteString("[...]")
-					out.WriteRune('\n')
-					break
-				}
-			}
-		}
-	case "export.declaration":
-		{
-			if strings.Contains(content, "export default ") {
+		// Check if parent is an export_statement
+		if parent := c.Node.Parent(); parent != nil && parent.Kind() == "export_statement" {
+			parentContent := parent.Utf8Text(*sourceCode)
+			if strings.HasPrefix(parentContent, "export default ") {
 				out.WriteString("export default ")
 			} else {
 				out.WriteString("export ")
 			}
 		}
-	case "function.parameters",
-		"class.name",
-		"class.method.name", "class.method.parameters":
-		{
-			out.WriteString(content)
+		if strings.HasPrefix(content, "async ") || strings.Contains(content, " async ") {
+			out.WriteString("async ")
+		}
+	case "function.name":
+		out.WriteString("function ")
+		out.WriteString(content)
+	case "function.parameters":
+		out.WriteString(content)
+	case "class.declaration":
+		writeJavascriptIndentLevel(&c.Node, out)
+		if parent := c.Node.Parent(); parent != nil && parent.Kind() == "export_statement" {
+			parentContent := parent.Utf8Text(*sourceCode)
+			if strings.HasPrefix(parentContent, "export default ") {
+				out.WriteString("export default ")
+			} else {
+				out.WriteString("export ")
+			}
+		}
+		out.WriteString("class ")
+	case "class.heritage":
+		out.WriteString(" ")
+		out.WriteString(content)
+	case "class.body", "class.method.body":
+		// no output for body
+	case "class.method.declaration", "class.field.declaration":
+		out.WriteString("\n")
+		writeJavascriptIndentLevel(&c.Node, out)
+	case "class.name", "class.method.name", "class.method.parameters", "class.field.name":
+		out.WriteString(content)
+	case "lexical.declaration", "var.declaration":
+		lines := strings.Split(content, "\n")
+		for i, line := range lines {
+			out.WriteString(line)
+			out.WriteRune('\n')
+			if i >= 2 && i < len(lines)-1 {
+				lastIndent := line[:len(line)-len(strings.TrimLeft(line, "\t "))]
+				out.WriteString(lastIndent)
+				out.WriteString("[...]")
+				out.WriteRune('\n')
+				break
+			}
+		}
+	case "export.declaration":
+		if strings.Contains(content, "export default ") {
+			out.WriteString("export default ")
+		} else {
+			out.WriteString("export ")
 		}
 	}
 }
@@ -89,14 +74,10 @@ func writeJavascriptSymbolCapture(out *strings.Builder, sourceCode *[]byte, c tr
 	content := c.Node.Utf8Text(*sourceCode)
 	switch name {
 	case "method.class_name":
-		{
-			out.WriteString(content)
-			out.WriteString(".")
-		}
-	case "class.name", "method.name", "function.name", "lexical.name", "var.name", "export.name":
-		{
-			out.WriteString(content)
-		}
+		out.WriteString(content)
+		out.WriteString(".")
+	case "class.name", "method.name", "function.name", "lexical.name", "var.name":
+		out.WriteString(content)
 	}
 }
 

@@ -37,8 +37,8 @@ func inferLanguageFromFilePath(filePath string) (string, *tree_sitter.Language, 
 		return "kotlin", tree_sitter.NewLanguage(tree_sitter_kotlin.Language()), nil
 	case "markdown":
 		return "markdown", getMarkdownLanguage(), nil
-	case "javascript":
-		return "javascript", tree_sitter.NewLanguage(tree_sitter_javascript.Language()), nil
+	case "javascript", "jsx", "mjs", "cjs":
+		return languageName, tree_sitter.NewLanguage(tree_sitter_javascript.Language()), nil
 	default:
 		return "", nil, fmt.Errorf("%w: %s", ErrFailedInferLanguage, filePath)
 	}

@@ -33,8 +33,10 @@ func InferLanguageNameFromFilePath(filePath string) string {
 		return "kotlin"
 	case ".md":
 		return "markdown"
-	case ".js", ".jsx":
+	case ".js", ".mjs", ".cjs":
 		return "javascript"
+	case ".jsx":
+		return "jsx"
 	default:
 		return "unknown"
 	}
