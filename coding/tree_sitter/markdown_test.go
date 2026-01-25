@@ -403,3 +403,331 @@ func TestGetSetextHeadingLevel(t *testing.T) {
 		})
 	}
 }
+
+func TestGetSymbolDefinitions_Markdown_ByCanonicalSlug(t *testing.T) {
+	t.Parallel()
+
+	content := `# Hello World
+
+Some intro text.
+
+## Getting Started
+
+Getting started content.
+
+## Usage
+
+Usage content.
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	// Lookup by canonical slug
+	blocks, err := GetSymbolDefinitions(filePath, "#getting-started", 0)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	blockContent := blocks[0].String()
+	assert.Contains(t, blockContent, "## Getting Started")
+	assert.Contains(t, blockContent, "Getting started content.")
+	// Should not include the next section
+	assert.NotContains(t, blockContent, "## Usage")
+}
+
+func TestGetSymbolDefinitions_Markdown_BySlugWithoutHash(t *testing.T) {
+	t.Parallel()
+
+	content := `# Main Title
+
+## Installation
+
+Install instructions.
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	// Lookup by slug without leading #
+	blocks, err := GetSymbolDefinitions(filePath, "installation", 0)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	blockContent := blocks[0].String()
+	assert.Contains(t, blockContent, "## Installation")
+}
+
+func TestGetSymbolDefinitions_Markdown_ByRawHeadingText(t *testing.T) {
+	t.Parallel()
+
+	content := `# API Reference
+
+## Getting Started
+
+Content here.
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	// Lookup by raw heading text
+	blocks, err := GetSymbolDefinitions(filePath, "Getting Started", 0)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	blockContent := blocks[0].String()
+	assert.Contains(t, blockContent, "## Getting Started")
+}
+
+func TestGetSymbolDefinitions_Markdown_ByHeadingWithHashPrefix(t *testing.T) {
+	t.Parallel()
+
+	content := `# Main
+
+## Section One
+
+Content.
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	// Lookup by heading text with ### prefix
+	blocks, err := GetSymbolDefinitions(filePath, "## Section One", 0)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	blockContent := blocks[0].String()
+	assert.Contains(t, blockContent, "## Section One")
+}
+
+func TestGetSymbolDefinitions_Markdown_DuplicateHeadings(t *testing.T) {
+	t.Parallel()
+
+	content := `# Main
+
+## Example
+
+First example.
+
+## Other
+
+Other content.
+
+## Example
+
+Second example.
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	// Lookup should return multiple blocks for duplicate headings
+	blocks, err := GetSymbolDefinitions(filePath, "#example", 0)
+	require.NoError(t, err)
+	require.Len(t, blocks, 2)
+
+	// First block should contain first example
+	assert.Contains(t, blocks[0].String(), "First example")
+	// Second block should contain second example
+	assert.Contains(t, blocks[1].String(), "Second example")
+}
+
+func TestGetSymbolDefinitions_Markdown_ParentChild(t *testing.T) {
+	t.Parallel()
+
+	content := `# Main
+
+## Parent One
+
+### Child
+
+Child under parent one.
+
+## Parent Two
+
+### Child
+
+Child under parent two.
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	// Lookup with parent disambiguation
+	blocks, err := GetSymbolDefinitions(filePath, "parent-one.child", 0)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	blockContent := blocks[0].String()
+	assert.Contains(t, blockContent, "Child under parent one")
+	assert.NotContains(t, blockContent, "Child under parent two")
+}
+
+func TestGetSymbolDefinitions_Markdown_ParentChildFallback(t *testing.T) {
+	t.Parallel()
+
+	content := `# Main
+
+## Section
+
+### Unique Child
+
+Content here.
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	// Lookup with non-matching parent should fall back to child-only
+	blocks, err := GetSymbolDefinitions(filePath, "nonexistent.unique-child", 0)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	blockContent := blocks[0].String()
+	assert.Contains(t, blockContent, "### Unique Child")
+}
+
+func TestGetSymbolDefinitions_Markdown_YamlFrontmatter(t *testing.T) {
+	t.Parallel()
+
+	content := `---
+title: My Document
+description: A test document
+tags:
+  - test
+  - example
+---
+
+# Introduction
+
+Some content.
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	// Lookup yaml_frontmatter
+	blocks, err := GetSymbolDefinitions(filePath, "yaml_frontmatter", 0)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	blockContent := blocks[0].String()
+	assert.Contains(t, blockContent, "title: My Document")
+	assert.Contains(t, blockContent, "description: A test document")
+	assert.Contains(t, blockContent, "tags:")
+	// Frontmatter should NOT include subsequent headings/content
+	assert.NotContains(t, blockContent, "# Introduction")
+	assert.NotContains(t, blockContent, "Some content")
+}
+
+func TestGetSymbolDefinitions_Markdown_YamlFrontmatterNotFound(t *testing.T) {
+	t.Parallel()
+
+	content := `# No Frontmatter
+
+Just content.
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	// Lookup yaml_frontmatter when not present
+	_, err = GetSymbolDefinitions(filePath, "yaml_frontmatter", 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symbol not found: yaml_frontmatter")
+}
+
+func TestGetSymbolDefinitions_Markdown_SectionRanges(t *testing.T) {
+	t.Parallel()
+
+	content := `# Main Title
+
+Intro paragraph.
+
+## Section One
+
+Section one content.
+More content here.
+
+### Subsection A
+
+Subsection content.
+
+## Section Two
+
+Section two content.
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	// Section One should include Subsection A but not Section Two
+	blocks, err := GetSymbolDefinitions(filePath, "#section-one", 0)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	blockContent := blocks[0].String()
+	assert.Contains(t, blockContent, "## Section One")
+	assert.Contains(t, blockContent, "### Subsection A")
+	assert.Contains(t, blockContent, "Subsection content")
+	assert.NotContains(t, blockContent, "## Section Two")
+}
+
+func TestGetSymbolDefinitions_Markdown_SetextHeadings(t *testing.T) {
+	t.Parallel()
+
+	content := "Main Title\n" +
+		"===========\n" +
+		"\n" +
+		"Intro paragraph.\n" +
+		"\n" +
+		"Section One\n" +
+		"-----------\n" +
+		"\n" +
+		"Section one content.\n"
+
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	// Lookup setext heading
+	blocks, err := GetSymbolDefinitions(filePath, "#section-one", 0)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	blockContent := blocks[0].String()
+	assert.Contains(t, blockContent, "Section One")
+	assert.Contains(t, blockContent, "Section one content")
+}
+
+func TestGetSymbolDefinitions_Markdown_SymbolNotFound(t *testing.T) {
+	t.Parallel()
+
+	content := `# Main
+
+## Existing Section
+
+Content.
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.md")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	// Lookup non-existent symbol
+	_, err = GetSymbolDefinitions(filePath, "#nonexistent", 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symbol not found")
+}
