@@ -269,6 +269,11 @@ func getSourceSymbolsInternal(languageName string, sitterLanguage *tree_sitter.L
 		return c
 	})
 
+	// Markdown-specific: compute section ranges for headings
+	if languageName == "markdown" {
+		symbols = computeMarkdownSectionRanges(symbols, sourceCode)
+	}
+
 	return symbols, nil
 }
 
@@ -291,6 +296,13 @@ func shouldExtendSymbolRange(languageName, captureName string) bool {
 			// these capture names just
 			if captureName == "interface.declaration" || captureName == "type.declaration" || captureName == "type_alias.declaration" {
 				return false
+			}
+		}
+	case "markdown":
+		{
+			// Markdown heading and frontmatter captures extend the range
+			if captureName == "heading.name" || captureName == "setext_heading.name" || captureName == "frontmatter.name" {
+				return true
 			}
 		}
 	}
@@ -352,6 +364,10 @@ func writeSymbolCapture(languageName string, out *strings.Builder, sourceCode *[
 	case "kotlin":
 		{
 			writeKotlinSymbolCapture(out, sourceCode, c, name)
+		}
+	case "markdown":
+		{
+			writeMarkdownSymbolCapture(out, sourceCode, c, name)
 		}
 	default:
 		{
@@ -417,6 +433,8 @@ func normalizeLanguageName(s string) string {
 		return "java"
 	case "ts", "typescript":
 		return "typescript"
+	case "md", "markdown":
+		return "markdown"
 	default:
 		return s
 	}
@@ -456,7 +474,8 @@ func getSitterLanguage(languageName string) (*tree_sitter.Language, error) {
 		return tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_typescript.LanguageTSX())), nil
 	case "vue":
 		return tree_sitter.NewLanguage(unsafe.Pointer(vue.Language())), nil
-	// Add more languages as needed
+	case "md", "markdown":
+		return getMarkdownLanguage(), nil
 	default:
 		return nil, fmt.Errorf("unsupported language: %s", languageName)
 	}
