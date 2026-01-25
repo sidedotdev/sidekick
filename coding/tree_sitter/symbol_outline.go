@@ -121,6 +121,43 @@ func expandWithAlternativeSymbols(languageName string, sitterLanguage *tree_sitt
 			}
 		}
 
+		// Handle Markdown heading symbols
+		if languageName == "markdown" && (symbol.SymbolType == "heading" || symbol.SymbolType == "setext_heading") {
+			var headingContent, headingMarker string
+			for _, capture := range symbol.SourceCaptures {
+				switch capture.Name {
+				case "heading.content":
+					headingContent = strings.TrimSpace(capture.Content)
+				case "setext_heading.h1.content", "setext_heading.h2.content":
+					// Setext heading content may have trailing newlines
+					headingContent = strings.TrimSpace(capture.Content)
+				case "heading.marker":
+					headingMarker = capture.Content
+				}
+			}
+
+			if headingContent != "" {
+				slug := slugifyHeading(headingContent)
+				alternativeSymbols := []string{
+					headingContent, // Raw heading text without any # prefix
+					slug,           // Slug only (without leading #)
+				}
+				// Original heading line (including # prefix for ATX headings only)
+				if headingMarker != "" {
+					alternativeSymbols = append(alternativeSymbols, headingMarker+" "+headingContent)
+				}
+
+				for _, altSymbol := range alternativeSymbols {
+					symbolSlice = append(symbolSlice, Symbol{
+						Content:    altSymbol,
+						SymbolType: "alt_" + symbol.SymbolType,
+						StartPoint: symbol.StartPoint,
+						EndPoint:   symbol.EndPoint,
+					})
+				}
+			}
+		}
+
 		if symbol.SymbolType == "method" {
 			// Extract the receiver type and method name using the symbol.SourceCaptures
 			var receiverMaybePointer, receiverNoPointer, receiverTypeNoPointer, methodName string
@@ -312,16 +349,19 @@ func shouldExtendSymbolRange(languageName, captureName string) bool {
 
 // cross language symbol types
 var nameToSymbolType map[string]string = map[string]string{
-	"function.name":   "function",
-	"method.name":     "method",
-	"type.name":       "type",
-	"type_alias.name": "type",
-	"lexical.name":    "variable",
-	"var.name":        "non_lexical_variable",
-	"const.name":      "const_variable",
-	"interface.name":  "interface",
-	"class.name":      "class",
-	"enum.name":       "enum",
+	"function.name":       "function",
+	"method.name":         "method",
+	"type.name":           "type",
+	"type_alias.name":     "type",
+	"lexical.name":        "variable",
+	"var.name":            "non_lexical_variable",
+	"const.name":          "const_variable",
+	"interface.name":      "interface",
+	"class.name":          "class",
+	"enum.name":           "enum",
+	"heading.name":        "heading",
+	"setext_heading.name": "setext_heading",
+	"frontmatter.name":    "frontmatter",
 }
 
 func getSymbolType(languageName string, names []string) string {

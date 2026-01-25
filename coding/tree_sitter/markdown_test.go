@@ -942,3 +942,83 @@ title: Doc Title
 	// FormatHeaders uses "\n---\n" as separator between multiple blocks
 	assert.Contains(t, formatted, "\n---\n")
 }
+
+func TestGetAllAlternativeFileSymbols_Markdown(t *testing.T) {
+	t.Parallel()
+
+	mdContent := `# Introduction
+
+Some intro text.
+
+## Getting Started
+
+Getting started content.
+
+### Installation
+
+Install instructions.
+
+Heading Two
+===========
+
+Setext content.
+`
+
+	tmpFile, err := os.CreateTemp("", "test_*.md")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(mdContent); err != nil {
+		t.Fatalf("Failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	symbols, err := GetAllAlternativeFileSymbols(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("GetAllAlternativeFileSymbols failed: %v", err)
+	}
+
+	// Collect all symbol contents
+	symbolContents := make(map[string]bool)
+	for _, sym := range symbols {
+		symbolContents[sym.Content] = true
+	}
+
+	// Check canonical symbols exist
+	expectedCanonical := []string{
+		"#introduction",
+		"#getting-started",
+		"#installation",
+		"#heading-two",
+	}
+	for _, expected := range expectedCanonical {
+		if !symbolContents[expected] {
+			t.Errorf("Expected canonical symbol %q not found", expected)
+		}
+	}
+
+	// Check alternative symbols exist
+	expectedAlternatives := []string{
+		// Raw heading text without # prefix
+		"Introduction",
+		"Getting Started",
+		"Installation",
+		"Heading Two",
+		// Slug only (without leading #)
+		"introduction",
+		"getting-started",
+		"installation",
+		"heading-two",
+		// Original heading line with # prefix (ATX only)
+		"# Introduction",
+		"## Getting Started",
+		"### Installation",
+	}
+	for _, expected := range expectedAlternatives {
+		if !symbolContents[expected] {
+			t.Errorf("Expected alternative symbol %q not found", expected)
+		}
+	}
+}
