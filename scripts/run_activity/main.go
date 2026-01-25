@@ -266,7 +266,7 @@ func main() {
 	var timeout time.Duration
 	var direct bool
 	flag.DurationVar(&timeout, "timeout", 180*time.Second, "Timeout for the activity execution")
-	flag.BoolVar(&direct, "direct", false, "Execute activity directly without Temporal workflow")
+	flag.BoolVar(&direct, "direct", true, "Execute activity directly without Temporal workflow")
 	flag.Parse()
 
 	args := flag.Args()
