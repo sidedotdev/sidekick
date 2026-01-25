@@ -171,8 +171,10 @@ func ExtractEditBlocks(text string, tildeOnly bool) ([]*EditBlock, error) {
 			newLines = nil
 			blocks = append(blocks, block)
 		} else if strings.HasPrefix(line, "=======") {
-			oldLines = nil
-			newLines = &block.NewLines
+			if block != nil {
+				oldLines = nil
+				newLines = &block.NewLines
+			}
 		} else if strings.HasPrefix(line, ">>>>>>>") {
 			newLines = nil
 			oldLines = nil
