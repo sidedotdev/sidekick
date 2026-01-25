@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sidekick/coding/tree_sitter/language_bindings/vue"
 	"sidekick/utils"
-	"unsafe"
 
 	tree_sitter_kotlin "github.com/tree-sitter-grammars/tree-sitter-kotlin/bindings/go"
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
@@ -28,7 +27,7 @@ func inferLanguageFromFilePath(filePath string) (string, *tree_sitter.Language, 
 	case "tsx":
 		return "tsx", tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTSX()), nil
 	case "vue":
-		return "vue", tree_sitter.NewLanguage(unsafe.Pointer(vue.Language())), nil
+		return "vue", tree_sitter.NewLanguage(vue.Language()), nil
 	case "python":
 		return "python", tree_sitter.NewLanguage(tree_sitter_python.Language()), nil
 	case "java":

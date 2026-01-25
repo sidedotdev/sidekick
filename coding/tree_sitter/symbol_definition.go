@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"strings"
-	"unsafe"
 
 	"github.com/cbroglie/mustache"
 	"github.com/rs/zerolog/log"
@@ -66,7 +65,7 @@ func getSymbolDefinitionsInternal(languageName string, sitterLanguage *tree_sitt
 	}
 
 	if languageName == "markdown" {
-		return getMarkdownSymbolDefinitions(sitterLanguage, tree, sourceCode, symbolName, "")
+		return getMarkdownSymbolDefinitions(sitterLanguage, tree, sourceCode, symbolName)
 	}
 
 	queryString, err := renderSymbolDefinitionQuery(languageName, symbolName)
@@ -95,10 +94,6 @@ func getSymbolDefinitionsInternal(languageName string, sitterLanguage *tree_sitt
 }
 
 func getSymbolDefinitionsWithParent(languageName string, sitterLanguage *tree_sitter.Language, tree *tree_sitter.Tree, sourceCode *[]byte, childSymbolName, parentSymbolName string) ([]SourceBlock, error) {
-	if languageName == "markdown" {
-		return getMarkdownSymbolDefinitions(sitterLanguage, tree, sourceCode, childSymbolName, parentSymbolName)
-	}
-
 	queryString, err := renderSymbolDefinitionWithParentQuery(languageName, childSymbolName, parentSymbolName)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -142,9 +137,8 @@ func splitSymbolNameIntoChildAndParent(symbolName string) (string, string) {
 
 // getMarkdownSymbolDefinitions handles markdown-specific symbol definition retrieval.
 // It normalizes the symbol name and filters matches in Go since tree-sitter queries
-// cannot perform slugification. If parentSymbolName is non-empty, it restricts matches
-// to headings whose nearest ancestor heading matches the parent.
-func getMarkdownSymbolDefinitions(sitterLanguage *tree_sitter.Language, tree *tree_sitter.Tree, sourceCode *[]byte, symbolName, parentSymbolName string) ([]SourceBlock, error) {
+// cannot perform slugification.
+func getMarkdownSymbolDefinitions(sitterLanguage *tree_sitter.Language, tree *tree_sitter.Tree, sourceCode *[]byte, symbolName string) ([]SourceBlock, error) {
 	queryString, err := renderSymbolDefinitionQuery("markdown", "")
 	if err != nil {
 		return nil, fmt.Errorf("error rendering markdown symbol definition query: %w", err)
@@ -167,16 +161,6 @@ func getMarkdownSymbolDefinitions(sitterLanguage *tree_sitter.Language, tree *tr
 		if c.normalizedSymbol == normalizedTarget {
 			matches = append(matches, c)
 		}
-	}
-
-	// If parent is specified, filter to only those with matching parent
-	if parentSymbolName != "" && len(matches) > 0 {
-		normalizedParent := NormalizeMarkdownSymbol(parentSymbolName)
-		parentMatches := filterByParentHeading(matches, candidates, normalizedParent)
-		if len(parentMatches) > 0 {
-			matches = parentMatches
-		}
-		// If no parent matches, fall through to return all matches (fallback behavior)
 	}
 
 	if len(matches) == 0 {
@@ -256,36 +240,6 @@ func collectMarkdownDefinitionCandidates(q *tree_sitter.Query, tree *tree_sitter
 	}
 
 	return candidates
-}
-
-// filterByParentHeading filters matches to only those whose nearest ancestor heading
-// matches the normalized parent symbol.
-func filterByParentHeading(matches, allCandidates []markdownDefinitionCandidate, normalizedParent string) []markdownDefinitionCandidate {
-	var filtered []markdownDefinitionCandidate
-
-	for _, m := range matches {
-		// Find the nearest ancestor heading (a heading that appears before this one
-		// with a lower level number, i.e., higher in the hierarchy)
-		var nearestAncestor *markdownDefinitionCandidate
-		for i := range allCandidates {
-			c := &allCandidates[i]
-			if c.isFrontmatter || c.startRow >= m.startRow {
-				continue
-			}
-			if c.headingLevel < m.headingLevel {
-				// This is a potential ancestor (higher level heading before this one)
-				if nearestAncestor == nil || c.startRow > nearestAncestor.startRow {
-					nearestAncestor = c
-				}
-			}
-		}
-
-		if nearestAncestor != nil && nearestAncestor.normalizedSymbol == normalizedParent {
-			filtered = append(filtered, m)
-		}
-	}
-
-	return filtered
 }
 
 // computeMarkdownDefinitionRanges computes section ranges for matched headings.
@@ -408,7 +362,7 @@ func getVueEmbeddedLanguageSymbolDefinition(vueTree *tree_sitter.Tree, sourceCod
 		return []SourceBlock{}, nil
 	}
 
-	tsLang := tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_typescript.LanguageTypescript()))
+	tsLang := tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript())
 	return getSymbolDefinitionsInternal("typescript", tsLang, tsTree, sourceCode, symbolName)
 }
 

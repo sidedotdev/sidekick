@@ -37,11 +37,16 @@ Final content.
 	result, err := GetFileSignaturesString(filePath)
 	require.NoError(t, err)
 
-	// Should contain all headings in original form
-	assert.Contains(t, result, "# Main Title")
-	assert.Contains(t, result, "## Section One")
-	assert.Contains(t, result, "### Subsection")
-	assert.Contains(t, result, "## Section Two")
+	expected := `# Main Title
+---
+## Section One
+---
+### Subsection
+---
+## Section Two
+---
+`
+	assert.Equal(t, expected, result)
 }
 
 func TestGetFileSignaturesString_Markdown_Setext(t *testing.T) {
@@ -65,11 +70,14 @@ More content.
 	result, err := GetFileSignaturesString(filePath)
 	require.NoError(t, err)
 
-	// Setext headings should preserve original form including underline
-	assert.Contains(t, result, "Main Title")
-	assert.Contains(t, result, "===========")
-	assert.Contains(t, result, "Section Two")
-	assert.Contains(t, result, "-----------")
+	expected := `Main Title
+===========
+---
+Section Two
+-----------
+---
+`
+	assert.Equal(t, expected, result)
 }
 
 func TestGetFileSymbolsString_Markdown(t *testing.T) {
@@ -429,11 +437,12 @@ Usage content.
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 
-	blockContent := blocks[0].String()
-	assert.Contains(t, blockContent, "## Getting Started")
-	assert.Contains(t, blockContent, "Getting started content.")
-	// Should not include the next section
-	assert.NotContains(t, blockContent, "## Usage")
+	expected := `## Getting Started
+
+Getting started content.
+
+`
+	assert.Equal(t, expected, blocks[0].String())
 }
 
 func TestGetSymbolDefinitions_Markdown_BySlugWithoutHash(t *testing.T) {
@@ -455,8 +464,11 @@ Install instructions.
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 
-	blockContent := blocks[0].String()
-	assert.Contains(t, blockContent, "## Installation")
+	expected := `## Installation
+
+Install instructions.
+`
+	assert.Equal(t, expected, blocks[0].String())
 }
 
 func TestGetSymbolDefinitions_Markdown_ByRawHeadingText(t *testing.T) {
@@ -478,8 +490,11 @@ Content here.
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 
-	blockContent := blocks[0].String()
-	assert.Contains(t, blockContent, "## Getting Started")
+	expected := `## Getting Started
+
+Content here.
+`
+	assert.Equal(t, expected, blocks[0].String())
 }
 
 func TestGetSymbolDefinitions_Markdown_ByHeadingWithHashPrefix(t *testing.T) {
@@ -501,8 +516,11 @@ Content.
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 
-	blockContent := blocks[0].String()
-	assert.Contains(t, blockContent, "## Section One")
+	expected := `## Section One
+
+Content.
+`
+	assert.Equal(t, expected, blocks[0].String())
 }
 
 func TestGetSymbolDefinitions_Markdown_DuplicateHeadings(t *testing.T) {
@@ -532,67 +550,17 @@ Second example.
 	require.NoError(t, err)
 	require.Len(t, blocks, 2)
 
-	// First block should contain first example
-	assert.Contains(t, blocks[0].String(), "First example")
-	// Second block should contain second example
-	assert.Contains(t, blocks[1].String(), "Second example")
-}
+	expectedFirst := `## Example
 
-func TestGetSymbolDefinitions_Markdown_ParentChild(t *testing.T) {
-	t.Parallel()
+First example.
 
-	content := `# Main
-
-## Parent One
-
-### Child
-
-Child under parent one.
-
-## Parent Two
-
-### Child
-
-Child under parent two.
 `
-	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "test.md")
-	err := os.WriteFile(filePath, []byte(content), 0644)
-	require.NoError(t, err)
+	expectedSecond := `## Example
 
-	// Lookup with parent disambiguation
-	blocks, err := GetSymbolDefinitions(filePath, "parent-one.child", 0)
-	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-
-	blockContent := blocks[0].String()
-	assert.Contains(t, blockContent, "Child under parent one")
-	assert.NotContains(t, blockContent, "Child under parent two")
-}
-
-func TestGetSymbolDefinitions_Markdown_ParentChildFallback(t *testing.T) {
-	t.Parallel()
-
-	content := `# Main
-
-## Section
-
-### Unique Child
-
-Content here.
+Second example.
 `
-	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "test.md")
-	err := os.WriteFile(filePath, []byte(content), 0644)
-	require.NoError(t, err)
-
-	// Lookup with non-matching parent should fall back to child-only
-	blocks, err := GetSymbolDefinitions(filePath, "nonexistent.unique-child", 0)
-	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-
-	blockContent := blocks[0].String()
-	assert.Contains(t, blockContent, "### Unique Child")
+	assert.Equal(t, expectedFirst, blocks[0].String())
+	assert.Equal(t, expectedSecond, blocks[1].String())
 }
 
 func TestGetSymbolDefinitions_Markdown_YamlFrontmatter(t *testing.T) {
@@ -620,13 +588,15 @@ Some content.
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 
-	blockContent := blocks[0].String()
-	assert.Contains(t, blockContent, "title: My Document")
-	assert.Contains(t, blockContent, "description: A test document")
-	assert.Contains(t, blockContent, "tags:")
-	// Frontmatter should NOT include subsequent headings/content
-	assert.NotContains(t, blockContent, "# Introduction")
-	assert.NotContains(t, blockContent, "Some content")
+	expected := `---
+title: My Document
+description: A test document
+tags:
+  - test
+  - example
+---
+`
+	assert.Equal(t, expected, blocks[0].String())
 }
 
 func TestGetSymbolDefinitions_Markdown_YamlFrontmatterNotFound(t *testing.T) {
@@ -677,11 +647,17 @@ Section two content.
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 
-	blockContent := blocks[0].String()
-	assert.Contains(t, blockContent, "## Section One")
-	assert.Contains(t, blockContent, "### Subsection A")
-	assert.Contains(t, blockContent, "Subsection content")
-	assert.NotContains(t, blockContent, "## Section Two")
+	expected := `## Section One
+
+Section one content.
+More content here.
+
+### Subsection A
+
+Subsection content.
+
+`
+	assert.Equal(t, expected, blocks[0].String())
 }
 
 func TestGetSymbolDefinitions_Markdown_SetextHeadings(t *testing.T) {
@@ -707,9 +683,11 @@ func TestGetSymbolDefinitions_Markdown_SetextHeadings(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 
-	blockContent := blocks[0].String()
-	assert.Contains(t, blockContent, "Section One")
-	assert.Contains(t, blockContent, "Section one content")
+	expected := "Section One\n" +
+		"-----------\n" +
+		"\n" +
+		"Section one content.\n"
+	assert.Equal(t, expected, blocks[0].String())
 }
 
 func TestGetSymbolDefinitions_Markdown_SymbolNotFound(t *testing.T) {

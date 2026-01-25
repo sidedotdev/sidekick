@@ -5,7 +5,6 @@ import (
 	"sidekick/utils"
 	"strings"
 	"testing"
-	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
@@ -14,7 +13,7 @@ import (
 
 func parseJavaString(code string) *tree_sitter.Tree {
 	parser := tree_sitter.NewParser()
-	javaLang := tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_java.Language()))
+	javaLang := tree_sitter.NewLanguage(tree_sitter_java.Language())
 	parser.SetLanguage(javaLang)
 	tree := parser.Parse([]byte(code), nil)
 	return tree
