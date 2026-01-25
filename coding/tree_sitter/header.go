@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"unsafe"
 
@@ -37,12 +38,22 @@ func GetFileHeaders(filePath string, numContextLines int) ([]SourceBlock, error)
 	headers = ExpandContextLines(headers, numContextLines, sourceCode)
 	headers = MergeAdjacentOrOverlappingSourceBlocks(headers, sourceCodeLines)
 
+	if languageName == "markdown" {
+		headers = extractMarkdownFrontmatterKeyBlocks(headers, &sourceCode)
+		if len(headers) == 0 {
+			return nil, ErrNoHeadersFound
+		}
+	}
+
 	return headers, nil
 }
 
 func GetFileHeadersString(filePath string, numContextLines int) (string, error) {
 	headers, err := GetFileHeaders(filePath, numContextLines)
 	if err != nil {
+		if errors.Is(err, ErrNoHeadersFound) {
+			return "", nil
+		}
 		return "", err
 	}
 	return FormatHeaders(headers), nil
@@ -133,6 +144,90 @@ func getVueEmbeddedLanguageHeaders(vueTree *tree_sitter.Tree, sourceCode *[]byte
 
 	tsLang := tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_typescript.LanguageTypescript()))
 	return getHeadersInternal("typescript", tsLang, tsTree, sourceCode)
+}
+
+var markdownHeaderKeyRegex = regexp.MustCompile(`^(name|title|description|tags):`)
+
+// extractMarkdownFrontmatterKeyBlocks takes the captured frontmatter block(s)
+// and returns individual SourceBlocks for each supported top-level key.
+func extractMarkdownFrontmatterKeyBlocks(headers []SourceBlock, sourceCode *[]byte) []SourceBlock {
+	var result []SourceBlock
+
+	for _, header := range headers {
+		frontmatterContent := header.String()
+		lines := strings.Split(frontmatterContent, "\n")
+
+		var currentKeyStart int = -1
+		var currentKeyLines []string
+
+		flushCurrentKey := func() {
+			if currentKeyStart >= 0 && len(currentKeyLines) > 0 {
+				keyBlock := createKeySourceBlock(header, currentKeyStart, currentKeyLines, sourceCode)
+				result = append(result, keyBlock)
+			}
+			currentKeyStart = -1
+			currentKeyLines = nil
+		}
+
+		for i, line := range lines {
+			// Skip top-level frontmatter delimiters (must not be indented)
+			if line == "---" {
+				flushCurrentKey()
+				continue
+			}
+
+			// Check if this is a top-level key (not indented)
+			if len(line) > 0 && line[0] != ' ' && line[0] != '\t' {
+				// Flush previous key before starting a new one
+				flushCurrentKey()
+				// Check if it's one of our supported keys
+				if markdownHeaderKeyRegex.MatchString(line) {
+					currentKeyStart = i
+					currentKeyLines = []string{line}
+				}
+			} else if currentKeyStart >= 0 {
+				// Continuation of current key value (indented line or empty)
+				currentKeyLines = append(currentKeyLines, line)
+			}
+		}
+		flushCurrentKey()
+	}
+
+	return result
+}
+
+func createKeySourceBlock(frontmatter SourceBlock, lineOffset int, keyLines []string, sourceCode *[]byte) SourceBlock {
+	// Calculate byte offset for the key block within the frontmatter
+	frontmatterContent := frontmatter.String()
+	lines := strings.Split(frontmatterContent, "\n")
+
+	// Find byte offset to the start of the key
+	byteOffset := uint(0)
+	for i := 0; i < lineOffset; i++ {
+		byteOffset += uint(len(lines[i])) + 1 // +1 for newline
+	}
+
+	// Preserve original YAML slice including all lines
+	keyContent := strings.Join(keyLines, "\n")
+	keyLength := uint(len(keyContent))
+
+	startByte := frontmatter.Range.StartByte + byteOffset
+	endByte := startByte + keyLength
+
+	// Calculate line numbers
+	startRow := frontmatter.Range.StartPoint.Row + uint(lineOffset)
+	endRow := startRow + uint(len(keyLines)) - 1
+	endCol := uint(len(keyLines[len(keyLines)-1]))
+
+	return SourceBlock{
+		Source: sourceCode,
+		Range: tree_sitter.Range{
+			StartPoint: tree_sitter.Point{Row: startRow, Column: 0},
+			EndPoint:   tree_sitter.Point{Row: endRow, Column: endCol},
+			StartByte:  startByte,
+			EndByte:    endByte,
+		},
+	}
 }
 
 //go:embed header_queries/*
