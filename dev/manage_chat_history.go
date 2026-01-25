@@ -2,6 +2,7 @@ package dev
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"regexp"
 	"sidekick/coding/tree_sitter"
@@ -360,7 +361,7 @@ func containsMessage(messages []llm.ChatMessage, message llm.ChatMessage) bool {
 //
 // Messages without ContextType are retained if they fall within a retained block (between a ContextType message and the next ContextType message),
 // or if they fit within maxLength after all marked messages are retained. maxLength is a soft limit that doesn't apply to marked messages.
-func ManageChatHistoryV2Activity(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {
+func ManageChatHistoryV2Activity(ctx context.Context, chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {
 	return manageChatHistoryV2(chatHistory, maxLength)
 }
 
