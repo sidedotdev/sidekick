@@ -14,6 +14,7 @@ import (
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
 	tree_sitter_java "github.com/tree-sitter/tree-sitter-java/bindings/go"
+	tree_sitter_javascript "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
 	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
 	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
@@ -515,6 +516,8 @@ func getSitterLanguage(languageName string) (*tree_sitter.Language, error) {
 		return tree_sitter.NewLanguage(vue.Language()), nil
 	case "md", "markdown":
 		return getMarkdownLanguage(), nil
+	case "js", "jsx", "javascript", "javascript-signatures":
+		return tree_sitter.NewLanguage(tree_sitter_javascript.Language()), nil
 	default:
 		return nil, fmt.Errorf("unsupported language: %s", languageName)
 	}

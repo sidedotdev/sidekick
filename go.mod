@@ -104,6 +104,7 @@ require (
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.57.1 // indirect
+	github.com/tree-sitter/tree-sitter-javascript v0.25.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 )
 
