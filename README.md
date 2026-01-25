@@ -308,6 +308,7 @@ produce a repo summary.
 | -------- | --------- | --------- |
 | kotlin | ✓ | ✓ |
 | java | ✓ | ✓ |
+| markdown | ✓ | ✓ |
 | python | ✓ | ✓ |
 | typescript | ✓ | ✓ |
 | vue | ✓ | ✓ |
@@ -331,7 +332,6 @@ Planned languages include:
 <!-- TODO create issues for each of these -->
 
 - javascript
-- markdown
 - jsx
 - svelte
 - rust

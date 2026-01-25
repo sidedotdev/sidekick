@@ -71,12 +71,12 @@ func extractCommandsFromNode(node *sitter.Node, sourceCode []byte, commands *[]s
 		// In legacy mode, skip this to preserve workflow determinism
 		if !opts.legacy && node.ChildCount() > 0 {
 			body := node.Child(0)
-			bodyType := body.Type()
+			bodyType := body.Kind()
 			if bodyType == "list" || bodyType == "pipeline" {
 				// Recurse into the compound structure to extract individual commands
 				extractCommandsFromNode(body, sourceCode, commands, opts)
 				// Also check for command substitutions in redirections
-				for i := 1; i < int(node.ChildCount()); i++ {
+				for i := uint(1); i < node.ChildCount(); i++ {
 					findAndExtractCommandSubstitutions(node.Child(i), sourceCode, commands, opts)
 				}
 				return

@@ -108,7 +108,7 @@ func checkGoTree(sourceCode []byte, node *tree_sitter_lib.Node) (bool, string) {
 }
 
 // hasImportC checks if any of the import declarations is `import "C"` (cgo)
-func hasImportC(sourceCode []byte, importDeclarations []*sitter.Node) bool {
+func hasImportC(sourceCode []byte, importDeclarations []*tree_sitter_lib.Node) bool {
 	for _, decl := range importDeclarations {
 		if isCgoImport(sourceCode, decl) {
 			return true
@@ -118,15 +118,15 @@ func hasImportC(sourceCode []byte, importDeclarations []*sitter.Node) bool {
 }
 
 // isCgoImport checks if an import declaration is specifically `import "C"`
-func isCgoImport(sourceCode []byte, importDecl *sitter.Node) bool {
-	for i := 0; i < int(importDecl.ChildCount()); i++ {
+func isCgoImport(sourceCode []byte, importDecl *tree_sitter_lib.Node) bool {
+	for i := uint(0); i < importDecl.ChildCount(); i++ {
 		child := importDecl.Child(i)
-		if child.Type() == "import_spec" {
+		if child.Kind() == "import_spec" {
 			// import_spec directly contains interpreted_string_literal
-			for j := 0; j < int(child.ChildCount()); j++ {
+			for j := uint(0); j < child.ChildCount(); j++ {
 				specChild := child.Child(j)
-				if specChild.Type() == "interpreted_string_literal" {
-					content := specChild.Content(sourceCode)
+				if specChild.Kind() == "interpreted_string_literal" {
+					content := specChild.Utf8Text(sourceCode)
 					if content == `"C"` {
 						return true
 					}
