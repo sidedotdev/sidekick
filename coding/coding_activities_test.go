@@ -648,7 +648,7 @@ func SecondFunc() {
 				Requests:        tc.input,
 				NumContextLines: &numLines,
 			}
-			output, err := ca.BulkGetSymbolDefinitions(dirSymDefRequest)
+			output, err := ca.BulkGetSymbolDefinitions(t.Context(), dirSymDefRequest)
 			assert.Nil(t, err)
 
 			// Compare the output with the expected output
@@ -975,7 +975,7 @@ Foo is referenced in the same file by:
 			}
 
 			numContextLines := 0
-			result, err := ca.BulkGetSymbolDefinitions(DirectorySymDefRequest{
+			result, err := ca.BulkGetSymbolDefinitions(t.Context(), DirectorySymDefRequest{
 				EnvContainer: env.EnvContainer{
 					Env: &env.LocalEnv{WorkingDirectory: filepath.Dir(tc.filename)},
 				},
@@ -1011,7 +1011,7 @@ func TestBulkGetSymbolDefinitionsTruncation(t *testing.T) {
 		numLines := 0
 
 		// Request the file with empty symbol names (wildcard/full file read)
-		result, err := ca.BulkGetSymbolDefinitions(DirectorySymDefRequest{
+		result, err := ca.BulkGetSymbolDefinitions(t.Context(), DirectorySymDefRequest{
 			EnvContainer: env.EnvContainer{
 				Env: &env.LocalEnv{WorkingDirectory: testDir},
 			},
@@ -1049,7 +1049,7 @@ func TestBulkGetSymbolDefinitionsTruncation(t *testing.T) {
 		ca := &CodingActivities{}
 		numLines := 0
 
-		result, err := ca.BulkGetSymbolDefinitions(DirectorySymDefRequest{
+		result, err := ca.BulkGetSymbolDefinitions(t.Context(), DirectorySymDefRequest{
 			EnvContainer: env.EnvContainer{
 				Env: &env.LocalEnv{WorkingDirectory: testDir},
 			},
@@ -1095,7 +1095,7 @@ func TestBulkGetSymbolDefinitionsTruncation(t *testing.T) {
 		ca := &CodingActivities{}
 		numLines := 0
 
-		result, err := ca.BulkGetSymbolDefinitions(DirectorySymDefRequest{
+		result, err := ca.BulkGetSymbolDefinitions(t.Context(), DirectorySymDefRequest{
 			EnvContainer: env.EnvContainer{
 				Env: &env.LocalEnv{WorkingDirectory: testDir},
 			},
@@ -1119,4 +1119,47 @@ func TestBulkGetSymbolDefinitionsTruncation(t *testing.T) {
 		// The output should be under 1MB
 		assert.LessOrEqual(t, len(result.SymbolDefinitions), 1024*1024)
 	})
+}
+
+func TestBulkGetSymbolDefinitionsNilNameRange(t *testing.T) {
+	t.Parallel()
+
+	ca := &CodingActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(language string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: language,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+		TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
+	}
+
+	testDir := t.TempDir()
+
+	// Markdown headings have nil NameRange
+	_, err := utils.WriteTestFile(t, testDir, "readme.md", `# Introduction
+
+This is the intro section.
+
+## Details
+
+Some details here.
+`)
+	assert.Nil(t, err)
+
+	numContextLines := 0
+	result, err := ca.BulkGetSymbolDefinitions(t.Context(), DirectorySymDefRequest{
+		EnvContainer: env.EnvContainer{
+			Env: &env.LocalEnv{WorkingDirectory: testDir},
+		},
+		Requests: []FileSymDefRequest{
+			{FilePath: "readme.md", SymbolNames: []string{"Introduction"}},
+		},
+		NumContextLines:       &numContextLines,
+		IncludeRelatedSymbols: true,
+	})
+	assert.Nil(t, err)
+	assert.Contains(t, result.SymbolDefinitions, "# Introduction")
 }

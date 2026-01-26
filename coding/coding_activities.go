@@ -807,7 +807,7 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContai
 			result.SourceBlocks = sourceBlocks
 			result.Error = err
 
-			if err == nil && includeRelatedSymbols && len(sourceBlocks) > 0 {
+			if err == nil && includeRelatedSymbols && len(sourceBlocks) > 0 && sourceBlocks[0].NameRange != nil {
 				symbolNameRange := sitterToLspRange(*sourceBlocks[0].NameRange)
 				related, err := ca.RelatedSymbolsActivity(context.Background(), RelatedSymbolsActivityInput{
 					RelativeFilePath: symDefRequest.FilePath,
