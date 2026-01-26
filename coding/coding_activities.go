@@ -188,7 +188,7 @@ type fileOutput struct {
 // Given a list of symbol definition requests for a directory, this method
 // outputs symbol definitions formatted per file. Any symbols that were not
 // found are included in the failures
-func (ca *CodingActivities) BulkGetSymbolDefinitions(dirSymDefRequest DirectorySymDefRequest) (SymDefResults, error) {
+func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSymDefRequest DirectorySymDefRequest) (SymDefResults, error) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var results []SymbolRetrievalResult
