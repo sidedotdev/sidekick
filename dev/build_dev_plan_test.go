@@ -108,7 +108,7 @@ func TestApplyDevPlanUpdates(t *testing.T) {
 			expectError: "step 99 not found for delete operation",
 		},
 		{
-			name: "insert step at existing position",
+			name: "insert step at existing position with auto-increment",
 			plan: basePlan(),
 			update: DevPlanUpdate{
 				Updates: []DevStepUpdate{
@@ -120,8 +120,8 @@ func TestApplyDevPlanUpdates(t *testing.T) {
 				Steps: []DevStep{
 					{StepNumber: "1", Title: "Step 1", Definition: "Do step 1", Type: "edit", CompletionAnalysis: "Check 1"},
 					{StepNumber: "2", Title: "Inserted Step", Definition: "Inserted def", Type: "edit", CompletionAnalysis: "Inserted check"},
-					{StepNumber: "2", Title: "Step 2", Definition: "Do step 2", Type: "edit", CompletionAnalysis: "Check 2"},
-					{StepNumber: "3", Title: "Step 3", Definition: "Do step 3", Type: "other", CompletionAnalysis: "Check 3"},
+					{StepNumber: "3", Title: "Step 2", Definition: "Do step 2", Type: "edit", CompletionAnalysis: "Check 2"},
+					{StepNumber: "4", Title: "Step 3", Definition: "Do step 3", Type: "other", CompletionAnalysis: "Check 3"},
 				},
 				Learnings: []string{"Learning 1", "Learning 2"},
 				Complete:  false,
