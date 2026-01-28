@@ -29,6 +29,8 @@ import (
 	"github.com/knadh/koanf/v2"
 	"github.com/segmentio/ksuid"
 	"github.com/zalando/go-keyring"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 type InitCommandHandler struct {
@@ -524,7 +526,7 @@ func selectLLMProvider(localConfig common.LocalConfig) (string, error) {
 	// Add configured built-in providers
 	configuredBuiltins := getConfiguredBuiltinLLMProviders()
 	for _, p := range configuredBuiltins {
-		options = append(options, strings.Title(p))
+		options = append(options, cases.Title(language.English).String(p))
 	}
 
 	// Add custom providers from local config
@@ -610,7 +612,7 @@ func selectEmbeddingProvider(localConfig common.LocalConfig) (string, error) {
 	// Add configured built-in embedding providers (OpenAI and Google only)
 	configuredBuiltins := getConfiguredBuiltinEmbeddingProviders()
 	for _, p := range configuredBuiltins {
-		options = append(options, strings.Title(p))
+		options = append(options, cases.Title(language.English).String(p))
 	}
 
 	// Add custom providers that support embeddings (openai, google, or openai_compatible types)
