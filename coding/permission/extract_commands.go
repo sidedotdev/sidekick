@@ -492,10 +492,12 @@ func handleWrapperWithPositionalArg(parts []string, commands *[]string, flagsWit
 				unquoted := unquoteString(innerCmd)
 				if unquoted != innerCmd {
 					*commands = append(*commands, unquoted)
+					handleSpecialCommands(unquoted, commands, opts)
 					return
 				}
 			}
 			*commands = append(*commands, innerCmd)
+			handleSpecialCommands(innerCmd, commands, opts)
 		}
 	}
 }

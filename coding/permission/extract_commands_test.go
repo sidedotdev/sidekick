@@ -301,6 +301,11 @@ func TestExtractCommands(t *testing.T) {
 			expected: []string{`ssh -p 22 -i ~/.ssh/key host "cmd"`, "cmd"},
 		},
 		{
+			name:     "ssh with nested sudo command",
+			script:   `ssh host 'sudo dangerous_cmd'`,
+			expected: []string{`ssh host 'sudo dangerous_cmd'`, "sudo dangerous_cmd", "dangerous_cmd"},
+		},
+		{
 			name:     "find with -exec",
 			script:   `find . -exec cmd {} \;`,
 			expected: []string{`find . -exec cmd {} \;`, "cmd {}"},
