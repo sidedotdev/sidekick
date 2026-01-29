@@ -158,6 +158,8 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "bun why"},
 			{Pattern: "bun pm view"},
 			{Pattern: "bun pm version"},
+			{Pattern: "bun tsc"},
+			{Pattern: "bunx tsc"},
 			// Python commands
 			{Pattern: "pytest"},
 			{Pattern: "python -m pytest"},
