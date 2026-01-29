@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"sidekick/client"
 	"sidekick/common"
@@ -36,6 +37,9 @@ type taskProgressModel struct {
 	err            error
 	failedSubflows []domain.Subflow
 	width          int
+
+	// Stores submitted responses by action ID for display
+	submittedResponses map[string]string
 
 	// Dev Run state (orthogonal to approval input)
 	// Track multiple active dev runs by command ID
@@ -135,6 +139,10 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ApprovalSubmittedMsg:
+		if m.submittedResponses == nil {
+			m.submittedResponses = make(map[string]string)
+		}
+		m.submittedResponses[msg.ActionID] = msg.ResponseContent
 		m.approvalInput.Clear()
 		return m, nil
 
@@ -158,8 +166,12 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentSubflow = &action
 		}
 
-		// Detect pending human action
+		// Detect pending human action, but skip if we already submitted a response for it
 		if action.IsHumanAction && action.IsCallbackAction && action.ActionStatus == domain.ActionStatusPending {
+			if _, alreadySubmitted := m.submittedResponses[action.Id]; alreadySubmitted {
+				// Already submitted response for this action, don't re-show input
+				return m, nil
+			}
 			cmd := m.approvalInput.SetAction(&action)
 			// Query for dev run config if not already checked
 			if !m.checkedDevRunConfig && m.flowID != "" && m.workspaceID != "" {
@@ -423,6 +435,17 @@ func (m taskProgressModel) renderAction(action client.FlowAction) string {
 
 	switch action.ActionStatus {
 	case domain.ActionStatusComplete:
+		// For completed human actions, parse the response from ActionResult
+		if action.IsHumanAction && action.ActionResult != "" {
+			var userResponse client.UserResponse
+			if err := json.Unmarshal([]byte(action.ActionResult), &userResponse); err == nil {
+				responseText := formatUserResponse(userResponse)
+				if responseText != "" {
+					responseStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+					return fmt.Sprintf("  %s You: %s\n", greenIndicator, responseStyle.Render(responseText))
+				}
+			}
+		}
 		return fmt.Sprintf("  %s %s\n", greenIndicator, displayName)
 
 	case domain.ActionStatusFailed:
@@ -450,6 +473,9 @@ func (m taskProgressModel) renderAction(action client.FlowAction) string {
 		return sb.String()
 
 	case domain.ActionStatusPending:
+		if _, ok := m.submittedResponses[action.Id]; ok {
+			return fmt.Sprintf("  %s Processing response...\n", m.spinner.View())
+		}
 		return fmt.Sprintf("  %s %s\n", yellowIndicator, displayName)
 
 	default:
@@ -493,6 +519,25 @@ func (m taskProgressModel) submitDevRunAction(action string) tea.Cmd {
 		}
 		return devRunActionMsg{action: action}
 	}
+}
+
+func formatUserResponse(response client.UserResponse) string {
+	if response.Approved != nil {
+		if *response.Approved {
+			if response.Content != "" {
+				return "Approved: " + response.Content
+			}
+			return "Approved"
+		}
+		if response.Content != "" {
+			return "Rejected: " + response.Content
+		}
+		return "Rejected"
+	}
+	if response.Choice != "" {
+		return response.Choice
+	}
+	return response.Content
 }
 
 func formatActionParams(params map[string]interface{}) string {
