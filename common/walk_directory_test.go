@@ -283,6 +283,36 @@ func TestWalkCodeDirectory_SingleIgnoreFile(t *testing.T) {
 	}
 }
 
+func TestWalkCodeDirectory_UnignoreDirectory(t *testing.T) {
+	tempDir := t.TempDir()
+	setupGitRepo(t, tempDir)
+
+	// Create a directory that will be ignored by .gitignore but un-ignored by .sideignore
+	createDir(t, filepath.Join(tempDir, "vendor"))
+	createDir(t, filepath.Join(tempDir, "vendor/pkg"))
+	createFile(t, filepath.Join(tempDir, "vendor/file1.go"), "package vendor")
+	createFile(t, filepath.Join(tempDir, "vendor/pkg/file2.go"), "package pkg")
+	createFile(t, filepath.Join(tempDir, "main.go"), "package main")
+
+	// .gitignore ignores the vendor directory
+	createFile(t, filepath.Join(tempDir, ".gitignore"), "vendor/\n")
+
+	// .sideignore un-ignores the vendor directory and all its contents
+	createFile(t, filepath.Join(tempDir, ".sideignore"), ".gitignore\n.sideignore\n!vendor/\n!vendor/*\n!vendor/**/*\n")
+
+	paths := collectWalkedFiles(t, tempDir)
+
+	// We expect to see the vendor directory AND its contents
+	expected := []string{
+		"main.go",
+		"vendor",
+		"vendor/file1.go",
+		"vendor/pkg",
+		"vendor/pkg/file2.go",
+	}
+	assert.Equal(t, expected, paths)
+}
+
 func TestWalkCodeDirectory_IgnoreFilePrecedence(t *testing.T) {
 	tmpDir := t.TempDir()
 	setupGitRepo(t, tmpDir)
