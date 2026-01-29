@@ -158,7 +158,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "bun why"},
 			{Pattern: "bun pm view"},
 			{Pattern: "bun pm version"},
-			// Bunx commands
+			{Pattern: "bun tsc"},
 			{Pattern: "bunx tsc"},
 			// Python commands
 			{Pattern: "pytest"},
@@ -810,10 +810,10 @@ type EvaluatePermissionOptions struct {
 // EvaluateCommandPermission evaluates a single command against the permission config.
 // It checks deny patterns first, then require-approval, then auto-approve.
 // Returns the permission result and any associated message.
-// This version strips leading env var prefixes by default.
+// This version does NOT strip env var prefixes for backward compatibility.
 func EvaluateCommandPermission(config CommandPermissionConfig, command string) (PermissionResult, string) {
 	return EvaluateCommandPermissionWithOptions(config, command, EvaluatePermissionOptions{
-		StripEnvVarPrefix: true,
+		StripEnvVarPrefix: false,
 	})
 }
 
@@ -882,10 +882,10 @@ func EvaluateCommandPermissionWithOptions(config CommandPermissionConfig, comman
 // Returns PermissionDeny if ANY command is denied.
 // Returns PermissionRequireApproval if ANY command requires approval (and none denied).
 // Returns PermissionAutoApprove only if ALL commands are auto-approved.
-// This version strips leading env var prefixes by default.
+// This version does NOT strip env var prefixes for backward compatibility.
 func EvaluateScriptPermission(config CommandPermissionConfig, script string) (PermissionResult, string) {
 	return EvaluateScriptPermissionWithOptions(config, script, EvaluatePermissionOptions{
-		StripEnvVarPrefix: true,
+		StripEnvVarPrefix: false,
 	})
 }
 
