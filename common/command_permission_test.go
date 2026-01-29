@@ -1692,3 +1692,37 @@ func TestBasePermissions_RmRfPatterns(t *testing.T) {
 		assert.Equal(t, PermissionRequireApproval, result)
 	})
 }
+
+func TestBasePermissions_BunxTsc(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	t.Run("bunx tsc commands are auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"bunx tsc",
+			"bunx tsc --noEmit",
+			"bunx tsc --build",
+			"bunx tsc -p tsconfig.json",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+
+	t.Run("bunx tsc with env var prefix is auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"FOO=bar bunx tsc",
+			"NODE_ENV=production bunx tsc --noEmit",
+			"CI=true DEBUG=1 bunx tsc --build",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+}
