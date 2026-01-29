@@ -166,3 +166,39 @@ func (s *BulkSearchRepositoryE2ETestSuite) TestBasicBulkSearch() {
 	s.Contains(result, "test2.txt")
 	s.Contains(result, "test file two")
 }
+
+func (s *BulkSearchRepositoryE2ETestSuite) TestSideignoreUnignoresGitignored() {
+	// Create a directory that will be ignored by .gitignore but un-ignored by .sideignore
+	err := os.MkdirAll(filepath.Join(s.dir, "vendor"), 0755)
+	s.Require().NoError(err)
+
+	// .gitignore ignores the vendor directory
+	s.createTestFile(".gitignore", "vendor/")
+
+	// .sideignore un-ignores the vendor directory using negation pattern
+	s.createTestFile(".sideignore", "!vendor/")
+
+	// Create a file inside the vendor directory
+	s.createTestFile("vendor/lib.go", "package vendor\n\nfunc LibFunction() string {\n\treturn \"hello from vendor\"\n}")
+
+	// Create a file outside vendor for comparison
+	s.createTestFile("main.go", "package main\n\nfunc main() {\n\tprintln(\"hello from main\")\n}")
+
+	// Execute bulk search looking for content in both files
+	result, err := s.executeBulkSearchRepository(BulkSearchRepositoryParams{
+		ContextLines: 0,
+		Searches: []SingleSearchParams{
+			{PathGlob: "**/*.go", SearchTerm: "hello"},
+		},
+	})
+
+	// Verify results
+	s.Require().NoError(err)
+	s.Contains(result, "main.go")
+	s.Contains(result, "hello from main")
+
+	// The vendor file should be found because .sideignore un-ignores it.
+	// This verifies that .sideignore negation patterns override .gitignore.
+	s.Contains(result, "vendor/lib.go", "vendor/lib.go should be found because .sideignore un-ignores it")
+	s.Contains(result, "hello from vendor")
+}

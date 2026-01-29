@@ -98,6 +98,7 @@ type searchContext struct {
 	escapedSearchTerm      string
 	useManualGlobFiltering bool
 	sideIgnoreExists       bool
+	gitIgnoreExists        bool
 }
 
 func initSearchContext(ctx workflow.Context, envContainer env.EnvContainer, input SearchRepositoryInput) (*searchContext, error) {
@@ -151,8 +152,35 @@ func initSearchContext(ctx workflow.Context, envContainer env.EnvContainer, inpu
 
 	sCtx.sideIgnoreExists = false
 	if catOutput.ExitStatus == 0 { // cat was successful, so .sideignore exists
-		sCtx.rgArgs += " --ignore-file .sideignore"
 		sCtx.sideIgnoreExists = true
+
+		// Version guard for sideignore override behavior
+		sideignoreOverrideVersion := workflow.GetVersion(sCtx.ctx, "sideignore-overrides-gitignore", workflow.DefaultVersion, 1)
+		if sideignoreOverrideVersion >= 1 {
+			// Use --no-ignore-vcs to disable .gitignore processing, then add both
+			// .gitignore and .sideignore as ignore files. Since later ignore files
+			// have higher precedence in ripgrep, .sideignore patterns (including
+			// negation patterns like !vendor/) will override .gitignore patterns.
+			sCtx.rgArgs += " --no-ignore-vcs"
+
+			// Check if .gitignore exists before adding it
+			var gitignoreOutput env.EnvRunCommandOutput
+			_ = workflow.ExecuteActivity(sCtx.ctx, env.EnvRunCommandActivity, env.EnvRunCommandActivityInput{
+				EnvContainer:       sCtx.envContainer,
+				RelativeWorkingDir: "./",
+				Command:            "cat",
+				Args:               []string{".gitignore"},
+			}).Get(sCtx.ctx, &gitignoreOutput)
+			if gitignoreOutput.ExitStatus == 0 {
+				sCtx.rgArgs += " --ignore-file .gitignore"
+				sCtx.gitIgnoreExists = true
+			}
+
+			sCtx.rgArgs += " --ignore-file .sideignore"
+		} else {
+			// Old behavior: just add .sideignore without override support
+			sCtx.rgArgs += " --ignore-file .sideignore"
+		}
 	}
 	// If catOutput.ExitStatus != 0 (e.g. file not found), we proceed without adding .sideignore to rgArgs, which is the desired behavior.
 
@@ -445,7 +473,13 @@ func (sCtx *searchContext) getFilesMatchingPathGlob() ([]string, error) {
 	rgFilesCmdParts := []string{"--files", "--hidden"}
 	rgFilesCmdParts = append(rgFilesCmdParts, "--ignore-file", sCtx.coreIgnorePath)
 	if sCtx.sideIgnoreExists {
-		rgFilesCmdParts = append(rgFilesCmdParts, "--ignore-file", ".sideignore")
+		if sCtx.gitIgnoreExists {
+			// New behavior: use --no-ignore-vcs so .sideignore can override .gitignore
+			rgFilesCmdParts = append(rgFilesCmdParts, "--no-ignore-vcs", "--ignore-file", ".gitignore", "--ignore-file", ".sideignore")
+		} else {
+			// Old behavior or no .gitignore: just add .sideignore
+			rgFilesCmdParts = append(rgFilesCmdParts, "--ignore-file", ".sideignore")
+		}
 	}
 
 	// version guard not needed: this already existed before
