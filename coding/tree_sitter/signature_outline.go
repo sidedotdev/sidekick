@@ -218,7 +218,12 @@ func GetDirectorySignatureOutlines(baseDirectory string, showPaths *map[string]b
 			outlineContent = newSourceCode.Content
 		}
 		if len(outlineContent) > maxContentLength {
-			outlineContent = outlineContent[:maxContentLength] + fmt.Sprintf("\n... [truncated %d characters]", len(outlineContent)-maxContentLength)
+			truncatedPart := outlineContent[maxContentLength:]
+			outlineContent = outlineContent[:maxContentLength]
+			// Only show truncation message if we truncated more than just whitespace
+			if strings.TrimSpace(truncatedPart) != "" {
+				outlineContent += fmt.Sprintf("\n... [truncated %d characters]", len(truncatedPart))
+			}
 		}
 
 		outline := FileOutline{
