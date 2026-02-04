@@ -189,6 +189,12 @@ type fileOutput struct {
 // outputs symbol definitions formatted per file. Any symbols that were not
 // found are included in the failures
 func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSymDefRequest DirectorySymDefRequest) (SymDefResults, error) {
+	if len(dirSymDefRequest.Requests) == 0 {
+		return SymDefResults{
+			SymbolDefinitions: "No symbol definition requests were provided.",
+		}, nil
+	}
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var results []SymbolRetrievalResult
