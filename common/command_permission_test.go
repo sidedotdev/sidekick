@@ -1744,3 +1744,75 @@ func TestBasePermissions_NpxTsc(t *testing.T) {
 		}
 	})
 }
+
+func TestBasePermissions_UvCommands(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	t.Run("uv run commands are auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"uv run pytest",
+			"uv run pytest -v tests/",
+			"uv run python -m pytest",
+			"uv run python3 -m pytest --tb=short",
+			"uv run pylint src/",
+			"uv run flake8 .",
+			"uv run mypy src/",
+			"uv run black --check .",
+			"uv run isort --check .",
+			"uv run ruff check",
+			"uv run ruff check src/",
+			"uv run ruff check --fix",
+			"uv run ruff format",
+			"uv run ruff format src/",
+			"ruff check",
+			"ruff check src/",
+			"ruff format",
+			"ruff format --check .",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+
+	t.Run("uv pip commands are auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"uv pip list",
+			"uv pip show requests",
+			"uv pip check",
+			"uv pip freeze",
+			"uv run python -m pip list",
+			"uv run python -m pip freeze",
+			"uv run python3 -m pip check",
+			"uv run python3 -m pip show requests",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+
+	t.Run("python -m pip commands are auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"python -m pip list",
+			"python -m pip show requests",
+			"python -m pip check",
+			"python -m pip freeze",
+			"python3 -m pip list",
+			"python3 -m pip show flask",
+			"python3 -m pip check",
+			"python3 -m pip freeze",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+}
