@@ -1163,3 +1163,29 @@ Some details here.
 	assert.Nil(t, err)
 	assert.Contains(t, result.SymbolDefinitions, "# Introduction")
 }
+
+func TestBulkGetSymbolDefinitionsNoRequests(t *testing.T) {
+	t.Parallel()
+
+	ca := &CodingActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(language string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: language,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+		TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
+	}
+
+	result, err := ca.BulkGetSymbolDefinitions(t.Context(), DirectorySymDefRequest{
+		EnvContainer: env.EnvContainer{
+			Env: &env.LocalEnv{WorkingDirectory: t.TempDir()},
+		},
+		Requests: []FileSymDefRequest{},
+	})
+	assert.Nil(t, err)
+	assert.Equal(t, "No symbol definition requests were provided.", result.SymbolDefinitions)
+	assert.Empty(t, result.Failures)
+}
