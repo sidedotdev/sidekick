@@ -119,6 +119,8 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "npm run build"},
 			{Pattern: "npm run check"},
 			{Pattern: "npm run format"},
+			{Pattern: "npm run tsc"},
+			{Pattern: "npm run tsc"},
 			{Pattern: "npm list"},
 			{Pattern: "npm outdated"},
 			{Pattern: "npm version"},
@@ -159,7 +161,9 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "bun pm view"},
 			{Pattern: "bun pm version"},
 			{Pattern: "bun tsc"},
+			{Pattern: "bun run tsc"},
 			{Pattern: "bunx tsc"},
+			{Pattern: "npx tsc"},
 			// Python commands
 			{Pattern: "pytest"},
 			{Pattern: "python -m pytest"},
