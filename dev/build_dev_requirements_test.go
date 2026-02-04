@@ -290,6 +290,46 @@ func TestApplyDevRequirementsUpdates(t *testing.T) {
 			},
 		},
 		{
+			name: "delete then edit with higher index",
+			reqs: func() DevRequirements {
+				r := baseReqs()
+				r.AcceptanceCriteria = []string{"C0", "C1", "C2", "C3", "C4"}
+				return r
+			}(),
+			update: DevRequirementsUpdate{
+				CriteriaUpdates: []CriteriaUpdate{
+					{Index: 3, Operation: "delete"},
+					{Index: 4, Operation: "edit", Content: strPtr("Edited C4")},
+				},
+			},
+			expected: DevRequirements{
+				Overview:           "Initial overview",
+				AcceptanceCriteria: []string{"C0", "C1", "C2", "Edited C4"},
+				Learnings:          []string{"Learning 1", "Learning 2"},
+				Complete:           false,
+			},
+		},
+		{
+			name: "delete and insert at same index",
+			reqs: func() DevRequirements {
+				r := baseReqs()
+				r.AcceptanceCriteria = []string{"C0", "C1", "C2"}
+				return r
+			}(),
+			update: DevRequirementsUpdate{
+				CriteriaUpdates: []CriteriaUpdate{
+					{Index: 1, Operation: "delete"},
+					{Index: 1, Operation: "insert", Content: strPtr("Replacement")},
+				},
+			},
+			expected: DevRequirements{
+				Overview:           "Initial overview",
+				AcceptanceCriteria: []string{"C0", "Replacement", "C2"},
+				Learnings:          []string{"Learning 1", "Learning 2"},
+				Complete:           false,
+			},
+		},
+		{
 			name: "invalid criteria operation",
 			reqs: baseReqs(),
 			update: DevRequirementsUpdate{
