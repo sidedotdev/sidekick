@@ -1704,10 +1704,38 @@ func TestBasePermissions_BunxTsc(t *testing.T) {
 			"bun tsc --noEmit",
 			"bun tsc --build",
 			"bun tsc -p tsconfig.json",
+			"bun run tsc",
+			"bun run tsc --noEmit",
+			"bun run tsc --build",
+			"bun run tsc -p tsconfig.json",
 			"bunx tsc",
 			"bunx tsc --noEmit",
 			"bunx tsc --build",
 			"bunx tsc -p tsconfig.json",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+}
+
+func TestBasePermissions_NpxTsc(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	t.Run("npx tsc and npm run tsc commands are auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"npx tsc",
+			"npx tsc --noEmit",
+			"npx tsc --build",
+			"npx tsc -p tsconfig.json",
+			"npm run tsc",
+			"npm run tsc --noEmit",
+			"npm run tsc --build",
+			"npm run tsc -p tsconfig.json",
 		}
 
 		for _, cmd := range commands {
