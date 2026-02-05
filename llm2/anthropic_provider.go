@@ -17,9 +17,9 @@ import (
 const anthropicDefaultModel = "claude-opus-4-5"
 const anthropicDefaultMaxTokens = 16000
 
-type AnthropicResponsesProvider struct{}
+type AnthropicProvider struct{}
 
-func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
+func (p AnthropicProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
 	messages := options.Params.ChatHistory.Llm2Messages()
 	done := make(chan struct{})
 	defer close(done)

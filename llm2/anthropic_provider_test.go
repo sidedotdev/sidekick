@@ -22,7 +22,7 @@ func contains(s, substr string) bool {
 func TestAnthropicResponsesProvider_Unauthorized(t *testing.T) {
 	ctx := context.Background()
 	mockSecretManager := &secret_manager.MockSecretManager{}
-	provider := AnthropicResponsesProvider{}
+	provider := AnthropicProvider{}
 
 	messages := []Message{
 		{
@@ -66,7 +66,7 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
-	provider := AnthropicResponsesProvider{}
+	provider := AnthropicProvider{}
 
 	mockTool := &common.Tool{
 		Name:        "get_current_weather",
