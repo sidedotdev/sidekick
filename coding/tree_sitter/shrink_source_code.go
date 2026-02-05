@@ -50,6 +50,8 @@ func (sc SourceCode) GetSignatures() ([]Signature, error) {
 	defer parser.Close()
 	parser.SetLanguage(sitterLanguage)
 	sourceBytes := []byte(sc.Content)
+	sourceBytes = dropLeadingErrorLines(sc.LanguageName, sitterLanguage, &sourceBytes)
+
 	tree := parser.Parse(sourceTransform(sc.LanguageName, &sourceBytes), nil)
 	if tree != nil {
 		defer tree.Close()
@@ -289,4 +291,52 @@ func removeComments(sourceCode SourceCode) (bool, SourceCode) {
 	}
 
 	return didRemove, newSourceCode
+}
+
+// dropLeadingErrorLines removes leading lines from source code until tree-sitter
+// can parse it without the first child being an ERROR node. This handles cases
+// where code starts mid-docstring or other unparseable content.
+func dropLeadingErrorLines(languageName string, sitterLanguage *tree_sitter.Language, sourceCode *[]byte) []byte {
+	source := *sourceCode
+	parser := tree_sitter.NewParser()
+	defer parser.Close()
+	parser.SetLanguage(sitterLanguage)
+
+	maxAttempts := 50 // limit iterations to avoid infinite loops
+	for i := 0; i < maxAttempts; i++ {
+		tree := parser.Parse(source, nil)
+		if tree == nil {
+			break
+		}
+		rootNode := tree.RootNode()
+
+		// Check if first child is an ERROR node
+		childCount := rootNode.ChildCount()
+		var firstChildKind string
+		if childCount > 0 {
+			if firstChild := rootNode.Child(0); firstChild != nil {
+				firstChildKind = firstChild.Kind()
+			}
+		}
+		tree.Close()
+
+		if childCount == 0 || firstChildKind != "ERROR" {
+			break
+		}
+
+		// Find the next newline and drop everything before it
+		newlineIdx := -1
+		for j := 0; j < len(source); j++ {
+			if source[j] == '\n' {
+				newlineIdx = j
+				break
+			}
+		}
+		if newlineIdx == -1 || newlineIdx >= len(source)-1 {
+			break
+		}
+		source = source[newlineIdx+1:]
+	}
+
+	return source
 }
