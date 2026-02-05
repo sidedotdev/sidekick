@@ -48,8 +48,8 @@ func TestHydrateChatHistoryHandler_HappyPath(t *testing.T) {
 	// Create request with refs
 	reqBody := HydrateChatHistoryRequest{
 		Refs: []llm2.MessageRef{
-			{FlowId: flowId, BlockIds: []string{"block-1"}, Role: "user"},
-			{FlowId: flowId, BlockIds: []string{"block-2", "block-3"}, Role: "assistant"},
+			{BlockIds: []string{"block-1"}, Role: "user"},
+			{BlockIds: []string{"block-2", "block-3"}, Role: "assistant"},
 		},
 	}
 	reqJSON, _ := json.Marshal(reqBody)
@@ -101,7 +101,7 @@ func TestHydrateChatHistoryHandler_MissingBlocksShowError(t *testing.T) {
 	// Request includes a missing block
 	reqBody := HydrateChatHistoryRequest{
 		Refs: []llm2.MessageRef{
-			{FlowId: flowId, BlockIds: []string{"block-exists", "block-missing"}, Role: "assistant"},
+			{BlockIds: []string{"block-exists", "block-missing"}, Role: "assistant"},
 		},
 	}
 	reqJSON, _ := json.Marshal(reqBody)
@@ -124,31 +124,7 @@ func TestHydrateChatHistoryHandler_MissingBlocksShowError(t *testing.T) {
 	assert.Contains(t, resp.Messages[0].Content[1].Text, "[hydrate error: missing block block-missing]")
 }
 
-func TestHydrateChatHistoryHandler_MismatchedFlowId(t *testing.T) {
-	ctrl := NewMockController(t)
-	router := DefineRoutes(ctrl, TestAllowedOrigins())
-
-	workspaceId := "test-workspace"
-	flowId := "test-flow"
-
-	reqBody := HydrateChatHistoryRequest{
-		Refs: []llm2.MessageRef{
-			{FlowId: "different-flow", BlockIds: []string{"block-1"}, Role: "user"},
-		},
-	}
-	reqJSON, _ := json.Marshal(reqBody)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+workspaceId+"/flows/"+flowId+"/chat_history/hydrate", bytes.NewReader(reqJSON))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assert.Contains(t, w.Body.String(), "Mismatched flowId")
-}
-
-func TestHydrateChatHistoryHandler_EmptyFlowIdInRefAllowed(t *testing.T) {
+func TestHydrateChatHistoryHandler_SingleRef(t *testing.T) {
 	ctrl := NewMockController(t)
 	router := DefineRoutes(ctrl, TestAllowedOrigins())
 
@@ -163,10 +139,9 @@ func TestHydrateChatHistoryHandler_EmptyFlowIdInRefAllowed(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Empty flowId in ref should be allowed
 	reqBody := HydrateChatHistoryRequest{
 		Refs: []llm2.MessageRef{
-			{FlowId: "", BlockIds: []string{"block-1"}, Role: "user"},
+			{BlockIds: []string{"block-1"}, Role: "user"},
 		},
 	}
 	reqJSON, _ := json.Marshal(reqBody)
@@ -231,7 +206,7 @@ func TestHydrateChatHistoryHandler_MalformedBlockShowsError(t *testing.T) {
 
 	reqBody := HydrateChatHistoryRequest{
 		Refs: []llm2.MessageRef{
-			{FlowId: flowId, BlockIds: []string{"block-bad"}, Role: "user"},
+			{BlockIds: []string{"block-bad"}, Role: "user"},
 		},
 	}
 	reqJSON, _ := json.Marshal(reqBody)
@@ -274,8 +249,8 @@ func TestHydrateChatHistoryHandler_PreservesOrder(t *testing.T) {
 	// Request with specific order
 	reqBody := HydrateChatHistoryRequest{
 		Refs: []llm2.MessageRef{
-			{FlowId: flowId, BlockIds: []string{"block-3", "block-1"}, Role: "user"},
-			{FlowId: flowId, BlockIds: []string{"block-5", "block-2", "block-4"}, Role: "assistant"},
+			{BlockIds: []string{"block-3", "block-1"}, Role: "user"},
+			{BlockIds: []string{"block-5", "block-2", "block-4"}, Role: "assistant"},
 		},
 	}
 	reqJSON, _ := json.Marshal(reqBody)

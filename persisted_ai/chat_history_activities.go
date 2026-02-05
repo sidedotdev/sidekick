@@ -28,8 +28,6 @@ func (ca *ChatHistoryActivities) ManageV3(
 		return nil, fmt.Errorf("ManageV3 requires Llm2ChatHistory, got %T", chatHistory.History)
 	}
 
-	llm2History.SetWorkspaceId(workspaceId)
-
 	if err := llm2History.Hydrate(ctx, ca.Storage); err != nil {
 		return nil, fmt.Errorf("failed to hydrate chat history: %w", err)
 	}

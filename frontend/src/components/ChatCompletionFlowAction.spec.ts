@@ -99,8 +99,8 @@ describe('ChatCompletionFlowAction', () => {
         messages: {
           type: 'llm2' as const,
           refs: [
-            { flowId: '', blockIds: ['block1'], role: 'user' },
-            { flowId: '', blockIds: ['block2', 'block3'], role: 'assistant' },
+            { blockIds: ['block1'], role: 'user' },
+            { blockIds: ['block2', 'block3'], role: 'assistant' },
           ]
         },
         model: 'gpt9',
