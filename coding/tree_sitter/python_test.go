@@ -585,6 +585,24 @@ class Greeter:
 		print("Hello, " + name)`,
 		},
 		// FIXME decorated functions, classes and methods should include the decorator in the definition
+		{
+			name:               "import alias from",
+			symbolName:         "DEFAULT_AGENT_ID",
+			code:               `from x.agents.some_agent import AGENT_ID as DEFAULT_AGENT_ID`,
+			expectedDefinition: `from x.agents.some_agent import AGENT_ID as DEFAULT_AGENT_ID`,
+		},
+		{
+			name:               "import alias",
+			symbolName:         "operating_system",
+			code:               `import os as operating_system`,
+			expectedDefinition: `import os as operating_system`,
+		},
+		{
+			name:          "import alias not in all symbols lookup",
+			symbolName:    "NonExistent",
+			code:          `from x.agents.some_agent import AGENT_ID as DEFAULT_AGENT_ID`,
+			expectedError: `symbol not found: NonExistent`,
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
