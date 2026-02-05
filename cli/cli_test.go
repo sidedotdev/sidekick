@@ -428,6 +428,33 @@ func TestEnsureTestCommands_UserSkipsCaseInsensitive(t *testing.T) {
 	assert.Contains(t, string(data), "# Uncomment and configure test commands for best results:")
 }
 
+func TestEnsureTestCommands_BlankInputSkips(t *testing.T) {
+	tmpDir, cleanup := setupTempDir(t)
+	defer cleanup()
+
+	configPath := filepath.Join(tmpDir, "side.yml")
+
+	oldStdin := os.Stdin
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	go func() {
+		w.WriteString("\n")
+		w.Close()
+	}()
+	defer func() {
+		os.Stdin = oldStdin
+	}()
+
+	config := &common.RepoConfig{}
+	err := ensureTestCommands(config, configPath)
+	assert.NoError(t, err)
+	assert.Empty(t, config.TestCommands)
+
+	data, err := os.ReadFile(configPath)
+	assert.NoError(t, err)
+	assert.Contains(t, string(data), "# Uncomment and configure test commands for best results:")
+}
+
 func TestEnsureWorkspaceConfig(t *testing.T) {
 	ctx := context.Background()
 

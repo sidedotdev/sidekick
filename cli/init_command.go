@@ -29,6 +29,8 @@ import (
 	"github.com/knadh/koanf/v2"
 	"github.com/segmentio/ksuid"
 	"github.com/zalando/go-keyring"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 type InitCommandHandler struct {
@@ -125,7 +127,7 @@ func (h *InitCommandHandler) handleInitCommand() error {
 	dirName := filepath.Base(baseDir)
 	workspaceName := dirName
 	repoName, err := getRepoName(baseDir)
-	if err != nil && repoName != dirName && existingWorkspace == nil {
+	if err == nil && repoName != dirName && existingWorkspace == nil {
 		workspaceNameSelection := selection.New("Which workspace name do you prefer?", []string{dirName, repoName})
 		selectedWorkspaceName, err := workspaceNameSelection.RunPrompt()
 		if err != nil {
@@ -427,7 +429,7 @@ func saveConfig(filePath string, config common.RepoConfig) error {
 }
 
 func ensureTestCommands(config *common.RepoConfig, filePath string) error {
-	fmt.Println("\nPlease enter the command you use to run your tests (or type 'skip' to skip)")
+	fmt.Println("\nPlease enter the command you use to run your tests (or press Enter to skip)")
 	fmt.Println("Examples: pytest, jest, go test ./...")
 	fmt.Print("Test command: ")
 
@@ -435,11 +437,7 @@ func ensureTestCommands(config *common.RepoConfig, filePath string) error {
 	scanner.Scan()
 	testCommand := strings.TrimSpace(scanner.Text())
 
-	if testCommand == "" {
-		return fmt.Errorf("no command entered, exiting early")
-	}
-
-	if strings.EqualFold(testCommand, "skip") {
+	if testCommand == "" || strings.EqualFold(testCommand, "skip") {
 		// Write a commented placeholder example to the config file
 		if err := saveConfig(filePath, *config); err != nil {
 			return err
@@ -528,7 +526,7 @@ func selectLLMProvider(localConfig common.LocalConfig) (string, error) {
 	// Add configured built-in providers
 	configuredBuiltins := getConfiguredBuiltinLLMProviders()
 	for _, p := range configuredBuiltins {
-		options = append(options, strings.Title(p))
+		options = append(options, cases.Title(language.English).String(p))
 	}
 
 	// Add custom providers from local config
@@ -614,7 +612,7 @@ func selectEmbeddingProvider(localConfig common.LocalConfig) (string, error) {
 	// Add configured built-in embedding providers (OpenAI and Google only)
 	configuredBuiltins := getConfiguredBuiltinEmbeddingProviders()
 	for _, p := range configuredBuiltins {
-		options = append(options, strings.Title(p))
+		options = append(options, cases.Title(language.English).String(p))
 	}
 
 	// Add custom providers that support embeddings (openai, google, or openai_compatible types)

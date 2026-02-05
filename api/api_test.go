@@ -453,7 +453,7 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 	err = db.PersistFlow(ctx, flow)
 	assert.NoError(t, err, "Persisting workflow failed")
 
-	router := DefineRoutes(ctrl)
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
 	s := httptest.NewServer(router)
 	defer s.Close()
 
@@ -564,7 +564,7 @@ func TestFlowActionChangesWebsocketHandler_NewOnly(t *testing.T) {
 	err = db.PersistFlowAction(ctx, preExistingAction)
 	require.NoError(t, err, "Persisting pre-existing flow action failed")
 
-	router := DefineRoutes(ctrl)
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
 	s := httptest.NewServer(router)
 	defer s.Close()
 
@@ -2107,7 +2107,7 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	err = db.PersistFlow(ctx, flow)
 	assert.NoError(t, err, "Persisting workflow failed")
 
-	router := DefineRoutes(ctrl)
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
 	s := httptest.NewServer(router)
 	defer s.Close()
 
@@ -2289,7 +2289,7 @@ func TestTaskChangesWebsocketHandler(t *testing.T) {
 	err = db.PersistTask(ctx, task1)
 	assert.NoError(t, err, "Persisting task 1 failed")
 
-	router := DefineRoutes(ctrl)
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
 
 	s := httptest.NewServer(router)
 	defer s.Close()
@@ -2374,7 +2374,7 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 	t.Run("Successful go_next_step", func(t *testing.T) {
 		t.Parallel()
 		ctrl := NewMockController(t)
-		router := DefineRoutes(ctrl)
+		router := DefineRoutes(ctrl, TestAllowedOrigins())
 
 		workspaceId := "ws_test_" + ksuid.New().String()
 		flowId := "flow_test_" + ksuid.New().String()
@@ -2404,7 +2404,7 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 	t.Run("Invalid actionType", func(t *testing.T) {
 		t.Parallel()
 		ctrl := NewMockController(t)
-		router := DefineRoutes(ctrl)
+		router := DefineRoutes(ctrl, TestAllowedOrigins())
 
 		workspaceId := "ws_test_" + ksuid.New().String()
 		flowId := "flow_test_" + ksuid.New().String()
@@ -2434,7 +2434,7 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 	t.Run("Invalid request payload - non-JSON", func(t *testing.T) {
 		t.Parallel()
 		ctrl := NewMockController(t)
-		router := DefineRoutes(ctrl)
+		router := DefineRoutes(ctrl, TestAllowedOrigins())
 
 		workspaceId := "ws_test_" + ksuid.New().String()
 		flowId := "flow_test_" + ksuid.New().String()
@@ -2459,7 +2459,7 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 	t.Run("Invalid request payload - missing actionType", func(t *testing.T) {
 		t.Parallel()
 		ctrl := NewMockController(t)
-		router := DefineRoutes(ctrl)
+		router := DefineRoutes(ctrl, TestAllowedOrigins())
 
 		workspaceId := "ws_test_" + ksuid.New().String()
 		flowId := "flow_test_" + ksuid.New().String()
@@ -2489,7 +2489,7 @@ func TestUserActionHandler_FlowNotFound(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	apiCtrl := NewMockController(t)
-	router := DefineRoutes(apiCtrl)
+	router := DefineRoutes(apiCtrl, TestAllowedOrigins())
 
 	workspaceID := "test-ws-notfound-123"
 	flowID := "test-flow-notfound-123"
@@ -2509,7 +2509,7 @@ func TestUserActionHandler_SignalError(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	apiCtrl := NewMockController(t)
-	router := DefineRoutes(apiCtrl)
+	router := DefineRoutes(apiCtrl, TestAllowedOrigins())
 	signalErr := serviceerror.DeadlineExceeded{Message: "deadline exceeded"}
 	mockTemporalClient := (apiCtrl.temporalClient).(*mocks.Client)
 	// undo default signal success mocking
@@ -2617,7 +2617,7 @@ func TestGetProvidersHandler(t *testing.T) {
 			t.Parallel()
 			sm := testSecretManager{secrets: tt.secrets}
 			apiCtrl := NewMockControllerWithSecretManager(t, sm)
-			router := DefineRoutes(apiCtrl)
+			router := DefineRoutes(apiCtrl, TestAllowedOrigins())
 
 			req, _ := http.NewRequest("GET", "/api/v1/providers", nil)
 			rr := httptest.NewRecorder()
@@ -2652,7 +2652,7 @@ func TestGetModelsHandler(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
-	router := DefineRoutes(ctrl)
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
 
 	req, _ := http.NewRequest("GET", "/api/v1/models", nil)
 	w := httptest.NewRecorder()

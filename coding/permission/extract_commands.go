@@ -1,115 +1,152 @@
 package permission
 
 import (
-	"context"
 	"strings"
+	"unsafe"
 
-	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/bash"
+	sitter "github.com/tree-sitter/go-tree-sitter"
+	tree_sitter_bash "github.com/tree-sitter/tree-sitter-bash/bindings/go"
 )
+
+// extractOpts controls extraction behavior for backward compatibility.
+type extractOpts struct {
+	// legacy preserves pre-fix behavior for redirected_statement with list/pipeline body
+	legacy bool
+}
 
 // ExtractCommands parses a bash script string using tree-sitter and returns
 // all executable commands found within it. Each command includes its full
 // text with arguments, redirections, and background operator if present.
 func ExtractCommands(script string) []string {
+	return extractCommandsWithOpts(script, extractOpts{legacy: false})
+}
+
+// ExtractCommandsLegacy is like ExtractCommands but preserves legacy behavior
+// for redirected_statement nodes with list/pipeline bodies. This is needed
+// for workflow determinism when command permission evaluation runs in-workflow.
+func ExtractCommandsLegacy(script string) []string {
+	return extractCommandsWithOpts(script, extractOpts{legacy: true})
+}
+
+func extractCommandsWithOpts(script string, opts extractOpts) []string {
 	parser := sitter.NewParser()
-	parser.SetLanguage(bash.GetLanguage())
-	tree, err := parser.ParseCtx(context.Background(), nil, []byte(script))
-	if err != nil {
+	defer parser.Close()
+	bashLang := sitter.NewLanguage(unsafe.Pointer(tree_sitter_bash.Language()))
+	if err := parser.SetLanguage(bashLang); err != nil {
 		return nil
 	}
+	tree := parser.Parse([]byte(script), nil)
+	defer tree.Close()
 
 	sourceCode := []byte(script)
 	var commands []string
-	extractCommandsFromNode(tree.RootNode(), sourceCode, &commands)
+	extractCommandsFromNode(tree.RootNode(), sourceCode, &commands, opts)
 	return commands
 }
 
 // extractCommandsFromNode recursively walks the AST and extracts commands
-func extractCommandsFromNode(node *sitter.Node, sourceCode []byte, commands *[]string) {
+func extractCommandsFromNode(node *sitter.Node, sourceCode []byte, commands *[]string, opts extractOpts) {
 	if node == nil {
 		return
 	}
 
-	nodeType := node.Type()
+	nodeType := node.Kind()
 
 	switch nodeType {
 	case "command":
 		cmdText := getFullCommandText(node, sourceCode)
 		if cmdText != "" {
 			*commands = append(*commands, cmdText)
-			handleSpecialCommands(cmdText, commands)
+			handleSpecialCommands(cmdText, commands, opts)
 		}
 		// Recurse into children to find command substitutions (may be nested in concatenations)
-		for i := 0; i < int(node.ChildCount()); i++ {
-			findAndExtractCommandSubstitutions(node.Child(i), sourceCode, commands)
+		for i := uint(0); i < node.ChildCount(); i++ {
+			findAndExtractCommandSubstitutions(node.Child(i), sourceCode, commands, opts)
 		}
 		return
 
 	case "redirected_statement":
+		// Check if the body is a compound structure (list, pipeline, etc.)
+		// If so, we need to recurse into it to extract individual commands
+		// In legacy mode, skip this to preserve workflow determinism
+		if !opts.legacy && node.ChildCount() > 0 {
+			body := node.Child(0)
+			bodyType := body.Kind()
+			if bodyType == "list" || bodyType == "pipeline" {
+				// Recurse into the compound structure to extract individual commands
+				extractCommandsFromNode(body, sourceCode, commands, opts)
+				// Also check for command substitutions in redirections
+				for i := uint(1); i < node.ChildCount(); i++ {
+					findAndExtractCommandSubstitutions(node.Child(i), sourceCode, commands, opts)
+				}
+				return
+			}
+		}
+
 		// Extract the full text including redirections
-		cmdText := strings.TrimSpace(node.Content(sourceCode))
+		cmdText := strings.TrimSpace(node.Utf8Text(sourceCode))
+
 		// Check for background operator at parent level
 		cmdText = appendBackgroundIfPresent(node, sourceCode, cmdText)
 		if cmdText != "" {
 			*commands = append(*commands, cmdText)
-			handleSpecialCommands(cmdText, commands)
+			handleSpecialCommands(cmdText, commands, opts)
 		}
 		// Recurse into children to find command substitutions (may be nested)
-		for i := 0; i < int(node.ChildCount()); i++ {
-			findAndExtractCommandSubstitutions(node.Child(i), sourceCode, commands)
+		for i := uint(0); i < node.ChildCount(); i++ {
+			findAndExtractCommandSubstitutions(node.Child(i), sourceCode, commands, opts)
 		}
 		return
 
 	case "subshell":
 		// Extract commands from within subshell, don't add subshell itself
-		for i := 0; i < int(node.ChildCount()); i++ {
-			extractCommandsFromNode(node.Child(i), sourceCode, commands)
+		for i := uint(0); i < node.ChildCount(); i++ {
+			extractCommandsFromNode(node.Child(i), sourceCode, commands, opts)
 		}
 		return
 
 	case "compound_statement":
 		// Extract commands from within brace groups { cmd; }, don't add group itself
-		for i := 0; i < int(node.ChildCount()); i++ {
-			extractCommandsFromNode(node.Child(i), sourceCode, commands)
+		for i := uint(0); i < node.ChildCount(); i++ {
+			extractCommandsFromNode(node.Child(i), sourceCode, commands, opts)
 		}
 		return
 
 	case "command_substitution":
 		// Recurse into command substitution to extract inner commands
-		for i := 0; i < int(node.ChildCount()); i++ {
-			extractCommandsFromNode(node.Child(i), sourceCode, commands)
+		for i := uint(0); i < node.ChildCount(); i++ {
+			extractCommandsFromNode(node.Child(i), sourceCode, commands, opts)
 		}
 		return
 	}
 
 	// For all other node types, recurse into children
-	for i := 0; i < int(node.ChildCount()); i++ {
-		extractCommandsFromNode(node.Child(i), sourceCode, commands)
+	for i := uint(0); i < node.ChildCount(); i++ {
+		extractCommandsFromNode(node.Child(i), sourceCode, commands, opts)
 	}
 }
 
 // findAndExtractCommandSubstitutions recursively searches for command_substitution
 // nodes and extracts commands from them. This handles cases where substitutions
 // are nested inside concatenations or other node types.
-func findAndExtractCommandSubstitutions(node *sitter.Node, sourceCode []byte, commands *[]string) {
+func findAndExtractCommandSubstitutions(node *sitter.Node, sourceCode []byte, commands *[]string, opts extractOpts) {
 	if node == nil {
 		return
 	}
 
-	if node.Type() == "command_substitution" {
-		extractCommandsFromNode(node, sourceCode, commands)
+	if node.Kind() == "command_substitution" {
+		extractCommandsFromNode(node, sourceCode, commands, opts)
 		return
 	}
 
-	for i := 0; i < int(node.ChildCount()); i++ {
-		findAndExtractCommandSubstitutions(node.Child(i), sourceCode, commands)
+	for i := uint(0); i < node.ChildCount(); i++ {
+		findAndExtractCommandSubstitutions(node.Child(i), sourceCode, commands, opts)
 	}
 }
 
 // getFullCommandText returns the command text including any trailing & for background
 func getFullCommandText(node *sitter.Node, sourceCode []byte) string {
-	cmdText := strings.TrimSpace(node.Content(sourceCode))
+	cmdText := strings.TrimSpace(node.Utf8Text(sourceCode))
 	return appendBackgroundIfPresent(node, sourceCode, cmdText)
 }
 
@@ -117,9 +154,9 @@ func getFullCommandText(node *sitter.Node, sourceCode []byte) string {
 func appendBackgroundIfPresent(node *sitter.Node, sourceCode []byte, cmdText string) string {
 	parent := node.Parent()
 	if parent != nil {
-		for i := 0; i < int(parent.ChildCount()); i++ {
+		for i := uint(0); i < parent.ChildCount(); i++ {
 			sibling := parent.Child(i)
-			if sibling.Type() == "&" {
+			if sibling.Kind() == "&" {
 				return cmdText + " &"
 			}
 		}
@@ -129,7 +166,7 @@ func appendBackgroundIfPresent(node *sitter.Node, sourceCode []byte, cmdText str
 
 // handleSpecialCommands handles commands that execute other commands:
 // sh/bash/zsh -c, eval, exec, xargs
-func handleSpecialCommands(cmdText string, commands *[]string) {
+func handleSpecialCommands(cmdText string, commands *[]string, opts extractOpts) {
 	parts := parseCommandParts(cmdText)
 	if len(parts) == 0 {
 		return
@@ -139,85 +176,85 @@ func handleSpecialCommands(cmdText string, commands *[]string) {
 
 	switch cmdName {
 	case "sh", "bash", "zsh":
-		handleShellCommand(parts, commands)
+		handleShellCommand(parts, commands, opts)
 	case "eval":
-		handleEvalCommand(parts, commands)
+		handleEvalCommand(parts, commands, opts)
 	case "exec", "lima":
-		handleExecCommand(parts, commands)
+		handleExecCommand(parts, commands, opts)
 	case "xargs":
-		handleXargsCommand(parts, commands)
+		handleXargsCommand(parts, commands, opts)
 
 	// Privilege/user context wrappers
 	case "sudo":
-		handleSudoCommand(parts, commands)
+		handleSudoCommand(parts, commands, opts)
 	case "su":
-		handleSuCommand(parts, commands)
+		handleSuCommand(parts, commands, opts)
 	case "doas":
-		handleSimpleWrapper(parts, commands)
+		handleSimpleWrapper(parts, commands, opts)
 	case "runuser":
-		handleRunuserCommand(parts, commands)
+		handleRunuserCommand(parts, commands, opts)
 
 	// Process/environment wrappers
 	case "env":
-		handleEnvCommand(parts, commands)
+		handleEnvCommand(parts, commands, opts)
 	case "nohup":
-		handleSimpleWrapper(parts, commands)
+		handleSimpleWrapper(parts, commands, opts)
 	case "nice":
-		handleWrapperWithFlags(parts, commands, map[string]bool{"-n": true})
+		handleWrapperWithFlags(parts, commands, map[string]bool{"-n": true}, opts)
 	case "ionice":
-		handleWrapperWithFlags(parts, commands, map[string]bool{"-c": true, "-n": true})
+		handleWrapperWithFlags(parts, commands, map[string]bool{"-c": true, "-n": true}, opts)
 	case "timeout":
-		handleWrapperWithPositionalArg(parts, commands, map[string]bool{"-k": true, "--kill-after": true, "-s": true, "--signal": true}, 1)
+		handleWrapperWithPositionalArg(parts, commands, map[string]bool{"-k": true, "--kill-after": true, "-s": true, "--signal": true}, 1, opts)
 	case "stdbuf":
-		handleWrapperWithFlags(parts, commands, map[string]bool{"-i": true, "-o": true, "-e": true, "--input": true, "--output": true, "--error": true})
+		handleWrapperWithFlags(parts, commands, map[string]bool{"-i": true, "-o": true, "-e": true, "--input": true, "--output": true, "--error": true}, opts)
 
 	// Remote/parallel execution
 	case "ssh":
-		handleSshCommand(parts, commands)
+		handleSshCommand(parts, commands, opts)
 	case "find":
-		handleFindCommand(parts, commands)
+		handleFindCommand(parts, commands, opts)
 	case "fd":
-		handleFdCommand(parts, commands)
+		handleFdCommand(parts, commands, opts)
 	case "parallel":
-		handleSimpleWrapper(parts, commands)
+		handleSimpleWrapper(parts, commands, opts)
 
 	// Shell builtins
 	case "command":
-		handleSimpleWrapper(parts, commands)
+		handleSimpleWrapper(parts, commands, opts)
 	case "builtin":
-		handleSimpleWrapper(parts, commands)
+		handleSimpleWrapper(parts, commands, opts)
 
 	// Debugging/tracing
 	case "time":
-		handleSimpleWrapper(parts, commands)
+		handleSimpleWrapper(parts, commands, opts)
 	case "strace":
-		handleWrapperWithFlags(parts, commands, map[string]bool{"-p": true, "-e": true, "-o": true, "-s": true, "-P": true, "-I": true, "-b": true, "-O": true, "-S": true, "-U": true, "-X": true})
+		handleWrapperWithFlags(parts, commands, map[string]bool{"-p": true, "-e": true, "-o": true, "-s": true, "-P": true, "-I": true, "-b": true, "-O": true, "-S": true, "-U": true, "-X": true}, opts)
 	case "ltrace":
-		handleSimpleWrapper(parts, commands)
+		handleSimpleWrapper(parts, commands, opts)
 
 	// Locking/synchronization
 	case "flock":
-		handleFlockCommand(parts, commands)
+		handleFlockCommand(parts, commands, opts)
 
 	// Watching/repeating
 	case "watch":
-		handleWrapperWithFlags(parts, commands, map[string]bool{"-n": true})
+		handleWrapperWithFlags(parts, commands, map[string]bool{"-n": true}, opts)
 	case "entr":
-		handleSimpleWrapper(parts, commands)
+		handleSimpleWrapper(parts, commands, opts)
 
 	// Privilege/capability manipulation
 	case "setpriv":
-		handleWrapperWithFlags(parts, commands, map[string]bool{"--reuid": true, "--regid": true, "--groups": true, "--inh-caps": true, "--ambient-caps": true, "--bounding-set": true, "--securebits": true, "--selinux-label": true, "--apparmor-profile": true})
+		handleWrapperWithFlags(parts, commands, map[string]bool{"--reuid": true, "--regid": true, "--groups": true, "--inh-caps": true, "--ambient-caps": true, "--bounding-set": true, "--securebits": true, "--selinux-label": true, "--apparmor-profile": true}, opts)
 	case "capsh":
-		handleCapshCommand(parts, commands)
+		handleCapshCommand(parts, commands, opts)
 	case "cgexec":
-		handleWrapperWithFlags(parts, commands, map[string]bool{"-g": true})
+		handleWrapperWithFlags(parts, commands, map[string]bool{"-g": true}, opts)
 
 	// Misc wrappers
 	case "systemd-run":
-		handleWrapperWithFlags(parts, commands, map[string]bool{"-u": true, "--unit": true, "-p": true, "--property": true, "-M": true, "--machine": true, "-E": true, "--setenv": true, "--uid": true, "--gid": true, "--nice": true, "--working-directory": true})
+		handleWrapperWithFlags(parts, commands, map[string]bool{"-u": true, "--unit": true, "-p": true, "--property": true, "-M": true, "--machine": true, "-E": true, "--setenv": true, "--uid": true, "--gid": true, "--nice": true, "--working-directory": true}, opts)
 	case "dbus-run-session":
-		handleSimpleWrapper(parts, commands)
+		handleSimpleWrapper(parts, commands, opts)
 
 	// Script file execution via source
 	case "source":
@@ -281,13 +318,13 @@ func parseCommandParts(cmd string) []string {
 }
 
 // handleShellCommand handles sh -c, bash -c, zsh -c patterns and script execution
-func handleShellCommand(parts []string, commands *[]string) {
+func handleShellCommand(parts []string, commands *[]string, opts extractOpts) {
 	// Look for -c flag followed by a string argument
 	for i := 1; i < len(parts)-1; i++ {
 		if parts[i] == "-c" {
 			scriptArg := parts[i+1]
 			innerScript := unquoteString(scriptArg)
-			innerCommands := ExtractCommands(innerScript)
+			innerCommands := extractCommandsWithOpts(innerScript, opts)
 			*commands = append(*commands, innerCommands...)
 			return
 		}
@@ -297,19 +334,19 @@ func handleShellCommand(parts []string, commands *[]string) {
 }
 
 // handleEvalCommand handles eval "..." patterns
-func handleEvalCommand(parts []string, commands *[]string) {
+func handleEvalCommand(parts []string, commands *[]string, opts extractOpts) {
 	if len(parts) < 2 {
 		return
 	}
 	// Join all arguments after eval and parse them
 	scriptArg := strings.Join(parts[1:], " ")
 	innerScript := unquoteString(scriptArg)
-	innerCommands := ExtractCommands(innerScript)
+	innerCommands := extractCommandsWithOpts(innerScript, opts)
 	*commands = append(*commands, innerCommands...)
 }
 
 // handleExecCommand handles exec ... patterns
-func handleExecCommand(parts []string, commands *[]string) {
+func handleExecCommand(parts []string, commands *[]string, opts extractOpts) {
 	if len(parts) < 2 {
 		return
 	}
@@ -321,7 +358,7 @@ func handleExecCommand(parts []string, commands *[]string) {
 }
 
 // handleXargsCommand handles xargs ... patterns
-func handleXargsCommand(parts []string, commands *[]string) {
+func handleXargsCommand(parts []string, commands *[]string, opts extractOpts) {
 	if len(parts) < 2 {
 		return
 	}
@@ -370,7 +407,7 @@ func unquoteString(s string) string {
 
 // handleSimpleWrapper handles commands where everything after the command name
 // is the wrapped command (e.g., nohup, doas, command, builtin, time, ltrace)
-func handleSimpleWrapper(parts []string, commands *[]string) {
+func handleSimpleWrapper(parts []string, commands *[]string, opts extractOpts) {
 	if len(parts) < 2 {
 		return
 	}
@@ -382,7 +419,7 @@ func handleSimpleWrapper(parts []string, commands *[]string) {
 
 // handleWrapperWithFlags handles commands with optional flags that may take arguments.
 // Skips flags (and their args if in flagsWithArgs map) until finding the actual command.
-func handleWrapperWithFlags(parts []string, commands *[]string, flagsWithArgs map[string]bool) {
+func handleWrapperWithFlags(parts []string, commands *[]string, flagsWithArgs map[string]bool, opts extractOpts) {
 	if len(parts) < 2 {
 		return
 	}
@@ -410,7 +447,7 @@ func handleWrapperWithFlags(parts []string, commands *[]string, flagsWithArgs ma
 			// Recursively handle the inner command for nested wrappers
 			innerParts := parseCommandParts(innerCmd)
 			if len(innerParts) > 0 {
-				handleSpecialCommands(innerCmd, commands)
+				handleSpecialCommands(innerCmd, commands, opts)
 			}
 		}
 	}
@@ -419,7 +456,7 @@ func handleWrapperWithFlags(parts []string, commands *[]string, flagsWithArgs ma
 // handleWrapperWithPositionalArg handles commands with required positional args
 // before the wrapped command (e.g., timeout has duration, flock has lockfile, ssh has host).
 // Skips flags, then skips numPositionalArgs positional arguments, then extracts the remaining.
-func handleWrapperWithPositionalArg(parts []string, commands *[]string, flagsWithArgs map[string]bool, numPositionalArgs int) {
+func handleWrapperWithPositionalArg(parts []string, commands *[]string, flagsWithArgs map[string]bool, numPositionalArgs int, opts extractOpts) {
 	if len(parts) < 2 {
 		return
 	}
@@ -455,22 +492,24 @@ func handleWrapperWithPositionalArg(parts []string, commands *[]string, flagsWit
 				unquoted := unquoteString(innerCmd)
 				if unquoted != innerCmd {
 					*commands = append(*commands, unquoted)
+					handleSpecialCommands(unquoted, commands, opts)
 					return
 				}
 			}
 			*commands = append(*commands, innerCmd)
+			handleSpecialCommands(innerCmd, commands, opts)
 		}
 	}
 }
 
 // handleShellDashC handles -c "cmd" patterns like su -c.
 // Looks for -c flag followed by a quoted string, unquotes it, and recursively parses.
-func handleShellDashC(parts []string, commands *[]string) {
+func handleShellDashC(parts []string, commands *[]string, opts extractOpts) {
 	for i := 1; i < len(parts)-1; i++ {
 		if parts[i] == "-c" {
 			scriptArg := parts[i+1]
 			innerScript := unquoteString(scriptArg)
-			innerCommands := ExtractCommands(innerScript)
+			innerCommands := extractCommandsWithOpts(innerScript, opts)
 			*commands = append(*commands, innerCommands...)
 			return
 		}
@@ -508,27 +547,27 @@ func handleScriptExecution(parts []string, commands *[]string) {
 }
 
 // handleSudoCommand handles sudo with various flags
-func handleSudoCommand(parts []string, commands *[]string) {
+func handleSudoCommand(parts []string, commands *[]string, opts extractOpts) {
 	flagsWithArgs := map[string]bool{
 		"-u": true, "-g": true, "-C": true, "-h": true, "-p": true,
 		"-r": true, "-t": true, "-U": true, "-T": true, "-R": true,
 	}
-	handleWrapperWithFlags(parts, commands, flagsWithArgs)
+	handleWrapperWithFlags(parts, commands, flagsWithArgs, opts)
 }
 
 // handleSuCommand handles su -c "cmd" pattern
-func handleSuCommand(parts []string, commands *[]string) {
-	handleShellDashC(parts, commands)
+func handleSuCommand(parts []string, commands *[]string, opts extractOpts) {
+	handleShellDashC(parts, commands, opts)
 }
 
 // handleRunuserCommand handles runuser with -u, -g, -G, -c flags
-func handleRunuserCommand(parts []string, commands *[]string) {
+func handleRunuserCommand(parts []string, commands *[]string, opts extractOpts) {
 	// Check for -c flag first (shell command mode)
 	for i := 1; i < len(parts)-1; i++ {
 		if parts[i] == "-c" {
 			scriptArg := parts[i+1]
 			innerScript := unquoteString(scriptArg)
-			innerCommands := ExtractCommands(innerScript)
+			innerCommands := extractCommandsWithOpts(innerScript, opts)
 			*commands = append(*commands, innerCommands...)
 			return
 		}
@@ -537,11 +576,11 @@ func handleRunuserCommand(parts []string, commands *[]string) {
 	flagsWithArgs := map[string]bool{
 		"-u": true, "-g": true, "-G": true,
 	}
-	handleWrapperWithFlags(parts, commands, flagsWithArgs)
+	handleWrapperWithFlags(parts, commands, flagsWithArgs, opts)
 }
 
 // handleEnvCommand handles env with VAR=value patterns and flags
-func handleEnvCommand(parts []string, commands *[]string) {
+func handleEnvCommand(parts []string, commands *[]string, opts extractOpts) {
 	if len(parts) < 2 {
 		return
 	}
@@ -582,25 +621,25 @@ func handleEnvCommand(parts []string, commands *[]string) {
 			// Recursively handle the inner command for nested wrappers
 			innerParts := parseCommandParts(innerCmd)
 			if len(innerParts) > 0 {
-				handleSpecialCommands(innerCmd, commands)
+				handleSpecialCommands(innerCmd, commands, opts)
 			}
 		}
 	}
 }
 
 // handleSshCommand handles ssh with host and optional flags
-func handleSshCommand(parts []string, commands *[]string) {
+func handleSshCommand(parts []string, commands *[]string, opts extractOpts) {
 	flagsWithArgs := map[string]bool{
 		"-p": true, "-i": true, "-l": true, "-o": true, "-F": true,
 		"-J": true, "-L": true, "-R": true, "-D": true, "-W": true,
 		"-b": true, "-c": true, "-e": true, "-m": true, "-O": true,
 		"-Q": true, "-S": true, "-w": true, "-B": true, "-E": true,
 	}
-	handleWrapperWithPositionalArg(parts, commands, flagsWithArgs, 1)
+	handleWrapperWithPositionalArg(parts, commands, flagsWithArgs, 1, opts)
 }
 
 // handleFindCommand extracts commands from -exec/-execdir/-ok/-okdir clauses
-func handleFindCommand(parts []string, commands *[]string) {
+func handleFindCommand(parts []string, commands *[]string, opts extractOpts) {
 	for i := 0; i < len(parts); i++ {
 		if parts[i] == "-exec" || parts[i] == "-execdir" || parts[i] == "-ok" || parts[i] == "-okdir" {
 			// Find the terminator (\; or +)
@@ -620,7 +659,7 @@ func handleFindCommand(parts []string, commands *[]string) {
 }
 
 // handleFdCommand extracts commands from -x/--exec flags
-func handleFdCommand(parts []string, commands *[]string) {
+func handleFdCommand(parts []string, commands *[]string, opts extractOpts) {
 	for i := 0; i < len(parts); i++ {
 		if parts[i] == "-x" || parts[i] == "--exec" {
 			if i+1 < len(parts) {
@@ -635,13 +674,13 @@ func handleFdCommand(parts []string, commands *[]string) {
 }
 
 // handleFlockCommand handles flock with lockfile argument
-func handleFlockCommand(parts []string, commands *[]string) {
+func handleFlockCommand(parts []string, commands *[]string, opts extractOpts) {
 	// Check for -c flag first (command string mode)
 	for i := 1; i < len(parts)-1; i++ {
 		if parts[i] == "-c" {
 			scriptArg := parts[i+1]
 			innerScript := unquoteString(scriptArg)
-			innerCommands := ExtractCommands(innerScript)
+			innerCommands := extractCommandsWithOpts(innerScript, opts)
 			*commands = append(*commands, innerCommands...)
 			return
 		}
@@ -651,17 +690,17 @@ func handleFlockCommand(parts []string, commands *[]string) {
 		"-w": true, "--wait": true, "--timeout": true,
 		"-E": true, "--conflict-exit-code": true,
 	}
-	handleWrapperWithPositionalArg(parts, commands, flagsWithArgs, 1)
+	handleWrapperWithPositionalArg(parts, commands, flagsWithArgs, 1, opts)
 }
 
 // handleCapshCommand handles capsh -- -c "cmd" pattern
-func handleCapshCommand(parts []string, commands *[]string) {
+func handleCapshCommand(parts []string, commands *[]string, opts extractOpts) {
 	// Look for -- followed by -c
 	for i := 1; i < len(parts)-2; i++ {
 		if parts[i] == "--" && parts[i+1] == "-c" {
 			scriptArg := parts[i+2]
 			innerScript := unquoteString(scriptArg)
-			innerCommands := ExtractCommands(innerScript)
+			innerCommands := extractCommandsWithOpts(innerScript, opts)
 			*commands = append(*commands, innerCommands...)
 			return
 		}

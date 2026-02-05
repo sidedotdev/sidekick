@@ -16,6 +16,41 @@ import (
 	"github.com/rs/zerolog/pkgerrors"
 )
 
+// asyncWriter wraps an io.Writer and performs writes in a background goroutine
+// to avoid blocking callers. This is critical for Temporal workflow goroutines,
+// which trigger a deadlock detector if they block on I/O (e.g. log writes to
+// stdout) for over a second.
+type asyncWriter struct {
+	ch     chan []byte
+	writer io.Writer
+}
+
+func newAsyncWriter(w io.Writer, bufSize int) *asyncWriter {
+	aw := &asyncWriter{
+		ch:     make(chan []byte, bufSize),
+		writer: w,
+	}
+	go aw.drain()
+	return aw
+}
+
+func (aw *asyncWriter) drain() {
+	for p := range aw.ch {
+		aw.writer.Write(p) //nolint:errcheck
+	}
+}
+
+func (aw *asyncWriter) Write(p []byte) (int, error) {
+	buf := make([]byte, len(p))
+	copy(buf, p)
+	select {
+	case aw.ch <- buf:
+	default:
+		// drop the log entry if the buffer is full rather than blocking
+	}
+	return len(p), nil
+}
+
 var once sync.Once
 
 var log zerolog.Logger
@@ -39,15 +74,17 @@ func Get() zerolog.Logger {
 			TimeFormat: time.RFC3339,
 		}
 
-		var output io.Writer = consoleWriter
+		var syncOutput io.Writer = consoleWriter
 
 		stateHome, err := common.GetSidekickStateHome()
 		if err == nil {
 			fileWriter, err := newDailyRotatingLogWriter(stateHome)
 			if err == nil {
-				output = zerolog.MultiLevelWriter(consoleWriter, fileWriter)
+				syncOutput = zerolog.MultiLevelWriter(consoleWriter, fileWriter)
 			}
 		}
+
+		output := newAsyncWriter(syncOutput, 1024)
 
 		var gitRevision string
 		buildInfo, ok := debug.ReadBuildInfo()

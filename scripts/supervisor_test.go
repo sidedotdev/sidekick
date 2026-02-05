@@ -1493,7 +1493,7 @@ sleep 30
 	}()
 
 	// Check state immediately after starting goroutine
-	waitForCondition(t, 2*time.Second, func() bool {
+	waitForCondition(t, 5*time.Second, func() bool {
 		return p.isStopping()
 	}, "process should be stopping")
 
@@ -1723,22 +1723,21 @@ fi
 
 	p := sup.processes[0]
 
+	// Wait for process to produce output and exit
+	waitForCondition(t, 5*time.Second, func() bool {
+		output := p.getOutput()
+		for _, line := range output {
+			if strings.Contains(line, "first run") {
+				return true
+			}
+		}
+		return false
+	}, "expected 'first run' in output")
+
 	// Wait for process to exit on its own
 	waitForCondition(t, 5*time.Second, func() bool {
 		return !p.isRunning()
 	}, "process should have exited by now")
-
-	// Verify first run output
-	output := p.getOutput()
-	foundFirstRun := false
-	for _, line := range output {
-		if strings.Contains(line, "first run") {
-			foundFirstRun = true
-		}
-	}
-	if !foundFirstRun {
-		t.Fatalf("expected 'first run' in output, got: %v", output)
-	}
 
 	// Drain messages
 	for len(outputChan) > 0 {

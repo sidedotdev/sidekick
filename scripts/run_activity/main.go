@@ -145,6 +145,7 @@ func buildActivityRegistry() map[string]interface{} {
 		sidekick.GithubCloneRepoActivity,
 		env.EnvRunCommandActivity,
 		git.GitDiffActivity,
+		git.DiffUntrackedFilesActivity,
 		git.GitAddActivity,
 		git.GitRestoreActivity,
 		git.GitCommitActivity,
@@ -218,6 +219,7 @@ func executeActivityDirect(activityName string, activityArgs []json.RawMessage, 
 	defer cancel()
 
 	// Build arguments: first arg is context, rest are from JSON
+	// FIXME only do this if it actually is the first argument, it does not have to be
 	args := make([]reflect.Value, fnType.NumIn())
 	args[0] = reflect.ValueOf(ctx)
 
@@ -265,7 +267,7 @@ func main() {
 	var timeout time.Duration
 	var direct bool
 	flag.DurationVar(&timeout, "timeout", 180*time.Second, "Timeout for the activity execution")
-	flag.BoolVar(&direct, "direct", false, "Execute activity directly without Temporal workflow")
+	flag.BoolVar(&direct, "direct", true, "Execute activity directly without Temporal workflow")
 	flag.Parse()
 
 	args := flag.Args()

@@ -11,6 +11,7 @@ import (
 	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
+	"sort"
 
 	"github.com/invopop/jsonschema"
 	"github.com/sashabaranov/go-openai"
@@ -49,89 +50,120 @@ var updateDevRequirementsTool = llm.Tool{
 }
 
 func applyDevRequirementsUpdates(reqs DevRequirements, update DevRequirementsUpdate) (DevRequirements, error) {
-	// Apply criteria updates
-	for _, criteriaUpdate := range update.CriteriaUpdates {
-		switch criteriaUpdate.Operation {
-		case "edit":
-			if criteriaUpdate.Index < 0 || criteriaUpdate.Index >= len(reqs.AcceptanceCriteria) {
-				return reqs, fmt.Errorf("criteria index %d out of range for edit operation", criteriaUpdate.Index)
-			}
-			if criteriaUpdate.Content != nil {
-				reqs.AcceptanceCriteria[criteriaUpdate.Index] = *criteriaUpdate.Content
-			}
-
-		case "delete":
-			if criteriaUpdate.Index < 0 || criteriaUpdate.Index >= len(reqs.AcceptanceCriteria) {
-				return reqs, fmt.Errorf("criteria index %d out of range for delete operation", criteriaUpdate.Index)
-			}
-			reqs.AcceptanceCriteria = append(reqs.AcceptanceCriteria[:criteriaUpdate.Index], reqs.AcceptanceCriteria[criteriaUpdate.Index+1:]...)
-
-		case "insert":
-			if criteriaUpdate.Index < 0 || criteriaUpdate.Index > len(reqs.AcceptanceCriteria) {
-				return reqs, fmt.Errorf("criteria index %d out of range for insert operation", criteriaUpdate.Index)
-			}
-			content := ""
-			if criteriaUpdate.Content != nil {
-				content = *criteriaUpdate.Content
-			}
-			if criteriaUpdate.Index == len(reqs.AcceptanceCriteria) {
-				reqs.AcceptanceCriteria = append(reqs.AcceptanceCriteria, content)
-			} else {
-				reqs.AcceptanceCriteria = append(reqs.AcceptanceCriteria[:criteriaUpdate.Index], append([]string{content}, reqs.AcceptanceCriteria[criteriaUpdate.Index:]...)...)
-			}
-
-		default:
-			return reqs, fmt.Errorf("invalid operation %q for criteria update", criteriaUpdate.Operation)
-		}
+	criteriaOps := make([]sliceUpdate, len(update.CriteriaUpdates))
+	for i, u := range update.CriteriaUpdates {
+		criteriaOps[i] = sliceUpdate{Index: u.Index, Operation: u.Operation, Content: u.Content}
+	}
+	var err error
+	reqs.AcceptanceCriteria, err = applySliceUpdates(reqs.AcceptanceCriteria, criteriaOps, "criteria")
+	if err != nil {
+		return reqs, err
 	}
 
-	// Apply learning updates
-	for _, learningUpdate := range update.LearningUpdates {
-		switch learningUpdate.Operation {
-		case "edit":
-			if learningUpdate.Index < 0 || learningUpdate.Index >= len(reqs.Learnings) {
-				return reqs, fmt.Errorf("learning index %d out of range for edit operation", learningUpdate.Index)
-			}
-			if learningUpdate.Content != nil {
-				reqs.Learnings[learningUpdate.Index] = *learningUpdate.Content
-			}
-
-		case "delete":
-			if learningUpdate.Index < 0 || learningUpdate.Index >= len(reqs.Learnings) {
-				return reqs, fmt.Errorf("learning index %d out of range for delete operation", learningUpdate.Index)
-			}
-			reqs.Learnings = append(reqs.Learnings[:learningUpdate.Index], reqs.Learnings[learningUpdate.Index+1:]...)
-
-		case "insert":
-			if learningUpdate.Index < 0 || learningUpdate.Index > len(reqs.Learnings) {
-				return reqs, fmt.Errorf("learning index %d out of range for insert operation", learningUpdate.Index)
-			}
-			content := ""
-			if learningUpdate.Content != nil {
-				content = *learningUpdate.Content
-			}
-			if learningUpdate.Index == len(reqs.Learnings) {
-				reqs.Learnings = append(reqs.Learnings, content)
-			} else {
-				reqs.Learnings = append(reqs.Learnings[:learningUpdate.Index], append([]string{content}, reqs.Learnings[learningUpdate.Index:]...)...)
-			}
-
-		default:
-			return reqs, fmt.Errorf("invalid operation %q for learning update", learningUpdate.Operation)
-		}
+	learningOps := make([]sliceUpdate, len(update.LearningUpdates))
+	for i, u := range update.LearningUpdates {
+		learningOps[i] = sliceUpdate{Index: u.Index, Operation: u.Operation, Content: u.Content}
+	}
+	reqs.Learnings, err = applySliceUpdates(reqs.Learnings, learningOps, "learning")
+	if err != nil {
+		return reqs, err
 	}
 
-	// Apply overview update
 	if update.Overview != nil {
 		reqs.Overview = *update.Overview
 	}
 
-	// Apply finalized flag update
 	if update.RequirementsFinalized != nil {
 		reqs.Complete = *update.RequirementsFinalized
 	}
 
 	return reqs, nil
+}
+
+type sliceUpdate struct {
+	Index     int
+	Operation string
+	Content   *string
+}
+
+// applySliceUpdates applies a batch of updates to a string slice, treating all
+// indices as positions in the original slice. Operations are reordered so that
+// edits apply first, then deletes (highest-index-first to preserve positions),
+// then inserts (lowest-index-first, adjusted for prior deletes).
+func applySliceUpdates(items []string, updates []sliceUpdate, label string) ([]string, error) {
+	var edits, deletes, inserts []sliceUpdate
+	for _, u := range updates {
+		switch u.Operation {
+		case "edit":
+			edits = append(edits, u)
+		case "delete":
+			deletes = append(deletes, u)
+		case "insert":
+			inserts = append(inserts, u)
+		default:
+			return items, fmt.Errorf("invalid operation %q for %s update", u.Operation, label)
+		}
+	}
+
+	origLen := len(items)
+
+	// Edits first: indices refer to the original slice
+	for _, u := range edits {
+		if u.Index < 0 || u.Index >= origLen {
+			return items, fmt.Errorf("%s index %d out of range for edit operation", label, u.Index)
+		}
+		if u.Content != nil {
+			items[u.Index] = *u.Content
+		}
+	}
+
+	// Validate all delete indices against the original length
+	for _, u := range deletes {
+		if u.Index < 0 || u.Index >= origLen {
+			return items, fmt.Errorf("%s index %d out of range for delete operation", label, u.Index)
+		}
+	}
+	// Sort deletes descending so removals don't shift earlier indices
+	sort.Slice(deletes, func(i, j int) bool {
+		return deletes[i].Index > deletes[j].Index
+	})
+	for _, u := range deletes {
+		items = append(items[:u.Index], items[u.Index+1:]...)
+	}
+
+	// Validate all insert indices against the original length
+	for _, u := range inserts {
+		if u.Index < 0 || u.Index > origLen {
+			return items, fmt.Errorf("%s index %d out of range for insert operation", label, u.Index)
+		}
+	}
+	// Sort inserts ascending by original index
+	sort.Slice(inserts, func(i, j int) bool {
+		return inserts[i].Index < inserts[j].Index
+	})
+	// Adjust insert indices: each insert's effective position shifts by the
+	// number of deletes that occurred before it and the number of inserts
+	// already applied before it.
+	for i, u := range inserts {
+		content := ""
+		if u.Content != nil {
+			content = *u.Content
+		}
+		deletedBefore := 0
+		for _, d := range deletes {
+			if d.Index < u.Index {
+				deletedBefore++
+			}
+		}
+		adjustedIndex := u.Index - deletedBefore + i
+		if adjustedIndex == len(items) {
+			items = append(items, content)
+		} else {
+			items = append(items[:adjustedIndex], append([]string{content}, items[adjustedIndex:]...)...)
+		}
+	}
+
+	return items, nil
 }
 
 /* Represents low-level requirements for a software engineer to implement a feature or fix a bug etc */

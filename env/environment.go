@@ -8,11 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"sidekick/coding/unix"
 	"sidekick/common"
 	"sidekick/domain"
 
+	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 )
 
@@ -242,10 +244,33 @@ type EnvRunCommandActivityOutput = EnvRunCommandOutput
 
 // EnvRunCommandActivity runs a command in the environment contained in the provided EnvContainer.
 func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
-	return input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
-		RelativeWorkingDir: input.RelativeWorkingDir,
-		Command:            input.Command,
-		Args:               input.Args,
-		EnvVars:            input.EnvVars,
-	})
+	type result struct {
+		output EnvRunCommandActivityOutput
+		err    error
+	}
+	resultCh := make(chan result, 1)
+
+	go func() {
+		out, err := input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
+			RelativeWorkingDir: input.RelativeWorkingDir,
+			Command:            input.Command,
+			Args:               input.Args,
+			EnvVars:            input.EnvVars,
+		})
+		resultCh <- result{output: out, err: err}
+	}()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case res := <-resultCh:
+			return res.output, res.err
+		case <-ticker.C:
+			activity.RecordHeartbeat(ctx, nil)
+		case <-ctx.Done():
+			return EnvRunCommandActivityOutput{}, ctx.Err()
+		}
+	}
 }

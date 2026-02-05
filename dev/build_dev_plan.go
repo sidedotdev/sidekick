@@ -9,6 +9,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/llm2"
+	"strconv"
 	"strings"
 
 	"github.com/invopop/jsonschema"
@@ -57,6 +58,18 @@ var updateDevPlanTool = llm.Tool{
 	Name:        "update_dev_plan",
 	Description: "Incrementally updates an existing dev plan. Use this instead of record_dev_plan when making small changes to avoid re-outputting the entire plan.",
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&DevPlanUpdate{}),
+}
+
+// incrementStepNumber increments a step number string.
+// For simple numbers like "1", returns "2".
+// For hierarchical numbers like "2.1", increments the last component to "2.2".
+func incrementStepNumber(stepNumber string) string {
+	parts := strings.Split(stepNumber, ".")
+	lastIdx := len(parts) - 1
+	if num, err := strconv.Atoi(parts[lastIdx]); err == nil {
+		parts[lastIdx] = strconv.Itoa(num + 1)
+	}
+	return strings.Join(parts, ".")
 }
 
 func applyDevPlanUpdates(plan DevPlan, update DevPlanUpdate) (DevPlan, error) {
@@ -114,6 +127,11 @@ func applyDevPlanUpdates(plan DevPlan, update DevPlanUpdate) (DevPlan, error) {
 			if stepIndex == -1 {
 				plan.Steps = append(plan.Steps, newStep)
 			} else {
+				// Increment step numbers for all steps from stepIndex onwards
+				for i := stepIndex; i < len(plan.Steps); i++ {
+					plan.Steps[i].StepNumber = incrementStepNumber(plan.Steps[i].StepNumber)
+				}
+				// Insert the new step at the found position
 				plan.Steps = append(plan.Steps[:stepIndex], append([]DevStep{newStep}, plan.Steps[stepIndex:]...)...)
 			}
 

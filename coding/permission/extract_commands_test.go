@@ -301,6 +301,11 @@ func TestExtractCommands(t *testing.T) {
 			expected: []string{`ssh -p 22 -i ~/.ssh/key host "cmd"`, "cmd"},
 		},
 		{
+			name:     "ssh with nested sudo command",
+			script:   `ssh host 'sudo dangerous_cmd'`,
+			expected: []string{`ssh host 'sudo dangerous_cmd'`, "sudo dangerous_cmd", "dangerous_cmd"},
+		},
+		{
 			name:     "find with -exec",
 			script:   `find . -exec cmd {} \;`,
 			expected: []string{`find . -exec cmd {} \;`, "cmd {}"},
@@ -523,6 +528,19 @@ func TestExtractCommands(t *testing.T) {
 			name:     "nested sudo env",
 			script:   "sudo env VAR=1 cmd",
 			expected: []string{"sudo env VAR=1 cmd", "env VAR=1 cmd", "cmd"},
+		},
+		// Chained commands with go run - redirection on compound list is stripped
+		// since we extract individual commands for permission checking
+		{
+			name:     "echo and go run chained",
+			script:   `echo "=== Original workflow ===" && go run ./worker/replay -id flow_123 2>&1; echo "Exit code: $?"`,
+			expected: []string{`echo "=== Original workflow ==="`, `go run ./worker/replay -id flow_123`, `echo "Exit code: $?"`},
+		},
+		// Chained commands with redirection on compound list
+		{
+			name:     "simple chained with redirect",
+			script:   `echo hello && ls 2>&1`,
+			expected: []string{`echo hello`, `ls`},
 		},
 	}
 

@@ -678,3 +678,440 @@ def main()
 		})
 	}
 }
+
+func TestShrinkEmbeddedCodeContext_Markdown(t *testing.T) {
+	t.Parallel()
+
+	longMarkdownContent := `# Introduction
+
+This is a long introduction section with lots of content that makes the document exceed the max length threshold.
+
+## Getting Started
+
+Here is some getting started content that is also quite long and verbose to help exceed the threshold.
+
+### Installation
+
+Installation instructions go here with many details about how to install the software properly.
+
+## Usage
+
+Usage documentation with examples and explanations that add to the overall length of the document.
+`
+
+	input := createMarkdownCodeBlock("markdown", longMarkdownContent)
+	maxLength := 200
+
+	gotContent, gotDidShrink := ShrinkEmbeddedCodeContext(input, true, maxLength)
+
+	if !gotDidShrink {
+		t.Error("Expected didShrink to be true")
+	}
+
+	// Should contain markdown-signatures fence
+	if !strings.Contains(gotContent, "```markdown-signatures") {
+		t.Errorf("Expected markdown-signatures fence, got:\n%s", gotContent)
+	}
+
+	// Should contain heading signatures
+	expectedHeadings := []string{
+		"# Introduction",
+		"## Getting Started",
+		"### Installation",
+		"## Usage",
+	}
+	for _, heading := range expectedHeadings {
+		if !strings.Contains(gotContent, heading) {
+			t.Errorf("Expected heading %q in output, got:\n%s", heading, gotContent)
+		}
+	}
+
+	// Should NOT contain the long prose content
+	if strings.Contains(gotContent, "This is a long introduction") {
+		t.Errorf("Expected prose content to be removed, got:\n%s", gotContent)
+	}
+}
+
+func TestRemoveCommentsMarkdown(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name              string
+		sourceCode        SourceCode
+		expectedDidRemove bool
+		expectedContent   string
+	}{
+		{
+			name: "single HTML comment",
+			sourceCode: SourceCode{
+				LanguageName:         "markdown",
+				OriginalLanguageName: "markdown",
+				Content: `# Heading
+
+<!-- This is a comment -->
+
+Some content.
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `# Heading
+
+Some content.
+`,
+		},
+		{
+			name: "multi-line HTML comment",
+			sourceCode: SourceCode{
+				LanguageName:         "markdown",
+				OriginalLanguageName: "markdown",
+				Content: `# Heading
+
+<!--
+This is a
+multi-line comment
+-->
+
+Some content.
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `# Heading
+
+Some content.
+`,
+		},
+		{
+			name: "multiple HTML comments",
+			sourceCode: SourceCode{
+				LanguageName:         "markdown",
+				OriginalLanguageName: "markdown",
+				Content: `# Heading
+
+<!-- Comment 1 -->
+
+Some content.
+
+<!-- Comment 2 -->
+
+More content.
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `# Heading
+
+Some content.
+
+More content.
+`,
+		},
+		{
+			name: "no comments",
+			sourceCode: SourceCode{
+				LanguageName:         "markdown",
+				OriginalLanguageName: "markdown",
+				Content: `# Heading
+
+Some content.
+`,
+			},
+			expectedDidRemove: false,
+			expectedContent: `# Heading
+
+Some content.
+`,
+		},
+		{
+			name: "empty content",
+			sourceCode: SourceCode{
+				LanguageName:         "markdown",
+				OriginalLanguageName: "markdown",
+				Content:              ``,
+			},
+			expectedDidRemove: false,
+			expectedContent:   ``,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			didRemove, result := removeComments(tc.sourceCode)
+			if didRemove != tc.expectedDidRemove {
+				t.Errorf("Expected didRemove: %t Got: %t", tc.expectedDidRemove, didRemove)
+			}
+			if normalizeWhitespace(result.Content) != normalizeWhitespace(tc.expectedContent) {
+				t.Errorf("Expected: \n%s\nGot:\n%s", normalizeWhitespace(tc.expectedContent), normalizeWhitespace(result.Content))
+				t.Errorf("\nExpected: %s\nGot_____: %s", utils.PanicJSON(normalizeWhitespace(tc.expectedContent)), utils.PanicJSON(normalizeWhitespace(result.Content)))
+			}
+		})
+	}
+}
+
+func TestRemoveCommentsMarkdownSignatures(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name              string
+		sourceCode        SourceCode
+		expectedDidRemove bool
+		expectedContent   string
+	}{
+		{
+			name: "HTML comment in signatures",
+			sourceCode: SourceCode{
+				LanguageName:         "markdown",
+				OriginalLanguageName: "markdown-signatures",
+				Content: `# Heading
+
+<!-- Comment -->
+
+## Another Heading
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `# Heading
+
+## Another Heading
+`,
+		},
+		{
+			name: "no comments in signatures",
+			sourceCode: SourceCode{
+				LanguageName:         "markdown",
+				OriginalLanguageName: "markdown-signatures",
+				Content: `# Heading
+
+## Another Heading
+`,
+			},
+			expectedDidRemove: false,
+			expectedContent: `# Heading
+
+## Another Heading
+`,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			didRemove, result := removeComments(tc.sourceCode)
+			if didRemove != tc.expectedDidRemove {
+				t.Errorf("Expected didRemove: %t Got: %t", tc.expectedDidRemove, didRemove)
+			}
+			if normalizeWhitespace(result.Content) != normalizeWhitespace(tc.expectedContent) {
+				t.Errorf("Expected: \n%s\nGot:\n%s", normalizeWhitespace(tc.expectedContent), normalizeWhitespace(result.Content))
+				t.Errorf("\nExpected: %s\nGot_____: %s", utils.PanicJSON(normalizeWhitespace(tc.expectedContent)), utils.PanicJSON(normalizeWhitespace(result.Content)))
+			}
+		})
+	}
+}
+
+func TestRemoveCommentsJavascript(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name              string
+		sourceCode        SourceCode
+		expectedDidRemove bool
+		expectedContent   string
+	}{
+		{
+			name: "single line comment",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "javascript",
+				Content: `// This is a comment
+function main() {
+	console.log("Hello, World!");
+}
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `function main() {
+	console.log("Hello, World!");
+}
+`,
+		},
+		{
+			name: "multi-line comment",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "javascript",
+				Content: `/* This is a
+multi-line comment */
+function main() {
+	console.log("Hello, World!");
+}
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `function main() {
+	console.log("Hello, World!");
+}
+`,
+		},
+		{
+			name: "mixed comments",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "javascript",
+				Content: `// Single line comment
+/* Multi-line
+comment */
+function main() {
+	console.log("Hello, World!");
+}
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `function main() {
+	console.log("Hello, World!");
+}
+`,
+		},
+		{
+			name: "JSDoc comment",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "javascript",
+				Content: `/**
+ * This is a JSDoc comment
+ * @param {string} name - The name
+ */
+function greet(name) {
+	console.log("Hello, " + name);
+}
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `function greet(name) {
+	console.log("Hello, " + name);
+}
+`,
+		},
+		{
+			name: "empty source code",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "javascript",
+				Content:              ``,
+			},
+			expectedDidRemove: false,
+			expectedContent:   ``,
+		},
+		{
+			name: "non-empty source code without comments",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "javascript",
+				Content: `function main() {
+	console.log("Hello, World!");
+}
+`,
+			},
+			expectedDidRemove: false,
+			expectedContent: `function main() {
+	console.log("Hello, World!");
+}
+`,
+		},
+		{
+			name: "jsx with comments",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "jsx",
+				Content: `// Component comment
+function MyComponent() {
+	return <div>Hello</div>;
+}
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `function MyComponent() {
+	return <div>Hello</div>;
+}
+`,
+		},
+		{
+			name: "js alias with comments",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "js",
+				Content: `// A comment
+const x = 1;
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `const x = 1;
+`,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			didRemove, result := removeComments(tc.sourceCode)
+			if didRemove != tc.expectedDidRemove {
+				t.Errorf("Expected didRemove: %t Got: %t", tc.expectedDidRemove, didRemove)
+			}
+			if normalizeWhitespace(result.Content) != normalizeWhitespace(tc.expectedContent) {
+				t.Errorf("Expected: \n%s\nGot:\n%s", normalizeWhitespace(tc.expectedContent), normalizeWhitespace(result.Content))
+				t.Errorf("\nExpected: %s\nGot_____: %s", utils.PanicJSON(normalizeWhitespace(tc.expectedContent)), utils.PanicJSON(normalizeWhitespace(result.Content)))
+			}
+		})
+	}
+}
+
+func TestRemoveCommentsJavascriptSignatures(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name              string
+		sourceCode        SourceCode
+		expectedDidRemove bool
+		expectedContent   string
+	}{
+		{
+			name: "comment in signatures",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "javascript-signatures",
+				Content: `// Comment
+function main()
+`,
+			},
+			expectedDidRemove: true,
+			expectedContent: `function main()
+`,
+		},
+		{
+			name: "no comments in signatures",
+			sourceCode: SourceCode{
+				LanguageName:         "javascript",
+				OriginalLanguageName: "javascript-signatures",
+				Content: `function main()
+class MyClass
+`,
+			},
+			expectedDidRemove: false,
+			expectedContent: `function main()
+class MyClass
+`,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			didRemove, result := removeComments(tc.sourceCode)
+			if didRemove != tc.expectedDidRemove {
+				t.Errorf("Expected didRemove: %t Got: %t", tc.expectedDidRemove, didRemove)
+			}
+			if normalizeWhitespace(result.Content) != normalizeWhitespace(tc.expectedContent) {
+				t.Errorf("Expected: \n%s\nGot:\n%s", normalizeWhitespace(tc.expectedContent), normalizeWhitespace(result.Content))
+				t.Errorf("\nExpected: %s\nGot_____: %s", utils.PanicJSON(normalizeWhitespace(tc.expectedContent)), utils.PanicJSON(normalizeWhitespace(result.Content)))
+			}
+		})
+	}
+}

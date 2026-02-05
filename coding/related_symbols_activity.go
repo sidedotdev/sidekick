@@ -10,7 +10,7 @@ import (
 	"sidekick/env"
 	"slices"
 
-	sitter "github.com/smacker/go-tree-sitter"
+	tree_sitter_lib "github.com/tree-sitter/go-tree-sitter"
 )
 
 type RelatedSymbolsActivityInput struct {
@@ -89,26 +89,26 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 
 		symbols := memoMap[filePath].symbols
 		for _, symbol := range symbols {
-			symbolRange := sitter.Range{
+			symbolRange := tree_sitter_lib.Range{
 				StartPoint: symbol.Declaration.StartPoint,
 				EndPoint:   symbol.Declaration.EndPoint,
 			}
-			referenceRange := sitter.Range{
-				StartPoint: sitter.Point{
-					Row:    uint32(reference.Range.Start.Line),
-					Column: uint32(reference.Range.Start.Character),
+			referenceRange := tree_sitter_lib.Range{
+				StartPoint: tree_sitter_lib.Point{
+					Row:    uint(reference.Range.Start.Line),
+					Column: uint(reference.Range.Start.Character),
 				},
-				EndPoint: sitter.Point{
-					Row:    uint32(reference.Range.End.Line),
-					Column: uint32(reference.Range.End.Character),
+				EndPoint: tree_sitter_lib.Point{
+					Row:    uint(reference.Range.End.Line),
+					Column: uint(reference.Range.End.Character),
 				},
 			}
 
 			if RangesOverlap(symbolRange, referenceRange) {
 				var signature tree_sitter.Signature
-				var signatureRange sitter.Range
+				var signatureRange tree_sitter_lib.Range
 				for _, sig := range memoMap[filePath].signatures {
-					sigRange := sitter.Range{
+					sigRange := tree_sitter_lib.Range{
 						StartPoint: sig.StartPoint,
 						EndPoint:   sig.EndPoint,
 					}
@@ -146,7 +146,7 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 	return relatedSymbols, nil
 }
 
-func RangesOverlap(r1, r2 sitter.Range) bool {
+func RangesOverlap(r1, r2 tree_sitter_lib.Range) bool {
 	return (r1.StartPoint.Row < r2.EndPoint.Row || (r1.StartPoint.Row == r2.EndPoint.Row && r1.StartPoint.Column <= r2.EndPoint.Column)) &&
 		(r2.StartPoint.Row < r1.EndPoint.Row || (r2.StartPoint.Row == r1.EndPoint.Row && r2.StartPoint.Column <= r1.EndPoint.Column))
 }

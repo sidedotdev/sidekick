@@ -1,19 +1,18 @@
 package tree_sitter
 
 import (
-	"context"
 	"fmt"
 	"os"
 
-	sitter "github.com/smacker/go-tree-sitter"
+	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
-func GetTree(filePath string) (*sitter.Tree, error) {
+func GetTree(filePath string) (*tree_sitter.Tree, error) {
 	tree, _, err := GetTreeWithSource(filePath)
 	return tree, err
 }
 
-func GetTreeWithSource(filePath string) (*sitter.Tree, []byte, error) {
+func GetTreeWithSource(filePath string) (*tree_sitter.Tree, []byte, error) {
 	languageName, sitterLanguage, err := inferLanguageFromFilePath(filePath)
 	if err != nil {
 		return nil, nil, err
@@ -22,9 +21,10 @@ func GetTreeWithSource(filePath string) (*sitter.Tree, []byte, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read source code: %v", err)
 	}
-	parser := sitter.NewParser()
+	parser := tree_sitter.NewParser()
+	defer parser.Close()
 	parser.SetLanguage(sitterLanguage)
 	transformedSource := sourceTransform(languageName, &sourceCode)
-	tree, err := parser.ParseCtx(context.Background(), nil, transformedSource)
-	return tree, transformedSource, err
+	tree := parser.Parse(transformedSource, nil)
+	return tree, transformedSource, nil
 }

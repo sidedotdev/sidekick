@@ -1,14 +1,13 @@
 package tree_sitter
 
 import (
-	"context"
 	"strings"
 
-	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/typescript/typescript"
+	tree_sitter "github.com/tree-sitter/go-tree-sitter"
+	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
 
-func writeVueSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
+func writeVueSignatureCapture(out *strings.Builder, sourceCode *[]byte, c tree_sitter.QueryCapture, name string) {
 	switch name {
 	case "template":
 		out.WriteString("<template>")
@@ -19,7 +18,7 @@ func writeVueSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitter
 	}
 }
 
-func getVueEmbeddedLanguageSymbols(vueTree *sitter.Tree, sourceCode *[]byte) ([]Symbol, error) {
+func getVueEmbeddedLanguageSymbols(vueTree *tree_sitter.Tree, sourceCode *[]byte) ([]Symbol, error) {
 	// Call GetVueEmbeddedTypescriptTree to get the embedded typescript
 	tsTree, err := GetVueEmbeddedTypescriptTree(vueTree, sourceCode)
 	if err != nil {
@@ -28,15 +27,17 @@ func getVueEmbeddedLanguageSymbols(vueTree *sitter.Tree, sourceCode *[]byte) ([]
 	if tsTree == nil {
 		return []Symbol{}, nil
 	}
+	defer tsTree.Close()
 	// Get symbols from tsTree and return them
-	symbols, err := getSourceSymbolsInternal("typescript", typescript.GetLanguage(), tsTree, sourceCode)
+	tsLang := tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript())
+	symbols, err := getSourceSymbolsInternal("typescript", tsLang, tsTree, sourceCode)
 	if err != nil {
 		return nil, err
 	}
 	return symbols, nil
 }
 
-func writeVueSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
+func writeVueSymbolCapture(out *strings.Builder, sourceCode *[]byte, c tree_sitter.QueryCapture, name string) {
 	switch name {
 	case "template":
 		out.WriteString("<template>")
@@ -47,7 +48,7 @@ func writeVueSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.Qu
 	}
 }
 
-func getVueEmbeddedLanguageSignatures(vueTree *sitter.Tree, sourceCode *[]byte) ([]Signature, error) {
+func getVueEmbeddedLanguageSignatures(vueTree *tree_sitter.Tree, sourceCode *[]byte) ([]Signature, error) {
 	// Call GetVueEmbeddedTypescriptTree to get the embedded typescript
 	tsTree, err := GetVueEmbeddedTypescriptTree(vueTree, sourceCode)
 	if err != nil {
@@ -56,8 +57,10 @@ func getVueEmbeddedLanguageSignatures(vueTree *sitter.Tree, sourceCode *[]byte) 
 	if tsTree == nil {
 		return []Signature{}, nil
 	}
+	defer tsTree.Close()
 
-	signatureSlice, err := getFileSignaturesInternal("typescript", typescript.GetLanguage(), tsTree, sourceCode, true)
+	tsLang := tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript())
+	signatureSlice, err := getFileSignaturesInternal("typescript", tsLang, tsTree, sourceCode, true)
 	if err != nil {
 		return nil, err
 	}
@@ -65,30 +68,24 @@ func getVueEmbeddedLanguageSignatures(vueTree *sitter.Tree, sourceCode *[]byte) 
 	return signatureSlice, nil
 }
 
-func GetVueEmbeddedTypescriptTree(vueTree *sitter.Tree, sourceCode *[]byte) (*sitter.Tree, error) {
-	//vueRanges := []sitter.Range{}
-	tsRanges := []sitter.Range{}
+func GetVueEmbeddedTypescriptTree(vueTree *tree_sitter.Tree, sourceCode *[]byte) (*tree_sitter.Tree, error) {
+	tsRanges := []tree_sitter.Range{}
 
 	rootNode := vueTree.RootNode()
 	childCount := rootNode.ChildCount()
 
-	for i := 0; i < int(childCount); i++ {
+	for i := uint(0); i < childCount; i++ {
 		node := rootNode.Child(i)
-		switch node.Type() {
+		switch node.Kind() {
 		case "template_element", "style_element":
-			// vueRanges = append(vueRanges, sitter.Range{
-			// 	StartPoint: node.StartPoint(),
-			// 	EndPoint:   node.EndPoint(),
-			// 	StartByte:  node.StartByte(),
-			// 	EndByte:    node.EndByte(),
-			// })
+			// skip
 		case "script_element":
 			codeNode := node.NamedChild(1)
-			tsRanges = append(tsRanges, sitter.Range{
-				StartPoint: codeNode.StartPoint(),
-				EndPoint:   codeNode.EndPoint(),
-				StartByte:  codeNode.StartByte(),
-				EndByte:    codeNode.EndByte(),
+			tsRanges = append(tsRanges, tree_sitter.Range{
+				StartPoint: codeNode.StartPosition(),
+				EndPoint:   codeNode.EndPosition(),
+				StartByte:  uint(codeNode.StartByte()),
+				EndByte:    uint(codeNode.EndByte()),
 			})
 		}
 	}
@@ -97,9 +94,11 @@ func GetVueEmbeddedTypescriptTree(vueTree *sitter.Tree, sourceCode *[]byte) (*si
 		return nil, nil
 	}
 
-	parser := sitter.NewParser()
+	parser := tree_sitter.NewParser()
+	defer parser.Close()
 	// TODO make sure the lang attribute is ts before committing to typescript
-	parser.SetLanguage(typescript.GetLanguage())
+	tsLang := tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript())
+	parser.SetLanguage(tsLang)
 	parser.SetIncludedRanges(tsRanges)
-	return parser.ParseCtx(context.Background(), nil, *sourceCode)
+	return parser.Parse(*sourceCode, nil), nil
 }

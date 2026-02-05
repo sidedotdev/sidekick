@@ -42,6 +42,8 @@ func BaseCommandPermissionsActivity(ctx context.Context) (CommandPermissionConfi
 func BaseCommandPermissions() CommandPermissionConfig {
 	return CommandPermissionConfig{
 		AutoApprove: []CommandPattern{
+			// Shell comments (no-op)
+			{Pattern: "#"},
 			// Basic read-only commands
 			{Pattern: "ls"},
 			{Pattern: "cat"},
@@ -50,6 +52,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "cd"},
 			{Pattern: "head"},
 			{Pattern: "tail"},
+			{Pattern: "tee"},
 			{Pattern: "wc"},
 			{Pattern: "grep"},
 			{Pattern: "find"},
@@ -116,6 +119,8 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "npm run build"},
 			{Pattern: "npm run check"},
 			{Pattern: "npm run format"},
+			{Pattern: "npm run tsc"},
+			{Pattern: "npm run tsc"},
 			{Pattern: "npm list"},
 			{Pattern: "npm outdated"},
 			{Pattern: "npm version"},
@@ -155,6 +160,10 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "bun why"},
 			{Pattern: "bun pm view"},
 			{Pattern: "bun pm version"},
+			{Pattern: "bun tsc"},
+			{Pattern: "bun run tsc"},
+			{Pattern: "bunx tsc"},
+			{Pattern: "npx tsc"},
 			// Python commands
 			{Pattern: "pytest"},
 			{Pattern: "python -m pytest"},
@@ -163,12 +172,44 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "pip show"},
 			{Pattern: "pip check"},
 			{Pattern: "pip freeze"},
+			{Pattern: "python -m pip list"},
+			{Pattern: "python -m pip show"},
+			{Pattern: "python -m pip check"},
+			{Pattern: "python -m pip freeze"},
+			{Pattern: "python3 -m pip list"},
+			{Pattern: "python3 -m pip show"},
+			{Pattern: "python3 -m pip check"},
+			{Pattern: "python3 -m pip freeze"},
 			{Pattern: "pylint"},
 			{Pattern: "flake8"},
 			{Pattern: "mypy"},
 			{Pattern: "black --check"},
 			{Pattern: "isort --check"},
 			{Pattern: "ruff check"},
+			{Pattern: "ruff format"},
+			// uv commands
+			{Pattern: "uv run pytest"},
+			{Pattern: "uv run python -m pytest"},
+			{Pattern: "uv run python3 -m pytest"},
+			{Pattern: "uv run pylint"},
+			{Pattern: "uv run flake8"},
+			{Pattern: "uv run mypy"},
+			{Pattern: "uv run black --check"},
+			{Pattern: "uv run isort --check"},
+			{Pattern: "uv run ruff check"},
+			{Pattern: "uv run ruff format"},
+			{Pattern: "uv pip list"},
+			{Pattern: "uv pip show"},
+			{Pattern: "uv pip check"},
+			{Pattern: "uv pip freeze"},
+			{Pattern: "uv run python -m pip list"},
+			{Pattern: "uv run python -m pip show"},
+			{Pattern: "uv run python -m pip check"},
+			{Pattern: "uv run python -m pip freeze"},
+			{Pattern: "uv run python3 -m pip list"},
+			{Pattern: "uv run python3 -m pip show"},
+			{Pattern: "uv run python3 -m pip check"},
+			{Pattern: "uv run python3 -m pip freeze"},
 			// Make commands
 			{Pattern: "make test"},
 			{Pattern: "make check"},
@@ -227,8 +268,9 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: `awk.*print.*\|`},
 			{Pattern: `awk.*printf.*\|`},
 			// Home directory access (potential secret exfiltration)
-			{Pattern: `.*~`},
-			{Pattern: `.*~[a-zA-Z]`},
+			// Match ~ when NOT preceded by alphanumeric (excludes git refs like HEAD~1)
+			{Pattern: `.*(^|[^a-zA-Z0-9])~($|/| )`},
+			{Pattern: `.*(^|[^a-zA-Z0-9])~[a-zA-Z]`},
 			{Pattern: `.*\$HOME`},
 			{Pattern: `.*\$\{HOME\}`},
 			// Parent directory traversal (escaping repo context)
@@ -256,13 +298,13 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: `^sed\b.*'[0-9$]*e[[:space:]]`, Message: "GNU sed `e` command executes shell commands for addressed lines, enabling exfiltration or side effects."},
 		},
 		Deny: []CommandPattern{
-			// Destructive file operations
-			{Pattern: "rm -rf /", Message: "Recursive force delete of root directory is extremely dangerous"},
-			{Pattern: "rm -rf ~", Message: "Recursive force delete of home directory is extremely dangerous"},
-			{Pattern: "rm -rf /*", Message: "Recursive force delete of root contents is extremely dangerous"},
-			{Pattern: "rm -rf ~/*", Message: "Recursive force delete of home contents is extremely dangerous"},
-			{Pattern: "rm -fr /", Message: "Recursive force delete of root directory is extremely dangerous"},
-			{Pattern: "rm -fr ~", Message: "Recursive force delete of home directory is extremely dangerous"},
+			// Destructive file operations - patterns use regex to avoid false positives on paths like /Users/...
+			{Pattern: `^rm -rf /(\s|;|&|\||$)`, Message: "Recursive force delete of root directory is extremely dangerous"},
+			{Pattern: `^rm -rf ~(\s|;|&|\||$)`, Message: "Recursive force delete of home directory is extremely dangerous"},
+			{Pattern: `^rm -rf /\*`, Message: "Recursive force delete of root contents is extremely dangerous"},
+			{Pattern: `^rm -rf ~/\*`, Message: "Recursive force delete of home contents is extremely dangerous"},
+			{Pattern: `^rm -fr /(\s|;|&|\||$)`, Message: "Recursive force delete of root directory is extremely dangerous"},
+			{Pattern: `^rm -fr ~(\s|;|&|\||$)`, Message: "Recursive force delete of home directory is extremely dangerous"},
 			// Privilege escalation
 			{Pattern: "sudo", Message: "sudo commands require manual execution for security"},
 			{Pattern: "su ", Message: "su commands require manual execution for security"},
@@ -795,6 +837,10 @@ type EvaluatePermissionOptions struct {
 	// StripEnvVarPrefix controls whether leading env var assignments are stripped
 	// from commands before matching against patterns that don't reference env vars.
 	StripEnvVarPrefix bool
+	// UseLegacyCommandExtraction uses the legacy command extraction behavior that
+	// does not recurse into list/pipeline bodies within redirected statements.
+	// This preserves determinism for in-workflow permission evaluation.
+	UseLegacyCommandExtraction bool
 }
 
 // EvaluateCommandPermission evaluates a single command against the permission config.
@@ -881,7 +927,12 @@ func EvaluateScriptPermission(config CommandPermissionConfig, script string) (Pe
 
 // EvaluateScriptPermissionWithOptions evaluates a shell script with configurable options.
 func EvaluateScriptPermissionWithOptions(config CommandPermissionConfig, script string, opts EvaluatePermissionOptions) (PermissionResult, string) {
-	commands := permission.ExtractCommands(script)
+	var commands []string
+	if opts.UseLegacyCommandExtraction {
+		commands = permission.ExtractCommandsLegacy(script)
+	} else {
+		commands = permission.ExtractCommands(script)
+	}
 
 	// If no commands extracted, default to require approval
 	if len(commands) == 0 {

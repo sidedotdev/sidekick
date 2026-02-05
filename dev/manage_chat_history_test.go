@@ -765,7 +765,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesNewActiv
 	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil).Once()
 
 	// Expect the new activity to be called
-	s.env.OnActivity(ManageChatHistoryV2Activity, []llm.ChatMessage{{Content: "test"}}, maxLength).Return(newChatHistory, nil).Once()
+	s.env.OnActivity(ManageChatHistoryV2Activity, mock.Anything, []llm.ChatMessage{{Content: "test"}}, maxLength).Return(newChatHistory, nil).Once()
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, maxLength)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
@@ -1186,7 +1186,7 @@ func TestManageChatHistoryV2_InitialInstructions(t *testing.T) {
 		{Content: "Another II", ContextType: ContextTypeInitialInstructions},
 	}
 
-	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, clearCacheControl(result))
 
@@ -1199,7 +1199,7 @@ func TestManageChatHistoryV2_InitialInstructions(t *testing.T) {
 		{Content: "Is II", ContextType: ContextTypeInitialInstructions},
 		{Content: "Not II again"},
 	}
-	result2, err := ManageChatHistoryV2Activity(chatHistory2, 0)
+	result2, err := ManageChatHistoryV2Activity(context.Background(), chatHistory2, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected2, clearCacheControl(result2))
 }
@@ -1226,7 +1226,7 @@ func TestManageChatHistoryV2_UserFeedback(t *testing.T) {
 		{Content: "Unmarked2"},
 	}
 
-	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, clearCacheControl(result))
 
@@ -1238,7 +1238,7 @@ func TestManageChatHistoryV2_UserFeedback(t *testing.T) {
 		{Content: "UF1", ContextType: ContextTypeUserFeedback},
 		{Content: "UF2", ContextType: ContextTypeUserFeedback},
 	}
-	result2, err := ManageChatHistoryV2Activity(chatHistory2, 0)
+	result2, err := ManageChatHistoryV2Activity(context.Background(), chatHistory2, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected2, clearCacheControl(result2))
 }
@@ -1337,7 +1337,7 @@ func TestManageChatHistoryV2_SupersededTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := ManageChatHistoryV2Activity(tt.chatHistory, 0)
+			result, err := ManageChatHistoryV2Activity(context.Background(), tt.chatHistory, 0)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, clearCacheControl(result))
 		})
@@ -1371,7 +1371,7 @@ func TestManageChatHistoryV2_MixedTypes_Complex(t *testing.T) {
 		{Content: "II2", ContextType: ContextTypeInitialInstructions},
 	}
 
-	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, clearCacheControl(result))
 }
@@ -1380,7 +1380,7 @@ func TestManageChatHistoryV2_EmptyHistory(t *testing.T) {
 	var chatHistory []llm.ChatMessage
 	expected := []llm.ChatMessage{}
 
-	result, err := ManageChatHistoryV2Activity(chatHistory, 10000)
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 10000)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -1464,7 +1464,7 @@ func TestManageChatHistoryV2_LastMessageRetention(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := ManageChatHistoryV2Activity(tt.chatHistory, tt.maxLength)
+			result, err := ManageChatHistoryV2Activity(context.Background(), tt.chatHistory, tt.maxLength)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, clearCacheControl(result))
 		})
@@ -1480,7 +1480,7 @@ func TestManageChatHistoryV2_NoMarkers_OverLimit(t *testing.T) {
 		{Content: "Msg2"},
 	}
 
-	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, clearCacheControl(result))
 }
@@ -1495,7 +1495,7 @@ func TestManageChatHistoryV2_NoMarkers_UnderLimit(t *testing.T) {
 		{Content: "Msg2"},
 	}
 
-	result, err := ManageChatHistoryV2Activity(chatHistory, 1000)
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 1000)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, clearCacheControl(result))
 }
@@ -1519,7 +1519,7 @@ func TestManageChatHistoryV2_BlockEndingConditions(t *testing.T) {
 		{Content: "Unmarked after UF2"},
 		{Content: "II1", ContextType: ContextTypeInitialInstructions},
 	}
-	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, clearCacheControl(result))
 }
@@ -1543,7 +1543,7 @@ func TestManageChatHistoryV2_WithToolCallsCleanup(t *testing.T) {
 		{Role: llm.ChatMessageRoleTool, ToolCallId: "call2", Name: "bar", Content: "bar_response"},
 	}
 
-	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, clearCacheControl(result))
 }
@@ -1563,7 +1563,7 @@ func TestManageChatHistoryV2_EditBlockReport_NoSequenceNumbersInReport(t *testin
 		{Role: llm.ChatMessageRoleUser, Content: "Follow up to report"},
 	}
 
-	updatedHistory, err := ManageChatHistoryV2Activity(chatHistory, 0)
+	updatedHistory, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedChatHistory, clearCacheControl(updatedHistory))
 }
@@ -1587,7 +1587,7 @@ func TestManageChatHistoryV2_EditBlockReport_TrimmingBeforeProtectedEBR(t *testi
 	expectedChatHistory := []llm.ChatMessage{chatHistory[0]} // initial always kept
 	// skip second message, which is unprotected, but rest is protected due to EBR context
 	expectedChatHistory = append(expectedChatHistory, chatHistory[2:]...)
-	updatedHistory, err := ManageChatHistoryV2Activity(chatHistory, 0)
+	updatedHistory, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedChatHistory, clearCacheControl(updatedHistory), "Chat history does not match expected after trimming")
 }
@@ -1612,7 +1612,7 @@ func TestManageChatHistoryV2_OverlapHandling(t *testing.T) {
 		{Content: "Unmarked after Report"},
 	}
 
-	result, err := ManageChatHistoryV2Activity(chatHistory, 0)
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, clearCacheControl(result))
 }
@@ -1631,7 +1631,7 @@ func TestManageChatHistoryV2_Trimming_Basic(t *testing.T) {
 		{Content: "Initial", ContextType: ContextTypeInitialInstructions},
 		{Content: strings.Repeat("C", 50)},
 	}
-	result, err := ManageChatHistoryV2Activity(chatHistory, 57)
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 57)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, clearCacheControl(result))
 
@@ -1640,7 +1640,7 @@ func TestManageChatHistoryV2_Trimming_Basic(t *testing.T) {
 		{Content: "Initial", ContextType: ContextTypeInitialInstructions},
 		{Content: strings.Repeat("C", 50)},
 	}
-	result2, err := ManageChatHistoryV2Activity(chatHistory, 56)
+	result2, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 56)
 	assert.NoError(t, err)
 	assert.Equal(t, expected2, clearCacheControl(result2))
 }
@@ -1658,7 +1658,7 @@ func TestManageChatHistoryV2_Trimming_InitialInstructionsProtected(t *testing.T)
 		{Content: "Initial", ContextType: ContextTypeInitialInstructions},
 		{Content: strings.Repeat("B", 50)},
 	}
-	result, err := ManageChatHistoryV2Activity(chatHistory, 10) // maxLength is 10
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 10) // maxLength is 10
 	assert.NoError(t, err)
 	assert.Equal(t, expected, clearCacheControl(result))
 }
@@ -1679,7 +1679,7 @@ func TestManageChatHistoryV2_Trimming_SoftLimit(t *testing.T) {
 		{Content: "Initial One", ContextType: ContextTypeInitialInstructions},
 		{Content: "Initial Two", ContextType: ContextTypeInitialInstructions},
 	}
-	result, err := ManageChatHistoryV2Activity(chatHistory, 25)
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 25)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, clearCacheControl(result))
 
@@ -1692,7 +1692,7 @@ func TestManageChatHistoryV2_Trimming_SoftLimit(t *testing.T) {
 		{Content: "Very Long Initial Instructions Part 1", ContextType: ContextTypeInitialInstructions},
 		{Content: "Very Long Initial Instructions Part 2", ContextType: ContextTypeInitialInstructions},
 	}
-	resultOnlyII, err := ManageChatHistoryV2Activity(chatHistoryOnlyII, 50) // maxLength 50, but II total 70
+	resultOnlyII, err := ManageChatHistoryV2Activity(context.Background(), chatHistoryOnlyII, 50) // maxLength 50, but II total 70
 	assert.NoError(t, err)
 	assert.Equal(t, expectedOnlyII, clearCacheControl(resultOnlyII)) // Soft limit: IIs are kept even if > maxLength
 }
@@ -1715,7 +1715,7 @@ func TestManageChatHistoryV2_ToolCallArgumentsInLength(t *testing.T) {
 	// maxLength = 20: Init(4) + Last(4) = 8 retained
 	// Assistant msg with tool call = 101, tool response = 8
 	// With args counted, assistant+tool (109) won't fit in remaining 12
-	result, err := ManageChatHistoryV2Activity(chatHistory, 20)
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 20)
 	assert.NoError(t, err)
 
 	// Should drop the assistant+tool pair since they exceed limit
@@ -1741,7 +1741,7 @@ func TestManageChatHistoryV2_DropAllOlderBehavior(t *testing.T) {
 	// Remaining budget = 2
 	// Going backwards: D(1) fits (total=6), CC(2) would make total=8 > 7
 	// Once CC exceeds limit, B and A should also be dropped
-	result, err := ManageChatHistoryV2Activity(chatHistory, 7)
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 7)
 	assert.NoError(t, err)
 
 	expected := []llm.ChatMessage{
@@ -1766,7 +1766,7 @@ func TestManageChatHistoryV2_TargetBudget90Percent(t *testing.T) {
 	// No room for unretained messages under targetMaxLength=9
 	// Under old maxLength=10 budget, "X" (1 char) would have fit (9+1=10)
 
-	result, err := ManageChatHistoryV2Activity(chatHistory, 10)
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 10)
 	assert.NoError(t, err)
 
 	expected := []llm.ChatMessage{
@@ -1792,7 +1792,7 @@ func TestManageChatHistoryV2_LargeToolResponseTruncation(t *testing.T) {
 
 	// maxLength = 100, threshold = 5 (5% of 100)
 	// Tool response (200) > threshold (5), should be truncated
-	result, err := ManageChatHistoryV2Activity(chatHistory, 100)
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 100)
 	assert.NoError(t, err)
 
 	assert.Len(t, result, 4)
@@ -1828,7 +1828,7 @@ func TestManageChatHistoryV2_TruncateOldestFirst(t *testing.T) {
 	// maxLength = 200, threshold = 10 (5% of 200)
 	// Both tool responses exceed threshold
 	// Oldest (A's) should be truncated first
-	result, err := ManageChatHistoryV2Activity(chatHistory, 200)
+	result, err := ManageChatHistoryV2Activity(context.Background(), chatHistory, 200)
 	assert.NoError(t, err)
 
 	// Find the tool responses

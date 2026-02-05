@@ -108,46 +108,57 @@ func GetCurrentBranch(ctx context.Context, repoDir string) (BranchState, error) 
 	return BranchState{}, fmt.Errorf("failed to determine current branch in %s: git symbolic-ref exit code %d, stderr: %s", repoDir, exitCode, stderr)
 }
 
-// GetDefaultBranch finds the default branch name (main or master) for a repository.
-// It checks for 'main' first, then 'master'. Requires the branch to exist and have commits.
-// Returns the default branch name or an error if neither is found or verifiable.
-// FIXME: adjust to take in an env.EnvContainer instead of repoDir, and use
-// EnvRunCommand instead of runGitCommand. note: error behavior is that a
-// non-zero exit code is an err for runGitCommand, but not for EnvRunCommand.
+// GetDefaultBranch finds the default branch name for a repository.
+// It first tries to determine the default from origin/HEAD (most reliable when remote exists),
+// then falls back to checking for 'main' or 'master' branches.
+// Returns the default branch name or an error if it cannot be determined.
 func GetDefaultBranch(ctx context.Context, repoDir string) (branchName string, err error) {
-	// `git rev-parse --verify <branch>` checks if a branch exists and points to a valid commit.
-	// This correctly handles empty repositories where the initial branch exists but has no commits yet.
-
 	devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
 	if err != nil {
 		return "", err
 	}
 
-	// Try 'main' first
-	commandResult, err := devEnv.RunCommand(ctx, env.EnvRunCommandInput{
+	// First, try to get the default branch from origin/HEAD (most reliable)
+	result, err := devEnv.RunCommand(ctx, env.EnvRunCommandInput{
+		Command: "git",
+		Args:    []string{"symbolic-ref", "refs/remotes/origin/HEAD"},
+	})
+	if err != nil {
+		return "", err
+	}
+	if result.ExitStatus == 0 {
+		// Output is like "refs/remotes/origin/main", extract the branch name
+		ref := strings.TrimSpace(result.Stdout)
+		if strings.HasPrefix(ref, "refs/remotes/origin/") {
+			return strings.TrimPrefix(ref, "refs/remotes/origin/"), nil
+		}
+	}
+
+	// Fall back to checking for 'main' first
+	result, err = devEnv.RunCommand(ctx, env.EnvRunCommandInput{
 		Command: "git",
 		Args:    []string{"rev-parse", "--verify", "main"},
 	})
 	if err != nil {
 		return "", err
 	}
-	if commandResult.ExitStatus == 0 {
+	if result.ExitStatus == 0 {
 		return "main", nil
 	}
 
 	// Try 'master' next
-	commandResult2, err := devEnv.RunCommand(ctx, env.EnvRunCommandInput{
+	result, err = devEnv.RunCommand(ctx, env.EnvRunCommandInput{
 		Command: "git",
 		Args:    []string{"rev-parse", "--verify", "master"},
 	})
 	if err != nil {
 		return "", err
 	}
-	if commandResult2.ExitStatus == 0 {
+	if result.ExitStatus == 0 {
 		return "master", nil
 	}
 
-	return "", fmt.Errorf("could not determine default branch for %s: \n%s", repoDir, commandResult.Stderr)
+	return "", fmt.Errorf("could not determine default branch for %s: neither origin/HEAD, main, nor master found", repoDir)
 }
 
 // ListLocalBranches lists all local branches in a repository, sorted by commit date (newest first).

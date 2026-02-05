@@ -112,8 +112,8 @@ type MyInterface interface {
 
 			for i, def := range defs {
 				assert.Equal(t, tc.expectedSymbols[i], def.SymbolName, "symbol name mismatch at index %d", i)
-				assert.Equal(t, uint32(tc.expectedRanges[i][0]), def.Range.StartPoint.Row, "start line mismatch for %s", tc.expectedSymbols[i])
-				assert.Equal(t, uint32(tc.expectedRanges[i][1]), def.Range.EndPoint.Row, "end line mismatch for %s", tc.expectedSymbols[i])
+				assert.Equal(t, uint(tc.expectedRanges[i][0]), def.Range.StartPoint.Row, "start line mismatch for %s", tc.expectedSymbols[i])
+				assert.Equal(t, uint(tc.expectedRanges[i][1]), def.Range.EndPoint.Row, "end line mismatch for %s", tc.expectedSymbols[i])
 			}
 		})
 	}
@@ -148,6 +148,16 @@ func TestGetAllSymbolDefinitionsFromSource_Python(t *testing.T) {
 			expectedSymbols: []string{"MyClass", "__init__", "get_value"},
 			expectedRanges:  [][2]int{{0, 5}, {1, 2}, {4, 5}},
 		},
+		{
+			name: "import aliases excluded from all symbols",
+			code: `from x.agents.some_agent import AGENT_ID as DEFAULT_AGENT_ID
+
+def my_func():
+    print("hello")
+`,
+			expectedSymbols: []string{"my_func"},
+			expectedRanges:  [][2]int{{2, 3}},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -161,8 +171,8 @@ func TestGetAllSymbolDefinitionsFromSource_Python(t *testing.T) {
 
 			for i, def := range defs {
 				assert.Equal(t, tc.expectedSymbols[i], def.SymbolName, "symbol name mismatch at index %d", i)
-				assert.Equal(t, uint32(tc.expectedRanges[i][0]), def.Range.StartPoint.Row, "start line mismatch for %s", tc.expectedSymbols[i])
-				assert.Equal(t, uint32(tc.expectedRanges[i][1]), def.Range.EndPoint.Row, "end line mismatch for %s", tc.expectedSymbols[i])
+				assert.Equal(t, uint(tc.expectedRanges[i][0]), def.Range.StartPoint.Row, "start line mismatch for %s", tc.expectedSymbols[i])
+				assert.Equal(t, uint(tc.expectedRanges[i][1]), def.Range.EndPoint.Row, "end line mismatch for %s", tc.expectedSymbols[i])
 			}
 		})
 	}
@@ -223,8 +233,8 @@ func TestGetAllSymbolDefinitionsFromSource_TypeScript(t *testing.T) {
 
 			for i, def := range defs {
 				assert.Equal(t, tc.expectedSymbols[i], def.SymbolName, "symbol name mismatch at index %d", i)
-				assert.Equal(t, uint32(tc.expectedRanges[i][0]), def.Range.StartPoint.Row, "start line mismatch for %s", tc.expectedSymbols[i])
-				assert.Equal(t, uint32(tc.expectedRanges[i][1]), def.Range.EndPoint.Row, "end line mismatch for %s", tc.expectedSymbols[i])
+				assert.Equal(t, uint(tc.expectedRanges[i][0]), def.Range.StartPoint.Row, "start line mismatch for %s", tc.expectedSymbols[i])
+				assert.Equal(t, uint(tc.expectedRanges[i][1]), def.Range.EndPoint.Row, "end line mismatch for %s", tc.expectedSymbols[i])
 			}
 		})
 	}

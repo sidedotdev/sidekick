@@ -60,14 +60,29 @@ func RunServer() *Server {
 		log.Fatal().Err(err).Msg("Failed to initialize telemetry")
 	}
 
+	allowedOrigins, err := GetAllowedOrigins()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to parse SIDE_ALLOWED_ORIGINS")
+	}
+
 	ctrl, err := NewController()
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize controller")
 	}
-	router := DefineRoutes(ctrl)
+	router := DefineRoutes(ctrl, allowedOrigins)
+
+	host := common.GetServerHost()
+	port := common.GetServerPort()
+	addr := fmt.Sprintf("%s:%d", host, port)
+
+	// Warn if binding to non-loopback address
+	if host != "127.0.0.1" && host != "::1" && host != "[::1]" && host != "localhost" {
+		log.Warn().Str("host", host).Int("port", port).Msg("Server binding to non-loopback address; may be accessible from LAN")
+	}
+	log.Info().Str("addr", addr).Msg("Starting API server")
 
 	httpSrv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", common.GetServerPort()),
+		Addr:    addr,
 		Handler: router.Handler(),
 	}
 
@@ -91,6 +106,7 @@ type Controller struct {
 	temporalTaskQueue string
 	secretManager     secret_manager.SecretManager
 	taskStartTimeout  time.Duration
+	allowedOrigins    *AllowedOrigins
 }
 
 // UserActionRequest defines the expected request body for user actions.
@@ -181,7 +197,7 @@ func (ctrl *Controller) ArchiveFinishedTasksHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"archivedCount": archivedCount})
 }
 
-func DefineRoutes(ctrl Controller) *gin.Engine {
+func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	r := gin.Default()
 	r.ForwardedByClientIP = true
 	r.SetTrustedProxies(nil)
@@ -189,6 +205,11 @@ func DefineRoutes(ctrl Controller) *gin.Engine {
 	if telemetry.IsEnabled() {
 		r.Use(otelgin.Middleware("sidekick-api"))
 	}
+
+	r.Use(CORSMiddleware(allowedOrigins))
+
+	// Store allowedOrigins in controller for websocket handlers
+	ctrl.allowedOrigins = allowedOrigins
 
 	r.GET("/api/v1/providers", ctrl.GetProvidersHandler)
 	r.GET("/api/v1/models", ctrl.GetModelsHandler)
@@ -1418,14 +1439,12 @@ func validateTaskRequest(taskReq *TaskRequest) (domain.AgentType, domain.TaskSta
 	return agentType, status, nil
 }
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		// Allow all connections by default
-		// TODO /gen Add a check for the origin of the request based on an env variable for the origin
-		return true
-	},
+func newUpgrader(allowedOrigins *AllowedOrigins) websocket.Upgrader {
+	return websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin:     CheckWebSocketOrigin(allowedOrigins),
+	}
 }
 
 func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
@@ -1464,6 +1483,7 @@ func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 		return
 	}
 
+	upgrader := newUpgrader(ctrl.allowedOrigins)
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		log.Printf("Failed to upgrade connection: %v", err)
@@ -1518,6 +1538,7 @@ func (ctrl *Controller) TaskChangesWebsocketHandler(c *gin.Context) {
 		lastTaskStreamId = "$" // Start from the latest message by default
 	}
 
+	upgrader := newUpgrader(ctrl.allowedOrigins)
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		http.Error(c.Writer, "Could not open websocket connection", http.StatusBadRequest)
@@ -1616,6 +1637,7 @@ func (ctrl *Controller) FlowEventsWebsocketHandler(c *gin.Context) {
 		return
 	}
 
+	upgrader := newUpgrader(ctrl.allowedOrigins)
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		log.Printf("Failed to upgrade connection: %v", err)

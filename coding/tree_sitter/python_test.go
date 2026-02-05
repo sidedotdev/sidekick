@@ -585,6 +585,24 @@ class Greeter:
 		print("Hello, " + name)`,
 		},
 		// FIXME decorated functions, classes and methods should include the decorator in the definition
+		{
+			name:               "import alias from",
+			symbolName:         "DEFAULT_AGENT_ID",
+			code:               `from x.agents.some_agent import AGENT_ID as DEFAULT_AGENT_ID`,
+			expectedDefinition: `from x.agents.some_agent import AGENT_ID as DEFAULT_AGENT_ID`,
+		},
+		{
+			name:               "import alias",
+			symbolName:         "operating_system",
+			code:               `import os as operating_system`,
+			expectedDefinition: `import os as operating_system`,
+		},
+		{
+			name:          "import alias not in all symbols lookup",
+			symbolName:    "NonExistent",
+			code:          `from x.agents.some_agent import AGENT_ID as DEFAULT_AGENT_ID`,
+			expectedError: `symbol not found: NonExistent`,
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -688,6 +706,160 @@ func TestGetFileHeadersStringPython(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestShrinkPythonEmbeddedCodeContext(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name     string
+		code     string
+		expected string
+	}{
+		{
+			name: "class with docstrings",
+			code: `
+from abc import ABC, abstractmethod
+from typing import Any
+
+
+class FooStore(ABC):
+    """Abstract interface for foo metadata and bar manager access."""
+
+    @abstractmethod
+    def list_items(self, user_id: str) -> list[ItemMetadata]:
+        """List items for a user, sorted by created_at descending."""
+        ...
+
+    @abstractmethod
+    def get_item(self, item_id: str) -> ItemMetadata | None:
+        """Get item metadata by ID."""
+        ...
+
+    @abstractmethod
+    def create_item(
+        self,
+        user_id: str,
+        title: str,
+        options: dict,
+        agent_id: str,
+    ) -> ItemMetadata:
+        """Create a new item and return its metadata."""
+        ...
+
+    @abstractmethod
+    def get_manager(self, item_id: str) -> Manager:
+        """Get the bar manager for an item."""
+        ...
+
+    @abstractmethod
+    def update_item_title(self, item_id: str, title: str) -> None:
+        """Update the title of an existing item."""
+        ...
+
+    def get_messages(self, item_id: str, agent_id: str) -> list[dict[str, Any]]:
+        """Get all messages for an item from storage."""
+        manager = self.get_manager(item_id)
+        bar_messages = manager.list_messages(item_id, agent_id)
+        return [
+            {
+                "message_id": str(msg.message_id),
+                "role": msg.message["role"],
+                "content": msg.message.get("content", []),
+                "created_at": msg.created_at,
+            }
+            for msg in bar_messages
+        ]
+
+
+def get_foo_store() -> FooStore:
+    """Get the configured foo store instance."""
+    from qux.config import config
+
+    if config.FOO_STORE == "s3":
+        from qux.foo.s3_store import S3FooStore
+        return S3FooStore()
+    else:
+        from qux.foo.local_store import LocalFooStore
+        return LocalFooStore(config.FOO_LOCAL_DIR)
+`,
+			expected: `Shrank context - here are the extracted code signatures and docstrings only, in lieu of full code:
+` + "```" + `python-signatures
+class FooStore(ABC)
+	"""Abstract interface for foo metadata and bar manager access."""
+	@abstractmethod
+	def list_items(self, user_id: str) -> list[ItemMetadata]
+		"""List items for a user, sorted by created_at descending."""
+	@abstractmethod
+	def get_item(self, item_id: str) -> ItemMetadata | None
+		"""Get item metadata by ID."""
+	@abstractmethod
+	def create_item(
+        self,
+        user_id: str,
+        title: str,
+        options: dict,
+        agent_id: str,
+    ) -> ItemMetadata
+		"""Create a new item and return its metadata."""
+	@abstractmethod
+	def get_manager(self, item_id: str) -> Manager
+		"""Get the bar manager for an item."""
+	@abstractmethod
+	def update_item_title(self, item_id: str, title: str) -> None
+		"""Update the title of an existing item."""
+	def get_messages(self, item_id: str, agent_id: str) -> list[dict[str, Any]]
+		"""Get all messages for an item from storage."""
+def get_foo_store() -> FooStore
+	"""Get the configured foo store instance."""
+` + "```",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			embeddedCode := createMarkdownCodeBlock("python", tc.code)
+			result, didShrink := ShrinkEmbeddedCodeContext(embeddedCode, false, len(tc.code)-100)
+
+			normalizedCode := strings.TrimSpace(strings.ReplaceAll(tc.code, "\r\n", "\n"))
+			normalizedResult := strings.TrimSpace(strings.ReplaceAll(result, "\r\n", "\n"))
+			normalizedExpected := strings.TrimSpace(strings.ReplaceAll(tc.expected, "\r\n", "\n"))
+
+			if normalizedCode == normalizedResult {
+				assert.False(t, didShrink)
+			} else {
+				assert.True(t, didShrink)
+			}
+
+			if normalizedResult != normalizedExpected {
+				t.Errorf("ShrinkEmbeddedCodeContext returned incorrect result.\nExpected:\n%s\n\nGot:\n%s", normalizedExpected, normalizedResult)
+			}
+		})
+	}
+}
+
+func TestGetSignaturesPython_ErrorNodes(t *testing.T) {
+	t.Parallel()
+
+	// Code starting mid-docstring triggers ERROR nodes in tree-sitter
+	midDocstringCode := `Abstract interface for foo metadata and bar manager access."""
+
+    @abstractmethod
+    def list_items(self, user_id: str) -> list[ItemMetadata]:
+        """List items for a user, sorted by created_at descending."""
+        ...
+`
+	sc := SourceCode{
+		LanguageName:         "python",
+		OriginalLanguageName: "python",
+		Content:              midDocstringCode,
+	}
+	signatures, err := sc.GetSignatures()
+	assert.NoError(t, err)
+
+	// Should only extract the valid function, not garbage from ERROR nodes
+	assert.Len(t, signatures, 1)
+	assert.Equal(t, "@abstractmethod\ndef list_items(self, user_id: str) -> list[ItemMetadata]\n\t\"\"\"List items for a user, sorted by created_at descending.\"\"\"", signatures[0].Content)
 }
 
 func TestNormalizeSymbolFromSnippet_Python(t *testing.T) {

@@ -3,13 +3,13 @@ package tree_sitter
 import (
 	"strings"
 
-	sitter "github.com/smacker/go-tree-sitter"
+	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 // extracts full "signatures", which provided detailed information about the code
 // based on the corresponding signatures_queries/signature_python.scm
-func writePythonSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
-	content := c.Node.Content(*sourceCode)
+func writePythonSignatureCapture(out *strings.Builder, sourceCode *[]byte, c tree_sitter.QueryCapture, name string) {
+	content := c.Node.Utf8Text(*sourceCode)
 	switch name {
 	case "type.declaration", "assignment.name", "function.parameters", "class.method.parameters", "class.superclasses":
 		{
@@ -82,8 +82,8 @@ func writePythonSignatureCapture(out *strings.Builder, sourceCode *[]byte, c sit
 
 // extracts symbol names only
 // based on the corresponding signatures_queries/signature_python.scm
-func writePythonSymbolCapture(out *strings.Builder, sourceCode *[]byte, c sitter.QueryCapture, name string) {
-	content := c.Node.Content(*sourceCode)
+func writePythonSymbolCapture(out *strings.Builder, sourceCode *[]byte, c tree_sitter.QueryCapture, name string) {
+	content := c.Node.Utf8Text(*sourceCode)
 	switch name {
 	case "class.method.name":
 		// skip as it's expected to be included in the method.name match instead

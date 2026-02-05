@@ -30,3 +30,6 @@ snake_case.
 
 New comments should be added sparingly. When added, comments must be concise and
 avoid repeating what is plainly visible in the code directly.
+
+Use local directory ./.tmp instead of /tmp for temporary files, it's
+a gitignored directory.

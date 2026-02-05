@@ -306,8 +306,10 @@ produce a repo summary.
 
 | Language/Framework | Symbols | Repo Summary |
 | -------- | --------- | --------- |
+| javascript (.js, .jsx) | ✓ | ✓ |
 | kotlin | ✓ | ✓ |
 | java | ✓ | ✓ |
+| markdown | ✓ | ✓ |
 | python | ✓ | ✓ |
 | typescript | ✓ | ✓ |
 | vue | ✓ | ✓ |
@@ -330,9 +332,6 @@ Planned languages include:
 
 <!-- TODO create issues for each of these -->
 
-- javascript
-- markdown
-- jsx
 - svelte
 - rust
 - ruby

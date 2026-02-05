@@ -44,3 +44,19 @@
   )
   {{#SymbolName}}(#eq? @name "{{SymbolName}}"){{/SymbolName}}
 ) @definition
+
+{{#SymbolName}}
+(import_from_statement
+  name: (aliased_import
+    alias: (identifier) @name
+    (#eq? @name "{{SymbolName}}")
+  )
+) @definition
+
+(import_statement
+  name: (aliased_import
+    alias: (identifier) @name
+    (#eq? @name "{{SymbolName}}")
+  )
+) @definition
+{{/SymbolName}}

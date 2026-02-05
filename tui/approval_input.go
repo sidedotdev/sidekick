@@ -47,7 +47,8 @@ var mergeStrategyPrefsPathOverride string
 
 // ApprovalSubmittedMsg is sent when an approval response is submitted
 type ApprovalSubmittedMsg struct {
-	ActionID string
+	ActionID        string
+	ResponseContent string
 }
 
 // ApprovalErrorMsg is sent when an error occurs during submission
@@ -335,7 +336,7 @@ func (m ApprovalInputModel) submitResponse(content string) tea.Cmd {
 		if err != nil {
 			return ApprovalErrorMsg{Err: err}
 		}
-		return ApprovalSubmittedMsg{ActionID: m.action.Id}
+		return ApprovalSubmittedMsg{ActionID: m.action.Id, ResponseContent: content}
 	}
 }
 
@@ -362,7 +363,14 @@ func (m ApprovalInputModel) submitApproval(approved bool, feedback string) tea.C
 		if err != nil {
 			return ApprovalErrorMsg{Err: err}
 		}
-		return ApprovalSubmittedMsg{ActionID: m.action.Id}
+		responseContent := "Approved"
+		if !approved {
+			responseContent = "Rejected"
+			if feedback != "" {
+				responseContent = "Rejected: " + feedback
+			}
+		}
+		return ApprovalSubmittedMsg{ActionID: m.action.Id, ResponseContent: responseContent}
 	}
 }
 
@@ -378,7 +386,7 @@ func (m ApprovalInputModel) submitContinue() tea.Cmd {
 		if err != nil {
 			return ApprovalErrorMsg{Err: err}
 		}
-		return ApprovalSubmittedMsg{ActionID: m.action.Id}
+		return ApprovalSubmittedMsg{ActionID: m.action.Id, ResponseContent: "Continued"}
 	}
 }
 

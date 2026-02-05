@@ -8,14 +8,15 @@ import (
 	"sidekick/env"
 	"sidekick/utils"
 	"strings"
+	"unsafe"
 
-	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/python"
+	tree_sitter_lib "github.com/tree-sitter/go-tree-sitter"
+	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
 )
 
 // checkEmbeddedFileValidity checks the syntax of embedded languages within a file.
 // Currently supports TypeScript embedded in Vue files.
-func checkEmbeddedFileValidity(tree *sitter.Tree, sourceCode []byte, languageName string) (bool, string) {
+func checkEmbeddedFileValidity(tree *tree_sitter_lib.Tree, sourceCode []byte, languageName string) (bool, string) {
 	switch languageName {
 	case "vue":
 		tsTree, err := tree_sitter.GetVueEmbeddedTypescriptTree(tree, &sourceCode)
@@ -68,7 +69,7 @@ func CheckFileValidity(envContainer env.EnvContainer, relativeFilePath string) (
 	switch languageName {
 	case "golang":
 		var err error
-		valid, errorString := checkGoTree(tree.RootNode())
+		valid, errorString := checkGoTree(sourceCode, tree.RootNode())
 
 		if valid {
 			valid, errorString, err = CheckViaGoBuild(envContainer, relativeFilePath)
@@ -83,32 +84,66 @@ func CheckFileValidity(envContainer env.EnvContainer, relativeFilePath string) (
 	}
 }
 
-func checkGoTree(node *sitter.Node) (bool, string) {
+func checkGoTree(sourceCode []byte, node *tree_sitter_lib.Node) (bool, string) {
 	// check for multiple import declarations, which is not allowed in go and
 	// LLMs tend to keep adding and have a hard time fixing
-	var importDeclarations []*sitter.Node
-	for i := 0; i < int(node.ChildCount()); i++ {
+	var importDeclarations []*tree_sitter_lib.Node
+	for i := uint(0); i < node.ChildCount(); i++ {
 		child := node.Child(i)
-		if child.Type() == "import_declaration" {
+		if child.Kind() == "import_declaration" {
 			importDeclarations = append(importDeclarations, child)
 		}
 	}
 
 	// TODO include the line number of the error and the content around those lines
 	if len(importDeclarations) > 1 {
+		// Allow exactly 2 import declarations if one is `import "C"` (cgo requirement)
+		if len(importDeclarations) == 2 && hasImportC(sourceCode, importDeclarations) {
+			return true, ""
+		}
 		return false, "Multiple import statements found"
 	}
 
 	return true, ""
 }
 
-func checkPythonTree(sourceCode *[]byte, node *sitter.Node) (bool, string) {
+// hasImportC checks if any of the import declarations is `import "C"` (cgo)
+func hasImportC(sourceCode []byte, importDeclarations []*tree_sitter_lib.Node) bool {
+	for _, decl := range importDeclarations {
+		if isCgoImport(sourceCode, decl) {
+			return true
+		}
+	}
+	return false
+}
+
+// isCgoImport checks if an import declaration is specifically `import "C"`
+func isCgoImport(sourceCode []byte, importDecl *tree_sitter_lib.Node) bool {
+	for i := uint(0); i < importDecl.ChildCount(); i++ {
+		child := importDecl.Child(i)
+		if child.Kind() == "import_spec" {
+			// import_spec directly contains interpreted_string_literal
+			for j := uint(0); j < child.ChildCount(); j++ {
+				specChild := child.Child(j)
+				if specChild.Kind() == "interpreted_string_literal" {
+					content := specChild.Utf8Text(sourceCode)
+					if content == `"C"` {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+func checkPythonTree(sourceCode *[]byte, node *tree_sitter_lib.Node) (bool, string) {
 	passedCheck, errorString := checkPythonEmptyBodies(sourceCode, node)
 	// TODO add check for duplicate classes and functions
 	return passedCheck, errorString
 }
 
-func checkPythonEmptyBodies(sourceCode *[]byte, node *sitter.Node) (bool, string) {
+func checkPythonEmptyBodies(sourceCode *[]byte, node *tree_sitter_lib.Node) (bool, string) {
 	// each match is a missing body in python, which is a syntax error that the
 	// python parser doesn't tag as an ERROR, hence this explicit check
 	emptyBodiesQuery := `
@@ -122,28 +157,23 @@ func checkPythonEmptyBodies(sourceCode *[]byte, node *sitter.Node) (bool, string
 			(#eq? @block "")
 		) @empty_class
 	`
-	sitterLanguage := python.GetLanguage()
-	q, err := sitter.NewQuery([]byte(emptyBodiesQuery), sitterLanguage)
+	sitterLanguage := tree_sitter_lib.NewLanguage(unsafe.Pointer(tree_sitter_python.Language()))
+	q, err := tree_sitter_lib.NewQuery(sitterLanguage, emptyBodiesQuery)
 	if err != nil {
 		return false, fmt.Sprintf("Failed to create query: %v", err)
 	}
+	defer q.Close()
 
 	errorsWriter := strings.Builder{}
 
-	qc := sitter.NewQueryCursor()
-	qc.Exec(q, node)
+	qc := tree_sitter_lib.NewQueryCursor()
+	defer qc.Close()
+	matches := qc.Matches(q, node, *sourceCode)
 	// Iterate over query results
-	for {
-		m, ok := qc.NextMatch()
-		if !ok {
-			break
-		}
-
-		// Apply predicates filtering
-		m = qc.FilterPredicates(m, *sourceCode)
-		for _, c := range m.Captures {
-			name := q.CaptureNameForId(c.Index)
-			content := c.Node.Content(*sourceCode)
+	for match := matches.Next(); match != nil; match = matches.Next() {
+		for _, c := range match.Captures {
+			name := q.CaptureNames()[c.Index]
+			content := c.Node.Utf8Text(*sourceCode)
 			if name == "empty_function" {
 				// TODO include context around the error. We could return a
 				// slice of structs containing the error message and the
@@ -153,11 +183,11 @@ func checkPythonEmptyBodies(sourceCode *[]byte, node *sitter.Node) (bool, string
 				// issue, eg "error" vs "warning", where warnings might not
 				// revert edits but errors would.
 				errorsWriter.WriteString("Empty function body found:\n\n")
-				errorsWriter.WriteString(fmt.Sprintf("Line: %d\n", c.Node.StartPoint().Row))
+				errorsWriter.WriteString(fmt.Sprintf("Line: %d\n", c.Node.StartPosition().Row))
 				errorsWriter.WriteString(content)
 			} else if name == "empty_class" {
 				errorsWriter.WriteString("Empty class body found:\n\n")
-				errorsWriter.WriteString(fmt.Sprintf("Line: %d\n", c.Node.StartPoint().Row))
+				errorsWriter.WriteString(fmt.Sprintf("Line: %d\n", c.Node.StartPosition().Row))
 				errorsWriter.WriteString(content)
 			}
 		}
@@ -170,7 +200,7 @@ func checkPythonEmptyBodies(sourceCode *[]byte, node *sitter.Node) (bool, string
 }
 
 // checkTypescriptTree checks the syntax of a TypeScript AST and returns a boolean indicating if it is valid and a string containing any errors.
-func checkTypescriptTree(sourceCode []byte, node *sitter.Node) (bool, string) {
+func checkTypescriptTree(sourceCode []byte, node *tree_sitter_lib.Node) (bool, string) {
 	if node.HasError() {
 		errorDetails := ExtractErrorMessages(sourceCode, node)
 		return false, errorDetails
@@ -179,14 +209,14 @@ func checkTypescriptTree(sourceCode []byte, node *sitter.Node) (bool, string) {
 }
 
 // ExtractErrorNodes traverses a tree-sitter tree and returns a slice of nodes that are errors.
-func ExtractErrorNodes(node *sitter.Node) []*sitter.Node {
-	var errors []*sitter.Node
-	var collectErrors func(*sitter.Node)
-	collectErrors = func(n *sitter.Node) {
+func ExtractErrorNodes(node *tree_sitter_lib.Node) []*tree_sitter_lib.Node {
+	var errors []*tree_sitter_lib.Node
+	var collectErrors func(*tree_sitter_lib.Node)
+	collectErrors = func(n *tree_sitter_lib.Node) {
 		if n.IsError() {
 			errors = append(errors, n)
 		}
-		for i := 0; i < int(n.ChildCount()); i++ {
+		for i := uint(0); i < n.ChildCount(); i++ {
 			collectErrors(n.Child(i))
 		}
 	}
@@ -194,16 +224,16 @@ func ExtractErrorNodes(node *sitter.Node) []*sitter.Node {
 	return errors
 }
 
-func ExtractErrorMessages(sourceCode []byte, node *sitter.Node) string {
+func ExtractErrorMessages(sourceCode []byte, node *tree_sitter_lib.Node) string {
 	errorNodes := ExtractErrorNodes(node)
-	errorDetails := fmt.Sprintf("%s: %v", SyntaxError, utils.Map(errorNodes, func(errorNode *sitter.Node) string {
+	errorDetails := fmt.Sprintf("%s: %v", SyntaxError, utils.Map(errorNodes, func(errorNode *tree_sitter_lib.Node) string {
 		sourceBlock := tree_sitter.SourceBlock{
 			Source: &sourceCode,
-			Range: sitter.Range{
+			Range: tree_sitter_lib.Range{
 				StartByte:  errorNode.StartByte(),
 				EndByte:    errorNode.EndByte(),
-				StartPoint: errorNode.StartPoint(),
-				EndPoint:   errorNode.EndPoint(),
+				StartPoint: errorNode.StartPosition(),
+				EndPoint:   errorNode.EndPosition(),
 			},
 		}
 

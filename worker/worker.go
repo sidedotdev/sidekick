@@ -172,6 +172,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(ragActivities)
 	w.RegisterActivity(env.EnvRunCommandActivity)
 	w.RegisterActivity(git.GitDiffActivity)
+	w.RegisterActivity(git.DiffUntrackedFilesActivity)
 	w.RegisterActivity(git.GitAddActivity)
 	w.RegisterActivity(git.GitRestoreActivity)
 	w.RegisterActivity(git.GitCommitActivity)
@@ -206,6 +207,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(ffa.EvalBoolFlag)
 	w.RegisterActivity(common.GetLocalConfig)
 	w.RegisterActivity(common.BaseCommandPermissionsActivity)
+	w.RegisterActivity(dev.CheckCommandPermissionActivity)
 
 	w.RegisterActivity(&workspace.Activities{Storage: service})
 	w.RegisterActivity(cascadeDeleteActivities)

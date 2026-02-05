@@ -1,0 +1,44 @@
+; ATX headings (# Heading) - capture the entire heading node to preserve original form
+(atx_heading
+  (atx_h1_marker) @heading.marker
+  heading_content: (inline) @heading.content
+) @heading.name
+
+(atx_heading
+  (atx_h2_marker) @heading.marker
+  heading_content: (inline) @heading.content
+) @heading.name
+
+(atx_heading
+  (atx_h3_marker) @heading.marker
+  heading_content: (inline) @heading.content
+) @heading.name
+
+(atx_heading
+  (atx_h4_marker) @heading.marker
+  heading_content: (inline) @heading.content
+) @heading.name
+
+(atx_heading
+  (atx_h5_marker) @heading.marker
+  heading_content: (inline) @heading.content
+) @heading.name
+
+(atx_heading
+  (atx_h6_marker) @heading.marker
+  heading_content: (inline) @heading.content
+) @heading.name
+
+; Setext headings (underlined with === or ---) - preserve original form including underline
+(setext_heading
+  (paragraph) @setext_heading.h1.content
+  (setext_h1_underline) @setext_heading.h1.underline
+) @setext_heading.name
+
+(setext_heading
+  (paragraph) @setext_heading.h2.content
+  (setext_h2_underline) @setext_heading.h2.underline
+) @setext_heading.name
+
+; YAML frontmatter
+(minus_metadata) @frontmatter.name

@@ -969,6 +969,21 @@ func TestContainsAbsolutePath(t *testing.T) {
 			command:  "ls $(echo (a|b))/file",
 			expected: true,
 		},
+		{
+			name:     "git diff with relative path after double dash",
+			command:  "git diff HEAD~1 -- coding/git/",
+			expected: false,
+		},
+		{
+			name:     "git diff with relative path no trailing slash",
+			command:  "git diff HEAD~1 -- coding/git",
+			expected: false,
+		},
+		{
+			name:     "git show with relative path",
+			command:  "git show HEAD:coding/git/file.go",
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1311,6 +1326,7 @@ func TestEvaluateScriptPermission_WithBasePermissions(t *testing.T) {
 			"go test ./...",
 			"pwd",
 			"cd worker/replay && cat replay_test_data.json | head -50",
+			"cd cli && go test -tags=e2e -v -run TestE2E_SimpleTaskCompletion -timeout 300s 2>&1 | tee e2e_output.txt | tail -150",
 		}
 
 		for _, script := range safeScripts {
@@ -1343,6 +1359,7 @@ func TestEvaluateScriptPermission_WithBasePermissions(t *testing.T) {
 			"cat .envrc",
 			"source .env",
 			"grep password .env",
+			"tee /tmp/out.txt",
 		}
 
 		for _, script := range sensitiveScripts {
@@ -1472,6 +1489,20 @@ func TestEvaluateScriptPermission_WithBasePermissions(t *testing.T) {
 			assert.Equal(t, PermissionRequireApproval, result, "expected require-approval for: %s", script)
 		}
 	})
+
+	t.Run("chained commands with unapproved command require approval", func(t *testing.T) {
+		// go run is not in the auto-approve list, so the whole script should require approval
+		scriptsRequiringApproval := []string{
+			`echo "=== Original workflow (flow_38EKf7eKG9ghgzczrdliGtchPaT) ===" && go run ./worker/replay -id flow_38EKf7eKG9ghgzczrdliGtchPaT 2>&1; echo "Exit code: $?"`,
+			`echo "hello" && go run main.go`,
+			`ls -la && go run ./cmd/server`,
+		}
+
+		for _, script := range scriptsRequiringApproval {
+			result, _ := EvaluateScriptPermission(config, script)
+			assert.Equal(t, PermissionRequireApproval, result, "expected require-approval for: %s", script)
+		}
+	})
 }
 
 func TestBasePermissions_ExfiltrationPatterns(t *testing.T) {
@@ -1551,6 +1582,237 @@ func TestBasePermissions_ExfiltrationPatterns(t *testing.T) {
 		for _, script := range scripts {
 			result, _ := EvaluateScriptPermission(config, script)
 			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", script)
+		}
+	})
+
+}
+
+func TestEvaluateCommandPermission_GitDiffRelativePath(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	tests := []struct {
+		name           string
+		command        string
+		expectedResult PermissionResult
+	}{
+		{
+			name:           "git diff with relative path should be auto-approved",
+			command:        "git diff HEAD~1 -- coding/git/",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "git diff with relative path no trailing slash",
+			command:        "git diff HEAD~1 -- coding/git",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "git show with colon path syntax",
+			command:        "git show HEAD:coding/git/file.go",
+			expectedResult: PermissionAutoApprove,
+		},
+		{
+			name:           "git diff with absolute path should require approval",
+			command:        "git diff HEAD~1 -- /etc/passwd",
+			expectedResult: PermissionRequireApproval,
+		},
+		{
+			name:           "git log with relative path",
+			command:        "git log --oneline -- src/main.go",
+			expectedResult: PermissionAutoApprove,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt // capture range variable for parallel subtests
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, _ := EvaluateCommandPermission(config, tt.command)
+			assert.Equal(t, tt.expectedResult, result, "command: %s", tt.command)
+		})
+	}
+}
+
+func TestBasePermissions_RmRfPatterns(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	t.Run("dangerous rm -rf patterns are denied", func(t *testing.T) {
+		t.Parallel()
+		tests := []struct {
+			command string
+			message string
+		}{
+			{"rm -rf /", "Recursive force delete of root directory is extremely dangerous"},
+			{"rm -rf / ", "Recursive force delete of root directory is extremely dangerous"},
+			{"rm -rf /;", "Recursive force delete of root directory is extremely dangerous"},
+			{"rm -rf /&", "Recursive force delete of root directory is extremely dangerous"},
+			{"rm -rf /|", "Recursive force delete of root directory is extremely dangerous"},
+			{"rm -rf ~", "Recursive force delete of home directory is extremely dangerous"},
+			{"rm -rf ~ ", "Recursive force delete of home directory is extremely dangerous"},
+			{"rm -rf ~;", "Recursive force delete of home directory is extremely dangerous"},
+			{"rm -rf /*", "Recursive force delete of root contents is extremely dangerous"},
+			{"rm -rf ~/*", "Recursive force delete of home contents is extremely dangerous"},
+			{"rm -fr /", "Recursive force delete of root directory is extremely dangerous"},
+			{"rm -fr ~", "Recursive force delete of home directory is extremely dangerous"},
+		}
+
+		for _, tt := range tests {
+			result, msg := EvaluateCommandPermission(config, tt.command)
+			assert.Equal(t, PermissionDeny, result, "expected deny for: %s", tt.command)
+			assert.Equal(t, tt.message, msg, "wrong message for: %s", tt.command)
+		}
+	})
+
+	t.Run("legitimate rm -rf paths require approval", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			`rm -rf "/Users/ehsanhoque/Library/Application Support/sidekick/worktrees/001"`,
+			`rm -rf "/Users/ehsanhoque/Library/Application Support/sidekick/worktrees/001" 2>&1 || echo "Directory doesn't exist"`,
+			"rm -rf /tmp/test",
+			"rm -rf /var/tmp/build",
+			"rm -rf ~/projects/old-backup",
+			"rm -rf /home/user/temp",
+			"rm -rf ./node_modules",
+			"rm -rf build/",
+			"rm -fr /tmp/cache",
+			"rm -fr ~/Downloads/temp",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionRequireApproval, result, "legitimate rm -rf path should require approval: %s", cmd)
+		}
+	})
+
+	t.Run("rm without -rf requires approval", func(t *testing.T) {
+		t.Parallel()
+		// rm is not auto-approved since it's a destructive operation
+		result, _ := EvaluateCommandPermission(config, "rm file.txt")
+		assert.Equal(t, PermissionRequireApproval, result)
+	})
+}
+
+func TestBasePermissions_BunxTsc(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	t.Run("bun tsc and bunx tsc commands are auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"bun tsc",
+			"bun tsc --noEmit",
+			"bun tsc --build",
+			"bun tsc -p tsconfig.json",
+			"bun run tsc",
+			"bun run tsc --noEmit",
+			"bun run tsc --build",
+			"bun run tsc -p tsconfig.json",
+			"bunx tsc",
+			"bunx tsc --noEmit",
+			"bunx tsc --build",
+			"bunx tsc -p tsconfig.json",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+}
+
+func TestBasePermissions_NpxTsc(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	t.Run("npx tsc and npm run tsc commands are auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"npx tsc",
+			"npx tsc --noEmit",
+			"npx tsc --build",
+			"npx tsc -p tsconfig.json",
+			"npm run tsc",
+			"npm run tsc --noEmit",
+			"npm run tsc --build",
+			"npm run tsc -p tsconfig.json",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+}
+
+func TestBasePermissions_UvCommands(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	t.Run("uv run commands are auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"uv run pytest",
+			"uv run pytest -v tests/",
+			"uv run python -m pytest",
+			"uv run python3 -m pytest --tb=short",
+			"uv run pylint src/",
+			"uv run flake8 .",
+			"uv run mypy src/",
+			"uv run black --check .",
+			"uv run isort --check .",
+			"uv run ruff check",
+			"uv run ruff check src/",
+			"uv run ruff check --fix",
+			"uv run ruff format",
+			"uv run ruff format src/",
+			"ruff check",
+			"ruff check src/",
+			"ruff format",
+			"ruff format --check .",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+
+	t.Run("uv pip commands are auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"uv pip list",
+			"uv pip show requests",
+			"uv pip check",
+			"uv pip freeze",
+			"uv run python -m pip list",
+			"uv run python -m pip freeze",
+			"uv run python3 -m pip check",
+			"uv run python3 -m pip show requests",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
+		}
+	})
+
+	t.Run("python -m pip commands are auto-approved", func(t *testing.T) {
+		t.Parallel()
+		commands := []string{
+			"python -m pip list",
+			"python -m pip show requests",
+			"python -m pip check",
+			"python -m pip freeze",
+			"python3 -m pip list",
+			"python3 -m pip show flask",
+			"python3 -m pip check",
+			"python3 -m pip freeze",
+		}
+
+		for _, cmd := range commands {
+			result, _ := EvaluateCommandPermission(config, cmd)
+			assert.Equal(t, PermissionAutoApprove, result, "expected auto-approve for: %s", cmd)
 		}
 	})
 }

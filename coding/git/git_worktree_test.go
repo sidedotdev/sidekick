@@ -180,7 +180,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		createCommit(t, repoDir, "Initial commit on main")
 
 		// Create a feature branch and worktree with unique name
-		branchName := fmt.Sprintf("feature-cleanup-test")
+		branchName := fmt.Sprintf("feature-cleanup-test-%s", filepath.Base(repoDir))
 
 		// Create environment container and the associated worktree
 		worktree := domain.Worktree{
@@ -357,10 +357,13 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		runGitCommandInTestRepo(t, repoDir, "tag", fmt.Sprintf("archive/%s-3", branchName), branchName)
 		runGitCommandInTestRepo(t, repoDir, "branch", "-D", branchName)
 
+		// Use a unique workspace ID to avoid collisions with other test runs
+		workspaceId := fmt.Sprintf("test-multi-tag-%s", filepath.Base(repoDir))
+
 		// Create environment container and the worktree
 		worktree := domain.Worktree{
 			Name:        branchName,
-			WorkspaceId: filepath.Base(repoDir),
+			WorkspaceId: workspaceId,
 		}
 		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
 		require.NoError(t, err)

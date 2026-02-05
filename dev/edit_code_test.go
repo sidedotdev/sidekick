@@ -72,7 +72,7 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	var fa *flow_action.FlowActivities // use a nil struct pointer to call activities that are part of a structure
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(nil)
 	s.env.OnActivity(ManageChatHistoryActivity, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
-	s.env.OnActivity(ManageChatHistoryV2Activity, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
+	s.env.OnActivity(ManageChatHistoryV2Activity, mock.Anything, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 
 	// Use version 1 for chat-history-llm2 (Llm2ChatHistory path)
 	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
