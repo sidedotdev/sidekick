@@ -105,6 +105,10 @@ func buildActivityRegistry() map[string]interface{} {
 	llmActivities := &persisted_ai.LlmActivities{
 		Streamer: service,
 	}
+	llm2Activities := &persisted_ai.Llm2Activities{
+		Streamer: service,
+		Storage:  service,
+	}
 	lspActivities := &lsp.LSPActivities{
 		LSPClientProvider: func(languageName string) lsp.LSPClient {
 			return &lsp.Jsonrpc2LSPClient{
@@ -176,6 +180,7 @@ func buildActivityRegistry() map[string]interface{} {
 	// Register struct methods
 	registerStructMethods(registry, srvActivities)
 	registerStructMethods(registry, llmActivities)
+	registerStructMethods(registry, llm2Activities)
 	registerStructMethods(registry, pollFailuresActivities)
 	registerStructMethods(registry, lspActivities)
 	registerStructMethods(registry, treeSitterActivities)
