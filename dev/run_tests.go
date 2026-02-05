@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"errors"
 	"fmt"
 	"sidekick/common"
 	"sidekick/domain"
@@ -10,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
+	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -78,6 +81,10 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 	allResults := make([]TestResult, len(commandsToRun))
 	completed := make([]bool, len(commandsToRun))
 
+	// Track non-heartbeat failures across iterations
+	var failedCommands []indexedCommand
+	var activityErrors []string
+
 	for {
 		// execute pending test commands in parallel
 		for _, ic := range pendingCommands {
@@ -89,8 +96,7 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 		}
 
 		// Wait for all goroutines to finish and collect the results
-		var failedCommands []indexedCommand
-		var activityErrors []string
+		var heartbeatFailedCommands []indexedCommand
 		for i := 0; i < len(pendingCommands); i++ {
 			var value interface{}
 			if ok := resultsCh.Receive(dCtx, &value); !ok {
@@ -98,21 +104,33 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 			}
 			result := value.(singleTestResult)
 			if result.err != nil {
-				// Activity error (timeout, etc) - candidate for retry
-				activityErrors = append(activityErrors, result.err.Error())
-				failedCommands = append(failedCommands, indexedCommand{
-					index: result.commandIndex,
-					cmd:   commandsToRun[result.commandIndex],
-				})
+				if isHeartbeatError(result.err) {
+					heartbeatFailedCommands = append(heartbeatFailedCommands, indexedCommand{
+						index: result.commandIndex,
+						cmd:   commandsToRun[result.commandIndex],
+					})
+				} else {
+					activityErrors = append(activityErrors, result.err.Error())
+					failedCommands = append(failedCommands, indexedCommand{
+						index: result.commandIndex,
+						cmd:   commandsToRun[result.commandIndex],
+					})
+				}
 			} else {
 				allResults[result.commandIndex] = result.result
 				completed[result.commandIndex] = true
 			}
 		}
 
-		// If no activity errors, we're done
-		if len(activityErrors) == 0 {
-			// Collect only completed results
+		// Auto-retry heartbeat failures first before bothering user with other errors
+		if len(heartbeatFailedCommands) > 0 {
+			log.Info().Int("count", len(heartbeatFailedCommands)).Msg("Auto-retrying tests due to heartbeat timeout")
+			pendingCommands = heartbeatFailedCommands
+			continue
+		}
+
+		if len(failedCommands) == 0 {
+			// All done successfully
 			var results []TestResult
 			for i, done := range completed {
 				if done {
@@ -151,8 +169,10 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 			return nil, userErr
 		}
 
-		// User chose to retry - only retry the failed commands
+		// Clear failures and retry
 		pendingCommands = failedCommands
+		failedCommands = nil
+		activityErrors = nil
 	}
 }
 
@@ -176,6 +196,14 @@ type singleTestResult struct {
 	commandIndex int
 	result       TestResult
 	err          error
+}
+
+func isHeartbeatError(err error) bool {
+	var timeoutErr *temporal.TimeoutError
+	if !errors.As(err, &timeoutErr) {
+		return false
+	}
+	return timeoutErr.TimeoutType() == enumspb.TIMEOUT_TYPE_HEARTBEAT
 }
 
 func runSingleTest(actionCtx DevActionContext, commandIndex int, workingDir string, fullCommand string, envContainer env.EnvContainer, resultsCh workflow.Channel) {
