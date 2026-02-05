@@ -129,6 +129,7 @@ func getLlm2Provider(config common.ModelConfig, providers []common.ModelProvider
 	case llm.OpenaiCompatibleToolChatProviderType:
 		for _, p := range providers {
 			if p.Type == string(providerType) && p.Name == config.Provider {
+				// FIXME should be llm2.OpenAIProvider (i.e. using the original openai api, not the responses api)
 				return llm2.OpenAIResponsesProvider{
 					BaseURL:      p.BaseURL,
 					DefaultModel: p.DefaultLLM,
