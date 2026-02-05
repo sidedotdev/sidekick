@@ -221,13 +221,18 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	}
 
 	feedbackIterations := 3
-	v := workflow.GetVersion(dCtx, "author-edit-feedback-iterations", workflow.DefaultVersion, 1)
-	if v == 1 {
+	v := workflow.GetVersion(dCtx, "author-edit-feedback-iterations", workflow.DefaultVersion, 2)
+	switch v {
+	case 1:
 		// TODO when tool calls are not finding things automatically, provide
 		// better hints for how to find things after Nth iteration, before going
 		// to human-based support. Eg fuzzy search or embedding search etc.
 		// Maybe provide that as a tool or even run that tool automatically.
 		feedbackIterations = 6
+	case 2:
+		// opus 4.5 likes doing more tool calls, adjust defaults to optimize for
+		// that model to allow greater autonomy
+		feedbackIterations = 15
 	}
 	if cfg, ok := dCtx.RepoConfig.AgentConfig[common.CodingKey]; ok && cfg.AutoIterations > 0 {
 		feedbackIterations = cfg.AutoIterations
