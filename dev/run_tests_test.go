@@ -17,7 +17,9 @@ import (
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
+	enumspb "go.temporal.io/api/enums/v1"
 	tlog "go.temporal.io/sdk/log"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 )
@@ -411,6 +413,87 @@ func (s *RunTestsTestSuite) TestRunTestsWithMultipleCommandsPartialActivityError
 	mu.Unlock()
 	s.Equal(2, flaky1Count)
 	s.Equal(2, flaky2Count)
+}
+
+func (s *RunTestsTestSuite) TestRunTestsWithMixedHeartbeatAndNonHeartbeatFailures() {
+	// Test that heartbeat failures are auto-retried first (without user prompt),
+	// then non-heartbeat failures are presented to the user for retry
+	s.devContext.RepoConfig = common.RepoConfig{
+		TestCommands: []common.CommandConfig{
+			{WorkingDir: ".", Command: "heartbeat fail command"},
+			{WorkingDir: ".", Command: "real fail command"},
+		},
+	}
+	s.devContext.ExecContext.DisableHumanInTheLoop = false
+
+	heartbeatCallCount := 0
+	realFailCallCount := 0
+	userPromptCount := 0
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+		return input.Args[2] == "heartbeat fail command"
+	})).Return(
+		func(ctx context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
+			heartbeatCallCount++
+			if heartbeatCallCount == 1 {
+				return env.EnvRunCommandActivityOutput{}, temporal.NewTimeoutError(enumspb.TIMEOUT_TYPE_HEARTBEAT, nil)
+			}
+			return env.EnvRunCommandActivityOutput{
+				Stdout:     "heartbeat success",
+				ExitStatus: 0,
+			}, nil
+		},
+	)
+
+	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.MatchedBy(func(input env.EnvRunCommandActivityInput) bool {
+		return input.Args[2] == "real fail command"
+	})).Return(
+		func(ctx context.Context, input env.EnvRunCommandActivityInput) (env.EnvRunCommandActivityOutput, error) {
+			realFailCallCount++
+			if realFailCallCount == 1 {
+				return env.EnvRunCommandActivityOutput{}, errors.New("real failure")
+			}
+			return env.EnvRunCommandActivityOutput{
+				Stdout:     "real success",
+				ExitStatus: 0,
+			}, nil
+		},
+	)
+
+	// Create a parent workflow that runs the test as a child workflow
+	parentWorkflow := func(ctx workflow.Context) (TestResult, error) {
+		signalCh := workflow.GetSignalChannel(ctx, flow_action.SignalNameRequestForUser)
+		workflow.Go(ctx, func(ctx workflow.Context) {
+			for {
+				var req flow_action.RequestForUser
+				signalCh.Receive(ctx, &req)
+				userPromptCount++
+				workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "", flow_action.SignalNameUserResponse, flow_action.UserResponse{}).Get(ctx, nil)
+			}
+		})
+
+		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+			WorkflowID: "child-test-workflow",
+		})
+		var result TestResult
+		err := workflow.ExecuteChildWorkflow(childCtx, s.wrapperWorkflow).Get(ctx, &result)
+		return result, err
+	}
+	s.env.RegisterWorkflow(parentWorkflow)
+
+	s.env.ExecuteWorkflow(parentWorkflow)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var result TestResult
+	s.NoError(s.env.GetWorkflowResult(&result))
+	s.True(result.TestsPassed)
+	// Heartbeat command: called twice (initial fail + auto-retry success)
+	s.Equal(2, heartbeatCallCount)
+	// Real fail command: called twice (initial fail + user-prompted retry success)
+	s.Equal(2, realFailCallCount)
+	// User should only be prompted once (for the real failure, not for heartbeat)
+	s.Equal(1, userPromptCount)
 }
 
 func (s *RunTestsTestSuite) TestRunTestsWithMultipleCommandsPartialActivityError() {
