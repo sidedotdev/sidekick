@@ -219,6 +219,7 @@ func executeActivityDirect(activityName string, activityArgs []json.RawMessage, 
 	defer cancel()
 
 	// Build arguments: first arg is context, rest are from JSON
+	// FIXME only do this if it actually is the first argument, it does not have to be
 	args := make([]reflect.Value, fnType.NumIn())
 	args[0] = reflect.ValueOf(ctx)
 
