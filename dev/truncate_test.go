@@ -147,3 +147,65 @@ func TestTruncateBetweenLines(t *testing.T) {
 		})
 	}
 }
+
+func TestTruncateMiddle(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns text unchanged when under limit", func(t *testing.T) {
+		t.Parallel()
+		text := "short text"
+		result := TruncateMiddle(text, 100)
+		assert.Equal(t, text, result)
+	})
+
+	t.Run("returns text unchanged when exactly at limit", func(t *testing.T) {
+		t.Parallel()
+		text := "exactly ten"
+		result := TruncateMiddle(text, len(text))
+		assert.Equal(t, text, result)
+	})
+
+	t.Run("truncates in the middle for large text", func(t *testing.T) {
+		t.Parallel()
+		// Build a string large enough that the marker fits within the budget
+		text := ""
+		for i := 0; i < 200; i++ {
+			text += "A"
+		}
+		for i := 0; i < 200; i++ {
+			text += "B"
+		}
+		for i := 0; i < 200; i++ {
+			text += "C"
+		}
+		result := TruncateMiddle(text, 200)
+		assert.Contains(t, result, "truncated")
+		assert.Contains(t, result, "from the middle")
+		assert.True(t, len(result) < len(text), "result should be shorter than input")
+		// Should contain start and end portions
+		assert.True(t, result[:1] == "A", "should start with A's")
+		assert.True(t, result[len(result)-1:] == "C", "should end with C's")
+	})
+
+	t.Run("preserves start and end content", func(t *testing.T) {
+		t.Parallel()
+		start := "START_MARKER_"
+		end := "_END_MARKER"
+		middle := ""
+		for i := 0; i < 1000; i++ {
+			middle += "x"
+		}
+		text := start + middle + end
+		result := TruncateMiddle(text, 200)
+		assert.True(t, len(result) < len(text))
+		assert.True(t, result[:5] == "START")
+		assert.True(t, result[len(result)-4:] == "RKER")
+	})
+
+	t.Run("handles very small maxChars", func(t *testing.T) {
+		t.Parallel()
+		text := "a]long text that should be truncated"
+		result := TruncateMiddle(text, 5)
+		assert.LessOrEqual(t, len(result), 5)
+	})
+}

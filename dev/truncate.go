@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"fmt"
 	"regexp"
 	"sidekick/llm"
 )
@@ -94,6 +95,21 @@ func truncateAllBetween(messages *[]llm.ChatMessage, startPattern *regexp.Regexp
 	*messages = newMessages
 }
 
-// TODO: Add a new function to summarize messages more smartly (eg omit old
-// edit blocks for example, or summarize using a smart summarization tool).
-// Or smartly choose which messages to drop based on tagging of messages.
+// TruncateMiddle truncates text in the middle when it exceeds maxChars,
+// keeping roughly equal portions from the start and end.
+func TruncateMiddle(text string, maxChars int) string {
+	if len(text) <= maxChars {
+		return text
+	}
+
+	removed := len(text) - maxChars
+	marker := fmt.Sprintf("\n\n[... truncated %d characters from the middle ...]\n\n", removed)
+
+	available := maxChars - len(marker)
+	if available <= 0 {
+		return text[:maxChars]
+	}
+
+	half := available / 2
+	return text[:half] + marker + text[len(text)-half:]
+}

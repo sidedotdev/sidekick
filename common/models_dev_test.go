@@ -9,6 +9,7 @@ import (
 
 func TestModelSupportsReasoning(t *testing.T) {
 	ClearModelsCache()
+	t.Cleanup(ClearModelsCache)
 	tempDir := t.TempDir()
 	t.Setenv("SIDE_CACHE_HOME", tempDir)
 
@@ -99,6 +100,7 @@ func TestModelSupportsReasoning(t *testing.T) {
 
 func TestGetModel(t *testing.T) {
 	ClearModelsCache()
+	t.Cleanup(ClearModelsCache)
 	tempDir := t.TempDir()
 	t.Setenv("SIDE_CACHE_HOME", tempDir)
 
@@ -213,6 +215,7 @@ func TestGetModel(t *testing.T) {
 
 func TestLoadModelsDev_CacheFreshness(t *testing.T) {
 	ClearModelsCache()
+	t.Cleanup(ClearModelsCache)
 	tempDir := t.TempDir()
 	t.Setenv("SIDE_CACHE_HOME", tempDir)
 

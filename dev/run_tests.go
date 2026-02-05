@@ -251,6 +251,11 @@ func runSingleTest(actionCtx DevActionContext, commandIndex int, workingDir stri
 }
 
 func SummarizeTestOutput(dCtx DevContext, testOutput string) (string, error) {
+	modelConfig := dCtx.GetModelConfig(common.SummarizationKey, 0, "small")
+
+	maxOutputChars := common.MaxCharsForModel(modelConfig.Provider, modelConfig.Model, 15000)
+	testOutput = TruncateMiddle(testOutput, maxOutputChars)
+
 	prompt := fmt.Sprintf(`
 Summarize the following test run results, maintain all important details that a
 software engineer may use to fix the underlyng issue. Leave out extraneous
@@ -318,8 +323,6 @@ Here is the test result output to summarize:
 
 %s
 `, testOutput)
-
-	modelConfig := dCtx.GetModelConfig(common.SummarizationKey, 0, "small")
 
 	toolChatOptions := llm.ToolChatOptions{
 		Secrets: *dCtx.Secrets,
