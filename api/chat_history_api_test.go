@@ -16,7 +16,7 @@ import (
 
 func TestHydrateChatHistoryHandler_HappyPath(t *testing.T) {
 	ctrl := NewMockController(t)
-	router := DefineRoutes(ctrl)
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
 
 	workspaceId := "test-workspace"
 	flowId := "test-flow"
@@ -83,7 +83,7 @@ func TestHydrateChatHistoryHandler_HappyPath(t *testing.T) {
 
 func TestHydrateChatHistoryHandler_MissingBlocksShowError(t *testing.T) {
 	ctrl := NewMockController(t)
-	router := DefineRoutes(ctrl)
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
 
 	workspaceId := "test-workspace"
 	flowId := "test-flow"
@@ -126,7 +126,7 @@ func TestHydrateChatHistoryHandler_MissingBlocksShowError(t *testing.T) {
 
 func TestHydrateChatHistoryHandler_MismatchedFlowId(t *testing.T) {
 	ctrl := NewMockController(t)
-	router := DefineRoutes(ctrl)
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
 
 	workspaceId := "test-workspace"
 	flowId := "test-flow"
@@ -150,7 +150,7 @@ func TestHydrateChatHistoryHandler_MismatchedFlowId(t *testing.T) {
 
 func TestHydrateChatHistoryHandler_EmptyFlowIdInRefAllowed(t *testing.T) {
 	ctrl := NewMockController(t)
-	router := DefineRoutes(ctrl)
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
 
 	workspaceId := "test-workspace"
 	flowId := "test-flow"
@@ -190,7 +190,7 @@ func TestHydrateChatHistoryHandler_EmptyFlowIdInRefAllowed(t *testing.T) {
 
 func TestHydrateChatHistoryHandler_EmptyRefs(t *testing.T) {
 	ctrl := NewMockController(t)
-	router := DefineRoutes(ctrl)
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
 
 	workspaceId := "test-workspace"
 	flowId := "test-flow"
@@ -217,7 +217,7 @@ func TestHydrateChatHistoryHandler_EmptyRefs(t *testing.T) {
 
 func TestHydrateChatHistoryHandler_MalformedBlockShowsError(t *testing.T) {
 	ctrl := NewMockController(t)
-	router := DefineRoutes(ctrl)
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
 
 	workspaceId := "test-workspace"
 	flowId := "test-flow"
@@ -256,7 +256,7 @@ func TestHydrateChatHistoryHandler_MalformedBlockShowsError(t *testing.T) {
 
 func TestHydrateChatHistoryHandler_PreservesOrder(t *testing.T) {
 	ctrl := NewMockController(t)
-	router := DefineRoutes(ctrl)
+	router := DefineRoutes(ctrl, TestAllowedOrigins())
 
 	workspaceId := "test-workspace"
 	flowId := "test-flow"
