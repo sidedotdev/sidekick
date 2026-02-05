@@ -10,8 +10,8 @@ import (
 const (
 	// DefaultContextLimitTokens is the fallback context limit when models.dev lookup fails
 	DefaultContextLimitTokens = 100000
-	// CharsPerToken is the conservative estimate for token-to-char conversion
-	CharsPerToken = 2.5
+	// CharsPerToken is a conservative estimate for token-to-char conversion
+	CharsPerToken = 1.9
 )
 
 // GetModelContextLimit returns the context limit in tokens for a given model.
