@@ -148,6 +148,16 @@ func TestGetAllSymbolDefinitionsFromSource_Python(t *testing.T) {
 			expectedSymbols: []string{"MyClass", "__init__", "get_value"},
 			expectedRanges:  [][2]int{{0, 5}, {1, 2}, {4, 5}},
 		},
+		{
+			name: "import aliases excluded from all symbols",
+			code: `from x.agents.some_agent import AGENT_ID as DEFAULT_AGENT_ID
+
+def my_func():
+    print("hello")
+`,
+			expectedSymbols: []string{"my_func"},
+			expectedRanges:  [][2]int{{2, 3}},
+		},
 	}
 
 	for _, tc := range testCases {
