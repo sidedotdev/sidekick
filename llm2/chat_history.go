@@ -24,7 +24,6 @@ func NewKsuidGenerator() BlockIdGenerator {
 
 // MessageRef stores a reference to a message's content blocks in KV storage.
 type MessageRef struct {
-	FlowId   string   `json:"flowId"`
 	BlockIds []string `json:"blockIds"`
 	Role     string   `json:"role"`
 }
@@ -223,11 +222,6 @@ func (h *Llm2ChatHistory) Hydrate(ctx context.Context, storage common.KeyValueSt
 		return nil
 	}
 
-	// Restore flowId from refs if not already set
-	if h.flowId == "" && len(h.refs) > 0 {
-		h.flowId = h.refs[0].FlowId
-	}
-
 	// Initialize cache if needed
 	if h.hydratedBlocks == nil {
 		h.hydratedBlocks = make(map[string]ContentBlock)
@@ -343,7 +337,6 @@ func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueSt
 			h.hydratedBlocks[blockId] = block
 		}
 		h.refs[idx] = MessageRef{
-			FlowId:   h.flowId,
 			BlockIds: blockIds,
 			Role:     string(msg.Role),
 		}
@@ -361,14 +354,18 @@ func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueSt
 
 // llm2ChatHistoryJSON is the wrapper format for Llm2ChatHistory serialization.
 type llm2ChatHistoryJSON struct {
-	Type string       `json:"type"`
-	Refs []MessageRef `json:"refs"`
+	Type        string       `json:"type"`
+	Refs        []MessageRef `json:"refs"`
+	FlowId      string       `json:"flowId,omitempty"`
+	WorkspaceId string       `json:"workspaceId,omitempty"`
 }
 
 func (h *Llm2ChatHistory) MarshalJSON() ([]byte, error) {
 	return json.Marshal(llm2ChatHistoryJSON{
-		Type: "llm2",
-		Refs: h.refs,
+		Type:        "llm2",
+		Refs:        h.refs,
+		FlowId:      h.flowId,
+		WorkspaceId: h.workspaceId,
 	})
 }
 
@@ -378,6 +375,8 @@ func (h *Llm2ChatHistory) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	h.refs = wrapper.Refs
+	h.flowId = wrapper.FlowId
+	h.workspaceId = wrapper.WorkspaceId
 	h.unpersisted = []int{}
 	if len(wrapper.Refs) == 0 {
 		h.hydrated = true
@@ -404,7 +403,6 @@ func (h *Llm2ChatHistory) Refs() []MessageRef {
 	result := make([]MessageRef, len(h.refs))
 	for i, ref := range h.refs {
 		result[i] = MessageRef{
-			FlowId:   ref.FlowId,
 			BlockIds: append([]string(nil), ref.BlockIds...),
 			Role:     ref.Role,
 		}
@@ -493,12 +491,17 @@ func (c *ChatHistoryContainer) UnmarshalJSON(data []byte) error {
 	// Detect Llm2 format by checking for {"type": "llm2", ...} wrapper object
 	if isLlm2Format(data) {
 		var wrapper struct {
-			Refs []MessageRef `json:"refs"`
+			Refs        []MessageRef `json:"refs"`
+			FlowId      string       `json:"flowId,omitempty"`
+			WorkspaceId string       `json:"workspaceId,omitempty"`
 		}
 		if err := json.Unmarshal(data, &wrapper); err != nil {
 			return err
 		}
-		c.History = newLlm2ChatHistoryFromRefs(wrapper.Refs)
+		h := newLlm2ChatHistoryFromRefs(wrapper.Refs)
+		h.flowId = wrapper.FlowId
+		h.workspaceId = wrapper.WorkspaceId
+		c.History = h
 		return nil
 	}
 

@@ -796,11 +796,12 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesManageV3
 
 	// ManageV3 returns refs-only (simulating JSON marshaling)
 	managedRefs := []llm2.MessageRef{
-		{FlowId: "test-flow", BlockIds: []string{"block-managed"}, Role: "user"},
+		{BlockIds: []string{"block-managed"}, Role: "user"},
 	}
 	managedRefsJSON, _ := json.Marshal(map[string]interface{}{
-		"type": "llm2",
-		"refs": managedRefs,
+		"type":   "llm2",
+		"refs":   managedRefs,
+		"flowId": "test-flow",
 	})
 	var managedContainer llm2.ChatHistoryContainer
 	_ = json.Unmarshal(managedRefsJSON, &managedContainer)
@@ -860,12 +861,13 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_HydratesA
 	// ManageV3 returns refs-only (simulating what happens after JSON marshaling)
 	// The refs point to KV storage keys
 	managedRefs := []llm2.MessageRef{
-		{FlowId: "test-flow", BlockIds: []string{"block-1"}, Role: "user"},
-		{FlowId: "test-flow", BlockIds: []string{"block-2"}, Role: "assistant"},
+		{BlockIds: []string{"block-1"}, Role: "user"},
+		{BlockIds: []string{"block-2"}, Role: "assistant"},
 	}
 	managedRefsJSON, _ := json.Marshal(map[string]interface{}{
-		"type": "llm2",
-		"refs": managedRefs,
+		"type":   "llm2",
+		"refs":   managedRefs,
+		"flowId": "test-flow",
 	})
 	var managedContainer llm2.ChatHistoryContainer
 	_ = json.Unmarshal(managedRefsJSON, &managedContainer)
@@ -910,13 +912,15 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_ReusesHyd
 	// The history will be non-hydrated when passed to the workflow (due to serialization),
 	// so we need a workflow that hydrates first, then calls ManageChatHistory
 	existingRefs := []llm2.MessageRef{
-		{FlowId: "test-flow", BlockIds: []string{"existing-block-1"}, Role: "user"},
-		{FlowId: "test-flow", BlockIds: []string{"existing-block-2"}, Role: "assistant"},
-		{FlowId: "test-flow", BlockIds: []string{"existing-block-3"}, Role: "user"},
+		{BlockIds: []string{"existing-block-1"}, Role: "user"},
+		{BlockIds: []string{"existing-block-2"}, Role: "assistant"},
+		{BlockIds: []string{"existing-block-3"}, Role: "user"},
 	}
 	existingRefsJSON, _ := json.Marshal(map[string]interface{}{
-		"type": "llm2",
-		"refs": existingRefs,
+		"type":        "llm2",
+		"refs":        existingRefs,
+		"flowId":      "test-flow",
+		"workspaceId": "test-workspace-id",
 	})
 	var chatHistory llm2.ChatHistoryContainer
 	_ = json.Unmarshal(existingRefsJSON, &chatHistory)
@@ -941,12 +945,14 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_ReusesHyd
 	// - Second message keeps its existing block ID (unchanged)
 	// - Third message has a new block ID (marker changed)
 	managedRefs := []llm2.MessageRef{
-		{FlowId: "test-flow", BlockIds: []string{"existing-block-2"}, Role: "assistant"},
-		{FlowId: "test-flow", BlockIds: []string{"new-block-3"}, Role: "user"},
+		{BlockIds: []string{"existing-block-2"}, Role: "assistant"},
+		{BlockIds: []string{"new-block-3"}, Role: "user"},
 	}
 	managedRefsJSON, _ := json.Marshal(map[string]interface{}{
-		"type": "llm2",
-		"refs": managedRefs,
+		"type":        "llm2",
+		"refs":        managedRefs,
+		"flowId":      "test-flow",
+		"workspaceId": "test-workspace-id",
 	})
 	var managedContainer llm2.ChatHistoryContainer
 	_ = json.Unmarshal(managedRefsJSON, &managedContainer)
@@ -1007,11 +1013,12 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_VerifiesH
 	s.env.OnActivity(ka.MSetRaw, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	managedRefs := []llm2.MessageRef{
-		{FlowId: "test-flow", BlockIds: []string{"block-1"}, Role: "user"},
+		{BlockIds: []string{"block-1"}, Role: "user"},
 	}
 	managedRefsJSON, _ := json.Marshal(map[string]interface{}{
-		"type": "llm2",
-		"refs": managedRefs,
+		"type":   "llm2",
+		"refs":   managedRefs,
+		"flowId": "test-flow",
 	})
 	var managedContainer llm2.ChatHistoryContainer
 	_ = json.Unmarshal(managedRefsJSON, &managedContainer)
@@ -1041,11 +1048,6 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_VerifiesH
 // hydrateFirstWorkflow is a named workflow that hydrates before calling ManageChatHistory
 func hydrateFirstWorkflow(ctx workflow.Context, ch *llm2.ChatHistoryContainer, ml int) (*llm2.ChatHistoryContainer, error) {
 	ctx = utils.NoRetryCtx(ctx)
-
-	// Set workspaceId (lost during JSON serialization across workflow boundary)
-	if llm2Hist, ok := ch.History.(*llm2.Llm2ChatHistory); ok {
-		llm2Hist.SetWorkspaceId("test-workspace-id")
-	}
 
 	// Hydrate the history first (simulating previous workflow operations)
 	workflowSafeStorage := &common.WorkflowSafeKVStorage{Ctx: ctx}

@@ -34,14 +34,6 @@ func (ctrl *Controller) HydrateChatHistoryHandler(c *gin.Context) {
 		return
 	}
 
-	// Validate that all refs have matching flowId
-	for _, ref := range req.Refs {
-		if ref.FlowId != "" && ref.FlowId != flowId {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Mismatched flowId in ref"})
-			return
-		}
-	}
-
 	// Collect all block IDs in order
 	var allBlockIds []string
 	for _, ref := range req.Refs {
