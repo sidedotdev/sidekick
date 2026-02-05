@@ -96,6 +96,7 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 		}
 
 		// Wait for all goroutines to finish and collect the results
+		heartbeatRetryVersion := workflow.GetVersion(dCtx, "heartbeat-auto-retry", workflow.DefaultVersion, 1)
 		var heartbeatFailedCommands []indexedCommand
 		for i := 0; i < len(pendingCommands); i++ {
 			var value interface{}
@@ -104,7 +105,7 @@ func runTestsWithRetry(dCtx DevContext, actionCtx DevActionContext, commandsToRu
 			}
 			result := value.(singleTestResult)
 			if result.err != nil {
-				if isHeartbeatError(result.err) {
+				if heartbeatRetryVersion >= 1 && isHeartbeatError(result.err) {
 					heartbeatFailedCommands = append(heartbeatFailedCommands, indexedCommand{
 						index: result.commandIndex,
 						cmd:   commandsToRun[result.commandIndex],
