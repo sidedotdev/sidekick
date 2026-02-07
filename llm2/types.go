@@ -58,6 +58,7 @@ type ReasoningBlock struct {
 	Text             string `json:"text"`
 	Summary          string `json:"summary"`
 	EncryptedContent string `json:"encryptedContent,omitempty"`
+	Signature        []byte `json:"signature,omitempty"`
 }
 
 type McpCallBlock struct {
@@ -96,6 +97,9 @@ type ContentBlock struct {
 	McpCall      *McpCallBlock    `json:"mcpCall,omitempty"`
 	CacheControl string           `json:"cacheControl,omitempty"`
 	ContextType  string           `json:"contextType,omitempty"`
+	// Signature is a provider-specific opaque token (e.g., Google's ThoughtSignature)
+	// that must be preserved and returned verbatim in subsequent turns.
+	Signature []byte `json:"signature,omitempty"`
 }
 
 // A single chat turn (message) consisting of a role and ordered content blocks.
@@ -283,4 +287,5 @@ type Event struct {
 	Index        int           `json:"index"`                  // 0-based block index
 	ContentBlock *ContentBlock `json:"contentBlock,omitempty"` // present for block_started; MAY be included for other events in future
 	Delta        string        `json:"delta,omitempty"`        // for *_delta events (text_delta, summary_text_delta, signature_delta)
+	Signature    []byte        `json:"signature,omitempty"`    // for block_done events that carry a signature (e.g., Google ThoughtSignature)
 }

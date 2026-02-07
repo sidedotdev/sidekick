@@ -39,5 +39,8 @@ func (o Options) ActionParams() map[string]any {
 	if o.Params.MaxTokens > 0 {
 		params["maxTokens"] = o.Params.MaxTokens
 	}
+	if o.Params.ServiceTier != "" {
+		params["serviceTier"] = o.Params.ServiceTier
+	}
 	return params
 }

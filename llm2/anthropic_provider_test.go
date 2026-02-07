@@ -3,6 +3,7 @@ package llm2
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"sidekick/common"
 	"sidekick/secret_manager"
@@ -109,9 +110,31 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 	var sawBlockStartedToolUse bool
 	var sawTextDelta bool
 
+	fmt.Println("\n=== Anthropic Provider Integration Test ===")
+
 	go func() {
 		for event := range eventChan {
 			allEvents = append(allEvents, event)
+			// Debug: print each event
+			switch event.Type {
+			case EventBlockStarted:
+				blockType := ""
+				if event.ContentBlock != nil {
+					blockType = string(event.ContentBlock.Type)
+				}
+				fmt.Printf("Event[%d]: type=block_started block_type=%s\n", event.Index, blockType)
+			case EventTextDelta:
+				deltaPreview := event.Delta
+				if len(deltaPreview) > 50 {
+					deltaPreview = deltaPreview[:50] + "..."
+				}
+				fmt.Printf("Event[%d]: type=text_delta delta=%q\n", event.Index, deltaPreview)
+			case EventBlockDone:
+				fmt.Printf("Event[%d]: type=block_done\n", event.Index)
+			default:
+				fmt.Printf("Event[%d]: type=%s\n", event.Index, event.Type)
+			}
+
 			if event.Type == EventBlockStarted && event.ContentBlock.Type == ContentBlockTypeToolUse {
 				sawBlockStartedToolUse = true
 			}
@@ -146,6 +169,28 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 	}
 
 	t.Logf("Response output content blocks: %d", len(response.Output.Content))
+
+	// Debug: print all content blocks
+	fmt.Printf("\n=== All Content Blocks (total: %d) ===\n", len(response.Output.Content))
+	for i, block := range response.Output.Content {
+		fmt.Printf("Block[%d] Type=%s\n", i, block.Type)
+		switch block.Type {
+		case ContentBlockTypeText:
+			textPreview := block.Text
+			if len(textPreview) > 100 {
+				textPreview = textPreview[:100] + "..."
+			}
+			fmt.Printf("  Text=%q\n", textPreview)
+		case ContentBlockTypeToolUse:
+			if block.ToolUse != nil {
+				fmt.Printf("  ToolUse: ID=%s Name=%s ArgsLen=%d\n", block.ToolUse.Id, block.ToolUse.Name, len(block.ToolUse.Arguments))
+			}
+		case ContentBlockTypeReasoning:
+			if block.Reasoning != nil {
+				fmt.Printf("  Reasoning: TextLen=%d SummaryLen=%d\n", len(block.Reasoning.Text), len(block.Reasoning.Summary))
+			}
+		}
+	}
 
 	var foundToolUseOrText bool
 	for _, block := range response.Output.Content {
@@ -244,6 +289,134 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		assert.NotNil(t, response.Usage, "Usage field should not be nil on multi-turn")
 		assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0 on multi-turn")
 		assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0 on multi-turn")
+	})
+
+	t.Run("Reasoning", func(t *testing.T) {
+		reasoningModel := os.Getenv("ANTHROPIC_REASONING_MODEL")
+		if reasoningModel == "" {
+			reasoningModel = "claude-sonnet-4-5"
+		}
+		fmt.Printf("\n=== Reasoning Test (%s) ===\n", reasoningModel)
+
+		reasoningMessages := []Message{
+			{
+				Role: RoleUser,
+				Content: []ContentBlock{
+					{
+						Type: ContentBlockTypeText,
+						Text: "What is 127 * 349? Think through this step by step, showing your work.",
+					},
+				},
+			},
+		}
+
+		reasoningOptions := Options{
+			Params: Params{
+				ModelConfig: common.ModelConfig{
+					Provider:        "anthropic",
+					Model:           reasoningModel,
+					ReasoningEffort: "high",
+				},
+			},
+			Secrets: secret_manager.SecretManagerContainer{
+				SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+					&secret_manager.EnvSecretManager{},
+					&secret_manager.KeyringSecretManager{},
+					&secret_manager.LocalConfigSecretManager{},
+				}),
+			},
+		}
+
+		eventChan := make(chan Event, 100)
+		var allEvents []Event
+
+		go func() {
+			for event := range eventChan {
+				allEvents = append(allEvents, event)
+				// Debug: print each event
+				switch event.Type {
+				case EventBlockStarted:
+					blockType := ""
+					if event.ContentBlock != nil {
+						blockType = string(event.ContentBlock.Type)
+					}
+					fmt.Printf("Event[%d]: type=block_started block_type=%s\n", event.Index, blockType)
+				case EventTextDelta:
+					deltaPreview := event.Delta
+					if len(deltaPreview) > 50 {
+						deltaPreview = deltaPreview[:50] + "..."
+					}
+					fmt.Printf("Event[%d]: type=text_delta delta=%q\n", event.Index, deltaPreview)
+				case EventBlockDone:
+					fmt.Printf("Event[%d]: type=block_done\n", event.Index)
+				case EventSignatureDelta:
+					fmt.Printf("Event[%d]: type=signature_delta len=%d\n", event.Index, len(event.Signature))
+				default:
+					fmt.Printf("Event[%d]: type=%s\n", event.Index, event.Type)
+				}
+			}
+		}()
+
+		reasoningOptions.Params.ChatHistory = newTestChatHistoryWithMessages(reasoningMessages)
+		response, err := provider.Stream(ctx, reasoningOptions, eventChan)
+		close(eventChan)
+
+		if err != nil {
+			if contains(err.Error(), "overloaded_error") || contains(err.Error(), "Overloaded") {
+				t.Skipf("Skipping reasoning test due to Anthropic API being overloaded: %v", err)
+			}
+			t.Fatalf("Stream returned an error: %v", err)
+		}
+
+		if response == nil {
+			t.Fatal("Stream returned a nil response")
+		}
+
+		// Debug: print all content blocks
+		fmt.Printf("\n=== All Content Blocks (total: %d) ===\n", len(response.Output.Content))
+		for i, block := range response.Output.Content {
+			fmt.Printf("Block[%d] Type=%s\n", i, block.Type)
+			switch block.Type {
+			case ContentBlockTypeText:
+				textPreview := block.Text
+				if len(textPreview) > 100 {
+					textPreview = textPreview[:100] + "..."
+				}
+				fmt.Printf("  Text=%q TextLen=%d\n", textPreview, len(block.Text))
+			case ContentBlockTypeReasoning:
+				if block.Reasoning != nil {
+					textPreview := block.Reasoning.Text
+					if len(textPreview) > 100 {
+						textPreview = textPreview[:100] + "..."
+					}
+					fmt.Printf("  ReasoningText=%q\n", textPreview)
+					fmt.Printf("  ReasoningTextLen=%d SummaryLen=%d SignatureLen=%d\n", len(block.Reasoning.Text), len(block.Reasoning.Summary), len(block.Reasoning.Signature))
+				}
+			}
+		}
+
+		// Check for reasoning content
+		var hasReasoning bool
+		var hasText bool
+		for _, block := range response.Output.Content {
+			if block.Type == ContentBlockTypeReasoning && block.Reasoning != nil && len(block.Reasoning.Text) > 0 {
+				hasReasoning = true
+				t.Logf("Reasoning text length: %d", len(block.Reasoning.Text))
+			}
+			if block.Type == ContentBlockTypeText && block.Text != "" {
+				hasText = true
+			}
+		}
+
+		if !hasReasoning {
+			t.Log("No reasoning block found - model may not support extended thinking")
+		}
+		if !hasText {
+			t.Error("Expected text content in response")
+		}
+
+		t.Logf("Usage: InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
+		t.Logf("Model: %s, StopReason: %s", response.Model, response.StopReason)
 	})
 }
 
