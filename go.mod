@@ -4,7 +4,7 @@ go 1.24.0
 
 // tree-sitter-grammars/tree-sitter-markdown doesn't have Go bindings yet;
 // using ehsanul fork's golang-language-bindings branch which adds them
-replace github.com/tree-sitter-grammars/tree-sitter-markdown => github.com/ehsanul/tree-sitter-markdown v0.0.0-20260124095102-47fdfba6c965
+replace github.com/tree-sitter-grammars/tree-sitter-markdown => github.com/ehsanul/tree-sitter-markdown v0.0.0-20260207061258-ff71bc74660c
 
 require (
 	al.essio.dev/pkg/shellescape v1.6.0
@@ -52,6 +52,7 @@ require (
 	github.com/tree-sitter/tree-sitter-bash v0.25.1
 	github.com/tree-sitter/tree-sitter-go v0.25.0
 	github.com/tree-sitter/tree-sitter-java v0.23.5
+	github.com/tree-sitter/tree-sitter-javascript v0.25.0
 	github.com/tree-sitter/tree-sitter-python v0.25.0
 	github.com/tree-sitter/tree-sitter-typescript v0.23.2
 	github.com/unum-cloud/usearch/golang v0.0.0-20231126121226-c2463ca3a043
@@ -93,7 +94,6 @@ require (
 	github.com/charmbracelet/x/exp/strings v0.0.0-20240722160745-212f7b056ed0 // indirect
 	github.com/charmbracelet/x/term v0.2.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
-	github.com/ehsanul/tree-sitter-markdown v0.0.0-20260123202532-cd95ee9be8ea // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
 	github.com/knadh/koanf/maps v0.1.1 // indirect
@@ -104,7 +104,6 @@ require (
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.57.1 // indirect
-	github.com/tree-sitter/tree-sitter-javascript v0.25.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 )
 

@@ -188,12 +188,8 @@ github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkp
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/ehsanul/anthropic-go/v3 v3.0.0-20240726013241-16f67db96235 h1:aH4sx4N6BVcIyrEvgKzUVG229Af4mtpWg8Uk1bE2CXA=
 github.com/ehsanul/anthropic-go/v3 v3.0.0-20240726013241-16f67db96235/go.mod h1:hE7aWod2T53nGifVQpZ9bFW1FSOFbzuox4km9CbGVGU=
-github.com/ehsanul/tree-sitter-markdown v0.0.0-20260123202532-cd95ee9be8ea h1:GlcKCqPwlipNFKcRdiyMN8IIGDT9iZY0rYjbTPN8kG4=
-github.com/ehsanul/tree-sitter-markdown v0.0.0-20260123202532-cd95ee9be8ea/go.mod h1:7o3d5z0FZy9SeTrNkOrRDXKGZaQsBoFGtKk+Sc9G9h0=
-github.com/ehsanul/tree-sitter-markdown v0.0.0-20260124094705-13ebf036eff4 h1:nIP3MyfIPhFTZjFqXAPxCZJL8jlJogOp0zaUAGMRmPc=
-github.com/ehsanul/tree-sitter-markdown v0.0.0-20260124094705-13ebf036eff4/go.mod h1:HbIqgbSD325ew2QNXOVcBhW/5XIR1OqGyxZbokp19+A=
-github.com/ehsanul/tree-sitter-markdown v0.0.0-20260124095102-47fdfba6c965 h1:RD9CkUD0pHO1EEbLul7+L0c79ohkAOngZ12sZmUzrRM=
-github.com/ehsanul/tree-sitter-markdown v0.0.0-20260124095102-47fdfba6c965/go.mod h1:HbIqgbSD325ew2QNXOVcBhW/5XIR1OqGyxZbokp19+A=
+github.com/ehsanul/tree-sitter-markdown v0.0.0-20260207061258-ff71bc74660c h1:rB4NhThs2u2c6alifUGinDgaIfdlrJz3aedn1Foavf0=
+github.com/ehsanul/tree-sitter-markdown v0.0.0-20260207061258-ff71bc74660c/go.mod h1:MwfM5WXylAMe/9vRwSGyN+ONxFHNDMUeoi8iFZ/0m7Q=
 github.com/elazarl/goproxy v1.2.1 h1:njjgvO6cRG9rIqN2ebkqy6cQz2Njkx7Fsfv/zIZqgug=
 github.com/elazarl/goproxy v1.2.1/go.mod h1:YfEbZtqP4AetfO6d40vWchF3znWX7C7Vd6ZMfdL8z64=
 github.com/emirpasic/gods v1.18.1 h1:FXtiHYKDGKCW2KzwZKx0iC0PQmdlorYgdFG9jPXJ1Bc=
@@ -619,8 +615,6 @@ github.com/tree-sitter/tree-sitter-html v0.23.2 h1:1UYDV+Yd05GGRhVnTcbP58GkKLSHH
 github.com/tree-sitter/tree-sitter-html v0.23.2/go.mod h1:gpUv/dG3Xl/eebqgeYeFMt+JLOY9cgFinb/Nw08a9og=
 github.com/tree-sitter/tree-sitter-java v0.23.5 h1:J9YeMGMwXYlKSP3K4Us8CitC6hjtMjqpeOf2GGo6tig=
 github.com/tree-sitter/tree-sitter-java v0.23.5/go.mod h1:NRKlI8+EznxA7t1Yt3xtraPk1Wzqh3GAIC46wxvc320=
-github.com/tree-sitter/tree-sitter-javascript v0.23.1 h1:1fWupaRC0ArlHJ/QJzsfQ3Ibyopw7ZfQK4xXc40Zveo=
-github.com/tree-sitter/tree-sitter-javascript v0.23.1/go.mod h1:lmGD1EJdCA+v0S1u2fFgepMg/opzSg/4pgFym2FPGAs=
 github.com/tree-sitter/tree-sitter-javascript v0.25.0 h1:ZkWETb66/w8cc13yhfnNuHOLDQWl3BnKlH6f9AdR88c=
 github.com/tree-sitter/tree-sitter-javascript v0.25.0/go.mod h1:lmGD1EJdCA+v0S1u2fFgepMg/opzSg/4pgFym2FPGAs=
 github.com/tree-sitter/tree-sitter-json v0.24.8 h1:tV5rMkihgtiOe14a9LHfDY5kzTl5GNUYe6carZBn0fQ=
