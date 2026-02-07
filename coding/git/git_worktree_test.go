@@ -183,9 +183,10 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		branchName := fmt.Sprintf("feature-cleanup-test-%s", filepath.Base(repoDir))
 
 		// Create environment container and the associated worktree
+		workspaceId := fmt.Sprintf("test-cleanup-%s", filepath.Base(repoDir))
 		worktree := domain.Worktree{
 			Name:        branchName,
-			WorkspaceId: filepath.Base(repoDir),
+			WorkspaceId: workspaceId,
 		}
 		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
 		require.NoError(t, err)
@@ -260,12 +261,13 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		createCommit(t, repoDir, "Initial commit on main")
 
 		// Create a feature branch and worktree with unique name
-		branchName := fmt.Sprintf("feature-empty-message-test")
+		branchName := fmt.Sprintf("feature-empty-message-test-%s", filepath.Base(repoDir))
 
 		// Create environment container and the worktree
+		workspaceId := fmt.Sprintf("test-empty-msg-%s", filepath.Base(repoDir))
 		worktree := domain.Worktree{
 			Name:        branchName,
-			WorkspaceId: filepath.Base(repoDir),
+			WorkspaceId: workspaceId,
 		}
 		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
 		require.NoError(t, err)
@@ -307,8 +309,8 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit on main")
 
-		// Create a feature branch and worktree
-		branchName := "feature-tag-fallback-test"
+		// Create a feature branch and worktree with unique name
+		branchName := fmt.Sprintf("feature-tag-fallback-test-%s", filepath.Base(repoDir))
 
 		// Pre-create the archive tag to simulate it already existing
 		runGitCommandInTestRepo(t, repoDir, "branch", branchName)
@@ -317,9 +319,10 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		runGitCommandInTestRepo(t, repoDir, "branch", "-D", branchName)
 
 		// Create environment container and the worktree
+		workspaceId := fmt.Sprintf("test-tag-fallback-%s", filepath.Base(repoDir))
 		worktree := domain.Worktree{
 			Name:        branchName,
-			WorkspaceId: filepath.Base(repoDir),
+			WorkspaceId: workspaceId,
 		}
 		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
 		require.NoError(t, err)
@@ -348,7 +351,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit on main")
 
-		branchName := "feature-multi-tag-test"
+		branchName := fmt.Sprintf("feature-multi-tag-test-%s", filepath.Base(repoDir))
 
 		// Pre-create multiple archive tags
 		runGitCommandInTestRepo(t, repoDir, "branch", branchName)
