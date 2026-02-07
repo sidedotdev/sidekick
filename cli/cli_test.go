@@ -13,6 +13,8 @@ import (
 	"sidekick/domain"
 	"sidekick/srv/sqlite"
 
+	"github.com/knadh/koanf/parsers/json"
+	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/urfave/cli/v3"
@@ -398,6 +400,113 @@ func TestSaveConfig_PreservesTomlFormat(t *testing.T) {
 	data, err := os.ReadFile(configPath)
 	assert.NoError(t, err)
 	assert.Contains(t, string(data), "command = \"test-command\"")
+}
+
+func TestMarshalConfigWithKoanf_YamlUsesSnakeCase(t *testing.T) {
+	t.Parallel()
+
+	config := common.RepoConfig{
+		TestCommands: []common.CommandConfig{
+			{Command: "go test ./...", WorkingDir: "src"},
+		},
+		MaxIterations: 10,
+	}
+
+	data, err := marshalConfigWithKoanf(config, yaml.Parser())
+	require.NoError(t, err)
+
+	expected := `max_iterations: 10
+test_commands:
+    - command: go test ./...
+      working_dir: src
+`
+	assert.Equal(t, expected, string(data))
+}
+
+func TestMarshalConfigWithKoanf_OmitsEmptyFields(t *testing.T) {
+	t.Parallel()
+
+	config := common.RepoConfig{
+		TestCommands: []common.CommandConfig{
+			{Command: "pytest"},
+		},
+	}
+
+	data, err := marshalConfigWithKoanf(config, yaml.Parser())
+	require.NoError(t, err)
+
+	expected := `test_commands:
+    - command: pytest
+`
+	assert.Equal(t, expected, string(data))
+}
+
+func TestMarshalConfigWithKoanf_JsonUsesSnakeCase(t *testing.T) {
+	t.Parallel()
+
+	config := common.RepoConfig{
+		TestCommands: []common.CommandConfig{
+			{Command: "npm test"},
+		},
+		MaxPlanningIterations: 5,
+	}
+
+	data, err := marshalConfigWithKoanf(config, json.Parser())
+	require.NoError(t, err)
+
+	expected := `{"max_planning_iterations":5,"test_commands":[{"command":"npm test"}]}`
+	assert.Equal(t, expected, string(data))
+}
+
+func TestMarshalConfigWithKoanf_HandlesNestedStructs(t *testing.T) {
+	t.Parallel()
+
+	config := common.RepoConfig{
+		EditCode: common.EditCodeConfig{
+			Hints:     "Use functional style",
+			HintsPath: "hints.md",
+		},
+	}
+
+	data, err := marshalConfigWithKoanf(config, yaml.Parser())
+	require.NoError(t, err)
+
+	expected := `edit_code:
+    hints: Use functional style
+    hints_path: hints.md
+`
+	assert.Equal(t, expected, string(data))
+}
+
+func TestMarshalConfigWithKoanf_HandlesMapFields(t *testing.T) {
+	t.Parallel()
+
+	config := common.RepoConfig{
+		AgentConfig: map[string]common.AgentUseCaseConfig{
+			"planning": {AutoIterations: 3},
+		},
+	}
+
+	data, err := marshalConfigWithKoanf(config, yaml.Parser())
+	require.NoError(t, err)
+
+	expected := `agent_config:
+    planning:
+        auto_iterations: 3
+`
+	assert.Equal(t, expected, string(data))
+}
+
+func TestMarshalConfigWithKoanf_EmptyConfigProducesEmptyOutput(t *testing.T) {
+	t.Parallel()
+
+	config := common.RepoConfig{}
+
+	data, err := marshalConfigWithKoanf(config, yaml.Parser())
+	require.NoError(t, err)
+
+	output := string(data)
+	assert.Equal(t, "{}\n", output)
 }
 
 func TestEnsureTestCommands_UserSkipsCaseInsensitive(t *testing.T) {

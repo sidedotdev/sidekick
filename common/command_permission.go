@@ -25,11 +25,11 @@ type CommandPattern struct {
 
 // CommandPermissionConfig defines permission rules for shell commands
 type CommandPermissionConfig struct {
-	AutoApprove          []CommandPattern `toml:"auto_approve" json:"autoApprove" koanf:"auto_approve"`
-	RequireApproval      []CommandPattern `toml:"require_approval" json:"requireApproval" koanf:"require_approval"`
-	Deny                 []CommandPattern `toml:"deny" json:"deny" koanf:"deny"`
-	ResetAutoApprove     bool             `toml:"reset_auto_approve" json:"resetAutoApprove" koanf:"reset_auto_approve"`
-	ResetRequireApproval bool             `toml:"reset_require_approval" json:"resetRequireApproval" koanf:"reset_require_approval"`
+	AutoApprove          []CommandPattern `toml:"auto_approve,omitempty" json:"autoApprove" koanf:"auto_approve"`
+	RequireApproval      []CommandPattern `toml:"require_approval,omitempty" json:"requireApproval" koanf:"require_approval"`
+	Deny                 []CommandPattern `toml:"deny,omitempty" json:"deny" koanf:"deny"`
+	ResetAutoApprove     bool             `toml:"reset_auto_approve,omitempty" json:"resetAutoApprove" koanf:"reset_auto_approve"`
+	ResetRequireApproval bool             `toml:"reset_require_approval,omitempty" json:"resetRequireApproval" koanf:"reset_require_approval"`
 }
 
 // BaseCommandPermissionsActivity is a Temporal activity wrapper for BaseCommandPermissions
