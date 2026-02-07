@@ -99,7 +99,7 @@ type AgentUseCaseConfig struct {
 type EditCodeConfig struct {
 	/** This is injected into the edit code prompt in order to provide hints to the LLM
 	 * for how to edit code in your particular code base. */
-	Hints string `toml:"hints"`
+	Hints string `toml:"hints,omitempty"`
 	/** Alternatively, specify a path relative to the repo root to load hints from.
 	 * If Hints is empty and HintsPath is set, the content of the file will be loaded into Hints. */
 	HintsPath string `toml:"hints_path,omitempty"`
