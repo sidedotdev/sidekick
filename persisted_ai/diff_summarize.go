@@ -67,6 +67,10 @@ func SummarizeDiff(ctx context.Context, opts DiffSummarizeOptions) (string, erro
 		}
 		if summary != "" {
 			symbolSummaries[fd.NewPath] = summary
+		} else {
+			// Always include every file, even without symbol-level changes
+			added, removed := countDiffLines(fd)
+			symbolSummaries[fd.NewPath] = fmt.Sprintf("(+%d/-%d lines)", added, removed)
 		}
 	}
 
@@ -88,9 +92,15 @@ func SummarizeDiff(ctx context.Context, opts DiffSummarizeOptions) (string, erro
 }
 
 // buildSymbolSummary creates a compact summary of symbol changes for a file.
-// For binary files, returns empty string. For unsupported languages, returns a
-// fallback summary with hunk headers and line counts.
+// For binary files, returns "(binary file)". For unsupported languages, returns a
+// fallback summary with hunk headers and line counts. Includes file status
+// (new/deleted) as a prefix when applicable.
 func buildSymbolSummary(fd diffanalysis.FileDiff, contentProvider FileContentProvider) (string, error) {
+	// Handle binary files first
+	if fd.IsBinary {
+		return "(binary file)", nil
+	}
+
 	var content string
 	if contentProvider != nil && !fd.IsDeleted {
 		var err error
@@ -100,17 +110,24 @@ func buildSymbolSummary(fd diffanalysis.FileDiff, contentProvider FileContentPro
 		}
 	}
 
+	// Build file status prefix
+	var statusPrefix string
+	if fd.IsDeleted {
+		statusPrefix = "[deleted] "
+	} else if fd.IsNewFile {
+		statusPrefix = "[new] "
+	}
+
 	delta, err := diffanalysis.GetSymbolDelta(fd, content)
 	if err != nil {
 		if errors.Is(err, diffanalysis.ErrBinaryFile) {
-			// Binary files have minimal diff output from git, just show as-is
-			return "", nil
+			return "(binary file)", nil
 		}
 		if errors.Is(err, diffanalysis.ErrUnsupportedLanguage) {
 			// Fallback: show hunk headers with line counts
 			// TODO: use git's xfuncname context-aware diff logic to extract
 			// additional potential symbol-like lines from the diff content
-			return buildFallbackHunkSummary(fd), nil
+			return statusPrefix + buildFallbackHunkSummary(fd), nil
 		}
 		return "", fmt.Errorf("failed to get symbol delta for %s: %w", fd.NewPath, err)
 	}
@@ -129,7 +146,7 @@ func buildSymbolSummary(fd diffanalysis.FileDiff, contentProvider FileContentPro
 	if len(parts) == 0 {
 		return "", nil
 	}
-	return strings.Join(parts, " "), nil
+	return statusPrefix + strings.Join(parts, " "), nil
 }
 
 // buildFallbackHunkSummary creates a summary for files where symbol extraction

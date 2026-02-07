@@ -369,6 +369,99 @@ func TestSummarizeDiff_AlwaysIncludesSymbolSummary(t *testing.T) {
 	assert.Contains(t, result, "=== Symbol Changes ===", "symbol summary header should always be included")
 }
 
+func TestSummarizeDiff_AllFilesInSymbolSummary(t *testing.T) {
+	t.Parallel()
+
+	// Create a diff with multiple files that will definitely be truncated
+	var largeDiff strings.Builder
+	fileNames := []string{"alpha.txt", "beta.txt", "gamma.txt", "delta.txt", "epsilon.txt"}
+	for _, name := range fileNames {
+		largeDiff.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", name, name))
+		largeDiff.WriteString(fmt.Sprintf("--- a/%s\n", name))
+		largeDiff.WriteString(fmt.Sprintf("+++ b/%s\n", name))
+		largeDiff.WriteString("@@ -1,5 +1,50 @@\n")
+		for j := 0; j < 50; j++ {
+			largeDiff.WriteString(fmt.Sprintf("+line %d in %s\n", j, name))
+		}
+	}
+
+	opts := DiffSummarizeOptions{
+		GitDiff:        largeDiff.String(),
+		ReviewFeedback: "check the changes",
+		MaxChars:       800,
+		Embedder:       &embedding.MockEmbedder{},
+		ModelConfig:    common.ModelConfig{Provider: "mock", Model: "test"},
+	}
+
+	result, err := SummarizeDiff(context.Background(), opts)
+	require.NoError(t, err)
+
+	// All files should appear in the symbol summary section, even if their diff content is truncated
+	for _, name := range fileNames {
+		assert.Contains(t, result, name, "file %s should appear in output even if truncated", name)
+	}
+
+	// Each file should have line count info since they're .txt files (unsupported language)
+	// The format is "(+N/-M)" from buildFallbackHunkSummary
+	assert.Contains(t, result, "(+50/-0)", "should show line counts for files without symbol detection")
+}
+
+func TestSummarizeDiff_SpecialFileFallbacks(t *testing.T) {
+	t.Parallel()
+
+	// Test deleted file
+	deletedDiff := `diff --git a/removed.txt b/removed.txt
+deleted file mode 100644
+--- a/removed.txt
++++ /dev/null
+@@ -1,5 +0,0 @@
+-line 1
+-line 2
+-line 3
+-line 4
+-line 5
+`
+
+	// Test new file
+	newFileDiff := `diff --git a/newfile.txt b/newfile.txt
+new file mode 100644
+--- /dev/null
++++ b/newfile.txt
+@@ -0,0 +1,3 @@
++new line 1
++new line 2
++new line 3
+`
+
+	// Test binary file
+	binaryDiff := `diff --git a/image.png b/image.png
+Binary files a/image.png and b/image.png differ
+`
+
+	combinedDiff := deletedDiff + newFileDiff + binaryDiff
+
+	opts := DiffSummarizeOptions{
+		GitDiff:        combinedDiff,
+		ReviewFeedback: "check the changes",
+		MaxChars:       300,
+		Embedder:       &embedding.MockEmbedder{},
+		ModelConfig:    common.ModelConfig{Provider: "mock", Model: "test"},
+	}
+
+	result, err := SummarizeDiff(context.Background(), opts)
+	require.NoError(t, err)
+
+	// All files should be represented
+	assert.Contains(t, result, "removed.txt", "deleted file should appear")
+	assert.Contains(t, result, "newfile.txt", "new file should appear")
+	assert.Contains(t, result, "image.png", "binary file should appear")
+
+	// Check appropriate fallback messages
+	assert.Contains(t, result, "[deleted]", "deleted file should show deleted indicator")
+	assert.Contains(t, result, "[new]", "new file should show new file indicator")
+	assert.Contains(t, result, "(binary file)", "binary file should show binary indicator")
+}
+
 func TestChunkFileDiffs(t *testing.T) {
 	t.Parallel()
 
