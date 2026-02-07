@@ -276,10 +276,7 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 	run.processes = append(run.processes, proc)
 	run.mu.Unlock()
 
-	// Brief wait to detect immediate failures (e.g., command not found, immediate exit)
-	time.Sleep(1 * time.Second)
-
-	// Check if the process exited immediately with an error
+	// Wait briefly to detect immediate failures (e.g., command not found, immediate exit)
 	run.mu.Lock()
 	proc = run.processes[0]
 	run.mu.Unlock()
@@ -309,8 +306,8 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 			a.emitEndedEvent(ctx, input.Context, exitCode, signalStr, errMsg)
 			return StartDevRunOutput{}, errors.New(errMsg)
 		}
-	default:
-		// Process still running, good
+	case <-time.After(3 * time.Second):
+		// Process still running after grace period, good
 	}
 
 	// Get session ID and output file path from the first process

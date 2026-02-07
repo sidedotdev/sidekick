@@ -35,6 +35,7 @@ side
 side-temporal
 side-worker
 side-api
+cli/cli
 libusearch_c.a
 local-temporal-db*
 .aider*

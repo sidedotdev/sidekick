@@ -1,4 +1,4 @@
-package llm
+package llm2
 
 import (
 	"testing"
@@ -7,12 +7,12 @@ import (
 )
 
 func TestActionParams_OmitsReasoningEffortWhenEmpty(t *testing.T) {
-	options := ToolChatOptions{
-		Params: ToolChatParams{
-			Messages: []ChatMessage{
-				{Role: "user", Content: "test"},
-			},
-			Tools: []*Tool{},
+	options := Options{
+		Params: Params{
+			ChatHistory: newTestChatHistoryWithMessages([]Message{
+				{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "test"}}},
+			}),
+			Tools: []*common.Tool{},
 			ModelConfig: common.ModelConfig{
 				Provider: "openai",
 				Model:    "gpt-4",
@@ -55,12 +55,12 @@ func TestActionParams_IncludesReasoningEffortWhenSet(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			options := ToolChatOptions{
-				Params: ToolChatParams{
-					Messages: []ChatMessage{
-						{Role: "user", Content: "test"},
-					},
-					Tools: []*Tool{},
+			options := Options{
+				Params: Params{
+					ChatHistory: newTestChatHistoryWithMessages([]Message{
+						{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "test"}}},
+					}),
+					Tools: []*common.Tool{},
 					ModelConfig: common.ModelConfig{
 						Provider:        "openai",
 						Model:           "o1",
@@ -90,12 +90,12 @@ func TestActionParams_IncludesReasoningEffortWhenSet(t *testing.T) {
 }
 
 func TestActionParams_OmitsMaxTokensWhenUnset(t *testing.T) {
-	options := ToolChatOptions{
-		Params: ToolChatParams{
-			Messages: []ChatMessage{
-				{Role: "user", Content: "test"},
-			},
-			Tools: []*Tool{},
+	options := Options{
+		Params: Params{
+			ChatHistory: newTestChatHistoryWithMessages([]Message{
+				{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "test"}}},
+			}),
+			Tools: []*common.Tool{},
 			ModelConfig: common.ModelConfig{
 				Provider: "anthropic",
 				Model:    "claude-3-5-sonnet-latest",
@@ -138,16 +138,16 @@ func TestActionParams_IncludesMaxTokensWhenSet(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			options := ToolChatOptions{
-				Params: ToolChatParams{
-					Messages: []ChatMessage{
-						{Role: "user", Content: "test"},
-					},
-					Tools: []*Tool{},
+			options := Options{
+				Params: Params{
+					ChatHistory: newTestChatHistoryWithMessages([]Message{
+						{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "test"}}},
+					}),
+					Tools:     []*common.Tool{},
+					MaxTokens: tt.maxTokens,
 					ModelConfig: common.ModelConfig{
-						Provider:  "anthropic",
-						Model:     "claude-3-5-sonnet-latest",
-						MaxTokens: tt.maxTokens,
+						Provider: "anthropic",
+						Model:    "claude-3-5-sonnet-latest",
 					},
 				},
 			}
@@ -173,12 +173,12 @@ func TestActionParams_IncludesMaxTokensWhenSet(t *testing.T) {
 }
 
 func TestActionParams_OmitsServiceTierWhenEmpty(t *testing.T) {
-	options := ToolChatOptions{
-		Params: ToolChatParams{
-			Messages: []ChatMessage{
-				{Role: "user", Content: "test"},
-			},
-			Tools: []*Tool{},
+	options := Options{
+		Params: Params{
+			ChatHistory: newTestChatHistoryWithMessages([]Message{
+				{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "test"}}},
+			}),
+			Tools: []*common.Tool{},
 			ModelConfig: common.ModelConfig{
 				Provider: "openai",
 				Model:    "gpt-4",
@@ -221,12 +221,12 @@ func TestActionParams_IncludesServiceTierWhenSet(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			options := ToolChatOptions{
-				Params: ToolChatParams{
-					Messages: []ChatMessage{
-						{Role: "user", Content: "test"},
-					},
-					Tools: []*Tool{},
+			options := Options{
+				Params: Params{
+					ChatHistory: newTestChatHistoryWithMessages([]Message{
+						{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "test"}}},
+					}),
+					Tools: []*common.Tool{},
 					ModelConfig: common.ModelConfig{
 						Provider:    "openai",
 						Model:       "gpt-4",

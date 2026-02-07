@@ -9,6 +9,7 @@ import (
 	"sidekick/env"
 	"testing"
 
+	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -180,12 +181,14 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		createCommit(t, repoDir, "Initial commit on main")
 
 		// Create a feature branch and worktree with unique name
-		branchName := fmt.Sprintf("feature-cleanup-test-%s", filepath.Base(repoDir))
+		uniqueId := ksuid.New().String()
+		branchName := fmt.Sprintf("feature-cleanup-test-%s", uniqueId)
 
 		// Create environment container and the associated worktree
+		workspaceId := fmt.Sprintf("test-cleanup-%s", uniqueId)
 		worktree := domain.Worktree{
 			Name:        branchName,
-			WorkspaceId: filepath.Base(repoDir),
+			WorkspaceId: workspaceId,
 		}
 		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
 		require.NoError(t, err)
@@ -259,13 +262,16 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit on main")
 
-		// Create a feature branch and worktree with unique name
-		branchName := fmt.Sprintf("feature-empty-message-test")
+		// Create a feature branch and worktree with unique name using ksuid for uniqueness
+		uniqueId := ksuid.New().String()
+		branchName := fmt.Sprintf("feature-empty-message-test-%s", uniqueId)
 
 		// Create environment container and the worktree
+		workspaceId := fmt.Sprintf("test-empty-msg-%s", uniqueId)
+
 		worktree := domain.Worktree{
 			Name:        branchName,
-			WorkspaceId: filepath.Base(repoDir),
+			WorkspaceId: workspaceId,
 		}
 		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
 		require.NoError(t, err)
@@ -307,8 +313,9 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit on main")
 
-		// Create a feature branch and worktree
-		branchName := "feature-tag-fallback-test"
+		// Create a feature branch and worktree with unique name
+		uniqueId := ksuid.New().String()
+		branchName := fmt.Sprintf("feature-tag-fallback-test-%s", uniqueId)
 
 		// Pre-create the archive tag to simulate it already existing
 		runGitCommandInTestRepo(t, repoDir, "branch", branchName)
@@ -317,9 +324,10 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		runGitCommandInTestRepo(t, repoDir, "branch", "-D", branchName)
 
 		// Create environment container and the worktree
+		workspaceId := fmt.Sprintf("test-tag-fallback-%s", uniqueId)
 		worktree := domain.Worktree{
 			Name:        branchName,
-			WorkspaceId: filepath.Base(repoDir),
+			WorkspaceId: workspaceId,
 		}
 		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
 		require.NoError(t, err)
@@ -348,7 +356,8 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit on main")
 
-		branchName := "feature-multi-tag-test"
+		uniqueId := ksuid.New().String()
+		branchName := fmt.Sprintf("feature-multi-tag-test-%s", uniqueId)
 
 		// Pre-create multiple archive tags
 		runGitCommandInTestRepo(t, repoDir, "branch", branchName)
@@ -358,7 +367,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		runGitCommandInTestRepo(t, repoDir, "branch", "-D", branchName)
 
 		// Use a unique workspace ID to avoid collisions with other test runs
-		workspaceId := fmt.Sprintf("test-multi-tag-%s", filepath.Base(repoDir))
+		workspaceId := fmt.Sprintf("test-multi-tag-%s", uniqueId)
 
 		// Create environment container and the worktree
 		worktree := domain.Worktree{

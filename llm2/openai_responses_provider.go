@@ -96,6 +96,10 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 		params.MaxOutputTokens = param.NewOpt(int64(effectiveMaxTokens))
 	}
 
+	if options.Params.ServiceTier != "" {
+		params.ServiceTier = responses.ResponseNewParamsServiceTier(options.Params.ServiceTier)
+	}
+
 	if len(options.Params.Tools) > 0 {
 		toolsToUse := options.Params.Tools
 		if options.Params.ToolChoice.Type == common.ToolChoiceTypeTool {

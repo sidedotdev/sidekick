@@ -149,7 +149,7 @@ func getLlm2Provider(config common.ModelConfig, providers []common.ModelProvider
 	case llm.AnthropicToolChatProviderType:
 		return llm2.AnthropicProvider{}, nil
 	case llm.GoogleToolChatProviderType:
-		return nil, fmt.Errorf("google provider not yet supported in llm2")
+		return llm2.GoogleProvider{}, nil
 	case llm.UnspecifiedToolChatProviderType:
 		return nil, fmt.Errorf("llm2 provider was not specified")
 	default:
