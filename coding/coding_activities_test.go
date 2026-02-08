@@ -1189,3 +1189,102 @@ func TestBulkGetSymbolDefinitionsNoRequests(t *testing.T) {
 	assert.Equal(t, "No symbol definition requests were provided.", result.SymbolDefinitions)
 	assert.Empty(t, result.Failures)
 }
+
+func TestShouldRetrieveFullFile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		symbols      []string
+		absolutePath string
+		expected     bool
+	}{
+		{
+			name:         "wildcard star",
+			symbols:      []string{"*"},
+			absolutePath: "/project/src/main.go",
+			expected:     true,
+		},
+		{
+			name:         "wildcard empty string",
+			symbols:      []string{""},
+			absolutePath: "/project/src/main.go",
+			expected:     true,
+		},
+		{
+			name:         "wildcard empty list",
+			symbols:      nil,
+			absolutePath: "/project/src/main.go",
+			expected:     true,
+		},
+		{
+			name:         "vue file with matching component name",
+			symbols:      []string{"MyComponent"},
+			absolutePath: "/project/src/components/MyComponent.vue",
+			expected:     true,
+		},
+		{
+			name:         "vue file with case-insensitive match",
+			symbols:      []string{"mycomponent"},
+			absolutePath: "/project/src/components/MyComponent.vue",
+			expected:     true,
+		},
+		{
+			name:         "vue index file uses parent directory name",
+			symbols:      []string{"MyComponent"},
+			absolutePath: "/project/src/components/MyComponent/index.vue",
+			expected:     true,
+		},
+		{
+			name:         "vue index file case-insensitive match",
+			symbols:      []string{"mycomponent"},
+			absolutePath: "/project/src/components/MyComponent/index.vue",
+			expected:     true,
+		},
+		{
+			name:         "vue index file with hyphenated directory name",
+			symbols:      []string{"MyComponent"},
+			absolutePath: "/project/src/components/My-Component/index.vue",
+			expected:     true,
+		},
+		{
+			name:         "vue index file with underscored directory name",
+			symbols:      []string{"MyComponent"},
+			absolutePath: "/project/src/components/My_Component/index.vue",
+			expected:     true,
+		},
+		{
+			name:         "vue file with non-matching symbol",
+			symbols:      []string{"OtherComponent"},
+			absolutePath: "/project/src/components/MyComponent.vue",
+			expected:     false,
+		},
+		{
+			name:         "vue index file with non-matching symbol",
+			symbols:      []string{"OtherComponent"},
+			absolutePath: "/project/src/components/MyComponent/index.vue",
+			expected:     false,
+		},
+		{
+			name:         "svelte index file not recognized without language support",
+			symbols:      []string{"MyWidget"},
+			absolutePath: "/project/src/components/MyWidget/index.svelte",
+			expected:     false,
+		},
+		{
+			name:         "go file with non-matching symbol",
+			symbols:      []string{"SomeFunc"},
+			absolutePath: "/project/src/main.go",
+			expected:     false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := shouldRetrieveFullFile(tc.symbols, tc.absolutePath)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
