@@ -11,8 +11,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
-	"go.temporal.io/sdk/activity"
+	"go.opentelemetry.io/otel/codes"
 )
 
 var autofixTracer = otel.Tracer("sidekick/coding/lsp/autofix")
@@ -34,15 +33,8 @@ type AutofixActivityOutput struct {
 }
 
 func (lspa *LSPActivities) AutofixActivity(ctx context.Context, input AutofixActivityInput) (AutofixActivityOutput, error) {
-	var span trace.Span
-	if activity.IsActivity(ctx) {
-		// When called via Temporal, use the existing span created by Temporal
-		span = trace.SpanFromContext(ctx)
-	} else {
-		// When called directly, create our own span
-		ctx, span = autofixTracer.Start(ctx, "AutofixActivity")
-		defer span.End()
-	}
+	ctx, span := autofixTracer.Start(ctx, "AutofixActivity")
+	defer span.End()
 	span.SetAttributes(attribute.String("documentURI", input.DocumentURI))
 
 	// step 1: initialize
@@ -78,7 +70,10 @@ func getAutofixCodeActions(ctx context.Context, lspClient LSPClient, documentURI
 	// Calculate end line and character based on file contents
 	fileContent, err := readURI(documentURI)
 	if err != nil {
-		return []CodeAction{}, fmt.Errorf("failed to read file: %w", err)
+		err = fmt.Errorf("failed to read file: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return []CodeAction{}, err
 	}
 	lines := strings.Split(string(fileContent), "\n")
 	endLine := len(lines) - 1
@@ -101,8 +96,13 @@ func getAutofixCodeActions(ctx context.Context, lspClient LSPClient, documentURI
 			Only: []CodeActionKind{CodeActionKindSourceFixAll, CodeActionKindSourceOrganizeImports},
 		},
 	})
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return codeActions, err
+	}
 	span.SetAttributes(attribute.Int("codeActionCount", len(codeActions)))
-	return codeActions, err
+	return codeActions, nil
 }
 
 func applyCodeActions(ctx context.Context, envContainer env.EnvContainer, codeActions []CodeAction) (AutofixActivityOutput, error) {
@@ -134,6 +134,9 @@ func applyCodeActions(ctx context.Context, envContainer env.EnvContainer, codeAc
 		attribute.Int("failedEdits", len(output.FailedEdits)),
 		attribute.Int("skippedCodeActions", len(output.SkippedCodeActions)),
 	)
+	if len(output.FailedEdits) > 0 {
+		span.SetStatus(codes.Error, fmt.Sprintf("%d edits failed", len(output.FailedEdits)))
+	}
 	return output, nil
 }
 

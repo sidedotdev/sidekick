@@ -26,9 +26,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/codes"
 
-	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -85,15 +84,8 @@ func ApplyEditBlocksActivity(ctx context.Context, input ApplyEditBlockActivityIn
 }
 
 func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlockActivityInput) ([]ApplyEditBlockReport, error) {
-	var span trace.Span
-	if activity.IsActivity(ctx) {
-		// When called via Temporal, use the existing span created by Temporal
-		span = trace.SpanFromContext(ctx)
-	} else {
-		// When called directly, create our own span
-		ctx, span = applyEditBlocksTracer.Start(ctx, "ApplyEditBlocks")
-		defer span.End()
-	}
+	ctx, span := applyEditBlocksTracer.Start(ctx, "ApplyEditBlocks")
+	defer span.End()
 	span.SetAttributes(
 		attribute.Int("editBlockCount", len(input.EditBlocks)),
 	)
@@ -272,18 +264,24 @@ func (da *DevActivities) notifyLSPServerOfFileChanges(ctx context.Context, envCo
 		attribute.String("editType", editType),
 	)
 
+	var err error
 	switch editType {
 	case "update", "append":
-		return da.notifyDidOpenChangeSaveAndClose(ctx, envContainer, filePath)
+		err = da.notifyDidOpenChangeSaveAndClose(ctx, envContainer, filePath)
 	case "create":
-		return da.notifyDidOpenChangeSaveAndClose(ctx, envContainer, filePath)
+		err = da.notifyDidOpenChangeSaveAndClose(ctx, envContainer, filePath)
 		// TODO call notifyCreateFile if server supports it
 	case "delete":
 		return nil
 		// TODO call notifyDeleteFile if server supports it
 	default:
-		return fmt.Errorf("unknown edit type: %s", editType)
+		err = fmt.Errorf("unknown edit type: %s", editType)
 	}
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
 }
 
 // notifyDidOpenChangeSaveAndClose handles LSP open/close/change/save
@@ -471,6 +469,10 @@ func checkAndStageOrRestoreFile(envContainer env.EnvContainer, checkCommands []c
 		CheckCommands: checkCommands,
 	})
 	checkSpan.SetAttributes(attribute.Bool("allPassed", checkOutput.AllPassed))
+	if checkErr != nil {
+		checkSpan.RecordError(checkErr)
+		checkSpan.SetStatus(codes.Error, checkErr.Error())
+	}
 	checkSpan.End()
 
 	if checkErr != nil && checkOutput.Output == "" {
@@ -484,10 +486,13 @@ func checkAndStageOrRestoreFile(envContainer env.EnvContainer, checkCommands []c
 			// Restoring the file to its previous state in case of an error
 			_, restoreSpan := applyEditBlocksTracer.Start(ctx, "GitRestoreActivity")
 			err := git.GitRestoreActivity(context.Background(), envContainer, filePath)
-			restoreSpan.End()
 			if err != nil {
+				restoreSpan.RecordError(err)
+				restoreSpan.SetStatus(codes.Error, err.Error())
+				restoreSpan.End()
 				return checkResult, fmt.Errorf("%v\nFailed to git restore: %v", checkErr, err)
 			}
+			restoreSpan.End()
 		} else {
 			// If the file that failed checks was just created, we should remove it since git restore won't work
 			err := os.Remove(filepath.Join(envContainer.Env.GetWorkingDirectory(), filePath))
@@ -503,10 +508,13 @@ func checkAndStageOrRestoreFile(envContainer env.EnvContainer, checkCommands []c
 	// don't affect this change
 	_, addSpan := applyEditBlocksTracer.Start(ctx, "gitAdd")
 	err := gitAdd(envContainer, filePath)
-	addSpan.End()
 	if err != nil {
+		addSpan.RecordError(err)
+		addSpan.SetStatus(codes.Error, err.Error())
+		addSpan.End()
 		return checkResult, fmt.Errorf("Failed to git add: %v", err)
 	}
+	addSpan.End()
 
 	return checkResult, nil
 }
@@ -1410,7 +1418,6 @@ func AutofixIfEditSucceeded(ctx context.Context, devActivities *DevActivities, e
 		log.Warn().Err(err).Str("filePath", report.OriginalEditBlock.FilePath).Msg("Failed to notify LSP server of file change")
 	}
 
-	_, lspAutofixSpan := applyEditBlocksTracer.Start(ctx, "LSPAutofix")
 	absoluteFilePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), report.OriginalEditBlock.FilePath)
 	autofixInput := lsp.AutofixActivityInput{
 		DocumentURI:  "file://" + absoluteFilePath,
@@ -1419,14 +1426,7 @@ func AutofixIfEditSucceeded(ctx context.Context, devActivities *DevActivities, e
 	result, autofixErr := devActivities.LSPActivities.AutofixActivity(ctx, autofixInput)
 	if autofixErr != nil {
 		report.AutofixError += fmt.Sprintf("\nLSP autofix error: %+v", autofixErr)
-		lspAutofixSpan.SetAttributes(attribute.String("error", autofixErr.Error()))
 	}
-	lspAutofixSpan.SetAttributes(
-		attribute.Int("appliedEdits", len(result.AppliedEdits)),
-		attribute.Int("skippedCodeActions", len(result.SkippedCodeActions)),
-		attribute.Int("failedEdits", len(result.FailedEdits)),
-	)
-	lspAutofixSpan.End()
 
 	report.AutofixResult = result
 }
@@ -1442,7 +1442,8 @@ func runAutofixCommands(ctx context.Context, envContainer env.EnvContainer, repo
 	repoConfig, err := GetRepoConfigActivity(envContainer)
 	if err != nil {
 		combinedOutput = fmt.Sprintf("failed to get coding config: %v", err)
-		span.SetAttributes(attribute.String("configError", err.Error()))
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 	}
 	autofixCommands := repoConfig.AutofixCommands
 	span.SetAttributes(attribute.Int("commandCount", len(autofixCommands)))
@@ -1466,7 +1467,8 @@ func runAutofixCommands(ctx context.Context, envContainer env.EnvContainer, repo
 		if err != nil {
 			// Append the error message to combinedOutput and continue with the next autofix command
 			combinedOutput += fmt.Sprintf("failed to run autofix command '%s': %v\n", command.Command, err)
-			cmdSpan.SetAttributes(attribute.String("error", err.Error()))
+			cmdSpan.RecordError(err)
+			cmdSpan.SetStatus(codes.Error, err.Error())
 			cmdSpan.End()
 			continue
 		}
