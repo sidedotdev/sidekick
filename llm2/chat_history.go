@@ -162,9 +162,25 @@ func (h *Llm2ChatHistory) Append(msg common.Message) {
 }
 
 func MessageFromChatMessage(cm common.ChatMessage) Message {
+	// Tool results in legacy format have role "tool", but in llm2 they should
+	// be user-role messages with a ToolResult content block
+	if cm.Role == common.ChatMessageRoleTool {
+		return Message{
+			Role: RoleUser,
+			Content: []ContentBlock{{
+				Type: ContentBlockTypeToolResult,
+				ToolResult: &ToolResultBlock{
+					ToolCallId: cm.ToolCallId,
+					Name:       cm.Name,
+					IsError:    cm.IsError,
+					Text:       cm.Content,
+				},
+			}},
+		}
+	}
 	return Message{
 		Role:    Role(cm.Role),
-		Content: []ContentBlock{{Type: "text", Text: cm.Content}},
+		Content: []ContentBlock{{Type: ContentBlockTypeText, Text: cm.Content}},
 	}
 }
 

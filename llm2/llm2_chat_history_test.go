@@ -402,6 +402,79 @@ func TestLlm2ChatHistory_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestMessageFromChatMessage_ToolRole(t *testing.T) {
+	t.Parallel()
+
+	t.Run("converts tool role to user with ToolResult", func(t *testing.T) {
+		t.Parallel()
+		cm := common.ChatMessage{
+			Role:       common.ChatMessageRoleTool,
+			Content:    "tool result content",
+			ToolCallId: "call_abc123",
+			Name:       "my_tool",
+			IsError:    false,
+		}
+
+		msg := MessageFromChatMessage(cm)
+
+		assert.Equal(t, RoleUser, msg.Role)
+		require.Len(t, msg.Content, 1)
+		assert.Equal(t, ContentBlockTypeToolResult, msg.Content[0].Type)
+		require.NotNil(t, msg.Content[0].ToolResult)
+		assert.Equal(t, "call_abc123", msg.Content[0].ToolResult.ToolCallId)
+		assert.Equal(t, "my_tool", msg.Content[0].ToolResult.Name)
+		assert.Equal(t, "tool result content", msg.Content[0].ToolResult.Text)
+		assert.False(t, msg.Content[0].ToolResult.IsError)
+	})
+
+	t.Run("converts tool role with error flag", func(t *testing.T) {
+		t.Parallel()
+		cm := common.ChatMessage{
+			Role:       common.ChatMessageRoleTool,
+			Content:    "error message",
+			ToolCallId: "call_xyz",
+			Name:       "failing_tool",
+			IsError:    true,
+		}
+
+		msg := MessageFromChatMessage(cm)
+
+		assert.Equal(t, RoleUser, msg.Role)
+		require.NotNil(t, msg.Content[0].ToolResult)
+		assert.True(t, msg.Content[0].ToolResult.IsError)
+	})
+
+	t.Run("converts user role to text content", func(t *testing.T) {
+		t.Parallel()
+		cm := common.ChatMessage{
+			Role:    common.ChatMessageRoleUser,
+			Content: "hello",
+		}
+
+		msg := MessageFromChatMessage(cm)
+
+		assert.Equal(t, RoleUser, msg.Role)
+		require.Len(t, msg.Content, 1)
+		assert.Equal(t, ContentBlockTypeText, msg.Content[0].Type)
+		assert.Equal(t, "hello", msg.Content[0].Text)
+	})
+
+	t.Run("converts assistant role to text content", func(t *testing.T) {
+		t.Parallel()
+		cm := common.ChatMessage{
+			Role:    common.ChatMessageRoleAssistant,
+			Content: "response",
+		}
+
+		msg := MessageFromChatMessage(cm)
+
+		assert.Equal(t, RoleAssistant, msg.Role)
+		require.Len(t, msg.Content, 1)
+		assert.Equal(t, ContentBlockTypeText, msg.Content[0].Type)
+		assert.Equal(t, "response", msg.Content[0].Text)
+	})
+}
+
 func TestLlm2ChatHistory_RoundTrip_WithToolCalls(t *testing.T) {
 	original := NewLlm2ChatHistory("flow-123", "workspace-456")
 	original.Append(&Message{
