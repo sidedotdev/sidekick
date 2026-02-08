@@ -15,22 +15,17 @@ import (
 )
 
 func TestGitMergeActivity(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
-	// Create a temporary directory to act as SIDE_DATA_HOME
-	tempDir := t.TempDir()
 	// spaces in path to exercise our command execution (the built-in
 	// SIDE_DATA_HOME on macos has spaces in "Application Support")
-	tempDataHome := filepath.Join(tempDir, "dir with spaces")
-	err := os.Mkdir(tempDataHome, 0755)
+	worktreeBaseDir := filepath.Join(t.TempDir(), "dir with spaces")
+	err := os.Mkdir(worktreeBaseDir, 0755)
 	require.NoError(t, err)
-	// TODO make the tests parallel by setting not needed to set env. this can
-	// be done by cloning LocalEnvParams into LocalGitWorktreeEnvParams and
-	// adding an optional worktree path there, which the tests will make use of,
-	// with separate directories for each.
-	t.Setenv("SIDE_DATA_HOME", tempDataHome) // Set env var for the test duration
 
 	t.Run("no worktree, no conflicts", func(t *testing.T) {
+		t.Parallel()
 		// Setup
 		repoDir := setupTestGitRepo(t)
 		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
@@ -61,6 +56,7 @@ func TestGitMergeActivity(t *testing.T) {
 	})
 
 	t.Run("no worktree, with conflicts", func(t *testing.T) {
+		t.Parallel()
 		// Setup
 		repoDir := setupTestGitRepo(t)
 		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
@@ -110,6 +106,7 @@ func TestGitMergeActivity(t *testing.T) {
 	})
 
 	t.Run("source is worktree, with target checked out on repoDir, no conflicts", func(t *testing.T) {
+		t.Parallel()
 		// Setup
 		repoDir := setupTestGitRepo(t)
 		createCommit(t, repoDir, "Initial commit")
@@ -118,7 +115,7 @@ func TestGitMergeActivity(t *testing.T) {
 			Name:        "feature",
 			WorkspaceId: t.Name(),
 		}
-		envContainer, err := env.NewLocalGitWorktreeActivity(context.Background(), env.LocalEnvParams{RepoDir: repoDir}, worktree)
+		envContainer, err := env.NewLocalGitWorktreeActivity(context.Background(), env.LocalEnvParams{RepoDir: repoDir, WorktreeBaseDir: worktreeBaseDir}, worktree)
 		require.NoError(t, err)
 		defer func() {
 			// Clean up worktree
@@ -146,6 +143,7 @@ func TestGitMergeActivity(t *testing.T) {
 	})
 
 	t.Run("source is worktree, with target checked out on repoDir, with conflicts", func(t *testing.T) {
+		t.Parallel()
 		// Setup
 		repoDir := setupTestGitRepo(t)
 
@@ -160,7 +158,7 @@ func TestGitMergeActivity(t *testing.T) {
 			Name:        "feature",
 			WorkspaceId: t.Name(),
 		}
-		envContainer, err := env.NewLocalGitWorktreeActivity(ctx, env.LocalEnvParams{RepoDir: repoDir, StartBranch: utils.Ptr("main")}, worktree)
+		envContainer, err := env.NewLocalGitWorktreeActivity(ctx, env.LocalEnvParams{RepoDir: repoDir, StartBranch: utils.Ptr("main"), WorktreeBaseDir: worktreeBaseDir}, worktree)
 		require.NoError(t, err)
 
 		// Change file on feature branch
@@ -198,6 +196,7 @@ func TestGitMergeActivity(t *testing.T) {
 	})
 
 	t.Run("source is worktree, with target NOT checked out anywhere, with conflicts - reverse merge strategy", func(t *testing.T) {
+		t.Parallel()
 		// Setup
 		repoDir := setupTestGitRepo(t)
 
@@ -212,7 +211,7 @@ func TestGitMergeActivity(t *testing.T) {
 			Name:        "feature",
 			WorkspaceId: t.Name(),
 		}
-		envContainer, err := env.NewLocalGitWorktreeActivity(ctx, env.LocalEnvParams{RepoDir: repoDir, StartBranch: utils.Ptr("main")}, featureWorktree)
+		envContainer, err := env.NewLocalGitWorktreeActivity(ctx, env.LocalEnvParams{RepoDir: repoDir, StartBranch: utils.Ptr("main"), WorktreeBaseDir: worktreeBaseDir}, featureWorktree)
 		require.NoError(t, err)
 
 		// Change file on feature branch
@@ -270,16 +269,15 @@ func createCommitWithFile(t *testing.T, repoDir, message, filename, content stri
 }
 
 func TestGitMergeActivitySquash(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
-	// Create a temporary directory to act as SIDE_DATA_HOME
-	tempDir := t.TempDir()
-	tempDataHome := filepath.Join(tempDir, "data home")
-	err := os.Mkdir(tempDataHome, 0755)
+	worktreeBaseDir := filepath.Join(t.TempDir(), "data home")
+	err := os.Mkdir(worktreeBaseDir, 0755)
 	require.NoError(t, err)
-	t.Setenv("SIDE_DATA_HOME", tempDataHome)
 
 	t.Run("squash merge no worktree", func(t *testing.T) {
+		t.Parallel()
 		// Setup
 		repoDir := setupTestGitRepo(t)
 		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
@@ -315,6 +313,7 @@ func TestGitMergeActivitySquash(t *testing.T) {
 	})
 
 	t.Run("squash merge with worktree", func(t *testing.T) {
+		t.Parallel()
 		// Setup
 		repoDir := setupTestGitRepo(t)
 		createCommitWithFile(t, repoDir, "Initial commit", "initial.txt", "initial content")
@@ -323,7 +322,7 @@ func TestGitMergeActivitySquash(t *testing.T) {
 			Name:        "feature",
 			WorkspaceId: t.Name(),
 		}
-		envContainer, err := env.NewLocalGitWorktreeActivity(context.Background(), env.LocalEnvParams{RepoDir: repoDir}, worktree)
+		envContainer, err := env.NewLocalGitWorktreeActivity(context.Background(), env.LocalEnvParams{RepoDir: repoDir, WorktreeBaseDir: worktreeBaseDir}, worktree)
 		require.NoError(t, err)
 		defer func() {
 			runGitCommandInTestRepo(t, repoDir, "worktree", "remove", envContainer.Env.GetWorkingDirectory())
@@ -354,6 +353,7 @@ func TestGitMergeActivitySquash(t *testing.T) {
 	})
 
 	t.Run("squash merge default commit message", func(t *testing.T) {
+		t.Parallel()
 		// Setup
 		repoDir := setupTestGitRepo(t)
 		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
@@ -384,6 +384,7 @@ func TestGitMergeActivitySquash(t *testing.T) {
 	})
 
 	t.Run("regular merge preserves commits", func(t *testing.T) {
+		t.Parallel()
 		// Setup
 		repoDir := setupTestGitRepo(t)
 		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
