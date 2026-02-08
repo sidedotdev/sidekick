@@ -749,8 +749,6 @@ func shouldRetrieveFullFile(symbols []string, absolutePath string) bool {
 	case "vue", "svelte", "riot", "marko":
 		var maybeComponentName string
 		if strings.HasPrefix(filepath.Base(absolutePath), "index.") {
-			// this handles a case like "components/MyComponent/index.vue"
-			// TODO /gen add a test for this case in TestBulkGetSymbolDefinitions
 			dirName := filepath.Base(filepath.Dir(absolutePath))
 			maybeComponentName = dirName
 		} else {
