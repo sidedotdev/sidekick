@@ -67,6 +67,9 @@ type LocalGitWorktreeEnv struct {
 type LocalEnvParams struct {
 	RepoDir     string
 	StartBranch *string
+	// WorktreeBaseDir overrides GetSidekickDataHome() for worktree placement.
+	// Used in tests to avoid setting SIDE_DATA_HOME globally.
+	WorktreeBaseDir string
 }
 
 func NewLocalEnv(ctx context.Context, params LocalEnvParams) (Env, error) {
@@ -93,9 +96,15 @@ func NewLocalGitWorktreeActivity(ctx context.Context, params LocalEnvParams, wor
 }
 
 func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree domain.Worktree) (Env, error) {
-	sidekickDataHome, err := common.GetSidekickDataHome()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Sidekick data home: %w", err)
+	var sidekickDataHome string
+	if params.WorktreeBaseDir != "" {
+		sidekickDataHome = params.WorktreeBaseDir
+	} else {
+		var err error
+		sidekickDataHome, err = common.GetSidekickDataHome()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get Sidekick data home: %w", err)
+		}
 	}
 
 	// Create worktree directory
