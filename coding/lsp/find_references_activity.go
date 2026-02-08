@@ -15,6 +15,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 var lspTracer = otel.Tracer("sidekick/coding/lsp")
@@ -93,7 +94,10 @@ func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string,
 		lspClient = lspa.LSPClientProvider(lang)
 		rootUri, err := url.Parse("file://" + baseDir)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse rootUri file://%s: %w", baseDir, err)
+			err = fmt.Errorf("failed to parse rootUri file://%s: %w", baseDir, err)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return nil, err
 		}
 		params := InitializeParams{
 			ProcessID:    1,
@@ -102,7 +106,10 @@ func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string,
 		}
 		_, err = lspClient.Initialize(ctx, params)
 		if err != nil {
-			return nil, fmt.Errorf("failed to initialize LSP client: %w", err)
+			err = fmt.Errorf("failed to initialize LSP client: %w", err)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return nil, err
 		}
 		lspa.InitializedClients[key] = lspClient
 	} else {
