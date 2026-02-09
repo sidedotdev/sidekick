@@ -33,6 +33,7 @@ func ExecuteChatStream(
 	ctx workflow.Context,
 	options ChatStreamOptionsV2,
 ) (common.MessageResponse, error) {
+	streamCtx := utils.LlmHeartbeatCtx(ctx)
 	if options.Params.ChatHistory == nil {
 		return nil, fmt.Errorf("ChatHistory is required in options.Params")
 	}
@@ -40,7 +41,7 @@ func ExecuteChatStream(
 	v := workflow.GetVersion(ctx, "chat-history-llm2", workflow.DefaultVersion, 1)
 
 	if v == 1 {
-		return executeChatStreamV1(ctx, options)
+		return executeChatStreamV1(streamCtx, options)
 	}
 
 	chatHistory := options.Params.ChatHistory
@@ -59,7 +60,7 @@ func ExecuteChatStream(
 		FlowId:       options.FlowId,
 		FlowActionId: options.FlowActionId,
 	}
-	return executeChatStreamLegacy(ctx, legacyOptions, chatHistory)
+	return executeChatStreamLegacy(streamCtx, legacyOptions, chatHistory)
 }
 
 // executeChatStreamV1 handles the Llm2ChatHistory path.
