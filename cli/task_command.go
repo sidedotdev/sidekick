@@ -30,6 +30,7 @@ func NewTaskCommand() *cli.Command {
 			&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"n"}, Usage: "Shorthand to set determineRequirements to false in flow options"},
 			&cli.BoolFlag{Name: "worktree", Aliases: []string{"w"}, Usage: "Use a git worktree. Sets --start-branch to the current branch if not specified."},
 			&cli.StringFlag{Name: "start-branch", Aliases: []string{"B"}, Usage: "The worktree start branch. Implies --worktree"},
+			&cli.StringFlag{Name: "env-type", Usage: "Set the environment type (e.g., local, devpod)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			c := client.NewClient(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
@@ -81,9 +82,14 @@ func parseFlowOptions(ctx context.Context, cmd *cli.Command, currentDir string) 
 		flowOpts[key] = valueStr
 	}
 
-	// --worktree flag or --start-branch flag implies worktree environment
+	// --worktree flag or --start-branch flag implies worktree repo mode
 	if cmd.Bool("worktree") || cmd.String("start-branch") != "" {
-		flowOpts["envType"] = "local_git_worktree"
+		flowOpts["repoMode"] = "worktree"
+	}
+
+	// --env-type flag sets envType
+	if envType := cmd.String("env-type"); envType != "" {
+		flowOpts["envType"] = envType
 	}
 
 	// --start-branch flag overrides startBranch
@@ -91,8 +97,14 @@ func parseFlowOptions(ctx context.Context, cmd *cli.Command, currentDir string) 
 		flowOpts["startBranch"] = startBranch
 	}
 
-	// If envType is local_git_worktree but startBranch is not set, detect current branch
+	// Backward compat: resolve legacy "local_git_worktree" envType
 	if envType, ok := flowOpts["envType"]; ok && envType == "local_git_worktree" {
+		flowOpts["envType"] = "local"
+		flowOpts["repoMode"] = "worktree"
+	}
+
+	// If repoMode is worktree but startBranch is not set, detect current branch
+	if repoMode, ok := flowOpts["repoMode"]; ok && repoMode == "worktree" {
 		if _, hasStartBranch := flowOpts["startBranch"]; !hasStartBranch {
 			branchState, err := git.GetCurrentBranch(ctx, currentDir)
 			if err != nil {
