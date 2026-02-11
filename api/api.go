@@ -1444,6 +1444,13 @@ func validateTaskRequest(taskReq *TaskRequest) (domain.AgentType, domain.TaskSta
 		}
 	}
 
+	// Validate RepoMode
+	if repoMode, ok := taskReq.FlowOptions["repoMode"].(string); ok {
+		if !env.RepoMode(repoMode).IsValid() {
+			return "", "", fmt.Errorf("invalid repo mode: %s", repoMode)
+		}
+	}
+
 	return agentType, status, nil
 }
 

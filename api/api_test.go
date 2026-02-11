@@ -234,6 +234,75 @@ func TestCreateTaskHandler(t *testing.T) {
 			},
 			expectedError: "Creating a task with status set to anything other than 'drafting' or 'to_do' is not allowed",
 		},
+		{
+			name: "InvalidEnvType",
+			taskRequest: TaskRequest{
+				Description: "test description",
+				FlowType:    domain.FlowTypeBasicDev,
+				FlowOptions: map[string]interface{}{
+					"envType": "invalid_env",
+				},
+			},
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "invalid env type: invalid_env",
+		},
+		{
+			name: "ValidEnvTypeDevPod",
+			taskRequest: TaskRequest{
+				Description: "test description",
+				FlowType:    domain.FlowTypeBasicDev,
+				FlowOptions: map[string]interface{}{
+					"envType": "devpod",
+				},
+			},
+			expectedStatus: http.StatusOK,
+			expectedTask: &domain.Task{
+				AgentType: domain.AgentTypeLLM,
+				FlowType:  domain.FlowTypeBasicDev,
+			},
+		},
+		{
+			name: "InvalidRepoMode",
+			taskRequest: TaskRequest{
+				Description: "test description",
+				FlowType:    domain.FlowTypeBasicDev,
+				FlowOptions: map[string]interface{}{
+					"repoMode": "invalid_mode",
+				},
+			},
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "invalid repo mode: invalid_mode",
+		},
+		{
+			name: "ValidRepoModeWorktree",
+			taskRequest: TaskRequest{
+				Description: "test description",
+				FlowType:    domain.FlowTypeBasicDev,
+				FlowOptions: map[string]interface{}{
+					"repoMode": "worktree",
+				},
+			},
+			expectedStatus: http.StatusOK,
+			expectedTask: &domain.Task{
+				AgentType: domain.AgentTypeLLM,
+				FlowType:  domain.FlowTypeBasicDev,
+			},
+		},
+		{
+			name: "ValidRepoModeInPlace",
+			taskRequest: TaskRequest{
+				Description: "test description",
+				FlowType:    domain.FlowTypeBasicDev,
+				FlowOptions: map[string]interface{}{
+					"repoMode": "in_place",
+				},
+			},
+			expectedStatus: http.StatusOK,
+			expectedTask: &domain.Task{
+				AgentType: domain.AgentTypeLLM,
+				FlowType:  domain.FlowTypeBasicDev,
+			},
+		},
 	}
 
 	for _, tc := range testCases {
