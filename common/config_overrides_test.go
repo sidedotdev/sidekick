@@ -145,6 +145,28 @@ func TestConfigOverrides_ApplyToRepoConfig(t *testing.T) {
 		assert.NotContains(t, config.DevRun, "old")
 	})
 
+	t.Run("env type override", func(t *testing.T) {
+		t.Parallel()
+		config := RepoConfig{EnvType: "local"}
+		newEnvType := "devpod"
+		overrides := ConfigOverrides{EnvType: &newEnvType}
+
+		overrides.ApplyToRepoConfig(&config)
+
+		assert.Equal(t, "devpod", config.EnvType)
+	})
+
+	t.Run("repo mode override", func(t *testing.T) {
+		t.Parallel()
+		config := RepoConfig{RepoMode: "worktree"}
+		newRepoMode := "in_place"
+		overrides := ConfigOverrides{RepoMode: &newRepoMode}
+
+		overrides.ApplyToRepoConfig(&config)
+
+		assert.Equal(t, "in_place", config.RepoMode)
+	})
+
 	t.Run("multiple overrides applied together", func(t *testing.T) {
 		t.Parallel()
 		config := RepoConfig{
