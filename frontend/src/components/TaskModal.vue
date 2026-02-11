@@ -184,6 +184,7 @@ const emit = defineEmits<{
   (e: 'close'): void
   (e: 'created'): void
   (e: 'updated'): void
+  (e: 'deleted'): void
 }>()
 
 const isEditMode = computed(() => !!props.task?.id)
@@ -651,6 +652,7 @@ const deleteTask = async () => {
     method: 'DELETE',
   })
   if (response.ok) {
+    emit('deleted')
     emit('close')
   } else {
     console.error('Failed to delete task')
