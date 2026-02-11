@@ -19,6 +19,8 @@ type ConfigOverrides struct {
 
 	CommandPermissions *CommandPermissionConfig `json:"commandPermissions,omitempty"`
 	DevRun             *DevRunConfig            `json:"devRun,omitempty"`
+	EnvType            *string                  `json:"envType,omitempty"`
+	RepoMode           *string                  `json:"repoMode,omitempty"`
 
 	// LocalConfig overrides
 	LLM       *LLMConfig                   `json:"llm,omitempty"`
@@ -70,5 +72,11 @@ func (o ConfigOverrides) ApplyToRepoConfig(c *RepoConfig) {
 	}
 	if o.DevRun != nil {
 		c.DevRun = *o.DevRun
+	}
+	if o.EnvType != nil {
+		c.EnvType = *o.EnvType
+	}
+	if o.RepoMode != nil {
+		c.RepoMode = *o.RepoMode
 	}
 }
