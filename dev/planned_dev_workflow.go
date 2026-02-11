@@ -25,7 +25,8 @@ type PlannedDevOptions struct {
 	ReproduceIssue        bool                   `json:"reproduceIssue"`
 	DetermineRequirements bool                   `json:"determineRequirements"`
 	EnvType               env.EnvType            `json:"envType,omitempty" default:"local"`
-	StartBranch           *string                `json:"startBranch,omitempty"` // Optional branch for git worktree env
+	RepoMode              env.RepoMode           `json:"repoMode,omitempty" default:"worktree"`
+	StartBranch           *string                `json:"startBranch,omitempty"`
 	ConfigOverrides       common.ConfigOverrides `json:"configOverrides"`
 }
 
@@ -53,7 +54,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 
 	ctx = utils.DefaultRetryCtx(ctx)
 
-	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), input.PlannedDevOptions.StartBranch, input.Requirements, input.PlannedDevOptions.ConfigOverrides)
+	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), string(input.RepoMode), input.PlannedDevOptions.StartBranch, input.Requirements, input.PlannedDevOptions.ConfigOverrides)
 	if err != nil {
 		_ = signalWorkflowClosure(ctx, "failed")
 		return DevPlanExecution{}, fmt.Errorf("failed to setup dev context: %v", err)
@@ -114,7 +115,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 
 	// Handle merge if using worktree and workflow version is new enough
 	v := workflow.GetVersion(ctx, "git-worktree-merge", workflow.DefaultVersion, 1)
-	if input.EnvType == env.EnvTypeLocalGitWorktree && v == 1 {
+	if dCtx.Worktree != nil && v == 1 {
 		err := reviewAndResolve(dCtx, MergeWithReviewParams{
 			CommitRequired: false, // planned dev flow writes commits already
 			Requirements: input.Requirements + `

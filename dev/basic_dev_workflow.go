@@ -28,6 +28,7 @@ type BasicDevWorkflowInput struct {
 type BasicDevOptions struct {
 	DetermineRequirements bool                   `json:"determineRequirements"`
 	EnvType               env.EnvType            `json:"envType,omitempty" default:"local"`
+	RepoMode              env.RepoMode           `json:"repoMode,omitempty" default:"worktree"`
 	StartBranch           *string                `json:"startBranch,omitempty"`
 	ConfigOverrides       common.ConfigOverrides `json:"configOverrides"`
 }
@@ -109,7 +110,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 
 	ctx = utils.DefaultRetryCtx(ctx)
 
-	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), input.BasicDevOptions.StartBranch, input.Requirements, input.BasicDevOptions.ConfigOverrides)
+	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), string(input.RepoMode), input.BasicDevOptions.StartBranch, input.Requirements, input.BasicDevOptions.ConfigOverrides)
 	if err != nil {
 		_ = signalWorkflowClosure(ctx, "failed")
 		return "", err
@@ -154,7 +155,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	}
 
 	goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
-	if goNextVersion >= 1 && errors.Is(err, flow_action.PendingActionError) && dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree {
+	if goNextVersion >= 1 && errors.Is(err, flow_action.PendingActionError) && dCtx.Worktree != nil {
 		pending := dCtx.ExecContext.GlobalState.GetPendingUserAction()
 		if pending != nil && *pending == flow_action.UserActionGoNext {
 			// skip to review/resolve subflow
@@ -168,7 +169,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	}
 
 	worktreeMergeVersion := workflow.GetVersion(dCtx, "worktree-merge", workflow.DefaultVersion, 1)
-	if dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree && worktreeMergeVersion >= 1 {
+	if dCtx.Worktree != nil && worktreeMergeVersion >= 1 {
 		params := MergeWithReviewParams{
 			CommitRequired: true,
 			Requirements:   requirements,
@@ -759,6 +760,14 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 
 	// After successful merge, cleanup the worktree
 	if !mergeResult.HasConflicts && dCtx.Worktree != nil {
+		devpodCleanupVersion := workflow.GetVersion(dCtx, "devpod-cleanup-on-merge", workflow.DefaultVersion, 1)
+		if devpodCleanupVersion >= 1 && dCtx.EnvContainer.Env.GetType() == env.EnvTypeDevPod {
+			err := workflow.ExecuteActivity(dCtx, env.DevPodDeleteActivity, dCtx.EnvContainer.Env.GetWorkingDirectory()).Get(dCtx, nil)
+			if err != nil {
+				workflow.GetLogger(dCtx).Error("Failed to delete DevPod workspace", "error", err)
+			}
+		}
+
 		actionCtx := dCtx.NewActionContext("cleanup_worktree")
 		v := workflow.GetVersion(dCtx, "hide-cleanup-worktree", workflow.DefaultVersion, 1)
 		trackOptions := flow_action.TrackOptions{FailuresOnly: v >= 1}
