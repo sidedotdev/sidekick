@@ -203,6 +203,26 @@ func TestLocalGitWorktreeEnvironment_MarshalUnmarshal(t *testing.T) {
 	assert.Equal(t, originalEnv, unmarshaledEnvContainer.Env.(*LocalGitWorktreeEnv))
 }
 
+func TestDevPodEnvironment_MarshalUnmarshal(t *testing.T) {
+	t.Parallel()
+	originalEnv := &DevPodEnv{
+		WorkingDirectory: "/some/workspace/dir",
+		WorkspaceName:    "my-workspace",
+	}
+	envContainer := EnvContainer{Env: originalEnv}
+
+	jsonBytes, err := json.Marshal(envContainer)
+	assert.NoError(t, err)
+
+	var unmarshaledEnvContainer EnvContainer
+	err = json.Unmarshal(jsonBytes, &unmarshaledEnvContainer)
+	assert.NoError(t, err)
+
+	assert.Equal(t, originalEnv, unmarshaledEnvContainer.Env.(*DevPodEnv))
+	assert.Equal(t, EnvTypeDevPod, unmarshaledEnvContainer.Env.GetType())
+	assert.Equal(t, "/some/workspace/dir", unmarshaledEnvContainer.Env.GetWorkingDirectory())
+}
+
 func TestEnvContainer_MarshalJSON_NilEnv(t *testing.T) {
 	// Create an EnvContainer with nil Env
 	envContainer := EnvContainer{Env: nil}
@@ -219,6 +239,70 @@ func TestEnvContainer_MarshalJSON_NilEnv(t *testing.T) {
 
 	// The unmarshaled EnvContainer should also have nil Env
 	assert.Nil(t, unmarshaledEnvContainer.Env)
+}
+
+func TestStripDevPodTunnelError(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		stderr   string
+		expected string
+	}{
+		{
+			name:     "no tunnel error",
+			stderr:   "some normal error\nanother line\n",
+			expected: "some normal error\nanother line\n",
+		},
+		{
+			name:     "tunnel error only",
+			stderr:   "16:09:34 Error tunneling to container: wait: remote command exited without exit status or exit signal\n",
+			expected: "",
+		},
+		{
+			name:     "tunnel error mixed with other output",
+			stderr:   "real error\n16:09:34 Error tunneling to container: wait: remote command exited without exit status or exit signal\nmore output\n",
+			expected: "real error\nmore output\n",
+		},
+		{
+			name:     "empty stderr",
+			stderr:   "",
+			expected: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := stripDevPodTunnelError(tt.stderr)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"simple", "'simple'"},
+		{"with spaces", "'with spaces'"},
+		{"it's", "'it'\"'\"'s'"},
+		{"", "''"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, shellQuote(tt.input))
+		})
+	}
+}
+
+func TestRepoMode_IsValid(t *testing.T) {
+	t.Parallel()
+	assert.True(t, RepoModeWorktree.IsValid())
+	assert.True(t, RepoModeInPlace.IsValid())
+	assert.False(t, RepoMode("invalid").IsValid())
+	assert.False(t, RepoMode("").IsValid())
 }
 
 func TestNewLocalGitWorktreeActivity_Error(t *testing.T) {

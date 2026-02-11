@@ -34,10 +34,22 @@ type EnvType string
 const (
 	EnvTypeLocal            EnvType = "local"
 	EnvTypeLocalGitWorktree EnvType = "local_git_worktree"
+	EnvTypeDevPod           EnvType = "devpod"
 )
 
 func (e EnvType) IsValid() bool {
-	return e == EnvTypeLocal || e == EnvTypeLocalGitWorktree
+	return e == EnvTypeLocal || e == EnvTypeLocalGitWorktree || e == EnvTypeDevPod
+}
+
+type RepoMode string
+
+const (
+	RepoModeWorktree RepoMode = "worktree"
+	RepoModeInPlace  RepoMode = "in_place"
+)
+
+func (r RepoMode) IsValid() bool {
+	return r == RepoModeWorktree || r == RepoModeInPlace
 }
 
 type Env interface {
@@ -62,6 +74,11 @@ type LocalEnv struct {
 
 type LocalGitWorktreeEnv struct {
 	WorkingDirectory string
+}
+
+type DevPodEnv struct {
+	WorkingDirectory string
+	WorkspaceName    string
 }
 
 type LocalEnvParams struct {
@@ -181,6 +198,63 @@ func (e *LocalGitWorktreeEnv) RunCommand(ctx context.Context, input EnvRunComman
 	return unix.RunCommandActivity(ctx, runCommandInput)
 }
 
+func (e *DevPodEnv) GetType() EnvType {
+	return EnvTypeDevPod
+}
+
+func (e *DevPodEnv) GetWorkingDirectory() string {
+	return e.WorkingDirectory
+}
+
+func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
+
+	allEnvVars := append(input.EnvVars, envVarsToInject...)
+	var shellParts []string
+	for _, envVar := range allEnvVars {
+		shellParts = append(shellParts, "export "+shellQuote(envVar))
+	}
+	shellParts = append(shellParts, "cd "+shellQuote(workDir))
+
+	cmdStr := shellQuote(input.Command)
+	for _, arg := range input.Args {
+		cmdStr += " " + shellQuote(arg)
+	}
+	shellParts = append(shellParts, cmdStr)
+
+	fullCommand := strings.Join(shellParts, " && ")
+
+	runCommandInput := unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "devpod",
+		Args:       []string{"ssh", e.WorkspaceName, "--command", fullCommand},
+	}
+	output, err := unix.RunCommandActivity(ctx, runCommandInput)
+	if err != nil {
+		return output, err
+	}
+
+	output.Stderr = stripDevPodTunnelError(output.Stderr)
+	return output, nil
+}
+
+// shellQuote wraps a string in single quotes, escaping any embedded single quotes.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
+func stripDevPodTunnelError(stderr string) string {
+	const tunnelErrSubstring = "Error tunneling to container: wait: remote command exited without exit status or exit signal"
+	lines := strings.Split(stderr, "\n")
+	var filtered []string
+	for _, line := range lines {
+		if !strings.Contains(line, tunnelErrSubstring) {
+			filtered = append(filtered, line)
+		}
+	}
+	return strings.Join(filtered, "\n")
+}
+
 // EnvContainer is a wrapper for the Env interface that provides custom
 // JSON marshaling and unmarshaling.
 type EnvContainer struct {
@@ -231,6 +305,12 @@ func (ec *EnvContainer) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		ec.Env = lgwe
+	case string(EnvTypeDevPod):
+		var dpe *DevPodEnv
+		if err := json.Unmarshal(v.Env, &dpe); err != nil {
+			return err
+		}
+		ec.Env = dpe
 	case "":
 		ec.Env = nil
 	default:
