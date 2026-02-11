@@ -142,6 +142,9 @@ func buildActivityRegistry() map[string]interface{} {
 	// Register standalone functions
 	standaloneFuncs := []interface{}{
 		env.NewLocalGitWorktreeActivity,
+		env.DevPodUpActivity,
+		env.DevPodDeleteActivity,
+		env.DevPodStopActivity,
 		sidekick.GithubCloneRepoActivity,
 		env.EnvRunCommandActivity,
 		git.GitDiffActivity,
