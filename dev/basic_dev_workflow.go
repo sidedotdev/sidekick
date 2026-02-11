@@ -154,7 +154,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 	}
 
 	goNextVersion := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
-	if goNextVersion >= 1 && errors.Is(err, flow_action.PendingActionError) && dCtx.EnvContainer.Env.GetType() == env.EnvTypeLocalGitWorktree {
+	if goNextVersion >= 1 && errors.Is(err, flow_action.PendingActionError) {
 		pending := dCtx.ExecContext.GlobalState.GetPendingUserAction()
 		if pending != nil && *pending == flow_action.UserActionGoNext {
 			// skip to review/resolve subflow
