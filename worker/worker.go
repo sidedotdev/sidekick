@@ -148,6 +148,9 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	RegisterWorkflows(w)
 
 	w.RegisterActivity(env.NewLocalGitWorktreeActivity)
+	w.RegisterActivity(env.DevPodUpActivity)
+	w.RegisterActivity(env.DevPodDeleteActivity)
+	w.RegisterActivity(env.DevPodStopActivity)
 	w.RegisterActivity(&srv.Activities{Service: service})
 	w.RegisterActivity(sidekick.GithubCloneRepoActivity)
 	w.RegisterActivity(llmActivities)
