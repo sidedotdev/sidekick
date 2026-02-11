@@ -96,7 +96,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 			// want to make the error visible in the Sidekick UI and mark the task
 			// as failed
 			if r := recover(); r != nil {
-				_ = signalWorkflowClosure(ctx, "failed")
+				signalWorkflowFailureOrCancel(ctx)
 				var ok bool
 				err, ok = r.(error)
 				if !ok {
@@ -111,7 +111,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 
 	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), input.BasicDevOptions.StartBranch, input.Requirements, input.BasicDevOptions.ConfigOverrides)
 	if err != nil {
-		_ = signalWorkflowClosure(ctx, "failed")
+		signalWorkflowFailureOrCancel(ctx)
 		return "", err
 	}
 	defer handleFlowCancel(dCtx)
