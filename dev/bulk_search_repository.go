@@ -66,7 +66,6 @@ func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *llm2.ChatHistor
 	actionCtx := dCtx.ExecContext.NewActionContext("generate.repo_search_query")
 	modelConfig := dCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
 	response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(
-		dCtx,
 		actionCtx,
 		flow_action.TrackOptions{},
 		modelConfig,

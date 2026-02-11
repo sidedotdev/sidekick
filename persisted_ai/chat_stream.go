@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"sidekick/common"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/utils"
@@ -30,18 +31,20 @@ type ChatStreamOptionsV2 struct {
 // Returns the response as a common.MessageResponse.
 // Note: Callers are responsible for appending the response message to chat history.
 func ExecuteChatStream(
-	ctx workflow.Context,
+	actionCtx flow_action.ActionContext,
 	options ChatStreamOptionsV2,
 ) (common.MessageResponse, error) {
-	streamCtx := utils.LlmHeartbeatCtx(ctx)
+	heartbeatActionCtx := actionCtx
+	heartbeatActionCtx.Context = utils.LlmHeartbeatCtx(actionCtx.Context)
+
 	if options.Params.ChatHistory == nil {
 		return nil, fmt.Errorf("ChatHistory is required in options.Params")
 	}
 
-	v := workflow.GetVersion(ctx, "chat-history-llm2", workflow.DefaultVersion, 1)
+	v := workflow.GetVersion(actionCtx, "chat-history-llm2", workflow.DefaultVersion, 1)
 
 	if v == 1 {
-		return executeChatStreamV1(streamCtx, options)
+		return executeChatStreamV1(heartbeatActionCtx, options)
 	}
 
 	chatHistory := options.Params.ChatHistory
@@ -60,12 +63,12 @@ func ExecuteChatStream(
 		FlowId:       options.FlowId,
 		FlowActionId: options.FlowActionId,
 	}
-	return executeChatStreamLegacy(streamCtx, legacyOptions, chatHistory)
+	return executeChatStreamLegacy(heartbeatActionCtx, legacyOptions, chatHistory)
 }
 
 // executeChatStreamV1 handles the Llm2ChatHistory path.
 func executeChatStreamV1(
-	ctx workflow.Context,
+	actionCtx flow_action.ActionContext,
 	options ChatStreamOptionsV2,
 ) (common.MessageResponse, error) {
 	chatHistory := options.Params.ChatHistory
@@ -75,8 +78,8 @@ func executeChatStreamV1(
 	}
 
 	// have to ensure we persist before we call stream
-	workflowSafeStorage := &common.WorkflowSafeKVStorage{Ctx: ctx}
-	gen := func() string { return utils.KsuidSideEffect(ctx) }
+	workflowSafeStorage := &common.WorkflowSafeKVStorage{Ctx: actionCtx}
+	gen := func() string { return utils.KsuidSideEffect(actionCtx) }
 	if err := chatHistory.Persist(context.Background(), workflowSafeStorage, gen); err != nil {
 		return nil, fmt.Errorf("failed to persist chat history: %w", err)
 	}
@@ -94,7 +97,7 @@ func executeChatStreamV1(
 
 	var la *Llm2Activities
 	var response llm2.MessageResponse
-	err := workflow.ExecuteActivity(ctx, la.Stream, streamInput).Get(ctx, &response)
+	err := flow_action.PerformWithUserRetry(actionCtx, la.Stream, &response, streamInput)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +107,7 @@ func executeChatStreamV1(
 
 // executeChatStreamLegacy handles the LegacyChatHistory path.
 func executeChatStreamLegacy(
-	ctx workflow.Context,
+	actionCtx flow_action.ActionContext,
 	options ChatStreamOptions,
 	chatHistory *llm2.ChatHistoryContainer,
 ) (common.MessageResponse, error) {
@@ -144,7 +147,7 @@ func executeChatStreamLegacy(
 
 	var la *LlmActivities
 	var chatResponse llm.ChatMessageResponse
-	err := workflow.ExecuteActivity(ctx, la.ChatStream, legacyOptions).Get(ctx, &chatResponse)
+	err := flow_action.PerformWithUserRetry(actionCtx, la.ChatStream, &chatResponse, legacyOptions)
 	if err != nil {
 		return nil, err
 	}

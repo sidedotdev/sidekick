@@ -79,7 +79,7 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 	for {
 		// TODO /gen test this, assert it calls the right tool via mock of chat stream method
 		actionCtx := dCtx.ExecContext.NewActionContext("check_criteria_fulfillment")
-		response, err := persisted_ai.ForceToolCall(dCtx, actionCtx, modelConfig, chatHistory, &determineCriteriaFulfillmentTool)
+		response, err := persisted_ai.ForceToolCall(actionCtx, modelConfig, chatHistory, &determineCriteriaFulfillmentTool)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to force tool call: %v", err)
 		}

@@ -35,7 +35,6 @@ func GetOpenaiFuncArgs(ctx context.Context, la LlmActivities, toolOptions llm.To
 // ChatHistoryContainer and delegates to ExecuteChatStream for LLM calls.
 // Returns common.MessageResponse which provides GetMessage().GetToolCalls() for accessing tool calls.
 func ForceToolCallWithTrackOptionsV2(
-	ctx workflow.Context,
 	actionCtx flow_action.ActionContext,
 	trackOptions flow_action.TrackOptions,
 	modelConfig common.ModelConfig,
@@ -62,7 +61,7 @@ func ForceToolCallWithTrackOptionsV2(
 			},
 		},
 		WorkspaceId: actionCtx.WorkspaceId,
-		FlowId:      workflow.GetInfo(ctx).WorkflowExecution.ID,
+		FlowId:      workflow.GetInfo(actionCtx).WorkflowExecution.ID,
 		Providers:   actionCtx.Providers,
 	}
 
@@ -70,7 +69,7 @@ func ForceToolCallWithTrackOptionsV2(
 	response, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		options.FlowActionId = flowAction.Id
 
-		msgResponse, err := ExecuteChatStream(ctx, options)
+		msgResponse, err := ExecuteChatStream(actionCtx, options)
 		if err != nil {
 			return nil, err
 		}
@@ -96,7 +95,7 @@ func ForceToolCallWithTrackOptionsV2(
 		response, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
 			options.FlowActionId = flowAction.Id
 
-			msgResponse, err := ExecuteChatStream(ctx, options)
+			msgResponse, err := ExecuteChatStream(actionCtx, options)
 			if err != nil {
 				return nil, err
 			}
@@ -117,6 +116,6 @@ func ForceToolCallWithTrackOptionsV2(
 	return response, err
 }
 
-func ForceToolCall(ctx workflow.Context, actionCtx flow_action.ActionContext, modelConfig common.ModelConfig, chatHistory *llm2.ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
-	return ForceToolCallWithTrackOptionsV2(ctx, actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, tools...)
+func ForceToolCall(actionCtx flow_action.ActionContext, modelConfig common.ModelConfig, chatHistory *llm2.ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
+	return ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, tools...)
 }

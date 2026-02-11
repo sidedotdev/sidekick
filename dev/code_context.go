@@ -454,7 +454,6 @@ type ToolCallWithCodeContext struct {
 func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *llm2.ChatHistoryContainer) ([]ToolCallWithCodeContext, error) {
 	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
 	response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(
-		actionCtx,
 		actionCtx.FlowActionContext(),
 		flow_action.TrackOptions{},
 		modelConfig,

@@ -470,7 +470,7 @@ func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options) (
 		}
 
 		response, err := persisted_ai.ExecuteChatStream(
-			dCtx,
+			actionCtx.FlowActionContext(),
 			chatStreamOptions,
 		)
 		if err != nil {
