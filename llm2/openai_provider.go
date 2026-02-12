@@ -54,10 +54,7 @@ func (p OpenAIProvider) Stream(ctx context.Context, options Options, eventChan c
 		}
 	}
 
-	// Add cache_control annotations when proxying Anthropic models through
-	// an OpenAI-compatible gateway (e.g. litellm in front of Bedrock).
-	addCacheControl := p.BaseURL != "" && isAnthropicModel(model)
-	chatMessages, err := messagesToChatCompletionParams(messages, addCacheControl)
+	chatMessages, err := messagesToChatCompletionParams(messages)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build messages: %w", err)
 	}
@@ -288,47 +285,31 @@ func findLastTextBlockIndex(events []Event) int {
 	return 0
 }
 
-// isAnthropicModel returns true if the model identifier indicates an
-// Anthropic / Claude model (possibly served via Bedrock or a proxy).
-func isAnthropicModel(model string) bool {
-	m := strings.ToLower(model)
-	return strings.Contains(m, "anthropic") || strings.Contains(m, "claude")
+func cacheControlExtraFields(value string) map[string]any {
+	return map[string]any{
+		"cache_control": map[string]string{"type": value},
+	}
 }
 
-func messagesToChatCompletionParams(messages []Message, addCacheControl bool) ([]openai.ChatCompletionMessageParamUnion, error) {
+func messagesToChatCompletionParams(messages []Message) ([]openai.ChatCompletionMessageParamUnion, error) {
 	var result []openai.ChatCompletionMessageParamUnion
 
-	cacheControlExtra := map[string]any{
-		"cache_control": map[string]string{"type": "ephemeral"},
-	}
-
-	for i, msg := range messages {
-		addCacheControl = i == len(messages)-6
+	for _, msg := range messages {
 		switch msg.Role {
 		case RoleSystem:
 			for _, block := range msg.Content {
 				if block.Type == ContentBlockTypeText {
-					if addCacheControl {
-						textPart := openai.ChatCompletionContentPartTextParam{
-							Text: block.Text,
-						}
-						textPart.SetExtraFields(cacheControlExtra)
-						result = append(result, openai.ChatCompletionMessageParamUnion{
-							OfSystem: &openai.ChatCompletionSystemMessageParam{
-								Content: openai.ChatCompletionSystemMessageParamContentUnion{
-									OfArrayOfContentParts: []openai.ChatCompletionContentPartTextParam{textPart},
-								},
-							},
-						})
-					} else {
-						result = append(result, openai.ChatCompletionMessageParamUnion{
-							OfSystem: &openai.ChatCompletionSystemMessageParam{
-								Content: openai.ChatCompletionSystemMessageParamContentUnion{
-									OfString: param.NewOpt(block.Text),
-								},
-							},
-						})
+					textPart := openai.ChatCompletionContentPartTextParam{Text: block.Text}
+					if block.CacheControl != "" {
+						textPart.SetExtraFields(cacheControlExtraFields(block.CacheControl))
 					}
+					result = append(result, openai.ChatCompletionMessageParamUnion{
+						OfSystem: &openai.ChatCompletionSystemMessageParam{
+							Content: openai.ChatCompletionSystemMessageParamContentUnion{
+								OfArrayOfContentParts: []openai.ChatCompletionContentPartTextParam{textPart},
+							},
+						},
+					})
 				}
 			}
 
@@ -336,54 +317,35 @@ func messagesToChatCompletionParams(messages []Message, addCacheControl bool) ([
 			for _, block := range msg.Content {
 				switch block.Type {
 				case ContentBlockTypeText:
-					if addCacheControl {
-						textPart := openai.ChatCompletionContentPartTextParam{
-							Text: block.Text,
-						}
-						textPart.SetExtraFields(cacheControlExtra)
-						result = append(result, openai.ChatCompletionMessageParamUnion{
-							OfUser: &openai.ChatCompletionUserMessageParam{
-								Content: openai.ChatCompletionUserMessageParamContentUnion{
-									OfArrayOfContentParts: []openai.ChatCompletionContentPartUnionParam{
-										{OfText: &textPart},
-									},
-								},
-							},
-						})
-					} else {
-						result = append(result, openai.ChatCompletionMessageParamUnion{
-							OfUser: &openai.ChatCompletionUserMessageParam{
-								Content: openai.ChatCompletionUserMessageParamContentUnion{
-									OfString: param.NewOpt(block.Text),
-								},
-							},
-						})
+					textPart := openai.ChatCompletionContentPartTextParam{Text: block.Text}
+					if block.CacheControl != "" {
+						textPart.SetExtraFields(cacheControlExtraFields(block.CacheControl))
 					}
+					result = append(result, openai.ChatCompletionMessageParamUnion{
+						OfUser: &openai.ChatCompletionUserMessageParam{
+							Content: openai.ChatCompletionUserMessageParamContentUnion{
+								OfArrayOfContentParts: []openai.ChatCompletionContentPartUnionParam{
+									{OfText: &textPart},
+								},
+							},
+						},
+					})
 				case ContentBlockTypeToolResult:
 					if block.ToolResult == nil {
 						return nil, fmt.Errorf("tool_result block missing ToolResult data")
 					}
-					if addCacheControl {
-						toolMsg := openai.ChatCompletionToolMessageParam{
-							ToolCallID: block.ToolResult.ToolCallId,
-							Content: openai.ChatCompletionToolMessageParamContentUnion{
-								OfString: param.NewOpt(block.ToolResult.Text),
-							},
-						}
-						toolMsg.SetExtraFields(cacheControlExtra)
-						result = append(result, openai.ChatCompletionMessageParamUnion{
-							OfTool: &toolMsg,
-						})
-					} else {
-						result = append(result, openai.ChatCompletionMessageParamUnion{
-							OfTool: &openai.ChatCompletionToolMessageParam{
-								ToolCallID: block.ToolResult.ToolCallId,
-								Content: openai.ChatCompletionToolMessageParamContentUnion{
-									OfString: param.NewOpt(block.ToolResult.Text),
-								},
-							},
-						})
+					toolMsg := openai.ChatCompletionToolMessageParam{
+						ToolCallID: block.ToolResult.ToolCallId,
+						Content: openai.ChatCompletionToolMessageParamContentUnion{
+							OfString: param.NewOpt(block.ToolResult.Text),
+						},
 					}
+					if block.CacheControl != "" {
+						toolMsg.SetExtraFields(cacheControlExtraFields(block.CacheControl))
+					}
+					result = append(result, openai.ChatCompletionMessageParamUnion{
+						OfTool: &toolMsg,
+					})
 				default:
 					return nil, fmt.Errorf("unsupported content block type %s for user role", block.Type)
 				}
@@ -418,8 +380,6 @@ func messagesToChatCompletionParams(messages []Message, addCacheControl bool) ([
 					})
 					hasContent = true
 				case ContentBlockTypeReasoning:
-					// Reasoning blocks are not representable in the chat completions API input;
-					// skip them to avoid errors.
 					continue
 				case ContentBlockTypeRefusal:
 					if block.Refusal != nil {
@@ -445,8 +405,11 @@ func messagesToChatCompletionParams(messages []Message, addCacheControl bool) ([
 						OfArrayOfContentParts: contentParts,
 					}
 				}
-				if addCacheControl {
-					assistantMsg.SetExtraFields(cacheControlExtra)
+				for _, block := range msg.Content {
+					if block.CacheControl != "" {
+						assistantMsg.SetExtraFields(cacheControlExtraFields(block.CacheControl))
+						break
+					}
 				}
 				result = append(result, openai.ChatCompletionMessageParamUnion{
 					OfAssistant: assistantMsg,
