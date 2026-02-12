@@ -17,6 +17,8 @@ const (
 )
 
 // Usage is surfaced on final responses (not deltas).
+// InputTokens must be the total prompt tokens (cached + non-cached).
+// CacheReadInputTokens and CacheWriteInputTokens are subsets of InputTokens.
 type Usage struct {
 	InputTokens           int `json:"inputTokens"`
 	OutputTokens          int `json:"outputTokens"`

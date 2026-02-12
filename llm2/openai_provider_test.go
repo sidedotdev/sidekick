@@ -13,8 +13,6 @@ import (
 	"testing"
 
 	"github.com/invopop/jsonschema"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -181,7 +179,7 @@ func TestOpenAIProvider_UsageOnChunkWithChoices(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.NotNil(t, response)
-	assert.Equal(t, 10, response.Usage.InputTokens, "InputTokens should be captured from chunk with choices")
+	assert.Equal(t, 110, response.Usage.InputTokens, "InputTokens should be total including cache write tokens")
 	assert.Equal(t, 5, response.Usage.OutputTokens, "OutputTokens should be captured from chunk with choices")
 	assert.Equal(t, 100, response.Usage.CacheWriteInputTokens, "CacheWriteInputTokens from cache_creation_input_tokens")
 	assert.Equal(t, "test-model", response.Model)
@@ -265,7 +263,6 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
 	}
 
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
 	provider := OpenAIProvider{}
 
@@ -352,14 +349,11 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 		t.Error("Expected to see at least one text_delta event")
 	}
 
-	t.Logf("Response output content blocks: %d", len(response.Output.Content))
-
 	var foundToolUse bool
 	for _, block := range response.Output.Content {
 		if block.Type == ContentBlockTypeToolUse {
 			foundToolUse = true
 			if block.ToolUse.Name == "get_current_weather" {
-				t.Logf("Found tool_use block: %+v", block.ToolUse)
 				break
 			}
 		}
@@ -372,10 +366,6 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 	assert.NotNil(t, response.Usage, "Usage field should not be nil")
 	assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0")
 	assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0")
-
-	t.Logf("Usage: InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
-	t.Logf("Model: %s, Provider: %s", response.Model, response.Provider)
-	t.Logf("StopReason: %s", response.StopReason)
 
 	t.Run("MultiTurn", func(t *testing.T) {
 		messages = append(messages, response.Output)
@@ -427,16 +417,11 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 			t.Error("No events received")
 		}
 
-		t.Logf("Response output content blocks (multi-turn): %d", len(response.Output.Content))
-		t.Logf("Usage (multi-turn): InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
-
 		var hasTextContent bool
 		for _, block := range response.Output.Content {
 			if block.Type == ContentBlockTypeText && block.Text != "" {
 				hasTextContent = true
 				break
-			} else {
-				t.Logf("Output Block: %s", utils.PanicJSON(block))
 			}
 		}
 

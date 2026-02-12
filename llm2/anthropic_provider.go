@@ -251,6 +251,15 @@ func (p AnthropicProvider) Stream(ctx context.Context, options Options, eventCha
 		responseModel = model
 	}
 
+	// Anthropic returns non-cached tokens as InputTokens; the total prompt
+	// token count is the sum of all three fields.
+	usage := Usage{
+		InputTokens:           int(finalMessage.Usage.InputTokens) + int(finalMessage.Usage.CacheReadInputTokens) + int(finalMessage.Usage.CacheCreationInputTokens),
+		OutputTokens:          int(finalMessage.Usage.OutputTokens),
+		CacheReadInputTokens:  int(finalMessage.Usage.CacheReadInputTokens),
+		CacheWriteInputTokens: int(finalMessage.Usage.CacheCreationInputTokens),
+	}
+
 	response := &MessageResponse{
 		Id:           finalMessage.ID,
 		Model:        responseModel,
@@ -258,12 +267,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, options Options, eventCha
 		Output:       output,
 		StopReason:   string(finalMessage.StopReason),
 		StopSequence: finalMessage.StopSequence,
-		Usage: Usage{
-			InputTokens:           int(finalMessage.Usage.InputTokens),
-			OutputTokens:          int(finalMessage.Usage.OutputTokens),
-			CacheReadInputTokens:  int(finalMessage.Usage.CacheReadInputTokens),
-			CacheWriteInputTokens: int(finalMessage.Usage.CacheCreationInputTokens),
-		},
+		Usage:        usage,
 	}
 
 	return response, nil

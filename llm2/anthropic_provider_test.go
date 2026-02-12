@@ -315,7 +315,7 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 				ModelConfig: common.ModelConfig{
 					Provider:        "anthropic",
 					Model:           reasoningModel,
-					ReasoningEffort: "high",
+					ReasoningEffort: "low",
 				},
 			},
 			Secrets: secret_manager.SecretManagerContainer{
