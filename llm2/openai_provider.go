@@ -131,14 +131,11 @@ func (p OpenAIProvider) Stream(ctx context.Context, options Options, eventChan c
 				usage.CacheReadInputTokens = int(chunk.Usage.PromptTokensDetails.CachedTokens)
 			}
 			// litellm proxying Anthropic models returns cache_creation_input_tokens
-			// as a top-level field in the usage object. When present, prompt_tokens
-			// from litellm is the non-cached baseline (Anthropic semantics), so we
-			// add the cache fields to get the true total.
+			// as a top-level field in the usage object.
 			if f, ok := chunk.Usage.JSON.ExtraFields["cache_creation_input_tokens"]; ok {
 				var cacheWriteTokens int
 				if json.Unmarshal([]byte(f.Raw()), &cacheWriteTokens) == nil {
 					usage.CacheWriteInputTokens = cacheWriteTokens
-					usage.InputTokens += cacheWriteTokens + usage.CacheReadInputTokens
 				}
 			}
 		}
