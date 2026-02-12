@@ -334,7 +334,7 @@ loop:
 	}
 
 	if err := stream.Err(); err != nil {
-		return nil, err
+		return nil, wrapOpenAIError(err)
 	}
 
 	outputMessage := accumulateOpenaiEventsToMessage(events)

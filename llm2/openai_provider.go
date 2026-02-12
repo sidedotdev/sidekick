@@ -2,6 +2,7 @@ package llm2
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sidekick/common"
@@ -212,7 +213,7 @@ func (p OpenAIProvider) Stream(ctx context.Context, options Options, eventChan c
 	}
 
 	if err := stream.Err(); err != nil {
-		return nil, err
+		return nil, wrapOpenAIError(err)
 	}
 
 	// Emit block_done events for all blocks
@@ -480,4 +481,38 @@ func openaiChatFromToolChoice(toolChoice common.ToolChoice, tools []*common.Tool
 	default:
 		panic("unknown tool choice: " + string(toolChoice.Type))
 	}
+}
+
+// wrapOpenAIError extracts detailed error information from OpenAI API errors.
+// The openai-go library's Error type only populates its JSON fields when the
+// response body matches OpenAI's error format ({"error": {...}}). Third-party
+// OpenAI-compatible providers (e.g. Cerebras) often return errors in a
+// different format, leaving the parsed fields empty and producing an unhelpful
+// error message like `POST "...": 404 Not Found`. This helper dumps the raw
+// response body so the actual error details are surfaced.
+func wrapOpenAIError(err error) error {
+	var apiErr *openai.Error
+	if !errors.As(err, &apiErr) {
+		return err
+	}
+
+	// If the library successfully parsed the error body (e.g. standard OpenAI
+	// format), the Message field will be populated — use it directly.
+	if apiErr.Message != "" {
+		return fmt.Errorf("%s %q: %d %s (message: %s, type: %s, code: %s)",
+			apiErr.Request.Method, apiErr.Request.URL,
+			apiErr.StatusCode, apiErr.Type,
+			apiErr.Message, apiErr.Type, apiErr.Code)
+	}
+
+	// Otherwise, dump the response to capture the raw body from non-standard
+	// providers.
+	body := apiErr.DumpResponse(true)
+	if len(body) > 0 {
+		return fmt.Errorf("%s %q: %d - response: %s",
+			apiErr.Request.Method, apiErr.Request.URL,
+			apiErr.StatusCode, string(body))
+	}
+
+	return err
 }
