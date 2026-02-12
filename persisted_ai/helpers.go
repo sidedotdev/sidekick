@@ -65,7 +65,7 @@ func ForceToolCallWithTrackOptionsV2(
 		Providers:   actionCtx.Providers,
 	}
 
-	actionCtx.ActionParams = llm.ToolChatOptions{Secrets: options.Secrets, Params: llm.ToolChatParams{ModelConfig: modelConfig}}.ActionParams()
+	actionCtx.ActionParams = options.ActionParams()
 	response, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		options.FlowActionId = flowAction.Id
 
@@ -91,7 +91,7 @@ func ForceToolCallWithTrackOptionsV2(
 		}
 		chatHistory.Append(retryMsg)
 
-		actionCtx.ActionParams = llm.ToolChatOptions{Secrets: options.Secrets, Params: llm.ToolChatParams{ModelConfig: modelConfig}}.ActionParams()
+		actionCtx.ActionParams = options.ActionParams()
 		response, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
 			options.FlowActionId = flowAction.Id
 

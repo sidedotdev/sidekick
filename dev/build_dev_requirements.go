@@ -454,7 +454,7 @@ func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options) (
 		return nil, fmt.Errorf("ChatHistory is required in options.Params for TrackedToolChat")
 	}
 	actionCtx := dCtx.NewActionContext("generate." + actionType)
-	actionCtx.ActionParams = llm.ToolChatOptions{Secrets: options.Secrets, Params: llm.ToolChatParams{ModelConfig: options.Params.ModelConfig}}.ActionParams()
+	actionCtx.ActionParams = options.ActionParams()
 	return Track(actionCtx, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		if options.Params.ModelConfig.Provider == "" {
 			options.Params.ModelConfig = dCtx.GetModelConfig(common.DefaultKey, 0, "default")

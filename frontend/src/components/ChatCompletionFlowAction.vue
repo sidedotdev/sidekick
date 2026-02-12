@@ -133,15 +133,42 @@
           </div>
           <pre>{{ flowAction.actionResult }}</pre>
         </div>
-        <vue-markdown v-if="completion?.content" :options="{ breaks: true }" :source="completion?.content" class="message-content markdown"/>
-        <div v-for="toolCall in completion?.toolCalls" :key="toolCall.id">
-          <p class="action-result-function-name">Tool Call: {{ toolCall.name }}</p>
-          <JsonTree :deep="1" :data="toolCall.parsedArguments || JSON.parse(toolCall.arguments || '{}')" class="action-result-function-args"/>
-        </div>
-        <div v-if="parsedActionResult && !completion?.toolCalls?.length && !completion?.content">
-          <JsonTree :deep="1" :data="parsedActionResult" class="action-result-parsed"/>
-        </div>
-        <p v-if="completion?.stopReason" class="action-result-stop-reason">Stop Reason: {{ completion?.stopReason }}</p>
+
+        <!-- llm2 MessageResponse format -->
+        <template v-if="isLlm2Response">
+          <template v-for="(block, blockIndex) in llm2ResponseBlocks" :key="blockIndex">
+            <div v-if="block.type === 'text' && block.text" class="llm2-text-block">
+              <vue-markdown :options="{ breaks: true }" :source="block.text" class="message-content markdown"/>
+            </div>
+            <div v-else-if="block.type === 'tool_use' && block.toolUse" class="llm2-tool-use-block">
+              <p class="action-result-function-name">Tool Call: {{ block.toolUse.name }}</p>
+              <JsonTree :deep="1" :data="parseLlm2ToolArguments(block.toolUse.arguments)" class="action-result-function-args"/>
+            </div>
+            <div v-else-if="block.type === 'reasoning'" class="llm2-text-block">
+              <vue-markdown v-if="block.reasoning && block.reasoning.text" :options="{ breaks: true }" :source="block.reasoning.text" class="message-content markdown reasoning"/>
+            </div>
+            <div v-else-if="block.type !== 'text'" class="llm2-unknown-block">
+              <JsonTree :deep="1" :data="block"/>
+            </div>
+          </template>
+          <div v-if="parsedActionResult && !llm2ResponseBlocks.length && !completionParseFailure">
+            <JsonTree :deep="1" :data="parsedActionResult" class="action-result-parsed"/>
+          </div>
+        </template>
+
+        <!-- Legacy ChatCompletionChoice format -->
+        <template v-else>
+          <vue-markdown v-if="completion?.content" :options="{ breaks: true }" :source="completion?.content" class="message-content markdown"/>
+          <div v-for="toolCall in completion?.toolCalls" :key="toolCall.id">
+            <p class="action-result-function-name">Tool Call: {{ toolCall.name }}</p>
+            <JsonTree :deep="1" :data="toolCall.parsedArguments || JSON.parse(toolCall.arguments || '{}')" class="action-result-function-args"/>
+          </div>
+          <div v-if="parsedActionResult && !completion?.toolCalls?.length && !completion?.content">
+            <JsonTree :deep="1" :data="parsedActionResult" class="action-result-parsed"/>
+          </div>
+        </template>
+
+        <p v-if="completion?.stopReason || parsedActionResult?.stopReason" class="action-result-stop-reason">Stop Reason: {{ completion?.stopReason || parsedActionResult?.stopReason }}</p>
       </template>
     </div>
   </div>
@@ -198,13 +225,16 @@ const hydratedLlm2Messages = computed(() => llm2Messages.value || []);
 // Watch for llm2 payloads and hydrate
 watch(
   () => [props.flowAction.workspaceId, props.flowAction.flowId, messagesPayload.value] as const,
-  async ([workspaceId, flowId, payload]) => {
+  async ([actionWorkspaceId, actionFlowId, payload]) => {
     if (!isLlm2ChatHistoryWrapper(payload)) {
       llm2Messages.value = null;
       llm2HydrationLoading.value = false;
       llm2HydrationError.value = null;
       return;
     }
+
+    const workspaceId = payload.workspaceId || actionWorkspaceId;
+    const flowId = payload.flowId || actionFlowId;
 
     llm2HydrationLoading.value = true;
     llm2HydrationError.value = null;
@@ -268,10 +298,21 @@ const parsedActionResult = ref((() => {
 
 const completion = computed<ChatCompletionChoice>(() => parsedActionResult.value || {});
 
-const effectiveModel = computed(() => props.flowAction.actionParams.model || completion.value?.model || '')
-const effectiveProvider = computed(() => props.flowAction.actionParams.provider || completion.value?.provider || '')
+const isLlm2Response = computed(() => {
+  const result = parsedActionResult.value;
+  return result && result.output && Array.isArray(result.output.content);
+});
 
-const usage = computed<Usage | null>(() => completion.value?.usage || null)
+const llm2ResponseBlocks = computed(() => {
+  const result = parsedActionResult.value;
+  if (!result?.output?.content) return [];
+  return result.output.content as Array<Record<string, any>>;
+});
+
+const effectiveModel = computed(() => props.flowAction.actionParams.model || parsedActionResult.value?.model || completion.value?.model || '')
+const effectiveProvider = computed(() => props.flowAction.actionParams.provider || parsedActionResult.value?.provider || completion.value?.provider || '')
+
+const usage = computed<Usage | null>(() => parsedActionResult.value?.usage || completion.value?.usage || null)
 
 const isStreaming = computed(() => props.flowAction.actionStatus === 'started')
 const streamingData = computed<StreamingData | null>(() => props.flowAction.streamingData || null)

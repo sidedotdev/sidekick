@@ -239,11 +239,13 @@ export type Llm2Message = {
 export type Llm2ChatHistoryWrapper = {
   type: 'llm2'
   refs: MessageRef[]
+  flowId?: string
+  workspaceId?: string
 }
 
 export type ChatHistoryParamPayload = ChatCompletionMessage[] | Llm2ChatHistoryWrapper
 
-export function isLlm2ChatHistoryWrapper(payload: ChatHistoryParamPayload | undefined): payload is Llm2ChatHistoryWrapper {
-  return payload !== undefined && !Array.isArray(payload) && payload.type === 'llm2'
+export function isLlm2ChatHistoryWrapper(payload: ChatHistoryParamPayload | undefined | null): payload is Llm2ChatHistoryWrapper {
+  return payload != null && !Array.isArray(payload) && payload.type === 'llm2'
 }
 // --- End llm2 Chat History Types ---

@@ -23,6 +23,11 @@ type ChatStreamOptionsV2 struct {
 	Providers    []common.ModelProviderPublicConfig
 }
 
+// ActionParams returns action parameters for flow action tracking.
+func (o ChatStreamOptionsV2) ActionParams() map[string]any {
+	return o.Options.ActionParams()
+}
+
 // ExecuteChatStream executes an LLM chat stream using the chat history from options.
 // It uses workflow versioning to determine which path to take:
 // - Version 1 (Llm2ChatHistory): calls Llm2Activities.Stream

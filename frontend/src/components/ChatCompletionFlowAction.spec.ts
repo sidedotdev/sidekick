@@ -236,4 +236,88 @@ describe('ChatCompletionFlowAction', () => {
       expect(wrapper.find('.llm2-error').text()).toContain('Network error')
     })
   })
+
+  describe('llm2 MessageResponse actionResult', () => {
+    let fetchMock: ReturnType<typeof vi.fn>
+
+    beforeEach(() => {
+      fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ messages: [] }), { status: 200 }))
+      vi.stubGlobal('fetch', fetchMock)
+    })
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+
+    it('renders llm2 response with text content blocks', async () => {
+      const actionResult = JSON.stringify({
+        id: 'resp-1',
+        model: 'claude-4',
+        provider: 'anthropic',
+        output: {
+          role: 'assistant',
+          content: [
+            { id: 'b1', type: 'text', text: 'Hello from llm2' }
+          ]
+        },
+        stopReason: 'end_turn',
+        usage: { inputTokens: 100, outputTokens: 50 }
+      })
+      const fa = { ...flowAction, actionResult, actionParams: { ...flowAction.actionParams, model: '', provider: '' } }
+      const wrapper = mount(ChatCompletionFlowAction, {
+        props: { flowAction: fa, expand: true }
+      })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('.action-result .llm2-text-block .message-content').text()).toBe('Hello from llm2')
+      expect(wrapper.find('.action-result .action-result-stop-reason').text()).toBe('Stop Reason: end_turn')
+      expect(wrapper.find('.model-name').text()).toContain('claude-4')
+      expect(wrapper.find('.model-provider').text()).toContain('anthropic')
+    })
+
+    it('renders llm2 response with tool_use content blocks', async () => {
+      const actionResult = JSON.stringify({
+        id: 'resp-2',
+        model: 'claude-4',
+        provider: 'anthropic',
+        output: {
+          role: 'assistant',
+          content: [
+            { id: 'b1', type: 'text', text: 'Let me call a tool' },
+            { id: 'b2', type: 'tool_use', toolUse: { id: 'tc1', name: 'search', arguments: '{"query":"test"}' } }
+          ]
+        },
+        stopReason: 'tool_use',
+        usage: { inputTokens: 200, outputTokens: 100 }
+      })
+      const fa = { ...flowAction, actionResult }
+      const wrapper = mount(ChatCompletionFlowAction, {
+        props: { flowAction: fa, expand: true }
+      })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('.action-result .llm2-text-block .message-content').text()).toBe('Let me call a tool')
+      expect(wrapper.find('.action-result .llm2-tool-use-block .action-result-function-name').text()).toBe('Tool Call: search')
+    })
+
+    it('displays usage from llm2 response', async () => {
+      const actionResult = JSON.stringify({
+        id: 'resp-3',
+        model: 'claude-4',
+        provider: 'anthropic',
+        output: {
+          role: 'assistant',
+          content: [{ id: 'b1', type: 'text', text: 'hi' }]
+        },
+        stopReason: 'end_turn',
+        usage: { inputTokens: 1500, outputTokens: 300, cacheReadInputTokens: 500 }
+      })
+      const fa = { ...flowAction, actionResult }
+      const wrapper = mount(ChatCompletionFlowAction, {
+        props: { flowAction: fa, expand: true }
+      })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('.model-usage').text()).toContain('1.5k in')
+      expect(wrapper.find('.model-usage').text()).toContain('300 out')
+    })
+  })
 })
