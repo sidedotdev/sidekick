@@ -202,7 +202,7 @@ func (s *SearchRepositoryE2ETestSuite) TestTruncatedLongSearchOutput() {
 
 func (s *SearchRepositoryE2ETestSuite) TestRefusalForOverlyLongSearchOutput() {
 	// Create a large file with repeating content
-	largerContent := strings.Repeat("line\n", 1000)
+	largerContent := strings.Repeat("line\n", refuseAtSearchOutputLength/len("line\n")+1)
 	s.createTestFile("larger_file.txt", largerContent)
 
 	// Test case: Output is too long and refused
