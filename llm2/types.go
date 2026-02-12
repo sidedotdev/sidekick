@@ -2,6 +2,7 @@ package llm2
 
 import (
 	"sidekick/common"
+	"strings"
 )
 
 // Role for the v2 message model. Provider-specific synonyms like "developer" should be
@@ -163,6 +164,37 @@ func (m *Message) SetToolCalls(toolCalls []common.ToolCall) {
 		})
 	}
 	m.Content = newContent
+}
+
+// SanitizeToolNames drops characters that don't match [a-zA-Z0-9_-] from all
+// tool use block names, preventing downstream provider rejections.
+func (m *Message) SanitizeToolNames() {
+	for i := range m.Content {
+		if m.Content[i].Type == ContentBlockTypeToolUse && m.Content[i].ToolUse != nil {
+			m.Content[i].ToolUse.Name = sanitizeToolName(m.Content[i].ToolUse.Name)
+		}
+	}
+}
+
+func sanitizeToolName(name string) string {
+	// Truncate at the first double-quote to discard injection-like suffixes.
+	if idx := strings.IndexByte(name, '"'); idx >= 0 {
+		name = name[:idx]
+	}
+
+	// Drop characters that don't match [a-zA-Z0-9_-].
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	name = b.String()
+
+	if name == "" {
+		return "invalid_tool_name"
+	}
+	return name
 }
 
 // Provider-agnostic response with metadata and a single synthesized output message.

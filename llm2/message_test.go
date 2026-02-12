@@ -91,3 +91,41 @@ func TestMessage_GetContentString(t *testing.T) {
 		})
 	}
 }
+
+func TestMessage_SanitizeToolNames(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"valid name unchanged", "bulk_search_repository", "bulk_search_repository"},
+		{"truncates at first quote", `bulk_search_repository" parameter_reload="true`, "bulk_search_repository"},
+		{"leading invalid then quote", `  bulk_search_repository" parameter_reload="true`, "bulk_search_repository"},
+		{"trailing invalid chars", "bulk_search_repository!@#", "bulk_search_repository"},
+		{"leading invalid chars", "!!bulk_search_repository", "bulk_search_repository"},
+		{"drops invalid chars in middle", "foo.bar/baz", "foobarbaz"},
+		{"preserves hyphens", "my-tool-name", "my-tool-name"},
+		{"preserves digits", "tool_v2_3", "tool_v2_3"},
+		{"preserves double underscores", "mcp__some_tool", "mcp__some_tool"},
+		{"empty string becomes placeholder", "", "invalid_tool_name"},
+		{"all invalid chars becomes placeholder", "!@#$%", "invalid_tool_name"},
+		{"leading space dropped", " tool_name", "tool_name"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			msg := Message{
+				Role: RoleAssistant,
+				Content: []ContentBlock{
+					{Type: ContentBlockTypeText, Text: "some text"},
+					{Type: ContentBlockTypeToolUse, ToolUse: &ToolUseBlock{Id: "1", Name: tt.input, Arguments: "{}"}},
+				},
+			}
+			msg.SanitizeToolNames()
+			assert.Equal(t, tt.expected, msg.Content[1].ToolUse.Name)
+			assert.Equal(t, "some text", msg.Content[0].Text, "non-tool blocks should be unaffected")
+		})
+	}
+}

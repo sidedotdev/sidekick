@@ -111,6 +111,7 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 
 	if response != nil {
 		response.Provider = input.Options.Params.ModelConfig.Provider
+		response.Output.SanitizeToolNames()
 	}
 
 	return response, err
