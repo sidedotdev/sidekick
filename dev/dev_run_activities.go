@@ -131,7 +131,6 @@ type runningProcess struct {
 	cmd            *exec.Cmd
 	sessionId      int
 	outputFilePath string
-	cancel         context.CancelFunc
 	doneCh         chan struct{}
 	exitCode       atomic.Pointer[int]
 	signal         atomic.Value // stores string
@@ -338,9 +337,11 @@ func (a *DevRunActivities) startCommand(
 	envVars []string,
 	cmdIndex int,
 ) (*runningProcess, error) {
-	cmdCtx, cancel := context.WithCancel(context.Background())
-
-	cmd := exec.CommandContext(cmdCtx, "sh", "-c", command)
+	// Use exec.Command (not CommandContext) so the child process survives
+	// activity/worker restarts. Lifecycle is managed explicitly: workflow
+	// cleanup (stopActiveDevRun, handleFlowCancel) calls StopDevRun which
+	// terminates processes via session-level signals (SIGINT→SIGKILL).
+	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = workingDir
 	cmd.Env = append(os.Environ(), envVars...)
 
@@ -353,7 +354,6 @@ func (a *DevRunActivities) startCommand(
 	outputFilePath := fmt.Sprintf("/tmp/sidekick-devrun-%s.log", devRunCtx.DevRunId)
 	outputFile, err := os.Create(outputFilePath)
 	if err != nil {
-		cancel()
 		return nil, fmt.Errorf("failed to create output file: %w", err)
 	}
 
@@ -364,7 +364,6 @@ func (a *DevRunActivities) startCommand(
 	if err := cmd.Start(); err != nil {
 		outputFile.Close()
 		os.Remove(outputFilePath)
-		cancel()
 		return nil, fmt.Errorf("failed to start command: %w", err)
 	}
 
@@ -378,7 +377,6 @@ func (a *DevRunActivities) startCommand(
 		cmd:            cmd,
 		sessionId:      sessionId,
 		outputFilePath: outputFilePath,
-		cancel:         cancel,
 		doneCh:         make(chan struct{}),
 	}
 
@@ -681,7 +679,6 @@ func (a *DevRunActivities) terminateActiveRun(run *activeDevRun, timeoutSeconds 
 				if err := syscall.Kill(-proc.sessionId, syscall.SIGKILL); err != nil {
 					log.Warn().Err(err).Int("sessionId", proc.sessionId).Msg("Failed to send SIGKILL to session")
 				}
-				proc.cancel()
 			}
 			// Wait briefly for SIGKILL to take effect
 			a.waitForProcesses(processes, 2*time.Second)
