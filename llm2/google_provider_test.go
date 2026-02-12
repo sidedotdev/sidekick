@@ -305,7 +305,7 @@ func TestGoogleProvider_Integration(t *testing.T) {
 				ModelConfig: common.ModelConfig{
 					Provider:        "google",
 					Model:           "gemini-3-flash-preview",
-					ReasoningEffort: "high",
+					ReasoningEffort: "low",
 				},
 			},
 			Secrets: options.Secrets,
