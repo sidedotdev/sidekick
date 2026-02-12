@@ -158,6 +158,9 @@ func (h *Llm2ChatHistory) Append(msg common.Message) {
 	} else if cm, ok := msg.(common.ChatMessage); ok {
 		h.messages = append(h.messages, MessageFromChatMessage(cm))
 		h.unpersisted = append(h.unpersisted, len(h.messages)-1)
+	} else if cmp, ok := msg.(*common.ChatMessage); ok {
+		h.messages = append(h.messages, MessageFromChatMessage(*cmp))
+		h.unpersisted = append(h.unpersisted, len(h.messages)-1)
 	}
 }
 
@@ -175,12 +178,19 @@ func MessageFromChatMessage(cm common.ChatMessage) Message {
 					IsError:    cm.IsError,
 					Text:       cm.Content,
 				},
+				CacheControl: cm.CacheControl,
+				ContextType:  cm.ContextType,
 			}},
 		}
 	}
 	return Message{
-		Role:    Role(cm.Role),
-		Content: []ContentBlock{{Type: ContentBlockTypeText, Text: cm.Content}},
+		Role: Role(cm.Role),
+		Content: []ContentBlock{{
+			Type:         ContentBlockTypeText,
+			Text:         cm.Content,
+			CacheControl: cm.CacheControl,
+			ContextType:  cm.ContextType,
+		}},
 	}
 }
 

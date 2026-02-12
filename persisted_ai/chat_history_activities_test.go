@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"sidekick/common"
 	"sidekick/llm2"
 
 	"github.com/stretchr/testify/assert"
@@ -205,7 +206,7 @@ func TestManageV3_PreservesRefsForUnchangedMessages(t *testing.T) {
 		Content: []llm2.ContentBlock{{
 			Type:        llm2.ContentBlockTypeText,
 			Text:        "First message",
-			ContextType: "initial_instructions", // Ensures retention
+			ContextType: ContextTypeInitialInstructions,
 		}},
 	})
 	history.Append(&llm2.Message{
@@ -217,7 +218,7 @@ func TestManageV3_PreservesRefsForUnchangedMessages(t *testing.T) {
 		Content: []llm2.ContentBlock{{
 			Type:        llm2.ContentBlockTypeText,
 			Text:        "Second message",
-			ContextType: "user_feedback", // Ensures retention
+			ContextType: ContextTypeUserFeedback,
 		}},
 	})
 
@@ -258,8 +259,8 @@ func TestManageV3_ChangesRefsForMarkerOnlyChanges(t *testing.T) {
 		Content: []llm2.ContentBlock{{
 			Type:         llm2.ContentBlockTypeText,
 			Text:         "First message",
-			ContextType:  "initial_instructions", // Ensures retention
-			CacheControl: "ephemeral",            // Pre-existing cache control
+			ContextType:  ContextTypeInitialInstructions,
+			CacheControl: "ephemeral",
 		}},
 	})
 	history.Append(&llm2.Message{
@@ -306,7 +307,7 @@ func TestManageV3_HydratingFromRefsRestoresMarkers(t *testing.T) {
 		Content: []llm2.ContentBlock{{
 			Type:        llm2.ContentBlockTypeText,
 			Text:        "Hello",
-			ContextType: "initial_instructions", // Ensures retention
+			ContextType: ContextTypeInitialInstructions,
 		}},
 	})
 	history.Append(&llm2.Message{
@@ -361,7 +362,7 @@ func TestManageV3_PreservesContextType(t *testing.T) {
 		Content: []llm2.ContentBlock{{
 			Type:        llm2.ContentBlockTypeText,
 			Text:        "Instructions",
-			ContextType: "initial_instructions",
+			ContextType: ContextTypeInitialInstructions,
 		}},
 	})
 	history.Append(&llm2.Message{
@@ -386,9 +387,8 @@ func TestManageV3_PreservesContextType(t *testing.T) {
 	err = freshHistory.Hydrate(context.Background(), storage)
 	require.NoError(t, err)
 
-	// Verify ContextType is preserved
 	messages := freshHistory.Llm2Messages()
-	assert.Equal(t, "initial_instructions", messages[0].Content[0].ContextType,
+	assert.Equal(t, ContextTypeInitialInstructions, messages[0].Content[0].ContextType,
 		"ContextType should be preserved after hydration")
 }
 
@@ -399,15 +399,13 @@ func TestManageV3_DroppingOlderMessagesPreservesRetainedRefs(t *testing.T) {
 		Storage: storage,
 	}
 
-	// Create history with messages that have ContextType for retention control
 	history := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
-	// First message: initial_instructions (always retained)
 	history.Append(&llm2.Message{
 		Role: llm2.RoleUser,
 		Content: []llm2.ContentBlock{{
 			Type:        llm2.ContentBlockTypeText,
 			Text:        "Initial instructions",
-			ContextType: "initial_instructions",
+			ContextType: ContextTypeInitialInstructions,
 		}},
 	})
 	// Middle messages without special context type (may be dropped)
@@ -443,7 +441,6 @@ func TestManageV3_DroppingOlderMessagesPreservesRetainedRefs(t *testing.T) {
 	resultHistory := result.History.(*llm2.Llm2ChatHistory)
 	newRefs := resultHistory.Refs()
 
-	// At minimum, first (initial_instructions) and last messages should be retained
 	require.GreaterOrEqual(t, len(newRefs), 2, "should retain at least first and last messages")
 
 	// The last message in the result should have new refs (cache control added)
@@ -467,4 +464,68 @@ func TestManageV3_DroppingOlderMessagesPreservesRetainedRefs(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestManageV3_LegacyChatMessageRetainsInitialInstructions(t *testing.T) {
+	t.Parallel()
+	storage := newMockKVStorage()
+	activities := &ChatHistoryActivities{
+		Storage: storage,
+	}
+
+	history := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
+
+	// Append via common.ChatMessage with ContextType set (the legacy path)
+	history.Append(&common.ChatMessage{
+		Role:        common.ChatMessageRoleUser,
+		Content:     "You are a helpful assistant.",
+		ContextType: ContextTypeInitialInstructions,
+	})
+	history.Append(&common.ChatMessage{
+		Role:    common.ChatMessageRoleAssistant,
+		Content: "Understood.",
+	})
+	history.Append(&common.ChatMessage{
+		Role:    common.ChatMessageRoleUser,
+		Content: "Do something.",
+	})
+	history.Append(&common.ChatMessage{
+		Role:    common.ChatMessageRoleAssistant,
+		Content: "Done.",
+	})
+	history.Append(&common.ChatMessage{
+		Role:    common.ChatMessageRoleUser,
+		Content: "Final question",
+	})
+
+	err := history.Persist(context.Background(), storage, llm2.NewKsuidGenerator())
+	require.NoError(t, err)
+
+	container := &llm2.ChatHistoryContainer{History: history}
+
+	// Small maxLength to trigger trimming of middle messages
+	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 30)
+	require.NoError(t, err)
+
+	resultHistory := result.History.(*llm2.Llm2ChatHistory)
+	messages := resultHistory.Llm2Messages()
+
+	// The initial-instructions message and last message must survive trimming
+	require.GreaterOrEqual(t, len(messages), 2)
+
+	foundInitialInstructions := false
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			if block.ContextType == ContextTypeInitialInstructions {
+				foundInitialInstructions = true
+				assert.Equal(t, "You are a helpful assistant.", block.Text)
+			}
+		}
+	}
+	assert.True(t, foundInitialInstructions,
+		"initial-instructions message should be retained after trimming")
+
+	// Last message should always be the final question
+	lastMsg := messages[len(messages)-1]
+	assert.Equal(t, "Final question", lastMsg.Content[0].Text)
 }

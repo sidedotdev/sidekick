@@ -1216,3 +1216,72 @@ func TestChatHistoryContainer_UnmarshalJSON_PreservesFlowId(t *testing.T) {
 	assert.Equal(t, 1, llm2Hist.Len())
 	assert.Equal(t, "Hello", llm2Hist.Get(0).GetContentString())
 }
+
+func TestMessageFromChatMessage_PreservesContextMarkers(t *testing.T) {
+	t.Parallel()
+
+	t.Run("text message preserves ContextType and CacheControl", func(t *testing.T) {
+		t.Parallel()
+		cm := common.ChatMessage{
+			Role:         common.ChatMessageRoleUser,
+			Content:      "system instructions",
+			ContextType:  "InitialInstructions",
+			CacheControl: "ephemeral",
+		}
+
+		msg := MessageFromChatMessage(cm)
+
+		require.Len(t, msg.Content, 1)
+		assert.Equal(t, "InitialInstructions", msg.Content[0].ContextType)
+		assert.Equal(t, "ephemeral", msg.Content[0].CacheControl)
+	})
+
+	t.Run("tool result preserves ContextType and CacheControl", func(t *testing.T) {
+		t.Parallel()
+		cm := common.ChatMessage{
+			Role:         common.ChatMessageRoleTool,
+			Content:      "tool output",
+			ToolCallId:   "call_123",
+			Name:         "my_tool",
+			ContextType:  "TestResult",
+			CacheControl: "ephemeral",
+		}
+
+		msg := MessageFromChatMessage(cm)
+
+		require.Len(t, msg.Content, 1)
+		assert.Equal(t, ContentBlockTypeToolResult, msg.Content[0].Type)
+		assert.Equal(t, "TestResult", msg.Content[0].ContextType)
+		assert.Equal(t, "ephemeral", msg.Content[0].CacheControl)
+	})
+}
+
+func TestLlm2ChatHistory_PersistHydrate_PreservesContextMarkers(t *testing.T) {
+	t.Parallel()
+	storage := newMockKeyValueStorage()
+
+	history := NewLlm2ChatHistory("flow-123", "workspace-456")
+	history.Append(&common.ChatMessage{
+		Role:         common.ChatMessageRoleUser,
+		Content:      "system instructions",
+		ContextType:  "InitialInstructions",
+		CacheControl: "ephemeral",
+	})
+
+	err := history.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	refs := history.Refs()
+	require.Len(t, refs, 1)
+
+	restored := NewLlm2ChatHistory("flow-123", "workspace-456")
+	restored.SetRefs(refs)
+	err = restored.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	messages := restored.Llm2Messages()
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].Content, 1)
+	assert.Equal(t, "InitialInstructions", messages[0].Content[0].ContextType)
+	assert.Equal(t, "ephemeral", messages[0].Content[0].CacheControl)
+}
