@@ -53,7 +53,7 @@
               <!-- tool_use block -->
               <div v-else-if="block.type === 'tool_use' && getToolUseBlock(block)" class="llm2-tool-use-block message-function-call">
                 Tool Call: <span class="message-function-call-name">{{ getToolUseBlock(block)!.name }}</span>
-                <JsonTree :deep="1" :data="parseLlm2ToolArguments(getToolUseBlock(block)!.arguments)" />
+                <JsonTree :deep="jsonTreeDepth" :data="parseLlm2ToolArguments(getToolUseBlock(block)!.arguments)" />
               </div>
 
               <!-- tool_result block -->
@@ -63,13 +63,13 @@
                   <span v-if="getToolResultBlock(block)!.isError" class="tool-result-error"> (error)</span>
                 </p>
                 <pre v-if="getToolResultBlock(block)!.text" class="tool-result-text">{{ getToolResultBlock(block)!.text }}</pre>
-                <JsonTree v-else :deep="1" :data="getToolResultBlock(block)" />
+                <JsonTree v-else :deep="jsonTreeDepth" :data="getToolResultBlock(block)" />
               </div>
 
               <!-- unknown block fallback -->
               <div v-else class="llm2-unknown-block">
                 <p class="unknown-block-header">Unknown Block ({{ block.type }}):</p>
-                <JsonTree :deep="1" :data="block" />
+                <JsonTree :deep="jsonTreeDepth" :data="block" />
               </div>
             </template>
           </div>
@@ -101,11 +101,11 @@
 
           <div v-if="message.function_call" class="message-function-call" :class="{ 'expanded': expandedMessages.includes(index), 'truncated': !expandedMessages.includes(index) }">
             Function Call: <span v-text="message.function_call?.name" class="message-function-call-name"></span>
-            <JsonTree :deep="1" :data="JSON.parse(message.function_call?.arguments || '{}')" />
+            <JsonTree :deep="jsonTreeDepth" :data="JSON.parse(message.function_call?.arguments || '{}')" />
           </div>
           <div v-for="toolCall in message.toolCalls" :key="toolCall.id" class="message-function-call" :class="{ 'expanded': expandedMessages.includes(index), 'truncated': !expandedMessages.includes(index) }">
             Tool Call: <span v-text="toolCall.name" class="message-function-call-name"></span>
-            <JsonTree :deep="1" :data="toolCall.parsedArguments" />
+            <JsonTree :deep="jsonTreeDepth" :data="toolCall.parsedArguments" />
           </div>
           <button @click="toggleMessage(index)">
             {{ expandedMessages.includes(index) ? "Show Less" : "Show More" }}
@@ -142,17 +142,17 @@
             </div>
             <div v-else-if="block.type === 'tool_use' && block.toolUse" class="llm2-tool-use-block">
               <p class="action-result-function-name">Tool Call: {{ block.toolUse.name }}</p>
-              <JsonTree :deep="1" :data="parseLlm2ToolArguments(block.toolUse.arguments)" class="action-result-function-args"/>
+              <JsonTree :deep="jsonTreeDepth" :data="parseLlm2ToolArguments(block.toolUse.arguments)" class="action-result-function-args"/>
             </div>
             <div v-else-if="block.type === 'reasoning'" class="llm2-text-block">
               <vue-markdown v-if="block.reasoning && block.reasoning.text" :options="{ breaks: true }" :source="block.reasoning.text" class="message-content markdown reasoning"/>
             </div>
             <div v-else-if="block.type !== 'text'" class="llm2-unknown-block">
-              <JsonTree :deep="1" :data="block"/>
+              <JsonTree :deep="jsonTreeDepth" :data="block"/>
             </div>
           </template>
           <div v-if="parsedActionResult && !llm2ResponseBlocks.length && !completionParseFailure">
-            <JsonTree :deep="1" :data="parsedActionResult" class="action-result-parsed"/>
+            <JsonTree :deep="jsonTreeDepth" :data="parsedActionResult" class="action-result-parsed"/>
           </div>
         </template>
 
@@ -161,10 +161,10 @@
           <vue-markdown v-if="completion?.content" :options="{ breaks: true }" :source="completion?.content" class="message-content markdown"/>
           <div v-for="toolCall in completion?.toolCalls" :key="toolCall.id">
             <p class="action-result-function-name">Tool Call: {{ toolCall.name }}</p>
-            <JsonTree :deep="1" :data="toolCall.parsedArguments || JSON.parse(toolCall.arguments || '{}')" class="action-result-function-args"/>
+            <JsonTree :deep="jsonTreeDepth" :data="toolCall.parsedArguments || JSON.parse(toolCall.arguments || '{}')" class="action-result-function-args"/>
           </div>
           <div v-if="parsedActionResult && !completion?.toolCalls?.length && !completion?.content">
-            <JsonTree :deep="1" :data="parsedActionResult" class="action-result-parsed"/>
+            <JsonTree :deep="jsonTreeDepth" :data="parsedActionResult" class="action-result-parsed"/>
           </div>
         </template>
 
@@ -193,6 +193,10 @@ const props = defineProps({
   expand: {
     type: Boolean,
     required: true,
+  },
+  jsonTreeDepth: {
+    type: Number,
+    default: 1,
   }
 })
 
