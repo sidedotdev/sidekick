@@ -3,6 +3,8 @@ package llm2
 import (
 	"sidekick/common"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Role for the v2 message model. Provider-specific synonyms like "developer" should be
@@ -171,7 +173,12 @@ func (m *Message) SetToolCalls(toolCalls []common.ToolCall) {
 func (m *Message) SanitizeToolNames() {
 	for i := range m.Content {
 		if m.Content[i].Type == ContentBlockTypeToolUse && m.Content[i].ToolUse != nil {
-			m.Content[i].ToolUse.Name = sanitizeToolName(m.Content[i].ToolUse.Name)
+			original := m.Content[i].ToolUse.Name
+			sanitized := sanitizeToolName(original)
+			if sanitized != original {
+				log.Info().Str("originalName", original).Str("sanitizedName", sanitized).Msg("sanitized tool call name")
+			}
+			m.Content[i].ToolUse.Name = sanitized
 		}
 	}
 }
