@@ -1,6 +1,7 @@
 package llm2
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -506,10 +507,18 @@ func wrapOpenAIError(err error) error {
 	}
 
 	// Otherwise, dump the response to capture the raw body from non-standard
-	// providers.
-	body := apiErr.DumpResponse(true)
-	if len(body) > 0 {
-		return fmt.Errorf("%s %q: %d - response: %s",
+	// providers. Extract only the body (after the header/body separator) to
+	// avoid logging verbose headers.
+	dump := apiErr.DumpResponse(true)
+	if len(dump) > 0 {
+		body := dump
+		for _, sep := range [][]byte{[]byte("\r\n\r\n"), []byte("\n\n")} {
+			if parts := bytes.SplitN(dump, sep, 2); len(parts) == 2 {
+				body = bytes.TrimSpace(parts[1])
+				break
+			}
+		}
+		return fmt.Errorf("%s %q: %d - response body: %s",
 			apiErr.Request.Method, apiErr.Request.URL,
 			apiErr.StatusCode, string(body))
 	}
