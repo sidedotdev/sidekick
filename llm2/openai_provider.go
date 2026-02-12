@@ -12,7 +12,6 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/shared"
-	"go.temporal.io/sdk/activity"
 )
 
 const openaiChatDefaultModel = "gpt-5.2"
@@ -25,32 +24,13 @@ type OpenAIProvider struct {
 func (p OpenAIProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
 	messages := options.Params.ChatHistory.Llm2Messages()
 
-	heartbeatCtx, cancelHeartbeat := context.WithCancel(context.Background())
-	defer cancelHeartbeat()
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-heartbeatCtx.Done():
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if activity.IsActivity(ctx) {
-					activity.RecordHeartbeat(ctx, map[string]bool{"fake": true})
-				}
-			}
-		}
-	}()
-
 	providerNameNormalized := options.Params.ModelConfig.NormalizedProviderName()
 	token, err := options.Secrets.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
 	if err != nil {
 		return nil, err
 	}
 
-	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	httpClient := &http.Client{Timeout: 45 * time.Minute}
 	clientOptions := []option.RequestOption{
 		option.WithAPIKey(token),
 		option.WithHTTPClient(httpClient),

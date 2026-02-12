@@ -12,7 +12,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
-	"go.temporal.io/sdk/activity"
 )
 
 const anthropicDefaultModel = "claude-opus-4-5"
@@ -22,25 +21,6 @@ type AnthropicProvider struct{}
 
 func (p AnthropicProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
 	messages := options.Params.ChatHistory.Llm2Messages()
-	done := make(chan struct{})
-	defer close(done)
-
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if activity.IsActivity(ctx) {
-					activity.RecordHeartbeat(ctx, map[string]bool{"fake": true})
-				}
-			}
-		}
-	}()
 
 	// Try OAuth credentials first, fall back to API key
 	oauthCreds, useOAuth, err := llm.GetAnthropicOAuthCredentials(options.Secrets.SecretManager)
@@ -48,7 +28,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, options Options, eventCha
 		return nil, fmt.Errorf("failed to get Anthropic OAuth credentials: %w", err)
 	}
 	var client anthropic.Client
-	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	httpClient := &http.Client{Timeout: 45 * time.Minute}
 	if useOAuth {
 		client = anthropic.NewClient(
 			option.WithHTTPClient(httpClient),

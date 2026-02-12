@@ -12,7 +12,6 @@ import (
 
 	"github.com/invopop/jsonschema"
 	"github.com/rs/zerolog/log"
-	"go.temporal.io/sdk/activity"
 	"google.golang.org/genai"
 )
 
@@ -34,27 +33,6 @@ type GoogleProvider struct{}
 func (p GoogleProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
 	messages := options.Params.ChatHistory.Llm2Messages()
 
-	// Heartbeat goroutine: Google may suppress thinking token deltas, causing
-	// long gaps that would trigger Temporal heartbeat timeouts.
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if activity.IsActivity(ctx) {
-					activity.RecordHeartbeat(ctx, map[string]bool{"fake": true})
-				}
-			}
-		}
-	}()
-
 	providerName := options.Params.ModelConfig.Provider
 	apiKey, err := options.Secrets.SecretManager.GetSecret(googleApiKeySecretName)
 	if err != nil {
@@ -64,7 +42,7 @@ func (p GoogleProvider) Stream(ctx context.Context, options Options, eventChan c
 		}
 	}
 
-	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	httpClient := &http.Client{Timeout: 45 * time.Minute}
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:     apiKey,
 		Backend:    genai.BackendGeminiAPI,
