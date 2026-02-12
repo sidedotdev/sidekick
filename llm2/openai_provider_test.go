@@ -2,6 +2,8 @@ package llm2
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"sidekick/common"
 	"sidekick/secret_manager"
@@ -52,6 +54,65 @@ func TestOpenAIProvider_Unauthorized(t *testing.T) {
 	_, err := provider.Stream(ctx, options, eventChan)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "401")
+}
+
+func TestOpenAIProvider_WrapErrorBodyOnly(t *testing.T) {
+	t.Parallel()
+
+	responseBody := `{"message":"Tokens per day limit exceeded - too many tokens processed.","type":"too_many_tokens_error","param":"quota","code":"token_quota_exceeded"}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "86399")
+		w.Header().Set("Strict-Transport-Security", "max-age=3600; includeSubDomains")
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(responseBody))
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	mockSecretManager := &secret_manager.MockSecretManager{}
+	provider := OpenAIProvider{BaseURL: server.URL + "/v1"}
+
+	messages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{Type: ContentBlockTypeText, Text: "Hello"},
+			},
+		},
+	}
+
+	options := Options{
+		Params: Params{
+			ModelConfig: common.ModelConfig{
+				Provider: "openai",
+				Model:    "gpt-4.1-nano",
+			},
+		},
+		Secrets: secret_manager.SecretManagerContainer{
+			SecretManager: mockSecretManager,
+		},
+	}
+	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+
+	eventChan := make(chan Event, 10)
+	defer close(eventChan)
+
+	_, err := provider.Stream(ctx, options, eventChan)
+	assert.Error(t, err)
+	errStr := err.Error()
+
+	assert.Contains(t, errStr, "429")
+	assert.Contains(t, errStr, "response body:")
+	assert.Contains(t, errStr, "too_many_tokens_error")
+	assert.Contains(t, errStr, responseBody)
+
+	// Headers should NOT be present in the error message
+	assert.NotContains(t, errStr, "Content-Type")
+	assert.NotContains(t, errStr, "Retry-After")
+	assert.NotContains(t, errStr, "Strict-Transport-Security")
+	assert.NotContains(t, errStr, "HTTP/")
 }
 
 func TestOpenAIProvider_Integration(t *testing.T) {
