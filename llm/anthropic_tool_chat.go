@@ -40,7 +40,7 @@ type OAuthCredentials struct {
 type AnthropicToolChat struct{}
 
 func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta, progressChan chan<- ProgressInfo) (*ChatMessageResponse, error) {
-	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	httpClient := &http.Client{Timeout: 20 * time.Minute}
 
 	// Try OAuth credentials first, fall back to API key
 	oauthCreds, useOAuth, err := GetAnthropicOAuthCredentials(options.Secrets.SecretManager)
