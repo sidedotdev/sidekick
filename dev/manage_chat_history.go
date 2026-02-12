@@ -1,15 +1,16 @@
 package dev
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"regexp"
 	"sidekick/coding/tree_sitter"
+	"sidekick/common"
 	"sidekick/fflag"
 	"sidekick/llm"
+	"sidekick/llm2"
+	"sidekick/persisted_ai"
+	"sidekick/utils"
 	"slices"
-	"strconv"
 	"strings"
 
 	"go.temporal.io/sdk/workflow"
@@ -33,14 +34,14 @@ const summaryEnd = "#END SUMMARY"
 const guidanceStart = "#START Guidance From the User"
 const guidanceEnd = "#END Guidance From the User"
 
-// ContextType constants
+// ContextType aliases for backward compatibility within dev package.
 const (
-	ContextTypeInitialInstructions string = "InitialInstructions"
-	ContextTypeUserFeedback        string = "UserFeedback"
-	ContextTypeTestResult          string = "TestResult"
-	ContextTypeEditBlockReport     string = "EditBlockReport"
-	ContextTypeSelfReviewFeedback  string = "SelfReviewFeedback"
-	ContextTypeSummary             string = "Summary"
+	ContextTypeInitialInstructions = persisted_ai.ContextTypeInitialInstructions
+	ContextTypeUserFeedback        = persisted_ai.ContextTypeUserFeedback
+	ContextTypeTestResult          = persisted_ai.ContextTypeTestResult
+	ContextTypeEditBlockReport     = persisted_ai.ContextTypeEditBlockReport
+	ContextTypeSelfReviewFeedback  = persisted_ai.ContextTypeSelfReviewFeedback
+	ContextTypeSummary             = persisted_ai.ContextTypeSummary
 )
 
 // Retention reason constants for cache control optimization
@@ -66,14 +67,71 @@ const (
 // TODO take in the model name and use a different threshold for each model
 // TODO don't drop messages, just create a new chat history with a new summary
 // each time based on the current needs or latest prompt
-func ManageChatHistory(ctx workflow.Context, chatHistory *[]llm.ChatMessage, maxLength int) {
+func ManageChatHistory(ctx workflow.Context, chatHistory *llm2.ChatHistoryContainer, workspaceId string, maxLength int) {
+	// Check if we should use the new Llm2ChatHistory-based management
+	v := workflow.GetVersion(ctx, "chat-history-llm2", workflow.DefaultVersion, 1)
+	if v == 1 {
+		llm2History, ok := chatHistory.History.(*llm2.Llm2ChatHistory)
+		if !ok {
+			wrapErr := fmt.Errorf("ManageChatHistory v3 path requires Llm2ChatHistory, got %T", chatHistory.History)
+			workflow.GetLogger(ctx).Error("ManageChatHistory wrong history type", "error", wrapErr)
+			panic(wrapErr)
+		}
+
+		// Must persist before managing chat history is possible
+		workflowSafeStorage := &common.WorkflowSafeKVStorage{Ctx: ctx}
+		gen := func() string { return utils.KsuidSideEffect(ctx) }
+		if err := llm2History.Persist(context.Background(), workflowSafeStorage, gen); err != nil {
+			wrapErr := fmt.Errorf("ManageChatHistory persist failed: %w", err)
+			workflow.GetLogger(ctx).Error("ManageChatHistory persist error", "error", wrapErr)
+			panic(wrapErr)
+		}
+
+		var managedHistory *llm2.ChatHistoryContainer
+		var cha *persisted_ai.ChatHistoryActivities
+		activityFuture := workflow.ExecuteActivity(ctx, cha.ManageV3, chatHistory, workspaceId, maxLength)
+		err := activityFuture.Get(ctx, &managedHistory)
+		if err != nil {
+			wrapErr := fmt.Errorf("ManageChatHistory ManageV3 activity returned an error: %w", err)
+			workflow.GetLogger(ctx).Error("ManageChatHistory error shouldn't happen, but it did", "error", wrapErr)
+			panic(wrapErr)
+		}
+
+		// Extract new refs from the returned (refs-only) history
+		managedLlm2History, ok := managedHistory.History.(*llm2.Llm2ChatHistory)
+		if !ok {
+			wrapErr := fmt.Errorf("ManageChatHistory ManageV3 returned unexpected history type: %T", managedHistory.History)
+			workflow.GetLogger(ctx).Error("ManageChatHistory unexpected return type", "error", wrapErr)
+			panic(wrapErr)
+		}
+		newRefs := managedLlm2History.Refs()
+
+		// Update the existing in-memory history with new refs (preserves cached blocks)
+		llm2History.SetRefs(newRefs)
+
+		// Hydrate only missing/changed blocks using workflow-safe storage
+		if err := llm2History.Hydrate(context.Background(), workflowSafeStorage); err != nil {
+			wrapErr := fmt.Errorf("ManageChatHistory hydration failed: %w", err)
+			workflow.GetLogger(ctx).Error("ManageChatHistory hydration error", "error", wrapErr)
+			panic(wrapErr)
+		}
+		return
+	}
+
+	// Convert Messages() to []llm.ChatMessage for activity input
+	messages := chatHistory.Messages()
+	chatMessages := make([]llm.ChatMessage, len(messages))
+	for i, msg := range messages {
+		chatMessages[i] = msg.(llm.ChatMessage)
+	}
+
 	var newChatHistory []llm.ChatMessage
 	var activityFuture workflow.Future
-	v := workflow.GetVersion(ctx, "ManageChatHistoryToV2", workflow.DefaultVersion, 1)
-	if v == 1 && fflag.IsEnabled(ctx, fflag.ManageHistoryWithContextMarkers) {
-		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryV2Activity, *chatHistory, maxLength)
+	vLegacy := workflow.GetVersion(ctx, "ManageChatHistoryToV2", workflow.DefaultVersion, 1)
+	if vLegacy == 1 && fflag.IsEnabled(ctx, fflag.ManageHistoryWithContextMarkers) {
+		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryV2Activity, chatMessages, maxLength)
 	} else {
-		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryActivity, *chatHistory, maxLength)
+		activityFuture = workflow.ExecuteActivity(ctx, ManageChatHistoryActivity, chatMessages, maxLength)
 	}
 	err := activityFuture.Get(ctx, &newChatHistory)
 
@@ -89,7 +147,7 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *[]llm.ChatMessage, max
 		panic(wrapErr)
 	}
 
-	*chatHistory = newChatHistory
+	chatHistory.History = llm2.NewLegacyChatHistoryFromChatMessages(newChatHistory)
 }
 
 func ManageChatHistoryActivity(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {
@@ -473,7 +531,7 @@ func manageChatHistoryV2(chatHistory []llm.ChatMessage, maxLength int) ([]llm.Ch
 	// TODO: Refactor to use structured data instead of parsing strings (llm2).
 	if latestEditBlockReportIndex != -1 {
 		reportMessage := chatHistory[latestEditBlockReportIndex]
-		sequenceNumbersInReport := extractSequenceNumbersFromReportContent(reportMessage.Content)
+		sequenceNumbersInReport := common.ExtractSequenceNumbersFromReportContent(reportMessage.Content)
 
 		for _, seqNum := range sequenceNumbersInReport {
 			foundProposalIndex := -1
@@ -718,34 +776,4 @@ func intersectReasons(a, b map[string]bool) map[string]bool {
 		}
 	}
 	return result
-}
-
-// extractSequenceNumbersFromReportContent extracts unique edit block sequence numbers
-// from EditBlockReport content formatted as "- edit_block:N application ...".
-func extractSequenceNumbersFromReportContent(content string) []int {
-	re := regexp.MustCompile(`-\s*edit_block:(\d+)\s*application.*`)
-
-	scanner := bufio.NewScanner(strings.NewReader(content))
-	seenNumbers := make(map[int]bool)
-	var uniqueSequenceNumbers []int
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		matches := re.FindStringSubmatch(line)
-
-		if len(matches) > 1 {
-			if num, err := strconv.Atoi(matches[1]); err == nil {
-				if !seenNumbers[num] {
-					seenNumbers[num] = true
-					uniqueSequenceNumbers = append(uniqueSequenceNumbers, num)
-				}
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		fmt.Printf("Error scanning content in extractSequenceNumbersFromReportContent: %v\n", err)
-	}
-
-	return uniqueSequenceNumbers
 }

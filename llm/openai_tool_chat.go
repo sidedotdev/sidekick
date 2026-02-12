@@ -1,13 +1,10 @@
 package llm
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"sidekick/utils"
 	"strings"
 	"time"
@@ -23,44 +20,6 @@ const OpenaiApiKeySecretName = "OPENAI_API_KEY"
 type OpenaiToolChat struct {
 	BaseURL      string
 	DefaultModel string
-}
-
-// extraBodyHTTPClient wraps an HTTP client to inject extra body parameters into JSON requests.
-type extraBodyHTTPClient struct {
-	client    openai.HTTPDoer
-	extraBody map[string]any
-}
-
-func (c *extraBodyHTTPClient) Do(req *http.Request) (*http.Response, error) {
-	if req.Body == nil || len(c.extraBody) == 0 {
-		return c.client.Do(req)
-	}
-
-	bodyBytes, err := io.ReadAll(req.Body)
-	req.Body.Close()
-	if err != nil {
-		return nil, err
-	}
-
-	var bodyMap map[string]any
-	if err := json.Unmarshal(bodyBytes, &bodyMap); err != nil {
-		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-		return c.client.Do(req)
-	}
-
-	for key, value := range c.extraBody {
-		bodyMap[key] = value
-	}
-
-	newBodyBytes, err := json.Marshal(bodyMap)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Body = io.NopCloser(bytes.NewReader(newBodyBytes))
-	req.ContentLength = int64(len(newBodyBytes))
-
-	return c.client.Do(req)
 }
 
 // implements ToolChat interface
@@ -98,16 +57,6 @@ func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 	config := openai.DefaultConfig(token)
 	if o.BaseURL != "" {
 		config.BaseURL = o.BaseURL
-	}
-	if len(options.Params.ExtraBody) > 0 {
-		baseClient := config.HTTPClient
-		if baseClient == nil {
-			baseClient = &http.Client{Timeout: 10 * time.Minute}
-		}
-		config.HTTPClient = &extraBodyHTTPClient{
-			client:    baseClient,
-			extraBody: options.Params.ExtraBody,
-		}
 	}
 	client := openai.NewClientWithConfig(config)
 
@@ -151,11 +100,14 @@ func (o OpenaiToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 			IncludeUsage: true,
 		},
 	}
+	if options.Params.MaxTokens > 0 {
+		req.MaxTokens = options.Params.MaxTokens
+	}
 	if options.Params.ReasoningEffort != "" {
 		req.ReasoningEffort = options.Params.ModelConfig.ReasoningEffort
 	}
-	if options.Params.MaxTokens > 0 {
-		req.MaxTokens = options.Params.MaxTokens
+	if options.Params.ServiceTier != "" {
+		req.ServiceTier = openai.ServiceTier(options.Params.ServiceTier)
 	}
 	if len(req.Tools) == 0 {
 		req.ParallelToolCalls = nil
@@ -255,7 +207,6 @@ func openaiFromChatMessages(messages []ChatMessage, shouldMerge bool) []openai.C
 
 		if isEquivalentRole && !bothTool {
 			lastMsg.Content += "\n\n" + string(msg.Role) + ":" + msg.Content
-			lastMsg.ToolCalls = append(lastMsg.ToolCalls, msg.ToolCalls...)
 		} else {
 			mergedMessages = append(mergedMessages, msg)
 		}
@@ -342,7 +293,7 @@ func openaiToUsage(usage *openai.Usage) Usage {
 		InputTokens:  usage.PromptTokens,
 		OutputTokens: usage.CompletionTokens,
 	}
-	if usage.PromptTokensDetails != nil {
+	if usage.PromptTokensDetails.CachedTokens > 0 {
 		result.CacheReadInputTokens = usage.PromptTokensDetails.CachedTokens
 	}
 	return result

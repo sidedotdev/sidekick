@@ -218,3 +218,12 @@ func (s *Storage) GetSubflow(ctx context.Context, workspaceId, subflowId string)
 
 	return subflow, nil
 }
+
+func (s *Storage) DeleteSubflowsForFlow(ctx context.Context, workspaceId, flowId string) error {
+	query := "DELETE FROM subflows WHERE workspace_id = ? AND flow_id = ?"
+	_, err := s.db.ExecContext(ctx, query, workspaceId, flowId)
+	if err != nil {
+		return fmt.Errorf("failed to delete subflows for flow %s: %w", flowId, err)
+	}
+	return nil
+}

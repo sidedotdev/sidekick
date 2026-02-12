@@ -2,6 +2,7 @@ package llm2
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sidekick/common"
 	"sidekick/secret_manager"
@@ -14,6 +15,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func newTestChatHistoryWithMessages(messages []Message) *ChatHistoryContainer {
+	chatHistory := NewLlm2ChatHistory("test-flow", "test-workspace")
+	chatHistory.SetMessages(messages)
+	return &ChatHistoryContainer{History: chatHistory}
+}
+
 type getCurrentWeather struct {
 	Location string `json:"location"`
 	Unit     string `json:"unit" jsonschema:"enum=celsius,fahrenheit"`
@@ -24,19 +31,20 @@ func TestOpenAIResponsesProvider_Unauthorized(t *testing.T) {
 	mockSecretManager := &secret_manager.MockSecretManager{}
 	provider := OpenAIResponsesProvider{}
 
-	options := Options{
-		Params: Params{
-			Messages: []Message{
+	messages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
 				{
-					Role: RoleUser,
-					Content: []ContentBlock{
-						{
-							Type: ContentBlockTypeText,
-							Text: "Hello",
-						},
-					},
+					Type: ContentBlockTypeText,
+					Text: "Hello",
 				},
 			},
+		},
+	}
+
+	options := Options{
+		Params: Params{
 			ModelConfig: common.ModelConfig{
 				Provider: "openai",
 				Model:    "gpt-5-codex",
@@ -46,6 +54,8 @@ func TestOpenAIResponsesProvider_Unauthorized(t *testing.T) {
 			SecretManager: mockSecretManager,
 		},
 	}
+
+	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 
 	eventChan := make(chan Event, 10)
 	defer close(eventChan)
@@ -65,10 +75,24 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 	ctx := context.Background()
 	provider := OpenAIResponsesProvider{}
 
+	fmt.Println("\n=== OpenAI Responses Provider Integration Test ===")
+
 	mockTool := &common.Tool{
 		Name:        "get_current_weather",
 		Description: "Get the current weather in a given location",
 		Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&getCurrentWeather{}),
+	}
+
+	messages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeText,
+					Text: "First say hi. After that, then look up what the weather is like in New York in celsius, then describe it in words.",
+				},
+			},
+		},
 	}
 
 	options := Options{
@@ -76,17 +100,6 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 			ModelConfig: common.ModelConfig{
 				Provider: "openai",
 				Model:    "gpt-4.1-nano-2025-04-14",
-			},
-			Messages: []Message{
-				{
-					Role: RoleUser,
-					Content: []ContentBlock{
-						{
-							Type: ContentBlockTypeText,
-							Text: "First say hi. After that, then look up what the weather is like in New York in celsius, then describe it in words.",
-						},
-					},
-				},
 			},
 			Temperature: utils.Ptr(float32(0)),
 			Tools:       []*common.Tool{mockTool},
@@ -105,10 +118,13 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 	var allEvents []Event
 	var sawBlockStartedToolUse bool
 	var sawTextDelta bool
+	eventIdx := 0
 
 	go func() {
 		for event := range eventChan {
 			allEvents = append(allEvents, event)
+			debugPrintOpenAIEvent(eventIdx, event)
+			eventIdx++
 			if event.Type == EventBlockStarted && event.ContentBlock.Type == ContentBlockTypeToolUse {
 				sawBlockStartedToolUse = true
 			}
@@ -117,6 +133,8 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 			}
 		}
 	}()
+
+	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 
 	response, err := provider.Stream(ctx, options, eventChan)
 	close(eventChan)
@@ -142,6 +160,7 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 	}
 
 	t.Logf("Response output content blocks: %d", len(response.Output.Content))
+	debugPrintAllContentBlocks(response.Output.Content)
 
 	var foundToolUse bool
 	for _, block := range response.Output.Content {
@@ -167,11 +186,11 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 	t.Logf("StopReason: %s", response.StopReason)
 
 	t.Run("MultiTurn", func(t *testing.T) {
-		options.Params.Messages = append(options.Params.Messages, response.Output)
+		messages = append(messages, response.Output)
 
 		for _, block := range response.Output.Content {
 			if block.Type == ContentBlockTypeToolUse && block.ToolUse != nil {
-				options.Params.Messages = append(options.Params.Messages, Message{
+				messages = append(messages, Message{
 					Role: RoleUser,
 					Content: []ContentBlock{
 						{
@@ -196,6 +215,7 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 			}
 		}()
 
+		options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 		response, err := provider.Stream(ctx, options, eventChan)
 		close(eventChan)
 
@@ -244,23 +264,26 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 	ctx := context.Background()
 	provider := OpenAIResponsesProvider{}
 
+	fmt.Println("\n=== OpenAI Responses Reasoning Test ===")
+
+	messages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeText,
+					Text: "What is 127 * 349? Think step by step and show your work.",
+				},
+			},
+		},
+	}
+
 	options := Options{
 		Params: Params{
 			ModelConfig: common.ModelConfig{
 				Provider:        "openai",
-				Model:           "gpt-5-nano",
-				ReasoningEffort: "minimal",
-			},
-			Messages: []Message{
-				{
-					Role: RoleUser,
-					Content: []ContentBlock{
-						{
-							Type: ContentBlockTypeText,
-							Text: "Hi",
-						},
-					},
-				},
+				Model:           "gpt-5.2",
+				ReasoningEffort: "high",
 			},
 		},
 		Secrets: secret_manager.SecretManagerContainer{
@@ -275,15 +298,20 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 	eventChan := make(chan Event, 100)
 	var allEvents []Event
 	var sawSummaryTextDelta bool
+	eventIdx := 0
 
 	go func() {
 		for event := range eventChan {
 			allEvents = append(allEvents, event)
+			debugPrintOpenAIEvent(eventIdx, event)
+			eventIdx++
 			if event.Type == EventSummaryTextDelta {
 				sawSummaryTextDelta = true
 			}
 		}
 	}()
+
+	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 
 	response, err := provider.Stream(ctx, options, eventChan)
 	close(eventChan)
@@ -301,6 +329,7 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 	}
 
 	t.Logf("Response output content blocks: %d", len(response.Output.Content))
+	debugPrintAllContentBlocks(response.Output.Content)
 
 	var foundReasoning bool
 	var encryptedContent string
@@ -330,9 +359,9 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 	t.Logf("StopReason: %s", response.StopReason)
 
 	t.Run("MultiTurnEncryptedReasoning", func(t *testing.T) {
-		options.Params.Messages = append(options.Params.Messages, response.Output)
+		messages = append(messages, response.Output)
 
-		options.Params.Messages = append(options.Params.Messages, Message{
+		messages = append(messages, Message{
 			Role: RoleUser,
 			Content: []ContentBlock{
 				{
@@ -348,6 +377,7 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 			}
 		}()
 
+		options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
 		response, err := provider.Stream(ctx, options, eventChan)
 		close(eventChan)
 
@@ -415,4 +445,103 @@ func TestAccumulateOpenaiEventsToMessage_BlockDone(t *testing.T) {
 	assert.Equal(t, "final text", message.Content[0].Reasoning.Text)
 	assert.Equal(t, "initial summary", message.Content[0].Reasoning.Summary)
 	assert.Equal(t, "encrypted_final_value", message.Content[0].Reasoning.EncryptedContent)
+}
+
+func debugPrintOpenAIEvent(idx int, event Event) {
+	switch event.Type {
+	case EventBlockStarted:
+		if event.ContentBlock != nil {
+			block := event.ContentBlock
+			switch block.Type {
+			case ContentBlockTypeText:
+				fmt.Printf("Event[%d]: type=block_started block_type=text id=%s\n", idx, block.Id)
+			case ContentBlockTypeToolUse:
+				if block.ToolUse != nil {
+					fmt.Printf("Event[%d]: type=block_started block_type=tool_use id=%s name=%s\n", idx, block.ToolUse.Id, block.ToolUse.Name)
+				}
+			case ContentBlockTypeReasoning:
+				if block.Reasoning != nil {
+					fmt.Printf("Event[%d]: type=block_started block_type=reasoning text_len=%d summary_len=%d encrypted_len=%d\n",
+						idx, len(block.Reasoning.Text), len(block.Reasoning.Summary), len(block.Reasoning.EncryptedContent))
+				} else {
+					fmt.Printf("Event[%d]: type=block_started block_type=reasoning (no reasoning block)\n", idx)
+				}
+			case ContentBlockTypeRefusal:
+				fmt.Printf("Event[%d]: type=block_started block_type=refusal\n", idx)
+			default:
+				fmt.Printf("Event[%d]: type=block_started block_type=%s\n", idx, block.Type)
+			}
+		}
+	case EventTextDelta:
+		deltaPreview := event.Delta
+		if len(deltaPreview) > 50 {
+			deltaPreview = deltaPreview[:50] + "..."
+		}
+		fmt.Printf("Event[%d]: type=text_delta index=%d delta=%q\n", idx, event.Index, deltaPreview)
+	case EventSummaryTextDelta:
+		deltaPreview := event.Delta
+		if len(deltaPreview) > 50 {
+			deltaPreview = deltaPreview[:50] + "..."
+		}
+		fmt.Printf("Event[%d]: type=summary_text_delta index=%d delta=%q\n", idx, event.Index, deltaPreview)
+	case EventSignatureDelta:
+		fmt.Printf("Event[%d]: type=signature_delta index=%d len=%d\n", idx, event.Index, len(event.Delta))
+	case EventBlockDone:
+		if event.ContentBlock != nil {
+			block := event.ContentBlock
+			switch block.Type {
+			case ContentBlockTypeReasoning:
+				if block.Reasoning != nil {
+					fmt.Printf("Event[%d]: type=block_done block_type=reasoning text_len=%d summary_len=%d encrypted_len=%d\n",
+						idx, len(block.Reasoning.Text), len(block.Reasoning.Summary), len(block.Reasoning.EncryptedContent))
+				} else {
+					fmt.Printf("Event[%d]: type=block_done block_type=reasoning (no reasoning block)\n", idx)
+				}
+			default:
+				fmt.Printf("Event[%d]: type=block_done block_type=%s\n", idx, block.Type)
+			}
+		} else {
+			fmt.Printf("Event[%d]: type=block_done index=%d\n", idx, event.Index)
+		}
+	default:
+		fmt.Printf("Event[%d]: type=%s index=%d\n", idx, event.Type, event.Index)
+	}
+}
+
+func debugPrintAllContentBlocks(blocks []ContentBlock) {
+	fmt.Printf("\n=== All Content Blocks (total: %d) ===\n", len(blocks))
+	for i, block := range blocks {
+		switch block.Type {
+		case ContentBlockTypeText:
+			textPreview := block.Text
+			if len(textPreview) > 100 {
+				textPreview = textPreview[:100] + "..."
+			}
+			fmt.Printf("Block[%d] Type=text\n  Text=%q\n", i, textPreview)
+		case ContentBlockTypeToolUse:
+			if block.ToolUse != nil {
+				fmt.Printf("Block[%d] Type=tool_use\n  ToolUse: ID=%s Name=%s ArgsLen=%d\n",
+					i, block.ToolUse.Id, block.ToolUse.Name, len(block.ToolUse.Arguments))
+			}
+		case ContentBlockTypeReasoning:
+			if block.Reasoning != nil {
+				textPreview := block.Reasoning.Text
+				if len(textPreview) > 100 {
+					textPreview = textPreview[:100] + "..."
+				}
+				summaryPreview := block.Reasoning.Summary
+				if len(summaryPreview) > 100 {
+					summaryPreview = summaryPreview[:100] + "..."
+				}
+				fmt.Printf("Block[%d] Type=reasoning\n  ReasoningText=%q\n  ReasoningTextLen=%d ReasoningSummary=%q SummaryLen=%d EncryptedLen=%d\n",
+					i, textPreview, len(block.Reasoning.Text), summaryPreview, len(block.Reasoning.Summary), len(block.Reasoning.EncryptedContent))
+			}
+		case ContentBlockTypeRefusal:
+			if block.Refusal != nil {
+				fmt.Printf("Block[%d] Type=refusal\n  Reason=%s\n", i, block.Refusal.Reason)
+			}
+		default:
+			fmt.Printf("Block[%d] Type=%s\n", i, block.Type)
+		}
+	}
 }

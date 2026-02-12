@@ -8,6 +8,7 @@ import (
 	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
+	"sidekick/llm2"
 	"strconv"
 	"strings"
 
@@ -271,7 +272,7 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 		codeContext = repoSummary + "\n\n" + codeContext
 	}
 
-	chatHistory := &[]llm.ChatMessage{}
+	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 	addDevPlanPrompt(dCtx, chatHistory, InitialPlanningInfo{
 		CodeContext:    codeContext,
 		Requirements:   requirements,
@@ -327,11 +328,11 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 	}
 
 	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
-	ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, maxLength)
+	ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength)
 
 	hasExistingPlan := len(state.devPlan.Steps) > 0
 
-	var chatResponse *llm.ChatMessageResponse
+	var chatResponse common.MessageResponse
 	var err error
 	if v := workflow.GetVersion(iteration.ExecCtx, "dev-plan-cleanup-cancel-internally", workflow.DefaultVersion, 1); v == 1 {
 		chatResponse, err = generateDevPlan(iteration.ExecCtx, iteration.ChatHistory, hasExistingPlan)
@@ -347,9 +348,9 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 		return nil, fmt.Errorf("error generating dev plan: %w", err)
 	}
 
-	*iteration.ChatHistory = append(*iteration.ChatHistory, chatResponse.ChatMessage)
+	iteration.ChatHistory.Append(chatResponse.GetMessage())
 
-	if len(chatResponse.ToolCalls) > 0 {
+	if len(chatResponse.GetMessage().GetToolCalls()) > 0 {
 		var recordedPlan *DevPlan
 		customHandlers := map[string]func(DevContext, llm.ToolCall) (ToolCallResponseInfo, error){
 			updateDevPlanTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (ToolCallResponseInfo, error) {
@@ -475,7 +476,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 			},
 		}
 
-		toolCallResponses := handleToolCalls(iteration.ExecCtx, chatResponse.ToolCalls, customHandlers)
+		toolCallResponses := handleToolCalls(iteration.ExecCtx, chatResponse.GetMessage().GetToolCalls(), customHandlers)
 
 		for _, response := range toolCallResponses {
 			if len(response.Response) > 5000 {
@@ -490,7 +491,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 		if recordedPlan != nil {
 			return recordedPlan, nil
 		}
-	} else if chatResponse.StopReason == string(openai.FinishReasonStop) || chatResponse.StopReason == string(openai.FinishReasonToolCalls) {
+	} else if chatResponse.GetStopReason() == string(openai.FinishReasonStop) || chatResponse.GetStopReason() == string(openai.FinishReasonToolCalls) {
 		addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
 			Response:     "Expected a tool call to record the plan, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevPlanTool.Name + " tool.",
 			FunctionName: recordDevPlanTool.Name,
@@ -512,7 +513,7 @@ func unmarshalPlan(jsonStr string) (DevPlan, error) {
 	return plan, nil
 }
 
-func generateDevPlan(dCtx DevContext, chatHistory *[]llm.ChatMessage, hasExistingPlan bool) (*llm.ChatMessageResponse, error) {
+func generateDevPlan(dCtx DevContext, chatHistory *llm2.ChatHistoryContainer, hasExistingPlan bool) (common.MessageResponse, error) {
 	tools := []*llm.Tool{
 		&recordDevPlanTool,
 		currentGetSymbolDefinitionsTool(),
@@ -528,11 +529,11 @@ func generateDevPlan(dCtx DevContext, chatHistory *[]llm.ChatMessage, hasExistin
 
 	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 
-	chatOptions := llm.ToolChatOptions{
+	chatOptions := llm2.Options{
 		Secrets: *dCtx.Secrets,
-		Params: llm.ToolChatParams{
-			Messages: *chatHistory,
-			Tools:    tools,
+		Params: llm2.Params{
+			ChatHistory: chatHistory,
+			Tools:       tools,
 			ToolChoice: llm.ToolChoice{
 				Type: llm.ToolChoiceTypeAuto,
 			},
@@ -592,7 +593,7 @@ step, describe the AAA in detail, and ensure you include the predicted failure o
 the test prior to fixing the bug as part of the completion_analysis.
 `
 
-func addDevPlanPrompt(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) {
+func addDevPlanPrompt(dCtx DevContext, chatHistory *llm2.ChatHistoryContainer, promptInfo PromptInfo) {
 	var content string
 	role := llm.ChatMessageRoleUser
 	cacheControl := ""
@@ -610,7 +611,7 @@ func addDevPlanPrompt(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInf
 	default:
 		panic("Unsupported prompt type for dev plan: " + promptInfo.GetType())
 	}
-	*chatHistory = append(*chatHistory, llm.ChatMessage{
+	chatHistory.Append(llm.ChatMessage{
 		Role:         role,
 		Content:      content,
 		CacheControl: cacheControl,

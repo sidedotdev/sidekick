@@ -106,26 +106,25 @@ func GenerateBranchName(eCtx flow_action.ExecContext, req BranchNameRequest) (st
 func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRequest) ([]string, error) {
 	reqMap := make(map[string]any)
 	utils.Transcode(req, &reqMap)
-	chatHistory := []llm.ChatMessage{
-		{
-			Role:    llm.ChatMessageRoleUser,
-			Content: RenderPrompt(generateBranchNamesPrompt, reqMap),
-		},
-	}
+	chatHistory := NewVersionedChatHistory(eCtx, eCtx.WorkspaceId)
+	chatHistory.Append(llm.ChatMessage{
+		Role:    llm.ChatMessageRoleUser,
+		Content: RenderPrompt(generateBranchNamesPrompt, reqMap),
+	})
 
 	modelConfig := eCtx.GetModelConfig(common.SummarizationKey, 0, "small")
-	params := llm.ToolChatParams{Messages: chatHistory, ModelConfig: modelConfig}
 
 	var branchResp SubmitBranchNamesParams
 	attempts := 0
 	for {
 		actionCtx := eCtx.NewActionContext("generate.branch_names")
-		chatResponse, err := persisted_ai.ForceToolCallWithTrackOptions(actionCtx, flow_action.TrackOptions{FailuresOnly: true}, eCtx.LLMConfig, &params, &generateBranchNamesTool)
+		msgResponse, err := persisted_ai.ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{FailuresOnly: true}, modelConfig, chatHistory, &generateBranchNamesTool)
 		if err != nil {
 			return nil, fmt.Errorf("failed to force tool call: %v", err)
 		}
 
-		toolCall := chatResponse.ToolCalls[0]
+		toolCalls := msgResponse.GetMessage().GetToolCalls()
+		toolCall := toolCalls[0]
 		jsonStr := toolCall.Arguments
 		err = json.Unmarshal([]byte(llm.RepairJson(jsonStr)), &branchResp)
 		if err == nil {
@@ -149,7 +148,7 @@ func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRe
 			Name:       toolCall.Name,
 			ToolCallId: toolCall.Id,
 		}
-		params.Messages = append(params.Messages, newMessage)
+		chatHistory.Append(newMessage)
 	}
 
 	if len(branchResp.Candidates) == 0 {

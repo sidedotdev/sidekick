@@ -171,3 +171,86 @@ func TestActionParams_IncludesMaxTokensWhenSet(t *testing.T) {
 		})
 	}
 }
+
+func TestActionParams_OmitsServiceTierWhenEmpty(t *testing.T) {
+	options := ToolChatOptions{
+		Params: ToolChatParams{
+			Messages: []ChatMessage{
+				{Role: "user", Content: "test"},
+			},
+			Tools: []*Tool{},
+			ModelConfig: common.ModelConfig{
+				Provider: "openai",
+				Model:    "gpt-4",
+			},
+		},
+	}
+
+	params := options.ActionParams()
+
+	if _, exists := params["serviceTier"]; exists {
+		t.Errorf("Expected serviceTier key to be absent when ServiceTier is empty, but it was present")
+	}
+
+	if params["provider"] != "openai" {
+		t.Errorf("Expected provider to be 'openai', got %v", params["provider"])
+	}
+	if params["model"] != "gpt-4" {
+		t.Errorf("Expected model to be 'gpt-4', got %v", params["model"])
+	}
+}
+
+func TestActionParams_IncludesServiceTierWhenSet(t *testing.T) {
+	tests := []struct {
+		name        string
+		serviceTier string
+	}{
+		{
+			name:        "default service tier",
+			serviceTier: "default",
+		},
+		{
+			name:        "flex service tier",
+			serviceTier: "flex",
+		},
+		{
+			name:        "priority service tier",
+			serviceTier: "priority",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			options := ToolChatOptions{
+				Params: ToolChatParams{
+					Messages: []ChatMessage{
+						{Role: "user", Content: "test"},
+					},
+					Tools: []*Tool{},
+					ModelConfig: common.ModelConfig{
+						Provider:    "openai",
+						Model:       "gpt-4",
+						ServiceTier: tt.serviceTier,
+					},
+				},
+			}
+
+			params := options.ActionParams()
+
+			serviceTier, exists := params["serviceTier"]
+			if !exists {
+				t.Errorf("Expected serviceTier key to be present when ServiceTier is '%s', but it was absent", tt.serviceTier)
+			}
+			if serviceTier != tt.serviceTier {
+				t.Errorf("Expected serviceTier to be '%s', got %v", tt.serviceTier, serviceTier)
+			}
+
+			if params["provider"] != "openai" {
+				t.Errorf("Expected provider to be 'openai', got %v", params["provider"])
+			}
+			if params["model"] != "gpt-4" {
+				t.Errorf("Expected model to be 'gpt-4', got %v", params["model"])
+			}
+		})
+	}
+}

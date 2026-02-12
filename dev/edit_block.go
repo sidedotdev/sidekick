@@ -3,7 +3,8 @@ package dev
 import (
 	"bufio"
 	"sidekick/coding/tree_sitter"
-	"sidekick/llm"
+	"sidekick/common"
+	"sidekick/llm2"
 	"sidekick/utils"
 	"strconv"
 	"strings"
@@ -36,19 +37,19 @@ type FileRange struct {
 
 // TODO: this doesn't handle edit blocks that were applied successfully, where
 // the new lines should be returned as a code block
-func extractAllCodeBlocks(chatHistory []llm.ChatMessage) []tree_sitter.CodeBlock {
+func extractAllCodeBlocks(chatHistory llm2.ChatHistoryContainer) []tree_sitter.CodeBlock {
 	codeBlocks := make([]tree_sitter.CodeBlock, 0)
-	for _, chatMessage := range chatHistory {
-		if chatMessage.Role != llm.ChatMessageRoleAssistant {
-			symDefCodeBlocks, err := tree_sitter.ExtractSymbolDefinitionBlocks(chatMessage.Content)
+	for _, chatMessage := range chatHistory.Messages() {
+		if chatMessage.GetRole() != string(common.ChatMessageRoleAssistant) {
+			symDefCodeBlocks, err := tree_sitter.ExtractSymbolDefinitionBlocks(chatMessage.GetContentString())
 			if err != nil {
 				log.Warn().Err(err).Msg("failed to extract symbol definition blocks")
 			}
-			searchCodeBlocks, err := tree_sitter.ExtractSearchCodeBlocks(chatMessage.Content)
+			searchCodeBlocks, err := tree_sitter.ExtractSearchCodeBlocks(chatMessage.GetContentString())
 			if err != nil {
 				log.Warn().Err(err).Msg("failed to extract search code blocks")
 			}
-			gitDiffCodeBlocks, err := tree_sitter.ExtractGitDiffCodeBlocks(chatMessage.Content)
+			gitDiffCodeBlocks, err := tree_sitter.ExtractGitDiffCodeBlocks(chatMessage.GetContentString())
 			if err != nil {
 				log.Warn().Err(err).Msg("failed to extract git diff code blocks")
 			}
@@ -221,7 +222,7 @@ func ExtractEditBlocks(text string, tildeOnly bool) ([]*EditBlock, error) {
 	return blocks, nil
 }
 
-func ExtractEditBlocksWithVisibility(text string, chatHistory []llm.ChatMessage, tildeOnly bool) ([]EditBlock, error) {
+func ExtractEditBlocksWithVisibility(text string, chatHistory llm2.ChatHistoryContainer, tildeOnly bool) ([]EditBlock, error) {
 	editBlocksWithoutVisibility, err := ExtractEditBlocks(text, tildeOnly)
 	if err != nil {
 		return nil, err

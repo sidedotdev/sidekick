@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sidekick/common"
 	"sidekick/utils"
 	"time"
@@ -13,32 +14,17 @@ import (
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
-	"go.temporal.io/sdk/activity"
 )
 
 const defaultModel = "gpt-5-codex"
 
-type OpenAIResponsesProvider struct{}
+type OpenAIResponsesProvider struct {
+	BaseURL      string
+	DefaultModel string
+}
 
 func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
-	heartbeatCtx, cancelHeartbeat := context.WithCancel(context.Background())
-	defer cancelHeartbeat()
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-heartbeatCtx.Done():
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if activity.IsActivity(ctx) {
-					activity.RecordHeartbeat(ctx, map[string]bool{"fake": true})
-				}
-			}
-		}
-	}()
+	messages := options.Params.ChatHistory.Llm2Messages()
 
 	providerNameNormalized := options.Params.ModelConfig.NormalizedProviderName()
 	token, err := options.Secrets.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
@@ -46,14 +32,26 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 		return nil, err
 	}
 
-	client := openai.NewClient(option.WithAPIKey(token))
+	httpClient := &http.Client{Timeout: 45 * time.Minute}
+	clientOptions := []option.RequestOption{
+		option.WithAPIKey(token),
+		option.WithHTTPClient(httpClient),
+	}
+	if p.BaseURL != "" {
+		clientOptions = append(clientOptions, option.WithBaseURL(p.BaseURL))
+	}
+	client := openai.NewClient(clientOptions...)
 
 	model := options.Params.Model
 	if model == "" {
-		model = defaultModel
+		if p.DefaultModel != "" {
+			model = p.DefaultModel
+		} else {
+			model = defaultModel
+		}
 	}
 
-	inputItems, err := messageToResponsesInput(options.Params.Messages)
+	inputItems, err := messageToResponsesInput(messages)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build input: %w", err)
 	}
@@ -80,6 +78,10 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 	}
 	if effectiveMaxTokens > 0 {
 		params.MaxOutputTokens = param.NewOpt(int64(effectiveMaxTokens))
+	}
+
+	if options.Params.ServiceTier != "" {
+		params.ServiceTier = responses.ResponseNewParamsServiceTier(options.Params.ServiceTier)
 	}
 
 	if len(options.Params.Tools) > 0 {
@@ -332,7 +334,7 @@ loop:
 	}
 
 	if err := stream.Err(); err != nil {
-		return nil, err
+		return nil, wrapOpenAIError(err)
 	}
 
 	outputMessage := accumulateOpenaiEventsToMessage(events)

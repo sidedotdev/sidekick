@@ -11,42 +11,24 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
-	"go.temporal.io/sdk/activity"
+	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 )
 
 const anthropicDefaultModel = "claude-opus-4-5"
 const anthropicDefaultMaxTokens = 16000
 
-type AnthropicResponsesProvider struct{}
+type AnthropicProvider struct{}
 
-func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
-	done := make(chan struct{})
-	defer close(done)
-
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if activity.IsActivity(ctx) {
-					activity.RecordHeartbeat(ctx, map[string]bool{"fake": true})
-				}
-			}
-		}
-	}()
+func (p AnthropicProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
+	messages := options.Params.ChatHistory.Llm2Messages()
 
 	// Try OAuth credentials first, fall back to API key
 	oauthCreds, useOAuth, err := llm.GetAnthropicOAuthCredentials(options.Secrets.SecretManager)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Anthropic OAuth credentials: %w", err)
 	}
-	var client *anthropic.Client
-	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	var client anthropic.Client
+	httpClient := &http.Client{Timeout: 45 * time.Minute}
 	if useOAuth {
 		client = anthropic.NewClient(
 			option.WithHTTPClient(httpClient),
@@ -81,36 +63,59 @@ func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options,
 	}
 
 	params := anthropic.MessageNewParams{
-		Model:     anthropic.F(model),
-		MaxTokens: anthropic.Int(int64(effectiveMaxTokens)),
+		Model:     anthropic.Model(model),
+		MaxTokens: int64(effectiveMaxTokens),
 	}
 
 	if options.Params.Temperature != nil {
-		params.Temperature = anthropic.F(float64(*options.Params.Temperature))
+		params.Temperature = anthropic.Opt(float64(*options.Params.Temperature))
 	}
 
-	messages, err := messagesToAnthropicParams(options.Params.Messages)
+	if options.Params.ServiceTier != "" {
+		params.ServiceTier = anthropic.MessageNewParamsServiceTier(options.Params.ServiceTier)
+	}
+
+	anthropicMessages, err := messagesToAnthropicParams(messages)
 	if err != nil {
 		return nil, err
 	}
-	params.Messages = anthropic.F(messages)
+	params.Messages = anthropicMessages
 
 	if len(options.Params.Tools) > 0 {
 		tools, err := toolsToAnthropicParams(options.Params.Tools)
 		if err != nil {
 			return nil, err
 		}
-		params.Tools = anthropic.F(tools)
+		params.Tools = tools
 
 		toolChoice := toolChoiceToAnthropicParam(options.Params.ToolChoice, options.Params.ParallelToolCalls != nil && *options.Params.ParallelToolCalls)
-		params.ToolChoice = anthropic.F(toolChoice)
+		params.ToolChoice = toolChoice
 	}
 
 	if useOAuth {
 		// NOTE: OAuth tokens require using the Claude Code system prompt, otherwise you get a 400 error
 		var systemMessages []anthropic.TextBlockParam
-		systemMessages = append(systemMessages, anthropic.NewTextBlock("You are Claude Code, Anthropic's official CLI for Claude."))
-		params.System = anthropic.F(systemMessages)
+		systemMessages = append(systemMessages, anthropic.TextBlockParam{Text: "You are Claude Code, Anthropic's official CLI for Claude."})
+		params.System = systemMessages
+	}
+
+	// Enable extended thinking if reasoning effort is specified
+	if options.Params.ReasoningEffort != "" {
+		budgetTokens := int64(10000) // default
+		switch options.Params.ReasoningEffort {
+		case "low":
+			budgetTokens = 5000
+		case "medium":
+			budgetTokens = 10000
+		case "high":
+			budgetTokens = 20000
+		}
+		// max_tokens must be greater than thinking.budget_tokens
+		if int64(effectiveMaxTokens) <= budgetTokens {
+			effectiveMaxTokens = int(budgetTokens) + 1000
+			params.MaxTokens = int64(effectiveMaxTokens)
+		}
+		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budgetTokens)
 	}
 
 	stream := client.Messages.NewStreaming(ctx, params)
@@ -130,7 +135,7 @@ func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options,
 			return nil, fmt.Errorf("failed to accumulate message: %w", err)
 		}
 
-		switch evt := event.AsUnion().(type) {
+		switch evt := event.AsAny().(type) {
 		case anthropic.ContentBlockStartEvent:
 			blockIndexMap[evt.Index] = nextBlockIndex
 			var contentBlock ContentBlock
@@ -148,6 +153,13 @@ func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options,
 						Id:        evt.ContentBlock.ID,
 						Name:      evt.ContentBlock.Name,
 						Arguments: "",
+					},
+				}
+			case "thinking":
+				contentBlock = ContentBlock{
+					Type: ContentBlockTypeReasoning,
+					Reasoning: &ReasoningBlock{
+						Text: "",
 					},
 				}
 			default:
@@ -170,7 +182,7 @@ func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options,
 				return nil, fmt.Errorf("received delta for unknown block index %d", evt.Index)
 			}
 
-			switch delta := evt.Delta.AsUnion().(type) {
+			switch delta := evt.Delta.AsAny().(type) {
 			case anthropic.TextDelta:
 				ev := Event{
 					Type:  EventTextDelta,
@@ -185,6 +197,24 @@ func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options,
 					Type:  EventTextDelta,
 					Index: blockIndex,
 					Delta: delta.PartialJSON,
+				}
+				events = append(events, ev)
+				eventChan <- ev
+
+			case anthropic.ThinkingDelta:
+				ev := Event{
+					Type:  EventTextDelta,
+					Index: blockIndex,
+					Delta: delta.Thinking,
+				}
+				events = append(events, ev)
+				eventChan <- ev
+
+			case anthropic.SignatureDelta:
+				ev := Event{
+					Type:      EventSignatureDelta,
+					Index:     blockIndex,
+					Signature: []byte(delta.Signature),
 				}
 				events = append(events, ev)
 				eventChan <- ev
@@ -216,7 +246,7 @@ func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options,
 
 	output := accumulateAnthropicEventsToMessage(events)
 
-	responseModel := finalMessage.Model
+	responseModel := string(finalMessage.Model)
 	if responseModel == "" {
 		responseModel = model
 	}
@@ -240,7 +270,56 @@ func (p AnthropicResponsesProvider) Stream(ctx context.Context, options Options,
 }
 
 func accumulateAnthropicEventsToMessage(events []Event) Message {
-	return accumulateOpenaiEventsToMessage(events)
+	msg := Message{
+		Role:    RoleAssistant,
+		Content: []ContentBlock{},
+	}
+
+	for _, event := range events {
+		switch event.Type {
+		case EventBlockStarted:
+			if event.ContentBlock != nil {
+				block := *event.ContentBlock
+				msg.Content = append(msg.Content, block)
+			}
+		case EventTextDelta:
+			if event.Index < len(msg.Content) {
+				block := &msg.Content[event.Index]
+				switch block.Type {
+				case ContentBlockTypeText:
+					block.Text += event.Delta
+				case ContentBlockTypeToolUse:
+					if block.ToolUse != nil {
+						block.ToolUse.Arguments += event.Delta
+					}
+				case ContentBlockTypeReasoning:
+					if block.Reasoning != nil {
+						block.Reasoning.Text += event.Delta
+					}
+				case ContentBlockTypeRefusal:
+					if block.Refusal != nil {
+						block.Refusal.Reason += event.Delta
+					}
+				}
+			}
+		case EventSummaryTextDelta:
+			if event.Index < len(msg.Content) {
+				block := &msg.Content[event.Index]
+				if block.Type == ContentBlockTypeReasoning && block.Reasoning != nil {
+					block.Reasoning.Summary += event.Delta
+				}
+			}
+		case EventSignatureDelta:
+			if event.Index < len(msg.Content) {
+				block := &msg.Content[event.Index]
+				if block.Type == ContentBlockTypeReasoning && block.Reasoning != nil {
+					block.Reasoning.Signature = append(block.Reasoning.Signature, event.Signature...)
+				}
+			}
+		}
+	}
+
+	return msg
 }
 
 func roleToAnthropicParam(role Role) anthropic.MessageParamRole {
@@ -295,18 +374,18 @@ func contentBlockToAnthropicParam(block ContentBlock, role Role) (anthropic.Cont
 	case ContentBlockTypeText:
 		textBlock := anthropic.NewTextBlock(block.Text)
 		if block.CacheControl != "" {
-			textBlock.CacheControl = anthropic.F(anthropic.CacheControlEphemeralParam{
-				Type: anthropic.F(anthropic.CacheControlEphemeralType(block.CacheControl)),
-			})
+			textBlock.OfText.CacheControl = anthropic.CacheControlEphemeralParam{
+				Type: "ephemeral",
+			}
 		}
 		return textBlock, nil
 
 	case ContentBlockTypeToolUse:
 		if role != RoleAssistant {
-			return nil, fmt.Errorf("tool_use blocks only allowed in assistant messages")
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("tool_use blocks only allowed in assistant messages")
 		}
 		if block.ToolUse == nil {
-			return nil, fmt.Errorf("tool_use block missing ToolUse data")
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("tool_use block missing ToolUse data")
 		}
 
 		var argsMap map[string]interface{}
@@ -320,81 +399,94 @@ func contentBlockToAnthropicParam(block ContentBlock, role Role) (anthropic.Cont
 			argsMap = make(map[string]interface{})
 		}
 
-		toolUseBlock := anthropic.NewToolUseBlockParam(block.ToolUse.Id, block.ToolUse.Name, argsMap)
+		toolUseBlock := anthropic.ContentBlockParamUnion{
+			OfToolUse: &anthropic.ToolUseBlockParam{
+				ID:    block.ToolUse.Id,
+				Name:  block.ToolUse.Name,
+				Input: argsMap,
+			},
+		}
 		if block.CacheControl != "" {
-			toolUseBlock.CacheControl = anthropic.F(anthropic.CacheControlEphemeralParam{
-				Type: anthropic.F(anthropic.CacheControlEphemeralType(block.CacheControl)),
-			})
+			toolUseBlock.OfToolUse.CacheControl = anthropic.CacheControlEphemeralParam{
+				Type: "ephemeral",
+			}
 		}
 		return toolUseBlock, nil
 
 	case ContentBlockTypeToolResult:
 		if role != RoleUser {
-			return nil, fmt.Errorf("tool_result blocks only allowed in user messages")
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("tool_result blocks only allowed in user messages")
 		}
 		if block.ToolResult == nil {
-			return nil, fmt.Errorf("tool_result block missing ToolResult data")
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("tool_result block missing ToolResult data")
 		}
 
 		toolResultBlock := anthropic.NewToolResultBlock(block.ToolResult.ToolCallId, block.ToolResult.Text, block.ToolResult.IsError)
 		if block.CacheControl != "" {
-			toolResultBlock.CacheControl = anthropic.F(anthropic.CacheControlEphemeralParam{
-				Type: anthropic.F(anthropic.CacheControlEphemeralType(block.CacheControl)),
-			})
+			toolResultBlock.OfToolResult.CacheControl = anthropic.CacheControlEphemeralParam{
+				Type: "ephemeral",
+			}
 		}
 		return toolResultBlock, nil
 
 	case ContentBlockTypeRefusal:
 		if role != RoleAssistant {
-			return nil, fmt.Errorf("refusal blocks only allowed in assistant messages")
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("refusal blocks only allowed in assistant messages")
 		}
 		if block.Refusal == nil {
-			return nil, fmt.Errorf("refusal block missing Refusal data")
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("refusal block missing Refusal data")
 		}
 		textBlock := anthropic.NewTextBlock(block.Refusal.Reason)
 		if block.CacheControl != "" {
-			textBlock.CacheControl = anthropic.F(anthropic.CacheControlEphemeralParam{
-				Type: anthropic.F(anthropic.CacheControlEphemeralType(block.CacheControl)),
-			})
+			textBlock.OfText.CacheControl = anthropic.CacheControlEphemeralParam{
+				Type: "ephemeral",
+			}
 		}
 		return textBlock, nil
 
 	case ContentBlockTypeReasoning:
 		if role != RoleAssistant {
-			return nil, fmt.Errorf("reasoning blocks only allowed in assistant messages")
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("reasoning blocks only allowed in assistant messages")
 		}
 		if block.Reasoning == nil {
-			return nil, fmt.Errorf("reasoning block missing Reasoning data")
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("reasoning block missing Reasoning data")
 		}
 		textBlock := anthropic.NewTextBlock(block.Reasoning.Text)
 		if block.CacheControl != "" {
-			textBlock.CacheControl = anthropic.F(anthropic.CacheControlEphemeralParam{
-				Type: anthropic.F(anthropic.CacheControlEphemeralType(block.CacheControl)),
-			})
+			textBlock.OfText.CacheControl = anthropic.CacheControlEphemeralParam{
+				Type: "ephemeral",
+			}
 		}
 		return textBlock, nil
 
 	case ContentBlockTypeImage:
-		return nil, fmt.Errorf("image blocks not yet supported")
+		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("image blocks not yet supported")
 
 	case ContentBlockTypeFile:
-		return nil, fmt.Errorf("file blocks not yet supported")
+		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("file blocks not yet supported")
 
 	case ContentBlockTypeMcpCall:
-		return nil, fmt.Errorf("mcp_call blocks not yet supported")
+		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("mcp_call blocks not yet supported")
 
 	default:
-		return nil, fmt.Errorf("unsupported content block type: %s", block.Type)
+		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("unsupported content block type: %s", block.Type)
 	}
 }
 
-func toolsToAnthropicParams(tools []*common.Tool) ([]anthropic.ToolParam, error) {
-	result := make([]anthropic.ToolParam, len(tools))
+func toolsToAnthropicParams(tools []*common.Tool) ([]anthropic.ToolUnionParam, error) {
+	result := make([]anthropic.ToolUnionParam, len(tools))
 	for i, tool := range tools {
-		result[i] = anthropic.ToolParam{
-			Name:        anthropic.F(tool.Name),
-			Description: anthropic.F(tool.Description),
-			InputSchema: anthropic.F[interface{}](tool.Parameters),
+		result[i] = anthropic.ToolUnionParam{
+			OfTool: &anthropic.ToolParam{
+				Name:        tool.Name,
+				Description: anthropic.Opt(tool.Description),
+				InputSchema: anthropic.ToolInputSchemaParam{
+					Properties:  tool.Parameters.Properties,
+					Required:    tool.Parameters.Required,
+					Type:        constant.Object(tool.Parameters.Type),
+					ExtraFields: tool.Parameters.Extras,
+				},
+			},
 		}
 	}
 	return result, nil
@@ -403,25 +495,29 @@ func toolsToAnthropicParams(tools []*common.Tool) ([]anthropic.ToolParam, error)
 func toolChoiceToAnthropicParam(choice common.ToolChoice, parallelToolCalls bool) anthropic.ToolChoiceUnionParam {
 	switch choice.Type {
 	case common.ToolChoiceTypeAuto, common.ToolChoiceTypeUnspecified:
-		return anthropic.ToolChoiceAutoParam{
-			Type:                   anthropic.F(anthropic.ToolChoiceAutoTypeAuto),
-			DisableParallelToolUse: anthropic.F(!parallelToolCalls),
+		return anthropic.ToolChoiceUnionParam{
+			OfAuto: &anthropic.ToolChoiceAutoParam{
+				DisableParallelToolUse: anthropic.Opt(!parallelToolCalls),
+			},
 		}
 	case common.ToolChoiceTypeRequired:
-		return anthropic.ToolChoiceAnyParam{
-			Type:                   anthropic.F(anthropic.ToolChoiceAnyTypeAny),
-			DisableParallelToolUse: anthropic.F(!parallelToolCalls),
+		return anthropic.ToolChoiceUnionParam{
+			OfAny: &anthropic.ToolChoiceAnyParam{
+				DisableParallelToolUse: anthropic.Opt(!parallelToolCalls),
+			},
 		}
 	case common.ToolChoiceTypeTool:
-		return anthropic.ToolChoiceToolParam{
-			Type:                   anthropic.F(anthropic.ToolChoiceToolTypeTool),
-			Name:                   anthropic.F(choice.Name),
-			DisableParallelToolUse: anthropic.F(!parallelToolCalls),
+		return anthropic.ToolChoiceUnionParam{
+			OfTool: &anthropic.ToolChoiceToolParam{
+				Name:                   choice.Name,
+				DisableParallelToolUse: anthropic.Opt(!parallelToolCalls),
+			},
 		}
 	default:
-		return anthropic.ToolChoiceAutoParam{
-			Type:                   anthropic.F(anthropic.ToolChoiceAutoTypeAuto),
-			DisableParallelToolUse: anthropic.F(!parallelToolCalls),
+		return anthropic.ToolChoiceUnionParam{
+			OfAuto: &anthropic.ToolChoiceAutoParam{
+				DisableParallelToolUse: anthropic.Opt(!parallelToolCalls),
+			},
 		}
 	}
 }

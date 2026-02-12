@@ -5,9 +5,9 @@ import (
 	"sidekick/secret_manager"
 )
 
-// Params holds the LLM request parameters including messages, tools, and model configuration.
+// Params holds the LLM request parameters including tools, model configuration, and chat history.
 type Params struct {
-	Messages          []Message
+	ChatHistory       *ChatHistoryContainer
 	Tools             []*common.Tool
 	ToolChoice        common.ToolChoice
 	ParallelToolCalls *bool
@@ -25,7 +25,7 @@ type Options struct {
 // ActionParams returns a map of action parameters suitable for logging or workflow metadata.
 func (o Options) ActionParams() map[string]any {
 	params := map[string]any{
-		"messages":          o.Params.Messages,
+		"messages":          o.Params.ChatHistory,
 		"tools":             o.Params.Tools,
 		"toolChoice":        o.Params.ToolChoice,
 		"model":             o.Params.Model,
@@ -38,6 +38,9 @@ func (o Options) ActionParams() map[string]any {
 	}
 	if o.Params.MaxTokens > 0 {
 		params["maxTokens"] = o.Params.MaxTokens
+	}
+	if o.Params.ServiceTier != "" {
+		params["serviceTier"] = o.Params.ServiceTier
 	}
 	return params
 }
