@@ -33,6 +33,7 @@ command_permissions:
     - pattern: "(npm|bun) run test:unit.*--run"
     - pattern: "bun test:unit.*--run"
     - pattern: "go run ./worker/replay/"
+    - pattern: "go run ./scripts/run_activity/"
 
 dev_run:
   supervisor:
