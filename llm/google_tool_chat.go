@@ -75,7 +75,7 @@ func (g GoogleToolChat) ChatStream(ctx context.Context, options ToolChatOptions,
 		return nil, fmt.Errorf("failed to get %s API key: %w", providerName, err)
 	}
 
-	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	httpClient := &http.Client{Timeout: 20 * time.Minute}
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:     apiKey,
 		Backend:    genai.BackendGeminiAPI,
