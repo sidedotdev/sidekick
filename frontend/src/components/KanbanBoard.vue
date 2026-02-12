@@ -1,5 +1,5 @@
 <template>
-  <TaskModal v-if="isModalOpen" @close="closeModal" @created="refresh" @updated="refresh" :task="newTask" />
+  <TaskModal v-if="isModalOpen" @close="closeModal" @created="refresh" @updated="refresh" @deleted="refresh" :task="newTask" />
   <div v-if="showGuidedOverlay" class="guided-overlay">
     <div class="guided-text">
       Get started by adding your first task to the AI Sidekick queue!

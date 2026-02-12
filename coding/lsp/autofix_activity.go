@@ -8,7 +8,13 @@ import (
 
 	"sidekick/env"
 	"sidekick/utils"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
+
+var autofixTracer = otel.Tracer("sidekick/coding/lsp/autofix")
 
 type FailedEdit struct {
 	Edit  WorkspaceEdit `json:"edit"`
@@ -27,11 +33,16 @@ type AutofixActivityOutput struct {
 }
 
 func (lspa *LSPActivities) AutofixActivity(ctx context.Context, input AutofixActivityInput) (AutofixActivityOutput, error) {
+	ctx, span := autofixTracer.Start(ctx, "AutofixActivity")
+	defer span.End()
+	span.SetAttributes(attribute.String("documentURI", input.DocumentURI))
+
 	// step 1: initialize
 	langName := utils.InferLanguageNameFromFilePath(input.DocumentURI)
 	lspClient, err := lspa.findOrInitClient(ctx, input.EnvContainer.Env.GetWorkingDirectory(), langName)
 	if err != nil {
 		if errors.Is(err, ErrUnsupportedLanguage) {
+			span.SetAttributes(attribute.Bool("skipped", true), attribute.String("reason", "unsupported language"))
 			err = nil // unsupported languages just means we can't autofix, not that autofix failed
 		}
 		return AutofixActivityOutput{}, err
@@ -53,15 +64,21 @@ func (lspa *LSPActivities) AutofixActivity(ctx context.Context, input AutofixAct
 }
 
 func getAutofixCodeActions(ctx context.Context, lspClient LSPClient, documentURI string) ([]CodeAction, error) {
+	ctx, span := autofixTracer.Start(ctx, "getAutofixCodeActions")
+	defer span.End()
+
 	// Calculate end line and character based on file contents
 	fileContent, err := readURI(documentURI)
 	if err != nil {
-		return []CodeAction{}, fmt.Errorf("failed to read file: %w", err)
+		err = fmt.Errorf("failed to read file: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return []CodeAction{}, err
 	}
 	lines := strings.Split(string(fileContent), "\n")
 	endLine := len(lines) - 1
 	endCharacter := len(lines[endLine])
-	return lspClient.TextDocumentCodeAction(ctx, CodeActionParams{
+	codeActions, err := lspClient.TextDocumentCodeAction(ctx, CodeActionParams{
 		TextDocument: TextDocumentIdentifier{
 			URI: documentURI,
 		},
@@ -79,9 +96,19 @@ func getAutofixCodeActions(ctx context.Context, lspClient LSPClient, documentURI
 			Only: []CodeActionKind{CodeActionKindSourceFixAll, CodeActionKindSourceOrganizeImports},
 		},
 	})
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return codeActions, err
+	}
+	span.SetAttributes(attribute.Int("codeActionCount", len(codeActions)))
+	return codeActions, nil
 }
 
 func applyCodeActions(ctx context.Context, envContainer env.EnvContainer, codeActions []CodeAction) (AutofixActivityOutput, error) {
+	ctx, span := autofixTracer.Start(ctx, "applyCodeActions")
+	defer span.End()
+
 	output := AutofixActivityOutput{}
 
 	for _, codeAction := range codeActions {
@@ -102,6 +129,14 @@ func applyCodeActions(ctx context.Context, envContainer env.EnvContainer, codeAc
 		}
 	}
 
+	span.SetAttributes(
+		attribute.Int("appliedEdits", len(output.AppliedEdits)),
+		attribute.Int("failedEdits", len(output.FailedEdits)),
+		attribute.Int("skippedCodeActions", len(output.SkippedCodeActions)),
+	)
+	if len(output.FailedEdits) > 0 {
+		span.SetStatus(codes.Error, fmt.Sprintf("%d edits failed", len(output.FailedEdits)))
+	}
 	return output, nil
 }
 
