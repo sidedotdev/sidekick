@@ -3,6 +3,7 @@ package llm2
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -32,7 +33,9 @@ func (p OpenAIProvider) Stream(ctx context.Context, options Options, eventChan c
 		return nil, err
 	}
 
-	httpClient := &http.Client{Timeout: 45 * time.Minute}
+	httpClient := &http.Client{
+		Timeout: 45 * time.Minute,
+	}
 	clientOptions := []option.RequestOption{
 		option.WithAPIKey(token),
 		option.WithHTTPClient(httpClient),
@@ -119,15 +122,25 @@ func (p OpenAIProvider) Stream(ctx context.Context, options Options, eventChan c
 			responseModel = chunk.Model
 		}
 
-		if len(chunk.Choices) == 0 {
-			// Final chunk with usage only
-			if chunk.Usage.JSON.PromptTokens.Valid() {
-				usage.InputTokens = int(chunk.Usage.PromptTokens)
-				usage.OutputTokens = int(chunk.Usage.CompletionTokens)
-				if chunk.Usage.PromptTokensDetails.CachedTokens > 0 {
-					usage.CacheReadInputTokens = int(chunk.Usage.PromptTokensDetails.CachedTokens)
+		// Usage may arrive on any chunk (including the final one with no
+		// choices), so check every chunk unconditionally.
+		if chunk.Usage.JSON.PromptTokens.Valid() {
+			usage.InputTokens = int(chunk.Usage.PromptTokens)
+			usage.OutputTokens = int(chunk.Usage.CompletionTokens)
+			if chunk.Usage.PromptTokensDetails.CachedTokens > 0 {
+				usage.CacheReadInputTokens = int(chunk.Usage.PromptTokensDetails.CachedTokens)
+			}
+			// litellm proxying Anthropic models returns cache_creation_input_tokens
+			// as a top-level field in the usage object.
+			if f, ok := chunk.Usage.JSON.ExtraFields["cache_creation_input_tokens"]; ok {
+				var cacheWriteTokens int
+				if json.Unmarshal([]byte(f.Raw()), &cacheWriteTokens) == nil {
+					usage.CacheWriteInputTokens = cacheWriteTokens
 				}
 			}
+		}
+
+		if len(chunk.Choices) == 0 {
 			continue
 		}
 
@@ -272,6 +285,12 @@ func findLastTextBlockIndex(events []Event) int {
 	return 0
 }
 
+func cacheControlExtraFields(value string) map[string]any {
+	return map[string]any{
+		"cache_control": map[string]string{"type": value},
+	}
+}
+
 func messagesToChatCompletionParams(messages []Message) ([]openai.ChatCompletionMessageParamUnion, error) {
 	var result []openai.ChatCompletionMessageParamUnion
 
@@ -280,10 +299,14 @@ func messagesToChatCompletionParams(messages []Message) ([]openai.ChatCompletion
 		case RoleSystem:
 			for _, block := range msg.Content {
 				if block.Type == ContentBlockTypeText {
+					textPart := openai.ChatCompletionContentPartTextParam{Text: block.Text}
+					if block.CacheControl != "" {
+						textPart.SetExtraFields(cacheControlExtraFields(block.CacheControl))
+					}
 					result = append(result, openai.ChatCompletionMessageParamUnion{
 						OfSystem: &openai.ChatCompletionSystemMessageParam{
 							Content: openai.ChatCompletionSystemMessageParamContentUnion{
-								OfString: param.NewOpt(block.Text),
+								OfArrayOfContentParts: []openai.ChatCompletionContentPartTextParam{textPart},
 							},
 						},
 					})
@@ -294,10 +317,16 @@ func messagesToChatCompletionParams(messages []Message) ([]openai.ChatCompletion
 			for _, block := range msg.Content {
 				switch block.Type {
 				case ContentBlockTypeText:
+					textPart := openai.ChatCompletionContentPartTextParam{Text: block.Text}
+					if block.CacheControl != "" {
+						textPart.SetExtraFields(cacheControlExtraFields(block.CacheControl))
+					}
 					result = append(result, openai.ChatCompletionMessageParamUnion{
 						OfUser: &openai.ChatCompletionUserMessageParam{
 							Content: openai.ChatCompletionUserMessageParamContentUnion{
-								OfString: param.NewOpt(block.Text),
+								OfArrayOfContentParts: []openai.ChatCompletionContentPartUnionParam{
+									{OfText: &textPart},
+								},
 							},
 						},
 					})
@@ -305,13 +334,17 @@ func messagesToChatCompletionParams(messages []Message) ([]openai.ChatCompletion
 					if block.ToolResult == nil {
 						return nil, fmt.Errorf("tool_result block missing ToolResult data")
 					}
-					result = append(result, openai.ChatCompletionMessageParamUnion{
-						OfTool: &openai.ChatCompletionToolMessageParam{
-							ToolCallID: block.ToolResult.ToolCallId,
-							Content: openai.ChatCompletionToolMessageParamContentUnion{
-								OfString: param.NewOpt(block.ToolResult.Text),
-							},
+					toolMsg := openai.ChatCompletionToolMessageParam{
+						ToolCallID: block.ToolResult.ToolCallId,
+						Content: openai.ChatCompletionToolMessageParamContentUnion{
+							OfString: param.NewOpt(block.ToolResult.Text),
 						},
+					}
+					if block.CacheControl != "" {
+						toolMsg.SetExtraFields(cacheControlExtraFields(block.CacheControl))
+					}
+					result = append(result, openai.ChatCompletionMessageParamUnion{
+						OfTool: &toolMsg,
 					})
 				default:
 					return nil, fmt.Errorf("unsupported content block type %s for user role", block.Type)
@@ -347,8 +380,6 @@ func messagesToChatCompletionParams(messages []Message) ([]openai.ChatCompletion
 					})
 					hasContent = true
 				case ContentBlockTypeReasoning:
-					// Reasoning blocks are not representable in the chat completions API input;
-					// skip them to avoid errors.
 					continue
 				case ContentBlockTypeRefusal:
 					if block.Refusal != nil {
@@ -372,6 +403,12 @@ func messagesToChatCompletionParams(messages []Message) ([]openai.ChatCompletion
 				} else if len(contentParts) > 0 {
 					assistantMsg.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
 						OfArrayOfContentParts: contentParts,
+					}
+				}
+				for _, block := range msg.Content {
+					if block.CacheControl != "" {
+						assistantMsg.SetExtraFields(cacheControlExtraFields(block.CacheControl))
+						break
 					}
 				}
 				result = append(result, openai.ChatCompletionMessageParamUnion{
