@@ -249,3 +249,24 @@ export function isLlm2ChatHistoryWrapper(payload: ChatHistoryParamPayload | unde
   return payload != null && !Array.isArray(payload) && payload.type === 'llm2'
 }
 // --- End llm2 Chat History Types ---
+
+export interface CriteriaFulfillment {
+  whatWasActuallyDone: string;
+  analysis: string;
+  isFulfilled: boolean;
+  confidence: number;
+  feedbackMessage?: string;
+}
+
+/**
+ * Extracts tool call arguments string from a parsed actionResult,
+ * supporting both legacy ChatCompletionMessage and llm2 MessageResponse formats.
+ */
+export function extractToolCallArguments(parsedResult: any): string | null {
+  if (!parsedResult) return null;
+  if (parsedResult.output?.content && Array.isArray(parsedResult.output.content)) {
+    const toolUseBlock = parsedResult.output.content.find((b: any) => b.type === 'tool_use');
+    return toolUseBlock?.toolUse?.arguments ?? null;
+  }
+  return parsedResult.toolCalls?.[0]?.arguments ?? null;
+}
