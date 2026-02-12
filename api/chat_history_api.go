@@ -8,7 +8,6 @@ import (
 	"sidekick/llm2"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kelindar/binary"
 )
 
 type HydrateChatHistoryRequest struct {
@@ -76,22 +75,12 @@ func (ctrl *Controller) HydrateChatHistoryHandler(c *gin.Context) {
 				continue
 			}
 
-			var jsonBytes []byte
-			if err := binary.Unmarshal(raw, &jsonBytes); err != nil {
+			var block llm2.ContentBlock
+			if err := json.Unmarshal(raw, &block); err != nil {
 				content = append(content, llm2.ContentBlock{
 					Id:   blockId,
 					Type: llm2.ContentBlockTypeText,
 					Text: fmt.Sprintf("[hydrate error: malformed block %s: %v]", blockId, err),
-				})
-				continue
-			}
-
-			var block llm2.ContentBlock
-			if err := json.Unmarshal(jsonBytes, &block); err != nil {
-				content = append(content, llm2.ContentBlock{
-					Id:   blockId,
-					Type: llm2.ContentBlockTypeText,
-					Text: fmt.Sprintf("[hydrate error: invalid JSON in block %s: %v]", blockId, err),
 				})
 				continue
 			}
