@@ -8,6 +8,7 @@ import (
 	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/srv"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/activity"
@@ -38,6 +39,27 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 	if err := input.Options.Params.ChatHistory.Hydrate(ctx, la.Storage); err != nil {
 		return nil, fmt.Errorf("failed to hydrate chat history: %w", err)
 	}
+
+	// Background heartbeat keeps the activity alive during long provider calls
+	// where no events are emitted (e.g. extended thinking).
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if activity.IsActivity(ctx) {
+					activity.RecordHeartbeat(ctx, nil)
+				}
+			}
+		}
+	}()
 
 	eventChan := make(chan llm2.Event, 10)
 
