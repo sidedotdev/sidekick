@@ -179,10 +179,80 @@ func TestOpenAIProvider_UsageOnChunkWithChoices(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.NotNil(t, response)
-	assert.Equal(t, 110, response.Usage.InputTokens, "InputTokens should be total including cache write tokens")
+	assert.Equal(t, 10, response.Usage.InputTokens, "InputTokens should be prompt_tokens as reported by the provider")
 	assert.Equal(t, 5, response.Usage.OutputTokens, "OutputTokens should be captured from chunk with choices")
 	assert.Equal(t, 100, response.Usage.CacheWriteInputTokens, "CacheWriteInputTokens from cache_creation_input_tokens")
 	assert.Equal(t, "test-model", response.Model)
+	assert.Equal(t, "stop", response.StopReason)
+}
+
+// TestOpenAIProvider_UsageOnChunkWithChoices_OpenAISemantics verifies that when
+// prompt_tokens already includes cache tokens (native OpenAI semantics), we do
+// not double-count.
+func TestOpenAIProvider_UsageOnChunkWithChoices_OpenAISemantics(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		flusher, _ := w.(http.Flusher)
+
+		fmt.Fprint(w, "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello\"}}]}\n\n")
+		flusher.Flush()
+
+		// prompt_tokens=700 already includes cached_tokens=200 and
+		// cache_creation_input_tokens=100 (OpenAI semantics: total >= sum of subsets).
+		fmt.Fprint(w, "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":700,\"completion_tokens\":5,\"total_tokens\":705,\"prompt_tokens_details\":{\"cached_tokens\":200},\"cache_creation_input_tokens\":100}}\n\n")
+		flusher.Flush()
+
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	provider := OpenAIProvider{BaseURL: server.URL + "/v1"}
+
+	messages := []Message{
+		{
+			Role:    RoleUser,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hi"}},
+		},
+	}
+
+	options := Options{
+		Params: Params{
+			ModelConfig: common.ModelConfig{
+				Provider: "test",
+				Model:    "test-model",
+			},
+		},
+		Secrets: secret_manager.SecretManagerContainer{
+			SecretManager: &secret_manager.MockSecretManager{},
+		},
+	}
+	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+
+	eventChan := make(chan Event, 100)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range eventChan {
+		}
+	}()
+
+	response, err := provider.Stream(ctx, options, eventChan)
+	close(eventChan)
+	wg.Wait()
+
+	assert.NoError(t, err)
+	assert.NotNil(t, response)
+	assert.Equal(t, 700, response.Usage.InputTokens, "InputTokens should not double-count when prompt_tokens already includes cache")
+	assert.Equal(t, 5, response.Usage.OutputTokens)
+	assert.Equal(t, 200, response.Usage.CacheReadInputTokens)
+	assert.Equal(t, 100, response.Usage.CacheWriteInputTokens)
 	assert.Equal(t, "stop", response.StopReason)
 }
 

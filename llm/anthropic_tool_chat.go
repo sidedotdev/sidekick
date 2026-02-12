@@ -335,7 +335,7 @@ func anthropicToChatMessageResponse(message anthropic.Message, provider string) 
 		StopReason:   string(message.StopReason),
 		StopSequence: message.StopSequence,
 		Usage: Usage{
-			InputTokens:           int(message.Usage.InputTokens),
+			InputTokens:           int(message.Usage.InputTokens) + int(message.Usage.CacheReadInputTokens) + int(message.Usage.CacheCreationInputTokens),
 			OutputTokens:          int(message.Usage.OutputTokens),
 			CacheReadInputTokens:  int(message.Usage.CacheReadInputTokens),
 			CacheWriteInputTokens: int(message.Usage.CacheCreationInputTokens),
