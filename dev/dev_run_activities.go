@@ -2,7 +2,6 @@ package dev
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -274,40 +273,6 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 	run.mu.Lock()
 	run.processes = append(run.processes, proc)
 	run.mu.Unlock()
-
-	// Wait briefly to detect immediate failures (e.g., command not found, immediate exit)
-	run.mu.Lock()
-	proc = run.processes[0]
-	run.mu.Unlock()
-
-	select {
-	case <-proc.doneCh:
-		// Process already exited - check if it was an error
-		exitCode := proc.exitCode.Load()
-		signal := proc.signal.Load()
-		signalStr, _ := signal.(string)
-
-		if signalStr != "" || (exitCode != nil && *exitCode != 0) {
-			// Clean up remaining processes
-			timeout := cmdConfig.StopTimeoutSeconds
-			if timeout <= 0 {
-				timeout = defaultStopTimeoutSeconds
-			}
-			a.terminateActiveRun(run, timeout)
-
-			errMsg := "command exited immediately"
-			if exitCode != nil {
-				errMsg = fmt.Sprintf("command exited immediately with status %d", *exitCode)
-			} else if signalStr != "" {
-				errMsg = fmt.Sprintf("command terminated by signal %s", signalStr)
-			}
-
-			a.emitEndedEvent(ctx, input.Context, exitCode, signalStr, errMsg)
-			return StartDevRunOutput{}, errors.New(errMsg)
-		}
-	case <-time.After(3 * time.Second):
-		// Process still running after grace period, good
-	}
 
 	// Get session ID and output file path from the first process
 	run.mu.Lock()
