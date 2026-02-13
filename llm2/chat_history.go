@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"sidekick/common"
 
@@ -267,38 +268,40 @@ func (h *Llm2ChatHistory) Hydrate(ctx context.Context, storage common.KeyValueSt
 		}
 	}
 
-	// Collect missing block IDs to fetch
-	var missingKeys []string
+	// Collect missing block IDs and their storage keys
+	var missingBlockIds []string
+	var missingStorageKeys []string
 	for _, ref := range h.refs {
 		for _, blockId := range ref.BlockIds {
 			if _, ok := h.hydratedBlocks[blockId]; !ok {
-				missingKeys = append(missingKeys, blockId)
+				missingBlockIds = append(missingBlockIds, blockId)
+				missingStorageKeys = append(missingStorageKeys, storageKey(h.flowId, blockId))
 			}
 		}
 	}
 
-	if len(missingKeys) == 0 && len(h.refs) == 0 {
+	if len(missingBlockIds) == 0 && len(h.refs) == 0 {
 		h.messages = []Message{}
 		h.hydrated = true
 		return nil
 	}
 
-	// Fetch only missing content blocks
-	if len(missingKeys) > 0 {
-		values, err := storage.MGet(ctx, h.workspaceId, missingKeys)
+	// Fetch only missing content blocks using prefixed storage keys
+	if len(missingStorageKeys) > 0 {
+		values, err := storage.MGet(ctx, h.workspaceId, missingStorageKeys)
 		if err != nil {
 			return fmt.Errorf("failed to fetch content blocks: %w", err)
 		}
 
-		for i, key := range missingKeys {
-			if values[i] == nil {
+		for i, blockId := range missingBlockIds {
+			if i >= len(values) || values[i] == nil {
 				continue
 			}
 			var block ContentBlock
 			if err := json.Unmarshal(values[i], &block); err != nil {
-				return fmt.Errorf("failed to unmarshal content block %s: %w", key, err)
+				return fmt.Errorf("failed to unmarshal content block %s: %w", blockId, err)
 			}
-			h.hydratedBlocks[key] = block
+			h.hydratedBlocks[blockId] = block
 		}
 	}
 
@@ -345,7 +348,7 @@ func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueSt
 	}
 
 	// Collect all content blocks to persist
-	values := make(map[string][]byte)
+	storageValues := make(map[string][]byte)
 	for _, idx := range h.unpersisted {
 		if idx < 0 || idx >= len(h.messages) {
 			continue
@@ -353,13 +356,13 @@ func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueSt
 		msg := h.messages[idx]
 		blockIds := make([]string, len(msg.Content))
 		for j, block := range msg.Content {
-			blockId := fmt.Sprintf("%s:msg:%s", h.flowId, gen())
+			blockId := gen()
 			blockIds[j] = blockId
 			blockBytes, err := json.Marshal(block)
 			if err != nil {
 				return fmt.Errorf("failed to marshal content block: %w", err)
 			}
-			values[blockId] = blockBytes
+			storageValues[storageKey(h.flowId, blockId)] = blockBytes
 			h.hydratedBlocks[blockId] = block
 		}
 		h.refs[idx] = MessageRef{
@@ -368,8 +371,8 @@ func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueSt
 		}
 	}
 
-	if len(values) > 0 {
-		if err := storage.MSetRaw(ctx, h.workspaceId, values); err != nil {
+	if len(storageValues) > 0 {
+		if err := storage.MSetRaw(ctx, h.workspaceId, storageValues); err != nil {
 			return fmt.Errorf("failed to persist content blocks: %w", err)
 		}
 	}
@@ -507,6 +510,48 @@ func (h *Llm2ChatHistory) SetHydratedWithMessages(messages []Message) {
 	}
 }
 
+// storageKey builds the KV storage key for a block ID by prepending the flow prefix.
+func storageKey(flowId, blockId string) string {
+	return fmt.Sprintf("%s:msg:%s", flowId, blockId)
+}
+
+// normalizeBlockId strips any "{flowId}:msg:" prefix from a block ID,
+// returning just the bare identifier. This is idempotent for already-normalized IDs.
+//
+// TODO remove once all workflows started on the llm2_migration branch have
+// completed or been terminated. Normalization is only needed to replay those
+// workflows, which persisted flow-prefixed block IDs before we switched to
+// bare IDs. After merging llm2_migration into main, new workflows will only
+// produce bare IDs and this becomes a no-op.
+func normalizeBlockId(blockId string) string {
+	if idx := strings.LastIndex(blockId, ":msg:"); idx >= 0 {
+		return blockId[idx+len(":msg:"):]
+	}
+	return blockId
+}
+
+// NormalizeBlockIds strips flow-prefixed block IDs down to bare identifiers.
+// Call at workflow↔activity/side-effect boundaries to ensure deterministic replay
+// regardless of how the block IDs were generated.
+//
+// TODO remove once all workflows started on the llm2_migration branch have
+// completed or been terminated. See normalizeBlockId.
+func (h *Llm2ChatHistory) NormalizeBlockIds() {
+	for i, ref := range h.refs {
+		for j, blockId := range ref.BlockIds {
+			h.refs[i].BlockIds[j] = normalizeBlockId(blockId)
+		}
+	}
+	// Re-key the cache under normalized IDs
+	if h.hydratedBlocks != nil {
+		normalized := make(map[string]ContentBlock, len(h.hydratedBlocks))
+		for k, v := range h.hydratedBlocks {
+			normalized[normalizeBlockId(k)] = v
+		}
+		h.hydratedBlocks = normalized
+	}
+}
+
 // ChatHistoryContainer wraps a ChatHistory for JSON serialization.
 // It handles detection of the underlying format during unmarshaling.
 type ChatHistoryContainer struct {
@@ -632,4 +677,17 @@ func (c *ChatHistoryContainer) Llm2Messages() []Message {
 		return llm2History.Llm2Messages()
 	}
 	return nil
+}
+
+// NormalizeBlockIds normalizes block IDs on the underlying Llm2ChatHistory, if present.
+//
+// TODO remove once all workflows started on the llm2_migration branch have
+// completed or been terminated. See normalizeBlockId.
+func (c *ChatHistoryContainer) NormalizeBlockIds() {
+	if c == nil || c.History == nil {
+		return
+	}
+	if llm2History, ok := c.History.(*Llm2ChatHistory); ok {
+		llm2History.NormalizeBlockIds()
+	}
 }

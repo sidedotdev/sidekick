@@ -240,17 +240,18 @@ func TestLlm2ChatHistory_UnmarshalJSON_EmptyRefsIsHydrated(t *testing.T) {
 }
 
 func TestLlm2ChatHistory_Hydrate_RestoresContent(t *testing.T) {
-	// Create storage with pre-populated content blocks
+	// Create storage with pre-populated content blocks using flow-prefixed keys
 	storage := newMockKeyValueStorage()
 	block1 := ContentBlock{Type: ContentBlockTypeText, Text: "Hello from user"}
 	block2 := ContentBlock{Type: ContentBlockTypeText, Text: "Hello from assistant"}
 	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
-		"block-1": block1,
-		"block-2": block2,
+		"flow-123:msg:block-1": block1,
+		"flow-123:msg:block-2": block2,
 	})
 
-	// Create non-hydrated history with refs
+	// Create non-hydrated history with refs (bare block IDs)
 	h := &Llm2ChatHistory{
+		flowId:      "flow-123",
 		workspaceId: "workspace-456",
 		refs: []MessageRef{
 			{BlockIds: []string{"block-1"}, Role: "user"},
@@ -773,12 +774,13 @@ func TestLlm2ChatHistory_Hydrate_MultipleBlocksPerMessage(t *testing.T) {
 	block2 := ContentBlock{Type: ContentBlockTypeText, Text: "Part 2"}
 	block3 := ContentBlock{Type: ContentBlockTypeText, Text: "Part 3"}
 	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
-		"block-1": block1,
-		"block-2": block2,
-		"block-3": block3,
+		"flow-123:msg:block-1": block1,
+		"flow-123:msg:block-2": block2,
+		"flow-123:msg:block-3": block3,
 	})
 
 	h := &Llm2ChatHistory{
+		flowId:      "flow-123",
 		workspaceId: "workspace-456",
 		refs: []MessageRef{
 			{BlockIds: []string{"block-1", "block-2"}, Role: "user"},
@@ -802,7 +804,7 @@ func TestLlm2ChatHistory_Hydrate_PreservesFlowId(t *testing.T) {
 	storage := newMockKeyValueStorage()
 	block1 := ContentBlock{Type: ContentBlockTypeText, Text: "Hello"}
 	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
-		"block-1": block1,
+		"flow-123:msg:block-1": block1,
 	})
 
 	h := &Llm2ChatHistory{
@@ -870,7 +872,7 @@ func TestLlm2ChatHistory_SetRefs_CachesExistingBlocks(t *testing.T) {
 	// SetRefs with a subset that reuses one existing block and adds a new one
 	newBlock := ContentBlock{Type: ContentBlockTypeText, Text: "New message"}
 	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
-		"new-block-id": newBlock,
+		"flow-123:msg:new-block-id": newBlock,
 	})
 
 	newRefs := []MessageRef{
@@ -898,14 +900,14 @@ func TestLlm2ChatHistory_Hydrate_OnlyFetchesMissingBlocks(t *testing.T) {
 		fetchedKeys:         make([]string, 0),
 	}
 
-	// Pre-populate storage with blocks
+	// Pre-populate storage with flow-prefixed keys
 	block1 := ContentBlock{Type: ContentBlockTypeText, Text: "First"}
 	block2 := ContentBlock{Type: ContentBlockTypeText, Text: "Second"}
 	block3 := ContentBlock{Type: ContentBlockTypeText, Text: "Third"}
 	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
-		"block-1": block1,
-		"block-2": block2,
-		"block-3": block3,
+		"flow-123:msg:block-1": block1,
+		"flow-123:msg:block-2": block2,
+		"flow-123:msg:block-3": block3,
 	})
 
 	// Create a hydrated history with two messages
@@ -913,7 +915,7 @@ func TestLlm2ChatHistory_Hydrate_OnlyFetchesMissingBlocks(t *testing.T) {
 	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{block1}})
 	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{block2}})
 
-	// Manually set refs to match the blocks
+	// Manually set refs to match the blocks (bare IDs)
 	h.refs = []MessageRef{
 		{BlockIds: []string{"block-1"}, Role: "user"},
 		{BlockIds: []string{"block-2"}, Role: "assistant"},
@@ -933,8 +935,8 @@ func TestLlm2ChatHistory_Hydrate_OnlyFetchesMissingBlocks(t *testing.T) {
 	err := h.Hydrate(context.Background(), storage)
 	require.NoError(t, err)
 
-	// Only block-3 should have been fetched (block-1 and block-2 were cached)
-	assert.Equal(t, []string{"block-3"}, storage.fetchedKeys)
+	// Only block-3 should have been fetched (with flow prefix in storage key)
+	assert.Equal(t, []string{"flow-123:msg:block-3"}, storage.fetchedKeys)
 
 	// Verify content is correct
 	assert.True(t, h.IsHydrated())
@@ -1006,15 +1008,15 @@ func TestLlm2ChatHistory_Persist_UsesDeterministicGenerator(t *testing.T) {
 	refs := h.Refs()
 	require.Len(t, refs, 2)
 
-	// Verify exact block IDs based on deterministic generator
-	assert.Equal(t, "flow-123:msg:id-1", refs[0].BlockIds[0])
-	assert.Equal(t, "flow-123:msg:id-2", refs[1].BlockIds[0])
+	// Refs contain bare block IDs (no flow prefix)
+	assert.Equal(t, "id-1", refs[0].BlockIds[0])
+	assert.Equal(t, "id-2", refs[1].BlockIds[0])
 
-	// Verify the keys exist in storage
+	// Storage keys include the flow prefix
 	_, ok := storage.data["flow-123:msg:id-1"]
-	assert.True(t, ok, "expected block id-1 to exist in storage")
+	assert.True(t, ok, "expected block id-1 to exist in storage with flow prefix")
 	_, ok = storage.data["flow-123:msg:id-2"]
-	assert.True(t, ok, "expected block id-2 to exist in storage")
+	assert.True(t, ok, "expected block id-2 to exist in storage with flow prefix")
 }
 
 func TestLlm2ChatHistory_Persist_BlockIdsDoNotContainMessageIndex(t *testing.T) {
@@ -1029,14 +1031,12 @@ func TestLlm2ChatHistory_Persist_BlockIdsDoNotContainMessageIndex(t *testing.T) 
 	require.NoError(t, err)
 
 	refs := h.Refs()
-	for idx, ref := range refs {
+	for _, ref := range refs {
 		for _, blockId := range ref.BlockIds {
-			// Block IDs should NOT contain patterns like ":msg:0:", ":msg:1:", etc.
-			assert.NotContains(t, blockId, fmt.Sprintf(":msg:%d:", idx),
-				"block ID should not contain message index")
-			// Should contain the flow-namespaced prefix
-			assert.True(t, strings.HasPrefix(blockId, "flow-123:msg:"),
-				"block ID should have flow-namespaced prefix")
+			// Bare block IDs should not contain any ":" prefix
+			assert.False(t, strings.Contains(blockId, ":"),
+				"block ID should be a bare identifier without any prefix")
+			assert.NotEmpty(t, blockId)
 		}
 	}
 }
@@ -1060,7 +1060,7 @@ func TestLlm2ChatHistory_Persist_ModifiedMessageGetsNewBlockIds(t *testing.T) {
 	originalRefs := h.Refs()
 	require.Len(t, originalRefs, 1)
 	originalBlockId := originalRefs[0].BlockIds[0]
-	assert.Equal(t, "flow-123:msg:id-1", originalBlockId)
+	assert.Equal(t, "id-1", originalBlockId)
 
 	// Modify the message via Set
 	h.Set(0, &Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Modified"}}})
@@ -1075,17 +1075,17 @@ func TestLlm2ChatHistory_Persist_ModifiedMessageGetsNewBlockIds(t *testing.T) {
 
 	// New block ID should be different from original
 	assert.NotEqual(t, originalBlockId, newBlockId)
-	assert.Equal(t, "flow-123:msg:id-2", newBlockId)
+	assert.Equal(t, "id-2", newBlockId)
 
-	// Both old and new blocks should exist in storage (orphaned blocks cleaned up later)
-	_, oldExists := storage.data[originalBlockId]
-	assert.True(t, oldExists, "original block should still exist")
-	_, newExists := storage.data[newBlockId]
-	assert.True(t, newExists, "new block should exist")
+	// Both old and new blocks should exist in storage with flow-prefixed keys
+	_, oldExists := storage.data["flow-123:msg:id-1"]
+	assert.True(t, oldExists, "original block should still exist in storage")
+	_, newExists := storage.data["flow-123:msg:id-2"]
+	assert.True(t, newExists, "new block should exist in storage")
 
 	// New block should have the modified content
 	var block ContentBlock
-	json.Unmarshal(storage.data[newBlockId], &block)
+	json.Unmarshal(storage.data["flow-123:msg:id-2"], &block)
 	assert.Equal(t, "Modified", block.Text)
 }
 
@@ -1107,19 +1107,26 @@ func TestLlm2ChatHistory_Persist_SetFlowIdUsesNewNamespace(t *testing.T) {
 	require.NoError(t, err)
 
 	originalRefs := h.Refs()
-	assert.Equal(t, "old-flow:msg:id-1", originalRefs[0].BlockIds[0])
+	assert.Equal(t, "id-1", originalRefs[0].BlockIds[0])
+
+	// Storage key uses the old flow prefix
+	_, ok := storage.data["old-flow:msg:id-1"]
+	assert.True(t, ok, "block should be stored under old flow prefix")
 
 	// Change flow ID and modify message
 	h.SetFlowId("new-flow")
 	h.Set(0, &Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Updated"}}})
 
-	// Second persist should use new flow namespace
+	// Second persist should store under new flow namespace in storage
 	err = h.Persist(context.Background(), storage, gen)
 	require.NoError(t, err)
 
 	newRefs := h.Refs()
-	assert.True(t, strings.HasPrefix(newRefs[0].BlockIds[0], "new-flow:msg:"),
-		"new block ID should use new flow namespace")
+	// Ref block IDs remain bare
+	assert.Equal(t, "id-2", newRefs[0].BlockIds[0])
+	// But storage key uses new flow prefix
+	_, ok = storage.data["new-flow:msg:id-2"]
+	assert.True(t, ok, "block should be stored under new flow prefix")
 }
 
 func TestLlm2ChatHistory_Persist_RefsConsistentWithMessages(t *testing.T) {
@@ -1179,8 +1186,8 @@ func TestLlm2ChatHistory_Persist_StoredBlocksDeserializeCorrectly(t *testing.T) 
 	refs := h.Refs()
 	blockId := refs[0].BlockIds[0]
 
-	// Retrieve and deserialize the stored block
-	storedData := storage.data[blockId]
+	// Storage key is flow-prefixed
+	storedData := storage.data[storageKey("flow-123", blockId)]
 	var retrievedBlock ContentBlock
 	err = json.Unmarshal(storedData, &retrievedBlock)
 	require.NoError(t, err)

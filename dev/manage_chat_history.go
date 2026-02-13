@@ -86,6 +86,9 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *llm2.ChatHistoryContai
 			workflow.GetLogger(ctx).Error("ManageChatHistory persist error", "error", wrapErr)
 			panic(wrapErr)
 		}
+		// TODO remove NormalizeBlockIds calls once all llm2_migration-branch
+		// workflows have completed; new workflows only produce bare IDs.
+		llm2History.NormalizeBlockIds()
 
 		var managedHistory *llm2.ChatHistoryContainer
 		var cha *persisted_ai.ChatHistoryActivities
@@ -108,6 +111,8 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *llm2.ChatHistoryContai
 
 		// Update the existing in-memory history with new refs (preserves cached blocks)
 		llm2History.SetRefs(newRefs)
+		// TODO remove once llm2_migration-branch workflows have completed.
+		llm2History.NormalizeBlockIds()
 
 		// Hydrate only missing/changed blocks using workflow-safe storage
 		if err := llm2History.Hydrate(context.Background(), workflowSafeStorage); err != nil {
