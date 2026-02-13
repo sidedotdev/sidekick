@@ -88,6 +88,8 @@ func executeChatStreamV1(
 	if err := chatHistory.Persist(context.Background(), workflowSafeStorage, gen); err != nil {
 		return nil, fmt.Errorf("failed to persist chat history: %w", err)
 	}
+	// TODO remove once llm2_migration-branch workflows have completed.
+	chatHistory.NormalizeBlockIds()
 
 	// Update options with hydrated chat history
 	options.Params.ChatHistory = chatHistory

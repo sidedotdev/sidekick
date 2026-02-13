@@ -813,8 +813,8 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesManageV3
 		nil,
 	).Once()
 
-	// Mock KVActivities.MGet to return the block content for hydration
-	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"block-managed"}).Return(
+	// Mock KVActivities.MGet to return the block content for hydration (keys are flow-prefixed in storage)
+	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"test-flow:msg:block-managed"}).Return(
 		[][]byte{mustMarshal(llm2.ContentBlock{Type: "text", Text: "managed"})},
 		nil,
 	).Once()
@@ -878,8 +878,8 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_HydratesA
 		nil,
 	).Once()
 
-	// Mock KVActivities.MGet to return the block content
-	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"block-1", "block-2"}).Return(
+	// Mock KVActivities.MGet to return the block content (keys are flow-prefixed in storage)
+	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"test-flow:msg:block-1", "test-flow:msg:block-2"}).Return(
 		[][]byte{
 			mustMarshal(llm2.ContentBlock{Type: "text", Text: "hello"}),
 			mustMarshal(llm2.ContentBlock{Type: "text", Text: "world"}),
@@ -929,9 +929,9 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_ReusesHyd
 
 	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1))
 
-	// First MGet: initial hydration before ManageChatHistory
+	// First MGet: initial hydration before ManageChatHistory (keys are flow-prefixed in storage)
 	var ka *common.KVActivities
-	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"existing-block-1", "existing-block-2", "existing-block-3"}).Return(
+	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"test-flow:msg:existing-block-1", "test-flow:msg:existing-block-2", "test-flow:msg:existing-block-3"}).Return(
 		[][]byte{
 			mustMarshal(llm2.ContentBlock{Type: "text", Text: "first"}),
 			mustMarshal(llm2.ContentBlock{Type: "text", Text: "second"}),
@@ -965,7 +965,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_ReusesHyd
 
 	// Second MGet: after ManageChatHistory, ONLY the new block should be fetched!
 	// "existing-block-2" should be served from the in-memory cache
-	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"new-block-3"}).Return(
+	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"test-flow:msg:new-block-3"}).Return(
 		[][]byte{
 			mustMarshal(llm2.ContentBlock{Type: "text", Text: "third-updated", CacheControl: "ephemeral"}),
 		},
@@ -1029,7 +1029,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_VerifiesH
 		nil,
 	).Once()
 
-	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"block-1"}).Return(
+	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"test-flow:msg:block-1"}).Return(
 		[][]byte{mustMarshal(llm2.ContentBlock{Type: "text", Text: "hello"})},
 		nil,
 	).Once()

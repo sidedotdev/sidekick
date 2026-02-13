@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -170,7 +171,9 @@ func (s *CascadeDeleteTaskTestSuite) seedTestData() (domain.Task, []domain.Flow,
 		}
 		s.Require().NoError(json.Unmarshal(data, &wrapper))
 		for _, ref := range wrapper.Refs {
-			allBlockIds = append(allBlockIds, ref.BlockIds...)
+			for _, blockId := range ref.BlockIds {
+				allBlockIds = append(allBlockIds, fmt.Sprintf("%s:msg:%s", flow.Id, blockId))
+			}
 		}
 	}
 
