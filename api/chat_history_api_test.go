@@ -39,9 +39,9 @@ func TestHydrateChatHistoryHandler_HappyPath(t *testing.T) {
 	block3JSON, _ := json.Marshal(block3)
 
 	err := ctrl.service.MSetRaw(ctx, workspaceId, map[string][]byte{
-		"block-1": block1JSON,
-		"block-2": block2JSON,
-		"block-3": block3JSON,
+		flowId + ":msg:block-1": block1JSON,
+		flowId + ":msg:block-2": block2JSON,
+		flowId + ":msg:block-3": block3JSON,
 	})
 	require.NoError(t, err)
 
@@ -94,7 +94,7 @@ func TestHydrateChatHistoryHandler_MissingBlocksShowError(t *testing.T) {
 	block1JSON, _ := json.Marshal(block1)
 
 	err := ctrl.service.MSetRaw(ctx, workspaceId, map[string][]byte{
-		"block-exists": block1JSON,
+		flowId + ":msg:block-exists": block1JSON,
 	})
 	require.NoError(t, err)
 
@@ -135,7 +135,7 @@ func TestHydrateChatHistoryHandler_SingleRef(t *testing.T) {
 	block1 := []byte(`{"type":"text","text":"Hello"}`)
 
 	err := ctrl.service.MSetRaw(ctx, workspaceId, map[string][]byte{
-		"block-1": block1,
+		flowId + ":msg:block-1": block1,
 	})
 	require.NoError(t, err)
 
@@ -200,7 +200,7 @@ func TestHydrateChatHistoryHandler_MalformedBlockShowsError(t *testing.T) {
 	ctx := context.Background()
 	// Store invalid data that will fail JSON unmarshal
 	err := ctrl.service.MSetRaw(ctx, workspaceId, map[string][]byte{
-		"block-bad": []byte("not valid json data"),
+		flowId + ":msg:block-bad": []byte("not valid json data"),
 	})
 	require.NoError(t, err)
 
@@ -240,7 +240,7 @@ func TestHydrateChatHistoryHandler_PreservesOrder(t *testing.T) {
 	blocks := map[string][]byte{}
 	letters := []string{"A", "B", "C", "D", "E"}
 	for i := 1; i <= 5; i++ {
-		blocks["block-"+string(rune('0'+i))] = []byte(`{"type":"text","text":"` + letters[i-1] + `"}`)
+		blocks[flowId+":msg:block-"+string(rune('0'+i))] = []byte(`{"type":"text","text":"` + letters[i-1] + `"}`)
 	}
 
 	err := ctrl.service.MSetRaw(ctx, workspaceId, blocks)
