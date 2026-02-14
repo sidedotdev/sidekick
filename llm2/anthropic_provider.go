@@ -2,11 +2,13 @@ package llm2
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"sidekick/common"
 	"sidekick/llm"
+	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -464,7 +466,45 @@ func contentBlockToAnthropicParam(block ContentBlock, role Role) (anthropic.Cont
 		return textBlock, nil
 
 	case ContentBlockTypeImage:
-		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("image blocks not yet supported")
+		if block.Image == nil || block.Image.Url == "" {
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("image block missing ImageRef or URL")
+		}
+		url := block.Image.Url
+
+		if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") {
+			imgBlock := anthropic.NewImageBlock(anthropic.URLImageSourceParam{
+				URL:  url,
+				Type: "url",
+			})
+			if block.CacheControl != "" {
+				imgBlock.OfImage.CacheControl = anthropic.CacheControlEphemeralParam{
+					Type: "ephemeral",
+				}
+			}
+			return imgBlock, nil
+		}
+
+		// data: URL — resize/recompress within Anthropic limits.
+		const anthropicMaxBytes = 30 * 1024 * 1024 // 30 MB conservative limit
+		const anthropicMaxLongEdgePx = 1568
+		newDataURL, mime, _, err := PrepareImageDataURLForLimits(url, anthropicMaxBytes, anthropicMaxLongEdgePx)
+		if err != nil {
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("preparing image for Anthropic: %w", err)
+		}
+
+		_, raw, err := ParseDataURL(newDataURL)
+		if err != nil {
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("re-parsing prepared image data URL: %w", err)
+		}
+		encoded := base64.StdEncoding.EncodeToString(raw)
+
+		imgBlock := anthropic.NewImageBlockBase64(mime, encoded)
+		if block.CacheControl != "" {
+			imgBlock.OfImage.CacheControl = anthropic.CacheControlEphemeralParam{
+				Type: "ephemeral",
+			}
+		}
+		return imgBlock, nil
 
 	case ContentBlockTypeFile:
 		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("file blocks not yet supported")

@@ -531,3 +531,78 @@ func TestAnthropicResponsesProvider_CacheControl(t *testing.T) {
 		})
 	}
 }
+
+func TestAnthropicProvider_ImageIntegration(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
+	ctx := context.Background()
+	provider := AnthropicProvider{}
+
+	expectedText, dataURL := GenerateVisionTestImage(6)
+	t.Logf("Generated vision test image with text: %q", expectedText)
+
+	messages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type:  ContentBlockTypeImage,
+					Image: &ImageRef{Url: dataURL},
+				},
+				{
+					Type: ContentBlockTypeText,
+					Text: "What text is written in this image? Reply with ONLY the exact text, nothing else.",
+				},
+			},
+		},
+	}
+
+	options := Options{
+		Params: Params{
+			ModelConfig: common.ModelConfig{
+				Provider: "anthropic",
+				Model:    "claude-sonnet-4-5-20250929",
+			},
+		},
+		Secrets: secret_manager.SecretManagerContainer{
+			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+				&secret_manager.EnvSecretManager{},
+				&secret_manager.KeyringSecretManager{},
+				&secret_manager.LocalConfigSecretManager{},
+			}),
+		},
+	}
+
+	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+
+	eventChan := make(chan Event, 100)
+	var fullText strings.Builder
+
+	go func() {
+		for event := range eventChan {
+			if event.Type == EventTextDelta {
+				fullText.WriteString(event.Delta)
+			}
+		}
+	}()
+
+	response, err := provider.Stream(ctx, options, eventChan)
+	close(eventChan)
+
+	if err != nil {
+		if contains(err.Error(), "overloaded_error") || contains(err.Error(), "Overloaded") || contains(err.Error(), "rate_limit") {
+			t.Skipf("Skipping test due to transient Anthropic API error: %v", err)
+		}
+		t.Fatalf("Stream returned an error: %v", err)
+	}
+
+	assert.NotNil(t, response)
+	responseText := strings.TrimSpace(fullText.String())
+	t.Logf("Model response: %q", responseText)
+	assert.Contains(t, strings.ToUpper(responseText), expectedText,
+		"Expected model to read %q from the image, got %q", expectedText, responseText)
+}
