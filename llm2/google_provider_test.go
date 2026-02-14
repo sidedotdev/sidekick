@@ -398,6 +398,82 @@ func TestGoogleProvider_Integration(t *testing.T) {
 	})
 }
 
+func TestGoogleProvider_ImageIntegration(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
+	ctx := context.Background()
+	provider := GoogleProvider{}
+
+	expectedText, dataURL := GenerateVisionTestImage(6)
+	t.Logf("Generated vision test image with text: %q", expectedText)
+
+	messages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type:  ContentBlockTypeImage,
+					Image: &ImageRef{Url: dataURL},
+				},
+				{
+					Type: ContentBlockTypeText,
+					Text: "What text is written in this image? Reply with ONLY the exact text, nothing else.",
+				},
+			},
+		},
+	}
+
+	options := Options{
+		Params: Params{
+			ModelConfig: common.ModelConfig{
+				Provider: "google",
+				Model:    "gemini-2.5-flash",
+			},
+		},
+		Secrets: secret_manager.SecretManagerContainer{
+			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+				&secret_manager.EnvSecretManager{},
+				&secret_manager.KeyringSecretManager{},
+				&secret_manager.LocalConfigSecretManager{},
+			}),
+		},
+	}
+
+	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+
+	eventChan := make(chan Event, 100)
+	var fullText strings.Builder
+
+	go func() {
+		for event := range eventChan {
+			if event.Type == EventTextDelta {
+				fullText.WriteString(event.Delta)
+			}
+		}
+	}()
+
+	response, err := provider.Stream(ctx, options, eventChan)
+	close(eventChan)
+
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "RESOURCE_EXHAUSTED") || strings.Contains(errStr, "429") || strings.Contains(errStr, "quota") {
+			t.Skipf("Skipping test due to Google API quota/rate limit: %v", err)
+		}
+		t.Fatalf("Stream returned an error: %v", err)
+	}
+
+	assert.NotNil(t, response)
+	responseText := strings.TrimSpace(fullText.String())
+	t.Logf("Model response: %q", responseText)
+	assert.Contains(t, strings.ToUpper(responseText), expectedText,
+		"Expected model to read %q from the image, got %q", expectedText, responseText)
+}
+
 func TestGoogleFromLlm2Messages(t *testing.T) {
 	t.Parallel()
 
@@ -418,7 +494,8 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents := googleFromLlm2Messages(messages, false)
+		contents, err := googleFromLlm2Messages(messages, false)
+		assert.NoError(t, err)
 		assert.Len(t, contents, 2)
 		assert.Equal(t, "user", contents[0].Role)
 		assert.Equal(t, "model", contents[1].Role)
@@ -445,7 +522,8 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents := googleFromLlm2Messages(messages, false)
+		contents, err := googleFromLlm2Messages(messages, false)
+		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Equal(t, "user", contents[0].Role)
 		assert.NotNil(t, contents[0].Parts[0].FunctionResponse)
@@ -471,7 +549,8 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents := googleFromLlm2Messages(messages, false)
+		contents, err := googleFromLlm2Messages(messages, false)
+		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Equal(t, "model", contents[0].Role)
 		assert.NotNil(t, contents[0].Parts[0].FunctionCall)
@@ -500,7 +579,8 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents := googleFromLlm2Messages(messages, false)
+		contents, err := googleFromLlm2Messages(messages, false)
+		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Len(t, contents[0].Parts, 2)
 		assert.True(t, contents[0].Parts[0].Thought)
@@ -527,7 +607,8 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents := googleFromLlm2Messages(messages, true)
+		contents, err := googleFromLlm2Messages(messages, true)
+		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Equal(t, []byte("skip_thought_signature_validator"), contents[0].Parts[0].ThoughtSignature)
 	})
@@ -551,7 +632,8 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents := googleFromLlm2Messages(messages, false)
+		contents, err := googleFromLlm2Messages(messages, false)
+		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		resp := contents[0].Parts[0].FunctionResponse.Response
 		assert.Equal(t, "something went wrong", resp["error"])
@@ -580,7 +662,8 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents := googleFromLlm2Messages(messages, false)
+		contents, err := googleFromLlm2Messages(messages, false)
+		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Len(t, contents[0].Parts, 2)
 		assert.True(t, contents[0].Parts[0].Thought)
@@ -610,7 +693,8 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents := googleFromLlm2Messages(messages, false)
+		contents, err := googleFromLlm2Messages(messages, false)
+		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Len(t, contents[0].Parts, 2)
 		assert.False(t, contents[0].Parts[0].Thought)

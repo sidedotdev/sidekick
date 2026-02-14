@@ -60,7 +60,10 @@ func (p GoogleProvider) Stream(ctx context.Context, options Options, eventChan c
 	modelInfo, _ := common.GetModel(options.Params.Provider, model)
 	isReasoningModel := modelInfo != nil && modelInfo.Reasoning
 
-	contents := googleFromLlm2Messages(messages, isReasoningModel)
+	contents, err := googleFromLlm2Messages(messages, isReasoningModel)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert messages: %w", err)
+	}
 
 	config := &genai.GenerateContentConfig{}
 
@@ -439,10 +442,13 @@ func googleFromLlm2ToolChoice(toolChoice common.ToolChoice) (*genai.ToolConfig, 
 	}, nil
 }
 
-func googleFromLlm2Messages(messages []Message, isReasoningModel bool) []*genai.Content {
+const googleMaxInlineBytes = 20 * 1024 * 1024 // 20 MB cumulative inline data limit
+
+func googleFromLlm2Messages(messages []Message, isReasoningModel bool) ([]*genai.Content, error) {
 	var contents []*genai.Content
 	var currentRole string
 	var currentParts []*genai.Part
+	var cumulativeInlineBytes int
 
 	addContent := func() {
 		if len(currentParts) > 0 {
@@ -537,14 +543,51 @@ func googleFromLlm2Messages(messages []Message, isReasoningModel bool) []*genai.
 					})
 				}
 
-			case ContentBlockTypeImage, ContentBlockTypeFile:
+			case ContentBlockTypeImage:
+				if block.Image == nil || block.Image.Url == "" {
+					continue
+				}
+				url := block.Image.Url
+				if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "gs://") {
+					mime := "image/jpeg"
+					if strings.HasSuffix(url, ".png") {
+						mime = "image/png"
+					} else if strings.HasSuffix(url, ".webp") {
+						mime = "image/webp"
+					}
+					currentParts = append(currentParts, &genai.Part{
+						FileData: &genai.FileData{
+							FileURI:  url,
+							MIMEType: mime,
+						},
+					})
+				} else if strings.HasPrefix(url, "data:") {
+					_, mime, data, err := PrepareImageDataURLForLimits(url, googleMaxInlineBytes-cumulativeInlineBytes, 3072)
+					if err != nil {
+						return nil, fmt.Errorf("image preparation failed: %w", err)
+					}
+					cumulativeInlineBytes += len(data)
+					if cumulativeInlineBytes > googleMaxInlineBytes {
+						return nil, fmt.Errorf("cumulative inline image data exceeds %d bytes", googleMaxInlineBytes)
+					}
+					currentParts = append(currentParts, &genai.Part{
+						InlineData: &genai.Blob{
+							MIMEType: mime,
+							Data:     data,
+						},
+					})
+				} else {
+					log.Warn().Str("url", url).Msg("unsupported image URL scheme for Google provider, skipping")
+				}
+
+			case ContentBlockTypeFile:
 				log.Warn().Str("type", string(block.Type)).Msg("unsupported content block type for Google provider, skipping")
 			}
 		}
 	}
 
 	addContent()
-	return contents
+	return contents, nil
 }
 
 func googleFromLlm2Tools(tools []*common.Tool) []*genai.Tool {
