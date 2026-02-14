@@ -33,10 +33,14 @@ func (ctrl *Controller) HydrateChatHistoryHandler(c *gin.Context) {
 		return
 	}
 
-	// Collect all block IDs in order
+	// Collect all block IDs in order, building prefixed storage keys
 	var allBlockIds []string
+	var allStorageKeys []string
 	for _, ref := range req.Refs {
-		allBlockIds = append(allBlockIds, ref.BlockIds...)
+		for _, blockId := range ref.BlockIds {
+			allBlockIds = append(allBlockIds, blockId)
+			allStorageKeys = append(allStorageKeys, fmt.Sprintf("%s:msg:%s", flowId, blockId))
+		}
 	}
 
 	ctx := c.Request.Context()
@@ -44,8 +48,8 @@ func (ctrl *Controller) HydrateChatHistoryHandler(c *gin.Context) {
 	// Fetch all blocks in a single MGet call
 	var blockData [][]byte
 	var err error
-	if len(allBlockIds) > 0 {
-		blockData, err = ctrl.service.MGet(ctx, workspaceId, allBlockIds)
+	if len(allStorageKeys) > 0 {
+		blockData, err = ctrl.service.MGet(ctx, workspaceId, allStorageKeys)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch content blocks"})
 			return
