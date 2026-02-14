@@ -1263,6 +1263,57 @@ func TestMessageFromChatMessage_PreservesContextMarkers(t *testing.T) {
 	})
 }
 
+func TestLlm2ChatHistory_RoundTrip_WithImage(t *testing.T) {
+	t.Parallel()
+
+	_, dataURL := GenerateVisionTestImage(6)
+
+	original := NewLlm2ChatHistory("flow-img", "workspace-img")
+	original.Append(&Message{
+		Role: RoleUser,
+		Content: []ContentBlock{
+			{Type: ContentBlockTypeText, Text: "What text is in this image?"},
+			{
+				Type:  ContentBlockTypeImage,
+				Image: &ImageRef{Url: dataURL},
+			},
+		},
+	})
+	original.Append(&Message{
+		Role: RoleAssistant,
+		Content: []ContentBlock{
+			{Type: ContentBlockTypeText, Text: "The image contains some text."},
+		},
+	})
+
+	storage := newMockKeyValueStorage()
+	err := original.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	data, err := original.MarshalJSON()
+	require.NoError(t, err)
+
+	restored := &Llm2ChatHistory{}
+	err = restored.UnmarshalJSON(data)
+	require.NoError(t, err)
+
+	assert.Equal(t, "flow-img", restored.flowId)
+	assert.Equal(t, "workspace-img", restored.workspaceId)
+
+	err = restored.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	assert.Equal(t, original.Len(), restored.Len())
+
+	// The image data URL must survive the round-trip exactly.
+	restoredMsgs := restored.Llm2Messages()
+	require.Len(t, restoredMsgs, 2)
+	require.Len(t, restoredMsgs[0].Content, 2)
+	assert.Equal(t, ContentBlockTypeImage, restoredMsgs[0].Content[1].Type)
+	require.NotNil(t, restoredMsgs[0].Content[1].Image)
+	assert.Equal(t, dataURL, restoredMsgs[0].Content[1].Image.Url)
+}
+
 func TestLlm2ChatHistory_PersistHydrate_PreservesContextMarkers(t *testing.T) {
 	t.Parallel()
 	storage := newMockKeyValueStorage()
