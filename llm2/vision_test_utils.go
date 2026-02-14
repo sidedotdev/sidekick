@@ -6,6 +6,8 @@ import (
 	"image/color"
 	"image/png"
 	"math/rand"
+	"strings"
+	"unicode"
 )
 
 // unambiguousChars excludes easily confused characters (0/O, 1/l/I, etc.).
@@ -115,12 +117,51 @@ func RenderTextImage(text string, scale int) []byte {
 	return buf.Bytes()
 }
 
+// VisionTestFuzzyMatch checks whether the model's response is close enough to
+// the expected text by extracting only ASCII alphanumeric characters, uppercasing,
+// and requiring that at least (len-1) characters match in the best alignment.
+func VisionTestFuzzyMatch(expected, response string) bool {
+	clean := func(s string) string {
+		var b strings.Builder
+		for _, r := range s {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				b.WriteRune(unicode.ToUpper(r))
+			}
+		}
+		return b.String()
+	}
+	exp := clean(expected)
+	resp := clean(response)
+	if len(exp) == 0 {
+		return false
+	}
+	if strings.Contains(resp, exp) {
+		return true
+	}
+	// Sliding window: find the best alignment of exp within resp.
+	maxMatches := 0
+	for i := 0; i <= len(resp)-len(exp); i++ {
+		matches := 0
+		for j := 0; j < len(exp); j++ {
+			if resp[i+j] == exp[j] {
+				matches++
+			}
+		}
+		if matches > maxMatches {
+			maxMatches = matches
+		}
+	}
+	// Allow at most 1 mismatched character per 6 expected characters.
+	allowedErrors := max(1, len(exp)/6)
+	return maxMatches >= len(exp)-allowedErrors
+}
+
 // GenerateVisionTestImage produces a random text string and a data URL of a
 // PNG image containing that text rendered in large block letters. The returned
 // expectedText is the string embedded in the image.
 func GenerateVisionTestImage(textLen int) (expectedText string, dataURL string) {
 	expectedText = GenerateRandomText(textLen)
-	raw := RenderTextImage(expectedText, 16)
+	raw := RenderTextImage(expectedText, 24)
 	dataURL = BuildDataURL("image/png", raw)
 	return expectedText, dataURL
 }

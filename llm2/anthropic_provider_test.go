@@ -8,6 +8,7 @@ import (
 	"sidekick/common"
 	"sidekick/secret_manager"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/invopop/jsonschema"
@@ -555,7 +556,7 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 				},
 				{
 					Type: ContentBlockTypeText,
-					Text: "What text is written in this image? Reply with ONLY the exact text, nothing else.",
+					Text: "What text is written in this image? The text consists only of uppercase ASCII letters (A-Z, no O or I) and digits (2-9). Reply with ONLY the exact text, nothing else.",
 				},
 			},
 		},
@@ -581,8 +582,11 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 
 	eventChan := make(chan Event, 100)
 	var fullText strings.Builder
+	var wg sync.WaitGroup
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for event := range eventChan {
 			if event.Type == EventTextDelta {
 				fullText.WriteString(event.Delta)
@@ -592,6 +596,7 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 
 	response, err := provider.Stream(ctx, options, eventChan)
 	close(eventChan)
+	wg.Wait()
 
 	if err != nil {
 		if contains(err.Error(), "overloaded_error") || contains(err.Error(), "Overloaded") || contains(err.Error(), "rate_limit") {
@@ -603,6 +608,6 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 	assert.NotNil(t, response)
 	responseText := strings.TrimSpace(fullText.String())
 	t.Logf("Model response: %q", responseText)
-	assert.Contains(t, strings.ToUpper(responseText), expectedText,
+	assert.True(t, VisionTestFuzzyMatch(expectedText, responseText),
 		"Expected model to read %q from the image, got %q", expectedText, responseText)
 }

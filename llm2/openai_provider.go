@@ -314,6 +314,7 @@ func messagesToChatCompletionParams(messages []Message) ([]openai.ChatCompletion
 			}
 
 		case RoleUser:
+			var userParts []openai.ChatCompletionContentPartUnionParam
 			for _, block := range msg.Content {
 				switch block.Type {
 				case ContentBlockTypeText:
@@ -321,14 +322,8 @@ func messagesToChatCompletionParams(messages []Message) ([]openai.ChatCompletion
 					if block.CacheControl != "" {
 						textPart.SetExtraFields(cacheControlExtraFields(block.CacheControl))
 					}
-					result = append(result, openai.ChatCompletionMessageParamUnion{
-						OfUser: &openai.ChatCompletionUserMessageParam{
-							Content: openai.ChatCompletionUserMessageParamContentUnion{
-								OfArrayOfContentParts: []openai.ChatCompletionContentPartUnionParam{
-									{OfText: &textPart},
-								},
-							},
-						},
+					userParts = append(userParts, openai.ChatCompletionContentPartUnionParam{
+						OfText: &textPart,
 					})
 				case ContentBlockTypeImage:
 					if block.Image == nil {
@@ -342,19 +337,12 @@ func messagesToChatCompletionParams(messages []Message) ([]openai.ChatCompletion
 						}
 						url = newURL
 					}
-					detail := "high"
 					if strings.HasPrefix(url, "data:") || strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
-						result = append(result, openai.ChatCompletionMessageParamUnion{
-							OfUser: &openai.ChatCompletionUserMessageParam{
-								Content: openai.ChatCompletionUserMessageParamContentUnion{
-									OfArrayOfContentParts: []openai.ChatCompletionContentPartUnionParam{
-										{OfImageURL: &openai.ChatCompletionContentPartImageParam{
-											ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
-												URL:    url,
-												Detail: detail,
-											},
-										}},
-									},
+						userParts = append(userParts, openai.ChatCompletionContentPartUnionParam{
+							OfImageURL: &openai.ChatCompletionContentPartImageParam{
+								ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
+									URL:    url,
+									Detail: "high",
 								},
 							},
 						})
@@ -380,6 +368,15 @@ func messagesToChatCompletionParams(messages []Message) ([]openai.ChatCompletion
 				default:
 					return nil, fmt.Errorf("unsupported content block type %s for user role", block.Type)
 				}
+			}
+			if len(userParts) > 0 {
+				result = append(result, openai.ChatCompletionMessageParamUnion{
+					OfUser: &openai.ChatCompletionUserMessageParam{
+						Content: openai.ChatCompletionUserMessageParamContentUnion{
+							OfArrayOfContentParts: userParts,
+						},
+					},
+				})
 			}
 
 		case RoleAssistant:
