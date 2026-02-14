@@ -8,6 +8,11 @@ import (
 	"math/rand"
 	"strings"
 	"unicode"
+
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/gofont/gomonobold"
+	"golang.org/x/image/font/opentype"
+	"golang.org/x/image/math/fixed"
 )
 
 // unambiguousChars excludes easily confused characters (0/O, 1/l/I, etc.).
@@ -23,94 +28,55 @@ func GenerateRandomText(length int) string {
 	return string(b)
 }
 
-// font5x7 maps uppercase letters and digits to 5-wide × 7-tall bitmaps.
-// Each entry is 7 rows; each row is a bitmask over 5 columns (MSB = left).
-var font5x7 = map[byte][7]byte{
-	'A': {0x04, 0x0A, 0x11, 0x1F, 0x11, 0x11, 0x11},
-	'B': {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E},
-	'C': {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E},
-	'D': {0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E},
-	'E': {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F},
-	'F': {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10},
-	'G': {0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0E},
-	'H': {0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11},
-	'J': {0x01, 0x01, 0x01, 0x01, 0x01, 0x11, 0x0E},
-	'K': {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11},
-	'L': {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F},
-	'M': {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11},
-	'N': {0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11},
-	'P': {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10},
-	'Q': {0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D},
-	'R': {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11},
-	'S': {0x0E, 0x11, 0x10, 0x0E, 0x01, 0x11, 0x0E},
-	'T': {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04},
-	'U': {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E},
-	'V': {0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04},
-	'W': {0x11, 0x11, 0x11, 0x15, 0x15, 0x1B, 0x11},
-	'X': {0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11},
-	'Y': {0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04},
-	'Z': {0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F},
-	'2': {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F},
-	'3': {0x0E, 0x11, 0x01, 0x06, 0x01, 0x11, 0x0E},
-	'4': {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02},
-	'5': {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E},
-	'6': {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E},
-	'7': {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08},
-	'8': {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E},
-	'9': {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C},
-}
-
 // RenderTextImage creates a high-contrast PNG image with the given text
-// rendered as large block characters. scale controls how many real pixels
-// each font pixel occupies. Returns the raw PNG bytes.
-func RenderTextImage(text string, scale int) []byte {
-	if scale < 1 {
-		scale = 1
+// rendered using Go's built-in bold monospace font. fontSize controls the
+// point size of the rendered text. Returns the raw PNG bytes.
+func RenderTextImage(text string, fontSize int) []byte {
+	if fontSize < 8 {
+		fontSize = 8
 	}
 
-	const (
-		charW   = 5
-		charH   = 7
-		spacing = 1
-	)
-
-	imgW := (len(text)*(charW+spacing) - spacing) * scale
-	if imgW <= 0 {
-		imgW = 1
+	tt, err := opentype.Parse(gomonobold.TTF)
+	if err != nil {
+		panic("failed to parse embedded font: " + err.Error())
 	}
-	imgH := charH * scale
-	padding := 4 * scale
+	face, err := opentype.NewFace(tt, &opentype.FaceOptions{
+		Size:    float64(fontSize),
+		DPI:     72,
+		Hinting: font.HintingFull,
+	})
+	if err != nil {
+		panic("failed to create font face: " + err.Error())
+	}
+	defer face.Close()
 
-	img := image.NewRGBA(image.Rect(0, 0, imgW+2*padding, imgH+2*padding))
+	// Measure the text to determine image dimensions.
+	d := &font.Drawer{Face: face}
+	advance := d.MeasureString(text)
+	textW := advance.Ceil()
+	metrics := face.Metrics()
+	ascent := metrics.Ascent.Ceil()
+	descent := metrics.Descent.Ceil()
+	textH := ascent + descent
+
+	padding := fontSize / 2
+	imgW := textW + 2*padding
+	imgH := textH + 2*padding
+
+	img := image.NewRGBA(image.Rect(0, 0, imgW, imgH))
 
 	// Fill white background.
 	white := color.RGBA{R: 255, G: 255, B: 255, A: 255}
-	black := color.RGBA{R: 0, G: 0, B: 0, A: 255}
-	for y := img.Rect.Min.Y; y < img.Rect.Max.Y; y++ {
-		for x := img.Rect.Min.X; x < img.Rect.Max.X; x++ {
+	for y := 0; y < imgH; y++ {
+		for x := 0; x < imgW; x++ {
 			img.Set(x, y, white)
 		}
 	}
 
-	for ci, ch := range []byte(text) {
-		glyph, ok := font5x7[ch]
-		if !ok {
-			continue
-		}
-		originX := padding + ci*(charW+spacing)*scale
-		originY := padding
-		for row := 0; row < charH; row++ {
-			for col := 0; col < charW; col++ {
-				if glyph[row]&(1<<(4-col)) != 0 {
-					for dy := 0; dy < scale; dy++ {
-						for dx := 0; dx < scale; dx++ {
-							img.Set(originX+col*scale+dx, originY+row*scale+dy, black)
-						}
-					}
-				}
-			}
-		}
-	}
+	d.Dst = img
+	d.Src = image.NewUniform(color.Black)
+	d.Dot = fixed.P(padding, padding+ascent)
+	d.DrawString(text)
 
 	var buf bytes.Buffer
 	_ = png.Encode(&buf, img)
@@ -157,11 +123,11 @@ func VisionTestFuzzyMatch(expected, response string) bool {
 }
 
 // GenerateVisionTestImage produces a random text string and a data URL of a
-// PNG image containing that text rendered in large block letters. The returned
-// expectedText is the string embedded in the image.
+// PNG image containing that text rendered in a large bold monospace font. The
+// returned expectedText is the string embedded in the image.
 func GenerateVisionTestImage(textLen int) (expectedText string, dataURL string) {
 	expectedText = GenerateRandomText(textLen)
-	raw := RenderTextImage(expectedText, 24)
+	raw := RenderTextImage(expectedText, 120)
 	dataURL = BuildDataURL("image/png", raw)
 	return expectedText, dataURL
 }
