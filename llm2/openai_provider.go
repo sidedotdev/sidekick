@@ -330,6 +330,37 @@ func messagesToChatCompletionParams(messages []Message) ([]openai.ChatCompletion
 							},
 						},
 					})
+				case ContentBlockTypeImage:
+					if block.Image == nil {
+						return nil, fmt.Errorf("image block missing Image data")
+					}
+					url := block.Image.Url
+					if strings.HasPrefix(url, "data:") {
+						newURL, _, _, err := PrepareImageDataURLForLimits(url, 20*1024*1024, 2048)
+						if err != nil {
+							return nil, fmt.Errorf("failed to prepare image for OpenAI: %w", err)
+						}
+						url = newURL
+					}
+					detail := "high"
+					if strings.HasPrefix(url, "data:") || strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+						result = append(result, openai.ChatCompletionMessageParamUnion{
+							OfUser: &openai.ChatCompletionUserMessageParam{
+								Content: openai.ChatCompletionUserMessageParamContentUnion{
+									OfArrayOfContentParts: []openai.ChatCompletionContentPartUnionParam{
+										{OfImageURL: &openai.ChatCompletionContentPartImageParam{
+											ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
+												URL:    url,
+												Detail: detail,
+											},
+										}},
+									},
+								},
+							},
+						})
+					} else {
+						return nil, fmt.Errorf("unsupported image URL scheme: %s", url)
+					}
 				case ContentBlockTypeToolResult:
 					if block.ToolResult == nil {
 						return nil, fmt.Errorf("tool_result block missing ToolResult data")

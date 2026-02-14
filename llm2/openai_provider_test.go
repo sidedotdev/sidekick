@@ -9,6 +9,7 @@ import (
 	"sidekick/common"
 	"sidekick/secret_manager"
 	"sidekick/utils"
+	"strings"
 	"sync"
 	"testing"
 
@@ -503,4 +504,79 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 		assert.Greater(t, response.Usage.InputTokens, 0, "InputTokens should be greater than 0 on multi-turn")
 		assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0 on multi-turn")
 	})
+}
+
+func TestOpenAIProvider_ImageIntegration(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
+	ctx := context.Background()
+	provider := OpenAIProvider{}
+
+	expectedText, dataURL := GenerateVisionTestImage(6)
+	t.Logf("Generated vision test image with text: %q", expectedText)
+
+	messages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type:  ContentBlockTypeImage,
+					Image: &ImageRef{Url: dataURL},
+				},
+				{
+					Type: ContentBlockTypeText,
+					Text: "What text is written in this image? Reply with ONLY the exact text, nothing else.",
+				},
+			},
+		},
+	}
+
+	options := Options{
+		Params: Params{
+			ModelConfig: common.ModelConfig{
+				Provider: "openai",
+				Model:    "gpt-4.1-nano-2025-04-14",
+			},
+		},
+		Secrets: secret_manager.SecretManagerContainer{
+			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+				&secret_manager.EnvSecretManager{},
+				&secret_manager.KeyringSecretManager{},
+				&secret_manager.LocalConfigSecretManager{},
+			}),
+		},
+	}
+
+	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+
+	eventChan := make(chan Event, 100)
+	var fullText strings.Builder
+
+	go func() {
+		for event := range eventChan {
+			if event.Type == EventTextDelta {
+				fullText.WriteString(event.Delta)
+			}
+		}
+	}()
+
+	response, err := provider.Stream(ctx, options, eventChan)
+	close(eventChan)
+
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "rate_limit") || strings.Contains(errStr, "429") || strings.Contains(errStr, "quota") {
+			t.Skipf("Skipping test due to OpenAI API rate limit: %v", err)
+		}
+		t.Fatalf("Stream returned an error: %v", err)
+	}
+
+	assert.NotNil(t, response)
+	responseText := strings.TrimSpace(fullText.String())
+	t.Logf("Model response: %q", responseText)
+	assert.Contains(t, strings.ToUpper(responseText), expectedText,
+		"Expected model to read %q from the image, got %q", expectedText, responseText)
 }
