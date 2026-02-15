@@ -119,6 +119,47 @@ func TestReadFileActivity(t *testing.T) {
 	}
 }
 
+func TestReadFileActivity_PathTraversal(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+
+	tests := []struct {
+		name     string
+		filePath string
+	}{
+		{
+			name:     "parent directory prefix",
+			filePath: "../etc/passwd",
+		},
+		{
+			name:     "parent directory in middle",
+			filePath: "subdir/../../etc/passwd",
+		},
+		{
+			name:     "bare parent directory",
+			filePath: "..",
+		},
+		{
+			name:     "absolute path",
+			filePath: "/etc/passwd",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			params := ReadFileActivityInput{
+				FilePath:   tt.filePath,
+				LineNumber: 1,
+				WindowSize: 1,
+			}
+			_, err := ReadFileActivity(tempDir, params)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "file path")
+		})
+	}
+}
+
 func TestReadFileActivity_NonExistentFile(t *testing.T) {
 	tempDir := t.TempDir()
 
