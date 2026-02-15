@@ -60,7 +60,7 @@ func (p GoogleProvider) Stream(ctx context.Context, options Options, eventChan c
 	modelInfo, _ := common.GetModel(options.Params.Provider, model)
 	isReasoningModel := modelInfo != nil && modelInfo.Reasoning
 
-	contents, err := googleFromLlm2Messages(messages, isReasoningModel)
+	contents, err := googleFromLlm2Messages(messages, isReasoningModel, model)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert messages: %w", err)
 	}
@@ -444,11 +444,16 @@ func googleFromLlm2ToolChoice(toolChoice common.ToolChoice) (*genai.ToolConfig, 
 
 const googleMaxInlineBytes = 20 * 1024 * 1024 // 20 MB cumulative inline data limit
 
-func googleFromLlm2Messages(messages []Message, isReasoningModel bool) ([]*genai.Content, error) {
+func isGemini3OrLater(model string) bool {
+	return strings.Contains(model, "gemini-3")
+}
+
+func googleFromLlm2Messages(messages []Message, isReasoningModel bool, model string) ([]*genai.Content, error) {
 	var contents []*genai.Content
 	var currentRole string
 	var currentParts []*genai.Part
 	var cumulativeInlineBytes int
+	supportsMultimodalFuncResponse := isGemini3OrLater(model)
 
 	addContent := func() {
 		if len(currentParts) > 0 {
@@ -538,9 +543,94 @@ func googleFromLlm2Messages(messages []Message, isReasoningModel bool) ([]*genai
 					} else {
 						functionResponse.Response = map[string]any{"output": block.ToolResult.Text}
 					}
+
+					var fallbackImageParts []*genai.Part
+					for i, nested := range block.ToolResult.Content {
+						switch nested.Type {
+						case ContentBlockTypeText:
+							// Already captured in Response["output"] if it's the main text
+						case ContentBlockTypeImage:
+							if nested.Image == nil || nested.Image.Url == "" {
+								continue
+							}
+							url := nested.Image.Url
+							if strings.HasPrefix(url, "data:") {
+								_, mime, data, err := PrepareImageDataURLForLimits(url, googleMaxInlineBytes-cumulativeInlineBytes, 3072)
+								if err != nil {
+									return nil, fmt.Errorf("tool result image preparation failed: %w", err)
+								}
+								cumulativeInlineBytes += len(data)
+								if cumulativeInlineBytes > googleMaxInlineBytes {
+									return nil, fmt.Errorf("cumulative inline image data exceeds %d bytes", googleMaxInlineBytes)
+								}
+								if supportsMultimodalFuncResponse {
+									functionResponse.Parts = append(functionResponse.Parts, &genai.FunctionResponsePart{
+										InlineData: &genai.FunctionResponseBlob{
+											MIMEType:    mime,
+											Data:        data,
+											DisplayName: fmt.Sprintf("tool_result_image_%d", i),
+										},
+									})
+								} else {
+									fallbackImageParts = append(fallbackImageParts, &genai.Part{
+										InlineData: &genai.Blob{
+											MIMEType: mime,
+											Data:     data,
+										},
+									})
+								}
+							} else if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "gs://") {
+								mime := "image/jpeg"
+								if strings.HasSuffix(url, ".png") {
+									mime = "image/png"
+								} else if strings.HasSuffix(url, ".webp") {
+									mime = "image/webp"
+								}
+								if supportsMultimodalFuncResponse {
+									functionResponse.Parts = append(functionResponse.Parts, &genai.FunctionResponsePart{
+										FileData: &genai.FunctionResponseFileData{
+											FileURI:     url,
+											MIMEType:    mime,
+											DisplayName: fmt.Sprintf("tool_result_image_%d", i),
+										},
+									})
+								} else {
+									fallbackImageParts = append(fallbackImageParts, &genai.Part{
+										FileData: &genai.FileData{
+											FileURI:  url,
+											MIMEType: mime,
+										},
+									})
+								}
+							}
+						}
+					}
+
+					// For Gemini 3+, reference inline image parts from the structured response
+					if supportsMultimodalFuncResponse && len(functionResponse.Parts) > 0 {
+						if functionResponse.Response == nil {
+							functionResponse.Response = make(map[string]any)
+						}
+						refs := make([]map[string]any, len(functionResponse.Parts))
+						for idx, p := range functionResponse.Parts {
+							name := fmt.Sprintf("tool_result_image_%d", idx)
+							if p.InlineData != nil {
+								name = p.InlineData.DisplayName
+							} else if p.FileData != nil {
+								name = p.FileData.DisplayName
+							}
+							refs[idx] = map[string]any{"$ref": name}
+						}
+						functionResponse.Response["images"] = refs
+					}
+
 					currentParts = append(currentParts, &genai.Part{
 						FunctionResponse: &functionResponse,
 					})
+
+					// For models that don't support multimodal function responses,
+					// append images as regular user content parts.
+					currentParts = append(currentParts, fallbackImageParts...)
 				}
 
 			case ContentBlockTypeImage:
