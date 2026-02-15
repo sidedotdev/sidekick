@@ -606,24 +606,6 @@ func googleFromLlm2Messages(messages []Message, isReasoningModel bool, model str
 						}
 					}
 
-					// For Gemini 3+, reference inline image parts from the structured response
-					if supportsMultimodalFuncResponse && len(functionResponse.Parts) > 0 {
-						if functionResponse.Response == nil {
-							functionResponse.Response = make(map[string]any)
-						}
-						refs := make([]map[string]any, len(functionResponse.Parts))
-						for idx, p := range functionResponse.Parts {
-							name := fmt.Sprintf("tool_result_image_%d", idx)
-							if p.InlineData != nil {
-								name = p.InlineData.DisplayName
-							} else if p.FileData != nil {
-								name = p.FileData.DisplayName
-							}
-							refs[idx] = map[string]any{"$ref": name}
-						}
-						functionResponse.Response["images"] = refs
-					}
-
 					currentParts = append(currentParts, &genai.Part{
 						FunctionResponse: &functionResponse,
 					})

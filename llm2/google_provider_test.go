@@ -787,12 +787,6 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 		assert.NotNil(t, frPart.FunctionResponse.Parts[0].InlineData)
 		assert.Equal(t, "tool_result_image_0", frPart.FunctionResponse.Parts[0].InlineData.DisplayName)
 
-		// Verify $ref mapping in Response
-		imageRefs, ok := frPart.FunctionResponse.Response["images"].([]map[string]any)
-		assert.True(t, ok)
-		assert.Len(t, imageRefs, 1)
-		assert.Equal(t, "tool_result_image_0", imageRefs[0]["$ref"])
-
 		// No fallback image parts outside the function response
 		assert.Len(t, contents[0].Parts, 1)
 	})
