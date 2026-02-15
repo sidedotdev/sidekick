@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sidekick/common"
 	"sidekick/utils"
+	"strings"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -367,6 +368,46 @@ func reasoningTextFromOpenaiContent(responseReasoningItemContent []responses.Res
 	return text
 }
 
+func hasImageContent(content []ContentBlock) bool {
+	for _, cb := range content {
+		if cb.Type == ContentBlockTypeImage && cb.Image != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func toolResultToResponsesOutputParts(tr *ToolResultBlock) responses.ResponseFunctionCallOutputItemListParam {
+	var parts responses.ResponseFunctionCallOutputItemListParam
+	if tr.Text != "" {
+		parts = append(parts, responses.ResponseFunctionCallOutputItemParamOfInputText(tr.Text))
+	}
+	for _, cb := range tr.Content {
+		switch cb.Type {
+		case ContentBlockTypeText:
+			parts = append(parts, responses.ResponseFunctionCallOutputItemParamOfInputText(cb.Text))
+		case ContentBlockTypeImage:
+			if cb.Image == nil {
+				continue
+			}
+			url := cb.Image.Url
+			if strings.HasPrefix(url, "data:") {
+				newURL, _, _, err := PrepareImageDataURLForLimits(url, 20*1024*1024, 2048)
+				if err == nil {
+					url = newURL
+				}
+			}
+			parts = append(parts, responses.ResponseFunctionCallOutputItemUnionParam{
+				OfInputImage: &responses.ResponseInputImageContentParam{
+					ImageURL: param.NewOpt(url),
+					Detail:   responses.ResponseInputImageContentDetailAuto,
+				},
+			})
+		}
+	}
+	return parts
+}
+
 func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemUnionParam, error) {
 	var items []responses.ResponseInputItemUnionParam
 
@@ -433,10 +474,18 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 				if block.ToolResult.ToolCallId == "" {
 					return nil, fmt.Errorf("tool_result block missing ToolCallId")
 				}
-				items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(
-					block.ToolResult.ToolCallId,
-					block.ToolResult.Text,
-				))
+				if hasImageContent(block.ToolResult.Content) {
+					outputParts := toolResultToResponsesOutputParts(block.ToolResult)
+					items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(
+						block.ToolResult.ToolCallId,
+						outputParts,
+					))
+				} else {
+					items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(
+						block.ToolResult.ToolCallId,
+						block.ToolResult.Text,
+					))
+				}
 
 			case ContentBlockTypeReasoning:
 				if msg.Role != RoleAssistant {
