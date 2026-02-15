@@ -800,3 +800,77 @@ func TestManageLlm2ChatHistory_TruncateOldestFirst(t *testing.T) {
 	assert.True(t, len(toolResp1Text) < 150)
 	assert.NotEmpty(t, toolResp2Text)
 }
+
+func TestLlm2MessageLength_IncludesImageAndFileURLs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		msg      llm2.Message
+		expected int
+	}{
+		{
+			name:     "text only",
+			msg:      textMsg(llm2.RoleUser, "hello"),
+			expected: 5,
+		},
+		{
+			name: "image URL in content block",
+			msg: llm2.Message{
+				Role: llm2.RoleUser,
+				Content: []llm2.ContentBlock{
+					{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: "data:image/png;base64,AAAA"}},
+				},
+			},
+			expected: len("data:image/png;base64,AAAA"),
+		},
+		{
+			name: "file URL in content block",
+			msg: llm2.Message{
+				Role: llm2.RoleUser,
+				Content: []llm2.ContentBlock{
+					{Type: llm2.ContentBlockTypeFile, File: &llm2.FileRef{Url: "data:application/pdf;base64,BBBB"}},
+				},
+			},
+			expected: len("data:application/pdf;base64,BBBB"),
+		},
+		{
+			name: "tool result with nested image content",
+			msg: llm2.Message{
+				Role: llm2.RoleUser,
+				Content: []llm2.ContentBlock{
+					{
+						Type: llm2.ContentBlockTypeToolResult,
+						ToolResult: &llm2.ToolResultBlock{
+							ToolCallId: "tc1",
+							Name:       "read_image",
+							Text:       "ok",
+							Content: []llm2.ContentBlock{
+								{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: "data:image/png;base64,CCCC"}},
+							},
+						},
+					},
+				},
+			},
+			expected: len("ok") + len("data:image/png;base64,CCCC"),
+		},
+		{
+			name: "mixed text and image",
+			msg: llm2.Message{
+				Role: llm2.RoleUser,
+				Content: []llm2.ContentBlock{
+					{Type: llm2.ContentBlockTypeText, Text: "hello"},
+					{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: "data:image/png;base64,DDDD"}},
+				},
+			},
+			expected: 5 + len("data:image/png;base64,DDDD"),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.expected, llm2MessageLength(tc.msg))
+		})
+	}
+}

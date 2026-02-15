@@ -82,10 +82,11 @@ type ToolUseBlock struct {
 
 // Tool result content provided back to the assistant, modeled within a user-role message.
 type ToolResultBlock struct {
-	ToolCallId string `json:"toolCallId"`
-	Name       string `json:"name,omitempty"`
-	IsError    bool   `json:"isError,omitempty"`
-	Text       string `json:"text,omitempty"`
+	ToolCallId string         `json:"toolCallId"`
+	Name       string         `json:"name,omitempty"`
+	IsError    bool           `json:"isError,omitempty"`
+	Text       string         `json:"text,omitempty"`
+	Content    []ContentBlock `json:"content,omitempty"`
 }
 
 // A single content block within a message turn.
