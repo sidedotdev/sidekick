@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"sidekick/coding"
 	"sidekick/llm"
 	"sidekick/utils"
@@ -21,9 +22,26 @@ type ReadFileActivityInput struct {
 	WindowSize int
 }
 
+// validateFilePath rejects paths that would escape the base directory via traversal.
+func validateFilePath(filePath string) error {
+	if filepath.IsAbs(filePath) {
+		return fmt.Errorf("file path must be relative, got: %s", filePath)
+	}
+	for _, segment := range strings.Split(filepath.ToSlash(filePath), "/") {
+		if segment == ".." {
+			return fmt.Errorf("file path must not contain parent directory references: %s", filePath)
+		}
+	}
+	return nil
+}
+
 func ReadFileActivity(baseDir string, readFileParams ReadFileActivityInput) (string, error) {
 	if readFileParams.LineNumber < 1 || readFileParams.WindowSize < 0 {
 		return "", fmt.Errorf("line number must be greater than 0 and window size must be at least 0")
+	}
+
+	if err := validateFilePath(readFileParams.FilePath); err != nil {
+		return "", err
 	}
 
 	filePath := path.Join(baseDir, readFileParams.FilePath)
@@ -116,6 +134,10 @@ func BulkReadFileActivity(baseDir string, params BulkReadFileParams) (BulkReadFi
 	for _, fileLine := range params.FileLines {
 		if fileLine.LineNumber < 1 {
 			return BulkReadFileActivityResult{}, fmt.Errorf("line number must be greater than 0")
+		}
+
+		if err := validateFilePath(fileLine.FilePath); err != nil {
+			return BulkReadFileActivityResult{}, err
 		}
 
 		if !seenFiles[fileLine.FilePath] {
