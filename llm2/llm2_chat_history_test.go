@@ -424,7 +424,7 @@ func TestMessageFromChatMessage_ToolRole(t *testing.T) {
 		require.NotNil(t, msg.Content[0].ToolResult)
 		assert.Equal(t, "call_abc123", msg.Content[0].ToolResult.ToolCallId)
 		assert.Equal(t, "my_tool", msg.Content[0].ToolResult.Name)
-		assert.Equal(t, "tool result content", msg.Content[0].ToolResult.Text)
+		assert.Equal(t, "tool result content", msg.Content[0].ToolResult.TextContent())
 		assert.False(t, msg.Content[0].ToolResult.IsError)
 	})
 
@@ -504,7 +504,7 @@ func TestLlm2ChatHistory_RoundTrip_WithToolCalls(t *testing.T) {
 				Type: ContentBlockTypeToolResult,
 				ToolResult: &ToolResultBlock{
 					ToolCallId: "call_123",
-					Text:       "Search results here",
+					Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "Search results here"}},
 				},
 			},
 		},
@@ -1405,8 +1405,8 @@ func TestLlm2ChatHistory_Hydrate_ResolvesKvImageInToolResult(t *testing.T) {
 				ToolResult: &ToolResultBlock{
 					ToolCallId: "call-1",
 					Name:       "read_image",
-					Text:       "Image loaded",
 					Content: []ContentBlock{
+						{Type: ContentBlockTypeText, Text: "Image loaded"},
 						{
 							Type:  ContentBlockTypeImage,
 							Image: &ImageRef{Url: KvImagePrefix + kvKey},
@@ -1434,8 +1434,9 @@ func TestLlm2ChatHistory_Hydrate_ResolvesKvImageInToolResult(t *testing.T) {
 	require.Len(t, msgs, 1)
 	require.Len(t, msgs[0].Content, 1)
 	require.NotNil(t, msgs[0].Content[0].ToolResult)
-	require.Len(t, msgs[0].Content[0].ToolResult.Content, 1)
-	assert.Equal(t, testDataURL, msgs[0].Content[0].ToolResult.Content[0].Image.Url)
+	require.Len(t, msgs[0].Content[0].ToolResult.Content, 2)
+	assert.Equal(t, "Image loaded", msgs[0].Content[0].ToolResult.Content[0].Text)
+	assert.Equal(t, testDataURL, msgs[0].Content[0].ToolResult.Content[1].Image.Url)
 }
 
 func TestLlm2ChatHistory_Hydrate_NoKvURLsIsNoOp(t *testing.T) {

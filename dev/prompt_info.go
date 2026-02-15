@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sidekick/llm2"
+	"strings"
 )
 
 // PromptInfoContainer  is a wrapper for the PromptInfo interface that provides custom
@@ -221,11 +222,21 @@ func renderGeneralFeedbackPrompt(feedback, feedbackType string) string {
 }
 
 type ToolCallResponseInfo struct {
-	Response          string
 	FunctionName      string
 	ToolCallId        string
 	IsError           bool
 	ToolResultContent []llm2.ContentBlock
+}
+
+// TextResponse returns the concatenated text from all text content blocks.
+func (p ToolCallResponseInfo) TextResponse() string {
+	var sb strings.Builder
+	for _, cb := range p.ToolResultContent {
+		if cb.Type == llm2.ContentBlockTypeText {
+			sb.WriteString(cb.Text)
+		}
+	}
+	return sb.String()
 }
 
 // Implement the PromptInfo interface for ToolCallResponseInfo

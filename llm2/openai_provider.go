@@ -309,7 +309,7 @@ func toolResultImageParts(tr *ToolResultBlock) []openai.ChatCompletionContentPar
 				OfImageURL: &openai.ChatCompletionContentPartImageParam{
 					ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
 						URL:    url,
-						Detail: "auto",
+						Detail: "high",
 					},
 				},
 			})
@@ -383,7 +383,7 @@ func messagesToChatCompletionParams(messages []Message) ([]openai.ChatCompletion
 					toolMsg := openai.ChatCompletionToolMessageParam{
 						ToolCallID: block.ToolResult.ToolCallId,
 						Content: openai.ChatCompletionToolMessageParamContentUnion{
-							OfString: param.NewOpt(block.ToolResult.Text),
+							OfString: param.NewOpt(block.ToolResult.TextContent()),
 						},
 					}
 					if block.CacheControl != "" {

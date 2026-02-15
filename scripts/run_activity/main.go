@@ -124,7 +124,7 @@ func buildActivityRegistry() map[string]interface{} {
 		TreeSitterActivities: treeSitterActivities,
 		LSPActivities:        lspActivities,
 	}
-	readImageActivities := &persisted_ai.ReadImageActivities{
+	readImageActivities := &dev.ReadImageActivities{
 		Storage: service,
 	}
 	vectorActivities := &persisted_ai.VectorActivities{

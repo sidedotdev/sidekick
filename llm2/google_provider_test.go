@@ -222,7 +222,7 @@ func TestGoogleProvider_Integration(t *testing.T) {
 							ToolResult: &ToolResultBlock{
 								ToolCallId: block.ToolUse.Id,
 								Name:       block.ToolUse.Name,
-								Text:       "25",
+								Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "25"}},
 								IsError:    false,
 							},
 						},
@@ -523,8 +523,8 @@ func TestGoogleProvider_ToolResultImageIntegration(t *testing.T) {
 					ToolResult: &ToolResultBlock{
 						ToolCallId: toolCallId,
 						Name:       "read_image",
-						Text:       "Here is the image content:",
 						Content: []ContentBlock{
+							{Type: ContentBlockTypeText, Text: "Here is the image content:"},
 							{
 								Type:  ContentBlockTypeImage,
 								Image: &ImageRef{Url: dataURL},
@@ -649,7 +649,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 						ToolResult: &ToolResultBlock{
 							ToolCallId: "call-123",
 							Name:       "get_weather",
-							Text:       "25 degrees",
+							Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "25 degrees"}},
 							IsError:    false,
 						},
 					},
@@ -760,8 +760,8 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 						ToolResult: &ToolResultBlock{
 							ToolCallId: "call-img-1",
 							Name:       "read_image",
-							Text:       "Image content:",
 							Content: []ContentBlock{
+								{Type: ContentBlockTypeText, Text: "Image content:"},
 								{
 									Type:  ContentBlockTypeImage,
 									Image: &ImageRef{Url: dataURL},
@@ -803,8 +803,8 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 						ToolResult: &ToolResultBlock{
 							ToolCallId: "call-img-2",
 							Name:       "read_image",
-							Text:       "Image content:",
 							Content: []ContentBlock{
+								{Type: ContentBlockTypeText, Text: "Image content:"},
 								{
 									Type:  ContentBlockTypeImage,
 									Image: &ImageRef{Url: dataURL},
@@ -843,7 +843,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 						ToolResult: &ToolResultBlock{
 							ToolCallId: "call-err",
 							Name:       "failing_tool",
-							Text:       "something went wrong",
+							Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "something went wrong"}},
 							IsError:    true,
 						},
 					},

@@ -1,4 +1,4 @@
-package persisted_ai
+package dev
 
 import (
 	"context"
@@ -10,11 +10,49 @@ import (
 	"strings"
 	"testing"
 
-	"sidekick/env"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type mockKVStorage struct {
+	data map[string][]byte
+}
+
+func newMockKVStorage() *mockKVStorage {
+	return &mockKVStorage{data: make(map[string][]byte)}
+}
+
+func (m *mockKVStorage) MGet(_ context.Context, _ string, keys []string) ([][]byte, error) {
+	results := make([][]byte, len(keys))
+	for i, k := range keys {
+		results[i] = m.data[k]
+	}
+	return results, nil
+}
+
+func (m *mockKVStorage) MSet(_ context.Context, _ string, values map[string]interface{}) error {
+	for k, v := range values {
+		if b, ok := v.([]byte); ok {
+			m.data[k] = b
+		}
+	}
+	return nil
+}
+
+func (m *mockKVStorage) MSetRaw(_ context.Context, _ string, values map[string][]byte) error {
+	for k, v := range values {
+		m.data[k] = v
+	}
+	return nil
+}
+
+func (m *mockKVStorage) DeletePrefix(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
+func (m *mockKVStorage) GetKeysWithPrefix(_ context.Context, _ string, _ string) ([]string, error) {
+	return nil, nil
+}
 
 func createTestImage(t *testing.T, dir, filename string) string {
 	t.Helper()
@@ -68,6 +106,12 @@ func TestValidateImagePath(t *testing.T) {
 			errSubstr: "'..'",
 		},
 		{
+			name:      "dotdot that resolves under workdir",
+			filePath:  "a/../b.png",
+			wantErr:   true,
+			errSubstr: "'..'",
+		},
+		{
 			name:     "valid relative path",
 			filePath: "image.png",
 			wantErr:  false,
@@ -106,10 +150,8 @@ func TestReadImageActivity_Success(t *testing.T) {
 	input := ReadImageInput{
 		FlowId:      "flow-123",
 		WorkspaceId: "ws-456",
-		EnvContainer: env.EnvContainer{
-			Env: &env.LocalEnv{WorkingDirectory: workDir},
-		},
-		FilePath: "test.png",
+		WorkDir:     workDir,
+		FilePath:    "test.png",
 	}
 
 	output, err := activities.ReadImageActivity(context.Background(), input)
@@ -133,10 +175,8 @@ func TestReadImageActivity_PathTraversal(t *testing.T) {
 	input := ReadImageInput{
 		FlowId:      "flow-123",
 		WorkspaceId: "ws-456",
-		EnvContainer: env.EnvContainer{
-			Env: &env.LocalEnv{WorkingDirectory: workDir},
-		},
-		FilePath: "../escape.png",
+		WorkDir:     workDir,
+		FilePath:    "../escape.png",
 	}
 
 	_, err := activities.ReadImageActivity(context.Background(), input)
@@ -155,10 +195,8 @@ func TestReadImageActivity_AbsolutePath(t *testing.T) {
 	input := ReadImageInput{
 		FlowId:      "flow-123",
 		WorkspaceId: "ws-456",
-		EnvContainer: env.EnvContainer{
-			Env: &env.LocalEnv{WorkingDirectory: workDir},
-		},
-		FilePath: "/etc/passwd",
+		WorkDir:     workDir,
+		FilePath:    "/etc/passwd",
 	}
 
 	_, err := activities.ReadImageActivity(context.Background(), input)
@@ -179,10 +217,8 @@ func TestReadImageActivity_NotAnImage(t *testing.T) {
 	input := ReadImageInput{
 		FlowId:      "flow-123",
 		WorkspaceId: "ws-456",
-		EnvContainer: env.EnvContainer{
-			Env: &env.LocalEnv{WorkingDirectory: workDir},
-		},
-		FilePath: "not_image.txt",
+		WorkDir:     workDir,
+		FilePath:    "not_image.txt",
 	}
 
 	_, err := activities.ReadImageActivity(context.Background(), input)
@@ -201,10 +237,8 @@ func TestReadImageActivity_FileNotFound(t *testing.T) {
 	input := ReadImageInput{
 		FlowId:      "flow-123",
 		WorkspaceId: "ws-456",
-		EnvContainer: env.EnvContainer{
-			Env: &env.LocalEnv{WorkingDirectory: workDir},
-		},
-		FilePath: "nonexistent.png",
+		WorkDir:     workDir,
+		FilePath:    "nonexistent.png",
 	}
 
 	_, err := activities.ReadImageActivity(context.Background(), input)

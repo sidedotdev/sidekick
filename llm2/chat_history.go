@@ -179,7 +179,7 @@ func MessageFromChatMessage(cm common.ChatMessage) Message {
 					ToolCallId: cm.ToolCallId,
 					Name:       cm.Name,
 					IsError:    cm.IsError,
-					Text:       cm.Content,
+					Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: cm.Content}},
 				},
 				CacheControl: cm.CacheControl,
 				ContextType:  cm.ContextType,

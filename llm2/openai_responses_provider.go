@@ -368,20 +368,8 @@ func reasoningTextFromOpenaiContent(responseReasoningItemContent []responses.Res
 	return text
 }
 
-func hasImageContent(content []ContentBlock) bool {
-	for _, cb := range content {
-		if cb.Type == ContentBlockTypeImage && cb.Image != nil {
-			return true
-		}
-	}
-	return false
-}
-
 func toolResultToResponsesOutputParts(tr *ToolResultBlock) responses.ResponseFunctionCallOutputItemListParam {
 	var parts responses.ResponseFunctionCallOutputItemListParam
-	if tr.Text != "" {
-		parts = append(parts, responses.ResponseFunctionCallOutputItemParamOfInputText(tr.Text))
-	}
 	for _, cb := range tr.Content {
 		switch cb.Type {
 		case ContentBlockTypeText:
@@ -474,18 +462,11 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 				if block.ToolResult.ToolCallId == "" {
 					return nil, fmt.Errorf("tool_result block missing ToolCallId")
 				}
-				if hasImageContent(block.ToolResult.Content) {
-					outputParts := toolResultToResponsesOutputParts(block.ToolResult)
-					items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(
-						block.ToolResult.ToolCallId,
-						outputParts,
-					))
-				} else {
-					items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(
-						block.ToolResult.ToolCallId,
-						block.ToolResult.Text,
-					))
-				}
+				outputParts := toolResultToResponsesOutputParts(block.ToolResult)
+				items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(
+					block.ToolResult.ToolCallId,
+					outputParts,
+				))
 
 			case ContentBlockTypeReasoning:
 				if msg.Role != RoleAssistant {

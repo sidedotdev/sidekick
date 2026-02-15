@@ -465,12 +465,6 @@ func contentBlockToAnthropicParam(block ContentBlock, role Role) (anthropic.Cont
 
 		var contentParts []anthropic.ToolResultBlockParamContentUnion
 
-		if block.ToolResult.Text != "" {
-			contentParts = append(contentParts, anthropic.ToolResultBlockParamContentUnion{
-				OfText: &anthropic.TextBlockParam{Text: block.ToolResult.Text},
-			})
-		}
-
 		for _, nested := range block.ToolResult.Content {
 			switch nested.Type {
 			case ContentBlockTypeText:

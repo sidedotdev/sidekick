@@ -444,8 +444,8 @@ func googleFromLlm2ToolChoice(toolChoice common.ToolChoice) (*genai.ToolConfig, 
 
 const googleMaxInlineBytes = 20 * 1024 * 1024 // 20 MB cumulative inline data limit
 
-func isGemini3OrLater(model string) bool {
-	return strings.Contains(model, "gemini-3")
+func supportsMultimodalFuncResponse(model string) bool {
+	return !strings.Contains(model, "gemini-2") && !strings.Contains(model, "gemini-1")
 }
 
 func googleFromLlm2Messages(messages []Message, isReasoningModel bool, model string) ([]*genai.Content, error) {
@@ -453,7 +453,7 @@ func googleFromLlm2Messages(messages []Message, isReasoningModel bool, model str
 	var currentRole string
 	var currentParts []*genai.Part
 	var cumulativeInlineBytes int
-	supportsMultimodalFuncResponse := isGemini3OrLater(model)
+	supportsMultimodalFuncResponse := supportsMultimodalFuncResponse(model)
 
 	addContent := func() {
 		if len(currentParts) > 0 {
@@ -538,14 +538,16 @@ func googleFromLlm2Messages(messages []Message, isReasoningModel bool, model str
 						ID:   block.ToolResult.ToolCallId,
 						Name: block.ToolResult.Name,
 					}
+					text := block.ToolResult.TextContent()
 					if block.ToolResult.IsError {
-						functionResponse.Response = map[string]any{"error": block.ToolResult.Text}
+						functionResponse.Response = map[string]any{"error": text}
 					} else {
-						functionResponse.Response = map[string]any{"output": block.ToolResult.Text}
+						functionResponse.Response = map[string]any{"output": text}
 					}
 
 					var fallbackImageParts []*genai.Part
-					for i, nested := range block.ToolResult.Content {
+					imageIdx := 0
+					for _, nested := range block.ToolResult.Content {
 						switch nested.Type {
 						case ContentBlockTypeText:
 							// Already captured in Response["output"] if it's the main text
@@ -568,7 +570,7 @@ func googleFromLlm2Messages(messages []Message, isReasoningModel bool, model str
 										InlineData: &genai.FunctionResponseBlob{
 											MIMEType:    mime,
 											Data:        data,
-											DisplayName: fmt.Sprintf("tool_result_image_%d", i),
+											DisplayName: fmt.Sprintf("tool_result_image_%d", imageIdx),
 										},
 									})
 								} else {
@@ -579,6 +581,7 @@ func googleFromLlm2Messages(messages []Message, isReasoningModel bool, model str
 										},
 									})
 								}
+								imageIdx++
 							} else if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "gs://") {
 								mime := "image/jpeg"
 								if strings.HasSuffix(url, ".png") {
@@ -591,7 +594,7 @@ func googleFromLlm2Messages(messages []Message, isReasoningModel bool, model str
 										FileData: &genai.FunctionResponseFileData{
 											FileURI:     url,
 											MIMEType:    mime,
-											DisplayName: fmt.Sprintf("tool_result_image_%d", i),
+											DisplayName: fmt.Sprintf("tool_result_image_%d", imageIdx),
 										},
 									})
 								} else {
@@ -602,6 +605,7 @@ func googleFromLlm2Messages(messages []Message, isReasoningModel bool, model str
 										},
 									})
 								}
+								imageIdx++
 							}
 						}
 					}

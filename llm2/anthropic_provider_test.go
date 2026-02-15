@@ -231,7 +231,7 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 							Type: ContentBlockTypeToolResult,
 							ToolResult: &ToolResultBlock{
 								ToolCallId: block.ToolUse.Id,
-								Text:       "25",
+								Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "25"}},
 								IsError:    false,
 							},
 						},
@@ -468,7 +468,7 @@ func TestAnthropicResponsesProvider_CacheControl(t *testing.T) {
 						Type: ContentBlockTypeToolResult,
 						ToolResult: &ToolResultBlock{
 							ToolCallId: "test-tool-id",
-							Text:       "result text",
+							Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "result text"}},
 							IsError:    false,
 						},
 						CacheControl: "ephemeral",
@@ -657,8 +657,8 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 					ToolResult: &ToolResultBlock{
 						ToolCallId: toolCallId,
 						Name:       "read_image",
-						Text:       "Here is the image content:",
 						Content: []ContentBlock{
+							{Type: ContentBlockTypeText, Text: "Here is the image content:"},
 							{
 								Type:  ContentBlockTypeImage,
 								Image: &ImageRef{Url: dataURL},
