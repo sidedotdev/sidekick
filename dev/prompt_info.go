@@ -3,6 +3,7 @@ package dev
 import (
 	"encoding/json"
 	"fmt"
+	"sidekick/llm2"
 )
 
 // PromptInfoContainer  is a wrapper for the PromptInfo interface that provides custom
@@ -220,10 +221,11 @@ func renderGeneralFeedbackPrompt(feedback, feedbackType string) string {
 }
 
 type ToolCallResponseInfo struct {
-	Response     string
-	FunctionName string
-	ToolCallId   string
-	IsError      bool
+	Response          string
+	FunctionName      string
+	ToolCallId        string
+	IsError           bool
+	ToolResultContent []llm2.ContentBlock
 }
 
 // Implement the PromptInfo interface for ToolCallResponseInfo

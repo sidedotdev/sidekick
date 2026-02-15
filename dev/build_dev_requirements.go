@@ -517,6 +517,23 @@ func addDevRequirementsPrompt(chatHistory *llm2.ChatHistoryContainer, promptInfo
 }
 
 func addToolCallResponse(chatHistory *llm2.ChatHistoryContainer, info ToolCallResponseInfo) {
+	if len(info.ToolResultContent) > 0 {
+		content := []llm2.ContentBlock{{
+			Type: llm2.ContentBlockTypeToolResult,
+			ToolResult: &llm2.ToolResultBlock{
+				ToolCallId: info.ToolCallId,
+				Name:       info.FunctionName,
+				IsError:    info.IsError,
+				Text:       info.Response,
+				Content:    info.ToolResultContent,
+			},
+		}}
+		chatHistory.Append(&llm2.Message{
+			Role:    llm2.RoleUser,
+			Content: content,
+		})
+		return
+	}
 	chatHistory.Append(llm.ChatMessage{
 		Role:       llm.ChatMessageRoleTool,
 		Content:    info.Response,

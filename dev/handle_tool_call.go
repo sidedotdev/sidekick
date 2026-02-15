@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"sidekick/domain"
 	"sidekick/llm"
+	"sidekick/llm2"
+	"sidekick/persisted_ai"
 	"sidekick/utils"
 	"strings"
 
@@ -173,6 +175,28 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult Tool
 			var runCommandParams RunCommandParams
 			response, err = unmarshalAndInvoke(toolCall, &runCommandParams, func() (string, error) {
 				return RunCommand(dCtx, runCommandParams)
+			})
+		case readImageTool.Name:
+			var params ReadImageParams
+			response, err = unmarshalAndInvoke(toolCall, &params, func() (string, error) {
+				flowId := workflow.GetInfo(dCtx).WorkflowExecution.ID
+				var ria *persisted_ai.ReadImageActivities
+				var output persisted_ai.ReadImageOutput
+				actErr := workflow.ExecuteActivity(dCtx.Context, ria.ReadImageActivity, persisted_ai.ReadImageInput{
+					FlowId:       flowId,
+					WorkspaceId:  dCtx.WorkspaceId,
+					EnvContainer: *dCtx.EnvContainer,
+					FilePath:     params.FilePath,
+				}).Get(dCtx, &output)
+				if actErr != nil {
+					return "", actErr
+				}
+				kvURL := persisted_ai.BuildKvImageURL(output.Key)
+				toolCallResult.ToolResultContent = []llm2.ContentBlock{{
+					Type:  llm2.ContentBlockTypeImage,
+					Image: &llm2.ImageRef{Url: kvURL},
+				}}
+				return "Image loaded successfully: " + params.FilePath, nil
 			})
 		default:
 			// FIXME this should be non-retryable but is being retried now (openai can rarely use a function name that we don't support)

@@ -446,11 +446,28 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 			contextType = ContextTypeEditBlockReport
 		}
 	case ToolCallResponseInfo:
-		role = llm.ChatMessageRoleTool
-		content = info.Response
-		name = info.FunctionName
-		toolCallId = info.ToolCallId
-		isError = info.IsError
+		if len(info.ToolResultContent) > 0 {
+			chatHistory.Append(&llm2.Message{
+				Role: llm2.RoleUser,
+				Content: []llm2.ContentBlock{{
+					Type: llm2.ContentBlockTypeToolResult,
+					ToolResult: &llm2.ToolResultBlock{
+						ToolCallId: info.ToolCallId,
+						Name:       info.FunctionName,
+						IsError:    info.IsError,
+						Text:       info.Response,
+						Content:    info.ToolResultContent,
+					},
+				}},
+			})
+			skip = true
+		} else {
+			role = llm.ChatMessageRoleTool
+			content = info.Response
+			name = info.FunctionName
+			toolCallId = info.ToolCallId
+			isError = info.IsError
+		}
 	default:
 		panic("Unsupported prompt type for authoring edit blocks: " + promptInfo.GetType())
 	}
@@ -474,6 +491,7 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	tools = append(tools, currentGetSymbolDefinitionsTool())
 	tools = append(tools, &bulkReadFileTool)
 	tools = append(tools, &runCommandTool)
+	tools = append(tools, &readImageTool)
 
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		tools = append(tools, &getHelpOrInputTool)
