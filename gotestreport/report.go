@@ -34,6 +34,9 @@ type packageResult struct {
 	cached         bool
 	elapsed        float64
 	uniqueTests    map[string]bool
+	testsPassed    int
+	testsFailed    int
+	testsSkipped   int
 	anyTestFailed  bool
 	anyTestSkipped bool
 	headerWritten  bool
@@ -103,6 +106,7 @@ func (s *Streamer) ProcessEvent(ev TestEvent) {
 			pr.packageOutput = nil
 		} else {
 			pr.uniqueTests[ev.Test] = true
+			pr.testsPassed++
 			// Discard buffered output for passing test
 			delete(s.testOutput, testKey(ev.Package, ev.Test))
 		}
@@ -116,6 +120,7 @@ func (s *Streamer) ProcessEvent(ev TestEvent) {
 			s.flushPackageOutput(pr)
 		} else {
 			pr.uniqueTests[ev.Test] = true
+			pr.testsFailed++
 			pr.anyTestFailed = true
 			s.flushTestOutput(pr, ev.Test)
 		}
@@ -126,8 +131,12 @@ func (s *Streamer) ProcessEvent(ev TestEvent) {
 			pr.elapsed = ev.Elapsed
 		} else {
 			pr.uniqueTests[ev.Test] = true
+			pr.testsSkipped++
 			pr.anyTestSkipped = true
-			s.flushTestOutput(pr, ev.Test)
+			// Only emit the test name, not full output
+			s.writePackageHeader(pr)
+			fmt.Fprintf(s.out, "  SKIP: %s\n", ev.Test)
+			delete(s.testOutput, testKey(ev.Package, ev.Test))
 		}
 
 	case "run", "pause", "cont":
@@ -189,7 +198,7 @@ func (s *Streamer) ProcessReader(r io.Reader) error {
 
 // Summary generates the final summary string.
 // If any packages failed, only failed packages are listed.
-// Otherwise all packages are listed.
+// Otherwise all packages are listed, with sibling packages merged.
 func (s *Streamer) Summary() string {
 	if len(s.packages) == 0 {
 		return ""
@@ -199,7 +208,6 @@ func (s *Streamer) Summary() string {
 	sb.WriteString("\n")
 	sb.WriteString("=== Summary ===\n")
 
-	// Collect and sort packages
 	pkgs := make([]*packageResult, 0, len(s.packages))
 	for _, pr := range s.packages {
 		pkgs = append(pkgs, pr)
@@ -216,30 +224,134 @@ func (s *Streamer) Summary() string {
 		}
 	}
 
-	for _, pr := range pkgs {
-		if anyFailed && pr.status != statusFail {
-			continue
+	if anyFailed {
+		for _, pr := range pkgs {
+			if pr.status == statusFail {
+				fmt.Fprintln(&sb, "❌"+formatPackageLine(pr.name, pr))
+			}
 		}
-		sb.WriteString(s.formatPackageLine(pr))
-		sb.WriteString("\n")
+	} else {
+		groups := groupPackages(pkgs)
+		for _, g := range groups {
+			fmt.Fprintln(&sb, g)
+		}
 	}
 
 	return sb.String()
 }
 
-func (s *Streamer) formatPackageLine(pr *packageResult) string {
-	status := string(pr.status)
-	if pr.status == statusPass && pr.cached {
-		status = "PASS (cached)"
+const minSiblingGroupSize = 3
+
+// groupPackages merges sibling packages (sharing a common path prefix)
+// into single summary lines when none have failures.
+func groupPackages(pkgs []*packageResult) []string {
+	var lines []string
+	for i := 0; i < len(pkgs); {
+		// Parent-child: this package is itself a prefix of the next
+		if i+1 < len(pkgs) && strings.HasPrefix(pkgs[i+1].name, pkgs[i].name+"/") {
+			prefix := pkgs[i].name
+			j := i + 1
+			for j < len(pkgs) && strings.HasPrefix(pkgs[j].name, prefix+"/") {
+				j++
+			}
+			lines = append(lines, formatMergedLine(prefix+"/...", pkgs[i:j]))
+			i = j
+			continue
+		}
+
+		// Siblings sharing the same parent directory (at least 2 segments deep
+		// to avoid merging unrelated top-level packages)
+		parent := dirParent(pkgs[i].name)
+		if parent != "" && strings.Contains(parent, "/") {
+			j := i + 1
+			for j < len(pkgs) && dirParent(pkgs[j].name) == parent {
+				j++
+			}
+			if j-i >= minSiblingGroupSize {
+				lines = append(lines, formatMergedLine(parent+"/*", pkgs[i:j]))
+				i = j
+				continue
+			}
+		}
+
+		lines = append(lines, formatPackageLine(pkgs[i].name, pkgs[i]))
+		i++
+	}
+	return lines
+}
+
+func formatMergedLine(displayName string, members []*packageResult) string {
+	merged := mergeResults(members)
+	return formatPackageLine(displayName, merged)
+}
+
+func dirParent(name string) string {
+	idx := strings.LastIndex(name, "/")
+	if idx < 0 {
+		return ""
+	}
+	return name[:idx]
+}
+
+func mergeResults(members []*packageResult) *packageResult {
+	merged := &packageResult{
+		uniqueTests: make(map[string]bool),
+	}
+	allCached := true
+	anyCached := false
+	for _, m := range members {
+		merged.testsPassed += m.testsPassed
+		merged.testsFailed += m.testsFailed
+		merged.testsSkipped += m.testsSkipped
+		for k := range m.uniqueTests {
+			merged.uniqueTests[k] = true
+		}
+		if m.cached {
+			anyCached = true
+		} else if len(m.uniqueTests) > 0 {
+			allCached = false
+		}
+		if m.status == statusFail {
+			merged.status = statusFail
+		}
+	}
+	if merged.status != statusFail {
+		merged.status = statusPass
+	}
+	// Only mark cached if all packages with tests were cached
+	if anyCached && allCached {
+		merged.cached = true
+	}
+	return merged
+}
+
+func formatPackageLine(name string, pr *packageResult) string {
+	total := len(pr.uniqueTests)
+
+	if pr.cached && total == 0 {
+		return fmt.Sprintf("  %s  cached", name)
 	}
 
-	testCount := len(pr.uniqueTests)
-	elapsed := fmt.Sprintf("%.1fs", pr.elapsed)
-
-	if pr.cached && testCount == 0 {
-		return fmt.Sprintf("  %s\t%s\t%s", status, pr.name, elapsed)
+	if total == 0 {
+		return fmt.Sprintf("  %s  no tests", name)
 	}
-	return fmt.Sprintf("  %s\t%s\t%d tests\t%s", status, pr.name, testCount, elapsed)
+
+	var parts []string
+	if pr.testsPassed > 0 {
+		parts = append(parts, fmt.Sprintf("%d passed", pr.testsPassed))
+	}
+	if pr.testsFailed > 0 {
+		parts = append(parts, fmt.Sprintf("%d failed", pr.testsFailed))
+	}
+	if pr.testsSkipped > 0 {
+		parts = append(parts, fmt.Sprintf("%d skipped", pr.testsSkipped))
+	}
+
+	counts := strings.Join(parts, ", ")
+	if pr.cached {
+		counts += " (cached)"
+	}
+	return fmt.Sprintf("  %s  %s", name, counts)
 }
 
 // HasFailures returns true if any package failed.
