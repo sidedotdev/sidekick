@@ -31,14 +31,14 @@ func GetOpenaiFuncArgs(ctx context.Context, la LlmActivities, toolOptions llm.To
 	return json.Unmarshal([]byte(llm.RepairJson(jsonStr)), funcArgs)
 }
 
-// ForceToolCallWithTrackOptionsV2
+// ForceToolCallWithTrackOptionsV2 forces the LLM to produce a tool call using the given
 // ChatHistoryContainer and delegates to ExecuteChatStream for LLM calls.
 // Returns common.MessageResponse which provides GetMessage().GetToolCalls() for accessing tool calls.
 func ForceToolCallWithTrackOptionsV2(
 	actionCtx flow_action.ActionContext,
 	trackOptions flow_action.TrackOptions,
 	modelConfig common.ModelConfig,
-	chatHistory *llm2.ChatHistoryContainer,
+	chatHistory *ChatHistoryContainer,
 	tools ...*llm.Tool,
 ) (common.MessageResponse, error) {
 
@@ -50,26 +50,26 @@ func ForceToolCallWithTrackOptionsV2(
 		toolChoice.Name = tools[0].Name
 	}
 
-	options := ChatStreamOptionsV2{
+	streamInput := StreamInput{
 		Options: llm2.Options{
-			Secrets: *actionCtx.Secrets,
 			Params: llm2.Params{
-				ChatHistory: chatHistory,
 				ModelConfig: modelConfig,
 				Tools:       tools,
 				ToolChoice:  toolChoice,
 			},
 		},
+		Secrets:     *actionCtx.Secrets,
+		ChatHistory: chatHistory,
 		WorkspaceId: actionCtx.WorkspaceId,
 		FlowId:      workflow.GetInfo(actionCtx).WorkflowExecution.ID,
 		Providers:   actionCtx.Providers,
 	}
 
-	actionCtx.ActionParams = options.ActionParams()
+	actionCtx.ActionParams = streamInput.ActionParams()
 	response, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
-		options.FlowActionId = flowAction.Id
+		streamInput.FlowActionId = flowAction.Id
 
-		msgResponse, err := ExecuteChatStream(actionCtx, options)
+		msgResponse, err := ExecuteChatStream(actionCtx, streamInput)
 		if err != nil {
 			return nil, err
 		}
@@ -79,23 +79,22 @@ func ForceToolCallWithTrackOptionsV2(
 
 	// Append the response to chat history
 	if err == nil {
-		chatHistory.Append(response.GetMessage())
+		AppendChatHistory(actionCtx, chatHistory, response.GetMessage())
 	}
 
 	// single retry in case the llm is being dumb and not returning a tool call
 	if err == nil && len(response.GetMessage().GetToolCalls()) == 0 {
-		// Use common.ChatMessage for compatibility with both history types
 		retryMsg := common.ChatMessage{
 			Role:    common.ChatMessageRoleSystem,
 			Content: "Expected a tool call, but didn't get it. Embedding the json in the content is not sufficient. Please use the provided tool(s).",
 		}
-		chatHistory.Append(retryMsg)
+		AppendChatHistory(actionCtx, chatHistory, retryMsg)
 
-		actionCtx.ActionParams = options.ActionParams()
+		actionCtx.ActionParams = streamInput.ActionParams()
 		response, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
-			options.FlowActionId = flowAction.Id
+			streamInput.FlowActionId = flowAction.Id
 
-			msgResponse, err := ExecuteChatStream(actionCtx, options)
+			msgResponse, err := ExecuteChatStream(actionCtx, streamInput)
 			if err != nil {
 				return nil, err
 			}
@@ -109,13 +108,38 @@ func ForceToolCallWithTrackOptionsV2(
 
 		// Append the retry response to chat history
 		if err == nil {
-			chatHistory.Append(response.GetMessage())
+			AppendChatHistory(actionCtx, chatHistory, response.GetMessage())
 		}
 	}
 
 	return response, err
 }
 
-func ForceToolCall(actionCtx flow_action.ActionContext, modelConfig common.ModelConfig, chatHistory *llm2.ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
+func ForceToolCall(actionCtx flow_action.ActionContext, modelConfig common.ModelConfig, chatHistory *ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
 	return ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, tools...)
+}
+
+// AppendChatHistory appends a message to chat history, using an activity to
+// persist for llm2 history or direct append for legacy history.
+func AppendChatHistory(ctx workflow.Context, chatHistory *ChatHistoryContainer, msg common.Message) {
+	llm2History, ok := chatHistory.History.(*Llm2ChatHistory)
+	if !ok {
+		chatHistory.Append(msg)
+		return
+	}
+
+	m := MessageFromCommon(msg)
+
+	var cha *ChatHistoryActivities
+	var ref *MessageRef
+	input := AppendMessageInput{
+		FlowId:      llm2History.FlowId(),
+		WorkspaceId: llm2History.WorkspaceId(),
+		Message:     m,
+	}
+	err := workflow.ExecuteActivity(ctx, cha.AppendMessage, input).Get(ctx, &ref)
+	if err != nil {
+		panic(fmt.Errorf("AppendChatHistory failed: %w", err))
+	}
+	llm2History.AppendRef(*ref)
 }

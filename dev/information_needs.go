@@ -5,6 +5,7 @@ import (
 	"sidekick/common"
 	"sidekick/llm"
 	"sidekick/llm2"
+	"sidekick/persisted_ai"
 	"strings"
 
 	"github.com/invopop/jsonschema"
@@ -27,7 +28,6 @@ func llmInputForIdentifyInformationNeeds(dCtx DevContext) llm2.Options {
 	modelConfig := dCtx.GetModelConfig(common.QueryExpansionKey, 0, "small") // query expansion is an easy task
 
 	return llm2.Options{
-		Secrets: *dCtx.Secrets,
 		Params: llm2.Params{
 			ModelConfig: modelConfig,
 			// TODO /gen use a tool for this, after defining the tool more
@@ -45,7 +45,7 @@ func llmInputForIdentifyInformationNeeds(dCtx DevContext) llm2.Options {
 	}
 }
 
-func IdentifyInformationNeeds(dCtx DevContext, chatHistory *llm2.ChatHistoryContainer, repoSummary string, requirements string) (InformationNeeds, error) {
+func IdentifyInformationNeeds(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, repoSummary string, requirements string) (InformationNeeds, error) {
 	prompt := fmt.Sprintf(`Repository Summary:
 
 %s
@@ -71,14 +71,13 @@ and variable names.
 `, repoSummary, requirements)
 	actionName := "requirements_query_expansion"
 
-	chatHistory.Append(&llm2.Message{
-		Role:    "user",
-		Content: []llm2.ContentBlock{{Type: "text", Text: prompt}},
+	AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
+		Role:    llm.ChatMessageRoleUser,
+		Content: prompt,
 	})
 	options := llmInputForIdentifyInformationNeeds(dCtx)
-	options.Params.ChatHistory = chatHistory
 
-	chatResponse, err := TrackedToolChat(dCtx, actionName, options)
+	chatResponse, err := TrackedToolChat(dCtx, actionName, options, chatHistory)
 	if err != nil {
 		return InformationNeeds{}, err
 	}

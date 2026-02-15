@@ -1,4 +1,4 @@
-package llm2
+package persisted_ai
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"sidekick/common"
+	"sidekick/llm2"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -72,10 +73,10 @@ func TestLlm2ChatHistory_NewLlm2ChatHistory(t *testing.T) {
 func TestLlm2ChatHistory_Append(t *testing.T) {
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
 
-	msg := &Message{
-		Role: RoleUser,
-		Content: []ContentBlock{
-			{Type: ContentBlockTypeText, Text: "Hello"},
+	msg := &llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "Hello"},
 		},
 	}
 
@@ -92,17 +93,17 @@ func TestLlm2ChatHistory_Len(t *testing.T) {
 
 	assert.Equal(t, 0, h.Len())
 
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "1"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "1"}}})
 	assert.Equal(t, 1, h.Len())
 
-	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "2"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "2"}}})
 	assert.Equal(t, 2, h.Len())
 }
 
 func TestLlm2ChatHistory_Get(t *testing.T) {
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "First"}}})
-	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Second"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "First"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Second"}}})
 
 	t.Run("valid indices", func(t *testing.T) {
 		msg := h.Get(0)
@@ -127,9 +128,9 @@ func TestLlm2ChatHistory_Get(t *testing.T) {
 
 func TestLlm2ChatHistory_Set(t *testing.T) {
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Original"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Original"}}})
 
-	h.Set(0, &Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Updated"}}})
+	h.Set(0, &llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Updated"}}})
 
 	assert.Equal(t, "Updated", h.Get(0).GetContentString())
 	assert.Contains(t, h.unpersisted, 0)
@@ -137,8 +138,8 @@ func TestLlm2ChatHistory_Set(t *testing.T) {
 
 func TestLlm2ChatHistory_Messages(t *testing.T) {
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
-	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hi"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hi"}}})
 
 	messages := h.Messages()
 
@@ -151,8 +152,8 @@ func TestLlm2ChatHistory_Messages(t *testing.T) {
 
 func TestLlm2ChatHistory_MarshalJSON_ProducesWrapperFormat(t *testing.T) {
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello world"}}})
-	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hi there"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello world"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hi there"}}})
 
 	// Persist to generate refs
 	storage := newMockKeyValueStorage()
@@ -242,8 +243,8 @@ func TestLlm2ChatHistory_UnmarshalJSON_EmptyRefsIsHydrated(t *testing.T) {
 func TestLlm2ChatHistory_Hydrate_RestoresContent(t *testing.T) {
 	// Create storage with pre-populated content blocks using flow-prefixed keys
 	storage := newMockKeyValueStorage()
-	block1 := ContentBlock{Type: ContentBlockTypeText, Text: "Hello from user"}
-	block2 := ContentBlock{Type: ContentBlockTypeText, Text: "Hello from assistant"}
+	block1 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Hello from user"}
+	block2 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Hello from assistant"}
 	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
 		"flow-123:msg:block-1": block1,
 		"flow-123:msg:block-2": block2,
@@ -273,7 +274,7 @@ func TestLlm2ChatHistory_Hydrate_RestoresContent(t *testing.T) {
 
 func TestLlm2ChatHistory_Hydrate_AlreadyHydrated(t *testing.T) {
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
 
 	// Should be a no-op
 	err := h.Hydrate(context.Background(), nil)
@@ -299,17 +300,17 @@ func TestLlm2ChatHistory_Hydrate_EmptyRefs(t *testing.T) {
 
 func TestLlm2ChatHistory_Persist_StoresContentBlocks(t *testing.T) {
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	h.Append(&Message{
-		Role: RoleUser,
-		Content: []ContentBlock{
-			{Type: ContentBlockTypeText, Text: "Hello"},
-			{Type: ContentBlockTypeText, Text: "World"},
+	h.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "Hello"},
+			{Type: llm2.ContentBlockTypeText, Text: "World"},
 		},
 	})
-	h.Append(&Message{
-		Role: RoleAssistant,
-		Content: []ContentBlock{
-			{Type: ContentBlockTypeText, Text: "Hi there"},
+	h.Append(&llm2.Message{
+		Role: llm2.RoleAssistant,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "Hi there"},
 		},
 	})
 
@@ -354,22 +355,22 @@ func TestLlm2ChatHistory_Persist_NotHydrated(t *testing.T) {
 func TestLlm2ChatHistory_RoundTrip(t *testing.T) {
 	// Create and populate history
 	original := NewLlm2ChatHistory("flow-123", "workspace-456")
-	original.Append(&Message{
-		Role: RoleUser,
-		Content: []ContentBlock{
-			{Type: ContentBlockTypeText, Text: "Hello, how are you?"},
+	original.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "Hello, how are you?"},
 		},
 	})
-	original.Append(&Message{
-		Role: RoleAssistant,
-		Content: []ContentBlock{
-			{Type: ContentBlockTypeText, Text: "I'm doing well, thank you!"},
+	original.Append(&llm2.Message{
+		Role: llm2.RoleAssistant,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "I'm doing well, thank you!"},
 		},
 	})
-	original.Append(&Message{
-		Role: RoleUser,
-		Content: []ContentBlock{
-			{Type: ContentBlockTypeText, Text: "Great to hear!"},
+	original.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "Great to hear!"},
 		},
 	})
 
@@ -418,9 +419,9 @@ func TestMessageFromChatMessage_ToolRole(t *testing.T) {
 
 		msg := MessageFromChatMessage(cm)
 
-		assert.Equal(t, RoleUser, msg.Role)
+		assert.Equal(t, llm2.RoleUser, msg.Role)
 		require.Len(t, msg.Content, 1)
-		assert.Equal(t, ContentBlockTypeToolResult, msg.Content[0].Type)
+		assert.Equal(t, llm2.ContentBlockTypeToolResult, msg.Content[0].Type)
 		require.NotNil(t, msg.Content[0].ToolResult)
 		assert.Equal(t, "call_abc123", msg.Content[0].ToolResult.ToolCallId)
 		assert.Equal(t, "my_tool", msg.Content[0].ToolResult.Name)
@@ -440,7 +441,7 @@ func TestMessageFromChatMessage_ToolRole(t *testing.T) {
 
 		msg := MessageFromChatMessage(cm)
 
-		assert.Equal(t, RoleUser, msg.Role)
+		assert.Equal(t, llm2.RoleUser, msg.Role)
 		require.NotNil(t, msg.Content[0].ToolResult)
 		assert.True(t, msg.Content[0].ToolResult.IsError)
 	})
@@ -448,48 +449,48 @@ func TestMessageFromChatMessage_ToolRole(t *testing.T) {
 	t.Run("converts user role to text content", func(t *testing.T) {
 		t.Parallel()
 		cm := common.ChatMessage{
-			Role:    common.ChatMessageRoleUser,
+			Role:    "user",
 			Content: "hello",
 		}
 
 		msg := MessageFromChatMessage(cm)
 
-		assert.Equal(t, RoleUser, msg.Role)
+		assert.Equal(t, llm2.RoleUser, msg.Role)
 		require.Len(t, msg.Content, 1)
-		assert.Equal(t, ContentBlockTypeText, msg.Content[0].Type)
+		assert.Equal(t, llm2.ContentBlockTypeText, msg.Content[0].Type)
 		assert.Equal(t, "hello", msg.Content[0].Text)
 	})
 
 	t.Run("converts assistant role to text content", func(t *testing.T) {
 		t.Parallel()
 		cm := common.ChatMessage{
-			Role:    common.ChatMessageRoleAssistant,
+			Role:    "assistant",
 			Content: "response",
 		}
 
 		msg := MessageFromChatMessage(cm)
 
-		assert.Equal(t, RoleAssistant, msg.Role)
+		assert.Equal(t, llm2.RoleAssistant, msg.Role)
 		require.Len(t, msg.Content, 1)
-		assert.Equal(t, ContentBlockTypeText, msg.Content[0].Type)
+		assert.Equal(t, llm2.ContentBlockTypeText, msg.Content[0].Type)
 		assert.Equal(t, "response", msg.Content[0].Text)
 	})
 }
 
 func TestLlm2ChatHistory_RoundTrip_WithToolCalls(t *testing.T) {
 	original := NewLlm2ChatHistory("flow-123", "workspace-456")
-	original.Append(&Message{
-		Role: RoleUser,
-		Content: []ContentBlock{
-			{Type: ContentBlockTypeText, Text: "Search for something"},
+	original.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "Search for something"},
 		},
 	})
-	original.Append(&Message{
-		Role: RoleAssistant,
-		Content: []ContentBlock{
+	original.Append(&llm2.Message{
+		Role: llm2.RoleAssistant,
+		Content: []llm2.ContentBlock{
 			{
-				Type: ContentBlockTypeToolUse,
-				ToolUse: &ToolUseBlock{
+				Type: llm2.ContentBlockTypeToolUse,
+				ToolUse: &llm2.ToolUseBlock{
 					Id:        "call_123",
 					Name:      "search",
 					Arguments: `{"query": "test"}`,
@@ -497,12 +498,12 @@ func TestLlm2ChatHistory_RoundTrip_WithToolCalls(t *testing.T) {
 			},
 		},
 	})
-	original.Append(&Message{
-		Role: RoleUser,
-		Content: []ContentBlock{
+	original.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
 			{
-				Type: ContentBlockTypeToolResult,
-				ToolResult: &ToolResultBlock{
+				Type: llm2.ContentBlockTypeToolResult,
+				ToolResult: &llm2.ToolResultBlock{
 					ToolCallId: "call_123",
 					Text:       "Search results here",
 				},
@@ -587,7 +588,7 @@ func TestLlm2ChatHistory_AccessorsPanicWhenNotHydrated(t *testing.T) {
 
 	t.Run("Set panics", func(t *testing.T) {
 		assert.Panics(t, func() {
-			h.Set(0, &Message{})
+			h.Set(0, &llm2.Message{})
 		})
 	})
 
@@ -597,9 +598,9 @@ func TestLlm2ChatHistory_AccessorsPanicWhenNotHydrated(t *testing.T) {
 		})
 	})
 
-	t.Run("Append panics", func(t *testing.T) {
+	t.Run("Append panics when not hydrated", func(t *testing.T) {
 		assert.Panics(t, func() {
-			h.Append(&Message{})
+			h.Append(&llm2.Message{})
 		})
 	})
 }
@@ -630,7 +631,7 @@ func TestChatHistoryContainer_UnmarshalJSON_DetectsLlm2Format(t *testing.T) {
 func TestChatHistoryContainer_UnmarshalJSON_PreservesWorkspaceId(t *testing.T) {
 	// Create history with workspace ID, persist, marshal via container
 	original := NewLlm2ChatHistory("flow-123", "workspace-456")
-	original.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
+	original.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
 
 	storage := newMockKeyValueStorage()
 	err := original.Persist(context.Background(), storage, NewKsuidGenerator())
@@ -683,8 +684,8 @@ func TestChatHistoryContainer_UnmarshalJSON_EmptyRefsIsHydrated(t *testing.T) {
 
 func TestChatHistoryContainer_UnmarshalJSON_FallsBackToLegacy(t *testing.T) {
 	msgs := []common.ChatMessage{
-		{Role: common.ChatMessageRoleUser, Content: "Hello"},
-		{Role: common.ChatMessageRoleAssistant, Content: "Hi there"},
+		{Role: "user", Content: "Hello"},
+		{Role: "assistant", Content: "Hi there"},
 	}
 	data, err := json.Marshal(msgs)
 	require.NoError(t, err)
@@ -703,15 +704,15 @@ func TestChatHistoryContainer_UnmarshalJSON_FallsBackToLegacy(t *testing.T) {
 
 func TestLlm2ChatHistory_Llm2Messages(t *testing.T) {
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
-	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hi"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hi"}}})
 
 	messages := h.Llm2Messages()
 
 	assert.Len(t, messages, 2)
-	assert.Equal(t, RoleUser, messages[0].Role)
+	assert.Equal(t, llm2.RoleUser, messages[0].Role)
 	assert.Equal(t, "Hello", messages[0].Content[0].Text)
-	assert.Equal(t, RoleAssistant, messages[1].Role)
+	assert.Equal(t, llm2.RoleAssistant, messages[1].Role)
 	assert.Equal(t, "Hi", messages[1].Content[0].Text)
 }
 
@@ -731,16 +732,16 @@ func TestLlm2ChatHistory_SetMessages(t *testing.T) {
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
 
 	// Add initial message
-	h.Append(&Message{
-		Role:    RoleUser,
-		Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "initial"}},
+	h.Append(&llm2.Message{
+		Role:    llm2.RoleUser,
+		Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "initial"}},
 	})
 
 	// Replace with new messages
-	newMessages := []Message{
-		{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "first"}}},
-		{Role: RoleAssistant, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "second"}}},
-		{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "third"}}},
+	newMessages := []llm2.Message{
+		{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "first"}}},
+		{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "second"}}},
+		{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "third"}}},
 	}
 	h.SetMessages(newMessages)
 
@@ -764,15 +765,15 @@ func TestLlm2ChatHistory_SetMessages_PanicsWhenNotHydrated(t *testing.T) {
 	}
 
 	assert.Panics(t, func() {
-		h.SetMessages([]Message{})
+		h.SetMessages([]llm2.Message{})
 	})
 }
 
 func TestLlm2ChatHistory_Hydrate_MultipleBlocksPerMessage(t *testing.T) {
 	storage := newMockKeyValueStorage()
-	block1 := ContentBlock{Type: ContentBlockTypeText, Text: "Part 1"}
-	block2 := ContentBlock{Type: ContentBlockTypeText, Text: "Part 2"}
-	block3 := ContentBlock{Type: ContentBlockTypeText, Text: "Part 3"}
+	block1 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Part 1"}
+	block2 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Part 2"}
+	block3 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Part 3"}
 	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
 		"flow-123:msg:block-1": block1,
 		"flow-123:msg:block-2": block2,
@@ -802,7 +803,7 @@ func TestLlm2ChatHistory_Hydrate_MultipleBlocksPerMessage(t *testing.T) {
 
 func TestLlm2ChatHistory_Hydrate_PreservesFlowId(t *testing.T) {
 	storage := newMockKeyValueStorage()
-	block1 := ContentBlock{Type: ContentBlockTypeText, Text: "Hello"}
+	block1 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Hello"}
 	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
 		"flow-123:msg:block-1": block1,
 	})
@@ -824,7 +825,7 @@ func TestLlm2ChatHistory_Hydrate_PreservesFlowId(t *testing.T) {
 
 func TestLlm2ChatHistory_Refs_ReturnsDefensiveCopy(t *testing.T) {
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
 
 	storage := newMockKeyValueStorage()
 	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
@@ -843,7 +844,7 @@ func TestLlm2ChatHistory_Refs_ReturnsDefensiveCopy(t *testing.T) {
 
 func TestLlm2ChatHistory_SetRefs_MarksNotHydrated(t *testing.T) {
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
 
 	assert.True(t, h.IsHydrated())
 
@@ -859,8 +860,8 @@ func TestLlm2ChatHistory_SetRefs_MarksNotHydrated(t *testing.T) {
 func TestLlm2ChatHistory_SetRefs_CachesExistingBlocks(t *testing.T) {
 	// Create and persist a history with two messages
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "First message"}}})
-	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Second message"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "First message"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Second message"}}})
 
 	storage := newMockKeyValueStorage()
 	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
@@ -870,7 +871,7 @@ func TestLlm2ChatHistory_SetRefs_CachesExistingBlocks(t *testing.T) {
 	require.Len(t, originalRefs, 2)
 
 	// SetRefs with a subset that reuses one existing block and adds a new one
-	newBlock := ContentBlock{Type: ContentBlockTypeText, Text: "New message"}
+	newBlock := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "New message"}
 	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
 		"flow-123:msg:new-block-id": newBlock,
 	})
@@ -901,9 +902,9 @@ func TestLlm2ChatHistory_Hydrate_OnlyFetchesMissingBlocks(t *testing.T) {
 	}
 
 	// Pre-populate storage with flow-prefixed keys
-	block1 := ContentBlock{Type: ContentBlockTypeText, Text: "First"}
-	block2 := ContentBlock{Type: ContentBlockTypeText, Text: "Second"}
-	block3 := ContentBlock{Type: ContentBlockTypeText, Text: "Third"}
+	block1 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "First"}
+	block2 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Second"}
+	block3 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Third"}
 	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
 		"flow-123:msg:block-1": block1,
 		"flow-123:msg:block-2": block2,
@@ -912,8 +913,8 @@ func TestLlm2ChatHistory_Hydrate_OnlyFetchesMissingBlocks(t *testing.T) {
 
 	// Create a hydrated history with two messages
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{block1}})
-	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{block2}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{block1}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{block2}})
 
 	// Manually set refs to match the blocks (bare IDs)
 	h.refs = []MessageRef{
@@ -948,7 +949,7 @@ func TestLlm2ChatHistory_Hydrate_OnlyFetchesMissingBlocks(t *testing.T) {
 
 func TestLlm2ChatHistory_Persist_PopulatesCache(t *testing.T) {
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
 
 	storage := newMockKeyValueStorage()
 	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
@@ -990,8 +991,8 @@ func (t *trackingMockStorage) MGet(ctx context.Context, workspaceId string, keys
 func TestLlm2ChatHistory_Persist_UsesDeterministicGenerator(t *testing.T) {
 	t.Parallel()
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
-	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "World"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "World"}}})
 
 	storage := newMockKeyValueStorage()
 
@@ -1022,9 +1023,9 @@ func TestLlm2ChatHistory_Persist_UsesDeterministicGenerator(t *testing.T) {
 func TestLlm2ChatHistory_Persist_BlockIdsDoNotContainMessageIndex(t *testing.T) {
 	t.Parallel()
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "First"}}})
-	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Second"}}})
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Third"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "First"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Second"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Third"}}})
 
 	storage := newMockKeyValueStorage()
 	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
@@ -1044,7 +1045,7 @@ func TestLlm2ChatHistory_Persist_BlockIdsDoNotContainMessageIndex(t *testing.T) 
 func TestLlm2ChatHistory_Persist_ModifiedMessageGetsNewBlockIds(t *testing.T) {
 	t.Parallel()
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Original"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Original"}}})
 
 	storage := newMockKeyValueStorage()
 
@@ -1063,7 +1064,7 @@ func TestLlm2ChatHistory_Persist_ModifiedMessageGetsNewBlockIds(t *testing.T) {
 	assert.Equal(t, "id-1", originalBlockId)
 
 	// Modify the message via Set
-	h.Set(0, &Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Modified"}}})
+	h.Set(0, &llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Modified"}}})
 
 	// Second persist - should generate new block IDs
 	err = h.Persist(context.Background(), storage, gen)
@@ -1084,7 +1085,7 @@ func TestLlm2ChatHistory_Persist_ModifiedMessageGetsNewBlockIds(t *testing.T) {
 	assert.True(t, newExists, "new block should exist in storage")
 
 	// New block should have the modified content
-	var block ContentBlock
+	var block llm2.ContentBlock
 	json.Unmarshal(storage.data["flow-123:msg:id-2"], &block)
 	assert.Equal(t, "Modified", block.Text)
 }
@@ -1092,7 +1093,7 @@ func TestLlm2ChatHistory_Persist_ModifiedMessageGetsNewBlockIds(t *testing.T) {
 func TestLlm2ChatHistory_Persist_SetFlowIdUsesNewNamespace(t *testing.T) {
 	t.Parallel()
 	h := NewLlm2ChatHistory("old-flow", "workspace-456")
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
 
 	storage := newMockKeyValueStorage()
 
@@ -1115,7 +1116,7 @@ func TestLlm2ChatHistory_Persist_SetFlowIdUsesNewNamespace(t *testing.T) {
 
 	// Change flow ID and modify message
 	h.SetFlowId("new-flow")
-	h.Set(0, &Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Updated"}}})
+	h.Set(0, &llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Updated"}}})
 
 	// Second persist should store under new flow namespace in storage
 	err = h.Persist(context.Background(), storage, gen)
@@ -1132,12 +1133,12 @@ func TestLlm2ChatHistory_Persist_SetFlowIdUsesNewNamespace(t *testing.T) {
 func TestLlm2ChatHistory_Persist_RefsConsistentWithMessages(t *testing.T) {
 	t.Parallel()
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{
-		{Type: ContentBlockTypeText, Text: "Block1"},
-		{Type: ContentBlockTypeText, Text: "Block2"},
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{
+		{Type: llm2.ContentBlockTypeText, Text: "Block1"},
+		{Type: llm2.ContentBlockTypeText, Text: "Block2"},
 	}})
-	h.Append(&Message{Role: RoleAssistant, Content: []ContentBlock{
-		{Type: ContentBlockTypeText, Text: "Response"},
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{
+		{Type: llm2.ContentBlockTypeText, Text: "Response"},
 	}})
 
 	storage := newMockKeyValueStorage()
@@ -1165,12 +1166,12 @@ func TestLlm2ChatHistory_Persist_RefsConsistentWithMessages(t *testing.T) {
 func TestLlm2ChatHistory_Persist_StoredBlocksDeserializeCorrectly(t *testing.T) {
 	t.Parallel()
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
-	originalBlock := ContentBlock{
-		Type:         ContentBlockTypeText,
+	originalBlock := llm2.ContentBlock{
+		Type:         llm2.ContentBlockTypeText,
 		Text:         "Hello World",
 		CacheControl: "ephemeral",
 	}
-	h.Append(&Message{Role: RoleUser, Content: []ContentBlock{originalBlock}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{originalBlock}})
 
 	storage := newMockKeyValueStorage()
 
@@ -1187,8 +1188,8 @@ func TestLlm2ChatHistory_Persist_StoredBlocksDeserializeCorrectly(t *testing.T) 
 	blockId := refs[0].BlockIds[0]
 
 	// Storage key is flow-prefixed
-	storedData := storage.data[storageKey("flow-123", blockId)]
-	var retrievedBlock ContentBlock
+	storedData := storage.data[StorageKey("flow-123", blockId)]
+	var retrievedBlock llm2.ContentBlock
 	err = json.Unmarshal(storedData, &retrievedBlock)
 	require.NoError(t, err)
 
@@ -1199,7 +1200,7 @@ func TestLlm2ChatHistory_Persist_StoredBlocksDeserializeCorrectly(t *testing.T) 
 
 func TestChatHistoryContainer_UnmarshalJSON_PreservesFlowId(t *testing.T) {
 	original := NewLlm2ChatHistory("flow-999", "workspace-456")
-	original.Append(&Message{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Hello"}}})
+	original.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
 
 	storage := newMockKeyValueStorage()
 	err := original.Persist(context.Background(), storage, NewKsuidGenerator())
@@ -1230,7 +1231,7 @@ func TestMessageFromChatMessage_PreservesContextMarkers(t *testing.T) {
 	t.Run("text message preserves ContextType and CacheControl", func(t *testing.T) {
 		t.Parallel()
 		cm := common.ChatMessage{
-			Role:         common.ChatMessageRoleUser,
+			Role:         "user",
 			Content:      "system instructions",
 			ContextType:  "InitialInstructions",
 			CacheControl: "ephemeral",
@@ -1257,7 +1258,7 @@ func TestMessageFromChatMessage_PreservesContextMarkers(t *testing.T) {
 		msg := MessageFromChatMessage(cm)
 
 		require.Len(t, msg.Content, 1)
-		assert.Equal(t, ContentBlockTypeToolResult, msg.Content[0].Type)
+		assert.Equal(t, llm2.ContentBlockTypeToolResult, msg.Content[0].Type)
 		assert.Equal(t, "TestResult", msg.Content[0].ContextType)
 		assert.Equal(t, "ephemeral", msg.Content[0].CacheControl)
 	})
@@ -1266,23 +1267,23 @@ func TestMessageFromChatMessage_PreservesContextMarkers(t *testing.T) {
 func TestLlm2ChatHistory_RoundTrip_WithImage(t *testing.T) {
 	t.Parallel()
 
-	_, dataURL := GenerateVisionTestImage(6)
+	_, dataURL := llm2.GenerateVisionTestImage(6)
 
 	original := NewLlm2ChatHistory("flow-img", "workspace-img")
-	original.Append(&Message{
-		Role: RoleUser,
-		Content: []ContentBlock{
-			{Type: ContentBlockTypeText, Text: "What text is in this image?"},
+	original.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "What text is in this image?"},
 			{
-				Type:  ContentBlockTypeImage,
-				Image: &ImageRef{Url: dataURL},
+				Type:  llm2.ContentBlockTypeImage,
+				Image: &llm2.ImageRef{Url: dataURL},
 			},
 		},
 	})
-	original.Append(&Message{
-		Role: RoleAssistant,
-		Content: []ContentBlock{
-			{Type: ContentBlockTypeText, Text: "The image contains some text."},
+	original.Append(&llm2.Message{
+		Role: llm2.RoleAssistant,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "The image contains some text."},
 		},
 	})
 
@@ -1309,7 +1310,7 @@ func TestLlm2ChatHistory_RoundTrip_WithImage(t *testing.T) {
 	restoredMsgs := restored.Llm2Messages()
 	require.Len(t, restoredMsgs, 2)
 	require.Len(t, restoredMsgs[0].Content, 2)
-	assert.Equal(t, ContentBlockTypeImage, restoredMsgs[0].Content[1].Type)
+	assert.Equal(t, llm2.ContentBlockTypeImage, restoredMsgs[0].Content[1].Type)
 	require.NotNil(t, restoredMsgs[0].Content[1].Image)
 	assert.Equal(t, dataURL, restoredMsgs[0].Content[1].Image.Url)
 }
@@ -1320,7 +1321,7 @@ func TestLlm2ChatHistory_PersistHydrate_PreservesContextMarkers(t *testing.T) {
 
 	history := NewLlm2ChatHistory("flow-123", "workspace-456")
 	history.Append(&common.ChatMessage{
-		Role:         common.ChatMessageRoleUser,
+		Role:         "user",
 		Content:      "system instructions",
 		ContextType:  "InitialInstructions",
 		CacheControl: "ephemeral",

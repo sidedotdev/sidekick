@@ -12,7 +12,6 @@ import (
 	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
-	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/utils"
 	"strings"
@@ -244,7 +243,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 	var requiredCodeContext RequiredCodeContext
 	var codeContext string
 	chatHistory := NewVersionedChatHistory(actionCtx, actionCtx.WorkspaceId)
-	addCodeContextPrompt(chatHistory, promptInfo)
+	addCodeContextPrompt(actionCtx, chatHistory, promptInfo)
 	noRetryCtx := utils.NoRetryCtx(actionCtx)
 	attempts := 0
 	iterationsSinceLastFeedback := 0
@@ -256,7 +255,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			return nil, "", fmt.Errorf("failed to check for pause: %v", err)
 		}
 		if userResponse != nil && userResponse.Content != "" {
-			addCodeContextPrompt(chatHistory, FeedbackInfo{
+			addCodeContextPrompt(actionCtx, chatHistory, FeedbackInfo{
 				Feedback: userResponse.Content,
 				Type:     FeedbackTypePause,
 			})
@@ -278,7 +277,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to get user feedback: %v", err)
 			}
-			addCodeContextPrompt(chatHistory, userFeedback)
+			addCodeContextPrompt(actionCtx, chatHistory, userFeedback)
 			iterationsSinceLastFeedback = 0
 		} else if attempts%3 == 0 {
 			chatCtx := actionCtx.DevContext.WithCancelOnPause()
@@ -291,7 +290,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			}
 			toolCallResponseInfos := handleToolCalls(actionCtx.DevContext, toolCalls, nil)
 			for _, info := range toolCallResponseInfos {
-				addCodeContextPrompt(chatHistory, info)
+				addCodeContextPrompt(actionCtx, chatHistory, info)
 			}
 		}
 
@@ -319,7 +318,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		}
 		if hasUnmarshalError {
 			for _, feedback := range feedbacks {
-				addCodeContextPrompt(chatHistory, feedback)
+				addCodeContextPrompt(actionCtx, chatHistory, feedback)
 			}
 			continue
 		}
@@ -336,7 +335,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		allSymbolDefinitions, retrievalFeedbacks := retrieveCodeContextForToolCalls(noRetryCtx, actionCtx.EnvContainer, toolCallResults)
 		if len(retrievalFeedbacks) > 0 {
 			for _, feedback := range retrievalFeedbacks {
-				addCodeContextPrompt(chatHistory, feedback)
+				addCodeContextPrompt(actionCtx, chatHistory, feedback)
 			}
 			continue
 		}
@@ -363,7 +362,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			feedback := "Error: the code context requested is too long to include. YOU MUST SHORTEN THE CODE CONTEXT REQUESTED. DO NOT REQUEST SO MANY FUNCTIONS AND TYPES IN SO MANY FILES. If you're not asking for too many symbols, then be more specific in your request - eg request just a few methods instead of a big class."
 			for _, tcResult := range toolCallResults {
 				promptInfo = ToolCallResponseInfo{Response: feedback, ToolCallId: tcResult.ToolCall.Id, FunctionName: tcResult.ToolCall.Name}
-				addCodeContextPrompt(chatHistory, promptInfo)
+				addCodeContextPrompt(actionCtx, chatHistory, promptInfo)
 			}
 			continue
 		} else {
@@ -451,7 +450,7 @@ type ToolCallWithCodeContext struct {
 // ForceToolRetrieveCodeContext forces the LLM to call get_symbol_definitions and
 // returns all tool calls with their parsed RequiredCodeContext. Each tool call is
 // parsed independently; if parsing fails for a tool call, its Err field is set.
-func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *llm2.ChatHistoryContainer) ([]ToolCallWithCodeContext, error) {
+func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *persisted_ai.ChatHistoryContainer) ([]ToolCallWithCodeContext, error) {
 	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
 	response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(
 		actionCtx.FlowActionContext(),
@@ -569,7 +568,7 @@ func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.Env
 	return allSymbolDefinitions, feedbacks
 }
 
-func addCodeContextPrompt(chatHistory *llm2.ChatHistoryContainer, promptInfo PromptInfo) {
+func addCodeContextPrompt(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) {
 	var content string
 	role := llm.ChatMessageRoleUser
 	name := ""
@@ -602,7 +601,7 @@ func addCodeContextPrompt(chatHistory *llm2.ChatHistoryContainer, promptInfo Pro
 	}
 
 	if !skip {
-		chatHistory.Append(llm.ChatMessage{
+		AppendChatHistory(ctx, chatHistory, llm.ChatMessage{
 			Role:         role,
 			Content:      content,
 			Name:         name,

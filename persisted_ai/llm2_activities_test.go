@@ -1,31 +1,37 @@
-package llm2
+package persisted_ai
 
 import (
 	"testing"
 
 	"sidekick/common"
+	"sidekick/llm2"
+	"sidekick/secret_manager"
 )
 
-func TestActionParams_OmitsReasoningEffortWhenEmpty(t *testing.T) {
-	options := Options{
-		Params: Params{
-			ChatHistory: newTestChatHistoryWithMessages([]Message{
-				{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "test"}}},
-			}),
+func newTestStreamInput(options llm2.Options) StreamInput {
+	return StreamInput{
+		Options: options,
+		Secrets: secret_manager.SecretManagerContainer{SecretManager: secret_manager.MockSecretManager{}},
+	}
+}
+
+func TestStreamInputActionParams_OmitsReasoningEffortWhenEmpty(t *testing.T) {
+	t.Parallel()
+	si := newTestStreamInput(llm2.Options{
+		Params: llm2.Params{
 			Tools: []*common.Tool{},
 			ModelConfig: common.ModelConfig{
 				Provider: "openai",
 				Model:    "gpt-4",
 			},
 		},
-	}
+	})
 
-	params := options.ActionParams()
+	params := si.ActionParams()
 
 	if _, exists := params["reasoningEffort"]; exists {
 		t.Errorf("Expected reasoningEffort key to be absent when ReasoningEffort is empty, but it was present")
 	}
-
 	if params["provider"] != "openai" {
 		t.Errorf("Expected provider to be 'openai', got %v", params["provider"])
 	}
@@ -34,32 +40,22 @@ func TestActionParams_OmitsReasoningEffortWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestActionParams_IncludesReasoningEffortWhenSet(t *testing.T) {
+func TestStreamInputActionParams_IncludesReasoningEffortWhenSet(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		reasoningEffort string
 	}{
-		{
-			name:            "low reasoning effort",
-			reasoningEffort: "low",
-		},
-		{
-			name:            "medium reasoning effort",
-			reasoningEffort: "medium",
-		},
-		{
-			name:            "high reasoning effort",
-			reasoningEffort: "high",
-		},
+		{"low reasoning effort", "low"},
+		{"medium reasoning effort", "medium"},
+		{"high reasoning effort", "high"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			options := Options{
-				Params: Params{
-					ChatHistory: newTestChatHistoryWithMessages([]Message{
-						{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "test"}}},
-					}),
+			t.Parallel()
+			si := newTestStreamInput(llm2.Options{
+				Params: llm2.Params{
 					Tools: []*common.Tool{},
 					ModelConfig: common.ModelConfig{
 						Provider:        "openai",
@@ -67,9 +63,9 @@ func TestActionParams_IncludesReasoningEffortWhenSet(t *testing.T) {
 						ReasoningEffort: tt.reasoningEffort,
 					},
 				},
-			}
+			})
 
-			params := options.ActionParams()
+			params := si.ActionParams()
 
 			reasoningEffort, exists := params["reasoningEffort"]
 			if !exists {
@@ -78,7 +74,6 @@ func TestActionParams_IncludesReasoningEffortWhenSet(t *testing.T) {
 			if reasoningEffort != tt.reasoningEffort {
 				t.Errorf("Expected reasoningEffort to be '%s', got %v", tt.reasoningEffort, reasoningEffort)
 			}
-
 			if params["provider"] != "openai" {
 				t.Errorf("Expected provider to be 'openai', got %v", params["provider"])
 			}
@@ -89,26 +84,23 @@ func TestActionParams_IncludesReasoningEffortWhenSet(t *testing.T) {
 	}
 }
 
-func TestActionParams_OmitsMaxTokensWhenUnset(t *testing.T) {
-	options := Options{
-		Params: Params{
-			ChatHistory: newTestChatHistoryWithMessages([]Message{
-				{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "test"}}},
-			}),
+func TestStreamInputActionParams_OmitsMaxTokensWhenUnset(t *testing.T) {
+	t.Parallel()
+	si := newTestStreamInput(llm2.Options{
+		Params: llm2.Params{
 			Tools: []*common.Tool{},
 			ModelConfig: common.ModelConfig{
 				Provider: "anthropic",
 				Model:    "claude-3-5-sonnet-latest",
 			},
 		},
-	}
+	})
 
-	params := options.ActionParams()
+	params := si.ActionParams()
 
 	if _, exists := params["maxTokens"]; exists {
 		t.Errorf("Expected maxTokens key to be absent when MaxTokens is unset, but it was present")
 	}
-
 	if params["provider"] != "anthropic" {
 		t.Errorf("Expected provider to be 'anthropic', got %v", params["provider"])
 	}
@@ -117,32 +109,22 @@ func TestActionParams_OmitsMaxTokensWhenUnset(t *testing.T) {
 	}
 }
 
-func TestActionParams_IncludesMaxTokensWhenSet(t *testing.T) {
+func TestStreamInputActionParams_IncludesMaxTokensWhenSet(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		maxTokens int
 	}{
-		{
-			name:      "small max tokens",
-			maxTokens: 123,
-		},
-		{
-			name:      "medium max tokens",
-			maxTokens: 4000,
-		},
-		{
-			name:      "large max tokens",
-			maxTokens: 8000,
-		},
+		{"small max tokens", 123},
+		{"medium max tokens", 4000},
+		{"large max tokens", 8000},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			options := Options{
-				Params: Params{
-					ChatHistory: newTestChatHistoryWithMessages([]Message{
-						{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "test"}}},
-					}),
+			t.Parallel()
+			si := newTestStreamInput(llm2.Options{
+				Params: llm2.Params{
 					Tools:     []*common.Tool{},
 					MaxTokens: tt.maxTokens,
 					ModelConfig: common.ModelConfig{
@@ -150,18 +132,17 @@ func TestActionParams_IncludesMaxTokensWhenSet(t *testing.T) {
 						Model:    "claude-3-5-sonnet-latest",
 					},
 				},
-			}
+			})
 
-			params := options.ActionParams()
+			params := si.ActionParams()
 
 			maxTokens, exists := params["maxTokens"]
 			if !exists {
 				t.Errorf("Expected maxTokens key to be present when MaxTokens is %d, but it was absent", tt.maxTokens)
 			}
-			if maxTokens != tt.maxTokens {
+			if maxTokens != float64(tt.maxTokens) {
 				t.Errorf("Expected maxTokens to be %d, got %v", tt.maxTokens, maxTokens)
 			}
-
 			if params["provider"] != "anthropic" {
 				t.Errorf("Expected provider to be 'anthropic', got %v", params["provider"])
 			}
@@ -172,26 +153,23 @@ func TestActionParams_IncludesMaxTokensWhenSet(t *testing.T) {
 	}
 }
 
-func TestActionParams_OmitsServiceTierWhenEmpty(t *testing.T) {
-	options := Options{
-		Params: Params{
-			ChatHistory: newTestChatHistoryWithMessages([]Message{
-				{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "test"}}},
-			}),
+func TestStreamInputActionParams_OmitsServiceTierWhenEmpty(t *testing.T) {
+	t.Parallel()
+	si := newTestStreamInput(llm2.Options{
+		Params: llm2.Params{
 			Tools: []*common.Tool{},
 			ModelConfig: common.ModelConfig{
 				Provider: "openai",
 				Model:    "gpt-4",
 			},
 		},
-	}
+	})
 
-	params := options.ActionParams()
+	params := si.ActionParams()
 
 	if _, exists := params["serviceTier"]; exists {
 		t.Errorf("Expected serviceTier key to be absent when ServiceTier is empty, but it was present")
 	}
-
 	if params["provider"] != "openai" {
 		t.Errorf("Expected provider to be 'openai', got %v", params["provider"])
 	}
@@ -200,32 +178,22 @@ func TestActionParams_OmitsServiceTierWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestActionParams_IncludesServiceTierWhenSet(t *testing.T) {
+func TestStreamInputActionParams_IncludesServiceTierWhenSet(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		serviceTier string
 	}{
-		{
-			name:        "default service tier",
-			serviceTier: "default",
-		},
-		{
-			name:        "flex service tier",
-			serviceTier: "flex",
-		},
-		{
-			name:        "priority service tier",
-			serviceTier: "priority",
-		},
+		{"default service tier", "default"},
+		{"flex service tier", "flex"},
+		{"priority service tier", "priority"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			options := Options{
-				Params: Params{
-					ChatHistory: newTestChatHistoryWithMessages([]Message{
-						{Role: RoleUser, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "test"}}},
-					}),
+			t.Parallel()
+			si := newTestStreamInput(llm2.Options{
+				Params: llm2.Params{
 					Tools: []*common.Tool{},
 					ModelConfig: common.ModelConfig{
 						Provider:    "openai",
@@ -233,9 +201,9 @@ func TestActionParams_IncludesServiceTierWhenSet(t *testing.T) {
 						ServiceTier: tt.serviceTier,
 					},
 				},
-			}
+			})
 
-			params := options.ActionParams()
+			params := si.ActionParams()
 
 			serviceTier, exists := params["serviceTier"]
 			if !exists {
@@ -244,7 +212,6 @@ func TestActionParams_IncludesServiceTierWhenSet(t *testing.T) {
 			if serviceTier != tt.serviceTier {
 				t.Errorf("Expected serviceTier to be '%s', got %v", tt.serviceTier, serviceTier)
 			}
-
 			if params["provider"] != "openai" {
 				t.Errorf("Expected provider to be 'openai', got %v", params["provider"])
 			}
@@ -252,5 +219,31 @@ func TestActionParams_IncludesServiceTierWhenSet(t *testing.T) {
 				t.Errorf("Expected model to be 'gpt-4', got %v", params["model"])
 			}
 		})
+	}
+}
+
+func TestStreamInputActionParams_IncludesMessagesAndSecretType(t *testing.T) {
+	t.Parallel()
+	si := StreamInput{
+		Options: llm2.Options{
+			Params: llm2.Params{
+				Tools: []*common.Tool{},
+				ModelConfig: common.ModelConfig{
+					Provider: "openai",
+					Model:    "gpt-4",
+				},
+			},
+		},
+		Secrets:     secret_manager.SecretManagerContainer{SecretManager: secret_manager.MockSecretManager{}},
+		ChatHistory: &ChatHistoryContainer{},
+	}
+
+	params := si.ActionParams()
+
+	if _, exists := params["messages"]; !exists {
+		t.Error("Expected messages key to be present")
+	}
+	if _, exists := params["secretManagerType"]; !exists {
+		t.Error("Expected secretManagerType key to be present")
 	}
 }

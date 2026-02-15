@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/env"
 	"sidekick/fflag"
@@ -33,7 +34,7 @@ type AuthorEditBlocksTestSuite struct {
 	// a wrapper is required to set the ctx1 value, so that we can a method that
 	// isn't a real workflow. otherwise we get errors about not having
 	// StartToClose or ScheduleToCloseTimeout set
-	wrapperWorkflow func(ctx workflow.Context, chatHistory *llm2.ChatHistoryContainer, pic PromptInfoContainer) ([]EditBlock, error)
+	wrapperWorkflow func(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, pic PromptInfoContainer) ([]EditBlock, error)
 }
 
 func (s *AuthorEditBlocksTestSuite) SetupTest() {
@@ -46,7 +47,7 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 
 	// s.NewTestActivityEnvironment()
-	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *llm2.ChatHistoryContainer, pic PromptInfoContainer) ([]EditBlock, error) {
+	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, pic PromptInfoContainer) ([]EditBlock, error) {
 		ctx1 := utils.NoRetryCtx(ctx)
 		execContext := DevContext{
 			ExecContext: flow_action.ExecContext{
@@ -82,12 +83,18 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	s.env.OnActivity(ka.MSetRaw, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	s.env.OnActivity(ka.MGet, mock.Anything, mock.Anything, mock.Anything).Return([][]byte{}, nil).Maybe()
 
-	// Mock ManageV3 activity - manages chat history for llm2 path
+	// Mock ChatHistoryActivities for llm2 path
 	var cha *persisted_ai.ChatHistoryActivities
 	s.env.OnActivity(cha.ManageV3, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
-		func(ctx context.Context, chatHistory *llm2.ChatHistoryContainer, workspaceId string, maxLength int) (*llm2.ChatHistoryContainer, error) {
+		func(ctx context.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, maxLength int) (*persisted_ai.ChatHistoryContainer, error) {
 			return chatHistory, nil
 		},
+	).Maybe()
+	s.env.OnActivity(cha.AppendMessage, mock.Anything, mock.Anything).Return(
+		&persisted_ai.MessageRef{BlockIds: []string{"mock-block"}, Role: "user"}, nil,
+	).Maybe()
+	s.env.OnActivity(cha.ExtractVisibleCodeBlocks, mock.Anything, mock.Anything).Return(
+		[]tree_sitter.CodeBlock{}, nil,
 	).Maybe()
 
 	// Create temporary directory using t.TempDir()
@@ -113,7 +120,7 @@ func TestAuthorEditBlockTestSuite(t *testing.T) {
 }
 
 func (s *AuthorEditBlocksTestSuite) TestInitialCodeInfoNoEditBlocks() {
-	chatHistory := &llm2.ChatHistoryContainer{History: llm2.NewLlm2ChatHistory("", "")}
+	chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 	var la *persisted_ai.Llm2Activities // use a nil struct pointer to call activities that are part of a structure
 	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		// Simulate progress events being handled

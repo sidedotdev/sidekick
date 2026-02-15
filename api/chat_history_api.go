@@ -6,12 +6,13 @@ import (
 	"net/http"
 
 	"sidekick/llm2"
+	"sidekick/persisted_ai"
 
 	"github.com/gin-gonic/gin"
 )
 
 type HydrateChatHistoryRequest struct {
-	Refs []llm2.MessageRef `json:"refs"`
+	Refs []persisted_ai.MessageRef `json:"refs"`
 }
 
 type HydrateChatHistoryResponse struct {

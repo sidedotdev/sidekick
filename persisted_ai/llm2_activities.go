@@ -7,7 +7,9 @@ import (
 	"sidekick/domain"
 	"sidekick/llm"
 	"sidekick/llm2"
+	"sidekick/secret_manager"
 	"sidekick/srv"
+	"sidekick/utils"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -15,12 +17,27 @@ import (
 )
 
 // StreamInput is the activity input for LLM streaming that carries chat history for hydration.
+// It separates chat history and secrets from pure LLM config (Options) so that
+// providers never see storage-aware types.
 type StreamInput struct {
 	Options      llm2.Options
+	Secrets      secret_manager.SecretManagerContainer
+	ChatHistory  *ChatHistoryContainer
 	WorkspaceId  string
 	FlowId       string
 	FlowActionId string
 	Providers    []common.ModelProviderPublicConfig
+}
+
+// ActionParams returns action parameters for flow action tracking.
+func (si StreamInput) ActionParams() map[string]any {
+	params, err := utils.StructToMap(si.Options.Params)
+	if err != nil {
+		params = map[string]any{}
+	}
+	params["messages"] = si.ChatHistory
+	params["secretManagerType"] = si.Secrets.GetType()
+	return params
 }
 
 // Llm2Activities provides LLM streaming activities using the llm2 package types.
@@ -32,11 +49,11 @@ type Llm2Activities struct {
 // Stream executes an LLM streaming request and sends events to the flow event stream.
 // It hydrates the chat history from storage and derives messages at runtime.
 func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.MessageResponse, error) {
-	if input.Options.Params.ChatHistory == nil {
-		return nil, fmt.Errorf("ChatHistory is required in StreamInput.Options.Params")
+	if input.ChatHistory == nil {
+		return nil, fmt.Errorf("ChatHistory is required in StreamInput")
 	}
 
-	if err := input.Options.Params.ChatHistory.Hydrate(ctx, la.Storage); err != nil {
+	if err := input.ChatHistory.Hydrate(ctx, la.Storage); err != nil {
 		return nil, fmt.Errorf("failed to hydrate chat history: %w", err)
 	}
 
@@ -106,7 +123,19 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		return nil, err
 	}
 
-	response, err := provider.Stream(ctx, input.Options, eventChan)
+	llm2History, ok := input.ChatHistory.History.(*Llm2ChatHistory)
+	if !ok {
+		close(eventChan)
+		return nil, fmt.Errorf("Stream requires Llm2ChatHistory, got %T", input.ChatHistory.History)
+	}
+
+	request := llm2.StreamRequest{
+		Messages:      llm2History.Llm2Messages(),
+		Options:       input.Options,
+		SecretManager: input.Secrets.SecretManager,
+	}
+
+	response, err := provider.Stream(ctx, request, eventChan)
 	close(eventChan)
 
 	if response != nil {

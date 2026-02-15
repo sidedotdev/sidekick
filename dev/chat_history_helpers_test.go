@@ -1,7 +1,7 @@
 package dev
 
 import (
-	"sidekick/llm2"
+	"sidekick/persisted_ai"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
@@ -24,7 +24,7 @@ func (s *NewVersionedChatHistoryTestSuite) TearDownTest() {
 }
 
 func (s *NewVersionedChatHistoryTestSuite) Test_Version1_CreatesLlm2ChatHistory() {
-	testWorkflow := func(ctx workflow.Context) (*llm2.ChatHistoryContainer, error) {
+	testWorkflow := func(ctx workflow.Context) (*persisted_ai.ChatHistoryContainer, error) {
 		return NewVersionedChatHistory(ctx, "test-workspace"), nil
 	}
 	s.env.RegisterWorkflow(testWorkflow)
@@ -35,15 +35,15 @@ func (s *NewVersionedChatHistoryTestSuite) Test_Version1_CreatesLlm2ChatHistory(
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
-	var result *llm2.ChatHistoryContainer
+	var result *persisted_ai.ChatHistoryContainer
 	s.NoError(s.env.GetWorkflowResult(&result))
 
-	_, ok := result.History.(*llm2.Llm2ChatHistory)
+	_, ok := result.History.(*persisted_ai.Llm2ChatHistory)
 	s.True(ok, "Expected Llm2ChatHistory for version 1")
 }
 
 func (s *NewVersionedChatHistoryTestSuite) Test_DefaultVersion_CreatesLegacyChatHistory() {
-	testWorkflow := func(ctx workflow.Context) (*llm2.ChatHistoryContainer, error) {
+	testWorkflow := func(ctx workflow.Context) (*persisted_ai.ChatHistoryContainer, error) {
 		return NewVersionedChatHistory(ctx, "test-workspace"), nil
 	}
 	s.env.RegisterWorkflow(testWorkflow)
@@ -54,10 +54,10 @@ func (s *NewVersionedChatHistoryTestSuite) Test_DefaultVersion_CreatesLegacyChat
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
-	var result *llm2.ChatHistoryContainer
+	var result *persisted_ai.ChatHistoryContainer
 	s.NoError(s.env.GetWorkflowResult(&result))
 
-	_, ok := result.History.(*llm2.LegacyChatHistory)
+	_, ok := result.History.(*persisted_ai.LegacyChatHistory)
 	s.True(ok, "Expected LegacyChatHistory for default version")
 }
 

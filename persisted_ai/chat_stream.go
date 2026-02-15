@@ -1,7 +1,6 @@
 package persisted_ai
 
 import (
-	"context"
 	"fmt"
 
 	"sidekick/common"
@@ -13,93 +12,56 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// ChatStreamOptionsV2 combines llm2.Options with workflow/flow context identifiers.
-// Used for the llm2 path in ExecuteChatStream.
-type ChatStreamOptionsV2 struct {
-	llm2.Options
-	WorkspaceId  string
-	FlowId       string
-	FlowActionId string
-	Providers    []common.ModelProviderPublicConfig
-}
-
-// ActionParams returns action parameters for flow action tracking.
-func (o ChatStreamOptionsV2) ActionParams() map[string]any {
-	return o.Options.ActionParams()
-}
-
-// ExecuteChatStream executes an LLM chat stream using the chat history from options.
-// It uses workflow versioning to determine which path to take:
-// - Version 1 (Llm2ChatHistory): calls Llm2Activities.Stream
-// - Default (LegacyChatHistory): calls LlmActivities.ChatStream
-//
-// Returns the response as a common.MessageResponse.
-// Note: Callers are responsible for appending the response message to chat history.
+// ExecuteChatStream executes an LLM chat stream.
+// For Llm2ChatHistory: delegates to the Stream activity which hydrates from KV.
+// For LegacyChatHistory: calls the legacy LlmActivities.ChatStream path.
+// Callers are responsible for appending the response message to chat history.
 func ExecuteChatStream(
 	actionCtx flow_action.ActionContext,
-	options ChatStreamOptionsV2,
+	streamInput StreamInput,
 ) (common.MessageResponse, error) {
 	heartbeatActionCtx := actionCtx
 	heartbeatActionCtx.Context = utils.LlmHeartbeatCtx(actionCtx.Context)
 
-	if options.Params.ChatHistory == nil {
-		return nil, fmt.Errorf("ChatHistory is required in options.Params")
+	if streamInput.ChatHistory == nil {
+		return nil, fmt.Errorf("ChatHistory is required in StreamInput")
 	}
 
 	v := workflow.GetVersion(actionCtx, "chat-history-llm2", workflow.DefaultVersion, 1)
 
 	if v == 1 {
-		return executeChatStreamV1(heartbeatActionCtx, options)
+		return executeChatStreamV1(heartbeatActionCtx, streamInput)
 	}
 
-	chatHistory := options.Params.ChatHistory
+	chatHistory := streamInput.ChatHistory
 	legacyOptions := ChatStreamOptions{
 		ToolChatOptions: llm.ToolChatOptions{
-			Secrets: options.Secrets,
+			Secrets: streamInput.Secrets,
 			Params: llm.ToolChatParams{
-				Tools:             options.Params.Tools,
-				ToolChoice:        options.Params.ToolChoice,
-				Temperature:       options.Params.Temperature,
-				ModelConfig:       options.Params.ModelConfig,
-				ParallelToolCalls: options.Params.ParallelToolCalls,
+				Tools:             streamInput.Options.Params.Tools,
+				ToolChoice:        streamInput.Options.Params.ToolChoice,
+				Temperature:       streamInput.Options.Params.Temperature,
+				ModelConfig:       streamInput.Options.Params.ModelConfig,
+				ParallelToolCalls: streamInput.Options.Params.ParallelToolCalls,
 			},
 		},
-		WorkspaceId:  options.WorkspaceId,
-		FlowId:       options.FlowId,
-		FlowActionId: options.FlowActionId,
+		WorkspaceId:  streamInput.WorkspaceId,
+		FlowId:       streamInput.FlowId,
+		FlowActionId: streamInput.FlowActionId,
 	}
 	return executeChatStreamLegacy(heartbeatActionCtx, legacyOptions, chatHistory)
 }
 
 // executeChatStreamV1 handles the Llm2ChatHistory path.
+// All messages are already persisted to KV via activity-backed appends,
+// so the Stream activity can hydrate the full history from refs.
 func executeChatStreamV1(
 	actionCtx flow_action.ActionContext,
-	options ChatStreamOptionsV2,
+	streamInput StreamInput,
 ) (common.MessageResponse, error) {
-	chatHistory := options.Params.ChatHistory
-	_, ok := chatHistory.History.(*llm2.Llm2ChatHistory)
-	if !ok {
+	chatHistory := streamInput.ChatHistory
+	if _, ok := chatHistory.History.(*Llm2ChatHistory); !ok {
 		return nil, fmt.Errorf("ExecuteChatStream version 1 requires Llm2ChatHistory, got %T", chatHistory.History)
-	}
-
-	// have to ensure we persist before we call stream
-	workflowSafeStorage := &common.WorkflowSafeKVStorage{Ctx: actionCtx}
-	gen := func() string { return utils.KsuidSideEffect(actionCtx) }
-	if err := chatHistory.Persist(context.Background(), workflowSafeStorage, gen); err != nil {
-		return nil, fmt.Errorf("failed to persist chat history: %w", err)
-	}
-	// TODO remove once llm2_migration-branch workflows have completed.
-	chatHistory.NormalizeBlockIds()
-
-	// Update options with hydrated chat history
-	options.Params.ChatHistory = chatHistory
-
-	streamInput := StreamInput{
-		Options:      options.Options,
-		WorkspaceId:  options.WorkspaceId,
-		FlowId:       options.FlowId,
-		FlowActionId: options.FlowActionId,
-		Providers:    options.Providers,
 	}
 
 	var la *Llm2Activities
@@ -116,9 +78,9 @@ func executeChatStreamV1(
 func executeChatStreamLegacy(
 	actionCtx flow_action.ActionContext,
 	options ChatStreamOptions,
-	chatHistory *llm2.ChatHistoryContainer,
+	chatHistory *ChatHistoryContainer,
 ) (common.MessageResponse, error) {
-	legacyHistory, ok := chatHistory.History.(*llm2.LegacyChatHistory)
+	legacyHistory, ok := chatHistory.History.(*LegacyChatHistory)
 	if !ok {
 		return nil, fmt.Errorf("ExecuteChatStream default version requires LegacyChatHistory, got %T", chatHistory.History)
 	}

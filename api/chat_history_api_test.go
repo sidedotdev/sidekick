@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"sidekick/llm2"
+	"sidekick/persisted_ai"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,7 +48,7 @@ func TestHydrateChatHistoryHandler_HappyPath(t *testing.T) {
 
 	// Create request with refs
 	reqBody := HydrateChatHistoryRequest{
-		Refs: []llm2.MessageRef{
+		Refs: []persisted_ai.MessageRef{
 			{BlockIds: []string{"block-1"}, Role: "user"},
 			{BlockIds: []string{"block-2", "block-3"}, Role: "assistant"},
 		},
@@ -100,7 +101,7 @@ func TestHydrateChatHistoryHandler_MissingBlocksShowError(t *testing.T) {
 
 	// Request includes a missing block
 	reqBody := HydrateChatHistoryRequest{
-		Refs: []llm2.MessageRef{
+		Refs: []persisted_ai.MessageRef{
 			{BlockIds: []string{"block-exists", "block-missing"}, Role: "assistant"},
 		},
 	}
@@ -140,7 +141,7 @@ func TestHydrateChatHistoryHandler_SingleRef(t *testing.T) {
 	require.NoError(t, err)
 
 	reqBody := HydrateChatHistoryRequest{
-		Refs: []llm2.MessageRef{
+		Refs: []persisted_ai.MessageRef{
 			{BlockIds: []string{"block-1"}, Role: "user"},
 		},
 	}
@@ -171,7 +172,7 @@ func TestHydrateChatHistoryHandler_EmptyRefs(t *testing.T) {
 	flowId := "test-flow"
 
 	reqBody := HydrateChatHistoryRequest{
-		Refs: []llm2.MessageRef{},
+		Refs: []persisted_ai.MessageRef{},
 	}
 	reqJSON, _ := json.Marshal(reqBody)
 
@@ -205,7 +206,7 @@ func TestHydrateChatHistoryHandler_MalformedBlockShowsError(t *testing.T) {
 	require.NoError(t, err)
 
 	reqBody := HydrateChatHistoryRequest{
-		Refs: []llm2.MessageRef{
+		Refs: []persisted_ai.MessageRef{
 			{BlockIds: []string{"block-bad"}, Role: "user"},
 		},
 	}
@@ -248,7 +249,7 @@ func TestHydrateChatHistoryHandler_PreservesOrder(t *testing.T) {
 
 	// Request with specific order
 	reqBody := HydrateChatHistoryRequest{
-		Refs: []llm2.MessageRef{
+		Refs: []persisted_ai.MessageRef{
 			{BlockIds: []string{"block-3", "block-1"}, Role: "user"},
 			{BlockIds: []string{"block-5", "block-2", "block-4"}, Role: "assistant"},
 		},

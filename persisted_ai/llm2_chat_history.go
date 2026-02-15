@@ -1,4 +1,4 @@
-package llm2
+package persisted_ai
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"sidekick/common"
+	"sidekick/llm2"
 
 	"github.com/segmentio/ksuid"
 )
@@ -115,10 +116,10 @@ type Llm2ChatHistory struct {
 	flowId         string
 	workspaceId    string
 	refs           []MessageRef
-	messages       []Message
+	messages       []llm2.Message
 	hydrated       bool
 	unpersisted    []int
-	hydratedBlocks map[string]ContentBlock
+	hydratedBlocks map[string]llm2.ContentBlock
 }
 
 // NewLlm2ChatHistory creates an empty, hydrated Llm2ChatHistory instance.
@@ -127,7 +128,7 @@ func NewLlm2ChatHistory(flowId, workspaceId string) *Llm2ChatHistory {
 		flowId:      flowId,
 		workspaceId: workspaceId,
 		refs:        []MessageRef{},
-		messages:    []Message{},
+		messages:    []llm2.Message{},
 		hydrated:    true,
 		unpersisted: []int{},
 	}
@@ -141,7 +142,7 @@ func newLlm2ChatHistoryFromRefs(refs []MessageRef) *Llm2ChatHistory {
 	}
 	if len(refs) == 0 {
 		h.hydrated = true
-		h.messages = []Message{}
+		h.messages = []llm2.Message{}
 	} else {
 		h.hydrated = false
 		h.messages = nil
@@ -151,29 +152,47 @@ func newLlm2ChatHistoryFromRefs(refs []MessageRef) *Llm2ChatHistory {
 
 func (h *Llm2ChatHistory) Append(msg common.Message) {
 	if !h.hydrated {
-		panic("cannot append to non-hydrated Llm2ChatHistory")
+		panic("cannot append to non-hydrated Llm2ChatHistory; use AppendRef or activity-backed append")
 	}
-	if mp, ok := msg.(*Message); ok {
-		h.messages = append(h.messages, *mp)
-		h.unpersisted = append(h.unpersisted, len(h.messages)-1)
+	var m llm2.Message
+	if mp, ok := msg.(*llm2.Message); ok {
+		m = *mp
 	} else if cm, ok := msg.(common.ChatMessage); ok {
-		h.messages = append(h.messages, MessageFromChatMessage(cm))
-		h.unpersisted = append(h.unpersisted, len(h.messages)-1)
+		m = MessageFromChatMessage(cm)
 	} else if cmp, ok := msg.(*common.ChatMessage); ok {
-		h.messages = append(h.messages, MessageFromChatMessage(*cmp))
-		h.unpersisted = append(h.unpersisted, len(h.messages)-1)
+		m = MessageFromChatMessage(*cmp)
+	} else {
+		return
 	}
+
+	h.messages = append(h.messages, m)
+	h.unpersisted = append(h.unpersisted, len(h.messages)-1)
 }
 
-func MessageFromChatMessage(cm common.ChatMessage) Message {
+// MessageFromCommon converts a common.Message to an llm2.Message.
+// Returns a zero Message if the type is not recognized.
+func MessageFromCommon(msg common.Message) llm2.Message {
+	if mp, ok := msg.(*llm2.Message); ok {
+		return *mp
+	}
+	if cm, ok := msg.(common.ChatMessage); ok {
+		return MessageFromChatMessage(cm)
+	}
+	if cmp, ok := msg.(*common.ChatMessage); ok {
+		return MessageFromChatMessage(*cmp)
+	}
+	return llm2.Message{}
+}
+
+func MessageFromChatMessage(cm common.ChatMessage) llm2.Message {
 	// Tool results in legacy format have role "tool", but in llm2 they should
 	// be user-role messages with a ToolResult content block
 	if cm.Role == common.ChatMessageRoleTool {
-		return Message{
-			Role: RoleUser,
-			Content: []ContentBlock{{
-				Type: ContentBlockTypeToolResult,
-				ToolResult: &ToolResultBlock{
+		return llm2.Message{
+			Role: llm2.RoleUser,
+			Content: []llm2.ContentBlock{{
+				Type: llm2.ContentBlockTypeToolResult,
+				ToolResult: &llm2.ToolResultBlock{
 					ToolCallId: cm.ToolCallId,
 					Name:       cm.Name,
 					IsError:    cm.IsError,
@@ -184,10 +203,10 @@ func MessageFromChatMessage(cm common.ChatMessage) Message {
 			}},
 		}
 	}
-	return Message{
-		Role: Role(cm.Role),
-		Content: []ContentBlock{{
-			Type:         ContentBlockTypeText,
+	return llm2.Message{
+		Role: llm2.Role(cm.Role),
+		Content: []llm2.ContentBlock{{
+			Type:         llm2.ContentBlockTypeText,
 			Text:         cm.Content,
 			CacheControl: cm.CacheControl,
 			ContextType:  cm.ContextType,
@@ -219,7 +238,7 @@ func (h *Llm2ChatHistory) Set(index int, msg common.Message) {
 	if index < 0 || index >= len(h.messages) {
 		return
 	}
-	if mp, ok := msg.(*Message); ok {
+	if mp, ok := msg.(*llm2.Message); ok {
 		h.messages[index] = *mp
 		h.unpersisted = append(h.unpersisted, index)
 	}
@@ -237,7 +256,7 @@ func (h *Llm2ChatHistory) Messages() []common.Message {
 }
 
 // Llm2Messages returns the underlying Message slice directly.
-func (h *Llm2ChatHistory) Llm2Messages() []Message {
+func (h *Llm2ChatHistory) Llm2Messages() []llm2.Message {
 	if !h.hydrated {
 		panic("cannot get llm2 messages from non-hydrated Llm2ChatHistory")
 	}
@@ -251,7 +270,7 @@ func (h *Llm2ChatHistory) Hydrate(ctx context.Context, storage common.KeyValueSt
 
 	// Initialize cache if needed
 	if h.hydratedBlocks == nil {
-		h.hydratedBlocks = make(map[string]ContentBlock)
+		h.hydratedBlocks = make(map[string]llm2.ContentBlock)
 	}
 
 	// Populate cache from existing in-memory messages+refs before overwriting
@@ -275,13 +294,13 @@ func (h *Llm2ChatHistory) Hydrate(ctx context.Context, storage common.KeyValueSt
 		for _, blockId := range ref.BlockIds {
 			if _, ok := h.hydratedBlocks[blockId]; !ok {
 				missingBlockIds = append(missingBlockIds, blockId)
-				missingStorageKeys = append(missingStorageKeys, storageKey(h.flowId, blockId))
+				missingStorageKeys = append(missingStorageKeys, StorageKey(h.flowId, blockId))
 			}
 		}
 	}
 
 	if len(missingBlockIds) == 0 && len(h.refs) == 0 {
-		h.messages = []Message{}
+		h.messages = []llm2.Message{}
 		h.hydrated = true
 		return nil
 	}
@@ -297,7 +316,7 @@ func (h *Llm2ChatHistory) Hydrate(ctx context.Context, storage common.KeyValueSt
 			if i >= len(values) || values[i] == nil {
 				continue
 			}
-			var block ContentBlock
+			var block llm2.ContentBlock
 			if err := json.Unmarshal(values[i], &block); err != nil {
 				return fmt.Errorf("failed to unmarshal content block %s: %w", blockId, err)
 			}
@@ -306,11 +325,11 @@ func (h *Llm2ChatHistory) Hydrate(ctx context.Context, storage common.KeyValueSt
 	}
 
 	// Reconstruct messages from refs using the cache
-	h.messages = make([]Message, len(h.refs))
+	h.messages = make([]llm2.Message, len(h.refs))
 	for i, ref := range h.refs {
-		h.messages[i] = Message{
-			Role:    Role(ref.Role),
-			Content: make([]ContentBlock, 0, len(ref.BlockIds)),
+		h.messages[i] = llm2.Message{
+			Role:    llm2.Role(ref.Role),
+			Content: make([]llm2.ContentBlock, 0, len(ref.BlockIds)),
 		}
 		for _, blockId := range ref.BlockIds {
 			if block, ok := h.hydratedBlocks[blockId]; ok {
@@ -339,7 +358,7 @@ func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueSt
 
 	// Initialize cache if needed
 	if h.hydratedBlocks == nil {
-		h.hydratedBlocks = make(map[string]ContentBlock)
+		h.hydratedBlocks = make(map[string]llm2.ContentBlock)
 	}
 
 	// Ensure refs slice is large enough
@@ -362,7 +381,7 @@ func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueSt
 			if err != nil {
 				return fmt.Errorf("failed to marshal content block: %w", err)
 			}
-			storageValues[storageKey(h.flowId, blockId)] = blockBytes
+			storageValues[StorageKey(h.flowId, blockId)] = blockBytes
 			h.hydratedBlocks[blockId] = block
 		}
 		h.refs[idx] = MessageRef{
@@ -409,7 +428,7 @@ func (h *Llm2ChatHistory) UnmarshalJSON(data []byte) error {
 	h.unpersisted = []int{}
 	if len(wrapper.Refs) == 0 {
 		h.hydrated = true
-		h.messages = []Message{}
+		h.messages = []llm2.Message{}
 	} else {
 		h.hydrated = false
 		h.messages = nil
@@ -417,9 +436,24 @@ func (h *Llm2ChatHistory) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// AppendRef adds a message reference without requiring hydration.
+func (h *Llm2ChatHistory) AppendRef(ref MessageRef) {
+	h.refs = append(h.refs, ref)
+}
+
+// FlowId returns the flow ID for the chat history.
+func (h *Llm2ChatHistory) FlowId() string {
+	return h.flowId
+}
+
 // SetFlowId sets the flow ID for the chat history.
 func (h *Llm2ChatHistory) SetFlowId(flowId string) {
 	h.flowId = flowId
+}
+
+// WorkspaceId returns the workspace ID for the chat history.
+func (h *Llm2ChatHistory) WorkspaceId() string {
+	return h.workspaceId
 }
 
 // SetWorkspaceId sets the workspace ID for the chat history.
@@ -445,7 +479,7 @@ func (h *Llm2ChatHistory) Refs() []MessageRef {
 func (h *Llm2ChatHistory) SetRefs(refs []MessageRef) {
 	// Populate cache from existing messages+refs before changing refs
 	if h.hydratedBlocks == nil {
-		h.hydratedBlocks = make(map[string]ContentBlock)
+		h.hydratedBlocks = make(map[string]llm2.ContentBlock)
 	}
 	if h.hydrated && h.messages != nil && len(h.messages) == len(h.refs) {
 		for i, ref := range h.refs {
@@ -468,7 +502,7 @@ func (h *Llm2ChatHistory) SetRefs(refs []MessageRef) {
 
 // SetMessages replaces all messages in the history with the provided slice.
 // All messages are marked as unpersisted.
-func (h *Llm2ChatHistory) SetMessages(messages []Message) {
+func (h *Llm2ChatHistory) SetMessages(messages []llm2.Message) {
 	if !h.hydrated {
 		panic("cannot set messages on non-hydrated Llm2ChatHistory")
 	}
@@ -490,13 +524,13 @@ func (h *Llm2ChatHistory) SetUnpersisted(indices []int) {
 // Unlike SetMessages, this does not reset refs or mark messages as unpersisted.
 // This is useful when the caller has already set refs via SetRefs and wants to
 // restore the hydrated state with known messages.
-func (h *Llm2ChatHistory) SetHydratedWithMessages(messages []Message) {
+func (h *Llm2ChatHistory) SetHydratedWithMessages(messages []llm2.Message) {
 	h.messages = messages
 	h.hydrated = true
 
 	// Populate the cache from the new messages and current refs
 	if h.hydratedBlocks == nil {
-		h.hydratedBlocks = make(map[string]ContentBlock)
+		h.hydratedBlocks = make(map[string]llm2.ContentBlock)
 	}
 	if len(h.messages) == len(h.refs) {
 		for i, ref := range h.refs {
@@ -510,8 +544,8 @@ func (h *Llm2ChatHistory) SetHydratedWithMessages(messages []Message) {
 	}
 }
 
-// storageKey builds the KV storage key for a block ID by prepending the flow prefix.
-func storageKey(flowId, blockId string) string {
+// StorageKey returns the KV storage key for a block ID within a flow.
+func StorageKey(flowId, blockId string) string {
 	return fmt.Sprintf("%s:msg:%s", flowId, blockId)
 }
 
@@ -544,7 +578,7 @@ func (h *Llm2ChatHistory) NormalizeBlockIds() {
 	}
 	// Re-key the cache under normalized IDs
 	if h.hydratedBlocks != nil {
-		normalized := make(map[string]ContentBlock, len(h.hydratedBlocks))
+		normalized := make(map[string]llm2.ContentBlock, len(h.hydratedBlocks))
 		for k, v := range h.hydratedBlocks {
 			normalized[normalizeBlockId(k)] = v
 		}
@@ -667,9 +701,9 @@ func (c *ChatHistoryContainer) IsHydrated() bool {
 	return c.History.IsHydrated()
 }
 
-// Llm2Messages returns the underlying []Message if the history is an Llm2ChatHistory,
+// Llm2Messages returns the underlying []llm2.Message if the history is an Llm2ChatHistory,
 // otherwise returns nil.
-func (c *ChatHistoryContainer) Llm2Messages() []Message {
+func (c *ChatHistoryContainer) Llm2Messages() []llm2.Message {
 	if c == nil || c.History == nil {
 		return nil
 	}

@@ -23,11 +23,12 @@ type OpenAIResponsesProvider struct {
 	DefaultModel string
 }
 
-func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
-	messages := options.Params.ChatHistory.Llm2Messages()
+func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
+	messages := request.Messages
+	options := request.Options
 
 	providerNameNormalized := options.Params.ModelConfig.NormalizedProviderName()
-	token, err := options.Secrets.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
+	token, err := request.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
 	if err != nil {
 		return nil, err
 	}

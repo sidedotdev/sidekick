@@ -8,7 +8,6 @@ import (
 	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/llm"
-	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"strings"
 
@@ -62,7 +61,7 @@ func BulkSearchRepository(ctx workflow.Context, envContainer env.EnvContainer, b
 	return strings.Join(results, "\n"), nil
 }
 
-func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *llm2.ChatHistoryContainer) ([]llm.ToolCall, error) {
+func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer) ([]llm.ToolCall, error) {
 	actionCtx := dCtx.ExecContext.NewActionContext("generate.repo_search_query")
 	modelConfig := dCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
 	response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(

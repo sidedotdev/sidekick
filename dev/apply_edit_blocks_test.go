@@ -13,7 +13,7 @@ import (
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/llm"
-	"sidekick/llm2"
+	"sidekick/persisted_ai"
 	"sidekick/utils"
 	"strings"
 	"testing"
@@ -26,7 +26,7 @@ func TestValidateEditBlocksEmptyChatHistory(t *testing.T) {
 	t.Parallel()
 
 	// Create an empty chat history
-	chatHistory := llm2.ChatHistoryContainer{History: llm2.NewLlm2ChatHistory("", "")}
+	chatHistory := persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
 	// Create a slice of EditBlocks with various scenarios
 	editBlocks := []EditBlock{
@@ -58,8 +58,8 @@ func TestValidateEditBlocksWithValidBlocks(t *testing.T) {
 	t.Parallel()
 
 	// Create a chat history that includes the old lines from our edit blocks
-	chatHistory := llm2.ChatHistoryContainer{
-		History: llm2.NewLegacyChatHistoryFromChatMessages(
+	chatHistory := persisted_ai.ChatHistoryContainer{
+		History: persisted_ai.NewLegacyChatHistoryFromChatMessages(
 			[]llm.ChatMessage{
 				{
 					Role:    llm.ChatMessageRoleTool,
@@ -105,8 +105,8 @@ func TestValidateEditBlocksWithInvalidBlocks(t *testing.T) {
 	t.Parallel()
 
 	// Create a chat history that doesn't include the old lines from our edit blocks
-	chatHistory := llm2.ChatHistoryContainer{
-		History: llm2.NewLegacyChatHistoryFromChatMessages(
+	chatHistory := persisted_ai.ChatHistoryContainer{
+		History: persisted_ai.NewLegacyChatHistoryFromChatMessages(
 			[]llm.ChatMessage{
 				{
 					Content: "Here's some unrelated code:\n```go\nfunc someOtherFunction() {\n    // Some code\n}\n```",

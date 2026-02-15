@@ -30,13 +30,14 @@ var googleLegacyThinkingBudgetLlm2 = map[string]int32{
 
 type GoogleProvider struct{}
 
-func (p GoogleProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
-	messages := options.Params.ChatHistory.Llm2Messages()
+func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
+	messages := request.Messages
+	options := request.Options
 
 	providerName := options.Params.ModelConfig.Provider
-	apiKey, err := options.Secrets.SecretManager.GetSecret(googleApiKeySecretName)
+	apiKey, err := request.SecretManager.GetSecret(googleApiKeySecretName)
 	if err != nil {
-		apiKey, err = options.Secrets.SecretManager.GetSecret(geminiApiKeySecretName)
+		apiKey, err = request.SecretManager.GetSecret(geminiApiKeySecretName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get %s API key: %w", providerName, err)
 		}

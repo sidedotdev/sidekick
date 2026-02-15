@@ -354,11 +354,11 @@ And here are test results:
 Please analyze whether the requirements have been fulfilled. If not, continue editing code as needed.
 `, testResult.TestsPassed)
 			}
-			chatHistory.Append(llm.ChatMessage{
+			AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
 				Role:    llm.ChatMessageRoleUser,
 				Content: userMessageContent,
 			})
-			chatHistory.Append(llm.ChatMessage{
+			AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
 				Role: llm.ChatMessageRoleUser,
 				Content: fmt.Sprintf(`Automated Analysis:
 

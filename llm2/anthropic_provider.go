@@ -21,11 +21,12 @@ const anthropicDefaultMaxTokens = 16000
 
 type AnthropicProvider struct{}
 
-func (p AnthropicProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
-	messages := options.Params.ChatHistory.Llm2Messages()
+func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
+	messages := request.Messages
+	options := request.Options
 
 	// Try OAuth credentials first, fall back to API key
-	oauthCreds, useOAuth, err := llm.GetAnthropicOAuthCredentials(options.Secrets.SecretManager)
+	oauthCreds, useOAuth, err := llm.GetAnthropicOAuthCredentials(request.SecretManager)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Anthropic OAuth credentials: %w", err)
 	}
@@ -39,7 +40,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, options Options, eventCha
 		)
 	} else {
 		secretName := fmt.Sprintf("%s_API_KEY", options.Params.ModelConfig.NormalizedProviderName())
-		token, err := options.Secrets.SecretManager.GetSecret(secretName)
+		token, err := request.SecretManager.GetSecret(secretName)
 		if err != nil {
 			return nil, err
 		}

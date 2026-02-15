@@ -327,19 +327,17 @@ Here is the test result output to summarize:
 
 	// Create a versioned chat history with just the prompt
 	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
-	chatHistory.Append(llm.ChatMessage{
+	AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
 		Role:    llm.ChatMessageRoleUser,
 		Content: prompt,
 	})
 
 	options := llm2.Options{
-		Secrets: *dCtx.Secrets,
 		Params: llm2.Params{
-			ChatHistory: chatHistory,
 			ModelConfig: modelConfig,
 		},
 	}
-	chatResponse, err := TrackedToolChat(dCtx, "summarize_tests", options)
+	chatResponse, err := TrackedToolChat(dCtx, "summarize_tests", options, chatHistory)
 	if err != nil {
 		return "", err
 	}

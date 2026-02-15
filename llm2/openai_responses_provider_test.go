@@ -15,12 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func newTestChatHistoryWithMessages(messages []Message) *ChatHistoryContainer {
-	chatHistory := NewLlm2ChatHistory("test-flow", "test-workspace")
-	chatHistory.SetMessages(messages)
-	return &ChatHistoryContainer{History: chatHistory}
-}
-
 type getCurrentWeather struct {
 	Location string `json:"location"`
 	Unit     string `json:"unit" jsonschema:"enum=celsius,fahrenheit"`
@@ -50,17 +44,18 @@ func TestOpenAIResponsesProvider_Unauthorized(t *testing.T) {
 				Model:    "gpt-5-codex",
 			},
 		},
-		Secrets: secret_manager.SecretManagerContainer{
-			SecretManager: mockSecretManager,
-		},
 	}
 
-	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+	request := StreamRequest{
+		Messages:      messages,
+		Options:       options,
+		SecretManager: mockSecretManager,
+	}
 
 	eventChan := make(chan Event, 10)
 	defer close(eventChan)
 
-	_, err := provider.Stream(ctx, options, eventChan)
+	_, err := provider.Stream(ctx, request, eventChan)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "401")
 }
@@ -95,6 +90,12 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 		},
 	}
 
+	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+		&secret_manager.EnvSecretManager{},
+		&secret_manager.KeyringSecretManager{},
+		&secret_manager.LocalConfigSecretManager{},
+	})
+
 	options := Options{
 		Params: Params{
 			ModelConfig: common.ModelConfig{
@@ -104,13 +105,6 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 			Temperature: utils.Ptr(float32(0)),
 			Tools:       []*common.Tool{mockTool},
 			ToolChoice:  common.ToolChoice{Type: common.ToolChoiceTypeAuto},
-		},
-		Secrets: secret_manager.SecretManagerContainer{
-			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-				&secret_manager.EnvSecretManager{},
-				&secret_manager.KeyringSecretManager{},
-				&secret_manager.LocalConfigSecretManager{},
-			}),
 		},
 	}
 
@@ -134,9 +128,13 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 		}
 	}()
 
-	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+	request := StreamRequest{
+		Messages:      messages,
+		Options:       options,
+		SecretManager: secretManager,
+	}
 
-	response, err := provider.Stream(ctx, options, eventChan)
+	response, err := provider.Stream(ctx, request, eventChan)
 	close(eventChan)
 
 	if err != nil {
@@ -215,8 +213,12 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 			}
 		}()
 
-		options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
-		response, err := provider.Stream(ctx, options, eventChan)
+		request := StreamRequest{
+			Messages:      messages,
+			Options:       options,
+			SecretManager: secretManager,
+		}
+		response, err := provider.Stream(ctx, request, eventChan)
 		close(eventChan)
 
 		if err != nil {
@@ -278,6 +280,12 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 		},
 	}
 
+	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+		&secret_manager.EnvSecretManager{},
+		&secret_manager.KeyringSecretManager{},
+		&secret_manager.LocalConfigSecretManager{},
+	})
+
 	options := Options{
 		Params: Params{
 			ModelConfig: common.ModelConfig{
@@ -285,13 +293,6 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 				Model:           "gpt-5.2",
 				ReasoningEffort: "low",
 			},
-		},
-		Secrets: secret_manager.SecretManagerContainer{
-			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-				&secret_manager.EnvSecretManager{},
-				&secret_manager.KeyringSecretManager{},
-				&secret_manager.LocalConfigSecretManager{},
-			}),
 		},
 	}
 
@@ -311,9 +312,13 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 		}
 	}()
 
-	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+	request := StreamRequest{
+		Messages:      messages,
+		Options:       options,
+		SecretManager: secretManager,
+	}
 
-	response, err := provider.Stream(ctx, options, eventChan)
+	response, err := provider.Stream(ctx, request, eventChan)
 	close(eventChan)
 
 	if err != nil {
@@ -377,8 +382,12 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 			}
 		}()
 
-		options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
-		response, err := provider.Stream(ctx, options, eventChan)
+		request := StreamRequest{
+			Messages:      messages,
+			Options:       options,
+			SecretManager: secretManager,
+		}
+		response, err := provider.Stream(ctx, request, eventChan)
 		close(eventChan)
 
 		if err != nil {

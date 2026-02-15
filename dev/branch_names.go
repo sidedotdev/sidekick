@@ -107,7 +107,7 @@ func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRe
 	reqMap := make(map[string]any)
 	utils.Transcode(req, &reqMap)
 	chatHistory := NewVersionedChatHistory(eCtx, eCtx.WorkspaceId)
-	chatHistory.Append(llm.ChatMessage{
+	AppendChatHistory(eCtx, chatHistory, llm.ChatMessage{
 		Role:    llm.ChatMessageRoleUser,
 		Content: RenderPrompt(generateBranchNamesPrompt, reqMap),
 	})
@@ -148,7 +148,7 @@ func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRe
 			Name:       toolCall.Name,
 			ToolCallId: toolCall.Id,
 		}
-		chatHistory.Append(newMessage)
+		AppendChatHistory(eCtx, chatHistory, newMessage)
 	}
 
 	if len(branchResp.Candidates) == 0 {

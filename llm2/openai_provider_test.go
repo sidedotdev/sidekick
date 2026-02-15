@@ -41,17 +41,18 @@ func TestOpenAIProvider_Unauthorized(t *testing.T) {
 				Model:    "gpt-4.1-nano-2025-04-14",
 			},
 		},
-		Secrets: secret_manager.SecretManagerContainer{
-			SecretManager: mockSecretManager,
-		},
 	}
 
-	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+	request := StreamRequest{
+		Messages:      messages,
+		Options:       options,
+		SecretManager: mockSecretManager,
+	}
 
 	eventChan := make(chan Event, 10)
 	defer close(eventChan)
 
-	_, err := provider.Stream(ctx, options, eventChan)
+	_, err := provider.Stream(ctx, request, eventChan)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "401")
 }
@@ -90,16 +91,18 @@ func TestOpenAIProvider_WrapErrorBodyOnly(t *testing.T) {
 				Model:    "gpt-4.1-nano",
 			},
 		},
-		Secrets: secret_manager.SecretManagerContainer{
-			SecretManager: mockSecretManager,
-		},
 	}
-	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+
+	request := StreamRequest{
+		Messages:      messages,
+		Options:       options,
+		SecretManager: mockSecretManager,
+	}
 
 	eventChan := make(chan Event, 10)
 	defer close(eventChan)
 
-	_, err := provider.Stream(ctx, options, eventChan)
+	_, err := provider.Stream(ctx, request, eventChan)
 	assert.Error(t, err)
 	errStr := err.Error()
 
@@ -159,11 +162,13 @@ func TestOpenAIProvider_UsageOnChunkWithChoices(t *testing.T) {
 				Model:    "test-model",
 			},
 		},
-		Secrets: secret_manager.SecretManagerContainer{
-			SecretManager: &secret_manager.MockSecretManager{},
-		},
 	}
-	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+
+	request := StreamRequest{
+		Messages:      messages,
+		Options:       options,
+		SecretManager: &secret_manager.MockSecretManager{},
+	}
 
 	eventChan := make(chan Event, 100)
 	var wg sync.WaitGroup
@@ -174,7 +179,7 @@ func TestOpenAIProvider_UsageOnChunkWithChoices(t *testing.T) {
 		}
 	}()
 
-	response, err := provider.Stream(ctx, options, eventChan)
+	response, err := provider.Stream(ctx, request, eventChan)
 	close(eventChan)
 	wg.Wait()
 
@@ -229,11 +234,13 @@ func TestOpenAIProvider_UsageOnChunkWithChoices_OpenAISemantics(t *testing.T) {
 				Model:    "test-model",
 			},
 		},
-		Secrets: secret_manager.SecretManagerContainer{
-			SecretManager: &secret_manager.MockSecretManager{},
-		},
 	}
-	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+
+	request := StreamRequest{
+		Messages:      messages,
+		Options:       options,
+		SecretManager: &secret_manager.MockSecretManager{},
+	}
 
 	eventChan := make(chan Event, 100)
 	var wg sync.WaitGroup
@@ -244,7 +251,7 @@ func TestOpenAIProvider_UsageOnChunkWithChoices_OpenAISemantics(t *testing.T) {
 		}
 	}()
 
-	response, err := provider.Stream(ctx, options, eventChan)
+	response, err := provider.Stream(ctx, request, eventChan)
 	close(eventChan)
 	wg.Wait()
 
@@ -302,11 +309,13 @@ func TestOpenAIProvider_UsageOnSeparateFinalChunk(t *testing.T) {
 				Model:    "gpt-4",
 			},
 		},
-		Secrets: secret_manager.SecretManagerContainer{
-			SecretManager: &secret_manager.MockSecretManager{},
-		},
 	}
-	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+
+	request := StreamRequest{
+		Messages:      messages,
+		Options:       options,
+		SecretManager: &secret_manager.MockSecretManager{},
+	}
 
 	eventChan := make(chan Event, 100)
 	var wg sync.WaitGroup
@@ -317,7 +326,7 @@ func TestOpenAIProvider_UsageOnSeparateFinalChunk(t *testing.T) {
 		}
 	}()
 
-	response, err := provider.Stream(ctx, options, eventChan)
+	response, err := provider.Stream(ctx, request, eventChan)
 	close(eventChan)
 	wg.Wait()
 
@@ -355,6 +364,12 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 		},
 	}
 
+	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+		&secret_manager.EnvSecretManager{},
+		&secret_manager.KeyringSecretManager{},
+		&secret_manager.LocalConfigSecretManager{},
+	})
+
 	options := Options{
 		Params: Params{
 			ModelConfig: common.ModelConfig{
@@ -364,13 +379,6 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 			Temperature: utils.Ptr(float32(0)),
 			Tools:       []*common.Tool{mockTool},
 			ToolChoice:  common.ToolChoice{Type: common.ToolChoiceTypeAuto},
-		},
-		Secrets: secret_manager.SecretManagerContainer{
-			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-				&secret_manager.EnvSecretManager{},
-				&secret_manager.KeyringSecretManager{},
-				&secret_manager.LocalConfigSecretManager{},
-			}),
 		},
 	}
 
@@ -394,9 +402,13 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 		}
 	}()
 
-	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+	request := StreamRequest{
+		Messages:      messages,
+		Options:       options,
+		SecretManager: secretManager,
+	}
 
-	response, err := provider.Stream(ctx, options, eventChan)
+	response, err := provider.Stream(ctx, request, eventChan)
 	close(eventChan)
 	wg.Wait()
 
@@ -471,8 +483,12 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 			}
 		}()
 
-		options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
-		response, err := provider.Stream(ctx, options, eventChan)
+		request := StreamRequest{
+			Messages:      messages,
+			Options:       options,
+			SecretManager: secretManager,
+		}
+		response, err := provider.Stream(ctx, request, eventChan)
 		close(eventChan)
 		wg2.Wait()
 
@@ -534,6 +550,12 @@ func TestOpenAIProvider_ImageIntegration(t *testing.T) {
 		},
 	}
 
+	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+		&secret_manager.EnvSecretManager{},
+		&secret_manager.KeyringSecretManager{},
+		&secret_manager.LocalConfigSecretManager{},
+	})
+
 	options := Options{
 		Params: Params{
 			ModelConfig: common.ModelConfig{
@@ -541,16 +563,13 @@ func TestOpenAIProvider_ImageIntegration(t *testing.T) {
 				Model:    "gpt-5-mini",
 			},
 		},
-		Secrets: secret_manager.SecretManagerContainer{
-			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-				&secret_manager.EnvSecretManager{},
-				&secret_manager.KeyringSecretManager{},
-				&secret_manager.LocalConfigSecretManager{},
-			}),
-		},
 	}
 
-	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+	request := StreamRequest{
+		Messages:      messages,
+		Options:       options,
+		SecretManager: secretManager,
+	}
 
 	eventChan := make(chan Event, 100)
 	var fullText strings.Builder
@@ -566,7 +585,7 @@ func TestOpenAIProvider_ImageIntegration(t *testing.T) {
 		}
 	}()
 
-	response, err := provider.Stream(ctx, options, eventChan)
+	response, err := provider.Stream(ctx, request, eventChan)
 	close(eventChan)
 	wg.Wait()
 

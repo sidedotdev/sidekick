@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"go.temporal.io/sdk/testsuite"
@@ -148,33 +149,23 @@ func (s *CascadeDeleteTaskTestSuite) seedTestData() (domain.Task, []domain.Flow,
 		flow2.Id: {subflow2},
 	}
 
-	// Create and persist llm2 chat history blocks for each flow
+	// Persist llm2 chat history blocks directly into KV storage for each flow
 	var allBlockIds []string
 	for _, flow := range []domain.Flow{flow1, flow2} {
-		chatHistory := llm2.NewLlm2ChatHistory(flow.Id, workspaceId)
-		msg := &llm2.Message{
-			Role: llm2.RoleUser,
-			Content: []llm2.ContentBlock{
-				{Type: llm2.ContentBlockTypeText, Text: "Hello from " + flow.Id},
-				{Type: llm2.ContentBlockTypeText, Text: "Second block from " + flow.Id},
-			},
+		blocks := []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "Hello from " + flow.Id},
+			{Type: llm2.ContentBlockTypeText, Text: "Second block from " + flow.Id},
 		}
-		chatHistory.Append(msg)
-		s.Require().NoError(chatHistory.Persist(ctx, s.storage, llm2.NewKsuidGenerator()))
-
-		// Extract block IDs from the marshaled chat history
-		data, err := chatHistory.MarshalJSON()
-		s.Require().NoError(err)
-
-		var wrapper struct {
-			Refs []llm2.MessageRef `json:"refs"`
+		values := make(map[string][]byte)
+		for _, block := range blocks {
+			blockId := ksuid.New().String()
+			blockBytes, err := json.Marshal(block)
+			s.Require().NoError(err)
+			storageKey := fmt.Sprintf("%s:msg:%s", flow.Id, blockId)
+			values[storageKey] = blockBytes
+			allBlockIds = append(allBlockIds, storageKey)
 		}
-		s.Require().NoError(json.Unmarshal(data, &wrapper))
-		for _, ref := range wrapper.Refs {
-			for _, blockId := range ref.BlockIds {
-				allBlockIds = append(allBlockIds, fmt.Sprintf("%s:msg:%s", flow.Id, blockId))
-			}
-		}
+		s.Require().NoError(s.storage.MSetRaw(ctx, workspaceId, values))
 	}
 
 	return task, []domain.Flow{flow1, flow2}, flowActions, subflows, allBlockIds

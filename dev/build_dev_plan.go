@@ -9,6 +9,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/llm2"
+	"sidekick/persisted_ai"
 	"strconv"
 	"strings"
 
@@ -348,7 +349,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 		return nil, fmt.Errorf("error generating dev plan: %w", err)
 	}
 
-	iteration.ChatHistory.Append(chatResponse.GetMessage())
+	AppendChatHistory(iteration.ExecCtx, iteration.ChatHistory, chatResponse.GetMessage())
 
 	if len(chatResponse.GetMessage().GetToolCalls()) > 0 {
 		var recordedPlan *DevPlan
@@ -482,7 +483,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 			if len(response.Response) > 5000 {
 				state.contextSizeExtension += len(response.Response) - 5000
 			}
-			addToolCallResponse(iteration.ChatHistory, response)
+			addToolCallResponse(iteration.ExecCtx, iteration.ChatHistory, response)
 			if response.FunctionName == getHelpOrInputTool.Name {
 				iteration.AutoIterationCount = 0
 			}
@@ -492,13 +493,13 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 			return recordedPlan, nil
 		}
 	} else if chatResponse.GetStopReason() == string(openai.FinishReasonStop) || chatResponse.GetStopReason() == string(openai.FinishReasonToolCalls) {
-		addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
+		addToolCallResponse(iteration.ExecCtx, iteration.ChatHistory, ToolCallResponseInfo{
 			Response:     "Expected a tool call to record the plan, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevPlanTool.Name + " tool.",
 			FunctionName: recordDevPlanTool.Name,
 		})
 	} else { // FIXME handle other stop reasons with more specific logic
 		feedbackInfo := FeedbackInfo{Feedback: "Expected a tool call to record the dev requirements, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevRequirementsTool.Name + " tool."}
-		addDevRequirementsPrompt(iteration.ChatHistory, feedbackInfo)
+		addDevRequirementsPrompt(iteration.ExecCtx, iteration.ChatHistory, feedbackInfo)
 	}
 
 	return nil, nil // continue the loop
@@ -513,7 +514,7 @@ func unmarshalPlan(jsonStr string) (DevPlan, error) {
 	return plan, nil
 }
 
-func generateDevPlan(dCtx DevContext, chatHistory *llm2.ChatHistoryContainer, hasExistingPlan bool) (common.MessageResponse, error) {
+func generateDevPlan(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, hasExistingPlan bool) (common.MessageResponse, error) {
 	tools := []*llm.Tool{
 		&recordDevPlanTool,
 		currentGetSymbolDefinitionsTool(),
@@ -530,10 +531,8 @@ func generateDevPlan(dCtx DevContext, chatHistory *llm2.ChatHistoryContainer, ha
 	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 
 	chatOptions := llm2.Options{
-		Secrets: *dCtx.Secrets,
 		Params: llm2.Params{
-			ChatHistory: chatHistory,
-			Tools:       tools,
+			Tools: tools,
 			ToolChoice: llm.ToolChoice{
 				Type: llm.ToolChoiceTypeAuto,
 			},
@@ -541,7 +540,7 @@ func generateDevPlan(dCtx DevContext, chatHistory *llm2.ChatHistoryContainer, ha
 		},
 	}
 
-	return TrackedToolChat(dCtx, "dev_plan", chatOptions)
+	return TrackedToolChat(dCtx, "dev_plan", chatOptions, chatHistory)
 }
 
 // TODO we should determine if the code context is too large programmatically
@@ -593,7 +592,7 @@ step, describe the AAA in detail, and ensure you include the predicted failure o
 the test prior to fixing the bug as part of the completion_analysis.
 `
 
-func addDevPlanPrompt(dCtx DevContext, chatHistory *llm2.ChatHistoryContainer, promptInfo PromptInfo) {
+func addDevPlanPrompt(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) {
 	var content string
 	role := llm.ChatMessageRoleUser
 	cacheControl := ""
@@ -606,12 +605,12 @@ func addDevPlanPrompt(dCtx DevContext, chatHistory *llm2.ChatHistoryContainer, p
 	case FeedbackInfo:
 		content = renderGeneralFeedbackPrompt(info.Feedback, info.Type)
 	case ToolCallResponseInfo:
-		addToolCallResponse(chatHistory, info)
+		addToolCallResponse(dCtx, chatHistory, info)
 		return
 	default:
 		panic("Unsupported prompt type for dev plan: " + promptInfo.GetType())
 	}
-	chatHistory.Append(llm.ChatMessage{
+	AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
 		Role:         role,
 		Content:      content,
 		CacheControl: cacheControl,

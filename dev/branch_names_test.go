@@ -75,6 +75,12 @@ func (s *BranchNameTestSuite) SetupTest() {
 	s.env.OnActivity(ka.MSetRaw, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	s.env.OnActivity(ka.MGet, mock.Anything, mock.Anything, mock.Anything).Return([][]byte{}, nil).Maybe()
 
+	// Mock ChatHistoryActivities for llm2 path
+	var cha *persisted_ai.ChatHistoryActivities
+	s.env.OnActivity(cha.AppendMessage, mock.Anything, mock.Anything).Return(
+		&persisted_ai.MessageRef{BlockIds: []string{"mock-block"}, Role: "user"}, nil,
+	).Maybe()
+
 	// Mock git command to simulate existing branches
 	s.env.OnActivity(env.EnvRunCommandActivity, mock.Anything, mock.Anything).Return(env.EnvRunCommandActivityOutput{
 		ExitStatus: 0,

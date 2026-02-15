@@ -83,22 +83,22 @@ func TestManageV3_HydratesHistory(t *testing.T) {
 		Storage: storage,
 	}
 
-	original := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
+	original := NewLlm2ChatHistory("flow-123", "workspace-456")
 	original.Append(&llm2.Message{
 		Role:    llm2.RoleUser,
 		Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}},
 	})
-	err := original.Persist(context.Background(), storage, llm2.NewKsuidGenerator())
+	err := original.Persist(context.Background(), storage, NewKsuidGenerator())
 	require.NoError(t, err)
 
 	data, err := original.MarshalJSON()
 	require.NoError(t, err)
 
-	restored := &llm2.Llm2ChatHistory{}
+	restored := &Llm2ChatHistory{}
 	err = restored.UnmarshalJSON(data)
 	require.NoError(t, err)
 
-	container := &llm2.ChatHistoryContainer{History: restored}
+	container := &ChatHistoryContainer{History: restored}
 	storage.mgetCalled = false
 
 	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 0)
@@ -113,13 +113,13 @@ func TestManageV3_PersistsHistory(t *testing.T) {
 		Storage: storage,
 	}
 
-	history := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
+	history := NewLlm2ChatHistory("flow-123", "workspace-456")
 	history.Append(&llm2.Message{
 		Role:    llm2.RoleUser,
 		Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}},
 	})
 
-	container := &llm2.ChatHistoryContainer{History: history}
+	container := &ChatHistoryContainer{History: history}
 
 	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 0)
 	require.NoError(t, err)
@@ -134,24 +134,24 @@ func TestManageV3_HydrationError(t *testing.T) {
 		Storage: storage,
 	}
 
-	original := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
+	original := NewLlm2ChatHistory("flow-123", "workspace-456")
 	original.Append(&llm2.Message{
 		Role:    llm2.RoleUser,
 		Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}},
 	})
 
 	initialStorage := newMockKVStorage()
-	err := original.Persist(context.Background(), initialStorage, llm2.NewKsuidGenerator())
+	err := original.Persist(context.Background(), initialStorage, NewKsuidGenerator())
 	require.NoError(t, err)
 
 	data, err := original.MarshalJSON()
 	require.NoError(t, err)
 
-	restored := &llm2.Llm2ChatHistory{}
+	restored := &Llm2ChatHistory{}
 	err = restored.UnmarshalJSON(data)
 	require.NoError(t, err)
 
-	container := &llm2.ChatHistoryContainer{History: restored}
+	container := &ChatHistoryContainer{History: restored}
 
 	_, err = activities.ManageV3(context.Background(), container, "workspace-456", 0)
 	require.Error(t, err)
@@ -165,13 +165,13 @@ func TestManageV3_PersistError(t *testing.T) {
 		Storage: storage,
 	}
 
-	history := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
+	history := NewLlm2ChatHistory("flow-123", "workspace-456")
 	history.Append(&llm2.Message{
 		Role:    llm2.RoleUser,
 		Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}},
 	})
 
-	container := &llm2.ChatHistoryContainer{History: history}
+	container := &ChatHistoryContainer{History: history}
 
 	_, err := activities.ManageV3(context.Background(), container, "workspace-456", 0)
 	require.Error(t, err)
@@ -184,8 +184,8 @@ func TestManageV3_WrongHistoryType(t *testing.T) {
 		Storage: storage,
 	}
 
-	legacyHistory := llm2.NewLegacyChatHistoryFromChatMessages(nil)
-	container := &llm2.ChatHistoryContainer{History: legacyHistory}
+	legacyHistory := NewLegacyChatHistoryFromChatMessages(nil)
+	container := &ChatHistoryContainer{History: legacyHistory}
 
 	_, err := activities.ManageV3(context.Background(), container, "workspace-456", 0)
 	require.Error(t, err)
@@ -200,7 +200,7 @@ func TestManageV3_PreservesRefsForUnchangedMessages(t *testing.T) {
 	}
 
 	// Create history with multiple messages, using ContextType to ensure retention
-	history := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
+	history := NewLlm2ChatHistory("flow-123", "workspace-456")
 	history.Append(&llm2.Message{
 		Role: llm2.RoleUser,
 		Content: []llm2.ContentBlock{{
@@ -223,17 +223,17 @@ func TestManageV3_PreservesRefsForUnchangedMessages(t *testing.T) {
 	})
 
 	// Persist to get initial refs
-	err := history.Persist(context.Background(), storage, llm2.NewKsuidGenerator())
+	err := history.Persist(context.Background(), storage, NewKsuidGenerator())
 	require.NoError(t, err)
 	originalRefs := history.Refs()
 
-	container := &llm2.ChatHistoryContainer{History: history}
+	container := &ChatHistoryContainer{History: history}
 
 	// Run ManageV3 with large maxLength to prevent trimming
 	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 100000)
 	require.NoError(t, err)
 
-	resultHistory := result.History.(*llm2.Llm2ChatHistory)
+	resultHistory := result.History.(*Llm2ChatHistory)
 	newRefs := resultHistory.Refs()
 
 	// Messages should still be present (management didn't drop any)
@@ -253,7 +253,7 @@ func TestManageV3_ChangesRefsForMarkerOnlyChanges(t *testing.T) {
 	}
 
 	// Create history with messages, using ContextType to ensure retention
-	history := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
+	history := NewLlm2ChatHistory("flow-123", "workspace-456")
 	history.Append(&llm2.Message{
 		Role: llm2.RoleUser,
 		Content: []llm2.ContentBlock{{
@@ -272,17 +272,17 @@ func TestManageV3_ChangesRefsForMarkerOnlyChanges(t *testing.T) {
 	})
 
 	// Persist to get initial refs
-	err := history.Persist(context.Background(), storage, llm2.NewKsuidGenerator())
+	err := history.Persist(context.Background(), storage, NewKsuidGenerator())
 	require.NoError(t, err)
 	originalRefs := history.Refs()
 
-	container := &llm2.ChatHistoryContainer{History: history}
+	container := &ChatHistoryContainer{History: history}
 
 	// Run ManageV3 with large maxLength - this will clear and re-apply cache control
 	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 100000)
 	require.NoError(t, err)
 
-	resultHistory := result.History.(*llm2.Llm2ChatHistory)
+	resultHistory := result.History.(*Llm2ChatHistory)
 	newRefs := resultHistory.Refs()
 
 	require.Equal(t, 2, len(newRefs), "should have 2 messages after management")
@@ -301,7 +301,7 @@ func TestManageV3_HydratingFromRefsRestoresMarkers(t *testing.T) {
 	}
 
 	// Create and manage history with ContextType to ensure retention
-	history := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
+	history := NewLlm2ChatHistory("flow-123", "workspace-456")
 	history.Append(&llm2.Message{
 		Role: llm2.RoleUser,
 		Content: []llm2.ContentBlock{{
@@ -315,20 +315,20 @@ func TestManageV3_HydratingFromRefsRestoresMarkers(t *testing.T) {
 		Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hi there"}},
 	})
 
-	container := &llm2.ChatHistoryContainer{History: history}
+	container := &ChatHistoryContainer{History: history}
 
 	// Run ManageV3 to apply cache control and persist
 	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 100000)
 	require.NoError(t, err)
 
 	// Get the refs from the managed history
-	managedHistory := result.History.(*llm2.Llm2ChatHistory)
+	managedHistory := result.History.(*Llm2ChatHistory)
 	refs := managedHistory.Refs()
 
 	require.Len(t, refs, 2, "should have 2 refs after management")
 
 	// Create a fresh history from refs only (simulating workflow deserialization)
-	freshHistory := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
+	freshHistory := NewLlm2ChatHistory("flow-123", "workspace-456")
 	freshHistory.SetRefs(refs)
 
 	// Hydrate from storage
@@ -356,7 +356,7 @@ func TestManageV3_PreservesContextType(t *testing.T) {
 	}
 
 	// Create history with ContextType set
-	history := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
+	history := NewLlm2ChatHistory("flow-123", "workspace-456")
 	history.Append(&llm2.Message{
 		Role: llm2.RoleUser,
 		Content: []llm2.ContentBlock{{
@@ -370,19 +370,19 @@ func TestManageV3_PreservesContextType(t *testing.T) {
 		Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Response"}},
 	})
 
-	container := &llm2.ChatHistoryContainer{History: history}
+	container := &ChatHistoryContainer{History: history}
 
 	// Run ManageV3 with large maxLength
 	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 100000)
 	require.NoError(t, err)
 
 	// Get refs and create fresh history
-	managedHistory := result.History.(*llm2.Llm2ChatHistory)
+	managedHistory := result.History.(*Llm2ChatHistory)
 	refs := managedHistory.Refs()
 
 	require.Len(t, refs, 2, "should have 2 refs after management")
 
-	freshHistory := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
+	freshHistory := NewLlm2ChatHistory("flow-123", "workspace-456")
 	freshHistory.SetRefs(refs)
 	err = freshHistory.Hydrate(context.Background(), storage)
 	require.NoError(t, err)
@@ -399,7 +399,7 @@ func TestManageV3_DroppingOlderMessagesPreservesRetainedRefs(t *testing.T) {
 		Storage: storage,
 	}
 
-	history := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
+	history := NewLlm2ChatHistory("flow-123", "workspace-456")
 	history.Append(&llm2.Message{
 		Role: llm2.RoleUser,
 		Content: []llm2.ContentBlock{{
@@ -428,17 +428,17 @@ func TestManageV3_DroppingOlderMessagesPreservesRetainedRefs(t *testing.T) {
 	})
 
 	// Persist to get initial refs
-	err := history.Persist(context.Background(), storage, llm2.NewKsuidGenerator())
+	err := history.Persist(context.Background(), storage, NewKsuidGenerator())
 	require.NoError(t, err)
 	originalRefs := history.Refs()
 
-	container := &llm2.ChatHistoryContainer{History: history}
+	container := &ChatHistoryContainer{History: history}
 
 	// Run ManageV3 with small maxLength to trigger trimming of middle messages
 	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 50)
 	require.NoError(t, err)
 
-	resultHistory := result.History.(*llm2.Llm2ChatHistory)
+	resultHistory := result.History.(*Llm2ChatHistory)
 	newRefs := resultHistory.Refs()
 
 	require.GreaterOrEqual(t, len(newRefs), 2, "should retain at least first and last messages")
@@ -473,7 +473,7 @@ func TestManageV3_LegacyChatMessageRetainsInitialInstructions(t *testing.T) {
 		Storage: storage,
 	}
 
-	history := llm2.NewLlm2ChatHistory("flow-123", "workspace-456")
+	history := NewLlm2ChatHistory("flow-123", "workspace-456")
 
 	// Append via common.ChatMessage with ContextType set (the legacy path)
 	history.Append(&common.ChatMessage{
@@ -498,16 +498,16 @@ func TestManageV3_LegacyChatMessageRetainsInitialInstructions(t *testing.T) {
 		Content: "Final question",
 	})
 
-	err := history.Persist(context.Background(), storage, llm2.NewKsuidGenerator())
+	err := history.Persist(context.Background(), storage, NewKsuidGenerator())
 	require.NoError(t, err)
 
-	container := &llm2.ChatHistoryContainer{History: history}
+	container := &ChatHistoryContainer{History: history}
 
 	// Small maxLength to trigger trimming of middle messages
 	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 30)
 	require.NoError(t, err)
 
-	resultHistory := result.History.(*llm2.Llm2ChatHistory)
+	resultHistory := result.History.(*Llm2ChatHistory)
 	messages := resultHistory.Llm2Messages()
 
 	// The initial-instructions message and last message must survive trimming

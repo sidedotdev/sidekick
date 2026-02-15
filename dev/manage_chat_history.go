@@ -7,9 +7,7 @@ import (
 	"sidekick/common"
 	"sidekick/fflag"
 	"sidekick/llm"
-	"sidekick/llm2"
 	"sidekick/persisted_ai"
-	"sidekick/utils"
 	"slices"
 	"strings"
 
@@ -67,30 +65,18 @@ const (
 // TODO take in the model name and use a different threshold for each model
 // TODO don't drop messages, just create a new chat history with a new summary
 // each time based on the current needs or latest prompt
-func ManageChatHistory(ctx workflow.Context, chatHistory *llm2.ChatHistoryContainer, workspaceId string, maxLength int) {
+func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, maxLength int) {
 	// Check if we should use the new Llm2ChatHistory-based management
 	v := workflow.GetVersion(ctx, "chat-history-llm2", workflow.DefaultVersion, 1)
 	if v == 1 {
-		llm2History, ok := chatHistory.History.(*llm2.Llm2ChatHistory)
+		llm2History, ok := chatHistory.History.(*persisted_ai.Llm2ChatHistory)
 		if !ok {
 			wrapErr := fmt.Errorf("ManageChatHistory v3 path requires Llm2ChatHistory, got %T", chatHistory.History)
 			workflow.GetLogger(ctx).Error("ManageChatHistory wrong history type", "error", wrapErr)
 			panic(wrapErr)
 		}
 
-		// Must persist before managing chat history is possible
-		workflowSafeStorage := &common.WorkflowSafeKVStorage{Ctx: ctx}
-		gen := func() string { return utils.KsuidSideEffect(ctx) }
-		if err := llm2History.Persist(context.Background(), workflowSafeStorage, gen); err != nil {
-			wrapErr := fmt.Errorf("ManageChatHistory persist failed: %w", err)
-			workflow.GetLogger(ctx).Error("ManageChatHistory persist error", "error", wrapErr)
-			panic(wrapErr)
-		}
-		// TODO remove NormalizeBlockIds calls once all llm2_migration-branch
-		// workflows have completed; new workflows only produce bare IDs.
-		llm2History.NormalizeBlockIds()
-
-		var managedHistory *llm2.ChatHistoryContainer
+		var managedHistory *persisted_ai.ChatHistoryContainer
 		var cha *persisted_ai.ChatHistoryActivities
 		activityFuture := workflow.ExecuteActivity(ctx, cha.ManageV3, chatHistory, workspaceId, maxLength)
 		err := activityFuture.Get(ctx, &managedHistory)
@@ -101,25 +87,13 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *llm2.ChatHistoryContai
 		}
 
 		// Extract new refs from the returned (refs-only) history
-		managedLlm2History, ok := managedHistory.History.(*llm2.Llm2ChatHistory)
+		managedLlm2History, ok := managedHistory.History.(*persisted_ai.Llm2ChatHistory)
 		if !ok {
 			wrapErr := fmt.Errorf("ManageChatHistory ManageV3 returned unexpected history type: %T", managedHistory.History)
 			workflow.GetLogger(ctx).Error("ManageChatHistory unexpected return type", "error", wrapErr)
 			panic(wrapErr)
 		}
-		newRefs := managedLlm2History.Refs()
-
-		// Update the existing in-memory history with new refs (preserves cached blocks)
-		llm2History.SetRefs(newRefs)
-		// TODO remove once llm2_migration-branch workflows have completed.
-		llm2History.NormalizeBlockIds()
-
-		// Hydrate only missing/changed blocks using workflow-safe storage
-		if err := llm2History.Hydrate(context.Background(), workflowSafeStorage); err != nil {
-			wrapErr := fmt.Errorf("ManageChatHistory hydration failed: %w", err)
-			workflow.GetLogger(ctx).Error("ManageChatHistory hydration error", "error", wrapErr)
-			panic(wrapErr)
-		}
+		llm2History.SetRefs(managedLlm2History.Refs())
 		return
 	}
 
@@ -152,7 +126,7 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *llm2.ChatHistoryContai
 		panic(wrapErr)
 	}
 
-	chatHistory.History = llm2.NewLegacyChatHistoryFromChatMessages(newChatHistory)
+	chatHistory.History = persisted_ai.NewLegacyChatHistoryFromChatMessages(newChatHistory)
 }
 
 func ManageChatHistoryActivity(chatHistory []llm.ChatMessage, maxLength int) ([]llm.ChatMessage, error) {

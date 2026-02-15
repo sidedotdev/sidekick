@@ -45,17 +45,18 @@ func TestAnthropicResponsesProvider_Unauthorized(t *testing.T) {
 				Model:    "claude-sonnet-4-5",
 			},
 		},
-		Secrets: secret_manager.SecretManagerContainer{
-			SecretManager: mockSecretManager,
-		},
 	}
 
-	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+	request := StreamRequest{
+		Messages:      messages,
+		Options:       options,
+		SecretManager: mockSecretManager,
+	}
 
 	eventChan := make(chan Event, 10)
 	defer close(eventChan)
 
-	_, err := provider.Stream(ctx, options, eventChan)
+	_, err := provider.Stream(ctx, request, eventChan)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "401")
 }
@@ -88,6 +89,12 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		},
 	}
 
+	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+		&secret_manager.EnvSecretManager{},
+		&secret_manager.KeyringSecretManager{},
+		&secret_manager.LocalConfigSecretManager{},
+	})
+
 	options := Options{
 		Params: Params{
 			ModelConfig: common.ModelConfig{
@@ -96,13 +103,6 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 			},
 			Tools:      []*common.Tool{mockTool},
 			ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
-		},
-		Secrets: secret_manager.SecretManagerContainer{
-			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-				&secret_manager.EnvSecretManager{},
-				&secret_manager.KeyringSecretManager{},
-				&secret_manager.LocalConfigSecretManager{},
-			}),
 		},
 	}
 
@@ -145,9 +145,13 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		}
 	}()
 
-	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+	request := StreamRequest{
+		Messages:      messages,
+		Options:       options,
+		SecretManager: secretManager,
+	}
 
-	response, err := provider.Stream(ctx, options, eventChan)
+	response, err := provider.Stream(ctx, request, eventChan)
 	close(eventChan)
 
 	if err != nil {
@@ -249,8 +253,12 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 			}
 		}()
 
-		options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
-		response, err := provider.Stream(ctx, options, eventChan)
+		request := StreamRequest{
+			Messages:      messages,
+			Options:       options,
+			SecretManager: secretManager,
+		}
+		response, err := provider.Stream(ctx, request, eventChan)
 		close(eventChan)
 
 		if err != nil {
@@ -319,13 +327,6 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 					ReasoningEffort: "low",
 				},
 			},
-			Secrets: secret_manager.SecretManagerContainer{
-				SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-					&secret_manager.EnvSecretManager{},
-					&secret_manager.KeyringSecretManager{},
-					&secret_manager.LocalConfigSecretManager{},
-				}),
-			},
 		}
 
 		eventChan := make(chan Event, 100)
@@ -358,8 +359,12 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 			}
 		}()
 
-		reasoningOptions.Params.ChatHistory = newTestChatHistoryWithMessages(reasoningMessages)
-		response, err := provider.Stream(ctx, reasoningOptions, eventChan)
+		reasoningRequest := StreamRequest{
+			Messages:      reasoningMessages,
+			Options:       reasoningOptions,
+			SecretManager: secretManager,
+		}
+		response, err := provider.Stream(ctx, reasoningRequest, eventChan)
 		close(eventChan)
 
 		if err != nil {
@@ -562,6 +567,12 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 		},
 	}
 
+	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+		&secret_manager.EnvSecretManager{},
+		&secret_manager.KeyringSecretManager{},
+		&secret_manager.LocalConfigSecretManager{},
+	})
+
 	options := Options{
 		Params: Params{
 			ModelConfig: common.ModelConfig{
@@ -569,16 +580,13 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 				Model:    "claude-sonnet-4-5-20250929",
 			},
 		},
-		Secrets: secret_manager.SecretManagerContainer{
-			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-				&secret_manager.EnvSecretManager{},
-				&secret_manager.KeyringSecretManager{},
-				&secret_manager.LocalConfigSecretManager{},
-			}),
-		},
 	}
 
-	options.Params.ChatHistory = newTestChatHistoryWithMessages(messages)
+	request := StreamRequest{
+		Messages:      messages,
+		Options:       options,
+		SecretManager: secretManager,
+	}
 
 	eventChan := make(chan Event, 100)
 	var fullText strings.Builder
@@ -594,7 +602,7 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 		}
 	}()
 
-	response, err := provider.Stream(ctx, options, eventChan)
+	response, err := provider.Stream(ctx, request, eventChan)
 	close(eventChan)
 	wg.Wait()
 

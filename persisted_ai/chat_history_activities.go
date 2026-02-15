@@ -2,11 +2,16 @@ package persisted_ai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 
+	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/llm2"
+
+	"github.com/rs/zerolog/log"
+	"github.com/segmentio/ksuid"
 )
 
 // ChatHistoryActivities provides activities for managing chat history with KV storage.
@@ -19,11 +24,11 @@ type ChatHistoryActivities struct {
 // It preserves refs for unchanged messages to avoid regenerating KV block IDs.
 func (ca *ChatHistoryActivities) ManageV3(
 	ctx context.Context,
-	chatHistory *llm2.ChatHistoryContainer,
+	chatHistory *ChatHistoryContainer,
 	workspaceId string,
 	maxLength int,
-) (*llm2.ChatHistoryContainer, error) {
-	llm2History, ok := chatHistory.History.(*llm2.Llm2ChatHistory)
+) (*ChatHistoryContainer, error) {
+	llm2History, ok := chatHistory.History.(*Llm2ChatHistory)
 	if !ok {
 		return nil, fmt.Errorf("ManageV3 requires Llm2ChatHistory, got %T", chatHistory.History)
 	}
@@ -61,11 +66,84 @@ func (ca *ChatHistoryActivities) ManageV3(
 	// Narrow persistence to only changed messages
 	llm2History.SetUnpersisted(changedIndices)
 
-	if err := llm2History.Persist(ctx, ca.Storage, llm2.NewKsuidGenerator()); err != nil {
+	if err := llm2History.Persist(ctx, ca.Storage, NewKsuidGenerator()); err != nil {
 		return nil, fmt.Errorf("failed to persist chat history: %w", err)
 	}
 
 	return chatHistory, nil
+}
+
+// AppendMessageInput is the input for the AppendMessage activity.
+type AppendMessageInput struct {
+	FlowId      string
+	WorkspaceId string
+	Message     llm2.Message
+}
+
+// AppendMessage persists a single message to KV storage and returns its ref.
+func (ca *ChatHistoryActivities) AppendMessage(
+	ctx context.Context,
+	input AppendMessageInput,
+) (*MessageRef, error) {
+	blockIds := make([]string, len(input.Message.Content))
+	storageValues := make(map[string][]byte)
+
+	for i, block := range input.Message.Content {
+		blockId := ksuid.New().String()
+		blockIds[i] = blockId
+		blockBytes, err := json.Marshal(block)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal content block: %w", err)
+		}
+		storageValues[StorageKey(input.FlowId, blockId)] = blockBytes
+	}
+
+	if len(storageValues) > 0 {
+		if err := ca.Storage.MSetRaw(ctx, input.WorkspaceId, storageValues); err != nil {
+			return nil, fmt.Errorf("failed to persist message blocks: %w", err)
+		}
+	}
+
+	ref := &MessageRef{
+		BlockIds: blockIds,
+		Role:     string(input.Message.Role),
+	}
+	return ref, nil
+}
+
+// ExtractVisibleCodeBlocks hydrates the chat history and extracts code blocks
+// from non-assistant messages for edit-block visibility tracking.
+func (ca *ChatHistoryActivities) ExtractVisibleCodeBlocks(
+	ctx context.Context,
+	chatHistory *ChatHistoryContainer,
+) ([]tree_sitter.CodeBlock, error) {
+	if err := chatHistory.Hydrate(ctx, ca.Storage); err != nil {
+		return nil, fmt.Errorf("failed to hydrate chat history: %w", err)
+	}
+
+	var codeBlocks []tree_sitter.CodeBlock
+	for _, msg := range chatHistory.Messages() {
+		if msg.GetRole() == string(common.ChatMessageRoleAssistant) {
+			continue
+		}
+		content := msg.GetContentString()
+		symDefBlocks, err := tree_sitter.ExtractSymbolDefinitionBlocks(content)
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to extract symbol definition blocks")
+		}
+		searchBlocks, err := tree_sitter.ExtractSearchCodeBlocks(content)
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to extract search code blocks")
+		}
+		gitDiffBlocks, err := tree_sitter.ExtractGitDiffCodeBlocks(content)
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to extract git diff code blocks")
+		}
+		codeBlocks = append(codeBlocks, symDefBlocks...)
+		codeBlocks = append(codeBlocks, searchBlocks...)
+		codeBlocks = append(codeBlocks, gitDiffBlocks...)
+	}
+	return codeBlocks, nil
 }
 
 // applyCacheControlBreakpointsLlm2 sets CacheControl on llm2 messages.
@@ -116,9 +194,9 @@ func deepCopyMessages(messages []llm2.Message) []llm2.Message {
 func preserveRefsForUnchangedMessages(
 	managedMessages []llm2.Message,
 	originalMessages []llm2.Message,
-	originalRefs []llm2.MessageRef,
-) ([]llm2.MessageRef, []int) {
-	newRefs := make([]llm2.MessageRef, len(managedMessages))
+	originalRefs []MessageRef,
+) ([]MessageRef, []int) {
+	newRefs := make([]MessageRef, len(managedMessages))
 	var changedIndices []int
 
 	// Track which original messages have been used (to avoid reusing the same ref twice)

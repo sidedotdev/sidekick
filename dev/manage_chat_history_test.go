@@ -3,7 +3,6 @@ package dev
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"sidekick/common"
 	"sidekick/fflag"
@@ -705,19 +704,18 @@ type ManageChatHistoryWorkflowTestSuite struct {
 	// StartToClose or ScheduleToCloseTimeout set.
 	// Also, ManageChatHistory doesn't return anything, since it just mutates
 	// the given pointer, but returning at least an error is required
-	wrapperWorkflow func(ctx workflow.Context, chatHistory *llm2.ChatHistoryContainer, maxLength int) (*llm2.ChatHistoryContainer, error)
+	wrapperWorkflow func(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, maxLength int) (*persisted_ai.ChatHistoryContainer, error)
 }
 
 // SetupTest is called before each test in the suite
 func (s *ManageChatHistoryWorkflowTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
-	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *llm2.ChatHistoryContainer, maxLength int) (*llm2.ChatHistoryContainer, error) {
+	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, maxLength int) (*persisted_ai.ChatHistoryContainer, error) {
 		ctx = utils.NoRetryCtx(ctx)
 		ManageChatHistory(ctx, chatHistory, "test-workspace-id", maxLength)
 		return chatHistory, nil
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
-	s.env.RegisterWorkflow(hydrateFirstWorkflow)
 	s.env.RegisterWorkflow(verifyHydrationWorkflow)
 }
 
@@ -728,8 +726,8 @@ func (s *ManageChatHistoryWorkflowTestSuite) TearDownTest() {
 
 // Test_ManageChatHistory_UsesOldActivity_ByDefault tests that the old activity is called by default
 func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesOldActivity_ByDefault() {
-	chatHistory := &llm2.ChatHistoryContainer{
-		History: llm2.NewLegacyChatHistoryFromChatMessages([]llm.ChatMessage{{Content: "test"}}),
+	chatHistory := &persisted_ai.ChatHistoryContainer{
+		History: persisted_ai.NewLegacyChatHistoryFromChatMessages([]llm.ChatMessage{{Content: "test"}}),
 	}
 	newChatHistory := []llm.ChatMessage{{Content: "_"}}
 	maxLength := 100
@@ -744,7 +742,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesOldActiv
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
-	var managedChatHistory *llm2.ChatHistoryContainer
+	var managedChatHistory *persisted_ai.ChatHistoryContainer
 	s.env.GetWorkflowResult(&managedChatHistory)
 	s.Equal(1, managedChatHistory.Len())
 	s.Equal("_", managedChatHistory.Get(0).(llm.ChatMessage).Content)
@@ -752,8 +750,8 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesOldActiv
 
 // Test_ManageChatHistory_UsesNewActivity_WhenVersioned tests that the new activity is called when versioned
 func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesNewActivity_WhenVersioned() {
-	chatHistory := &llm2.ChatHistoryContainer{
-		History: llm2.NewLegacyChatHistoryFromChatMessages([]llm.ChatMessage{{Content: "test"}}),
+	chatHistory := &persisted_ai.ChatHistoryContainer{
+		History: persisted_ai.NewLegacyChatHistoryFromChatMessages([]llm.ChatMessage{{Content: "test"}}),
 	}
 	newChatHistory := []llm.ChatMessage{{Content: "_"}}
 	maxLength := 100
@@ -770,7 +768,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesNewActiv
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
-	var managedChatHistory *llm2.ChatHistoryContainer
+	var managedChatHistory *persisted_ai.ChatHistoryContainer
 	s.env.GetWorkflowResult(&managedChatHistory)
 	s.Equal(1, managedChatHistory.Len())
 	s.Equal("_", managedChatHistory.Get(0).(llm.ChatMessage).Content)
@@ -779,12 +777,12 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesNewActiv
 // Test_ManageChatHistory_UsesManageV3_WhenLlm2Version tests that ManageV3 is called for version 1
 func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesManageV3_WhenLlm2Version() {
 	// Create an llm2 history (v3 path requires Llm2ChatHistory)
-	llm2History := llm2.NewLlm2ChatHistory("test-flow", "test-workspace-id")
+	llm2History := persisted_ai.NewLlm2ChatHistory("test-flow", "test-workspace-id")
 	llm2History.Append(llm2.Message{
 		Role:    llm2.RoleUser,
 		Content: []llm2.ContentBlock{{Type: "text", Text: "test"}},
 	})
-	chatHistory := &llm2.ChatHistoryContainer{History: llm2History}
+	chatHistory := &persisted_ai.ChatHistoryContainer{History: llm2History}
 	maxLength := 100
 
 	// Return version 1 for chat-history-llm2 to trigger ManageV3 path
@@ -795,7 +793,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesManageV3
 	s.env.OnActivity(ka.MSetRaw, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// ManageV3 returns refs-only (simulating JSON marshaling)
-	managedRefs := []llm2.MessageRef{
+	managedRefs := []persisted_ai.MessageRef{
 		{BlockIds: []string{"block-managed"}, Role: "user"},
 	}
 	managedRefsJSON, _ := json.Marshal(map[string]interface{}{
@@ -803,7 +801,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesManageV3
 		"refs":   managedRefs,
 		"flowId": "test-flow",
 	})
-	var managedContainer llm2.ChatHistoryContainer
+	var managedContainer persisted_ai.ChatHistoryContainer
 	_ = json.Unmarshal(managedRefsJSON, &managedContainer)
 
 	// Expect ManageV3 activity to be called
@@ -813,32 +811,26 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesManageV3
 		nil,
 	).Once()
 
-	// Mock KVActivities.MGet to return the block content for hydration (keys are flow-prefixed in storage)
-	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"test-flow:msg:block-managed"}).Return(
-		[][]byte{mustMarshal(llm2.ContentBlock{Type: "text", Text: "managed"})},
-		nil,
-	).Once()
-
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, maxLength)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
-	var managedChatHistory *llm2.ChatHistoryContainer
+	var managedChatHistory *persisted_ai.ChatHistoryContainer
 	s.env.GetWorkflowResult(&managedChatHistory)
 
 	// The returned container has refs (workflow result is serialized as refs-only)
 	// Verify the refs are correct
-	llm2Hist := managedChatHistory.History.(*llm2.Llm2ChatHistory)
+	llm2Hist := managedChatHistory.History.(*persisted_ai.Llm2ChatHistory)
 	refs := llm2Hist.Refs()
 	s.Equal(1, len(refs))
 	s.Equal("block-managed", refs[0].BlockIds[0])
 }
 
 // Test_ManageChatHistory_V3_HydratesAfterManagement tests that the v3 path
-// properly hydrates the history after ManageV3 returns refs-only data.
+// returns refs-only data after ManageV3 without hydrating in the workflow.
 func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_HydratesAfterManagement() {
 	// Create an llm2 history with some messages
-	llm2History := llm2.NewLlm2ChatHistory("test-flow", "test-workspace-id")
+	llm2History := persisted_ai.NewLlm2ChatHistory("test-flow", "test-workspace-id")
 	llm2History.Append(llm2.Message{
 		Role:    llm2.RoleUser,
 		Content: []llm2.ContentBlock{{Type: "text", Text: "hello"}},
@@ -848,7 +840,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_HydratesA
 		Content: []llm2.ContentBlock{{Type: "text", Text: "world"}},
 	})
 
-	chatHistory := &llm2.ChatHistoryContainer{History: llm2History}
+	chatHistory := &persisted_ai.ChatHistoryContainer{History: llm2History}
 	maxLength := 100
 
 	// Return version 1 for chat-history-llm2 to trigger ManageV3 path
@@ -859,8 +851,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_HydratesA
 	s.env.OnActivity(ka.MSetRaw, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// ManageV3 returns refs-only (simulating what happens after JSON marshaling)
-	// The refs point to KV storage keys
-	managedRefs := []llm2.MessageRef{
+	managedRefs := []persisted_ai.MessageRef{
 		{BlockIds: []string{"block-1"}, Role: "user"},
 		{BlockIds: []string{"block-2"}, Role: "assistant"},
 	}
@@ -869,7 +860,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_HydratesA
 		"refs":   managedRefs,
 		"flowId": "test-flow",
 	})
-	var managedContainer llm2.ChatHistoryContainer
+	var managedContainer persisted_ai.ChatHistoryContainer
 	_ = json.Unmarshal(managedRefsJSON, &managedContainer)
 
 	var ca *persisted_ai.ChatHistoryActivities
@@ -878,40 +869,26 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_HydratesA
 		nil,
 	).Once()
 
-	// Mock KVActivities.MGet to return the block content (keys are flow-prefixed in storage)
-	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"test-flow:msg:block-1", "test-flow:msg:block-2"}).Return(
-		[][]byte{
-			mustMarshal(llm2.ContentBlock{Type: "text", Text: "hello"}),
-			mustMarshal(llm2.ContentBlock{Type: "text", Text: "world"}),
-		},
-		nil,
-	).Once()
-
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, maxLength)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
-	var result *llm2.ChatHistoryContainer
+	var result *persisted_ai.ChatHistoryContainer
 	s.env.GetWorkflowResult(&result)
 
-	// The returned container has refs (workflow result is serialized as refs-only)
-	// Verify the refs are correct - hydration happened inside the workflow
-	llm2Hist := result.History.(*llm2.Llm2ChatHistory)
+	// Workflow returns refs-only; no hydration happens in the workflow
+	llm2Hist := result.History.(*persisted_ai.Llm2ChatHistory)
 	refs := llm2Hist.Refs()
 	s.Equal(2, len(refs))
 	s.Equal("block-1", refs[0].BlockIds[0])
 	s.Equal("block-2", refs[1].BlockIds[0])
 }
 
-// Test_ManageChatHistory_V3_ReusesHydratedBlocks tests that unchanged blocks
-// are served from the in-memory cache and not re-fetched from KV storage.
-// This test simulates a workflow that has already hydrated its history before
-// calling ManageChatHistory, verifying that only new/changed block IDs are fetched.
+// Test_ManageChatHistory_V3_ReusesHydratedBlocks tests that ManageV3 correctly
+// updates refs when some messages are dropped and others change block IDs.
+// The workflow never hydrates; all hydration happens inside the ManageV3 activity.
 func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_ReusesHydratedBlocks() {
-	// Create an llm2 history with refs (simulating a previously persisted state)
-	// The history will be non-hydrated when passed to the workflow (due to serialization),
-	// so we need a workflow that hydrates first, then calls ManageChatHistory
-	existingRefs := []llm2.MessageRef{
+	existingRefs := []persisted_ai.MessageRef{
 		{BlockIds: []string{"existing-block-1"}, Role: "user"},
 		{BlockIds: []string{"existing-block-2"}, Role: "assistant"},
 		{BlockIds: []string{"existing-block-3"}, Role: "user"},
@@ -922,29 +899,18 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_ReusesHyd
 		"flowId":      "test-flow",
 		"workspaceId": "test-workspace-id",
 	})
-	var chatHistory llm2.ChatHistoryContainer
+	var chatHistory persisted_ai.ChatHistoryContainer
 	_ = json.Unmarshal(existingRefsJSON, &chatHistory)
 
 	maxLength := 100
 
 	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1))
 
-	// First MGet: initial hydration before ManageChatHistory (keys are flow-prefixed in storage)
-	var ka *common.KVActivities
-	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"test-flow:msg:existing-block-1", "test-flow:msg:existing-block-2", "test-flow:msg:existing-block-3"}).Return(
-		[][]byte{
-			mustMarshal(llm2.ContentBlock{Type: "text", Text: "first"}),
-			mustMarshal(llm2.ContentBlock{Type: "text", Text: "second"}),
-			mustMarshal(llm2.ContentBlock{Type: "text", Text: "third"}),
-		},
-		nil,
-	).Once()
-
 	// ManageV3 returns refs where:
 	// - First message is dropped
 	// - Second message keeps its existing block ID (unchanged)
 	// - Third message has a new block ID (marker changed)
-	managedRefs := []llm2.MessageRef{
+	managedRefs := []persisted_ai.MessageRef{
 		{BlockIds: []string{"existing-block-2"}, Role: "assistant"},
 		{BlockIds: []string{"new-block-3"}, Role: "user"},
 	}
@@ -954,7 +920,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_ReusesHyd
 		"flowId":      "test-flow",
 		"workspaceId": "test-workspace-id",
 	})
-	var managedContainer llm2.ChatHistoryContainer
+	var managedContainer persisted_ai.ChatHistoryContainer
 	_ = json.Unmarshal(managedRefsJSON, &managedContainer)
 
 	var ca *persisted_ai.ChatHistoryActivities
@@ -963,24 +929,14 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_ReusesHyd
 		nil,
 	).Once()
 
-	// Second MGet: after ManageChatHistory, ONLY the new block should be fetched!
-	// "existing-block-2" should be served from the in-memory cache
-	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"test-flow:msg:new-block-3"}).Return(
-		[][]byte{
-			mustMarshal(llm2.ContentBlock{Type: "text", Text: "third-updated", CacheControl: "ephemeral"}),
-		},
-		nil,
-	).Once()
-
-	s.env.ExecuteWorkflow(hydrateFirstWorkflow, &chatHistory, maxLength)
+	s.env.ExecuteWorkflow(s.wrapperWorkflow, &chatHistory, maxLength)
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 
-	var result *llm2.ChatHistoryContainer
+	var result *persisted_ai.ChatHistoryContainer
 	s.env.GetWorkflowResult(&result)
 
-	// Verify the refs are correct
-	llm2Hist := result.History.(*llm2.Llm2ChatHistory)
+	llm2Hist := result.History.(*persisted_ai.Llm2ChatHistory)
 	refs := llm2Hist.Refs()
 	s.Equal(2, len(refs))
 	s.Equal("existing-block-2", refs[0].BlockIds[0])
@@ -993,17 +949,17 @@ type hydrationVerifyResult struct {
 	MsgCount   int  `json:"msgCount"`
 }
 
-// Test_ManageChatHistory_V3_VerifiesHydrationInsideWorkflow tests that
-// IsHydrated() returns true and Messages() can be called without panic
-// inside the workflow after ManageChatHistory completes.
-func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_VerifiesHydrationInsideWorkflow() {
-	llm2History := llm2.NewLlm2ChatHistory("test-flow", "test-workspace-id")
+// Test_ManageChatHistory_V3_VerifiesRefsOnlyInsideWorkflow tests that
+// the history remains refs-only (not hydrated) inside the workflow after
+// ManageChatHistory completes.
+func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_VerifiesRefsOnlyInsideWorkflow() {
+	llm2History := persisted_ai.NewLlm2ChatHistory("test-flow", "test-workspace-id")
 	llm2History.Append(llm2.Message{
 		Role:    llm2.RoleUser,
 		Content: []llm2.ContentBlock{{Type: "text", Text: "hello"}},
 	})
 
-	chatHistory := &llm2.ChatHistoryContainer{History: llm2History}
+	chatHistory := &persisted_ai.ChatHistoryContainer{History: llm2History}
 	maxLength := 100
 
 	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1))
@@ -1012,7 +968,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_VerifiesH
 	var ka *common.KVActivities
 	s.env.OnActivity(ka.MSetRaw, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	managedRefs := []llm2.MessageRef{
+	managedRefs := []persisted_ai.MessageRef{
 		{BlockIds: []string{"block-1"}, Role: "user"},
 	}
 	managedRefsJSON, _ := json.Marshal(map[string]interface{}{
@@ -1020,17 +976,12 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_VerifiesH
 		"refs":   managedRefs,
 		"flowId": "test-flow",
 	})
-	var managedContainer llm2.ChatHistoryContainer
+	var managedContainer persisted_ai.ChatHistoryContainer
 	_ = json.Unmarshal(managedRefsJSON, &managedContainer)
 
 	var ca *persisted_ai.ChatHistoryActivities
 	s.env.OnActivity(ca.ManageV3, mock.Anything, mock.Anything, "test-workspace-id", maxLength).Return(
 		&managedContainer,
-		nil,
-	).Once()
-
-	s.env.OnActivity(ka.MGet, mock.Anything, "test-workspace-id", []string{"test-flow:msg:block-1"}).Return(
-		[][]byte{mustMarshal(llm2.ContentBlock{Type: "text", Text: "hello"})},
 		nil,
 	).Once()
 
@@ -1041,31 +992,15 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_VerifiesH
 	var result hydrationVerifyResult
 	err := s.env.GetWorkflowResult(&result)
 	s.NoError(err)
-	s.True(result.IsHydrated, "expected IsHydrated() to be true inside workflow")
-	s.Equal(1, result.MsgCount, "expected 1 message accessible via Messages()")
+	s.False(result.IsHydrated, "expected IsHydrated() to be false inside workflow (refs-only)")
+	s.Equal(0, result.MsgCount, "expected 0 messages since history is not hydrated")
 }
 
-// hydrateFirstWorkflow is a named workflow that hydrates before calling ManageChatHistory
-func hydrateFirstWorkflow(ctx workflow.Context, ch *llm2.ChatHistoryContainer, ml int) (*llm2.ChatHistoryContainer, error) {
-	ctx = utils.NoRetryCtx(ctx)
-
-	// Hydrate the history first (simulating previous workflow operations)
-	workflowSafeStorage := &common.WorkflowSafeKVStorage{Ctx: ctx}
-	if err := ch.Hydrate(context.Background(), workflowSafeStorage); err != nil {
-		return nil, fmt.Errorf("initial hydration failed: %w", err)
-	}
-
-	// Now call ManageChatHistory (which should reuse cached blocks)
-	ManageChatHistory(ctx, ch, "test-workspace-id", ml)
-	return ch, nil
-}
-
-// verifyHydrationWorkflow is a named workflow that verifies hydration after ManageChatHistory
-func verifyHydrationWorkflow(ctx workflow.Context, ch *llm2.ChatHistoryContainer, ml int) (*hydrationVerifyResult, error) {
+// verifyHydrationWorkflow is a named workflow that verifies hydration status after ManageChatHistory
+func verifyHydrationWorkflow(ctx workflow.Context, ch *persisted_ai.ChatHistoryContainer, ml int) (*hydrationVerifyResult, error) {
 	ctx = utils.NoRetryCtx(ctx)
 	ManageChatHistory(ctx, ch, "test-workspace-id", ml)
 
-	// Return hydration status and message count from inside the workflow
 	result := &hydrationVerifyResult{
 		IsHydrated: ch.IsHydrated(),
 	}

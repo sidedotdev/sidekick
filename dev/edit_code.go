@@ -12,6 +12,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/llm2"
+	"sidekick/persisted_ai"
 	"sidekick/srv"
 	"sidekick/utils"
 	"sort"
@@ -33,7 +34,7 @@ var ErrMaxAttemptsReached = fmt.Errorf("reached max attempts")
 var ErrExtractEditBlocks = fmt.Errorf("failed to extract edit blocks")
 
 // edits code in the envContainer based on code context + requirements
-func EditCode(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *llm2.ChatHistoryContainer, promptInfo PromptInfo) error {
+func EditCode(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) error {
 	return RunSubflowWithoutResult(dCtx, "edit_code", "Edit Code", func(_ domain.Subflow) error {
 		return editCodeSubflow(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo)
 	})
@@ -96,7 +97,7 @@ func applyEditBlocksAndReport(dCtx DevContext, editBlocks []EditBlock) (applyEdi
 	}, nil
 }
 
-func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *llm2.ChatHistoryContainer, promptInfo PromptInfo) error {
+func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) error {
 	var err error
 	var editBlocks []EditBlock
 
@@ -196,7 +197,7 @@ editLoop:
 			// no errors, but want to retain the system message in this case as
 			// well. in the error case, we use the system message as the
 			// feedback and get it into chat history that way
-			chatHistory.Append(llm.ChatMessage{
+			AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
 				Role:        "system",
 				Content:     result.ReportMessage,
 				ContextType: ContextTypeEditBlockReport,
@@ -209,7 +210,7 @@ editLoop:
 	return nil
 }
 
-func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *llm2.ChatHistoryContainer, promptInfo PromptInfo) ([]EditBlock, error) {
+func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) ([]EditBlock, error) {
 	var extractedEditBlocks []EditBlock
 
 	attemptCount := 0
@@ -314,7 +315,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 		if !applyImmediately && len(extractedEditBlocks) > 0 {
 			content := fmt.Sprintf("Note: %d edit block(s) are pending application.", len(extractedEditBlocks))
-			chatHistory.Append(llm.ChatMessage{
+			AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
 				Role:    llm.ChatMessageRoleSystem,
 				Content: content,
 			})
@@ -326,8 +327,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 		// call Open AI to get back messages that contain edit blocks
 		chatCtx := dCtx.WithCancelOnPause()
-		authorEditBlockInput.Params.ChatHistory = chatHistory
-		chatResponse, err := TrackedToolChat(chatCtx, "code_edits", authorEditBlockInput)
+		chatResponse, err := TrackedToolChat(chatCtx, "code_edits", authorEditBlockInput, chatHistory)
 		if dCtx.GlobalState.Paused {
 			continue // UserRequestIfPaused will handle the pause
 		}
@@ -337,15 +337,27 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 		// visibleChatHistory is captured before ManageChatHistory to reflect
 		// what was actually visible to the LLM when edit blocks were generated
-		visibleChatHistory := *authorEditBlockInput.Params.ChatHistory
+		visibleChatHistory := *chatHistory
 		if v := workflow.GetVersion(dCtx, "bugfix-edit-block-visibility-orig-history", workflow.DefaultVersion, 1); v == 1 {
 			// this maintains the buggy behavior on older workflows to still replay them
-			visibleChatHistory.Append(chatResponse.GetMessage())
+			AppendChatHistory(dCtx, &visibleChatHistory, chatResponse.GetMessage())
 		}
 
-		chatHistory.Append(chatResponse.GetMessage())
+		AppendChatHistory(dCtx, chatHistory, chatResponse.GetMessage())
 		tildeOnly := workflow.GetVersion(dCtx, "tilde-edit-block-fence", workflow.DefaultVersion, 1) >= 1
-		currentExtractedBlocks, err := ExtractEditBlocksWithVisibility(chatResponse.GetMessage().GetContentString(), visibleChatHistory, tildeOnly)
+
+		var currentExtractedBlocks []EditBlock
+		if _, isLlm2 := visibleChatHistory.History.(*persisted_ai.Llm2ChatHistory); isLlm2 {
+			var cha *persisted_ai.ChatHistoryActivities
+			var visibleCodeBlocks []tree_sitter.CodeBlock
+			err = workflow.ExecuteActivity(dCtx, cha.ExtractVisibleCodeBlocks, &visibleChatHistory).Get(dCtx, &visibleCodeBlocks)
+			if err != nil {
+				return []EditBlock{}, fmt.Errorf("failed to extract visible code blocks: %w", err)
+			}
+			currentExtractedBlocks, err = ExtractEditBlocksWithCodeBlocks(chatResponse.GetMessage().GetContentString(), visibleCodeBlocks, tildeOnly)
+		} else {
+			currentExtractedBlocks, err = ExtractEditBlocksWithVisibility(chatResponse.GetMessage().GetContentString(), visibleChatHistory, tildeOnly)
+		}
 		if err != nil {
 			return []EditBlock{}, fmt.Errorf("%w: %v", ErrExtractEditBlocks, err)
 		}
@@ -377,7 +389,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			if len(toolCallResponseInfo.Response) > 5000 {
 				contextSizeExtension += len(toolCallResponseInfo.Response) - 5000
 			}
-			addToolCallResponse(chatHistory, toolCallResponseInfo)
+			addToolCallResponse(dCtx, chatHistory, toolCallResponseInfo)
 		}
 
 		// keep loop going if we failed to apply edit blocks, with feedback hints
@@ -393,7 +405,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 				attemptCount++
 				continue
 			} else {
-				chatHistory.Append(llm.ChatMessage{
+				AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
 					Role:        llm.ChatMessageRoleSystem,
 					Content:     applyEditBlocksResult.ReportMessage,
 					ContextType: ContextTypeEditBlockReport,
@@ -415,7 +427,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 // buildAuthorEditBlockInput builds the LLM options for authoring edit blocks.
 // Returns the options and the visible messages (for edit block extraction).
-func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *llm2.ChatHistoryContainer, promptInfo PromptInfo) llm2.Options {
+func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) llm2.Options {
 	// TODO extract chat message building into a separate function
 	var content string
 	role := llm.ChatMessageRoleUser
@@ -466,7 +478,7 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 			ContextType:  contextType,
 		}
 		// FIXME don't mutate chatHistory here, let the caller do it if they want it
-		chatHistory.Append(newMessage)
+		AppendChatHistory(dCtx, chatHistory, newMessage)
 	}
 
 	var tools []*llm.Tool
@@ -480,7 +492,6 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	}
 
 	options := llm2.Options{
-		Secrets: *dCtx.Secrets,
 		Params: llm2.Params{
 			Tools: tools,
 			ToolChoice: llm.ToolChoice{

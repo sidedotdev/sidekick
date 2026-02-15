@@ -6,7 +6,6 @@ import (
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/llm"
-	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"strings"
 
@@ -104,12 +103,12 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 			Name:       toolCall.Name,
 			ToolCallId: toolCall.Id,
 		}
-		chatHistory.Append(newMessage)
+		AppendChatHistory(dCtx, chatHistory, newMessage)
 	}
 	return fulfillment, nil
 }
 
-func getCriteriaFulfillmentPrompt(ctx workflow.Context, workspaceId string, promptInfo CheckWorkInfo) *llm2.ChatHistoryContainer {
+func getCriteriaFulfillmentPrompt(ctx workflow.Context, workspaceId string, promptInfo CheckWorkInfo) *persisted_ai.ChatHistoryContainer {
 	chatHistory := NewVersionedChatHistory(ctx, workspaceId)
 
 	var content string
@@ -246,6 +245,6 @@ Anyways, here are the automated check results:
 		Content:     content,
 		ContextType: ContextTypeInitialInstructions,
 	}
-	chatHistory.Append(newMessage)
+	AppendChatHistory(ctx, chatHistory, newMessage)
 	return chatHistory
 }
