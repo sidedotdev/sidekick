@@ -375,6 +375,42 @@ func messagesToAnthropicParams(messages []Message) ([]anthropic.MessageParam, er
 	return result, nil
 }
 
+func toolResultImageToAnthropicParam(url string) (*anthropic.ImageBlockParam, error) {
+	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") {
+		return &anthropic.ImageBlockParam{
+			Source: anthropic.ImageBlockParamSourceUnion{
+				OfURL: &anthropic.URLImageSourceParam{
+					URL:  url,
+					Type: "url",
+				},
+			},
+		}, nil
+	}
+
+	const anthropicMaxBytes = 30 * 1024 * 1024
+	const anthropicMaxLongEdgePx = 1568
+	newDataURL, mime, _, err := PrepareImageDataURLForLimits(url, anthropicMaxBytes, anthropicMaxLongEdgePx)
+	if err != nil {
+		return nil, fmt.Errorf("preparing image for Anthropic tool_result: %w", err)
+	}
+
+	_, raw, err := ParseDataURL(newDataURL)
+	if err != nil {
+		return nil, fmt.Errorf("re-parsing prepared image data URL: %w", err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(raw)
+
+	return &anthropic.ImageBlockParam{
+		Source: anthropic.ImageBlockParamSourceUnion{
+			OfBase64: &anthropic.Base64ImageSourceParam{
+				MediaType: anthropic.Base64ImageSourceMediaType(mime),
+				Data:      encoded,
+				Type:      "base64",
+			},
+		},
+	}, nil
+}
+
 func contentBlockToAnthropicParam(block ContentBlock, role Role) (anthropic.ContentBlockParamUnion, error) {
 	switch block.Type {
 	case ContentBlockTypeText:
@@ -427,7 +463,49 @@ func contentBlockToAnthropicParam(block ContentBlock, role Role) (anthropic.Cont
 			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("tool_result block missing ToolResult data")
 		}
 
-		toolResultBlock := anthropic.NewToolResultBlock(block.ToolResult.ToolCallId, block.ToolResult.Text, block.ToolResult.IsError)
+		var contentParts []anthropic.ToolResultBlockParamContentUnion
+
+		if block.ToolResult.Text != "" {
+			contentParts = append(contentParts, anthropic.ToolResultBlockParamContentUnion{
+				OfText: &anthropic.TextBlockParam{Text: block.ToolResult.Text},
+			})
+		}
+
+		for _, nested := range block.ToolResult.Content {
+			switch nested.Type {
+			case ContentBlockTypeText:
+				contentParts = append(contentParts, anthropic.ToolResultBlockParamContentUnion{
+					OfText: &anthropic.TextBlockParam{Text: nested.Text},
+				})
+			case ContentBlockTypeImage:
+				if nested.Image == nil || nested.Image.Url == "" {
+					return anthropic.ContentBlockParamUnion{}, fmt.Errorf("nested image block in tool_result missing ImageRef or URL")
+				}
+				imgParam, err := toolResultImageToAnthropicParam(nested.Image.Url)
+				if err != nil {
+					return anthropic.ContentBlockParamUnion{}, err
+				}
+				contentParts = append(contentParts, anthropic.ToolResultBlockParamContentUnion{
+					OfImage: imgParam,
+				})
+			default:
+				return anthropic.ContentBlockParamUnion{}, fmt.Errorf("unsupported nested content block type in tool_result: %s", nested.Type)
+			}
+		}
+
+		if len(contentParts) == 0 {
+			contentParts = append(contentParts, anthropic.ToolResultBlockParamContentUnion{
+				OfText: &anthropic.TextBlockParam{Text: ""},
+			})
+		}
+
+		toolResultBlock := anthropic.ContentBlockParamUnion{
+			OfToolResult: &anthropic.ToolResultBlockParam{
+				ToolUseID: block.ToolResult.ToolCallId,
+				Content:   contentParts,
+				IsError:   anthropic.Bool(block.ToolResult.IsError),
+			},
+		}
 		if block.CacheControl != "" {
 			toolResultBlock.OfToolResult.CacheControl = anthropic.CacheControlEphemeralParam{
 				Type: "ephemeral",
