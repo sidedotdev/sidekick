@@ -42,7 +42,7 @@ func TestFailingTestOutputFlushed(t *testing.T) {
 	assert.Contains(t, out.String(), "--- pkg/a ---")
 }
 
-func TestSkippedTestOutputFlushed(t *testing.T) {
+func TestSkippedTestShowsOnlyName(t *testing.T) {
 	t.Parallel()
 
 	var out bytes.Buffer
@@ -53,8 +53,10 @@ func TestSkippedTestOutputFlushed(t *testing.T) {
 	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/b", Test: "TestSkipped", Output: "    skip_test.go:5: skipping for now\n"})
 	s.ProcessEvent(TestEvent{Action: "skip", Package: "pkg/b", Test: "TestSkipped"})
 
-	assert.Contains(t, out.String(), "skipping for now")
+	assert.Contains(t, out.String(), "SKIP: TestSkipped")
 	assert.Contains(t, out.String(), "--- pkg/b ---")
+	// Full output should not be flushed for skipped tests
+	assert.NotContains(t, out.String(), "skipping for now")
 }
 
 func TestPackageFailFlushesPackageOutput(t *testing.T) {
@@ -96,7 +98,7 @@ func TestCachedPackage(t *testing.T) {
 	assert.Empty(t, out.String())
 
 	summary := s.Summary()
-	assert.Contains(t, summary, "PASS (cached)")
+	assert.Contains(t, summary, "cached")
 	assert.Contains(t, summary, "pkg/e")
 }
 
@@ -128,7 +130,6 @@ func TestSummaryAllPackagesWhenAllPass(t *testing.T) {
 	var out bytes.Buffer
 	s := NewStreamer(&out)
 
-	// Two passing packages
 	s.ProcessEvent(TestEvent{Action: "run", Package: "pkg/one", Test: "TestA"})
 	s.ProcessEvent(TestEvent{Action: "pass", Package: "pkg/one", Test: "TestA"})
 	s.ProcessEvent(TestEvent{Action: "pass", Package: "pkg/one", Elapsed: 0.1})
@@ -157,7 +158,7 @@ func TestUniqueTestCount(t *testing.T) {
 	s.ProcessEvent(TestEvent{Action: "pass", Package: "pkg/x", Elapsed: 0.5})
 
 	summary := s.Summary()
-	assert.Contains(t, summary, "3 tests")
+	assert.Contains(t, summary, "3 passed")
 }
 
 func TestSkippedTestMarksPackageAsSkip(t *testing.T) {
@@ -173,8 +174,11 @@ func TestSkippedTestMarksPackageAsSkip(t *testing.T) {
 	s.ProcessEvent(TestEvent{Action: "skip", Package: "pkg/s", Test: "TestSkip"})
 	s.ProcessEvent(TestEvent{Action: "pass", Package: "pkg/s", Elapsed: 0.0})
 
+	assert.Contains(t, out.String(), "SKIP: TestSkip")
+	assert.NotContains(t, out.String(), "--- SKIP: TestSkip (0.00s)")
+
 	summary := s.Summary()
-	assert.Contains(t, summary, "SKIP")
+	assert.Contains(t, summary, "1 skipped")
 	assert.NotContains(t, summary, "FAIL")
 }
 
@@ -245,10 +249,10 @@ func TestCachedPackageNoTestCount(t *testing.T) {
 	s.ProcessEvent(TestEvent{Action: "pass", Package: "pkg/cached", Elapsed: 0.0})
 
 	summary := s.Summary()
-	assert.Contains(t, summary, "PASS (cached)")
+	assert.Contains(t, summary, "cached")
 	assert.Contains(t, summary, "pkg/cached")
-	// Should not show "0 tests" — cached packages omit test count
-	assert.NotContains(t, summary, "0 tests")
+	// Should not show "no tests" — cached packages omit test count
+	assert.NotContains(t, summary, "no tests")
 }
 
 func TestMixedPassSkipFail(t *testing.T) {
@@ -268,14 +272,131 @@ func TestMixedPassSkipFail(t *testing.T) {
 
 	s.ProcessEvent(TestEvent{Action: "pass", Package: "pkg/mix", Elapsed: 0.3})
 
-	// Skipped test output should be present
-	assert.Contains(t, out.String(), "skip reason")
-	// Passing test output should not
+	// Skipped test name should be present, but not full output
+	assert.Contains(t, out.String(), "SKIP: TestSkipped")
+	assert.NotContains(t, out.String(), "skip reason")
+	// Passing test output should not appear
 	assert.NotContains(t, out.String(), "ok output")
 
 	summary := s.Summary()
-	assert.Contains(t, summary, "SKIP")
-	assert.Contains(t, summary, "2 tests")
+	assert.Contains(t, summary, "1 passed, 1 skipped")
+}
+
+func TestSummaryMergesSiblingPackages(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := NewStreamer(&out)
+
+	// 3+ "no tests" packages under same prefix get merged
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "app/scripts/a", Elapsed: 0.0})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "app/scripts/b", Elapsed: 0.0})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "app/scripts/c", Elapsed: 0.0})
+
+	summary := s.Summary()
+	assert.Contains(t, summary, "app/scripts/*")
+	assert.Contains(t, summary, "no tests")
+	assert.NotContains(t, summary, "app/scripts/a")
+	assert.NotContains(t, summary, "app/scripts/b")
+}
+
+func TestSummaryNoMergeBelowThreshold(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := NewStreamer(&out)
+
+	// Only 2 siblings: not enough to merge
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "app/scripts/a", Elapsed: 0.0})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "app/scripts/b", Elapsed: 0.0})
+
+	summary := s.Summary()
+	assert.Contains(t, summary, "app/scripts/a")
+	assert.Contains(t, summary, "app/scripts/b")
+	assert.NotContains(t, summary, "app/scripts/*")
+}
+
+func TestSummaryMergesPassedSiblings(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := NewStreamer(&out)
+
+	// 3+ passing packages under a 2+ segment parent
+	s.ProcessEvent(TestEvent{Action: "run", Package: "app/lib/math", Test: "TestAdd"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "app/lib/math", Test: "TestAdd"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "app/lib/math", Elapsed: 0.1})
+
+	s.ProcessEvent(TestEvent{Action: "run", Package: "app/lib/str", Test: "TestTrim"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "app/lib/str", Test: "TestTrim"})
+	s.ProcessEvent(TestEvent{Action: "run", Package: "app/lib/str", Test: "TestSplit"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "app/lib/str", Test: "TestSplit"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "app/lib/str", Elapsed: 0.2})
+
+	s.ProcessEvent(TestEvent{Action: "run", Package: "app/lib/io", Test: "TestRead"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "app/lib/io", Test: "TestRead"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "app/lib/io", Elapsed: 0.1})
+
+	summary := s.Summary()
+	assert.Contains(t, summary, "app/lib/*")
+	assert.Contains(t, summary, "4 passed")
+	assert.NotContains(t, summary, "app/lib/math")
+	assert.NotContains(t, summary, "app/lib/str")
+}
+
+func TestSummaryMergesWithParentPackage(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := NewStreamer(&out)
+
+	// Parent package + children
+	s.ProcessEvent(TestEvent{Action: "run", Package: "coding", Test: "TestA"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "coding", Test: "TestA"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "coding", Elapsed: 0.1})
+
+	s.ProcessEvent(TestEvent{Action: "run", Package: "coding/check", Test: "TestB"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "coding/check", Test: "TestB"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "coding/check", Elapsed: 0.1})
+
+	summary := s.Summary()
+	// Should use /... when the prefix is itself a package
+	assert.Contains(t, summary, "coding/...")
+	assert.Contains(t, summary, "2 passed")
+}
+
+func TestSummaryNoMergeAcrossDifferentPrefixes(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := NewStreamer(&out)
+
+	s.ProcessEvent(TestEvent{Action: "run", Package: "alpha/one", Test: "TestA"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "alpha/one", Test: "TestA"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "alpha/one", Elapsed: 0.1})
+
+	s.ProcessEvent(TestEvent{Action: "run", Package: "beta/two", Test: "TestB"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "beta/two", Test: "TestB"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "beta/two", Elapsed: 0.1})
+
+	summary := s.Summary()
+	assert.Contains(t, summary, "alpha/one")
+	assert.Contains(t, summary, "beta/two")
+}
+
+func TestSummaryNoDurationShown(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := NewStreamer(&out)
+
+	s.ProcessEvent(TestEvent{Action: "run", Package: "pkg/a", Test: "TestA"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "pkg/a", Test: "TestA"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "pkg/a", Elapsed: 1.5})
+
+	summary := s.Summary()
+	assert.NotContains(t, summary, "1.5s")
+	assert.NotContains(t, summary, "0.0s")
 }
 
 func TestEmptyStreamSummary(t *testing.T) {
@@ -310,4 +431,36 @@ func TestMultipleFailedPackagesInSummary(t *testing.T) {
 	assert.Contains(t, summary, "b/fail1")
 	assert.Contains(t, summary, "c/fail2")
 	assert.NotContains(t, summary, "a/pass")
+}
+
+func TestSummaryFailedPackageHasEmoji(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := NewStreamer(&out)
+
+	s.ProcessEvent(TestEvent{Action: "run", Package: "pkg/ok", Test: "TestA"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "pkg/ok", Test: "TestA"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "pkg/ok", Elapsed: 0.1})
+
+	s.ProcessEvent(TestEvent{Action: "run", Package: "pkg/bad", Test: "TestB"})
+	s.ProcessEvent(TestEvent{Action: "fail", Package: "pkg/bad", Test: "TestB"})
+	s.ProcessEvent(TestEvent{Action: "fail", Package: "pkg/bad", Elapsed: 0.2})
+
+	summary := s.Summary()
+	assert.Contains(t, summary, "❌")
+	assert.Contains(t, summary, "❌  pkg/bad")
+
+	// Passing packages not shown when failures exist
+	assert.NotContains(t, summary, "pkg/ok")
+
+	// All-pass summary should not have emoji
+	var out2 bytes.Buffer
+	s2 := NewStreamer(&out2)
+	s2.ProcessEvent(TestEvent{Action: "run", Package: "pkg/ok", Test: "TestA"})
+	s2.ProcessEvent(TestEvent{Action: "pass", Package: "pkg/ok", Test: "TestA"})
+	s2.ProcessEvent(TestEvent{Action: "pass", Package: "pkg/ok", Elapsed: 0.1})
+
+	summary2 := s2.Summary()
+	assert.NotContains(t, summary2, "❌")
 }

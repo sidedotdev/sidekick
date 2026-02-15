@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"sidekick/gotestreport"
@@ -96,8 +95,9 @@ func TestIntegrationStreamingAggregator(t *testing.T) {
 	// Passing test output should be suppressed
 	assert.NotContains(t, output, "this output should be suppressed")
 
-	// Skipped test output should appear
-	assert.Contains(t, output, "skip output should appear")
+	// Skipped test name should appear, but not full output
+	assert.Contains(t, output, "SKIP: TestSkipped")
+	assert.NotContains(t, output, "skip output should appear")
 
 	// Failed test output should appear
 	assert.Contains(t, output, "fail output should appear")
@@ -106,7 +106,7 @@ func TestIntegrationStreamingAggregator(t *testing.T) {
 	assert.Contains(t, summary, "=== Summary ===")
 
 	// Since there's a failure, summary should only show the failed package
-	assert.Contains(t, summary, "FAIL")
+	assert.Contains(t, summary, "failed")
 	assert.Contains(t, summary, "testmod/failing")
 	assert.NotContains(t, summary, "testmod/passing")
 	assert.NotContains(t, summary, "testmod/skipping")
@@ -162,14 +162,7 @@ func TestSkipped(t *testing.T) {
 	assert.Contains(t, summary, "=== Summary ===")
 	assert.Contains(t, summary, "testmod/passing")
 	assert.Contains(t, summary, "testmod/skipping")
-
-	// Verify SKIP status appears for the skipped package
-	lines := strings.Split(summary, "\n")
-	for _, line := range lines {
-		if strings.Contains(line, "testmod/skipping") {
-			assert.Contains(t, line, "SKIP")
-		}
-	}
+	assert.Contains(t, summary, "1 skipped")
 
 	assert.False(t, streamer.HasFailures())
 }
