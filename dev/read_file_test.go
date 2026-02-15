@@ -160,6 +160,39 @@ func TestReadFileActivity_PathTraversal(t *testing.T) {
 	}
 }
 
+func TestReadFileActivity_PathTraversal_AllowAnyPath(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+
+	// Create a file in a subdirectory to traverse into
+	subDir := filepath.Join(tempDir, "sub")
+	require.NoError(t, os.MkdirAll(subDir, 0755))
+	targetFile := filepath.Join(subDir, "target.txt")
+	require.NoError(t, os.WriteFile(targetFile, []byte("line1\nline2\nline3\n"), 0644))
+
+	// With AllowAnyPath, relative paths with ".." should succeed if the file exists
+	params := ReadFileActivityInput{
+		FilePath:     "sub/../sub/target.txt",
+		LineNumber:   1,
+		WindowSize:   1,
+		AllowAnyPath: true,
+	}
+	result, err := ReadFileActivity(tempDir, params)
+	require.NoError(t, err)
+	require.Contains(t, result, "line1")
+
+	// Absolute paths should also work with AllowAnyPath
+	params = ReadFileActivityInput{
+		FilePath:     targetFile,
+		LineNumber:   1,
+		WindowSize:   1,
+		AllowAnyPath: true,
+	}
+	result, err = ReadFileActivity(tempDir, params)
+	require.NoError(t, err)
+	require.Contains(t, result, "line1")
+}
+
 func TestReadFileActivity_NonExistentFile(t *testing.T) {
 	tempDir := t.TempDir()
 

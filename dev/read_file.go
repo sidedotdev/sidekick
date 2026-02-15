@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"sidekick/coding"
+	"sidekick/env"
 	"sidekick/llm"
 	"sidekick/utils"
 	"slices"
@@ -17,13 +18,17 @@ import (
 )
 
 type ReadFileActivityInput struct {
-	FilePath   string
-	LineNumber int
-	WindowSize int
+	FilePath     string
+	LineNumber   int
+	WindowSize   int
+	AllowAnyPath bool
 }
 
 // validateFilePath rejects paths that would escape the base directory via traversal.
-func validateFilePath(filePath string) error {
+func validateFilePath(filePath string, allowAnyPath bool) error {
+	if allowAnyPath {
+		return nil
+	}
 	if filepath.IsAbs(filePath) {
 		return fmt.Errorf("file path must be relative, got: %s", filePath)
 	}
@@ -40,11 +45,14 @@ func ReadFileActivity(baseDir string, readFileParams ReadFileActivityInput) (str
 		return "", fmt.Errorf("line number must be greater than 0 and window size must be at least 0")
 	}
 
-	if err := validateFilePath(readFileParams.FilePath); err != nil {
+	if err := validateFilePath(readFileParams.FilePath, readFileParams.AllowAnyPath); err != nil {
 		return "", err
 	}
 
 	filePath := path.Join(baseDir, readFileParams.FilePath)
+	if readFileParams.AllowAnyPath && filepath.IsAbs(readFileParams.FilePath) {
+		filePath = readFileParams.FilePath
+	}
 	lang := utils.InferLanguageNameFromFilePath(filePath)
 
 	file, err := os.Open(filePath)
@@ -98,8 +106,9 @@ type FileLine struct {
 }
 
 type BulkReadFileParams struct {
-	FileLines  []FileLine `json:"file_lines"`
-	WindowSize int        `json:"window_size"`
+	FileLines    []FileLine `json:"file_lines"`
+	WindowSize   int        `json:"window_size"`
+	AllowAnyPath bool       `json:"allow_any_path,omitempty"`
 }
 
 type MergedCodeBlock struct {
@@ -136,7 +145,7 @@ func BulkReadFileActivity(baseDir string, params BulkReadFileParams) (BulkReadFi
 			return BulkReadFileActivityResult{}, fmt.Errorf("line number must be greater than 0")
 		}
 
-		if err := validateFilePath(fileLine.FilePath); err != nil {
+		if err := validateFilePath(fileLine.FilePath, params.AllowAnyPath); err != nil {
 			return BulkReadFileActivityResult{}, err
 		}
 
@@ -187,6 +196,9 @@ func BulkReadFileActivity(baseDir string, params BulkReadFileParams) (BulkReadFi
 
 		// Read the file and extract content for each merged interval
 		fullFilePath := path.Join(baseDir, filePath)
+		if params.AllowAnyPath && filepath.IsAbs(filePath) {
+			fullFilePath = filePath
+		}
 		file, err := os.Open(fullFilePath)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -278,6 +290,8 @@ func BulkReadFileV2(dCtx DevContext, params BulkReadFileParams) (string, error) 
 	}
 
 	envContainer := dCtx.EnvContainer
+	params.AllowAnyPath = envContainer.Env.GetType() == env.EnvTypeDevPod
+
 	var result BulkReadFileActivityResult
 	err := workflow.ExecuteActivity(dCtx, BulkReadFileActivity, envContainer.Env.GetWorkingDirectory(), params).Get(dCtx, &result)
 	if err != nil {
@@ -311,13 +325,16 @@ func BulkReadFile(dCtx DevContext, bulkReadFileParams BulkReadFileParams) (strin
 	if version == workflow.DefaultVersion {
 		// Original behavior: execute ReadFileActivity for each request
 		envContainer := dCtx.EnvContainer
+		allowAnyPath := envContainer.Env.GetType() == env.EnvTypeDevPod
+
 		var results []string
 
 		for _, fileLine := range bulkReadFileParams.FileLines {
 			readFileParams := ReadFileActivityInput{
-				FilePath:   fileLine.FilePath,
-				LineNumber: fileLine.LineNumber,
-				WindowSize: bulkReadFileParams.WindowSize,
+				FilePath:     fileLine.FilePath,
+				LineNumber:   fileLine.LineNumber,
+				WindowSize:   bulkReadFileParams.WindowSize,
+				AllowAnyPath: allowAnyPath,
 			}
 			var result string
 			err := workflow.ExecuteActivity(dCtx, ReadFileActivity, envContainer.Env.GetWorkingDirectory(), readFileParams).Get(dCtx, &result)
