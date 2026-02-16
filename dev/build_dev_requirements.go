@@ -318,39 +318,39 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	if len(chatResponse.GetMessage().GetToolCalls()) > 0 {
 		var recordedReqs *DevRequirements
 
-		customHandlers := map[string]func(DevContext, llm.ToolCall) (ToolCallResponseInfo, error){
-			recordDevRequirementsTool.Name: func(dCtx DevContext, tc llm.ToolCall) (ToolCallResponseInfo, error) {
+		customHandlers := map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error){
+			recordDevRequirementsTool.Name: func(dCtx DevContext, tc llm.ToolCall) (llm2.ToolResultBlock, error) {
 				devReq, unmarshalErr := unmarshalDevRequirements(tc.Arguments)
 				if unmarshalErr != nil {
-					return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks(unmarshalErr.Error()), FunctionName: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
+					return llm2.ToolResultBlock{Content: llm2.TextContentBlocks(unmarshalErr.Error()), Name: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
 				}
 				state.devRequirements = devReq
 				if devReq.Complete {
 					userResponse, approveErr := ApproveDevRequirements(dCtx, devReq)
 					if approveErr != nil {
-						return ToolCallResponseInfo{}, fmt.Errorf("error approving dev requirements: %v", approveErr)
+						return llm2.ToolResultBlock{}, fmt.Errorf("error approving dev requirements: %v", approveErr)
 					}
 					iteration.AutoIterationCount = 0
 					if userResponse.Approved != nil && *userResponse.Approved {
 						recordedReqs = &devReq
-						return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks("Requirements recorded and approved."), FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+						return llm2.ToolResultBlock{Content: llm2.TextContentBlocks("Requirements recorded and approved."), Name: tc.Name, ToolCallId: tc.Id}, nil
 					} else {
 						feedback := fmt.Sprintf("Requirements were not approved. Current state:\n%s\n\nPlease try again, taking this feedback into account:\n\n%s", devReq.String(), userResponse.Content)
-						return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks(feedback), FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+						return llm2.ToolResultBlock{Content: llm2.TextContentBlocks(feedback), Name: tc.Name, ToolCallId: tc.Id}, nil
 					}
 				} else {
-					return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks("Recorded partial requirements, but requirements are not finalized yet based on the \"requirements_finalized\" boolean field value being set to false. Do some more research or thinking to finalize the requirements, as needed. If you need more details or clarification from the user, use the " + getHelpOrInputTool.Name + " tool. Then record the finalized requirements again in full, or use update_dev_requirements to make incremental changes."), FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+					return llm2.ToolResultBlock{Content: llm2.TextContentBlocks("Recorded partial requirements, but requirements are not finalized yet based on the \"requirements_finalized\" boolean field value being set to false. Do some more research or thinking to finalize the requirements, as needed. If you need more details or clarification from the user, use the " + getHelpOrInputTool.Name + " tool. Then record the finalized requirements again in full, or use update_dev_requirements to make incremental changes."), Name: tc.Name, ToolCallId: tc.Id}, nil
 				}
 			},
-			updateDevRequirementsTool.Name: func(dCtx DevContext, tc llm.ToolCall) (ToolCallResponseInfo, error) {
+			updateDevRequirementsTool.Name: func(dCtx DevContext, tc llm.ToolCall) (llm2.ToolResultBlock, error) {
 				var update DevRequirementsUpdate
 				if err := json.Unmarshal([]byte(llm.RepairJson(tc.Arguments)), &update); err != nil {
-					return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks(fmt.Sprintf("failed to unmarshal update: %v", err)), FunctionName: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
+					return llm2.ToolResultBlock{Content: llm2.TextContentBlocks(fmt.Sprintf("failed to unmarshal update: %v", err)), Name: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
 				}
 
 				updatedReqs, err := applyDevRequirementsUpdates(state.devRequirements, update)
 				if err != nil {
-					return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks(fmt.Sprintf("failed to apply updates: %v", err)), FunctionName: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
+					return llm2.ToolResultBlock{Content: llm2.TextContentBlocks(fmt.Sprintf("failed to apply updates: %v", err)), Name: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
 				}
 
 				state.devRequirements = updatedReqs
@@ -358,19 +358,19 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 				if updatedReqs.Complete {
 					userResponse, approveErr := ApproveDevRequirements(dCtx, updatedReqs)
 					if approveErr != nil {
-						return ToolCallResponseInfo{}, fmt.Errorf("error approving dev requirements: %v", approveErr)
+						return llm2.ToolResultBlock{}, fmt.Errorf("error approving dev requirements: %v", approveErr)
 					}
 					iteration.AutoIterationCount = 0
 					if userResponse.Approved != nil && *userResponse.Approved {
 						recordedReqs = &updatedReqs
-						return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks("Requirements updated and approved."), FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+						return llm2.ToolResultBlock{Content: llm2.TextContentBlocks("Requirements updated and approved."), Name: tc.Name, ToolCallId: tc.Id}, nil
 					} else {
 						feedback := fmt.Sprintf("Requirements updated but not approved. Current state:\n%s\n\nPlease try again, taking this feedback into account:\n\n%s", updatedReqs.String(), userResponse.Content)
-						return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks(feedback), FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+						return llm2.ToolResultBlock{Content: llm2.TextContentBlocks(feedback), Name: tc.Name, ToolCallId: tc.Id}, nil
 					}
 				}
 
-				return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks(fmt.Sprintf("Requirements updated successfully. Current state:\n%s", updatedReqs.String())), FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+				return llm2.ToolResultBlock{Content: llm2.TextContentBlocks(fmt.Sprintf("Requirements updated successfully. Current state:\n%s", updatedReqs.String())), Name: tc.Name, ToolCallId: tc.Id}, nil
 			},
 		}
 
@@ -379,11 +379,11 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 		for _, res := range toolCallResults {
 			addToolCallResponse(iteration.ExecCtx, iteration.ChatHistory, res)
 
-			if len(res.TextResponse()) > 5000 {
-				state.contextSizeExtension += len(res.TextResponse()) - 5000
+			if len(res.TextContent()) > 5000 {
+				state.contextSizeExtension += len(res.TextContent()) - 5000
 			}
 
-			if res.FunctionName == getHelpOrInputTool.Name {
+			if res.Name == getHelpOrInputTool.Name {
 				iteration.AutoIterationCount = 0
 			}
 		}
@@ -506,9 +506,6 @@ func addDevRequirementsPrompt(ctx workflow.Context, chatHistory *persisted_ai.Ch
 		contextType = ContextTypeInitialInstructions
 	case FeedbackInfo:
 		content = renderGeneralFeedbackPrompt(info.Feedback, info.Type)
-	case ToolCallResponseInfo:
-		addToolCallResponse(ctx, chatHistory, info)
-		return
 	default:
 		panic("Unsupported prompt type for dev requirements: " + promptInfo.GetType())
 	}
@@ -520,39 +517,15 @@ func addDevRequirementsPrompt(ctx workflow.Context, chatHistory *persisted_ai.Ch
 	})
 }
 
-func addToolCallResponse(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, info ToolCallResponseInfo) {
-	hasRichContent := false
-	for _, cb := range info.ToolResultContent {
-		if cb.Type != llm2.ContentBlockTypeText {
-			hasRichContent = true
-			break
-		}
+func addToolCallResponse(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, trb llm2.ToolResultBlock) {
+	msg := &llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{{
+			Type:       llm2.ContentBlockTypeToolResult,
+			ToolResult: &trb,
+		}},
 	}
-
-	if hasRichContent {
-		msg := &llm2.Message{
-			Role: llm2.RoleUser,
-			Content: []llm2.ContentBlock{{
-				Type: llm2.ContentBlockTypeToolResult,
-				ToolResult: &llm2.ToolResultBlock{
-					ToolCallId: info.ToolCallId,
-					Name:       info.FunctionName,
-					IsError:    info.IsError,
-					Content:    info.ToolResultContent,
-				},
-			}},
-		}
-		AppendChatHistory(ctx, chatHistory, msg)
-		return
-	}
-
-	AppendChatHistory(ctx, chatHistory, llm.ChatMessage{
-		Role:       llm.ChatMessageRoleTool,
-		Content:    info.TextResponse(),
-		Name:       info.FunctionName,
-		ToolCallId: info.ToolCallId,
-		IsError:    info.IsError,
-	})
+	AppendChatHistory(ctx, chatHistory, msg)
 }
 
 func ApproveDevRequirements(dCtx DevContext, devReq DevRequirements) (*flow_action.UserResponse, error) {

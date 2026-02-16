@@ -289,9 +289,9 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to force searching repository: %v", err)
 			}
-			toolCallResponseInfos := handleToolCalls(actionCtx.DevContext, toolCalls, nil)
-			for _, info := range toolCallResponseInfos {
-				addCodeContextPrompt(actionCtx, chatHistory, info)
+			toolCallResults := handleToolCalls(actionCtx.DevContext, toolCalls, nil)
+			for _, trb := range toolCallResults {
+				addCodeContextToolResult(actionCtx, chatHistory, trb)
 			}
 		}
 
@@ -319,7 +319,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		}
 		if hasUnmarshalError {
 			for _, feedback := range feedbacks {
-				addCodeContextPrompt(actionCtx, chatHistory, feedback)
+				addCodeContextToolResult(actionCtx, chatHistory, feedback)
 			}
 			continue
 		}
@@ -336,7 +336,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		allSymbolDefinitions, retrievalFeedbacks := retrieveCodeContextForToolCalls(noRetryCtx, actionCtx.EnvContainer, toolCallResults)
 		if len(retrievalFeedbacks) > 0 {
 			for _, feedback := range retrievalFeedbacks {
-				addCodeContextPrompt(actionCtx, chatHistory, feedback)
+				addCodeContextToolResult(actionCtx, chatHistory, feedback)
 			}
 			continue
 		}
@@ -362,8 +362,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			// Provide feedback for all tool calls when combined context is too long
 			feedback := "Error: the code context requested is too long to include. YOU MUST SHORTEN THE CODE CONTEXT REQUESTED. DO NOT REQUEST SO MANY FUNCTIONS AND TYPES IN SO MANY FILES. If you're not asking for too many symbols, then be more specific in your request - eg request just a few methods instead of a big class."
 			for _, tcResult := range toolCallResults {
-				promptInfo = ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks(feedback), ToolCallId: tcResult.ToolCall.Id, FunctionName: tcResult.ToolCall.Name}
-				addCodeContextPrompt(actionCtx, chatHistory, promptInfo)
+				addCodeContextToolResult(actionCtx, chatHistory, llm2.ToolResultBlock{Content: llm2.TextContentBlocks(feedback), ToolCallId: tcResult.ToolCall.Id, Name: tcResult.ToolCall.Name})
 			}
 			continue
 		} else {
@@ -508,17 +507,17 @@ func mergeToolCallRequests(results []ToolCallWithCodeContext) RequiredCodeContex
 // checkToolCallUnmarshalErrors checks for unmarshal errors in tool call results.
 // Returns feedback for each malformed tool call, whether any unmarshal errors were found,
 // and a fatal error if a non-unmarshal error is encountered.
-func checkToolCallUnmarshalErrors(results []ToolCallWithCodeContext) ([]ToolCallResponseInfo, bool, error) {
-	var feedbacks []ToolCallResponseInfo
+func checkToolCallUnmarshalErrors(results []ToolCallWithCodeContext) ([]llm2.ToolResultBlock, bool, error) {
+	var feedbacks []llm2.ToolResultBlock
 	hasUnmarshalError := false
 	for _, tcResult := range results {
 		if tcResult.Err != nil {
 			if errors.Is(tcResult.Err, llm.ErrToolCallUnmarshal) {
 				response := fmt.Sprintf("%s\n\nHint: To fix this, follow the json schema correctly. In particular, don't put json within a string.", tcResult.Err.Error())
-				feedbacks = append(feedbacks, ToolCallResponseInfo{
-					ToolResultContent: llm2.TextContentBlocks(response),
-					ToolCallId:        tcResult.ToolCall.Id,
-					FunctionName:      tcResult.ToolCall.Name,
+				feedbacks = append(feedbacks, llm2.ToolResultBlock{
+					Content:    llm2.TextContentBlocks(response),
+					ToolCallId: tcResult.ToolCall.Id,
+					Name:       tcResult.ToolCall.Name,
 				})
 				hasUnmarshalError = true
 			} else {
@@ -532,9 +531,9 @@ func checkToolCallUnmarshalErrors(results []ToolCallWithCodeContext) ([]ToolCall
 // retrieveCodeContextForToolCalls retrieves code context for each tool call and returns
 // the concatenated symbol definitions. If any retrieval fails, it returns feedback for
 // those failures instead of symbol definitions.
-func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.EnvContainer, results []ToolCallWithCodeContext) ([]string, []ToolCallResponseInfo) {
+func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.EnvContainer, results []ToolCallWithCodeContext) ([]string, []llm2.ToolResultBlock) {
 	var allSymbolDefinitions []string
-	var feedbacks []ToolCallResponseInfo
+	var feedbacks []llm2.ToolResultBlock
 
 	v := workflow.GetVersion(ctx, "handle-multiple-required-code-context", workflow.DefaultVersion, 1)
 	for i, tcResult := range results {
@@ -556,10 +555,10 @@ func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.Env
 		if err != nil || result.Failures != "" {
 			hint := fmt.Sprintf("Have you followed the required formats exactly for all arguments? Look at the examples given in the %s schema descriptions for all the properties. Note that frontend components can be retrieved in full with empty symbol names array", currentGetSymbolDefinitionsTool().Name)
 			feedback := fmt.Sprintf("failed to extract code context: %v\n%s\n\nHint: %s", err, result.Failures, hint)
-			feedbacks = append(feedbacks, ToolCallResponseInfo{
-				ToolResultContent: llm2.TextContentBlocks(feedback),
-				ToolCallId:        tcResult.ToolCall.Id,
-				FunctionName:      tcResult.ToolCall.Name,
+			feedbacks = append(feedbacks, llm2.ToolResultBlock{
+				Content:    llm2.TextContentBlocks(feedback),
+				ToolCallId: tcResult.ToolCall.Id,
+				Name:       tcResult.ToolCall.Name,
 			})
 		} else {
 			allSymbolDefinitions = append(allSymbolDefinitions, result.SymbolDefinitions)
@@ -581,12 +580,6 @@ func addCodeContextPrompt(ctx workflow.Context, chatHistory *persisted_ai.ChatHi
 	switch info := promptInfo.(type) {
 	case SkipInfo:
 		skip = true
-	case ToolCallResponseInfo:
-		role = llm.ChatMessageRoleTool
-		content = renderCodeContextFeedbackPrompt(info.TextResponse(), "")
-		name = info.FunctionName
-		toolCallId = info.ToolCallId
-		isError = info.IsError
 	case FeedbackInfo:
 		content = renderCodeContextFeedbackPrompt(info.Feedback, info.Type)
 	case DetermineCodeContextInfo:
@@ -612,6 +605,17 @@ func addCodeContextPrompt(ctx workflow.Context, chatHistory *persisted_ai.ChatHi
 			IsError:      isError,
 		})
 	}
+}
+
+func addCodeContextToolResult(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, trb llm2.ToolResultBlock) {
+	content := renderCodeContextFeedbackPrompt(trb.TextContent(), "")
+	AppendChatHistory(ctx, chatHistory, llm.ChatMessage{
+		Role:       llm.ChatMessageRoleTool,
+		Content:    content,
+		Name:       trb.Name,
+		ToolCallId: trb.ToolCallId,
+		IsError:    trb.IsError,
+	})
 }
 
 func renderCodeContextFeedbackPrompt(feedback, feedbackType string) string {

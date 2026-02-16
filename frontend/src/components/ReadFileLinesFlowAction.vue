@@ -18,8 +18,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { FlowAction } from '../lib/models';
-import type { Llm2ToolResultContentBlock } from '../lib/models';
+import type { FlowAction, Llm2ContentBlock } from '../lib/models';
 import JsonTree from './JsonTree.vue'
 
 const props = defineProps<{
@@ -71,23 +70,21 @@ const parsedResult = computed(() => {
   }
 })
 
-const contentBlocks = computed<Llm2ToolResultContentBlock[] | null>(() => {
+const contentBlocks = computed<Llm2ContentBlock[] | null>(() => {
   const parsed = parsedResult.value
   if (parsed?.content && Array.isArray(parsed.content)) {
     return parsed.content
   }
-  if (parsed?.toolResultContent && Array.isArray(parsed.toolResultContent)) {
-    return parsed.toolResultContent
+  const trc = parsed?.toolResultContent ?? parsed?.ToolResultContent
+  if (trc && Array.isArray(trc)) {
+    return trc
   }
   return null
 })
 
 const toolResponse = computed<string | null>(() => {
   const parsed = parsedResult.value
-  if (parsed?.Response) {
-    return parsed.Response
-  }
-  return null
+  return parsed?.response ?? parsed?.Response ?? null
 })
 </script>
 

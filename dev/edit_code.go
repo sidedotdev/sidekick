@@ -374,22 +374,22 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			}
 		}
 
-		var toolCallResponses []ToolCallResponseInfo
+		var toolCallResponses []llm2.ToolResultBlock
 		if len(chatResponse.GetMessage().GetToolCalls()) > 0 {
 			toolCallResponses = handleToolCalls(dCtx, chatResponse.GetMessage().GetToolCalls(), nil)
 		}
 
 		// Add tool call responses to history
-		for _, toolCallResponseInfo := range toolCallResponses {
+		for _, toolCallResponse := range toolCallResponses {
 			// Reset feedback counter if this was a getHelpOrInput response
-			if toolCallResponseInfo.FunctionName == getHelpOrInputTool.Name {
+			if toolCallResponse.Name == getHelpOrInputTool.Name {
 				attemptsSinceLastEditBlockOrFeedback = 0
 			}
 			// dynamically adjust the context size extension based on the length of the response
-			if len(toolCallResponseInfo.TextResponse()) > 5000 {
-				contextSizeExtension += len(toolCallResponseInfo.TextResponse()) - 5000
+			if len(toolCallResponse.TextContent()) > 5000 {
+				contextSizeExtension += len(toolCallResponse.TextContent()) - 5000
 			}
-			addToolCallResponse(dCtx, chatHistory, toolCallResponseInfo)
+			addToolCallResponse(dCtx, chatHistory, toolCallResponse)
 		}
 
 		// keep loop going if we failed to apply edit blocks, with feedback hints
@@ -457,9 +457,6 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 		if info.Type == FeedbackTypeApplyError {
 			contextType = ContextTypeEditBlockReport
 		}
-	case ToolCallResponseInfo:
-		addToolCallResponse(dCtx, chatHistory, info)
-		skip = true
 	default:
 		panic("Unsupported prompt type for authoring edit blocks: " + promptInfo.GetType())
 	}
