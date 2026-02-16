@@ -1,5 +1,7 @@
 package common
 
+import "encoding/json"
+
 type RepoConfig struct {
 	/** A set of commands to run to check the code for basic issues, eg syntax
 	 * err, after an edit to determine if it is a good edit. A failed check
@@ -78,12 +80,42 @@ type DevRunConfig map[string]DevRunCommandConfig
 
 // DevRunCommandConfig configures a single named dev-run command.
 type DevRunCommandConfig struct {
-	WorkingDir string `toml:"working_dir,omitempty"`
-	Command    string `toml:"command"`
+	WorkingDir string `toml:"working_dir,omitempty" json:"workingDir,omitempty"`
+	Command    string `toml:"command" json:"command"`
 
 	// StopTimeoutSeconds is the time to wait after SIGINT before sending SIGKILL.
 	// Defaults to 10 seconds if not specified.
 	StopTimeoutSeconds int `toml:"stop_timeout_seconds,omitempty" json:"stopTimeoutSeconds,omitempty"`
+}
+
+// UnmarshalJSON supports both the current camelCase keys and the legacy
+// PascalCase keys (WorkingDir, Command, StopTimeoutSeconds) that were
+// produced before explicit json tags were added.
+func (c *DevRunCommandConfig) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	if v, ok := raw["workingDir"]; ok {
+		_ = json.Unmarshal(v, &c.WorkingDir)
+	} else if v, ok := raw["WorkingDir"]; ok {
+		_ = json.Unmarshal(v, &c.WorkingDir)
+	}
+
+	if v, ok := raw["command"]; ok {
+		_ = json.Unmarshal(v, &c.Command)
+	} else if v, ok := raw["Command"]; ok {
+		_ = json.Unmarshal(v, &c.Command)
+	}
+
+	if v, ok := raw["stopTimeoutSeconds"]; ok {
+		_ = json.Unmarshal(v, &c.StopTimeoutSeconds)
+	} else if v, ok := raw["StopTimeoutSeconds"]; ok {
+		_ = json.Unmarshal(v, &c.StopTimeoutSeconds)
+	}
+
+	return nil
 }
 
 type CommandConfig struct {
@@ -99,7 +131,7 @@ type AgentUseCaseConfig struct {
 type EditCodeConfig struct {
 	/** This is injected into the edit code prompt in order to provide hints to the LLM
 	 * for how to edit code in your particular code base. */
-	Hints string `toml:"hints"`
+	Hints string `toml:"hints,omitempty"`
 	/** Alternatively, specify a path relative to the repo root to load hints from.
 	 * If Hints is empty and HintsPath is set, the content of the file will be loaded into Hints. */
 	HintsPath string `toml:"hints_path,omitempty"`

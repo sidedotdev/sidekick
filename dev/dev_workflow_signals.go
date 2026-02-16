@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"errors"
 	"fmt"
 
 	"go.temporal.io/sdk/workflow"
@@ -16,6 +17,17 @@ const SignalNameUserAction = "userAction"
 type WorkflowClosure struct {
 	FlowId string
 	Reason string // reasons are: https://docs.temporal.io/workflows#closed
+}
+
+// signalWorkflowFailureOrCancel signals the parent workflow with "canceled" if
+// the context was canceled, otherwise signals "failed".
+func signalWorkflowFailureOrCancel(ctx workflow.Context) {
+	if errors.Is(ctx.Err(), workflow.ErrCanceled) {
+		disconnectedCtx, _ := workflow.NewDisconnectedContext(ctx)
+		_ = signalWorkflowClosure(disconnectedCtx, "canceled")
+	} else {
+		_ = signalWorkflowClosure(ctx, "failed")
+	}
 }
 
 func signalWorkflowClosure(ctx workflow.Context, reason string) (err error) {

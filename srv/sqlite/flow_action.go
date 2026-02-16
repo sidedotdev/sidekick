@@ -121,3 +121,12 @@ func (s *Storage) GetFlowAction(ctx context.Context, workspaceId, flowActionId s
 
 	return fa, nil
 }
+
+func (s *Storage) DeleteFlowActionsForFlow(ctx context.Context, workspaceId, flowId string) error {
+	query := "DELETE FROM flow_actions WHERE workspace_id = ? AND flow_id = ?"
+	_, err := s.db.ExecContext(ctx, query, workspaceId, flowId)
+	if err != nil {
+		return fmt.Errorf("failed to delete flow actions for flow %s: %w", flowId, err)
+	}
+	return nil
+}

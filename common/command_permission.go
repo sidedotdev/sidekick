@@ -25,11 +25,11 @@ type CommandPattern struct {
 
 // CommandPermissionConfig defines permission rules for shell commands
 type CommandPermissionConfig struct {
-	AutoApprove          []CommandPattern `toml:"auto_approve" json:"autoApprove" koanf:"auto_approve"`
-	RequireApproval      []CommandPattern `toml:"require_approval" json:"requireApproval" koanf:"require_approval"`
-	Deny                 []CommandPattern `toml:"deny" json:"deny" koanf:"deny"`
-	ResetAutoApprove     bool             `toml:"reset_auto_approve" json:"resetAutoApprove" koanf:"reset_auto_approve"`
-	ResetRequireApproval bool             `toml:"reset_require_approval" json:"resetRequireApproval" koanf:"reset_require_approval"`
+	AutoApprove          []CommandPattern `toml:"auto_approve,omitempty" json:"autoApprove" koanf:"auto_approve"`
+	RequireApproval      []CommandPattern `toml:"require_approval,omitempty" json:"requireApproval" koanf:"require_approval"`
+	Deny                 []CommandPattern `toml:"deny,omitempty" json:"deny" koanf:"deny"`
+	ResetAutoApprove     bool             `toml:"reset_auto_approve,omitempty" json:"resetAutoApprove" koanf:"reset_auto_approve"`
+	ResetRequireApproval bool             `toml:"reset_require_approval,omitempty" json:"resetRequireApproval" koanf:"reset_require_approval"`
 }
 
 // BaseCommandPermissionsActivity is a Temporal activity wrapper for BaseCommandPermissions
@@ -79,6 +79,9 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "dirname"},
 			{Pattern: "realpath"},
 			{Pattern: "readlink"},
+			{Pattern: "timeout"},
+			{Pattern: "sleep"},
+			{Pattern: "wait"},
 			// Git read operations
 			{Pattern: "git status"},
 			{Pattern: "git log"},
@@ -165,6 +168,8 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "bunx tsc"},
 			{Pattern: "npx tsc"},
 			// Python commands
+			{Pattern: "python --version"},
+			{Pattern: "python3 --version"},
 			{Pattern: "pytest"},
 			{Pattern: "python -m pytest"},
 			{Pattern: "python3 -m pytest"},
@@ -188,6 +193,8 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "ruff check"},
 			{Pattern: "ruff format"},
 			// uv commands
+			{Pattern: "uv python list"},
+			{Pattern: "uv run python --version"},
 			{Pattern: "uv run pytest"},
 			{Pattern: "uv run python -m pytest"},
 			{Pattern: "uv run python3 -m pytest"},

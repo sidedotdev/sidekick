@@ -33,7 +33,9 @@ import UserRequest from './UserRequest.vue'
 import ChatCompletionFlowAction from './ChatCompletionFlowAction.vue'
 import RunTestsFlowAction from './RunTestsFlowAction.vue'
 import JsonTree from './JsonTree.vue'
-import CheckCriteriaFulfillmentFlowAction, { type CriteriaFulfillment } from './CheckCriteriaFulfillmentFlowAction.vue'
+import CheckCriteriaFulfillmentFlowAction from './CheckCriteriaFulfillmentFlowAction.vue'
+import type { CriteriaFulfillment } from '@/lib/models';
+import { extractToolCallArguments } from '@/lib/models';
 import ApplyEditBlocksFlowAction, { type ApplyEditBlockResult } from './ApplyEditBlocksFlowAction.vue';
 import PlaintextResultFlowAction from './PlaintextResultFlowAction.vue';
 import ToolFlowAction from './ToolFlowAction.vue';
@@ -274,7 +276,8 @@ const summary = computed<Summary | null>(() => {
         return null;
       }
       try {
-        const criteriaFulfillment = JSON.parse(actionResult.value?.toolCalls[0]?.arguments || "null") as CriteriaFulfillment | null;
+        const args = extractToolCallArguments(actionResult.value);
+        const criteriaFulfillment = JSON.parse(args || "null") as CriteriaFulfillment | null;
         if (criteriaFulfillment === null) {
           return null;
         }

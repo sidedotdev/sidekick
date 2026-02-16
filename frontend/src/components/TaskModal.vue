@@ -12,6 +12,7 @@
       <div class="preset-section">
         <label>Model Config</label>
         <Dropdown
+          ref="presetDropdownRef"
           v-model="selectedPresetValue"
           :options="presetOptions"
           optionLabel="label"
@@ -26,11 +27,16 @@
                   <div class="preset-name">{{ option.label }}</div>
                   <div v-if="option.preset && option.label != getModelSummary(option.preset.config)" class="preset-summary">{{ getModelSummary(option.preset.config) }}</div>
                 </div>
-                <span
-                  v-if="option.preset"
-                  class="preset-delete-icon"
-                  @click.stop="deletePreset(option.preset.id)"
-                >x</span>
+                <span v-if="option.preset" class="preset-action-icons">
+                  <span
+                    class="preset-edit-icon"
+                    @click.stop="editPreset(option.preset.id)"
+                  >✎</span>
+                  <span
+                    class="preset-delete-icon"
+                    @click.stop="deletePreset(option.preset.id)"
+                  >x</span>
+                </span>
               </div>
             </div>
           </template>
@@ -38,10 +44,11 @@
       </div>
 
       <div v-if="isAddPresetMode" class="add-preset-section">
+        <div v-if="isEditingPreset" class="preset-editing-label">Editing preset</div>
         <input
           type="text"
           v-model="newPresetName"
-          placeholder="Preset name (optional)"
+          :placeholder="isEditingPreset ? 'Preset name' : 'Preset name (optional)'"
           class="preset-name-input"
         />
         <LlmConfigEditor v-model="llmConfig" />
@@ -184,6 +191,7 @@ const emit = defineEmits<{
   (e: 'close'): void
   (e: 'created'): void
   (e: 'updated'): void
+  (e: 'deleted'): void
 }>()
 
 const isEditMode = computed(() => !!props.task?.id)
@@ -356,6 +364,7 @@ const findMatchingPreset = (): string => {
 const selectedPresetValue = ref<string>(findMatchingPreset())
 const currentPresetId = ref<string | null>(null)
 const newPresetName = ref('')
+const presetDropdownRef = ref<InstanceType<typeof Dropdown> | null>(null)
 const llmConfig = ref<LLMConfig>(existingLlmConfig || {
   defaults: [{ provider: '', model: '', reasoningEffort: '' }],
   useCaseConfigs: {},
@@ -379,6 +388,7 @@ const presetOptions = computed((): PresetOption[] => {
 })
 
 const isAddPresetMode = computed(() => selectedPresetValue.value === 'add_preset')
+const isEditingPreset = computed(() => isAddPresetMode.value && currentPresetId.value !== null)
 
 const handlePresetChange = (value: string) => {
   selectedPresetValue.value = value
@@ -395,6 +405,17 @@ const handlePresetChange = (value: string) => {
     }
     newPresetName.value = ''
   }
+}
+
+const editPreset = (presetId: string) => {
+  const preset = presets.value.find(p => p.id === presetId)
+  if (!preset) return
+
+  selectedPresetValue.value = 'add_preset'
+  currentPresetId.value = presetId
+  newPresetName.value = preset.name
+  llmConfig.value = JSON.parse(JSON.stringify(preset.config))
+  presetDropdownRef.value?.hide()
 }
 
 const deletePreset = (presetId: string, event?: Event) => {
@@ -651,6 +672,7 @@ const deleteTask = async () => {
     method: 'DELETE',
   })
   if (response.ok) {
+    emit('deleted')
     emit('close')
   } else {
     console.error('Failed to delete task')
@@ -882,8 +904,19 @@ label {
   color: var(--color-text-muted);
 }
 
-.preset-delete-icon {
+.preset-action-icons {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
   visibility: hidden;
+}
+
+.preset-option:hover .preset-action-icons {
+  visibility: visible;
+}
+
+.preset-edit-icon,
+.preset-delete-icon {
   opacity: 0.4;
   cursor: pointer;
   padding: 0.25rem;
@@ -891,12 +924,15 @@ label {
   font-size: 0.875rem;
 }
 
-.preset-option:hover .preset-delete-icon {
-  visibility: visible;
-}
-
+.preset-edit-icon:hover,
 .preset-delete-icon:hover {
   opacity: 1;
+}
+
+.preset-editing-label {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  font-style: italic;
 }
 
 .add-preset-section {

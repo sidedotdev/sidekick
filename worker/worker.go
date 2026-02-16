@@ -96,12 +96,29 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 		Storage:        service,
 		TemporalClient: temporalClient,
 	}
+	cascadeDeleteActivities := &srv.CascadeDeleteTaskActivities{
+		Service:        service,
+		TemporalClient: temporalClient,
+	}
 	flowActivities := &flow_action.FlowActivities{Service: service}
 	embedActivities := &persisted_ai.EmbedActivities{
 		Storage: service,
 	}
 	llmActivities := &persisted_ai.LlmActivities{
 		Streamer: service,
+	}
+	llm2Activities := &persisted_ai.Llm2Activities{
+		Streamer: service,
+		Storage:  service,
+	}
+	chatHistoryActivities := &persisted_ai.ChatHistoryActivities{
+		Storage: service,
+	}
+	readImageActivities := &dev.ReadImageActivities{
+		Storage: service,
+	}
+	kvActivities := &common.KVActivities{
+		Storage: service,
 	}
 
 	lspActivities := &lsp.LSPActivities{
@@ -187,12 +204,17 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(dev.SummarizeDiffActivity)
 	w.RegisterActivity(dev.ManageChatHistoryActivity)
 	w.RegisterActivity(dev.ManageChatHistoryV2Activity)
+	w.RegisterActivity(chatHistoryActivities)
+	w.RegisterActivity(readImageActivities)
+	w.RegisterActivity(kvActivities)
+	w.RegisterActivity(llm2Activities)
 	w.RegisterActivity(ffa.EvalBoolFlag)
 	w.RegisterActivity(common.GetLocalConfig)
 	w.RegisterActivity(common.BaseCommandPermissionsActivity)
 	w.RegisterActivity(dev.CheckCommandPermissionActivity)
 
 	w.RegisterActivity(&workspace.Activities{Storage: service})
+	w.RegisterActivity(cascadeDeleteActivities)
 
 	err = w.Start()
 	if err != nil {
@@ -211,4 +233,5 @@ func RegisterWorkflows(w worker.WorkflowRegistry) {
 	w.RegisterWorkflow(dev.PlannedDevWorkflow)
 	w.RegisterWorkflow(dev.BasicDevWorkflow)
 	w.RegisterWorkflow(poll_failures.PollFailuresWorkflow)
+	w.RegisterWorkflow(srv.CascadeDeleteTaskWorkflow)
 }

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sidekick/common"
 	"sidekick/llm"
+	"sidekick/llm2"
+	"sidekick/persisted_ai"
 	"strings"
 
 	"github.com/invopop/jsonschema"
@@ -22,18 +24,11 @@ var defineInformationNeedsTool = &llm.Tool{
 }
 
 // TODO /gen use ForceToolCall instead of this function
-func llmInputForIdentifyInformationNeeds(dCtx DevContext, chatHistory []llm.ChatMessage, prompt string) llm.ToolChatOptions {
+func llmInputForIdentifyInformationNeeds(dCtx DevContext) llm2.Options {
 	modelConfig := dCtx.GetModelConfig(common.QueryExpansionKey, 0, "small") // query expansion is an easy task
 
-	chatHistory = append(chatHistory, llm.ChatMessage{
-		Role:    "user",
-		Content: prompt,
-	})
-
-	return llm.ToolChatOptions{
-		Secrets: *dCtx.Secrets,
-		Params: llm.ToolChatParams{
-			Messages:    chatHistory,
+	return llm2.Options{
+		Params: llm2.Params{
 			ModelConfig: modelConfig,
 			// TODO /gen use a tool for this, after defining the tool more
 			// specifically (not just a list of needs, but several different
@@ -50,7 +45,7 @@ func llmInputForIdentifyInformationNeeds(dCtx DevContext, chatHistory []llm.Chat
 	}
 }
 
-func IdentifyInformationNeeds(dCtx DevContext, chatHistory *[]llm.ChatMessage, repoSummary string, requirements string) (InformationNeeds, error) {
+func IdentifyInformationNeeds(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, repoSummary string, requirements string) (InformationNeeds, error) {
 	prompt := fmt.Sprintf(`Repository Summary:
 
 %s
@@ -75,11 +70,17 @@ with. If the requirements are referencing code, list specific class, function,
 and variable names.
 `, repoSummary, requirements)
 	actionName := "requirements_query_expansion"
-	options := llmInputForIdentifyInformationNeeds(dCtx, *chatHistory, prompt)
-	chatResponse, err := TrackedToolChat(dCtx, actionName, options)
+
+	AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
+		Role:    llm.ChatMessageRoleUser,
+		Content: prompt,
+	})
+	options := llmInputForIdentifyInformationNeeds(dCtx)
+
+	chatResponse, err := TrackedToolChat(dCtx, actionName, options, chatHistory)
 	if err != nil {
 		return InformationNeeds{}, err
 	}
 
-	return InformationNeeds{Needs: strings.Split(chatResponse.ChatMessage.Content, "\n")}, nil
+	return InformationNeeds{Needs: strings.Split(chatResponse.GetMessage().GetContentString(), "\n")}, nil
 }

@@ -1,5 +1,14 @@
 package llm2
 
+import (
+	"sidekick/common"
+	"strings"
+
+	"github.com/rs/zerolog/log"
+)
+
+// Role for the v2 message model. Provider-specific synonyms like "developer" should be
+
 // Role for the v2 message model. Provider-specific synonyms like "developer" should be
 // handled in adapters (map to RoleSystem on ingest/emit as needed).
 type Role string
@@ -11,6 +20,8 @@ const (
 )
 
 // Usage is surfaced on final responses (not deltas).
+// InputTokens must be the total prompt tokens (cached + non-cached).
+// CacheReadInputTokens and CacheWriteInputTokens are subsets of InputTokens.
 type Usage struct {
 	InputTokens           int `json:"inputTokens"`
 	OutputTokens          int `json:"outputTokens"`
@@ -52,6 +63,7 @@ type ReasoningBlock struct {
 	Text             string `json:"text"`
 	Summary          string `json:"summary"`
 	EncryptedContent string `json:"encryptedContent,omitempty"`
+	Signature        []byte `json:"signature,omitempty"`
 }
 
 type McpCallBlock struct {
@@ -70,10 +82,26 @@ type ToolUseBlock struct {
 
 // Tool result content provided back to the assistant, modeled within a user-role message.
 type ToolResultBlock struct {
-	ToolCallId string `json:"toolCallId"`
-	Name       string `json:"name,omitempty"`
-	IsError    bool   `json:"isError,omitempty"`
-	Text       string `json:"text,omitempty"`
+	ToolCallId string         `json:"toolCallId"`
+	Name       string         `json:"name,omitempty"`
+	IsError    bool           `json:"isError,omitempty"`
+	Content    []ContentBlock `json:"content,omitempty"`
+}
+
+// TextContent returns the concatenated text from all text content blocks.
+func (tr *ToolResultBlock) TextContent() string {
+	var sb strings.Builder
+	for _, cb := range tr.Content {
+		if cb.Type == ContentBlockTypeText {
+			sb.WriteString(cb.Text)
+		}
+	}
+	return sb.String()
+}
+
+// TextContentBlocks creates a ContentBlock slice with a single text block.
+func TextContentBlocks(text string) []ContentBlock {
+	return []ContentBlock{{Type: ContentBlockTypeText, Text: text}}
 }
 
 // A single content block within a message turn.
@@ -90,12 +118,106 @@ type ContentBlock struct {
 	McpCall      *McpCallBlock    `json:"mcpCall,omitempty"`
 	CacheControl string           `json:"cacheControl,omitempty"`
 	ContextType  string           `json:"contextType,omitempty"`
+	// Signature is a provider-specific opaque token (e.g., Google's ThoughtSignature)
+	// that must be preserved and returned verbatim in subsequent turns.
+	Signature []byte `json:"signature,omitempty"`
 }
 
 // A single chat turn (message) consisting of a role and ordered content blocks.
 type Message struct {
 	Role    Role           `json:"role"`
 	Content []ContentBlock `json:"content"`
+}
+
+// GetRole returns the role as a string.
+func (m Message) GetRole() string {
+	return string(m.Role)
+}
+
+// GetContentString concatenates text from all text content blocks.
+func (m Message) GetContentString() string {
+	var result string
+	for _, block := range m.Content {
+		if block.Type == ContentBlockTypeText {
+			result += block.Text
+		}
+	}
+	return result
+}
+
+// GetToolCalls returns tool calls from content blocks as common.ToolCall slice.
+func (m Message) GetToolCalls() []common.ToolCall {
+	var calls []common.ToolCall
+	for _, block := range m.Content {
+		if block.Type == ContentBlockTypeToolUse && block.ToolUse != nil {
+			calls = append(calls, common.ToolCall{
+				Id:        block.ToolUse.Id,
+				Name:      block.ToolUse.Name,
+				Arguments: block.ToolUse.Arguments,
+			})
+		}
+	}
+	return calls
+}
+
+// SetToolCalls replaces tool use content blocks with the provided tool calls.
+func (m *Message) SetToolCalls(toolCalls []common.ToolCall) {
+	// Remove existing tool use blocks
+	var newContent []ContentBlock
+	for _, block := range m.Content {
+		if block.Type != ContentBlockTypeToolUse {
+			newContent = append(newContent, block)
+		}
+	}
+	// Add new tool use blocks
+	for _, tc := range toolCalls {
+		newContent = append(newContent, ContentBlock{
+			Id:   tc.Id,
+			Type: ContentBlockTypeToolUse,
+			ToolUse: &ToolUseBlock{
+				Id:        tc.Id,
+				Name:      tc.Name,
+				Arguments: tc.Arguments,
+			},
+		})
+	}
+	m.Content = newContent
+}
+
+// SanitizeToolNames drops characters that don't match [a-zA-Z0-9_-] from all
+// tool use block names, preventing downstream provider rejections.
+func (m *Message) SanitizeToolNames() {
+	for i := range m.Content {
+		if m.Content[i].Type == ContentBlockTypeToolUse && m.Content[i].ToolUse != nil {
+			original := m.Content[i].ToolUse.Name
+			sanitized := sanitizeToolName(original)
+			if sanitized != original {
+				log.Info().Str("originalName", original).Str("sanitizedName", sanitized).Msg("sanitized tool call name")
+			}
+			m.Content[i].ToolUse.Name = sanitized
+		}
+	}
+}
+
+func sanitizeToolName(name string) string {
+	// Truncate at the first double-quote to discard injection-like suffixes.
+	if idx := strings.IndexByte(name, '"'); idx >= 0 {
+		name = name[:idx]
+	}
+
+	// Drop characters that don't match [a-zA-Z0-9_-].
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	name = b.String()
+
+	if name == "" {
+		return "invalid_tool_name"
+	}
+	return name
 }
 
 // Provider-agnostic response with metadata and a single synthesized output message.
@@ -112,6 +234,31 @@ type MessageResponse struct {
 	// effort requested if the model does not support reasoning or uses a
 	// different effort enum/schema)
 	ReasoningEffort string `json:"reasoningEffort"`
+}
+
+// GetMessage returns the Output message as a common.Message interface.
+func (r MessageResponse) GetMessage() common.Message {
+	return &r.Output
+}
+
+// GetStopReason returns the stop reason.
+func (r MessageResponse) GetStopReason() string {
+	return r.StopReason
+}
+
+// GetId returns the response ID.
+func (r MessageResponse) GetId() string {
+	return r.Id
+}
+
+// GetInputTokens returns the number of input tokens used.
+func (r MessageResponse) GetInputTokens() int {
+	return r.Usage.InputTokens
+}
+
+// GetOutputTokens returns the number of output tokens used.
+func (r MessageResponse) GetOutputTokens() int {
+	return r.Usage.OutputTokens
 }
 
 // EventType enumerates provider-agnostic streaming event kinds for content blocks.
@@ -197,4 +344,5 @@ type Event struct {
 	Index        int           `json:"index"`                  // 0-based block index
 	ContentBlock *ContentBlock `json:"contentBlock,omitempty"` // present for block_started; MAY be included for other events in future
 	Delta        string        `json:"delta,omitempty"`        // for *_delta events (text_delta, summary_text_delta, signature_delta)
+	Signature    []byte        `json:"signature,omitempty"`    // for block_done events that carry a signature (e.g., Google ThoughtSignature)
 }

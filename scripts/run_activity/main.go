@@ -105,6 +105,10 @@ func buildActivityRegistry() map[string]interface{} {
 	llmActivities := &persisted_ai.LlmActivities{
 		Streamer: service,
 	}
+	llm2Activities := &persisted_ai.Llm2Activities{
+		Streamer: service,
+		Storage:  service,
+	}
 	lspActivities := &lsp.LSPActivities{
 		LSPClientProvider: func(languageName string) lsp.LSPClient {
 			return &lsp.Jsonrpc2LSPClient{
@@ -119,6 +123,9 @@ func buildActivityRegistry() map[string]interface{} {
 	codingActivities := &coding.CodingActivities{
 		TreeSitterActivities: treeSitterActivities,
 		LSPActivities:        lspActivities,
+	}
+	readImageActivities := &dev.ReadImageActivities{
+		Storage: service,
 	}
 	vectorActivities := &persisted_ai.VectorActivities{
 		DatabaseAccessor: service,
@@ -176,6 +183,7 @@ func buildActivityRegistry() map[string]interface{} {
 	// Register struct methods
 	registerStructMethods(registry, srvActivities)
 	registerStructMethods(registry, llmActivities)
+	registerStructMethods(registry, llm2Activities)
 	registerStructMethods(registry, pollFailuresActivities)
 	registerStructMethods(registry, lspActivities)
 	registerStructMethods(registry, treeSitterActivities)
@@ -187,6 +195,7 @@ func buildActivityRegistry() map[string]interface{} {
 	registerStructMethods(registry, devManagerActivities)
 	registerStructMethods(registry, devActivities)
 	registerStructMethods(registry, devRunActivities)
+	registerStructMethods(registry, readImageActivities)
 	registerStructMethods(registry, workspaceActivities)
 	registry["EvalBoolFlag"] = ffa.EvalBoolFlag
 
@@ -219,6 +228,7 @@ func executeActivityDirect(activityName string, activityArgs []json.RawMessage, 
 	defer cancel()
 
 	// Build arguments: first arg is context, rest are from JSON
+	// FIXME only do this if it actually is the first argument, it does not have to be
 	args := make([]reflect.Value, fnType.NumIn())
 	args[0] = reflect.ValueOf(ctx)
 

@@ -19,36 +19,99 @@
       <p class="model-reasoning-effort" v-if="flowAction.actionParams.reasoningEffort">
         Requested Reasoning Effort: {{ flowAction.actionParams.reasoningEffort }}
       </p>
-      <div v-for="(message, index) in messages" :key="index" class="message">
-        <p class="message-role"><span v-text="message.role"></span>:</p>
 
-        <div v-if="message.content"
-          :class="{
-            'expanded': expandedMessages.includes(index),
-            'truncated': !expandedMessages.includes(index)
-          }"
-          class="message-content historical"
-        >
-          <vue-markdown v-if="message.role == 'assistant'"
-            :source="message.content"
-            :options="{ breaks: true }"
-            class="markdown"
-          />
-          <pre v-else v-text="message.content"></pre>
-        </div>
-
-        <div v-if="message.function_call" class="message-function-call" :class="{ 'expanded': expandedMessages.includes(index), 'truncated': !expandedMessages.includes(index) }">
-          Function Call: <span v-text="message.function_call?.name" class="message-function-call-name"></span>
-          <JsonTree :deep="1" :data="JSON.parse(message.function_call?.arguments || '{}')" />
-        </div>
-        <div v-for="toolCall in message.toolCalls" :key="toolCall.id" class="message-function-call" :class="{ 'expanded': expandedMessages.includes(index), 'truncated': !expandedMessages.includes(index) }">
-          Tool Call: <span v-text="toolCall.name" class="message-function-call-name"></span>
-          <JsonTree :deep="1" :data="toolCall.parsedArguments" />
-        </div>
-        <button @click="toggleMessage(index)">
-          {{ expandedMessages.includes(index) ? "Show Less" : "Show More" }}
-        </button>
+      <!-- llm2 hydration states -->
+      <div v-if="isLlm2Format && llm2HydrationLoading" class="llm2-loading">
+        Loading message history...
       </div>
+      <div v-else-if="isLlm2Format && llm2HydrationError" class="llm2-error">
+        Error loading message history: {{ llm2HydrationError }}
+      </div>
+
+      <!-- llm2 format messages -->
+      <template v-else-if="isLlm2Format">
+        <div v-for="(message, index) in hydratedLlm2Messages" :key="index" class="message">
+          <p class="message-role"><span v-text="message.role"></span>:</p>
+          <div
+            :class="{
+              'expanded': expandedMessages.includes(index),
+              'truncated': !expandedMessages.includes(index)
+            }"
+            class="message-content historical llm2-blocks"
+          >
+            <template v-for="(block, blockIndex) in message.content" :key="blockIndex">
+              <!-- text block -->
+              <div v-if="block.type === 'text'" class="llm2-text-block">
+                <vue-markdown v-if="message.role === 'assistant'"
+                  :source="getTextBlockText(block)"
+                  :options="{ breaks: true }"
+                  class="markdown"
+                />
+                <pre v-else v-text="getTextBlockText(block)"></pre>
+              </div>
+
+              <!-- tool_use block -->
+              <div v-else-if="block.type === 'tool_use' && getToolUseBlock(block)" class="llm2-tool-use-block message-function-call">
+                Tool Call: <span class="message-function-call-name">{{ getToolUseBlock(block)!.name }}</span>
+                <JsonTree :deep="jsonTreeDepth" :data="parseLlm2ToolArguments(getToolUseBlock(block)!.arguments)" />
+              </div>
+
+              <!-- tool_result block -->
+              <div v-else-if="block.type === 'tool_result' && getToolResultBlock(block)" class="llm2-tool-result-block">
+                <p class="tool-result-header">
+                  Tool Result<span v-if="getToolResultBlock(block)!.name">: {{ getToolResultBlock(block)!.name }}</span>
+                  <span v-if="getToolResultBlock(block)!.isError" class="tool-result-error"> (error)</span>
+                </p>
+                <pre v-if="getToolResultBlock(block)!.text" class="tool-result-text">{{ getToolResultBlock(block)!.text }}</pre>
+                <JsonTree v-else :deep="jsonTreeDepth" :data="getToolResultBlock(block)" />
+              </div>
+
+              <!-- unknown block fallback -->
+              <div v-else class="llm2-unknown-block">
+                <p class="unknown-block-header">Unknown Block ({{ block.type }}):</p>
+                <JsonTree :deep="jsonTreeDepth" :data="block" />
+              </div>
+            </template>
+          </div>
+          <button @click="toggleMessage(index)">
+            {{ expandedMessages.includes(index) ? "Show Less" : "Show More" }}
+          </button>
+        </div>
+      </template>
+
+      <!-- Legacy format messages -->
+      <template v-else>
+        <div v-for="(message, index) in legacyMessages" :key="index" class="message">
+          <p class="message-role"><span v-text="message.role"></span>:</p>
+
+          <div v-if="message.content"
+            :class="{
+              'expanded': expandedMessages.includes(index),
+              'truncated': !expandedMessages.includes(index)
+            }"
+            class="message-content historical"
+          >
+            <vue-markdown v-if="message.role == 'assistant'"
+              :source="message.content"
+              :options="{ breaks: true }"
+              class="markdown"
+            />
+            <pre v-else v-text="message.content"></pre>
+          </div>
+
+          <div v-if="message.function_call" class="message-function-call" :class="{ 'expanded': expandedMessages.includes(index), 'truncated': !expandedMessages.includes(index) }">
+            Function Call: <span v-text="message.function_call?.name" class="message-function-call-name"></span>
+            <JsonTree :deep="jsonTreeDepth" :data="JSON.parse(message.function_call?.arguments || '{}')" />
+          </div>
+          <div v-for="toolCall in message.toolCalls" :key="toolCall.id" class="message-function-call" :class="{ 'expanded': expandedMessages.includes(index), 'truncated': !expandedMessages.includes(index) }">
+            Tool Call: <span v-text="toolCall.name" class="message-function-call-name"></span>
+            <JsonTree :deep="jsonTreeDepth" :data="toolCall.parsedArguments" />
+          </div>
+          <button @click="toggleMessage(index)">
+            {{ expandedMessages.includes(index) ? "Show Less" : "Show More" }}
+          </button>
+        </div>
+      </template>
     </div>
 
     <div class="action-result" v-if="flowAction.actionResult != '' || flowAction.streamingData || (flowAction.actionStatus != 'pending' && flowAction.actionStatus != 'started')">
@@ -70,15 +133,42 @@
           </div>
           <pre>{{ flowAction.actionResult }}</pre>
         </div>
-        <vue-markdown v-if="completion?.content" :options="{ breaks: true }" :source="completion?.content" class="message-content markdown"/>
-        <div v-for="toolCall in completion?.toolCalls" :key="toolCall.id">
-          <p class="action-result-function-name">Tool Call: {{ toolCall.name }}</p>
-          <JsonTree :deep="1" :data="toolCall.parsedArguments || JSON.parse(toolCall.arguments || '{}')" class="action-result-function-args"/>
-        </div>
-        <div v-if="parsedActionResult && !completion?.toolCalls?.length && !completion?.content">
-          <JsonTree :deep="1" :data="parsedActionResult" class="action-result-parsed"/>
-        </div>
-        <p v-if="completion?.stopReason" class="action-result-stop-reason">Stop Reason: {{ completion?.stopReason }}</p>
+
+        <!-- llm2 MessageResponse format -->
+        <template v-if="isLlm2Response">
+          <template v-for="(block, blockIndex) in llm2ResponseBlocks" :key="blockIndex">
+            <div v-if="block.type === 'text' && block.text" class="llm2-text-block">
+              <vue-markdown :options="{ breaks: true }" :source="block.text" class="message-content markdown"/>
+            </div>
+            <div v-else-if="block.type === 'tool_use' && block.toolUse" class="llm2-tool-use-block">
+              <p class="action-result-function-name">Tool Call: {{ block.toolUse.name }}</p>
+              <JsonTree :deep="jsonTreeDepth" :data="parseLlm2ToolArguments(block.toolUse.arguments)" class="action-result-function-args"/>
+            </div>
+            <div v-else-if="block.type === 'reasoning'" class="llm2-text-block">
+              <vue-markdown v-if="block.reasoning && block.reasoning.text" :options="{ breaks: true }" :source="block.reasoning.text" class="message-content markdown reasoning"/>
+            </div>
+            <div v-else-if="block.type !== 'text'" class="llm2-unknown-block">
+              <JsonTree :deep="jsonTreeDepth" :data="block"/>
+            </div>
+          </template>
+          <div v-if="parsedActionResult && !llm2ResponseBlocks.length && !completionParseFailure">
+            <JsonTree :deep="jsonTreeDepth" :data="parsedActionResult" class="action-result-parsed"/>
+          </div>
+        </template>
+
+        <!-- Legacy ChatCompletionChoice format -->
+        <template v-else>
+          <vue-markdown v-if="completion?.content" :options="{ breaks: true }" :source="completion?.content" class="message-content markdown"/>
+          <div v-for="toolCall in completion?.toolCalls" :key="toolCall.id">
+            <p class="action-result-function-name">Tool Call: {{ toolCall.name }}</p>
+            <JsonTree :deep="jsonTreeDepth" :data="toolCall.parsedArguments || JSON.parse(toolCall.arguments || '{}')" class="action-result-function-args"/>
+          </div>
+          <div v-if="parsedActionResult && !completion?.toolCalls?.length && !completion?.content">
+            <JsonTree :deep="jsonTreeDepth" :data="parsedActionResult" class="action-result-parsed"/>
+          </div>
+        </template>
+
+        <p v-if="completion?.stopReason || parsedActionResult?.stopReason" class="action-result-stop-reason">Stop Reason: {{ completion?.stopReason || parsedActionResult?.stopReason }}</p>
       </template>
     </div>
   </div>
@@ -89,7 +179,8 @@
 </template>
 
 <script setup lang="ts">
-import type { ChatCompletionChoice, ChatCompletionMessage, FlowAction, Usage, StreamingData } from '../lib/models';
+import type { ChatCompletionChoice, ChatCompletionMessage, FlowAction, Usage, StreamingData, Llm2Message, Llm2ContentBlock, ChatHistoryParamPayload } from '../lib/models';
+import { isLlm2ChatHistoryWrapper } from '../lib/models';
 import { computed, ref, watch } from 'vue'
 import JsonTree from './JsonTree.vue'
 import VueMarkdown from 'vue-markdown-render'
@@ -102,19 +193,98 @@ const props = defineProps({
   expand: {
     type: Boolean,
     required: true,
+  },
+  jsonTreeDepth: {
+    type: Number,
+    default: 1,
   }
 })
 
 const showParams = ref(false);
 const debug = ref(false);
 const expandedMessages = ref<number[]>([])
-const messages = computed(() => {
-  const msgs = props.flowAction.actionParams.messages;
-  if (msgs) {
-    msgs.forEach(addParsedArguments);
-  }
-  return msgs || [];
+
+// llm2 hydration state
+const llm2Messages = ref<Llm2Message[] | null>(null)
+const llm2HydrationLoading = ref(false)
+const llm2HydrationError = ref<string | null>(null)
+
+const messagesPayload = computed<ChatHistoryParamPayload | undefined>(() => {
+  return props.flowAction.actionParams.messages;
 });
+
+const isLlm2Format = computed(() => isLlm2ChatHistoryWrapper(messagesPayload.value));
+
+const legacyMessages = computed(() => {
+  const payload = messagesPayload.value;
+  if (!payload || isLlm2ChatHistoryWrapper(payload)) {
+    return [];
+  }
+  payload.forEach(addParsedArguments);
+  return payload;
+});
+
+const hydratedLlm2Messages = computed(() => llm2Messages.value || []);
+
+// Watch for llm2 payloads and hydrate
+watch(
+  () => [props.flowAction.workspaceId, props.flowAction.flowId, messagesPayload.value] as const,
+  async ([actionWorkspaceId, actionFlowId, payload]) => {
+    if (!isLlm2ChatHistoryWrapper(payload)) {
+      llm2Messages.value = null;
+      llm2HydrationLoading.value = false;
+      llm2HydrationError.value = null;
+      return;
+    }
+
+    const workspaceId = payload.workspaceId || actionWorkspaceId;
+    const flowId = payload.flowId || actionFlowId;
+
+    llm2HydrationLoading.value = true;
+    llm2HydrationError.value = null;
+
+    try {
+      const response = await fetch(`/api/v1/workspaces/${workspaceId}/flows/${flowId}/chat_history/hydrate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refs: payload.refs }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Hydration failed: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      llm2Messages.value = data.messages || [];
+    } catch (e: any) {
+      llm2HydrationError.value = e.message || 'Failed to hydrate chat history';
+      llm2Messages.value = null;
+    } finally {
+      llm2HydrationLoading.value = false;
+    }
+  },
+  { immediate: true }
+);
+
+function parseLlm2ToolArguments(args: string): object {
+  try {
+    return JSON.parse(args) as object;
+  } catch {
+    return { raw: args };
+  }
+}
+
+function getTextBlockText(block: Llm2ContentBlock): string {
+  return block.type === 'text' ? block.text : '';
+}
+
+function getToolUseBlock(block: Llm2ContentBlock) {
+  return block.type === 'tool_use' ? block.toolUse : null;
+}
+
+function getToolResultBlock(block: Llm2ContentBlock) {
+  return block.type === 'tool_result' ? block.toolResult : null;
+}
 
 const completionParseFailure = ref<string | null>(null);
 
@@ -132,10 +302,21 @@ const parsedActionResult = ref((() => {
 
 const completion = computed<ChatCompletionChoice>(() => parsedActionResult.value || {});
 
-const effectiveModel = computed(() => props.flowAction.actionParams.model || completion.value?.model || '')
-const effectiveProvider = computed(() => props.flowAction.actionParams.provider || completion.value?.provider || '')
+const isLlm2Response = computed(() => {
+  const result = parsedActionResult.value;
+  return result && result.output && Array.isArray(result.output.content);
+});
 
-const usage = computed<Usage | null>(() => completion.value?.usage || null)
+const llm2ResponseBlocks = computed(() => {
+  const result = parsedActionResult.value;
+  if (!result?.output?.content) return [];
+  return result.output.content as Array<Record<string, any>>;
+});
+
+const effectiveModel = computed(() => props.flowAction.actionParams.model || parsedActionResult.value?.model || completion.value?.model || '')
+const effectiveProvider = computed(() => props.flowAction.actionParams.provider || parsedActionResult.value?.provider || completion.value?.provider || '')
+
+const usage = computed<Usage | null>(() => parsedActionResult.value?.usage || completion.value?.usage || null)
 
 const isStreaming = computed(() => props.flowAction.actionStatus === 'started')
 const streamingData = computed<StreamingData | null>(() => props.flowAction.streamingData || null)
@@ -277,6 +458,71 @@ function toggleMessage(index: number) {
 
 .tool-call-arguments :deep(code) {
   font-family: monospace;
+}
+
+.llm2-loading {
+  padding: 1rem;
+  color: var(--color-text-2);
+  font-style: italic;
+}
+
+.llm2-error {
+  padding: 1rem;
+  color: var(--color-error, #c00);
+  background: var(--color-error-bg, rgba(200, 0, 0, 0.1));
+  border-radius: 4px;
+  margin-bottom: 1rem;
+}
+
+.llm2-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.llm2-text-block {
+  margin-bottom: 0.5rem;
+}
+
+.llm2-tool-use-block {
+  margin-bottom: 0.5rem;
+}
+
+.llm2-tool-result-block {
+  margin-bottom: 0.5rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--color-border-contrast);
+}
+
+.tool-result-header {
+  font-weight: bold;
+  margin-bottom: 0.25rem;
+}
+
+.tool-result-error {
+  color: var(--color-error, #c00);
+}
+
+.tool-result-text {
+  margin: 0;
+  padding: 0.5rem;
+  background: var(--color-background-soft);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.llm2-unknown-block {
+  margin-bottom: 0.5rem;
+  padding: 0.5rem;
+  background: var(--color-background-soft);
+  border-radius: 4px;
+}
+
+.unknown-block-header {
+  font-weight: bold;
+  color: var(--color-text-2);
+  margin-bottom: 0.25rem;
 }
 
 </style>

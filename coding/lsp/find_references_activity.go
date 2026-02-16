@@ -12,7 +12,13 @@ import (
 	"sidekick/utils"
 	"strings"
 	"sync"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
+
+var lspTracer = otel.Tracer("sidekick/coding/lsp")
 
 // NewLSPActivities creates a new LSPActivities instance with proper initialization
 func NewLSPActivities(lspClientProvider func(lang string) LSPClient) *LSPActivities {
@@ -66,6 +72,10 @@ func (lspa *LSPActivities) FindReferencesActivity(ctx context.Context, input Fin
 }
 
 func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string, lang string) (LSPClient, error) {
+	_, span := lspTracer.Start(ctx, "findOrInitClient")
+	defer span.End()
+	span.SetAttributes(attribute.String("language", lang), attribute.String("baseDir", baseDir))
+
 	key := baseDir + ":" + lang
 
 	// init lsp client once per baseDir and lang
@@ -79,11 +89,15 @@ func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string,
 
 	lspClient, ok := lspa.InitializedClients[key]
 	if !ok {
+		span.SetAttributes(attribute.Bool("initialized", true))
 		// Initialize LSP client
 		lspClient = lspa.LSPClientProvider(lang)
 		rootUri, err := url.Parse("file://" + baseDir)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse rootUri file://%s: %w", baseDir, err)
+			err = fmt.Errorf("failed to parse rootUri file://%s: %w", baseDir, err)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return nil, err
 		}
 		params := InitializeParams{
 			ProcessID:    1,
@@ -92,9 +106,14 @@ func (lspa *LSPActivities) findOrInitClient(ctx context.Context, baseDir string,
 		}
 		_, err = lspClient.Initialize(ctx, params)
 		if err != nil {
-			return nil, fmt.Errorf("failed to initialize LSP client: %w", err)
+			err = fmt.Errorf("failed to initialize LSP client: %w", err)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return nil, err
 		}
 		lspa.InitializedClients[key] = lspClient
+	} else {
+		span.SetAttributes(attribute.Bool("cached", true))
 	}
 
 	return lspClient, nil

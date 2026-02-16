@@ -1,0 +1,1472 @@
+package persisted_ai
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+
+	"sidekick/common"
+	"sidekick/llm2"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// mockKeyValueStorage implements common.KeyValueStorage for testing.
+type mockKeyValueStorage struct {
+	data map[string][]byte
+}
+
+func newMockKeyValueStorage() *mockKeyValueStorage {
+	return &mockKeyValueStorage{
+		data: make(map[string][]byte),
+	}
+}
+
+func (m *mockKeyValueStorage) MGet(ctx context.Context, workspaceId string, keys []string) ([][]byte, error) {
+	result := make([][]byte, len(keys))
+	for i, key := range keys {
+		result[i] = m.data[key]
+	}
+	return result, nil
+}
+
+func (m *mockKeyValueStorage) MSet(ctx context.Context, workspaceId string, values map[string]interface{}) error {
+	for key, value := range values {
+		data, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		m.data[key] = data
+	}
+	return nil
+}
+
+func (m *mockKeyValueStorage) DeletePrefix(ctx context.Context, workspaceId string, prefix string) error {
+	return nil
+}
+
+func (m *mockKeyValueStorage) GetKeysWithPrefix(ctx context.Context, workspaceId string, prefix string) ([]string, error) {
+	return nil, nil
+}
+
+func (m *mockKeyValueStorage) MSetRaw(ctx context.Context, workspaceId string, values map[string][]byte) error {
+	for key, value := range values {
+		m.data[key] = value
+	}
+	return nil
+}
+
+func TestLlm2ChatHistory_NewLlm2ChatHistory(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+
+	assert.NotNil(t, h)
+	assert.Equal(t, 0, h.Len())
+	assert.True(t, h.hydrated)
+	assert.Empty(t, h.refs)
+	assert.Empty(t, h.messages)
+	assert.Empty(t, h.unpersisted)
+}
+
+func TestLlm2ChatHistory_Append(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+
+	msg := &llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "Hello"},
+		},
+	}
+
+	h.Append(msg)
+
+	assert.Equal(t, 1, h.Len())
+	assert.Equal(t, []int{0}, h.unpersisted)
+	assert.Equal(t, "user", h.Get(0).GetRole())
+	assert.Equal(t, "Hello", h.Get(0).GetContentString())
+}
+
+func TestLlm2ChatHistory_Len(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+
+	assert.Equal(t, 0, h.Len())
+
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "1"}}})
+	assert.Equal(t, 1, h.Len())
+
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "2"}}})
+	assert.Equal(t, 2, h.Len())
+}
+
+func TestLlm2ChatHistory_Get(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "First"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Second"}}})
+
+	t.Run("valid indices", func(t *testing.T) {
+		msg := h.Get(0)
+		assert.NotNil(t, msg)
+		assert.Equal(t, "First", msg.GetContentString())
+
+		msg = h.Get(1)
+		assert.NotNil(t, msg)
+		assert.Equal(t, "Second", msg.GetContentString())
+	})
+
+	t.Run("negative index", func(t *testing.T) {
+		msg := h.Get(-1)
+		assert.Nil(t, msg)
+	})
+
+	t.Run("out of bounds", func(t *testing.T) {
+		msg := h.Get(2)
+		assert.Nil(t, msg)
+	})
+}
+
+func TestLlm2ChatHistory_Set(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Original"}}})
+
+	h.Set(0, &llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Updated"}}})
+
+	assert.Equal(t, "Updated", h.Get(0).GetContentString())
+	assert.Contains(t, h.unpersisted, 0)
+}
+
+func TestLlm2ChatHistory_Messages(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hi"}}})
+
+	messages := h.Messages()
+
+	assert.Len(t, messages, 2)
+	assert.Equal(t, "user", messages[0].GetRole())
+	assert.Equal(t, "Hello", messages[0].GetContentString())
+	assert.Equal(t, "assistant", messages[1].GetRole())
+	assert.Equal(t, "Hi", messages[1].GetContentString())
+}
+
+func TestLlm2ChatHistory_MarshalJSON_ProducesWrapperFormat(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello world"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hi there"}}})
+
+	// Persist to generate refs
+	storage := newMockKeyValueStorage()
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	// Marshal should produce wrapper format JSON
+	data, err := h.MarshalJSON()
+	require.NoError(t, err)
+
+	// Verify it's a wrapper object with type and refs
+	var wrapper struct {
+		Type string       `json:"type"`
+		Refs []MessageRef `json:"refs"`
+	}
+	err = json.Unmarshal(data, &wrapper)
+	require.NoError(t, err)
+
+	assert.Equal(t, "llm2", wrapper.Type)
+	assert.Len(t, wrapper.Refs, 2)
+	assert.Equal(t, "user", wrapper.Refs[0].Role)
+	assert.NotEmpty(t, wrapper.Refs[0].BlockIds)
+	assert.Equal(t, "assistant", wrapper.Refs[1].Role)
+	assert.NotEmpty(t, wrapper.Refs[1].BlockIds)
+
+	// Verify flowId and workspaceId are in the JSON
+	jsonStr := string(data)
+	assert.Contains(t, jsonStr, `"flowId":"flow-123"`)
+	assert.Contains(t, jsonStr, `"workspaceId":"workspace-456"`)
+
+	// Verify message content is NOT in the JSON
+	assert.NotContains(t, jsonStr, "Hello world")
+	assert.NotContains(t, jsonStr, "Hi there")
+}
+
+func TestLlm2ChatHistory_UnmarshalJSON_SetsNotHydrated(t *testing.T) {
+	wrapper := struct {
+		Type        string       `json:"type"`
+		Refs        []MessageRef `json:"refs"`
+		FlowId      string       `json:"flowId"`
+		WorkspaceId string       `json:"workspaceId"`
+	}{
+		Type: "llm2",
+		Refs: []MessageRef{
+			{BlockIds: []string{"block-1"}, Role: "user"},
+			{BlockIds: []string{"block-2"}, Role: "assistant"},
+		},
+		FlowId:      "flow-123",
+		WorkspaceId: "workspace-456",
+	}
+	data, err := json.Marshal(wrapper)
+	require.NoError(t, err)
+
+	h := &Llm2ChatHistory{}
+	err = h.UnmarshalJSON(data)
+	require.NoError(t, err)
+
+	assert.False(t, h.hydrated)
+	assert.Nil(t, h.messages)
+	assert.Len(t, h.refs, 2)
+	assert.Equal(t, "user", h.refs[0].Role)
+	assert.Equal(t, "flow-123", h.flowId)
+	assert.Equal(t, "workspace-456", h.workspaceId)
+}
+
+func TestLlm2ChatHistory_UnmarshalJSON_EmptyRefsIsHydrated(t *testing.T) {
+	wrapper := struct {
+		Type string       `json:"type"`
+		Refs []MessageRef `json:"refs"`
+	}{
+		Type: "llm2",
+		Refs: []MessageRef{},
+	}
+	data, err := json.Marshal(wrapper)
+	require.NoError(t, err)
+
+	h := &Llm2ChatHistory{}
+	err = h.UnmarshalJSON(data)
+	require.NoError(t, err)
+
+	assert.True(t, h.hydrated, "empty refs should be considered hydrated")
+	assert.NotNil(t, h.messages)
+	assert.Len(t, h.messages, 0)
+	assert.Len(t, h.refs, 0)
+}
+
+func TestLlm2ChatHistory_Hydrate_RestoresContent(t *testing.T) {
+	// Create storage with pre-populated content blocks using flow-prefixed keys
+	storage := newMockKeyValueStorage()
+	block1 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Hello from user"}
+	block2 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Hello from assistant"}
+	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
+		"flow-123:msg:block-1": block1,
+		"flow-123:msg:block-2": block2,
+	})
+
+	// Create non-hydrated history with refs (bare block IDs)
+	h := &Llm2ChatHistory{
+		flowId:      "flow-123",
+		workspaceId: "workspace-456",
+		refs: []MessageRef{
+			{BlockIds: []string{"block-1"}, Role: "user"},
+			{BlockIds: []string{"block-2"}, Role: "assistant"},
+		},
+		hydrated: false,
+	}
+
+	err := h.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	assert.True(t, h.hydrated)
+	assert.Len(t, h.messages, 2)
+	assert.Equal(t, "user", h.messages[0].GetRole())
+	assert.Equal(t, "Hello from user", h.messages[0].GetContentString())
+	assert.Equal(t, "assistant", h.messages[1].GetRole())
+	assert.Equal(t, "Hello from assistant", h.messages[1].GetContentString())
+}
+
+func TestLlm2ChatHistory_Hydrate_AlreadyHydrated(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
+
+	// Should be a no-op
+	err := h.Hydrate(context.Background(), nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, h.Len())
+	assert.Equal(t, "Hello", h.Get(0).GetContentString())
+}
+
+func TestLlm2ChatHistory_Hydrate_EmptyRefs(t *testing.T) {
+	h := &Llm2ChatHistory{
+		workspaceId: "workspace-456",
+		refs:        []MessageRef{},
+		hydrated:    false,
+	}
+
+	err := h.Hydrate(context.Background(), newMockKeyValueStorage())
+	require.NoError(t, err)
+
+	assert.True(t, h.hydrated)
+	assert.Empty(t, h.messages)
+}
+
+func TestLlm2ChatHistory_Persist_StoresContentBlocks(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "Hello"},
+			{Type: llm2.ContentBlockTypeText, Text: "World"},
+		},
+	})
+	h.Append(&llm2.Message{
+		Role: llm2.RoleAssistant,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "Hi there"},
+		},
+	})
+
+	storage := newMockKeyValueStorage()
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	// Verify refs were updated
+	assert.Len(t, h.refs, 2)
+	assert.Equal(t, "user", h.refs[0].Role)
+	assert.Len(t, h.refs[0].BlockIds, 2)
+	assert.Equal(t, "assistant", h.refs[1].Role)
+	assert.Len(t, h.refs[1].BlockIds, 1)
+
+	// Verify content was stored
+	assert.Len(t, storage.data, 3)
+
+	// Verify unpersisted was cleared
+	assert.Empty(t, h.unpersisted)
+}
+
+func TestLlm2ChatHistory_Persist_NothingToPersist(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+
+	storage := newMockKeyValueStorage()
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	assert.Empty(t, storage.data)
+}
+
+func TestLlm2ChatHistory_Persist_NotHydrated(t *testing.T) {
+	h := &Llm2ChatHistory{
+		hydrated: false,
+	}
+
+	err := h.Persist(context.Background(), newMockKeyValueStorage(), NewKsuidGenerator())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "non-hydrated")
+}
+
+func TestLlm2ChatHistory_RoundTrip(t *testing.T) {
+	// Create and populate history
+	original := NewLlm2ChatHistory("flow-123", "workspace-456")
+	original.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "Hello, how are you?"},
+		},
+	})
+	original.Append(&llm2.Message{
+		Role: llm2.RoleAssistant,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "I'm doing well, thank you!"},
+		},
+	})
+	original.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "Great to hear!"},
+		},
+	})
+
+	// Persist to storage
+	storage := newMockKeyValueStorage()
+	err := original.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	// Marshal to JSON
+	data, err := original.MarshalJSON()
+	require.NoError(t, err)
+
+	// Unmarshal into new history
+	restored := &Llm2ChatHistory{}
+	err = restored.UnmarshalJSON(data)
+	require.NoError(t, err)
+
+	// flowId and workspaceId should survive the round-trip
+	assert.Equal(t, "flow-123", restored.flowId)
+	assert.Equal(t, "workspace-456", restored.workspaceId)
+
+	// Hydrate from storage
+	err = restored.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	// Verify content matches
+	assert.Equal(t, original.Len(), restored.Len())
+	for i := 0; i < original.Len(); i++ {
+		assert.Equal(t, original.Get(i).GetRole(), restored.Get(i).GetRole())
+		assert.Equal(t, original.Get(i).GetContentString(), restored.Get(i).GetContentString())
+	}
+}
+
+func TestMessageFromChatMessage_ToolRole(t *testing.T) {
+	t.Parallel()
+
+	t.Run("converts tool role to user with ToolResult", func(t *testing.T) {
+		t.Parallel()
+		cm := common.ChatMessage{
+			Role:       common.ChatMessageRoleTool,
+			Content:    "tool result content",
+			ToolCallId: "call_abc123",
+			Name:       "my_tool",
+			IsError:    false,
+		}
+
+		msg := MessageFromChatMessage(cm)
+
+		assert.Equal(t, llm2.RoleUser, msg.Role)
+		require.Len(t, msg.Content, 1)
+		assert.Equal(t, llm2.ContentBlockTypeToolResult, msg.Content[0].Type)
+		require.NotNil(t, msg.Content[0].ToolResult)
+		assert.Equal(t, "call_abc123", msg.Content[0].ToolResult.ToolCallId)
+		assert.Equal(t, "my_tool", msg.Content[0].ToolResult.Name)
+		assert.Equal(t, "tool result content", msg.Content[0].ToolResult.TextContent())
+		assert.False(t, msg.Content[0].ToolResult.IsError)
+	})
+
+	t.Run("converts tool role with error flag", func(t *testing.T) {
+		t.Parallel()
+		cm := common.ChatMessage{
+			Role:       common.ChatMessageRoleTool,
+			Content:    "error message",
+			ToolCallId: "call_xyz",
+			Name:       "failing_tool",
+			IsError:    true,
+		}
+
+		msg := MessageFromChatMessage(cm)
+
+		assert.Equal(t, llm2.RoleUser, msg.Role)
+		require.NotNil(t, msg.Content[0].ToolResult)
+		assert.True(t, msg.Content[0].ToolResult.IsError)
+	})
+
+	t.Run("converts user role to text content", func(t *testing.T) {
+		t.Parallel()
+		cm := common.ChatMessage{
+			Role:    "user",
+			Content: "hello",
+		}
+
+		msg := MessageFromChatMessage(cm)
+
+		assert.Equal(t, llm2.RoleUser, msg.Role)
+		require.Len(t, msg.Content, 1)
+		assert.Equal(t, llm2.ContentBlockTypeText, msg.Content[0].Type)
+		assert.Equal(t, "hello", msg.Content[0].Text)
+	})
+
+	t.Run("converts assistant role to text content", func(t *testing.T) {
+		t.Parallel()
+		cm := common.ChatMessage{
+			Role:    "assistant",
+			Content: "response",
+		}
+
+		msg := MessageFromChatMessage(cm)
+
+		assert.Equal(t, llm2.RoleAssistant, msg.Role)
+		require.Len(t, msg.Content, 1)
+		assert.Equal(t, llm2.ContentBlockTypeText, msg.Content[0].Type)
+		assert.Equal(t, "response", msg.Content[0].Text)
+	})
+}
+
+func TestLlm2ChatHistory_RoundTrip_WithToolCalls(t *testing.T) {
+	original := NewLlm2ChatHistory("flow-123", "workspace-456")
+	original.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "Search for something"},
+		},
+	})
+	original.Append(&llm2.Message{
+		Role: llm2.RoleAssistant,
+		Content: []llm2.ContentBlock{
+			{
+				Type: llm2.ContentBlockTypeToolUse,
+				ToolUse: &llm2.ToolUseBlock{
+					Id:        "call_123",
+					Name:      "search",
+					Arguments: `{"query": "test"}`,
+				},
+			},
+		},
+	})
+	original.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{
+				Type: llm2.ContentBlockTypeToolResult,
+				ToolResult: &llm2.ToolResultBlock{
+					ToolCallId: "call_123",
+					Content:    []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Search results here"}},
+				},
+			},
+		},
+	})
+
+	storage := newMockKeyValueStorage()
+	err := original.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	data, err := original.MarshalJSON()
+	require.NoError(t, err)
+
+	restored := &Llm2ChatHistory{}
+	err = restored.UnmarshalJSON(data)
+	require.NoError(t, err)
+
+	// flowId and workspaceId should survive the round-trip
+	assert.Equal(t, "flow-123", restored.flowId)
+	assert.Equal(t, "workspace-456", restored.workspaceId)
+
+	err = restored.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	assert.Equal(t, original.Len(), restored.Len())
+
+	// Verify tool call details
+	toolCalls := restored.Get(1).GetToolCalls()
+	assert.Len(t, toolCalls, 1)
+	assert.Equal(t, "call_123", toolCalls[0].Id)
+	assert.Equal(t, "search", toolCalls[0].Name)
+}
+
+func TestLlm2ChatHistory_EmptyRoundTrip(t *testing.T) {
+	// Create empty history
+	original := NewLlm2ChatHistory("flow-123", "workspace-456")
+
+	// Marshal via container
+	container := ChatHistoryContainer{History: original}
+	data, err := json.Marshal(&container)
+	require.NoError(t, err)
+
+	// Verify the JSON has the wrapper format
+	var wrapper struct {
+		Type string `json:"type"`
+	}
+	err = json.Unmarshal(data, &wrapper)
+	require.NoError(t, err)
+	assert.Equal(t, "llm2", wrapper.Type)
+
+	// Unmarshal into new container
+	var restored ChatHistoryContainer
+	err = json.Unmarshal(data, &restored)
+	require.NoError(t, err)
+
+	// Verify it's still Llm2ChatHistory, not LegacyChatHistory
+	assert.NotNil(t, restored.History)
+	_, ok := restored.History.(*Llm2ChatHistory)
+	assert.True(t, ok, "Empty Llm2ChatHistory should round-trip as Llm2ChatHistory, not LegacyChatHistory")
+}
+
+func TestLlm2ChatHistory_AccessorsPanicWhenNotHydrated(t *testing.T) {
+	h := &Llm2ChatHistory{
+		hydrated: false,
+		refs: []MessageRef{
+			{BlockIds: []string{"block-1"}, Role: "user"},
+		},
+	}
+
+	t.Run("Len does not panic", func(t *testing.T) {
+		assert.NotPanics(t, func() {
+			h.Len()
+		})
+	})
+
+	t.Run("Get panics", func(t *testing.T) {
+		assert.Panics(t, func() {
+			h.Get(0)
+		})
+	})
+
+	t.Run("Set panics", func(t *testing.T) {
+		assert.Panics(t, func() {
+			h.Set(0, &llm2.Message{})
+		})
+	})
+
+	t.Run("Messages panics", func(t *testing.T) {
+		assert.Panics(t, func() {
+			h.Messages()
+		})
+	})
+
+	t.Run("Append panics when not hydrated", func(t *testing.T) {
+		assert.Panics(t, func() {
+			h.Append(&llm2.Message{})
+		})
+	})
+}
+
+func TestChatHistoryContainer_UnmarshalJSON_DetectsLlm2Format(t *testing.T) {
+	wrapper := struct {
+		Type string       `json:"type"`
+		Refs []MessageRef `json:"refs"`
+	}{
+		Type: "llm2",
+		Refs: []MessageRef{
+			{BlockIds: []string{"block-1", "block-2"}, Role: "user"},
+			{BlockIds: []string{"block-3"}, Role: "assistant"},
+		},
+	}
+	data, err := json.Marshal(wrapper)
+	require.NoError(t, err)
+
+	var container ChatHistoryContainer
+	err = json.Unmarshal(data, &container)
+	require.NoError(t, err)
+
+	assert.NotNil(t, container.History)
+	_, ok := container.History.(*Llm2ChatHistory)
+	assert.True(t, ok, "History should be *Llm2ChatHistory")
+}
+
+func TestChatHistoryContainer_UnmarshalJSON_PreservesWorkspaceId(t *testing.T) {
+	// Create history with workspace ID, persist, marshal via container
+	original := NewLlm2ChatHistory("flow-123", "workspace-456")
+	original.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
+
+	storage := newMockKeyValueStorage()
+	err := original.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	container := ChatHistoryContainer{History: original}
+	data, err := json.Marshal(&container)
+	require.NoError(t, err)
+
+	var restored ChatHistoryContainer
+	err = json.Unmarshal(data, &restored)
+	require.NoError(t, err)
+
+	llm2Hist, ok := restored.History.(*Llm2ChatHistory)
+	require.True(t, ok)
+	assert.Equal(t, "flow-123", llm2Hist.flowId)
+	assert.Equal(t, "workspace-456", llm2Hist.workspaceId)
+
+	// Hydrate should work without manually setting flowId or workspaceId
+	err = llm2Hist.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+	assert.Equal(t, 1, llm2Hist.Len())
+	assert.Equal(t, "Hello", llm2Hist.Get(0).GetContentString())
+}
+
+func TestChatHistoryContainer_UnmarshalJSON_EmptyRefsIsHydrated(t *testing.T) {
+	wrapper := struct {
+		Type string       `json:"type"`
+		Refs []MessageRef `json:"refs"`
+	}{
+		Type: "llm2",
+		Refs: []MessageRef{},
+	}
+	data, err := json.Marshal(wrapper)
+	require.NoError(t, err)
+
+	var container ChatHistoryContainer
+	err = json.Unmarshal(data, &container)
+	require.NoError(t, err)
+
+	assert.NotNil(t, container.History)
+	h, ok := container.History.(*Llm2ChatHistory)
+	require.True(t, ok, "History should be *Llm2ChatHistory")
+
+	assert.True(t, h.hydrated, "empty refs should be considered hydrated")
+	assert.NotNil(t, h.messages)
+	assert.Len(t, h.messages, 0)
+	assert.Len(t, h.refs, 0)
+}
+
+func TestChatHistoryContainer_UnmarshalJSON_FallsBackToLegacy(t *testing.T) {
+	msgs := []common.ChatMessage{
+		{Role: "user", Content: "Hello"},
+		{Role: "assistant", Content: "Hi there"},
+	}
+	data, err := json.Marshal(msgs)
+	require.NoError(t, err)
+
+	var container ChatHistoryContainer
+	err = json.Unmarshal(data, &container)
+	require.NoError(t, err)
+
+	assert.NotNil(t, container.History)
+	_, ok := container.History.(*LegacyChatHistory)
+	assert.True(t, ok, "History should be *LegacyChatHistory")
+
+	assert.Equal(t, 2, container.History.Len())
+	assert.Equal(t, "Hello", container.History.Get(0).GetContentString())
+}
+
+func TestLlm2ChatHistory_Llm2Messages(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hi"}}})
+
+	messages := h.Llm2Messages()
+
+	assert.Len(t, messages, 2)
+	assert.Equal(t, llm2.RoleUser, messages[0].Role)
+	assert.Equal(t, "Hello", messages[0].Content[0].Text)
+	assert.Equal(t, llm2.RoleAssistant, messages[1].Role)
+	assert.Equal(t, "Hi", messages[1].Content[0].Text)
+}
+
+func TestLlm2ChatHistory_SetFlowId(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.SetFlowId("new-flow-id")
+	assert.Equal(t, "new-flow-id", h.flowId)
+}
+
+func TestLlm2ChatHistory_SetWorkspaceId(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.SetWorkspaceId("new-workspace-id")
+	assert.Equal(t, "new-workspace-id", h.workspaceId)
+}
+
+func TestLlm2ChatHistory_SetMessages(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+
+	// Add initial message
+	h.Append(&llm2.Message{
+		Role:    llm2.RoleUser,
+		Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "initial"}},
+	})
+
+	// Replace with new messages
+	newMessages := []llm2.Message{
+		{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "first"}}},
+		{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "second"}}},
+		{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "third"}}},
+	}
+	h.SetMessages(newMessages)
+
+	assert.Equal(t, 3, h.Len())
+	assert.Equal(t, "first", h.Get(0).GetContentString())
+	assert.Equal(t, "second", h.Get(1).GetContentString())
+	assert.Equal(t, "third", h.Get(2).GetContentString())
+
+	// Verify all messages are marked as unpersisted
+	assert.Equal(t, []int{0, 1, 2}, h.unpersisted)
+
+	// Verify refs are reset
+	assert.Equal(t, 3, len(h.refs))
+}
+
+func TestLlm2ChatHistory_SetMessages_PanicsWhenNotHydrated(t *testing.T) {
+	h := &Llm2ChatHistory{
+		flowId:      "flow-123",
+		workspaceId: "workspace-456",
+		hydrated:    false,
+	}
+
+	assert.Panics(t, func() {
+		h.SetMessages([]llm2.Message{})
+	})
+}
+
+func TestLlm2ChatHistory_Hydrate_MultipleBlocksPerMessage(t *testing.T) {
+	storage := newMockKeyValueStorage()
+	block1 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Part 1"}
+	block2 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Part 2"}
+	block3 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Part 3"}
+	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
+		"flow-123:msg:block-1": block1,
+		"flow-123:msg:block-2": block2,
+		"flow-123:msg:block-3": block3,
+	})
+
+	h := &Llm2ChatHistory{
+		flowId:      "flow-123",
+		workspaceId: "workspace-456",
+		refs: []MessageRef{
+			{BlockIds: []string{"block-1", "block-2"}, Role: "user"},
+			{BlockIds: []string{"block-3"}, Role: "assistant"},
+		},
+		hydrated: false,
+	}
+
+	err := h.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	assert.Len(t, h.messages, 2)
+	assert.Len(t, h.messages[0].Content, 2)
+	assert.Equal(t, "Part 1", h.messages[0].Content[0].Text)
+	assert.Equal(t, "Part 2", h.messages[0].Content[1].Text)
+	assert.Len(t, h.messages[1].Content, 1)
+	assert.Equal(t, "Part 3", h.messages[1].Content[0].Text)
+}
+
+func TestLlm2ChatHistory_Hydrate_PreservesFlowId(t *testing.T) {
+	storage := newMockKeyValueStorage()
+	block1 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Hello"}
+	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
+		"flow-123:msg:block-1": block1,
+	})
+
+	h := &Llm2ChatHistory{
+		flowId:      "flow-123",
+		workspaceId: "workspace-456",
+		refs: []MessageRef{
+			{BlockIds: []string{"block-1"}, Role: "user"},
+		},
+		hydrated: false,
+	}
+
+	err := h.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	assert.Equal(t, "flow-123", h.flowId)
+}
+
+func TestLlm2ChatHistory_Refs_ReturnsDefensiveCopy(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
+
+	storage := newMockKeyValueStorage()
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	refs := h.Refs()
+	require.Len(t, refs, 1)
+
+	// Modify the returned refs
+	refs[0].BlockIds[0] = "modified-block"
+
+	// Original refs should be unchanged
+	originalRefs := h.Refs()
+	assert.NotEqual(t, "modified-block", originalRefs[0].BlockIds[0])
+}
+
+func TestLlm2ChatHistory_SetRefs_MarksNotHydrated(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
+
+	assert.True(t, h.IsHydrated())
+
+	newRefs := []MessageRef{
+		{BlockIds: []string{"new-block-1"}, Role: "user"},
+	}
+	h.SetRefs(newRefs)
+
+	assert.False(t, h.IsHydrated())
+	assert.Equal(t, 1, h.Len())
+}
+
+func TestLlm2ChatHistory_SetRefs_CachesExistingBlocks(t *testing.T) {
+	// Create and persist a history with two messages
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "First message"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Second message"}}})
+
+	storage := newMockKeyValueStorage()
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	originalRefs := h.Refs()
+	require.Len(t, originalRefs, 2)
+
+	// SetRefs with a subset that reuses one existing block and adds a new one
+	newBlock := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "New message"}
+	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
+		"flow-123:msg:new-block-id": newBlock,
+	})
+
+	newRefs := []MessageRef{
+		originalRefs[1], // Reuse second message's ref
+		{BlockIds: []string{"new-block-id"}, Role: "user"},
+	}
+	h.SetRefs(newRefs)
+
+	assert.False(t, h.IsHydrated())
+
+	// Hydrate should only fetch the new block, not the cached one
+	err = h.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	assert.True(t, h.IsHydrated())
+	assert.Len(t, h.Llm2Messages(), 2)
+	assert.Equal(t, "Second message", h.Llm2Messages()[0].Content[0].Text)
+	assert.Equal(t, "New message", h.Llm2Messages()[1].Content[0].Text)
+}
+
+func TestLlm2ChatHistory_Hydrate_OnlyFetchesMissingBlocks(t *testing.T) {
+	// Create a tracking mock storage to verify which keys are fetched
+	storage := &trackingMockStorage{
+		mockKeyValueStorage: newMockKeyValueStorage(),
+		fetchedKeys:         make([]string, 0),
+	}
+
+	// Pre-populate storage with flow-prefixed keys
+	block1 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "First"}
+	block2 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Second"}
+	block3 := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Third"}
+	storage.MSet(context.Background(), "workspace-456", map[string]interface{}{
+		"flow-123:msg:block-1": block1,
+		"flow-123:msg:block-2": block2,
+		"flow-123:msg:block-3": block3,
+	})
+
+	// Create a hydrated history with two messages
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{block1}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{block2}})
+
+	// Manually set refs to match the blocks (bare IDs)
+	h.refs = []MessageRef{
+		{BlockIds: []string{"block-1"}, Role: "user"},
+		{BlockIds: []string{"block-2"}, Role: "assistant"},
+	}
+
+	// SetRefs to a new set that reuses block-2 and adds block-3
+	newRefs := []MessageRef{
+		{BlockIds: []string{"block-2"}, Role: "assistant"},
+		{BlockIds: []string{"block-3"}, Role: "user"},
+	}
+	h.SetRefs(newRefs)
+
+	// Clear fetch tracking
+	storage.fetchedKeys = nil
+
+	// Hydrate
+	err := h.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	// Only block-3 should have been fetched (with flow prefix in storage key)
+	assert.Equal(t, []string{"flow-123:msg:block-3"}, storage.fetchedKeys)
+
+	// Verify content is correct
+	assert.True(t, h.IsHydrated())
+	messages := h.Llm2Messages()
+	assert.Len(t, messages, 2)
+	assert.Equal(t, "Second", messages[0].Content[0].Text)
+	assert.Equal(t, "Third", messages[1].Content[0].Text)
+}
+
+func TestLlm2ChatHistory_Persist_PopulatesCache(t *testing.T) {
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
+
+	storage := newMockKeyValueStorage()
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	refs := h.Refs()
+	require.Len(t, refs, 1)
+	require.Len(t, refs[0].BlockIds, 1)
+
+	// SetRefs to the same refs (simulating workflow receiving refs back)
+	h.SetRefs(refs)
+
+	// Create a tracking storage to verify no fetch happens
+	trackingStorage := &trackingMockStorage{
+		mockKeyValueStorage: storage,
+		fetchedKeys:         make([]string, 0),
+	}
+
+	// Hydrate should use cached blocks, not fetch from storage
+	err = h.Hydrate(context.Background(), trackingStorage)
+	require.NoError(t, err)
+
+	assert.Empty(t, trackingStorage.fetchedKeys)
+	assert.True(t, h.IsHydrated())
+	assert.Equal(t, "Hello", h.Llm2Messages()[0].Content[0].Text)
+}
+
+// trackingMockStorage wraps mockKeyValueStorage to track which keys are fetched
+type trackingMockStorage struct {
+	*mockKeyValueStorage
+	fetchedKeys []string
+}
+
+func (t *trackingMockStorage) MGet(ctx context.Context, workspaceId string, keys []string) ([][]byte, error) {
+	t.fetchedKeys = append(t.fetchedKeys, keys...)
+	return t.mockKeyValueStorage.MGet(ctx, workspaceId, keys)
+}
+
+func TestLlm2ChatHistory_Persist_UsesDeterministicGenerator(t *testing.T) {
+	t.Parallel()
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "World"}}})
+
+	storage := newMockKeyValueStorage()
+
+	// Use a deterministic generator that yields predictable IDs
+	idCounter := 0
+	deterministicGen := func() string {
+		idCounter++
+		return fmt.Sprintf("id-%d", idCounter)
+	}
+
+	err := h.Persist(context.Background(), storage, deterministicGen)
+	require.NoError(t, err)
+
+	refs := h.Refs()
+	require.Len(t, refs, 2)
+
+	// Refs contain bare block IDs (no flow prefix)
+	assert.Equal(t, "id-1", refs[0].BlockIds[0])
+	assert.Equal(t, "id-2", refs[1].BlockIds[0])
+
+	// Storage keys include the flow prefix
+	_, ok := storage.data["flow-123:msg:id-1"]
+	assert.True(t, ok, "expected block id-1 to exist in storage with flow prefix")
+	_, ok = storage.data["flow-123:msg:id-2"]
+	assert.True(t, ok, "expected block id-2 to exist in storage with flow prefix")
+}
+
+func TestLlm2ChatHistory_Persist_BlockIdsDoNotContainMessageIndex(t *testing.T) {
+	t.Parallel()
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "First"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Second"}}})
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Third"}}})
+
+	storage := newMockKeyValueStorage()
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	refs := h.Refs()
+	for _, ref := range refs {
+		for _, blockId := range ref.BlockIds {
+			// Bare block IDs should not contain any ":" prefix
+			assert.False(t, strings.Contains(blockId, ":"),
+				"block ID should be a bare identifier without any prefix")
+			assert.NotEmpty(t, blockId)
+		}
+	}
+}
+
+func TestLlm2ChatHistory_Persist_ModifiedMessageGetsNewBlockIds(t *testing.T) {
+	t.Parallel()
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Original"}}})
+
+	storage := newMockKeyValueStorage()
+
+	// First persist
+	idCounter := 0
+	gen := func() string {
+		idCounter++
+		return fmt.Sprintf("id-%d", idCounter)
+	}
+	err := h.Persist(context.Background(), storage, gen)
+	require.NoError(t, err)
+
+	originalRefs := h.Refs()
+	require.Len(t, originalRefs, 1)
+	originalBlockId := originalRefs[0].BlockIds[0]
+	assert.Equal(t, "id-1", originalBlockId)
+
+	// Modify the message via Set
+	h.Set(0, &llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Modified"}}})
+
+	// Second persist - should generate new block IDs
+	err = h.Persist(context.Background(), storage, gen)
+	require.NoError(t, err)
+
+	newRefs := h.Refs()
+	require.Len(t, newRefs, 1)
+	newBlockId := newRefs[0].BlockIds[0]
+
+	// New block ID should be different from original
+	assert.NotEqual(t, originalBlockId, newBlockId)
+	assert.Equal(t, "id-2", newBlockId)
+
+	// Both old and new blocks should exist in storage with flow-prefixed keys
+	_, oldExists := storage.data["flow-123:msg:id-1"]
+	assert.True(t, oldExists, "original block should still exist in storage")
+	_, newExists := storage.data["flow-123:msg:id-2"]
+	assert.True(t, newExists, "new block should exist in storage")
+
+	// New block should have the modified content
+	var block llm2.ContentBlock
+	json.Unmarshal(storage.data["flow-123:msg:id-2"], &block)
+	assert.Equal(t, "Modified", block.Text)
+}
+
+func TestLlm2ChatHistory_Persist_SetFlowIdUsesNewNamespace(t *testing.T) {
+	t.Parallel()
+	h := NewLlm2ChatHistory("old-flow", "workspace-456")
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
+
+	storage := newMockKeyValueStorage()
+
+	idCounter := 0
+	gen := func() string {
+		idCounter++
+		return fmt.Sprintf("id-%d", idCounter)
+	}
+
+	// First persist with old flow ID
+	err := h.Persist(context.Background(), storage, gen)
+	require.NoError(t, err)
+
+	originalRefs := h.Refs()
+	assert.Equal(t, "id-1", originalRefs[0].BlockIds[0])
+
+	// Storage key uses the old flow prefix
+	_, ok := storage.data["old-flow:msg:id-1"]
+	assert.True(t, ok, "block should be stored under old flow prefix")
+
+	// Change flow ID and modify message
+	h.SetFlowId("new-flow")
+	h.Set(0, &llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Updated"}}})
+
+	// Second persist should store under new flow namespace in storage
+	err = h.Persist(context.Background(), storage, gen)
+	require.NoError(t, err)
+
+	newRefs := h.Refs()
+	// Ref block IDs remain bare
+	assert.Equal(t, "id-2", newRefs[0].BlockIds[0])
+	// But storage key uses new flow prefix
+	_, ok = storage.data["new-flow:msg:id-2"]
+	assert.True(t, ok, "block should be stored under new flow prefix")
+}
+
+func TestLlm2ChatHistory_Persist_RefsConsistentWithMessages(t *testing.T) {
+	t.Parallel()
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{
+		{Type: llm2.ContentBlockTypeText, Text: "Block1"},
+		{Type: llm2.ContentBlockTypeText, Text: "Block2"},
+	}})
+	h.Append(&llm2.Message{Role: llm2.RoleAssistant, Content: []llm2.ContentBlock{
+		{Type: llm2.ContentBlockTypeText, Text: "Response"},
+	}})
+
+	storage := newMockKeyValueStorage()
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	refs := h.Refs()
+	messages := h.Llm2Messages()
+
+	require.Len(t, refs, len(messages))
+
+	for idx, ref := range refs {
+		msg := messages[idx]
+		// Role should match
+		assert.Equal(t, string(msg.Role), ref.Role)
+		// Number of block IDs should match number of content blocks
+		assert.Equal(t, len(msg.Content), len(ref.BlockIds))
+		// All block IDs should be non-empty
+		for _, blockId := range ref.BlockIds {
+			assert.NotEmpty(t, blockId)
+		}
+	}
+}
+
+func TestLlm2ChatHistory_Persist_StoredBlocksDeserializeCorrectly(t *testing.T) {
+	t.Parallel()
+	h := NewLlm2ChatHistory("flow-123", "workspace-456")
+	originalBlock := llm2.ContentBlock{
+		Type:         llm2.ContentBlockTypeText,
+		Text:         "Hello World",
+		CacheControl: "ephemeral",
+	}
+	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{originalBlock}})
+
+	storage := newMockKeyValueStorage()
+
+	idCounter := 0
+	gen := func() string {
+		idCounter++
+		return fmt.Sprintf("id-%d", idCounter)
+	}
+
+	err := h.Persist(context.Background(), storage, gen)
+	require.NoError(t, err)
+
+	refs := h.Refs()
+	blockId := refs[0].BlockIds[0]
+
+	// Storage key is flow-prefixed
+	storedData := storage.data[StorageKey("flow-123", blockId)]
+	var retrievedBlock llm2.ContentBlock
+	err = json.Unmarshal(storedData, &retrievedBlock)
+	require.NoError(t, err)
+
+	assert.Equal(t, originalBlock.Type, retrievedBlock.Type)
+	assert.Equal(t, originalBlock.Text, retrievedBlock.Text)
+	assert.Equal(t, originalBlock.CacheControl, retrievedBlock.CacheControl)
+}
+
+func TestChatHistoryContainer_UnmarshalJSON_PreservesFlowId(t *testing.T) {
+	original := NewLlm2ChatHistory("flow-999", "workspace-456")
+	original.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Hello"}}})
+
+	storage := newMockKeyValueStorage()
+	err := original.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	container := ChatHistoryContainer{History: original}
+	data, err := json.Marshal(&container)
+	require.NoError(t, err)
+
+	var restored ChatHistoryContainer
+	err = json.Unmarshal(data, &restored)
+	require.NoError(t, err)
+
+	llm2Hist, ok := restored.History.(*Llm2ChatHistory)
+	require.True(t, ok)
+	assert.Equal(t, "flow-999", llm2Hist.flowId)
+	assert.Equal(t, "workspace-456", llm2Hist.workspaceId)
+
+	err = llm2Hist.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+	assert.Equal(t, 1, llm2Hist.Len())
+	assert.Equal(t, "Hello", llm2Hist.Get(0).GetContentString())
+}
+
+func TestMessageFromChatMessage_PreservesContextMarkers(t *testing.T) {
+	t.Parallel()
+
+	t.Run("text message preserves ContextType and CacheControl", func(t *testing.T) {
+		t.Parallel()
+		cm := common.ChatMessage{
+			Role:         "user",
+			Content:      "system instructions",
+			ContextType:  "InitialInstructions",
+			CacheControl: "ephemeral",
+		}
+
+		msg := MessageFromChatMessage(cm)
+
+		require.Len(t, msg.Content, 1)
+		assert.Equal(t, "InitialInstructions", msg.Content[0].ContextType)
+		assert.Equal(t, "ephemeral", msg.Content[0].CacheControl)
+	})
+
+	t.Run("tool result preserves ContextType and CacheControl", func(t *testing.T) {
+		t.Parallel()
+		cm := common.ChatMessage{
+			Role:         common.ChatMessageRoleTool,
+			Content:      "tool output",
+			ToolCallId:   "call_123",
+			Name:         "my_tool",
+			ContextType:  "TestResult",
+			CacheControl: "ephemeral",
+		}
+
+		msg := MessageFromChatMessage(cm)
+
+		require.Len(t, msg.Content, 1)
+		assert.Equal(t, llm2.ContentBlockTypeToolResult, msg.Content[0].Type)
+		assert.Equal(t, "TestResult", msg.Content[0].ContextType)
+		assert.Equal(t, "ephemeral", msg.Content[0].CacheControl)
+	})
+}
+
+func TestLlm2ChatHistory_RoundTrip_WithImage(t *testing.T) {
+	t.Parallel()
+
+	_, dataURL := llm2.GenerateVisionTestImage(6)
+
+	original := NewLlm2ChatHistory("flow-img", "workspace-img")
+	original.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "What text is in this image?"},
+			{
+				Type:  llm2.ContentBlockTypeImage,
+				Image: &llm2.ImageRef{Url: dataURL},
+			},
+		},
+	})
+	original.Append(&llm2.Message{
+		Role: llm2.RoleAssistant,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "The image contains some text."},
+		},
+	})
+
+	storage := newMockKeyValueStorage()
+	err := original.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	data, err := original.MarshalJSON()
+	require.NoError(t, err)
+
+	restored := &Llm2ChatHistory{}
+	err = restored.UnmarshalJSON(data)
+	require.NoError(t, err)
+
+	assert.Equal(t, "flow-img", restored.flowId)
+	assert.Equal(t, "workspace-img", restored.workspaceId)
+
+	err = restored.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	assert.Equal(t, original.Len(), restored.Len())
+
+	// The image data URL must survive the round-trip exactly.
+	restoredMsgs := restored.Llm2Messages()
+	require.Len(t, restoredMsgs, 2)
+	require.Len(t, restoredMsgs[0].Content, 2)
+	assert.Equal(t, llm2.ContentBlockTypeImage, restoredMsgs[0].Content[1].Type)
+	require.NotNil(t, restoredMsgs[0].Content[1].Image)
+	assert.Equal(t, dataURL, restoredMsgs[0].Content[1].Image.Url)
+}
+
+func TestLlm2ChatHistory_PersistHydrate_PreservesContextMarkers(t *testing.T) {
+	t.Parallel()
+	storage := newMockKeyValueStorage()
+
+	history := NewLlm2ChatHistory("flow-123", "workspace-456")
+	history.Append(&common.ChatMessage{
+		Role:         "user",
+		Content:      "system instructions",
+		ContextType:  "InitialInstructions",
+		CacheControl: "ephemeral",
+	})
+
+	err := history.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	refs := history.Refs()
+	require.Len(t, refs, 1)
+
+	restored := NewLlm2ChatHistory("flow-123", "workspace-456")
+	restored.SetRefs(refs)
+	err = restored.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	messages := restored.Llm2Messages()
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].Content, 1)
+	assert.Equal(t, "InitialInstructions", messages[0].Content[0].ContextType)
+	assert.Equal(t, "ephemeral", messages[0].Content[0].CacheControl)
+}
+
+func TestLlm2ChatHistory_Hydrate_ResolvesKvImageURLs(t *testing.T) {
+	t.Parallel()
+
+	storage := newMockKeyValueStorage()
+
+	// Store a data URL in KV under a known key
+	_, testDataURL := llm2.GenerateVisionTestImage(4)
+	kvKey := "flow-kv:img:test-image-key"
+	storage.data[kvKey] = []byte(testDataURL)
+
+	h := NewLlm2ChatHistory("flow-kv", "workspace-kv")
+	h.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "What is in this image?"},
+			{
+				Type:  llm2.ContentBlockTypeImage,
+				Image: &llm2.ImageRef{Url: KvImagePrefix + kvKey},
+			},
+		},
+	})
+
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	data, err := h.MarshalJSON()
+	require.NoError(t, err)
+
+	restored := &Llm2ChatHistory{}
+	err = restored.UnmarshalJSON(data)
+	require.NoError(t, err)
+
+	err = restored.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	msgs := restored.Llm2Messages()
+	require.Len(t, msgs, 1)
+	require.Len(t, msgs[0].Content, 2)
+	assert.Equal(t, llm2.ContentBlockTypeImage, msgs[0].Content[1].Type)
+	require.NotNil(t, msgs[0].Content[1].Image)
+	assert.Equal(t, testDataURL, msgs[0].Content[1].Image.Url)
+}
+
+func TestLlm2ChatHistory_Hydrate_ResolvesKvImageInToolResult(t *testing.T) {
+	t.Parallel()
+
+	storage := newMockKeyValueStorage()
+
+	_, testDataURL := llm2.GenerateVisionTestImage(4)
+	kvKey := "flow-kv:img:tool-result-image"
+	storage.data[kvKey] = []byte(testDataURL)
+
+	h := NewLlm2ChatHistory("flow-kv", "workspace-kv")
+	h.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{
+				Type: llm2.ContentBlockTypeToolResult,
+				ToolResult: &llm2.ToolResultBlock{
+					ToolCallId: "call-1",
+					Name:       "read_image",
+					Content: []llm2.ContentBlock{
+						{Type: llm2.ContentBlockTypeText, Text: "Image loaded"},
+						{
+							Type:  llm2.ContentBlockTypeImage,
+							Image: &llm2.ImageRef{Url: KvImagePrefix + kvKey},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	data, err := h.MarshalJSON()
+	require.NoError(t, err)
+
+	restored := &Llm2ChatHistory{}
+	err = restored.UnmarshalJSON(data)
+	require.NoError(t, err)
+
+	err = restored.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	msgs := restored.Llm2Messages()
+	require.Len(t, msgs, 1)
+	require.Len(t, msgs[0].Content, 1)
+	require.NotNil(t, msgs[0].Content[0].ToolResult)
+	require.Len(t, msgs[0].Content[0].ToolResult.Content, 2)
+	assert.Equal(t, "Image loaded", msgs[0].Content[0].ToolResult.Content[0].Text)
+	assert.Equal(t, testDataURL, msgs[0].Content[0].ToolResult.Content[1].Image.Url)
+}
+
+func TestLlm2ChatHistory_Hydrate_NoKvURLsIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	storage := newMockKeyValueStorage()
+
+	h := NewLlm2ChatHistory("flow-no-kv", "workspace-no-kv")
+	h.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "Hello"},
+		},
+	})
+
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	data, err := h.MarshalJSON()
+	require.NoError(t, err)
+
+	restored := &Llm2ChatHistory{}
+	err = restored.UnmarshalJSON(data)
+	require.NoError(t, err)
+
+	err = restored.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	msgs := restored.Llm2Messages()
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "Hello", msgs[0].Content[0].Text)
+}

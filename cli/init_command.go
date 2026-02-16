@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/llm"
@@ -24,7 +24,9 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/charmbracelet/huh"
 	"github.com/erikgeiser/promptkit/selection"
-	"github.com/goccy/go-yaml"
+	"github.com/knadh/koanf/parsers/json"
+	"github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
 	"github.com/segmentio/ksuid"
@@ -406,13 +408,13 @@ func saveConfig(filePath string, config common.RepoConfig) error {
 
 	switch ext {
 	case ".yml", ".yaml":
-		data, err = yaml.Marshal(config)
+		data, err = marshalConfigWithKoanf(config, yaml.Parser())
 	case ".toml":
 		var buf bytes.Buffer
 		err = toml.NewEncoder(&buf).Encode(config)
 		data = buf.Bytes()
 	case ".json":
-		data, err = json.MarshalIndent(config, "", "  ")
+		data, err = marshalConfigWithKoanf(config, json.Parser())
 	default:
 		return fmt.Errorf("unsupported config file format: %s", ext)
 	}
@@ -426,6 +428,134 @@ func saveConfig(filePath string, config common.RepoConfig) error {
 	}
 
 	return nil
+}
+
+func marshalConfigWithKoanf(config common.RepoConfig, parser koanf.Parser) ([]byte, error) {
+	k := koanf.New(".")
+	if err := k.Load(confmap.Provider(structToMap(config), "."), nil); err != nil {
+		return nil, fmt.Errorf("error loading config into koanf: %w", err)
+	}
+	return k.Marshal(parser)
+}
+
+func structToMap(v interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+	val := reflect.ValueOf(v)
+	if val.Kind() == reflect.Ptr {
+		val = val.Elem()
+	}
+	if val.Kind() != reflect.Struct {
+		return result
+	}
+
+	typ := val.Type()
+	for i := 0; i < val.NumField(); i++ {
+		field := typ.Field(i)
+		fieldVal := val.Field(i)
+
+		name, omitEmpty := parseKoanfTag(field)
+		if name == "" || name == "-" {
+			continue
+		}
+
+		if omitEmpty && isEmptyValue(fieldVal) {
+			continue
+		}
+
+		result[name] = convertValue(fieldVal)
+	}
+	return result
+}
+
+func parseKoanfTag(field reflect.StructField) (name string, omitEmpty bool) {
+	// Check koanf tag for name, fall back to toml tag
+	koanfTag := field.Tag.Get("koanf")
+	tomlTag := field.Tag.Get("toml")
+
+	// Get name from koanf tag first, then toml tag
+	if koanfTag != "" {
+		parts := strings.Split(koanfTag, ",")
+		name = parts[0]
+		for _, opt := range parts[1:] {
+			if opt == "omitempty" {
+				omitEmpty = true
+			}
+		}
+	}
+	if name == "" && tomlTag != "" {
+		parts := strings.Split(tomlTag, ",")
+		name = parts[0]
+	}
+
+	// Check toml tag for omitempty as well (merge from both tags)
+	if !omitEmpty && tomlTag != "" {
+		parts := strings.Split(tomlTag, ",")
+		for _, opt := range parts[1:] {
+			if opt == "omitempty" {
+				omitEmpty = true
+				break
+			}
+		}
+	}
+
+	return name, omitEmpty
+}
+
+func isEmptyValue(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Array, reflect.Map, reflect.Slice, reflect.String:
+		return v.Len() == 0
+	case reflect.Bool:
+		return !v.Bool()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v.Int() == 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return v.Uint() == 0
+	case reflect.Float32, reflect.Float64:
+		return v.Float() == 0
+	case reflect.Interface, reflect.Ptr:
+		return v.IsNil()
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if !isEmptyValue(v.Field(i)) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func convertValue(v reflect.Value) interface{} {
+	switch v.Kind() {
+	case reflect.Struct:
+		return structToMap(v.Interface())
+	case reflect.Slice, reflect.Array:
+		if v.Len() == 0 {
+			return nil
+		}
+		result := make([]interface{}, v.Len())
+		for i := 0; i < v.Len(); i++ {
+			result[i] = convertValue(v.Index(i))
+		}
+		return result
+	case reflect.Map:
+		if v.Len() == 0 {
+			return nil
+		}
+		result := make(map[string]interface{})
+		for _, key := range v.MapKeys() {
+			result[key.String()] = convertValue(v.MapIndex(key))
+		}
+		return result
+	case reflect.Ptr, reflect.Interface:
+		if v.IsNil() {
+			return nil
+		}
+		return convertValue(v.Elem())
+	default:
+		return v.Interface()
+	}
 }
 
 func ensureTestCommands(config *common.RepoConfig, filePath string) error {

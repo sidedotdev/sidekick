@@ -90,3 +90,31 @@ func (s Storage) GetSubflows(ctx context.Context, workspaceId, flowId string) ([
 
 	return subflows, nil
 }
+
+func (s Storage) DeleteSubflowsForFlow(ctx context.Context, workspaceId, flowId string) error {
+	subflowSetKey := fmt.Sprintf("%s:%s:subflows", workspaceId, flowId)
+
+	subflowIds, err := s.Client.SMembers(ctx, subflowSetKey).Result()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return fmt.Errorf("failed to get subflow IDs: %w", err)
+	}
+
+	if len(subflowIds) > 0 {
+		pipe := s.Client.Pipeline()
+		for _, id := range subflowIds {
+			key := fmt.Sprintf("%s:%s", workspaceId, id)
+			pipe.Del(ctx, key)
+		}
+		pipe.Del(ctx, subflowSetKey)
+		_, err = pipe.Exec(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to delete subflows: %w", err)
+		}
+	} else {
+		if err := s.Client.Del(ctx, subflowSetKey).Err(); err != nil {
+			return fmt.Errorf("failed to delete subflow set key: %w", err)
+		}
+	}
+
+	return nil
+}

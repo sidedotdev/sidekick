@@ -2,8 +2,11 @@ package dev
 
 import (
 	"bufio"
+	"context"
+	"fmt"
 	"sidekick/coding/tree_sitter"
-	"sidekick/llm"
+	"sidekick/common"
+	"sidekick/persisted_ai"
 	"sidekick/utils"
 	"strconv"
 	"strings"
@@ -34,21 +37,36 @@ type FileRange struct {
 	EndLine   int    `json:"endLine"`
 }
 
-// TODO: this doesn't handle edit blocks that were applied successfully, where
-// the new lines should be returned as a code block
-func extractAllCodeBlocks(chatHistory []llm.ChatMessage) []tree_sitter.CodeBlock {
+// ExtractEditBlocksWithVisibilityActivity is an activity that hydrates the chat
+// history from KV storage before extracting edit blocks with visibility info.
+func ExtractEditBlocksWithVisibilityActivity(
+	ctx context.Context,
+	storage common.KeyValueStorage,
+	chatHistory *persisted_ai.ChatHistoryContainer,
+	responseText string,
+	tildeOnly bool,
+) ([]EditBlock, error) {
+	if err := chatHistory.Hydrate(ctx, storage); err != nil {
+		return nil, fmt.Errorf("failed to hydrate chat history: %w", err)
+	}
+	return ExtractEditBlocksWithVisibility(responseText, *chatHistory, tildeOnly)
+}
+
+// extractAllCodeBlocks scans chat messages for code blocks used in edit-block
+// visibility tracking. Requires a hydrated ChatHistoryContainer.
+func extractAllCodeBlocks(chatHistory persisted_ai.ChatHistoryContainer) []tree_sitter.CodeBlock {
 	codeBlocks := make([]tree_sitter.CodeBlock, 0)
-	for _, chatMessage := range chatHistory {
-		if chatMessage.Role != llm.ChatMessageRoleAssistant {
-			symDefCodeBlocks, err := tree_sitter.ExtractSymbolDefinitionBlocks(chatMessage.Content)
+	for _, chatMessage := range chatHistory.Messages() {
+		if chatMessage.GetRole() != string(common.ChatMessageRoleAssistant) {
+			symDefCodeBlocks, err := tree_sitter.ExtractSymbolDefinitionBlocks(chatMessage.GetContentString())
 			if err != nil {
 				log.Warn().Err(err).Msg("failed to extract symbol definition blocks")
 			}
-			searchCodeBlocks, err := tree_sitter.ExtractSearchCodeBlocks(chatMessage.Content)
+			searchCodeBlocks, err := tree_sitter.ExtractSearchCodeBlocks(chatMessage.GetContentString())
 			if err != nil {
 				log.Warn().Err(err).Msg("failed to extract search code blocks")
 			}
-			gitDiffCodeBlocks, err := tree_sitter.ExtractGitDiffCodeBlocks(chatMessage.Content)
+			gitDiffCodeBlocks, err := tree_sitter.ExtractGitDiffCodeBlocks(chatMessage.GetContentString())
 			if err != nil {
 				log.Warn().Err(err).Msg("failed to extract git diff code blocks")
 			}
@@ -221,14 +239,20 @@ func ExtractEditBlocks(text string, tildeOnly bool) ([]*EditBlock, error) {
 	return blocks, nil
 }
 
-func ExtractEditBlocksWithVisibility(text string, chatHistory []llm.ChatMessage, tildeOnly bool) ([]EditBlock, error) {
+func ExtractEditBlocksWithVisibility(text string, chatHistory persisted_ai.ChatHistoryContainer, tildeOnly bool) ([]EditBlock, error) {
+	visibleCodeBlocks := extractAllCodeBlocks(chatHistory)
+	return ExtractEditBlocksWithCodeBlocks(text, visibleCodeBlocks, tildeOnly)
+}
+
+// ExtractEditBlocksWithCodeBlocks extracts edit blocks from text and annotates
+// them with visibility information from pre-extracted code blocks.
+func ExtractEditBlocksWithCodeBlocks(text string, visibleCodeBlocks []tree_sitter.CodeBlock, tildeOnly bool) ([]EditBlock, error) {
 	editBlocksWithoutVisibility, err := ExtractEditBlocks(text, tildeOnly)
 	if err != nil {
 		return nil, err
 	}
 
 	var extractedEditBlocks []EditBlock
-	visibleCodeBlocks := extractAllCodeBlocks(chatHistory)
 	for i, block := range editBlocksWithoutVisibility {
 		// these file ranges visible now, but might not be later after we
 		// ManageChatHistory, so we need to track visibility right now, at

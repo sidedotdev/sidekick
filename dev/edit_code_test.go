@@ -4,17 +4,17 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/flow_action"
-	"sidekick/llm"
+	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
 	"sidekick/utils"
 	"testing"
 
-	"github.com/sashabaranov/go-openai"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -34,7 +34,7 @@ type AuthorEditBlocksTestSuite struct {
 	// a wrapper is required to set the ctx1 value, so that we can a method that
 	// isn't a real workflow. otherwise we get errors about not having
 	// StartToClose or ScheduleToCloseTimeout set
-	wrapperWorkflow func(ctx workflow.Context, chatHistory *[]llm.ChatMessage, pic PromptInfoContainer) ([]EditBlock, error)
+	wrapperWorkflow func(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, pic PromptInfoContainer) ([]EditBlock, error)
 }
 
 func (s *AuthorEditBlocksTestSuite) SetupTest() {
@@ -47,7 +47,7 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 
 	// s.NewTestActivityEnvironment()
-	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *[]llm.ChatMessage, pic PromptInfoContainer) ([]EditBlock, error) {
+	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, pic PromptInfoContainer) ([]EditBlock, error) {
 		ctx1 := utils.NoRetryCtx(ctx)
 		execContext := DevContext{
 			ExecContext: flow_action.ExecContext{
@@ -75,6 +75,28 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	s.env.OnActivity(ManageChatHistoryActivity, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	s.env.OnActivity(ManageChatHistoryV2Activity, mock.Anything, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 
+	// Use version 1 for chat-history-llm2 (Llm2ChatHistory path)
+	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
+
+	// Mock KV activities for chat history persistence
+	var ka *common.KVActivities
+	s.env.OnActivity(ka.MSetRaw, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	s.env.OnActivity(ka.MGet, mock.Anything, mock.Anything, mock.Anything).Return([][]byte{}, nil).Maybe()
+
+	// Mock ChatHistoryActivities for llm2 path
+	var cha *persisted_ai.ChatHistoryActivities
+	s.env.OnActivity(cha.ManageV3, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, maxLength int) (*persisted_ai.ChatHistoryContainer, error) {
+			return chatHistory, nil
+		},
+	).Maybe()
+	s.env.OnActivity(cha.AppendMessage, mock.Anything, mock.Anything).Return(
+		&persisted_ai.MessageRef{BlockIds: []string{"mock-block"}, Role: "user"}, nil,
+	).Maybe()
+	s.env.OnActivity(cha.ExtractVisibleCodeBlocks, mock.Anything, mock.Anything).Return(
+		[]tree_sitter.CodeBlock{}, nil,
+	).Maybe()
+
 	// Create temporary directory using t.TempDir()
 	s.dir = s.T().TempDir()
 	devEnv, err := env.NewLocalEnv(context.Background(), env.LocalEnvParams{
@@ -98,22 +120,28 @@ func TestAuthorEditBlockTestSuite(t *testing.T) {
 }
 
 func (s *AuthorEditBlocksTestSuite) TestInitialCodeInfoNoEditBlocks() {
-	chatHistory := &[]llm.ChatMessage{}
-	var la *persisted_ai.LlmActivities // use a nil struct pointer to call activities that are part of a structure
-	s.env.OnActivity(la.ChatStream, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+	chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
+	var la *persisted_ai.Llm2Activities // use a nil struct pointer to call activities that are part of a structure
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		// Simulate progress events being handled
-		opts := args[1].(persisted_ai.ChatStreamOptions)
+		opts := args[1].(persisted_ai.StreamInput)
 		s.NotEmpty(opts.FlowActionId)
-	}).Return(&llm.ChatMessageResponse{
-		StopReason: string(openai.FinishReasonStop),
-		ChatMessage: llm.ChatMessage{
-			Content: "No edit blocks",
+	}).Return(&llm2.MessageResponse{
+		StopReason: "stop",
+		Output: llm2.Message{
+			Role: "assistant",
+			Content: []llm2.ContentBlock{
+				{
+					Type: llm2.ContentBlockTypeText,
+					Text: "No edit blocks",
+				},
+			},
 		},
 	},
 		nil,
 	).Once()
 	var ffa *fflag.FFlagActivities // use a nil struct pointer to call activities that are part of a structure
-	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil)
+	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, PromptInfoContainer{
 		InitialCodeInfo{},
 	})
