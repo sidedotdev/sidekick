@@ -91,7 +91,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContai
 			return nil, fmt.Errorf("error checking for pause: %v", err)
 		}
 		if response != nil && response.Content != "" {
-			iteration.ChatHistory.Append(llm.ChatMessage{
+			AppendChatHistory(dCtx, iteration.ChatHistory, llm.ChatMessage{
 				Role:    "user",
 				Content: renderGeneralFeedbackPrompt(response.Content, FeedbackTypePause),
 			})
@@ -100,7 +100,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContai
 
 		// Inject proactive system message when nearing per-cycle tool-call limits
 		if msg, ok := ThresholdMessageForCounter(config.autoIterations, iteration.AutoIterationCount); ok {
-			iteration.ChatHistory.Append(llm.ChatMessage{
+			AppendChatHistory(dCtx, iteration.ChatHistory, llm.ChatMessage{
 				Role:    "system",
 				Content: msg,
 			})
@@ -115,7 +115,7 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContai
 			}
 
 			// Add feedback to chat history
-			iteration.ChatHistory.Append(llm.ChatMessage{
+			AppendChatHistory(dCtx, iteration.ChatHistory, llm.ChatMessage{
 				Role:    "user",
 				Content: userResponse.Content,
 			})
