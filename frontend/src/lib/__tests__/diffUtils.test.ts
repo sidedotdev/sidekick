@@ -45,6 +45,52 @@ describe('parseDiff', () => {
     expect(parseDiff('   ')).toEqual([]);
   });
 
+  it('should extract file names from --- and +++ headers when diff --git parsing fails', () => {
+    const diffWithWeirdHeader = `diff --git a/some weird header
+--- a/src/real-file.ts
++++ b/src/real-file.ts
+@@ -1,3 +1,4 @@
+ line1
++added
+ line2
+ line3`;
+
+    const result = parseDiff(diffWithWeirdHeader);
+    
+    expect(result).toHaveLength(1);
+    expect(result[0].newFile.fileName).toBe('src/real-file.ts');
+    expect(result[0].oldFile.fileName).toBe('src/real-file.ts');
+  });
+
+  it('should handle \\r\\n line endings', () => {
+    const diffWithCRLF = "diff --git a/src/test.js b/src/test.js\r\nindex 1234567..abcdefg 100644\r\n--- a/src/test.js\r\n+++ b/src/test.js\r\n@@ -1,2 +1,3 @@\r\n line1\r\n+added\r\n line2\r\n";
+
+    const result = parseDiff(diffWithCRLF);
+    
+    expect(result).toHaveLength(1);
+    expect(result[0].oldFile.fileName).toBe('src/test.js');
+    expect(result[0].newFile.fileName).toBe('src/test.js');
+  });
+
+  it('should handle new file with /dev/null old path', () => {
+    const newFileDiff = `diff --git a/src/new.ts b/src/new.ts
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/src/new.ts
+@@ -0,0 +1,2 @@
++line1
++line2`;
+
+    const result = parseDiff(newFileDiff);
+    
+    expect(result).toHaveLength(1);
+    // oldFile retains the path from the diff --git header since --- /dev/null
+    // doesn't provide a usable override
+    expect(result[0].oldFile.fileName).toBe('src/new.ts');
+    expect(result[0].newFile.fileName).toBe('src/new.ts');
+  });
+
   it('should parse a single file diff correctly', () => {
     const singleFileDiff = `diff --git a/src/test.js b/src/test.js
 index 1234567..abcdefg 100644

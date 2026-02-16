@@ -109,6 +109,16 @@ const calculateLineCounts = (diffContent: string): { added: number; removed: num
   return { added, removed, unchanged };
 };
 
+const extractFileFromHeader = (line: string, prefix: '--- ' | '+++ '): string | null => {
+  const trimmed = line.replace(/\r$/, '');
+  if (!trimmed.startsWith(prefix)) return null;
+  const path = trimmed.slice(prefix.length);
+  if (path === '/dev/null') return null;
+  // Strip a/ or b/ prefix used by git diff
+  const stripped = path.replace(/^[ab]\//, '');
+  return stripped || null;
+};
+
 export const parseDiff = (diffString: string): ParsedDiff[] => {
   if (!diffString || diffString.trim() === '') {
     return [];
@@ -134,10 +144,19 @@ export const parseDiff = (diffString: string): ParsedDiff[] => {
       };
     }
     
-    // Extract file paths from diff header
-    const pathMatch = diffHeader.match(/^diff --git a\/(.+) b\/(.+)$/);
-    const oldFile = pathMatch ? pathMatch[1] : null;
-    const newFile = pathMatch ? pathMatch[2] : null;
+    // Extract file paths from diff header (use non-greedy match for first group)
+    const pathMatch = diffHeader.replace(/\r$/, '').match(/^diff --git a\/(.+?) b\/(.+)$/);
+    let oldFile = pathMatch ? pathMatch[1] : null;
+    let newFile = pathMatch ? pathMatch[2] : null;
+
+    // Use --- and +++ lines as authoritative source when available,
+    // since they're unambiguous unlike the diff --git header
+    const oldHeaderLine = lines.find(line => line.startsWith('--- '));
+    const newHeaderLine = lines.find(line => line.startsWith('+++ '));
+    const oldFromHeader = oldHeaderLine ? extractFileFromHeader(oldHeaderLine, '--- ') : null;
+    const newFromHeader = newHeaderLine ? extractFileFromHeader(newHeaderLine, '+++ ') : null;
+    if (oldFromHeader) oldFile = oldFromHeader;
+    if (newFromHeader) newFile = newFromHeader;
     
     // Calculate line counts
     const { added, removed, unchanged } = calculateLineCounts(file);
