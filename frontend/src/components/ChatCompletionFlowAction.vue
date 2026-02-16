@@ -62,7 +62,14 @@
                   Tool Result<span v-if="getToolResultBlock(block)!.name">: {{ getToolResultBlock(block)!.name }}</span>
                   <span v-if="getToolResultBlock(block)!.isError" class="tool-result-error"> (error)</span>
                 </p>
-                <pre v-if="getToolResultBlock(block)!.text" class="tool-result-text">{{ getToolResultBlock(block)!.text }}</pre>
+                <template v-if="getToolResultBlock(block)!.content && getToolResultBlock(block)!.content!.length > 0">
+                  <template v-for="(contentBlock, cbIdx) in getToolResultBlock(block)!.content" :key="cbIdx">
+                    <pre v-if="contentBlock.type === 'text' && contentBlock.text" class="tool-result-text">{{ contentBlock.text }}</pre>
+                    <img v-else-if="contentBlock.type === 'image' && contentBlock.image?.url" :src="contentBlock.image.url" class="tool-result-image" />
+                    <JsonTree v-else :deep="jsonTreeDepth" :data="contentBlock" />
+                  </template>
+                </template>
+                <pre v-else-if="getToolResultBlock(block)!.text" class="tool-result-text">{{ getToolResultBlock(block)!.text }}</pre>
                 <JsonTree v-else :deep="jsonTreeDepth" :data="getToolResultBlock(block)" />
               </div>
 
@@ -510,6 +517,11 @@ function toggleMessage(index: number) {
   border-radius: 4px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.tool-result-image {
+  max-width: 100%;
+  margin: 0.5em 0;
 }
 
 .llm2-unknown-block {

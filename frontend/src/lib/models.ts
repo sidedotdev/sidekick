@@ -210,6 +210,13 @@ export type Llm2ToolUseBlock = {
   }
 }
 
+export type Llm2ToolResultContentBlock = {
+  type: string
+  text?: string
+  image?: { url: string; mediaType?: string; data?: string }
+  file?: { url: string; mediaType?: string; data?: string }
+}
+
 export type Llm2ToolResultBlock = {
   type: 'tool_result'
   toolResult: {
@@ -217,6 +224,7 @@ export type Llm2ToolResultBlock = {
     name?: string
     isError?: boolean
     text?: string
+    content?: Llm2ToolResultContentBlock[]
   }
 }
 
