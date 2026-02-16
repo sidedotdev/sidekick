@@ -6,6 +6,7 @@ export interface ParsedDiff {
   linesRemoved: number;
   linesUnchanged: number;
   firstLineNumber: number | null;
+  isRename: boolean;
 }
 
 export const getFileLanguage = (fileName: string | undefined): string | null => {
@@ -124,15 +125,14 @@ export const parseDiff = (diffString: string): ParsedDiff[] => {
     return [];
   }
   
-  // Split by diff headers, but keep the headers
-  const files = diffString.split(/^(?=diff --git)/m).filter(file => file.trim() !== '');
+  // Split by diff headers (--git, --cc, --combined), but keep the headers
+  const files = diffString.split(/^(?=diff --(?:git|cc|combined))/m).filter(file => file.trim() !== '');
   
   return files.map(file => {
     const lines = file.split('\n');
-    const diffHeader = lines.find(line => line.startsWith('diff --git'));
+    const diffHeader = lines.find(line => /^diff --(?:git|cc|combined)/.test(line));
     
     if (!diffHeader) {
-      // Fallback for malformed diffs
       return {
         oldFile: { fileName: null, fileLang: null },
         newFile: { fileName: null, fileLang: null },
@@ -141,13 +141,27 @@ export const parseDiff = (diffString: string): ParsedDiff[] => {
         linesRemoved: 0,
         linesUnchanged: 0,
         firstLineNumber: null,
+        isRename: false,
       };
     }
     
-    // Extract file paths from diff header (use non-greedy match for first group)
-    const pathMatch = diffHeader.replace(/\r$/, '').match(/^diff --git a\/(.+?) b\/(.+)$/);
-    let oldFile = pathMatch ? pathMatch[1] : null;
-    let newFile = pathMatch ? pathMatch[2] : null;
+    const cleanHeader = diffHeader.replace(/\r$/, '');
+    let oldFile: string | null = null;
+    let newFile: string | null = null;
+
+    // Extract file paths from diff header
+    const gitMatch = cleanHeader.match(/^diff --git a\/(.+?) b\/(.+)$/);
+    if (gitMatch) {
+      oldFile = gitMatch[1];
+      newFile = gitMatch[2];
+    } else {
+      // Combined diff: "diff --cc path" or "diff --combined path"
+      const combinedMatch = cleanHeader.match(/^diff --(?:cc|combined) (.+)$/);
+      if (combinedMatch) {
+        oldFile = combinedMatch[1];
+        newFile = combinedMatch[1];
+      }
+    }
 
     // Use --- and +++ lines as authoritative source when available,
     // since they're unambiguous unlike the diff --git header
@@ -157,6 +171,17 @@ export const parseDiff = (diffString: string): ParsedDiff[] => {
     const newFromHeader = newHeaderLine ? extractFileFromHeader(newHeaderLine, '+++ ') : null;
     if (oldFromHeader) oldFile = oldFromHeader;
     if (newFromHeader) newFile = newFromHeader;
+
+    // Detect renames from explicit rename headers or differing old/new paths
+    const renameFromLine = lines.find(line => line.startsWith('rename from '));
+    const renameToLine = lines.find(line => line.startsWith('rename to '));
+    if (renameFromLine) {
+      oldFile = renameFromLine.replace(/\r$/, '').slice('rename from '.length);
+    }
+    if (renameToLine) {
+      newFile = renameToLine.replace(/\r$/, '').slice('rename to '.length);
+    }
+    const isRename = oldFile != null && newFile != null && oldFile !== newFile;
     
     // Calculate line counts
     const { added, removed, unchanged } = calculateLineCounts(file);
@@ -174,6 +199,7 @@ export const parseDiff = (diffString: string): ParsedDiff[] => {
       linesRemoved: removed,
       linesUnchanged: unchanged,
       firstLineNumber,
+      isRename,
     };
   });
 };
