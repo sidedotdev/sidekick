@@ -15,8 +15,8 @@ import (
 	"golang.org/x/image/math/fixed"
 )
 
-// unambiguousChars excludes easily confused characters (0/O/Q, 1/l/I, 8/B).
-const unambiguousChars = "ACDEFGHJKLMNPRSTUVWXYZ2345679"
+// unambiguousChars excludes easily confused characters (0/O/Q, 1/l/I, 8/B, M/W, F/E).
+const unambiguousChars = "ACDGHJKLNPRSTUVXYZ2345679"
 
 // GenerateRandomText returns a random alphanumeric string of the given length
 // using only characters that are visually unambiguous.

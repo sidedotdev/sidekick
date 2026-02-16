@@ -2,6 +2,7 @@ package llm2
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sidekick/common"
@@ -570,13 +571,22 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 	t.Logf("Generated vision test image with text: %q", expectedText)
 
 	toolCallId := "tool_call_img_001"
+
+	reportTextTool := &common.Tool{
+		Name:        "report_text",
+		Description: "Report the exact text found in an image. Call this tool with the text you read.",
+		Parameters: (&jsonschema.Reflector{DoNotReference: true}).Reflect(&struct {
+			Text string `json:"text" jsonschema:"description=The exact text found in the image"`
+		}{}),
+	}
+
 	messages := []Message{
 		{
 			Role: RoleUser,
 			Content: []ContentBlock{
 				{
 					Type: ContentBlockTypeText,
-					Text: "Please use the read_image tool to read the image at path 'test.png' and tell me the exact text in it.",
+					Text: "Please use the read_image tool to read the image at path 'test.png'.",
 				},
 			},
 		},
@@ -634,6 +644,11 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 						FilePath string `json:"file_path" jsonschema:"description=Path to the image file"`
 					}{}),
 				},
+				reportTextTool,
+			},
+			ToolChoice: common.ToolChoice{
+				Type: common.ToolChoiceTypeTool,
+				Name: "report_text",
 			},
 		},
 	}
@@ -645,7 +660,7 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 	}
 
 	eventChan := make(chan Event, 100)
-	var fullText strings.Builder
+	var toolArgs strings.Builder
 	var wg sync.WaitGroup
 
 	wg.Add(1)
@@ -653,7 +668,7 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 		defer wg.Done()
 		for event := range eventChan {
 			if event.Type == EventTextDelta {
-				fullText.WriteString(event.Delta)
+				toolArgs.WriteString(event.Delta)
 			}
 		}
 	}()
@@ -671,8 +686,22 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 	}
 
 	assert.NotNil(t, response)
-	responseText := strings.TrimSpace(fullText.String())
-	t.Logf("Model response: %q", responseText)
-	assert.True(t, VisionTestFuzzyMatch(expectedText, responseText),
-		"Expected model to read %q from the image, got %q", expectedText, responseText)
+
+	// Extract the text from the report_text tool call arguments
+	var reportedText string
+	for _, block := range response.Output.Content {
+		if block.Type == ContentBlockTypeToolUse && block.ToolUse != nil && block.ToolUse.Name == "report_text" {
+			var args struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal([]byte(block.ToolUse.Arguments), &args); err == nil {
+				reportedText = args.Text
+			}
+			break
+		}
+	}
+
+	t.Logf("Model reported text: %q", reportedText)
+	assert.True(t, VisionTestFuzzyMatch(expectedText, reportedText),
+		"Expected model to read %q from the image, got %q", expectedText, reportedText)
 }
