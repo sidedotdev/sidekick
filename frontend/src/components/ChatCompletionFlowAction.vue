@@ -69,7 +69,6 @@
                     <JsonTree v-else :deep="jsonTreeDepth" :data="contentBlock" />
                   </template>
                 </template>
-                <pre v-else-if="getToolResultBlock(block)!.text" class="tool-result-text">{{ getToolResultBlock(block)!.text }}</pre>
                 <JsonTree v-else :deep="jsonTreeDepth" :data="getToolResultBlock(block)" />
               </div>
 

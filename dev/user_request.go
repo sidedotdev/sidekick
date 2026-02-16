@@ -229,12 +229,6 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 	case SkipInfo:
 		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content, Type: FeedbackTypeUserGuidance}
 		return feedbackInfo, nil
-	case ToolCallResponseInfo:
-		// the caller is replacing the prompt info so will lose this unless we
-		// append it to chat history
-		addToolCallResponse(dCtx, chatHistory, info)
-		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content, Type: FeedbackTypeUserGuidance}
-		return feedbackInfo, nil
 	case InitialDevStepInfo:
 		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
 		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop

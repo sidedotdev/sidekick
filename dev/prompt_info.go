@@ -3,8 +3,6 @@ package dev
 import (
 	"encoding/json"
 	"fmt"
-	"sidekick/llm2"
-	"strings"
 )
 
 // PromptInfoContainer  is a wrapper for the PromptInfo interface that provides custom
@@ -79,11 +77,9 @@ func (pic *PromptInfoContainer) UnmarshalJSON(data []byte) error {
 		}
 		pic.PromptInfo = fi
 	case "tool_call_response":
-		var fcri ToolCallResponseInfo
-		if err := json.Unmarshal(v.Info, &fcri); err != nil {
-			return err
-		}
-		pic.PromptInfo = fcri
+		// Legacy: tool call responses are now added to chat history directly
+		// via addToolCallResponse, so we just skip when deserializing old data.
+		pic.PromptInfo = SkipInfo{}
 	default:
 		return fmt.Errorf("unknown PromptInfo type: %s", v.Type)
 	}
@@ -219,27 +215,4 @@ func renderGeneralFeedbackPrompt(feedback, feedbackType string) string {
 		"isSystemError":  feedbackType == FeedbackTypeSystemError,
 	}
 	return RenderPrompt(GeneralFeedback, data)
-}
-
-type ToolCallResponseInfo struct {
-	FunctionName      string
-	ToolCallId        string
-	IsError           bool
-	ToolResultContent []llm2.ContentBlock
-}
-
-// TextResponse returns the concatenated text from all text content blocks.
-func (p ToolCallResponseInfo) TextResponse() string {
-	var sb strings.Builder
-	for _, cb := range p.ToolResultContent {
-		if cb.Type == llm2.ContentBlockTypeText {
-			sb.WriteString(cb.Text)
-		}
-	}
-	return sb.String()
-}
-
-// Implement the PromptInfo interface for ToolCallResponseInfo
-func (p ToolCallResponseInfo) GetType() string {
-	return "tool_call_response"
 }

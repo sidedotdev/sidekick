@@ -20,17 +20,17 @@ import (
 // TODO /gen/planned/req move this to RepoConfig
 const maxRetrieveCodeContextLength = 15000
 
-func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers map[string]func(DevContext, llm.ToolCall) (ToolCallResponseInfo, error)) []ToolCallResponseInfo {
+func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error)) []llm2.ToolResultBlock {
 	// backward compatibility: handle-parallel-tool-calls
 	// if old version, only process the first tool call
 	version := workflow.GetVersion(dCtx, "handle-parallel-tool-calls", workflow.DefaultVersion, 1)
 	if version == workflow.DefaultVersion {
 		if len(toolCalls) == 0 {
-			return []ToolCallResponseInfo{}
+			return []llm2.ToolResultBlock{}
 		}
 		// Process only the first tool call sequentially
 		tc := toolCalls[0]
-		var result ToolCallResponseInfo
+		var result llm2.ToolResultBlock
 		var err error
 
 		if handler, ok := customHandlers[tc.Name]; ok {
@@ -41,12 +41,12 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers m
 
 		if err != nil {
 			result.IsError = true
-			result.ToolResultContent = llm2.TextContentBlocks(err.Error())
-			result.FunctionName = tc.Name
+			result.Content = llm2.TextContentBlocks(err.Error())
+			result.Name = tc.Name
 			result.ToolCallId = tc.Id
 		}
 
-		return cleanupWorkingDirFromResults(dCtx, []ToolCallResponseInfo{result})
+		return cleanupWorkingDirFromResults(dCtx, []llm2.ToolResultBlock{result})
 	}
 
 	responseChannel := workflow.NewChannel(dCtx)
@@ -58,7 +58,7 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers m
 			localDCtx := dCtx
 			localDCtx.Context = ctx
 
-			var result ToolCallResponseInfo
+			var result llm2.ToolResultBlock
 			var err error
 
 			if handler, ok := customHandlers[tc.Name]; ok {
@@ -69,18 +69,18 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers m
 
 			responseChannel.Send(ctx, struct {
 				Index  int
-				Result ToolCallResponseInfo
+				Result llm2.ToolResultBlock
 				Err    error
 			}{index, result, err})
 		})
 	}
 
-	results := make([]ToolCallResponseInfo, len(toolCalls))
+	results := make([]llm2.ToolResultBlock, len(toolCalls))
 
 	for i := 0; i < len(toolCalls); i++ {
 		var resp struct {
 			Index  int
-			Result ToolCallResponseInfo
+			Result llm2.ToolResultBlock
 			Err    error
 		}
 		responseChannel.Receive(dCtx, &resp)
@@ -88,9 +88,9 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers m
 		if resp.Err != nil {
 			results[resp.Index].IsError = true
 			results[resp.Index].ToolCallId = toolCalls[resp.Index].Id
-			results[resp.Index].FunctionName = toolCalls[resp.Index].Name
-			if len(results[resp.Index].ToolResultContent) == 0 {
-				results[resp.Index].ToolResultContent = llm2.TextContentBlocks(resp.Err.Error())
+			results[resp.Index].Name = toolCalls[resp.Index].Name
+			if len(results[resp.Index].Content) == 0 {
+				results[resp.Index].Content = llm2.TextContentBlocks(resp.Err.Error())
 			}
 		}
 	}
@@ -98,13 +98,13 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers m
 	return cleanupWorkingDirFromResults(dCtx, results)
 }
 
-func cleanupWorkingDirFromResults(dCtx DevContext, results []ToolCallResponseInfo) []ToolCallResponseInfo {
+func cleanupWorkingDirFromResults(dCtx DevContext, results []llm2.ToolResultBlock) []llm2.ToolResultBlock {
 	if dCtx.EnvContainer != nil && dCtx.EnvContainer.Env != nil {
 		workingDir := dCtx.EnvContainer.Env.GetWorkingDirectory()
 		for i := range results {
-			for j := range results[i].ToolResultContent {
-				if results[i].ToolResultContent[j].Type == llm2.ContentBlockTypeText {
-					results[i].ToolResultContent[j].Text = removeWorkingDirFromPaths(results[i].ToolResultContent[j].Text, workingDir)
+			for j := range results[i].Content {
+				if results[i].Content[j].Type == llm2.ContentBlockTypeText {
+					results[i].Content[j].Text = removeWorkingDirFromPaths(results[i].Content[j].Text, workingDir)
 				}
 			}
 		}
@@ -113,9 +113,9 @@ func cleanupWorkingDirFromResults(dCtx DevContext, results []ToolCallResponseInf
 }
 
 // TODO /gen/planned/req add a test for this function using WorkflowTestSuite
-func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult ToolCallResponseInfo, err error) {
+func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult llm2.ToolResultBlock, err error) {
 	dCtx.Context = utils.NoRetryCtx(dCtx)
-	toolCallResult.FunctionName = toolCall.Name
+	toolCallResult.Name = toolCall.Name
 	toolCallResult.ToolCallId = toolCall.Id
 
 	// we need to use the TrackHuman function when the tool call is for a human
@@ -125,7 +125,7 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult Tool
 		response, err := unmarshalAndInvoke(toolCall, &wrapper, func() (string, error) {
 			return GetHelpOrInput(dCtx, wrapper.Requests)
 		})
-		toolCallResult.ToolResultContent = llm2.TextContentBlocks(response)
+		toolCallResult.Content = llm2.TextContentBlocks(response)
 		return toolCallResult, err
 	}
 
@@ -139,9 +139,9 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult Tool
 	actionCtx.ActionParams = actionParams
 
 	// NOTE: the function passed in very deliberately returns
-	// ToolCallResponseInfo since what's returned is what's tracked, and we want
+	// ToolResultBlock since what's returned is what's tracked, and we want
 	// to the entire tool call response, not just the response string
-	return Track(actionCtx, func(flowAction *domain.FlowAction) (ToolCallResponseInfo, error) {
+	return Track(actionCtx, func(flowAction *domain.FlowAction) (llm2.ToolResultBlock, error) {
 		var response string
 		switch toolCall.Name {
 		case "retrieve_code_context", currentGetSymbolDefinitionsTool().Name:
@@ -155,7 +155,7 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult Tool
 				// to shrink it or truncate it etc if it's too long, and use the
 				// detailed metadata + other chat history and current context to
 				// make a better decision here. We'd need to change the format
-				// of ToolCallResponseInfo here to add an map[string]{interface}
+				// of ToolResultBlock here to add an map[string]{interface}
 				// field for detailed info, and also change how we pass the
 				// variables to render the prompts later based on this more
 				// detailed metadata with context of max history limits.
@@ -195,7 +195,7 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult Tool
 					return "", actErr
 				}
 				kvURL := BuildKvImageURL(output.Key)
-				toolCallResult.ToolResultContent = []llm2.ContentBlock{
+				toolCallResult.Content = []llm2.ContentBlock{
 					{Type: llm2.ContentBlockTypeText, Text: "Image loaded successfully: " + params.FilePath},
 					{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: kvURL}},
 				}
@@ -206,22 +206,22 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult Tool
 			response, err = "", fmt.Errorf("unknown function name: %s", toolCall.Name)
 		}
 
-		if response != "" && len(toolCallResult.ToolResultContent) == 0 {
-			toolCallResult.ToolResultContent = llm2.TextContentBlocks(response)
+		if response != "" && len(toolCallResult.Content) == 0 {
+			toolCallResult.Content = llm2.TextContentBlocks(response)
 		}
 		// ensure tracked flow action gets the state after handling this type of error
 		return handleErrToolCallUnmarshal(toolCallResult, err)
 	})
 }
 
-func handleErrToolCallUnmarshal(toolCallResult ToolCallResponseInfo, err error) (ToolCallResponseInfo, error) {
+func handleErrToolCallUnmarshal(toolCallResult llm2.ToolResultBlock, err error) (llm2.ToolResultBlock, error) {
 	if err != nil {
 		toolCallResult.IsError = true
 		if errors.Is(err, llm.ErrToolCallUnmarshal) {
 			// NOTE: this error happens when the tool call arguments didn't
 			// follow schema. by providing the error as the tool call response,
 			// we give the llm a chance to self-correct via feedback.
-			toolCallResult.ToolResultContent = llm2.TextContentBlocks(fmt.Sprintf("%s\n\nHint: To fix this, follow the json schema correctly. In particular, don't put json within a string.", err.Error()))
+			toolCallResult.Content = llm2.TextContentBlocks(fmt.Sprintf("%s\n\nHint: To fix this, follow the json schema correctly. In particular, don't put json within a string.", err.Error()))
 			err = nil
 		}
 	}

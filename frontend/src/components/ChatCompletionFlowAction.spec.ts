@@ -191,7 +191,14 @@ describe('ChatCompletionFlowAction', () => {
       const messagesWithToolResult: Llm2Message[] = [
         {
           role: 'user',
-          content: [{ type: 'tool_result', toolResult: { toolCallId: 'tool1', name: 'myTool', text: 'Tool output here' } }]
+          content: [{
+            type: 'tool_result',
+            toolResult: {
+              toolCallId: 'tool1',
+              name: 'myTool',
+              content: [{ type: 'text', text: 'Tool output here' }]
+            }
+          } as any]
         }
       ]
       fetchMock.mockResolvedValue(new Response(JSON.stringify({ messages: messagesWithToolResult }), { status: 200 }))

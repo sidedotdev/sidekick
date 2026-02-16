@@ -196,12 +196,25 @@ export type MessageRef = {
   role: string
 }
 
-export type Llm2TextBlock = {
+// Shared fields present on every ContentBlock from the Go llm2.ContentBlock struct.
+type Llm2ContentBlockBase = {
+  id?: string
+  cacheControl?: string
+  contextType?: string
+  signature?: string
+}
+
+export type Llm2TextBlock = Llm2ContentBlockBase & {
   type: 'text'
   text: string
 }
 
-export type Llm2ToolUseBlock = {
+export type Llm2ImageBlock = Llm2ContentBlockBase & {
+  type: 'image'
+  image: { url: string }
+}
+
+export type Llm2ToolUseBlock = Llm2ContentBlockBase & {
   type: 'tool_use'
   toolUse: {
     id: string
@@ -210,34 +223,39 @@ export type Llm2ToolUseBlock = {
   }
 }
 
-export type Llm2ToolResultContentBlock = {
-  type: string
-  text?: string
-  image?: { url: string; mediaType?: string; data?: string }
-  file?: { url: string; mediaType?: string; data?: string }
-}
-
-export type Llm2ToolResultBlock = {
+export type Llm2ToolResultBlock = Llm2ContentBlockBase & {
   type: 'tool_result'
   toolResult: {
     toolCallId: string
     name?: string
     isError?: boolean
-    text?: string
-    content?: Llm2ToolResultContentBlock[]
+    content?: Llm2ContentBlock[]
   }
 }
 
-export type Llm2UnknownBlock = {
-  type: 'unknown'
-  raw: unknown
+export type Llm2ReasoningBlock = Llm2ContentBlockBase & {
+  type: 'reasoning'
+  reasoning: {
+    text: string
+    summary?: string
+  }
+}
+
+export type Llm2RefusalBlock = Llm2ContentBlockBase & {
+  type: 'refusal'
+  refusal: {
+    type?: string
+    reason: string
+  }
 }
 
 export type Llm2ContentBlock =
   | Llm2TextBlock
+  | Llm2ImageBlock
   | Llm2ToolUseBlock
   | Llm2ToolResultBlock
-  | Llm2UnknownBlock
+  | Llm2ReasoningBlock
+  | Llm2RefusalBlock
 
 export type Llm2Message = {
   role: string
