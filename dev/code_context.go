@@ -206,7 +206,7 @@ func GetRelevantCodeContext(dCtx DevContext, promptInfo DetermineCodeContextInfo
 	threshold := defaultMaxChatHistoryLength
 
 	// TODO move up to PrepareInitialCodeContext and beyond
-	return codeContextLoop(dCtx.NewActionContext("Determine Required Code Context"), promptInfo, longestFirst, threshold)
+	return codeContextLoop(dCtx.NewActionContext("generate.code_context"), promptInfo, longestFirst, threshold)
 }
 
 // TODO: make this configurable and/or dynamic by model
@@ -223,7 +223,7 @@ func RefineAndRankCodeContext(dCtx DevContext, envContainer env.EnvContainer, pr
 	threshold := min(defaultMaxChatHistoryLength/2, refineContextLengthThreshold)
 
 	// TODO move up to PrepareInitialCodeContext and beyond
-	requiredCodeContext, codeContext, err := codeContextLoop(dCtx.NewActionContext("Refine And Rank Code Context"), promptInfo, longestFirst, threshold)
+	requiredCodeContext, codeContext, err := codeContextLoop(dCtx.NewActionContext("generate.refine_code_context"), promptInfo, longestFirst, threshold)
 	if err != nil {
 		return "", "", err
 	}
