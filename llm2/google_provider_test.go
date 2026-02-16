@@ -226,7 +226,7 @@ func TestGoogleProvider_Integration(t *testing.T) {
 							ToolResult: &ToolResultBlock{
 								ToolCallId: block.ToolUse.Id,
 								Name:       block.ToolUse.Name,
-								Text:       "25",
+								Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "25"}},
 								IsError:    false,
 							},
 						},
@@ -492,6 +492,140 @@ func TestGoogleProvider_ImageIntegration(t *testing.T) {
 		"Expected model to read %q from the image, got %q", expectedText, responseText)
 }
 
+func TestGoogleProvider_ToolResultImageIntegration(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
+	ctx := context.Background()
+	provider := GoogleProvider{}
+
+	expectedText, dataURL := GenerateVisionTestImage(6)
+	t.Logf("Generated vision test image with text: %q", expectedText)
+
+	toolCallId := "tool_call_img_001"
+	messages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeText,
+					Text: "Please use the read_image tool to read the image at path 'test.png' and tell me the exact text in it.",
+				},
+			},
+		},
+		{
+			Role: RoleAssistant,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeToolUse,
+					ToolUse: &ToolUseBlock{
+						Id:        toolCallId,
+						Name:      "read_image",
+						Arguments: `{"file_path": "test.png"}`,
+					},
+				},
+			},
+		},
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeToolResult,
+					ToolResult: &ToolResultBlock{
+						ToolCallId: toolCallId,
+						Name:       "read_image",
+						Content: []ContentBlock{
+							{Type: ContentBlockTypeText, Text: "Here is the image content:"},
+							{
+								Type:  ContentBlockTypeImage,
+								Image: &ImageRef{Url: dataURL},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	models := []struct {
+		name  string
+		model string
+	}{
+		{"gemini-2.5-flash", "gemini-2.5-flash"},
+		{"gemini-3-pro-preview", "gemini-3-pro-preview"},
+	}
+
+	for _, mc := range models {
+		t.Run(mc.name, func(t *testing.T) {
+			t.Parallel()
+			secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+				&secret_manager.EnvSecretManager{},
+				&secret_manager.KeyringSecretManager{},
+				&secret_manager.LocalConfigSecretManager{},
+			})
+
+			options := Options{
+				Params: Params{
+					ModelConfig: common.ModelConfig{
+						Provider: "google",
+						Model:    mc.model,
+					},
+					Tools: []*common.Tool{
+						{
+							Name:        "read_image",
+							Description: "Reads an image file and returns its content",
+							Parameters: (&jsonschema.Reflector{DoNotReference: true}).Reflect(&struct {
+								FilePath string `json:"file_path" jsonschema:"description=Path to the image file"`
+							}{}),
+						},
+					},
+				},
+			}
+
+			request := StreamRequest{
+				Messages:      messages,
+				Options:       options,
+				SecretManager: secretManager,
+			}
+
+			eventChan := make(chan Event, 100)
+			var fullText strings.Builder
+			var wg sync.WaitGroup
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for event := range eventChan {
+					if event.Type == EventTextDelta {
+						fullText.WriteString(event.Delta)
+					}
+				}
+			}()
+
+			response, err := provider.Stream(ctx, request, eventChan)
+			close(eventChan)
+			wg.Wait()
+
+			if err != nil {
+				errStr := err.Error()
+				if strings.Contains(errStr, "RESOURCE_EXHAUSTED") || strings.Contains(errStr, "429") || strings.Contains(errStr, "quota") {
+					t.Skipf("Skipping test due to Google API quota/rate limit: %v", err)
+				}
+				t.Fatalf("Stream returned an error: %v", err)
+			}
+
+			assert.NotNil(t, response)
+			responseText := strings.TrimSpace(fullText.String())
+			t.Logf("Model response: %q", responseText)
+			assert.True(t, VisionTestFuzzyMatch(expectedText, responseText),
+				"Expected model to read %q from the image, got %q", expectedText, responseText)
+		})
+	}
+}
+
 func TestGoogleFromLlm2Messages(t *testing.T) {
 	t.Parallel()
 
@@ -512,7 +646,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, false)
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 2)
 		assert.Equal(t, "user", contents[0].Role)
@@ -532,7 +666,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 						ToolResult: &ToolResultBlock{
 							ToolCallId: "call-123",
 							Name:       "get_weather",
-							Text:       "25 degrees",
+							Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "25 degrees"}},
 							IsError:    false,
 						},
 					},
@@ -540,7 +674,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, false)
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Equal(t, "user", contents[0].Role)
@@ -567,7 +701,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, false)
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Equal(t, "model", contents[0].Role)
@@ -597,7 +731,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, false)
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Len(t, contents[0].Parts, 2)
@@ -625,10 +759,94 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, true)
+		contents, err := googleFromLlm2Messages(messages, true, "gemini-2.5-flash")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Equal(t, []byte("skip_thought_signature_validator"), contents[0].Parts[0].ThoughtSignature)
+	})
+
+	t.Run("tool result with nested image - gemini 3", func(t *testing.T) {
+		t.Parallel()
+		dataURL := "data:image/png;base64,iVBORw0KGgo="
+		messages := []Message{
+			{
+				Role: RoleUser,
+				Content: []ContentBlock{
+					{
+						Type: ContentBlockTypeToolResult,
+						ToolResult: &ToolResultBlock{
+							ToolCallId: "call-img-1",
+							Name:       "read_image",
+							Content: []ContentBlock{
+								{Type: ContentBlockTypeText, Text: "Image content:"},
+								{
+									Type:  ContentBlockTypeImage,
+									Image: &ImageRef{Url: dataURL},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-3-pro-preview")
+		assert.NoError(t, err)
+		assert.Len(t, contents, 1)
+		assert.Equal(t, "user", contents[0].Role)
+
+		frPart := contents[0].Parts[0]
+		assert.NotNil(t, frPart.FunctionResponse)
+		assert.Equal(t, "call-img-1", frPart.FunctionResponse.ID)
+		assert.Equal(t, "read_image", frPart.FunctionResponse.Name)
+		assert.Equal(t, "Image content:", frPart.FunctionResponse.Response["output"])
+		assert.Len(t, frPart.FunctionResponse.Parts, 1)
+		assert.NotNil(t, frPart.FunctionResponse.Parts[0].InlineData)
+		assert.Equal(t, "tool_result_image_0", frPart.FunctionResponse.Parts[0].InlineData.DisplayName)
+
+		// No fallback image parts outside the function response
+		assert.Len(t, contents[0].Parts, 1)
+	})
+
+	t.Run("tool result with nested image - gemini 2.x fallback", func(t *testing.T) {
+		t.Parallel()
+		dataURL := "data:image/png;base64,iVBORw0KGgo="
+		messages := []Message{
+			{
+				Role: RoleUser,
+				Content: []ContentBlock{
+					{
+						Type: ContentBlockTypeToolResult,
+						ToolResult: &ToolResultBlock{
+							ToolCallId: "call-img-2",
+							Name:       "read_image",
+							Content: []ContentBlock{
+								{Type: ContentBlockTypeText, Text: "Image content:"},
+								{
+									Type:  ContentBlockTypeImage,
+									Image: &ImageRef{Url: dataURL},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
+		assert.NoError(t, err)
+		assert.Len(t, contents, 1)
+		assert.Equal(t, "user", contents[0].Role)
+
+		// First part: function response (text-only, no Parts)
+		frPart := contents[0].Parts[0]
+		assert.NotNil(t, frPart.FunctionResponse)
+		assert.Equal(t, "call-img-2", frPart.FunctionResponse.ID)
+		assert.Len(t, frPart.FunctionResponse.Parts, 0)
+
+		// Second part: fallback inline image
+		assert.Len(t, contents[0].Parts, 2)
+		assert.NotNil(t, contents[0].Parts[1].InlineData)
 	})
 
 	t.Run("error tool result", func(t *testing.T) {
@@ -642,7 +860,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 						ToolResult: &ToolResultBlock{
 							ToolCallId: "call-err",
 							Name:       "failing_tool",
-							Text:       "something went wrong",
+							Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "something went wrong"}},
 							IsError:    true,
 						},
 					},
@@ -650,7 +868,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, false)
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		resp := contents[0].Parts[0].FunctionResponse.Response
@@ -680,7 +898,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, false)
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Len(t, contents[0].Parts, 2)
@@ -711,7 +929,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, false)
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Len(t, contents[0].Parts, 2)

@@ -232,13 +232,7 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 	case ToolCallResponseInfo:
 		// the caller is replacing the prompt info so will lose this unless we
 		// append it to chat history
-		AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
-			Role:       llm.ChatMessageRoleTool,
-			Content:    info.Response,
-			Name:       info.FunctionName,
-			ToolCallId: info.ToolCallId,
-			IsError:    info.IsError,
-		})
+		addToolCallResponse(dCtx, chatHistory, info)
 		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content, Type: FeedbackTypeUserGuidance}
 		return feedbackInfo, nil
 	case InitialDevStepInfo:

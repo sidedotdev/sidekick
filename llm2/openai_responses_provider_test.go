@@ -7,6 +7,8 @@ import (
 	"sidekick/common"
 	"sidekick/secret_manager"
 	"sidekick/utils"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/invopop/jsonschema"
@@ -195,7 +197,7 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 							Type: ContentBlockTypeToolResult,
 							ToolResult: &ToolResultBlock{
 								ToolCallId: block.ToolUse.Id,
-								Text:       "25",
+								Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "25"}},
 								IsError:    false,
 							},
 						},
@@ -553,4 +555,124 @@ func debugPrintAllContentBlocks(blocks []ContentBlock) {
 			fmt.Printf("Block[%d] Type=%s\n", i, block.Type)
 		}
 	}
+}
+
+func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
+	ctx := context.Background()
+	provider := OpenAIResponsesProvider{}
+
+	expectedText, dataURL := GenerateVisionTestImage(6)
+	t.Logf("Generated vision test image with text: %q", expectedText)
+
+	toolCallId := "tool_call_img_001"
+	messages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeText,
+					Text: "Please use the read_image tool to read the image at path 'test.png' and tell me the exact text in it.",
+				},
+			},
+		},
+		{
+			Role: RoleAssistant,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeToolUse,
+					ToolUse: &ToolUseBlock{
+						Id:        toolCallId,
+						Name:      "read_image",
+						Arguments: `{"file_path": "test.png"}`,
+					},
+				},
+			},
+		},
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeToolResult,
+					ToolResult: &ToolResultBlock{
+						ToolCallId: toolCallId,
+						Name:       "read_image",
+						Content: []ContentBlock{
+							{Type: ContentBlockTypeText, Text: "Here is the image content:"},
+							{
+								Type:  ContentBlockTypeImage,
+								Image: &ImageRef{Url: dataURL},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+		&secret_manager.EnvSecretManager{},
+		&secret_manager.KeyringSecretManager{},
+		&secret_manager.LocalConfigSecretManager{},
+	})
+
+	options := Options{
+		Params: Params{
+			ModelConfig: common.ModelConfig{
+				Provider: "openai",
+				Model:    defaultModel,
+			},
+			Tools: []*common.Tool{
+				{
+					Name:        "read_image",
+					Description: "Reads an image file and returns its content",
+					Parameters: (&jsonschema.Reflector{DoNotReference: true}).Reflect(&struct {
+						FilePath string `json:"file_path" jsonschema:"description=Path to the image file"`
+					}{}),
+				},
+			},
+		},
+	}
+
+	request := StreamRequest{
+		Messages:      messages,
+		Options:       options,
+		SecretManager: secretManager,
+	}
+
+	eventChan := make(chan Event, 100)
+	var fullText strings.Builder
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for event := range eventChan {
+			if event.Type == EventTextDelta {
+				fullText.WriteString(event.Delta)
+			}
+		}
+	}()
+
+	response, err := provider.Stream(ctx, request, eventChan)
+	close(eventChan)
+	wg.Wait()
+
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "rate_limit") || strings.Contains(errStr, "429") || strings.Contains(errStr, "quota") {
+			t.Skipf("Skipping test due to OpenAI API rate limit: %v", err)
+		}
+		t.Fatalf("Stream returned an error: %v", err)
+	}
+
+	assert.NotNil(t, response)
+	responseText := strings.TrimSpace(fullText.String())
+	t.Logf("Model response: %q", responseText)
+	assert.True(t, VisionTestFuzzyMatch(expectedText, responseText),
+		"Expected model to read %q from the image, got %q", expectedText, responseText)
 }

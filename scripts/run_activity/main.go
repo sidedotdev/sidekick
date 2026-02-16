@@ -124,6 +124,9 @@ func buildActivityRegistry() map[string]interface{} {
 		TreeSitterActivities: treeSitterActivities,
 		LSPActivities:        lspActivities,
 	}
+	readImageActivities := &dev.ReadImageActivities{
+		Storage: service,
+	}
 	vectorActivities := &persisted_ai.VectorActivities{
 		DatabaseAccessor: service,
 	}
@@ -192,6 +195,7 @@ func buildActivityRegistry() map[string]interface{} {
 	registerStructMethods(registry, devManagerActivities)
 	registerStructMethods(registry, devActivities)
 	registerStructMethods(registry, devRunActivities)
+	registerStructMethods(registry, readImageActivities)
 	registerStructMethods(registry, workspaceActivities)
 	registry["EvalBoolFlag"] = ffa.EvalBoolFlag
 

@@ -37,8 +37,12 @@ func toolResultMsg(toolCallId, name, text string) llm2.Message {
 	return llm2.Message{
 		Role: llm2.RoleUser,
 		Content: []llm2.ContentBlock{{
-			Type:       llm2.ContentBlockTypeToolResult,
-			ToolResult: &llm2.ToolResultBlock{ToolCallId: toolCallId, Name: name, Text: text},
+			Type: llm2.ContentBlockTypeToolResult,
+			ToolResult: &llm2.ToolResultBlock{
+				ToolCallId: toolCallId,
+				Name:       name,
+				Content:    []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: text}},
+			},
 		}},
 	}
 }
@@ -274,7 +278,7 @@ func TestManageLlm2ChatHistory_LargeToolResponseTruncation(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, result, 4)
 
-	toolResultText := result[2].Content[0].ToolResult.Text
+	toolResultText := result[2].Content[0].ToolResult.TextContent()
 	assert.True(t, strings.HasSuffix(toolResultText, "[truncated]"))
 	assert.True(t, len(toolResultText) < 200)
 }
@@ -787,10 +791,10 @@ func TestManageLlm2ChatHistory_TruncateOldestFirst(t *testing.T) {
 		for _, block := range msg.Content {
 			if block.Type == llm2.ContentBlockTypeToolResult && block.ToolResult != nil {
 				if block.ToolResult.ToolCallId == "tc1" {
-					toolResp1Text = block.ToolResult.Text
+					toolResp1Text = block.ToolResult.TextContent()
 				}
 				if block.ToolResult.ToolCallId == "tc2" {
-					toolResp2Text = block.ToolResult.Text
+					toolResp2Text = block.ToolResult.TextContent()
 				}
 			}
 		}
@@ -799,4 +803,78 @@ func TestManageLlm2ChatHistory_TruncateOldestFirst(t *testing.T) {
 	assert.True(t, strings.HasSuffix(toolResp1Text, "[truncated]"), "Oldest tool response should be truncated")
 	assert.True(t, len(toolResp1Text) < 150)
 	assert.NotEmpty(t, toolResp2Text)
+}
+
+func TestLlm2MessageLength_IncludesImageAndFileURLs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		msg      llm2.Message
+		expected int
+	}{
+		{
+			name:     "text only",
+			msg:      textMsg(llm2.RoleUser, "hello"),
+			expected: 5,
+		},
+		{
+			name: "image URL in content block",
+			msg: llm2.Message{
+				Role: llm2.RoleUser,
+				Content: []llm2.ContentBlock{
+					{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: "data:image/png;base64,AAAA"}},
+				},
+			},
+			expected: len("data:image/png;base64,AAAA"),
+		},
+		{
+			name: "file URL in content block",
+			msg: llm2.Message{
+				Role: llm2.RoleUser,
+				Content: []llm2.ContentBlock{
+					{Type: llm2.ContentBlockTypeFile, File: &llm2.FileRef{Url: "data:application/pdf;base64,BBBB"}},
+				},
+			},
+			expected: len("data:application/pdf;base64,BBBB"),
+		},
+		{
+			name: "tool result with nested image content",
+			msg: llm2.Message{
+				Role: llm2.RoleUser,
+				Content: []llm2.ContentBlock{
+					{
+						Type: llm2.ContentBlockTypeToolResult,
+						ToolResult: &llm2.ToolResultBlock{
+							ToolCallId: "tc1",
+							Name:       "read_image",
+							Content: []llm2.ContentBlock{
+								{Type: llm2.ContentBlockTypeText, Text: "ok"},
+								{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: "data:image/png;base64,CCCC"}},
+							},
+						},
+					},
+				},
+			},
+			expected: len("ok") + len("data:image/png;base64,CCCC"),
+		},
+		{
+			name: "mixed text and image",
+			msg: llm2.Message{
+				Role: llm2.RoleUser,
+				Content: []llm2.ContentBlock{
+					{Type: llm2.ContentBlockTypeText, Text: "hello"},
+					{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: "data:image/png;base64,DDDD"}},
+				},
+			},
+			expected: 5 + len("data:image/png;base64,DDDD"),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.expected, llm2MessageLength(tc.msg))
+		})
+	}
 }

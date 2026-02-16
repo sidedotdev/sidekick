@@ -292,6 +292,33 @@ func cacheControlExtraFields(value string) map[string]any {
 	}
 }
 
+func toolResultImageParts(tr *ToolResultBlock) []openai.ChatCompletionContentPartUnionParam {
+	var parts []openai.ChatCompletionContentPartUnionParam
+	for _, cb := range tr.Content {
+		if cb.Type != ContentBlockTypeImage || cb.Image == nil {
+			continue
+		}
+		url := cb.Image.Url
+		if strings.HasPrefix(url, "data:") {
+			newURL, _, _, err := PrepareImageDataURLForLimits(url, 20*1024*1024, 2048)
+			if err == nil {
+				url = newURL
+			}
+		}
+		if strings.HasPrefix(url, "data:") || strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+			parts = append(parts, openai.ChatCompletionContentPartUnionParam{
+				OfImageURL: &openai.ChatCompletionContentPartImageParam{
+					ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
+						URL:    url,
+						Detail: "high",
+					},
+				},
+			})
+		}
+	}
+	return parts
+}
+
 func messagesToChatCompletionParams(messages []Message) ([]openai.ChatCompletionMessageParamUnion, error) {
 	var result []openai.ChatCompletionMessageParamUnion
 
@@ -357,7 +384,7 @@ func messagesToChatCompletionParams(messages []Message) ([]openai.ChatCompletion
 					toolMsg := openai.ChatCompletionToolMessageParam{
 						ToolCallID: block.ToolResult.ToolCallId,
 						Content: openai.ChatCompletionToolMessageParamContentUnion{
-							OfString: param.NewOpt(block.ToolResult.Text),
+							OfString: param.NewOpt(block.ToolResult.TextContent()),
 						},
 					}
 					if block.CacheControl != "" {
@@ -366,6 +393,17 @@ func messagesToChatCompletionParams(messages []Message) ([]openai.ChatCompletion
 					result = append(result, openai.ChatCompletionMessageParamUnion{
 						OfTool: &toolMsg,
 					})
+					// Chat completions tool messages don't support inline images,
+					// so we append them as a follow-up user message.
+					if imageParts := toolResultImageParts(block.ToolResult); len(imageParts) > 0 {
+						result = append(result, openai.ChatCompletionMessageParamUnion{
+							OfUser: &openai.ChatCompletionUserMessageParam{
+								Content: openai.ChatCompletionUserMessageParamContentUnion{
+									OfArrayOfContentParts: imageParts,
+								},
+							},
+						})
+					}
 				default:
 					return nil, fmt.Errorf("unsupported content block type %s for user role", block.Type)
 				}

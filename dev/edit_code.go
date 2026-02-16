@@ -386,8 +386,8 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 				attemptsSinceLastEditBlockOrFeedback = 0
 			}
 			// dynamically adjust the context size extension based on the length of the response
-			if len(toolCallResponseInfo.Response) > 5000 {
-				contextSizeExtension += len(toolCallResponseInfo.Response) - 5000
+			if len(toolCallResponseInfo.TextResponse()) > 5000 {
+				contextSizeExtension += len(toolCallResponseInfo.TextResponse()) - 5000
 			}
 			addToolCallResponse(dCtx, chatHistory, toolCallResponseInfo)
 		}
@@ -458,11 +458,8 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 			contextType = ContextTypeEditBlockReport
 		}
 	case ToolCallResponseInfo:
-		role = llm.ChatMessageRoleTool
-		content = info.Response
-		name = info.FunctionName
-		toolCallId = info.ToolCallId
-		isError = info.IsError
+		addToolCallResponse(dCtx, chatHistory, info)
+		skip = true
 	default:
 		panic("Unsupported prompt type for authoring edit blocks: " + promptInfo.GetType())
 	}
@@ -486,6 +483,9 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	tools = append(tools, currentGetSymbolDefinitionsTool())
 	tools = append(tools, &bulkReadFileTool)
 	tools = append(tools, &runCommandTool)
+	if supportsImageToolResults(codingModelConfig) {
+		tools = append(tools, &readImageTool)
+	}
 
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		tools = append(tools, &getHelpOrInputTool)

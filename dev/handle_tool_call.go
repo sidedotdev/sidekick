@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sidekick/domain"
 	"sidekick/llm"
+	"sidekick/llm2"
 	"sidekick/utils"
 	"strings"
 
@@ -40,7 +41,7 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers m
 
 		if err != nil {
 			result.IsError = true
-			result.Response = err.Error()
+			result.ToolResultContent = llm2.TextContentBlocks(err.Error())
 			result.FunctionName = tc.Name
 			result.ToolCallId = tc.Id
 		}
@@ -88,8 +89,8 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, customHandlers m
 			results[resp.Index].IsError = true
 			results[resp.Index].ToolCallId = toolCalls[resp.Index].Id
 			results[resp.Index].FunctionName = toolCalls[resp.Index].Name
-			if results[resp.Index].Response == "" {
-				results[resp.Index].Response = resp.Err.Error()
+			if len(results[resp.Index].ToolResultContent) == 0 {
+				results[resp.Index].ToolResultContent = llm2.TextContentBlocks(resp.Err.Error())
 			}
 		}
 	}
@@ -101,7 +102,11 @@ func cleanupWorkingDirFromResults(dCtx DevContext, results []ToolCallResponseInf
 	if dCtx.EnvContainer != nil && dCtx.EnvContainer.Env != nil {
 		workingDir := dCtx.EnvContainer.Env.GetWorkingDirectory()
 		for i := range results {
-			results[i].Response = removeWorkingDirFromPaths(results[i].Response, workingDir)
+			for j := range results[i].ToolResultContent {
+				if results[i].ToolResultContent[j].Type == llm2.ContentBlockTypeText {
+					results[i].ToolResultContent[j].Text = removeWorkingDirFromPaths(results[i].ToolResultContent[j].Text, workingDir)
+				}
+			}
 		}
 	}
 	return results
@@ -120,7 +125,7 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult Tool
 		response, err := unmarshalAndInvoke(toolCall, &wrapper, func() (string, error) {
 			return GetHelpOrInput(dCtx, wrapper.Requests)
 		})
-		toolCallResult.Response = response
+		toolCallResult.ToolResultContent = llm2.TextContentBlocks(response)
 		return toolCallResult, err
 	}
 
@@ -174,12 +179,36 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult Tool
 			response, err = unmarshalAndInvoke(toolCall, &runCommandParams, func() (string, error) {
 				return RunCommand(dCtx, runCommandParams)
 			})
+		case readImageTool.Name:
+			var params ReadImageParams
+			response, err = unmarshalAndInvoke(toolCall, &params, func() (string, error) {
+				flowId := workflow.GetInfo(dCtx).WorkflowExecution.ID
+				var ria *ReadImageActivities
+				var output ReadImageOutput
+				actErr := workflow.ExecuteActivity(dCtx.Context, ria.ReadImageActivity, ReadImageInput{
+					FlowId:      flowId,
+					WorkspaceId: dCtx.WorkspaceId,
+					WorkDir:     dCtx.EnvContainer.Env.GetWorkingDirectory(),
+					FilePath:    params.FilePath,
+				}).Get(dCtx, &output)
+				if actErr != nil {
+					return "", actErr
+				}
+				kvURL := BuildKvImageURL(output.Key)
+				toolCallResult.ToolResultContent = []llm2.ContentBlock{
+					{Type: llm2.ContentBlockTypeText, Text: "Image loaded successfully: " + params.FilePath},
+					{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: kvURL}},
+				}
+				return "", nil
+			})
 		default:
 			// FIXME this should be non-retryable but is being retried now (openai can rarely use a function name that we don't support)
 			response, err = "", fmt.Errorf("unknown function name: %s", toolCall.Name)
 		}
 
-		toolCallResult.Response = response
+		if response != "" && len(toolCallResult.ToolResultContent) == 0 {
+			toolCallResult.ToolResultContent = llm2.TextContentBlocks(response)
+		}
 		// ensure tracked flow action gets the state after handling this type of error
 		return handleErrToolCallUnmarshal(toolCallResult, err)
 	})
@@ -192,7 +221,7 @@ func handleErrToolCallUnmarshal(toolCallResult ToolCallResponseInfo, err error) 
 			// NOTE: this error happens when the tool call arguments didn't
 			// follow schema. by providing the error as the tool call response,
 			// we give the llm a chance to self-correct via feedback.
-			toolCallResult.Response = fmt.Sprintf("%s\n\nHint: To fix this, follow the json schema correctly. In particular, don't put json within a string.", err.Error())
+			toolCallResult.ToolResultContent = llm2.TextContentBlocks(fmt.Sprintf("%s\n\nHint: To fix this, follow the json schema correctly. In particular, don't put json within a string.", err.Error()))
 			err = nil
 		}
 	}

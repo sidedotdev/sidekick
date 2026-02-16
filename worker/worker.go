@@ -114,6 +114,9 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	chatHistoryActivities := &persisted_ai.ChatHistoryActivities{
 		Storage: service,
 	}
+	readImageActivities := &dev.ReadImageActivities{
+		Storage: service,
+	}
 	kvActivities := &common.KVActivities{
 		Storage: service,
 	}
@@ -202,6 +205,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(dev.ManageChatHistoryActivity)
 	w.RegisterActivity(dev.ManageChatHistoryV2Activity)
 	w.RegisterActivity(chatHistoryActivities)
+	w.RegisterActivity(readImageActivities)
 	w.RegisterActivity(kvActivities)
 	w.RegisterActivity(llm2Activities)
 	w.RegisterActivity(ffa.EvalBoolFlag)

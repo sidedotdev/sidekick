@@ -322,7 +322,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 			recordDevRequirementsTool.Name: func(dCtx DevContext, tc llm.ToolCall) (ToolCallResponseInfo, error) {
 				devReq, unmarshalErr := unmarshalDevRequirements(tc.Arguments)
 				if unmarshalErr != nil {
-					return ToolCallResponseInfo{Response: unmarshalErr.Error(), FunctionName: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
+					return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks(unmarshalErr.Error()), FunctionName: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
 				}
 				state.devRequirements = devReq
 				if devReq.Complete {
@@ -333,24 +333,24 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 					iteration.AutoIterationCount = 0
 					if userResponse.Approved != nil && *userResponse.Approved {
 						recordedReqs = &devReq
-						return ToolCallResponseInfo{Response: "Requirements recorded and approved.", FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+						return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks("Requirements recorded and approved."), FunctionName: tc.Name, ToolCallId: tc.Id}, nil
 					} else {
 						feedback := fmt.Sprintf("Requirements were not approved. Current state:\n%s\n\nPlease try again, taking this feedback into account:\n\n%s", devReq.String(), userResponse.Content)
-						return ToolCallResponseInfo{Response: feedback, FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+						return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks(feedback), FunctionName: tc.Name, ToolCallId: tc.Id}, nil
 					}
 				} else {
-					return ToolCallResponseInfo{Response: "Recorded partial requirements, but requirements are not finalized yet based on the \"requirements_finalized\" boolean field value being set to false. Do some more research or thinking to finalize the requirements, as needed. If you need more details or clarification from the user, use the " + getHelpOrInputTool.Name + " tool. Then record the finalized requirements again in full, or use update_dev_requirements to make incremental changes.", FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+					return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks("Recorded partial requirements, but requirements are not finalized yet based on the \"requirements_finalized\" boolean field value being set to false. Do some more research or thinking to finalize the requirements, as needed. If you need more details or clarification from the user, use the " + getHelpOrInputTool.Name + " tool. Then record the finalized requirements again in full, or use update_dev_requirements to make incremental changes."), FunctionName: tc.Name, ToolCallId: tc.Id}, nil
 				}
 			},
 			updateDevRequirementsTool.Name: func(dCtx DevContext, tc llm.ToolCall) (ToolCallResponseInfo, error) {
 				var update DevRequirementsUpdate
 				if err := json.Unmarshal([]byte(llm.RepairJson(tc.Arguments)), &update); err != nil {
-					return ToolCallResponseInfo{Response: fmt.Sprintf("failed to unmarshal update: %v", err), FunctionName: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
+					return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks(fmt.Sprintf("failed to unmarshal update: %v", err)), FunctionName: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
 				}
 
 				updatedReqs, err := applyDevRequirementsUpdates(state.devRequirements, update)
 				if err != nil {
-					return ToolCallResponseInfo{Response: fmt.Sprintf("failed to apply updates: %v", err), FunctionName: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
+					return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks(fmt.Sprintf("failed to apply updates: %v", err)), FunctionName: tc.Name, ToolCallId: tc.Id, IsError: true}, nil
 				}
 
 				state.devRequirements = updatedReqs
@@ -363,14 +363,14 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 					iteration.AutoIterationCount = 0
 					if userResponse.Approved != nil && *userResponse.Approved {
 						recordedReqs = &updatedReqs
-						return ToolCallResponseInfo{Response: "Requirements updated and approved.", FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+						return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks("Requirements updated and approved."), FunctionName: tc.Name, ToolCallId: tc.Id}, nil
 					} else {
 						feedback := fmt.Sprintf("Requirements updated but not approved. Current state:\n%s\n\nPlease try again, taking this feedback into account:\n\n%s", updatedReqs.String(), userResponse.Content)
-						return ToolCallResponseInfo{Response: feedback, FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+						return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks(feedback), FunctionName: tc.Name, ToolCallId: tc.Id}, nil
 					}
 				}
 
-				return ToolCallResponseInfo{Response: fmt.Sprintf("Requirements updated successfully. Current state:\n%s", updatedReqs.String()), FunctionName: tc.Name, ToolCallId: tc.Id}, nil
+				return ToolCallResponseInfo{ToolResultContent: llm2.TextContentBlocks(fmt.Sprintf("Requirements updated successfully. Current state:\n%s", updatedReqs.String())), FunctionName: tc.Name, ToolCallId: tc.Id}, nil
 			},
 		}
 
@@ -379,8 +379,8 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 		for _, res := range toolCallResults {
 			addToolCallResponse(iteration.ExecCtx, iteration.ChatHistory, res)
 
-			if len(res.Response) > 5000 {
-				state.contextSizeExtension += len(res.Response) - 5000
+			if len(res.TextResponse()) > 5000 {
+				state.contextSizeExtension += len(res.TextResponse()) - 5000
 			}
 
 			if res.FunctionName == getHelpOrInputTool.Name {
@@ -410,6 +410,8 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 }
 
 func generateDevRequirements(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, hasExistingRequirements bool) (common.MessageResponse, error) {
+	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
+
 	tools := []*llm.Tool{
 		&recordDevRequirementsTool,
 		currentGetSymbolDefinitionsTool(),
@@ -418,6 +420,9 @@ func generateDevRequirements(dCtx DevContext, chatHistory *persisted_ai.ChatHist
 	}
 	if hasExistingRequirements {
 		tools = append(tools, &updateDevRequirementsTool)
+	}
+	if supportsImageToolResults(modelConfig) {
+		tools = append(tools, &readImageTool)
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		tools = append(tools, &getHelpOrInputTool)
@@ -430,8 +435,6 @@ func generateDevRequirements(dCtx DevContext, chatHistory *persisted_ai.ChatHist
 			tools[i], tools[j] = tools[j], tools[i]
 		})
 	*/
-
-	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
 
 	options := llm2.Options{
 		Params: llm2.Params{
@@ -518,9 +521,34 @@ func addDevRequirementsPrompt(ctx workflow.Context, chatHistory *persisted_ai.Ch
 }
 
 func addToolCallResponse(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, info ToolCallResponseInfo) {
+	hasRichContent := false
+	for _, cb := range info.ToolResultContent {
+		if cb.Type != llm2.ContentBlockTypeText {
+			hasRichContent = true
+			break
+		}
+	}
+
+	if hasRichContent {
+		msg := &llm2.Message{
+			Role: llm2.RoleUser,
+			Content: []llm2.ContentBlock{{
+				Type: llm2.ContentBlockTypeToolResult,
+				ToolResult: &llm2.ToolResultBlock{
+					ToolCallId: info.ToolCallId,
+					Name:       info.FunctionName,
+					IsError:    info.IsError,
+					Content:    info.ToolResultContent,
+				},
+			}},
+		}
+		AppendChatHistory(ctx, chatHistory, msg)
+		return
+	}
+
 	AppendChatHistory(ctx, chatHistory, llm.ChatMessage{
 		Role:       llm.ChatMessageRoleTool,
-		Content:    info.Response,
+		Content:    info.TextResponse(),
 		Name:       info.FunctionName,
 		ToolCallId: info.ToolCallId,
 		IsError:    info.IsError,

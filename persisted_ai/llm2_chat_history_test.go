@@ -425,7 +425,7 @@ func TestMessageFromChatMessage_ToolRole(t *testing.T) {
 		require.NotNil(t, msg.Content[0].ToolResult)
 		assert.Equal(t, "call_abc123", msg.Content[0].ToolResult.ToolCallId)
 		assert.Equal(t, "my_tool", msg.Content[0].ToolResult.Name)
-		assert.Equal(t, "tool result content", msg.Content[0].ToolResult.Text)
+		assert.Equal(t, "tool result content", msg.Content[0].ToolResult.TextContent())
 		assert.False(t, msg.Content[0].ToolResult.IsError)
 	})
 
@@ -505,7 +505,7 @@ func TestLlm2ChatHistory_RoundTrip_WithToolCalls(t *testing.T) {
 				Type: llm2.ContentBlockTypeToolResult,
 				ToolResult: &llm2.ToolResultBlock{
 					ToolCallId: "call_123",
-					Text:       "Search results here",
+					Content:    []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Search results here"}},
 				},
 			},
 		},
@@ -1343,4 +1343,130 @@ func TestLlm2ChatHistory_PersistHydrate_PreservesContextMarkers(t *testing.T) {
 	require.Len(t, messages[0].Content, 1)
 	assert.Equal(t, "InitialInstructions", messages[0].Content[0].ContextType)
 	assert.Equal(t, "ephemeral", messages[0].Content[0].CacheControl)
+}
+
+func TestLlm2ChatHistory_Hydrate_ResolvesKvImageURLs(t *testing.T) {
+	t.Parallel()
+
+	storage := newMockKeyValueStorage()
+
+	// Store a data URL in KV under a known key
+	_, testDataURL := llm2.GenerateVisionTestImage(4)
+	kvKey := "flow-kv:img:test-image-key"
+	storage.data[kvKey] = []byte(testDataURL)
+
+	h := NewLlm2ChatHistory("flow-kv", "workspace-kv")
+	h.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "What is in this image?"},
+			{
+				Type:  llm2.ContentBlockTypeImage,
+				Image: &llm2.ImageRef{Url: KvImagePrefix + kvKey},
+			},
+		},
+	})
+
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	data, err := h.MarshalJSON()
+	require.NoError(t, err)
+
+	restored := &Llm2ChatHistory{}
+	err = restored.UnmarshalJSON(data)
+	require.NoError(t, err)
+
+	err = restored.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	msgs := restored.Llm2Messages()
+	require.Len(t, msgs, 1)
+	require.Len(t, msgs[0].Content, 2)
+	assert.Equal(t, llm2.ContentBlockTypeImage, msgs[0].Content[1].Type)
+	require.NotNil(t, msgs[0].Content[1].Image)
+	assert.Equal(t, testDataURL, msgs[0].Content[1].Image.Url)
+}
+
+func TestLlm2ChatHistory_Hydrate_ResolvesKvImageInToolResult(t *testing.T) {
+	t.Parallel()
+
+	storage := newMockKeyValueStorage()
+
+	_, testDataURL := llm2.GenerateVisionTestImage(4)
+	kvKey := "flow-kv:img:tool-result-image"
+	storage.data[kvKey] = []byte(testDataURL)
+
+	h := NewLlm2ChatHistory("flow-kv", "workspace-kv")
+	h.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{
+				Type: llm2.ContentBlockTypeToolResult,
+				ToolResult: &llm2.ToolResultBlock{
+					ToolCallId: "call-1",
+					Name:       "read_image",
+					Content: []llm2.ContentBlock{
+						{Type: llm2.ContentBlockTypeText, Text: "Image loaded"},
+						{
+							Type:  llm2.ContentBlockTypeImage,
+							Image: &llm2.ImageRef{Url: KvImagePrefix + kvKey},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	data, err := h.MarshalJSON()
+	require.NoError(t, err)
+
+	restored := &Llm2ChatHistory{}
+	err = restored.UnmarshalJSON(data)
+	require.NoError(t, err)
+
+	err = restored.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	msgs := restored.Llm2Messages()
+	require.Len(t, msgs, 1)
+	require.Len(t, msgs[0].Content, 1)
+	require.NotNil(t, msgs[0].Content[0].ToolResult)
+	require.Len(t, msgs[0].Content[0].ToolResult.Content, 2)
+	assert.Equal(t, "Image loaded", msgs[0].Content[0].ToolResult.Content[0].Text)
+	assert.Equal(t, testDataURL, msgs[0].Content[0].ToolResult.Content[1].Image.Url)
+}
+
+func TestLlm2ChatHistory_Hydrate_NoKvURLsIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	storage := newMockKeyValueStorage()
+
+	h := NewLlm2ChatHistory("flow-no-kv", "workspace-no-kv")
+	h.Append(&llm2.Message{
+		Role: llm2.RoleUser,
+		Content: []llm2.ContentBlock{
+			{Type: llm2.ContentBlockTypeText, Text: "Hello"},
+		},
+	})
+
+	err := h.Persist(context.Background(), storage, NewKsuidGenerator())
+	require.NoError(t, err)
+
+	data, err := h.MarshalJSON()
+	require.NoError(t, err)
+
+	restored := &Llm2ChatHistory{}
+	err = restored.UnmarshalJSON(data)
+	require.NoError(t, err)
+
+	err = restored.Hydrate(context.Background(), storage)
+	require.NoError(t, err)
+
+	msgs := restored.Llm2Messages()
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "Hello", msgs[0].Content[0].Text)
 }

@@ -12,6 +12,8 @@ import (
 	"github.com/segmentio/ksuid"
 )
 
+const KvImagePrefix = "kv:"
+
 // BlockIdGenerator is a function that generates unique block IDs.
 // For workflow code, this should be backed by a deterministic side effect.
 // For non-workflow code, this can use ksuid.New().String() directly.
@@ -196,7 +198,7 @@ func MessageFromChatMessage(cm common.ChatMessage) llm2.Message {
 					ToolCallId: cm.ToolCallId,
 					Name:       cm.Name,
 					IsError:    cm.IsError,
-					Text:       cm.Content,
+					Content:    []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: cm.Content}},
 				},
 				CacheControl: cm.CacheControl,
 				ContextType:  cm.ContextType,
@@ -340,6 +342,69 @@ func (h *Llm2ChatHistory) Hydrate(ctx context.Context, storage common.KeyValueSt
 
 	h.hydrated = true
 	h.unpersisted = []int{}
+
+	// Resolve any kv:-prefixed image URLs by loading stored data from KV
+	if err := resolveKvImageURLs(ctx, storage, h.workspaceId, h.messages); err != nil {
+		return fmt.Errorf("failed to resolve kv image URLs: %w", err)
+	}
+
+	return nil
+}
+
+// resolveKvImageURLs replaces kv:-prefixed image URLs in messages with the
+// actual data URLs stored in KV storage.
+func resolveKvImageURLs(ctx context.Context, storage common.KeyValueStorage, workspaceId string, messages []llm2.Message) error {
+	type kvRef struct {
+		msgIdx     int
+		blockIdx   int
+		nested     bool
+		contentIdx int
+		key        string
+	}
+
+	var refs []kvRef
+	var keys []string
+
+	for i, msg := range messages {
+		for j, block := range msg.Content {
+			if block.Type == llm2.ContentBlockTypeImage && block.Image != nil && strings.HasPrefix(block.Image.Url, KvImagePrefix) {
+				key := strings.TrimPrefix(block.Image.Url, KvImagePrefix)
+				refs = append(refs, kvRef{msgIdx: i, blockIdx: j, key: key})
+				keys = append(keys, key)
+			}
+			if block.Type == llm2.ContentBlockTypeToolResult && block.ToolResult != nil {
+				for k, cb := range block.ToolResult.Content {
+					if cb.Type == llm2.ContentBlockTypeImage && cb.Image != nil && strings.HasPrefix(cb.Image.Url, KvImagePrefix) {
+						key := strings.TrimPrefix(cb.Image.Url, KvImagePrefix)
+						refs = append(refs, kvRef{msgIdx: i, blockIdx: j, nested: true, contentIdx: k, key: key})
+						keys = append(keys, key)
+					}
+				}
+			}
+		}
+	}
+
+	if len(keys) == 0 {
+		return nil
+	}
+
+	values, err := storage.MGet(ctx, workspaceId, keys)
+	if err != nil {
+		return fmt.Errorf("failed to fetch kv image data: %w", err)
+	}
+
+	for i, ref := range refs {
+		if i >= len(values) || values[i] == nil {
+			continue
+		}
+		dataURL := string(values[i])
+		if ref.nested {
+			messages[ref.msgIdx].Content[ref.blockIdx].ToolResult.Content[ref.contentIdx].Image.Url = dataURL
+		} else {
+			messages[ref.msgIdx].Content[ref.blockIdx].Image.Url = dataURL
+		}
+	}
+
 	return nil
 }
 

@@ -82,10 +82,26 @@ type ToolUseBlock struct {
 
 // Tool result content provided back to the assistant, modeled within a user-role message.
 type ToolResultBlock struct {
-	ToolCallId string `json:"toolCallId"`
-	Name       string `json:"name,omitempty"`
-	IsError    bool   `json:"isError,omitempty"`
-	Text       string `json:"text,omitempty"`
+	ToolCallId string         `json:"toolCallId"`
+	Name       string         `json:"name,omitempty"`
+	IsError    bool           `json:"isError,omitempty"`
+	Content    []ContentBlock `json:"content,omitempty"`
+}
+
+// TextContent returns the concatenated text from all text content blocks.
+func (tr *ToolResultBlock) TextContent() string {
+	var sb strings.Builder
+	for _, cb := range tr.Content {
+		if cb.Type == ContentBlockTypeText {
+			sb.WriteString(cb.Text)
+		}
+	}
+	return sb.String()
+}
+
+// TextContentBlocks creates a ContentBlock slice with a single text block.
+func TextContentBlocks(text string) []ContentBlock {
+	return []ContentBlock{{Type: ContentBlockTypeText, Text: text}}
 }
 
 // A single content block within a message turn.

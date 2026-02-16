@@ -16,16 +16,30 @@ const (
 )
 
 // llm2MessageLength calculates the total length of a message by summing
-// text content and tool call arguments from all content blocks.
+// text content, tool call arguments, image/file URLs, and nested tool result
+// content from all content blocks.
 func llm2MessageLength(msg llm2.Message) int {
 	length := 0
 	for _, block := range msg.Content {
-		length += len(block.Text)
-		if block.ToolUse != nil {
-			length += len(block.ToolUse.Arguments)
-		}
-		if block.ToolResult != nil {
-			length += len(block.ToolResult.Text)
+		length += contentBlockLength(block)
+	}
+	return length
+}
+
+func contentBlockLength(block llm2.ContentBlock) int {
+	length := len(block.Text)
+	if block.Image != nil {
+		length += len(block.Image.Url)
+	}
+	if block.File != nil {
+		length += len(block.File.Url)
+	}
+	if block.ToolUse != nil {
+		length += len(block.ToolUse.Arguments)
+	}
+	if block.ToolResult != nil {
+		for _, nested := range block.ToolResult.Content {
+			length += contentBlockLength(nested)
 		}
 	}
 	return length
@@ -244,7 +258,7 @@ func truncateLargeLlm2ToolResponses(messages []llm2.Message, isRetained []bool, 
 		}
 		for j, block := range msg.Content {
 			if block.Type == llm2.ContentBlockTypeToolResult && block.ToolResult != nil {
-				blockLen := len(block.ToolResult.Text)
+				blockLen := len(block.ToolResult.TextContent())
 				if blockLen > threshold {
 					candidates = append(candidates, candidate{msgIndex: i, blockIndex: j, length: blockLen})
 				}
@@ -276,8 +290,9 @@ func truncateLargeLlm2ToolResponses(messages []llm2.Message, isRetained []bool, 
 		if block.ToolResult == nil {
 			continue
 		}
-		oldLen := len(block.ToolResult.Text)
-		truncatedText := block.ToolResult.Text[:min(len(block.ToolResult.Text), threshold)]
+		oldText := block.ToolResult.TextContent()
+		oldLen := len(oldText)
+		truncatedText := oldText[:min(oldLen, threshold)]
 		if len(truncatedText) < oldLen {
 			truncatedText += "\n[truncated]"
 		}
@@ -285,9 +300,9 @@ func truncateLargeLlm2ToolResponses(messages []llm2.Message, isRetained []bool, 
 			ToolCallId: block.ToolResult.ToolCallId,
 			Name:       block.ToolResult.Name,
 			IsError:    block.ToolResult.IsError,
-			Text:       truncatedText,
+			Content:    []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: truncatedText}},
 		}
-		totalLength -= oldLen - len(block.ToolResult.Text)
+		totalLength -= oldLen - len(truncatedText)
 	}
 
 	return result, isRetained
