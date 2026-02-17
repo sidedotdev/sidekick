@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -54,11 +55,12 @@ type ReadImageInput struct {
 	WorkspaceId string `json:"workspaceId"`
 	WorkDir     string `json:"workDir"`
 	FilePath    string `json:"filePath"`
+	ToolCallId  string `json:"toolCallId"`
 }
 
-// ReadImageOutput is the activity output containing the KV key for the stored image.
+// ReadImageOutput contains the persisted message ref for the image content block.
 type ReadImageOutput struct {
-	Key string `json:"key"`
+	Ref persisted_ai.MessageRef `json:"ref"`
 }
 
 // ReadImageActivities holds dependencies for image-reading activities.
@@ -67,7 +69,8 @@ type ReadImageActivities struct {
 }
 
 // ReadImageActivity reads an image file, validates the path, clamps it for LLM limits,
-// and stores the resulting data URL in KV storage under a flow-prefixed key.
+// builds a tool result content block, and persists it to KV using the standard
+// {flowId}:msg:{blockId} namespace so cascade delete handles cleanup.
 func (a *ReadImageActivities) ReadImageActivity(ctx context.Context, input ReadImageInput) (*ReadImageOutput, error) {
 	resolvedPath, err := validateImagePath(input.WorkDir, input.FilePath)
 	if err != nil {
@@ -91,16 +94,38 @@ func (a *ReadImageActivities) ReadImageActivity(ctx context.Context, input ReadI
 		return nil, fmt.Errorf("failed to prepare image for LLM limits: %w", err)
 	}
 
-	key := fmt.Sprintf("%s:img:%s", input.FlowId, ksuid.New().String())
+	// Build a tool result content block containing text + image
+	block := llm2.ContentBlock{
+		Type: llm2.ContentBlockTypeToolResult,
+		ToolResult: &llm2.ToolResultBlock{
+			ToolCallId: input.ToolCallId,
+			Name:       readImageTool.Name,
+			Content: []llm2.ContentBlock{
+				{Type: llm2.ContentBlockTypeText, Text: "Image loaded successfully: " + input.FilePath},
+				{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: clampedURL}},
+			},
+		},
+	}
+
+	blockId := ksuid.New().String()
+	blockBytes, err := json.Marshal(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal content block: %w", err)
+	}
 
 	err = a.Storage.MSetRaw(ctx, input.WorkspaceId, map[string][]byte{
-		key: []byte(clampedURL),
+		persisted_ai.StorageKey(input.FlowId, blockId): blockBytes,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to store image in KV: %w", err)
 	}
 
-	return &ReadImageOutput{Key: key}, nil
+	return &ReadImageOutput{
+		Ref: persisted_ai.MessageRef{
+			BlockIds: []string{blockId},
+			Role:     string(llm2.RoleUser),
+		},
+	}, nil
 }
 
 // validateImagePath ensures the file path is safe: no ".." segments, not absolute,
@@ -140,9 +165,4 @@ func validateImagePath(workDir, filePath string) (string, error) {
 	}
 
 	return resolved, nil
-}
-
-// BuildKvImageURL builds a kv:-prefixed URL reference for storing in chat history.
-func BuildKvImageURL(key string) string {
-	return persisted_ai.KvImagePrefix + key
 }
