@@ -1240,7 +1240,7 @@ func TestMessageFromChatMessage_PreservesContextMarkers(t *testing.T) {
 		msg := MessageFromChatMessage(cm)
 
 		require.Len(t, msg.Content, 1)
-		assert.Equal(t, "InitialInstructions", msg.Content[0].ContextType)
+		assert.Equal(t, "InitialInstructions", GetContextType(msg.Content[0]))
 		assert.Equal(t, "ephemeral", msg.Content[0].CacheControl)
 	})
 
@@ -1259,7 +1259,7 @@ func TestMessageFromChatMessage_PreservesContextMarkers(t *testing.T) {
 
 		require.Len(t, msg.Content, 1)
 		assert.Equal(t, llm2.ContentBlockTypeToolResult, msg.Content[0].Type)
-		assert.Equal(t, "TestResult", msg.Content[0].ContextType)
+		assert.Equal(t, "TestResult", GetContextType(msg.Content[0]))
 		assert.Equal(t, "ephemeral", msg.Content[0].CacheControl)
 	})
 }
@@ -1341,7 +1341,7 @@ func TestLlm2ChatHistory_PersistHydrate_PreservesContextMarkers(t *testing.T) {
 	messages := restored.Llm2Messages()
 	require.Len(t, messages, 1)
 	require.Len(t, messages[0].Content, 1)
-	assert.Equal(t, "InitialInstructions", messages[0].Content[0].ContextType)
+	assert.Equal(t, "InitialInstructions", GetContextType(messages[0].Content[0]))
 	assert.Equal(t, "ephemeral", messages[0].Content[0].CacheControl)
 }
 

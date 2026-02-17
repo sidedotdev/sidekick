@@ -201,25 +201,21 @@ func TestManageV3_PreservesRefsForUnchangedMessages(t *testing.T) {
 
 	// Create history with multiple messages, using ContextType to ensure retention
 	history := NewLlm2ChatHistory("flow-123", "workspace-456")
+	firstBlock := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "First message"}
+	SetContextType(&firstBlock, ContextTypeInitialInstructions)
 	history.Append(&llm2.Message{
-		Role: llm2.RoleUser,
-		Content: []llm2.ContentBlock{{
-			Type:        llm2.ContentBlockTypeText,
-			Text:        "First message",
-			ContextType: ContextTypeInitialInstructions,
-		}},
+		Role:    llm2.RoleUser,
+		Content: []llm2.ContentBlock{firstBlock},
 	})
 	history.Append(&llm2.Message{
 		Role:    llm2.RoleAssistant,
 		Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Response"}},
 	})
+	secondBlock := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Second message"}
+	SetContextType(&secondBlock, ContextTypeUserFeedback)
 	history.Append(&llm2.Message{
-		Role: llm2.RoleUser,
-		Content: []llm2.ContentBlock{{
-			Type:        llm2.ContentBlockTypeText,
-			Text:        "Second message",
-			ContextType: ContextTypeUserFeedback,
-		}},
+		Role:    llm2.RoleUser,
+		Content: []llm2.ContentBlock{secondBlock},
 	})
 
 	// Persist to get initial refs
@@ -254,14 +250,15 @@ func TestManageV3_ChangesRefsForMarkerOnlyChanges(t *testing.T) {
 
 	// Create history with messages, using ContextType to ensure retention
 	history := NewLlm2ChatHistory("flow-123", "workspace-456")
+	firstBlock := llm2.ContentBlock{
+		Type:         llm2.ContentBlockTypeText,
+		Text:         "First message",
+		CacheControl: "ephemeral",
+	}
+	SetContextType(&firstBlock, ContextTypeInitialInstructions)
 	history.Append(&llm2.Message{
-		Role: llm2.RoleUser,
-		Content: []llm2.ContentBlock{{
-			Type:         llm2.ContentBlockTypeText,
-			Text:         "First message",
-			ContextType:  ContextTypeInitialInstructions,
-			CacheControl: "ephemeral",
-		}},
+		Role:    llm2.RoleUser,
+		Content: []llm2.ContentBlock{firstBlock},
 	})
 	history.Append(&llm2.Message{
 		Role: llm2.RoleAssistant,
@@ -302,13 +299,11 @@ func TestManageV3_HydratingFromRefsRestoresMarkers(t *testing.T) {
 
 	// Create and manage history with ContextType to ensure retention
 	history := NewLlm2ChatHistory("flow-123", "workspace-456")
+	helloBlock := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Hello"}
+	SetContextType(&helloBlock, ContextTypeInitialInstructions)
 	history.Append(&llm2.Message{
-		Role: llm2.RoleUser,
-		Content: []llm2.ContentBlock{{
-			Type:        llm2.ContentBlockTypeText,
-			Text:        "Hello",
-			ContextType: ContextTypeInitialInstructions,
-		}},
+		Role:    llm2.RoleUser,
+		Content: []llm2.ContentBlock{helloBlock},
 	})
 	history.Append(&llm2.Message{
 		Role:    llm2.RoleAssistant,
@@ -357,13 +352,11 @@ func TestManageV3_PreservesContextType(t *testing.T) {
 
 	// Create history with ContextType set
 	history := NewLlm2ChatHistory("flow-123", "workspace-456")
+	instrBlock := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Instructions"}
+	SetContextType(&instrBlock, ContextTypeInitialInstructions)
 	history.Append(&llm2.Message{
-		Role: llm2.RoleUser,
-		Content: []llm2.ContentBlock{{
-			Type:        llm2.ContentBlockTypeText,
-			Text:        "Instructions",
-			ContextType: ContextTypeInitialInstructions,
-		}},
+		Role:    llm2.RoleUser,
+		Content: []llm2.ContentBlock{instrBlock},
 	})
 	history.Append(&llm2.Message{
 		Role:    llm2.RoleAssistant,
@@ -388,7 +381,7 @@ func TestManageV3_PreservesContextType(t *testing.T) {
 	require.NoError(t, err)
 
 	messages := freshHistory.Llm2Messages()
-	assert.Equal(t, ContextTypeInitialInstructions, messages[0].Content[0].ContextType,
+	assert.Equal(t, ContextTypeInitialInstructions, GetContextType(messages[0].Content[0]),
 		"ContextType should be preserved after hydration")
 }
 
@@ -400,13 +393,11 @@ func TestManageV3_DroppingOlderMessagesPreservesRetainedRefs(t *testing.T) {
 	}
 
 	history := NewLlm2ChatHistory("flow-123", "workspace-456")
+	initBlock := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: "Initial instructions"}
+	SetContextType(&initBlock, ContextTypeInitialInstructions)
 	history.Append(&llm2.Message{
-		Role: llm2.RoleUser,
-		Content: []llm2.ContentBlock{{
-			Type:        llm2.ContentBlockTypeText,
-			Text:        "Initial instructions",
-			ContextType: ContextTypeInitialInstructions,
-		}},
+		Role:    llm2.RoleUser,
+		Content: []llm2.ContentBlock{initBlock},
 	})
 	// Middle messages without special context type (may be dropped)
 	history.Append(&llm2.Message{
@@ -516,7 +507,7 @@ func TestManageV3_LegacyChatMessageRetainsInitialInstructions(t *testing.T) {
 	foundInitialInstructions := false
 	for _, msg := range messages {
 		for _, block := range msg.Content {
-			if block.ContextType == ContextTypeInitialInstructions {
+			if GetContextType(block) == ContextTypeInitialInstructions {
 				foundInitialInstructions = true
 				assert.Equal(t, "You are a helpful assistant.", block.Text)
 			}

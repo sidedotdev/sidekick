@@ -34,6 +34,9 @@ func NewKsuidGenerator() BlockIdGenerator {
 // MetadataNamespacePersistence is the namespace key for block persistence metadata.
 const MetadataNamespacePersistence = "persistence"
 
+// MetadataNamespaceSidekick is the namespace key for sidekick-specific block metadata.
+const MetadataNamespaceSidekick = "sidekick"
+
 // BlockMetadata provides access to the persisted block key for a
 // content block. Implementations live in persisted_ai (BasicBlockMetadata)
 // or in other packages that need custom metadata.
@@ -49,6 +52,58 @@ type BasicBlockMetadata struct {
 
 func (m *BasicBlockMetadata) GetBlockKey() string    { return m.BlockKey }
 func (m *BasicBlockMetadata) SetBlockKey(key string) { m.BlockKey = key }
+
+// SidekickBlockMetadata holds sidekick-specific metadata for a content block.
+type SidekickBlockMetadata struct {
+	ContextType string `json:"contextType,omitempty"`
+}
+
+// getSidekickBlockMetadata resolves the sidekick metadata from a content block,
+// handling both the typed SidekickBlockMetadata case and the raw map[string]any
+// case that results from JSON round-tripping.
+func getSidekickBlockMetadata(block llm2.ContentBlock) *SidekickBlockMetadata {
+	if block.Metadata == nil {
+		return nil
+	}
+	raw := block.Metadata[MetadataNamespaceSidekick]
+	if raw == nil {
+		return nil
+	}
+	if meta, ok := raw.(*SidekickBlockMetadata); ok {
+		return meta
+	}
+	if meta, ok := raw.(SidekickBlockMetadata); ok {
+		return &meta
+	}
+	if m, ok := raw.(map[string]interface{}); ok {
+		ct, _ := m["contextType"].(string)
+		return &SidekickBlockMetadata{ContextType: ct}
+	}
+	return nil
+}
+
+// GetContextType returns the context type from a content block's sidekick
+// metadata, or "" if none is set.
+func GetContextType(block llm2.ContentBlock) string {
+	if meta := getSidekickBlockMetadata(block); meta != nil {
+		return meta.ContextType
+	}
+	return ""
+}
+
+// SetContextType sets the context type in a content block's sidekick metadata,
+// initializing the metadata map if needed.
+func SetContextType(block *llm2.ContentBlock, contextType string) {
+	if block.Metadata == nil {
+		block.Metadata = make(map[string]any)
+	}
+	meta := getSidekickBlockMetadata(*block)
+	if meta == nil {
+		meta = &SidekickBlockMetadata{}
+	}
+	meta.ContextType = contextType
+	block.Metadata[MetadataNamespaceSidekick] = meta
+}
 
 // getBlockMetadata resolves the persistence metadata from a content block,
 // handling both the typed BlockMetadata case and the raw map[string]interface{}
@@ -286,29 +341,35 @@ func MessageFromChatMessage(cm common.ChatMessage) llm2.Message {
 	// Tool results in legacy format have role "tool", but in llm2 they should
 	// be user-role messages with a ToolResult content block
 	if cm.Role == common.ChatMessageRoleTool {
+		block := llm2.ContentBlock{
+			Type: llm2.ContentBlockTypeToolResult,
+			ToolResult: &llm2.ToolResultBlock{
+				ToolCallId: cm.ToolCallId,
+				Name:       cm.Name,
+				IsError:    cm.IsError,
+				Content:    []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: cm.Content}},
+			},
+			CacheControl: cm.CacheControl,
+		}
+		if cm.ContextType != "" {
+			SetContextType(&block, cm.ContextType)
+		}
 		return llm2.Message{
-			Role: llm2.RoleUser,
-			Content: []llm2.ContentBlock{{
-				Type: llm2.ContentBlockTypeToolResult,
-				ToolResult: &llm2.ToolResultBlock{
-					ToolCallId: cm.ToolCallId,
-					Name:       cm.Name,
-					IsError:    cm.IsError,
-					Content:    []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: cm.Content}},
-				},
-				CacheControl: cm.CacheControl,
-				ContextType:  cm.ContextType,
-			}},
+			Role:    llm2.RoleUser,
+			Content: []llm2.ContentBlock{block},
 		}
 	}
+	block := llm2.ContentBlock{
+		Type:         llm2.ContentBlockTypeText,
+		Text:         cm.Content,
+		CacheControl: cm.CacheControl,
+	}
+	if cm.ContextType != "" {
+		SetContextType(&block, cm.ContextType)
+	}
 	return llm2.Message{
-		Role: llm2.Role(cm.Role),
-		Content: []llm2.ContentBlock{{
-			Type:         llm2.ContentBlockTypeText,
-			Text:         cm.Content,
-			CacheControl: cm.CacheControl,
-			ContextType:  cm.ContextType,
-		}},
+		Role:    llm2.Role(cm.Role),
+		Content: []llm2.ContentBlock{block},
 	}
 }
 

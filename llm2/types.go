@@ -117,7 +117,6 @@ type ContentBlock struct {
 	Reasoning    *ReasoningBlock  `json:"reasoning,omitempty"`
 	McpCall      *McpCallBlock    `json:"mcpCall,omitempty"`
 	CacheControl string           `json:"cacheControl,omitempty"`
-	ContextType  string           `json:"contextType,omitempty"`
 	// Signature is a provider-specific opaque token (e.g., Google's ThoughtSignature)
 	// that must be preserved and returned verbatim in subsequent turns.
 	Signature []byte `json:"signature,omitempty"`

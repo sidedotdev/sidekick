@@ -48,8 +48,8 @@ func contentBlockLength(block llm2.ContentBlock) int {
 // getLlm2ContextType returns the ContextType from the first content block that has one.
 func getLlm2ContextType(msg llm2.Message) string {
 	for _, block := range msg.Content {
-		if block.ContextType != "" {
-			return block.ContextType
+		if ct := GetContextType(block); ct != "" {
+			return ct
 		}
 	}
 	return ""

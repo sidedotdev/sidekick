@@ -17,9 +17,11 @@ func textMsg(role llm2.Role, text string) llm2.Message {
 }
 
 func textMsgWithCtx(role llm2.Role, text, contextType string) llm2.Message {
+	block := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: text}
+	SetContextType(&block, contextType)
 	return llm2.Message{
 		Role:    role,
-		Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: text, ContextType: contextType}},
+		Content: []llm2.ContentBlock{block},
 	}
 }
 
