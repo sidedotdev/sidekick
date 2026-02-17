@@ -11,7 +11,6 @@ import (
 	"sidekick/llm2"
 
 	"github.com/rs/zerolog/log"
-	"github.com/segmentio/ksuid"
 )
 
 // ChatHistoryActivities provides activities for managing chat history with KV storage.
@@ -80,22 +79,58 @@ type AppendMessageInput struct {
 	Message     llm2.Message
 }
 
+// PersistContentBlock persists a single content block to KV storage and returns
+// a MessageRef pointing to it. The block receives a new block key if it doesn't
+// already have one.
+func PersistContentBlock(
+	ctx context.Context,
+	storage common.KeyValueStorage,
+	flowId, workspaceId, role string,
+	block llm2.ContentBlock,
+) (*MessageRef, error) {
+	blockKey := GetBlockKey(block)
+	if blockKey == "" {
+		blockKey = NewBlockId()
+		SetBlockKey(&block, blockKey)
+	}
+	blockBytes, err := json.Marshal(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal content block: %w", err)
+	}
+	if err := storage.MSetRaw(ctx, workspaceId, map[string][]byte{
+		StorageKey(flowId, blockKey): blockBytes,
+	}); err != nil {
+		return nil, fmt.Errorf("failed to persist content block: %w", err)
+	}
+	return &MessageRef{
+		BlockKeys: []string{blockKey},
+		Role:      role,
+	}, nil
+}
+
 // AppendMessage persists a single message to KV storage and returns its ref.
+// Blocks that already carry a block key in their persistence metadata (i.e.
+// pre-persisted by an activity such as ReadImageActivity) are not re-stored.
 func (ca *ChatHistoryActivities) AppendMessage(
 	ctx context.Context,
 	input AppendMessageInput,
 ) (*MessageRef, error) {
-	blockIds := make([]string, len(input.Message.Content))
+	blockKeys := make([]string, len(input.Message.Content))
 	storageValues := make(map[string][]byte)
 
 	for i, block := range input.Message.Content {
-		blockId := ksuid.New().String()
-		blockIds[i] = blockId
+		if existingKey := GetBlockKey(block); existingKey != "" {
+			blockKeys[i] = existingKey
+			continue
+		}
+		blockKey := NewBlockId()
+		blockKeys[i] = blockKey
+		SetBlockKey(&block, blockKey)
 		blockBytes, err := json.Marshal(block)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal content block: %w", err)
 		}
-		storageValues[StorageKey(input.FlowId, blockId)] = blockBytes
+		storageValues[StorageKey(input.FlowId, blockKey)] = blockBytes
 	}
 
 	if len(storageValues) > 0 {
@@ -105,8 +140,8 @@ func (ca *ChatHistoryActivities) AppendMessage(
 	}
 
 	ref := &MessageRef{
-		BlockIds: blockIds,
-		Role:     string(input.Message.Role),
+		BlockKeys: blockKeys,
+		Role:      string(input.Message.Role),
 	}
 	return ref, nil
 }

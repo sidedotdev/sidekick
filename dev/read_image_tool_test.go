@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"sidekick/env"
+	"sidekick/llm"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -148,12 +151,13 @@ func TestReadImageActivity_Success(t *testing.T) {
 	storage := newMockKVStorage()
 	activities := &ReadImageActivities{Storage: storage}
 
+	tc := &llm.ToolCall{Id: "call-abc", Name: "read_image"}
 	input := ReadImageInput{
-		FlowId:      "flow-123",
-		WorkspaceId: "ws-456",
-		WorkDir:     workDir,
-		FilePath:    "test.png",
-		ToolCallId:  "call-abc",
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: workDir}},
+		FilePath:     "test.png",
+		FlowId:       "flow-123",
+		ToolCall:     tc,
+		WorkspaceId:  "ws-456",
 	}
 
 	output, err := activities.ReadImageActivity(context.Background(), input)
@@ -162,17 +166,37 @@ func TestReadImageActivity_Success(t *testing.T) {
 
 	ref := output.Ref
 	assert.Equal(t, "user", ref.Role)
-	require.Len(t, ref.BlockIds, 1)
+	require.Len(t, ref.BlockKeys, 1)
+	assert.True(t, strings.HasPrefix(ref.BlockKeys[0], "block_"))
 
 	// Verify content block was stored under the standard msg namespace
-	key := "flow-123:msg:" + ref.BlockIds[0]
+	key := "flow-123:msg:" + ref.BlockKeys[0]
 	stored := storage.data[key]
 	require.NotNil(t, stored, "content block should be stored under {flowId}:msg:{blockId}")
 
-	// Verify the stored block is a tool result with text + image
+	// Verify the stored block is a valid tool result with image content
 	var block map[string]interface{}
 	require.NoError(t, json.Unmarshal(stored, &block))
 	assert.Equal(t, "tool_result", block["type"])
+
+	toolResult, ok := block["toolResult"].(map[string]interface{})
+	require.True(t, ok, "stored block should have a toolResult field")
+	assert.Equal(t, "call-abc", toolResult["toolCallId"])
+	assert.Equal(t, "read_image", toolResult["name"])
+
+	content, ok := toolResult["content"].([]interface{})
+	require.True(t, ok, "toolResult should have content array")
+	require.Len(t, content, 1)
+
+	imgBlock, ok := content[0].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "image", imgBlock["type"])
+
+	imgRef, ok := imgBlock["image"].(map[string]interface{})
+	require.True(t, ok, "image block should have image ref")
+	url, ok := imgRef["url"].(string)
+	require.True(t, ok)
+	assert.True(t, strings.HasPrefix(url, "data:image/png;base64,"), "image URL should be a data URL")
 }
 
 func TestReadImageActivity_PathTraversal(t *testing.T) {
@@ -184,11 +208,10 @@ func TestReadImageActivity_PathTraversal(t *testing.T) {
 	activities := &ReadImageActivities{Storage: storage}
 
 	input := ReadImageInput{
-		FlowId:      "flow-123",
-		WorkspaceId: "ws-456",
-		WorkDir:     workDir,
-		FilePath:    "../escape.png",
-		ToolCallId:  "call-abc",
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: workDir}},
+		FilePath:     "../escape.png",
+		FlowId:       "flow-123",
+		WorkspaceId:  "ws-456",
 	}
 
 	_, err := activities.ReadImageActivity(context.Background(), input)
@@ -205,11 +228,10 @@ func TestReadImageActivity_AbsolutePath(t *testing.T) {
 	activities := &ReadImageActivities{Storage: storage}
 
 	input := ReadImageInput{
-		FlowId:      "flow-123",
-		WorkspaceId: "ws-456",
-		WorkDir:     workDir,
-		FilePath:    "/etc/passwd",
-		ToolCallId:  "call-abc",
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: workDir}},
+		FilePath:     "/etc/passwd",
+		FlowId:       "flow-123",
+		WorkspaceId:  "ws-456",
 	}
 
 	_, err := activities.ReadImageActivity(context.Background(), input)
@@ -228,11 +250,10 @@ func TestReadImageActivity_NotAnImage(t *testing.T) {
 	activities := &ReadImageActivities{Storage: storage}
 
 	input := ReadImageInput{
-		FlowId:      "flow-123",
-		WorkspaceId: "ws-456",
-		WorkDir:     workDir,
-		FilePath:    "not_image.txt",
-		ToolCallId:  "call-abc",
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: workDir}},
+		FilePath:     "not_image.txt",
+		FlowId:       "flow-123",
+		WorkspaceId:  "ws-456",
 	}
 
 	_, err := activities.ReadImageActivity(context.Background(), input)
@@ -249,11 +270,10 @@ func TestReadImageActivity_FileNotFound(t *testing.T) {
 	activities := &ReadImageActivities{Storage: storage}
 
 	input := ReadImageInput{
-		FlowId:      "flow-123",
-		WorkspaceId: "ws-456",
-		WorkDir:     workDir,
-		FilePath:    "nonexistent.png",
-		ToolCallId:  "call-abc",
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: workDir}},
+		FilePath:     "nonexistent.png",
+		FlowId:       "flow-123",
+		WorkspaceId:  "ws-456",
 	}
 
 	_, err := activities.ReadImageActivity(context.Background(), input)

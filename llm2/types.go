@@ -121,6 +121,10 @@ type ContentBlock struct {
 	// Signature is a provider-specific opaque token (e.g., Google's ThoughtSignature)
 	// that must be preserved and returned verbatim in subsequent turns.
 	Signature []byte `json:"signature,omitempty"`
+	// Metadata holds namespaced extensibility data. Keys are namespace strings
+	// (e.g. "persistence"). Packages like persisted_ai define interfaces for
+	// the values; after JSON round-tripping values appear as map[string]any.
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // A single chat turn (message) consisting of a role and ordered content blocks.

@@ -49,8 +49,8 @@ func TestHydrateChatHistoryHandler_HappyPath(t *testing.T) {
 	// Create request with refs
 	reqBody := HydrateChatHistoryRequest{
 		Refs: []persisted_ai.MessageRef{
-			{BlockIds: []string{"block-1"}, Role: "user"},
-			{BlockIds: []string{"block-2", "block-3"}, Role: "assistant"},
+			{BlockKeys: []string{"block-1"}, Role: "user"},
+			{BlockKeys: []string{"block-2", "block-3"}, Role: "assistant"},
 		},
 	}
 	reqJSON, _ := json.Marshal(reqBody)
@@ -102,7 +102,7 @@ func TestHydrateChatHistoryHandler_MissingBlocksShowError(t *testing.T) {
 	// Request includes a missing block
 	reqBody := HydrateChatHistoryRequest{
 		Refs: []persisted_ai.MessageRef{
-			{BlockIds: []string{"block-exists", "block-missing"}, Role: "assistant"},
+			{BlockKeys: []string{"block-exists", "block-missing"}, Role: "assistant"},
 		},
 	}
 	reqJSON, _ := json.Marshal(reqBody)
@@ -142,7 +142,7 @@ func TestHydrateChatHistoryHandler_SingleRef(t *testing.T) {
 
 	reqBody := HydrateChatHistoryRequest{
 		Refs: []persisted_ai.MessageRef{
-			{BlockIds: []string{"block-1"}, Role: "user"},
+			{BlockKeys: []string{"block-1"}, Role: "user"},
 		},
 	}
 	reqJSON, _ := json.Marshal(reqBody)
@@ -207,7 +207,7 @@ func TestHydrateChatHistoryHandler_MalformedBlockShowsError(t *testing.T) {
 
 	reqBody := HydrateChatHistoryRequest{
 		Refs: []persisted_ai.MessageRef{
-			{BlockIds: []string{"block-bad"}, Role: "user"},
+			{BlockKeys: []string{"block-bad"}, Role: "user"},
 		},
 	}
 	reqJSON, _ := json.Marshal(reqBody)
@@ -250,8 +250,8 @@ func TestHydrateChatHistoryHandler_PreservesOrder(t *testing.T) {
 	// Request with specific order
 	reqBody := HydrateChatHistoryRequest{
 		Refs: []persisted_ai.MessageRef{
-			{BlockIds: []string{"block-3", "block-1"}, Role: "user"},
-			{BlockIds: []string{"block-5", "block-2", "block-4"}, Role: "assistant"},
+			{BlockKeys: []string{"block-3", "block-1"}, Role: "user"},
+			{BlockKeys: []string{"block-5", "block-2", "block-4"}, Role: "assistant"},
 		},
 	}
 	reqJSON, _ := json.Marshal(reqBody)

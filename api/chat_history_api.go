@@ -34,13 +34,13 @@ func (ctrl *Controller) HydrateChatHistoryHandler(c *gin.Context) {
 		return
 	}
 
-	// Collect all block IDs in order, building prefixed storage keys
-	var allBlockIds []string
+	// Collect all block keys in order, building prefixed storage keys
+	var allBlockKeys []string
 	var allStorageKeys []string
 	for _, ref := range req.Refs {
-		for _, blockId := range ref.BlockIds {
-			allBlockIds = append(allBlockIds, blockId)
-			allStorageKeys = append(allStorageKeys, fmt.Sprintf("%s:msg:%s", flowId, blockId))
+		for _, blockKey := range ref.BlockKeys {
+			allBlockKeys = append(allBlockKeys, blockKey)
+			allStorageKeys = append(allStorageKeys, fmt.Sprintf("%s:msg:%s", flowId, blockKey))
 		}
 	}
 
@@ -57,11 +57,11 @@ func (ctrl *Controller) HydrateChatHistoryHandler(c *gin.Context) {
 		}
 	}
 
-	// Build blockId -> raw bytes map
+	// Build blockKey -> raw bytes map
 	blockDataMap := make(map[string][]byte)
-	for i, blockId := range allBlockIds {
+	for i, blockKey := range allBlockKeys {
 		if i < len(blockData) && blockData[i] != nil {
-			blockDataMap[blockId] = blockData[i]
+			blockDataMap[blockKey] = blockData[i]
 		}
 	}
 
@@ -69,13 +69,13 @@ func (ctrl *Controller) HydrateChatHistoryHandler(c *gin.Context) {
 	messages := make([]llm2.Message, 0, len(req.Refs))
 	for _, ref := range req.Refs {
 		var content []llm2.ContentBlock
-		for _, blockId := range ref.BlockIds {
-			raw, ok := blockDataMap[blockId]
+		for _, blockKey := range ref.BlockKeys {
+			raw, ok := blockDataMap[blockKey]
 			if !ok {
 				content = append(content, llm2.ContentBlock{
-					Id:   blockId,
+					Id:   blockKey,
 					Type: llm2.ContentBlockTypeText,
-					Text: fmt.Sprintf("[hydrate error: missing block %s]", blockId),
+					Text: fmt.Sprintf("[hydrate error: missing block %s]", blockKey),
 				})
 				continue
 			}
@@ -83,9 +83,9 @@ func (ctrl *Controller) HydrateChatHistoryHandler(c *gin.Context) {
 			var block llm2.ContentBlock
 			if err := json.Unmarshal(raw, &block); err != nil {
 				content = append(content, llm2.ContentBlock{
-					Id:   blockId,
+					Id:   blockKey,
 					Type: llm2.ContentBlockTypeText,
-					Text: fmt.Sprintf("[hydrate error: malformed block %s: %v]", blockId, err),
+					Text: fmt.Sprintf("[hydrate error: malformed block %s: %v]", blockKey, err),
 				})
 				continue
 			}

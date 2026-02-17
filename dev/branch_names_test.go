@@ -78,7 +78,7 @@ func (s *BranchNameTestSuite) SetupTest() {
 	// Mock ChatHistoryActivities for llm2 path
 	var cha *persisted_ai.ChatHistoryActivities
 	s.env.OnActivity(cha.AppendMessage, mock.Anything, mock.Anything).Return(
-		&persisted_ai.MessageRef{BlockIds: []string{"mock-block"}, Role: "user"}, nil,
+		&persisted_ai.MessageRef{BlockKeys: []string{"mock-block"}, Role: "user"}, nil,
 	).Maybe()
 
 	// Mock git command to simulate existing branches

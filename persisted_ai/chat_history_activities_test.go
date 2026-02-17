@@ -241,8 +241,8 @@ func TestManageV3_PreservesRefsForUnchangedMessages(t *testing.T) {
 
 	// The middle message (index 1) should have preserved its ref block IDs
 	// (first and last get cache control changes, so their refs change)
-	assert.Equal(t, originalRefs[1].BlockIds, newRefs[1].BlockIds,
-		"unchanged middle message should preserve its block IDs")
+	assert.Equal(t, originalRefs[1].BlockKeys, newRefs[1].BlockKeys,
+		"unchanged middle message should preserve its block keys")
 }
 
 func TestManageV3_ChangesRefsForMarkerOnlyChanges(t *testing.T) {
@@ -289,8 +289,8 @@ func TestManageV3_ChangesRefsForMarkerOnlyChanges(t *testing.T) {
 
 	// First message still has ephemeral (it's the first message), so content is same
 	// But the second message now has ephemeral (it's the last), so it changed
-	assert.NotEqual(t, originalRefs[1].BlockIds, newRefs[1].BlockIds,
-		"message with marker change should get new block IDs")
+	assert.NotEqual(t, originalRefs[1].BlockKeys, newRefs[1].BlockKeys,
+		"message with marker change should get new block keys")
 }
 
 func TestManageV3_HydratingFromRefsRestoresMarkers(t *testing.T) {
@@ -445,8 +445,8 @@ func TestManageV3_DroppingOlderMessagesPreservesRetainedRefs(t *testing.T) {
 
 	// The last message in the result should have new refs (cache control added)
 	// but we verify that management completed successfully
-	assert.True(t, len(newRefs[len(newRefs)-1].BlockIds) > 0,
-		"last message should have block IDs")
+	assert.True(t, len(newRefs[len(newRefs)-1].BlockKeys) > 0,
+		"last message should have block keys")
 
 	// If any middle messages were retained, check if their refs were preserved
 	// by looking for matching block IDs between original and new refs
@@ -455,8 +455,8 @@ func TestManageV3_DroppingOlderMessagesPreservesRetainedRefs(t *testing.T) {
 		for i := 1; i < len(newRefs)-1; i++ {
 			// See if this ref matches any original middle ref
 			for j := 1; j < len(originalRefs)-1; j++ {
-				if len(newRefs[i].BlockIds) > 0 && len(originalRefs[j].BlockIds) > 0 {
-					if newRefs[i].BlockIds[0] == originalRefs[j].BlockIds[0] {
+				if len(newRefs[i].BlockKeys) > 0 && len(originalRefs[j].BlockKeys) > 0 {
+					if newRefs[i].BlockKeys[0] == originalRefs[j].BlockKeys[0] {
 						// Found a preserved ref - this is expected behavior
 						t.Logf("Middle message at new index %d preserved ref from original index %d", i, j)
 					}

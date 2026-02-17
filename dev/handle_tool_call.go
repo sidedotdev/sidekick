@@ -46,6 +46,7 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *per
 			result.Content = llm2.TextContentBlocks(err.Error())
 			result.Name = tc.Name
 			result.ToolCallId = tc.Id
+			ref = nil
 		}
 
 		results := cleanupWorkingDirFromResults(dCtx, []llm2.ToolResultBlock{result})
@@ -113,8 +114,8 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *per
 }
 
 // appendToolCallResult appends a tool call result to chat history. For pre-persisted
-// image results (with a non-nil ref), it appends the ref directly. For all other
-// results, it wraps them in a message and persists via addToolCallResponse.
+// results (with a non-nil ref), it appends the ref directly. Otherwise it wraps
+// and persists via addToolCallResponse.
 func appendToolCallResult(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, trb llm2.ToolResultBlock, ref *persisted_ai.MessageRef) {
 	if ref != nil {
 		if llm2History, ok := chatHistory.History.(*persisted_ai.Llm2ChatHistory); ok {
@@ -214,11 +215,11 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult llm2
 				var ria *ReadImageActivities
 				var output ReadImageOutput
 				actErr := workflow.ExecuteActivity(dCtx.Context, ria.ReadImageActivity, ReadImageInput{
-					FlowId:      flowId,
-					WorkspaceId: dCtx.WorkspaceId,
-					WorkDir:     dCtx.EnvContainer.Env.GetWorkingDirectory(),
-					FilePath:    params.FilePath,
-					ToolCallId:  toolCall.Id,
+					EnvContainer: *dCtx.EnvContainer,
+					FilePath:     params.FilePath,
+					FlowId:       flowId,
+					ToolCall:     &toolCall,
+					WorkspaceId:  dCtx.WorkspaceId,
 				}).Get(dCtx, &output)
 				if actErr != nil {
 					return "", actErr
