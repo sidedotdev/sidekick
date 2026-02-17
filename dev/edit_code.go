@@ -376,20 +376,16 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 		var toolCallResponses []llm2.ToolResultBlock
 		if len(chatResponse.GetMessage().GetToolCalls()) > 0 {
-			toolCallResponses = handleToolCalls(dCtx, chatResponse.GetMessage().GetToolCalls(), nil)
+			toolCallResponses = handleToolCalls(dCtx, chatResponse.GetMessage().GetToolCalls(), chatHistory, nil)
 		}
 
-		// Add tool call responses to history
 		for _, toolCallResponse := range toolCallResponses {
-			// Reset feedback counter if this was a getHelpOrInput response
 			if toolCallResponse.Name == getHelpOrInputTool.Name {
 				attemptsSinceLastEditBlockOrFeedback = 0
 			}
-			// dynamically adjust the context size extension based on the length of the response
 			if len(toolCallResponse.TextContent()) > 5000 {
 				contextSizeExtension += len(toolCallResponse.TextContent()) - 5000
 			}
-			addToolCallResponse(dCtx, chatHistory, toolCallResponse)
 		}
 
 		// keep loop going if we failed to apply edit blocks, with feedback hints

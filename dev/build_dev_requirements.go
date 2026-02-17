@@ -374,11 +374,9 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 			},
 		}
 
-		toolCallResults := handleToolCalls(iteration.ExecCtx, chatResponse.GetMessage().GetToolCalls(), customHandlers)
+		toolCallResults := handleToolCalls(iteration.ExecCtx, chatResponse.GetMessage().GetToolCalls(), iteration.ChatHistory, customHandlers)
 
 		for _, res := range toolCallResults {
-			addToolCallResponse(iteration.ExecCtx, iteration.ChatHistory, res)
-
 			if len(res.TextContent()) > 5000 {
 				state.contextSizeExtension += len(res.TextContent()) - 5000
 			}

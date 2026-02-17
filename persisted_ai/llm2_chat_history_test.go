@@ -1345,15 +1345,11 @@ func TestLlm2ChatHistory_PersistHydrate_PreservesContextMarkers(t *testing.T) {
 	assert.Equal(t, "ephemeral", messages[0].Content[0].CacheControl)
 }
 
-func TestLlm2ChatHistory_Hydrate_ResolvesKvImageURLs(t *testing.T) {
+func TestLlm2ChatHistory_Hydrate_ImageViaStandardStorageKey(t *testing.T) {
 	t.Parallel()
 
 	storage := newMockKeyValueStorage()
-
-	// Store a data URL in KV under a known key
 	_, testDataURL := llm2.GenerateVisionTestImage(4)
-	kvKey := "flow-kv:img:test-image-key"
-	storage.data[kvKey] = []byte(testDataURL)
 
 	h := NewLlm2ChatHistory("flow-kv", "workspace-kv")
 	h.Append(&llm2.Message{
@@ -1362,7 +1358,7 @@ func TestLlm2ChatHistory_Hydrate_ResolvesKvImageURLs(t *testing.T) {
 			{Type: llm2.ContentBlockTypeText, Text: "What is in this image?"},
 			{
 				Type:  llm2.ContentBlockTypeImage,
-				Image: &llm2.ImageRef{Url: KvImagePrefix + kvKey},
+				Image: &llm2.ImageRef{Url: testDataURL},
 			},
 		},
 	})
@@ -1388,14 +1384,11 @@ func TestLlm2ChatHistory_Hydrate_ResolvesKvImageURLs(t *testing.T) {
 	assert.Equal(t, testDataURL, msgs[0].Content[1].Image.Url)
 }
 
-func TestLlm2ChatHistory_Hydrate_ResolvesKvImageInToolResult(t *testing.T) {
+func TestLlm2ChatHistory_Hydrate_ImageInToolResultViaStandardStorageKey(t *testing.T) {
 	t.Parallel()
 
 	storage := newMockKeyValueStorage()
-
 	_, testDataURL := llm2.GenerateVisionTestImage(4)
-	kvKey := "flow-kv:img:tool-result-image"
-	storage.data[kvKey] = []byte(testDataURL)
 
 	h := NewLlm2ChatHistory("flow-kv", "workspace-kv")
 	h.Append(&llm2.Message{
@@ -1410,7 +1403,7 @@ func TestLlm2ChatHistory_Hydrate_ResolvesKvImageInToolResult(t *testing.T) {
 						{Type: llm2.ContentBlockTypeText, Text: "Image loaded"},
 						{
 							Type:  llm2.ContentBlockTypeImage,
-							Image: &llm2.ImageRef{Url: KvImagePrefix + kvKey},
+							Image: &llm2.ImageRef{Url: testDataURL},
 						},
 					},
 				},
@@ -1440,7 +1433,7 @@ func TestLlm2ChatHistory_Hydrate_ResolvesKvImageInToolResult(t *testing.T) {
 	assert.Equal(t, testDataURL, msgs[0].Content[0].ToolResult.Content[1].Image.Url)
 }
 
-func TestLlm2ChatHistory_Hydrate_NoKvURLsIsNoOp(t *testing.T) {
+func TestLlm2ChatHistory_Hydrate_TextOnlyMessage(t *testing.T) {
 	t.Parallel()
 
 	storage := newMockKeyValueStorage()

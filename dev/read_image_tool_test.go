@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
@@ -152,16 +153,26 @@ func TestReadImageActivity_Success(t *testing.T) {
 		WorkspaceId: "ws-456",
 		WorkDir:     workDir,
 		FilePath:    "test.png",
+		ToolCallId:  "call-abc",
 	}
 
 	output, err := activities.ReadImageActivity(context.Background(), input)
 	require.NoError(t, err)
 	require.NotNil(t, output)
-	assert.True(t, strings.HasPrefix(output.Key, "flow-123:img:"))
 
-	stored := storage.data[output.Key]
-	require.NotNil(t, stored)
-	assert.True(t, strings.HasPrefix(string(stored), "data:image/"))
+	ref := output.Ref
+	assert.Equal(t, "user", ref.Role)
+	require.Len(t, ref.BlockIds, 1)
+
+	// Verify content block was stored under the standard msg namespace
+	key := "flow-123:msg:" + ref.BlockIds[0]
+	stored := storage.data[key]
+	require.NotNil(t, stored, "content block should be stored under {flowId}:msg:{blockId}")
+
+	// Verify the stored block is a tool result with text + image
+	var block map[string]interface{}
+	require.NoError(t, json.Unmarshal(stored, &block))
+	assert.Equal(t, "tool_result", block["type"])
 }
 
 func TestReadImageActivity_PathTraversal(t *testing.T) {
@@ -177,6 +188,7 @@ func TestReadImageActivity_PathTraversal(t *testing.T) {
 		WorkspaceId: "ws-456",
 		WorkDir:     workDir,
 		FilePath:    "../escape.png",
+		ToolCallId:  "call-abc",
 	}
 
 	_, err := activities.ReadImageActivity(context.Background(), input)
@@ -197,6 +209,7 @@ func TestReadImageActivity_AbsolutePath(t *testing.T) {
 		WorkspaceId: "ws-456",
 		WorkDir:     workDir,
 		FilePath:    "/etc/passwd",
+		ToolCallId:  "call-abc",
 	}
 
 	_, err := activities.ReadImageActivity(context.Background(), input)
@@ -219,6 +232,7 @@ func TestReadImageActivity_NotAnImage(t *testing.T) {
 		WorkspaceId: "ws-456",
 		WorkDir:     workDir,
 		FilePath:    "not_image.txt",
+		ToolCallId:  "call-abc",
 	}
 
 	_, err := activities.ReadImageActivity(context.Background(), input)
@@ -239,15 +253,10 @@ func TestReadImageActivity_FileNotFound(t *testing.T) {
 		WorkspaceId: "ws-456",
 		WorkDir:     workDir,
 		FilePath:    "nonexistent.png",
+		ToolCallId:  "call-abc",
 	}
 
 	_, err := activities.ReadImageActivity(context.Background(), input)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to read image file")
-}
-
-func TestBuildKvImageURL(t *testing.T) {
-	t.Parallel()
-	url := BuildKvImageURL("flow-1:img:abc123")
-	assert.Equal(t, "kv:flow-1:img:abc123", url)
 }

@@ -477,13 +477,12 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 			},
 		}
 
-		toolCallResponses := handleToolCalls(iteration.ExecCtx, chatResponse.GetMessage().GetToolCalls(), customHandlers)
+		toolCallResponses := handleToolCalls(iteration.ExecCtx, chatResponse.GetMessage().GetToolCalls(), iteration.ChatHistory, customHandlers)
 
 		for _, response := range toolCallResponses {
 			if len(response.TextContent()) > 5000 {
 				state.contextSizeExtension += len(response.TextContent()) - 5000
 			}
-			addToolCallResponse(iteration.ExecCtx, iteration.ChatHistory, response)
 			if response.Name == getHelpOrInputTool.Name {
 				iteration.AutoIterationCount = 0
 			}

@@ -289,10 +289,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to force searching repository: %v", err)
 			}
-			toolCallResults := handleToolCalls(actionCtx.DevContext, toolCalls, nil)
-			for _, trb := range toolCallResults {
-				addCodeContextToolResult(actionCtx, chatHistory, trb)
-			}
+			handleToolCalls(actionCtx.DevContext, toolCalls, chatHistory, nil)
 		}
 
 		if attempts >= 17 {
