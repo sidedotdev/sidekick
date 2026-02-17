@@ -101,7 +101,6 @@ func (a *ReadImageActivities) ReadImageActivity(ctx context.Context, input ReadI
 			ToolCallId: input.ToolCallId,
 			Name:       readImageTool.Name,
 			Content: []llm2.ContentBlock{
-				{Type: llm2.ContentBlockTypeText, Text: "Image loaded successfully: " + input.FilePath},
 				{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: clampedURL}},
 			},
 		},
