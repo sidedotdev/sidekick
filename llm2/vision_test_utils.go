@@ -9,11 +9,15 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/adrg/strutil"
+	"github.com/adrg/strutil/metrics"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/gofont/gomonobold"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 )
+
+var visionLevenshtein = metrics.NewLevenshtein()
 
 // unambiguousChars excludes easily confused characters (0/O/Q, 1/l/I, 8/B, M/W, F/E).
 const unambiguousChars = "ACDGHJKLNPRSTUVXYZ2345679"
@@ -104,22 +108,24 @@ func VisionTestFuzzyMatch(expected, response string) bool {
 	if strings.Contains(resp, exp) {
 		return true
 	}
-	// Sliding window: find the best alignment of exp within resp.
-	maxMatches := 0
-	for i := 0; i <= len(resp)-len(exp); i++ {
-		matches := 0
-		for j := 0; j < len(exp); j++ {
-			if resp[i+j] == exp[j] {
-				matches++
+	// Allow at most 1 error per 6 expected characters.
+	allowedErrors := max(1, len(exp)/6)
+	minSimilarity := 1.0 - float64(allowedErrors)/float64(len(exp))
+	// Slide windows of varying length across resp and check similarity.
+	for winLen := max(1, len(exp)-allowedErrors); winLen <= len(exp)+allowedErrors; winLen++ {
+		for i := 0; i <= len(resp)-winLen; i++ {
+			if strutil.Similarity(exp, resp[i:i+winLen], visionLevenshtein) >= minSimilarity {
+				return true
 			}
 		}
-		if matches > maxMatches {
-			maxMatches = matches
+	}
+	// Also check the full response in case it's shorter than exp.
+	if len(resp) < len(exp) {
+		if strutil.Similarity(exp, resp, visionLevenshtein) >= minSimilarity {
+			return true
 		}
 	}
-	// Allow at most 1 mismatched character per 6 expected characters.
-	allowedErrors := max(1, len(exp)/6)
-	return maxMatches >= len(exp)-allowedErrors
+	return false
 }
 
 // GenerateVisionTestImage produces a random text string and a data URL of a
