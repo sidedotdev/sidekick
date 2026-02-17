@@ -2,7 +2,6 @@ package dev
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -10,12 +9,12 @@ import (
 	"strings"
 
 	"sidekick/common"
+	"sidekick/env"
 	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
 
 	"github.com/invopop/jsonschema"
-	"github.com/segmentio/ksuid"
 )
 
 const (
@@ -51,11 +50,11 @@ func supportsImageToolResults(config common.ModelConfig) bool {
 
 // ReadImageInput is the activity input for reading an image file and storing it in KV.
 type ReadImageInput struct {
-	FlowId      string `json:"flowId"`
-	WorkspaceId string `json:"workspaceId"`
-	WorkDir     string `json:"workDir"`
-	FilePath    string `json:"filePath"`
-	ToolCallId  string `json:"toolCallId"`
+	EnvContainer env.EnvContainer `json:"envContainer"`
+	FilePath     string           `json:"filePath"`
+	FlowId       string           `json:"flowId"`
+	ToolCall     *llm.ToolCall    `json:"toolCall,omitempty"`
+	WorkspaceId  string           `json:"workspaceId"`
 }
 
 // ReadImageOutput contains the persisted message ref for the image content block.
@@ -72,7 +71,8 @@ type ReadImageActivities struct {
 // builds a tool result content block, and persists it to KV using the standard
 // {flowId}:msg:{blockId} namespace so cascade delete handles cleanup.
 func (a *ReadImageActivities) ReadImageActivity(ctx context.Context, input ReadImageInput) (*ReadImageOutput, error) {
-	resolvedPath, err := validateImagePath(input.WorkDir, input.FilePath)
+	workDir := input.EnvContainer.Env.GetWorkingDirectory()
+	resolvedPath, err := validateImagePath(workDir, input.FilePath)
 	if err != nil {
 		return nil, err
 	}
@@ -94,37 +94,31 @@ func (a *ReadImageActivities) ReadImageActivity(ctx context.Context, input ReadI
 		return nil, fmt.Errorf("failed to prepare image for LLM limits: %w", err)
 	}
 
-	// Build a tool result content block containing text + image
-	block := llm2.ContentBlock{
-		Type: llm2.ContentBlockTypeToolResult,
-		ToolResult: &llm2.ToolResultBlock{
-			ToolCallId: input.ToolCallId,
-			Name:       readImageTool.Name,
-			Content: []llm2.ContentBlock{
-				{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: clampedURL}},
-			},
-		},
+	imageBlock := llm2.ContentBlock{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: clampedURL}}
+	finalBlock := imageBlock
+
+	if input.ToolCall != nil {
+		// Build a tool result content block wrapping the image
+		toolResultBlock := llm2.ToolResultBlock{
+			Name:    readImageTool.Name,
+			Content: []llm2.ContentBlock{imageBlock},
+		}
+		toolResultBlock.ToolCallId = input.ToolCall.Id
+		toolResultBlock.Name = input.ToolCall.Name
+		finalBlock = llm2.ContentBlock{
+			Type:       llm2.ContentBlockTypeToolResult,
+			ToolResult: &toolResultBlock,
+		}
 	}
 
-	blockId := ksuid.New().String()
-	blockBytes, err := json.Marshal(block)
+	ref, err := persisted_ai.PersistContentBlock(
+		ctx, a.Storage, input.FlowId, input.WorkspaceId, string(llm2.RoleUser), finalBlock,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal content block: %w", err)
+		return nil, fmt.Errorf("failed to persist content block: %w", err)
 	}
 
-	err = a.Storage.MSetRaw(ctx, input.WorkspaceId, map[string][]byte{
-		persisted_ai.StorageKey(input.FlowId, blockId): blockBytes,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to store image in KV: %w", err)
-	}
-
-	return &ReadImageOutput{
-		Ref: persisted_ai.MessageRef{
-			BlockIds: []string{blockId},
-			Role:     string(llm2.RoleUser),
-		},
-	}, nil
+	return &ReadImageOutput{Ref: *ref}, nil
 }
 
 // validateImagePath ensures the file path is safe: no ".." segments, not absolute,

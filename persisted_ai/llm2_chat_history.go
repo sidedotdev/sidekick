@@ -17,17 +17,115 @@ import (
 // For non-workflow code, this can use ksuid.New().String() directly.
 type BlockIdGenerator func() string
 
+const blockIdPrefix = "block_"
+
+// NewBlockId generates a new unique block ID with the standard prefix.
+func NewBlockId() string {
+	return blockIdPrefix + ksuid.New().String()
+}
+
 // NewKsuidGenerator returns a BlockIdGenerator that uses ksuid.New().
 func NewKsuidGenerator() BlockIdGenerator {
 	return func() string {
-		return ksuid.New().String()
+		return NewBlockId()
+	}
+}
+
+// MetadataNamespacePersistence is the namespace key for block persistence metadata.
+const MetadataNamespacePersistence = "persistence"
+
+// BlockMetadata provides access to the persisted block key for a
+// content block. Implementations live in persisted_ai (BasicBlockMetadata)
+// or in other packages that need custom metadata.
+type BlockMetadata interface {
+	GetBlockKey() string
+	SetBlockKey(key string)
+}
+
+// BasicBlockMetadata is the default BlockMetadata implementation.
+type BasicBlockMetadata struct {
+	BlockKey string `json:"blockKey,omitempty"`
+}
+
+func (m *BasicBlockMetadata) GetBlockKey() string    { return m.BlockKey }
+func (m *BasicBlockMetadata) SetBlockKey(key string) { m.BlockKey = key }
+
+// getBlockMetadata resolves the persistence metadata from a content block,
+// handling both the typed BlockMetadata case and the raw map[string]interface{}
+// case that results from JSON round-tripping.
+func getBlockMetadata(block llm2.ContentBlock) BlockMetadata {
+	if block.Metadata == nil {
+		return nil
+	}
+	raw := block.Metadata[MetadataNamespacePersistence]
+	if raw == nil {
+		return nil
+	}
+	if meta, ok := raw.(BlockMetadata); ok {
+		return meta
+	}
+	if m, ok := raw.(map[string]interface{}); ok {
+		key, _ := m["blockKey"].(string)
+		return &BasicBlockMetadata{BlockKey: key}
+	}
+	return nil
+}
+
+// GetBlockKey returns the persisted block key from a content block's
+// persistence metadata, or "" if none is set.
+func GetBlockKey(block llm2.ContentBlock) string {
+	if meta := getBlockMetadata(block); meta != nil {
+		return meta.GetBlockKey()
+	}
+	return ""
+}
+
+// SetBlockKey sets the persisted block key in a content block's
+// persistence metadata, initializing the metadata map if needed.
+func SetBlockKey(block *llm2.ContentBlock, key string) {
+	if block.Metadata == nil {
+		block.Metadata = make(map[string]any)
+	}
+	meta := getBlockMetadata(*block)
+	if meta == nil {
+		meta = &BasicBlockMetadata{}
+	}
+	meta.SetBlockKey(key)
+	block.Metadata[MetadataNamespacePersistence] = meta
+}
+
+// clearBlockKeys removes persistence block keys from all content blocks in a
+// message, so that Persist will re-store them.
+func clearBlockKeys(msg *llm2.Message) {
+	for i := range msg.Content {
+		if GetBlockKey(msg.Content[i]) != "" {
+			SetBlockKey(&msg.Content[i], "")
+		}
 	}
 }
 
 // MessageRef stores a reference to a message's content blocks in KV storage.
 type MessageRef struct {
-	BlockIds []string `json:"blockIds"`
-	Role     string   `json:"role"`
+	BlockKeys []string `json:"blockKeys"`
+	Role      string   `json:"role"`
+}
+
+// UnmarshalJSON supports both "blockKeys" and the legacy "blockIds" field.
+// TODO(temporary): remove "blockIds" fallback once all persisted data uses "blockKeys".
+func (r *MessageRef) UnmarshalJSON(data []byte) error {
+	type alias MessageRef
+	var raw struct {
+		alias
+		LegacyBlockIds []string `json:"blockIds"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*r = MessageRef(raw.alias)
+	if len(r.BlockKeys) == 0 && len(raw.LegacyBlockIds) > 0 {
+		r.BlockKeys = raw.LegacyBlockIds
+	}
+	return nil
 }
 
 // ChatHistory is an interface for managing chat message history.
@@ -240,6 +338,7 @@ func (h *Llm2ChatHistory) Set(index int, msg common.Message) {
 	}
 	if mp, ok := msg.(*llm2.Message); ok {
 		h.messages[index] = *mp
+		clearBlockKeys(&h.messages[index])
 		h.unpersisted = append(h.unpersisted, index)
 	}
 }
@@ -278,28 +377,28 @@ func (h *Llm2ChatHistory) Hydrate(ctx context.Context, storage common.KeyValueSt
 		for i, ref := range h.refs {
 			if i < len(h.messages) {
 				msg := h.messages[i]
-				for j, blockId := range ref.BlockIds {
+				for j, blockKey := range ref.BlockKeys {
 					if j < len(msg.Content) {
-						h.hydratedBlocks[blockId] = msg.Content[j]
+						h.hydratedBlocks[blockKey] = msg.Content[j]
 					}
 				}
 			}
 		}
 	}
 
-	// Collect missing block IDs and their storage keys
-	var missingBlockIds []string
+	// Collect missing block keys and their storage keys
+	var missingBlockKeys []string
 	var missingStorageKeys []string
 	for _, ref := range h.refs {
-		for _, blockId := range ref.BlockIds {
-			if _, ok := h.hydratedBlocks[blockId]; !ok {
-				missingBlockIds = append(missingBlockIds, blockId)
-				missingStorageKeys = append(missingStorageKeys, StorageKey(h.flowId, blockId))
+		for _, blockKey := range ref.BlockKeys {
+			if _, ok := h.hydratedBlocks[blockKey]; !ok {
+				missingBlockKeys = append(missingBlockKeys, blockKey)
+				missingStorageKeys = append(missingStorageKeys, StorageKey(h.flowId, blockKey))
 			}
 		}
 	}
 
-	if len(missingBlockIds) == 0 && len(h.refs) == 0 {
+	if len(missingBlockKeys) == 0 && len(h.refs) == 0 {
 		h.messages = []llm2.Message{}
 		h.hydrated = true
 		return nil
@@ -312,15 +411,15 @@ func (h *Llm2ChatHistory) Hydrate(ctx context.Context, storage common.KeyValueSt
 			return fmt.Errorf("failed to fetch content blocks: %w", err)
 		}
 
-		for i, blockId := range missingBlockIds {
+		for i, blockKey := range missingBlockKeys {
 			if i >= len(values) || values[i] == nil {
 				continue
 			}
 			var block llm2.ContentBlock
 			if err := json.Unmarshal(values[i], &block); err != nil {
-				return fmt.Errorf("failed to unmarshal content block %s: %w", blockId, err)
+				return fmt.Errorf("failed to unmarshal content block %s: %w", blockKey, err)
 			}
-			h.hydratedBlocks[blockId] = block
+			h.hydratedBlocks[blockKey] = block
 		}
 	}
 
@@ -329,10 +428,11 @@ func (h *Llm2ChatHistory) Hydrate(ctx context.Context, storage common.KeyValueSt
 	for i, ref := range h.refs {
 		h.messages[i] = llm2.Message{
 			Role:    llm2.Role(ref.Role),
-			Content: make([]llm2.ContentBlock, 0, len(ref.BlockIds)),
+			Content: make([]llm2.ContentBlock, 0, len(ref.BlockKeys)),
 		}
-		for _, blockId := range ref.BlockIds {
-			if block, ok := h.hydratedBlocks[blockId]; ok {
+		for _, blockKey := range ref.BlockKeys {
+			if block, ok := h.hydratedBlocks[blockKey]; ok {
+				SetBlockKey(&block, blockKey)
 				h.messages[i].Content = append(h.messages[i].Content, block)
 			}
 		}
@@ -373,21 +473,27 @@ func (h *Llm2ChatHistory) Persist(ctx context.Context, storage common.KeyValueSt
 		if idx < 0 || idx >= len(h.messages) {
 			continue
 		}
-		msg := h.messages[idx]
-		blockIds := make([]string, len(msg.Content))
-		for j, block := range msg.Content {
-			blockId := gen()
-			blockIds[j] = blockId
-			blockBytes, err := json.Marshal(block)
+		msg := &h.messages[idx]
+		blockKeys := make([]string, len(msg.Content))
+		for j := range msg.Content {
+			block := &msg.Content[j]
+			if existingKey := GetBlockKey(*block); existingKey != "" {
+				blockKeys[j] = existingKey
+				continue
+			}
+			blockKey := gen()
+			blockKeys[j] = blockKey
+			SetBlockKey(block, blockKey)
+			blockBytes, err := json.Marshal(*block)
 			if err != nil {
 				return fmt.Errorf("failed to marshal content block: %w", err)
 			}
-			storageValues[StorageKey(h.flowId, blockId)] = blockBytes
-			h.hydratedBlocks[blockId] = block
+			storageValues[StorageKey(h.flowId, blockKey)] = blockBytes
+			h.hydratedBlocks[blockKey] = *block
 		}
 		h.refs[idx] = MessageRef{
-			BlockIds: blockIds,
-			Role:     string(msg.Role),
+			BlockKeys: blockKeys,
+			Role:      string(msg.Role),
 		}
 	}
 
@@ -467,8 +573,8 @@ func (h *Llm2ChatHistory) Refs() []MessageRef {
 	result := make([]MessageRef, len(h.refs))
 	for i, ref := range h.refs {
 		result[i] = MessageRef{
-			BlockIds: append([]string(nil), ref.BlockIds...),
-			Role:     ref.Role,
+			BlockKeys: append([]string(nil), ref.BlockKeys...),
+			Role:      ref.Role,
 		}
 	}
 	return result
@@ -486,9 +592,9 @@ func (h *Llm2ChatHistory) SetRefs(refs []MessageRef) {
 		for i, ref := range h.refs {
 			if i < len(h.messages) {
 				msg := h.messages[i]
-				for j, blockId := range ref.BlockIds {
+				for j, blockKey := range ref.BlockKeys {
 					if j < len(msg.Content) {
-						h.hydratedBlocks[blockId] = msg.Content[j]
+						h.hydratedBlocks[blockKey] = msg.Content[j]
 					}
 				}
 			}
@@ -502,7 +608,8 @@ func (h *Llm2ChatHistory) SetRefs(refs []MessageRef) {
 }
 
 // SetMessages replaces all messages in the history with the provided slice.
-// All messages are marked as unpersisted.
+// All messages are marked as unpersisted and block refs are cleared so that
+// Persist will re-store the (potentially modified) content.
 func (h *Llm2ChatHistory) SetMessages(messages []llm2.Message) {
 	if !h.hydrated {
 		panic("cannot set messages on non-hydrated Llm2ChatHistory")
@@ -512,6 +619,7 @@ func (h *Llm2ChatHistory) SetMessages(messages []llm2.Message) {
 	h.unpersisted = make([]int, len(messages))
 	for i := range messages {
 		h.unpersisted[i] = i
+		clearBlockKeys(&h.messages[i])
 	}
 }
 
@@ -536,9 +644,9 @@ func (h *Llm2ChatHistory) SetHydratedWithMessages(messages []llm2.Message) {
 	if len(h.messages) == len(h.refs) {
 		for i, ref := range h.refs {
 			msg := h.messages[i]
-			for j, blockId := range ref.BlockIds {
+			for j, blockKey := range ref.BlockKeys {
 				if j < len(msg.Content) {
-					h.hydratedBlocks[blockId] = msg.Content[j]
+					h.hydratedBlocks[blockKey] = msg.Content[j]
 				}
 			}
 		}
@@ -573,8 +681,8 @@ func normalizeBlockId(blockId string) string {
 // completed or been terminated. See normalizeBlockId.
 func (h *Llm2ChatHistory) NormalizeBlockIds() {
 	for i, ref := range h.refs {
-		for j, blockId := range ref.BlockIds {
-			h.refs[i].BlockIds[j] = normalizeBlockId(blockId)
+		for j, blockKey := range ref.BlockKeys {
+			h.refs[i].BlockKeys[j] = normalizeBlockId(blockKey)
 		}
 	}
 	// Re-key the cache under normalized IDs

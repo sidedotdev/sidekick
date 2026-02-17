@@ -175,9 +175,9 @@ func TestLlm2ChatHistory_MarshalJSON_ProducesWrapperFormat(t *testing.T) {
 	assert.Equal(t, "llm2", wrapper.Type)
 	assert.Len(t, wrapper.Refs, 2)
 	assert.Equal(t, "user", wrapper.Refs[0].Role)
-	assert.NotEmpty(t, wrapper.Refs[0].BlockIds)
+	assert.NotEmpty(t, wrapper.Refs[0].BlockKeys)
 	assert.Equal(t, "assistant", wrapper.Refs[1].Role)
-	assert.NotEmpty(t, wrapper.Refs[1].BlockIds)
+	assert.NotEmpty(t, wrapper.Refs[1].BlockKeys)
 
 	// Verify flowId and workspaceId are in the JSON
 	jsonStr := string(data)
@@ -198,8 +198,8 @@ func TestLlm2ChatHistory_UnmarshalJSON_SetsNotHydrated(t *testing.T) {
 	}{
 		Type: "llm2",
 		Refs: []MessageRef{
-			{BlockIds: []string{"block-1"}, Role: "user"},
-			{BlockIds: []string{"block-2"}, Role: "assistant"},
+			{BlockKeys: []string{"block-1"}, Role: "user"},
+			{BlockKeys: []string{"block-2"}, Role: "assistant"},
 		},
 		FlowId:      "flow-123",
 		WorkspaceId: "workspace-456",
@@ -255,8 +255,8 @@ func TestLlm2ChatHistory_Hydrate_RestoresContent(t *testing.T) {
 		flowId:      "flow-123",
 		workspaceId: "workspace-456",
 		refs: []MessageRef{
-			{BlockIds: []string{"block-1"}, Role: "user"},
-			{BlockIds: []string{"block-2"}, Role: "assistant"},
+			{BlockKeys: []string{"block-1"}, Role: "user"},
+			{BlockKeys: []string{"block-2"}, Role: "assistant"},
 		},
 		hydrated: false,
 	}
@@ -321,9 +321,9 @@ func TestLlm2ChatHistory_Persist_StoresContentBlocks(t *testing.T) {
 	// Verify refs were updated
 	assert.Len(t, h.refs, 2)
 	assert.Equal(t, "user", h.refs[0].Role)
-	assert.Len(t, h.refs[0].BlockIds, 2)
+	assert.Len(t, h.refs[0].BlockKeys, 2)
 	assert.Equal(t, "assistant", h.refs[1].Role)
-	assert.Len(t, h.refs[1].BlockIds, 1)
+	assert.Len(t, h.refs[1].BlockKeys, 1)
 
 	// Verify content was stored
 	assert.Len(t, storage.data, 3)
@@ -570,7 +570,7 @@ func TestLlm2ChatHistory_AccessorsPanicWhenNotHydrated(t *testing.T) {
 	h := &Llm2ChatHistory{
 		hydrated: false,
 		refs: []MessageRef{
-			{BlockIds: []string{"block-1"}, Role: "user"},
+			{BlockKeys: []string{"block-1"}, Role: "user"},
 		},
 	}
 
@@ -612,8 +612,8 @@ func TestChatHistoryContainer_UnmarshalJSON_DetectsLlm2Format(t *testing.T) {
 	}{
 		Type: "llm2",
 		Refs: []MessageRef{
-			{BlockIds: []string{"block-1", "block-2"}, Role: "user"},
-			{BlockIds: []string{"block-3"}, Role: "assistant"},
+			{BlockKeys: []string{"block-1", "block-2"}, Role: "user"},
+			{BlockKeys: []string{"block-3"}, Role: "assistant"},
 		},
 	}
 	data, err := json.Marshal(wrapper)
@@ -784,8 +784,8 @@ func TestLlm2ChatHistory_Hydrate_MultipleBlocksPerMessage(t *testing.T) {
 		flowId:      "flow-123",
 		workspaceId: "workspace-456",
 		refs: []MessageRef{
-			{BlockIds: []string{"block-1", "block-2"}, Role: "user"},
-			{BlockIds: []string{"block-3"}, Role: "assistant"},
+			{BlockKeys: []string{"block-1", "block-2"}, Role: "user"},
+			{BlockKeys: []string{"block-3"}, Role: "assistant"},
 		},
 		hydrated: false,
 	}
@@ -812,7 +812,7 @@ func TestLlm2ChatHistory_Hydrate_PreservesFlowId(t *testing.T) {
 		flowId:      "flow-123",
 		workspaceId: "workspace-456",
 		refs: []MessageRef{
-			{BlockIds: []string{"block-1"}, Role: "user"},
+			{BlockKeys: []string{"block-1"}, Role: "user"},
 		},
 		hydrated: false,
 	}
@@ -835,11 +835,11 @@ func TestLlm2ChatHistory_Refs_ReturnsDefensiveCopy(t *testing.T) {
 	require.Len(t, refs, 1)
 
 	// Modify the returned refs
-	refs[0].BlockIds[0] = "modified-block"
+	refs[0].BlockKeys[0] = "modified-block"
 
 	// Original refs should be unchanged
 	originalRefs := h.Refs()
-	assert.NotEqual(t, "modified-block", originalRefs[0].BlockIds[0])
+	assert.NotEqual(t, "modified-block", originalRefs[0].BlockKeys[0])
 }
 
 func TestLlm2ChatHistory_SetRefs_MarksNotHydrated(t *testing.T) {
@@ -849,7 +849,7 @@ func TestLlm2ChatHistory_SetRefs_MarksNotHydrated(t *testing.T) {
 	assert.True(t, h.IsHydrated())
 
 	newRefs := []MessageRef{
-		{BlockIds: []string{"new-block-1"}, Role: "user"},
+		{BlockKeys: []string{"new-block-1"}, Role: "user"},
 	}
 	h.SetRefs(newRefs)
 
@@ -878,7 +878,7 @@ func TestLlm2ChatHistory_SetRefs_CachesExistingBlocks(t *testing.T) {
 
 	newRefs := []MessageRef{
 		originalRefs[1], // Reuse second message's ref
-		{BlockIds: []string{"new-block-id"}, Role: "user"},
+		{BlockKeys: []string{"new-block-id"}, Role: "user"},
 	}
 	h.SetRefs(newRefs)
 
@@ -918,14 +918,14 @@ func TestLlm2ChatHistory_Hydrate_OnlyFetchesMissingBlocks(t *testing.T) {
 
 	// Manually set refs to match the blocks (bare IDs)
 	h.refs = []MessageRef{
-		{BlockIds: []string{"block-1"}, Role: "user"},
-		{BlockIds: []string{"block-2"}, Role: "assistant"},
+		{BlockKeys: []string{"block-1"}, Role: "user"},
+		{BlockKeys: []string{"block-2"}, Role: "assistant"},
 	}
 
 	// SetRefs to a new set that reuses block-2 and adds block-3
 	newRefs := []MessageRef{
-		{BlockIds: []string{"block-2"}, Role: "assistant"},
-		{BlockIds: []string{"block-3"}, Role: "user"},
+		{BlockKeys: []string{"block-2"}, Role: "assistant"},
+		{BlockKeys: []string{"block-3"}, Role: "user"},
 	}
 	h.SetRefs(newRefs)
 
@@ -957,7 +957,7 @@ func TestLlm2ChatHistory_Persist_PopulatesCache(t *testing.T) {
 
 	refs := h.Refs()
 	require.Len(t, refs, 1)
-	require.Len(t, refs[0].BlockIds, 1)
+	require.Len(t, refs[0].BlockKeys, 1)
 
 	// SetRefs to the same refs (simulating workflow receiving refs back)
 	h.SetRefs(refs)
@@ -1010,8 +1010,8 @@ func TestLlm2ChatHistory_Persist_UsesDeterministicGenerator(t *testing.T) {
 	require.Len(t, refs, 2)
 
 	// Refs contain bare block IDs (no flow prefix)
-	assert.Equal(t, "id-1", refs[0].BlockIds[0])
-	assert.Equal(t, "id-2", refs[1].BlockIds[0])
+	assert.Equal(t, "id-1", refs[0].BlockKeys[0])
+	assert.Equal(t, "id-2", refs[1].BlockKeys[0])
 
 	// Storage keys include the flow prefix
 	_, ok := storage.data["flow-123:msg:id-1"]
@@ -1020,7 +1020,7 @@ func TestLlm2ChatHistory_Persist_UsesDeterministicGenerator(t *testing.T) {
 	assert.True(t, ok, "expected block id-2 to exist in storage with flow prefix")
 }
 
-func TestLlm2ChatHistory_Persist_BlockIdsDoNotContainMessageIndex(t *testing.T) {
+func TestLlm2ChatHistory_Persist_BlockKeysDoNotContainMessageIndex(t *testing.T) {
 	t.Parallel()
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
 	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "First"}}})
@@ -1033,16 +1033,16 @@ func TestLlm2ChatHistory_Persist_BlockIdsDoNotContainMessageIndex(t *testing.T) 
 
 	refs := h.Refs()
 	for _, ref := range refs {
-		for _, blockId := range ref.BlockIds {
-			// Bare block IDs should not contain any ":" prefix
-			assert.False(t, strings.Contains(blockId, ":"),
-				"block ID should be a bare identifier without any prefix")
-			assert.NotEmpty(t, blockId)
+		for _, blockKey := range ref.BlockKeys {
+			// Bare block keys should not contain any ":" prefix
+			assert.False(t, strings.Contains(blockKey, ":"),
+				"block key should be a bare identifier without any prefix")
+			assert.NotEmpty(t, blockKey)
 		}
 	}
 }
 
-func TestLlm2ChatHistory_Persist_ModifiedMessageGetsNewBlockIds(t *testing.T) {
+func TestLlm2ChatHistory_Persist_ModifiedMessageGetsNewBlockKeys(t *testing.T) {
 	t.Parallel()
 	h := NewLlm2ChatHistory("flow-123", "workspace-456")
 	h.Append(&llm2.Message{Role: llm2.RoleUser, Content: []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: "Original"}}})
@@ -1060,7 +1060,7 @@ func TestLlm2ChatHistory_Persist_ModifiedMessageGetsNewBlockIds(t *testing.T) {
 
 	originalRefs := h.Refs()
 	require.Len(t, originalRefs, 1)
-	originalBlockId := originalRefs[0].BlockIds[0]
+	originalBlockId := originalRefs[0].BlockKeys[0]
 	assert.Equal(t, "id-1", originalBlockId)
 
 	// Modify the message via Set
@@ -1072,7 +1072,7 @@ func TestLlm2ChatHistory_Persist_ModifiedMessageGetsNewBlockIds(t *testing.T) {
 
 	newRefs := h.Refs()
 	require.Len(t, newRefs, 1)
-	newBlockId := newRefs[0].BlockIds[0]
+	newBlockId := newRefs[0].BlockKeys[0]
 
 	// New block ID should be different from original
 	assert.NotEqual(t, originalBlockId, newBlockId)
@@ -1108,7 +1108,7 @@ func TestLlm2ChatHistory_Persist_SetFlowIdUsesNewNamespace(t *testing.T) {
 	require.NoError(t, err)
 
 	originalRefs := h.Refs()
-	assert.Equal(t, "id-1", originalRefs[0].BlockIds[0])
+	assert.Equal(t, "id-1", originalRefs[0].BlockKeys[0])
 
 	// Storage key uses the old flow prefix
 	_, ok := storage.data["old-flow:msg:id-1"]
@@ -1123,8 +1123,8 @@ func TestLlm2ChatHistory_Persist_SetFlowIdUsesNewNamespace(t *testing.T) {
 	require.NoError(t, err)
 
 	newRefs := h.Refs()
-	// Ref block IDs remain bare
-	assert.Equal(t, "id-2", newRefs[0].BlockIds[0])
+	// Ref block keys remain bare
+	assert.Equal(t, "id-2", newRefs[0].BlockKeys[0])
 	// But storage key uses new flow prefix
 	_, ok = storage.data["new-flow:msg:id-2"]
 	assert.True(t, ok, "block should be stored under new flow prefix")
@@ -1154,11 +1154,11 @@ func TestLlm2ChatHistory_Persist_RefsConsistentWithMessages(t *testing.T) {
 		msg := messages[idx]
 		// Role should match
 		assert.Equal(t, string(msg.Role), ref.Role)
-		// Number of block IDs should match number of content blocks
-		assert.Equal(t, len(msg.Content), len(ref.BlockIds))
-		// All block IDs should be non-empty
-		for _, blockId := range ref.BlockIds {
-			assert.NotEmpty(t, blockId)
+		// Number of block keys should match number of content blocks
+		assert.Equal(t, len(msg.Content), len(ref.BlockKeys))
+		// All block keys should be non-empty
+		for _, blockKey := range ref.BlockKeys {
+			assert.NotEmpty(t, blockKey)
 		}
 	}
 }
@@ -1185,10 +1185,10 @@ func TestLlm2ChatHistory_Persist_StoredBlocksDeserializeCorrectly(t *testing.T) 
 	require.NoError(t, err)
 
 	refs := h.Refs()
-	blockId := refs[0].BlockIds[0]
+	blockKey := refs[0].BlockKeys[0]
 
 	// Storage key is flow-prefixed
-	storedData := storage.data[StorageKey("flow-123", blockId)]
+	storedData := storage.data[StorageKey("flow-123", blockKey)]
 	var retrievedBlock llm2.ContentBlock
 	err = json.Unmarshal(storedData, &retrievedBlock)
 	require.NoError(t, err)

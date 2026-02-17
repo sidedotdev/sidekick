@@ -91,7 +91,7 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 		},
 	).Maybe()
 	s.env.OnActivity(cha.AppendMessage, mock.Anything, mock.Anything).Return(
-		&persisted_ai.MessageRef{BlockIds: []string{"mock-block"}, Role: "user"}, nil,
+		&persisted_ai.MessageRef{BlockKeys: []string{"mock-block"}, Role: "user"}, nil,
 	).Maybe()
 	s.env.OnActivity(cha.ExtractVisibleCodeBlocks, mock.Anything, mock.Anything).Return(
 		[]tree_sitter.CodeBlock{}, nil,

@@ -794,7 +794,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesManageV3
 
 	// ManageV3 returns refs-only (simulating JSON marshaling)
 	managedRefs := []persisted_ai.MessageRef{
-		{BlockIds: []string{"block-managed"}, Role: "user"},
+		{BlockKeys: []string{"block-managed"}, Role: "user"},
 	}
 	managedRefsJSON, _ := json.Marshal(map[string]interface{}{
 		"type":   "llm2",
@@ -823,7 +823,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesManageV3
 	llm2Hist := managedChatHistory.History.(*persisted_ai.Llm2ChatHistory)
 	refs := llm2Hist.Refs()
 	s.Equal(1, len(refs))
-	s.Equal("block-managed", refs[0].BlockIds[0])
+	s.Equal("block-managed", refs[0].BlockKeys[0])
 }
 
 // Test_ManageChatHistory_V3_HydratesAfterManagement tests that the v3 path
@@ -852,8 +852,8 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_HydratesA
 
 	// ManageV3 returns refs-only (simulating what happens after JSON marshaling)
 	managedRefs := []persisted_ai.MessageRef{
-		{BlockIds: []string{"block-1"}, Role: "user"},
-		{BlockIds: []string{"block-2"}, Role: "assistant"},
+		{BlockKeys: []string{"block-1"}, Role: "user"},
+		{BlockKeys: []string{"block-2"}, Role: "assistant"},
 	}
 	managedRefsJSON, _ := json.Marshal(map[string]interface{}{
 		"type":   "llm2",
@@ -880,8 +880,8 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_HydratesA
 	llm2Hist := result.History.(*persisted_ai.Llm2ChatHistory)
 	refs := llm2Hist.Refs()
 	s.Equal(2, len(refs))
-	s.Equal("block-1", refs[0].BlockIds[0])
-	s.Equal("block-2", refs[1].BlockIds[0])
+	s.Equal("block-1", refs[0].BlockKeys[0])
+	s.Equal("block-2", refs[1].BlockKeys[0])
 }
 
 // Test_ManageChatHistory_V3_ReusesHydratedBlocks tests that ManageV3 correctly
@@ -889,9 +889,9 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_HydratesA
 // The workflow never hydrates; all hydration happens inside the ManageV3 activity.
 func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_ReusesHydratedBlocks() {
 	existingRefs := []persisted_ai.MessageRef{
-		{BlockIds: []string{"existing-block-1"}, Role: "user"},
-		{BlockIds: []string{"existing-block-2"}, Role: "assistant"},
-		{BlockIds: []string{"existing-block-3"}, Role: "user"},
+		{BlockKeys: []string{"existing-block-1"}, Role: "user"},
+		{BlockKeys: []string{"existing-block-2"}, Role: "assistant"},
+		{BlockKeys: []string{"existing-block-3"}, Role: "user"},
 	}
 	existingRefsJSON, _ := json.Marshal(map[string]interface{}{
 		"type":        "llm2",
@@ -911,8 +911,8 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_ReusesHyd
 	// - Second message keeps its existing block ID (unchanged)
 	// - Third message has a new block ID (marker changed)
 	managedRefs := []persisted_ai.MessageRef{
-		{BlockIds: []string{"existing-block-2"}, Role: "assistant"},
-		{BlockIds: []string{"new-block-3"}, Role: "user"},
+		{BlockKeys: []string{"existing-block-2"}, Role: "assistant"},
+		{BlockKeys: []string{"new-block-3"}, Role: "user"},
 	}
 	managedRefsJSON, _ := json.Marshal(map[string]interface{}{
 		"type":        "llm2",
@@ -939,8 +939,8 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_ReusesHyd
 	llm2Hist := result.History.(*persisted_ai.Llm2ChatHistory)
 	refs := llm2Hist.Refs()
 	s.Equal(2, len(refs))
-	s.Equal("existing-block-2", refs[0].BlockIds[0])
-	s.Equal("new-block-3", refs[1].BlockIds[0])
+	s.Equal("existing-block-2", refs[0].BlockKeys[0])
+	s.Equal("new-block-3", refs[1].BlockKeys[0])
 }
 
 // hydrationVerifyResult is used to return verification results from the workflow
@@ -969,7 +969,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V3_VerifiesR
 	s.env.OnActivity(ka.MSetRaw, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	managedRefs := []persisted_ai.MessageRef{
-		{BlockIds: []string{"block-1"}, Role: "user"},
+		{BlockKeys: []string{"block-1"}, Role: "user"},
 	}
 	managedRefsJSON, _ := json.Marshal(map[string]interface{}{
 		"type":   "llm2",
