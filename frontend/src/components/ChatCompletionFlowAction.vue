@@ -50,6 +50,11 @@
                 <pre v-else v-text="getTextBlockText(block)"></pre>
               </div>
 
+              <!-- image block -->
+              <div v-else-if="block.type === 'image' && block.image?.url" class="llm2-image-block">
+                <img :src="block.image.url" class="llm2-image" />
+              </div>
+
               <!-- tool_use block -->
               <div v-else-if="block.type === 'tool_use' && getToolUseBlock(block)" class="llm2-tool-use-block message-function-call">
                 Tool Call: <span class="message-function-call-name">{{ getToolUseBlock(block)!.name }}</span>
@@ -145,6 +150,9 @@
           <template v-for="(block, blockIndex) in llm2ResponseBlocks" :key="blockIndex">
             <div v-if="block.type === 'text' && block.text" class="llm2-text-block">
               <vue-markdown :options="{ breaks: true }" :source="block.text" class="message-content markdown"/>
+            </div>
+            <div v-else-if="block.type === 'image' && block.image?.url" class="llm2-image-block">
+              <img :src="block.image.url" class="llm2-image" />
             </div>
             <div v-else-if="block.type === 'tool_use' && block.toolUse" class="llm2-tool-use-block">
               <p class="action-result-function-name">Tool Call: {{ block.toolUse.name }}</p>
@@ -520,6 +528,16 @@ function toggleMessage(index: number) {
 
 .tool-result-image {
   max-width: 100%;
+  margin: 0.5em 0;
+}
+
+.llm2-image-block {
+  margin-bottom: 0.5rem;
+}
+
+.llm2-image {
+  max-width: 100%;
+  border-radius: 4px;
   margin: 0.5em 0;
 }
 
