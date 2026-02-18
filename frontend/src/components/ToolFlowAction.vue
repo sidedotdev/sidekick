@@ -7,7 +7,14 @@
       <template v-if="contentBlocks && contentBlocks.length > 0">
         <template v-for="(block, idx) in contentBlocks" :key="idx">
           <pre v-if="block.type === 'text' && block.text" class="tool-result-text">{{ block.text }}</pre>
-          <img v-else-if="block.type === 'image' && block.image?.url" :src="block.image.url" class="tool-result-image" />
+          <ImagePreview v-else-if="block.type === 'image' && block.image?.url" :src="block.image.url" />
+          <div v-else-if="block.type === 'tool_result' && block.toolResult?.content?.length" class="nested-tool-result">
+            <template v-for="(nested, nIdx) in block.toolResult.content" :key="nIdx">
+              <pre v-if="nested.type === 'text' && nested.text" class="tool-result-text">{{ nested.text }}</pre>
+              <ImagePreview v-else-if="nested.type === 'image' && nested.image?.url" :src="nested.image.url" />
+              <JsonTree v-else :deep="0" :data="nested" />
+            </template>
+          </div>
           <JsonTree v-else :deep="0" :data="block" />
         </template>
       </template>
@@ -20,6 +27,7 @@
 import { computed } from 'vue';
 import type { FlowAction, Llm2ContentBlock } from '../lib/models';
 import JsonTree from './JsonTree.vue'
+import ImagePreview from './ImagePreview.vue'
 
 const props = defineProps<{
   flowAction: FlowAction,
@@ -61,8 +69,4 @@ const toolResponse = computed<string | null>(() => {
   margin-top: 10px;
 }
 
-.tool-result-image {
-  max-width: 100%;
-  margin: 0.5em 0;
-}
 </style>

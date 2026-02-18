@@ -50,6 +50,11 @@
                 <pre v-else v-text="getTextBlockText(block)"></pre>
               </div>
 
+              <!-- image block -->
+              <div v-else-if="block.type === 'image' && block.image?.url" class="llm2-image-block">
+                <ImagePreview :src="block.image.url" />
+              </div>
+
               <!-- tool_use block -->
               <div v-else-if="block.type === 'tool_use' && getToolUseBlock(block)" class="llm2-tool-use-block message-function-call">
                 Tool Call: <span class="message-function-call-name">{{ getToolUseBlock(block)!.name }}</span>
@@ -65,7 +70,7 @@
                 <template v-if="getToolResultBlock(block)!.content && getToolResultBlock(block)!.content!.length > 0">
                   <template v-for="(contentBlock, cbIdx) in getToolResultBlock(block)!.content" :key="cbIdx">
                     <pre v-if="contentBlock.type === 'text' && contentBlock.text" class="tool-result-text">{{ contentBlock.text }}</pre>
-                    <img v-else-if="contentBlock.type === 'image' && contentBlock.image?.url" :src="contentBlock.image.url" class="tool-result-image" />
+                    <ImagePreview v-else-if="contentBlock.type === 'image' && contentBlock.image?.url" :src="contentBlock.image.url" />
                     <JsonTree v-else :deep="jsonTreeDepth" :data="contentBlock" />
                   </template>
                 </template>
@@ -146,6 +151,9 @@
             <div v-if="block.type === 'text' && block.text" class="llm2-text-block">
               <vue-markdown :options="{ breaks: true }" :source="block.text" class="message-content markdown"/>
             </div>
+            <div v-else-if="block.type === 'image' && block.image?.url" class="llm2-image-block">
+              <ImagePreview :src="block.image.url" />
+            </div>
             <div v-else-if="block.type === 'tool_use' && block.toolUse" class="llm2-tool-use-block">
               <p class="action-result-function-name">Tool Call: {{ block.toolUse.name }}</p>
               <JsonTree :deep="jsonTreeDepth" :data="parseLlm2ToolArguments(block.toolUse.arguments)" class="action-result-function-args"/>
@@ -189,6 +197,7 @@ import type { ChatCompletionChoice, ChatCompletionMessage, FlowAction, Usage, St
 import { isLlm2ChatHistoryWrapper } from '../lib/models';
 import { computed, ref, watch } from 'vue'
 import JsonTree from './JsonTree.vue'
+import ImagePreview from './ImagePreview.vue'
 import VueMarkdown from 'vue-markdown-render'
 
 const props = defineProps({
@@ -518,9 +527,9 @@ function toggleMessage(index: number) {
   word-break: break-word;
 }
 
-.tool-result-image {
-  max-width: 100%;
-  margin: 0.5em 0;
+
+.llm2-image-block {
+  margin-bottom: 0.5rem;
 }
 
 .llm2-unknown-block {
