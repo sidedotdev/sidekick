@@ -592,7 +592,11 @@ func feedbackFromApplyEditBlockReports(reports []ApplyEditBlockReport) string {
 		} else if !report.DidApply {
 			messages = append(messages, fmt.Sprintf("- edit_block:%d application failed due to unknown reasons", seqNum))
 		} else {
-			messages = append(messages, fmt.Sprintf("- edit_block:%d application succeeded", seqNum))
+			msg := fmt.Sprintf("- edit_block:%d application succeeded", seqNum)
+			if report.CheckWarning != "" {
+				msg += fmt.Sprintf(" (warning: %s)", report.CheckWarning)
+			}
+			messages = append(messages, msg)
 		}
 	}
 	return strings.Join(messages, "\n")
