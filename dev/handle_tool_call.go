@@ -31,26 +31,25 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *per
 		}
 		// Process only the first tool call sequentially
 		tc := toolCalls[0]
-		var result llm2.ToolResultBlock
-		var ref *persisted_ai.MessageRef
+		var output ToolCallOutput
 		var err error
 
 		if handler, ok := customHandlers[tc.Name]; ok {
-			result, err = handler(dCtx, tc)
+			output.ToolResultBlock, err = handler(dCtx, tc)
 		} else {
-			result, ref, err = handleToolCall(dCtx, tc)
+			output, err = handleToolCall(dCtx, tc)
 		}
 
 		if err != nil {
-			result.IsError = true
-			result.Content = llm2.TextContentBlocks(err.Error())
-			result.Name = tc.Name
-			result.ToolCallId = tc.Id
-			ref = nil
+			output.IsError = true
+			output.Content = llm2.TextContentBlocks(err.Error())
+			output.Name = tc.Name
+			output.ToolCallId = tc.Id
+			output.Ref = nil
 		}
 
-		results := cleanupWorkingDirFromResults(dCtx, []llm2.ToolResultBlock{result})
-		appendToolCallResult(dCtx, chatHistory, results[0], ref)
+		results := cleanupWorkingDirFromResults(dCtx, []llm2.ToolResultBlock{output.ToolResultBlock})
+		appendToolCallResult(dCtx, chatHistory, results[0], output.Ref)
 		return results
 	}
 
@@ -63,52 +62,51 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *per
 			localDCtx := dCtx
 			localDCtx.Context = ctx
 
-			var result llm2.ToolResultBlock
-			var ref *persisted_ai.MessageRef
+			var output ToolCallOutput
 			var err error
 
 			if handler, ok := customHandlers[tc.Name]; ok {
-				result, err = handler(localDCtx, tc)
+				output.ToolResultBlock, err = handler(localDCtx, tc)
 			} else {
-				result, ref, err = handleToolCall(localDCtx, tc)
+				output, err = handleToolCall(localDCtx, tc)
 			}
 
 			responseChannel.Send(ctx, struct {
 				Index  int
-				Result llm2.ToolResultBlock
-				Ref    *persisted_ai.MessageRef
+				Output ToolCallOutput
 				Err    error
-			}{index, result, ref, err})
+			}{index, output, err})
 		})
 	}
 
-	results := make([]llm2.ToolResultBlock, len(toolCalls))
-	refs := make([]*persisted_ai.MessageRef, len(toolCalls))
+	outputs := make([]ToolCallOutput, len(toolCalls))
 
 	for i := 0; i < len(toolCalls); i++ {
 		var resp struct {
 			Index  int
-			Result llm2.ToolResultBlock
-			Ref    *persisted_ai.MessageRef
+			Output ToolCallOutput
 			Err    error
 		}
 		responseChannel.Receive(dCtx, &resp)
-		results[resp.Index] = resp.Result
-		refs[resp.Index] = resp.Ref
+		outputs[resp.Index] = resp.Output
 		if resp.Err != nil {
-			results[resp.Index].IsError = true
-			results[resp.Index].ToolCallId = toolCalls[resp.Index].Id
-			results[resp.Index].Name = toolCalls[resp.Index].Name
-			if len(results[resp.Index].Content) == 0 {
-				results[resp.Index].Content = llm2.TextContentBlocks(resp.Err.Error())
+			outputs[resp.Index].IsError = true
+			outputs[resp.Index].ToolCallId = toolCalls[resp.Index].Id
+			outputs[resp.Index].Name = toolCalls[resp.Index].Name
+			if len(outputs[resp.Index].Content) == 0 {
+				outputs[resp.Index].Content = llm2.TextContentBlocks(resp.Err.Error())
 			}
-			refs[resp.Index] = nil
+			outputs[resp.Index].Ref = nil
 		}
 	}
 
+	results := make([]llm2.ToolResultBlock, len(outputs))
+	for i, o := range outputs {
+		results[i] = o.ToolResultBlock
+	}
 	results = cleanupWorkingDirFromResults(dCtx, results)
 	for i, result := range results {
-		appendToolCallResult(dCtx, chatHistory, result, refs[i])
+		appendToolCallResult(dCtx, chatHistory, result, outputs[i].Ref)
 	}
 	return results
 }
@@ -140,8 +138,16 @@ func cleanupWorkingDirFromResults(dCtx DevContext, results []llm2.ToolResultBloc
 	return results
 }
 
+// ToolCallOutput wraps a tool result with an optional persisted ref for
+// content that shouldn't be inlined in the tracked flow action (e.g. images).
+type ToolCallOutput struct {
+	llm2.ToolResultBlock
+	Ref *persisted_ai.MessageRef `json:"ref,omitempty"`
+}
+
 // TODO /gen/planned/req add a test for this function using WorkflowTestSuite
-func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult llm2.ToolResultBlock, ref *persisted_ai.MessageRef, err error) {
+func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, error) {
+	var toolCallResult llm2.ToolResultBlock
 	dCtx.Context = utils.NoRetryCtx(dCtx)
 	toolCallResult.Name = toolCall.Name
 	toolCallResult.ToolCallId = toolCall.Id
@@ -154,23 +160,23 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult llm2
 			return GetHelpOrInput(dCtx, wrapper.Requests)
 		})
 		toolCallResult.Content = llm2.TextContentBlocks(response)
-		return toolCallResult, nil, err
+		return ToolCallOutput{ToolResultBlock: toolCallResult}, err
 	}
 
 	actionParams := make(map[string]interface{})
-	err = json.Unmarshal([]byte(llm.RepairJson(toolCall.Arguments)), &actionParams)
+	err := json.Unmarshal([]byte(llm.RepairJson(toolCall.Arguments)), &actionParams)
 	if err != nil {
 		result, unmarshalErr := handleErrToolCallUnmarshal(toolCallResult, fmt.Errorf("%w: %v", llm.ErrToolCallUnmarshal, err))
-		return result, nil, unmarshalErr
+		return ToolCallOutput{ToolResultBlock: result}, unmarshalErr
 	}
 
 	actionCtx := dCtx.NewActionContext("tool_call." + toolCall.Name)
 	actionCtx.ActionParams = actionParams
 
-	// NOTE: the function passed in very deliberately returns
-	// ToolResultBlock since what's returned is what's tracked, and we want
-	// to the entire tool call response, not just the response string
-	result, trackErr := Track(actionCtx, func(flowAction *domain.FlowAction) (llm2.ToolResultBlock, error) {
+	// The tracked flow action result includes both the tool result content
+	// and an optional ref for persisted content (e.g. images).
+	var ref *persisted_ai.MessageRef
+	result, trackErr := Track(actionCtx, func(flowAction *domain.FlowAction) (ToolCallOutput, error) {
 		var response string
 		switch toolCall.Name {
 		case "retrieve_code_context", currentGetSymbolDefinitionsTool().Name:
@@ -237,9 +243,10 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (toolCallResult llm2
 			toolCallResult.Content = llm2.TextContentBlocks(response)
 		}
 		// ensure tracked flow action gets the state after handling this type of error
-		return handleErrToolCallUnmarshal(toolCallResult, err)
+		trb, unmarshalErr := handleErrToolCallUnmarshal(toolCallResult, err)
+		return ToolCallOutput{ToolResultBlock: trb, Ref: ref}, unmarshalErr
 	})
-	return result, ref, trackErr
+	return result, trackErr
 }
 
 func handleErrToolCallUnmarshal(toolCallResult llm2.ToolResultBlock, err error) (llm2.ToolResultBlock, error) {

@@ -7,9 +7,7 @@
       <div class="action-result">
         <template v-if="contentBlocks && contentBlocks.length > 0">
           <template v-for="(block, idx) in contentBlocks" :key="idx">
-            <pre v-if="block.type === 'text' && block.text" class="tool-result-text">{{ block.text }}</pre>
-            <ImagePreview v-else-if="block.type === 'image' && block.image?.url" :src="block.image.url" />
-            <JsonTree v-else :deep="0" :data="block" />
+            <ContentBlockRenderer :block="block" />
           </template>
         </template>
         <pre v-else-if="toolResponse">{{ toolResponse }}</pre>
@@ -21,8 +19,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { FlowAction, Llm2ContentBlock } from '../lib/models';
-import JsonTree from './JsonTree.vue'
-import ImagePreview from './ImagePreview.vue'
+import ContentBlockRenderer from './ContentBlockRenderer.vue'
 
 const props = defineProps<{
   flowAction: FlowAction,

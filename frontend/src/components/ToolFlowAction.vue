@@ -4,30 +4,27 @@
       Params: <JsonTree :data="flowAction.actionParams" :deep="0" />
     </div>
     <div class="action-result">
-      <template v-if="contentBlocks && contentBlocks.length > 0">
-        <template v-for="(block, idx) in contentBlocks" :key="idx">
-          <pre v-if="block.type === 'text' && block.text" class="tool-result-text">{{ block.text }}</pre>
-          <ImagePreview v-else-if="block.type === 'image' && block.image?.url" :src="block.image.url" />
-          <div v-else-if="block.type === 'tool_result' && block.toolResult?.content?.length" class="nested-tool-result">
-            <template v-for="(nested, nIdx) in block.toolResult.content" :key="nIdx">
-              <pre v-if="nested.type === 'text' && nested.text" class="tool-result-text">{{ nested.text }}</pre>
-              <ImagePreview v-else-if="nested.type === 'image' && nested.image?.url" :src="nested.image.url" />
-              <JsonTree v-else :deep="0" :data="nested" />
-            </template>
-          </div>
-          <JsonTree v-else :deep="0" :data="block" />
+      <div v-if="hydrationLoading" class="hydration-loading">Loading content...</div>
+      <template v-if="hydratedBlocks && hydratedBlocks.length > 0">
+        <template v-for="(block, idx) in hydratedBlocks" :key="'h-' + idx">
+          <ContentBlockRenderer :block="block" />
         </template>
       </template>
-      <pre v-else-if="toolResponse">{{ toolResponse }}</pre>
+      <template v-if="contentBlocks && contentBlocks.length > 0">
+        <template v-for="(block, idx) in contentBlocks" :key="idx">
+          <ContentBlockRenderer :block="block" />
+        </template>
+      </template>
+      <pre v-else-if="!hydratedBlocks?.length && toolResponse">{{ toolResponse }}</pre>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { FlowAction, Llm2ContentBlock } from '../lib/models';
 import JsonTree from './JsonTree.vue'
-import ImagePreview from './ImagePreview.vue'
+import ContentBlockRenderer from './ContentBlockRenderer.vue'
 
 const props = defineProps<{
   flowAction: FlowAction,
@@ -58,6 +55,57 @@ const toolResponse = computed<string | null>(() => {
   const parsed = parsedResult.value
   return parsed?.response ?? parsed?.Response ?? null
 })
+
+const hydrationLoading = ref(false)
+const hydratedBlocks = ref<Llm2ContentBlock[] | null>(null)
+
+const resultRef = computed(() => {
+  const parsed = parsedResult.value
+  if (parsed?.ref?.blockKeys?.length) {
+    return parsed.ref
+  }
+  return null
+})
+
+watch(
+  () => [props.expand, resultRef.value] as const,
+  async ([expanded, refVal]) => {
+    if (!expanded || !refVal) {
+      hydratedBlocks.value = null
+      return
+    }
+
+    hydrationLoading.value = true
+    try {
+      const response = await fetch(
+        `/api/v1/workspaces/${props.flowAction.workspaceId}/flows/${props.flowAction.flowId}/chat_history/hydrate`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refs: [refVal] }),
+        }
+      )
+      if (!response.ok) {
+        hydratedBlocks.value = null
+        return
+      }
+      const data = await response.json()
+      const messages = data.messages || []
+      const blocks: Llm2ContentBlock[] = []
+      for (const msg of messages) {
+        if (msg.content) {
+          blocks.push(...msg.content)
+        }
+      }
+      hydratedBlocks.value = blocks.length > 0 ? blocks : null
+    } catch {
+      hydratedBlocks.value = null
+    } finally {
+      hydrationLoading.value = false
+    }
+  },
+  { immediate: true }
+)
 </script>
 
 <style scoped>

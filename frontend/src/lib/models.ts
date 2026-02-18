@@ -192,7 +192,7 @@ export interface Subflow {
 
 // --- llm2 Chat History Types ---
 export type MessageRef = {
-  blockIds: string[]
+  blockKeys: string[]
   role: string
 }
 
