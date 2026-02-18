@@ -3,6 +3,7 @@ package check
 import (
 	"os"
 	"path/filepath"
+	"sidekick/coding/tree_sitter"
 	"sidekick/env"
 	"strings"
 	"testing"
@@ -445,4 +446,73 @@ func TestExtractErrors_NestedErrors(t *testing.T) {
 	// Call ExtractErrors
 	errors := ExtractErrorNodes(tree.RootNode())
 	assert.Len(t, errors, 1)
+}
+
+// TestCheckFileValidity_Markdown_HasErrorButNoErrorNodes verifies that when
+// tree-sitter reports HasError()=true but produces zero ERROR and zero missing
+// nodes, CheckFileValidity treats the file as valid.
+func TestCheckFileValidity_Markdown_HasErrorButNoErrorNodes(t *testing.T) {
+	t.Parallel()
+
+	// Minimal reproducer: a fenced code block with backslash line continuation,
+	// followed by a heading, with no trailing newline. This triggers tree-sitter's
+	// HasError()=true but produces zero ERROR and zero missing nodes.
+	content := `## Heading`
+
+	dir, filename, err := writeTempFile(t, "md", content)
+	if err != nil {
+		t.Fatalf("Failed to write temp file: %v", err)
+	}
+
+	filePath := filepath.Join(dir, filename)
+	tree, _, treeErr := tree_sitter.GetTreeWithSource(filePath)
+	assert.NoError(t, treeErr)
+
+	root := tree.RootNode()
+	assert.True(t, root.HasError(), "Expected HasError() to be true")
+	assert.Empty(t, ExtractErrorNodes(root), "Expected zero ERROR nodes")
+	assert.Empty(t, ExtractMissingNodes(root), "Expected zero missing nodes")
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{
+			WorkingDirectory: dir,
+		},
+	}
+
+	passed, output, checkErr := CheckFileValidity(envContainer, filename)
+	assert.NoError(t, checkErr)
+	assert.True(t, passed, "Expected CheckFileValidity to pass when HasError is true but no error/missing nodes")
+	assert.Contains(t, output, "Warning")
+}
+
+// TestCheckFileActivity_SkipBaseFileValidityCheck verifies that
+// SkipBaseFileValidityCheck bypasses the built-in syntax check.
+func TestCheckFileActivity_SkipBaseFileValidityCheck(t *testing.T) {
+	t.Parallel()
+
+	dir, filename, err := writeTempFile(t, "py", "def broken(:\n")
+	if err != nil {
+		t.Fatalf("Failed to write temp file: %v", err)
+	}
+
+	envContainer := env.EnvContainer{
+		Env: &env.LocalEnv{
+			WorkingDirectory: dir,
+		},
+	}
+
+	// Confirm the file genuinely fails the syntax check.
+	passed, _, checkErr := CheckFileValidity(envContainer, filename)
+	assert.NoError(t, checkErr)
+	assert.False(t, passed)
+
+	// With SkipBaseFileValidityCheck, the activity should pass.
+	output, activityErr := CheckFileActivity(CheckFileActivityInput{
+		EnvContainer:              envContainer,
+		FilePath:                  filename,
+		SkipBaseFileValidityCheck: true,
+	})
+	assert.NoError(t, activityErr)
+	assert.True(t, output.AllPassed)
+	assert.Contains(t, output.Output, "skipped base file validity check")
 }
