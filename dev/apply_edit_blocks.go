@@ -51,7 +51,8 @@ type ApplyEditBlockReport struct {
 
 	// TODO /gen/req replace with slice of CheckResult, which should include
 	// check name
-	CheckResult CheckResult `json:"checkResult"`
+	CheckResult  CheckResult `json:"checkResult"`
+	CheckWarning string      `json:"checkWarning,omitempty"`
 
 	/* InitialDiff records the diff before autofixes are applied (if any) */
 	InitialDiff string `json:"initialDiff"`
@@ -100,6 +101,14 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 			attribute.String("editType", block.EditType),
 			attribute.String("filePath", block.FilePath),
 		)
+
+		// Check pre-edit file validity for existing files so we can skip the
+		// post-edit syntax check if the file was already broken.
+		preEditFileHadErrors := false
+		if block.EditType == "update" || block.EditType == "append" {
+			preEditValid, _, preEditErr := check.CheckFileValidity(input.EnvContainer, block.FilePath)
+			preEditFileHadErrors = !preEditValid && preEditErr == nil
+		}
 
 		var report ApplyEditBlockReport
 		var err error
@@ -170,8 +179,11 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 					report.CheckResult.Message = "Skipped"
 				}
 			} else { // create, update, append
-				checkResult, checkErr := checkAndStageOrRestoreFile(input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create")
+				checkResult, checkErr := checkAndStageOrRestoreFile(input.EnvContainer, input.CheckCommands, block.FilePath, block.EditType != "create", preEditFileHadErrors)
 				report.CheckResult = checkResult
+				if preEditFileHadErrors {
+					report.CheckWarning = "file had pre-existing syntax errors; base file validity check was skipped"
+				}
 
 				if !checkResult.Success {
 					report.DidApply = false
@@ -451,8 +463,9 @@ func countUnbalanced(lines []string, openingDelimiter, closingDelimiter string) 
 
 // Checks the file after applying the edit. If the checks fail, the file is
 // restored, otherwise it is staged, so that future restores don't affect this
-// change.
-func checkAndStageOrRestoreFile(envContainer env.EnvContainer, checkCommands []common.CommandConfig, filePath string, isExistingFile bool) (CheckResult, error) {
+// change. When preEditFileHadErrors is true, the built-in syntax check is
+// skipped since the file was already invalid before the edit.
+func checkAndStageOrRestoreFile(envContainer env.EnvContainer, checkCommands []common.CommandConfig, filePath string, isExistingFile bool, preEditFileHadErrors bool) (CheckResult, error) {
 	ctx := context.Background()
 	ctx, span := applyEditBlocksTracer.Start(ctx, "checkAndStageOrRestoreFile")
 	defer span.End()
@@ -464,9 +477,10 @@ func checkAndStageOrRestoreFile(envContainer env.EnvContainer, checkCommands []c
 
 	_, checkSpan := applyEditBlocksTracer.Start(ctx, "CheckFileActivity")
 	checkOutput, checkErr := check.CheckFileActivity(check.CheckFileActivityInput{
-		EnvContainer:  envContainer,
-		FilePath:      filePath,
-		CheckCommands: checkCommands,
+		EnvContainer:              envContainer,
+		FilePath:                  filePath,
+		CheckCommands:             checkCommands,
+		SkipBaseFileValidityCheck: preEditFileHadErrors,
 	})
 	checkSpan.SetAttributes(attribute.Bool("allPassed", checkOutput.AllPassed))
 	if checkErr != nil {
