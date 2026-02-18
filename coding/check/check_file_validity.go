@@ -51,6 +51,13 @@ func CheckFileValidity(envContainer env.EnvContainer, relativeFilePath string) (
 	}
 	hasError := tree.RootNode().HasError()
 	if hasError {
+		errorNodes := ExtractErrorNodes(tree.RootNode())
+		missingNodes := ExtractMissingNodes(tree.RootNode())
+		if len(errorNodes) == 0 && len(missingNodes) == 0 {
+			// Tree-sitter reports HasError but produced no concrete error or
+			// missing nodes — treat as a parser false positive.
+			return true, "Warning: tree-sitter reported HasError with no identifiable error or missing nodes", nil
+		}
 		errorDetails := ExtractErrorMessages(sourceCode, tree.RootNode())
 		return false, errorDetails, nil
 	}
@@ -208,6 +215,22 @@ func checkTypescriptTree(sourceCode []byte, node *tree_sitter_lib.Node) (bool, s
 	return true, ""
 }
 
+// ExtractMissingNodes traverses a tree-sitter tree and returns a slice of nodes where IsMissing() is true.
+func ExtractMissingNodes(node *tree_sitter_lib.Node) []*tree_sitter_lib.Node {
+	var missing []*tree_sitter_lib.Node
+	var walk func(*tree_sitter_lib.Node)
+	walk = func(n *tree_sitter_lib.Node) {
+		if n.IsMissing() {
+			missing = append(missing, n)
+		}
+		for i := uint(0); i < n.ChildCount(); i++ {
+			walk(n.Child(i))
+		}
+	}
+	walk(node)
+	return missing
+}
+
 // ExtractErrorNodes traverses a tree-sitter tree and returns a slice of nodes that are errors.
 func ExtractErrorNodes(node *tree_sitter_lib.Node) []*tree_sitter_lib.Node {
 	var errors []*tree_sitter_lib.Node
@@ -225,7 +248,10 @@ func ExtractErrorNodes(node *tree_sitter_lib.Node) []*tree_sitter_lib.Node {
 }
 
 func ExtractErrorMessages(sourceCode []byte, node *tree_sitter_lib.Node) string {
-	errorNodes := ExtractErrorNodes(node)
+	return ExtractErrorMessagesFromNodes(sourceCode, ExtractErrorNodes(node))
+}
+
+func ExtractErrorMessagesFromNodes(sourceCode []byte, errorNodes []*tree_sitter_lib.Node) string {
 	errorDetails := fmt.Sprintf("%s: %v", SyntaxError, utils.Map(errorNodes, func(errorNode *tree_sitter_lib.Node) string {
 		sourceBlock := tree_sitter.SourceBlock{
 			Source: &sourceCode,
