@@ -12,6 +12,7 @@ worktree_setup: |
 
 test_commands:
   - command: "go test -test.timeout 30s ./..."
+  - command: "go run ./scripts/lint_chat_history_append/"
   - working_dir: "frontend"
     command: "bun run test:unit -- --reporter=dot --no-color --run"
   - working_dir: "frontend"

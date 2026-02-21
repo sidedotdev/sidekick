@@ -327,6 +327,7 @@ type ServerCapabilities struct {
 	DocumentLinkProvider             *DocumentLinkOptions             `json:"documentLinkProvider,omitempty"`
 	Workspace                        *WorkspaceSpecificCapabilties    `json:"workspace,omitempty"`
 	SemanticTokensProvider           interface{}                      `json:"semanticTokensProvider,omitempty"`
+	CallHierarchyProvider            interface{}                      `json:"callHierarchyProvider,omitempty"`
 }
 
 type CompletionOptions struct {
@@ -612,4 +613,30 @@ type Range struct {
 type Location struct {
 	URI   string `json:"uri"`
 	Range Range  `json:"range"`
+}
+
+// Call hierarchy types per LSP specification
+
+type CallHierarchyPrepareParams struct {
+	TextDocumentPositionParams
+}
+
+type CallHierarchyItem struct {
+	Name           string      `json:"name"`
+	Kind           int         `json:"kind"`
+	Tags           []int       `json:"tags,omitempty"`
+	Detail         string      `json:"detail,omitempty"`
+	URI            string      `json:"uri"`
+	Range          Range       `json:"range"`
+	SelectionRange Range       `json:"selectionRange"`
+	Data           interface{} `json:"data,omitempty"`
+}
+
+type CallHierarchyIncomingCallsParams struct {
+	Item CallHierarchyItem `json:"item"`
+}
+
+type CallHierarchyIncomingCall struct {
+	From       CallHierarchyItem `json:"from"`
+	FromRanges []Range           `json:"fromRanges"`
 }
