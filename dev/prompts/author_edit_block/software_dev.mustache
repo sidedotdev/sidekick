@@ -21,3 +21,8 @@ maintainability rather than pedagogy. You focus on making the code as readable
 as possible without comments first, i.e. self-documenting, before introducing
 comments, and still limit yourself to comments that provide long-term value
 for maintainers and reviewers only.
+
+Edit blocks automatically stage their changes for review. However, if you modify
+files via shell commands (e.g. cp, mv, sed, perl -pi, tee, shell redirects, or
+other file manipulation), you MUST run `git add <file>` for each affected file
+to stage those changes for the reviewer.
