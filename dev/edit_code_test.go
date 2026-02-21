@@ -118,7 +118,7 @@ func (s *AuthorEditBlocksTestSuite) TestInitialCodeInfoNoEditBlocks() {
 		nil,
 	).Once()
 	var ffa *fflag.FFlagActivities // use a nil struct pointer to call activities that are part of a structure
-	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil)
+	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil)
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, PromptInfoContainer{
 		InitialCodeInfo{},
 	})
@@ -133,8 +133,15 @@ func (s *AuthorEditBlocksTestSuite) TestInitialCodeInfoNoEditBlocks() {
 func (s *AuthorEditBlocksTestSuite) TestDoneRequiredProtocol_EmptyResponseThenDone() {
 	chatHistory := &[]llm.ChatMessage{}
 
-	// Enable done-required protocol (version 1)
+	// Enable done-required protocol (version 1 AND feature flag)
 	s.env.OnGetVersion("done-required-protocol", workflow.DefaultVersion, 1).Return(workflow.Version(1))
+
+	var ffa *fflag.FFlagActivities
+	// DisableDoneCoding flag returns false (not disabled), so done protocol is enabled
+	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.MatchedBy(func(params fflag.EvaluateFeatureFlagParams) bool {
+		return params.FlagName == fflag.DisableDoneCoding
+	})).Return(false, nil)
+	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil)
 
 	var la *persisted_ai.LlmActivities
 	callCount := 0
@@ -174,9 +181,6 @@ func (s *AuthorEditBlocksTestSuite) TestDoneRequiredProtocol_EmptyResponseThenDo
 		}, nil
 	})
 
-	var ffa *fflag.FFlagActivities
-	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil)
-
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, PromptInfoContainer{
 		InitialCodeInfo{},
 	})
@@ -208,7 +212,9 @@ func TestBuildAuthorEditBlockInitialPrompt(t *testing.T) {
 			DisableHumanInTheLoop: false,
 		},
 	}
-	prompt := renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false)
+
+	// Test with doneRequired=true
+	prompt := renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, true)
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
@@ -216,8 +222,17 @@ func TestBuildAuthorEditBlockInitialPrompt(t *testing.T) {
 	assert.Contains(t, prompt, doneTool.Name)
 	assert.NotContains(t, prompt, "#START SUMMARY")
 
+	// Test with doneRequired=false (legacy behavior)
+	prompt = renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, false)
+	assert.NotEmpty(t, prompt)
+	assert.Contains(t, prompt, "some code")
+	assert.Contains(t, prompt, "some requirements")
+	assert.Contains(t, prompt, getHelpOrInputTool.Name)
+	assert.Contains(t, prompt, "#START SUMMARY")
+	assert.NotContains(t, prompt, "call the `done` tool")
+
 	dCtx.RepoConfig.DisableHumanInTheLoop = true
-	prompt = renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false)
+	prompt = renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, true)
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
@@ -232,7 +247,9 @@ func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
 			DisableHumanInTheLoop: false,
 		},
 	}
-	prompt := renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false)
+
+	// Test with doneRequired=true
+	prompt := renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, true)
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
@@ -242,8 +259,19 @@ func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
 	assert.Contains(t, prompt, doneTool.Name)
 	assert.NotContains(t, prompt, "#START SUMMARY")
 
+	// Test with doneRequired=false (legacy behavior)
+	prompt = renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, false)
+	assert.NotEmpty(t, prompt)
+	assert.Contains(t, prompt, "some code")
+	assert.Contains(t, prompt, "some requirements")
+	assert.Contains(t, prompt, "plan")
+	assert.Contains(t, prompt, "step")
+	assert.Contains(t, prompt, getHelpOrInputTool.Name)
+	assert.Contains(t, prompt, "#START SUMMARY")
+	assert.NotContains(t, prompt, "call the `done` tool")
+
 	dCtx.RepoConfig.DisableHumanInTheLoop = true
-	prompt = renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false)
+	prompt = renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, true)
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
@@ -254,50 +282,105 @@ func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
 	assert.NotContains(t, prompt, "#START SUMMARY")
 }
 
-func TestBuildAuthorEditBlockInput_IncludesDoneTool(t *testing.T) {
-	dCtx := DevContext{
-		ExecContext: flow_action.ExecContext{
-			Secrets: &secret_manager.SecretManagerContainer{
-				SecretManager: secret_manager.MockSecretManager{},
+type BuildAuthorEditBlockInputTestSuite struct {
+	suite.Suite
+	testsuite.WorkflowTestSuite
+	env *testsuite.TestWorkflowEnvironment
+}
+
+func (s *BuildAuthorEditBlockInputTestSuite) SetupTest() {
+	s.env = s.NewTestWorkflowEnvironment()
+}
+
+func (s *BuildAuthorEditBlockInputTestSuite) AfterTest(suiteName, testName string) {
+	s.env.AssertExpectations(s.T())
+}
+
+func TestBuildAuthorEditBlockInputTestSuite(t *testing.T) {
+	suite.Run(t, new(BuildAuthorEditBlockInputTestSuite))
+}
+
+func (s *BuildAuthorEditBlockInputTestSuite) TestIncludesDoneTool() {
+	wrapperWorkflow := func(ctx workflow.Context, disableHumanInTheLoop bool) ([]string, error) {
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context: ctx,
+				Secrets: &secret_manager.SecretManagerContainer{
+					SecretManager: secret_manager.MockSecretManager{},
+				},
 			},
-		},
-		RepoConfig: common.RepoConfig{
-			DisableHumanInTheLoop: false,
-		},
-	}
-	chatHistory := &[]llm.ChatMessage{}
-
-	result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{})
-
-	// Verify done tool is included
-	foundDoneTool := false
-	for _, tool := range result.Params.Tools {
-		if tool.Name == doneTool.Name {
-			foundDoneTool = true
-			break
+			RepoConfig: common.RepoConfig{
+				DisableHumanInTheLoop: disableHumanInTheLoop,
+			},
 		}
-	}
-	assert.True(t, foundDoneTool, "Expected done tool to be included in tools")
+		chatHistory := &[]llm.ChatMessage{}
 
-	// Verify other expected tools are present
-	toolNames := make([]string, len(result.Params.Tools))
-	for i, tool := range result.Params.Tools {
-		toolNames[i] = tool.Name
-	}
-	assert.Contains(t, toolNames, bulkSearchRepositoryTool.Name)
-	assert.Contains(t, toolNames, bulkReadFileTool.Name)
-	assert.Contains(t, toolNames, runCommandTool.Name)
-	assert.Contains(t, toolNames, getHelpOrInputTool.Name) // human-in-the-loop enabled
+		doneRequired := IsDoneRequiredProtocol(dCtx)
+		result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired)
 
-	// Test with human-in-the-loop disabled
-	dCtx.RepoConfig.DisableHumanInTheLoop = true
-	chatHistory2 := &[]llm.ChatMessage{}
-	result2 := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory2, SkipInfo{})
-
-	toolNames2 := make([]string, len(result2.Params.Tools))
-	for i, tool := range result2.Params.Tools {
-		toolNames2[i] = tool.Name
+		toolNames := make([]string, len(result.Params.Tools))
+		for i, tool := range result.Params.Tools {
+			toolNames[i] = tool.Name
+		}
+		return toolNames, nil
 	}
-	assert.Contains(t, toolNames2, doneTool.Name)
-	assert.NotContains(t, toolNames2, getHelpOrInputTool.Name) // human-in-the-loop disabled
+
+	s.env.OnGetVersion("done-required-protocol", workflow.DefaultVersion, 1).Return(workflow.Version(1))
+
+	var ffa *fflag.FFlagActivities
+	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil)
+
+	s.env.ExecuteWorkflow(wrapperWorkflow, false)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var toolNames []string
+	s.NoError(s.env.GetWorkflowResult(&toolNames))
+
+	s.Contains(toolNames, doneTool.Name)
+	s.Contains(toolNames, bulkSearchRepositoryTool.Name)
+	s.Contains(toolNames, bulkReadFileTool.Name)
+	s.Contains(toolNames, runCommandTool.Name)
+	s.Contains(toolNames, getHelpOrInputTool.Name)
+}
+
+func (s *BuildAuthorEditBlockInputTestSuite) TestHumanInTheLoopDisabled() {
+	wrapperWorkflow := func(ctx workflow.Context, disableHumanInTheLoop bool) ([]string, error) {
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context: ctx,
+				Secrets: &secret_manager.SecretManagerContainer{
+					SecretManager: secret_manager.MockSecretManager{},
+				},
+			},
+			RepoConfig: common.RepoConfig{
+				DisableHumanInTheLoop: disableHumanInTheLoop,
+			},
+		}
+		chatHistory := &[]llm.ChatMessage{}
+
+		doneRequired := IsDoneRequiredProtocol(dCtx)
+		result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired)
+
+		toolNames := make([]string, len(result.Params.Tools))
+		for i, tool := range result.Params.Tools {
+			toolNames[i] = tool.Name
+		}
+		return toolNames, nil
+	}
+
+	s.env.OnGetVersion("done-required-protocol", workflow.DefaultVersion, 1).Return(workflow.Version(1))
+
+	var ffa *fflag.FFlagActivities
+	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil)
+
+	s.env.ExecuteWorkflow(wrapperWorkflow, true)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var toolNames []string
+	s.NoError(s.env.GetWorkflowResult(&toolNames))
+
+	s.Contains(toolNames, doneTool.Name)
+	s.NotContains(toolNames, getHelpOrInputTool.Name)
 }

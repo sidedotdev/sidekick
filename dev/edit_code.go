@@ -9,6 +9,7 @@ import (
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/srv"
@@ -208,8 +209,8 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	attemptsSinceLastEditBlockOrFeedback := 0
 	maxAttempts := 7 // Default value
 
-	// Version gate for done-required protocol
-	doneRequiredVersion := workflow.GetVersion(dCtx, "done-required-protocol", workflow.DefaultVersion, 1)
+	// Check if done-required protocol is enabled (requires both version AND feature flag)
+	doneRequired := IsDoneRequiredProtocol(dCtx)
 	doneToolCalled := false
 
 	repoConfig := dCtx.RepoConfig
@@ -251,7 +252,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			// are in the history before the pause feedback.
 			switch promptInfo.(type) {
 			case InitialCodeInfo, InitialDevStepInfo:
-				buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo)
+				buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired)
 			}
 			promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			attemptsSinceLastEditBlockOrFeedback = 0
@@ -292,7 +293,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		}
 
 		// NOTE: this also ensures the tool call response is added to chat history
-		authorEditBlockInput := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo)
+		authorEditBlockInput := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired)
 		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
 
 		// NOTE this MUST be below authorEditBlockInput to ensure tool call
@@ -410,8 +411,8 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			promptInfo = SkipInfo{}
 		} else {
 			// No tool calls in this response
-			if doneRequiredVersion >= 1 {
-				// New version: require done tool to terminate
+			if doneRequired {
+				// New version with flag enabled: require done tool to terminate
 				if len(currentExtractedBlocks) == 0 {
 					// No edit blocks and no tool calls - provide feedback
 					promptInfo = FeedbackInfo{
@@ -426,7 +427,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 					}
 				}
 			} else {
-				// Old version: no tool calls means we're done
+				// Old version or flag disabled: no tool calls means we're done
 				break
 			}
 		}
@@ -435,8 +436,16 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	return extractedEditBlocks, nil
 }
 
+// IsDoneRequiredProtocol returns true if the done-required protocol should be used.
+// This checks the workflow version gate and ensures the disable flag is not set.
+// The done protocol is enabled by default for new workflow versions unless explicitly disabled.
+func IsDoneRequiredProtocol(ctx workflow.Context) bool {
+	doneRequiredVersion := workflow.GetVersion(ctx, "done-required-protocol", workflow.DefaultVersion, 1)
+	return doneRequiredVersion >= 1 && !fflag.IsEnabled(ctx, fflag.DisableDoneCoding)
+}
+
 // TODO move to a coding-related package, eg coding/edit_block
-func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) llm.ToolChatOptions {
+func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo, doneRequired bool) llm.ToolChatOptions {
 	// TODO extract chat message building into a separate function
 	var content string
 	role := llm.ChatMessageRoleUser
@@ -446,17 +455,18 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	isError := false
 	cacheControl := ""
 	contextType := ""
+
 	switch info := promptInfo.(type) {
 	case InitialCodeInfo:
 		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
 		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
-		content = renderAuthorEditBlockInitialPrompt(dCtx, info.CodeContext, info.Requirements, applyImmediately)
+		content = renderAuthorEditBlockInitialPrompt(dCtx, info.CodeContext, info.Requirements, applyImmediately, doneRequired)
 		cacheControl = "ephemeral"
 		contextType = ContextTypeInitialInstructions
 	case InitialDevStepInfo:
 		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
 		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
-		content = renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, applyImmediately)
+		content = renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, applyImmediately, doneRequired)
 		cacheControl = "ephemeral"
 		contextType = ContextTypeInitialInstructions
 	case SkipInfo:
@@ -524,7 +534,7 @@ const replace = ">>>>>>> REPLACE_EXACT"
 const startInitialCodeContext = "#START INITIAL CODE CONTEXT"
 const endInitialCodeContext = "#END INITIAL CODE CONTEXT"
 
-func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requirements string, applyEditBlocksImmediately bool) string {
+func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requirements string, applyEditBlocksImmediately, doneRequired bool) string {
 	data := map[string]interface{}{
 		"codeContext":                     codeContext,
 		"requirements":                    requirements,
@@ -536,7 +546,14 @@ func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requiremen
 		"editCodeHints":                   dCtx.RepoConfig.EditCode.Hints,
 		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,
 		"applyEditBlocksImmediately":      applyEditBlocksImmediately,
+		"doneRequired":                    doneRequired,
 		"doneFunctionName":                doneTool.Name,
+	}
+	if doneRequired {
+		data["doneFunctionName"] = doneTool.Name
+	} else {
+		data["summaryStart"] = summaryStart
+		data["summaryEnd"] = summaryEnd
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		data["getHelpOrInputFunctionName"] = getHelpOrInputTool.Name
@@ -544,7 +561,7 @@ func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requiremen
 	return RenderPrompt(AuthorEditBlockInitial, data)
 }
 
-func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, requirements, planContext, currentStep string, applyEditBlocksImmediately bool) string {
+func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, requirements, planContext, currentStep string, applyEditBlocksImmediately, doneRequired bool) string {
 	data := map[string]interface{}{
 		"codeContext":                     codeContext,
 		"requirements":                    requirements,
@@ -558,7 +575,13 @@ func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, req
 		"editCodeHints":                   dCtx.RepoConfig.EditCode.Hints,
 		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,
 		"applyEditBlocksImmediately":      applyEditBlocksImmediately,
-		"doneFunctionName":                doneTool.Name,
+		"doneRequired":                    doneRequired,
+	}
+	if doneRequired {
+		data["doneFunctionName"] = doneTool.Name
+	} else {
+		data["summaryStart"] = summaryStart
+		data["summaryEnd"] = summaryEnd
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		data["getHelpOrInputFunctionName"] = getHelpOrInputTool.Name
