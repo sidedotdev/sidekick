@@ -223,6 +223,7 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 				actErr := workflow.ExecuteActivity(dCtx.Context, ria.ReadImageActivity, ReadImageInput{
 					EnvContainer: *dCtx.EnvContainer,
 					FilePath:     params.FilePath,
+					URL:          params.URL,
 					FlowId:       flowId,
 					ToolCall:     &toolCall,
 					WorkspaceId:  dCtx.WorkspaceId,
@@ -231,7 +232,11 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 					return "", actErr
 				}
 				ref = &output.Ref
-				toolCallResult.Content = llm2.TextContentBlocks("Image loaded successfully: " + params.FilePath)
+				source := params.FilePath
+				if params.URL != "" {
+					source = params.URL
+				}
+				toolCallResult.Content = llm2.TextContentBlocks("Image loaded successfully: " + source)
 				return "", nil
 			})
 		default:

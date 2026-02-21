@@ -1,11 +1,14 @@
 package dev
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -279,4 +282,126 @@ func TestReadImageActivity_FileNotFound(t *testing.T) {
 	_, err := activities.ReadImageActivity(context.Background(), input)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to read image file")
+}
+
+func TestReadImageActivity_URL_Success(t *testing.T) {
+	t.Parallel()
+
+	// Create a test image and serve it via httptest
+	img := image.NewRGBA(image.Rect(0, 0, 10, 10))
+	for x := 0; x < 10; x++ {
+		for y := 0; y < 10; y++ {
+			img.Set(x, y, color.RGBA{R: 0, G: 255, B: 0, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	require.NoError(t, png.Encode(&buf, img))
+	pngBytes := buf.Bytes()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(pngBytes)
+	}))
+	defer srv.Close()
+
+	storage := newMockKVStorage()
+	activities := &ReadImageActivities{Storage: storage}
+
+	tc := &llm.ToolCall{Id: "call-url", Name: "read_image"}
+	input := ReadImageInput{
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: t.TempDir()}},
+		URL:          srv.URL + "/test.png",
+		FlowId:       "flow-url",
+		ToolCall:     tc,
+		WorkspaceId:  "ws-url",
+	}
+
+	output, err := activities.ReadImageActivity(context.Background(), input)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	ref := output.Ref
+	assert.Equal(t, "user", ref.Role)
+	require.Len(t, ref.BlockKeys, 1)
+
+	key := "flow-url:msg:" + ref.BlockKeys[0]
+	stored := storage.data[key]
+	require.NotNil(t, stored)
+
+	var block map[string]interface{}
+	require.NoError(t, json.Unmarshal(stored, &block))
+	assert.Equal(t, "tool_result", block["type"])
+}
+
+func TestReadImageActivity_URL_NotAnImage(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte("this is not an image"))
+	}))
+	defer srv.Close()
+
+	storage := newMockKVStorage()
+	activities := &ReadImageActivities{Storage: storage}
+
+	input := ReadImageInput{
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: t.TempDir()}},
+		URL:          srv.URL + "/text.txt",
+		FlowId:       "flow-123",
+		WorkspaceId:  "ws-456",
+	}
+
+	_, err := activities.ReadImageActivity(context.Background(), input)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not an image")
+}
+
+func TestReadImageActivity_URL_InvalidScheme(t *testing.T) {
+	t.Parallel()
+
+	storage := newMockKVStorage()
+	activities := &ReadImageActivities{Storage: storage}
+
+	input := ReadImageInput{
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: t.TempDir()}},
+		URL:          "ftp://example.com/image.png",
+		FlowId:       "flow-123",
+		WorkspaceId:  "ws-456",
+	}
+
+	_, err := activities.ReadImageActivity(context.Background(), input)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "http or https")
+}
+
+func TestReadImageActivity_URL_HTTPError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	storage := newMockKVStorage()
+	activities := &ReadImageActivities{Storage: storage}
+
+	input := ReadImageInput{
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: t.TempDir()}},
+		URL:          srv.URL + "/missing.png",
+		FlowId:       "flow-123",
+		WorkspaceId:  "ws-456",
+	}
+
+	_, err := activities.ReadImageActivity(context.Background(), input)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "HTTP 404")
+}
+
+func TestFetchImageFromURL_EmptyURL(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := fetchImageFromURL("")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty")
 }
