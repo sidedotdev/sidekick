@@ -118,6 +118,7 @@ func main() {
 		if err := ReplayWorkflowLatest(context.Background(), c, defaultWorkflowId); err != nil {
 			log.Fatal().Err(err).Msg("Default replay failed.")
 		}
+		log.Info().Msgf("Replay finished successfully for workflow %s.", defaultWorkflowId)
 	}
 }
 
