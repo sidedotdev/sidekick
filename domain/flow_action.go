@@ -16,6 +16,14 @@ const (
 	ActionStatusFailed   ActionStatus = "failed"
 )
 
+type TemporalActivityRef struct {
+	ActivityType     string `json:"activityType"`
+	ActivityId       string `json:"activityId"`
+	ScheduledEventId int64  `json:"scheduledEventId"`
+	CloseEventId     int64  `json:"closeEventId,omitempty"`
+	CloseEventType   string `json:"closeEventType,omitempty"`
+}
+
 type FlowAction struct {
 	Id                 string                 `json:"id"`
 	SubflowName        string                 `json:"subflow"`            // TODO: remove in favor of SubflowId
@@ -31,6 +39,7 @@ type FlowAction struct {
 	ActionResult       string                 `json:"actionResult"`
 	IsHumanAction      bool                   `json:"isHumanAction"`
 	IsCallbackAction   bool                   `json:"isCallbackAction"`
+	TemporalActivities []TemporalActivityRef  `json:"temporalActivities,omitempty"`
 }
 
 func (fa FlowAction) MarshalJSON() ([]byte, error) {
