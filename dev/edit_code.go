@@ -356,17 +356,15 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		var toolCallResponses []ToolCallResponseInfo
 		if len(chatResponse.ToolCalls) > 0 {
 			customHandlers := map[string]func(DevContext, llm.ToolCall) (ToolCallResponseInfo, error){
-				doneTool.Name: handleDoneToolCall,
+				doneTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (ToolCallResponseInfo, error) {
+					resp, err := handleDoneToolCall(dCtx, toolCall)
+					if err == nil {
+						doneToolCalled = true
+					}
+					return resp, err
+				},
 			}
 			toolCallResponses = handleToolCalls(dCtx, chatResponse.ToolCalls, customHandlers)
-
-			// Check if done tool was called successfully
-			for _, resp := range toolCallResponses {
-				if resp.FunctionName == doneTool.Name && !resp.IsError {
-					doneToolCalled = true
-					break
-				}
-			}
 		}
 
 		// Add tool call responses to history
