@@ -108,6 +108,24 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	s.envContainer = env.EnvContainer{
 		Env: devEnv,
 	}
+
+	// Mock each feature flag individually so unexpected flags cause test failures.
+	// Defaults match flags.yml production defaults.
+	var ffa *fflag.FFlagActivities
+	knownFlags := map[string]bool{
+		fflag.CheckEdits:                        true,
+		fflag.InfoNeeds:                         false,
+		fflag.DisableContextCodeVisibilityCheck: true,
+		fflag.InitialRepoSummary:                true,
+		fflag.ManageHistoryWithContextMarkers:   true,
+	}
+	for flagName, value := range knownFlags {
+		flagName := flagName
+		value := value
+		s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.MatchedBy(func(params fflag.EvaluateFeatureFlagParams) bool {
+			return params.FlagName == flagName
+		})).Return(value, nil).Maybe()
+	}
 }
 
 func (s *AuthorEditBlocksTestSuite) AfterTest(suiteName, testName string) {
@@ -140,8 +158,6 @@ func (s *AuthorEditBlocksTestSuite) TestInitialCodeInfoNoEditBlocks() {
 	},
 		nil,
 	).Once()
-	var ffa *fflag.FFlagActivities // use a nil struct pointer to call activities that are part of a structure
-	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, PromptInfoContainer{
 		InitialCodeInfo{},
 	})
