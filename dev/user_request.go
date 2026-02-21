@@ -5,6 +5,7 @@ import (
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
 
@@ -243,7 +244,9 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 	case InitialDevStepInfo:
 		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
 		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
-		content := renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, applyImmediately)
+		doneRequiredVersion := workflow.GetVersion(dCtx, "done-required-protocol", workflow.DefaultVersion, 1)
+		doneRequired := doneRequiredVersion >= 1 && !fflag.IsEnabled(dCtx, fflag.DisableDoneCoding)
+		content := renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, applyImmediately, doneRequired)
 		*chatHistory = append(*chatHistory, llm.ChatMessage{
 			Role:    llm.ChatMessageRoleUser,
 			Content: content,
