@@ -103,11 +103,10 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 		Params: Params{
 			ModelConfig: common.ModelConfig{
 				Provider: "openai",
-				Model:    "gpt-4.1-nano-2025-04-14",
+				Model:    "gpt-5-mini",
 			},
-			Temperature: utils.Ptr(float32(0)),
-			Tools:       []*common.Tool{mockTool},
-			ToolChoice:  common.ToolChoice{Type: common.ToolChoiceTypeAuto},
+			Tools:      []*common.Tool{mockTool},
+			ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
 		},
 	}
 
