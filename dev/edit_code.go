@@ -437,15 +437,14 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 				if len(currentExtractedBlocks) == 0 {
 					// No edit blocks and no tool calls - provide feedback
 					promptInfo = FeedbackInfo{
-						Feedback: "No edit blocks or tool calls were provided. Please either provide edit blocks, use tools to gather more information, or call the `done` tool if no changes are required.",
+						Feedback: "No edit blocks or tool calls were provided. Please either provide edit blocks, use tools to gather more information, get user input, or call the `done` tool if no changes are required.",
 						Type:     FeedbackTypeSystemError,
 					}
 				} else {
-					// Edit blocks were provided but done wasn't called
-					promptInfo = FeedbackInfo{
-						Feedback: "Edit blocks were applied. When you have completed all necessary edits, call the `done` tool to finish. If more edits are needed, continue providing edit blocks.",
-						Type:     FeedbackTypeSystemError,
-					}
+					// Edit blocks were provided and we apply those immediately
+					// now. That means there is a feedback message for that in
+					// the next turn already, so nothing to do here
+					promptInfo = SkipInfo{}
 				}
 			} else {
 				// Old version or flag disabled: no tool calls means we're done
