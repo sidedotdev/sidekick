@@ -339,8 +339,8 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		}
 
 		// Step 4: check diff and confirm if requirements have been met
-		baseBranch := ""
-		if startBranch != nil {
+		baseBranch := dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch)
+		if baseBranch == "" && startBranch != nil {
 			baseBranch = *startBranch
 		}
 		fulfillment, err = CheckWorkMeetsCriteria(dCtx, CheckWorkInfo{
@@ -536,6 +536,7 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 			if !mergeInfo.Approved {
 				// Retain new choice of target branch next iteration, in case it was changed
 				params.StartBranch = &mergeInfo.TargetBranch
+				dCtx.ExecContext.GlobalState.SetValue(common.KeyCurrentTargetBranch, mergeInfo.TargetBranch)
 				lastReviewTreeHash = treeHash
 
 				// Summarize diff if it exceeds the character budget
@@ -599,9 +600,15 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 
 func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, lastReviewTreeHash string) (string, MergeApprovalResponse, string, error) {
 
-	defaultTarget := "main"
-	if params.StartBranch != nil {
-		defaultTarget = *params.StartBranch
+	// GlobalState is the single source of truth for the target branch, updated
+	// by set_base_branch tool and UI. Fallback covers workflow replays from
+	// before GlobalState was initialized at setup.
+	defaultTarget := dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch)
+	if defaultTarget == "" {
+		defaultTarget = "main"
+		if params.StartBranch != nil {
+			defaultTarget = *params.StartBranch
+		}
 	}
 
 	gitAddVersion := workflow.GetVersion(dCtx, "git-add-before-diff", workflow.DefaultVersion, 1)

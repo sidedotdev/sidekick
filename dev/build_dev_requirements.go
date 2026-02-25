@@ -415,6 +415,9 @@ func generateDevRequirements(dCtx DevContext, chatHistory *[]llm.ChatMessage, ha
 		&bulkSearchRepositoryTool,
 		&bulkReadFileTool,
 	}
+	if dCtx.Worktree != nil {
+		tools = append(tools, &setBaseBranchTool)
+	}
 	if hasExistingRequirements {
 		tools = append(tools, &updateDevRequirementsTool)
 	}
