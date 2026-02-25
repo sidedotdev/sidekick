@@ -233,6 +233,7 @@ func countHunkLines(hunks []diffanalysis.Hunk) (added, removed int) {
 }
 
 // splitLargeFileDiff splits a large file diff into smaller chunks by hunks.
+// If a single hunk exceeds targetSize, it is further split by lines.
 func splitLargeFileDiff(fd diffanalysis.FileDiff, targetSize int) []DiffChunk {
 	var chunks []DiffChunk
 	var currentContent strings.Builder
@@ -242,11 +243,8 @@ func splitLargeFileDiff(fd diffanalysis.FileDiff, targetSize int) []DiffChunk {
 	// Extract the original header from RawContent to preserve rename/delete/new file markers
 	header := extractDiffHeader(fd.RawContent)
 
-	for _, hunk := range fd.Hunks {
-		hunkContent := formatHunk(hunk)
-
-		// If adding this hunk would exceed target, start a new chunk
-		if currentContent.Len() > 0 && currentContent.Len()+len(hunkContent) > targetSize {
+	flushCurrent := func() {
+		if currentContent.Len() > 0 {
 			added, removed := countHunkLines(currentHunks)
 			chunks = append(chunks, DiffChunk{
 				FilePath:     fd.NewPath,
@@ -259,17 +257,84 @@ func splitLargeFileDiff(fd diffanalysis.FileDiff, targetSize int) []DiffChunk {
 			currentContent.Reset()
 			currentHunks = nil
 		}
+	}
+
+	for _, hunk := range fd.Hunks {
+		hunkContent := formatHunk(hunk)
+
+		// If a single hunk exceeds targetSize, split it by lines
+		if len(hunkContent)+len(header) > targetSize {
+			flushCurrent()
+			lineChunks := splitHunkByLines(fd.NewPath, header, hunk, targetSize, chunkIndex)
+			chunks = append(chunks, lineChunks...)
+			chunkIndex += len(lineChunks)
+			continue
+		}
+
+		// If adding this hunk would exceed target, start a new chunk
+		if currentContent.Len() > 0 && currentContent.Len()+len(hunkContent) > targetSize {
+			flushCurrent()
+		}
 
 		currentContent.WriteString(hunkContent)
 		currentHunks = append(currentHunks, hunk)
 	}
 
-	// Add remaining content
-	if currentContent.Len() > 0 {
-		added, removed := countHunkLines(currentHunks)
+	flushCurrent()
+
+	return chunks
+}
+
+// splitHunkByLines splits an oversized hunk into multiple chunks by lines.
+func splitHunkByLines(filePath, header string, hunk diffanalysis.Hunk, targetSize int, startChunkIndex int) []DiffChunk {
+	var chunks []DiffChunk
+	chunkIndex := startChunkIndex
+	var sb strings.Builder
+	var added, removed int
+
+	sb.WriteString(hunk.RawHeader)
+	sb.WriteString("\n")
+
+	for _, line := range hunk.Lines {
+		var lineStr string
+		switch line.Type {
+		case diffanalysis.LineContext:
+			lineStr = " " + line.Content + "\n"
+		case diffanalysis.LineAdded:
+			lineStr = "+" + line.Content + "\n"
+		case diffanalysis.LineRemoved:
+			lineStr = "-" + line.Content + "\n"
+		}
+
+		if sb.Len()+len(lineStr)+len(header) > targetSize && sb.Len() > len(hunk.RawHeader)+1 {
+			chunks = append(chunks, DiffChunk{
+				FilePath:     filePath,
+				Content:      header + sb.String(),
+				ChunkIndex:   chunkIndex,
+				LinesAdded:   added,
+				LinesRemoved: removed,
+			})
+			chunkIndex++
+			sb.Reset()
+			sb.WriteString(hunk.RawHeader)
+			sb.WriteString("\n")
+			added = 0
+			removed = 0
+		}
+
+		sb.WriteString(lineStr)
+		switch line.Type {
+		case diffanalysis.LineAdded:
+			added++
+		case diffanalysis.LineRemoved:
+			removed++
+		}
+	}
+
+	if sb.Len() > len(hunk.RawHeader)+1 {
 		chunks = append(chunks, DiffChunk{
-			FilePath:     fd.NewPath,
-			Content:      header + currentContent.String(),
+			FilePath:     filePath,
+			Content:      header + sb.String(),
 			ChunkIndex:   chunkIndex,
 			LinesAdded:   added,
 			LinesRemoved: removed,
@@ -336,8 +401,17 @@ func rankChunksByRelevance(ctx context.Context, chunks []DiffChunk, feedback str
 
 	// Prepare embedding inputs - include file path for context
 	chunkTexts := make([]string, len(chunks))
+	maxChars, err := embedding.GetModelMaxChars(opts.ModelConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get model max chars: %w", err)
+	}
+	safeMaxChars := int(float64(maxChars) * 0.9)
 	for i, chunk := range chunks {
-		chunkTexts[i] = fmt.Sprintf("File: %s\n%s", chunk.FilePath, chunk.Content)
+		text := fmt.Sprintf("File: %s\n%s", chunk.FilePath, chunk.Content)
+		if len(text) > safeMaxChars {
+			text = text[:safeMaxChars]
+		}
+		chunkTexts[i] = text
 	}
 
 	// Embed chunks (with caching)
