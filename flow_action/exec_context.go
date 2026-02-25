@@ -13,6 +13,10 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+func modelMetadataCacheKey(provider, model string) string {
+	return "model_metadata:" + provider + ":" + model
+}
+
 func (eCtx *ExecContext) getModelMetadata(provider, model string) common.ModelMetadata {
 	activityCtx := workflow.WithActivityOptions(eCtx.Context, workflow.ActivityOptions{
 		StartToCloseTimeout: 30 * time.Second,
@@ -26,6 +30,9 @@ func (eCtx *ExecContext) getModelMetadata(provider, model string) common.ModelMe
 	if err != nil {
 		log.Warn().Err(err).Str("provider", provider).Str("model", model).Msg("Failed to get model metadata")
 		return common.ModelMetadata{}
+	}
+	if eCtx.GlobalState != nil {
+		eCtx.GlobalState.SetValue(modelMetadataCacheKey(provider, model), result)
 	}
 	return result
 }
@@ -98,7 +105,7 @@ func (eCtx *ExecContext) GetModelConfig(key string, iteration int, fallback stri
 		}
 	}
 
-	metadata := eCtx.fetchModelMetadata(modelConfig.Provider, modelConfig.Model)
+	metadata := eCtx.FetchModelMetadata(modelConfig.Provider, modelConfig.Model)
 	if !metadata.Reasoning {
 		modelConfig.ReasoningEffort = ""
 	} else if isDefault && fallback == "small" {
@@ -112,7 +119,12 @@ func (eCtx *ExecContext) GetModelConfig(key string, iteration int, fallback stri
 	return modelConfig
 }
 
-func (eCtx *ExecContext) fetchModelMetadata(provider, model string) common.ModelMetadata {
+func (eCtx *ExecContext) FetchModelMetadata(provider, model string) common.ModelMetadata {
+	if eCtx.GlobalState != nil {
+		if cached, ok := eCtx.GlobalState.GetValue(modelMetadataCacheKey(provider, model)).(common.ModelMetadata); ok && cached != (common.ModelMetadata{}) {
+			return cached
+		}
+	}
 	v := workflow.GetVersion(eCtx, "model-supports-reasoning-activity", workflow.DefaultVersion, 1)
 	switch v {
 	case 1:
