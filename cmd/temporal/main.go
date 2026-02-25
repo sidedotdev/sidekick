@@ -22,6 +22,8 @@ func main() {
 		}
 	}
 
+	common.StartPprofServer()
+
 	server := temporal.Start()
 
 	quit := make(chan os.Signal, 1)

@@ -22,6 +22,8 @@ func main() {
 		}
 	}
 
+	common.StartPprofServer()
+
 	w := worker.StartWorker(common.GetTemporalServerHostPort(), common.GetTemporalTaskQueue())
 
 	quit := make(chan os.Signal, 1)
