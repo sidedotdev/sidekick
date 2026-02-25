@@ -53,8 +53,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func RunServer() *Server {
-	common.StartPprofServer()
-
 	gin.SetMode(gin.ReleaseMode)
 
 	shutdownTracer, err := telemetry.InitTracer("sidekick-api")
