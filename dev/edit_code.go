@@ -133,8 +133,7 @@ editLoop:
 			// are in the history before the pause feedback.
 			switch promptInfo.(type) {
 			case InitialCodeInfo, InitialDevStepInfo:
-				doneRequired := IsDoneRequiredProtocol(dCtx)
-				buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired)
+				buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, IsDoneRequiredProtocol(dCtx))
 			}
 			promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 		}

@@ -46,6 +46,31 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 		}
 	}
 
+	// Summarize diff to fit within 50% of the judging model's context capacity
+	summarizeVersion := workflow.GetVersion(dCtx, "summarize-diff-for-fulfillment", workflow.DefaultVersion, 1)
+	if summarizeVersion >= 1 && len(diff) > 0 {
+		modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
+		metadata := dCtx.ExecContext.FetchModelMetadata(modelConfig.Provider, modelConfig.Model)
+		maxDiffChars := metadata.MaxChars() / 2
+		if len(diff) > maxDiffChars {
+			embeddingModelConfig := dCtx.ExecContext.GetEmbeddingModelConfig("diff_summarize")
+			var summarizedDiff string
+			err = workflow.ExecuteActivity(dCtx, SummarizeDiffActivity, SummarizeDiffActivityInput{
+				GitDiff:                diff,
+				ReviewFeedback:         promptInfo.Requirements,
+				EnvContainer:           *dCtx.EnvContainer,
+				ModelConfig:            embeddingModelConfig,
+				SecretManagerContainer: *dCtx.Secrets,
+				MaxChars:               maxDiffChars,
+			}).Get(dCtx, &summarizedDiff)
+			if err == nil {
+				diff = summarizedDiff
+			} else {
+				diff = diff[:maxDiffChars]
+			}
+		}
+	}
+
 	promptInfo.Work = diff
 	if strings.TrimSpace(diff) == "" {
 		promptInfo.Work = "git diff is empty: no changes were made."
@@ -78,6 +103,7 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 	for {
 		// TODO /gen test this, assert it calls the right tool via mock of chat stream method
 		actionCtx := dCtx.ExecContext.NewActionContext("check_criteria_fulfillment")
+		actionCtx.ActionParams["diffString"] = promptInfo.Work
 		response, err := persisted_ai.ForceToolCall(actionCtx, modelConfig, chatHistory, &determineCriteriaFulfillmentTool)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to force tool call: %v", err)

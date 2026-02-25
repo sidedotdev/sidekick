@@ -254,7 +254,8 @@ func runSingleTest(actionCtx DevActionContext, commandIndex int, workingDir stri
 func SummarizeTestOutput(dCtx DevContext, testOutput string) (string, error) {
 	modelConfig := dCtx.GetModelConfig(common.SummarizationKey, 0, "small")
 
-	maxOutputChars := common.MaxCharsForModel(modelConfig.Provider, modelConfig.Model, 15000)
+	metadata := dCtx.ExecContext.FetchModelMetadata(modelConfig.Provider, modelConfig.Model)
+	maxOutputChars := max(0, metadata.MaxChars()-15000)
 	testOutput = TruncateMiddle(testOutput, maxOutputChars)
 
 	prompt := fmt.Sprintf(`

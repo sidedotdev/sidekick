@@ -30,14 +30,17 @@ func GetModelContextLimit(provider, model string) int {
 	return DefaultContextLimitTokens
 }
 
-// MaxCharsForModel returns the maximum character budget for a model's context window,
-// subtracting reserveChars from the total to leave room for prompt overhead and response.
-func MaxCharsForModel(provider, model string, reserveChars int) int {
+// MaxCharsForModel returns the maximum character budget for a model's context window.
+func MaxCharsForModel(provider, model string) int {
 	contextTokens := GetModelContextLimit(provider, model)
-	totalChars := int(float64(contextTokens) * CharsPerToken)
-	available := totalChars - reserveChars
-	if available < 0 {
-		return 0
+	return int(float64(contextTokens) * CharsPerToken)
+}
+
+// MaxChars returns the character budget derived from the model's context window.
+func (m ModelMetadata) MaxChars() int {
+	contextTokens := m.ContextTokens
+	if contextTokens <= 0 {
+		contextTokens = getContextTokensFallback()
 	}
-	return available
+	return int(float64(contextTokens) * CharsPerToken)
 }

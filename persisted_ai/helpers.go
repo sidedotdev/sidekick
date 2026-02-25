@@ -65,7 +65,9 @@ func ForceToolCallWithTrackOptionsV2(
 		Providers:   actionCtx.Providers,
 	}
 
-	actionCtx.ActionParams = streamInput.ActionParams()
+	for k, v := range streamInput.ActionParams() {
+		actionCtx.ActionParams[k] = v
+	}
 	response, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		streamInput.FlowActionId = flowAction.Id
 
@@ -90,7 +92,9 @@ func ForceToolCallWithTrackOptionsV2(
 		}
 		AppendChatHistory(actionCtx, chatHistory, retryMsg)
 
-		actionCtx.ActionParams = streamInput.ActionParams()
+		for k, v := range streamInput.ActionParams() {
+			actionCtx.ActionParams[k] = v
+		}
 		response, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
 			streamInput.FlowActionId = flowAction.Id
 
