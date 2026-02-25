@@ -515,6 +515,9 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	tools = append(tools, currentGetSymbolDefinitionsTool())
 	tools = append(tools, &bulkReadFileTool)
 	tools = append(tools, &runCommandTool)
+	if dCtx.Worktree != nil {
+		tools = append(tools, &setBaseBranchTool)
+	}
 	tools = append(tools, &doneTool)
 
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {

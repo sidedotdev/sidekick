@@ -519,6 +519,9 @@ func generateDevPlan(dCtx DevContext, chatHistory *[]llm.ChatMessage, hasExistin
 		&bulkSearchRepositoryTool,
 		&bulkReadFileTool,
 	}
+	if dCtx.Worktree != nil {
+		tools = append(tools, &setBaseBranchTool)
+	}
 	if hasExistingPlan {
 		tools = append(tools, &updateDevPlanTool)
 	}
