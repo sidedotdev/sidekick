@@ -202,12 +202,16 @@ func GetModel(provider string, model string) (*ModelInfo, bool) {
 	return nil, false
 }
 
-func ModelSupportsReasoning(provider string, model string) bool {
+type ModelMetadata struct {
+	Reasoning bool
+}
+
+func GetModelMetadata(provider string, model string) ModelMetadata {
 	modelInfo, _ := GetModel(provider, model)
 	if modelInfo == nil {
-		return false
+		return ModelMetadata{}
 	}
-	return modelInfo.Reasoning
+	return ModelMetadata{Reasoning: modelInfo.Reasoning}
 }
 
 func ClearModelsCache() {

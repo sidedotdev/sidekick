@@ -6,9 +6,29 @@ import (
 	"sidekick/env"
 	"sidekick/secret_manager"
 	"strings"
+	"time"
 
+	"github.com/rs/zerolog/log"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
+
+func (eCtx *ExecContext) getModelMetadata(provider, model string) common.ModelMetadata {
+	activityCtx := workflow.WithActivityOptions(eCtx.Context, workflow.ActivityOptions{
+		StartToCloseTimeout: 30 * time.Second,
+		RetryPolicy: &temporal.RetryPolicy{
+			MaximumAttempts: 2,
+		},
+	})
+	var fa *FlowActivities
+	var result common.ModelMetadata
+	err := workflow.ExecuteActivity(activityCtx, fa.GetModelMetadata, provider, model).Get(eCtx, &result)
+	if err != nil {
+		log.Warn().Err(err).Str("provider", provider).Str("model", model).Msg("Failed to get model metadata")
+		return common.ModelMetadata{}
+	}
+	return result
+}
 
 // ExecContext encapsulates environment, secret configuration, and workspace
 // context necessary for running activities. Most of these items are required
@@ -73,23 +93,33 @@ func (eCtx *ExecContext) GetModelConfig(key string, iteration int, fallback stri
 					}
 				}
 			}
-			// Set low reasoning effort for non-Claude reasoning models.
-			// Claude models are excluded because they error with "Thinking may
-			// not be enabled when tool_choice forces tool use."
-			if common.ModelSupportsReasoning(modelConfig.Provider, modelConfig.Model) &&
-				!strings.Contains(strings.ToLower(modelConfig.Model), "claude") {
-				modelConfig.ReasoningEffort = "low"
-			}
 		} else {
 			modelConfig, _ = eCtx.LLMConfig.GetModelConfig(fallback, iteration)
 		}
 	}
 
-	if !common.ModelSupportsReasoning(modelConfig.Provider, modelConfig.Model) {
+	metadata := eCtx.fetchModelMetadata(modelConfig.Provider, modelConfig.Model)
+	if !metadata.Reasoning {
 		modelConfig.ReasoningEffort = ""
+	} else if isDefault && fallback == "small" {
+		// Claude models are excluded because they error with "Thinking may
+		// not be enabled when tool_choice forces tool use."
+		if !strings.Contains(strings.ToLower(modelConfig.Model), "claude") {
+			modelConfig.ReasoningEffort = "low"
+		}
 	}
 
 	return modelConfig
+}
+
+func (eCtx *ExecContext) fetchModelMetadata(provider, model string) common.ModelMetadata {
+	v := workflow.GetVersion(eCtx, "model-supports-reasoning-activity", workflow.DefaultVersion, 1)
+	switch v {
+	case 1:
+		return eCtx.getModelMetadata(provider, model)
+	default:
+		return common.GetModelMetadata(provider, model)
+	}
 }
 
 func (eCtx *ExecContext) GetEmbeddingModelConfig(key string) common.ModelConfig {
