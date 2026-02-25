@@ -213,21 +213,26 @@ func (h *LegacyChatHistory) Append(msg common.Message) {
 	} else if cmp, ok := msg.(*common.ChatMessage); ok {
 		h.messages = append(h.messages, *cmp)
 	} else {
-		x := MessageFromCommon(msg)
+		converted := MessageFromCommon(msg)
+		if len(converted.Content) == 0 {
+			return
+		}
 		role := common.ChatMessageRole(msg.GetRole())
-		if len(x.Content[0].ToolResult.Name) > 0 {
+		first := converted.Content[0]
+		if first.ToolResult != nil && len(first.ToolResult.Name) > 0 {
 			role = common.ChatMessageRoleTool
 		}
 		legacyMsg := common.ChatMessage{
-			Role:      role,
-			Content:   x.GetContentString(),
-			ToolCalls: x.GetToolCalls(),
-
-			Name:         x.Content[0].ToolResult.Name,
-			ToolCallId:   x.Content[0].ToolResult.ToolCallId,
-			IsError:      x.Content[0].ToolResult.IsError,
-			CacheControl: x.Content[0].CacheControl,
-			ContextType:  GetContextType(x.Content[0]),
+			Role:         role,
+			Content:      converted.GetContentString(),
+			ToolCalls:    converted.GetToolCalls(),
+			CacheControl: first.CacheControl,
+			ContextType:  GetContextType(first),
+		}
+		if first.ToolResult != nil {
+			legacyMsg.Name = first.ToolResult.Name
+			legacyMsg.ToolCallId = first.ToolResult.ToolCallId
+			legacyMsg.IsError = first.ToolResult.IsError
 		}
 		h.messages = append(h.messages, legacyMsg)
 	}

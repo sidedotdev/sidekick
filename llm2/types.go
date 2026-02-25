@@ -143,7 +143,7 @@ func (m Message) GetContentString() string {
 	for _, block := range m.Content {
 		if block.Type == ContentBlockTypeText {
 			result += block.Text
-		} else if block.Type == ContentBlockTypeToolResult {
+		} else if block.Type == ContentBlockTypeToolResult && block.ToolResult != nil {
 			result += block.ToolResult.TextContent()
 		}
 	}
