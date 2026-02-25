@@ -1019,3 +1019,77 @@ func TestBuildFallbackHunkSummary(t *testing.T) {
 		})
 	}
 }
+
+func TestSplitLargeFileDiff_SplitsLargeHunkByLines(t *testing.T) {
+	t.Parallel()
+
+	// Create a diff with a single very large hunk
+	var largeDiff strings.Builder
+	largeDiff.WriteString("diff --git a/big.go b/big.go\n")
+	largeDiff.WriteString("--- a/big.go\n")
+	largeDiff.WriteString("+++ b/big.go\n")
+	largeDiff.WriteString("@@ -1,2 +1,502 @@\n")
+	largeDiff.WriteString(" package main\n")
+	for i := 0; i < 500; i++ {
+		largeDiff.WriteString(fmt.Sprintf("+func generated_%d() { return %d }\n", i, i))
+	}
+	largeDiff.WriteString(" func main() {}\n")
+
+	fileDiffs, err := diffanalysis.ParseUnifiedDiff(largeDiff.String())
+	require.NoError(t, err)
+	require.Len(t, fileDiffs, 1)
+
+	// Use a small target to force splitting within the hunk
+	chunks := splitLargeFileDiff(fileDiffs[0], 500)
+	require.Greater(t, len(chunks), 1, "should split large hunk into multiple chunks")
+
+	// Each chunk should be within target size (header + content)
+	for i, chunk := range chunks {
+		assert.LessOrEqual(t, len(chunk.Content), 1000,
+			"chunk %d should be reasonably sized, got %d chars", i, len(chunk.Content))
+	}
+
+	// All chunks should have the file path set
+	for i, chunk := range chunks {
+		assert.Equal(t, "big.go", chunk.FilePath, "chunk %d should have correct file path", i)
+	}
+
+	// Line stats across all chunks should sum to the total
+	totalAdded := 0
+	for _, chunk := range chunks {
+		totalAdded += chunk.LinesAdded
+	}
+	assert.Equal(t, 500, totalAdded, "total added lines across chunks should match")
+
+	// Chunk indices should be sequential
+	for i, chunk := range chunks {
+		assert.Equal(t, i, chunk.ChunkIndex, "chunk indices should be sequential")
+	}
+}
+
+func TestChunkFileDiffs_SplitsOversizedSingleHunk(t *testing.T) {
+	t.Parallel()
+
+	// Create a diff with one massive hunk that exceeds any reasonable chunk target
+	var largeDiff strings.Builder
+	largeDiff.WriteString("diff --git a/huge.go b/huge.go\n")
+	largeDiff.WriteString("--- a/huge.go\n")
+	largeDiff.WriteString("+++ b/huge.go\n")
+	largeDiff.WriteString("@@ -1,1 +1,301 @@\n")
+	largeDiff.WriteString(" package main\n")
+	for i := 0; i < 300; i++ {
+		largeDiff.WriteString(fmt.Sprintf("+func longFunctionName_%d() { /* some body content here to make lines longer */ return %d }\n", i, i))
+	}
+
+	fileDiffs, err := diffanalysis.ParseUnifiedDiff(largeDiff.String())
+	require.NoError(t, err)
+
+	// maxChars=10000 → targetChunkSize=min(2500, 4000)=2500
+	chunks := chunkFileDiffs(fileDiffs, 10000)
+	require.Greater(t, len(chunks), 1, "oversized single hunk should be split into multiple chunks")
+
+	// Verify all chunks belong to the same file
+	for _, chunk := range chunks {
+		assert.Equal(t, "huge.go", chunk.FilePath)
+	}
+}
