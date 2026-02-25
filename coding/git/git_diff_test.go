@@ -367,6 +367,25 @@ func TestGitDiffActivity(t *testing.T) {
 			expectOutput: false,
 		},
 		{
+			name: "context_lines_zero",
+			params: GitDiffParams{
+				Staged:       true,
+				ThreeDotDiff: true,
+				BaseRef:      "main",
+				ContextLines: func() *int { v := 0; return &v }(),
+			},
+			setupRepo: func(t *testing.T, repoDir string) {
+				createFileAndCommit(t, repoDir, "file1.txt", "line1\nline2\nline3\nline4\nline5", "initial commit")
+				runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
+				err := os.WriteFile(filepath.Join(repoDir, "file1.txt"), []byte("line1\nline2\nchanged\nline4\nline5"), fs.FileMode(0644))
+				require.NoError(t, err)
+				runGitCommandInTestRepo(t, repoDir, "add", "file1.txt")
+			},
+			expectError:    false,
+			expectOutput:   true,
+			outputContains: []string{"changed"},
+		},
+		{
 			name: "three_dot_diff_with_shell_metachar_in_branch_name",
 			params: GitDiffParams{
 				ThreeDotDiff: true,
