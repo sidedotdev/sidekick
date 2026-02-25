@@ -412,7 +412,7 @@ func (m taskProgressModel) View() string {
 			b.WriteString(fmt.Sprintf("\n%s Working... To cancel, press ctrl+c.", m.spinner.View()))
 		}
 
-		b.WriteString(fmt.Sprintf("\n⚠️  Sidekick's cli-only mode is *experimental*. Interact via http://localhost:%d/flows/%s", common.GetServerPort(), m.flowID))
+		b.WriteString(fmt.Sprintf("\n⚠️  Sidekick's cli-only mode is *experimental*. Interact via http://localhost:%d/flows/%s?workspaceId=%s", common.GetServerPort(), m.flowID, m.workspaceID))
 	}
 
 	return b.String()
