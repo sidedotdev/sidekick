@@ -212,6 +212,24 @@ func (h *LegacyChatHistory) Append(msg common.Message) {
 		h.messages = append(h.messages, cm)
 	} else if cmp, ok := msg.(*common.ChatMessage); ok {
 		h.messages = append(h.messages, *cmp)
+	} else {
+		x := MessageFromCommon(msg)
+		role := common.ChatMessageRole(msg.GetRole())
+		if len(x.Content[0].ToolResult.Name) > 0 {
+			role = common.ChatMessageRoleTool
+		}
+		legacyMsg := common.ChatMessage{
+			Role:      role,
+			Content:   x.GetContentString(),
+			ToolCalls: x.GetToolCalls(),
+
+			Name:         x.Content[0].ToolResult.Name,
+			ToolCallId:   x.Content[0].ToolResult.ToolCallId,
+			IsError:      x.Content[0].ToolResult.IsError,
+			CacheControl: x.Content[0].CacheControl,
+			ContextType:  GetContextType(x.Content[0]),
+		}
+		h.messages = append(h.messages, legacyMsg)
 	}
 }
 

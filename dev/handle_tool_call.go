@@ -232,11 +232,6 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 					return "", actErr
 				}
 				ref = &output.Ref
-				source := params.FilePath
-				if params.URL != "" {
-					source = params.URL
-				}
-				toolCallResult.Content = llm2.TextContentBlocks("Image loaded successfully: " + source)
 				return "", nil
 			})
 		default:
