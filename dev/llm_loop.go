@@ -23,6 +23,7 @@ type Option func(*LlmLoopConfig)
 type LlmLoopConfig struct {
 	maxIterations  int
 	autoIterations int
+	giveUpQuietly  bool
 	initialState   interface{}
 }
 
@@ -54,10 +55,19 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 	config := &LlmLoopConfig{
 		maxIterations:  17,
 		autoIterations: 3,
+		giveUpQuietly:  false,
 	}
 
 	for _, opt := range opts {
 		opt(config)
+	}
+
+	v := workflow.GetVersion(dCtx, "llm-loop-give-up-quietly", workflow.DefaultVersion, 1)
+	if v == 1 {
+		config.giveUpQuietly = true
+		if config.autoIterations < 8 {
+			config.autoIterations = 8
+		}
 	}
 
 	if chatHistory == nil {
@@ -107,6 +117,10 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 
 		// Get user feedback every N iterations
 		if iteration.AutoIterationCount >= config.autoIterations {
+			if config.giveUpQuietly {
+				workflow.GetLogger(dCtx).Warn("LlmLoop exceeded threshold, returning empty result", "iterations", iteration.Num)
+				return new(T), nil
+			}
 			guidanceContext := fmt.Sprintf("The LLM has looped %d times without finalizing. Please provide guidance or just say \"continue\" if they are on track.", iteration.Num)
 			userResponse, err := GetUserGuidance(dCtx, guidanceContext, nil)
 			if err != nil {

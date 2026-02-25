@@ -247,6 +247,16 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 	attempts := 0
 	iterationsSinceLastFeedback := 0
 
+	feedbackThreshold := 5
+	maxAttempts := 17
+	giveUpQuietly := false
+	v := workflow.GetVersion(actionCtx, "code-context-loop-limits", workflow.DefaultVersion, 1)
+	if v == 1 {
+		feedbackThreshold = 8
+		maxAttempts = feedbackThreshold
+		giveUpQuietly = true
+	}
+
 	for {
 		// Check for pause at the beginning of each iteration
 		userResponse, err := UserRequestIfPaused(actionCtx.DevContext, "Code context loop paused. Would you like to provide any guidance?", nil)
@@ -270,7 +280,11 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		attempts++
 		iterationsSinceLastFeedback++
 
-		if iterationsSinceLastFeedback >= 5 {
+		if iterationsSinceLastFeedback >= feedbackThreshold {
+			if giveUpQuietly {
+				workflow.GetLogger(actionCtx).Warn("code context loop exceeded threshold, returning empty context", "attempts", attempts)
+				return &RequiredCodeContext{}, "", nil
+			}
 			guidanceContext := "The system has attempted to refine and rank the code context multiple times without success. Please provide some guidance."
 			userFeedback, err := GetUserFeedback(actionCtx.DevContext, SkipInfo{}, guidanceContext, chatHistory, nil)
 			if err != nil {
@@ -293,8 +307,8 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			}
 		}
 
-		if attempts >= 17 {
-			return nil, "", fmt.Errorf("failed to refine and rank code context after 17 attempts: %v", err)
+		if !giveUpQuietly && attempts >= maxAttempts {
+			return nil, "", fmt.Errorf("failed to refine and rank code context after %d attempts: %v", maxAttempts, err)
 		}
 
 		// STEP 2: Decide which code to read fully
