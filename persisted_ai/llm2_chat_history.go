@@ -193,6 +193,7 @@ type ChatHistory interface {
 	IsHydrated() bool
 	Hydrate(ctx context.Context, storage common.KeyValueStorage) error
 	Persist(ctx context.Context, storage common.KeyValueStorage, gen BlockIdGenerator) error
+	Clone() ChatHistory
 }
 
 // LegacyChatHistory wraps a slice of ChatMessage to implement ChatHistory.
@@ -261,6 +262,12 @@ func (h *LegacyChatHistory) MarshalJSON() ([]byte, error) {
 		return json.Marshal([]common.ChatMessage{})
 	}
 	return json.Marshal(h.messages)
+}
+
+func (h *LegacyChatHistory) Clone() ChatHistory {
+	msgs := make([]common.ChatMessage, len(h.messages))
+	copy(msgs, h.messages)
+	return &LegacyChatHistory{messages: msgs}
 }
 
 // Llm2ChatHistory stores message references in Temporal history and persists
@@ -576,6 +583,39 @@ type llm2ChatHistoryJSON struct {
 	WorkspaceId string       `json:"workspaceId,omitempty"`
 }
 
+func (h *Llm2ChatHistory) Clone() ChatHistory {
+	refs := make([]MessageRef, len(h.refs))
+	for i, ref := range h.refs {
+		refs[i] = MessageRef{
+			BlockKeys: append([]string(nil), ref.BlockKeys...),
+			Role:      ref.Role,
+		}
+	}
+
+	clone := &Llm2ChatHistory{
+		flowId:      h.flowId,
+		workspaceId: h.workspaceId,
+		refs:        refs,
+		hydrated:    h.hydrated,
+	}
+
+	if h.messages != nil {
+		clone.messages = deepCopyMessages(h.messages)
+	}
+
+	clone.unpersisted = make([]int, len(h.unpersisted))
+	copy(clone.unpersisted, h.unpersisted)
+
+	if h.hydratedBlocks != nil {
+		clone.hydratedBlocks = make(map[string]llm2.ContentBlock, len(h.hydratedBlocks))
+		for k, v := range h.hydratedBlocks {
+			clone.hydratedBlocks[k] = v
+		}
+	}
+
+	return clone
+}
+
 func (h *Llm2ChatHistory) MarshalJSON() ([]byte, error) {
 	return json.Marshal(llm2ChatHistoryJSON{
 		Type:        "llm2",
@@ -869,6 +909,14 @@ func (c *ChatHistoryContainer) IsHydrated() bool {
 		return true
 	}
 	return c.History.IsHydrated()
+}
+
+// Clone returns a deep copy of the container with a cloned underlying history.
+func (c *ChatHistoryContainer) Clone() ChatHistoryContainer {
+	if c.History == nil {
+		return ChatHistoryContainer{}
+	}
+	return ChatHistoryContainer{History: c.History.Clone()}
 }
 
 // Llm2Messages returns the underlying []llm2.Message if the history is an Llm2ChatHistory,

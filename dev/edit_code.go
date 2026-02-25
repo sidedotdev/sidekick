@@ -343,7 +343,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 		// visibleChatHistory is captured before ManageChatHistory to reflect
 		// what was actually visible to the LLM when edit blocks were generated
-		visibleChatHistory := *chatHistory
+		visibleChatHistory := chatHistory.Clone()
 		if v := workflow.GetVersion(dCtx, "bugfix-edit-block-visibility-orig-history", workflow.DefaultVersion, 1); v == 1 {
 			// this maintains the buggy behavior on older workflows to still replay them
 			AppendChatHistory(dCtx, &visibleChatHistory, chatResponse.GetMessage())
