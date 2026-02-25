@@ -18,6 +18,7 @@ type GitDiffParams struct {
 	ThreeDotDiff     bool
 	IgnoreWhitespace bool
 	Staged           bool
+	ContextLines     *int
 }
 
 // GitDiff returns the diff of the current, staged changes in the working tree.
@@ -104,6 +105,10 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 		if params.BaseRef != "" {
 			cmdParts = append(cmdParts, shellQuote(params.BaseRef))
 		}
+	}
+
+	if params.ContextLines != nil {
+		cmdParts = append(cmdParts, fmt.Sprintf("-U%d", *params.ContextLines))
 	}
 
 	if params.IgnoreWhitespace {
