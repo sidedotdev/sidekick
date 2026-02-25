@@ -158,6 +158,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	}
 
 	w := worker.New(temporalClient, taskQueue, worker.Options{
+		DeadlockDetectionTimeout: 5 * time.Second,
 		OnFatalError: func(err error) {
 			log.Fatal().Err(err).Msg("Worker encountered a fatal error")
 		},
