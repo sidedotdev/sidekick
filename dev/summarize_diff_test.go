@@ -134,3 +134,57 @@ func TestSummarizeDiffActivity_BudgetCalculation(t *testing.T) {
 	// Verify that the hard-coded budget constant is set correctly
 	assert.Equal(t, 15000, DiffSummarizeMaxChars, "DiffSummarizeMaxChars should be 15000")
 }
+
+func TestSummarizeDiffActivity_MaxCharsOverride(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(tempDir, "file.go"), []byte("package main\n"), 0644)
+	require.NoError(t, err)
+
+	// Build a diff larger than a custom budget but smaller than DiffSummarizeMaxChars
+	var diffBuilder strings.Builder
+	diffBuilder.WriteString("diff --git a/file.go b/file.go\n")
+	diffBuilder.WriteString("--- a/file.go\n")
+	diffBuilder.WriteString("+++ b/file.go\n")
+	diffBuilder.WriteString("@@ -1,1 +1,100 @@\n")
+	diffBuilder.WriteString(" package main\n")
+	for i := 0; i < 200; i++ {
+		diffBuilder.WriteString("+// line with padding content to increase size ")
+		diffBuilder.WriteString(string(rune('0'+i/10)) + string(rune('0'+i%10)))
+		diffBuilder.WriteString("\n")
+	}
+
+	diffStr := diffBuilder.String()
+	customBudget := 500
+	require.Greater(t, len(diffStr), customBudget)
+	require.Less(t, len(diffStr), DiffSummarizeMaxChars)
+
+	input := SummarizeDiffActivityInput{
+		GitDiff:        diffStr,
+		ReviewFeedback: "review",
+		EnvContainer: env.EnvContainer{
+			Env: &env.LocalEnv{WorkingDirectory: tempDir},
+		},
+		ModelConfig: common.ModelConfig{
+			Provider: "mock",
+			Model:    "mock-model",
+		},
+		SecretManagerContainer: secret_manager.SecretManagerContainer{
+			SecretManager: secret_manager.MockSecretManager{},
+		},
+		MaxChars: customBudget,
+	}
+
+	result, err := SummarizeDiffActivity(context.Background(), input)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(result), customBudget, "output should respect the custom MaxChars budget")
+	assert.NotEqual(t, diffStr, result, "diff exceeding custom budget should be summarized")
+
+	// Without MaxChars override, same diff should be returned unchanged (under default budget)
+	input.MaxChars = 0
+	result, err = SummarizeDiffActivity(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, diffStr, result, "diff under default budget should be returned unchanged")
+}

@@ -23,13 +23,20 @@ type SummarizeDiffActivityInput struct {
 	EnvContainer           env.EnvContainer
 	ModelConfig            common.ModelConfig
 	SecretManagerContainer secret_manager.SecretManagerContainer
+	// MaxChars overrides DiffSummarizeMaxChars when set to a positive value.
+	MaxChars int
 }
 
 // SummarizeDiffActivity summarizes a git diff to fit within the character budget.
 // If the diff is small enough, it returns it unchanged. Otherwise, it ranks chunks
 // by relevance to the review feedback and truncates to fit.
 func SummarizeDiffActivity(ctx context.Context, input SummarizeDiffActivityInput) (string, error) {
-	if len(input.GitDiff) <= DiffSummarizeMaxChars {
+	maxChars := DiffSummarizeMaxChars
+	if input.MaxChars > 0 {
+		maxChars = input.MaxChars
+	}
+
+	if len(input.GitDiff) <= maxChars {
 		return input.GitDiff, nil
 	}
 
@@ -51,7 +58,7 @@ func SummarizeDiffActivity(ctx context.Context, input SummarizeDiffActivityInput
 	opts := persisted_ai.DiffSummarizeOptions{
 		GitDiff:         input.GitDiff,
 		ReviewFeedback:  input.ReviewFeedback,
-		MaxChars:        DiffSummarizeMaxChars,
+		MaxChars:        maxChars,
 		ModelConfig:     input.ModelConfig,
 		SecretManager:   input.SecretManagerContainer.SecretManager,
 		Embedder:        embedder,

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -203,7 +204,8 @@ func GetModel(provider string, model string) (*ModelInfo, bool) {
 }
 
 type ModelMetadata struct {
-	Reasoning bool
+	Reasoning     bool
+	ContextTokens int
 }
 
 func GetModelMetadata(provider string, model string) ModelMetadata {
@@ -211,7 +213,19 @@ func GetModelMetadata(provider string, model string) ModelMetadata {
 	if modelInfo == nil {
 		return ModelMetadata{}
 	}
-	return ModelMetadata{Reasoning: modelInfo.Reasoning}
+	return ModelMetadata{
+		Reasoning:     modelInfo.Reasoning,
+		ContextTokens: modelInfo.Limit.Context,
+	}
+}
+
+func getContextTokensFallback() int {
+	if envVal := os.Getenv("SIDE_FALLBACK_MAX_TOKENS"); envVal != "" {
+		if limit, err := strconv.Atoi(envVal); err == nil && limit > 0 {
+			return limit
+		}
+	}
+	return DefaultContextLimitTokens
 }
 
 func ClearModelsCache() {
