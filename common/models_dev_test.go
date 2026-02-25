@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestModelSupportsReasoning(t *testing.T) {
+func TestGetModelMetadata(t *testing.T) {
 	ClearModelsCache()
 	t.Cleanup(ClearModelsCache)
 	tempDir := t.TempDir()
@@ -42,57 +42,57 @@ func TestModelSupportsReasoning(t *testing.T) {
 		name     string
 		provider string
 		model    string
-		want     bool
+		want     ModelMetadata
 	}{
 		{
 			name:     "known provider and model with reasoning true",
 			provider: "openai",
 			model:    "gpt-5",
-			want:     true,
+			want:     ModelMetadata{Reasoning: true},
 		},
 		{
 			name:     "known provider and model with reasoning false",
 			provider: "openai",
 			model:    "gpt-3.5-turbo",
-			want:     false,
+			want:     ModelMetadata{Reasoning: false},
 		},
 		{
 			name:     "case insensitive provider match",
 			provider: "OpenAI",
 			model:    "gpt-5",
-			want:     true,
+			want:     ModelMetadata{Reasoning: true},
 		},
 		{
 			name:     "unknown provider",
 			provider: "unknown",
 			model:    "some-model",
-			want:     false,
+			want:     ModelMetadata{Reasoning: false},
 		},
 		{
 			name:     "known provider unknown model",
 			provider: "openai",
 			model:    "unknown-model",
-			want:     false,
+			want:     ModelMetadata{Reasoning: false},
 		},
 		{
 			name:     "anthropic model without reasoning",
 			provider: "anthropic",
 			model:    "claude-3-opus",
-			want:     false,
+			want:     ModelMetadata{Reasoning: false},
 		},
 		{
 			name:     "custom provider fallback to model match with reasoning",
 			provider: "custom-gateway",
 			model:    "gpt-5",
-			want:     true,
+			want:     ModelMetadata{Reasoning: true},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ModelSupportsReasoning(tt.provider, tt.model)
+			got := GetModelMetadata(tt.provider, tt.model)
 			if got != tt.want {
-				t.Errorf("ModelSupportsReasoning(%q, %q) = %v, want %v", tt.provider, tt.model, got, tt.want)
+				t.Errorf("GetModelMetadata(%q, %q) = %v, want %v", tt.provider, tt.model, got, tt.want)
 			}
 		})
 	}
