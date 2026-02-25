@@ -31,8 +31,10 @@ type CriteriaFulfillment struct {
 // TODO /gen add a test for this function
 func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (CriteriaFulfillment, error) {
 	// Use GlobalState as single source of truth for base branch, falling back to caller-provided value
-	if globalBase := dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch); globalBase != "" {
-		promptInfo.BaseBranch = globalBase
+	if v := workflow.GetVersion(dCtx, "check-work-global-base-branch", workflow.DefaultVersion, 1); v >= 1 {
+		if globalBase := dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch); globalBase != "" {
+			promptInfo.BaseBranch = globalBase
+		}
 	}
 
 	var diff string
