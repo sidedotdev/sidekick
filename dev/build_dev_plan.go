@@ -522,6 +522,9 @@ func generateDevPlan(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryConta
 		&bulkSearchRepositoryTool,
 		&bulkReadFileTool,
 	}
+	if dCtx.Worktree != nil {
+		tools = append(tools, &setBaseBranchTool)
+	}
 	if hasExistingPlan {
 		tools = append(tools, &updateDevPlanTool)
 	}

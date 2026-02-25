@@ -234,6 +234,11 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 				ref = &output.Ref
 				return "", nil
 			})
+		case setBaseBranchTool.Name:
+			var setBaseBranchParams SetBaseBranchParams
+			response, err = unmarshalAndInvoke(toolCall, &setBaseBranchParams, func() (string, error) {
+				return SetBaseBranch(dCtx, setBaseBranchParams)
+			})
 		default:
 			// FIXME this should be non-retryable but is being retried now (openai can rarely use a function name that we don't support)
 			response, err = "", fmt.Errorf("unknown function name: %s", toolCall.Name)

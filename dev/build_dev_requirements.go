@@ -416,6 +416,9 @@ func generateDevRequirements(dCtx DevContext, chatHistory *persisted_ai.ChatHist
 		&bulkSearchRepositoryTool,
 		&bulkReadFileTool,
 	}
+	if dCtx.Worktree != nil {
+		tools = append(tools, &setBaseBranchTool)
+	}
 	if hasExistingRequirements {
 		tools = append(tools, &updateDevRequirementsTool)
 	}
