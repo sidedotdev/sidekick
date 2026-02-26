@@ -3,6 +3,7 @@ package dev
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"sidekick/coding"
@@ -627,5 +628,72 @@ func TestCheckToolCallUnmarshalErrors(t *testing.T) {
 		assert.Contains(t, fatalErr.Error(), "some other error")
 		assert.False(t, hasUnmarshalError)
 		assert.Nil(t, feedbacks)
+	})
+}
+
+func TestTruncateCodeContextWithSummary(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no truncation needed", func(t *testing.T) {
+		t.Parallel()
+		content := "File: foo.go\nsome code"
+		result := truncateCodeContextWithSummary(content, 1000)
+		assert.Equal(t, content, result)
+	})
+
+	t.Run("single file partially truncated", func(t *testing.T) {
+		t.Parallel()
+		content := "File: foo.go\n" + strings.Repeat("x", 200)
+		result := truncateCodeContextWithSummary(content, 100)
+		assert.Less(t, len(result), len(content))
+		assert.Contains(t, result, "... [truncated] ...")
+		assert.Contains(t, result, "Partially included: foo.go")
+	})
+
+	t.Run("multiple files with some fully removed", func(t *testing.T) {
+		t.Parallel()
+		content := "File: first.go\n" + strings.Repeat("a\n", 50) +
+			"File: second.go\n" + strings.Repeat("b\n", 50) +
+			"File: third.go\n" + strings.Repeat("c\n", 50)
+		// Truncate so first file is kept, second partially, third fully removed
+		secondFileOffset := strings.Index(content, "File: second.go")
+		maxLen := secondFileOffset + 30
+		result := truncateCodeContextWithSummary(content, maxLen)
+		assert.Contains(t, result, "File: first.go")
+		assert.Contains(t, result, "Fully removed: third.go")
+		assert.Contains(t, result, "Partially included: second.go")
+	})
+
+	t.Run("files fully removed and partially included", func(t *testing.T) {
+		t.Parallel()
+		content := "File: a.go\n" + strings.Repeat("x\n", 50) +
+			"File: b.go\n" + strings.Repeat("y\n", 100) +
+			"File: c.go\n" + strings.Repeat("z\n", 100)
+		thirdFileOffset := strings.Index(content, "File: c.go")
+		// Max well past second file start but before third, leaving room for summary
+		result := truncateCodeContextWithSummary(content, thirdFileOffset)
+		assert.Contains(t, result, "File: a.go")
+		assert.Contains(t, result, "File: b.go")
+		assert.Contains(t, result, "Fully removed: c.go")
+	})
+
+	t.Run("no file markers", func(t *testing.T) {
+		t.Parallel()
+		content := strings.Repeat("some text\n", 100)
+		result := truncateCodeContextWithSummary(content, 50)
+		assert.Contains(t, result, "... [truncated] ...")
+		assert.NotContains(t, result, "Partially included:")
+		assert.NotContains(t, result, "Fully removed:")
+	})
+
+	t.Run("truncates at line boundary", func(t *testing.T) {
+		t.Parallel()
+		content := "File: foo.go\nline1\nline2\nline3\nline4\nline5\n" + strings.Repeat("x", 200)
+		result := truncateCodeContextWithSummary(content, 60)
+		// Should not cut in the middle of a line
+		truncatedPart := strings.SplitN(result, "\n\n... [truncated]", 2)[0]
+		lastLine := truncatedPart[strings.LastIndex(truncatedPart, "\n")+1:]
+		// The last line before the summary should be a complete line from the original
+		assert.True(t, strings.Contains(content, lastLine), "truncation should occur at a line boundary")
 	})
 }

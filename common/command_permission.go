@@ -347,6 +347,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			// Unnecessary cd to home directory paths
 			{Pattern: `cd /home/`, Message: "cd not needed, the command will already be run in the correct working directory"},
 			{Pattern: `cd /Users/`, Message: "cd not needed, the command will already be run in the correct working directory"},
+			{Pattern: `cd /repo`, Message: "cd not needed, the command will already be run in the correct working directory"},
 		},
 	}
 }

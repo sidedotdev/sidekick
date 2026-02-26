@@ -369,21 +369,87 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 
 		// TODO use tiktoken to count exact tokens and compare with specific model being used + margin
 		if len(codeContext) > currentMax {
-			// TODO if this happens, we could try partially symbolizing the code context too
-			// Provide feedback for all tool calls when combined context is too long
-			feedback := "Error: the code context requested is too long to include. YOU MUST SHORTEN THE CODE CONTEXT REQUESTED. DO NOT REQUEST SO MANY FUNCTIONS AND TYPES IN SO MANY FILES. If you're not asking for too many symbols, then be more specific in your request - eg request just a few methods instead of a big class."
-			for _, tcResult := range toolCallResults {
-				addCodeContextToolResult(actionCtx, chatHistory, llm2.ToolResultBlock{Content: llm2.TextContentBlocks(feedback), ToolCallId: tcResult.ToolCall.Id, Name: tcResult.ToolCall.Name})
-			}
-			continue
-		} else {
-			// TODO check for empty code context too. we should use
-			// alternate methods if we get empty code context repeatedly.
-			break
+			codeContext = truncateCodeContextWithSummary(codeContext, currentMax)
 		}
+		// TODO check for empty code context too. we should use
+		// alternate methods if we get empty code context repeatedly.
+		break
 	}
 
 	return &requiredCodeContext, codeContext, nil
+}
+
+// truncateCodeContextWithSummary truncates codeContext to fit within maxLength,
+// appending a summary of which file sections were fully or partially removed.
+func truncateCodeContextWithSummary(codeContext string, maxLength int) string {
+	if len(codeContext) <= maxLength {
+		return codeContext
+	}
+
+	// Find all "File: " markers and their positions
+	type fileSection struct {
+		filePath string
+		offset   int
+	}
+	var sections []fileSection
+	lines := strings.Split(codeContext, "\n")
+	offset := 0
+	for _, line := range lines {
+		if strings.HasPrefix(line, "File: ") {
+			sections = append(sections, fileSection{
+				filePath: strings.TrimPrefix(line, "File: "),
+				offset:   offset,
+			})
+		}
+		offset += len(line) + 1 // +1 for the newline
+	}
+
+	// Determine which files are truncated or fully removed
+	var truncatedFiles []string
+	var removedFiles []string
+	for i, sec := range sections {
+		sectionEnd := len(codeContext)
+		if i+1 < len(sections) {
+			sectionEnd = sections[i+1].offset
+		}
+		if sec.offset >= maxLength {
+			removedFiles = append(removedFiles, sec.filePath)
+		} else if sectionEnd > maxLength {
+			remaining := maxLength - sec.offset
+			total := sectionEnd - sec.offset
+			truncatedFiles = append(truncatedFiles, fmt.Sprintf("%s (%d/%d bytes kept)", sec.filePath, remaining, total))
+		}
+	}
+
+	// Build the truncation summary
+	var summary strings.Builder
+	summary.WriteString("\n\n... [truncated] ...")
+	if len(truncatedFiles) > 0 {
+		summary.WriteString("\nPartially included: ")
+		summary.WriteString(strings.Join(truncatedFiles, ", "))
+	}
+	if len(removedFiles) > 0 {
+		summary.WriteString("\nFully removed: ")
+		summary.WriteString(strings.Join(removedFiles, ", "))
+	}
+
+	summaryStr := summary.String()
+	// Truncate at the last newline before the limit to avoid cutting mid-line,
+	// leaving room for the summary
+	cutoff := maxLength - len(summaryStr)
+	if cutoff < 0 {
+		cutoff = 0
+	}
+	if cutoff > len(codeContext) {
+		cutoff = len(codeContext)
+	}
+	// Find the last newline before cutoff to avoid splitting mid-line
+	lastNewline := strings.LastIndex(codeContext[:cutoff], "\n")
+	if lastNewline > 0 {
+		cutoff = lastNewline
+	}
+
+	return codeContext[:cutoff] + summaryStr
 }
 
 func extractCodeContext(ctx workflow.Context, req coding.DirectorySymDefRequest) (coding.SymDefResults, error) {
