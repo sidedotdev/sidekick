@@ -1258,7 +1258,13 @@ func TestMergeStrategyPersistence(t *testing.T) {
 }
 
 func TestMergeStrategyToggle(t *testing.T) {
-	t.Parallel()
+	// Not parallel - modifies package-level mergeStrategyPrefsPathOverride
+	tmpDir := t.TempDir()
+	oldOverride := mergeStrategyPrefsPathOverride
+	mergeStrategyPrefsPathOverride = tmpDir + "/merge_strategy.json"
+	t.Cleanup(func() {
+		mergeStrategyPrefsPathOverride = oldOverride
+	})
 
 	action := client.FlowAction{
 		Id:           "action-1",

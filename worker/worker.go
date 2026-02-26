@@ -9,6 +9,7 @@ import (
 	"go.temporal.io/sdk/contrib/opentelemetry"
 	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 	zerologadapter "logur.dev/adapter/zerolog"
 	"logur.dev/logur"
 
@@ -66,9 +67,10 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 		log.Fatal().Err(err).Msg("Failed to create tracing interceptor")
 	}
 	clientOptions := client.Options{
-		Logger:       logger,
-		HostPort:     hostPort,
-		Interceptors: []interceptor.ClientInterceptor{tracingInterceptor},
+		Logger:             logger,
+		HostPort:           hostPort,
+		Interceptors:       []interceptor.ClientInterceptor{tracingInterceptor},
+		ContextPropagators: []workflow.ContextPropagator{flow_action.NewFlowActionIdPropagator()},
 	}
 	var temporalClient client.Client
 	for i := 0; i < 30; i++ {
