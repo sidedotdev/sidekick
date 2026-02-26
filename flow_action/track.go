@@ -235,8 +235,24 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 	}
 	*flowAction = persisted
 
+	// Tag activities executed within f with this flow action's ID via header propagation
+	var previousCtx workflow.Context
+	if v := workflow.GetVersion(eCtx, "flow-action-id-propagation", workflow.DefaultVersion, 1); v == 1 {
+		if mCtx, ok := eCtx.Context.(*MutableWorkflowContext); ok {
+			previousCtx = mCtx.Get()
+			mCtx.Set(workflow.WithValue(previousCtx, flowActionIdCtxKey, flowAction.Id))
+		}
+	}
+
 	// perform the actual action being tracked
 	val, err := f(flowAction)
+
+	// Restore context before persisting status so persist activities aren't tagged
+	if previousCtx != nil {
+		if mCtx, ok := eCtx.Context.(*MutableWorkflowContext); ok {
+			mCtx.Set(previousCtx)
+		}
+	}
 
 	if err != nil {
 		flowAction.ActionStatus = domain.ActionStatusFailed
@@ -287,8 +303,26 @@ func trackFlowActionFailureOnly[T any](eCtx ExecContext, actionType string, acti
 		ActionParams:       actionParams,
 	}
 
+	// Pre-generate an ID so we can tag activities even though the FlowAction
+	// is only persisted on error.
+	var previousCtx workflow.Context
+	if v := workflow.GetVersion(eCtx, "flow-action-id-propagation", workflow.DefaultVersion, 1); v == 1 {
+		flowAction.Id = "fa_" + utils.KsuidSideEffect(eCtx)
+		if mCtx, ok := eCtx.Context.(*MutableWorkflowContext); ok {
+			previousCtx = mCtx.Get()
+			mCtx.Set(workflow.WithValue(previousCtx, flowActionIdCtxKey, flowAction.Id))
+		}
+	}
+
 	// perform the actual action being tracked
 	val, err := f(flowAction)
+
+	// Restore context before persisting so persist activities aren't tagged
+	if previousCtx != nil {
+		if mCtx, ok := eCtx.Context.(*MutableWorkflowContext); ok {
+			mCtx.Set(previousCtx)
+		}
+	}
 
 	if err != nil {
 		flowAction.ActionStatus = domain.ActionStatusFailed

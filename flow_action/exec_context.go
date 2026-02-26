@@ -34,11 +34,17 @@ type ActionContext struct {
 }
 
 func (eCtx *ExecContext) NewActionContext(actionType string) ActionContext {
-	return ActionContext{
+	aCtx := ActionContext{
 		ExecContext:  *eCtx,
 		ActionType:   actionType,
 		ActionParams: map[string]interface{}{},
 	}
+	// Ensure the context is backed by a shared MutableWorkflowContext so that
+	// context swaps (e.g. injecting a flow action ID) are visible to all copies.
+	if _, ok := aCtx.ExecContext.Context.(*MutableWorkflowContext); !ok {
+		aCtx.ExecContext.Context = NewMutableWorkflowContext(aCtx.ExecContext.Context)
+	}
+	return aCtx
 }
 
 type FlowScope struct {
