@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sidekick/domain"
+	"sidekick/temporalmeta"
 	"sidekick/utils"
 	"time"
 
@@ -236,8 +237,10 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 	*flowAction = persisted
 
 	// Tag activities executed within f with this flow action's ID via header propagation
+	propagationEnabled := false
 	var previousCtx workflow.Context
 	if v := workflow.GetVersion(eCtx, "flow-action-id-propagation", workflow.DefaultVersion, 1); v == 1 {
+		propagationEnabled = true
 		if mCtx, ok := eCtx.Context.(*MutableWorkflowContext); ok {
 			previousCtx = mCtx.Get()
 			mCtx.Set(workflow.WithValue(previousCtx, flowActionIdCtxKey, flowAction.Id))
@@ -269,6 +272,9 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 			return defaultT, fmt.Errorf("failed to mark flow action as failed: %v\noriginal failure: %v", err2, err)
 		}
 		*flowAction = persistedFailure
+		if propagationEnabled {
+			decorateFlowActionWithActivities(eCtx, *flowAction)
+		}
 		return defaultT, err
 	}
 
@@ -288,8 +294,35 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 		return val, fmt.Errorf("failed to mark flow action as completed: %v", err)
 	}
 	*flowAction = persisted
+	if propagationEnabled {
+		decorateFlowActionWithActivities(eCtx, *flowAction)
+	}
 
 	return val, nil
+}
+
+// decorateFlowActionWithActivities asynchronously fetches the temporal activity
+// history for a completed/failed flow action and persists the activity refs.
+func decorateFlowActionWithActivities(eCtx ExecContext, flowAction domain.FlowAction) {
+	wfInfo := workflow.GetInfo(eCtx)
+	workflow.Go(eCtx, func(gCtx workflow.Context) {
+		disconnectedCtx, _ := workflow.NewDisconnectedContext(gCtx)
+		var meta *temporalmeta.TemporalMetaActivities
+		params := temporalmeta.FetchFlowActionActivitiesParams{
+			WorkflowId:   wfInfo.WorkflowExecution.ID,
+			RunId:        wfInfo.WorkflowExecution.RunID,
+			FlowActionId: flowAction.Id,
+		}
+		var activities []domain.TemporalActivityRef
+		err := workflow.ExecuteActivity(disconnectedCtx, meta.FetchFlowActionActivities, params).Get(disconnectedCtx, &activities)
+		if err != nil || len(activities) == 0 {
+			return
+		}
+		flowAction.TemporalActivities = activities
+		decorateECtx := eCtx
+		decorateECtx.Context = disconnectedCtx
+		_, _ = putFlowAction(decorateECtx, flowAction)
+	})
 }
 
 func trackFlowActionFailureOnly[T any](eCtx ExecContext, actionType string, actionParams map[string]any, f func(flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
