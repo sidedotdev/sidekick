@@ -22,6 +22,7 @@ import (
 	sidekicklogger "sidekick/logger"
 	"sidekick/srv"
 	"sidekick/telemetry"
+	"sidekick/temporalmeta"
 	"sidekick/workspace"
 
 	"sidekick/dev"
@@ -134,6 +135,10 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 		Service:        service,
 	}
 
+	temporalMetaActivities := &temporalmeta.TemporalMetaActivities{
+		Client: temporalClient,
+	}
+
 	devActivities := &dev.DevActivities{
 		LSPActivities: lspActivities,
 	}
@@ -194,6 +199,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(common.BaseCommandPermissionsActivity)
 	w.RegisterActivity(dev.CheckCommandPermissionActivity)
 
+	w.RegisterActivity(temporalMetaActivities)
 	w.RegisterActivity(&workspace.Activities{Storage: service})
 
 	err = w.Start()
