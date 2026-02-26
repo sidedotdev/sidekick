@@ -20,6 +20,7 @@ test_commands:
 
 integration_test_commands:
   - command: "SIDE_INTEGRATION_TEST=true go test -test.timeout 30s ./..."
+  - command: "SIDE_INTEGRATION_TEST=true go test -test.timeout 120s -run TestReplayRunningWorkflows -v -count=1 ./worker/replay/"
 
 agent_config:
   coding:
