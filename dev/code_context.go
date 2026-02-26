@@ -370,7 +370,18 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 
 		// TODO use tiktoken to count exact tokens and compare with specific model being used + margin
 		if len(codeContext) > currentMax {
-			codeContext = truncateCodeContextWithSummary(codeContext, currentMax)
+			v := workflow.GetVersion(actionCtx, "truncate-code-context-instead-of-retry", workflow.DefaultVersion, 1)
+			if v == 1 {
+				codeContext = truncateCodeContextWithSummary(codeContext, currentMax)
+			} else {
+				// TODO if this happens, we could try partially symbolizing the code context too
+				feedback := "Error: the code context requested is too long to include. YOU MUST SHORTEN THE CODE CONTEXT REQUESTED. DO NOT REQUEST SO MANY FUNCTIONS AND TYPES IN SO MANY FILES. If you're not asking for too many symbols, then be more specific in your request - eg request just a few methods instead of a big class."
+				for _, tcResult := range toolCallResults {
+					promptInfo = ToolCallResponseInfo{Response: feedback, ToolCallId: tcResult.ToolCall.Id, FunctionName: tcResult.ToolCall.Name}
+					addCodeContextPrompt(chatHistory, promptInfo)
+				}
+				continue
+			}
 		}
 		// TODO check for empty code context too. we should use
 		// alternate methods if we get empty code context repeatedly.
