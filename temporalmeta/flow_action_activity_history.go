@@ -6,6 +6,7 @@ import (
 	"sidekick/domain"
 
 	"go.temporal.io/api/enums/v1"
+	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
 )
@@ -24,7 +25,16 @@ type FetchFlowActionActivitiesParams struct {
 
 func (t *TemporalMetaActivities) FetchFlowActionActivities(ctx context.Context, params FetchFlowActionActivitiesParams) ([]domain.TemporalActivityRef, error) {
 	iter := t.Client.GetWorkflowHistory(ctx, params.WorkflowId, params.RunId, false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
+	return processHistoryIterator(iter, params.FlowActionId)
+}
 
+// historyIterator abstracts the Temporal history event iterator for testability.
+type historyIterator interface {
+	HasNext() bool
+	Next() (*historypb.HistoryEvent, error)
+}
+
+func processHistoryIterator(iter historyIterator, flowActionId string) ([]domain.TemporalActivityRef, error) {
 	type scheduledInfo struct {
 		activityType string
 		activityId   string
@@ -56,11 +66,11 @@ func (t *TemporalMetaActivities) FetchFlowActionActivities(ctx context.Context, 
 			if !ok || payload == nil {
 				continue
 			}
-			var flowActionId string
-			if err := converter.GetDefaultDataConverter().FromPayload(payload, &flowActionId); err != nil {
+			var headerFlowActionId string
+			if err := converter.GetDefaultDataConverter().FromPayload(payload, &headerFlowActionId); err != nil {
 				continue
 			}
-			if flowActionId != params.FlowActionId {
+			if headerFlowActionId != flowActionId {
 				continue
 			}
 			matchingScheduled[event.EventId] = scheduledInfo{
