@@ -42,8 +42,10 @@ func (s *TrackTemporalActivitiesTestSuite) SetupTest() {
 	s.SetContextPropagators([]workflow.ContextPropagator{NewFlowActionIdPropagator()})
 
 	s.env = s.NewTestWorkflowEnvironment()
+	s.mu.Lock()
 	s.persistedActions = nil
 	s.headerFlowActionIds = nil
+	s.mu.Unlock()
 
 	var fa *FlowActivities
 	s.env.OnActivity(fa.PersistFlowAction, mock.Anything, mock.Anything).Return(
@@ -195,7 +197,7 @@ func (s *TrackTemporalActivitiesTestSuite) TestTrackDecoratesWithMultipleActivit
 		if err != nil {
 			return err
 		}
-		_ = workflow.Sleep(ctx, time.Millisecond)
+		_ = workflow.Sleep(ctx, 10*time.Second)
 		return nil
 	}
 
@@ -267,7 +269,7 @@ func (s *TrackTemporalActivitiesTestSuite) TestTrackDecoratesOnFailure() {
 			return "", errors.New("simulated action failure")
 		})
 		_ = err
-		_ = workflow.Sleep(ctx, time.Millisecond)
+		_ = workflow.Sleep(ctx, 10*time.Second)
 		return nil
 	}
 
@@ -325,7 +327,7 @@ func (s *TrackTemporalActivitiesTestSuite) TestTrackNoDecorationPersistWhenFetch
 		if err != nil {
 			return err
 		}
-		_ = workflow.Sleep(ctx, time.Millisecond)
+		_ = workflow.Sleep(ctx, 10*time.Second)
 		return nil
 	}
 
@@ -380,7 +382,7 @@ func (s *TrackTemporalActivitiesTestSuite) TestTrackFlowActionIdConsistency() {
 		if err != nil {
 			return err
 		}
-		_ = workflow.Sleep(ctx, time.Millisecond)
+		_ = workflow.Sleep(ctx, 10*time.Second)
 		return nil
 	}
 
