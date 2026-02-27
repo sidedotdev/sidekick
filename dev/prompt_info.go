@@ -174,6 +174,7 @@ type CheckWorkInfo struct {
 	Work               string
 	AutoChecks         string
 	LastReviewTreeHash string
+	BaseBranch         string
 }
 
 // Implement the PromptInfo interface for InitialDevStepInfo

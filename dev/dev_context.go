@@ -311,6 +311,12 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		}
 	}
 
+	if startBranch != nil && *startBranch != "" {
+		eCtx.GlobalState.SetValue(common.KeyCurrentTargetBranch, *startBranch)
+	} else {
+		eCtx.GlobalState.SetValue(common.KeyCurrentTargetBranch, "main")
+	}
+
 	return devCtx, nil
 }
 
