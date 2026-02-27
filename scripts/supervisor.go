@@ -326,6 +326,7 @@ type Process struct {
 	generation      uint64
 	prebuildRunning bool
 	prebuildLastErr string
+	restartPending  bool
 }
 
 func (p *Process) appendOutput(line string) {
@@ -442,6 +443,18 @@ func (p *Process) setPrebuildLastErr(err string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.prebuildLastErr = err
+}
+
+func (p *Process) isRestartPending() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.restartPending
+}
+
+func (p *Process) setRestartPending(pending bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.restartPending = pending
 }
 
 // ephemeralConn tracks an active ephemeral connection
@@ -749,6 +762,17 @@ func (s *Supervisor) runPrebuild(ctx context.Context, p *Process, outputChan cha
 	}
 	if outputChan != nil {
 		outputChan <- processOutputMsg{name: p.Config.Name}
+	}
+
+	// If a restart was requested while prebuild was running, trigger it now
+	if p.isRestartPending() {
+		p.setRestartPending(false)
+		p.clearOutputAndIncrementGeneration()
+		p.setStopping(true)
+		if outputChan != nil {
+			outputChan <- processOutputMsg{name: p.Config.Name}
+		}
+		s.RestartProcess(ctx, p, outputChan)
 	}
 }
 
@@ -1457,11 +1481,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Restart current process
 			if m.activeTab < len(m.supervisor.processes) {
 				p := m.supervisor.processes[m.activeTab]
-				// Set stopping state and clear logs immediately so UI updates
-				p.clearOutputAndIncrementGeneration()
-				p.setStopping(true)
-				m.updateViewportContent()
-				go m.supervisor.RestartProcess(m.ctx, p, m.outputChan)
+				if p.isPrebuildRunning() {
+					p.setRestartPending(true)
+					m.updateViewportContent()
+				} else {
+					p.clearOutputAndIncrementGeneration()
+					p.setStopping(true)
+					m.updateViewportContent()
+					go m.supervisor.RestartProcess(m.ctx, p, m.outputChan)
+				}
 			}
 		case "R":
 			// Restart all processes
@@ -1474,23 +1502,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			// Restart all dirty processes
 			var dirtyProcesses []*Process
+			var deferredProcesses []*Process
 			for _, p := range m.supervisor.processes {
 				if p.isDirty() {
-					dirtyProcesses = append(dirtyProcesses, p)
+					if p.isPrebuildRunning() {
+						deferredProcesses = append(deferredProcesses, p)
+					} else {
+						dirtyProcesses = append(dirtyProcesses, p)
+					}
 				}
+			}
+			for _, p := range deferredProcesses {
+				p.setRestartPending(true)
 			}
 			if len(dirtyProcesses) > 0 {
 				for _, p := range dirtyProcesses {
 					p.clearOutputAndIncrementGeneration()
 					p.setStopping(true)
 				}
-				m.updateViewportContent()
 				go func() {
 					for _, p := range dirtyProcesses {
 						m.supervisor.RestartProcess(m.ctx, p, m.outputChan)
 					}
 				}()
 			}
+			m.updateViewportContent()
 		case "left", "h":
 			if m.activeTab > 0 {
 				m.activeTab--
@@ -1970,6 +2006,9 @@ func (m model) getStatusIndicator(p *Process) string {
 	if p.isDirty() {
 		style := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 		if p.isPrebuildRunning() {
+			if p.isRestartPending() {
+				return style.Render("● Restarting after prebuild…")
+			}
 			return style.Render("● Changes (prebuilding…)")
 		}
 		if errMsg := p.getPrebuildLastErr(); errMsg != "" {
