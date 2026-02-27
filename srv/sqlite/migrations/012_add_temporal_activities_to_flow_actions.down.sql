@@ -1,0 +1,1 @@
+ALTER TABLE flow_actions DROP COLUMN temporal_activities;

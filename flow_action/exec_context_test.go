@@ -10,16 +10,31 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/workflow"
 )
 
-func TestGetModelConfig_SmallFallback_ReasoningSupported(t *testing.T) {
+func setupModelsCache(t *testing.T, modelsData map[string]interface{}) {
+	t.Helper()
 	common.ClearModelsCache()
 	tmpDir := t.TempDir()
 	t.Setenv("SIDE_CACHE_HOME", tmpDir)
-
 	cachePath := filepath.Join(tmpDir, "models.dev.json")
+	data, err := json.Marshal(modelsData)
+	require.NoError(t, err)
+	err = os.WriteFile(cachePath, data, 0644)
+	require.NoError(t, err)
+}
 
-	modelsData := map[string]interface{}{
+func runGetModelConfigWorkflow(eCtx *ExecContext, key string, iteration int, fallback string) func(ctx workflow.Context) (common.ModelConfig, error) {
+	return func(ctx workflow.Context) (common.ModelConfig, error) {
+		eCtx.Context = ctx
+		return eCtx.GetModelConfig(key, iteration, fallback), nil
+	}
+}
+
+func TestGetModelConfig_SmallFallback_ReasoningSupported(t *testing.T) {
+	setupModelsCache(t, map[string]interface{}{
 		"openai": map[string]interface{}{
 			"models": map[string]interface{}{
 				"gpt-5-mini-2025-08-07": map[string]interface{}{
@@ -27,12 +42,7 @@ func TestGetModelConfig_SmallFallback_ReasoningSupported(t *testing.T) {
 				},
 			},
 		},
-	}
-
-	data, err := json.Marshal(modelsData)
-	require.NoError(t, err)
-	err = os.WriteFile(cachePath, data, 0644)
-	require.NoError(t, err)
+	})
 
 	eCtx := &ExecContext{
 		LLMConfig: common.LLMConfig{
@@ -45,8 +55,15 @@ func TestGetModelConfig_SmallFallback_ReasoningSupported(t *testing.T) {
 		},
 	}
 
-	modelConfig := eCtx.GetModelConfig("", 0, "small")
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivity(&FlowActivities{})
+	env.ExecuteWorkflow(runGetModelConfigWorkflow(eCtx, "", 0, "small"))
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
 
+	var modelConfig common.ModelConfig
+	require.NoError(t, env.GetWorkflowResult(&modelConfig))
 	assert.Equal(t, "openai", modelConfig.Provider)
 	assert.Equal(t, "gpt-5-mini-2025-08-07", modelConfig.Model)
 	// Non-Claude reasoning models get low reasoning effort for small fallback
@@ -54,13 +71,7 @@ func TestGetModelConfig_SmallFallback_ReasoningSupported(t *testing.T) {
 }
 
 func TestGetModelConfig_SmallFallback_ReasoningNotSupported(t *testing.T) {
-	common.ClearModelsCache()
-	tmpDir := t.TempDir()
-	t.Setenv("SIDE_CACHE_HOME", tmpDir)
-
-	cachePath := filepath.Join(tmpDir, "models.dev.json")
-
-	modelsData := map[string]interface{}{
+	setupModelsCache(t, map[string]interface{}{
 		"openai": map[string]interface{}{
 			"models": map[string]interface{}{
 				"gpt-5-mini-2025-08-07": map[string]interface{}{
@@ -68,12 +79,7 @@ func TestGetModelConfig_SmallFallback_ReasoningNotSupported(t *testing.T) {
 				},
 			},
 		},
-	}
-
-	data, err := json.Marshal(modelsData)
-	require.NoError(t, err)
-	err = os.WriteFile(cachePath, data, 0644)
-	require.NoError(t, err)
+	})
 
 	eCtx := &ExecContext{
 		LLMConfig: common.LLMConfig{
@@ -86,22 +92,22 @@ func TestGetModelConfig_SmallFallback_ReasoningNotSupported(t *testing.T) {
 		},
 	}
 
-	modelConfig := eCtx.GetModelConfig("", 0, "small")
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivity(&FlowActivities{})
+	env.ExecuteWorkflow(runGetModelConfigWorkflow(eCtx, "", 0, "small"))
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
 
+	var modelConfig common.ModelConfig
+	require.NoError(t, env.GetWorkflowResult(&modelConfig))
 	assert.Equal(t, "openai", modelConfig.Provider)
 	assert.Equal(t, "gpt-5-mini-2025-08-07", modelConfig.Model)
 	assert.Equal(t, "", modelConfig.ReasoningEffort)
 }
 
 func TestGetModelConfig_SmallFallback_ClaudeModel(t *testing.T) {
-	common.ClearModelsCache()
-	tmpDir := t.TempDir()
-	t.Setenv("SIDE_CACHE_HOME", tmpDir)
-
-	cachePath := filepath.Join(tmpDir, "models.dev.json")
-
-	// Use a custom provider with a Claude model as its small model
-	modelsData := map[string]interface{}{
+	setupModelsCache(t, map[string]interface{}{
 		"custom-provider": map[string]interface{}{
 			"models": map[string]interface{}{
 				"claude-custom-small": map[string]interface{}{
@@ -109,12 +115,7 @@ func TestGetModelConfig_SmallFallback_ClaudeModel(t *testing.T) {
 				},
 			},
 		},
-	}
-
-	data, err := json.Marshal(modelsData)
-	require.NoError(t, err)
-	err = os.WriteFile(cachePath, data, 0644)
-	require.NoError(t, err)
+	})
 
 	eCtx := &ExecContext{
 		LLMConfig: common.LLMConfig{
@@ -133,8 +134,15 @@ func TestGetModelConfig_SmallFallback_ClaudeModel(t *testing.T) {
 		},
 	}
 
-	modelConfig := eCtx.GetModelConfig("", 0, "small")
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivity(&FlowActivities{})
+	env.ExecuteWorkflow(runGetModelConfigWorkflow(eCtx, "", 0, "small"))
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
 
+	var modelConfig common.ModelConfig
+	require.NoError(t, env.GetWorkflowResult(&modelConfig))
 	assert.Equal(t, "custom-provider", modelConfig.Provider)
 	assert.Equal(t, "claude-custom-small", modelConfig.Model)
 	// Claude models should not get automatic reasoning effort
@@ -142,13 +150,7 @@ func TestGetModelConfig_SmallFallback_ClaudeModel(t *testing.T) {
 }
 
 func TestGetModelConfig_NoReasoningForNonReasoningModel(t *testing.T) {
-	common.ClearModelsCache()
-	tmpDir := t.TempDir()
-	t.Setenv("SIDE_CACHE_HOME", tmpDir)
-
-	cachePath := filepath.Join(tmpDir, "models.dev.json")
-
-	modelsData := map[string]interface{}{
+	setupModelsCache(t, map[string]interface{}{
 		"anthropic": map[string]interface{}{
 			"models": map[string]interface{}{
 				"claude-3-5-sonnet-20241022": map[string]interface{}{
@@ -156,12 +158,7 @@ func TestGetModelConfig_NoReasoningForNonReasoningModel(t *testing.T) {
 				},
 			},
 		},
-	}
-
-	data, err := json.Marshal(modelsData)
-	require.NoError(t, err)
-	err = os.WriteFile(cachePath, data, 0644)
-	require.NoError(t, err)
+	})
 
 	eCtx := &ExecContext{
 		LLMConfig: common.LLMConfig{
@@ -175,8 +172,15 @@ func TestGetModelConfig_NoReasoningForNonReasoningModel(t *testing.T) {
 		},
 	}
 
-	modelConfig := eCtx.GetModelConfig("", 0, "default")
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivity(&FlowActivities{})
+	env.ExecuteWorkflow(runGetModelConfigWorkflow(eCtx, "", 0, "default"))
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
 
+	var modelConfig common.ModelConfig
+	require.NoError(t, env.GetWorkflowResult(&modelConfig))
 	assert.Equal(t, "anthropic", modelConfig.Provider)
 	assert.Equal(t, "claude-3-5-sonnet-20241022", modelConfig.Model)
 	assert.Equal(t, "", modelConfig.ReasoningEffort)

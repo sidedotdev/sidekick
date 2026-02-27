@@ -41,12 +41,4 @@ export default defineConfig({
     // about chunking just yet)
     chunkSizeWarningLimit: 2048,
   },
-  test: {
-    onConsoleLog(log: string, type: 'stdout' | 'stderr'): false | void {
-      //console.log('log in test: ', log);
-      if (log === 'message from third party library' && type === 'stdout') {
-        return false;
-      }
-    },
-  }
 })

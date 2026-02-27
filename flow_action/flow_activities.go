@@ -3,6 +3,7 @@ package flow_action
 import (
 	"context"
 
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/srv"
 )
@@ -17,4 +18,8 @@ func (fa *FlowActivities) PersistFlowAction(ctx context.Context, flowAction doma
 
 func (fa *FlowActivities) PersistSubflow(ctx context.Context, subflow domain.Subflow) error {
 	return fa.Service.PersistSubflow(ctx, subflow)
+}
+
+func (fa *FlowActivities) GetModelMetadata(ctx context.Context, provider string, model string) (common.ModelMetadata, error) {
+	return common.GetModelMetadata(provider, model), nil
 }

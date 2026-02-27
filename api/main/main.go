@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"sidekick/api"
+	"sidekick/common"
 	"syscall"
 
 	"github.com/joho/godotenv"
@@ -20,6 +21,8 @@ func main() {
 			log.Fatal().Err(err).Msg("Error loading .env file")
 		}
 	}
+
+	common.StartPprofServer()
 
 	srv := api.RunServer()
 

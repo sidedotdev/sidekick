@@ -15,9 +15,11 @@ import (
 type GitDiffParams struct {
 	FilePaths        []string
 	BaseRef          string
+	EndRef           string
 	ThreeDotDiff     bool
 	IgnoreWhitespace bool
 	Staged           bool
+	ContextLines     *int
 }
 
 // GitDiff returns the diff of the current, staged changes in the working tree.
@@ -74,7 +76,7 @@ func GitDiffLegacy(eCtx flow_action.ExecContext) (string, error) {
 }
 
 func GitDiffActivity(ctx context.Context, envContainer env.EnvContainer, params GitDiffParams) (string, error) {
-	if params.ThreeDotDiff || params.Staged {
+	if params.ThreeDotDiff || params.Staged || params.EndRef != "" {
 		return stagedAndOrThreeDotDiff(ctx, envContainer, params)
 	}
 
@@ -94,7 +96,11 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 	cmdParts = append(cmdParts, "git", "diff")
 
 	// Handle different combinations of flags
-	if params.Staged && params.ThreeDotDiff {
+	if params.EndRef != "" && params.BaseRef != "" {
+		// Direct diff between two refs
+		cmdParts = append(cmdParts, shellQuote(params.BaseRef))
+		cmdParts = append(cmdParts, shellQuote(params.EndRef))
+	} else if params.Staged && params.ThreeDotDiff {
 		cmdParts = append(cmdParts, "--staged")
 		cmdParts = append(cmdParts, fmt.Sprintf("$(git merge-base %s HEAD)", shellQuote(params.BaseRef)))
 	} else if params.ThreeDotDiff {
@@ -104,6 +110,10 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 		if params.BaseRef != "" {
 			cmdParts = append(cmdParts, shellQuote(params.BaseRef))
 		}
+	}
+
+	if params.ContextLines != nil {
+		cmdParts = append(cmdParts, fmt.Sprintf("-U%d", *params.ContextLines))
 	}
 
 	if params.IgnoreWhitespace {
