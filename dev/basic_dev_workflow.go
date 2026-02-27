@@ -7,6 +7,7 @@ import (
 
 	"go.temporal.io/sdk/workflow"
 
+	"sidekick/coding"
 	"sidekick/coding/diffanalysis"
 	"sidekick/coding/git"
 	"sidekick/common"
@@ -78,6 +79,21 @@ func getGitDiffWithContext(dCtx DevContext, baseBranch string, ignoreWhitespace 
 // A sinceReview hunk is dropped only if it overlaps a base-branch hunk and does
 // NOT overlap a branch hunk (i.e. it's purely merge-introduced, not convergent).
 func getOwnChangesSinceReview(dCtx DevContext, baseBranch string, lastReviewTreeHash string, ignoreWhitespace bool) (string, error) {
+	var result string
+	var ca *coding.CodingActivities
+	err := workflow.ExecuteActivity(dCtx, ca.GetOwnChangesSinceReviewActivity, coding.GetOwnChangesSinceReviewParams{
+		EnvContainer:     *dCtx.EnvContainer,
+		BaseBranch:       baseBranch,
+		LastReviewTree:   lastReviewTreeHash,
+		IgnoreWhitespace: ignoreWhitespace,
+	}).Get(dCtx, &result)
+	return result, err
+}
+
+// legacyOwnChangesSinceReviewV3 preserves the three-activity call pattern for
+// workflow replay determinism (version 3 of "diff-since-last-review").
+// FIXME remove once all v==3 workflows have completed
+func legacyOwnChangesSinceReviewV3(dCtx DevContext, baseBranch string, lastReviewTreeHash string, ignoreWhitespace bool) (string, error) {
 	sinceReviewDiff, err := getDiffSinceLastReview(dCtx, lastReviewTreeHash, ignoreWhitespace, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to get diff since last review: %w", err)
@@ -497,7 +513,8 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 	// Track tree hash and diff since last review for new workflow versions
 	var currentTreeHash string
 	var diffSinceLastReview string
-	diffSinceLastReviewVersion := workflow.GetVersion(dCtx, "diff-since-last-review", workflow.DefaultVersion, 3)
+	// FIXME revert max version to 3 once all v==3 workflows have completed
+	diffSinceLastReviewVersion := workflow.GetVersion(dCtx, "diff-since-last-review", workflow.DefaultVersion, 4)
 	if diffSinceLastReviewVersion >= 1 {
 		// Capture current tree hash before getting approval
 		err = workflow.ExecuteActivity(dCtx, git.WriteTreeActivity, *dCtx.EnvContainer).Get(dCtx, &currentTreeHash)
@@ -507,10 +524,11 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 
 		// Generate diff since last review if we have a previous tree hash
 		if lastReviewTreeHash != "" {
-			if diffSinceLastReviewVersion >= 3 {
+			if diffSinceLastReviewVersion >= 4 {
 				diffSinceLastReview, err = getOwnChangesSinceReview(dCtx, defaultTarget, lastReviewTreeHash, false)
+			} else if diffSinceLastReviewVersion >= 3 {
+				diffSinceLastReview, err = legacyOwnChangesSinceReviewV3(dCtx, defaultTarget, lastReviewTreeHash, false)
 			} else if diffSinceLastReviewVersion >= 2 {
-				// Legacy: two-activity intersection (kept for replay determinism)
 				diffSinceLastReview, err = legacyOwnChangesSinceReview(dCtx, defaultTarget, lastReviewTreeHash, false)
 			} else {
 				diffSinceLastReview, err = getDiffSinceLastReview(dCtx, lastReviewTreeHash, false, nil)
