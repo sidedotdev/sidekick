@@ -144,7 +144,7 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.submittedResponses[msg.ActionID] = msg.ResponseContent
 		m.approvalInput.Clear()
-		return m, nil
+		return m, tea.ClearScreen
 
 	case ApprovalErrorMsg:
 		m.err = msg.Err
@@ -182,11 +182,16 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Clear pending action if it's no longer pending
-		if m.approvalInput.HasPendingAction() && m.approvalInput.GetActionID() == action.Id && action.ActionStatus != domain.ActionStatusPending {
+		hadPendingAction := m.approvalInput.HasPendingAction()
+		if hadPendingAction && m.approvalInput.GetActionID() == action.Id && action.ActionStatus != domain.ActionStatusPending {
 			m.approvalInput.Clear()
 		}
+		approvalCleared := hadPendingAction && !m.approvalInput.HasPendingAction()
 
 		if shouldHideAction(action.ActionType, action.ActionStatus) {
+			if approvalCleared {
+				return m, tea.ClearScreen
+			}
 			return m, nil
 		}
 
@@ -201,6 +206,9 @@ func (m taskProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !found {
 			m.actions = append(m.actions, action)
+		}
+		if approvalCleared {
+			return m, tea.ClearScreen
 		}
 		return m, nil
 
