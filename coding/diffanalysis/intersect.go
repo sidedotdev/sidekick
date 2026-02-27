@@ -4,41 +4,59 @@ import (
 	"strings"
 )
 
-// IntersectDiffs returns hunks from diffA that overlap (by new-file line
-// ranges) with hunks in diffB for the same file. This is useful for keeping
-// only the hunks from an incremental diff (A) that correspond to our branch's
-// own work (B), filtering out content introduced by merging another branch.
-func IntersectDiffs(diffA, diffB string) (string, error) {
-	filesA, err := ParseUnifiedDiff(diffA)
+// FilterDiffForReview filters sinceReviewDiff to remove merge-introduced
+// changes. It uses hunk-level filtering within each file:
+//   - A sinceReview hunk that overlaps a baseSinceReviewDiff hunk (base branch
+//     changed those lines) is dropped, UNLESS it also overlaps a branchDiff hunk
+//     (our branch independently changed the same lines — convergence).
+//   - All other sinceReview hunks are kept.
+//
+// branchDiff is the three-dot diff (main...HEAD) showing our branch's unique
+// changes. baseSinceReviewDiff is the diff from the review tree to the base
+// branch tip, showing what the base branch changed since the review.
+func FilterDiffForReview(sinceReviewDiff, branchDiff, baseSinceReviewDiff string) (string, error) {
+	sinceReviewFiles, err := ParseUnifiedDiff(sinceReviewDiff)
 	if err != nil {
 		return "", err
 	}
-	filesB, err := ParseUnifiedDiff(diffB)
+	branchFiles, err := ParseUnifiedDiff(branchDiff)
+	if err != nil {
+		return "", err
+	}
+	baseFiles, err := ParseUnifiedDiff(baseSinceReviewDiff)
 	if err != nil {
 		return "", err
 	}
 
-	// Index diffB files by path for quick lookup
-	bFilesByPath := make(map[string]*FileDiff, len(filesB))
-	for i := range filesB {
-		bFilesByPath[filesB[i].NewPath] = &filesB[i]
+	branchHunksByPath := make(map[string][]Hunk, len(branchFiles))
+	for _, f := range branchFiles {
+		branchHunksByPath[f.NewPath] = f.Hunks
+	}
+
+	baseHunksByPath := make(map[string][]Hunk, len(baseFiles))
+	for _, f := range baseFiles {
+		baseHunksByPath[f.NewPath] = f.Hunks
 	}
 
 	var result strings.Builder
-	for _, fileA := range filesA {
-		fileB, exists := bFilesByPath[fileA.NewPath]
-		if !exists {
-			// File not in our branch's diff — skip entirely (came from merge)
-			continue
-		}
+	for _, file := range sinceReviewFiles {
+		baseHunks := baseHunksByPath[file.NewPath]
+		branchHunks := branchHunksByPath[file.NewPath]
 
-		kept := filterOverlappingHunks(fileA.Hunks, fileB.Hunks)
+		var kept []Hunk
+		for _, h := range file.Hunks {
+			// Compare on old side for base (both diffs share the review tree as old),
+			// and on new side for branch (three-dot diff new side = HEAD = our new side).
+			if overlapsAnyOld(h, baseHunks) && !overlapsAnyNew(h, branchHunks) {
+				// Merge-introduced hunk: base changed it but we didn't
+				continue
+			}
+			kept = append(kept, h)
+		}
 		if len(kept) == 0 {
 			continue
 		}
-
-		// Reconstruct file header and kept hunks
-		result.WriteString(formatFileHeader(fileA))
+		result.WriteString(formatFileHeader(file))
 		for _, h := range kept {
 			result.WriteString(formatHunkContent(h))
 		}
@@ -47,33 +65,38 @@ func IntersectDiffs(diffA, diffB string) (string, error) {
 	return result.String(), nil
 }
 
-// hunksOverlap returns true if two hunks have overlapping new-file line ranges.
-// Zero-count ranges (pure deletions) are treated as occupying one line so they
-// can still match against hunks at the same position.
-func hunksOverlap(a, b Hunk) bool {
-	aCount := a.NewCount
+// rangesOverlap returns true if [aStart, aStart+aCount) overlaps [bStart, bStart+bCount).
+// Zero-count ranges (pure deletions/additions) are treated as one line wide.
+func rangesOverlap(aStart, aCount, bStart, bCount int) bool {
+	aEnd := aStart + aCount
 	if aCount == 0 {
-		aCount = 1
+		aEnd = aStart + 1
 	}
-	bCount := b.NewCount
+	bEnd := bStart + bCount
 	if bCount == 0 {
-		bCount = 1
+		bEnd = bStart + 1
 	}
-	return a.NewStart < b.NewStart+bCount && b.NewStart < a.NewStart+aCount
+	return aStart < bEnd && bStart < aEnd
 }
 
-// filterOverlappingHunks returns hunks from listA that overlap with any hunk in listB.
-func filterOverlappingHunks(hunksA, hunksB []Hunk) []Hunk {
-	var kept []Hunk
-	for _, hA := range hunksA {
-		for _, hB := range hunksB {
-			if hunksOverlap(hA, hB) {
-				kept = append(kept, hA)
-				break
-			}
+// overlapsAnyNew returns true if h's new-file range overlaps any hunk's new-file range.
+func overlapsAnyNew(h Hunk, hunks []Hunk) bool {
+	for _, other := range hunks {
+		if rangesOverlap(h.NewStart, h.NewCount, other.NewStart, other.NewCount) {
+			return true
 		}
 	}
-	return kept
+	return false
+}
+
+// overlapsAnyOld returns true if h's old-file range overlaps any hunk's old-file range.
+func overlapsAnyOld(h Hunk, hunks []Hunk) bool {
+	for _, other := range hunks {
+		if rangesOverlap(h.OldStart, h.OldCount, other.OldStart, other.OldCount) {
+			return true
+		}
+	}
+	return false
 }
 
 // formatFileHeader reconstructs the diff header lines for a FileDiff.
