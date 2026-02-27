@@ -110,8 +110,7 @@ func GetUserMergeApproval(
 			return nil, err
 		}
 
-		// FIXME revert max version to 4 once all v==3/v==4 workflows have completed
-		v := workflow.GetVersion(dCtx, "final-merge-response-update-flow-action", workflow.DefaultVersion, 5)
+		v := workflow.GetVersion(dCtx, "final-merge-response-update-flow-action", workflow.DefaultVersion, 6)
 
 		// handle branch switching and whitespace toggle until final approval/rejection
 		for {
@@ -152,6 +151,8 @@ func GetUserMergeApproval(
 						if lastReviewTreeHash != "" {
 							if v >= 5 {
 								newDiffSinceLastReview, err = getOwnChangesSinceReview(dCtx, finalTarget, lastReviewTreeHash, ignoreWhitespace)
+							} else if v >= 4 {
+								newDiffSinceLastReview, err = legacyV4OwnChangesSinceReview(dCtx, finalTarget, lastReviewTreeHash, ignoreWhitespace)
 							} else if v >= 3 {
 								newDiffSinceLastReview, err = legacyOwnChangesSinceReviewV3(dCtx, finalTarget, lastReviewTreeHash, ignoreWhitespace)
 							} else {

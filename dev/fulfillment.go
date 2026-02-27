@@ -40,10 +40,14 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 	var diff string
 	var err error
 
-	// FIXME revert max version to 3 once all v==3 workflows have completed
-	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 4)
-	if v >= 4 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
+	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 5)
+	if v >= 5 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
 		diff, err = getOwnChangesSinceReview(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, false)
+		if err != nil {
+			return CriteriaFulfillment{}, fmt.Errorf("failed to get own changes since review: %v", err)
+		}
+	} else if v >= 4 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
+		diff, err = legacyV4OwnChangesSinceReview(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, false)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get own changes since review: %v", err)
 		}
