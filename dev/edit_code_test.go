@@ -316,7 +316,7 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestIncludesDoneTool() {
 		chatHistory := &[]llm.ChatMessage{}
 
 		doneRequired := IsDoneRequiredProtocol(dCtx)
-		result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired)
+		result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false)
 
 		toolNames := make([]string, len(result.Params.Tools))
 		for i, tool := range result.Params.Tools {
@@ -360,7 +360,7 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestHumanInTheLoopDisabled() {
 		chatHistory := &[]llm.ChatMessage{}
 
 		doneRequired := IsDoneRequiredProtocol(dCtx)
-		result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired)
+		result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false)
 
 		toolNames := make([]string, len(result.Params.Tools))
 		for i, tool := range result.Params.Tools {

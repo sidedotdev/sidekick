@@ -3,6 +3,9 @@ When you have completed all necessary edits (or determined that no edits are
 needed), you must call the `{{{doneFunctionName}}}` tool to signal completion.
 Include a summary of the changes made and your reasoning in the `summary`
 argument of the tool call.
+
+Important: the `{{{doneFunctionName}}}` tool must be called on its own, without
+any other tool calls or edit blocks in the same response.
 {{/doneRequired}}
 {{^doneRequired}}
 At the end, after the *edit blocks*, summarize both the *edit blocks* and your
