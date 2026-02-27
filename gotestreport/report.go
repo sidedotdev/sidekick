@@ -90,6 +90,12 @@ func (s *Streamer) ProcessEvent(ev TestEvent) {
 			}
 			pr.packageOutput = append(pr.packageOutput, ev.Output)
 		} else {
+			trimmed := strings.TrimLeft(ev.Output, " \t")
+			if strings.HasPrefix(trimmed, "=== RUN") ||
+				strings.HasPrefix(trimmed, "=== PAUSE") ||
+				strings.HasPrefix(trimmed, "=== CONT") {
+				break
+			}
 			key := testKey(ev.Package, ev.Test)
 			s.testOutput[key] = append(s.testOutput[key], ev.Output)
 		}
@@ -158,8 +164,27 @@ func (s *Streamer) flushTestOutput(pr *packageResult, test string) {
 		return
 	}
 	s.writePackageHeader(pr)
-	for _, line := range lines {
-		fmt.Fprint(s.out, line)
+
+	// Print the "--- FAIL:" line first, then the rest of the output.
+	failIdx := -1
+	for i, line := range lines {
+		trimmed := strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(trimmed, "--- FAIL:") {
+			failIdx = i
+			break
+		}
+	}
+	if failIdx >= 0 {
+		fmt.Fprint(s.out, lines[failIdx])
+		for i, line := range lines {
+			if i != failIdx {
+				fmt.Fprint(s.out, line)
+			}
+		}
+	} else {
+		for _, line := range lines {
+			fmt.Fprint(s.out, line)
+		}
 	}
 	delete(s.testOutput, key)
 }

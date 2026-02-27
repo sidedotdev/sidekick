@@ -8,7 +8,6 @@ mission: |
   productive as they work within large existing code bases.
 
 worktree_setup: |
-  go install sidekick/cmd/gotestreport
   cd frontend && bun ci && touch dist/empty.txt
 
 test_commands:
