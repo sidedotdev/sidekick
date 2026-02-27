@@ -338,16 +338,17 @@ func (p *Process) appendOutput(line string) {
 	}
 }
 
-func (p *Process) appendOutputIfGeneration(line string, gen uint64) {
+func (p *Process) appendOutputIfGeneration(line string, gen uint64) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.generation != gen {
-		return
+		return false
 	}
 	p.Output = append(p.Output, line)
 	if len(p.Output) > 1000 {
 		p.Output = p.Output[len(p.Output)-1000:]
 	}
+	return true
 }
 
 func (p *Process) getGeneration() uint64 {
@@ -555,12 +556,13 @@ func (s *Supervisor) StartProcess(ctx context.Context, p *Process, outputChan ch
 	go func() {
 		err := cmd.Wait()
 		p.setExited(gen)
+		var appended bool
 		if err != nil && procCtx.Err() == nil {
-			p.appendOutputIfGeneration(fmt.Sprintf("[Process exited with error: %v]", err), gen)
+			appended = p.appendOutputIfGeneration(fmt.Sprintf("[Process exited with error: %v]", err), gen)
 		} else {
-			p.appendOutputIfGeneration("[Process exited]", gen)
+			appended = p.appendOutputIfGeneration("[Process exited]", gen)
 		}
-		if outputChan != nil {
+		if appended && outputChan != nil {
 			outputChan <- processOutputMsg{name: p.Config.Name}
 		}
 	}()
@@ -572,9 +574,10 @@ func (s *Supervisor) streamOutput(p *Process, r io.Reader, outputChan chan<- pro
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Text()
-		p.appendOutputIfGeneration(line, gen)
-		if outputChan != nil {
-			outputChan <- processOutputMsg{name: p.Config.Name}
+		if p.appendOutputIfGeneration(line, gen) {
+			if outputChan != nil {
+				outputChan <- processOutputMsg{name: p.Config.Name}
+			}
 		}
 	}
 }

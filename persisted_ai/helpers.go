@@ -67,7 +67,10 @@ func ForceToolCallWithTrackOptions(actionCtx flow_action.ActionContext, trackOpt
 	flowId := workflow.GetInfo(actionCtx).WorkflowExecution.ID
 	options.WorkspaceId = actionCtx.WorkspaceId
 	options.FlowId = flowId
-	actionCtx.ActionParams = options.ActionParams()
+	optionParams := options.ActionParams()
+	for k, v := range optionParams {
+		actionCtx.ActionParams[k] = v
+	}
 	chatResponse, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (llm.ChatMessageResponse, error) {
 		options.FlowActionId = flowAction.Id
 		var chatResponse llm.ChatMessageResponse
@@ -93,7 +96,10 @@ func ForceToolCallWithTrackOptions(actionCtx flow_action.ActionContext, trackOpt
 			Content: "Expected a tool call, but didn't get it. Embedding the json in the content is not sufficient. Please use the provided tool(s).",
 		})
 		options.Params.Messages = params.Messages
-		actionCtx.ActionParams = options.ActionParams()
+		retryParams := options.ActionParams()
+		for k, v := range retryParams {
+			actionCtx.ActionParams[k] = v
+		}
 		chatResponse, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (llm.ChatMessageResponse, error) {
 			var chatResponse llm.ChatMessageResponse
 			options.FlowActionId = flowAction.Id

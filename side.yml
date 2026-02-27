@@ -13,7 +13,7 @@ worktree_setup: |
 test_commands:
   - command: "gotestreport -test.timeout 30s ./..."
   - working_dir: "frontend"
-    command: "bun run test:unit -- --reporter=dot --no-color --run"
+    command: "bun run test:unit -- --no-color --run"
   - working_dir: "frontend"
     command: "bun run type-check"
 

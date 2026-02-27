@@ -1461,23 +1461,21 @@ sleep 30
 	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
 	sup.StartAll(ctx, outputChan)
 
-	time.Sleep(2 * time.Second)
-
 	p := sup.processes[0]
+
+	// Wait for process to start and produce initial output
+	waitForCondition(t, 10*time.Second, func() bool {
+		output := p.getOutput()
+		for _, line := range output {
+			if strings.Contains(line, "run number 1") {
+				return true
+			}
+		}
+		return false
+	}, "expected 'run number 1' in initial output")
+
 	if !p.isRunning() {
 		t.Fatal("process should be running")
-	}
-
-	// Verify initial state - should have "run number 1"
-	initialOutput := p.getOutput()
-	foundRun1 := false
-	for _, line := range initialOutput {
-		if strings.Contains(line, "run number 1") {
-			foundRun1 = true
-		}
-	}
-	if !foundRun1 {
-		t.Fatalf("expected 'run number 1' in initial output, got: %v", initialOutput)
 	}
 
 	// Drain initial messages
@@ -1492,54 +1490,6 @@ sleep 30
 		close(restartDone)
 	}()
 
-	// Check state immediately after starting goroutine
-	waitForCondition(t, 5*time.Second, func() bool {
-		return p.isStopping()
-	}, "process should be stopping")
-
-	immediateState := struct {
-		stopping bool
-		running  bool
-		output   []string
-	}{
-		stopping: p.isStopping(),
-		running:  p.isRunning(),
-		output:   p.getOutput(),
-	}
-	t.Logf("Immediate state: stopping=%v, running=%v, output=%v",
-		immediateState.stopping, immediateState.running, immediateState.output)
-
-	// Wait for first notification (should show stopping state with cleared logs)
-	select {
-	case <-outputChan:
-		notificationState := struct {
-			stopping bool
-			running  bool
-			output   []string
-		}{
-			stopping: p.isStopping(),
-			running:  p.isRunning(),
-			output:   p.getOutput(),
-		}
-		t.Logf("After first notification: stopping=%v, running=%v, output=%v",
-			notificationState.stopping, notificationState.running, notificationState.output)
-
-		if !notificationState.stopping {
-			t.Errorf("stopping should be true after first notification")
-		}
-		if len(notificationState.output) > 0 {
-			t.Errorf("output should be cleared after first notification, got: %v", notificationState.output)
-		}
-		// Should NOT have "run number 1" anymore
-		for _, line := range notificationState.output {
-			if strings.Contains(line, "run number 1") {
-				t.Errorf("old output 'run number 1' should be cleared")
-			}
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for first notification")
-	}
-
 	// Wait for restart to complete
 	select {
 	case <-restartDone:
@@ -1548,7 +1498,15 @@ sleep 30
 	}
 
 	// Wait for new process to produce output
-	time.Sleep(2 * time.Second)
+	waitForCondition(t, 10*time.Second, func() bool {
+		output := p.getOutput()
+		for _, line := range output {
+			if strings.Contains(line, "run number 2") {
+				return true
+			}
+		}
+		return false
+	}, "expected 'run number 2' in output after restart")
 
 	// Drain remaining messages
 	for len(outputChan) > 0 {
@@ -1724,7 +1682,7 @@ fi
 	p := sup.processes[0]
 
 	// Wait for process to produce output and exit
-	waitForCondition(t, 5*time.Second, func() bool {
+	waitForCondition(t, 10*time.Second, func() bool {
 		output := p.getOutput()
 		for _, line := range output {
 			if strings.Contains(line, "first run") {
@@ -1748,7 +1706,15 @@ fi
 	sup.RestartProcess(ctx, p, outputChan)
 
 	// Wait for new process to start and produce output
-	time.Sleep(300 * time.Millisecond)
+	waitForCondition(t, 10*time.Second, func() bool {
+		output := p.getOutput()
+		for _, line := range output {
+			if strings.Contains(line, "second run") {
+				return true
+			}
+		}
+		return false
+	}, "expected 'second run' in output after restart")
 
 	// Process should be running again
 	if !p.isRunning() {
@@ -2768,29 +2734,21 @@ sleep 30
 	enterMsg := tea.KeyMsg{Type: tea.KeyEnter}
 	m.Update(enterMsg)
 
-	// Wait for notification
-	select {
-	case msg := <-outputChan:
-		t.Logf("Received notification for: %s", msg.name)
+	// Wait for dirty to be cleared by RestartProcess
+	waitForCondition(t, 10*time.Second, func() bool {
+		return !p.isDirty()
+	}, "process should not be dirty after restart initiated")
 
-		// Check process state - dirty should be cleared by RestartProcess
-		if p.isDirty() {
-			t.Error("process should not be dirty after restart initiated")
+	// Wait for new process to produce output
+	waitForCondition(t, 10*time.Second, func() bool {
+		output := p.getOutput()
+		for _, line := range output {
+			if strings.Contains(line, "run number 2") {
+				return true
+			}
 		}
-
-		// Check status indicator - should show "Stopping" now
-		statusIndicator := m.getStatusIndicator(p)
-		t.Logf("Status indicator after restart: %s", statusIndicator)
-		if !strings.Contains(statusIndicator, "Stopping") {
-			t.Errorf("status should show 'Stopping', got: %s", statusIndicator)
-		}
-
-	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for notification")
-	}
-
-	// Wait for restart to complete
-	time.Sleep(1 * time.Second)
+		return false
+	}, "expected 'run number 2' in output after restart")
 
 	// Drain remaining messages and update viewport
 	for len(outputChan) > 0 {

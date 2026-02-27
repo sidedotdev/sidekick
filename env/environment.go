@@ -34,10 +34,11 @@ type EnvType string
 const (
 	EnvTypeLocal            EnvType = "local"
 	EnvTypeLocalGitWorktree EnvType = "local_git_worktree"
+	EnvTypeDevPod           EnvType = "devpod"
 )
 
 func (e EnvType) IsValid() bool {
-	return e == EnvTypeLocal || e == EnvTypeLocalGitWorktree
+	return e == EnvTypeLocal || e == EnvTypeLocalGitWorktree || e == EnvTypeDevPod
 }
 
 type Env interface {
