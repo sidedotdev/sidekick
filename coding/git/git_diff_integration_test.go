@@ -468,6 +468,102 @@ func TestFilterDiffForReview_Integration(t *testing.T) {
 			"file reverted to match main should be dropped — nothing actionable for reviewer")
 	})
 
+	t.Run("undone_changes_appear_in_diff", func(t *testing.T) {
+		t.Parallel()
+
+		// Reproduces a production bug: stage changes, write the tree hash,
+		// then undo those staged changes. The undo must appear in the
+		// filtered diff because the reviewer saw them and needs to know
+		// they were removed.
+
+		repoDir := setupTestGitRepo(t)
+		ctx := context.Background()
+
+		// Initial file on main
+		originalContent := "#!/usr/bin/env bash\nset -euo pipefail\n\nENV_FILE=\".env\"\necho \"hello\"\n"
+		createFileAndCommit(t, repoDir, "setup.sh", originalContent, "initial commit")
+
+		runGitCommandInTestRepo(t, repoDir, "checkout", "-b", "feature")
+
+		// Commit a file before the review — should NOT appear in the final result
+		createFileAndCommit(t, repoDir, "unchanged.go", "package unchanged\n", "add unchanged file")
+
+		// Stage additions to setup.sh (not committed)
+		withAdditions := "#!/usr/bin/env bash\n# If this script was checked out with CRLF line endings,\n# re-execute with corrected endings so bash doesn't choke on \\r.\nif [[ \"$(head -1 \"$0\")\" == *$'\\r' ]]; then\n  tmp=\"$(mktemp)\"\n  sed 's/\\r$//' \"$0\" > \"$tmp\"\n  chmod +x \"$tmp\"\n  exec bash \"$tmp\" \"$@\"\nfi\n\nset -euo pipefail\n\nENV_FILE=\".env\"\necho \"hello\"\n"
+		err := os.WriteFile(filepath.Join(repoDir, "setup.sh"), []byte(withAdditions), 0644)
+		require.NoError(t, err)
+		runGitCommandInTestRepo(t, repoDir, "add", "setup.sh")
+
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		// Write tree hash — captures the staged state including CRLF additions
+		lastReviewTreeHash, err := WriteTreeActivity(ctx, envContainer)
+		require.NoError(t, err)
+
+		// Stage a new file after the review — must appear in the filtered result
+		err = os.WriteFile(filepath.Join(repoDir, "feature.go"), []byte("package feature\n\nfunc Feature() {}\n"), 0644)
+		require.NoError(t, err)
+		runGitCommandInTestRepo(t, repoDir, "add", "feature.go")
+
+		// Undo the CRLF additions: revert to original and re-stage
+		err = os.WriteFile(filepath.Join(repoDir, "setup.sh"), []byte(originalContent), 0644)
+		require.NoError(t, err)
+		runGitCommandInTestRepo(t, repoDir, "add", "setup.sh")
+
+		// sinceReviewDiff: reviewTree → HEAD
+		sinceReviewDiff, err := GitDiffActivity(ctx, envContainer, GitDiffParams{
+			Staged:  true,
+			BaseRef: lastReviewTreeHash,
+		})
+		require.NoError(t, err)
+		t.Logf("sinceReviewDiff:\n%s", sinceReviewDiff)
+
+		assert.Contains(t, sinceReviewDiff, "setup.sh",
+			"sinceReviewDiff should show the undone changes")
+		assert.Contains(t, sinceReviewDiff, "re-execute with corrected endings",
+			"sinceReviewDiff should contain the removed lines")
+
+		// branchDiff: three-dot diff (main...HEAD)
+		zeroCtx := 0
+		branchDiff, err := GitDiffActivity(ctx, envContainer, GitDiffParams{
+			Staged:       true,
+			ThreeDotDiff: true,
+			BaseRef:      "main",
+			ContextLines: &zeroCtx,
+		})
+		require.NoError(t, err)
+		t.Logf("branchDiff (three-dot):\n%s", branchDiff)
+
+		assert.NotContains(t, branchDiff, "setup.sh",
+			"setup.sh matches main so should not appear in three-dot diff")
+
+		// baseSinceReviewDiff: reviewTree → main
+		baseSinceReviewDiff, err := GitDiffActivity(ctx, envContainer, GitDiffParams{
+			BaseRef:      lastReviewTreeHash,
+			EndRef:       "main",
+			ContextLines: &zeroCtx,
+		})
+		require.NoError(t, err)
+		t.Logf("baseSinceReviewDiff:\n%s", baseSinceReviewDiff)
+
+		result, err := diffanalysis.FilterDiffForReview(sinceReviewDiff, branchDiff, baseSinceReviewDiff)
+		require.NoError(t, err)
+		t.Logf("FilterDiffForReview result:\n%s", result)
+
+		// The undone changes must appear — the reviewer approved them and
+		// needs to know they were removed.
+		assert.Contains(t, result, "setup.sh",
+			"undone file should appear in filtered diff")
+		assert.Contains(t, result, "re-execute with corrected endings",
+			"removed lines should be visible in the filtered diff")
+		assert.Contains(t, result, "feature.go",
+			"new staged file should also appear")
+		assert.NotContains(t, result, "unchanged.go",
+			"file committed before review and unchanged since should not appear")
+	})
+
 	t.Run("production_scenario_worktree_setup_revert", func(t *testing.T) {
 		t.Parallel()
 
