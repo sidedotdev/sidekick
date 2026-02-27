@@ -35,11 +35,41 @@ func TestFailingTestOutputFlushed(t *testing.T) {
 	s.ProcessEvent(TestEvent{Action: "run", Package: "pkg/a", Test: "TestFail"})
 	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/a", Test: "TestFail", Output: "=== RUN   TestFail\n"})
 	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/a", Test: "TestFail", Output: "    fail_test.go:10: expected 1 got 2\n"})
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/a", Test: "TestFail", Output: "--- FAIL: TestFail (0.00s)\n"})
 	s.ProcessEvent(TestEvent{Action: "fail", Package: "pkg/a", Test: "TestFail"})
 
+	output := out.String()
 	// Failed test output should be flushed
-	assert.Contains(t, out.String(), "expected 1 got 2")
-	assert.Contains(t, out.String(), "--- pkg/a ---")
+	assert.Contains(t, output, "expected 1 got 2")
+	assert.Contains(t, output, "--- pkg/a ---")
+	// RUN/PAUSE/CONT lines should be filtered out
+	assert.NotContains(t, output, "=== RUN")
+	// FAIL line should come before the log output
+	failIdx := strings.Index(output, "--- FAIL: TestFail")
+	logIdx := strings.Index(output, "expected 1 got 2")
+	assert.Greater(t, logIdx, failIdx, "FAIL line should precede log output")
+}
+
+func TestRunPauseContLinesFiltered(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := NewStreamer(&out)
+
+	s.ProcessEvent(TestEvent{Action: "run", Package: "pkg/a", Test: "TestFail"})
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/a", Test: "TestFail", Output: "=== RUN   TestFail\n"})
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/a", Test: "TestFail", Output: "=== PAUSE TestFail\n"})
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/a", Test: "TestFail", Output: "=== CONT  TestFail\n"})
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/a", Test: "TestFail", Output: "    fail_test.go:10: something broke\n"})
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/a", Test: "TestFail", Output: "--- FAIL: TestFail (0.00s)\n"})
+	s.ProcessEvent(TestEvent{Action: "fail", Package: "pkg/a", Test: "TestFail"})
+
+	output := out.String()
+	assert.NotContains(t, output, "=== RUN")
+	assert.NotContains(t, output, "=== PAUSE")
+	assert.NotContains(t, output, "=== CONT")
+	assert.Contains(t, output, "--- FAIL: TestFail")
+	assert.Contains(t, output, "something broke")
 }
 
 func TestSkippedTestShowsOnlyName(t *testing.T) {
