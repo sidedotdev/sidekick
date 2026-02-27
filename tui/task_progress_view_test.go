@@ -1770,3 +1770,138 @@ func TestSubflowFailedMsgUpdate(t *testing.T) {
 		t.Errorf("expected 2 failed subflows after second update, got %d", len(m.failedSubflows))
 	}
 }
+
+func TestClearScreenOnApprovalCleared(t *testing.T) {
+	t.Parallel()
+
+	// isClearScreenCmd checks whether a tea.Cmd produces the same message as tea.ClearScreen.
+	isClearScreenCmd := func(cmd tea.Cmd) bool {
+		if cmd == nil {
+			return false
+		}
+		expected := tea.ClearScreen()
+		got := cmd()
+		return fmt.Sprintf("%T", got) == fmt.Sprintf("%T", expected)
+	}
+
+	t.Run("clear screen when pending action completed via status change", func(t *testing.T) {
+		t.Parallel()
+		m := newProgressModel("task-1", "flow-1", "ws-1", nil)
+
+		// Set up a pending approval with a long multi-line command
+		longCommand := strings.Repeat("echo 'hello world';", 50)
+		pendingAction := client.FlowAction{
+			Id:               "action-1",
+			ActionType:       "user_request.approve.run_command",
+			ActionStatus:     domain.ActionStatusPending,
+			IsHumanAction:    true,
+			IsCallbackAction: true,
+			ActionParams: map[string]interface{}{
+				"command":        longCommand,
+				"requestContent": "Run this command?",
+			},
+		}
+		updated, _ := m.Update(flowActionChangeMsg{action: pendingAction})
+		m = updated.(taskProgressModel)
+
+		if !m.approvalInput.HasPendingAction() {
+			t.Fatal("expected pending action to be set")
+		}
+
+		// Complete the action — approval is cleared
+		completedAction := client.FlowAction{
+			Id:               "action-1",
+			ActionType:       "user_request.approve.run_command",
+			ActionStatus:     domain.ActionStatusComplete,
+			IsHumanAction:    true,
+			IsCallbackAction: true,
+			ActionParams: map[string]interface{}{
+				"command":        longCommand,
+				"requestContent": "Run this command?",
+			},
+		}
+		updated, cmd := m.Update(flowActionChangeMsg{action: completedAction})
+		m = updated.(taskProgressModel)
+
+		if m.approvalInput.HasPendingAction() {
+			t.Error("expected pending action to be cleared")
+		}
+		if !isClearScreenCmd(cmd) {
+			t.Error("expected tea.ClearScreen command when approval is cleared")
+		}
+	})
+
+	t.Run("clear screen when approval submitted", func(t *testing.T) {
+		t.Parallel()
+		m := newProgressModel("task-1", "flow-1", "ws-1", nil)
+
+		// Set up a pending approval
+		longCommand := strings.Repeat("echo 'hello world';", 50)
+		pendingAction := client.FlowAction{
+			Id:               "action-1",
+			ActionType:       "user_request.approve.run_command",
+			ActionStatus:     domain.ActionStatusPending,
+			IsHumanAction:    true,
+			IsCallbackAction: true,
+			ActionParams: map[string]interface{}{
+				"command":        longCommand,
+				"requestContent": "Run this command?",
+			},
+		}
+		updated, _ := m.Update(flowActionChangeMsg{action: pendingAction})
+		m = updated.(taskProgressModel)
+
+		// Simulate approval submission
+		updated, cmd := m.Update(ApprovalSubmittedMsg{
+			ActionID:        "action-1",
+			ResponseContent: "approved",
+		})
+		m = updated.(taskProgressModel)
+
+		if m.approvalInput.HasPendingAction() {
+			t.Error("expected pending action to be cleared after submission")
+		}
+		if !isClearScreenCmd(cmd) {
+			t.Error("expected tea.ClearScreen command when approval is submitted")
+		}
+	})
+
+	t.Run("no clear screen when no approval was pending", func(t *testing.T) {
+		t.Parallel()
+		m := newProgressModel("task-1", "flow-1", "ws-1", nil)
+
+		// Send a completed action without any prior pending state
+		completedAction := client.FlowAction{
+			Id:               "action-1",
+			ActionType:       "user_request.approve.run_command",
+			ActionStatus:     domain.ActionStatusComplete,
+			IsHumanAction:    true,
+			IsCallbackAction: true,
+			ActionParams: map[string]interface{}{
+				"command":        "echo hello",
+				"requestContent": "Run this?",
+			},
+		}
+		_, cmd := m.Update(flowActionChangeMsg{action: completedAction})
+
+		if isClearScreenCmd(cmd) {
+			t.Error("should not clear screen when no approval was pending")
+		}
+	})
+
+	t.Run("no clear screen for normal action updates", func(t *testing.T) {
+		t.Parallel()
+		m := newProgressModel("task-1", "flow-1", "ws-1", nil)
+
+		action := client.FlowAction{
+			Id:           "action-1",
+			ActionType:   "tool_call",
+			ActionStatus: domain.ActionStatusComplete,
+		}
+		_, cmd := m.Update(flowActionChangeMsg{action: action})
+
+		if isClearScreenCmd(cmd) {
+			t.Error("should not clear screen for normal action updates")
+		}
+	})
+}
