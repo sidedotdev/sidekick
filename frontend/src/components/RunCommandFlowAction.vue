@@ -1,8 +1,5 @@
 <template>
   <div class="tool-flow-action">
-    <div v-if="summary" class="action-summary-section">
-      <strong>Command:</strong> <code>{{ summary }}</code>
-    </div>
     <div v-if="expand">
       <div class="action-params">
         Params: <JsonTree :data="flowAction.actionParams" :deep="0" />
@@ -25,24 +22,6 @@ const props = defineProps<{
   level?: number
 }>()
 
-const summary = computed(() => {
-  try {
-    const params = props.flowAction.actionParams;
-    if (!params || !params.command) {
-      return null;
-    }
-
-    let result = params.command;
-    if (params.workingDir) {
-      result = `(${params.workingDir}) ${result}`;
-    }
-    return result;
-  } catch (error) {
-    console.error('Error computing run_command summary:', error);
-    return null;
-  }
-});
-
 const toolResponse = computed(() => {
   try {
     const parsed = JSON.parse(props.flowAction.actionResult)
@@ -59,10 +38,6 @@ const toolResponse = computed(() => {
 
 <style scoped>
 .tool-flow-action {
-  margin-top: 0.625rem;
-}
-
-.action-summary-section {
   margin-top: 0.625rem;
 }
 

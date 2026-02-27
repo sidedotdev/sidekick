@@ -59,8 +59,23 @@ func TestGetModelContextLimit_InvalidEnvVar(t *testing.T) {
 func TestMaxCharsForModel(t *testing.T) {
 	t.Parallel()
 
-	result := MaxCharsForModel("unknown", "unknown-model", 15000)
-	totalChars := int(float64(DefaultContextLimitTokens) * CharsPerToken)
-	expected := totalChars - 15000
+	result := MaxCharsForModel("unknown", "unknown-model")
+	expected := int(float64(DefaultContextLimitTokens) * CharsPerToken)
 	assert.Equal(t, expected, result)
+}
+
+func TestModelMetadata_MaxChars(t *testing.T) {
+	t.Parallel()
+
+	t.Run("uses context tokens", func(t *testing.T) {
+		t.Parallel()
+		m := ModelMetadata{ContextTokens: 50000}
+		assert.Equal(t, int(float64(50000)*CharsPerToken), m.MaxChars())
+	})
+
+	t.Run("falls back when context tokens is zero", func(t *testing.T) {
+		t.Parallel()
+		m := ModelMetadata{}
+		assert.Equal(t, int(float64(DefaultContextLimitTokens)*CharsPerToken), m.MaxChars())
+	})
 }

@@ -608,22 +608,10 @@ func TestStartDevRun_ImmediateNonZeroExit(t *testing.T) {
 		},
 	}
 
-	_, err := activities.StartDevRun(context.Background(), input)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "exited immediately")
-
-	// Should have emitted DevRunEndedEvent
-	events := streamer.getEvents()
-	var endedEvent *domain.DevRunEndedEvent
-	for _, e := range events {
-		if ev, ok := e.(domain.DevRunEndedEvent); ok {
-			endedEvent = &ev
-			break
-		}
-	}
-	require.NotNil(t, endedEvent, "should have DevRunEndedEvent on immediate failure")
-	assert.NotNil(t, endedEvent.ExitStatus)
-	assert.Equal(t, 1, *endedEvent.ExitStatus)
+	output, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output.Started)
+	assert.NotNil(t, output.Instance)
 }
 
 func TestStartDevRun_CommandNotFound(t *testing.T) {
@@ -653,8 +641,10 @@ func TestStartDevRun_CommandNotFound(t *testing.T) {
 		},
 	}
 
-	_, err := activities.StartDevRun(context.Background(), input)
-	require.Error(t, err)
+	output, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output.Started)
+	assert.NotNil(t, output.Instance)
 }
 
 func TestStartDevRun_NaturalExitEmitsEndedEvent(t *testing.T) {
@@ -743,10 +733,10 @@ func TestStartDevRun_NaturalNonZeroExitEmitsEndedEvent(t *testing.T) {
 		},
 	}
 
-	// This will fail because the command exits immediately with non-zero
-	_, err := activities.StartDevRun(context.Background(), input)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "exited immediately")
+	output, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output.Started)
+	assert.NotNil(t, output.Instance)
 }
 
 func TestStartDevRun_RelativeWorkingDir(t *testing.T) {

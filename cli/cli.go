@@ -6,6 +6,7 @@ import (
 	"os"
 	"sidekick"
 	"sidekick/api"
+	"sidekick/common"
 	"sidekick/temporal"
 	"strconv"
 	"time"
@@ -88,11 +89,22 @@ func main() {
 func setupAndRunInteractiveCli(args []string) error {
 	log.Logger = log.Level(zerolog.InfoLevel).Output(zerolog.ConsoleWriter{Out: os.Stderr})
 
+	skipPprof := map[string]bool{
+		"version": true, "v": true, "-v": true, "--version": true,
+		"help": true, "h": true, "-h": true, "--help": true,
+	}
+
 	cliApp := &cli.Command{
 		Name:        "side",
 		Usage:       "CLI for Sidekick",
 		Description: "~ Sidekick is an agentic AI tool for software engineers.",
 		Version:     version, // Enables global --version flag
+		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+			if len(os.Args) < 2 || !skipPprof[os.Args[1]] {
+				common.StartPprofServer()
+			}
+			return ctx, nil
+		},
 		Commands: []*cli.Command{
 			{
 				Name:  "init",

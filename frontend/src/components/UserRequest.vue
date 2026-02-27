@@ -378,8 +378,7 @@ async function queryDevRunConfig() {
       return
     }
     const data = await response.json()
-    // Check if result has non-empty commands map
-    if (data.result?.commands && typeof data.result.commands === 'object' && Object.keys(data.result.commands).length > 0) {
+    if (data.result && typeof data.result === 'object' && Object.keys(data.result).length > 0) {
       hasDevRunConfig.value = true
     }
   } catch (err) {

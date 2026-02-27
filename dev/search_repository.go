@@ -69,8 +69,8 @@ type SingleSearchParams struct {
 	SearchTerm string `json:"search_term" jsonschema:"description=The search term to look for within the files."`
 }
 
-const refuseAtSearchOutputLength = 6000
-const maxSearchOutputLength = 2000
+const refuseAtSearchOutputLength = 20000
+const maxSearchOutputLength = 10000
 
 // addSearchPrefix adds a consistent search description prefix to the given output
 func addSearchPrefix(input SearchRepositoryInput, output string) string {

@@ -55,7 +55,7 @@ func (o OpenaiResponsesToolChat) ChatStream(ctx context.Context, options ToolCha
 	if err != nil {
 		return nil, err
 	}
-	httpClient := &http.Client{Timeout: 5 * time.Minute}
+	httpClient := &http.Client{Timeout: 20 * time.Minute}
 	clientOptions := []option.RequestOption{
 		option.WithAPIKey(token),
 		option.WithMaxRetries(0), // retries handled by temporal
