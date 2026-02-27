@@ -45,10 +45,7 @@ func FilterDiffForReview(sinceReviewDiff, branchDiff, baseSinceReviewDiff string
 
 		var kept []Hunk
 		for _, h := range file.Hunks {
-			// Compare on old side for base (both diffs share the review tree as old),
-			// and on new side for branch (three-dot diff new side = HEAD = our new side).
-			if overlapsAnyOld(h, baseHunks) && !overlapsAnyNew(h, branchHunks) {
-				// Merge-introduced hunk: base changed it but we didn't
+			if isMergeIntroduced(h, baseHunks, branchHunks) {
 				continue
 			}
 			kept = append(kept, h)
@@ -65,6 +62,25 @@ func FilterDiffForReview(sinceReviewDiff, branchDiff, baseSinceReviewDiff string
 	return result.String(), nil
 }
 
+// isMergeIntroduced returns true if a sinceReview hunk was introduced by
+// merging the base branch and is not part of our branch's own work. This
+// requires finding a single base hunk that overlaps on both old side (shared
+// review-tree origin) and new side (convergent outcome), while no branch hunk
+// claims the new-side range.
+func isMergeIntroduced(h Hunk, baseHunks, branchHunks []Hunk) bool {
+	if overlapsAnyNew(h, branchHunks) {
+		return false
+	}
+	for _, bh := range baseHunks {
+		oldOverlap := rangesOverlap(h.OldStart, h.OldCount, bh.OldStart, bh.OldCount)
+		newOverlap := rangesOverlapStrict(h.NewStart, h.NewCount, bh.NewStart, bh.NewCount)
+		if oldOverlap && newOverlap {
+			return true
+		}
+	}
+	return false
+}
+
 // rangesOverlap returns true if [aStart, aStart+aCount) overlaps [bStart, bStart+bCount).
 // Zero-count ranges (pure deletions/additions) are treated as one line wide.
 func rangesOverlap(aStart, aCount, bStart, bCount int) bool {
@@ -77,6 +93,33 @@ func rangesOverlap(aStart, aCount, bStart, bCount int) bool {
 		bEnd = bStart + 1
 	}
 	return aStart < bEnd && bStart < aEnd
+}
+
+// rangesOverlapStrict is like rangesOverlap but treats zero-count ranges as
+// truly empty: if either side has count=0 (no content), there is no overlap
+// unless both sides are zero-count at the same position (convergent pure
+// deletion/addition).
+func rangesOverlapStrict(aStart, aCount, bStart, bCount int) bool {
+	if aCount == 0 && bCount == 0 {
+		return aStart == bStart
+	}
+	if aCount == 0 || bCount == 0 {
+		return false
+	}
+	aEnd := aStart + aCount
+	bEnd := bStart + bCount
+	return aStart < bEnd && bStart < aEnd
+}
+
+// overlapsAnyNewStrict returns true if h's new-file range has a strict overlap
+// with any hunk's new-file range (zero-count ranges don't overlap non-zero).
+func overlapsAnyNewStrict(h Hunk, hunks []Hunk) bool {
+	for _, other := range hunks {
+		if rangesOverlapStrict(h.NewStart, h.NewCount, other.NewStart, other.NewCount) {
+			return true
+		}
+	}
+	return false
 }
 
 // overlapsAnyNew returns true if h's new-file range overlaps any hunk's new-file range.

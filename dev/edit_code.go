@@ -131,9 +131,10 @@ editLoop:
 			// If promptInfo is an initial type, add it to chat history first before
 			// overwriting with pause feedback. This ensures the initial instructions
 			// are in the history before the pause feedback.
+			_, editCodeSubflowHasPlan := promptInfo.(InitialDevStepInfo)
 			switch promptInfo.(type) {
 			case InitialCodeInfo, InitialDevStepInfo:
-				buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, IsDoneRequiredProtocol(dCtx))
+				buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, IsDoneRequiredProtocol(dCtx), editCodeSubflowHasPlan)
 			}
 			promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 		}
@@ -221,6 +222,8 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	// Check if done-required protocol is enabled (requires both version AND feature flag)
 	doneRequired := IsDoneRequiredProtocol(dCtx)
 
+	_, hasPlan := promptInfo.(InitialDevStepInfo)
+
 	repoConfig := dCtx.RepoConfig
 	if repoConfig.MaxIterations > 0 {
 		maxAttempts = repoConfig.MaxIterations
@@ -266,7 +269,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			// are in the history before the pause feedback.
 			switch promptInfo.(type) {
 			case InitialCodeInfo, InitialDevStepInfo:
-				buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired)
+				buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired, hasPlan)
 			}
 			promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			attemptsSinceLastEditBlockOrFeedback = 0
@@ -307,7 +310,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		}
 
 		// NOTE: this also ensures the tool call response is added to chat history
-		authorEditBlockInput := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired)
+		authorEditBlockInput := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired, hasPlan)
 		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
 
 		// NOTE this MUST be below authorEditBlockInput to ensure tool call
@@ -381,8 +384,24 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 		var toolCallResponses []llm2.ToolResultBlock
 		if len(chatResponse.GetMessage().GetToolCalls()) > 0 {
+			otherToolCalls := false
+			for _, tc := range chatResponse.GetMessage().GetToolCalls() {
+				if tc.Name != doneTool.Name {
+					otherToolCalls = true
+					break
+				}
+			}
+			doneCalledAlongsideOtherWork := otherToolCalls || len(currentExtractedBlocks) > 0
+
 			customHandlers := map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error){
 				doneTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (llm2.ToolResultBlock, error) {
+					if doneCalledAlongsideOtherWork {
+						return llm2.ToolResultBlock{
+							Name:       toolCall.Name,
+							ToolCallId: toolCall.Id,
+							Content:    llm2.TextContentBlocks("The `done` tool must be called on its own, without any other tool calls or edit blocks in the same response. If you still have more work to do, continue working. Once all work is complete, call `done` by itself."),
+						}, nil
+					}
 					resp, err := handleDoneToolCall(dCtx, toolCall)
 					if err == nil {
 						doneToolCalled = true
@@ -465,7 +484,7 @@ func IsDoneRequiredProtocol(ctx workflow.Context) bool {
 
 // buildAuthorEditBlockInput builds the LLM options for authoring edit blocks.
 // Returns the options and the visible messages (for edit block extraction).
-func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, doneRequired bool) llm2.Options {
+func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, doneRequired bool, hasPlan bool) llm2.Options {
 	// TODO extract chat message building into a separate function
 	var content string
 	role := llm.ChatMessageRoleUser
@@ -519,11 +538,17 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	tools = append(tools, currentGetSymbolDefinitionsTool())
 	tools = append(tools, &bulkReadFileTool)
 	tools = append(tools, &runCommandTool)
+
 	if dCtx.Worktree != nil {
 		tools = append(tools, &setBaseBranchTool)
 	}
+
 	if doneRequired {
-		tools = append(tools, &doneTool)
+		if hasPlan {
+			tools = append(tools, &doneToolWithPlan)
+		} else {
+			tools = append(tools, &doneTool)
+		}
 	}
 
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {

@@ -375,7 +375,7 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestIncludesDoneTool() {
 		chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
 		doneRequired := IsDoneRequiredProtocol(dCtx)
-		result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired)
+		result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false)
 
 		toolNames := make([]string, len(result.Params.Tools))
 		for i, tool := range result.Params.Tools {
@@ -419,7 +419,7 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestHumanInTheLoopDisabled() {
 		chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
 		doneRequired := IsDoneRequiredProtocol(dCtx)
-		result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired)
+		result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false)
 
 		toolNames := make([]string, len(result.Params.Tools))
 		for i, tool := range result.Params.Tools {
