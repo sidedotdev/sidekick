@@ -118,6 +118,7 @@
         @click="submitUserResponse(true)"
       >
         {{ continueCopy() }}
+        <span class="shortcut-hint">{{ shortcutLabel }}</span>
       </button>
     </div>
     <div v-else>
@@ -354,6 +355,9 @@ const handleKeyDown = (event: KeyboardEvent) => {
     } else if (requestKind === 'approval' || requestKind === 'merge_approval') {
       event.preventDefault()
       submitUserResponse(!hasResponseText.value)
+    } else if (requestKind === 'continue') {
+      event.preventDefault()
+      submitUserResponse(true)
     }
   }
 }
