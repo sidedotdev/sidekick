@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sidekick/client"
 	"sidekick/domain"
 	"strings"
@@ -1261,7 +1262,7 @@ func TestMergeStrategyToggle(t *testing.T) {
 	// Not parallel - modifies package-level mergeStrategyPrefsPathOverride
 	tmpDir := t.TempDir()
 	oldOverride := mergeStrategyPrefsPathOverride
-	mergeStrategyPrefsPathOverride = tmpDir + "/merge_strategy.json"
+	mergeStrategyPrefsPathOverride = filepath.Join(tmpDir, "/merge_strategy.json")
 	t.Cleanup(func() {
 		mergeStrategyPrefsPathOverride = oldOverride
 	})

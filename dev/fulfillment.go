@@ -30,12 +30,30 @@ type CriteriaFulfillment struct {
 
 // TODO /gen add a test for this function
 func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (CriteriaFulfillment, error) {
+	// Use GlobalState as single source of truth for base branch, falling back to caller-provided value
+	if v := workflow.GetVersion(dCtx, "check-work-global-base-branch", workflow.DefaultVersion, 1); v >= 1 {
+		if globalBase := dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch); globalBase != "" {
+			promptInfo.BaseBranch = globalBase
+		}
+	}
+
 	var diff string
 	var err error
 
-	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 1)
-	if v >= 1 && promptInfo.LastReviewTreeHash != "" {
-		diff, err = getDiffSinceLastReview(dCtx, promptInfo.LastReviewTreeHash, false)
+	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 2)
+	if v >= 2 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
+		diff, err = getOwnChangesSinceReview(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, false)
+		if err != nil {
+			return CriteriaFulfillment{}, fmt.Errorf("failed to get own changes since review: %v", err)
+		}
+	} else if v >= 2 && promptInfo.BaseBranch != "" {
+		// No last review tree hash available, fall back to full three-dot diff
+		diff, err = GetGitDiff(dCtx, promptInfo.BaseBranch, false)
+		if err != nil {
+			return CriteriaFulfillment{}, fmt.Errorf("failed to get three-dot diff: %v", err)
+		}
+	} else if v >= 1 && promptInfo.LastReviewTreeHash != "" {
+		diff, err = getDiffSinceLastReview(dCtx, promptInfo.LastReviewTreeHash, false, nil)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get diff since last review: %v", err)
 		}
@@ -43,6 +61,31 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 		diff, err = git.GitDiff(dCtx.ExecContext)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get git diff: %v", err)
+		}
+	}
+
+	// Summarize diff to fit within 50% of the judging model's context capacity
+	summarizeVersion := workflow.GetVersion(dCtx, "summarize-diff-for-fulfillment", workflow.DefaultVersion, 1)
+	if summarizeVersion >= 1 && len(diff) > 0 {
+		modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
+		metadata := dCtx.ExecContext.FetchModelMetadata(modelConfig.Provider, modelConfig.Model)
+		maxDiffChars := metadata.MaxChars() / 2
+		if len(diff) > maxDiffChars {
+			embeddingModelConfig := dCtx.ExecContext.GetEmbeddingModelConfig("diff_summarize")
+			var summarizedDiff string
+			err = workflow.ExecuteActivity(dCtx, SummarizeDiffActivity, SummarizeDiffActivityInput{
+				GitDiff:                diff,
+				ReviewFeedback:         promptInfo.Requirements,
+				EnvContainer:           *dCtx.EnvContainer,
+				ModelConfig:            embeddingModelConfig,
+				SecretManagerContainer: *dCtx.Secrets,
+				MaxChars:               maxDiffChars,
+			}).Get(dCtx, &summarizedDiff)
+			if err == nil {
+				diff = summarizedDiff
+			} else {
+				diff = diff[:maxDiffChars]
+			}
 		}
 	}
 
@@ -79,6 +122,7 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 	for {
 		// TODO /gen test this, assert it calls the right tool via mock of chat stream method
 		actionCtx := dCtx.ExecContext.NewActionContext("check_criteria_fulfillment")
+		actionCtx.ActionParams["diffString"] = promptInfo.Work
 		chatResponse, err := persisted_ai.ForceToolCall(actionCtx, dCtx.LLMConfig, &params, &determineCriteriaFulfillmentTool)
 		*chatHistory = params.Messages // update chat history with the new messages
 		if err != nil {

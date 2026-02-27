@@ -218,7 +218,6 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 	// Check if done-required protocol is enabled (requires both version AND feature flag)
 	doneRequired := IsDoneRequiredProtocol(dCtx)
-	doneToolCalled := false
 
 	repoConfig := dCtx.RepoConfig
 	if repoConfig.MaxIterations > 0 {
@@ -244,6 +243,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	}
 
 	for {
+		doneToolCalled := false
 		// Check for UserActionGoNext and version to potentially skip this step
 		version := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
 		if version == 1 {
@@ -515,6 +515,9 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	tools = append(tools, currentGetSymbolDefinitionsTool())
 	tools = append(tools, &bulkReadFileTool)
 	tools = append(tools, &runCommandTool)
+	if dCtx.Worktree != nil {
+		tools = append(tools, &setBaseBranchTool)
+	}
 	tools = append(tools, &doneTool)
 
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {

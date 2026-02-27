@@ -11,6 +11,13 @@
       <div v-if="expand && criteriaFulfillment.confidence <= 3" class="confidence">
         <pre><strong>Confidence:</strong> {{ criteriaFulfillment.confidence }}/5</pre>
       </div>
+      <div v-if="expand && diffString" class="diff-section">
+        <UnifiedDiffViewer
+          :diff-string="diffString"
+          :default-expanded="false"
+          :level="(level ?? 0) + 1"
+        />
+      </div>
     </div>
     <div v-else-if="flowAction.actionStatus == 'complete'">
       Unable to parse criteria fulfillment data:
@@ -23,6 +30,7 @@
 import { computed } from 'vue';
 import type { ChatCompletionMessage, FlowAction } from '@/lib/models';
 import VueMarkdown from 'vue-markdown-render';
+import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
 
 export interface CriteriaFulfillment {
   whatWasActuallyDone: string;
@@ -35,6 +43,7 @@ export interface CriteriaFulfillment {
 const props = defineProps<{
   flowAction: FlowAction;
   expand: boolean;
+  level?: number;
 }>();
 
 const criteriaFulfillment = computed<CriteriaFulfillment | null>(() => {
@@ -48,6 +57,11 @@ const criteriaFulfillment = computed<CriteriaFulfillment | null>(() => {
     return null;
   }
 });
+
+const diffString = computed<string | null>(() => {
+  const diff = props.flowAction.actionParams?.diffString;
+  return typeof diff === 'string' && diff.trim() !== '' ? diff : null;
+});
 </script>
 
 <style scoped>
@@ -60,6 +74,10 @@ const criteriaFulfillment = computed<CriteriaFulfillment | null>(() => {
 
 strong {
   font-weight: bold;
+}
+
+.diff-section {
+  margin-top: 1rem;
 }
 
 /* TODO move this to a single shared component */

@@ -522,7 +522,7 @@ const setupFlow = async (newFlowId: string | undefined) => {
       const flowData = await response.json();
       flow.value = flowData.flow;
       isLoadingFlow.value = false;
-      isStartingFlow.value = true;
+      isStartingFlow.value = !hasReceivedFirstAction;
 
       // Fetch workspace for localRepoDir fallback
       if (flow.value?.workspaceId) {
