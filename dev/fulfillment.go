@@ -40,14 +40,19 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 	var diff string
 	var err error
 
-	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 3)
-	if v >= 3 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
+	// FIXME revert max version to 3 once all v==3 workflows have completed
+	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 4)
+	if v >= 4 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
 		diff, err = getOwnChangesSinceReview(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, false)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get own changes since review: %v", err)
 		}
+	} else if v >= 3 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
+		diff, err = legacyOwnChangesSinceReviewV3(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, false)
+		if err != nil {
+			return CriteriaFulfillment{}, fmt.Errorf("failed to get own changes since review: %v", err)
+		}
 	} else if v >= 2 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
-		// Legacy: two-activity intersection (kept for replay determinism)
 		diff, err = legacyOwnChangesSinceReview(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, false)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get own changes since review: %v", err)
