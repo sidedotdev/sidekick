@@ -1,6 +1,7 @@
 package diffanalysis
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -27,7 +28,7 @@ func TestFilterDiffForReview_FileInBranch(t *testing.T) {
  context
 `
 
-	result, err := FilterDiffForReview(sinceReview, branchDiff, "")
+	result, err := FilterDiffForReview(sinceReview, branchDiff, "", sinceReview)
 	require.NoError(t, err)
 	assert.Contains(t, result, "+new line since review")
 	assert.Contains(t, result, "file.go")
@@ -61,7 +62,7 @@ func TestFilterDiffForReview_MergeIntroducedFile(t *testing.T) {
  context
 `
 
-	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview)
+	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview, sinceReview)
 	require.NoError(t, err)
 	assert.Empty(t, result, "merged.go hunk overlaps base but not branch, should be excluded")
 }
@@ -82,7 +83,7 @@ func TestFilterDiffForReview_RevertedFile(t *testing.T) {
 	branchDiff := ""
 	baseSinceReview := ""
 
-	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview)
+	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview, sinceReview)
 	require.NoError(t, err)
 	assert.Contains(t, result, "side.yml")
 	assert.Contains(t, result, "-  go install sidekick/cmd/gotestreport",
@@ -135,7 +136,7 @@ diff --git a/reverted.go b/reverted.go
  context
 `
 
-	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview)
+	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview, sinceReview)
 	require.NoError(t, err)
 	assert.Contains(t, result, "+our recent change")
 	assert.NotContains(t, result, "+from main merge")
@@ -172,7 +173,7 @@ func TestFilterDiffForReview_FileInBothBranchAndBase(t *testing.T) {
  context
 `
 
-	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview)
+	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview, sinceReview)
 	require.NoError(t, err)
 	assert.Contains(t, result, "+combined changes",
 		"convergent hunk should be kept since our branch also touched it")
@@ -181,11 +182,11 @@ func TestFilterDiffForReview_FileInBothBranchAndBase(t *testing.T) {
 func TestFilterDiffForReview_EmptyDiffs(t *testing.T) {
 	t.Parallel()
 
-	result, err := FilterDiffForReview("", "", "")
+	result, err := FilterDiffForReview("", "", "", "")
 	require.NoError(t, err)
 	assert.Empty(t, result)
 
-	result, err = FilterDiffForReview("", "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,1 +1,2 @@\n c\n+a\n", "")
+	result, err = FilterDiffForReview("", "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,1 +1,2 @@\n c\n+a\n", "", "")
 	require.NoError(t, err)
 	assert.Empty(t, result)
 }
@@ -210,7 +211,7 @@ func TestFilterDiffForReview_NewFile(t *testing.T) {
 +func New() {}
 `
 
-	result, err := FilterDiffForReview(sinceReview, branchDiff, "")
+	result, err := FilterDiffForReview(sinceReview, branchDiff, "", sinceReview)
 	require.NoError(t, err)
 	assert.Contains(t, result, "new file mode")
 	assert.Contains(t, result, "+package new")
@@ -236,7 +237,7 @@ func TestFilterDiffForReview_DeletionOnlyHunks(t *testing.T) {
 -deleted line 3
 `
 
-	result, err := FilterDiffForReview(sinceReview, branchDiff, "")
+	result, err := FilterDiffForReview(sinceReview, branchDiff, "", sinceReview)
 	require.NoError(t, err)
 	assert.Contains(t, result, "-deleted line 1")
 	assert.Contains(t, result, "file.go")
@@ -271,7 +272,7 @@ func TestFilterDiffForReview_MergeDeletionExcluded(t *testing.T) {
 -merged deletion 3
 `
 
-	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview)
+	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview, sinceReview)
 	require.NoError(t, err)
 	assert.NotContains(t, result, "merged deletion")
 }
@@ -302,7 +303,7 @@ func TestFilterDiffForReview_ProductionScenario(t *testing.T) {
 `
 	baseSinceReview := ""
 
-	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview)
+	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview, sinceReview)
 	require.NoError(t, err)
 	assert.Contains(t, result, "side.yml")
 	assert.Contains(t, result, "-  go install sidekick/cmd/gotestreport",
@@ -355,7 +356,7 @@ diff --git a/utils.go b/utils.go
  context
 `
 
-	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview)
+	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview, sinceReview)
 	require.NoError(t, err)
 
 	// Only the hunk at line 5 of file.go survives: it overlaps branchDiff.
@@ -402,7 +403,7 @@ func TestFilterDiffForReview_ConvergentHunkKept(t *testing.T) {
  context
 `
 
-	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview)
+	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview, sinceReview)
 	require.NoError(t, err)
 	assert.Contains(t, result, "+converged change",
 		"convergent hunk (in both branch and base) should be kept")
@@ -443,9 +444,522 @@ func TestFilterDiffForReview_SharedFileMixedHunks(t *testing.T) {
  context
 `
 
-	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview)
+	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview, sinceReview)
 	require.NoError(t, err)
 	assert.Contains(t, result, "+our work")
 	assert.NotContains(t, result, "+from main",
 		"merge-introduced hunk should be filtered even within a shared file")
+}
+
+func TestFilterDiffForReview_MissingContext_Regression(t *testing.T) {
+	t.Parallel()
+
+	// Regression: the pre-fix code path used FilterDiffForReview with
+	// 0-context diffs for all inputs including the sinceReview used for
+	// output. This stripped all surrounding context from the result, making
+	// changes unreadable for reviewers. The fix passes a context-rich
+	// displayDiff separately.
+	sinceReviewZero := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -10,1 +10,2 @@ package foo
+-oldline10
++newline10a
++newline10b
+`
+
+	branchDiff := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -10,1 +10,2 @@ package foo
+-oldline10
++newline10a
++newline10b
+`
+
+	baseSinceReview := ""
+
+	displayDiff := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -7,7 +7,8 @@ package foo
+ line7
+ line8
+ line9
+-oldline10
++newline10a
++newline10b
+ line11
+ line12
+ line13
+`
+
+	result, err := FilterDiffForReview(sinceReviewZero, branchDiff, baseSinceReview, displayDiff)
+	require.NoError(t, err)
+	require.Contains(t, result, "newline10a", "our change should be present")
+	assert.Contains(t, result, " line9",
+		"output should include context lines for reviewers")
+	assert.Contains(t, result, " line13",
+		"output should include trailing context lines")
+}
+
+func TestFilterDiffForReviewWithDisplay_KeepsContextInOutput(t *testing.T) {
+	t.Parallel()
+
+	// 0-context sinceReview for filtering
+	sinceReviewZero := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -10,1 +10,2 @@ package foo
+-oldline10
++newline10a
++newline10b
+@@ -20,1 +21,1 @@ package foo
+-oldline20
++mainchange20
+`
+
+	branchDiff := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -10,1 +10,2 @@ package foo
+-oldline10
++newline10a
++newline10b
+`
+
+	baseSinceReview := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -20,1 +20,1 @@ package foo
+-oldline20
++mainchange20
+`
+
+	// Display diff has 3-line context
+	displayDiff := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -7,7 +7,8 @@ package foo
+ line7
+ line8
+ line9
+-oldline10
++newline10a
++newline10b
+ line11
+ line12
+ line13
+@@ -17,7 +18,7 @@ package foo
+ line17
+ line18
+ line19
+-oldline20
++mainchange20
+ line21
+ line22
+ line23
+`
+
+	result, err := FilterDiffForReview(sinceReviewZero, branchDiff, baseSinceReview, displayDiff)
+	require.NoError(t, err)
+
+	// Our hunk at line 10 should be kept with context
+	assert.Contains(t, result, "newline10a", "our change should be kept")
+	assert.Contains(t, result, " line7", "context from display diff should be present")
+	assert.Contains(t, result, " line13", "trailing context should be present")
+
+	// Main's hunk at line 20 should be dropped
+	assert.NotContains(t, result, "mainchange20",
+		"merge-introduced hunk should be filtered")
+	assert.NotContains(t, result, " line17",
+		"context around filtered hunk should not appear")
+}
+
+func TestFilterDiffForReviewWithDisplay_AllHunksKept(t *testing.T) {
+	t.Parallel()
+
+	// When no hunks are merge-introduced, the full display diff is returned.
+	sinceReviewZero := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -5,1 +5,2 @@ package foo
+-old5
++new5a
++new5b
+`
+
+	branchDiff := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -5,1 +5,2 @@ package foo
+-old5
++new5a
++new5b
+`
+
+	baseSinceReview := ""
+
+	displayDiff := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -2,7 +2,8 @@ package foo
+ line2
+ line3
+ line4
+-old5
++new5a
++new5b
+ line6
+ line7
+ line8
+`
+
+	result, err := FilterDiffForReview(sinceReviewZero, branchDiff, baseSinceReview, displayDiff)
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "new5a")
+	assert.Contains(t, result, " line2", "context should be preserved")
+	assert.Contains(t, result, " line8", "trailing context should be preserved")
+}
+
+func TestFilterDiffForReviewWithDisplay_AllHunksDropped(t *testing.T) {
+	t.Parallel()
+
+	// When all hunks are merge-introduced, the result is empty.
+	sinceReviewZero := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -10,1 +10,1 @@ package foo
+-old10
++main10
+`
+
+	branchDiff := ""
+
+	baseSinceReview := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -10,1 +10,1 @@ package foo
+-old10
++main10
+`
+
+	displayDiff := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -7,7 +7,7 @@ package foo
+ line7
+ line8
+ line9
+-old10
++main10
+ line11
+ line12
+ line13
+`
+
+	result, err := FilterDiffForReview(sinceReviewZero, branchDiff, baseSinceReview, displayDiff)
+	require.NoError(t, err)
+	assert.Empty(t, result, "all merge-introduced hunks should be filtered")
+}
+
+func TestFilterDiffForReviewWithDisplay_MultipleFiles(t *testing.T) {
+	t.Parallel()
+
+	// Two files: one entirely ours (kept), one entirely from base (dropped).
+	sinceReviewZero := `diff --git a/ours.go b/ours.go
+--- a/ours.go
++++ b/ours.go
+@@ -1,1 +1,2 @@ package ours
+-old
++new1
++new2
+diff --git a/theirs.go b/theirs.go
+--- a/theirs.go
++++ b/theirs.go
+@@ -1,1 +1,1 @@ package theirs
+-old
++frombase
+`
+
+	branchDiff := `diff --git a/ours.go b/ours.go
+--- a/ours.go
++++ b/ours.go
+@@ -1,1 +1,2 @@ package ours
+-old
++new1
++new2
+`
+
+	baseSinceReview := `diff --git a/theirs.go b/theirs.go
+--- a/theirs.go
++++ b/theirs.go
+@@ -1,1 +1,1 @@ package theirs
+-old
++frombase
+`
+
+	displayDiff := `diff --git a/ours.go b/ours.go
+--- a/ours.go
++++ b/ours.go
+@@ -1,4 +1,5 @@ package ours
+-old
++new1
++new2
+ ctx1
+ ctx2
+ ctx3
+diff --git a/theirs.go b/theirs.go
+--- a/theirs.go
++++ b/theirs.go
+@@ -1,4 +1,4 @@ package theirs
+-old
++frombase
+ ctx1
+ ctx2
+ ctx3
+`
+
+	result, err := FilterDiffForReview(sinceReviewZero, branchDiff, baseSinceReview, displayDiff)
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "ours.go", "our file should be kept")
+	assert.Contains(t, result, "new1", "our change should be present")
+	assert.Contains(t, result, " ctx1", "context should be present")
+	assert.NotContains(t, result, "theirs.go", "base-only file should be excluded")
+	assert.NotContains(t, result, "frombase", "base change should not appear")
+}
+
+func TestFilterDiffForReview_ContextMismatchDoesNotDropOwnHunks(t *testing.T) {
+	t.Parallel()
+
+	// sinceReviewDiff with 3-line context: the hunk range expands to cover
+	// lines 7-13 on the old side even though the actual change is at line 10.
+	sinceReview := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -7,7 +7,8 @@ package foo
+ line7
+ line8
+ line9
+-oldline10
++newline10a
++newline10b
+ line11
+ line12
+ line13
+`
+
+	// branchDiff (0-context): our branch changed line 10
+	branchDiff := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -10,1 +10,2 @@ package foo
+-oldline10
++newline10a
++newline10b
+`
+
+	// baseSinceReviewDiff (0-context): base changed line 13 (adjacent to
+	// sinceReview's context but not our actual change).
+	baseSinceReview := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -13,1 +13,1 @@ package foo
+-line13
++line13modified
+`
+
+	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview, sinceReview)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == "" {
+		t.Fatal("expected non-empty result: our own change at line 10 should be kept")
+	}
+	if !strings.Contains(result, "newline10a") {
+		t.Errorf("result should contain our change, got:\n%s", result)
+	}
+}
+
+func TestFilterDiffForReview_ZeroContextConsistentFiltering(t *testing.T) {
+	t.Parallel()
+
+	// When all three diffs use 0-context, hunk ranges are tight and the
+	// overlap check is precise.
+	sinceReview := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -10,1 +10,2 @@ package foo
+-oldline10
++newline10a
++newline10b
+`
+
+	branchDiff := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -10,1 +10,2 @@ package foo
+-oldline10
++newline10a
++newline10b
+`
+
+	// Base changed a nearby but non-overlapping line
+	baseSinceReview := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -13,1 +13,1 @@ package foo
+-line13
++line13modified
+`
+
+	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview, sinceReview)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == "" {
+		t.Fatal("expected non-empty result: our own change should survive filtering")
+	}
+	if !strings.Contains(result, "newline10a") {
+		t.Errorf("result should contain our change, got:\n%s", result)
+	}
+}
+
+func TestFilterDiffForReview_ExpandedContextCausesOverlap(t *testing.T) {
+	t.Parallel()
+
+	// Demonstrates the scenario: sinceReview has 3-line context expanding
+	// the old-side range to [7,14), base has a 0-context hunk at [12,13).
+	// The ranges overlap on the old side even though the actual change
+	// (line 10) doesn't overlap with the base change (line 12).
+	sinceReview := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -7,7 +7,8 @@ package foo
+ line7
+ line8
+ line9
+-oldline10
++newline10a
++newline10b
+ line11
+ line12
+ line13
+`
+
+	// branchDiff: 0-context, tight around our change at line 10 (new side 10-11)
+	branchDiff := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -10,1 +10,2 @@ package foo
+-oldline10
++newline10a
++newline10b
+`
+
+	// baseSinceReview: 0-context, base changed line 12 on old side.
+	// old range [12,1) overlaps with sinceReview old range [7,7)=[7,14).
+	baseSinceReview := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -12,1 +12,1 @@ package foo
+-line12
++line12modified
+`
+
+	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview, sinceReview)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The sinceReview hunk old range [7,14) overlaps base old range [12,13).
+	// The sinceReview hunk new range [7,15) overlaps branch new range [10,12).
+	// Since it overlaps with branch, the hunk is kept (convergent case).
+	if result == "" {
+		t.Fatal("expected non-empty result: our hunk should be kept because its new-side overlaps branchDiff")
+	}
+	if !strings.Contains(result, "newline10a") {
+		t.Errorf("result should contain our change, got:\n%s", result)
+	}
+}
+
+func TestFilterDiffForReview_ContextOverlapWithoutBranchOverlap(t *testing.T) {
+	t.Parallel()
+
+	// When the context-expanded sinceReview hunk overlaps base on old side,
+	// BUT the new-side range does NOT overlap with branchDiff (because the
+	// branch change is at a distant line), the hunk gets incorrectly dropped.
+	// This test documents the scenario where using consistent 0-context
+	// prevents the false drop.
+	sinceReviewWithContext := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -7,7 +7,8 @@ package foo
+ line7
+ line8
+ line9
+-oldline10
++newline10a
++newline10b
+ line11
+ line12
+ line13
+`
+
+	// Branch diff has our change at line 10 AND an unrelated change at line 50.
+	// The line 10 change is tight (0-context).
+	branchDiff := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -10,1 +10,2 @@ package foo
+-oldline10
++newline10a
++newline10b
+@@ -50,1 +51,2 @@ package foo
+-old50
++new50a
++new50b
+`
+
+	baseSinceReview := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -12,1 +12,1 @@ package foo
+-line12
++line12modified
+`
+
+	result, err := FilterDiffForReview(sinceReviewWithContext, branchDiff, baseSinceReview, sinceReviewWithContext)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// With context expansion, sinceReview old range [7,14) overlaps base [12,13).
+	// But sinceReview new range [7,15) overlaps branch [10,12). Kept.
+	if !strings.Contains(result, "newline10a") {
+		t.Errorf("expected our change to be kept, got:\n%s", result)
+	}
+
+	// Now test the same with 0-context sinceReview (the fix)
+	sinceReviewZeroCtx := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -10,1 +10,2 @@ package foo
+-oldline10
++newline10a
++newline10b
+`
+
+	result2, err := FilterDiffForReview(sinceReviewZeroCtx, branchDiff, baseSinceReview, sinceReviewZeroCtx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// With 0-context, sinceReview old range [10,1) does NOT overlap base [12,1).
+	// Hunk is unconditionally kept.
+	if !strings.Contains(result2, "newline10a") {
+		t.Errorf("expected our change to be kept with 0-context, got:\n%s", result2)
+	}
 }

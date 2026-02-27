@@ -17,19 +17,22 @@ type GetOwnChangesSinceReviewParams struct {
 }
 
 // GetOwnChangesSinceReviewActivity computes the since-review diff with
-// merge-introduced hunks filtered out. It gathers three diffs (since-review,
-// branch three-dot, and base-since-review) then applies hunk-level filtering.
+// merge-introduced hunks filtered out. It uses zero-context diffs for accurate
+// overlap detection and a default-context diff for reviewer-friendly output.
 func (ca *CodingActivities) GetOwnChangesSinceReviewActivity(ctx context.Context, params GetOwnChangesSinceReviewParams) (string, error) {
-	sinceReviewDiff, err := git.GitDiffActivity(ctx, params.EnvContainer, git.GitDiffParams{
+	zeroCtx := 0
+
+	// 0-context diff for accurate hunk overlap detection
+	sinceReviewZero, err := git.GitDiffActivity(ctx, params.EnvContainer, git.GitDiffParams{
 		Staged:           true,
 		BaseRef:          params.LastReviewTree,
 		IgnoreWhitespace: params.IgnoreWhitespace,
+		ContextLines:     &zeroCtx,
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to get diff since last review: %w", err)
 	}
 
-	zeroCtx := 0
 	branchDiff, err := git.GitDiffActivity(ctx, params.EnvContainer, git.GitDiffParams{
 		Staged:           true,
 		ThreeDotDiff:     true,
@@ -51,5 +54,15 @@ func (ca *CodingActivities) GetOwnChangesSinceReviewActivity(ctx context.Context
 		return "", fmt.Errorf("failed to get base-since-review diff: %w", err)
 	}
 
-	return diffanalysis.FilterDiffForReview(sinceReviewDiff, branchDiff, baseSinceReviewDiff)
+	// Default-context diff for reviewer-friendly output
+	sinceReviewDisplay, err := git.GitDiffActivity(ctx, params.EnvContainer, git.GitDiffParams{
+		Staged:           true,
+		BaseRef:          params.LastReviewTree,
+		IgnoreWhitespace: params.IgnoreWhitespace,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to get display diff since last review: %w", err)
+	}
+
+	return diffanalysis.FilterDiffForReview(sinceReviewZero, branchDiff, baseSinceReviewDiff, sinceReviewDisplay)
 }

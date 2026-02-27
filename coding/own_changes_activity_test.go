@@ -2,8 +2,10 @@ package coding
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"sidekick/coding/git"
@@ -385,6 +387,111 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 			"our post-rebase work should be included")
 		assert.NotContains(t, result, "main_new.go",
 			"rebase-introduced file should be filtered out")
+	})
+
+	t.Run("context_lines_preserved_in_output", func(t *testing.T) {
+		t.Parallel()
+
+		repoDir := setupTestGitRepo(t)
+		ctx := context.Background()
+
+		// 20-line file so context lines are clearly visible
+		content := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n" +
+			"line11\nline12\nline13\nline14\nline15\nline16\nline17\nline18\nline19\nline20\n"
+		createFileAndCommit(t, repoDir, "shared.go", content, "initial commit")
+
+		runGit(t, repoDir, "checkout", "-b", "feature")
+
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		require.NoError(t, err)
+
+		// Edit line 10 on feature
+		newContent := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nOUR_CHANGE\n" +
+			"line11\nline12\nline13\nline14\nline15\nline16\nline17\nline18\nline19\nline20\n"
+		err = os.WriteFile(filepath.Join(repoDir, "shared.go"), []byte(newContent), 0644)
+		require.NoError(t, err)
+		runGit(t, repoDir, "add", "shared.go")
+		runGit(t, repoDir, "commit", "-m", "our change at line 10")
+
+		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
+			EnvContainer:   envContainer,
+			BaseBranch:     "main",
+			LastReviewTree: lastReviewTreeHash,
+		})
+		require.NoError(t, err)
+		t.Logf("result:\n%s", result)
+
+		assert.Contains(t, result, "OUR_CHANGE", "our change should be present")
+		assert.Contains(t, result, " line7", "leading context lines should be present")
+		assert.Contains(t, result, " line13", "trailing context lines should be present")
+	})
+
+	t.Run("adjacent_base_change_not_falsely_dropped", func(t *testing.T) {
+		t.Parallel()
+
+		// When context expansion causes overlapping hunks in the display diff,
+		// our own change must not be falsely dropped.
+		repoDir := setupTestGitRepo(t)
+		ctx := context.Background()
+
+		// 30-line file; feature edits line 3, main edits line 20.
+		var lines []string
+		for i := 1; i <= 30; i++ {
+			lines = append(lines, fmt.Sprintf("line%d", i))
+		}
+		content := strings.Join(lines, "\n") + "\n"
+		createFileAndCommit(t, repoDir, "shared.go", content, "initial commit")
+
+		runGit(t, repoDir, "checkout", "-b", "feature")
+
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		require.NoError(t, err)
+
+		// Feature edits line 3
+		lines[2] = "OUR_CHANGE"
+		featureContent := strings.Join(lines, "\n") + "\n"
+		lines[2] = "line3"
+		err = os.WriteFile(filepath.Join(repoDir, "shared.go"), []byte(featureContent), 0644)
+		require.NoError(t, err)
+		runGit(t, repoDir, "add", "shared.go")
+		runGit(t, repoDir, "commit", "-m", "our change at line 3")
+
+		// Main edits line 20
+		runGit(t, repoDir, "checkout", "main")
+		lines[19] = "BASE_CHANGE"
+		mainContent := strings.Join(lines, "\n") + "\n"
+		lines[19] = "line20"
+		err = os.WriteFile(filepath.Join(repoDir, "shared.go"), []byte(mainContent), 0644)
+		require.NoError(t, err)
+		runGit(t, repoDir, "add", "shared.go")
+		runGit(t, repoDir, "commit", "-m", "base change at line 20")
+
+		// Merge main into feature
+		runGit(t, repoDir, "checkout", "feature")
+		runGit(t, repoDir, "merge", "main", "-m", "merge main")
+
+		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
+			EnvContainer:   envContainer,
+			BaseBranch:     "main",
+			LastReviewTree: lastReviewTreeHash,
+		})
+		require.NoError(t, err)
+		t.Logf("result:\n%s", result)
+
+		assert.Contains(t, result, "OUR_CHANGE",
+			"our change should be kept even when base changed a nearby line")
+		assert.NotContains(t, result, "BASE_CHANGE",
+			"base's hunk should be filtered")
+		assert.Contains(t, result, " line2",
+			"context lines should be preserved in the output")
 	})
 
 	t.Run("rebase_shared_file_hunk_level_filtering", func(t *testing.T) {
