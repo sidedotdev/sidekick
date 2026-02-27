@@ -43,12 +43,17 @@ type MergeWithReviewParams struct {
 // getDiffSinceLastReview generates a diff comparing the last review tree to current staged changes.
 // If filePaths is non-empty, the diff is restricted to those files only.
 func getDiffSinceLastReview(dCtx DevContext, lastReviewTreeHash string, ignoreWhitespace bool, filePaths []string) (string, error) {
+	return getDiffSinceLastReviewWithContext(dCtx, lastReviewTreeHash, ignoreWhitespace, filePaths, nil)
+}
+
+func getDiffSinceLastReviewWithContext(dCtx DevContext, lastReviewTreeHash string, ignoreWhitespace bool, filePaths []string, contextLines *int) (string, error) {
 	var diffOutput string
 	err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
 		Staged:           true,
 		BaseRef:          lastReviewTreeHash,
 		IgnoreWhitespace: ignoreWhitespace,
 		FilePaths:        filePaths,
+		ContextLines:     contextLines,
 	}).Get(dCtx, &diffOutput)
 	return diffOutput, err
 }
@@ -90,6 +95,26 @@ func getOwnChangesSinceReview(dCtx DevContext, baseBranch string, lastReviewTree
 	return result, err
 }
 
+// legacyV4OwnChangesSinceReview preserves the four-activity call pattern for
+// workflow replay determinism (version 4 of "diff-since-last-review").
+// FIXME remove once all v==4 workflows have completed
+func legacyV4OwnChangesSinceReview(dCtx DevContext, baseBranch string, lastReviewTreeHash string, ignoreWhitespace bool) (string, error) {
+	zeroCtx := 0
+	sinceReviewDiff, err := getDiffSinceLastReviewWithContext(dCtx, lastReviewTreeHash, ignoreWhitespace, nil, &zeroCtx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get diff since last review: %w", err)
+	}
+	branchDiff, err := getGitDiffWithContext(dCtx, baseBranch, ignoreWhitespace, &zeroCtx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get branch diff: %w", err)
+	}
+	baseSinceReviewDiff, err := getBaseSinceReviewDiff(dCtx, baseBranch, lastReviewTreeHash, ignoreWhitespace)
+	if err != nil {
+		return "", fmt.Errorf("failed to get base-since-review diff: %w", err)
+	}
+	return diffanalysis.FilterDiffForReview(sinceReviewDiff, branchDiff, baseSinceReviewDiff, sinceReviewDiff)
+}
+
 // legacyOwnChangesSinceReviewV3 preserves the three-activity call pattern for
 // workflow replay determinism (version 3 of "diff-since-last-review").
 // FIXME remove once all v==3 workflows have completed
@@ -107,7 +132,7 @@ func legacyOwnChangesSinceReviewV3(dCtx DevContext, baseBranch string, lastRevie
 	if err != nil {
 		return "", fmt.Errorf("failed to get base-since-review diff: %w", err)
 	}
-	return diffanalysis.FilterDiffForReview(sinceReviewDiff, branchDiff, baseSinceReviewDiff)
+	return diffanalysis.FilterDiffForReview(sinceReviewDiff, branchDiff, baseSinceReviewDiff, sinceReviewDiff)
 }
 
 // legacyOwnChangesSinceReview preserves the two-activity call pattern for
@@ -122,7 +147,7 @@ func legacyOwnChangesSinceReview(dCtx DevContext, baseBranch string, lastReviewT
 	if err != nil {
 		return "", fmt.Errorf("failed to get three-dot diff: %w", err)
 	}
-	return diffanalysis.FilterDiffForReview(sinceReviewDiff, threeDotDiff, "")
+	return diffanalysis.FilterDiffForReview(sinceReviewDiff, threeDotDiff, "", sinceReviewDiff)
 }
 
 func getBaseSinceReviewDiff(dCtx DevContext, baseBranch string, lastReviewTreeHash string, ignoreWhitespace bool) (string, error) {
@@ -513,8 +538,7 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 	// Track tree hash and diff since last review for new workflow versions
 	var currentTreeHash string
 	var diffSinceLastReview string
-	// FIXME revert max version to 3 once all v==3 workflows have completed
-	diffSinceLastReviewVersion := workflow.GetVersion(dCtx, "diff-since-last-review", workflow.DefaultVersion, 4)
+	diffSinceLastReviewVersion := workflow.GetVersion(dCtx, "diff-since-last-review", workflow.DefaultVersion, 5)
 	if diffSinceLastReviewVersion >= 1 {
 		// Capture current tree hash before getting approval
 		err = workflow.ExecuteActivity(dCtx, git.WriteTreeActivity, *dCtx.EnvContainer).Get(dCtx, &currentTreeHash)
@@ -524,8 +548,10 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 
 		// Generate diff since last review if we have a previous tree hash
 		if lastReviewTreeHash != "" {
-			if diffSinceLastReviewVersion >= 4 {
+			if diffSinceLastReviewVersion >= 5 {
 				diffSinceLastReview, err = getOwnChangesSinceReview(dCtx, defaultTarget, lastReviewTreeHash, false)
+			} else if diffSinceLastReviewVersion >= 4 {
+				diffSinceLastReview, err = legacyV4OwnChangesSinceReview(dCtx, defaultTarget, lastReviewTreeHash, false)
 			} else if diffSinceLastReviewVersion >= 3 {
 				diffSinceLastReview, err = legacyOwnChangesSinceReviewV3(dCtx, defaultTarget, lastReviewTreeHash, false)
 			} else if diffSinceLastReviewVersion >= 2 {
