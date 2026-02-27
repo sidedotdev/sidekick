@@ -24,6 +24,7 @@ import (
 	"sidekick/persisted_ai"
 	"sidekick/poll_failures"
 	"sidekick/srv"
+	"sidekick/temporalmeta"
 	"sidekick/workspace"
 
 	"github.com/google/uuid"
@@ -137,6 +138,19 @@ func buildActivityRegistry() map[string]interface{} {
 		TemporalClient: temporalClient,
 		Service:        service,
 	}
+	chatHistoryActivities := &persisted_ai.ChatHistoryActivities{
+		Storage: service,
+	}
+	kvActivities := &common.KVActivities{
+		Storage: service,
+	}
+	cascadeDeleteActivities := &srv.CascadeDeleteTaskActivities{
+		Service:        service,
+		TemporalClient: temporalClient,
+	}
+	temporalMetaActivities := &temporalmeta.TemporalMetaActivities{
+		Client: temporalClient,
+	}
 	devActivities := &dev.DevActivities{
 		LSPActivities: lspActivities,
 	}
@@ -173,6 +187,8 @@ func buildActivityRegistry() map[string]interface{} {
 		dev.BulkReadFileActivity,
 		dev.ManageChatHistoryActivity,
 		dev.ManageChatHistoryV2Activity,
+		dev.SummarizeDiffActivity,
+		dev.CheckCommandPermissionActivity,
 		common.GetLocalConfig,
 		common.BaseCommandPermissionsActivity,
 	}
@@ -197,6 +213,10 @@ func buildActivityRegistry() map[string]interface{} {
 	registerStructMethods(registry, devRunActivities)
 	registerStructMethods(registry, readImageActivities)
 	registerStructMethods(registry, workspaceActivities)
+	registerStructMethods(registry, chatHistoryActivities)
+	registerStructMethods(registry, kvActivities)
+	registerStructMethods(registry, cascadeDeleteActivities)
+	registerStructMethods(registry, temporalMetaActivities)
 	registry["EvalBoolFlag"] = ffa.EvalBoolFlag
 
 	return registry
