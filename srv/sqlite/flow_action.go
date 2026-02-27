@@ -16,12 +16,21 @@ func (s *Storage) PersistFlowAction(ctx context.Context, flowAction domain.FlowA
 		return fmt.Errorf("failed to marshal ActionParams: %w", err)
 	}
 
+	var temporalActivities sql.NullString
+	if len(flowAction.TemporalActivities) > 0 {
+		taJSON, err := json.Marshal(flowAction.TemporalActivities)
+		if err != nil {
+			return fmt.Errorf("failed to marshal TemporalActivities: %w", err)
+		}
+		temporalActivities = sql.NullString{String: string(taJSON), Valid: true}
+	}
+
 	query := `
 		INSERT OR REPLACE INTO flow_actions (
 			id, subflow_name, subflow_description, subflow_id, flow_id, workspace_id,
 			created, updated, action_type, action_params, action_status, action_result,
-			is_human_action, is_callback_action
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			is_human_action, is_callback_action, temporal_activities
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	flowAction.Created = flowAction.Created.UTC()
@@ -31,7 +40,7 @@ func (s *Storage) PersistFlowAction(ctx context.Context, flowAction domain.FlowA
 		flowAction.Id, flowAction.SubflowName, flowAction.SubflowDescription, flowAction.SubflowId,
 		flowAction.FlowId, flowAction.WorkspaceId, flowAction.Created, flowAction.Updated,
 		flowAction.ActionType, actionParamsJSON, flowAction.ActionStatus, flowAction.ActionResult,
-		flowAction.IsHumanAction, flowAction.IsCallbackAction,
+		flowAction.IsHumanAction, flowAction.IsCallbackAction, temporalActivities,
 	)
 
 	if err != nil {
@@ -46,7 +55,7 @@ func (s *Storage) GetFlowActions(ctx context.Context, workspaceId, flowId string
 	query := `
 		SELECT id, subflow_name, subflow_description, subflow_id, flow_id, workspace_id,
 			   created, updated, action_type, action_params, action_status, action_result,
-			   is_human_action, is_callback_action
+			   is_human_action, is_callback_action, temporal_activities
 		FROM flow_actions
 		WHERE workspace_id = ? AND flow_id = ?
 	`
@@ -61,12 +70,13 @@ func (s *Storage) GetFlowActions(ctx context.Context, workspaceId, flowId string
 	for rows.Next() {
 		var fa domain.FlowAction
 		var actionParamsJSON []byte
+		var temporalActivities sql.NullString
 
 		err := rows.Scan(
 			&fa.Id, &fa.SubflowName, &fa.SubflowDescription, &fa.SubflowId,
 			&fa.FlowId, &fa.WorkspaceId, &fa.Created, &fa.Updated,
 			&fa.ActionType, &actionParamsJSON, &fa.ActionStatus, &fa.ActionResult,
-			&fa.IsHumanAction, &fa.IsCallbackAction,
+			&fa.IsHumanAction, &fa.IsCallbackAction, &temporalActivities,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan flow action row: %w", err)
@@ -75,6 +85,13 @@ func (s *Storage) GetFlowActions(ctx context.Context, workspaceId, flowId string
 		err = json.Unmarshal(actionParamsJSON, &fa.ActionParams)
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal action params: %w", err)
+		}
+
+		if temporalActivities.Valid {
+			err = json.Unmarshal([]byte(temporalActivities.String), &fa.TemporalActivities)
+			if err != nil {
+				return nil, fmt.Errorf("failed to unmarshal temporal activities: %w", err)
+			}
 		}
 
 		flowActions = append(flowActions, fa)
@@ -92,19 +109,20 @@ func (s *Storage) GetFlowAction(ctx context.Context, workspaceId, flowActionId s
 	query := `
 		SELECT id, subflow_name, subflow_description, subflow_id, flow_id, workspace_id,
 			   created, updated, action_type, action_params, action_status, action_result,
-			   is_human_action, is_callback_action
+			   is_human_action, is_callback_action, temporal_activities
 		FROM flow_actions
 		WHERE workspace_id = ? AND id = ?
 	`
 
 	var fa domain.FlowAction
 	var actionParamsJSON []byte
+	var temporalActivities sql.NullString
 
 	err := s.db.QueryRowContext(ctx, query, workspaceId, flowActionId).Scan(
 		&fa.Id, &fa.SubflowName, &fa.SubflowDescription, &fa.SubflowId,
 		&fa.FlowId, &fa.WorkspaceId, &fa.Created, &fa.Updated,
 		&fa.ActionType, &actionParamsJSON, &fa.ActionStatus, &fa.ActionResult,
-		&fa.IsHumanAction, &fa.IsCallbackAction,
+		&fa.IsHumanAction, &fa.IsCallbackAction, &temporalActivities,
 	)
 
 	if err != nil {
@@ -117,6 +135,13 @@ func (s *Storage) GetFlowAction(ctx context.Context, workspaceId, flowActionId s
 	err = json.Unmarshal(actionParamsJSON, &fa.ActionParams)
 	if err != nil {
 		return domain.FlowAction{}, fmt.Errorf("failed to unmarshal action params: %w", err)
+	}
+
+	if temporalActivities.Valid {
+		err = json.Unmarshal([]byte(temporalActivities.String), &fa.TemporalActivities)
+		if err != nil {
+			return domain.FlowAction{}, fmt.Errorf("failed to unmarshal temporal activities: %w", err)
+		}
 	}
 
 	return fa, nil

@@ -159,6 +159,14 @@ func (s Streamer) AddFlowActionChange(ctx context.Context, flowAction domain.Flo
 	}
 	// TODO Maybe we need to do the same for actionResult
 	flowActionMap["actionParams"] = string(actionParams)
+	if len(flowAction.TemporalActivities) > 0 {
+		taJSON, err := json.Marshal(flowAction.TemporalActivities)
+		if err != nil {
+			log.Println("Failed to marshal temporal activities: ", err)
+			return err
+		}
+		flowActionMap["temporalActivities"] = string(taJSON)
+	}
 	err = s.Client.XAdd(ctx, &redis.XAddArgs{
 		Stream: streamKey,
 		Values: flowActionMap,
@@ -243,6 +251,12 @@ func (s Streamer) GetFlowActionChanges(ctx context.Context, workspaceId, flowId,
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to parse 'updated' timestamp in message %d: %v", i, err)
 			}
+			var temporalActivities []domain.TemporalActivityRef
+			if taStr, ok := message.Values["temporalActivities"].(string); ok && taStr != "" {
+				if err := json.Unmarshal([]byte(taStr), &temporalActivities); err != nil {
+					return nil, "", fmt.Errorf("failed to unmarshal temporal activities in message %d: %v", i, err)
+				}
+			}
 			flowActions = append(flowActions, domain.FlowAction{
 				WorkspaceId:        workspaceId,
 				FlowId:             flowId,
@@ -258,6 +272,7 @@ func (s Streamer) GetFlowActionChanges(ctx context.Context, workspaceId, flowId,
 				IsCallbackAction:   isCallbackAction == "1",
 				Created:            created,
 				Updated:            updated,
+				TemporalActivities: temporalActivities,
 			})
 		} else {
 			return flowActions, "end", nil
