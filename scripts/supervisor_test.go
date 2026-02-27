@@ -3369,3 +3369,309 @@ func TestExcludedDir(t *testing.T) {
 		}
 	}
 }
+
+func TestRestartPendingDeferredDuringPrebuild(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-restart-pending-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	markerPath := filepath.Join(tmpDir, "prebuild-done")
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:            "pending-test",
+			Command:         "sleep",
+			Args:            []string{"30"},
+			PrebuildCommand: "sh",
+			PrebuildArgs:    []string{"-c", fmt.Sprintf("sleep 0.5 && echo done > %s", markerPath)},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	outputChan := make(chan processOutputMsg, 100)
+
+	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	sup.StartAll(ctx, outputChan)
+	defer sup.StopAll()
+
+	p := sup.processes[0]
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		return p.isRunning()
+	}, "process should be running")
+
+	p.setDirty(true)
+
+	// Start prebuild in background
+	prebuildDone := make(chan struct{})
+	go func() {
+		sup.runPrebuild(ctx, p, outputChan)
+		close(prebuildDone)
+	}()
+
+	// Wait for prebuild to start
+	waitForCondition(t, 2*time.Second, func() bool {
+		return p.isPrebuildRunning()
+	}, "prebuild should be running")
+
+	// Set restart pending (as if user pressed enter during prebuild)
+	p.setRestartPending(true)
+
+	if !p.isRestartPending() {
+		t.Fatal("restartPending should be true")
+	}
+
+	// Wait for prebuild (and deferred restart) to complete
+	<-prebuildDone
+
+	// restartPending should have been cleared by runPrebuild
+	if p.isRestartPending() {
+		t.Error("restartPending should be cleared after prebuild triggers restart")
+	}
+
+	// Process should have been restarted (dirty cleared)
+	waitForCondition(t, 10*time.Second, func() bool {
+		return !p.isDirty()
+	}, "process should not be dirty after deferred restart")
+
+	// Verify marker file was created by prebuild
+	if _, err := os.Stat(markerPath); os.IsNotExist(err) {
+		t.Error("prebuild marker file should exist")
+	}
+}
+
+func TestRestartPendingStatusIndicator(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-restart-indicator-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:            "indicator-test",
+			Command:         "echo",
+			Args:            []string{"hello"},
+			PrebuildCommand: "true",
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	p := sup.processes[0]
+
+	m := model{
+		supervisor: sup,
+		viewMode:   viewTiled,
+		activeTab:  0,
+		ctx:        ctx,
+	}
+
+	// Dirty + prebuilding but no restart pending
+	p.setDirty(true)
+	p.setPrebuildRunning(true)
+	status := m.getStatusIndicator(p)
+	if !strings.Contains(status, "prebuilding") {
+		t.Errorf("expected 'prebuilding' in status, got: %s", status)
+	}
+	if strings.Contains(status, "Restarting") {
+		t.Errorf("should not show 'Restarting' without pending, got: %s", status)
+	}
+
+	// Now set restart pending
+	p.setRestartPending(true)
+	status = m.getStatusIndicator(p)
+	if !strings.Contains(status, "Restarting after prebuild") {
+		t.Errorf("expected 'Restarting after prebuild' in status, got: %s", status)
+	}
+
+	// Clear prebuild running - no longer shows prebuild indicator
+	p.setPrebuildRunning(false)
+	p.setRestartPending(false)
+	status = m.getStatusIndicator(p)
+	if strings.Contains(status, "prebuild") {
+		t.Errorf("should not show prebuild indicator when not running, got: %s", status)
+	}
+}
+
+func TestEnterDefersRestartDuringPrebuild(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-enter-defer-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:            "defer-test",
+			Command:         "sleep",
+			Args:            []string{"30"},
+			PrebuildCommand: "sleep",
+			PrebuildArgs:    []string{"30"},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	outputChan := make(chan processOutputMsg, 100)
+
+	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	p := sup.processes[0]
+
+	p.setDirty(true)
+	p.setPrebuildRunning(true)
+
+	m := model{
+		supervisor: sup,
+		viewMode:   viewTiled,
+		activeTab:  0,
+		outputChan: outputChan,
+		ctx:        ctx,
+		viewports:  []viewport.Model{viewport.New(80, 20)},
+	}
+
+	// Press enter while prebuild is running
+	enterMsg := tea.KeyMsg{Type: tea.KeyEnter}
+	m.Update(enterMsg)
+
+	// Should have set restartPending instead of immediately restarting
+	if !p.isRestartPending() {
+		t.Fatal("restartPending should be true after Enter during prebuild")
+	}
+
+	// Should NOT have started stopping
+	if p.isStopping() {
+		t.Error("process should not be stopping yet - waiting for prebuild")
+	}
+}
+
+func TestSingleRestartDeferseDuringPrebuild(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-r-defer-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:            "r-defer-test",
+			Command:         "sleep",
+			Args:            []string{"30"},
+			PrebuildCommand: "sleep",
+			PrebuildArgs:    []string{"30"},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	outputChan := make(chan processOutputMsg, 100)
+
+	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	p := sup.processes[0]
+
+	p.setPrebuildRunning(true)
+
+	m := model{
+		supervisor: sup,
+		viewMode:   viewTiled,
+		activeTab:  0,
+		outputChan: outputChan,
+		ctx:        ctx,
+		viewports:  []viewport.Model{viewport.New(80, 20)},
+	}
+
+	// Press 'r' while prebuild is running
+	rMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}}
+	m.Update(rMsg)
+
+	if !p.isRestartPending() {
+		t.Fatal("restartPending should be true after 'r' during prebuild")
+	}
+
+	if p.isStopping() {
+		t.Error("process should not be stopping yet - waiting for prebuild")
+	}
+}
+
+func TestNoPrebuildRunningRestartsImmediately(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-no-defer-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	scriptPath := filepath.Join(tmpDir, "test.sh")
+	script := `#!/bin/sh
+echo "running"
+sleep 30
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatalf("failed to write script: %v", err)
+	}
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:    "no-defer-test",
+			Command: "sh",
+			Args:    []string{scriptPath},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	outputChan := make(chan processOutputMsg, 100)
+
+	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	sup.StartAll(ctx, outputChan)
+	defer sup.StopAll()
+
+	p := sup.processes[0]
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		return p.isRunning()
+	}, "process should be running")
+
+	p.setDirty(true)
+
+	m := model{
+		supervisor: sup,
+		viewMode:   viewTiled,
+		activeTab:  0,
+		outputChan: outputChan,
+		ctx:        ctx,
+		viewports:  []viewport.Model{viewport.New(80, 20)},
+	}
+
+	// Press enter - no prebuild running, should restart immediately
+	enterMsg := tea.KeyMsg{Type: tea.KeyEnter}
+	m.Update(enterMsg)
+
+	// Should NOT set restartPending
+	if p.isRestartPending() {
+		t.Error("restartPending should not be set when no prebuild is running")
+	}
+
+	// Should have started stopping (immediate restart)
+	waitForCondition(t, 5*time.Second, func() bool {
+		return !p.isDirty()
+	}, "process should not be dirty after immediate restart")
+}
