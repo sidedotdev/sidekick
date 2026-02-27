@@ -5,6 +5,7 @@ import (
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
 
@@ -109,7 +110,7 @@ func GetUserMergeApproval(
 			return nil, err
 		}
 
-		v := workflow.GetVersion(dCtx, "final-merge-response-update-flow-action", workflow.DefaultVersion, 1)
+		v := workflow.GetVersion(dCtx, "final-merge-response-update-flow-action", workflow.DefaultVersion, 2)
 
 		// handle branch switching and whitespace toggle until final approval/rejection
 		for {
@@ -139,28 +140,39 @@ func GetUserMergeApproval(
 				}
 
 				if paramsChanged {
-					// Regenerate the diff with the updated parameters
 					var newDiff string
-					err = workflow.ExecuteActivity(actionCtx.DevContext, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
-						Staged:           true,
-						ThreeDotDiff:     true,
-						BaseRef:          finalTarget,
-						IgnoreWhitespace: ignoreWhitespace,
-					}).Get(actionCtx.DevContext, &newDiff)
-					if err != nil {
-						return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", finalTarget, err)
-					}
-
-					// Regenerate diffSinceLastReview if we have a tree hash from a previous review
 					var newDiffSinceLastReview string
-					if lastReviewTreeHash != "" {
+
+					if v >= 2 {
+						newDiff, err = GetGitDiff(dCtx, finalTarget, ignoreWhitespace)
+						if err != nil {
+							return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", finalTarget, err)
+						}
+						if lastReviewTreeHash != "" {
+							newDiffSinceLastReview, err = getOwnChangesSinceReview(dCtx, finalTarget, lastReviewTreeHash, ignoreWhitespace)
+							if err != nil {
+								return nil, fmt.Errorf("failed to generate diff since last review: %v", err)
+							}
+						}
+					} else {
 						err = workflow.ExecuteActivity(actionCtx.DevContext, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
 							Staged:           true,
-							BaseRef:          lastReviewTreeHash,
+							ThreeDotDiff:     true,
+							BaseRef:          finalTarget,
 							IgnoreWhitespace: ignoreWhitespace,
-						}).Get(actionCtx.DevContext, &newDiffSinceLastReview)
+						}).Get(actionCtx.DevContext, &newDiff)
 						if err != nil {
-							return nil, fmt.Errorf("failed to generate diff since last review: %v", err)
+							return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", finalTarget, err)
+						}
+						if lastReviewTreeHash != "" {
+							err = workflow.ExecuteActivity(actionCtx.DevContext, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
+								Staged:           true,
+								BaseRef:          lastReviewTreeHash,
+								IgnoreWhitespace: ignoreWhitespace,
+							}).Get(actionCtx.DevContext, &newDiffSinceLastReview)
+							if err != nil {
+								return nil, fmt.Errorf("failed to generate diff since last review: %v", err)
+							}
 						}
 					}
 
@@ -243,7 +255,9 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 	case InitialDevStepInfo:
 		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
 		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
-		content := renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, applyImmediately)
+		doneRequiredVersion := workflow.GetVersion(dCtx, "done-required-protocol", workflow.DefaultVersion, 1)
+		doneRequired := doneRequiredVersion >= 1 && !fflag.IsEnabled(dCtx, fflag.DisableDoneCoding)
+		content := renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, applyImmediately, doneRequired)
 		*chatHistory = append(*chatHistory, llm.ChatMessage{
 			Role:    llm.ChatMessageRoleUser,
 			Content: content,

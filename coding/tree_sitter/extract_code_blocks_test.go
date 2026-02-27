@@ -143,8 +143,49 @@ abc=invalid line number`,
 			input:    "```go\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n```",
 			expected: nil,
 		},
-
-		// TODO /gen add test cases for truncated search output (with and without files listed after)
+		{
+			name: "Truncated search output with files listed after",
+			input: `some/file.go
+10:func hello() {
+11:	fmt.Println("hello")
+12:}
+--
+another/file.go
+5=import "fmt"
+... (search output truncated). The last file's results may be partial. Further matches exist in these files: 
+path/to/file1.go
+path/to/file2.go`,
+			expected: []CodeBlock{
+				{
+					FilePath:  "some/file.go",
+					StartLine: 10,
+					EndLine:   12,
+					Code:      "func hello() {\n\tfmt.Println(\"hello\")\n}",
+				},
+				{
+					FilePath:  "another/file.go",
+					StartLine: 5,
+					EndLine:   5,
+					Code:      "import \"fmt\"",
+				},
+			},
+		},
+		{
+			name: "Truncated search output without files listed after",
+			input: `some/file.go
+10:func hello() {
+11:	fmt.Println("hello")
+12:}
+... (search output truncated). The last file's matches are cut off, but no other files matched.`,
+			expected: []CodeBlock{
+				{
+					FilePath:  "some/file.go",
+					StartLine: 10,
+					EndLine:   12,
+					Code:      "func hello() {\n\tfmt.Println(\"hello\")\n}",
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {

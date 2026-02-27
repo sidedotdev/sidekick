@@ -385,8 +385,14 @@ func TestGetTasksHandler(t *testing.T) {
 			statusesStr:   "blocked",
 			expectedTasks: []domain.Task{tasks[2]},
 		},
-		// TODO need a case for when empty statuses are passed (should default to all statuses)
-		// TODO need a case for when invalid statuses are passed
+		{
+			statusesStr:   "",
+			expectedTasks: tasks,
+		},
+		{
+			statusesStr:   "invalid_status",
+			expectedTasks: []domain.Task{},
+		},
 	}
 
 	for _, testCase := range testCases {

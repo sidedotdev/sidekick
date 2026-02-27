@@ -7,6 +7,7 @@ import (
 
 	"go.temporal.io/sdk/workflow"
 
+	"sidekick/coding/diffanalysis"
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
@@ -38,27 +39,51 @@ type MergeWithReviewParams struct {
 	CommitRequired bool
 }
 
-// getDiffSinceLastReview generates a diff comparing the last review tree to current staged changes
-func getDiffSinceLastReview(dCtx DevContext, lastReviewTreeHash string, ignoreWhitespace bool) (string, error) {
+// getDiffSinceLastReview generates a diff comparing the last review tree to current staged changes.
+// If filePaths is non-empty, the diff is restricted to those files only.
+func getDiffSinceLastReview(dCtx DevContext, lastReviewTreeHash string, ignoreWhitespace bool, filePaths []string) (string, error) {
 	var diffOutput string
 	err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
 		Staged:           true,
 		BaseRef:          lastReviewTreeHash,
 		IgnoreWhitespace: ignoreWhitespace,
+		FilePaths:        filePaths,
 	}).Get(dCtx, &diffOutput)
 	return diffOutput, err
 }
 
 // GetGitDiff generates a git diff for merge approval, with optional whitespace ignoring
 func GetGitDiff(dCtx DevContext, baseBranch string, ignoreWhitespace bool) (string, error) {
+	return getGitDiffWithContext(dCtx, baseBranch, ignoreWhitespace, nil)
+}
+
+func getGitDiffWithContext(dCtx DevContext, baseBranch string, ignoreWhitespace bool, contextLines *int) (string, error) {
 	var gitDiff string
 	err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
 		Staged:           true,
 		ThreeDotDiff:     true,
 		BaseRef:          baseBranch,
 		IgnoreWhitespace: ignoreWhitespace,
+		ContextLines:     contextLines,
 	}).Get(dCtx, &gitDiff)
 	return gitDiff, err
+}
+
+// getOwnChangesSinceReview returns the diff of our branch's own changes since
+// the last review, excluding content introduced by merging baseBranch. It
+// intersects the since-review diff with a zero-context three-dot diff against
+// baseBranch so that only hunks touching our branch's work survive.
+func getOwnChangesSinceReview(dCtx DevContext, baseBranch string, lastReviewTreeHash string, ignoreWhitespace bool) (string, error) {
+	sinceReviewDiff, err := getDiffSinceLastReview(dCtx, lastReviewTreeHash, ignoreWhitespace, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to get diff since last review: %w", err)
+	}
+	zeroCtx := 0
+	threeDotDiff, err := getGitDiffWithContext(dCtx, baseBranch, ignoreWhitespace, &zeroCtx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get three-dot diff: %w", err)
+	}
+	return diffanalysis.IntersectDiffs(sinceReviewDiff, threeDotDiff)
 }
 
 // formatRequirementsWithReview combines original requirements with review history and work done
@@ -96,7 +121,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 			// want to make the error visible in the Sidekick UI and mark the task
 			// as failed
 			if r := recover(); r != nil {
-				_ = signalWorkflowClosure(ctx, "failed")
+				signalWorkflowFailureOrCancel(ctx)
 				var ok bool
 				err, ok = r.(error)
 				if !ok {
@@ -111,7 +136,7 @@ func BasicDevWorkflow(ctx workflow.Context, input BasicDevWorkflowInput) (result
 
 	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), input.BasicDevOptions.StartBranch, input.Requirements, input.BasicDevOptions.ConfigOverrides)
 	if err != nil {
-		_ = signalWorkflowClosure(ctx, "failed")
+		signalWorkflowFailureOrCancel(ctx)
 		return "", err
 	}
 	defer handleFlowCancel(dCtx)
@@ -314,10 +339,15 @@ func codingSubflow(dCtx DevContext, requirements string, startBranch *string, la
 		}
 
 		// Step 4: check diff and confirm if requirements have been met
+		baseBranch := dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch)
+		if baseBranch == "" && startBranch != nil {
+			baseBranch = *startBranch
+		}
 		fulfillment, err = CheckWorkMeetsCriteria(dCtx, CheckWorkInfo{
 			Requirements:       requirements,
 			AutoChecks:         testOutput,
 			LastReviewTreeHash: lastReviewTreeHash,
+			BaseBranch:         baseBranch,
 		})
 		if err != nil {
 			return "", fmt.Errorf("failed to check if requirements are fulfilled: %w", err)
@@ -435,7 +465,7 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 	// Track tree hash and diff since last review for new workflow versions
 	var currentTreeHash string
 	var diffSinceLastReview string
-	diffSinceLastReviewVersion := workflow.GetVersion(dCtx, "diff-since-last-review", workflow.DefaultVersion, 1)
+	diffSinceLastReviewVersion := workflow.GetVersion(dCtx, "diff-since-last-review", workflow.DefaultVersion, 2)
 	if diffSinceLastReviewVersion >= 1 {
 		// Capture current tree hash before getting approval
 		err = workflow.ExecuteActivity(dCtx, git.WriteTreeActivity, *dCtx.EnvContainer).Get(dCtx, &currentTreeHash)
@@ -445,7 +475,11 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 
 		// Generate diff since last review if we have a previous tree hash
 		if lastReviewTreeHash != "" {
-			diffSinceLastReview, err = getDiffSinceLastReview(dCtx, lastReviewTreeHash, false)
+			if diffSinceLastReviewVersion >= 2 {
+				diffSinceLastReview, err = getOwnChangesSinceReview(dCtx, defaultTarget, lastReviewTreeHash, false)
+			} else {
+				diffSinceLastReview, err = getDiffSinceLastReview(dCtx, lastReviewTreeHash, false, nil)
+			}
 			if err != nil {
 				return MergeApprovalResponse{}, "", "", fmt.Errorf("failed to generate diff since last review: %w", err)
 			}
@@ -502,6 +536,7 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 			if !mergeInfo.Approved {
 				// Retain new choice of target branch next iteration, in case it was changed
 				params.StartBranch = &mergeInfo.TargetBranch
+				dCtx.ExecContext.GlobalState.SetValue(common.KeyCurrentTargetBranch, mergeInfo.TargetBranch)
 				lastReviewTreeHash = treeHash
 
 				// Summarize diff if it exceeds the character budget
@@ -565,9 +600,15 @@ func reviewAndResolve(dCtx DevContext, params MergeWithReviewParams) error {
 
 func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, lastReviewTreeHash string) (string, MergeApprovalResponse, string, error) {
 
-	defaultTarget := "main"
-	if params.StartBranch != nil {
-		defaultTarget = *params.StartBranch
+	// GlobalState is the single source of truth for the target branch, updated
+	// by set_base_branch tool and UI. Fallback covers workflow replays from
+	// before GlobalState was initialized at setup.
+	defaultTarget := dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch)
+	if defaultTarget == "" {
+		defaultTarget = "main"
+		if params.StartBranch != nil {
+			defaultTarget = *params.StartBranch
+		}
 	}
 
 	gitAddVersion := workflow.GetVersion(dCtx, "git-add-before-diff", workflow.DefaultVersion, 1)
