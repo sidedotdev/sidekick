@@ -19,8 +19,8 @@ import (
 
 var visionLevenshtein = metrics.NewLevenshtein()
 
-// unambiguousChars excludes easily confused characters (0/O/Q, 1/l/I, 8/B, M/W, F/E).
-const unambiguousChars = "ACDGHJKLNPRSTUVXYZ2345679"
+// unambiguousChars excludes easily confused characters (0/O/Q, 1/l/I, 8/B, M/W, F/E, 5/S, L/1, 6/G, 2/Z, 7/Y).
+const unambiguousChars = "ACDHJKNPRTUVX349"
 
 // GenerateRandomText returns a random alphanumeric string of the given length
 // using only characters that are visually unambiguous.
@@ -55,9 +55,11 @@ func RenderTextImage(text string, fontSize int) []byte {
 	defer face.Close()
 
 	// Measure the text to determine image dimensions.
+	// Add extra spacing between characters to reduce positional confusion.
+	letterSpacing := fontSize / 3
 	d := &font.Drawer{Face: face}
 	advance := d.MeasureString(text)
-	textW := advance.Ceil()
+	textW := advance.Ceil() + letterSpacing*(len(text)-1)
 	metrics := face.Metrics()
 	ascent := metrics.Ascent.Ceil()
 	descent := metrics.Descent.Ceil()
@@ -80,7 +82,12 @@ func RenderTextImage(text string, fontSize int) []byte {
 	d.Dst = img
 	d.Src = image.NewUniform(color.Black)
 	d.Dot = fixed.P(padding, padding+ascent)
-	d.DrawString(text)
+	for i, ch := range text {
+		d.DrawString(string(ch))
+		if i < len(text)-1 {
+			d.Dot.X += fixed.I(letterSpacing)
+		}
+	}
 
 	var buf bytes.Buffer
 	_ = png.Encode(&buf, img)
