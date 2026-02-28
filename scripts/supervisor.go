@@ -654,19 +654,12 @@ func (s *Supervisor) StartAll(ctx context.Context, outputChan chan<- processOutp
 	}
 }
 
-// processHasExited checks if the process has actually exited at the OS level.
-// It first checks cmd.ProcessState (set by cmd.Wait()), then falls back to
-// checking if the process exists via kill(pid, 0).
+// processHasExited checks if the process has actually exited at the OS level
+// using kill(pid, 0), which returns an error if the process no longer exists.
 func processHasExited(cmd *exec.Cmd) bool {
 	if cmd == nil || cmd.Process == nil {
 		return true
 	}
-	// ProcessState is set by cmd.Wait() when the process exits
-	if cmd.ProcessState != nil {
-		return true
-	}
-	// Fallback: check if process exists at OS level
-	// kill(pid, 0) returns error if process doesn't exist
 	err := syscall.Kill(cmd.Process.Pid, 0)
 	return err != nil
 }

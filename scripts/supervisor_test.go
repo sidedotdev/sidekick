@@ -2118,7 +2118,8 @@ func TestRestartProcessStateTransitions(t *testing.T) {
 		close(restartDone)
 	}()
 
-	// Capture state snapshots during restart
+	// Capture state snapshots during restart from both a ticker and
+	// outputChan notifications (which fire while stopping is true).
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -2133,6 +2134,12 @@ func TestRestartProcessStateTransitions(t *testing.T) {
 				output:   p.getOutput(),
 			})
 			goto done
+		case <-outputChan:
+			snapshots = append(snapshots, stateSnapshot{
+				running:  p.isRunning(),
+				stopping: p.isStopping(),
+				output:   p.getOutput(),
+			})
 		case <-ticker.C:
 			snapshots = append(snapshots, stateSnapshot{
 				running:  p.isRunning(),
