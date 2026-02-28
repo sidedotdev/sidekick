@@ -34,8 +34,6 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/contrib/opentelemetry"
-	"go.temporal.io/sdk/interceptor"
 )
 
 type Server struct {
@@ -272,22 +270,18 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 }
 
 func NewController() (Controller, error) {
-	tracingInterceptor, err := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
+	service, err := sidekick.GetService()
 	if err != nil {
-		return Controller{}, fmt.Errorf("failed to create tracing interceptor: %w", err)
+		return Controller{}, fmt.Errorf("failed to initialize storage: %w", err)
 	}
-	clientOptions := client.Options{
-		HostPort:     common.GetTemporalServerHostPort(),
-		Interceptors: []interceptor.ClientInterceptor{tracingInterceptor},
+
+	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalServerHostPort())
+	if err != nil {
+		return Controller{}, fmt.Errorf("failed to create Temporal client options: %w", err)
 	}
 	temporalClient, err := client.NewLazyClient(clientOptions)
 	if err != nil {
 		return Controller{}, fmt.Errorf("failed to create Temporal client: %w", err)
-	}
-
-	service, err := sidekick.GetService()
-	if err != nil {
-		return Controller{}, fmt.Errorf("failed to initialize storage: %w", err)
 	}
 	err = service.CheckConnection(context.Background())
 	if err != nil {
@@ -986,6 +980,14 @@ func (ctrl *Controller) ResetFlowHandler(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	// Prevent the codec cleanup workflow from deleting keys still needed by the new run
+	err = ctrl.temporalClient.SignalWorkflow(c, common.CodecCleanupWorkflowID, "", "codec-workflow-reset", common.CodecCleanupResetSignal{
+		WorkflowID: flowId,
+	})
+	if err != nil {
+		log.Warn().Err(err).Str("workflowId", flowId).Msg("Failed to signal codec cleanup workflow for reset")
 	}
 
 	c.JSON(http.StatusOK, gin.H{"runId": resp.RunId})

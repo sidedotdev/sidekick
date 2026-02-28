@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sidekick"
 	"sidekick/common"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
@@ -132,8 +133,13 @@ func main() {
 	}
 
 	// Initialize Temporal client
-	clientOptions := client.Options{
-		HostPort: common.GetTemporalServerHostPort(), // Assumes common.GetTemporalServerHostPort() is available
+	service, err := sidekick.GetService()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize storage")
+	}
+	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalServerHostPort())
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create Temporal client options")
 	}
 
 	temporalClient, err := client.NewLazyClient(clientOptions)

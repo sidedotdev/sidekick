@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sidekick"
 
 	"sidekick/common"
 	"sidekick/utils"
@@ -105,10 +106,15 @@ func main() {
 
 		log.Info().Msgf("Executing default replay: id=%s, hostPort=%s", defaultWorkflowId, defaultHostPort)
 
-		clientOptions := client.Options{
-			Logger:   logur.LoggerToKV(zerologadapter.New(log.Logger)),
-			HostPort: defaultHostPort,
+		service, err := sidekick.GetService()
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to initialize storage for codec")
 		}
+		clientOptions, err := common.NewTemporalClientOptions(service, defaultHostPort)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to create Temporal client options")
+		}
+		clientOptions.Logger = logur.LoggerToKV(zerologadapter.New(log.Logger))
 		c, err := client.Dial(clientOptions)
 		if err != nil {
 			log.Fatal().Err(err).Msg("Unable to create Temporal client for default replay.")

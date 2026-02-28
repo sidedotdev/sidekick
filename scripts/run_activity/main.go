@@ -352,14 +352,15 @@ func main() {
 
 func executeActivityViaWorkflow(activityName string, activityArgs []json.RawMessage, timeout time.Duration) (json.RawMessage, error) {
 	hostPort := common.GetTemporalServerHostPort()
-	tracingInterceptor, err := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
+	service, err := sidekick.GetService()
 	if err != nil {
-		return nil, fmt.Errorf("error creating tracing interceptor: %w", err)
+		return nil, fmt.Errorf("error initializing storage: %w", err)
 	}
-	temporalClient, err := client.Dial(client.Options{
-		HostPort:     hostPort,
-		Interceptors: []interceptor.ClientInterceptor{tracingInterceptor},
-	})
+	clientOptions, err := common.NewTemporalClientOptions(service, hostPort)
+	if err != nil {
+		return nil, fmt.Errorf("error creating Temporal client options: %w", err)
+	}
+	temporalClient, err := client.Dial(clientOptions)
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to Temporal: %w", err)
 	}
