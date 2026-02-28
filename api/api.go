@@ -34,8 +34,6 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/contrib/opentelemetry"
-	"go.temporal.io/sdk/interceptor"
 )
 
 type Server struct {
@@ -272,22 +270,18 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 }
 
 func NewController() (Controller, error) {
-	tracingInterceptor, err := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
+	service, err := sidekick.GetService()
 	if err != nil {
-		return Controller{}, fmt.Errorf("failed to create tracing interceptor: %w", err)
+		return Controller{}, fmt.Errorf("failed to initialize storage: %w", err)
 	}
-	clientOptions := client.Options{
-		HostPort:     common.GetTemporalServerHostPort(),
-		Interceptors: []interceptor.ClientInterceptor{tracingInterceptor},
+
+	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalServerHostPort())
+	if err != nil {
+		return Controller{}, fmt.Errorf("failed to create Temporal client options: %w", err)
 	}
 	temporalClient, err := client.NewLazyClient(clientOptions)
 	if err != nil {
 		return Controller{}, fmt.Errorf("failed to create Temporal client: %w", err)
-	}
-
-	service, err := sidekick.GetService()
-	if err != nil {
-		return Controller{}, fmt.Errorf("failed to initialize storage: %w", err)
 	}
 	err = service.CheckConnection(context.Background())
 	if err != nil {

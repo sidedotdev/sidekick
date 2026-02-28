@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sidekick"
 	"strings"
 	"sync"
 	"testing"
@@ -91,10 +92,16 @@ func TestReplayRunningWorkflows(t *testing.T) {
 
 	ctx := context.Background()
 
-	c, err := client.Dial(client.Options{
-		Logger:   logur.LoggerToKV(zerologadapter.New(log.Logger)),
-		HostPort: common.GetTemporalServerHostPort(),
-	})
+	service, err := sidekick.GetService()
+	if err != nil {
+		t.Fatalf("Failed to initialize storage for codec: %v", err)
+	}
+	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalServerHostPort())
+	if err != nil {
+		t.Fatalf("Failed to create Temporal client options: %v", err)
+	}
+	clientOptions.Logger = logur.LoggerToKV(zerologadapter.New(log.Logger))
+	c, err := client.Dial(clientOptions)
 	if err != nil {
 		t.Fatalf("Failed to create Temporal client: %v", err)
 	}
