@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -16,12 +18,40 @@ import (
 // replayTestData represents the mapping of versions to workflow IDs for replay testing
 type replayTestData map[string][]string
 
+// readGoSourceTree walks all Go source files from the module root so that
+// Go's test cache observes them as dependencies. This ensures the cached
+// test result is invalidated whenever any Go source file changes.
+func readGoSourceTree(t *testing.T) {
+	t.Helper()
+	moduleRoot := filepath.Join("..", "..")
+	err := filepath.WalkDir(moduleRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if name == ".git" || name == "node_modules" || name == "frontend" || name == ".tmp" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) == ".go" {
+			os.Stat(path) //nolint:errcheck
+		}
+		return nil
+	})
+	if err != nil {
+		t.Logf("Warning: failed to walk Go source tree for cache invalidation: %v", err)
+	}
+}
+
 // TestReplayFromS3Integration performs an integration test for replaying workflow histories from S3.
 // It lists specified versions of workflow histories from the S3 bucket "genflow.dev",
 // fetches them using the (unexported) fetchAndCacheHistory function (which utilizes local caching),
 // and then attempts to replay them using the current worker's registered workflows.
 func TestReplayFromS3Integration(t *testing.T) {
 	t.Parallel()
+	readGoSourceTree(t)
 	ctx := context.Background()
 
 	// Read test data file
