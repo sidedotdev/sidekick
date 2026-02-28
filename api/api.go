@@ -982,6 +982,14 @@ func (ctrl *Controller) ResetFlowHandler(c *gin.Context) {
 		return
 	}
 
+	// Prevent the codec cleanup workflow from deleting keys still needed by the new run
+	err = ctrl.temporalClient.SignalWorkflow(c, common.CodecCleanupWorkflowID, "", "codec-workflow-reset", common.CodecCleanupResetSignal{
+		WorkflowID: flowId,
+	})
+	if err != nil {
+		log.Warn().Err(err).Str("workflowId", flowId).Msg("Failed to signal codec cleanup workflow for reset")
+	}
+
 	c.JSON(http.StatusOK, gin.H{"runId": resp.RunId})
 }
 
