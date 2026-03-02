@@ -95,26 +95,6 @@ func getOwnChangesSinceReview(dCtx DevContext, baseBranch string, lastReviewTree
 	return result, err
 }
 
-// legacyV4OwnChangesSinceReview preserves the four-activity call pattern for
-// workflow replay determinism (version 4 of "diff-since-last-review").
-// FIXME remove once all v==4 workflows have completed
-func legacyV4OwnChangesSinceReview(dCtx DevContext, baseBranch string, lastReviewTreeHash string, ignoreWhitespace bool) (string, error) {
-	zeroCtx := 0
-	sinceReviewDiff, err := getDiffSinceLastReviewWithContext(dCtx, lastReviewTreeHash, ignoreWhitespace, nil, &zeroCtx)
-	if err != nil {
-		return "", fmt.Errorf("failed to get diff since last review: %w", err)
-	}
-	branchDiff, err := getGitDiffWithContext(dCtx, baseBranch, ignoreWhitespace, &zeroCtx)
-	if err != nil {
-		return "", fmt.Errorf("failed to get branch diff: %w", err)
-	}
-	baseSinceReviewDiff, err := getBaseSinceReviewDiff(dCtx, baseBranch, lastReviewTreeHash, ignoreWhitespace)
-	if err != nil {
-		return "", fmt.Errorf("failed to get base-since-review diff: %w", err)
-	}
-	return diffanalysis.FilterDiffForReview(sinceReviewDiff, branchDiff, baseSinceReviewDiff, sinceReviewDiff)
-}
-
 // legacyOwnChangesSinceReviewV3 preserves the three-activity call pattern for
 // workflow replay determinism (version 3 of "diff-since-last-review").
 // FIXME remove once all v==3 workflows have completed
@@ -548,10 +528,8 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 
 		// Generate diff since last review if we have a previous tree hash
 		if lastReviewTreeHash != "" {
-			if diffSinceLastReviewVersion >= 5 {
+			if diffSinceLastReviewVersion >= 4 {
 				diffSinceLastReview, err = getOwnChangesSinceReview(dCtx, defaultTarget, lastReviewTreeHash, false)
-			} else if diffSinceLastReviewVersion >= 4 {
-				diffSinceLastReview, err = legacyV4OwnChangesSinceReview(dCtx, defaultTarget, lastReviewTreeHash, false)
 			} else if diffSinceLastReviewVersion >= 3 {
 				diffSinceLastReview, err = legacyOwnChangesSinceReviewV3(dCtx, defaultTarget, lastReviewTreeHash, false)
 			} else if diffSinceLastReviewVersion >= 2 {
