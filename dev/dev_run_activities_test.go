@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -239,11 +240,13 @@ func TestStopDevRun_TimeoutEscalation(t *testing.T) {
 	workspaceId := "ws_timeout_" + t.Name()
 	flowId := "flow_timeout_" + t.Name()
 
-	// Use an inline command that traps SIGINT - the trap applies to the sh process
-	// that runs the command directly (no intermediate script)
+	readyFile := filepath.Join(tmpDir, "ready")
+	// Trap both INT and TERM so the process survives until SIGKILL.
+	// Touch a marker file so the test can wait for the trap to be set up.
+	cmd := fmt.Sprintf("trap '' INT TERM; touch %s; while true; do sleep 1; done", readyFile)
 	startInput := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
-			"test": {Command: "trap '' INT; while true; do sleep 1; done"},
+			"test": {Command: cmd},
 		},
 		CommandId: "test",
 		Context: DevRunContext{
@@ -260,8 +263,11 @@ func TestStopDevRun_TimeoutEscalation(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, startOutput.Started)
 
-	// Give the process time to start and set up the trap
-	time.Sleep(300 * time.Millisecond)
+	// Wait until the process has set up its signal trap
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(readyFile)
+		return err == nil
+	}, 5*time.Second, 50*time.Millisecond, "process should create ready file after setting up trap")
 
 	// Stop with a short timeout to trigger SIGKILL escalation
 	gs := &flow_action.GlobalState{}
