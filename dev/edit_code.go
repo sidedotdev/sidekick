@@ -539,6 +539,10 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	tools = append(tools, &bulkReadFileTool)
 	tools = append(tools, &runCommandTool)
 
+	if supportsImageToolResults(codingModelConfig) {
+		tools = append(tools, &readImageTool)
+	}
+
 	if dCtx.Worktree != nil {
 		tools = append(tools, &setBaseBranchTool)
 	}
