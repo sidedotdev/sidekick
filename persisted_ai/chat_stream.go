@@ -28,8 +28,10 @@ func ExecuteChatStream(
 	}
 
 	v := workflow.GetVersion(actionCtx, "chat-history-llm2", workflow.DefaultVersion, 1)
+	fmt.Println("DEBUG ExecuteChatStream chat-history-llm2-version=", v)
 
 	if v == 1 {
+		fmt.Println("DEBUG ExecuteChatStream calling executeChatStreamV1")
 		return executeChatStreamV1(heartbeatActionCtx, streamInput)
 	}
 
@@ -64,9 +66,11 @@ func executeChatStreamV1(
 		return nil, fmt.Errorf("ExecuteChatStream version 1 requires Llm2ChatHistory, got %T", chatHistory.History)
 	}
 
+	fmt.Println("DEBUG executeChatStreamV1 before PerformWithUserRetry (la.Stream)")
 	var la *Llm2Activities
 	var response llm2.MessageResponse
 	err := flow_action.PerformWithUserRetry(actionCtx, la.Stream, &response, streamInput)
+	fmt.Println("DEBUG executeChatStreamV1 after PerformWithUserRetry err=", err)
 	if err != nil {
 		return nil, err
 	}

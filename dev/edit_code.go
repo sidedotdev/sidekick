@@ -145,7 +145,9 @@ editLoop:
 		}
 
 		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
-		ManageChatHistory(dCtx, chatHistory, dCtx.WorkspaceId, maxLength)
+		fmt.Println("DEBUG editCodeSubflow before ManageChatHistory attempt=", attemptCount)
+		ManageChatHistory(dCtx, chatHistory, dCtx.WorkspaceId, maxLength, codingModelConfig.Provider)
+		fmt.Println("DEBUG editCodeSubflow after ManageChatHistory attempt=", attemptCount)
 
 		// Step 1: Get a list of *edit blocks* from the LLM
 		editBlocks, err = authorEditBlocks(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo)
@@ -319,7 +321,9 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		// calls immediately, we'll need a way to support this "burst"
 		// functionality (or maybe the ManageChatHistoryV2 function will
 		// natively always support burst due to the markers, hmmm...)
-		ManageChatHistory(dCtx, chatHistory, dCtx.WorkspaceId, maxLength)
+		fmt.Println("DEBUG authorEditBlocks before ManageChatHistory attempt=", attemptCount)
+		ManageChatHistory(dCtx, chatHistory, dCtx.WorkspaceId, maxLength, codingModelConfig.Provider)
+		fmt.Println("DEBUG authorEditBlocks after ManageChatHistory attempt=", attemptCount)
 
 		if !applyImmediately && len(extractedEditBlocks) > 0 {
 			content := fmt.Sprintf("Note: %d edit block(s) are pending application.", len(extractedEditBlocks))

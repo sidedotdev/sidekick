@@ -1,9 +1,33 @@
 package persisted_ai
 
 import (
+	"bytes"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+	"strings"
+
 	"sidekick/common"
 	"sidekick/llm2"
 )
+
+// imageDimensionsFromDataURL extracts width and height from a base64-encoded
+// data URL by reading only the image header. Returns (0, 0) on any failure.
+func imageDimensionsFromDataURL(dataURL string) (int, int) {
+	if !strings.HasPrefix(dataURL, "data:") {
+		return 0, 0
+	}
+	_, raw, err := llm2.ParseDataURL(dataURL)
+	if err != nil {
+		return 0, 0
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil {
+		return 0, 0
+	}
+	return cfg.Width, cfg.Height
+}
 
 // ContextType constants for categorizing chat messages.
 const (
@@ -18,28 +42,28 @@ const (
 // llm2MessageLength calculates the total length of a message by summing
 // text content, tool call arguments, image/file URLs, and nested tool result
 // content from all content blocks.
-func llm2MessageLength(msg llm2.Message) int {
+func llm2MessageLength(provider string, msg llm2.Message) int {
 	length := 0
 	for _, block := range msg.Content {
-		length += contentBlockLength(block)
+		length += contentBlockLength(provider, block)
 	}
 	return length
 }
 
 // imageCharEstimate returns the estimated character-equivalent length of an
-// image by computing provider-agnostic token estimates from its dimensions.
-func imageCharEstimate(url string) int {
-	w, h := llm2.ImageDimensionsFromDataURL(url)
+// image by computing token estimates from its dimensions for the given provider.
+func imageCharEstimate(provider string, url string) int {
+	w, h := imageDimensionsFromDataURL(url)
 	if w <= 0 || h <= 0 {
 		w, h = 2560, 1440
 	}
-	return llm2.EstimateImageTokens(w, h) * 4
+	return llm2.ImageTokensForProvider(provider, w, h) * 4
 }
 
-func contentBlockLength(block llm2.ContentBlock) int {
+func contentBlockLength(provider string, block llm2.ContentBlock) int {
 	length := len(block.Text)
 	if block.Image != nil {
-		length += imageCharEstimate(block.Image.Url)
+		length += imageCharEstimate(provider, block.Image.Url)
 	}
 	if block.File != nil {
 		length += len(block.File.Url)
@@ -49,7 +73,7 @@ func contentBlockLength(block llm2.ContentBlock) int {
 	}
 	if block.ToolResult != nil {
 		for _, nested := range block.ToolResult.Content {
-			length += contentBlockLength(nested)
+			length += contentBlockLength(provider, nested)
 		}
 	}
 	return length
@@ -110,7 +134,7 @@ func getToolResultBlocks(msg llm2.Message) []*llm2.ToolResultBlock {
 
 // ManageLlm2ChatHistory applies retention logic to llm2 messages.
 // This mirrors the logic in manageChatHistoryV2 but operates on llm2.Message types.
-func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, maxLength int) ([]llm2.Message, error) {
+func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, maxLength int, provider string) ([]llm2.Message, error) {
 	if len(messages) == 0 {
 		return []llm2.Message{}, nil
 	}
@@ -215,12 +239,12 @@ func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, 
 	}
 
 	// Truncate large unretained tool responses before dropping messages
-	messages, isRetained = truncateLargeLlm2ToolResponses(messages, isRetained, maxLength)
+	messages, isRetained = truncateLargeLlm2ToolResponses(messages, isRetained, maxLength, provider)
 
 	var totalLength = 0
 	for i, msg := range messages {
 		if isRetained[i] {
-			totalLength += llm2MessageLength(msg)
+			totalLength += llm2MessageLength(provider, msg)
 		}
 	}
 
@@ -232,9 +256,9 @@ func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, 
 		if isRetained[i] {
 			newMessages = append(newMessages, msg)
 		} else if !limitExceeded {
-			if llm2MessageLength(msg)+totalLength <= maxLength {
+			if llm2MessageLength(provider, msg)+totalLength <= maxLength {
 				newMessages = append(newMessages, msg)
-				totalLength += llm2MessageLength(msg)
+				totalLength += llm2MessageLength(provider, msg)
 			} else {
 				limitExceeded = true
 			}
@@ -252,7 +276,7 @@ func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, 
 }
 
 // truncateLargeLlm2ToolResponses truncates large unretained tool result blocks.
-func truncateLargeLlm2ToolResponses(messages []llm2.Message, isRetained []bool, maxLength int) ([]llm2.Message, []bool) {
+func truncateLargeLlm2ToolResponses(messages []llm2.Message, isRetained []bool, maxLength int, provider string) ([]llm2.Message, []bool) {
 	threshold := maxLength / 20 // 5% of maxLength
 
 	type candidate struct {
@@ -282,7 +306,7 @@ func truncateLargeLlm2ToolResponses(messages []llm2.Message, isRetained []bool, 
 
 	totalLength := 0
 	for _, msg := range messages {
-		totalLength += llm2MessageLength(msg)
+		totalLength += llm2MessageLength(provider, msg)
 	}
 
 	result := make([]llm2.Message, len(messages))

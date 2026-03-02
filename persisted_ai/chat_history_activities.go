@@ -19,17 +19,39 @@ type ChatHistoryActivities struct {
 }
 
 // ManageV3 manages chat history using the llm2 message format with KV storage.
-// It hydrates the history, runs management logic, and persists the result.
-// It preserves refs for unchanged messages to avoid regenerating KV block IDs.
+// Deprecated: use ManageV4 which accepts a provider for image token estimation.
+// TODO delete after in-flight ManageV3 workflows have drained.
 func (ca *ChatHistoryActivities) ManageV3(
 	ctx context.Context,
 	chatHistory *ChatHistoryContainer,
 	workspaceId string,
 	maxLength int,
 ) (*ChatHistoryContainer, error) {
+	return ca.manageLlm2ChatHistoryActivity(ctx, chatHistory, workspaceId, maxLength, "")
+}
+
+// ManageV4 is like ManageV3 but accepts a provider name for provider-specific
+// image token estimation during chat history management.
+func (ca *ChatHistoryActivities) ManageV4(
+	ctx context.Context,
+	chatHistory *ChatHistoryContainer,
+	workspaceId string,
+	maxLength int,
+	provider string,
+) (*ChatHistoryContainer, error) {
+	return ca.manageLlm2ChatHistoryActivity(ctx, chatHistory, workspaceId, maxLength, provider)
+}
+
+func (ca *ChatHistoryActivities) manageLlm2ChatHistoryActivity(
+	ctx context.Context,
+	chatHistory *ChatHistoryContainer,
+	workspaceId string,
+	maxLength int,
+	provider string,
+) (*ChatHistoryContainer, error) {
 	llm2History, ok := chatHistory.History.(*Llm2ChatHistory)
 	if !ok {
-		return nil, fmt.Errorf("ManageV3 requires Llm2ChatHistory, got %T", chatHistory.History)
+		return nil, fmt.Errorf("ManageV3/V4 requires Llm2ChatHistory, got %T", chatHistory.History)
 	}
 
 	if err := llm2History.Hydrate(ctx, ca.Storage); err != nil {
@@ -41,7 +63,7 @@ func (ca *ChatHistoryActivities) ManageV3(
 	originalMessages := deepCopyMessages(llm2History.Llm2Messages())
 
 	messages := llm2History.Llm2Messages()
-	managedMessages, err := ca.ManageLlm2ChatHistory(messages, maxLength)
+	managedMessages, err := ca.ManageLlm2ChatHistory(messages, maxLength, provider)
 	if err != nil {
 		return nil, fmt.Errorf("failed to manage chat history: %w", err)
 	}

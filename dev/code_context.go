@@ -277,7 +277,7 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		// NOTE due to most of the testing being done this way so far, we clean
 		// up chat history *before* extending it. We'll look into changing this
 		// later, and will tune our max history length to support that change.
-		ManageChatHistory(actionCtx, chatHistory, actionCtx.WorkspaceId, defaultMaxChatHistoryLength)
+		ManageChatHistory(actionCtx, chatHistory, actionCtx.WorkspaceId, defaultMaxChatHistoryLength, actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default").Provider)
 
 		attempts++
 		iterationsSinceLastFeedback++
