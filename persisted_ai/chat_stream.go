@@ -28,7 +28,6 @@ func ExecuteChatStream(
 	}
 
 	v := workflow.GetVersion(actionCtx, "chat-history-llm2", workflow.DefaultVersion, 1)
-
 	if v == 1 {
 		return executeChatStreamV1(heartbeatActionCtx, streamInput)
 	}

@@ -7,7 +7,6 @@ import (
 	"sidekick/domain"
 	"sidekick/temporalmeta"
 	"sidekick/utils"
-	"time"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -394,10 +393,11 @@ func putFlowAction(eCtx ExecContext, flowAction domain.FlowAction) (domain.FlowA
 		}
 	}
 
+	now := workflow.Now(eCtx)
 	if flowAction.Created.IsZero() {
-		flowAction.Created = time.Now()
+		flowAction.Created = now
 	}
-	flowAction.Updated = time.Now()
+	flowAction.Updated = now
 
 	var fa *FlowActivities // nil struct pointer for struct-based activities
 

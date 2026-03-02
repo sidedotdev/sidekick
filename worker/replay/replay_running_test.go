@@ -195,7 +195,13 @@ func TestReplayRunningWorkflows(t *testing.T) {
 				histories[workflowID] = &historyResult{id: workflowID, skipped: true}
 				return
 			}
-			replayer := worker.NewWorkflowReplayer()
+			replayer, err := worker.NewWorkflowReplayerWithOptions(worker.WorkflowReplayerOptions{
+				DataConverter: clientOptions.DataConverter,
+			})
+			if err != nil {
+				histories[workflowID] = &historyResult{id: workflowID, err: err}
+				return
+			}
 			sidekick_worker.RegisterWorkflows(replayer)
 			replayErr := replayer.ReplayWorkflowHistory(nil, hist)
 			histories[workflowID] = &historyResult{id: workflowID, err: replayErr}
