@@ -2,6 +2,7 @@ package gotestreport
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -493,4 +494,73 @@ func TestSummaryFailedPackageHasEmoji(t *testing.T) {
 
 	summary2 := s2.Summary()
 	assert.NotContains(t, summary2, "❌")
+}
+
+func TestTimeoutFlushesBufferedTestOutput(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := NewStreamer(&out)
+
+	// Simulate a timeout: tests run, one is mid-execution when timeout hits
+	s.ProcessEvent(TestEvent{Action: "run", Package: "pkg/slow", Test: "TestFast"})
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/slow", Test: "TestFast", Output: "fast output\n"})
+	s.ProcessEvent(TestEvent{Action: "pass", Package: "pkg/slow", Test: "TestFast"})
+
+	s.ProcessEvent(TestEvent{Action: "run", Package: "pkg/slow", Test: "TestSlow"})
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/slow", Test: "TestSlow", Output: "    slow_test.go:15: doing something\n"})
+
+	// Timeout: panic output comes as package-level output
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/slow", Output: "panic: test timed out after 30s\n"})
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/slow", Output: "goroutine 1 [running]:\n"})
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/slow", Output: "FAIL\tpkg/slow\t30.601s\n"})
+
+	// Package fails without individual test fail events
+	s.ProcessEvent(TestEvent{Action: "fail", Package: "pkg/slow", Elapsed: 30.601})
+
+	output := out.String()
+	// Buffered test output for the incomplete test should be flushed
+	assert.Contains(t, output, "doing something")
+	// Package-level panic output should be flushed
+	assert.Contains(t, output, "panic: test timed out")
+	assert.Contains(t, output, "goroutine 1 [running]")
+	// Passing test output should still be suppressed
+	assert.NotContains(t, output, "fast output")
+}
+
+func TestTimeoutSummaryShowsPackageError(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := NewStreamer(&out)
+
+	// 109 tests pass, then package fails due to timeout (no individual test failure)
+	for i := 0; i < 109; i++ {
+		name := fmt.Sprintf("Test%d", i)
+		s.ProcessEvent(TestEvent{Action: "run", Package: "pkg/slow", Test: name})
+		s.ProcessEvent(TestEvent{Action: "pass", Package: "pkg/slow", Test: name})
+	}
+	s.ProcessEvent(TestEvent{Action: "fail", Package: "pkg/slow", Elapsed: 30.601})
+
+	summary := s.Summary()
+	assert.Contains(t, summary, "109 passed")
+	assert.Contains(t, summary, "package error (timeout/crash)")
+	assert.Contains(t, summary, "❌")
+}
+
+func TestNoPackageErrorLabelWhenTestsFailed(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := NewStreamer(&out)
+
+	// Normal failure: individual test fails
+	s.ProcessEvent(TestEvent{Action: "run", Package: "pkg/a", Test: "TestFail"})
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/a", Test: "TestFail", Output: "--- FAIL: TestFail (0.00s)\n"})
+	s.ProcessEvent(TestEvent{Action: "fail", Package: "pkg/a", Test: "TestFail"})
+	s.ProcessEvent(TestEvent{Action: "fail", Package: "pkg/a", Elapsed: 0.1})
+
+	summary := s.Summary()
+	assert.Contains(t, summary, "1 failed")
+	assert.NotContains(t, summary, "timeout/crash")
 }
