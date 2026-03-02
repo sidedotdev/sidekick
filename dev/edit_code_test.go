@@ -78,7 +78,6 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 
 	// Use version 1 for chat-history-llm2 (Llm2ChatHistory path)
 	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
-	s.env.OnGetVersion("chat-history-manage-v4", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
 
 	// Mock KV activities for chat history persistence
 	var ka *common.KVActivities
@@ -87,8 +86,8 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 
 	// Mock ChatHistoryActivities for llm2 path
 	var cha *persisted_ai.ChatHistoryActivities
-	s.env.OnActivity(cha.ManageV4, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
-		func(ctx context.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, maxLength int, provider string) (*persisted_ai.ChatHistoryContainer, error) {
+	s.env.OnActivity(cha.ManageV3, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, maxLength int) (*persisted_ai.ChatHistoryContainer, error) {
 			return chatHistory, nil
 		},
 	).Maybe()

@@ -69,7 +69,6 @@ func (s *BranchNameTestSuite) SetupTest() {
 
 	// Use version 1 for chat-history-llm2 (Llm2ChatHistory path) - called multiple times
 	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
-	s.env.OnGetVersion("chat-history-manage-v4", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
 
 	// Mock KV activities for chat history persistence
 	var ka *common.KVActivities

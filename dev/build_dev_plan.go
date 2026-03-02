@@ -329,7 +329,7 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 	}
 
 	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
-	ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength, iteration.ExecCtx.GetModelConfig(common.PlanningKey, 0, "default").Provider)
+	ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength)
 
 	hasExistingPlan := len(state.devPlan.Steps) > 0
 

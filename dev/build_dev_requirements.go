@@ -294,7 +294,7 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	}
 
 	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
-	ManageChatHistory(iteration.ExecCtx.Context, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength, iteration.ExecCtx.GetModelConfig(common.PlanningKey, 0, "default").Provider)
+	ManageChatHistory(iteration.ExecCtx.Context, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength)
 
 	hasExistingRequirements := len(state.devRequirements.AcceptanceCriteria) > 0 || state.devRequirements.Overview != ""
 

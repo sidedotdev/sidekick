@@ -1,7 +1,10 @@
 package llm2
 
 import (
+	"bytes"
+	"image"
 	"math"
+	"strings"
 )
 
 // AnthropicImageTokens estimates token cost for an image sent to Anthropic Claude.
@@ -92,16 +95,41 @@ func GeminiImageTokens(w, h int) int {
 	return tilesW * tilesH * tokensPerTile
 }
 
-// ImageTokensForProvider returns the estimated token cost for an image
-// based on the provider name. Unknown or empty providers default to
-// Anthropic-style calculation.
-func ImageTokensForProvider(provider string, w, h int) int {
-	switch provider {
-	case "openai":
-		return OpenAITileImageTokens(w, h)
-	case "google":
-		return GeminiImageTokens(w, h)
-	default:
-		return AnthropicImageTokens(w, h)
+// EstimateImageTokens returns a provider-agnostic upper-bound token estimate
+// by taking the maximum across all provider formulas (using 1.0 multiplier
+// for patch-based).
+func EstimateImageTokens(w, h int) int {
+	anthropic := AnthropicImageTokens(w, h)
+	openaiTile := OpenAITileImageTokens(w, h)
+	openaiPatch := OpenAIPatchImageTokens(w, h, 1.0)
+	gemini := GeminiImageTokens(w, h)
+
+	result := anthropic
+	if openaiTile > result {
+		result = openaiTile
 	}
+	if openaiPatch > result {
+		result = openaiPatch
+	}
+	if gemini > result {
+		result = gemini
+	}
+	return result
+}
+
+// ImageDimensionsFromDataURL extracts width and height from a base64-encoded
+// data URL by reading only the image header. Returns (0, 0) on any failure.
+func ImageDimensionsFromDataURL(dataURL string) (int, int) {
+	if !strings.HasPrefix(dataURL, "data:") {
+		return 0, 0
+	}
+	_, raw, err := ParseDataURL(dataURL)
+	if err != nil {
+		return 0, 0
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil {
+		return 0, 0
+	}
+	return cfg.Width, cfg.Height
 }
