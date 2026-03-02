@@ -316,7 +316,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 			"file now matches main so sinceReviewDiff is empty, nothing to show")
 	})
 
-	t.Run("undone_changes_excluded", func(t *testing.T) {
+	t.Run("undone_changes_shown", func(t *testing.T) {
 		t.Parallel()
 
 		repoDir := setupTestGitRepo(t)
@@ -345,8 +345,8 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		t.Logf("result:\n%s", result)
 
-		assert.NotContains(t, result, "feature.go",
-			"undone change (file added then removed) should be excluded from since-review diff")
+		assert.Contains(t, result, "feature.go",
+			"file removed since review should appear in diff")
 	})
 
 	t.Run("rebase_new_file_filtered", func(t *testing.T) {
@@ -492,6 +492,41 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 			"base's hunk should be filtered")
 		assert.Contains(t, result, " line2",
 			"context lines should be preserved in the output")
+	})
+
+	t.Run("removed_file_shown_in_diff", func(t *testing.T) {
+		t.Parallel()
+
+		repoDir := setupTestGitRepo(t)
+		ctx := context.Background()
+
+		createFileAndCommit(t, repoDir, "shared.go", "package shared\n\nfunc Shared() {}\n", "initial commit")
+
+		runGit(t, repoDir, "checkout", "-b", "feature")
+		createFileAndCommit(t, repoDir, "newfile.go", "package newfile\n\nfunc New() {}\n", "add new file")
+
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		require.NoError(t, err)
+
+		runGit(t, repoDir, "rm", "newfile.go")
+		runGit(t, repoDir, "commit", "-m", "remove newfile")
+
+		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
+			EnvContainer:   envContainer,
+			BaseBranch:     "main",
+			LastReviewTree: lastReviewTreeHash,
+		})
+		require.NoError(t, err)
+		t.Logf("result:\n%s", result)
+
+		assert.Contains(t, result, "newfile.go",
+			"removed file should appear in diff")
+		assert.Contains(t, result, "func New()",
+			"removed content should appear in diff")
 	})
 
 	t.Run("rebase_shared_file_hunk_level_filtering", func(t *testing.T) {

@@ -26,8 +26,12 @@ func computeKeptHunks(sinceReviewDiff, branchDiff, baseSinceReviewDiff string) (
 	}
 
 	baseHunksByPath := make(map[string][]Hunk, len(baseFiles))
+	baseDeletedFiles := make(map[string]bool, len(baseFiles))
 	for _, f := range baseFiles {
 		baseHunksByPath[f.NewPath] = f.Hunks
+		if f.IsDeleted {
+			baseDeletedFiles[f.NewPath] = true
+		}
 	}
 
 	result := make(map[string][]Hunk)
@@ -35,8 +39,14 @@ func computeKeptHunks(sinceReviewDiff, branchDiff, baseSinceReviewDiff string) (
 		baseHunks := baseHunksByPath[file.NewPath]
 		branchHunks := branchHunksByPath[file.NewPath]
 
+		// A file deleted in both since-review and base-since-review diffs
+		// means it existed only in the review tree. The base diff "deletion"
+		// reflects the file never existing on the base branch, not an actual
+		// base change, so skip merge-introduced filtering.
+		skipMergeCheck := file.IsDeleted && baseDeletedFiles[file.NewPath]
+
 		for _, h := range file.Hunks {
-			if isMergeIntroduced(h, baseHunks, branchHunks) {
+			if !skipMergeCheck && isMergeIntroduced(h, baseHunks, branchHunks) {
 				continue
 			}
 			result[file.NewPath] = append(result[file.NewPath], h)
