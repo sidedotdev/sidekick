@@ -529,6 +529,48 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 			"removed content should appear in diff")
 	})
 
+	t.Run("staged_untracked_file_then_removed", func(t *testing.T) {
+		t.Parallel()
+
+		repoDir := setupTestGitRepo(t)
+		ctx := context.Background()
+
+		createFileAndCommit(t, repoDir, "shared.go", "package shared\n\nfunc Shared() {}\n", "initial commit")
+
+		runGit(t, repoDir, "checkout", "-b", "feature")
+
+		// Stage a previously untracked file (no commit yet)
+		err := os.WriteFile(filepath.Join(repoDir, "staged.go"), []byte("package staged\n\nfunc Staged() {}\n"), 0644)
+		require.NoError(t, err)
+		runGit(t, repoDir, "add", "staged.go")
+
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		// WriteTree captures the index including the staged file
+		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		require.NoError(t, err)
+
+		// Commit the staged file, then remove it
+		runGit(t, repoDir, "commit", "-m", "add staged file")
+		runGit(t, repoDir, "rm", "staged.go")
+		runGit(t, repoDir, "commit", "-m", "remove staged file")
+
+		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
+			EnvContainer:   envContainer,
+			BaseBranch:     "main",
+			LastReviewTree: lastReviewTreeHash,
+		})
+		require.NoError(t, err)
+		t.Logf("result:\n%s", result)
+
+		assert.Contains(t, result, "staged.go",
+			"removed file should appear in diff")
+		assert.Contains(t, result, "func Staged()",
+			"removed content should appear in diff")
+	})
+
 	t.Run("rebase_shared_file_hunk_level_filtering", func(t *testing.T) {
 		t.Parallel()
 
