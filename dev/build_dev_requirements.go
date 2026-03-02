@@ -293,8 +293,12 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 		return nil, fmt.Errorf("Invalid llm iteration state type, expected *buildDevRequirementsState: %v", iteration.State)
 	}
 
+	provider := ""
+	if v := workflow.GetVersion(iteration.ExecCtx.Context, "chat-history-manage-v4", workflow.DefaultVersion, 1); v == 1 {
+		provider = iteration.ExecCtx.GetModelConfig(common.PlanningKey, 0, "default").Provider
+	}
 	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
-	ManageChatHistory(iteration.ExecCtx.Context, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength)
+	ManageChatHistory(iteration.ExecCtx.Context, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength, provider)
 
 	hasExistingRequirements := len(state.devRequirements.AcceptanceCriteria) > 0 || state.devRequirements.Overview != ""
 

@@ -77,7 +77,7 @@ func noopManageLlm2ChatHistory(messages []llm2.Message, maxLength int) ([]llm2.M
 	return messages, nil
 }
 
-func TestManageV3_HydratesHistory(t *testing.T) {
+func TestManageV4_HydratesHistory(t *testing.T) {
 	storage := newMockKVStorage()
 	activities := &ChatHistoryActivities{
 		Storage: storage,
@@ -101,13 +101,15 @@ func TestManageV3_HydratesHistory(t *testing.T) {
 	container := &ChatHistoryContainer{History: restored}
 	storage.mgetCalled = false
 
-	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 0)
+	output, err := activities.ManageV4(context.Background(), ManageInput{
+		ChatHistory: container, WorkspaceId: "workspace-456",
+	})
 	require.NoError(t, err)
-	require.NotNil(t, result)
+	require.NotNil(t, output)
 	assert.True(t, storage.mgetCalled, "MGet should have been called for hydration")
 }
 
-func TestManageV3_PersistsHistory(t *testing.T) {
+func TestManageV4_PersistsHistory(t *testing.T) {
 	storage := newMockKVStorage()
 	activities := &ChatHistoryActivities{
 		Storage: storage,
@@ -121,13 +123,15 @@ func TestManageV3_PersistsHistory(t *testing.T) {
 
 	container := &ChatHistoryContainer{History: history}
 
-	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 0)
+	output, err := activities.ManageV4(context.Background(), ManageInput{
+		ChatHistory: container, WorkspaceId: "workspace-456",
+	})
 	require.NoError(t, err)
-	require.NotNil(t, result)
+	require.NotNil(t, output)
 	assert.True(t, storage.msetCalled, "MSet should have been called for persistence")
 }
 
-func TestManageV3_HydrationError(t *testing.T) {
+func TestManageV4_HydrationError(t *testing.T) {
 	storage := newMockKVStorage()
 	storage.mgetErr = errors.New("hydration failed")
 	activities := &ChatHistoryActivities{
@@ -153,12 +157,14 @@ func TestManageV3_HydrationError(t *testing.T) {
 
 	container := &ChatHistoryContainer{History: restored}
 
-	_, err = activities.ManageV3(context.Background(), container, "workspace-456", 0)
+	_, err = activities.ManageV4(context.Background(), ManageInput{
+		ChatHistory: container, WorkspaceId: "workspace-456",
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "hydrate")
 }
 
-func TestManageV3_PersistError(t *testing.T) {
+func TestManageV4_PersistError(t *testing.T) {
 	storage := newMockKVStorage()
 	storage.msetErr = errors.New("persist failed")
 	activities := &ChatHistoryActivities{
@@ -173,12 +179,14 @@ func TestManageV3_PersistError(t *testing.T) {
 
 	container := &ChatHistoryContainer{History: history}
 
-	_, err := activities.ManageV3(context.Background(), container, "workspace-456", 0)
+	_, err := activities.ManageV4(context.Background(), ManageInput{
+		ChatHistory: container, WorkspaceId: "workspace-456",
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "persist")
 }
 
-func TestManageV3_WrongHistoryType(t *testing.T) {
+func TestManageV4_WrongHistoryType(t *testing.T) {
 	storage := newMockKVStorage()
 	activities := &ChatHistoryActivities{
 		Storage: storage,
@@ -187,12 +195,14 @@ func TestManageV3_WrongHistoryType(t *testing.T) {
 	legacyHistory := NewLegacyChatHistoryFromChatMessages(nil)
 	container := &ChatHistoryContainer{History: legacyHistory}
 
-	_, err := activities.ManageV3(context.Background(), container, "workspace-456", 0)
+	_, err := activities.ManageV4(context.Background(), ManageInput{
+		ChatHistory: container, WorkspaceId: "workspace-456",
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Llm2ChatHistory")
 }
 
-func TestManageV3_PreservesRefsForUnchangedMessages(t *testing.T) {
+func TestManageV4_PreservesRefsForUnchangedMessages(t *testing.T) {
 	t.Parallel()
 	storage := newMockKVStorage()
 	activities := &ChatHistoryActivities{
@@ -225,11 +235,13 @@ func TestManageV3_PreservesRefsForUnchangedMessages(t *testing.T) {
 
 	container := &ChatHistoryContainer{History: history}
 
-	// Run ManageV3 with large maxLength to prevent trimming
-	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 100000)
+	// Run ManageV4 with large maxLength to prevent trimming
+	output, err := activities.ManageV4(context.Background(), ManageInput{
+		ChatHistory: container, WorkspaceId: "workspace-456", MaxLength: 100000,
+	})
 	require.NoError(t, err)
 
-	resultHistory := result.History.(*Llm2ChatHistory)
+	resultHistory := output.ChatHistory.History.(*Llm2ChatHistory)
 	newRefs := resultHistory.Refs()
 
 	// Messages should still be present (management didn't drop any)
@@ -241,7 +253,7 @@ func TestManageV3_PreservesRefsForUnchangedMessages(t *testing.T) {
 		"unchanged middle message should preserve its block keys")
 }
 
-func TestManageV3_ChangesRefsForMarkerOnlyChanges(t *testing.T) {
+func TestManageV4_ChangesRefsForMarkerOnlyChanges(t *testing.T) {
 	t.Parallel()
 	storage := newMockKVStorage()
 	activities := &ChatHistoryActivities{
@@ -275,11 +287,13 @@ func TestManageV3_ChangesRefsForMarkerOnlyChanges(t *testing.T) {
 
 	container := &ChatHistoryContainer{History: history}
 
-	// Run ManageV3 with large maxLength - this will clear and re-apply cache control
-	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 100000)
+	// Run ManageV4 with large maxLength - this will clear and re-apply cache control
+	output, err := activities.ManageV4(context.Background(), ManageInput{
+		ChatHistory: container, WorkspaceId: "workspace-456", MaxLength: 100000,
+	})
 	require.NoError(t, err)
 
-	resultHistory := result.History.(*Llm2ChatHistory)
+	resultHistory := output.ChatHistory.History.(*Llm2ChatHistory)
 	newRefs := resultHistory.Refs()
 
 	require.Equal(t, 2, len(newRefs), "should have 2 messages after management")
@@ -290,7 +304,7 @@ func TestManageV3_ChangesRefsForMarkerOnlyChanges(t *testing.T) {
 		"message with marker change should get new block keys")
 }
 
-func TestManageV3_HydratingFromRefsRestoresMarkers(t *testing.T) {
+func TestManageV4_HydratingFromRefsRestoresMarkers(t *testing.T) {
 	t.Parallel()
 	storage := newMockKVStorage()
 	activities := &ChatHistoryActivities{
@@ -312,12 +326,14 @@ func TestManageV3_HydratingFromRefsRestoresMarkers(t *testing.T) {
 
 	container := &ChatHistoryContainer{History: history}
 
-	// Run ManageV3 to apply cache control and persist
-	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 100000)
+	// Run ManageV4 to apply cache control and persist
+	output, err := activities.ManageV4(context.Background(), ManageInput{
+		ChatHistory: container, WorkspaceId: "workspace-456", MaxLength: 100000,
+	})
 	require.NoError(t, err)
 
 	// Get the refs from the managed history
-	managedHistory := result.History.(*Llm2ChatHistory)
+	managedHistory := output.ChatHistory.History.(*Llm2ChatHistory)
 	refs := managedHistory.Refs()
 
 	require.Len(t, refs, 2, "should have 2 refs after management")
@@ -343,7 +359,7 @@ func TestManageV3_HydratingFromRefsRestoresMarkers(t *testing.T) {
 		"last message should have ephemeral cache control after hydration")
 }
 
-func TestManageV3_PreservesContextType(t *testing.T) {
+func TestManageV4_PreservesContextType(t *testing.T) {
 	t.Parallel()
 	storage := newMockKVStorage()
 	activities := &ChatHistoryActivities{
@@ -365,12 +381,14 @@ func TestManageV3_PreservesContextType(t *testing.T) {
 
 	container := &ChatHistoryContainer{History: history}
 
-	// Run ManageV3 with large maxLength
-	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 100000)
+	// Run ManageV4 with large maxLength
+	output, err := activities.ManageV4(context.Background(), ManageInput{
+		ChatHistory: container, WorkspaceId: "workspace-456", MaxLength: 100000,
+	})
 	require.NoError(t, err)
 
 	// Get refs and create fresh history
-	managedHistory := result.History.(*Llm2ChatHistory)
+	managedHistory := output.ChatHistory.History.(*Llm2ChatHistory)
 	refs := managedHistory.Refs()
 
 	require.Len(t, refs, 2, "should have 2 refs after management")
@@ -385,7 +403,7 @@ func TestManageV3_PreservesContextType(t *testing.T) {
 		"ContextType should be preserved after hydration")
 }
 
-func TestManageV3_DroppingOlderMessagesPreservesRetainedRefs(t *testing.T) {
+func TestManageV4_DroppingOlderMessagesPreservesRetainedRefs(t *testing.T) {
 	t.Parallel()
 	storage := newMockKVStorage()
 	activities := &ChatHistoryActivities{
@@ -425,11 +443,13 @@ func TestManageV3_DroppingOlderMessagesPreservesRetainedRefs(t *testing.T) {
 
 	container := &ChatHistoryContainer{History: history}
 
-	// Run ManageV3 with small maxLength to trigger trimming of middle messages
-	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 50)
+	// Run ManageV4 with small maxLength to trigger trimming of middle messages
+	output, err := activities.ManageV4(context.Background(), ManageInput{
+		ChatHistory: container, WorkspaceId: "workspace-456", MaxLength: 50,
+	})
 	require.NoError(t, err)
 
-	resultHistory := result.History.(*Llm2ChatHistory)
+	resultHistory := output.ChatHistory.History.(*Llm2ChatHistory)
 	newRefs := resultHistory.Refs()
 
 	require.GreaterOrEqual(t, len(newRefs), 2, "should retain at least first and last messages")
@@ -457,7 +477,7 @@ func TestManageV3_DroppingOlderMessagesPreservesRetainedRefs(t *testing.T) {
 	}
 }
 
-func TestManageV3_LegacyChatMessageRetainsInitialInstructions(t *testing.T) {
+func TestManageV4_LegacyChatMessageRetainsInitialInstructions(t *testing.T) {
 	t.Parallel()
 	storage := newMockKVStorage()
 	activities := &ChatHistoryActivities{
@@ -495,10 +515,12 @@ func TestManageV3_LegacyChatMessageRetainsInitialInstructions(t *testing.T) {
 	container := &ChatHistoryContainer{History: history}
 
 	// Small maxLength to trigger trimming of middle messages
-	result, err := activities.ManageV3(context.Background(), container, "workspace-456", 30)
+	output, err := activities.ManageV4(context.Background(), ManageInput{
+		ChatHistory: container, WorkspaceId: "workspace-456", MaxLength: 30,
+	})
 	require.NoError(t, err)
 
-	resultHistory := result.History.(*Llm2ChatHistory)
+	resultHistory := output.ChatHistory.History.(*Llm2ChatHistory)
 	messages := resultHistory.Llm2Messages()
 
 	// The initial-instructions message and last message must survive trimming

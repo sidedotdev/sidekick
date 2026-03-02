@@ -86,9 +86,9 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 
 	// Mock ChatHistoryActivities for llm2 path
 	var cha *persisted_ai.ChatHistoryActivities
-	s.env.OnActivity(cha.ManageV3, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
-		func(ctx context.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, maxLength int) (*persisted_ai.ChatHistoryContainer, error) {
-			return chatHistory, nil
+	s.env.OnActivity(cha.ManageV4, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, input persisted_ai.ManageInput) (*persisted_ai.ManageOutput, error) {
+			return &persisted_ai.ManageOutput{ChatHistory: input.ChatHistory}, nil
 		},
 	).Maybe()
 	s.env.OnActivity(cha.AppendMessage, mock.Anything, mock.Anything).Return(

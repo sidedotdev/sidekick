@@ -65,7 +65,7 @@ const (
 // TODO take in the model name and use a different threshold for each model
 // TODO don't drop messages, just create a new chat history with a new summary
 // each time based on the current needs or latest prompt
-func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, maxLength int) {
+func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, maxLength int, provider string) {
 	// Check if we should use the new Llm2ChatHistory-based management
 	v := workflow.GetVersion(ctx, "chat-history-llm2", workflow.DefaultVersion, 1)
 	if v == 1 {
@@ -76,20 +76,37 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHisto
 			panic(wrapErr)
 		}
 
-		var managedHistory *persisted_ai.ChatHistoryContainer
 		var cha *persisted_ai.ChatHistoryActivities
-		activityFuture := workflow.ExecuteActivity(ctx, cha.ManageV3, chatHistory, workspaceId, maxLength)
-		err := activityFuture.Get(ctx, &managedHistory)
-		if err != nil {
-			wrapErr := fmt.Errorf("ManageChatHistory ManageV3 activity returned an error: %w", err)
-			workflow.GetLogger(ctx).Error("ManageChatHistory error shouldn't happen, but it did", "error", wrapErr)
-			panic(wrapErr)
+
+		var managedChatHistory *persisted_ai.ChatHistoryContainer
+		vManage := workflow.GetVersion(ctx, "chat-history-manage-v4", workflow.DefaultVersion, 1)
+		if vManage == 1 {
+			var manageOutput persisted_ai.ManageOutput
+			err := workflow.ExecuteActivity(ctx, cha.ManageV4, persisted_ai.ManageInput{
+				ChatHistory: chatHistory,
+				WorkspaceId: workspaceId,
+				MaxLength:   maxLength,
+				Provider:    provider,
+			}).Get(ctx, &manageOutput)
+			if err != nil {
+				wrapErr := fmt.Errorf("ManageChatHistory ManageV4 activity returned an error: %w", err)
+				workflow.GetLogger(ctx).Error("ManageChatHistory error shouldn't happen, but it did", "error", wrapErr)
+				panic(wrapErr)
+			}
+			managedChatHistory = manageOutput.ChatHistory
+		} else {
+			err := workflow.ExecuteActivity(ctx, cha.ManageV3, chatHistory, workspaceId, maxLength).Get(ctx, &managedChatHistory)
+			if err != nil {
+				wrapErr := fmt.Errorf("ManageChatHistory ManageV3 activity returned an error: %w", err)
+				workflow.GetLogger(ctx).Error("ManageChatHistory error shouldn't happen, but it did", "error", wrapErr)
+				panic(wrapErr)
+			}
 		}
 
 		// Extract new refs from the returned (refs-only) history
-		managedLlm2History, ok := managedHistory.History.(*persisted_ai.Llm2ChatHistory)
+		managedLlm2History, ok := managedChatHistory.History.(*persisted_ai.Llm2ChatHistory)
 		if !ok {
-			wrapErr := fmt.Errorf("ManageChatHistory ManageV3 returned unexpected history type: %T", managedHistory.History)
+			wrapErr := fmt.Errorf("ManageChatHistory returned unexpected history type: %T", managedChatHistory.History)
 			workflow.GetLogger(ctx).Error("ManageChatHistory unexpected return type", "error", wrapErr)
 			panic(wrapErr)
 		}

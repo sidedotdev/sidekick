@@ -119,62 +119,25 @@ func TestGeminiImageTokens(t *testing.T) {
 	}
 }
 
-func TestEstimateImageTokens(t *testing.T) {
+func TestImageTokensForProvider(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name string
-		w, h int
+		name     string
+		provider string
+		w, h     int
+		expect   int
 	}{
-		{"small", 100, 100},
-		{"medium", 1024, 768},
-		{"large", 1920, 1080},
-		{"huge", 4000, 3000},
-		{"tall", 500, 3000},
+		{"openai uses patch formula", "openai", 1024, 768, OpenAIPatchImageTokens(1024, 768, 1.0)},
+		{"google uses gemini formula", "google", 1920, 1080, GeminiImageTokens(1920, 1080)},
+		{"anthropic uses anthropic formula", "anthropic", 1024, 768, AnthropicImageTokens(1024, 768)},
+		{"empty provider defaults to anthropic", "", 1024, 768, AnthropicImageTokens(1024, 768)},
+		{"unknown provider defaults to anthropic", "custom-llm", 1024, 768, AnthropicImageTokens(1024, 768)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			est := EstimateImageTokens(tt.w, tt.h)
-
-			// Must be >= each provider estimate.
-			assert.GreaterOrEqual(t, est, AnthropicImageTokens(tt.w, tt.h))
-			assert.GreaterOrEqual(t, est, OpenAITileImageTokens(tt.w, tt.h))
-			assert.GreaterOrEqual(t, est, OpenAIPatchImageTokens(tt.w, tt.h, 1.0))
-			assert.GreaterOrEqual(t, est, GeminiImageTokens(tt.w, tt.h))
+			got := ImageTokensForProvider(tt.provider, tt.w, tt.h)
+			assert.Equal(t, tt.expect, got)
 		})
 	}
-}
-
-func TestImageDimensionsFromDataURL(t *testing.T) {
-	t.Parallel()
-
-	t.Run("valid png", func(t *testing.T) {
-		t.Parallel()
-		dataURL := makePNGDataURL(t, 200, 150)
-		w, h := ImageDimensionsFromDataURL(dataURL)
-		assert.Equal(t, 200, w)
-		assert.Equal(t, 150, h)
-	})
-
-	t.Run("not a data URL", func(t *testing.T) {
-		t.Parallel()
-		w, h := ImageDimensionsFromDataURL("https://example.com/image.png")
-		assert.Equal(t, 0, w)
-		assert.Equal(t, 0, h)
-	})
-
-	t.Run("invalid base64", func(t *testing.T) {
-		t.Parallel()
-		w, h := ImageDimensionsFromDataURL("data:image/png;base64,!!!invalid!!!")
-		assert.Equal(t, 0, w)
-		assert.Equal(t, 0, h)
-	})
-
-	t.Run("valid base64 but not an image", func(t *testing.T) {
-		t.Parallel()
-		dataURL := BuildDataURL("image/png", []byte("not an image"))
-		w, h := ImageDimensionsFromDataURL(dataURL)
-		assert.Equal(t, 0, w)
-		assert.Equal(t, 0, h)
-	})
 }

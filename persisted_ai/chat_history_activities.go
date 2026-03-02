@@ -41,7 +41,7 @@ func (ca *ChatHistoryActivities) ManageV3(
 	originalMessages := deepCopyMessages(llm2History.Llm2Messages())
 
 	messages := llm2History.Llm2Messages()
-	managedMessages, err := ca.ManageLlm2ChatHistory(messages, maxLength)
+	managedMessages, err := ca.ManageLlm2ChatHistory(messages, maxLength, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to manage chat history: %w", err)
 	}
@@ -70,6 +70,63 @@ func (ca *ChatHistoryActivities) ManageV3(
 	}
 
 	return chatHistory, nil
+}
+
+// ManageInput is the input for the ManageV4 activity.
+type ManageInput struct {
+	ChatHistory *ChatHistoryContainer
+	WorkspaceId string
+	MaxLength   int
+	Provider    string
+}
+
+// ManageOutput is the output for the ManageV4 activity.
+type ManageOutput struct {
+	ChatHistory *ChatHistoryContainer
+}
+
+// ManageV4 is like ManageV3 but accepts a provider name for provider-specific
+// image token estimation during chat history management.
+func (ca *ChatHistoryActivities) ManageV4(
+	ctx context.Context,
+	input ManageInput,
+) (*ManageOutput, error) {
+	llm2History, ok := input.ChatHistory.History.(*Llm2ChatHistory)
+	if !ok {
+		return nil, fmt.Errorf("ManageV4 requires Llm2ChatHistory, got %T", input.ChatHistory.History)
+	}
+
+	if err := llm2History.Hydrate(ctx, ca.Storage); err != nil {
+		return nil, fmt.Errorf("failed to hydrate chat history: %w", err)
+	}
+
+	originalRefs := llm2History.Refs()
+	originalMessages := deepCopyMessages(llm2History.Llm2Messages())
+
+	messages := llm2History.Llm2Messages()
+	managedMessages, err := ca.ManageLlm2ChatHistory(messages, input.MaxLength, input.Provider)
+	if err != nil {
+		return nil, fmt.Errorf("failed to manage chat history: %w", err)
+	}
+
+	applyCacheControlBreakpointsLlm2(managedMessages)
+
+	newRefs, changedIndices := preserveRefsForUnchangedMessages(
+		managedMessages,
+		originalMessages,
+		originalRefs,
+	)
+
+	llm2History.SetMessages(managedMessages)
+	llm2History.SetRefs(newRefs)
+	llm2History.SetHydratedWithMessages(managedMessages)
+	llm2History.SetUnpersisted(changedIndices)
+
+	if err := llm2History.Persist(ctx, ca.Storage, NewKsuidGenerator()); err != nil {
+		return nil, fmt.Errorf("failed to persist chat history: %w", err)
+	}
+
+	return &ManageOutput{ChatHistory: input.ChatHistory}, nil
 }
 
 // AppendMessageInput is the input for the AppendMessage activity.
