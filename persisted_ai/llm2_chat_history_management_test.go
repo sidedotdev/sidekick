@@ -1,12 +1,17 @@
 package persisted_ai
 
 import (
+	"bytes"
+	"image"
+	"image/color"
+	"image/png"
 	"strings"
 	"testing"
 
 	"sidekick/llm2"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func textMsg(role llm2.Role, text string) llm2.Message {
@@ -807,8 +812,25 @@ func TestManageLlm2ChatHistory_TruncateOldestFirst(t *testing.T) {
 	assert.NotEmpty(t, toolResp2Text)
 }
 
+func testMakePNGDataURL(t *testing.T, width, height int) string {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: 255, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	require.NoError(t, png.Encode(&buf, img))
+	return llm2.BuildDataURL("image/png", buf.Bytes())
+}
+
 func TestLlm2MessageLength_IncludesImageAndFileURLs(t *testing.T) {
 	t.Parallel()
+
+	fallbackEstimate := llm2.EstimateImageTokens(2560, 1440) * 4
+	smallImgEstimate := llm2.EstimateImageTokens(2, 3) * 4
+	smallPNG := testMakePNGDataURL(t, 2, 3)
 
 	tests := []struct {
 		name     string
@@ -821,14 +843,34 @@ func TestLlm2MessageLength_IncludesImageAndFileURLs(t *testing.T) {
 			expected: 5,
 		},
 		{
-			name: "image URL in content block",
+			name: "image with valid PNG uses token-based estimate",
+			msg: llm2.Message{
+				Role: llm2.RoleUser,
+				Content: []llm2.ContentBlock{
+					{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: smallPNG}},
+				},
+			},
+			expected: smallImgEstimate,
+		},
+		{
+			name: "image with invalid data URL falls back to default dimensions",
 			msg: llm2.Message{
 				Role: llm2.RoleUser,
 				Content: []llm2.ContentBlock{
 					{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: "data:image/png;base64,AAAA"}},
 				},
 			},
-			expected: len("data:image/png;base64,AAAA"),
+			expected: fallbackEstimate,
+		},
+		{
+			name: "image with non-data URL falls back to default dimensions",
+			msg: llm2.Message{
+				Role: llm2.RoleUser,
+				Content: []llm2.ContentBlock{
+					{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: "https://example.com/img.png"}},
+				},
+			},
+			expected: fallbackEstimate,
 		},
 		{
 			name: "file URL in content block",
@@ -852,13 +894,13 @@ func TestLlm2MessageLength_IncludesImageAndFileURLs(t *testing.T) {
 							Name:       "read_image",
 							Content: []llm2.ContentBlock{
 								{Type: llm2.ContentBlockTypeText, Text: "ok"},
-								{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: "data:image/png;base64,CCCC"}},
+								{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: smallPNG}},
 							},
 						},
 					},
 				},
 			},
-			expected: len("ok") + len("data:image/png;base64,CCCC"),
+			expected: len("ok") + smallImgEstimate,
 		},
 		{
 			name: "mixed text and image",
@@ -866,10 +908,10 @@ func TestLlm2MessageLength_IncludesImageAndFileURLs(t *testing.T) {
 				Role: llm2.RoleUser,
 				Content: []llm2.ContentBlock{
 					{Type: llm2.ContentBlockTypeText, Text: "hello"},
-					{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: "data:image/png;base64,DDDD"}},
+					{Type: llm2.ContentBlockTypeImage, Image: &llm2.ImageRef{Url: smallPNG}},
 				},
 			},
-			expected: 5 + len("data:image/png;base64,DDDD"),
+			expected: 5 + smallImgEstimate,
 		},
 	}
 

@@ -26,10 +26,20 @@ func llm2MessageLength(msg llm2.Message) int {
 	return length
 }
 
+// imageCharEstimate returns the estimated character-equivalent length of an
+// image by computing provider-agnostic token estimates from its dimensions.
+func imageCharEstimate(url string) int {
+	w, h := llm2.ImageDimensionsFromDataURL(url)
+	if w <= 0 || h <= 0 {
+		w, h = 2560, 1440
+	}
+	return llm2.EstimateImageTokens(w, h) * 4
+}
+
 func contentBlockLength(block llm2.ContentBlock) int {
 	length := len(block.Text)
 	if block.Image != nil {
-		length += len(block.Image.Url)
+		length += imageCharEstimate(block.Image.Url)
 	}
 	if block.File != nil {
 		length += len(block.File.Url)
