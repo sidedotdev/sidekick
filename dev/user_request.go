@@ -151,8 +151,6 @@ func GetUserMergeApproval(
 						if lastReviewTreeHash != "" {
 							if v >= 5 {
 								newDiffSinceLastReview, err = getOwnChangesSinceReview(dCtx, finalTarget, lastReviewTreeHash, ignoreWhitespace)
-							} else if v >= 4 {
-								newDiffSinceLastReview, err = legacyV4OwnChangesSinceReview(dCtx, finalTarget, lastReviewTreeHash, ignoreWhitespace)
 							} else if v >= 3 {
 								newDiffSinceLastReview, err = legacyOwnChangesSinceReviewV3(dCtx, finalTarget, lastReviewTreeHash, ignoreWhitespace)
 							} else {
