@@ -36,6 +36,7 @@ side-temporal
 side-worker
 side-api
 cli/cli
+cmd/gotestreport/gotestreport
 libusearch_c.a
 local-temporal-db*
 .aider*
