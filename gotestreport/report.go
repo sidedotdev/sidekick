@@ -122,6 +122,8 @@ func (s *Streamer) ProcessEvent(ev TestEvent) {
 			// Package failed
 			pr.status = statusFail
 			pr.elapsed = ev.Elapsed
+			// Flush buffered output for tests that never got a terminal event (e.g. timeout)
+			s.flushRemainingTestOutput(pr)
 			// Flush any remaining package-level output
 			s.flushPackageOutput(pr)
 		} else {
@@ -187,6 +189,23 @@ func (s *Streamer) flushTestOutput(pr *packageResult, test string) {
 		}
 	}
 	delete(s.testOutput, key)
+}
+
+func (s *Streamer) flushRemainingTestOutput(pr *packageResult) {
+	prefix := pr.name + "/"
+	for key, lines := range s.testOutput {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if len(lines) == 0 {
+			continue
+		}
+		s.writePackageHeader(pr)
+		for _, line := range lines {
+			fmt.Fprint(s.out, line)
+		}
+		delete(s.testOutput, key)
+	}
 }
 
 func (s *Streamer) flushPackageOutput(pr *packageResult) {
@@ -372,6 +391,9 @@ func formatPackageLine(name string, pr *packageResult) string {
 		parts = append(parts, fmt.Sprintf("%d skipped", pr.testsSkipped))
 	}
 
+	if pr.status == statusFail && pr.testsFailed == 0 {
+		parts = append(parts, "package error (timeout/crash)")
+	}
 	counts := strings.Join(parts, ", ")
 	if pr.cached {
 		counts += " (cached)"

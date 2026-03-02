@@ -13,6 +13,7 @@ import (
 	"sidekick/common"
 	sidekick_worker "sidekick/worker"
 
+	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
@@ -52,8 +53,13 @@ func loadBlacklist() map[string]struct{} {
 	return blacklist
 }
 
-func listRecentRunningWorkflows(ctx context.Context, c client.Client, limit int) ([]string, error) {
-	var workflowIDs []string
+type listedWorkflow struct {
+	id     string
+	status enums.WorkflowExecutionStatus
+}
+
+func listRecentRunningWorkflows(ctx context.Context, c client.Client, limit int) ([]listedWorkflow, error) {
+	var results []listedWorkflow
 	var nextPageToken []byte
 
 	for {
@@ -65,9 +71,12 @@ func listRecentRunningWorkflows(ctx context.Context, c client.Client, limit int)
 			return nil, err
 		}
 		for _, exec := range resp.Executions {
-			workflowIDs = append(workflowIDs, exec.Execution.WorkflowId)
-			if len(workflowIDs) >= limit {
-				return workflowIDs, nil
+			results = append(results, listedWorkflow{
+				id:     exec.Execution.WorkflowId,
+				status: exec.Status,
+			})
+			if len(results) >= limit {
+				return results, nil
 			}
 		}
 		if len(resp.NextPageToken) == 0 {
@@ -75,7 +84,7 @@ func listRecentRunningWorkflows(ctx context.Context, c client.Client, limit int)
 		}
 		nextPageToken = resp.NextPageToken
 	}
-	return workflowIDs, nil
+	return results, nil
 }
 
 // TestReplayRunningWorkflows connects to the local Temporal server, fetches
@@ -114,25 +123,37 @@ func TestReplayRunningWorkflows(t *testing.T) {
 	if fetchLimit < maxWorkflowsToReplay*2 {
 		fetchLimit = maxWorkflowsToReplay * 2
 	}
-	workflowIDs, err := listRecentRunningWorkflows(ctx, c, fetchLimit)
+	listed, err := listRecentRunningWorkflows(ctx, c, fetchLimit)
 	if err != nil {
 		t.Fatalf("Failed to list running workflows: %v", err)
 	}
 
+	statusCounts := make(map[enums.WorkflowExecutionStatus]int)
+	for _, wf := range listed {
+		statusCounts[wf.status]++
+	}
+	t.Logf("Fetched %d workflows from visibility query; status breakdown: %v", len(listed), statusCounts)
+	if nonRunning := len(listed) - statusCounts[enums.WORKFLOW_EXECUTION_STATUS_RUNNING]; nonRunning > 0 {
+		t.Logf("WARNING: %d/%d workflows returned by Running query were not actually Running", nonRunning, len(listed))
+	}
+
 	var filtered []string
-	for _, id := range workflowIDs {
-		if _, ok := blacklist[id]; ok {
-			t.Logf("Skipping blacklisted workflow: %s", id)
+	for _, wf := range listed {
+		if wf.status != enums.WORKFLOW_EXECUTION_STATUS_RUNNING {
 			continue
 		}
-		filtered = append(filtered, id)
+		if _, ok := blacklist[wf.id]; ok {
+			t.Logf("Skipping blacklisted workflow: %s", wf.id)
+			continue
+		}
+		filtered = append(filtered, wf.id)
 		if len(filtered) >= maxWorkflowsToReplay {
 			break
 		}
 	}
 
 	if len(filtered) == 0 {
-		t.Logf("No running workflows to replay (fetched: %d, all blacklisted or none found)", len(workflowIDs))
+		t.Logf("No running workflows to replay (fetched: %d, all blacklisted or non-running)", len(listed))
 		return
 	}
 
@@ -140,8 +161,18 @@ func TestReplayRunningWorkflows(t *testing.T) {
 
 	// Fetch all histories concurrently, then replay concurrently in subtests.
 	type historyResult struct {
-		id  string
-		err error
+		id      string
+		err     error
+		skipped bool
+	}
+
+	terminalEventTypes := map[enums.EventType]bool{
+		enums.EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED:        true,
+		enums.EVENT_TYPE_WORKFLOW_EXECUTION_FAILED:           true,
+		enums.EVENT_TYPE_WORKFLOW_EXECUTION_TIMED_OUT:        true,
+		enums.EVENT_TYPE_WORKFLOW_EXECUTION_CANCELED:         true,
+		enums.EVENT_TYPE_WORKFLOW_EXECUTION_TERMINATED:       true,
+		enums.EVENT_TYPE_WORKFLOW_EXECUTION_CONTINUED_AS_NEW: true,
 	}
 
 	var mu sync.Mutex
@@ -159,6 +190,11 @@ func TestReplayRunningWorkflows(t *testing.T) {
 				histories[workflowID] = &historyResult{id: workflowID, err: err}
 				return
 			}
+			// Guard against workflows that completed between listing and history fetch.
+			if events := hist.Events; len(events) > 0 && terminalEventTypes[events[len(events)-1].EventType] {
+				histories[workflowID] = &historyResult{id: workflowID, skipped: true}
+				return
+			}
 			replayer := worker.NewWorkflowReplayer()
 			sidekick_worker.RegisterWorkflows(replayer)
 			replayErr := replayer.ReplayWorkflowHistory(nil, hist)
@@ -172,6 +208,9 @@ func TestReplayRunningWorkflows(t *testing.T) {
 		result := histories[id]
 		t.Run(id, func(t *testing.T) {
 			t.Parallel()
+			if result.skipped {
+				t.Skipf("Workflow %s completed before replay; skipping", result.id)
+			}
 			if result.err != nil {
 				t.Errorf("Replay failed for workflow %s: %v", result.id, result.err)
 			}
