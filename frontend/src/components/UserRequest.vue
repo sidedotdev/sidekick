@@ -148,6 +148,21 @@
       <pre>{{ flowAction.actionParams.command }}</pre>
     </div>
     <template v-if="flowAction.actionParams.mergeApprovalInfo?.diff">
+      <div class="diff-options-row">
+        <label for="diffScopeNonPending">Show</label>
+        <Select
+          id="diffScopeNonPending"
+          v-model="diffScope"
+          :options="diffScopeOptions"
+          optionLabel="label"
+          optionValue="value"
+        ></Select>
+        <DiffViewOptions
+          v-model:ignoreWhitespace="ignoreWhitespace"
+          v-model:diffMode="diffMode"
+          :canGetNewDiffs="false"
+        />
+      </div>
       <div v-if="showEmptyDiffMessage" class="empty-diff-message">
         No changes since last review
       </div>
