@@ -102,24 +102,49 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		params.System = systemMessages
 	}
 
-	// Enable extended thinking if reasoning effort is specified
-	if options.Params.ReasoningEffort != "" {
-		budgetTokens := int64(10000) // default
-		switch options.Params.ReasoningEffort {
+	resolvedEffort := resolveAnthropicReasoningEffort(options.Params.ReasoningEffort, model)
+
+	if anthropicSupportsAdaptiveThinking(model) && resolvedEffort != "" {
+		// Adaptive-capable models: thinking and effort are orthogonal.
+		// Enable adaptive thinking and set effort via OutputConfig.
+		adaptive := anthropic.NewThinkingConfigAdaptiveParam()
+		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
+		params.OutputConfig = anthropic.OutputConfigParam{
+			Effort: anthropic.OutputConfigEffort(resolvedEffort),
+		}
+	} else if anthropicSupportsAdaptiveThinking(model) && resolvedEffort == "" && options.Params.ReasoningEffort == "" {
+		// Adaptive-capable model with no explicit effort: enable adaptive thinking at defaults.
+		adaptive := anthropic.NewThinkingConfigAdaptiveParam()
+		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
+	} else if resolvedEffort != "" {
+		// Non-adaptive models (or adaptive with future effort levels):
+		// use budget-based thinking.
+		budgetTokens := int64(10000) // default for unrecognized effort levels
+		useAdaptive := false
+		switch resolvedEffort {
 		case "low":
 			budgetTokens = 5000
 		case "medium":
 			budgetTokens = 10000
 		case "high":
 			budgetTokens = 20000
+		case "max":
+			useAdaptive = true
 		}
-		// max_tokens must be greater than thinking.budget_tokens
-		if int64(effectiveMaxTokens) <= budgetTokens {
-			effectiveMaxTokens = int(budgetTokens) + 1000
-			params.MaxTokens = int64(effectiveMaxTokens)
+		if useAdaptive {
+			adaptive := anthropic.NewThinkingConfigAdaptiveParam()
+			params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
+		} else {
+			// max_tokens must be greater than thinking.budget_tokens
+			if int64(effectiveMaxTokens) <= budgetTokens {
+				effectiveMaxTokens = int(budgetTokens) + 1000
+				params.MaxTokens = int64(effectiveMaxTokens)
+			}
+			params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budgetTokens)
 		}
-		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budgetTokens)
 	}
+	// When resolvedEffort is "" and ReasoningEffort was "lowest", thinking is
+	// intentionally skipped (no params.Thinking set).
 
 	stream := client.Messages.NewStreaming(ctx, params)
 
@@ -263,14 +288,22 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		CacheWriteInputTokens: int(finalMessage.Usage.CacheCreationInputTokens),
 	}
 
+	// Report the resolved effort. When "lowest" resolved to "" (thinking off),
+	// report "off" so consumers know thinking was intentionally skipped.
+	reportedEffort := resolvedEffort
+	if options.Params.ReasoningEffort == "lowest" && resolvedEffort == "" {
+		reportedEffort = "off"
+	}
+
 	response := &MessageResponse{
-		Id:           finalMessage.ID,
-		Model:        responseModel,
-		Provider:     options.Params.Provider,
-		Output:       output,
-		StopReason:   string(finalMessage.StopReason),
-		StopSequence: finalMessage.StopSequence,
-		Usage:        usage,
+		Id:              finalMessage.ID,
+		Model:           responseModel,
+		Provider:        options.Params.Provider,
+		Output:          output,
+		StopReason:      string(finalMessage.StopReason),
+		StopSequence:    finalMessage.StopSequence,
+		Usage:           usage,
+		ReasoningEffort: reportedEffort,
 	}
 
 	return response, nil

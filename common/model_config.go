@@ -7,7 +7,7 @@ type ModelConfig struct {
 	Provider string `koanf:"provider" json:"provider"`
 	Model    string `koanf:"model,omitempty" json:"model,omitempty"`
 	// Optional hint for models that support dedicated reasoning modes.
-	// Allowed values: minimal | low | medium | high
+	// Allowed values: lowest | minimal | low | medium | high | highest
 	ReasoningEffort string `koanf:"reasoning_effort" json:"reasoningEffort,omitempty"`
 	// Optional maximum number of tokens to generate. Values <= 0 are treated as unset.
 	MaxTokens int `koanf:"max_tokens" json:"maxTokens,omitempty"`

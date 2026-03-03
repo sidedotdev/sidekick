@@ -80,8 +80,9 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 		params.ParallelToolCalls = param.NewOpt(*options.Params.ParallelToolCalls)
 	}
 
-	if options.Params.ReasoningEffort != "" {
-		params.ReasoningEffort = shared.ReasoningEffort(options.Params.ReasoningEffort)
+	actualReasoningEffort := resolveOpenAIReasoningEffort(options.Params.ReasoningEffort, model)
+	if actualReasoningEffort != "" {
+		params.ReasoningEffort = shared.ReasoningEffort(actualReasoningEffort)
 	}
 
 	if len(options.Params.Tools) > 0 {
@@ -264,7 +265,7 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 		Output:          outputMessage,
 		StopReason:      stopReason,
 		Usage:           usage,
-		ReasoningEffort: options.Params.ReasoningEffort,
+		ReasoningEffort: actualReasoningEffort,
 	}, nil
 }
 

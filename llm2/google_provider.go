@@ -84,25 +84,31 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 		}
 	}
 
+	resolvedGoogleEffort := resolveGoogleReasoningEffort(options.Params.ReasoningEffort, model)
 	var actualReasoningEffort string
 	if isReasoningModel {
-		config.ThinkingConfig = &genai.ThinkingConfig{
-			IncludeThoughts: true,
-		}
-		if options.Params.ReasoningEffort != "" {
-			isLegacyThinkingBudget := strings.Contains(model, "2.5")
-			if isLegacyThinkingBudget {
-				budget, ok := googleLegacyThinkingBudgetLlm2[strings.ToLower(options.Params.ReasoningEffort)]
-				if !ok {
-					log.Warn().Str("reasoningEffort", options.Params.ReasoningEffort).
-						Msg("unknown reasoning effort for legacy thinking budget model; using default")
+		if resolvedGoogleEffort == "off" {
+			// "lowest" resolved to "off": skip thinking entirely
+			actualReasoningEffort = "off"
+		} else {
+			config.ThinkingConfig = &genai.ThinkingConfig{
+				IncludeThoughts: true,
+			}
+			if resolvedGoogleEffort != "" {
+				isLegacyThinkingBudget := strings.Contains(model, "2.5")
+				if isLegacyThinkingBudget {
+					if resolvedGoogleEffort == "max" {
+						budget := int32(24576)
+						config.ThinkingConfig.ThinkingBudget = &budget
+					} else if budget, ok := googleLegacyThinkingBudgetLlm2[strings.ToLower(resolvedGoogleEffort)]; ok {
+						config.ThinkingConfig.ThinkingBudget = &budget
+					} else {
+						config.ThinkingConfig.ThinkingLevel = genai.ThinkingLevel(strings.ToUpper(resolvedGoogleEffort))
+					}
 				} else {
-					config.ThinkingConfig.ThinkingBudget = &budget
-					actualReasoningEffort = options.Params.ReasoningEffort
+					config.ThinkingConfig.ThinkingLevel = genai.ThinkingLevel(strings.ToUpper(resolvedGoogleEffort))
 				}
-			} else {
-				config.ThinkingConfig.ThinkingLevel = genai.ThinkingLevel(strings.ToUpper(options.Params.ReasoningEffort))
-				actualReasoningEffort = options.Params.ReasoningEffort
+				actualReasoningEffort = resolvedGoogleEffort
 			}
 		}
 	}
