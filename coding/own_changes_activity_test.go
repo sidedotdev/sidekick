@@ -101,44 +101,6 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 			"merge-introduced file should be filtered")
 	})
 
-	t.Run("fully_reverted_change_not_shown", func(t *testing.T) {
-		t.Parallel()
-
-		repoDir := setupTestGitRepo(t)
-		ctx := context.Background()
-
-		createFileAndCommit(t, repoDir, "config.yml", "key: value1\n", "initial commit")
-
-		runGit(t, repoDir, "checkout", "-b", "feature")
-
-		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
-		require.NoError(t, err)
-		envContainer := env.EnvContainer{Env: devEnv}
-
-		err = os.WriteFile(filepath.Join(repoDir, "config.yml"), []byte("key: changed\n"), 0644)
-		require.NoError(t, err)
-		runGit(t, repoDir, "add", "config.yml")
-		runGit(t, repoDir, "commit", "-m", "modify config")
-
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
-		require.NoError(t, err)
-
-		err = os.WriteFile(filepath.Join(repoDir, "config.yml"), []byte("key: value1\n"), 0644)
-		require.NoError(t, err)
-		runGit(t, repoDir, "add", "config.yml")
-		runGit(t, repoDir, "commit", "-m", "revert config")
-
-		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
-			EnvContainer:   envContainer,
-			BaseBranch:     "main",
-			LastReviewTree: lastReviewTreeHash,
-		})
-		require.NoError(t, err)
-
-		assert.Empty(t, result,
-			"fully reverted change should produce empty diff")
-	})
-
 	t.Run("partial_revert_preserved", func(t *testing.T) {
 		t.Parallel()
 
@@ -267,8 +229,12 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		t.Logf("result:\n%s", result)
 
-		assert.NotContains(t, result, "config.yml",
-			"file reverted to match main should be filtered out")
+		assert.Contains(t, result, "config.yml",
+			"reverted file should appear in diff")
+		assert.Contains(t, result, "key: modified",
+			"previously reviewed content should appear as removed")
+		assert.Contains(t, result, "key: original",
+			"reverted content should appear as added")
 	})
 
 	t.Run("convergent_change_kept", func(t *testing.T) {
@@ -569,6 +535,52 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 			"removed file should appear in diff")
 		assert.Contains(t, result, "func Staged()",
 			"removed content should appear in diff")
+		assert.Contains(t, result, "+++ /dev/null",
+			"diff should show the file was deleted")
+	})
+
+	t.Run("staged_tracked_file_changes_then_reverted", func(t *testing.T) {
+		t.Parallel()
+
+		repoDir := setupTestGitRepo(t)
+		ctx := context.Background()
+
+		createFileAndCommit(t, repoDir, "tracked.go",
+			"package tracked\n\nfunc Original() {}\n", "initial commit")
+
+		runGit(t, repoDir, "checkout", "-b", "feature")
+
+		// Modify a tracked file and stage it (but don't commit)
+		err := os.WriteFile(filepath.Join(repoDir, "tracked.go"),
+			[]byte("package tracked\n\nfunc Modified() {}\n"), 0644)
+		require.NoError(t, err)
+		runGit(t, repoDir, "add", "tracked.go")
+
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		// WriteTree captures the index with the staged modification
+		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		require.NoError(t, err)
+
+		// Revert both index and working tree back to the committed content
+		runGit(t, repoDir, "checkout", "HEAD", "--", "tracked.go")
+
+		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
+			EnvContainer:   envContainer,
+			BaseBranch:     "main",
+			LastReviewTree: lastReviewTreeHash,
+		})
+		require.NoError(t, err)
+		t.Logf("result:\n%s", result)
+
+		assert.Contains(t, result, "tracked.go",
+			"reverted tracked file should appear in diff")
+		assert.Contains(t, result, "func Original()",
+			"original content should appear as added back")
+		assert.Contains(t, result, "func Modified()",
+			"modified content should appear as removed")
 	})
 
 	t.Run("rebase_shared_file_hunk_level_filtering", func(t *testing.T) {
