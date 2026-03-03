@@ -442,13 +442,11 @@ func generateDevRequirements(dCtx DevContext, chatHistory *persisted_ai.ChatHist
 	*/
 
 	options := llm2.Options{
-		Params: llm2.Params{
-			Tools: tools,
-			ToolChoice: llm.ToolChoice{
-				Type: llm.ToolChoiceTypeAuto, // TODO test with llm.ToolChoiceTypeRequired
-			},
-			ModelConfig: modelConfig,
+		Tools: tools,
+		ToolChoice: llm.ToolChoice{
+			Type: llm.ToolChoiceTypeAuto, // TODO test with llm.ToolChoiceTypeRequired
 		},
+		ModelConfig: modelConfig,
 	}
 	return TrackedToolChat(dCtx, "dev_requirements", options, chatHistory)
 }
@@ -471,8 +469,8 @@ func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options, c
 	actionCtx := dCtx.NewActionContext("generate." + actionType)
 	actionCtx.ActionParams = streamInput.ActionParams()
 	return Track(actionCtx, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
-		if options.Params.ModelConfig.Provider == "" {
-			options.Params.ModelConfig = dCtx.GetModelConfig(common.DefaultKey, 0, "default")
+		if options.ModelConfig.Provider == "" {
+			options.ModelConfig = dCtx.GetModelConfig(common.DefaultKey, 0, "default")
 			streamInput.Options = options
 		}
 		streamInput.FlowId = workflow.GetInfo(dCtx).WorkflowExecution.ID

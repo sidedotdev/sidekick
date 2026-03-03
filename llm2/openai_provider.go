@@ -28,7 +28,7 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 	messages := request.Messages
 	options := request.Options
 
-	providerNameNormalized := options.Params.ModelConfig.NormalizedProviderName()
+	providerNameNormalized := options.ModelConfig.NormalizedProviderName()
 	token, err := request.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
 	if err != nil {
 		return nil, err
@@ -46,7 +46,7 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 	}
 	client := openai.NewClient(clientOptions...)
 
-	model := options.Params.Model
+	model := options.Model
 	if model == "" {
 		if p.DefaultModel != "" {
 			model = p.DefaultModel
@@ -68,26 +68,26 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 		},
 	}
 
-	if options.Params.Temperature != nil {
-		params.Temperature = openai.Float(float64(*options.Params.Temperature))
+	if options.Temperature != nil {
+		params.Temperature = openai.Float(float64(*options.Temperature))
 	}
 
-	if options.Params.MaxTokens > 0 {
-		params.MaxCompletionTokens = param.NewOpt(int64(options.Params.MaxTokens))
+	if options.MaxTokens > 0 {
+		params.MaxCompletionTokens = param.NewOpt(int64(options.MaxTokens))
 	}
 
-	if options.Params.ParallelToolCalls != nil {
-		params.ParallelToolCalls = param.NewOpt(*options.Params.ParallelToolCalls)
+	if options.ParallelToolCalls != nil {
+		params.ParallelToolCalls = param.NewOpt(*options.ParallelToolCalls)
 	}
 
-	if options.Params.ReasoningEffort != "" {
-		params.ReasoningEffort = shared.ReasoningEffort(options.Params.ReasoningEffort)
+	if options.ReasoningEffort != "" {
+		params.ReasoningEffort = shared.ReasoningEffort(options.ReasoningEffort)
 	}
 
-	if len(options.Params.Tools) > 0 {
-		toolsToUse := options.Params.Tools
-		if options.Params.ToolChoice.Type == common.ToolChoiceTypeTool {
-			toolsToUse = filterToolsByName(options.Params.Tools, options.Params.ToolChoice.Name)
+	if len(options.Tools) > 0 {
+		toolsToUse := options.Tools
+		if options.ToolChoice.Type == common.ToolChoiceTypeTool {
+			toolsToUse = filterToolsByName(options.Tools, options.ToolChoice.Name)
 		}
 
 		tools, err := openaiChatFromTools(toolsToUse)
@@ -95,11 +95,11 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 			return nil, fmt.Errorf("failed to convert tools: %w", err)
 		}
 		params.Tools = tools
-		params.ToolChoice = openaiChatFromToolChoice(options.Params.ToolChoice, toolsToUse)
+		params.ToolChoice = openaiChatFromToolChoice(options.ToolChoice, toolsToUse)
 	}
 
 	var extraBodyOptions []option.RequestOption
-	for key, value := range options.Params.ExtraBody {
+	for key, value := range options.ExtraBody {
 		extraBodyOptions = append(extraBodyOptions, option.WithJSONSet(key, value))
 	}
 
@@ -260,11 +260,11 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 
 	return &MessageResponse{
 		Model:           responseModel,
-		Provider:        options.Params.Provider,
+		Provider:        options.Provider,
 		Output:          outputMessage,
 		StopReason:      stopReason,
 		Usage:           usage,
-		ReasoningEffort: options.Params.ReasoningEffort,
+		ReasoningEffort: options.ReasoningEffort,
 	}, nil
 }
 

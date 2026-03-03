@@ -41,11 +41,9 @@ func TestOpenAIResponsesProvider_Unauthorized(t *testing.T) {
 	}
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "openai",
-				Model:    "gpt-5-codex",
-			},
+		ModelConfig: common.ModelConfig{
+			Provider: "openai",
+			Model:    "gpt-5-codex",
 		},
 	}
 
@@ -100,14 +98,12 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 	})
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "openai",
-				Model:    "gpt-5-mini",
-			},
-			Tools:      []*common.Tool{mockTool},
-			ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
+		ModelConfig: common.ModelConfig{
+			Provider: "openai",
+			Model:    "gpt-5-mini",
 		},
+		Tools:      []*common.Tool{mockTool},
+		ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
 	}
 
 	eventChan := make(chan Event, 100)
@@ -289,12 +285,10 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 	})
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider:        "openai",
-				Model:           "gpt-5.2",
-				ReasoningEffort: "low",
-			},
+		ModelConfig: common.ModelConfig{
+			Provider:        "openai",
+			Model:           "gpt-5.2",
+			ReasoningEffort: "low",
 		},
 	}
 
@@ -630,25 +624,23 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 	})
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "openai",
-				Model:    defaultModel,
+		ModelConfig: common.ModelConfig{
+			Provider: "openai",
+			Model:    defaultModel,
+		},
+		Tools: []*common.Tool{
+			{
+				Name:        "read_image",
+				Description: "Reads an image file and returns its content",
+				Parameters: (&jsonschema.Reflector{DoNotReference: true}).Reflect(&struct {
+					FilePath string `json:"file_path" jsonschema:"description=Path to the image file"`
+				}{}),
 			},
-			Tools: []*common.Tool{
-				{
-					Name:        "read_image",
-					Description: "Reads an image file and returns its content",
-					Parameters: (&jsonschema.Reflector{DoNotReference: true}).Reflect(&struct {
-						FilePath string `json:"file_path" jsonschema:"description=Path to the image file"`
-					}{}),
-				},
-				reportTextTool,
-			},
-			ToolChoice: common.ToolChoice{
-				Type: common.ToolChoiceTypeTool,
-				Name: "report_text",
-			},
+			reportTextTool,
+		},
+		ToolChoice: common.ToolChoice{
+			Type: common.ToolChoiceTypeTool,
+			Name: "report_text",
 		},
 	}
 

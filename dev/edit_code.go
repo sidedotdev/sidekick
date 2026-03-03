@@ -560,13 +560,11 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	}
 
 	options := llm2.Options{
-		Params: llm2.Params{
-			Tools: tools,
-			ToolChoice: llm.ToolChoice{
-				Type: llm.ToolChoiceTypeAuto,
-			},
-			ModelConfig: codingModelConfig,
+		Tools: tools,
+		ToolChoice: llm.ToolChoice{
+			Type: llm.ToolChoiceTypeAuto,
 		},
+		ModelConfig: codingModelConfig,
 	}
 
 	return options

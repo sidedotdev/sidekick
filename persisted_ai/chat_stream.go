@@ -37,11 +37,11 @@ func ExecuteChatStream(
 		ToolChatOptions: llm.ToolChatOptions{
 			Secrets: streamInput.Secrets,
 			Params: llm.ToolChatParams{
-				Tools:             streamInput.Options.Params.Tools,
-				ToolChoice:        streamInput.Options.Params.ToolChoice,
-				Temperature:       streamInput.Options.Params.Temperature,
-				ModelConfig:       streamInput.Options.Params.ModelConfig,
-				ParallelToolCalls: streamInput.Options.Params.ParallelToolCalls,
+				Tools:             streamInput.Options.Tools,
+				ToolChoice:        streamInput.Options.ToolChoice,
+				Temperature:       streamInput.Options.Temperature,
+				ModelConfig:       streamInput.Options.ModelConfig,
+				ParallelToolCalls: streamInput.Options.ParallelToolCalls,
 			},
 		},
 		WorkspaceId:  streamInput.WorkspaceId,

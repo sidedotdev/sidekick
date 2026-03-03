@@ -18,12 +18,10 @@ func newTestStreamInput(options llm2.Options) StreamInput {
 func TestStreamInputActionParams_OmitsReasoningEffortWhenEmpty(t *testing.T) {
 	t.Parallel()
 	si := newTestStreamInput(llm2.Options{
-		Params: llm2.Params{
-			Tools: []*common.Tool{},
-			ModelConfig: common.ModelConfig{
-				Provider: "openai",
-				Model:    "gpt-4",
-			},
+		Tools: []*common.Tool{},
+		ModelConfig: common.ModelConfig{
+			Provider: "openai",
+			Model:    "gpt-4",
 		},
 	})
 
@@ -55,13 +53,11 @@ func TestStreamInputActionParams_IncludesReasoningEffortWhenSet(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			si := newTestStreamInput(llm2.Options{
-				Params: llm2.Params{
-					Tools: []*common.Tool{},
-					ModelConfig: common.ModelConfig{
-						Provider:        "openai",
-						Model:           "o1",
-						ReasoningEffort: tt.reasoningEffort,
-					},
+				Tools: []*common.Tool{},
+				ModelConfig: common.ModelConfig{
+					Provider:        "openai",
+					Model:           "o1",
+					ReasoningEffort: tt.reasoningEffort,
 				},
 			})
 
@@ -87,12 +83,10 @@ func TestStreamInputActionParams_IncludesReasoningEffortWhenSet(t *testing.T) {
 func TestStreamInputActionParams_OmitsMaxTokensWhenUnset(t *testing.T) {
 	t.Parallel()
 	si := newTestStreamInput(llm2.Options{
-		Params: llm2.Params{
-			Tools: []*common.Tool{},
-			ModelConfig: common.ModelConfig{
-				Provider: "anthropic",
-				Model:    "claude-3-5-sonnet-latest",
-			},
+		Tools: []*common.Tool{},
+		ModelConfig: common.ModelConfig{
+			Provider: "anthropic",
+			Model:    "claude-3-5-sonnet-latest",
 		},
 	})
 
@@ -124,13 +118,11 @@ func TestStreamInputActionParams_IncludesMaxTokensWhenSet(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			si := newTestStreamInput(llm2.Options{
-				Params: llm2.Params{
-					Tools:     []*common.Tool{},
-					MaxTokens: tt.maxTokens,
-					ModelConfig: common.ModelConfig{
-						Provider: "anthropic",
-						Model:    "claude-3-5-sonnet-latest",
-					},
+				Tools:     []*common.Tool{},
+				MaxTokens: tt.maxTokens,
+				ModelConfig: common.ModelConfig{
+					Provider: "anthropic",
+					Model:    "claude-3-5-sonnet-latest",
 				},
 			})
 
@@ -156,12 +148,10 @@ func TestStreamInputActionParams_IncludesMaxTokensWhenSet(t *testing.T) {
 func TestStreamInputActionParams_OmitsServiceTierWhenEmpty(t *testing.T) {
 	t.Parallel()
 	si := newTestStreamInput(llm2.Options{
-		Params: llm2.Params{
-			Tools: []*common.Tool{},
-			ModelConfig: common.ModelConfig{
-				Provider: "openai",
-				Model:    "gpt-4",
-			},
+		Tools: []*common.Tool{},
+		ModelConfig: common.ModelConfig{
+			Provider: "openai",
+			Model:    "gpt-4",
 		},
 	})
 
@@ -193,13 +183,11 @@ func TestStreamInputActionParams_IncludesServiceTierWhenSet(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			si := newTestStreamInput(llm2.Options{
-				Params: llm2.Params{
-					Tools: []*common.Tool{},
-					ModelConfig: common.ModelConfig{
-						Provider:    "openai",
-						Model:       "gpt-4",
-						ServiceTier: tt.serviceTier,
-					},
+				Tools: []*common.Tool{},
+				ModelConfig: common.ModelConfig{
+					Provider:    "openai",
+					Model:       "gpt-4",
+					ServiceTier: tt.serviceTier,
 				},
 			})
 
@@ -226,12 +214,10 @@ func TestStreamInputActionParams_IncludesMessagesAndSecretType(t *testing.T) {
 	t.Parallel()
 	si := StreamInput{
 		Options: llm2.Options{
-			Params: llm2.Params{
-				Tools: []*common.Tool{},
-				ModelConfig: common.ModelConfig{
-					Provider: "openai",
-					Model:    "gpt-4",
-				},
+			Tools: []*common.Tool{},
+			ModelConfig: common.ModelConfig{
+				Provider: "openai",
+				Model:    "gpt-4",
 			},
 		},
 		Secrets:     secret_manager.SecretManagerContainer{SecretManager: secret_manager.MockSecretManager{}},

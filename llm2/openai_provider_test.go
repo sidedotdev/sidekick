@@ -35,11 +35,9 @@ func TestOpenAIProvider_Unauthorized(t *testing.T) {
 	}
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "openai",
-				Model:    "gpt-4.1-nano-2025-04-14",
-			},
+		ModelConfig: common.ModelConfig{
+			Provider: "openai",
+			Model:    "gpt-4.1-nano-2025-04-14",
 		},
 	}
 
@@ -85,11 +83,9 @@ func TestOpenAIProvider_WrapErrorBodyOnly(t *testing.T) {
 	}
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "openai",
-				Model:    "gpt-4.1-nano",
-			},
+		ModelConfig: common.ModelConfig{
+			Provider: "openai",
+			Model:    "gpt-4.1-nano",
 		},
 	}
 
@@ -156,11 +152,9 @@ func TestOpenAIProvider_UsageOnChunkWithChoices(t *testing.T) {
 	}
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "test",
-				Model:    "test-model",
-			},
+		ModelConfig: common.ModelConfig{
+			Provider: "test",
+			Model:    "test-model",
 		},
 	}
 
@@ -228,11 +222,9 @@ func TestOpenAIProvider_UsageOnChunkWithChoices_OpenAISemantics(t *testing.T) {
 	}
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "test",
-				Model:    "test-model",
-			},
+		ModelConfig: common.ModelConfig{
+			Provider: "test",
+			Model:    "test-model",
 		},
 	}
 
@@ -303,11 +295,9 @@ func TestOpenAIProvider_UsageOnSeparateFinalChunk(t *testing.T) {
 	}
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "test",
-				Model:    "gpt-4",
-			},
+		ModelConfig: common.ModelConfig{
+			Provider: "test",
+			Model:    "gpt-4",
 		},
 	}
 
@@ -371,15 +361,13 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 	})
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "openai",
-				Model:    "gpt-4.1-nano-2025-04-14",
-			},
-			Temperature: utils.Ptr(float32(0)),
-			Tools:       []*common.Tool{mockTool},
-			ToolChoice:  common.ToolChoice{Type: common.ToolChoiceTypeAuto},
+		ModelConfig: common.ModelConfig{
+			Provider: "openai",
+			Model:    "gpt-4.1-nano-2025-04-14",
 		},
+		Temperature: utils.Ptr(float32(0)),
+		Tools:       []*common.Tool{mockTool},
+		ToolChoice:  common.ToolChoice{Type: common.ToolChoiceTypeAuto},
 	}
 
 	eventChan := make(chan Event, 100)
@@ -557,11 +545,9 @@ func TestOpenAIProvider_ImageIntegration(t *testing.T) {
 	})
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "openai",
-				Model:    "gpt-5-mini",
-			},
+		ModelConfig: common.ModelConfig{
+			Provider: "openai",
+			Model:    "gpt-5-mini",
 		},
 	}
 
@@ -668,19 +654,17 @@ func TestOpenAIProvider_ToolResultImageIntegration(t *testing.T) {
 	})
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "openai",
-				Model:    "gpt-5-mini",
-			},
-			Tools: []*common.Tool{
-				{
-					Name:        "read_image",
-					Description: "Reads an image file and returns its content",
-					Parameters: (&jsonschema.Reflector{DoNotReference: true}).Reflect(&struct {
-						FilePath string `json:"file_path" jsonschema:"description=Path to the image file"`
-					}{}),
-				},
+		ModelConfig: common.ModelConfig{
+			Provider: "openai",
+			Model:    "gpt-5-mini",
+		},
+		Tools: []*common.Tool{
+			{
+				Name:        "read_image",
+				Description: "Reads an image file and returns its content",
+				Parameters: (&jsonschema.Reflector{DoNotReference: true}).Reflect(&struct {
+					FilePath string `json:"file_path" jsonschema:"description=Path to the image file"`
+				}{}),
 			},
 		},
 	}

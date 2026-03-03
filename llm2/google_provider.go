@@ -34,7 +34,7 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 	messages := request.Messages
 	options := request.Options
 
-	providerName := options.Params.ModelConfig.Provider
+	providerName := options.ModelConfig.Provider
 	apiKey, err := request.SecretManager.GetSecret(googleApiKeySecretName)
 	if err != nil {
 		apiKey, err = request.SecretManager.GetSecret(geminiApiKeySecretName)
@@ -54,11 +54,11 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 	}
 
 	model := googleDefaultModel
-	if options.Params.Model != "" {
-		model = options.Params.Model
+	if options.Model != "" {
+		model = options.Model
 	}
 
-	modelInfo, _ := common.GetModel(options.Params.Provider, model)
+	modelInfo, _ := common.GetModel(options.Provider, model)
 	isReasoningModel := modelInfo != nil && modelInfo.Reasoning
 
 	contents, err := googleFromLlm2Messages(messages, isReasoningModel, model)
@@ -68,18 +68,18 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 
 	config := &genai.GenerateContentConfig{}
 
-	if len(options.Params.Tools) > 0 {
-		toolConfig, err := googleFromLlm2ToolChoice(options.Params.ToolChoice)
+	if len(options.Tools) > 0 {
+		toolConfig, err := googleFromLlm2ToolChoice(options.ToolChoice)
 		if err != nil {
 			return nil, err
 		}
 		config.ToolConfig = toolConfig
-		config.Tools = googleFromLlm2Tools(options.Params.Tools)
+		config.Tools = googleFromLlm2Tools(options.Tools)
 
 		// Google API does not support a parallel tool calls toggle;
 		// the model decides autonomously whether to emit multiple calls.
-		if options.Params.ParallelToolCalls != nil {
-			log.Debug().Bool("parallelToolCalls", *options.Params.ParallelToolCalls).
+		if options.ParallelToolCalls != nil {
+			log.Debug().Bool("parallelToolCalls", *options.ParallelToolCalls).
 				Msg("Google provider does not support ParallelToolCalls setting; ignoring")
 		}
 	}
@@ -89,30 +89,30 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 		config.ThinkingConfig = &genai.ThinkingConfig{
 			IncludeThoughts: true,
 		}
-		if options.Params.ReasoningEffort != "" {
+		if options.ReasoningEffort != "" {
 			isLegacyThinkingBudget := strings.Contains(model, "2.5")
 			if isLegacyThinkingBudget {
-				budget, ok := googleLegacyThinkingBudgetLlm2[strings.ToLower(options.Params.ReasoningEffort)]
+				budget, ok := googleLegacyThinkingBudgetLlm2[strings.ToLower(options.ReasoningEffort)]
 				if !ok {
-					log.Warn().Str("reasoningEffort", options.Params.ReasoningEffort).
+					log.Warn().Str("reasoningEffort", options.ReasoningEffort).
 						Msg("unknown reasoning effort for legacy thinking budget model; using default")
 				} else {
 					config.ThinkingConfig.ThinkingBudget = &budget
-					actualReasoningEffort = options.Params.ReasoningEffort
+					actualReasoningEffort = options.ReasoningEffort
 				}
 			} else {
-				config.ThinkingConfig.ThinkingLevel = genai.ThinkingLevel(strings.ToUpper(options.Params.ReasoningEffort))
-				actualReasoningEffort = options.Params.ReasoningEffort
+				config.ThinkingConfig.ThinkingLevel = genai.ThinkingLevel(strings.ToUpper(options.ReasoningEffort))
+				actualReasoningEffort = options.ReasoningEffort
 			}
 		}
 	}
 
-	if options.Params.Temperature != nil {
-		config.Temperature = options.Params.Temperature
+	if options.Temperature != nil {
+		config.Temperature = options.Temperature
 	}
 
-	if options.Params.MaxTokens > 0 {
-		config.MaxOutputTokens = int32(options.Params.MaxTokens)
+	if options.MaxTokens > 0 {
+		config.MaxOutputTokens = int32(options.MaxTokens)
 	}
 
 	stream := client.Models.GenerateContentStream(ctx, model, contents, config)
