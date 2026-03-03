@@ -28,20 +28,18 @@ func llmInputForIdentifyInformationNeeds(dCtx DevContext) llm2.Options {
 	modelConfig := dCtx.GetModelConfig(common.QueryExpansionKey, 0, "small") // query expansion is an easy task
 
 	return llm2.Options{
-		Params: llm2.Params{
-			ModelConfig: modelConfig,
-			// TODO /gen use a tool for this, after defining the tool more
-			// specifically (not just a list of needs, but several different
-			// aspects, eg questions to answer by reading code, related
-			// concepts, key words to search the codebase, key file names from
-			// the input)
-			/*
-				Tools: []*llm.Tool{ defineInformationNeeds },
-				ToolChoice: llm.ToolChoice{
-					Type:     llm.ToolChoiceTypeRequired,
-				},
-			*/
-		},
+		ModelConfig: modelConfig,
+		// TODO /gen use a tool for this, after defining the tool more
+		// specifically (not just a list of needs, but several different
+		// aspects, eg questions to answer by reading code, related
+		// concepts, key words to search the codebase, key file names from
+		// the input)
+		/*
+			Tools: []*llm.Tool{ defineInformationNeeds },
+			ToolChoice: llm.ToolChoice{
+				Type:     llm.ToolChoiceTypeRequired,
+			},
+		*/
 	}
 }
 

@@ -39,11 +39,9 @@ func TestAnthropicResponsesProvider_Unauthorized(t *testing.T) {
 	}
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "anthropic",
-				Model:    "claude-sonnet-4-5",
-			},
+		ModelConfig: common.ModelConfig{
+			Provider: "anthropic",
+			Model:    "claude-sonnet-4-5",
 		},
 	}
 
@@ -96,14 +94,12 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 	})
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "anthropic",
-				Model:    "",
-			},
-			Tools:      []*common.Tool{mockTool},
-			ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
+		ModelConfig: common.ModelConfig{
+			Provider: "anthropic",
+			Model:    "",
 		},
+		Tools:      []*common.Tool{mockTool},
+		ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
 	}
 
 	eventChan := make(chan Event, 100)
@@ -320,12 +316,10 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		}
 
 		reasoningOptions := Options{
-			Params: Params{
-				ModelConfig: common.ModelConfig{
-					Provider:        "anthropic",
-					Model:           reasoningModel,
-					ReasoningEffort: "low",
-				},
+			ModelConfig: common.ModelConfig{
+				Provider:        "anthropic",
+				Model:           reasoningModel,
+				ReasoningEffort: "low",
 			},
 		}
 
@@ -574,11 +568,9 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 	})
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "anthropic",
-				Model:    "claude-sonnet-4-5-20250929",
-			},
+		ModelConfig: common.ModelConfig{
+			Provider: "anthropic",
+			Model:    "claude-sonnet-4-5-20250929",
 		},
 	}
 
@@ -685,19 +677,17 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 	})
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "anthropic",
-				Model:    "claude-sonnet-4-5-20250929",
-			},
-			Tools: []*common.Tool{
-				{
-					Name:        "read_image",
-					Description: "Reads an image file and returns its content",
-					Parameters: (&jsonschema.Reflector{DoNotReference: true}).Reflect(&struct {
-						FilePath string `json:"file_path" jsonschema:"description=Path to the image file"`
-					}{}),
-				},
+		ModelConfig: common.ModelConfig{
+			Provider: "anthropic",
+			Model:    "claude-sonnet-4-5-20250929",
+		},
+		Tools: []*common.Tool{
+			{
+				Name:        "read_image",
+				Description: "Reads an image file and returns its content",
+				Parameters: (&jsonschema.Reflector{DoNotReference: true}).Reflect(&struct {
+					FilePath string `json:"file_path" jsonschema:"description=Path to the image file"`
+				}{}),
 			},
 		},
 	}

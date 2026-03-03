@@ -52,11 +52,9 @@ func ForceToolCallWithTrackOptionsV2(
 
 	streamInput := StreamInput{
 		Options: llm2.Options{
-			Params: llm2.Params{
-				ModelConfig: modelConfig,
-				Tools:       tools,
-				ToolChoice:  toolChoice,
-			},
+			ModelConfig: modelConfig,
+			Tools:       tools,
+			ToolChoice:  toolChoice,
 		},
 		Secrets:     *actionCtx.Secrets,
 		ChatHistory: chatHistory,

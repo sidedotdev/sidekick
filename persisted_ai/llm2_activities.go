@@ -31,7 +31,7 @@ type StreamInput struct {
 
 // ActionParams returns action parameters for flow action tracking.
 func (si StreamInput) ActionParams() map[string]any {
-	params, err := utils.StructToMap(si.Options.Params)
+	params, err := utils.StructToMap(si.Options)
 	if err != nil {
 		params = map[string]any{}
 	}
@@ -116,7 +116,7 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		}
 	}()
 
-	provider, err := getLlm2Provider(input.Options.Params.ModelConfig, input.Providers)
+	provider, err := getLlm2Provider(input.Options.ModelConfig, input.Providers)
 	if err != nil {
 		close(eventChan)
 		log.Error().Err(err).Msg("failed to get llm2 provider")
@@ -139,7 +139,7 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 	close(eventChan)
 
 	if response != nil {
-		response.Provider = input.Options.Params.ModelConfig.Provider
+		response.Provider = input.Options.ModelConfig.Provider
 		response.Output.SanitizeToolNames()
 	}
 

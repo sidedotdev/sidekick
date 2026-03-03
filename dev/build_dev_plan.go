@@ -540,13 +540,11 @@ func generateDevPlan(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryConta
 	}
 
 	chatOptions := llm2.Options{
-		Params: llm2.Params{
-			Tools: tools,
-			ToolChoice: llm.ToolChoice{
-				Type: llm.ToolChoiceTypeAuto,
-			},
-			ModelConfig: modelConfig,
+		Tools: tools,
+		ToolChoice: llm.ToolChoice{
+			Type: llm.ToolChoiceTypeAuto,
 		},
+		ModelConfig: modelConfig,
 	}
 
 	return TrackedToolChat(dCtx, "dev_plan", chatOptions, chatHistory)

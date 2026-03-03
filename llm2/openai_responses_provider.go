@@ -28,7 +28,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	messages := request.Messages
 	options := request.Options
 
-	providerNameNormalized := options.Params.ModelConfig.NormalizedProviderName()
+	providerNameNormalized := options.ModelConfig.NormalizedProviderName()
 	token, err := request.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
 	if err != nil {
 		return nil, err
@@ -44,7 +44,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	}
 	client := openai.NewClient(clientOptions...)
 
-	model := options.Params.Model
+	model := options.Model
 	if model == "" {
 		if p.DefaultModel != "" {
 			model = p.DefaultModel
@@ -65,15 +65,15 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 		Model: openai.ChatModel(model),
 	}
 
-	if options.Params.Temperature != nil {
-		params.Temperature = openai.Float(float64(*options.Params.Temperature))
+	if options.Temperature != nil {
+		params.Temperature = openai.Float(float64(*options.Temperature))
 	}
 
 	effectiveMaxTokens := 0
-	if options.Params.MaxTokens > 0 {
-		effectiveMaxTokens = options.Params.MaxTokens
+	if options.MaxTokens > 0 {
+		effectiveMaxTokens = options.MaxTokens
 	}
-	if modelInfo, found := common.GetModel(options.Params.Provider, model); found {
+	if modelInfo, found := common.GetModel(options.Provider, model); found {
 		if modelInfo.Limit.Output > 0 && (effectiveMaxTokens == 0 || effectiveMaxTokens > modelInfo.Limit.Output) {
 			effectiveMaxTokens = modelInfo.Limit.Output
 		}
@@ -82,14 +82,14 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 		params.MaxOutputTokens = param.NewOpt(int64(effectiveMaxTokens))
 	}
 
-	if options.Params.ServiceTier != "" {
-		params.ServiceTier = responses.ResponseNewParamsServiceTier(options.Params.ServiceTier)
+	if options.ServiceTier != "" {
+		params.ServiceTier = responses.ResponseNewParamsServiceTier(options.ServiceTier)
 	}
 
-	if len(options.Params.Tools) > 0 {
-		toolsToUse := options.Params.Tools
-		if options.Params.ToolChoice.Type == common.ToolChoiceTypeTool {
-			toolsToUse = filterToolsByName(options.Params.Tools, options.Params.ToolChoice.Name)
+	if len(options.Tools) > 0 {
+		toolsToUse := options.Tools
+		if options.ToolChoice.Type == common.ToolChoiceTypeTool {
+			toolsToUse = filterToolsByName(options.Tools, options.ToolChoice.Name)
 		}
 
 		tools, err := openaiResponsesFromTools(toolsToUse)
@@ -98,7 +98,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 		}
 		params.Tools = tools
 
-		toolChoice := openaiResponsesFromToolChoice(options.Params.ToolChoice, toolsToUse)
+		toolChoice := openaiResponsesFromToolChoice(options.ToolChoice, toolsToUse)
 		if toolChoice != nil {
 			params.ToolChoice = *toolChoice
 		}
@@ -107,18 +107,18 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	params.Store = openai.Bool(false)
 
 	var actualReasoningEffort string
-	modelInfo, _ := common.GetModel(options.Params.Provider, model)
+	modelInfo, _ := common.GetModel(options.Provider, model)
 	if modelInfo != nil && modelInfo.Reasoning {
 		params.Include = []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent}
-		if options.Params.ReasoningEffort != "" {
-			actualReasoningEffort = options.Params.ReasoningEffort
+		if options.ReasoningEffort != "" {
+			actualReasoningEffort = options.ReasoningEffort
 			params.Reasoning.Effort = shared.ReasoningEffort(actualReasoningEffort)
 			params.Reasoning.Summary = shared.ReasoningSummaryAuto
 		}
 	}
 
 	var extraBodyOptions []option.RequestOption
-	for key, value := range options.Params.ExtraBody {
+	for key, value := range options.ExtraBody {
 		extraBodyOptions = append(extraBodyOptions, option.WithJSONSet(key, value))
 	}
 
@@ -344,7 +344,7 @@ loop:
 	return &MessageResponse{
 		Id:              "",
 		Model:           model,
-		Provider:        options.Params.Provider,
+		Provider:        options.Provider,
 		Output:          outputMessage,
 		StopReason:      stopReason,
 		StopSequence:    "",

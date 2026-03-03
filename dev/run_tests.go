@@ -334,9 +334,7 @@ Here is the test result output to summarize:
 	})
 
 	options := llm2.Options{
-		Params: llm2.Params{
-			ModelConfig: modelConfig,
-		},
+		ModelConfig: modelConfig,
 	}
 	chatResponse, err := TrackedToolChat(dCtx, "summarize_tests", options, chatHistory)
 	if err != nil {

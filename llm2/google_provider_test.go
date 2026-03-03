@@ -36,11 +36,9 @@ func TestGoogleProvider_Unauthorized(t *testing.T) {
 	}
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "google",
-				Model:    "gemini-2.5-flash",
-			},
+		ModelConfig: common.ModelConfig{
+			Provider: "google",
+			Model:    "gemini-2.5-flash",
 		},
 	}
 
@@ -98,14 +96,12 @@ func TestGoogleProvider_Integration(t *testing.T) {
 	})
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "google",
-				Model:    "gemini-2.5-flash",
-			},
-			Tools:      []*common.Tool{mockTool},
-			ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
+		ModelConfig: common.ModelConfig{
+			Provider: "google",
+			Model:    "gemini-2.5-flash",
 		},
+		Tools:      []*common.Tool{mockTool},
+		ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
 	}
 
 	eventChan := make(chan Event, 100)
@@ -309,12 +305,10 @@ func TestGoogleProvider_Integration(t *testing.T) {
 		}
 
 		reasoningOptions := Options{
-			Params: Params{
-				ModelConfig: common.ModelConfig{
-					Provider:        "google",
-					Model:           "gemini-3-flash-preview",
-					ReasoningEffort: "low",
-				},
+			ModelConfig: common.ModelConfig{
+				Provider:        "google",
+				Model:           "gemini-3-flash-preview",
+				ReasoningEffort: "low",
 			},
 		}
 
@@ -445,11 +439,9 @@ func TestGoogleProvider_ImageIntegration(t *testing.T) {
 	})
 
 	options := Options{
-		Params: Params{
-			ModelConfig: common.ModelConfig{
-				Provider: "google",
-				Model:    "gemini-2.5-flash",
-			},
+		ModelConfig: common.ModelConfig{
+			Provider: "google",
+			Model:    "gemini-2.5-flash",
 		},
 	}
 
@@ -568,19 +560,17 @@ func TestGoogleProvider_ToolResultImageIntegration(t *testing.T) {
 			})
 
 			options := Options{
-				Params: Params{
-					ModelConfig: common.ModelConfig{
-						Provider: "google",
-						Model:    mc.model,
-					},
-					Tools: []*common.Tool{
-						{
-							Name:        "read_image",
-							Description: "Reads an image file and returns its content",
-							Parameters: (&jsonschema.Reflector{DoNotReference: true}).Reflect(&struct {
-								FilePath string `json:"file_path" jsonschema:"description=Path to the image file"`
-							}{}),
-						},
+				ModelConfig: common.ModelConfig{
+					Provider: "google",
+					Model:    mc.model,
+				},
+				Tools: []*common.Tool{
+					{
+						Name:        "read_image",
+						Description: "Reads an image file and returns its content",
+						Parameters: (&jsonschema.Reflector{DoNotReference: true}).Reflect(&struct {
+							FilePath string `json:"file_path" jsonschema:"description=Path to the image file"`
+						}{}),
 					},
 				},
 			}

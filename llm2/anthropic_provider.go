@@ -39,7 +39,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 			option.WithHeader("anthropic-beta", llm.AnthropicOAuthBetaHeaders),
 		)
 	} else {
-		secretName := fmt.Sprintf("%s_API_KEY", options.Params.ModelConfig.NormalizedProviderName())
+		secretName := fmt.Sprintf("%s_API_KEY", options.ModelConfig.NormalizedProviderName())
 		token, err := request.SecretManager.GetSecret(secretName)
 		if err != nil {
 			return nil, err
@@ -50,16 +50,16 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		)
 	}
 
-	model := options.Params.Model
+	model := options.Model
 	if model == "" {
 		model = anthropicDefaultModel
 	}
 
 	effectiveMaxTokens := anthropicDefaultMaxTokens
-	if options.Params.MaxTokens > 0 {
-		effectiveMaxTokens = options.Params.MaxTokens
+	if options.MaxTokens > 0 {
+		effectiveMaxTokens = options.MaxTokens
 	}
-	if modelInfo, ok := common.GetModel(options.Params.Provider, model); ok && modelInfo.Limit.Output > 0 {
+	if modelInfo, ok := common.GetModel(options.Provider, model); ok && modelInfo.Limit.Output > 0 {
 		if effectiveMaxTokens == 0 || effectiveMaxTokens > modelInfo.Limit.Output {
 			effectiveMaxTokens = modelInfo.Limit.Output
 		}
@@ -70,12 +70,12 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		MaxTokens: int64(effectiveMaxTokens),
 	}
 
-	if options.Params.Temperature != nil {
-		params.Temperature = anthropic.Opt(float64(*options.Params.Temperature))
+	if options.Temperature != nil {
+		params.Temperature = anthropic.Opt(float64(*options.Temperature))
 	}
 
-	if options.Params.ServiceTier != "" {
-		params.ServiceTier = anthropic.MessageNewParamsServiceTier(options.Params.ServiceTier)
+	if options.ServiceTier != "" {
+		params.ServiceTier = anthropic.MessageNewParamsServiceTier(options.ServiceTier)
 	}
 
 	anthropicMessages, err := messagesToAnthropicParams(messages)
@@ -84,14 +84,14 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	}
 	params.Messages = anthropicMessages
 
-	if len(options.Params.Tools) > 0 {
-		tools, err := toolsToAnthropicParams(options.Params.Tools)
+	if len(options.Tools) > 0 {
+		tools, err := toolsToAnthropicParams(options.Tools)
 		if err != nil {
 			return nil, err
 		}
 		params.Tools = tools
 
-		toolChoice := toolChoiceToAnthropicParam(options.Params.ToolChoice, options.Params.ParallelToolCalls != nil && *options.Params.ParallelToolCalls)
+		toolChoice := toolChoiceToAnthropicParam(options.ToolChoice, options.ParallelToolCalls != nil && *options.ParallelToolCalls)
 		params.ToolChoice = toolChoice
 	}
 
@@ -103,9 +103,9 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	}
 
 	// Enable extended thinking if reasoning effort is specified
-	if options.Params.ReasoningEffort != "" {
+	if options.ReasoningEffort != "" {
 		budgetTokens := int64(10000) // default
-		switch options.Params.ReasoningEffort {
+		switch options.ReasoningEffort {
 		case "low":
 			budgetTokens = 5000
 		case "medium":
@@ -266,7 +266,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	response := &MessageResponse{
 		Id:           finalMessage.ID,
 		Model:        responseModel,
-		Provider:     options.Params.Provider,
+		Provider:     options.Provider,
 		Output:       output,
 		StopReason:   string(finalMessage.StopReason),
 		StopSequence: finalMessage.StopSequence,
