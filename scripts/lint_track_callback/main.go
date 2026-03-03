@@ -1,16 +1,12 @@
 package main
 
 import (
-	"fmt"
 	"go/ast"
-	"go/token"
 	"go/types"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 
-	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/analysis/singlechecker"
 )
 
 // trackFuncNames are the function names whose callbacks must not reference
@@ -31,91 +27,31 @@ var contextTypeNames = map[string]bool{
 	"DevActionContext": true,
 }
 
-type violation struct {
-	Pos      token.Position
-	VarName  string
-	FuncName string
+var Analyzer = &analysis.Analyzer{
+	Name: "noouterctrxintrack",
+	Doc:  "reports outer context variables (ExecContext, ActionContext, DevContext, DevActionContext) referenced inside Track callbacks",
+	Run:  run,
 }
 
 func main() {
-	patterns := os.Args[1:]
-	if len(patterns) == 0 {
-		patterns = []string{"./..."}
-	}
-
-	violations, err := findViolations(patterns)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
-		os.Exit(1)
-	}
-
-	if len(violations) > 0 {
-		fmt.Println("=== Track callback context lint violations ===")
-		fmt.Println("Outer context variables referenced inside Track callbacks:")
-		fmt.Println("Use the tracked context parameter passed to the callback instead.")
-		fmt.Println()
-		for _, v := range violations {
-			fmt.Printf("  %s: %q referenced in Track callback (in %s)\n", v.Pos, v.VarName, v.FuncName)
-		}
-		fmt.Printf("\n%d violation(s) found.\n", len(violations))
-		os.Exit(1)
-	}
-
-	fmt.Println("No Track callback context lint violations found.")
+	singlechecker.Main(Analyzer)
 }
 
-func findViolations(patterns []string) ([]violation, error) {
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
-			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedDeps,
-		Tests: false,
+func run(pass *analysis.Pass) (interface{}, error) {
+	for _, file := range pass.Files {
+		checkFile(pass, file)
 	}
-	pkgs, err := packages.Load(cfg, patterns...)
-	if err != nil {
-		return nil, fmt.Errorf("loading packages: %w", err)
-	}
-
-	var errs []string
-	for _, pkg := range pkgs {
-		for _, e := range pkg.Errors {
-			errs = append(errs, e.Error())
-		}
-	}
-	if len(errs) > 0 {
-		return nil, fmt.Errorf("package errors:\n%s", strings.Join(errs, "\n"))
-	}
-
-	var results []violation
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Syntax {
-			pos := pkg.Fset.Position(file.Pos())
-			if strings.HasSuffix(pos.Filename, "_test.go") {
-				continue
-			}
-			results = append(results, checkFile(pkg, file)...)
-		}
-	}
-
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].Pos.Filename != results[j].Pos.Filename {
-			return results[i].Pos.Filename < results[j].Pos.Filename
-		}
-		return results[i].Pos.Line < results[j].Pos.Line
-	})
-
-	return results, nil
+	return nil, nil
 }
 
-func checkFile(pkg *packages.Package, file *ast.File) []violation {
-	var results []violation
-
+func checkFile(pass *analysis.Pass, file *ast.File) {
 	ast.Inspect(file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
 
-		funcName := trackCallName(call, pkg.TypesInfo)
+		funcName := trackCallName(call, pass.TypesInfo)
 		if funcName == "" {
 			return true
 		}
@@ -145,11 +81,11 @@ func checkFile(pkg *packages.Package, file *ast.File) []violation {
 
 		// Skip Track wrapper functions that intentionally capture the outer
 		// context to re-wrap it with the tracked context
-		if isTrackWrapper(enclosing, pkg.TypesInfo) {
+		if isTrackWrapper(enclosing, pass.TypesInfo) {
 			return true
 		}
 
-		outerCtxVars := collectOuterContextVars(enclosing, funcLit, pkg.TypesInfo, callbackParams)
+		outerCtxVars := collectOuterContextVars(enclosing, funcLit, pass.TypesInfo, callbackParams)
 		if len(outerCtxVars) == 0 {
 			return true
 		}
@@ -161,19 +97,13 @@ func checkFile(pkg *packages.Package, file *ast.File) []violation {
 				return true
 			}
 			if outerCtxVars[ident.Obj] {
-				results = append(results, violation{
-					Pos:      pkg.Fset.Position(ident.Pos()),
-					VarName:  ident.Name,
-					FuncName: funcName,
-				})
+				pass.Reportf(ident.Pos(), "%q referenced in Track callback (in %s); use the tracked context parameter instead", ident.Name, funcName)
 			}
 			return true
 		})
 
 		return true
 	})
-
-	return results
 }
 
 // trackCallName returns the Track* function name if this call targets one,
@@ -212,8 +142,6 @@ func trackCallName(call *ast.CallExpr, info *types.Info) string {
 }
 
 // extractCallbackArg finds the func literal argument in a Track* call.
-// It's the last argument for Track/TrackHuman/TrackFailureOnly, and the
-// last for TrackWithOptions too.
 func extractCallbackArg(call *ast.CallExpr) *ast.FuncLit {
 	for i := len(call.Args) - 1; i >= 0; i-- {
 		if lit, ok := call.Args[i].(*ast.FuncLit); ok {
@@ -253,7 +181,15 @@ func isTrackWrapper(enclosing ast.Node, info *types.Info) bool {
 	if !ok {
 		return false
 	}
-	return trackFuncNames[decl.Name.Name]
+	if !trackFuncNames[decl.Name.Name] {
+		return false
+	}
+	obj := info.ObjectOf(decl.Name)
+	if obj == nil || obj.Pkg() == nil {
+		return false
+	}
+	pkgPath := obj.Pkg().Path()
+	return pkgPath == "sidekick/flow_action" || pkgPath == "sidekick/dev"
 }
 
 func containsNode(parent, child ast.Node) bool {
@@ -372,13 +308,4 @@ func isContextTypeName(t types.Type) bool {
 		name = typStr[idx+1:]
 	}
 	return contextTypeNames[name]
-}
-
-func formatPath(pos token.Position) string {
-	if cwd, err := os.Getwd(); err == nil {
-		if rel, err := filepath.Rel(cwd, pos.Filename); err == nil {
-			pos.Filename = rel
-		}
-	}
-	return pos.String()
 }

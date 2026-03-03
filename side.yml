@@ -20,7 +20,7 @@ test_commands:
 integration_test_commands:
   - command: "SIDE_INTEGRATION_TEST=true gotestreport -test.timeout 30s ./..."
   - command: "go run ./scripts/lint_chat_history_append/"
-  - command: "go run ./scripts/lint_track_callback/"
+  - command: "go run ./scripts/lint_track_callback/ ./..."
 
 agent_config:
   coding:
