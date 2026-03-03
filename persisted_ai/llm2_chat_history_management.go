@@ -2,6 +2,7 @@ package persisted_ai
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -134,7 +135,8 @@ func getToolResultBlocks(msg llm2.Message) []*llm2.ToolResultBlock {
 
 // ManageLlm2ChatHistory applies retention logic to llm2 messages.
 // This mirrors the logic in manageChatHistoryV2 but operates on llm2.Message types.
-func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, maxLength int, provider string) ([]llm2.Message, error) {
+func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, maxLength int, modelConfig common.ModelConfig) ([]llm2.Message, error) {
+	provider := modelConfig.Provider
 	if len(messages) == 0 {
 		return []llm2.Message{}, nil
 	}
@@ -238,8 +240,8 @@ func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, 
 		}
 	}
 
-	// Truncate large unretained tool responses before dropping messages
-	messages, isRetained = truncateLargeLlm2ToolResponses(messages, isRetained, maxLength, provider)
+	// Truncate large tool responses before dropping messages
+	messages, isRetained = truncateLargeLlm2ToolResponses(messages, isRetained, maxLength, provider, modelConfig)
 
 	var totalLength = 0
 	for i, msg := range messages {
@@ -275,18 +277,47 @@ func (ca *ChatHistoryActivities) ManageLlm2ChatHistory(messages []llm2.Message, 
 	return newMessages, nil
 }
 
-// truncateLargeLlm2ToolResponses truncates large unretained tool result blocks.
-func truncateLargeLlm2ToolResponses(messages []llm2.Message, isRetained []bool, maxLength int, provider string) ([]llm2.Message, []bool) {
-	threshold := maxLength / 20 // 5% of maxLength
+// truncateLargeLlm2ToolResponses truncates large tool result blocks.
+// Retained tool responses exceeding 25% of the model's max context are
+// truncated from the middle. Unretained tool responses exceeding the threshold
+// are also truncated when total length exceeds maxLength, oldest first.
+func truncateLargeLlm2ToolResponses(messages []llm2.Message, isRetained []bool, maxLength int, provider string, modelConfig common.ModelConfig) ([]llm2.Message, []bool) {
+	threshold := common.MaxCharsForModel(modelConfig.Provider, modelConfig.Model) / 4
+	if threshold <= 0 {
+		return messages, isRetained
+	}
 
 	type candidate struct {
 		msgIndex   int
 		blockIndex int
 		length     int
 	}
-	var candidates []candidate
 
+	result := make([]llm2.Message, len(messages))
 	for i, msg := range messages {
+		newContent := make([]llm2.ContentBlock, len(msg.Content))
+		copy(newContent, msg.Content)
+		result[i] = llm2.Message{Role: msg.Role, Content: newContent}
+	}
+
+	// Truncate any retained tool response that exceeds the threshold
+	for i := range result {
+		if !isRetained[i] {
+			continue
+		}
+		for j, block := range result[i].Content {
+			if block.Type == llm2.ContentBlockTypeToolResult && block.ToolResult != nil {
+				oldText := block.ToolResult.TextContent()
+				if len(oldText) > threshold {
+					truncateToolResultMiddle(&result[i].Content[j], oldText, threshold)
+				}
+			}
+		}
+	}
+
+	// Collect unretained candidates that exceed the threshold
+	var candidates []candidate
+	for i, msg := range result {
 		if isRetained[i] {
 			continue
 		}
@@ -301,19 +332,12 @@ func truncateLargeLlm2ToolResponses(messages []llm2.Message, isRetained []bool, 
 	}
 
 	if len(candidates) == 0 {
-		return messages, isRetained
+		return result, isRetained
 	}
 
 	totalLength := 0
-	for _, msg := range messages {
+	for _, msg := range result {
 		totalLength += llm2MessageLength(provider, msg)
-	}
-
-	result := make([]llm2.Message, len(messages))
-	for i, msg := range messages {
-		newContent := make([]llm2.ContentBlock, len(msg.Content))
-		copy(newContent, msg.Content)
-		result[i] = llm2.Message{Role: msg.Role, Content: newContent}
 	}
 
 	for _, c := range candidates {
@@ -326,20 +350,62 @@ func truncateLargeLlm2ToolResponses(messages []llm2.Message, isRetained []bool, 
 		}
 		oldText := block.ToolResult.TextContent()
 		oldLen := len(oldText)
-		truncatedText := oldText[:min(oldLen, threshold)]
-		if len(truncatedText) < oldLen {
-			truncatedText += "\n[truncated]"
-		}
-		block.ToolResult = &llm2.ToolResultBlock{
-			ToolCallId: block.ToolResult.ToolCallId,
-			Name:       block.ToolResult.Name,
-			IsError:    block.ToolResult.IsError,
-			Content:    []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: truncatedText}},
-		}
-		totalLength -= oldLen - len(truncatedText)
+		truncateToolResultMiddle(block, oldText, threshold)
+		totalLength -= oldLen - len(block.ToolResult.TextContent())
 	}
 
 	return result, isRetained
+}
+
+// truncateToolResultMiddle replaces a tool result block's text content with a
+// middle-truncated version that fits within maxChars, preserving the start and
+// end of the original text. Always includes a trailing NOTE line.
+func truncateToolResultMiddle(block *llm2.ContentBlock, oldText string, maxChars int) {
+	if len(oldText) <= maxChars {
+		return
+	}
+
+	removed := len(oldText)
+	// Use len(oldText) as upper bound for removed digit count to size templates
+	marker := fmt.Sprintf("\n\n[... truncated %d characters from the middle ...]\n\n", removed)
+	note := fmt.Sprintf("\nNOTE: %d characters were truncated from this tool response.", removed)
+	overhead := len(marker) + len(note)
+	available := maxChars - overhead
+
+	var truncatedText string
+	if available > 0 {
+		half := available / 2
+		prefix := oldText[:half]
+		suffix := oldText[len(oldText)-half:]
+		removed = len(oldText) - len(prefix) - len(suffix)
+		marker = fmt.Sprintf("\n\n[... truncated %d characters from the middle ...]\n\n", removed)
+		note = fmt.Sprintf("\nNOTE: %d characters were truncated from this tool response.", removed)
+		truncatedText = prefix + marker + suffix + note
+	} else {
+		// maxChars too small for full marker; use compact format with all
+		// overhead budgeted within the limit
+		sep := "\n...\n"
+		note = fmt.Sprintf("\nNOTE: %d characters truncated.", removed)
+		kept := maxChars - len(sep) - len(note)
+		if kept > 0 {
+			half := kept / 2
+			removed = len(oldText) - 2*half
+			note = fmt.Sprintf("\nNOTE: %d characters truncated.", removed)
+			truncatedText = oldText[:half] + sep + oldText[len(oldText)-half:] + note
+		} else {
+			// Extremely small maxChars; just include the note
+			removed = len(oldText)
+			note = fmt.Sprintf("\nNOTE: %d characters truncated.", removed)
+			truncatedText = note
+		}
+	}
+
+	block.ToolResult = &llm2.ToolResultBlock{
+		ToolCallId: block.ToolResult.ToolCallId,
+		Name:       block.ToolResult.Name,
+		IsError:    block.ToolResult.IsError,
+		Content:    []llm2.ContentBlock{{Type: llm2.ContentBlockTypeText, Text: truncatedText}},
+	}
 }
 
 // cleanLlm2ToolCallsAndResponses removes orphaned tool calls and tool results.

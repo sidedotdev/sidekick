@@ -41,7 +41,7 @@ func (ca *ChatHistoryActivities) ManageV3(
 	originalMessages := deepCopyMessages(llm2History.Llm2Messages())
 
 	messages := llm2History.Llm2Messages()
-	managedMessages, err := ca.ManageLlm2ChatHistory(messages, maxLength, "")
+	managedMessages, err := ca.ManageLlm2ChatHistory(messages, maxLength, common.ModelConfig{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to manage chat history: %w", err)
 	}
@@ -77,7 +77,7 @@ type ManageInput struct {
 	ChatHistory *ChatHistoryContainer
 	WorkspaceId string
 	MaxLength   int
-	Provider    string
+	ModelConfig common.ModelConfig
 }
 
 // ManageOutput is the output for the ManageV4 activity.
@@ -104,7 +104,7 @@ func (ca *ChatHistoryActivities) ManageV4(
 	originalMessages := deepCopyMessages(llm2History.Llm2Messages())
 
 	messages := llm2History.Llm2Messages()
-	managedMessages, err := ca.ManageLlm2ChatHistory(messages, input.MaxLength, input.Provider)
+	managedMessages, err := ca.ManageLlm2ChatHistory(messages, input.MaxLength, input.ModelConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to manage chat history: %w", err)
 	}

@@ -328,12 +328,12 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 		return nil, fmt.Errorf("Invalid llm iteration state type, expected *buildDevPlanState: %v", iteration.State)
 	}
 
-	provider := ""
+	var modelConfig common.ModelConfig
 	if v := workflow.GetVersion(iteration.ExecCtx, "chat-history-manage-v4", workflow.DefaultVersion, 1); v == 1 {
-		provider = iteration.ExecCtx.GetModelConfig(common.PlanningKey, 0, "default").Provider
+		modelConfig = iteration.ExecCtx.GetModelConfig(common.PlanningKey, 0, "default")
 	}
 	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
-	ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength, provider)
+	ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength, modelConfig)
 
 	hasExistingPlan := len(state.devPlan.Steps) > 0
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"sidekick/common"
 	"sidekick/llm2"
 
 	"github.com/stretchr/testify/assert"
@@ -69,7 +70,7 @@ func TestManageLlm2ChatHistory_InitialInstructions(t *testing.T) {
 		textMsgWithCtx(llm2.RoleUser, "Another II", ContextTypeInitialInstructions),
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 0, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 0, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 
@@ -82,7 +83,7 @@ func TestManageLlm2ChatHistory_InitialInstructions(t *testing.T) {
 		textMsgWithCtx(llm2.RoleUser, "Is II", ContextTypeInitialInstructions),
 		textMsg(llm2.RoleAssistant, "Not II again"),
 	}
-	result2, err := ca.ManageLlm2ChatHistory(messages2, 0, "")
+	result2, err := ca.ManageLlm2ChatHistory(messages2, 0, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected2, result2)
 }
@@ -106,7 +107,7 @@ func TestManageLlm2ChatHistory_UserFeedback(t *testing.T) {
 		textMsg(llm2.RoleAssistant, "Unmarked2"),
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 0, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 0, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 
@@ -118,7 +119,7 @@ func TestManageLlm2ChatHistory_UserFeedback(t *testing.T) {
 		textMsgWithCtx(llm2.RoleUser, "UF1", ContextTypeUserFeedback),
 		textMsgWithCtx(llm2.RoleUser, "UF2", ContextTypeUserFeedback),
 	}
-	result2, err := ca.ManageLlm2ChatHistory(messages2, 0, "")
+	result2, err := ca.ManageLlm2ChatHistory(messages2, 0, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected2, result2)
 }
@@ -207,7 +208,7 @@ func TestManageLlm2ChatHistory_SupersededTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := ca.ManageLlm2ChatHistory(tt.messages, 0, "")
+			result, err := ca.ManageLlm2ChatHistory(tt.messages, 0, common.ModelConfig{})
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
@@ -228,7 +229,7 @@ func TestManageLlm2ChatHistory_EditBlockReport(t *testing.T) {
 		textMsg(llm2.RoleUser, "After EBR 2"),
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 0, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 0, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -249,7 +250,7 @@ func TestManageLlm2ChatHistory_ToolCallsCleanup(t *testing.T) {
 		toolResultMsg("call2", "bar", "bar_response"),
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 0, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 0, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -266,28 +267,38 @@ func TestManageLlm2ChatHistory_OrphanedToolResult(t *testing.T) {
 		textMsg(llm2.RoleAssistant, "Last"),
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 0, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 0, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
 
 func TestManageLlm2ChatHistory_LargeToolResponseTruncation(t *testing.T) {
+	// threshold = MaxCharsForModel / 4 = int(1000*1.9)/4 = 475
+	// 800-char content exceeds 475, so it gets truncated even though retained
+	common.ClearModelsCache()
+	t.Cleanup(common.ClearModelsCache)
+	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", "1000")
+	t.Setenv("SIDE_CACHE_HOME", t.TempDir())
 	ca := &ChatHistoryActivities{}
-	largeContent := strings.Repeat("X", 200)
+	largeContent := strings.Repeat("X", 800)
+
+	// The last message is a tool result, which makes it retained along with
+	// the preceding assistant message. The retained truncation path should
+	// still truncate it since it exceeds the threshold.
 	messages := []llm2.Message{
 		textMsgWithCtx(llm2.RoleUser, "Init", ContextTypeInitialInstructions),
 		toolUseMsg("tc1", "tool1", "{}"),
 		toolResultMsg("tc1", "tool1", largeContent),
-		textMsg(llm2.RoleAssistant, "Last"),
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 100, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 2000, common.ModelConfig{})
 	assert.NoError(t, err)
-	assert.Len(t, result, 4)
+	assert.Len(t, result, 3)
 
 	toolResultText := result[2].Content[0].ToolResult.TextContent()
-	assert.True(t, strings.HasSuffix(toolResultText, "[truncated]"))
-	assert.True(t, len(toolResultText) < 200)
+	assert.Contains(t, toolResultText, "truncated")
+	assert.Contains(t, toolResultText, "NOTE:")
+	assert.LessOrEqual(t, len(toolResultText), 475, "Truncated result should fit within threshold")
 }
 
 func TestManageLlm2ChatHistory_MessageLengthLimits(t *testing.T) {
@@ -300,7 +311,7 @@ func TestManageLlm2ChatHistory_MessageLengthLimits(t *testing.T) {
 		textMsg(llm2.RoleAssistant, "Last"),
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 60, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 60, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.GreaterOrEqual(t, len(result), 2)
 
@@ -312,7 +323,7 @@ func TestManageLlm2ChatHistory_EmptyHistory(t *testing.T) {
 	ca := &ChatHistoryActivities{}
 	messages := []llm2.Message{}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 0, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 0, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Empty(t, result)
 }
@@ -339,11 +350,11 @@ func TestManageLlm2ChatHistory_LastMessageRetention(t *testing.T) {
 		{
 			name: "Last message is a tool response, its call should also be retained",
 			messages: []llm2.Message{
-				textMsg(llm2.RoleUser, "Message 1"),
+				textMsg(llm2.RoleUser, strings.Repeat("x", 60)),
 				toolUseMsg("123", "test", "{}"),
 				toolResultMsg("123", "test", "Tool Response"),
 			},
-			maxLength: 15,
+			maxLength: 56,
 			expected: []llm2.Message{
 				toolUseMsg("123", "test", "{}"),
 				toolResultMsg("123", "test", "Tool Response"),
@@ -365,7 +376,7 @@ func TestManageLlm2ChatHistory_LastMessageRetention(t *testing.T) {
 				toolUseMsg("123", "test", "{}"),
 				toolResultMsg("123", "test", "Tool Response"),
 			},
-			maxLength: 5,
+			maxLength: 100,
 			expected: []llm2.Message{
 				toolUseMsg("123", "test", "{}"),
 				toolResultMsg("123", "test", "Tool Response"),
@@ -397,7 +408,7 @@ func TestManageLlm2ChatHistory_LastMessageRetention(t *testing.T) {
 	ca := &ChatHistoryActivities{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := ca.ManageLlm2ChatHistory(tt.messages, tt.maxLength, "")
+			result, err := ca.ManageLlm2ChatHistory(tt.messages, tt.maxLength, common.ModelConfig{})
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
@@ -412,7 +423,7 @@ func TestManageLlm2ChatHistory_LastMessageIsToolResult(t *testing.T) {
 		toolResultMsg("tc1", "tool1", "result"),
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 0, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 0, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.GreaterOrEqual(t, len(result), 2)
 }
@@ -434,7 +445,7 @@ func TestManageLlm2ChatHistory_ParallelToolCalls(t *testing.T) {
 	}
 
 	// Use large maxLength to allow unretained messages to be kept
-	result, err := ca.ManageLlm2ChatHistory(messages, 10000, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 10000, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Len(t, result, 5)
 }
@@ -455,7 +466,7 @@ func TestManageLlm2ChatHistory_ParallelToolCalls_MissingOneResult(t *testing.T) 
 	}
 
 	// Use large maxLength to allow unretained messages to be kept, then cleanup removes orphans
-	result, err := ca.ManageLlm2ChatHistory(messages, 10000, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 10000, common.ModelConfig{})
 	assert.NoError(t, err)
 	// Parallel tool calls with missing result get cleaned up (both call and partial result removed)
 	assert.Len(t, result, 2)
@@ -474,7 +485,7 @@ func TestManageLlm2ChatHistory_EditBlockReport_RetainsProposals(t *testing.T) {
 		textMsg(llm2.RoleAssistant, "I'll fix it"),
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 0, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 0, common.ModelConfig{})
 	assert.NoError(t, err)
 
 	// Should retain: the proposal (edit_block:1), user response, EditBlockReport, and response after
@@ -513,7 +524,7 @@ func TestManageLlm2ChatHistory_MixedTypes_Complex(t *testing.T) {
 		textMsgWithCtx(llm2.RoleUser, "II2", ContextTypeInitialInstructions),
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 0, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 0, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -528,7 +539,7 @@ func TestManageLlm2ChatHistory_NoMarkers_OverLimit(t *testing.T) {
 		textMsg(llm2.RoleAssistant, "Msg2"),
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 0, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 0, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -544,7 +555,7 @@ func TestManageLlm2ChatHistory_NoMarkers_UnderLimit(t *testing.T) {
 		textMsg(llm2.RoleAssistant, "Msg2"),
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 1000, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 1000, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -569,7 +580,7 @@ func TestManageLlm2ChatHistory_BlockEndingConditions(t *testing.T) {
 		textMsg(llm2.RoleAssistant, "Unmarked after UF2"),
 		textMsgWithCtx(llm2.RoleUser, "II1", ContextTypeInitialInstructions),
 	}
-	result, err := ca.ManageLlm2ChatHistory(messages, 0, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 0, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -588,7 +599,7 @@ func TestManageLlm2ChatHistory_EditBlockReport_NoSequenceNumbersInReport(t *test
 		textMsg(llm2.RoleUser, "Follow up to report"),
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 0, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 0, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -614,7 +625,7 @@ func TestManageLlm2ChatHistory_EditBlockReport_TrimmingBeforeProtectedEBR(t *tes
 		messages[6],
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 0, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 0, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -640,7 +651,7 @@ func TestManageLlm2ChatHistory_OverlapHandling(t *testing.T) {
 		textMsg(llm2.RoleUser, "Unmarked after Report"),
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 0, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 0, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -658,7 +669,7 @@ func TestManageLlm2ChatHistory_Trimming_Basic(t *testing.T) {
 		textMsgWithCtx(llm2.RoleUser, "Initial", ContextTypeInitialInstructions),
 		textMsg(llm2.RoleAssistant, strings.Repeat("C", 50)),
 	}
-	result, err := ca.ManageLlm2ChatHistory(messages, 57, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 57, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 
@@ -666,7 +677,7 @@ func TestManageLlm2ChatHistory_Trimming_Basic(t *testing.T) {
 		textMsgWithCtx(llm2.RoleUser, "Initial", ContextTypeInitialInstructions),
 		textMsg(llm2.RoleAssistant, strings.Repeat("C", 50)),
 	}
-	result2, err := ca.ManageLlm2ChatHistory(messages, 56, "")
+	result2, err := ca.ManageLlm2ChatHistory(messages, 56, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected2, result2)
 }
@@ -683,7 +694,7 @@ func TestManageLlm2ChatHistory_Trimming_InitialInstructionsProtected(t *testing.
 		textMsgWithCtx(llm2.RoleUser, "Initial", ContextTypeInitialInstructions),
 		textMsg(llm2.RoleAssistant, strings.Repeat("B", 50)),
 	}
-	result, err := ca.ManageLlm2ChatHistory(messages, 10, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 10, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -700,7 +711,7 @@ func TestManageLlm2ChatHistory_Trimming_SoftLimit(t *testing.T) {
 		textMsgWithCtx(llm2.RoleUser, "Initial One", ContextTypeInitialInstructions),
 		textMsgWithCtx(llm2.RoleUser, "Initial Two", ContextTypeInitialInstructions),
 	}
-	result, err := ca.ManageLlm2ChatHistory(messages, 25, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 25, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 
@@ -712,7 +723,7 @@ func TestManageLlm2ChatHistory_Trimming_SoftLimit(t *testing.T) {
 		textMsgWithCtx(llm2.RoleUser, "Very Long Initial Instructions Part 1", ContextTypeInitialInstructions),
 		textMsgWithCtx(llm2.RoleUser, "Very Long Initial Instructions Part 2", ContextTypeInitialInstructions),
 	}
-	resultOnlyII, err := ca.ManageLlm2ChatHistory(messagesOnlyII, 50, "")
+	resultOnlyII, err := ca.ManageLlm2ChatHistory(messagesOnlyII, 50, common.ModelConfig{})
 	assert.NoError(t, err)
 	assert.Equal(t, expectedOnlyII, resultOnlyII)
 }
@@ -732,7 +743,7 @@ func TestManageLlm2ChatHistory_ToolCallArgumentsInLength(t *testing.T) {
 		textMsg(llm2.RoleAssistant, "Last"),       // len 4, retained as last
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 20, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 20, common.ModelConfig{})
 	assert.NoError(t, err)
 
 	expected := []llm2.Message{
@@ -753,7 +764,7 @@ func TestManageLlm2ChatHistory_DropAllOlderBehavior(t *testing.T) {
 		textMsg(llm2.RoleAssistant, "E"),                                      // len 1, unretained, last message retained
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 7, "")
+	result, err := ca.ManageLlm2ChatHistory(messages, 7, common.ModelConfig{})
 	assert.NoError(t, err)
 
 	expected := []llm2.Message{
@@ -765,32 +776,39 @@ func TestManageLlm2ChatHistory_DropAllOlderBehavior(t *testing.T) {
 }
 
 func TestManageLlm2ChatHistory_TruncateOldestFirst(t *testing.T) {
+	// threshold = MaxCharsForModel / 4 = int(1000*1.9)/4 = 475
+	// 800-char content exceeds threshold, gets truncated oldest first
+	common.ClearModelsCache()
+	t.Cleanup(common.ClearModelsCache)
+	t.Setenv("SIDE_FALLBACK_MAX_TOKENS", "1000")
+	t.Setenv("SIDE_CACHE_HOME", t.TempDir())
 	ca := &ChatHistoryActivities{}
-	largeContent1 := strings.Repeat("A", 150)
-	largeContent2 := strings.Repeat("B", 150)
+	largeContent1 := strings.Repeat("A", 800)
+	largeContent2 := strings.Repeat("B", 800)
 
 	messages := []llm2.Message{
-		textMsgWithCtx(llm2.RoleUser, "Init", ContextTypeInitialInstructions), // len 4
+		textMsgWithCtx(llm2.RoleUser, "Init", ContextTypeInitialInstructions),
 		{
 			Role: llm2.RoleAssistant,
 			Content: []llm2.ContentBlock{
 				{Type: llm2.ContentBlockTypeText, Text: "c1"},
 				{Type: llm2.ContentBlockTypeToolUse, ToolUse: &llm2.ToolUseBlock{Id: "tc1", Name: "tool1", Arguments: "{}"}},
 			},
-		}, // len 4
-		toolResultMsg("tc1", "tool1", largeContent1), // len 150, older
+		},
+		toolResultMsg("tc1", "tool1", largeContent1),
 		{
 			Role: llm2.RoleAssistant,
 			Content: []llm2.ContentBlock{
 				{Type: llm2.ContentBlockTypeText, Text: "c2"},
 				{Type: llm2.ContentBlockTypeToolUse, ToolUse: &llm2.ToolUseBlock{Id: "tc2", Name: "tool2", Arguments: "{}"}},
 			},
-		}, // len 4
-		toolResultMsg("tc2", "tool2", largeContent2), // len 150, newer
-		textMsg(llm2.RoleAssistant, "Last"),          // len 4, retained
+		},
+		toolResultMsg("tc2", "tool2", largeContent2),
+		textMsg(llm2.RoleAssistant, "Last"),
 	}
 
-	result, err := ca.ManageLlm2ChatHistory(messages, 200, "")
+	// maxLength set so truncating the oldest candidate alone brings total under limit
+	result, err := ca.ManageLlm2ChatHistory(messages, 1400, common.ModelConfig{})
 	assert.NoError(t, err)
 
 	var toolResp1Text, toolResp2Text string
@@ -807,9 +825,10 @@ func TestManageLlm2ChatHistory_TruncateOldestFirst(t *testing.T) {
 		}
 	}
 
-	assert.True(t, strings.HasSuffix(toolResp1Text, "[truncated]"), "Oldest tool response should be truncated")
-	assert.True(t, len(toolResp1Text) < 150)
-	assert.NotEmpty(t, toolResp2Text)
+	assert.Contains(t, toolResp1Text, "truncated", "Oldest tool response should be truncated")
+	assert.Contains(t, toolResp1Text, "NOTE:")
+	assert.LessOrEqual(t, len(toolResp1Text), 475, "Truncated result should fit within threshold")
+	assert.Equal(t, largeContent2, toolResp2Text, "Newer tool response should not be truncated")
 }
 
 func testMakePNGDataURL(t *testing.T, width, height int) string {
