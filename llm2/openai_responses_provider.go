@@ -110,8 +110,9 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	modelInfo, _ := common.GetModel(options.Provider, model)
 	if modelInfo != nil && modelInfo.Reasoning {
 		params.Include = []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent}
-		if options.ReasoningEffort != "" {
-			actualReasoningEffort = options.ReasoningEffort
+		resolved := resolveOpenAIReasoningEffort(options.ReasoningEffort, model)
+		if resolved != "" {
+			actualReasoningEffort = resolved
 			params.Reasoning.Effort = shared.ReasoningEffort(actualReasoningEffort)
 			params.Reasoning.Summary = shared.ReasoningSummaryAuto
 		}

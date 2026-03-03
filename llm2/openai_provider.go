@@ -80,8 +80,9 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 		params.ParallelToolCalls = param.NewOpt(*options.ParallelToolCalls)
 	}
 
-	if options.ReasoningEffort != "" {
-		params.ReasoningEffort = shared.ReasoningEffort(options.ReasoningEffort)
+	actualReasoningEffort := resolveOpenAIReasoningEffort(options.ReasoningEffort, model)
+	if actualReasoningEffort != "" {
+		params.ReasoningEffort = shared.ReasoningEffort(actualReasoningEffort)
 	}
 
 	if len(options.Tools) > 0 {
@@ -264,7 +265,7 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 		Output:          outputMessage,
 		StopReason:      stopReason,
 		Usage:           usage,
-		ReasoningEffort: options.ReasoningEffort,
+		ReasoningEffort: actualReasoningEffort, // FIXME if we didn't set reasoning effort, we should report the default value here
 	}, nil
 }
 

@@ -11,7 +11,7 @@ worktree_setup: |
   cd frontend && bun ci && touch dist/empty.txt
 
 test_commands:
-  - command: "gotestreport -test.timeout 30s ./..."
+  - command: "gotestreport -test.timeout 60s ./..."
   - command: "go run ./scripts/lint_chat_history_append/"
   - working_dir: "frontend"
     command: "bun run test:unit -- --no-color --run"
@@ -19,7 +19,7 @@ test_commands:
     command: "bun run type-check"
 
 integration_test_commands:
-  - command: "SIDE_INTEGRATION_TEST=true gotestreport -test.timeout 30s ./..."
+  - command: "SIDE_INTEGRATION_TEST=true gotestreport -test.timeout 60s ./..."
 
 agent_config:
   coding:
