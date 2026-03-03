@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sidekick/common"
+	"sidekick/llm"
 	"sidekick/secret_manager"
 	"strings"
 	"sync"
@@ -418,6 +419,42 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		t.Logf("Usage: InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
 		t.Logf("Model: %s, StopReason: %s", response.Model, response.StopReason)
 	})
+}
+
+func TestAnthropicProvider_OAuthRefresh(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
+	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+		&secret_manager.EnvSecretManager{},
+		&secret_manager.KeyringSecretManager{},
+		&secret_manager.LocalConfigSecretManager{},
+	})
+
+	creds, useOAuth, err := llm.GetAnthropicOAuthCredentials(secretManager)
+	if err != nil {
+		t.Fatalf("Failed to get OAuth credentials: %v", err)
+	}
+	if !useOAuth || creds == nil {
+		t.Skip("Skipping: Anthropic OAuth not configured")
+	}
+	if creds.RefreshToken == "" {
+		t.Skip("Skipping: no refresh token available")
+	}
+
+	newCreds, err := llm.RefreshAnthropicOAuthToken(creds.RefreshToken)
+	assert.NoError(t, err, "RefreshAnthropicOAuthToken should not return an error")
+	if err != nil {
+		t.FailNow()
+	}
+
+	assert.NotEmpty(t, newCreds.AccessToken, "new access token should not be empty")
+	assert.NotEmpty(t, newCreds.RefreshToken, "new refresh token should not be empty")
+	assert.Greater(t, newCreds.ExpiresAt, int64(0), "new expiry should be set")
+
+	t.Logf("OAuth refresh successful: got new access token (len=%d), expires_at=%d", len(newCreds.AccessToken), newCreds.ExpiresAt)
 }
 
 func TestAnthropicResponsesProvider_CacheControl(t *testing.T) {
