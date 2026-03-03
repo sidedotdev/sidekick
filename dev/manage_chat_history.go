@@ -65,7 +65,7 @@ const (
 // TODO take in the model name and use a different threshold for each model
 // TODO don't drop messages, just create a new chat history with a new summary
 // each time based on the current needs or latest prompt
-func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, maxLength int, provider string) {
+func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, workspaceId string, maxLength int, modelConfig common.ModelConfig) {
 	// Check if we should use the new Llm2ChatHistory-based management
 	v := workflow.GetVersion(ctx, "chat-history-llm2", workflow.DefaultVersion, 1)
 	if v == 1 {
@@ -86,7 +86,7 @@ func ManageChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHisto
 				ChatHistory: chatHistory,
 				WorkspaceId: workspaceId,
 				MaxLength:   maxLength,
-				Provider:    provider,
+				ModelConfig: modelConfig,
 			}).Get(ctx, &manageOutput)
 			if err != nil {
 				wrapErr := fmt.Errorf("ManageChatHistory ManageV4 activity returned an error: %w", err)

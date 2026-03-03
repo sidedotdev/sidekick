@@ -712,7 +712,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, maxLength int) (*persisted_ai.ChatHistoryContainer, error) {
 		ctx = utils.NoRetryCtx(ctx)
-		ManageChatHistory(ctx, chatHistory, "test-workspace-id", maxLength, "")
+		ManageChatHistory(ctx, chatHistory, "test-workspace-id", maxLength, common.ModelConfig{})
 		return chatHistory, nil
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
@@ -806,7 +806,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_UsesManageV4
 
 	var ca *persisted_ai.ChatHistoryActivities
 	s.env.OnActivity(ca.ManageV4, mock.Anything, mock.MatchedBy(func(input persisted_ai.ManageInput) bool {
-		return input.WorkspaceId == "test-workspace-id" && input.MaxLength == maxLength && input.Provider == ""
+		return input.WorkspaceId == "test-workspace-id" && input.MaxLength == maxLength
 	})).Return(
 		&persisted_ai.ManageOutput{ChatHistory: &managedContainer},
 		nil,
@@ -996,7 +996,7 @@ func (s *ManageChatHistoryWorkflowTestSuite) Test_ManageChatHistory_V4_VerifiesR
 // verifyHydrationWorkflow is a named workflow that verifies hydration status after ManageChatHistory
 func verifyHydrationWorkflow(ctx workflow.Context, ch *persisted_ai.ChatHistoryContainer, ml int) (*hydrationVerifyResult, error) {
 	ctx = utils.NoRetryCtx(ctx)
-	ManageChatHistory(ctx, ch, "test-workspace-id", ml, "")
+	ManageChatHistory(ctx, ch, "test-workspace-id", ml, common.ModelConfig{})
 
 	result := &hydrationVerifyResult{
 		IsHydrated: ch.IsHydrated(),
