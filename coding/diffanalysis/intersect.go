@@ -39,11 +39,13 @@ func computeKeptHunks(sinceReviewDiff, branchDiff, baseSinceReviewDiff string) (
 		baseHunks := baseHunksByPath[file.NewPath]
 		branchHunks := branchHunksByPath[file.NewPath]
 
-		// A file deleted in both since-review and base-since-review diffs
-		// means it existed only in the review tree. The base diff "deletion"
-		// reflects the file never existing on the base branch, not an actual
-		// base change, so skip merge-introduced filtering.
-		skipMergeCheck := file.IsDeleted && baseDeletedFiles[file.NewPath]
+		// Skip merge-introduced filtering when the file existed at review
+		// time and the sinceReview and base diffs describe the same state
+		// transition. This covers reverted staged changes to tracked files
+		// and files that existed only in the review tree (staged then
+		// removed). New files are excluded: a file added identically in both
+		// diffs means the base branch introduced it via merge.
+		skipMergeCheck := !file.IsNewFile && hunkSetsEqual(file.Hunks, baseHunks)
 
 		for _, h := range file.Hunks {
 			if !skipMergeCheck && isMergeIntroduced(h, baseHunks, branchHunks) {
@@ -106,6 +108,23 @@ func FilterDiffForReview(sinceReviewDiff, branchDiff, baseSinceReviewDiff, displ
 // and new-side non-overlap with branch (our unique changes).
 func isMergeIntroduced(h Hunk, baseHunks, branchHunks []Hunk) bool {
 	return overlapsAnyOld(h, baseHunks) && !overlapsAnyNew(h, branchHunks)
+}
+
+// hunkSetsEqual returns true when two hunk slices describe the same set of
+// changes (identical old/new ranges in the same order). When the sinceReview
+// and baseSinceReview hunks are equal for a file, both diffs represent the
+// same state transition from the review tree, so nothing is merge-introduced.
+func hunkSetsEqual(a, b []Hunk) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].OldStart != b[i].OldStart || a[i].OldCount != b[i].OldCount ||
+			a[i].NewStart != b[i].NewStart || a[i].NewCount != b[i].NewCount {
+			return false
+		}
+	}
+	return true
 }
 
 // rangesOverlap returns true if [aStart, aStart+aCount) overlaps [bStart, bStart+bCount).
