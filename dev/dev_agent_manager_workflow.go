@@ -47,6 +47,39 @@ func DevAgentManagerWorkflow(ctx workflow.Context, input DevAgentManagerWorkflow
 		settable.Set(nil, err)
 	})
 
+	if v := workflow.GetVersion(ctx, "stale-worktree-cleaner", workflow.DefaultVersion, 1); v == 1 {
+		workflow.Go(ctx, func(ctx workflow.Context) {
+			ao := workflow.ActivityOptions{
+				StartToCloseTimeout: 2 * time.Minute,
+				RetryPolicy: &temporal.RetryPolicy{
+					InitialInterval:        time.Second,
+					BackoffCoefficient:     2.0,
+					MaximumInterval:        30 * time.Second,
+					MaximumAttempts:        3,
+					NonRetryableErrorTypes: []string{},
+				},
+			}
+			actCtx := workflow.WithActivityOptions(ctx, ao)
+
+			for {
+				var report CleanupStaleWorktreesReport
+				err := workflow.ExecuteActivity(actCtx, ima.CleanupStaleWorktrees, CleanupStaleWorktreesInput{
+					WorkspaceId: input.WorkspaceId,
+					DryRun:      false,
+				}).Get(actCtx, &report)
+				if err != nil {
+					log.Error("Stale worktree cleanup job failed", "Error", err)
+				} else {
+					log.Info("Stale worktree cleanup completed", "candidates", len(report.Candidates), "dryRun", report.DryRun)
+				}
+
+				if err := workflow.Sleep(ctx, 1*time.Hour); err != nil {
+					return
+				}
+			}
+		})
+	}
+
 	err := handleWorkRequests(ctx, input.WorkspaceId, ima, &count)
 	if err != nil {
 		return err
