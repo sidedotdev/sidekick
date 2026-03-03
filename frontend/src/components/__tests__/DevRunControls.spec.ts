@@ -38,16 +38,23 @@ class MockWebSocket {
 describe('DevRunControls', () => {
   let wrapper: VueWrapper
   let originalWebSocket: typeof WebSocket
+  let originalFetch: typeof global.fetch
 
   beforeEach(() => {
     vi.clearAllMocks()
     MockWebSocket.clear()
     originalWebSocket = global.WebSocket
+    originalFetch = global.fetch
     global.WebSocket = MockWebSocket as any
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+    }) as any
   })
 
   afterEach(() => {
     global.WebSocket = originalWebSocket
+    global.fetch = originalFetch
     wrapper?.unmount()
   })
 

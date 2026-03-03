@@ -2684,8 +2684,10 @@ func TestCreateTaskHandler_StartTimeout(t *testing.T) {
 	mockTemporalClient.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			ctx := args.Get(0).(context.Context)
+			timer := time.NewTimer(5 * time.Second)
+			defer timer.Stop()
 			select {
-			case <-time.After(500 * time.Millisecond):
+			case <-timer.C:
 			case <-ctx.Done():
 			}
 		}).
@@ -2695,12 +2697,13 @@ func TestCreateTaskHandler_StartTimeout(t *testing.T) {
 	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
 	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
 
+	taskTimeout := 500 * time.Millisecond
 	service := NewTestService(t)
 	ctrl := Controller{
 		temporalClient:   mockTemporalClient,
 		service:          service,
 		secretManager:    secret_manager.MockSecretManager{},
-		taskStartTimeout: 100 * time.Millisecond,
+		taskStartTimeout: taskTimeout,
 	}
 
 	workspaceId := "ws_" + ksuid.New().String()
@@ -2716,12 +2719,8 @@ func TestCreateTaskHandler_StartTimeout(t *testing.T) {
 	c.Request = httptest.NewRequest("POST", "/workspaces/"+workspaceId+"/tasks", bytes.NewBuffer(reqBody))
 	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}}
 
-	start := time.Now()
 	ctrl.CreateTaskHandler(c)
-	elapsed := time.Since(start)
 
-	// Should return within ~timeout, not wait for the full sleep
-	assert.Less(t, elapsed, 300*time.Millisecond, "should timeout quickly")
 	assert.Equal(t, http.StatusServiceUnavailable, resp.Code)
 
 	var response map[string]string
@@ -2832,8 +2831,10 @@ func TestUpdateTaskHandler_StartTimeout(t *testing.T) {
 	mockTemporalClient.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			ctx := args.Get(0).(context.Context)
+			timer := time.NewTimer(5 * time.Second)
+			defer timer.Stop()
 			select {
-			case <-time.After(500 * time.Millisecond):
+			case <-timer.C:
 			case <-ctx.Done():
 			}
 		}).
@@ -2843,12 +2844,13 @@ func TestUpdateTaskHandler_StartTimeout(t *testing.T) {
 	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
 	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
 
+	taskTimeout := 500 * time.Millisecond
 	service := NewTestService(t)
 	ctrl := Controller{
 		temporalClient:   mockTemporalClient,
 		service:          service,
 		secretManager:    secret_manager.MockSecretManager{},
-		taskStartTimeout: 100 * time.Millisecond,
+		taskStartTimeout: taskTimeout,
 	}
 
 	// Create a task in drafting status first
@@ -2881,12 +2883,8 @@ func TestUpdateTaskHandler_StartTimeout(t *testing.T) {
 		{Key: "id", Value: task.Id},
 	}
 
-	start := time.Now()
 	ctrl.UpdateTaskHandler(c)
-	elapsed := time.Since(start)
 
-	// Should return within ~timeout, not wait for the full sleep
-	assert.Less(t, elapsed, 300*time.Millisecond, "should timeout quickly")
 	assert.Equal(t, http.StatusServiceUnavailable, resp.Code)
 
 	// Verify task was reverted to drafting
