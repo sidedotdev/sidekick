@@ -151,8 +151,14 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 	close(eventChan)
 
 	if err != nil {
-		if contains(err.Error(), "overloaded_error") || contains(err.Error(), "Overloaded") {
+		errStr := err.Error()
+		if contains(errStr, "overloaded_error") || contains(errStr, "Overloaded") {
 			t.Skipf("Skipping test due to Anthropic API being overloaded: %v", err)
+		}
+		if contains(errStr, "invalid_grant") ||
+			contains(errStr, "Refresh token not found or invalid") ||
+			contains(errStr, "failed to get Anthropic OAuth credentials") {
+			t.Skipf("Skipping test due to Anthropic credentials not configured/invalid: %v", err)
 		}
 		t.Fatalf("Stream returned an error: %v", err)
 	}
@@ -599,8 +605,14 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 	wg.Wait()
 
 	if err != nil {
-		if contains(err.Error(), "overloaded_error") || contains(err.Error(), "Overloaded") || contains(err.Error(), "rate_limit") {
+		errStr := err.Error()
+		if contains(errStr, "overloaded_error") || contains(errStr, "Overloaded") || contains(errStr, "rate_limit") {
 			t.Skipf("Skipping test due to transient Anthropic API error: %v", err)
+		}
+		if contains(errStr, "invalid_grant") ||
+			contains(errStr, "Refresh token not found or invalid") ||
+			contains(errStr, "failed to get Anthropic OAuth credentials") {
+			t.Skipf("Skipping test due to Anthropic credentials not configured/invalid: %v", err)
 		}
 		t.Fatalf("Stream returned an error: %v", err)
 	}
@@ -717,8 +729,14 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 	wg.Wait()
 
 	if err != nil {
-		if contains(err.Error(), "overloaded_error") || contains(err.Error(), "Overloaded") || contains(err.Error(), "rate_limit") {
+		errStr := err.Error()
+		if contains(errStr, "overloaded_error") || contains(errStr, "Overloaded") || contains(errStr, "rate_limit") {
 			t.Skipf("Skipping test due to transient Anthropic API error: %v", err)
+		}
+		if contains(errStr, "invalid_grant") ||
+			contains(errStr, "Refresh token not found or invalid") ||
+			contains(errStr, "failed to get Anthropic OAuth credentials") {
+			t.Skipf("Skipping test due to Anthropic credentials not configured/invalid: %v", err)
 		}
 		t.Fatalf("Stream returned an error: %v", err)
 	}
