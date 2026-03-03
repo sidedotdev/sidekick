@@ -737,26 +737,26 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		}
 	}
 
-	mergeResult, err := Track(actionCtx, func(flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
+	mergeResult, err := Track(actionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
 		var mergeResult git.MergeActivityResult
 
 		if gitCommitVersion >= 1 && params.CommitRequired {
-			err = workflow.ExecuteActivity(dCtx, git.GitCommitActivity, dCtx.EnvContainer, git.GitCommitParams{
+			err = workflow.ExecuteActivity(trackedCtx, git.GitCommitActivity, trackedCtx.EnvContainer, git.GitCommitParams{
 				CommitMessage:  commitMessage,
 				CommitterName:  committerName,
 				CommitterEmail: committerEmail,
-			}).Get(dCtx, nil)
+			}).Get(trackedCtx, nil)
 			if err != nil {
 				if strings.Contains(err.Error(), "nothing to commit") {
-					workflow.GetLogger(dCtx).Warn("nothing to commit during merge workflow")
+					workflow.GetLogger(trackedCtx).Warn("nothing to commit during merge workflow")
 				} else {
 					return mergeResult, fmt.Errorf("failed to commit changes: %w", err)
 				}
 			}
 		}
 
-		err := flow_action.PerformWithUserRetry(actionCtx.FlowActionContext(), git.GitMergeActivity, &mergeResult, dCtx.EnvContainer, git.GitMergeParams{
-			SourceBranch:   dCtx.Worktree.Name,
+		err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), git.GitMergeActivity, &mergeResult, trackedCtx.EnvContainer, git.GitMergeParams{
+			SourceBranch:   trackedCtx.Worktree.Name,
 			TargetBranch:   mergeInfo.TargetBranch,
 			MergeStrategy:  git.MergeStrategy(mergeInfo.MergeStrategy),
 			CommitMessage:  commitMessage,
@@ -830,10 +830,10 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 					"targetBranch": mergeInfo.TargetBranch,
 				}
 
-				finalMergeResult, err := Track(finalActionCtx, func(flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
+				finalMergeResult, err := Track(finalActionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (git.MergeActivityResult, error) {
 					var finalResult git.MergeActivityResult
-					err := flow_action.PerformWithUserRetry(finalActionCtx.FlowActionContext(), git.GitMergeActivity, &finalResult, dCtx.EnvContainer, git.GitMergeParams{
-						SourceBranch:   dCtx.Worktree.Name,
+					err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), git.GitMergeActivity, &finalResult, trackedCtx.EnvContainer, git.GitMergeParams{
+						SourceBranch:   trackedCtx.Worktree.Name,
 						TargetBranch:   mergeInfo.TargetBranch,
 						MergeStrategy:  git.MergeStrategy(mergeInfo.MergeStrategy),
 						CommitMessage:  commitMessage,
@@ -860,9 +860,12 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		actionCtx := dCtx.NewActionContext("cleanup_worktree")
 		v := workflow.GetVersion(dCtx, "hide-cleanup-worktree", workflow.DefaultVersion, 1)
 		trackOptions := flow_action.TrackOptions{FailuresOnly: v >= 1}
-		_, err := flow_action.TrackWithOptions(actionCtx.FlowActionContext(), trackOptions, func(flowAction *domain.FlowAction) (interface{}, error) {
-			future := workflow.ExecuteActivity(dCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "Sidekick task completed and merged")
-			return nil, future.Get(dCtx, nil)
+		envContainer := dCtx.EnvContainer
+		worktreeName := dCtx.Worktree.Name
+		workingDir := envContainer.Env.GetWorkingDirectory()
+		_, err := flow_action.TrackWithOptions(actionCtx.FlowActionContext(), trackOptions, func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (interface{}, error) {
+			future := workflow.ExecuteActivity(trackedActionCtx, git.CleanupWorktreeActivity, envContainer, workingDir, worktreeName, "Sidekick task completed and merged")
+			return nil, future.Get(trackedActionCtx, nil)
 		})
 		if err != nil {
 			// Log the error but don't fail the workflow since merge was successful

@@ -49,7 +49,7 @@ func SetupDevContext(ctx workflow.Context, workspaceId string, repoDir string, e
 	}
 	return flow_action.TrackSubflowFailureOnly(initialExecCtx, "flow_init", "Initialize", func(_ domain.Subflow) (DevContext, error) {
 		actionCtx := initialExecCtx.NewActionContext("setup_dev_context")
-		return flow_action.TrackFailureOnly(actionCtx, func(_ *domain.FlowAction) (DevContext, error) {
+		return flow_action.TrackFailureOnly(actionCtx, func(_ flow_action.ActionContext, _ *domain.FlowAction) (DevContext, error) {
 			return setupDevContextAction(ctx, workspaceId, repoDir, envType, startBranch, requirements, configOverrides)
 		})
 	})
@@ -535,14 +535,22 @@ func (actionCtx DevActionContext) WithCancelOnPause() DevActionContext {
 	return actionCtx
 }
 
-func Track[T any](devActionCtx DevActionContext, f func(flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
+func Track[T any](devActionCtx DevActionContext, f func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
 	// TODO /gen check if the devContext.State.Paused is true, and if so, wait
 	// indefinitely for a temporal signal to resume before continuing
-	return flow_action.Track(devActionCtx.FlowActionContext(), f)
+	return flow_action.Track(devActionCtx.FlowActionContext(), func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (T, error) {
+		trackedDevActionCtx := devActionCtx
+		trackedDevActionCtx.Context = trackedActionCtx.Context
+		return f(trackedDevActionCtx, flowAction)
+	})
 }
 
-func TrackHuman[T any](devActionCtx DevActionContext, f func(flowAction *domain.FlowAction) (T, error)) (T, error) {
-	return flow_action.TrackHuman(devActionCtx.FlowActionContext(), f)
+func TrackHuman[T any](devActionCtx DevActionContext, f func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (T, error)) (T, error) {
+	return flow_action.TrackHuman(devActionCtx.FlowActionContext(), func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (T, error) {
+		trackedDevActionCtx := devActionCtx
+		trackedDevActionCtx.Context = trackedActionCtx.Context
+		return f(trackedDevActionCtx, flowAction)
+	})
 }
 
 func RunSubflow[T any](dCtx DevContext, subflowType, subflowName string, f func(subflow domain.Subflow) (T, error)) (T, error) {

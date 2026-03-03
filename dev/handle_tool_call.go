@@ -176,8 +176,9 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 	// The tracked flow action result includes both the tool result content
 	// and an optional ref for persisted content (e.g. images).
 	var ref *persisted_ai.MessageRef
-	result, trackErr := Track(actionCtx, func(flowAction *domain.FlowAction) (ToolCallOutput, error) {
+	result, trackErr := Track(actionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (ToolCallOutput, error) {
 		var response string
+		trackedDCtx := trackedCtx.DevContext
 		switch toolCall.Name {
 		case "retrieve_code_context", currentGetSymbolDefinitionsTool().Name:
 			var requiredCodeContext RequiredCodeContext
@@ -195,39 +196,39 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 				// variables to render the prompts later based on this more
 				// detailed metadata with context of max history limits.
 				lengthThreshold := min(defaultMaxChatHistoryLength/2, maxRetrieveCodeContextLength)
-				return RetrieveCodeContext(dCtx, requiredCodeContext, lengthThreshold)
+				return RetrieveCodeContext(trackedDCtx, requiredCodeContext, lengthThreshold)
 			})
 		case bulkReadFileTool.Name:
 			var bulkReadFileParams BulkReadFileParams
 			response, err = unmarshalAndInvoke(toolCall, &bulkReadFileParams, func() (string, error) {
-				return BulkReadFile(dCtx, bulkReadFileParams)
+				return BulkReadFile(trackedDCtx, bulkReadFileParams)
 			})
 		case bulkSearchRepositoryTool.Name:
 			var bulkSearchRepositoryParams BulkSearchRepositoryParams
 			response, err = unmarshalAndInvoke(toolCall, &bulkSearchRepositoryParams, func() (string, error) {
-				return BulkSearchRepository(dCtx, *dCtx.EnvContainer, bulkSearchRepositoryParams)
+				return BulkSearchRepository(trackedDCtx, *trackedDCtx.EnvContainer, bulkSearchRepositoryParams)
 			})
 		case recordDevPlanTool.Name:
 			response, err = "recorded", nil
 		case runCommandTool.Name:
 			var runCommandParams RunCommandParams
 			response, err = unmarshalAndInvoke(toolCall, &runCommandParams, func() (string, error) {
-				return RunCommand(dCtx, runCommandParams)
+				return RunCommand(trackedDCtx, runCommandParams)
 			})
 		case readImageTool.Name:
 			var params ReadImageParams
 			response, err = unmarshalAndInvoke(toolCall, &params, func() (string, error) {
-				flowId := workflow.GetInfo(dCtx).WorkflowExecution.ID
+				flowId := workflow.GetInfo(trackedDCtx).WorkflowExecution.ID
 				var ria *ReadImageActivities
 				var output ReadImageOutput
-				actErr := workflow.ExecuteActivity(dCtx.Context, ria.ReadImageActivity, ReadImageInput{
-					EnvContainer: *dCtx.EnvContainer,
+				actErr := workflow.ExecuteActivity(trackedDCtx, ria.ReadImageActivity, ReadImageInput{
+					EnvContainer: *trackedDCtx.EnvContainer,
 					FilePath:     params.FilePath,
 					URL:          params.URL,
 					FlowId:       flowId,
 					ToolCall:     &toolCall,
-					WorkspaceId:  dCtx.WorkspaceId,
-				}).Get(dCtx, &output)
+					WorkspaceId:  trackedDCtx.WorkspaceId,
+				}).Get(trackedDCtx, &output)
 				if actErr != nil {
 					return "", actErr
 				}
@@ -237,7 +238,7 @@ func handleToolCall(dCtx DevContext, toolCall llm.ToolCall) (ToolCallOutput, err
 		case setBaseBranchTool.Name:
 			var setBaseBranchParams SetBaseBranchParams
 			response, err = unmarshalAndInvoke(toolCall, &setBaseBranchParams, func() (string, error) {
-				return SetBaseBranch(dCtx, setBaseBranchParams)
+				return SetBaseBranch(trackedDCtx, setBaseBranchParams)
 			})
 		default:
 			// FIXME this should be non-retryable but is being retried now (openai can rarely use a function name that we don't support)

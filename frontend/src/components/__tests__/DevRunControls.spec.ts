@@ -44,6 +44,9 @@ describe('DevRunControls', () => {
     MockWebSocket.clear()
     originalWebSocket = global.WebSocket
     global.WebSocket = MockWebSocket as any
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+    } as Response)
   })
 
   afterEach(() => {

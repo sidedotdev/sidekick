@@ -68,10 +68,10 @@ func ForceToolCallWithTrackOptionsV2(
 	for k, v := range streamInput.ActionParams() {
 		actionCtx.ActionParams[k] = v
 	}
-	response, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
+	response, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		streamInput.FlowActionId = flowAction.Id
 
-		msgResponse, err := ExecuteChatStream(actionCtx, streamInput)
+		msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput)
 		if err != nil {
 			return nil, err
 		}
@@ -95,10 +95,10 @@ func ForceToolCallWithTrackOptionsV2(
 		for k, v := range streamInput.ActionParams() {
 			actionCtx.ActionParams[k] = v
 		}
-		response, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
+		response, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 			streamInput.FlowActionId = flowAction.Id
 
-			msgResponse, err := ExecuteChatStream(actionCtx, streamInput)
+			msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput)
 			if err != nil {
 				return nil, err
 			}

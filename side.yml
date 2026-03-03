@@ -12,7 +12,6 @@ worktree_setup: |
 
 test_commands:
   - command: "gotestreport -test.timeout 30s ./..."
-  - command: "go run ./scripts/lint_chat_history_append/"
   - working_dir: "frontend"
     command: "bun run test:unit -- --no-color --run"
   - working_dir: "frontend"
@@ -20,6 +19,8 @@ test_commands:
 
 integration_test_commands:
   - command: "SIDE_INTEGRATION_TEST=true gotestreport -test.timeout 30s ./..."
+  - command: "go run ./scripts/lint_chat_history_append/"
+  - command: "go run ./scripts/lint_track_callback/"
 
 agent_config:
   coding:
