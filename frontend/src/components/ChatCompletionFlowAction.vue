@@ -5,8 +5,8 @@
       <p class="model-provider" v-if="effectiveProvider">Provider: {{ effectiveProvider }}</p>
       <p class="model-name" v-if="effectiveModel">
         Model: {{ effectiveModel }}
-        <span class="model-reasoning-effort" v-if="flowAction.actionParams.reasoningEffort">
-          ({{ flowAction.actionParams.reasoningEffort }} reasoning)
+        <span class="model-reasoning-effort" v-if="effectiveReasoningEffort">
+          ({{ effectiveReasoningEffort }} reasoning)
         </span>
       </p>
       <p class="model-usage" v-if="parsedActionResult && !completionParseFailure && flowAction.actionStatus !== 'pending' && flowAction.actionStatus !== 'started' && usage && (usage.inputTokens || usage.outputTokens)">
@@ -330,6 +330,7 @@ const llm2ResponseBlocks = computed(() => {
 
 const effectiveModel = computed(() => props.flowAction.actionParams.model || parsedActionResult.value?.model || completion.value?.model || '')
 const effectiveProvider = computed(() => props.flowAction.actionParams.provider || parsedActionResult.value?.provider || completion.value?.provider || '')
+const effectiveReasoningEffort = computed(() => parsedActionResult.value?.reasoningEffort || props.flowAction.actionParams.reasoningEffort || '')
 
 const usage = computed<Usage | null>(() => parsedActionResult.value?.usage || completion.value?.usage || null)
 
