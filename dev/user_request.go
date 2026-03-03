@@ -14,9 +14,9 @@ import (
 
 // GetUserResponse wraps TrackHuman and delegates to flow_action.GetUserResponse
 func GetUserResponse(actionCtx DevActionContext, req flow_action.RequestForUser) (*flow_action.UserResponse, error) {
-	return TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*flow_action.UserResponse, error) {
+	return TrackHuman(actionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (*flow_action.UserResponse, error) {
 		req.FlowActionId = flowAction.Id
-		return flow_action.GetUserResponse(actionCtx.ExecContext, req)
+		return flow_action.GetUserResponse(trackedCtx.ExecContext, req)
 	})
 }
 
@@ -101,16 +101,16 @@ func GetUserMergeApproval(
 	}
 
 	// Ensure tracking of the flow action within the guidance request
-	userResponse, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*flow_action.UserResponse, error) {
+	userResponse, err := TrackHuman(actionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (*flow_action.UserResponse, error) {
 		req.FlowActionId = flowAction.Id
 
 		// Get the initial user response
-		currentResponse, err := flow_action.GetUserResponse(actionCtx.ExecContext, req)
+		currentResponse, err := flow_action.GetUserResponse(trackedCtx.ExecContext, req)
 		if err != nil {
 			return nil, err
 		}
 
-		v := workflow.GetVersion(dCtx, "final-merge-response-update-flow-action", workflow.DefaultVersion, 6)
+		v := workflow.GetVersion(trackedCtx, "final-merge-response-update-flow-action", workflow.DefaultVersion, 6)
 
 		// handle branch switching and whitespace toggle until final approval/rejection
 		for {
@@ -127,7 +127,7 @@ func GetUserMergeApproval(
 					finalTarget = latestTarget
 					paramsChanged = true
 					// Update GlobalState so Dev Run can access the current target branch
-					dCtx.ExecContext.GlobalState.SetValue(common.KeyCurrentTargetBranch, finalTarget)
+					trackedCtx.ExecContext.GlobalState.SetValue(common.KeyCurrentTargetBranch, finalTarget)
 				}
 
 				if ignoreWhitespaceVal, ok := currentResponse.Params["ignoreWhitespace"].(bool); ok {
@@ -144,38 +144,38 @@ func GetUserMergeApproval(
 					var newDiffSinceLastReview string
 
 					if v >= 2 {
-						newDiff, err = GetGitDiff(dCtx, finalTarget, ignoreWhitespace)
+						newDiff, err = GetGitDiff(trackedCtx.DevContext, finalTarget, ignoreWhitespace)
 						if err != nil {
 							return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", finalTarget, err)
 						}
 						if lastReviewTreeHash != "" {
 							if v >= 5 {
-								newDiffSinceLastReview, err = getOwnChangesSinceReview(dCtx, finalTarget, lastReviewTreeHash, ignoreWhitespace)
+								newDiffSinceLastReview, err = getOwnChangesSinceReview(trackedCtx.DevContext, finalTarget, lastReviewTreeHash, ignoreWhitespace)
 							} else if v >= 3 {
-								newDiffSinceLastReview, err = legacyOwnChangesSinceReviewV3(dCtx, finalTarget, lastReviewTreeHash, ignoreWhitespace)
+								newDiffSinceLastReview, err = legacyOwnChangesSinceReviewV3(trackedCtx.DevContext, finalTarget, lastReviewTreeHash, ignoreWhitespace)
 							} else {
-								newDiffSinceLastReview, err = legacyOwnChangesSinceReview(dCtx, finalTarget, lastReviewTreeHash, ignoreWhitespace)
+								newDiffSinceLastReview, err = legacyOwnChangesSinceReview(trackedCtx.DevContext, finalTarget, lastReviewTreeHash, ignoreWhitespace)
 							}
 							if err != nil {
 								return nil, fmt.Errorf("failed to generate diff since last review: %v", err)
 							}
 						}
 					} else {
-						err = workflow.ExecuteActivity(actionCtx.DevContext, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
+						err = workflow.ExecuteActivity(trackedCtx, git.GitDiffActivity, *trackedCtx.EnvContainer, git.GitDiffParams{
 							Staged:           true,
 							ThreeDotDiff:     true,
 							BaseRef:          finalTarget,
 							IgnoreWhitespace: ignoreWhitespace,
-						}).Get(actionCtx.DevContext, &newDiff)
+						}).Get(trackedCtx, &newDiff)
 						if err != nil {
 							return nil, fmt.Errorf("failed to generate diff for target branch %s: %v", finalTarget, err)
 						}
 						if lastReviewTreeHash != "" {
-							err = workflow.ExecuteActivity(actionCtx.DevContext, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
+							err = workflow.ExecuteActivity(trackedCtx, git.GitDiffActivity, *trackedCtx.EnvContainer, git.GitDiffParams{
 								Staged:           true,
 								BaseRef:          lastReviewTreeHash,
 								IgnoreWhitespace: ignoreWhitespace,
-							}).Get(actionCtx.DevContext, &newDiffSinceLastReview)
+							}).Get(trackedCtx, &newDiffSinceLastReview)
 							if err != nil {
 								return nil, fmt.Errorf("failed to generate diff since last review: %v", err)
 							}
@@ -191,7 +191,7 @@ func GetUserMergeApproval(
 					// Update the flow action with the new parameters, so the user sees the updated diff and target
 					flowAction.ActionParams = req.ActionParams()
 					var fa *flow_action.FlowActivities
-					err = workflow.ExecuteActivity(actionCtx.DevContext, fa.PersistFlowAction, flowAction).Get(actionCtx.DevContext, nil)
+					err = workflow.ExecuteActivity(trackedCtx, fa.PersistFlowAction, flowAction).Get(trackedCtx, nil)
 					if err != nil {
 						return nil, fmt.Errorf("failed to update flow action params: %v", err)
 					}
@@ -204,11 +204,11 @@ func GetUserMergeApproval(
 			}
 
 			// wait for the next user response signal
-			selector := workflow.NewNamedSelector(actionCtx.DevContext, "mergeApprovalUserResponseSelector")
-			selector.AddReceive(workflow.GetSignalChannel(actionCtx.DevContext, flow_action.SignalNameUserResponse), func(c workflow.ReceiveChannel, more bool) {
-				c.Receive(actionCtx.DevContext, &currentResponse)
+			selector := workflow.NewNamedSelector(trackedCtx, "mergeApprovalUserResponseSelector")
+			selector.AddReceive(workflow.GetSignalChannel(trackedCtx, flow_action.SignalNameUserResponse), func(c workflow.ReceiveChannel, more bool) {
+				c.Receive(trackedCtx, &currentResponse)
 			})
-			selector.Select(actionCtx.DevContext)
+			selector.Select(trackedCtx)
 		}
 	})
 

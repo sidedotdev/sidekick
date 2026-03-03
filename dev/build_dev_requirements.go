@@ -468,16 +468,16 @@ func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options, c
 
 	actionCtx := dCtx.NewActionContext("generate." + actionType)
 	actionCtx.ActionParams = streamInput.ActionParams()
-	return Track(actionCtx, func(flowAction *domain.FlowAction) (common.MessageResponse, error) {
+	return Track(actionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		if options.ModelConfig.Provider == "" {
-			options.ModelConfig = dCtx.GetModelConfig(common.DefaultKey, 0, "default")
+			options.ModelConfig = trackedCtx.GetModelConfig(common.DefaultKey, 0, "default")
 			streamInput.Options = options
 		}
-		streamInput.FlowId = workflow.GetInfo(dCtx).WorkflowExecution.ID
+		streamInput.FlowId = workflow.GetInfo(trackedCtx).WorkflowExecution.ID
 		streamInput.FlowActionId = flowAction.Id
 
 		response, err := persisted_ai.ExecuteChatStream(
-			actionCtx.FlowActionContext(),
+			trackedCtx.FlowActionContext(),
 			streamInput,
 		)
 		if err != nil {

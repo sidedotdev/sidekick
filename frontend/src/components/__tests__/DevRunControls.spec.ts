@@ -46,10 +46,10 @@ describe('DevRunControls', () => {
     originalWebSocket = global.WebSocket
     originalFetch = global.fetch
     global.WebSocket = MockWebSocket as any
-    global.fetch = vi.fn().mockResolvedValue({
+    globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 404,
-    }) as any
+    } as Response)
   })
 
   afterEach(() => {
