@@ -13,6 +13,7 @@ import (
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/llm"
+	"sidekick/persisted_ai"
 	"sidekick/utils"
 	"strings"
 	"testing"
@@ -25,7 +26,7 @@ func TestValidateEditBlocksEmptyChatHistory(t *testing.T) {
 	t.Parallel()
 
 	// Create an empty chat history
-	chatHistory := []llm.ChatMessage{}
+	chatHistory := persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
 	// Create a slice of EditBlocks with various scenarios
 	editBlocks := []EditBlock{
@@ -57,15 +58,19 @@ func TestValidateEditBlocksWithValidBlocks(t *testing.T) {
 	t.Parallel()
 
 	// Create a chat history that includes the old lines from our edit blocks
-	chatHistory := []llm.ChatMessage{
-		{
-			Role:    llm.ChatMessageRoleTool,
-			Content: "Here's some code:\n```go\nfunc oldFunction() {\n    // Some code\n}\n```",
-		},
-		{
-			Role:    llm.ChatMessageRoleTool,
-			Content: "And here's another struct:\n```go\ntype OldStruct struct {\n    // Some fields\n}\n```",
-		},
+	chatHistory := persisted_ai.ChatHistoryContainer{
+		History: persisted_ai.NewLegacyChatHistoryFromChatMessages(
+			[]llm.ChatMessage{
+				{
+					Role:    llm.ChatMessageRoleTool,
+					Content: "Here's some code:\n```go\nfunc oldFunction() {\n    // Some code\n}\n```",
+				},
+				{
+					Role:    llm.ChatMessageRoleTool,
+					Content: "And here's another struct:\n```go\ntype OldStruct struct {\n    // Some fields\n}\n```",
+				},
+			},
+		),
 	}
 
 	// Create a slice of EditBlocks with various scenarios
@@ -100,13 +105,17 @@ func TestValidateEditBlocksWithInvalidBlocks(t *testing.T) {
 	t.Parallel()
 
 	// Create a chat history that doesn't include the old lines from our edit blocks
-	chatHistory := []llm.ChatMessage{
-		{
-			Content: "Here's some unrelated code:\n```go\nfunc someOtherFunction() {\n    // Some code\n}\n```",
-		},
-		{
-			Content: "And here's another unrelated struct:\n```go\ntype SomeOtherStruct struct {\n    // Some fields\n}\n```",
-		},
+	chatHistory := persisted_ai.ChatHistoryContainer{
+		History: persisted_ai.NewLegacyChatHistoryFromChatMessages(
+			[]llm.ChatMessage{
+				{
+					Content: "Here's some unrelated code:\n```go\nfunc someOtherFunction() {\n    // Some code\n}\n```",
+				},
+				{
+					Content: "And here's another unrelated struct:\n```go\ntype SomeOtherStruct struct {\n    // Some fields\n}\n```",
+				},
+			},
+		),
 	}
 
 	// Create a slice of EditBlocks with old lines not present in chat history

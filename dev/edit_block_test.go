@@ -496,6 +496,30 @@ d
 	},
 }
 
+var missingDivider = EditBlockTestCase{
+	name: "Missing divider",
+	testInput: `This edit block is missing the divider:
+
+` + "```" + `go
+edit_block:1
+file1.go
+` + search + `
+line1
+line2
+` + replace + `
+` + "```" + `
+`,
+	expectedResult: []*EditBlock{
+		{
+			FilePath:       "file1.go",
+			OldLines:       []string{"line1", "line2"},
+			NewLines:       nil,
+			EditType:       "update",
+			SequenceNumber: 1,
+		},
+	},
+}
+
 // Test that ExtractEditBlocks handles stray conflict markers without panicking
 func TestExtractEditBlocks_StrayConflictMarkers(t *testing.T) {
 	t.Parallel()
@@ -523,7 +547,7 @@ func TestExtractEditBlocks(t *testing.T) {
 		missingFileNameAndSequenceNumber,
 		missingFileName,
 		missingSequenceNumber,
-		// TODO: add missingDivider test case
+		missingDivider,
 		newFile,
 		appendFile,
 		missingDividerAppendFile,

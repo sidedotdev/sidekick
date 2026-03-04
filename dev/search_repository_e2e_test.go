@@ -12,6 +12,7 @@ import (
 	"sidekick/utils"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/suite"
 	tlog "go.temporal.io/sdk/log"
@@ -69,6 +70,7 @@ func (s *SearchRepositoryE2ETestSuite) ResetWorkflowEnvironment() {
 
 	// Create a new TestWorkflowEnvironment for each test
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetTestTimeout(30 * time.Second)
 
 	s.env.RegisterActivity(env.EnvRunCommandActivity)
 	s.wrapperWorkflow = func(ctx workflow.Context, envContainer env.EnvContainer, input SearchRepositoryInput) (string, error) {

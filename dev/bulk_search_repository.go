@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"sidekick/coding/tree_sitter"
+	"sidekick/common"
 	"sidekick/env"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
 	"strings"
@@ -59,15 +61,20 @@ func BulkSearchRepository(ctx workflow.Context, envContainer env.EnvContainer, b
 	return strings.Join(results, "\n"), nil
 }
 
-func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *[]llm.ChatMessage) ([]llm.ToolCall, error) {
+func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer) ([]llm.ToolCall, error) {
 	actionCtx := dCtx.ExecContext.NewActionContext("generate.repo_search_query")
-	params := llm.ToolChatParams{Messages: *chatHistory}
-	chatResponse, err := persisted_ai.ForceToolCall(actionCtx, dCtx.LLMConfig, &params, &bulkSearchRepositoryTool)
-	*chatHistory = params.Messages // update chat history with the new messages
+	modelConfig := dCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
+	response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(
+		actionCtx,
+		flow_action.TrackOptions{},
+		modelConfig,
+		chatHistory,
+		&bulkSearchRepositoryTool,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to force tool call: %v", err)
 	}
-	return chatResponse.ToolCalls, nil
+	return response.GetMessage().GetToolCalls(), nil
 }
 
 // isExistentFilePath returns true if the given path is a specific file path rather than a glob pattern

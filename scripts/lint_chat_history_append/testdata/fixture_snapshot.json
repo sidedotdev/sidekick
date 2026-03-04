@@ -1,0 +1,572 @@
+{
+  "goplsVersion": "golang.org/x/tools/gopls v0.21.0",
+  "codeChecksum": "7b93d59c3667177d1dbfd8a70bae87d92ba5b3d3c521c755424c966ef98d1a72",
+  "prepare": {
+    "fixture://callers/activity.go:5:5": [
+      {
+        "name": "ActivityFunc",
+        "kind": 12,
+        "detail": "fixture/callers • activity.go",
+        "uri": "fixture://callers/activity.go",
+        "range": {
+          "start": {
+            "line": 5,
+            "character": 5
+          },
+          "end": {
+            "line": 5,
+            "character": 17
+          }
+        },
+        "selectionRange": {
+          "start": {
+            "line": 5,
+            "character": 5
+          },
+          "end": {
+            "line": 5,
+            "character": 17
+          }
+        }
+      }
+    ],
+    "fixture://callers/cycle_a.go:3:5": [
+      {
+        "name": "CycleA",
+        "kind": 12,
+        "detail": "fixture/callers • cycle_a.go",
+        "uri": "fixture://callers/cycle_a.go",
+        "range": {
+          "start": {
+            "line": 3,
+            "character": 5
+          },
+          "end": {
+            "line": 3,
+            "character": 11
+          }
+        },
+        "selectionRange": {
+          "start": {
+            "line": 3,
+            "character": 5
+          },
+          "end": {
+            "line": 3,
+            "character": 11
+          }
+        }
+      }
+    ],
+    "fixture://callers/cycle_b.go:2:5": [
+      {
+        "name": "CycleB",
+        "kind": 12,
+        "detail": "fixture/callers • cycle_b.go",
+        "uri": "fixture://callers/cycle_b.go",
+        "range": {
+          "start": {
+            "line": 2,
+            "character": 5
+          },
+          "end": {
+            "line": 2,
+            "character": 11
+          }
+        },
+        "selectionRange": {
+          "start": {
+            "line": 2,
+            "character": 5
+          },
+          "end": {
+            "line": 2,
+            "character": 11
+          }
+        }
+      }
+    ],
+    "fixture://chathistory/container.go:9:31": [
+      {
+        "name": "Append",
+        "kind": 12,
+        "detail": "fixture/chathistory • container.go",
+        "uri": "fixture://chathistory/container.go",
+        "range": {
+          "start": {
+            "line": 9,
+            "character": 31
+          },
+          "end": {
+            "line": 9,
+            "character": 37
+          }
+        },
+        "selectionRange": {
+          "start": {
+            "line": 9,
+            "character": 31
+          },
+          "end": {
+            "line": 9,
+            "character": 37
+          }
+        }
+      }
+    ]
+  },
+  "incoming": {
+    "fixture://callers/activity.go:5:5": [
+      {
+        "from": {
+          "name": "testActivityCaller",
+          "kind": 12,
+          "detail": "fixture/callers • callers_test.go",
+          "uri": "fixture://callers/callers_test.go",
+          "range": {
+            "start": {
+              "line": 15,
+              "character": 5
+            },
+            "end": {
+              "line": 15,
+              "character": 23
+            }
+          },
+          "selectionRange": {
+            "start": {
+              "line": 15,
+              "character": 5
+            },
+            "end": {
+              "line": 15,
+              "character": 23
+            }
+          }
+        },
+        "fromRanges": [
+          {
+            "start": {
+              "line": 16,
+              "character": 1
+            },
+            "end": {
+              "line": 16,
+              "character": 13
+            }
+          }
+        ]
+      }
+    ],
+    "fixture://callers/cycle_a.go:3:5": [
+      {
+        "from": {
+          "name": "CycleB",
+          "kind": 12,
+          "detail": "fixture/callers • cycle_b.go",
+          "uri": "fixture://callers/cycle_b.go",
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 5
+            },
+            "end": {
+              "line": 2,
+              "character": 11
+            }
+          },
+          "selectionRange": {
+            "start": {
+              "line": 2,
+              "character": 5
+            },
+            "end": {
+              "line": 2,
+              "character": 11
+            }
+          }
+        },
+        "fromRanges": [
+          {
+            "start": {
+              "line": 3,
+              "character": 1
+            },
+            "end": {
+              "line": 3,
+              "character": 7
+            }
+          }
+        ]
+      }
+    ],
+    "fixture://callers/cycle_b.go:2:5": [
+      {
+        "from": {
+          "name": "CycleA",
+          "kind": 12,
+          "detail": "fixture/callers • cycle_a.go",
+          "uri": "fixture://callers/cycle_a.go",
+          "range": {
+            "start": {
+              "line": 3,
+              "character": 5
+            },
+            "end": {
+              "line": 3,
+              "character": 11
+            }
+          },
+          "selectionRange": {
+            "start": {
+              "line": 3,
+              "character": 5
+            },
+            "end": {
+              "line": 3,
+              "character": 11
+            }
+          }
+        },
+        "fromRanges": [
+          {
+            "start": {
+              "line": 4,
+              "character": 1
+            },
+            "end": {
+              "line": 4,
+              "character": 7
+            }
+          }
+        ]
+      }
+    ],
+    "fixture://callers/helper.go:5:5": [
+      {
+        "from": {
+          "name": "TransitiveWorkflowCaller",
+          "kind": 12,
+          "detail": "fixture/callers • transitive_workflow.go",
+          "uri": "fixture://callers/transitive_workflow.go",
+          "range": {
+            "start": {
+              "line": 8,
+              "character": 5
+            },
+            "end": {
+              "line": 8,
+              "character": 29
+            }
+          },
+          "selectionRange": {
+            "start": {
+              "line": 8,
+              "character": 5
+            },
+            "end": {
+              "line": 8,
+              "character": 29
+            }
+          }
+        },
+        "fromRanges": [
+          {
+            "start": {
+              "line": 9,
+              "character": 1
+            },
+            "end": {
+              "line": 9,
+              "character": 13
+            }
+          }
+        ]
+      }
+    ],
+    "fixture://chathistory/container.go:9:31": [
+      {
+        "from": {
+          "name": "testWorkflowHelper",
+          "kind": 12,
+          "detail": "fixture/chathistory • callers_test.go",
+          "uri": "fixture://callers/callers_test.go",
+          "range": {
+            "start": {
+              "line": 10,
+              "character": 5
+            },
+            "end": {
+              "line": 10,
+              "character": 23
+            }
+          },
+          "selectionRange": {
+            "start": {
+              "line": 10,
+              "character": 5
+            },
+            "end": {
+              "line": 10,
+              "character": 23
+            }
+          }
+        },
+        "fromRanges": [
+          {
+            "start": {
+              "line": 11,
+              "character": 3
+            },
+            "end": {
+              "line": 11,
+              "character": 9
+            }
+          }
+        ]
+      },
+      {
+        "from": {
+          "name": "DevContextCaller",
+          "kind": 12,
+          "detail": "fixture/chathistory • devctx.go",
+          "uri": "fixture://callers/devctx.go",
+          "range": {
+            "start": {
+              "line": 5,
+              "character": 5
+            },
+            "end": {
+              "line": 5,
+              "character": 21
+            }
+          },
+          "selectionRange": {
+            "start": {
+              "line": 5,
+              "character": 5
+            },
+            "end": {
+              "line": 5,
+              "character": 21
+            }
+          }
+        },
+        "fromRanges": [
+          {
+            "start": {
+              "line": 6,
+              "character": 3
+            },
+            "end": {
+              "line": 6,
+              "character": 9
+            }
+          }
+        ]
+      },
+      {
+        "from": {
+          "name": "DirectWorkflowCaller",
+          "kind": 12,
+          "detail": "fixture/chathistory • direct_workflow.go",
+          "uri": "fixture://callers/direct_workflow.go",
+          "range": {
+            "start": {
+              "line": 8,
+              "character": 5
+            },
+            "end": {
+              "line": 8,
+              "character": 25
+            }
+          },
+          "selectionRange": {
+            "start": {
+              "line": 8,
+              "character": 5
+            },
+            "end": {
+              "line": 8,
+              "character": 25
+            }
+          }
+        },
+        "fromRanges": [
+          {
+            "start": {
+              "line": 9,
+              "character": 3
+            },
+            "end": {
+              "line": 9,
+              "character": 9
+            }
+          }
+        ]
+      },
+      {
+        "from": {
+          "name": "ExecContextCaller",
+          "kind": 12,
+          "detail": "fixture/chathistory • execctx.go",
+          "uri": "fixture://callers/execctx.go",
+          "range": {
+            "start": {
+              "line": 5,
+              "character": 5
+            },
+            "end": {
+              "line": 5,
+              "character": 22
+            }
+          },
+          "selectionRange": {
+            "start": {
+              "line": 5,
+              "character": 5
+            },
+            "end": {
+              "line": 5,
+              "character": 22
+            }
+          }
+        },
+        "fromRanges": [
+          {
+            "start": {
+              "line": 6,
+              "character": 3
+            },
+            "end": {
+              "line": 6,
+              "character": 9
+            }
+          }
+        ]
+      },
+      {
+        "from": {
+          "name": "HelperAppend",
+          "kind": 12,
+          "detail": "fixture/chathistory • helper.go",
+          "uri": "fixture://callers/helper.go",
+          "range": {
+            "start": {
+              "line": 5,
+              "character": 5
+            },
+            "end": {
+              "line": 5,
+              "character": 17
+            }
+          },
+          "selectionRange": {
+            "start": {
+              "line": 5,
+              "character": 5
+            },
+            "end": {
+              "line": 5,
+              "character": 17
+            }
+          }
+        },
+        "fromRanges": [
+          {
+            "start": {
+              "line": 6,
+              "character": 3
+            },
+            "end": {
+              "line": 6,
+              "character": 9
+            }
+          }
+        ]
+      },
+      {
+        "from": {
+          "name": "AppendChatHistory",
+          "kind": 12,
+          "detail": "fixture/chathistory • helpers.go",
+          "uri": "fixture://persisted_ai/helpers.go",
+          "range": {
+            "start": {
+              "line": 5,
+              "character": 5
+            },
+            "end": {
+              "line": 5,
+              "character": 22
+            }
+          },
+          "selectionRange": {
+            "start": {
+              "line": 5,
+              "character": 5
+            },
+            "end": {
+              "line": 5,
+              "character": 22
+            }
+          }
+        },
+        "fromRanges": [
+          {
+            "start": {
+              "line": 6,
+              "character": 3
+            },
+            "end": {
+              "line": 6,
+              "character": 9
+            }
+          }
+        ]
+      }
+    ],
+    "fixture://persisted_ai/helpers.go:5:5": [
+      {
+        "from": {
+          "name": "WorkflowCallsSanctioned",
+          "kind": 12,
+          "detail": "fixture/persisted_ai • sanctioned_caller.go",
+          "uri": "fixture://callers/sanctioned_caller.go",
+          "range": {
+            "start": {
+              "line": 9,
+              "character": 5
+            },
+            "end": {
+              "line": 9,
+              "character": 28
+            }
+          },
+          "selectionRange": {
+            "start": {
+              "line": 9,
+              "character": 5
+            },
+            "end": {
+              "line": 9,
+              "character": 28
+            }
+          }
+        },
+        "fromRanges": [
+          {
+            "start": {
+              "line": 10,
+              "character": 14
+            },
+            "end": {
+              "line": 10,
+              "character": 31
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -23,7 +23,12 @@ Temporal: New activities/workflows should be registered in the worker. Changes
 to workflow logic should be "deterministic", meaning that the same set of
 activities & side effects should be called in workflow replays. If that's not
 possible, add a new workflow version that gates the new logic, while retaining
-the old logic for old workflow executions.
+the old logic for old workflow executions. Activities should almost always take
+structs for input instead of multiple arguments. Output should also be dedicated
+structs, even if wrapping a single type.
+
+To debug workflow replays, you must use `fmt.Println` since workflow loggers are
+suppressed during replay.
 
 Logs always use zerolog in go. JSON serialization is always in camelCase, not
 snake_case.

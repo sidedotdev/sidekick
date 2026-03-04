@@ -113,6 +113,37 @@ func (s Storage) GetFlowAction(ctx context.Context, workspaceId, flowActionId st
 	return flowAction, nil
 }
 
+func (s Storage) DeleteFlowActionsForFlow(ctx context.Context, workspaceId, flowId string) error {
+	listKey := fmt.Sprintf("%s:%s:flow_action_ids", workspaceId, flowId)
+
+	// Get all flow action IDs
+	ids, err := s.Client.LRange(ctx, listKey, 0, -1).Result()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return fmt.Errorf("failed to get flow action IDs: %w", err)
+	}
+
+	// Delete each flow action and the list key
+	if len(ids) > 0 {
+		pipe := s.Client.Pipeline()
+		for _, id := range ids {
+			key := fmt.Sprintf("%s:%s", workspaceId, id)
+			pipe.Del(ctx, key)
+		}
+		pipe.Del(ctx, listKey)
+		_, err = pipe.Exec(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to delete flow actions: %w", err)
+		}
+	} else {
+		// Still try to delete the list key in case it exists but is empty
+		if err := s.Client.Del(ctx, listKey).Err(); err != nil {
+			return fmt.Errorf("failed to delete flow action list key: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // AddFlowActionChange persists a flow action to the changes stream.
 func (s Streamer) AddFlowActionChange(ctx context.Context, flowAction domain.FlowAction) error {
 	streamKey := fmt.Sprintf("%s:%s:flow_action_changes", flowAction.WorkspaceId, flowAction.FlowId)

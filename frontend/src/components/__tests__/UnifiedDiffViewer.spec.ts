@@ -69,7 +69,8 @@ index 1234567..abcdefg 100644
         linesAdded: 1,
         linesRemoved: 0,
         linesUnchanged: 2,
-        firstLineNumber: 1
+        firstLineNumber: 1,
+        isRename: false
       }]
 
       mockParseDiff.mockReturnValue(mockParsedData)
@@ -119,7 +120,8 @@ index 7890123..fedcba9 100644
           linesAdded: 1,
           linesRemoved: 0,
           linesUnchanged: 1,
-          firstLineNumber: 1
+          firstLineNumber: 1,
+          isRename: false
         },
         {
           oldFile: { fileName: 'file2.py', fileLang: 'python' },
@@ -128,7 +130,8 @@ index 7890123..fedcba9 100644
           linesAdded: 0,
           linesRemoved: 1,
           linesUnchanged: 2,
-          firstLineNumber: 1
+          firstLineNumber: 1,
+          isRename: false
         }
       ]
 
@@ -175,7 +178,8 @@ index 1234567..abcdefg 100644
         linesAdded: 1,
         linesRemoved: 0,
         linesUnchanged: 1,
-        firstLineNumber: 1
+        firstLineNumber: 1,
+        isRename: false
       }]
 
       mockParseDiff.mockReturnValue(mockParsedData)
@@ -296,7 +300,8 @@ index 1234567..abcdefg 100644
         linesAdded: 1,
         linesRemoved: 0,
         linesUnchanged: 1,
-        firstLineNumber: 1
+        firstLineNumber: 1,
+        isRename: false
       }]
 
       mockParseDiff.mockReturnValue(mockParsedData)
@@ -325,7 +330,8 @@ index 1234567..abcdefg 100644
         linesAdded: 1,
         linesRemoved: 0,
         linesUnchanged: 1,
-        firstLineNumber: 1
+        firstLineNumber: 1,
+        isRename: false
       }]
 
       mockParseDiff.mockReturnValue(mockParsedData)
@@ -358,7 +364,8 @@ index 1234567..abcdefg 100644
           linesAdded: 1,
           linesRemoved: 0,
           linesUnchanged: 1,
-          firstLineNumber: 1
+          firstLineNumber: 1,
+          isRename: false
         },
         {
           oldFile: { fileName: 'file2.js', fileLang: 'javascript' },
@@ -367,7 +374,8 @@ index 1234567..abcdefg 100644
           linesAdded: 0,
           linesRemoved: 1,
           linesUnchanged: 1,
-          firstLineNumber: 1
+          firstLineNumber: 1,
+          isRename: false
         }
       ]
 
@@ -402,7 +410,8 @@ index 1234567..abcdefg 100644
         linesAdded: 1,
         linesRemoved: 0,
         linesUnchanged: 1,
-        firstLineNumber: null
+        firstLineNumber: null,
+        isRename: false
       }]
 
       mockParseDiff.mockReturnValue(mockParsedData)
@@ -437,7 +446,8 @@ index 1234567..abcdefg 100644
         linesAdded: 1,
         linesRemoved: 0,
         linesUnchanged: 1,
-        firstLineNumber: 1
+        firstLineNumber: 1,
+        isRename: false
       }]
 
       const newParsedData = [{
@@ -447,7 +457,8 @@ index 1234567..abcdefg 100644
         linesAdded: 2,
         linesRemoved: 1,
         linesUnchanged: 0,
-        firstLineNumber: 1
+        firstLineNumber: 1,
+        isRename: false
       }]
 
       mockParseDiff.mockReturnValueOnce(initialParsedData)
@@ -483,7 +494,8 @@ index 1234567..abcdefg 100644
         linesAdded: 1,
         linesRemoved: 0,
         linesUnchanged: 1,
-        firstLineNumber: 1
+        firstLineNumber: 1,
+        isRename: false
       }]
 
       mockParseDiff.mockReturnValue(mockParsedData)

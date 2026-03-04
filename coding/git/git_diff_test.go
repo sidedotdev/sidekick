@@ -12,6 +12,7 @@ import (
 	"sidekick/utils"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -42,6 +43,7 @@ func (s *GitDiffWorkflowTestSuite) SetupTest() {
 
 	// setup workflow environment
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetTestTimeout(30 * time.Second)
 
 	// s.NewTestActivityEnvironment()
 	s.wrapperWorkflow = func(ctx workflow.Context, envContainer env.EnvContainer) (string, error) {

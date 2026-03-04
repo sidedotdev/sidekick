@@ -124,9 +124,9 @@ func GetUserContinue(eCtx ExecContext, prompt string, requestParams map[string]a
 	actionCtx.ActionParams = req.ActionParams()
 
 	// Ensure tracking of the flow action within the guidance request
-	_, err := TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
+	_, err := TrackHuman(actionCtx, func(trackedActionCtx ActionContext, flowAction *domain.FlowAction) (*UserResponse, error) {
 		req.FlowActionId = flowAction.Id
-		return GetUserResponse(actionCtx.ExecContext, req)
+		return GetUserResponse(trackedActionCtx.ExecContext, req)
 	})
 	return err
 }
@@ -167,9 +167,9 @@ would mean to apply it to your current situation.
 	actionCtx := eCtx.NewActionContext("user_request.guidance")
 	actionCtx.ActionParams = guidanceRequest.ActionParams()
 
-	return TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
+	return TrackHuman(actionCtx, func(trackedActionCtx ActionContext, flowAction *domain.FlowAction) (*UserResponse, error) {
 		guidanceRequest.FlowActionId = flowAction.Id
-		response, err := GetUserResponse(actionCtx.ExecContext, guidanceRequest)
+		response, err := GetUserResponse(trackedActionCtx.ExecContext, guidanceRequest)
 		if err == nil && response != nil && response.Content != "" {
 			response.Content = "#START Guidance From the User\n\n" + response.Content + "\n#END Guidance From the User"
 		}
@@ -198,8 +198,8 @@ func GetUserApproval(eCtx ExecContext, approvalType, approvalPrompt string, requ
 	}
 	actionCtx.ActionParams = req.ActionParams()
 
-	return TrackHuman(actionCtx, func(flowAction *domain.FlowAction) (*UserResponse, error) {
+	return TrackHuman(actionCtx, func(trackedActionCtx ActionContext, flowAction *domain.FlowAction) (*UserResponse, error) {
 		req.FlowActionId = flowAction.Id
-		return GetUserResponse(actionCtx.ExecContext, req)
+		return GetUserResponse(trackedActionCtx.ExecContext, req)
 	})
 }

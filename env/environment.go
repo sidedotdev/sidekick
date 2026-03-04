@@ -278,7 +278,9 @@ func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput
 		case res := <-resultCh:
 			return res.output, res.err
 		case <-ticker.C:
-			activity.RecordHeartbeat(ctx, nil)
+			if activity.IsActivity(ctx) {
+				activity.RecordHeartbeat(ctx, nil)
+			}
 		case <-ctx.Done():
 			return EnvRunCommandActivityOutput{}, ctx.Err()
 		}

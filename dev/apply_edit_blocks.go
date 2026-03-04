@@ -638,7 +638,7 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 	actionCtx.ActionParams = actionParams
 
 	var fullReports []ApplyEditBlockReport
-	_, err := Track(actionCtx, func(flowAction *domain.FlowAction) ([]ApplyEditBlockReport, error) {
+	_, err := Track(actionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) ([]ApplyEditBlockReport, error) {
 		var validEditBlocks []EditBlock
 		var invalidReports []ApplyEditBlockReport
 
@@ -653,8 +653,8 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		// by finding chunks that match and cover all lines and by incorporating
 		// code that isn't just in code blocks (e.g. raw excerpts and git
 		// diffs), then we may consider bringing back this validation.
-		visibilityVersion := workflow.GetVersion(dCtx, "disable-context-code-visibility-check", workflow.DefaultVersion, 1)
-		if visibilityVersion >= 1 && fflag.IsEnabled(dCtx, fflag.DisableContextCodeVisibilityCheck) {
+		visibilityVersion := workflow.GetVersion(trackedCtx, "disable-context-code-visibility-check", workflow.DefaultVersion, 1)
+		if visibilityVersion >= 1 && fflag.IsEnabled(trackedCtx, fflag.DisableContextCodeVisibilityCheck) {
 			validEditBlocks = editBlocks
 		} else {
 			validEditBlocks, invalidReports = validateEditBlocks(editBlocks)
@@ -690,21 +690,21 @@ func validateAndApplyEditBlocks(dCtx DevContext, editBlocks []EditBlock) ([]Appl
 		}
 
 		enabledFlags := make([]string, 0)
-		if fflag.IsEnabled(dCtx, fflag.CheckEdits) {
+		if fflag.IsEnabled(trackedCtx, fflag.CheckEdits) {
 			enabledFlags = append(enabledFlags, fflag.CheckEdits)
 		}
 
 		applyEditBlockInput := ApplyEditBlockActivityInput{
-			EnvContainer:  *dCtx.EnvContainer,
+			EnvContainer:  *trackedCtx.EnvContainer,
 			EditBlocks:    validEditBlocks,
 			EnabledFlags:  enabledFlags,
-			CheckCommands: dCtx.RepoConfig.CheckCommands,
+			CheckCommands: trackedCtx.RepoConfig.CheckCommands,
 		}
 
-		noRetryCtx := utils.NoRetryCtx(dCtx)
+		noRetryCtx := utils.NoRetryCtx(trackedCtx)
 		var validReports []ApplyEditBlockReport
 		var err error
-		v := workflow.GetVersion(dCtx, "apply-edit-blocks", workflow.DefaultVersion, 1)
+		v := workflow.GetVersion(trackedCtx, "apply-edit-blocks", workflow.DefaultVersion, 1)
 		if v == 1 {
 			var da *DevActivities
 			err = workflow.ExecuteActivity(noRetryCtx, da.ApplyEditBlocks, applyEditBlockInput).Get(noRetryCtx, &validReports)

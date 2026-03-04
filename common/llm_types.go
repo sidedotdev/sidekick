@@ -22,6 +22,20 @@ type ChatMessage struct {
 	ContextType  string `json:"contextType,omitempty"`
 }
 
+// GetRole returns the role as a string.
+func (c ChatMessage) GetRole() string {
+	return string(c.Role)
+}
+
+func (c ChatMessage) GetToolCalls() []ToolCall {
+	return c.ToolCalls
+}
+
+// GetContentString returns the content string.
+func (c ChatMessage) GetContentString() string {
+	return c.Content
+}
+
 // TODO ChatMessage.Content should be changed to []ContentBlock
 type ContentBlock struct {
 	Type         string `json:"type"`
@@ -55,11 +69,38 @@ type ChatMessageResponse struct {
 	ReasoningEffort string `json:"reasoningEffort"`
 }
 
+// InputTokens must be the total prompt tokens (cached + non-cached).
+// CacheReadInputTokens and CacheWriteInputTokens are subsets of InputTokens.
 type Usage struct {
 	InputTokens           int `json:"inputTokens"`
 	OutputTokens          int `json:"outputTokens"`
 	CacheReadInputTokens  int `json:"cacheReadInputTokens"`
 	CacheWriteInputTokens int `json:"cacheWriteInputTokens"`
+}
+
+// GetMessage returns the embedded ChatMessage as a Message interface.
+func (r *ChatMessageResponse) GetMessage() Message {
+	return r.ChatMessage
+}
+
+// GetStopReason returns the stop reason.
+func (r *ChatMessageResponse) GetStopReason() string {
+	return r.StopReason
+}
+
+// GetId returns the response ID.
+func (r *ChatMessageResponse) GetId() string {
+	return r.Id
+}
+
+// GetInputTokens returns the number of input tokens used.
+func (r *ChatMessageResponse) GetInputTokens() int {
+	return r.Usage.InputTokens
+}
+
+// GetOutputTokens returns the number of output tokens used.
+func (r *ChatMessageResponse) GetOutputTokens() int {
+	return r.Usage.OutputTokens
 }
 
 /* based on openai's delta format */
