@@ -42,9 +42,11 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *per
 
 		if err != nil {
 			output.IsError = true
-			output.Content = llm2.TextContentBlocks(err.Error())
 			output.Name = tc.Name
 			output.ToolCallId = tc.Id
+			if len(output.Content) == 0 {
+				output.Content = llm2.TextContentBlocks(err.Error())
+			}
 			output.Ref = nil
 		}
 
