@@ -82,7 +82,10 @@ const contentBlocks = computed<Llm2ContentBlock[] | null>(() => {
 
 const toolResponse = computed<string | null>(() => {
   const parsed = parsedResult.value
-  return parsed?.response ?? parsed?.Response ?? null
+  if (parsed) {
+    return parsed.response ?? parsed.Response ?? null
+  }
+  return props.flowAction.actionResult || null
 })
 </script>
 
