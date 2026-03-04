@@ -66,8 +66,8 @@ func OpenAIPatchImageTokens(w, h int, multiplier float64) int {
 		r := math.Sqrt(float64(patchSize*patchSize*maxPatches) / float64(w*h))
 		newW := math.Floor(float64(w) * r)
 		newH := math.Floor(float64(h) * r)
-		fitW := int(math.Floor(newW / float64(patchSize)))
-		fitH := int(math.Floor(newH / float64(patchSize)))
+		fitW := int(math.Ceil(newW / float64(patchSize)))
+		fitH := int(math.Ceil(newH / float64(patchSize)))
 		patches = fitW * fitH
 		if patches > maxPatches {
 			patches = maxPatches
