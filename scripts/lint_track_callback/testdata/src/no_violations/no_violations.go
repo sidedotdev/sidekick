@@ -37,3 +37,13 @@ func correctNonContextVarFromOuter(eCtx flow_action.ExecContext) {
 		return "", nil
 	})
 }
+
+func correctWorkflowContextNotCaptured(ctx workflow.Context) {
+	var eCtx flow_action.ExecContext
+	actionCtx := eCtx.NewActionContext("test")
+	flow_action.Track(actionCtx, func(trackedCtx flow_action.ActionContext, flowAction *flow_action.FlowAction) (string, error) {
+		workflow.ExecuteActivity(trackedCtx, "something")
+		return "", nil
+	})
+	workflow.ExecuteActivity(ctx, "outside track is fine")
+}
