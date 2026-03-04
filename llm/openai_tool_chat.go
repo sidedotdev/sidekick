@@ -293,7 +293,7 @@ func openaiToUsage(usage *openai.Usage) Usage {
 		InputTokens:  usage.PromptTokens,
 		OutputTokens: usage.CompletionTokens,
 	}
-	if usage.PromptTokensDetails.CachedTokens > 0 {
+	if usage.PromptTokensDetails != nil && usage.PromptTokensDetails.CachedTokens > 0 {
 		result.CacheReadInputTokens = usage.PromptTokensDetails.CachedTokens
 	}
 	return result

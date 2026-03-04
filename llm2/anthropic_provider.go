@@ -447,15 +447,15 @@ func accumulateAnthropicEventsToMessage(events []Event) Message {
 	return msg
 }
 
-func roleToAnthropicParam(role Role) anthropic.MessageParamRole {
+func roleToAnthropicParam(role Role) (anthropic.MessageParamRole, error) {
 	switch role {
 	case RoleSystem, RoleUser:
 		// anthropic doesn't have a system role
-		return anthropic.MessageParamRoleUser
+		return anthropic.MessageParamRoleUser, nil
 	case RoleAssistant:
-		return anthropic.MessageParamRoleAssistant
+		return anthropic.MessageParamRoleAssistant, nil
 	default:
-		panic(fmt.Sprintf("unknown role: %s", role))
+		return "", fmt.Errorf("unknown role: %s", role)
 	}
 }
 
@@ -476,10 +476,14 @@ func messagesToAnthropicParams(messages []Message) ([]anthropic.MessageParam, er
 	}
 
 	for _, msg := range messages {
-		if roleToAnthropicParam(msg.Role) != currentRole && len(currentBlocks) > 0 {
+		msgRole, err := roleToAnthropicParam(msg.Role)
+		if err != nil {
+			return nil, err
+		}
+		if msgRole != currentRole && len(currentBlocks) > 0 {
 			flushCurrent()
 		}
-		currentRole = roleToAnthropicParam(msg.Role)
+		currentRole = msgRole
 
 		for _, block := range msg.Content {
 			anthropicBlock, err := contentBlockToAnthropicParam(block, msg.Role)
