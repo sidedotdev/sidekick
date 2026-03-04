@@ -6,6 +6,7 @@ import (
 	"sidekick/common"
 	"sidekick/secret_manager"
 	"sidekick/utils"
+	"sync"
 	"testing"
 
 	"github.com/invopop/jsonschema"
@@ -106,7 +107,10 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 	var sawBlockStartedToolUse bool
 	var sawTextDelta bool
 
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for event := range eventChan {
 			allEvents = append(allEvents, event)
 			if event.Type == EventBlockStarted && event.ContentBlock.Type == ContentBlockTypeToolUse {
@@ -120,6 +124,7 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 
 	response, err := provider.Stream(ctx, options, eventChan)
 	close(eventChan)
+	wg.Wait()
 
 	if err != nil {
 		t.Fatalf("Stream returned an error: %v", err)
@@ -190,7 +195,10 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 		eventChan := make(chan Event, 100)
 		var allEvents []Event
 
+		var wg sync.WaitGroup
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			for event := range eventChan {
 				allEvents = append(allEvents, event)
 			}
@@ -198,6 +206,7 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 
 		response, err := provider.Stream(ctx, options, eventChan)
 		close(eventChan)
+		wg.Wait()
 
 		if err != nil {
 			t.Fatalf("Stream returned an error: %v", err)
