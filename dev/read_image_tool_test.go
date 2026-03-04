@@ -222,6 +222,42 @@ func TestReadImageActivity_PathTraversal(t *testing.T) {
 	assert.Contains(t, err.Error(), "'..'")
 }
 
+func TestReadImageActivity_BothURLAndFilePath(t *testing.T) {
+	t.Parallel()
+
+	storage := newMockKVStorage()
+	activities := &ReadImageActivities{Storage: storage}
+
+	input := ReadImageInput{
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: t.TempDir()}},
+		FilePath:     "test.png",
+		URL:          "http://example.com/image.png",
+		FlowId:       "flow-123",
+		WorkspaceId:  "ws-456",
+	}
+
+	_, err := activities.ReadImageActivity(context.Background(), input)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not both")
+}
+
+func TestReadImageActivity_NeitherURLNorFilePath(t *testing.T) {
+	t.Parallel()
+
+	storage := newMockKVStorage()
+	activities := &ReadImageActivities{Storage: storage}
+
+	input := ReadImageInput{
+		EnvContainer: env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: t.TempDir()}},
+		FlowId:       "flow-123",
+		WorkspaceId:  "ws-456",
+	}
+
+	_, err := activities.ReadImageActivity(context.Background(), input)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "provide either")
+}
+
 func TestReadImageActivity_AbsolutePath(t *testing.T) {
 	t.Parallel()
 

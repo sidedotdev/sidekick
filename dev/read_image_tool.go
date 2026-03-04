@@ -75,6 +75,13 @@ type ReadImageActivities struct {
 // builds a tool result content block, and persists it to KV using the standard
 // {flowId}:msg:{blockId} namespace so cascade delete handles cleanup.
 func (a *ReadImageActivities) ReadImageActivity(ctx context.Context, input ReadImageInput) (*ReadImageOutput, error) {
+	if input.URL != "" && input.FilePath != "" {
+		return nil, fmt.Errorf("provide either file_path or url but not both")
+	}
+	if input.URL == "" && input.FilePath == "" {
+		return nil, fmt.Errorf("provide either file_path or url")
+	}
+
 	var raw []byte
 	var mimeType string
 	var err error
