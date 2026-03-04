@@ -935,6 +935,35 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 	})
 }
 
+func TestMimeTypeFromImageURL(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		url      string
+		expected string
+	}{
+		{"png lowercase", "https://example.com/image.png", "image/png"},
+		{"png uppercase", "https://example.com/IMAGE.PNG", "image/png"},
+		{"png mixed case", "https://example.com/Photo.Png", "image/png"},
+		{"webp lowercase", "https://example.com/image.webp", "image/webp"},
+		{"webp uppercase", "https://example.com/IMAGE.WEBP", "image/webp"},
+		{"gif lowercase", "https://example.com/image.gif", "image/gif"},
+		{"jpeg default", "https://example.com/image.jpg", "image/jpeg"},
+		{"no extension defaults to jpeg", "https://example.com/image", "image/jpeg"},
+		{"png with query string", "https://example.com/image.png?token=abc&size=large", "image/png"},
+		{"webp with query string", "https://example.com/photo.webp?v=2", "image/webp"},
+		{"png with fragment", "https://example.com/image.png#section", "image/png"},
+		{"png with query and fragment", "https://example.com/image.png?a=1#frag", "image/png"},
+		{"gs scheme", "gs://bucket/path/to/image.webp", "image/webp"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, mimeTypeFromImageURL(tt.url))
+		})
+	}
+}
+
 func TestGoogleFromLlm2ToolChoice(t *testing.T) {
 	t.Parallel()
 
