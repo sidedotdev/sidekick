@@ -760,7 +760,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 
 	t.Run("tool result with nested image - gemini 3", func(t *testing.T) {
 		t.Parallel()
-		dataURL := "data:image/png;base64,iVBORw0KGgo="
+		dataURL := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
 		messages := []Message{
 			{
 				Role: RoleUser,
@@ -803,7 +803,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 
 	t.Run("tool result with nested image - gemini 2.x fallback", func(t *testing.T) {
 		t.Parallel()
-		dataURL := "data:image/png;base64,iVBORw0KGgo="
+		dataURL := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
 		messages := []Message{
 			{
 				Role: RoleUser,

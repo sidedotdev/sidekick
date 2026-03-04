@@ -2,8 +2,6 @@ package dev
 
 import (
 	"bufio"
-	"context"
-	"fmt"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/persisted_ai"
@@ -35,21 +33,6 @@ type FileRange struct {
 	FilePath  string `json:"filePath"`
 	StartLine int    `json:"startLine"`
 	EndLine   int    `json:"endLine"`
-}
-
-// ExtractEditBlocksWithVisibilityActivity is an activity that hydrates the chat
-// history from KV storage before extracting edit blocks with visibility info.
-func ExtractEditBlocksWithVisibilityActivity(
-	ctx context.Context,
-	storage common.KeyValueStorage,
-	chatHistory *persisted_ai.ChatHistoryContainer,
-	responseText string,
-	tildeOnly bool,
-) ([]EditBlock, error) {
-	if err := chatHistory.Hydrate(ctx, storage); err != nil {
-		return nil, fmt.Errorf("failed to hydrate chat history: %w", err)
-	}
-	return ExtractEditBlocksWithVisibility(responseText, *chatHistory, tildeOnly)
 }
 
 // extractAllCodeBlocks scans chat messages for code blocks used in edit-block

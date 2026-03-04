@@ -13,6 +13,7 @@ func ExtractSequenceNumbersFromReportContent(content string) []int {
 	re := regexp.MustCompile(`-\s*edit_block:(\d+)\s*application.*`)
 
 	scanner := bufio.NewScanner(strings.NewReader(content))
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	seenNumbers := make(map[int]bool)
 	var uniqueSequenceNumbers []int
 
