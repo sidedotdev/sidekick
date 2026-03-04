@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/srv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -311,6 +314,7 @@ func (ima *DevAgentManagerActivities) CleanupStaleWorktrees(ctx context.Context,
 		}
 	}
 
+	var toDelete []StaleWorktreeCandidate
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -327,22 +331,112 @@ func (ima *DevAgentManagerActivities) CleanupStaleWorktrees(ctx context.Context,
 		}
 		warning := inactiveWarnings[dirPath]
 
-		report.Candidates = append(report.Candidates, StaleWorktreeCandidate{
+		candidate := StaleWorktreeCandidate{
 			Path:    dirPath,
 			Reason:  reason,
 			Warning: warning,
-		})
+		}
+		report.Candidates = append(report.Candidates, candidate)
 
 		if input.DryRun {
 			infoLog("Stale worktree candidate (dry-run)", "path", dirPath, "reason", reason, "warning", warning)
 			continue
 		}
 
-		if err := os.RemoveAll(dirPath); err != nil {
-			errorLog("Failed to delete stale worktree directory", "path", dirPath, "error", err)
-			continue
+		toDelete = append(toDelete, candidate)
+	}
+
+	if !input.DryRun && len(toDelete) > 0 {
+		deleteOne := func(candidate StaleWorktreeCandidate) {
+			dirPath := candidate.Path
+			reason := candidate.Reason
+			warning := candidate.Warning
+
+			safeRemoveAll := func() error {
+				cleanBase := filepath.Clean(baseDir)
+				cleanPath := filepath.Clean(dirPath)
+				if cleanPath != cleanBase && !strings.HasPrefix(cleanPath, cleanBase+string(os.PathSeparator)) {
+					return fmt.Errorf("refusing to delete path outside baseDir: %s", cleanPath)
+				}
+				return os.RemoveAll(dirPath)
+			}
+
+			commonGitDirCmd := exec.CommandContext(ctx, "git", "-C", dirPath, "rev-parse", "--git-common-dir")
+			commonGitDirOut, err := commonGitDirCmd.CombinedOutput()
+			if err != nil {
+				if rmErr := safeRemoveAll(); rmErr != nil {
+					errorLog(
+						"Failed to locate git common dir for worktree; and direct delete failed",
+						"path", dirPath,
+						"error", err,
+						"output", strings.TrimSpace(string(commonGitDirOut)),
+						"removeError", rmErr,
+					)
+					return
+				}
+				infoLog("Deleted stale worktree directory (direct delete fallback)", "path", dirPath, "reason", reason, "warning", warning)
+				return
+			}
+
+			commonGitDir := strings.TrimSpace(string(commonGitDirOut))
+			if commonGitDir == "" {
+				if rmErr := safeRemoveAll(); rmErr != nil {
+					errorLog("Failed to locate git common dir for worktree; and direct delete failed", "path", dirPath, "error", "empty git common dir", "removeError", rmErr)
+					return
+				}
+				infoLog("Deleted stale worktree directory (direct delete fallback)", "path", dirPath, "reason", reason, "warning", warning)
+				return
+			}
+			if !filepath.IsAbs(commonGitDir) {
+				commonGitDir = filepath.Join(dirPath, commonGitDir)
+			}
+
+			removeCmd := exec.CommandContext(ctx, "git", "--git-dir", commonGitDir, "worktree", "remove", dirPath, "--force")
+			removeOut, err := removeCmd.CombinedOutput()
+			if err != nil {
+				fallbackCmd := exec.CommandContext(ctx, "git", "-C", dirPath, "worktree", "remove", ".", "--force")
+				fallbackOut, fallbackErr := fallbackCmd.CombinedOutput()
+				if fallbackErr != nil {
+					if rmErr := safeRemoveAll(); rmErr != nil {
+						errorLog(
+							"Failed to delete stale worktree via git worktree remove; and direct delete failed",
+							"path", dirPath,
+							"error", err,
+							"output", strings.TrimSpace(string(removeOut)),
+							"fallbackError", fallbackErr,
+							"fallbackOutput", strings.TrimSpace(string(fallbackOut)),
+							"removeError", rmErr,
+						)
+						return
+					}
+					infoLog("Deleted stale worktree directory (direct delete fallback)", "path", dirPath, "reason", reason, "warning", warning)
+					return
+				}
+			}
+
+			infoLog("Deleted stale worktree directory", "path", dirPath, "reason", reason, "warning", warning)
 		}
-		infoLog("Deleted stale worktree directory", "path", dirPath, "reason", reason, "warning", warning)
+
+		maxParallel := runtime.GOMAXPROCS(0)
+		if maxParallel < 2 {
+			maxParallel = 2
+		}
+		if maxParallel > 8 {
+			maxParallel = 8
+		}
+
+		sema := make(chan struct{}, maxParallel)
+		var wg sync.WaitGroup
+		for _, candidate := range toDelete {
+			wg.Add(1)
+			go func(candidate StaleWorktreeCandidate) {
+				defer wg.Done()
+				sema <- struct{}{}
+				defer func() { <-sema }()
+				deleteOne(candidate)
+			}(candidate)
+		}
+		wg.Wait()
 	}
 
 	for _, entry := range protected {
