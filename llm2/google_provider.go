@@ -476,6 +476,25 @@ func supportsMultimodalFuncResponse(model string) bool {
 	return !strings.Contains(model, "gemini-2") && !strings.Contains(model, "gemini-1")
 }
 
+func mimeTypeFromImageURL(rawURL string) string {
+	// Strip query string and fragment before checking extension
+	path := rawURL
+	if idx := strings.IndexAny(path, "?#"); idx != -1 {
+		path = path[:idx]
+	}
+	lower := strings.ToLower(path)
+	switch {
+	case strings.HasSuffix(lower, ".png"):
+		return "image/png"
+	case strings.HasSuffix(lower, ".webp"):
+		return "image/webp"
+	case strings.HasSuffix(lower, ".gif"):
+		return "image/gif"
+	default:
+		return "image/jpeg"
+	}
+}
+
 func googleFromLlm2Messages(messages []Message, isReasoningModel bool, model string) ([]*genai.Content, error) {
 	var contents []*genai.Content
 	var currentRole string
@@ -610,12 +629,7 @@ func googleFromLlm2Messages(messages []Message, isReasoningModel bool, model str
 								}
 								imageIdx++
 							} else if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "gs://") {
-								mime := "image/jpeg"
-								if strings.HasSuffix(url, ".png") {
-									mime = "image/png"
-								} else if strings.HasSuffix(url, ".webp") {
-									mime = "image/webp"
-								}
+								mime := mimeTypeFromImageURL(url)
 								if supportsMultimodalFuncResponse(model) {
 									functionResponse.Parts = append(functionResponse.Parts, &genai.FunctionResponsePart{
 										FileData: &genai.FunctionResponseFileData{
@@ -652,12 +666,7 @@ func googleFromLlm2Messages(messages []Message, isReasoningModel bool, model str
 				}
 				url := block.Image.Url
 				if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "gs://") {
-					mime := "image/jpeg"
-					if strings.HasSuffix(url, ".png") {
-						mime = "image/png"
-					} else if strings.HasSuffix(url, ".webp") {
-						mime = "image/webp"
-					}
+					mime := mimeTypeFromImageURL(url)
 					currentParts = append(currentParts, &genai.Part{
 						FileData: &genai.FileData{
 							FileURI:  url,
