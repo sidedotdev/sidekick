@@ -451,9 +451,11 @@ func TestAnthropicProvider_OAuthRefresh(t *testing.T) {
 	}
 
 	newCreds, err := llm.RefreshAnthropicOAuthToken(creds.RefreshToken)
-	assert.NoError(t, err, "RefreshAnthropicOAuthToken should not return an error")
 	if err != nil {
-		t.FailNow()
+		if strings.Contains(err.Error(), "invalid_grant") {
+			t.Skipf("Skipping: refresh token is invalid or revoked: %v", err)
+		}
+		t.Fatalf("RefreshAnthropicOAuthToken should not return an error: %v", err)
 	}
 
 	assert.NotEmpty(t, newCreds.AccessToken, "new access token should not be empty")

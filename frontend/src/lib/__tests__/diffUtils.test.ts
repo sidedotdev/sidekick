@@ -349,6 +349,40 @@ index 1234567..abcdefg 100644
     expect(result[0].isRename).toBe(false);
   });
 
+  it('should not treat new file as rename when diff --git header has dev/null', () => {
+    const newFileDiff = `diff --git a/dev/null b/src/newfile.ts
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/src/newfile.ts
+@@ -0,0 +1,2 @@
++line1
++line2`;
+
+    const result = parseDiff(newFileDiff);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].newFile.fileName).toBe('src/newfile.ts');
+    expect(result[0].isRename).toBe(false);
+  });
+
+  it('should not treat deleted file as rename when diff --git header has dev/null', () => {
+    const deletedFileDiff = `diff --git a/src/oldfile.js b/dev/null
+deleted file mode 100644
+index 1234567..0000000
+--- a/src/oldfile.js
++++ /dev/null
+@@ -1,2 +0,0 @@
+-line1
+-line2`;
+
+    const result = parseDiff(deletedFileDiff);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].oldFile.fileName).toBe('src/oldfile.js');
+    expect(result[0].isRename).toBe(false);
+  });
+
   it('should handle diff with no changes (context only)', () => {
     const contextOnlyDiff = `diff --git a/src/unchanged.js b/src/unchanged.js
 index 1234567..1234567 100644
