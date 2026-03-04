@@ -27,9 +27,16 @@ var contextTypeNames = map[string]bool{
 	"DevActionContext": true,
 }
 
+// contextQualifiedSuffixes are qualified type suffixes (e.g. "workflow.Context")
+// checked against the full type string to catch types that are too generic to
+// match by short name alone.
+var contextQualifiedSuffixes = []string{
+	"workflow.Context",
+}
+
 var Analyzer = &analysis.Analyzer{
 	Name: "noouterctrxintrack",
-	Doc:  "reports outer context variables (ExecContext, ActionContext, DevContext, DevActionContext) referenced inside Track callbacks",
+	Doc:  "reports outer context variables (ExecContext, ActionContext, DevContext, DevActionContext, workflow.Context) referenced inside Track callbacks",
 	Run:  run,
 }
 
@@ -307,5 +314,14 @@ func isContextTypeName(t types.Type) bool {
 	if idx := strings.LastIndex(typStr, "."); idx >= 0 {
 		name = typStr[idx+1:]
 	}
-	return contextTypeNames[name]
+	if contextTypeNames[name] {
+		return true
+	}
+
+	for _, suffix := range contextQualifiedSuffixes {
+		if strings.HasSuffix(typStr, suffix) {
+			return true
+		}
+	}
+	return false
 }
