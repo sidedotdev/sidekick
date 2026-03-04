@@ -236,8 +236,9 @@ export type Llm2ToolResultBlock = Llm2ContentBlockBase & {
 export type Llm2ReasoningBlock = Llm2ContentBlockBase & {
   type: 'reasoning'
   reasoning: {
-    text: string
+    text?: string
     summary?: string
+    encryptedContent?: string
   }
 }
 
