@@ -77,6 +77,13 @@
                 <JsonTree v-else :deep="jsonTreeDepth" :data="getToolResultBlock(block)" />
               </div>
 
+              <!-- reasoning block -->
+              <div v-else-if="block.type === 'reasoning'" class="llm2-text-block">
+                <vue-markdown v-if="block.reasoning?.text" :options="{ breaks: true }" :source="block.reasoning.text" class="message-content markdown reasoning"/>
+                <p v-else class="reasoning-redacted"><em>Reasoning (content not available)</em></p>
+                <p v-if="block.reasoning?.summary" class="reasoning-summary"><strong>Summary:</strong> {{ block.reasoning.summary }}</p>
+              </div>
+
               <!-- unknown block fallback -->
               <div v-else class="llm2-unknown-block">
                 <p class="unknown-block-header">Unknown Block ({{ block.type }}):</p>
