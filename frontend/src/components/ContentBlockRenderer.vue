@@ -2,7 +2,7 @@
   <pre v-if="block.type === 'text' && block.text" class="tool-result-text">{{ block.text }}</pre>
   <ImagePreview v-else-if="block.type === 'image' && block.image?.url" :src="block.image.url" />
   <div v-else-if="block.type === 'tool_result' && block.toolResult?.content?.length" class="nested-tool-result">
-    <template v-for="(nested, nIdx) in block.toolResult.content" :key="nIdx">
+    <template v-for="(nested, nIdx) in block.toolResult.content" :key="nested.id ?? nIdx">
       <ContentBlockRenderer :block="nested" />
     </template>
   </div>
