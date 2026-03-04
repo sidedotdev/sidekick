@@ -75,10 +75,10 @@ func TestOpenAIPatchImageTokens(t *testing.T) {
 		{"small no multiplier", 320, 320, 1.0, 100},
 		// 320x320 with 1.62 multiplier: 100*1.62 = 162
 		{"small with 4.1-mini multiplier", 320, 320, 1.62, 162},
-		// 1280x1280: ceil(1280/32)^2 = 40*40 = 1600 > 1536 → needs scaling
-		{"exceeds cap", 1280, 1280, 1.0, 1521},
+		// 1280x1280: ceil(1280/32)^2 = 40*40 = 1600 > 1536 → capped
+		{"exceeds cap", 1280, 1280, 1.0, 1536},
 		// Very large: definitely capped
-		{"very large", 4000, 3000, 1.0, 1485},
+		{"very large", 4000, 3000, 1.0, 1536},
 		// With nano multiplier 2.46
 		{"small with nano multiplier", 320, 320, 2.46, 246},
 		// Zero multiplier defaults to 1.0

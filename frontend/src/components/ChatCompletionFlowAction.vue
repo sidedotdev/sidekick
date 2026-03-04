@@ -112,7 +112,7 @@
 
           <div v-if="message.function_call" class="message-function-call" :class="{ 'expanded': expandedMessages.includes(index), 'truncated': !expandedMessages.includes(index) }">
             Function Call: <span v-text="message.function_call?.name" class="message-function-call-name"></span>
-            <JsonTree :deep="jsonTreeDepth" :data="JSON.parse(message.function_call?.arguments || '{}')" />
+            <JsonTree :deep="jsonTreeDepth" :data="message.function_call.parsedArguments" />
           </div>
           <div v-for="toolCall in message.toolCalls" :key="toolCall.id" class="message-function-call" :class="{ 'expanded': expandedMessages.includes(index), 'truncated': !expandedMessages.includes(index) }">
             Tool Call: <span v-text="toolCall.name" class="message-function-call-name"></span>
@@ -366,7 +366,7 @@ watch(() => props.flowAction, (newVal) => {
     }
   }
 
-  if (completion.value?.toolCalls?.length) {
+  if (completion.value?.toolCalls?.length || completion.value?.function_call) {
     try {
       addParsedArguments(completion.value);
     } catch (e: any) {
@@ -381,6 +381,18 @@ watch(() => props.flowAction, (newVal) => {
 }, { immediate: true, deep: true });
 
 function addParsedArguments(message: ChatCompletionMessage) {
+  if (message.function_call?.arguments) {
+    try {
+      message.function_call.parsedArguments = JSON.parse(message.function_call.arguments)
+    } catch (e: any) {
+      if (!(e instanceof Error)) { throw e; }
+      if (/JSON/.test(e.message)) {
+        message.function_call.parsedArguments = `Error: Invalid JSON string in function call arguments: ${ message.function_call.arguments }`
+      } else {
+        throw e
+      }
+    }
+  }
   message.toolCalls?.forEach((toolCall) => {
     if (toolCall.arguments) {
       try {

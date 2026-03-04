@@ -18,6 +18,7 @@
 import { computed } from 'vue';
 import type { FlowAction, Llm2ContentBlock } from '../lib/models';
 import ContentBlockRenderer from './ContentBlockRenderer.vue'
+import JsonTree from './JsonTree.vue'
 
 const props = defineProps<{
   flowAction: FlowAction,

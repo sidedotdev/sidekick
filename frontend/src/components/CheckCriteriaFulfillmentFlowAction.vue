@@ -1,6 +1,6 @@
 <template>
   <div class="check-criteria-fulfillment">
-    <ChatCompletionFlowAction :flowAction="flowAction" :expand="expand" :jsonTreeDepth="0" />
+    <ChatCompletionFlowAction v-if="expand" :flowAction="flowAction" :expand="expand" :jsonTreeDepth="0" />
     <div v-if="criteriaFulfillment">
       <div v-if="expand" class="analysis">
         <strong>Analysis:</strong>

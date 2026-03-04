@@ -10,12 +10,12 @@
           <ContentBlockRenderer :block="block" />
         </template>
       </template>
-      <template v-if="contentBlocks && contentBlocks.length > 0">
+      <template v-else-if="contentBlocks && contentBlocks.length > 0">
         <template v-for="(block, idx) in contentBlocks" :key="idx">
           <ContentBlockRenderer :block="block" />
         </template>
       </template>
-      <pre v-else-if="!hydratedBlocks?.length && toolResponse">{{ toolResponse }}</pre>
+      <pre v-else-if="toolResponse">{{ toolResponse }}</pre>
     </div>
   </div>
 </template>
