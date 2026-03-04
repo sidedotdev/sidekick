@@ -40,30 +40,32 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 	var diff string
 	var err error
 
+	ignoreWhitespace := true
+
 	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 5)
 	if v >= 4 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
-		diff, err = getOwnChangesSinceReview(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, false)
+		diff, err = getOwnChangesSinceReview(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, ignoreWhitespace)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get own changes since review: %v", err)
 		}
 	} else if v >= 3 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
-		diff, err = legacyOwnChangesSinceReviewV3(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, false)
+		diff, err = legacyOwnChangesSinceReviewV3(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, ignoreWhitespace)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get own changes since review: %v", err)
 		}
 	} else if v >= 2 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
-		diff, err = legacyOwnChangesSinceReview(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, false)
+		diff, err = legacyOwnChangesSinceReview(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, ignoreWhitespace)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get own changes since review: %v", err)
 		}
 	} else if v >= 2 && promptInfo.BaseBranch != "" {
 		// No last review tree hash available, fall back to full three-dot diff
-		diff, err = GetGitDiff(dCtx, promptInfo.BaseBranch, false)
+		diff, err = GetGitDiff(dCtx, promptInfo.BaseBranch, ignoreWhitespace)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get three-dot diff: %v", err)
 		}
 	} else if v >= 1 && promptInfo.LastReviewTreeHash != "" {
-		diff, err = getDiffSinceLastReview(dCtx, promptInfo.LastReviewTreeHash, false, nil)
+		diff, err = getDiffSinceLastReview(dCtx, promptInfo.LastReviewTreeHash, ignoreWhitespace, nil)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get diff since last review: %v", err)
 		}
