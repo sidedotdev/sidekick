@@ -1,7 +1,7 @@
 export interface ModelConfig {
   provider: string
   model: string
-  reasoningEffort?: '' | 'minimal' | 'low' | 'medium' | 'high'
+  reasoningEffort?: '' | 'lowest' | 'minimal' | 'low' | 'medium' | 'high' | 'highest'
 }
 
 export interface LLMConfig {
@@ -189,3 +189,111 @@ export interface Subflow {
   result?: string; // Result of the subflow, if any
 }
 // --- End From Go definition ---
+
+// --- llm2 Chat History Types ---
+export type MessageRef = {
+  blockKeys: string[]
+  role: string
+}
+
+// Shared fields present on every ContentBlock from the Go llm2.ContentBlock struct.
+type Llm2ContentBlockBase = {
+  id?: string
+  cacheControl?: string
+  contextType?: string
+  signature?: string
+}
+
+export type Llm2TextBlock = Llm2ContentBlockBase & {
+  type: 'text'
+  text: string
+}
+
+export type Llm2ImageBlock = Llm2ContentBlockBase & {
+  type: 'image'
+  image: { url: string }
+}
+
+export type Llm2ToolUseBlock = Llm2ContentBlockBase & {
+  type: 'tool_use'
+  toolUse: {
+    id: string
+    name: string
+    arguments: string
+  }
+}
+
+export type Llm2ToolResultBlock = Llm2ContentBlockBase & {
+  type: 'tool_result'
+  toolResult: {
+    toolCallId: string
+    name?: string
+    isError?: boolean
+    content?: Llm2ContentBlock[]
+  }
+}
+
+export type Llm2ReasoningBlock = Llm2ContentBlockBase & {
+  type: 'reasoning'
+  reasoning: {
+    text?: string
+    summary?: string
+    encryptedContent?: string
+  }
+}
+
+export type Llm2RefusalBlock = Llm2ContentBlockBase & {
+  type: 'refusal'
+  refusal: {
+    type?: string
+    reason: string
+  }
+}
+
+export type Llm2ContentBlock =
+  | Llm2TextBlock
+  | Llm2ImageBlock
+  | Llm2ToolUseBlock
+  | Llm2ToolResultBlock
+  | Llm2ReasoningBlock
+  | Llm2RefusalBlock
+
+export type Llm2Message = {
+  role: string
+  content: Llm2ContentBlock[]
+}
+
+export type Llm2ChatHistoryWrapper = {
+  type: 'llm2'
+  refs: MessageRef[]
+  flowId?: string
+  workspaceId?: string
+}
+
+export type ChatHistoryParamPayload = ChatCompletionMessage[] | Llm2ChatHistoryWrapper
+
+export function isLlm2ChatHistoryWrapper(payload: ChatHistoryParamPayload | undefined | null): payload is Llm2ChatHistoryWrapper {
+  return payload != null && !Array.isArray(payload) && payload.type === 'llm2'
+}
+// --- End llm2 Chat History Types ---
+
+export interface CriteriaFulfillment {
+  whatWasActuallyDone: string;
+  analysis: string;
+  isFulfilled: boolean;
+  confidence: number;
+  feedbackMessage?: string;
+}
+
+/**
+ * Extracts tool call arguments string from a parsed actionResult,
+ * supporting both legacy ChatCompletionMessage and llm2 MessageResponse formats.
+ */
+export function extractToolCallArguments(parsedResult: any): string | null {
+  if (!parsedResult) return null;
+  if (parsedResult.output?.content && Array.isArray(parsedResult.output.content)) {
+    const toolUseBlock = parsedResult.output.content.find((b: any) => b.type === 'tool_use');
+    return toolUseBlock?.toolUse?.arguments ?? null;
+  }
+  return parsedResult.toolCalls?.[0]?.arguments ?? null;
+}

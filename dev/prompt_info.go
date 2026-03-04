@@ -77,11 +77,9 @@ func (pic *PromptInfoContainer) UnmarshalJSON(data []byte) error {
 		}
 		pic.PromptInfo = fi
 	case "tool_call_response":
-		var fcri ToolCallResponseInfo
-		if err := json.Unmarshal(v.Info, &fcri); err != nil {
-			return err
-		}
-		pic.PromptInfo = fcri
+		// Legacy: tool call responses are now added to chat history directly
+		// via addToolCallResponse, so we just skip when deserializing old data.
+		pic.PromptInfo = SkipInfo{}
 	default:
 		return fmt.Errorf("unknown PromptInfo type: %s", v.Type)
 	}
@@ -218,16 +216,4 @@ func renderGeneralFeedbackPrompt(feedback, feedbackType string) string {
 		"isSystemError":  feedbackType == FeedbackTypeSystemError,
 	}
 	return RenderPrompt(GeneralFeedback, data)
-}
-
-type ToolCallResponseInfo struct {
-	Response     string
-	FunctionName string
-	ToolCallId   string
-	IsError      bool
-}
-
-// Implement the PromptInfo interface for ToolCallResponseInfo
-func (p ToolCallResponseInfo) GetType() string {
-	return "tool_call_response"
 }

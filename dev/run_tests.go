@@ -8,6 +8,7 @@ import (
 	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/llm"
+	"sidekick/llm2"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -44,8 +45,8 @@ func RunTests(dCtx DevContext, commandsToRun []common.CommandConfig) (TestResult
 
 	actionCtx := dCtx.NewActionContext("run_tests")
 	actionCtx.ActionParams = actionParams
-	testResults, err := Track(actionCtx, func(flowAction *domain.FlowAction) ([]TestResult, error) {
-		return runTestsWithRetry(dCtx, actionCtx, commandsToRun, resultsCh)
+	testResults, err := Track(actionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) ([]TestResult, error) {
+		return runTestsWithRetry(trackedCtx.DevContext, trackedCtx, commandsToRun, resultsCh)
 	})
 
 	if err != nil {
@@ -325,17 +326,21 @@ Here is the test result output to summarize:
 %s
 `, testOutput)
 
-	toolChatOptions := llm.ToolChatOptions{
-		Secrets: *dCtx.Secrets,
-		Params: llm.PromptToToolChatParams(prompt, llm.ChatControlParams{
-			ModelConfig: modelConfig,
-		}),
+	// Create a versioned chat history with just the prompt
+	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
+	AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
+		Role:    llm.ChatMessageRoleUser,
+		Content: prompt,
+	})
+
+	options := llm2.Options{
+		ModelConfig: modelConfig,
 	}
-	chatResponse, err := TrackedToolChat(dCtx, "summarize_tests", toolChatOptions)
+	chatResponse, err := TrackedToolChat(dCtx, "summarize_tests", options, chatHistory)
 	if err != nil {
 		return "", err
 	}
-	summarizedOutput := chatResponse.Content
+	summarizedOutput := chatResponse.GetMessage().GetContentString()
 
 	if len(summarizedOutput) > maxTestOutputSize {
 		messageFormat := "\n...\nNote: the summarized test output was too long, so we truncated the last %d characters.\n\n"

@@ -2,6 +2,7 @@ package srv
 
 import (
 	"context"
+	"sidekick/common"
 	"sidekick/domain"
 )
 
@@ -19,10 +20,9 @@ type Storage interface {
 	domain.FlowActionStorage
 	domain.WorkspaceStorage
 	domain.WorktreeStorage
+	common.KeyValueStorage
 
 	CheckConnection(ctx context.Context) error
-	MGet(ctx context.Context, workspaceId string, keys []string) ([][]byte, error)
-	MSet(ctx context.Context, workspaceId string, values map[string]interface{}) error
 }
 
 type Streamer interface {

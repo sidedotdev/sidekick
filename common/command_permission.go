@@ -79,6 +79,9 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "dirname"},
 			{Pattern: "realpath"},
 			{Pattern: "readlink"},
+			{Pattern: "timeout"},
+			{Pattern: "sleep"},
+			{Pattern: "wait"},
 			// Git read operations
 			{Pattern: "git status"},
 			{Pattern: "git log"},
