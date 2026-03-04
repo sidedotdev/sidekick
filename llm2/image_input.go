@@ -124,11 +124,11 @@ func PrepareImageDataURLForLimits(dataURL string, maxBytes int, maxLongEdgePx in
 	// Try to decode the image to check dimensions and potentially resize.
 	img, _, decodeErr := decodeImage(raw)
 	if decodeErr != nil {
-		// Can't decode — check if the raw bytes are at least within the size limit.
-		if len(raw) <= maxBytes {
+		// Can't decode — pass through only if within size limit and no dimension constraint.
+		if len(raw) <= maxBytes && maxLongEdgePx <= 0 {
 			return dataURL, mime, raw, nil
 		}
-		return "", "", nil, fmt.Errorf("image exceeds %d bytes and cannot be decoded for resizing: %w", maxBytes, decodeErr)
+		return "", "", nil, fmt.Errorf("image cannot be decoded for resizing: %w", decodeErr)
 	}
 
 	bounds := img.Bounds()
