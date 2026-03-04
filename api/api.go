@@ -987,7 +987,8 @@ func (ctrl *Controller) ResetFlowHandler(c *gin.Context) {
 		WorkflowID: flowId,
 	})
 	if err != nil {
-		log.Warn().Err(err).Str("workflowId", flowId).Msg("Failed to signal codec cleanup workflow for reset")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Reset succeeded but failed to signal codec cleanup workflow: " + err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"runId": resp.RunId})
