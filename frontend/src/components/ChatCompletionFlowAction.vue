@@ -243,14 +243,16 @@ const hydratedLlm2Messages = computed(() => llm2Messages.value || []);
 
 // Watch for llm2 payloads and hydrate
 watch(
-  () => [props.flowAction.workspaceId, props.flowAction.flowId, messagesPayload.value] as const,
-  async ([actionWorkspaceId, actionFlowId, payload]) => {
+  () => [props.expand, props.flowAction.workspaceId, props.flowAction.flowId, messagesPayload.value] as const,
+  async ([expand, actionWorkspaceId, actionFlowId, payload]) => {
     if (!isLlm2ChatHistoryWrapper(payload)) {
       llm2Messages.value = null;
       llm2HydrationLoading.value = false;
       llm2HydrationError.value = null;
       return;
     }
+
+    if (!expand || llm2Messages.value !== null) return;
 
     const workspaceId = payload.workspaceId || actionWorkspaceId;
     const flowId = payload.flowId || actionFlowId;
