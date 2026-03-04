@@ -967,6 +967,16 @@ func (ctrl *Controller) ResetFlowHandler(c *gin.Context) {
 		return
 	}
 
+	// Signal codec cleanup first to prevent deletion of keys needed by the new run.
+	// Safe to do before reset: if reset fails, pending deletions self-correct on workflow completion.
+	err := ctrl.temporalClient.SignalWorkflow(c, common.CodecCleanupWorkflowID, "", "codec-workflow-reset", common.CodecCleanupResetSignal{
+		WorkflowID: flowId,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to signal codec cleanup workflow: " + err.Error()})
+		return
+	}
+
 	resp, err := ctrl.temporalClient.ResetWorkflowExecution(c, &workflowservice.ResetWorkflowExecutionRequest{
 		Namespace:                 ctrl.temporalNamespace,
 		WorkflowExecution:         &commonpb.WorkflowExecution{WorkflowId: flowId},
@@ -979,15 +989,6 @@ func (ctrl *Controller) ResetFlowHandler(c *gin.Context) {
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Prevent the codec cleanup workflow from deleting keys still needed by the new run
-	err = ctrl.temporalClient.SignalWorkflow(c, common.CodecCleanupWorkflowID, "", "codec-workflow-reset", common.CodecCleanupResetSignal{
-		WorkflowID: flowId,
-	})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Reset succeeded but failed to signal codec cleanup workflow: " + err.Error()})
 		return
 	}
 
