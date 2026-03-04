@@ -536,17 +536,17 @@ func TestAnthropicResponsesProvider_CacheControl(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "reasoning block with cache control",
+			name: "reasoning block (cache control not supported by thinking blocks)",
 			message: Message{
 				Role: RoleAssistant,
 				Content: []ContentBlock{
 					{
 						Type: ContentBlockTypeReasoning,
 						Reasoning: &ReasoningBlock{
-							Text:    "Let me think about this...",
-							Summary: "Thinking",
+							Text:      "Let me think about this...",
+							Summary:   "Thinking",
+							Signature: []byte("test-signature"),
 						},
-						CacheControl: "ephemeral",
 					},
 				},
 			},
@@ -569,8 +569,15 @@ func TestAnthropicResponsesProvider_CacheControl(t *testing.T) {
 			assert.NoError(t, err)
 
 			jsonStr := string(jsonBytes)
-			assert.Contains(t, jsonStr, `"cache_control":{"type":"ephemeral"}`,
-				"Expected cache_control to be present in JSON output for %s", tc.name)
+			if tc.message.Content[0].CacheControl != "" {
+				assert.Contains(t, jsonStr, `"cache_control":{"type":"ephemeral"}`,
+					"Expected cache_control to be present in JSON output for %s", tc.name)
+			}
+
+			if tc.message.Content[0].Type == ContentBlockTypeReasoning {
+				assert.Contains(t, jsonStr, `"thinking"`,
+					"Expected thinking block type in JSON output for %s", tc.name)
+			}
 		})
 	}
 }

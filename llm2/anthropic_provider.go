@@ -648,13 +648,10 @@ func contentBlockToAnthropicParam(block ContentBlock, role Role) (anthropic.Cont
 		if block.Reasoning == nil {
 			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("reasoning block missing Reasoning data")
 		}
-		textBlock := anthropic.NewTextBlock(block.Reasoning.Text)
-		if block.CacheControl != "" {
-			textBlock.OfText.CacheControl = anthropic.CacheControlEphemeralParam{
-				Type: "ephemeral",
-			}
+		if block.Reasoning.EncryptedContent != "" {
+			return anthropic.NewRedactedThinkingBlock(block.Reasoning.EncryptedContent), nil
 		}
-		return textBlock, nil
+		return anthropic.NewThinkingBlock(string(block.Reasoning.Signature), block.Reasoning.Text), nil
 
 	case ContentBlockTypeImage:
 		if block.Image == nil || block.Image.Url == "" {
