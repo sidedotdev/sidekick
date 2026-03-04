@@ -604,6 +604,9 @@ func TestGoogleProvider_ToolResultImageIntegration(t *testing.T) {
 				if strings.Contains(errStr, "RESOURCE_EXHAUSTED") || strings.Contains(errStr, "429") || strings.Contains(errStr, "quota") {
 					t.Skipf("Skipping test due to Google API quota/rate limit: %v", err)
 				}
+				if strings.Contains(errStr, "UNAVAILABLE") || strings.Contains(errStr, "Error 503") || strings.Contains(errStr, "high demand") {
+					t.Skipf("Skipping test due to transient Google API unavailability: %v", err)
+				}
 				t.Fatalf("Stream returned an error: %v", err)
 			}
 

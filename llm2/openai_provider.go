@@ -24,6 +24,51 @@ type OpenAIProvider struct {
 	DefaultModel string
 }
 
+func resolveOpenAIReasoningEffort(effort, model string) string {
+	if effort != "lowest" && effort != "highest" {
+		return effort
+	}
+
+	modelLower := strings.ToLower(model)
+
+	type effortRange struct {
+		lowest  string
+		highest string
+	}
+
+	// Order matters: more specific prefixes must come before broader ones.
+	families := []struct {
+		match func(string) bool
+		effortRange
+	}{
+		{func(m string) bool { return strings.HasPrefix(m, "gpt-5.2-pro") }, effortRange{"medium", "xhigh"}},
+		{func(m string) bool { return strings.HasPrefix(m, "gpt-5.2") }, effortRange{"none", "xhigh"}},
+		{func(m string) bool { return strings.HasPrefix(m, "gpt-5.3-codex") }, effortRange{"low", "xhigh"}},
+		{func(m string) bool { return strings.HasPrefix(m, "gpt-5.1-codex-max") }, effortRange{"low", "xhigh"}},
+		{func(m string) bool { return strings.HasPrefix(m, "gpt-5-codex") }, effortRange{"low", "high"}},
+		{func(m string) bool { return strings.HasPrefix(m, "gpt-5-mini") }, effortRange{"minimal", "high"}},
+		{func(m string) bool { return strings.HasPrefix(m, "gpt-5.1") }, effortRange{"minimal", "high"}},
+		{func(m string) bool { return strings.HasPrefix(m, "gpt-5") }, effortRange{"minimal", "high"}},
+		{func(m string) bool {
+			return strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4-mini")
+		}, effortRange{"low", "high"}},
+	}
+
+	for _, f := range families {
+		if f.match(modelLower) {
+			if effort == "lowest" {
+				return f.lowest
+			}
+			return f.highest
+		}
+	}
+
+	if effort == "lowest" {
+		return "none"
+	}
+	return "high"
+}
+
 func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
 	messages := request.Messages
 	options := request.Options

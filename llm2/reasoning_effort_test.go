@@ -60,8 +60,8 @@ func TestResolveOpenAIReasoningEffort(t *testing.T) {
 		{"gpt-5.3-codex lowest", "lowest", "gpt-5.3-Codex", "low"},
 		{"gpt-5.3-codex highest", "highest", "gpt-5.3-Codex", "xhigh"},
 
-		// Fallback for unrecognized models
-		{"unknown model lowest", "lowest", "some-new-model", "low"},
+		// Unrecognized models: assume newer models support these values
+		{"unknown model lowest", "lowest", "some-new-model", "none"},
 		{"unknown model highest", "highest", "some-new-model", "high"},
 	}
 
@@ -102,6 +102,10 @@ func TestResolveAnthropicReasoningEffort(t *testing.T) {
 		{"highest opus-4-5", "highest", "claude-opus-4-5", "high"},
 		{"highest sonnet-4", "highest", "claude-sonnet-4", "high"},
 		{"highest haiku", "highest", "claude-haiku-3", "high"},
+
+		// Unrecognized models
+		{"unknown model lowest", "lowest", "some-new-model", ""},
+		{"unknown model highest", "highest", "some-new-model", "high"},
 	}
 
 	for _, tt := range tests {
@@ -168,14 +172,18 @@ func TestResolveGoogleReasoningEffort(t *testing.T) {
 		{"passthrough low", "low", "gemini-2.5-pro", "low"},
 		{"passthrough high", "high", "gemini-3-pro-preview", "high"},
 
-		// lowest: newer models → off (thinking disabled), legacy 2.5 → minimal (budget 1024)
-		{"lowest newer model", "lowest", "gemini-3-pro-preview", "off"},
-		{"lowest legacy 2.5-pro", "lowest", "gemini-2.5-pro", "minimal"},
-		{"lowest legacy 2.5-flash", "lowest", "gemini-2.5-flash", "minimal"},
+		// lowest → none (thinking disabled)
+		{"lowest newer model", "lowest", "gemini-3-pro-preview", "none"},
+		{"lowest legacy 2.5-pro", "lowest", "gemini-2.5-pro", "none"},
+		{"lowest legacy 2.5-flash", "lowest", "gemini-2.5-flash", "none"},
 
 		// highest → max
 		{"highest newer model", "highest", "gemini-3-pro-preview", "max"},
 		{"highest legacy model", "highest", "gemini-2.5-pro", "max"},
+
+		// Unrecognized models
+		{"unknown model lowest", "lowest", "some-new-model", ""},
+		{"unknown model highest", "highest", "some-new-model", "high"},
 	}
 
 	for _, tt := range tests {

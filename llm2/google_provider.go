@@ -22,13 +22,34 @@ const (
 )
 
 var googleLegacyThinkingBudgetLlm2 = map[string]int32{
-	"minimal": 1024,
-	"low":     1024,
-	"medium":  8192,
-	"high":    24576,
+	"low":    1024,
+	"medium": 8192,
+	"high":   24576,
 }
 
 type GoogleProvider struct{}
+
+func resolveGoogleReasoningEffort(effort, model string) string {
+	if effort != "lowest" && effort != "highest" {
+		return effort
+	}
+
+	modelLower := strings.ToLower(model)
+	if !strings.Contains(modelLower, "gemini") {
+		if effort == "lowest" {
+			// Some Google models/configs separate enabling thinking from tuning its strength.
+			// Returning "" maps "lowest" to "default effort + no thinking" without guessing provider-specific values.
+			return ""
+		}
+		return "high"
+	}
+
+	if effort == "lowest" {
+		return "none"
+	}
+	// highest
+	return "max"
+}
 
 func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
 	messages := request.Messages
@@ -87,9 +108,9 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 	resolvedGoogleEffort := resolveGoogleReasoningEffort(options.ReasoningEffort, model)
 	var actualReasoningEffort string
 	if isReasoningModel {
-		if resolvedGoogleEffort == "off" {
-			// "lowest" resolved to "off": skip thinking entirely
-			actualReasoningEffort = "off"
+		if resolvedGoogleEffort == "none" || resolvedGoogleEffort == "" {
+			// Thinking is intentionally skipped.
+			actualReasoningEffort = resolvedGoogleEffort
 		} else {
 			config.ThinkingConfig = &genai.ThinkingConfig{
 				IncludeThoughts: true,

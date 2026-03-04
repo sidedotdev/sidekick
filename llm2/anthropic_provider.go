@@ -289,10 +289,10 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	}
 
 	// Report the resolved effort. When "lowest" resolved to "" (thinking off),
-	// report "off" so consumers know thinking was intentionally skipped.
+	// report "none" so consumers know thinking was intentionally skipped.
 	reportedEffort := resolvedEffort
 	if options.ReasoningEffort == "lowest" && resolvedEffort == "" {
-		reportedEffort = "off"
+		reportedEffort = "none"
 	}
 
 	response := &MessageResponse{
@@ -307,6 +307,91 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	}
 
 	return response, nil
+}
+
+func resolveAnthropicReasoningEffort(effort, model string) string {
+	if effort != "lowest" && effort != "highest" {
+		return effort
+	}
+
+	modelLower := strings.ToLower(model)
+	if !strings.Contains(modelLower, "claude") {
+		if effort == "lowest" {
+			// Anthropic doesn't have a "none" effort; thinking is controlled separately from effort.
+			// Returning "" is a reliable way to map "lowest" to "default effort + no thinking".
+			return ""
+		}
+		return "high"
+	}
+
+	if effort == "lowest" {
+		return ""
+	}
+	// highest
+	if anthropicSupportsAdaptiveThinking(model) {
+		return "max"
+	}
+	return "high"
+}
+
+// anthropicSupportsAdaptiveThinking returns true for models where adaptive
+// thinking should be enabled by default (Opus and Sonnet 4.6+).
+func anthropicSupportsAdaptiveThinking(model string) bool {
+	major, minor, ok := parseAnthropicVersion(model)
+	if !ok {
+		return false
+	}
+	// Adaptive thinking is supported starting from version 4.6.
+	return major > 4 || (major == 4 && minor >= 6)
+}
+
+// parseAnthropicVersion extracts the major and minor version from an Anthropic
+// model name for the opus or sonnet family. Returns false if the model is not
+// a recognized opus/sonnet model or the version cannot be parsed.
+func parseAnthropicVersion(model string) (major, minor int, ok bool) {
+	m := strings.ToLower(model)
+
+	// Find the family prefix to locate where the version starts.
+	var versionPart string
+	for _, family := range []string{"opus-", "sonnet-"} {
+		idx := strings.Index(m, family)
+		if idx >= 0 {
+			versionPart = m[idx+len(family):]
+			break
+		}
+	}
+	if versionPart == "" {
+		return 0, 0, false
+	}
+
+	// Parse major version (digits at the start).
+	i := 0
+	for i < len(versionPart) && versionPart[i] >= '0' && versionPart[i] <= '9' {
+		i++
+	}
+	if i == 0 {
+		return 0, 0, false
+	}
+	major = 0
+	for _, c := range versionPart[:i] {
+		major = major*10 + int(c-'0')
+	}
+
+	// Parse optional minor version after '.' or '-'.
+	if i < len(versionPart) && (versionPart[i] == '.' || versionPart[i] == '-') {
+		rest := versionPart[i+1:]
+		j := 0
+		for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
+			j++
+		}
+		if j > 0 {
+			for _, c := range rest[:j] {
+				minor = minor*10 + int(c-'0')
+			}
+		}
+	}
+
+	return major, minor, true
 }
 
 func accumulateAnthropicEventsToMessage(events []Event) Message {
