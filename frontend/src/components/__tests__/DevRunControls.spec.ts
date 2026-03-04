@@ -15,10 +15,12 @@ class MockWebSocket {
   constructor(url: string) {
     this.url = url
     MockWebSocket.instances.push(this)
-    setTimeout(() => {
+    // Use queueMicrotask so onopen fires before any pending macrotask timers,
+    // avoiding a race between the debounce timer and the socket open callback.
+    queueMicrotask(() => {
       this.readyState = WebSocket.OPEN
       this.onopen?.(new Event('open'))
-    }, 0)
+    })
   }
   
   send = vi.fn()
