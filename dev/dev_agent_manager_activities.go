@@ -3,10 +3,16 @@ package dev
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/srv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -194,4 +200,311 @@ func (ima *DevAgentManagerActivities) FindWorkspaceById(ctx context.Context, wor
 		return domain.Workspace{}, err
 	}
 	return workspace, nil
+}
+
+type StaleWorktreeCandidate struct {
+	Path    string `json:"path"`
+	Reason  string `json:"reason"`
+	Warning string `json:"warning,omitempty"`
+}
+
+type CleanupStaleWorktreesReport struct {
+	WorkspaceId string                   `json:"workspaceId"`
+	BaseDir     string                   `json:"baseDir"`
+	DryRun      bool                     `json:"dryRun"`
+	Candidates  []StaleWorktreeCandidate `json:"candidates"`
+	Protected   []StaleWorktreeCandidate `json:"protected"`
+}
+
+func (ima *DevAgentManagerActivities) CleanupStaleWorktrees(ctx context.Context, input CleanupStaleWorktreesInput) (CleanupStaleWorktreesReport, error) {
+	infoLog := func(msg string, kv ...any) {
+		if activity.IsActivity(ctx) {
+			activity.GetLogger(ctx).Info(msg, kv...)
+			return
+		}
+
+		ev := log.Info()
+		for i := 0; i+1 < len(kv); i += 2 {
+			key, ok := kv[i].(string)
+			if !ok || strings.TrimSpace(key) == "" {
+				continue
+			}
+			ev = ev.Interface(key, kv[i+1])
+		}
+		ev.Msg(msg)
+	}
+
+	errorLog := func(msg string, kv ...any) {
+		if activity.IsActivity(ctx) {
+			activity.GetLogger(ctx).Error(msg, kv...)
+			return
+		}
+
+		ev := log.Error()
+		for i := 0; i+1 < len(kv); i += 2 {
+			key, ok := kv[i].(string)
+			if !ok || strings.TrimSpace(key) == "" {
+				continue
+			}
+			ev = ev.Interface(key, kv[i+1])
+		}
+		ev.Msg(msg)
+	}
+
+	sidekickDataHome, err := common.GetSidekickDataHome()
+	if err != nil {
+		return CleanupStaleWorktreesReport{}, err
+	}
+	baseDir := filepath.Join(sidekickDataHome, "worktrees", input.WorkspaceId)
+
+	report := CleanupStaleWorktreesReport{
+		WorkspaceId: input.WorkspaceId,
+		BaseDir:     baseDir,
+		DryRun:      input.DryRun,
+	}
+
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return report, nil
+		}
+		return CleanupStaleWorktreesReport{}, fmt.Errorf("failed to read worktrees directory: %w", err)
+	}
+
+	worktrees, err := ima.Storage.GetWorktrees(ctx, input.WorkspaceId)
+	if err != nil {
+		return CleanupStaleWorktreesReport{}, err
+	}
+
+	protected := make(map[string]StaleWorktreeCandidate)
+	inactiveReasons := make(map[string]string)
+	inactiveWarnings := make(map[string]string)
+
+	for _, wt := range worktrees {
+		workingDir := strings.TrimSpace(wt.WorkingDirectory)
+		if workingDir == "" {
+			continue
+		}
+
+		active, reason, warning, err := ima.isWorktreeActive(ctx, input.WorkspaceId, wt)
+		if err != nil {
+			errorLog("Failed to evaluate worktree activity; treating as protected", "worktreeId", wt.Id, "worktreeDir", workingDir, "error", err)
+			protected[workingDir] = StaleWorktreeCandidate{
+				Path:    workingDir,
+				Reason:  "failed to evaluate worktree activity",
+				Warning: "",
+			}
+			continue
+		}
+
+		if active {
+			protected[workingDir] = StaleWorktreeCandidate{
+				Path:    workingDir,
+				Reason:  reason,
+				Warning: warning,
+			}
+			continue
+		}
+
+		if strings.TrimSpace(reason) != "" {
+			inactiveReasons[workingDir] = reason
+		}
+		if strings.TrimSpace(warning) != "" {
+			inactiveWarnings[workingDir] = warning
+		}
+	}
+
+	var toDelete []StaleWorktreeCandidate
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		dirPath := filepath.Join(baseDir, entry.Name())
+		if _, ok := protected[dirPath]; ok {
+			continue
+		}
+
+		reason := inactiveReasons[dirPath]
+		if strings.TrimSpace(reason) == "" {
+			reason = "not tied to an active flow/task"
+		}
+		warning := inactiveWarnings[dirPath]
+
+		candidate := StaleWorktreeCandidate{
+			Path:    dirPath,
+			Reason:  reason,
+			Warning: warning,
+		}
+		report.Candidates = append(report.Candidates, candidate)
+
+		if input.DryRun {
+			infoLog("Stale worktree candidate (dry-run)", "path", dirPath, "reason", reason, "warning", warning)
+			continue
+		}
+
+		toDelete = append(toDelete, candidate)
+	}
+
+	if !input.DryRun && len(toDelete) > 0 {
+		deleteOne := func(candidate StaleWorktreeCandidate) {
+			dirPath := candidate.Path
+			reason := candidate.Reason
+			warning := candidate.Warning
+
+			safeRemoveAll := func() error {
+				cleanBase := filepath.Clean(baseDir)
+				cleanPath := filepath.Clean(dirPath)
+				if cleanPath != cleanBase && !strings.HasPrefix(cleanPath, cleanBase+string(os.PathSeparator)) {
+					return fmt.Errorf("refusing to delete path outside baseDir: %s", cleanPath)
+				}
+				return os.RemoveAll(dirPath)
+			}
+
+			commonGitDirCmd := exec.CommandContext(ctx, "git", "-C", dirPath, "rev-parse", "--git-common-dir")
+			commonGitDirOut, err := commonGitDirCmd.CombinedOutput()
+			if err != nil {
+				if rmErr := safeRemoveAll(); rmErr != nil {
+					errorLog(
+						"Failed to locate git common dir for worktree; and direct delete failed",
+						"path", dirPath,
+						"error", err,
+						"output", strings.TrimSpace(string(commonGitDirOut)),
+						"removeError", rmErr,
+					)
+					return
+				}
+				infoLog("Deleted stale worktree directory (direct delete fallback)", "path", dirPath, "reason", reason, "warning", warning)
+				return
+			}
+
+			commonGitDir := strings.TrimSpace(string(commonGitDirOut))
+			if commonGitDir == "" {
+				if rmErr := safeRemoveAll(); rmErr != nil {
+					errorLog("Failed to locate git common dir for worktree; and direct delete failed", "path", dirPath, "error", "empty git common dir", "removeError", rmErr)
+					return
+				}
+				infoLog("Deleted stale worktree directory (direct delete fallback)", "path", dirPath, "reason", reason, "warning", warning)
+				return
+			}
+			if !filepath.IsAbs(commonGitDir) {
+				commonGitDir = filepath.Join(dirPath, commonGitDir)
+			}
+
+			removeCmd := exec.CommandContext(ctx, "git", "--git-dir", commonGitDir, "worktree", "remove", dirPath, "--force")
+			removeOut, err := removeCmd.CombinedOutput()
+			if err != nil {
+				fallbackCmd := exec.CommandContext(ctx, "git", "-C", dirPath, "worktree", "remove", ".", "--force")
+				fallbackOut, fallbackErr := fallbackCmd.CombinedOutput()
+				if fallbackErr != nil {
+					if rmErr := safeRemoveAll(); rmErr != nil {
+						errorLog(
+							"Failed to delete stale worktree via git worktree remove; and direct delete failed",
+							"path", dirPath,
+							"error", err,
+							"output", strings.TrimSpace(string(removeOut)),
+							"fallbackError", fallbackErr,
+							"fallbackOutput", strings.TrimSpace(string(fallbackOut)),
+							"removeError", rmErr,
+						)
+						return
+					}
+					infoLog("Deleted stale worktree directory (direct delete fallback)", "path", dirPath, "reason", reason, "warning", warning)
+					return
+				}
+			}
+
+			infoLog("Deleted stale worktree directory", "path", dirPath, "reason", reason, "warning", warning)
+		}
+
+		maxParallel := runtime.GOMAXPROCS(0)
+		if maxParallel < 2 {
+			maxParallel = 2
+		}
+		if maxParallel > 8 {
+			maxParallel = 8
+		}
+
+		sema := make(chan struct{}, maxParallel)
+		var wg sync.WaitGroup
+		for _, candidate := range toDelete {
+			wg.Add(1)
+			go func(candidate StaleWorktreeCandidate) {
+				defer wg.Done()
+				sema <- struct{}{}
+				defer func() { <-sema }()
+				deleteOne(candidate)
+			}(candidate)
+		}
+		wg.Wait()
+	}
+
+	for _, entry := range protected {
+		report.Protected = append(report.Protected, entry)
+	}
+
+	return report, nil
+}
+
+func (ima *DevAgentManagerActivities) isWorktreeActive(ctx context.Context, workspaceId string, wt domain.Worktree) (bool, string, string, error) {
+	if strings.TrimSpace(wt.FlowId) == "" {
+		return true, "no flowId on worktree record", "", nil
+	}
+
+	flow, err := ima.Storage.GetFlow(ctx, workspaceId, wt.FlowId)
+	if err != nil {
+		if err == srv.ErrNotFound {
+			return false, "flow not found", "", nil
+		}
+		return false, "", "", err
+	}
+
+	flowFinished := false
+	switch flow.Status {
+	case "completed", "failed", "canceled":
+		flowFinished = true
+	}
+
+	if strings.HasPrefix(flow.ParentId, "task_") {
+		task, err := ima.Storage.GetTask(ctx, workspaceId, flow.ParentId)
+		if err != nil {
+			if err == srv.ErrNotFound {
+				if flowFinished {
+					return false, "flow finished", "flow finished but task missing", nil
+				}
+				return false, "task not found", "", nil
+			}
+			return false, "", "", err
+		}
+
+		taskFinished := false
+		switch task.Status {
+		case domain.TaskStatusComplete, domain.TaskStatusFailed, domain.TaskStatusCanceled:
+			taskFinished = true
+		}
+
+		if flowFinished && !taskFinished {
+			return true, "task active", "flow finished but task still active", nil
+		}
+
+		if !flowFinished && taskFinished {
+			return false, "task finished", "flow still active but task finished", nil
+		}
+
+		if taskFinished {
+			return false, "task finished", "", nil
+		}
+		return true, "task active", "", nil
+	}
+
+	if flowFinished {
+		return false, "flow finished", "", nil
+	}
+
+	return true, "flow active", "", nil
+}
+
+type CleanupStaleWorktreesInput struct {
+	WorkspaceId string `json:"workspaceId"`
+	DryRun      bool   `json:"dryRun"`
 }
