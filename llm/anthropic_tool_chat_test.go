@@ -201,6 +201,13 @@ func TestAnthropicToolChatIntegration(t *testing.T) {
 	close(deltaChan)
 
 	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "OAuth token has been revoked") ||
+			strings.Contains(errStr, "invalid_grant") ||
+			strings.Contains(errStr, "Refresh token not found or invalid") ||
+			strings.Contains(errStr, "failed to get Anthropic OAuth credentials") {
+			t.Skipf("Skipping test due to Anthropic credentials not configured/invalid: %v", err)
+		}
 		t.Fatalf("ChatStream returned an error: %v", err)
 	}
 

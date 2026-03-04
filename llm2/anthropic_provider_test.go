@@ -158,7 +158,8 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		}
 		if contains(errStr, "invalid_grant") ||
 			contains(errStr, "Refresh token not found or invalid") ||
-			contains(errStr, "failed to get Anthropic OAuth credentials") {
+			contains(errStr, "failed to get Anthropic OAuth credentials") ||
+			contains(errStr, "OAuth token has been revoked") {
 			t.Skipf("Skipping test due to Anthropic credentials not configured/invalid: %v", err)
 		}
 		t.Fatalf("Stream returned an error: %v", err)
@@ -657,7 +658,8 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 		}
 		if contains(errStr, "invalid_grant") ||
 			contains(errStr, "Refresh token not found or invalid") ||
-			contains(errStr, "failed to get Anthropic OAuth credentials") {
+			contains(errStr, "failed to get Anthropic OAuth credentials") ||
+			contains(errStr, "OAuth token has been revoked") {
 			t.Skipf("Skipping test due to Anthropic credentials not configured/invalid: %v", err)
 		}
 		t.Fatalf("Stream returned an error: %v", err)
@@ -781,7 +783,8 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 		}
 		if contains(errStr, "invalid_grant") ||
 			contains(errStr, "Refresh token not found or invalid") ||
-			contains(errStr, "failed to get Anthropic OAuth credentials") {
+			contains(errStr, "failed to get Anthropic OAuth credentials") ||
+			contains(errStr, "OAuth token has been revoked") {
 			t.Skipf("Skipping test due to Anthropic credentials not configured/invalid: %v", err)
 		}
 		t.Fatalf("Stream returned an error: %v", err)
