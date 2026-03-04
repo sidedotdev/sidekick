@@ -181,7 +181,8 @@ export const parseDiff = (diffString: string): ParsedDiff[] => {
     if (renameToLine) {
       newFile = renameToLine.replace(/\r$/, '').slice('rename to '.length);
     }
-    const isRename = oldFile != null && newFile != null && oldFile !== newFile;
+    const isRename = oldFile != null && newFile != null && oldFile !== newFile
+      && oldFile !== 'dev/null' && newFile !== 'dev/null';
     
     // Calculate line counts
     const { added, removed, unchanged } = calculateLineCounts(file);
