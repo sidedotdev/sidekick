@@ -17,6 +17,8 @@ type LSPClient interface {
 	TextDocumentCodeAction(ctx context.Context, params CodeActionParams) ([]CodeAction, error)
 	TextDocumentImplementation(ctx context.Context, uri string, line int, character int) ([]Location, error)
 	TextDocumentReferences(ctx context.Context, uri string, line int, character int) ([]Location, error)
+	PrepareCallHierarchy(ctx context.Context, uri string, line int, character int) ([]CallHierarchyItem, error)
+	CallHierarchyIncomingCalls(ctx context.Context, item CallHierarchyItem) ([]CallHierarchyIncomingCall, error)
 	GetServerCapabilities() ServerCapabilities
 
 	// Text document synchronization notifications
@@ -193,6 +195,46 @@ func (l *Jsonrpc2LSPClient) TextDocumentImplementation(ctx context.Context, uri 
 		return []Location{}, err
 	}
 	return locations, nil
+}
+
+// textDocument/prepareCallHierarchy
+func (l *Jsonrpc2LSPClient) PrepareCallHierarchy(ctx context.Context, uri string, line int, character int) ([]CallHierarchyItem, error) {
+	if l.Conn == nil {
+		return []CallHierarchyItem{}, fmt.Errorf("PrepareCallHierarchy called before Initialize")
+	}
+	params := CallHierarchyPrepareParams{
+		TextDocumentPositionParams: TextDocumentPositionParams{
+			TextDocument: TextDocumentIdentifier{
+				URI: uri,
+			},
+			Position: Position{
+				Line:      line,
+				Character: character,
+			},
+		},
+	}
+	var items []CallHierarchyItem
+	err := l.Conn.Call(ctx, "textDocument/prepareCallHierarchy", params, &items)
+	if err != nil {
+		return []CallHierarchyItem{}, err
+	}
+	return items, nil
+}
+
+// callHierarchy/incomingCalls
+func (l *Jsonrpc2LSPClient) CallHierarchyIncomingCalls(ctx context.Context, item CallHierarchyItem) ([]CallHierarchyIncomingCall, error) {
+	if l.Conn == nil {
+		return []CallHierarchyIncomingCall{}, fmt.Errorf("CallHierarchyIncomingCalls called before Initialize")
+	}
+	params := CallHierarchyIncomingCallsParams{
+		Item: item,
+	}
+	var calls []CallHierarchyIncomingCall
+	err := l.Conn.Call(ctx, "callHierarchy/incomingCalls", params, &calls)
+	if err != nil {
+		return []CallHierarchyIncomingCall{}, err
+	}
+	return calls, nil
 }
 
 func (l *Jsonrpc2LSPClient) GetServerCapabilities() ServerCapabilities {

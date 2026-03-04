@@ -4,7 +4,12 @@
       <div class="file-header-content">
         <div class="file-path-container">
           <span class="expand-icon" :class="{ expanded: isExpanded }">▶</span>
-          <span class="file-path">{{ filePath }}</span>
+          <template v-if="fileData.isRename">
+            <span class="file-path rename-path">{{ fileData.oldFile.fileName }}</span>
+            <span class="rename-arrow">→</span>
+            <span class="file-path rename-path">{{ fileData.newFile.fileName }}</span>
+          </template>
+          <span v-else class="file-path">{{ filePath }}</span>
           <button class="copy-button" @click.stop="copyFilePath" title="Copy file path">
             <CopyIcon />
           </button>
@@ -192,6 +197,12 @@ const getTheme = () => {
   font-size: 0.875rem;
   color: var(--color-text);
   word-break: break-all;
+}
+
+.rename-arrow {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  flex-shrink: 0;
 }
 
 .copy-button,

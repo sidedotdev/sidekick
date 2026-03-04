@@ -4,15 +4,15 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/flow_action"
-	"sidekick/llm"
+	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
 	"sidekick/utils"
-	"strings"
 	"testing"
 
 	"github.com/sashabaranov/go-openai"
@@ -35,7 +35,7 @@ type AuthorEditBlocksTestSuite struct {
 	// a wrapper is required to set the ctx1 value, so that we can a method that
 	// isn't a real workflow. otherwise we get errors about not having
 	// StartToClose or ScheduleToCloseTimeout set
-	wrapperWorkflow func(ctx workflow.Context, chatHistory *[]llm.ChatMessage, pic PromptInfoContainer) ([]EditBlock, error)
+	wrapperWorkflow func(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, pic PromptInfoContainer) ([]EditBlock, error)
 }
 
 func (s *AuthorEditBlocksTestSuite) SetupTest() {
@@ -48,7 +48,7 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 
 	// s.NewTestActivityEnvironment()
-	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *[]llm.ChatMessage, pic PromptInfoContainer) ([]EditBlock, error) {
+	s.wrapperWorkflow = func(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, pic PromptInfoContainer) ([]EditBlock, error) {
 		ctx1 := utils.NoRetryCtx(ctx)
 		execContext := DevContext{
 			ExecContext: flow_action.ExecContext{
@@ -76,6 +76,28 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	s.env.OnActivity(ManageChatHistoryActivity, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	s.env.OnActivity(ManageChatHistoryV2Activity, mock.Anything, mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 
+	// Use version 1 for chat-history-llm2 (Llm2ChatHistory path)
+	s.env.OnGetVersion("chat-history-llm2", workflow.DefaultVersion, 1).Return(workflow.Version(1)).Maybe()
+
+	// Mock KV activities for chat history persistence
+	var ka *common.KVActivities
+	s.env.OnActivity(ka.MSetRaw, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	s.env.OnActivity(ka.MGet, mock.Anything, mock.Anything, mock.Anything).Return([][]byte{}, nil).Maybe()
+
+	// Mock ChatHistoryActivities for llm2 path
+	var cha *persisted_ai.ChatHistoryActivities
+	s.env.OnActivity(cha.ManageV4, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, input persisted_ai.ManageInput) (*persisted_ai.ManageOutput, error) {
+			return &persisted_ai.ManageOutput{ChatHistory: input.ChatHistory}, nil
+		},
+	).Maybe()
+	s.env.OnActivity(cha.AppendMessage, mock.Anything, mock.Anything).Return(
+		&persisted_ai.MessageRef{BlockKeys: []string{"mock-block"}, Role: "user"}, nil,
+	).Maybe()
+	s.env.OnActivity(cha.ExtractVisibleCodeBlocks, mock.Anything, mock.Anything).Return(
+		[]tree_sitter.CodeBlock{}, nil,
+	).Maybe()
+
 	// Create temporary directory using t.TempDir()
 	s.dir = s.T().TempDir()
 	devEnv, err := env.NewLocalEnv(context.Background(), env.LocalEnvParams{
@@ -86,6 +108,24 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 	}
 	s.envContainer = env.EnvContainer{
 		Env: devEnv,
+	}
+
+	// Mock each feature flag individually so unexpected flags cause test failures.
+	// Defaults match flags.yml production defaults.
+	var ffa *fflag.FFlagActivities
+	knownFlags := map[string]bool{
+		fflag.CheckEdits:                        true,
+		fflag.InfoNeeds:                         false,
+		fflag.DisableContextCodeVisibilityCheck: true,
+		fflag.InitialRepoSummary:                true,
+		fflag.ManageHistoryWithContextMarkers:   true,
+	}
+	for flagName, value := range knownFlags {
+		flagName := flagName
+		value := value
+		s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.MatchedBy(func(params fflag.EvaluateFeatureFlagParams) bool {
+			return params.FlagName == flagName
+		})).Return(value, nil).Maybe()
 	}
 }
 
@@ -99,26 +139,30 @@ func TestAuthorEditBlockTestSuite(t *testing.T) {
 }
 
 func (s *AuthorEditBlocksTestSuite) TestInitialCodeInfoNoEditBlocks() {
-	chatHistory := &[]llm.ChatMessage{}
+	chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
 	// Use legacy version (DefaultVersion) so no tool calls terminates the loop
 	s.env.OnGetVersion("done-required-protocol", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
 
-	var la *persisted_ai.LlmActivities // use a nil struct pointer to call activities that are part of a structure
-	s.env.OnActivity(la.ChatStream, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+	var la *persisted_ai.Llm2Activities // use a nil struct pointer to call activities that are part of a structure
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		// Simulate progress events being handled
-		opts := args[1].(persisted_ai.ChatStreamOptions)
+		opts := args[1].(persisted_ai.StreamInput)
 		s.NotEmpty(opts.FlowActionId)
-	}).Return(&llm.ChatMessageResponse{
-		StopReason: string(openai.FinishReasonStop),
-		ChatMessage: llm.ChatMessage{
-			Content: "No edit blocks",
+	}).Return(&llm2.MessageResponse{
+		StopReason: "stop",
+		Output: llm2.Message{
+			Role: "assistant",
+			Content: []llm2.ContentBlock{
+				{
+					Type: llm2.ContentBlockTypeText,
+					Text: "No edit blocks",
+				},
+			},
 		},
 	},
 		nil,
 	).Once()
-	var ffa *fflag.FFlagActivities // use a nil struct pointer to call activities that are part of a structure
-	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil)
 	s.env.ExecuteWorkflow(s.wrapperWorkflow, chatHistory, PromptInfoContainer{
 		InitialCodeInfo{},
 	})
@@ -131,7 +175,7 @@ func (s *AuthorEditBlocksTestSuite) TestInitialCodeInfoNoEditBlocks() {
 }
 
 func (s *AuthorEditBlocksTestSuite) TestDoneRequiredProtocol_EmptyResponseThenDone() {
-	chatHistory := &[]llm.ChatMessage{}
+	chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
 	// Enable done-required protocol (version 1 AND feature flag)
 	s.env.OnGetVersion("done-required-protocol", workflow.DefaultVersion, 1).Return(workflow.Version(1))
@@ -143,38 +187,51 @@ func (s *AuthorEditBlocksTestSuite) TestDoneRequiredProtocol_EmptyResponseThenDo
 	})).Return(false, nil)
 	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil)
 
-	var la *persisted_ai.LlmActivities
+	var la *persisted_ai.Llm2Activities
 	callCount := 0
-	var secondCallMessages []llm.ChatMessage
+	var firstCallRefCount, secondCallRefCount int
+	var secondCallRefs []persisted_ai.MessageRef
 
-	s.env.OnActivity(la.ChatStream, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
-		opts := args[1].(persisted_ai.ChatStreamOptions)
+	s.env.OnActivity(la.Stream, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		opts := args[1].(persisted_ai.StreamInput)
 		s.NotEmpty(opts.FlowActionId)
 		callCount++
-		if callCount == 2 {
-			// Capture messages from the second call to verify feedback was injected
-			secondCallMessages = opts.Params.Messages
+		llm2History := opts.ChatHistory.History.(*persisted_ai.Llm2ChatHistory)
+		refs := llm2History.Refs()
+		if callCount == 1 {
+			firstCallRefCount = len(refs)
+		} else if callCount == 2 {
+			secondCallRefCount = len(refs)
+			secondCallRefs = refs
 		}
-	}).Return(func(ctx context.Context, opts persisted_ai.ChatStreamOptions) (*llm.ChatMessageResponse, error) {
+	}).Return(func(ctx context.Context, opts persisted_ai.StreamInput) (*llm2.MessageResponse, error) {
 		if callCount == 1 {
 			// First call: return empty response (no tool calls, no edit blocks)
-			return &llm.ChatMessageResponse{
+			return &llm2.MessageResponse{
 				StopReason: string(openai.FinishReasonStop),
-				ChatMessage: llm.ChatMessage{
-					Content: "I'm thinking about what to do...",
+				Output: llm2.Message{
+					Content: []llm2.ContentBlock{
+						{
+							Type: llm2.ContentBlockTypeText,
+							Text: "I'm thinking about what to do...",
+						},
+					},
 				},
 			}, nil
 		}
 		// Second call: return done tool call
-		return &llm.ChatMessageResponse{
+		return &llm2.MessageResponse{
 			StopReason: string(openai.FinishReasonToolCalls),
-			ChatMessage: llm.ChatMessage{
-				Content: "",
-				ToolCalls: []llm.ToolCall{
+			Output: llm2.Message{
+				Role: "assistant",
+				Content: []llm2.ContentBlock{
 					{
-						Id:        "call_done_123",
-						Name:      "done",
-						Arguments: `{"summary": "No changes were needed."}`,
+						Type: llm2.ContentBlockTypeToolUse,
+						ToolUse: &llm2.ToolUseBlock{
+							Id:        "call_done_123",
+							Name:      "done",
+							Arguments: `{"summary": "No changes were needed."}`,
+						},
 					},
 				},
 			},
@@ -194,16 +251,18 @@ func (s *AuthorEditBlocksTestSuite) TestDoneRequiredProtocol_EmptyResponseThenDo
 	// Verify that ChatStream was called twice (empty response triggered feedback, then done)
 	s.Equal(2, callCount)
 
-	// Verify that the second call's messages contain the feedback about no edit blocks or tool calls
-	s.GreaterOrEqual(len(secondCallMessages), 2, "Expected at least 2 messages in second call")
-	foundFeedback := false
-	for _, msg := range secondCallMessages {
-		if msg.Role == llm.ChatMessageRoleUser && strings.Contains(msg.Content, "No edit blocks or tool calls were provided") {
-			foundFeedback = true
+	// Verify that the second call has more refs than the first (feedback + assistant response were added)
+	s.Greater(secondCallRefCount, firstCallRefCount, "Expected more refs in second Stream call after feedback injection")
+
+	// Verify that there's a user-role ref added after the first call's refs (the feedback message)
+	foundUserFeedbackRef := false
+	for _, ref := range secondCallRefs[firstCallRefCount:] {
+		if ref.Role == "user" {
+			foundUserFeedbackRef = true
 			break
 		}
 	}
-	s.True(foundFeedback, "Expected feedback message about no edit blocks or tool calls in second ChatStream call")
+	s.True(foundUserFeedbackRef, "Expected a user-role ref for the feedback message in second Stream call")
 }
 
 func TestBuildAuthorEditBlockInitialPrompt(t *testing.T) {
@@ -313,13 +372,13 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestIncludesDoneTool() {
 				DisableHumanInTheLoop: disableHumanInTheLoop,
 			},
 		}
-		chatHistory := &[]llm.ChatMessage{}
+		chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
 		doneRequired := IsDoneRequiredProtocol(dCtx)
 		result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false)
 
-		toolNames := make([]string, len(result.Params.Tools))
-		for i, tool := range result.Params.Tools {
+		toolNames := make([]string, len(result.Tools))
+		for i, tool := range result.Tools {
 			toolNames[i] = tool.Name
 		}
 		return toolNames, nil
@@ -328,7 +387,7 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestIncludesDoneTool() {
 	s.env.OnGetVersion("done-required-protocol", workflow.DefaultVersion, 1).Return(workflow.Version(1))
 
 	var ffa *fflag.FFlagActivities
-	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil)
+	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil)
 
 	s.env.ExecuteWorkflow(wrapperWorkflow, false)
 	s.True(s.env.IsWorkflowCompleted())
@@ -357,13 +416,13 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestHumanInTheLoopDisabled() {
 				DisableHumanInTheLoop: disableHumanInTheLoop,
 			},
 		}
-		chatHistory := &[]llm.ChatMessage{}
+		chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
 		doneRequired := IsDoneRequiredProtocol(dCtx)
 		result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false)
 
-		toolNames := make([]string, len(result.Params.Tools))
-		for i, tool := range result.Params.Tools {
+		toolNames := make([]string, len(result.Tools))
+		for i, tool := range result.Tools {
 			toolNames[i] = tool.Name
 		}
 		return toolNames, nil
@@ -372,7 +431,7 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestHumanInTheLoopDisabled() {
 	s.env.OnGetVersion("done-required-protocol", workflow.DefaultVersion, 1).Return(workflow.Version(1))
 
 	var ffa *fflag.FFlagActivities
-	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(true, nil)
+	s.env.OnActivity(ffa.EvalBoolFlag, mock.Anything, mock.Anything).Return(false, nil)
 
 	s.env.ExecuteWorkflow(wrapperWorkflow, true)
 	s.True(s.env.IsWorkflowCompleted())

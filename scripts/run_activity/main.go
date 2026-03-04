@@ -24,6 +24,7 @@ import (
 	"sidekick/persisted_ai"
 	"sidekick/poll_failures"
 	"sidekick/srv"
+	"sidekick/temporalmeta"
 	"sidekick/workspace"
 
 	"github.com/google/uuid"
@@ -105,6 +106,10 @@ func buildActivityRegistry() map[string]interface{} {
 	llmActivities := &persisted_ai.LlmActivities{
 		Streamer: service,
 	}
+	llm2Activities := &persisted_ai.Llm2Activities{
+		Streamer: service,
+		Storage:  service,
+	}
 	lspActivities := &lsp.LSPActivities{
 		LSPClientProvider: func(languageName string) lsp.LSPClient {
 			return &lsp.Jsonrpc2LSPClient{
@@ -120,6 +125,9 @@ func buildActivityRegistry() map[string]interface{} {
 		TreeSitterActivities: treeSitterActivities,
 		LSPActivities:        lspActivities,
 	}
+	readImageActivities := &dev.ReadImageActivities{
+		Storage: service,
+	}
 	vectorActivities := &persisted_ai.VectorActivities{
 		DatabaseAccessor: service,
 	}
@@ -129,6 +137,19 @@ func buildActivityRegistry() map[string]interface{} {
 	pollFailuresActivities := &poll_failures.PollFailuresActivities{
 		TemporalClient: temporalClient,
 		Service:        service,
+	}
+	chatHistoryActivities := &persisted_ai.ChatHistoryActivities{
+		Storage: service,
+	}
+	kvActivities := &common.KVActivities{
+		Storage: service,
+	}
+	cascadeDeleteActivities := &srv.CascadeDeleteTaskActivities{
+		Service:        service,
+		TemporalClient: temporalClient,
+	}
+	temporalMetaActivities := &temporalmeta.TemporalMetaActivities{
+		Client: temporalClient,
 	}
 	devActivities := &dev.DevActivities{
 		LSPActivities: lspActivities,
@@ -166,6 +187,8 @@ func buildActivityRegistry() map[string]interface{} {
 		dev.BulkReadFileActivity,
 		dev.ManageChatHistoryActivity,
 		dev.ManageChatHistoryV2Activity,
+		dev.SummarizeDiffActivity,
+		dev.CheckCommandPermissionActivity,
 		common.GetLocalConfig,
 		common.BaseCommandPermissionsActivity,
 	}
@@ -176,6 +199,7 @@ func buildActivityRegistry() map[string]interface{} {
 	// Register struct methods
 	registerStructMethods(registry, srvActivities)
 	registerStructMethods(registry, llmActivities)
+	registerStructMethods(registry, llm2Activities)
 	registerStructMethods(registry, pollFailuresActivities)
 	registerStructMethods(registry, lspActivities)
 	registerStructMethods(registry, treeSitterActivities)
@@ -187,7 +211,12 @@ func buildActivityRegistry() map[string]interface{} {
 	registerStructMethods(registry, devManagerActivities)
 	registerStructMethods(registry, devActivities)
 	registerStructMethods(registry, devRunActivities)
+	registerStructMethods(registry, readImageActivities)
 	registerStructMethods(registry, workspaceActivities)
+	registerStructMethods(registry, chatHistoryActivities)
+	registerStructMethods(registry, kvActivities)
+	registerStructMethods(registry, cascadeDeleteActivities)
+	registerStructMethods(registry, temporalMetaActivities)
 	registry["EvalBoolFlag"] = ffa.EvalBoolFlag
 
 	return registry
@@ -323,14 +352,15 @@ func main() {
 
 func executeActivityViaWorkflow(activityName string, activityArgs []json.RawMessage, timeout time.Duration) (json.RawMessage, error) {
 	hostPort := common.GetTemporalServerHostPort()
-	tracingInterceptor, err := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
+	service, err := sidekick.GetService()
 	if err != nil {
-		return nil, fmt.Errorf("error creating tracing interceptor: %w", err)
+		return nil, fmt.Errorf("error initializing storage: %w", err)
 	}
-	temporalClient, err := client.Dial(client.Options{
-		HostPort:     hostPort,
-		Interceptors: []interceptor.ClientInterceptor{tracingInterceptor},
-	})
+	clientOptions, err := common.NewTemporalClientOptions(service, hostPort)
+	if err != nil {
+		return nil, fmt.Errorf("error creating Temporal client options: %w", err)
+	}
+	temporalClient, err := client.Dial(clientOptions)
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to Temporal: %w", err)
 	}

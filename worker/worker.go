@@ -6,7 +6,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/contrib/opentelemetry"
 	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -63,16 +62,22 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	ffa := fflag.FFlagActivities{FFlag: featureFlag}
 
 	logger := logur.LoggerToKV(zerologadapter.New(sidekicklogger.Get()))
-	tracingInterceptor, err := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
+
+	service, err := sidekick.GetService()
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create tracing interceptor")
+		log.Fatal().Err(err).Msg("Failed to initialize storage")
 	}
-	clientOptions := client.Options{
-		Logger:             logger,
-		HostPort:           hostPort,
-		Interceptors:       []interceptor.ClientInterceptor{tracingInterceptor},
-		ContextPropagators: []workflow.ContextPropagator{flow_action.NewFlowActionIdPropagator()},
+	err = service.CheckConnection(context.Background())
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to connect to storage")
 	}
+
+	clientOptions, err := common.NewTemporalClientOptions(service, hostPort)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create Temporal client options")
+	}
+	clientOptions.Logger = logger
+	clientOptions.ContextPropagators = []workflow.ContextPropagator{flow_action.NewFlowActionIdPropagator()}
 	var temporalClient client.Client
 	for i := 0; i < 30; i++ {
 		temporalClient, err = client.Dial(clientOptions)
@@ -86,17 +91,12 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 		log.Fatal().Err(err).Msg("Unable to create Temporal client after multiple retries.")
 	}
 
-	service, err := sidekick.GetService()
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize storage")
-	}
-	err = service.CheckConnection(context.Background())
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to connect to storage")
-	}
-
 	devManagerActivities := &dev.DevAgentManagerActivities{
 		Storage:        service,
+		TemporalClient: temporalClient,
+	}
+	cascadeDeleteActivities := &srv.CascadeDeleteTaskActivities{
+		Service:        service,
 		TemporalClient: temporalClient,
 	}
 	flowActivities := &flow_action.FlowActivities{Service: service}
@@ -105,6 +105,19 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	}
 	llmActivities := &persisted_ai.LlmActivities{
 		Streamer: service,
+	}
+	llm2Activities := &persisted_ai.Llm2Activities{
+		Streamer: service,
+		Storage:  service,
+	}
+	chatHistoryActivities := &persisted_ai.ChatHistoryActivities{
+		Storage: service,
+	}
+	readImageActivities := &dev.ReadImageActivities{
+		Storage: service,
+	}
+	kvActivities := &common.KVActivities{
+		Storage: service,
 	}
 
 	lspActivities := &lsp.LSPActivities{
@@ -148,6 +161,8 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	}
 
 	w := worker.New(temporalClient, taskQueue, worker.Options{
+		DeadlockDetectionTimeout: 5 * time.Second,
+		Interceptors:             []interceptor.WorkerInterceptor{common.NewCodecCleanupInterceptor()},
 		OnFatalError: func(err error) {
 			log.Fatal().Err(err).Msg("Worker encountered a fatal error")
 		},
@@ -194,18 +209,30 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(dev.SummarizeDiffActivity)
 	w.RegisterActivity(dev.ManageChatHistoryActivity)
 	w.RegisterActivity(dev.ManageChatHistoryV2Activity)
+	w.RegisterActivity(chatHistoryActivities)
+	w.RegisterActivity(readImageActivities)
+	w.RegisterActivity(kvActivities)
+	w.RegisterActivity(llm2Activities)
 	w.RegisterActivity(ffa.EvalBoolFlag)
 	w.RegisterActivity(common.GetLocalConfig)
 	w.RegisterActivity(common.BaseCommandPermissionsActivity)
 	w.RegisterActivity(dev.CheckCommandPermissionActivity)
 
 	w.RegisterActivity(temporalMetaActivities)
+	codecCleanupActivities := &common.CodecCleanupActivities{
+		TemporalClient: temporalClient,
+		Storage:        service,
+	}
+	w.RegisterActivity(codecCleanupActivities)
 	w.RegisterActivity(&workspace.Activities{Storage: service})
+	w.RegisterActivity(cascadeDeleteActivities)
 
 	err = w.Start()
 	if err != nil {
 		log.Fatal().Err(err)
 	}
+
+	common.StartCodecCleanupWorkflow(context.Background(), temporalClient, taskQueue)
 
 	return &Worker{
 		Worker:         w,
@@ -219,4 +246,6 @@ func RegisterWorkflows(w worker.WorkflowRegistry) {
 	w.RegisterWorkflow(dev.PlannedDevWorkflow)
 	w.RegisterWorkflow(dev.BasicDevWorkflow)
 	w.RegisterWorkflow(poll_failures.PollFailuresWorkflow)
+	w.RegisterWorkflow(srv.CascadeDeleteTaskWorkflow)
+	w.RegisterWorkflow(common.CodecPayloadCleanupWorkflow)
 }

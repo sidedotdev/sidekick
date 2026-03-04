@@ -113,7 +113,7 @@ const getProviderLabel = (provider: string): string => {
 
 const providerOptions = ref<string[]>([])
 const providersError = ref(false)
-const reasoningEffortOptions = ['', 'minimal', 'low', 'medium', 'high'] as const
+const reasoningEffortOptions = ['', 'lowest', 'low', 'medium', 'high', 'highest'] as const
 
 const fetchProviders = async () => {
   try {

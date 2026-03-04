@@ -15,10 +15,12 @@ class MockWebSocket {
   constructor(url: string) {
     this.url = url
     MockWebSocket.instances.push(this)
-    setTimeout(() => {
+    // Use queueMicrotask so onopen fires before any pending macrotask timers,
+    // avoiding a race between the debounce timer and the socket open callback.
+    queueMicrotask(() => {
       this.readyState = WebSocket.OPEN
       this.onopen?.(new Event('open'))
-    }, 0)
+    })
   }
   
   send = vi.fn()
@@ -46,10 +48,10 @@ describe('DevRunControls', () => {
     originalWebSocket = global.WebSocket
     originalFetch = global.fetch
     global.WebSocket = MockWebSocket as any
-    global.fetch = vi.fn().mockResolvedValue({
+    globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 404,
-    }) as any
+    } as Response)
   })
 
   afterEach(() => {

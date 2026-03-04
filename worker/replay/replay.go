@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sidekick"
 
 	"sidekick/common"
 	"sidekick/utils"
@@ -25,6 +26,7 @@ import (
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/history/v1"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/worker"
 )
 
@@ -105,19 +107,25 @@ func main() {
 
 		log.Info().Msgf("Executing default replay: id=%s, hostPort=%s", defaultWorkflowId, defaultHostPort)
 
-		clientOptions := client.Options{
-			Logger:   logur.LoggerToKV(zerologadapter.New(log.Logger)),
-			HostPort: defaultHostPort,
+		service, err := sidekick.GetService()
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to initialize storage for codec")
 		}
+		clientOptions, err := common.NewTemporalClientOptions(service, defaultHostPort)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to create Temporal client options")
+		}
+		clientOptions.Logger = logur.LoggerToKV(zerologadapter.New(log.Logger))
 		c, err := client.Dial(clientOptions)
 		if err != nil {
 			log.Fatal().Err(err).Msg("Unable to create Temporal client for default replay.")
 		}
 		defer c.Close()
 
-		if err := ReplayWorkflowLatest(context.Background(), c, defaultWorkflowId); err != nil {
+		if err := ReplayWorkflowLatest(context.Background(), c, defaultWorkflowId, clientOptions.DataConverter); err != nil {
 			log.Fatal().Err(err).Msg("Default replay failed.")
 		}
+		log.Info().Msgf("Replay finished successfully for workflow %s.", defaultWorkflowId)
 	}
 }
 
@@ -307,12 +315,18 @@ func ReplayWorkflow(ctx context.Context, client client.Client, id, runID string)
 	return replayer.ReplayWorkflowHistory(nil, hist)
 }
 
-func ReplayWorkflowLatest(ctx context.Context, client client.Client, id string) error {
+func ReplayWorkflowLatest(ctx context.Context, client client.Client, id string, dc converter.DataConverter) error {
 	hist, err := GetWorkflowHistory(ctx, client, id, "")
 	if err != nil {
 		return err
 	}
-	replayer := worker.NewWorkflowReplayer()
+
+	replayer, err := worker.NewWorkflowReplayerWithOptions(worker.WorkflowReplayerOptions{
+		DataConverter: dc,
+	})
+	if err != nil {
+		return err
+	}
 	sidekick_worker.RegisterWorkflows(replayer)
 	return replayer.ReplayWorkflowHistory(nil, hist)
 }

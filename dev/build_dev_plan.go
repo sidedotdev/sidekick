@@ -8,6 +8,8 @@ import (
 	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
+	"sidekick/llm2"
+	"sidekick/persisted_ai"
 	"strconv"
 	"strings"
 
@@ -271,7 +273,7 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 		codeContext = repoSummary + "\n\n" + codeContext
 	}
 
-	chatHistory := &[]llm.ChatMessage{}
+	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 	addDevPlanPrompt(dCtx, chatHistory, InitialPlanningInfo{
 		CodeContext:    codeContext,
 		Requirements:   requirements,
@@ -326,12 +328,16 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 		return nil, fmt.Errorf("Invalid llm iteration state type, expected *buildDevPlanState: %v", iteration.State)
 	}
 
+	var modelConfig common.ModelConfig
+	if v := workflow.GetVersion(iteration.ExecCtx, "chat-history-manage-v4", workflow.DefaultVersion, 1); v == 1 {
+		modelConfig = iteration.ExecCtx.GetModelConfig(common.PlanningKey, 0, "default")
+	}
 	maxLength := min(defaultMaxChatHistoryLength+state.contextSizeExtension, extendedMaxChatHistoryLength)
-	ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, maxLength)
+	ManageChatHistory(iteration.ExecCtx, iteration.ChatHistory, iteration.ExecCtx.WorkspaceId, maxLength, modelConfig)
 
 	hasExistingPlan := len(state.devPlan.Steps) > 0
 
-	var chatResponse *llm.ChatMessageResponse
+	var chatResponse common.MessageResponse
 	var err error
 	if v := workflow.GetVersion(iteration.ExecCtx, "dev-plan-cleanup-cancel-internally", workflow.DefaultVersion, 1); v == 1 {
 		chatResponse, err = generateDevPlan(iteration.ExecCtx, iteration.ChatHistory, hasExistingPlan)
@@ -347,36 +353,36 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 		return nil, fmt.Errorf("error generating dev plan: %w", err)
 	}
 
-	*iteration.ChatHistory = append(*iteration.ChatHistory, chatResponse.ChatMessage)
+	AppendChatHistory(iteration.ExecCtx, iteration.ChatHistory, chatResponse.GetMessage())
 
-	if len(chatResponse.ToolCalls) > 0 {
+	if len(chatResponse.GetMessage().GetToolCalls()) > 0 {
 		var recordedPlan *DevPlan
-		customHandlers := map[string]func(DevContext, llm.ToolCall) (ToolCallResponseInfo, error){
-			updateDevPlanTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (ToolCallResponseInfo, error) {
-				info := ToolCallResponseInfo{
-					FunctionName: toolCall.Name,
-					ToolCallId:   toolCall.Id,
+		customHandlers := map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error){
+			updateDevPlanTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (llm2.ToolResultBlock, error) {
+				result := llm2.ToolResultBlock{
+					Name:       toolCall.Name,
+					ToolCallId: toolCall.Id,
 				}
 
 				var planUpdate DevPlanUpdate
 				if err := json.Unmarshal([]byte(toolCall.Arguments), &planUpdate); err != nil {
-					info.IsError = true
-					info.Response = "Failed to parse update: " + err.Error()
-					return info, nil
+					result.IsError = true
+					result.Content = llm2.TextContentBlocks("Failed to parse update: " + err.Error())
+					return result, nil
 				}
 
 				updatedPlan, err := applyDevPlanUpdates(state.devPlan, planUpdate)
 				if err != nil {
-					info.IsError = true
-					info.Response = "Failed to apply updates: " + err.Error()
-					return info, nil
+					result.IsError = true
+					result.Content = llm2.TextContentBlocks("Failed to apply updates: " + err.Error())
+					return result, nil
 				}
 
 				validatedPlan, err := ValidateAndCleanPlan(updatedPlan)
 				if err != nil {
-					info.IsError = true
-					info.Response = "Plan failed validation after update: " + err.Error()
-					return info, nil
+					result.IsError = true
+					result.Content = llm2.TextContentBlocks("Plan failed validation after update: " + err.Error())
+					return result, nil
 				}
 
 				state.devPlan = validatedPlan
@@ -384,19 +390,19 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 				if validatedPlan.Complete {
 					if !state.hasRevisedPerPlanningPrompt && state.planningPrompt != "" {
 						state.hasRevisedPerPlanningPrompt = true
-						info.Response = "List out all conditions/requirements in the following instructions. Then consider whether the plan meets each one, one by one. Once you have done that, then rewrite & record the plan as needed to ensure it meets all conditions/requirements.\n\nInstructions follow:\n\n" + state.planningPrompt
-						return info, nil
+						result.Content = llm2.TextContentBlocks("List out all conditions/requirements in the following instructions. Then consider whether the plan meets each one, one by one. Once you have done that, then rewrite & record the plan as needed to ensure it meets all conditions/requirements.\n\nInstructions follow:\n\n" + state.planningPrompt)
+						return result, nil
 					}
 
 					if !state.hasRevisedPerReproPrompt && state.reproduceIssue {
 						state.hasRevisedPerReproPrompt = true
-						info.Response = reviseReproPrompt
-						return info, nil
+						result.Content = llm2.TextContentBlocks(reviseReproPrompt)
+						return result, nil
 					}
 
 					userResponse, err := ApproveDevPlan(dCtx, validatedPlan)
 					if err != nil {
-						return ToolCallResponseInfo{}, fmt.Errorf("error getting plan approval: %w", err)
+						return llm2.ToolResultBlock{}, fmt.Errorf("error getting plan approval: %w", err)
 					}
 
 					v := workflow.GetVersion(dCtx, "dev-plan", workflow.DefaultVersion, 1)
@@ -406,53 +412,53 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 
 					if userResponse.Approved != nil && *userResponse.Approved {
 						recordedPlan = &validatedPlan
-						info.Response = "Plan updated and approved."
-						return info, nil
+						result.Content = llm2.TextContentBlocks("Plan updated and approved.")
+						return result, nil
 					} else {
-						info.Response = fmt.Sprintf("Plan updated but not approved. Current plan:\n%s\n\nPlease continue planning by taking this feedback into account:\n\n%s", validatedPlan.String(), userResponse.Content)
-						return info, nil
+						result.Content = llm2.TextContentBlocks(fmt.Sprintf("Plan updated but not approved. Current plan:\n%s\n\nPlease continue planning by taking this feedback into account:\n\n%s", validatedPlan.String(), userResponse.Content))
+						return result, nil
 					}
 				}
 
-				info.Response = "Plan updated successfully. Current plan:\n" + validatedPlan.String()
-				return info, nil
+				result.Content = llm2.TextContentBlocks("Plan updated successfully. Current plan:\n" + validatedPlan.String())
+				return result, nil
 			},
-			recordDevPlanTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (ToolCallResponseInfo, error) {
-				info := ToolCallResponseInfo{
-					FunctionName: toolCall.Name,
-					ToolCallId:   toolCall.Id,
+			recordDevPlanTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (llm2.ToolResultBlock, error) {
+				result := llm2.ToolResultBlock{
+					Name:       toolCall.Name,
+					ToolCallId: toolCall.Id,
 				}
 				unvalidatedDevPlan, err := unmarshalPlan(toolCall.Arguments)
 				if err != nil {
-					info.IsError = true
-					info.Response = "Please output a new plan: Plan failed to be parsed and was NOT recorded: " + err.Error()
-					return info, nil
+					result.IsError = true
+					result.Content = llm2.TextContentBlocks("Please output a new plan: Plan failed to be parsed and was NOT recorded: " + err.Error())
+					return result, nil
 				}
 
 				validatedDevPlan, err := ValidateAndCleanPlan(unvalidatedDevPlan)
 				if err != nil {
-					info.IsError = true
-					info.Response = "Please output a new plan: Plan failed validation and was NOT recorded: " + err.Error()
-					return info, nil
+					result.IsError = true
+					result.Content = llm2.TextContentBlocks("Please output a new plan: Plan failed validation and was NOT recorded: " + err.Error())
+					return result, nil
 				}
 
 				state.devPlan = validatedDevPlan
 				if validatedDevPlan.Complete {
 					if !state.hasRevisedPerPlanningPrompt && state.planningPrompt != "" {
 						state.hasRevisedPerPlanningPrompt = true
-						info.Response = "List out all conditions/requirements in the following instructions. Then consider whether the plan meets each one, one by one. Once you have done that, then rewrite & record the plan as needed to ensure it meets all conditions/requirements.\n\nInstructions follow:\n\n" + state.planningPrompt
-						return info, nil
+						result.Content = llm2.TextContentBlocks("List out all conditions/requirements in the following instructions. Then consider whether the plan meets each one, one by one. Once you have done that, then rewrite & record the plan as needed to ensure it meets all conditions/requirements.\n\nInstructions follow:\n\n" + state.planningPrompt)
+						return result, nil
 					}
 
 					if !state.hasRevisedPerReproPrompt && state.reproduceIssue {
 						state.hasRevisedPerReproPrompt = true
-						info.Response = reviseReproPrompt
-						return info, nil
+						result.Content = llm2.TextContentBlocks(reviseReproPrompt)
+						return result, nil
 					}
 
 					userResponse, err := ApproveDevPlan(dCtx, validatedDevPlan)
 					if err != nil {
-						return ToolCallResponseInfo{}, fmt.Errorf("error getting plan approval: %w", err)
+						return llm2.ToolResultBlock{}, fmt.Errorf("error getting plan approval: %w", err)
 					}
 
 					v := workflow.GetVersion(dCtx, "dev-plan", workflow.DefaultVersion, 1)
@@ -462,27 +468,26 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 
 					if userResponse.Approved != nil && *userResponse.Approved {
 						recordedPlan = &validatedDevPlan
-						info.Response = "Plan approved"
-						return info, nil
+						result.Content = llm2.TextContentBlocks("Plan approved")
+						return result, nil
 					} else {
-						info.Response = fmt.Sprintf("Plan was not approved. Current plan:\n%s\n\nPlease continue planning by taking this feedback into account:\n\n%s", validatedDevPlan.String(), userResponse.Content)
-						return info, nil
+						result.Content = llm2.TextContentBlocks(fmt.Sprintf("Plan was not approved. Current plan:\n%s\n\nPlease continue planning by taking this feedback into account:\n\n%s", validatedDevPlan.String(), userResponse.Content))
+						return result, nil
 					}
 				} else {
-					info.Response = "Recorded plan progress, but the plan is not complete yet based on the \"is_planning_complete\" boolean field value being set to false. Do some more research or thinking or get help/input to complete the plan, as needed. Once the planning is complete, record the plan again in full."
-					return info, nil
+					result.Content = llm2.TextContentBlocks("Recorded plan progress, but the plan is not complete yet based on the \"is_planning_complete\" boolean field value being set to false. Do some more research or thinking or get help/input to complete the plan, as needed. Once the planning is complete, record the plan again in full.")
+					return result, nil
 				}
 			},
 		}
 
-		toolCallResponses := handleToolCalls(iteration.ExecCtx, chatResponse.ToolCalls, customHandlers)
+		toolCallResponses := handleToolCalls(iteration.ExecCtx, chatResponse.GetMessage().GetToolCalls(), iteration.ChatHistory, customHandlers)
 
 		for _, response := range toolCallResponses {
-			if len(response.Response) > 5000 {
-				state.contextSizeExtension += len(response.Response) - 5000
+			if len(response.TextContent()) > 5000 {
+				state.contextSizeExtension += len(response.TextContent()) - 5000
 			}
-			addToolCallResponse(iteration.ChatHistory, response)
-			if response.FunctionName == getHelpOrInputTool.Name {
+			if response.Name == getHelpOrInputTool.Name {
 				iteration.AutoIterationCount = 0
 			}
 		}
@@ -490,14 +495,14 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 		if recordedPlan != nil {
 			return recordedPlan, nil
 		}
-	} else if chatResponse.StopReason == string(openai.FinishReasonStop) || chatResponse.StopReason == string(openai.FinishReasonToolCalls) {
-		addToolCallResponse(iteration.ChatHistory, ToolCallResponseInfo{
-			Response:     "Expected a tool call to record the plan, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevPlanTool.Name + " tool.",
-			FunctionName: recordDevPlanTool.Name,
+	} else if chatResponse.GetStopReason() == string(openai.FinishReasonStop) || chatResponse.GetStopReason() == string(openai.FinishReasonToolCalls) {
+		addToolCallResponse(iteration.ExecCtx, iteration.ChatHistory, llm2.ToolResultBlock{
+			Content: llm2.TextContentBlocks("Expected a tool call to record the plan, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevPlanTool.Name + " tool."),
+			Name:    recordDevPlanTool.Name,
 		})
 	} else { // FIXME handle other stop reasons with more specific logic
 		feedbackInfo := FeedbackInfo{Feedback: "Expected a tool call to record the dev requirements, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevRequirementsTool.Name + " tool."}
-		addDevRequirementsPrompt(iteration.ChatHistory, feedbackInfo)
+		addDevRequirementsPrompt(iteration.ExecCtx, iteration.ChatHistory, feedbackInfo)
 	}
 
 	return nil, nil // continue the loop
@@ -512,7 +517,9 @@ func unmarshalPlan(jsonStr string) (DevPlan, error) {
 	return plan, nil
 }
 
-func generateDevPlan(dCtx DevContext, chatHistory *[]llm.ChatMessage, hasExistingPlan bool) (*llm.ChatMessageResponse, error) {
+func generateDevPlan(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, hasExistingPlan bool) (common.MessageResponse, error) {
+	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
+
 	tools := []*llm.Tool{
 		&recordDevPlanTool,
 		currentGetSymbolDefinitionsTool(),
@@ -525,25 +532,22 @@ func generateDevPlan(dCtx DevContext, chatHistory *[]llm.ChatMessage, hasExistin
 	if hasExistingPlan {
 		tools = append(tools, &updateDevPlanTool)
 	}
+	if supportsImageToolResults(modelConfig) {
+		tools = append(tools, &readImageTool)
+	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		tools = append(tools, &getHelpOrInputTool)
 	}
 
-	modelConfig := dCtx.GetModelConfig(common.PlanningKey, 0, "default")
-
-	chatOptions := llm.ToolChatOptions{
-		Secrets: *dCtx.Secrets,
-		Params: llm.ToolChatParams{
-			Messages: *chatHistory,
-			Tools:    tools,
-			ToolChoice: llm.ToolChoice{
-				Type: llm.ToolChoiceTypeAuto,
-			},
-			ModelConfig: modelConfig,
+	chatOptions := llm2.Options{
+		Tools: tools,
+		ToolChoice: llm.ToolChoice{
+			Type: llm.ToolChoiceTypeAuto,
 		},
+		ModelConfig: modelConfig,
 	}
 
-	return TrackedToolChat(dCtx, "dev_plan", chatOptions)
+	return TrackedToolChat(dCtx, "dev_plan", chatOptions, chatHistory)
 }
 
 // TODO we should determine if the code context is too large programmatically
@@ -595,7 +599,7 @@ step, describe the AAA in detail, and ensure you include the predicted failure o
 the test prior to fixing the bug as part of the completion_analysis.
 `
 
-func addDevPlanPrompt(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) {
+func addDevPlanPrompt(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) {
 	var content string
 	role := llm.ChatMessageRoleUser
 	cacheControl := ""
@@ -607,13 +611,10 @@ func addDevPlanPrompt(dCtx DevContext, chatHistory *[]llm.ChatMessage, promptInf
 		contextType = ContextTypeInitialInstructions
 	case FeedbackInfo:
 		content = renderGeneralFeedbackPrompt(info.Feedback, info.Type)
-	case ToolCallResponseInfo:
-		addToolCallResponse(chatHistory, info)
-		return
 	default:
 		panic("Unsupported prompt type for dev plan: " + promptInfo.GetType())
 	}
-	*chatHistory = append(*chatHistory, llm.ChatMessage{
+	AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
 		Role:         role,
 		Content:      content,
 		CacheControl: cacheControl,

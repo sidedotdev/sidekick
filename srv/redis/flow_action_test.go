@@ -232,3 +232,50 @@ func TestStreamFlowActionChanges(t *testing.T) {
 		t.Fatalf("Timed out waiting for flow action channel to close")
 	}
 }
+
+func TestDeleteFlowActionsForFlow(t *testing.T) {
+	ctx := context.Background()
+	db := newTestRedisStorage()
+	workspaceId := "TEST_WORKSPACE_ID"
+	flowId := "flow_" + ksuid.New().String()
+
+	t.Run("Delete existing flow actions", func(t *testing.T) {
+		// Create multiple flow actions
+		for i := 0; i < 3; i++ {
+			fa := domain.FlowAction{
+				WorkspaceId:  workspaceId,
+				FlowId:       flowId,
+				Id:           "action_" + ksuid.New().String(),
+				ActionType:   "testType",
+				ActionStatus: domain.ActionStatusPending,
+			}
+			err := db.PersistFlowAction(ctx, fa)
+			assert.NoError(t, err)
+		}
+
+		// Verify actions exist
+		actions, err := db.GetFlowActions(ctx, workspaceId, flowId)
+		assert.NoError(t, err)
+		assert.Len(t, actions, 3)
+
+		// Delete all actions for the flow
+		err = db.DeleteFlowActionsForFlow(ctx, workspaceId, flowId)
+		assert.NoError(t, err)
+
+		// Verify actions are deleted
+		actions, err = db.GetFlowActions(ctx, workspaceId, flowId)
+		assert.NoError(t, err)
+		assert.Empty(t, actions)
+
+		// Verify individual actions are also deleted
+		for _, action := range actions {
+			_, err := db.GetFlowAction(ctx, workspaceId, action.Id)
+			assert.Error(t, err)
+		}
+	})
+
+	t.Run("Delete flow actions for flow with no actions", func(t *testing.T) {
+		err := db.DeleteFlowActionsForFlow(ctx, workspaceId, "flow-with-no-actions")
+		assert.NoError(t, err)
+	})
+}

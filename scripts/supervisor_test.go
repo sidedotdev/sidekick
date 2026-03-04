@@ -1023,20 +1023,14 @@ done
 	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
 	sup.StartAll(ctx, outputChan)
 
-	// Wait for some output
-	time.Sleep(500 * time.Millisecond)
-
 	p := sup.processes[0]
-	if !p.isRunning() {
-		t.Fatal("process should be running")
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return p.isRunning() && len(p.getOutput()) >= 3
+	}, "process should be running and have produced at least 3 lines of output")
 
 	// Verify we have output from run 1
 	initialOutput := p.getOutput()
 	t.Logf("Initial output count: %d", len(initialOutput))
-	if len(initialOutput) < 3 {
-		t.Fatalf("expected at least 3 lines of output, got %d", len(initialOutput))
-	}
 
 	foundRun1 := false
 	for _, line := range initialOutput {
@@ -1122,7 +1116,15 @@ done
 	recordState("after_restart")
 
 	// Wait for new output
-	time.Sleep(500 * time.Millisecond)
+	waitForCondition(t, 5*time.Second, func() bool {
+		output := p.getOutput()
+		for _, line := range output {
+			if strings.Contains(line, "run 2:") || strings.Contains(line, "Starting run 2") {
+				return true
+			}
+		}
+		return false
+	}, "expected output from run 2 after restart")
 
 	recordState("final")
 
@@ -1393,14 +1395,13 @@ sleep 30
 		t.Fatal("timeout waiting for notification")
 	}
 
-	// Wait for restart to complete
-	time.Sleep(1 * time.Second)
-
-	// Drain remaining messages and update viewport
-	for len(outputChan) > 0 {
-		<-outputChan
-	}
-	m.updateViewportContent()
+	waitForCondition(t, 10*time.Second, func() bool {
+		for len(outputChan) > 0 {
+			<-outputChan
+		}
+		m.updateViewportContent()
+		return strings.Contains(m.viewports[0].View(), "run number 2")
+	}, "expected 'run number 2' in final viewport")
 
 	// Final state
 	finalViewportContent := m.viewports[0].View()
@@ -1775,7 +1776,7 @@ func TestRestartProcessFastRestartRace(t *testing.T) {
 
 	// Wait for process to start and produce output to ensure we don't get
 	// delayed initial notifications interfering with the test
-	waitForCondition(t, 2*time.Second, func() bool {
+	waitForCondition(t, 5*time.Second, func() bool {
 		output := p.getOutput()
 		for _, line := range output {
 			if strings.Contains(line, "started") {
