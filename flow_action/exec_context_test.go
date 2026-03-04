@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"sidekick/common"
 
@@ -57,6 +58,7 @@ func TestGetModelConfig_SmallFallback_ReasoningSupported(t *testing.T) {
 
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
+	env.SetTestTimeout(30 * time.Second)
 	env.RegisterActivity(&FlowActivities{})
 	env.ExecuteWorkflow(runGetModelConfigWorkflow(eCtx, "", 0, "small"))
 	require.True(t, env.IsWorkflowCompleted())
@@ -94,6 +96,7 @@ func TestGetModelConfig_SmallFallback_ReasoningNotSupported(t *testing.T) {
 
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
+	env.SetTestTimeout(30 * time.Second)
 	env.RegisterActivity(&FlowActivities{})
 	env.ExecuteWorkflow(runGetModelConfigWorkflow(eCtx, "", 0, "small"))
 	require.True(t, env.IsWorkflowCompleted())

@@ -8,6 +8,7 @@ import (
 
 	"sidekick/coding"
 	"sidekick/llm"
+	"sidekick/llm2"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -230,7 +231,7 @@ func TestToolCallWithCodeContext(t *testing.T) {
 	})
 }
 
-func TestToolCallResponseInfoForMultipleToolCalls(t *testing.T) {
+func TestToolResultBlockForMultipleToolCalls(t *testing.T) {
 	t.Parallel()
 
 	t.Run("feedback references correct tool call id", func(t *testing.T) {
@@ -243,15 +244,15 @@ func TestToolCallResponseInfoForMultipleToolCalls(t *testing.T) {
 		err := llm.ErrToolCallUnmarshal
 
 		response := err.Error() + "\n\nHint: To fix this, follow the json schema correctly."
-		toolCallResponseInfo := ToolCallResponseInfo{
-			Response:     response,
-			ToolCallId:   toolCall.Id,
-			FunctionName: toolCall.Name,
+		trb := llm2.ToolResultBlock{
+			Content:    llm2.TextContentBlocks(response),
+			ToolCallId: toolCall.Id,
+			Name:       toolCall.Name,
 		}
 
-		assert.Equal(t, "call_malformed", toolCallResponseInfo.ToolCallId)
-		assert.Equal(t, "get_symbol_definitions", toolCallResponseInfo.FunctionName)
-		assert.Contains(t, toolCallResponseInfo.Response, "failed to unmarshal json")
+		assert.Equal(t, "call_malformed", trb.ToolCallId)
+		assert.Equal(t, "get_symbol_definitions", trb.Name)
+		assert.Contains(t, trb.TextContent(), "failed to unmarshal json")
 	})
 }
 
@@ -442,8 +443,8 @@ func TestParseToolCallsToCodeContext(t *testing.T) {
 		assert.True(t, hasUnmarshalError)
 		require.Len(t, feedbacks, 1)
 		assert.Equal(t, "call_malformed", feedbacks[0].ToolCallId)
-		assert.Equal(t, "get_symbol_definitions", feedbacks[0].FunctionName)
-		assert.Contains(t, feedbacks[0].Response, "failed to unmarshal json")
+		assert.Equal(t, "get_symbol_definitions", feedbacks[0].Name)
+		assert.Contains(t, feedbacks[0].TextContent(), "failed to unmarshal json")
 	})
 
 	t.Run("codeContextLoop behavior: errors trigger feedback, valid calls are merged", func(t *testing.T) {
@@ -483,7 +484,7 @@ func TestParseToolCallsToCodeContext(t *testing.T) {
 		assert.True(t, hasUnmarshalError, "should detect unmarshal error")
 		require.Len(t, feedbacks, 1, "only one feedback should be generated")
 		assert.Equal(t, "call_2_bad", feedbacks[0].ToolCallId, "feedback should reference the malformed tool call")
-		assert.Contains(t, feedbacks[0].Response, "missing requests")
+		assert.Contains(t, feedbacks[0].TextContent(), "missing requests")
 
 		// When there are no errors, mergeToolCallRequests is called
 		// Simulate a retry where all tool calls are valid
@@ -573,9 +574,9 @@ func TestCheckToolCallUnmarshalErrors(t *testing.T) {
 		assert.True(t, hasUnmarshalError)
 		require.Len(t, feedbacks, 1)
 		assert.Equal(t, "call_2_bad", feedbacks[0].ToolCallId)
-		assert.Equal(t, "get_symbol_definitions", feedbacks[0].FunctionName)
-		assert.Contains(t, feedbacks[0].Response, "failed to unmarshal json")
-		assert.Contains(t, feedbacks[0].Response, "Hint:")
+		assert.Equal(t, "get_symbol_definitions", feedbacks[0].Name)
+		assert.Contains(t, feedbacks[0].TextContent(), "failed to unmarshal json")
+		assert.Contains(t, feedbacks[0].TextContent(), "Hint:")
 	})
 
 	t.Run("multiple unmarshal errors generate multiple feedbacks", func(t *testing.T) {

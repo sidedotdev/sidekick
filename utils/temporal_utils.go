@@ -35,13 +35,9 @@ func LlmHeartbeatCtx(ctx workflow.Context) workflow.Context {
 		NonRetryableErrorTypes: []string{}, // TODO make out-of-bounds errors non-retryable
 	}
 
-	// we heartbeat every 40s: 5s was not enough for anthropic tool streaming
-	// chunks sometimes, or even 20s with litellm going to bedrock with large
-	// context. maybe incorporating ping message events will fix this, though
-	// openai-compatible providers will not provide this, so it doesn't matter.
 	options := workflow.ActivityOptions{
-		StartToCloseTimeout: 20 * time.Minute, // This is so long because LLM calls with thinking can take a *very* long time
-		HeartbeatTimeout:    40 * time.Second,
+		StartToCloseTimeout: 45 * time.Minute,
+		HeartbeatTimeout:    20 * time.Second,
 		RetryPolicy:         retrypolicy,
 	}
 	ctx = workflow.WithActivityOptions(ctx, options)

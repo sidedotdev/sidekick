@@ -163,21 +163,21 @@ func (s *TrackTemporalActivitiesTestSuite) TestTrackDecoratesWithMultipleActivit
 		eCtx := s.newTestExecContext(ctx)
 		actionCtx := eCtx.NewActionContext("multi_activity_action")
 
-		_, err := Track(actionCtx, func(fa *domain.FlowAction) (string, error) {
+		_, err := Track(actionCtx, func(trackedActionCtx ActionContext, fa *domain.FlowAction) (string, error) {
 			// Sequential activity
 			var resA string
-			if err := workflow.ExecuteActivity(actionCtx, stubActivityA, "seq").Get(actionCtx, &resA); err != nil {
+			if err := workflow.ExecuteActivity(trackedActionCtx, stubActivityA, "seq").Get(trackedActionCtx, &resA); err != nil {
 				return "", err
 			}
 
 			// Two parallel activities via workflow.Go
-			errCh := workflow.NewChannel(actionCtx)
-			workflow.Go(actionCtx, func(gCtx workflow.Context) {
+			errCh := workflow.NewChannel(trackedActionCtx)
+			workflow.Go(trackedActionCtx, func(gCtx workflow.Context) {
 				var resB int
 				err := workflow.ExecuteActivity(gCtx, stubActivityB, 7).Get(gCtx, &resB)
 				errCh.Send(gCtx, err)
 			})
-			workflow.Go(actionCtx, func(gCtx workflow.Context) {
+			workflow.Go(trackedActionCtx, func(gCtx workflow.Context) {
 				var resA2 string
 				err := workflow.ExecuteActivity(gCtx, stubActivityA, "par").Get(gCtx, &resA2)
 				errCh.Send(gCtx, err)
@@ -186,7 +186,7 @@ func (s *TrackTemporalActivitiesTestSuite) TestTrackDecoratesWithMultipleActivit
 			// Collect results from both parallel goroutines
 			for i := 0; i < 2; i++ {
 				var chErr error
-				errCh.Receive(actionCtx, &chErr)
+				errCh.Receive(trackedActionCtx, &chErr)
 				if chErr != nil {
 					return "", chErr
 				}
@@ -262,10 +262,10 @@ func (s *TrackTemporalActivitiesTestSuite) TestTrackDecoratesOnFailure() {
 		eCtx := s.newTestExecContext(ctx)
 		actionCtx := eCtx.NewActionContext("failing_action")
 
-		_, err := Track(actionCtx, func(fa *domain.FlowAction) (string, error) {
+		_, err := Track(actionCtx, func(trackedActionCtx ActionContext, fa *domain.FlowAction) (string, error) {
 			// Execute an activity before failing so we can verify header injection
 			var res string
-			_ = workflow.ExecuteActivity(actionCtx, stubActivityA, "before-fail").Get(actionCtx, &res)
+			_ = workflow.ExecuteActivity(trackedActionCtx, stubActivityA, "before-fail").Get(trackedActionCtx, &res)
 			return "", errors.New("simulated action failure")
 		})
 		_ = err
@@ -321,7 +321,7 @@ func (s *TrackTemporalActivitiesTestSuite) TestTrackNoDecorationPersistWhenFetch
 		eCtx := s.newTestExecContext(ctx)
 		actionCtx := eCtx.NewActionContext("test_action")
 
-		_, err := Track(actionCtx, func(fa *domain.FlowAction) (string, error) {
+		_, err := Track(actionCtx, func(trackedActionCtx ActionContext, fa *domain.FlowAction) (string, error) {
 			return "done", nil
 		})
 		if err != nil {
@@ -374,9 +374,9 @@ func (s *TrackTemporalActivitiesTestSuite) TestTrackFlowActionIdConsistency() {
 		eCtx := s.newTestExecContext(ctx)
 		actionCtx := eCtx.NewActionContext("consistency_action")
 
-		_, err := Track(actionCtx, func(fa *domain.FlowAction) (string, error) {
+		_, err := Track(actionCtx, func(trackedActionCtx ActionContext, fa *domain.FlowAction) (string, error) {
 			var result string
-			err := workflow.ExecuteActivity(actionCtx, stubActivityA, "input").Get(actionCtx, &result)
+			err := workflow.ExecuteActivity(trackedActionCtx, stubActivityA, "input").Get(trackedActionCtx, &result)
 			return result, err
 		})
 		if err != nil {

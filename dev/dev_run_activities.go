@@ -566,10 +566,12 @@ func (a *DevRunActivities) MonitorDevRun(ctx context.Context, input MonitorDevRu
 			return MonitorDevRunOutput{ExitCode: exitCode, Signal: signal}, nil
 
 		case <-heartbeatTicker.C:
-			activity.RecordHeartbeat(ctx, map[string]interface{}{
-				"devRunId":  instance.DevRunId,
-				"commandId": instance.CommandId,
-			})
+			if activity.IsActivity(ctx) {
+				activity.RecordHeartbeat(ctx, map[string]interface{}{
+					"devRunId":  instance.DevRunId,
+					"commandId": instance.CommandId,
+				})
+			}
 
 		default:
 			// Try to read from file

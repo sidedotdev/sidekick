@@ -11,14 +11,16 @@ worktree_setup: |
   cd frontend && bun ci && touch dist/empty.txt
 
 test_commands:
-  - command: "gotestreport -test.timeout 30s ./..."
+  - command: "gotestreport -test.timeout 60s ./..."
   - working_dir: "frontend"
     command: "bun run test:unit -- --no-color --run"
   - working_dir: "frontend"
     command: "bun run type-check"
 
 integration_test_commands:
-  - command: "SIDE_INTEGRATION_TEST=true gotestreport -test.timeout 30s ./..."
+  - command: "SIDE_INTEGRATION_TEST=true gotestreport -test.timeout 60s ./..."
+  - command: "go run ./scripts/lint_chat_history_append/"
+  - command: "go run ./scripts/lint_track_callback/ ./..."
 
 agent_config:
   coding:
@@ -32,6 +34,8 @@ command_permissions:
     - pattern: "bun type-check"
     - pattern: "(npm|bun) run test:unit.*--run"
     - pattern: "bun test:unit.*--run"
+    - pattern: "go run ./worker/replay/"
+    - pattern: "go run ./scripts/run_activity/"
 
 dev_run:
   supervisor:

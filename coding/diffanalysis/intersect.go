@@ -26,8 +26,12 @@ func computeKeptHunks(sinceReviewDiff, branchDiff, baseSinceReviewDiff string) (
 	}
 
 	baseHunksByPath := make(map[string][]Hunk, len(baseFiles))
+	baseDeletedFiles := make(map[string]bool, len(baseFiles))
 	for _, f := range baseFiles {
 		baseHunksByPath[f.NewPath] = f.Hunks
+		if f.IsDeleted {
+			baseDeletedFiles[f.NewPath] = true
+		}
 	}
 
 	result := make(map[string][]Hunk)
@@ -35,8 +39,16 @@ func computeKeptHunks(sinceReviewDiff, branchDiff, baseSinceReviewDiff string) (
 		baseHunks := baseHunksByPath[file.NewPath]
 		branchHunks := branchHunksByPath[file.NewPath]
 
+		// Skip merge-introduced filtering when the file existed at review
+		// time and the sinceReview and base diffs describe the same state
+		// transition. This covers reverted staged changes to tracked files
+		// and files that existed only in the review tree (staged then
+		// removed). New files are excluded: a file added identically in both
+		// diffs means the base branch introduced it via merge.
+		skipMergeCheck := !file.IsNewFile && hunkSetsEqual(file.Hunks, baseHunks)
+
 		for _, h := range file.Hunks {
-			if isMergeIntroduced(h, baseHunks, branchHunks) {
+			if !skipMergeCheck && isMergeIntroduced(h, baseHunks, branchHunks) {
 				continue
 			}
 			result[file.NewPath] = append(result[file.NewPath], h)
@@ -96,6 +108,23 @@ func FilterDiffForReview(sinceReviewDiff, branchDiff, baseSinceReviewDiff, displ
 // and new-side non-overlap with branch (our unique changes).
 func isMergeIntroduced(h Hunk, baseHunks, branchHunks []Hunk) bool {
 	return overlapsAnyOld(h, baseHunks) && !overlapsAnyNew(h, branchHunks)
+}
+
+// hunkSetsEqual returns true when two hunk slices describe the same set of
+// changes (identical old/new ranges in the same order). When the sinceReview
+// and baseSinceReview hunks are equal for a file, both diffs represent the
+// same state transition from the review tree, so nothing is merge-introduced.
+func hunkSetsEqual(a, b []Hunk) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].OldStart != b[i].OldStart || a[i].OldCount != b[i].OldCount ||
+			a[i].NewStart != b[i].NewStart || a[i].NewCount != b[i].NewCount {
+			return false
+		}
+	}
+	return true
 }
 
 // rangesOverlap returns true if [aStart, aStart+aCount) overlaps [bStart, bStart+bCount).

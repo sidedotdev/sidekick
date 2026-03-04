@@ -37,13 +37,17 @@ func TestFilterDiffForReview_FileInBranch(t *testing.T) {
 func TestFilterDiffForReview_MergeIntroducedFile(t *testing.T) {
 	t.Parallel()
 
+	// merged.go is a new file introduced via the merge: it appears in both
+	// sinceReview and baseSinceReview with identical content, but our branch
+	// never created it.
 	sinceReview := `diff --git a/merged.go b/merged.go
---- a/merged.go
+new file mode 100644
+--- /dev/null
 +++ b/merged.go
-@@ -1,3 +1,4 @@ func merged()
- context
-+from main
- context
+@@ -0,0 +1,3 @@
++package merged
++
++func Merged() {}
 `
 	branchDiff := `diff --git a/ours.go b/ours.go
 --- a/ours.go
@@ -54,17 +58,19 @@ func TestFilterDiffForReview_MergeIntroducedFile(t *testing.T) {
  context
 `
 	baseSinceReview := `diff --git a/merged.go b/merged.go
---- a/merged.go
+new file mode 100644
+--- /dev/null
 +++ b/merged.go
-@@ -1,3 +1,4 @@ func merged()
- context
-+from main
- context
+@@ -0,0 +1,3 @@
++package merged
++
++func Merged() {}
 `
 
 	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview, sinceReview)
 	require.NoError(t, err)
-	assert.Empty(t, result, "merged.go hunk overlaps base but not branch, should be excluded")
+	assert.NotContains(t, result, "merged.go",
+		"new file introduced by merge should be filtered out")
 }
 
 func TestFilterDiffForReview_RevertedFile(t *testing.T) {
@@ -95,7 +101,7 @@ func TestFilterDiffForReview_MixedFiles(t *testing.T) {
 
 	// since-review has three files:
 	//   file.go — hunk overlaps branch diff → keep
-	//   merged.go — hunk overlaps base-since-review only → drop
+	//   merged.go — new file from base branch merge → drop
 	//   reverted.go — hunk in neither branch nor base → keep
 	sinceReview := `diff --git a/file.go b/file.go
 --- a/file.go
@@ -105,12 +111,13 @@ func TestFilterDiffForReview_MixedFiles(t *testing.T) {
 +our recent change
  context
 diff --git a/merged.go b/merged.go
---- a/merged.go
+new file mode 100644
+--- /dev/null
 +++ b/merged.go
-@@ -20,3 +20,4 @@ func helper()
- context
-+from main merge
- context
+@@ -0,0 +1,3 @@
++package merged
++
++func FromMain() {}
 diff --git a/reverted.go b/reverted.go
 --- a/reverted.go
 +++ b/reverted.go
@@ -128,18 +135,20 @@ diff --git a/reverted.go b/reverted.go
  context
 `
 	baseSinceReview := `diff --git a/merged.go b/merged.go
---- a/merged.go
+new file mode 100644
+--- /dev/null
 +++ b/merged.go
-@@ -20,3 +20,4 @@ func helper()
- context
-+from main merge
- context
+@@ -0,0 +1,3 @@
++package merged
++
++func FromMain() {}
 `
 
 	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview, sinceReview)
 	require.NoError(t, err)
 	assert.Contains(t, result, "+our recent change")
-	assert.NotContains(t, result, "+from main merge")
+	assert.NotContains(t, result, "merged.go",
+		"new file from base branch merge should be filtered out")
 	assert.Contains(t, result, "+was reverted")
 }
 
@@ -243,10 +252,12 @@ func TestFilterDiffForReview_DeletionOnlyHunks(t *testing.T) {
 	assert.Contains(t, result, "file.go")
 }
 
-func TestFilterDiffForReview_MergeDeletionExcluded(t *testing.T) {
+func TestFilterDiffForReview_MergeDeletionKeptWhenAmbiguous(t *testing.T) {
 	t.Parallel()
 
-	// file.go deletion hunk overlaps base-since-review but not branch → excluded
+	// file.go deletion hunk appears identically in sinceReview and
+	// baseSinceReview. We can't tell whether it was our deletion or the
+	// base branch's, so we keep it to avoid hiding our own work.
 	sinceReview := `diff --git a/file.go b/file.go
 --- a/file.go
 +++ b/file.go
@@ -274,7 +285,8 @@ func TestFilterDiffForReview_MergeDeletionExcluded(t *testing.T) {
 
 	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview, sinceReview)
 	require.NoError(t, err)
-	assert.NotContains(t, result, "merged deletion")
+	assert.Contains(t, result, "merged deletion",
+		"ambiguous deletion should be kept since we can't tell if it was ours")
 }
 
 func TestFilterDiffForReview_ProductionScenario(t *testing.T) {
@@ -359,15 +371,24 @@ diff --git a/utils.go b/utils.go
 	result, err := FilterDiffForReview(sinceReview, branchDiff, baseSinceReview, sinceReview)
 	require.NoError(t, err)
 
-	// Only the hunk at line 5 of file.go survives: it overlaps branchDiff.
-	// The hunk at line 80 overlaps baseSinceReview but not branchDiff → dropped.
-	// utils.go entirely overlaps baseSinceReview → dropped.
+	// file.go has different hunk counts in sinceReview (2) vs base (1), so
+	// per-hunk filtering applies: line-5 hunk overlaps branchDiff → kept,
+	// line-80 hunk overlaps only baseSinceReview → dropped.
+	// utils.go has identical hunk sets in sinceReview and base (existing
+	// file, ambiguous ownership) → kept entirely.
 	expected := `diff --git a/file.go b/file.go
 --- a/file.go
 +++ b/file.go
 @@ -5,3 +5,4 @@ func foo()
  context
 +our change
+ context
+diff --git a/utils.go b/utils.go
+--- a/utils.go
++++ b/utils.go
+@@ -20,3 +20,4 @@ func helper()
+ context
++from main merge
  context
 `
 	assert.Equal(t, expected, result)
@@ -626,48 +647,48 @@ func TestFilterDiffForReviewWithDisplay_AllHunksKept(t *testing.T) {
 func TestFilterDiffForReviewWithDisplay_AllHunksDropped(t *testing.T) {
 	t.Parallel()
 
-	// When all hunks are merge-introduced, the result is empty.
+	// foo.go is a new file introduced entirely by the base branch merge.
 	sinceReviewZero := `diff --git a/foo.go b/foo.go
---- a/foo.go
+new file mode 100644
+--- /dev/null
 +++ b/foo.go
-@@ -10,1 +10,1 @@ package foo
--old10
-+main10
+@@ -0,0 +1,3 @@
++package foo
++
++func Main10() {}
 `
 
 	branchDiff := ""
 
 	baseSinceReview := `diff --git a/foo.go b/foo.go
---- a/foo.go
+new file mode 100644
+--- /dev/null
 +++ b/foo.go
-@@ -10,1 +10,1 @@ package foo
--old10
-+main10
+@@ -0,0 +1,3 @@
++package foo
++
++func Main10() {}
 `
 
 	displayDiff := `diff --git a/foo.go b/foo.go
---- a/foo.go
+new file mode 100644
+--- /dev/null
 +++ b/foo.go
-@@ -7,7 +7,7 @@ package foo
- line7
- line8
- line9
--old10
-+main10
- line11
- line12
- line13
+@@ -0,0 +1,3 @@
++package foo
++
++func Main10() {}
 `
 
 	result, err := FilterDiffForReview(sinceReviewZero, branchDiff, baseSinceReview, displayDiff)
 	require.NoError(t, err)
-	assert.Empty(t, result, "all merge-introduced hunks should be filtered")
+	assert.Empty(t, result, "new file from merge should be filtered out entirely")
 }
 
 func TestFilterDiffForReviewWithDisplay_MultipleFiles(t *testing.T) {
 	t.Parallel()
 
-	// Two files: one entirely ours (kept), one entirely from base (dropped).
+	// Two files: one entirely ours (kept), one new file from base (dropped).
 	sinceReviewZero := `diff --git a/ours.go b/ours.go
 --- a/ours.go
 +++ b/ours.go
@@ -676,10 +697,10 @@ func TestFilterDiffForReviewWithDisplay_MultipleFiles(t *testing.T) {
 +new1
 +new2
 diff --git a/theirs.go b/theirs.go
---- a/theirs.go
+new file mode 100644
+--- /dev/null
 +++ b/theirs.go
-@@ -1,1 +1,1 @@ package theirs
--old
+@@ -0,0 +1 @@
 +frombase
 `
 
@@ -693,10 +714,10 @@ diff --git a/theirs.go b/theirs.go
 `
 
 	baseSinceReview := `diff --git a/theirs.go b/theirs.go
---- a/theirs.go
+new file mode 100644
+--- /dev/null
 +++ b/theirs.go
-@@ -1,1 +1,1 @@ package theirs
--old
+@@ -0,0 +1 @@
 +frombase
 `
 
@@ -711,14 +732,11 @@ diff --git a/theirs.go b/theirs.go
  ctx2
  ctx3
 diff --git a/theirs.go b/theirs.go
---- a/theirs.go
+new file mode 100644
+--- /dev/null
 +++ b/theirs.go
-@@ -1,4 +1,4 @@ package theirs
--old
+@@ -0,0 +1 @@
 +frombase
- ctx1
- ctx2
- ctx3
 `
 
 	result, err := FilterDiffForReview(sinceReviewZero, branchDiff, baseSinceReview, displayDiff)
@@ -727,7 +745,7 @@ diff --git a/theirs.go b/theirs.go
 	assert.Contains(t, result, "ours.go", "our file should be kept")
 	assert.Contains(t, result, "new1", "our change should be present")
 	assert.Contains(t, result, " ctx1", "context should be present")
-	assert.NotContains(t, result, "theirs.go", "base-only file should be excluded")
+	assert.NotContains(t, result, "theirs.go", "new file from base should be excluded")
 	assert.NotContains(t, result, "frombase", "base change should not appear")
 }
 

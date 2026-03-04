@@ -116,6 +116,10 @@ func (o OpenaiResponsesToolChat) ChatStream(ctx context.Context, options ToolCha
 		}
 	}
 
+	if options.Params.ServiceTier != "" {
+		params.ServiceTier = responses.ResponseNewParamsServiceTier(options.Params.ServiceTier)
+	}
+
 	if len(options.Params.Tools) > 0 {
 		toolsToUse := options.Params.Tools
 		if options.Params.ToolChoice.Type == ToolChoiceTypeTool {

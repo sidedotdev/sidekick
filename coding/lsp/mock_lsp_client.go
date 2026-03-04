@@ -9,6 +9,8 @@ type MockLSPClient struct {
 	TextDocumentCodeActionFunc     func(ctx context.Context, params CodeActionParams) ([]CodeAction, error)
 	TextDocumentImplementationFunc func(ctx context.Context, uri string, line int, character int) ([]Location, error)
 	TextDocumentReferencesFunc     func(ctx context.Context, uri string, line int, character int) ([]Location, error)
+	PrepareCallHierarchyFunc       func(ctx context.Context, uri string, line int, character int) ([]CallHierarchyItem, error)
+	CallHierarchyIncomingCallsFunc func(ctx context.Context, item CallHierarchyItem) ([]CallHierarchyIncomingCall, error)
 	TextDocumentDidOpenFunc        func(ctx context.Context, params DidOpenTextDocumentParams) error
 	TextDocumentDidChangeFunc      func(ctx context.Context, params DidChangeTextDocumentParams) error
 	TextDocumentDidSaveFunc        func(ctx context.Context, params DidSaveTextDocumentParams) error
@@ -50,6 +52,20 @@ func (m MockLSPClient) TextDocumentReferences(ctx context.Context, uri string, l
 		panic("TextDocumentReferencesFunc is not set on mock lsp client")
 	}
 	return m.TextDocumentReferencesFunc(ctx, uri, line, character)
+}
+
+func (m MockLSPClient) PrepareCallHierarchy(ctx context.Context, uri string, line int, character int) ([]CallHierarchyItem, error) {
+	if m.PrepareCallHierarchyFunc == nil {
+		panic("PrepareCallHierarchyFunc is not set on mock lsp client")
+	}
+	return m.PrepareCallHierarchyFunc(ctx, uri, line, character)
+}
+
+func (m MockLSPClient) CallHierarchyIncomingCalls(ctx context.Context, item CallHierarchyItem) ([]CallHierarchyIncomingCall, error) {
+	if m.CallHierarchyIncomingCallsFunc == nil {
+		panic("CallHierarchyIncomingCallsFunc is not set on mock lsp client")
+	}
+	return m.CallHierarchyIncomingCallsFunc(ctx, item)
 }
 
 func (m MockLSPClient) GetServerCapabilities() ServerCapabilities {

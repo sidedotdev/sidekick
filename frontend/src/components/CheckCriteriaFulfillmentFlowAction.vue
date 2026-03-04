@@ -1,5 +1,6 @@
 <template>
   <div class="check-criteria-fulfillment">
+    <ChatCompletionFlowAction v-if="expand" :flowAction="flowAction" :expand="expand" :jsonTreeDepth="0" />
     <div v-if="criteriaFulfillment">
       <div v-if="expand" class="analysis">
         <strong>Analysis:</strong>
@@ -28,17 +29,11 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { ChatCompletionMessage, FlowAction } from '@/lib/models';
+import type { FlowAction, CriteriaFulfillment } from '@/lib/models';
+import { extractToolCallArguments } from '@/lib/models';
 import VueMarkdown from 'vue-markdown-render';
+import ChatCompletionFlowAction from './ChatCompletionFlowAction.vue';
 import UnifiedDiffViewer from './UnifiedDiffViewer.vue';
-
-export interface CriteriaFulfillment {
-  whatWasActuallyDone: string;
-  analysis: string;
-  isFulfilled: boolean;
-  confidence: number;
-  feedbackMessage?: string;
-}
 
 const props = defineProps<{
   flowAction: FlowAction;
@@ -48,8 +43,9 @@ const props = defineProps<{
 
 const criteriaFulfillment = computed<CriteriaFulfillment | null>(() => {
   try {
-    const parsedActionResult = JSON.parse(props.flowAction.actionResult) as ChatCompletionMessage
-    return JSON.parse(parsedActionResult.toolCalls[0].arguments || "null") as CriteriaFulfillment | null
+    const parsedResult = JSON.parse(props.flowAction.actionResult);
+    const args = extractToolCallArguments(parsedResult);
+    return JSON.parse(args || "null") as CriteriaFulfillment | null;
   } catch (error) {
     if (props.flowAction.actionStatus === 'complete') {
       console.error('Error parsing criteria fulfillment data:', error);

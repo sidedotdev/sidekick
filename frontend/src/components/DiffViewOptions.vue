@@ -35,7 +35,7 @@
           </div>
         </div>
 
-        <div class="view-option">
+        <div class="view-option" v-if="canGetNewDiffs">
           <label class="checkbox-label">
             <input 
               type="checkbox" 
@@ -54,11 +54,14 @@ import { ref, computed } from 'vue'
 import Popover from 'primevue/popover'
 import GearIcon from './icons/GearIcon.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   ignoreWhitespace: boolean
   diffMode: 'unified' | 'split'
   disabled?: boolean
-}>()
+  canGetNewDiffs?: boolean
+}>(), {
+  canGetNewDiffs: true
+})
 
 const emit = defineEmits<{
   (e: 'update:ignoreWhitespace', value: boolean): void

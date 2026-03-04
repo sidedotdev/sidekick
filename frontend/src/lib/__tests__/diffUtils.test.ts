@@ -45,6 +45,52 @@ describe('parseDiff', () => {
     expect(parseDiff('   ')).toEqual([]);
   });
 
+  it('should extract file names from --- and +++ headers when diff --git parsing fails', () => {
+    const diffWithWeirdHeader = `diff --git a/some weird header
+--- a/src/real-file.ts
++++ b/src/real-file.ts
+@@ -1,3 +1,4 @@
+ line1
++added
+ line2
+ line3`;
+
+    const result = parseDiff(diffWithWeirdHeader);
+    
+    expect(result).toHaveLength(1);
+    expect(result[0].newFile.fileName).toBe('src/real-file.ts');
+    expect(result[0].oldFile.fileName).toBe('src/real-file.ts');
+  });
+
+  it('should handle \\r\\n line endings', () => {
+    const diffWithCRLF = "diff --git a/src/test.js b/src/test.js\r\nindex 1234567..abcdefg 100644\r\n--- a/src/test.js\r\n+++ b/src/test.js\r\n@@ -1,2 +1,3 @@\r\n line1\r\n+added\r\n line2\r\n";
+
+    const result = parseDiff(diffWithCRLF);
+    
+    expect(result).toHaveLength(1);
+    expect(result[0].oldFile.fileName).toBe('src/test.js');
+    expect(result[0].newFile.fileName).toBe('src/test.js');
+  });
+
+  it('should handle new file with /dev/null old path', () => {
+    const newFileDiff = `diff --git a/src/new.ts b/src/new.ts
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/src/new.ts
+@@ -0,0 +1,2 @@
++line1
++line2`;
+
+    const result = parseDiff(newFileDiff);
+    
+    expect(result).toHaveLength(1);
+    // oldFile retains the path from the diff --git header since --- /dev/null
+    // doesn't provide a usable override
+    expect(result[0].oldFile.fileName).toBe('src/new.ts');
+    expect(result[0].newFile.fileName).toBe('src/new.ts');
+  });
+
   it('should parse a single file diff correctly', () => {
     const singleFileDiff = `diff --git a/src/test.js b/src/test.js
 index 1234567..abcdefg 100644
@@ -223,6 +269,118 @@ without proper headers`;
     expect(result[0].linesAdded).toBe(0);
     expect(result[0].linesRemoved).toBe(0);
     expect(result[0].linesUnchanged).toBe(0);
+  });
+
+  it('should handle combined diff format (diff --cc)', () => {
+    const combinedDiff = `diff --cc scripts/lint_chat_history_append/main.go
+index 32293236,12d21e3c..00000000
+--- a/scripts/lint_chat_history_append/main.go
++++ b/scripts/lint_chat_history_append/main.go
+@@ -1,5 +1,6 @@
+ package main
+ 
++import "fmt"
+ func main() {
+   return
+ }`;
+
+    const result = parseDiff(combinedDiff);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].oldFile.fileName).toBe('scripts/lint_chat_history_append/main.go');
+    expect(result[0].newFile.fileName).toBe('scripts/lint_chat_history_append/main.go');
+    expect(result[0].oldFile.fileLang).toBe('go');
+    expect(result[0].linesAdded).toBe(1);
+    expect(result[0].isRename).toBe(false);
+  });
+
+  it('should handle combined diff without --- +++ headers', () => {
+    const combinedDiff = `diff --cc scripts/main.go
+index 32293236,12d21e3c..00000000
+@@ -1,3 +1,4 @@
+ package main
++import "fmt"
+ func main() {
+ }`;
+
+    const result = parseDiff(combinedDiff);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].oldFile.fileName).toBe('scripts/main.go');
+    expect(result[0].newFile.fileName).toBe('scripts/main.go');
+    expect(result[0].isRename).toBe(false);
+  });
+
+  it('should detect rename and set isRename', () => {
+    const renamedFileDiff = `diff --git a/src/oldname.js b/src/newname.js
+similarity index 100%
+rename from src/oldname.js
+rename to src/newname.js
+index 1234567..1234567 100644
+--- a/src/oldname.js
++++ b/src/newname.js
+@@ -1,3 +1,3 @@
+ function test() {
+-  return 'old';
++  return 'new';
+ }`;
+
+    const result = parseDiff(renamedFileDiff);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].oldFile.fileName).toBe('src/oldname.js');
+    expect(result[0].newFile.fileName).toBe('src/newname.js');
+    expect(result[0].isRename).toBe(true);
+  });
+
+  it('should set isRename false when old and new paths are the same', () => {
+    const sameFileDiff = `diff --git a/src/test.js b/src/test.js
+index 1234567..abcdefg 100644
+--- a/src/test.js
++++ b/src/test.js
+@@ -1,2 +1,3 @@
+ line1
++added
+ line2`;
+
+    const result = parseDiff(sameFileDiff);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].isRename).toBe(false);
+  });
+
+  it('should not treat new file as rename when diff --git header has dev/null', () => {
+    const newFileDiff = `diff --git a/dev/null b/src/newfile.ts
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/src/newfile.ts
+@@ -0,0 +1,2 @@
++line1
++line2`;
+
+    const result = parseDiff(newFileDiff);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].newFile.fileName).toBe('src/newfile.ts');
+    expect(result[0].isRename).toBe(false);
+  });
+
+  it('should not treat deleted file as rename when diff --git header has dev/null', () => {
+    const deletedFileDiff = `diff --git a/src/oldfile.js b/dev/null
+deleted file mode 100644
+index 1234567..0000000
+--- a/src/oldfile.js
++++ /dev/null
+@@ -1,2 +0,0 @@
+-line1
+-line2`;
+
+    const result = parseDiff(deletedFileDiff);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].oldFile.fileName).toBe('src/oldfile.js');
+    expect(result[0].isRename).toBe(false);
   });
 
   it('should handle diff with no changes (context only)', () => {

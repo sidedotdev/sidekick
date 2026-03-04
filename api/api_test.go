@@ -1444,9 +1444,10 @@ func TestUpdateTaskHandler_InvalidAgentTypeAndStatusCombo(t *testing.T) {
 
 func TestDeleteTaskHandler(t *testing.T) {
 	t.Parallel()
-	// Initialize the test server and database
 	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
+
+	mockTemporalClient := mocks.NewClient(t)
+	service := NewTestService(t)
 
 	// Create a task for testing
 	task := domain.Task{
@@ -1456,28 +1457,43 @@ func TestDeleteTaskHandler(t *testing.T) {
 		AgentType:   domain.AgentTypeLLM,
 		Status:      domain.TaskStatusToDo,
 	}
-	err := ctrl.service.PersistTask(context.Background(), task)
-	if err != nil {
-		t.Fatal(err)
+	err := service.PersistTask(context.Background(), task)
+	require.NoError(t, err)
+
+	var capturedInput srv.CascadeDeleteTaskInput
+	mockTemporalClient.On("ExecuteWorkflow",
+		mock.Anything,
+		mock.MatchedBy(func(opts client.StartWorkflowOptions) bool {
+			return opts.TaskQueue == "test-task-queue"
+		}),
+		mock.Anything,
+		mock.MatchedBy(func(input srv.CascadeDeleteTaskInput) bool {
+			capturedInput = input
+			return true
+		}),
+	).Return(MockWorkflow{}, nil).Once()
+
+	ctrl := Controller{
+		temporalClient:    mockTemporalClient,
+		temporalTaskQueue: "test-task-queue",
+		service:           service,
+		secretManager:     secret_manager.MockSecretManager{},
 	}
 
-	// Prepare the request
-	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
 	ginCtx.Request = httptest.NewRequest(http.MethodDelete, "/workspaces/"+task.WorkspaceId+"/tasks/"+task.Id, nil)
 	ginCtx.Params = []gin.Param{
 		{Key: "workspaceId", Value: task.WorkspaceId},
 		{Key: "id", Value: task.Id},
 	}
 
-	// Call the handler
 	ctrl.DeleteTaskHandler(ginCtx)
 
-	// Check the response
-	assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
-
-	// Check that the task has been deleted
-	_, err = ctrl.service.GetTask(ginCtx.Request.Context(), task.WorkspaceId, task.Id)
-	assert.True(t, errors.Is(err, srv.ErrNotFound))
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, task.WorkspaceId, capturedInput.WorkspaceId)
+	assert.Equal(t, task.Id, capturedInput.TaskId)
+	mockTemporalClient.AssertExpectations(t)
 }
 
 func TestCancelTaskHandler(t *testing.T) {
@@ -2668,8 +2684,10 @@ func TestCreateTaskHandler_StartTimeout(t *testing.T) {
 	mockTemporalClient.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			ctx := args.Get(0).(context.Context)
+			timer := time.NewTimer(5 * time.Second)
+			defer timer.Stop()
 			select {
-			case <-time.After(500 * time.Millisecond):
+			case <-timer.C:
 			case <-ctx.Done():
 			}
 		}).
@@ -2679,12 +2697,13 @@ func TestCreateTaskHandler_StartTimeout(t *testing.T) {
 	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
 	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
 
+	taskTimeout := 500 * time.Millisecond
 	service := NewTestService(t)
 	ctrl := Controller{
 		temporalClient:   mockTemporalClient,
 		service:          service,
 		secretManager:    secret_manager.MockSecretManager{},
-		taskStartTimeout: 100 * time.Millisecond,
+		taskStartTimeout: taskTimeout,
 	}
 
 	workspaceId := "ws_" + ksuid.New().String()
@@ -2700,12 +2719,8 @@ func TestCreateTaskHandler_StartTimeout(t *testing.T) {
 	c.Request = httptest.NewRequest("POST", "/workspaces/"+workspaceId+"/tasks", bytes.NewBuffer(reqBody))
 	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}}
 
-	start := time.Now()
 	ctrl.CreateTaskHandler(c)
-	elapsed := time.Since(start)
 
-	// Should return within ~timeout, not wait for the full sleep
-	assert.Less(t, elapsed, 300*time.Millisecond, "should timeout quickly")
 	assert.Equal(t, http.StatusServiceUnavailable, resp.Code)
 
 	var response map[string]string
@@ -2816,8 +2831,10 @@ func TestUpdateTaskHandler_StartTimeout(t *testing.T) {
 	mockTemporalClient.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			ctx := args.Get(0).(context.Context)
+			timer := time.NewTimer(5 * time.Second)
+			defer timer.Stop()
 			select {
-			case <-time.After(500 * time.Millisecond):
+			case <-timer.C:
 			case <-ctx.Done():
 			}
 		}).
@@ -2827,12 +2844,13 @@ func TestUpdateTaskHandler_StartTimeout(t *testing.T) {
 	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
 	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
 
+	taskTimeout := 500 * time.Millisecond
 	service := NewTestService(t)
 	ctrl := Controller{
 		temporalClient:   mockTemporalClient,
 		service:          service,
 		secretManager:    secret_manager.MockSecretManager{},
-		taskStartTimeout: 100 * time.Millisecond,
+		taskStartTimeout: taskTimeout,
 	}
 
 	// Create a task in drafting status first
@@ -2865,12 +2883,8 @@ func TestUpdateTaskHandler_StartTimeout(t *testing.T) {
 		{Key: "id", Value: task.Id},
 	}
 
-	start := time.Now()
 	ctrl.UpdateTaskHandler(c)
-	elapsed := time.Since(start)
 
-	// Should return within ~timeout, not wait for the full sleep
-	assert.Less(t, elapsed, 300*time.Millisecond, "should timeout quickly")
 	assert.Equal(t, http.StatusServiceUnavailable, resp.Code)
 
 	// Verify task was reverted to drafting

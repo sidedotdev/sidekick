@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
 	"sidekick/common"
 	"sidekick/domain"
 	"testing"
@@ -121,5 +122,43 @@ func TestFlowActionStorage(t *testing.T) {
 		assert.True(t, retrieved.Updated.Equal(updated.UTC()))
 		assert.Equal(t, 123456789, retrieved.Created.Nanosecond())
 		assert.Equal(t, 987654321, retrieved.Updated.Nanosecond())
+	})
+
+	t.Run("DeleteFlowActionsForFlow", func(t *testing.T) {
+		deleteFlowId := "delete-test-flow"
+		// Add flow actions to delete
+		for i := 0; i < 3; i++ {
+			fa := domain.FlowAction{
+				Id:           fmt.Sprintf("delete-action-%d", i),
+				FlowId:       deleteFlowId,
+				WorkspaceId:  workspaceId,
+				Created:      time.Now().UTC(),
+				Updated:      time.Now().UTC(),
+				ActionType:   "test-type",
+				ActionStatus: "pending",
+			}
+			err := storage.PersistFlowAction(ctx, fa)
+			assert.NoError(t, err)
+		}
+
+		// Verify actions exist
+		actions, err := storage.GetFlowActions(ctx, workspaceId, deleteFlowId)
+		assert.NoError(t, err)
+		assert.Len(t, actions, 3)
+
+		// Delete all actions for the flow
+		err = storage.DeleteFlowActionsForFlow(ctx, workspaceId, deleteFlowId)
+		assert.NoError(t, err)
+
+		// Verify actions are deleted
+		actions, err = storage.GetFlowActions(ctx, workspaceId, deleteFlowId)
+		assert.NoError(t, err)
+		assert.Empty(t, actions)
+	})
+
+	t.Run("DeleteFlowActionsForFlow_NoActions", func(t *testing.T) {
+		// Deleting actions for a flow with no actions should succeed
+		err := storage.DeleteFlowActionsForFlow(ctx, workspaceId, "flow-with-no-actions")
+		assert.NoError(t, err)
 	})
 }
