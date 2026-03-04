@@ -235,6 +235,16 @@ func TestPrepareImageDataURLForLimits(t *testing.T) {
 		assert.Equal(t, raw, data)
 	})
 
+	t.Run("non-decodable image within size limit but with dimension constraint returns error", func(t *testing.T) {
+		t.Parallel()
+		raw := []byte("not-a-real-image-but-small")
+		dataURL := BuildDataURL("image/webp", raw)
+
+		_, _, _, err := PrepareImageDataURLForLimits(dataURL, 1024*1024, 500)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot be decoded for resizing")
+	})
+
 	t.Run("non-decodable image exceeding size limit returns error", func(t *testing.T) {
 		t.Parallel()
 		raw := make([]byte, 1000)
