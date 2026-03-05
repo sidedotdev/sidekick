@@ -14,6 +14,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
+	"github.com/rs/zerolog/log"
 )
 
 const anthropicDefaultModel = "claude-opus-4-5"
@@ -104,7 +105,14 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 
 	resolvedEffort := resolveAnthropicReasoningEffort(options.ReasoningEffort, model)
 
-	if anthropicSupportsAdaptiveThinking(model) && resolvedEffort != "" {
+	// Anthropic does not allow thinking when tool_choice forces tool use
+	forcesTool := options.ToolChoice.Type == common.ToolChoiceTypeRequired || options.ToolChoice.Type == common.ToolChoiceTypeTool
+	if forcesTool && resolvedEffort != "" {
+		log.Info().
+			Str("model", model).
+			Str("toolChoiceType", string(options.ToolChoice.Type)).
+			Msg("disabling thinking because tool_choice forces tool use")
+	} else if anthropicSupportsAdaptiveThinking(model) && resolvedEffort != "" {
 		// Adaptive-capable models: thinking and effort are orthogonal.
 		// Enable adaptive thinking and set effort via OutputConfig.
 		adaptive := anthropic.NewThinkingConfigAdaptiveParam()
