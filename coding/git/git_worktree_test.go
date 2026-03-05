@@ -188,7 +188,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		workspaceId := fmt.Sprintf("test-cleanup-%s", uniqueId)
 		worktree := domain.Worktree{
 			Name:        branchName,
-			WorkspaceId: workspaceId,
+			WorkspaceId: fmt.Sprintf("test-workspace-%s", t.Name()),
 		}
 		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
 		require.NoError(t, err)
@@ -271,7 +271,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 
 		worktree := domain.Worktree{
 			Name:        branchName,
-			WorkspaceId: workspaceId,
+			WorkspaceId: fmt.Sprintf("test-workspace-%s", t.Name()),
 		}
 		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
 		require.NoError(t, err)
@@ -327,7 +327,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		workspaceId := fmt.Sprintf("test-tag-fallback-%s", uniqueId)
 		worktree := domain.Worktree{
 			Name:        branchName,
-			WorkspaceId: workspaceId,
+			WorkspaceId: fmt.Sprintf("test-workspace-%s", t.Name()),
 		}
 		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
 		require.NoError(t, err)
@@ -372,7 +372,7 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		// Create environment container and the worktree
 		worktree := domain.Worktree{
 			Name:        branchName,
-			WorkspaceId: workspaceId,
+			WorkspaceId: fmt.Sprintf("test-workspace-%s", t.Name()),
 		}
 		devEnv, err := env.NewLocalGitWorktreeEnv(ctx, env.LocalEnvParams{RepoDir: repoDir}, worktree)
 		require.NoError(t, err)
