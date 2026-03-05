@@ -237,7 +237,7 @@ func TestStreamFlowActionChanges(t *testing.T) {
 
 func TestDeleteFlowActionsForFlow(t *testing.T) {
 	ctx := context.Background()
-	db := newTestRedisStorage()
+	db := newTestRedisStorage(t)
 	workspaceId := "TEST_WORKSPACE_ID"
 	flowId := "flow_" + ksuid.New().String()
 

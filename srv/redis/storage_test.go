@@ -11,7 +11,7 @@ import (
 
 func TestDeletePrefix(t *testing.T) {
 	ctx := context.Background()
-	db := newTestRedisStorage()
+	db := newTestRedisStorage(t)
 	workspaceID := "test-workspace"
 
 	t.Run("DeletePrefix removes matching keys", func(t *testing.T) {

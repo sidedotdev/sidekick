@@ -2334,18 +2334,13 @@ func TestTaskChangesWebsocketHandler(t *testing.T) {
 	assert.True(t, ok, "lastTaskStreamId is not a string")
 	assert.Equal(t, "stream_id_2", lastTaskStreamId, "unexpected lastTaskStreamId")
 
-	// Check for errors from the goroutine
-	if persistErr := <-persistErrCh; persistErr != nil {
-		assert.NoError(t, persistErr, "Persisting task 2 failed")
-	}
-
-	// Assert if the task matches the expected structure/content
-	assert.Equal(t, task2, receivedTask, "Received task does not match expected task")
-
 	// Check for errors from the task-persisting goroutine
 	if persistErr := <-persistErrCh; persistErr != nil {
 		t.Fatalf("Failed to persist task 2: %v", persistErr)
 	}
+
+	// Assert if the task matches the expected structure/content
+	assert.Equal(t, task2, receivedTask, "Received task does not match expected task")
 
 	// Close the WebSocket connection
 	err = ws.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))

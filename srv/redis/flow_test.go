@@ -89,7 +89,7 @@ func TestPersistFlowWithExplicitTimestamps(t *testing.T) {
 }
 
 func TestDeleteFlow(t *testing.T) {
-	db := newTestRedisStorage()
+	db := newTestRedisStorage(t)
 	ctx := context.Background()
 	workspaceId := "TEST_WORKSPACE_ID"
 	parentId := "testParentId"

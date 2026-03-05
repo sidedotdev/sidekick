@@ -185,7 +185,6 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		branchName := fmt.Sprintf("feature-cleanup-test-%s", uniqueId)
 
 		// Create environment container and the associated worktree
-		workspaceId := fmt.Sprintf("test-cleanup-%s", uniqueId)
 		worktree := domain.Worktree{
 			Name:        branchName,
 			WorkspaceId: fmt.Sprintf("test-workspace-%s", t.Name()),
@@ -267,8 +266,6 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		branchName := fmt.Sprintf("feature-empty-message-test-%s", uniqueId)
 
 		// Create environment container and the worktree
-		workspaceId := fmt.Sprintf("test-empty-msg-%s", uniqueId)
-
 		worktree := domain.Worktree{
 			Name:        branchName,
 			WorkspaceId: fmt.Sprintf("test-workspace-%s", t.Name()),
@@ -324,7 +321,6 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		runGitCommandInTestRepo(t, repoDir, "branch", "-D", branchName)
 
 		// Create environment container and the worktree
-		workspaceId := fmt.Sprintf("test-tag-fallback-%s", uniqueId)
 		worktree := domain.Worktree{
 			Name:        branchName,
 			WorkspaceId: fmt.Sprintf("test-workspace-%s", t.Name()),
@@ -365,9 +361,6 @@ func TestCleanupWorktreeActivity(t *testing.T) {
 		runGitCommandInTestRepo(t, repoDir, "tag", fmt.Sprintf("archive/%s-2", branchName), branchName)
 		runGitCommandInTestRepo(t, repoDir, "tag", fmt.Sprintf("archive/%s-3", branchName), branchName)
 		runGitCommandInTestRepo(t, repoDir, "branch", "-D", branchName)
-
-		// Use a unique workspace ID to avoid collisions with other test runs
-		workspaceId := fmt.Sprintf("test-multi-tag-%s", uniqueId)
 
 		// Create environment container and the worktree
 		worktree := domain.Worktree{

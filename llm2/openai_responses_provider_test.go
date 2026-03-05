@@ -296,7 +296,7 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 		ModelConfig: common.ModelConfig{
 			Provider:        "openai",
 			Model:           "gpt-5.2",
-			ReasoningEffort: "low",
+			ReasoningEffort: "medium",
 		},
 	}
 
