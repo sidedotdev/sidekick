@@ -11,13 +11,14 @@ existing color variables (in frontend/src/assets/base.css) instead of
 hard-coding colors. Don't assume light or dark theme, the existing variables
 auto-adjust based on light vs dark.
 
-When writing go tests, use a real DB via sqlite.NewTestSqliteStorage for the
-srv.Storage, rather than defining a mock database accessor, which should never
-be used. Prefer table-style tests in general, but break into separate test
-functions when there are a very large number of test cases, to keep the test
-function sizes reasonable (less than a few hundred lines). Make tests parallel
-with t.Parallel() as much as possible (including subtests) when it is safe to do
-so.
+Write unit tests for new behavior that closely matches intent and asserts actual
+behavior rather than implementation specifics. When writing go tests, use a real
+DB via sqlite.NewTestSqliteStorage for the srv.Storage, rather than defining a
+mock database accessor, which should never be used. Prefer table-style tests in
+general, but break into separate test functions when there are a very large
+number of test cases, to keep the test function sizes reasonable (less than a
+few hundred lines). Make tests parallel with t.Parallel() as much as possible
+(including subtests) when it is safe to do so.
 
 Temporal: New activities/workflows should be registered in the worker. Changes
 to workflow logic should be "deterministic", meaning that the same set of
