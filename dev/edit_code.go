@@ -455,7 +455,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 				if len(currentExtractedBlocks) == 0 {
 					// No edit blocks and no tool calls - provide feedback
 					promptInfo = FeedbackInfo{
-						Feedback: "No edit blocks or tool calls were provided. Please either provide edit blocks, use tools to gather more information, get user input, or call the `done` tool if no changes are required.",
+						Feedback: fmt.Sprintf("No edit blocks or tool calls were provided. If you were trying to talk to the user, you must use the %s tool to ensure the user sees your message. Otherwise, please provide edit blocks, use tools to gather more information, or call the `done` tool if you are certain that no futher changes or actions are required and you don't think the user should read and respond to your previous message. IMPORTANT NOTE: the user CAN NOT SEE your previous message, and will never see it if you call the `done` tool.", getHelpOrInputTool.Name),
 						Type:     FeedbackTypeSystemError,
 					}
 				} else {
