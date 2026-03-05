@@ -391,6 +391,31 @@ func (ima *DevAgentManagerActivities) CleanupStaleWorktrees(ctx context.Context,
 				commonGitDir = filepath.Join(dirPath, commonGitDir)
 			}
 
+			// Delete the branch before removing the worktree to avoid
+			// leaving orphaned branches behind.
+			branchCmd := exec.CommandContext(ctx, "git", "-C", dirPath, "rev-parse", "--abbrev-ref", "HEAD")
+			branchOut, branchErr := branchCmd.CombinedOutput()
+			branchName := strings.TrimSpace(string(branchOut))
+			if branchErr == nil && branchName != "" && branchName != "HEAD" {
+				// Detach HEAD so the branch is not checked out
+				shaCmd := exec.CommandContext(ctx, "git", "-C", dirPath, "rev-parse", "HEAD")
+				shaOut, shaErr := shaCmd.CombinedOutput()
+				if shaErr == nil {
+					sha := strings.TrimSpace(string(shaOut))
+					detachCmd := exec.CommandContext(ctx, "git", "-C", dirPath, "checkout", sha)
+					if detachOut, detachErr := detachCmd.CombinedOutput(); detachErr != nil {
+						errorLog("Failed to detach HEAD before branch delete", "path", dirPath, "branch", branchName, "error", detachErr, "output", strings.TrimSpace(string(detachOut)))
+					} else {
+						delCmd := exec.CommandContext(ctx, "git", "--git-dir", commonGitDir, "branch", "-D", branchName)
+						if delOut, delErr := delCmd.CombinedOutput(); delErr != nil {
+							errorLog("Failed to delete branch for stale worktree", "path", dirPath, "branch", branchName, "error", delErr, "output", strings.TrimSpace(string(delOut)))
+						} else {
+							infoLog("Deleted branch for stale worktree", "path", dirPath, "branch", branchName)
+						}
+					}
+				}
+			}
+
 			removeCmd := exec.CommandContext(ctx, "git", "--git-dir", commonGitDir, "worktree", "remove", dirPath, "--force")
 			removeOut, err := removeCmd.CombinedOutput()
 			if err != nil {
