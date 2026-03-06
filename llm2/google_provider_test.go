@@ -38,7 +38,7 @@ func TestGoogleProvider_Unauthorized(t *testing.T) {
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider: "google",
-			Model:    "gemini-2.5-flash",
+			Model:    "gemini-3-flash-preview",
 		},
 	}
 
@@ -98,7 +98,7 @@ func TestGoogleProvider_Integration(t *testing.T) {
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider: "google",
-			Model:    "gemini-2.5-flash",
+			Model:    "gemini-3-flash-preview",
 		},
 		Tools:      []*common.Tool{mockTool},
 		ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeAuto},
@@ -169,17 +169,18 @@ func TestGoogleProvider_Integration(t *testing.T) {
 		t.Error("No events received")
 	}
 
-	assert.True(t, sawTextDelta, "Expected at least one text_delta event")
 	assert.True(t, sawBlockStartedToolUse, "Expected at least one block_started event with tool_use type")
 
-	// Verify non-empty assistant text in the first response
+	// Some models may produce text before the tool call, but it's not required
 	var firstResponseText string
 	for _, block := range response.Output.Content {
 		if block.Type == ContentBlockTypeText {
 			firstResponseText += block.Text
 		}
 	}
-	assert.NotEmpty(t, firstResponseText, "Expected non-empty assistant text in the first response")
+	if sawTextDelta {
+		assert.NotEmpty(t, firstResponseText, "Saw text_delta events but accumulated text is empty")
+	}
 
 	t.Logf("Response output content blocks: %d", len(response.Output.Content))
 	for i, block := range response.Output.Content {
@@ -441,7 +442,7 @@ func TestGoogleProvider_ImageIntegration(t *testing.T) {
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider: "google",
-			Model:    "gemini-2.5-flash",
+			Model:    "gemini-3-flash-preview",
 		},
 	}
 
@@ -546,7 +547,7 @@ func TestGoogleProvider_ToolResultImageIntegration(t *testing.T) {
 		name  string
 		model string
 	}{
-		{"gemini-2.5-flash", "gemini-2.5-flash"},
+		{"gemini-3-flash-preview", "gemini-3-flash-preview"},
 		{"gemini-3-pro-preview", "gemini-3-pro-preview"},
 	}
 
@@ -639,7 +640,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-3-flash-preview")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 2)
 		assert.Equal(t, "user", contents[0].Role)
@@ -667,7 +668,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-3-flash-preview")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Equal(t, "user", contents[0].Role)
@@ -694,7 +695,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-3-flash-preview")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Equal(t, "model", contents[0].Role)
@@ -724,7 +725,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-3-flash-preview")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Len(t, contents[0].Parts, 2)
@@ -752,7 +753,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, true, "gemini-2.5-flash")
+		contents, err := googleFromLlm2Messages(messages, true, "gemini-3-flash-preview")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Equal(t, []byte("skip_thought_signature_validator"), contents[0].Parts[0].ThoughtSignature)
@@ -861,7 +862,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-3-flash-preview")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		resp := contents[0].Parts[0].FunctionResponse.Response
@@ -891,7 +892,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-3-flash-preview")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Len(t, contents[0].Parts, 2)
@@ -922,7 +923,7 @@ func TestGoogleFromLlm2Messages(t *testing.T) {
 			},
 		}
 
-		contents, err := googleFromLlm2Messages(messages, false, "gemini-2.5-flash")
+		contents, err := googleFromLlm2Messages(messages, false, "gemini-3-flash-preview")
 		assert.NoError(t, err)
 		assert.Len(t, contents, 1)
 		assert.Len(t, contents[0].Parts, 2)
