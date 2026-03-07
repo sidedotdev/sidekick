@@ -22,21 +22,6 @@ func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
 
-func shouldSkipAnthropicIntegrationAuthError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	errStr := err.Error()
-	return contains(errStr, "invalid_grant") ||
-		contains(errStr, "Refresh token not found or invalid") ||
-		contains(errStr, "failed to get Anthropic OAuth credentials") ||
-		contains(errStr, "OAuth token has been revoked") ||
-		contains(errStr, "authentication_error") ||
-		contains(errStr, "Invalid authentication credentials") ||
-		contains(errStr, "401 Unauthorized")
-}
-
 func TestAnthropicResponsesProvider_Unauthorized(t *testing.T) {
 	ctx := context.Background()
 	mockSecretManager := &secret_manager.MockSecretManager{}
@@ -171,7 +156,10 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		if contains(errStr, "overloaded_error") || contains(errStr, "Overloaded") {
 			t.Skipf("Skipping test due to Anthropic API being overloaded: %v", err)
 		}
-		if shouldSkipAnthropicIntegrationAuthError(err) {
+		if contains(errStr, "invalid_grant") ||
+			contains(errStr, "Refresh token not found or invalid") ||
+			contains(errStr, "failed to get Anthropic OAuth credentials") ||
+			contains(errStr, "OAuth token has been revoked") {
 			t.Skipf("Skipping test due to Anthropic credentials not configured/invalid: %v", err)
 		}
 		t.Fatalf("Stream returned an error: %v", err)
@@ -281,9 +269,6 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 			if contains(err.Error(), "overloaded_error") || contains(err.Error(), "Overloaded") {
 				t.Skipf("Skipping multi-turn test due to Anthropic API being overloaded: %v", err)
 			}
-			if shouldSkipAnthropicIntegrationAuthError(err) {
-				t.Skipf("Skipping multi-turn test due to Anthropic credentials not configured/invalid: %v", err)
-			}
 			t.Fatalf("Stream returned an error: %v", err)
 		}
 
@@ -387,9 +372,6 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		if err != nil {
 			if contains(err.Error(), "overloaded_error") || contains(err.Error(), "Overloaded") {
 				t.Skipf("Skipping reasoning test due to Anthropic API being overloaded: %v", err)
-			}
-			if shouldSkipAnthropicIntegrationAuthError(err) {
-				t.Skipf("Skipping reasoning test due to Anthropic credentials not configured/invalid: %v", err)
 			}
 			t.Fatalf("Stream returned an error: %v", err)
 		}
