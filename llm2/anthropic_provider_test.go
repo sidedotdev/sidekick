@@ -444,6 +444,9 @@ func TestAnthropicProvider_OAuthRefresh(t *testing.T) {
 
 	creds, useOAuth, err := llm.GetAnthropicOAuthCredentials(secretManager)
 	if err != nil {
+		if isAnthropicCredentialError(err) {
+			t.Skipf("Skipping: Anthropic OAuth credentials are invalid or revoked: %v", err)
+		}
 		t.Fatalf("Failed to get OAuth credentials: %v", err)
 	}
 	if !useOAuth || creds == nil {
@@ -809,5 +812,6 @@ func isAnthropicCredentialError(err error) bool {
 	return contains(errStr, "invalid_grant") ||
 		contains(errStr, "Refresh token not found or invalid") ||
 		contains(errStr, "failed to get Anthropic OAuth credentials") ||
-		contains(errStr, "OAuth token has been revoked")
+		contains(errStr, "OAuth token has been revoked") ||
+		contains(errStr, "401 Unauthorized")
 }
