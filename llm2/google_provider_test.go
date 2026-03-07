@@ -565,15 +565,6 @@ func TestGoogleProvider_ToolResultImageIntegration(t *testing.T) {
 					Provider: "google",
 					Model:    mc.model,
 				},
-				Tools: []*common.Tool{
-					{
-						Name:        "read_image",
-						Description: "Reads an image file and returns its content",
-						Parameters: (&jsonschema.Reflector{DoNotReference: true}).Reflect(&struct {
-							FilePath string `json:"file_path" jsonschema:"description=Path to the image file"`
-						}{}),
-					},
-				},
 			}
 
 			request := StreamRequest{

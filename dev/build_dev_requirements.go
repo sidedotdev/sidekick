@@ -484,12 +484,19 @@ func TrackedToolChat(dCtx DevContext, actionType string, options llm2.Options, c
 			options.ModelConfig = trackedCtx.GetModelConfig(common.DefaultKey, 0, "default")
 			streamInput.Options = options
 		}
+
+		toolNameMapping, err := resolveStreamToolNameMapping(streamInput.Options.ModelConfig, *trackedCtx.Secrets)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve tool name mapping: %v", err)
+		}
+
 		streamInput.FlowId = workflow.GetInfo(trackedCtx).WorkflowExecution.ID
 		streamInput.FlowActionId = flowAction.Id
 
 		response, err := persisted_ai.ExecuteChatStream(
 			trackedCtx.FlowActionContext(),
 			streamInput,
+			toolNameMapping,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("error during tracked tool chat action '%s': %v", actionType, err)

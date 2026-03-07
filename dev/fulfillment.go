@@ -138,7 +138,11 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 		// TODO /gen test this, assert it calls the right tool via mock of chat stream method
 		actionCtx := dCtx.ExecContext.NewActionContext("check_criteria_fulfillment")
 		actionCtx.ActionParams["diffString"] = promptInfo.Work
-		response, err := persisted_ai.ForceToolCall(actionCtx, modelConfig, chatHistory, &determineCriteriaFulfillmentTool)
+		toolNameMapping, err := resolveStreamToolNameMapping(modelConfig, *actionCtx.Secrets)
+		if err != nil {
+			return CriteriaFulfillment{}, fmt.Errorf("failed to resolve tool name mapping: %v", err)
+		}
+		response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, toolNameMapping, &determineCriteriaFulfillmentTool)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to force tool call: %v", err)
 		}

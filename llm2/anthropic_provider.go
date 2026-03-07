@@ -19,6 +19,7 @@ import (
 
 const anthropicDefaultModel = "claude-opus-4-5"
 const anthropicDefaultMaxTokens = 16000
+const anthropicOAuthBetaHeaders = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14"
 
 type AnthropicProvider struct{}
 
@@ -37,7 +38,11 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 		client = anthropic.NewClient(
 			option.WithHTTPClient(httpClient),
 			option.WithHeader("Authorization", "Bearer "+oauthCreds.AccessToken),
-			option.WithHeader("anthropic-beta", llm.AnthropicOAuthBetaHeaders),
+			option.WithHeader("Accept", "application/json"),
+			option.WithHeader("User-Agent", "claude-cli/2.1.62"),
+			option.WithHeader("x-app", "cli"),
+			option.WithHeader("anthropic-dangerous-direct-browser-access", "true"),
+			option.WithHeader("anthropic-beta", anthropicOAuthBetaHeaders),
 		)
 	} else {
 		secretName := fmt.Sprintf("%s_API_KEY", options.ModelConfig.NormalizedProviderName())
@@ -183,11 +188,12 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 					Text: "",
 				}
 			case "tool_use":
+				toolUseName := evt.ContentBlock.Name
 				contentBlock = ContentBlock{
 					Type: ContentBlockTypeToolUse,
 					ToolUse: &ToolUseBlock{
 						Id:        evt.ContentBlock.ID,
-						Name:      evt.ContentBlock.Name,
+						Name:      toolUseName,
 						Arguments: "",
 					},
 				}

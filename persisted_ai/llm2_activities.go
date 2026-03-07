@@ -20,13 +20,14 @@ import (
 // It separates chat history and secrets from pure LLM config (Options) so that
 // providers never see storage-aware types.
 type StreamInput struct {
-	Options      llm2.Options
-	Secrets      secret_manager.SecretManagerContainer
-	ChatHistory  *ChatHistoryContainer
-	WorkspaceId  string
-	FlowId       string
-	FlowActionId string
-	Providers    []common.ModelProviderPublicConfig
+	Options         llm2.Options
+	Secrets         secret_manager.SecretManagerContainer
+	ChatHistory     *ChatHistoryContainer
+	ToolNameMapping *ToolNameMappingConfig
+	WorkspaceId     string
+	FlowId          string
+	FlowActionId    string
+	Providers       []common.ModelProviderPublicConfig
 }
 
 // ActionParams returns action parameters for flow action tracking.
@@ -129,9 +130,16 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		return nil, fmt.Errorf("Stream requires Llm2ChatHistory, got %T", input.ChatHistory.History)
 	}
 
+	options := input.Options
+	messages := llm2History.Llm2Messages()
+	if input.ToolNameMapping != nil {
+		options = mapOptionsToolNames(options, input.ToolNameMapping)
+		messages = mapMessagesToolNames(messages, input.ToolNameMapping)
+	}
+
 	request := llm2.StreamRequest{
-		Messages:      llm2History.Llm2Messages(),
-		Options:       input.Options,
+		Messages:      messages,
+		Options:       options,
 		SecretManager: input.Secrets.SecretManager,
 	}
 
@@ -140,6 +148,9 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 
 	if response != nil {
 		response.Provider = input.Options.ModelConfig.Provider
+		if input.ToolNameMapping != nil {
+			response.Output = reverseMapMessageToolNames(response.Output, input.ToolNameMapping)
+		}
 		response.Output.SanitizeToolNames()
 	}
 

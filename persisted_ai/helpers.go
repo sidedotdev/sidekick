@@ -41,6 +41,7 @@ func ForceToolCallWithTrackOptionsV2(
 	trackOptions flow_action.TrackOptions,
 	modelConfig common.ModelConfig,
 	chatHistory *ChatHistoryContainer,
+	toolNameMapping *ToolNameMappingConfig,
 	tools ...*llm.Tool,
 ) (common.MessageResponse, error) {
 
@@ -71,7 +72,7 @@ func ForceToolCallWithTrackOptionsV2(
 	response, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		streamInput.FlowActionId = flowAction.Id
 
-		msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput)
+		msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput, toolNameMapping)
 		if err != nil {
 			return nil, err
 		}
@@ -102,7 +103,7 @@ func ForceToolCallWithTrackOptionsV2(
 		response, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 			streamInput.FlowActionId = flowAction.Id
 
-			msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput)
+			msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput, toolNameMapping)
 			if err != nil {
 				return nil, err
 			}
@@ -126,7 +127,7 @@ func ForceToolCallWithTrackOptionsV2(
 }
 
 func ForceToolCall(actionCtx flow_action.ActionContext, modelConfig common.ModelConfig, chatHistory *ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
-	return ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, tools...)
+	return ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, nil, tools...)
 }
 
 // AppendChatHistory appends a message to chat history, using an activity to
