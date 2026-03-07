@@ -306,9 +306,40 @@ describe('ChatCompletionFlowAction', () => {
       expect(wrapper.find('.action-result .llm2-tool-use-block .action-result-function-name').text()).toBe('Tool Call: search')
     })
 
-    it('displays usage from llm2 response', async () => {
+    it('renders llm2 response reasoning blocks without text using summary and redacted fallback', async () => {
       const actionResult = JSON.stringify({
         id: 'resp-3',
+        model: 'claude-4',
+        provider: 'anthropic',
+        output: {
+          role: 'assistant',
+          content: [
+            {
+              id: 'b1',
+              type: 'reasoning',
+              reasoning: {
+                summary: 'Looked at the repo and chose the safest path.',
+                encryptedContent: 'opaque'
+              }
+            }
+          ]
+        },
+        stopReason: 'end_turn',
+        usage: { inputTokens: 1500, outputTokens: 300, cacheReadInputTokens: 500 }
+      })
+      const fa = { ...flowAction, actionResult }
+      const wrapper = mount(ChatCompletionFlowAction, {
+        props: { flowAction: fa, expand: true }
+      })
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.find('.action-result .reasoning-redacted').text()).toContain('Reasoning (content not available)')
+      expect(wrapper.find('.action-result .reasoning-summary').text()).toContain('Looked at the repo and chose the safest path.')
+    })
+
+    it('displays usage from llm2 response', async () => {
+      const actionResult = JSON.stringify({
+        id: 'resp-4',
         model: 'claude-4',
         provider: 'anthropic',
         output: {
