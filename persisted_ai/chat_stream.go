@@ -19,6 +19,7 @@ import (
 func ExecuteChatStream(
 	actionCtx flow_action.ActionContext,
 	streamInput StreamInput,
+	toolNameMapper *ToolNameMapper,
 ) (common.MessageResponse, error) {
 	heartbeatActionCtx := actionCtx
 	heartbeatActionCtx.Context = utils.LlmHeartbeatCtx(actionCtx.Context)
@@ -29,7 +30,7 @@ func ExecuteChatStream(
 
 	v := workflow.GetVersion(actionCtx, "chat-history-llm2", workflow.DefaultVersion, 1)
 	if v == 1 {
-		return executeChatStreamV1(heartbeatActionCtx, streamInput)
+		return executeChatStreamV1(heartbeatActionCtx, streamInput, toolNameMapper)
 	}
 
 	chatHistory := streamInput.ChatHistory
@@ -57,10 +58,21 @@ func ExecuteChatStream(
 func executeChatStreamV1(
 	actionCtx flow_action.ActionContext,
 	streamInput StreamInput,
+	toolNameMapper *ToolNameMapper,
 ) (common.MessageResponse, error) {
 	chatHistory := streamInput.ChatHistory
 	if _, ok := chatHistory.History.(*Llm2ChatHistory); !ok {
 		return nil, fmt.Errorf("ExecuteChatStream version 1 requires Llm2ChatHistory, got %T", chatHistory.History)
+	}
+
+	if toolNameMapper != nil {
+		streamInput.Options = mapOptionsToolNames(streamInput.Options, toolNameMapper)
+
+		mappedChatHistory := streamInput.ChatHistory.Clone()
+		if mappedLlm2History, ok := mappedChatHistory.History.(*Llm2ChatHistory); ok {
+			mappedLlm2History.SetHydratedWithMessages(mapMessagesToolNames(mappedLlm2History.Llm2Messages(), toolNameMapper))
+		}
+		streamInput.ChatHistory = &mappedChatHistory
 	}
 
 	var la *Llm2Activities
@@ -68,6 +80,11 @@ func executeChatStreamV1(
 	err := flow_action.PerformWithUserRetry(actionCtx, la.Stream, &response, streamInput)
 	if err != nil {
 		return nil, err
+	}
+
+	if toolNameMapper != nil {
+		response.Output = reverseMapMessageToolNames(response.Output, toolNameMapper)
+		response.Output.SanitizeToolNames()
 	}
 
 	return &response, nil
