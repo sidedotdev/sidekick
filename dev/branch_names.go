@@ -118,11 +118,7 @@ func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRe
 	attempts := 0
 	for {
 		actionCtx := eCtx.NewActionContext("generate.branch_names")
-		toolNameMapper, err := resolveStreamToolNameMapper(modelConfig, *actionCtx.Secrets)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve tool name mapper: %v", err)
-		}
-		msgResponse, err := persisted_ai.ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{FailuresOnly: true}, modelConfig, chatHistory, toolNameMapper, &generateBranchNamesTool)
+		msgResponse, err := persisted_ai.ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{FailuresOnly: true}, modelConfig, chatHistory, &generateBranchNamesTool)
 		if err != nil {
 			return nil, fmt.Errorf("failed to force tool call: %v", err)
 		}

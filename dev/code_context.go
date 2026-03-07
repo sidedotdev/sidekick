@@ -549,17 +549,11 @@ type ToolCallWithCodeContext struct {
 // parsed independently; if parsing fails for a tool call, its Err field is set.
 func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *persisted_ai.ChatHistoryContainer) ([]ToolCallWithCodeContext, error) {
 	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
-	flowActionCtx := actionCtx.FlowActionContext()
-	toolNameMapper, err := resolveStreamToolNameMapper(modelConfig, *flowActionCtx.Secrets)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve tool name mapper: %v", err)
-	}
 	response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(
-		flowActionCtx,
+		actionCtx.FlowActionContext(),
 		flow_action.TrackOptions{},
 		modelConfig,
 		chatHistory,
-		toolNameMapper,
 		currentGetSymbolDefinitionsTool(),
 	)
 	if err != nil {
