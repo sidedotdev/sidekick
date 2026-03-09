@@ -56,6 +56,11 @@ func NewStorage() (*Storage, error) {
 	// Run PRAGMA optimize periodically
 	go storage.runPeriodicOptimization()
 
+	err = storage.CheckConnection(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to sqlite storage: %w", err)
+	}
+
 	return storage, nil
 }
 
