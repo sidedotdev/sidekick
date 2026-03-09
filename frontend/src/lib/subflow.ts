@@ -51,13 +51,36 @@ Create an array subflow tree like this:
   },
 ]
 */
+const getFlowActionTimestamp = (value: FlowAction['created'] | FlowAction['updated'] | undefined): number | null => {
+  if (!value) {
+    return null
+  }
+
+  const timestamp = new Date(value).getTime()
+  return Number.isNaN(timestamp) ? null : timestamp
+}
+
 export const buildSubflowTrees = (flowActions: FlowAction[]): SubflowTree[] => {
   const subflowTrees: SubflowTree[] = [];
   let ancestors: SubflowTree[] = [];
   const subflowDescriptions: { [subflow: string]: string } = {};
   const subflowIds: { [subflow: string]: string } = {};
+  const orderedFlowActions = flowActions
+    .map((action, index) => ({
+      action,
+      index,
+      createdAt: getFlowActionTimestamp(action.created),
+    }))
+    .sort((left, right) => {
+      if (left.createdAt !== null && right.createdAt !== null && left.createdAt !== right.createdAt) {
+        return left.createdAt - right.createdAt
+      }
 
-  for (const action of flowActions) {
+      return left.index - right.index
+    })
+    .map(({ action }) => action)
+
+  for (const action of orderedFlowActions) {
     const subflows = action.subflow.split(':|:');
 
     if (action.subflowDescription && action.subflowDescription.length > 0) {
