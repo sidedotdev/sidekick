@@ -16,8 +16,8 @@ import (
 )
 
 type Storage struct {
-	db   *sql.DB
-	kvDb *sql.DB
+	db   *trackedDB
+	kvDb *trackedDB
 }
 
 func NewStorage() (*Storage, error) {
@@ -41,7 +41,11 @@ func NewStorage() (*Storage, error) {
 		return nil, fmt.Errorf("failed to open key-value database: %w", err)
 	}
 
-	storage := &Storage{db: mainDb, kvDb: kvDb}
+	tracker := newBusyTracker()
+	storage := &Storage{
+		db:   &trackedDB{DB: mainDb, name: "main", tracker: tracker},
+		kvDb: &trackedDB{DB: kvDb, name: "kv", tracker: tracker},
+	}
 
 	err = storage.MigrateUp("sidekick")
 	sideAppEnv := os.Getenv("SIDE_APP_ENV")
@@ -107,11 +111,11 @@ func (s *Storage) CheckConnection(ctx context.Context) error {
 		return nil
 	}
 
-	if err := checkDB(s.db, "main"); err != nil {
+	if err := checkDB(s.db.DB, "main"); err != nil {
 		return err
 	}
 
-	if err := checkDB(s.kvDb, "key-value"); err != nil {
+	if err := checkDB(s.kvDb.DB, "key-value"); err != nil {
 		return err
 	}
 
