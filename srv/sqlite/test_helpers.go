@@ -16,8 +16,9 @@ func NewTestSqliteStorage(t *testing.T, dbName string) *Storage {
 
 	tracker := newBusyTracker()
 	storage := &Storage{
-		db:   &trackedDB{DB: db, name: "main", tracker: tracker},
-		kvDb: &trackedDB{DB: kvDb, name: "kv", tracker: tracker},
+		db:                    &trackedDB{DB: db, name: "main", tracker: tracker},
+		kvDb:                  &trackedDB{DB: kvDb, name: "kv", tracker: tracker},
+		deletePrefixBatchSize: defaultDeletePrefixBatchSize,
 	}
 	err = storage.MigrateUp(dbName)
 	require.NoError(t, err)
