@@ -9,6 +9,8 @@ import (
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/llm2"
+	"sidekick/utils"
+	"time"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -153,7 +155,9 @@ func AppendChatHistory(eCtx flow_action.ExecContext, chatHistory *ChatHistoryCon
 			panic(fmt.Errorf("AppendChatHistory failed: %w", err))
 		}
 	} else {
-		err := flow_action.PerformActivityWithUserRetry(eCtx, "append_chat_history", cha.AppendMessage, &ref, input)
+		retryEctx := eCtx
+		retryEctx.Context = utils.RetryCtx(eCtx.Context, 30, 1*time.Second)
+		err := flow_action.PerformActivityWithUserRetry(retryEctx, "append_chat_history", cha.AppendMessage, &ref, input)
 		if err != nil {
 			return fmt.Errorf("AppendChatHistory failed: %w", err)
 		}
