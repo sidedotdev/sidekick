@@ -152,14 +152,10 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 	close(eventChan)
 
 	if err != nil {
-		errStr := err.Error()
-		if contains(errStr, "overloaded_error") || contains(errStr, "Overloaded") {
-			t.Skipf("Skipping test due to Anthropic API being overloaded: %v", err)
+		if isAnthropicTransientError(err) {
+			t.Skipf("Skipping test due to transient Anthropic API error: %v", err)
 		}
-		if contains(errStr, "invalid_grant") ||
-			contains(errStr, "Refresh token not found or invalid") ||
-			contains(errStr, "failed to get Anthropic OAuth credentials") ||
-			contains(errStr, "OAuth token has been revoked") {
+		if isAnthropicCredentialError(err) {
 			t.Skipf("Skipping test due to Anthropic credentials not configured/invalid: %v", err)
 		}
 		t.Fatalf("Stream returned an error: %v", err)
@@ -266,8 +262,11 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		close(eventChan)
 
 		if err != nil {
-			if contains(err.Error(), "overloaded_error") || contains(err.Error(), "Overloaded") {
-				t.Skipf("Skipping multi-turn test due to Anthropic API being overloaded: %v", err)
+			if isAnthropicTransientError(err) {
+				t.Skipf("Skipping multi-turn test due to transient Anthropic API error: %v", err)
+			}
+			if isAnthropicCredentialError(err) {
+				t.Skipf("Skipping multi-turn test due to Anthropic credentials not configured/invalid: %v", err)
 			}
 			t.Fatalf("Stream returned an error: %v", err)
 		}
@@ -370,8 +369,11 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		close(eventChan)
 
 		if err != nil {
-			if contains(err.Error(), "overloaded_error") || contains(err.Error(), "Overloaded") {
-				t.Skipf("Skipping reasoning test due to Anthropic API being overloaded: %v", err)
+			if isAnthropicTransientError(err) {
+				t.Skipf("Skipping reasoning test due to transient Anthropic API error: %v", err)
+			}
+			if isAnthropicCredentialError(err) {
+				t.Skipf("Skipping reasoning test due to Anthropic credentials not configured/invalid: %v", err)
 			}
 			t.Fatalf("Stream returned an error: %v", err)
 		}
@@ -453,7 +455,7 @@ func TestAnthropicProvider_OAuthRefresh(t *testing.T) {
 
 	newCreds, err := llm.RefreshAnthropicOAuthToken(creds.RefreshToken)
 	if err != nil {
-		if strings.Contains(err.Error(), "invalid_grant") {
+		if isAnthropicCredentialError(err) {
 			t.Skipf("Skipping: refresh token is invalid or revoked: %v", err)
 		}
 		t.Fatalf("RefreshAnthropicOAuthToken should not return an error: %v", err)
@@ -652,14 +654,10 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 	wg.Wait()
 
 	if err != nil {
-		errStr := err.Error()
-		if contains(errStr, "overloaded_error") || contains(errStr, "Overloaded") || contains(errStr, "rate_limit") {
+		if isAnthropicTransientError(err) {
 			t.Skipf("Skipping test due to transient Anthropic API error: %v", err)
 		}
-		if contains(errStr, "invalid_grant") ||
-			contains(errStr, "Refresh token not found or invalid") ||
-			contains(errStr, "failed to get Anthropic OAuth credentials") ||
-			contains(errStr, "OAuth token has been revoked") {
+		if isAnthropicCredentialError(err) {
 			t.Skipf("Skipping test due to Anthropic credentials not configured/invalid: %v", err)
 		}
 		t.Fatalf("Stream returned an error: %v", err)
@@ -777,14 +775,10 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 	wg.Wait()
 
 	if err != nil {
-		errStr := err.Error()
-		if contains(errStr, "overloaded_error") || contains(errStr, "Overloaded") || contains(errStr, "rate_limit") {
+		if isAnthropicTransientError(err) {
 			t.Skipf("Skipping test due to transient Anthropic API error: %v", err)
 		}
-		if contains(errStr, "invalid_grant") ||
-			contains(errStr, "Refresh token not found or invalid") ||
-			contains(errStr, "failed to get Anthropic OAuth credentials") ||
-			contains(errStr, "OAuth token has been revoked") {
+		if isAnthropicCredentialError(err) {
 			t.Skipf("Skipping test due to Anthropic credentials not configured/invalid: %v", err)
 		}
 		t.Fatalf("Stream returned an error: %v", err)
@@ -795,4 +789,25 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 	t.Logf("Model response: %q", responseText)
 	assert.True(t, VisionTestFuzzyMatch(expectedText, responseText),
 		"Expected model to read %q from the image, got %q", expectedText, responseText)
+}
+func isAnthropicTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+	return contains(errStr, "overloaded_error") ||
+		contains(errStr, "Overloaded") ||
+		contains(errStr, "rate_limit")
+}
+func isAnthropicCredentialError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+	return contains(errStr, "invalid_grant") ||
+		contains(errStr, "Refresh token not found or invalid") ||
+		contains(errStr, "failed to get Anthropic OAuth credentials") ||
+		contains(errStr, "OAuth token has been revoked")
 }
