@@ -2731,7 +2731,7 @@ func TestGetProvidersHandler(t *testing.T) {
 		expectedNotToContain []string
 	}{
 		{
-			name:                 "does not include openai without OPENAI_API_KEY",
+			name:                 "does not include openai without any credentials",
 			secrets:              map[string]string{},
 			expectedToContain:    []string{},
 			expectedNotToContain: []string{"openai", "anthropic", "google"},
@@ -2740,6 +2740,23 @@ func TestGetProvidersHandler(t *testing.T) {
 			name: "includes openai when OPENAI_API_KEY is present",
 			secrets: map[string]string{
 				"OPENAI_API_KEY": "sk-test-key",
+			},
+			expectedToContain:    []string{"openai"},
+			expectedNotToContain: []string{"anthropic", "google"},
+		},
+		{
+			name: "includes openai when OPENAI_OAUTH is present",
+			secrets: map[string]string{
+				"OPENAI_OAUTH": `{"access_token":"tok","refresh_token":"ref","expires_at":9999999999,"account_id":"acct"}`,
+			},
+			expectedToContain:    []string{"openai"},
+			expectedNotToContain: []string{"anthropic", "google"},
+		},
+		{
+			name: "openai appears once even with both API key and OAuth",
+			secrets: map[string]string{
+				"OPENAI_API_KEY": "sk-test-key",
+				"OPENAI_OAUTH":   `{"access_token":"tok","refresh_token":"ref","expires_at":9999999999,"account_id":"acct"}`,
 			},
 			expectedToContain:    []string{"openai"},
 			expectedNotToContain: []string{"anthropic", "google"},
@@ -2820,6 +2837,61 @@ func TestGetProvidersHandler(t *testing.T) {
 			for _, p := range response.Providers {
 				assert.False(t, seen[p], "provider %s appears more than once", p)
 				seen[p] = true
+			}
+		})
+	}
+}
+
+func TestOpenAIOAuthCallbackHandler(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name           string
+		query          string
+		expectedInBody []string
+	}{
+		{
+			name:  "displays code and state",
+			query: "?code=test_auth_code&state=test_state_value",
+			expectedInBody: []string{
+				"test_auth_code#test_state_value",
+				"side auth",
+			},
+		},
+		{
+			name:  "displays code only when no state",
+			query: "?code=test_auth_code",
+			expectedInBody: []string{
+				"test_auth_code",
+				"side auth",
+			},
+		},
+		{
+			name:  "displays empty when no params",
+			query: "",
+			expectedInBody: []string{
+				"side auth",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			apiCtrl := NewMockController(t)
+			router := DefineRoutes(apiCtrl, TestAllowedOrigins())
+
+			req, _ := http.NewRequest("GET", "/auth/openai/callback"+tt.query, nil)
+			rr := httptest.NewRecorder()
+			router.ServeHTTP(rr, req)
+
+			require.Equal(t, http.StatusOK, rr.Code)
+			assert.Contains(t, rr.Header().Get("Content-Type"), "text/html")
+
+			body := rr.Body.String()
+			for _, expected := range tt.expectedInBody {
+				assert.Contains(t, body, expected)
 			}
 		})
 	}

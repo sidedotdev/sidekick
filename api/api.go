@@ -20,6 +20,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/frontend"
 	"sidekick/llm"
+	"sidekick/openai_oauth"
 	"sidekick/secret_manager"
 	"sidekick/srv"
 	"sidekick/telemetry"
@@ -211,6 +212,8 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	// Store allowedOrigins in controller for websocket handlers
 	ctrl.allowedOrigins = allowedOrigins
 
+	r.GET("/auth/openai/callback", ctrl.OpenAIOAuthCallbackHandler)
+
 	r.GET("/api/v1/providers", ctrl.GetProvidersHandler)
 	r.GET("/api/v1/models", ctrl.GetModelsHandler)
 	r.GET("/api/v1/off_hours", ctrl.GetOffHoursHandler)
@@ -345,7 +348,7 @@ func (ctrl *Controller) GetProvidersHandler(c *gin.Context) {
 		var secretNames []string
 		switch builtinProvider {
 		case "openai":
-			secretNames = []string{llm.OpenaiApiKeySecretName}
+			secretNames = []string{llm.OpenaiApiKeySecretName, openai_oauth.SecretName}
 		case "anthropic":
 			secretNames = []string{llm.AnthropicApiKeySecretName, "ANTHROPIC_OAUTH"}
 		case "google":
