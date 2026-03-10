@@ -20,7 +20,7 @@ type RunCommandParams struct {
 
 var runCommandTool = llm.Tool{
 	Name:        "run_command",
-	Description: "Not for running tests or reading code. This tool is used to execute other shell commands, subject to user approval. The command will be run through the 'sh' shell if approved. This tool should NOT be used to run tests. When asked to provide edit blocks, all tests are run automatically after no further edit blocks are provided. Also don't use this tool when a more specific tool already exists, e.g. specific tools to get symbol definitions, read files, search repo, etc",
+	Description: "Not for reading code. This tool is used to execute other shell commands, subject to user approval. The command will be run through the 'sh' shell if approved. It can be used to run specific tests, suites, or even the full test suite when appropriate, especially when debugging failures or validating changes. The full test suite does not need to be run manually by default, because all tests are run automatically after no further edit blocks are provided. Also don't use this tool when a more specific tool already exists, e.g. specific tools to get symbol definitions, read files, search repo, etc",
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&RunCommandParams{}),
 }
 
