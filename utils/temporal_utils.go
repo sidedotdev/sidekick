@@ -24,6 +24,22 @@ func DefaultRetryCtx(ctx workflow.Context) workflow.Context {
 	return ctx
 }
 
+func RetryCtx(ctx workflow.Context, maxAttempts int32, maxInterval time.Duration) workflow.Context {
+	retrypolicy := &temporal.RetryPolicy{
+		InitialInterval:        time.Second,
+		BackoffCoefficient:     3.0,
+		MaximumInterval:        maxInterval,
+		MaximumAttempts:        maxAttempts,
+		NonRetryableErrorTypes: []string{}, // TODO make out-of-bounds errors non-retryable
+	}
+	options := workflow.ActivityOptions{
+		StartToCloseTimeout: 10 * time.Minute,
+		RetryPolicy:         retrypolicy,
+	}
+	ctx = workflow.WithActivityOptions(ctx, options)
+	return ctx
+}
+
 var LlmNumRetries = 4
 
 func LlmHeartbeatCtx(ctx workflow.Context) workflow.Context {
