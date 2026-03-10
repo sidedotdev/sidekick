@@ -440,11 +440,13 @@ And here are test results:
 Please analyze whether the requirements have been fulfilled. If not, continue editing code as needed.
 `, testResult.TestsPassed)
 			}
-			AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
+			if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
 				Role:    llm.ChatMessageRoleUser,
 				Content: userMessageContent,
-			})
-			AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
+			}); err != nil {
+				return "", err
+			}
+			if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
 				Role: llm.ChatMessageRoleUser,
 				Content: fmt.Sprintf(`Automated Analysis:
 
@@ -453,7 +455,9 @@ The requirements were not fulfilled.
 Analysis: %s
 
 Feedback: %s`, fulfillment.Analysis, fulfillment.FeedbackMessage),
-			})
+			}); err != nil {
+				return "", err
+			}
 			promptInfo = SkipInfo{}
 			attemptCount++
 			continue

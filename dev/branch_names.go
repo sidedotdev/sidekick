@@ -107,10 +107,12 @@ func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRe
 	reqMap := make(map[string]any)
 	utils.Transcode(req, &reqMap)
 	chatHistory := NewVersionedChatHistory(eCtx, eCtx.WorkspaceId)
-	AppendChatHistory(eCtx, chatHistory, llm.ChatMessage{
+	if err := AppendChatHistory(eCtx, chatHistory, llm.ChatMessage{
 		Role:    llm.ChatMessageRoleUser,
 		Content: RenderPrompt(generateBranchNamesPrompt, reqMap),
-	})
+	}); err != nil {
+		return nil, err
+	}
 
 	modelConfig := eCtx.GetModelConfig(common.SummarizationKey, 0, "small")
 
@@ -148,7 +150,9 @@ func generateBranchNameCandidates(eCtx flow_action.ExecContext, req BranchNameRe
 			Name:       toolCall.Name,
 			ToolCallId: toolCall.Id,
 		}
-		AppendChatHistory(eCtx, chatHistory, newMessage)
+		if err := AppendChatHistory(eCtx, chatHistory, newMessage); err != nil {
+			return nil, err
+		}
 	}
 
 	if len(branchResp.Candidates) == 0 {
