@@ -274,12 +274,14 @@ func buildDevPlanSubflow(dCtx DevContext, requirements, planningPrompt string, r
 	}
 
 	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
-	addDevPlanPrompt(dCtx, chatHistory, InitialPlanningInfo{
+	if err := addDevPlanPrompt(dCtx, chatHistory, InitialPlanningInfo{
 		CodeContext:    codeContext,
 		Requirements:   requirements,
 		PlanningPrompt: planningPrompt,
 		ReproduceIssue: reproduceIssue,
-	})
+	}); err != nil {
+		return nil, err
+	}
 
 	maxIterations := 17
 	if dCtx.RepoConfig.MaxPlanningIterations > 0 {
@@ -353,7 +355,9 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 		return nil, fmt.Errorf("error generating dev plan: %w", err)
 	}
 
-	AppendChatHistory(iteration.ExecCtx, iteration.ChatHistory, chatResponse.GetMessage())
+	if err := AppendChatHistory(iteration.ExecCtx.ExecContext, iteration.ChatHistory, chatResponse.GetMessage()); err != nil {
+		return nil, err
+	}
 
 	if len(chatResponse.GetMessage().GetToolCalls()) > 0 {
 		var recordedPlan *DevPlan
@@ -481,7 +485,10 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 			},
 		}
 
-		toolCallResponses := handleToolCalls(iteration.ExecCtx, chatResponse.GetMessage().GetToolCalls(), iteration.ChatHistory, customHandlers)
+		toolCallResponses, err := handleToolCalls(iteration.ExecCtx, chatResponse.GetMessage().GetToolCalls(), iteration.ChatHistory, customHandlers)
+		if err != nil {
+			return nil, err
+		}
 
 		for _, response := range toolCallResponses {
 			if len(response.TextContent()) > 5000 {
@@ -496,13 +503,17 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 			return recordedPlan, nil
 		}
 	} else if chatResponse.GetStopReason() == string(openai.FinishReasonStop) || chatResponse.GetStopReason() == string(openai.FinishReasonToolCalls) {
-		addToolCallResponse(iteration.ExecCtx, iteration.ChatHistory, llm2.ToolResultBlock{
+		if appendErr := addToolCallResponse(iteration.ExecCtx.ExecContext, iteration.ChatHistory, llm2.ToolResultBlock{
 			Content: llm2.TextContentBlocks("Expected a tool call to record the plan, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevPlanTool.Name + " tool."),
 			Name:    recordDevPlanTool.Name,
-		})
+		}); appendErr != nil {
+			return nil, appendErr
+		}
 	} else { // FIXME handle other stop reasons with more specific logic
 		feedbackInfo := FeedbackInfo{Feedback: "Expected a tool call to record the dev requirements, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevRequirementsTool.Name + " tool."}
-		addDevRequirementsPrompt(iteration.ExecCtx, iteration.ChatHistory, feedbackInfo)
+		if appendErr := addDevRequirementsPrompt(iteration.ExecCtx.ExecContext, iteration.ChatHistory, feedbackInfo); appendErr != nil {
+			return nil, appendErr
+		}
 	}
 
 	return nil, nil // continue the loop
@@ -599,7 +610,7 @@ step, describe the AAA in detail, and ensure you include the predicted failure o
 the test prior to fixing the bug as part of the completion_analysis.
 `
 
-func addDevPlanPrompt(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) {
+func addDevPlanPrompt(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) error {
 	var content string
 	role := llm.ChatMessageRoleUser
 	cacheControl := ""
@@ -614,7 +625,7 @@ func addDevPlanPrompt(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryCont
 	default:
 		panic("Unsupported prompt type for dev plan: " + promptInfo.GetType())
 	}
-	AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
+	return AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
 		Role:         role,
 		Content:      content,
 		CacheControl: cacheControl,
