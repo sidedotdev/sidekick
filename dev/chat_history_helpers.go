@@ -2,6 +2,7 @@ package dev
 
 import (
 	"sidekick/common"
+	"sidekick/flow_action"
 	"sidekick/persisted_ai"
 
 	"go.temporal.io/sdk/workflow"
@@ -26,6 +27,6 @@ func NewVersionedChatHistory(ctx workflow.Context, workspaceId string) *persiste
 // AppendChatHistory appends a message to chat history. For llm2 history, it
 // persists the message to KV storage via an activity and appends only the ref.
 // For legacy history, it appends directly.
-func AppendChatHistory(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, msg common.Message) {
-	persisted_ai.AppendChatHistory(ctx, chatHistory, msg)
+func AppendChatHistory(eCtx flow_action.ExecContext, chatHistory *persisted_ai.ChatHistoryContainer, msg common.Message) error {
+	return persisted_ai.AppendChatHistory(eCtx, chatHistory, msg)
 }

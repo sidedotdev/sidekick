@@ -267,7 +267,9 @@ func buildDevRequirementsSubflow(dCtx DevContext, initialInfo InitialDevRequirem
 
 	// Step 2: run the dev requirements loop
 	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
-	addDevRequirementsPrompt(dCtx, chatHistory, initialInfo)
+	if err := addDevRequirementsPrompt(dCtx.ExecContext, chatHistory, initialInfo); err != nil {
+		return nil, err
+	}
 	initialState := &buildDevRequirementsState{
 		contextSizeExtension: contextSizeExtension,
 	}
@@ -317,7 +319,9 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	if err != nil {
 		return nil, err
 	}
-	AppendChatHistory(iteration.ExecCtx, iteration.ChatHistory, chatResponse.GetMessage())
+	if err := AppendChatHistory(iteration.ExecCtx.ExecContext, iteration.ChatHistory, chatResponse.GetMessage()); err != nil {
+		return nil, err
+	}
 
 	if len(chatResponse.GetMessage().GetToolCalls()) > 0 {
 		var recordedReqs *DevRequirements
@@ -378,7 +382,10 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 			},
 		}
 
-		toolCallResults := handleToolCalls(iteration.ExecCtx, chatResponse.GetMessage().GetToolCalls(), iteration.ChatHistory, customHandlers)
+		toolCallResults, err := handleToolCalls(iteration.ExecCtx, chatResponse.GetMessage().GetToolCalls(), iteration.ChatHistory, customHandlers)
+		if err != nil {
+			return nil, err
+		}
 
 		for _, res := range toolCallResults {
 			if len(res.TextContent()) > 5000 {
@@ -396,12 +403,16 @@ func buildDevRequirementsIteration(iteration *LlmIteration) (*DevRequirements, e
 	} else if chatResponse.GetStopReason() == string(openai.FinishReasonStop) || chatResponse.GetStopReason() == string(openai.FinishReasonToolCalls) {
 		// TODO try to extract the dev requirements from the content in this case and treat it as if it was a tool call
 		feedbackInfo := FeedbackInfo{Feedback: "Expected a tool call to record the dev requirements, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevRequirementsTool.Name + " tool. If you need more details or clarification from the user to finalize, use the " + getHelpOrInputTool.Name + " tool."}
-		addDevRequirementsPrompt(iteration.ExecCtx, iteration.ChatHistory, feedbackInfo)
+		if appendErr := addDevRequirementsPrompt(iteration.ExecCtx.ExecContext, iteration.ChatHistory, feedbackInfo); appendErr != nil {
+			return nil, appendErr
+		}
 	} else { // FIXME handle other stop reasons with more specific logic
 		//return nil, fmt.Errorf("expected OpenAI chat completion finish reason to be stop or tool calls, got: %v", chatResponse.StopReason)
 		// NOTE: we continue the loop instead of failing here so we can attempt to recover
 		feedbackInfo := FeedbackInfo{Feedback: "Expected a tool call to record the dev requirements, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevRequirementsTool.Name + " tool. If you need more details or clarification from the user to finalize, use the " + getHelpOrInputTool.Name + " tool."}
-		addDevRequirementsPrompt(iteration.ExecCtx, iteration.ChatHistory, feedbackInfo)
+		if appendErr := addDevRequirementsPrompt(iteration.ExecCtx.ExecContext, iteration.ChatHistory, feedbackInfo); appendErr != nil {
+			return nil, appendErr
+		}
 	}
 
 	if err != nil {
@@ -497,7 +508,7 @@ func unmarshalDevRequirements(jsonStr string) (DevRequirements, error) {
 	return devRequirements, nil
 }
 
-func addDevRequirementsPrompt(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) {
+func addDevRequirementsPrompt(eCtx flow_action.ExecContext, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) error {
 	var content string
 	role := llm.ChatMessageRoleUser
 	cacheControl := ""
@@ -512,7 +523,7 @@ func addDevRequirementsPrompt(ctx workflow.Context, chatHistory *persisted_ai.Ch
 	default:
 		panic("Unsupported prompt type for dev requirements: " + promptInfo.GetType())
 	}
-	AppendChatHistory(ctx, chatHistory, llm.ChatMessage{
+	return AppendChatHistory(eCtx, chatHistory, llm.ChatMessage{
 		Role:         role,
 		Content:      content,
 		CacheControl: cacheControl,
@@ -520,7 +531,7 @@ func addDevRequirementsPrompt(ctx workflow.Context, chatHistory *persisted_ai.Ch
 	})
 }
 
-func addToolCallResponse(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, trb llm2.ToolResultBlock) {
+func addToolCallResponse(eCtx flow_action.ExecContext, chatHistory *persisted_ai.ChatHistoryContainer, trb llm2.ToolResultBlock) error {
 	msg := &llm2.Message{
 		Role: llm2.RoleUser,
 		Content: []llm2.ContentBlock{{
@@ -528,7 +539,7 @@ func addToolCallResponse(ctx workflow.Context, chatHistory *persisted_ai.ChatHis
 			ToolResult: &trb,
 		}},
 	}
-	AppendChatHistory(ctx, chatHistory, msg)
+	return AppendChatHistory(eCtx, chatHistory, msg)
 }
 
 func ApproveDevRequirements(dCtx DevContext, devReq DevRequirements) (*flow_action.UserResponse, error) {

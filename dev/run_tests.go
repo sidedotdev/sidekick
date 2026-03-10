@@ -328,10 +328,12 @@ Here is the test result output to summarize:
 
 	// Create a versioned chat history with just the prompt
 	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
-	AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
+	if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
 		Role:    llm.ChatMessageRoleUser,
 		Content: prompt,
-	})
+	}); err != nil {
+		return "", err
+	}
 
 	options := llm2.Options{
 		ModelConfig: modelConfig,
