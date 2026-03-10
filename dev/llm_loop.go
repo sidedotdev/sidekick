@@ -101,19 +101,23 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContai
 			return nil, fmt.Errorf("error checking for pause: %v", err)
 		}
 		if response != nil && response.Content != "" {
-			AppendChatHistory(dCtx, iteration.ChatHistory, llm.ChatMessage{
+			if err := AppendChatHistory(dCtx.ExecContext, iteration.ChatHistory, llm.ChatMessage{
 				Role:    "user",
 				Content: renderGeneralFeedbackPrompt(response.Content, FeedbackTypePause),
-			})
+			}); err != nil {
+				return nil, err
+			}
 			iteration.AutoIterationCount = 0
 		}
 
 		// Inject proactive system message when nearing per-cycle tool-call limits
 		if msg, ok := ThresholdMessageForCounter(config.autoIterations, iteration.AutoIterationCount); ok {
-			AppendChatHistory(dCtx, iteration.ChatHistory, llm.ChatMessage{
+			if err := AppendChatHistory(dCtx.ExecContext, iteration.ChatHistory, llm.ChatMessage{
 				Role:    "system",
 				Content: msg,
-			})
+			}); err != nil {
+				return nil, err
+			}
 		}
 
 		// Get user feedback every N iterations
@@ -129,10 +133,12 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContai
 			}
 
 			// Add feedback to chat history
-			AppendChatHistory(dCtx, iteration.ChatHistory, llm.ChatMessage{
+			if err := AppendChatHistory(dCtx.ExecContext, iteration.ChatHistory, llm.ChatMessage{
 				Role:    "user",
 				Content: userResponse.Content,
-			})
+			}); err != nil {
+				return nil, err
+			}
 
 			iteration.AutoIterationCount = 0
 		}

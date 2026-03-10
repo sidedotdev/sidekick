@@ -69,10 +69,12 @@ and variable names.
 `, repoSummary, requirements)
 	actionName := "requirements_query_expansion"
 
-	AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
+	if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
 		Role:    llm.ChatMessageRoleUser,
 		Content: prompt,
-	})
+	}); err != nil {
+		return InformationNeeds{}, err
+	}
 	options := llmInputForIdentifyInformationNeeds(dCtx)
 
 	chatResponse, err := TrackedToolChat(dCtx, actionName, options, chatHistory)
