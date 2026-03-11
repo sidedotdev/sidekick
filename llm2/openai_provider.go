@@ -22,6 +22,7 @@ const openaiChatDefaultModel = "gpt-5.2"
 type OpenAIProvider struct {
 	BaseURL      string
 	DefaultModel string
+	AuthType     common.ProviderAuthType
 }
 
 func resolveOpenAIReasoningEffort(effort, model string) string {

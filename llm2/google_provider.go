@@ -27,7 +27,9 @@ var googleLegacyThinkingBudgetLlm2 = map[string]int32{
 	"high":   24576,
 }
 
-type GoogleProvider struct{}
+type GoogleProvider struct {
+	AuthType common.ProviderAuthType
+}
 
 func resolveGoogleReasoningEffort(effort, model string) string {
 	if effort != "lowest" && effort != "highest" {

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"sidekick/common"
-	"sidekick/llm"
 	"strings"
 	"time"
 
@@ -19,46 +18,121 @@ import (
 
 const anthropicDefaultModel = "claude-opus-4-5"
 const anthropicDefaultMaxTokens = 16000
-const anthropicOAuthBetaHeaders = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14"
 
-type AnthropicProvider struct{}
+const (
+	anthropicAcceptHeaderValue                  = "application/json"
+	anthropicDangerousBrowserAccessHeaderValue  = "true"
+	anthropicClaudeCLIUserAgent                 = "claude-cli/2.0.65 (external, cli)"
+	anthropicCLIAppHeaderValue                  = "cli"
+	anthropicClaudeCodeBetaHeader               = "claude-code-20250219"
+	anthropicOAuthBetaHeader                    = "oauth-2025-04-20"
+	anthropicFineGrainedToolStreamingBetaHeader = "fine-grained-tool-streaming-2025-05-14"
+	anthropicInterleavedThinkingBetaHeader      = "interleaved-thinking-2025-05-14"
+)
+
+type AnthropicProvider struct {
+	BaseURL             string
+	DefaultModel        string
+	AnthropicCompatible bool
+	AuthType common.ProviderAuthType
+}
+
+func anthropicBetaHeader(model string, useOAuth bool, tools []*common.Tool, assumeAnthropicModelNames bool) string {
+	parts := make([]string, 0, 4)
+	if useOAuth {
+		hasNativeMappedTools := false
+		for _, tool := range tools {
+			if tool == nil {
+				continue
+			}
+			switch tool.Name {
+			case "Read", "Write", "Edit", "Bash", "Grep", "Glob", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "KillShell", "NotebookEdit", "Skill", "Task", "TaskOutput", "TodoWrite", "WebFetch", "WebSearch":
+				hasNativeMappedTools = true
+			}
+			if hasNativeMappedTools {
+				break
+			}
+		}
+		if hasNativeMappedTools {
+			parts = append(parts, anthropicClaudeCodeBetaHeader)
+		}
+		parts = append(parts, anthropicOAuthBetaHeader)
+	}
+	parts = append(parts, anthropicFineGrainedToolStreamingBetaHeader)
+	if !assumeAnthropicModelNames || !anthropicSupportsAdaptiveThinking(model) {
+		parts = append(parts, anthropicInterleavedThinkingBetaHeader)
+	}
+	return strings.Join(parts, ",")
+}
+
+func anthropicRequestHeaders(model string, useOAuth bool, accessToken string, tools []*common.Tool, assumeAnthropicModelNames bool) map[string]string {
+	headers := map[string]string{
+		"Accept": anthropicAcceptHeaderValue,
+		"anthropic-dangerous-direct-browser-access": anthropicDangerousBrowserAccessHeaderValue,
+		"anthropic-beta": anthropicBetaHeader(model, useOAuth, tools, assumeAnthropicModelNames),
+	}
+
+	if useOAuth {
+		headers["Authorization"] = "Bearer " + accessToken
+		headers["User-Agent"] = anthropicClaudeCLIUserAgent
+		headers["x-app"] = anthropicCLIAppHeaderValue
+	}
+
+	return headers
+}
 
 func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
 	messages := request.Messages
 	options := request.Options
 
-	// Try OAuth credentials first, fall back to API key
-	oauthCreds, useOAuth, err := llm.GetAnthropicOAuthCredentials(request.SecretManager)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Anthropic OAuth credentials: %w", err)
-	}
-	var client anthropic.Client
-	httpClient := &http.Client{Timeout: 45 * time.Minute}
-	if useOAuth {
-		client = anthropic.NewClient(
-			option.WithHTTPClient(httpClient),
-			option.WithHeader("Authorization", "Bearer "+oauthCreds.AccessToken),
-			option.WithHeader("Accept", "application/json"),
-			option.WithHeader("User-Agent", "claude-cli/2.1.62"),
-			option.WithHeader("x-app", "cli"),
-			option.WithHeader("anthropic-dangerous-direct-browser-access", "true"),
-			option.WithHeader("anthropic-beta", anthropicOAuthBetaHeaders),
-		)
-	} else {
-		secretName := fmt.Sprintf("%s_API_KEY", options.ModelConfig.NormalizedProviderName())
-		token, err := request.SecretManager.GetSecret(secretName)
-		if err != nil {
-			return nil, err
-		}
-		client = anthropic.NewClient(
-			option.WithHTTPClient(httpClient),
-			option.WithAPIKey(token),
-		)
-	}
-
 	model := options.Model
 	if model == "" {
-		model = anthropicDefaultModel
+		model = p.DefaultModel
+		if model == "" {
+			model = anthropicDefaultModel
+		}
+	}
+	assumeAnthropicModelNames := !p.AnthropicCompatible
+
+	oauthCreds, token, useOAuth, err := anthropicCredentialsForRequest(
+		request.SecretManager,
+		options.ModelConfig.NormalizedProviderName(),
+		p.AuthType,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var client anthropic.Client
+	httpClient := &http.Client{Timeout: 45 * time.Minute}
+	clientOptions := []option.RequestOption{
+		option.WithHTTPClient(httpClient),
+	}
+	if p.BaseURL != "" {
+		clientOptions = append(clientOptions, option.WithBaseURL(p.BaseURL))
+	}
+	if useOAuth {
+		headers := anthropicRequestHeaders(model, true, oauthCreds.AccessToken, options.Tools, assumeAnthropicModelNames)
+		clientOptions = append(
+			clientOptions,
+			option.WithHeader("Authorization", headers["Authorization"]),
+			option.WithHeader("Accept", headers["Accept"]),
+			option.WithHeader("User-Agent", headers["User-Agent"]),
+			option.WithHeader("x-app", headers["x-app"]),
+			option.WithHeader("anthropic-dangerous-direct-browser-access", headers["anthropic-dangerous-direct-browser-access"]),
+			option.WithHeader("anthropic-beta", headers["anthropic-beta"]),
+		)
+		client = anthropic.NewClient(clientOptions...)
+	} else {
+		headers := anthropicRequestHeaders(model, false, "", options.Tools, assumeAnthropicModelNames)
+		clientOptions = append(
+			clientOptions,
+			option.WithAPIKey(token),
+			option.WithHeader("Accept", headers["Accept"]),
+			option.WithHeader("anthropic-dangerous-direct-browser-access", headers["anthropic-dangerous-direct-browser-access"]),
+			option.WithHeader("anthropic-beta", headers["anthropic-beta"]),
+		)
+		client = anthropic.NewClient(clientOptions...)
 	}
 
 	effectiveMaxTokens := anthropicDefaultMaxTokens

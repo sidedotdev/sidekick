@@ -17,11 +17,12 @@ type LocalPublicConfig struct {
 
 // ModelProviderPublicConfig represents the model provider configuration without keys
 type ModelProviderPublicConfig struct {
-	Name       string `json:"name"`
-	Type       string `json:"type"`
-	BaseURL    string `json:"base_url,omitempty"`
-	DefaultLLM string `json:"default_llm,omitempty"`
-	SmallLLM   string `json:"small_llm,omitempty"`
+	Name       string           `json:"name"`
+	Type       string           `json:"type"`
+	BaseURL    string           `json:"base_url,omitempty"`
+	DefaultLLM string           `json:"default_llm,omitempty"`
+	SmallLLM   string           `json:"small_llm,omitempty"`
+	AuthType   ProviderAuthType `json:"auth_type,omitempty"`
 }
 
 // GetLocalConfig loads the local configuration and converts it to a format
@@ -51,6 +52,7 @@ func GetLocalConfig() (LocalPublicConfig, error) {
 			BaseURL:    p.BaseURL,
 			DefaultLLM: p.DefaultLLM,
 			SmallLLM:   p.SmallLLM,
+			AuthType:   NormalizeProviderAuthType(string(p.AuthType)),
 		}
 	}
 

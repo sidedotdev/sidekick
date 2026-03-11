@@ -22,6 +22,7 @@ const defaultModel = "gpt-5-codex"
 type OpenAIResponsesProvider struct {
 	BaseURL      string
 	DefaultModel string
+	AuthType     common.ProviderAuthType
 }
 
 func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {

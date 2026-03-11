@@ -76,6 +76,12 @@ func executeChatStreamV1(
 		return nil, err
 	}
 
+	// TODO remove tool name mapping after the few local workflows that rely on this are finished
+	if toolNameMapping != nil {
+		response.Output = reverseMapMessageToolNames(response.Output, toolNameMapping)
+		response.Output.SanitizeToolNames()
+	}
+
 	return &response, nil
 }
 
