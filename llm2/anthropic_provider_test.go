@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"sidekick/common"
-	"sidekick/llm"
 	"sidekick/secret_manager"
 	"strings"
 	"sync"
@@ -68,7 +67,7 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
-	provider := AnthropicProvider{}
+	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAPI}
 
 	mockTool := &common.Tool{
 		Name:        "get_current_weather",
@@ -88,11 +87,7 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		},
 	}
 
-	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		&secret_manager.EnvSecretManager{},
-		&secret_manager.KeyringSecretManager{},
-		&secret_manager.LocalConfigSecretManager{},
-	})
+	secretManager := requireIntegrationAPIKey(t, "ANTHROPIC_API_KEY")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -372,9 +367,6 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 			if isAnthropicTransientError(err) {
 				t.Skipf("Skipping reasoning test due to transient Anthropic API error: %v", err)
 			}
-			if isAnthropicCredentialError(err) {
-				t.Skipf("Skipping reasoning test due to Anthropic credentials not configured/invalid: %v", err)
-			}
 			t.Fatalf("Stream returned an error: %v", err)
 		}
 
@@ -428,47 +420,6 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		t.Logf("Usage: InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
 		t.Logf("Model: %s, StopReason: %s", response.Model, response.StopReason)
 	})
-}
-
-func TestAnthropicProvider_OAuthRefresh(t *testing.T) {
-	t.Parallel()
-	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
-		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
-	}
-
-	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		&secret_manager.EnvSecretManager{},
-		&secret_manager.KeyringSecretManager{},
-		&secret_manager.LocalConfigSecretManager{},
-	})
-
-	creds, useOAuth, err := llm.GetAnthropicOAuthCredentials(secretManager)
-	if err != nil {
-		if isAnthropicCredentialError(err) {
-			t.Skipf("Skipping: Anthropic OAuth credentials are invalid or revoked: %v", err)
-		}
-		t.Fatalf("Failed to get OAuth credentials: %v", err)
-	}
-	if !useOAuth || creds == nil {
-		t.Skip("Skipping: Anthropic OAuth not configured")
-	}
-	if creds.RefreshToken == "" {
-		t.Skip("Skipping: no refresh token available")
-	}
-
-	newCreds, err := llm.RefreshAnthropicOAuthToken(creds.RefreshToken)
-	if err != nil {
-		if isAnthropicCredentialError(err) {
-			t.Skipf("Skipping: refresh token is invalid or revoked: %v", err)
-		}
-		t.Fatalf("RefreshAnthropicOAuthToken should not return an error: %v", err)
-	}
-
-	assert.NotEmpty(t, newCreds.AccessToken, "new access token should not be empty")
-	assert.NotEmpty(t, newCreds.RefreshToken, "new refresh token should not be empty")
-	assert.Greater(t, newCreds.ExpiresAt, int64(0), "new expiry should be set")
-
-	t.Logf("OAuth refresh successful: got new access token (len=%d), expires_at=%d", len(newCreds.AccessToken), newCreds.ExpiresAt)
 }
 
 func TestAnthropicResponsesProvider_CacheControl(t *testing.T) {
@@ -598,7 +549,7 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
-	provider := AnthropicProvider{}
+	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAPI}
 
 	expectedText, dataURL := GenerateVisionTestImage(6)
 	t.Logf("Generated vision test image with text: %q", expectedText)
@@ -619,11 +570,7 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 		},
 	}
 
-	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		&secret_manager.EnvSecretManager{},
-		&secret_manager.KeyringSecretManager{},
-		&secret_manager.LocalConfigSecretManager{},
-	})
+	secretManager := requireIntegrationAPIKey(t, "ANTHROPIC_API_KEY")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -681,7 +628,7 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
-	provider := AnthropicProvider{}
+	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAPI}
 
 	expectedText, dataURL := GenerateVisionTestImage(6)
 	t.Logf("Generated vision test image with text: %q", expectedText)
@@ -731,11 +678,7 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 		},
 	}
 
-	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		&secret_manager.EnvSecretManager{},
-		&secret_manager.KeyringSecretManager{},
-		&secret_manager.LocalConfigSecretManager{},
-	})
+	secretManager := requireIntegrationAPIKey(t, "ANTHROPIC_API_KEY")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{

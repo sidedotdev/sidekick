@@ -181,38 +181,86 @@ func convertLlm2EventToFlowEvent(event llm2.Event, flowActionId string) domain.F
 
 // getLlm2Provider returns the appropriate llm2.Provider based on the model configuration.
 func getLlm2Provider(config common.ModelConfig, providers []common.ModelProviderPublicConfig) (llm2.Provider, error) {
-	providerType, err := getProviderType(config.Provider)
+	var providerConfig *common.ModelProviderPublicConfig
+	for i := range providers {
+		if providers[i].Name == config.Provider {
+			providerConfig = &providers[i]
+			break
+		}
+	}
+
+	providerTypeName := config.Provider
+	if providerConfig != nil {
+		providerTypeName = providerConfig.Type
+	}
+
+	providerType, err := getProviderType(providerTypeName)
 	if err != nil {
-		return nil, err
+		for _, p := range providers {
+			if p.Name == config.Provider {
+				providerType = llm.ToolChatProviderType(p.Type)
+				err = nil
+				break
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	authType := common.ProviderAuthTypeAny
+	if providerConfig != nil {
+		authType = common.NormalizeProviderAuthType(string(providerConfig.AuthType))
 	}
 
 	switch providerType {
 	case llm.OpenaiToolChatProviderType:
-		return llm2.OpenAIResponsesProvider{}, nil
+		return llm2.OpenAIResponsesProvider{
+			AuthType: authType,
+		}, nil
 	case llm.OpenaiCompatibleToolChatProviderType:
-		for _, p := range providers {
-			if p.Type == string(providerType) && p.Name == config.Provider {
-				return llm2.OpenAIProvider{
-					BaseURL:      p.BaseURL,
-					DefaultModel: p.DefaultLLM,
-				}, nil
-			}
+		if providerConfig != nil && providerConfig.Type == string(providerType) {
+			return llm2.OpenAIProvider{
+				BaseURL:      providerConfig.BaseURL,
+				DefaultModel: providerConfig.DefaultLLM,
+				AuthType:     authType,
+			}, nil
 		}
 		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
 	case llm.OpenaiResponsesCompatibleToolChatProviderType:
+		if providerConfig != nil && providerConfig.Type == string(providerType) {
+			return llm2.OpenAIResponsesProvider{
+				BaseURL:      providerConfig.BaseURL,
+				DefaultModel: providerConfig.DefaultLLM,
+				AuthType:     authType,
+			}, nil
+		}
+		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
+	case llm.AnthropicToolChatProviderType:
 		for _, p := range providers {
 			if p.Type == string(providerType) && p.Name == config.Provider {
-				return llm2.OpenAIResponsesProvider{
+				return llm2.AnthropicProvider{
 					BaseURL:      p.BaseURL,
 					DefaultModel: p.DefaultLLM,
+					AuthType:     p.AuthType,
+				}, nil
+			}
+		}
+		return llm2.AnthropicProvider{}, nil
+	case llm.ToolChatProviderType("anthropic_compatible"):
+		for _, p := range providers {
+			if p.Type == string(providerType) && p.Name == config.Provider {
+				return llm2.AnthropicProvider{
+					BaseURL:             p.BaseURL,
+					DefaultModel:        p.DefaultLLM,
+					AuthType:            p.AuthType,
+					AnthropicCompatible: true,
 				}, nil
 			}
 		}
 		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
-	case llm.AnthropicToolChatProviderType:
-		return llm2.AnthropicProvider{}, nil
 	case llm.GoogleToolChatProviderType:
-		return llm2.GoogleProvider{}, nil
+		return llm2.GoogleProvider{AuthType: authType}, nil
 	case llm.UnspecifiedToolChatProviderType:
 		return nil, fmt.Errorf("llm2 provider was not specified")
 	default:

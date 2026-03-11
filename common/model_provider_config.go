@@ -13,12 +13,13 @@ var BuiltinProviders = []string{"openai", "anthropic", "google"}
 
 // ModelProviderConfig represents configuration for an LLM or embedding provider
 type ModelProviderConfig struct {
-	Name       string `koanf:"name" json:"name"`
-	Type       string `koanf:"type" json:"type"`
-	BaseURL    string `koanf:"base_url,omitempty" json:"base_url,omitempty"`
-	Key        string `koanf:"key" json:"key"`
-	DefaultLLM string `koanf:"default_llm,omitempty" json:"default_llm,omitempty"`
-	SmallLLM   string `koanf:"small_llm,omitempty" json:"small_llm,omitempty"`
+	Name       string           `koanf:"name" json:"name"`
+	Type       string           `koanf:"type" json:"type"`
+	BaseURL    string           `koanf:"base_url,omitempty" json:"base_url,omitempty"`
+	Key        string           `koanf:"key" json:"key"`
+	DefaultLLM string           `koanf:"default_llm,omitempty" json:"default_llm,omitempty"`
+	SmallLLM   string           `koanf:"small_llm,omitempty" json:"small_llm,omitempty"`
+	AuthType   ProviderAuthType `koanf:"auth_type,omitempty" json:"auth_type,omitempty"`
 }
 
 // Validate ensures the CustomProviderConfig is valid
@@ -32,8 +33,11 @@ func (c ModelProviderConfig) Validate() error {
 	if c.Name == "" && !slices.Contains(BuiltinProviders, c.Type) {
 		return fmt.Errorf("name is required for custom provider types like openai_compatible")
 	}
-	if c.Key == "" {
-		return fmt.Errorf("key is required")
+	if err := ValidateProviderAuthType(string(c.AuthType)); err != nil {
+		return err
+	}
+	if c.Key == "" && c.AuthType == ProviderAuthTypeAPI {
+		return fmt.Errorf("key is required for auth type %s", c.AuthType)
 	}
 	return nil
 }

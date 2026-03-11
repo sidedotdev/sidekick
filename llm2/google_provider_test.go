@@ -89,11 +89,7 @@ func TestGoogleProvider_Integration(t *testing.T) {
 		},
 	}
 
-	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		&secret_manager.EnvSecretManager{},
-		&secret_manager.KeyringSecretManager{},
-		&secret_manager.LocalConfigSecretManager{},
-	})
+	secretManager := requireIntegrationAPIKey(t, "GOOGLE_API_KEY", "GEMINI_API_KEY")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -433,11 +429,7 @@ func TestGoogleProvider_ImageIntegration(t *testing.T) {
 		},
 	}
 
-	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		&secret_manager.EnvSecretManager{},
-		&secret_manager.KeyringSecretManager{},
-		&secret_manager.LocalConfigSecretManager{},
-	})
+	secretManager := requireIntegrationAPIKey(t, "GOOGLE_API_KEY", "GEMINI_API_KEY")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -554,11 +546,7 @@ func TestGoogleProvider_ToolResultImageIntegration(t *testing.T) {
 	for _, mc := range models {
 		t.Run(mc.name, func(t *testing.T) {
 			t.Parallel()
-			secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-				&secret_manager.EnvSecretManager{},
-				&secret_manager.KeyringSecretManager{},
-				&secret_manager.LocalConfigSecretManager{},
-			})
+			secretManager := requireIntegrationAPIKey(t, "GOOGLE_API_KEY", "GEMINI_API_KEY")
 
 			options := Options{
 				ModelConfig: common.ModelConfig{
