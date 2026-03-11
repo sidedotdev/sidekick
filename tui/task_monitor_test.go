@@ -365,8 +365,48 @@ func TestTaskMonitor_Start_ContextCancellation(t *testing.T) {
 
 func TestTaskMonitor_Start_ExternalTaskCancellation(t *testing.T) {
 	t.Parallel()
-	// TODO: test by setting testTask.status to canceled, as if the task was
-	// canceled from a completely separate process
+	s := httptest.NewServer(http.HandlerFunc(wsHandler))
+	defer s.Close()
+	testTask := newTestTask()
+	mockClient := &mockClient{baseURL: s.URL}
+	mockCall := mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	m := NewTaskMonitor(mockClient, "workspace1", "task1")
+	m.TaskPollInterval = 1 * time.Millisecond
+	m.FlowPollInterval = 1 * time.Millisecond
+
+	statusChan, progressChan, _, _ := m.Start(context.Background())
+
+	// Verify initial task status
+	status := <-statusChan
+	assert.NoError(t, status.Error)
+	assert.Equal(t, testTask, status.Task)
+
+	// Verify flow gets updated
+	testTask.Flows = []domain.Flow{{Id: "flow1"}}
+	mockCall.Unset()
+	mockCall = mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	status = <-statusChan
+	assert.Equal(t, testTask.Flows, status.Task.Flows)
+	assert.NoError(t, status.Error)
+
+	// Verify progress update
+	progress := <-progressChan
+	assert.Equal(t, "test", progress.ActionType)
+	assert.Equal(t, domain.ActionStatusComplete, progress.ActionStatus)
+
+	// Simulate external cancellation
+	testTask.Status = domain.TaskStatusCanceled
+	mockCall.Unset()
+	mockClient.On("GetTask", "workspace1", "task1").Return(testTask, nil)
+	status = <-statusChan
+	assert.NoError(t, status.Error)
+	assert.Equal(t, domain.TaskStatusCanceled, status.Task.Status)
+	assert.True(t, status.Finished)
+
+	_, ok := <-statusChan
+	assert.False(t, ok, "status channel should be closed")
+	_, ok = <-progressChan
+	assert.False(t, ok, "progress channel should be closed")
 }
 
 func TestTaskMonitor_Start_SigtermTaskCancellation(t *testing.T) {
