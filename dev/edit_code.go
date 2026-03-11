@@ -644,6 +644,7 @@ func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, req
 		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,
 		"applyEditBlocksImmediately":      applyEditBlocksImmediately,
 		"doneRequired":                    doneRequired,
+		"hasPlan":                         true,
 	}
 	if doneRequired {
 		data["doneFunctionName"] = doneTool.Name
