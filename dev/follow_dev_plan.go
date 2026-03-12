@@ -303,6 +303,15 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		if executeNormalStepEvaluation {
 			result, err = checkIfDevStepCompleted(dCtx, requirements, step, planExecution)
 			if err != nil {
+				if errors.Is(err, flow_action.PendingActionError) {
+					pending := dCtx.ExecContext.GlobalState.GetPendingUserAction()
+					if pending != nil && *pending == flow_action.UserActionGoNext {
+						dCtx.ExecContext.GlobalState.ConsumePendingUserAction()
+						result.Summary = fmt.Sprintf("The user forcibly ended step %s's execution to go to the next step. Assume that it has been completed, though likely in a manner slightly different from what was originally specified. Take any changes in stride, but ask for clarifications if necessary.", step.StepNumber)
+						result.Successful = true
+						break
+					}
+				}
 				return result, fmt.Errorf("failed to check if requirements are fulfilled: %w", err)
 			}
 		} else {
