@@ -28,7 +28,21 @@ var googleLegacyThinkingBudgetLlm2 = map[string]int32{
 }
 
 type GoogleProvider struct {
-	AuthType common.ProviderAuthType
+	AuthType      common.ProviderAuthType
+	CustomHeaders map[string]string
+}
+
+// customHeadersTransport wraps an http.RoundTripper to inject custom headers into every request.
+type customHeadersTransport struct {
+	base    http.RoundTripper
+	headers map[string]string
+}
+
+func (t *customHeadersTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	for k, v := range t.headers {
+		req.Header.Set(k, v)
+	}
+	return t.base.RoundTrip(req)
 }
 
 func resolveGoogleReasoningEffort(effort, model string) string {
@@ -67,6 +81,12 @@ func (p GoogleProvider) Stream(ctx context.Context, request StreamRequest, event
 	}
 
 	httpClient := &http.Client{Timeout: 45 * time.Minute}
+	if len(p.CustomHeaders) > 0 {
+		httpClient.Transport = &customHeadersTransport{
+			base:    http.DefaultTransport,
+			headers: p.CustomHeaders,
+		}
+	}
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:     apiKey,
 		Backend:    genai.BackendGeminiAPI,

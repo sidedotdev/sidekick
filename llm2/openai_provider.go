@@ -20,9 +20,10 @@ import (
 const openaiChatDefaultModel = "gpt-5.2"
 
 type OpenAIProvider struct {
-	BaseURL      string
-	DefaultModel string
-	AuthType     common.ProviderAuthType
+	BaseURL       string
+	DefaultModel  string
+	AuthType      common.ProviderAuthType
+	CustomHeaders map[string]string
 }
 
 func resolveOpenAIReasoningEffort(effort, model string) string {
@@ -89,6 +90,9 @@ func (p OpenAIProvider) Stream(ctx context.Context, request StreamRequest, event
 	}
 	if p.BaseURL != "" {
 		clientOptions = append(clientOptions, option.WithBaseURL(p.BaseURL))
+	}
+	for k, v := range p.CustomHeaders {
+		clientOptions = append(clientOptions, option.WithHeader(k, v))
 	}
 	client := openai.NewClient(clientOptions...)
 
