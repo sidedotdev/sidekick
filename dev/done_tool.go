@@ -14,13 +14,13 @@ type DoneArguments struct {
 
 var doneTool = llm.Tool{
 	Name:        "done",
-	Description: "Call this tool when you have completed all necessary edits and are ready to finish. This signals that no further changes are needed. You must provide a summary of what was done. Only call this after all your work is completed, and call it on its own without any other tool calls or edit blocks in the same response.",
+	Description: "Call this tool ONLY when ALL necessary edits and actions have been fully completed (or you've confirmed none are needed after thorough analysis). Do NOT call this after merely answering a question, responding to feedback, or completing only part of the work; continue working until the full scope is finished. Only call this on its own without any other tool calls or edit blocks in the same response.",
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&DoneArguments{}),
 }
 
 var doneToolWithPlan = llm.Tool{
 	Name:        "done",
-	Description: "Call this tool when the current step has been fully completed and you are ready to finish. This signals that no further changes are needed for this step. You must provide a summary of what was done. Only call this after the step has been fully completed, and call it on its own without any other tool calls or edit blocks in the same response.",
+	Description: "Call this tool ONLY when ALL work for the current step has been fully completed — meaning all required edits and actions have been made (or you've confirmed none are needed after thorough analysis). Do NOT call this after merely answering a question, gathering information, or completing a sub-task; the step is not done until its full scope of work is finished. Only call this on its own without any other tool calls or edit blocks in the same response.",
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&DoneArguments{}),
 }
 

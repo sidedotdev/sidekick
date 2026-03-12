@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sidekick/coding/git"
 	"sidekick/common"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
 	"strings"
@@ -124,7 +125,10 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 	// were required to fulfill the requirements (eg already done in previous
 	// step), in which case we need more info in the chat history, eg summary of
 	// chat, and include that in the CheckWorkInfo struct.
-	chatHistory := getCriteriaFulfillmentPrompt(dCtx, dCtx.WorkspaceId, promptInfo)
+	chatHistory, err := getCriteriaFulfillmentPrompt(dCtx.ExecContext, dCtx.WorkspaceId, promptInfo)
+	if err != nil {
+		return CriteriaFulfillment{}, err
+	}
 
 	modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
 
@@ -134,9 +138,13 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 		// TODO /gen test this, assert it calls the right tool via mock of chat stream method
 		actionCtx := dCtx.ExecContext.NewActionContext("check_criteria_fulfillment")
 		actionCtx.ActionParams["diffString"] = promptInfo.Work
-		response, err := persisted_ai.ForceToolCall(actionCtx, modelConfig, chatHistory, &determineCriteriaFulfillmentTool)
+		toolNameMapping, err := resolveStreamToolNameMapping(modelConfig, *actionCtx.Secrets)
 		if err != nil {
-			return CriteriaFulfillment{}, fmt.Errorf("failed to force tool call: %v", err)
+			return CriteriaFulfillment{}, fmt.Errorf("failed to resolve tool name mapping: %v", err)
+		}
+		response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, toolNameMapping, &determineCriteriaFulfillmentTool)
+		if err != nil {
+			return CriteriaFulfillment{}, fmt.Errorf("failed to force tool call: %w", err)
 		}
 		toolCalls := response.GetMessage().GetToolCalls()
 		toolCall := toolCalls[0]
@@ -159,13 +167,15 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 			Name:       toolCall.Name,
 			ToolCallId: toolCall.Id,
 		}
-		AppendChatHistory(dCtx, chatHistory, newMessage)
+		if err := AppendChatHistory(dCtx.ExecContext, chatHistory, newMessage); err != nil {
+			return CriteriaFulfillment{}, err
+		}
 	}
 	return fulfillment, nil
 }
 
-func getCriteriaFulfillmentPrompt(ctx workflow.Context, workspaceId string, promptInfo CheckWorkInfo) *persisted_ai.ChatHistoryContainer {
-	chatHistory := NewVersionedChatHistory(ctx, workspaceId)
+func getCriteriaFulfillmentPrompt(eCtx flow_action.ExecContext, workspaceId string, promptInfo CheckWorkInfo) (*persisted_ai.ChatHistoryContainer, error) {
+	chatHistory := NewVersionedChatHistory(eCtx, workspaceId)
 
 	var content string
 	if promptInfo.Step.Definition != "" {
@@ -301,6 +311,8 @@ Anyways, here are the automated check results:
 		Content:     content,
 		ContextType: ContextTypeInitialInstructions,
 	}
-	AppendChatHistory(ctx, chatHistory, newMessage)
-	return chatHistory
+	if err := AppendChatHistory(eCtx, chatHistory, newMessage); err != nil {
+		return nil, err
+	}
+	return chatHistory, nil
 }

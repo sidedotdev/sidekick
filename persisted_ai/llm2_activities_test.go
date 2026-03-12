@@ -233,3 +233,235 @@ func TestStreamInputActionParams_IncludesMessagesAndSecretType(t *testing.T) {
 		t.Error("Expected secretManagerType key to be present")
 	}
 }
+func TestGetLlm2Provider_AnthropicVariants(t *testing.T) {
+	t.Parallel()
+
+	providers := []common.ModelProviderPublicConfig{
+		{
+			Name:       "anthropic-proxy",
+			Type:       "anthropic",
+			BaseURL:    "https://proxy.example.com",
+			DefaultLLM: "claude-sonnet-4-5",
+		},
+		{
+			Name:       "vendor-anthropic",
+			Type:       "anthropic_compatible",
+			BaseURL:    "https://vendor.example.com",
+			DefaultLLM: "vendor-model-v1",
+		},
+	}
+
+	tests := []struct {
+		name   string
+		config common.ModelConfig
+		want   llm2.AnthropicProvider
+	}{
+		{
+			name: "anthropic proxy preserves anthropic model assumptions",
+			config: common.ModelConfig{
+				Provider: "anthropic-proxy",
+			},
+			want: llm2.AnthropicProvider{
+				BaseURL:      "https://proxy.example.com",
+				DefaultModel: "claude-sonnet-4-5",
+			},
+		},
+		{
+			name: "anthropic compatible disables anthropic model assumptions",
+			config: common.ModelConfig{
+				Provider: "vendor-anthropic",
+			},
+			want: llm2.AnthropicProvider{
+				BaseURL:             "https://vendor.example.com",
+				DefaultModel:        "vendor-model-v1",
+				AnthropicCompatible: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			provider, err := getLlm2Provider(tt.config, providers)
+			if err != nil {
+				t.Fatalf("getLlm2Provider returned error: %v", err)
+			}
+
+			anthropicProvider, ok := provider.(llm2.AnthropicProvider)
+			if !ok {
+				t.Fatalf("provider type = %T, want llm2.AnthropicProvider", provider)
+			}
+			if anthropicProvider.BaseURL != tt.want.BaseURL ||
+				anthropicProvider.DefaultModel != tt.want.DefaultModel ||
+				anthropicProvider.AnthropicCompatible != tt.want.AnthropicCompatible ||
+				anthropicProvider.AuthType != tt.want.AuthType {
+				t.Fatalf("provider = %#v, want %#v", anthropicProvider, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetLlm2Provider_AuthType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		config    common.ModelConfig
+		providers []common.ModelProviderPublicConfig
+		assert    func(t *testing.T, provider llm2.Provider)
+	}{
+		{
+			name: "builtin anthropic defaults to any",
+			config: common.ModelConfig{
+				Provider: "anthropic",
+			},
+			assert: func(t *testing.T, provider llm2.Provider) {
+				t.Helper()
+
+				anthropicProvider, ok := provider.(llm2.AnthropicProvider)
+				if !ok {
+					t.Fatalf("expected llm2.AnthropicProvider, got %T", provider)
+				}
+				if anthropicProvider.AuthType != common.ProviderAuthTypeAny {
+					t.Fatalf("expected auth type %q, got %q", common.ProviderAuthTypeAny, anthropicProvider.AuthType)
+				}
+			},
+		},
+		{
+			name: "builtin anthropic config uses explicit api type",
+			config: common.ModelConfig{
+				Provider: "anthropic",
+			},
+			providers: []common.ModelProviderPublicConfig{
+				{
+					Name:     "anthropic",
+					Type:     "anthropic",
+					AuthType: common.ProviderAuthTypeAPI,
+				},
+			},
+			assert: func(t *testing.T, provider llm2.Provider) {
+				t.Helper()
+
+				anthropicProvider, ok := provider.(llm2.AnthropicProvider)
+				if !ok {
+					t.Fatalf("expected llm2.AnthropicProvider, got %T", provider)
+				}
+				if anthropicProvider.AuthType != common.ProviderAuthTypeAPI {
+					t.Fatalf("expected auth type %q, got %q", common.ProviderAuthTypeAPI, anthropicProvider.AuthType)
+				}
+			},
+		},
+		{
+			name: "named anthropic alias uses explicit subscription type",
+			config: common.ModelConfig{
+				Provider: "anthropic-subscription",
+			},
+			providers: []common.ModelProviderPublicConfig{
+				{
+					Name:     "anthropic-subscription",
+					Type:     "anthropic",
+					AuthType: common.ProviderAuthTypeSubscription,
+				},
+			},
+			assert: func(t *testing.T, provider llm2.Provider) {
+				t.Helper()
+
+				anthropicProvider, ok := provider.(llm2.AnthropicProvider)
+				if !ok {
+					t.Fatalf("expected llm2.AnthropicProvider, got %T", provider)
+				}
+				if anthropicProvider.AuthType != common.ProviderAuthTypeSubscription {
+					t.Fatalf("expected auth type %q, got %q", common.ProviderAuthTypeSubscription, anthropicProvider.AuthType)
+				}
+			},
+		},
+		{
+			name: "builtin openai config propagates auth type",
+			config: common.ModelConfig{
+				Provider: "openai",
+			},
+			providers: []common.ModelProviderPublicConfig{
+				{
+					Name:     "openai",
+					Type:     "openai",
+					AuthType: common.ProviderAuthTypeAPI,
+				},
+			},
+			assert: func(t *testing.T, provider llm2.Provider) {
+				t.Helper()
+
+				openAIProvider, ok := provider.(llm2.OpenAIResponsesProvider)
+				if !ok {
+					t.Fatalf("expected llm2.OpenAIResponsesProvider, got %T", provider)
+				}
+				if openAIProvider.AuthType != common.ProviderAuthTypeAPI {
+					t.Fatalf("expected auth type %q, got %q", common.ProviderAuthTypeAPI, openAIProvider.AuthType)
+				}
+			},
+		},
+		{
+			name: "named openai compatible alias propagates auth type",
+			config: common.ModelConfig{
+				Provider: "workspace-openai",
+			},
+			providers: []common.ModelProviderPublicConfig{
+				{
+					Name:       "workspace-openai",
+					Type:       "openai_compatible",
+					BaseURL:    "https://example.com/v1",
+					DefaultLLM: "gpt-4.1-mini",
+					AuthType:   common.ProviderAuthTypeSubscription,
+				},
+			},
+			assert: func(t *testing.T, provider llm2.Provider) {
+				t.Helper()
+
+				openAIProvider, ok := provider.(llm2.OpenAIProvider)
+				if !ok {
+					t.Fatalf("expected llm2.OpenAIProvider, got %T", provider)
+				}
+				if openAIProvider.AuthType != common.ProviderAuthTypeSubscription {
+					t.Fatalf("expected auth type %q, got %q", common.ProviderAuthTypeSubscription, openAIProvider.AuthType)
+				}
+			},
+		},
+		{
+			name: "named google alias propagates auth type",
+			config: common.ModelConfig{
+				Provider: "workspace-google",
+			},
+			providers: []common.ModelProviderPublicConfig{
+				{
+					Name:     "workspace-google",
+					Type:     "google",
+					AuthType: common.ProviderAuthTypeAPI,
+				},
+			},
+			assert: func(t *testing.T, provider llm2.Provider) {
+				t.Helper()
+
+				googleProvider, ok := provider.(llm2.GoogleProvider)
+				if !ok {
+					t.Fatalf("expected llm2.GoogleProvider, got %T", provider)
+				}
+				if googleProvider.AuthType != common.ProviderAuthTypeAPI {
+					t.Fatalf("expected auth type %q, got %q", common.ProviderAuthTypeAPI, googleProvider.AuthType)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			provider, err := getLlm2Provider(tt.config, tt.providers)
+			if err != nil {
+				t.Fatalf("getLlm2Provider returned error: %v", err)
+			}
+
+			tt.assert(t, provider)
+		})
+	}
+}

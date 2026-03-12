@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"sidekick/domain"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/llm2"
 	"sidekick/persisted_ai"
@@ -21,13 +22,13 @@ import (
 // TODO /gen/planned/req move this to RepoConfig
 const maxRetrieveCodeContextLength = 15000
 
-func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *persisted_ai.ChatHistoryContainer, customHandlers map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error)) []llm2.ToolResultBlock {
+func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *persisted_ai.ChatHistoryContainer, customHandlers map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error)) ([]llm2.ToolResultBlock, error) {
 	// backward compatibility: handle-parallel-tool-calls
 	// if old version, only process the first tool call
 	version := workflow.GetVersion(dCtx, "handle-parallel-tool-calls", workflow.DefaultVersion, 1)
 	if version == workflow.DefaultVersion {
 		if len(toolCalls) == 0 {
-			return []llm2.ToolResultBlock{}
+			return []llm2.ToolResultBlock{}, nil
 		}
 		// Process only the first tool call sequentially
 		tc := toolCalls[0]
@@ -51,8 +52,10 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *per
 		}
 
 		results := cleanupWorkingDirFromResults(dCtx, []llm2.ToolResultBlock{output.ToolResultBlock})
-		appendToolCallResult(dCtx, chatHistory, results[0], output.Ref)
-		return results
+		if err := appendToolCallResult(dCtx.ExecContext, chatHistory, results[0], output.Ref); err != nil {
+			return nil, err
+		}
+		return results, nil
 	}
 
 	responseChannel := workflow.NewChannel(dCtx)
@@ -108,22 +111,24 @@ func handleToolCalls(dCtx DevContext, toolCalls []llm.ToolCall, chatHistory *per
 	}
 	results = cleanupWorkingDirFromResults(dCtx, results)
 	for i, result := range results {
-		appendToolCallResult(dCtx, chatHistory, result, outputs[i].Ref)
+		if err := appendToolCallResult(dCtx.ExecContext, chatHistory, result, outputs[i].Ref); err != nil {
+			return nil, err
+		}
 	}
-	return results
+	return results, nil
 }
 
 // appendToolCallResult appends a tool call result to chat history. For pre-persisted
 // results (with a non-nil ref), it appends the ref directly. Otherwise it wraps
 // and persists via addToolCallResponse.
-func appendToolCallResult(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, trb llm2.ToolResultBlock, ref *persisted_ai.MessageRef) {
+func appendToolCallResult(eCtx flow_action.ExecContext, chatHistory *persisted_ai.ChatHistoryContainer, trb llm2.ToolResultBlock, ref *persisted_ai.MessageRef) error {
 	if ref != nil {
 		if llm2History, ok := chatHistory.History.(*persisted_ai.Llm2ChatHistory); ok {
 			llm2History.AppendRef(*ref)
-			return
+			return nil
 		}
 	}
-	addToolCallResponse(ctx, chatHistory, trb)
+	return addToolCallResponse(eCtx, chatHistory, trb)
 }
 
 func cleanupWorkingDirFromResults(dCtx DevContext, results []llm2.ToolResultBlock) []llm2.ToolResultBlock {

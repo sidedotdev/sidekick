@@ -9,6 +9,8 @@ import (
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/llm2"
+	"sidekick/utils"
+	"time"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -39,6 +41,7 @@ func ForceToolCallWithTrackOptionsV2(
 	trackOptions flow_action.TrackOptions,
 	modelConfig common.ModelConfig,
 	chatHistory *ChatHistoryContainer,
+	toolNameMapping *ToolNameMappingConfig,
 	tools ...*llm.Tool,
 ) (common.MessageResponse, error) {
 
@@ -69,7 +72,7 @@ func ForceToolCallWithTrackOptionsV2(
 	response, err := flow_action.TrackWithOptions(actionCtx, trackOptions, func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 		streamInput.FlowActionId = flowAction.Id
 
-		msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput)
+		msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput, toolNameMapping)
 		if err != nil {
 			return nil, err
 		}
@@ -79,7 +82,9 @@ func ForceToolCallWithTrackOptionsV2(
 
 	// Append the response to chat history
 	if err == nil {
-		AppendChatHistory(actionCtx, chatHistory, response.GetMessage())
+		if appendErr := AppendChatHistory(actionCtx.ExecContext, chatHistory, response.GetMessage()); appendErr != nil {
+			return nil, appendErr
+		}
 	}
 
 	// single retry in case the llm is being dumb and not returning a tool call
@@ -88,7 +93,9 @@ func ForceToolCallWithTrackOptionsV2(
 			Role:    common.ChatMessageRoleSystem,
 			Content: "Expected a tool call, but didn't get it. Embedding the json in the content is not sufficient. Please use the provided tool(s).",
 		}
-		AppendChatHistory(actionCtx, chatHistory, retryMsg)
+		if appendErr := AppendChatHistory(actionCtx.ExecContext, chatHistory, retryMsg); appendErr != nil {
+			return nil, appendErr
+		}
 
 		for k, v := range streamInput.ActionParams() {
 			actionCtx.ActionParams[k] = v
@@ -96,7 +103,7 @@ func ForceToolCallWithTrackOptionsV2(
 		response, err = flow_action.TrackWithOptions(actionCtx, trackOptions, func(trackedActionCtx flow_action.ActionContext, flowAction *domain.FlowAction) (common.MessageResponse, error) {
 			streamInput.FlowActionId = flowAction.Id
 
-			msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput)
+			msgResponse, err := ExecuteChatStream(trackedActionCtx, streamInput, toolNameMapping)
 			if err != nil {
 				return nil, err
 			}
@@ -110,7 +117,9 @@ func ForceToolCallWithTrackOptionsV2(
 
 		// Append the retry response to chat history
 		if err == nil {
-			AppendChatHistory(actionCtx, chatHistory, response.GetMessage())
+			if appendErr := AppendChatHistory(actionCtx.ExecContext, chatHistory, response.GetMessage()); appendErr != nil {
+				return nil, appendErr
+			}
 		}
 	}
 
@@ -118,16 +127,16 @@ func ForceToolCallWithTrackOptionsV2(
 }
 
 func ForceToolCall(actionCtx flow_action.ActionContext, modelConfig common.ModelConfig, chatHistory *ChatHistoryContainer, tools ...*llm.Tool) (common.MessageResponse, error) {
-	return ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, tools...)
+	return ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, nil, tools...)
 }
 
 // AppendChatHistory appends a message to chat history, using an activity to
 // persist for llm2 history or direct append for legacy history.
-func AppendChatHistory(ctx workflow.Context, chatHistory *ChatHistoryContainer, msg common.Message) {
+func AppendChatHistory(eCtx flow_action.ExecContext, chatHistory *ChatHistoryContainer, msg common.Message) error {
 	llm2History, ok := chatHistory.History.(*Llm2ChatHistory)
 	if !ok {
 		chatHistory.Append(msg)
-		return
+		return nil
 	}
 
 	m := MessageFromCommon(msg)
@@ -139,9 +148,21 @@ func AppendChatHistory(ctx workflow.Context, chatHistory *ChatHistoryContainer, 
 		WorkspaceId: llm2History.WorkspaceId(),
 		Message:     m,
 	}
-	err := workflow.ExecuteActivity(ctx, cha.AppendMessage, input).Get(ctx, &ref)
-	if err != nil {
-		panic(fmt.Errorf("AppendChatHistory failed: %w", err))
+
+	version := workflow.GetVersion(eCtx, "append-chat-history-user-retry", workflow.DefaultVersion, 1)
+	if version < 1 {
+		err := workflow.ExecuteActivity(eCtx, cha.AppendMessage, input).Get(eCtx, &ref)
+		if err != nil {
+			panic(fmt.Errorf("AppendChatHistory failed: %w", err))
+		}
+	} else {
+		retryEctx := eCtx
+		retryEctx.Context = utils.RetryCtx(eCtx.Context, 30, 1*time.Second)
+		err := flow_action.PerformActivityWithUserRetry(retryEctx, "append_chat_history", cha.AppendMessage, &ref, input)
+		if err != nil {
+			return fmt.Errorf("AppendChatHistory failed: %w", err)
+		}
 	}
 	llm2History.AppendRef(*ref)
+	return nil
 }

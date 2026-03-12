@@ -98,12 +98,11 @@ func (a *CodecCleanupActivities) CollectCodecKeysFromHistory(ctx context.Context
 
 // DeleteCodecKeys deletes the specified codec KV keys.
 func (a *CodecCleanupActivities) DeleteCodecKeys(ctx context.Context, keys []string) error {
+	values := make(map[string]interface{}, len(keys))
 	for _, key := range keys {
-		if err := a.Storage.DeletePrefix(ctx, codecWorkspaceID, key); err != nil {
-			return fmt.Errorf("failed to delete codec key %q: %w", key, err)
-		}
+		values[key] = nil
 	}
-	return nil
+	return a.Storage.MSet(ctx, codecWorkspaceID, values)
 }
 
 // ListAllCodecKeys returns all codec KV keys.
