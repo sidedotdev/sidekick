@@ -19,22 +19,14 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 	t.Parallel()
 	ca := &CodingActivities{}
 
-	t.Run("after_merge_base_into_feature", func(t *testing.T) {
+	t.Run("no_changes_since_review", func(t *testing.T) {
 		t.Parallel()
 
 		repoDir := setupTestGitRepo(t)
 		ctx := context.Background()
 
 		createFileAndCommit(t, repoDir, "shared.go", "package shared\n\nfunc Shared() {}\n", "initial commit")
-
 		runGit(t, repoDir, "checkout", "-b", "feature")
-		createFileAndCommit(t, repoDir, "feature.go", "package feature\n\nfunc Feature() {}\n", "our feature work")
-
-		runGit(t, repoDir, "checkout", "main")
-		createFileAndCommit(t, repoDir, "base_file.go", "package base\n\nfunc Base() {}\n", "base branch addition")
-
-		runGit(t, repoDir, "checkout", "feature")
-		runGit(t, repoDir, "merge", "main", "-m", "merge main into feature")
 
 		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
 		require.NoError(t, err)
@@ -42,12 +34,6 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 
 		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
 		require.NoError(t, err)
-
-		runGit(t, repoDir, "checkout", "main")
-		createFileAndCommit(t, repoDir, "new_main_file.go", "package newmain\n\nfunc NewMain() {}\n", "new main file")
-
-		runGit(t, repoDir, "checkout", "feature")
-		runGit(t, repoDir, "merge", "main", "-m", "merge main again")
 
 		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
 			EnvContainer:   envContainer,
@@ -55,14 +41,10 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 			LastReviewTree: lastReviewTreeHash,
 		})
 		require.NoError(t, err)
-
-		assert.NotContains(t, result, "new_main_file.go",
-			"merge-introduced file should be filtered out")
-		assert.Empty(t, result,
-			"no files should remain: feature.go was already reviewed, new_main_file.go is merge-introduced")
+		assert.Empty(t, result, "no changes since review means empty diff")
 	})
 
-	t.Run("merge_introduced_file_filtered", func(t *testing.T) {
+	t.Run("uses_since_review_when_shorter", func(t *testing.T) {
 		t.Parallel()
 
 		repoDir := setupTestGitRepo(t)
@@ -71,7 +53,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		createFileAndCommit(t, repoDir, "shared.go", "package shared\n\nfunc Shared() {}\n", "initial commit")
 
 		runGit(t, repoDir, "checkout", "-b", "feature")
-		createFileAndCommit(t, repoDir, "feature.go", "package feature\n\nfunc Feature() {}\n", "our feature work")
+		createFileAndCommit(t, repoDir, "feature.go", "package feature\n\nfunc Feature() {}\n", "feature work")
 
 		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
 		require.NoError(t, err)
@@ -80,12 +62,46 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
 		require.NoError(t, err)
 
-		runGit(t, repoDir, "checkout", "main")
-		createFileAndCommit(t, repoDir, "base_file.go", "package base\n\nfunc Base() {}\n", "base branch work")
-
-		runGit(t, repoDir, "checkout", "feature")
 		createFileAndCommit(t, repoDir, "feature2.go", "package feature\n\nfunc Feature2() {}\n", "more feature work")
 
+		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
+			EnvContainer:   envContainer,
+			BaseBranch:     "main",
+			LastReviewTree: lastReviewTreeHash,
+		})
+		require.NoError(t, err)
+		t.Logf("result:\n%s", result)
+
+		assert.Contains(t, result, "feature2.go", "new work since review should appear")
+		assert.NotContains(t, result, "feature.go",
+			"already-reviewed file should not appear when since-review diff is used")
+	})
+
+	t.Run("uses_base_branch_when_merge_inflates_since_review", func(t *testing.T) {
+		t.Parallel()
+
+		repoDir := setupTestGitRepo(t)
+		ctx := context.Background()
+
+		createFileAndCommit(t, repoDir, "shared.go", "package shared\n\nfunc Shared() {}\n", "initial commit")
+
+		runGit(t, repoDir, "checkout", "-b", "feature")
+		createFileAndCommit(t, repoDir, "feature.go", "package feature\n\nfunc Feature() {}\n", "feature work")
+
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		require.NoError(t, err)
+
+		// Add several files on main so the merge inflates the since-review diff
+		runGit(t, repoDir, "checkout", "main")
+		createFileAndCommit(t, repoDir, "base1.go", "package base\n\nfunc Base1() {}\n", "base work 1")
+		createFileAndCommit(t, repoDir, "base2.go", "package base\n\nfunc Base2() {}\n", "base work 2")
+		createFileAndCommit(t, repoDir, "base3.go", "package base\n\nfunc Base3() {}\n", "base work 3")
+
+		runGit(t, repoDir, "checkout", "feature")
 		runGit(t, repoDir, "merge", "main", "-m", "merge main")
 
 		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
@@ -96,9 +112,90 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		t.Logf("result:\n%s", result)
 
-		assert.Contains(t, result, "feature2.go", "our new work should be included")
-		assert.NotContains(t, result, "base_file.go",
-			"merge-introduced file should be filtered")
+		assert.Contains(t, result, "feature.go",
+			"feature work should appear in base-branch diff")
+		assert.NotContains(t, result, "base1.go",
+			"base-branch files should not appear")
+		assert.NotContains(t, result, "base2.go")
+		assert.NotContains(t, result, "base3.go")
+	})
+
+	t.Run("convergent_change_empty_after_merge", func(t *testing.T) {
+		t.Parallel()
+
+		repoDir := setupTestGitRepo(t)
+		ctx := context.Background()
+
+		createFileAndCommit(t, repoDir, "test_commands",
+			"run_tests: old_command\nother: stuff\n", "initial commit")
+
+		runGit(t, repoDir, "checkout", "-b", "feature")
+		err := os.WriteFile(filepath.Join(repoDir, "test_commands"),
+			[]byte("run_tests: new_command\nother: stuff\n"), 0644)
+		require.NoError(t, err)
+		runGit(t, repoDir, "add", "test_commands")
+		runGit(t, repoDir, "commit", "-m", "update test command")
+
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		require.NoError(t, err)
+
+		runGit(t, repoDir, "checkout", "main")
+		err = os.WriteFile(filepath.Join(repoDir, "test_commands"),
+			[]byte("run_tests: new_command\nother: stuff\n"), 0644)
+		require.NoError(t, err)
+		runGit(t, repoDir, "add", "test_commands")
+		runGit(t, repoDir, "commit", "-m", "same change on main")
+
+		runGit(t, repoDir, "checkout", "feature")
+		runGit(t, repoDir, "merge", "main", "-m", "merge main")
+
+		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
+			EnvContainer:   envContainer,
+			BaseBranch:     "main",
+			LastReviewTree: lastReviewTreeHash,
+		})
+		require.NoError(t, err)
+		t.Logf("result:\n%s", result)
+
+		assert.Empty(t, result,
+			"file now matches main so sinceReviewDiff is empty, nothing to show")
+	})
+
+	t.Run("undone_changes_empty", func(t *testing.T) {
+		t.Parallel()
+
+		repoDir := setupTestGitRepo(t)
+		ctx := context.Background()
+
+		createFileAndCommit(t, repoDir, "shared.go", "package shared\n\nfunc Shared() {}\n", "initial commit")
+
+		runGit(t, repoDir, "checkout", "-b", "feature")
+		createFileAndCommit(t, repoDir, "feature.go", "package feature\n\nfunc Feature() {}\n", "add feature")
+
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		require.NoError(t, err)
+
+		runGit(t, repoDir, "rm", "feature.go")
+		runGit(t, repoDir, "commit", "-m", "remove feature.go")
+
+		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
+			EnvContainer:   envContainer,
+			BaseBranch:     "main",
+			LastReviewTree: lastReviewTreeHash,
+		})
+		require.NoError(t, err)
+		t.Logf("result:\n%s", result)
+
+		assert.Empty(t, result,
+			"base-branch diff is empty (matches main) and shorter than since-review diff")
 	})
 
 	t.Run("partial_revert_preserved", func(t *testing.T) {
@@ -143,7 +240,164 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 			"partially reverted file should still show remaining changes")
 	})
 
-	t.Run("shared_file_different_hunks_all_kept", func(t *testing.T) {
+	t.Run("context_lines_preserved_in_output", func(t *testing.T) {
+		t.Parallel()
+
+		repoDir := setupTestGitRepo(t)
+		ctx := context.Background()
+
+		// 20-line file so context lines are clearly visible
+		content := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n" +
+			"line11\nline12\nline13\nline14\nline15\nline16\nline17\nline18\nline19\nline20\n"
+		createFileAndCommit(t, repoDir, "shared.go", content, "initial commit")
+
+		runGit(t, repoDir, "checkout", "-b", "feature")
+
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		require.NoError(t, err)
+
+		// Edit line 10 on feature
+		newContent := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nOUR_CHANGE\n" +
+			"line11\nline12\nline13\nline14\nline15\nline16\nline17\nline18\nline19\nline20\n"
+		err = os.WriteFile(filepath.Join(repoDir, "shared.go"), []byte(newContent), 0644)
+		require.NoError(t, err)
+		runGit(t, repoDir, "add", "shared.go")
+		runGit(t, repoDir, "commit", "-m", "our change at line 10")
+
+		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
+			EnvContainer:   envContainer,
+			BaseBranch:     "main",
+			LastReviewTree: lastReviewTreeHash,
+		})
+		require.NoError(t, err)
+		t.Logf("result:\n%s", result)
+
+		assert.Contains(t, result, "OUR_CHANGE", "our change should be present")
+		assert.Contains(t, result, " line7", "leading context lines should be present")
+		assert.Contains(t, result, " line13", "trailing context lines should be present")
+	})
+
+	t.Run("removed_file_empty_when_net_matches_main", func(t *testing.T) {
+		t.Parallel()
+
+		repoDir := setupTestGitRepo(t)
+		ctx := context.Background()
+
+		createFileAndCommit(t, repoDir, "shared.go", "package shared\n\nfunc Shared() {}\n", "initial commit")
+
+		runGit(t, repoDir, "checkout", "-b", "feature")
+		createFileAndCommit(t, repoDir, "newfile.go", "package newfile\n\nfunc New() {}\n", "add new file")
+
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		require.NoError(t, err)
+
+		runGit(t, repoDir, "rm", "newfile.go")
+		runGit(t, repoDir, "commit", "-m", "remove newfile")
+
+		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
+			EnvContainer:   envContainer,
+			BaseBranch:     "main",
+			LastReviewTree: lastReviewTreeHash,
+		})
+		require.NoError(t, err)
+		t.Logf("result:\n%s", result)
+
+		assert.Empty(t, result,
+			"net effect matches main so base-branch diff (shorter) is empty")
+	})
+
+	t.Run("after_merge_base_into_feature", func(t *testing.T) {
+		t.Parallel()
+
+		repoDir := setupTestGitRepo(t)
+		ctx := context.Background()
+
+		createFileAndCommit(t, repoDir, "shared.go", "package shared\n\nfunc Shared() {}\n", "initial commit")
+
+		runGit(t, repoDir, "checkout", "-b", "feature")
+		createFileAndCommit(t, repoDir, "feature.go", "package feature\n\nfunc Feature() {}\n", "our feature work")
+
+		runGit(t, repoDir, "checkout", "main")
+		createFileAndCommit(t, repoDir, "base_file.go", "package base\n\nfunc Base() {}\n", "base branch addition")
+
+		runGit(t, repoDir, "checkout", "feature")
+		runGit(t, repoDir, "merge", "main", "-m", "merge main into feature")
+
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		require.NoError(t, err)
+
+		runGit(t, repoDir, "checkout", "main")
+		createFileAndCommit(t, repoDir, "new_main_file.go", "package newmain\n\nfunc NewMain() {}\n", "new main file")
+
+		runGit(t, repoDir, "checkout", "feature")
+		runGit(t, repoDir, "merge", "main", "-m", "merge main again")
+
+		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
+			EnvContainer:   envContainer,
+			BaseBranch:     "main",
+			LastReviewTree: lastReviewTreeHash,
+		})
+		require.NoError(t, err)
+		t.Logf("result:\n%s", result)
+
+		assert.NotContains(t, result, "new_main_file.go",
+			"merge-introduced file excluded when base-branch diff is shorter")
+		assert.Contains(t, result, "feature.go",
+			"base-branch diff includes previously-reviewed feature work")
+	})
+
+	t.Run("merge_introduced_file_included_when_since_review_shorter", func(t *testing.T) {
+		t.Parallel()
+
+		repoDir := setupTestGitRepo(t)
+		ctx := context.Background()
+
+		createFileAndCommit(t, repoDir, "shared.go", "package shared\n\nfunc Shared() {}\n", "initial commit")
+
+		runGit(t, repoDir, "checkout", "-b", "feature")
+		createFileAndCommit(t, repoDir, "feature.go", "package feature\n\nfunc Feature() {}\n", "our feature work")
+
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
+		require.NoError(t, err)
+
+		runGit(t, repoDir, "checkout", "main")
+		createFileAndCommit(t, repoDir, "base_file.go", "package base\n\nfunc Base() {}\n", "base branch work")
+
+		runGit(t, repoDir, "checkout", "feature")
+		createFileAndCommit(t, repoDir, "feature2.go", "package feature\n\nfunc Feature2() {}\n", "more feature work")
+
+		runGit(t, repoDir, "merge", "main", "-m", "merge main")
+
+		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
+			EnvContainer:   envContainer,
+			BaseBranch:     "main",
+			LastReviewTree: lastReviewTreeHash,
+		})
+		require.NoError(t, err)
+		t.Logf("result:\n%s", result)
+
+		assert.Contains(t, result, "feature2.go", "our new work should be included")
+		assert.Contains(t, result, "base_file.go",
+			"since-review diff is shorter and includes merge-introduced file")
+	})
+
+	t.Run("shared_file_base_hunk_excluded", func(t *testing.T) {
 		t.Parallel()
 
 		repoDir := setupTestGitRepo(t)
@@ -191,7 +445,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		assert.Contains(t, result, "OUR_FEATURE_CHANGE",
 			"our change should be in the result")
 		assert.NotContains(t, result, "MAIN_CHANGE",
-			"merge-introduced hunk should be filtered even in a file we also touched")
+			"main's hunk excluded when base-branch diff is shorter")
 		assert.Contains(t, result, "shared.go")
 	})
 
@@ -229,93 +483,11 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		t.Logf("result:\n%s", result)
 
-		assert.Contains(t, result, "config.yml",
-			"reverted file should appear in diff")
-		assert.Contains(t, result, "key: modified",
-			"previously reviewed content should appear as removed")
-		assert.Contains(t, result, "key: original",
-			"reverted content should appear as added")
-	})
-
-	t.Run("convergent_change_kept", func(t *testing.T) {
-		t.Parallel()
-
-		repoDir := setupTestGitRepo(t)
-		ctx := context.Background()
-
-		createFileAndCommit(t, repoDir, "test_commands",
-			"run_tests: old_command\nother: stuff\n", "initial commit")
-
-		runGit(t, repoDir, "checkout", "-b", "feature")
-		err := os.WriteFile(filepath.Join(repoDir, "test_commands"),
-			[]byte("run_tests: new_command\nother: stuff\n"), 0644)
-		require.NoError(t, err)
-		runGit(t, repoDir, "add", "test_commands")
-		runGit(t, repoDir, "commit", "-m", "update test command")
-
-		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
-		require.NoError(t, err)
-		envContainer := env.EnvContainer{Env: devEnv}
-
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
-		require.NoError(t, err)
-
-		runGit(t, repoDir, "checkout", "main")
-		err = os.WriteFile(filepath.Join(repoDir, "test_commands"),
-			[]byte("run_tests: new_command\nother: stuff\n"), 0644)
-		require.NoError(t, err)
-		runGit(t, repoDir, "add", "test_commands")
-		runGit(t, repoDir, "commit", "-m", "same change on main")
-
-		runGit(t, repoDir, "checkout", "feature")
-		runGit(t, repoDir, "merge", "main", "-m", "merge main")
-
-		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
-			EnvContainer:   envContainer,
-			BaseBranch:     "main",
-			LastReviewTree: lastReviewTreeHash,
-		})
-		require.NoError(t, err)
-		t.Logf("result:\n%s", result)
-
 		assert.Empty(t, result,
-			"file now matches main so sinceReviewDiff is empty, nothing to show")
+			"base-branch diff is empty (matches main) and shorter than since-review diff")
 	})
 
-	t.Run("undone_changes_shown", func(t *testing.T) {
-		t.Parallel()
-
-		repoDir := setupTestGitRepo(t)
-		ctx := context.Background()
-
-		createFileAndCommit(t, repoDir, "shared.go", "package shared\n\nfunc Shared() {}\n", "initial commit")
-
-		runGit(t, repoDir, "checkout", "-b", "feature")
-		createFileAndCommit(t, repoDir, "feature.go", "package feature\n\nfunc Feature() {}\n", "add feature")
-
-		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
-		require.NoError(t, err)
-		envContainer := env.EnvContainer{Env: devEnv}
-
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
-		require.NoError(t, err)
-
-		runGit(t, repoDir, "rm", "feature.go")
-		runGit(t, repoDir, "commit", "-m", "remove feature.go")
-
-		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
-			EnvContainer:   envContainer,
-			BaseBranch:     "main",
-			LastReviewTree: lastReviewTreeHash,
-		})
-		require.NoError(t, err)
-		t.Logf("result:\n%s", result)
-
-		assert.Contains(t, result, "feature.go",
-			"file removed since review should appear in diff")
-	})
-
-	t.Run("rebase_new_file_filtered", func(t *testing.T) {
+	t.Run("rebase_base_file_excluded", func(t *testing.T) {
 		t.Parallel()
 
 		repoDir := setupTestGitRepo(t)
@@ -352,48 +524,7 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		assert.Contains(t, result, "feature2.go",
 			"our post-rebase work should be included")
 		assert.NotContains(t, result, "main_new.go",
-			"rebase-introduced file should be filtered out")
-	})
-
-	t.Run("context_lines_preserved_in_output", func(t *testing.T) {
-		t.Parallel()
-
-		repoDir := setupTestGitRepo(t)
-		ctx := context.Background()
-
-		// 20-line file so context lines are clearly visible
-		content := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n" +
-			"line11\nline12\nline13\nline14\nline15\nline16\nline17\nline18\nline19\nline20\n"
-		createFileAndCommit(t, repoDir, "shared.go", content, "initial commit")
-
-		runGit(t, repoDir, "checkout", "-b", "feature")
-
-		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
-		require.NoError(t, err)
-		envContainer := env.EnvContainer{Env: devEnv}
-
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
-		require.NoError(t, err)
-
-		// Edit line 10 on feature
-		newContent := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nOUR_CHANGE\n" +
-			"line11\nline12\nline13\nline14\nline15\nline16\nline17\nline18\nline19\nline20\n"
-		err = os.WriteFile(filepath.Join(repoDir, "shared.go"), []byte(newContent), 0644)
-		require.NoError(t, err)
-		runGit(t, repoDir, "add", "shared.go")
-		runGit(t, repoDir, "commit", "-m", "our change at line 10")
-
-		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
-			EnvContainer:   envContainer,
-			BaseBranch:     "main",
-			LastReviewTree: lastReviewTreeHash,
-		})
-		require.NoError(t, err)
-		t.Logf("result:\n%s", result)
-
-		assert.Contains(t, result, "OUR_CHANGE", "our change should be present")
-		assert.Contains(t, result, " line7", "leading context lines should be present")
-		assert.Contains(t, result, " line13", "trailing context lines should be present")
+			"base-branch diff chosen as shorter; main's file excluded")
 	})
 
 	t.Run("adjacent_base_change_not_falsely_dropped", func(t *testing.T) {
@@ -455,44 +586,9 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		assert.Contains(t, result, "OUR_CHANGE",
 			"our change should be kept even when base changed a nearby line")
 		assert.NotContains(t, result, "BASE_CHANGE",
-			"base's hunk should be filtered")
+			"base's hunk excluded when base-branch diff is shorter")
 		assert.Contains(t, result, " line2",
 			"context lines should be preserved in the output")
-	})
-
-	t.Run("removed_file_shown_in_diff", func(t *testing.T) {
-		t.Parallel()
-
-		repoDir := setupTestGitRepo(t)
-		ctx := context.Background()
-
-		createFileAndCommit(t, repoDir, "shared.go", "package shared\n\nfunc Shared() {}\n", "initial commit")
-
-		runGit(t, repoDir, "checkout", "-b", "feature")
-		createFileAndCommit(t, repoDir, "newfile.go", "package newfile\n\nfunc New() {}\n", "add new file")
-
-		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{RepoDir: repoDir})
-		require.NoError(t, err)
-		envContainer := env.EnvContainer{Env: devEnv}
-
-		lastReviewTreeHash, err := git.WriteTreeActivity(ctx, envContainer)
-		require.NoError(t, err)
-
-		runGit(t, repoDir, "rm", "newfile.go")
-		runGit(t, repoDir, "commit", "-m", "remove newfile")
-
-		result, err := ca.GetOwnChangesSinceReviewActivity(ctx, GetOwnChangesSinceReviewParams{
-			EnvContainer:   envContainer,
-			BaseBranch:     "main",
-			LastReviewTree: lastReviewTreeHash,
-		})
-		require.NoError(t, err)
-		t.Logf("result:\n%s", result)
-
-		assert.Contains(t, result, "newfile.go",
-			"removed file should appear in diff")
-		assert.Contains(t, result, "func New()",
-			"removed content should appear in diff")
 	})
 
 	t.Run("staged_untracked_file_then_removed", func(t *testing.T) {
@@ -531,12 +627,8 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		t.Logf("result:\n%s", result)
 
-		assert.Contains(t, result, "staged.go",
-			"removed file should appear in diff")
-		assert.Contains(t, result, "func Staged()",
-			"removed content should appear in diff")
-		assert.Contains(t, result, "+++ /dev/null",
-			"diff should show the file was deleted")
+		assert.Empty(t, result,
+			"base-branch diff is empty (matches main) and shorter than since-review diff")
 	})
 
 	t.Run("staged_tracked_file_changes_then_reverted", func(t *testing.T) {
@@ -575,12 +667,8 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		require.NoError(t, err)
 		t.Logf("result:\n%s", result)
 
-		assert.Contains(t, result, "tracked.go",
-			"reverted tracked file should appear in diff")
-		assert.Contains(t, result, "func Original()",
-			"original content should appear as added back")
-		assert.Contains(t, result, "func Modified()",
-			"modified content should appear as removed")
+		assert.Empty(t, result,
+			"base-branch diff is empty (matches main) and shorter than since-review diff")
 	})
 
 	t.Run("rebase_shared_file_hunk_level_filtering", func(t *testing.T) {
@@ -631,6 +719,6 @@ func TestGetOwnChangesSinceReviewActivity(t *testing.T) {
 		assert.Contains(t, result, "OUR_CHANGE",
 			"our hunk should be kept after rebase")
 		assert.NotContains(t, result, "MAIN_CHANGE",
-			"main's hunk should be filtered even after rebase")
+			"main's hunk excluded when base-branch diff is shorter")
 	})
 }
