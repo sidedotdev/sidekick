@@ -34,7 +34,7 @@ type AnthropicProvider struct {
 	BaseURL             string
 	DefaultModel        string
 	AnthropicCompatible bool
-	AuthType common.ProviderAuthType
+	AuthType            common.ProviderAuthType
 }
 
 func anthropicBetaHeader(model string, useOAuth bool, tools []*common.Tool, assumeAnthropicModelNames bool) string {
@@ -122,7 +122,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 			option.WithHeader("anthropic-dangerous-direct-browser-access", headers["anthropic-dangerous-direct-browser-access"]),
 			option.WithHeader("anthropic-beta", headers["anthropic-beta"]),
 		)
-		client = anthropic.NewClient(clientOptions...)
+		client = newAnthropicClient(clientOptions...)
 	} else {
 		headers := anthropicRequestHeaders(model, false, "", options.Tools, assumeAnthropicModelNames)
 		clientOptions = append(
@@ -132,7 +132,7 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 			option.WithHeader("anthropic-dangerous-direct-browser-access", headers["anthropic-dangerous-direct-browser-access"]),
 			option.WithHeader("anthropic-beta", headers["anthropic-beta"]),
 		)
-		client = anthropic.NewClient(clientOptions...)
+		client = newAnthropicClient(clientOptions...)
 	}
 
 	effectiveMaxTokens := anthropicDefaultMaxTokens
