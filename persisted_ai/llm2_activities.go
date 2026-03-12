@@ -215,24 +215,31 @@ func getLlm2Provider(config common.ModelConfig, providers []common.ModelProvider
 
 	switch providerType {
 	case llm.OpenaiToolChatProviderType:
+		var customHeaders map[string]string
+		if providerConfig != nil {
+			customHeaders = providerConfig.CustomHeaders
+		}
 		return llm2.OpenAIResponsesProvider{
-			AuthType: authType,
+			AuthType:      authType,
+			CustomHeaders: customHeaders,
 		}, nil
 	case llm.OpenaiCompatibleToolChatProviderType:
 		if providerConfig != nil && providerConfig.Type == string(providerType) {
 			return llm2.OpenAIProvider{
-				BaseURL:      providerConfig.BaseURL,
-				DefaultModel: providerConfig.DefaultLLM,
-				AuthType:     authType,
+				BaseURL:       providerConfig.BaseURL,
+				DefaultModel:  providerConfig.DefaultLLM,
+				AuthType:      authType,
+				CustomHeaders: providerConfig.CustomHeaders,
 			}, nil
 		}
 		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
 	case llm.OpenaiResponsesCompatibleToolChatProviderType:
 		if providerConfig != nil && providerConfig.Type == string(providerType) {
 			return llm2.OpenAIResponsesProvider{
-				BaseURL:      providerConfig.BaseURL,
-				DefaultModel: providerConfig.DefaultLLM,
-				AuthType:     authType,
+				BaseURL:       providerConfig.BaseURL,
+				DefaultModel:  providerConfig.DefaultLLM,
+				AuthType:      authType,
+				CustomHeaders: providerConfig.CustomHeaders,
 			}, nil
 		}
 		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
@@ -240,9 +247,10 @@ func getLlm2Provider(config common.ModelConfig, providers []common.ModelProvider
 		for _, p := range providers {
 			if p.Type == string(providerType) && p.Name == config.Provider {
 				return llm2.AnthropicProvider{
-					BaseURL:      p.BaseURL,
-					DefaultModel: p.DefaultLLM,
-					AuthType:     p.AuthType,
+					BaseURL:       p.BaseURL,
+					DefaultModel:  p.DefaultLLM,
+					AuthType:      p.AuthType,
+					CustomHeaders: p.CustomHeaders,
 				}, nil
 			}
 		}
@@ -255,12 +263,17 @@ func getLlm2Provider(config common.ModelConfig, providers []common.ModelProvider
 					DefaultModel:        p.DefaultLLM,
 					AuthType:            p.AuthType,
 					AnthropicCompatible: true,
+					CustomHeaders:       p.CustomHeaders,
 				}, nil
 			}
 		}
 		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
 	case llm.GoogleToolChatProviderType:
-		return llm2.GoogleProvider{AuthType: authType}, nil
+		var customHeaders map[string]string
+		if providerConfig != nil {
+			customHeaders = providerConfig.CustomHeaders
+		}
+		return llm2.GoogleProvider{AuthType: authType, CustomHeaders: customHeaders}, nil
 	case llm.UnspecifiedToolChatProviderType:
 		return nil, fmt.Errorf("llm2 provider was not specified")
 	default:

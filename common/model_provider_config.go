@@ -13,13 +13,14 @@ var BuiltinProviders = []string{"openai", "anthropic", "google"}
 
 // ModelProviderConfig represents configuration for an LLM or embedding provider
 type ModelProviderConfig struct {
-	Name       string           `koanf:"name" json:"name"`
-	Type       string           `koanf:"type" json:"type"`
-	BaseURL    string           `koanf:"base_url,omitempty" json:"base_url,omitempty"`
-	Key        string           `koanf:"key" json:"key"`
-	DefaultLLM string           `koanf:"default_llm,omitempty" json:"default_llm,omitempty"`
-	SmallLLM   string           `koanf:"small_llm,omitempty" json:"small_llm,omitempty"`
-	AuthType   ProviderAuthType `koanf:"auth_type,omitempty" json:"auth_type,omitempty"`
+	Name          string            `koanf:"name" json:"name"`
+	Type          string            `koanf:"type" json:"type"`
+	BaseURL       string            `koanf:"base_url,omitempty" json:"base_url,omitempty"`
+	Key           string            `koanf:"key" json:"key"`
+	DefaultLLM    string            `koanf:"default_llm,omitempty" json:"default_llm,omitempty"`
+	SmallLLM      string            `koanf:"small_llm,omitempty" json:"small_llm,omitempty"`
+	AuthType      ProviderAuthType  `koanf:"auth_type,omitempty" json:"auth_type,omitempty"`
+	CustomHeaders map[string]string `koanf:"custom_headers,omitempty" json:"custom_headers,omitempty"`
 }
 
 // Validate ensures the CustomProviderConfig is valid

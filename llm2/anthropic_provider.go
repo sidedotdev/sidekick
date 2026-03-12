@@ -35,6 +35,7 @@ type AnthropicProvider struct {
 	DefaultModel        string
 	AnthropicCompatible bool
 	AuthType            common.ProviderAuthType
+	CustomHeaders       map[string]string
 }
 
 func anthropicBetaHeader(model string, useOAuth bool, tools []*common.Tool, assumeAnthropicModelNames bool) string {
@@ -110,6 +111,9 @@ func (p AnthropicProvider) Stream(ctx context.Context, request StreamRequest, ev
 	}
 	if p.BaseURL != "" {
 		clientOptions = append(clientOptions, option.WithBaseURL(p.BaseURL))
+	}
+	for k, v := range p.CustomHeaders {
+		clientOptions = append(clientOptions, option.WithHeader(k, v))
 	}
 	if useOAuth {
 		headers := anthropicRequestHeaders(model, true, oauthCreds.AccessToken, options.Tools, assumeAnthropicModelNames)
