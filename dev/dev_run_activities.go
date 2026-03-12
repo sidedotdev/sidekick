@@ -2,6 +2,8 @@ package dev
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -233,6 +235,29 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 			Msg("Existing Dev Run process is dead, starting fresh")
 	}
 
+	// Idempotency: check for a previously started process from a crashed activity
+	// execution. The instance metadata file is written after the process starts
+	// but before the activity returns, so if the worker crashed in between,
+	// we can recover the running process instead of starting a duplicate.
+	instanceFilePath := devRunInstanceFilePath(input.Context.FlowId, input.CommandId)
+	if recovered, err := recoverInstanceFromFile(instanceFilePath); err == nil && recovered != nil {
+		if IsSessionAlive(recovered.SessionId) {
+			log.Info().
+				Str("devRunId", recovered.DevRunId).
+				Str("commandId", input.CommandId).
+				Int("sessionId", recovered.SessionId).
+				Msg("Recovered running Dev Run process from previous activity attempt")
+
+			return StartDevRunOutput{
+				DevRunId: recovered.DevRunId,
+				Started:  true,
+				Instance: recovered,
+			}, nil
+		}
+		// Process from previous attempt is dead, clean up and start fresh
+		os.Remove(instanceFilePath)
+	}
+
 	// Generate a new devRunId
 	devRunId := "devrun_" + ksuid.New().String()
 	input.Context.DevRunId = devRunId
@@ -274,6 +299,45 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 	run.processes = append(run.processes, proc)
 	run.mu.Unlock()
 
+	// Wait briefly to detect immediate failures (e.g., command not found, immediate exit)
+	run.mu.Lock()
+	proc = run.processes[0]
+	run.mu.Unlock()
+
+	immediateExit := false
+	select {
+	case <-proc.doneCh:
+		immediateExit = true
+	case <-time.After(3 * time.Second):
+		// Process still running after grace period, good
+	}
+
+	if immediateExit {
+		// Process already exited - check if it was an error
+		exitCode := proc.exitCode.Load()
+		signal := proc.signal.Load()
+		signalStr, _ := signal.(string)
+
+		if signalStr != "" || (exitCode != nil && *exitCode != 0) {
+			// Clean up remaining processes
+			timeout := cmdConfig.StopTimeoutSeconds
+			if timeout <= 0 {
+				timeout = defaultStopTimeoutSeconds
+			}
+			a.terminateActiveRun(run, timeout)
+
+			errMsg := "command exited immediately"
+			if exitCode != nil {
+				errMsg = fmt.Sprintf("command exited immediately with status %d", *exitCode)
+			} else if signalStr != "" {
+				errMsg = fmt.Sprintf("command terminated by signal %s", signalStr)
+			}
+
+			a.emitEndedEvent(ctx, input.Context, exitCode, signalStr, errMsg)
+			return StartDevRunOutput{}, errors.New(errMsg)
+		}
+	}
+
 	// Get session ID and output file path from the first process
 	run.mu.Lock()
 	sessionId := run.processes[0].sessionId
@@ -285,6 +349,13 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 		SessionId:      sessionId,
 		OutputFilePath: outputFilePath,
 		CommandId:      input.CommandId,
+	}
+
+	// Persist instance metadata to disk for idempotency across activity retries.
+	// If the worker crashes after this point, the next attempt will find this
+	// file and reconnect to the already-running process.
+	if err := writeInstanceFile(instanceFilePath, instance); err != nil {
+		log.Warn().Err(err).Msg("Failed to write dev run instance file for idempotency")
 	}
 
 	return StartDevRunOutput{
@@ -390,57 +461,6 @@ func (a *DevRunActivities) startCommand(
 	return proc, nil
 }
 
-// monitorActiveRun watches for natural process exit and handles cleanup.
-func (a *DevRunActivities) monitorActiveRun(ctx context.Context, devRunCtx DevRunContext, run *activeDevRun, stopTimeoutSeconds int) {
-	run.mu.Lock()
-	processes := run.processes
-	run.mu.Unlock()
-
-	if len(processes) == 0 {
-		return
-	}
-
-	// Wait for all processes to complete
-	for _, proc := range processes {
-		<-proc.doneCh
-	}
-
-	// Collect exit information from the last process (or first non-zero exit)
-	var finalExitCode *int
-	var finalSignal string
-	for _, proc := range processes {
-		exitCode := proc.exitCode.Load()
-		signal := proc.signal.Load()
-		signalStr, _ := signal.(string)
-
-		if signalStr != "" {
-			finalSignal = signalStr
-			break
-		}
-		if exitCode != nil {
-			if *exitCode != 0 {
-				finalExitCode = exitCode
-				break
-			}
-			finalExitCode = exitCode
-		}
-	}
-
-	// Only emit ended event if not already emitted (prevents duplicate with StopDevRun)
-	if markEndedEventEmitted(devRunCtx.DevRunId) {
-		// Use background context since the original context may be canceled
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		a.emitEndedEvent(cleanupCtx, devRunCtx, finalExitCode, finalSignal, "")
-
-		// End the output stream
-		if err := a.Streamer.EndFlowEventStream(cleanupCtx, devRunCtx.WorkspaceId, devRunCtx.FlowId, devRunCtx.DevRunId); err != nil {
-			log.Warn().Err(err).Msg("Failed to end Dev Run output stream")
-		}
-	}
-}
-
 // StopDevRun stops an active Dev Run.
 func (a *DevRunActivities) StopDevRun(ctx context.Context, input StopDevRunInput) (StopDevRunOutput, error) {
 	instance := input.Instance
@@ -459,7 +479,7 @@ func (a *DevRunActivities) StopDevRun(ctx context.Context, input StopDevRunInput
 	// Terminate process by session ID
 	terminateBySessionId(instance.SessionId, timeout)
 
-	// Only emit ended event if not already emitted (prevents duplicate with monitorActiveRun)
+	// Only emit ended event if not already emitted (prevents duplicate with MonitorDevRun)
 	if markEndedEventEmitted(instance.DevRunId) {
 		// Use background context since the original context may be canceled
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -473,8 +493,9 @@ func (a *DevRunActivities) StopDevRun(ctx context.Context, input StopDevRunInput
 		}
 	}
 
-	// Clean up the tracker entry
+	// Clean up the tracker entry and instance file
 	clearEndedEventTracker(instance.DevRunId)
+	os.Remove(devRunInstanceFilePath(input.Context.FlowId, input.CommandId))
 
 	return StopDevRunOutput{Stopped: true}, nil
 }
@@ -520,7 +541,7 @@ func (a *DevRunActivities) MonitorDevRun(ctx context.Context, input MonitorDevRu
 
 	var sequence int64
 	buf := make([]byte, 4096)
-	heartbeatTicker := time.NewTicker(10 * time.Second)
+	heartbeatTicker := time.NewTicker(2 * time.Second)
 	defer heartbeatTicker.Stop()
 
 	for {
@@ -562,6 +583,9 @@ func (a *DevRunActivities) MonitorDevRun(ctx context.Context, input MonitorDevRu
 				}
 				cancel()
 			}
+
+			// Clean up the instance file used for idempotent recovery
+			os.Remove(devRunInstanceFilePath(input.Context.FlowId, input.CommandId))
 
 			return MonitorDevRunOutput{ExitCode: exitCode, Signal: signal}, nil
 
@@ -753,6 +777,45 @@ func buildDevRunEnvVars(ctx DevRunContext) []string {
 func IsDevRunActive(gs *flow_action.GlobalState) bool {
 	entry := GetDevRunEntry(gs)
 	return entry != nil && len(entry) > 0
+}
+
+// safeRecordHeartbeat calls activity.RecordHeartbeat but recovers from the
+// panic that occurs when ctx is not an activity context (e.g. in unit tests).
+func safeRecordHeartbeat(ctx context.Context, details ...interface{}) {
+	defer func() { recover() }()
+	activity.RecordHeartbeat(ctx, details...)
+}
+
+// devRunInstanceFilePath returns a deterministic file path for persisting
+// Dev Run instance metadata, keyed by flow ID and command ID.
+func devRunInstanceFilePath(flowId, commandId string) string {
+	return fmt.Sprintf("/tmp/sidekick-devrun-instance-%s-%s.json", flowId, commandId)
+}
+
+// writeInstanceFile writes a DevRunInstance to a JSON file for crash recovery.
+func writeInstanceFile(path string, instance *DevRunInstance) error {
+	data, err := json.Marshal(instance)
+	if err != nil {
+		return fmt.Errorf("failed to marshal instance: %w", err)
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+// recoverInstanceFromFile reads a DevRunInstance from a previously written file.
+// Returns (nil, nil) if the file does not exist.
+func recoverInstanceFromFile(path string) (*DevRunInstance, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var instance DevRunInstance
+	if err := json.Unmarshal(data, &instance); err != nil {
+		return nil, err
+	}
+	return &instance, nil
 }
 
 // IsSessionAlive checks if a process session is still alive.

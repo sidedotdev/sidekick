@@ -1,6 +1,8 @@
 package dev
 
 import (
+	"context"
+	"os"
 	"sidekick/common"
 	"sidekick/flow_action"
 	"time"
@@ -92,6 +94,10 @@ func handleDevRunStart(dCtx DevContext) {
 	flowInfo := workflow.GetInfo(dCtx)
 	targetBranch := dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch)
 
+	startCtx := workflow.WithActivityOptions(dCtx, workflow.ActivityOptions{
+		StartToCloseTimeout: 30 * time.Second,
+	})
+
 	// Start all configured dev run commands
 	for commandId := range dCtx.RepoConfig.DevRun {
 		// Check if this command is already active
@@ -115,7 +121,7 @@ func handleDevRunStart(dCtx DevContext) {
 
 		var dra *DevRunActivities
 		var startOutput StartDevRunOutput
-		err := workflow.ExecuteActivity(dCtx, dra.StartDevRun, StartDevRunInput{
+		err := workflow.ExecuteActivity(startCtx, dra.StartDevRun, StartDevRunInput{
 			DevRunConfig:     dCtx.RepoConfig.DevRun,
 			CommandId:        commandId,
 			Context:          devRunCtx,
@@ -130,26 +136,56 @@ func handleDevRunStart(dCtx DevContext) {
 		if startOutput.Started {
 			SetDevRunInstance(dCtx.ExecContext.GlobalState, startOutput.Instance)
 
-			// Start long-lived monitoring activity (non-blocking)
-			// This activity tails output, streams to JetStream, and heartbeats
-			monitorCtx := workflow.WithActivityOptions(dCtx, workflow.ActivityOptions{
-				StartToCloseTimeout: 24 * time.Hour,
-				HeartbeatTimeout:    30 * time.Second,
-			})
 			workflow.Go(dCtx, func(ctx workflow.Context) {
-				var monitorOutput MonitorDevRunOutput
-				err := workflow.ExecuteActivity(monitorCtx, dra.MonitorDevRun, MonitorDevRunInput{
-					DevRunConfig: dCtx.RepoConfig.DevRun,
-					CommandId:    commandId,
-					Context:      devRunCtx,
-					Instance:     startOutput.Instance,
-				}).Get(ctx, &monitorOutput)
-				if err != nil {
-					workflow.GetLogger(ctx).Debug("MonitorDevRun ended", "commandId", commandId, "error", err)
-				}
+				monitorActiveRun(dCtx.WithContext(ctx), commandId, devRunCtx, startOutput.Instance)
 			})
 		}
 	}
+}
+
+// monitorActiveRun watches a running Dev Run process from workflow code.
+// It launches the MonitorDevRun activity (which tails output, streams events,
+// and heartbeats) and cleans up workflow state when the process exits.
+func monitorActiveRun(dCtx DevContext, commandId string, devRunCtx DevRunContext, instance *DevRunInstance) {
+	monitorCtx := workflow.WithActivityOptions(dCtx, workflow.ActivityOptions{
+		StartToCloseTimeout: 24 * time.Hour,
+		HeartbeatTimeout:    5 * time.Second,
+	})
+
+	var dra *DevRunActivities
+	var monitorOutput MonitorDevRunOutput
+	err := workflow.ExecuteActivity(monitorCtx, dra.MonitorDevRun, MonitorDevRunInput{
+		DevRunConfig: dCtx.RepoConfig.DevRun,
+		CommandId:    commandId,
+		Context:      devRunCtx,
+		Instance:     instance,
+	}).Get(dCtx, &monitorOutput)
+	if err != nil {
+		workflow.GetLogger(dCtx).Debug("MonitorDevRun ended", "commandId", commandId, "error", err)
+		return
+	}
+
+	// Process exited naturally; clear instance from workflow state so
+	// dev run state queries reflect the process is no longer active.
+	ClearDevRunInstance(dCtx.ExecContext.GlobalState, commandId)
+
+	// Clean up the instance file used for idempotent recovery.
+	flowInfo := workflow.GetInfo(dCtx)
+	_ = workflow.ExecuteActivity(
+		workflow.WithActivityOptions(dCtx, workflow.ActivityOptions{
+			StartToCloseTimeout: 5 * time.Second,
+		}),
+		removeDevRunInstanceFileActivity,
+		flowInfo.WorkflowExecution.ID,
+		commandId,
+	).Get(dCtx, nil)
+}
+
+// removeDevRunInstanceFileActivity is a small activity that removes the
+// instance metadata file from disk after a dev run ends naturally.
+func removeDevRunInstanceFileActivity(ctx context.Context, flowId, commandId string) error {
+	os.Remove(devRunInstanceFilePath(flowId, commandId))
+	return nil
 }
 
 func handleDevRunStop(dCtx DevContext) {
