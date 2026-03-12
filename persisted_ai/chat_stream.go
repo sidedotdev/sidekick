@@ -19,6 +19,7 @@ import (
 func ExecuteChatStream(
 	actionCtx flow_action.ActionContext,
 	streamInput StreamInput,
+	toolNameMapping *ToolNameMappingConfig,
 ) (common.MessageResponse, error) {
 	heartbeatActionCtx := actionCtx
 	heartbeatActionCtx.Context = utils.LlmHeartbeatCtx(actionCtx.Context)
@@ -29,7 +30,7 @@ func ExecuteChatStream(
 
 	v := workflow.GetVersion(actionCtx, "chat-history-llm2", workflow.DefaultVersion, 1)
 	if v == 1 {
-		return executeChatStreamV1(heartbeatActionCtx, streamInput)
+		return executeChatStreamV1(heartbeatActionCtx, streamInput, toolNameMapping)
 	}
 
 	chatHistory := streamInput.ChatHistory
@@ -57,10 +58,15 @@ func ExecuteChatStream(
 func executeChatStreamV1(
 	actionCtx flow_action.ActionContext,
 	streamInput StreamInput,
+	toolNameMapping *ToolNameMappingConfig,
 ) (common.MessageResponse, error) {
 	chatHistory := streamInput.ChatHistory
 	if _, ok := chatHistory.History.(*Llm2ChatHistory); !ok {
 		return nil, fmt.Errorf("ExecuteChatStream version 1 requires Llm2ChatHistory, got %T", chatHistory.History)
+	}
+
+	if toolNameMapping != nil {
+		streamInput.ToolNameMapping = toolNameMapping
 	}
 
 	var la *Llm2Activities
@@ -68,6 +74,12 @@ func executeChatStreamV1(
 	err := flow_action.PerformWithUserRetry(actionCtx, la.Stream, &response, streamInput)
 	if err != nil {
 		return nil, err
+	}
+
+	// TODO remove tool name mapping after the few local workflows that rely on this are finished
+	if toolNameMapping != nil {
+		response.Output = reverseMapMessageToolNames(response.Output, toolNameMapping)
+		response.Output.SanitizeToolNames()
 	}
 
 	return &response, nil

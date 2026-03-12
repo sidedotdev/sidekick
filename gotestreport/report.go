@@ -40,6 +40,7 @@ type packageResult struct {
 	anyTestFailed  bool
 	anyTestSkipped bool
 	headerWritten  bool
+	failureReason  string
 	// package-level output lines (Test == "")
 	packageOutput []string
 }
@@ -87,6 +88,9 @@ func (s *Streamer) ProcessEvent(ev TestEvent) {
 			// Package-level output: check for cached indicator
 			if strings.Contains(ev.Output, "(cached)") {
 				pr.cached = true
+			}
+			if strings.Contains(ev.Output, "[build failed]") {
+				pr.failureReason = "build failed"
 			}
 			pr.packageOutput = append(pr.packageOutput, ev.Output)
 		} else {
@@ -208,14 +212,45 @@ func (s *Streamer) flushRemainingTestOutput(pr *packageResult) {
 	}
 }
 
+func shouldSkipPackageOutputLine(pr *packageResult, line string) bool {
+	if pr.failureReason != "build failed" {
+		return false
+	}
+
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "# "+pr.name {
+		return true
+	}
+
+	return strings.HasPrefix(trimmed, "FAIL") &&
+		strings.HasSuffix(trimmed, "["+pr.failureReason+"]")
+}
+
 func (s *Streamer) flushPackageOutput(pr *packageResult) {
 	if len(pr.packageOutput) == 0 {
+		if pr.failureReason == "" {
+			return
+		}
+		s.writePackageHeader(pr)
+		fmt.Fprintln(s.out, pr.failureReason)
 		return
 	}
-	s.writePackageHeader(pr)
+
+	wroteOutput := false
 	for _, line := range pr.packageOutput {
+		if shouldSkipPackageOutputLine(pr, line) {
+			continue
+		}
+		s.writePackageHeader(pr)
 		fmt.Fprint(s.out, line)
+		wroteOutput = true
 	}
+
+	if !wroteOutput && pr.failureReason != "" {
+		s.writePackageHeader(pr)
+		fmt.Fprintln(s.out, pr.failureReason)
+	}
+
 	pr.packageOutput = nil
 }
 
@@ -376,10 +411,6 @@ func formatPackageLine(name string, pr *packageResult) string {
 		return fmt.Sprintf("  %s  cached", name)
 	}
 
-	if total == 0 {
-		return fmt.Sprintf("  %s  no tests", name)
-	}
-
 	var parts []string
 	if pr.testsPassed > 0 {
 		parts = append(parts, fmt.Sprintf("%d passed", pr.testsPassed))
@@ -392,8 +423,17 @@ func formatPackageLine(name string, pr *packageResult) string {
 	}
 
 	if pr.status == statusFail && pr.testsFailed == 0 {
-		parts = append(parts, "package error (timeout/crash)")
+		if pr.failureReason != "" {
+			parts = append(parts, pr.failureReason)
+		} else {
+			parts = append(parts, "package error (timeout/crash)")
+		}
 	}
+
+	if len(parts) == 0 && total == 0 {
+		return fmt.Sprintf("  %s  no tests", name)
+	}
+
 	counts := strings.Join(parts, ", ")
 	if pr.cached {
 		counts += " (cached)"

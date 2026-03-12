@@ -354,11 +354,7 @@ func TestOpenAIProvider_Integration(t *testing.T) {
 		},
 	}
 
-	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		&secret_manager.EnvSecretManager{},
-		&secret_manager.KeyringSecretManager{},
-		&secret_manager.LocalConfigSecretManager{},
-	})
+	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -538,11 +534,7 @@ func TestOpenAIProvider_ImageIntegration(t *testing.T) {
 		},
 	}
 
-	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		&secret_manager.EnvSecretManager{},
-		&secret_manager.KeyringSecretManager{},
-		&secret_manager.LocalConfigSecretManager{},
-	})
+	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -647,11 +639,7 @@ func TestOpenAIProvider_ToolResultImageIntegration(t *testing.T) {
 		},
 	}
 
-	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		&secret_manager.EnvSecretManager{},
-		&secret_manager.KeyringSecretManager{},
-		&secret_manager.LocalConfigSecretManager{},
-	})
+	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{

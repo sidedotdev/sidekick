@@ -94,6 +94,64 @@ func TestCallSiteLinesFromRanges(t *testing.T) {
 	})
 }
 
+func TestIsActivityInvocationEdge(t *testing.T) {
+	t.Parallel()
+
+	t.Run("perform with user retry", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+
+		caller := writeGoFileAndMakeItem(t, tmpDir, "chat_stream.go",
+			`package persisted_ai
+
+func executeChatStreamV1(actionCtx flow_action.ActionContext) {
+	var la *Llm2Activities
+	flow_action.PerformWithUserRetry(actionCtx, la.Stream, &response, streamInput)
+}
+`, "executeChatStreamV1", 2)
+
+		call := lsp.CallHierarchyIncomingCall{
+			From: caller,
+			FromRanges: []lsp.Range{
+				{Start: lsp.Position{Line: 4, Character: 1}},
+			},
+		}
+
+		if !isActivityInvocationEdge(call, "Stream") {
+			t.Fatal("expected PerformWithUserRetry(..., la.Stream, ...) to be treated as an activity invocation edge")
+		}
+
+		if isActivityInvocationEdge(call, "Llm2Messages") {
+			t.Fatal("did not expect unrelated callee name to match activity invocation edge")
+		}
+	})
+
+	t.Run("workflow execute activity", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+
+		caller := writeGoFileAndMakeItem(t, tmpDir, "manage_chat_history.go",
+			`package dev
+
+func ManageChatHistory(ctx workflow.Context) {
+	var cha *ChatHistoryActivities
+	workflow.ExecuteActivity(ctx, cha.ManageV4, input).Get(ctx, &output)
+}
+`, "ManageChatHistory", 2)
+
+		call := lsp.CallHierarchyIncomingCall{
+			From: caller,
+			FromRanges: []lsp.Range{
+				{Start: lsp.Position{Line: 4, Character: 1}},
+			},
+		}
+
+		if !isActivityInvocationEdge(call, "ManageV4") {
+			t.Fatal("expected workflow.ExecuteActivity(..., cha.ManageV4, ...) to be treated as an activity invocation edge")
+		}
+	})
+}
+
 func TestIsSanctioned(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -821,5 +879,265 @@ func TestFindViolations_Fixture(t *testing.T) {
 		if strings.Contains(v, "AppendChatHistory") {
 			t.Errorf("sanctioned AppendChatHistory should not be a violation: %s", v)
 		}
+	}
+}
+func TestFindViolations_ReportsWorkflowReachableLlm2Messages(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	persistedAIDir := filepath.Join(tmpDir, "persisted_ai")
+	if err := os.MkdirAll(persistedAIDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	historyFile := `package persisted_ai
+
+type Message struct{}
+
+type Llm2ChatHistory struct{}
+
+func (h *Llm2ChatHistory) Llm2Messages() []Message {
+	return nil
+}
+`
+	targetItem := writeGoFileAndMakeItem(t, persistedAIDir, "llm2_chat_history.go", historyFile, "Llm2Messages", 6)
+
+	streamFile := `package persisted_ai
+
+func executeChatStreamV1(actionCtx flow_action.ActionContext, history *Llm2ChatHistory) {
+	history.Llm2Messages()
+}
+`
+	callerItem := writeGoFileAndMakeItem(t, persistedAIDir, "chat_stream.go", streamFile, "executeChatStreamV1", 2)
+	callerItem.Detail = ""
+
+	client := lsp.MockLSPClient{
+		PrepareCallHierarchyFunc: func(ctx context.Context, uri string, line int, character int) ([]lsp.CallHierarchyItem, error) {
+			expectedURI := "file://" + filepath.Join(persistedAIDir, "llm2_chat_history.go")
+			if uri != expectedURI {
+				t.Fatalf("PrepareCallHierarchy called with uri %q, want %q", uri, expectedURI)
+			}
+			return []lsp.CallHierarchyItem{targetItem}, nil
+		},
+		CallHierarchyIncomingCallsFunc: func(ctx context.Context, item lsp.CallHierarchyItem) ([]lsp.CallHierarchyIncomingCall, error) {
+			switch item.Name {
+			case "Llm2Messages":
+				return []lsp.CallHierarchyIncomingCall{
+					{
+						From:       callerItem,
+						FromRanges: []lsp.Range{{Start: lsp.Position{Line: 3, Character: 1}}},
+					},
+				}, nil
+			case "executeChatStreamV1":
+				return nil, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	violations, err := findViolations(ctx, client, tmpDir, []appendTarget{
+		{
+			file:         "persisted_ai/llm2_chat_history.go",
+			methodName:   "Llm2Messages",
+			displayName:  "Llm2Messages()",
+			receiverHint: "*Llm2ChatHistory)",
+		},
+	})
+	if err != nil {
+		t.Fatalf("findViolations error: %v", err)
+	}
+
+	if len(violations) != 1 {
+		t.Fatalf("expected exactly 1 violation, got %d: %v", len(violations), violations)
+	}
+	if !strings.Contains(violations[0], "persisted_ai/chat_stream.go:4 in executeChatStreamV1") {
+		t.Fatalf("expected violation to point at executeChatStreamV1 call site, got %q", violations[0])
+	}
+	if !strings.Contains(violations[0], "Llm2Messages()") {
+		t.Fatalf("expected violation to mention Llm2Messages(), got %q", violations[0])
+	}
+}
+func TestFindViolations_SkipsLlm2MessagesReadInsideActivity(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	persistedAIDir := filepath.Join(tmpDir, "persisted_ai")
+	if err := os.MkdirAll(persistedAIDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	historyFile := `package persisted_ai
+
+type Message struct{}
+
+type Llm2ChatHistory struct{}
+
+func (h *Llm2ChatHistory) Llm2Messages() []Message {
+	return nil
+}
+`
+	targetItem := writeGoFileAndMakeItem(t, persistedAIDir, "llm2_chat_history.go", historyFile, "Llm2Messages", 6)
+
+	activityFile := `package persisted_ai
+
+func (la *Llm2Activities) Stream(ctx context.Context, history *Llm2ChatHistory) {
+	history.Llm2Messages()
+}
+`
+	activityItem := writeGoFileAndMakeItem(t, persistedAIDir, "llm2_activities.go", activityFile, "Stream", 2)
+	activityItem.Detail = "func(ctx context.Context, history *Llm2ChatHistory)"
+
+	workflowFile := `package persisted_ai
+
+func executeChatStreamV1(actionCtx flow_action.ActionContext) {
+	var la *Llm2Activities
+	flow_action.PerformWithUserRetry(actionCtx, la.Stream, &response, streamInput)
+}
+`
+	workflowItem := writeGoFileAndMakeItem(t, persistedAIDir, "chat_stream.go", workflowFile, "executeChatStreamV1", 2)
+	workflowItem.Detail = "func(actionCtx flow_action.ActionContext)"
+
+	client := lsp.MockLSPClient{
+		PrepareCallHierarchyFunc: func(ctx context.Context, uri string, line int, character int) ([]lsp.CallHierarchyItem, error) {
+			expectedURI := "file://" + filepath.Join(persistedAIDir, "llm2_chat_history.go")
+			if uri != expectedURI {
+				t.Fatalf("PrepareCallHierarchy called with uri %q, want %q", uri, expectedURI)
+			}
+			return []lsp.CallHierarchyItem{targetItem}, nil
+		},
+		CallHierarchyIncomingCallsFunc: func(ctx context.Context, item lsp.CallHierarchyItem) ([]lsp.CallHierarchyIncomingCall, error) {
+			switch item.Name {
+			case "Llm2Messages":
+				return []lsp.CallHierarchyIncomingCall{
+					{
+						From:       activityItem,
+						FromRanges: []lsp.Range{{Start: lsp.Position{Line: 3, Character: 1}}},
+					},
+				}, nil
+			case "Stream":
+				return []lsp.CallHierarchyIncomingCall{
+					{
+						From:       workflowItem,
+						FromRanges: []lsp.Range{{Start: lsp.Position{Line: 4, Character: 1}}},
+					},
+				}, nil
+			case "executeChatStreamV1":
+				return nil, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	violations, err := findViolations(ctx, client, tmpDir, []appendTarget{
+		{
+			file:         "persisted_ai/llm2_chat_history.go",
+			methodName:   "Llm2Messages",
+			displayName:  "Llm2Messages()",
+			receiverHint: "*Llm2ChatHistory)",
+		},
+	})
+	if err != nil {
+		t.Fatalf("findViolations error: %v", err)
+	}
+
+	if len(violations) != 0 {
+		t.Fatalf("expected no violations for activity-local Llm2Messages read, got %v", violations)
+	}
+}
+func TestFindViolations_SkipsLlm2MessagesReadInsideExecuteActivity(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	persistedAIDir := filepath.Join(tmpDir, "persisted_ai")
+	if err := os.MkdirAll(persistedAIDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	devDir := filepath.Join(tmpDir, "dev")
+	if err := os.MkdirAll(devDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	historyFile := `package persisted_ai
+
+type Message struct{}
+
+type Llm2ChatHistory struct{}
+
+func (h *Llm2ChatHistory) Llm2Messages() []Message {
+	return nil
+}
+`
+	targetItem := writeGoFileAndMakeItem(t, persistedAIDir, "llm2_chat_history.go", historyFile, "Llm2Messages", 6)
+
+	activityFile := `package persisted_ai
+
+func (ca *ChatHistoryActivities) ManageV4(ctx context.Context, history *Llm2ChatHistory) {
+	history.Llm2Messages()
+}
+`
+	activityItem := writeGoFileAndMakeItem(t, persistedAIDir, "chat_history_activities.go", activityFile, "ManageV4", 2)
+	activityItem.Detail = "func(ctx context.Context, history *Llm2ChatHistory)"
+
+	workflowFile := `package dev
+
+func ManageChatHistory(ctx workflow.Context) {
+	var ca *ChatHistoryActivities
+	workflow.ExecuteActivity(ctx, ca.ManageV4, input).Get(ctx, &output)
+}
+`
+	workflowItem := writeGoFileAndMakeItem(t, devDir, "manage_chat_history.go", workflowFile, "ManageChatHistory", 2)
+	workflowItem.Detail = "func(ctx workflow.Context)"
+
+	client := lsp.MockLSPClient{
+		PrepareCallHierarchyFunc: func(ctx context.Context, uri string, line int, character int) ([]lsp.CallHierarchyItem, error) {
+			expectedURI := "file://" + filepath.Join(persistedAIDir, "llm2_chat_history.go")
+			if uri != expectedURI {
+				t.Fatalf("PrepareCallHierarchy called with uri %q, want %q", uri, expectedURI)
+			}
+			return []lsp.CallHierarchyItem{targetItem}, nil
+		},
+		CallHierarchyIncomingCallsFunc: func(ctx context.Context, item lsp.CallHierarchyItem) ([]lsp.CallHierarchyIncomingCall, error) {
+			switch item.Name {
+			case "Llm2Messages":
+				return []lsp.CallHierarchyIncomingCall{
+					{
+						From:       activityItem,
+						FromRanges: []lsp.Range{{Start: lsp.Position{Line: 3, Character: 1}}},
+					},
+				}, nil
+			case "ManageV4":
+				return []lsp.CallHierarchyIncomingCall{
+					{
+						From:       workflowItem,
+						FromRanges: []lsp.Range{{Start: lsp.Position{Line: 4, Character: 1}}},
+					},
+				}, nil
+			case "ManageChatHistory":
+				return nil, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	violations, err := findViolations(ctx, client, tmpDir, []appendTarget{
+		{
+			file:         "persisted_ai/llm2_chat_history.go",
+			methodName:   "Llm2Messages",
+			displayName:  "Llm2Messages()",
+			receiverHint: "*Llm2ChatHistory)",
+		},
+	})
+	if err != nil {
+		t.Fatalf("findViolations error: %v", err)
+	}
+
+	if len(violations) != 0 {
+		t.Fatalf("expected no violations for activity-local Llm2Messages read behind workflow.ExecuteActivity, got %v", violations)
 	}
 }

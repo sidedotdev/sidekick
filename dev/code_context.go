@@ -244,7 +244,9 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 	var requiredCodeContext RequiredCodeContext
 	var codeContext string
 	chatHistory := NewVersionedChatHistory(actionCtx, actionCtx.WorkspaceId)
-	addCodeContextPrompt(actionCtx, chatHistory, promptInfo)
+	if err := addCodeContextPrompt(actionCtx.ExecContext, chatHistory, promptInfo); err != nil {
+		return nil, "", err
+	}
 	noRetryCtx := utils.NoRetryCtx(actionCtx)
 	attempts := 0
 	iterationsSinceLastFeedback := 0
@@ -266,10 +268,12 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			return nil, "", fmt.Errorf("failed to check for pause: %v", err)
 		}
 		if userResponse != nil && userResponse.Content != "" {
-			addCodeContextPrompt(actionCtx, chatHistory, FeedbackInfo{
+			if err := addCodeContextPrompt(actionCtx.ExecContext, chatHistory, FeedbackInfo{
 				Feedback: userResponse.Content,
 				Type:     FeedbackTypePause,
-			})
+			}); err != nil {
+				return nil, "", err
+			}
 			iterationsSinceLastFeedback = 0
 			continue
 		}
@@ -296,7 +300,9 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to get user feedback: %v", err)
 			}
-			addCodeContextPrompt(actionCtx, chatHistory, userFeedback)
+			if err := addCodeContextPrompt(actionCtx.ExecContext, chatHistory, userFeedback); err != nil {
+				return nil, "", err
+			}
 			iterationsSinceLastFeedback = 0
 		} else if attempts%3 == 0 {
 			chatCtx := actionCtx.DevContext.WithCancelOnPause()
@@ -307,7 +313,9 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to force searching repository: %v", err)
 			}
-			handleToolCalls(actionCtx.DevContext, toolCalls, chatHistory, nil)
+			if _, err := handleToolCalls(actionCtx.DevContext, toolCalls, chatHistory, nil); err != nil {
+				return nil, "", err
+			}
 		}
 
 		if !giveUpQuietly && attempts >= maxAttempts {
@@ -334,7 +342,9 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		}
 		if hasUnmarshalError {
 			for _, feedback := range feedbacks {
-				addCodeContextToolResult(actionCtx, chatHistory, feedback)
+				if err := addCodeContextToolResult(actionCtx.ExecContext, chatHistory, feedback); err != nil {
+					return nil, "", err
+				}
 			}
 			continue
 		}
@@ -351,7 +361,9 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		allSymbolDefinitions, retrievalFeedbacks := retrieveCodeContextForToolCalls(noRetryCtx, actionCtx.EnvContainer, toolCallResults)
 		if len(retrievalFeedbacks) > 0 {
 			for _, feedback := range retrievalFeedbacks {
-				addCodeContextToolResult(actionCtx, chatHistory, feedback)
+				if err := addCodeContextToolResult(actionCtx.ExecContext, chatHistory, feedback); err != nil {
+					return nil, "", err
+				}
 			}
 			continue
 		}
@@ -386,7 +398,9 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 						IsError:    true,
 						Content:    llm2.TextContentBlocks(feedback),
 					}
-					addCodeContextToolResult(actionCtx, chatHistory, toolResult)
+					if err := addCodeContextToolResult(actionCtx.ExecContext, chatHistory, toolResult); err != nil {
+						return nil, "", err
+					}
 				}
 				continue
 			}
@@ -549,11 +563,17 @@ type ToolCallWithCodeContext struct {
 // parsed independently; if parsing fails for a tool call, its Err field is set.
 func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *persisted_ai.ChatHistoryContainer) ([]ToolCallWithCodeContext, error) {
 	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
+	flowActionCtx := actionCtx.FlowActionContext()
+	toolNameMapping, err := resolveStreamToolNameMapping(modelConfig, *flowActionCtx.Secrets)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve tool name mapping: %v", err)
+	}
 	response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(
-		actionCtx.FlowActionContext(),
+		flowActionCtx,
 		flow_action.TrackOptions{},
 		modelConfig,
 		chatHistory,
+		toolNameMapping,
 		currentGetSymbolDefinitionsTool(),
 	)
 	if err != nil {
@@ -665,7 +685,7 @@ func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.Env
 	return allSymbolDefinitions, feedbacks
 }
 
-func addCodeContextPrompt(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) {
+func addCodeContextPrompt(eCtx flow_action.ExecContext, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) error {
 	var content string
 	role := llm.ChatMessageRoleUser
 	name := ""
@@ -692,7 +712,7 @@ func addCodeContextPrompt(ctx workflow.Context, chatHistory *persisted_ai.ChatHi
 	}
 
 	if !skip {
-		AppendChatHistory(ctx, chatHistory, llm.ChatMessage{
+		return AppendChatHistory(eCtx, chatHistory, llm.ChatMessage{
 			Role:         role,
 			Content:      content,
 			Name:         name,
@@ -702,11 +722,12 @@ func addCodeContextPrompt(ctx workflow.Context, chatHistory *persisted_ai.ChatHi
 			IsError:      isError,
 		})
 	}
+	return nil
 }
 
-func addCodeContextToolResult(ctx workflow.Context, chatHistory *persisted_ai.ChatHistoryContainer, trb llm2.ToolResultBlock) {
+func addCodeContextToolResult(eCtx flow_action.ExecContext, chatHistory *persisted_ai.ChatHistoryContainer, trb llm2.ToolResultBlock) error {
 	content := renderCodeContextFeedbackPrompt(trb.TextContent(), "")
-	AppendChatHistory(ctx, chatHistory, llm.ChatMessage{
+	return AppendChatHistory(eCtx, chatHistory, llm.ChatMessage{
 		Role:       llm.ChatMessageRoleTool,
 		Content:    content,
 		Name:       trb.Name,

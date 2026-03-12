@@ -166,7 +166,9 @@
               <JsonTree :deep="jsonTreeDepth" :data="parseLlm2ToolArguments(block.toolUse.arguments)" class="action-result-function-args"/>
             </div>
             <div v-else-if="block.type === 'reasoning'" class="llm2-text-block">
-              <vue-markdown v-if="block.reasoning && block.reasoning.text" :options="{ breaks: true }" :source="block.reasoning.text" class="message-content markdown reasoning"/>
+              <vue-markdown v-if="block.reasoning?.text" :options="{ breaks: true }" :source="block.reasoning.text" class="message-content markdown reasoning"/>
+              <p v-else class="reasoning-redacted"><em>Reasoning (content not available)</em></p>
+              <p v-if="block.reasoning?.summary" class="reasoning-summary"><strong>Summary:</strong> {{ block.reasoning.summary }}</p>
             </div>
             <div v-else-if="block.type !== 'text'" class="llm2-unknown-block">
               <JsonTree :deep="jsonTreeDepth" :data="block"/>

@@ -280,6 +280,8 @@ func TestBuildAuthorEditBlockInitialPrompt(t *testing.T) {
 	assert.Contains(t, prompt, getHelpOrInputTool.Name)
 	assert.Contains(t, prompt, doneTool.Name)
 	assert.NotContains(t, prompt, "#START SUMMARY")
+	assert.Contains(t, prompt, "answering a question is not the\nsame as completing the task")
+	assert.Contains(t, prompt, "paused to answer a question")
 
 	// Test with doneRequired=false (legacy behavior)
 	prompt = renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, false)
@@ -289,6 +291,7 @@ func TestBuildAuthorEditBlockInitialPrompt(t *testing.T) {
 	assert.Contains(t, prompt, getHelpOrInputTool.Name)
 	assert.Contains(t, prompt, "#START SUMMARY")
 	assert.NotContains(t, prompt, "call the `done` tool")
+	assert.NotContains(t, prompt, "paused to answer a question")
 
 	dCtx.RepoConfig.DisableHumanInTheLoop = true
 	prompt = renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, true)
@@ -317,6 +320,8 @@ func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
 	assert.Contains(t, prompt, getHelpOrInputTool.Name)
 	assert.Contains(t, prompt, doneTool.Name)
 	assert.NotContains(t, prompt, "#START SUMMARY")
+	assert.Contains(t, prompt, "answering a\nquestion is not the same as completing the step")
+	assert.Contains(t, prompt, "paused to answer a question")
 
 	// Test with doneRequired=false (legacy behavior)
 	prompt = renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, false)
@@ -328,6 +333,7 @@ func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
 	assert.Contains(t, prompt, getHelpOrInputTool.Name)
 	assert.Contains(t, prompt, "#START SUMMARY")
 	assert.NotContains(t, prompt, "call the `done` tool")
+	assert.NotContains(t, prompt, "paused to answer a question")
 
 	dCtx.RepoConfig.DisableHumanInTheLoop = true
 	prompt = renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, true)
@@ -375,7 +381,10 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestIncludesDoneTool() {
 		chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
 		doneRequired := IsDoneRequiredProtocol(dCtx)
-		result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false)
+		result, err := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false)
+		if err != nil {
+			return nil, err
+		}
 
 		toolNames := make([]string, len(result.Tools))
 		for i, tool := range result.Tools {
@@ -419,7 +428,10 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestHumanInTheLoopDisabled() {
 		chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
 		doneRequired := IsDoneRequiredProtocol(dCtx)
-		result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false)
+		result, err := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false)
+		if err != nil {
+			return nil, err
+		}
 
 		toolNames := make([]string, len(result.Tools))
 		for i, tool := range result.Tools {

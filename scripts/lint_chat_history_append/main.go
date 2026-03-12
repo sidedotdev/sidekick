@@ -28,24 +28,66 @@ var workflowContextTypes = []string{
 	"flow_action.ActionContext",
 }
 
-// appendTarget defines a method definition to check via call hierarchy
+// appendTarget defines a chat history method definition to check via call hierarchy.
 type appendTarget struct {
-	file       string
-	methodName string
+	file        string
+	methodName  string
+	displayName string
+	guidance    string
 	// receiver prefix to match, e.g. "func (h *Llm2ChatHistory)"
 	receiverHint string
 }
 
-// All Append definitions: the interface method plus each concrete implementation
+// All prohibited chat history method definitions that must not be called from
+// workflow-reachable code.
 var appendTargets = []appendTarget{
-	{file: "persisted_ai/llm2_chat_history.go", methodName: "Append", receiverHint: "ChatHistory interface"},
-	{file: "persisted_ai/llm2_chat_history.go", methodName: "Append", receiverHint: "*LegacyChatHistory)"},
-	{file: "persisted_ai/llm2_chat_history.go", methodName: "Append", receiverHint: "*Llm2ChatHistory)"},
-	{file: "persisted_ai/llm2_chat_history.go", methodName: "Append", receiverHint: "*ChatHistoryContainer)"},
+	{
+		file:         "persisted_ai/llm2_chat_history.go",
+		methodName:   "Append",
+		displayName:  "Append()",
+		guidance:     "Use persisted_ai.AppendChatHistory instead.",
+		receiverHint: "ChatHistory interface",
+	},
+	{
+		file:         "persisted_ai/llm2_chat_history.go",
+		methodName:   "Append",
+		displayName:  "Append()",
+		guidance:     "Use persisted_ai.AppendChatHistory instead.",
+		receiverHint: "*LegacyChatHistory)",
+	},
+	{
+		file:         "persisted_ai/llm2_chat_history.go",
+		methodName:   "Append",
+		displayName:  "Append()",
+		guidance:     "Use persisted_ai.AppendChatHistory instead.",
+		receiverHint: "*Llm2ChatHistory)",
+	},
+	{
+		file:         "persisted_ai/llm2_chat_history.go",
+		methodName:   "Append",
+		displayName:  "Append()",
+		guidance:     "Use persisted_ai.AppendChatHistory instead.",
+		receiverHint: "*ChatHistoryContainer)",
+	},
+	{
+		file:         "persisted_ai/llm2_chat_history.go",
+		methodName:   "Llm2Messages",
+		displayName:  "Llm2Messages()",
+		guidance:     "Keep hydrated-only llm2 message reads inside activities after hydration.",
+		receiverHint: "*Llm2ChatHistory)",
+	},
+	{
+		file:         "persisted_ai/llm2_chat_history.go",
+		methodName:   "Llm2Messages",
+		displayName:  "Llm2Messages()",
+		guidance:     "Keep hydrated-only llm2 message reads inside activities after hydration.",
+		receiverHint: "*ChatHistoryContainer)",
+	},
 }
 
 // sanctionedCallers maps fully-qualified file-relative paths to function names
-// that are allowed to call .Append directly. Their callers are NOT transitively checked.
+// that are allowed to call chat history methods directly. Their callers are NOT
+// transitively checked.
 var sanctionedCallers = []sanctionedCaller{
 	{pathSuffix: "persisted_ai/helpers.go", funcName: "AppendChatHistory"},
 }
@@ -99,27 +141,31 @@ func main() {
 		os.Exit(1)
 	}
 	if len(violations) > 0 {
-		fmt.Println("=== Chat history .Append() lint violations ===")
-		fmt.Println("Direct .Append() calls reachable from workflow code:")
+		fmt.Println("=== Chat history workflow lint violations ===")
+		fmt.Println("Direct chat history method calls reachable from workflow code:")
 		fmt.Println()
 		for _, v := range violations {
 			fmt.Println(v)
 		}
-		fmt.Printf("\n%d violation(s) found. Use persisted_ai.AppendChatHistory instead.\n", len(violations))
+		fmt.Printf(
+			"\n%d violation(s) found. Use persisted_ai.AppendChatHistory for appends and keep hydrated-only llm2 message reads inside activities.\n",
+			len(violations),
+		)
 		os.Exit(1)
 	}
 
-	fmt.Println("No chat history .Append() lint violations found.")
+	fmt.Println("No chat history workflow lint violations found.")
 }
 
 type violation struct {
-	relPath  string
-	line     int
-	funcName string
+	relPath    string
+	line       int
+	funcName   string
+	targetName string
 }
 
 func (v violation) String() string {
-	return fmt.Sprintf("  %s:%d in %s", v.relPath, v.line, v.funcName)
+	return fmt.Sprintf("  %s:%d in %s (calls %s)", v.relPath, v.line, v.funcName, v.targetName)
 }
 
 func findViolations(ctx context.Context, client lsp.LSPClient, cwd string, targets []appendTarget) ([]string, error) {
@@ -192,7 +238,12 @@ func findViolations(ctx context.Context, client lsp.LSPClient, cwd string, targe
 			callSiteLines := callSiteLinesFromRanges(call.FromRanges, call.From)
 
 			for _, csLine := range callSiteLines {
-				v := violation{relPath: relPath, line: csLine, funcName: call.From.Name}
+				v := violation{
+					relPath:    relPath,
+					line:       csLine,
+					funcName:   call.From.Name,
+					targetName: entry.target.displayName,
+				}
 				key := v.String()
 				if seen[key] {
 					continue
@@ -209,6 +260,13 @@ func findViolations(ctx context.Context, client lsp.LSPClient, cwd string, targe
 	return results, nil
 }
 
+var activityInvocationHelpers = []string{
+	"PerformWithUserRetry(",
+	"PerformActivityWithUserRetry(",
+	"workflow.ExecuteActivity(",
+	"workflow.ExecuteLocalActivity(",
+}
+
 // callSiteLinesFromRanges extracts 1-indexed line numbers from FromRanges.
 // Falls back to the caller function's start line if no ranges are available.
 func callSiteLinesFromRanges(fromRanges []lsp.Range, callerItem lsp.CallHierarchyItem) []int {
@@ -220,6 +278,44 @@ func callSiteLinesFromRanges(fromRanges []lsp.Range, callerItem lsp.CallHierarch
 		return lines
 	}
 	return []int{callerItem.Range.Start.Line + 1}
+}
+
+func readCallSiteSnippet(callerItem lsp.CallHierarchyItem, fromRanges []lsp.Range) string {
+	if len(fromRanges) == 0 {
+		return ""
+	}
+
+	path := uriToPath(callerItem.URI)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(string(data), "\n")
+	startLine := fromRanges[0].Start.Line
+	endLine := startLine + 3
+	if endLine >= len(lines) {
+		endLine = len(lines) - 1
+	}
+	if startLine < 0 || startLine >= len(lines) || endLine < startLine {
+		return ""
+	}
+
+	return strings.Join(lines[startLine:endLine+1], "\n")
+}
+
+func isActivityInvocationEdge(call lsp.CallHierarchyIncomingCall, calleeName string) bool {
+	snippet := readCallSiteSnippet(call.From, call.FromRanges)
+	if snippet == "" || !strings.Contains(snippet, "."+calleeName) {
+		return false
+	}
+
+	for _, helper := range activityInvocationHelpers {
+		if strings.Contains(snippet, helper) {
+			return true
+		}
+	}
+	return false
 }
 
 // isReachableFromWorkflow checks whether the given function has a workflow context
@@ -256,6 +352,10 @@ func isReachableFromWorkflow(ctx context.Context, client lsp.LSPClient, item lsp
 		}
 
 		if isSanctioned(call.From.URI, call.From.Name) {
+			continue
+		}
+
+		if isActivityInvocationEdge(call, item.Name) {
 			continue
 		}
 

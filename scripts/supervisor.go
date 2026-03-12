@@ -315,18 +315,18 @@ const (
 
 // Process represents a running process
 type Process struct {
-	Config          ProcessConfig
-	Cmd             *exec.Cmd
-	Output          []string
-	mu              sync.RWMutex
-	running         bool
-	stopping        bool
-	dirty           bool
-	cancel          context.CancelFunc
-	generation      uint64
-	prebuildRunning bool
-	prebuildLastErr string
-	restartPending  bool
+	Config               ProcessConfig
+	Cmd                  *exec.Cmd
+	Output               []string
+	mu                   sync.RWMutex
+	running              bool
+	stopping             bool
+	dirty                bool
+	cancel               context.CancelFunc
+	generation           uint64
+	prebuildRunningCount int
+	prebuildLastErr      string
+	restartPending       bool
 }
 
 func (p *Process) appendOutput(line string) {
@@ -424,13 +424,17 @@ func (p *Process) setDirty(dirty bool) {
 func (p *Process) isPrebuildRunning() bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.prebuildRunning
+	return p.prebuildRunningCount > 0
 }
 
 func (p *Process) setPrebuildRunning(running bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.prebuildRunning = running
+	if running {
+		p.prebuildRunningCount++
+	} else if p.prebuildRunningCount > 0 {
+		p.prebuildRunningCount--
+	}
 }
 
 func (p *Process) getPrebuildLastErr() string {
@@ -498,10 +502,11 @@ type Supervisor struct {
 	takenOverBy string
 
 	// Filesystem watcher for prebuild triggers
-	watcher        *fsnotify.Watcher
-	watcherCancel  context.CancelFunc
-	prebuildTimers map[string]*time.Timer
-	prebuildMu     sync.Mutex
+	watcher         *fsnotify.Watcher
+	watcherCancel   context.CancelFunc
+	prebuildTimers  map[string]*time.Timer
+	prebuildCancels map[string]context.CancelFunc
+	prebuildMu      sync.Mutex
 }
 
 func NewSupervisor(configs []ProcessConfig, ephemeral bool, projectID, executionRoot string) *Supervisor {
@@ -513,13 +518,15 @@ func NewSupervisor(configs []ProcessConfig, ephemeral bool, projectID, execution
 		}
 	}
 	s := &Supervisor{
-		processes:      processes,
-		ephemeral:      ephemeral,
-		projectID:      projectID,
-		executionRoot:  executionRoot,
-		socketPath:     getSocketPath(projectID),
-		takeoverChan:   make(chan struct{}, 1),
-		ephemeralConns: make(map[string]*ephemeralConn),
+		processes:       processes,
+		ephemeral:       ephemeral,
+		projectID:       projectID,
+		executionRoot:   executionRoot,
+		socketPath:      getSocketPath(projectID),
+		takeoverChan:    make(chan struct{}, 1),
+		ephemeralConns:  make(map[string]*ephemeralConn),
+		prebuildTimers:  make(map[string]*time.Timer),
+		prebuildCancels: make(map[string]context.CancelFunc),
 	}
 	s.ownershipCond = sync.NewCond(&s.ownershipMu)
 	return s
@@ -733,13 +740,22 @@ func (s *Supervisor) runPrebuild(ctx context.Context, p *Process, outputChan cha
 		return
 	}
 
+	// Create a per-process cancellable context so handleFileChange can cancel us
+	s.prebuildMu.Lock()
+	prebuildCtx, prebuildCancel := context.WithCancel(ctx)
+	s.prebuildCancels[p.Config.Name] = prebuildCancel
+	s.prebuildMu.Unlock()
+	defer prebuildCancel()
+
 	p.setPrebuildRunning(true)
+	defer p.setPrebuildRunning(false)
+
 	p.setPrebuildLastErr("")
 	if outputChan != nil {
 		outputChan <- processOutputMsg{name: p.Config.Name}
 	}
 
-	cmd := exec.CommandContext(ctx, p.Config.PrebuildCommand, p.Config.PrebuildArgs...)
+	cmd := exec.CommandContext(prebuildCtx, p.Config.PrebuildCommand, p.Config.PrebuildArgs...)
 	if p.Config.WorkingDir != "" {
 		cmd.Dir = filepath.Join(s.executionRoot, p.Config.WorkingDir)
 	} else {
@@ -749,7 +765,14 @@ func (s *Supervisor) runPrebuild(ctx context.Context, p *Process, outputChan cha
 
 	err := cmd.Run()
 
-	p.setPrebuildRunning(false)
+	// If cancelled, return without triggering restart — a new prebuild will follow
+	if prebuildCtx.Err() != nil {
+		if outputChan != nil {
+			outputChan <- processOutputMsg{name: p.Config.Name}
+		}
+		return
+	}
+
 	if err != nil {
 		p.setPrebuildLastErr(err.Error())
 	}
@@ -836,7 +859,12 @@ func (s *Supervisor) StartWatcher(ctx context.Context, outputChan chan<- process
 		return fmt.Errorf("failed to create watcher: %w", err)
 	}
 	s.watcher = watcher
-	s.prebuildTimers = make(map[string]*time.Timer)
+	if s.prebuildTimers == nil {
+		s.prebuildTimers = make(map[string]*time.Timer)
+	}
+	if s.prebuildCancels == nil {
+		s.prebuildCancels = make(map[string]context.CancelFunc)
+	}
 
 	// Add watch roots recursively
 	for root := range rootSet {
@@ -918,10 +946,15 @@ func (s *Supervisor) handleFileChange(ctx context.Context, p *Process, outputCha
 		}
 	}
 
-	// Schedule debounced prebuild
 	s.prebuildMu.Lock()
 	defer s.prebuildMu.Unlock()
 
+	// Cancel any in-progress prebuild for this process
+	if cancel, exists := s.prebuildCancels[p.Config.Name]; exists {
+		cancel()
+	}
+
+	// Reset debounce timer
 	if timer, exists := s.prebuildTimers[p.Config.Name]; exists {
 		timer.Stop()
 	}

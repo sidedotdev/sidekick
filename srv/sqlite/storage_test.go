@@ -5,6 +5,7 @@ import (
 	"context"
 	encoding_binary "encoding/binary"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/kelindar/binary"
@@ -174,6 +175,33 @@ func TestDeletePrefix(t *testing.T) {
 	t.Run("DeletePrefix with no matching keys", func(t *testing.T) {
 		err := storage.DeletePrefix(ctx, workspaceID, "nonexistent-prefix:")
 		assert.NoError(t, err)
+	})
+
+	t.Run("DeletePrefix with batching", func(t *testing.T) {
+		batchStorage := NewTestSqliteStorage(t, "test_delete_prefix_batch")
+		batchStorage.deletePrefixBatchSize = 3
+		batchWorkspace := "batch-workspace"
+
+		values := make(map[string]interface{})
+		for i := 0; i < 10; i++ {
+			values[fmt.Sprintf("batch:key%d", i)] = fmt.Sprintf("val%d", i)
+		}
+		values["other:key1"] = "keep1"
+		values["other:key2"] = "keep2"
+
+		err := batchStorage.MSet(ctx, batchWorkspace, values)
+		require.NoError(t, err)
+
+		err = batchStorage.DeletePrefix(ctx, batchWorkspace, "batch:")
+		require.NoError(t, err)
+
+		remaining, err := batchStorage.GetKeysWithPrefix(ctx, batchWorkspace, "batch:")
+		require.NoError(t, err)
+		assert.Empty(t, remaining)
+
+		kept, err := batchStorage.GetKeysWithPrefix(ctx, batchWorkspace, "other:")
+		require.NoError(t, err)
+		assert.Len(t, kept, 2)
 	})
 
 	t.Run("DeletePrefix is workspace-scoped", func(t *testing.T) {

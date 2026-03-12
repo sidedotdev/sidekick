@@ -15,9 +15,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const defaultDeletePrefixBatchSize = 500
+
 type Storage struct {
-	db   *sql.DB
-	kvDb *sql.DB
+	db                    *trackedDB
+	kvDb                  *trackedDB
+	deletePrefixBatchSize int
 }
 
 func NewStorage() (*Storage, error) {
@@ -41,7 +44,12 @@ func NewStorage() (*Storage, error) {
 		return nil, fmt.Errorf("failed to open key-value database: %w", err)
 	}
 
-	storage := &Storage{db: mainDb, kvDb: kvDb}
+	tracker := newBusyTracker()
+	storage := &Storage{
+		db:                    &trackedDB{DB: mainDb, name: "main", tracker: tracker},
+		kvDb:                  &trackedDB{DB: kvDb, name: "kv", tracker: tracker},
+		deletePrefixBatchSize: defaultDeletePrefixBatchSize,
+	}
 
 	err = storage.MigrateUp("sidekick")
 	sideAppEnv := os.Getenv("SIDE_APP_ENV")
@@ -55,6 +63,11 @@ func NewStorage() (*Storage, error) {
 
 	// Run PRAGMA optimize periodically
 	go storage.runPeriodicOptimization()
+
+	err = storage.CheckConnection(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to sqlite storage: %w", err)
+	}
 
 	return storage, nil
 }
@@ -102,11 +115,11 @@ func (s *Storage) CheckConnection(ctx context.Context) error {
 		return nil
 	}
 
-	if err := checkDB(s.db, "main"); err != nil {
+	if err := checkDB(s.db.DB, "main"); err != nil {
 		return err
 	}
 
-	if err := checkDB(s.kvDb, "key-value"); err != nil {
+	if err := checkDB(s.kvDb.DB, "key-value"); err != nil {
 		return err
 	}
 
@@ -219,11 +232,38 @@ func (s *Storage) MSetRaw(ctx context.Context, workspaceId string, values map[st
 }
 
 func (s *Storage) DeletePrefix(ctx context.Context, workspaceId string, prefix string) error {
-	query := "DELETE FROM kv WHERE workspace_id = ? AND key LIKE ?"
-	_, err := s.kvDb.ExecContext(ctx, query, workspaceId, prefix+"%")
+	keys, err := s.GetKeysWithPrefix(ctx, workspaceId, prefix)
 	if err != nil {
-		return fmt.Errorf("failed to delete keys with prefix %s: %w", prefix, err)
+		return fmt.Errorf("failed to list keys with prefix %s: %w", prefix, err)
 	}
+
+	batchSize := s.deletePrefixBatchSize
+	if batchSize <= 0 {
+		batchSize = defaultDeletePrefixBatchSize
+	}
+
+	for i := 0; i < len(keys); i += batchSize {
+		end := i + batchSize
+		if end > len(keys) {
+			end = len(keys)
+		}
+		batch := keys[i:end]
+
+		placeholders := strings.Repeat("?,", len(batch))
+		placeholders = placeholders[:len(placeholders)-1]
+		query := "DELETE FROM kv WHERE workspace_id = ? AND key IN (" + placeholders + ")"
+
+		args := make([]any, 0, 1+len(batch))
+		args = append(args, workspaceId)
+		for _, key := range batch {
+			args = append(args, key)
+		}
+
+		if _, err := s.kvDb.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("failed to delete keys with prefix %s: %w", prefix, err)
+		}
+	}
+
 	return nil
 }
 

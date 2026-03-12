@@ -20,8 +20,10 @@ import (
 const defaultModel = "gpt-5-codex"
 
 type OpenAIResponsesProvider struct {
-	BaseURL      string
-	DefaultModel string
+	BaseURL       string
+	DefaultModel  string
+	AuthType      common.ProviderAuthType
+	CustomHeaders map[string]string
 }
 
 func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
@@ -41,6 +43,9 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamReque
 	}
 	if p.BaseURL != "" {
 		clientOptions = append(clientOptions, option.WithBaseURL(p.BaseURL))
+	}
+	for k, v := range p.CustomHeaders {
+		clientOptions = append(clientOptions, option.WithHeader(k, v))
 	}
 	client := openai.NewClient(clientOptions...)
 

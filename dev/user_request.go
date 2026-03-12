@@ -251,10 +251,12 @@ func GetUserFeedback(dCtx DevContext, currentPromptInfo PromptInfo, guidanceCont
 		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
 		doneRequired := IsDoneRequiredProtocol(dCtx)
 		content := renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, applyImmediately, doneRequired)
-		AppendChatHistory(dCtx, chatHistory, llm.ChatMessage{
+		if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
 			Role:    llm.ChatMessageRoleUser,
 			Content: content,
-		})
+		}); err != nil {
+			return FeedbackInfo{}, err
+		}
 		feedbackInfo := FeedbackInfo{Feedback: userResponse.Content, Type: FeedbackTypeUserGuidance}
 		return feedbackInfo, nil
 	default:
