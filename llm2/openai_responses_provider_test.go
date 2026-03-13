@@ -288,7 +288,8 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 		ModelConfig: common.ModelConfig{
 			Provider:        "openai",
 			Model:           "gpt-5-mini",
-			ReasoningEffort: "high",
+			ReasoningEffort: "low",
+			MaxTokens:       1024,
 		},
 	}
 
