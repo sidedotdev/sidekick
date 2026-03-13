@@ -24,12 +24,15 @@ integration_test_commands:
 
 agent_config:
   coding:
-    auto_iterations: 15
+    auto_iterations: 25
   coding_and_verification:
-    auto_iterations: 7
+    auto_iterations: 27
 
 command_permissions:
   auto_approve:
+    - pattern: "docker build"
+    - pattern: "docker logs"
+    - pattern: "docker ps"
     - pattern: "(npm|bun) run type-check"
     - pattern: "bun type-check"
     - pattern: "(npm|bun) run test:unit.*--run"

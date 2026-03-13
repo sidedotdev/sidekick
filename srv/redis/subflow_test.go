@@ -12,7 +12,7 @@ import (
 )
 
 func TestPersistSubflow(t *testing.T) {
-	db := newTestRedisStorage()
+	db := newTestRedisStorage(t)
 	ctx := context.Background()
 
 	validSubflow := domain.Subflow{
@@ -96,7 +96,7 @@ func TestPersistSubflow(t *testing.T) {
 }
 
 func TestGetSubflow(t *testing.T) {
-	db := newTestRedisStorage()
+	db := newTestRedisStorage(t)
 	ctx := context.Background()
 
 	workspaceId := ksuid.New().String()
@@ -173,7 +173,7 @@ func TestGetSubflow(t *testing.T) {
 }
 
 func TestGetSubflows(t *testing.T) {
-	db := newTestRedisStorage()
+	db := newTestRedisStorage(t)
 	ctx := context.Background()
 
 	workspaceId := ksuid.New().String()
