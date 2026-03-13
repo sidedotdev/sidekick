@@ -1,0 +1,1 @@
+ALTER TABLE flow_actions ADD COLUMN temporal_activities TEXT;

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -331,6 +332,43 @@ type EnvRunCommandActivityInput struct {
 
 type EnvRunCommandActivityOutput = EnvRunCommandOutput
 
+// maxActivityOutputBytes caps individual stdout/stderr fields to stay within
+// Temporal's per-event payload size limit (~2MB).
+const maxActivityOutputBytes = 2 * 1024 * 1024
+
+type GetEnvironmentInfoInput struct {
+	EnvContainer EnvContainer
+}
+
+type GetEnvironmentInfoOutput struct {
+	OS   string `json:"os"`
+	Arch string `json:"arch"`
+}
+
+func (o GetEnvironmentInfoOutput) FormatEnvironmentContext() string {
+	return fmt.Sprintf("OS: %s, Arch: %s", o.OS, o.Arch)
+}
+
+// GetEnvironmentInfoActivity retrieves OS and architecture info from the environment.
+func GetEnvironmentInfoActivity(ctx context.Context, input GetEnvironmentInfoInput) (GetEnvironmentInfoOutput, error) {
+	out, err := input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
+		Command: "uname",
+		Args:    []string{"-sm"},
+	})
+	if err != nil {
+		return GetEnvironmentInfoOutput{}, fmt.Errorf("failed to get environment info: %w", err)
+	}
+	info := strings.TrimSpace(out.Stdout)
+	if info == "" {
+		return GetEnvironmentInfoOutput{}, fmt.Errorf("empty environment info from uname")
+	}
+	parts := strings.Fields(info)
+	if len(parts) < 2 {
+		return GetEnvironmentInfoOutput{}, fmt.Errorf("unexpected uname output: %s", info)
+	}
+	return GetEnvironmentInfoOutput{OS: parts[0], Arch: parts[1]}, nil
+}
+
 // EnvRunCommandActivity runs a command in the environment contained in the provided EnvContainer.
 func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
 	type result struct {
@@ -355,11 +393,31 @@ func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput
 	for {
 		select {
 		case res := <-resultCh:
+			if activity.IsActivity(ctx) {
+				res.output.Stdout = truncateMiddle(res.output.Stdout, maxActivityOutputBytes)
+				res.output.Stderr = truncateMiddle(res.output.Stderr, maxActivityOutputBytes)
+			}
 			return res.output, res.err
 		case <-ticker.C:
-			activity.RecordHeartbeat(ctx, nil)
+			if activity.IsActivity(ctx) {
+				activity.RecordHeartbeat(ctx, nil)
+			}
 		case <-ctx.Done():
 			return EnvRunCommandActivityOutput{}, ctx.Err()
 		}
 	}
+}
+
+func truncateMiddle(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	removed := len(s) - maxBytes
+	marker := "\n\n[... truncated " + strconv.Itoa(removed) + " bytes from the middle ...]\n\n"
+	available := maxBytes - 2*len(marker)
+	if available <= 0 {
+		return s[:maxBytes]
+	}
+	half := available / 2
+	return s[:half] + marker + s[len(s)-half:] + marker
 }

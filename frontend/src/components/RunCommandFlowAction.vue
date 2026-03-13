@@ -1,14 +1,16 @@
 <template>
   <div class="tool-flow-action">
-    <div v-if="summary" class="action-summary-section">
-      <strong>Command:</strong> <code>{{ summary }}</code>
-    </div>
     <div v-if="expand">
       <div class="action-params">
         Params: <JsonTree :data="flowAction.actionParams" :deep="0" />
       </div>
       <div class="action-result">
-        <pre v-if="toolResponse">{{ toolResponse }}</pre>
+        <template v-if="contentBlocks && contentBlocks.length > 0">
+          <template v-for="(block, idx) in contentBlocks" :key="idx">
+            <ContentBlockRenderer :block="block" />
+          </template>
+        </template>
+        <pre v-else-if="toolResponse">{{ toolResponse }}</pre>
       </div>
     </div>
   </div>
@@ -16,8 +18,8 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { FlowAction } from '../lib/models';
-import JsonTree from './JsonTree.vue'
+import type { FlowAction, Llm2ContentBlock } from '../lib/models';
+import ContentBlockRenderer from './ContentBlockRenderer.vue'
 
 const props = defineProps<{
   flowAction: FlowAction,
@@ -25,44 +27,76 @@ const props = defineProps<{
   level?: number
 }>()
 
-const summary = computed(() => {
+const summary = computed<{ text: string, emoji: string } | null>(() => {
   try {
     const params = props.flowAction.actionParams;
-    if (!params || !params.command) {
+    if (!params?.command) {
       return null;
     }
-
-    let result = params.command;
-    if (params.workingDir) {
-      result = `(${params.workingDir}) ${result}`;
+    
+    const command = params.workingDir ? `${params.workingDir}$ ${params.command}` : `${params.command}`;
+    
+    if (props.flowAction.actionStatus === 'complete') {
+      let exitStatus: number | null = null;
+      try {
+        const parsed = JSON.parse(props.flowAction.actionResult);
+        if (parsed && typeof parsed.exitStatus === 'number') {
+          exitStatus = parsed.exitStatus;
+        }
+      } catch {
+        // ignore parse errors
+      }
+      
+      const text = exitStatus !== null && exitStatus !== 0 
+        ? `${command} (exit ${exitStatus})`
+        : command;
+      
+      return {
+        text,
+        emoji: exitStatus !== null && exitStatus !== 0 ? '❌' : '',
+      };
     }
-    return result;
+    
+    return { text: command, emoji: '' };
   } catch (error) {
-    console.error('Error computing run_command summary:', error);
+    console.error('Error parsing run_command params:', error);
     return null;
   }
 });
 
-const toolResponse = computed(() => {
+defineExpose({ summary });
+
+const parsedResult = computed(() => {
   try {
-    const parsed = JSON.parse(props.flowAction.actionResult)
-    if (parsed && parsed.Response) {
-      return parsed.Response
-    }
+    return JSON.parse(props.flowAction.actionResult)
+  } catch {
     return null
-  } catch (error) {
-    console.error('Error parsing action result:', error)
-    return props.flowAction.actionResult
   }
+})
+
+const contentBlocks = computed<Llm2ContentBlock[] | null>(() => {
+  const parsed = parsedResult.value
+  if (parsed?.content && Array.isArray(parsed.content)) {
+    return parsed.content
+  }
+  const trc = parsed?.toolResultContent ?? parsed?.ToolResultContent
+  if (trc && Array.isArray(trc)) {
+    return trc
+  }
+  return null
+})
+
+const toolResponse = computed<string | null>(() => {
+  const parsed = parsedResult.value
+  if (parsed) {
+    return parsed.response ?? parsed.Response ?? null
+  }
+  return props.flowAction.actionResult || null
 })
 </script>
 
 <style scoped>
 .tool-flow-action {
-  margin-top: 0.625rem;
-}
-
-.action-summary-section {
   margin-top: 0.625rem;
 }
 

@@ -75,5 +75,8 @@ func (options ToolChatOptions) ActionParams() map[string]any {
 	if options.Params.MaxTokens > 0 {
 		params["maxTokens"] = options.Params.MaxTokens
 	}
+	if options.Params.ServiceTier != "" {
+		params["serviceTier"] = options.Params.ServiceTier
+	}
 	return params
 }

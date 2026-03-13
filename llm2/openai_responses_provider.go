@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sidekick/common"
 	"sidekick/utils"
+	"strings"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -13,47 +15,50 @@ import (
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
-	"go.temporal.io/sdk/activity"
 )
 
 const defaultModel = "gpt-5-codex"
 
-type OpenAIResponsesProvider struct{}
+type OpenAIResponsesProvider struct {
+	BaseURL       string
+	DefaultModel  string
+	AuthType      common.ProviderAuthType
+	CustomHeaders map[string]string
+}
 
-func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, eventChan chan<- Event) (*MessageResponse, error) {
-	heartbeatCtx, cancelHeartbeat := context.WithCancel(context.Background())
-	defer cancelHeartbeat()
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-heartbeatCtx.Done():
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if activity.IsActivity(ctx) {
-					activity.RecordHeartbeat(ctx, map[string]bool{"fake": true})
-				}
-			}
-		}
-	}()
+func (p OpenAIResponsesProvider) Stream(ctx context.Context, request StreamRequest, eventChan chan<- Event) (*MessageResponse, error) {
+	messages := request.Messages
+	options := request.Options
 
-	providerNameNormalized := options.Params.ModelConfig.NormalizedProviderName()
-	token, err := options.Secrets.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
+	providerNameNormalized := options.ModelConfig.NormalizedProviderName()
+	token, err := request.SecretManager.GetSecret(fmt.Sprintf("%s_API_KEY", providerNameNormalized))
 	if err != nil {
 		return nil, err
 	}
 
-	client := openai.NewClient(option.WithAPIKey(token))
+	httpClient := &http.Client{Timeout: 45 * time.Minute}
+	clientOptions := []option.RequestOption{
+		option.WithAPIKey(token),
+		option.WithHTTPClient(httpClient),
+	}
+	if p.BaseURL != "" {
+		clientOptions = append(clientOptions, option.WithBaseURL(p.BaseURL))
+	}
+	for k, v := range p.CustomHeaders {
+		clientOptions = append(clientOptions, option.WithHeader(k, v))
+	}
+	client := openai.NewClient(clientOptions...)
 
-	model := options.Params.Model
+	model := options.Model
 	if model == "" {
-		model = defaultModel
+		if p.DefaultModel != "" {
+			model = p.DefaultModel
+		} else {
+			model = defaultModel
+		}
 	}
 
-	inputItems, err := messageToResponsesInput(options.Params.Messages)
+	inputItems, err := messageToResponsesInput(messages)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build input: %w", err)
 	}
@@ -65,15 +70,15 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 		Model: openai.ChatModel(model),
 	}
 
-	if options.Params.Temperature != nil {
-		params.Temperature = openai.Float(float64(*options.Params.Temperature))
+	if options.Temperature != nil {
+		params.Temperature = openai.Float(float64(*options.Temperature))
 	}
 
 	effectiveMaxTokens := 0
-	if options.Params.MaxTokens > 0 {
-		effectiveMaxTokens = options.Params.MaxTokens
+	if options.MaxTokens > 0 {
+		effectiveMaxTokens = options.MaxTokens
 	}
-	if modelInfo, found := common.GetModel(options.Params.Provider, model); found {
+	if modelInfo, found := common.GetModel(options.Provider, model); found {
 		if modelInfo.Limit.Output > 0 && (effectiveMaxTokens == 0 || effectiveMaxTokens > modelInfo.Limit.Output) {
 			effectiveMaxTokens = modelInfo.Limit.Output
 		}
@@ -82,10 +87,14 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 		params.MaxOutputTokens = param.NewOpt(int64(effectiveMaxTokens))
 	}
 
-	if len(options.Params.Tools) > 0 {
-		toolsToUse := options.Params.Tools
-		if options.Params.ToolChoice.Type == common.ToolChoiceTypeTool {
-			toolsToUse = filterToolsByName(options.Params.Tools, options.Params.ToolChoice.Name)
+	if options.ServiceTier != "" {
+		params.ServiceTier = responses.ResponseNewParamsServiceTier(options.ServiceTier)
+	}
+
+	if len(options.Tools) > 0 {
+		toolsToUse := options.Tools
+		if options.ToolChoice.Type == common.ToolChoiceTypeTool {
+			toolsToUse = filterToolsByName(options.Tools, options.ToolChoice.Name)
 		}
 
 		tools, err := openaiResponsesFromTools(toolsToUse)
@@ -94,7 +103,7 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 		}
 		params.Tools = tools
 
-		toolChoice := openaiResponsesFromToolChoice(options.Params.ToolChoice, toolsToUse)
+		toolChoice := openaiResponsesFromToolChoice(options.ToolChoice, toolsToUse)
 		if toolChoice != nil {
 			params.ToolChoice = *toolChoice
 		}
@@ -103,18 +112,19 @@ func (p OpenAIResponsesProvider) Stream(ctx context.Context, options Options, ev
 	params.Store = openai.Bool(false)
 
 	var actualReasoningEffort string
-	modelInfo, _ := common.GetModel(options.Params.Provider, model)
+	modelInfo, _ := common.GetModel(options.Provider, model)
 	if modelInfo != nil && modelInfo.Reasoning {
 		params.Include = []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent}
-		if options.Params.ReasoningEffort != "" {
-			actualReasoningEffort = options.Params.ReasoningEffort
+		resolved := resolveOpenAIReasoningEffort(options.ReasoningEffort, model)
+		if resolved != "" {
+			actualReasoningEffort = resolved
 			params.Reasoning.Effort = shared.ReasoningEffort(actualReasoningEffort)
 			params.Reasoning.Summary = shared.ReasoningSummaryAuto
 		}
 	}
 
 	var extraBodyOptions []option.RequestOption
-	for key, value := range options.Params.ExtraBody {
+	for key, value := range options.ExtraBody {
 		extraBodyOptions = append(extraBodyOptions, option.WithJSONSet(key, value))
 	}
 
@@ -332,7 +342,7 @@ loop:
 	}
 
 	if err := stream.Err(); err != nil {
-		return nil, err
+		return nil, wrapOpenAIError(err)
 	}
 
 	outputMessage := accumulateOpenaiEventsToMessage(events)
@@ -340,7 +350,7 @@ loop:
 	return &MessageResponse{
 		Id:              "",
 		Model:           model,
-		Provider:        options.Params.Provider,
+		Provider:        options.Provider,
 		Output:          outputMessage,
 		StopReason:      stopReason,
 		StopSequence:    "",
@@ -363,6 +373,34 @@ func reasoningTextFromOpenaiContent(responseReasoningItemContent []responses.Res
 		text += content.Text
 	}
 	return text
+}
+
+func toolResultToResponsesOutputParts(tr *ToolResultBlock) responses.ResponseFunctionCallOutputItemListParam {
+	var parts responses.ResponseFunctionCallOutputItemListParam
+	for _, cb := range tr.Content {
+		switch cb.Type {
+		case ContentBlockTypeText:
+			parts = append(parts, responses.ResponseFunctionCallOutputItemParamOfInputText(cb.Text))
+		case ContentBlockTypeImage:
+			if cb.Image == nil {
+				continue
+			}
+			url := cb.Image.Url
+			if strings.HasPrefix(url, "data:") {
+				newURL, _, _, err := PrepareImageDataURLForLimits(url, 20*1024*1024, 2048)
+				if err == nil {
+					url = newURL
+				}
+			}
+			parts = append(parts, responses.ResponseFunctionCallOutputItemUnionParam{
+				OfInputImage: &responses.ResponseInputImageContentParam{
+					ImageURL: param.NewOpt(url),
+					Detail:   responses.ResponseInputImageContentDetailAuto,
+				},
+			})
+		}
+	}
+	return parts
 }
 
 func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemUnionParam, error) {
@@ -431,9 +469,10 @@ func messageToResponsesInput(messages []Message) ([]responses.ResponseInputItemU
 				if block.ToolResult.ToolCallId == "" {
 					return nil, fmt.Errorf("tool_result block missing ToolCallId")
 				}
+				outputParts := toolResultToResponsesOutputParts(block.ToolResult)
 				items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(
 					block.ToolResult.ToolCallId,
-					block.ToolResult.Text,
+					outputParts,
 				))
 
 			case ContentBlockTypeReasoning:

@@ -3,7 +3,6 @@ package dev
 import (
 	"context"
 	"fmt"
-	"log"
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/llm"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
@@ -60,7 +60,7 @@ func (ia *DevAgent) workRequest(ctx context.Context, parentId, request, flowType
 }
 
 func (ia *DevAgent) RelayResponse(ctx context.Context, userResponse flow_action.UserResponse) error {
-	log.Printf("relaying response to workflow: %s\n", userResponse.TargetWorkflowId)
+	log.Info().Str("workflowId", userResponse.TargetWorkflowId).Msg("relaying response to workflow")
 	devManagerWorkflowId, err := ia.findOrStartDevAgentManagerWorkflow(ctx, ia.WorkspaceId)
 	if err != nil {
 		return fmt.Errorf("error finding or starting dev manager workflow: %w", err)
@@ -116,7 +116,7 @@ func (ia *DevAgent) TerminateWorkflowIfExists(ctx context.Context, workflowId st
 	reason := "DevAgent TerminateWorkflowIfExists"
 	err := ia.TemporalClient.TerminateWorkflow(ctx, workflowId, "", reason)
 	if err != nil && !strings.Contains(err.Error(), temporalWorkflowNotFoundForId) && !strings.Contains(err.Error(), temporalLiteNotFoundError1) && !strings.Contains(err.Error(), temporalLiteAlreadyCompletedError) {
-		fmt.Printf("failed to terminate workflow: %v\n", err)
+		log.Error().Err(err).Msg("failed to terminate workflow")
 		return fmt.Errorf("failed to terminate workflow: %w", err)
 	}
 	return nil

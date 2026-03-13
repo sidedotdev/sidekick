@@ -25,6 +25,9 @@ type CheckFileActivityInput struct {
 	EnvContainer  env.EnvContainer
 	FilePath      string
 	CheckCommands []common.CommandConfig
+	// SkipBaseFileValidityCheck skips the built-in syntax check, e.g. when the
+	// file already had syntax errors before the edit was applied.
+	SkipBaseFileValidityCheck bool
 }
 
 func CheckFileActivity(input CheckFileActivityInput) (CheckFileActivityOutput, error) {
@@ -61,15 +64,20 @@ func CheckFileActivity(input CheckFileActivityInput) (CheckFileActivityOutput, e
 		}
 	}
 
-	valid, checkOutput, err := CheckFileValidity(input.EnvContainer, input.FilePath)
-	if err != nil {
-		return CheckFileActivityOutput{}, fmt.Errorf("failed to check file validity: %w", err)
+	if input.SkipBaseFileValidityCheck {
+		combinedOutput += "skipped base file validity check: file had pre-existing syntax errors\n"
+		checkPassed["baseFileValidityChecks"] = true
+	} else {
+		valid, checkOutput, err := CheckFileValidity(input.EnvContainer, input.FilePath)
+		if err != nil {
+			return CheckFileActivityOutput{}, fmt.Errorf("failed to check file validity: %w", err)
+		}
+		if !valid {
+			combinedOutput += fmt.Sprintf("errors found when checking file validity: %s\n", checkOutput)
+			allPassed = false
+		}
+		checkPassed["baseFileValidityChecks"] = valid
 	}
-	if !valid {
-		combinedOutput += fmt.Sprintf("errors found when checking file validity: %s\n", checkOutput)
-		allPassed = false
-	}
-	checkPassed["baseFileValidityChecks"] = valid
 
 	return CheckFileActivityOutput{
 		CheckPassed: checkPassed,

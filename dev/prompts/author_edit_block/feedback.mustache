@@ -1,9 +1,6 @@
 Consider the following the feedback and provide new *edit blocks* if necessary:
 
 {{#isApplyError}}
-The previously provided *edit block(s)* did not all apply successfully. Please
-analyze what went wrong and provide new *edit blocks*, if needed only.
-
 Hint: Take a look at the current state of the relevant code via the {{{retrieveCodeContextFunctionName}}}
 tool or the {{{bulkSearchRepositoryFunctionName}}} tool.
 
@@ -19,6 +16,11 @@ Hint: If it seems like the edit failed saying it's not in chat history, but
 you think it is, then try creating multiple smaller edit blocks, one per
 function or import section etc.
 {{/isContextCodeVisibilityCheckEnabled}}
+
+The previously provided *edit block(s)* did not all apply successfully. Please
+analyze what went wrong and provide new *edit blocks*, if needed only:
+
+{{{feedback}}}
 {{/isApplyError}}
 
 {{#isTestFailure}}

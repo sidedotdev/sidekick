@@ -41,7 +41,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 			// want to make the error visible in the Sidekick UI and mark the task
 			// as failed
 			if r := recover(); r != nil {
-				_ = signalWorkflowClosure(ctx, "failed")
+				signalWorkflowFailureOrCancel(ctx)
 				var ok bool
 				err, ok = r.(error)
 				if !ok {
@@ -56,7 +56,7 @@ func PlannedDevWorkflow(ctx workflow.Context, input PlannedDevInput) (planExec D
 
 	dCtx, err := SetupDevContext(ctx, input.WorkspaceId, input.RepoDir, string(input.EnvType), string(input.RepoMode), input.PlannedDevOptions.StartBranch, input.Requirements, input.PlannedDevOptions.ConfigOverrides)
 	if err != nil {
-		_ = signalWorkflowClosure(ctx, "failed")
+		signalWorkflowFailureOrCancel(ctx)
 		return DevPlanExecution{}, fmt.Errorf("failed to setup dev context: %v", err)
 	}
 	defer handleFlowCancel(dCtx)

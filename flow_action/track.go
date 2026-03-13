@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"sidekick/domain"
+	"sidekick/temporalmeta"
 	"sidekick/utils"
-	"time"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -28,42 +28,42 @@ to allow for generic return type
 TODO: /gen write a set of tests for Track. use a real redis db instance via
 the existing newTestRedisDatabase fucntion and confirm started/failed/completed statuses.
 */
-func Track[T any](actionCtx ActionContext, f func(flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
+func Track[T any](actionCtx ActionContext, f func(actionCtx ActionContext, flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
 	if actionCtx.ExecContext.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking flow action")
 	}
-	return trackFlowAction(actionCtx.ExecContext, false, actionCtx.ActionType, actionCtx.ActionParams, f)
+	return trackFlowAction(actionCtx, false, f)
 }
 
-func TrackFailureOnly[T any](actionCtx ActionContext, f func(flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
+func TrackFailureOnly[T any](actionCtx ActionContext, f func(actionCtx ActionContext, flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
 	if actionCtx.ExecContext.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking flow action")
 	}
-	return trackFlowActionFailureOnly(actionCtx.ExecContext, actionCtx.ActionType, actionCtx.ActionParams, f)
+	return trackFlowActionFailureOnly(actionCtx, f)
 }
 
 // TrackWithOptions wraps an anonymous func with flow action tracking based on the provided options
-func TrackWithOptions[T any](actionCtx ActionContext, options TrackOptions, f func(flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
+func TrackWithOptions[T any](actionCtx ActionContext, options TrackOptions, f func(actionCtx ActionContext, flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
 	if actionCtx.ExecContext.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking flow action")
 	}
 
 	if options.FailuresOnly {
-		return trackFlowActionFailureOnly(actionCtx.ExecContext, actionCtx.ActionType, actionCtx.ActionParams, f)
+		return trackFlowActionFailureOnly(actionCtx, f)
 	}
 
-	return trackFlowAction(actionCtx.ExecContext, false, actionCtx.ActionType, actionCtx.ActionParams, f)
+	return trackFlowAction(actionCtx, false, f)
 }
 
 /*
 Just like Track, but for human actions. This sets up the required metadata to
 ensure the human can complete the action.
 */
-func TrackHuman[T any](actionCtx ActionContext, f func(flowAction *domain.FlowAction) (T, error)) (T, error) {
+func TrackHuman[T any](actionCtx ActionContext, f func(actionCtx ActionContext, flowAction *domain.FlowAction) (T, error)) (T, error) {
 	if actionCtx.ExecContext.FlowScope == nil {
 		panic("Missing FlowScope in ExecContext when tracking flow action")
 	}
-	return trackFlowAction(actionCtx.ExecContext, true, actionCtx.ActionType, actionCtx.ActionParams, f)
+	return trackFlowAction(actionCtx, true, f)
 }
 
 func TrackSubflow[T any](eCtx ExecContext, subflowType, subflowName string, f func(subflow domain.Subflow) (T, error)) (T, error) {
@@ -213,7 +213,8 @@ func trackSubflowFailureOnly[T any](eCtx ExecContext, subflowType, subflowName s
 	return val, nil
 }
 
-func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType string, actionParams map[string]any, f func(flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
+func trackFlowAction[T any](actionCtx ActionContext, isHumanAction bool, f func(actionCtx ActionContext, flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
+	eCtx := actionCtx.ExecContext
 	initialStatus := domain.ActionStatusStarted
 	if isHumanAction {
 		initialStatus = domain.ActionStatusPending
@@ -223,9 +224,9 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 		WorkspaceId:        eCtx.WorkspaceId,
 		SubflowName:        eCtx.FlowScope.SubflowName,
 		SubflowDescription: eCtx.FlowScope.subflowDescription,
-		ActionType:         actionType,
+		ActionType:         actionCtx.ActionType,
 		ActionStatus:       initialStatus,
-		ActionParams:       actionParams,
+		ActionParams:       actionCtx.ActionParams,
 		IsHumanAction:      isHumanAction,
 		IsCallbackAction:   isHumanAction, // human actions are always callback actions and the only ones for now
 	}
@@ -235,8 +236,16 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 	}
 	*flowAction = persisted
 
+	// Tag activities executed within f with this flow action's ID via header propagation
+	propagationEnabled := false
+	enrichedActionCtx := actionCtx
+	if v := workflow.GetVersion(eCtx, "flow-action-id-propagation", workflow.DefaultVersion, 1); v == 1 {
+		propagationEnabled = true
+		enrichedActionCtx.Context = workflow.WithValue(eCtx.Context, flowActionIdCtxKey, flowAction.Id)
+	}
+
 	// perform the actual action being tracked
-	val, err := f(flowAction)
+	val, err := f(enrichedActionCtx, flowAction)
 
 	if err != nil {
 		flowAction.ActionStatus = domain.ActionStatusFailed
@@ -253,6 +262,9 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 			return defaultT, fmt.Errorf("failed to mark flow action as failed: %v\noriginal failure: %v", err2, err)
 		}
 		*flowAction = persistedFailure
+		if propagationEnabled {
+			decorateFlowActionWithActivities(eCtx, *flowAction)
+		}
 		return defaultT, err
 	}
 
@@ -272,23 +284,59 @@ func trackFlowAction[T any](eCtx ExecContext, isHumanAction bool, actionType str
 		return val, fmt.Errorf("failed to mark flow action as completed: %v", err)
 	}
 	*flowAction = persisted
+	if propagationEnabled {
+		decorateFlowActionWithActivities(eCtx, *flowAction)
+	}
 
 	return val, nil
 }
 
-func trackFlowActionFailureOnly[T any](eCtx ExecContext, actionType string, actionParams map[string]any, f func(flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
+// decorateFlowActionWithActivities asynchronously fetches the temporal activity
+// history for a completed/failed flow action and persists the activity refs.
+func decorateFlowActionWithActivities(eCtx ExecContext, flowAction domain.FlowAction) {
+	wfInfo := workflow.GetInfo(eCtx)
+	workflow.Go(eCtx, func(gCtx workflow.Context) {
+		disconnectedCtx, _ := workflow.NewDisconnectedContext(gCtx)
+		var meta *temporalmeta.TemporalMetaActivities
+		params := temporalmeta.FetchFlowActionActivitiesParams{
+			WorkflowId:   wfInfo.WorkflowExecution.ID,
+			RunId:        wfInfo.WorkflowExecution.RunID,
+			FlowActionId: flowAction.Id,
+		}
+		var activities []domain.TemporalActivityRef
+		err := workflow.ExecuteActivity(disconnectedCtx, meta.FetchFlowActionActivities, params).Get(disconnectedCtx, &activities)
+		if err != nil || len(activities) == 0 {
+			return
+		}
+		flowAction.TemporalActivities = activities
+		decorateECtx := eCtx
+		decorateECtx.Context = disconnectedCtx
+		_, _ = putFlowAction(decorateECtx, flowAction)
+	})
+}
+
+func trackFlowActionFailureOnly[T any](actionCtx ActionContext, f func(actionCtx ActionContext, flowAction *domain.FlowAction) (T, error)) (defaultT T, err error) {
+	eCtx := actionCtx.ExecContext
 	initialStatus := domain.ActionStatusStarted
 	flowAction := &domain.FlowAction{
 		WorkspaceId:        eCtx.WorkspaceId,
 		SubflowName:        eCtx.FlowScope.SubflowName,
 		SubflowDescription: eCtx.FlowScope.subflowDescription,
-		ActionType:         actionType,
+		ActionType:         actionCtx.ActionType,
 		ActionStatus:       initialStatus,
-		ActionParams:       actionParams,
+		ActionParams:       actionCtx.ActionParams,
+	}
+
+	// Pre-generate an ID so we can tag activities even though the FlowAction
+	// is only persisted on error.
+	enrichedActionCtx := actionCtx
+	if v := workflow.GetVersion(eCtx, "flow-action-id-propagation", workflow.DefaultVersion, 1); v == 1 {
+		flowAction.Id = "fa_" + utils.KsuidSideEffect(eCtx)
+		enrichedActionCtx.Context = workflow.WithValue(eCtx.Context, flowActionIdCtxKey, flowAction.Id)
 	}
 
 	// perform the actual action being tracked
-	val, err := f(flowAction)
+	val, err := f(enrichedActionCtx, flowAction)
 
 	if err != nil {
 		flowAction.ActionStatus = domain.ActionStatusFailed
@@ -327,10 +375,11 @@ func putFlowAction(eCtx ExecContext, flowAction domain.FlowAction) (domain.FlowA
 		}
 	}
 
+	now := workflow.Now(eCtx)
 	if flowAction.Created.IsZero() {
-		flowAction.Created = time.Now()
+		flowAction.Created = now
 	}
-	flowAction.Updated = time.Now()
+	flowAction.Updated = now
 
 	var fa *FlowActivities // nil struct pointer for struct-based activities
 

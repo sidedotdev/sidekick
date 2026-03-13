@@ -28,3 +28,9 @@ manage-history-with-context-markers:
     c: false
   defaultRule:
     variation: t1
+disable-done-coding:
+  variations:
+    t1: true
+    c: false
+  defaultRule:
+    variation: c

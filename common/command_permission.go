@@ -79,6 +79,9 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "dirname"},
 			{Pattern: "realpath"},
 			{Pattern: "readlink"},
+			{Pattern: "timeout"},
+			{Pattern: "sleep"},
+			{Pattern: "wait"},
 			// Git read operations
 			{Pattern: "git status"},
 			{Pattern: "git log"},
@@ -165,6 +168,8 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "bunx tsc"},
 			{Pattern: "npx tsc"},
 			// Python commands
+			{Pattern: "python --version"},
+			{Pattern: "python3 --version"},
 			{Pattern: "pytest"},
 			{Pattern: "python -m pytest"},
 			{Pattern: "python3 -m pytest"},
@@ -188,6 +193,8 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "ruff check"},
 			{Pattern: "ruff format"},
 			// uv commands
+			{Pattern: "uv python list"},
+			{Pattern: "uv run python --version"},
 			{Pattern: "uv run pytest"},
 			{Pattern: "uv run python -m pytest"},
 			{Pattern: "uv run python3 -m pytest"},
@@ -340,6 +347,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			// Unnecessary cd to home directory paths
 			{Pattern: `cd /home/`, Message: "cd not needed, the command will already be run in the correct working directory"},
 			{Pattern: `cd /Users/`, Message: "cd not needed, the command will already be run in the correct working directory"},
+			{Pattern: `cd /repo`, Message: "cd not needed, the command will already be run in the correct working directory"},
 		},
 	}
 }

@@ -31,6 +31,7 @@ All the dependencies listed in README.md are required when developing the projec
 2. bun: https://bun.sh/
 3. usearch: https://unum-cloud.github.io/usearch/golang/
 4. [redis](https://redis.io/docs/install/install-redis/)
+5. gotestreport (install from repo root): `go install sidekick/cmd/gotestreport`
 
 ## Development Workflow
 
@@ -58,9 +59,16 @@ This assumes you have already run `side init` in at least one project.
 
 ### Step 4: Run Tests
 
+We use `gotestreport`, a thin wrapper around `go test -json` that suppresses
+output for passing tests, shows full details for failed/skipped tests, and
+prints a package summary at the end.
+
 ```sh
-go test -test.timeout 10s sidekick/... 
+gotestreport -test.timeout 10s ./...
 ```
+
+All `go test` flags are passed through directly. With no arguments,
+`gotestreport` defaults to `./...`.
 
 ## Debugging
 

@@ -118,6 +118,7 @@
         @click="submitUserResponse(true)"
       >
         {{ continueCopy() }}
+        <span class="shortcut-hint">{{ shortcutLabel }}</span>
       </button>
     </div>
     <div v-else>
@@ -147,6 +148,21 @@
       <pre>{{ flowAction.actionParams.command }}</pre>
     </div>
     <template v-if="flowAction.actionParams.mergeApprovalInfo?.diff">
+      <div class="diff-options-row">
+        <label for="diffScopeNonPending">Show</label>
+        <Select
+          id="diffScopeNonPending"
+          v-model="diffScope"
+          :options="diffScopeOptions"
+          optionLabel="label"
+          optionValue="value"
+        ></Select>
+        <DiffViewOptions
+          v-model:ignoreWhitespace="ignoreWhitespace"
+          v-model:diffMode="diffMode"
+          :canGetNewDiffs="false"
+        />
+      </div>
       <div v-if="showEmptyDiffMessage" class="empty-diff-message">
         No changes since last review
       </div>
@@ -354,6 +370,9 @@ const handleKeyDown = (event: KeyboardEvent) => {
     } else if (requestKind === 'approval' || requestKind === 'merge_approval') {
       event.preventDefault()
       submitUserResponse(!hasResponseText.value)
+    } else if (requestKind === 'continue') {
+      event.preventDefault()
+      submitUserResponse(true)
     }
   }
 }
@@ -378,8 +397,7 @@ async function queryDevRunConfig() {
       return
     }
     const data = await response.json()
-    // Check if result has non-empty commands map
-    if (data.result?.commands && typeof data.result.commands === 'object' && Object.keys(data.result.commands).length > 0) {
+    if (data.result && typeof data.result === 'object' && Object.keys(data.result).length > 0) {
       hasDevRunConfig.value = true
     }
   } catch (err) {

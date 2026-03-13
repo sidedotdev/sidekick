@@ -13,6 +13,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 	"github.com/rs/zerolog/log"
 	"github.com/zalando/go-keyring"
 	"go.temporal.io/sdk/activity"
@@ -39,14 +40,14 @@ type OAuthCredentials struct {
 type AnthropicToolChat struct{}
 
 func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions, deltaChan chan<- ChatMessageDelta, progressChan chan<- ProgressInfo) (*ChatMessageResponse, error) {
-	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	httpClient := &http.Client{Timeout: 20 * time.Minute}
 
 	// Try OAuth credentials first, fall back to API key
 	oauthCreds, useOAuth, err := GetAnthropicOAuthCredentials(options.Secrets.SecretManager)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Anthropic OAuth credentials: %w", err)
 	}
-	var client *anthropic.Client
+	var client anthropic.Client
 	if useOAuth {
 		client = anthropic.NewClient(
 			option.WithHeader("Authorization", "Bearer "+oauthCreds.AccessToken),
@@ -96,47 +97,40 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 	}
 
 	messageParams := anthropic.MessageNewParams{
-		Temperature: anthropic.F(float64(temperature)),
-		Model:       anthropic.F(model),
-		MaxTokens:   anthropic.Int(maxTokensToUse),
-		Messages:    anthropic.F(messages),
-		Tools:       anthropic.F(tools),
+		Temperature: anthropic.Opt(float64(temperature)),
+		Model:       anthropic.Model(model),
+		MaxTokens:   maxTokensToUse,
+		Messages:    messages,
+		Tools:       tools,
+	}
+
+	if options.Params.ServiceTier != "" {
+		messageParams.ServiceTier = anthropic.MessageNewParamsServiceTier(options.Params.ServiceTier)
 	}
 
 	// TODO move into helper function
 	switch options.Params.ToolChoice.Type {
 	case ToolChoiceTypeAuto:
-		messageParams.ToolChoice = anthropic.F(
-			anthropic.ToolChoiceUnionParam(
-				anthropic.ToolChoiceAutoParam{
-					Type: anthropic.F(anthropic.ToolChoiceAutoTypeAuto),
-				},
-			),
-		)
+		messageParams.ToolChoice = anthropic.ToolChoiceUnionParam{
+			OfAuto: &anthropic.ToolChoiceAutoParam{},
+		}
 	case ToolChoiceTypeRequired:
-		messageParams.ToolChoice = anthropic.F(
-			anthropic.ToolChoiceUnionParam(
-				anthropic.ToolChoiceAnyParam{
-					Type: anthropic.F(anthropic.ToolChoiceAnyTypeAny),
-				},
-			),
-		)
+		messageParams.ToolChoice = anthropic.ToolChoiceUnionParam{
+			OfAny: &anthropic.ToolChoiceAnyParam{},
+		}
 	case ToolChoiceTypeTool:
-		messageParams.ToolChoice = anthropic.F(
-			anthropic.ToolChoiceUnionParam(
-				anthropic.ToolChoiceToolParam{
-					Type: anthropic.F(anthropic.ToolChoiceToolTypeTool),
-					Name: anthropic.F(options.Params.ToolChoice.Name),
-				},
-			),
-		)
+		messageParams.ToolChoice = anthropic.ToolChoiceUnionParam{
+			OfTool: &anthropic.ToolChoiceToolParam{
+				Name: options.Params.ToolChoice.Name,
+			},
+		}
 	}
 
 	if useOAuth {
 		// NOTE: OAuth tokens require using the Claude Code system prompt, otherwise you get a 400 error
 		var systemMessages []anthropic.TextBlockParam
-		systemMessages = append(systemMessages, anthropic.NewTextBlock("You are Claude Code, Anthropic's official CLI for Claude."))
-		messageParams.System = anthropic.F(systemMessages)
+		systemMessages = append(systemMessages, anthropic.TextBlockParam{Text: "You are Claude Code, Anthropic's official CLI for Claude."})
+		messageParams.System = systemMessages
 	}
 
 	stream := client.Messages.NewStreaming(ctx, messageParams)
@@ -156,7 +150,7 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 			return nil, fmt.Errorf("failed to accumulate message: %w", err)
 		}
 
-		switch event := event.AsUnion().(type) {
+		switch event := event.AsAny().(type) {
 		case anthropic.ContentBlockStartEvent:
 			deltaChan <- anthropicContentStartToChatMessageDelta(event.ContentBlock)
 			startedBlocks++
@@ -196,10 +190,10 @@ func (AnthropicToolChat) ChatStream(ctx context.Context, options ToolChatOptions
 	return response, nil
 }
 
-func anthropicToChatMessageDelta(eventDelta anthropic.ContentBlockDeltaEventDelta) ChatMessageDelta {
+func anthropicToChatMessageDelta(eventDelta anthropic.RawContentBlockDeltaUnion) ChatMessageDelta {
 	outDelta := ChatMessageDelta{Role: ChatMessageRoleAssistant}
 
-	switch delta := eventDelta.AsUnion().(type) {
+	switch delta := eventDelta.AsAny().(type) {
 	case anthropic.TextDelta:
 		outDelta.Content = delta.Text
 	case anthropic.InputJSONDelta:
@@ -213,26 +207,26 @@ func anthropicToChatMessageDelta(eventDelta anthropic.ContentBlockDeltaEventDelt
 	return outDelta
 }
 
-func anthropicContentStartToChatMessageDelta(contentBlock anthropic.ContentBlockStartEventContentBlock) ChatMessageDelta {
-	switch contentBlock.Type {
-	case "text":
+func anthropicContentStartToChatMessageDelta(contentBlockUnion anthropic.ContentBlockStartEventContentBlockUnion) ChatMessageDelta {
+	switch contentBlock := contentBlockUnion.AsAny().(type) {
+	case anthropic.TextBlock:
 		return ChatMessageDelta{
 			Role:    ChatMessageRoleAssistant,
 			Content: contentBlock.Text,
 		}
-	case "tool_use":
+	case anthropic.ToolUseBlock:
 		return ChatMessageDelta{
 			Role: ChatMessageRoleAssistant,
 			ToolCalls: []ToolCall{
 				{
-					Id:        contentBlock.ID,
-					Name:      contentBlock.Name,
+					Id:        contentBlockUnion.ID,
+					Name:      contentBlockUnion.Name,
 					Arguments: string(contentBlock.Input),
 				},
 			},
 		}
 	default:
-		panic(fmt.Sprintf("unsupported content block type: %s", contentBlock.Type))
+		panic(fmt.Sprintf("unsupported content block type: %s", contentBlockUnion.Type))
 	}
 }
 
@@ -245,17 +239,13 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 			if msg.Role == ChatMessageRoleTool {
 				block := anthropic.NewToolResultBlock(msg.ToolCallId, invalidJsonWorkaround(msg.Content), msg.IsError)
 				if msg.CacheControl != "" {
-					block.CacheControl = anthropic.F(anthropic.CacheControlEphemeralParam{
-						Type: anthropic.F(anthropic.CacheControlEphemeralType(msg.CacheControl)),
-					})
+					block.OfToolResult.CacheControl = anthropic.NewCacheControlEphemeralParam()
 				}
 				blocks = append(blocks, block)
 			} else {
 				block := anthropic.NewTextBlock(invalidJsonWorkaround(msg.Content))
 				if msg.CacheControl != "" {
-					block.CacheControl = anthropic.F(anthropic.CacheControlEphemeralParam{
-						Type: anthropic.F(anthropic.CacheControlEphemeralType(msg.CacheControl)),
-					})
+					block.OfText.CacheControl = anthropic.NewCacheControlEphemeralParam()
 				}
 				blocks = append(blocks, block)
 			}
@@ -267,17 +257,15 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 				// anthropic requires valid json, but didn't give us valid json. we improvise.
 				args["invalid_json_stringified"] = toolCall.Arguments
 			}
-			toolUseBlock := anthropic.NewToolUseBlockParam(toolCall.Id, toolCall.Name, args)
+			toolUseBlock := anthropic.NewToolUseBlock(toolCall.Id, args, toolCall.Name)
 			if msg.CacheControl != "" {
-				toolUseBlock.CacheControl = anthropic.F(anthropic.CacheControlEphemeralParam{
-					Type: anthropic.F(anthropic.CacheControlEphemeralType(msg.CacheControl)),
-				})
+				toolUseBlock.OfToolUse.CacheControl = anthropic.NewCacheControlEphemeralParam()
 			}
 			blocks = append(blocks, toolUseBlock)
 		}
 		anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
-			Role:    anthropic.F(anthropicFromChatMessageRole(msg.Role)),
-			Content: anthropic.F(blocks),
+			Role:    anthropicFromChatMessageRole(msg.Role),
+			Content: blocks,
 		})
 	}
 
@@ -291,7 +279,7 @@ func anthropicFromChatMessages(messages []ChatMessage) ([]anthropic.MessageParam
 
 		lastMsg := &mergedAnthropicMessages[len(mergedAnthropicMessages)-1]
 		if lastMsg.Role == msg.Role {
-			lastMsg.Content.Value = append(lastMsg.Content.Value, msg.Content.Value...)
+			lastMsg.Content = append(lastMsg.Content, msg.Content...)
 		} else {
 			mergedAnthropicMessages = append(mergedAnthropicMessages, msg)
 		}
@@ -318,14 +306,21 @@ func anthropicFromChatMessageRole(role ChatMessageRole) anthropic.MessageParamRo
 	}
 }
 
-func anthropicFromTools(tools []*Tool) ([]anthropic.ToolParam, error) {
-	var result []anthropic.ToolParam
+func anthropicFromTools(tools []*Tool) ([]anthropic.ToolUnionParam, error) {
+	var result []anthropic.ToolUnionParam
 	for _, tool := range tools {
-		result = append(result, anthropic.ToolParam{
-			Name:        anthropic.F(tool.Name),
-			Description: anthropic.F(tool.Description),
-			InputSchema: anthropic.F[interface{}](tool.Parameters),
-		})
+		toolParam := anthropic.ToolParam{
+			Name:        tool.Name,
+			Description: anthropic.Opt(tool.Description),
+			InputSchema: anthropic.ToolInputSchemaParam{
+				Properties:  tool.Parameters.Properties,
+				Required:    tool.Parameters.Required,
+				Type:        constant.Object(tool.Parameters.Type),
+				ExtraFields: tool.Parameters.Extras,
+			},
+		}
+
+		result = append(result, anthropic.ToolUnionParam{OfTool: &toolParam})
 	}
 	return result, nil
 }
@@ -340,20 +335,20 @@ func anthropicToChatMessageResponse(message anthropic.Message, provider string) 
 		StopReason:   string(message.StopReason),
 		StopSequence: message.StopSequence,
 		Usage: Usage{
-			InputTokens:           int(message.Usage.InputTokens),
+			InputTokens:           int(message.Usage.InputTokens) + int(message.Usage.CacheReadInputTokens) + int(message.Usage.CacheCreationInputTokens),
 			OutputTokens:          int(message.Usage.OutputTokens),
 			CacheReadInputTokens:  int(message.Usage.CacheReadInputTokens),
 			CacheWriteInputTokens: int(message.Usage.CacheCreationInputTokens),
 		},
-		Model:    message.Model,
+		Model:    string(message.Model),
 		Provider: provider,
 	}
 
 	for _, block := range message.Content {
-		switch block.Type {
-		case anthropic.ContentBlockTypeText:
+		switch block.AsAny().(type) {
+		case anthropic.TextBlock:
 			response.Content += block.Text
-		case anthropic.ContentBlockTypeToolUse:
+		case anthropic.ToolUseBlock:
 			response.ToolCalls = append(response.ToolCalls, ToolCall{
 				Id:        block.ID,
 				Name:      block.Name,

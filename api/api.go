@@ -34,8 +34,6 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/contrib/opentelemetry"
-	"go.temporal.io/sdk/interceptor"
 )
 
 type Server struct {
@@ -239,6 +237,7 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 	flowRoutes.POST("/:id/reset", ctrl.ResetFlowHandler)
 	flowRoutes.GET("/:id/subflows", ctrl.GetFlowSubflowsHandler)
 	flowRoutes.POST("/:id/query", ctrl.QueryFlowHandler)
+	flowRoutes.POST("/:id/chat_history/hydrate", ctrl.HydrateChatHistoryHandler)
 
 	workspaceApiRoutes.POST("/flow_actions/:id/complete", ctrl.CompleteFlowActionHandler)
 	workspaceApiRoutes.PUT("/flow_actions/:id", ctrl.UpdateFlowActionHandler)
@@ -271,22 +270,18 @@ func DefineRoutes(ctrl Controller, allowedOrigins *AllowedOrigins) *gin.Engine {
 }
 
 func NewController() (Controller, error) {
-	tracingInterceptor, err := opentelemetry.NewTracingInterceptor(opentelemetry.TracerOptions{})
+	service, err := sidekick.GetService()
 	if err != nil {
-		return Controller{}, fmt.Errorf("failed to create tracing interceptor: %w", err)
+		return Controller{}, fmt.Errorf("failed to initialize storage: %w", err)
 	}
-	clientOptions := client.Options{
-		HostPort:     common.GetTemporalServerHostPort(),
-		Interceptors: []interceptor.ClientInterceptor{tracingInterceptor},
+
+	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalServerHostPort())
+	if err != nil {
+		return Controller{}, fmt.Errorf("failed to create Temporal client options: %w", err)
 	}
 	temporalClient, err := client.NewLazyClient(clientOptions)
 	if err != nil {
 		return Controller{}, fmt.Errorf("failed to create Temporal client: %w", err)
-	}
-
-	service, err := sidekick.GetService()
-	if err != nil {
-		return Controller{}, fmt.Errorf("failed to initialize storage: %w", err)
 	}
 	err = service.CheckConnection(context.Background())
 	if err != nil {
@@ -421,38 +416,29 @@ func (ctrl *Controller) DeleteTaskHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	taskId := c.Param("id")
 
-	task, err := ctrl.service.GetTask(c.Request.Context(), workspaceId, taskId)
+	_, err := ctrl.service.GetTask(c.Request.Context(), workspaceId, taskId)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
 		return
 	}
 
-	// Get the child workflows of the task
-	childFlows, err := ctrl.service.GetFlowsForTask(c.Request.Context(), workspaceId, taskId)
+	workflowOptions := client.StartWorkflowOptions{
+		TaskQueue: ctrl.temporalTaskQueue,
+	}
+	input := srv.CascadeDeleteTaskInput{
+		WorkspaceId: workspaceId,
+		TaskId:      taskId,
+	}
+	workflowRun, err := ctrl.temporalClient.ExecuteWorkflow(c.Request.Context(), workflowOptions, srv.CascadeDeleteTaskWorkflow, input)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get child workflows"})
+		log.Error().Err(err).Str("taskId", taskId).Msg("Failed to start cascade delete workflow")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete task"})
 		return
 	}
 
-	// Check if any of the child workflows are in progress and cancel them
-	devAgent := dev.DevAgent{
-		TemporalClient:    ctrl.temporalClient,
-		TemporalTaskQueue: ctrl.temporalTaskQueue,
-		WorkspaceId:       task.WorkspaceId,
-	}
-	for _, flow := range childFlows {
-		err = devAgent.TerminateWorkflowIfExists(c.Request.Context(), flow.Id)
-		if err != nil {
-			log.Error().Err(err).Str("flowId", flow.Id).Msg("Error terminating workflow")
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to terminate workflow"})
-			return
-		}
-
-		// TODO delete the flow from the database
-	}
-
-	err = ctrl.service.DeleteTask(c.Request.Context(), workspaceId, taskId)
+	err = workflowRun.Get(c.Request.Context(), nil)
 	if err != nil {
+		log.Error().Err(err).Str("taskId", taskId).Msg("Cascade delete workflow failed")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete task"})
 		return
 	}
@@ -981,6 +967,16 @@ func (ctrl *Controller) ResetFlowHandler(c *gin.Context) {
 		return
 	}
 
+	// Signal codec cleanup first to prevent deletion of keys needed by the new run.
+	// Safe to do before reset: if reset fails, pending deletions self-correct on workflow completion.
+	err := ctrl.temporalClient.SignalWorkflow(c, common.CodecCleanupWorkflowID, "", "codec-workflow-reset", common.CodecCleanupResetSignal{
+		WorkflowID: flowId,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to signal codec cleanup workflow: " + err.Error()})
+		return
+	}
+
 	resp, err := ctrl.temporalClient.ResetWorkflowExecution(c, &workflowservice.ResetWorkflowExecutionRequest{
 		Namespace:                 ctrl.temporalNamespace,
 		WorkflowExecution:         &commonpb.WorkflowExecution{WorkflowId: flowId},
@@ -1465,6 +1461,7 @@ func newUpgrader(allowedOrigins *AllowedOrigins) websocket.Upgrader {
 func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
 	flowId := c.Param("id")
 
 	if workspaceId == "" {

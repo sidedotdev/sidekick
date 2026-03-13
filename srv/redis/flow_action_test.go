@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"sidekick/domain"
+	"sidekick/srv"
 	"testing"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 
 func TestGetFlowActions(t *testing.T) {
 	ctx := context.Background()
-	db := newTestRedisStorage()
+	db := newTestRedisStorage(t)
 	flowAction1 := domain.FlowAction{
 		WorkspaceId: "TEST_WORKSPACE_ID",
 		FlowId:      "test-flow-id",
@@ -43,8 +44,9 @@ func TestGetFlowActions(t *testing.T) {
 
 func TestPersistFlowAction(t *testing.T) {
 	ctx := context.Background()
-	service, _ := NewTestRedisService()
-	streamer := NewTestRedisStreamer()
+	storage := newTestRedisStorage(t)
+	streamer := newTestRedisStreamer(t)
+	service := srv.NewDelegator(storage, streamer)
 	flowAction := domain.FlowAction{
 		WorkspaceId:  "TEST_WORKSPACE_ID",
 		FlowId:       "flow_" + ksuid.New().String(),
@@ -79,7 +81,7 @@ func TestPersistFlowAction(t *testing.T) {
 
 func TestPersistFlowAction_MissingId(t *testing.T) {
 	ctx := context.Background()
-	db := newTestRedisStorage()
+	db := newTestRedisStorage(t)
 	flowAction := domain.FlowAction{
 		WorkspaceId: "TEST_WORKSPACE_ID",
 		FlowId:      "flow_" + ksuid.New().String(),
@@ -91,7 +93,7 @@ func TestPersistFlowAction_MissingId(t *testing.T) {
 
 func TestPersistFlowAction_MissingFlowId(t *testing.T) {
 	ctx := context.Background()
-	db := newTestRedisStorage()
+	db := newTestRedisStorage(t)
 	flowAction := domain.FlowAction{
 		Id:          "id_" + ksuid.New().String(),
 		WorkspaceId: "TEST_WORKSPACE_ID",
@@ -103,7 +105,7 @@ func TestPersistFlowAction_MissingFlowId(t *testing.T) {
 
 func TestPersistFlowAction_MissingWorkspaceId(t *testing.T) {
 	ctx := context.Background()
-	db := newTestRedisStorage()
+	db := newTestRedisStorage(t)
 	flowAction := domain.FlowAction{
 		Id:     "id_" + ksuid.New().String(),
 		FlowId: "flow_" + ksuid.New().String(),
@@ -117,7 +119,7 @@ func TestStreamFlowActionChanges(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	streamer := NewStreamer()
+	streamer := newTestRedisStreamer(t)
 	defer streamer.Client.Close()
 
 	// Clear the stream used by this test
@@ -231,4 +233,51 @@ func TestStreamFlowActionChanges(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatalf("Timed out waiting for flow action channel to close")
 	}
+}
+
+func TestDeleteFlowActionsForFlow(t *testing.T) {
+	ctx := context.Background()
+	db := newTestRedisStorage(t)
+	workspaceId := "TEST_WORKSPACE_ID"
+	flowId := "flow_" + ksuid.New().String()
+
+	t.Run("Delete existing flow actions", func(t *testing.T) {
+		// Create multiple flow actions
+		for i := 0; i < 3; i++ {
+			fa := domain.FlowAction{
+				WorkspaceId:  workspaceId,
+				FlowId:       flowId,
+				Id:           "action_" + ksuid.New().String(),
+				ActionType:   "testType",
+				ActionStatus: domain.ActionStatusPending,
+			}
+			err := db.PersistFlowAction(ctx, fa)
+			assert.NoError(t, err)
+		}
+
+		// Verify actions exist
+		actions, err := db.GetFlowActions(ctx, workspaceId, flowId)
+		assert.NoError(t, err)
+		assert.Len(t, actions, 3)
+
+		// Delete all actions for the flow
+		err = db.DeleteFlowActionsForFlow(ctx, workspaceId, flowId)
+		assert.NoError(t, err)
+
+		// Verify actions are deleted
+		actions, err = db.GetFlowActions(ctx, workspaceId, flowId)
+		assert.NoError(t, err)
+		assert.Empty(t, actions)
+
+		// Verify individual actions are also deleted
+		for _, action := range actions {
+			_, err := db.GetFlowAction(ctx, workspaceId, action.Id)
+			assert.Error(t, err)
+		}
+	})
+
+	t.Run("Delete flow actions for flow with no actions", func(t *testing.T) {
+		err := db.DeleteFlowActionsForFlow(ctx, workspaceId, "flow-with-no-actions")
+		assert.NoError(t, err)
+	})
 }

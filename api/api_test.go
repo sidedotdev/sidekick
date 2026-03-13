@@ -30,6 +30,10 @@ import (
 	"go.temporal.io/sdk/client"
 )
 
+func init() {
+	gin.SetMode(gin.TestMode)
+}
+
 type MockWorkflow struct{}
 
 // testSecretManager is a configurable mock for testing GetProvidersHandler
@@ -106,7 +110,6 @@ func NewMockControllerWithSecretManager(t *testing.T, sm secret_manager.SecretMa
 
 func TestCreateTaskHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	testCases := []struct {
 		name           string
@@ -358,7 +361,6 @@ func TestCreateTaskHandler(t *testing.T) {
 
 func TestCreateTaskHandler_TemporalFailure(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	// Create a controller with a mock Temporal client that fails
 	mockTemporalClient := mocks.NewClient(t)
@@ -408,7 +410,6 @@ func TestCreateTaskHandler_TemporalFailure(t *testing.T) {
 func TestGetTasksHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	ctx := context.Background()
 	workspaceId := "ws_1"
@@ -454,8 +455,14 @@ func TestGetTasksHandler(t *testing.T) {
 			statusesStr:   "blocked",
 			expectedTasks: []domain.Task{tasks[2]},
 		},
-		// TODO need a case for when empty statuses are passed (should default to all statuses)
-		// TODO need a case for when invalid statuses are passed
+		{
+			statusesStr:   "",
+			expectedTasks: tasks,
+		},
+		{
+			statusesStr:   "invalid_status",
+			expectedTasks: []domain.Task{},
+		},
 	}
 
 	for _, testCase := range testCases {
@@ -480,7 +487,6 @@ func TestGetTasksHandler(t *testing.T) {
 func TestGetTasksHandlerWhenTasksAreEmpty(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create a new gin context with the mock controller
@@ -506,7 +512,6 @@ func TestGetTasksHandlerWhenTasksAreEmpty(t *testing.T) {
 
 func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	db := ctrl.service
 	ctx := context.Background()
@@ -608,7 +613,6 @@ func TestFlowActionChangesWebsocketHandler(t *testing.T) {
 
 func TestFlowActionChangesWebsocketHandler_NewOnly(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	db := ctrl.service
 	ctx := context.Background()
@@ -1167,7 +1171,6 @@ func TestUpdateFlowActionHandler_NonCallback(t *testing.T) {
 func TestGetFlowActionsHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	ctx := context.Background()
 
@@ -1221,7 +1224,6 @@ func TestGetFlowActionsHandler(t *testing.T) {
 
 func TestGetFlowActionsHandler_NonExistentFlowId(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	resp := httptest.NewRecorder()
@@ -1235,7 +1237,6 @@ func TestGetFlowActionsHandler_NonExistentFlowId(t *testing.T) {
 
 func TestGetFlowActionsHandler_EmptyActions(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	flow := domain.Flow{
@@ -1266,7 +1267,6 @@ func TestGetFlowActionsHandler_EmptyActions(t *testing.T) {
 func TestUpdateTaskHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create a task for testing
@@ -1316,7 +1316,6 @@ func TestUpdateTaskHandler(t *testing.T) {
 func TestUpdateTaskHandler_InvalidTaskID(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Prepare the request body
@@ -1347,7 +1346,6 @@ func TestUpdateTaskHandler_InvalidTaskID(t *testing.T) {
 func TestUpdateTaskHandler_UnparseableRequestBody(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create a task for testing
@@ -1381,7 +1379,6 @@ func TestUpdateTaskHandler_UnparseableRequestBody(t *testing.T) {
 func TestUpdateTaskHandler_InvalidStatus(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create a task for testing
@@ -1423,7 +1420,6 @@ func TestUpdateTaskHandler_InvalidStatus(t *testing.T) {
 func TestUpdateTaskHandler_InvalidAgentType(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create a task for testing
@@ -1465,7 +1461,6 @@ func TestUpdateTaskHandler_InvalidAgentType(t *testing.T) {
 func TestUpdateTaskHandler_InvalidAgentTypeAndStatusCombo(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create a task for testing
@@ -1507,9 +1502,9 @@ func TestUpdateTaskHandler_InvalidAgentTypeAndStatusCombo(t *testing.T) {
 
 func TestDeleteTaskHandler(t *testing.T) {
 	t.Parallel()
-	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
-	ctrl := NewMockController(t)
+
+	mockTemporalClient := mocks.NewClient(t)
+	service := NewTestService(t)
 
 	// Create a task for testing
 	task := domain.Task{
@@ -1519,34 +1514,48 @@ func TestDeleteTaskHandler(t *testing.T) {
 		AgentType:   domain.AgentTypeLLM,
 		Status:      domain.TaskStatusToDo,
 	}
-	err := ctrl.service.PersistTask(context.Background(), task)
-	if err != nil {
-		t.Fatal(err)
+	err := service.PersistTask(context.Background(), task)
+	require.NoError(t, err)
+
+	var capturedInput srv.CascadeDeleteTaskInput
+	mockTemporalClient.On("ExecuteWorkflow",
+		mock.Anything,
+		mock.MatchedBy(func(opts client.StartWorkflowOptions) bool {
+			return opts.TaskQueue == "test-task-queue"
+		}),
+		mock.Anything,
+		mock.MatchedBy(func(input srv.CascadeDeleteTaskInput) bool {
+			capturedInput = input
+			return true
+		}),
+	).Return(MockWorkflow{}, nil).Once()
+
+	ctrl := Controller{
+		temporalClient:    mockTemporalClient,
+		temporalTaskQueue: "test-task-queue",
+		service:           service,
+		secretManager:     secret_manager.MockSecretManager{},
 	}
 
-	// Prepare the request
-	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
 	ginCtx.Request = httptest.NewRequest(http.MethodDelete, "/workspaces/"+task.WorkspaceId+"/tasks/"+task.Id, nil)
 	ginCtx.Params = []gin.Param{
 		{Key: "workspaceId", Value: task.WorkspaceId},
 		{Key: "id", Value: task.Id},
 	}
 
-	// Call the handler
 	ctrl.DeleteTaskHandler(ginCtx)
 
-	// Check the response
-	assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
-
-	// Check that the task has been deleted
-	_, err = ctrl.service.GetTask(ginCtx.Request.Context(), task.WorkspaceId, task.Id)
-	assert.True(t, errors.Is(err, srv.ErrNotFound))
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, task.WorkspaceId, capturedInput.WorkspaceId)
+	assert.Equal(t, task.Id, capturedInput.TaskId)
+	mockTemporalClient.AssertExpectations(t)
 }
 
 func TestCancelTaskHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 
 	testCases := []struct {
 		name           string
@@ -1619,7 +1628,6 @@ func TestCancelTaskHandler(t *testing.T) {
 
 func TestGetTasksHandler_DefaultIncludesInReview(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	testCases := []struct {
 		name        string
@@ -1676,7 +1684,6 @@ func TestGetTasksHandler_DefaultIncludesInReview(t *testing.T) {
 func TestCancelTaskHandler_NonExistentTask(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Prepare the request with non-existent task ID
@@ -1703,7 +1710,6 @@ func TestCancelTaskHandler_NonExistentTask(t *testing.T) {
 func TestArchiveFinishedTasksHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create tasks for testing
@@ -1779,7 +1785,6 @@ func TestArchiveFinishedTasksHandler(t *testing.T) {
 func TestArchiveTaskHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 
 	// Create tasks for testing
 	completedTask := domain.Task{
@@ -1868,7 +1873,6 @@ func TestArchiveTaskHandler(t *testing.T) {
 
 func TestGetWorkspacesHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Test for correct data retrieval
@@ -1926,7 +1930,6 @@ func TestGetWorkspacesHandler(t *testing.T) {
 func TestGetTaskHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	ctx := context.Background()
 	workspaceId := "ws_1"
@@ -2034,7 +2037,6 @@ func TestGetTaskHandler(t *testing.T) {
 func TestGetFlowHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	ctx := context.Background()
 	workspaceId := "ws_1"
@@ -2144,7 +2146,6 @@ func TestGetFlowHandler(t *testing.T) {
 
 func TestFlowEventsWebsocketHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	workspaceId := "test-workspace-id-" + uuid.New().String()
@@ -2194,6 +2195,9 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 		},
 	}
 
+	// Channel to propagate errors from the event-producing goroutine
+	eventErrCh := make(chan error, 1)
+
 	// Start a goroutine to add the events over time, simulating a real-time scenario
 	addErrCh := make(chan error, len(flowEvents))
 	go func() {
@@ -2201,12 +2205,12 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 		for _, event := range flowEvents {
 			time.Sleep(100 * time.Millisecond)
 			addErr := ctrl.service.AddFlowEvent(context.Background(), workspaceId, flowId, event)
-			fmt.Printf("Added event: %v\n", event)
 			if addErr != nil {
 				addErrCh <- addErr
 				return
 			}
 		}
+		close(eventErrCh)
 	}()
 
 	// Connect to the WebSocket server
@@ -2223,30 +2227,32 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 	assert.NoError(t, err, "Failed to send subscription for flowEvent2")
 
 	// Verify if the flow events are streamed correctly
-	timeout := time.After(5 * time.Second)
 	receivedEvents := make([]domain.FlowEvent, 0, len(flowEvents))
 
-	fmt.Print("Waiting for flow events...\n")
 	for i := 0; i < len(flowEvents); i++ {
-		select {
-		case <-timeout:
-			t.Fatalf("Timeout waiting for flow events. Received %d events so far", len(receivedEvents))
-		default:
-			_, r, err := ws.NextReader()
-			if err != nil {
-				t.Fatalf("Failed to get next reader: %v", err)
-			}
-			bytes, err := io.ReadAll(r)
-			if err != nil {
-				t.Fatalf("Failed to read ws bytes: %v", err)
-			}
-			receivedEvent, err := domain.UnmarshalFlowEvent(bytes)
-			if err != nil {
-				t.Fatalf("Failed to unmarshal flow event: %v", err)
-			}
-			t.Logf("Received event: %+v", receivedEvent)
-			receivedEvents = append(receivedEvents, receivedEvent)
+		// Set a read deadline for each message
+		err = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+		require.NoError(t, err, "Failed to set read deadline")
+
+		_, r, err := ws.NextReader()
+		if err != nil {
+			t.Fatalf("Failed to get next reader: %v", err)
 		}
+		msgBytes, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatalf("Failed to read ws bytes: %v", err)
+		}
+		receivedEvent, err := domain.UnmarshalFlowEvent(msgBytes)
+		if err != nil {
+			t.Fatalf("Failed to unmarshal flow event: %v", err)
+		}
+		t.Logf("Received event: %+v", receivedEvent)
+		receivedEvents = append(receivedEvents, receivedEvent)
+	}
+
+	// Check for errors from the event-producing goroutine
+	if eventErr := <-eventErrCh; eventErr != nil {
+		t.Fatalf("Failed to add flow event: %v", eventErr)
 	}
 
 	// Check for errors from the goroutine
@@ -2264,7 +2270,6 @@ func TestFlowEventsWebsocketHandler(t *testing.T) {
 func TestGetArchivedTasksHandler(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 
 	// Create and archive a task
@@ -2319,7 +2324,6 @@ func TestGetArchivedTasksHandler(t *testing.T) {
 
 func TestTaskChangesWebsocketHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	db := ctrl.service
 	ctx := context.Background()
@@ -2365,46 +2369,43 @@ func TestTaskChangesWebsocketHandler(t *testing.T) {
 		Status:      domain.TaskStatusComplete,
 		StreamId:    "stream_id_2",
 	}
+
+	// Channel to propagate errors from the task-persisting goroutine
 	persistErrCh := make(chan error, 1)
 	go func() {
 		time.Sleep(time.Millisecond)
-		persistErr := db.PersistTask(ctx, task2)
-		persistErrCh <- persistErr
-		close(persistErrCh)
+		persistErrCh <- db.PersistTask(ctx, task2)
 	}()
 
+	// Set a read deadline so the test doesn't hang indefinitely
+	err = ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+	require.NoError(t, err, "Failed to set read deadline")
+
 	// Verify if the task is streamed correctly
-	timeout := time.After(2 * time.Second)
 	var receivedTask domain.Task
-
-	select {
-	case <-timeout:
-		t.Fatalf("Timeout waiting for task")
-	default:
-		var response map[string]interface{}
-		err = ws.ReadJSON(&response)
-		if err != nil {
-			t.Fatalf("Failed to read task: %v", err)
-		}
-		t.Logf("Received response: %+v", response)
-
-		tasks, ok := response["tasks"].([]interface{})
-		assert.True(t, ok, "tasks is not an array")
-		assert.Equal(t, 1, len(tasks), "expected 1 task")
-
-		taskJSON, err := json.Marshal(tasks[0])
-		assert.NoError(t, err, "Failed to marshal task")
-		err = json.Unmarshal(taskJSON, &receivedTask)
-		assert.NoError(t, err, "Failed to unmarshal task")
-
-		lastTaskStreamId, ok := response["lastTaskStreamId"].(string)
-		assert.True(t, ok, "lastTaskStreamId is not a string")
-		assert.Equal(t, "stream_id_2", lastTaskStreamId, "unexpected lastTaskStreamId")
+	var response map[string]interface{}
+	err = ws.ReadJSON(&response)
+	if err != nil {
+		t.Fatalf("Failed to read task: %v", err)
 	}
+	t.Logf("Received response: %+v", response)
 
-	// Check for errors from the goroutine
+	tasks, ok := response["tasks"].([]interface{})
+	assert.True(t, ok, "tasks is not an array")
+	assert.Equal(t, 1, len(tasks), "expected 1 task")
+
+	taskJSON, err := json.Marshal(tasks[0])
+	assert.NoError(t, err, "Failed to marshal task")
+	err = json.Unmarshal(taskJSON, &receivedTask)
+	assert.NoError(t, err, "Failed to unmarshal task")
+
+	lastTaskStreamId, ok := response["lastTaskStreamId"].(string)
+	assert.True(t, ok, "lastTaskStreamId is not a string")
+	assert.Equal(t, "stream_id_2", lastTaskStreamId, "unexpected lastTaskStreamId")
+
+	// Check for errors from the task-persisting goroutine
 	if persistErr := <-persistErrCh; persistErr != nil {
-		assert.NoError(t, persistErr, "Persisting task 2 failed")
+		t.Fatalf("Failed to persist task 2: %v", persistErr)
 	}
 
 	// Assert if the task matches the expected structure/content
@@ -2416,13 +2417,10 @@ func TestTaskChangesWebsocketHandler(t *testing.T) {
 
 	// Wait for a short time to allow for cleanup
 	time.Sleep(100 * time.Millisecond)
-
-	// Additional assertions can be added here if needed
 }
 
 func TestUserActionHandler_BasicCases(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	t.Run("Successful go_next_step", func(t *testing.T) {
 		t.Parallel()
@@ -2540,7 +2538,6 @@ func TestUserActionHandler_BasicCases(t *testing.T) {
 
 func TestUserActionHandler_FlowNotFound(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	apiCtrl := NewMockController(t)
 	router := DefineRoutes(apiCtrl, TestAllowedOrigins())
 
@@ -2560,7 +2557,6 @@ func TestUserActionHandler_FlowNotFound(t *testing.T) {
 
 func TestUserActionHandler_SignalError(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	apiCtrl := NewMockController(t)
 	router := DefineRoutes(apiCtrl, TestAllowedOrigins())
 	signalErr := serviceerror.DeadlineExceeded{Message: "deadline exceeded"}
@@ -2598,7 +2594,6 @@ func TestUserActionHandler_SignalError(t *testing.T) {
 
 func TestGetProvidersHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
 		name                 string
@@ -2703,7 +2698,6 @@ func TestGetProvidersHandler(t *testing.T) {
 
 func TestGetModelsHandler(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	ctrl := NewMockController(t)
 	router := DefineRoutes(ctrl, TestAllowedOrigins())
 
@@ -2721,7 +2715,6 @@ func TestGetModelsHandler(t *testing.T) {
 
 func TestCreateTaskHandler_StartTimeout(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	mockTemporalClient := mocks.NewClient(t)
 	mockScheduleClient := mocks.NewScheduleClient(t)
@@ -2731,8 +2724,10 @@ func TestCreateTaskHandler_StartTimeout(t *testing.T) {
 	mockTemporalClient.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			ctx := args.Get(0).(context.Context)
+			timer := time.NewTimer(5 * time.Second)
+			defer timer.Stop()
 			select {
-			case <-time.After(500 * time.Millisecond):
+			case <-timer.C:
 			case <-ctx.Done():
 			}
 		}).
@@ -2742,12 +2737,13 @@ func TestCreateTaskHandler_StartTimeout(t *testing.T) {
 	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
 	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
 
+	taskTimeout := 500 * time.Millisecond
 	service := NewTestService(t)
 	ctrl := Controller{
 		temporalClient:   mockTemporalClient,
 		service:          service,
 		secretManager:    secret_manager.MockSecretManager{},
-		taskStartTimeout: 100 * time.Millisecond,
+		taskStartTimeout: taskTimeout,
 	}
 
 	workspaceId := "ws_" + ksuid.New().String()
@@ -2763,12 +2759,8 @@ func TestCreateTaskHandler_StartTimeout(t *testing.T) {
 	c.Request = httptest.NewRequest("POST", "/workspaces/"+workspaceId+"/tasks", bytes.NewBuffer(reqBody))
 	c.Params = []gin.Param{{Key: "workspaceId", Value: workspaceId}}
 
-	start := time.Now()
 	ctrl.CreateTaskHandler(c)
-	elapsed := time.Since(start)
 
-	// Should return within ~timeout, not wait for the full sleep
-	assert.Less(t, elapsed, 300*time.Millisecond, "should timeout quickly")
 	assert.Equal(t, http.StatusServiceUnavailable, resp.Code)
 
 	var response map[string]string
@@ -2787,7 +2779,6 @@ func TestCreateTaskHandler_StartTimeout(t *testing.T) {
 
 func TestCreateTaskHandler_StartError(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	mockTemporalClient := mocks.NewClient(t)
 	mockScheduleClient := mocks.NewScheduleClient(t)
@@ -2838,7 +2829,6 @@ func TestCreateTaskHandler_StartError(t *testing.T) {
 
 func TestCreateTaskHandler_StartSuccess(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	// Use default mock controller which has successful ExecuteWorkflow
 	ctrl := NewMockController(t)
@@ -2869,7 +2859,6 @@ func TestCreateTaskHandler_StartSuccess(t *testing.T) {
 
 func TestUpdateTaskHandler_StartTimeout(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	mockTemporalClient := mocks.NewClient(t)
 	mockScheduleClient := mocks.NewScheduleClient(t)
@@ -2879,8 +2868,10 @@ func TestUpdateTaskHandler_StartTimeout(t *testing.T) {
 	mockTemporalClient.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			ctx := args.Get(0).(context.Context)
+			timer := time.NewTimer(5 * time.Second)
+			defer timer.Stop()
 			select {
-			case <-time.After(500 * time.Millisecond):
+			case <-timer.C:
 			case <-ctx.Done():
 			}
 		}).
@@ -2890,12 +2881,13 @@ func TestUpdateTaskHandler_StartTimeout(t *testing.T) {
 	mockTemporalClient.On("ScheduleClient", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockScheduleClient, nil).Maybe()
 	mockScheduleClient.On("Create", mock.Anything, mock.Anything).Return(mockScheduleHandle, nil).Maybe()
 
+	taskTimeout := 500 * time.Millisecond
 	service := NewTestService(t)
 	ctrl := Controller{
 		temporalClient:   mockTemporalClient,
 		service:          service,
 		secretManager:    secret_manager.MockSecretManager{},
-		taskStartTimeout: 100 * time.Millisecond,
+		taskStartTimeout: taskTimeout,
 	}
 
 	// Create a task in drafting status first
@@ -2928,12 +2920,8 @@ func TestUpdateTaskHandler_StartTimeout(t *testing.T) {
 		{Key: "id", Value: task.Id},
 	}
 
-	start := time.Now()
 	ctrl.UpdateTaskHandler(c)
-	elapsed := time.Since(start)
 
-	// Should return within ~timeout, not wait for the full sleep
-	assert.Less(t, elapsed, 300*time.Millisecond, "should timeout quickly")
 	assert.Equal(t, http.StatusServiceUnavailable, resp.Code)
 
 	// Verify task was reverted to drafting
@@ -2947,7 +2935,6 @@ func TestUpdateTaskHandler_StartTimeout(t *testing.T) {
 
 func TestUpdateTaskHandler_StartError(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	mockTemporalClient := mocks.NewClient(t)
 	mockScheduleClient := mocks.NewScheduleClient(t)
