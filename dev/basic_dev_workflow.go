@@ -758,10 +758,9 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		}
 	}
 
-	// After successful merge, cleanup the worktree
+	// After successful merge, cleanup the worktree and/or DevPod workspace
 	if !mergeResult.HasConflicts && dCtx.Worktree != nil {
-		devpodCleanupVersion := workflow.GetVersion(dCtx, "devpod-cleanup-on-merge", workflow.DefaultVersion, 1)
-		if devpodCleanupVersion >= 1 && dCtx.EnvContainer.Env.GetType() == env.EnvTypeDevPod {
+		if dCtx.EnvContainer.Env.GetType() == env.EnvTypeDevPod {
 			err := workflow.ExecuteActivity(dCtx, env.DevPodDeleteActivity, dCtx.EnvContainer.Env.GetWorkingDirectory()).Get(dCtx, nil)
 			if err != nil {
 				workflow.GetLogger(dCtx).Error("Failed to delete DevPod workspace", "error", err)
@@ -778,6 +777,14 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		if err != nil {
 			// Log the error but don't fail the workflow since merge was successful
 			workflow.GetLogger(dCtx).Error("Failed to cleanup worktree", "error", err)
+		}
+	}
+
+	// Stop in-place DevPod workspace after successful merge
+	if !mergeResult.HasConflicts && dCtx.Worktree == nil && dCtx.EnvContainer.Env.GetType() == env.EnvTypeDevPod {
+		err := workflow.ExecuteActivity(dCtx, env.DevPodStopActivity, dCtx.EnvContainer.Env.GetWorkingDirectory()).Get(dCtx, nil)
+		if err != nil {
+			workflow.GetLogger(dCtx).Error("Failed to stop DevPod workspace", "error", err)
 		}
 	}
 
