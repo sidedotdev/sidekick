@@ -882,13 +882,6 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 
 	// After successful merge, cleanup the worktree and/or DevPod workspace
 	if !mergeResult.HasConflicts && dCtx.Worktree != nil {
-		if dCtx.EnvContainer.Env.GetType() == env.EnvTypeDevPod {
-			err := workflow.ExecuteActivity(dCtx, env.DevPodDeleteActivity, dCtx.EnvContainer.Env.GetWorkingDirectory()).Get(dCtx, nil)
-			if err != nil {
-				workflow.GetLogger(dCtx).Error("Failed to delete DevPod workspace", "error", err)
-			}
-		}
-
 		actionCtx := dCtx.NewActionContext("cleanup_worktree")
 		v := workflow.GetVersion(dCtx, "hide-cleanup-worktree", workflow.DefaultVersion, 1)
 		trackOptions := flow_action.TrackOptions{FailuresOnly: v >= 1}
@@ -900,16 +893,22 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 			return nil, future.Get(trackedActionCtx, nil)
 		})
 		if err != nil {
-			// Log the error but don't fail the workflow since merge was successful
 			workflow.GetLogger(dCtx).Error("Failed to cleanup worktree", "error", err)
 		}
 	}
 
-	// Stop in-place DevPod workspace after successful merge
-	if !mergeResult.HasConflicts && dCtx.Worktree == nil && dCtx.EnvContainer.Env.GetType() == env.EnvTypeDevPod {
-		err := workflow.ExecuteActivity(dCtx, env.DevPodStopActivity, dCtx.EnvContainer.Env.GetWorkingDirectory()).Get(dCtx, nil)
-		if err != nil {
-			workflow.GetLogger(dCtx).Error("Failed to stop DevPod workspace", "error", err)
+	if !mergeResult.HasConflicts && dCtx.EnvContainer.Env.GetType() == env.EnvTypeDevPod {
+		devPodEnv := dCtx.EnvContainer.Env.(*env.DevPodEnv)
+		if dCtx.Worktree != nil {
+			err := workflow.ExecuteActivity(dCtx, env.DevPodDeleteActivity, devPodEnv.WorkspaceName).Get(dCtx, nil)
+			if err != nil {
+				workflow.GetLogger(dCtx).Error("Failed to delete DevPod workspace", "error", err)
+			}
+		} else {
+			err := workflow.ExecuteActivity(dCtx, env.DevPodStopActivity, devPodEnv.WorkspaceName).Get(dCtx, nil)
+			if err != nil {
+				workflow.GetLogger(dCtx).Error("Failed to stop DevPod workspace", "error", err)
+			}
 		}
 	}
 
