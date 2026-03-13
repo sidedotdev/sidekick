@@ -64,6 +64,8 @@ func GetGitDiff(dCtx DevContext, baseBranch string, ignoreWhitespace bool) (stri
 }
 
 func getGitDiffWithContext(dCtx DevContext, baseBranch string, ignoreWhitespace bool, contextLines *int) (string, error) {
+	v := workflow.GetVersion(dCtx, "three-dot-prefer-smaller", workflow.DefaultVersion, 1)
+
 	var gitDiff string
 	err := workflow.ExecuteActivity(dCtx, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
 		Staged:           true,
@@ -72,6 +74,23 @@ func getGitDiffWithContext(dCtx DevContext, baseBranch string, ignoreWhitespace 
 		IgnoreWhitespace: ignoreWhitespace,
 		ContextLines:     contextLines,
 	}).Get(dCtx, &gitDiff)
+	if err != nil {
+		return "", err
+	}
+
+	if v >= 1 {
+		var directDiff string
+		err = workflow.ExecuteActivity(dCtx, git.GitDiffActivity, *dCtx.EnvContainer, git.GitDiffParams{
+			Staged:           true,
+			BaseRef:          baseBranch,
+			IgnoreWhitespace: ignoreWhitespace,
+			ContextLines:     contextLines,
+		}).Get(dCtx, &directDiff)
+		if err == nil && len(directDiff) < len(gitDiff) {
+			return directDiff, nil
+		}
+	}
+
 	return gitDiff, err
 }
 

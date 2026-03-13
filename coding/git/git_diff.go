@@ -143,6 +143,7 @@ func stagedAndOrThreeDotDiff(ctx context.Context, envContainer env.EnvContainer,
 	if gitDiffRunOutput.ExitStatus != 0 && gitDiffRunOutput.ExitStatus != 1 {
 		return "", fmt.Errorf("git diff command failed with exit status %d: %s", gitDiffRunOutput.ExitStatus, gitDiffRunOutput.Stderr)
 	}
+
 	return gitDiffRunOutput.Stdout, nil
 }
 
