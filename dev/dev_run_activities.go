@@ -3,7 +3,6 @@ package dev
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -236,26 +235,25 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 	}
 
 	// Idempotency: check for a previously started process from a crashed activity
-	// execution. The instance metadata file is written after the process starts
-	// but before the activity returns, so if the worker crashed in between,
-	// we can recover the running process instead of starting a duplicate.
+	// execution. The instance file is written by the wrapper process before the
+	// real command runs, so if the worker crashed at any point after cmd.Start(),
+	// we can recover the instance. Return it regardless of alive/dead status so
+	// MonitorDevRun can handle final output and cleanup.
 	instanceFilePath := devRunInstanceFilePath(input.Context.FlowId, input.CommandId)
 	if recovered, err := recoverInstanceFromFile(instanceFilePath); err == nil && recovered != nil {
-		if IsSessionAlive(recovered.SessionId) {
-			log.Info().
-				Str("devRunId", recovered.DevRunId).
-				Str("commandId", input.CommandId).
-				Int("sessionId", recovered.SessionId).
-				Msg("Recovered running Dev Run process from previous activity attempt")
+		alive := IsSessionAlive(recovered.SessionId)
+		log.Info().
+			Str("devRunId", recovered.DevRunId).
+			Str("commandId", input.CommandId).
+			Int("sessionId", recovered.SessionId).
+			Bool("alive", alive).
+			Msg("Recovered Dev Run instance from previous activity attempt")
 
-			return StartDevRunOutput{
-				DevRunId: recovered.DevRunId,
-				Started:  true,
-				Instance: recovered,
-			}, nil
-		}
-		// Process from previous attempt is dead, clean up and start fresh
-		os.Remove(instanceFilePath)
+		return StartDevRunOutput{
+			DevRunId: recovered.DevRunId,
+			Started:  true,
+			Instance: recovered,
+		}, nil
 	}
 
 	// Generate a new devRunId
@@ -281,7 +279,7 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 		}
 	}
 
-	proc, err := a.startCommand(ctx, input.Context, cmdConfig.Command, workingDir, envVars, 0)
+	proc, err := a.startCommand(ctx, input.Context, cmdConfig.Command, workingDir, envVars, 0, instanceFilePath)
 	if err != nil {
 		// Clean up any processes we started with proper timeout escalation
 		timeout := cmdConfig.StopTimeoutSeconds
@@ -299,63 +297,11 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 	run.processes = append(run.processes, proc)
 	run.mu.Unlock()
 
-	// Wait briefly to detect immediate failures (e.g., command not found, immediate exit)
-	run.mu.Lock()
-	proc = run.processes[0]
-	run.mu.Unlock()
-
-	immediateExit := false
-	select {
-	case <-proc.doneCh:
-		immediateExit = true
-	case <-time.After(3 * time.Second):
-		// Process still running after grace period, good
-	}
-
-	if immediateExit {
-		// Process already exited - check if it was an error
-		exitCode := proc.exitCode.Load()
-		signal := proc.signal.Load()
-		signalStr, _ := signal.(string)
-
-		if signalStr != "" || (exitCode != nil && *exitCode != 0) {
-			// Clean up remaining processes
-			timeout := cmdConfig.StopTimeoutSeconds
-			if timeout <= 0 {
-				timeout = defaultStopTimeoutSeconds
-			}
-			a.terminateActiveRun(run, timeout)
-
-			errMsg := "command exited immediately"
-			if exitCode != nil {
-				errMsg = fmt.Sprintf("command exited immediately with status %d", *exitCode)
-			} else if signalStr != "" {
-				errMsg = fmt.Sprintf("command terminated by signal %s", signalStr)
-			}
-
-			a.emitEndedEvent(ctx, input.Context, exitCode, signalStr, errMsg)
-			return StartDevRunOutput{}, errors.New(errMsg)
-		}
-	}
-
-	// Get session ID and output file path from the first process
-	run.mu.Lock()
-	sessionId := run.processes[0].sessionId
-	outputFilePath := run.processes[0].outputFilePath
-	run.mu.Unlock()
-
 	instance := &DevRunInstance{
 		DevRunId:       devRunId,
-		SessionId:      sessionId,
-		OutputFilePath: outputFilePath,
+		SessionId:      proc.sessionId,
+		OutputFilePath: proc.outputFilePath,
 		CommandId:      input.CommandId,
-	}
-
-	// Persist instance metadata to disk for idempotency across activity retries.
-	// If the worker crashes after this point, the next attempt will find this
-	// file and reconnect to the already-running process.
-	if err := writeInstanceFile(instanceFilePath, instance); err != nil {
-		log.Warn().Err(err).Msg("Failed to write dev run instance file for idempotency")
 	}
 
 	return StartDevRunOutput{
@@ -372,14 +318,27 @@ func (a *DevRunActivities) startCommand(
 	workingDir string,
 	envVars []string,
 	cmdIndex int,
+	instanceFilePath string,
 ) (*runningProcess, error) {
-	// Use exec.Command (not CommandContext) so the child process survives
-	// activity/worker restarts. Lifecycle is managed explicitly: workflow
-	// cleanup (stopActiveDevRun, handleFlowCancel) calls StopDevRun which
-	// terminates processes via session-level signals (SIGINT→SIGKILL).
-	cmd := exec.Command("sh", "-c", command)
+	// Use a wrapper script that writes the instance file (using $$ as
+	// sessionId) before exec'ing into the real command. This ensures the
+	// instance file exists on disk before the real command runs, eliminating
+	// the race between process start and file creation that caused recovery
+	// failures when the worker was killed by the dev run command itself.
+	wrapperScript := `printf '{"devRunId":"%s","sessionId":%d,"outputFilePath":"%s","commandId":"%s"}' "$_SK_DEVRUN_ID" $$ "$_SK_OUTPUT" "$_SK_CMDID" > "$_SK_INSTANCE_PATH" && exec sh -c "$_SK_CMD"`
+
+	cmd := exec.Command("sh", "-c", wrapperScript)
 	cmd.Dir = workingDir
+
+	outputFilePath := fmt.Sprintf("/tmp/sidekick-devrun-%s.log", devRunCtx.DevRunId)
 	cmd.Env = append(os.Environ(), envVars...)
+	cmd.Env = append(cmd.Env,
+		"_SK_CMD="+command,
+		"_SK_INSTANCE_PATH="+instanceFilePath,
+		"_SK_DEVRUN_ID="+devRunCtx.DevRunId,
+		"_SK_OUTPUT="+outputFilePath,
+		"_SK_CMDID="+devRunCtx.CommandId,
+	)
 
 	// Create a new session so processes survive worker restarts
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -387,7 +346,6 @@ func (a *DevRunActivities) startCommand(
 	}
 
 	// Create output file for capturing stdout/stderr
-	outputFilePath := fmt.Sprintf("/tmp/sidekick-devrun-%s.log", devRunCtx.DevRunId)
 	outputFile, err := os.Create(outputFilePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create output file: %w", err)

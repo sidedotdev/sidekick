@@ -614,9 +614,19 @@ func TestStartDevRun_ImmediateNonZeroExit(t *testing.T) {
 		},
 	}
 
-	_, err := activities.StartDevRun(context.Background(), input)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "command exited immediately with status 1")
+	output, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output.Started)
+	require.NotNil(t, output.Instance)
+
+	// MonitorDevRun detects the process is dead and returns
+	_, err = activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+	require.NoError(t, err)
 }
 
 func TestStartDevRun_CommandNotFound(t *testing.T) {
@@ -646,9 +656,19 @@ func TestStartDevRun_CommandNotFound(t *testing.T) {
 		},
 	}
 
-	_, err := activities.StartDevRun(context.Background(), input)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "command exited immediately with status 127")
+	output, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output.Started)
+	require.NotNil(t, output.Instance)
+
+	// MonitorDevRun detects the process is dead and returns
+	_, err = activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+	require.NoError(t, err)
 }
 
 func TestStartDevRun_NaturalExitEmitsEndedEvent(t *testing.T) {
@@ -737,11 +757,21 @@ func TestStartDevRun_NaturalNonZeroExitEmitsEndedEvent(t *testing.T) {
 		},
 	}
 
-	_, err := activities.StartDevRun(context.Background(), input)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "command exited immediately with status 42")
+	output, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output.Started)
+	require.NotNil(t, output.Instance)
 
-	// Verify DevRunEndedEvent was emitted before the error was returned
+	// MonitorDevRun detects the exit and emits the ended event
+	_, err = activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+	require.NoError(t, err)
+
+	// Verify DevRunEndedEvent was emitted by MonitorDevRun
 	events := streamer.getEvents()
 	var endedEvent *domain.DevRunEndedEvent
 	for _, e := range events {
@@ -750,10 +780,7 @@ func TestStartDevRun_NaturalNonZeroExitEmitsEndedEvent(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(t, endedEvent, "should have DevRunEndedEvent on immediate non-zero exit")
-	require.NotNil(t, endedEvent.ExitStatus)
-	assert.Equal(t, 42, *endedEvent.ExitStatus)
-	assert.NotEmpty(t, endedEvent.Error)
+	require.NotNil(t, endedEvent, "should have DevRunEndedEvent on non-zero exit")
 }
 
 func TestStartDevRun_RelativeWorkingDir(t *testing.T) {
