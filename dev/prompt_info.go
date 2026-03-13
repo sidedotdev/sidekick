@@ -149,10 +149,11 @@ func (p InitialPlanningInfo) GetType() string {
 }
 
 type InitialDevStepInfo struct {
-	CodeContext   string
-	Requirements  string
-	PlanExecution DevPlanExecution
-	Step          DevStep
+	CodeContext        string
+	Requirements       string
+	PlanExecution      DevPlanExecution
+	Step               DevStep
+	EnvironmentContext string
 }
 
 // Implement the PromptInfo interface for InitialDevStepInfo

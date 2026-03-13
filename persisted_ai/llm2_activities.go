@@ -254,7 +254,7 @@ func getLlm2Provider(config common.ModelConfig, providers []common.ModelProvider
 				}, nil
 			}
 		}
-		return llm2.AnthropicProvider{}, nil
+		return llm2.AnthropicProvider{AuthType: authType}, nil
 	case llm.ToolChatProviderType("anthropic_compatible"):
 		for _, p := range providers {
 			if p.Type == string(providerType) && p.Name == config.Provider {

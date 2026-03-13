@@ -607,14 +607,12 @@ func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
 	_, err = os.Stat(filePath)
 	assert.True(t, os.IsNotExist(err), "File should be deleted")
 
-	// Verify the deletion was staged in the git index
-	statusCmd := exec.Command("git", "diff", "--cached", "--name-status")
-	statusCmd.Dir = tmpDir
-	var statusOut bytes.Buffer
-	statusCmd.Stdout = &statusOut
-	err = statusCmd.Run()
+	// Verify the deletion was staged by checking git diff --cached
+	diffCmd := exec.Command("git", "diff", "--cached", "--name-status")
+	diffCmd.Dir = tmpDir
+	output, err := diffCmd.Output()
 	require.NoError(t, err)
-	assert.Contains(t, statusOut.String(), "D\ttest_file.txt", "File deletion should be staged")
+	assert.Contains(t, string(output), "D\ttest_file.txt", "File deletion should be staged")
 }
 
 func TestGetUpdatedContents(t *testing.T) {

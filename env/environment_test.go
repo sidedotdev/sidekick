@@ -253,3 +253,25 @@ func TestNewLocalGitWorktreeActivity_Error(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotEmpty(t, jsonBytes)
 }
+
+func TestGetEnvironmentInfoActivity(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	params := LocalEnvParams{
+		RepoDir: tempDir,
+	}
+
+	localEnv, err := NewLocalEnv(ctx, params)
+	require.NoError(t, err)
+
+	output, err := GetEnvironmentInfoActivity(ctx, GetEnvironmentInfoInput{
+		EnvContainer: EnvContainer{Env: localEnv},
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, output.OS)
+	assert.NotEmpty(t, output.Arch)
+	formatted := output.FormatEnvironmentContext()
+	assert.Contains(t, formatted, "OS:")
+	assert.Contains(t, formatted, "Arch:")
+}

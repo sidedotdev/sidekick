@@ -144,7 +144,7 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 		}
 		response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, toolNameMapping, &determineCriteriaFulfillmentTool)
 		if err != nil {
-			return CriteriaFulfillment{}, fmt.Errorf("failed to force tool call: %v", err)
+			return CriteriaFulfillment{}, fmt.Errorf("failed to force tool call: %w", err)
 		}
 		toolCalls := response.GetMessage().GetToolCalls()
 		toolCall := toolCalls[0]
