@@ -128,17 +128,19 @@ editLoop:
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return fmt.Errorf("failed to make user request when paused: %v", err)
 		} else if response != nil && response.Content != "" {
-			// If promptInfo is an initial type, add it to chat history first before
-			// overwriting with pause feedback. This ensures the initial instructions
-			// are in the history before the pause feedback.
 			_, editCodeSubflowHasPlan := promptInfo.(InitialDevStepInfo)
-			switch promptInfo.(type) {
+			switch info := promptInfo.(type) {
 			case InitialCodeInfo, InitialDevStepInfo:
+				// Flush initial instructions into chat history before replacing with pause feedback
 				if _, err := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, IsDoneRequiredProtocol(dCtx), editCodeSubflowHasPlan); err != nil {
 					return err
 				}
+				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
+			case FeedbackInfo:
+				promptInfo = FeedbackInfo{Feedback: info.Feedback + "\n\n" + response.Content, Type: FeedbackTypePause}
+			default:
+				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			}
-			promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 		}
 
 		v := workflow.GetVersion(dCtx, "no-max-unless-disabled-human", workflow.DefaultVersion, 1)
@@ -268,26 +270,29 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return nil, fmt.Errorf("failed to make user request when paused: %v", err)
 		} else if response != nil && response.Content != "" {
-			// If promptInfo is an initial type, add it to chat history first before
-			// overwriting with pause feedback. This ensures the initial instructions
-			// are in the history before the pause feedback.
-			switch promptInfo.(type) {
+			switch info := promptInfo.(type) {
 			case InitialCodeInfo, InitialDevStepInfo:
+				// Flush initial instructions into chat history before replacing with pause feedback
 				if _, err := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired, hasPlan); err != nil {
 					return nil, err
 				}
+				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
+			case FeedbackInfo:
+				promptInfo = FeedbackInfo{Feedback: info.Feedback + "\n\n" + response.Content, Type: FeedbackTypePause}
+			default:
+				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			}
-			promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			attemptsSinceLastEditBlockOrFeedback = 0
 		}
 
-		// Inject proactive system message based on tool-call thresholds
+		// Inject proactive system message based on tool-call thresholds, merging
+		// with any existing pending feedback to avoid overwriting it.
 		if msg, ok := ThresholdMessageForCounter(feedbackIterations, attemptsSinceLastEditBlockOrFeedback); ok {
-			//*chatHistory = append(*chatHistory, llm.ChatMessage{
-			//	Role:    "system",
-			//	Content: msg,
-			//})
-			promptInfo = FeedbackInfo{Feedback: msg, Type: FeedbackTypeSystemError}
+			if existing, isFeedback := promptInfo.(FeedbackInfo); isFeedback {
+				promptInfo = FeedbackInfo{Feedback: existing.Feedback + "\n\n" + msg, Type: existing.Type}
+			} else {
+				promptInfo = FeedbackInfo{Feedback: msg, Type: FeedbackTypeSystemError}
+			}
 		}
 
 		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
@@ -313,6 +318,16 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 				return nil, fmt.Errorf("failed to get user feedback: %v", err)
 			}
 			attemptsSinceLastEditBlockOrFeedback = 0
+		}
+
+		// Flush any pending FeedbackInfo to chat history before building LLM input.
+		// This replaces buildAuthorEditBlockInput's handling of FeedbackInfo,
+		// producing the same single AppendChatHistory activity.
+		if feedbackInfo, ok := promptInfo.(FeedbackInfo); ok {
+			if err := appendEditFeedback(dCtx.ExecContext, chatHistory, feedbackInfo.Feedback, feedbackInfo.Type); err != nil {
+				return nil, err
+			}
+			promptInfo = SkipInfo{}
 		}
 
 		// NOTE: this also ensures the tool call response is added to chat history
@@ -443,7 +458,6 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		if len(currentExtractedBlocks) > 0 && applyImmediately {
 			if applyEditBlocksError != nil {
 				feedback := fmt.Sprintf("Error while applying edit blocks: %v", applyEditBlocksError)
-
 				promptInfo = FeedbackInfo{Feedback: feedback, Type: FeedbackTypeSystemError}
 				attemptCount++
 				continue
@@ -474,8 +488,9 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 				// New version with flag enabled: require done tool to terminate
 				if len(currentExtractedBlocks) == 0 {
 					// No edit blocks and no tool calls - provide feedback
+					noActionFeedback := fmt.Sprintf("No edit blocks or tool calls were provided. If you were trying to talk to the user, you must use the %s tool to ensure the user sees your message. Otherwise, please provide edit blocks, use tools to gather more information, or call the `done` tool if you are certain that no futher changes or actions are required and you don't think the user should read and respond to your previous message. IMPORTANT NOTE: the user CAN NOT SEE your previous message, and will never see it if you call the `done` tool.", getHelpOrInputTool.Name)
 					promptInfo = FeedbackInfo{
-						Feedback: fmt.Sprintf("No edit blocks or tool calls were provided. If you were trying to talk to the user, you must use the %s tool to ensure the user sees your message. Otherwise, please provide edit blocks, use tools to gather more information, or call the `done` tool if you are certain that no futher changes or actions are required and you don't think the user should read and respond to your previous message. IMPORTANT NOTE: the user CAN NOT SEE your previous message, and will never see it if you call the `done` tool.", getHelpOrInputTool.Name),
+						Feedback: noActionFeedback,
 						Type:     FeedbackTypeSystemError,
 					}
 				} else {
@@ -500,6 +515,20 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 func IsDoneRequiredProtocol(ctx workflow.Context) bool {
 	doneRequiredVersion := workflow.GetVersion(ctx, "done-required-protocol", workflow.DefaultVersion, 1)
 	return doneRequiredVersion >= 1 && !fflag.IsEnabled(ctx, fflag.DisableDoneCoding)
+}
+
+// appendEditFeedback renders feedback and appends it directly to chat history.
+func appendEditFeedback(eCtx flow_action.ExecContext, chatHistory *persisted_ai.ChatHistoryContainer, feedback string, feedbackType string) error {
+	content := renderAuthorEditBlockFeedbackPrompt(feedback, feedbackType)
+	contextType := ""
+	if feedbackType == FeedbackTypeApplyError {
+		contextType = ContextTypeEditBlockReport
+	}
+	return AppendChatHistory(eCtx, chatHistory, llm.ChatMessage{
+		Role:        llm.ChatMessageRoleUser,
+		Content:     content,
+		ContextType: contextType,
+	})
 }
 
 // buildAuthorEditBlockInput builds the LLM options for authoring edit blocks.
