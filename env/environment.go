@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -252,6 +253,10 @@ type EnvRunCommandActivityInput struct {
 
 type EnvRunCommandActivityOutput = EnvRunCommandOutput
 
+// maxActivityOutputBytes caps individual stdout/stderr fields to stay within
+// Temporal's per-event payload size limit (~2MB).
+const maxActivityOutputBytes = 2 * 1024 * 1024
+
 // EnvRunCommandActivity runs a command in the environment contained in the provided EnvContainer.
 func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
 	type result struct {
@@ -276,6 +281,10 @@ func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput
 	for {
 		select {
 		case res := <-resultCh:
+			if activity.IsActivity(ctx) {
+				res.output.Stdout = truncateMiddle(res.output.Stdout, maxActivityOutputBytes)
+				res.output.Stderr = truncateMiddle(res.output.Stderr, maxActivityOutputBytes)
+			}
 			return res.output, res.err
 		case <-ticker.C:
 			if activity.IsActivity(ctx) {
@@ -285,4 +294,18 @@ func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput
 			return EnvRunCommandActivityOutput{}, ctx.Err()
 		}
 	}
+}
+
+func truncateMiddle(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	removed := len(s) - maxBytes
+	marker := "\n\n[... truncated " + strconv.Itoa(removed) + " bytes from the middle ...]\n\n"
+	available := maxBytes - 2*len(marker)
+	if available <= 0 {
+		return s[:maxBytes]
+	}
+	half := available / 2
+	return s[:half] + marker + s[len(s)-half:] + marker
 }
