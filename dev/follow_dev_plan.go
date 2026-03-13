@@ -9,7 +9,7 @@ import (
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/flow_action"
-	"sidekick/llm"
+	"sidekick/persisted_ai"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -162,7 +162,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 
 	// TODO store chat history in a way that can be referred to by id, and pass
 	// id to the activities to avoid bloating temporal db
-	chatHistory := &[]llm.ChatMessage{}
+	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 
 	modelConfigs, _ := dCtx.LLMConfig.GetModelsOrDefault(common.CodingKey)
 	modelAttemptCount := 0
@@ -188,13 +188,26 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		}
 	}
 
+	environmentContext := getEnvironmentContext()
+	v := workflow.GetVersion(dCtx, "env-context-from-activity-step", workflow.DefaultVersion, 1)
+	if v >= 1 && dCtx.EnvContainer != nil {
+		var output env.GetEnvironmentInfoOutput
+		actErr := workflow.ExecuteActivity(dCtx, env.GetEnvironmentInfoActivity, env.GetEnvironmentInfoInput{
+			EnvContainer: *dCtx.EnvContainer,
+		}).Get(dCtx, &output)
+		if actErr == nil && output.OS != "" {
+			environmentContext = output.FormatEnvironmentContext()
+		}
+	}
+
 	// TODO decide how to set the dev step info based on the step type, eg
 	// perhaps different structs per step type
 	initialPromptInfo := InitialDevStepInfo{
-		CodeContext:   codeContext,
-		Requirements:  requirements,
-		PlanExecution: planExecution,
-		Step:          step,
+		CodeContext:        codeContext,
+		Requirements:       requirements,
+		PlanExecution:      planExecution,
+		Step:               step,
+		EnvironmentContext: environmentContext,
 	}
 
 	attemptCount := 0
@@ -209,7 +222,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		if modelIndex < len(modelConfigs) {
 			// TODO /gen capture the git checkout head all in a "Revert Edits" flow action
 			promptInfo = initialPromptInfo
-			chatHistory = &[]llm.ChatMessage{}
+			chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 			err := git.GitCheckoutHeadAll(dCtx.ExecContext)
 			if err != nil {
 				return fmt.Errorf("failed to reset working directory via git checkout: %v", err)
@@ -231,7 +244,7 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		// get_help_or_input tool recently already, i.e. keep track of count
 		// of attempts since last helped and use that here instead
 		// TODO figure out best way to do this when human is in the loop
-		if modelAttemptCount > 0 && modelAttemptCount%autoIterations == 0 && len(*chatHistory) > 0 {
+		if modelAttemptCount > 0 && modelAttemptCount%autoIterations == 0 && chatHistory.Len() > 0 {
 			guidanceContext := "The system looped 2 times attempting to complete this step and failed, so the LLM probably needs some help. Please provide some guidance for the next step based on the above log. Look at the latest test result and git diff for an idea of what's going wrong."
 
 			// get the latest git diff, since it could be different from the
@@ -258,7 +271,9 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 				// TODO don't assume we're authoring edit blocks (when dev plan
 				// step types expand in the future)
 				content := renderAuthorEditBlockFeedbackPrompt(info.Feedback, info.Type)
-				*chatHistory = append(*chatHistory, llm.ChatMessage{Role: "user", Content: content})
+				if err := AppendChatHistory(dCtx.ExecContext, chatHistory, common.ChatMessage{Role: "user", Content: content}); err != nil {
+					return result, err
+				}
 			}
 
 			feedbackInfo, err := GetUserFeedback(dCtx, promptInfo, guidanceContext, chatHistory, requestParams)
@@ -301,6 +316,15 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		if executeNormalStepEvaluation {
 			result, err = checkIfDevStepCompleted(dCtx, requirements, step, planExecution)
 			if err != nil {
+				if errors.Is(err, flow_action.PendingActionError) {
+					pending := dCtx.ExecContext.GlobalState.GetPendingUserAction()
+					if pending != nil && *pending == flow_action.UserActionGoNext {
+						dCtx.ExecContext.GlobalState.ConsumePendingUserAction()
+						result.Summary = fmt.Sprintf("The user forcibly ended step %s's execution to go to the next step. Assume that it has been completed, though likely in a manner slightly different from what was originally specified. Take any changes in stride, but ask for clarifications if necessary.", step.StepNumber)
+						result.Successful = true
+						break
+					}
+				}
 				return result, fmt.Errorf("failed to check if requirements are fulfilled: %w", err)
 			}
 		} else {
@@ -401,7 +425,7 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 	return result, nil
 }
 
-func performStep(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo, step DevStep, planExec DevPlanExecution) error {
+func performStep(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, step DevStep, planExec DevPlanExecution) error {
 	v := workflow.GetVersion(dCtx, "performStep", workflow.DefaultVersion, 1)
 	if v == workflow.DefaultVersion {
 		return RunSubflowWithoutResult(dCtx, "perform_step", "Perform Step", func(_ domain.Subflow) error {
@@ -414,7 +438,7 @@ func performStep(dCtx DevContext, codingModelConfig common.ModelConfig, contextS
 	}
 }
 
-func performStepSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo, step DevStep, planExec DevPlanExecution) error {
+func performStepSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, step DevStep, planExec DevPlanExecution) error {
 	switch step.Type {
 	case "edit":
 		return EditCode(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo)

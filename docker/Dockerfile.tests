@@ -1,0 +1,58 @@
+FROM golang:1.24.0-alpine
+
+# Install build dependencies
+RUN apk add --no-cache \
+    build-base \
+    cmake \
+    git \
+    ripgrep
+
+# Build USearch library
+WORKDIR /tmp
+RUN git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-cloud/usearch.git && \
+    cd usearch && \
+    cmake -D CMAKE_BUILD_TYPE=Release \
+          -D USEARCH_USE_FP16LIB=1 \
+          -D USEARCH_USE_OPENMP=0 \
+          -D USEARCH_USE_SIMSIMD=0 \
+          -D USEARCH_USE_JEMALLOC=0 \
+          -D USEARCH_BUILD_TEST_CPP=0 \
+          -D USEARCH_BUILD_BENCH_CPP=0 \
+          -D USEARCH_BUILD_LIB_C=1 \
+          -D USEARCH_BUILD_TEST_C=0 \
+          -D USEARCH_BUILD_SQLITE=0 \
+          -B build_release && \
+    cmake --build build_release --config Release
+
+# Copy USearch library and headers to standard locations
+RUN mkdir -p /usr/local/lib /usr/local/include && \
+    cp /tmp/usearch/build_release/libusearch_static_c.a /usr/local/lib/libusearch_c.a && \
+    cp /tmp/usearch/c/usearch.h /usr/local/include/usearch.h
+
+# Set up working directory
+WORKDIR /app
+
+# Configure git for tests
+RUN git config --global user.email "test@test.com" && \
+    git config --global user.name "Test User" && \
+    git config --global init.defaultBranch main
+
+# Set CGO environment variables
+ENV CGO_ENABLED=1
+ENV CGO_LDFLAGS="-L/usr/local/lib /usr/local/lib/libusearch_c.a -lstdc++ -lm"
+
+# Copy go.mod and go.sum first for better caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy the rest of the source code
+COPY . .
+
+# Create placeholder frontend dist for tests (embed pattern requires it)
+RUN mkdir -p frontend/dist && touch frontend/dist/.gitkeep
+
+# Install gopls for LSP tests (v0.17.1 is compatible with Go 1.24)
+RUN go install golang.org/x/tools/gopls@v0.17.1
+
+# Default command runs tests
+CMD ["go", "test", "-timeout", "5m", "./..."]

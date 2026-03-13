@@ -12,6 +12,7 @@ import (
 	"sidekick/utils"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/suite"
 	tlog "go.temporal.io/sdk/log"
@@ -69,6 +70,7 @@ func (s *SearchRepositoryE2ETestSuite) ResetWorkflowEnvironment() {
 
 	// Create a new TestWorkflowEnvironment for each test
 	s.env = s.NewTestWorkflowEnvironment()
+	s.env.SetTestTimeout(30 * time.Second)
 
 	s.env.RegisterActivity(env.EnvRunCommandActivity)
 	s.wrapperWorkflow = func(ctx workflow.Context, envContainer env.EnvContainer, input SearchRepositoryInput) (string, error) {
@@ -202,7 +204,7 @@ func (s *SearchRepositoryE2ETestSuite) TestTruncatedLongSearchOutput() {
 
 func (s *SearchRepositoryE2ETestSuite) TestRefusalForOverlyLongSearchOutput() {
 	// Create a large file with repeating content
-	largerContent := strings.Repeat("line\n", 1000)
+	largerContent := strings.Repeat("line\n", refuseAtSearchOutputLength/len("line\n")+1)
 	s.createTestFile("larger_file.txt", largerContent)
 
 	// Test case: Output is too long and refused

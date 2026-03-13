@@ -5,12 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"runtime"
 	"sidekick/coding/git"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/env"
+	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
+	"sidekick/llm2"
+	"sidekick/persisted_ai"
 	"sidekick/srv"
 	"sidekick/utils"
 	"sort"
@@ -32,7 +37,7 @@ var ErrMaxAttemptsReached = fmt.Errorf("reached max attempts")
 var ErrExtractEditBlocks = fmt.Errorf("failed to extract edit blocks")
 
 // edits code in the envContainer based on code context + requirements
-func EditCode(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) error {
+func EditCode(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) error {
 	return RunSubflowWithoutResult(dCtx, "edit_code", "Edit Code", func(_ domain.Subflow) error {
 		return editCodeSubflow(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo)
 	})
@@ -95,9 +100,21 @@ func applyEditBlocksAndReport(dCtx DevContext, editBlocks []EditBlock) (applyEdi
 	}, nil
 }
 
-func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) error {
+func editCodeSubflow(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) error {
 	var err error
 	var editBlocks []EditBlock
+
+	environmentContext := getEnvironmentContext()
+	v := workflow.GetVersion(dCtx, "env-context-from-activity", workflow.DefaultVersion, 1)
+	if v >= 1 && dCtx.EnvContainer != nil {
+		var output env.GetEnvironmentInfoOutput
+		actErr := workflow.ExecuteActivity(dCtx, env.GetEnvironmentInfoActivity, env.GetEnvironmentInfoInput{
+			EnvContainer: *dCtx.EnvContainer,
+		}).Get(dCtx, &output)
+		if actErr == nil && output.OS != "" {
+			environmentContext = output.FormatEnvironmentContext()
+		}
+	}
 
 	// TODO return info that could help redefine requirements if issues are
 	// discovered while editing code. It should indicate if edits
@@ -125,26 +142,31 @@ editLoop:
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return fmt.Errorf("failed to make user request when paused: %v", err)
 		} else if response != nil && response.Content != "" {
-			// If promptInfo is an initial type, add it to chat history first before
-			// overwriting with pause feedback. This ensures the initial instructions
-			// are in the history before the pause feedback.
-			switch promptInfo.(type) {
+			_, editCodeSubflowHasPlan := promptInfo.(InitialDevStepInfo)
+			switch info := promptInfo.(type) {
 			case InitialCodeInfo, InitialDevStepInfo:
-				buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo)
+				// Flush initial instructions into chat history before replacing with pause feedback
+				if _, err := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, IsDoneRequiredProtocol(dCtx), editCodeSubflowHasPlan, environmentContext); err != nil {
+					return err
+				}
+				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
+			case FeedbackInfo:
+				promptInfo = FeedbackInfo{Feedback: info.Feedback + "\n\n" + response.Content, Type: FeedbackTypePause}
+			default:
+				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			}
-			promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 		}
 
-		v := workflow.GetVersion(dCtx, "no-max-unless-disabled-human", workflow.DefaultVersion, 1)
+		v = workflow.GetVersion(dCtx, "no-max-unless-disabled-human", workflow.DefaultVersion, 1)
 		if attemptCount >= maxAttempts && (v < 1 || dCtx.RepoConfig.DisableHumanInTheLoop) {
 			return ErrMaxAttemptsReached
 		}
 
 		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
-		ManageChatHistory(dCtx, chatHistory, maxLength)
+		ManageChatHistory(dCtx, chatHistory, dCtx.WorkspaceId, maxLength, codingModelConfig)
 
 		// Step 1: Get a list of *edit blocks* from the LLM
-		editBlocks, err = authorEditBlocks(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo)
+		editBlocks, err = authorEditBlocks(dCtx, codingModelConfig, contextSizeExtension, chatHistory, promptInfo, environmentContext)
 		if err != nil && !errors.Is(err, flow_action.PendingActionError) {
 			v := workflow.GetVersion(dCtx, "edit-code-max-attempts-bugfix", workflow.DefaultVersion, 1)
 			isMaxAttempts := errors.Is(err, ErrMaxAttemptsReached)
@@ -195,11 +217,13 @@ editLoop:
 			// no errors, but want to retain the system message in this case as
 			// well. in the error case, we use the system message as the
 			// feedback and get it into chat history that way
-			*chatHistory = append(*chatHistory, llm.ChatMessage{
+			if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
 				Role:        "system",
 				Content:     result.ReportMessage,
 				ContextType: ContextTypeEditBlockReport,
-			})
+			}); err != nil {
+				return err
+			}
 
 			break
 		}
@@ -208,12 +232,17 @@ editLoop:
 	return nil
 }
 
-func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) ([]EditBlock, error) {
+func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, contextSizeExtension int, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, environmentContext string) ([]EditBlock, error) {
 	var extractedEditBlocks []EditBlock
 
 	attemptCount := 0
 	attemptsSinceLastEditBlockOrFeedback := 0
 	maxAttempts := 7 // Default value
+
+	// Check if done-required protocol is enabled (requires both version AND feature flag)
+	doneRequired := IsDoneRequiredProtocol(dCtx)
+
+	_, hasPlan := promptInfo.(InitialDevStepInfo)
 
 	repoConfig := dCtx.RepoConfig
 	if repoConfig.MaxIterations > 0 {
@@ -239,6 +268,7 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 	}
 
 	for {
+		doneToolCalled := false
 		// Check for UserActionGoNext and version to potentially skip this step
 		version := workflow.GetVersion(dCtx, "user-action-go-next", workflow.DefaultVersion, 1)
 		if version == 1 {
@@ -254,24 +284,29 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		if response, err := UserRequestIfPaused(dCtx, "Paused. Provide some guidance to continue:", nil); err != nil {
 			return nil, fmt.Errorf("failed to make user request when paused: %v", err)
 		} else if response != nil && response.Content != "" {
-			// If promptInfo is an initial type, add it to chat history first before
-			// overwriting with pause feedback. This ensures the initial instructions
-			// are in the history before the pause feedback.
-			switch promptInfo.(type) {
+			switch info := promptInfo.(type) {
 			case InitialCodeInfo, InitialDevStepInfo:
-				buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo)
+				// Flush initial instructions into chat history before replacing with pause feedback
+				if _, err := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired, hasPlan, environmentContext); err != nil {
+					return nil, err
+				}
+				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
+			case FeedbackInfo:
+				promptInfo = FeedbackInfo{Feedback: info.Feedback + "\n\n" + response.Content, Type: FeedbackTypePause}
+			default:
+				promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			}
-			promptInfo = FeedbackInfo{Feedback: response.Content, Type: FeedbackTypePause}
 			attemptsSinceLastEditBlockOrFeedback = 0
 		}
 
-		// Inject proactive system message based on tool-call thresholds
+		// Inject proactive system message based on tool-call thresholds, merging
+		// with any existing pending feedback to avoid overwriting it.
 		if msg, ok := ThresholdMessageForCounter(feedbackIterations, attemptsSinceLastEditBlockOrFeedback); ok {
-			//*chatHistory = append(*chatHistory, llm.ChatMessage{
-			//	Role:    "system",
-			//	Content: msg,
-			//})
-			promptInfo = FeedbackInfo{Feedback: msg, Type: FeedbackTypeSystemError}
+			if existing, isFeedback := promptInfo.(FeedbackInfo); isFeedback {
+				promptInfo = FeedbackInfo{Feedback: existing.Feedback + "\n\n" + msg, Type: existing.Type}
+			} else {
+				promptInfo = FeedbackInfo{Feedback: msg, Type: FeedbackTypeSystemError}
+			}
 		}
 
 		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
@@ -299,8 +334,21 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			attemptsSinceLastEditBlockOrFeedback = 0
 		}
 
+		// Flush any pending FeedbackInfo to chat history before building LLM input.
+		// This replaces buildAuthorEditBlockInput's handling of FeedbackInfo,
+		// producing the same single AppendChatHistory activity.
+		if feedbackInfo, ok := promptInfo.(FeedbackInfo); ok {
+			if err := appendEditFeedback(dCtx.ExecContext, chatHistory, feedbackInfo.Feedback, feedbackInfo.Type); err != nil {
+				return nil, err
+			}
+			promptInfo = SkipInfo{}
+		}
+
 		// NOTE: this also ensures the tool call response is added to chat history
-		authorEditBlockInput := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo)
+		authorEditBlockInput, err := buildAuthorEditBlockInput(dCtx, codingModelConfig, chatHistory, promptInfo, doneRequired, hasPlan, environmentContext)
+		if err != nil {
+			return nil, err
+		}
 		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
 
 		// NOTE this MUST be below authorEditBlockInput to ensure tool call
@@ -309,14 +357,16 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		// calls immediately, we'll need a way to support this "burst"
 		// functionality (or maybe the ManageChatHistoryV2 function will
 		// natively always support burst due to the markers, hmmm...)
-		ManageChatHistory(dCtx, chatHistory, maxLength)
+		ManageChatHistory(dCtx, chatHistory, dCtx.WorkspaceId, maxLength, codingModelConfig)
 
 		if !applyImmediately && len(extractedEditBlocks) > 0 {
 			content := fmt.Sprintf("Note: %d edit block(s) are pending application.", len(extractedEditBlocks))
-			*chatHistory = append(*chatHistory, llm.ChatMessage{
+			if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
 				Role:    llm.ChatMessageRoleSystem,
 				Content: content,
-			})
+			}); err != nil {
+				return nil, err
+			}
 		}
 
 		// Increment counters before making the call
@@ -325,25 +375,41 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 
 		// call Open AI to get back messages that contain edit blocks
 		chatCtx := dCtx.WithCancelOnPause()
-		chatResponse, err := TrackedToolChat(chatCtx, "code_edits", authorEditBlockInput)
+		chatResponse, err := TrackedToolChat(chatCtx, "code_edits", authorEditBlockInput, chatHistory)
 		if dCtx.GlobalState.Paused {
 			continue // UserRequestIfPaused will handle the pause
 		}
 		if err != nil {
 			return []EditBlock{}, err
 		}
-		*chatHistory = append(*chatHistory, chatResponse.ChatMessage)
 
-		// Use history that is actually passed to the LLM, before
-		// ManageChatHistory was called, since that corresponds to what was
-		// actually visible to the LLM at the time edit blocks were generated
-		visibleChatHistory := authorEditBlockInput.Params.Messages
-		if v := workflow.GetVersion(dCtx, "bugfix-edit-block-visibility-orig-history", workflow.DefaultVersion, 1); v == 0 {
+		// visibleChatHistory is captured before ManageChatHistory to reflect
+		// what was actually visible to the LLM when edit blocks were generated
+		visibleChatHistory := chatHistory.Clone()
+		if v := workflow.GetVersion(dCtx, "bugfix-edit-block-visibility-orig-history", workflow.DefaultVersion, 1); v == 1 {
 			// this maintains the buggy behavior on older workflows to still replay them
-			visibleChatHistory = append(*chatHistory, chatResponse.ChatMessage)
+			if err := AppendChatHistory(dCtx.ExecContext, &visibleChatHistory, chatResponse.GetMessage()); err != nil {
+				return nil, err
+			}
+		}
+
+		if err := AppendChatHistory(dCtx.ExecContext, chatHistory, chatResponse.GetMessage()); err != nil {
+			return nil, err
 		}
 		tildeOnly := workflow.GetVersion(dCtx, "tilde-edit-block-fence", workflow.DefaultVersion, 1) >= 1
-		currentExtractedBlocks, err := ExtractEditBlocksWithVisibility(chatResponse.ChatMessage.Content, visibleChatHistory, tildeOnly)
+
+		var currentExtractedBlocks []EditBlock
+		if _, isLlm2 := visibleChatHistory.History.(*persisted_ai.Llm2ChatHistory); isLlm2 {
+			var cha *persisted_ai.ChatHistoryActivities
+			var visibleCodeBlocks []tree_sitter.CodeBlock
+			err = workflow.ExecuteActivity(dCtx, cha.ExtractVisibleCodeBlocks, &visibleChatHistory).Get(dCtx, &visibleCodeBlocks)
+			if err != nil {
+				return []EditBlock{}, fmt.Errorf("failed to extract visible code blocks: %w", err)
+			}
+			currentExtractedBlocks, err = ExtractEditBlocksWithCodeBlocks(chatResponse.GetMessage().GetContentString(), visibleCodeBlocks, tildeOnly)
+		} else {
+			currentExtractedBlocks, err = ExtractEditBlocksWithVisibility(chatResponse.GetMessage().GetContentString(), visibleChatHistory, tildeOnly)
+		}
 		if err != nil {
 			return []EditBlock{}, fmt.Errorf("%w: %v", ErrExtractEditBlocks, err)
 		}
@@ -360,29 +426,52 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 			}
 		}
 
-		var toolCallResponses []ToolCallResponseInfo
-		if len(chatResponse.ToolCalls) > 0 {
-			toolCallResponses = handleToolCalls(dCtx, chatResponse.ToolCalls, nil)
+		var toolCallResponses []llm2.ToolResultBlock
+		if len(chatResponse.GetMessage().GetToolCalls()) > 0 {
+			otherToolCalls := false
+			for _, tc := range chatResponse.GetMessage().GetToolCalls() {
+				if tc.Name != doneTool.Name {
+					otherToolCalls = true
+					break
+				}
+			}
+			doneCalledAlongsideOtherWork := otherToolCalls || len(currentExtractedBlocks) > 0
+
+			customHandlers := map[string]func(DevContext, llm.ToolCall) (llm2.ToolResultBlock, error){
+				doneTool.Name: func(dCtx DevContext, toolCall llm.ToolCall) (llm2.ToolResultBlock, error) {
+					if doneCalledAlongsideOtherWork {
+						return llm2.ToolResultBlock{
+							Name:       toolCall.Name,
+							ToolCallId: toolCall.Id,
+							Content:    llm2.TextContentBlocks("The `done` tool must be called on its own, without any other tool calls or edit blocks in the same response. If you still have more work to do, continue working. Once all work is complete, call `done` by itself."),
+						}, nil
+					}
+					resp, err := handleDoneToolCall(dCtx, toolCall)
+					if err == nil {
+						doneToolCalled = true
+					}
+					return resp, err
+				},
+			}
+			toolCallResponses, err = handleToolCalls(dCtx, chatResponse.GetMessage().GetToolCalls(), chatHistory, customHandlers)
+			if err != nil {
+				return nil, err
+			}
 		}
 
-		// Add tool call responses to history
-		for _, toolCallResponseInfo := range toolCallResponses {
-			// Reset feedback counter if this was a getHelpOrInput response
-			if toolCallResponseInfo.FunctionName == getHelpOrInputTool.Name {
+		for _, toolCallResponse := range toolCallResponses {
+			if toolCallResponse.Name == getHelpOrInputTool.Name {
 				attemptsSinceLastEditBlockOrFeedback = 0
 			}
-			// dynamically adjust the context size extension based on the length of the response
-			if len(toolCallResponseInfo.Response) > 5000 {
-				contextSizeExtension += len(toolCallResponseInfo.Response) - 5000
+			if len(toolCallResponse.TextContent()) > 5000 {
+				contextSizeExtension += len(toolCallResponse.TextContent()) - 5000
 			}
-			addToolCallResponse(chatHistory, toolCallResponseInfo)
 		}
 
 		// keep loop going if we failed to apply edit blocks, with feedback hints
 		if len(currentExtractedBlocks) > 0 && applyImmediately {
 			if applyEditBlocksError != nil {
 				feedback := fmt.Sprintf("Error while applying edit blocks: %v", applyEditBlocksError)
-
 				promptInfo = FeedbackInfo{Feedback: feedback, Type: FeedbackTypeSystemError}
 				attemptCount++
 				continue
@@ -391,28 +480,74 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 				attemptCount++
 				continue
 			} else {
-				*chatHistory = append(*chatHistory, llm.ChatMessage{
+				if err := AppendChatHistory(dCtx.ExecContext, chatHistory, llm.ChatMessage{
 					Role:        llm.ChatMessageRoleSystem,
 					Content:     applyEditBlocksResult.ReportMessage,
 					ContextType: ContextTypeEditBlockReport,
-				})
+				}); err != nil {
+					return nil, err
+				}
 			}
 		}
 
-		if len(chatResponse.ToolCalls) > 0 {
+		if len(toolCallResponses) > 0 {
+			// If done tool was called successfully, terminate the loop
+			if doneToolCalled {
+				return extractedEditBlocks, nil
+			}
 			promptInfo = SkipInfo{}
 		} else {
-			// we use the fact that no tool call happened to
-			// infer that we're done with this loop
-			break
+			// No tool calls in this response
+			if doneRequired {
+				// New version with flag enabled: require done tool to terminate
+				if len(currentExtractedBlocks) == 0 {
+					// No edit blocks and no tool calls - provide feedback
+					noActionFeedback := fmt.Sprintf("No edit blocks or tool calls were provided. If you were trying to talk to the user, you must use the %s tool to ensure the user sees your message. Otherwise, please provide edit blocks, use tools to gather more information, or call the `done` tool if you are certain that no futher changes or actions are required and you don't think the user should read and respond to your previous message. IMPORTANT NOTE: the user CAN NOT SEE your previous message, and will never see it if you call the `done` tool.", getHelpOrInputTool.Name)
+					promptInfo = FeedbackInfo{
+						Feedback: noActionFeedback,
+						Type:     FeedbackTypeSystemError,
+					}
+				} else {
+					// Edit blocks were provided and we apply those immediately
+					// now. That means there is a feedback message for that in
+					// the next turn already, so nothing to do here
+					promptInfo = SkipInfo{}
+				}
+			} else {
+				// Old version or flag disabled: no tool calls means we're done
+				break
+			}
 		}
 	}
 
 	return extractedEditBlocks, nil
 }
 
-// TODO move to a coding-related package, eg coding/edit_block
-func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) llm.ToolChatOptions {
+// IsDoneRequiredProtocol returns true if the done-required protocol should be used.
+// This checks the workflow version gate and ensures the disable flag is not set.
+// The done protocol is enabled by default for new workflow versions unless explicitly disabled.
+func IsDoneRequiredProtocol(ctx workflow.Context) bool {
+	doneRequiredVersion := workflow.GetVersion(ctx, "done-required-protocol", workflow.DefaultVersion, 1)
+	return doneRequiredVersion >= 1 && !fflag.IsEnabled(ctx, fflag.DisableDoneCoding)
+}
+
+// appendEditFeedback renders feedback and appends it directly to chat history.
+func appendEditFeedback(eCtx flow_action.ExecContext, chatHistory *persisted_ai.ChatHistoryContainer, feedback string, feedbackType string) error {
+	content := renderAuthorEditBlockFeedbackPrompt(feedback, feedbackType)
+	contextType := ""
+	if feedbackType == FeedbackTypeApplyError {
+		contextType = ContextTypeEditBlockReport
+	}
+	return AppendChatHistory(eCtx, chatHistory, llm.ChatMessage{
+		Role:        llm.ChatMessageRoleUser,
+		Content:     content,
+		ContextType: contextType,
+	})
+}
+
+// buildAuthorEditBlockInput builds the LLM options for authoring edit blocks.
+// Returns the options and the visible messages (for edit block extraction).
+func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelConfig, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo, doneRequired bool, hasPlan bool, environmentContext string) (llm2.Options, error) {
 	// TODO extract chat message building into a separate function
 	var content string
 	role := llm.ChatMessageRoleUser
@@ -422,17 +557,18 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	isError := false
 	cacheControl := ""
 	contextType := ""
+
 	switch info := promptInfo.(type) {
 	case InitialCodeInfo:
 		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
 		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
-		content = renderAuthorEditBlockInitialPrompt(dCtx, info.CodeContext, info.Requirements, applyImmediately)
+		content = renderAuthorEditBlockInitialPrompt(dCtx, info.CodeContext, info.Requirements, applyImmediately, doneRequired, environmentContext)
 		cacheControl = "ephemeral"
 		contextType = ContextTypeInitialInstructions
 	case InitialDevStepInfo:
 		v := workflow.GetVersion(dCtx, "apply-edit-blocks-immediately", workflow.DefaultVersion, 1)
 		applyImmediately := v >= 1 && !dCtx.RepoConfig.DisableHumanInTheLoop
-		content = renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, applyImmediately)
+		content = renderAuthorEditBlockInitialDevStepPrompt(dCtx, info.CodeContext, info.Requirements, info.PlanExecution.String(), info.Step.Definition, applyImmediately, doneRequired, environmentContext)
 		cacheControl = "ephemeral"
 		contextType = ContextTypeInitialInstructions
 	case SkipInfo:
@@ -442,12 +578,6 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 		if info.Type == FeedbackTypeApplyError {
 			contextType = ContextTypeEditBlockReport
 		}
-	case ToolCallResponseInfo:
-		role = llm.ChatMessageRoleTool
-		content = info.Response
-		name = info.FunctionName
-		toolCallId = info.ToolCallId
-		isError = info.IsError
 	default:
 		panic("Unsupported prompt type for authoring edit blocks: " + promptInfo.GetType())
 	}
@@ -463,7 +593,9 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 			ContextType:  contextType,
 		}
 		// FIXME don't mutate chatHistory here, let the caller do it if they want it
-		*chatHistory = append(*chatHistory, newMessage)
+		if err := AppendChatHistory(dCtx.ExecContext, chatHistory, newMessage); err != nil {
+			return llm2.Options{}, err
+		}
 	}
 
 	var tools []*llm.Tool
@@ -472,21 +604,35 @@ func buildAuthorEditBlockInput(dCtx DevContext, codingModelConfig common.ModelCo
 	tools = append(tools, &bulkReadFileTool)
 	tools = append(tools, &runCommandTool)
 
+	if supportsImageToolResults(codingModelConfig) {
+		tools = append(tools, &readImageTool)
+	}
+
+	if dCtx.Worktree != nil {
+		tools = append(tools, &setBaseBranchTool)
+	}
+
+	if doneRequired {
+		if hasPlan {
+			tools = append(tools, &doneToolWithPlan)
+		} else {
+			tools = append(tools, &doneTool)
+		}
+	}
+
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		tools = append(tools, &getHelpOrInputTool)
 	}
 
-	return llm.ToolChatOptions{
-		Secrets: *dCtx.Secrets,
-		Params: llm.ToolChatParams{
-			Messages: *chatHistory,
-			Tools:    tools,
-			ToolChoice: llm.ToolChoice{
-				Type: llm.ToolChoiceTypeAuto,
-			},
-			ModelConfig: codingModelConfig,
+	options := llm2.Options{
+		Tools: tools,
+		ToolChoice: llm.ToolChoice{
+			Type: llm.ToolChoiceTypeAuto,
 		},
+		ModelConfig: codingModelConfig,
 	}
+
+	return options, nil
 }
 
 // we use these variable names so that code extracting edit blocks and merge conflict
@@ -499,20 +645,31 @@ const replace = ">>>>>>> REPLACE_EXACT"
 const startInitialCodeContext = "#START INITIAL CODE CONTEXT"
 const endInitialCodeContext = "#END INITIAL CODE CONTEXT"
 
-func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requirements string, applyEditBlocksImmediately bool) string {
+func getEnvironmentContext() string {
+	return fmt.Sprintf("OS: %s, Arch: %s", runtime.GOOS, runtime.GOARCH)
+}
+
+func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requirements string, applyEditBlocksImmediately, doneRequired bool, environmentContext string) string {
 	data := map[string]interface{}{
 		"codeContext":                     codeContext,
 		"requirements":                    requirements,
 		"startInitialCodeContext":         startInitialCodeContext,
 		"endInitialCodeContext":           endInitialCodeContext,
-		"summaryStart":                    summaryStart,
-		"summaryEnd":                      summaryEnd,
 		"search":                          search,
 		"divider":                         divider,
 		"replace":                         replace,
 		"editCodeHints":                   dCtx.RepoConfig.EditCode.Hints,
 		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,
 		"applyEditBlocksImmediately":      applyEditBlocksImmediately,
+		"doneRequired":                    doneRequired,
+		"doneFunctionName":                doneTool.Name,
+		"environmentContext":              environmentContext,
+	}
+	if doneRequired {
+		data["doneFunctionName"] = doneTool.Name
+	} else {
+		data["summaryStart"] = summaryStart
+		data["summaryEnd"] = summaryEnd
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		data["getHelpOrInputFunctionName"] = getHelpOrInputTool.Name
@@ -520,7 +677,7 @@ func renderAuthorEditBlockInitialPrompt(dCtx DevContext, codeContext, requiremen
 	return RenderPrompt(AuthorEditBlockInitial, data)
 }
 
-func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, requirements, planContext, currentStep string, applyEditBlocksImmediately bool) string {
+func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, requirements, planContext, currentStep string, applyEditBlocksImmediately, doneRequired bool, environmentContext string) string {
 	data := map[string]interface{}{
 		"codeContext":                     codeContext,
 		"requirements":                    requirements,
@@ -528,14 +685,21 @@ func renderAuthorEditBlockInitialDevStepPrompt(dCtx DevContext, codeContext, req
 		"currentStep":                     currentStep,
 		"startInitialCodeContext":         startInitialCodeContext,
 		"endInitialCodeContext":           endInitialCodeContext,
-		"summaryStart":                    summaryStart,
-		"summaryEnd":                      summaryEnd,
 		"search":                          search,
 		"divider":                         divider,
 		"replace":                         replace,
 		"editCodeHints":                   dCtx.RepoConfig.EditCode.Hints,
 		"retrieveCodeContextFunctionName": currentGetSymbolDefinitionsTool().Name,
 		"applyEditBlocksImmediately":      applyEditBlocksImmediately,
+		"doneRequired":                    doneRequired,
+		"hasPlan":                         true,
+		"environmentContext":              environmentContext,
+	}
+	if doneRequired {
+		data["doneFunctionName"] = doneTool.Name
+	} else {
+		data["summaryStart"] = summaryStart
+		data["summaryEnd"] = summaryEnd
 	}
 	if !dCtx.RepoConfig.DisableHumanInTheLoop {
 		data["getHelpOrInputFunctionName"] = getHelpOrInputTool.Name
@@ -584,7 +748,11 @@ func feedbackFromApplyEditBlockReports(reports []ApplyEditBlockReport) string {
 		} else if !report.DidApply {
 			messages = append(messages, fmt.Sprintf("- edit_block:%d application failed due to unknown reasons", seqNum))
 		} else {
-			messages = append(messages, fmt.Sprintf("- edit_block:%d application succeeded", seqNum))
+			msg := fmt.Sprintf("- edit_block:%d application succeeded", seqNum)
+			if report.CheckWarning != "" {
+				msg += fmt.Sprintf(" (warning: %s)", report.CheckWarning)
+			}
+			messages = append(messages, msg)
 		}
 	}
 	return strings.Join(messages, "\n")

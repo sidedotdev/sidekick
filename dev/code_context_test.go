@@ -3,10 +3,12 @@ package dev
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"sidekick/coding"
 	"sidekick/llm"
+	"sidekick/llm2"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -229,7 +231,7 @@ func TestToolCallWithCodeContext(t *testing.T) {
 	})
 }
 
-func TestToolCallResponseInfoForMultipleToolCalls(t *testing.T) {
+func TestToolResultBlockForMultipleToolCalls(t *testing.T) {
 	t.Parallel()
 
 	t.Run("feedback references correct tool call id", func(t *testing.T) {
@@ -242,15 +244,15 @@ func TestToolCallResponseInfoForMultipleToolCalls(t *testing.T) {
 		err := llm.ErrToolCallUnmarshal
 
 		response := err.Error() + "\n\nHint: To fix this, follow the json schema correctly."
-		toolCallResponseInfo := ToolCallResponseInfo{
-			Response:     response,
-			ToolCallId:   toolCall.Id,
-			FunctionName: toolCall.Name,
+		trb := llm2.ToolResultBlock{
+			Content:    llm2.TextContentBlocks(response),
+			ToolCallId: toolCall.Id,
+			Name:       toolCall.Name,
 		}
 
-		assert.Equal(t, "call_malformed", toolCallResponseInfo.ToolCallId)
-		assert.Equal(t, "get_symbol_definitions", toolCallResponseInfo.FunctionName)
-		assert.Contains(t, toolCallResponseInfo.Response, "failed to unmarshal json")
+		assert.Equal(t, "call_malformed", trb.ToolCallId)
+		assert.Equal(t, "get_symbol_definitions", trb.Name)
+		assert.Contains(t, trb.TextContent(), "failed to unmarshal json")
 	})
 }
 
@@ -441,8 +443,8 @@ func TestParseToolCallsToCodeContext(t *testing.T) {
 		assert.True(t, hasUnmarshalError)
 		require.Len(t, feedbacks, 1)
 		assert.Equal(t, "call_malformed", feedbacks[0].ToolCallId)
-		assert.Equal(t, "get_symbol_definitions", feedbacks[0].FunctionName)
-		assert.Contains(t, feedbacks[0].Response, "failed to unmarshal json")
+		assert.Equal(t, "get_symbol_definitions", feedbacks[0].Name)
+		assert.Contains(t, feedbacks[0].TextContent(), "failed to unmarshal json")
 	})
 
 	t.Run("codeContextLoop behavior: errors trigger feedback, valid calls are merged", func(t *testing.T) {
@@ -482,7 +484,7 @@ func TestParseToolCallsToCodeContext(t *testing.T) {
 		assert.True(t, hasUnmarshalError, "should detect unmarshal error")
 		require.Len(t, feedbacks, 1, "only one feedback should be generated")
 		assert.Equal(t, "call_2_bad", feedbacks[0].ToolCallId, "feedback should reference the malformed tool call")
-		assert.Contains(t, feedbacks[0].Response, "missing requests")
+		assert.Contains(t, feedbacks[0].TextContent(), "missing requests")
 
 		// When there are no errors, mergeToolCallRequests is called
 		// Simulate a retry where all tool calls are valid
@@ -572,9 +574,9 @@ func TestCheckToolCallUnmarshalErrors(t *testing.T) {
 		assert.True(t, hasUnmarshalError)
 		require.Len(t, feedbacks, 1)
 		assert.Equal(t, "call_2_bad", feedbacks[0].ToolCallId)
-		assert.Equal(t, "get_symbol_definitions", feedbacks[0].FunctionName)
-		assert.Contains(t, feedbacks[0].Response, "failed to unmarshal json")
-		assert.Contains(t, feedbacks[0].Response, "Hint:")
+		assert.Equal(t, "get_symbol_definitions", feedbacks[0].Name)
+		assert.Contains(t, feedbacks[0].TextContent(), "failed to unmarshal json")
+		assert.Contains(t, feedbacks[0].TextContent(), "Hint:")
 	})
 
 	t.Run("multiple unmarshal errors generate multiple feedbacks", func(t *testing.T) {
@@ -626,5 +628,72 @@ func TestCheckToolCallUnmarshalErrors(t *testing.T) {
 		assert.Contains(t, fatalErr.Error(), "some other error")
 		assert.False(t, hasUnmarshalError)
 		assert.Nil(t, feedbacks)
+	})
+}
+
+func TestTruncateCodeContextWithSummary(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no truncation needed", func(t *testing.T) {
+		t.Parallel()
+		content := "File: foo.go\nsome code"
+		result := truncateCodeContextWithSummary(content, 1000)
+		assert.Equal(t, content, result)
+	})
+
+	t.Run("single file partially truncated", func(t *testing.T) {
+		t.Parallel()
+		content := "File: foo.go\n" + strings.Repeat("x", 200)
+		result := truncateCodeContextWithSummary(content, 100)
+		assert.Less(t, len(result), len(content))
+		assert.Contains(t, result, "... [truncated] ...")
+		assert.Contains(t, result, "Partially included: foo.go")
+	})
+
+	t.Run("multiple files with some fully removed", func(t *testing.T) {
+		t.Parallel()
+		content := "File: first.go\n" + strings.Repeat("a\n", 50) +
+			"File: second.go\n" + strings.Repeat("b\n", 50) +
+			"File: third.go\n" + strings.Repeat("c\n", 50)
+		// Truncate so first file is kept, second partially, third fully removed
+		secondFileOffset := strings.Index(content, "File: second.go")
+		maxLen := secondFileOffset + 30
+		result := truncateCodeContextWithSummary(content, maxLen)
+		assert.Contains(t, result, "File: first.go")
+		assert.Contains(t, result, "Fully removed: third.go")
+		assert.Contains(t, result, "Partially included: second.go")
+	})
+
+	t.Run("files fully removed and partially included", func(t *testing.T) {
+		t.Parallel()
+		content := "File: a.go\n" + strings.Repeat("x\n", 50) +
+			"File: b.go\n" + strings.Repeat("y\n", 100) +
+			"File: c.go\n" + strings.Repeat("z\n", 100)
+		thirdFileOffset := strings.Index(content, "File: c.go")
+		// Max well past second file start but before third, leaving room for summary
+		result := truncateCodeContextWithSummary(content, thirdFileOffset)
+		assert.Contains(t, result, "File: a.go")
+		assert.Contains(t, result, "File: b.go")
+		assert.Contains(t, result, "Fully removed: c.go")
+	})
+
+	t.Run("no file markers", func(t *testing.T) {
+		t.Parallel()
+		content := strings.Repeat("some text\n", 100)
+		result := truncateCodeContextWithSummary(content, 50)
+		assert.Contains(t, result, "... [truncated] ...")
+		assert.NotContains(t, result, "Partially included:")
+		assert.NotContains(t, result, "Fully removed:")
+	})
+
+	t.Run("truncates at line boundary", func(t *testing.T) {
+		t.Parallel()
+		content := "File: foo.go\nline1\nline2\nline3\nline4\nline5\n" + strings.Repeat("x", 200)
+		result := truncateCodeContextWithSummary(content, 60)
+		// Should not cut in the middle of a line
+		truncatedPart := strings.SplitN(result, "\n\n... [truncated]", 2)[0]
+		lastLine := truncatedPart[strings.LastIndex(truncatedPart, "\n")+1:]
+		// The last line before the summary should be a complete line from the original
+		assert.True(t, strings.Contains(content, lastLine), "truncation should occur at a line boundary")
 	})
 }

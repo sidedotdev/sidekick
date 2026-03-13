@@ -3,6 +3,7 @@ package dev
 import (
 	"fmt"
 	"sidekick/llm"
+	"sidekick/persisted_ai"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -13,7 +14,7 @@ type LlmIteration struct {
 	Num                int
 	AutoIterationCount int
 	ExecCtx            DevContext
-	ChatHistory        *[]llm.ChatMessage
+	ChatHistory        *persisted_ai.ChatHistoryContainer
 	State              interface{}
 }
 
@@ -23,6 +24,7 @@ type Option func(*LlmLoopConfig)
 type LlmLoopConfig struct {
 	maxIterations  int
 	autoIterations int
+	giveUpQuietly  bool
 	initialState   interface{}
 }
 
@@ -50,18 +52,27 @@ func WithInitialState(initialState interface{}) Option {
 }
 
 // LlmLoop is a generic function that implements an interative loop for human-in-the-loop LLM invocations
-func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc func(iteration *LlmIteration) (*T, error), opts ...Option) (*T, error) {
+func LlmLoop[T any](dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer, loopFunc func(iteration *LlmIteration) (*T, error), opts ...Option) (*T, error) {
 	config := &LlmLoopConfig{
 		maxIterations:  17,
 		autoIterations: 3,
+		giveUpQuietly:  false,
 	}
 
 	for _, opt := range opts {
 		opt(config)
 	}
 
+	v := workflow.GetVersion(dCtx, "llm-loop-give-up-quietly", workflow.DefaultVersion, 1)
+	if v == 1 {
+		config.giveUpQuietly = true
+		if config.autoIterations < 8 {
+			config.autoIterations = 8
+		}
+	}
+
 	if chatHistory == nil {
-		chatHistory = &[]llm.ChatMessage{}
+		chatHistory = NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 	}
 
 	iteration := &LlmIteration{
@@ -90,23 +101,31 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 			return nil, fmt.Errorf("error checking for pause: %v", err)
 		}
 		if response != nil && response.Content != "" {
-			*iteration.ChatHistory = append(*iteration.ChatHistory, llm.ChatMessage{
+			if err := AppendChatHistory(dCtx.ExecContext, iteration.ChatHistory, llm.ChatMessage{
 				Role:    "user",
 				Content: renderGeneralFeedbackPrompt(response.Content, FeedbackTypePause),
-			})
+			}); err != nil {
+				return nil, err
+			}
 			iteration.AutoIterationCount = 0
 		}
 
 		// Inject proactive system message when nearing per-cycle tool-call limits
 		if msg, ok := ThresholdMessageForCounter(config.autoIterations, iteration.AutoIterationCount); ok {
-			*iteration.ChatHistory = append(*iteration.ChatHistory, llm.ChatMessage{
+			if err := AppendChatHistory(dCtx.ExecContext, iteration.ChatHistory, llm.ChatMessage{
 				Role:    "system",
 				Content: msg,
-			})
+			}); err != nil {
+				return nil, err
+			}
 		}
 
 		// Get user feedback every N iterations
 		if iteration.AutoIterationCount >= config.autoIterations {
+			if config.giveUpQuietly {
+				workflow.GetLogger(dCtx).Warn("LlmLoop exceeded threshold, returning empty result", "iterations", iteration.Num)
+				return new(T), nil
+			}
 			guidanceContext := fmt.Sprintf("The LLM has looped %d times without finalizing. Please provide guidance or just say \"continue\" if they are on track.", iteration.Num)
 			userResponse, err := GetUserGuidance(dCtx, guidanceContext, nil)
 			if err != nil {
@@ -114,10 +133,12 @@ func LlmLoop[T any](dCtx DevContext, chatHistory *[]llm.ChatMessage, loopFunc fu
 			}
 
 			// Add feedback to chat history
-			*iteration.ChatHistory = append(*iteration.ChatHistory, llm.ChatMessage{
+			if err := AppendChatHistory(dCtx.ExecContext, iteration.ChatHistory, llm.ChatMessage{
 				Role:    "user",
 				Content: userResponse.Content,
-			})
+			}); err != nil {
+				return nil, err
+			}
 
 			iteration.AutoIterationCount = 0
 		}

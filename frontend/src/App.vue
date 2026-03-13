@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { RouterLink, RouterView } from 'vue-router'
-import { ref, onMounted } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 import { store } from './lib/store'
 import type { Ref } from 'vue'
 import type { Workspace } from './lib/models'
+import Select from 'primevue/select'
 import GearIcon from './components/icons/GearIcon.vue'
 
 // look up if system is dark mode
@@ -16,8 +17,19 @@ const fetchWorkspaces = async () => {
   workspaces.value = data.workspaces.sort((a: Workspace, b: Workspace) => a.name.localeCompare(b.name))
 }
 const mode = import.meta.env.MODE
+const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
+const workspaceSelectRef = ref<InstanceType<typeof Select> | null>(null)
+
+const handleGlobalKeyDown = (event: KeyboardEvent) => {
+  const modKey = isMac ? event.metaKey : event.ctrlKey
+  if (modKey && event.key === 'w') {
+    event.preventDefault()
+    workspaceSelectRef.value?.show()
+  }
+}
 
 onMounted(async () => {
+  document.addEventListener('keydown', handleGlobalKeyDown)
   if (mode === 'development') {
     document.title = 'Sidekick Dev'
     let metaThemeColor = document.querySelector('meta[name="theme-color"]')
@@ -50,6 +62,17 @@ onMounted(async () => {
   }
 })
 
+const handleFilter = () => {
+  nextTick(() => {
+    const instance = workspaceSelectRef.value as any
+    if (!instance) return
+    const options = instance.visibleOptions
+    if (options && options.length > 0) {
+      instance.changeFocusedOptionIndex(null, options.length - 1)
+    }
+  })
+}
+
 const selectedWorkspace = () => {
   console.log('selectedWorkspace', store.workspaceId)
   if (store.workspaceId) {
@@ -57,6 +80,10 @@ const selectedWorkspace = () => {
     localStorage.setItem('selectedWorkspaceId', store.workspaceId)
   }
 }
+
+onUnmounted(() => {
+  document.removeEventListener('keydown', handleGlobalKeyDown)
+})
 
 </script>
 
@@ -80,11 +107,19 @@ const selectedWorkspace = () => {
       <header>
         <div class="container">
           <div class="workspace-selector">
-            <select v-model="store.workspaceId" @change="selectedWorkspace">
-              <option v-for="workspace in workspaces" :key="workspace.id" :value="workspace.id">
-                {{ workspace.name }}
-              </option>
-            </select>
+            <Select
+              ref="workspaceSelectRef"
+              v-model="store.workspaceId"
+              :options="workspaces"
+              optionLabel="name"
+              optionValue="id"
+              filter
+              autoFilterFocus
+              filterPlaceholder="Search"
+              @filter="handleFilter"
+              @change="selectedWorkspace"
+              class="workspace-select"
+            />
             <RouterLink v-if="mode === 'development'" :to="'/workspaces/' + store.workspaceId" class="edit-workspace-button"><GearIcon /></RouterLink>
           </div>
 
@@ -145,14 +180,17 @@ header {
   align-items: center;
 }
 
-.workspace-selector select {
-  padding: 0.2rem;
+.workspace-selector :deep(.p-select) {
   font-size: 0.9rem;
   background-color: var(--workspace-select-background-color);
   color: var(--color-text);
   border: 1px solid var(--color-border-contrast);
   border-radius: 0.25rem;
   margin-right: 0.5rem;
+}
+
+.workspace-selector :deep(.p-select-label) {
+  padding: 0.2rem 0.4rem;
 }
 
 .edit-workspace-button {

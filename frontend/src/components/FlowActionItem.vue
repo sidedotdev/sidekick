@@ -14,7 +14,7 @@
       <hr>
     </div>
     <div v-if="actionSpecificComponent" :class="{ 'expanded': expand, 'odd': level % 2 === 1 }">
-      <component :is="actionSpecificComponent" :flowAction="flowAction" :expand="expand" :level="level + 1"/>
+      <component ref="actionComponentRef" :is="actionSpecificComponent" :flowAction="flowAction" :expand="expand" :level="level + 1"/>
     </div>
     <div v-else-if="expand" :class="{ 'expanded': expand, 'odd': level % 2 === 1 }">
       <h3>Params</h3>
@@ -33,7 +33,9 @@ import UserRequest from './UserRequest.vue'
 import ChatCompletionFlowAction from './ChatCompletionFlowAction.vue'
 import RunTestsFlowAction from './RunTestsFlowAction.vue'
 import JsonTree from './JsonTree.vue'
-import CheckCriteriaFulfillmentFlowAction, { type CriteriaFulfillment } from './CheckCriteriaFulfillmentFlowAction.vue'
+import CheckCriteriaFulfillmentFlowAction from './CheckCriteriaFulfillmentFlowAction.vue'
+import type { CriteriaFulfillment } from '@/lib/models';
+import { extractToolCallArguments } from '@/lib/models';
 import ApplyEditBlocksFlowAction, { type ApplyEditBlockResult } from './ApplyEditBlocksFlowAction.vue';
 import PlaintextResultFlowAction from './PlaintextResultFlowAction.vue';
 import ToolFlowAction from './ToolFlowAction.vue';
@@ -73,6 +75,7 @@ if (props.flowAction.isHumanAction) {
 }
 
 const container = ref<HTMLDivElement | null>(null)
+const actionComponentRef = ref<{ summary?: { text: string, emoji: string } | null } | null>(null)
 function toggle() {
   if (disableToggle.value) {
     return
@@ -274,7 +277,8 @@ const summary = computed<Summary | null>(() => {
         return null;
       }
       try {
-        const criteriaFulfillment = JSON.parse(actionResult.value?.toolCalls[0]?.arguments || "null") as CriteriaFulfillment | null;
+        const args = extractToolCallArguments(actionResult.value);
+        const criteriaFulfillment = JSON.parse(args || "null") as CriteriaFulfillment | null;
         if (criteriaFulfillment === null) {
           return null;
         }
@@ -328,138 +332,8 @@ const summary = computed<Summary | null>(() => {
       }
     }
 
-    case 'tool_call.retrieve_code_context':
-    case 'tool_call.get_symbol_definitions': {
-      try {
-        const params = props.flowAction.actionParams;
-        if (!params?.code_context_requests || !Array.isArray(params.code_context_requests)) {
-          if (!params?.requests || !Array.isArray(params.requests)) {
-            return null;
-          }
-        }
-        
-        const fileGroups: Record<string, string[]> = {};
-        for (const request of (params.code_context_requests || params.requests)) {
-          if (!request?.file_path) continue;
-          const symbols = request.symbol_names && Array.isArray(request.symbol_names) && request.symbol_names.length > 0
-            ? request.symbol_names
-            : ['(full)'];
-          fileGroups[request.file_path] = symbols;
-        }
-        
-        const parts = Object.entries(fileGroups).map(([file, symbols]) => `${file}: ${symbols.join(', ')}`);
-        return {
-          text: parts.join('; '),
-          emoji: '📖',
-        };
-      } catch (error) {
-        console.error('Error parsing get_symbol_definitions params:', error);
-        return null;
-      }
-    }
-
-    case 'tool_call.bulk_search_repository': {
-      try {
-        const params = props.flowAction.actionParams;
-        if (!params?.searches || !Array.isArray(params.searches)) {
-          return null;
-        }
-        
-        const globGroups: Record<string, string[]> = {};
-        for (const search of params.searches) {
-          if (!search?.path_glob || !search?.search_term) continue;
-          if (!globGroups[search.path_glob]) {
-            globGroups[search.path_glob] = [];
-          }
-          globGroups[search.path_glob].push(search.search_term);
-        }
-        
-        const parts = Object.entries(globGroups).map(([glob, terms]) => `${glob}: ${terms.join(', ')}`);
-        return {
-          text: parts.join('; '),
-          emoji: '🔎',
-        };
-      } catch (error) {
-        console.error('Error parsing bulk_search_repository params:', error);
-        return null;
-      }
-    }
-
-    case 'tool_call.read_file_lines': {
-      try {
-        const params = props.flowAction.actionParams;
-        if (!params?.file_lines || !Array.isArray(params.file_lines) || typeof params.window_size !== 'number') {
-          return null;
-        }
-        
-        const fileGroups: Record<string, string[]> = {};
-        for (const fileLine of params.file_lines) {
-          if (!fileLine?.file_path || typeof fileLine.line_number !== 'number') continue;
-          const startLine = Math.max(1, fileLine.line_number - params.window_size);
-          const endLine = fileLine.line_number + params.window_size;
-          const range = `${startLine}-${endLine}`;
-          
-          if (!fileGroups[fileLine.file_path]) {
-            fileGroups[fileLine.file_path] = [];
-          }
-          fileGroups[fileLine.file_path].push(range);
-        }
-        
-        const parts = Object.entries(fileGroups).map(([file, ranges]) => `${file}: ${ranges.join(', ')}`);
-        return {
-          text: parts.join('; '),
-          emoji: '📄',
-        };
-      } catch (error) {
-        console.error('Error parsing read_file_lines params:', error);
-        return null;
-      }
-    }
-
-    case 'tool_call.run_command': {
-      try {
-        const params = props.flowAction.actionParams;
-        if (!params?.command) {
-          return null;
-        }
-        
-        const command = params.workingDir ? `${params.workingDir}$ ${params.command}` : `${params.command}`;
-        
-        // Only check exit status if action is complete
-        if (props.flowAction.actionStatus === 'complete') {
-          let exitStatus: number | null = null;
-          try {
-            const parsed = JSON.parse(props.flowAction.actionResult);
-            if (parsed && typeof parsed.exitStatus === 'number') {
-              exitStatus = parsed.exitStatus;
-            }
-          } catch {
-            // ignore parse errors
-          }
-          
-          const text = exitStatus !== null && exitStatus !== 0 
-            ? `${command} (exit ${exitStatus})`
-            : command;
-          
-          return {
-            text,
-            emoji: exitStatus !== null && exitStatus !== 0 ? '❌' : '',
-          };
-        }
-        
-        // Return command without exit status while running
-        return {
-          text: command,
-          emoji: '',
-        };
-      } catch (error) {
-        console.error('Error parsing run_command params:', error);
-        return null;
-      }
-    }
-
     default: {
-      return null;
+      return actionComponentRef.value?.summary ?? null;
     }
   }
 })

@@ -115,4 +115,29 @@ describe('buildSubflowTrees', () => {
     const result = buildSubflowTrees(flowActions);
     expect(result).toEqual(expectedSubflowTrees);
   });
+
+  it('should render actions in created order when websocket and REST merges race on load', () => {
+    const latestInProgressAction = {
+      id: 'action-2',
+      subflow: 'a',
+      actionType: 'action2',
+      created: '2024-01-01T00:00:02.000Z',
+    } as unknown as FlowAction
+
+    const secondLastAction = {
+      id: 'action-1',
+      subflow: 'a',
+      actionType: 'action1',
+      created: '2024-01-01T00:00:01.000Z',
+    } as unknown as FlowAction
+
+    const result = buildSubflowTrees([latestInProgressAction, secondLastAction])
+
+    expect(result).toEqual([
+      {
+        name: 'a',
+        children: [secondLastAction, latestInProgressAction],
+      },
+    ])
+  });
 });

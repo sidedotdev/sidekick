@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sidekick/coding/git"
 	"sidekick/common"
+	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
 	"strings"
@@ -30,12 +31,42 @@ type CriteriaFulfillment struct {
 
 // TODO /gen add a test for this function
 func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (CriteriaFulfillment, error) {
+	// Use GlobalState as single source of truth for base branch, falling back to caller-provided value
+	if v := workflow.GetVersion(dCtx, "check-work-global-base-branch", workflow.DefaultVersion, 1); v >= 1 {
+		if globalBase := dCtx.ExecContext.GlobalState.GetStringValue(common.KeyCurrentTargetBranch); globalBase != "" {
+			promptInfo.BaseBranch = globalBase
+		}
+	}
+
 	var diff string
 	var err error
 
-	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 1)
-	if v >= 1 && promptInfo.LastReviewTreeHash != "" {
-		diff, err = getDiffSinceLastReview(dCtx, promptInfo.LastReviewTreeHash, false)
+	ignoreWhitespace := true
+
+	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 5)
+	if v >= 4 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
+		diff, err = getOwnChangesSinceReview(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, ignoreWhitespace)
+		if err != nil {
+			return CriteriaFulfillment{}, fmt.Errorf("failed to get own changes since review: %v", err)
+		}
+	} else if v >= 3 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
+		diff, err = legacyOwnChangesSinceReviewV3(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, ignoreWhitespace)
+		if err != nil {
+			return CriteriaFulfillment{}, fmt.Errorf("failed to get own changes since review: %v", err)
+		}
+	} else if v >= 2 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
+		diff, err = legacyOwnChangesSinceReview(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, ignoreWhitespace)
+		if err != nil {
+			return CriteriaFulfillment{}, fmt.Errorf("failed to get own changes since review: %v", err)
+		}
+	} else if v >= 2 && promptInfo.BaseBranch != "" {
+		// No last review tree hash available, fall back to full three-dot diff
+		diff, err = GetGitDiff(dCtx, promptInfo.BaseBranch, ignoreWhitespace)
+		if err != nil {
+			return CriteriaFulfillment{}, fmt.Errorf("failed to get three-dot diff: %v", err)
+		}
+	} else if v >= 1 && promptInfo.LastReviewTreeHash != "" {
+		diff, err = getDiffSinceLastReview(dCtx, promptInfo.LastReviewTreeHash, ignoreWhitespace, nil)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get diff since last review: %v", err)
 		}
@@ -43,6 +74,31 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 		diff, err = git.GitDiff(dCtx.ExecContext)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get git diff: %v", err)
+		}
+	}
+
+	// Summarize diff to fit within 50% of the judging model's context capacity
+	summarizeVersion := workflow.GetVersion(dCtx, "summarize-diff-for-fulfillment", workflow.DefaultVersion, 1)
+	if summarizeVersion >= 1 && len(diff) > 0 {
+		modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
+		metadata := dCtx.ExecContext.FetchModelMetadata(modelConfig.Provider, modelConfig.Model)
+		maxDiffChars := metadata.MaxChars() / 2
+		if len(diff) > maxDiffChars {
+			embeddingModelConfig := dCtx.ExecContext.GetEmbeddingModelConfig("diff_summarize")
+			var summarizedDiff string
+			err = workflow.ExecuteActivity(dCtx, SummarizeDiffActivity, SummarizeDiffActivityInput{
+				GitDiff:                diff,
+				ReviewFeedback:         promptInfo.Requirements,
+				EnvContainer:           *dCtx.EnvContainer,
+				ModelConfig:            embeddingModelConfig,
+				SecretManagerContainer: *dCtx.Secrets,
+				MaxChars:               maxDiffChars,
+			}).Get(dCtx, &summarizedDiff)
+			if err == nil {
+				diff = summarizedDiff
+			} else {
+				diff = diff[:maxDiffChars]
+			}
 		}
 	}
 
@@ -69,22 +125,29 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 	// were required to fulfill the requirements (eg already done in previous
 	// step), in which case we need more info in the chat history, eg summary of
 	// chat, and include that in the CheckWorkInfo struct.
-	chatHistory := getCriteriaFulfillmentPrompt(promptInfo)
+	chatHistory, err := getCriteriaFulfillmentPrompt(dCtx.ExecContext, dCtx.WorkspaceId, promptInfo)
+	if err != nil {
+		return CriteriaFulfillment{}, err
+	}
 
 	modelConfig := dCtx.GetModelConfig(common.JudgingKey, 0, "default")
-	params := llm.ToolChatParams{Messages: *chatHistory, ModelConfig: modelConfig}
 
 	var fulfillment CriteriaFulfillment
 	attempts := 0
 	for {
 		// TODO /gen test this, assert it calls the right tool via mock of chat stream method
 		actionCtx := dCtx.ExecContext.NewActionContext("check_criteria_fulfillment")
-		chatResponse, err := persisted_ai.ForceToolCall(actionCtx, dCtx.LLMConfig, &params, &determineCriteriaFulfillmentTool)
-		*chatHistory = params.Messages // update chat history with the new messages
+		actionCtx.ActionParams["diffString"] = promptInfo.Work
+		toolNameMapping, err := resolveStreamToolNameMapping(modelConfig, *actionCtx.Secrets)
 		if err != nil {
-			return CriteriaFulfillment{}, fmt.Errorf("failed to force tool call: %v", err)
+			return CriteriaFulfillment{}, fmt.Errorf("failed to resolve tool name mapping: %v", err)
 		}
-		toolCall := chatResponse.ToolCalls[0]
+		response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(actionCtx, flow_action.TrackOptions{}, modelConfig, chatHistory, toolNameMapping, &determineCriteriaFulfillmentTool)
+		if err != nil {
+			return CriteriaFulfillment{}, fmt.Errorf("failed to force tool call: %w", err)
+		}
+		toolCalls := response.GetMessage().GetToolCalls()
+		toolCall := toolCalls[0]
 		jsonStr := toolCall.Arguments
 		err = json.Unmarshal([]byte(llm.RepairJson(jsonStr)), &fulfillment)
 		if err == nil {
@@ -97,20 +160,22 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 		}
 
 		// we have an error. get the llm to self-correct with the error message
-		newMessage := llm.ChatMessage{
+		newMessage := common.ChatMessage{
 			IsError:    true,
-			Role:       llm.ChatMessageRoleTool,
+			Role:       common.ChatMessageRoleTool,
 			Content:    err.Error(),
 			Name:       toolCall.Name,
 			ToolCallId: toolCall.Id,
 		}
-		*chatHistory = append(*chatHistory, newMessage)
+		if err := AppendChatHistory(dCtx.ExecContext, chatHistory, newMessage); err != nil {
+			return CriteriaFulfillment{}, err
+		}
 	}
 	return fulfillment, nil
 }
 
-func getCriteriaFulfillmentPrompt(promptInfo CheckWorkInfo) *[]llm.ChatMessage {
-	chatHistory := &[]llm.ChatMessage{}
+func getCriteriaFulfillmentPrompt(eCtx flow_action.ExecContext, workspaceId string, promptInfo CheckWorkInfo) (*persisted_ai.ChatHistoryContainer, error) {
+	chatHistory := NewVersionedChatHistory(eCtx, workspaceId)
 
 	var content string
 	if promptInfo.Step.Definition != "" {
@@ -246,6 +311,8 @@ Anyways, here are the automated check results:
 		Content:     content,
 		ContextType: ContextTypeInitialInstructions,
 	}
-	*chatHistory = append(*chatHistory, newMessage)
-	return chatHistory
+	if err := AppendChatHistory(eCtx, chatHistory, newMessage); err != nil {
+		return nil, err
+	}
+	return chatHistory, nil
 }

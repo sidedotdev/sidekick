@@ -146,6 +146,40 @@ func TestGetFlow(t *testing.T) {
 	})
 }
 
+func TestDeleteFlow(t *testing.T) {
+	storage := NewTestSqliteStorage(t, "flow_test")
+	ctx := context.Background()
+
+	t.Run("Delete existing flow", func(t *testing.T) {
+		flow := domain.Flow{
+			WorkspaceId: "workspace1",
+			Id:          "flow-to-delete",
+			Type:        domain.FlowTypeBasicDev,
+			ParentId:    "parent1",
+			Status:      "active",
+		}
+		err := storage.PersistFlow(ctx, flow)
+		require.NoError(t, err)
+
+		// Verify flow exists
+		_, err = storage.GetFlow(ctx, flow.WorkspaceId, flow.Id)
+		require.NoError(t, err)
+
+		// Delete the flow
+		err = storage.DeleteFlow(ctx, flow.WorkspaceId, flow.Id)
+		assert.NoError(t, err)
+
+		// Verify flow is deleted
+		_, err = storage.GetFlow(ctx, flow.WorkspaceId, flow.Id)
+		assert.ErrorIs(t, err, common.ErrNotFound)
+	})
+
+	t.Run("Delete non-existent flow is idempotent", func(t *testing.T) {
+		err := storage.DeleteFlow(ctx, "workspace1", "non-existent-flow")
+		assert.NoError(t, err)
+	})
+}
+
 func TestGetFlowsForTask(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

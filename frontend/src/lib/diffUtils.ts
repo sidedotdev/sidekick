@@ -6,6 +6,7 @@ export interface ParsedDiff {
   linesRemoved: number;
   linesUnchanged: number;
   firstLineNumber: number | null;
+  isRename: boolean;
 }
 
 export const getFileLanguage = (fileName: string | undefined): string | null => {
@@ -109,20 +110,29 @@ const calculateLineCounts = (diffContent: string): { added: number; removed: num
   return { added, removed, unchanged };
 };
 
+const extractFileFromHeader = (line: string, prefix: '--- ' | '+++ '): string | null => {
+  const trimmed = line.replace(/\r$/, '');
+  if (!trimmed.startsWith(prefix)) return null;
+  const path = trimmed.slice(prefix.length);
+  if (path === '/dev/null') return null;
+  // Strip a/ or b/ prefix used by git diff
+  const stripped = path.replace(/^[ab]\//, '');
+  return stripped || null;
+};
+
 export const parseDiff = (diffString: string): ParsedDiff[] => {
   if (!diffString || diffString.trim() === '') {
     return [];
   }
   
-  // Split by diff headers, but keep the headers
-  const files = diffString.split(/^(?=diff --git)/m).filter(file => file.trim() !== '');
+  // Split by diff headers (--git, --cc, --combined), but keep the headers
+  const files = diffString.split(/^(?=diff --(?:git|cc|combined))/m).filter(file => file.trim() !== '');
   
   return files.map(file => {
     const lines = file.split('\n');
-    const diffHeader = lines.find(line => line.startsWith('diff --git'));
+    const diffHeader = lines.find(line => /^diff --(?:git|cc|combined)/.test(line));
     
     if (!diffHeader) {
-      // Fallback for malformed diffs
       return {
         oldFile: { fileName: null, fileLang: null },
         newFile: { fileName: null, fileLang: null },
@@ -131,13 +141,48 @@ export const parseDiff = (diffString: string): ParsedDiff[] => {
         linesRemoved: 0,
         linesUnchanged: 0,
         firstLineNumber: null,
+        isRename: false,
       };
     }
     
+    const cleanHeader = diffHeader.replace(/\r$/, '');
+    let oldFile: string | null = null;
+    let newFile: string | null = null;
+
     // Extract file paths from diff header
-    const pathMatch = diffHeader.match(/^diff --git a\/(.+) b\/(.+)$/);
-    const oldFile = pathMatch ? pathMatch[1] : null;
-    const newFile = pathMatch ? pathMatch[2] : null;
+    const gitMatch = cleanHeader.match(/^diff --git a\/(.+?) b\/(.+)$/);
+    if (gitMatch) {
+      oldFile = gitMatch[1];
+      newFile = gitMatch[2];
+    } else {
+      // Combined diff: "diff --cc path" or "diff --combined path"
+      const combinedMatch = cleanHeader.match(/^diff --(?:cc|combined) (.+)$/);
+      if (combinedMatch) {
+        oldFile = combinedMatch[1];
+        newFile = combinedMatch[1];
+      }
+    }
+
+    // Use --- and +++ lines as authoritative source when available,
+    // since they're unambiguous unlike the diff --git header
+    const oldHeaderLine = lines.find(line => line.startsWith('--- '));
+    const newHeaderLine = lines.find(line => line.startsWith('+++ '));
+    const oldFromHeader = oldHeaderLine ? extractFileFromHeader(oldHeaderLine, '--- ') : null;
+    const newFromHeader = newHeaderLine ? extractFileFromHeader(newHeaderLine, '+++ ') : null;
+    if (oldFromHeader) oldFile = oldFromHeader;
+    if (newFromHeader) newFile = newFromHeader;
+
+    // Detect renames from explicit rename headers or differing old/new paths
+    const renameFromLine = lines.find(line => line.startsWith('rename from '));
+    const renameToLine = lines.find(line => line.startsWith('rename to '));
+    if (renameFromLine) {
+      oldFile = renameFromLine.replace(/\r$/, '').slice('rename from '.length);
+    }
+    if (renameToLine) {
+      newFile = renameToLine.replace(/\r$/, '').slice('rename to '.length);
+    }
+    const isRename = oldFile != null && newFile != null && oldFile !== newFile
+      && oldFile !== 'dev/null' && newFile !== 'dev/null';
     
     // Calculate line counts
     const { added, removed, unchanged } = calculateLineCounts(file);
@@ -155,6 +200,7 @@ export const parseDiff = (diffString: string): ParsedDiff[] => {
       linesRemoved: removed,
       linesUnchanged: unchanged,
       firstLineNumber,
+      isRename,
     };
   });
 };

@@ -1,6 +1,35 @@
+{{#doneRequired}}
+{{#hasPlan}}
+When ALL work for the current step has been fully completed — meaning all
+required code changes and actions have been made and verified — you must call the
+`{{{doneFunctionName}}}` tool to signal that the step is complete.
+Do NOT call `{{{doneFunctionName}}}` after merely answering a question,
+responding to feedback, or completing only part of the step's work. If the user
+asked a question and you answered it, continue working on the step — answering a
+question is not the same as completing the step. The step is only done when its
+entire scope of work is finished.
+{{/hasPlan}}
+{{^hasPlan}}
+When ALL necessary edits and actions have been fully completed (or you've
+confirmed none are needed after thorough analysis), you must call the
+`{{{doneFunctionName}}}` tool to signal completion.
+Do NOT call `{{{doneFunctionName}}}` after merely answering a question,
+responding to feedback, or completing only part of the work. If the user asked a
+question and you answered it, continue working — answering a question is not the
+same as completing the task. Only call done when the full scope of work is
+finished.
+{{/hasPlan}}
+Include a summary of the changes made and your reasoning in the `summary`
+argument of the tool call.
+
+Important: the `{{{doneFunctionName}}}` tool must be called on its own, without
+any other tool calls or edit blocks in the same response.
+{{/doneRequired}}
+{{^doneRequired}}
 At the end, after the *edit blocks*, summarize both the *edit blocks* and your
 thinking process. Use the following format:
 
 {{{summaryStart}}}
 The summary goes here.
 {{{summaryEnd}}}
+{{/doneRequired}}

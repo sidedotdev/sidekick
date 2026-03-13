@@ -1550,6 +1550,8 @@ func TestBasePermissions_ExfiltrationPatterns(t *testing.T) {
 			"cd /home/user",
 			"cd /Users/someone/projects",
 			"cd /Users/dev/code",
+			"cd /repo",
+			"cd /repo/src",
 		}
 
 		for _, script := range scripts {

@@ -465,6 +465,9 @@ func (m ApprovalInputModel) View() string {
 			Foreground(lipgloss.Color("252")).
 			Background(lipgloss.Color("236")).
 			Padding(0, 1)
+		if m.width > 2 {
+			commandStyle = commandStyle.Width(m.width - 2)
+		}
 		b.WriteString(commandStyle.Render(command))
 		b.WriteString("\n")
 		if workingDir, ok := m.action.ActionParams["workingDir"].(string); ok && workingDir != "" {

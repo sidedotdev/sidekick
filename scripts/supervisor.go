@@ -315,17 +315,18 @@ const (
 
 // Process represents a running process
 type Process struct {
-	Config          ProcessConfig
-	Cmd             *exec.Cmd
-	Output          []string
-	mu              sync.RWMutex
-	running         bool
-	stopping        bool
-	dirty           bool
-	cancel          context.CancelFunc
-	generation      uint64
-	prebuildRunning bool
-	prebuildLastErr string
+	Config               ProcessConfig
+	Cmd                  *exec.Cmd
+	Output               []string
+	mu                   sync.RWMutex
+	running              bool
+	stopping             bool
+	dirty                bool
+	cancel               context.CancelFunc
+	generation           uint64
+	prebuildRunningCount int
+	prebuildLastErr      string
+	restartPending       bool
 }
 
 func (p *Process) appendOutput(line string) {
@@ -338,16 +339,17 @@ func (p *Process) appendOutput(line string) {
 	}
 }
 
-func (p *Process) appendOutputIfGeneration(line string, gen uint64) {
+func (p *Process) appendOutputIfGeneration(line string, gen uint64) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.generation != gen {
-		return
+		return false
 	}
 	p.Output = append(p.Output, line)
 	if len(p.Output) > 1000 {
 		p.Output = p.Output[len(p.Output)-1000:]
 	}
+	return true
 }
 
 func (p *Process) getGeneration() uint64 {
@@ -422,13 +424,17 @@ func (p *Process) setDirty(dirty bool) {
 func (p *Process) isPrebuildRunning() bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.prebuildRunning
+	return p.prebuildRunningCount > 0
 }
 
 func (p *Process) setPrebuildRunning(running bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.prebuildRunning = running
+	if running {
+		p.prebuildRunningCount++
+	} else if p.prebuildRunningCount > 0 {
+		p.prebuildRunningCount--
+	}
 }
 
 func (p *Process) getPrebuildLastErr() string {
@@ -441,6 +447,18 @@ func (p *Process) setPrebuildLastErr(err string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.prebuildLastErr = err
+}
+
+func (p *Process) isRestartPending() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.restartPending
+}
+
+func (p *Process) setRestartPending(pending bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.restartPending = pending
 }
 
 // ephemeralConn tracks an active ephemeral connection
@@ -484,10 +502,11 @@ type Supervisor struct {
 	takenOverBy string
 
 	// Filesystem watcher for prebuild triggers
-	watcher        *fsnotify.Watcher
-	watcherCancel  context.CancelFunc
-	prebuildTimers map[string]*time.Timer
-	prebuildMu     sync.Mutex
+	watcher         *fsnotify.Watcher
+	watcherCancel   context.CancelFunc
+	prebuildTimers  map[string]*time.Timer
+	prebuildCancels map[string]context.CancelFunc
+	prebuildMu      sync.Mutex
 }
 
 func NewSupervisor(configs []ProcessConfig, ephemeral bool, projectID, executionRoot string) *Supervisor {
@@ -499,13 +518,15 @@ func NewSupervisor(configs []ProcessConfig, ephemeral bool, projectID, execution
 		}
 	}
 	s := &Supervisor{
-		processes:      processes,
-		ephemeral:      ephemeral,
-		projectID:      projectID,
-		executionRoot:  executionRoot,
-		socketPath:     getSocketPath(projectID),
-		takeoverChan:   make(chan struct{}, 1),
-		ephemeralConns: make(map[string]*ephemeralConn),
+		processes:       processes,
+		ephemeral:       ephemeral,
+		projectID:       projectID,
+		executionRoot:   executionRoot,
+		socketPath:      getSocketPath(projectID),
+		takeoverChan:    make(chan struct{}, 1),
+		ephemeralConns:  make(map[string]*ephemeralConn),
+		prebuildTimers:  make(map[string]*time.Timer),
+		prebuildCancels: make(map[string]context.CancelFunc),
 	}
 	s.ownershipCond = sync.NewCond(&s.ownershipMu)
 	return s
@@ -555,12 +576,13 @@ func (s *Supervisor) StartProcess(ctx context.Context, p *Process, outputChan ch
 	go func() {
 		err := cmd.Wait()
 		p.setExited(gen)
+		var appended bool
 		if err != nil && procCtx.Err() == nil {
-			p.appendOutputIfGeneration(fmt.Sprintf("[Process exited with error: %v]", err), gen)
+			appended = p.appendOutputIfGeneration(fmt.Sprintf("[Process exited with error: %v]", err), gen)
 		} else {
-			p.appendOutputIfGeneration("[Process exited]", gen)
+			appended = p.appendOutputIfGeneration("[Process exited]", gen)
 		}
-		if outputChan != nil {
+		if appended && outputChan != nil {
 			outputChan <- processOutputMsg{name: p.Config.Name}
 		}
 	}()
@@ -572,9 +594,10 @@ func (s *Supervisor) streamOutput(p *Process, r io.Reader, outputChan chan<- pro
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Text()
-		p.appendOutputIfGeneration(line, gen)
-		if outputChan != nil {
-			outputChan <- processOutputMsg{name: p.Config.Name}
+		if p.appendOutputIfGeneration(line, gen) {
+			if outputChan != nil {
+				outputChan <- processOutputMsg{name: p.Config.Name}
+			}
 		}
 	}
 }
@@ -638,19 +661,12 @@ func (s *Supervisor) StartAll(ctx context.Context, outputChan chan<- processOutp
 	}
 }
 
-// processHasExited checks if the process has actually exited at the OS level.
-// It first checks cmd.ProcessState (set by cmd.Wait()), then falls back to
-// checking if the process exists via kill(pid, 0).
+// processHasExited checks if the process has actually exited at the OS level
+// using kill(pid, 0), which returns an error if the process no longer exists.
 func processHasExited(cmd *exec.Cmd) bool {
 	if cmd == nil || cmd.Process == nil {
 		return true
 	}
-	// ProcessState is set by cmd.Wait() when the process exits
-	if cmd.ProcessState != nil {
-		return true
-	}
-	// Fallback: check if process exists at OS level
-	// kill(pid, 0) returns error if process doesn't exist
 	err := syscall.Kill(cmd.Process.Pid, 0)
 	return err != nil
 }
@@ -724,13 +740,22 @@ func (s *Supervisor) runPrebuild(ctx context.Context, p *Process, outputChan cha
 		return
 	}
 
+	// Create a per-process cancellable context so handleFileChange can cancel us
+	s.prebuildMu.Lock()
+	prebuildCtx, prebuildCancel := context.WithCancel(ctx)
+	s.prebuildCancels[p.Config.Name] = prebuildCancel
+	s.prebuildMu.Unlock()
+	defer prebuildCancel()
+
 	p.setPrebuildRunning(true)
+	defer p.setPrebuildRunning(false)
+
 	p.setPrebuildLastErr("")
 	if outputChan != nil {
 		outputChan <- processOutputMsg{name: p.Config.Name}
 	}
 
-	cmd := exec.CommandContext(ctx, p.Config.PrebuildCommand, p.Config.PrebuildArgs...)
+	cmd := exec.CommandContext(prebuildCtx, p.Config.PrebuildCommand, p.Config.PrebuildArgs...)
 	if p.Config.WorkingDir != "" {
 		cmd.Dir = filepath.Join(s.executionRoot, p.Config.WorkingDir)
 	} else {
@@ -740,12 +765,30 @@ func (s *Supervisor) runPrebuild(ctx context.Context, p *Process, outputChan cha
 
 	err := cmd.Run()
 
-	p.setPrebuildRunning(false)
+	// If cancelled, return without triggering restart — a new prebuild will follow
+	if prebuildCtx.Err() != nil {
+		if outputChan != nil {
+			outputChan <- processOutputMsg{name: p.Config.Name}
+		}
+		return
+	}
+
 	if err != nil {
 		p.setPrebuildLastErr(err.Error())
 	}
 	if outputChan != nil {
 		outputChan <- processOutputMsg{name: p.Config.Name}
+	}
+
+	// If a restart was requested while prebuild was running, trigger it now
+	if p.isRestartPending() {
+		p.setRestartPending(false)
+		p.clearOutputAndIncrementGeneration()
+		p.setStopping(true)
+		if outputChan != nil {
+			outputChan <- processOutputMsg{name: p.Config.Name}
+		}
+		s.RestartProcess(ctx, p, outputChan)
 	}
 }
 
@@ -816,7 +859,12 @@ func (s *Supervisor) StartWatcher(ctx context.Context, outputChan chan<- process
 		return fmt.Errorf("failed to create watcher: %w", err)
 	}
 	s.watcher = watcher
-	s.prebuildTimers = make(map[string]*time.Timer)
+	if s.prebuildTimers == nil {
+		s.prebuildTimers = make(map[string]*time.Timer)
+	}
+	if s.prebuildCancels == nil {
+		s.prebuildCancels = make(map[string]context.CancelFunc)
+	}
 
 	// Add watch roots recursively
 	for root := range rootSet {
@@ -898,10 +946,15 @@ func (s *Supervisor) handleFileChange(ctx context.Context, p *Process, outputCha
 		}
 	}
 
-	// Schedule debounced prebuild
 	s.prebuildMu.Lock()
 	defer s.prebuildMu.Unlock()
 
+	// Cancel any in-progress prebuild for this process
+	if cancel, exists := s.prebuildCancels[p.Config.Name]; exists {
+		cancel()
+	}
+
+	// Reset debounce timer
 	if timer, exists := s.prebuildTimers[p.Config.Name]; exists {
 		timer.Stop()
 	}
@@ -1454,11 +1507,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Restart current process
 			if m.activeTab < len(m.supervisor.processes) {
 				p := m.supervisor.processes[m.activeTab]
-				// Set stopping state and clear logs immediately so UI updates
-				p.clearOutputAndIncrementGeneration()
-				p.setStopping(true)
-				m.updateViewportContent()
-				go m.supervisor.RestartProcess(m.ctx, p, m.outputChan)
+				if p.isPrebuildRunning() {
+					p.setRestartPending(true)
+					m.updateViewportContent()
+				} else {
+					p.clearOutputAndIncrementGeneration()
+					p.setStopping(true)
+					m.updateViewportContent()
+					go m.supervisor.RestartProcess(m.ctx, p, m.outputChan)
+				}
 			}
 		case "R":
 			// Restart all processes
@@ -1471,23 +1528,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			// Restart all dirty processes
 			var dirtyProcesses []*Process
+			var deferredProcesses []*Process
 			for _, p := range m.supervisor.processes {
 				if p.isDirty() {
-					dirtyProcesses = append(dirtyProcesses, p)
+					if p.isPrebuildRunning() {
+						deferredProcesses = append(deferredProcesses, p)
+					} else {
+						dirtyProcesses = append(dirtyProcesses, p)
+					}
 				}
+			}
+			for _, p := range deferredProcesses {
+				p.setRestartPending(true)
 			}
 			if len(dirtyProcesses) > 0 {
 				for _, p := range dirtyProcesses {
 					p.clearOutputAndIncrementGeneration()
 					p.setStopping(true)
 				}
-				m.updateViewportContent()
 				go func() {
 					for _, p := range dirtyProcesses {
 						m.supervisor.RestartProcess(m.ctx, p, m.outputChan)
 					}
 				}()
 			}
+			m.updateViewportContent()
 		case "left", "h":
 			if m.activeTab > 0 {
 				m.activeTab--
@@ -1967,6 +2032,9 @@ func (m model) getStatusIndicator(p *Process) string {
 	if p.isDirty() {
 		style := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 		if p.isPrebuildRunning() {
+			if p.isRestartPending() {
+				return style.Render("● Restarting after prebuild…")
+			}
 			return style.Render("● Changes (prebuilding…)")
 		}
 		if errMsg := p.getPrebuildLastErr(); errMsg != "" {

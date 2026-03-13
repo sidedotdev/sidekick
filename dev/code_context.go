@@ -10,7 +10,9 @@ import (
 	"sidekick/domain"
 	"sidekick/env"
 	"sidekick/fflag"
+	"sidekick/flow_action"
 	"sidekick/llm"
+	"sidekick/llm2"
 	"sidekick/persisted_ai"
 	"sidekick/utils"
 	"strings"
@@ -132,7 +134,7 @@ func PrepareRepoSummary(dCtx DevContext, requirements string) (string, string, e
 		return repoSummary, "", nil
 	}
 	// Call IdentifyInformationNeeds to get additional information needs
-	chatHistory := &[]llm.ChatMessage{}
+	chatHistory := NewVersionedChatHistory(dCtx, dCtx.WorkspaceId)
 	infoNeeds, err := IdentifyInformationNeeds(dCtx, chatHistory, repoSummary, requirements)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to identify information needs: %v", err)
@@ -169,10 +171,10 @@ func GetRankedRepoSummary(dCtx DevContext, rankQuery string, charLimit int) (str
 	for {
 		actionCtx := dCtx.NewActionContext("ranked_repo_summary")
 		actionCtx.ActionParams = options.ActionParams()
-		repoSummary, err = Track(actionCtx, func(flowAction *domain.FlowAction) (string, error) {
+		repoSummary, err = Track(actionCtx, func(trackedCtx DevActionContext, flowAction *domain.FlowAction) (string, error) {
 			var repoSummary string
 			var ra *persisted_ai.RagActivities // use a nil struct pointer to call activities that are part of a structure
-			err := workflow.ExecuteActivity(utils.NoRetryCtx(dCtx), ra.RankedDirSignatureOutline, options).Get(dCtx, &repoSummary)
+			err := workflow.ExecuteActivity(utils.NoRetryCtx(trackedCtx), ra.RankedDirSignatureOutline, options).Get(trackedCtx, &repoSummary)
 			if err != nil {
 				return "", err
 			}
@@ -204,7 +206,7 @@ func GetRelevantCodeContext(dCtx DevContext, promptInfo DetermineCodeContextInfo
 	threshold := defaultMaxChatHistoryLength
 
 	// TODO move up to PrepareInitialCodeContext and beyond
-	return codeContextLoop(dCtx.NewActionContext("Determine Required Code Context"), promptInfo, longestFirst, threshold)
+	return codeContextLoop(dCtx.NewActionContext("generate.code_context"), promptInfo, longestFirst, threshold)
 }
 
 // TODO: make this configurable and/or dynamic by model
@@ -221,7 +223,7 @@ func RefineAndRankCodeContext(dCtx DevContext, envContainer env.EnvContainer, pr
 	threshold := min(defaultMaxChatHistoryLength/2, refineContextLengthThreshold)
 
 	// TODO move up to PrepareInitialCodeContext and beyond
-	requiredCodeContext, codeContext, err := codeContextLoop(dCtx.NewActionContext("Refine And Rank Code Context"), promptInfo, longestFirst, threshold)
+	requiredCodeContext, codeContext, err := codeContextLoop(dCtx.NewActionContext("generate.refine_code_context"), promptInfo, longestFirst, threshold)
 	if err != nil {
 		return "", "", err
 	}
@@ -241,11 +243,23 @@ func RefineAndRankCodeContext(dCtx DevContext, envContainer env.EnvContainer, pr
 func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestFirst bool, maxLength int) (*RequiredCodeContext, string, error) {
 	var requiredCodeContext RequiredCodeContext
 	var codeContext string
-	chatHistory := &[]llm.ChatMessage{}
-	addCodeContextPrompt(chatHistory, promptInfo)
+	chatHistory := NewVersionedChatHistory(actionCtx, actionCtx.WorkspaceId)
+	if err := addCodeContextPrompt(actionCtx.ExecContext, chatHistory, promptInfo); err != nil {
+		return nil, "", err
+	}
 	noRetryCtx := utils.NoRetryCtx(actionCtx)
 	attempts := 0
 	iterationsSinceLastFeedback := 0
+
+	feedbackThreshold := 5
+	maxAttempts := 17
+	giveUpQuietly := false
+	v := workflow.GetVersion(actionCtx, "code-context-loop-limits", workflow.DefaultVersion, 1)
+	if v == 1 {
+		feedbackThreshold = 8
+		maxAttempts = feedbackThreshold
+		giveUpQuietly = true
+	}
 
 	for {
 		// Check for pause at the beginning of each iteration
@@ -254,10 +268,12 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			return nil, "", fmt.Errorf("failed to check for pause: %v", err)
 		}
 		if userResponse != nil && userResponse.Content != "" {
-			addCodeContextPrompt(chatHistory, FeedbackInfo{
+			if err := addCodeContextPrompt(actionCtx.ExecContext, chatHistory, FeedbackInfo{
 				Feedback: userResponse.Content,
 				Type:     FeedbackTypePause,
-			})
+			}); err != nil {
+				return nil, "", err
+			}
 			iterationsSinceLastFeedback = 0
 			continue
 		}
@@ -265,18 +281,28 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		// NOTE due to most of the testing being done this way so far, we clean
 		// up chat history *before* extending it. We'll look into changing this
 		// later, and will tune our max history length to support that change.
-		ManageChatHistory(actionCtx, chatHistory, defaultMaxChatHistoryLength)
+		var modelConfig common.ModelConfig
+		if v := workflow.GetVersion(actionCtx, "chat-history-manage-v4", workflow.DefaultVersion, 1); v == 1 {
+			modelConfig = actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
+		}
+		ManageChatHistory(actionCtx, chatHistory, actionCtx.WorkspaceId, defaultMaxChatHistoryLength, modelConfig)
 
 		attempts++
 		iterationsSinceLastFeedback++
 
-		if iterationsSinceLastFeedback >= 5 {
+		if iterationsSinceLastFeedback >= feedbackThreshold {
+			if giveUpQuietly {
+				workflow.GetLogger(actionCtx).Warn("code context loop exceeded threshold, returning empty context", "attempts", attempts)
+				return &RequiredCodeContext{}, "", nil
+			}
 			guidanceContext := "The system has attempted to refine and rank the code context multiple times without success. Please provide some guidance."
 			userFeedback, err := GetUserFeedback(actionCtx.DevContext, SkipInfo{}, guidanceContext, chatHistory, nil)
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to get user feedback: %v", err)
 			}
-			addCodeContextPrompt(chatHistory, userFeedback)
+			if err := addCodeContextPrompt(actionCtx.ExecContext, chatHistory, userFeedback); err != nil {
+				return nil, "", err
+			}
 			iterationsSinceLastFeedback = 0
 		} else if attempts%3 == 0 {
 			chatCtx := actionCtx.DevContext.WithCancelOnPause()
@@ -287,14 +313,13 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to force searching repository: %v", err)
 			}
-			toolCallResponseInfos := handleToolCalls(actionCtx.DevContext, toolCalls, nil)
-			for _, info := range toolCallResponseInfos {
-				addCodeContextPrompt(chatHistory, info)
+			if _, err := handleToolCalls(actionCtx.DevContext, toolCalls, chatHistory, nil); err != nil {
+				return nil, "", err
 			}
 		}
 
-		if attempts >= 17 {
-			return nil, "", fmt.Errorf("failed to refine and rank code context after 17 attempts: %v", err)
+		if !giveUpQuietly && attempts >= maxAttempts {
+			return nil, "", fmt.Errorf("failed to refine and rank code context after %d attempts: %v", maxAttempts, err)
 		}
 
 		// STEP 2: Decide which code to read fully
@@ -317,7 +342,9 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		}
 		if hasUnmarshalError {
 			for _, feedback := range feedbacks {
-				addCodeContextPrompt(chatHistory, feedback)
+				if err := addCodeContextToolResult(actionCtx.ExecContext, chatHistory, feedback); err != nil {
+					return nil, "", err
+				}
 			}
 			continue
 		}
@@ -334,7 +361,9 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 		allSymbolDefinitions, retrievalFeedbacks := retrieveCodeContextForToolCalls(noRetryCtx, actionCtx.EnvContainer, toolCallResults)
 		if len(retrievalFeedbacks) > 0 {
 			for _, feedback := range retrievalFeedbacks {
-				addCodeContextPrompt(chatHistory, feedback)
+				if err := addCodeContextToolResult(actionCtx.ExecContext, chatHistory, feedback); err != nil {
+					return nil, "", err
+				}
 			}
 			continue
 		}
@@ -356,22 +385,105 @@ func codeContextLoop(actionCtx DevActionContext, promptInfo PromptInfo, longestF
 
 		// TODO use tiktoken to count exact tokens and compare with specific model being used + margin
 		if len(codeContext) > currentMax {
-			// TODO if this happens, we could try partially symbolizing the code context too
-			// Provide feedback for all tool calls when combined context is too long
-			feedback := "Error: the code context requested is too long to include. YOU MUST SHORTEN THE CODE CONTEXT REQUESTED. DO NOT REQUEST SO MANY FUNCTIONS AND TYPES IN SO MANY FILES. If you're not asking for too many symbols, then be more specific in your request - eg request just a few methods instead of a big class."
-			for _, tcResult := range toolCallResults {
-				promptInfo = ToolCallResponseInfo{Response: feedback, ToolCallId: tcResult.ToolCall.Id, FunctionName: tcResult.ToolCall.Name}
-				addCodeContextPrompt(chatHistory, promptInfo)
+			v := workflow.GetVersion(actionCtx, "truncate-code-context-instead-of-retry", workflow.DefaultVersion, 1)
+			if v == 1 {
+				codeContext = truncateCodeContextWithSummary(codeContext, currentMax)
+			} else {
+				// TODO if this happens, we could try partially symbolizing the code context too
+				feedback := "Error: the code context requested is too long to include. YOU MUST SHORTEN THE CODE CONTEXT REQUESTED. DO NOT REQUEST SO MANY FUNCTIONS AND TYPES IN SO MANY FILES. If you're not asking for too many symbols, then be more specific in your request - eg request just a few methods instead of a big class."
+				for _, tcResult := range toolCallResults {
+					toolResult := llm2.ToolResultBlock{
+						ToolCallId: tcResult.ToolCall.Id,
+						Name:       tcResult.ToolCall.Name,
+						IsError:    true,
+						Content:    llm2.TextContentBlocks(feedback),
+					}
+					if err := addCodeContextToolResult(actionCtx.ExecContext, chatHistory, toolResult); err != nil {
+						return nil, "", err
+					}
+				}
+				continue
 			}
-			continue
-		} else {
-			// TODO check for empty code context too. we should use
-			// alternate methods if we get empty code context repeatedly.
-			break
 		}
+		// TODO check for empty code context too. we should use
+		// alternate methods if we get empty code context repeatedly.
+		break
 	}
 
 	return &requiredCodeContext, codeContext, nil
+}
+
+// truncateCodeContextWithSummary truncates codeContext to fit within maxLength,
+// appending a summary of which file sections were fully or partially removed.
+func truncateCodeContextWithSummary(codeContext string, maxLength int) string {
+	if len(codeContext) <= maxLength {
+		return codeContext
+	}
+
+	// Find all "File: " markers and their positions
+	type fileSection struct {
+		filePath string
+		offset   int
+	}
+	var sections []fileSection
+	lines := strings.Split(codeContext, "\n")
+	offset := 0
+	for _, line := range lines {
+		if strings.HasPrefix(line, "File: ") {
+			sections = append(sections, fileSection{
+				filePath: strings.TrimPrefix(line, "File: "),
+				offset:   offset,
+			})
+		}
+		offset += len(line) + 1 // +1 for the newline
+	}
+
+	// Determine which files are truncated or fully removed
+	var truncatedFiles []string
+	var removedFiles []string
+	for i, sec := range sections {
+		sectionEnd := len(codeContext)
+		if i+1 < len(sections) {
+			sectionEnd = sections[i+1].offset
+		}
+		if sec.offset >= maxLength {
+			removedFiles = append(removedFiles, sec.filePath)
+		} else if sectionEnd > maxLength {
+			remaining := maxLength - sec.offset
+			total := sectionEnd - sec.offset
+			truncatedFiles = append(truncatedFiles, fmt.Sprintf("%s (%d/%d bytes kept)", sec.filePath, remaining, total))
+		}
+	}
+
+	// Build the truncation summary
+	var summary strings.Builder
+	summary.WriteString("\n\n... [truncated] ...")
+	if len(truncatedFiles) > 0 {
+		summary.WriteString("\nPartially included: ")
+		summary.WriteString(strings.Join(truncatedFiles, ", "))
+	}
+	if len(removedFiles) > 0 {
+		summary.WriteString("\nFully removed: ")
+		summary.WriteString(strings.Join(removedFiles, ", "))
+	}
+
+	summaryStr := summary.String()
+	// Truncate at the last newline before the limit to avoid cutting mid-line,
+	// leaving room for the summary
+	cutoff := maxLength - len(summaryStr)
+	if cutoff < 0 {
+		cutoff = 0
+	}
+	if cutoff > len(codeContext) {
+		cutoff = len(codeContext)
+	}
+	// Find the last newline before cutoff to avoid splitting mid-line
+	lastNewline := strings.LastIndex(codeContext[:cutoff], "\n")
+	if lastNewline > 0 {
+		cutoff = lastNewline
+	}
+
+	return codeContext[:cutoff] + summaryStr
 }
 
 func extractCodeContext(ctx workflow.Context, req coding.DirectorySymDefRequest) (coding.SymDefResults, error) {
@@ -449,16 +561,25 @@ type ToolCallWithCodeContext struct {
 // ForceToolRetrieveCodeContext forces the LLM to call get_symbol_definitions and
 // returns all tool calls with their parsed RequiredCodeContext. Each tool call is
 // parsed independently; if parsing fails for a tool call, its Err field is set.
-func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *[]llm.ChatMessage) ([]ToolCallWithCodeContext, error) {
-	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "small")
-	params := llm.ToolChatParams{Messages: *chatHistory, ModelConfig: modelConfig}
-	chatResponse, err := persisted_ai.ForceToolCall(actionCtx.FlowActionContext(), actionCtx.LLMConfig, &params, currentGetSymbolDefinitionsTool())
-	*chatHistory = params.Messages // update chat history with the new messages
+func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *persisted_ai.ChatHistoryContainer) ([]ToolCallWithCodeContext, error) {
+	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
+	flowActionCtx := actionCtx.FlowActionContext()
+	toolNameMapping, err := resolveStreamToolNameMapping(modelConfig, *flowActionCtx.Secrets)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve tool name mapping: %v", err)
+	}
+	response, err := persisted_ai.ForceToolCallWithTrackOptionsV2(
+		flowActionCtx,
+		flow_action.TrackOptions{},
+		modelConfig,
+		chatHistory,
+		toolNameMapping,
+		currentGetSymbolDefinitionsTool(),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to force tool call: %v", err)
 	}
-
-	return parseToolCallsToCodeContext(chatResponse.ToolCalls), nil
+	return parseToolCallsToCodeContext(response.GetMessage().GetToolCalls()), nil
 }
 
 // parseToolCallsToCodeContext parses multiple tool calls into ToolCallWithCodeContext structs.
@@ -503,17 +624,17 @@ func mergeToolCallRequests(results []ToolCallWithCodeContext) RequiredCodeContex
 // checkToolCallUnmarshalErrors checks for unmarshal errors in tool call results.
 // Returns feedback for each malformed tool call, whether any unmarshal errors were found,
 // and a fatal error if a non-unmarshal error is encountered.
-func checkToolCallUnmarshalErrors(results []ToolCallWithCodeContext) ([]ToolCallResponseInfo, bool, error) {
-	var feedbacks []ToolCallResponseInfo
+func checkToolCallUnmarshalErrors(results []ToolCallWithCodeContext) ([]llm2.ToolResultBlock, bool, error) {
+	var feedbacks []llm2.ToolResultBlock
 	hasUnmarshalError := false
 	for _, tcResult := range results {
 		if tcResult.Err != nil {
 			if errors.Is(tcResult.Err, llm.ErrToolCallUnmarshal) {
 				response := fmt.Sprintf("%s\n\nHint: To fix this, follow the json schema correctly. In particular, don't put json within a string.", tcResult.Err.Error())
-				feedbacks = append(feedbacks, ToolCallResponseInfo{
-					Response:     response,
-					ToolCallId:   tcResult.ToolCall.Id,
-					FunctionName: tcResult.ToolCall.Name,
+				feedbacks = append(feedbacks, llm2.ToolResultBlock{
+					Content:    llm2.TextContentBlocks(response),
+					ToolCallId: tcResult.ToolCall.Id,
+					Name:       tcResult.ToolCall.Name,
 				})
 				hasUnmarshalError = true
 			} else {
@@ -527,9 +648,9 @@ func checkToolCallUnmarshalErrors(results []ToolCallWithCodeContext) ([]ToolCall
 // retrieveCodeContextForToolCalls retrieves code context for each tool call and returns
 // the concatenated symbol definitions. If any retrieval fails, it returns feedback for
 // those failures instead of symbol definitions.
-func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.EnvContainer, results []ToolCallWithCodeContext) ([]string, []ToolCallResponseInfo) {
+func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.EnvContainer, results []ToolCallWithCodeContext) ([]string, []llm2.ToolResultBlock) {
 	var allSymbolDefinitions []string
-	var feedbacks []ToolCallResponseInfo
+	var feedbacks []llm2.ToolResultBlock
 
 	v := workflow.GetVersion(ctx, "handle-multiple-required-code-context", workflow.DefaultVersion, 1)
 	for i, tcResult := range results {
@@ -551,10 +672,10 @@ func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.Env
 		if err != nil || result.Failures != "" {
 			hint := fmt.Sprintf("Have you followed the required formats exactly for all arguments? Look at the examples given in the %s schema descriptions for all the properties. Note that frontend components can be retrieved in full with empty symbol names array", currentGetSymbolDefinitionsTool().Name)
 			feedback := fmt.Sprintf("failed to extract code context: %v\n%s\n\nHint: %s", err, result.Failures, hint)
-			feedbacks = append(feedbacks, ToolCallResponseInfo{
-				Response:     feedback,
-				ToolCallId:   tcResult.ToolCall.Id,
-				FunctionName: tcResult.ToolCall.Name,
+			feedbacks = append(feedbacks, llm2.ToolResultBlock{
+				Content:    llm2.TextContentBlocks(feedback),
+				ToolCallId: tcResult.ToolCall.Id,
+				Name:       tcResult.ToolCall.Name,
 			})
 		} else {
 			allSymbolDefinitions = append(allSymbolDefinitions, result.SymbolDefinitions)
@@ -564,7 +685,7 @@ func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.Env
 	return allSymbolDefinitions, feedbacks
 }
 
-func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo) {
+func addCodeContextPrompt(eCtx flow_action.ExecContext, chatHistory *persisted_ai.ChatHistoryContainer, promptInfo PromptInfo) error {
 	var content string
 	role := llm.ChatMessageRoleUser
 	name := ""
@@ -576,12 +697,6 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 	switch info := promptInfo.(type) {
 	case SkipInfo:
 		skip = true
-	case ToolCallResponseInfo:
-		role = llm.ChatMessageRoleTool
-		content = renderCodeContextFeedbackPrompt(info.Response, "")
-		name = info.FunctionName
-		toolCallId = info.ToolCallId
-		isError = info.IsError
 	case FeedbackInfo:
 		content = renderCodeContextFeedbackPrompt(info.Feedback, info.Type)
 	case DetermineCodeContextInfo:
@@ -597,7 +712,7 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 	}
 
 	if !skip {
-		*chatHistory = append(*chatHistory, llm.ChatMessage{
+		return AppendChatHistory(eCtx, chatHistory, llm.ChatMessage{
 			Role:         role,
 			Content:      content,
 			Name:         name,
@@ -607,6 +722,18 @@ func addCodeContextPrompt(chatHistory *[]llm.ChatMessage, promptInfo PromptInfo)
 			IsError:      isError,
 		})
 	}
+	return nil
+}
+
+func addCodeContextToolResult(eCtx flow_action.ExecContext, chatHistory *persisted_ai.ChatHistoryContainer, trb llm2.ToolResultBlock) error {
+	content := renderCodeContextFeedbackPrompt(trb.TextContent(), "")
+	return AppendChatHistory(eCtx, chatHistory, llm.ChatMessage{
+		Role:       llm.ChatMessageRoleTool,
+		Content:    content,
+		Name:       trb.Name,
+		ToolCallId: trb.ToolCallId,
+		IsError:    trb.IsError,
+	})
 }
 
 func renderCodeContextFeedbackPrompt(feedback, feedbackType string) string {

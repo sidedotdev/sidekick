@@ -13,6 +13,7 @@ import (
 	"sidekick/env"
 	"sidekick/fflag"
 	"sidekick/llm"
+	"sidekick/persisted_ai"
 	"sidekick/utils"
 	"strings"
 	"testing"
@@ -25,7 +26,7 @@ func TestValidateEditBlocksEmptyChatHistory(t *testing.T) {
 	t.Parallel()
 
 	// Create an empty chat history
-	chatHistory := []llm.ChatMessage{}
+	chatHistory := persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
 	// Create a slice of EditBlocks with various scenarios
 	editBlocks := []EditBlock{
@@ -57,15 +58,19 @@ func TestValidateEditBlocksWithValidBlocks(t *testing.T) {
 	t.Parallel()
 
 	// Create a chat history that includes the old lines from our edit blocks
-	chatHistory := []llm.ChatMessage{
-		{
-			Role:    llm.ChatMessageRoleTool,
-			Content: "Here's some code:\n```go\nfunc oldFunction() {\n    // Some code\n}\n```",
-		},
-		{
-			Role:    llm.ChatMessageRoleTool,
-			Content: "And here's another struct:\n```go\ntype OldStruct struct {\n    // Some fields\n}\n```",
-		},
+	chatHistory := persisted_ai.ChatHistoryContainer{
+		History: persisted_ai.NewLegacyChatHistoryFromChatMessages(
+			[]llm.ChatMessage{
+				{
+					Role:    llm.ChatMessageRoleTool,
+					Content: "Here's some code:\n```go\nfunc oldFunction() {\n    // Some code\n}\n```",
+				},
+				{
+					Role:    llm.ChatMessageRoleTool,
+					Content: "And here's another struct:\n```go\ntype OldStruct struct {\n    // Some fields\n}\n```",
+				},
+			},
+		),
 	}
 
 	// Create a slice of EditBlocks with various scenarios
@@ -100,13 +105,17 @@ func TestValidateEditBlocksWithInvalidBlocks(t *testing.T) {
 	t.Parallel()
 
 	// Create a chat history that doesn't include the old lines from our edit blocks
-	chatHistory := []llm.ChatMessage{
-		{
-			Content: "Here's some unrelated code:\n```go\nfunc someOtherFunction() {\n    // Some code\n}\n```",
-		},
-		{
-			Content: "And here's another unrelated struct:\n```go\ntype SomeOtherStruct struct {\n    // Some fields\n}\n```",
-		},
+	chatHistory := persisted_ai.ChatHistoryContainer{
+		History: persisted_ai.NewLegacyChatHistoryFromChatMessages(
+			[]llm.ChatMessage{
+				{
+					Content: "Here's some unrelated code:\n```go\nfunc someOtherFunction() {\n    // Some code\n}\n```",
+				},
+				{
+					Content: "And here's another unrelated struct:\n```go\ntype SomeOtherStruct struct {\n    // Some fields\n}\n```",
+				},
+			},
+		),
 	}
 
 	// Create a slice of EditBlocks with old lines not present in chat history
@@ -598,13 +607,12 @@ func TestApplyEditBlockActivity_deleteWithCheckEdits(t *testing.T) {
 	_, err = os.Stat(filePath)
 	assert.True(t, os.IsNotExist(err), "File should be deleted")
 
-	// Verify the deletion was staged
-	stashCmd := exec.Command("git", "stash", "--keep-index")
-	stashCmd.Dir = tmpDir
-	err = stashCmd.Run()
+	// Verify the deletion was staged by checking git diff --cached
+	diffCmd := exec.Command("git", "diff", "--cached", "--name-status")
+	diffCmd.Dir = tmpDir
+	output, err := diffCmd.Output()
 	require.NoError(t, err)
-	_, err = os.Stat(filePath)
-	assert.True(t, os.IsNotExist(err), "File should still be deleted post-stash")
+	assert.Contains(t, string(output), "D\ttest_file.txt", "File deletion should be staged")
 }
 
 func TestGetUpdatedContents(t *testing.T) {

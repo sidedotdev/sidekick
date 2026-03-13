@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sidekick"
 	"sidekick/common"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
 	"sidekick/secret_manager"
-	"sidekick/srv/redis"
-	sidekickworker "sidekick/worker" // Added for StartWorker
+	"sidekick/srv"
+	sidekickworker "sidekick/worker"
 	"syscall"
 	"time"
 
@@ -87,7 +88,7 @@ func ExampleLlmActivitiesWorkflow(ctx workflow.Context) (string, error) {
 	var chatResponse llm.ChatMessageResponse
 	// This workflow instantiates LlmActivities directly with a test streamer.
 	// Therefore, LlmActivities does not need to be registered on the worker separately for this workflow.
-	la := persisted_ai.LlmActivities{Streamer: redis.NewTestRedisStreamer()}
+	la := persisted_ai.LlmActivities{Streamer: srv.NewMemoryStreamer()}
 	err := workflow.ExecuteActivity(ctx, la.ChatStream, chatStreamOptions).Get(ctx, &chatResponse)
 	if err != nil {
 		return "", err
@@ -132,8 +133,13 @@ func main() {
 	}
 
 	// Initialize Temporal client
-	clientOptions := client.Options{
-		HostPort: common.GetTemporalServerHostPort(), // Assumes common.GetTemporalServerHostPort() is available
+	service, err := sidekick.GetService()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize storage")
+	}
+	clientOptions, err := common.NewTemporalClientOptions(service, common.GetTemporalServerHostPort())
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create Temporal client options")
 	}
 
 	temporalClient, err := client.NewLazyClient(clientOptions)

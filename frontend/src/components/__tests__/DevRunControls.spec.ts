@@ -15,10 +15,12 @@ class MockWebSocket {
   constructor(url: string) {
     this.url = url
     MockWebSocket.instances.push(this)
-    setTimeout(() => {
+    // Use queueMicrotask so onopen fires before any pending macrotask timers,
+    // avoiding a race between the debounce timer and the socket open callback.
+    queueMicrotask(() => {
       this.readyState = WebSocket.OPEN
       this.onopen?.(new Event('open'))
-    }, 0)
+    })
   }
   
   send = vi.fn()
@@ -38,16 +40,23 @@ class MockWebSocket {
 describe('DevRunControls', () => {
   let wrapper: VueWrapper
   let originalWebSocket: typeof WebSocket
+  let originalFetch: typeof global.fetch
 
   beforeEach(() => {
     vi.clearAllMocks()
     MockWebSocket.clear()
     originalWebSocket = global.WebSocket
+    originalFetch = global.fetch
     global.WebSocket = MockWebSocket as any
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+    } as Response)
   })
 
   afterEach(() => {
     global.WebSocket = originalWebSocket
+    global.fetch = originalFetch
     wrapper?.unmount()
   })
 
