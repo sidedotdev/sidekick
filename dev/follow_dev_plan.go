@@ -188,13 +188,26 @@ func completeDevStepSubflow(dCtx DevContext, requirements string, planExecution 
 		}
 	}
 
+	environmentContext := getEnvironmentContext()
+	v := workflow.GetVersion(dCtx, "env-context-from-activity-step", workflow.DefaultVersion, 1)
+	if v >= 1 && dCtx.EnvContainer != nil {
+		var output env.GetEnvironmentInfoOutput
+		actErr := workflow.ExecuteActivity(dCtx, env.GetEnvironmentInfoActivity, env.GetEnvironmentInfoInput{
+			EnvContainer: *dCtx.EnvContainer,
+		}).Get(dCtx, &output)
+		if actErr == nil && output.OS != "" {
+			environmentContext = output.FormatEnvironmentContext()
+		}
+	}
+
 	// TODO decide how to set the dev step info based on the step type, eg
 	// perhaps different structs per step type
 	initialPromptInfo := InitialDevStepInfo{
-		CodeContext:   codeContext,
-		Requirements:  requirements,
-		PlanExecution: planExecution,
-		Step:          step,
+		CodeContext:        codeContext,
+		Requirements:       requirements,
+		PlanExecution:      planExecution,
+		Step:               step,
+		EnvironmentContext: environmentContext,
 	}
 
 	attemptCount := 0

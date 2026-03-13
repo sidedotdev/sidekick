@@ -1,0 +1,42 @@
+# Git
+.git/
+.github/
+
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+main
+side
+side-temporal
+side-worker
+side-api
+
+# Build artifacts
+*.out
+libusearch_c.a
+
+# IDE
+.idea/
+.vscode/
+
+# Dependencies (will be downloaded fresh in container)
+frontend/node_modules/
+
+# Local files
+.env
+*.db
+local-temporal-db*
+.aider*
+__debug_bin*
+
+# Misc
+*.rej
+*.patch
+*.swp
+*.DS_Store
+todo.md
+release-thoughts.md

@@ -564,7 +564,7 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 				},
 				{
 					Type: ContentBlockTypeText,
-					Text: "What text is written in this image? The text consists only of uppercase ASCII letters (A-Z, no O or I) and digits (2-9). Reply with ONLY the exact text, nothing else.",
+					Text: fmt.Sprintf("What text is written in this image? %s Reply with ONLY the exact text, nothing else.", VisionTestCharSetHint()),
 				},
 			},
 		},
@@ -575,7 +575,7 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider: "anthropic",
-			Model:    "claude-sonnet-4-5-20250929",
+			Model:    "claude-sonnet-4-6",
 		},
 	}
 
@@ -640,7 +640,7 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 			Content: []ContentBlock{
 				{
 					Type: ContentBlockTypeText,
-					Text: "Please use the read_image tool to read the image at path 'test.png' and tell me the exact text in it.",
+					Text: fmt.Sprintf("Please use the read_image tool to read the image at path 'test.png'. %s Reply with ONLY the exact text, nothing else.", VisionTestCharSetHint()),
 				},
 			},
 		},
@@ -683,7 +683,7 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider: "anthropic",
-			Model:    "claude-sonnet-4-5-20250929",
+			Model:    "claude-sonnet-4-6",
 		},
 		Tools: []*common.Tool{
 			{

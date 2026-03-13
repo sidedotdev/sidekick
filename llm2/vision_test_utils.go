@@ -19,8 +19,18 @@ import (
 
 var visionLevenshtein = metrics.NewLevenshtein()
 
-// unambiguousChars excludes easily confused characters (0/O/Q, 1/l/I, 8/B, M/W, F/E, 5/S, L/1, 6/G, 2/Z, 7/Y).
-const unambiguousChars = "ACDHJKNPRTUVX349"
+// unambiguousChars excludes easily confused characters (0/O/Q, 1/l/I/T, 8/B, M/W, F/E, 5/S, L/1, 6/G, 2/Z, 7/Y, U/V).
+const unambiguousChars = "ACDHJKNPRUX349"
+
+// VisionTestCharSetHint returns a prompt fragment listing the exact characters
+// used in generated vision test images.
+func VisionTestCharSetHint() string {
+	parts := make([]string, len(unambiguousChars))
+	for i, c := range unambiguousChars {
+		parts[i] = string(c)
+	}
+	return "Each character is one of: " + strings.Join(parts, ", ") + "."
+}
 
 // GenerateRandomText returns a random alphanumeric string of the given length
 // using only characters that are visually unambiguous.

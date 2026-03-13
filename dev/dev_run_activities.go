@@ -379,10 +379,7 @@ printf '{"exitCode":%d}' $_EC > "$_SK_STATUS_PATH"`
 	}
 
 	// With Setsid, the session ID equals the PID of the session leader
-	sessionId, err := syscall.Getsid(cmd.Process.Pid)
-	if err != nil {
-		sessionId = cmd.Process.Pid
-	}
+	sessionId := cmd.Process.Pid
 
 	proc := &runningProcess{
 		cmd:            cmd,
