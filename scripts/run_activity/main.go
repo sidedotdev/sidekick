@@ -165,6 +165,7 @@ func buildActivityRegistry() map[string]interface{} {
 		env.NewLocalGitWorktreeActivity,
 		sidekick.GithubCloneRepoActivity,
 		env.EnvRunCommandActivity,
+		env.GetEnvironmentInfoActivity,
 		git.GitDiffActivity,
 		git.DiffUntrackedFilesActivity,
 		git.GitAddActivity,
