@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/invopop/jsonschema"
 	"github.com/rs/zerolog"
@@ -218,10 +219,17 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 	t.Logf("Model: %s, Provider: %s", response.Model, response.Provider)
 	t.Logf("StopReason: %s", response.StopReason)
 
-	t.Run("MultiTurn", func(t *testing.T) {
-		messages = append(messages, response.Output)
+	// Capture values for parallel subtests before parent returns
+	parentResponse := response
+	parentMessages := append([]Message{}, messages...)
 
-		for _, block := range response.Output.Content {
+	t.Run("MultiTurn", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		messages := append(parentMessages, parentResponse.Output)
+
+		for _, block := range parentResponse.Output.Content {
 			if block.Type == ContentBlockTypeToolUse && block.ToolUse != nil {
 				messages = append(messages, Message{
 					Role: RoleUser,
@@ -298,128 +306,93 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0 on multi-turn")
 	})
 
-	t.Run("Reasoning", func(t *testing.T) {
-		reasoningModel := os.Getenv("ANTHROPIC_REASONING_MODEL")
-		if reasoningModel == "" {
-			reasoningModel = "claude-sonnet-4-5"
-		}
-		fmt.Printf("\n=== Reasoning Test (%s) ===\n", reasoningModel)
+}
 
-		reasoningMessages := []Message{
-			{
-				Role: RoleUser,
-				Content: []ContentBlock{
-					{
-						Type: ContentBlockTypeText,
-						Text: "What is 127 * 349? Think through this step by step, showing your work.",
-					},
+func TestAnthropicResponsesProvider_ReasoningIntegration(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAPI}
+	secretManager := requireIntegrationAPIKey(t, "ANTHROPIC_API_KEY")
+
+	reasoningModel := os.Getenv("ANTHROPIC_REASONING_MODEL")
+	if reasoningModel == "" {
+		reasoningModel = "claude-sonnet-4-5"
+	}
+	fmt.Printf("\n=== Reasoning Test (%s) ===\n", reasoningModel)
+
+	reasoningMessages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeText,
+					Text: "What is 127 * 349? Think through this step by step, showing your work.",
 				},
 			},
+		},
+	}
+
+	reasoningOptions := Options{
+		ModelConfig: common.ModelConfig{
+			Provider:        "anthropic",
+			Model:           reasoningModel,
+			ReasoningEffort: "low",
+			MaxTokens:       1024,
+		},
+	}
+
+	eventChan := make(chan Event, 100)
+	go func() {
+		for range eventChan {
 		}
+	}()
 
-		reasoningOptions := Options{
-			ModelConfig: common.ModelConfig{
-				Provider:        "anthropic",
-				Model:           reasoningModel,
-				ReasoningEffort: "low",
-			},
+	reasoningRequest := StreamRequest{
+		Messages:      reasoningMessages,
+		Options:       reasoningOptions,
+		SecretManager: secretManager,
+	}
+	response, err := provider.Stream(ctx, reasoningRequest, eventChan)
+	close(eventChan)
+
+	if err != nil {
+		if isAnthropicTransientError(err) {
+			t.Skipf("Skipping reasoning test due to transient Anthropic API error: %v", err)
 		}
+		t.Fatalf("Stream returned an error: %v", err)
+	}
 
-		eventChan := make(chan Event, 100)
-		var allEvents []Event
+	if response == nil {
+		t.Fatal("Stream returned a nil response")
+	}
 
-		go func() {
-			for event := range eventChan {
-				allEvents = append(allEvents, event)
-				// Debug: print each event
-				switch event.Type {
-				case EventBlockStarted:
-					blockType := ""
-					if event.ContentBlock != nil {
-						blockType = string(event.ContentBlock.Type)
-					}
-					fmt.Printf("Event[%d]: type=block_started block_type=%s\n", event.Index, blockType)
-				case EventTextDelta:
-					deltaPreview := event.Delta
-					if len(deltaPreview) > 50 {
-						deltaPreview = deltaPreview[:50] + "..."
-					}
-					fmt.Printf("Event[%d]: type=text_delta delta=%q\n", event.Index, deltaPreview)
-				case EventBlockDone:
-					fmt.Printf("Event[%d]: type=block_done\n", event.Index)
-				case EventSignatureDelta:
-					fmt.Printf("Event[%d]: type=signature_delta len=%d\n", event.Index, len(event.Signature))
-				default:
-					fmt.Printf("Event[%d]: type=%s\n", event.Index, event.Type)
-				}
-			}
-		}()
-
-		reasoningRequest := StreamRequest{
-			Messages:      reasoningMessages,
-			Options:       reasoningOptions,
-			SecretManager: secretManager,
+	var hasReasoning bool
+	var hasText bool
+	for _, block := range response.Output.Content {
+		if block.Type == ContentBlockTypeReasoning && block.Reasoning != nil && len(block.Reasoning.Text) > 0 {
+			hasReasoning = true
+			t.Logf("Reasoning text length: %d", len(block.Reasoning.Text))
 		}
-		response, err := provider.Stream(ctx, reasoningRequest, eventChan)
-		close(eventChan)
-
-		if err != nil {
-			if isAnthropicTransientError(err) {
-				t.Skipf("Skipping reasoning test due to transient Anthropic API error: %v", err)
-			}
-			t.Fatalf("Stream returned an error: %v", err)
+		if block.Type == ContentBlockTypeText && block.Text != "" {
+			hasText = true
 		}
+	}
 
-		if response == nil {
-			t.Fatal("Stream returned a nil response")
-		}
+	if !hasReasoning {
+		t.Log("No reasoning block found - model may not support extended thinking")
+	}
+	if !hasText {
+		t.Error("Expected text content in response")
+	}
 
-		// Debug: print all content blocks
-		fmt.Printf("\n=== All Content Blocks (total: %d) ===\n", len(response.Output.Content))
-		for i, block := range response.Output.Content {
-			fmt.Printf("Block[%d] Type=%s\n", i, block.Type)
-			switch block.Type {
-			case ContentBlockTypeText:
-				textPreview := block.Text
-				if len(textPreview) > 100 {
-					textPreview = textPreview[:100] + "..."
-				}
-				fmt.Printf("  Text=%q TextLen=%d\n", textPreview, len(block.Text))
-			case ContentBlockTypeReasoning:
-				if block.Reasoning != nil {
-					textPreview := block.Reasoning.Text
-					if len(textPreview) > 100 {
-						textPreview = textPreview[:100] + "..."
-					}
-					fmt.Printf("  ReasoningText=%q\n", textPreview)
-					fmt.Printf("  ReasoningTextLen=%d SummaryLen=%d SignatureLen=%d\n", len(block.Reasoning.Text), len(block.Reasoning.Summary), len(block.Reasoning.Signature))
-				}
-			}
-		}
-
-		// Check for reasoning content
-		var hasReasoning bool
-		var hasText bool
-		for _, block := range response.Output.Content {
-			if block.Type == ContentBlockTypeReasoning && block.Reasoning != nil && len(block.Reasoning.Text) > 0 {
-				hasReasoning = true
-				t.Logf("Reasoning text length: %d", len(block.Reasoning.Text))
-			}
-			if block.Type == ContentBlockTypeText && block.Text != "" {
-				hasText = true
-			}
-		}
-
-		if !hasReasoning {
-			t.Log("No reasoning block found - model may not support extended thinking")
-		}
-		if !hasText {
-			t.Error("Expected text content in response")
-		}
-
-		t.Logf("Usage: InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
-		t.Logf("Model: %s, StopReason: %s", response.Model, response.StopReason)
-	})
+	t.Logf("Usage: InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
+	t.Logf("Model: %s, StopReason: %s", response.Model, response.StopReason)
 }
 
 func TestAnthropicResponsesProvider_CacheControl(t *testing.T) {
