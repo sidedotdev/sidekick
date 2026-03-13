@@ -1,0 +1,29 @@
+services:
+  test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.tests
+    depends_on:
+      - redis
+    volumes:
+      - go-mod-cache:/go/pkg/mod
+    environment:
+      - CGO_ENABLED=1
+      - CGO_LDFLAGS=-L/usr/local/lib /usr/local/lib/libusearch_c.a -lstdc++ -lm
+      - REDIS_ADDRESS=redis:6379
+
+  test-without-redis:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.tests
+    volumes:
+      - go-mod-cache:/go/pkg/mod
+    environment:
+      - CGO_ENABLED=1
+      - CGO_LDFLAGS=-L/usr/local/lib /usr/local/lib/libusearch_c.a -lstdc++ -lm
+
+  redis:
+    image: redis:7-alpine
+
+volumes:
+  go-mod-cache:

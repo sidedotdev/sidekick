@@ -1454,6 +1454,7 @@ func newUpgrader(allowedOrigins *AllowedOrigins) websocket.Upgrader {
 func (ctrl *Controller) FlowActionChangesWebsocketHandler(c *gin.Context) {
 	workspaceId := c.Param("workspaceId")
 	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
 	flowId := c.Param("id")
 
 	if workspaceId == "" {
