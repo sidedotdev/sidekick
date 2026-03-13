@@ -7,7 +7,7 @@
     "dev": "VITE_HOME=$HOME vite",
     "build": "run-p type-check \"build-only {@}\" -- && git checkout dist/.gitignore",
     "preview": "vite preview",
-    "test:unit": "vitest --run",
+    "test:unit": "vitest",
     "test:e2e": "nightwatch tests/e2e",
     "build-only": "vite build && git checkout dist/.gitignore",
     "build-dev": "vite build --mode development && git checkout dist/.gitignore",
