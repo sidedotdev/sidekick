@@ -8,7 +8,6 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"sidekick/coding"
-	"sidekick/coding/diffanalysis"
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
@@ -94,14 +93,9 @@ func getGitDiffWithContext(dCtx DevContext, baseBranch string, ignoreWhitespace 
 	return gitDiff, err
 }
 
-// getOwnChangesSinceReview returns the since-review diff with merge-introduced
-// hunks removed. It uses three diffs to determine what to keep:
-//   - sinceReviewDiff: all changes since the review tree snapshot
-//   - branchDiff: three-dot diff (our branch's unique changes vs base)
-//   - baseSinceReviewDiff: what the base branch changed since the review
-//
-// A sinceReview hunk is dropped only if it overlaps a base-branch hunk and does
-// NOT overlap a branch hunk (i.e. it's purely merge-introduced, not convergent).
+// getOwnChangesSinceReview returns the shorter of the since-review diff and the
+// three-dot base-branch diff. A merge inflates the since-review diff with
+// base-branch changes, so falling back keeps the output focused.
 func getOwnChangesSinceReview(dCtx DevContext, baseBranch string, lastReviewTreeHash string, ignoreWhitespace bool) (string, error) {
 	var result string
 	var ca *coding.CodingActivities
@@ -127,11 +121,15 @@ func legacyOwnChangesSinceReviewV3(dCtx DevContext, baseBranch string, lastRevie
 	if err != nil {
 		return "", fmt.Errorf("failed to get branch diff: %w", err)
 	}
-	baseSinceReviewDiff, err := getBaseSinceReviewDiff(dCtx, baseBranch, lastReviewTreeHash, ignoreWhitespace)
+	// Activity call kept for replay determinism; result no longer needed.
+	_, err = getBaseSinceReviewDiff(dCtx, baseBranch, lastReviewTreeHash, ignoreWhitespace)
 	if err != nil {
 		return "", fmt.Errorf("failed to get base-since-review diff: %w", err)
 	}
-	return diffanalysis.FilterDiffForReview(sinceReviewDiff, branchDiff, baseSinceReviewDiff, sinceReviewDiff)
+	if len(sinceReviewDiff) > len(branchDiff) {
+		return branchDiff, nil
+	}
+	return sinceReviewDiff, nil
 }
 
 // legacyOwnChangesSinceReview preserves the two-activity call pattern for
@@ -146,7 +144,10 @@ func legacyOwnChangesSinceReview(dCtx DevContext, baseBranch string, lastReviewT
 	if err != nil {
 		return "", fmt.Errorf("failed to get three-dot diff: %w", err)
 	}
-	return diffanalysis.FilterDiffForReview(sinceReviewDiff, threeDotDiff, "", sinceReviewDiff)
+	if len(sinceReviewDiff) > len(threeDotDiff) {
+		return threeDotDiff, nil
+	}
+	return sinceReviewDiff, nil
 }
 
 func getBaseSinceReviewDiff(dCtx DevContext, baseBranch string, lastReviewTreeHash string, ignoreWhitespace bool) (string, error) {
