@@ -24,10 +24,9 @@ const filterText = ref('')
 
 const filteredWorkspaces = computed(() => {
   const query = filterText.value
-  const sorted = [...workspaces.value].sort((a, b) => a.name.localeCompare(b.name))
-  if (!query) return sorted.map(w => ({ ...w, _q: '' }))
+  if (!query) return workspaces.value
 
-  return sorted
+  return workspaces.value
     .map(w => ({ ...w, _rank: fuzzyWordPrefixRank(w.name, query), _q: query }))
     .filter(w => w._rank >= 0)
     .sort((a, b) => a._rank !== b._rank ? a._rank - b._rank : a.name.localeCompare(b.name))
