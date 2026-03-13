@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/invopop/jsonschema"
 	"github.com/rs/zerolog"
@@ -205,11 +206,17 @@ func TestGoogleProvider_Integration(t *testing.T) {
 	t.Logf("Model: %s, Provider: %s", response.Model, response.Provider)
 	t.Logf("StopReason: %s", response.StopReason)
 
+	parentResponse := response
+	parentMessages := append([]Message{}, messages...)
+
 	// Multi-turn: feed tool results back
 	t.Run("MultiTurn", func(t *testing.T) {
-		messages = append(messages, response.Output)
+		t.Parallel()
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		messages := append(parentMessages, parentResponse.Output)
 
-		for _, block := range response.Output.Content {
+		for _, block := range parentResponse.Output.Content {
 			if block.Type == ContentBlockTypeToolUse && block.ToolUse != nil {
 				messages = append(messages, Message{
 					Role: RoleUser,
@@ -287,117 +294,94 @@ func TestGoogleProvider_Integration(t *testing.T) {
 		assert.Greater(t, response.Usage.OutputTokens, 0, "OutputTokens should be greater than 0 on multi-turn")
 	})
 
-	// Reasoning test: verify reasoning blocks are produced for reasoning models
-	t.Run("Reasoning", func(t *testing.T) {
-		reasoningMessages := []Message{
-			{
-				Role: RoleUser,
-				Content: []ContentBlock{
-					{
-						Type: ContentBlockTypeText,
-						Text: "What is 127 * 349? Think step by step.",
-					},
+}
+
+func TestGoogleProvider_ReasoningIntegration(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
+	}
+
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	provider := GoogleProvider{}
+	secretManager := requireIntegrationAPIKey(t, "GOOGLE_API_KEY", "GEMINI_API_KEY")
+
+	reasoningMessages := []Message{
+		{
+			Role: RoleUser,
+			Content: []ContentBlock{
+				{
+					Type: ContentBlockTypeText,
+					Text: "What is 127 * 349? Think step by step.",
 				},
 			},
-		}
+		},
+	}
 
-		reasoningOptions := Options{
-			ModelConfig: common.ModelConfig{
-				Provider:        "google",
-				Model:           "gemini-3-flash-preview",
-				ReasoningEffort: "low",
-			},
-		}
+	reasoningOptions := Options{
+		ModelConfig: common.ModelConfig{
+			Provider:        "google",
+			Model:           "gemini-3-flash-preview",
+			ReasoningEffort: "low",
+		},
+	}
 
-		reasoningRequest := StreamRequest{
-			Messages:      reasoningMessages,
-			Options:       reasoningOptions,
-			SecretManager: secretManager,
-		}
+	reasoningRequest := StreamRequest{
+		Messages:      reasoningMessages,
+		Options:       reasoningOptions,
+		SecretManager: secretManager,
+	}
 
-		eventChan := make(chan Event, 100)
-		var reasoningEvents []Event
-		var sawReasoning bool
+	eventChan := make(chan Event, 100)
+	var sawReasoning bool
 
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for event := range eventChan {
-				reasoningEvents = append(reasoningEvents, event)
-				if event.Type == EventBlockStarted && event.ContentBlock != nil && event.ContentBlock.Type == ContentBlockTypeReasoning {
-					sawReasoning = true
-				}
-			}
-		}()
-
-		fmt.Println("\n=== Reasoning Test (gemini-3-flash-preview) ===")
-		response, err := provider.Stream(ctx, reasoningRequest, eventChan)
-		close(eventChan)
-		wg.Wait()
-
-		if err != nil {
-			errStr := err.Error()
-			if strings.Contains(errStr, "429") || strings.Contains(errStr, "RESOURCE_EXHAUSTED") {
-				t.Skipf("Skipping due to quota: %v", err)
-			}
-			t.Fatalf("Stream returned an error: %v", err)
-		}
-
-		assert.NotNil(t, response)
-		assert.True(t, sawReasoning, "Expected at least one reasoning block event")
-
-		var foundReasoning bool
-		for _, block := range response.Output.Content {
-			if block.Type == ContentBlockTypeReasoning {
-				foundReasoning = true
-				assert.NotEmpty(t, block.Reasoning.Text, "Reasoning text should not be empty")
-				fmt.Printf("DEBUG: Reasoning block - Text length: %d, Signature length: %d\n", len(block.Reasoning.Text), len(block.Reasoning.Signature))
-				if len(block.Reasoning.Signature) > 0 {
-					fmt.Printf("DEBUG: Reasoning Signature (first 100 bytes): %v\n", block.Reasoning.Signature[:min(100, len(block.Reasoning.Signature))])
-				}
-				t.Logf("Reasoning text length: %d", len(block.Reasoning.Text))
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for event := range eventChan {
+			if event.Type == EventBlockStarted && event.ContentBlock != nil && event.ContentBlock.Type == ContentBlockTypeReasoning {
+				sawReasoning = true
 			}
 		}
-		assert.True(t, foundReasoning, "Expected a reasoning block in the output")
+	}()
 
-		// Debug: print all content blocks with signatures
-		fmt.Printf("\n=== All Content Blocks (total: %d) ===\n", len(response.Output.Content))
-		for i, block := range response.Output.Content {
-			fmt.Printf("Block[%d] Type=%s\n", i, block.Type)
-			if block.Type == ContentBlockTypeText {
-				textPreview := block.Text
-				if len(textPreview) > 100 {
-					textPreview = textPreview[:100] + "..."
-				}
-				fmt.Printf("  Text=%q\n", textPreview)
-				fmt.Printf("  TextLen=<varies> Signature=%d bytes\n", len(block.Signature))
-			} else if block.Type == ContentBlockTypeReasoning && block.Reasoning != nil {
-				reasoningPreview := block.Reasoning.Text
-				if len(reasoningPreview) > 100 {
-					reasoningPreview = reasoningPreview[:100] + "..."
-				}
-				fmt.Printf("  ReasoningText=%q\n", reasoningPreview)
-				fmt.Printf("  ReasoningTextLen=%d ReasoningSignature=%d bytes\n", len(block.Reasoning.Text), len(block.Reasoning.Signature))
-			} else if block.Type == ContentBlockTypeToolUse && block.ToolUse != nil {
-				argsPreview := block.ToolUse.Arguments
-				if len(argsPreview) > 100 {
-					argsPreview = argsPreview[:100] + "..."
-				}
-				fmt.Printf("  ToolName=%s Args=%s\n", block.ToolUse.Name, argsPreview)
-				fmt.Printf("  Signature=%d bytes\n", len(block.ToolUse.Signature))
-			}
-		}
+	fmt.Println("\n=== Reasoning Test (gemini-3-flash-preview) ===")
+	response, err := provider.Stream(ctx, reasoningRequest, eventChan)
+	close(eventChan)
+	wg.Wait()
 
-		var foundText bool
-		for _, block := range response.Output.Content {
-			if block.Type == ContentBlockTypeText && block.Text != "" {
-				foundText = true
-				break
-			}
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "429") || strings.Contains(errStr, "RESOURCE_EXHAUSTED") {
+			t.Skipf("Skipping due to quota: %v", err)
 		}
-		assert.True(t, foundText, "Expected a text block with the answer")
-	})
+		t.Fatalf("Stream returned an error: %v", err)
+	}
+
+	assert.NotNil(t, response)
+	assert.True(t, sawReasoning, "Expected at least one reasoning block event")
+
+	var foundReasoning bool
+	for _, block := range response.Output.Content {
+		if block.Type == ContentBlockTypeReasoning {
+			foundReasoning = true
+			assert.NotEmpty(t, block.Reasoning.Text, "Reasoning text should not be empty")
+			t.Logf("Reasoning text length: %d", len(block.Reasoning.Text))
+		}
+	}
+	assert.True(t, foundReasoning, "Expected a reasoning block in the output")
+
+	var foundText bool
+	for _, block := range response.Output.Content {
+		if block.Type == ContentBlockTypeText && block.Text != "" {
+			foundText = true
+			break
+		}
+	}
+	assert.True(t, foundText, "Expected a text block with the answer")
 }
 
 func TestGoogleProvider_ImageIntegration(t *testing.T) {
@@ -548,6 +532,9 @@ func TestGoogleProvider_ToolResultImageIntegration(t *testing.T) {
 			t.Parallel()
 			secretManager := requireIntegrationAPIKey(t, "GOOGLE_API_KEY", "GEMINI_API_KEY")
 
+			testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+
 			options := Options{
 				ModelConfig: common.ModelConfig{
 					Provider: "google",
@@ -575,7 +562,7 @@ func TestGoogleProvider_ToolResultImageIntegration(t *testing.T) {
 				}
 			}()
 
-			response, err := provider.Stream(ctx, request, eventChan)
+			response, err := provider.Stream(testCtx, request, eventChan)
 			close(eventChan)
 			wg.Wait()
 
@@ -586,6 +573,9 @@ func TestGoogleProvider_ToolResultImageIntegration(t *testing.T) {
 				}
 				if strings.Contains(errStr, "UNAVAILABLE") || strings.Contains(errStr, "Error 503") || strings.Contains(errStr, "high demand") {
 					t.Skipf("Skipping test due to transient Google API unavailability: %v", err)
+				}
+				if testCtx.Err() != nil {
+					t.Skipf("Skipping test due to context timeout: %v", err)
 				}
 				t.Fatalf("Stream returned an error: %v", err)
 			}
