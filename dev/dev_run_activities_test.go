@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1287,6 +1288,233 @@ func TestStartDevRun_NoExistingInstanceStartsFresh(t *testing.T) {
 	assert.True(t, output.Started)
 	require.NotNil(t, output.Instance)
 	assert.NotEmpty(t, output.Instance.DevRunId)
+
+	// Clean up
+	activities.StopDevRun(context.Background(), StopDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output.Instance,
+	})
+}
+
+func TestStartDevRun_WorkerKillRecoveryFromInstanceFile(t *testing.T) {
+	t.Parallel()
+
+	streamer := newMockFlowEventStreamer()
+	activities := &DevRunActivities{Streamer: streamer}
+
+	tmpDir := t.TempDir()
+	workspaceId := "ws_worker_kill_" + t.Name()
+	flowId := "flow_worker_kill_" + t.Name()
+
+	input := StartDevRunInput{
+		DevRunConfig: common.DevRunConfig{
+			"test": {Command: "sleep 60", StopTimeoutSeconds: 1},
+		},
+		CommandId: "test",
+		Context: DevRunContext{
+			WorkspaceId:  workspaceId,
+			FlowId:       flowId,
+			WorktreeDir:  tmpDir,
+			SourceBranch: "feature/test",
+			BaseBranch:   "main",
+			TargetBranch: "main",
+		},
+	}
+
+	// First call: start the process
+	output1, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output1.Started)
+	require.NotNil(t, output1.Instance)
+	assert.True(t, IsSessionAlive(output1.Instance.SessionId), "process should be alive")
+
+	// Wait for the wrapper to write the instance file to disk
+	instanceFilePath := devRunInstanceFilePath(flowId, "test")
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(instanceFilePath)
+		return err == nil
+	}, 5*time.Second, 10*time.Millisecond, "instance file should be written by wrapper")
+
+	// Simulate worker death: discard in-memory state by creating a fresh
+	// activities instance. ExistingInstance is nil because GlobalState was lost.
+	activities2 := &DevRunActivities{Streamer: streamer}
+	input2 := input
+	input2.ExistingInstance = nil
+
+	// Call StartDevRun again — should recover from instance file
+	output2, err := activities2.StartDevRun(context.Background(), input2)
+	require.NoError(t, err)
+	assert.True(t, output2.Started)
+	require.NotNil(t, output2.Instance)
+
+	// Recovered instance must match the original
+	assert.Equal(t, output1.Instance.DevRunId, output2.Instance.DevRunId)
+	assert.Equal(t, output1.Instance.SessionId, output2.Instance.SessionId)
+	assert.Equal(t, output1.Instance.OutputFilePath, output2.Instance.OutputFilePath)
+
+	// Process should still be alive (no duplicate started)
+	assert.True(t, IsSessionAlive(output2.Instance.SessionId), "process should still be alive after recovery")
+
+	// Clean up
+	activities2.StopDevRun(context.Background(), StopDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output2.Instance,
+	})
+}
+
+func TestStartDevRun_InstanceFileRecoveryWhenProcessDead(t *testing.T) {
+	t.Parallel()
+
+	streamer := newMockFlowEventStreamer()
+	activities := &DevRunActivities{Streamer: streamer}
+
+	tmpDir := t.TempDir()
+	workspaceId := "ws_dead_recovery_" + t.Name()
+	flowId := "flow_dead_recovery_" + t.Name()
+
+	input := StartDevRunInput{
+		DevRunConfig: common.DevRunConfig{
+			"test": {Command: "echo done"},
+		},
+		CommandId: "test",
+		Context: DevRunContext{
+			WorkspaceId:  workspaceId,
+			FlowId:       flowId,
+			WorktreeDir:  tmpDir,
+			SourceBranch: "feature/test",
+			BaseBranch:   "main",
+			TargetBranch: "main",
+		},
+	}
+
+	output1, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output1.Started)
+	require.NotNil(t, output1.Instance)
+
+	// Wait for the short-lived process to exit
+	for i := 0; i < 50; i++ {
+		if !IsSessionAlive(output1.Instance.SessionId) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	require.False(t, IsSessionAlive(output1.Instance.SessionId), "process should have exited")
+
+	// Simulate activity retry with no ExistingInstance
+	activities2 := &DevRunActivities{Streamer: newMockFlowEventStreamer()}
+	input2 := input
+	input2.ExistingInstance = nil
+
+	output2, err := activities2.StartDevRun(context.Background(), input2)
+	require.NoError(t, err)
+	assert.True(t, output2.Started)
+	require.NotNil(t, output2.Instance)
+
+	// Should return the same (dead) instance, not a fresh start
+	assert.Equal(t, output1.Instance.DevRunId, output2.Instance.DevRunId)
+	assert.Equal(t, output1.Instance.SessionId, output2.Instance.SessionId)
+
+	// MonitorDevRun should detect the dead process, read remaining output, and return
+	monitorStreamer := newMockFlowEventStreamer()
+	activities3 := &DevRunActivities{Streamer: monitorStreamer}
+	clearEndedEventTracker(output2.Instance.DevRunId)
+
+	monitorOutput, err := activities3.MonitorDevRun(context.Background(), MonitorDevRunInput{
+		DevRunConfig: input.DevRunConfig,
+		CommandId:    "test",
+		Context:      input.Context,
+		Instance:     output2.Instance,
+	})
+	require.NoError(t, err)
+	_ = monitorOutput
+
+	// Verify output was captured
+	events := monitorStreamer.getEvents()
+	var allOutput string
+	for _, e := range events {
+		if ev, ok := e.(domain.DevRunOutputEvent); ok {
+			allOutput += ev.Chunk
+		}
+	}
+	assert.Contains(t, allOutput, "done")
+
+	// Verify ended event was emitted
+	var endedEvent *domain.DevRunEndedEvent
+	for _, e := range events {
+		if ev, ok := e.(domain.DevRunEndedEvent); ok {
+			endedEvent = &ev
+			break
+		}
+	}
+	require.NotNil(t, endedEvent, "should have DevRunEndedEvent")
+
+	// Clean up instance file
+	os.Remove(devRunInstanceFilePath(flowId, "test"))
+}
+
+func TestStartDevRun_WrapperWritesInstanceFileBeforeOutput(t *testing.T) {
+	t.Parallel()
+
+	streamer := newMockFlowEventStreamer()
+	activities := &DevRunActivities{Streamer: streamer}
+
+	tmpDir := t.TempDir()
+	workspaceId := "ws_wrapper_write_" + t.Name()
+	flowId := "flow_wrapper_write_" + t.Name()
+
+	// The real command creates a sentinel file after a delay; the wrapper
+	// writes the instance file before exec'ing into it.
+	sentinelPath := filepath.Join(tmpDir, "sentinel.txt")
+	command := fmt.Sprintf("sleep 2 && touch %s", sentinelPath)
+
+	input := StartDevRunInput{
+		DevRunConfig: common.DevRunConfig{
+			"test": {Command: command, StopTimeoutSeconds: 1},
+		},
+		CommandId: "test",
+		Context: DevRunContext{
+			WorkspaceId:  workspaceId,
+			FlowId:       flowId,
+			WorktreeDir:  tmpDir,
+			SourceBranch: "feature/test",
+			BaseBranch:   "main",
+			TargetBranch: "main",
+		},
+	}
+
+	output, err := activities.StartDevRun(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, output.Started)
+	require.NotNil(t, output.Instance)
+
+	// Wait for the wrapper to write the instance file (written before exec)
+	instanceFilePath := devRunInstanceFilePath(flowId, "test")
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(instanceFilePath)
+		return err == nil
+	}, 5*time.Second, 10*time.Millisecond, "instance file should be written by wrapper")
+
+	data, err := os.ReadFile(instanceFilePath)
+	require.NoError(t, err, "instance file should be readable")
+
+	var fileInstance DevRunInstance
+	require.NoError(t, json.Unmarshal(data, &fileInstance))
+
+	assert.Equal(t, output.Instance.DevRunId, fileInstance.DevRunId)
+	assert.Equal(t, output.Instance.SessionId, fileInstance.SessionId)
+	assert.Equal(t, output.Instance.OutputFilePath, fileInstance.OutputFilePath)
+	assert.Equal(t, output.Instance.CommandId, fileInstance.CommandId)
+	assert.Equal(t, "test", fileInstance.CommandId)
+
+	// The sentinel file should NOT exist yet, proving the instance file was
+	// written before the real command had a chance to run.
+	_, err = os.Stat(sentinelPath)
+	assert.True(t, os.IsNotExist(err), "sentinel file should not exist yet — write-ahead property")
 
 	// Clean up
 	activities.StopDevRun(context.Background(), StopDevRunInput{

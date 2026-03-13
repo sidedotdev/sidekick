@@ -259,6 +259,7 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 	// Generate a new devRunId
 	devRunId := "devrun_" + ksuid.New().String()
 	input.Context.DevRunId = devRunId
+	input.Context.CommandId = input.CommandId
 
 	run := &activeDevRun{
 		devRunId:  devRunId,
