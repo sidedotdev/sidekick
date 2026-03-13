@@ -591,7 +591,7 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 			Content: []ContentBlock{
 				{
 					Type: ContentBlockTypeText,
-					Text: "Please use the read_image tool to read the image at path 'test.png'.",
+					Text: fmt.Sprintf("Please use the read_image tool to read the image at path 'test.png'. %s Reply with ONLY the exact text, nothing else.", VisionTestCharSetHint()),
 				},
 			},
 		},
