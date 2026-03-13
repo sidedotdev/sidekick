@@ -257,6 +257,39 @@ type EnvRunCommandActivityOutput = EnvRunCommandOutput
 // Temporal's per-event payload size limit (~2MB).
 const maxActivityOutputBytes = 2 * 1024 * 1024
 
+type GetEnvironmentInfoInput struct {
+	EnvContainer EnvContainer
+}
+
+type GetEnvironmentInfoOutput struct {
+	OS   string `json:"os"`
+	Arch string `json:"arch"`
+}
+
+func (o GetEnvironmentInfoOutput) FormatEnvironmentContext() string {
+	return fmt.Sprintf("OS: %s, Arch: %s", o.OS, o.Arch)
+}
+
+// GetEnvironmentInfoActivity retrieves OS and architecture info from the environment.
+func GetEnvironmentInfoActivity(ctx context.Context, input GetEnvironmentInfoInput) (GetEnvironmentInfoOutput, error) {
+	out, err := input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
+		Command: "uname",
+		Args:    []string{"-sm"},
+	})
+	if err != nil {
+		return GetEnvironmentInfoOutput{}, fmt.Errorf("failed to get environment info: %w", err)
+	}
+	info := strings.TrimSpace(out.Stdout)
+	if info == "" {
+		return GetEnvironmentInfoOutput{}, fmt.Errorf("empty environment info from uname")
+	}
+	parts := strings.Fields(info)
+	if len(parts) < 2 {
+		return GetEnvironmentInfoOutput{}, fmt.Errorf("unexpected uname output: %s", info)
+	}
+	return GetEnvironmentInfoOutput{OS: parts[0], Arch: parts[1]}, nil
+}
+
 // EnvRunCommandActivity runs a command in the environment contained in the provided EnvContainer.
 func EnvRunCommandActivity(ctx context.Context, input EnvRunCommandActivityInput) (EnvRunCommandActivityOutput, error) {
 	type result struct {
