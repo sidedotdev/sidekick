@@ -1361,7 +1361,11 @@ sleep 30
 	}
 
 	// Simulate pressing 'r' - this is what Update() does
-	go sup.RestartProcess(ctx, p, outputChan)
+	restartDone := make(chan struct{})
+	go func() {
+		sup.RestartProcess(ctx, p, outputChan)
+		close(restartDone)
+	}()
 
 	// Wait for notification
 	select {
@@ -1393,6 +1397,13 @@ sleep 30
 
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for notification")
+	}
+
+	// Wait for restart to complete before checking for new output
+	select {
+	case <-restartDone:
+	case <-time.After(15 * time.Second):
+		t.Fatal("timeout waiting for restart to complete")
 	}
 
 	waitForCondition(t, 10*time.Second, func() bool {
