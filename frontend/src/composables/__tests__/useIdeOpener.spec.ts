@@ -3,7 +3,7 @@ import { useIdeOpener } from '../useIdeOpener'
 
 describe('useIdeOpener', () => {
   const mockSessionStorage: Record<string, string> = {}
-  let fetchSpy: MockInstance<[input: RequestInfo | URL, init?: RequestInit | undefined], Promise<Response>>
+  let fetchSpy: MockInstance
   let lastFetchBody: unknown = null
 
   beforeEach(() => {
