@@ -764,13 +764,17 @@ func TestStartDevRun_NaturalNonZeroExitEmitsEndedEvent(t *testing.T) {
 	require.NotNil(t, output.Instance)
 
 	// MonitorDevRun detects the exit and emits the ended event
-	_, err = activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
+	monitorOutput, err := activities.MonitorDevRun(context.Background(), MonitorDevRunInput{
 		DevRunConfig: input.DevRunConfig,
 		CommandId:    "test",
 		Context:      input.Context,
 		Instance:     output.Instance,
 	})
 	require.NoError(t, err)
+
+	// Verify exit code was recovered from the wrapper's status file
+	require.NotNil(t, monitorOutput.ExitCode, "exit code should be captured via status file")
+	assert.Equal(t, 42, *monitorOutput.ExitCode)
 
 	// Verify DevRunEndedEvent was emitted by MonitorDevRun
 	events := streamer.getEvents()
@@ -782,6 +786,8 @@ func TestStartDevRun_NaturalNonZeroExitEmitsEndedEvent(t *testing.T) {
 		}
 	}
 	require.NotNil(t, endedEvent, "should have DevRunEndedEvent on non-zero exit")
+	require.NotNil(t, endedEvent.ExitStatus, "ended event should have exit status from status file")
+	assert.Equal(t, 42, *endedEvent.ExitStatus)
 }
 
 func TestStartDevRun_RelativeWorkingDir(t *testing.T) {
@@ -1467,10 +1473,10 @@ func TestStartDevRun_WrapperWritesInstanceFileBeforeOutput(t *testing.T) {
 	workspaceId := "ws_wrapper_write_" + t.Name()
 	flowId := "flow_wrapper_write_" + t.Name()
 
-	// The real command creates a sentinel file after a delay; the wrapper
-	// writes the instance file before exec'ing into it.
-	sentinelPath := filepath.Join(tmpDir, "sentinel.txt")
-	command := fmt.Sprintf("sleep 2 && touch %s", sentinelPath)
+	// The real command checks for the instance file as its very first
+	// action. Because the wrapper writes the instance file before
+	// starting the child, $_SK_INSTANCE_PATH must already exist.
+	command := `test -f "$_SK_INSTANCE_PATH" && echo "WRITE_AHEAD_OK" || echo "WRITE_AHEAD_FAIL"`
 
 	input := StartDevRunInput{
 		DevRunConfig: common.DevRunConfig{
@@ -1492,13 +1498,20 @@ func TestStartDevRun_WrapperWritesInstanceFileBeforeOutput(t *testing.T) {
 	assert.True(t, output.Started)
 	require.NotNil(t, output.Instance)
 
-	// Wait for the wrapper to write the instance file (written before exec)
-	instanceFilePath := devRunInstanceFilePath(flowId, "test")
+	// Wait for the short-lived command to finish
 	require.Eventually(t, func() bool {
-		_, err := os.Stat(instanceFilePath)
-		return err == nil
-	}, 5*time.Second, 10*time.Millisecond, "instance file should be written by wrapper")
+		return !IsSessionAlive(output.Instance.SessionId)
+	}, 5*time.Second, 50*time.Millisecond, "process should exit")
 
+	// Read the output file written by the real command
+	outputData, err := os.ReadFile(output.Instance.OutputFilePath)
+	require.NoError(t, err)
+	assert.Contains(t, string(outputData), "WRITE_AHEAD_OK",
+		"real command must see instance file already on disk — proves write-ahead property")
+	assert.NotContains(t, string(outputData), "WRITE_AHEAD_FAIL")
+
+	// Also verify the instance file content is correct
+	instanceFilePath := devRunInstanceFilePath(flowId, "test")
 	data, err := os.ReadFile(instanceFilePath)
 	require.NoError(t, err, "instance file should be readable")
 
@@ -1511,16 +1524,6 @@ func TestStartDevRun_WrapperWritesInstanceFileBeforeOutput(t *testing.T) {
 	assert.Equal(t, output.Instance.CommandId, fileInstance.CommandId)
 	assert.Equal(t, "test", fileInstance.CommandId)
 
-	// The sentinel file should NOT exist yet, proving the instance file was
-	// written before the real command had a chance to run.
-	_, err = os.Stat(sentinelPath)
-	assert.True(t, os.IsNotExist(err), "sentinel file should not exist yet — write-ahead property")
-
 	// Clean up
-	activities.StopDevRun(context.Background(), StopDevRunInput{
-		DevRunConfig: input.DevRunConfig,
-		CommandId:    "test",
-		Context:      input.Context,
-		Instance:     output.Instance,
-	})
+	os.Remove(instanceFilePath)
 }

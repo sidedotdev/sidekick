@@ -240,7 +240,14 @@ func (a *DevRunActivities) StartDevRun(ctx context.Context, input StartDevRunInp
 	// we can recover the instance. Return it regardless of alive/dead status so
 	// MonitorDevRun can handle final output and cleanup.
 	instanceFilePath := devRunInstanceFilePath(input.Context.FlowId, input.CommandId)
-	if recovered, err := recoverInstanceFromFile(instanceFilePath); err == nil && recovered != nil {
+	recovered, recoverErr := recoverInstanceFromFile(instanceFilePath)
+	if recoverErr != nil {
+		log.Warn().Err(recoverErr).
+			Str("path", instanceFilePath).
+			Msg("Failed to read dev run instance file; removing corrupt file and starting fresh")
+		os.Remove(instanceFilePath)
+	}
+	if recovered != nil {
 		alive := IsSessionAlive(recovered.SessionId)
 		log.Info().
 			Str("devRunId", recovered.DevRunId).
@@ -321,17 +328,25 @@ func (a *DevRunActivities) startCommand(
 	cmdIndex int,
 	instanceFilePath string,
 ) (*runningProcess, error) {
-	// Use a wrapper script that writes the instance file (using $$ as
-	// sessionId) before exec'ing into the real command. This ensures the
-	// instance file exists on disk before the real command runs, eliminating
-	// the race between process start and file creation that caused recovery
-	// failures when the worker was killed by the dev run command itself.
-	wrapperScript := `printf '{"devRunId":"%s","sessionId":%d,"outputFilePath":"%s","commandId":"%s"}' "$_SK_DEVRUN_ID" $$ "$_SK_OUTPUT" "$_SK_CMDID" > "$_SK_INSTANCE_PATH" && exec sh -c "$_SK_CMD"`
+	// The wrapper shell writes the instance file before starting the real
+	// command (write-ahead), then stays alive as the parent so it can
+	// capture the child's exit status into a durable status file. Using
+	// `trap : SIG` (no-op handler, NOT SIG_IGN) lets the wrapper survive
+	// signals while children inherit default signal handling.
+	wrapperScript := `printf '{"devRunId":"%s","sessionId":%d,"outputFilePath":"%s","commandId":"%s"}' "$_SK_DEVRUN_ID" $$ "$_SK_OUTPUT" "$_SK_CMDID" > "$_SK_INSTANCE_PATH"
+trap : TERM INT HUP
+sh -c "$_SK_CMD" &
+_PID=$!
+wait $_PID
+_EC=$?
+while kill -0 $_PID 2>/dev/null; do wait $_PID 2>/dev/null; _EC=$?; done
+printf '{"exitCode":%d}' $_EC > "$_SK_STATUS_PATH"`
 
 	cmd := exec.Command("sh", "-c", wrapperScript)
 	cmd.Dir = workingDir
 
 	outputFilePath := fmt.Sprintf("/tmp/sidekick-devrun-%s.log", devRunCtx.DevRunId)
+	statusFilePath := devRunStatusFilePath(devRunCtx.DevRunId)
 	cmd.Env = append(os.Environ(), envVars...)
 	cmd.Env = append(cmd.Env,
 		"_SK_CMD="+command,
@@ -339,6 +354,7 @@ func (a *DevRunActivities) startCommand(
 		"_SK_DEVRUN_ID="+devRunCtx.DevRunId,
 		"_SK_OUTPUT="+outputFilePath,
 		"_SK_CMDID="+devRunCtx.CommandId,
+		"_SK_STATUS_PATH="+statusFilePath,
 	)
 
 	// Create a new session so processes survive worker restarts
@@ -452,9 +468,10 @@ func (a *DevRunActivities) StopDevRun(ctx context.Context, input StopDevRunInput
 		}
 	}
 
-	// Clean up the tracker entry and instance file
+	// Clean up the tracker entry, instance file, and status file
 	clearEndedEventTracker(instance.DevRunId)
 	os.Remove(devRunInstanceFilePath(input.Context.FlowId, input.CommandId))
+	os.Remove(devRunStatusFilePath(instance.DevRunId))
 
 	return StopDevRunOutput{Stopped: true}, nil
 }
@@ -532,6 +549,19 @@ func (a *DevRunActivities) MonitorDevRun(ctx context.Context, input MonitorDevRu
 					break
 				}
 			}
+
+			// Recover exit status from the wrapper's durable status file
+			statusPath := devRunStatusFilePath(instance.DevRunId)
+			if statusData, readErr := os.ReadFile(statusPath); readErr == nil {
+				var status devRunExitStatus
+				if jsonErr := json.Unmarshal(statusData, &status); jsonErr == nil {
+					exitCode = &status.ExitCode
+					if status.ExitCode > 128 {
+						signal = syscall.Signal(status.ExitCode - 128).String()
+					}
+				}
+			}
+			os.Remove(statusPath)
 
 			// Emit ended event if not already emitted
 			if markEndedEventEmitted(instance.DevRunId) {
@@ -749,6 +779,15 @@ func safeRecordHeartbeat(ctx context.Context, details ...interface{}) {
 // Dev Run instance metadata, keyed by flow ID and command ID.
 func devRunInstanceFilePath(flowId, commandId string) string {
 	return fmt.Sprintf("/tmp/sidekick-devrun-instance-%s-%s.json", flowId, commandId)
+}
+
+// devRunStatusFilePath returns the path for the wrapper's exit status file.
+func devRunStatusFilePath(devRunId string) string {
+	return fmt.Sprintf("/tmp/sidekick-devrun-status-%s.json", devRunId)
+}
+
+type devRunExitStatus struct {
+	ExitCode int `json:"exitCode"`
 }
 
 // writeInstanceFile writes a DevRunInstance to a JSON file for crash recovery.
