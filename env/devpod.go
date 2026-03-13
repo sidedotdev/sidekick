@@ -6,12 +6,21 @@ import (
 	"sidekick/coding/unix"
 )
 
+type DevPodUpInput struct {
+	WorkspacePath string `json:"workspacePath"`
+	IDE           string `json:"ide,omitempty"`
+}
+
 // DevPodUpActivity starts a DevPod workspace for the given source path.
-func DevPodUpActivity(ctx context.Context, workspacePath string) error {
+func DevPodUpActivity(ctx context.Context, input DevPodUpInput) error {
+	ide := input.IDE
+	if ide == "" {
+		ide = "none"
+	}
 	output, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
 		WorkingDir: ".",
 		Command:    "devpod",
-		Args:       []string{"up", workspacePath},
+		Args:       []string{"up", input.WorkspacePath, "--ide", ide},
 	})
 	if err != nil {
 		return fmt.Errorf("devpod up failed: %w", err)

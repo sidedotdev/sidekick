@@ -1,26 +1,8 @@
 {
 	"name": "Sidekick",
-	"image": "mcr.microsoft.com/devcontainers/go:1.24",
-	"features": {
-		"ghcr.io/devcontainers/features/git:1": {},
-		"ghcr.io/devcontainers/features/github-cli:1": {}
+	"build": {
+		"dockerfile": "Dockerfile",
+		"context": ".."
 	},
-	"postCreateCommand": "curl -fsSL https://bun.sh/install | bash && echo 'export BUN_INSTALL=\"$HOME/.bun\"' >> ~/.bashrc && echo 'export PATH=\"$BUN_INSTALL/bin:$PATH\"' >> ~/.bashrc && export BUN_INSTALL=\"$HOME/.bun\" && export PATH=\"$BUN_INSTALL/bin:$PATH\" && cd frontend && bun install",
-	"customizations": {
-		"vscode": {
-			"extensions": [
-				"golang.go",
-				"Vue.volar",
-				"dbaeumer.vscode-eslint",
-				"esbenp.prettier-vscode"
-			],
-			"settings": {
-				"go.testFlags": ["-v"]
-			}
-		}
-	},
-	"remoteEnv": {
-		"BUN_INSTALL": "${containerEnv:HOME}/.bun",
-		"PATH": "${containerEnv:HOME}/.bun/bin:${containerEnv:PATH}"
-	}
+	"postCreateCommand": "cd frontend && bun install --frozen-lockfile"
 }

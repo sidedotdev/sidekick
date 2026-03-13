@@ -266,7 +266,7 @@ func executeWorkRequest(ctx workflow.Context, workspaceId string, workRequest Wo
 		return domain.Flow{}, err
 	}
 
-	repoDir, err := filepath.Abs(workspace.LocalRepoDir) // TODO specify sandbox to run these things in instead later
+	repoDir, err := filepath.Abs(workspace.LocalRepoDir)
 	if err != nil {
 		return domain.Flow{}, err
 	}
