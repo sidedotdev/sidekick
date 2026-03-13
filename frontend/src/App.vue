@@ -87,14 +87,6 @@ const handleFilter = (event: { value: string }) => {
 }
 
 const handleShow = () => {
-  nextTick(() => {
-    const instance = workspaceSelectRef.value as any
-    if (!instance) return
-    const options = instance.visibleOptions
-    if (options && options.length > 0) {
-      instance.changeFocusedOptionIndex(null, 0)
-    }
-  })
 }
 
 const handleHide = () => {
