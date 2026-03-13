@@ -20,13 +20,14 @@ import (
 // It separates chat history and secrets from pure LLM config (Options) so that
 // providers never see storage-aware types.
 type StreamInput struct {
-	Options      llm2.Options
-	Secrets      secret_manager.SecretManagerContainer
-	ChatHistory  *ChatHistoryContainer
-	WorkspaceId  string
-	FlowId       string
-	FlowActionId string
-	Providers    []common.ModelProviderPublicConfig
+	Options         llm2.Options
+	Secrets         secret_manager.SecretManagerContainer
+	ChatHistory     *ChatHistoryContainer
+	ToolNameMapping *ToolNameMappingConfig
+	WorkspaceId     string
+	FlowId          string
+	FlowActionId    string
+	Providers       []common.ModelProviderPublicConfig
 }
 
 // ActionParams returns action parameters for flow action tracking.
@@ -129,9 +130,16 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 		return nil, fmt.Errorf("Stream requires Llm2ChatHistory, got %T", input.ChatHistory.History)
 	}
 
+	options := input.Options
+	messages := llm2History.Llm2Messages()
+	if input.ToolNameMapping != nil {
+		options = mapOptionsToolNames(options, input.ToolNameMapping)
+		messages = mapMessagesToolNames(messages, input.ToolNameMapping)
+	}
+
 	request := llm2.StreamRequest{
-		Messages:      llm2History.Llm2Messages(),
-		Options:       input.Options,
+		Messages:      messages,
+		Options:       options,
 		SecretManager: input.Secrets.SecretManager,
 	}
 
@@ -140,6 +148,9 @@ func (la *Llm2Activities) Stream(ctx context.Context, input StreamInput) (*llm2.
 
 	if response != nil {
 		response.Provider = input.Options.ModelConfig.Provider
+		if input.ToolNameMapping != nil {
+			response.Output = reverseMapMessageToolNames(response.Output, input.ToolNameMapping)
+		}
 		response.Output.SanitizeToolNames()
 	}
 
@@ -170,38 +181,99 @@ func convertLlm2EventToFlowEvent(event llm2.Event, flowActionId string) domain.F
 
 // getLlm2Provider returns the appropriate llm2.Provider based on the model configuration.
 func getLlm2Provider(config common.ModelConfig, providers []common.ModelProviderPublicConfig) (llm2.Provider, error) {
-	providerType, err := getProviderType(config.Provider)
+	var providerConfig *common.ModelProviderPublicConfig
+	for i := range providers {
+		if providers[i].Name == config.Provider {
+			providerConfig = &providers[i]
+			break
+		}
+	}
+
+	providerTypeName := config.Provider
+	if providerConfig != nil {
+		providerTypeName = providerConfig.Type
+	}
+
+	providerType, err := getProviderType(providerTypeName)
 	if err != nil {
-		return nil, err
+		for _, p := range providers {
+			if p.Name == config.Provider {
+				providerType = llm.ToolChatProviderType(p.Type)
+				err = nil
+				break
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	authType := common.ProviderAuthTypeAny
+	if providerConfig != nil {
+		authType = common.NormalizeProviderAuthType(string(providerConfig.AuthType))
 	}
 
 	switch providerType {
 	case llm.OpenaiToolChatProviderType:
-		return llm2.OpenAIResponsesProvider{}, nil
+		var customHeaders map[string]string
+		if providerConfig != nil {
+			customHeaders = providerConfig.CustomHeaders
+		}
+		return llm2.OpenAIResponsesProvider{
+			AuthType:      authType,
+			CustomHeaders: customHeaders,
+		}, nil
 	case llm.OpenaiCompatibleToolChatProviderType:
-		for _, p := range providers {
-			if p.Type == string(providerType) && p.Name == config.Provider {
-				return llm2.OpenAIProvider{
-					BaseURL:      p.BaseURL,
-					DefaultModel: p.DefaultLLM,
-				}, nil
-			}
+		if providerConfig != nil && providerConfig.Type == string(providerType) {
+			return llm2.OpenAIProvider{
+				BaseURL:       providerConfig.BaseURL,
+				DefaultModel:  providerConfig.DefaultLLM,
+				AuthType:      authType,
+				CustomHeaders: providerConfig.CustomHeaders,
+			}, nil
 		}
 		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
 	case llm.OpenaiResponsesCompatibleToolChatProviderType:
+		if providerConfig != nil && providerConfig.Type == string(providerType) {
+			return llm2.OpenAIResponsesProvider{
+				BaseURL:       providerConfig.BaseURL,
+				DefaultModel:  providerConfig.DefaultLLM,
+				AuthType:      authType,
+				CustomHeaders: providerConfig.CustomHeaders,
+			}, nil
+		}
+		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
+	case llm.AnthropicToolChatProviderType:
 		for _, p := range providers {
 			if p.Type == string(providerType) && p.Name == config.Provider {
-				return llm2.OpenAIResponsesProvider{
-					BaseURL:      p.BaseURL,
-					DefaultModel: p.DefaultLLM,
+				return llm2.AnthropicProvider{
+					BaseURL:       p.BaseURL,
+					DefaultModel:  p.DefaultLLM,
+					AuthType:      p.AuthType,
+					CustomHeaders: p.CustomHeaders,
+				}, nil
+			}
+		}
+		return llm2.AnthropicProvider{AuthType: authType}, nil
+	case llm.ToolChatProviderType("anthropic_compatible"):
+		for _, p := range providers {
+			if p.Type == string(providerType) && p.Name == config.Provider {
+				return llm2.AnthropicProvider{
+					BaseURL:             p.BaseURL,
+					DefaultModel:        p.DefaultLLM,
+					AuthType:            p.AuthType,
+					AnthropicCompatible: true,
+					CustomHeaders:       p.CustomHeaders,
 				}, nil
 			}
 		}
 		return nil, fmt.Errorf("configuration not found for provider named: %s", config.Provider)
-	case llm.AnthropicToolChatProviderType:
-		return llm2.AnthropicProvider{}, nil
 	case llm.GoogleToolChatProviderType:
-		return llm2.GoogleProvider{}, nil
+		var customHeaders map[string]string
+		if providerConfig != nil {
+			customHeaders = providerConfig.CustomHeaders
+		}
+		return llm2.GoogleProvider{AuthType: authType, CustomHeaders: customHeaders}, nil
 	case llm.UnspecifiedToolChatProviderType:
 		return nil, fmt.Errorf("llm2 provider was not specified")
 	default:

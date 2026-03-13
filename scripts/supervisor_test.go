@@ -1361,7 +1361,11 @@ sleep 30
 	}
 
 	// Simulate pressing 'r' - this is what Update() does
-	go sup.RestartProcess(ctx, p, outputChan)
+	restartDone := make(chan struct{})
+	go func() {
+		sup.RestartProcess(ctx, p, outputChan)
+		close(restartDone)
+	}()
 
 	// Wait for notification
 	select {
@@ -1393,6 +1397,13 @@ sleep 30
 
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for notification")
+	}
+
+	// Wait for restart to complete before checking for new output
+	select {
+	case <-restartDone:
+	case <-time.After(15 * time.Second):
+		t.Fatal("timeout waiting for restart to complete")
 	}
 
 	waitForCondition(t, 10*time.Second, func() bool {
@@ -3682,4 +3693,237 @@ sleep 30
 	waitForCondition(t, 5*time.Second, func() bool {
 		return !p.isDirty()
 	}, "process should not be dirty after immediate restart")
+}
+
+func TestPrebuildCancelledOnNewFileChange(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-prebuild-cancel-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	markerPath := filepath.Join(tmpDir, "prebuild-marker")
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:            "cancel-test",
+			Command:         "echo",
+			Args:            []string{"main"},
+			PrebuildCommand: "sleep",
+			PrebuildArgs:    []string{"30"},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	outputChan := make(chan processOutputMsg, 100)
+
+	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	p := sup.processes[0]
+
+	// Start a long-running prebuild
+	prebuildDone := make(chan struct{})
+	go func() {
+		sup.runPrebuild(ctx, p, outputChan)
+		close(prebuildDone)
+	}()
+
+	// Wait for prebuild to start
+	waitForCondition(t, 2*time.Second, func() bool {
+		return p.isPrebuildRunning()
+	}, "prebuild should be running")
+
+	// Simulate a file change which should cancel the running prebuild and schedule a new one.
+	// Use a short prebuild command for the replacement so the test completes quickly.
+	p.Config.PrebuildCommand = "sh"
+	p.Config.PrebuildArgs = []string{"-c", fmt.Sprintf("echo done > %s", markerPath)}
+
+	sup.handleFileChange(ctx, p, outputChan, 50*time.Millisecond)
+
+	// The old prebuild should be cancelled and finish
+	select {
+	case <-prebuildDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old prebuild should have been cancelled")
+	}
+
+	// The cancelled prebuild should not have set an error (it was intentionally cancelled)
+	if p.getPrebuildLastErr() != "" {
+		t.Errorf("cancelled prebuild should not set error, got: %s", p.getPrebuildLastErr())
+	}
+
+	// Wait for the new prebuild (scheduled by handleFileChange) to complete
+	waitForCondition(t, 3*time.Second, func() bool {
+		_, err := os.ReadFile(markerPath)
+		return err == nil
+	}, "new prebuild should have run and created marker file")
+
+	// Verify the new prebuild completed
+	content, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatalf("failed to read marker: %v", err)
+	}
+	if !strings.Contains(string(content), "done") {
+		t.Errorf("marker should contain 'done', got: %s", string(content))
+	}
+}
+
+func TestRestartPendingPreservedAcrossPrebuildCancellation(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-restart-pending-cancel-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	markerPath := filepath.Join(tmpDir, "final-prebuild-done")
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:            "restart-cancel-test",
+			Command:         "sleep",
+			Args:            []string{"30"},
+			PrebuildCommand: "sleep",
+			PrebuildArgs:    []string{"30"},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	outputChan := make(chan processOutputMsg, 100)
+
+	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	sup.StartAll(ctx, outputChan)
+	defer sup.StopAll()
+
+	p := sup.processes[0]
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		return p.isRunning()
+	}, "process should be running")
+
+	p.setDirty(true)
+
+	// Start a long-running prebuild
+	prebuildDone := make(chan struct{})
+	go func() {
+		sup.runPrebuild(ctx, p, outputChan)
+		close(prebuildDone)
+	}()
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return p.isPrebuildRunning()
+	}, "prebuild should be running")
+
+	// User presses Enter during prebuild
+	p.setRestartPending(true)
+
+	// File change arrives — cancels prebuild, but restartPending should persist
+	p.Config.PrebuildCommand = "sh"
+	p.Config.PrebuildArgs = []string{"-c", fmt.Sprintf("echo done > %s", markerPath)}
+
+	sup.handleFileChange(ctx, p, outputChan, 50*time.Millisecond)
+
+	// Old prebuild should finish (cancelled)
+	select {
+	case <-prebuildDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old prebuild should have been cancelled")
+	}
+
+	// restartPending must still be true after cancellation
+	if !p.isRestartPending() {
+		t.Fatal("restartPending should be preserved when prebuild is cancelled")
+	}
+
+	// Wait for the new prebuild to run and complete, which should trigger the restart
+	waitForCondition(t, 5*time.Second, func() bool {
+		return !p.isRestartPending()
+	}, "restartPending should be cleared after final prebuild completes and triggers restart")
+
+	// Verify the final prebuild ran
+	if _, err := os.Stat(markerPath); os.IsNotExist(err) {
+		t.Error("final prebuild marker should exist")
+	}
+}
+
+func TestNoConcurrentPrebuildsForSameProcess(t *testing.T) {
+	t.Parallel()
+
+	tmpDir, err := os.MkdirTemp("", "supervisor-no-concurrent-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	counterPath := filepath.Join(tmpDir, "run-count")
+
+	testProcesses := []ProcessConfig{
+		{
+			Name:            "concurrent-test",
+			Command:         "echo",
+			Args:            []string{"main"},
+			PrebuildCommand: "sleep",
+			PrebuildArgs:    []string{"30"},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	outputChan := make(chan processOutputMsg, 100)
+
+	sup := NewSupervisor(testProcesses, false, tmpDir, tmpDir)
+	p := sup.processes[0]
+
+	// Start a long-running prebuild
+	prebuild1Done := make(chan struct{})
+	go func() {
+		sup.runPrebuild(ctx, p, outputChan)
+		close(prebuild1Done)
+	}()
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return p.isPrebuildRunning()
+	}, "first prebuild should be running")
+
+	// Cancel the running prebuild via handleFileChange with a fast replacement
+	p.Config.PrebuildCommand = "sh"
+	p.Config.PrebuildArgs = []string{"-c", fmt.Sprintf("echo run >> %s", counterPath)}
+
+	sup.handleFileChange(ctx, p, outputChan, 50*time.Millisecond)
+
+	// Old prebuild should be cancelled
+	select {
+	case <-prebuild1Done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first prebuild should have been cancelled")
+	}
+
+	// isPrebuildRunning should still report correctly through the transition
+	waitForCondition(t, 3*time.Second, func() bool {
+		_, err := os.ReadFile(counterPath)
+		return err == nil
+	}, "replacement prebuild should have run")
+
+	time.Sleep(100 * time.Millisecond)
+
+	content, err := os.ReadFile(counterPath)
+	if err != nil {
+		t.Fatalf("failed to read counter file: %v", err)
+	}
+	runs := strings.Count(strings.TrimSpace(string(content)), "run")
+	if runs != 1 {
+		t.Errorf("expected exactly 1 completed prebuild, got: %d", runs)
+	}
+
+	// After everything settles, prebuild should not be running
+	waitForCondition(t, 2*time.Second, func() bool {
+		return !p.isPrebuildRunning()
+	}, "prebuild should not be running after all complete")
 }

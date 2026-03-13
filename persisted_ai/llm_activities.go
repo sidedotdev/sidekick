@@ -243,6 +243,10 @@ func getProviderType(s string) (llm.ToolChatProviderType, error) {
 		return llm.AnthropicToolChatProviderType, nil
 	case "google":
 		return llm.GoogleToolChatProviderType, nil
+	case "openai_compatible":
+		return llm.OpenaiCompatibleToolChatProviderType, nil
+	case "openai_responses_compatible":
+		return llm.OpenaiResponsesCompatibleToolChatProviderType, nil
 	case "mock":
 		return llm.ToolChatProviderType("mock"), nil
 	}

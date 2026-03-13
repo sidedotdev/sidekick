@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"sidekick/common"
-	"sidekick/llm"
 	"sidekick/secret_manager"
 	"strings"
 	"sync"
@@ -68,7 +67,7 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
-	provider := AnthropicProvider{}
+	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAPI}
 
 	mockTool := &common.Tool{
 		Name:        "get_current_weather",
@@ -88,11 +87,7 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		},
 	}
 
-	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		&secret_manager.EnvSecretManager{},
-		&secret_manager.KeyringSecretManager{},
-		&secret_manager.LocalConfigSecretManager{},
-	})
+	secretManager := requireIntegrationAPIKey(t, "ANTHROPIC_API_KEY")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -152,14 +147,10 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 	close(eventChan)
 
 	if err != nil {
-		errStr := err.Error()
-		if contains(errStr, "overloaded_error") || contains(errStr, "Overloaded") {
-			t.Skipf("Skipping test due to Anthropic API being overloaded: %v", err)
+		if isAnthropicTransientError(err) {
+			t.Skipf("Skipping test due to transient Anthropic API error: %v", err)
 		}
-		if contains(errStr, "invalid_grant") ||
-			contains(errStr, "Refresh token not found or invalid") ||
-			contains(errStr, "failed to get Anthropic OAuth credentials") ||
-			contains(errStr, "OAuth token has been revoked") {
+		if isAnthropicCredentialError(err) {
 			t.Skipf("Skipping test due to Anthropic credentials not configured/invalid: %v", err)
 		}
 		t.Fatalf("Stream returned an error: %v", err)
@@ -266,8 +257,11 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		close(eventChan)
 
 		if err != nil {
-			if contains(err.Error(), "overloaded_error") || contains(err.Error(), "Overloaded") {
-				t.Skipf("Skipping multi-turn test due to Anthropic API being overloaded: %v", err)
+			if isAnthropicTransientError(err) {
+				t.Skipf("Skipping multi-turn test due to transient Anthropic API error: %v", err)
+			}
+			if isAnthropicCredentialError(err) {
+				t.Skipf("Skipping multi-turn test due to Anthropic credentials not configured/invalid: %v", err)
 			}
 			t.Fatalf("Stream returned an error: %v", err)
 		}
@@ -370,8 +364,8 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		close(eventChan)
 
 		if err != nil {
-			if contains(err.Error(), "overloaded_error") || contains(err.Error(), "Overloaded") {
-				t.Skipf("Skipping reasoning test due to Anthropic API being overloaded: %v", err)
+			if isAnthropicTransientError(err) {
+				t.Skipf("Skipping reasoning test due to transient Anthropic API error: %v", err)
 			}
 			t.Fatalf("Stream returned an error: %v", err)
 		}
@@ -426,44 +420,6 @@ func TestAnthropicResponsesProvider_Integration(t *testing.T) {
 		t.Logf("Usage: InputTokens=%d, OutputTokens=%d", response.Usage.InputTokens, response.Usage.OutputTokens)
 		t.Logf("Model: %s, StopReason: %s", response.Model, response.StopReason)
 	})
-}
-
-func TestAnthropicProvider_OAuthRefresh(t *testing.T) {
-	t.Parallel()
-	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
-		t.Skip("Skipping integration test; SIDE_INTEGRATION_TEST not set")
-	}
-
-	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		&secret_manager.EnvSecretManager{},
-		&secret_manager.KeyringSecretManager{},
-		&secret_manager.LocalConfigSecretManager{},
-	})
-
-	creds, useOAuth, err := llm.GetAnthropicOAuthCredentials(secretManager)
-	if err != nil {
-		t.Fatalf("Failed to get OAuth credentials: %v", err)
-	}
-	if !useOAuth || creds == nil {
-		t.Skip("Skipping: Anthropic OAuth not configured")
-	}
-	if creds.RefreshToken == "" {
-		t.Skip("Skipping: no refresh token available")
-	}
-
-	newCreds, err := llm.RefreshAnthropicOAuthToken(creds.RefreshToken)
-	if err != nil {
-		if strings.Contains(err.Error(), "invalid_grant") {
-			t.Skipf("Skipping: refresh token is invalid or revoked: %v", err)
-		}
-		t.Fatalf("RefreshAnthropicOAuthToken should not return an error: %v", err)
-	}
-
-	assert.NotEmpty(t, newCreds.AccessToken, "new access token should not be empty")
-	assert.NotEmpty(t, newCreds.RefreshToken, "new refresh token should not be empty")
-	assert.Greater(t, newCreds.ExpiresAt, int64(0), "new expiry should be set")
-
-	t.Logf("OAuth refresh successful: got new access token (len=%d), expires_at=%d", len(newCreds.AccessToken), newCreds.ExpiresAt)
 }
 
 func TestAnthropicResponsesProvider_CacheControl(t *testing.T) {
@@ -593,7 +549,7 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
-	provider := AnthropicProvider{}
+	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAPI}
 
 	expectedText, dataURL := GenerateVisionTestImage(6)
 	t.Logf("Generated vision test image with text: %q", expectedText)
@@ -608,22 +564,18 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 				},
 				{
 					Type: ContentBlockTypeText,
-					Text: "What text is written in this image? The text consists only of uppercase ASCII letters (A-Z, no O or I) and digits (2-9). Reply with ONLY the exact text, nothing else.",
+					Text: fmt.Sprintf("What text is written in this image? %s Reply with ONLY the exact text, nothing else.", VisionTestCharSetHint()),
 				},
 			},
 		},
 	}
 
-	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		&secret_manager.EnvSecretManager{},
-		&secret_manager.KeyringSecretManager{},
-		&secret_manager.LocalConfigSecretManager{},
-	})
+	secretManager := requireIntegrationAPIKey(t, "ANTHROPIC_API_KEY")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider: "anthropic",
-			Model:    "claude-sonnet-4-5-20250929",
+			Model:    "claude-sonnet-4-6",
 		},
 	}
 
@@ -652,14 +604,10 @@ func TestAnthropicProvider_ImageIntegration(t *testing.T) {
 	wg.Wait()
 
 	if err != nil {
-		errStr := err.Error()
-		if contains(errStr, "overloaded_error") || contains(errStr, "Overloaded") || contains(errStr, "rate_limit") {
+		if isAnthropicTransientError(err) {
 			t.Skipf("Skipping test due to transient Anthropic API error: %v", err)
 		}
-		if contains(errStr, "invalid_grant") ||
-			contains(errStr, "Refresh token not found or invalid") ||
-			contains(errStr, "failed to get Anthropic OAuth credentials") ||
-			contains(errStr, "OAuth token has been revoked") {
+		if isAnthropicCredentialError(err) {
 			t.Skipf("Skipping test due to Anthropic credentials not configured/invalid: %v", err)
 		}
 		t.Fatalf("Stream returned an error: %v", err)
@@ -680,7 +628,7 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(zerolog.DebugLevel)
 	ctx := context.Background()
-	provider := AnthropicProvider{}
+	provider := AnthropicProvider{AuthType: common.ProviderAuthTypeAPI}
 
 	expectedText, dataURL := GenerateVisionTestImage(6)
 	t.Logf("Generated vision test image with text: %q", expectedText)
@@ -692,7 +640,7 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 			Content: []ContentBlock{
 				{
 					Type: ContentBlockTypeText,
-					Text: "Please use the read_image tool to read the image at path 'test.png' and tell me the exact text in it.",
+					Text: fmt.Sprintf("Please use the read_image tool to read the image at path 'test.png'. %s Reply with ONLY the exact text, nothing else.", VisionTestCharSetHint()),
 				},
 			},
 		},
@@ -730,16 +678,12 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 		},
 	}
 
-	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		&secret_manager.EnvSecretManager{},
-		&secret_manager.KeyringSecretManager{},
-		&secret_manager.LocalConfigSecretManager{},
-	})
+	secretManager := requireIntegrationAPIKey(t, "ANTHROPIC_API_KEY")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider: "anthropic",
-			Model:    "claude-sonnet-4-5-20250929",
+			Model:    "claude-sonnet-4-6",
 		},
 		Tools: []*common.Tool{
 			{
@@ -777,14 +721,10 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 	wg.Wait()
 
 	if err != nil {
-		errStr := err.Error()
-		if contains(errStr, "overloaded_error") || contains(errStr, "Overloaded") || contains(errStr, "rate_limit") {
+		if isAnthropicTransientError(err) {
 			t.Skipf("Skipping test due to transient Anthropic API error: %v", err)
 		}
-		if contains(errStr, "invalid_grant") ||
-			contains(errStr, "Refresh token not found or invalid") ||
-			contains(errStr, "failed to get Anthropic OAuth credentials") ||
-			contains(errStr, "OAuth token has been revoked") {
+		if isAnthropicCredentialError(err) {
 			t.Skipf("Skipping test due to Anthropic credentials not configured/invalid: %v", err)
 		}
 		t.Fatalf("Stream returned an error: %v", err)
@@ -795,4 +735,26 @@ func TestAnthropicProvider_ToolResultImageIntegration(t *testing.T) {
 	t.Logf("Model response: %q", responseText)
 	assert.True(t, VisionTestFuzzyMatch(expectedText, responseText),
 		"Expected model to read %q from the image, got %q", expectedText, responseText)
+}
+func isAnthropicTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+	return contains(errStr, "overloaded_error") ||
+		contains(errStr, "Overloaded") ||
+		contains(errStr, "rate_limit")
+}
+func isAnthropicCredentialError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+	return contains(errStr, "invalid_grant") ||
+		contains(errStr, "Refresh token not found or invalid") ||
+		contains(errStr, "failed to get Anthropic OAuth credentials") ||
+		contains(errStr, "OAuth token has been revoked") ||
+		contains(errStr, "401 Unauthorized")
 }

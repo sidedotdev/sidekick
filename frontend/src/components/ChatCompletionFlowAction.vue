@@ -42,7 +42,7 @@
             <template v-for="(block, blockIndex) in message.content" :key="blockIndex">
               <!-- text block -->
               <div v-if="block.type === 'text'" class="llm2-text-block">
-                <vue-markdown v-if="message.role === 'assistant'"
+                <vue-markdown v-if="message.role === 'assistant' && getTextBlockText(block)"
                   :source="getTextBlockText(block)"
                   :options="{ breaks: true }"
                   class="markdown"
@@ -109,7 +109,7 @@
             }"
             class="message-content historical"
           >
-            <vue-markdown v-if="message.role == 'assistant'"
+            <vue-markdown v-if="message.role == 'assistant' && typeof message.content === 'string'"
               :source="message.content"
               :options="{ breaks: true }"
               class="markdown"
@@ -166,7 +166,9 @@
               <JsonTree :deep="jsonTreeDepth" :data="parseLlm2ToolArguments(block.toolUse.arguments)" class="action-result-function-args"/>
             </div>
             <div v-else-if="block.type === 'reasoning'" class="llm2-text-block">
-              <vue-markdown v-if="block.reasoning && block.reasoning.text" :options="{ breaks: true }" :source="block.reasoning.text" class="message-content markdown reasoning"/>
+              <vue-markdown v-if="block.reasoning?.text" :options="{ breaks: true }" :source="block.reasoning.text" class="message-content markdown reasoning"/>
+              <p v-else class="reasoning-redacted"><em>Reasoning (content not available)</em></p>
+              <p v-if="block.reasoning?.summary" class="reasoning-summary"><strong>Summary:</strong> {{ block.reasoning.summary }}</p>
             </div>
             <div v-else-if="block.type !== 'text'" class="llm2-unknown-block">
               <JsonTree :deep="jsonTreeDepth" :data="block"/>
@@ -179,7 +181,7 @@
 
         <!-- Legacy ChatCompletionChoice format -->
         <template v-else>
-          <vue-markdown v-if="completion?.content" :options="{ breaks: true }" :source="completion?.content" class="message-content markdown"/>
+          <vue-markdown v-if="typeof completion?.content === 'string' && completion.content" :options="{ breaks: true }" :source="completion.content" class="message-content markdown"/>
           <div v-for="toolCall in completion?.toolCalls" :key="toolCall.id">
             <p class="action-result-function-name">Tool Call: {{ toolCall.name }}</p>
             <JsonTree :deep="jsonTreeDepth" :data="toolCall.parsedArguments || JSON.parse(toolCall.arguments || '{}')" class="action-result-function-args"/>
@@ -299,7 +301,7 @@ function parseLlm2ToolArguments(args: string): object {
 }
 
 function getTextBlockText(block: Llm2ContentBlock): string {
-  return block.type === 'text' ? block.text : '';
+  return block.type === 'text' && typeof block.text === 'string' ? block.text : '';
 }
 
 function getToolUseBlock(block: Llm2ContentBlock) {

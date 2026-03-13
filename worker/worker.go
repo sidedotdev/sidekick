@@ -179,6 +179,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(codingActivities)
 	w.RegisterActivity(ragActivities)
 	w.RegisterActivity(env.EnvRunCommandActivity)
+	w.RegisterActivity(env.GetEnvironmentInfoActivity)
 	w.RegisterActivity(git.GitDiffActivity)
 	w.RegisterActivity(git.DiffUntrackedFilesActivity)
 	w.RegisterActivity(git.GitAddActivity)

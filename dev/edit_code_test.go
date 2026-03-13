@@ -68,7 +68,7 @@ func (s *AuthorEditBlocksTestSuite) SetupTest() {
 				},
 			},
 		}
-		return authorEditBlocks(execContext, common.ModelConfig{}, 0, chatHistory, pic.PromptInfo)
+		return authorEditBlocks(execContext, common.ModelConfig{}, 0, chatHistory, pic.PromptInfo, getEnvironmentContext())
 	}
 	s.env.RegisterWorkflow(s.wrapperWorkflow)
 	var fa *flow_action.FlowActivities // use a nil struct pointer to call activities that are part of a structure
@@ -273,25 +273,29 @@ func TestBuildAuthorEditBlockInitialPrompt(t *testing.T) {
 	}
 
 	// Test with doneRequired=true
-	prompt := renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, true)
+	prompt := renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, true, "OS: Linux, Arch: x86_64")
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
 	assert.Contains(t, prompt, getHelpOrInputTool.Name)
 	assert.Contains(t, prompt, doneTool.Name)
 	assert.NotContains(t, prompt, "#START SUMMARY")
+	assert.Contains(t, prompt, "answering a question is not the\nsame as completing the task")
+	assert.Contains(t, prompt, "paused to answer a question")
+	assert.Contains(t, prompt, "Environment: OS: Linux, Arch: x86_64")
 
 	// Test with doneRequired=false (legacy behavior)
-	prompt = renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, false)
+	prompt = renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, false, "OS: Linux, Arch: x86_64")
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
 	assert.Contains(t, prompt, getHelpOrInputTool.Name)
 	assert.Contains(t, prompt, "#START SUMMARY")
 	assert.NotContains(t, prompt, "call the `done` tool")
+	assert.NotContains(t, prompt, "paused to answer a question")
 
 	dCtx.RepoConfig.DisableHumanInTheLoop = true
-	prompt = renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, true)
+	prompt = renderAuthorEditBlockInitialPrompt(dCtx, "some code", "some requirements", false, true, "OS: Linux, Arch: x86_64")
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
@@ -308,7 +312,7 @@ func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
 	}
 
 	// Test with doneRequired=true
-	prompt := renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, true)
+	prompt := renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, true, "OS: Darwin, Arch: arm64")
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
@@ -317,9 +321,12 @@ func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
 	assert.Contains(t, prompt, getHelpOrInputTool.Name)
 	assert.Contains(t, prompt, doneTool.Name)
 	assert.NotContains(t, prompt, "#START SUMMARY")
+	assert.Contains(t, prompt, "answering a\nquestion is not the same as completing the step")
+	assert.Contains(t, prompt, "paused to answer a question")
+	assert.Contains(t, prompt, "Environment: OS: Darwin, Arch: arm64")
 
 	// Test with doneRequired=false (legacy behavior)
-	prompt = renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, false)
+	prompt = renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, false, "OS: Darwin, Arch: arm64")
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
@@ -328,9 +335,10 @@ func TestBuildAuthorEditBlockInitialDevStepPrompt(t *testing.T) {
 	assert.Contains(t, prompt, getHelpOrInputTool.Name)
 	assert.Contains(t, prompt, "#START SUMMARY")
 	assert.NotContains(t, prompt, "call the `done` tool")
+	assert.NotContains(t, prompt, "paused to answer a question")
 
 	dCtx.RepoConfig.DisableHumanInTheLoop = true
-	prompt = renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, true)
+	prompt = renderAuthorEditBlockInitialDevStepPrompt(dCtx, "some code", "some requirements", "plan", "step", false, true, "OS: Darwin, Arch: arm64")
 	assert.NotEmpty(t, prompt)
 	assert.Contains(t, prompt, "some code")
 	assert.Contains(t, prompt, "some requirements")
@@ -375,7 +383,10 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestIncludesDoneTool() {
 		chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
 		doneRequired := IsDoneRequiredProtocol(dCtx)
-		result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false)
+		result, err := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false, "OS: Linux, Arch: x86_64")
+		if err != nil {
+			return nil, err
+		}
 
 		toolNames := make([]string, len(result.Tools))
 		for i, tool := range result.Tools {
@@ -419,7 +430,10 @@ func (s *BuildAuthorEditBlockInputTestSuite) TestHumanInTheLoopDisabled() {
 		chatHistory := &persisted_ai.ChatHistoryContainer{History: persisted_ai.NewLlm2ChatHistory("", "")}
 
 		doneRequired := IsDoneRequiredProtocol(dCtx)
-		result := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false)
+		result, err := buildAuthorEditBlockInput(dCtx, common.ModelConfig{}, chatHistory, SkipInfo{}, doneRequired, false, "OS: Linux, Arch: x86_64")
+		if err != nil {
+			return nil, err
+		}
 
 		toolNames := make([]string, len(result.Tools))
 		for i, tool := range result.Tools {

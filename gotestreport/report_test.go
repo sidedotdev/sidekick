@@ -564,3 +564,37 @@ func TestNoPackageErrorLabelWhenTestsFailed(t *testing.T) {
 	assert.Contains(t, summary, "1 failed")
 	assert.NotContains(t, summary, "timeout/crash")
 }
+func TestBuildFailureOutputIsConcise(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := NewStreamer(&out)
+
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/build", Output: "# pkg/build\n"})
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/build", Output: "pkg/build/broken.go:5: undefined: nope\n"})
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/build", Output: "FAIL\tpkg/build [build failed]\n"})
+	s.ProcessEvent(TestEvent{Action: "fail", Package: "pkg/build", Elapsed: 0.0})
+
+	output := out.String()
+	assert.Contains(t, output, "--- pkg/build ---")
+	assert.Contains(t, output, "undefined: nope")
+	assert.NotContains(t, output, "# pkg/build")
+	assert.NotContains(t, output, "FAIL\tpkg/build [build failed]")
+}
+
+func TestBuildFailureSummaryShowsBuildFailed(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := NewStreamer(&out)
+
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/build", Output: "# pkg/build\n"})
+	s.ProcessEvent(TestEvent{Action: "output", Package: "pkg/build", Output: "FAIL\tpkg/build [build failed]\n"})
+	s.ProcessEvent(TestEvent{Action: "fail", Package: "pkg/build", Elapsed: 0.0})
+
+	assert.Equal(t, "\n--- pkg/build ---\nbuild failed\n", out.String())
+
+	summary := s.Summary()
+	assert.Contains(t, summary, "build failed")
+	assert.NotContains(t, summary, "no tests")
+}

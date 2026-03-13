@@ -91,11 +91,7 @@ func TestOpenAIResponsesProvider_Integration(t *testing.T) {
 		},
 	}
 
-	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		&secret_manager.EnvSecretManager{},
-		&secret_manager.KeyringSecretManager{},
-		&secret_manager.LocalConfigSecretManager{},
-	})
+	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
@@ -286,26 +282,25 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 		},
 	}
 
-	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		&secret_manager.EnvSecretManager{},
-		&secret_manager.KeyringSecretManager{},
-		&secret_manager.LocalConfigSecretManager{},
-	})
+	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
 			Provider:        "openai",
-			Model:           "gpt-5.2",
-			ReasoningEffort: "medium",
+			Model:           "gpt-5-mini",
+			ReasoningEffort: "high",
 		},
 	}
 
-	eventChan := make(chan Event, 100)
+	eventChan := make(chan Event, 1000)
 	var allEvents []Event
 	var sawSummaryTextDelta bool
 	eventIdx := 0
 
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for event := range eventChan {
 			allEvents = append(allEvents, event)
 			debugPrintOpenAIEvent(eventIdx, event)
@@ -324,6 +319,7 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 
 	response, err := provider.Stream(ctx, request, eventChan)
 	close(eventChan)
+	wg.Wait()
 
 	if err != nil {
 		t.Fatalf("Stream returned an error: %v", err)
@@ -352,11 +348,11 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 	}
 
 	if !foundReasoning {
-		t.Error("Expected response.Output.Content to include a reasoning block")
+		t.Fatal("Expected response.Output.Content to include a reasoning block")
 	}
 
 	if encryptedContent == "" {
-		t.Error("Expected reasoning block to have non-empty EncryptedContent")
+		t.Fatal("Expected reasoning block to have non-empty EncryptedContent")
 	}
 
 	assert.NotNil(t, response.Usage, "Usage field should not be nil")
@@ -368,9 +364,9 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 	t.Logf("StopReason: %s", response.StopReason)
 
 	t.Run("MultiTurnEncryptedReasoning", func(t *testing.T) {
-		messages = append(messages, response.Output)
-
-		messages = append(messages, Message{
+		followUpMessages := append([]Message{}, messages...)
+		followUpMessages = append(followUpMessages, response.Output)
+		followUpMessages = append(followUpMessages, Message{
 			Role: RoleUser,
 			Content: []ContentBlock{
 				{
@@ -380,19 +376,27 @@ func TestOpenAIResponsesProvider_ReasoningEncryptedContinuation(t *testing.T) {
 			},
 		})
 
-		eventChan := make(chan Event, 100)
+		followUpOptions := options
+		followUpOptions.ModelConfig.ReasoningEffort = ""
+		followUpOptions.ModelConfig.MaxTokens = 32
+
+		eventChan := make(chan Event, 1000)
+		var wg sync.WaitGroup
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			for range eventChan {
 			}
 		}()
 
 		request := StreamRequest{
-			Messages:      messages,
-			Options:       options,
+			Messages:      followUpMessages,
+			Options:       followUpOptions,
 			SecretManager: secretManager,
 		}
 		response, err := provider.Stream(ctx, request, eventChan)
 		close(eventChan)
+		wg.Wait()
 
 		if err != nil {
 			t.Fatalf("Stream returned an error on multi-turn: %v", err)
@@ -587,7 +591,7 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 			Content: []ContentBlock{
 				{
 					Type: ContentBlockTypeText,
-					Text: "Please use the read_image tool to read the image at path 'test.png'.",
+					Text: fmt.Sprintf("Please use the read_image tool to read the image at path 'test.png'. %s Reply with ONLY the exact text, nothing else.", VisionTestCharSetHint()),
 				},
 			},
 		},
@@ -625,11 +629,7 @@ func TestOpenAIResponsesProvider_ToolResultImageIntegration(t *testing.T) {
 		},
 	}
 
-	secretManager := secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-		&secret_manager.EnvSecretManager{},
-		&secret_manager.KeyringSecretManager{},
-		&secret_manager.LocalConfigSecretManager{},
-	})
+	secretManager := requireIntegrationAPIKey(t, "OPENAI_API_KEY")
 
 	options := Options{
 		ModelConfig: common.ModelConfig{
