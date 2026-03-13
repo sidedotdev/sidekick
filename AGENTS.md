@@ -9,7 +9,8 @@ as the first directory when specifying any frontend path. We use vue3 with
 typescript `<script setup lang="ts">`. Use em and rem instead of px. Use
 existing color variables (in frontend/src/assets/base.css) instead of
 hard-coding colors. Don't assume light or dark theme, the existing variables
-auto-adjust based on light vs dark.
+auto-adjust based on light vs dark. We use bun and bunx instead of npm, eg
+`bun run test:unit` and `bun run type-check`.
 
 Write unit tests for new behavior that closely matches intent and asserts actual
 behavior rather than implementation specifics. When writing go tests, use a real
@@ -19,6 +20,11 @@ general, but break into separate test functions when there are a very large
 number of test cases, to keep the test function sizes reasonable (less than a
 few hundred lines). Make tests parallel with t.Parallel() as much as possible
 (including subtests) when it is safe to do so.
+
+You can use `go test`, or our wrapper, `gotestreport`, taking the same
+arguments. The latter is usually better as it will omit verbose output from
+passing tests when there are partial package failures, and show you skipped
+tests.
 
 Temporal: New activities/workflows should be registered in the worker. Changes
 to workflow logic should be "deterministic", meaning that the same set of
@@ -36,6 +42,3 @@ snake_case.
 
 New comments should be added sparingly. When added, comments must be concise and
 avoid repeating what is plainly visible in the code directly.
-
-Use local directory ./.tmp instead of /tmp for temporary files, it's
-a gitignored directory.
