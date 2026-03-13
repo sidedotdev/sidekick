@@ -359,3 +359,80 @@ func TestGetEnvironmentInfoActivity(t *testing.T) {
 	assert.Contains(t, formatted, "OS:")
 	assert.Contains(t, formatted, "Arch:")
 }
+
+func TestCreateDevPodWorktreeActivity(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repoDir := setupTestGitRepo(t)
+
+	// Use a LocalEnv to simulate running commands inside a container
+	localEnv, err := NewLocalEnv(ctx, LocalEnvParams{RepoDir: repoDir})
+	require.NoError(t, err)
+	envContainer := EnvContainer{Env: localEnv}
+
+	t.Run("creates worktree successfully", func(t *testing.T) {
+		t.Parallel()
+		output, err := CreateDevPodWorktreeActivity(ctx, CreateDevPodWorktreeInput{
+			EnvContainer: envContainer,
+			RepoDir:      repoDir,
+			BranchName:   "side/test-feature",
+			WorkspaceId:  "ws-" + ksuid.New().String(),
+		})
+		require.NoError(t, err)
+		assert.Contains(t, output.WorktreePath, "sidekick-worktrees")
+		assert.DirExists(t, output.WorktreePath)
+
+		// Verify the branch was created inside the worktree
+		cmd := exec.Command("git", "branch", "--show-current")
+		cmd.Dir = output.WorktreePath
+		branchOutput, err := cmd.CombinedOutput()
+		require.NoError(t, err)
+		assert.Equal(t, "side/test-feature", strings.TrimSpace(string(branchOutput)))
+	})
+
+	t.Run("creates worktree with start branch", func(t *testing.T) {
+		t.Parallel()
+		output, err := CreateDevPodWorktreeActivity(ctx, CreateDevPodWorktreeInput{
+			EnvContainer: envContainer,
+			RepoDir:      repoDir,
+			BranchName:   "side/from-main",
+			StartBranch:  "main",
+			WorkspaceId:  "ws-" + ksuid.New().String(),
+		})
+		require.NoError(t, err)
+		assert.DirExists(t, output.WorktreePath)
+	})
+
+	t.Run("returns error for duplicate branch", func(t *testing.T) {
+		t.Parallel()
+		wsId := "ws-" + ksuid.New().String()
+		input := CreateDevPodWorktreeInput{
+			EnvContainer: envContainer,
+			RepoDir:      repoDir,
+			BranchName:   "side/dup-branch",
+			WorkspaceId:  wsId,
+		}
+
+		_, err := CreateDevPodWorktreeActivity(ctx, input)
+		require.NoError(t, err)
+
+		// Creating the same branch again should fail
+		input.WorkspaceId = "ws-" + ksuid.New().String()
+		_, err = CreateDevPodWorktreeActivity(ctx, input)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "already exists")
+	})
+
+	t.Run("strips side/ prefix for directory name", func(t *testing.T) {
+		t.Parallel()
+		output, err := CreateDevPodWorktreeActivity(ctx, CreateDevPodWorktreeInput{
+			EnvContainer: envContainer,
+			RepoDir:      repoDir,
+			BranchName:   "side/my-dir-test",
+			WorkspaceId:  "ws-" + ksuid.New().String(),
+		})
+		require.NoError(t, err)
+		assert.Contains(t, output.WorktreePath, "my-dir-test")
+		assert.NotContains(t, filepath.Base(output.WorktreePath), "side/")
+	})
+}

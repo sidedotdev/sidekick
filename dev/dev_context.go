@@ -114,17 +114,18 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		GlobalState:     &flow_action.GlobalState{},
 	}
 
-	// Helper to create a git worktree and persist it
-	createWorktree := func() (*domain.Worktree, env.EnvContainer, error) {
+	// createWorktree handles branch name generation, retry on conflicts, and persistence.
+	// The createFn callback performs the env-specific worktree creation and returns the working directory.
+	createWorktree := func(createFn func(wt domain.Worktree) (string, error)) (*domain.Worktree, error) {
 		flowId := workflow.GetInfo(ctx).WorkflowExecution.ID
-		var wt *domain.Worktree
-		var ec env.EnvContainer
-
 		var branchName string
+		var workingDir string
+		var wtId string
+
 		if enableBranchNameGeneration {
 			tempLocalRepoConfig, err := GetRepoConfig(tempLocalExecContext)
 			if err != nil {
-				return nil, env.EnvContainer{}, fmt.Errorf("failed to get coding config: %v", err)
+				return nil, fmt.Errorf("failed to get coding config: %v", err)
 			}
 			configOverrides.ApplyToRepoConfig(&tempLocalRepoConfig)
 			tempLocalExecContext.DisableHumanInTheLoop = tempLocalRepoConfig.DisableHumanInTheLoop
@@ -138,19 +139,16 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 					ExcludeBranches: excludeBranches,
 				})
 				if err != nil {
-					return nil, env.EnvContainer{}, fmt.Errorf("failed to generate branch name: %v", err)
+					return nil, fmt.Errorf("failed to generate branch name: %v", err)
 				}
 
-				wt = &domain.Worktree{
-					Id:          ksuidSideEffect(ctx),
+				wtId = ksuidSideEffect(ctx)
+				workingDir, err = createFn(domain.Worktree{
+					Id:          wtId,
 					FlowId:      flowId,
 					Name:        branchName,
 					WorkspaceId: workspaceId,
-				}
-				err = workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeActivity, env.LocalEnvParams{
-					RepoDir:     repoDir,
-					StartBranch: startBranch,
-				}, *wt).Get(ctx, &ec)
+				})
 				if err == nil {
 					break
 				}
@@ -162,31 +160,34 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 					excludeBranches = append(excludeBranches, branchName)
 					continue
 				}
-				return nil, env.EnvContainer{}, fmt.Errorf("failed to create environment: %v", err)
+				return nil, fmt.Errorf("failed to create worktree: %v", err)
 			}
 		} else {
 			branchName = flowId
-
-			wt = &domain.Worktree{
-				Id:          ksuidSideEffect(ctx),
+			wtId = ksuidSideEffect(ctx)
+			workingDir, err = createFn(domain.Worktree{
+				Id:          wtId,
 				FlowId:      flowId,
 				Name:        branchName,
 				WorkspaceId: workspaceId,
-			}
-			err = workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeActivity, env.LocalEnvParams{
-				RepoDir:     repoDir,
-				StartBranch: startBranch,
-			}, *wt).Get(ctx, &ec)
+			})
 			if err != nil {
-				return nil, env.EnvContainer{}, fmt.Errorf("failed to create environment: %v", err)
+				return nil, fmt.Errorf("failed to create worktree: %v", err)
 			}
 		}
-		wt.WorkingDirectory = ec.Env.GetWorkingDirectory()
+
+		wt := &domain.Worktree{
+			Id:               wtId,
+			FlowId:           flowId,
+			Name:             branchName,
+			WorkspaceId:      workspaceId,
+			WorkingDirectory: workingDir,
+		}
 		err = workflow.ExecuteActivity(ctx, srv.Activities.PersistWorktree, *wt).Get(ctx, nil)
 		if err != nil {
-			return nil, env.EnvContainer{}, fmt.Errorf("failed to persist worktree: %v", err)
+			return nil, fmt.Errorf("failed to persist worktree: %v", err)
 		}
-		return wt, ec, nil
+		return wt, nil
 	}
 
 	// Resolve legacy local_git_worktree into local + worktree
@@ -214,10 +215,21 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	switch envType {
 	case string(env.EnvTypeLocal), "":
 		if repoMode == string(env.RepoModeWorktree) {
-			worktree, envContainer, err = createWorktree()
+			var localEnvContainer env.EnvContainer
+			worktree, err = createWorktree(func(wt domain.Worktree) (string, error) {
+				err := workflow.ExecuteActivity(ctx, env.NewLocalGitWorktreeActivity, env.LocalEnvParams{
+					RepoDir:     repoDir,
+					StartBranch: startBranch,
+				}, wt).Get(ctx, &localEnvContainer)
+				if err != nil {
+					return "", err
+				}
+				return localEnvContainer.Env.GetWorkingDirectory(), nil
+			})
 			if err != nil {
 				return DevContext{}, err
 			}
+			envContainer = localEnvContainer
 		} else {
 			devEnv, err = env.NewLocalEnv(context.Background(), env.LocalEnvParams{
 				RepoDir: repoDir,
@@ -228,25 +240,50 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			envContainer = env.EnvContainer{Env: devEnv}
 		}
 	case string(env.EnvTypeDevPod):
-		var workDir string
-		if repoMode == string(env.RepoModeWorktree) {
-			worktree, envContainer, err = createWorktree()
-			if err != nil {
-				return DevContext{}, err
-			}
-			workDir = envContainer.Env.GetWorkingDirectory()
-		} else {
-			workDir = repoDir
-		}
-
-		err = workflow.ExecuteActivity(ctx, env.DevPodUpActivity, env.DevPodUpInput{WorkspacePath: workDir}).Get(ctx, nil)
+		// Start devpod with the main repo so the full .git directory is available inside the container
+		err = workflow.ExecuteActivity(ctx, env.DevPodUpActivity, env.DevPodUpInput{WorkspacePath: repoDir}).Get(ctx, nil)
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to start DevPod workspace: %v", err)
 		}
-		envContainer = env.EnvContainer{Env: &env.DevPodEnv{
-			WorkingDirectory: workDir,
-			WorkspaceName:    workDir,
-		}}
+
+		if repoMode == string(env.RepoModeWorktree) {
+			repoDevPodEnvContainer := env.EnvContainer{Env: &env.DevPodEnv{
+				WorkingDirectory: repoDir,
+				WorkspaceName:    repoDir,
+			}}
+			startBranchStr := ""
+			if startBranch != nil {
+				startBranchStr = *startBranch
+			}
+
+			worktree, err = createWorktree(func(wt domain.Worktree) (string, error) {
+				var wtOutput env.CreateDevPodWorktreeOutput
+				err := workflow.ExecuteActivity(ctx, env.CreateDevPodWorktreeActivity, env.CreateDevPodWorktreeInput{
+					EnvContainer: repoDevPodEnvContainer,
+					RepoDir:      repoDir,
+					BranchName:   wt.Name,
+					StartBranch:  startBranchStr,
+					WorkspaceId:  workspaceId,
+				}).Get(ctx, &wtOutput)
+				if err != nil {
+					return "", err
+				}
+				return wtOutput.WorktreePath, nil
+			})
+			if err != nil {
+				return DevContext{}, err
+			}
+
+			envContainer = env.EnvContainer{Env: &env.DevPodEnv{
+				WorkingDirectory: worktree.WorkingDirectory,
+				WorkspaceName:    repoDir,
+			}}
+		} else {
+			envContainer = env.EnvContainer{Env: &env.DevPodEnv{
+				WorkingDirectory: repoDir,
+				WorkspaceName:    repoDir,
+			}}
+		}
 	default:
 		return DevContext{}, fmt.Errorf("unsupported environment type: %s", envType)
 	}
@@ -460,25 +497,25 @@ func handleFlowCancel(dCtx DevContext) {
 		}
 	}
 
-	// Clean up DevPod workspace before worktree cleanup
-	if dCtx.EnvContainer != nil && dCtx.EnvContainer.Env.GetType() == env.EnvTypeDevPod {
-		if dCtx.Worktree != nil {
-			err := workflow.ExecuteActivity(disconnectedCtx, env.DevPodDeleteActivity, dCtx.EnvContainer.Env.GetWorkingDirectory()).Get(disconnectedCtx, nil)
-			if err != nil {
-				workflow.GetLogger(dCtx).Error("Failed to delete DevPod workspace during cancellation", "error", err)
-			}
-		} else {
-			err := workflow.ExecuteActivity(disconnectedCtx, env.DevPodStopActivity, dCtx.EnvContainer.Env.GetWorkingDirectory()).Get(disconnectedCtx, nil)
-			if err != nil {
-				workflow.GetLogger(dCtx).Error("Failed to stop DevPod workspace during cancellation", "error", err)
-			}
-		}
-	}
-
 	if dCtx.Worktree != nil {
 		future := workflow.ExecuteActivity(disconnectedCtx, git.CleanupWorktreeActivity, dCtx.EnvContainer, dCtx.EnvContainer.Env.GetWorkingDirectory(), dCtx.Worktree.Name, "Sidekick task cancelled")
 		if err := future.Get(disconnectedCtx, nil); err != nil {
 			workflow.GetLogger(dCtx).Error("Failed to cleanup worktree during workflow cancellation", "error", err, "worktree", dCtx.Worktree.Name)
+		}
+	}
+
+	if dCtx.EnvContainer != nil && dCtx.EnvContainer.Env.GetType() == env.EnvTypeDevPod {
+		devPodEnv := dCtx.EnvContainer.Env.(*env.DevPodEnv)
+		if dCtx.Worktree != nil {
+			err := workflow.ExecuteActivity(disconnectedCtx, env.DevPodDeleteActivity, devPodEnv.WorkspaceName).Get(disconnectedCtx, nil)
+			if err != nil {
+				workflow.GetLogger(dCtx).Error("Failed to delete DevPod workspace during cancellation", "error", err)
+			}
+		} else {
+			err := workflow.ExecuteActivity(disconnectedCtx, env.DevPodStopActivity, devPodEnv.WorkspaceName).Get(disconnectedCtx, nil)
+			if err != nil {
+				workflow.GetLogger(dCtx).Error("Failed to stop DevPod workspace during cancellation", "error", err)
+			}
 		}
 	}
 }
