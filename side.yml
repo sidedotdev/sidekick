@@ -30,6 +30,7 @@ agent_config:
 
 command_permissions:
   auto_approve:
+    - pattern: "gotestreport"
     - pattern: "docker build"
     - pattern: "docker logs"
     - pattern: "docker ps"
@@ -37,8 +38,9 @@ command_permissions:
     - pattern: "bun type-check"
     - pattern: "(npm|bun) run test:unit.*--run"
     - pattern: "bun test:unit.*--run"
-    - pattern: "go run ./worker/replay/"
-    - pattern: "go run ./scripts/run_activity/"
+    - pattern: "go run ./worker/replay"
+    - pattern: "go run ./scripts/run_activity"
+    - pattern: "go run ./scripts/lint_.*"
 
 dev_run:
   supervisor:
