@@ -1,5 +1,5 @@
-import { DotReporter } from 'vitest/reporters'
-import type { UserConsoleLog, File, Task } from 'vitest'
+import { DotReporter } from 'vitest/node'
+import type { UserConsoleLog, File, Task } from 'vitest/node'
 
 /**
  * Dot-style reporter that suppresses console output from passing tests.
