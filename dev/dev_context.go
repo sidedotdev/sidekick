@@ -313,6 +313,10 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 	if startBranch != nil && *startBranch != "" {
 		eCtx.GlobalState.SetValue(common.KeyCurrentTargetBranch, *startBranch)
+	} else if v := workflow.GetVersion(ctx, "target-branch-worktree-only-default", workflow.DefaultVersion, 1); v >= 1 {
+		if envType == string(env.EnvTypeLocalGitWorktree) {
+			eCtx.GlobalState.SetValue(common.KeyCurrentTargetBranch, "main")
+		}
 	} else {
 		eCtx.GlobalState.SetValue(common.KeyCurrentTargetBranch, "main")
 	}
