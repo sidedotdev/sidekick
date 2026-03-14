@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sidekick/coding/git"
 	"sidekick/common"
 	"sidekick/domain"
@@ -246,9 +247,12 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			return DevContext{}, fmt.Errorf("failed to start DevPod workspace: %v", err)
 		}
 
+		// Inside the container the workspace is mounted at /workspaces/<basename>
+		containerWorkDir := "/workspaces/" + filepath.Base(repoDir)
+
 		if repoMode == string(env.RepoModeWorktree) {
 			repoDevPodEnvContainer := env.EnvContainer{Env: &env.DevPodEnv{
-				WorkingDirectory: repoDir,
+				WorkingDirectory: containerWorkDir,
 				WorkspaceName:    repoDir,
 			}}
 			startBranchStr := ""
@@ -260,7 +264,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				var wtOutput env.CreateDevPodWorktreeOutput
 				err := workflow.ExecuteActivity(ctx, env.CreateDevPodWorktreeActivity, env.CreateDevPodWorktreeInput{
 					EnvContainer: repoDevPodEnvContainer,
-					RepoDir:      repoDir,
+					RepoDir:      containerWorkDir,
 					BranchName:   wt.Name,
 					StartBranch:  startBranchStr,
 					WorkspaceId:  workspaceId,
@@ -280,7 +284,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			}}
 		} else {
 			envContainer = env.EnvContainer{Env: &env.DevPodEnv{
-				WorkingDirectory: repoDir,
+				WorkingDirectory: containerWorkDir,
 				WorkspaceName:    repoDir,
 			}}
 		}
