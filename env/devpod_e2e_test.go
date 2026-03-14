@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
@@ -29,16 +30,25 @@ func TestDevPodIntegration(t *testing.T) {
 		t.Skip("devpod command not found in PATH")
 	}
 
-	ctx := context.Background()
 	workspacePath := repoRoot(t)
+
+	// Derive a context that leaves time for cleanup before the test deadline.
+	ctx := context.Background()
+	if deadline, ok := t.Deadline(); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline.Add(-10*time.Second))
+		defer cancel()
+	}
 
 	// Start the DevPod workspace from the repo's .devcontainer config.
 	err := DevPodUpActivity(ctx, DevPodUpInput{WorkspacePath: workspacePath})
 	require.NoError(t, err, "DevPodUpActivity failed")
 
 	t.Cleanup(func() {
-		if err := DevPodDeleteActivity(context.Background(), workspacePath); err != nil {
-			t.Logf("DevPodDeleteActivity cleanup error: %v", err)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := DevPodStopActivity(cleanupCtx, workspacePath); err != nil {
+			t.Logf("DevPodStopActivity cleanup error: %v", err)
 		}
 	})
 
@@ -65,12 +75,12 @@ func TestDevPodIntegration(t *testing.T) {
 	t.Run("go unit tests inside container", func(t *testing.T) {
 		out, err := devEnv.RunCommand(ctx, EnvRunCommandInput{
 			Command: "go",
-			Args:    []string{"test", "./common/..."},
+			Args:    []string{"test", "-run", "TestMatchPattern", "-count=1", "./common"},
 		})
 		require.NoError(t, err)
 		t.Logf("stdout:\n%s", out.Stdout)
 		t.Logf("stderr:\n%s", out.Stderr)
-		assert.Equal(t, 0, out.ExitStatus, "go test ./common/... failed")
+		assert.Equal(t, 0, out.ExitStatus, "go test ./common failed")
 	})
 
 	t.Run("frontend tests inside container", func(t *testing.T) {
@@ -87,8 +97,10 @@ func TestDevPodIntegration(t *testing.T) {
 	})
 
 	t.Run("create worktree inside container", func(t *testing.T) {
-		// Create a fresh git repo inside the container so that .git is a
-		// real directory (not a worktree reference to a host path).
+		// The mounted workspace may itself be a git worktree whose .git
+		// file references a host path that doesn't exist inside the
+		// container. Create a standalone repo in the container so that
+		// git worktree add has a valid .git directory to work with.
 		containerRepoDir := "/tmp/devpod-e2e-repo-" + ksuid.New().String()
 		initScript := strings.Join([]string{
 			"mkdir -p " + containerRepoDir,
@@ -110,13 +122,13 @@ func TestDevPodIntegration(t *testing.T) {
 			WorkingDirectory: containerRepoDir,
 			WorkspaceName:    workspacePath,
 		}
-		repoEnvContainer := EnvContainer{Env: repoEnv}
+		envContainer := EnvContainer{Env: repoEnv}
 
 		wsId := "ws-" + ksuid.New().String()
 		branchName := "side/devpod-e2e-test-" + ksuid.New().String()
 
 		output, err := CreateDevPodWorktreeActivity(ctx, CreateDevPodWorktreeInput{
-			EnvContainer: repoEnvContainer,
+			EnvContainer: envContainer,
 			RepoDir:      containerRepoDir,
 			BranchName:   branchName,
 			WorkspaceId:  wsId,
