@@ -4,6 +4,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake git ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Node.js matching frontend/.node-version
+ARG NODE_VERSION=20.16.0
+RUN ARCH=$(uname -m | sed 's/x86_64/x64/' | sed 's/aarch64/arm64/') && \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz" \
+    | tar -xJ --strip-components=1 -C /usr/local
+
 # Build USearch C library from source
 RUN git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-cloud/usearch.git /tmp/usearch \
     && cd /tmp/usearch \
