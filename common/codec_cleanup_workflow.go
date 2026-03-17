@@ -494,7 +494,7 @@ func StartCodecCleanupWorkflow(ctx context.Context, temporalClient client.Client
 	_, err := temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:                    CodecCleanupWorkflowID,
 		TaskQueue:             taskQueue,
-		WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+		WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
 	}, CodecPayloadCleanupWorkflow, CodecCleanupWorkflowInput{})
 	if err != nil {
 		log.Debug().Err(err).Msg("Codec cleanup workflow start (may already be running)")
