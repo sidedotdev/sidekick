@@ -73,10 +73,24 @@ type RepoConfig struct {
 	// RepoMode specifies the default repo mode for this repo (e.g., "worktree", "in_place").
 	RepoMode string `toml:"repo_mode,omitempty"`
 
-	// DevPodWorkspaceId overrides the workspace name DevPod derives from the
+	DevPodConfig    DevPodEnvConfig    `toml:"dev_pod_config,omitempty"`
+	OpenShellConfig OpenShellEnvConfig `toml:"openshell_config,omitempty"`
+}
+
+// DevPodEnvConfig holds configuration specific to the DevPod environment type.
+type DevPodEnvConfig struct {
+	// WorkspaceId overrides the workspace name DevPod derives from the
 	// repo directory basename. When empty, the repo directory's basename is
 	// used, matching DevPod's default behavior.
-	DevPodWorkspaceId string `toml:"devpod_workspace_id,omitempty"`
+	WorkspaceId string `toml:"workspace_id,omitempty"`
+}
+
+// OpenShellEnvConfig holds configuration specific to the OpenShell environment type.
+type OpenShellEnvConfig struct {
+	// PrebuildCommand is a shell command executed locally before sandbox creation.
+	PrebuildCommand string `toml:"prebuild_command,omitempty"`
+	// From is passed as the --from flag to "openshell sandbox create".
+	From string `toml:"from,omitempty"`
 }
 
 // GlobalState keys for workflow-specific state
