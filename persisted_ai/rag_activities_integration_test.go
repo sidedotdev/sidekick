@@ -99,7 +99,7 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 			EnvContainer: env.EnvContainer{
 				Env: localEnv,
 			},
-			RankQuery: "database interaction functions for tasks",
+			RankQuery: "peristence interface for task domain",
 			Secrets: secret_manager.SecretManagerContainer{
 				SecretManager: secretsManager,
 			},
@@ -121,8 +121,10 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 
 	// Verify expected directory paths are present
 	expectedPaths := []string{
-		"domain/\n\ttask.go\n",
-		"\n\t\ttask.go\n", // under srv/sqlite or srv/redis
+		"\ndomain/\n",
+		"\n\ttask.go", // under domain
+		"\nsrv/\n",
+		"\n\t\ttask.go", // under srv/sqlite or srv/redis
 	}
 	for _, path := range expectedPaths {
 		require.Contains(t, output, path, "Output should contain directory path: %s", path)
