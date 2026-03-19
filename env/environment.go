@@ -39,10 +39,11 @@ const (
 	EnvTypeLocal            EnvType = "local"
 	EnvTypeLocalGitWorktree EnvType = "local_git_worktree"
 	EnvTypeDevPod           EnvType = "devpod"
+	EnvTypeOpenShell        EnvType = "openshell"
 )
 
 func (e EnvType) IsValid() bool {
-	return e == EnvTypeLocal || e == EnvTypeLocalGitWorktree || e == EnvTypeDevPod
+	return e == EnvTypeLocal || e == EnvTypeLocalGitWorktree || e == EnvTypeDevPod || e == EnvTypeOpenShell
 }
 
 type RepoMode string
@@ -83,6 +84,11 @@ type LocalGitWorktreeEnv struct {
 type DevPodEnv struct {
 	WorkingDirectory string
 	WorkspaceName    string
+}
+
+type OpenShellEnv struct {
+	WorkingDirectory string
+	SandboxName      string
 }
 
 type LocalEnvParams struct {
@@ -257,6 +263,46 @@ func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (E
 	return output, nil
 }
 
+func (e *OpenShellEnv) GetType() EnvType {
+	return EnvTypeOpenShell
+}
+
+func (e *OpenShellEnv) GetWorkingDirectory() string {
+	return e.WorkingDirectory
+}
+
+func (e *OpenShellEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error) {
+	workDir := filepath.Join(e.WorkingDirectory, input.RelativeWorkingDir)
+
+	allEnvVars := append(input.EnvVars, envVarsToInject...)
+	var shellParts []string
+	for _, envVar := range allEnvVars {
+		shellParts = append(shellParts, "export "+shellQuote(envVar))
+	}
+	shellParts = append(shellParts, "cd "+shellQuote(workDir))
+
+	cmdStr := shellQuote(input.Command)
+	for _, arg := range input.Args {
+		cmdStr += " " + shellQuote(arg)
+	}
+	shellParts = append(shellParts, cmdStr)
+
+	fullCommand := strings.Join(shellParts, " && ")
+
+	sshArgs, err := openShellSSHArgs(ctx, e.SandboxName)
+	if err != nil {
+		return EnvRunCommandOutput{}, fmt.Errorf("failed to get SSH config for sandbox %s: %w", e.SandboxName, err)
+	}
+	sshArgs = append(sshArgs, fullCommand)
+
+	runCommandInput := unix.RunCommandActivityInput{
+		WorkingDir: os.TempDir(),
+		Command:    "ssh",
+		Args:       sshArgs,
+	}
+	return unix.RunCommandActivity(ctx, runCommandInput)
+}
+
 // shellQuote wraps a string in single quotes, escaping any embedded single quotes.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
@@ -369,6 +415,12 @@ func (ec *EnvContainer) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		ec.Env = dpe
+	case string(EnvTypeOpenShell):
+		var ose *OpenShellEnv
+		if err := json.Unmarshal(v.Env, &ose); err != nil {
+			return err
+		}
+		ec.Env = ose
 	case "":
 		ec.Env = nil
 	default:

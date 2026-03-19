@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sidekick/coding/git"
+	"sidekick/coding/unix"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/env"
@@ -248,8 +249,8 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		tempRepoConfigForDevPod, configErr := GetRepoConfig(tempLocalExecContext)
 		if configErr == nil {
 			configOverrides.ApplyToRepoConfig(&tempRepoConfigForDevPod)
-			if tempRepoConfigForDevPod.DevPodWorkspaceId != "" {
-				devpodWorkspaceName = tempRepoConfigForDevPod.DevPodWorkspaceId
+			if tempRepoConfigForDevPod.DevPodConfig.WorkspaceId != "" {
+				devpodWorkspaceName = tempRepoConfigForDevPod.DevPodConfig.WorkspaceId
 				devPodUpInput.WorkspaceId = devpodWorkspaceName
 			}
 		}
@@ -298,6 +299,115 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			envContainer = env.EnvContainer{Env: &env.DevPodEnv{
 				WorkingDirectory: containerWorkDir,
 				WorkspaceName:    devpodWorkspaceName,
+			}}
+		}
+	case string(env.EnvTypeOpenShell):
+		var sandboxName string
+
+		tempRepoConfigForOpenShell, configErr := GetRepoConfig(tempLocalExecContext)
+		if configErr == nil {
+			configOverrides.ApplyToRepoConfig(&tempRepoConfigForOpenShell)
+		}
+		osConfig := tempRepoConfigForOpenShell.OpenShellConfig
+
+		openShellAutoNameVersion := workflow.GetVersion(ctx, "openshell-auto-sandbox-name", workflow.DefaultVersion, 1)
+		if openShellAutoNameVersion >= 1 {
+			sandboxName = env.OpenShellSandboxName(workspaceId)
+
+			// Reuse an existing sandbox for this workspace if it is still alive.
+			var checkOutput env.OpenShellCheckSandboxOutput
+			_ = workflow.ExecuteActivity(ctx, env.OpenShellCheckSandboxActivity, env.OpenShellCheckSandboxInput{
+				SandboxName: sandboxName,
+			}).Get(ctx, &checkOutput)
+
+			if !checkOutput.Alive {
+				if osConfig.PrebuildCommand != "" {
+					var prebuildOutput unix.RunCommandActivityOutput
+					err = workflow.ExecuteActivity(ctx, unix.RunCommandActivity, unix.RunCommandActivityInput{
+						WorkingDir: repoDir,
+						Command:    "/usr/bin/env",
+						Args:       []string{"sh", "-c", osConfig.PrebuildCommand},
+					}).Get(ctx, &prebuildOutput)
+					if err != nil {
+						return DevContext{}, fmt.Errorf("openshell prebuild command failed: %v", err)
+					}
+					if prebuildOutput.ExitStatus != 0 {
+						return DevContext{}, fmt.Errorf("openshell prebuild command exited with status %d: %s", prebuildOutput.ExitStatus, prebuildOutput.Stderr)
+					}
+				}
+
+				var createOutput env.OpenShellCreateOutput
+				err = workflow.ExecuteActivity(ctx, env.OpenShellCreateActivity, env.OpenShellCreateInput{
+					Name:    sandboxName,
+					Source:  osConfig.From,
+					RepoDir: repoDir,
+				}).Get(ctx, &createOutput)
+				if err != nil {
+					return DevContext{}, fmt.Errorf("failed to create OpenShell sandbox: %v", err)
+				}
+				sandboxName = createOutput.SandboxName
+			}
+		} else {
+			// Legacy path: no auto sandbox name
+			var createOutput env.OpenShellCreateOutput
+			err = workflow.ExecuteActivity(ctx, env.OpenShellCreateActivity, env.OpenShellCreateInput{
+				Source:  osConfig.From,
+				RepoDir: repoDir,
+			}).Get(ctx, &createOutput)
+			if err != nil {
+				return DevContext{}, fmt.Errorf("failed to create OpenShell sandbox: %v", err)
+			}
+			sandboxName = createOutput.SandboxName
+		}
+
+		containerWorkDir := "/sandbox/" + filepath.Base(repoDir)
+
+		var syncOutput env.OpenShellSyncRepoOutput
+		err = workflow.ExecuteActivity(ctx, env.OpenShellSyncRepoActivity, env.OpenShellSyncRepoInput{
+			SandboxName:      sandboxName,
+			LocalRepoDir:     repoDir,
+			ContainerRepoDir: containerWorkDir,
+		}).Get(ctx, &syncOutput)
+		if err != nil {
+			return DevContext{}, fmt.Errorf("failed to sync repo to OpenShell sandbox: %v", err)
+		}
+
+		if repoMode == string(env.RepoModeWorktree) {
+			repoOpenShellEnvContainer := env.EnvContainer{Env: &env.OpenShellEnv{
+				WorkingDirectory: containerWorkDir,
+				SandboxName:      sandboxName,
+			}}
+			startBranchStr := ""
+			if startBranch != nil {
+				startBranchStr = *startBranch
+			}
+
+			worktree, err = createWorktree(func(wt domain.Worktree) (string, error) {
+				var wtOutput env.CreateOpenShellWorktreeOutput
+				err := workflow.ExecuteActivity(ctx, env.CreateOpenShellWorktreeActivity, env.CreateOpenShellWorktreeInput{
+					EnvContainer: repoOpenShellEnvContainer,
+					RepoDir:      containerWorkDir,
+					BranchName:   wt.Name,
+					StartBranch:  startBranchStr,
+					WorkspaceId:  workspaceId,
+				}).Get(ctx, &wtOutput)
+				if err != nil {
+					return "", err
+				}
+				return wtOutput.WorktreePath, nil
+			})
+			if err != nil {
+				return DevContext{}, err
+			}
+
+			envContainer = env.EnvContainer{Env: &env.OpenShellEnv{
+				WorkingDirectory: worktree.WorkingDirectory,
+				SandboxName:      sandboxName,
+			}}
+		} else {
+			envContainer = env.EnvContainer{Env: &env.OpenShellEnv{
+				WorkingDirectory: containerWorkDir,
+				SandboxName:      sandboxName,
 			}}
 		}
 	default:
@@ -536,6 +646,14 @@ func handleFlowCancel(dCtx DevContext) {
 			if err != nil {
 				workflow.GetLogger(dCtx).Error("Failed to stop DevPod workspace during cancellation", "error", err)
 			}
+		}
+	}
+
+	if dCtx.EnvContainer != nil && dCtx.EnvContainer.Env.GetType() == env.EnvTypeOpenShell {
+		openShellEnv := dCtx.EnvContainer.Env.(*env.OpenShellEnv)
+		err := workflow.ExecuteActivity(disconnectedCtx, env.OpenShellStopActivity, openShellEnv.SandboxName).Get(disconnectedCtx, nil)
+		if err != nil {
+			workflow.GetLogger(dCtx).Error("Failed to stop OpenShell sandbox during cancellation", "error", err)
 		}
 	}
 }
