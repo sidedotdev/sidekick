@@ -167,6 +167,32 @@ func TestConfigOverrides_ApplyToRepoConfig(t *testing.T) {
 		assert.Equal(t, "in_place", config.RepoMode)
 	})
 
+	t.Run("devpod config override", func(t *testing.T) {
+		t.Parallel()
+		config := RepoConfig{}
+		dpCfg := DevPodEnvConfig{WorkspaceId: "my-workspace"}
+		overrides := ConfigOverrides{DevPodConfig: &dpCfg}
+
+		overrides.ApplyToRepoConfig(&config)
+
+		assert.Equal(t, "my-workspace", config.DevPodConfig.WorkspaceId)
+	})
+
+	t.Run("openshell config override", func(t *testing.T) {
+		t.Parallel()
+		config := RepoConfig{}
+		osCfg := OpenShellEnvConfig{
+			PrebuildCommand: "make deps",
+			From:            ".devcontainer/Dockerfile",
+		}
+		overrides := ConfigOverrides{OpenShellConfig: &osCfg}
+
+		overrides.ApplyToRepoConfig(&config)
+
+		assert.Equal(t, "make deps", config.OpenShellConfig.PrebuildCommand)
+		assert.Equal(t, ".devcontainer/Dockerfile", config.OpenShellConfig.From)
+	})
+
 	t.Run("multiple overrides applied together", func(t *testing.T) {
 		t.Parallel()
 		config := RepoConfig{
