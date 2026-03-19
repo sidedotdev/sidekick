@@ -241,8 +241,20 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			envContainer = env.EnvContainer{Env: devEnv}
 		}
 	case string(env.EnvTypeDevPod):
-		// Start devpod with the main repo so the full .git directory is available inside the container
-		err = workflow.ExecuteActivity(ctx, env.DevPodUpActivity, env.DevPodUpInput{WorkspacePath: repoDir}).Get(ctx, nil)
+		devpodWorkspaceName := env.DevPodWorkspaceName(repoDir)
+
+		devPodUpInput := env.DevPodUpInput{WorkspacePath: repoDir}
+		// Check for a custom workspace ID from repo config
+		tempRepoConfigForDevPod, configErr := GetRepoConfig(tempLocalExecContext)
+		if configErr == nil {
+			configOverrides.ApplyToRepoConfig(&tempRepoConfigForDevPod)
+			if tempRepoConfigForDevPod.DevPodWorkspaceId != "" {
+				devpodWorkspaceName = tempRepoConfigForDevPod.DevPodWorkspaceId
+				devPodUpInput.WorkspaceId = devpodWorkspaceName
+			}
+		}
+
+		err = workflow.ExecuteActivity(ctx, env.DevPodUpActivity, devPodUpInput).Get(ctx, nil)
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to start DevPod workspace: %v", err)
 		}
@@ -253,7 +265,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 		if repoMode == string(env.RepoModeWorktree) {
 			repoDevPodEnvContainer := env.EnvContainer{Env: &env.DevPodEnv{
 				WorkingDirectory: containerWorkDir,
-				WorkspaceName:    repoDir,
+				WorkspaceName:    devpodWorkspaceName,
 			}}
 			startBranchStr := ""
 			if startBranch != nil {
@@ -280,12 +292,12 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 			envContainer = env.EnvContainer{Env: &env.DevPodEnv{
 				WorkingDirectory: worktree.WorkingDirectory,
-				WorkspaceName:    repoDir,
+				WorkspaceName:    devpodWorkspaceName,
 			}}
 		} else {
 			envContainer = env.EnvContainer{Env: &env.DevPodEnv{
 				WorkingDirectory: containerWorkDir,
-				WorkspaceName:    repoDir,
+				WorkspaceName:    devpodWorkspaceName,
 			}}
 		}
 	default:

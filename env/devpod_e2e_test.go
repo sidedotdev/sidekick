@@ -44,10 +44,12 @@ func TestDevPodIntegration(t *testing.T) {
 	err := DevPodUpActivity(ctx, DevPodUpInput{WorkspacePath: workspacePath})
 	require.NoError(t, err, "DevPodUpActivity failed")
 
+	workspaceName := DevPodWorkspaceName(workspacePath)
+
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := DevPodStopActivity(cleanupCtx, workspacePath); err != nil {
+		if err := DevPodStopActivity(cleanupCtx, workspaceName); err != nil {
 			t.Logf("DevPodStopActivity cleanup error: %v", err)
 		}
 	})
@@ -58,7 +60,7 @@ func TestDevPodIntegration(t *testing.T) {
 
 	devEnv := &DevPodEnv{
 		WorkingDirectory: containerWorkDir,
-		WorkspaceName:    workspacePath,
+		WorkspaceName:    workspaceName,
 	}
 
 	t.Run("basic command execution", func(t *testing.T) {
@@ -120,7 +122,7 @@ func TestDevPodIntegration(t *testing.T) {
 
 		repoEnv := &DevPodEnv{
 			WorkingDirectory: containerRepoDir,
-			WorkspaceName:    workspacePath,
+			WorkspaceName:    workspaceName,
 		}
 		envContainer := EnvContainer{Env: repoEnv}
 

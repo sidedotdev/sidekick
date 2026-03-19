@@ -72,6 +72,11 @@ type RepoConfig struct {
 
 	// RepoMode specifies the default repo mode for this repo (e.g., "worktree", "in_place").
 	RepoMode string `toml:"repo_mode,omitempty"`
+
+	// DevPodWorkspaceId overrides the workspace name DevPod derives from the
+	// repo directory basename. When empty, the repo directory's basename is
+	// used, matching DevPod's default behavior.
+	DevPodWorkspaceId string `toml:"devpod_workspace_id,omitempty"`
 }
 
 // GlobalState keys for workflow-specific state
