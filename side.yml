@@ -34,6 +34,8 @@ command_permissions:
     - pattern: "docker build"
     - pattern: "docker logs"
     - pattern: "docker ps"
+    - pattern: "openshell"
+    - pattern: "devpod"
     - pattern: "(npm|bun) run type-check"
     - pattern: "bun type-check"
     - pattern: "(npm|bun) run test:unit.*--run"
