@@ -2,10 +2,12 @@ package env
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"sidekick/common"
 	"sidekick/domain"
 
+	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 )
@@ -225,10 +228,25 @@ func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (E
 
 	fullCommand := strings.Join(shellParts, " && ")
 
+	controlPath := devpodSSHControlPath(e.WorkspaceName)
+	sshHost := e.WorkspaceName + ".devpod"
+	sshArgs := []string{
+		"-o", "ControlMaster=auto",
+		"-S", controlPath,
+		"-o", "ControlPersist=3600",
+		"-o", "BatchMode=yes",
+		"-o", "ServerAliveInterval=10",
+		"-o", "ServerAliveCountMax=3",
+		"-o", "LogLevel=ERROR",
+		sshHost,
+		"--",
+		fullCommand,
+	}
+
 	runCommandInput := unix.RunCommandActivityInput{
 		WorkingDir: os.TempDir(),
-		Command:    "devpod",
-		Args:       []string{"ssh", e.WorkspaceName, "--command", fullCommand},
+		Command:    "ssh",
+		Args:       sshArgs,
 	}
 	output, err := unix.RunCommandActivity(ctx, runCommandInput)
 	if err != nil {
@@ -254,6 +272,45 @@ func stripDevPodTunnelError(stderr string) string {
 		}
 	}
 	return strings.Join(filtered, "\n")
+}
+
+// maxWorkspaceNameLen is the threshold above which we hash the workspace name
+// in the SSH control socket path. Keeps the full path well under the 104-byte
+// Unix socket limit even on macOS where os.TempDir() can resolve to long
+// paths under /private/var/folders/.
+const maxWorkspaceNameLen = 20
+
+// devpodSSHControlPath returns a stable socket path for SSH ControlMaster
+// keyed by the workspace name. Uses the workspace name directly for
+// readability, falling back to a hash for long names to stay within Unix
+// socket path length limits.
+func devpodSSHControlPath(workspaceName string) string {
+	name := workspaceName
+	if len(name) > maxWorkspaceNameLen {
+		h := sha256.Sum256([]byte(workspaceName))
+		name = fmt.Sprintf("%x", h[:8])
+	}
+	return filepath.Join(os.TempDir(), "devpod-ssh-"+name)
+}
+
+// DevPodWorkspaceName returns the DevPod workspace name for a given repo
+// directory path. DevPod derives the workspace name from the directory basename.
+func DevPodWorkspaceName(repoDir string) string {
+	return filepath.Base(repoDir)
+}
+
+// CloseDevPodSSHMaster closes any active SSH master connection for the given
+// workspace. It is best-effort and safe to call even when no master exists.
+func CloseDevPodSSHMaster(workspaceName string) {
+	controlPath := devpodSSHControlPath(workspaceName)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := exec.CommandContext(ctx, "ssh", "-O", "exit", "-S", controlPath, workspaceName+".devpod").Run(); err != nil {
+		log.Warn().Err(err).Str("workspace", workspaceName).Msg("Failed to close SSH master connection")
+	}
+	if err := os.Remove(controlPath); err != nil && !os.IsNotExist(err) {
+		log.Warn().Err(err).Str("path", controlPath).Msg("Failed to remove SSH control socket")
+	}
 }
 
 // EnvContainer is a wrapper for the Env interface that provides custom
