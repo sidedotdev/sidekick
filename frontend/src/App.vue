@@ -41,6 +41,12 @@ const handleGlobalKeyDown = (event: KeyboardEvent) => {
     event.preventDefault()
     workspaceSelectRef.value?.show()
   }
+  if (event.key === 'Escape') {
+    const selectEl = workspaceSelectRef.value?.$el as HTMLElement | undefined
+    if (selectEl?.contains(document.activeElement)) {
+      (document.activeElement as HTMLElement)?.blur()
+    }
+  }
 }
 
 onMounted(async () => {
@@ -94,6 +100,12 @@ const handleShow = () => {
 
 const handleHide = () => {
   filterText.value = ''
+  nextTick(() => {
+    const selectEl = workspaceSelectRef.value?.$el as HTMLElement | undefined
+    if (selectEl?.contains(document.activeElement)) {
+      (document.activeElement as HTMLElement)?.blur()
+    }
+  })
 }
 
 const kanbanAndSettingsRoutes = new Set(['kanban', 'workspace'])
