@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sidekick/coding/git"
 	"sidekick/common"
+	"sidekick/fflag"
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
@@ -43,8 +44,16 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 
 	ignoreWhitespace := true
 
-	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 5)
-	if v >= 4 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
+	v := workflow.GetVersion(dCtx, "check-work-diff-since-review", workflow.DefaultVersion, 6)
+	if v >= 6 && fflag.IsEnabled(dCtx, fflag.CheckEdits) {
+		// When CheckEdits is enabled, all current-step work is staged, so
+		// git diff --staged captures exactly the relevant changes without
+		// including prior committed steps or merged upstream changes.
+		diff, err = git.GitDiff(dCtx.ExecContext)
+		if err != nil {
+			return CriteriaFulfillment{}, fmt.Errorf("failed to get staged git diff: %v", err)
+		}
+	} else if v >= 4 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
 		diff, err = getOwnChangesSinceReview(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, ignoreWhitespace)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to get own changes since review: %v", err)
