@@ -1,31 +1,31 @@
 <template>
   <form @submit.prevent="submitWorkspace">
     <div>
-      <label for="name">Workspace Name:</label>
-      <input id="name" v-model="name" required>
+      <label for="name">Name</label>
+      <input id="name" v-model="name" required placeholder="Workspace name">
     </div>
     <div>
-      <label for="localRepoDir">Local Repository Directory:</label>
-      <input id="localRepoDir" v-model="localRepoDir" required>
+      <label for="localRepoDir">Repository Directory</label>
+      <input id="localRepoDir" v-model="localRepoDir" required placeholder="Path to local repository">
     </div>
     <div>
-      <h3>Configuration Mode</h3>
-      <select v-model="configMode" class="config-mode-select">
+      <label>Configuration Mode</label>
+      <select v-model="configMode">
         <option value="local">Local only</option>
         <option value="workspace">Workspace only</option>
         <option value="merge">Merge</option>
       </select>
     </div>
     <div v-show="configMode !== 'local'">
-      <h3>LLMs</h3>
+      <label>LLMs</label>
       <LlmConfigEditor v-model="llmConfig" />
     </div>
     <div v-show="configMode !== 'local'">
-      <h3>Embeddings</h3>
+      <label>Embeddings</label>
       <EmbeddingConfigEditor v-model="embeddingConfig" />
     </div>
     <div class="button-container">
-      <button type="submit">{{ isEditing ? 'Update' : 'Create' }} Workspace</button>
+      <button type="submit" class="submit-button">{{ isEditing ? 'Update' : 'Create' }} Workspace</button>
     </div>
   </form>
 </template>
@@ -126,28 +126,52 @@ form > div {
 }
 
 label {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin: 12px 0;
-  min-width: 120px;
+  display: block;
+  margin: 0.75rem 0 0.375rem 0;
+  font-size: 0.875rem;
+  color: var(--color-text-2);
+}
+
+input[type="text"],
+input:not([type]) {
+  width: 100%;
+  padding: 0.5rem;
+  font-size: 0.9rem;
+  background-color: var(--color-background);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-contrast);
+  border-radius: 0.25rem;
+  box-sizing: border-box;
+}
+
+input[type="text"]:focus,
+input:not([type]):focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+select {
+  padding: 0.5rem;
+  font-size: 0.9rem;
+  background-color: var(--color-background);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-contrast);
+  border-radius: 0.25rem;
 }
 
 .button-container {
   display: flex;
-  justify-content: flex-end;
-  gap: 1rem;
-  margin-top: 1rem;
+  justify-content: flex-start;
+  margin-top: 1.5rem;
 }
 
-select {
-  --select-background-color: var(--color-background-hover);
-  padding: 0.2rem;
+.submit-button {
+  padding: 0.5rem 1.25rem;
   font-size: 0.9rem;
-  background-color: var(--select-background-color);
-  color: var(--color-text);
-  border: 1px solid var(--color-border-contrast);
+  background-color: var(--color-cta-button-bg);
+  color: var(--color-cta-button-text);
+  border: none;
   border-radius: 0.25rem;
-  margin-right: 0.5rem;
+  cursor: pointer;
 }
 </style>
