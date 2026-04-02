@@ -349,6 +349,9 @@ func authorEditBlocks(dCtx DevContext, codingModelConfig common.ModelConfig, con
 		if err != nil {
 			return nil, err
 		}
+		if v := workflow.GetVersion(dCtx, "fix-pause-duplicate-initial-prompt", workflow.DefaultVersion, 1); v >= 1 {
+			promptInfo = SkipInfo{}
+		}
 		maxLength := min(defaultMaxChatHistoryLength+contextSizeExtension, extendedMaxChatHistoryLength)
 
 		// NOTE this MUST be below authorEditBlockInput to ensure tool call
