@@ -203,6 +203,22 @@ func (ima *DevAgentManagerActivities) CreatePendingUserRequest(ctx context.Conte
 	return nil
 }
 
+type ListWorkspacesResult struct {
+	WorkspaceIds []string `json:"workspaceIds"`
+}
+
+func (ima *DevAgentManagerActivities) ListWorkspaces(ctx context.Context) (ListWorkspacesResult, error) {
+	workspaces, err := ima.Storage.GetAllWorkspaces(ctx)
+	if err != nil {
+		return ListWorkspacesResult{}, fmt.Errorf("failed to list workspaces: %w", err)
+	}
+	ids := make([]string, len(workspaces))
+	for i, ws := range workspaces {
+		ids[i] = ws.Id
+	}
+	return ListWorkspacesResult{WorkspaceIds: ids}, nil
+}
+
 func (ima *DevAgentManagerActivities) FindWorkspaceById(ctx context.Context, workspaceId string) (domain.Workspace, error) {
 	log := activity.GetLogger(ctx)
 	workspace, err := ima.Storage.GetWorkspace(ctx, workspaceId)

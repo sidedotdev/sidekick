@@ -234,6 +234,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	}
 
 	common.StartCodecCleanupWorkflow(context.Background(), temporalClient, taskQueue)
+	dev.StartCleanupWorktreesWorkflow(context.Background(), temporalClient, taskQueue)
 
 	return &Worker{
 		Worker:         w,
@@ -249,5 +250,6 @@ func RegisterWorkflows(w worker.WorkflowRegistry) {
 	w.RegisterWorkflow(dev.BasicDevWorkflow)
 	w.RegisterWorkflow(poll_failures.PollFailuresWorkflow)
 	w.RegisterWorkflow(srv.CascadeDeleteTaskWorkflow)
+	w.RegisterWorkflow(dev.CleanupWorktreesWorkflow)
 	w.RegisterWorkflow(common.CodecPayloadCleanupWorkflow)
 }
