@@ -31,6 +31,17 @@ type TaskUpdate struct {
 	AgentType domain.AgentType
 }
 
+func (ima *DevAgentManagerActivities) UpdateTaskByTaskId(ctx context.Context, workspaceId, taskId string, update TaskUpdate) error {
+	task, err := ima.Storage.GetTask(ctx, workspaceId, taskId)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve task for taskId %s: %v", taskId, err)
+	}
+	task.AgentType = update.AgentType
+	task.Status = update.Status
+	task.Updated = time.Now()
+	return ima.Storage.PersistTask(ctx, task)
+}
+
 func (ima *DevAgentManagerActivities) UpdateTask(ctx context.Context, workspaceId, workflowId string, update TaskUpdate) error {
 	// Recursive function to find a workflow record with parent_id that starts with "task_"
 	var findWorkflowParentTaskId func(string) (string, error)
