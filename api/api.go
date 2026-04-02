@@ -370,6 +370,16 @@ func (ctrl *Controller) CancelTaskHandler(c *gin.Context) {
 		return
 	}
 
+	// Cancel the task orchestrator workflow directly
+	taskWfId := dev.TaskWorkflowId(taskId)
+	if err := ctrl.temporalClient.CancelWorkflow(c.Request.Context(), taskWfId, ""); err != nil {
+		var notFoundErr *serviceerror.NotFound
+		if !errors.As(err, &notFoundErr) && !strings.Contains(err.Error(), "workflow execution already completed") {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to cancel task workflow"})
+			return
+		}
+	}
+
 	// Get the child workflows of the task
 	childFlows, err := ctrl.service.GetFlowsForTask(c.Request.Context(), workspaceId, taskId)
 	if err != nil {
@@ -377,9 +387,8 @@ func (ctrl *Controller) CancelTaskHandler(c *gin.Context) {
 		return
 	}
 
-	// Check if any of the child workflows are in progress and cancel them
+	// Cancel any child flow workflows and update their status
 	for _, flow := range childFlows {
-		// Update and persist the flow status
 		flow.Status = "canceled"
 		if err := ctrl.service.PersistFlow(c.Request.Context(), flow); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -390,7 +399,6 @@ func (ctrl *Controller) CancelTaskHandler(c *gin.Context) {
 
 		err = ctrl.temporalClient.CancelWorkflow(c.Request.Context(), flow.Id, "")
 		if err != nil {
-			// Check if the error is due to workflow not found or already completed
 			var notFoundErr *serviceerror.NotFound
 			if !errors.As(err, &notFoundErr) && !strings.Contains(err.Error(), "workflow execution already completed") {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to cancel workflow"})
