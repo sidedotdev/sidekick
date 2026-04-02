@@ -412,6 +412,10 @@ func patternContainsEnvVar(pattern string) bool {
 	return envVarRefRegex.MatchString(pattern) || envVarAssignRegex.MatchString(pattern)
 }
 
+func isWordChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-'
+}
+
 // matchPattern attempts to match a pattern against a command.
 // It first tries an exact prefix match. If that fails and the pattern contains
 // regex metacharacters, it compiles the pattern as a regex (anchored at start).
@@ -419,8 +423,13 @@ func patternContainsEnvVar(pattern string) bool {
 func matchPattern(pattern string, command string) (bool, []string) {
 	// Try exact prefix match first
 	if strings.HasPrefix(command, pattern) {
-		// For prefix match, return the matched portion as $0
-		return true, []string{pattern}
+		// Ensure the match ends at a word boundary so that e.g. pattern
+		// "bunx tsc" does not match command "bunx tscfake".
+		if len(command) == len(pattern) ||
+			!isWordChar(pattern[len(pattern)-1]) ||
+			!isWordChar(command[len(pattern)]) {
+			return true, []string{pattern}
+		}
 	}
 
 	// Check if pattern contains regex metacharacters
