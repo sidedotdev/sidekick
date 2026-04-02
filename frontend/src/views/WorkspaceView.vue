@@ -1,6 +1,6 @@
 <template>
   <div class="workspace-view">
-    <h1>{{ isEditing ? 'Edit' : 'Create' }} Workspace</h1>
+    <h2>{{ isEditing ? 'Edit' : 'Create' }} Workspace</h2>
     <WorkspaceForm
       v-if="workspace"
       :workspace="workspace"
@@ -59,8 +59,11 @@ const fetchWorkspace = async (workspaceId: string) => {
 
 <style scoped>
 .workspace-view {
-  max-width: 600px;
-  margin: 0 auto;
+  max-width: 40rem;
   padding: 2rem;
+}
+
+.workspace-view h2 {
+  margin: 0 0 1.5rem 0;
 }
 </style>
