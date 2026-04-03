@@ -10,6 +10,7 @@ import (
 	"sidekick/utils"
 	"strings"
 	"syscall"
+	"time"
 )
 
 type RunCommandActivityInput struct {
@@ -52,7 +53,12 @@ func RunCommandActivity(ctx context.Context, input RunCommandActivityInput) (Run
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	// WaitDelay bounds how long Wait blocks for I/O pipes to close after the
+	// process exits. Background children (& / nohup) inherit the pipes and
+	// would otherwise block Wait indefinitely.
+	cmd.WaitDelay = 100 * time.Millisecond
+
+	runErr := cmd.Run()
 
 	if err != nil && ctx.Err() != nil {
 		return RunCommandActivityOutput{
@@ -63,24 +69,23 @@ func RunCommandActivity(ctx context.Context, input RunCommandActivityInput) (Run
 	}
 
 	exitStatus := 0
-	// Check if there's an error and if it's an ExitError.
-	if err != nil {
-		exitError, ok := err.(*exec.ExitError)
-		if !ok {
-			// If it's not an ExitError, return it as an actual error.
-			return RunCommandActivityOutput{}, err
+	if runErr != nil {
+		if errors.Is(runErr, exec.ErrWaitDelay) {
+			// Process exited successfully but background children held pipes open.
+		} else if exitError, ok := runErr.(*exec.ExitError); ok {
+			if status, ok := exitError.Sys().(syscall.WaitStatus); ok {
+				exitStatus = status.ExitStatus()
+			}
+		} else {
+			return RunCommandActivityOutput{}, runErr
 		}
-		// If it's an ExitError, get the exit status.
-		if status, ok := exitError.Sys().(syscall.WaitStatus); ok {
-			exitStatus = status.ExitStatus()
-		}
-		err = nil
 	}
+
 	output := RunCommandActivityOutput{
 		Stdout:     stdout.String(),
 		Stderr:     stderr.String(),
 		ExitStatus: exitStatus,
 	}
 
-	return output, err
+	return output, nil
 }
