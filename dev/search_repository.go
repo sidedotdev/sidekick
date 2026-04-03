@@ -36,6 +36,21 @@ func isSpecificPathGlob(pattern string) bool {
 	return true
 }
 
+// hasLiteralPathSegment returns true if the glob pattern contains at least one
+// path segment starting with a literal character, indicating the pattern targets
+// a specific directory or file rather than matching broadly (e.g. "**/*.go").
+func hasLiteralPathSegment(pattern string) bool {
+	if pattern == "" {
+		return false
+	}
+	for _, seg := range strings.Split(pattern, "/") {
+		if seg != "" && seg[0] != '*' && seg[0] != '?' && seg[0] != '[' && seg[0] != '{' {
+			return true
+		}
+	}
+	return false
+}
+
 // filterFilesByGlob filters a list of files using the given glob pattern.
 // It tries matching against both the full path and the basename.
 func filterFilesByGlob(files []string, globPattern string) ([]string, error) {
@@ -84,6 +99,7 @@ type SearchRepositoryInput struct {
 	ContextLines    int
 	CaseInsensitive bool
 	FixedStrings    bool
+	NoIgnore        bool
 }
 
 // TODO /gen include the function name in the associated with each search result
@@ -117,7 +133,11 @@ func initSearchContext(ctx workflow.Context, envContainer env.EnvContainer, inpu
 	sCtx.escapedSearchTerm = escapeShellArg(input.SearchTerm)
 
 	// Base rgArgs
-	sCtx.rgArgs = "--files-with-matches --hidden --ignore-file " + escapeShellArg(sCtx.coreIgnorePath)
+	sCtx.rgArgs = "--files-with-matches --hidden"
+	if input.NoIgnore {
+		sCtx.rgArgs += " --no-ignore"
+	}
+	sCtx.rgArgs += " --ignore-file " + escapeShellArg(sCtx.coreIgnorePath)
 
 	// Base gitGrepArgs
 	sCtx.gitGrepArgs = fmt.Sprintf("git grep --no-index --show-function --heading --line-number --context %d", input.ContextLines)
@@ -135,6 +155,10 @@ func initSearchContext(ctx workflow.Context, envContainer env.EnvContainer, inpu
 	// Version guard for manual glob filtering logic
 	v := workflow.GetVersion(sCtx.ctx, "manual-search-glob-filtering", workflow.DefaultVersion, 1)
 	sCtx.useManualGlobFiltering = isSpecificPathGlob(sCtx.input.PathGlob) && v >= 1
+
+	if input.NoIgnore {
+		return sCtx, nil
+	}
 
 	// Check for .sideignore file
 	var catOutput env.EnvRunCommandOutput
@@ -471,6 +495,9 @@ func (sCtx *searchContext) handleOutputLengthChecks(rawOutput string, globMatche
 func (sCtx *searchContext) getFilesMatchingPathGlob() ([]string, error) {
 	var rgFilesOutput env.EnvRunCommandOutput
 	rgFilesCmdParts := []string{"--files", "--hidden"}
+	if sCtx.input.NoIgnore {
+		rgFilesCmdParts = append(rgFilesCmdParts, "--no-ignore")
+	}
 	rgFilesCmdParts = append(rgFilesCmdParts, "--ignore-file", sCtx.coreIgnorePath)
 	if sCtx.sideIgnoreExists {
 		if sCtx.gitIgnoreExists {
@@ -656,6 +683,12 @@ func updatedInputWithCaseInsensitive(input SearchRepositoryInput) SearchReposito
 	return newInput
 }
 
+func updatedInputWithNoIgnore(input SearchRepositoryInput) SearchRepositoryInput {
+	newInput := input
+	newInput.NoIgnore = true
+	return newInput
+}
+
 // isNonCriticalRgError checks if the stderr from rg indicates an error that
 // shouldn't halt the search process (e.g., allow retries or fallback).
 func isNonCriticalRgError(stderr string) bool {
@@ -734,13 +767,20 @@ func SearchRepository(ctx workflow.Context, envContainer env.EnvContainer, input
 			return cmdStderr, nil
 		}
 
-		// Attempt retries for FixedStrings and CaseInsensitive.
-		// These recursive calls create new searchContexts internally.
 		if !sCtx.input.FixedStrings {
 			return SearchRepository(ctx, envContainer, updatedInputWithFixedStrings(sCtx.input))
 		}
 		if !sCtx.input.CaseInsensitive {
 			return SearchRepository(ctx, envContainer, updatedInputWithCaseInsensitive(sCtx.input))
+		}
+
+		// Retry with ignore files disabled for path-specific globs, so that
+		// files in .gitignored or .sideignored directories can still be found.
+		if !sCtx.input.NoIgnore && hasLiteralPathSegment(sCtx.input.PathGlob) {
+			v := workflow.GetVersion(sCtx.ctx, "search-no-ignore-fallback", workflow.DefaultVersion, 1)
+			if v >= 1 {
+				return SearchRepository(ctx, envContainer, updatedInputWithNoIgnore(sCtx.input))
+			}
 		}
 
 		// Retries exhausted, still no results. Apply specific glob fallback logic.

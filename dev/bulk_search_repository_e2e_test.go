@@ -202,3 +202,29 @@ func (s *BulkSearchRepositoryE2ETestSuite) TestSideignoreUnignoresGitignored() {
 	s.Contains(result, "vendor/lib.go", "vendor/lib.go should be found because .sideignore un-ignores it")
 	s.Contains(result, "hello from vendor")
 }
+
+func (s *BulkSearchRepositoryE2ETestSuite) TestSearchFindsResultsInSideignoredFile() {
+	// Create a file in a directory that's ignored by .sideignore
+	err := os.MkdirAll(filepath.Join(s.dir, "mocks"), 0755)
+	s.Require().NoError(err)
+
+	s.createTestFile("mocks/client.go", `package mocks
+
+func (_m *Client) DoSomething() error {
+	return nil
+}
+`)
+
+	s.createTestFile(".sideignore", "mocks\n")
+
+	result, err := s.executeBulkSearchRepository(BulkSearchRepositoryParams{
+		ContextLines: 0,
+		Searches: []SingleSearchParams{
+			{PathGlob: "mocks/client.go", SearchTerm: "func (_m *Client) DoSomething"},
+		},
+	})
+	s.Require().NoError(err)
+	s.Contains(result, "DoSomething")
+	s.NotContains(result, "No results found")
+	s.NotContains(result, "No files matched")
+}
