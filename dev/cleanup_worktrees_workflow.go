@@ -2,10 +2,10 @@ package dev
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
@@ -51,14 +51,24 @@ func CleanupWorktreesWorkflow(ctx workflow.Context) error {
 	return nil
 }
 
-func StartCleanupWorktreesWorkflow(ctx context.Context, temporalClient client.Client, taskQueue string) {
-	_, err := temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:                    CleanupWorktreesWorkflowID,
-		TaskQueue:             taskQueue,
-		CronSchedule:          "0 3 * * *",
-		WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
-	}, CleanupWorktreesWorkflow)
+func StartCleanupWorktreesSchedule(ctx context.Context, temporalClient client.Client, taskQueue string) {
+	scheduleID := CleanupWorktreesWorkflowID + "_schedule"
+	_, err := temporalClient.ScheduleClient().Create(ctx, client.ScheduleOptions{
+		ID: scheduleID,
+		Spec: client.ScheduleSpec{
+			CronExpressions: []string{"0 3 * * *"},
+		},
+		Action: &client.ScheduleWorkflowAction{
+			ID:        CleanupWorktreesWorkflowID,
+			Workflow:  CleanupWorktreesWorkflow,
+			TaskQueue: taskQueue,
+		},
+	})
 	if err != nil {
-		log.Debug().Err(err).Msg("Cleanup worktrees workflow start (may already be running)")
+		if errors.Is(err, temporal.ErrScheduleAlreadyRunning) {
+			log.Debug().Msg("Cleanup worktrees schedule already exists")
+		} else {
+			log.Warn().Err(err).Msg("Failed to create cleanup worktrees schedule")
+		}
 	}
 }
