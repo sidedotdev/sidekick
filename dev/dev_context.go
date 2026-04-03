@@ -199,9 +199,10 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 	}
 
 	// Fall back to repo config defaults when envType is not specified.
-	// Only do this when envType is empty to avoid introducing new activity
-	// calls during replay of old workflows that always had envType set.
-	if envType == "" {
+	// Gated behind a version check to avoid introducing new activity calls
+	// during replay of old workflows that never called GetRepoConfig here.
+	envFromConfigVersion := workflow.GetVersion(ctx, "env-from-repo-config", workflow.DefaultVersion, 1)
+	if envType == "" && envFromConfigVersion >= 1 {
 		tempRepoConfig, configErr := GetRepoConfig(tempLocalExecContext)
 		if configErr == nil {
 			configOverrides.ApplyToRepoConfig(&tempRepoConfig)
