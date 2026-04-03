@@ -5,106 +5,47 @@ import (
 	"fmt"
 	"sidekick/domain"
 	"sidekick/flow_action"
-	"sidekick/llm"
 	"strings"
-	"time"
 
-	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/temporal"
 )
 
 type DevAgent struct {
 	TemporalClient    client.Client
 	TemporalTaskQueue string
 	WorkspaceId       string
-	ChatHistory       *[]llm.ChatMessage
-}
-
-func (ia *DevAgent) getRunID(ctx context.Context, workflowID string) string {
-	handle := ia.TemporalClient.GetWorkflow(ctx, workflowID, "")
-	return handle.GetRunID()
-}
-
-func (ia *DevAgent) workRequest(ctx context.Context, parentId, request, flowType string, flowOptions map[string]interface{}) (domain.Flow, error) {
-	devManagerWorkflowId, err := ia.findOrStartDevAgentManagerWorkflow(ctx, ia.WorkspaceId)
-	if err != nil {
-		return domain.Flow{}, fmt.Errorf("error finding or starting dev manager workflow: %w", err)
-	}
-
-	workRequest := WorkRequest{ParentId: parentId, Input: request, FlowType: flowType, FlowOptions: flowOptions}
-	//updateHandle, err := ia.TemporalClient.UpdateWorkflow(ctx, devManagerWorkflowId, "", UpdateNameWorkRequest, workRequest)
-	updateRequest := client.UpdateWorkflowOptions{
-		UpdateID:   uuid.New().String(),
-		WorkflowID: devManagerWorkflowId,
-		RunID:      ia.getRunID(ctx, devManagerWorkflowId),
-		UpdateName: UpdateNameWorkRequest,
-		Args:       []interface{}{workRequest},
-
-		// How this RPC should block on the server before returning.
-		WaitForStage: client.WorkflowUpdateStageAccepted,
-	}
-	updateHandle, err := ia.TemporalClient.UpdateWorkflow(ctx, updateRequest)
-	if err != nil {
-		return domain.Flow{}, fmt.Errorf("error issuing Update request: %w\n%v", err, updateRequest)
-	}
-
-	var flow domain.Flow
-	err = updateHandle.Get(ctx, &flow)
-	if err != nil {
-		return domain.Flow{}, fmt.Errorf("update encountered an error: %w", err)
-	}
-	return flow, nil
 }
 
 func (ia *DevAgent) RelayResponse(ctx context.Context, userResponse flow_action.UserResponse) error {
 	log.Info().Str("workflowId", userResponse.TargetWorkflowId).Msg("relaying response to workflow")
-	devManagerWorkflowId, err := ia.findOrStartDevAgentManagerWorkflow(ctx, ia.WorkspaceId)
-	if err != nil {
-		return fmt.Errorf("error finding or starting dev manager workflow: %w", err)
+	err := ia.TemporalClient.SignalWorkflow(ctx, userResponse.TargetWorkflowId, "", flow_action.SignalNameUserResponse, userResponse)
+	if err != nil && strings.Contains(err.Error(), temporalLiteAlreadyCompletedError) {
+		log.Warn().Msg("tried to relay user response to a workflow that already completed")
+		return nil
 	}
-
-	err = ia.TemporalClient.SignalWorkflow(ctx, devManagerWorkflowId, "", SignalNameUserResponse, userResponse)
 	return err
 }
 
-func (ia DevAgent) findOrStartDevAgentManagerWorkflow(ctx context.Context, workspaceId string) (string, error) {
-	workflowId := workspaceId + "_dev_manager"
-	workflowRetryPolicy := &temporal.RetryPolicy{
-		InitialInterval:        time.Second,
-		BackoffCoefficient:     2.0,
-		MaximumInterval:        100 * time.Second,
-		MaximumAttempts:        1000,                         // up to 1000 retries
-		NonRetryableErrorTypes: []string{"OutOfBoundsError"}, // Out-of-bounds errors are non-retryable
-	}
-	options := client.StartWorkflowOptions{
-		ID:                    workflowId,
-		TaskQueue:             ia.TemporalTaskQueue,
-		WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE_FAILED_ONLY,
-		RetryPolicy:           workflowRetryPolicy,
-		SearchAttributes:      map[string]interface{}{"WorkspaceId": workspaceId},
-	}
-
-	we, err := ia.TemporalClient.ExecuteWorkflow(ctx, options, DevAgentManagerWorkflow, DevAgentManagerWorkflowInput{
-		WorkspaceId: workspaceId,
-	})
-	if err != nil {
-		// fmt.Printf("Failed to start dev manager workflow: %v\n", err)
-		return "", err
-	}
-	// fmt.Printf("Started dev manager workflow: %s\n", we.GetID())
-	return we.GetID(), nil
+// TaskWorkflowId returns the deterministic Temporal workflow ID for a task's
+// orchestrator workflow, allowing callers to cancel or query it by task ID.
+func TaskWorkflowId(taskId string) string {
+	return "task_wf_" + taskId
 }
 
 func (ia DevAgent) HandleNewTask(ctx context.Context, task *domain.Task) error {
-	// perform a work request where the parentId is the taskId and the task description is the request
-	_, err := ia.workRequest(ctx, task.Id, task.Description, task.FlowType, task.FlowOptions)
-	if err != nil {
-		return err
+	options := client.StartWorkflowOptions{
+		ID:        TaskWorkflowId(task.Id),
+		TaskQueue: ia.TemporalTaskQueue,
 	}
-	return nil
+	_, err := ia.TemporalClient.ExecuteWorkflow(ctx, options, TaskWorkflow, TaskWorkflowInput{
+		WorkspaceId: task.WorkspaceId,
+		TaskId:      task.Id,
+		FlowType:    task.FlowType,
+		FlowOptions: task.FlowOptions,
+		Description: task.Description,
+	})
+	return err
 }
 
 const temporalLiteNotFoundError1 = "no rows in result set"

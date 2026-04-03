@@ -2,12 +2,8 @@
 set -ex
 
 cd frontend
-if [ ! -d "node_modules" ]; then
-  npm ci
-else
-  npm i
-fi
-npm run build
+bun ci
+bun run build
 cd ..
 
 export VERSION=$(git rev-parse --short HEAD)

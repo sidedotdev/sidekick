@@ -10,6 +10,35 @@ import (
 func Test_RunCommandActivity(t *testing.T) {
 	ctx := context.Background()
 
+	t.Run("does not block on background processes", func(t *testing.T) {
+		t.Parallel()
+		input := RunCommandActivityInput{
+			WorkingDir: ".",
+			Command:    "sh",
+			Args:       []string{"-c", "echo hello && sleep 10 &"},
+		}
+
+		done := make(chan struct{})
+		var output RunCommandActivityOutput
+		var err error
+		go func() {
+			output, err = RunCommandActivity(ctx, input)
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			if !strings.Contains(output.Stdout, "hello") {
+				t.Errorf("expected stdout to contain 'hello', got %q", output.Stdout)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("RunCommandActivity blocked on background process")
+		}
+	})
+
 	t.Run("returns stdout and no error when command is successful", func(t *testing.T) {
 		// Arrange
 		input := RunCommandActivityInput{

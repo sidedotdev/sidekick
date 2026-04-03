@@ -44,6 +44,7 @@ command_permissions:
     - pattern: "go run ./worker/replay"
     - pattern: "go run ./scripts/run_activity"
     - pattern: "go run ./scripts/lint_.*"
+    - pattern: "playwright-cli"
 
 dev_run:
   supervisor:
