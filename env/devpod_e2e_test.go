@@ -23,14 +23,19 @@ func repoRoot(t *testing.T) string {
 }
 
 func TestDevPodIntegration(t *testing.T) {
-	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
-		t.Skip("skipping DevPod integration test; SIDE_INTEGRATION_TEST not set to true")
+	if os.Getenv("SIDE_E2E_TEST") != "true" {
+		t.Skip("skipping DevPod integration test; SIDE_E2E_TEST not set to true")
 	}
 	if _, err := exec.LookPath("devpod"); err != nil {
 		t.Skip("devpod command not found in PATH")
 	}
 
 	workspacePath := repoRoot(t)
+
+	// Start the DevPod workspace. When the container is already running
+	// (e.g. pre-warmed by `devpod up .` in side.yml), this returns quickly.
+	err := DevPodUpActivity(context.Background(), DevPodUpInput{WorkspacePath: workspacePath})
+	require.NoError(t, err, "DevPodUpActivity failed")
 
 	// Derive a context that leaves time for cleanup before the test deadline.
 	ctx := context.Background()
@@ -39,10 +44,6 @@ func TestDevPodIntegration(t *testing.T) {
 		ctx, cancel = context.WithDeadline(ctx, deadline.Add(-10*time.Second))
 		defer cancel()
 	}
-
-	// Start the DevPod workspace from the repo's .devcontainer config.
-	err := DevPodUpActivity(ctx, DevPodUpInput{WorkspacePath: workspacePath})
-	require.NoError(t, err, "DevPodUpActivity failed")
 
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

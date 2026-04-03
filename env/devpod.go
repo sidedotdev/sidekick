@@ -31,7 +31,8 @@ func DevPodUpActivity(ctx context.Context, input DevPodUpInput) error {
 		return fmt.Errorf("devpod up failed: %w", err)
 	}
 	if output.ExitStatus != 0 {
-		return fmt.Errorf("devpod up exited with status %d: %s", output.ExitStatus, output.Stderr)
+		combinedOutput := strings.TrimSpace(output.Stderr + "\n" + output.Stdout)
+		return fmt.Errorf("devpod up exited with status %d: %s", output.ExitStatus, combinedOutput)
 	}
 	return nil
 }
