@@ -26,7 +26,7 @@ import (
 
 const (
 	blacklistFileName    = "replay_blacklist.txt"
-	maxWorkflowsToReplay = 30
+	maxWorkflowsToReplay = 20
 )
 
 func loadBlacklist() map[string]struct{} {
