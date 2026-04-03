@@ -2,6 +2,7 @@ package common
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -522,4 +524,75 @@ func (s *CodecCleanupWorkflowTestSuite) TestResetSignalRemovesPendingEntries() {
 	s.NotNil(err)
 	var continueAsNewErr *workflow.ContinueAsNewError
 	s.ErrorAs(err, &continueAsNewErr)
+}
+
+// fakeKVStorage is a minimal KeyValueStorage for testing activity methods directly.
+type fakeKVStorage struct {
+	msetCalls []map[string]interface{}
+}
+
+func (f *fakeKVStorage) MGet(_ context.Context, _ string, _ []string) ([][]byte, error) {
+	return nil, nil
+}
+
+func (f *fakeKVStorage) MSet(_ context.Context, _ string, values map[string]interface{}) error {
+	f.msetCalls = append(f.msetCalls, values)
+	return nil
+}
+
+func (f *fakeKVStorage) MSetRaw(_ context.Context, _ string, _ map[string][]byte) error {
+	return nil
+}
+
+func (f *fakeKVStorage) DeletePrefix(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
+func (f *fakeKVStorage) GetKeysWithPrefix(_ context.Context, _ string, _ string) ([]string, error) {
+	return nil, nil
+}
+
+func TestDeleteCodecKeys_Batching(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		numKeys       int
+		wantMSetCalls int
+	}{
+		{"empty", 0, 0},
+		{"under batch size", 500, 1},
+		{"exact batch size", codecDeleteBatchSize, 1},
+		{"just over batch size", codecDeleteBatchSize + 1, 2},
+		{"multiple full batches", codecDeleteBatchSize * 3, 3},
+		{"multiple batches with remainder", codecDeleteBatchSize*2 + 500, 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			storage := &fakeKVStorage{}
+			a := &CodecCleanupActivities{Storage: storage}
+
+			keys := make([]string, tt.numKeys)
+			for i := range keys {
+				keys[i] = fmt.Sprintf("codec/key-%d", i)
+			}
+
+			err := a.DeleteCodecKeys(context.Background(), keys)
+			require.NoError(t, err)
+			assert.Len(t, storage.msetCalls, tt.wantMSetCalls)
+
+			// Verify all keys were included across batches
+			allDeleted := map[string]bool{}
+			for _, call := range storage.msetCalls {
+				assert.LessOrEqual(t, len(call), codecDeleteBatchSize)
+				for k, v := range call {
+					assert.Nil(t, v)
+					allDeleted[k] = true
+				}
+			}
+			assert.Len(t, allDeleted, tt.numKeys)
+		})
+	}
 }

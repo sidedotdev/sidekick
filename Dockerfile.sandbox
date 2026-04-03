@@ -1,0 +1,65 @@
+# Sandbox Dockerfile for openshell.
+# Placed at repo root so the build context includes frontend/ files needed
+# for bun dependency caching. Early layers are kept byte-identical to
+# .devcontainer/Dockerfile to maximize Docker layer cache reuse.
+
+FROM mcr.microsoft.com/devcontainers/go:1.24
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake git ripgrep \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js matching frontend/.node-version
+ARG NODE_VERSION=20.16.0
+RUN ARCH=$(uname -m | sed 's/x86_64/x64/' | sed 's/aarch64/arm64/') && \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz" \
+    | tar -xJ --strip-components=1 -C /usr/local
+
+# Build USearch C library from source
+RUN git clone --depth 1 --recursive --branch v2.16.6 https://github.com/unum-cloud/usearch.git /tmp/usearch \
+    && cd /tmp/usearch \
+    && cmake -D CMAKE_BUILD_TYPE=Release \
+             -D USEARCH_USE_FP16LIB=1 \
+             -D USEARCH_USE_OPENMP=0 \
+             -D USEARCH_USE_SIMSIMD=0 \
+             -D USEARCH_USE_JEMALLOC=0 \
+             -D USEARCH_BUILD_TEST_CPP=0 \
+             -D USEARCH_BUILD_BENCH_CPP=0 \
+             -D USEARCH_BUILD_LIB_C=1 \
+             -D USEARCH_BUILD_TEST_C=0 \
+             -D USEARCH_BUILD_SQLITE=0 \
+             -B build_release \
+    && cmake --build build_release --config Release \
+    && cp build_release/libusearch_static_c.a /usr/local/lib/libusearch_c.a \
+    && cp c/usearch.h /usr/local/include/usearch.h \
+    && rm -rf /tmp/usearch
+
+ENV CGO_ENABLED=1
+ENV CGO_LDFLAGS="-L/usr/local/lib /usr/local/lib/libusearch_c.a -lstdc++ -lm"
+
+# gopls for LSP tests
+RUN go install golang.org/x/tools/gopls@v0.17.1
+
+# --- Sandbox-specific additions ---
+
+# iproute2: required for network namespace management (ip netns, veth pairs)
+# iptables: optional, enables bypass detection (LOG + REJECT for direct connections)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl iproute2 iptables \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create the sandbox user (uid/gid 1000) for non-root execution.
+# The devcontainer base image ships a "vscode" user at uid 1000; rename it.
+RUN usermod -l sandbox -d /home/sandbox -m vscode && \
+    groupmod -n sandbox vscode
+
+# Ensure sandbox user can write to Go module cache
+RUN mkdir -p /go/pkg/mod && chown -R sandbox:sandbox /go/pkg/mod
+
+# Install bun and pre-warm the dependency cache
+USER sandbox
+RUN curl -fsSL https://bun.sh/install | bash
+ENV BUN_INSTALL=/home/sandbox/.bun
+ENV PATH=$BUN_INSTALL/bin:$PATH
+COPY --chown=sandbox:sandbox frontend/package.json frontend/bun.lock /tmp/frontend-deps/
+RUN cd /tmp/frontend-deps && bun install --frozen-lockfile && rm -rf /tmp/frontend-deps

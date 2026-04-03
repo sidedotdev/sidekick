@@ -436,3 +436,63 @@ func TestCreateDevPodWorktreeActivity(t *testing.T) {
 		assert.NotContains(t, filepath.Base(output.WorktreePath), "side/")
 	})
 }
+
+func TestDevpodSSHControlPath(t *testing.T) {
+	t.Parallel()
+
+	t.Run("deterministic for same workspace", func(t *testing.T) {
+		t.Parallel()
+		path1 := devpodSSHControlPath("myproject")
+		path2 := devpodSSHControlPath("myproject")
+		assert.Equal(t, path1, path2)
+	})
+
+	t.Run("different for different workspaces", func(t *testing.T) {
+		t.Parallel()
+		path1 := devpodSSHControlPath("project-a")
+		path2 := devpodSSHControlPath("project-b")
+		assert.NotEqual(t, path1, path2)
+	})
+
+	t.Run("uses readable name for short workspaces", func(t *testing.T) {
+		t.Parallel()
+		path := devpodSSHControlPath("my-app")
+		assert.Contains(t, path, "devpod-ssh-my-app")
+	})
+
+	t.Run("uses name directly when within limit", func(t *testing.T) {
+		t.Parallel()
+		name := strings.Repeat("a", maxWorkspaceNameLen)
+		path := devpodSSHControlPath(name)
+		assert.Contains(t, path, name)
+	})
+
+	t.Run("falls back to hash for long names", func(t *testing.T) {
+		t.Parallel()
+		longName := strings.Repeat("a", maxWorkspaceNameLen+1)
+		path := devpodSSHControlPath(longName)
+		assert.NotContains(t, path, longName)
+		assert.Contains(t, path, "devpod-ssh-")
+	})
+}
+
+func TestDevPodWorkspaceName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		repoDir  string
+		expected string
+	}{
+		{"simple basename", "/home/user/my-app", "my-app"},
+		{"nested path", "/home/user/code/my-app", "my-app"},
+		{"trailing slash stripped by Base", "/home/user/my-app/", "my-app"},
+		{"just a name", "my-app", "my-app"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.expected, DevPodWorkspaceName(tc.repoDir))
+		})
+	}
+}

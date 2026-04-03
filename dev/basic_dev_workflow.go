@@ -912,5 +912,13 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		}
 	}
 
+	if !mergeResult.HasConflicts && dCtx.EnvContainer.Env.GetType() == env.EnvTypeOpenShell {
+		openShellEnv := dCtx.EnvContainer.Env.(*env.OpenShellEnv)
+		err := workflow.ExecuteActivity(dCtx, env.OpenShellStopActivity, openShellEnv.SandboxName).Get(dCtx, nil)
+		if err != nil {
+			workflow.GetLogger(dCtx).Error("Failed to stop OpenShell sandbox", "error", err)
+		}
+	}
+
 	return gitDiff, mergeInfo, currentTreeHash, err
 }

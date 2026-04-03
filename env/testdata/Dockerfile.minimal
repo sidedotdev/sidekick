@@ -1,0 +1,7 @@
+FROM alpine:3.20
+RUN apk add --no-cache git openssh-client bash curl iproute2 iptables
+RUN addgroup -g 1000 sandbox \
+ && adduser -u 1000 -G sandbox -h /sandbox -s /bin/bash -D sandbox
+USER sandbox
+WORKDIR /sandbox
+RUN git config --global user.name "Test" && git config --global user.email "test@test.com"

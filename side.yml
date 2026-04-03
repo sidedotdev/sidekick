@@ -13,7 +13,7 @@ worktree_setup: |
 test_commands:
   - command: "gotestreport -test.timeout 60s ./..."
   - working_dir: "frontend"
-    command: "bun run test:unit -- --no-color --run"
+    command: "bun run test:unit -- --no-color"
   - working_dir: "frontend"
     command: "bun run type-check"
 
@@ -31,15 +31,19 @@ agent_config:
 
 command_permissions:
   auto_approve:
+    - pattern: "gotestreport"
     - pattern: "docker build"
     - pattern: "docker logs"
     - pattern: "docker ps"
+    - pattern: "openshell"
+    - pattern: "devpod"
     - pattern: "(npm|bun) run type-check"
     - pattern: "bun type-check"
     - pattern: "(npm|bun) run test:unit.*--run"
     - pattern: "bun test:unit.*--run"
-    - pattern: "go run ./worker/replay/"
-    - pattern: "go run ./scripts/run_activity/"
+    - pattern: "go run ./worker/replay"
+    - pattern: "go run ./scripts/run_activity"
+    - pattern: "go run ./scripts/lint_.*"
 
 dev_run:
   supervisor:
