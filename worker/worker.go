@@ -234,7 +234,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	}
 
 	common.StartCodecCleanupWorkflow(context.Background(), temporalClient, taskQueue)
-	dev.StartCleanupWorktreesWorkflow(context.Background(), temporalClient, taskQueue)
+	dev.StartCleanupWorktreesSchedule(context.Background(), temporalClient, taskQueue)
 
 	return &Worker{
 		Worker:         w,

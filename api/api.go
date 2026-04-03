@@ -975,12 +975,23 @@ func (ctrl *Controller) ResetFlowHandler(c *gin.Context) {
 		return
 	}
 
-	// Signal codec cleanup first to prevent deletion of keys needed by the new run.
-	// Safe to do before reset: if reset fails, pending deletions self-correct on workflow completion.
-	err := ctrl.temporalClient.SignalWorkflow(c, common.CodecCleanupWorkflowID, "", "codec-workflow-reset", common.CodecCleanupResetSignal{
+	// Reset the parent TaskWorkflow first so it is listening before the child
+	// restarts. There is a theoretical race where the child could replay and
+	// signal before the parent finishes replaying into its selector loop, but
+	// in practice the parent's history is trivially short compared to the
+	// child's, making this negligible — especially since reset is a dev tool.
+	parentReset, err := ctrl.resetParentTaskWorkflow(c.Request.Context(), workspaceId, flowId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to reset parent task workflow: " + err.Error()})
+		return
+	}
+
+	// Signal codec cleanup to prevent deletion of keys needed by the new run.
+	err = ctrl.temporalClient.SignalWorkflow(c, common.CodecCleanupWorkflowID, "", "codec-workflow-reset", common.CodecCleanupResetSignal{
 		WorkflowID: flowId,
 	})
 	if err != nil {
+		parentReset.rollback(c.Request.Context(), ctrl)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to signal codec cleanup workflow: " + err.Error()})
 		return
 	}
@@ -996,11 +1007,154 @@ func (ctrl *Controller) ResetFlowHandler(c *gin.Context) {
 		},
 	})
 	if err != nil {
+		parentReset.rollback(c.Request.Context(), ctrl)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"runId": resp.RunId})
+}
+
+// parentResetResult holds state needed to roll back a parent TaskWorkflow reset
+// if the subsequent child flow reset fails.
+type parentResetResult struct {
+	taskWfId       string
+	prevFlowStatus string
+	prevTaskStatus domain.TaskStatus
+	prevAgentType  domain.AgentType
+	flow           domain.Flow
+	taskId         string
+	workspaceId    string
+	didReset       bool
+}
+
+func (r *parentResetResult) rollback(ctx context.Context, ctrl *Controller) {
+	if !r.didReset {
+		return
+	}
+	// Terminate the reset parent workflow so it doesn't sit waiting
+	err := ctrl.temporalClient.TerminateWorkflow(ctx, r.taskWfId, "", "rolling back parent reset after child reset failure")
+	if err != nil {
+		log.Error().Err(err).Str("taskWfId", r.taskWfId).Msg("Failed to terminate reset task workflow during rollback")
+	}
+	// Restore flow and task status
+	r.flow.Status = r.prevFlowStatus
+	_ = ctrl.service.PersistFlow(ctx, r.flow)
+
+	task, err := ctrl.service.GetTask(ctx, r.workspaceId, r.taskId)
+	if err == nil {
+		task.Status = r.prevTaskStatus
+		task.AgentType = r.prevAgentType
+		task.Updated = time.Now()
+		_ = ctrl.service.PersistTask(ctx, task)
+	}
+}
+
+// resetParentTaskWorkflow resets the parent TaskWorkflow when a child flow is
+// reset, so the parent can resume listening for signals from the new run.
+// Returns a rollback handle that can undo the reset if the child reset fails.
+func (ctrl *Controller) resetParentTaskWorkflow(ctx context.Context, workspaceId, flowId string) (*parentResetResult, error) {
+	result := &parentResetResult{workspaceId: workspaceId}
+
+	flow, err := ctrl.service.GetFlow(ctx, workspaceId, flowId)
+	if err != nil {
+		return result, nil
+	}
+	if flow.ParentId == "" {
+		return result, nil
+	}
+	result.flow = flow
+	result.taskId = flow.ParentId
+	result.prevFlowStatus = flow.Status
+
+	taskWfId := dev.TaskWorkflowId(flow.ParentId)
+	result.taskWfId = taskWfId
+
+	desc, err := ctrl.temporalClient.DescribeWorkflowExecution(ctx, taskWfId, "")
+	if err != nil {
+		log.Warn().Err(err).Str("taskWfId", taskWfId).Msg("Could not describe task workflow for reset")
+		return result, nil
+	}
+	if desc.WorkflowExecutionInfo.Status == enums.WORKFLOW_EXECUTION_STATUS_RUNNING {
+		return result, nil
+	}
+
+	iter := ctrl.temporalClient.GetWorkflowHistory(ctx, taskWfId, "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
+	resetEventId, err := findTaskWorkflowResetEventId(iter)
+	if err != nil {
+		return result, fmt.Errorf("could not find reset event ID for task workflow %s: %w", taskWfId, err)
+	}
+
+	_ = ctrl.temporalClient.SignalWorkflow(ctx, common.CodecCleanupWorkflowID, "", "codec-workflow-reset", common.CodecCleanupResetSignal{
+		WorkflowID: taskWfId,
+	})
+
+	_, err = ctrl.temporalClient.ResetWorkflowExecution(ctx, &workflowservice.ResetWorkflowExecutionRequest{
+		Namespace:                 ctrl.temporalNamespace,
+		WorkflowExecution:         &commonpb.WorkflowExecution{WorkflowId: taskWfId},
+		WorkflowTaskFinishEventId: resetEventId,
+		RequestId:                 ksuid.New().String(),
+		ResetReapplyExcludeTypes: []enums.ResetReapplyExcludeType{
+			enums.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL,
+			enums.RESET_REAPPLY_EXCLUDE_TYPE_UPDATE,
+		},
+	})
+	if err != nil {
+		return result, fmt.Errorf("failed to reset task workflow %s: %w", taskWfId, err)
+	}
+	result.didReset = true
+
+	// Snapshot previous task state for rollback
+	task, err := ctrl.service.GetTask(ctx, workspaceId, flow.ParentId)
+	if err == nil {
+		result.prevTaskStatus = task.Status
+		result.prevAgentType = task.AgentType
+	}
+
+	// Update flow and task to in-progress
+	flow.Status = "in_progress"
+	_ = ctrl.service.PersistFlow(ctx, flow)
+
+	if err == nil {
+		task.Status = domain.TaskStatusInProgress
+		task.AgentType = domain.AgentTypeLLM
+		task.Updated = time.Now()
+		_ = ctrl.service.PersistTask(ctx, task)
+	}
+
+	return result, nil
+}
+
+// findTaskWorkflowResetEventId walks a TaskWorkflow's history to find the last
+// WorkflowTaskCompleted before the first signal or child workflow resolution.
+// That is the point where the workflow was waiting in its signal-handling loop.
+func findTaskWorkflowResetEventId(iter client.HistoryEventIterator) (int64, error) {
+	var lastWorkflowTaskCompleted int64
+	childStarted := false
+	for iter.HasNext() {
+		event, err := iter.Next()
+		if err != nil {
+			return 0, err
+		}
+		switch event.EventType {
+		case enums.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_STARTED:
+			childStarted = true
+		case enums.EVENT_TYPE_WORKFLOW_TASK_COMPLETED:
+			lastWorkflowTaskCompleted = event.EventId
+		case enums.EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED,
+			enums.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_COMPLETED,
+			enums.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_FAILED,
+			enums.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_CANCELED,
+			enums.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_TERMINATED:
+			if childStarted && lastWorkflowTaskCompleted > 0 {
+				return lastWorkflowTaskCompleted, nil
+			}
+		}
+	}
+	if childStarted && lastWorkflowTaskCompleted > 0 {
+		return lastWorkflowTaskCompleted, nil
+	}
+	return 0, fmt.Errorf("could not find suitable reset point in task workflow history")
 }
 
 func (ctrl *Controller) GetTasksHandler(c *gin.Context) {

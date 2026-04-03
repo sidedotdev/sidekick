@@ -2,7 +2,6 @@ package dev
 
 import (
 	"fmt"
-	"path/filepath"
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/utils"
@@ -35,11 +34,6 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 		return fmt.Errorf("failed to find workspace: %w", err)
 	}
 
-	repoDir, err := filepath.Abs(workspace.LocalRepoDir)
-	if err != nil {
-		return fmt.Errorf("failed to resolve repo dir: %w", err)
-	}
-
 	flowId := "flow_" + ksuidSideEffect(ctx)
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		WorkflowID:        flowId,
@@ -55,7 +49,7 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 		childFuture = workflow.ExecuteChildWorkflow(childCtx, BasicDevWorkflow, BasicDevWorkflowInput{
 			WorkspaceId:     input.WorkspaceId,
 			Requirements:    input.Description,
-			RepoDir:         repoDir,
+			RepoDir:         workspace.LocalRepoDir,
 			BasicDevOptions: options,
 		})
 	case "planned_dev":
@@ -64,7 +58,7 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 		childFuture = workflow.ExecuteChildWorkflow(childCtx, PlannedDevWorkflow, PlannedDevInput{
 			WorkspaceId:       input.WorkspaceId,
 			Requirements:      input.Description,
-			RepoDir:           repoDir,
+			RepoDir:           workspace.LocalRepoDir,
 			PlannedDevOptions: options,
 		})
 	}
@@ -142,8 +136,6 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 		})
 
 		selector.AddFuture(childFuture, func(f workflow.Future) {
-			// Child workflow completed without sending a workflowClosed signal.
-			// Determine status from the error.
 			var childErr error
 			childErr = f.Get(ctx, nil)
 			status := "completed"
