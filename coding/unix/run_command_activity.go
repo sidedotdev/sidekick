@@ -60,7 +60,7 @@ func RunCommandActivity(ctx context.Context, input RunCommandActivityInput) (Run
 
 	runErr := cmd.Run()
 
-	if err != nil && ctx.Err() != nil {
+	if runErr != nil && ctx.Err() != nil {
 		return RunCommandActivityOutput{
 			Stdout:     stdout.String(),
 			Stderr:     stderr.String(),

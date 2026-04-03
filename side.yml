@@ -21,7 +21,7 @@ integration_test_commands:
   - command: "SIDE_INTEGRATION_TEST=true gotestreport -test.timeout 60s ./..."
   - command: "go run ./scripts/lint_chat_history_append/"
   - command: "go run ./scripts/lint_track_callback/ ./..."
-  - command: "devpod up . && SIDE_E2E_TEST=true gotestreport -test.timeout 120s -run TestDevPodIntegration ./env/..."
+  - command: "devpod up --ide none . && SIDE_E2E_TEST=true gotestreport -test.timeout 120s -run TestDevPodIntegration ./env/..."
 
 agent_config:
   coding:
