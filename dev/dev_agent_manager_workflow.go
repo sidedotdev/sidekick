@@ -47,7 +47,8 @@ func DevAgentManagerWorkflow(ctx workflow.Context, input DevAgentManagerWorkflow
 		settable.Set(nil, err)
 	})
 
-	if v := workflow.GetVersion(ctx, "stale-worktree-cleaner", workflow.DefaultVersion, 1); v == 1 {
+	// v2: cleanup moved to standalone CleanupWorktreesWorkflow
+	if v := workflow.GetVersion(ctx, "stale-worktree-cleaner", workflow.DefaultVersion, 2); v == 1 {
 		workflow.Go(ctx, func(ctx workflow.Context) {
 			ao := workflow.ActivityOptions{
 				StartToCloseTimeout: 2 * time.Minute,

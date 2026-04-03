@@ -234,6 +234,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	}
 
 	common.StartCodecCleanupWorkflow(context.Background(), temporalClient, taskQueue)
+	dev.StartCleanupWorktreesSchedule(context.Background(), temporalClient, taskQueue)
 
 	return &Worker{
 		Worker:         w,
@@ -244,9 +245,11 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 func RegisterWorkflows(w worker.WorkflowRegistry) {
 	w.RegisterWorkflow(persisted_ai.TestOpenAiEmbedActivityWorkflow)
 	w.RegisterWorkflow(dev.DevAgentManagerWorkflow)
+	w.RegisterWorkflow(dev.TaskWorkflow)
 	w.RegisterWorkflow(dev.PlannedDevWorkflow)
 	w.RegisterWorkflow(dev.BasicDevWorkflow)
 	w.RegisterWorkflow(poll_failures.PollFailuresWorkflow)
 	w.RegisterWorkflow(srv.CascadeDeleteTaskWorkflow)
+	w.RegisterWorkflow(dev.CleanupWorktreesWorkflow)
 	w.RegisterWorkflow(common.CodecPayloadCleanupWorkflow)
 }
