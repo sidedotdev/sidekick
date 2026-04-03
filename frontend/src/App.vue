@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RouterLink, RouterView } from 'vue-router'
+import { RouterLink, RouterView, useRouter, useRoute } from 'vue-router'
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { store } from './lib/store'
 import type { Ref } from 'vue'
@@ -7,6 +7,9 @@ import type { Workspace } from './lib/models'
 import Select from 'primevue/select'
 import GearIcon from './components/icons/GearIcon.vue'
 import { fuzzyWordPrefixRank } from './lib/fuzzyMatch'
+
+const router = useRouter()
+const route = useRoute()
 
 // look up if system is dark mode
 const isDarkMode = ref(window.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -93,11 +96,16 @@ const handleHide = () => {
   filterText.value = ''
 }
 
+const kanbanAndSettingsRoutes = new Set(['kanban', 'workspace'])
+
 const selectedWorkspace = () => {
   console.log('selectedWorkspace', store.workspaceId)
   if (store.workspaceId) {
     sessionStorage.setItem('selectedWorkspaceId', store.workspaceId)
     localStorage.setItem('selectedWorkspaceId', store.workspaceId)
+  }
+  if (!kanbanAndSettingsRoutes.has(route.name as string)) {
+    router.push({ name: 'kanban' })
   }
 }
 

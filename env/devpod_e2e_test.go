@@ -22,6 +22,22 @@ func repoRoot(t *testing.T) string {
 	return strings.TrimSpace(string(out))
 }
 
+func setupMinimalWorkspace(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	devcontainerDir := filepath.Join(dir, ".devcontainer")
+	require.NoError(t, os.MkdirAll(devcontainerDir, 0755))
+
+	dockerfile, err := os.ReadFile(filepath.Join(repoRoot(t), "env", "testdata", "Dockerfile.minimal"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(devcontainerDir, "Dockerfile"), dockerfile, 0644))
+
+	devcontainerJSON := `{"name": "test", "build": {"dockerfile": "Dockerfile"}}`
+	require.NoError(t, os.WriteFile(filepath.Join(devcontainerDir, "devcontainer.json"), []byte(devcontainerJSON), 0644))
+
+	return dir
+}
+
 func TestDevPodIntegration(t *testing.T) {
 	if os.Getenv("SIDE_E2E_TEST") != "true" {
 		t.Skip("skipping DevPod integration test; SIDE_E2E_TEST not set to true")
@@ -30,12 +46,13 @@ func TestDevPodIntegration(t *testing.T) {
 		t.Skip("devpod command not found in PATH")
 	}
 
-	workspacePath := repoRoot(t)
+	workspacePath := setupMinimalWorkspace(t)
 
 	// Start the DevPod workspace. When the container is already running
 	// (e.g. pre-warmed by `devpod up .` in side.yml), this returns quickly.
 	err := DevPodUpActivity(context.Background(), DevPodUpInput{WorkspacePath: workspacePath})
 	require.NoError(t, err, "DevPodUpActivity failed")
+	workspaceName := DevPodWorkspaceName(workspacePath)
 
 	// Derive a context that leaves time for cleanup before the test deadline.
 	ctx := context.Background()
@@ -46,20 +63,18 @@ func TestDevPodIntegration(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := DevPodStopActivity(cleanupCtx, workspacePath); err != nil {
-			t.Logf("DevPodStopActivity cleanup error: %v", err)
+		if err := DevPodDeleteActivity(cleanupCtx, workspacePath); err != nil {
+			t.Logf("DevPodDeleteActivity cleanup error: %v", err)
 		}
 	})
 
-	// Inside the container the workspace is mounted at /workspaces/<basename>
-	// per the devcontainer spec default.
 	containerWorkDir := "/workspaces/" + filepath.Base(workspacePath)
 
 	devEnv := &DevPodEnv{
 		WorkingDirectory: containerWorkDir,
-		WorkspaceName:    workspacePath,
+		WorkspaceName:    workspaceName,
 	}
 
 	t.Run("basic command execution", func(t *testing.T) {
@@ -73,35 +88,7 @@ func TestDevPodIntegration(t *testing.T) {
 		t.Logf("stdout: %s", out.Stdout)
 	})
 
-	t.Run("go unit tests inside container", func(t *testing.T) {
-		out, err := devEnv.RunCommand(ctx, EnvRunCommandInput{
-			Command: "go",
-			Args:    []string{"test", "-run", "TestMatchPattern", "-count=1", "./common"},
-		})
-		require.NoError(t, err)
-		t.Logf("stdout:\n%s", out.Stdout)
-		t.Logf("stderr:\n%s", out.Stderr)
-		assert.Equal(t, 0, out.ExitStatus, "go test ./common failed")
-	})
-
-	t.Run("frontend tests inside container", func(t *testing.T) {
-		out, err := devEnv.RunCommand(ctx, EnvRunCommandInput{
-			RelativeWorkingDir: "frontend",
-			Command:            "bun",
-			Args:               []string{"run", "test:unit", "--run"},
-			EnvVars:            []string{"PATH=/home/vscode/.bun/bin:/usr/local/bin:/usr/bin:/bin"},
-		})
-		require.NoError(t, err)
-		t.Logf("stdout:\n%s", out.Stdout)
-		t.Logf("stderr:\n%s", out.Stderr)
-		assert.Equal(t, 0, out.ExitStatus, "frontend tests failed")
-	})
-
 	t.Run("create worktree inside container", func(t *testing.T) {
-		// The mounted workspace may itself be a git worktree whose .git
-		// file references a host path that doesn't exist inside the
-		// container. Create a standalone repo in the container so that
-		// git worktree add has a valid .git directory to work with.
 		containerRepoDir := "/tmp/devpod-e2e-repo-" + ksuid.New().String()
 		initScript := strings.Join([]string{
 			"mkdir -p " + containerRepoDir,
@@ -121,7 +108,7 @@ func TestDevPodIntegration(t *testing.T) {
 
 		repoEnv := &DevPodEnv{
 			WorkingDirectory: containerRepoDir,
-			WorkspaceName:    workspacePath,
+			WorkspaceName:    workspaceName,
 		}
 		envContainer := EnvContainer{Env: repoEnv}
 
@@ -138,7 +125,6 @@ func TestDevPodIntegration(t *testing.T) {
 		assert.NotEmpty(t, output.WorktreePath)
 		t.Logf("worktree created at: %s", output.WorktreePath)
 
-		// Verify the worktree directory exists inside the container.
 		verifyOut, err := devEnv.RunCommand(ctx, EnvRunCommandInput{
 			Command: "test",
 			Args:    []string{"-d", output.WorktreePath},

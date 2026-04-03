@@ -481,7 +481,7 @@ func TestGoogleProvider_ToolResultImageIntegration(t *testing.T) {
 			Content: []ContentBlock{
 				{
 					Type: ContentBlockTypeText,
-					Text: fmt.Sprintf("Please use the read_image tool to read the image at path 'test.png'. %s Reply with ONLY the exact text, nothing else.", VisionTestCharSetHint()),
+					Text: fmt.Sprintf("Please use the read_image tool to read the image at path 'test.png'. %s Then call respond_with_text with ONLY the exact text from the image.", VisionTestCharSetHint()),
 				},
 			},
 		},
@@ -519,12 +519,20 @@ func TestGoogleProvider_ToolResultImageIntegration(t *testing.T) {
 		},
 	}
 
+	respondTool := &common.Tool{
+		Name:        "respond_with_text",
+		Description: "Respond with the text read from the image",
+		Parameters: (&jsonschema.Reflector{DoNotReference: true}).Reflect(&struct {
+			Text string `json:"text" jsonschema:"description=The exact text read from the image"`
+		}{}),
+	}
+
 	models := []struct {
 		name  string
 		model string
 	}{
 		{"gemini-3-flash-preview", "gemini-3-flash-preview"},
-		{"gemini-3-pro-preview", "gemini-3-pro-preview"},
+		{"gemini-3.1-pro-preview", "gemini-3.1-pro-preview"},
 	}
 
 	for _, mc := range models {
@@ -540,6 +548,8 @@ func TestGoogleProvider_ToolResultImageIntegration(t *testing.T) {
 					Provider: "google",
 					Model:    mc.model,
 				},
+				Tools:      []*common.Tool{respondTool},
+				ToolChoice: common.ToolChoice{Type: common.ToolChoiceTypeTool, Name: "respond_with_text"},
 			}
 
 			request := StreamRequest{
@@ -549,15 +559,21 @@ func TestGoogleProvider_ToolResultImageIntegration(t *testing.T) {
 			}
 
 			eventChan := make(chan Event, 100)
-			var fullText strings.Builder
+			var toolArgs strings.Builder
 			var wg sync.WaitGroup
 
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				for event := range eventChan {
+					if event.Type == EventBlockStarted && event.ContentBlock != nil &&
+						event.ContentBlock.Type == ContentBlockTypeToolUse {
+						if event.ContentBlock.ToolUse != nil {
+							toolArgs.WriteString(event.ContentBlock.ToolUse.Arguments)
+						}
+					}
 					if event.Type == EventTextDelta {
-						fullText.WriteString(event.Delta)
+						toolArgs.WriteString(event.Delta)
 					}
 				}
 			}()
@@ -581,7 +597,19 @@ func TestGoogleProvider_ToolResultImageIntegration(t *testing.T) {
 			}
 
 			assert.NotNil(t, response)
-			responseText := strings.TrimSpace(fullText.String())
+
+			var responseText string
+			for _, block := range response.Output.Content {
+				if block.Type == ContentBlockTypeToolUse && block.ToolUse != nil && block.ToolUse.Name == "respond_with_text" {
+					var args struct {
+						Text string `json:"text"`
+					}
+					if err := json.Unmarshal([]byte(block.ToolUse.Arguments), &args); err == nil {
+						responseText = args.Text
+					}
+				}
+			}
+			responseText = strings.TrimSpace(responseText)
 			t.Logf("Model response: %q", responseText)
 			assert.True(t, VisionTestFuzzyMatch(expectedText, responseText),
 				"Expected model to read %q from the image, got %q", expectedText, responseText)

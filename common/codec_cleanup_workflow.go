@@ -24,6 +24,9 @@ const (
 	codecCleanupInterval         = 1 * time.Hour
 	codecOrphanScanInterval      = 7 * 24 * time.Hour
 	codecMaxHistoryBeforeRenew   = 5000
+	codecDeleteBatchSize         = 10000
+	codecDeleteBatchDelay        = 1 * time.Second
+	codecDeleteTimeout           = 1 * time.Hour
 )
 
 // PendingDeletion holds codec KV keys collected from a completed workflow,
@@ -96,13 +99,30 @@ func (a *CodecCleanupActivities) CollectCodecKeysFromHistory(ctx context.Context
 	return keys, nil
 }
 
-// DeleteCodecKeys deletes the specified codec KV keys.
+// DeleteCodecKeys deletes the specified codec KV keys in batches with rate limiting.
 func (a *CodecCleanupActivities) DeleteCodecKeys(ctx context.Context, keys []string) error {
-	values := make(map[string]interface{}, len(keys))
-	for _, key := range keys {
-		values[key] = nil
+	for i := 0; i < len(keys); i += codecDeleteBatchSize {
+		end := i + codecDeleteBatchSize
+		if end > len(keys) {
+			end = len(keys)
+		}
+		batch := keys[i:end]
+		values := make(map[string]interface{}, len(batch))
+		for _, key := range batch {
+			values[key] = nil
+		}
+		if err := a.Storage.MSet(ctx, codecWorkspaceID, values); err != nil {
+			return err
+		}
+		if end < len(keys) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(codecDeleteBatchDelay):
+			}
+		}
 	}
-	return a.Storage.MSet(ctx, codecWorkspaceID, values)
+	return nil
 }
 
 // ListAllCodecKeys returns all codec KV keys.
@@ -293,7 +313,10 @@ func CodecPayloadCleanupWorkflow(ctx workflow.Context, input CodecCleanupWorkflo
 		}
 		if len(keysToDelete) > 0 {
 			var activities *CodecCleanupActivities
-			err := workflow.ExecuteActivity(actCtx, activities.DeleteCodecKeys, keysToDelete).Get(ctx, nil)
+			deleteCtx := workflow.WithActivityOptions(actCtx, workflow.ActivityOptions{
+				StartToCloseTimeout: codecDeleteTimeout,
+			})
+			err := workflow.ExecuteActivity(deleteCtx, activities.DeleteCodecKeys, keysToDelete).Get(ctx, nil)
 			if err != nil {
 				logger.Warn("Failed to delete expired codec keys", "error", err)
 			} else {
@@ -384,7 +407,10 @@ func orphanScan(ctx workflow.Context, actCtx workflow.Context, retention time.Du
 	}
 
 	if len(orphans) > 0 {
-		err = workflow.ExecuteActivity(actCtx, activities.DeleteCodecKeys, orphans).Get(ctx, nil)
+		deleteCtx := workflow.WithActivityOptions(actCtx, workflow.ActivityOptions{
+			StartToCloseTimeout: codecDeleteTimeout,
+		})
+		err = workflow.ExecuteActivity(deleteCtx, activities.DeleteCodecKeys, orphans).Get(ctx, nil)
 		activityCount++
 		if err != nil {
 			logger.Warn("Orphan scan: failed to delete orphan keys", "error", err)
@@ -494,7 +520,7 @@ func StartCodecCleanupWorkflow(ctx context.Context, temporalClient client.Client
 	_, err := temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:                    CodecCleanupWorkflowID,
 		TaskQueue:             taskQueue,
-		WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+		WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
 	}, CodecPayloadCleanupWorkflow, CodecCleanupWorkflowInput{})
 	if err != nil {
 		log.Debug().Err(err).Msg("Codec cleanup workflow start (may already be running)")
