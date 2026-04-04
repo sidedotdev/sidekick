@@ -33,8 +33,8 @@ func setupMinimalGitRepo(t *testing.T) string {
 }
 
 func TestOpenShellIntegration(t *testing.T) {
-	if os.Getenv("SIDE_INTEGRATION_TEST") != "true" {
-		t.Skip("skipping OpenShell integration test; SIDE_INTEGRATION_TEST not set to true")
+	if os.Getenv("SIDE_E2E_TEST") != "true" {
+		t.Skip("skipping OpenShell e2e test; SIDE_E2E_TEST not set to true")
 	}
 	if _, err := exec.LookPath("openshell"); err != nil {
 		t.Skip("openshell command not found in PATH")
