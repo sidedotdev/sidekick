@@ -153,9 +153,9 @@ describe('TaskModal', () => {
     expect(wrapper.emitted('close')).toBeTruthy()
   })
 
-  it('renders segmented control for flow type and workdir', () => {
+  it('renders segmented controls for flow type, environment, and repo mode', () => {
     mountComponent()
-    expect(wrapper.findAllComponents({ name: 'SegmentedControl' })).toHaveLength(2)
+    expect(wrapper.findAllComponents({ name: 'SegmentedControl' })).toHaveLength(3)
   })
 
   it('submits form with correct API call for create', async () => {
@@ -471,7 +471,7 @@ describe('TaskModal localStorage behavior', () => {
       const textarea = wrapper.find('textarea')
       await textarea.setValue('Task with branch')
 
-      ;(wrapper.vm as any).envType = 'local_git_worktree'
+      ;(wrapper.vm as any).repoMode = 'worktree'
       ;(wrapper.vm as any).selectedBranch = 'feature-2'
       await wrapper.vm.$nextTick()
 
@@ -480,6 +480,20 @@ describe('TaskModal localStorage behavior', () => {
       await flushPromises()
 
       expect(localStorage.getItem(branchKey)).toBe('feature-2')
+    })
+
+    it('does not use localStorage repoMode when editing an existing task without repoMode', () => {
+      localStorage.setItem('lastUsedRepoMode', 'worktree')
+
+      const wrapper = mount(TaskModal, {
+        props: {
+          task: createTestTask({
+            flowOptions: { envType: 'local' }
+          })
+        }
+      })
+
+      expect((wrapper.vm as any).repoMode).toBe('in_place')
     })
 
     it('does not load branch from localStorage when editing existing task', () => {
@@ -523,6 +537,15 @@ describe('TaskModal localStorage behavior', () => {
 
       expect(localStorage.getItem(branchKey)).toBeNull()
     })
+  })
+
+  it('derives repoMode as worktree from legacy lastUsedEnvType localStorage value', () => {
+    localStorage.setItem('lastUsedEnvType', 'local_git_worktree')
+
+    const wrapper = mount(TaskModal)
+
+    expect((wrapper.vm as any).envType).toBe('local')
+    expect((wrapper.vm as any).repoMode).toBe('worktree')
   })
 
   describe('close behavior', () => {
