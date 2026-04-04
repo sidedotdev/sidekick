@@ -61,13 +61,17 @@
       </div>
 
       <div>
-        <label>Workdir</label>
+        <label>Environment</label>
         <SegmentedControl v-model="envType" :options="envTypeOptions" />
       </div>
 
       <div>
-        <!-- Branch Selection -->
-        <div v-if="envType === 'local_git_worktree'" style="display: flex;">
+        <label>Repo Mode</label>
+        <SegmentedControl v-model="repoMode" :options="repoModeOptions" />
+      </div>
+
+      <div>
+        <div v-if="repoMode === 'worktree'" style="display: flex;">
           <label for="startBranch">Start Branch</label>
           <BranchSelector
             id="startBranch"
@@ -221,7 +225,19 @@ const description = ref(initialDescriptionValue)
 const descriptionRef = ref<{ focus: () => void } | null>(null)
 const status = ref<TaskStatus>(props.task?.status || 'to_do')
 const flowType = ref(props.task?.flowType || localStorage.getItem('lastUsedFlowType') || 'basic_dev')
-const envType = ref<string>(props.task?.flowOptions?.envType || localStorage.getItem('lastUsedEnvType') || 'local')
+const resolveEnvType = (raw: string): string => raw === 'local_git_worktree' ? 'local' : raw
+const envType = ref<string>(resolveEnvType(props.task?.flowOptions?.envType || localStorage.getItem('lastUsedEnvType') || 'local'))
+const getInitialRepoMode = (): string => {
+  const taskRepoMode = props.task?.flowOptions?.repoMode
+  if (taskRepoMode) return taskRepoMode
+  if (props.task?.flowOptions?.envType === 'local_git_worktree') return 'worktree'
+  if (props.task) return 'in_place'
+  const stored = localStorage.getItem('lastUsedRepoMode')
+  if (stored) return stored
+  if (localStorage.getItem('lastUsedEnvType') === 'local_git_worktree') return 'worktree'
+  return 'in_place'
+}
+const repoMode = ref<string>(getInitialRepoMode())
 
 const getLastDetermineRequirementsKey = () => `lastDetermineRequirements_${workspaceId.value}`
 
@@ -268,6 +284,7 @@ interface FormState {
   description: string
   flowType: string
   envType: string
+  repoMode: string
   selectedBranch: string | null
   determineRequirements: boolean
   planningPrompt: string
@@ -284,6 +301,7 @@ const captureFormState = (): FormState => ({
   description: description.value,
   flowType: flowType.value,
   envType: envType.value,
+  repoMode: repoMode.value,
   selectedBranch: selectedBranch.value,
   determineRequirements: determineRequirements.value,
   planningPrompt: planningPrompt.value,
@@ -297,6 +315,7 @@ const restoreFormState = (state: FormState) => {
   description.value = state.description
   flowType.value = state.flowType
   envType.value = state.envType
+  repoMode.value = state.repoMode
   selectedBranch.value = state.selectedBranch
   determineRequirements.value = state.determineRequirements
   planningPrompt.value = state.planningPrompt
@@ -444,8 +463,13 @@ const flowTypeOptions = [
 ]
 
 const envTypeOptions = [
-  { label: 'Repo Directory', value: 'local' },
-  { label: 'Git Worktree', value: 'local_git_worktree' }
+  { label: 'Local', value: 'local' },
+  { label: 'DevPod', value: 'devpod' }
+]
+
+const repoModeOptions = [
+  { label: 'In-Place', value: 'in_place' },
+  { label: 'Worktree', value: 'worktree' }
 ]
 
 const buildFlowOptions = (): Record<string, any> => {
@@ -453,9 +477,10 @@ const buildFlowOptions = (): Record<string, any> => {
     planningPrompt: planningPrompt.value,
     determineRequirements: determineRequirements.value,
     envType: envType.value,
+    repoMode: repoMode.value,
   }
 
-  if (envType.value === 'local_git_worktree') {
+  if (repoMode.value === 'worktree') {
     flowOptions.startBranch = selectedBranch.value
   }
 
@@ -544,7 +569,7 @@ const scheduleAutoSave = () => {
 }
 
 // Watch all form fields for auto-save
-watch([description, flowType, envType, selectedBranch, determineRequirements, planningPrompt, selectedPresetValue, llmConfig, newPresetName], () => {
+watch([description, flowType, envType, repoMode, selectedBranch, determineRequirements, planningPrompt, selectedPresetValue, llmConfig, newPresetName], () => {
   if (isApplyingTaskConfig.value) return
   if (!isUndoRedo.value) {
     pushHistory()
@@ -640,6 +665,7 @@ const startTask = async () => {
 
   localStorage.setItem('lastUsedFlowType', flowType.value)
   localStorage.setItem('lastUsedEnvType', envType.value)
+  localStorage.setItem('lastUsedRepoMode', repoMode.value)
 
   if (selectedBranch.value) {
     localStorage.setItem(getLastBranchKey(), selectedBranch.value)
