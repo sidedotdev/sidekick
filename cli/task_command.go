@@ -29,8 +29,9 @@ func NewTaskCommand() *cli.Command {
 			&cli.StringSliceFlag{Name: "flow-option", Aliases: []string{"O"}, Usage: "Add flow option (key=value), can be specified multiple times"},
 			&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"n"}, Usage: "Shorthand to set determineRequirements to false in flow options"},
 			&cli.BoolFlag{Name: "worktree", Aliases: []string{"w"}, Usage: "Use a git worktree. Sets --start-branch to the current branch if not specified."},
+			&cli.StringFlag{Name: "repo-mode", Usage: "Set the repo mode (worktree, in_place)"},
 			&cli.StringFlag{Name: "start-branch", Aliases: []string{"B"}, Usage: "The worktree start branch. Implies --worktree"},
-			&cli.StringFlag{Name: "env-type", Usage: "Set the environment type (e.g., local, devpod)"},
+			&cli.StringFlag{Name: "env-type", Usage: "Set the environment type (local, devpod, openshell)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			c := client.NewClient(fmt.Sprintf("http://localhost:%d", common.GetServerPort()))
@@ -80,6 +81,11 @@ func parseFlowOptions(ctx context.Context, cmd *cli.Command, currentDir string) 
 			}
 		}
 		flowOpts[key] = valueStr
+	}
+
+	// --repo-mode flag sets repoMode explicitly
+	if repoMode := cmd.String("repo-mode"); repoMode != "" {
+		flowOpts["repoMode"] = repoMode
 	}
 
 	// --worktree flag or --start-branch flag implies worktree repo mode
