@@ -108,6 +108,7 @@ func OpenShellSyncRepoActivity(ctx context.Context, input OpenShellSyncRepoInput
 	bundlePath := filepath.Join(os.TempDir(), fmt.Sprintf("openshell-repo-%s.bundle", input.SandboxName))
 	defer os.Remove(bundlePath)
 
+	// FIXME skip creating the bundle when it's not needed (when updating)
 	bundleOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
 		WorkingDir: input.LocalRepoDir,
 		Command:    "git",
@@ -149,7 +150,7 @@ func OpenShellSyncRepoActivity(ctx context.Context, input OpenShellSyncRepoInput
 			"cd %s && git fetch %s '+refs/*:refs/*' --prune && git reset --hard HEAD; "+
 			"else "+
 			"mkdir -p %s && git clone %s %s && cd %s && "+
-			"git config user.name 'Sidekick' && git config user.email 'sidekick@localhost'; "+
+			"git config user.name 'Sidekick' && git config user.email 'sidekick@side.dev'; "+
 			"fi && rm -f %s",
 		quotedRepo,
 		quotedRepo, quotedBundle,
@@ -204,7 +205,7 @@ func CreateOpenShellWorktreeActivity(ctx context.Context, input CreateOpenShellW
 	repoName := filepath.Base(input.RepoDir)
 	branchSuffix := strings.TrimPrefix(input.BranchName, "side/")
 	dirName := repoName + "-" + branchSuffix
-	worktreePath := filepath.Join("/tmp", "sidekick-worktrees", input.WorkspaceId, dirName)
+	worktreePath := filepath.Join("/sandbox", "sidekick-worktrees", input.WorkspaceId, dirName)
 
 	mkdirOutput, err := input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
 		Command: "mkdir",
@@ -342,6 +343,7 @@ func parseSSHConfigArgs(configOutput string, sandboxName string) ([]string, erro
 		return nil, fmt.Errorf("no Host directive found in ssh-config output for sandbox %s", sandboxName)
 	}
 
+	// enable fast reuse of a master ssh connection to the sandbox
 	args := []string{
 		"-o", "ControlMaster=auto",
 		"-S", "/tmp/ssh-%r@%h:%p",
