@@ -332,6 +332,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 				}
 			}
 
+			// TODO increase timeout for sandbox creation
 			var createOutput env.OpenShellCreateOutput
 			err = workflow.ExecuteActivity(ctx, env.OpenShellCreateActivity, env.OpenShellCreateInput{
 				Name:    sandboxName,
