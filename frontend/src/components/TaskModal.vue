@@ -464,7 +464,8 @@ const flowTypeOptions = [
 
 const envTypeOptions = [
   { label: 'Local', value: 'local' },
-  { label: 'DevPod', value: 'devpod' }
+  { label: 'DevPod', value: 'devpod' },
+  { label: 'OpenShell', value: 'openshell' },
 ]
 
 const repoModeOptions = [
