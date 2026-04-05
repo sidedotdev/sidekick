@@ -47,6 +47,9 @@ command_permissions:
     - pattern: "go run ./scripts/lint_.*"
     - pattern: "playwright-cli"
 
+openshell:
+  from: "Dockerfile.openshell"
+
 dev_run:
   supervisor:
     command: "./scripts/supervisor.go --ephemeral"
