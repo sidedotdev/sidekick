@@ -303,55 +303,38 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			}}
 		}
 	case string(env.EnvTypeOpenShell):
-		var sandboxName string
-
 		tempRepoConfigForOpenShell, configErr := GetRepoConfig(tempLocalExecContext)
 		if configErr == nil {
 			configOverrides.ApplyToRepoConfig(&tempRepoConfigForOpenShell)
 		}
 		osConfig := tempRepoConfigForOpenShell.OpenShellConfig
 
-		openShellAutoNameVersion := workflow.GetVersion(ctx, "openshell-auto-sandbox-name", workflow.DefaultVersion, 1)
-		if openShellAutoNameVersion >= 1 {
-			sandboxName = env.OpenShellSandboxName(workspaceId)
+		sandboxName := env.OpenShellSandboxName(repoDir)
+		// Reuse an existing sandbox for this workspace if it is still alive.
+		var checkOutput env.OpenShellCheckSandboxOutput
+		_ = workflow.ExecuteActivity(ctx, env.OpenShellCheckSandboxActivity, env.OpenShellCheckSandboxInput{
+			SandboxName: sandboxName,
+		}).Get(ctx, &checkOutput)
 
-			// Reuse an existing sandbox for this workspace if it is still alive.
-			var checkOutput env.OpenShellCheckSandboxOutput
-			_ = workflow.ExecuteActivity(ctx, env.OpenShellCheckSandboxActivity, env.OpenShellCheckSandboxInput{
-				SandboxName: sandboxName,
-			}).Get(ctx, &checkOutput)
-
-			if !checkOutput.Alive {
-				if osConfig.PrebuildCommand != "" {
-					var prebuildOutput unix.RunCommandActivityOutput
-					err = workflow.ExecuteActivity(ctx, unix.RunCommandActivity, unix.RunCommandActivityInput{
-						WorkingDir: repoDir,
-						Command:    "/usr/bin/env",
-						Args:       []string{"sh", "-c", osConfig.PrebuildCommand},
-					}).Get(ctx, &prebuildOutput)
-					if err != nil {
-						return DevContext{}, fmt.Errorf("openshell prebuild command failed: %v", err)
-					}
-					if prebuildOutput.ExitStatus != 0 {
-						return DevContext{}, fmt.Errorf("openshell prebuild command exited with status %d: %s", prebuildOutput.ExitStatus, prebuildOutput.Stderr)
-					}
-				}
-
-				var createOutput env.OpenShellCreateOutput
-				err = workflow.ExecuteActivity(ctx, env.OpenShellCreateActivity, env.OpenShellCreateInput{
-					Name:    sandboxName,
-					Source:  osConfig.From,
-					RepoDir: repoDir,
-				}).Get(ctx, &createOutput)
+		if !checkOutput.Alive {
+			if osConfig.PrebuildCommand != "" {
+				var prebuildOutput unix.RunCommandActivityOutput
+				err = workflow.ExecuteActivity(ctx, unix.RunCommandActivity, unix.RunCommandActivityInput{
+					WorkingDir: repoDir,
+					Command:    "/usr/bin/env",
+					Args:       []string{"sh", "-c", osConfig.PrebuildCommand},
+				}).Get(ctx, &prebuildOutput)
 				if err != nil {
-					return DevContext{}, fmt.Errorf("failed to create OpenShell sandbox: %v", err)
+					return DevContext{}, fmt.Errorf("openshell prebuild command failed: %v", err)
 				}
-				sandboxName = createOutput.SandboxName
+				if prebuildOutput.ExitStatus != 0 {
+					return DevContext{}, fmt.Errorf("openshell prebuild command exited with status %d: %s", prebuildOutput.ExitStatus, prebuildOutput.Stderr)
+				}
 			}
-		} else {
-			// Legacy path: no auto sandbox name
+
 			var createOutput env.OpenShellCreateOutput
 			err = workflow.ExecuteActivity(ctx, env.OpenShellCreateActivity, env.OpenShellCreateInput{
+				Name:    sandboxName,
 				Source:  osConfig.From,
 				RepoDir: repoDir,
 			}).Get(ctx, &createOutput)

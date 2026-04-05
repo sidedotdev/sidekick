@@ -29,10 +29,9 @@ type OpenShellCreateOutput struct {
 	SandboxName string `json:"sandboxName"`
 }
 
-// OpenShellSandboxName returns a deterministic sandbox name for a given
-// workspace ID, allowing sandbox reuse across runs.
-func OpenShellSandboxName(workspaceId string) string {
-	return "sk-" + workspaceId
+// OpenShellSandboxName returns a sandbox name for a given repo
+func OpenShellSandboxName(repoDir string) string {
+	return "side/" + DevPodWorkspaceName(repoDir)
 }
 
 // OpenShellCreateActivity creates an OpenShell sandbox.

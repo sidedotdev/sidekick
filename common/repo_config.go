@@ -67,14 +67,14 @@ type RepoConfig struct {
 	// for pre-approval manual QA in the worktree environment.
 	DevRun DevRunConfig `toml:"dev_run,omitempty"`
 
-	// EnvType specifies the default environment type for this repo (e.g., "local", "devpod").
+	// EnvType specifies the default environment type for this repo (e.g., "local", "devpod", "openshell").
 	EnvType string `toml:"env_type,omitempty"`
 
 	// RepoMode specifies the default repo mode for this repo (e.g., "worktree", "in_place").
 	RepoMode string `toml:"repo_mode,omitempty"`
 
-	DevPodConfig    DevPodEnvConfig    `toml:"dev_pod_config,omitempty"`
-	OpenShellConfig OpenShellEnvConfig `toml:"openshell_config,omitempty"`
+	DevPodConfig    DevPodEnvConfig    `toml:"devpod,omitempty"`
+	OpenShellConfig OpenShellEnvConfig `toml:"openshell,omitempty"`
 }
 
 // DevPodEnvConfig holds configuration specific to the DevPod environment type.
