@@ -31,7 +31,11 @@ type OpenShellCreateOutput struct {
 
 // OpenShellSandboxName returns a sandbox name for a given repo
 func OpenShellSandboxName(repoDir string) string {
-	return "side/" + DevPodWorkspaceName(repoDir)
+	// FIXME ensure sandbox name is valid by replacing invalid characters
+	// (anything other than -, a-z, A-Z, 0-9). replace spaces with - and remove
+	// all other characters. if empty or only dashes, use a hex hash of the repo
+	// basename. also ensure no starting/ending dash. and don't allow "." at all.
+	return "side--" + DevPodWorkspaceName(repoDir)
 }
 
 // OpenShellCreateActivity creates an OpenShell sandbox.
