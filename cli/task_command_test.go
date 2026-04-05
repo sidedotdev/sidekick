@@ -74,6 +74,36 @@ func TestParseFlowOptions(t *testing.T) {
 			},
 		},
 		{
+			name: "repo-mode flag sets repoMode",
+			args: []string{"--repo-mode", "in_place"},
+			expectedOpts: map[string]interface{}{
+				"determineRequirements": true,
+				"repoMode":              "in_place",
+			},
+		},
+		{
+			name:         "repo-mode worktree detects branch",
+			args:         []string{"--repo-mode", "worktree"},
+			needsGitRepo: true,
+			gitBranch:    "main",
+			expectedOpts: map[string]interface{}{
+				"determineRequirements": true,
+				"repoMode":              "worktree",
+				"startBranch":           "main",
+			},
+		},
+		{
+			name:         "worktree flag overrides repo-mode in_place",
+			args:         []string{"--repo-mode", "in_place", "--worktree"},
+			needsGitRepo: true,
+			gitBranch:    "main",
+			expectedOpts: map[string]interface{}{
+				"determineRequirements": true,
+				"repoMode":              "worktree",
+				"startBranch":           "main",
+			},
+		},
+		{
 			name:         "env-type and worktree together",
 			args:         []string{"--env-type", "devpod", "--worktree"},
 			needsGitRepo: true,
@@ -152,6 +182,7 @@ func TestParseFlowOptions(t *testing.T) {
 							&cli.StringSliceFlag{Name: "flow-option", Aliases: []string{"O"}},
 							&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"n"}},
 							&cli.BoolFlag{Name: "worktree", Aliases: []string{"w"}},
+							&cli.StringFlag{Name: "repo-mode"},
 							&cli.StringFlag{Name: "start-branch", Aliases: []string{"B"}},
 							&cli.StringFlag{Name: "env-type"},
 						},
@@ -205,6 +236,7 @@ func TestParseFlowOptions_WorktreeDetachedHead(t *testing.T) {
 					&cli.StringSliceFlag{Name: "flow-option", Aliases: []string{"O"}},
 					&cli.BoolFlag{Name: "no-requirements", Aliases: []string{"n"}},
 					&cli.BoolFlag{Name: "worktree", Aliases: []string{"w"}},
+					&cli.StringFlag{Name: "repo-mode"},
 					&cli.StringFlag{Name: "start-branch", Aliases: []string{"B"}},
 					&cli.StringFlag{Name: "env-type"},
 				},
