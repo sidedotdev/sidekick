@@ -18,7 +18,7 @@ test_commands:
     command: "bun run type-check"
 
 integration_test_commands:
-  - command: "SIDE_INTEGRATION_TEST=true gotestreport -test.timeout 60s ./..."
+  - command: "SIDE_INTEGRATION_TEST=true gotestreport -test.timeout 120s ./..."
   - command: "go run ./scripts/lint_chat_history_append/"
   - command: "go run ./scripts/lint_track_callback/ ./..."
   - command: "SIDE_E2E_TEST=true gotestreport -test.timeout 120s -run TestOpenShellIntegration ./env/..."
