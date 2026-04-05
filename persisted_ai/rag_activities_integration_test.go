@@ -107,7 +107,7 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 				Provider: "openai",
 			},
 		},
-		CharLimit: 16000,
+		CharLimit: 20000,
 	}
 
 	// Execute the function under test
