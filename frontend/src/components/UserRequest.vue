@@ -188,7 +188,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import type { FlowAction } from '../lib/models';
 import AutogrowTextarea from './AutogrowTextarea.vue';
 import BranchSelector from './BranchSelector.vue'
@@ -198,6 +198,7 @@ import CopyIcon from './icons/CopyIcon.vue';
 import DiffViewOptions from './DiffViewOptions.vue';
 import Select from 'primevue/select';
 import DevRunControls from './DevRunControls.vue';
+import { registerGlobalShortcut, unregisterGlobalShortcut } from '../lib/globalShortcutRegistry';
 
 interface UserResponse {
   content?: string;
@@ -333,12 +334,27 @@ onMounted(() => {
   }
 
   if (isPending.value) {
+    registerGlobalShortcut(props.flowAction.id, props.flowAction.created, () => {
+      const requestKind = props.flowAction.actionParams.requestKind
+      if (requestKind === 'free_form' && responseContent.value.length > 0) {
+        submitUserResponse(true)
+      } else if (requestKind === 'approval' || requestKind === 'merge_approval') {
+        submitUserResponse(!hasResponseText.value)
+      } else if (requestKind === 'continue') {
+        submitUserResponse(true)
+      }
+    })
+
     setTimeout(() => {
       if (isPending.value) {
         textareaRef.value?.focus();
       }
     }, 200);
   }
+});
+
+onUnmounted(() => {
+  unregisterGlobalShortcut(props.flowAction.id)
 });
 
 interface keyable {
@@ -366,12 +382,15 @@ const handleKeyDown = (event: KeyboardEvent) => {
     const requestKind = props.flowAction.actionParams.requestKind
     if (requestKind === 'free_form' && responseContent.value.length > 0) {
       event.preventDefault()
+      event.stopPropagation()
       submitUserResponse(true)
     } else if (requestKind === 'approval' || requestKind === 'merge_approval') {
       event.preventDefault()
+      event.stopPropagation()
       submitUserResponse(!hasResponseText.value)
     } else if (requestKind === 'continue') {
       event.preventDefault()
+      event.stopPropagation()
       submitUserResponse(true)
     }
   }
