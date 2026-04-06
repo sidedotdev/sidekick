@@ -288,6 +288,106 @@ func (s *TaskWorkflowTestSuite) TestChildFailureWithoutSignal() {
 	s.NoError(s.env.GetWorkflowError())
 }
 
+func (s *TaskWorkflowTestSuite) TestMonitorMode_WorkflowClosedSignal() {
+	s.setupPutWorkflow()
+
+	existingFlow := domain.Flow{
+		WorkspaceId: "ws_123",
+		Id:          "flow_existing",
+		Type:        "basic_dev",
+		Status:      "in_progress",
+		ParentId:    "task_456",
+	}
+
+	s.env.OnActivity(
+		s.ima.GetWorkflow,
+		mock.Anything, "ws_123", "flow_existing",
+	).Return(existingFlow, nil)
+
+	s.env.OnActivity(
+		s.ima.CompleteFlowParentTask,
+		mock.Anything, "ws_123", "task_456", "completed",
+	).Return(nil)
+
+	s.env.RegisterDelayedCallback(func() {
+		s.env.SignalWorkflow(SignalNameWorkflowClosed, WorkflowClosure{
+			FlowId: "flow_existing",
+			Reason: "completed",
+		})
+	}, 0)
+
+	s.env.RegisterWorkflow(TaskWorkflow)
+	s.env.ExecuteWorkflow(TaskWorkflow, TaskWorkflowInput{
+		WorkspaceId:    "ws_123",
+		TaskId:         "task_456",
+		ExistingFlowId: "flow_existing",
+	})
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+}
+
+func (s *TaskWorkflowTestSuite) TestMonitorMode_RequestForUserSignal() {
+	s.setupPutWorkflow()
+
+	existingFlow := domain.Flow{
+		WorkspaceId: "ws_123",
+		Id:          "flow_existing",
+		Type:        "basic_dev",
+		Status:      "in_progress",
+		ParentId:    "task_456",
+	}
+
+	s.env.OnActivity(
+		s.ima.GetWorkflow,
+		mock.Anything, "ws_123", "flow_existing",
+	).Return(existingFlow, nil)
+
+	s.env.OnActivity(
+		s.ima.CreatePendingUserRequest,
+		mock.Anything, "ws_123", mock.AnythingOfType("flow_action.RequestForUser"),
+	).Return(nil)
+
+	s.env.OnActivity(
+		s.ima.UpdateTaskByTaskId,
+		mock.Anything, "ws_123", "task_456", TaskUpdate{
+			Status:    domain.TaskStatusBlocked,
+			AgentType: domain.AgentTypeHuman,
+		},
+	).Return(nil)
+
+	s.env.OnActivity(
+		s.ima.CompleteFlowParentTask,
+		mock.Anything, "ws_123", "task_456", "completed",
+	).Return(nil)
+
+	s.env.RegisterDelayedCallback(func() {
+		s.env.SignalWorkflow(flow_action.SignalNameRequestForUser, flow_action.RequestForUser{
+			OriginWorkflowId: "flow_existing",
+			FlowActionId:     "action_1",
+			Content:          "need help",
+			RequestKind:      flow_action.RequestKindFreeForm,
+		})
+	}, 0)
+
+	s.env.RegisterDelayedCallback(func() {
+		s.env.SignalWorkflow(SignalNameWorkflowClosed, WorkflowClosure{
+			FlowId: "flow_existing",
+			Reason: "completed",
+		})
+	}, time.Millisecond)
+
+	s.env.RegisterWorkflow(TaskWorkflow)
+	s.env.ExecuteWorkflow(TaskWorkflow, TaskWorkflowInput{
+		WorkspaceId:    "ws_123",
+		TaskId:         "task_456",
+		ExistingFlowId: "flow_existing",
+	})
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+}
+
 func TestTaskWorkflowTestSuite(t *testing.T) {
 	suite.Run(t, new(TaskWorkflowTestSuite))
 }
