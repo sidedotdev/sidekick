@@ -387,6 +387,9 @@ func putFlowAction(eCtx ExecContext, flowAction domain.FlowAction) (domain.FlowA
 	//utils.PrettyPrint(flowAction)
 	err := workflow.ExecuteActivity(eCtx, fa.PersistFlowAction, flowAction).Get(eCtx, nil)
 	if err != nil {
+		if eCtx.GlobalState != nil && (eCtx.GlobalState.Paused || eCtx.GlobalState.GetPendingUserAction() != nil) {
+			return domain.FlowAction{}, PendingActionError
+		}
 		return domain.FlowAction{}, err
 	}
 
@@ -422,6 +425,9 @@ func putSubflow(eCtx ExecContext, subflow domain.Subflow) (domain.Subflow, error
 	var fa *FlowActivities // nil struct pointer for struct-based activities
 	err := workflow.ExecuteActivity(eCtx, fa.PersistSubflow, subflow).Get(eCtx, nil)
 	if err != nil {
+		if eCtx.GlobalState != nil && (eCtx.GlobalState.Paused || eCtx.GlobalState.GetPendingUserAction() != nil) {
+			return domain.Subflow{}, PendingActionError
+		}
 		return domain.Subflow{}, err
 	}
 	return subflow, nil
