@@ -161,7 +161,7 @@ func (m *mockNonSSHEnv) Walk(ctx context.Context, ignoreFileNames []string, hand
 	return fmt.Errorf("walk not supported on mock env")
 }
 
-// Verify that WalkCodeDirectoryViaEnv with LocalEnv matches common.WalkDirectory
+// Verify that LocalEnv.Walk and WalkCodeDirectoryViaEnv produce the same results
 func TestWalkerProtocolConsistency(t *testing.T) {
 	t.Parallel()
 
@@ -171,18 +171,21 @@ func TestWalkerProtocolConsistency(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "sub"), 0755)
 	writeTestFile(t, filepath.Join(dir, "sub", "b.go"), "package sub")
 
+	ctx := context.Background()
+	localEnv := &LocalEnv{WorkingDirectory: dir}
+
 	var directEntries []WalkEntry
-	err := common.WalkDirectory(dir, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
+	err := localEnv.Walk(ctx, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
 		directEntries = append(directEntries, WalkEntry{Path: path, IsDir: isDir})
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("WalkDirectory() error: %v", err)
+		t.Fatalf("LocalEnv.Walk() error: %v", err)
 	}
 
 	var viaEnvEntries []WalkEntry
 	ec := EnvContainer{Env: &LocalEnv{WorkingDirectory: dir}}
-	err = WalkCodeDirectoryViaEnv(context.Background(), ec, func(path string, isDir bool) error {
+	err = WalkCodeDirectoryViaEnv(ctx, ec, func(path string, isDir bool) error {
 		viaEnvEntries = append(viaEnvEntries, WalkEntry{Path: path, IsDir: isDir})
 		return nil
 	})

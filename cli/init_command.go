@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"sidekick/common"
 	"sidekick/domain"
+	"sidekick/env"
 	"sidekick/llm"
 	"sidekick/srv"
 	"strings"
@@ -60,7 +61,8 @@ func (h *InitCommandHandler) handleInitCommand() error {
 		return fmt.Errorf("side init must be run within a git repository")
 	}
 
-	err = checkLanguageSpecificTools(baseDir)
+	ec := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: baseDir}}
+	err = checkLanguageSpecificTools(ec)
 	if err != nil {
 		return err
 	}
@@ -822,10 +824,10 @@ func checkServerStatus() bool {
 	return strings.Contains(strings.ToLower(string(body)), "sidekick")
 }
 
-func checkLanguageSpecificTools(baseDirectory string) error {
+func checkLanguageSpecificTools(ec env.EnvContainer) error {
 	extensionCounts := make(map[string]int)
 
-	err := common.WalkDirectory(baseDirectory, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
+	err := ec.Env.Walk(context.Background(), common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
 		if !isDir {
 			ext := strings.ToLower(filepath.Ext(path))
 			extensionCounts[ext]++
