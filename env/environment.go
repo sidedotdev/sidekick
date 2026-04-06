@@ -61,6 +61,19 @@ type Env interface {
 	GetType() EnvType
 	GetWorkingDirectory() string
 	RunCommand(ctx context.Context, input EnvRunCommandInput) (EnvRunCommandOutput, error)
+	// Walk traverses the working directory tree, respecting ignore files
+	// whose names are given in ignoreFileNames (ordered by precedence,
+	// last = highest). The callback receives absolute paths.
+	Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error
+}
+
+// SSHCapableEnv is implemented by environments that support direct SSH access.
+type SSHCapableEnv interface {
+	Env
+	// SSHArgs returns SSH CLI arguments for connecting to this environment.
+	// The returned args end with the destination; a remote command string
+	// can be appended directly.
+	SSHArgs(ctx context.Context) ([]string, error)
 }
 
 type EnvRunCommandInput struct {
@@ -172,6 +185,10 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 	return &LocalGitWorktreeEnv{WorkingDirectory: workingDir}, nil
 }
 
+func (e *LocalEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
+	return common.WalkDirectory(e.WorkingDirectory, ignoreFileNames, handleEntry)
+}
+
 func (e *LocalEnv) GetType() EnvType {
 	return EnvTypeLocal
 }
@@ -190,6 +207,10 @@ func (e *LocalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 	return unix.RunCommandActivity(ctx, runCommandInput)
 }
 
+func (e *LocalGitWorktreeEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
+	return common.WalkDirectory(e.WorkingDirectory, ignoreFileNames, handleEntry)
+}
+
 func (e *LocalGitWorktreeEnv) GetType() EnvType {
 	return EnvTypeLocalGitWorktree
 }
@@ -206,6 +227,10 @@ func (e *LocalGitWorktreeEnv) RunCommand(ctx context.Context, input EnvRunComman
 		EnvVars:    append(input.EnvVars, envVarsToInject...),
 	}
 	return unix.RunCommandActivity(ctx, runCommandInput)
+}
+
+func (e *DevPodEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
+	return walkCodeDirectorySSH(ctx, e, e.WorkingDirectory, ignoreFileNames, handleEntry)
 }
 
 func (e *DevPodEnv) GetType() EnvType {
@@ -263,6 +288,26 @@ func (e *DevPodEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (E
 	return output, nil
 }
 
+func (e *DevPodEnv) SSHArgs(ctx context.Context) ([]string, error) {
+	controlPath := devpodSSHControlPath(e.WorkspaceName)
+	sshHost := e.WorkspaceName + ".devpod"
+	return []string{
+		"-o", "ControlMaster=auto",
+		"-S", controlPath,
+		"-o", "ControlPersist=3600",
+		"-o", "BatchMode=yes",
+		"-o", "ServerAliveInterval=10",
+		"-o", "ServerAliveCountMax=3",
+		"-o", "LogLevel=ERROR",
+		sshHost,
+		"--",
+	}, nil
+}
+
+func (e *OpenShellEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
+	return walkCodeDirectorySSH(ctx, e, e.WorkingDirectory, ignoreFileNames, handleEntry)
+}
+
 func (e *OpenShellEnv) GetType() EnvType {
 	return EnvTypeOpenShell
 }
@@ -301,6 +346,10 @@ func (e *OpenShellEnv) RunCommand(ctx context.Context, input EnvRunCommandInput)
 		Args:       sshArgs,
 	}
 	return unix.RunCommandActivity(ctx, runCommandInput)
+}
+
+func (e *OpenShellEnv) SSHArgs(ctx context.Context) ([]string, error) {
+	return openShellSSHArgs(ctx, e.SandboxName)
 }
 
 // shellQuote wraps a string in single quotes, escaping any embedded single quotes.

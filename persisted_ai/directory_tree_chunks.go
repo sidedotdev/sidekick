@@ -1,7 +1,6 @@
 package persisted_ai
 
 import (
-	"io/fs"
 	"path/filepath"
 	"sidekick/common"
 	"sidekick/utils"
@@ -15,8 +14,9 @@ type DirChunk struct {
 }
 
 type PathInfo struct {
-	Path     string
-	DirEntry fs.DirEntry
+	Path    string
+	IsDir   bool
+	present bool
 }
 
 type PathNode struct {
@@ -33,9 +33,9 @@ const (
 func GetDirectoryChunks(basePath string) []DirChunk {
 	allPaths := []PathInfo{}
 
-	common.WalkCodeDirectory(basePath, func(path string, entry fs.DirEntry) error {
+	common.WalkDirectory(basePath, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
 		relativePath := strings.Replace(path, basePath, "", 1)
-		allPaths = append(allPaths, PathInfo{Path: relativePath, DirEntry: entry})
+		allPaths = append(allPaths, PathInfo{Path: relativePath, IsDir: isDir, present: true})
 		return nil
 	})
 
@@ -58,7 +58,7 @@ func GetDirectoryChunks(basePath string) []DirChunk {
 		//fmt.Println("Chunk:", chunk.Name)
 		for _, path := range chunk.Paths {
 			pathStr := path.Path
-			if path.DirEntry.IsDir() {
+			if path.IsDir {
 				pathStr += string(filepath.Separator)
 			}
 			//fmt.Println(pathStr)
@@ -71,7 +71,7 @@ func GetDirectoryChunks(basePath string) []DirChunk {
 }
 
 func breadthFirstOrder(pathInfos []PathInfo) []PathInfo {
-	root := &PathNode{pathInfo: PathInfo{Path: "", DirEntry: nil}, depth: -1}
+	root := &PathNode{pathInfo: PathInfo{Path: ""}, depth: -1}
 
 	// Build tree structure
 	for _, pi := range pathInfos {
@@ -88,7 +88,7 @@ func breadthFirstOrder(pathInfos []PathInfo) []PathInfo {
 			}
 			if !found {
 				newNode := &PathNode{
-					pathInfo: PathInfo{Path: component, DirEntry: nil},
+					pathInfo: PathInfo{Path: component},
 					depth:    i,
 				}
 				if i == len(components)-1 {
@@ -117,7 +117,7 @@ func breadthFirstOrder(pathInfos []PathInfo) []PathInfo {
 	var traverse func(*PathNode, string)
 	traverse = func(node *PathNode, currentPath string) {
 		if node.depth >= 0 {
-			if node.pathInfo.DirEntry != nil {
+			if node.pathInfo.present {
 				result = append(result, node.pathInfo)
 			}
 		}

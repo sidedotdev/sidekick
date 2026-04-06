@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sidekick/common"
 	"sidekick/env"
 	"testing"
 
@@ -31,6 +32,10 @@ func (m *mockEnv) GetWorkingDirectory() string {
 // RunCommand is not needed for GetRepoConfigActivity tests.
 func (m *mockEnv) RunCommand(ctx context.Context, input env.EnvRunCommandInput) (env.EnvRunCommandOutput, error) {
 	panic("RunCommand should not be called in this test")
+}
+
+func (m *mockEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
+	return common.WalkDirectory(m.workingDir, ignoreFileNames, handleEntry)
 }
 
 // setupTestEnv creates a test environment with a repo config file and optional hints file.

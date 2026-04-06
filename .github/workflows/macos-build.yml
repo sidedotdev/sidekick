@@ -84,11 +84,24 @@ jobs:
 
           SIDE="side_macos_arm64_$VERSION"
 
-          go build -ldflags="-X main.version=${VERSION#v}" -o $SIDE sidekick/cli
+          go build -ldflags="-X main.version=${VERSION#v} -X sidekick/common.walkerVersion=${VERSION#v}" -o $SIDE sidekick/cli
           echo "SIDE=$SIDE" >> $GITHUB_OUTPUT
+
+      - name: Build side-walker binaries
+        run: |
+          for pair in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+            GOOS="${pair%%-*}"
+            GOARCH="${pair##*-}"
+            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="-s -w" -o "side-walker-${GOOS}-${GOARCH}" ./cmd/side-walker
+          done
 
       - name: Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: ${{ steps.build-cli.outputs.SIDE }}
+          files: |
+            ${{ steps.build-cli.outputs.SIDE }}
+            side-walker-linux-amd64
+            side-walker-linux-arm64
+            side-walker-darwin-amd64
+            side-walker-darwin-arm64

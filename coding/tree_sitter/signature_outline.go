@@ -6,7 +6,6 @@ import (
 	"embed"
 	"encoding/hex"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -149,10 +148,10 @@ func GetDirectorySignatureOutlines(baseDirectory string, showPaths *map[string]b
 		baseDirectory = baseDirectory + string(os.PathSeparator)
 	}
 
-	err = common.WalkCodeDirectory(baseDirectory, func(path string, entry fs.DirEntry) error {
+	err = common.WalkDirectory(baseDirectory, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
 		relativePath := strings.Replace(path, baseDirectory, "", 1)
 
-		if entry.IsDir() {
+		if isDir {
 			if showPaths == nil || (*showPaths)[relativePath] {
 				outlines = append(outlines, FileOutline{
 					Path:        relativePath,
