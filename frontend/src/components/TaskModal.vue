@@ -231,11 +231,11 @@ const getInitialRepoMode = (): string => {
   const taskRepoMode = props.task?.flowOptions?.repoMode
   if (taskRepoMode) return taskRepoMode
   if (props.task?.flowOptions?.envType === 'local_git_worktree') return 'worktree'
-  if (props.task) return 'in_place'
+  if (props.task?.id && props.task?.flowOptions?.envType === 'local') return 'in_place' // handles legacy persisted tasks without repoMode
+
   const stored = localStorage.getItem('lastUsedRepoMode')
   if (stored) return stored
-  if (localStorage.getItem('lastUsedEnvType') === 'local_git_worktree') return 'worktree'
-  return 'in_place'
+  return 'worktree' // default for new tasks: we're async-first and parallel-by-default
 }
 const repoMode = ref<string>(getInitialRepoMode())
 
