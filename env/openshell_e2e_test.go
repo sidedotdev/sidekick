@@ -81,18 +81,16 @@ func TestOpenShellIntegration(t *testing.T) {
 
 	t.Run("sync and verify repo", func(t *testing.T) {
 		localRepo := setupMinimalGitRepo(t)
-		containerRepoDir := "/sandbox/synced-repo"
 
 		syncOutput, err := OpenShellSyncRepoActivity(ctx, OpenShellSyncRepoInput{
-			SandboxName:      createOutput.SandboxName,
-			LocalRepoDir:     localRepo,
-			ContainerRepoDir: containerRepoDir,
+			SandboxName:  createOutput.SandboxName,
+			LocalRepoDir: localRepo,
 		})
 		require.NoError(t, err, "OpenShellSyncRepoActivity failed")
-		assert.Equal(t, containerRepoDir, syncOutput.ContainerRepoDir)
+		assert.NotEmpty(t, syncOutput.ContainerRepoDir)
 
 		repoEnv := &OpenShellEnv{
-			WorkingDirectory: containerRepoDir,
+			WorkingDirectory: syncOutput.ContainerRepoDir,
 			SandboxName:      createOutput.SandboxName,
 		}
 		out, err := repoEnv.RunCommand(ctx, EnvRunCommandInput{

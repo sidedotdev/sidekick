@@ -104,6 +104,26 @@ func OpenShellSyncRepoActivity(ctx context.Context, input OpenShellSyncRepoInput
 		return OpenShellSyncRepoOutput{}, fmt.Errorf("failed to get SSH args: %w", err)
 	}
 
+	containerRepoDir := input.ContainerRepoDir
+	if containerRepoDir == "" {
+		homeArgs := make([]string, len(sshArgs))
+		copy(homeArgs, sshArgs)
+		homeArgs = append(homeArgs, "echo $HOME")
+		homeOutput, err := unix.RunCommandActivity(ctx, unix.RunCommandActivityInput{
+			WorkingDir: ".",
+			Command:    "ssh",
+			Args:       homeArgs,
+		})
+		if err != nil {
+			return OpenShellSyncRepoOutput{}, fmt.Errorf("failed to resolve $HOME in sandbox: %w", err)
+		}
+		home := strings.TrimSpace(homeOutput.Stdout)
+		if home == "" {
+			home = "/tmp"
+		}
+		containerRepoDir = filepath.Join(home, filepath.Base(input.LocalRepoDir))
+	}
+
 	// Create a git bundle containing all refs
 	bundlePath := filepath.Join(os.TempDir(), fmt.Sprintf("openshell-repo-%s.bundle", input.SandboxName))
 	defer os.Remove(bundlePath)
@@ -143,7 +163,7 @@ func OpenShellSyncRepoActivity(ctx context.Context, input OpenShellSyncRepoInput
 	// Clone or update the repo inside the sandbox.
 	// If the repo already exists (sandbox reuse), fetch from the bundle and
 	// reset to match; otherwise clone fresh.
-	quotedRepo := shellQuote(input.ContainerRepoDir)
+	quotedRepo := shellQuote(containerRepoDir)
 	quotedBundle := shellQuote(remoteBundlePath)
 	cloneScript := fmt.Sprintf(
 		"if [ -d %s/.git ]; then "+
@@ -154,7 +174,7 @@ func OpenShellSyncRepoActivity(ctx context.Context, input OpenShellSyncRepoInput
 			"fi && rm -f %s",
 		quotedRepo,
 		quotedRepo, quotedBundle,
-		shellQuote(filepath.Dir(input.ContainerRepoDir)), quotedBundle, quotedRepo, quotedRepo,
+		shellQuote(filepath.Dir(containerRepoDir)), quotedBundle, quotedRepo, quotedRepo,
 		quotedBundle,
 	)
 
@@ -174,7 +194,7 @@ func OpenShellSyncRepoActivity(ctx context.Context, input OpenShellSyncRepoInput
 		return OpenShellSyncRepoOutput{}, fmt.Errorf("git clone in sandbox failed (exit %d): %s", cloneOutput.ExitStatus, cloneOutput.Stderr)
 	}
 
-	return OpenShellSyncRepoOutput{ContainerRepoDir: input.ContainerRepoDir}, nil
+	return OpenShellSyncRepoOutput{ContainerRepoDir: containerRepoDir}, nil
 }
 
 // quoteArgs shell-quotes each argument for use in a sh -c command.
@@ -205,7 +225,19 @@ func CreateOpenShellWorktreeActivity(ctx context.Context, input CreateOpenShellW
 	repoName := filepath.Base(input.RepoDir)
 	branchSuffix := strings.TrimPrefix(input.BranchName, "side/")
 	dirName := repoName + "-" + branchSuffix
-	worktreePath := filepath.Join("/sandbox", "sidekick-worktrees", input.WorkspaceId, dirName)
+
+	homeOutput, err := input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
+		Command: "sh",
+		Args:    []string{"-c", "echo $HOME"},
+	})
+	if err != nil {
+		return CreateOpenShellWorktreeOutput{}, fmt.Errorf("failed to resolve $HOME in environment: %w", err)
+	}
+	baseDir := strings.TrimSpace(homeOutput.Stdout)
+	if baseDir == "" {
+		baseDir = "/tmp"
+	}
+	worktreePath := filepath.Join(baseDir, "sidekick-worktrees", input.WorkspaceId, dirName)
 
 	mkdirOutput, err := input.EnvContainer.Env.RunCommand(ctx, EnvRunCommandInput{
 		Command: "mkdir",

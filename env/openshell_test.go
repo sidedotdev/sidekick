@@ -3,7 +3,9 @@ package env
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -168,6 +170,7 @@ func TestCreateOpenShellWorktreeActivity(t *testing.T) {
 			WorkspaceId:  "ws-" + ksuid.New().String(),
 		})
 		require.NoError(t, err)
+		t.Cleanup(func() { os.RemoveAll(filepath.Dir(output.WorktreePath)) })
 		assert.Contains(t, output.WorktreePath, "sidekick-worktrees")
 		assert.DirExists(t, output.WorktreePath)
 
@@ -188,6 +191,7 @@ func TestCreateOpenShellWorktreeActivity(t *testing.T) {
 			WorkspaceId:  "ws-" + ksuid.New().String(),
 		})
 		require.NoError(t, err)
+		t.Cleanup(func() { os.RemoveAll(filepath.Dir(output.WorktreePath)) })
 		assert.DirExists(t, output.WorktreePath)
 	})
 
@@ -201,8 +205,9 @@ func TestCreateOpenShellWorktreeActivity(t *testing.T) {
 			WorkspaceId:  wsId,
 		}
 
-		_, err := CreateOpenShellWorktreeActivity(ctx, input)
+		firstOutput, err := CreateOpenShellWorktreeActivity(ctx, input)
 		require.NoError(t, err)
+		t.Cleanup(func() { os.RemoveAll(filepath.Dir(firstOutput.WorktreePath)) })
 
 		input.WorkspaceId = "ws-" + ksuid.New().String()
 		_, err = CreateOpenShellWorktreeActivity(ctx, input)
@@ -219,6 +224,7 @@ func TestCreateOpenShellWorktreeActivity(t *testing.T) {
 			WorkspaceId:  "ws-" + ksuid.New().String(),
 		})
 		require.NoError(t, err)
+		t.Cleanup(func() { os.RemoveAll(filepath.Dir(output.WorktreePath)) })
 		assert.Contains(t, output.WorktreePath, "os-dir-test")
 		assert.NotContains(t, output.WorktreePath, "side/")
 	})
