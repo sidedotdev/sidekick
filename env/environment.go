@@ -186,7 +186,49 @@ func NewLocalGitWorktreeEnv(ctx context.Context, params LocalEnvParams, worktree
 }
 
 func (e *LocalEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
-	return common.WalkDirectory(e.WorkingDirectory, ignoreFileNames, handleEntry)
+	ignoreManager, err := common.NewIgnoreManager(e.WorkingDirectory, ignoreFileNames)
+	if err != nil {
+		return err
+	}
+
+	info, err := os.Stat(e.WorkingDirectory)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errors.New("baseDirectory must be a directory")
+	}
+
+	return filepath.WalkDir(e.WorkingDirectory, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if path == e.WorkingDirectory {
+			return nil
+		}
+
+		if entry.IsDir() && entry.Name() == ".git" {
+			return filepath.SkipDir
+		}
+
+		if ignoreManager.IsIgnored(path, entry.IsDir()) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if entry.IsDir() {
+			for i, name := range ignoreFileNames {
+				if err := ignoreManager.AddIgnoreFile(name, i, path); err != nil {
+					return err
+				}
+			}
+		}
+
+		return handleEntry(path, entry.IsDir())
+	})
 }
 
 func (e *LocalEnv) GetType() EnvType {
@@ -208,7 +250,49 @@ func (e *LocalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 }
 
 func (e *LocalGitWorktreeEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
-	return common.WalkDirectory(e.WorkingDirectory, ignoreFileNames, handleEntry)
+	ignoreManager, err := common.NewIgnoreManager(e.WorkingDirectory, ignoreFileNames)
+	if err != nil {
+		return err
+	}
+
+	info, err := os.Stat(e.WorkingDirectory)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errors.New("baseDirectory must be a directory")
+	}
+
+	return filepath.WalkDir(e.WorkingDirectory, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if path == e.WorkingDirectory {
+			return nil
+		}
+
+		if entry.IsDir() && entry.Name() == ".git" {
+			return filepath.SkipDir
+		}
+
+		if ignoreManager.IsIgnored(path, entry.IsDir()) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if entry.IsDir() {
+			for i, name := range ignoreFileNames {
+				if err := ignoreManager.AddIgnoreFile(name, i, path); err != nil {
+					return err
+				}
+			}
+		}
+
+		return handleEntry(path, entry.IsDir())
+	})
 }
 
 func (e *LocalGitWorktreeEnv) GetType() EnvType {

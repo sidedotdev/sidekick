@@ -53,7 +53,7 @@ func (ra *RagActivities) RankedDirSignatureOutline(ctx context.Context, options 
 		return "", fmt.Errorf("failed to calculate embedding char limits: %w", err)
 	}
 
-	fileSignatureSubkeys, err := t.CreateDirSignatureOutlines(options.WorkspaceId, options.EnvContainer.Env.GetWorkingDirectory(), maxChars)
+	fileSignatureSubkeys, err := t.CreateDirSignatureOutlines(ctx, options.WorkspaceId, options.EnvContainer, maxChars)
 	if err != nil {
 		return "", err
 	}
@@ -72,11 +72,11 @@ func (ra *RagActivities) RankedDirSignatureOutline(ctx context.Context, options 
 		return "", err
 	}
 
-	return ra.LimitedDirSignatureOutline(DirSignatureOutlineOptions{
+	return ra.LimitedDirSignatureOutline(ctx, DirSignatureOutlineOptions{
 		WorkspaceId:          options.WorkspaceId,
 		FileSignatureSubkeys: rankedFileSignatureSubkeys,
 		DirChunkSubkeys:      rankedDirChunkSubkeys,
-		BasePath:             options.EnvContainer.Env.GetWorkingDirectory(),
+		EnvContainer:         options.EnvContainer,
 		CharLimit:            options.CharLimit,
 	})
 }
@@ -236,13 +236,13 @@ type DirSignatureOutlineOptions struct {
 	WorkspaceId          string
 	FileSignatureSubkeys []string // these are file signature subkeys
 	DirChunkSubkeys      []string
-	BasePath             string
+	EnvContainer         env.EnvContainer
 	EmbeddingType        string
 	CharLimit            int
 }
 
 // LimitedDirSignatureOutline returns a string containing the directory structure with signature outlines expanded only for the given subkeys.
-func (ra *RagActivities) LimitedDirSignatureOutline(options DirSignatureOutlineOptions) (string, error) {
+func (ra *RagActivities) LimitedDirSignatureOutline(ctx context.Context, options DirSignatureOutlineOptions) (string, error) {
 	var charCount int
 	showPaths := make(map[string]bool, 0)
 	signaturePaths := make(map[string]int, 0)
@@ -351,7 +351,7 @@ chunksLoop:
 		}
 	}
 
-	outlines, err := tree_sitter.GetDirectorySignatureOutlines(options.BasePath, &showPaths, &signaturePaths)
+	outlines, err := tree_sitter.GetDirectorySignatureOutlines(ctx, options.EnvContainer, &showPaths, &signaturePaths)
 	if err != nil {
 		return "", err
 	}
@@ -364,8 +364,10 @@ type RankedDirChunkSubkeysOptions struct {
 }
 
 func (ra *RagActivities) RankedDirChunkSubkeys(ctx context.Context, options RankedDirChunkSubkeysOptions) ([]string, error) {
-	basePath := options.EnvContainer.Env.GetWorkingDirectory()
-	chunks := GetDirectoryChunks(basePath)
+	chunks, err := GetDirectoryChunks(ctx, options.EnvContainer)
+	if err != nil {
+		return []string{}, fmt.Errorf("get directory chunks: %w", err)
+	}
 
 	values := make(map[string]interface{})
 	hashes := make([]string, 0, len(chunks))
@@ -377,7 +379,7 @@ func (ra *RagActivities) RankedDirChunkSubkeys(ctx context.Context, options Rank
 		key := fmt.Sprintf("%s:%s", tree_sitter.ContentTypeDirChunk, hash)
 		values[key] = value
 	}
-	err := ra.DatabaseAccessor.MSet(ctx, options.WorkspaceId, values)
+	err = ra.DatabaseAccessor.MSet(ctx, options.WorkspaceId, values)
 	if err != nil {
 		return []string{}, fmt.Errorf("error persisting dir chunk content: %w", err)
 	}

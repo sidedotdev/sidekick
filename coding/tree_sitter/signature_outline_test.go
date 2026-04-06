@@ -1,8 +1,10 @@
 package tree_sitter
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"sidekick/env"
 	"strings"
 	"testing"
 
@@ -38,7 +40,8 @@ More content.
 	maxLen := len(sigContent) - 1
 	signaturePaths := map[string]int{"test.md": maxLen}
 
-	outlines, err := GetDirectorySignatureOutlines(tmpDir, nil, &signaturePaths)
+	ec := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: tmpDir}}
+	outlines, err := GetDirectorySignatureOutlines(context.Background(), ec, nil, &signaturePaths)
 	require.NoError(t, err)
 
 	// Find the file outline
@@ -84,7 +87,8 @@ Even more content.
 	maxLen := len(sigContent) - 20
 	signaturePaths := map[string]int{"test.md": maxLen}
 
-	outlines, err := GetDirectorySignatureOutlines(tmpDir, nil, &signaturePaths)
+	ec := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: tmpDir}}
+	outlines, err := GetDirectorySignatureOutlines(context.Background(), ec, nil, &signaturePaths)
 	require.NoError(t, err)
 
 	// Find the file outline

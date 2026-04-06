@@ -207,7 +207,7 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSym
 	for _, req := range dirSymDefRequest.Requests {
 		absolutePath := filepath.Join(baseDir, req.FilePath)
 		if shouldRetrieveFullFile(req.SymbolNames, absolutePath) {
-			result := getWildcardRetrievalResult(req.SymbolNames, absolutePath, req.FilePath, dirSymDefRequest.EnvContainer.Env.GetWorkingDirectory())
+			result := getWildcardRetrievalResult(ctx, dirSymDefRequest.EnvContainer, req.SymbolNames, absolutePath, req.FilePath)
 			mu.Lock()
 			results = append(results, result)
 			mu.Unlock()
@@ -257,7 +257,7 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSym
 		for _, result := range fileResults {
 			if result.Error != nil {
 				if relativeFilePathsBySymbolName == nil {
-					filePaths, err := getRelativeFilePathsBySymbolName(baseDir)
+					filePaths, err := getRelativeFilePathsBySymbolName(ctx, dirSymDefRequest.EnvContainer)
 					if err != nil {
 						msg := fmt.Sprintf("error getting file paths by symbol name: %v\n", err)
 						fileContentBuilder.WriteString(msg)
@@ -266,7 +266,7 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSym
 					relativeFilePathsBySymbolName = filePaths
 				}
 
-				hint := getHintForSymbolDefResultFailure(result.Error, baseDir, result.RelativePath, result.SymbolName, &relativeFilePathsBySymbolName)
+				hint := getHintForSymbolDefResultFailure(ctx, dirSymDefRequest.EnvContainer, result.Error, result.RelativePath, result.SymbolName, &relativeFilePathsBySymbolName)
 				fileContentBuilder.WriteString(hint)
 				fileContentBuilder.WriteString("\n")
 				fileFailureBuilder.WriteString(hint)
@@ -537,10 +537,11 @@ func CodeFenceStartForLanguage(langName string) string {
 	}
 }
 
-func getRelativeFilePathsBySymbolName(directoryPath string) (map[string][]string, error) {
+func getRelativeFilePathsBySymbolName(ctx context.Context, ec env.EnvContainer) (map[string][]string, error) {
+	directoryPath := ec.Env.GetWorkingDirectory()
 	symbolToPaths := make(map[string][]string, 0)
 	num := 0
-	err := common.WalkDirectory(directoryPath, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
+	err := ec.Env.Walk(ctx, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
 		num++
 		if isDir {
 			return nil
@@ -566,8 +567,9 @@ func getRelativeFilePathsBySymbolName(directoryPath string) (map[string][]string
 	return symbolToPaths, nil
 }
 
-func getHintForSymbolDefResultFailure(err error, directory, relativePath, symbolName string, filePathsBySymbolName *map[string][]string) string {
+func getHintForSymbolDefResultFailure(ctx context.Context, ec env.EnvContainer, err error, relativePath, symbolName string, filePathsBySymbolName *map[string][]string) string {
 	hints := []string{}
+	directory := ec.Env.GetWorkingDirectory()
 	absolutePath := filepath.Join(directory, relativePath)
 	directory = filepath.Clean(directory) + string(filepath.Separator)
 
@@ -580,7 +582,7 @@ func getHintForSymbolDefResultFailure(err error, directory, relativePath, symbol
 
 	// if os.IsNotExist(err) {
 	if !utils.FileExists(absolutePath) {
-		hint := getHintForNonExistentFile(directory, absolutePath)
+		hint := getHintForNonExistentFile(ctx, ec, absolutePath)
 		hints = append(hints, hint)
 	} else {
 		rawFileSymbols, err := tree_sitter.GetFileSymbols(absolutePath)
@@ -633,11 +635,12 @@ type candidate struct {
 const maxSegmentDistance = 4
 
 // provides a hint that shows similar files based on path-segment-wise levenshtein distance ratio
-func getHintForNonExistentFile(directoryPath, absolutePath string) string {
+func getHintForNonExistentFile(ctx context.Context, ec env.EnvContainer, absolutePath string) string {
+	directoryPath := ec.Env.GetWorkingDirectory()
 	relativePath := strings.TrimPrefix(absolutePath, filepath.Clean(directoryPath)+string(filepath.Separator))
 	pathSegments := strings.Split(relativePath, string(filepath.Separator))
 	candidates := []candidate{}
-	err := common.WalkDirectory(directoryPath, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
+	err := ec.Env.Walk(ctx, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
 		if isDir {
 			return nil
 		}
@@ -694,7 +697,7 @@ func getHintForNonExistentFile(directoryPath, absolutePath string) string {
 	panic("unimplemented")
 }
 
-func getWildcardRetrievalResult(symbols []string, absolutePath, relativePath, directoryPath string) SymbolRetrievalResult {
+func getWildcardRetrievalResult(ctx context.Context, ec env.EnvContainer, symbols []string, absolutePath, relativePath string) SymbolRetrievalResult {
 	if !shouldRetrieveFullFile(symbols, absolutePath) {
 		return SymbolRetrievalResult{RelativePath: relativePath}
 	}
@@ -703,9 +706,9 @@ func getWildcardRetrievalResult(symbols []string, absolutePath, relativePath, di
 	if err != nil {
 		var errMsg string
 		if os.IsNotExist(err) {
-			errMsg = getHintForNonExistentFile(directoryPath, absolutePath)
+			errMsg = getHintForNonExistentFile(ctx, ec, absolutePath)
 		} else {
-			relativeErr := errors.New(strings.ReplaceAll(err.Error(), directoryPath, ""))
+			relativeErr := errors.New(strings.ReplaceAll(err.Error(), ec.Env.GetWorkingDirectory(), ""))
 			errMsg = fmt.Sprintf("error reading file %s: %v", relativePath, relativeErr)
 		}
 		return SymbolRetrievalResult{
