@@ -56,17 +56,29 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 	} else if v >= 4 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
 		diff, err = getOwnChangesSinceReview(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, ignoreWhitespace)
 		if err != nil {
-			return CriteriaFulfillment{}, fmt.Errorf("failed to get own changes since review: %v", err)
+			workflow.GetLogger(dCtx).Warn("Failed to get own changes since review, falling back to base branch diff", "error", err)
+			diff, err = GetGitDiff(dCtx, promptInfo.BaseBranch, ignoreWhitespace)
+			if err != nil {
+				return CriteriaFulfillment{}, fmt.Errorf("failed to get fallback base branch diff: %v", err)
+			}
 		}
 	} else if v >= 3 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
 		diff, err = legacyOwnChangesSinceReviewV3(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, ignoreWhitespace)
 		if err != nil {
-			return CriteriaFulfillment{}, fmt.Errorf("failed to get own changes since review: %v", err)
+			workflow.GetLogger(dCtx).Warn("Failed to get own changes since review, falling back to base branch diff", "error", err)
+			diff, err = GetGitDiff(dCtx, promptInfo.BaseBranch, ignoreWhitespace)
+			if err != nil {
+				return CriteriaFulfillment{}, fmt.Errorf("failed to get fallback base branch diff: %v", err)
+			}
 		}
 	} else if v >= 2 && promptInfo.BaseBranch != "" && promptInfo.LastReviewTreeHash != "" {
 		diff, err = legacyOwnChangesSinceReview(dCtx, promptInfo.BaseBranch, promptInfo.LastReviewTreeHash, ignoreWhitespace)
 		if err != nil {
-			return CriteriaFulfillment{}, fmt.Errorf("failed to get own changes since review: %v", err)
+			workflow.GetLogger(dCtx).Warn("Failed to get own changes since review, falling back to base branch diff", "error", err)
+			diff, err = GetGitDiff(dCtx, promptInfo.BaseBranch, ignoreWhitespace)
+			if err != nil {
+				return CriteriaFulfillment{}, fmt.Errorf("failed to get fallback base branch diff: %v", err)
+			}
 		}
 	} else if v >= 2 && promptInfo.BaseBranch != "" {
 		// No last review tree hash available, fall back to full three-dot diff
@@ -77,7 +89,11 @@ func CheckWorkMeetsCriteria(dCtx DevContext, promptInfo CheckWorkInfo) (Criteria
 	} else if v >= 1 && promptInfo.LastReviewTreeHash != "" {
 		diff, err = getDiffSinceLastReview(dCtx, promptInfo.LastReviewTreeHash, ignoreWhitespace, nil)
 		if err != nil {
-			return CriteriaFulfillment{}, fmt.Errorf("failed to get diff since last review: %v", err)
+			workflow.GetLogger(dCtx).Warn("Failed to get diff since last review, falling back to staged diff", "error", err)
+			diff, err = git.GitDiff(dCtx.ExecContext)
+			if err != nil {
+				return CriteriaFulfillment{}, fmt.Errorf("failed to get fallback staged diff: %v", err)
+			}
 		}
 	} else {
 		diff, err = git.GitDiff(dCtx.ExecContext)
