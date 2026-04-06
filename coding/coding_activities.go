@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -541,9 +540,9 @@ func CodeFenceStartForLanguage(langName string) string {
 func getRelativeFilePathsBySymbolName(directoryPath string) (map[string][]string, error) {
 	symbolToPaths := make(map[string][]string, 0)
 	num := 0
-	err := common.WalkCodeDirectory(directoryPath, func(path string, entry fs.DirEntry) error {
+	err := common.WalkDirectory(directoryPath, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
 		num++
-		if entry.IsDir() {
+		if isDir {
 			return nil
 		}
 		symbols, err := tree_sitter.GetAllAlternativeFileSymbols(path)
@@ -638,8 +637,8 @@ func getHintForNonExistentFile(directoryPath, absolutePath string) string {
 	relativePath := strings.TrimPrefix(absolutePath, filepath.Clean(directoryPath)+string(filepath.Separator))
 	pathSegments := strings.Split(relativePath, string(filepath.Separator))
 	candidates := []candidate{}
-	err := common.WalkCodeDirectory(directoryPath, func(path string, entry fs.DirEntry) error {
-		if entry.IsDir() {
+	err := common.WalkDirectory(directoryPath, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
+		if isDir {
 			return nil
 		}
 		relativeEntryPath := strings.TrimPrefix(path, filepath.Clean(directoryPath)+string(filepath.Separator))

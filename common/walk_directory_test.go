@@ -31,10 +31,11 @@ func createDir(t *testing.T, path string) {
 	require.NoError(t, err)
 }
 
-// collectWalkedFiles returns a slice of paths that WalkCodeDirectory visits
+// collectWalkedFiles returns a slice of paths that WalkDirectory visits
+// using the full sidekick ignore file set.
 func collectWalkedFiles(t *testing.T, baseDir string) []string {
 	var paths []string
-	err := WalkCodeDirectory(baseDir, func(path string, entry os.DirEntry) error {
+	err := WalkDirectory(baseDir, SidekickIgnoreFileNames, func(path string, isDir bool) error {
 		relPath, err := filepath.Rel(baseDir, path)
 		require.NoError(t, err)
 		paths = append(paths, relPath)
@@ -45,7 +46,7 @@ func collectWalkedFiles(t *testing.T, baseDir string) []string {
 	return paths
 }
 
-func TestWalkCodeDirectory_MultiLevelIgnores(t *testing.T) {
+func TestWalkDirectory_MultiLevelIgnores(t *testing.T) {
 	tempDir := t.TempDir()
 	setupGitRepo(t, tempDir)
 
@@ -80,7 +81,7 @@ func TestWalkCodeDirectory_MultiLevelIgnores(t *testing.T) {
 	}, paths)
 }
 
-func TestWalkCodeDirectory_UnignorePatterns(t *testing.T) {
+func TestWalkDirectory_UnignorePatterns(t *testing.T) {
 	tempDir := t.TempDir()
 	setupGitRepo(t, tempDir)
 
@@ -108,7 +109,7 @@ docs/important.txt`)
 	}, paths)
 }
 
-func TestWalkCodeDirectory_MixedScenarios(t *testing.T) {
+func TestWalkDirectory_MixedScenarios(t *testing.T) {
 	tempDir := t.TempDir()
 	setupGitRepo(t, tempDir)
 
@@ -150,7 +151,7 @@ bench.go`)
 	}, paths)
 }
 
-func TestWalkCodeDirectory_NoGitRepo(t *testing.T) {
+func TestWalkDirectory_NoGitRepo(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Create files and directories
@@ -198,18 +199,18 @@ func TestFindGitRoot(t *testing.T) {
 	})
 }
 
-func TestWalkCodeDirectory_SingleIgnoreFile(t *testing.T) {
+func TestWalkDirectory_SingleIgnoreFile(t *testing.T) {
 	tests := []struct {
-		name       string
-		ignoreType IgnoreFileType
-		content    string
-		files      []string
-		expected   []string
+		name           string
+		ignoreFileName string
+		content        string
+		files          []string
+		expected       []string
 	}{
 		{
-			name:       "gitignore",
-			ignoreType: GitIgnoreType,
-			content:    "*.txt\n",
+			name:           "gitignore",
+			ignoreFileName: ".gitignore",
+			content:        "*.txt\n",
 			files: []string{
 				"file.txt",
 				"file.go",
@@ -224,9 +225,9 @@ func TestWalkCodeDirectory_SingleIgnoreFile(t *testing.T) {
 			},
 		},
 		{
-			name:       "ignore",
-			ignoreType: IgnoreType,
-			content:    "*.go\n",
+			name:           "ignore",
+			ignoreFileName: ".ignore",
+			content:        "*.go\n",
 			files: []string{
 				"file.txt",
 				"file.go",
@@ -241,9 +242,9 @@ func TestWalkCodeDirectory_SingleIgnoreFile(t *testing.T) {
 			},
 		},
 		{
-			name:       "sideignore",
-			ignoreType: SideIgnoreType,
-			content:    "sub/\n",
+			name:           "sideignore",
+			ignoreFileName: ".sideignore",
+			content:        "sub/\n",
 			files: []string{
 				"file.txt",
 				"file.go",
@@ -264,7 +265,7 @@ func TestWalkCodeDirectory_SingleIgnoreFile(t *testing.T) {
 			setupGitRepo(t, tmpDir)
 
 			// Create ignore file
-			createFile(t, filepath.Join(tmpDir, tt.ignoreType.String()), tt.content)
+			createFile(t, filepath.Join(tmpDir, tt.ignoreFileName), tt.content)
 
 			// Create test files
 			for _, f := range tt.files {
@@ -277,13 +278,22 @@ func TestWalkCodeDirectory_SingleIgnoreFile(t *testing.T) {
 				}
 			}
 
-			paths := collectWalkedFiles(t, tmpDir)
+			// Walk with only this single ignore file type
+			var paths []string
+			err := WalkDirectory(tmpDir, []string{tt.ignoreFileName}, func(path string, isDir bool) error {
+				relPath, relErr := filepath.Rel(tmpDir, path)
+				require.NoError(t, relErr)
+				paths = append(paths, relPath)
+				return nil
+			})
+			require.NoError(t, err)
+			sort.Strings(paths)
 			assert.ElementsMatch(t, tt.expected, paths)
 		})
 	}
 }
 
-func TestWalkCodeDirectory_UnignoreDirectory(t *testing.T) {
+func TestWalkDirectory_UnignoreDirectory(t *testing.T) {
 	tempDir := t.TempDir()
 	setupGitRepo(t, tempDir)
 
@@ -313,7 +323,7 @@ func TestWalkCodeDirectory_UnignoreDirectory(t *testing.T) {
 	assert.Equal(t, expected, paths)
 }
 
-func TestWalkCodeDirectory_IgnoreFilePrecedence(t *testing.T) {
+func TestWalkDirectory_IgnoreFilePrecedence(t *testing.T) {
 	tmpDir := t.TempDir()
 	setupGitRepo(t, tmpDir)
 

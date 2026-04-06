@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -826,8 +825,8 @@ func checkServerStatus() bool {
 func checkLanguageSpecificTools(baseDirectory string) error {
 	extensionCounts := make(map[string]int)
 
-	err := common.WalkCodeDirectory(baseDirectory, func(path string, entry fs.DirEntry) error {
-		if !entry.IsDir() {
+	err := common.WalkDirectory(baseDirectory, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
+		if !isDir {
 			ext := strings.ToLower(filepath.Ext(path))
 			extensionCounts[ext]++
 		}
