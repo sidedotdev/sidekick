@@ -3,6 +3,7 @@ package tree_sitter
 import (
 	"context"
 	"fmt"
+	"sidekick/env"
 	"sidekick/srv"
 	"sidekick/utils"
 	"strings"
@@ -19,10 +20,9 @@ const ContentTypeFileSignature = "file:signature"
 const ContentTypeDirChunk = "dir:chunk"
 
 // TODO move to RagActivities
-// TODO add param for context.Context
-func (t *TreeSitterActivities) CreateDirSignatureOutlines(workspaceId string, directoryPath string, maxCharacterLimit int) ([]string, error) {
+func (t *TreeSitterActivities) CreateDirSignatureOutlines(ctx context.Context, workspaceId string, ec env.EnvContainer, maxCharacterLimit int) ([]string, error) {
 	// FIXME perf: have a way to skip getting outlines for the ones we already set in the DB, eg using checksums
-	outlines, err := GetDirectorySignatureOutlines(directoryPath, nil, nil)
+	outlines, err := GetDirectorySignatureOutlines(ctx, ec, nil, nil)
 
 	if err != nil {
 		return []string{}, err

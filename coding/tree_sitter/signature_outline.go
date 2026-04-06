@@ -2,6 +2,7 @@ package tree_sitter
 
 import (
 	"cmp"
+	"context"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -15,6 +16,7 @@ import (
 	"fmt"
 
 	"sidekick/common"
+	"sidekick/env"
 	"sidekick/logger"
 	"sidekick/utils"
 
@@ -138,7 +140,8 @@ func getChecksum(path string) (string, error) {
 
 // nil for the showPaths means: show all paths
 // nil for signaturePaths means: outline signatures for all paths
-func GetDirectorySignatureOutlines(baseDirectory string, showPaths *map[string]bool, signaturePaths *map[string]int) (outlines []FileOutline, err error) {
+func GetDirectorySignatureOutlines(ctx context.Context, ec env.EnvContainer, showPaths *map[string]bool, signaturePaths *map[string]int) (outlines []FileOutline, err error) {
+	baseDirectory := ec.Env.GetWorkingDirectory()
 	baseDirectory, err = filepath.Abs(baseDirectory)
 	if err != nil {
 		return outlines, err
@@ -148,7 +151,7 @@ func GetDirectorySignatureOutlines(baseDirectory string, showPaths *map[string]b
 		baseDirectory = baseDirectory + string(os.PathSeparator)
 	}
 
-	err = common.WalkDirectory(baseDirectory, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
+	err = ec.Env.Walk(ctx, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
 		relativePath := strings.Replace(path, baseDirectory, "", 1)
 
 		if isDir {
@@ -238,8 +241,8 @@ func GetDirectorySignatureOutlines(baseDirectory string, showPaths *map[string]b
 	return outlines, err
 }
 
-func GetDirectorySignatureOutlinesString(baseDirectory string) (string, error) {
-	outlines, err := GetDirectorySignatureOutlines(baseDirectory, nil, nil)
+func GetDirectorySignatureOutlinesString(ctx context.Context, ec env.EnvContainer) (string, error) {
+	outlines, err := GetDirectorySignatureOutlines(ctx, ec, nil, nil)
 	if err != nil {
 		return "", err
 	}

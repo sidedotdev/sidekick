@@ -1,8 +1,10 @@
 package persisted_ai
 
 import (
+	"context"
 	"path/filepath"
 	"sidekick/common"
+	"sidekick/env"
 	"sidekick/utils"
 	"sort"
 	"strings"
@@ -30,14 +32,18 @@ const (
 	MAX_CHUNK_SIZE = 40
 )
 
-func GetDirectoryChunks(basePath string) []DirChunk {
+func GetDirectoryChunks(ctx context.Context, ec env.EnvContainer) ([]DirChunk, error) {
+	basePath := ec.Env.GetWorkingDirectory()
 	allPaths := []PathInfo{}
 
-	common.WalkDirectory(basePath, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
+	err := ec.Env.Walk(ctx, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
 		relativePath := strings.Replace(path, basePath, "", 1)
 		allPaths = append(allPaths, PathInfo{Path: relativePath, IsDir: isDir, present: true})
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
 
 	allPaths = breadthFirstOrder(allPaths)
 	//fmt.Println("All paths in order:")
@@ -67,7 +73,7 @@ func GetDirectoryChunks(basePath string) []DirChunk {
 		//fmt.Println()
 	}
 
-	return chunks
+	return chunks, nil
 }
 
 func breadthFirstOrder(pathInfos []PathInfo) []PathInfo {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sidekick/common"
 	"sidekick/env"
 	"testing"
 
@@ -35,7 +34,7 @@ func (m *mockEnv) RunCommand(ctx context.Context, input env.EnvRunCommandInput) 
 }
 
 func (m *mockEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
-	return common.WalkDirectory(m.workingDir, ignoreFileNames, handleEntry)
+	return (&env.LocalEnv{WorkingDirectory: m.workingDir}).Walk(ctx, ignoreFileNames, handleEntry)
 }
 
 // setupTestEnv creates a test environment with a repo config file and optional hints file.
