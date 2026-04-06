@@ -345,17 +345,17 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			sandboxName = createOutput.SandboxName
 		}
 
-		containerWorkDir := "/sandbox/" + filepath.Base(repoDir)
+		syncInput := env.OpenShellSyncRepoInput{
+			SandboxName:  sandboxName,
+			LocalRepoDir: repoDir,
+		}
 
 		var syncOutput env.OpenShellSyncRepoOutput
-		err = workflow.ExecuteActivity(ctx, env.OpenShellSyncRepoActivity, env.OpenShellSyncRepoInput{
-			SandboxName:      sandboxName,
-			LocalRepoDir:     repoDir,
-			ContainerRepoDir: containerWorkDir,
-		}).Get(ctx, &syncOutput)
+		err = workflow.ExecuteActivity(ctx, env.OpenShellSyncRepoActivity, syncInput).Get(ctx, &syncOutput)
 		if err != nil {
 			return DevContext{}, fmt.Errorf("failed to sync repo to OpenShell sandbox: %v", err)
 		}
+		containerWorkDir := syncOutput.ContainerRepoDir
 
 		if repoMode == string(env.RepoModeWorktree) {
 			repoOpenShellEnvContainer := env.EnvContainer{Env: &env.OpenShellEnv{
