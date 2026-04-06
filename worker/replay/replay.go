@@ -37,6 +37,9 @@ func main() {
 	}
 
 	// Define flag sets for subcommands
+	// blacklist subcommand
+	blacklistCmd := flag.NewFlagSet("blacklist", flag.ExitOnError)
+
 	// store subcommand
 	storeCmd := flag.NewFlagSet("store", flag.ExitOnError)
 	var storeHostPort, storeWorkflowId, storeSidekickVersion string
@@ -54,14 +57,20 @@ func main() {
 		fmt.Println("Usage: replay store -id <workflow_id> -sidekick-version <version> [-hostPort <host:port>]")
 		storeCmd.PrintDefaults()
 	}
+	blacklistCmd.Usage = func() {
+		fmt.Println("Usage: replay blacklist <workflow_id> [workflow_id...]")
+		fmt.Println("Adds workflow IDs to the replay blacklist so they are skipped during replay tests.")
+	}
+
 	flag.Usage = func() {
 		fmt.Println("Usage: replay [-id <workflow_id>] [-hostPort <host:port>]")
 		fmt.Println("Or: replay <subcommand> [options]")
 		fmt.Println("Subcommands:")
 		fmt.Println("  store          Fetches workflow history and stores it to S3.")
+		fmt.Println("  blacklist      Adds workflow IDs to the replay blacklist.")
 		fmt.Println("\nDefault (if no subcommand is given) is to replay a given flow from the temporal server. This has the following flags:")
 		flag.PrintDefaults()
-		fmt.Println("\nFor 'store' subcommand usage:\nreplay store --help")
+		fmt.Println("\nFor subcommand usage:\nreplay <subcommand> --help")
 	}
 
 	flag.Parse()
@@ -71,6 +80,21 @@ func main() {
 		args := flag.Args()[1:]
 
 		switch subcommand {
+		case "blacklist":
+			if err := blacklistCmd.Parse(args); err != nil {
+				blacklistCmd.Usage()
+				os.Exit(1)
+			}
+			ids := blacklistCmd.Args()
+			if len(ids) == 0 {
+				log.Error().Msg("Error: at least one workflow ID is required.")
+				blacklistCmd.Usage()
+				os.Exit(1)
+			}
+			if err := addToBlacklist(ids); err != nil {
+				log.Fatal().Err(err).Msg("Blacklist command failed.")
+			}
+			log.Info().Strs("workflowIds", ids).Msg("Added to replay blacklist")
 		case "store":
 			if err := storeCmd.Parse(args); err != nil {
 				log.Error().Err(err).Msg("Error parsing 'store' subcommand flags.")
@@ -132,6 +156,42 @@ func main() {
 var s3Region string = "us-east-2"
 
 const replayTestDataFile = "worker/replay/replay_test_data.json"
+
+func addToBlacklist(ids []string) error {
+	cacheHome, err := common.GetSidekickCacheHome()
+	if err != nil {
+		return fmt.Errorf("failed to get cache home: %w", err)
+	}
+
+	blacklistPath := filepath.Join(cacheHome, "replay_blacklist.txt")
+
+	existing := make(map[string]struct{})
+	if data, err := os.ReadFile(blacklistPath); err == nil {
+		for _, line := range bytes.Split(data, []byte("\n")) {
+			s := string(bytes.TrimSpace(line))
+			if s != "" {
+				existing[s] = struct{}{}
+			}
+		}
+	}
+
+	f, err := os.OpenFile(blacklistPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open blacklist file: %w", err)
+	}
+	defer f.Close()
+
+	for _, id := range ids {
+		if _, ok := existing[id]; ok {
+			log.Info().Str("workflowId", id).Msg("Already blacklisted, skipping")
+			continue
+		}
+		if _, err := fmt.Fprintln(f, id); err != nil {
+			return fmt.Errorf("failed to write to blacklist: %w", err)
+		}
+	}
+	return nil
+}
 
 func handleStoreCommand(workflowId, hostPort, sidekickVersion string) error {
 	log.Info().Msgf("Initiating store command for workflow ID: %s, version: %s", workflowId, sidekickVersion)

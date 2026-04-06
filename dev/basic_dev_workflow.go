@@ -563,7 +563,8 @@ func getMergeApproval(dCtx DevContext, defaultTarget string, commitRequired bool
 				diffSinceLastReview, err = getDiffSinceLastReview(dCtx, lastReviewTreeHash, false, nil)
 			}
 			if err != nil {
-				return MergeApprovalResponse{}, "", "", fmt.Errorf("failed to generate diff since last review: %w", err)
+				workflow.GetLogger(dCtx).Warn("Failed to generate diff since last review, continuing without it", "error", err)
+				diffSinceLastReview = ""
 			}
 		}
 	}
