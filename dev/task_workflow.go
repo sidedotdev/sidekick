@@ -16,71 +16,86 @@ type TaskWorkflowInput struct {
 	FlowType    string
 	FlowOptions map[string]interface{}
 	Description string
+
+	// ExistingFlowId, when set, puts the workflow into "monitor mode":
+	// it skips child creation and listens for signals from an already-running
+	// flow. Used when re-executing the parent after a child flow reset.
+	ExistingFlowId string
 }
 
 func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 	log := workflow.GetLogger(ctx)
-
-	if input.FlowType != "basic_dev" && input.FlowType != "planned_dev" {
-		return fmt.Errorf("invalid flow type '%s'; valid values are 'basic_dev' and 'planned_dev'", input.FlowType)
-	}
-
 	ctx = setActivityOptions(ctx)
 	var ima *DevAgentManagerActivities
 
-	var workspace domain.Workspace
-	err := workflow.ExecuteActivity(ctx, ima.FindWorkspaceById, input.WorkspaceId).Get(ctx, &workspace)
-	if err != nil {
-		return fmt.Errorf("failed to find workspace: %w", err)
-	}
-
-	flowId := "flow_" + ksuidSideEffect(ctx)
-	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
-		WorkflowID:        flowId,
-		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON,
-	})
-
 	var childFuture workflow.ChildWorkflowFuture
-	untypedOptions := input.FlowOptions
-	switch input.FlowType {
-	case "basic_dev":
-		var options BasicDevOptions
-		utils.Transcode(untypedOptions, &options)
-		childFuture = workflow.ExecuteChildWorkflow(childCtx, BasicDevWorkflow, BasicDevWorkflowInput{
-			WorkspaceId:     input.WorkspaceId,
-			Requirements:    input.Description,
-			RepoDir:         workspace.LocalRepoDir,
-			BasicDevOptions: options,
-		})
-	case "planned_dev":
-		var options PlannedDevOptions
-		utils.Transcode(untypedOptions, &options)
-		childFuture = workflow.ExecuteChildWorkflow(childCtx, PlannedDevWorkflow, PlannedDevInput{
-			WorkspaceId:       input.WorkspaceId,
-			Requirements:      input.Description,
-			RepoDir:           workspace.LocalRepoDir,
-			PlannedDevOptions: options,
-		})
-	}
+	var flow domain.Flow
 
-	// Wait for child workflow to actually start
-	var we workflow.Execution
-	err = childFuture.GetChildWorkflowExecution().Get(childCtx, &we)
-	if err != nil {
-		return fmt.Errorf("child workflow failed to start: %w", err)
-	}
+	if input.ExistingFlowId != "" {
+		// Monitor mode: adopt an already-running flow instead of starting a
+		// new child. Used after a flow reset to re-establish signal handling.
+		err := workflow.ExecuteActivity(ctx, ima.GetWorkflow, input.WorkspaceId, input.ExistingFlowId).Get(ctx, &flow)
+		if err != nil {
+			return fmt.Errorf("failed to get existing flow: %w", err)
+		}
+	} else {
+		if input.FlowType != "basic_dev" && input.FlowType != "planned_dev" {
+			return fmt.Errorf("invalid flow type '%s'; valid values are 'basic_dev' and 'planned_dev'", input.FlowType)
+		}
 
-	// Persist the flow record
-	flow := domain.Flow{
-		WorkspaceId: input.WorkspaceId,
-		Id:          we.ID,
-		Type:        domain.FlowType(input.FlowType),
-		Status:      "in_progress",
-		ParentId:    input.TaskId,
-	}
-	err = workflow.ExecuteActivity(ctx, ima.PutWorkflow, flow).Get(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to persist flow record: %w", err)
+		var workspace domain.Workspace
+		err := workflow.ExecuteActivity(ctx, ima.FindWorkspaceById, input.WorkspaceId).Get(ctx, &workspace)
+		if err != nil {
+			return fmt.Errorf("failed to find workspace: %w", err)
+		}
+
+		flowId := "flow_" + ksuidSideEffect(ctx)
+		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+			WorkflowID:        flowId,
+			ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON,
+		})
+
+		untypedOptions := input.FlowOptions
+		switch input.FlowType {
+		case "basic_dev":
+			var options BasicDevOptions
+			utils.Transcode(untypedOptions, &options)
+			childFuture = workflow.ExecuteChildWorkflow(childCtx, BasicDevWorkflow, BasicDevWorkflowInput{
+				WorkspaceId:     input.WorkspaceId,
+				Requirements:    input.Description,
+				RepoDir:         workspace.LocalRepoDir,
+				BasicDevOptions: options,
+			})
+		case "planned_dev":
+			var options PlannedDevOptions
+			utils.Transcode(untypedOptions, &options)
+			childFuture = workflow.ExecuteChildWorkflow(childCtx, PlannedDevWorkflow, PlannedDevInput{
+				WorkspaceId:       input.WorkspaceId,
+				Requirements:      input.Description,
+				RepoDir:           workspace.LocalRepoDir,
+				PlannedDevOptions: options,
+			})
+		}
+
+		// Wait for child workflow to actually start
+		var we workflow.Execution
+		err = childFuture.GetChildWorkflowExecution().Get(childCtx, &we)
+		if err != nil {
+			return fmt.Errorf("child workflow failed to start: %w", err)
+		}
+
+		// Persist the flow record
+		flow = domain.Flow{
+			WorkspaceId: input.WorkspaceId,
+			Id:          we.ID,
+			Type:        domain.FlowType(input.FlowType),
+			Status:      "in_progress",
+			ParentId:    input.TaskId,
+		}
+		err = workflow.ExecuteActivity(ctx, ima.PutWorkflow, flow).Get(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("failed to persist flow record: %w", err)
+		}
 	}
 
 	// Signal-handling loop: listen for signals from the child and monitor its completion
@@ -135,27 +150,29 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 			childDone = true
 		})
 
-		selector.AddFuture(childFuture, func(f workflow.Future) {
-			var childErr error
-			childErr = f.Get(ctx, nil)
-			status := "completed"
-			if childErr != nil {
-				log.Error("Child workflow failed", "Error", childErr)
-				status = "failed"
-			}
+		if childFuture != nil {
+			selector.AddFuture(childFuture, func(f workflow.Future) {
+				var childErr error
+				childErr = f.Get(ctx, nil)
+				status := "completed"
+				if childErr != nil {
+					log.Error("Child workflow failed", "Error", childErr)
+					status = "failed"
+				}
 
-			flow.Status = status
-			putErr := workflow.ExecuteActivity(ctx, ima.PutWorkflow, flow).Get(ctx, nil)
-			if putErr != nil {
-				log.Error("Failed to update flow status on child completion", "Error", putErr)
-			}
+				flow.Status = status
+				putErr := workflow.ExecuteActivity(ctx, ima.PutWorkflow, flow).Get(ctx, nil)
+				if putErr != nil {
+					log.Error("Failed to update flow status on child completion", "Error", putErr)
+				}
 
-			completeErr := workflow.ExecuteActivity(ctx, ima.CompleteFlowParentTask, input.WorkspaceId, input.TaskId, flow.Status).Get(ctx, nil)
-			if completeErr != nil {
-				log.Error("Failed to complete parent task on child completion", "Error", completeErr)
-			}
-			childDone = true
-		})
+				completeErr := workflow.ExecuteActivity(ctx, ima.CompleteFlowParentTask, input.WorkspaceId, input.TaskId, flow.Status).Get(ctx, nil)
+				if completeErr != nil {
+					log.Error("Failed to complete parent task on child completion", "Error", completeErr)
+				}
+				childDone = true
+			})
+		}
 
 		selector.Select(ctx)
 	}
