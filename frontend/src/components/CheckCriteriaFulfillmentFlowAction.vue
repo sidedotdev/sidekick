@@ -16,7 +16,7 @@
         <UnifiedDiffViewer
           :diff-string="diffString"
           :default-expanded="false"
-          :level="(level ?? 0) + 1"
+          :level="level"
         />
       </div>
     </div>
