@@ -3,6 +3,7 @@ package dev
 import (
 	"context"
 	"fmt"
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"strings"
@@ -37,6 +38,9 @@ func (ia DevAgent) HandleNewTask(ctx context.Context, task *domain.Task) error {
 	options := client.StartWorkflowOptions{
 		ID:        TaskWorkflowId(task.Id),
 		TaskQueue: ia.TemporalTaskQueue,
+		Memo: map[string]interface{}{
+			"sidekickVersion": common.GetBuildCommitSha(),
+		},
 	}
 	_, err := ia.TemporalClient.ExecuteWorkflow(ctx, options, TaskWorkflow, TaskWorkflowInput{
 		WorkspaceId: task.WorkspaceId,

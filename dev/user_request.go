@@ -157,7 +157,8 @@ func GetUserMergeApproval(
 								newDiffSinceLastReview, err = legacyOwnChangesSinceReview(trackedCtx.DevContext, finalTarget, lastReviewTreeHash, ignoreWhitespace)
 							}
 							if err != nil {
-								return nil, fmt.Errorf("failed to generate diff since last review: %v", err)
+								workflow.GetLogger(trackedCtx).Warn("Failed to generate diff since last review, continuing without it", "error", err)
+								newDiffSinceLastReview = ""
 							}
 						}
 					} else {
@@ -177,7 +178,8 @@ func GetUserMergeApproval(
 								IgnoreWhitespace: ignoreWhitespace,
 							}).Get(trackedCtx, &newDiffSinceLastReview)
 							if err != nil {
-								return nil, fmt.Errorf("failed to generate diff since last review: %v", err)
+								workflow.GetLogger(trackedCtx).Warn("Failed to generate diff since last review, continuing without it", "error", err)
+								newDiffSinceLastReview = ""
 							}
 						}
 					}

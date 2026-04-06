@@ -3,12 +3,15 @@ package main
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sidekick"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"sidekick/common"
 	sidekick_worker "sidekick/worker"
@@ -16,6 +19,7 @@ import (
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/worker"
 
 	"github.com/rs/zerolog"
@@ -54,8 +58,9 @@ func loadBlacklist() map[string]struct{} {
 }
 
 type listedWorkflow struct {
-	id     string
-	status enums.WorkflowExecutionStatus
+	id              string
+	status          enums.WorkflowExecutionStatus
+	sidekickVersion string
 }
 
 func listRecentRunningWorkflows(ctx context.Context, c client.Client, limit int) ([]listedWorkflow, error) {
@@ -70,10 +75,17 @@ func listRecentRunningWorkflows(ctx context.Context, c client.Client, limit int)
 		if err != nil {
 			return nil, err
 		}
-		for _, exec := range resp.Executions {
+		for _, wfExec := range resp.Executions {
+			var version string
+			if wfExec.Memo != nil {
+				if payload, ok := wfExec.Memo.Fields["sidekickVersion"]; ok {
+					_ = converter.GetDefaultDataConverter().FromPayload(payload, &version)
+				}
+			}
 			results = append(results, listedWorkflow{
-				id:     exec.Execution.WorkflowId,
-				status: exec.Status,
+				id:              wfExec.Execution.WorkflowId,
+				status:          wfExec.Status,
+				sidekickVersion: version,
 			})
 			if len(results) >= limit {
 				return results, nil
@@ -85,6 +97,22 @@ func listRecentRunningWorkflows(ctx context.Context, c client.Client, limit int)
 		nextPageToken = resp.NextPageToken
 	}
 	return results, nil
+}
+
+// isReplayableVersion reports whether the workflow's version ref is in the
+// current branch's history, meaning it is safe to replay. The refs can be
+// commit SHAs, tags, or any other valid git ref. Returns true when either ref
+// is empty (graceful fallback) or when the workflow ref is an ancestor of (or
+// equal to) the current ref.
+func isReplayableVersion(currentRef, workflowRef string) bool {
+	if currentRef == "" || workflowRef == "" {
+		return true
+	}
+	if currentRef == workflowRef {
+		return true
+	}
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", workflowRef, currentRef)
+	return cmd.Run() == nil
 }
 
 // TestReplayRunningWorkflows connects to the local Temporal server, fetches
@@ -137,6 +165,13 @@ func TestReplayRunningWorkflows(t *testing.T) {
 		t.Logf("WARNING: %d/%d workflows returned by Running query were not actually Running", nonRunning, len(listed))
 	}
 
+	currentSha := common.GetBuildCommitSha()
+	if currentSha != "" {
+		t.Logf("Current build commit: %s", currentSha)
+	} else {
+		t.Logf("Current build commit SHA unavailable; skipping version-based filtering")
+	}
+
 	var filtered []string
 	for _, wf := range listed {
 		if wf.status != enums.WORKFLOW_EXECUTION_STATUS_RUNNING {
@@ -144,6 +179,10 @@ func TestReplayRunningWorkflows(t *testing.T) {
 		}
 		if _, ok := blacklist[wf.id]; ok {
 			t.Logf("Skipping blacklisted workflow: %s", wf.id)
+			continue
+		}
+		if !isReplayableVersion(currentSha, wf.sidekickVersion) {
+			t.Logf("Skipping workflow %s: version %s is not in current branch history", wf.id, wf.sidekickVersion)
 			continue
 		}
 		filtered = append(filtered, wf.id)
@@ -179,32 +218,45 @@ func TestReplayRunningWorkflows(t *testing.T) {
 	histories := make(map[string]*historyResult)
 	var wg sync.WaitGroup
 
+	perWorkflowTimeout := 30 * time.Second
+
 	for _, id := range filtered {
 		wg.Add(1)
 		go func(workflowID string) {
 			defer wg.Done()
-			hist, err := GetWorkflowHistory(ctx, c, workflowID, "")
+
+			done := make(chan *historyResult, 1)
+			go func() {
+				hist, err := GetWorkflowHistory(ctx, c, workflowID, "")
+				if err != nil {
+					done <- &historyResult{id: workflowID, err: err}
+					return
+				}
+				if events := hist.Events; len(events) > 0 && terminalEventTypes[events[len(events)-1].EventType] {
+					done <- &historyResult{id: workflowID, skipped: true}
+					return
+				}
+				replayer, err := worker.NewWorkflowReplayerWithOptions(worker.WorkflowReplayerOptions{
+					DataConverter: clientOptions.DataConverter,
+				})
+				if err != nil {
+					done <- &historyResult{id: workflowID, err: err}
+					return
+				}
+				sidekick_worker.RegisterWorkflows(replayer)
+				replayErr := replayer.ReplayWorkflowHistory(nil, hist)
+				done <- &historyResult{id: workflowID, err: replayErr}
+			}()
+
+			var result *historyResult
+			select {
+			case result = <-done:
+			case <-time.After(perWorkflowTimeout):
+				result = &historyResult{id: workflowID, err: fmt.Errorf("replay timed out after %s", perWorkflowTimeout)}
+			}
 			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				histories[workflowID] = &historyResult{id: workflowID, err: err}
-				return
-			}
-			// Guard against workflows that completed between listing and history fetch.
-			if events := hist.Events; len(events) > 0 && terminalEventTypes[events[len(events)-1].EventType] {
-				histories[workflowID] = &historyResult{id: workflowID, skipped: true}
-				return
-			}
-			replayer, err := worker.NewWorkflowReplayerWithOptions(worker.WorkflowReplayerOptions{
-				DataConverter: clientOptions.DataConverter,
-			})
-			if err != nil {
-				histories[workflowID] = &historyResult{id: workflowID, err: err}
-				return
-			}
-			sidekick_worker.RegisterWorkflows(replayer)
-			replayErr := replayer.ReplayWorkflowHistory(nil, hist)
-			histories[workflowID] = &historyResult{id: workflowID, err: replayErr}
+			histories[workflowID] = result
+			mu.Unlock()
 		}(id)
 	}
 
