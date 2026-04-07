@@ -3,15 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sidekick"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"sidekick/common"
 	sidekick_worker "sidekick/worker"
@@ -218,45 +217,42 @@ func TestReplayRunningWorkflows(t *testing.T) {
 	histories := make(map[string]*historyResult)
 	var wg sync.WaitGroup
 
-	perWorkflowTimeout := 30 * time.Second
+	// Limit concurrent replays to avoid CPU contention that triggers the
+	// deadlock detector (which measures wall-clock time between yields).
+	replaySem := make(chan struct{}, runtime.NumCPU())
 
 	for _, id := range filtered {
 		wg.Add(1)
 		go func(workflowID string) {
 			defer wg.Done()
 
-			done := make(chan *historyResult, 1)
-			go func() {
-				hist, err := GetWorkflowHistory(ctx, c, workflowID, "")
-				if err != nil {
-					done <- &historyResult{id: workflowID, err: err}
-					return
-				}
-				if events := hist.Events; len(events) > 0 && terminalEventTypes[events[len(events)-1].EventType] {
-					done <- &historyResult{id: workflowID, skipped: true}
-					return
-				}
-				replayer, err := worker.NewWorkflowReplayerWithOptions(worker.WorkflowReplayerOptions{
-					DataConverter: clientOptions.DataConverter,
-				})
-				if err != nil {
-					done <- &historyResult{id: workflowID, err: err}
-					return
-				}
-				sidekick_worker.RegisterWorkflows(replayer)
-				replayErr := replayer.ReplayWorkflowHistory(nil, hist)
-				done <- &historyResult{id: workflowID, err: replayErr}
+			result := &historyResult{id: workflowID}
+			defer func() {
+				mu.Lock()
+				histories[workflowID] = result
+				mu.Unlock()
 			}()
 
-			var result *historyResult
-			select {
-			case result = <-done:
-			case <-time.After(perWorkflowTimeout):
-				result = &historyResult{id: workflowID, err: fmt.Errorf("replay timed out after %s", perWorkflowTimeout)}
+			hist, err := GetWorkflowHistory(ctx, c, workflowID, "")
+			if err != nil {
+				result.err = err
+				return
 			}
-			mu.Lock()
-			histories[workflowID] = result
-			mu.Unlock()
+			if events := hist.Events; len(events) > 0 && terminalEventTypes[events[len(events)-1].EventType] {
+				result.skipped = true
+				return
+			}
+			replayer, err := worker.NewWorkflowReplayerWithOptions(worker.WorkflowReplayerOptions{
+				DataConverter: clientOptions.DataConverter,
+			})
+			if err != nil {
+				result.err = err
+				return
+			}
+			sidekick_worker.RegisterWorkflows(replayer)
+			replaySem <- struct{}{}
+			result.err = replayer.ReplayWorkflowHistory(nil, hist)
+			<-replaySem
 		}(id)
 	}
 
