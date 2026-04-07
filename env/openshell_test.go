@@ -162,7 +162,6 @@ func TestCreateOpenShellWorktreeActivity(t *testing.T) {
 	envContainer := EnvContainer{Env: localEnv}
 
 	t.Run("creates worktree successfully", func(t *testing.T) {
-		t.Parallel()
 		output, err := CreateOpenShellWorktreeActivity(ctx, CreateOpenShellWorktreeInput{
 			EnvContainer: envContainer,
 			RepoDir:      repoDir,
@@ -182,7 +181,6 @@ func TestCreateOpenShellWorktreeActivity(t *testing.T) {
 	})
 
 	t.Run("creates worktree with start branch", func(t *testing.T) {
-		t.Parallel()
 		output, err := CreateOpenShellWorktreeActivity(ctx, CreateOpenShellWorktreeInput{
 			EnvContainer: envContainer,
 			RepoDir:      repoDir,
@@ -196,7 +194,6 @@ func TestCreateOpenShellWorktreeActivity(t *testing.T) {
 	})
 
 	t.Run("returns error for duplicate branch", func(t *testing.T) {
-		t.Parallel()
 		wsId := "ws-" + ksuid.New().String()
 		input := CreateOpenShellWorktreeInput{
 			EnvContainer: envContainer,
@@ -216,7 +213,6 @@ func TestCreateOpenShellWorktreeActivity(t *testing.T) {
 	})
 
 	t.Run("strips side/ prefix for directory name", func(t *testing.T) {
-		t.Parallel()
 		output, err := CreateOpenShellWorktreeActivity(ctx, CreateOpenShellWorktreeInput{
 			EnvContainer: envContainer,
 			RepoDir:      repoDir,
