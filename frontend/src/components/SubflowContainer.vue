@@ -68,7 +68,6 @@ watch(() => props.defaultExpanded, (newVal: boolean) => {
   if (!wasToggled) {
     accordionState.value.expanded = newVal || props.subflowTree.children.length <= autoExpandThreshold
   }
-  wasToggled = false
 })
 
 function isFlowAction(child: FlowAction | SubflowTree): child is FlowAction {
@@ -96,7 +95,7 @@ function toggleAccordion() {
 
 function childKey(child: FlowAction | SubflowTree, index: number): string {
   if (isFlowAction(child)) {
-    return child.id + ":" + child.updated
+    return child.id
   } else {
     return child.name + index
   }

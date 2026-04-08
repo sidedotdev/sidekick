@@ -1,8 +1,11 @@
 <template>
   <div class="tool-flow-action">
     <div v-if="expand">
-      <div class="action-params">
-        Params: <JsonTree :data="flowAction.actionParams" :deep="0" />
+      <div v-if="commandDisplay" class="command-block">
+        <pre class="command-line"><code>{{ commandDisplay }}</code></pre>
+      </div>
+      <div v-else class="action-params">
+        <JsonTree :data="flowAction.actionParams" :deep="0" />
       </div>
       <div class="action-result">
         <template v-if="contentBlocks && contentBlocks.length > 0">
@@ -11,6 +14,7 @@
           </template>
         </template>
         <pre v-else-if="toolResponse">{{ toolResponse }}</pre>
+        <p v-else-if="flowAction.actionStatus === 'started'" class="running-indicator">Running…</p>
       </div>
     </div>
   </div>
@@ -19,6 +23,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { FlowAction, Llm2ContentBlock } from '../lib/models';
+import JsonTree from './JsonTree.vue'
 import ContentBlockRenderer from './ContentBlockRenderer.vue'
 
 const props = defineProps<{
@@ -64,6 +69,13 @@ const summary = computed<{ text: string, emoji: string } | null>(() => {
   }
 });
 
+const commandDisplay = computed(() => {
+  const params = props.flowAction.actionParams;
+  if (!params?.command) return null;
+  const prefix = params.workingDir ? `${params.workingDir}$ ` : '$ ';
+  return prefix + params.command;
+});
+
 defineExpose({ summary });
 
 const parsedResult = computed(() => {
@@ -104,9 +116,26 @@ const toolResponse = computed<string | null>(() => {
   margin-top: 0.625rem;
 }
 
-code {
+.command-block {
+  margin-top: 0.5rem;
+}
+
+.command-line {
   background-color: var(--color-background-mute);
-  padding: 0.125rem 0.25rem;
+  padding: 0.5rem 0.75rem;
   border-radius: 0.25rem;
+  overflow-x: auto;
+  margin: 0;
+}
+
+.command-line code {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.running-indicator {
+  color: var(--color-text-2);
+  font-style: italic;
+  margin: 0.5rem 0;
 }
 </style>

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import FlowActionItem from '../FlowActionItem.vue'
 import type { FlowAction } from '../../lib/models'
 
@@ -66,6 +67,76 @@ describe('FlowActionItem', () => {
     await wrapper.find('a').trigger('click')
     expect(wrapper.text()).toContain('{param: "Test param"}')
     expect(wrapper.text()).toContain('Test result')
+  })
+
+  it('maintains manually expanded state and updates rendered content when flowAction prop changes', async () => {
+    flowAction.actionType = 'generic_action'
+    flowAction.actionStatus = 'started'
+    flowAction.actionResult = ''
+    flowAction.actionParams = { step: 'processing' }
+    const wrapper = mount(FlowActionItem, {
+      props: { flowAction, defaultExpanded: false },
+    })
+
+    // Initially not expanded — no detail content rendered
+    expect(wrapper.classes()).not.toContain('expanded-action')
+    expect(wrapper.text()).toContain('...')
+
+    // Manually expand
+    await wrapper.find('a').trigger('click')
+    await nextTick()
+    expect(wrapper.classes()).toContain('expanded-action')
+    // Expanded generic action shows params
+    expect(wrapper.text()).toContain('step')
+    expect(wrapper.text()).toContain('processing')
+
+    // Update flowAction prop to simulate real-time completion
+    const updatedFlowAction: FlowAction = {
+      ...flowAction,
+      actionStatus: 'complete',
+      actionResult: JSON.stringify({ Response: 'task completed successfully' }),
+      updated: new Date(),
+    }
+    await wrapper.setProps({ flowAction: updatedFlowAction })
+    await nextTick()
+
+    // Should still be expanded
+    expect(wrapper.classes()).toContain('expanded-action')
+    // Rendered content should reflect the update
+    expect(wrapper.text()).not.toContain('...')
+    expect(wrapper.text()).toContain('task completed successfully')
+  })
+
+  it('maintains manually collapsed state and updates header when flowAction prop changes', async () => {
+    flowAction.actionType = 'generic_action'
+    flowAction.actionStatus = 'started'
+    const wrapper = mount(FlowActionItem, {
+      props: { flowAction, defaultExpanded: true },
+    })
+
+    // Initially expanded, header shows "started" indicator
+    expect(wrapper.classes()).toContain('expanded-action')
+    expect(wrapper.text()).toContain('...')
+
+    // Manually collapse
+    await wrapper.find('a').trigger('click')
+    await nextTick()
+    expect(wrapper.classes()).not.toContain('expanded-action')
+
+    // Update flowAction prop
+    const updatedFlowAction: FlowAction = {
+      ...flowAction,
+      actionStatus: 'complete',
+      actionResult: JSON.stringify({ Response: 'result' }),
+      updated: new Date(),
+    }
+    await wrapper.setProps({ flowAction: updatedFlowAction })
+    await nextTick()
+
+    // Should still be collapsed
+    expect(wrapper.classes()).not.toContain('expanded-action')
+    // Header should reflect updated status (no more "..." indicator)
+    expect(wrapper.text()).not.toContain('...')
   })
 
   it('makes a POST request with the correct arguments when the submit button is clicked', async () => {

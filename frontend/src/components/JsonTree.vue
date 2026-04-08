@@ -3,7 +3,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, type PropType } from 'vue'
+import { ref, computed, onMounted, type PropType } from 'vue'
 import VueJsonPretty from 'vue-json-pretty'
 import 'vue-json-pretty/lib/styles.css'
 import type { JSONDataType } from 'vue-json-pretty/types/utils';
@@ -20,7 +20,7 @@ const props = defineProps({
   },
 })
 
-const jsonData = props.data as JSONDataType
+const jsonData = computed(() => props.data as JSONDataType)
 
 const theme = ref<'dark' | 'light'>('dark')
 
