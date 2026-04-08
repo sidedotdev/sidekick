@@ -61,7 +61,7 @@ func lspServerStdioReadWriteCloser(languageName string) (*ReadWriteCloser, error
 		}
 		cmd = exec.Command(goplsPath, "-remote=auto", "-logfile=auto", "-debug=:0", "-remote.debug=:0", "-rpc.trace", "-remote.listen.timeout=0")
 	default:
-		return nil, fmt.Errorf("%v: %s", ErrUnsupportedLanguage, languageName)
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedLanguage, languageName)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -88,7 +88,7 @@ func (l *Jsonrpc2LSPClient) Initialize(ctx context.Context, params InitializePar
 	// start lsp server (if needed) and connect to it
 	rwc, err := lspServerStdioReadWriteCloser(l.LanguageName)
 	if err != nil {
-		return InitializeResponse{}, fmt.Errorf("gopls failure: %v", err)
+		return InitializeResponse{}, fmt.Errorf("gopls failure: %w", err)
 	}
 	// Setup JSON-RPC 2.0 connection
 	(*l).Conn = jsonrpc2.NewConn(ctx, jsonrpc2.NewBufferedStream(rwc, jsonrpc2.VSCodeObjectCodec{}), &noopHandler{})

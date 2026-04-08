@@ -3,6 +3,7 @@ package lsp
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -43,6 +44,9 @@ func (lspa *LSPActivities) FindReferencesActivity(ctx context.Context, input Fin
 	lang := utils.InferLanguageNameFromFilePath(input.RelativeFilePath)
 	lspClient, err := lspa.findOrInitClient(ctx, baseDir, lang)
 	if err != nil {
+		if errors.Is(err, ErrUnsupportedLanguage) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("failed to find or initialize lsp client: %w", err)
 	}
 
