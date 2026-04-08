@@ -379,3 +379,39 @@ type Foo struct {}
 	require.NoError(t, err)
 	require.Len(t, result, 2)
 }
+
+func TestFindReferencesActivity_UnsupportedLanguage(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+
+	testFile := `def hello():
+    print("hello")
+
+hello()
+`
+	testFilePath := filepath.Join(tempDir, "test.py")
+	err := os.WriteFile(testFilePath, []byte(testFile), 0644)
+	require.NoError(t, err)
+
+	lspa := &LSPActivities{
+		LSPClientProvider: func(language string) LSPClient {
+			return &Jsonrpc2LSPClient{
+				LanguageName: language,
+			}
+		},
+		InitializedClients: map[string]LSPClient{},
+	}
+
+	input := FindReferencesActivityInput{
+		EnvContainer: env.EnvContainer{
+			Env: &env.LocalEnv{WorkingDirectory: tempDir},
+		},
+		RelativeFilePath: filepath.Base(testFilePath),
+		SymbolText:       "hello",
+	}
+
+	result, err := lspa.FindReferencesActivity(context.Background(), input)
+	assert.NoError(t, err)
+	assert.Empty(t, result)
+}
