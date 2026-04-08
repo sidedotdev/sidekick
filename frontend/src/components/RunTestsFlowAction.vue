@@ -21,7 +21,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineProps, reactive } from 'vue';
+import { computed, reactive } from 'vue';
 import type { FlowAction } from '../lib/models';
 
 interface RunTestsParams {
@@ -47,7 +47,7 @@ const props = defineProps({
   },
 });
 
-const params = props.flowAction.actionParams as RunTestsParams;
+const params = computed(() => props.flowAction.actionParams as RunTestsParams);
 const errorLoadingResults = reactive<{ status: boolean }>({ status: false });
 
 const actionResult = computed(() => {

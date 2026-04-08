@@ -16,6 +16,7 @@
         </template>
       </template>
       <pre v-else-if="toolResponse">{{ toolResponse }}</pre>
+      <p v-else-if="flowAction.actionStatus === 'started'" class="running-indicator">Running…</p>
     </div>
   </div>
 </template>
@@ -113,11 +114,16 @@ watch(
 
 <style scoped>
 .tool-flow-action {
-  margin-top: 10px;
+  margin-top: 0.625rem;
 }
 
 .action-params {
-  margin-top: 10px;
+  margin-top: 0.625rem;
 }
 
+.running-indicator {
+  color: var(--color-text-2);
+  font-style: italic;
+  margin: 0.5rem 0;
+}
 </style>
