@@ -82,6 +82,8 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "timeout"},
 			{Pattern: "sleep"},
 			{Pattern: "wait"},
+			{Pattern: "seq"},
+			{Pattern: "printf"},
 			// Git read operations
 			{Pattern: "git status"},
 			{Pattern: "git log"},
