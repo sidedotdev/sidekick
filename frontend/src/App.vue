@@ -6,7 +6,9 @@ import type { Ref } from 'vue'
 import type { Workspace } from './lib/models'
 import Select from 'primevue/select'
 import GearIcon from './components/icons/GearIcon.vue'
+import ShortcutTooltip from './components/ShortcutTooltip.vue'
 import { fuzzyWordPrefixRank } from './lib/fuzzyMatch'
+import { isInteractiveElement } from './lib/dom'
 
 const router = useRouter()
 const route = useRoute()
@@ -45,6 +47,14 @@ const handleGlobalKeyDown = (event: KeyboardEvent) => {
     const selectEl = workspaceSelectRef.value?.$el as HTMLElement | undefined
     if (selectEl?.contains(document.activeElement)) {
       (document.activeElement as HTMLElement)?.blur()
+    }
+  }
+
+  const hasAnyModifier = event.metaKey || event.ctrlKey || event.altKey
+  if (!hasAnyModifier && (event.key === 'b' || event.key === 'B')) {
+    if (!isInteractiveElement(event.target as HTMLElement)) {
+      event.preventDefault()
+      router.push({ name: 'kanban' })
     }
   }
 }
@@ -137,9 +147,15 @@ onUnmounted(() => {
       <RouterLink id="logo-link" to="/kanban"><div id="logo">~</div></RouterLink>
 
       <nav class="container">
-        <RouterLink to="/kanban">Board</RouterLink>
-        <RouterLink to="/archived-tasks">Archived Tasks</RouterLink>
-        <RouterLink to="/workspaces/new">+Space</RouterLink>
+        <ShortcutTooltip label="Board" shortcut="B">
+          <RouterLink to="/kanban">Board</RouterLink>
+        </ShortcutTooltip>
+        <ShortcutTooltip label="Archived Tasks">
+          <RouterLink to="/archived-tasks">Archived Tasks</RouterLink>
+        </ShortcutTooltip>
+        <ShortcutTooltip label="New Space">
+          <RouterLink to="/workspaces/new">+Space</RouterLink>
+        </ShortcutTooltip>
       </nav>
     </div>
 
@@ -331,7 +347,7 @@ nav a {
   border-left: 1px solid var(--color-border);
 }
 
-nav a:first-of-type {
+nav > :first-child a {
   border: 0;
 }
 
