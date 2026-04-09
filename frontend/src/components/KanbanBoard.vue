@@ -45,6 +45,7 @@ import TaskCard from './TaskCard.vue'
 import TaskModal from './TaskModal.vue'
 import ShortcutHint from './ShortcutHint.vue'
 import { store } from '../lib/store'
+import { isInteractiveElement } from '../lib/dom'
 
 const props = defineProps<{
   tasks: FullTask[],
@@ -161,15 +162,8 @@ const handleKeyDown = (event: KeyboardEvent) => {
   }
 
   const target = event.target as HTMLElement
-  const isEditableElement = target && (
-    target.tagName === 'INPUT' ||
-    target.tagName === 'TEXTAREA' ||
-    target.tagName === 'SELECT' ||
-    target.isContentEditable ||
-    target.getAttribute('role') === 'textbox'
-  )
 
-  if (isEditableElement || isModalOpen.value) {
+  if (isInteractiveElement(target) || isModalOpen.value) {
     return
   }
 
