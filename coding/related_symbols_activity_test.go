@@ -208,3 +208,40 @@ func getRangeMatching(t *testing.T, testFile, s string) *lsp.Range {
 	t.Fatalf("String not found in test file: %s", s)
 	return nil
 }
+
+func TestRelatedSymbolsActivity_UnsupportedLanguage(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+
+	testFile := `def hello():
+    print("hello")
+
+hello()
+`
+	writeFile(t, filepath.Join(tempDir, "test.py"), testFile)
+
+	ca := &CodingActivities{
+		LSPActivities: &lsp.LSPActivities{
+			LSPClientProvider: func(language string) lsp.LSPClient {
+				return &lsp.Jsonrpc2LSPClient{
+					LanguageName: language,
+				}
+			},
+			InitializedClients: map[string]lsp.LSPClient{},
+		},
+		TreeSitterActivities: &tree_sitter.TreeSitterActivities{},
+	}
+
+	input := RelatedSymbolsActivityInput{
+		EnvContainer: env.EnvContainer{
+			Env: &env.LocalEnv{WorkingDirectory: tempDir},
+		},
+		RelativeFilePath: "test.py",
+		SymbolText:       "hello",
+	}
+
+	result, err := ca.RelatedSymbolsActivity(context.Background(), input)
+	assert.NoError(t, err)
+	assert.Nil(t, result)
+}
