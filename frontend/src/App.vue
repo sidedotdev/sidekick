@@ -6,6 +6,9 @@ import type { Ref } from 'vue'
 import type { Workspace } from './lib/models'
 import Select from 'primevue/select'
 import GearIcon from './components/icons/GearIcon.vue'
+import BoardIcon from './components/icons/BoardIcon.vue'
+import ArchiveIcon from './components/icons/ArchiveIcon.vue'
+import PlusIcon from './components/icons/PlusIcon.vue'
 import ShortcutTooltip from './components/ShortcutTooltip.vue'
 import { fuzzyWordPrefixRank } from './lib/fuzzyMatch'
 import { isInteractiveElement } from './lib/dom'
@@ -148,13 +151,13 @@ onUnmounted(() => {
 
       <nav class="container">
         <ShortcutTooltip label="Board" shortcut="B">
-          <RouterLink to="/kanban">Board</RouterLink>
+          <RouterLink to="/kanban" class="nav-icon-link" aria-label="Board"><BoardIcon /></RouterLink>
         </ShortcutTooltip>
         <ShortcutTooltip label="Archived Tasks">
-          <RouterLink to="/archived-tasks">Archived Tasks</RouterLink>
+          <RouterLink to="/archived-tasks" class="nav-icon-link" aria-label="Archived Tasks"><ArchiveIcon /></RouterLink>
         </ShortcutTooltip>
         <ShortcutTooltip label="New Space">
-          <RouterLink to="/workspaces/new">+Space</RouterLink>
+          <RouterLink to="/workspaces/new" class="nav-icon-link" aria-label="New Space"><PlusIcon /></RouterLink>
         </ShortcutTooltip>
       </nav>
     </div>
@@ -349,6 +352,12 @@ nav a {
 
 nav > :first-child a {
   border: 0;
+}
+
+.nav-icon-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 @media (min-width: 1024px) {

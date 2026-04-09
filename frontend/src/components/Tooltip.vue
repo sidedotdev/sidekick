@@ -35,7 +35,7 @@ const positionClass = computed(() => `tooltip-${props.position}`)
   position: absolute;
   padding: 0.375rem 0.625rem;
   background: var(--color-background-mute);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-contrast);
   border-radius: 0.375rem;
   white-space: nowrap;
   display: flex;
@@ -48,11 +48,29 @@ const positionClass = computed(() => `tooltip-${props.position}`)
   box-shadow: 0 0.125rem 0.5rem rgba(0, 0, 0, 0.15);
 }
 
+.tooltip-popup::before {
+  content: '';
+  position: absolute;
+  width: 0.5rem;
+  height: 0.5rem;
+  background: var(--color-background-mute);
+  border: 1px solid var(--color-border-contrast);
+  transform: rotate(45deg);
+}
+
 .tooltip-right {
   left: 100%;
   top: 50%;
   transform: translateY(-50%);
   margin-left: 0.5rem;
+}
+
+.tooltip-right::before {
+  left: -0.3125rem;
+  top: 50%;
+  transform: translateY(-50%) rotate(45deg);
+  border-right: none;
+  border-top: none;
 }
 
 .tooltip-left {
@@ -62,6 +80,14 @@ const positionClass = computed(() => `tooltip-${props.position}`)
   margin-right: 0.5rem;
 }
 
+.tooltip-left::before {
+  right: -0.3125rem;
+  top: 50%;
+  transform: translateY(-50%) rotate(45deg);
+  border-left: none;
+  border-bottom: none;
+}
+
 .tooltip-top {
   bottom: 100%;
   left: 50%;
@@ -69,10 +95,26 @@ const positionClass = computed(() => `tooltip-${props.position}`)
   margin-bottom: 0.5rem;
 }
 
+.tooltip-top::before {
+  bottom: -0.3125rem;
+  left: 50%;
+  transform: translateX(-50%) rotate(45deg);
+  border-top: none;
+  border-left: none;
+}
+
 .tooltip-bottom {
   top: 100%;
   left: 50%;
   transform: translateX(-50%);
   margin-top: 0.5rem;
+}
+
+.tooltip-bottom::before {
+  top: -0.3125rem;
+  left: 50%;
+  transform: translateX(-50%) rotate(45deg);
+  border-bottom: none;
+  border-right: none;
 }
 </style>
