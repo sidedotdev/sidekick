@@ -50,9 +50,9 @@ func TestDevPodIntegration(t *testing.T) {
 
 	// Start the DevPod workspace. When the container is already running
 	// (e.g. pre-warmed by `devpod up .` in side.yml), this returns quickly.
-	err := DevPodUpActivity(context.Background(), DevPodUpInput{WorkspacePath: workspacePath})
+	workspaceName := "test-devpod-integration-sidekick-e2e" // use fixed value for faster runs (no repeated image build)
+	err := DevPodUpActivity(context.Background(), DevPodUpInput{WorkspacePath: workspacePath, IDE: "none", WorkspaceId: workspaceName})
 	require.NoError(t, err, "DevPodUpActivity failed")
-	workspaceName := DevPodWorkspaceName(workspacePath)
 
 	// Derive a context that leaves time for cleanup before the test deadline.
 	ctx := context.Background()
@@ -65,12 +65,12 @@ func TestDevPodIntegration(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := DevPodDeleteActivity(cleanupCtx, workspacePath); err != nil {
+		if err := DevPodDeleteActivity(cleanupCtx, workspaceName); err != nil {
 			t.Logf("DevPodDeleteActivity cleanup error: %v", err)
 		}
 	})
 
-	containerWorkDir := "/workspaces/" + filepath.Base(workspacePath)
+	containerWorkDir := "/workspaces/" + workspaceName
 
 	devEnv := &DevPodEnv{
 		WorkingDirectory: containerWorkDir,
