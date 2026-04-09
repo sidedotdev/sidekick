@@ -11,7 +11,6 @@ import ArchiveIcon from './components/icons/ArchiveIcon.vue'
 import PlusIcon from './components/icons/PlusIcon.vue'
 import ShortcutTooltip from './components/ShortcutTooltip.vue'
 import { fuzzyWordPrefixRank } from './lib/fuzzyMatch'
-import { isInteractiveElement } from './lib/dom'
 
 const router = useRouter()
 const route = useRoute()
@@ -54,10 +53,8 @@ const handleGlobalKeyDown = (event: KeyboardEvent) => {
   }
 
   if (modKey && (event.key === 'b' || event.key === 'B')) {
-    if (!isInteractiveElement(event.target as HTMLElement)) {
-      event.preventDefault()
-      router.push({ name: 'kanban' })
-    }
+    event.preventDefault()
+    router.push({ name: 'kanban' })
   }
 }
 
