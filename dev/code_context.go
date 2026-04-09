@@ -564,7 +564,7 @@ type ToolCallWithCodeContext struct {
 func ForceToolRetrieveCodeContext(actionCtx DevActionContext, chatHistory *persisted_ai.ChatHistoryContainer) ([]ToolCallWithCodeContext, error) {
 	modelConfig := actionCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
 	flowActionCtx := actionCtx.FlowActionContext()
-	toolNameMapping, err := resolveStreamToolNameMapping(modelConfig, *flowActionCtx.Secrets)
+	toolNameMapping, err := resolveStreamToolNameMapping(flowActionCtx, modelConfig, *flowActionCtx.Secrets)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve tool name mapping: %v", err)
 	}
