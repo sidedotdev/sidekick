@@ -393,6 +393,23 @@ func checkIfDevStepCompleted(dCtx DevContext, overallRequirements string, step D
 		if !testResult.TestsSkipped {
 			autoChecks = testResult.Output
 		}
+
+		if v := workflow.GetVersion(dCtx, "step-integration-tests", workflow.DefaultVersion, 1); v >= 1 {
+			if step.RunIntegrationTests && testResult.TestsPassed && len(dCtx.RepoConfig.IntegrationTestCommands) > 0 {
+				integrationTestResult, intErr := RunTests(dCtx, dCtx.RepoConfig.IntegrationTestCommands)
+				if intErr != nil {
+					return result, fmt.Errorf("failed to run integration tests: %v", intErr)
+				}
+				if !integrationTestResult.TestsPassed && !integrationTestResult.TestsSkipped {
+					result.Successful = false
+					result.Summary = integrationTestResult.Output
+					return result, nil
+				}
+				if !integrationTestResult.TestsSkipped {
+					autoChecks += "\n\n" + integrationTestResult.Output
+				}
+			}
+		}
 		fulfillment, err := CheckWorkMeetsCriteria(dCtx, CheckWorkInfo{
 			CodeContext:   "", // TODO providing the code context will help with checking for criteria fulfillment
 			Requirements:  overallRequirements,

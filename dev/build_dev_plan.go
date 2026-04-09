@@ -219,6 +219,8 @@ type DevStep struct {
 	Definition         string `json:"definition" jsonschema:"description=Information about what to do in this step formatted with markdown (without any headings). Should be short\\, yet include enough initial context/information for someone to be able to start performing the step."`
 	Type               string `json:"type" jsonschema:"enum=edit,description=\"edit\" means code or non-code plaintext files must be created\\, deleted and/or edited. searching for text or code context in the repo can also be done in the same step. \"other\" means that other actions than the standard ones are required\\, so this will ask for external help"`
 	CompletionAnalysis string `json:"completion_analysis" jsonschema:"description=Brief analysis of the minimal checks that should be done to confirm the step was successfully completed"`
+
+	RunIntegrationTests bool `json:"-"`
 }
 
 func (plan DevPlan) String() string {
