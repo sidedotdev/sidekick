@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -412,6 +413,7 @@ hello()
 	}
 
 	result, err := lspa.FindReferencesActivity(context.Background(), input)
-	assert.NoError(t, err)
-	assert.Empty(t, result)
+	assert.Nil(t, result)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrUnsupportedLanguage))
 }

@@ -51,7 +51,19 @@ func (rwc *ReadWriteCloser) Close() error {
 
 var ErrUnsupportedLanguage = errors.New("unsupported language")
 
+func IsSupportedLanguage(lang string) bool {
+	switch lang {
+	case "golang":
+		return true
+	default:
+		return false
+	}
+}
+
 func lspServerStdioReadWriteCloser(languageName string) (*ReadWriteCloser, error) {
+	if !IsSupportedLanguage(languageName) {
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedLanguage, languageName)
+	}
 	var cmd *exec.Cmd
 	switch languageName {
 	case "golang":
@@ -60,8 +72,6 @@ func lspServerStdioReadWriteCloser(languageName string) (*ReadWriteCloser, error
 			return nil, fmt.Errorf("failed to find or install gopls: %w", err)
 		}
 		cmd = exec.Command(goplsPath, "-remote=auto", "-logfile=auto", "-debug=:0", "-remote.debug=:0", "-rpc.trace", "-remote.listen.timeout=0")
-	default:
-		return nil, fmt.Errorf("%w: %s", ErrUnsupportedLanguage, languageName)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

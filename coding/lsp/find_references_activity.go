@@ -3,7 +3,6 @@ package lsp
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -38,15 +37,15 @@ type FindReferencesActivityInput struct {
 	Range            *Range // Optional
 }
 
-// FindReferencesActivity finds references for the given input using the LSP client
+// FindReferencesActivity finds references for the given input using the LSP client.
+// Returns ErrUnsupportedLanguage (wrapped) for languages without LSP support.
+// Callers that want to silently skip unsupported languages should check with
+// IsSupportedLanguage before calling, or use errors.Is on the returned error.
 func (lspa *LSPActivities) FindReferencesActivity(ctx context.Context, input FindReferencesActivityInput) ([]Location, error) {
 	baseDir := input.EnvContainer.Env.GetWorkingDirectory()
 	lang := utils.InferLanguageNameFromFilePath(input.RelativeFilePath)
 	lspClient, err := lspa.findOrInitClient(ctx, baseDir, lang)
 	if err != nil {
-		if errors.Is(err, ErrUnsupportedLanguage) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("failed to find or initialize lsp client: %w", err)
 	}
 
