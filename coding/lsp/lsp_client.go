@@ -51,7 +51,19 @@ func (rwc *ReadWriteCloser) Close() error {
 
 var ErrUnsupportedLanguage = errors.New("unsupported language")
 
+func IsSupportedLanguage(lang string) bool {
+	switch lang {
+	case "golang":
+		return true
+	default:
+		return false
+	}
+}
+
 func lspServerStdioReadWriteCloser(languageName string) (*ReadWriteCloser, error) {
+	if !IsSupportedLanguage(languageName) {
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedLanguage, languageName)
+	}
 	var cmd *exec.Cmd
 	switch languageName {
 	case "golang":
@@ -60,8 +72,6 @@ func lspServerStdioReadWriteCloser(languageName string) (*ReadWriteCloser, error
 			return nil, fmt.Errorf("failed to find or install gopls: %w", err)
 		}
 		cmd = exec.Command(goplsPath, "-remote=auto", "-logfile=auto", "-debug=:0", "-remote.debug=:0", "-rpc.trace", "-remote.listen.timeout=0")
-	default:
-		return nil, fmt.Errorf("%v: %s", ErrUnsupportedLanguage, languageName)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -88,7 +98,7 @@ func (l *Jsonrpc2LSPClient) Initialize(ctx context.Context, params InitializePar
 	// start lsp server (if needed) and connect to it
 	rwc, err := lspServerStdioReadWriteCloser(l.LanguageName)
 	if err != nil {
-		return InitializeResponse{}, fmt.Errorf("gopls failure: %v", err)
+		return InitializeResponse{}, fmt.Errorf("gopls failure: %w", err)
 	}
 	// Setup JSON-RPC 2.0 connection
 	(*l).Conn = jsonrpc2.NewConn(ctx, jsonrpc2.NewBufferedStream(rwc, jsonrpc2.VSCodeObjectCodec{}), &noopHandler{})
