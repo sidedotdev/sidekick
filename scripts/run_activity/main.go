@@ -193,6 +193,7 @@ func buildActivityRegistry() map[string]interface{} {
 		dev.GetRepoConfigActivity,
 		dev.GetRepoConfigActivityV2,
 		dev.GetSymbolsActivity,
+		dev.ResolveToolNameMappingActivity,
 		dev.ApplyEditBlocksActivity,
 		dev.ReadFileActivity,
 		dev.BulkReadFileActivity,
