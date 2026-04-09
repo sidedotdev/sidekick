@@ -164,6 +164,7 @@ func ensureTestsPassAfterDevPlanExecutedSubflow(dCtx DevContext, input PlannedDe
 			return nil
 		}
 
+		integrationTestsFailed := false
 		if testResult.TestsPassed {
 			if len(dCtx.RepoConfig.IntegrationTestCommands) == 0 {
 				break
@@ -179,18 +180,15 @@ func ensureTestsPassAfterDevPlanExecutedSubflow(dCtx DevContext, input PlannedDe
 
 			// use the integration test results as part of the prompt
 			testResult = integrationTestResult
+			integrationTestsFailed = true
 		}
 
-		// TODO if it's integration tests that failed, override the configured
-		// test commands that should be run within dCtx, to include the
-		// integration tests as well, to ensure that the inner loop of editing
-		// code within completeDevStep has access to the output of integration
-		// test results too.
 		_, err = completeDevStep(dCtx, input.Requirements, planExec, DevStep{
-			Type:               "edit",
-			Title:              "Ensure Tests Pass",
-			Definition:         "The plan has now been fully executed, but please ensure tests pass: they are unfortunately still failing. If you notice errors in the code, fix them but ensure all of the original requirements are being met with your changes. Here are test results:\n\n" + testResult.Output,
-			CompletionAnalysis: "This final step will be considered complete when *all* tests pass. Any test failures mean the requirements are not met and thus the criteria have not been fulfilled. Furthermore, it's required that no changes were made that are not in line with the original requirements.",
+			Type:                "edit",
+			Title:               "Ensure Tests Pass",
+			Definition:          "The plan has now been fully executed, but please ensure tests pass: they are unfortunately still failing. If you notice errors in the code, fix them but ensure all of the original requirements are being met with your changes. Here are test results:\n\n" + testResult.Output,
+			CompletionAnalysis:  "This final step will be considered complete when *all* tests pass. Any test failures mean the requirements are not met and thus the criteria have not been fulfilled. Furthermore, it's required that no changes were made that are not in line with the original requirements.",
+			RunIntegrationTests: integrationTestsFailed,
 		})
 
 		if err != nil {
