@@ -50,8 +50,7 @@ const handleGlobalKeyDown = (event: KeyboardEvent) => {
     }
   }
 
-  const hasAnyModifier = event.metaKey || event.ctrlKey || event.altKey
-  if (!hasAnyModifier && (event.key === 'b' || event.key === 'B')) {
+  if (modKey && (event.key === 'b' || event.key === 'B')) {
     if (!isInteractiveElement(event.target as HTMLElement)) {
       event.preventDefault()
       router.push({ name: 'kanban' })
@@ -147,7 +146,7 @@ onUnmounted(() => {
       <RouterLink id="logo-link" to="/kanban"><div id="logo">~</div></RouterLink>
 
       <nav class="container">
-        <ShortcutTooltip label="Board" shortcut="B">
+        <ShortcutTooltip label="Board" :shortcut="isMac ? '⌘B' : 'Ctrl+B'">
           <RouterLink to="/kanban">Board</RouterLink>
         </ShortcutTooltip>
         <ShortcutTooltip label="Archived Tasks">
