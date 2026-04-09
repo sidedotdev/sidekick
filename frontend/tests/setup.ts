@@ -1,4 +1,7 @@
-import { vi } from 'vitest'
+import { vi, afterEach } from 'vitest'
+import { enableAutoUnmount } from '@vue/test-utils'
+
+enableAutoUnmount(afterEach)
 
 // Create storage mocks that work with vi.spyOn(Storage.prototype, ...) in tests.
 // We define methods on Storage.prototype and create objects that inherit from it.
