@@ -38,6 +38,7 @@ require (
 	github.com/nats-io/nats-server/v2 v2.10.27
 	github.com/nats-io/nats.go v1.39.1
 	github.com/openai/openai-go/v3 v3.1.0
+	github.com/pkg/sftp v1.13.10
 	github.com/redis/go-redis/v9 v9.5.1
 	github.com/rs/zerolog v1.31.0
 	github.com/sashabaranov/go-openai v1.41.0
@@ -100,6 +101,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
 	github.com/goccy/go-yaml v1.19.0 // indirect
 	github.com/knadh/koanf/maps v0.1.2 // indirect
+	github.com/kr/fs v0.1.0 // indirect
 	github.com/mattn/go-pointer v0.0.1 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/hashstructure/v2 v2.0.2 // indirect

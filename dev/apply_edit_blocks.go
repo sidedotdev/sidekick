@@ -331,8 +331,7 @@ func (da *DevActivities) notifyDidOpenChangeSaveAndClose(ctx context.Context, en
 	if didOpenCalled {
 		_, didChangeSpan := applyEditBlocksTracer.Start(ctx, "LSP.didChange")
 		// Read current file content for change notification
-		absoluteFilePath := filepath.Join(baseDir, filePath)
-		content, err := os.ReadFile(absoluteFilePath)
+		content, err := envContainer.Env.ReadFile(ctx, filePath)
 		if err == nil {
 			didChangeInput := lsp.TextDocumentDidChangeActivityInput{
 				RepoDir:  baseDir,

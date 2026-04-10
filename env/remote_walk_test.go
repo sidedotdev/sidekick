@@ -3,6 +3,7 @@ package env
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -159,6 +160,12 @@ func (m *mockNonSSHEnv) RunCommand(ctx context.Context, input EnvRunCommandInput
 }
 func (m *mockNonSSHEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
 	return fmt.Errorf("walk not supported on mock env")
+}
+func (m *mockNonSSHEnv) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	return nil, fmt.Errorf("read file not supported on mock env")
+}
+func (m *mockNonSSHEnv) ReadDir(ctx context.Context, path string) ([]fs.DirEntry, error) {
+	return nil, fmt.Errorf("read dir not supported on mock env")
 }
 
 // Verify that LocalEnv.Walk and WalkCodeDirectoryViaEnv produce the same results

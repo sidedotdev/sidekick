@@ -13,13 +13,18 @@ import (
 )
 
 func GetFileHeaders(filePath string, numContextLines int) ([]SourceBlock, error) {
-	languageName, sitterLanguage, err := inferLanguageFromFilePath(filePath)
-	if err != nil {
-		return nil, err
-	}
 	sourceCode, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to obtain source code when getting headers for file %s: %v", filePath, err)
+	}
+	return GetFileHeadersFromBytes(filePath, sourceCode, numContextLines)
+}
+
+// GetFileHeadersFromBytes is like GetFileHeaders but uses pre-read bytes.
+func GetFileHeadersFromBytes(filePath string, sourceCode []byte, numContextLines int) ([]SourceBlock, error) {
+	languageName, sitterLanguage, err := inferLanguageFromFilePath(filePath)
+	if err != nil {
+		return nil, err
 	}
 	parser := tree_sitter.NewParser()
 	defer parser.Close()

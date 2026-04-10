@@ -167,7 +167,7 @@ func OpenShellSyncRepoActivity(ctx context.Context, input OpenShellSyncRepoInput
 	quotedBundle := shellQuote(remoteBundlePath)
 	cloneScript := fmt.Sprintf(
 		"if [ -d %s/.git ]; then "+
-			"cd %s && git fetch %s '+refs/*:refs/*' --prune && git reset --hard HEAD; "+
+			"cd %s && git fetch --update-head-ok %s '+refs/*:refs/*' --prune && git reset --hard HEAD; "+
 			"else "+
 			"mkdir -p %s && git clone %s %s && cd %s && "+
 			"git config user.name 'Sidekick' && git config user.email 'sidekick@side.dev'; "+

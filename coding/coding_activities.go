@@ -198,16 +198,14 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSym
 	var mu sync.Mutex
 	var results []SymbolRetrievalResult
 
-	baseDir := dirSymDefRequest.EnvContainer.Env.GetWorkingDirectory()
 	numContextLines := DefaultNumContextLines
 	if dirSymDefRequest.NumContextLines != nil {
 		numContextLines = *dirSymDefRequest.NumContextLines
 	}
 
 	for _, req := range dirSymDefRequest.Requests {
-		absolutePath := filepath.Join(baseDir, req.FilePath)
-		if shouldRetrieveFullFile(req.SymbolNames, absolutePath) {
-			result := getWildcardRetrievalResult(ctx, dirSymDefRequest.EnvContainer, req.SymbolNames, absolutePath, req.FilePath)
+		if shouldRetrieveFullFile(req.SymbolNames, req.FilePath) {
+			result := getWildcardRetrievalResult(ctx, dirSymDefRequest.EnvContainer, req.SymbolNames, req.FilePath)
 			mu.Lock()
 			results = append(results, result)
 			mu.Unlock()
@@ -226,7 +224,7 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSym
 
 			if symbolResults[0].Error == nil {
 				// include headers only when no failure
-				result := getHeaderRetrievalResult(absolutePath, req.FilePath, numContextLines)
+				result := getHeaderRetrievalResult(ctx, dirSymDefRequest.EnvContainer.Env, req.FilePath, numContextLines)
 				mu.Lock()
 				results = append(results, result)
 				mu.Unlock()
@@ -546,7 +544,13 @@ func getRelativeFilePathsBySymbolName(ctx context.Context, ec env.EnvContainer) 
 		if isDir {
 			return nil
 		}
-		symbols, err := tree_sitter.GetAllAlternativeFileSymbols(path)
+
+		langName := utils.InferLanguageNameFromFilePath(path)
+		fileBytes, readErr := ec.Env.ReadFile(ctx, path)
+		if readErr != nil {
+			return fmt.Errorf("error reading file %s: %w", path, readErr)
+		}
+		symbols, err := tree_sitter.GetAllAlternativeFileSymbolsFromBytes(path, langName, fileBytes)
 
 		if err != nil {
 			if !errors.Is(err, tree_sitter.ErrFailedInferLanguage) {
@@ -555,7 +559,10 @@ func getRelativeFilePathsBySymbolName(ctx context.Context, ec env.EnvContainer) 
 			// If it's a language inference error, continue processing other files
 			return nil
 		}
-		relativePath := strings.TrimPrefix(path, filepath.Clean(directoryPath)+string(filepath.Separator))
+		relativePath, relErr := env.EnvRel(ec.Env, directoryPath, path)
+		if relErr != nil {
+			relativePath = path
+		}
 		for _, symbol := range symbols {
 			symbolToPaths[symbol.Content] = append(symbolToPaths[symbol.Content], relativePath)
 		}
@@ -569,24 +576,24 @@ func getRelativeFilePathsBySymbolName(ctx context.Context, ec env.EnvContainer) 
 
 func getHintForSymbolDefResultFailure(ctx context.Context, ec env.EnvContainer, err error, relativePath, symbolName string, filePathsBySymbolName *map[string][]string) string {
 	hints := []string{}
-	directory := ec.Env.GetWorkingDirectory()
-	absolutePath := filepath.Join(directory, relativePath)
-	directory = filepath.Clean(directory) + string(filepath.Separator)
+	wd := ec.Env.GetWorkingDirectory()
 
 	// symbol not found is not an error we need to relay as we have later hints for this situation
 	// same thing for no such file or directory. but we need the error in other
 	// cases that don't yet have customized hints
 	if !strings.Contains(err.Error(), " not found") && !strings.Contains(err.Error(), "no such file or directory") {
-		hints = append(hints, strings.ReplaceAll(err.Error(), directory, ""))
+		hints = append(hints, strings.ReplaceAll(err.Error(), wd, ""))
 	}
 
-	// if os.IsNotExist(err) {
-	if !utils.FileExists(absolutePath) {
-		hint := getHintForNonExistentFile(ctx, ec, absolutePath)
+	// Try reading the file via the env to determine whether it exists
+	fileBytes, readErr := ec.Env.ReadFile(ctx, relativePath)
+	if readErr != nil {
+		hint := getHintForNonExistentFile(ctx, ec, relativePath)
 		hints = append(hints, hint)
 	} else {
-		rawFileSymbols, err := tree_sitter.GetFileSymbols(absolutePath)
-		if err == nil {
+		langName := utils.InferLanguageNameFromFilePath(relativePath)
+		rawFileSymbols, symErr := tree_sitter.GetFileSymbolsFromBytes(relativePath, langName, fileBytes)
+		if symErr == nil {
 			if len(rawFileSymbols) == 0 {
 				hints = append(hints, fmt.Sprintf("The file at '%s' exists, but does not contain any symbols. Try requesting the special symbol name '*' to see the entire file.", relativePath))
 			} else {
@@ -612,8 +619,15 @@ func getHintForSymbolDefResultFailure(ctx context.Context, ec env.EnvContainer, 
 	return strings.Join(hints, "\n")
 }
 
-func getHeaderRetrievalResult(absolutePath, relativePath string, numContextLines int) SymbolRetrievalResult {
-	headers, err := tree_sitter.GetFileHeaders(absolutePath, numContextLines)
+func getHeaderRetrievalResult(ctx context.Context, e env.Env, relativePath string, numContextLines int) SymbolRetrievalResult {
+	fileBytes, readErr := e.ReadFile(ctx, relativePath)
+	if readErr != nil {
+		return SymbolRetrievalResult{
+			RelativePath: relativePath,
+			Error:        fmt.Errorf("error reading file for headers: %v", readErr),
+		}
+	}
+	headers, err := tree_sitter.GetFileHeadersFromBytes(relativePath, fileBytes, numContextLines)
 	if err != nil && !errors.Is(err, tree_sitter.ErrNoHeadersFound) {
 		return SymbolRetrievalResult{
 			RelativePath: relativePath,
@@ -635,17 +649,18 @@ type candidate struct {
 const maxSegmentDistance = 4
 
 // provides a hint that shows similar files based on path-segment-wise levenshtein distance ratio
-func getHintForNonExistentFile(ctx context.Context, ec env.EnvContainer, absolutePath string) string {
+func getHintForNonExistentFile(ctx context.Context, ec env.EnvContainer, relativePath string) string {
 	directoryPath := ec.Env.GetWorkingDirectory()
-	relativePath := strings.TrimPrefix(absolutePath, filepath.Clean(directoryPath)+string(filepath.Separator))
-	pathSegments := strings.Split(relativePath, string(filepath.Separator))
+	sep := env.EnvSeparator(ec.Env)
+	pathSegments := strings.Split(relativePath, sep)
 	candidates := []candidate{}
+	cleanDir := env.EnvClean(ec.Env, directoryPath) + sep
 	err := ec.Env.Walk(ctx, common.SidekickIgnoreFileNames, func(path string, isDir bool) error {
 		if isDir {
 			return nil
 		}
-		relativeEntryPath := strings.TrimPrefix(path, filepath.Clean(directoryPath)+string(filepath.Separator))
-		entrySegments := strings.Split(relativeEntryPath, string(filepath.Separator))
+		relativeEntryPath := strings.TrimPrefix(path, cleanDir)
+		entrySegments := strings.Split(relativeEntryPath, sep)
 		segmentDistance, ratio := utils.SliceLevenshtein(pathSegments, entrySegments)
 
 		// filter out paths that are too different
@@ -697,16 +712,16 @@ func getHintForNonExistentFile(ctx context.Context, ec env.EnvContainer, absolut
 	panic("unimplemented")
 }
 
-func getWildcardRetrievalResult(ctx context.Context, ec env.EnvContainer, symbols []string, absolutePath, relativePath string) SymbolRetrievalResult {
-	if !shouldRetrieveFullFile(symbols, absolutePath) {
+func getWildcardRetrievalResult(ctx context.Context, ec env.EnvContainer, symbols []string, relativePath string) SymbolRetrievalResult {
+	if !shouldRetrieveFullFile(symbols, relativePath) {
 		return SymbolRetrievalResult{RelativePath: relativePath}
 	}
 
-	fileBytes, err := os.ReadFile(absolutePath)
+	fileBytes, err := ec.Env.ReadFile(ctx, relativePath)
 	if err != nil {
 		var errMsg string
 		if os.IsNotExist(err) {
-			errMsg = getHintForNonExistentFile(ctx, ec, absolutePath)
+			errMsg = getHintForNonExistentFile(ctx, ec, relativePath)
 		} else {
 			relativeErr := errors.New(strings.ReplaceAll(err.Error(), ec.Env.GetWorkingDirectory(), ""))
 			errMsg = fmt.Sprintf("error reading file %s: %v", relativePath, relativeErr)
@@ -776,8 +791,9 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContai
 	results := make([]SymbolRetrievalResult, len(symDefRequest.SymbolNames))
 	var wg sync.WaitGroup
 
-	baseDir := envContainer.Env.GetWorkingDirectory()
-	absolutePath := filepath.Join(baseDir, symDefRequest.FilePath)
+	// Read the file once for all symbol lookups.
+	fileBytes, readErr := envContainer.Env.ReadFile(context.Background(), symDefRequest.FilePath)
+
 	for i, symbol := range symDefRequest.SymbolNames {
 		if symbol == "" || symbol == "*" {
 			continue
@@ -790,14 +806,19 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContai
 			result.SymbolName = symbol
 			result.RelativePath = symDefRequest.FilePath
 
+			if readErr != nil {
+				result.Error = readErr
+				return
+			}
+
 			// TODO optimize: don't re-parse the file for each symbol
-			sourceBlocks, err := tree_sitter.GetSymbolDefinitions(absolutePath, symbol, numContextLines)
+			sourceBlocks, err := tree_sitter.GetSymbolDefinitionsFromBytes(symDefRequest.FilePath, fileBytes, symbol, numContextLines)
 			if err != nil {
 				// Attempt to normalize snippet-like inputs to a canonical symbol name and retry.
-				langName := utils.InferLanguageNameFromFilePath(absolutePath)
+				langName := utils.InferLanguageNameFromFilePath(symDefRequest.FilePath)
 				if langName != "" {
 					if normalized, nErr := tree_sitter.NormalizeSymbolFromSnippet(langName, symbol); nErr == nil && normalized != "" && normalized != symbol {
-						sourceBlocks, err = tree_sitter.GetSymbolDefinitions(absolutePath, normalized, numContextLines)
+						sourceBlocks, err = tree_sitter.GetSymbolDefinitionsFromBytes(symDefRequest.FilePath, fileBytes, normalized, numContextLines)
 					}
 				}
 				// If still failing and the original contains a ".", retry with only the part after the last dot.
@@ -805,7 +826,7 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContai
 					// TODO make this language-specific and try several different alternative forms
 					lastDotIndex := strings.LastIndex(symbol, ".")
 					if lastDotIndex != -1 {
-						sourceBlocks, err = tree_sitter.GetSymbolDefinitions(absolutePath, symbol[lastDotIndex+1:], numContextLines)
+						sourceBlocks, err = tree_sitter.GetSymbolDefinitionsFromBytes(symDefRequest.FilePath, fileBytes, symbol[lastDotIndex+1:], numContextLines)
 					}
 				}
 			}

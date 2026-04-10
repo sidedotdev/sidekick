@@ -2,9 +2,12 @@ package lsp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"path"
+	"sidekick/env"
 	"sidekick/utils"
 	"strings"
 	"sync"
@@ -21,8 +24,9 @@ type LSPActivities struct {
 }
 
 type LSPDefinitionLocationsRequest struct {
-	RepoDir  string `json:"repo_dir"`
-	FilePath string `json:"file_path"`
+	RepoDir      string            `json:"repo_dir"`
+	FilePath     string            `json:"file_path"`
+	EnvContainer *env.EnvContainer `json:"envContainer,omitempty"`
 	// The list of symbol names in the file to get the definition locations of,
 	// eg: "SomeFunction", or "SomeStruct", or "recieiver.SomeMethod", or
 	// "some_package.SomeThing", or "someConst" or "aVariableName"
@@ -51,7 +55,17 @@ func (la *LSPActivities) GetSymbolDefinitionLocations(ctx context.Context, reque
 
 func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request LSPDefinitionLocationsRequest) ([]SymbolDefinitionLocation, error) {
 	// Step 1: Find the Position of each symbol in the file.
-	positions, err := findSymbolPositions(ctx, request.FilePath, request.Symbols)
+	var positions []Position
+	var err error
+	if request.EnvContainer != nil {
+		fileBytes, readErr := request.EnvContainer.Env.ReadFile(ctx, request.FilePath)
+		if readErr != nil {
+			return []SymbolDefinitionLocation{}, readErr
+		}
+		positions, err = findSymbolPositionsFromBytes(fileBytes, request.Symbols)
+	} else {
+		positions, err = findSymbolPositions(ctx, request.FilePath, request.Symbols)
+	}
 	if err != nil {
 		return []SymbolDefinitionLocation{}, err
 	}
@@ -102,13 +116,22 @@ func findSymbolPositions(ctx context.Context, filePath string, symbols []string)
 	}
 	defer file.Close()
 
+	return findSymbolPositionsFromReader(file, symbols)
+}
+
+// findSymbolPositionsFromBytes finds symbol positions in pre-read file content.
+func findSymbolPositionsFromBytes(data []byte, symbols []string) ([]Position, error) {
+	return findSymbolPositionsFromReader(bytes.NewReader(data), symbols)
+}
+
+func findSymbolPositionsFromReader(r io.Reader, symbols []string) ([]Position, error) {
 	// FIXME this might find multiple positions for the same symbol, we should
 	// limit it the first one. less naively, we should use the positions for
 	// each unique type of symbol match, but the easiest way to do this might
 	// just be to get all the defintions and then remove dups, but this could
 	// also be extremely slow with a symbol used many times.
 	var positions []Position
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(r)
 	for i := 0; scanner.Scan(); i++ {
 		line := scanner.Text()
 		for _, symbol := range symbols {

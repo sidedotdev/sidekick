@@ -2,11 +2,11 @@ package lsp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/url"
-	"os"
 	"path/filepath"
 	"sidekick/env"
 	"sidekick/utils"
@@ -46,19 +46,18 @@ func (lspa *LSPActivities) FindReferencesActivity(ctx context.Context, input Fin
 		return nil, fmt.Errorf("failed to find or initialize lsp client: %w", err)
 	}
 
-	absoluteFilepath := filepath.Join(baseDir, input.RelativeFilePath)
-	file, err := os.Open(absoluteFilepath)
+	fileBytes, err := input.EnvContainer.Env.ReadFile(ctx, input.RelativeFilePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
+		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
-	defer file.Close()
-	reader := bufio.NewReader(file)
+	reader := bufio.NewReader(bytes.NewReader(fileBytes))
 
 	position, err := findSymbolPosition(reader, input.Range, input.SymbolText)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find symbol position: %w", err)
 	}
 
+	absoluteFilepath := filepath.Join(baseDir, input.RelativeFilePath)
 	uri, err := url.Parse("file://" + absoluteFilepath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse uri file://%s: %w", absoluteFilepath, err)
