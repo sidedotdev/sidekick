@@ -28,8 +28,8 @@ func (ctrl *Controller) OpenInIdeHandler(c *gin.Context) {
 		return
 	}
 
-	if req.Ide != "vscode" && req.Ide != "intellij" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid IDE type. Must be 'vscode' or 'intellij'"})
+	if req.Ide != "vscode" && req.Ide != "intellij" && req.Ide != "zed" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid IDE type. Must be 'vscode', 'intellij', or 'zed'"})
 		return
 	}
 
@@ -48,10 +48,14 @@ func (ctrl *Controller) OpenInIdeHandler(c *gin.Context) {
 }
 
 func openInIde(ide, filePath string, line *int, baseDir string) error {
-	if ide == "vscode" {
+	switch ide {
+	case "vscode":
 		return openInVSCode(filePath, line, baseDir)
+	case "zed":
+		return openInZed(filePath, line)
+	default:
+		return openInIntelliJ(filePath, line)
 	}
-	return openInIntelliJ(filePath, line)
 }
 
 func openInVSCode(filePath string, line *int, baseDir string) error {
@@ -83,6 +87,15 @@ func openInIntelliJ(filePath string, line *int) error {
 		lineFragment = fmt.Sprintf(":%d", *line)
 	}
 	url := fmt.Sprintf("idea://open?file=%s%s", filePath, lineFragment)
+	return openURL(url)
+}
+
+func openInZed(filePath string, line *int) error {
+	lineFragment := ""
+	if line != nil {
+		lineFragment = fmt.Sprintf(":%d", *line)
+	}
+	url := fmt.Sprintf("zed://file%s%s", filePath, lineFragment)
 	return openURL(url)
 }
 
