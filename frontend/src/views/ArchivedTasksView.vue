@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import TaskCard from '@/components/TaskCard.vue'
+import VirtualTaskList from '@/components/VirtualTaskList.vue'
 import type { FullTask } from '@/lib/models'
 import { store } from '../lib/store'
 
@@ -41,10 +41,8 @@ onMounted(() => {
     <div v-else-if="error">{{ error }}</div>
     <div v-else-if="archivedTasks.length === 0">No archived tasks found.</div>
     <div v-else class="task-list">
-      <TaskCard
-        v-for="task in archivedTasks"
-        :key="task.id"
-        :task="task"
+      <VirtualTaskList
+        :tasks="archivedTasks"
         :readonly="true"
         @deleted="handleTaskDeleted"
       />
