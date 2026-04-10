@@ -52,7 +52,7 @@ func openInIde(ide, filePath string, line *int, baseDir string) error {
 	case "vscode":
 		return openInVSCode(filePath, line, baseDir)
 	case "zed":
-		return openInZed(filePath, line)
+		return openInZed(filePath, line, baseDir)
 	default:
 		return openInIntelliJ(filePath, line)
 	}
@@ -90,11 +90,19 @@ func openInIntelliJ(filePath string, line *int) error {
 	return openURL(url)
 }
 
-func openInZed(filePath string, line *int) error {
+func openInZed(filePath string, line *int, baseDir string) error {
 	lineFragment := ""
 	if line != nil {
 		lineFragment = fmt.Sprintf(":%d", *line)
 	}
+
+	if baseDir != "" {
+		if err := openURL(fmt.Sprintf("zed://file%s", baseDir)); err != nil {
+			return fmt.Errorf("failed to open base directory: %w", err)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+
 	url := fmt.Sprintf("zed://file%s%s", filePath, lineFragment)
 	return openURL(url)
 }
