@@ -4,6 +4,7 @@
       <div
         v-for="item in virtualizer.getVirtualItems()"
         :key="tasks[item.index].id"
+        :data-index="item.index"
         :ref="(el) => measureRef(el as HTMLElement | null, item)"
         :style="{
           position: 'absolute',
@@ -32,9 +33,11 @@ import type { FullTask } from '../lib/models'
 const props = withDefaults(defineProps<{
   tasks: FullTask[]
   estimateSize?: number
+  gap?: number
   readonly?: boolean
 }>(), {
   estimateSize: 120,
+  gap: 8,
   readonly: false,
 })
 
@@ -68,6 +71,7 @@ const virtualizer = useVirtualizer({
   getScrollElement: () => scrollElement.value,
   estimateSize: () => props.estimateSize,
   get scrollMargin() { return scrollMargin.value },
+  get gap() { return props.gap },
   overscan: 5,
 })
 
@@ -91,6 +95,7 @@ onMounted(() => {
   if (containerRef.value) {
     resizeObserver.observe(containerRef.value)
   }
+
 })
 
 onUnmounted(() => {
