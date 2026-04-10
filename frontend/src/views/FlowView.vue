@@ -7,6 +7,8 @@
           <VSCodeIcon/>
         </a>&nbsp;<a :href="`idea://open?file=${encodeURIComponent(worktree.workingDirectory)}`">
           <IntellijIcon/>
+        </a>&nbsp;<a :href="`zed://file/${worktree.workingDirectory}`">
+          <ZedIcon/>
         </a>
       </p>
     <div class="debug" v-if="devMode">
@@ -60,6 +62,7 @@ import SubflowContainer from '@/components/SubflowContainer.vue'
 import IdeSelectorDialog from '@/components/IdeSelectorDialog.vue'
 import VSCodeIcon from '@/components/icons/VSCodeIcon.vue'
 import IntellijIcon from '@/components/icons/IntellijIcon.vue'
+import ZedIcon from '@/components/icons/ZedIcon.vue'
 import type { FlowAction, SubflowTree, ChatMessageDelta, Flow, Worktree, Subflow, Workspace } from '../lib/models'
 import { SubflowStatus } from '../lib/models'
 import { buildSubflowTrees } from '../lib/subflow'
