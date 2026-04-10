@@ -68,6 +68,7 @@ import { SubflowStatus } from '../lib/models'
 import { buildSubflowTrees } from '../lib/subflow'
 import { useRoute } from 'vue-router'
 import { store } from '../lib/store'
+import { viewCache } from '../lib/viewCache'
 import { useIdeOpener, IDE_OPENER_KEY } from '@/composables/useIdeOpener'
 
 const subflowProcessingDebounceTimers = ref<Record<string, NodeJS.Timeout>>({})
@@ -447,7 +448,21 @@ const fetchFlowSubflows = async (flowId: string) => {
   }
 };
 
+const saveCurrentFlowToCache = () => {
+  if (flow.value && currentFlowIdForSockets) {
+    viewCache.setFlowView(currentFlowIdForSockets, {
+      flow: flow.value,
+      flowActions: flowActions.value,
+      subflowsById: subflowsById.value,
+      subflowTrees: subflowTrees.value,
+      workspace: workspace.value,
+    })
+  }
+}
+
 const setupFlow = async (newFlowId: string | undefined) => {
+  saveCurrentFlowToCache();
+
   // Close existing WebSockets first
   if (actionChangesSocket) {
     actionChangesSocketClosed = true;
@@ -487,15 +502,9 @@ const setupFlow = async (newFlowId: string | undefined) => {
   }
 
   currentFlowIdForSockets = newFlowId;
-  isLoadingFlow.value = true;
   isStartingFlow.value = false;
   hasReceivedFirstAction = false;
 
-  // Reset states for the new flow
-  flow.value = null;
-  flowActions.value = [];
-  activeDevStep.value.clear();
-  subflowsById.value = {};
   // Clear any pending subflow status update timers
   Object.keys(subflowStatusUpdateDebounceTimers).forEach(key => {
     clearTimeout(subflowStatusUpdateDebounceTimers[key]);
@@ -506,7 +515,27 @@ const setupFlow = async (newFlowId: string | undefined) => {
   Object.values(subflowProcessingDebounceTimers.value).forEach(timerId => clearTimeout(timerId));
   subflowProcessingDebounceTimers.value = {};
 
-  updateSubflowTrees(); // Clear trees
+  // Restore from cache or initialize empty state
+  const cached = viewCache.getFlowView(newFlowId);
+  if (cached) {
+    flow.value = cached.flow;
+    flowActions.value = [...cached.flowActions];
+    subflowsById.value = { ...cached.subflowsById };
+    workspace.value = cached.workspace;
+    isLoadingFlow.value = false;
+    activeDevStep.value.clear();
+    for (const [id, subflow] of Object.entries(subflowsById.value)) {
+      updateActiveDevStep(id, subflow.type, subflow.status);
+    }
+    updateSubflowTrees();
+  } else {
+    flow.value = null;
+    flowActions.value = [];
+    activeDevStep.value.clear();
+    subflowsById.value = {};
+    isLoadingFlow.value = true;
+    updateSubflowTrees();
+  }
 
   const flowPromise = fetch(`/api/v1/workspaces/${store.workspaceId}/flows/${newFlowId}`);
 
@@ -616,6 +645,7 @@ const pauseFlow = async () => {
 }
 
 onUnmounted(() => {
+  saveCurrentFlowToCache();
   actionChangesSocketClosed = true; // Prevent reconnects
   if (actionChangesSocket) {
     actionChangesSocket.close();
