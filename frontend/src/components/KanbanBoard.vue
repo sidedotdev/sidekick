@@ -26,7 +26,14 @@
         <button v-if="agentType !== 'none'" class="new-task mini-button" @click="addTask(agentType)">+</button>
         <button v-if="agentType === 'none' && groupedTasks[agentType]?.length > 0" class="new-task mini-button" @click="confirmArchiveFinished">📦</button>
       </h2>
-      <TaskCard v-for="task in groupedTasks[agentType]" :key="task.id" :task="task" @deleted="refresh" @canceled="refresh" @archived="refresh" @updated="refresh" @error="error" />
+      <VirtualTaskList
+        :tasks="groupedTasks[agentType] ?? []"
+        @deleted="refresh"
+        @canceled="refresh"
+        @archived="refresh"
+        @updated="refresh"
+        @error="error"
+      />
       <button class="new-task" v-if="agentType == 'human'" @click="addTask(agentType)">
         + Draft Task
         <ShortcutHint :label="newTaskShortcutLabel" />
@@ -41,7 +48,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import type { FullTask, AgentType, Task, TaskStatus } from '../lib/models'
-import TaskCard from './TaskCard.vue'
+import VirtualTaskList from './VirtualTaskList.vue'
 import TaskModal from './TaskModal.vue'
 import ShortcutHint from './ShortcutHint.vue'
 import { store } from '../lib/store'
