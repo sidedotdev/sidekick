@@ -14,6 +14,7 @@ import type { Ref } from 'vue'
 import { useRoute } from 'vue-router'
 import KanbanBoard from '../components/KanbanBoard.vue'
 import { store } from '../lib/store'
+import { viewCache } from '../lib/viewCache'
 import type { FullTask } from '../lib/models'
 
 const route = useRoute()
@@ -25,7 +26,7 @@ const parseTaskDates = (task: any): FullTask => {
   return task as FullTask
 }
 
-const tasks: Ref<Array<FullTask>> = ref([])
+const tasks: Ref<Array<FullTask>> = ref(viewCache.getKanbanTasks(store.workspaceId ?? '') ?? [])
 const showGuidedOverlay = ref(false) // disable for now, until this works better
 //const showGuidedOverlay = ref(localStorage.getItem('guidedTourNeeded') !== 'false')
 let socket: WebSocket | null = null
@@ -38,6 +39,9 @@ const fetchTasks = async () => {
       const response = await fetch(`/api/v1/workspaces/${store.workspaceId}/tasks`)
       const data = await response.json()
       tasks.value = data.tasks.map((task: any) => parseTaskDates(task))
+      if (store.workspaceId) {
+        viewCache.setKanbanTasks(store.workspaceId, tasks.value)
+      }
       if (tasks.value.length > 0) {
         // If there are any tasks, user never needs the guided tour again
         localStorage.setItem('guidedTourNeeded', 'false')
@@ -105,6 +109,9 @@ const updateTasks = (newTasks: Array<FullTask>) => {
     }
   });
 
+  if (store.workspaceId) {
+    viewCache.setKanbanTasks(store.workspaceId, tasks.value)
+  }
   console.debug('Updated tasks:', tasks.value);
 }
 
