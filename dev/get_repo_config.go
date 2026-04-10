@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -44,7 +45,7 @@ func GetRepoConfigActivity(envContainer env.EnvContainer) (common.RepoConfig, er
 				Msg("Multiple repo config files found; using highest precedence file")
 		}
 
-		data, err := os.ReadFile(discovery.ChosenPath)
+		data, err := envContainer.Env.ReadFile(context.Background(), discovery.ChosenPath)
 		if err != nil {
 			return common.RepoConfig{}, fmt.Errorf("failed to read repo config file %q: %w", discovery.ChosenPath, err)
 		}
@@ -60,14 +61,13 @@ func GetRepoConfigActivity(envContainer env.EnvContainer) (common.RepoConfig, er
 		}
 
 		if err := k.UnmarshalWithConf("", &config, koanf.UnmarshalConf{Tag: "toml"}); err != nil {
-			return common.RepoConfig{}, fmt.Errorf("failed to unmarshal repo config %q: %w", discovery.ChosenPath, err)
+		return common.RepoConfig{}, fmt.Errorf("failed to unmarshal repo config %q: %w", discovery.ChosenPath, err)
 		}
 	}
 
 	// If hints are not provided inline, try loading from HintsPath
 	if config.EditCode.Hints == "" && config.EditCode.HintsPath != "" {
-		hintsFilePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), config.EditCode.HintsPath)
-		hintsData, err := os.ReadFile(hintsFilePath)
+		hintsData, err := envContainer.Env.ReadFile(context.Background(), config.EditCode.HintsPath)
 		if err != nil {
 			configName := "repo config"
 			if discovery.ChosenPath != "" {
@@ -90,8 +90,7 @@ func GetRepoConfigActivity(envContainer env.EnvContainer) (common.RepoConfig, er
 			"CONVENTIONS.md",
 		}
 		for _, candidate := range candidates {
-			fallbackPath := filepath.Join(envContainer.Env.GetWorkingDirectory(), candidate)
-			hintsData, err := os.ReadFile(fallbackPath)
+			hintsData, err := envContainer.Env.ReadFile(context.Background(), candidate)
 			if err != nil {
 				if os.IsNotExist(err) {
 					continue
@@ -129,7 +128,7 @@ func GetRepoConfigActivityV2(envContainer env.EnvContainer) (GetRepoConfigActivi
 				Msg("Multiple repo config files found; using highest precedence file")
 		}
 
-		data, err := os.ReadFile(discovery.ChosenPath)
+		data, err := envContainer.Env.ReadFile(context.Background(), discovery.ChosenPath)
 		if err != nil {
 			return GetRepoConfigActivityResult{}, fmt.Errorf("failed to read repo config file %q: %w", discovery.ChosenPath, err)
 		}
@@ -151,8 +150,7 @@ func GetRepoConfigActivityV2(envContainer env.EnvContainer) (GetRepoConfigActivi
 
 	// If hints are not provided inline, try loading from HintsPath
 	if config.EditCode.Hints == "" && config.EditCode.HintsPath != "" {
-		hintsFilePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), config.EditCode.HintsPath)
-		hintsData, err := os.ReadFile(hintsFilePath)
+		hintsData, err := envContainer.Env.ReadFile(context.Background(), config.EditCode.HintsPath)
 		if err != nil {
 			configName := "repo config"
 			if discovery.ChosenPath != "" {
@@ -175,8 +173,7 @@ func GetRepoConfigActivityV2(envContainer env.EnvContainer) (GetRepoConfigActivi
 			"CONVENTIONS.md",
 		}
 		for _, candidate := range candidates {
-			fallbackPath := filepath.Join(envContainer.Env.GetWorkingDirectory(), candidate)
-			hintsData, err := os.ReadFile(fallbackPath)
+			hintsData, err := envContainer.Env.ReadFile(context.Background(), candidate)
 			if err != nil {
 				if os.IsNotExist(err) {
 					continue

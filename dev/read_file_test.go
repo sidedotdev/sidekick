@@ -1,9 +1,11 @@
 package dev
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sidekick/env"
 	"sidekick/utils"
 	"strings"
 	"testing"
@@ -527,4 +529,160 @@ def hello():
 ` + "```"
 
 	require.Equal(t, expectedOutput, finalOutput)
+}
+
+func TestEnvReadFileActivity(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+
+	content := "line1\nline2\nline3\nline4\nline5"
+	err := os.WriteFile(filepath.Join(tempDir, "test.txt"), []byte(content), 0644)
+	require.NoError(t, err)
+
+	ec := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: tempDir}}
+
+	tests := []struct {
+		name    string
+		input   EnvReadFileInput
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "successful read",
+			input: EnvReadFileInput{
+				EnvContainer: ec,
+				Params:       ReadFileActivityInput{FilePath: "test.txt", LineNumber: 3, WindowSize: 1},
+			},
+			want: "File: test.txt\nLines: 2-4\n```\nline2\nline3\nline4\n```",
+		},
+		{
+			name: "line number less than 1",
+			input: EnvReadFileInput{
+				EnvContainer: ec,
+				Params:       ReadFileActivityInput{FilePath: "test.txt", LineNumber: 0, WindowSize: 1},
+			},
+			wantErr: true,
+		},
+		{
+			name: "non-existent file",
+			input: EnvReadFileInput{
+				EnvContainer: ec,
+				Params:       ReadFileActivityInput{FilePath: "missing.txt", LineNumber: 1, WindowSize: 1},
+			},
+			wantErr: true,
+		},
+		{
+			name: "path traversal rejected",
+			input: EnvReadFileInput{
+				EnvContainer: ec,
+				Params:       ReadFileActivityInput{FilePath: "../secret.txt", LineNumber: 1, WindowSize: 1},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := EnvReadFileActivity(context.Background(), tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestEnvBulkReadFileActivity(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(tempDir, "test1.go"), []byte("package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello\")\n}\n"), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tempDir, "test2.py"), []byte("def hello():\n    print(\"Hello\")\n    return True\n"), 0644)
+	require.NoError(t, err)
+
+	ec := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: tempDir}}
+
+	tests := []struct {
+		name           string
+		input          EnvBulkReadFileInput
+		expectedBlocks int
+		expectedErrors int
+		wantErr        bool
+	}{
+		{
+			name: "overlapping windows merged",
+			input: EnvBulkReadFileInput{
+				EnvContainer: ec,
+				Params: BulkReadFileParams{
+					FileLines: []FileLine{
+						{FilePath: "test1.go", LineNumber: 3},
+						{FilePath: "test1.go", LineNumber: 5},
+					},
+					WindowSize: 1,
+				},
+			},
+			expectedBlocks: 1,
+			expectedErrors: 0,
+		},
+		{
+			name: "multiple files",
+			input: EnvBulkReadFileInput{
+				EnvContainer: ec,
+				Params: BulkReadFileParams{
+					FileLines: []FileLine{
+						{FilePath: "test1.go", LineNumber: 1},
+						{FilePath: "test2.py", LineNumber: 1},
+					},
+					WindowSize: 1,
+				},
+			},
+			expectedBlocks: 2,
+			expectedErrors: 0,
+		},
+		{
+			name: "missing file produces error",
+			input: EnvBulkReadFileInput{
+				EnvContainer: ec,
+				Params: BulkReadFileParams{
+					FileLines: []FileLine{
+						{FilePath: "nonexistent.txt", LineNumber: 1},
+					},
+					WindowSize: 1,
+				},
+			},
+			expectedBlocks: 0,
+			expectedErrors: 1,
+		},
+		{
+			name: "negative window size rejected",
+			input: EnvBulkReadFileInput{
+				EnvContainer: ec,
+				Params: BulkReadFileParams{
+					FileLines: []FileLine{
+						{FilePath: "test1.go", LineNumber: 1},
+					},
+					WindowSize: -1,
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := EnvBulkReadFileActivity(context.Background(), tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, result.CodeBlocks, tt.expectedBlocks)
+			require.Len(t, result.Errors, tt.expectedErrors)
+		})
+	}
 }

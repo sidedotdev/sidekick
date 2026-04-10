@@ -39,13 +39,22 @@ type Declaration struct {
 }
 
 func GetFileSymbols(filePath string) ([]Symbol, error) {
-	languageName, sitterLanguage, err := inferLanguageFromFilePath(filePath)
+	languageName, _, err := inferLanguageFromFilePath(filePath)
 	if err != nil {
 		return nil, err
 	}
 	sourceCode, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to obtain source code when getting symbol definition for file %s: %v", filePath, err)
+	}
+	return GetFileSymbolsFromBytes(filePath, languageName, sourceCode)
+}
+
+// GetFileSymbolsFromBytes is like GetFileSymbols but uses pre-read bytes.
+func GetFileSymbolsFromBytes(filePath string, languageName string, sourceCode []byte) ([]Symbol, error) {
+	sitterLanguage, err := getSitterLanguage(languageName)
+	if err != nil {
+		return nil, err
 	}
 	parser := tree_sitter.NewParser()
 	defer parser.Close()
@@ -59,10 +68,7 @@ func GetFileSymbols(filePath string) ([]Symbol, error) {
 		return nil, err
 	}
 
-	filenameSymbols, err := getFilenameSymbols(languageName, filePath)
-	if err != nil {
-		return nil, err
-	}
+	filenameSymbols := getFilenameSymbolsFromBytes(languageName, filePath, sourceCode)
 	symbolSlice = append(symbolSlice, filenameSymbols...)
 
 	return symbolSlice, nil
@@ -89,10 +95,33 @@ func GetAllAlternativeFileSymbols(filePath string) ([]Symbol, error) {
 		return nil, err
 	}
 
-	filenameSymbols, err := getFilenameSymbols(languageName, filePath)
+	filenameSymbols := getFilenameSymbolsFromBytes(languageName, filePath, sourceCode)
+	symbolSlice = append(symbolSlice, filenameSymbols...)
+
+	symbolSlice = expandWithAlternativeSymbols(languageName, sitterLanguage, tree, &sourceCode, symbolSlice)
+
+	return symbolSlice, nil
+}
+
+// GetAllAlternativeFileSymbolsFromBytes returns all symbols plus alternatives from pre-read bytes.
+func GetAllAlternativeFileSymbolsFromBytes(filePath string, languageName string, sourceCode []byte) ([]Symbol, error) {
+	sitterLanguage, err := getSitterLanguage(languageName)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrFailedInferLanguage, err)
+	}
+	parser := tree_sitter.NewParser()
+	defer parser.Close()
+	parser.SetLanguage(sitterLanguage)
+	tree := parser.Parse(sourceTransform(languageName, &sourceCode), nil)
+	if tree != nil {
+		defer tree.Close()
+	}
+	symbolSlice, err := getSourceSymbolsInternal(languageName, sitterLanguage, tree, &sourceCode)
 	if err != nil {
 		return nil, err
 	}
+
+	filenameSymbols := getFilenameSymbolsFromBytes(languageName, filePath, sourceCode)
 	symbolSlice = append(symbolSlice, filenameSymbols...)
 
 	symbolSlice = expandWithAlternativeSymbols(languageName, sitterLanguage, tree, &sourceCode, symbolSlice)
@@ -541,8 +570,19 @@ func getSitterLanguage(languageName string) (*tree_sitter.Language, error) {
 }
 
 func getFilenameSymbols(langName, filename string) ([]Symbol, error) {
-	filenameSymbols := []Symbol{}
+	switch langName {
+	case "vue", "svelte", "riot", "marko":
+		contents, err := os.ReadFile(filename)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read file %s: %w", filename, err)
+		}
+		return getFilenameSymbolsFromBytes(langName, filename, contents), nil
+	}
+	return []Symbol{}, nil
+}
 
+// getFilenameSymbolsFromBytes derives filename-based symbols from pre-read bytes.
+func getFilenameSymbolsFromBytes(langName string, filename string, contents []byte) []Symbol {
 	switch langName {
 	case "vue", "svelte", "riot", "marko":
 		maybeComponentName := strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
@@ -551,12 +591,8 @@ func getFilenameSymbols(langName, filename string) ([]Symbol, error) {
 		maybeComponentName = strings.ToLower(maybeComponentName)
 
 		if maybeComponentName != "" {
-			contents, err := os.ReadFile(filename)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read file %s: %w", filename, err)
-			}
 			lines := strings.Split(string(contents), "\n")
-			filenameSymbols = append(filenameSymbols, Symbol{
+			return []Symbol{{
 				Content:    maybeComponentName,
 				SymbolType: "sfc",
 				Declaration: Declaration{
@@ -566,9 +602,8 @@ func getFilenameSymbols(langName, filename string) ([]Symbol, error) {
 						Column: uint(len(lines[len(lines)-1]) - 1),
 					},
 				},
-			})
+			}}
 		}
 	}
-
-	return filenameSymbols, nil
+	return nil
 }

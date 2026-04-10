@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"path"
 	"sidekick/coding/unix"
 	"sidekick/common"
 	"sidekick/domain"
@@ -65,6 +67,12 @@ type Env interface {
 	// whose names are given in ignoreFileNames (ordered by precedence,
 	// last = highest). The callback receives absolute paths.
 	Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error
+	// ReadFile reads the contents of the file at the given path.
+	// Relative paths are resolved against the working directory.
+	ReadFile(ctx context.Context, path string) ([]byte, error)
+	// ReadDir reads the directory at the given path and returns its entries.
+	// Relative paths are resolved against the working directory.
+	ReadDir(ctx context.Context, path string) ([]fs.DirEntry, error)
 }
 
 // SSHCapableEnv is implemented by environments that support direct SSH access.
@@ -74,6 +82,81 @@ type SSHCapableEnv interface {
 	// The returned args end with the destination; a remote command string
 	// can be appended directly.
 	SSHArgs(ctx context.Context) ([]string, error)
+}
+
+// EnvSeparator returns the path separator string for the env.
+func EnvSeparator(e Env) string {
+	switch e.GetType() {
+	case EnvTypeLocal, EnvTypeLocalGitWorktree:
+		return string(filepath.Separator)
+	default:
+		return "/"
+	}
+}
+
+// EnvClean returns a cleaned path for the env's filesystem.
+func EnvClean(e Env, p string) string {
+	switch e.GetType() {
+	case EnvTypeLocal, EnvTypeLocalGitWorktree:
+		return filepath.Clean(p)
+	default:
+		return path.Clean(p)
+	}
+}
+
+// EnvRel returns a relative path from basepath to targpath for the env.
+func EnvRel(e Env, basepath, targpath string) (string, error) {
+	switch e.GetType() {
+	case EnvTypeLocal, EnvTypeLocalGitWorktree:
+		return filepath.Rel(basepath, targpath)
+	default:
+		return posixRel(basepath, targpath)
+	}
+}
+
+// posixRel computes a relative path from basepath to targpath using POSIX
+// path semantics, equivalent to filepath.Rel for forward-slash paths.
+func posixRel(basepath, targpath string) (string, error) {
+	base := path.Clean(basepath)
+	targ := path.Clean(targpath)
+
+	baseIsAbs := len(base) > 0 && base[0] == '/'
+	targIsAbs := len(targ) > 0 && targ[0] == '/'
+	if baseIsAbs != targIsAbs {
+		return "", fmt.Errorf("Rel: can't make %s relative to %s", targpath, basepath)
+	}
+
+	baseParts := splitNonEmpty(base, "/")
+	targParts := splitNonEmpty(targ, "/")
+
+	commonLen := 0
+	for i := 0; i < len(baseParts) && i < len(targParts); i++ {
+		if baseParts[i] != targParts[i] {
+			break
+		}
+		commonLen++
+	}
+
+	var parts []string
+	for i := commonLen; i < len(baseParts); i++ {
+		parts = append(parts, "..")
+	}
+	parts = append(parts, targParts[commonLen:]...)
+
+	if len(parts) == 0 {
+		return ".", nil
+	}
+	return strings.Join(parts, "/"), nil
+}
+
+func splitNonEmpty(s, sep string) []string {
+	var result []string
+	for _, part := range strings.Split(s, sep) {
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
 }
 
 type EnvRunCommandInput struct {
@@ -97,11 +180,13 @@ type LocalGitWorktreeEnv struct {
 type DevPodEnv struct {
 	WorkingDirectory string
 	WorkspaceName    string
+	sftp             sftpConn
 }
 
 type OpenShellEnv struct {
 	WorkingDirectory string
 	SandboxName      string
+	sftp             sftpConn
 }
 
 type LocalEnvParams struct {
@@ -249,6 +334,20 @@ func (e *LocalEnv) RunCommand(ctx context.Context, input EnvRunCommandInput) (En
 	return unix.RunCommandActivity(ctx, runCommandInput)
 }
 
+func (e *LocalEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(e.WorkingDirectory, p)
+	}
+	return os.ReadFile(p)
+}
+
+func (e *LocalEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(e.WorkingDirectory, p)
+	}
+	return os.ReadDir(p)
+}
+
 func (e *LocalGitWorktreeEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
 	ignoreManager, err := common.NewIgnoreManager(e.WorkingDirectory, ignoreFileNames)
 	if err != nil {
@@ -311,6 +410,20 @@ func (e *LocalGitWorktreeEnv) RunCommand(ctx context.Context, input EnvRunComman
 		EnvVars:    append(input.EnvVars, envVarsToInject...),
 	}
 	return unix.RunCommandActivity(ctx, runCommandInput)
+}
+
+func (e *LocalGitWorktreeEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(e.WorkingDirectory, p)
+	}
+	return os.ReadFile(p)
+}
+
+func (e *LocalGitWorktreeEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(e.WorkingDirectory, p)
+	}
+	return os.ReadDir(p)
 }
 
 func (e *DevPodEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
@@ -388,6 +501,20 @@ func (e *DevPodEnv) SSHArgs(ctx context.Context) ([]string, error) {
 	}, nil
 }
 
+func (e *DevPodEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpReadFile(ctx, &e.sftp, e, p)
+}
+
+func (e *DevPodEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpReadDir(ctx, &e.sftp, e, p)
+}
+
 func (e *OpenShellEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
 	return walkCodeDirectorySSH(ctx, e, e.WorkingDirectory, ignoreFileNames, handleEntry)
 }
@@ -434,6 +561,37 @@ func (e *OpenShellEnv) RunCommand(ctx context.Context, input EnvRunCommandInput)
 
 func (e *OpenShellEnv) SSHArgs(ctx context.Context) ([]string, error) {
 	return openShellSSHArgs(ctx, e.SandboxName)
+}
+
+func (e *OpenShellEnv) ReadFile(ctx context.Context, p string) ([]byte, error) {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpReadFile(ctx, &e.sftp, e, p)
+}
+
+func (e *OpenShellEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpReadDir(ctx, &e.sftp, e, p)
+}
+
+// SetReadLatency injects artificial latency into each SFTP read for benchmarking.
+func (e *OpenShellEnv) SetReadLatency(d time.Duration) {
+	e.sftp.mu.Lock()
+	defer e.sftp.mu.Unlock()
+	e.sftp.readLatency = d
+	// Force reconnect so the latency wrapper takes effect.
+	if e.sftp.client != nil {
+		_ = e.sftp.client.Close()
+		e.sftp.client = nil
+	}
+	if e.sftp.cmd != nil {
+		_ = e.sftp.cmd.Process.Kill()
+		_ = e.sftp.cmd.Wait()
+		e.sftp.cmd = nil
+	}
 }
 
 // shellQuote wraps a string in single quotes, escaping any embedded single quotes.

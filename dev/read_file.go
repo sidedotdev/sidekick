@@ -2,6 +2,8 @@ package dev
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path"
@@ -38,6 +40,42 @@ func validateFilePath(filePath string, allowAnyPath bool) error {
 		}
 	}
 	return nil
+}
+
+func readFileLinesFromBytes(data []byte, relFilePath string, lineNumber, windowSize int) (string, error) {
+	lang := utils.InferLanguageNameFromFilePath(relFilePath)
+
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	var lines []string
+	lineNum := 1
+	start := lineNumber - windowSize
+	end := lineNumber + windowSize
+	firstLineNumber := max(start, 1)
+	lastLineNumber := 0
+	for scanner.Scan() {
+		line := scanner.Text()
+		if lineNum >= start && lineNum <= end {
+			lines = append(lines, line)
+			lastLineNumber = lineNum
+		}
+		lineNum++
+		if lineNum > end {
+			break
+		}
+	}
+
+	if len(lines) == 0 {
+		return "", fmt.Errorf("no lines found in the specified window")
+	}
+
+	return fmt.Sprintf(
+		"File: %s\nLines: %d-%d\n%s%s\n```",
+		relFilePath,
+		firstLineNumber,
+		lastLineNumber,
+		coding.CodeFenceStartForLanguage(lang),
+		strings.Join(lines, "\n"),
+	), nil
 }
 
 func ReadFileActivity(baseDir string, readFileParams ReadFileActivityInput) (string, error) {
@@ -98,6 +136,32 @@ func ReadFileActivity(baseDir string, readFileParams ReadFileActivityInput) (str
 	)
 
 	return formattedOutput, nil
+}
+
+// EnvReadFileInput is the input for the env-aware file reading activity.
+type EnvReadFileInput struct {
+	EnvContainer env.EnvContainer     `json:"envContainer"`
+	Params       ReadFileActivityInput `json:"params"`
+}
+
+// EnvReadFileActivity reads a file via the Env.ReadFile method, supporting remote envs.
+func EnvReadFileActivity(ctx context.Context, input EnvReadFileInput) (string, error) {
+	params := input.Params
+	if params.LineNumber < 1 || params.WindowSize < 0 {
+		return "", fmt.Errorf("line number must be greater than 0 and window size must be at least 0")
+	}
+	if err := validateFilePath(params.FilePath, params.AllowAnyPath); err != nil {
+		return "", err
+	}
+
+	data, err := input.EnvContainer.Env.ReadFile(ctx, params.FilePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("no file exists at the given file path: %s", params.FilePath)
+		}
+		return "", fmt.Errorf("failed to open file: %v", err)
+	}
+	return readFileLinesFromBytes(data, params.FilePath, params.LineNumber, params.WindowSize)
 }
 
 type FileLine struct {
@@ -273,6 +337,128 @@ func BulkReadFileActivity(baseDir string, params BulkReadFileParams) (BulkReadFi
 	}, nil
 }
 
+// EnvBulkReadFileInput is the input for the env-aware bulk file reading activity.
+type EnvBulkReadFileInput struct {
+	EnvContainer env.EnvContainer   `json:"envContainer"`
+	Params       BulkReadFileParams `json:"params"`
+}
+
+// EnvBulkReadFileActivity reads multiple file sections via the Env.ReadFile method.
+func EnvBulkReadFileActivity(ctx context.Context, input EnvBulkReadFileInput) (BulkReadFileActivityResult, error) {
+	params := input.Params
+	if params.WindowSize < 0 {
+		return BulkReadFileActivityResult{}, fmt.Errorf("window size must be at least 0")
+	}
+
+	fileGroups := make(map[string][]FileLine)
+	fileOrder := make([]string, 0)
+	seenFiles := make(map[string]bool)
+
+	for _, fileLine := range params.FileLines {
+		if fileLine.LineNumber < 1 {
+			return BulkReadFileActivityResult{}, fmt.Errorf("line number must be greater than 0")
+		}
+		if err := validateFilePath(fileLine.FilePath, params.AllowAnyPath); err != nil {
+			return BulkReadFileActivityResult{}, err
+		}
+		if !seenFiles[fileLine.FilePath] {
+			fileOrder = append(fileOrder, fileLine.FilePath)
+			seenFiles[fileLine.FilePath] = true
+		}
+		fileGroups[fileLine.FilePath] = append(fileGroups[fileLine.FilePath], fileLine)
+	}
+
+	var codeBlocks []MergedCodeBlock
+	var errors []string
+
+	for _, filePath := range fileOrder {
+		fileLines := fileGroups[filePath]
+
+		type interval struct {
+			start int
+			end   int
+		}
+
+		var intervals []interval
+		for _, fileLine := range fileLines {
+			start := max(fileLine.LineNumber-params.WindowSize, 1)
+			end := fileLine.LineNumber + params.WindowSize
+			intervals = append(intervals, interval{start: start, end: end})
+		}
+
+		slices.SortFunc(intervals, func(a, b interval) int {
+			if a.start != b.start {
+				return a.start - b.start
+			}
+			return a.end - b.end
+		})
+
+		var merged []interval
+		for _, curr := range intervals {
+			if len(merged) == 0 || curr.start > merged[len(merged)-1].end+1 {
+				merged = append(merged, curr)
+			} else {
+				merged[len(merged)-1].end = max(merged[len(merged)-1].end, curr.end)
+			}
+		}
+
+		data, err := input.EnvContainer.Env.ReadFile(ctx, filePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				errors = append(errors, fmt.Sprintf("failed to read the file: no file exists at the given file path: %s", filePath))
+			} else {
+				errors = append(errors, fmt.Sprintf("failed to read the file: failed to open file: %v", err))
+			}
+			continue
+		}
+
+		scanner := bufio.NewScanner(bytes.NewReader(data))
+		var allLines []string
+		for scanner.Scan() {
+			allLines = append(allLines, scanner.Text())
+		}
+
+		fileLength := len(allLines)
+		lang := utils.InferLanguageNameFromFilePath(filePath)
+
+		hasValidBlocks := false
+		for _, mergedInterval := range merged {
+			actualEnd := min(mergedInterval.end, fileLength)
+			if mergedInterval.start > fileLength {
+				continue
+			}
+			startIdx := mergedInterval.start - 1
+			endIdx := actualEnd - 1
+			if startIdx < 0 || startIdx >= fileLength {
+				continue
+			}
+			var extractedLines []string
+			for i := startIdx; i <= endIdx && i < fileLength; i++ {
+				extractedLines = append(extractedLines, allLines[i])
+			}
+			if len(extractedLines) > 0 {
+				hasValidBlocks = true
+				codeBlocks = append(codeBlocks, MergedCodeBlock{
+					FilePath:  filePath,
+					StartLine: mergedInterval.start,
+					EndLine:   min(actualEnd, fileLength),
+					Language:  lang,
+					Content:   strings.Join(extractedLines, "\n"),
+				})
+			}
+		}
+
+		if !hasValidBlocks {
+			errors = append(errors, fmt.Sprintf("failed to read the file: no lines found in the specified window"))
+		}
+	}
+
+	return BulkReadFileActivityResult{
+		CodeBlocks: codeBlocks,
+		Errors:     errors,
+	}, nil
+}
+
 func formatCodeBlock(block MergedCodeBlock) string {
 	return fmt.Sprintf(
 		"File: %s\nLines: %d-%d\n%s%s\n```",
@@ -313,6 +499,33 @@ func BulkReadFileV2(dCtx DevContext, params BulkReadFileParams) (string, error) 
 	return strings.Join(results, "\n\n"), nil
 }
 
+func BulkReadFileV2Env(dCtx DevContext, params BulkReadFileParams) (string, error) {
+	if len(params.FileLines) == 0 {
+		return "", llm.ErrToolCallUnmarshal
+	}
+
+	envContainer := dCtx.EnvContainer
+	params.AllowAnyPath = envContainer.Env.GetType() == env.EnvTypeDevPod
+
+	var result BulkReadFileActivityResult
+	err := workflow.ExecuteActivity(dCtx, EnvBulkReadFileActivity, EnvBulkReadFileInput{
+		EnvContainer: *envContainer,
+		Params:       params,
+	}).Get(dCtx, &result)
+	if err != nil {
+		return "", fmt.Errorf("failed to execute bulk read file activity: %v", err)
+	}
+
+	var results []string
+	for _, block := range result.CodeBlocks {
+		results = append(results, formatCodeBlock(block))
+	}
+	for _, errorMsg := range result.Errors {
+		results = append(results, errorMsg)
+	}
+	return strings.Join(results, "\n\n"), nil
+}
+
 // TODO add tests for bulk read file, with mock read file activity
 func BulkReadFile(dCtx DevContext, bulkReadFileParams BulkReadFileParams) (string, error) {
 	if len(bulkReadFileParams.FileLines) == 0 {
@@ -320,7 +533,7 @@ func BulkReadFile(dCtx DevContext, bulkReadFileParams BulkReadFileParams) (strin
 	}
 
 	// Use workflow versioning to gate the new behavior
-	version := workflow.GetVersion(dCtx, "read_file_lines_merge_adjacent_v2", workflow.DefaultVersion, 1)
+	version := workflow.GetVersion(dCtx, "read_file_lines_merge_adjacent_v2", workflow.DefaultVersion, 2)
 
 	if version == workflow.DefaultVersion {
 		// Original behavior: execute ReadFileActivity for each request
@@ -347,8 +560,9 @@ func BulkReadFile(dCtx DevContext, bulkReadFileParams BulkReadFileParams) (strin
 			}
 		}
 		return strings.Join(results, "\n\n"), nil
-	} else {
-		// New behavior: use BulkReadFileV2 with merging
+	} else if version == 1 {
 		return BulkReadFileV2(dCtx, bulkReadFileParams)
+	} else {
+		return BulkReadFileV2Env(dCtx, bulkReadFileParams)
 	}
 }

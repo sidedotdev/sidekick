@@ -761,9 +761,8 @@ nested/file0a.txt`,
 			}
 
 			// Call the function and check the result
-			absolutePath := filepath.Join(tmpDir, tt.nonExistentRelativePath)
 			ec := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: tmpDir}}
-			hint := getHintForNonExistentFile(context.Background(), ec, absolutePath)
+			hint := getHintForNonExistentFile(context.Background(), ec, tt.nonExistentRelativePath)
 			if hint != tt.expectedHint {
 				t.Errorf("Expected hint %q, but got %q", tt.expectedHint, hint)
 			}

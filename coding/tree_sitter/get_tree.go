@@ -13,13 +13,18 @@ func GetTree(filePath string) (*tree_sitter.Tree, error) {
 }
 
 func GetTreeWithSource(filePath string) (*tree_sitter.Tree, []byte, error) {
-	languageName, sitterLanguage, err := inferLanguageFromFilePath(filePath)
-	if err != nil {
-		return nil, nil, err
-	}
 	sourceCode, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read source code: %v", err)
+	}
+	return GetTreeWithSourceFromBytes(filePath, sourceCode)
+}
+
+// GetTreeWithSourceFromBytes is like GetTreeWithSource but uses pre-read bytes.
+func GetTreeWithSourceFromBytes(filePath string, sourceCode []byte) (*tree_sitter.Tree, []byte, error) {
+	languageName, sitterLanguage, err := inferLanguageFromFilePath(filePath)
+	if err != nil {
+		return nil, nil, err
 	}
 	parser := tree_sitter.NewParser()
 	defer parser.Close()
