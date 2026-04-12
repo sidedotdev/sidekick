@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { RouterLink, RouterView, useRouter, useRoute } from 'vue-router'
-import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { store } from './lib/store'
 import type { Ref } from 'vue'
 import type { Workspace } from './lib/models'
@@ -14,6 +14,23 @@ import { fuzzyWordPrefixRank } from './lib/fuzzyMatch'
 
 const router = useRouter()
 const route = useRoute()
+
+const applyWorkspaceId = (workspaceId: string) => {
+  store.selectWorkspaceId(workspaceId)
+  sessionStorage.setItem('selectedWorkspaceId', workspaceId)
+  localStorage.setItem('selectedWorkspaceId', workspaceId)
+}
+
+// Set workspace from query param or storage before child components mount
+const initialQueryWorkspaceId = route.query.workspaceId as string | undefined
+if (initialQueryWorkspaceId) {
+  applyWorkspaceId(initialQueryWorkspaceId)
+} else {
+  const storedWorkspaceId = sessionStorage.getItem('selectedWorkspaceId') ?? localStorage.getItem('selectedWorkspaceId')
+  if (storedWorkspaceId) {
+    store.selectWorkspaceId(storedWorkspaceId)
+  }
+}
 
 // look up if system is dark mode
 const isDarkMode = ref(window.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -73,15 +90,16 @@ onMounted(async () => {
     document.documentElement.classList.toggle('dark-mode');
   }
 
-  const storedWorkspaceId = sessionStorage.getItem('selectedWorkspaceId') ?? localStorage.getItem('selectedWorkspaceId')
+  await fetchWorkspaces()
 
-  if (storedWorkspaceId) {
-    store.selectWorkspaceId(storedWorkspaceId)
+  const workspaceIsValid = !!store.workspaceId && workspaces.value.some(w => w.id === store.workspaceId)
+
+  if (initialQueryWorkspaceId && !workspaceIsValid) {
+    window.alert(`Invalid workspace ID: ${initialQueryWorkspaceId}`)
   }
 
-  await fetchWorkspaces()
-  if (!storedWorkspaceId && workspaces.value.length > 0) {
-    // If no workspace was previously selected, select the one with
+  if (!workspaceIsValid && workspaces.value.length > 0) {
+    // If no valid workspace is selected, select the one with
     // lexicographically last ID (more recently created)
     const workspaceId = [...workspaces.value].map(w => w.id).sort().reverse()[0]
     if (workspaceId) {
@@ -129,6 +147,16 @@ const selectedWorkspace = () => {
     router.push({ name: 'kanban' })
   }
 }
+
+watch(() => route.query.workspaceId, (newWorkspaceId) => {
+  if (newWorkspaceId && typeof newWorkspaceId === 'string') {
+    if (workspaces.value.length > 0 && !workspaces.value.some(w => w.id === newWorkspaceId)) {
+      window.alert(`Invalid workspace ID: ${newWorkspaceId}`)
+      return
+    }
+    applyWorkspaceId(newWorkspaceId)
+  }
+})
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleGlobalKeyDown)
