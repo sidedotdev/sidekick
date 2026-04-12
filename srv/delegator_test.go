@@ -2,8 +2,6 @@ package srv
 
 import (
 	"context"
-	"fmt"
-	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/nats"
 	"sidekick/srv/jetstream"
@@ -29,9 +27,8 @@ func (s *DelegatorTestSuite) SetupSuite() {
 	var err error
 	s.ctx = context.Background()
 
-	// Create test server with unique domain and port
 	s.server, err = nats.NewTestServer(nats.ServerOptions{
-		Port:            28867, // Different from other test ports
+		Port:            -1,
 		JetStreamDomain: "sidekick_delegator_test",
 		StoreDir:        s.T().TempDir(),
 	})
@@ -39,7 +36,7 @@ func (s *DelegatorTestSuite) SetupSuite() {
 	s.Require().NoError(s.server.Start(context.Background()))
 
 	// Connect to server
-	s.nc, err = natspkg.Connect(fmt.Sprintf("nats://%s:%d", common.GetNatsServerHost(), 28867))
+	s.nc, err = natspkg.Connect(s.server.ClientURL())
 	s.Require().NoError(err)
 
 	// Create streamer
