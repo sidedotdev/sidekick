@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import TaskCard from '@/components/TaskCard.vue'
+import VirtualTaskGrid from '@/components/VirtualTaskGrid.vue'
 import type { FullTask } from '@/lib/models'
 import { store } from '../lib/store'
 
@@ -40,15 +40,12 @@ onMounted(() => {
     <div v-if="loading">Loading...</div>
     <div v-else-if="error">{{ error }}</div>
     <div v-else-if="archivedTasks.length === 0">No archived tasks found.</div>
-    <div v-else class="task-list">
-      <TaskCard
-        v-for="task in archivedTasks"
-        :key="task.id"
-        :task="task"
-        :readonly="true"
-        @deleted="handleTaskDeleted"
-      />
-    </div>
+    <VirtualTaskGrid
+      v-else
+      :tasks="archivedTasks"
+      :readonly="true"
+      @deleted="handleTaskDeleted"
+    />
   </div>
 </template>
 
@@ -57,9 +54,4 @@ onMounted(() => {
   padding: 1rem;
 }
 
-.task-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 1rem;
-}
 </style>

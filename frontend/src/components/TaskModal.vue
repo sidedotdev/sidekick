@@ -1,4 +1,5 @@
 <template>
+  <Teleport to="body" :disabled="!teleport">
   <div class="overlay" @click="close"></div>
   <div class="modal" @keydown="handleKeyDown">
     <div class="modal-header">
@@ -113,6 +114,7 @@
       </div>
     </form>
   </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -187,9 +189,12 @@ const saveOrUpdatePreset = (options: { finalSave?: boolean } = {}): boolean => {
 }
 
 const devMode = import.meta.env.MODE === 'development'
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   task?: Task
-}>()
+  teleport?: boolean
+}>(), {
+  teleport: true,
+})
 
 const emit = defineEmits<{
   (e: 'close'): void

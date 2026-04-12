@@ -1846,6 +1846,15 @@ func TestBasePermissions_NpxTsc(t *testing.T) {
 	})
 }
 
+func TestBasePermissions_ForLoopWithSeq(t *testing.T) {
+	t.Parallel()
+	config := BaseCommandPermissions()
+
+	script := `cd heartbeat && for i in $(seq 1 10); do go test -count=1 -race ./... 2>&1 | tail -1; done`
+	result, _ := EvaluateScriptPermission(config, script)
+	assert.Equal(t, PermissionAutoApprove, result, "for loop with seq should be auto-approved")
+}
+
 func TestBasePermissions_UvCommands(t *testing.T) {
 	t.Parallel()
 	config := BaseCommandPermissions()

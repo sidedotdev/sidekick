@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { shallowMount } from '@vue/test-utils'
 import KanbanBoard from '../KanbanBoard.vue'
-import TaskCard from '../TaskCard.vue'
+import VirtualTaskList from '../VirtualTaskList.vue'
 import type { FullTask } from '../../lib/models'
 
 describe('KanbanBoard', () => {
@@ -13,7 +13,10 @@ describe('KanbanBoard', () => {
 
   it('renders no tasks when tasks prop is empty', () => {
     const wrapper = shallowMount(KanbanBoard, { props: defaultProps })
-    expect(wrapper.findAll('.task-card').length).toBe(0)
+    const lists = wrapper.findAllComponents(VirtualTaskList)
+    lists.forEach(list => {
+      expect(list.props().tasks.length).toBe(0)
+    })
   })
 
   it('renders tasks in the correct columns', () => {
@@ -26,9 +29,9 @@ describe('KanbanBoard', () => {
     const wrapper = shallowMount(KanbanBoard, { props: { ...defaultProps, tasks } })
     const columns = wrapper.findAll('.kanban-column')
     expect(columns.length).toBe(3)
-    expect(columns.at(0)!.findAllComponents(TaskCard).length).toBe(1) // human
-    expect(columns.at(1)!.findAllComponents(TaskCard).length).toBe(2) // llm
-    expect(columns.at(2)!.findAllComponents(TaskCard).length).toBe(1) // none
+    expect(columns.at(0)!.findComponent(VirtualTaskList).props().tasks.length).toBe(1) // human
+    expect(columns.at(1)!.findComponent(VirtualTaskList).props().tasks.length).toBe(2) // llm
+    expect(columns.at(2)!.findComponent(VirtualTaskList).props().tasks.length).toBe(1) // none
   })
 
   it('displays tasks in descending order of id', () => {
@@ -42,9 +45,10 @@ describe('KanbanBoard', () => {
       props: { ...defaultProps, tasks, showGuidedOverlay: false }
     })
 
-    const taskCards = wrapper.findAllComponents(TaskCard)
-    expect(taskCards[0].props().task.id).toBe('3')
-    expect(taskCards[1].props().task.id).toBe('2')
-    expect(taskCards[2].props().task.id).toBe('1')
+    const columns = wrapper.findAll('.kanban-column')
+    const humanTasks = columns.at(0)!.findComponent(VirtualTaskList).props().tasks
+    expect(humanTasks[0].id).toBe('3')
+    expect(humanTasks[1].id).toBe('2')
+    expect(humanTasks[2].id).toBe('1')
   })
 })
