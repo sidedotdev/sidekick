@@ -29,8 +29,8 @@ const handleTaskDeleted = (id: string) => {
   archivedTasks.value = archivedTasks.value.filter(task => task.id !== id)
 }
 
-onMounted(() => {
-  fetchArchivedTasks()
+onMounted(async () => {
+  await fetchArchivedTasks()
 })
 </script>
 
