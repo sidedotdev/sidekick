@@ -127,6 +127,36 @@ func TestOrphanDetection_KSUIDAge(t *testing.T) {
 	assert.True(t, recentAge < DefaultCodecCleanupRetention, "recent KSUID should not be past retention")
 }
 
+func TestFindOrphanCodecKeys(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	oldID, err := ksuid.NewRandomWithTime(now.Add(-10 * 24 * time.Hour))
+	require.NoError(t, err)
+	recentID, err := ksuid.NewRandomWithTime(now.Add(-1 * time.Hour))
+	require.NoError(t, err)
+	referencedID, err := ksuid.NewRandomWithTime(now.Add(-10 * 24 * time.Hour))
+	require.NoError(t, err)
+
+	oldKey := codecKeyPrefix + oldID.String()
+	recentKey := codecKeyPrefix + recentID.String()
+	referencedKey := codecKeyPrefix + referencedID.String()
+	allKeys := []string{oldKey, recentKey, referencedKey, "codec/not-a-ksuid"}
+
+	t.Run("filters referenced and recent keys", func(t *testing.T) {
+		t.Parallel()
+		referenced := map[string]struct{}{referencedKey: {}}
+		orphans := GetCandidateOrphanCodecKeys(allKeys, referenced, now, DefaultCodecCleanupRetention)
+		assert.Equal(t, []string{oldKey}, orphans)
+	})
+
+	t.Run("nil referenced map treats all old keys as orphans", func(t *testing.T) {
+		t.Parallel()
+		orphans := GetCandidateOrphanCodecKeys(allKeys, nil, now, DefaultCodecCleanupRetention)
+		assert.Equal(t, []string{oldKey, referencedKey}, orphans)
+	})
+}
+
 // --- Workflow-level tests using Temporal test suite ---
 
 type CodecCleanupWorkflowTestSuite struct {
