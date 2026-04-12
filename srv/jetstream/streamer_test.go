@@ -2,7 +2,6 @@ package jetstream
 
 import (
 	"context"
-	"fmt"
 	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/nats"
@@ -21,14 +20,11 @@ type StreamerTestSuite struct {
 	streamer *Streamer
 }
 
-const TestNatsServerPort = 28866
-
 func (s *StreamerTestSuite) SetupSuite() {
 	var err error
 
-	// Create test server with unique domain and port
 	s.server, err = nats.NewTestServer(nats.ServerOptions{
-		Port:            TestNatsServerPort,
+		Port:            -1,
 		JetStreamDomain: "sidekick_test",
 		StoreDir:        s.T().TempDir(),
 	})
@@ -36,7 +32,7 @@ func (s *StreamerTestSuite) SetupSuite() {
 	s.Require().NoError(s.server.Start(context.Background()))
 
 	// Connect to server
-	s.nc, err = natspkg.Connect(fmt.Sprintf("nats://%s:%d", common.GetNatsServerHost(), TestNatsServerPort))
+	s.nc, err = natspkg.Connect(s.server.ClientURL())
 	s.Require().NoError(err)
 
 	// Create streamer
