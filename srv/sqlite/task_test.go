@@ -246,3 +246,120 @@ func TestGetArchivedTasks(t *testing.T) {
 	assert.Len(t, emptyTasks, 0)
 	assert.Equal(t, int64(0), totalCount)
 }
+
+func TestUpdateTaskTitle(t *testing.T) {
+	storage := NewTestSqliteStorage(t, "task_test")
+	ctx := context.Background()
+
+	t.Run("sets title when empty", func(t *testing.T) {
+		task := domain.Task{
+			WorkspaceId: "ws1",
+			Id:          "task_empty_title",
+			Description: "Fix the login bug",
+			Title:       "",
+			Status:      domain.TaskStatusToDo,
+			Created:     time.Now().UTC(),
+			Updated:     time.Now().UTC(),
+		}
+		require.NoError(t, storage.PersistTask(ctx, task))
+
+		err := storage.UpdateTaskTitle(ctx, "ws1", "task_empty_title", "Login Bug Fix")
+		require.NoError(t, err)
+
+		got, err := storage.GetTask(ctx, "ws1", "task_empty_title")
+		require.NoError(t, err)
+		assert.Equal(t, "Login Bug Fix", got.Title)
+	})
+
+	t.Run("sets title when it matches description", func(t *testing.T) {
+		task := domain.Task{
+			WorkspaceId: "ws1",
+			Id:          "task_desc_title",
+			Description: "Fix the login bug",
+			Title:       "Fix the login bug",
+			Status:      domain.TaskStatusToDo,
+			Created:     time.Now().UTC(),
+			Updated:     time.Now().UTC(),
+		}
+		require.NoError(t, storage.PersistTask(ctx, task))
+
+		err := storage.UpdateTaskTitle(ctx, "ws1", "task_desc_title", "Login Bug Fix")
+		require.NoError(t, err)
+
+		got, err := storage.GetTask(ctx, "ws1", "task_desc_title")
+		require.NoError(t, err)
+		assert.Equal(t, "Login Bug Fix", got.Title)
+	})
+
+	t.Run("does not overwrite manually set title", func(t *testing.T) {
+		task := domain.Task{
+			WorkspaceId: "ws1",
+			Id:          "task_manual_title",
+			Description: "Fix the login bug",
+			Title:       "My Custom Title",
+			Status:      domain.TaskStatusToDo,
+			Created:     time.Now().UTC(),
+			Updated:     time.Now().UTC(),
+		}
+		require.NoError(t, storage.PersistTask(ctx, task))
+
+		err := storage.UpdateTaskTitle(ctx, "ws1", "task_manual_title", "Generated Title")
+		require.NoError(t, err)
+
+		got, err := storage.GetTask(ctx, "ws1", "task_manual_title")
+		require.NoError(t, err)
+		assert.Equal(t, "My Custom Title", got.Title)
+	})
+}
+
+func TestUpdateTaskStatus(t *testing.T) {
+	storage := NewTestSqliteStorage(t, "task_test")
+	ctx := context.Background()
+
+	t.Run("updates status and agent_type without clobbering title", func(t *testing.T) {
+		task := domain.Task{
+			WorkspaceId: "ws1",
+			Id:          "task_status_update",
+			Title:       "My Title",
+			Description: "Do something",
+			Status:      domain.TaskStatusToDo,
+			AgentType:   domain.AgentTypeLLM,
+			Created:     time.Now().UTC(),
+			Updated:     time.Now().UTC(),
+		}
+		require.NoError(t, storage.PersistTask(ctx, task))
+
+		err := storage.UpdateTaskStatus(ctx, "ws1", "task_status_update", domain.TaskStatusBlocked, domain.AgentTypeHuman)
+		require.NoError(t, err)
+
+		got, err := storage.GetTask(ctx, "ws1", "task_status_update")
+		require.NoError(t, err)
+		assert.Equal(t, domain.TaskStatusBlocked, got.Status)
+		assert.Equal(t, domain.AgentTypeHuman, got.AgentType)
+		assert.Equal(t, "My Title", got.Title)
+		assert.True(t, got.Updated.After(task.Updated) || got.Updated.Equal(task.Updated))
+	})
+
+	t.Run("updates status to complete", func(t *testing.T) {
+		task := domain.Task{
+			WorkspaceId: "ws1",
+			Id:          "task_complete_update",
+			Title:       "Another Title",
+			Description: "Finish this",
+			Status:      domain.TaskStatusInProgress,
+			AgentType:   domain.AgentTypeLLM,
+			Created:     time.Now().UTC(),
+			Updated:     time.Now().UTC(),
+		}
+		require.NoError(t, storage.PersistTask(ctx, task))
+
+		err := storage.UpdateTaskStatus(ctx, "ws1", "task_complete_update", domain.TaskStatusComplete, domain.AgentTypeNone)
+		require.NoError(t, err)
+
+		got, err := storage.GetTask(ctx, "ws1", "task_complete_update")
+		require.NoError(t, err)
+		assert.Equal(t, domain.TaskStatusComplete, got.Status)
+		assert.Equal(t, domain.AgentTypeNone, got.AgentType)
+		assert.Equal(t, "Another Title", got.Title)
+	})
+}

@@ -32,14 +32,7 @@ type TaskUpdate struct {
 }
 
 func (ima *DevAgentManagerActivities) UpdateTaskByTaskId(ctx context.Context, workspaceId, taskId string, update TaskUpdate) error {
-	task, err := ima.Storage.GetTask(ctx, workspaceId, taskId)
-	if err != nil {
-		return fmt.Errorf("failed to retrieve task for taskId %s: %v", taskId, err)
-	}
-	task.AgentType = update.AgentType
-	task.Status = update.Status
-	task.Updated = time.Now()
-	return ima.Storage.PersistTask(ctx, task)
+	return ima.Storage.UpdateTaskStatus(ctx, workspaceId, taskId, update.Status, update.AgentType)
 }
 
 func (ima *DevAgentManagerActivities) UpdateTask(ctx context.Context, workspaceId, workflowId string, update TaskUpdate) error {
@@ -66,17 +59,7 @@ func (ima *DevAgentManagerActivities) UpdateTask(ctx context.Context, workspaceI
 		return err
 	}
 
-	// Update the task record
-	task, err := ima.Storage.GetTask(ctx, workspaceId, taskId)
-	if err != nil {
-		return fmt.Errorf("Failed to retrieve task record for taskId %s: %v", taskId, err)
-	}
-
-	task.AgentType = update.AgentType
-	task.Status = update.Status
-	task.Updated = time.Now()
-
-	return ima.Storage.PersistTask(ctx, task)
+	return ima.Storage.UpdateTaskStatus(ctx, workspaceId, taskId, update.Status, update.AgentType)
 }
 
 func (ima *DevAgentManagerActivities) UpdateTaskForUserRequest(ctx context.Context, workspaceId, workflowId string) error {
@@ -103,17 +86,7 @@ func (ima *DevAgentManagerActivities) UpdateTaskForUserRequest(ctx context.Conte
 		return err
 	}
 
-	// Update the task record
-	task, err := ima.Storage.GetTask(ctx, workspaceId, taskId)
-	if err != nil {
-		return fmt.Errorf("Failed to retrieve task record for taskId %s: %v", taskId, err)
-	}
-
-	task.AgentType = domain.AgentTypeHuman
-	task.Status = domain.TaskStatusBlocked
-	task.Updated = time.Now()
-
-	return ima.Storage.PersistTask(ctx, task)
+	return ima.Storage.UpdateTaskStatus(ctx, workspaceId, taskId, domain.TaskStatusBlocked, domain.AgentTypeHuman)
 }
 
 func (ima *DevAgentManagerActivities) PutWorkflow(ctx context.Context, flow domain.Flow) (err error) {
@@ -122,12 +95,6 @@ func (ima *DevAgentManagerActivities) PutWorkflow(ctx context.Context, flow doma
 }
 
 func (ima *DevAgentManagerActivities) CompleteFlowParentTask(ctx context.Context, workspaceId, parentId, flowStatus string) (err error) {
-	// Retrieve the task using workspaceId and parentId
-	task, err := ima.Storage.GetTask(ctx, workspaceId, parentId)
-	if err != nil {
-		return err
-	}
-
 	var taskStatus domain.TaskStatus
 	switch flowStatus {
 	case "completed":
@@ -139,15 +106,7 @@ func (ima *DevAgentManagerActivities) CompleteFlowParentTask(ctx context.Context
 	default:
 		return fmt.Errorf("Unrecognized flow status: '%s'", flowStatus)
 	}
-	task.Status = taskStatus
-	task.AgentType = domain.AgentTypeNone
-	task.Updated = time.Now()
-	err = ima.Storage.PersistTask(ctx, task)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return ima.Storage.UpdateTaskStatus(ctx, workspaceId, parentId, taskStatus, domain.AgentTypeNone)
 }
 
 func (ima *DevAgentManagerActivities) PassOnUserResponse(userResponse flow_action.UserResponse) (err error) {

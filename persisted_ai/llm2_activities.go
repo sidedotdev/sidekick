@@ -179,7 +179,11 @@ func convertLlm2EventToFlowEvent(event llm2.Event, flowActionId string) domain.F
 	}
 }
 
-// getLlm2Provider returns the appropriate llm2.Provider based on the model configuration.
+// GetLlm2Provider returns the appropriate llm2.Provider based on the model configuration.
+func GetLlm2Provider(config common.ModelConfig, providers []common.ModelProviderPublicConfig) (llm2.Provider, error) {
+	return getLlm2Provider(config, providers)
+}
+
 func getLlm2Provider(config common.ModelConfig, providers []common.ModelProviderPublicConfig) (llm2.Provider, error) {
 	var providerConfig *common.ModelProviderPublicConfig
 	for i := range providers {

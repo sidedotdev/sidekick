@@ -41,7 +41,7 @@ const props = withDefaults(defineProps<{
   readonly?: boolean
 }>(), {
   minColumnWidth: 300,
-  estimateRowHeight: 120,
+  estimateRowHeight: 130,
   rowGap: 16,
   readonly: false,
 })

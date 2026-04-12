@@ -1,5 +1,5 @@
 <template>
-  <div :class="`task-card ${task.status.toLowerCase()}`" @click="cardClicked">
+  <div :class="['task-card', task.status.toLowerCase(), { 'has-title': task.title }]" @click="cardClicked">
     <div class="actions">
       <button v-if="task.status == 'drafting'" class="action edit" title="Edit task" @click.stop="openEditModal">✎️</button>
       <button class="action copy" title="Duplicate task" @click.stop="copyTask"><CopyIcon/></button>
@@ -8,10 +8,12 @@
       <button v-if="canDelete" class="action delete" title="Delete task" @click.stop="deleteTask"><TrashIcon/></button>
     </div>
 
-    <h3>{{ task.title }}</h3>
-    <p>{{ task.description }}</p>
-    <span :class="`status-label ${task.status.toLowerCase()}`">{{ statusLabel(task.status) }}</span>
-    <span v-if="task.archived" class="archived-label">Archived</span>
+    <h3 v-if="task.title" class="task-title">{{ task.title }}</h3>
+    <p class="task-description">{{ task.description }}</p>
+    <div class="card-footer">
+      <span :class="`status-label ${task.status.toLowerCase()}`">{{ statusLabel(task.status) }}</span>
+      <span v-if="task.archived" class="archived-label">Archived</span>
+    </div>
 
     <span v-if="llmPresetLabel" class="llm-preset-label">{{ llmPresetLabel }}</span>
   </div>
@@ -240,12 +242,17 @@ const cancelTask = async () => {
   padding: var(--task-pad) calc(var(--task-pad) / 2);
   transition: box-shadow 0.3s ease;
   font-family: sans-serif;
+  height: 7.5rem;
+  overflow: hidden;
+  position: relative;
 }
 
 .task-card:hover {
   box-shadow: 0 2px 5px var(--action-box-shadow);
   background-color: var(--task-card-hover-background);
   cursor: pointer;
+  overflow: visible;
+  z-index: 10;
 }
 
 .status-label {
@@ -290,44 +297,58 @@ const cancelTask = async () => {
   background-color: #4caf50;
 }
 
-.task-card p {
-  /* NOTE: doing line-clamp messes up the ::first-line style in chrome (not
-   * firefox), so preferring that instead. ideally we'd have both. */
-  /*
-  -webkit-box-orient: vertical;
-  box-orient: vertical;
-  display: -webkit-box;
-  -webkit-line-clamp: 5;
-  line-clamp: 5;
-  */
+.task-title {
+  margin: 0 0 0.25rem 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.3;
   overflow: hidden;
-  white-space: pre-wrap;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-description {
+  overflow: hidden;
   word-wrap: break-word;
-  max-height: 10rem;
-  margin-top: -10px;
-  margin-bottom: 8px;
-  max-height: 10rem;
+  margin: 0 0 0.5rem 0;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
-.task-card:hover p {
-  max-height: none;
-  -webkit-line-clamp: 1000;
-  line-clamp: 1000;
-  overflow: visible;
-  max-height: none;
-  z-index: 1;
-}
-.task-card p::first-line {
-  font-size: 1.0rem;
+
+/* When no title, make the first line title-sized */
+.task-card:not(.has-title) .task-description::first-line {
+  font-size: 0.95rem;
   line-height: 2.0;
+}
+
+.task-card:hover .task-description {
+  display: block;
+  -webkit-line-clamp: unset;
+  white-space: pre-wrap;
+  position: relative;
+  z-index: 1;
+  max-height: 24rem;
+  /* TODO: only engage scroll capture when user starts scrolling within this element */
+  overflow-y: auto;
+  background-color: var(--task-card-hover-background);
+  padding: 0.4rem calc(var(--task-pad) / 2);
+  margin-left: calc(var(--task-pad) / -2);
+  margin-right: calc(var(--task-pad) / -2);
+  border-radius: 0 0 2px 2px;
+}
+
+.card-footer {
+  position: absolute;
+  bottom: calc(var(--task-pad) / 2);
+  left: calc(var(--task-pad) / 2);
 }
 
 .task-card a {
   display: block;
   margin-top: 1rem;
-}
-
-.task-card {
-  position: relative;
 }
 .actions {
   position: absolute;

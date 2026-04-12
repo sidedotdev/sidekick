@@ -36,7 +36,7 @@ const props = withDefaults(defineProps<{
   gap?: number
   readonly?: boolean
 }>(), {
-  estimateSize: 120,
+  estimateSize: 130,
   gap: 8,
   readonly: false,
 })
