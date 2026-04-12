@@ -82,6 +82,57 @@ func (s Storage) PersistTask(ctx context.Context, task domain.Task) error {
 	return nil
 }
 
+func (s Storage) withTaskLock(ctx context.Context, workspaceId, taskId string, fn func() error) error {
+	lockKey := fmt.Sprintf("%s:%s:lock", workspaceId, taskId)
+	lockTTL := 5 * time.Second
+
+	for {
+		ok, err := s.Client.SetNX(ctx, lockKey, "1", lockTTL).Result()
+		if err != nil {
+			return fmt.Errorf("failed to acquire task lock: %w", err)
+		}
+		if ok {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	defer s.Client.Del(ctx, lockKey)
+
+	return fn()
+}
+
+func (s Storage) UpdateTaskStatus(ctx context.Context, workspaceId, taskId string, status domain.TaskStatus, agentType domain.AgentType) error {
+	return s.withTaskLock(ctx, workspaceId, taskId, func() error {
+		task, err := s.GetTask(ctx, workspaceId, taskId)
+		if err != nil {
+			return err
+		}
+		task.Status = status
+		task.AgentType = agentType
+		task.Updated = time.Now()
+		return s.PersistTask(ctx, task)
+	})
+}
+
+func (s Storage) UpdateTaskTitle(ctx context.Context, workspaceId, taskId, title string) error {
+	return s.withTaskLock(ctx, workspaceId, taskId, func() error {
+		task, err := s.GetTask(ctx, workspaceId, taskId)
+		if err != nil {
+			return err
+		}
+		if task.Title == "" || task.Title == task.Description {
+			task.Title = title
+			task.Updated = time.Now()
+			return s.PersistTask(ctx, task)
+		}
+		return nil
+	})
+}
+
 // TODO /gen add tests for DeleteTask
 func (s Storage) DeleteTask(ctx context.Context, workspaceId, taskId string) error {
 	task, err := s.GetTask(ctx, workspaceId, taskId)
