@@ -96,6 +96,20 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 		if err != nil {
 			return fmt.Errorf("failed to persist flow record: %w", err)
 		}
+
+		if v := workflow.GetVersion(ctx, "generate-task-title", workflow.DefaultVersion, 1); v >= 1 {
+			workflow.Go(ctx, func(gCtx workflow.Context) {
+				gCtx = setActivityOptions(gCtx)
+				titleErr := workflow.ExecuteActivity(gCtx, ima.GenerateTaskTitle, GenerateTitleInput{
+					WorkspaceId: input.WorkspaceId,
+					TaskId:      input.TaskId,
+					Description: input.Description,
+				}).Get(gCtx, nil)
+				if titleErr != nil {
+					workflow.GetLogger(gCtx).Warn("Failed to generate task title", "Error", titleErr)
+				}
+			})
+		}
 	}
 
 	// Signal-handling loop: listen for signals from the child and monitor its completion
