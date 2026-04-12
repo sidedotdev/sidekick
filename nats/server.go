@@ -150,6 +150,11 @@ func (s *Server) Stop() error {
 	return nil
 }
 
+// ClientURL returns the URL clients should use to connect to this server
+func (s *Server) ClientURL() string {
+	return s.natsServer.ClientURL()
+}
+
 // newNATSLogger creates a NATS-compatible logger that forwards to zerolog
 func newNATSLogger() server.Logger {
 	return &natsLogger{
