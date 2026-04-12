@@ -336,6 +336,26 @@ func CodecPayloadCleanupWorkflow(ctx workflow.Context, input CodecCleanupWorkflo
 	}
 }
 
+// GetCandidateOrphanCodecKeys returns codec keys from allKeys that are not in referencedKeys
+// and are older than retention based on their embedded KSUID timestamp.
+func GetCandidateOrphanCodecKeys(allKeys []string, referencedKeys map[string]struct{}, now time.Time, retention time.Duration) []string {
+	var orphans []string
+	for _, key := range allKeys {
+		if _, referenced := referencedKeys[key]; referenced {
+			continue
+		}
+		ksuidStr := key[len(codecKeyPrefix):]
+		id, err := ksuid.Parse(ksuidStr)
+		if err != nil {
+			continue
+		}
+		if now.Sub(id.Time()) >= retention {
+			orphans = append(orphans, key)
+		}
+	}
+	return orphans
+}
+
 // orphanScan finds and deletes codec keys not referenced by any workflow.
 // Returns the number of activity invocations for history size tracking.
 func orphanScan(ctx workflow.Context, actCtx workflow.Context, retention time.Duration) int {
@@ -391,20 +411,7 @@ func orphanScan(ctx workflow.Context, actCtx workflow.Context, retention time.Du
 
 	// Find orphans: keys not referenced by any workflow, and old enough based on KSUID timestamp
 	now := workflow.Now(ctx)
-	var orphans []string
-	for _, key := range allKeys {
-		if _, referenced := referencedKeys[key]; referenced {
-			continue
-		}
-		ksuidStr := key[len(codecKeyPrefix):]
-		id, err := ksuid.Parse(ksuidStr)
-		if err != nil {
-			continue
-		}
-		if now.Sub(id.Time()) >= retention {
-			orphans = append(orphans, key)
-		}
-	}
+	orphans := GetCandidateOrphanCodecKeys(allKeys, referencedKeys, now, retention)
 
 	if len(orphans) > 0 {
 		deleteCtx := workflow.WithActivityOptions(actCtx, workflow.ActivityOptions{
