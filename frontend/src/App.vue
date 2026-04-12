@@ -6,6 +6,10 @@ import type { Ref } from 'vue'
 import type { Workspace } from './lib/models'
 import Select from 'primevue/select'
 import GearIcon from './components/icons/GearIcon.vue'
+import BoardIcon from './components/icons/BoardIcon.vue'
+import ArchiveIcon from './components/icons/ArchiveIcon.vue'
+import PlusIcon from './components/icons/PlusIcon.vue'
+import ShortcutTooltip from './components/ShortcutTooltip.vue'
 import { fuzzyWordPrefixRank } from './lib/fuzzyMatch'
 
 const router = useRouter()
@@ -46,6 +50,11 @@ const handleGlobalKeyDown = (event: KeyboardEvent) => {
     if (selectEl?.contains(document.activeElement)) {
       (document.activeElement as HTMLElement)?.blur()
     }
+  }
+
+  if (modKey && (event.key === 'b' || event.key === 'B')) {
+    event.preventDefault()
+    router.push({ name: 'kanban' })
   }
 }
 
@@ -137,9 +146,15 @@ onUnmounted(() => {
       <RouterLink id="logo-link" to="/kanban"><div id="logo">~</div></RouterLink>
 
       <nav class="container">
-        <RouterLink to="/kanban">Board</RouterLink>
-        <RouterLink to="/archived-tasks">Archived Tasks</RouterLink>
-        <RouterLink to="/workspaces/new">+Space</RouterLink>
+        <ShortcutTooltip label="Board" :shortcut="isMac ? '⌘B' : 'Ctrl+B'">
+          <RouterLink to="/kanban" class="nav-icon-link" aria-label="Board"><BoardIcon /></RouterLink>
+        </ShortcutTooltip>
+        <ShortcutTooltip label="Archived Tasks">
+          <RouterLink to="/archived-tasks" class="nav-icon-link" aria-label="Archived Tasks"><ArchiveIcon /></RouterLink>
+        </ShortcutTooltip>
+        <ShortcutTooltip label="New Space">
+          <RouterLink to="/workspaces/new" class="nav-icon-link" aria-label="New Space"><PlusIcon /></RouterLink>
+        </ShortcutTooltip>
       </nav>
     </div>
 
@@ -331,8 +346,14 @@ nav a {
   border-left: 1px solid var(--color-border);
 }
 
-nav a:first-of-type {
+nav > :first-child a {
   border: 0;
+}
+
+.nav-icon-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 @media (min-width: 1024px) {

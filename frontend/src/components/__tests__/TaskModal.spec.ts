@@ -95,6 +95,9 @@ const LlmConfigEditorStub = {
   template: '<div class="llm-config-editor-stub"></div>'
 }
 
+const mountModal = (options: Record<string, any> = {}) =>
+  mount(TaskModal, { ...options, props: { teleport: false, ...options.props } })
+
 describe('TaskModal', () => {
   let wrapper: VueWrapper
 
@@ -105,7 +108,7 @@ describe('TaskModal', () => {
   })
 
   const mountComponent = (props = {}) => {
-    wrapper = mount(TaskModal, {
+    wrapper = mountModal({
       props,
       global: {
         stubs: {
@@ -333,7 +336,7 @@ describe('TaskModal localStorage behavior', () => {
       })
       global.fetch = fetchMock
 
-      const wrapper = mount(TaskModal)
+      const wrapper = mountModal()
       const textarea = wrapper.find('textarea')
       await textarea.setValue('New description')
       await wrapper.vm.$nextTick()
@@ -357,7 +360,7 @@ describe('TaskModal localStorage behavior', () => {
       const fetchMock = createMockFetch()
       global.fetch = fetchMock
 
-      const wrapper = mount(TaskModal)
+      const wrapper = mountModal()
       const textarea = wrapper.find('textarea')
       
       // Set empty description
@@ -378,7 +381,7 @@ describe('TaskModal localStorage behavior', () => {
       const fetchMock = createMockFetch()
       global.fetch = fetchMock
 
-      const wrapper = mount(TaskModal)
+      const wrapper = mountModal()
       const textarea = wrapper.find('textarea')
       
       // Set whitespace-only description
@@ -408,7 +411,7 @@ describe('TaskModal localStorage behavior', () => {
       })
       global.fetch = fetchMock
 
-      const wrapper = mount(TaskModal)
+      const wrapper = mountModal()
       const textarea = wrapper.find('textarea')
       
       // First change triggers POST
@@ -435,14 +438,14 @@ describe('TaskModal localStorage behavior', () => {
       const draftKey = `draftDescription_${testWorkspaceId}`
       localStorage.setItem(draftKey, 'Old localStorage draft')
 
-      const wrapper = mount(TaskModal)
+      const wrapper = mountModal()
 
       const textarea = wrapper.find('textarea')
       expect(textarea.element.value).toBe('')
     })
 
     it('loads description from task prop when editing existing task', () => {
-      const wrapper = mount(TaskModal, {
+      const wrapper = mountModal({
         props: {
           task: createTestTask()
         }
@@ -458,7 +461,7 @@ describe('TaskModal localStorage behavior', () => {
       const branchKey = `lastSelectedBranch_${testWorkspaceId}`
       localStorage.setItem(branchKey, 'feature-1')
 
-      const wrapper = mount(TaskModal)
+      const wrapper = mountModal()
 
       expect((wrapper.vm as any).selectedBranch).toBe('feature-1')
     })
@@ -466,7 +469,7 @@ describe('TaskModal localStorage behavior', () => {
     it('saves selected branch to localStorage after successful task creation', async () => {
       const branchKey = `lastSelectedBranch_${testWorkspaceId}`
 
-      const wrapper = mount(TaskModal)
+      const wrapper = mountModal()
 
       const textarea = wrapper.find('textarea')
       await textarea.setValue('Task with branch')
@@ -485,7 +488,7 @@ describe('TaskModal localStorage behavior', () => {
     it('does not use localStorage repoMode when editing an existing task without repoMode', () => {
       localStorage.setItem('lastUsedRepoMode', 'worktree')
 
-      const wrapper = mount(TaskModal, {
+      const wrapper = mountModal({
         props: {
           task: createTestTask({
             flowOptions: { envType: 'local' }
@@ -500,7 +503,7 @@ describe('TaskModal localStorage behavior', () => {
       const branchKey = `lastSelectedBranch_${testWorkspaceId}`
       localStorage.setItem(branchKey, 'should-not-appear')
 
-      const wrapper = mount(TaskModal, {
+      const wrapper = mountModal({
         props: {
           task: createTestTask({
             flowOptions: {
@@ -518,7 +521,7 @@ describe('TaskModal localStorage behavior', () => {
       const otherBranchKey = `lastSelectedBranch_${otherWorkspaceId}`
       localStorage.setItem(otherBranchKey, 'other-branch')
 
-      const wrapper = mount(TaskModal)
+      const wrapper = mountModal()
 
       expect((wrapper.vm as any).selectedBranch).toBeNull()
     })
@@ -526,7 +529,7 @@ describe('TaskModal localStorage behavior', () => {
     it('does not save branch when null after task creation', async () => {
       const branchKey = `lastSelectedBranch_${testWorkspaceId}`
 
-      const wrapper = mount(TaskModal)
+      const wrapper = mountModal()
 
       const textarea = wrapper.find('textarea')
       await textarea.setValue('Task without branch')
@@ -542,7 +545,7 @@ describe('TaskModal localStorage behavior', () => {
   it('derives repoMode as worktree from legacy lastUsedEnvType localStorage value', () => {
     localStorage.setItem('lastUsedEnvType', 'local_git_worktree')
 
-    const wrapper = mount(TaskModal)
+    const wrapper = mountModal()
 
     expect((wrapper.vm as any).envType).toBe('local')
     expect((wrapper.vm as any).repoMode).toBe('worktree')
@@ -557,7 +560,7 @@ describe('TaskModal localStorage behavior', () => {
       })
       global.fetch = fetchMock
 
-      const wrapper = mount(TaskModal)
+      const wrapper = mountModal()
       const textarea = wrapper.find('textarea')
       
       // Make a change but don't wait for debounce
@@ -585,7 +588,7 @@ describe('TaskModal localStorage behavior', () => {
       const fetchMock = createMockFetch()
       global.fetch = fetchMock
 
-      const wrapper = mount(TaskModal)
+      const wrapper = mountModal()
       
       // Close without entering anything
       await wrapper.find('.close-button').trigger('click')
@@ -607,7 +610,7 @@ describe('TaskModal localStorage behavior', () => {
       } as Response)
       global.fetch = fetchMock
 
-      const wrapper = mount(TaskModal)
+      const wrapper = mountModal()
       const textarea = wrapper.find('textarea')
       
       await textarea.setValue('Some description')
@@ -629,7 +632,7 @@ describe('TaskModal localStorage behavior', () => {
       } as Response)
       global.fetch = fetchMock
 
-      const wrapper = mount(TaskModal)
+      const wrapper = mountModal()
       const textarea = wrapper.find('textarea')
       
       await textarea.setValue('Some description')
@@ -654,7 +657,7 @@ describe('TaskModal localStorage behavior', () => {
       } as Response)
       global.fetch = fetchMock
 
-      const wrapper = mount(TaskModal)
+      const wrapper = mountModal()
       const textarea = wrapper.find('textarea')
       
       await textarea.setValue('Some description')
@@ -678,7 +681,7 @@ describe('TaskModal localStorage behavior', () => {
   describe('undo/redo functionality', () => {
     it('supports undo with Ctrl+Z', async () => {
       vi.useFakeTimers()
-      const wrapper = mount(TaskModal)
+      const wrapper = mountModal()
       const textarea = wrapper.find('textarea')
       
       await textarea.setValue('First value')
@@ -699,7 +702,7 @@ describe('TaskModal localStorage behavior', () => {
 
     it('supports redo with Ctrl+Y', async () => {
       vi.useFakeTimers()
-      const wrapper = mount(TaskModal)
+      const wrapper = mountModal()
       const textarea = wrapper.find('textarea')
       
       await textarea.setValue('First value')
@@ -736,7 +739,7 @@ describe('TaskModal localStorage behavior', () => {
     })
 
     it('creates a new preset when in add preset mode', async () => {
-      const wrapper = mount(TaskModal, {
+      const wrapper = mountModal({
         global: {
           stubs: {
             Dropdown: DropdownStub,
@@ -777,7 +780,7 @@ describe('TaskModal localStorage behavior', () => {
       }
       localStorage.setItem('sidekick_model_presets', JSON.stringify([existingPreset]))
 
-      const wrapper = mount(TaskModal, {
+      const wrapper = mountModal({
         global: {
           stubs: {
             Dropdown: DropdownStub,
@@ -809,7 +812,7 @@ describe('TaskModal localStorage behavior', () => {
     })
 
     it('validates config when validate option is true', async () => {
-      const wrapper = mount(TaskModal, {
+      const wrapper = mountModal({
         global: {
           stubs: {
             Dropdown: DropdownStub,
@@ -839,7 +842,7 @@ describe('TaskModal localStorage behavior', () => {
     })
 
     it('validates without showing alert when finalSave is false', async () => {
-      const wrapper = mount(TaskModal, {
+      const wrapper = mountModal({
         global: {
           stubs: {
             Dropdown: DropdownStub,
@@ -867,7 +870,7 @@ describe('TaskModal localStorage behavior', () => {
     })
 
     it('returns true when not in add preset mode', async () => {
-      const wrapper = mount(TaskModal, {
+      const wrapper = mountModal({
         global: {
           stubs: {
             Dropdown: DropdownStub,
@@ -887,7 +890,7 @@ describe('TaskModal localStorage behavior', () => {
     })
 
     it('validates use case configs', async () => {
-      const wrapper = mount(TaskModal, {
+      const wrapper = mountModal({
         global: {
           stubs: {
             Dropdown: DropdownStub,
@@ -927,7 +930,7 @@ describe('TaskModal localStorage behavior', () => {
       })
       global.fetch = fetchMock
 
-      const wrapper = mount(TaskModal, {
+      const wrapper = mountModal({
         global: {
           stubs: {
             Dropdown: DropdownStub,
@@ -972,7 +975,7 @@ describe('TaskModal localStorage behavior', () => {
       })
       global.fetch = fetchMock
 
-      const wrapper = mount(TaskModal, {
+      const wrapper = mountModal({
         global: {
           stubs: {
             Dropdown: DropdownStub,
@@ -1029,7 +1032,7 @@ describe('TaskModal localStorage behavior', () => {
       }
       localStorage.setItem('sidekick_model_presets', JSON.stringify([existingPreset]))
 
-      const wrapper = mount(TaskModal, {
+      const wrapper = mountModal({
         global: {
           stubs: {
             Dropdown: DropdownStub,
@@ -1053,7 +1056,7 @@ describe('TaskModal localStorage behavior', () => {
       })
       global.fetch = fetchMock
 
-      const wrapper = mount(TaskModal, {
+      const wrapper = mountModal({
         global: {
           stubs: {
             Dropdown: DropdownStub,
@@ -1085,7 +1088,7 @@ describe('TaskModal localStorage behavior', () => {
       const fetchMock = createMockFetch()
       global.fetch = fetchMock
 
-      const wrapper = mount(TaskModal, {
+      const wrapper = mountModal({
         global: {
           stubs: {
             Dropdown: DropdownStub,
@@ -1136,7 +1139,7 @@ describe('TaskModal determineRequirements behavior', () => {
       flowOptions: { determineRequirements: false }
     })
 
-    const wrapper = mount(TaskModal, {
+    const wrapper = mountModal({
       props: { task },
       global: {
         stubs: {
@@ -1158,7 +1161,7 @@ describe('TaskModal determineRequirements behavior', () => {
     localStorage.setItem(`lastDetermineRequirements_${testWorkspaceId}`, 'false')
     vi.stubGlobal('fetch', createMockFetch({ rememberLastSelection: true }))
 
-    const wrapper = mount(TaskModal, {
+    const wrapper = mountModal({
       global: {
         stubs: {
           Dropdown: DropdownStub,
@@ -1179,7 +1182,7 @@ describe('TaskModal determineRequirements behavior', () => {
     localStorage.setItem(`lastDetermineRequirements_${testWorkspaceId}`, 'false')
     vi.stubGlobal('fetch', createMockFetch({ rememberLastSelection: false }))
 
-    const wrapper = mount(TaskModal, {
+    const wrapper = mountModal({
       global: {
         stubs: {
           Dropdown: DropdownStub,
@@ -1199,7 +1202,7 @@ describe('TaskModal determineRequirements behavior', () => {
     })
     vi.stubGlobal('fetch', createMockFetch({ rememberLastSelection: true }))
 
-    const wrapper = mount(TaskModal, {
+    const wrapper = mountModal({
       global: {
         stubs: {
           Dropdown: DropdownStub,
@@ -1242,7 +1245,7 @@ describe('TaskModal determineRequirements behavior', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const wrapper = mount(TaskModal, {
+    const wrapper = mountModal({
       global: {
         stubs: {
           Dropdown: DropdownStub,
@@ -1292,7 +1295,7 @@ describe('TaskModal determineRequirements behavior', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const wrapper = mount(TaskModal, {
+    const wrapper = mountModal({
       global: {
         stubs: {
           Dropdown: DropdownStub,
@@ -1316,7 +1319,7 @@ describe('TaskModal determineRequirements behavior', () => {
     mockStore.getTaskConfigCache = () => null
     vi.stubGlobal('fetch', createMockFetch())
 
-    const wrapper = mount(TaskModal, {
+    const wrapper = mountModal({
       global: {
         stubs: {
           Dropdown: DropdownStub,

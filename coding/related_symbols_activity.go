@@ -30,6 +30,11 @@ type RelatedSymbol struct {
 
 // Could be called EnrichedReferencesActivity or something similar too
 func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input RelatedSymbolsActivityInput) ([]RelatedSymbol, error) {
+	lang := utils.InferLanguageNameFromFilePath(input.RelativeFilePath)
+	if !lsp.IsSupportedLanguage(lang) {
+		return nil, nil
+	}
+
 	lspInput := lsp.FindReferencesActivityInput{
 		EnvContainer:     input.EnvContainer,
 		RelativeFilePath: input.RelativeFilePath,

@@ -163,7 +163,7 @@ func CheckIfCriteriaFulfilled(dCtx DevContext, promptInfo CheckWorkInfo) (Criter
 		// TODO /gen test this, assert it calls the right tool via mock of chat stream method
 		actionCtx := dCtx.ExecContext.NewActionContext("check_criteria_fulfillment")
 		actionCtx.ActionParams["diffString"] = promptInfo.Work
-		toolNameMapping, err := resolveStreamToolNameMapping(modelConfig, *actionCtx.Secrets)
+		toolNameMapping, err := resolveStreamToolNameMapping(actionCtx, modelConfig, *actionCtx.Secrets)
 		if err != nil {
 			return CriteriaFulfillment{}, fmt.Errorf("failed to resolve tool name mapping: %v", err)
 		}

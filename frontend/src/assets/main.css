@@ -115,4 +115,11 @@ a:hover, button:hover {
   color: var(--color-text);
 }
 
+svg.icon {
+  /* fix for sub-pixel positioning issues causing strokes on bottom border to
+   * sometimes get cut off at some resolutions and svg sizes */
+  overflow: visible;
+}
+
+
 /* NOTE: color variables should be defined in base.css */

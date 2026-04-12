@@ -238,7 +238,6 @@ const cancelTask = async () => {
   background-color: var(--task-card-background);
   border-radius: 2px;
   padding: var(--task-pad) calc(var(--task-pad) / 2);
-  margin-top: var(--kanban-gap);
   transition: box-shadow 0.3s ease;
   font-family: sans-serif;
 }

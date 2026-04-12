@@ -11,6 +11,10 @@
           <IntellijIcon />
           <span>IntelliJ</span>
         </button>
+        <button @click="$emit('select', 'zed')" class="ide-button">
+          <ZedIcon />
+          <span>Zed</span>
+        </button>
       </div>
       <button @click="$emit('cancel')" class="ide-cancel-button">Cancel</button>
     </div>
@@ -20,6 +24,7 @@
 <script setup lang="ts">
 import VSCodeIcon from '@/components/icons/VSCodeIcon.vue'
 import IntellijIcon from '@/components/icons/IntellijIcon.vue'
+import ZedIcon from '@/components/icons/ZedIcon.vue'
 import type { IdeType } from '@/composables/useIdeOpener'
 
 defineProps<{

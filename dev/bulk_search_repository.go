@@ -65,7 +65,7 @@ func BulkSearchRepository(ctx workflow.Context, envContainer env.EnvContainer, b
 func ForceToolBulkSearchRepository(dCtx DevContext, chatHistory *persisted_ai.ChatHistoryContainer) ([]llm.ToolCall, error) {
 	actionCtx := dCtx.ExecContext.NewActionContext("generate.repo_search_query")
 	modelConfig := dCtx.GetModelConfig(common.CodeLocalizationKey, 0, "default")
-	toolNameMapping, err := resolveStreamToolNameMapping(modelConfig, *actionCtx.Secrets)
+	toolNameMapping, err := resolveStreamToolNameMapping(actionCtx, modelConfig, *actionCtx.Secrets)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve tool name mapping: %v", err)
 	}

@@ -82,6 +82,34 @@ describe('useIdeOpener', () => {
       })
     })
 
+    it('opens file directly in Zed when preference is stored', async () => {
+      mockSessionStorage['sidekick-preferred-ide'] = 'zed'
+      const { showIdeSelector, openInIde } = useIdeOpener()
+      
+      openInIde('/path/to/file.ts')
+      await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled())
+      
+      expect(showIdeSelector.value).toBe(false)
+      expect(lastFetchBody).toEqual({
+        ide: 'zed',
+        filePath: '/path/to/file.ts',
+      })
+    })
+
+    it('opens Zed with line number when provided', async () => {
+      mockSessionStorage['sidekick-preferred-ide'] = 'zed'
+      const { openInIde } = useIdeOpener()
+      
+      openInIde('/path/to/file.ts', 42)
+      await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled())
+      
+      expect(lastFetchBody).toEqual({
+        ide: 'zed',
+        filePath: '/path/to/file.ts',
+        line: 42,
+      })
+    })
+
     it('opens VSCode with baseDir when provided', async () => {
       mockSessionStorage['sidekick-preferred-ide'] = 'vscode'
       const { openInIde } = useIdeOpener()
@@ -181,6 +209,22 @@ describe('useIdeOpener', () => {
       expect(mockSessionStorage['sidekick-preferred-ide']).toBe('intellij')
       expect(lastFetchBody).toEqual({
         ide: 'intellij',
+        filePath: '/path/to/file.ts',
+      })
+      expect(showIdeSelector.value).toBe(false)
+      expect(pendingFilePath.value).toBe(null)
+    })
+
+    it('stores Zed preference and opens pending file', async () => {
+      const { showIdeSelector, pendingFilePath, openInIde, selectIde } = useIdeOpener()
+      
+      openInIde('/path/to/file.ts')
+      selectIde('zed')
+      await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled())
+      
+      expect(mockSessionStorage['sidekick-preferred-ide']).toBe('zed')
+      expect(lastFetchBody).toEqual({
+        ide: 'zed',
         filePath: '/path/to/file.ts',
       })
       expect(showIdeSelector.value).toBe(false)

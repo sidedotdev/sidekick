@@ -26,7 +26,14 @@
         <button v-if="agentType !== 'none'" class="new-task mini-button" @click="addTask(agentType)">+</button>
         <button v-if="agentType === 'none' && groupedTasks[agentType]?.length > 0" class="new-task mini-button" @click="confirmArchiveFinished">📦</button>
       </h2>
-      <TaskCard v-for="task in groupedTasks[agentType]" :key="task.id" :task="task" @deleted="refresh" @canceled="refresh" @archived="refresh" @updated="refresh" @error="error" />
+      <VirtualTaskList
+        :tasks="groupedTasks[agentType] ?? []"
+        @deleted="refresh"
+        @canceled="refresh"
+        @archived="refresh"
+        @updated="refresh"
+        @error="error"
+      />
       <button class="new-task" v-if="agentType == 'human'" @click="addTask(agentType)">
         + Draft Task
         <ShortcutHint :label="newTaskShortcutLabel" />
@@ -41,10 +48,11 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import type { FullTask, AgentType, Task, TaskStatus } from '../lib/models'
-import TaskCard from './TaskCard.vue'
+import VirtualTaskList from './VirtualTaskList.vue'
 import TaskModal from './TaskModal.vue'
 import ShortcutHint from './ShortcutHint.vue'
 import { store } from '../lib/store'
+import { isInteractiveElement } from '../lib/dom'
 
 const props = defineProps<{
   tasks: FullTask[],
@@ -161,15 +169,8 @@ const handleKeyDown = (event: KeyboardEvent) => {
   }
 
   const target = event.target as HTMLElement
-  const isEditableElement = target && (
-    target.tagName === 'INPUT' ||
-    target.tagName === 'TEXTAREA' ||
-    target.tagName === 'SELECT' ||
-    target.isContentEditable ||
-    target.getAttribute('role') === 'textbox'
-  )
 
-  if (isEditableElement || isModalOpen.value) {
+  if (isInteractiveElement(target) || isModalOpen.value) {
     return
   }
 
