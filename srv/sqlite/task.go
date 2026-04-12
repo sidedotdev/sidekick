@@ -69,6 +69,57 @@ func (s *Storage) PersistTask(ctx context.Context, task domain.Task) error {
 	return nil
 }
 
+// UpdateTaskTitle performs a targeted column update on the task title,
+// only setting it when the current title is empty or matches the description.
+func (s *Storage) UpdateTaskTitle(ctx context.Context, workspaceId, taskId, title string) error {
+	ctx, span := taskTracer.Start(ctx, "Storage.UpdateTaskTitle")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("db.system", "sqlite"),
+		attribute.String("db.operation", "UPDATE"),
+		attribute.String("workspace_id", workspaceId),
+		attribute.String("task_id", taskId),
+	)
+
+	query := `
+		UPDATE tasks
+		SET title = ?, updated = ?
+		WHERE workspace_id = ? AND id = ? AND (title = '' OR title = description)
+	`
+	_, err := s.db.ExecContext(ctx, query, title, time.Now().UTC(), workspaceId, taskId)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return fmt.Errorf("failed to update task title: %w", err)
+	}
+	return nil
+}
+
+// UpdateTaskStatus performs a targeted update of status and agent_type columns.
+func (s *Storage) UpdateTaskStatus(ctx context.Context, workspaceId, taskId string, status domain.TaskStatus, agentType domain.AgentType) error {
+	ctx, span := taskTracer.Start(ctx, "Storage.UpdateTaskStatus")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("db.system", "sqlite"),
+		attribute.String("db.operation", "UPDATE"),
+		attribute.String("workspace_id", workspaceId),
+		attribute.String("task_id", taskId),
+	)
+
+	query := `
+		UPDATE tasks
+		SET status = ?, agent_type = ?, updated = ?
+		WHERE workspace_id = ? AND id = ?
+	`
+	_, err := s.db.ExecContext(ctx, query, status, agentType, time.Now().UTC(), workspaceId, taskId)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return fmt.Errorf("failed to update task status: %w", err)
+	}
+	return nil
+}
+
 // DeleteTask removes a Task from the SQLite database
 func (s *Storage) DeleteTask(ctx context.Context, workspaceId, taskId string) error {
 	ctx, span := taskTracer.Start(ctx, "Storage.DeleteTask")

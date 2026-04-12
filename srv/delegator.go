@@ -123,6 +123,30 @@ func (d Delegator) PersistTask(ctx context.Context, task domain.Task) error {
 }
 
 /* implements TaskStorage interface */
+func (d Delegator) UpdateTaskStatus(ctx context.Context, workspaceId, taskId string, status domain.TaskStatus, agentType domain.AgentType) error {
+	if err := d.storage.UpdateTaskStatus(ctx, workspaceId, taskId, status, agentType); err != nil {
+		return err
+	}
+	task, err := d.storage.GetTask(ctx, workspaceId, taskId)
+	if err != nil {
+		return err
+	}
+	return d.AddTaskChange(ctx, task)
+}
+
+/* implements TaskStorage interface */
+func (d Delegator) UpdateTaskTitle(ctx context.Context, workspaceId, taskId, title string) error {
+	if err := d.storage.UpdateTaskTitle(ctx, workspaceId, taskId, title); err != nil {
+		return err
+	}
+	task, err := d.storage.GetTask(ctx, workspaceId, taskId)
+	if err != nil {
+		return err
+	}
+	return d.AddTaskChange(ctx, task)
+}
+
+/* implements TaskStorage interface */
 func (d Delegator) DeleteTask(ctx context.Context, workspaceId string, taskId string) error {
 	return d.storage.DeleteTask(ctx, workspaceId, taskId)
 }

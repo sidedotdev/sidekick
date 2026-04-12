@@ -49,6 +49,13 @@ func (s *TaskWorkflowTestSuite) setupPutWorkflow() {
 	).Return(nil).Maybe()
 }
 
+func (s *TaskWorkflowTestSuite) setupGenerateTitle() {
+	s.env.OnActivity(
+		s.ima.GenerateTaskTitle,
+		mock.Anything, mock.Anything,
+	).Return(GenerateTitleOutput{}, nil).Maybe()
+}
+
 func (s *TaskWorkflowTestSuite) registerMockBasicDev() {
 	s.env.RegisterWorkflowWithOptions(
 		func(ctx workflow.Context, input BasicDevWorkflowInput) (string, error) {
@@ -81,6 +88,7 @@ func (s *TaskWorkflowTestSuite) TestChildStartsCorrectly_BasicDev() {
 	s.registerMockBasicDev()
 	s.setupFindWorkspace("ws_123")
 	s.setupPutWorkflow()
+	s.setupGenerateTitle()
 
 	s.env.OnActivity(
 		s.ima.CompleteFlowParentTask,
@@ -104,6 +112,7 @@ func (s *TaskWorkflowTestSuite) TestChildStartsCorrectly_PlannedDev() {
 	s.registerMockPlannedDev()
 	s.setupFindWorkspace("ws_123")
 	s.setupPutWorkflow()
+	s.setupGenerateTitle()
 
 	s.env.OnActivity(
 		s.ima.CompleteFlowParentTask,
@@ -143,6 +152,7 @@ func (s *TaskWorkflowTestSuite) TestRequestForUserSignal() {
 	s.registerSlowMockBasicDev()
 	s.setupFindWorkspace("ws_123")
 	s.setupPutWorkflow()
+	s.setupGenerateTitle()
 
 	s.env.OnActivity(
 		s.ima.CreatePendingUserRequest,
@@ -188,6 +198,7 @@ func (s *TaskWorkflowTestSuite) TestRequestForUserSignal_MergeApproval() {
 	s.registerSlowMockBasicDev()
 	s.setupFindWorkspace("ws_123")
 	s.setupPutWorkflow()
+	s.setupGenerateTitle()
 
 	s.env.OnActivity(
 		s.ima.CreatePendingUserRequest,
@@ -233,6 +244,7 @@ func (s *TaskWorkflowTestSuite) TestWorkflowClosedSignal() {
 	s.registerSlowMockBasicDev()
 	s.setupFindWorkspace("ws_123")
 	s.setupPutWorkflow()
+	s.setupGenerateTitle()
 
 	s.env.OnActivity(
 		s.ima.CompleteFlowParentTask,
@@ -262,6 +274,7 @@ func (s *TaskWorkflowTestSuite) TestWorkflowClosedSignal() {
 func (s *TaskWorkflowTestSuite) TestChildFailureWithoutSignal() {
 	s.setupFindWorkspace("ws_123")
 	s.setupPutWorkflow()
+	s.setupGenerateTitle()
 
 	s.env.OnActivity(
 		s.ima.CompleteFlowParentTask,
