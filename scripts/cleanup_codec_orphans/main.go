@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -26,6 +27,39 @@ const (
 	codecKeyPrefix    = "codec/"
 	ksuidByteLength   = 20
 )
+
+type orphanProgress struct {
+	CompletedBatches int `json:"completedBatches"`
+	BatchSize        int `json:"batchSize"`
+	TotalKeys        int `json:"totalKeys"`
+}
+
+func progressFilePath(orphanFile string) string {
+	return orphanFile + ".progress.json"
+}
+
+func readProgress(path string) (*orphanProgress, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var p orphanProgress
+	if err := json.Unmarshal(data, &p); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+func writeProgress(path string, p *orphanProgress) error {
+	data, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
 
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
@@ -87,8 +121,39 @@ func main() {
 		return
 	}
 
+	progFile := progressFilePath(orphanFile)
 	totalBatches := (len(orphans) + batchSize - 1) / batchSize
-	for batchNum := 0; batchNum < totalBatches; batchNum++ {
+
+	startBatch := 0
+	if prog, err := readProgress(progFile); err != nil {
+		log.Fatal().Err(err).Msg("Failed to read progress file")
+	} else if prog != nil && prog.BatchSize == batchSize && prog.TotalKeys == len(orphans) {
+		if prog.CompletedBatches < 0 || prog.CompletedBatches > totalBatches {
+			log.Fatal().
+				Int("completedBatches", prog.CompletedBatches).Int("totalBatches", totalBatches).
+				Msg("Progress file has invalid completedBatches; delete the progress file to restart")
+		}
+		startBatch = prog.CompletedBatches
+		log.Info().Int("completedBatches", startBatch).Int("totalBatches", totalBatches).Msg("Resuming from saved progress")
+	} else if prog != nil {
+		log.Fatal().
+			Int("fileBatchSize", prog.BatchSize).Int("currentBatchSize", batchSize).
+			Int("fileTotalKeys", prog.TotalKeys).Int("currentTotalKeys", len(orphans)).
+			Msg("Progress file parameters don't match current run; delete the progress file to restart")
+	}
+
+	if startBatch >= totalBatches {
+		log.Info().Msg("All batches already completed")
+		if err := os.Remove(orphanFile); err != nil && !os.IsNotExist(err) {
+			log.Fatal().Err(err).Msg("Failed to remove orphan file")
+		}
+		if err := os.Remove(progFile); err != nil && !os.IsNotExist(err) {
+			log.Fatal().Err(err).Msg("Failed to remove progress file")
+		}
+		return
+	}
+
+	for batchNum := startBatch; batchNum < totalBatches; batchNum++ {
 		start := batchNum * batchSize
 		end := start + batchSize
 		if end > len(orphans) {
@@ -101,29 +166,33 @@ func main() {
 				Int("batch", batchNum+1).Int("totalBatches", totalBatches).
 				Int("deletedSoFar", start).
 				Msg("Failed to delete batch, stopping")
-			// Rewrite file with remaining keys so next run resumes here.
-			if writeErr := writeOrphanFile(orphanFile, orphans[start:]); writeErr != nil {
-				log.Error().Err(writeErr).Msg("Failed to update orphan file with remaining keys")
-			}
 			os.Exit(1)
 		}
 
-		remaining := orphans[end:]
-		if len(remaining) > 0 {
-			if writeErr := writeOrphanFile(orphanFile, remaining); writeErr != nil {
-				log.Error().Err(writeErr).Msg("Failed to update orphan file")
-			}
-		} else {
-			os.Remove(orphanFile)
+		if err := writeProgress(progFile, &orphanProgress{
+			CompletedBatches: batchNum + 1,
+			BatchSize:        batchSize,
+			TotalKeys:        len(orphans),
+		}); err != nil {
+			log.Fatal().Err(err).Msg("Failed to write progress file")
 		}
 
+		remaining := len(orphans) - end
 		log.Info().
 			Int("batch", batchNum+1).Int("totalBatches", totalBatches).
-			Int("batchSize", len(batch)).Int("remaining", len(remaining)).
+			Int("batchSize", len(batch)).Int("remaining", remaining).
 			Msg("Batch deleted")
 	}
 
-	fmt.Fprintf(os.Stderr, "\nOrphan cleanup complete: %d keys deleted\n", len(orphans))
+	if err := os.Remove(orphanFile); err != nil && !os.IsNotExist(err) {
+		log.Fatal().Err(err).Msg("Failed to remove orphan file")
+	}
+	if err := os.Remove(progFile); err != nil && !os.IsNotExist(err) {
+		log.Fatal().Err(err).Msg("Failed to remove progress file")
+	}
+
+	deletedThisRun := len(orphans) - startBatch*batchSize
+	fmt.Fprintf(os.Stderr, "\nOrphan cleanup complete: %d keys deleted (%d total orphans)\n", deletedThisRun, len(orphans))
 }
 
 // resolveOrphans returns the list of orphan keys to delete, either from a
@@ -150,6 +219,10 @@ func resolveOrphans(ctx context.Context, activities *common.CodecCleanupActiviti
 			return existing, nil
 		}
 		log.Info().Msg("Recalculating orphans fresh...")
+	}
+
+	if err := os.Remove(progressFilePath(orphanFile)); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("removing stale progress file: %w", err)
 	}
 
 	orphans, err := discoverOrphans(ctx, activities, retention)
