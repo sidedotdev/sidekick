@@ -215,8 +215,8 @@ const cancelTask = async () => {
 /* dark mode */
 .task-card {
   --task-card-border: #454545;
-  --task-card-background: rgba(255, 255, 255, 0.07);
-  --task-card-hover-background: rgba(255, 255, 255, 0.15);
+  --task-card-background: color-mix(in srgb, white 7%, var(--color-background));
+  --task-card-hover-background: color-mix(in srgb, white 15%, var(--color-background));
   --status-label-color: white;
   --action-background: #1e1e1e;
   --action-color: white;
@@ -355,6 +355,7 @@ const cancelTask = async () => {
   right: calc(var(--task-pad) / 2);
   top: calc(var(--task-pad) / 2);
   display: flex;
+  z-index: 2;
 }
 .task-card:hover .action {
   visibility: visible;
