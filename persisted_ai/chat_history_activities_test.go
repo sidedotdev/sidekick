@@ -54,6 +54,10 @@ func (m *mockKVStorage) MSet(ctx context.Context, workspaceId string, values map
 	return nil
 }
 
+func (m *mockKVStorage) MDelete(ctx context.Context, workspaceId string, keys []string) error {
+	return nil
+}
+
 func (m *mockKVStorage) DeletePrefix(ctx context.Context, workspaceId string, prefix string) error {
 	return nil
 }

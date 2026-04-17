@@ -10,6 +10,7 @@ type KeyValueStorage interface {
 	MGet(ctx context.Context, workspaceId string, keys []string) ([][]byte, error)
 	MSet(ctx context.Context, workspaceId string, values map[string]interface{}) error
 	MSetRaw(ctx context.Context, workspaceId string, values map[string][]byte) error
+	MDelete(ctx context.Context, workspaceId string, keys []string) error
 	// DeletePrefix deletes all keys matching the given prefix for a workspace.
 	// This operation is NOT atomic or transactional: keys are deleted in batches,
 	// so a failure partway through may leave some matching keys deleted and others

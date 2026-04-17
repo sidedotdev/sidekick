@@ -22,6 +22,10 @@ func (ka *KVActivities) MSetRaw(ctx context.Context, workspaceId string, values 
 	return ka.Storage.MSetRaw(ctx, workspaceId, values)
 }
 
+func (ka *KVActivities) MDelete(ctx context.Context, workspaceId string, keys []string) error {
+	return ka.Storage.MDelete(ctx, workspaceId, keys)
+}
+
 func (ka *KVActivities) DeletePrefix(ctx context.Context, workspaceId string, prefix string) error {
 	return ka.Storage.DeletePrefix(ctx, workspaceId, prefix)
 }

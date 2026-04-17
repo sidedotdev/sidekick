@@ -52,6 +52,19 @@ func (m *memKVStorage) MSetRaw(_ context.Context, workspaceId string, values map
 	return nil
 }
 
+func (m *memKVStorage) MDelete(_ context.Context, workspaceId string, keys []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ws := m.data[workspaceId]
+	if ws == nil {
+		return nil
+	}
+	for _, k := range keys {
+		delete(ws, k)
+	}
+	return nil
+}
+
 func (m *memKVStorage) DeletePrefix(_ context.Context, workspaceId string, prefix string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

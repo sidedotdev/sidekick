@@ -44,6 +44,13 @@ func (m *mockKeyValueStorage) MSet(ctx context.Context, workspaceId string, valu
 	return nil
 }
 
+func (m *mockKeyValueStorage) MDelete(ctx context.Context, workspaceId string, keys []string) error {
+	for _, key := range keys {
+		delete(m.data, key)
+	}
+	return nil
+}
+
 func (m *mockKeyValueStorage) DeletePrefix(ctx context.Context, workspaceId string, prefix string) error {
 	return nil
 }

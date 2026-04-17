@@ -231,6 +231,41 @@ func (s *Storage) MSetRaw(ctx context.Context, workspaceId string, values map[st
 	return nil
 }
 
+func (s *Storage) MDelete(ctx context.Context, workspaceId string, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	batchSize := s.deletePrefixBatchSize
+	if batchSize <= 0 {
+		batchSize = defaultDeletePrefixBatchSize
+	}
+
+	for i := 0; i < len(keys); i += batchSize {
+		end := i + batchSize
+		if end > len(keys) {
+			end = len(keys)
+		}
+		batch := keys[i:end]
+
+		placeholders := strings.Repeat("?,", len(batch))
+		placeholders = placeholders[:len(placeholders)-1]
+		query := "DELETE FROM kv WHERE workspace_id = ? AND key IN (" + placeholders + ")"
+
+		args := make([]any, 0, 1+len(batch))
+		args = append(args, workspaceId)
+		for _, key := range batch {
+			args = append(args, key)
+		}
+
+		if _, err := s.kvDb.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("failed to delete keys: %w", err)
+		}
+	}
+
+	return nil
+}
+
 func (s *Storage) DeletePrefix(ctx context.Context, workspaceId string, prefix string) error {
 	keys, err := s.GetKeysWithPrefix(ctx, workspaceId, prefix)
 	if err != nil {

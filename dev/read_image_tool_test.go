@@ -53,6 +53,10 @@ func (m *mockKVStorage) MSetRaw(_ context.Context, _ string, values map[string][
 	return nil
 }
 
+func (m *mockKVStorage) MDelete(_ context.Context, _ string, _ []string) error {
+	return nil
+}
+
 func (m *mockKVStorage) DeletePrefix(_ context.Context, _ string, _ string) error {
 	return nil
 }

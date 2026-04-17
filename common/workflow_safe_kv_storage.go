@@ -33,6 +33,12 @@ func (ws *WorkflowSafeKVStorage) MSetRaw(ctx context.Context, workspaceId string
 	return err
 }
 
+func (ws *WorkflowSafeKVStorage) MDelete(ctx context.Context, workspaceId string, keys []string) error {
+	var ka *KVActivities
+	err := workflow.ExecuteActivity(ws.Ctx, ka.MDelete, workspaceId, keys).Get(ws.Ctx, nil)
+	return err
+}
+
 func (ws *WorkflowSafeKVStorage) DeletePrefix(ctx context.Context, workspaceId string, prefix string) error {
 	var ka *KVActivities
 	err := workflow.ExecuteActivity(ws.Ctx, ka.DeletePrefix, workspaceId, prefix).Get(ws.Ctx, nil)

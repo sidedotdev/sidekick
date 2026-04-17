@@ -70,6 +70,11 @@ func (d Delegator) MSetRaw(ctx context.Context, workspaceId string, values map[s
 }
 
 /* implements KeyValueStorage interface */
+func (d Delegator) MDelete(ctx context.Context, workspaceId string, keys []string) error {
+	return d.storage.MDelete(ctx, workspaceId, keys)
+}
+
+/* implements KeyValueStorage interface */
 func (d Delegator) DeletePrefix(ctx context.Context, workspaceId string, prefix string) error {
 	return d.storage.DeletePrefix(ctx, workspaceId, prefix)
 }
