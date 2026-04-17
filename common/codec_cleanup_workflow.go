@@ -107,11 +107,7 @@ func (a *CodecCleanupActivities) DeleteCodecKeys(ctx context.Context, keys []str
 			end = len(keys)
 		}
 		batch := keys[i:end]
-		values := make(map[string]interface{}, len(batch))
-		for _, key := range batch {
-			values[key] = nil
-		}
-		if err := a.Storage.MSet(ctx, codecWorkspaceID, values); err != nil {
+		if err := a.Storage.MDelete(ctx, codecWorkspaceID, batch); err != nil {
 			return err
 		}
 		if end < len(keys) {

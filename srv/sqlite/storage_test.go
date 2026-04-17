@@ -134,6 +134,96 @@ func (ev *embeddingVector) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+func TestMDelete(t *testing.T) {
+	ctx := context.Background()
+	storage := NewTestSqliteStorage(t, "test_mdelete")
+	workspaceID := "test-workspace"
+
+	t.Run("deletes specified keys", func(t *testing.T) {
+		err := storage.MSet(ctx, workspaceID, map[string]interface{}{
+			"key1": "value1",
+			"key2": "value2",
+			"key3": "value3",
+		})
+		require.NoError(t, err)
+
+		err = storage.MDelete(ctx, workspaceID, []string{"key1", "key3"})
+		require.NoError(t, err)
+
+		results, err := storage.MGet(ctx, workspaceID, []string{"key1", "key2", "key3"})
+		require.NoError(t, err)
+		assert.Nil(t, results[0], "key1 should be deleted")
+		assert.NotNil(t, results[1], "key2 should still exist")
+		assert.Nil(t, results[2], "key3 should be deleted")
+	})
+
+	t.Run("empty keys is a no-op", func(t *testing.T) {
+		err := storage.MDelete(ctx, workspaceID, []string{})
+		assert.NoError(t, err)
+
+		err = storage.MDelete(ctx, workspaceID, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("nonexistent keys do not error", func(t *testing.T) {
+		err := storage.MDelete(ctx, workspaceID, []string{"no-such-key"})
+		assert.NoError(t, err)
+	})
+
+	t.Run("workspace-scoped", func(t *testing.T) {
+		otherWorkspace := "other-workspace-mdelete"
+
+		err := storage.MSet(ctx, workspaceID, map[string]interface{}{
+			"scoped:key": "ws1",
+		})
+		require.NoError(t, err)
+		err = storage.MSet(ctx, otherWorkspace, map[string]interface{}{
+			"scoped:key": "ws2",
+		})
+		require.NoError(t, err)
+
+		err = storage.MDelete(ctx, workspaceID, []string{"scoped:key"})
+		require.NoError(t, err)
+
+		results, err := storage.MGet(ctx, workspaceID, []string{"scoped:key"})
+		require.NoError(t, err)
+		assert.Nil(t, results[0])
+
+		results, err = storage.MGet(ctx, otherWorkspace, []string{"scoped:key"})
+		require.NoError(t, err)
+		assert.NotNil(t, results[0])
+	})
+
+	t.Run("batching with many keys", func(t *testing.T) {
+		batchStorage := NewTestSqliteStorage(t, "test_mdelete_batch")
+		batchStorage.deletePrefixBatchSize = 3
+		batchWorkspace := "batch-workspace"
+
+		values := make(map[string]interface{})
+		keys := make([]string, 10)
+		for i := 0; i < 10; i++ {
+			k := fmt.Sprintf("batch:key%d", i)
+			values[k] = fmt.Sprintf("val%d", i)
+			keys[i] = k
+		}
+		values["keep:key1"] = "keep1"
+
+		err := batchStorage.MSet(ctx, batchWorkspace, values)
+		require.NoError(t, err)
+
+		err = batchStorage.MDelete(ctx, batchWorkspace, keys)
+		require.NoError(t, err)
+
+		remaining, err := batchStorage.GetKeysWithPrefix(ctx, batchWorkspace, "batch:")
+		require.NoError(t, err)
+		assert.Empty(t, remaining)
+
+		kept, err := batchStorage.GetKeysWithPrefix(ctx, batchWorkspace, "keep:")
+		require.NoError(t, err)
+		assert.Len(t, kept, 1)
+	})
+}
+
 func TestDeletePrefix(t *testing.T) {
 	ctx := context.Background()
 	storage := NewTestSqliteStorage(t, "test_delete_prefix")

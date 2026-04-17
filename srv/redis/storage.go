@@ -62,6 +62,17 @@ func (s Storage) MSetRaw(ctx context.Context, workspaceId string, values map[str
 	return s.Client.MSet(ctx, prefixedValues).Err()
 }
 
+func (s Storage) MDelete(ctx context.Context, workspaceId string, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	prefixedKeys := make([]string, len(keys))
+	for i, key := range keys {
+		prefixedKeys[i] = fmt.Sprintf("%s:%s", workspaceId, key)
+	}
+	return s.Client.Del(ctx, prefixedKeys...).Err()
+}
+
 func (s Storage) DeletePrefix(ctx context.Context, workspaceId string, prefix string) error {
 	pattern := fmt.Sprintf("%s:%s*", workspaceId, prefix)
 	var cursor uint64

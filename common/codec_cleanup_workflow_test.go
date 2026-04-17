@@ -558,7 +558,7 @@ func (s *CodecCleanupWorkflowTestSuite) TestResetSignalRemovesPendingEntries() {
 
 // fakeKVStorage is a minimal KeyValueStorage for testing activity methods directly.
 type fakeKVStorage struct {
-	msetCalls []map[string]interface{}
+	mdeleteCalls [][]string
 }
 
 func (f *fakeKVStorage) MGet(_ context.Context, _ string, _ []string) ([][]byte, error) {
@@ -566,11 +566,15 @@ func (f *fakeKVStorage) MGet(_ context.Context, _ string, _ []string) ([][]byte,
 }
 
 func (f *fakeKVStorage) MSet(_ context.Context, _ string, values map[string]interface{}) error {
-	f.msetCalls = append(f.msetCalls, values)
 	return nil
 }
 
 func (f *fakeKVStorage) MSetRaw(_ context.Context, _ string, _ map[string][]byte) error {
+	return nil
+}
+
+func (f *fakeKVStorage) MDelete(_ context.Context, _ string, keys []string) error {
+	f.mdeleteCalls = append(f.mdeleteCalls, keys)
 	return nil
 }
 
@@ -586,9 +590,9 @@ func TestDeleteCodecKeys_Batching(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name          string
-		numKeys       int
-		wantMSetCalls int
+		name            string
+		numKeys         int
+		wantDeleteCalls int
 	}{
 		{"empty", 0, 0},
 		{"under batch size", 500, 1},
@@ -611,14 +615,13 @@ func TestDeleteCodecKeys_Batching(t *testing.T) {
 
 			err := a.DeleteCodecKeys(context.Background(), keys)
 			require.NoError(t, err)
-			assert.Len(t, storage.msetCalls, tt.wantMSetCalls)
+			assert.Len(t, storage.mdeleteCalls, tt.wantDeleteCalls)
 
 			// Verify all keys were included across batches
 			allDeleted := map[string]bool{}
-			for _, call := range storage.msetCalls {
+			for _, call := range storage.mdeleteCalls {
 				assert.LessOrEqual(t, len(call), codecDeleteBatchSize)
-				for k, v := range call {
-					assert.Nil(t, v)
+				for _, k := range call {
 					allDeleted[k] = true
 				}
 			}
