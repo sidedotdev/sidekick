@@ -23,10 +23,10 @@ const remoteSFTPPrefix = "/tmp/side-sftp-"
 // sftpConn manages a persistent SFTP client connection over SSH.
 // It is safe for concurrent use; the underlying sftp.Client multiplexes requests.
 type sftpConn struct {
-	mu          sync.Mutex
-	client      *sftp.Client
-	cmd         *exec.Cmd
-	readLatency time.Duration
+	mu      sync.Mutex
+	client  *sftp.Client
+	cmd     *exec.Cmd
+	latency time.Duration
 }
 
 // getOrDial returns the cached SFTP client, dialing a new connection if needed.
@@ -105,9 +105,10 @@ func (sc *sftpConn) dialLocked(ctx context.Context, sshEnv SSHCapableEnv) (*sftp
 
 	var reader io.Reader = stdout
 	var writer io.WriteCloser = stdin
-	if sc.readLatency > 0 {
+	if sc.latency > 0 {
 		// Only delay reads (response direction) to approximate network RTT.
-		reader = &latencyReader{r: stdout, delay: sc.readLatency}
+		reader = &latencyReaderWriter{r: stdout, delay: sc.latency}
+		writer = &latencyReaderWriter{w: stdin, delay: sc.latency}
 	}
 	client, err := sftp.NewClientPipe(reader, writer)
 	if err != nil {
@@ -185,14 +186,24 @@ func doSFTPRead(client *sftp.Client, path string) ([]byte, error) {
 	return io.ReadAll(f)
 }
 
-// latencyReader wraps an io.Reader, injecting a delay before each Read call.
-type latencyReader struct {
+// latencyReaderWriter wraps an io.Reader, injecting a delay before each Read call.
+type latencyReaderWriter struct {
 	r     io.Reader
+	w     io.Writer
 	delay time.Duration
 }
 
-func (lr *latencyReader) Read(p []byte) (int, error) {
+func (lr *latencyReaderWriter) Read(p []byte) (int, error) {
 	time.Sleep(lr.delay)
 	return lr.r.Read(p)
 }
 
+func (lr *latencyReaderWriter) Write(p []byte) (int, error) {
+	time.Sleep(lr.delay)
+	return lr.w.Write(p)
+}
+
+func (lr *latencyReaderWriter) Close() (int, error) {
+	return lr.w.Close()
+}
+}

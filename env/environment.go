@@ -577,11 +577,11 @@ func (e *OpenShellEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, er
 	return sftpReadDir(ctx, &e.sftp, e, p)
 }
 
-// SetReadLatency injects artificial latency into each SFTP read for benchmarking.
-func (e *OpenShellEnv) SetReadLatency(d time.Duration) {
+// SetLatency injects artificial latency into each SFTP read for benchmarking.
+func (e *OpenShellEnv) SetLatency(d time.Duration) {
 	e.sftp.mu.Lock()
 	defer e.sftp.mu.Unlock()
-	e.sftp.readLatency = d
+	e.sftp.latency = d
 	// Force reconnect so the latency wrapper takes effect.
 	if e.sftp.client != nil {
 		_ = e.sftp.client.Close()

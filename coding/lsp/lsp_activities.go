@@ -64,7 +64,11 @@ func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request L
 		}
 		positions, err = findSymbolPositionsFromBytes(fileBytes, request.Symbols)
 	} else {
-		positions, err = findSymbolPositions(ctx, request.FilePath, request.Symbols)
+		fileBytes, readErr := os.ReadFile(request.FilePath)
+		if readErr != nil {
+			return []SymbolDefinitionLocation{}, readErr
+		}
+		positions, err = findSymbolPositionsFromBytes(fileBytes, request.Symbols)
 	}
 	if err != nil {
 		return []SymbolDefinitionLocation{}, err
@@ -106,17 +110,6 @@ func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request L
 type symbolPosition struct {
 	symbol   string
 	position Position
-}
-
-// findSymbolPositions finds the positions of symbols in the given file.
-func findSymbolPositions(ctx context.Context, filePath string, symbols []string) ([]Position, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	return findSymbolPositionsFromReader(file, symbols)
 }
 
 // findSymbolPositionsFromBytes finds symbol positions in pre-read file content.

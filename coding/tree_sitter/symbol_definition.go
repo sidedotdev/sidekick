@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"strings"
 
 	"github.com/cbroglie/mustache"
@@ -14,18 +13,9 @@ import (
 	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
 
-func GetSymbolDefinitions(filePath string, symbolName string, numContextLines int) ([]SourceBlock, error) {
-	sourceCodeBytes, err := os.ReadFile(filePath)
-	if err != nil {
-		// TODO return specific err var if file not found
-		return []SourceBlock{}, fmt.Errorf("failed to obtain source code when getting symbol definitions: %v", err)
-	}
-	return GetSymbolDefinitionsFromBytes(filePath, sourceCodeBytes, symbolName, numContextLines)
-}
-
-// GetSymbolDefinitionsFromBytes is like GetSymbolDefinitions but uses pre-read bytes.
-func GetSymbolDefinitionsFromBytes(filePath string, sourceCodeBytes []byte, symbolName string, numContextLines int) ([]SourceBlock, error) {
-	languageName, sitterLanguage, err := inferLanguageFromFilePath(filePath)
+// GetSymbolDefinitionsFromBytes returns symbol definition source blocks from pre-read bytes.
+func GetSymbolDefinitionsFromBytes(languageName string, sourceCodeBytes []byte, symbolName string, numContextLines int) ([]SourceBlock, error) {
+	sitterLanguage, err := getSitterLanguage(languageName)
 	if err != nil {
 		return []SourceBlock{}, err
 	}
@@ -49,8 +39,8 @@ func GetSymbolDefinitionsFromBytes(filePath string, sourceCodeBytes []byte, symb
 	return symbolDefinitions, nil
 }
 
-func GetSymbolDefinitionsString(filePath string, symbolName string, numContextLines int) (string, error) {
-	symbolDefinitions, err := GetSymbolDefinitions(filePath, symbolName, numContextLines)
+func GetSymbolDefinitionsStringFromBytes(languageName string, sourceCodeBytes []byte, symbolName string, numContextLines int) (string, error) {
+	symbolDefinitions, err := GetSymbolDefinitionsFromBytes(languageName, sourceCodeBytes, symbolName, numContextLines)
 	if err != nil {
 		return "", err
 	}
@@ -431,34 +421,8 @@ type SymbolDefinition struct {
 	SymbolName string
 }
 
-// GetAllSymbolDefinitions returns all symbol definitions in a file with their ranges.
-// This is useful for determining which symbols overlap with changed line ranges.
-func GetAllSymbolDefinitions(filePath string) ([]SymbolDefinition, error) {
-	sourceCode, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read source code: %w", err)
-	}
-	return GetAllSymbolDefinitionsFromBytes(filePath, sourceCode)
-}
-
-// GetAllSymbolDefinitionsFromBytes is like GetAllSymbolDefinitions but uses pre-read bytes.
-func GetAllSymbolDefinitionsFromBytes(filePath string, sourceCode []byte) ([]SymbolDefinition, error) {
-	languageName, sitterLanguage, err := inferLanguageFromFilePath(filePath)
-	if err != nil {
-		return nil, err
-	}
-	parser := tree_sitter.NewParser()
-	defer parser.Close()
-	parser.SetLanguage(sitterLanguage)
-	transformedSource := sourceTransform(languageName, &sourceCode)
-	tree := parser.Parse(transformedSource, nil)
-	if tree != nil {
-		defer tree.Close()
-	}
-	return getAllSymbolDefinitionsInternal(languageName, sitterLanguage, tree, &transformedSource)
-}
-
 // GetAllSymbolDefinitionsFromSource returns all symbol definitions from source code content.
+// This is useful for determining which symbols overlap with changed line ranges.
 func GetAllSymbolDefinitionsFromSource(languageName string, sourceCode []byte) ([]SymbolDefinition, error) {
 	sitterLanguage, err := getSitterLanguage(languageName)
 	if err != nil {

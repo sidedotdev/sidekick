@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sidekick/coding/tree_sitter/language_bindings/vue"
 	"slices"
@@ -38,19 +37,7 @@ type Declaration struct {
 	EndPoint   tree_sitter.Point
 }
 
-func GetFileSymbols(filePath string) ([]Symbol, error) {
-	languageName, _, err := inferLanguageFromFilePath(filePath)
-	if err != nil {
-		return nil, err
-	}
-	sourceCode, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to obtain source code when getting symbol definition for file %s: %v", filePath, err)
-	}
-	return GetFileSymbolsFromBytes(filePath, languageName, sourceCode)
-}
-
-// GetFileSymbolsFromBytes is like GetFileSymbols but uses pre-read bytes.
+// GetFileSymbolsFromBytes returns symbols from pre-read bytes.
 func GetFileSymbolsFromBytes(filePath string, languageName string, sourceCode []byte) ([]Symbol, error) {
 	sitterLanguage, err := getSitterLanguage(languageName)
 	if err != nil {
@@ -70,35 +57,6 @@ func GetFileSymbolsFromBytes(filePath string, languageName string, sourceCode []
 
 	filenameSymbols := getFilenameSymbolsFromBytes(languageName, filePath, sourceCode)
 	symbolSlice = append(symbolSlice, filenameSymbols...)
-
-	return symbolSlice, nil
-}
-
-func GetAllAlternativeFileSymbols(filePath string) ([]Symbol, error) {
-	languageName, sitterLanguage, err := inferLanguageFromFilePath(filePath)
-	if err != nil {
-		return nil, err
-	}
-	sourceCode, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to obtain source code when getting symbol definition for file %s: %v", filePath, err)
-	}
-	parser := tree_sitter.NewParser()
-	defer parser.Close()
-	parser.SetLanguage(sitterLanguage)
-	tree := parser.Parse(sourceTransform(languageName, &sourceCode), nil)
-	if tree != nil {
-		defer tree.Close()
-	}
-	symbolSlice, err := getSourceSymbolsInternal(languageName, sitterLanguage, tree, &sourceCode)
-	if err != nil {
-		return nil, err
-	}
-
-	filenameSymbols := getFilenameSymbolsFromBytes(languageName, filePath, sourceCode)
-	symbolSlice = append(symbolSlice, filenameSymbols...)
-
-	symbolSlice = expandWithAlternativeSymbols(languageName, sitterLanguage, tree, &sourceCode, symbolSlice)
 
 	return symbolSlice, nil
 }
@@ -247,8 +205,8 @@ func expandWithAlternativeSymbols(languageName string, sitterLanguage *tree_sitt
 	return uniqueSymbolSlice
 }
 
-func GetFileSymbolsString(filePath string) (string, error) {
-	symbolSlice, err := GetFileSymbols(filePath)
+func GetFileSymbolsStringFromBytes(filePath string, languageName string, sourceCode []byte) (string, error) {
+	symbolSlice, err := GetFileSymbolsFromBytes(filePath, languageName, sourceCode)
 	if err != nil {
 		return "", err
 	}
@@ -565,20 +523,8 @@ func getSitterLanguage(languageName string) (*tree_sitter.Language, error) {
 	case "javascript", "js", "jsx", "mjs", "cjs", "javascript-signatures", "js-signatures", "jsx-signatures", "mjs-signatures", "cjs-signatures":
 		return tree_sitter.NewLanguage(tree_sitter_javascript.Language()), nil
 	default:
-		return nil, fmt.Errorf("unsupported language: %s", languageName)
+		return nil, fmt.Errorf("%w: unsupported language: %s", ErrFailedInferLanguage, languageName)
 	}
-}
-
-func getFilenameSymbols(langName, filename string) ([]Symbol, error) {
-	switch langName {
-	case "vue", "svelte", "riot", "marko":
-		contents, err := os.ReadFile(filename)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read file %s: %w", filename, err)
-		}
-		return getFilenameSymbolsFromBytes(langName, filename, contents), nil
-	}
-	return []Symbol{}, nil
 }
 
 // getFilenameSymbolsFromBytes derives filename-based symbols from pre-read bytes.

@@ -109,7 +109,7 @@ func TestRankedDirSignatureOutline_Integration(t *testing.T) {
 				Provider: "openai",
 			},
 		},
-		CharLimit: 20000,
+		CharLimit: 24000,
 	}
 
 	// Execute the function under test
@@ -203,7 +203,7 @@ func TestRankedDirSignatureOutline_OpenShell_Integration(t *testing.T) {
 				Provider: "openai",
 			},
 		},
-		CharLimit: 20000,
+		CharLimit: 24000,
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
@@ -279,7 +279,7 @@ func BenchmarkGetDirectorySignatureOutlines_OpenShell(b *testing.B) {
 		WorkingDirectory: syncOut.ContainerRepoDir,
 		SandboxName:      sandboxName,
 	}
-	osEnv.SetReadLatency(10 * time.Millisecond)
+	osEnv.SetLatency(10 * time.Millisecond)
 	ec := env.EnvContainer{Env: osEnv}
 
 	b.ResetTimer()

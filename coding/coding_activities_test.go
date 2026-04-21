@@ -397,9 +397,9 @@ The symbol 'TestFunc' is not defined in any repo files.`,
 				},
 			},
 			expectedOutput: SymDefResults{
-				SymbolDefinitions: `failed to infer language: placeholder_tempfile
+				SymbolDefinitions: `failed to infer language: unsupported language: 
 The symbol 'NonExistentFunc' is not defined in any repo files.`,
-				Failures: `failed to infer language: placeholder_tempfile
+				Failures: `failed to infer language: unsupported language: 
 The symbol 'NonExistentFunc' is not defined in any repo files.`,
 			},
 		},

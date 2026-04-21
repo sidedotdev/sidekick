@@ -6,8 +6,6 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
-	"io"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -39,42 +37,10 @@ const (
 	OutlineTypeFileUnhandled OutlineType = iota
 )
 
-func GetFileSignatures(filePath string) ([]Signature, error) {
-	languageName, sitterLanguage, err := inferLanguageFromFilePath(filePath)
-	if err != nil {
-		return nil, err
-	}
-	sourceCode, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to obtain source code when getting file signatures: %v", err)
-	}
-	parser := tree_sitter.NewParser()
-	defer parser.Close()
-	parser.SetLanguage(sitterLanguage)
-	tree := parser.Parse(sourceTransform(languageName, &sourceCode), nil)
-	if tree != nil {
-		defer tree.Close()
-	}
-	signatureSlice, err := getFileSignaturesInternal(languageName, sitterLanguage, tree, &sourceCode, false)
-	if err != nil {
-		return nil, err
-	}
-
-	return signatureSlice, nil
-}
-
-func GetFileSignaturesString(filePath string) (string, error) {
-	signatureSlice, err := GetFileSignatures(filePath)
-	if err != nil {
-		return "", err
-	}
-	return FormatSignatures(signatureSlice), nil
-}
-
-// GetFileSignaturesFromBytes is like GetFileSignatures but operates on
+// GetFileSignaturesFromBytes returns file signatures from
 // pre-read source bytes, avoiding filesystem access.
-func GetFileSignaturesFromBytes(filePath string, sourceCode []byte) ([]Signature, error) {
-	languageName, sitterLanguage, err := inferLanguageFromFilePath(filePath)
+func GetFileSignaturesFromBytes(languageName string, sourceCode []byte) ([]Signature, error) {
+	sitterLanguage, err := getSitterLanguage(languageName)
 	if err != nil {
 		return nil, err
 	}
@@ -90,8 +56,8 @@ func GetFileSignaturesFromBytes(filePath string, sourceCode []byte) ([]Signature
 
 // GetFileSignaturesStringFromBytes is like GetFileSignaturesString but operates
 // on pre-read source bytes.
-func GetFileSignaturesStringFromBytes(filePath string, sourceCode []byte) (string, error) {
-	sigs, err := GetFileSignaturesFromBytes(filePath, sourceCode)
+func GetFileSignaturesStringFromBytes(languageName string, sourceCode []byte) (string, error) {
+	sigs, err := GetFileSignaturesFromBytes(languageName, sourceCode)
 	if err != nil {
 		return "", err
 	}
@@ -115,55 +81,8 @@ func sourceTransform(languageName string, sourceCode *[]byte) []byte {
 	return *sourceCode
 }
 
-/*
-var checksums = make(map[string]string)
-var cachedOutlines = make(map[string]*[]FileOutline)
-
-// getChecksum calculates the checksum of the file at the given path
-func getChecksum(path string) (string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
-	}
-
-	checksum := hex.EncodeToString(hash.Sum(nil))
-	return checksum, nil
-}
-
-func dirTreeChecksumAwareCache(path string, outline FileOutline) {
-}
-
-func getCachedFileOutline(path string) (FileOutline, bool) {
-	outline, ok := cachedOutlines[path]
-	return outline, ok
-}
-*/
-
 var checksums = sync.Map{}
 var cachedOutlines = sync.Map{}
-
-// getChecksum calculates the checksum of the file at the given path
-func getChecksum(path string) (string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
-	}
-
-	checksum := hex.EncodeToString(hash.Sum(nil))
-	return checksum, nil
-}
 
 func checksumFromBytes(data []byte) string {
 	sum := sha256.Sum256(data)
@@ -265,7 +184,8 @@ func GetDirectorySignatureOutlines(ctx context.Context, ec env.EnvContainer, sho
 			}
 
 			if outlineContent == "" {
-				content, sigErr := GetFileSignaturesStringFromBytes(t.path, fileBytes)
+				langName := utils.InferLanguageNameFromFilePath(t.path)
+				content, sigErr := GetFileSignaturesStringFromBytes(langName, fileBytes)
 				if sigErr != nil {
 					l := logger.Get()
 					if strings.Contains(sigErr.Error(), t.path) {
