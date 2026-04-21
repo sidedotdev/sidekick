@@ -76,7 +76,7 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 				return nil, fmt.Errorf("failed to get file symbols for %s: %w", filePath, err)
 			}
 
-			signatures, err := tree_sitter.GetFileSignaturesFromBytes(filePath, fileBytes)
+			signatures, err := tree_sitter.GetFileSignaturesFromBytes(langName, fileBytes)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get file signatures for %s: %w", filePath, err)
 			}

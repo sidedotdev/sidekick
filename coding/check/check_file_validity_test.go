@@ -465,7 +465,9 @@ func TestCheckFileValidity_Markdown_HasErrorButNoErrorNodes(t *testing.T) {
 	}
 
 	filePath := filepath.Join(dir, filename)
-	tree, _, treeErr := tree_sitter.GetTreeWithSource(filePath)
+	data, readErr := os.ReadFile(filePath)
+	assert.NoError(t, readErr)
+	tree, _, treeErr := tree_sitter.GetTreeWithSourceFromBytes("markdown", data)
 	assert.NoError(t, treeErr)
 
 	root := tree.RootNode()

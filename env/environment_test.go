@@ -501,11 +501,11 @@ func TestPosixRel(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		base     string
-		targ     string
-		want     string
-		wantErr  bool
+		name    string
+		base    string
+		targ    string
+		want    string
+		wantErr bool
 	}{
 		{name: "same path", base: "/a/b", targ: "/a/b", want: "."},
 		{name: "child", base: "/a/b", targ: "/a/b/c/d", want: "c/d"},

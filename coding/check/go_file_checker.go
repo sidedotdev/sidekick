@@ -24,18 +24,6 @@ var blacklistErrorsRegex = regexp.MustCompile(strings.Join([]string{
 	"EOF",
 }, "|"))
 
-// parseBuildConstraint extracts the build constraint expression from a Go file.
-// Returns the parsed constraint expression, or nil if no constraint is found.
-// For legacy // +build syntax, multiple lines are combined with AND.
-func parseBuildConstraint(filePath string) constraint.Expr {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return nil
-	}
-	defer file.Close()
-	return parseBuildConstraintFromReader(file)
-}
-
 // parseBuildConstraintFromBytes parses build constraints from pre-read file content.
 func parseBuildConstraintFromBytes(data []byte) constraint.Expr {
 	return parseBuildConstraintFromReader(bytes.NewReader(data))
@@ -339,7 +327,11 @@ func filterFilesByBuildTags(filePaths []string, targetFile string, readFile func
 			}
 			return parseBuildConstraintFromBytes(data)
 		}
-		return parseBuildConstraint(path)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		return parseBuildConstraintFromBytes(data)
 	}
 
 	targetConstraint := readConstraint(targetFile)

@@ -1108,7 +1108,13 @@ func FindPotentialMatchesWithOptions(block EditBlock, originalLines []string, st
 		if block.VisibleCodeBlocks != nil {
 			for _, codeBlock := range block.VisibleCodeBlocks {
 				if codeBlock.Symbol != "" && codeBlock.FilePath == block.FilePath {
-					symbols, err := tree_sitter.GetSymbolDefinitions(block.AbsoluteFilePath, codeBlock.Symbol, 0)
+					fileData, readErr := os.ReadFile(block.AbsoluteFilePath)
+					if readErr != nil {
+						log.Warn().Err(readErr).Msg("Failed to read file when checking visibility")
+						continue
+					}
+					langName := utils.InferLanguageNameFromFilePath(block.AbsoluteFilePath)
+					symbols, err := tree_sitter.GetSymbolDefinitionsFromBytes(langName, fileData, codeBlock.Symbol, 0)
 					if err != nil {
 						log.Warn().Err(err).Msg("Failed to get new symbol definitions when checking visibility")
 						continue

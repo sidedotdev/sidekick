@@ -1,28 +1,12 @@
 package tree_sitter
 
 import (
-	"fmt"
-	"os"
-
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
-func GetTree(filePath string) (*tree_sitter.Tree, error) {
-	tree, _, err := GetTreeWithSource(filePath)
-	return tree, err
-}
-
-func GetTreeWithSource(filePath string) (*tree_sitter.Tree, []byte, error) {
-	sourceCode, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to read source code: %v", err)
-	}
-	return GetTreeWithSourceFromBytes(filePath, sourceCode)
-}
-
-// GetTreeWithSourceFromBytes is like GetTreeWithSource but uses pre-read bytes.
-func GetTreeWithSourceFromBytes(filePath string, sourceCode []byte) (*tree_sitter.Tree, []byte, error) {
-	languageName, sitterLanguage, err := inferLanguageFromFilePath(filePath)
+// GetTreeWithSourceFromBytes parses source bytes and returns the tree-sitter tree.
+func GetTreeWithSourceFromBytes(languageName string, sourceCode []byte) (*tree_sitter.Tree, []byte, error) {
+	sitterLanguage, err := getSitterLanguage(languageName)
 	if err != nil {
 		return nil, nil, err
 	}

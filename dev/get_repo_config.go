@@ -61,7 +61,7 @@ func GetRepoConfigActivity(envContainer env.EnvContainer) (common.RepoConfig, er
 		}
 
 		if err := k.UnmarshalWithConf("", &config, koanf.UnmarshalConf{Tag: "toml"}); err != nil {
-		return common.RepoConfig{}, fmt.Errorf("failed to unmarshal repo config %q: %w", discovery.ChosenPath, err)
+			return common.RepoConfig{}, fmt.Errorf("failed to unmarshal repo config %q: %w", discovery.ChosenPath, err)
 		}
 	}
 

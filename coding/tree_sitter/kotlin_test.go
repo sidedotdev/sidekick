@@ -425,7 +425,7 @@ val oldValue = ""
 			}
 
 			// Call GetFileSignatures with the path to the temp file
-			result, err := GetFileSignaturesString(tmpfile.Name())
+			result, err := GetFileSignaturesStringFromBytes("kotlin", []byte(tt.input))
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
@@ -657,7 +657,7 @@ val oldValue = ""
 				t.Fatalf("Failed to close temp file: %v", err)
 			}
 
-			symbolsString, err := GetFileSymbolsString(tmpfile.Name())
+			symbolsString, err := GetFileSymbolsStringFromBytes(tmpfile.Name(), "kotlin", []byte(test.code))
 			if err != nil {
 				t.Fatalf("Failed to get symbols: %v", err)
 			}
@@ -947,7 +947,7 @@ value class Password(private val value: String) {
 			}
 			defer os.Remove(filePath)
 
-			definition, err := GetSymbolDefinitionsString(filePath, tc.symbolName, 0)
+			definition, err := GetSymbolDefinitionsStringFromBytes("kotlin", []byte(tc.code), tc.symbolName, 0)
 			if err != nil {
 				if tc.expectedError == "" {
 					t.Fatalf("Unexpected error: %v", err)
@@ -1078,7 +1078,7 @@ func TestGetFileHeadersStringKotlin(t *testing.T) {
 			if err := tmpfile.Close(); err != nil {
 				t.Fatalf("Failed to close temp file: %v", err)
 			}
-			result, err := GetFileHeadersString(tmpfile.Name(), 0)
+			result, err := GetFileHeadersStringFromBytes("kotlin", []byte(tc.code), 0)
 			assert.Nil(t, err)
 
 			// Check the result
@@ -1140,7 +1140,7 @@ func TestGetAllAlternativeFileSymbolsKotlin(t *testing.T) {
 			defer os.Remove(filePath)
 
 			// Call the function and check the output
-			output, err := GetAllAlternativeFileSymbols(filePath)
+			output, err := GetAllAlternativeFileSymbolsFromBytes(filePath, "kotlin", []byte(tc.input))
 			if err != nil {
 				t.Fatalf("failed to get all alternative file symbols: %v", err)
 			}

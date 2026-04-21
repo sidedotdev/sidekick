@@ -140,7 +140,7 @@ func ReadFileActivity(baseDir string, readFileParams ReadFileActivityInput) (str
 
 // EnvReadFileInput is the input for the env-aware file reading activity.
 type EnvReadFileInput struct {
-	EnvContainer env.EnvContainer     `json:"envContainer"`
+	EnvContainer env.EnvContainer      `json:"envContainer"`
 	Params       ReadFileActivityInput `json:"params"`
 }
 

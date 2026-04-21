@@ -30,7 +30,7 @@ More content.
 	require.NoError(t, err)
 
 	// First, get the actual signature output to know its length
-	sigContent, err := GetFileSignaturesString(filePath)
+	sigContent, err := GetFileSignaturesStringFromBytes("markdown", []byte(content))
 	require.NoError(t, err)
 
 	// The signature should end with "---\n", verify it has trailing whitespace
@@ -80,7 +80,7 @@ Even more content.
 	require.NoError(t, err)
 
 	// Get the actual signature output
-	sigContent, err := GetFileSignaturesString(filePath)
+	sigContent, err := GetFileSignaturesStringFromBytes("markdown", []byte(content))
 	require.NoError(t, err)
 
 	// Set maxContentLength to truncate actual content (not just whitespace)

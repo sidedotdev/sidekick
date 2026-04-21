@@ -627,7 +627,8 @@ func getHeaderRetrievalResult(ctx context.Context, e env.Env, relativePath strin
 			Error:        fmt.Errorf("error reading file for headers: %v", readErr),
 		}
 	}
-	headers, err := tree_sitter.GetFileHeadersFromBytes(relativePath, fileBytes, numContextLines)
+	langName := utils.InferLanguageNameFromFilePath(relativePath)
+	headers, err := tree_sitter.GetFileHeadersFromBytes(langName, fileBytes, numContextLines)
 	if err != nil && !errors.Is(err, tree_sitter.ErrNoHeadersFound) {
 		return SymbolRetrievalResult{
 			RelativePath: relativePath,
@@ -793,6 +794,7 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContai
 
 	// Read the file once for all symbol lookups.
 	fileBytes, readErr := envContainer.Env.ReadFile(context.Background(), symDefRequest.FilePath)
+	langName := utils.InferLanguageNameFromFilePath(symDefRequest.FilePath)
 
 	for i, symbol := range symDefRequest.SymbolNames {
 		if symbol == "" || symbol == "*" {
@@ -812,13 +814,12 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContai
 			}
 
 			// TODO optimize: don't re-parse the file for each symbol
-			sourceBlocks, err := tree_sitter.GetSymbolDefinitionsFromBytes(symDefRequest.FilePath, fileBytes, symbol, numContextLines)
+			sourceBlocks, err := tree_sitter.GetSymbolDefinitionsFromBytes(langName, fileBytes, symbol, numContextLines)
 			if err != nil {
 				// Attempt to normalize snippet-like inputs to a canonical symbol name and retry.
-				langName := utils.InferLanguageNameFromFilePath(symDefRequest.FilePath)
 				if langName != "" {
 					if normalized, nErr := tree_sitter.NormalizeSymbolFromSnippet(langName, symbol); nErr == nil && normalized != "" && normalized != symbol {
-						sourceBlocks, err = tree_sitter.GetSymbolDefinitionsFromBytes(symDefRequest.FilePath, fileBytes, normalized, numContextLines)
+						sourceBlocks, err = tree_sitter.GetSymbolDefinitionsFromBytes(langName, fileBytes, normalized, numContextLines)
 					}
 				}
 				// If still failing and the original contains a ".", retry with only the part after the last dot.
@@ -826,7 +827,7 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContai
 					// TODO make this language-specific and try several different alternative forms
 					lastDotIndex := strings.LastIndex(symbol, ".")
 					if lastDotIndex != -1 {
-						sourceBlocks, err = tree_sitter.GetSymbolDefinitionsFromBytes(symDefRequest.FilePath, fileBytes, symbol[lastDotIndex+1:], numContextLines)
+						sourceBlocks, err = tree_sitter.GetSymbolDefinitionsFromBytes(langName, fileBytes, symbol[lastDotIndex+1:], numContextLines)
 					}
 				}
 			}
