@@ -118,13 +118,13 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 			report, err = ApplyCreateEditBlock(block, baseDir)
 			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
 		case "update":
-			report, err = ApplyUpdateEditBlock(block, baseDir)
+			report, err = ApplyUpdateEditBlock(ctx, input.EnvContainer, block, baseDir)
 			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
 		case "append":
-			report, err = ApplyAppendEditBlock(block, baseDir)
+			report, err = ApplyAppendEditBlock(ctx, input.EnvContainer, block, baseDir)
 			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
 		case "delete":
-			report, err = ApplyDeleteEditBlock(block, baseDir)
+			report, err = ApplyDeleteEditBlock(ctx, input.EnvContainer, block, baseDir)
 		default:
 			report = ApplyEditBlockReport{
 				OriginalEditBlock: block,
@@ -566,14 +566,14 @@ func ApplyCreateEditBlock(block EditBlock, baseDir string) (ApplyEditBlockReport
 	return report, nil
 }
 
-func ApplyUpdateEditBlock(block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
+func ApplyUpdateEditBlock(ctx context.Context, envContainer env.EnvContainer, block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
 	report := ApplyEditBlockReport{
 		OriginalEditBlock: block,
 	}
 
 	absoluteFilePath := filepath.Join(baseDir, block.FilePath)
 	block.AbsoluteFilePath = absoluteFilePath // FIXME temporary hack so we get symbols for visible ranges stuff
-	originalContents, err := os.ReadFile(absoluteFilePath)
+	originalContents, err := envContainer.Env.ReadFile(ctx, block.FilePath)
 	if err != nil {
 		report.Error = fmt.Errorf("failed to read file %s: %v", absoluteFilePath, err).Error()
 		return report, err
@@ -595,13 +595,13 @@ func ApplyUpdateEditBlock(block EditBlock, baseDir string) (ApplyEditBlockReport
 	return report, nil
 }
 
-func ApplyAppendEditBlock(block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
+func ApplyAppendEditBlock(ctx context.Context, envContainer env.EnvContainer, block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
 	report := ApplyEditBlockReport{
 		OriginalEditBlock: block,
 	}
 
 	absoluteFilePath := filepath.Join(baseDir, block.FilePath)
-	originalContents, err := os.ReadFile(absoluteFilePath)
+	originalContents, err := envContainer.Env.ReadFile(ctx, block.FilePath)
 	if err != nil {
 		report.Error = fmt.Errorf("failed to read file %s: %v", absoluteFilePath, err).Error()
 		return report, err
@@ -928,10 +928,10 @@ func singleAcceptableMatch(lines []string, originalLines []string) bool {
 	}
 }
 
-func ApplyDeleteEditBlock(block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
+func ApplyDeleteEditBlock(ctx context.Context, envContainer env.EnvContainer, block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
 	filePath := filepath.Join(baseDir, block.FilePath)
 
-	originalContents, err := os.ReadFile(filePath)
+	originalContents, err := envContainer.Env.ReadFile(ctx, block.FilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return ApplyEditBlockReport{
@@ -1106,14 +1106,10 @@ func FindPotentialMatchesWithOptions(block EditBlock, originalLines []string, st
 		// FIXME that said, we should be doing this logic outside of this
 		// function, somewhere in the caller heirarchy
 		if block.VisibleCodeBlocks != nil {
+			fileData := []byte(strings.Join(originalLines, "\n"))
+			langName := utils.InferLanguageNameFromFilePath(block.FilePath)
 			for _, codeBlock := range block.VisibleCodeBlocks {
 				if codeBlock.Symbol != "" && codeBlock.FilePath == block.FilePath {
-					fileData, readErr := os.ReadFile(block.AbsoluteFilePath)
-					if readErr != nil {
-						log.Warn().Err(readErr).Msg("Failed to read file when checking visibility")
-						continue
-					}
-					langName := utils.InferLanguageNameFromFilePath(block.AbsoluteFilePath)
 					symbols, err := tree_sitter.GetSymbolDefinitionsFromBytes(langName, fileData, codeBlock.Symbol, 0)
 					if err != nil {
 						log.Warn().Err(err).Msg("Failed to get new symbol definitions when checking visibility")

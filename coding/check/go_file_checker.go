@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"go/build/constraint"
 	"io"
-	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -318,16 +317,9 @@ func generateTagAssignments(tagNames []string) []map[string]bool {
 // (GOOS/GOARCH, cgo, and custom tags) that satisfies the target file's constraint,
 // then includes only files that match that same context. The target file is
 // always included.
-func filterFilesByBuildTags(filePaths []string, targetFile string, readFile func(string) ([]byte, error)) []string {
+func filterFilesByBuildTags(filePaths []string, targetFile string, envContainer env.EnvContainer) []string {
 	readConstraint := func(path string) constraint.Expr {
-		if readFile != nil {
-			data, err := readFile(path)
-			if err != nil {
-				return nil
-			}
-			return parseBuildConstraintFromBytes(data)
-		}
-		data, err := os.ReadFile(path)
+		data, err := envContainer.Env.ReadFile(context.Background(), path)
 		if err != nil {
 			return nil
 		}
@@ -391,10 +383,7 @@ func CheckViaGoBuild(envContainer env.EnvContainer, relativeFilePath string) (bo
 		goFiles = append(goFiles, filepath.Join(dir, entry.Name()))
 	}
 	targetFilePath := filepath.Join(dir, filepath.Base(relativeFilePath))
-	readFile := func(p string) ([]byte, error) {
-		return envContainer.Env.ReadFile(context.Background(), p)
-	}
-	goFiles = filterFilesByBuildTags(goFiles, targetFilePath, readFile)
+	goFiles = filterFilesByBuildTags(goFiles, targetFilePath, envContainer)
 	args = append(args, goFiles...)
 
 	result, err := envContainer.Env.RunCommand(context.Background(), env.EnvRunCommandInput{
