@@ -186,10 +186,10 @@ func doSFTPRead(client *sftp.Client, path string) ([]byte, error) {
 	return io.ReadAll(f)
 }
 
-// latencyReaderWriter wraps an io.Reader, injecting a delay before each Read call.
+// latencyReaderWriter wraps an io.Reader and io.WriteCloser, injecting a delay before each operation.
 type latencyReaderWriter struct {
 	r     io.Reader
-	w     io.Writer
+	w     io.WriteCloser
 	delay time.Duration
 }
 
@@ -203,7 +203,6 @@ func (lr *latencyReaderWriter) Write(p []byte) (int, error) {
 	return lr.w.Write(p)
 }
 
-func (lr *latencyReaderWriter) Close() (int, error) {
+func (lr *latencyReaderWriter) Close() error {
 	return lr.w.Close()
-}
 }

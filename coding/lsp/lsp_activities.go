@@ -4,8 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
-	"os"
 	"path"
 	"sidekick/env"
 	"sidekick/utils"
@@ -24,7 +24,6 @@ type LSPActivities struct {
 }
 
 type LSPDefinitionLocationsRequest struct {
-	RepoDir      string            `json:"repo_dir"`
 	FilePath     string            `json:"file_path"`
 	EnvContainer *env.EnvContainer `json:"envContainer,omitempty"`
 	// The list of symbol names in the file to get the definition locations of,
@@ -55,32 +54,26 @@ func (la *LSPActivities) GetSymbolDefinitionLocations(ctx context.Context, reque
 
 func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request LSPDefinitionLocationsRequest) ([]SymbolDefinitionLocation, error) {
 	// Step 1: Find the Position of each symbol in the file.
-	var positions []Position
-	var err error
-	if request.EnvContainer != nil {
-		fileBytes, readErr := request.EnvContainer.Env.ReadFile(ctx, request.FilePath)
-		if readErr != nil {
-			return []SymbolDefinitionLocation{}, readErr
-		}
-		positions, err = findSymbolPositionsFromBytes(fileBytes, request.Symbols)
-	} else {
-		fileBytes, readErr := os.ReadFile(request.FilePath)
-		if readErr != nil {
-			return []SymbolDefinitionLocation{}, readErr
-		}
-		positions, err = findSymbolPositionsFromBytes(fileBytes, request.Symbols)
+	if request.EnvContainer == nil {
+		return nil, fmt.Errorf("EnvContainer is required in LSPDefinitionLocationsRequest")
 	}
+	fileBytes, readErr := request.EnvContainer.Env.ReadFile(ctx, request.FilePath)
+	if readErr != nil {
+		return []SymbolDefinitionLocation{}, readErr
+	}
+	positions, err := findSymbolPositionsFromBytes(fileBytes, request.Symbols)
 	if err != nil {
 		return []SymbolDefinitionLocation{}, err
 	}
 
 	// Step 2: Initialize the lsp client and invoke its TextDocumentDefinition function to get the definition of each symbol.
 	langName := utils.InferLanguageNameFromFilePath(request.FilePath)
-	lspClient, err := la.findOrInitClient(ctx, request.RepoDir, langName)
+	repoDir := request.EnvContainer.Env.GetWorkingDirectory()
+	lspClient, err := la.findOrInitClient(ctx, repoDir, langName)
 	if err != nil {
 		return []SymbolDefinitionLocation{}, err
 	}
-	fileURI := convertFilePathToURI(request.RepoDir, request.FilePath)
+	fileURI := convertFilePathToURI(repoDir, request.FilePath)
 	symbolDefinitions := make([]SymbolDefinitionLocation, 0, len(positions))
 	for _, position := range positions {
 		locations, err := lspClient.TextDocumentDefinition(ctx, fileURI, position.Line, position.Character)
