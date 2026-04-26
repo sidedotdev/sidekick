@@ -9,8 +9,11 @@ import (
 	"path"
 	"path/filepath"
 	"sidekick/coding"
+	"sidekick/common"
 	"sidekick/env"
 	"sidekick/llm"
+	"sidekick/llm2"
+	"sidekick/persisted_ai"
 	"sidekick/utils"
 	"slices"
 	"strings"
@@ -136,32 +139,6 @@ func ReadFileActivity(baseDir string, readFileParams ReadFileActivityInput) (str
 	)
 
 	return formattedOutput, nil
-}
-
-// EnvReadFileInput is the input for the env-aware file reading activity.
-type EnvReadFileInput struct {
-	EnvContainer env.EnvContainer      `json:"envContainer"`
-	Params       ReadFileActivityInput `json:"params"`
-}
-
-// EnvReadFileActivity reads a file via the Env.ReadFile method, supporting remote envs.
-func EnvReadFileActivity(ctx context.Context, input EnvReadFileInput) (string, error) {
-	params := input.Params
-	if params.LineNumber < 1 || params.WindowSize < 0 {
-		return "", fmt.Errorf("line number must be greater than 0 and window size must be at least 0")
-	}
-	if err := validateFilePath(params.FilePath, params.AllowAnyPath); err != nil {
-		return "", err
-	}
-
-	data, err := input.EnvContainer.Env.ReadFile(ctx, params.FilePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("no file exists at the given file path: %s", params.FilePath)
-		}
-		return "", fmt.Errorf("failed to open file: %v", err)
-	}
-	return readFileLinesFromBytes(data, params.FilePath, params.LineNumber, params.WindowSize)
 }
 
 type FileLine struct {
@@ -337,17 +314,71 @@ func BulkReadFileActivity(baseDir string, params BulkReadFileParams) (BulkReadFi
 	}, nil
 }
 
-// EnvBulkReadFileInput is the input for the env-aware bulk file reading activity.
-type EnvBulkReadFileInput struct {
-	EnvContainer env.EnvContainer   `json:"envContainer"`
-	Params       BulkReadFileParams `json:"params"`
+func formatCodeBlock(block MergedCodeBlock) string {
+	return fmt.Sprintf(
+		"File: %s\nLines: %d-%d\n%s%s\n```",
+		block.FilePath,
+		block.StartLine,
+		block.EndLine,
+		coding.CodeFenceStartForLanguage(block.Language),
+		block.Content,
+	)
 }
 
-// EnvBulkReadFileActivity reads multiple file sections via the Env.ReadFile method.
-func EnvBulkReadFileActivity(ctx context.Context, input EnvBulkReadFileInput) (BulkReadFileActivityResult, error) {
+func bulkReadFileMerged(dCtx DevContext, params BulkReadFileParams) (string, error) {
+	if len(params.FileLines) == 0 {
+		return "", llm.ErrToolCallUnmarshal
+	}
+
+	envContainer := dCtx.EnvContainer
+	params.AllowAnyPath = envContainer.Env.GetType() == env.EnvTypeDevPod
+
+	var result BulkReadFileActivityResult
+	err := workflow.ExecuteActivity(dCtx, BulkReadFileActivity, envContainer.Env.GetWorkingDirectory(), params).Get(dCtx, &result)
+	if err != nil {
+		return "", fmt.Errorf("failed to execute bulk read file activity: %v", err)
+	}
+
+	var results []string
+
+	// Add formatted code blocks
+	for _, block := range result.CodeBlocks {
+		results = append(results, formatCodeBlock(block))
+	}
+
+	// Add errors
+	for _, errorMsg := range result.Errors {
+		results = append(results, errorMsg)
+	}
+
+	return strings.Join(results, "\n\n"), nil
+}
+
+// BulkReadFileActivities holds dependencies for persisted bulk file reading.
+type BulkReadFileActivities struct {
+	Storage common.KeyValueStorage
+}
+
+// BulkReadFileActivityV2Input is the input for the ref-returning bulk read activity.
+type BulkReadFileActivityV2Input struct {
+	EnvContainer env.EnvContainer   `json:"envContainer"`
+	Params       BulkReadFileParams `json:"params"`
+	FlowId       string             `json:"flowId"`
+	ToolCall     llm.ToolCall       `json:"toolCall"`
+	WorkspaceId  string             `json:"workspaceId"`
+}
+
+// BulkReadFileActivityV2Output contains the persisted message ref.
+type BulkReadFileActivityV2Output struct {
+	Ref persisted_ai.MessageRef `json:"ref"`
+}
+
+// BulkReadFileActivityV2 reads files via Env.ReadFile, formats the output,
+// persists it to KV storage, and returns a MessageRef.
+func (a *BulkReadFileActivities) BulkReadFileActivityV2(ctx context.Context, input BulkReadFileActivityV2Input) (*BulkReadFileActivityV2Output, error) {
 	params := input.Params
 	if params.WindowSize < 0 {
-		return BulkReadFileActivityResult{}, fmt.Errorf("window size must be at least 0")
+		return nil, fmt.Errorf("window size must be at least 0")
 	}
 
 	fileGroups := make(map[string][]FileLine)
@@ -356,10 +387,10 @@ func EnvBulkReadFileActivity(ctx context.Context, input EnvBulkReadFileInput) (B
 
 	for _, fileLine := range params.FileLines {
 		if fileLine.LineNumber < 1 {
-			return BulkReadFileActivityResult{}, fmt.Errorf("line number must be greater than 0")
+			return nil, fmt.Errorf("line number must be greater than 0")
 		}
 		if err := validateFilePath(fileLine.FilePath, params.AllowAnyPath); err != nil {
-			return BulkReadFileActivityResult{}, err
+			return nil, err
 		}
 		if !seenFiles[fileLine.FilePath] {
 			fileOrder = append(fileOrder, fileLine.FilePath)
@@ -368,9 +399,7 @@ func EnvBulkReadFileActivity(ctx context.Context, input EnvBulkReadFileInput) (B
 		fileGroups[fileLine.FilePath] = append(fileGroups[fileLine.FilePath], fileLine)
 	}
 
-	var codeBlocks []MergedCodeBlock
-	var errors []string
-
+	var parts []string
 	for _, filePath := range fileOrder {
 		fileLines := fileGroups[filePath]
 
@@ -402,12 +431,12 @@ func EnvBulkReadFileActivity(ctx context.Context, input EnvBulkReadFileInput) (B
 			}
 		}
 
-		data, err := input.EnvContainer.Env.ReadFile(ctx, filePath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				errors = append(errors, fmt.Sprintf("failed to read the file: no file exists at the given file path: %s", filePath))
+		data, readErr := input.EnvContainer.Env.ReadFile(ctx, filePath)
+		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				parts = append(parts, fmt.Sprintf("failed to read the file: no file exists at the given file path: %s", filePath))
 			} else {
-				errors = append(errors, fmt.Sprintf("failed to read the file: failed to open file: %v", err))
+				parts = append(parts, fmt.Sprintf("failed to read the file: failed to open file: %v", readErr))
 			}
 			continue
 		}
@@ -438,92 +467,67 @@ func EnvBulkReadFileActivity(ctx context.Context, input EnvBulkReadFileInput) (B
 			}
 			if len(extractedLines) > 0 {
 				hasValidBlocks = true
-				codeBlocks = append(codeBlocks, MergedCodeBlock{
+				parts = append(parts, formatCodeBlock(MergedCodeBlock{
 					FilePath:  filePath,
 					StartLine: mergedInterval.start,
 					EndLine:   min(actualEnd, fileLength),
 					Language:  lang,
 					Content:   strings.Join(extractedLines, "\n"),
-				})
+				}))
 			}
 		}
 
 		if !hasValidBlocks {
-			errors = append(errors, fmt.Sprintf("failed to read the file: no lines found in the specified window"))
+			parts = append(parts, "failed to read the file: no lines found in the specified window")
 		}
 	}
 
-	return BulkReadFileActivityResult{
-		CodeBlocks: codeBlocks,
-		Errors:     errors,
-	}, nil
-}
+	content := strings.Join(parts, "\n\n")
 
-func formatCodeBlock(block MergedCodeBlock) string {
-	return fmt.Sprintf(
-		"File: %s\nLines: %d-%d\n%s%s\n```",
-		block.FilePath,
-		block.StartLine,
-		block.EndLine,
-		coding.CodeFenceStartForLanguage(block.Language),
-		block.Content,
+	textBlock := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: content}
+	trb := llm2.ToolResultBlock{
+		ToolCallId: input.ToolCall.Id,
+		Name:       input.ToolCall.Name,
+		Content:    []llm2.ContentBlock{textBlock},
+	}
+	finalBlock := llm2.ContentBlock{
+		Type:       llm2.ContentBlockTypeToolResult,
+		ToolResult: &trb,
+	}
+
+	ref, err := persisted_ai.PersistContentBlock(
+		ctx, a.Storage, input.FlowId, input.WorkspaceId, string(llm2.RoleUser), finalBlock,
 	)
-}
-
-func BulkReadFileV2(dCtx DevContext, params BulkReadFileParams) (string, error) {
-	if len(params.FileLines) == 0 {
-		return "", llm.ErrToolCallUnmarshal
-	}
-
-	envContainer := dCtx.EnvContainer
-	params.AllowAnyPath = envContainer.Env.GetType() == env.EnvTypeDevPod
-
-	var result BulkReadFileActivityResult
-	err := workflow.ExecuteActivity(dCtx, BulkReadFileActivity, envContainer.Env.GetWorkingDirectory(), params).Get(dCtx, &result)
 	if err != nil {
-		return "", fmt.Errorf("failed to execute bulk read file activity: %v", err)
+		return nil, fmt.Errorf("failed to persist content block: %w", err)
 	}
 
-	var results []string
-
-	// Add formatted code blocks
-	for _, block := range result.CodeBlocks {
-		results = append(results, formatCodeBlock(block))
-	}
-
-	// Add errors
-	for _, errorMsg := range result.Errors {
-		results = append(results, errorMsg)
-	}
-
-	return strings.Join(results, "\n\n"), nil
+	return &BulkReadFileActivityV2Output{Ref: *ref}, nil
 }
 
-func BulkReadFileV2Env(dCtx DevContext, params BulkReadFileParams) (string, error) {
+// BulkReadFileV2 reads files via Env and persists the result to KV, returning a ref.
+func BulkReadFileV2(dCtx DevContext, params BulkReadFileParams, toolCall llm.ToolCall) (*BulkReadFileActivityV2Output, error) {
 	if len(params.FileLines) == 0 {
-		return "", llm.ErrToolCallUnmarshal
+		return nil, llm.ErrToolCallUnmarshal
 	}
 
 	envContainer := dCtx.EnvContainer
 	params.AllowAnyPath = envContainer.Env.GetType() == env.EnvTypeDevPod
+	flowId := workflow.GetInfo(dCtx).WorkflowExecution.ID
 
-	var result BulkReadFileActivityResult
-	err := workflow.ExecuteActivity(dCtx, EnvBulkReadFileActivity, EnvBulkReadFileInput{
+	var bra *BulkReadFileActivities
+	var output BulkReadFileActivityV2Output
+	err := workflow.ExecuteActivity(dCtx, bra.BulkReadFileActivityV2, BulkReadFileActivityV2Input{
 		EnvContainer: *envContainer,
 		Params:       params,
-	}).Get(dCtx, &result)
+		FlowId:       flowId,
+		ToolCall:     toolCall,
+		WorkspaceId:  dCtx.WorkspaceId,
+	}).Get(dCtx, &output)
 	if err != nil {
-		return "", fmt.Errorf("failed to execute bulk read file activity: %v", err)
+		return nil, fmt.Errorf("failed to execute bulk read file activity: %v", err)
 	}
-
-	var results []string
-	for _, block := range result.CodeBlocks {
-		results = append(results, formatCodeBlock(block))
-	}
-	for _, errorMsg := range result.Errors {
-		results = append(results, errorMsg)
-	}
-	return strings.Join(results, "\n\n"), nil
+	return &output, nil
 }
 
 // TODO add tests for bulk read file, with mock read file activity
@@ -533,7 +537,7 @@ func BulkReadFile(dCtx DevContext, bulkReadFileParams BulkReadFileParams) (strin
 	}
 
 	// Use workflow versioning to gate the new behavior
-	version := workflow.GetVersion(dCtx, "read_file_lines_merge_adjacent_v2", workflow.DefaultVersion, 2)
+	version := workflow.GetVersion(dCtx, "read_file_lines_merge_adjacent_v2", workflow.DefaultVersion, 1)
 
 	if version == workflow.DefaultVersion {
 		// Original behavior: execute ReadFileActivity for each request
@@ -560,9 +564,7 @@ func BulkReadFile(dCtx DevContext, bulkReadFileParams BulkReadFileParams) (strin
 			}
 		}
 		return strings.Join(results, "\n\n"), nil
-	} else if version == 1 {
-		return BulkReadFileV2(dCtx, bulkReadFileParams)
 	} else {
-		return BulkReadFileV2Env(dCtx, bulkReadFileParams)
+		return bulkReadFileMerged(dCtx, bulkReadFileParams)
 	}
 }
