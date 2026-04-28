@@ -31,36 +31,56 @@ func TestResolveOpenAIReasoningEffort(t *testing.T) {
 		{"o4-mini lowest", "lowest", "o4-mini", "low"},
 		{"o4-mini highest", "highest", "o4-mini", "high"},
 
-		// GPT-5, GPT-5.1, GPT-5-mini
+		// Explicit GPT-5 family mappings
 		{"gpt-5 lowest", "lowest", "gpt-5", "minimal"},
 		{"gpt-5 highest", "highest", "gpt-5", "high"},
 		{"GPT-5 uppercase lowest", "lowest", "GPT-5", "minimal"},
-		{"gpt-5.1 lowest", "lowest", "gpt-5.1", "minimal"},
-		{"gpt-5.1 highest", "highest", "gpt-5.1", "high"},
 		{"gpt-5-mini lowest", "lowest", "gpt-5-mini", "minimal"},
 		{"gpt-5-mini highest", "highest", "gpt-5-mini", "high"},
-
-		// GPT-5-codex
+		{"gpt-5-nano lowest", "lowest", "gpt-5-nano", "minimal"},
+		{"gpt-5-nano highest", "highest", "gpt-5-nano", "high"},
 		{"gpt-5-codex lowest", "lowest", "gpt-5-codex", "low"},
 		{"gpt-5-codex highest", "highest", "gpt-5-codex", "high"},
-
-		// GPT-5.1-Codex-Max
+		{"gpt-5-pro lowest", "lowest", "gpt-5-pro", "high"},
+		{"gpt-5-pro highest", "highest", "gpt-5-pro", "high"},
+		{"gpt-5.1 lowest", "lowest", "gpt-5.1", "none"},
+		{"gpt-5.1 highest", "highest", "gpt-5.1", "high"},
+		{"gpt-5.1-codex lowest", "lowest", "gpt-5.1-codex", "low"},
+		{"gpt-5.1-codex highest", "highest", "gpt-5.1-codex", "high"},
+		{"gpt-5.1-codex-mini lowest", "lowest", "gpt-5.1-codex-mini", "low"},
+		{"gpt-5.1-codex-mini highest", "highest", "gpt-5.1-codex-mini", "high"},
 		{"gpt-5.1-codex-max lowest", "lowest", "gpt-5.1-Codex-Max", "low"},
 		{"gpt-5.1-codex-max highest", "highest", "gpt-5.1-Codex-Max", "xhigh"},
-
-		// GPT-5.2
 		{"gpt-5.2 lowest", "lowest", "gpt-5.2", "none"},
 		{"gpt-5.2 highest", "highest", "gpt-5.2", "xhigh"},
-
-		// GPT-5.2-pro
 		{"gpt-5.2-pro lowest", "lowest", "gpt-5.2-pro", "medium"},
 		{"gpt-5.2-pro highest", "highest", "gpt-5.2-pro", "xhigh"},
-
-		// GPT-5.3-Codex
+		{"gpt-5.2-codex lowest", "lowest", "gpt-5.2-codex", "low"},
+		{"gpt-5.2-codex highest", "highest", "gpt-5.2-codex", "xhigh"},
 		{"gpt-5.3-codex lowest", "lowest", "gpt-5.3-Codex", "low"},
 		{"gpt-5.3-codex highest", "highest", "gpt-5.3-Codex", "xhigh"},
+		{"gpt-5.4 lowest", "lowest", "gpt-5.4", "none"},
+		{"gpt-5.4 highest", "highest", "gpt-5.4", "xhigh"},
+		{"gpt-5.4-mini lowest", "lowest", "gpt-5.4-mini", "none"},
+		{"gpt-5.4-mini highest", "highest", "gpt-5.4-mini", "xhigh"},
+		{"gpt-5.4-nano lowest", "lowest", "gpt-5.4-nano", "none"},
+		{"gpt-5.4-nano highest", "highest", "gpt-5.4-nano", "xhigh"},
+		{"gpt-5.4-pro lowest", "lowest", "gpt-5.4-pro", "medium"},
+		{"gpt-5.4-pro highest", "highest", "gpt-5.4-pro", "xhigh"},
+		{"gpt-5.5 lowest", "lowest", "gpt-5.5", "none"},
+		{"gpt-5.5 highest", "highest", "gpt-5.5", "xhigh"},
+		{"gpt-5.5-pro lowest", "lowest", "gpt-5.5-pro", "medium"},
+		{"gpt-5.5-pro highest", "highest", "gpt-5.5-pro", "xhigh"},
 
-		// Unrecognized models: assume newer models support these values
+		// Newer unreleased GPT model heuristics
+		{"newer gpt pro lowest", "lowest", "gpt-5.6-pro", "medium"},
+		{"newer gpt pro highest", "highest", "gpt-5.6-pro", "xhigh"},
+		{"newer gpt codex lowest", "lowest", "gpt-5.6-codex", "low"},
+		{"newer gpt codex highest", "highest", "gpt-5.6-codex", "xhigh"},
+		{"newer general gpt lowest", "lowest", "gpt-5.6", "none"},
+		{"newer general gpt highest", "highest", "gpt-5.6", "xhigh"},
+
+		// Unrecognized non-GPT models
 		{"unknown model lowest", "lowest", "some-new-model", "none"},
 		{"unknown model highest", "highest", "some-new-model", "high"},
 	}
@@ -102,6 +122,14 @@ func TestResolveAnthropicReasoningEffort(t *testing.T) {
 		{"highest opus-4-5", "highest", "claude-opus-4-5", "high"},
 		{"highest sonnet-4", "highest", "claude-sonnet-4", "high"},
 		{"highest haiku", "highest", "claude-haiku-3", "high"},
+
+		// GPT mappings are provider-agnostic
+		{"gpt-5.1 lowest", "lowest", "gpt-5.1", "none"},
+		{"gpt-5.1 highest", "highest", "gpt-5.1", "high"},
+		{"gpt-5.4-pro lowest", "lowest", "gpt-5.4-pro", "medium"},
+		{"gpt-5.4-pro highest", "highest", "gpt-5.4-pro", "xhigh"},
+		{"newer gpt codex lowest", "lowest", "gpt-5.6-codex", "low"},
+		{"newer general gpt highest", "highest", "gpt-5.6", "xhigh"},
 
 		// Unrecognized models
 		{"unknown model lowest", "lowest", "some-new-model", ""},
@@ -180,6 +208,14 @@ func TestResolveGoogleReasoningEffort(t *testing.T) {
 		// highest → max
 		{"highest newer model", "highest", "gemini-3-pro-preview", "max"},
 		{"highest legacy model", "highest", "gemini-2.5-pro", "max"},
+
+		// GPT mappings are provider-agnostic
+		{"gpt-5.1 lowest", "lowest", "gpt-5.1", "none"},
+		{"gpt-5.1 highest", "highest", "gpt-5.1", "high"},
+		{"gpt-5.4-pro lowest", "lowest", "gpt-5.4-pro", "medium"},
+		{"gpt-5.4-pro highest", "highest", "gpt-5.4-pro", "xhigh"},
+		{"newer gpt codex lowest", "lowest", "gpt-5.6-codex", "low"},
+		{"newer general gpt highest", "highest", "gpt-5.6", "xhigh"},
 
 		// Unrecognized models
 		{"unknown model lowest", "lowest", "some-new-model", ""},
