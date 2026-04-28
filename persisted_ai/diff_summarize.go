@@ -674,17 +674,59 @@ func buildSummarizedOutput(rankedChunks []DiffChunk, symbolSummaries map[string]
 	expandedChunks := make(map[chunkKey]bool)
 	var omittedChunks []chunkKey
 
-	// Add ranked chunks until we hit the limit
+	isStructuralMetadataChunk := func(content string) bool {
+		return strings.Contains(content, "\ndeleted file mode ") ||
+			strings.HasPrefix(content, "deleted file mode ") ||
+			strings.Contains(content, "\nrename from ") ||
+			strings.HasPrefix(content, "rename from ") ||
+			strings.Contains(content, "\nrename to ") ||
+			strings.HasPrefix(content, "rename to ")
+	}
+
 	var diffContent strings.Builder
-	for _, chunk := range rankedChunks {
-		key := chunkKey{filePath: chunk.FilePath, chunkIndex: chunk.ChunkIndex, linesAdded: chunk.LinesAdded, linesRemoved: chunk.LinesRemoved}
+	writeDiffChunk := func(chunk DiffChunk, key chunkKey) bool {
 		chunkSize := len(chunk.Content) + 1 // +1 for newline
 		if chunkSize <= remainingChars {
 			diffContent.WriteString(chunk.Content)
 			diffContent.WriteString("\n")
 			remainingChars -= chunkSize
 			expandedChunks[key] = true
-		} else {
+			return true
+		}
+
+		return false
+	}
+
+	// Preserve file-level metadata even when ranking prefers ordinary hunks.
+	for _, chunk := range rankedChunks {
+		if !isStructuralMetadataChunk(chunk.Content) {
+			continue
+		}
+
+		key := chunkKey{filePath: chunk.FilePath, chunkIndex: chunk.ChunkIndex, linesAdded: chunk.LinesAdded, linesRemoved: chunk.LinesRemoved}
+		if writeDiffChunk(chunk, key) {
+			continue
+		}
+
+		header := extractDiffHeader(chunk.Content)
+		headerSize := len(header) + 1
+		if header != "" && headerSize <= remainingChars {
+			diffContent.WriteString(header)
+			diffContent.WriteString("\n")
+			remainingChars -= headerSize
+		}
+		omittedChunks = append(omittedChunks, key)
+		expandedChunks[key] = true
+	}
+
+	// Add ranked chunks until we hit the limit
+	for _, chunk := range rankedChunks {
+		key := chunkKey{filePath: chunk.FilePath, chunkIndex: chunk.ChunkIndex, linesAdded: chunk.LinesAdded, linesRemoved: chunk.LinesRemoved}
+		if expandedChunks[key] {
+			continue
+		}
+
+		if !writeDiffChunk(chunk, key) {
 			omittedChunks = append(omittedChunks, key)
 		}
 	}
