@@ -8,6 +8,7 @@ import (
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
+	"sidekick/utils"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -193,7 +194,8 @@ func GetUserMergeApproval(
 					// Update the flow action with the new parameters, so the user sees the updated diff and target
 					flowAction.ActionParams = req.ActionParams()
 					var fa *flow_action.FlowActivities
-					err = workflow.ExecuteActivity(trackedCtx, fa.PersistFlowAction, flowAction).Get(trackedCtx, nil)
+					storageCtx := utils.WithStorageActivityOptions(trackedCtx)
+					err = workflow.ExecuteActivity(storageCtx, fa.PersistFlowAction, flowAction).Get(storageCtx, nil)
 					if err != nil {
 						return nil, fmt.Errorf("failed to update flow action params: %v", err)
 					}
