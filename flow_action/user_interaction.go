@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sidekick/domain"
 	"sidekick/srv"
+	"sidekick/utils"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -79,14 +80,15 @@ func GetUserResponse(ctx ExecContext, req RequestForUser) (*UserResponse, error)
 		// the outside (both cases flow through this code path), otherwise the
 		// flow will appear "pausable" even though it's really just waiting for
 		// user response, i.e. paused
+		storageCtx := utils.WithStorageActivityOptions(ctx.Context)
 		var flow domain.Flow
-		err := workflow.ExecuteActivity(ctx.Context, srv.Activities.GetFlow, ctx.WorkspaceId, req.OriginWorkflowId).Get(ctx.Context, &flow)
+		err := workflow.ExecuteActivity(storageCtx, srv.Activities.GetFlow, ctx.WorkspaceId, req.OriginWorkflowId).Get(storageCtx, &flow)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get flow: %v", err)
 		}
 		if flow.Status != domain.FlowStatusPaused {
 			flow.Status = domain.FlowStatusPaused
-			err := workflow.ExecuteActivity(ctx.Context, srv.Activities.PersistFlow, flow).Get(ctx.Context, nil)
+			err := workflow.ExecuteActivity(storageCtx, srv.Activities.PersistFlow, flow).Get(storageCtx, nil)
 			if err != nil {
 				return nil, fmt.Errorf("failed to set flow status to paused: %v", err)
 			}

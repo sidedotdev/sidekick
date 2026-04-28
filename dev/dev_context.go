@@ -185,7 +185,8 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			WorkspaceId:      workspaceId,
 			WorkingDirectory: workingDir,
 		}
-		err = workflow.ExecuteActivity(ctx, srv.Activities.PersistWorktree, *wt).Get(ctx, nil)
+		storageCtx := utils.WithStorageActivityOptions(ctx)
+		err = workflow.ExecuteActivity(storageCtx, srv.Activities.PersistWorktree, *wt).Get(storageCtx, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to persist worktree: %v", err)
 		}
