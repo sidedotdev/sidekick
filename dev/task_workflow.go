@@ -2,6 +2,7 @@ package dev
 
 import (
 	"fmt"
+	"sidekick/common"
 	"sidekick/domain"
 	"sidekick/flow_action"
 	"sidekick/utils"
@@ -56,10 +57,12 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 		})
 
 		untypedOptions := input.FlowOptions
+		var configOverrides common.ConfigOverrides
 		switch input.FlowType {
 		case "basic_dev":
 			var options BasicDevOptions
 			utils.Transcode(untypedOptions, &options)
+			configOverrides = options.ConfigOverrides
 			childFuture = workflow.ExecuteChildWorkflow(childCtx, BasicDevWorkflow, BasicDevWorkflowInput{
 				WorkspaceId:     input.WorkspaceId,
 				Requirements:    input.Description,
@@ -69,6 +72,7 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 		case "planned_dev":
 			var options PlannedDevOptions
 			utils.Transcode(untypedOptions, &options)
+			configOverrides = options.ConfigOverrides
 			childFuture = workflow.ExecuteChildWorkflow(childCtx, PlannedDevWorkflow, PlannedDevInput{
 				WorkspaceId:       input.WorkspaceId,
 				Requirements:      input.Description,
@@ -97,14 +101,21 @@ func TaskWorkflow(ctx workflow.Context, input TaskWorkflowInput) error {
 			return fmt.Errorf("failed to persist flow record: %w", err)
 		}
 
-		if v := workflow.GetVersion(ctx, "generate-task-title", workflow.DefaultVersion, 1); v >= 1 {
+		titleVersion := workflow.GetVersion(ctx, "generate-task-title", workflow.DefaultVersion, 2)
+		if titleVersion >= 1 {
 			workflow.Go(ctx, func(gCtx workflow.Context) {
 				gCtx = setActivityOptions(gCtx)
-				titleErr := workflow.ExecuteActivity(gCtx, ima.GenerateTaskTitle, GenerateTitleInput{
+				titleInput := GenerateTitleInput{
 					WorkspaceId: input.WorkspaceId,
 					TaskId:      input.TaskId,
 					Description: input.Description,
-				}).Get(gCtx, nil)
+				}
+				var titleErr error
+				if titleVersion >= 2 {
+					titleErr = generateTaskTitle(gCtx, titleInput, workspace.LocalRepoDir, configOverrides)
+				} else {
+					titleErr = workflow.ExecuteActivity(gCtx, ima.GenerateTaskTitle, titleInput).Get(gCtx, nil)
+				}
 				if titleErr != nil {
 					workflow.GetLogger(gCtx).Warn("Failed to generate task title", "Error", titleErr)
 				}
