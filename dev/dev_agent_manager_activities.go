@@ -110,12 +110,25 @@ func (ima *DevAgentManagerActivities) CompleteFlowParentTask(ctx context.Context
 }
 
 func (ima *DevAgentManagerActivities) PassOnUserResponse(userResponse flow_action.UserResponse) (err error) {
-	err = ima.TemporalClient.SignalWorkflow(context.Background(), userResponse.TargetWorkflowId, "", SignalNameUserResponse, userResponse)
-	if err != nil && err.Error() == "workflow execution already completed" {
-		log.Warn().Msg("we tried to pass on a user response to a workflow that already completed, something must be wrong")
-		return nil
+	// Signal both the legacy unscoped channel and the FlowActionId-specific
+	// channel so workflows on either side of the version gate receive the
+	// response. Each workflow only listens on one of these names, so the
+	// unconsumed signal is harmless.
+	signalNames := []string{SignalNameUserResponse}
+	if userResponse.FlowActionId != "" {
+		signalNames = append(signalNames, flow_action.UserResponseSignalName(userResponse.FlowActionId))
 	}
-	return err
+	for _, name := range signalNames {
+		err = ima.TemporalClient.SignalWorkflow(context.Background(), userResponse.TargetWorkflowId, "", name, userResponse)
+		if err != nil {
+			if err.Error() == "workflow execution already completed" {
+				log.Warn().Msg("we tried to pass on a user response to a workflow that already completed, something must be wrong")
+				return nil
+			}
+			return err
+		}
+	}
+	return nil
 }
 
 func (ima *DevAgentManagerActivities) GetWorkflow(ctx context.Context, workspaceId, workflowId string) (message domain.Flow, err error) {

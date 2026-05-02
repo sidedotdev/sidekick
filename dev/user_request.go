@@ -207,12 +207,11 @@ func GetUserMergeApproval(
 				return currentResponse, nil
 			}
 
-			// wait for the next user response signal
-			selector := workflow.NewNamedSelector(trackedCtx, "mergeApprovalUserResponseSelector")
-			selector.AddReceive(workflow.GetSignalChannel(trackedCtx, flow_action.SignalNameUserResponse), func(c workflow.ReceiveChannel, more bool) {
-				c.Receive(trackedCtx, &currentResponse)
-			})
-			selector.Select(trackedCtx)
+			next, err := flow_action.ReceiveUserResponse(trackedCtx, req.FlowActionId)
+			if err != nil {
+				return nil, err
+			}
+			currentResponse = &next
 		}
 	})
 
