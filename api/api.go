@@ -1346,6 +1346,7 @@ func (ctrl *Controller) CompleteFlowActionHandler(c *gin.Context) {
 
 	userResponse := flow_action.UserResponse{
 		TargetWorkflowId: flowAction.FlowId,
+		FlowActionId:     flowAction.Id,
 		Content:          body.UserResponse.Content,
 		Approved:         body.UserResponse.Approved,
 		Choice:           body.UserResponse.Choice,
@@ -1458,6 +1459,7 @@ func (ctrl *Controller) UpdateFlowActionHandler(c *gin.Context) {
 
 	userResponse := flow_action.UserResponse{
 		TargetWorkflowId: flowAction.FlowId,
+		FlowActionId:     flowAction.Id,
 		Content:          body.UserResponse.Content,
 		Approved:         nil,
 		Choice:           body.UserResponse.Choice,

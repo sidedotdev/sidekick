@@ -357,10 +357,13 @@ func (s *MergeStrategyRoundTripTestSuite) TestMergeStrategyRoundTrip() {
 			var req flow_action.RequestForUser
 			signalCh.Receive(ctx, &req)
 
+			signalName := flow_action.UserResponseSignalName(req.FlowActionId)
+
 			// First, send a param-only update with the merge strategy (Approved is nil)
 			// The workflow will loop and wait for another userResponse signal (not a new request)
-			workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "", flow_action.SignalNameUserResponse, flow_action.UserResponse{
+			workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "", signalName, flow_action.UserResponse{
 				TargetWorkflowId: req.OriginWorkflowId,
+				FlowActionId:     req.FlowActionId,
 				Params: map[string]interface{}{
 					"mergeStrategy": string(mergeStrategy),
 				},
@@ -368,8 +371,9 @@ func (s *MergeStrategyRoundTripTestSuite) TestMergeStrategyRoundTrip() {
 
 			// Now send the final approval (no need to wait for another request signal)
 			approved := true
-			workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "", flow_action.SignalNameUserResponse, flow_action.UserResponse{
+			workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "", signalName, flow_action.UserResponse{
 				TargetWorkflowId: req.OriginWorkflowId,
+				FlowActionId:     req.FlowActionId,
 				Approved:         &approved,
 			}).Get(ctx, nil)
 		})
@@ -412,8 +416,9 @@ func (s *MergeStrategyRoundTripTestSuite) TestMergeStrategyDefaultsToSquashInRes
 
 			// Immediately approve without setting merge strategy
 			approved := true
-			workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "", flow_action.SignalNameUserResponse, flow_action.UserResponse{
+			workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "", flow_action.UserResponseSignalName(req.FlowActionId), flow_action.UserResponse{
 				TargetWorkflowId: req.OriginWorkflowId,
+				FlowActionId:     req.FlowActionId,
 				Approved:         &approved,
 			}).Get(ctx, nil)
 		})
