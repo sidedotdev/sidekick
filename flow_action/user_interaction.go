@@ -25,10 +25,16 @@ const (
 
 type UserResponse struct {
 	TargetWorkflowId string
-	Content          string
-	Approved         *bool
-	Choice           string
-	Params           map[string]interface{}
+	// FlowActionId identifies which RequestForUser this response corresponds to.
+	// It is also encoded into the signal name (see UserResponseSignalName) so a
+	// workflow only receives responses for its own active request. This allows
+	// multiple concurrent requests to coexist without stale/duplicate signals
+	// from earlier interactions silently satisfying a later prompt.
+	FlowActionId string
+	Content      string
+	Approved     *bool
+	Choice       string
+	Params       map[string]interface{}
 }
 
 type RequestForUser struct {
@@ -93,18 +99,54 @@ func GetUserResponse(ctx ExecContext, req RequestForUser) (*UserResponse, error)
 		}
 	}
 
-	// Wait for the 'userResponse' signal
-	var userResponse UserResponse
-	selector := workflow.NewNamedSelector(ctx.Context, "userResponseSelector")
-	selector.AddReceive(workflow.GetSignalChannel(ctx.Context, SignalNameUserResponse), func(c workflow.ReceiveChannel, more bool) {
-		c.Receive(ctx.Context, &userResponse)
-	})
-	selector.Select(ctx.Context)
+	userResponse, err := ReceiveUserResponse(ctx.Context, req.FlowActionId)
+	if err != nil {
+		return nil, err
+	}
 
 	// NOTE: unpausing of the flow is always done via the complete flow action
 	// handler, so it is omitted here
 
 	return &userResponse, nil
+}
+
+// UserResponseSignalName returns the signal name a workflow should listen on
+// to receive responses for a specific flow action. Encoding the FlowActionId
+// into the signal name (instead of post-filtering a shared channel) ensures
+// stale or duplicate responses for prior requests cannot satisfy a later
+// request, and lets multiple concurrent requests coexist on the same workflow.
+// An empty flowActionId yields the legacy unscoped signal name for backward
+// compatibility with callers that don't supply one.
+func UserResponseSignalName(flowActionId string) string {
+	if flowActionId == "" {
+		return SignalNameUserResponse
+	}
+	return SignalNameUserResponse + "-" + flowActionId
+}
+
+// ReceiveUserResponse waits for a userResponse signal targeting the given
+// FlowActionId. The FlowActionId is encoded in the signal name so the
+// receiver only ever observes responses to its own active request. The
+// switch from a shared signal channel to per-flow-action signal names is
+// gated by workflow version so in-flight executions replay deterministically.
+// An empty expectedFlowActionId falls back to the legacy unscoped signal
+// channel, supporting older callers and tests that don't supply an id.
+func ReceiveUserResponse(ctx workflow.Context, expectedFlowActionId string) (UserResponse, error) {
+	signalName := SignalNameUserResponse
+	if expectedFlowActionId != "" {
+		v := workflow.GetVersion(ctx, "user-response-signal-name-by-flow-action-id", workflow.DefaultVersion, 1)
+		if v >= 1 {
+			signalName = UserResponseSignalName(expectedFlowActionId)
+		}
+	}
+
+	var userResponse UserResponse
+	selector := workflow.NewNamedSelector(ctx, "userResponseSelector")
+	selector.AddReceive(workflow.GetSignalChannel(ctx, signalName), func(c workflow.ReceiveChannel, more bool) {
+		c.Receive(ctx, &userResponse)
+	})
+	selector.Select(ctx)
+	return userResponse, nil
 }
 
 func GetUserContinue(eCtx ExecContext, prompt string, requestParams map[string]any) error {
