@@ -71,49 +71,24 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 
 	enableBranchNameGeneration := workflow.GetVersion(ctx, "branch-name-generation", workflow.DefaultVersion, 1) >= 1
 
-	// for workflow backcompat/replay, we can't do this early unless enabled
+	var tempLocalExecContext flow_action.ExecContext
+	// for workflow backcompat/replay, we can't load configs early unless enabled
 	if enableBranchNameGeneration {
-		localConfig, workspaceConfig, llmConfig, embeddingConfig, err = getConfigs(ctx, workspaceId)
+		tempLocalExecContext, localConfig, workspaceConfig, err = NewTempLocalExecContext(ctx, workspaceId, repoDir, configOverrides)
 		if err != nil {
 			return DevContext{}, err
 		}
-
-		if configOverrides.LLM != nil {
-			llmConfig = *configOverrides.LLM
+		llmConfig = tempLocalExecContext.LLMConfig
+		embeddingConfig = tempLocalExecContext.EmbeddingConfig
+	} else {
+		tempProviders := localConfig.Providers
+		if configOverrides.Providers != nil {
+			tempProviders = *configOverrides.Providers
 		}
-		if configOverrides.Embedding != nil {
-			embeddingConfig = *configOverrides.Embedding
+		tempLocalExecContext, err = newTempLocalExecContext(ctx, workspaceId, repoDir, tempProviders, llmConfig, embeddingConfig)
+		if err != nil {
+			return DevContext{}, err
 		}
-	}
-
-	// this is *only* to be used temporarily during setup, until the real/full env is created
-	tempLocalEnv, err := env.NewLocalEnv(context.Background(), env.LocalEnvParams{RepoDir: repoDir})
-	if err != nil {
-		return DevContext{}, fmt.Errorf("failed to create temp local env: %v", err)
-	}
-
-	tempProviders := localConfig.Providers
-	if configOverrides.Providers != nil {
-		tempProviders = *configOverrides.Providers
-	}
-
-	// this is *only* to be used temporarily during setup, until the real/full eCtx is created
-	tempLocalExecContext := flow_action.ExecContext{
-		FlowScope:    &flow_action.FlowScope{},
-		Context:      ctx,
-		WorkspaceId:  workspaceId,
-		EnvContainer: &env.EnvContainer{Env: tempLocalEnv},
-		Secrets: &secret_manager.SecretManagerContainer{
-			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
-				secret_manager.KeyringSecretManager{},
-				secret_manager.LocalConfigSecretManager{},
-				secret_manager.EnvSecretManager{},
-			}),
-		},
-		Providers:       tempProviders, // TODO merge with workspace providers
-		LLMConfig:       llmConfig,
-		EmbeddingConfig: embeddingConfig,
-		GlobalState:     &flow_action.GlobalState{},
 	}
 
 	// createWorktree handles branch name generation, retry on conflicts, and persistence.
@@ -803,4 +778,69 @@ func (devActionCtx *DevActionContext) FlowActionContext() flow_action.ActionCont
 		ActionType:   devActionCtx.ActionType,
 		ActionParams: devActionCtx.ActionParams,
 	}
+}
+
+// newTempLocalExecContext constructs a minimal ExecContext suitable for one-off
+// LLM operations invoked directly from a workflow (e.g. generating branch names
+// or task titles), before the full per-worktree dev context is available. It
+// creates a local env rooted at repoDir and wires in the default secret manager
+// chain. This context should not be used for long-lived operations.
+func newTempLocalExecContext(
+	ctx workflow.Context,
+	workspaceId string,
+	repoDir string,
+	providers []common.ModelProviderPublicConfig,
+	llmConfig common.LLMConfig,
+	embeddingConfig common.EmbeddingConfig,
+) (flow_action.ExecContext, error) {
+	tempLocalEnv, err := env.NewLocalEnv(context.Background(), env.LocalEnvParams{RepoDir: repoDir})
+	if err != nil {
+		return flow_action.ExecContext{}, fmt.Errorf("failed to create temp local env: %v", err)
+	}
+	return flow_action.ExecContext{
+		FlowScope:    &flow_action.FlowScope{},
+		Context:      ctx,
+		WorkspaceId:  workspaceId,
+		EnvContainer: &env.EnvContainer{Env: tempLocalEnv},
+		Secrets: &secret_manager.SecretManagerContainer{
+			SecretManager: secret_manager.NewCompositeSecretManager([]secret_manager.SecretManager{
+				secret_manager.KeyringSecretManager{},
+				secret_manager.LocalConfigSecretManager{},
+				secret_manager.EnvSecretManager{},
+			}),
+		},
+		Providers:       providers,
+		LLMConfig:       llmConfig,
+		EmbeddingConfig: embeddingConfig,
+		GlobalState:     &flow_action.GlobalState{},
+	}, nil
+}
+
+// NewTempLocalExecContext is a workflow-facing wrapper around newTempLocalExecContext
+// that loads local/workspace configs via activities and applies any overrides.
+// Suitable for inline workflow helpers that need a basic ExecContext for LLM calls
+// (e.g. branch name or title generation) without the full per-worktree dev context
+// setup. It also returns the loaded local and workspace configs so callers that
+// need them downstream (e.g. for command permission merging) can avoid repeating
+// the same activity calls.
+func NewTempLocalExecContext(ctx workflow.Context, workspaceId, repoDir string, configOverrides common.ConfigOverrides) (flow_action.ExecContext, common.LocalPublicConfig, domain.WorkspaceConfig, error) {
+	localConfig, workspaceConfig, llmConfig, embeddingConfig, err := getConfigs(ctx, workspaceId)
+	if err != nil {
+		return flow_action.ExecContext{}, localConfig, workspaceConfig, err
+	}
+	if configOverrides.LLM != nil {
+		llmConfig = *configOverrides.LLM
+	}
+	if configOverrides.Embedding != nil {
+		embeddingConfig = *configOverrides.Embedding
+	}
+	providers := localConfig.Providers
+	if configOverrides.Providers != nil {
+		providers = *configOverrides.Providers
+	}
+	eCtx, err := newTempLocalExecContext(ctx, workspaceId, repoDir, providers, llmConfig, embeddingConfig)
+	if err != nil {
+		return flow_action.ExecContext{}, localConfig, workspaceConfig, err
+	}
+	return eCtx, localConfig, workspaceConfig, nil
 }
