@@ -600,9 +600,40 @@ func (c *embeddingCache) set(text, taskType string, vec embedding.EmbeddingVecto
 	if err != nil {
 		return fmt.Errorf("failed to marshal embedding for cache: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("failed to write cache file: %w", err)
+
+	tmpFile, err := os.CreateTemp(c.cacheDir, key+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary cache file: %w", err)
 	}
+
+	tmpPath := tmpFile.Name()
+	shouldRemoveTmp := true
+	defer func() {
+		if shouldRemoveTmp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("failed to write temporary cache file: %w", err)
+	}
+	if err := tmpFile.Chmod(0644); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("failed to set temporary cache file permissions: %w", err)
+	}
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("failed to sync temporary cache file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("failed to close temporary cache file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("failed to replace cache file: %w", err)
+	}
+	shouldRemoveTmp = false
 	return nil
 }
 
