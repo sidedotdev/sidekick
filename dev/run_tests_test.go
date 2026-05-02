@@ -298,7 +298,9 @@ func (s *RunTestsTestSuite) TestRunTestsWithRetryOnActivityError() {
 			var req flow_action.RequestForUser
 			signalCh.Receive(ctx, &req)
 			// Simulate user responding to retry prompt
-			workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "", flow_action.SignalNameUserResponse, flow_action.UserResponse{}).Get(ctx, nil)
+			workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "", flow_action.UserResponseSignalName(req.FlowActionId), flow_action.UserResponse{
+				FlowActionId: req.FlowActionId,
+			}).Get(ctx, nil)
 		})
 
 		// Execute the child workflow
@@ -386,7 +388,9 @@ func (s *RunTestsTestSuite) TestRunTestsWithMultipleCommandsPartialActivityError
 			var req flow_action.RequestForUser
 			signalCh.Receive(ctx, &req)
 			// Simulate user responding to retry prompt
-			workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "", flow_action.SignalNameUserResponse, flow_action.UserResponse{}).Get(ctx, nil)
+			workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "", flow_action.UserResponseSignalName(req.FlowActionId), flow_action.UserResponse{
+				FlowActionId: req.FlowActionId,
+			}).Get(ctx, nil)
 		})
 
 		// Execute the child workflow
@@ -468,7 +472,9 @@ func (s *RunTestsTestSuite) TestRunTestsWithMixedHeartbeatAndNonHeartbeatFailure
 				var req flow_action.RequestForUser
 				signalCh.Receive(ctx, &req)
 				userPromptCount++
-				workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "", flow_action.SignalNameUserResponse, flow_action.UserResponse{}).Get(ctx, nil)
+				workflow.SignalExternalWorkflow(ctx, req.OriginWorkflowId, "", flow_action.UserResponseSignalName(req.FlowActionId), flow_action.UserResponse{
+					FlowActionId: req.FlowActionId,
+				}).Get(ctx, nil)
 			}
 		})
 
