@@ -63,3 +63,5 @@ var AuthorEditBlockInitialWithPlan = panicParseMustache(promptsFS, "author_edit_
 var CodeContextInitial = panicParseMustache(promptsFS, "code_context/initial")
 var CodeContextFeedback = panicParseMustache(promptsFS, "code_context/feedback")
 var CodeContextRefineAndRank = panicParseMustache(promptsFS, "code_context/refine_and_rank")
+var FulfillmentInitial = panicParseMustache(promptsFS, "fulfillment/initial")
+var FulfillmentInitialWithPlan = panicParseMustache(promptsFS, "fulfillment/initial_with_plan")
