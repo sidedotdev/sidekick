@@ -372,3 +372,58 @@ func TestApplyDevPlanUpdates(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateAndCleanPlan(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		plan     DevPlan
+		expected DevPlan
+	}{
+		{
+			name: "valid plan with steps is unchanged",
+			plan: DevPlan{
+				Analysis: "x",
+				Steps: []DevStep{
+					{StepNumber: "1", Title: "S1", Definition: "d", Type: "edit", CompletionAnalysis: "c"},
+				},
+				Complete: true,
+			},
+			expected: DevPlan{
+				Analysis: "x",
+				Steps: []DevStep{
+					{StepNumber: "1", Title: "S1", Definition: "d", Type: "edit", CompletionAnalysis: "c"},
+				},
+				Complete: true,
+			},
+		},
+		{
+			name: "skip/none steps are filtered out",
+			plan: DevPlan{
+				Steps: []DevStep{
+					{StepNumber: "1", Title: "Skip me", Type: "skip"},
+					{StepNumber: "2", Title: "Keep me", Type: "edit"},
+					{StepNumber: "3", Title: "None either", Type: "none"},
+				},
+				Complete: true,
+			},
+			expected: DevPlan{
+				Steps: []DevStep{
+					{StepNumber: "2", Title: "Keep me", Type: "edit"},
+				},
+				Complete: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := ValidateAndCleanPlan(tt.plan)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
