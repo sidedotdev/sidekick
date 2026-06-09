@@ -505,7 +505,32 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 			return recordedPlan, nil
 		}
 	} else if chatResponse.GetStopReason() == string(openai.FinishReasonStop) || chatResponse.GetStopReason() == string(openai.FinishReasonToolCalls) {
-		if appendErr := addToolCallResponse(iteration.ExecCtx.ExecContext, iteration.ChatHistory, llm2.ToolResultBlock{
+		// When a planning prompt revision was already requested, the LLM may
+		// have decided the previously recorded plan still satisfies the
+		// requirements and skipped emitting another tool call. Treat the prior
+		// plan as final in that case so we don't loop forever.
+		if state.hasRevisedPerPlanningPrompt && state.devPlan.Complete && len(state.devPlan.Steps) > 0 {
+			userResponse, err := ApproveDevPlan(iteration.ExecCtx, state.devPlan)
+			if err != nil {
+				return nil, fmt.Errorf("error getting plan approval: %w", err)
+			}
+
+			v := workflow.GetVersion(iteration.ExecCtx, "dev-plan", workflow.DefaultVersion, 1)
+			if v == 1 {
+				iteration.AutoIterationCount = 0
+			}
+
+			if userResponse.Approved != nil && *userResponse.Approved {
+				return &state.devPlan, nil
+			}
+
+			if appendErr := addToolCallResponse(iteration.ExecCtx.ExecContext, iteration.ChatHistory, llm2.ToolResultBlock{
+				Content: llm2.TextContentBlocks(fmt.Sprintf("Plan was not approved. Current plan:\n%s\n\nPlease continue planning by taking this feedback into account:\n\n%s", state.devPlan.String(), userResponse.Content)),
+				Name:    recordDevPlanTool.Name,
+			}); appendErr != nil {
+				return nil, appendErr
+			}
+		} else if appendErr := addToolCallResponse(iteration.ExecCtx.ExecContext, iteration.ChatHistory, llm2.ToolResultBlock{
 			Content: llm2.TextContentBlocks("Expected a tool call to record the plan, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevPlanTool.Name + " tool."),
 			Name:    recordDevPlanTool.Name,
 		}); appendErr != nil {
