@@ -391,6 +391,12 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 					return result, nil
 				}
 
+				if workflow.GetVersion(dCtx, "dev-plan-reject-empty-steps", workflow.DefaultVersion, 1) == 1 && len(validatedPlan.Steps) == 0 {
+					result.IsError = true
+					result.Content = llm2.TextContentBlocks("Plan failed validation after update: the plan must contain at least one step with a valid type. The previously-recorded plan was not overwritten.")
+					return result, nil
+				}
+
 				state.devPlan = validatedPlan
 
 				if validatedPlan.Complete {
@@ -445,6 +451,12 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 				if err != nil {
 					result.IsError = true
 					result.Content = llm2.TextContentBlocks("Please output a new plan: Plan failed validation and was NOT recorded: " + err.Error())
+					return result, nil
+				}
+
+				if workflow.GetVersion(dCtx, "dev-plan-reject-empty-steps", workflow.DefaultVersion, 1) == 1 && len(validatedDevPlan.Steps) == 0 {
+					result.IsError = true
+					result.Content = llm2.TextContentBlocks("Please output a new plan: Plan was NOT recorded because it contains no steps with a valid type. The previously-recorded plan, if any, was not overwritten.")
 					return result, nil
 				}
 
@@ -504,17 +516,55 @@ func buildDevPlanIteration(iteration *LlmIteration) (*DevPlan, error) {
 		if recordedPlan != nil {
 			return recordedPlan, nil
 		}
-	} else if chatResponse.GetStopReason() == string(openai.FinishReasonStop) || chatResponse.GetStopReason() == string(openai.FinishReasonToolCalls) {
-		if appendErr := addToolCallResponse(iteration.ExecCtx.ExecContext, iteration.ChatHistory, llm2.ToolResultBlock{
-			Content: llm2.TextContentBlocks("Expected a tool call to record the plan, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevPlanTool.Name + " tool."),
-			Name:    recordDevPlanTool.Name,
-		}); appendErr != nil {
-			return nil, appendErr
-		}
-	} else { // FIXME handle other stop reasons with more specific logic
-		feedbackInfo := FeedbackInfo{Feedback: "Expected a tool call to record the dev requirements, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevRequirementsTool.Name + " tool."}
-		if appendErr := addDevRequirementsPrompt(iteration.ExecCtx.ExecContext, iteration.ChatHistory, feedbackInfo); appendErr != nil {
-			return nil, appendErr
+	} else {
+		stopReason := chatResponse.GetStopReason()
+		noToolCallStop := stopReason == string(openai.FinishReasonStop) || stopReason == string(openai.FinishReasonToolCalls)
+
+		// After we asked the LLM to revise per the planning prompt, the model
+		// may decide the previously-recorded plan already satisfies the
+		// revised requirements and respond without any tool call. Treat the
+		// prior complete plan as final in that case so we don't loop forever.
+		canSkipRevisionToolCall := stopReason == string(openai.FinishReasonStop) &&
+			state.hasRevisedPerPlanningPrompt &&
+			state.devPlan.Complete &&
+			len(state.devPlan.Steps) > 0 &&
+			workflow.GetVersion(iteration.ExecCtx, "dev-plan-approve-on-revise-no-toolcall", workflow.DefaultVersion, 1) == 1
+
+		switch {
+		case canSkipRevisionToolCall:
+			userResponse, err := ApproveDevPlan(iteration.ExecCtx, state.devPlan)
+			if err != nil {
+				return nil, fmt.Errorf("error getting plan approval: %w", err)
+			}
+
+			if workflow.GetVersion(iteration.ExecCtx, "dev-plan", workflow.DefaultVersion, 1) == 1 {
+				iteration.AutoIterationCount = 0
+			}
+
+			if userResponse.Approved != nil && *userResponse.Approved {
+				return &state.devPlan, nil
+			}
+
+			if appendErr := addToolCallResponse(iteration.ExecCtx.ExecContext, iteration.ChatHistory, llm2.ToolResultBlock{
+				Content: llm2.TextContentBlocks(fmt.Sprintf("Plan was not approved. Current plan:\n%s\n\nPlease continue planning by taking this feedback into account:\n\n%s", state.devPlan.String(), userResponse.Content)),
+				Name:    recordDevPlanTool.Name,
+			}); appendErr != nil {
+				return nil, appendErr
+			}
+
+		case noToolCallStop:
+			if appendErr := addToolCallResponse(iteration.ExecCtx.ExecContext, iteration.ChatHistory, llm2.ToolResultBlock{
+				Content: llm2.TextContentBlocks("Expected a tool call to record the plan, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevPlanTool.Name + " tool."),
+				Name:    recordDevPlanTool.Name,
+			}); appendErr != nil {
+				return nil, appendErr
+			}
+
+		default: // FIXME handle other stop reasons with more specific logic
+			feedbackInfo := FeedbackInfo{Feedback: "Expected a tool call to record the dev requirements, but didn't get it. Embedding the json in the content is not sufficient. Please record the plan via the " + recordDevRequirementsTool.Name + " tool."}
+			if appendErr := addDevRequirementsPrompt(iteration.ExecCtx.ExecContext, iteration.ChatHistory, feedbackInfo); appendErr != nil {
+				return nil, appendErr
+			}
 		}
 	}
 
