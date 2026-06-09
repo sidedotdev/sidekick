@@ -226,6 +226,8 @@ func getToolChatter(config common.ModelConfig) (llm.ToolChatter, error) {
 		return llm.AnthropicToolChat{}, nil
 	case llm.GoogleToolChatProviderType:
 		return llm.GoogleToolChat{}, nil
+	case llm.BedrockToolChatProviderType:
+		return nil, fmt.Errorf("bedrock provider is only supported via the llm2 stack")
 	case llm.UnspecifiedToolChatProviderType:
 		return nil, errors.New("tool chat provider was not specified")
 
@@ -247,6 +249,8 @@ func getProviderType(s string) (llm.ToolChatProviderType, error) {
 		return llm.OpenaiCompatibleToolChatProviderType, nil
 	case "openai_responses_compatible":
 		return llm.OpenaiResponsesCompatibleToolChatProviderType, nil
+	case "bedrock":
+		return llm.BedrockToolChatProviderType, nil
 	case "mock":
 		return llm.ToolChatProviderType("mock"), nil
 	}
