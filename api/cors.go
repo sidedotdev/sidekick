@@ -83,6 +83,8 @@ func BuildDefaultAllowedOrigins() *AllowedOrigins {
 	// Vite dev server origins when in development mode
 	if os.Getenv("SIDE_APP_ENV") == "development" {
 		origins["http://localhost:5173"] = struct{}{}
+		origins["http://localhost:5174"] = struct{}{}
+		origins["http://localhost:5175"] = struct{}{}
 		origins["http://127.0.0.1:5173"] = struct{}{}
 	}
 
