@@ -73,6 +73,7 @@ func (s *SearchRepositoryE2ETestSuite) ResetWorkflowEnvironment() {
 	s.env.SetTestTimeout(30 * time.Second)
 
 	s.env.RegisterActivity(env.EnvRunCommandActivity)
+	s.env.RegisterActivity(EnsureCoreIgnoreFileActivity)
 	s.wrapperWorkflow = func(ctx workflow.Context, envContainer env.EnvContainer, input SearchRepositoryInput) (string, error) {
 		ctx1 := utils.NoRetryCtx(ctx)
 		return SearchRepository(ctx1, envContainer, input)
