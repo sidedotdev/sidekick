@@ -459,7 +459,7 @@ func (e *LocalGitWorktreeEnv) CreateTemp(ctx context.Context, dir, pattern strin
 }
 
 func (e *DevPodEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
-	return walkCodeDirectorySSH(ctx, e, e.WorkingDirectory, ignoreFileNames, handleEntry)
+	return walkCodeDirectorySSH(ctx, e, e.LocalRepoDir, e.WorkingDirectory, ignoreFileNames, handleEntry)
 }
 
 func (e *DevPodEnv) GetType() EnvType {
@@ -585,7 +585,7 @@ func (e *DevPodEnv) CreateTemp(ctx context.Context, dir, pattern string) (string
 }
 
 func (e *OpenShellEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
-	return walkCodeDirectorySSH(ctx, e, e.WorkingDirectory, ignoreFileNames, handleEntry)
+	return walkCodeDirectorySSH(ctx, e, e.LocalRepoDir, e.WorkingDirectory, ignoreFileNames, handleEntry)
 }
 
 func (e *OpenShellEnv) GetType() EnvType {

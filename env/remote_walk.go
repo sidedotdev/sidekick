@@ -1,9 +1,11 @@
 package env
 
 import (
-	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -11,11 +13,8 @@ import (
 	"strings"
 
 	"sidekick/common"
-
-	"github.com/rs/zerolog/log"
+	"sidekick/gitwalk"
 )
-
-const remoteWalkerPrefix = "/tmp/side-walker-"
 
 // WalkEntry represents a single entry discovered during a directory walk.
 type WalkEntry struct {
@@ -36,154 +35,203 @@ func WalkCodeDirectoryViaEnv(
 	return ec.Env.Walk(ctx, common.SidekickIgnoreFileNames, handleEntry)
 }
 
+// remoteWalkInfoSeparator delimits the three sections of the single remote
+// info script's stdout (toplevel, HEAD, porcelain status). The exact byte
+// sequence is highly unlikely to appear in any tracked or untracked path.
+const remoteWalkInfoSeparator = "---SIDEKICK-WALK-SEP---"
+
+// The script takes the base directory as its first positional argument so
+// it runs against the requested working directory regardless of the env's
+// default cwd. Using `git -C "$1"` avoids relying on a writable cd.
+const remoteWalkInfoScript = `set -e
+git -C "$1" rev-parse --show-toplevel
+printf '%s\n' '` + remoteWalkInfoSeparator + `'
+git -C "$1" rev-parse HEAD
+printf '%s\n' '` + remoteWalkInfoSeparator + `'
+git -C "$1" status --porcelain=v1 -uall -z
+`
+
+// walkCodeDirectorySSH walks an SSH-reachable env's working directory by
+// driving gitwalk against a local clone of the same repository. The remote
+// is queried once for repo root, HEAD, and `git status --porcelain=v1 -uall -z`,
+// the missing commit (if any) is fetched into the local repo, then gitwalk
+// emits entries with overlay content read back from the remote via sftp.
+// Callbacks receive remote-absolute paths anchored at baseDirectory.
 func walkCodeDirectorySSH(
 	ctx context.Context,
 	sshEnv SSHCapableEnv,
+	localRepoDir string,
 	baseDirectory string,
 	ignoreFileNames []string,
 	handleEntry func(path string, isDir bool) error,
 ) error {
-	// Detect remote OS/arch for cross-compilation
-	envInfo, err := getRemoteEnvInfo(ctx, sshEnv)
-	if err != nil {
-		return fmt.Errorf("detect remote environment: %w", err)
+	if localRepoDir == "" {
+		return fmt.Errorf("env has no LocalRepoDir set; cannot walk %s via local git", baseDirectory)
 	}
 
-	targetOS := common.NormalizeOS(envInfo.OS)
-	targetArch := common.NormalizeArch(envInfo.Arch)
-
-	localBinaryPath, err := common.GetWalkerBinaryPath(targetOS, targetArch)
-	if err != nil {
-		return fmt.Errorf("get walker binary: %w", err)
-	}
-
-	sshArgs, err := sshEnv.SSHArgs(ctx)
-	if err != nil {
-		return fmt.Errorf("get SSH args: %w", err)
-	}
-
-	remotePath := remoteWalkerPrefix + filepath.Base(localBinaryPath)
-	if err := ensureRemoteBinary(ctx, sshArgs, localBinaryPath, remotePath); err != nil {
-		return fmt.Errorf("upload walker binary: %w", err)
-	}
-
-	return streamRemoteWalk(ctx, sshArgs, remotePath, baseDirectory, ignoreFileNames, handleEntry)
-}
-
-func getRemoteEnvInfo(ctx context.Context, sshEnv SSHCapableEnv) (GetEnvironmentInfoOutput, error) {
-	out, err := sshEnv.RunCommand(ctx, EnvRunCommandInput{
-		Command: "uname",
-		Args:    []string{"-sm"},
+	info, err := sshEnv.RunCommand(ctx, EnvRunCommandInput{
+		Command: "sh",
+		Args:    []string{"-c", remoteWalkInfoScript, "sidekick-walk", baseDirectory},
 	})
 	if err != nil {
-		return GetEnvironmentInfoOutput{}, fmt.Errorf("uname failed: %w", err)
+		return fmt.Errorf("collect remote git info: %w", err)
 	}
-	info := strings.TrimSpace(out.Stdout)
-	parts := strings.Fields(info)
-	if len(parts) < 2 {
-		return GetEnvironmentInfoOutput{}, fmt.Errorf("unexpected uname output: %s", info)
+	if info.ExitStatus != 0 {
+		return fmt.Errorf("collect remote git info exited %d: %s", info.ExitStatus, info.Stderr)
 	}
-	return GetEnvironmentInfoOutput{OS: parts[0], Arch: parts[1]}, nil
+
+	remoteRoot, remoteHead, porcelain, err := parseRemoteGitInfo(info.Stdout)
+	if err != nil {
+		return fmt.Errorf("parse remote git info: %w", err)
+	}
+
+	if err := ensureLocalHasCommit(ctx, sshEnv, localRepoDir, remoteHead, remoteRoot); err != nil {
+		return err
+	}
+
+	overlay, err := gitwalk.ChangesFromPorcelainZ(porcelain, func(relPath string) (io.ReadCloser, error) {
+		data, err := sshEnv.ReadFile(ctx, path.Join(remoteRoot, relPath))
+		if err != nil {
+			return nil, err
+		}
+		return io.NopCloser(bytes.NewReader(data)), nil
+	})
+	if err != nil {
+		return fmt.Errorf("parse remote porcelain: %w", err)
+	}
+
+	w, err := gitwalk.New(ctx, gitwalk.Options{
+		RepoPath:        localRepoDir,
+		Ref:             remoteHead,
+		Overlay:         sliceOverlay(overlay),
+		SideIgnoreFiles: ignoreFilesWithGitignore(ignoreFileNames),
+	})
+	if err != nil {
+		return err
+	}
+	defer w.Close()
+
+	subPrefix, ok := remoteSubPath(remoteRoot, baseDirectory)
+	if !ok {
+		return fmt.Errorf("base directory %q is not under remote repo root %q", baseDirectory, remoteRoot)
+	}
+
+	return w.Walk(ctx, func(d gitwalk.DirEntry) error {
+		p := d.Path()
+		if p == "" {
+			return nil
+		}
+		var rel string
+		if subPrefix == "" {
+			rel = p
+		} else {
+			switch {
+			case p == subPrefix:
+				return nil
+			case strings.HasPrefix(p, subPrefix+"/"):
+				rel = strings.TrimPrefix(p, subPrefix+"/")
+			case d.IsDir() && strings.HasPrefix(subPrefix+"/", p+"/"):
+				return nil
+			default:
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+		return handleEntry(path.Join(baseDirectory, rel), d.IsDir())
+	})
 }
 
-// ensureRemoteBinary checks whether the binary exists on the remote host and
-// uploads it via stdin pipe if it does not.
-func ensureRemoteBinary(ctx context.Context, sshArgs []string, localPath, remotePath string) error {
-	// Check if the binary already exists and is executable
-	checkCmd := exec.CommandContext(ctx, "ssh", append(cloneArgs(sshArgs), "test -x "+shellQuote(remotePath))...)
-	if err := checkCmd.Run(); err == nil {
-		log.Debug().Str("remotePath", remotePath).Msg("walker binary already present")
+func parseRemoteGitInfo(stdout string) (toplevel, head string, porcelain []byte, err error) {
+	sep := []byte("\n" + remoteWalkInfoSeparator + "\n")
+	data := []byte(stdout)
+	i := bytes.Index(data, sep)
+	if i < 0 {
+		return "", "", nil, errors.New("missing toplevel/HEAD separator")
+	}
+	toplevel = strings.TrimSpace(string(data[:i]))
+	rest := data[i+len(sep):]
+	j := bytes.Index(rest, sep)
+	if j < 0 {
+		return "", "", nil, errors.New("missing HEAD/porcelain separator")
+	}
+	head = strings.TrimSpace(string(rest[:j]))
+	porcelain = rest[j+len(sep):]
+	if toplevel == "" || head == "" {
+		return "", "", nil, errors.New("empty toplevel or HEAD")
+	}
+	return toplevel, head, porcelain, nil
+}
+
+// sshCommitFetcher is an optional interface that SSHCapableEnvs may implement
+// to provide their own way of fetching a commit into the local mirror repo.
+// When not implemented, the default ssh-based fetch is used. Tests use this
+// hook to substitute a file:// fetch so they don't need a real ssh server.
+type sshCommitFetcher interface {
+	FetchCommitForWalk(ctx context.Context, localRepo, sha, remoteRoot string) error
+}
+
+func ensureLocalHasCommit(ctx context.Context, sshEnv SSHCapableEnv, localRepo, sha, remoteRoot string) error {
+	if exec.CommandContext(ctx, "git", "-C", localRepo, "cat-file", "-e", sha+"^{commit}").Run() == nil {
 		return nil
 	}
-
-	log.Info().Str("remotePath", remotePath).Msg("uploading walker binary")
-
-	localFile, err := os.Open(localPath)
-	if err != nil {
-		return fmt.Errorf("open local binary: %w", err)
+	if f, ok := sshEnv.(sshCommitFetcher); ok {
+		return f.FetchCommitForWalk(ctx, localRepo, sha, remoteRoot)
 	}
-	defer localFile.Close()
+	return sshFetchCommitDefault(ctx, sshEnv, localRepo, sha, remoteRoot)
+}
 
-	uploadScript := fmt.Sprintf("cat > %s && chmod +x %s",
-		shellQuote(remotePath),
-		shellQuote(remotePath),
-	)
-	cmd := exec.CommandContext(ctx, "ssh", append(cloneArgs(sshArgs), uploadScript)...)
-	cmd.Stdin = localFile
-
+func sshFetchCommitDefault(ctx context.Context, sshEnv SSHCapableEnv, localRepo, sha, remoteRoot string) error {
+	sshArgs, err := sshEnv.SSHArgs(ctx)
+	if err != nil {
+		return fmt.Errorf("ssh args: %w", err)
+	}
+	dest, opts := splitSSHDestination(sshArgs)
+	if dest == "" {
+		return fmt.Errorf("could not determine ssh destination from args %v", sshArgs)
+	}
+	gitSSH := "ssh"
+	for _, a := range opts {
+		gitSSH += " " + shellQuote(a)
+	}
+	fetchURL := dest + ":" + remoteRoot
+	cmd := exec.CommandContext(ctx, "git", "-C", localRepo,
+		"fetch", "--no-tags", "--no-write-fetch-head", fetchURL, sha)
+	cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+gitSSH)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("upload failed: %w: %s", err, string(out))
+		return fmt.Errorf("git fetch %s %s: %w: %s", fetchURL, sha, err, string(out))
 	}
 	return nil
 }
 
-// streamRemoteWalk executes the walker binary on the remote host and processes
-// the output stream in realtime. The walker protocol emits one line per entry
-// in the format "f:<relative-path>" or "d:<relative-path>".
-func streamRemoteWalk(
-	ctx context.Context,
-	sshArgs []string,
-	walkerPath string,
-	baseDirectory string,
-	ignoreFileNames []string,
-	handleEntry func(path string, isDir bool) error,
-) error {
-	remoteCmd := shellQuote(walkerPath) + " " + shellQuote(baseDirectory)
-	for _, name := range ignoreFileNames {
-		remoteCmd += " " + shellQuote(name)
+// splitSSHDestination returns the trailing destination token and the
+// preceding option args, ignoring a final "--" separator if present.
+func splitSSHDestination(args []string) (string, []string) {
+	n := len(args)
+	if n == 0 {
+		return "", nil
 	}
-	// -tt forces PTY allocation so output is not buffered
-	runArgs := append([]string{"-tt"}, append(cloneArgs(sshArgs), remoteCmd)...)
-
-	cmd := exec.CommandContext(ctx, "ssh", runArgs...)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("create stdout pipe: %w", err)
+	if args[n-1] == "--" {
+		n--
 	}
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start remote walker: %w", err)
+	if n == 0 {
+		return "", nil
 	}
-
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		line := strings.TrimRight(scanner.Text(), "\r")
-		ok, isDir, relPath := parseWalkerLine(line)
-		if !ok {
-			continue
-		}
-
-		fullPath := path.Join(baseDirectory, relPath)
-		if err := handleEntry(fullPath, isDir); err != nil {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			return err
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		_ = cmd.Wait()
-		return fmt.Errorf("read remote walker output: %w", err)
-	}
-
-	return cmd.Wait()
+	return args[n-1], args[:n-1]
 }
 
-// parseWalkerLine parses a single line of the walker binary output protocol.
-// Returns (ok, isDir, relativePath).
-func parseWalkerLine(line string) (bool, bool, string) {
-	if len(line) < 2 || line[1] != ':' {
-		return false, false, ""
+// remoteSubPath returns the slash-separated path of workingDir underneath
+// repoRoot, or "" when they refer to the same directory. The second return
+// value is false when workingDir is outside repoRoot.
+func remoteSubPath(repoRoot, workingDir string) (string, bool) {
+	root := path.Clean(repoRoot)
+	wd := path.Clean(workingDir)
+	if root == wd {
+		return "", true
 	}
-	prefix := line[0]
-	if prefix != 'f' && prefix != 'd' {
-		return false, false, ""
+	if !strings.HasPrefix(wd, root+"/") {
+		return "", false
 	}
-	return true, prefix == 'd', line[2:]
-}
-
-func cloneArgs(args []string) []string {
-	c := make([]string, len(args))
-	copy(c, args)
-	return c
+	return strings.TrimPrefix(wd, root+"/"), true
 }

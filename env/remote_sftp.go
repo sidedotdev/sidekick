@@ -357,6 +357,58 @@ func randomTempSuffix() string {
 	return hex.EncodeToString(b[:])
 }
 
+// cloneArgs returns a fresh copy of args so callers can safely append to it.
+func cloneArgs(args []string) []string {
+	c := make([]string, len(args))
+	copy(c, args)
+	return c
+}
+
+// getRemoteEnvInfo runs `uname -sm` over ssh to detect the remote OS/arch so
+// the matching prebuilt helper binary (the sftp server) can be uploaded.
+func getRemoteEnvInfo(ctx context.Context, sshEnv SSHCapableEnv) (GetEnvironmentInfoOutput, error) {
+	out, err := sshEnv.RunCommand(ctx, EnvRunCommandInput{
+		Command: "uname",
+		Args:    []string{"-sm"},
+	})
+	if err != nil {
+		return GetEnvironmentInfoOutput{}, fmt.Errorf("uname failed: %w", err)
+	}
+	info := strings.TrimSpace(out.Stdout)
+	parts := strings.Fields(info)
+	if len(parts) < 2 {
+		return GetEnvironmentInfoOutput{}, fmt.Errorf("unexpected uname output: %s", info)
+	}
+	return GetEnvironmentInfoOutput{OS: parts[0], Arch: parts[1]}, nil
+}
+
+// ensureRemoteBinary checks whether the binary exists on the remote host and
+// uploads it via stdin pipe if it does not.
+func ensureRemoteBinary(ctx context.Context, sshArgs []string, localPath, remotePath string) error {
+	checkCmd := exec.CommandContext(ctx, "ssh", append(cloneArgs(sshArgs), "test -x "+shellQuote(remotePath))...)
+	if err := checkCmd.Run(); err == nil {
+		return nil
+	}
+
+	localFile, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("open local binary: %w", err)
+	}
+	defer localFile.Close()
+
+	uploadScript := fmt.Sprintf("cat > %s && chmod +x %s",
+		shellQuote(remotePath),
+		shellQuote(remotePath),
+	)
+	cmd := exec.CommandContext(ctx, "ssh", append(cloneArgs(sshArgs), uploadScript)...)
+	cmd.Stdin = localFile
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("upload failed: %w: %s", err, string(out))
+	}
+	return nil
+}
+
 // latencyReaderWriter wraps an io.Reader and io.WriteCloser, injecting a delay before each operation.
 type latencyReaderWriter struct {
 	r     io.Reader
