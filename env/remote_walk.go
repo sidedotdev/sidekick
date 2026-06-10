@@ -24,6 +24,47 @@ type WalkEntry struct {
 	IsDir bool
 }
 
+// WalkEntryWithContent is an entry from an entry-based walk. Open is nil
+// for directories; for files it returns the entry's content as observed
+// by the walker. The reader is only guaranteed to be valid until the
+// next entry callback returns; callers wanting to defer the read should
+// copy the bytes inline.
+type WalkEntryWithContent struct {
+	Path  string
+	IsDir bool
+	Open  func(ctx context.Context) (io.ReadCloser, error)
+}
+
+// RemoteWalkContentMode selects how WalkCodeDirectoryEntriesViaEnv reads
+// content for entries on an SSH-backed env. See the package-level
+// constants for the available values.
+type RemoteWalkContentMode string
+
+const (
+	// RemoteWalkContentModeSFTP reads every file's content via the env's
+	// SFTP transport. This is the default — simpler and lower-latency for
+	// small numbers of file reads.
+	RemoteWalkContentModeSFTP RemoteWalkContentMode = "sftp"
+	// RemoteWalkContentModeSnapshot reads unchanged tracked files from
+	// local git objects (via gitwalk's cat-file pool) and falls back to
+	// SFTP only for overlay-changed or untracked files.
+	RemoteWalkContentModeSnapshot RemoteWalkContentMode = "snapshot"
+)
+
+// remoteWalkContentModeEnv lets operators flip the default content mode
+// without recompiling. Unset / unrecognized values resolve to the SFTP
+// default.
+const remoteWalkContentModeEnv = "SIDEKICK_REMOTE_WALK_CONTENT_MODE"
+
+func remoteWalkContentMode() RemoteWalkContentMode {
+	switch RemoteWalkContentMode(os.Getenv(remoteWalkContentModeEnv)) {
+	case RemoteWalkContentModeSnapshot:
+		return RemoteWalkContentModeSnapshot
+	default:
+		return RemoteWalkContentModeSFTP
+	}
+}
+
 // WalkCodeDirectoryViaEnv walks the environment's working directory using the
 // sidekick ignore file set. It delegates to the Env.Walk method, which handles
 // both local and remote environments transparently.
@@ -33,6 +74,31 @@ func WalkCodeDirectoryViaEnv(
 	handleEntry func(path string, isDir bool) error,
 ) error {
 	return ec.Env.Walk(ctx, common.SidekickIgnoreFileNames, handleEntry)
+}
+
+// WalkCodeDirectoryEntriesViaEnv walks the environment's working directory
+// like WalkCodeDirectoryViaEnv but yields entries carrying an Open callback
+// for file content. For SSH-backed envs the content source is chosen by the
+// active RemoteWalkContentMode.
+func WalkCodeDirectoryEntriesViaEnv(
+	ctx context.Context,
+	ec EnvContainer,
+	handleEntry func(WalkEntryWithContent) error,
+) error {
+	switch env := ec.Env.(type) {
+	case *LocalEnv:
+		return walkCodeDirectoryEntries(ctx, env.WorkingDirectory, common.SidekickIgnoreFileNames, handleEntry)
+	case *LocalGitWorktreeEnv:
+		return walkCodeDirectoryEntries(ctx, env.WorkingDirectory, common.SidekickIgnoreFileNames, handleEntry)
+	case *DevPodEnv:
+		return walkCodeDirectorySSHEntries(ctx, env, env.LocalRepoDir, env.WorkingDirectory,
+			common.SidekickIgnoreFileNames, remoteWalkContentMode(), handleEntry)
+	case *OpenShellEnv:
+		return walkCodeDirectorySSHEntries(ctx, env, env.LocalRepoDir, env.WorkingDirectory,
+			common.SidekickIgnoreFileNames, remoteWalkContentMode(), handleEntry)
+	default:
+		return fmt.Errorf("unsupported env type %s for entry walk", ec.Env.GetType())
+	}
 }
 
 // remoteWalkInfoSeparator delimits the three sections of the single remote
@@ -65,6 +131,27 @@ func walkCodeDirectorySSH(
 	ignoreFileNames []string,
 	handleEntry func(path string, isDir bool) error,
 ) error {
+	return walkCodeDirectorySSHEntries(ctx, sshEnv, localRepoDir, baseDirectory, ignoreFileNames,
+		remoteWalkContentMode(), func(e WalkEntryWithContent) error {
+			return handleEntry(e.Path, e.IsDir)
+		})
+}
+
+// walkCodeDirectorySSHEntries is the entry-callback core for SSH-backed
+// envs. mode selects how file content is opened: RemoteWalkContentModeSFTP
+// always reads via the env's SFTP transport; RemoteWalkContentModeSnapshot
+// reads unchanged tracked files from local git objects via the gitwalk
+// cat-file pool and falls back to SFTP only for overlay (modified, added,
+// renamed-to, untracked) entries.
+func walkCodeDirectorySSHEntries(
+	ctx context.Context,
+	sshEnv SSHCapableEnv,
+	localRepoDir string,
+	baseDirectory string,
+	ignoreFileNames []string,
+	mode RemoteWalkContentMode,
+	handleEntry func(WalkEntryWithContent) error,
+) error {
 	if localRepoDir == "" {
 		return fmt.Errorf("env has no LocalRepoDir set; cannot walk %s via local git", baseDirectory)
 	}
@@ -89,15 +176,27 @@ func walkCodeDirectorySSH(
 		return err
 	}
 
-	overlay, err := gitwalk.ChangesFromPorcelainZ(porcelain, func(relPath string) (io.ReadCloser, error) {
+	readRemoteRel := func(relPath string) (io.ReadCloser, error) {
 		data, err := sshEnv.ReadFile(ctx, path.Join(remoteRoot, relPath))
 		if err != nil {
 			return nil, err
 		}
 		return io.NopCloser(bytes.NewReader(data)), nil
-	})
+	}
+
+	overlay, err := gitwalk.ChangesFromPorcelainZ(porcelain, readRemoteRel)
 	if err != nil {
 		return fmt.Errorf("parse remote porcelain: %w", err)
+	}
+
+	// overlayPaths tracks every path touched by the working-copy overlay
+	// (added/modified/renamed-to/untracked) so snapshot mode can route
+	// those reads through SFTP instead of stale local blobs.
+	overlayPaths := make(map[string]struct{}, len(overlay))
+	for _, c := range overlay {
+		if c.Kind != gitwalk.ChangeDeleted {
+			overlayPaths[c.Path] = struct{}{}
+		}
 	}
 
 	w, err := gitwalk.New(ctx, gitwalk.Options{
@@ -139,7 +238,26 @@ func walkCodeDirectorySSH(
 				return nil
 			}
 		}
-		return handleEntry(path.Join(baseDirectory, rel), d.IsDir())
+		entry := WalkEntryWithContent{
+			Path:  path.Join(baseDirectory, rel),
+			IsDir: d.IsDir(),
+		}
+		if !d.IsDir() {
+			repoRelPath := p
+			_, isOverlay := overlayPaths[repoRelPath]
+			useSnapshot := mode == RemoteWalkContentModeSnapshot && !isOverlay
+			if useSnapshot {
+				snapEntry := d
+				entry.Open = func(_ context.Context) (io.ReadCloser, error) {
+					return snapEntry.Open()
+				}
+			} else {
+				entry.Open = func(_ context.Context) (io.ReadCloser, error) {
+					return readRemoteRel(repoRelPath)
+				}
+			}
+		}
+		return handleEntry(entry)
 	})
 }
 

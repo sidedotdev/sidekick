@@ -3,6 +3,7 @@ package env
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -179,7 +180,7 @@ func (f *fakeSSHEnv) FetchCommitForWalk(ctx context.Context, localRepo, sha, rem
 }
 
 // runGit runs a git command in dir, failing the test on error.
-func runGit(t *testing.T, dir string, args ...string) {
+func runGit(t testing.TB, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -192,7 +193,7 @@ func runGit(t *testing.T, dir string, args ...string) {
 }
 
 // gitOut runs a git command and returns its trimmed stdout.
-func gitOut(t *testing.T, dir string, args ...string) string {
+func gitOut(t testing.TB, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -212,7 +213,7 @@ func bytesTrim(b []byte) []byte {
 // representing the local mirror used by gitwalk and one acting as the remote
 // working tree. The remote repo is configured to allow fetches by sha so the
 // test fetch path can grab newly-created commits.
-func setupLocalAndRemoteGitRepos(t *testing.T, files map[string]string) (localRepo, remoteRepo string) {
+func setupLocalAndRemoteGitRepos(t testing.TB, files map[string]string) (localRepo, remoteRepo string) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -427,4 +428,137 @@ func TestWalkCodeDirectorySSH_RemoteDirty(t *testing.T) {
 	data, err := envObj.ReadFile(context.Background(), filepath.Join(remoteRepo, "modify.go"))
 	require.NoError(t, err)
 	require.Contains(t, string(data), "// after")
+}
+
+// entryReadResult is a flattened view of a WalkEntryWithContent used by
+// the content-parity tests below.
+type entryReadResult struct {
+	Path    string
+	IsDir   bool
+	Content []byte
+}
+
+func walkRemoteEntries(t testing.TB, remoteRepo, localRepo string, mode RemoteWalkContentMode) []entryReadResult {
+	t.Helper()
+	envObj := &fakeSSHEnv{LocalEnv: &LocalEnv{WorkingDirectory: remoteRepo}}
+	var results []entryReadResult
+	err := walkCodeDirectorySSHEntries(context.Background(), envObj, localRepo, remoteRepo,
+		common.SidekickIgnoreFileNames, mode, func(e WalkEntryWithContent) error {
+			rel, _ := filepath.Rel(remoteRepo, e.Path)
+			r := entryReadResult{Path: rel, IsDir: e.IsDir}
+			if !e.IsDir {
+				require.NotNil(t, e.Open, "file entry %s should have an Open callback", rel)
+				rc, err := e.Open(context.Background())
+				require.NoError(t, err, "open %s", rel)
+				data, err := io.ReadAll(rc)
+				require.NoError(t, rc.Close())
+				require.NoError(t, err, "read %s", rel)
+				r.Content = data
+			}
+			results = append(results, r)
+			return nil
+		})
+	require.NoError(t, err)
+	sort.Slice(results, func(i, j int) bool { return results[i].Path < results[j].Path })
+	return results
+}
+
+// TestWalkCodeDirectorySSHEntries_ContentParityAcrossModes asserts that
+// SFTP and snapshot modes yield byte-identical content for every entry
+// across clean, modified, untracked, and renamed file states. These are
+// the four cases the snapshot mode must handle without diverging from
+// the always-SFTP baseline.
+func TestWalkCodeDirectorySSHEntries_ContentParityAcrossModes(t *testing.T) {
+	t.Parallel()
+
+	localRepo, remoteRepo := setupLocalAndRemoteGitRepos(t, map[string]string{
+		"clean.go":        "package clean\n// pristine\n",
+		"modify.go":       "package modify\n// before\n",
+		"rename_from.go":  "package rename\n// original\n",
+		"subdir/other.go": "package sub\n",
+	})
+
+	require.NoError(t, os.WriteFile(filepath.Join(remoteRepo, "modify.go"),
+		[]byte("package modify\n// after\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(remoteRepo, "untracked.go"),
+		[]byte("package untracked\n// fresh\n"), 0644))
+	runGit(t, remoteRepo, "mv", "rename_from.go", "rename_to.go")
+
+	sftp := walkRemoteEntries(t, remoteRepo, localRepo, RemoteWalkContentModeSFTP)
+	snap := walkRemoteEntries(t, remoteRepo, localRepo, RemoteWalkContentModeSnapshot)
+
+	require.Equal(t, len(sftp), len(snap), "entry count must match across modes")
+	for i := range sftp {
+		require.Equal(t, sftp[i].Path, snap[i].Path, "path order must match across modes")
+		require.Equal(t, sftp[i].IsDir, snap[i].IsDir, "isDir must match for %s", sftp[i].Path)
+		require.Equal(t, sftp[i].Content, snap[i].Content,
+			"content must be byte-identical across modes for %s", sftp[i].Path)
+	}
+
+	// Cross-check against the on-disk remote so we know both modes
+	// agree with the real content, not just with each other.
+	for _, r := range sftp {
+		if r.IsDir {
+			continue
+		}
+		expected, err := os.ReadFile(filepath.Join(remoteRepo, r.Path))
+		require.NoError(t, err)
+		require.Equal(t, expected, r.Content, "entry content must equal on-disk remote for %s", r.Path)
+	}
+
+	// Sanity-check that the expected categories are exercised.
+	paths := make([]string, 0, len(sftp))
+	for _, r := range sftp {
+		paths = append(paths, r.Path)
+	}
+	for _, must := range []string{"clean.go", "modify.go", "untracked.go", "rename_to.go", "subdir/other.go"} {
+		require.Contains(t, paths, must)
+	}
+	require.NotContains(t, paths, "rename_from.go", "deleted source of rename should not appear")
+}
+
+// BenchmarkWalkCodeDirectorySSHEntries_Modes times the two content modes
+// over a synthetic repo so the default mode choice can be revisited with
+// real measurements. Set BENCH_REMOTE_WALK=1 to run.
+func BenchmarkWalkCodeDirectorySSHEntries_Modes(b *testing.B) {
+	if os.Getenv("BENCH_REMOTE_WALK") == "" {
+		b.Skip("set BENCH_REMOTE_WALK=1 to run remote walk benchmark")
+	}
+
+	files := make(map[string]string, 500)
+	for i := 0; i < 500; i++ {
+		files[fmt.Sprintf("pkg%02d/file%03d.go", i%20, i)] =
+			fmt.Sprintf("package pkg%02d\n// generated content for file %d, more bytes so reads are non-trivial\n", i%20, i)
+	}
+	localRepo, remoteRepo := setupLocalAndRemoteGitRepos(b, files)
+	require.NoError(b, os.WriteFile(filepath.Join(remoteRepo, "pkg00", "file000.go"),
+		[]byte("package pkg00\n// modified\n"), 0644))
+	require.NoError(b, os.WriteFile(filepath.Join(remoteRepo, "untracked.go"), []byte("package untracked\n"), 0644))
+
+	envObj := &fakeSSHEnv{LocalEnv: &LocalEnv{WorkingDirectory: remoteRepo}}
+
+	for _, mode := range []RemoteWalkContentMode{RemoteWalkContentModeSFTP, RemoteWalkContentModeSnapshot} {
+		b.Run(string(mode), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				err := walkCodeDirectorySSHEntries(context.Background(), envObj, localRepo, remoteRepo,
+					common.SidekickIgnoreFileNames, mode, func(e WalkEntryWithContent) error {
+						if e.IsDir {
+							return nil
+						}
+						rc, err := e.Open(context.Background())
+						if err != nil {
+							return err
+						}
+						if _, err := io.Copy(io.Discard, rc); err != nil {
+							rc.Close()
+							return err
+						}
+						return rc.Close()
+					})
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }

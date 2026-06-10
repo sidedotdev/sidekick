@@ -29,6 +29,21 @@ func walkCodeDirectory(
 	ignoreFileNames []string,
 	handleEntry func(path string, isDir bool) error,
 ) error {
+	return walkCodeDirectoryEntries(ctx, workingDir, ignoreFileNames, func(e WalkEntryWithContent) error {
+		return handleEntry(e.Path, e.IsDir)
+	})
+}
+
+// walkCodeDirectoryEntries is the entry-callback core used by the path
+// wrapper and by WalkCodeDirectoryEntriesViaEnv. File entries carry an
+// Open that reads from local git blobs along the gitwalk path and from
+// disk on the fallback path.
+func walkCodeDirectoryEntries(
+	ctx context.Context,
+	workingDir string,
+	ignoreFileNames []string,
+	handleEntry func(WalkEntryWithContent) error,
+) error {
 	info, err := os.Stat(workingDir)
 	if err != nil {
 		return err
@@ -52,7 +67,7 @@ func walkCodeDirectoryGit(
 	ctx context.Context,
 	workingDir string,
 	ignoreFileNames []string,
-	handleEntry func(path string, isDir bool) error,
+	handleEntry func(WalkEntryWithContent) error,
 ) (bool, error) {
 	repoRoot, ok := resolveRepoRoot(ctx, workingDir)
 	if !ok {
@@ -116,7 +131,14 @@ func walkCodeDirectoryGit(
 			}
 		}
 		abs := filepath.Join(workingDir, filepath.FromSlash(relToWD))
-		return handleEntry(abs, d.IsDir())
+		entry := WalkEntryWithContent{Path: abs, IsDir: d.IsDir()}
+		if !d.IsDir() {
+			openEntry := d
+			entry.Open = func(_ context.Context) (io.ReadCloser, error) {
+				return openEntry.Open()
+			}
+		}
+		return handleEntry(entry)
 	})
 }
 
@@ -148,7 +170,7 @@ func relativeSubPath(repoRoot, workingDir string) (string, bool) {
 func walkCodeDirectoryFallback(
 	workingDir string,
 	ignoreFileNames []string,
-	handleEntry func(path string, isDir bool) error,
+	handleEntry func(WalkEntryWithContent) error,
 ) error {
 	ignoreManager, err := common.NewIgnoreManager(workingDir, ignoreFileNames)
 	if err != nil {
@@ -177,7 +199,14 @@ func walkCodeDirectoryFallback(
 				}
 			}
 		}
-		return handleEntry(p, entry.IsDir())
+		ent := WalkEntryWithContent{Path: p, IsDir: entry.IsDir()}
+		if !entry.IsDir() {
+			absPath := p
+			ent.Open = func(_ context.Context) (io.ReadCloser, error) {
+				return os.Open(absPath)
+			}
+		}
+		return handleEntry(ent)
 	})
 }
 
