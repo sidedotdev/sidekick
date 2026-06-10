@@ -15,6 +15,11 @@ type GitCommitParams struct {
 	CommitAll      bool
 	CommitterName  string
 	CommitterEmail string
+	// IgnoreNothingToCommit causes the activity to succeed silently when the
+	// working tree has no staged changes, instead of returning an error. This
+	// is useful in flows that want to commit if there's anything to commit but
+	// don't want a clean tree to be treated as a failure.
+	IgnoreNothingToCommit bool
 }
 
 func GitCommitActivity(ctx context.Context, envContainer env.EnvContainer, params GitCommitParams) (string, error) {
@@ -50,9 +55,29 @@ func GitCommitActivity(ctx context.Context, envContainer env.EnvContainer, param
 		return "", fmt.Errorf("failed to git commit: %v", err)
 	}
 	if gitCommitOutput.ExitStatus != 0 {
+		if params.IgnoreNothingToCommit && isNothingToCommitOutput(gitCommitOutput.Stdout, gitCommitOutput.Stderr) {
+			return gitCommitOutput.Stdout, nil
+		}
 		return "", fmt.Errorf("git commit failed: %s", gitCommitOutput.Stdout+"\n"+gitCommitOutput.Stderr)
 	}
 	return gitCommitOutput.Stdout, nil
+}
+
+// isNothingToCommitOutput reports whether the git commit output indicates that
+// there was simply nothing to commit (clean tree, only untracked files, or
+// unstaged modifications), as opposed to a genuine commit failure.
+func isNothingToCommitOutput(stdout, stderr string) bool {
+	combined := stdout + "\n" + stderr
+	for _, marker := range []string{
+		"nothing to commit",
+		"no changes added to commit",
+		"nothing added to commit",
+	} {
+		if strings.Contains(combined, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // GitUserConfig holds the git user configuration
