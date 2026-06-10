@@ -211,6 +211,7 @@ func StartWorker(hostPort string, taskQueue string) *Worker {
 	w.RegisterActivity(dev.GetRepoConfigActivity)
 	w.RegisterActivity(dev.GetRepoConfigActivityV2)
 	w.RegisterActivity(dev.GetSymbolsActivity)
+	w.RegisterActivity(dev.EnsureCoreIgnoreFileActivity)
 	w.RegisterActivity(dev.ResolveToolNameMappingActivity)
 	w.RegisterActivity(devManagerActivities)
 	w.RegisterActivity(dev.ApplyEditBlocksActivity) // backcompat for <= v0.4.2
