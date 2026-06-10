@@ -140,6 +140,69 @@ func TestGitCommitActivity_NoChangesToCommit(t *testing.T) {
 	require.Contains(t, err.Error(), "git commit failed")
 }
 
+func TestGitCommitActivity_IgnoreNothingToCommit(t *testing.T) {
+	t.Parallel()
+
+	t.Run("clean tree returns no error", func(t *testing.T) {
+		t.Parallel()
+		repoDir, cleanup := createTempGitRepo(t)
+		defer cleanup()
+
+		ctx := context.Background()
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{
+			RepoDir: repoDir,
+		})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		_, err = GitCommitActivity(ctx, envContainer, GitCommitParams{
+			CommitMessage:         "noop",
+			CommitAll:             true,
+			IgnoreNothingToCommit: true,
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("unstaged modifications return no error", func(t *testing.T) {
+		t.Parallel()
+		repoDir, cleanup := createTempGitRepo(t)
+		defer cleanup()
+
+		// Create an initial commit so that subsequent unstaged modifications
+		// produce the "no changes added to commit" path rather than the
+		// "nothing to commit, working tree clean" path.
+		filePath := repoDir + "/README.md"
+		require.NoError(t, os.WriteFile(filePath, []byte("initial\n"), 0644))
+		runGit(t, repoDir, "config", "user.email", "test@example.com")
+		runGit(t, repoDir, "config", "user.name", "Test User")
+		runGit(t, repoDir, "add", "README.md")
+		runGit(t, repoDir, "commit", "-m", "initial")
+
+		require.NoError(t, os.WriteFile(filePath, []byte("modified\n"), 0644))
+
+		ctx := context.Background()
+		devEnv, err := env.NewLocalEnv(ctx, env.LocalEnvParams{
+			RepoDir: repoDir,
+		})
+		require.NoError(t, err)
+		envContainer := env.EnvContainer{Env: devEnv}
+
+		_, err = GitCommitActivity(ctx, envContainer, GitCommitParams{
+			CommitMessage:         "noop",
+			IgnoreNothingToCommit: true,
+		})
+		require.NoError(t, err)
+	})
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v failed: %s", args, string(out))
+}
+
 func createTempGitRepo(t *testing.T) (string, func()) {
 	t.Helper()
 
