@@ -2,13 +2,17 @@ package env
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -184,6 +188,173 @@ func doSFTPRead(client *sftp.Client, path string) ([]byte, error) {
 	}
 	defer f.Close()
 	return io.ReadAll(f)
+}
+
+// sftpWriteFile writes data to a file via SFTP, reconnecting once on failure.
+func sftpWriteFile(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p string, data []byte, perm fs.FileMode) error {
+	client, err := conn.getOrDial(ctx, sshEnv)
+	if err != nil {
+		return err
+	}
+
+	err = doSFTPWrite(client, p, data, perm)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+			return err
+		}
+		client, retryErr := conn.resetAndDial(ctx, sshEnv)
+		if retryErr != nil {
+			return fmt.Errorf("write %s: %w (reconnect: %v)", p, err, retryErr)
+		}
+		return doSFTPWrite(client, p, data, perm)
+	}
+	return nil
+}
+
+// sftpMkdirAll creates directories via SFTP, reconnecting once on failure.
+func sftpMkdirAll(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p string, perm fs.FileMode) error {
+	client, err := conn.getOrDial(ctx, sshEnv)
+	if err != nil {
+		return err
+	}
+
+	err = doSFTPMkdirAll(client, p, perm)
+	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			return err
+		}
+		client, retryErr := conn.resetAndDial(ctx, sshEnv)
+		if retryErr != nil {
+			return fmt.Errorf("mkdirall %s: %w (reconnect: %v)", p, err, retryErr)
+		}
+		return doSFTPMkdirAll(client, p, perm)
+	}
+	return nil
+}
+
+// sftpStat stats a path via SFTP, reconnecting once on failure.
+func sftpStat(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p string) (fs.FileInfo, error) {
+	client, err := conn.getOrDial(ctx, sshEnv)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := client.Stat(p)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+			return nil, err
+		}
+		client, retryErr := conn.resetAndDial(ctx, sshEnv)
+		if retryErr != nil {
+			return nil, fmt.Errorf("stat %s: %w (reconnect: %v)", p, err, retryErr)
+		}
+		return client.Stat(p)
+	}
+	return info, nil
+}
+
+// sftpRemove deletes a file or empty directory via SFTP, reconnecting once on failure.
+func sftpRemove(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, p string) error {
+	client, err := conn.getOrDial(ctx, sshEnv)
+	if err != nil {
+		return err
+	}
+
+	err = client.Remove(p)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+			return err
+		}
+		client, retryErr := conn.resetAndDial(ctx, sshEnv)
+		if retryErr != nil {
+			return fmt.Errorf("remove %s: %w (reconnect: %v)", p, err, retryErr)
+		}
+		return client.Remove(p)
+	}
+	return nil
+}
+
+// sftpCreateTemp creates a uniquely-named file under dir via SFTP, returning
+// its full path. The pattern follows os.CreateTemp semantics: the last "*" in
+// pattern is replaced with a random string (or appended if absent). The dir
+// must be absolute; the caller is responsible for resolving relative dirs.
+func sftpCreateTemp(ctx context.Context, conn *sftpConn, sshEnv SSHCapableEnv, dir, pattern string) (string, error) {
+	prefix, suffix := pattern, ""
+	if i := strings.LastIndex(pattern, "*"); i >= 0 {
+		prefix, suffix = pattern[:i], pattern[i+1:]
+	}
+
+	client, err := conn.getOrDial(ctx, sshEnv)
+	if err != nil {
+		return "", err
+	}
+
+	name, err := doSFTPCreateTemp(client, dir, prefix, suffix)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+			return "", err
+		}
+		client, retryErr := conn.resetAndDial(ctx, sshEnv)
+		if retryErr != nil {
+			return "", fmt.Errorf("createtemp %s/%s: %w (reconnect: %v)", dir, pattern, err, retryErr)
+		}
+		return doSFTPCreateTemp(client, dir, prefix, suffix)
+	}
+	return name, nil
+}
+
+func doSFTPWrite(client *sftp.Client, p string, data []byte, perm fs.FileMode) error {
+	f, err := client.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := f.Chmod(perm); err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	return nil
+}
+
+func doSFTPMkdirAll(client *sftp.Client, p string, perm fs.FileMode) error {
+	if err := client.MkdirAll(p); err != nil {
+		return err
+	}
+	// MkdirAll on github.com/pkg/sftp doesn't take a mode; apply it to the leaf
+	// to match os.MkdirAll's behavior on the final directory.
+	if err := client.Chmod(p, perm); err != nil && !errors.Is(err, os.ErrPermission) {
+		return err
+	}
+	return nil
+}
+
+func doSFTPCreateTemp(client *sftp.Client, dir, prefix, suffix string) (string, error) {
+	const maxAttempts = 10000
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		name := path.Join(dir, prefix+randomTempSuffix()+suffix)
+		f, err := client.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL)
+		if err != nil {
+			if errors.Is(err, os.ErrExist) {
+				continue
+			}
+			return "", err
+		}
+		if cerr := f.Close(); cerr != nil {
+			return name, cerr
+		}
+		return name, nil
+	}
+	return "", fmt.Errorf("could not create temp file in %s after %d attempts", dir, maxAttempts)
+}
+
+func randomTempSuffix() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // latencyReaderWriter wraps an io.Reader and io.WriteCloser, injecting a delay before each operation.

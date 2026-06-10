@@ -167,6 +167,21 @@ func (m *mockNonSSHEnv) ReadFile(ctx context.Context, path string) ([]byte, erro
 func (m *mockNonSSHEnv) ReadDir(ctx context.Context, path string) ([]fs.DirEntry, error) {
 	return nil, fmt.Errorf("read dir not supported on mock env")
 }
+func (m *mockNonSSHEnv) WriteFile(ctx context.Context, path string, data []byte, perm fs.FileMode) error {
+	return fmt.Errorf("write file not supported on mock env")
+}
+func (m *mockNonSSHEnv) MkdirAll(ctx context.Context, path string, perm fs.FileMode) error {
+	return fmt.Errorf("mkdirall not supported on mock env")
+}
+func (m *mockNonSSHEnv) Stat(ctx context.Context, path string) (fs.FileInfo, error) {
+	return nil, fmt.Errorf("stat not supported on mock env")
+}
+func (m *mockNonSSHEnv) Remove(ctx context.Context, path string) error {
+	return fmt.Errorf("remove not supported on mock env")
+}
+func (m *mockNonSSHEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
+	return "", fmt.Errorf("createtemp not supported on mock env")
+}
 
 // Verify that LocalEnv.Walk and WalkCodeDirectoryViaEnv produce the same results
 func TestWalkerProtocolConsistency(t *testing.T) {
