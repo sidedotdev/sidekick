@@ -244,6 +244,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			repoDevPodEnvContainer := env.EnvContainer{Env: &env.DevPodEnv{
 				WorkingDirectory: containerWorkDir,
 				WorkspaceName:    devpodWorkspaceName,
+				LocalRepoDir:     repoDir,
 			}}
 			startBranchStr := ""
 			if startBranch != nil {
@@ -271,11 +272,13 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			envContainer = env.EnvContainer{Env: &env.DevPodEnv{
 				WorkingDirectory: worktree.WorkingDirectory,
 				WorkspaceName:    devpodWorkspaceName,
+				LocalRepoDir:     repoDir,
 			}}
 		} else {
 			envContainer = env.EnvContainer{Env: &env.DevPodEnv{
 				WorkingDirectory: containerWorkDir,
 				WorkspaceName:    devpodWorkspaceName,
+				LocalRepoDir:     repoDir,
 			}}
 		}
 	case string(env.EnvTypeOpenShell):
@@ -337,6 +340,7 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			repoOpenShellEnvContainer := env.EnvContainer{Env: &env.OpenShellEnv{
 				WorkingDirectory: containerWorkDir,
 				SandboxName:      sandboxName,
+				LocalRepoDir:     repoDir,
 			}}
 			startBranchStr := ""
 			if startBranch != nil {
@@ -364,11 +368,13 @@ func setupDevContextAction(ctx workflow.Context, workspaceId string, repoDir str
 			envContainer = env.EnvContainer{Env: &env.OpenShellEnv{
 				WorkingDirectory: worktree.WorkingDirectory,
 				SandboxName:      sandboxName,
+				LocalRepoDir:     repoDir,
 			}}
 		} else {
 			envContainer = env.EnvContainer{Env: &env.OpenShellEnv{
 				WorkingDirectory: containerWorkDir,
 				SandboxName:      sandboxName,
+				LocalRepoDir:     repoDir,
 			}}
 		}
 	default:
