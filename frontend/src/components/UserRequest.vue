@@ -714,7 +714,7 @@ label[for="targetBranch"] {
 }
 
 /* FIXME make this dependent on light vs dark theme */
-.markdown :deep(li > code) {
+.markdown :deep(:not(pre) > code) {
   padding: 2px 4px;
   font-size: 90%;
   color: #6bc725;
