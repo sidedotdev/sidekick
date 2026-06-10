@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
 	"sidekick/env"
 	"sort"
 	"strings"
@@ -89,9 +88,10 @@ func applyTextDocumentEdit(originalContents string, textDocumentEdit TextDocumen
 	return updatedContents, nil
 }
 
-// readURI parses the given URI and returns the corresponding file path.
+// readURI parses the given URI and returns the contents of the corresponding
+// file, read via the provided env so it works against remote environments.
 // Returns an error if the URI is not a valid file URI.
-func readURI(documentURI string) (string, error) {
+func readURI(ctx context.Context, envContainer env.EnvContainer, documentURI string) (string, error) {
 	if !strings.HasPrefix(documentURI, "file://") {
 		return "", fmt.Errorf("invalid file URI: %s", documentURI)
 	}
@@ -99,14 +99,14 @@ func readURI(documentURI string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	contents, err := os.ReadFile(u.Path)
+	contents, err := envContainer.Env.ReadFile(ctx, u.Path)
 	if err != nil {
 		return "", err
 	}
 	return string(contents), nil
 }
 
-func writeURI(documentURI, updatedContents string) error {
+func writeURI(ctx context.Context, envContainer env.EnvContainer, documentURI, updatedContents string) error {
 	if !strings.HasPrefix(documentURI, "file://") {
 		return fmt.Errorf("invalid file URI: %s", documentURI)
 	}
@@ -114,16 +114,12 @@ func writeURI(documentURI, updatedContents string) error {
 	if err != nil {
 		return err
 	}
-	err = os.WriteFile(u.Path, []byte(updatedContents), 0644)
-	if err != nil {
-		return err
-	}
-	return nil
+	return envContainer.Env.WriteFile(ctx, u.Path, []byte(updatedContents), 0644)
 }
 
 func ApplyWorkspaceEdit(ctx context.Context, envContainer env.EnvContainer, workspaceEdit WorkspaceEdit) error {
 	for _, documentEdit := range workspaceEdit.DocumentChanges {
-		originalContents, err := readURI(documentEdit.TextDocument.TextDocumentIdentifier.URI)
+		originalContents, err := readURI(ctx, envContainer, documentEdit.TextDocument.TextDocumentIdentifier.URI)
 		if err != nil {
 			return err
 		}
@@ -133,8 +129,7 @@ func ApplyWorkspaceEdit(ctx context.Context, envContainer env.EnvContainer, work
 			return err
 		}
 
-		// Write the updated contents back to the file
-		err = writeURI(documentEdit.TextDocument.TextDocumentIdentifier.URI, updatedContents)
+		err = writeURI(ctx, envContainer, documentEdit.TextDocument.TextDocumentIdentifier.URI, updatedContents)
 		if err != nil {
 			return err
 		}

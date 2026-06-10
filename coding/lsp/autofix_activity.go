@@ -49,7 +49,7 @@ func (lspa *LSPActivities) AutofixActivity(ctx context.Context, input AutofixAct
 	}
 
 	// step 2: get code actions
-	codeActions, err := getAutofixCodeActions(ctx, lspClient, input.DocumentURI)
+	codeActions, err := getAutofixCodeActions(ctx, lspClient, input.EnvContainer, input.DocumentURI)
 	if err != nil {
 		return AutofixActivityOutput{}, err
 	}
@@ -63,12 +63,12 @@ func (lspa *LSPActivities) AutofixActivity(ctx context.Context, input AutofixAct
 	return output, nil
 }
 
-func getAutofixCodeActions(ctx context.Context, lspClient LSPClient, documentURI string) ([]CodeAction, error) {
+func getAutofixCodeActions(ctx context.Context, lspClient LSPClient, envContainer env.EnvContainer, documentURI string) ([]CodeAction, error) {
 	ctx, span := autofixTracer.Start(ctx, "getAutofixCodeActions")
 	defer span.End()
 
 	// Calculate end line and character based on file contents
-	fileContent, err := readURI(documentURI)
+	fileContent, err := readURI(ctx, envContainer, documentURI)
 	if err != nil {
 		err = fmt.Errorf("failed to read file: %w", err)
 		span.RecordError(err)
