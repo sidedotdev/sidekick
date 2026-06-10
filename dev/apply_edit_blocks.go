@@ -115,7 +115,7 @@ func (da *DevActivities) ApplyEditBlocks(ctx context.Context, input ApplyEditBlo
 
 		switch block.EditType {
 		case "create":
-			report, err = ApplyCreateEditBlock(block, baseDir)
+			report, err = ApplyCreateEditBlock(ctx, input.EnvContainer, block, baseDir)
 			AutofixIfEditSucceeded(ctx, da, input.EnvContainer, &report)
 		case "update":
 			report, err = ApplyUpdateEditBlock(ctx, input.EnvContainer, block, baseDir)
@@ -508,7 +508,7 @@ func checkAndStageOrRestoreFile(envContainer env.EnvContainer, checkCommands []c
 			restoreSpan.End()
 		} else {
 			// If the file that failed checks was just created, we should remove it since git restore won't work
-			err := os.Remove(filepath.Join(envContainer.Env.GetWorkingDirectory(), filePath))
+			err := envContainer.Env.Remove(ctx, filePath)
 			if err != nil {
 				return checkResult, fmt.Errorf("%v\nFailed to remove file: %v", checkErr, err)
 			}
@@ -537,26 +537,26 @@ func gitAdd(envContainer env.EnvContainer, filePath string) error {
 	return git.GitAddActivity(context.Background(), input)
 }
 
-func ApplyCreateEditBlock(block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
+func ApplyCreateEditBlock(ctx context.Context, envContainer env.EnvContainer, block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
 	report := ApplyEditBlockReport{
 		OriginalEditBlock: block,
 	}
 
 	absoluteFilePath := filepath.Join(baseDir, block.FilePath)
-	dirPath := filepath.Dir(absoluteFilePath)
-	if err := os.MkdirAll(dirPath, 0755); err != nil {
+	dirPath := filepath.Dir(block.FilePath)
+	if err := envContainer.Env.MkdirAll(ctx, dirPath, 0755); err != nil {
 		report.Error = fmt.Errorf("failed to create necessary directories %s: %v", dirPath, err).Error()
 		return report, err
 	}
 	newContents := strings.TrimSuffix(strings.Join(block.NewLines, "\n"), "\n")
-	if _, err := os.Stat(absoluteFilePath); err == nil {
+	if _, err := envContainer.Env.Stat(ctx, block.FilePath); err == nil {
 		report.Error = fmt.Sprintf("file already exists: %s", absoluteFilePath)
 		return report, errors.New(report.Error)
 	} else if !os.IsNotExist(err) {
 		report.Error = fmt.Sprintf("failed to check if file exists %s: %v", absoluteFilePath, err)
 		return report, errors.New(report.Error)
 	}
-	err := os.WriteFile(absoluteFilePath, []byte(newContents), 0644)
+	err := envContainer.Env.WriteFile(ctx, block.FilePath, []byte(newContents), 0644)
 	if err != nil {
 		report.Error = fmt.Errorf("failed to create new file %s: %v", absoluteFilePath, err).Error()
 		return report, err
@@ -585,7 +585,7 @@ func ApplyUpdateEditBlock(ctx context.Context, envContainer env.EnvContainer, bl
 		return report, err
 	}
 
-	err = os.WriteFile(absoluteFilePath, []byte(modifiedContents), 0644)
+	err = envContainer.Env.WriteFile(ctx, block.FilePath, []byte(modifiedContents), 0644)
 	if err != nil {
 		report.Error = fmt.Errorf("Failed to write modified content to file %s: %v", absoluteFilePath, err).Error()
 		return report, err
@@ -612,7 +612,7 @@ func ApplyAppendEditBlock(ctx context.Context, envContainer env.EnvContainer, bl
 		updatedContents += "\n"
 	}
 	updatedContents += strings.Join(block.NewLines, "\n")
-	err = os.WriteFile(absoluteFilePath, []byte(updatedContents), 0644)
+	err = envContainer.Env.WriteFile(ctx, block.FilePath, []byte(updatedContents), 0644)
 	if err != nil {
 		report.Error = fmt.Errorf("failed to append new lines to end of file %s: %v", absoluteFilePath, err).Error()
 		return report, err
@@ -929,8 +929,6 @@ func singleAcceptableMatch(lines []string, originalLines []string) bool {
 }
 
 func ApplyDeleteEditBlock(ctx context.Context, envContainer env.EnvContainer, block EditBlock, baseDir string) (ApplyEditBlockReport, error) {
-	filePath := filepath.Join(baseDir, block.FilePath)
-
 	originalContents, err := envContainer.Env.ReadFile(ctx, block.FilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -946,8 +944,7 @@ func ApplyDeleteEditBlock(ctx context.Context, envContainer env.EnvContainer, bl
 		}
 	}
 
-	// Delete the file
-	err = os.Remove(filePath)
+	err = envContainer.Env.Remove(ctx, block.FilePath)
 	if err != nil {
 		return ApplyEditBlockReport{
 			OriginalEditBlock: block,
