@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -152,7 +153,7 @@ func streamRemoteWalk(
 			continue
 		}
 
-		fullPath := filepath.Join(baseDirectory, relPath)
+		fullPath := path.Join(baseDirectory, relPath)
 		if err := handleEntry(fullPath, isDir); err != nil {
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()

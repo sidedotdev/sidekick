@@ -2,13 +2,18 @@ package dev
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
 	"sidekick/coding"
+	"sidekick/common"
 	"sidekick/env"
 	"sidekick/llm"
+	"sidekick/llm2"
+	"sidekick/persisted_ai"
 	"sidekick/utils"
 	"slices"
 	"strings"
@@ -38,6 +43,42 @@ func validateFilePath(filePath string, allowAnyPath bool) error {
 		}
 	}
 	return nil
+}
+
+func readFileLinesFromBytes(data []byte, relFilePath string, lineNumber, windowSize int) (string, error) {
+	lang := utils.InferLanguageNameFromFilePath(relFilePath)
+
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	var lines []string
+	lineNum := 1
+	start := lineNumber - windowSize
+	end := lineNumber + windowSize
+	firstLineNumber := max(start, 1)
+	lastLineNumber := 0
+	for scanner.Scan() {
+		line := scanner.Text()
+		if lineNum >= start && lineNum <= end {
+			lines = append(lines, line)
+			lastLineNumber = lineNum
+		}
+		lineNum++
+		if lineNum > end {
+			break
+		}
+	}
+
+	if len(lines) == 0 {
+		return "", fmt.Errorf("no lines found in the specified window")
+	}
+
+	return fmt.Sprintf(
+		"File: %s\nLines: %d-%d\n%s%s\n```",
+		relFilePath,
+		firstLineNumber,
+		lastLineNumber,
+		coding.CodeFenceStartForLanguage(lang),
+		strings.Join(lines, "\n"),
+	), nil
 }
 
 func ReadFileActivity(baseDir string, readFileParams ReadFileActivityInput) (string, error) {
@@ -284,7 +325,7 @@ func formatCodeBlock(block MergedCodeBlock) string {
 	)
 }
 
-func BulkReadFileV2(dCtx DevContext, params BulkReadFileParams) (string, error) {
+func bulkReadFileMerged(dCtx DevContext, params BulkReadFileParams) (string, error) {
 	if len(params.FileLines) == 0 {
 		return "", llm.ErrToolCallUnmarshal
 	}
@@ -311,6 +352,182 @@ func BulkReadFileV2(dCtx DevContext, params BulkReadFileParams) (string, error) 
 	}
 
 	return strings.Join(results, "\n\n"), nil
+}
+
+// BulkReadFileActivities holds dependencies for persisted bulk file reading.
+type BulkReadFileActivities struct {
+	Storage common.KeyValueStorage
+}
+
+// BulkReadFileActivityV2Input is the input for the ref-returning bulk read activity.
+type BulkReadFileActivityV2Input struct {
+	EnvContainer env.EnvContainer   `json:"envContainer"`
+	Params       BulkReadFileParams `json:"params"`
+	FlowId       string             `json:"flowId"`
+	ToolCall     llm.ToolCall       `json:"toolCall"`
+	WorkspaceId  string             `json:"workspaceId"`
+}
+
+// BulkReadFileActivityV2Output contains the persisted message ref.
+type BulkReadFileActivityV2Output struct {
+	Ref persisted_ai.MessageRef `json:"ref"`
+}
+
+// BulkReadFileActivityV2 reads files via Env.ReadFile, formats the output,
+// persists it to KV storage, and returns a MessageRef.
+func (a *BulkReadFileActivities) BulkReadFileActivityV2(ctx context.Context, input BulkReadFileActivityV2Input) (*BulkReadFileActivityV2Output, error) {
+	params := input.Params
+	if params.WindowSize < 0 {
+		return nil, fmt.Errorf("window size must be at least 0")
+	}
+
+	fileGroups := make(map[string][]FileLine)
+	fileOrder := make([]string, 0)
+	seenFiles := make(map[string]bool)
+
+	for _, fileLine := range params.FileLines {
+		if fileLine.LineNumber < 1 {
+			return nil, fmt.Errorf("line number must be greater than 0")
+		}
+		if err := validateFilePath(fileLine.FilePath, params.AllowAnyPath); err != nil {
+			return nil, err
+		}
+		if !seenFiles[fileLine.FilePath] {
+			fileOrder = append(fileOrder, fileLine.FilePath)
+			seenFiles[fileLine.FilePath] = true
+		}
+		fileGroups[fileLine.FilePath] = append(fileGroups[fileLine.FilePath], fileLine)
+	}
+
+	var parts []string
+	for _, filePath := range fileOrder {
+		fileLines := fileGroups[filePath]
+
+		type interval struct {
+			start int
+			end   int
+		}
+
+		var intervals []interval
+		for _, fileLine := range fileLines {
+			start := max(fileLine.LineNumber-params.WindowSize, 1)
+			end := fileLine.LineNumber + params.WindowSize
+			intervals = append(intervals, interval{start: start, end: end})
+		}
+
+		slices.SortFunc(intervals, func(a, b interval) int {
+			if a.start != b.start {
+				return a.start - b.start
+			}
+			return a.end - b.end
+		})
+
+		var merged []interval
+		for _, curr := range intervals {
+			if len(merged) == 0 || curr.start > merged[len(merged)-1].end+1 {
+				merged = append(merged, curr)
+			} else {
+				merged[len(merged)-1].end = max(merged[len(merged)-1].end, curr.end)
+			}
+		}
+
+		data, readErr := input.EnvContainer.Env.ReadFile(ctx, filePath)
+		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				parts = append(parts, fmt.Sprintf("failed to read the file: no file exists at the given file path: %s", filePath))
+			} else {
+				parts = append(parts, fmt.Sprintf("failed to read the file: failed to open file: %v", readErr))
+			}
+			continue
+		}
+
+		scanner := bufio.NewScanner(bytes.NewReader(data))
+		var allLines []string
+		for scanner.Scan() {
+			allLines = append(allLines, scanner.Text())
+		}
+
+		fileLength := len(allLines)
+		lang := utils.InferLanguageNameFromFilePath(filePath)
+
+		hasValidBlocks := false
+		for _, mergedInterval := range merged {
+			actualEnd := min(mergedInterval.end, fileLength)
+			if mergedInterval.start > fileLength {
+				continue
+			}
+			startIdx := mergedInterval.start - 1
+			endIdx := actualEnd - 1
+			if startIdx < 0 || startIdx >= fileLength {
+				continue
+			}
+			var extractedLines []string
+			for i := startIdx; i <= endIdx && i < fileLength; i++ {
+				extractedLines = append(extractedLines, allLines[i])
+			}
+			if len(extractedLines) > 0 {
+				hasValidBlocks = true
+				parts = append(parts, formatCodeBlock(MergedCodeBlock{
+					FilePath:  filePath,
+					StartLine: mergedInterval.start,
+					EndLine:   min(actualEnd, fileLength),
+					Language:  lang,
+					Content:   strings.Join(extractedLines, "\n"),
+				}))
+			}
+		}
+
+		if !hasValidBlocks {
+			parts = append(parts, "failed to read the file: no lines found in the specified window")
+		}
+	}
+
+	content := strings.Join(parts, "\n\n")
+
+	textBlock := llm2.ContentBlock{Type: llm2.ContentBlockTypeText, Text: content}
+	trb := llm2.ToolResultBlock{
+		ToolCallId: input.ToolCall.Id,
+		Name:       input.ToolCall.Name,
+		Content:    []llm2.ContentBlock{textBlock},
+	}
+	finalBlock := llm2.ContentBlock{
+		Type:       llm2.ContentBlockTypeToolResult,
+		ToolResult: &trb,
+	}
+
+	ref, err := persisted_ai.PersistContentBlock(
+		ctx, a.Storage, input.FlowId, input.WorkspaceId, string(llm2.RoleUser), finalBlock,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to persist content block: %w", err)
+	}
+
+	return &BulkReadFileActivityV2Output{Ref: *ref}, nil
+}
+
+// BulkReadFileV2 reads files via Env and persists the result to KV, returning a ref.
+func BulkReadFileV2(dCtx DevContext, params BulkReadFileParams, toolCall llm.ToolCall) (*BulkReadFileActivityV2Output, error) {
+	if len(params.FileLines) == 0 {
+		return nil, llm.ErrToolCallUnmarshal
+	}
+
+	envContainer := dCtx.EnvContainer
+	params.AllowAnyPath = envContainer.Env.GetType() == env.EnvTypeDevPod
+	flowId := workflow.GetInfo(dCtx).WorkflowExecution.ID
+
+	var bra *BulkReadFileActivities
+	var output BulkReadFileActivityV2Output
+	err := workflow.ExecuteActivity(dCtx, bra.BulkReadFileActivityV2, BulkReadFileActivityV2Input{
+		EnvContainer: *envContainer,
+		Params:       params,
+		FlowId:       flowId,
+		ToolCall:     toolCall,
+		WorkspaceId:  dCtx.WorkspaceId,
+	}).Get(dCtx, &output)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute bulk read file activity: %v", err)
+	}
+	return &output, nil
 }
 
 // TODO add tests for bulk read file, with mock read file activity
@@ -348,7 +565,6 @@ func BulkReadFile(dCtx DevContext, bulkReadFileParams BulkReadFileParams) (strin
 		}
 		return strings.Join(results, "\n\n"), nil
 	} else {
-		// New behavior: use BulkReadFileV2 with merging
-		return BulkReadFileV2(dCtx, bulkReadFileParams)
+		return bulkReadFileMerged(dCtx, bulkReadFileParams)
 	}
 }

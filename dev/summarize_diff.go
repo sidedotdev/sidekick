@@ -3,8 +3,6 @@ package dev
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"sidekick/common"
 	"sidekick/env"
@@ -45,10 +43,8 @@ func SummarizeDiffActivity(ctx context.Context, input SummarizeDiffActivityInput
 		return "", fmt.Errorf("failed to get embedder: %w", err)
 	}
 
-	baseDir := input.EnvContainer.Env.GetWorkingDirectory()
 	contentProvider := func(filePath string) (string, error) {
-		fullPath := filepath.Join(baseDir, filePath)
-		content, err := os.ReadFile(fullPath)
+		content, err := input.EnvContainer.Env.ReadFile(ctx, filePath)
 		if err != nil {
 			return "", err
 		}

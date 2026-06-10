@@ -101,7 +101,7 @@ func TestGetFileSignaturesStringGolang(t *testing.T) {
 			}
 
 			// Call GetFileSignatures with the path to the temp file
-			result, err := GetFileSignaturesString(tmpfile.Name())
+			result, err := GetFileSignaturesStringFromBytes("golang", []byte(tc.code))
 			if err != nil {
 				t.Fatalf("GetFileSignatures returned an error: %v", err)
 			}
@@ -219,7 +219,7 @@ func add(a int, b int) int {
 				t.Fatalf("Failed to close temp file: %v", err)
 			}
 
-			symbolsString, err := GetFileSymbolsString(tmpfile.Name())
+			symbolsString, err := GetFileSymbolsStringFromBytes(tmpfile.Name(), "golang", []byte(test.code))
 			if err != nil {
 				t.Fatalf("Failed to get symbols: %v", err)
 			}
@@ -270,7 +270,7 @@ func TestGetAllAlternativeFileSymbolsGolang(t *testing.T) {
 			defer os.Remove(filePath)
 
 			// Call the function and check the output
-			output, err := GetAllAlternativeFileSymbols(filePath)
+			output, err := GetAllAlternativeFileSymbolsFromBytes(filePath, "golang", []byte(tc.input))
 			if err != nil {
 				t.Fatalf("failed to get all alternative file symbols: %v", err)
 			}
@@ -450,7 +450,7 @@ type Something = string
 			}
 			defer os.Remove(filePath)
 
-			definition, err := GetSymbolDefinitionsString(filePath, tc.symbolName, 0)
+			definition, err := GetSymbolDefinitionsStringFromBytes("golang", []byte(tc.code), tc.symbolName, 0)
 			if err != nil {
 				if tc.expectedError == "" {
 					t.Fatalf("Unexpected error: %v", err)
@@ -567,7 +567,7 @@ func TestGetFileHeadersStringGolang(t *testing.T) {
 				t.Fatalf("Failed to close temp file: %v", err)
 			}
 
-			result, err := GetFileHeadersString(tmpfile.Name(), 0)
+			result, err := GetFileHeadersStringFromBytes("golang", []byte(tc.code), 0)
 			assert.Nil(t, err)
 
 			// Check the result

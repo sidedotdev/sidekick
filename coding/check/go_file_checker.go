@@ -2,10 +2,11 @@ package check
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"go/build/constraint"
-	"os"
+	"io"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -22,18 +23,14 @@ var blacklistErrorsRegex = regexp.MustCompile(strings.Join([]string{
 	"EOF",
 }, "|"))
 
-// parseBuildConstraint extracts the build constraint expression from a Go file.
-// Returns the parsed constraint expression, or nil if no constraint is found.
-// For legacy // +build syntax, multiple lines are combined with AND.
-func parseBuildConstraint(filePath string) constraint.Expr {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return nil
-	}
-	defer file.Close()
+// parseBuildConstraintFromBytes parses build constraints from pre-read file content.
+func parseBuildConstraintFromBytes(data []byte) constraint.Expr {
+	return parseBuildConstraintFromReader(bytes.NewReader(data))
+}
 
+func parseBuildConstraintFromReader(r io.Reader) constraint.Expr {
 	var result constraint.Expr
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Text()
 		trimmed := strings.TrimSpace(line)
@@ -320,8 +317,16 @@ func generateTagAssignments(tagNames []string) []map[string]bool {
 // (GOOS/GOARCH, cgo, and custom tags) that satisfies the target file's constraint,
 // then includes only files that match that same context. The target file is
 // always included.
-func filterFilesByBuildTags(filePaths []string, targetFile string) []string {
-	targetConstraint := parseBuildConstraint(targetFile)
+func filterFilesByBuildTags(filePaths []string, targetFile string, envContainer env.EnvContainer) []string {
+	readConstraint := func(path string) constraint.Expr {
+		data, err := envContainer.Env.ReadFile(context.Background(), path)
+		if err != nil {
+			return nil
+		}
+		return parseBuildConstraintFromBytes(data)
+	}
+
+	targetConstraint := readConstraint(targetFile)
 
 	// Find a build context that satisfies the target constraint
 	ctx := findSatisfyingContext(targetConstraint)
@@ -343,7 +348,7 @@ func filterFilesByBuildTags(filePaths []string, targetFile string) []string {
 			result = append(result, fp)
 			continue
 		}
-		expr := parseBuildConstraint(fp)
+		expr := readConstraint(fp)
 		if matchesBuildContextFull(expr, ctx) {
 			result = append(result, fp)
 		}
@@ -359,24 +364,26 @@ func filterFilesByBuildTags(filePaths []string, targetFile string) []string {
 // bad errors that should revert the edit that caused them.
 func CheckViaGoBuild(envContainer env.EnvContainer, relativeFilePath string) (bool, string, error) {
 	// Get all files in the directory to build, to avoid errors due to missing dependencies from other files within the same package
-	dir := filepath.Dir(filepath.Join(envContainer.Env.GetWorkingDirectory(), relativeFilePath))
+	dir := filepath.Dir(relativeFilePath)
 	args := []string{"test", "-c"}
-	files, err := os.ReadDir(dir)
+
+	isTest := strings.HasSuffix(relativeFilePath, "_test.go")
+	entries, err := envContainer.Env.ReadDir(context.Background(), dir)
 	if err != nil {
 		return false, fmt.Sprintf("Failed to read directory: %v", err), err
 	}
 	var goFiles []string
-	for _, file := range files {
-		if !file.IsDir() && strings.HasSuffix(file.Name(), ".go") {
-			if !strings.HasSuffix(relativeFilePath, "_test.go") && strings.HasSuffix(file.Name(), "_test.go") {
-				// unless checking a test file, no need to include test files in compilation
-				continue
-			}
-			goFiles = append(goFiles, filepath.Join(dir, file.Name()))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			continue
 		}
+		if !isTest && strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		goFiles = append(goFiles, filepath.Join(dir, entry.Name()))
 	}
 	targetFilePath := filepath.Join(dir, filepath.Base(relativeFilePath))
-	goFiles = filterFilesByBuildTags(goFiles, targetFilePath)
+	goFiles = filterFilesByBuildTags(goFiles, targetFilePath, envContainer)
 	args = append(args, goFiles...)
 
 	result, err := envContainer.Env.RunCommand(context.Background(), env.EnvRunCommandInput{

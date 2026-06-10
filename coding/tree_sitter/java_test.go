@@ -174,7 +174,7 @@ func TestGetFileHeadersStringJava(t *testing.T) {
 				t.Fatalf("Failed to close temp file: %v", err)
 			}
 
-			result, err := GetFileHeadersString(tmpfile.Name(), 0)
+			result, err := GetFileHeadersStringFromBytes("java", []byte(tc.code), 0)
 			assert.Nil(t, err)
 
 			// Check the result
@@ -480,7 +480,7 @@ public class Container {
 			}
 
 			// Call GetFileSignatures with the path to the temp file
-			result, err := GetFileSignaturesString(tmpfile.Name())
+			result, err := GetFileSignaturesStringFromBytes("java", []byte(tc.code))
 			if err != nil {
 				t.Fatalf("GetFileSignatures returned an error: %v", err)
 			}
@@ -810,7 +810,7 @@ enum Size {
 				t.Fatalf("Failed to close temp file: %v", err)
 			}
 
-			symbolsString, err := GetFileSymbolsString(tmpfile.Name())
+			symbolsString, err := GetFileSymbolsStringFromBytes(tmpfile.Name(), "java", []byte(test.code))
 			if err != nil {
 				t.Fatalf("Failed to get symbols: %v", err)
 			}
@@ -1131,7 +1131,7 @@ public enum DocEnum {
 			}
 			defer os.Remove(filePath)
 
-			definition, err := GetSymbolDefinitionsString(filePath, tc.symbolName, 0)
+			definition, err := GetSymbolDefinitionsStringFromBytes("java", []byte(tc.code), tc.symbolName, 0)
 			if err != nil {
 				if tc.expectedError == "" {
 					t.Fatalf("Unexpected error: %v", err)

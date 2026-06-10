@@ -143,7 +143,7 @@ func TestValidateImagePath(t *testing.T) {
 				assert.Contains(t, err.Error(), tt.errSubstr)
 			} else {
 				require.NoError(t, err)
-				assert.True(t, strings.HasPrefix(resolved, workDir))
+				assert.Equal(t, filepath.Clean(tt.filePath), resolved)
 			}
 		})
 	}

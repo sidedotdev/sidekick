@@ -105,7 +105,7 @@ func TestGetFileHeadersStringJavascript(t *testing.T) {
 			if err := tmpfile.Close(); err != nil {
 				t.Fatalf("Failed to close temp file: %v", err)
 			}
-			result, err := GetFileHeadersString(tmpfile.Name(), 0)
+			result, err := GetFileHeadersStringFromBytes("javascript", []byte(tc.code), 0)
 			assert.Nil(t, err)
 			if result != tc.expected {
 				t.Errorf("GetFileHeadersString returned incorrect result. Expected:\n%s\nGot:\n%s", utils.PanicJSON(tc.expected), utils.PanicJSON(result))
@@ -290,7 +290,7 @@ func TestGetFileSignaturesStringJavascript(t *testing.T) {
 				t.Fatalf("Failed to close temp file: %v", err)
 			}
 
-			result, err := GetFileSignaturesString(tmpfile.Name())
+			result, err := GetFileSignaturesStringFromBytes("javascript", []byte(tc.code))
 			if err != nil {
 				t.Fatalf("GetFileSignaturesString returned an error: %v", err)
 			}
@@ -438,7 +438,7 @@ function add(a, b) {
 				t.Fatalf("Failed to close temp file: %v", err)
 			}
 
-			symbolsString, err := GetFileSymbolsString(tmpfile.Name())
+			symbolsString, err := GetFileSymbolsStringFromBytes(tmpfile.Name(), "javascript", []byte(test.code))
 			if err != nil {
 				t.Fatalf("Failed to get symbols: %v", err)
 			}
@@ -663,7 +663,7 @@ export const x = someFunction({
 			}
 			defer os.Remove(filePath)
 
-			definition, err := GetSymbolDefinitionsString(filePath, tc.symbolName, 0)
+			definition, err := GetSymbolDefinitionsStringFromBytes("javascript", []byte(tc.code), tc.symbolName, 0)
 			if err != nil {
 				if tc.expectedError == "" {
 					t.Fatalf("Unexpected error: %v", err)

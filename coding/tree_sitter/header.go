@@ -4,7 +4,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 
@@ -12,14 +11,11 @@ import (
 	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
 
-func GetFileHeaders(filePath string, numContextLines int) ([]SourceBlock, error) {
-	languageName, sitterLanguage, err := inferLanguageFromFilePath(filePath)
+// GetFileHeadersFromBytes returns header source blocks from pre-read bytes.
+func GetFileHeadersFromBytes(languageName string, sourceCode []byte, numContextLines int) ([]SourceBlock, error) {
+	sitterLanguage, err := getSitterLanguage(languageName)
 	if err != nil {
 		return nil, err
-	}
-	sourceCode, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to obtain source code when getting headers for file %s: %v", filePath, err)
 	}
 	parser := tree_sitter.NewParser()
 	defer parser.Close()
@@ -47,8 +43,8 @@ func GetFileHeaders(filePath string, numContextLines int) ([]SourceBlock, error)
 	return headers, nil
 }
 
-func GetFileHeadersString(filePath string, numContextLines int) (string, error) {
-	headers, err := GetFileHeaders(filePath, numContextLines)
+func GetFileHeadersStringFromBytes(languageName string, sourceCode []byte, numContextLines int) (string, error) {
+	headers, err := GetFileHeadersFromBytes(languageName, sourceCode, numContextLines)
 	if err != nil {
 		if errors.Is(err, ErrNoHeadersFound) {
 			return "", nil
