@@ -290,8 +290,8 @@ var defaultProcesses = []ProcessConfig{
 	},
 	{
 		Name:       "frontend",
-		Command:    "bun",
-		Args:       []string{"dev"},
+		Command:    "sh",
+		Args:       []string{"-c", "bun ci && bun dev"},
 		WorkingDir: "frontend",
 	},
 }
