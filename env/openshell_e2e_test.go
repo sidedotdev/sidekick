@@ -79,6 +79,10 @@ func TestOpenShellIntegration(t *testing.T) {
 		t.Logf("stdout: %s", out.Stdout)
 	})
 
+	t.Run("filesystem methods via sftp", func(t *testing.T) {
+		runRemoteEnvFilesystemSubtests(t, ctx, osEnv)
+	})
+
 	t.Run("sync and verify repo", func(t *testing.T) {
 		localRepo := setupMinimalGitRepo(t)
 

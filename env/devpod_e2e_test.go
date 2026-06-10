@@ -88,6 +88,10 @@ func TestDevPodIntegration(t *testing.T) {
 		t.Logf("stdout: %s", out.Stdout)
 	})
 
+	t.Run("filesystem methods via sftp", func(t *testing.T) {
+		runRemoteEnvFilesystemSubtests(t, ctx, devEnv)
+	})
+
 	t.Run("create worktree inside container", func(t *testing.T) {
 		containerRepoDir := "/tmp/devpod-e2e-repo-" + ksuid.New().String()
 		initScript := strings.Join([]string{
