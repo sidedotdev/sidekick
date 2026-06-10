@@ -96,6 +96,7 @@ func TestOpenShellIntegration(t *testing.T) {
 		repoEnv := &OpenShellEnv{
 			WorkingDirectory: syncOutput.ContainerRepoDir,
 			SandboxName:      createOutput.SandboxName,
+			LocalRepoDir:     localRepo,
 		}
 		out, err := repoEnv.RunCommand(ctx, EnvRunCommandInput{
 			Command: "git",

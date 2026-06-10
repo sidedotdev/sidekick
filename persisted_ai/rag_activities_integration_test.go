@@ -182,6 +182,7 @@ func TestRankedDirSignatureOutline_OpenShell_Integration(t *testing.T) {
 	osEnv := &env.OpenShellEnv{
 		WorkingDirectory: syncOut.ContainerRepoDir,
 		SandboxName:      sandboxName,
+		LocalRepoDir:     repoRoot,
 	}
 	ec := env.EnvContainer{Env: osEnv}
 
@@ -278,6 +279,7 @@ func BenchmarkGetDirectorySignatureOutlines_OpenShell(b *testing.B) {
 	osEnv := &env.OpenShellEnv{
 		WorkingDirectory: syncOut.ContainerRepoDir,
 		SandboxName:      sandboxName,
+		LocalRepoDir:     repoRoot,
 	}
 	osEnv.SetLatency(10 * time.Millisecond)
 	ec := env.EnvContainer{Env: osEnv}

@@ -208,11 +208,13 @@ func TestDevPodEnvironment_MarshalUnmarshal(t *testing.T) {
 	originalEnv := &DevPodEnv{
 		WorkingDirectory: "/some/workspace/dir",
 		WorkspaceName:    "my-workspace",
+		LocalRepoDir:     "/host/path/to/repo",
 	}
 	envContainer := EnvContainer{Env: originalEnv}
 
 	jsonBytes, err := json.Marshal(envContainer)
 	assert.NoError(t, err)
+	assert.Contains(t, string(jsonBytes), `"localRepoDir":"/host/path/to/repo"`)
 
 	var unmarshaledEnvContainer EnvContainer
 	err = json.Unmarshal(jsonBytes, &unmarshaledEnvContainer)
@@ -221,6 +223,7 @@ func TestDevPodEnvironment_MarshalUnmarshal(t *testing.T) {
 	assert.Equal(t, originalEnv, unmarshaledEnvContainer.Env.(*DevPodEnv))
 	assert.Equal(t, EnvTypeDevPod, unmarshaledEnvContainer.Env.GetType())
 	assert.Equal(t, "/some/workspace/dir", unmarshaledEnvContainer.Env.GetWorkingDirectory())
+	assert.Equal(t, "/host/path/to/repo", unmarshaledEnvContainer.Env.(*DevPodEnv).LocalRepoDir)
 }
 
 func TestEnvContainer_MarshalJSON_NilEnv(t *testing.T) {

@@ -200,13 +200,23 @@ type LocalGitWorktreeEnv struct {
 type DevPodEnv struct {
 	WorkingDirectory string
 	WorkspaceName    string
-	sftp             sftpConn
+	// LocalRepoDir is the path to the local checkout of the repo whose
+	// remote copy lives in this DevPod container. It is used by file-walking
+	// to read tracked content from local git objects instead of paying the
+	// per-file SSH/sftp cost.
+	LocalRepoDir string `json:"localRepoDir,omitempty"`
+	sftp         sftpConn
 }
 
 type OpenShellEnv struct {
 	WorkingDirectory string
 	SandboxName      string
-	sftp             sftpConn
+	// LocalRepoDir is the path to the local checkout of the repo whose
+	// remote copy lives in this OpenShell sandbox. It is used by file-walking
+	// to read tracked content from local git objects instead of paying the
+	// per-file SSH/sftp cost.
+	LocalRepoDir string `json:"localRepoDir,omitempty"`
+	sftp         sftpConn
 }
 
 type LocalEnvParams struct {

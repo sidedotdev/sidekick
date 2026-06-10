@@ -75,6 +75,7 @@ func TestDevPodIntegration(t *testing.T) {
 	devEnv := &DevPodEnv{
 		WorkingDirectory: containerWorkDir,
 		WorkspaceName:    workspaceName,
+		LocalRepoDir:     workspacePath,
 	}
 
 	t.Run("basic command execution", func(t *testing.T) {
