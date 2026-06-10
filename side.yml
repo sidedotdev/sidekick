@@ -1,11 +1,17 @@
 mission: |
-  Sidekick is a human-in-the-loop system designed to support software developers
-  through GenAI automation. Sidekick should be easy for developers to set up and
-  use, intuitive to understand and highly introspectable with realtime feedback
-  and granular tracking. It should be able to be guided by developers using it,
-  but do as much as can be done reliably without the human in the loop, before
-  engaging them. The core mission of Sidekick is to make developers more
-  productive as they work within large existing code bases.
+  Sidekick is an async-first coding agent optimized for professional software
+  developers. The core mission of Sidekick is to make developers more productive
+  as they work within large existing code bases. While operated and steered by
+  developers, it does as much possible reliably without the human in the loop,
+  before engaging them.
+
+  We aspire to:
+
+  1. Reduce the level of agent supervision required by developers to the bare
+     minimum
+  2. Give developers ways to automatically verify work done by Sidekick
+  3. Let developers effectively specify just what matters to them: their core
+     design intent, constraints and preferences
 
 worktree_setup: |
   cd frontend && bun ci && touch dist/empty.txt
