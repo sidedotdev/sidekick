@@ -209,10 +209,10 @@ const cancelTask = async () => {
   }
 }
 
-const handleDescriptionBlur = (event) => {
+const handleDescriptionBlur = (event: FocusEvent) => {
   // we switch to scrolling overflow and back to hidden, but it can stay
   // scrolled which is very odd looking
-  event.target.scrollTop = 0
+  ;(event.target as HTMLElement).scrollTop = 0
 }
 </script>
 

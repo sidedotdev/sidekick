@@ -73,6 +73,26 @@ type Env interface {
 	// ReadDir reads the directory at the given path and returns its entries.
 	// Relative paths are resolved against the working directory.
 	ReadDir(ctx context.Context, path string) ([]fs.DirEntry, error)
+	// WriteFile writes data to the file at the given path with the given
+	// permission bits, creating it if necessary. Relative paths are resolved
+	// against the working directory.
+	WriteFile(ctx context.Context, path string, data []byte, perm fs.FileMode) error
+	// MkdirAll creates the directory at the given path along with any
+	// necessary parents. Relative paths are resolved against the working
+	// directory.
+	MkdirAll(ctx context.Context, path string, perm fs.FileMode) error
+	// Stat returns the FileInfo describing the file at the given path.
+	// Relative paths are resolved against the working directory.
+	Stat(ctx context.Context, path string) (fs.FileInfo, error)
+	// Remove removes the file or (empty) directory at the given path.
+	// Relative paths are resolved against the working directory.
+	Remove(ctx context.Context, path string) error
+	// CreateTemp creates a new temporary file in the directory dir, opens
+	// the file for reading and writing, and returns the resulting file's
+	// path. An empty dir uses the environment's default temp directory.
+	// The pattern follows the same semantics as os.CreateTemp: the last
+	// "*" in pattern is replaced with a random string.
+	CreateTemp(ctx context.Context, dir, pattern string) (string, error)
 }
 
 // SSHCapableEnv is implemented by environments that support direct SSH access.
@@ -348,6 +368,49 @@ func (e *LocalEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error)
 	return os.ReadDir(p)
 }
 
+func (e *LocalEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(e.WorkingDirectory, p)
+	}
+	return os.WriteFile(p, data, perm)
+}
+
+func (e *LocalEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(e.WorkingDirectory, p)
+	}
+	return os.MkdirAll(p, perm)
+}
+
+func (e *LocalEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(e.WorkingDirectory, p)
+	}
+	return os.Stat(p)
+}
+
+func (e *LocalEnv) Remove(ctx context.Context, p string) error {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(e.WorkingDirectory, p)
+	}
+	return os.Remove(p)
+}
+
+func (e *LocalEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
+	if dir != "" && !filepath.IsAbs(dir) {
+		dir = filepath.Join(e.WorkingDirectory, dir)
+	}
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return "", err
+	}
+	name := f.Name()
+	if cerr := f.Close(); cerr != nil {
+		return name, cerr
+	}
+	return name, nil
+}
+
 func (e *LocalGitWorktreeEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
 	ignoreManager, err := common.NewIgnoreManager(e.WorkingDirectory, ignoreFileNames)
 	if err != nil {
@@ -424,6 +487,49 @@ func (e *LocalGitWorktreeEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEn
 		p = filepath.Join(e.WorkingDirectory, p)
 	}
 	return os.ReadDir(p)
+}
+
+func (e *LocalGitWorktreeEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(e.WorkingDirectory, p)
+	}
+	return os.WriteFile(p, data, perm)
+}
+
+func (e *LocalGitWorktreeEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(e.WorkingDirectory, p)
+	}
+	return os.MkdirAll(p, perm)
+}
+
+func (e *LocalGitWorktreeEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(e.WorkingDirectory, p)
+	}
+	return os.Stat(p)
+}
+
+func (e *LocalGitWorktreeEnv) Remove(ctx context.Context, p string) error {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(e.WorkingDirectory, p)
+	}
+	return os.Remove(p)
+}
+
+func (e *LocalGitWorktreeEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
+	if dir != "" && !filepath.IsAbs(dir) {
+		dir = filepath.Join(e.WorkingDirectory, dir)
+	}
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return "", err
+	}
+	name := f.Name()
+	if cerr := f.Close(); cerr != nil {
+		return name, cerr
+	}
+	return name, nil
 }
 
 func (e *DevPodEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
@@ -515,6 +621,43 @@ func (e *DevPodEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error
 	return sftpReadDir(ctx, &e.sftp, e, p)
 }
 
+func (e *DevPodEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpWriteFile(ctx, &e.sftp, e, p, data, perm)
+}
+
+func (e *DevPodEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpMkdirAll(ctx, &e.sftp, e, p, perm)
+}
+
+func (e *DevPodEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpStat(ctx, &e.sftp, e, p)
+}
+
+func (e *DevPodEnv) Remove(ctx context.Context, p string) error {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpRemove(ctx, &e.sftp, e, p)
+}
+
+func (e *DevPodEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
+	if dir == "" {
+		dir = "/tmp"
+	} else if !strings.HasPrefix(dir, "/") {
+		dir = path.Join(e.WorkingDirectory, dir)
+	}
+	return sftpCreateTemp(ctx, &e.sftp, e, dir, pattern)
+}
+
 func (e *OpenShellEnv) Walk(ctx context.Context, ignoreFileNames []string, handleEntry func(path string, isDir bool) error) error {
 	return walkCodeDirectorySSH(ctx, e, e.WorkingDirectory, ignoreFileNames, handleEntry)
 }
@@ -575,6 +718,43 @@ func (e *OpenShellEnv) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, er
 		p = path.Join(e.WorkingDirectory, p)
 	}
 	return sftpReadDir(ctx, &e.sftp, e, p)
+}
+
+func (e *OpenShellEnv) WriteFile(ctx context.Context, p string, data []byte, perm fs.FileMode) error {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpWriteFile(ctx, &e.sftp, e, p, data, perm)
+}
+
+func (e *OpenShellEnv) MkdirAll(ctx context.Context, p string, perm fs.FileMode) error {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpMkdirAll(ctx, &e.sftp, e, p, perm)
+}
+
+func (e *OpenShellEnv) Stat(ctx context.Context, p string) (fs.FileInfo, error) {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpStat(ctx, &e.sftp, e, p)
+}
+
+func (e *OpenShellEnv) Remove(ctx context.Context, p string) error {
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(e.WorkingDirectory, p)
+	}
+	return sftpRemove(ctx, &e.sftp, e, p)
+}
+
+func (e *OpenShellEnv) CreateTemp(ctx context.Context, dir, pattern string) (string, error) {
+	if dir == "" {
+		dir = "/tmp"
+	} else if !strings.HasPrefix(dir, "/") {
+		dir = path.Join(e.WorkingDirectory, dir)
+	}
+	return sftpCreateTemp(ctx, &e.sftp, e, dir, pattern)
 }
 
 // SetLatency injects artificial latency into each SFTP read for benchmarking.
