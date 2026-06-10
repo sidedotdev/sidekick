@@ -767,17 +767,14 @@ func mergeWorktreeIfApproved(dCtx DevContext, params MergeWithReviewParams, last
 		var mergeResult git.MergeActivityResult
 
 		if gitCommitVersion >= 1 && params.CommitRequired {
-			err = workflow.ExecuteActivity(trackedCtx, git.GitCommitActivity, trackedCtx.EnvContainer, git.GitCommitParams{
-				CommitMessage:  commitMessage,
-				CommitterName:  committerName,
-				CommitterEmail: committerEmail,
-			}).Get(trackedCtx, nil)
-			if err != nil {
-				if strings.Contains(err.Error(), "nothing to commit") {
-					workflow.GetLogger(trackedCtx).Warn("nothing to commit during merge workflow")
-				} else {
-					return mergeResult, fmt.Errorf("failed to commit changes: %w", err)
-				}
+			var commitOutput string
+			if err := flow_action.PerformWithUserRetry(trackedCtx.FlowActionContext(), git.GitCommitActivity, &commitOutput, trackedCtx.EnvContainer, git.GitCommitParams{
+				CommitMessage:         commitMessage,
+				CommitterName:         committerName,
+				CommitterEmail:        committerEmail,
+				IgnoreNothingToCommit: true,
+			}); err != nil {
+				return mergeResult, fmt.Errorf("failed to commit changes: %w", err)
 			}
 		}
 
