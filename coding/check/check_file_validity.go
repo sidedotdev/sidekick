@@ -1,9 +1,8 @@
 package check
 
 import (
-	"errors"
+	"context"
 	"fmt"
-	"path/filepath"
 	"sidekick/coding/tree_sitter"
 	"sidekick/env"
 	"sidekick/utils"
@@ -40,14 +39,17 @@ const SyntaxError = "Syntax error(s)"
 // containing any errors found, or warnings for errors that should not revert
 // edits.
 func CheckFileValidity(envContainer env.EnvContainer, relativeFilePath string) (bool, string, error) {
-	filePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), relativeFilePath)
-	tree, sourceCode, err := tree_sitter.GetTreeWithSource(filePath)
+	fileBytes, readErr := envContainer.Env.ReadFile(context.Background(), relativeFilePath)
+	if readErr != nil {
+		return false, fmt.Sprintf("Failed to read file: %v", readErr), readErr
+	}
+	languageName := utils.InferLanguageNameFromFilePath(relativeFilePath)
+	if languageName == "" {
+		return true, fmt.Sprintf("Warning: Failed to infer language from file extension: %s", relativeFilePath), nil
+	}
+	tree, sourceCode, err := tree_sitter.GetTreeWithSourceFromBytes(languageName, fileBytes)
 	if err != nil {
-		if errors.Is(err, tree_sitter.ErrFailedInferLanguage) {
-			return true, fmt.Sprintf("Warning: Failed to infer language from file extension: %v", err), nil
-		} else {
-			return false, fmt.Sprintf("Failed to get tree: %v", err), err
-		}
+		return false, fmt.Sprintf("Failed to get tree: %v", err), err
 	}
 	hasError := tree.RootNode().HasError()
 	if hasError {
@@ -66,7 +68,6 @@ func CheckFileValidity(envContainer env.EnvContainer, relativeFilePath string) (
 		return false, "File is blank", nil
 	}
 
-	languageName := utils.InferLanguageNameFromFilePath(filePath)
 	valid, errorString := checkEmbeddedFileValidity(tree, sourceCode, languageName)
 	if !valid {
 		return false, errorString, nil

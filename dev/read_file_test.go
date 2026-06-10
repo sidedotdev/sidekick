@@ -4,11 +4,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sidekick/env"
+	"sidekick/flow_action"
+	"sidekick/llm"
+	"sidekick/persisted_ai"
 	"sidekick/utils"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
+	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/workflow"
 )
 
 func TestReadFileActivity(t *testing.T) {
@@ -527,4 +535,88 @@ def hello():
 ` + "```"
 
 	require.Equal(t, expectedOutput, finalOutput)
+}
+
+// BulkReadFileV2TestSuite tests the BulkReadFileV2 workflow helper,
+// which dispatches to BulkReadFileActivities.BulkReadFileActivityV2.
+type BulkReadFileV2TestSuite struct {
+	suite.Suite
+	testsuite.WorkflowTestSuite
+	env *testsuite.TestWorkflowEnvironment
+}
+
+func (s *BulkReadFileV2TestSuite) SetupTest() {
+	s.env = s.NewTestWorkflowEnvironment()
+}
+
+func (s *BulkReadFileV2TestSuite) TearDownTest() {
+	s.env.AssertExpectations(s.T())
+}
+
+func (s *BulkReadFileV2TestSuite) TestBulkReadFileV2_ReturnsRef() {
+	tempDir := s.T().TempDir()
+	ec := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: tempDir}}
+
+	expectedRef := persisted_ai.MessageRef{
+		BlockKeys: []string{"test-flow:msg:block1"},
+		Role:      "user",
+	}
+
+	wrapperWorkflow := func(ctx workflow.Context) (*BulkReadFileActivityV2Output, error) {
+		ctx = utils.NoRetryCtx(ctx)
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context:      ctx,
+				EnvContainer: &ec,
+				WorkspaceId:  "test-workspace",
+			},
+		}
+		return BulkReadFileV2(dCtx, BulkReadFileParams{
+			FileLines:  []FileLine{{FilePath: "test.go", LineNumber: 1}},
+			WindowSize: 5,
+		}, llm.ToolCall{Id: "call_123", Name: "read_file"})
+	}
+	s.env.RegisterWorkflow(wrapperWorkflow)
+
+	// Mock the activity via nil struct pointer — identical to production usage
+	var bra *BulkReadFileActivities
+	s.env.OnActivity(bra.BulkReadFileActivityV2, mock.Anything, mock.Anything).Return(
+		&BulkReadFileActivityV2Output{Ref: expectedRef}, nil,
+	)
+
+	s.env.ExecuteWorkflow(wrapperWorkflow)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+
+	var result BulkReadFileActivityV2Output
+	s.NoError(s.env.GetWorkflowResult(&result))
+	s.Equal(expectedRef, result.Ref)
+}
+
+func (s *BulkReadFileV2TestSuite) TestBulkReadFileV2_EmptyFileLines() {
+	tempDir := s.T().TempDir()
+	ec := env.EnvContainer{Env: &env.LocalEnv{WorkingDirectory: tempDir}}
+
+	wrapperWorkflow := func(ctx workflow.Context) (*BulkReadFileActivityV2Output, error) {
+		dCtx := DevContext{
+			ExecContext: flow_action.ExecContext{
+				Context:      ctx,
+				EnvContainer: &ec,
+				WorkspaceId:  "test-workspace",
+			},
+		}
+		return BulkReadFileV2(dCtx, BulkReadFileParams{
+			FileLines:  []FileLine{},
+			WindowSize: 5,
+		}, llm.ToolCall{Id: "call_123", Name: "read_file"})
+	}
+	s.env.RegisterWorkflow(wrapperWorkflow)
+
+	s.env.ExecuteWorkflow(wrapperWorkflow)
+	s.True(s.env.IsWorkflowCompleted())
+	s.Error(s.env.GetWorkflowError())
+}
+
+func TestBulkReadFileV2(t *testing.T) {
+	suite.Run(t, new(BulkReadFileV2TestSuite))
 }

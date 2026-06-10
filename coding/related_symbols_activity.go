@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"path/filepath"
 	"sidekick/coding/lsp"
 	"sidekick/coding/tree_sitter"
 	"sidekick/env"
@@ -66,12 +65,18 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 
 		// Memoize file symbols and signatures
 		if _, ok := memoMap[filePath]; !ok {
-			symbols, err := tree_sitter.GetFileSymbols(filePath)
+			fileBytes, readErr := input.EnvContainer.Env.ReadFile(ctx, filePath)
+			if readErr != nil {
+				return nil, fmt.Errorf("failed to read file %s: %w", filePath, readErr)
+			}
+			langName := utils.InferLanguageNameFromFilePath(filePath)
+
+			symbols, err := tree_sitter.GetFileSymbolsFromBytes(filePath, langName, fileBytes)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get file symbols for %s: %w", filePath, err)
 			}
 
-			signatures, err := tree_sitter.GetFileSignatures(filePath)
+			signatures, err := tree_sitter.GetFileSignaturesFromBytes(langName, fileBytes)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get file signatures for %s: %w", filePath, err)
 			}
@@ -126,7 +131,7 @@ func (ca *CodingActivities) RelatedSymbolsActivity(ctx context.Context, input Re
 				}
 
 				inSignature := RangesOverlap(signatureRange, referenceRange)
-				relFilePath, err := filepath.Rel(rootUri, filePath)
+				relFilePath, err := env.EnvRel(input.EnvContainer.Env, rootUri, filePath)
 				if err != nil {
 					relFilePath = "" // File is outside working directory
 				}

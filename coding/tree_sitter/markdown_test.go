@@ -34,7 +34,7 @@ Final content.
 	err := os.WriteFile(filePath, []byte(content), 0644)
 	require.NoError(t, err)
 
-	result, err := GetFileSignaturesString(filePath)
+	result, err := GetFileSignaturesStringFromBytes("markdown", []byte(content))
 	require.NoError(t, err)
 
 	expected := `# Main Title
@@ -67,7 +67,7 @@ More content.
 	err := os.WriteFile(filePath, []byte(content), 0644)
 	require.NoError(t, err)
 
-	result, err := GetFileSignaturesString(filePath)
+	result, err := GetFileSignaturesStringFromBytes("markdown", []byte(content))
 	require.NoError(t, err)
 
 	expected := `Main Title
@@ -96,7 +96,7 @@ func TestGetFileSymbolsString_Markdown(t *testing.T) {
 	err := os.WriteFile(filePath, []byte(content), 0644)
 	require.NoError(t, err)
 
-	result, err := GetFileSymbolsString(filePath)
+	result, err := GetFileSymbolsStringFromBytes(filePath, "markdown", []byte(content))
 	require.NoError(t, err)
 
 	// Should contain canonical slugified symbols
@@ -125,7 +125,7 @@ func TestGetFileSymbolsString_Markdown_Setext(t *testing.T) {
 	err := os.WriteFile(filePath, []byte(content), 0644)
 	require.NoError(t, err)
 
-	result, err := GetFileSymbolsString(filePath)
+	result, err := GetFileSymbolsStringFromBytes(filePath, "markdown", []byte(content))
 	require.NoError(t, err)
 
 	// Setext headings should also produce canonical slugified symbols
@@ -150,7 +150,7 @@ Some content.
 	err := os.WriteFile(filePath, []byte(content), 0644)
 	require.NoError(t, err)
 
-	result, err := GetFileSymbolsString(filePath)
+	result, err := GetFileSymbolsStringFromBytes(filePath, "markdown", []byte(content))
 	require.NoError(t, err)
 
 	// Should contain yaml_frontmatter and heading symbols
@@ -183,7 +183,7 @@ Section two content.
 	err := os.WriteFile(filePath, []byte(content), 0644)
 	require.NoError(t, err)
 
-	symbols, err := GetFileSymbols(filePath)
+	symbols, err := GetFileSymbolsFromBytes(filePath, "markdown", []byte(content))
 	require.NoError(t, err)
 
 	// Find symbols by content
@@ -244,7 +244,7 @@ func TestGetFileSymbols_Markdown_SetextSectionRanges(t *testing.T) {
 	err := os.WriteFile(filePath, []byte(content), 0644)
 	require.NoError(t, err)
 
-	symbols, err := GetFileSymbols(filePath)
+	symbols, err := GetFileSymbolsFromBytes(filePath, "markdown", []byte(content))
 	require.NoError(t, err)
 
 	// Find symbols by content
@@ -433,7 +433,7 @@ Usage content.
 	require.NoError(t, err)
 
 	// Lookup by canonical slug
-	blocks, err := GetSymbolDefinitions(filePath, "#getting-started", 0)
+	blocks, err := GetSymbolDefinitionsFromBytes("markdown", []byte(content), "#getting-started", 0)
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 
@@ -460,7 +460,7 @@ Install instructions.
 	require.NoError(t, err)
 
 	// Lookup by slug without leading #
-	blocks, err := GetSymbolDefinitions(filePath, "installation", 0)
+	blocks, err := GetSymbolDefinitionsFromBytes("markdown", []byte(content), "installation", 0)
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 
@@ -486,7 +486,7 @@ Content here.
 	require.NoError(t, err)
 
 	// Lookup by raw heading text
-	blocks, err := GetSymbolDefinitions(filePath, "Getting Started", 0)
+	blocks, err := GetSymbolDefinitionsFromBytes("markdown", []byte(content), "Getting Started", 0)
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 
@@ -512,7 +512,7 @@ Content.
 	require.NoError(t, err)
 
 	// Lookup by heading text with ### prefix
-	blocks, err := GetSymbolDefinitions(filePath, "## Section One", 0)
+	blocks, err := GetSymbolDefinitionsFromBytes("markdown", []byte(content), "## Section One", 0)
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 
@@ -546,7 +546,7 @@ Second example.
 	require.NoError(t, err)
 
 	// Lookup should return multiple blocks for duplicate headings
-	blocks, err := GetSymbolDefinitions(filePath, "#example", 0)
+	blocks, err := GetSymbolDefinitionsFromBytes("markdown", []byte(content), "#example", 0)
 	require.NoError(t, err)
 	require.Len(t, blocks, 2)
 
@@ -584,7 +584,7 @@ Some content.
 	require.NoError(t, err)
 
 	// Lookup yaml_frontmatter
-	blocks, err := GetSymbolDefinitions(filePath, "yaml_frontmatter", 0)
+	blocks, err := GetSymbolDefinitionsFromBytes("markdown", []byte(content), "yaml_frontmatter", 0)
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 
@@ -612,7 +612,7 @@ Just content.
 	require.NoError(t, err)
 
 	// Lookup yaml_frontmatter when not present
-	_, err = GetSymbolDefinitions(filePath, "yaml_frontmatter", 0)
+	_, err = GetSymbolDefinitionsFromBytes("markdown", []byte(content), "yaml_frontmatter", 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "symbol not found: yaml_frontmatter")
 }
@@ -643,7 +643,7 @@ Section two content.
 	require.NoError(t, err)
 
 	// Section One should include Subsection A but not Section Two
-	blocks, err := GetSymbolDefinitions(filePath, "#section-one", 0)
+	blocks, err := GetSymbolDefinitionsFromBytes("markdown", []byte(content), "#section-one", 0)
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 
@@ -679,7 +679,7 @@ func TestGetSymbolDefinitions_Markdown_SetextHeadings(t *testing.T) {
 	require.NoError(t, err)
 
 	// Lookup setext heading
-	blocks, err := GetSymbolDefinitions(filePath, "#section-one", 0)
+	blocks, err := GetSymbolDefinitionsFromBytes("markdown", []byte(content), "#section-one", 0)
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 
@@ -705,7 +705,7 @@ Content.
 	require.NoError(t, err)
 
 	// Lookup non-existent symbol
-	_, err = GetSymbolDefinitions(filePath, "#nonexistent", 0)
+	_, err = GetSymbolDefinitionsFromBytes("markdown", []byte(content), "#nonexistent", 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "symbol not found")
 }
@@ -735,7 +735,7 @@ Some text here.
 	err := os.WriteFile(filePath, []byte(content), 0644)
 	require.NoError(t, err)
 
-	result, err := GetFileHeadersString(filePath, 0)
+	result, err := GetFileHeadersStringFromBytes("markdown", []byte(content), 0)
 	require.NoError(t, err)
 
 	// Should contain the supported keys
@@ -766,7 +766,7 @@ author: Someone
 	err := os.WriteFile(filePath, []byte(content), 0644)
 	require.NoError(t, err)
 
-	result, err := GetFileHeadersString(filePath, 0)
+	result, err := GetFileHeadersStringFromBytes("markdown", []byte(content), 0)
 	require.NoError(t, err)
 
 	assert.Contains(t, result, "title: Just a Title")
@@ -788,7 +788,7 @@ version: 1.0
 	err := os.WriteFile(filePath, []byte(content), 0644)
 	require.NoError(t, err)
 
-	result, err := GetFileHeadersString(filePath, 0)
+	result, err := GetFileHeadersStringFromBytes("markdown", []byte(content), 0)
 	require.NoError(t, err)
 
 	// Should return empty string when no supported keys exist
@@ -807,7 +807,7 @@ Some content without frontmatter.
 	err := os.WriteFile(filePath, []byte(content), 0644)
 	require.NoError(t, err)
 
-	result, err := GetFileHeadersString(filePath, 0)
+	result, err := GetFileHeadersStringFromBytes("markdown", []byte(content), 0)
 	require.NoError(t, err)
 
 	// Should return empty string when no frontmatter exists
@@ -832,7 +832,7 @@ name: Test
 	err := os.WriteFile(filePath, []byte(content), 0644)
 	require.NoError(t, err)
 
-	result, err := GetFileHeadersString(filePath, 0)
+	result, err := GetFileHeadersStringFromBytes("markdown", []byte(content), 0)
 	require.NoError(t, err)
 
 	assert.Contains(t, result, "description: |")
@@ -857,9 +857,8 @@ tags:
 	err := os.WriteFile(filePath, []byte(content), 0644)
 	require.NoError(t, err)
 
-	result, err := GetFileHeadersString(filePath, 0)
+	result, err := GetFileHeadersStringFromBytes("markdown", []byte(content), 0)
 	require.NoError(t, err)
-
 	assert.Contains(t, result, "tags:")
 	assert.Contains(t, result, "- documentation")
 	assert.Contains(t, result, "- markdown")
@@ -884,7 +883,7 @@ title: My Title
 	err := os.WriteFile(filePath, []byte(content), 0644)
 	require.NoError(t, err)
 
-	result, err := GetFileHeadersString(filePath, 0)
+	result, err := GetFileHeadersStringFromBytes("markdown", []byte(content), 0)
 	require.NoError(t, err)
 
 	// Should preserve the indented --- inside the block scalar
@@ -909,7 +908,7 @@ title: Doc Title
 	err := os.WriteFile(filePath, []byte(content), 0644)
 	require.NoError(t, err)
 
-	headers, err := GetFileHeaders(filePath, 0)
+	headers, err := GetFileHeadersFromBytes("markdown", []byte(content), 0)
 	require.NoError(t, err)
 	require.Len(t, headers, 2)
 
@@ -953,9 +952,9 @@ Setext content.
 	}
 	tmpFile.Close()
 
-	symbols, err := GetAllAlternativeFileSymbols(tmpFile.Name())
+	symbols, err := GetAllAlternativeFileSymbolsFromBytes(tmpFile.Name(), "markdown", []byte(mdContent))
 	if err != nil {
-		t.Fatalf("GetAllAlternativeFileSymbols failed: %v", err)
+		t.Fatalf("GetAllAlternativeFileSymbolsFromBytes failed: %v", err)
 	}
 
 	// Collect all symbol contents

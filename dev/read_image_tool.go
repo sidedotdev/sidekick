@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -98,7 +97,7 @@ func (a *ReadImageActivities) ReadImageActivity(ctx context.Context, input ReadI
 			return nil, pathErr
 		}
 
-		raw, err = os.ReadFile(resolvedPath)
+		raw, err = input.EnvContainer.Env.ReadFile(ctx, resolvedPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read image file: %w", err)
 		}
@@ -184,13 +183,14 @@ func fetchImageFromURL(imageURL string) ([]byte, string, error) {
 }
 
 // validateImagePath ensures the file path is safe: no ".." segments, not absolute,
-// and resolves within the working directory.
+// and resolves within the working directory. The returned path is relative to
+// workDir (suitable for passing to Env.ReadFile on envs that resolve relative paths).
 func validateImagePath(workDir, filePath string) (string, error) {
 	if filePath == "" {
 		return "", fmt.Errorf("file path is empty")
 	}
 
-	if filepath.IsAbs(filePath) {
+	if filepath.IsAbs(filePath) || strings.HasPrefix(filePath, "/") {
 		return "", fmt.Errorf("absolute paths are not allowed: %s", filePath)
 	}
 
@@ -219,5 +219,5 @@ func validateImagePath(workDir, filePath string) (string, error) {
 		return "", fmt.Errorf("resolved path %s is not under working directory %s", absResolved, absWorkDir)
 	}
 
-	return resolved, nil
+	return cleaned, nil
 }

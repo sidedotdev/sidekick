@@ -1,14 +1,15 @@
 package dev
 
 import (
+	"context"
 	"fmt"
-	"path/filepath"
 	"sidekick/coding/tree_sitter"
 	"sidekick/common"
 	"sidekick/env"
 	"sidekick/flow_action"
 	"sidekick/llm"
 	"sidekick/persisted_ai"
+	"sidekick/utils"
 	"strings"
 
 	"github.com/invopop/jsonschema"
@@ -107,8 +108,12 @@ func isExistentFilePath(ctx workflow.Context, envContainer env.EnvContainer, pat
 
 // getSymbolsMessage returns a message about available symbols in a file if it exists
 func GetSymbolsActivity(envContainer env.EnvContainer, filePath string) ([]tree_sitter.Symbol, error) {
-	absolutePath := filepath.Join(envContainer.Env.GetWorkingDirectory(), filePath)
-	return tree_sitter.GetFileSymbols(absolutePath)
+	fileBytes, err := envContainer.Env.ReadFile(context.Background(), filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file %s: %w", filePath, err)
+	}
+	langName := utils.InferLanguageNameFromFilePath(filePath)
+	return tree_sitter.GetFileSymbolsFromBytes(filePath, langName, fileBytes)
 }
 
 func getSymbolsMessage(ctx workflow.Context, envContainer env.EnvContainer, filePath string) (string, error) {

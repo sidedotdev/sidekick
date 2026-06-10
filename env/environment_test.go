@@ -496,3 +496,37 @@ func TestDevPodWorkspaceName(t *testing.T) {
 		})
 	}
 }
+
+func TestPosixRel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		base    string
+		targ    string
+		want    string
+		wantErr bool
+	}{
+		{name: "same path", base: "/a/b", targ: "/a/b", want: "."},
+		{name: "child", base: "/a/b", targ: "/a/b/c/d", want: "c/d"},
+		{name: "sibling", base: "/a/b", targ: "/a/c", want: "../c"},
+		{name: "deeper base", base: "/a/b/c", targ: "/a/d", want: "../../d"},
+		{name: "root to child", base: "/", targ: "/a/b", want: "a/b"},
+		{name: "mixed abs/rel", base: "/a", targ: "b", wantErr: true},
+		{name: "both relative", base: "a/b", targ: "a/c", want: "../c"},
+		{name: "unclean paths", base: "/a//b/", targ: "/a/b/c", want: "c"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := posixRel(tt.base, tt.targ)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
