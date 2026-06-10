@@ -100,6 +100,8 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "git blame"},
 			{Pattern: "git shortlog"},
 			{Pattern: "git stash list"},
+			{Pattern: "git add"},
+			{Pattern: "git rm"},
 			// Go commands
 			{Pattern: "go test"},
 			{Pattern: "go build"},
@@ -131,6 +133,10 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: "npm version"},
 			{Pattern: "npm audit"},
 			{Pattern: "npm update"},
+			{Pattern: "npm view"},
+			{Pattern: "npm info"},
+			{Pattern: "npm show"},
+			{Pattern: "npm v"},
 			// Yarn commands
 			{Pattern: "yarn test"},
 			{Pattern: "yarn lint"},
@@ -305,6 +311,7 @@ func BaseCommandPermissions() CommandPermissionConfig {
 			{Pattern: `^sed\b.*s.*/e\b`, Message: "GNU sed substitution with execute flag runs shell commands, enabling exfiltration or side effects."},
 			// GNU sed e command (standalone, with optional address like 1e or $e)
 			{Pattern: `^sed\b.*'[0-9$]*e[[:space:]]`, Message: "GNU sed `e` command executes shell commands for addressed lines, enabling exfiltration or side effects."},
+			{Pattern: "uvx", Message: "uvx can run any published package, even if it's not installed yet, so should require approval"},
 		},
 		Deny: []CommandPattern{
 			// Destructive file operations - patterns use regex to avoid false positives on paths like /Users/...
