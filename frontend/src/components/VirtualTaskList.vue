@@ -13,6 +13,7 @@
           width: '100%',
           transform: `translateY(${item.start - virtualizer.options.scrollMargin}px)`,
         }"
+        class="virtual-task-card-container"
       >
         <TaskCard
           :task="tasks[item.index]"
@@ -106,5 +107,8 @@ onUnmounted(() => {
 <style scoped>
 .virtual-task-list {
   width: 100%;
+}
+.virtual-task-card-container:hover {
+  z-index: 1; /* hovering allow rendering over next ones */
 }
 </style>
