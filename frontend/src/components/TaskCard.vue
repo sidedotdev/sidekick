@@ -309,8 +309,16 @@ const handleDescriptionBlur = (event: FocusEvent) => {
   line-height: 1.3;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+}
+
+.task-card:hover .task-title {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+  background-color: var(--task-card-hover-background);
 }
 
 .task-description {
