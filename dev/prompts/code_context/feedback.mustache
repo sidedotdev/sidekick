@@ -2,3 +2,11 @@ The previously provided arguments to {{{retrieveCodeContextFunctionName}}} were 
 extract code using it. Here is the feedback we received:
 
 {{{feedback}}}
+
+Hint: `file_path` may be either the file where a symbol is defined OR any file
+that references/uses it. When the symbol isn't defined in `file_path`, the tool
+resolves the real definition via LSP go-to-definition (possibly in another repo
+file or a third-party library/stdlib). Pass the optional `reference_line`
+argument (a literal line or distinctive substring from `file_path` where the
+symbol is used) to disambiguate when the symbol text appears multiple times in
+`file_path`.

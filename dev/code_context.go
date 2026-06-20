@@ -24,7 +24,7 @@ import (
 
 type RequiredCodeContext struct {
 	Analysis string                     `json:"analysis" jsonschema:"description=Brief analysis of which code symbols (functions\\, types\\, etc) are most relevant before outputting requests."`
-	Requests []coding.FileSymDefRequest `json:"requests" jsonschema:"description=Requests to retrieve full definitions of a given symbol within the given file where it is defined."`
+	Requests []coding.FileSymDefRequest `json:"requests" jsonschema:"description=Requests to retrieve full definitions of given symbols. For each request\\, file_path may be either the file where the symbol is defined OR a file that references/uses it; when the symbol is not defined in file_path\\, the tool automatically resolves the real definition (possibly in another repo file or a third-party library)."`
 }
 
 func (r *RequiredCodeContext) UnmarshalJSON(data []byte) error {
@@ -52,7 +52,7 @@ func (r *RequiredCodeContext) UnmarshalJSON(data []byte) error {
 
 var getSymbolDefinitionsTool = &llm.Tool{
 	Name:        "get_symbol_definitions",
-	Description: "When additional code context is required, analysis should be done first. Then the shortlist of functions and important custom types of interest. Returns the complete lines of code corresponding to that input, i.e., the full function and type defintion bodies. The go import block will also be included.",
+	Description: "When additional code context is required, analysis should be done first. Then the shortlist of functions and important custom types of interest. Returns the complete lines of code corresponding to that input, i.e., the full function and type definition bodies. The go import block will also be included. For each request, file_path may be either the file where the symbol is defined OR a file that references/uses it: when the symbol is not defined in file_path, the tool automatically resolves the real definition via LSP go-to-definition and inlines it from wherever it lives (another repo file or a third-party library/stdlib). Use the optional reference_line field to disambiguate when the symbol text appears multiple times in file_path.",
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&RequiredCodeContext{}),
 }
 
@@ -670,7 +670,7 @@ func retrieveCodeContextForToolCalls(ctx workflow.Context, envContainer *env.Env
 		})
 
 		if err != nil || result.Failures != "" {
-			hint := fmt.Sprintf("Have you followed the required formats exactly for all arguments? Look at the examples given in the %s schema descriptions for all the properties. Note that frontend components can be retrieved in full with empty symbol names array", currentGetSymbolDefinitionsTool().Name)
+			hint := fmt.Sprintf("Have you followed the required formats exactly for all arguments? Look at the examples given in the %s schema descriptions for all the properties. Note that frontend components can be retrieved in full with empty symbol names array. Also note that file_path may be either the file where the symbol is defined or a file that references/uses it: when the symbol isn't defined in file_path the tool resolves the real definition via LSP (possibly in another repo file or a third-party library). Use the optional reference_line field to disambiguate when the symbol text appears multiple times in file_path.", currentGetSymbolDefinitionsTool().Name)
 			feedback := fmt.Sprintf("failed to extract code context: %v\n%s\n\nHint: %s", err, result.Failures, hint)
 			feedbacks = append(feedbacks, llm2.ToolResultBlock{
 				Content:    llm2.TextContentBlocks(feedback),
