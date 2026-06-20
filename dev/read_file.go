@@ -45,6 +45,13 @@ func validateFilePath(filePath string, allowAnyPath bool) error {
 	return nil
 }
 
+func noLinesInWindowError(fileLength int) error {
+	if fileLength == 0 {
+		return fmt.Errorf("no lines found in the specified window; file is empty")
+	}
+	return fmt.Errorf("no lines found in the specified window; file has %d lines, valid line numbers are 1-%d", fileLength, fileLength)
+}
+
 func readFileLinesFromBytes(data []byte, relFilePath string, lineNumber, windowSize int) (string, error) {
 	lang := utils.InferLanguageNameFromFilePath(relFilePath)
 
@@ -68,7 +75,10 @@ func readFileLinesFromBytes(data []byte, relFilePath string, lineNumber, windowS
 	}
 
 	if len(lines) == 0 {
-		return "", fmt.Errorf("no lines found in the specified window")
+		for scanner.Scan() {
+			lineNum++
+		}
+		return "", noLinesInWindowError(lineNum - 1)
 	}
 
 	return fmt.Sprintf(
@@ -126,7 +136,10 @@ func ReadFileActivity(baseDir string, readFileParams ReadFileActivityInput) (str
 	}
 
 	if len(lines) == 0 {
-		return "", fmt.Errorf("no lines found in the specified window")
+		for scanner.Scan() {
+			lineNumber++
+		}
+		return "", noLinesInWindowError(lineNumber - 1)
 	}
 
 	formattedOutput := fmt.Sprintf(
@@ -304,7 +317,7 @@ func BulkReadFileActivity(baseDir string, params BulkReadFileParams) (BulkReadFi
 
 		// If no valid blocks were found for this file, add an error
 		if !hasValidBlocks {
-			errors = append(errors, fmt.Sprintf("failed to read the file: no lines found in the specified window"))
+			errors = append(errors, fmt.Sprintf("failed to read the file: %s", noLinesInWindowError(fileLength).Error()))
 		}
 	}
 
@@ -478,7 +491,7 @@ func (a *BulkReadFileActivities) BulkReadFileActivityV2(ctx context.Context, inp
 		}
 
 		if !hasValidBlocks {
-			parts = append(parts, "failed to read the file: no lines found in the specified window")
+			parts = append(parts, fmt.Sprintf("failed to read the file: %s", noLinesInWindowError(fileLength).Error()))
 		}
 	}
 
