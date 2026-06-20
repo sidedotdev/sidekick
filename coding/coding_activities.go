@@ -224,8 +224,18 @@ func (ca *CodingActivities) BulkGetSymbolDefinitions(ctx context.Context, dirSym
 			defer wg.Done()
 			symbolResults := ca.retrieveSymbolDefinitions(dirSymDefRequest.EnvContainer, req, numContextLines, dirSymDefRequest.IncludeRelatedSymbols)
 
-			if symbolResults[0].Error == nil {
-				// include headers only when no failure
+			// The file's headers (e.g. package/imports) are only useful when at
+			// least one symbol was actually found in the requested file. When
+			// every symbol was resolved via LSP into a different file, emitting
+			// the requested file's header alone would be orphan output.
+			hasInFileResult := false
+			for _, sr := range symbolResults {
+				if sr.Error == nil && sr.RelativePath == req.FilePath {
+					hasInFileResult = true
+					break
+				}
+			}
+			if hasInFileResult {
 				result := getHeaderRetrievalResult(ctx, dirSymDefRequest.EnvContainer.Env, req.FilePath, numContextLines)
 				mu.Lock()
 				results = append(results, result)
@@ -934,6 +944,22 @@ func (ca *CodingActivities) resolveSymbolDefinitionViaLSP(ctx context.Context, e
 		blocks, _ := tree_sitter.GetSymbolDefinitionsFromBytes(resolvedLang, defBytes, resolvedSymbolName, numContextLines)
 		if len(blocks) == 0 && resolvedSymbolName != symbol {
 			blocks, _ = tree_sitter.GetSymbolDefinitionsFromBytes(resolvedLang, defBytes, symbol, numContextLines)
+		}
+		// When the resolved file contains multiple same-named definitions
+		// (e.g. a free function and a method with the same selector), keep
+		// only blocks whose range contains the LSP-pointed definition row.
+		if len(blocks) > 1 {
+			locStartRow := uint(loc.Location.Range.Start.Line)
+			locEndRow := uint(loc.Location.Range.End.Line)
+			filtered := blocks[:0]
+			for _, b := range blocks {
+				if b.Range.StartPoint.Row <= locStartRow && b.Range.EndPoint.Row >= locEndRow {
+					filtered = append(filtered, b)
+				}
+			}
+			if len(filtered) > 0 {
+				blocks = filtered
+			}
 		}
 		if len(blocks) == 0 {
 			blocks = tree_sitter.ExpandContextLines(
