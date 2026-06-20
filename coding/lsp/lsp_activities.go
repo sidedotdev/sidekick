@@ -30,6 +30,12 @@ type LSPDefinitionLocationsRequest struct {
 	// eg: "SomeFunction", or "SomeStruct", or "recieiver.SomeMethod", or
 	// "some_package.SomeThing", or "someConst" or "aVariableName"
 	Symbols []string `json:"symbols"`
+	// ReferenceLine, when set, is a literal source line (or distinctive
+	// substring of one) from FilePath used to constrain the symbol-position
+	// search to a specific line before invoking go-to-definition. When the
+	// line cannot be located in the file, the search degrades to the first
+	// occurrence of each symbol rather than erroring.
+	ReferenceLine string `json:"reference_line,omitempty"`
 }
 
 type SymbolDefinitionLocation struct {
@@ -53,7 +59,6 @@ func (la *LSPActivities) GetSymbolDefinitionLocations(ctx context.Context, reque
 }
 
 func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request LSPDefinitionLocationsRequest) ([]SymbolDefinitionLocation, error) {
-	// Step 1: Find the Position of each symbol in the file.
 	if request.EnvContainer == nil {
 		return nil, fmt.Errorf("EnvContainer is required in LSPDefinitionLocationsRequest")
 	}
@@ -61,12 +66,12 @@ func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request L
 	if readErr != nil {
 		return []SymbolDefinitionLocation{}, readErr
 	}
-	positions, err := findSymbolPositionsFromBytes(fileBytes, request.Symbols)
-	if err != nil {
-		return []SymbolDefinitionLocation{}, err
+
+	var lineRange *Range
+	if request.ReferenceLine != "" {
+		lineRange = findReferenceLineRange(fileBytes, request.ReferenceLine)
 	}
 
-	// Step 2: Initialize the lsp client and invoke its TextDocumentDefinition function to get the definition of each symbol.
 	langName := utils.InferLanguageNameFromFilePath(request.FilePath)
 	repoDir := request.EnvContainer.Env.GetWorkingDirectory()
 	lspClient, err := la.findOrInitClient(ctx, repoDir, langName)
@@ -74,29 +79,61 @@ func (la *LSPActivities) GetSingleFileDefinitions(ctx context.Context, request L
 		return []SymbolDefinitionLocation{}, err
 	}
 	fileURI := convertFilePathToURI(repoDir, request.FilePath)
-	symbolDefinitions := make([]SymbolDefinitionLocation, 0, len(positions))
-	for _, position := range positions {
+
+	symbolDefinitions := make([]SymbolDefinitionLocation, 0, len(request.Symbols))
+	for _, symbol := range request.Symbols {
+		position, posErr := findSymbolPosition(bytes.NewReader(fileBytes), lineRange, symbol)
+		if posErr != nil && lineRange != nil {
+			position, posErr = findSymbolPosition(bytes.NewReader(fileBytes), nil, symbol)
+		}
+		if posErr != nil {
+			symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
+				Symbol: symbol,
+				Error:  posErr.Error(),
+			})
+			continue
+		}
+
 		locations, err := lspClient.TextDocumentDefinition(ctx, fileURI, position.Line, position.Character)
 		if err != nil {
 			symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
-				// FIXME include the symbol name here
-				// Symbol: symbolPosition.symbol,
-				Error: err.Error(),
+				Symbol: symbol,
+				Error:  err.Error(),
 			})
 			continue
 		}
 
 		for _, location := range locations {
 			symbolDefinitions = append(symbolDefinitions, SymbolDefinitionLocation{
-				// FIXME include the symbol name here
-				// Symbol: symbolPosition.symbol,
+				Symbol:   symbol,
 				Location: location,
 			})
 		}
 	}
 
-	// Step 3: Use the Location responses and read the location file to get the definition of each symbol based on given range
 	return symbolDefinitions, nil
+}
+
+// findReferenceLineRange returns a single-line Range covering the first line in
+// data that contains the given snippet (after trimming surrounding whitespace),
+// or nil if no such line is found. Callers use a nil return to degrade to
+// first-occurrence search.
+func findReferenceLineRange(data []byte, snippet string) *Range {
+	trimmed := strings.TrimSpace(snippet)
+	if trimmed == "" {
+		return nil
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for i := 0; scanner.Scan(); i++ {
+		line := scanner.Text()
+		if strings.Contains(line, trimmed) {
+			return &Range{
+				Start: Position{Line: i, Character: 0},
+				End:   Position{Line: i, Character: len(line)},
+			}
+		}
+	}
+	return nil
 }
 
 // TODO return this instead of Position in findSymbolPositions
