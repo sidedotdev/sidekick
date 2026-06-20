@@ -1314,6 +1314,46 @@ func TestUpdateTaskHandler(t *testing.T) {
 	assert.WithinDuration(t, time.Now(), updatedTask.Updated, time.Second, "'updated' field should be current time")
 }
 
+func TestUpdateTaskHandler_UpdatesFlowType(t *testing.T) {
+	t.Parallel()
+	ctrl := NewMockController(t)
+
+	task := domain.Task{
+		WorkspaceId: "ws_" + ksuid.New().String(),
+		Id:          "task_" + ksuid.New().String(),
+		Description: "test description",
+		AgentType:   domain.AgentTypeLLM,
+		Status:      domain.TaskStatusDrafting,
+		FlowType:    "basic_dev",
+	}
+	err := ctrl.service.PersistTask(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := TaskRequest{
+		Description: task.Description,
+		AgentType:   string(domain.AgentTypeHuman),
+		Status:      string(domain.TaskStatusDrafting),
+		FlowType:    "planned_dev",
+	}
+	reqBody, _ := json.Marshal(req)
+
+	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ginCtx.Request = httptest.NewRequest(http.MethodPut, "/workspaces/"+task.WorkspaceId+"/tasks/"+task.Id, bytes.NewBuffer(reqBody))
+	ginCtx.Params = []gin.Param{
+		{Key: "workspaceId", Value: task.WorkspaceId},
+		{Key: "id", Value: task.Id},
+	}
+
+	ctrl.UpdateTaskHandler(ginCtx)
+
+	assert.Equal(t, http.StatusOK, ginCtx.Writer.Status())
+
+	updatedTask, _ := ctrl.service.GetTask(ginCtx.Request.Context(), task.WorkspaceId, task.Id)
+	assert.Equal(t, "planned_dev", updatedTask.FlowType)
+}
+
 func TestUpdateTaskHandler_InvalidTaskID(t *testing.T) {
 	t.Parallel()
 	// Initialize the test server and database
