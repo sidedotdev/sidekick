@@ -34,7 +34,7 @@ var recordDevPlanTool = llm.Tool{
 }
 
 type DevStepUpdate struct {
-	StepNumber         string  `json:"step_number" jsonschema:"description=The step number to update (e.g. \"1\"\\, \"2.1\"). For insert\\, this is where the new step will be inserted."`
+	StepNumber         string  `json:"step_number" jsonschema:"description=The step number to update (e.g. \"1\"\\, \"2\"). For insert\\, this is where the new step will be inserted."`
 	Operation          string  `json:"operation" jsonschema:"enum=edit,enum=delete,enum=insert,description=The operation to perform: edit updates existing step\\, delete removes it\\, insert adds a new step at the position."`
 	Title              *string `json:"title,omitempty" jsonschema:"description=Summary of the step's purpose (for edit/insert)"`
 	Definition         *string `json:"definition,omitempty" jsonschema:"description=Information about what to do in this step (for edit/insert)"`
@@ -61,21 +61,26 @@ var updateDevPlanTool = llm.Tool{
 	Parameters:  (&jsonschema.Reflector{DoNotReference: true}).Reflect(&DevPlanUpdate{}),
 }
 
-// incrementStepNumber increments a step number string.
-// For simple numbers like "1", returns "2".
-// For hierarchical numbers like "2.1", increments the last component to "2.2".
+// incrementStepNumber increments a step number string, e.g. "1" -> "2".
+// Returns the original string if it cannot be parsed as an integer.
 func incrementStepNumber(stepNumber string) string {
-	parts := strings.Split(stepNumber, ".")
-	lastIdx := len(parts) - 1
-	if num, err := strconv.Atoi(parts[lastIdx]); err == nil {
-		parts[lastIdx] = strconv.Itoa(num + 1)
+	num, err := strconv.Atoi(stepNumber)
+	if err != nil {
+		return stepNumber
 	}
-	return strings.Join(parts, ".")
+	return strconv.Itoa(num + 1)
 }
 
 func applyDevPlanUpdates(plan DevPlan, update DevPlanUpdate) (DevPlan, error) {
 	// Apply step updates
 	for _, stepUpdate := range update.Updates {
+		if strings.Contains(stepUpdate.StepNumber, ".") {
+			return plan, fmt.Errorf("nested step numbers are not allowed: %q", stepUpdate.StepNumber)
+		}
+		if _, err := strconv.Atoi(stepUpdate.StepNumber); err != nil {
+			return plan, fmt.Errorf("step number must be an integer: %q", stepUpdate.StepNumber)
+		}
+
 		stepIndex := -1
 		for i, step := range plan.Steps {
 			if step.StepNumber == stepUpdate.StepNumber {
@@ -192,7 +197,7 @@ func applyDevPlanUpdates(plan DevPlan, update DevPlanUpdate) (DevPlan, error) {
 
 type DevPlan struct {
 	Analysis  string    `json:"analysis" jsonschema:"description=High-level analysis of what the plan will require before defining the individual steps."`
-	Steps     []DevStep `json:"steps" jsonschema:"description=The top-level steps that must be executed to fulfill the given requirements. This should be a pretty short list."`
+	Steps     []DevStep `json:"steps" jsonschema:"description=The steps that must be executed to fulfill the given requirements. This should be a pretty short list."`
 	Complete  bool      `json:"is_planning_complete" jsonschema:"description=Is the plan itself complete - not the actual execution of the plan\\, but the plan itself. Should be written out AFTER the steps in the plan\\, since completion is hard to figure out before the plan is written out."`
 	Learnings []string  `json:"learnings" jsonschema:"description=What was learned while developing the plan that will aid in execution? If the plan is not complete\\, what did we learn that will help us complete the rest of this plan?"`
 }
@@ -209,12 +214,17 @@ func CleanSteps(steps []DevStep) []DevStep {
 
 func ValidateAndCleanPlan(plan DevPlan) (DevPlan, error) {
 	plan.Steps = CleanSteps(plan.Steps)
+	// Normalize step numbers to a flat 1-based sequence so any nested-style
+	// numbering produced by the model is flattened away.
+	for i := range plan.Steps {
+		plan.Steps[i].StepNumber = strconv.Itoa(i + 1)
+	}
 	return plan, nil
 }
 
 // TODO also add EstimatedDevStep struct, or do it in one go within DevStep with an StepSize field
 type DevStep struct {
-	StepNumber         string `json:"step_number" jsonschema:"description=Hierarchical step number in the plan\\, eg \"1\" for the first top-level step\\, and \"2.1\" for the first sub-step of the second top-level step"`
+	StepNumber         string `json:"step_number" jsonschema:"description=Step number in the plan\\, eg \"1\" for the first step and \"2\" for the second step"`
 	Title              string `json:"title" jsonschema:"description=Summary of the step's purpose"`
 	Definition         string `json:"definition" jsonschema:"description=Information about what to do in this step formatted with markdown (without any headings). Should be short\\, yet include enough initial context/information for someone to be able to start performing the step."`
 	Type               string `json:"type" jsonschema:"enum=edit,description=\"edit\" means code or non-code plaintext files must be created\\, deleted and/or edited. searching for text or code context in the repo can also be done in the same step. \"other\" means that other actions than the standard ones are required\\, so this will ask for external help"`
@@ -236,19 +246,12 @@ func (plan DevPlan) String() string {
 
 func (step DevStep) String() string {
 	writer := &strings.Builder{}
-	level := len(strings.Split(step.StepNumber, ".")) - 1
-	writer.WriteString(strings.Repeat("  ", level))
-	if level == 0 {
-		writer.WriteString("#### Step ")
-		writer.WriteString(step.StepNumber)
-		writer.WriteString(": ")
-	} else {
-		writer.WriteString(step.StepNumber)
-		writer.WriteString(". ")
-	}
+	writer.WriteString("#### Step ")
+	writer.WriteString(step.StepNumber)
+	writer.WriteString(": ")
 	writer.WriteString(step.Title)
 	writer.WriteString("\n")
-	writer.WriteString(strings.ReplaceAll(strings.Trim(step.Definition, "\n"), "\n", "\n"+strings.Repeat("  ", level+1)))
+	writer.WriteString(strings.ReplaceAll(strings.Trim(step.Definition, "\n"), "\n", "\n  "))
 	return writer.String()
 }
 
