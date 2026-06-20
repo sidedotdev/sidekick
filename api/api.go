@@ -1509,6 +1509,9 @@ func (ctrl *Controller) UpdateTaskHandler(c *gin.Context) {
 	task.AgentType = agentType
 	task.Status = status
 	task.FlowOptions = taskReq.FlowOptions
+	if taskReq.FlowType != "" {
+		task.FlowType = taskReq.FlowType
+	}
 
 	// If the task status is 'to_do' and there is no flow record, start the flow
 	flows, err := ctrl.service.GetFlowsForTask(requestCtx, workspaceId, task.Id)
