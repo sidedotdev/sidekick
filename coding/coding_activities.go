@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sidekick/coding/lsp"
@@ -27,8 +28,9 @@ type CodingActivities struct {
 }
 
 type FileSymDefRequest struct {
-	FilePath    string   `json:"file_path" jsonschema:"description=The name of the file\\, including relative path\\, eg: \"foo/bar/something.go\""`
-	SymbolNames []string `json:"symbol_names,omitempty" jsonschema:"description=Each string in this array is a case-sensitive name of a code symbol (eg name of a function\\, type\\, alias\\, interface\\, class\\, method\\, enum/member\\, constant\\, etc\\, depending on the language) defined in the given file\\, eg: \"someFunction\"\\, or \"SomeType\"\\, or \"SOME_CONSTANT\" etc. These are the symbol names for which the full symbol definition will be returned. Eg for a function name\\, this would be the entire function declaration including the function body. If no symbol names are provided\\, the entire file will be returned\\, but this usage is generally discouraged except for non-code files. Specifying the desired symbol names is strongly recommended\\, even when all symbols are desired."`
+	FilePath      string   `json:"file_path" jsonschema:"description=The name of the file\\, including relative path\\, eg: \"foo/bar/something.go\""`
+	SymbolNames   []string `json:"symbol_names,omitempty" jsonschema:"description=Each string in this array is a case-sensitive name of a code symbol (eg name of a function\\, type\\, alias\\, interface\\, class\\, method\\, enum/member\\, constant\\, etc\\, depending on the language) defined in the given file\\, eg: \"someFunction\"\\, or \"SomeType\"\\, or \"SOME_CONSTANT\" etc. These are the symbol names for which the full symbol definition will be returned. Eg for a function name\\, this would be the entire function declaration including the function body. If no symbol names are provided\\, the entire file will be returned\\, but this usage is generally discouraged except for non-code files. Specifying the desired symbol names is strongly recommended\\, even when all symbols are desired."`
+	ReferenceLine string   `json:"reference_line,omitempty"`
 }
 
 type SymDefResults struct {
@@ -790,6 +792,8 @@ func shouldRetrieveFullFile(symbols []string, absolutePath string) bool {
 
 func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContainer, symDefRequest FileSymDefRequest, numContextLines int, includeRelatedSymbols bool) []SymbolRetrievalResult {
 	results := make([]SymbolRetrievalResult, len(symDefRequest.SymbolNames))
+	var extras []SymbolRetrievalResult
+	var extrasMu sync.Mutex
 	var wg sync.WaitGroup
 
 	// Read the file once for all symbol lookups.
@@ -837,28 +841,181 @@ func (ca *CodingActivities) retrieveSymbolDefinitions(envContainer env.EnvContai
 
 			if err == nil && includeRelatedSymbols && len(sourceBlocks) > 0 && sourceBlocks[0].NameRange != nil {
 				symbolNameRange := sitterToLspRange(*sourceBlocks[0].NameRange)
-				related, err := ca.RelatedSymbolsActivity(context.Background(), RelatedSymbolsActivityInput{
+				related, relatedErr := ca.RelatedSymbolsActivity(context.Background(), RelatedSymbolsActivityInput{
 					RelativeFilePath: symDefRequest.FilePath,
 					SymbolText:       symbol,
 					EnvContainer:     envContainer,
 					SymbolRange:      &symbolNameRange,
 				})
-				if err == nil {
+				if relatedErr == nil {
 					result.RelatedSymbols = related
 				} else {
 					result.RelatedSymbols = []RelatedSymbol{
 						{
-							Symbol:    tree_sitter.Symbol{Content: fmt.Sprintf("error getting related symbols: %v", err)},
-							Signature: tree_sitter.Signature{Content: fmt.Sprintf("error getting related symbols: %v", err)},
+							Symbol:    tree_sitter.Symbol{Content: fmt.Sprintf("error getting related symbols: %v", relatedErr)},
+							Signature: tree_sitter.Signature{Content: fmt.Sprintf("error getting related symbols: %v", relatedErr)},
 						},
 					}
 				}
+				return
+			}
+
+			if err == nil || !lsp.IsSupportedLanguage(langName) {
+				return
+			}
+
+			resolved := ca.resolveSymbolDefinitionViaLSP(context.Background(), envContainer, symDefRequest.FilePath, symbol, symDefRequest.ReferenceLine, numContextLines)
+			if len(resolved) == 0 {
+				return
+			}
+
+			// Replace the in-file miss with the first LSP-resolved definition so
+			// BulkGetSymbolDefinitions groups it under the resolved file and skips
+			// the name-search hint for this symbol.
+			result.Error = nil
+			result.RelativePath = resolved[0].RelativePath
+			result.SourceBlocks = resolved[0].SourceBlocks
+			if len(resolved) > 1 {
+				extrasMu.Lock()
+				extras = append(extras, resolved[1:]...)
+				extrasMu.Unlock()
 			}
 		}()
 	}
 	wg.Wait()
 
+	if len(extras) > 0 {
+		results = append(results, extras...)
+	}
 	return results
+}
+
+// resolveSymbolDefinitionViaLSP treats filePath as a reference site for symbol
+// and uses LSP go-to-definition to locate and inline the real definition,
+// possibly from another repo file or a third-party library. Returns one
+// SymbolRetrievalResult per resolved location. Returns nil when LSP resolves
+// nothing or errors so callers can fall back to the existing name-search hint.
+func (ca *CodingActivities) resolveSymbolDefinitionViaLSP(ctx context.Context, envContainer env.EnvContainer, filePath, symbol, referenceLine string, numContextLines int) []SymbolRetrievalResult {
+	if ca.LSPActivities == nil || ca.LSPActivities.LSPClientProvider == nil {
+		return nil
+	}
+	locations, err := ca.LSPActivities.GetSingleFileDefinitions(ctx, lsp.LSPDefinitionLocationsRequest{
+		FilePath:      filePath,
+		EnvContainer:  &envContainer,
+		Symbols:       []string{symbol},
+		ReferenceLine: referenceLine,
+	})
+	if err != nil {
+		return nil
+	}
+
+	workingDir := envContainer.Env.GetWorkingDirectory()
+	resolvedSymbolName := symbol
+	if i := strings.LastIndex(symbol, "."); i >= 0 && i < len(symbol)-1 {
+		resolvedSymbolName = symbol[i+1:]
+	}
+
+	var out []SymbolRetrievalResult
+	for _, loc := range locations {
+		if loc.Error != "" {
+			continue
+		}
+		parsedURL, parseErr := url.Parse(loc.Location.URI)
+		if parseErr != nil || parsedURL.Path == "" {
+			continue
+		}
+		absPath := parsedURL.Path
+		defBytes, readErr := envContainer.Env.ReadFile(ctx, absPath)
+		if readErr != nil {
+			continue
+		}
+
+		resolvedLang := utils.InferLanguageNameFromFilePath(absPath)
+		blocks, _ := tree_sitter.GetSymbolDefinitionsFromBytes(resolvedLang, defBytes, resolvedSymbolName, numContextLines)
+		if len(blocks) == 0 && resolvedSymbolName != symbol {
+			blocks, _ = tree_sitter.GetSymbolDefinitionsFromBytes(resolvedLang, defBytes, symbol, numContextLines)
+		}
+		if len(blocks) == 0 {
+			blocks = tree_sitter.ExpandContextLines(
+				[]tree_sitter.SourceBlock{sourceBlockFromLSPRange(defBytes, loc.Location.Range)},
+				numContextLines,
+				defBytes,
+			)
+		}
+
+		out = append(out, SymbolRetrievalResult{
+			SymbolName:   symbol,
+			RelativePath: lspDefinitionDisplayPath(envContainer.Env, workingDir, absPath),
+			SourceBlocks: blocks,
+		})
+	}
+	return out
+}
+
+// sourceBlockFromLSPRange builds a SourceBlock spanning the line range of an
+// LSP location, used as the last-resort inlining fallback when tree-sitter
+// extraction yields nothing on the resolved file.
+func sourceBlockFromLSPRange(source []byte, r lsp.Range) tree_sitter.SourceBlock {
+	startLine := r.Start.Line
+	if startLine < 0 {
+		startLine = 0
+	}
+	endLine := r.End.Line
+	if endLine < startLine {
+		endLine = startLine
+	}
+
+	startByte := uint(len(source))
+	line := 0
+	for i, b := range source {
+		if line == startLine {
+			startByte = uint(i)
+			break
+		}
+		if b == '\n' {
+			line++
+		}
+	}
+
+	endByte := uint(len(source))
+	line = startLine
+	for i := int(startByte); i < len(source); i++ {
+		if source[i] == '\n' {
+			if line >= endLine {
+				endByte = uint(i + 1)
+				break
+			}
+			line++
+		}
+	}
+
+	src := source
+	return tree_sitter.SourceBlock{
+		Source: &src,
+		Range: tree_sitter_lib.Range{
+			StartByte:  startByte,
+			EndByte:    endByte,
+			StartPoint: tree_sitter_lib.Point{Row: uint(startLine), Column: 0},
+			EndPoint:   tree_sitter_lib.Point{Row: uint(endLine), Column: 0},
+		},
+	}
+}
+
+// lspDefinitionDisplayPath returns a human-friendly path for an LSP-resolved
+// definition file: repo-relative when inside the working directory, otherwise
+// a best-effort dependency-root path (stripping known prefixes such as the Go
+// module cache or node_modules). Never returns an absolute path.
+func lspDefinitionDisplayPath(e env.Env, workingDir, absPath string) string {
+	if rel, err := env.EnvRel(e, workingDir, absPath); err == nil && rel != "" && rel != "." && !strings.HasPrefix(rel, "..") {
+		return rel
+	}
+	normalized := filepath.ToSlash(absPath)
+	for _, marker := range []string{"/go/pkg/mod/", "/node_modules/"} {
+		if idx := strings.LastIndex(normalized, marker); idx >= 0 {
+			return normalized[idx+len(marker):]
+		}
+	}
+	return strings.TrimPrefix(normalized, "/")
 }
 
 // TODO: make this configurable, and/or more dynamic depending on the codebase's symbol graph structure
