@@ -22,6 +22,8 @@ test_commands:
     command: "bun run test:unit -- --no-color"
   - working_dir: "frontend"
     command: "bun run type-check"
+  - working_dir: "frontend"
+    command: "bun run lint:check"
 
 integration_test_commands:
   - command: "SIDE_INTEGRATION_TEST=true gotestreport -test.timeout 120s ./..."
@@ -46,6 +48,7 @@ command_permissions:
     - pattern: "devpod"
     - pattern: "(npm|bun) run type-check"
     - pattern: "bun type-check"
+    - pattern: "(npm|bun) run lint:check"
     - pattern: "(npm|bun) run test:unit.*--run"
     - pattern: "bun test:unit.*--run"
     - pattern: "go run ./worker/replay"
