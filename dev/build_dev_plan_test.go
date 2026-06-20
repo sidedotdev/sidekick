@@ -356,6 +356,46 @@ func TestApplyDevPlanUpdates(t *testing.T) {
 				Complete:  false,
 			},
 		},
+		{
+			name: "reject nested step number on edit",
+			plan: basePlan(),
+			update: DevPlanUpdate{
+				Updates: []DevStepUpdate{
+					{StepNumber: "2.1", Operation: "edit", Title: strPtr("Nested")},
+				},
+			},
+			expectError: "nested step numbers are not allowed: \"2.1\"",
+		},
+		{
+			name: "reject nested step number on insert",
+			plan: basePlan(),
+			update: DevPlanUpdate{
+				Updates: []DevStepUpdate{
+					{StepNumber: "2.1", Operation: "insert", Title: strPtr("Nested"), Definition: strPtr("d"), Type: strPtr("edit"), CompletionAnalysis: strPtr("c")},
+				},
+			},
+			expectError: "nested step numbers are not allowed: \"2.1\"",
+		},
+		{
+			name: "reject nested step number on delete",
+			plan: basePlan(),
+			update: DevPlanUpdate{
+				Updates: []DevStepUpdate{
+					{StepNumber: "2.1", Operation: "delete"},
+				},
+			},
+			expectError: "nested step numbers are not allowed: \"2.1\"",
+		},
+		{
+			name: "reject non-integer step number",
+			plan: basePlan(),
+			update: DevPlanUpdate{
+				Updates: []DevStepUpdate{
+					{StepNumber: "abc", Operation: "edit", Title: strPtr("x")},
+				},
+			},
+			expectError: "step number must be an integer: \"abc\"",
+		},
 	}
 
 	for _, tt := range tests {
@@ -399,7 +439,7 @@ func TestValidateAndCleanPlan(t *testing.T) {
 			},
 		},
 		{
-			name: "skip/none steps are filtered out",
+			name: "skip/none steps are filtered out and remaining steps renumbered",
 			plan: DevPlan{
 				Steps: []DevStep{
 					{StepNumber: "1", Title: "Skip me", Type: "skip"},
@@ -410,7 +450,28 @@ func TestValidateAndCleanPlan(t *testing.T) {
 			},
 			expected: DevPlan{
 				Steps: []DevStep{
-					{StepNumber: "2", Title: "Keep me", Type: "edit"},
+					{StepNumber: "1", Title: "Keep me", Type: "edit"},
+				},
+				Complete: true,
+			},
+		},
+		{
+			name: "nested step numbers are flattened",
+			plan: DevPlan{
+				Steps: []DevStep{
+					{StepNumber: "1", Title: "S1", Type: "edit"},
+					{StepNumber: "2.1", Title: "S2.1", Type: "edit"},
+					{StepNumber: "2.2", Title: "S2.2", Type: "edit"},
+					{StepNumber: "3", Title: "S3", Type: "edit"},
+				},
+				Complete: true,
+			},
+			expected: DevPlan{
+				Steps: []DevStep{
+					{StepNumber: "1", Title: "S1", Type: "edit"},
+					{StepNumber: "2", Title: "S2.1", Type: "edit"},
+					{StepNumber: "3", Title: "S2.2", Type: "edit"},
+					{StepNumber: "4", Title: "S3", Type: "edit"},
 				},
 				Complete: true,
 			},
